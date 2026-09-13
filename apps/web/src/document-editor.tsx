@@ -11,6 +11,12 @@ import {
   Alert,
 } from "antd";
 import { api, queryClient } from "./api";
+import {
+  LineSheet,
+  lineRule,
+  purchaseFields,
+  receiptFields,
+} from "./line-sheet";
 import { Row, useOptions, options } from "./shared";
 export function DocumentEditor({
   record,
@@ -21,6 +27,7 @@ export function DocumentEditor({
   receipt: boolean;
   onClose: () => void;
 }) {
+  const [grid, setGrid] = useState(false);
   const [form] = Form.useForm(),
     [busy, setBusy] = useState(false),
     [key, setKey] = useState(crypto.randomUUID());
@@ -31,6 +38,7 @@ export function DocumentEditor({
     receipt
       ? {
           purchaseOrderItemId: i.purchaseOrderItemId,
+          skuCode: i.skuCode,
           receivedQty: i.receivedQty,
           qualifiedQty: i.qualifiedQty,
           damagedQty: i.damagedQty,
@@ -47,6 +55,7 @@ export function DocumentEditor({
       title={receipt ? "修订验收数量" : "编辑采购草稿"}
       open
       onClose={onClose}
+      width={grid ? "96vw" : undefined}
       size="large"
       extra={
         <Button
@@ -61,6 +70,7 @@ export function DocumentEditor({
                 "PATCH",
                 {
                   ...b,
+                  items: b.items.map(({ skuCode: _sku, ...i }: Row) => i),
                   expectedVersion: record.version,
                   ...(!receipt
                     ? {
@@ -104,77 +114,96 @@ export function DocumentEditor({
         }}
         onValuesChange={() => setKey(crypto.randomUUID())}
       >
-        <Form.List name="items">
-          {(fields, { add, remove }) => (
-            <>
-              {fields.map((f, index) => (
-                <div key={f.key} className="editor-line">
-                  {receipt ? (
-                    <>
-                      <strong>{record.items[index].skuCode}</strong>
-                      <Form.Item name={[f.name, "purchaseOrderItemId"]} hidden>
-                        <Input />
-                      </Form.Item>
-                      <Space wrap>
-                        {[
-                          ["receivedQty", "本次到货"],
-                          ["qualifiedQty", "合格"],
-                          ["damagedQty", "次品"],
-                          ["shortageQty", "少货"],
-                        ].map(([k, label]) => (
+        <Button className="sheet-mode" onClick={() => setGrid(!grid)}>
+          {grid ? "切换逐条填写" : "表格录入 / Excel 导入"}
+        </Button>
+        {grid ? (
+          <Form.Item
+            name="items"
+            rules={[lineRule(receipt ? receiptFields : purchaseFields)]}
+          >
+            <LineSheet receipt={receipt} />
+          </Form.Item>
+        ) : (
+          <>
+            <Form.List name="items">
+              {(fields, { add, remove }) => (
+                <>
+                  {fields.map((f, index) => (
+                    <div key={f.key} className="editor-line">
+                      {receipt ? (
+                        <>
+                          <strong>{record.items[index].skuCode}</strong>
                           <Form.Item
-                            key={k}
-                            name={[f.name, k]}
-                            label={label}
+                            name={[f.name, "purchaseOrderItemId"]}
+                            hidden
+                          >
+                            <Input />
+                          </Form.Item>
+                          <Space wrap>
+                            {[
+                              ["receivedQty", "本次到货"],
+                              ["qualifiedQty", "合格"],
+                              ["damagedQty", "次品"],
+                              ["shortageQty", "少货"],
+                            ].map(([k, label]) => (
+                              <Form.Item
+                                key={k}
+                                name={[f.name, k]}
+                                label={label}
+                                rules={[{ required: true }]}
+                              >
+                                <InputNumber min={0} precision={0} />
+                              </Form.Item>
+                            ))}
+                          </Space>
+                        </>
+                      ) : (
+                        <>
+                          <Form.Item
+                            name={[f.name, "skuId"]}
+                            label="SKU"
                             rules={[{ required: true }]}
                           >
-                            <InputNumber min={0} precision={0} />
+                            <Select options={options(skus.data, "skuCode")} />
                           </Form.Item>
-                        ))}
-                      </Space>
-                    </>
-                  ) : (
-                    <>
-                      <Form.Item
-                        name={[f.name, "skuId"]}
-                        label="SKU"
-                        rules={[{ required: true }]}
-                      >
-                        <Select options={options(skus.data, "skuCode")} />
-                      </Form.Item>
-                      <Space>
-                        <Form.Item
-                          name={[f.name, "orderedQty"]}
-                          label="采购数量"
-                          rules={[{ required: true }]}
-                        >
-                          <InputNumber min={1} precision={0} />
-                        </Form.Item>
-                        <Form.Item
-                          name={[f.name, "unitCost"]}
-                          label="单价"
-                          rules={[{ required: true }]}
-                        >
-                          <InputNumber stringMode min="0" precision={2} />
-                        </Form.Item>
-                        {fields.length > 1 && (
-                          <Button onClick={() => remove(f.name)}>移除</Button>
-                        )}
-                      </Space>
-                    </>
+                          <Space>
+                            <Form.Item
+                              name={[f.name, "orderedQty"]}
+                              label="采购数量"
+                              rules={[{ required: true }]}
+                            >
+                              <InputNumber min={1} precision={0} />
+                            </Form.Item>
+                            <Form.Item
+                              name={[f.name, "unitCost"]}
+                              label="单价"
+                              rules={[{ required: true }]}
+                            >
+                              <InputNumber stringMode min="0" precision={2} />
+                            </Form.Item>
+                            {fields.length > 1 && (
+                              <Button onClick={() => remove(f.name)}>
+                                移除
+                              </Button>
+                            )}
+                          </Space>
+                        </>
+                      )}
+                    </div>
+                  ))}
+                  {!receipt && (
+                    <Button
+                      onClick={() => add({ orderedQty: 1, unitCost: "0.00" })}
+                    >
+                      添加明细
+                    </Button>
                   )}
-                </div>
-              ))}
-              {!receipt && (
-                <Button
-                  onClick={() => add({ orderedQty: 1, unitCost: "0.00" })}
-                >
-                  添加明细
-                </Button>
+                </>
               )}
-            </>
-          )}
-        </Form.List>
+            </Form.List>
+          </>
+        )}
         {!receipt && (
           <Form.Item
             name="expectedDeliveryAt"

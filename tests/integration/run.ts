@@ -503,6 +503,43 @@ try {
   );
   for (const row of recon) assert.equal(row.physical_qty, row.rebuilt);
   check("all balances reconcile to immutable ledger");
+  const warehouseSnapshot = (await ok("/warehouses")).find(
+    (r: any) => r.id === wh.id,
+  );
+  await ok("/warehouses/" + wh.id, "PATCH", {
+    address: "new address",
+    expectedUpdatedAt: warehouseSnapshot.updatedAt,
+  });
+  assert.equal(
+    (
+      await request("/warehouses/" + wh.id, "PATCH", {
+        address: "stale edit",
+        expectedUpdatedAt: warehouseSnapshot.updatedAt,
+      })
+    ).status,
+    409,
+  );
+  check("spreadsheet stale edits are rejected without overwriting newer data");
+  const buyerRecord = (await ok("/users")).find(
+    (r: any) => r.username === "buyer",
+  );
+  await ok("/users/" + buyerRecord.id, "PATCH", {
+    displayName: "表格修改采购员",
+  });
+  const updatedBuyer = (await ok("/users")).find(
+    (r: any) => r.id === buyerRecord.id,
+  );
+  assert.deepEqual(updatedBuyer.roleIds, buyerRecord.roleIds);
+  assert.equal(updatedBuyer.status, buyerRecord.status);
+  await ok("/roles/" + buyerRole.id, "PATCH", { name: "采购角色显示名" });
+  const renamedRole = (await ok("/roles")).find(
+    (r: any) => r.id === buyerRole.id,
+  );
+  assert.deepEqual(
+    [...renamedRole.permissionCodes].sort(),
+    [...buyerRole.permissionCodes].sort(),
+  );
+  check("spreadsheet profile edits preserve current roles and permissions");
   await migrate();
   check("migrations rerun without modifying data");
   await writeFile(

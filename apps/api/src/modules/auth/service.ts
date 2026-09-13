@@ -102,12 +102,14 @@ export async function userWrite(c: Context, input: unknown, value?: string) {
     z
       .object({
         username: value ? text.optional() : text,
-        displayName: text,
+        displayName: value ? text.optional() : text,
         password: value
           ? z.string().min(12).max(128).optional()
           : z.string().min(12).max(128),
-        roleIds: z.array(id).min(1),
-        status: z.enum(["ACTIVE", "INACTIVE"]).default("ACTIVE"),
+        roleIds: value ? z.array(id).min(1).optional() : z.array(id).min(1),
+        status: value
+          ? z.enum(["ACTIVE", "INACTIVE"]).optional()
+          : z.enum(["ACTIVE", "INACTIVE"]).default("ACTIVE"),
       })
       .strict(),
     input,
@@ -117,8 +119,8 @@ export async function userWrite(c: Context, input: unknown, value?: string) {
     const before = value ? await entity(tx, "users", value, true) : null;
     const u = value
       ? await update(tx, "users", value, {
-          displayName: b.displayName,
-          status: b.status,
+          displayName: b.displayName ?? before!.display_name,
+          status: b.status ?? before!.status,
         })
       : await insert(tx, "users", {
           username: b.username!.toLowerCase(),
@@ -126,18 +128,20 @@ export async function userWrite(c: Context, input: unknown, value?: string) {
           status: b.status,
           passwordHash: passwordHash(b.password!),
         });
-    await rows(
-      tx,
-      "DELETE FROM user_roles WHERE user_id=$1::bigint RETURNING user_id",
-      String(u.id),
-    );
-    for (const role of new Set(b.roleIds))
+    if (b.roleIds) {
       await rows(
         tx,
-        "INSERT INTO user_roles(user_id,role_id) VALUES($1::bigint,$2::bigint) RETURNING user_id",
+        "DELETE FROM user_roles WHERE user_id=$1::bigint RETURNING user_id",
         String(u.id),
-        role,
       );
+      for (const role of new Set(b.roleIds))
+        await rows(
+          tx,
+          "INSERT INTO user_roles(user_id,role_id) VALUES($1::bigint,$2::bigint) RETURNING user_id",
+          String(u.id),
+          role,
+        );
+    }
     await ensureAdmin(tx);
     await audit(
       tx,
@@ -188,7 +192,7 @@ export async function roleWrite(c: Context, input: unknown, value?: string) {
       .object({
         code: value ? text.optional() : text,
         name: text,
-        permissionCodes: z.array(text),
+        permissionCodes: value ? z.array(text).optional() : z.array(text),
       })
       .strict(),
     input,
@@ -200,20 +204,26 @@ export async function roleWrite(c: Context, input: unknown, value?: string) {
     const r = value
       ? await update(tx, "roles", value, { name: b.name })
       : await insert(tx, "roles", { name: b.name, code: b.code });
-    await rows(
-      tx,
-      "DELETE FROM role_permissions WHERE role_id=$1::bigint RETURNING role_id",
-      String(r.id),
-    );
-    for (const code of new Set(b.permissionCodes)) {
-      const p = await one(tx, "SELECT id FROM permissions WHERE code=$1", code);
-      if (!p) fail("VALIDATION_ERROR", "未知权限", 400);
+    if (b.permissionCodes) {
       await rows(
         tx,
-        "INSERT INTO role_permissions(role_id,permission_id) VALUES($1::bigint,$2::bigint) RETURNING role_id",
+        "DELETE FROM role_permissions WHERE role_id=$1::bigint RETURNING role_id",
         String(r.id),
-        String(p.id),
       );
+      for (const code of new Set(b.permissionCodes)) {
+        const p = await one(
+          tx,
+          "SELECT id FROM permissions WHERE code=$1",
+          code,
+        );
+        if (!p) fail("VALIDATION_ERROR", "未知权限", 400);
+        await rows(
+          tx,
+          "INSERT INTO role_permissions(role_id,permission_id) VALUES($1::bigint,$2::bigint) RETURNING role_id",
+          String(r.id),
+          String(p.id),
+        );
+      }
     }
     await audit(tx, c, "ROLE_WRITE", "role", r.id, old, {
       ...r,

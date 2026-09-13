@@ -1,3 +1,4 @@
+import { Table } from "./data-table";
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -13,7 +14,6 @@ import {
   Modal,
   Select,
   Space,
-  Table,
   Tabs,
   Tag,
 } from "antd";
@@ -35,6 +35,9 @@ import {
   when,
 } from "./shared";
 import { MasterPage } from "./master";
+import { BatchEditor } from "./batch-editor";
+import { LineSheet, lineRule, purchaseFields } from "./line-sheet";
+import { Sheet } from "./sheet";
 import { DocumentEditor } from "./document-editor";
 function useAction() {
   const { message } = App.useApp();
@@ -58,6 +61,7 @@ function useAction() {
   };
 }
 export function InventoryPage() {
+  const [batch, setBatch] = useState(false);
   const [search, setSearch] = useState(""),
     [warehouse, setWarehouse] = useState<string>(),
     [open, setOpen] = useState(false),
@@ -78,16 +82,21 @@ export function InventoryPage() {
         subtitle="实际库存、可售数量和已确认采购在途，分仓清晰可查。"
         extra={
           can && (
-            <Button
-              type="primary"
-              onClick={() => {
-                form.resetFields();
-                setKey(crypto.randomUUID());
-                setOpen(true);
-              }}
-            >
-              库存调整
-            </Button>
+            <Space>
+              <Button onClick={() => setBatch(true)}>
+                批量库存调整 / Excel 导入
+              </Button>
+              <Button
+                type="primary"
+                onClick={() => {
+                  form.resetFields();
+                  setKey(crypto.randomUUID());
+                  setOpen(true);
+                }}
+              >
+                库存调整
+              </Button>
+            </Space>
           )
         }
       />
@@ -231,6 +240,43 @@ export function InventoryPage() {
           </Form.Item>
         </Form>
       </Modal>
+      {batch && (
+        <BatchEditor
+          title="批量库存调整"
+          fields={[
+            { key: "skuId", label: "SKU", required: true, source: "/skus" },
+            {
+              key: "warehouseId",
+              label: "仓库",
+              required: true,
+              source: "/warehouses",
+            },
+            {
+              key: "quantity",
+              label: "变化数量",
+              required: true,
+              type: "number",
+              min: -2147483647,
+            },
+            {
+              key: "reason",
+              label: "原因",
+              required: true,
+              options: [
+                { value: "OPENING", label: "期初建账" },
+                { value: "STOCKTAKE", label: "盘点差异" },
+                { value: "MANUAL", label: "人工调整" },
+              ],
+            },
+            { key: "remark", label: "说明", required: true },
+          ]}
+          defaults={{ warehouseId: warehouse }}
+          saveRow={(body, key) =>
+            api("/inventory/adjustments", "POST", body, key)
+          }
+          onClose={() => setBatch(false)}
+        />
+      )}
     </>
   );
 }
@@ -412,6 +458,7 @@ export function PurchaseList({ receipt = false }: { receipt?: boolean }) {
   );
 }
 export function PurchaseNew() {
+  const [grid, setGrid] = useState(false);
   const [form] = Form.useForm(),
     [key, setKey] = useState(crypto.randomUUID());
   const suppliers = useOptions("/suppliers"),
@@ -473,57 +520,70 @@ export function PurchaseNew() {
               <Select options={options(warehouses.data)} />
             </Form.Item>
           </div>
-          <Form.List name="items">
-            {(fields, { add, remove }) => (
-              <>
-                {fields.map((field) => (
-                  <div className="po-line" key={field.key}>
-                    <Form.Item
-                      name={[field.name, "skuId"]}
-                      label="SKU"
-                      rules={[{ required: true }]}
+          <Button className="sheet-mode" onClick={() => setGrid(!grid)}>
+            {grid ? "切换逐条填写" : "表格录入 / Excel 导入"}
+          </Button>
+          {grid ? (
+            <Form.Item name="items" rules={[lineRule(purchaseFields)]}>
+              <LineSheet />
+            </Form.Item>
+          ) : (
+            <>
+              <Form.List name="items">
+                {(fields, { add, remove }) => (
+                  <>
+                    {fields.map((field) => (
+                      <div className="po-line" key={field.key}>
+                        <Form.Item
+                          name={[field.name, "skuId"]}
+                          label="SKU"
+                          rules={[{ required: true }]}
+                        >
+                          <Select
+                            style={{ minWidth: 250 }}
+                            showSearch
+                            optionFilterProp="label"
+                            options={options(skus.data, "skuCode")}
+                          />
+                        </Form.Item>
+                        <Form.Item
+                          name={[field.name, "orderedQty"]}
+                          label="采购数量"
+                          rules={[{ required: true }]}
+                        >
+                          <InputNumber min={1} precision={0} />
+                        </Form.Item>
+                        <Form.Item
+                          name={[field.name, "unitCost"]}
+                          label="单价"
+                          rules={[{ required: true }]}
+                        >
+                          <InputNumber min="0" stringMode precision={2} />
+                        </Form.Item>
+                        <Form.Item
+                          name={[field.name, "purchaseSuggestionId"]}
+                          hidden
+                        >
+                          <Input />
+                        </Form.Item>
+                        {fields.length > 1 && (
+                          <Button onClick={() => remove(field.name)}>
+                            移除
+                          </Button>
+                        )}
+                      </div>
+                    ))}
+                    <Button
+                      type="dashed"
+                      onClick={() => add({ orderedQty: 1, unitCost: "0.00" })}
                     >
-                      <Select
-                        style={{ minWidth: 250 }}
-                        showSearch
-                        optionFilterProp="label"
-                        options={options(skus.data, "skuCode")}
-                      />
-                    </Form.Item>
-                    <Form.Item
-                      name={[field.name, "orderedQty"]}
-                      label="采购数量"
-                      rules={[{ required: true }]}
-                    >
-                      <InputNumber min={1} precision={0} />
-                    </Form.Item>
-                    <Form.Item
-                      name={[field.name, "unitCost"]}
-                      label="单价"
-                      rules={[{ required: true }]}
-                    >
-                      <InputNumber min="0" stringMode precision={2} />
-                    </Form.Item>
-                    <Form.Item
-                      name={[field.name, "purchaseSuggestionId"]}
-                      hidden
-                    >
-                      <Input />
-                    </Form.Item>
-                    {fields.length > 1 && (
-                      <Button onClick={() => remove(field.name)}>移除</Button>
-                    )}
-                  </div>
-                ))}
-                <Button
-                  type="dashed"
-                  onClick={() => add({ orderedQty: 1, unitCost: "0.00" })}
-                >
-                  添加 SKU 明细
-                </Button>
-              </>
-            )}
-          </Form.List>
+                      添加 SKU 明细
+                    </Button>
+                  </>
+                )}
+              </Form.List>
+            </>
+          )}
           <Form.Item name="remark" label="备注" style={{ marginTop: 24 }}>
             <Input.TextArea rows={2} />
           </Form.Item>
@@ -538,6 +598,7 @@ export function PurchaseNew() {
 export function DocumentDetail({ receipt = false }: { receipt?: boolean }) {
   const { modal } = App.useApp();
   const [editing, setEditing] = useState(false);
+  const [receiptGrid, setReceiptGrid] = useState(false);
   const { id } = useParams(),
     path = (receipt ? "/receipts/" : "/purchase-orders/") + id;
   const q = useQuery({ queryKey: [path], queryFn: () => api(path) }),
@@ -748,6 +809,20 @@ export function DocumentDetail({ receipt = false }: { receipt?: boolean }) {
             type="primary"
             loading={action.busy}
             onClick={async () => {
+              if (
+                lines.some(
+                  (i) =>
+                    !Number.isSafeInteger(i.receivedQty) ||
+                    i.receivedQty < 0 ||
+                    i.receivedQty > i.remaining,
+                )
+              ) {
+                modal.error({
+                  title: "请检查到货数量",
+                  content: "到货数量须为不超过剩余量的非负整数。",
+                });
+                return;
+              }
               const items = lines
                 .filter((i) => i.receivedQty > 0)
                 .map(({ skuCode: _, remaining: _r, ...i }) => i);
@@ -774,41 +849,86 @@ export function DocumentDetail({ receipt = false }: { receipt?: boolean }) {
           title="本次先处理正常合格入库；次品或少货单可保存，异常过账规则待确认。"
           type="info"
         />
-        <Table<Row>
-          rowKey="purchaseOrderItemId"
-          pagination={false}
-          dataSource={lines}
-          columns={[
-            { title: "SKU", dataIndex: "skuCode" },
-            { title: "剩余", dataIndex: "remaining" },
-            {
-              title: "本次合格到货",
-              render: (_, line) => (
-                <InputNumber
-                  min={0}
-                  max={line.remaining}
-                  precision={0}
-                  value={line.receivedQty}
-                  onChange={(v) => {
-                    setLines((ls) =>
-                      ls.map((i) =>
-                        i === line
-                          ? { ...i, receivedQty: v || 0, qualifiedQty: v || 0 }
-                          : i,
-                      ),
-                    );
-                    setKey(crypto.randomUUID());
-                  }}
-                />
-              ),
-            },
-          ]}
-        />
+        <Button
+          className="sheet-mode"
+          onClick={() => setReceiptGrid(!receiptGrid)}
+        >
+          {receiptGrid ? "切换逐条填写" : "表格录入 / Excel 导入"}
+        </Button>
+        {receiptGrid ? (
+          <Sheet
+            title="本次合格入库"
+            fixed
+            columns={[
+              { key: "skuCode", label: "SKU", readonly: true },
+              { key: "remaining", label: "剩余", readonly: true },
+              {
+                key: "receivedQty",
+                label: "本次合格到货",
+                required: true,
+                type: "number",
+              },
+            ]}
+            value={lines}
+            onChange={(next) => {
+              setLines(
+                next.map((i) => ({
+                  ...i,
+                  receivedQty: /^\d+$/.test(String(i.receivedQty))
+                    ? Number(i.receivedQty)
+                    : i.receivedQty,
+                  qualifiedQty: /^\d+$/.test(String(i.receivedQty))
+                    ? Number(i.receivedQty)
+                    : i.receivedQty,
+                })),
+              );
+              setKey(crypto.randomUUID());
+            }}
+          />
+        ) : (
+          <>
+            <Table<Row>
+              rowKey="purchaseOrderItemId"
+              pagination={false}
+              dataSource={lines}
+              columns={[
+                { title: "SKU", dataIndex: "skuCode" },
+                { title: "剩余", dataIndex: "remaining" },
+                {
+                  title: "本次合格到货",
+                  render: (_, line) => (
+                    <InputNumber
+                      min={0}
+                      max={line.remaining}
+                      precision={0}
+                      value={line.receivedQty}
+                      onChange={(v) => {
+                        setLines((ls) =>
+                          ls.map((i) =>
+                            i === line
+                              ? {
+                                  ...i,
+                                  receivedQty: v || 0,
+                                  qualifiedQty: v || 0,
+                                }
+                              : i,
+                          ),
+                        );
+                        setKey(crypto.randomUUID());
+                      }}
+                    />
+                  ),
+                },
+              ]}
+            />
+          </>
+        )}
       </Drawer>
     </>
   );
 }
 export function SuggestionsPage() {
+  const [batch, setBatch] = useState(false);
   const { modal } = App.useApp();
   const q = useList("/purchase-suggestions"),
     [open, setOpen] = useState(false),
@@ -864,17 +984,20 @@ export function SuggestionsPage() {
         subtitle="系统建议与实际采购分开保存，每一次决策都有依据。"
         extra={
           can && (
-            <Button
-              type="primary"
-              onClick={() => {
-                form.resetFields();
-                setResult(null);
-                setKey(crypto.randomUUID());
-                setOpen(true);
-              }}
-            >
-              生成建议
-            </Button>
+            <Space>
+              <Button onClick={() => setBatch(true)}>表格确认采购量</Button>
+              <Button
+                type="primary"
+                onClick={() => {
+                  form.resetFields();
+                  setResult(null);
+                  setKey(crypto.randomUUID());
+                  setOpen(true);
+                }}
+              >
+                生成建议
+              </Button>
+            </Space>
           )
         }
       />
@@ -1007,6 +1130,49 @@ export function SuggestionsPage() {
           />
         )}
       </Modal>
+      {batch && (
+        <BatchEditor
+          title="采购建议确认"
+          submitUnchanged
+          allowCreate={false}
+          initial={q.items
+            .filter((r: Row) => r.status === "PENDING" && r.suggestedQty > 0)
+            .map((r: Row) => ({
+              ...r,
+              purchaseQty: r.suggestedQty,
+              reason: "",
+            }))}
+          fields={[
+            { key: "skuCode", label: "SKU", readonly: true },
+            {
+              key: "suggestedQty",
+              label: "系统建议",
+              type: "number",
+              readonly: true,
+            },
+            {
+              key: "purchaseQty",
+              label: "实际确认量",
+              type: "number",
+              required: true,
+              min: 1,
+            },
+            { key: "reason", label: "修改原因" },
+          ]}
+          saveRow={(body, key, original) =>
+            api(
+              "/purchase-suggestions/" + original!.id + "/accept",
+              "POST",
+              {
+                purchaseQty: body.purchaseQty ?? original!.purchaseQty,
+                ...(body.reason ? { reason: body.reason } : {}),
+              },
+              key,
+            )
+          }
+          onClose={() => setBatch(false)}
+        />
+      )}
     </>
   );
 }

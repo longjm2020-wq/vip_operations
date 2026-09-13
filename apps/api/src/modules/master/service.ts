@@ -191,14 +191,32 @@ export async function masterWrite(
 ) {
   const r = getResource(name);
   const b = parse<Row>(
-    value ? r.schema.partial().strict() : r.schema,
+    value
+      ? r.schema
+          .partial()
+          .extend({ expectedUpdatedAt: z.iso.datetime().optional() })
+          .strict()
+      : r.schema,
     input,
   ) as Row;
-  if (!Object.keys(b).length) fail("VALIDATION_ERROR", "没有可更新字段", 400);
+  if (!Object.keys(b).some((key) => key !== "expectedUpdatedAt"))
+    fail("VALIDATION_ERROR", "没有可更新字段", 400);
   return command(c, name + "/" + (value ?? "create"), b, async (tx) => {
     // This lock also serializes inventory/PO checks against warehouse disabling.
     await rows(tx, "SELECT pg_advisory_xact_lock(91002)::text");
     const before = value ? await entity(tx, r.table, value, true) : null;
+    if (
+      before &&
+      b.expectedUpdatedAt &&
+      new Date(before.updated_at).toISOString() !== b.expectedUpdatedAt
+    )
+      fail(
+        "EDIT_CONFLICT",
+        "资料已被其他操作修改，请关闭表格并刷新后重新编辑",
+        409,
+      );
+    const changes = { ...b };
+    delete changes.expectedUpdatedAt;
     if (
       name === "skus" &&
       value &&
@@ -281,7 +299,7 @@ export async function masterWrite(
           : ["ACTIVE", "INACTIVE"],
       );
     const result = value
-      ? await update(tx, r.table, value, b)
+      ? await update(tx, r.table, value, changes)
       : await insert(tx, r.table, b);
     await audit(
       tx,

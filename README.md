@@ -2,6 +2,8 @@
 
 可运行的内部经营管理首版。React / Ant Design 6 前端，NestJS 模块化后端，PostgreSQL 事务库存，Redis + BullMQ 后台任务。
 
+现支持保留单条表单的双入口录入：在线表格编辑、Excel/CSV 导入、多行粘贴及当前页导出。页面范围、导入顺序及保存规则见 [表格录入说明](docs/SPREADSHEET_ENTRY.md)。
+
 ## 在当前电脑试用
 
 双击 `START_LOCAL.cmd`，然后打开 **http://localhost:5173**。

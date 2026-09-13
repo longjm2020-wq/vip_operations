@@ -102,7 +102,6 @@ export function useOptions(path: string, enabled = true) {
     queryKey: ["options", path],
     queryFn: async () => {
       const first = await api(path + "?pageSize=100");
-      if (!path.endsWith("-mappings")) return first;
       const data = [...first.data];
       for (let page = 2; data.length < first.total; page++) {
         const next = await api(path + "?pageSize=100&page=" + page);

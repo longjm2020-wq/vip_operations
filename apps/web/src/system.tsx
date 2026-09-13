@@ -1,5 +1,7 @@
+import { BatchEditor } from "./batch-editor";
+import { Table } from "./data-table";
 import { useState } from "react";
-import { App, Button, Card, Drawer, Form, Input, Select, Table } from "antd";
+import { App, Button, Card, Drawer, Form, Input, Select } from "antd";
 import { useQuery } from "@tanstack/react-query";
 import { api, queryClient } from "./api";
 import {
@@ -7,12 +9,15 @@ import {
   Row,
   Status,
   useList,
+  useCan,
   useOptions,
   options,
   QueryState,
   when,
 } from "./shared";
 export function AccessPage({ roles = false }: { roles?: boolean }) {
+  const [batch, setBatch] = useState(false);
+  const manage = useCan(roles ? "role.manage" : "user.manage");
   const path = roles ? "/roles" : "/users",
     q = useQuery({ queryKey: [path], queryFn: () => api(path) }),
     roleOptions = useOptions("/roles", !roles),
@@ -67,9 +72,14 @@ export function AccessPage({ roles = false }: { roles?: boolean }) {
         title={roles ? "角色权限" : "用户管理"}
         subtitle="权限由后端执行，角色变更后立即在后续请求生效。"
         extra={
-          <Button type="primary" onClick={() => start()}>
-            新建{roles ? "角色" : "用户"}
-          </Button>
+          <>
+            <Button disabled={!manage} onClick={() => setBatch(true)}>
+              表格批量编辑
+            </Button>
+            <Button type="primary" disabled={!manage} onClick={() => start()}>
+              新建{roles ? "角色" : "用户"}
+            </Button>
+          </>
         }
       />
       <Card>
@@ -236,6 +246,31 @@ export function AccessPage({ roles = false }: { roles?: boolean }) {
           )}
         </Form>
       </Drawer>
+      {batch && (
+        <BatchEditor
+          title={roles ? "角色名称" : "用户资料"}
+          allowCreate={false}
+          initial={(q.data?.data || []).filter(
+            (r: Row) => !roles || r.code !== "ADMIN",
+          )}
+          fields={
+            roles
+              ? [
+                  { key: "code", label: "角色代码", readonly: true },
+                  { key: "name", label: "角色名称", required: true },
+                ]
+              : [
+                  { key: "username", label: "用户名", readonly: true },
+                  { key: "displayName", label: "姓名", required: true },
+                  { key: "status", label: "状态", type: "status" },
+                ]
+          }
+          saveRow={(body, key, original) =>
+            api(path + "/" + original!.id, "PATCH", body, key)
+          }
+          onClose={() => setBatch(false)}
+        />
+      )}
     </>
   );
 }

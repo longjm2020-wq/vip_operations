@@ -1,3 +1,4 @@
+import { Table } from "./data-table";
 import { useState } from "react";
 import {
   App,
@@ -9,12 +10,12 @@ import {
   InputNumber,
   Select,
   Space,
-  Table,
   Tag,
 } from "antd";
 import { PlusOutlined } from "@ant-design/icons";
 import { Link, useParams } from "react-router-dom";
 import { api, queryClient } from "./api";
+import { BatchEditor } from "./batch-editor";
 import {
   Header,
   Row,
@@ -278,6 +279,7 @@ export function MasterPage({
   const resource = explicit || param || "products",
     conf = configurations[resource];
   const [search, setSearch] = useState("");
+  const [batch, setBatch] = useState(false);
   const q = useList("/" + resource, {
     ...filter,
     ...(search ? { q: search } : {}),
@@ -324,6 +326,7 @@ export function MasterPage({
         key,
       );
       message.success("已保存");
+      setBusy(false);
       setOpen(false);
       await queryClient.invalidateQueries();
     } catch (e) {
@@ -353,6 +356,11 @@ export function MasterPage({
         subtitle={conf.description}
         extra={
           <>
+            {(create || edit) && (
+              <Button onClick={() => setBatch(true)}>
+                表格编辑 / Excel 导入
+              </Button>
+            )}
             {create && (
               <Button
                 type="primary"
@@ -449,7 +457,12 @@ export function MasterPage({
         onClose={() => setOpen(false)}
         size="large"
         extra={
-          <Button type="primary" loading={busy} onClick={save}>
+          <Button
+            aria-label="保存"
+            type="primary"
+            loading={busy}
+            onClick={save}
+          >
             保存
           </Button>
         }
@@ -476,6 +489,26 @@ export function MasterPage({
         </Form>
         <Tag>内部商品资料无需唯品会 ID</Tag>
       </Drawer>
+      {batch && (
+        <BatchEditor
+          title={conf.title}
+          resource={resource}
+          fields={conf.fields.map((f) => ({
+            ...f,
+            readonly:
+              f.key === "productId"
+                ? (row: Row) => !!row.id || !!filter?.productId
+                : !edit
+                  ? (row: Row) => !!row.id
+                  : false,
+          }))}
+          initial={q.items}
+          defaults={{ status: "ACTIVE", ...filter }}
+          allowCreate={create}
+          allowEdit={edit}
+          onClose={() => setBatch(false)}
+        />
+      )}
     </>
   );
 }

@@ -34,7 +34,9 @@ export async function api(
   if (!response.ok) {
     if (response.status === 401 && path !== "/auth/login")
       queryClient.setQueryData(["me"], null);
-    throw new Error(result.error?.message || "请求失败");
+    throw Object.assign(new Error(result.error?.message || "请求失败"), {
+      status: response.status,
+    });
   }
   return result;
 }
