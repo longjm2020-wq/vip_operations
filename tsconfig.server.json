@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.json",
+  "exclude": [
+    "node_modules",
+    "dist",
+    "tests",
+    "scripts",
+    "prisma.config.ts",
+    "playwright.config.ts"
+  ]
+}

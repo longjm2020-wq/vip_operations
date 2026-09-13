@@ -1,0 +1,63 @@
+services:
+  postgres:
+    image: postgres:16.13-alpine
+    environment:
+      POSTGRES_USER: erp
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: vip_erp
+    ports: ["127.0.0.1:5432:5432"]
+    volumes: ["pg_data:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U erp -d vip_erp"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  redis:
+    image: redis:7.4-alpine
+    command: redis-server --appendonly yes
+    ports: ["127.0.0.1:6379:6379"]
+    volumes: ["redis_data:/data"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  migrate:
+    build: .
+    environment:
+      DATABASE_URL: ${COMPOSE_DATABASE_URL:?Set COMPOSE_DATABASE_URL in .env}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set ADMIN_PASSWORD in .env}
+    command: sh -c 'pnpm db:migrate && pnpm db:seed'
+    depends_on:
+      postgres: {condition: service_healthy}
+  api:
+    build: .
+    command: pnpm start:api
+    environment:
+      DATABASE_URL: ${COMPOSE_DATABASE_URL:?Set COMPOSE_DATABASE_URL in .env}
+      REDIS_URL: redis://redis:6379
+      APP_ORIGIN: ${COMPOSE_ORIGIN:-http://localhost:8080}
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 3100
+      VIP_MODE: disabled
+      SALES_SOURCE: unavailable
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+  worker:
+    build: .
+    command: pnpm start:worker
+    environment:
+      REDIS_URL: redis://redis:6379
+      VIP_MODE: disabled
+      NODE_ENV: production
+    depends_on:
+      redis: {condition: service_healthy}
+  web:
+    build: {context: ., dockerfile: Dockerfile.web}
+    ports: ["127.0.0.1:8080:80"]
+    depends_on: [api]
+volumes:
+  pg_data:
+  redis_data:

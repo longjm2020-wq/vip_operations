@@ -1,0 +1,33 @@
+name: Verify
+on: [push, pull_request]
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16.13
+        env: {POSTGRES_USER: erp, POSTGRES_HOST_AUTH_METHOD: trust, POSTGRES_DB: vip_erp}
+        ports: ["5432:5432"]
+        options: --health-cmd "pg_isready -U erp -d vip_erp" --health-interval 5s --health-retries 20
+      redis:
+        image: redis:7.4
+        ports: ["6379:6379"]
+    env:
+      REDIS_URL: redis://localhost:6379
+      APP_ORIGIN: http://localhost:5173
+      VIP_MODE: disabled
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure isolated CI database
+        run: |
+          node -e 'const u=new URL("postgresql:"+"//localhost:5432/vip_erp");u.username="erp";require("fs").appendFileSync(process.env.GITHUB_ENV,"DATABASE_URL="+u.toString()+"\n")'
+      - uses: pnpm/action-setup@v4
+        with: {version: 10.32.1}
+      - uses: actions/setup-node@v4
+        with: {node-version: 24.21.0, cache: pnpm}
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm db:generate
+      - run: pnpm lint && pnpm typecheck && pnpm test:unit && pnpm build
+      - run: pnpm test:integration
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm test:e2e
