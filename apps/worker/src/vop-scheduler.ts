@@ -1,5 +1,6 @@
 import pg from "pg";
 import { VipClient } from "../../api/src/integrations/vip/client.js";
+import { syncDetails } from "../../api/src/integrations/vip/details.js";
 import {
   syncCatalog,
   syncConfig,
@@ -26,21 +27,25 @@ export function startVopScheduler() {
           [config.namespace],
         )
       ).rows[0]?.requested_at;
-      if (Date.now() < nextRun && !requested) return;
-      const result = await syncCatalog(
-        pool,
-        client,
-        config.namespace,
-        config.token,
-      );
-      nextRun =
-        Date.now() +
-        (result.status === "CONTINUING"
-          ? 15000
-          : result.status === "FAILED"
-            ? 300000
-            : 3600000);
-      console.log(JSON.stringify({ event: "vop-catalog", ...result }));
+      if (Date.now() >= nextRun || requested) {
+        const result = await syncCatalog(
+          pool,
+          client,
+          config.namespace,
+          config.token,
+        );
+        nextRun =
+          Date.now() +
+          (result.status === "CONTINUING"
+            ? 15000
+            : result.status === "FAILED"
+              ? 300000
+              : 3600000);
+        console.log(JSON.stringify({ event: "vop-catalog", ...result }));
+      }
+      const details = await syncDetails(pool, client, config.namespace);
+      if (!["IDLE", "BUSY"].includes(details))
+        console.log(JSON.stringify({ event: "vop-details", status: details }));
     } catch {
       nextRun = Date.now() + 300000;
       console.error("VOP_SYNC_SERVICE_UNAVAILABLE");

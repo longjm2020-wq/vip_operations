@@ -1,6 +1,16 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Alert, App, Button, Card, Space, Table, Tag, Typography } from "antd";
+import {
+  Alert,
+  App,
+  Button,
+  Card,
+  Image,
+  Space,
+  Table,
+  Tag,
+  Typography,
+} from "antd";
 import { api, queryClient } from "./api";
 import { Header, useCan, when, type Row } from "./shared";
 
@@ -125,10 +135,22 @@ export function VipPage() {
           </Card>
         ))}
         <Card title="平台商品库">
+          <Typography.Paragraph type="secondary">
+            颜色、尺码、品牌、品类、图片与价格来自已发布商品资料，每小时分批核对。详情同步不会修改内部商品档案，原有单款编辑继续保留。售价、供货价为资料接口返回值，不代表实时成交价；返回
+            0 时标注“未提供有效价格”。
+          </Typography.Paragraph>
+          {data?.detailJobs?.map((j: Row) => (
+            <Typography.Paragraph key={j.namespace}>
+              商品详情：{status(j.status)} 已匹配 {String(j.matched)} 条 ·
+              累计扫描 {j.scanned} 条 · 当前款分页 {j.nextPage} · 最近一轮完成{" "}
+              {when(j.lastSuccessAt)}
+              {j.lastError && <Tag color="red">{j.lastError}</Tag>}
+            </Typography.Paragraph>
+          ))}
           <Table<Row>
             loading={catalog.isLoading}
             rowKey={(r) => r.namespace + ":" + r.externalKey}
-            scroll={{ x: 1100 }}
+            scroll={{ x: 2450 }}
             dataSource={catalog.data?.data?.items || []}
             pagination={{
               current: page,
@@ -138,9 +160,52 @@ export function VipPage() {
               showSizeChanger: false,
             }}
             columns={[
+              {
+                title: "图片",
+                width: 90,
+                render: (_, r) =>
+                  r.detail?.images?.length ? (
+                    <Image
+                      width={56}
+                      height={70}
+                      style={{ objectFit: "contain" }}
+                      src={r.detail.images[0]}
+                      alt={r.productName}
+                    />
+                  ) : (
+                    "暂无图片"
+                  ),
+              },
               { title: "款号", dataIndex: "styleNo" },
               { title: "条码", dataIndex: "barcode" },
               { title: "商品名称", dataIndex: "productName", width: 320 },
+              ...[
+                ["颜色", "color"],
+                ["尺码", "size"],
+                ["品牌", "brandName"],
+                ["品类", "categoryName"],
+              ].map(([title, key]) => ({
+                title,
+                width: 110,
+                render: (_: unknown, r: Row) =>
+                  r.detail?.[key] || (r.detail ? "未提供" : "待同步"),
+              })),
+              ...[
+                ["吊牌价", "marketPrice"],
+                ["资料售价", "sellPrice"],
+                ["资料供货价", "supplyPrice"],
+              ].map(([title, key]) => ({
+                title,
+                width: 160,
+                render: (_: unknown, r: Row) =>
+                  !r.detail
+                    ? "待同步"
+                    : r.detail[key] == null
+                      ? "未提供"
+                      : Number(r.detail[key]) === 0
+                        ? "0（未提供有效价格）"
+                        : `${r.detail.currency || "币种未提供"} ${Number(r.detail[key]).toFixed(2)}`,
+              })),
               { title: "合作编码", dataIndex: "cooperationNo" },
               { title: "仓库", dataIndex: "warehouse" },
               {
@@ -149,6 +214,11 @@ export function VipPage() {
                 render: (v) => when(Number(v) * 1000),
               },
               { title: "入库时间", dataIndex: "syncedAt", render: when },
+              {
+                title: "详情同步时间",
+                dataIndex: "detailSyncedAt",
+                render: when,
+              },
             ]}
           />
         </Card>

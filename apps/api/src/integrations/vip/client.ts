@@ -70,7 +70,7 @@ export class VipClient {
     readonly credentials: Credentials,
     private readonly fetcher: typeof fetch = fetch,
   ) {}
-  private async call(
+  async call(
     service: string,
     method: string,
     input: unknown,

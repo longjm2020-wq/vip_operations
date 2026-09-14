@@ -272,9 +272,12 @@ class SystemController {
     const p = pagination(q);
     const list = await rows(
       db,
-      `SELECT namespace,external_key,barcode,style_no,product_name,cooperation_no,warehouse,source_updated_at,
-       to_char(synced_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS synced_at
-       FROM vop_catalog ORDER BY vop_catalog.synced_at DESC,namespace,external_key LIMIT $1 OFFSET $2`,
+      `SELECT c.namespace,c.external_key,c.barcode,c.style_no,c.product_name,c.cooperation_no,c.warehouse,c.source_updated_at,
+       d.detail,
+       to_char(d.synced_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS detail_synced_at,
+       to_char(c.synced_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS synced_at
+       FROM vop_catalog c LEFT JOIN vop_product_details d ON d.namespace=c.namespace AND d.barcode=c.barcode
+       ORDER BY c.synced_at DESC,c.namespace,c.external_key LIMIT $1 OFFSET $2`,
       p.pageSize,
       (p.page - 1) * p.pageSize,
     );
@@ -291,6 +294,14 @@ class SystemController {
         "UPDATE vop_connections SET requested_at=now() RETURNING namespace",
       );
       if (!requested.length) fail("NOT_CONFIGURED", "同步服务尚未配置", 409);
+      await rows(
+        tx,
+        "UPDATE vop_detail_jobs SET next_run_at=now() RETURNING namespace",
+      );
+      await rows(
+        tx,
+        "UPDATE vop_detail_tasks SET next_run_at=now() RETURNING namespace",
+      );
       await audit(tx, context(r), "VIP_SYNC_REQUEST", "vip", null, null, {
         capability: "SCHEDULE_CATALOG",
       });

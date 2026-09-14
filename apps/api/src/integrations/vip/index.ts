@@ -44,7 +44,14 @@ export async function vipStatus() {
   )[0];
   return {
     mode: "catalog",
-    capabilities: ["SCHEDULE_CATALOG"],
+    capabilities: ["SCHEDULE_CATALOG", "PRODUCT_DETAILS"],
+    detailJobs: await rows(
+      db,
+      `SELECT j.namespace,j.status,j.next_page,j.scanned,j.last_error,
+      to_char(j.last_success_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS last_success_at,
+      (SELECT count(*) FROM vop_catalog c JOIN vop_product_details d ON d.namespace=c.namespace AND d.barcode=c.barcode WHERE c.namespace=j.namespace) AS matched
+      FROM vop_detail_jobs j ORDER BY j.namespace`,
+    ),
     connections,
     runs,
     total: totals.total,
