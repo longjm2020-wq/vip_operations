@@ -34,3 +34,11 @@ VIS 授权账号页面已核实：供应商身份与当前 VOP 开发者账号�
 - 使用已由 VIS 核实的供应商 ID 执行一次只读查询，实际返回 `vipapis.oauth-invalidate-failure`，未返回品牌数据。实际错误与方法页面授权标注存在差异；不能推断业务授权已完成，也不能将其当作空数据。需登录后核对当前应用授权，并按官方 OAuth 流程取得必要授权：https://vop.vip.com/doccenter/viewdoc/33 。
 - Railway 项目五个服务均显示 Online，Worker 仍连接 main；当前工作区处于试用状态，设置页没有静态出口选项。官方静态出口功能要求 Pro，启用后须记录该服务列出的全部 IPv4 地址、添加平台白名单并重新部署：https://docs.railway.com/networking/static-outbound-ips 。不能使用本机测试出口替代生产出口。
 - 同步尚未实现或启用；现有 Worker 仅处理内部健康检查任务。完成授权、出口与生产凭据配置后，才可验证实际业务响应，并据此实现数据适配、幂等入库、失败恢复和逐项验收。
+
+## 后续生产网络与 OAuth 准备
+
+用户已订阅 Pro。Worker 固定出口已开启，分配的三个生产 IPv4 地址经用户逐项范围确认后全部加入 VOP 白名单，原本机测试地址保留。Worker 重新部署 `e0802638-869c-4180-b4e1-5731c8f91cdd` 已 Active，日志显示 Worker ready；尚未在该实例执行真实 VOP 调用。
+
+`scripts/vop-oauth.ts prepare` 创建随机 state 和本机授权尝试记录，使用已注册 HTTPS 回调地址。用户完成授权后，将完整返回地址保存至 Git 忽略的 `.local/vop-oauth-return.txt`，运行 `scripts/vop-oauth.ts exchange` 校验来源、路径、state、重复参数及本机尝试时效，通过 HTTPS POST 向官方 token 端点交换令牌。官方授权码有效期5分钟，必须及时交换；本机尝试15分钟上限不是平台授权码有效期。state 缺失或不匹配不得绕过校验。
+
+令牌只保存本机 Git 忽略的 `.local/vop-token.json`，不输出到终端或聊天，不自动上传生产。该文件是明文本机凭据文件，须按密钥保护。生产令牌存储、刷新与同步调度尚待实现。授权程序已通过单元测试、类型检查和 lint，整个单元测试集23项通过。
