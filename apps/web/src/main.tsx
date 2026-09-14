@@ -51,6 +51,12 @@ import {
 } from "./operations";
 import { AccessPage, AuditPage } from "./system";
 import { VipPage } from "./vip";
+import {
+  SopPage,
+  ProjectsPage,
+  ProjectDetailPage,
+  ProjectNotifications,
+} from "./projects";
 import "./style.css";
 const useUi = create<{ collapsed: boolean; toggle: () => void }>((set) => ({
   collapsed: false,
@@ -184,6 +190,16 @@ function Workspace({ user }: { user: Row }) {
       permission: "supplier.read",
     },
     {
+      key: "/project-management",
+      label: "项目管理",
+      icon: <TeamOutlined />,
+      permission: "project.read",
+      children: [
+        { key: "/sops", label: "操作流程 SOP", permission: "project.read" },
+        { key: "/projects", label: "新建项目", permission: "project.read" },
+      ],
+    },
+    {
       key: "/settings",
       label: "系统设置",
       icon: <SettingOutlined />,
@@ -239,7 +255,12 @@ function Workspace({ user }: { user: Row }) {
             mode="inline"
             theme="dark"
             selectedKeys={selected ? [selected] : []}
-            defaultOpenKeys={["/settings"]}
+            defaultOpenKeys={
+              location.pathname.startsWith("/projects") ||
+              location.pathname === "/sops"
+                ? ["/project-management"]
+                : ["/settings"]
+            }
             items={menu}
           />
           {!ui.collapsed && (
@@ -265,6 +286,7 @@ function Workspace({ user }: { user: Row }) {
               </Typography.Text>
             </Space>
             <Space size={14}>
+              <ProjectNotifications />
               <Avatar
                 size={30}
                 style={{ background: "#dce9e7", color: "#24594f" }}
@@ -329,6 +351,9 @@ function Workspace({ user }: { user: Row }) {
               <Route path="/roles" element={<AccessPage roles />} />
               <Route path="/audit-logs" element={<AuditPage />} />
               <Route path="/vip" element={<VipPage />} />
+              <Route path="/sops" element={<SopPage />} />
+              <Route path="/projects" element={<ProjectsPage />} />
+              <Route path="/projects/:id" element={<ProjectDetailPage />} />
               <Route path="*" element={<Navigate to="/products" replace />} />
             </Routes>
             <footer className="page-footer">

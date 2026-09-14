@@ -7,6 +7,8 @@ import cookieParser from "cookie-parser";
 import helmet from "helmet";
 import { randomUUID } from "node:crypto";
 import { Request, Response, NextFunction } from "express";
+import { NestExpressApplication } from "@nestjs/platform-express";
+import { ProjectsModule } from "./modules/projects/controller.js";
 import {
   AuthModule,
   InventoryModule,
@@ -23,6 +25,7 @@ import { enrichOpenApi } from "./openapi.js";
     InventoryModule,
     PurchaseModule,
     SystemModule,
+    ProjectsModule,
     MasterModule,
   ],
   providers: [
@@ -35,10 +38,11 @@ export async function start() {
   validateIntegrationMode();
   if (!process.env.DATABASE_URL || !process.env.APP_ORIGIN)
     throw Error("DATABASE_URL and APP_ORIGIN required");
-  const app = await NestFactory.create(AppModule, {
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     logger: ["warn", "error", "log"],
   });
   app.use(helmet());
+  app.useBodyParser("json", { limit: "8mb" });
   app.use(cookieParser());
   app.use(
     (

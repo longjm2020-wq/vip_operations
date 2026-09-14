@@ -26,6 +26,9 @@ export const permissions = [
   "receipt.post",
   "audit.read",
   "vip.settings",
+  "project.read",
+  "project.create",
+  "sop.manage",
 ];
 const buyer = [
   "product.read",
@@ -89,6 +92,24 @@ export const roleSeeds: Record<
     ],
   },
 };
+for (const r of Object.values(roleSeeds))
+  r.permissions = [
+    ...new Set([
+      ...r.permissions,
+      "project.read",
+      "project.create",
+      "sop.manage",
+    ]),
+  ];
+for (const [code, name] of Object.entries({
+  PRODUCT: "商品",
+  CUSTOMER: "客服",
+  FINANCE: "财务",
+}))
+  roleSeeds[code] = {
+    name,
+    permissions: ["project.read", "project.create", "sop.manage"],
+  };
 export const inTransitStatuses = [
   "CONFIRMED",
   "IN_PRODUCTION",
