@@ -1,7 +1,10 @@
 import "dotenv/config";
 import { Worker } from "bullmq";
 import { validateIntegrationMode } from "../../api/src/integrations/vip/index.js";
+import { startVopScheduler } from "./vop-scheduler.js";
 validateIntegrationMode();
+const stopVop =
+  process.env.VIP_MODE === "catalog" ? startVopScheduler() : async () => {};
 export function connection() {
   const u = new URL(process.env.REDIS_URL || "redis://127.0.0.1:6379");
   return {
@@ -33,6 +36,10 @@ worker.on("failed", (job, error) =>
 worker.on("error", () => console.error("Queue unavailable"));
 for (const signal of ["SIGINT", "SIGTERM"] as const)
   process.on(signal, () => {
-    void worker.close().then(() => process.exit(0));
+    void Promise.all([worker.close(), stopVop()]).then(() => process.exit(0));
   });
-console.log("Worker ready. Only internal health-check tasks are enabled.");
+console.log(
+  process.env.VIP_MODE === "catalog"
+    ? "Worker ready. VOP schedule catalog sync enabled."
+    : "Worker ready. Only internal health-check tasks are enabled.",
+);

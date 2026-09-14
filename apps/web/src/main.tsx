@@ -50,6 +50,7 @@ import {
   ProductDetail,
 } from "./operations";
 import { AccessPage, AuditPage } from "./system";
+import { VipPage } from "./vip";
 import "./style.css";
 const useUi = create<{ collapsed: boolean; toggle: () => void }>((set) => ({
   collapsed: false,
@@ -124,7 +125,7 @@ function Login() {
               进入工作台
             </Button>
           </Form>
-          <p className="login-note">内部经营系统 · 唯品会接入尚未启用</p>
+          <p className="login-note">内部经营系统 · 商品与供应链管理</p>
         </div>
       </section>
     </div>
@@ -245,7 +246,7 @@ function Workspace({ user }: { user: Row }) {
             <div className="sidebar-footer">
               <span className="status-dot" /> 内部管理系统
               <br />
-              <small>唯品会接入待配置</small>
+              <small>商品 · 库存 · 采购</small>
             </div>
           )}
         </Layout.Sider>
@@ -327,17 +328,7 @@ function Workspace({ user }: { user: Row }) {
               <Route path="/users" element={<AccessPage />} />
               <Route path="/roles" element={<AccessPage roles />} />
               <Route path="/audit-logs" element={<AuditPage />} />
-              <Route
-                path="/vip"
-                element={
-                  <Alert
-                    type="info"
-                    showIcon
-                    title="唯品会尚未接入"
-                    description="企业认证、应用权限及字段定义确认后再启用。当前内部商品、采购和入库功能可独立使用。"
-                  />
-                }
-              />
+              <Route path="/vip" element={<VipPage />} />
               <Route path="*" element={<Navigate to="/products" replace />} />
             </Routes>
             <footer className="page-footer">

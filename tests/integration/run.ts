@@ -540,6 +540,61 @@ try {
     [...buyerRole.permissionCodes].sort(),
   );
   check("spreadsheet profile edits preserve current roles and permissions");
+  assert.equal((await ok("/integrations/vip/status")).mode, "disabled");
+  assert.equal(
+    (
+      await request(
+        "/integrations/vip/status",
+        "GET",
+        undefined,
+        undefined,
+        buyer,
+      )
+    ).status,
+    403,
+  );
+  assert.equal(
+    (await request("/integrations/vip/sync", "POST", {}, undefined, buyer))
+      .status,
+    403,
+  );
+  await rows(
+    db,
+    "INSERT INTO vop_connections(namespace,vendor_id,token_cipher,token_expires_at) VALUES('test:123',123,'never-expose-this',now()+interval '1 day') RETURNING namespace",
+  );
+  const vopState = await ok("/integrations/vip/status");
+  assert.ok(
+    Math.abs(
+      new Date(vopState.connections[0].tokenExpiresAt).getTime() -
+        Date.now() -
+        86400000,
+    ) < 10000,
+    "VOP timestamps preserve the database instant across time zones",
+  );
+  assert.equal(vopState.mode, "catalog");
+  assert.equal(JSON.stringify(vopState).includes("never-expose-this"), false);
+  assert.equal((await ok("/integrations/vip/catalog")).total, 0);
+  const requestKey = randomUUID();
+  await ok("/integrations/vip/sync", "POST", {}, requestKey);
+  await ok("/integrations/vip/sync", "POST", {}, requestKey);
+  assert.equal(
+    Number(
+      (await one(
+        db,
+        "SELECT count(*) AS n FROM audit_logs WHERE action='VIP_SYNC_REQUEST'",
+      ))!.n,
+    ),
+    1,
+  );
+  assert.ok(
+    (await one(
+      db,
+      "SELECT requested_at FROM vop_connections WHERE namespace='test:123'",
+    ))!.requested_at,
+  );
+  check(
+    "VOP status and manual sync require permission, hide tokens, and audit idempotently",
+  );
   await migrate();
   check("migrations rerun without modifying data");
   await writeFile(

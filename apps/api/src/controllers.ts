@@ -16,7 +16,16 @@ import { ApiTags, ApiOperation } from "@nestjs/swagger";
 import { Response } from "express";
 import { db, rows, one } from "../../../packages/database/src/index.js";
 import { context, AuthRequest, Permission, Public } from "./http.js";
-import { parse, id, requirePermission, entity, pagination } from "./core.js";
+import {
+  parse,
+  id,
+  requirePermission,
+  entity,
+  pagination,
+  command,
+  fail,
+  audit,
+} from "./core.js";
 import * as auth from "./modules/auth/service.js";
 import * as master from "./modules/master/service.js";
 import * as inventory from "./modules/inventory/service.js";
@@ -257,6 +266,37 @@ class SuggestionController {
 @ApiTags("审计与接入")
 @Controller("api/v1")
 class SystemController {
+  @Permission("vip.settings") @Get("integrations/vip/catalog") async catalog(
+    @Query() q: any,
+  ) {
+    const p = pagination(q);
+    const list = await rows(
+      db,
+      `SELECT namespace,external_key,barcode,style_no,product_name,cooperation_no,warehouse,source_updated_at,
+       to_char(synced_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS synced_at
+       FROM vop_catalog ORDER BY vop_catalog.synced_at DESC,namespace,external_key LIMIT $1 OFFSET $2`,
+      p.pageSize,
+      (p.page - 1) * p.pageSize,
+    );
+    const total = (await one(db, "SELECT count(*) AS total FROM vop_catalog"))!
+      .total;
+    return { items: list, total: Number(total), ...p };
+  }
+  @Permission("vip.settings") @Post("integrations/vip/sync") async sync(
+    @Req() r: AuthRequest,
+  ) {
+    return command(context(r), "vip.catalog.request", {}, async (tx) => {
+      const requested = await rows(
+        tx,
+        "UPDATE vop_connections SET requested_at=now() RETURNING namespace",
+      );
+      if (!requested.length) fail("NOT_CONFIGURED", "同步服务尚未配置", 409);
+      await audit(tx, context(r), "VIP_SYNC_REQUEST", "vip", null, null, {
+        capability: "SCHEDULE_CATALOG",
+      });
+      return { requested: true };
+    });
+  }
   @Permission("vip.settings") @Get("integrations/vip/status") vip() {
     return vipStatus();
   }

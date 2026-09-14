@@ -432,6 +432,68 @@ model color_mappings {
   updated_at DateTime @default(now()) @db.Timestamptz(6)
 }
 
+model vop_connections {
+  namespace String @id
+  vendor_id BigInt
+  token_cipher String
+  token_expires_at DateTime @db.Timestamptz(6)
+  watermark BigInt @default(0)
+  window_start BigInt?
+  window_end BigInt?
+  window_full Boolean @default(false)
+  reconciled_at DateTime? @db.Timestamptz(6)
+  next_page Int @default(1)
+  status String @default("READY")
+  last_error String?
+  last_success_at DateTime? @db.Timestamptz(6)
+  heartbeat_at DateTime? @db.Timestamptz(6)
+  requested_at DateTime? @db.Timestamptz(6)
+  updated_at DateTime @default(now()) @db.Timestamptz(6)
+  catalog vop_catalog[]
+  runs vop_sync_runs[]
+  rejections vop_sync_rejections[]
+}
+
+model vop_catalog {
+  namespace String
+  external_key String
+  barcode String
+  style_no String
+  product_name String
+  cooperation_no BigInt
+  warehouse String
+  source_updated_at BigInt
+  payload_hash String
+  synced_at DateTime @default(now()) @db.Timestamptz(6)
+  connection vop_connections @relation(fields:[namespace],references:[namespace],onDelete:NoAction,onUpdate:NoAction)
+  @@id([namespace,external_key])
+  @@index([barcode],map:"vop_catalog_barcode")
+}
+
+model vop_sync_runs {
+  id BigInt @id @default(autoincrement())
+  namespace String
+  started_at DateTime @default(now()) @db.Timestamptz(6)
+  finished_at DateTime? @db.Timestamptz(6)
+  status String @default("RUNNING")
+  pages Int @default(0)
+  received Int @default(0)
+  changed Int @default(0)
+  rejected Int @default(0)
+  error_code String?
+  connection vop_connections @relation(fields:[namespace],references:[namespace],onDelete:NoAction,onUpdate:NoAction)
+}
+
+model vop_sync_rejections {
+  namespace String
+  record_hash String
+  payload Json
+  error_code String
+  last_seen_at DateTime @default(now()) @db.Timestamptz(6)
+  connection vop_connections @relation(fields:[namespace],references:[namespace],onDelete:NoAction,onUpdate:NoAction)
+  @@id([namespace,record_hash])
+}
+
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
 model size_mappings {
   id         BigInt   @id @default(autoincrement())
