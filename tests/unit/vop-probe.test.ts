@@ -5,6 +5,24 @@ import {
 } from "../../apps/api/src/integrations/vip/probe.js";
 
 describe("VOP read-only connection preparation", () => {
+  it("accepts the observed gateway success envelope without asserting vendor access", async () => {
+    const result = await probeVopHealth(
+      { appKey: "test", appSecret: "secret" },
+      async () =>
+        new Response(JSON.stringify({ returnCode: "0", result: null })),
+    );
+    expect(result).toEqual({
+      gatewayResponseReceived: true,
+      vendorAccessVerified: false,
+      syncEnabled: false,
+    });
+    await expect(
+      probeVopHealth(
+        { appKey: "test", appSecret: "secret" },
+        async () => new Response(JSON.stringify({ returnCode: "0" })),
+      ),
+    ).rejects.toThrow("VOP_GATEWAY_REJECTED");
+  });
   it("uses HMAC-MD5 with uppercase output (RFC 2202 vector)", () => {
     expect(signVop({}, "what do ya want for nothing?", "Jefe")).toBe(
       "750C783E6AB0B503EAA86E310A5DB738",

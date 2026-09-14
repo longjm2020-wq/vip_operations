@@ -70,10 +70,12 @@ export async function probeVopHealth(
   // Only map known codes; never expose the gateway message or arbitrary values.
   if (record.returnCode === "vipapis.ip-in-blackList")
     throw new VopProbeError("VOP_IP_NOT_ALLOWLISTED");
-  if (Object.hasOwn(record, "returnCode"))
+  const gatewaySuccess =
+    record.returnCode === "0" && Object.hasOwn(record, "result");
+  if (Object.hasOwn(record, "returnCode") && !gatewaySuccess)
     throw new VopProbeError("VOP_GATEWAY_REJECTED");
   if ("error" in record) throw new VopProbeError("VOP_GATEWAY_REJECTED");
-  if (!Object.hasOwn(record, "success"))
+  if (!gatewaySuccess && !Object.hasOwn(record, "success"))
     throw new VopProbeError("VOP_UNRECOGNIZED_RESPONSE");
   // The health payload is a CheckResult, not proof of vendor ownership/data access.
   return {

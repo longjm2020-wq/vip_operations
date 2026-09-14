@@ -25,3 +25,5 @@ VIS 授权账号页面已核实：供应商身份与当前 VOP 开发者账号�
 ## 首次真实连接检查
 
 用户配置密钥后已执行 healthCheck。网关返回 HTTP 200，但响应为 `returnCode` / `returnMessage`，错误码 `vipapis.ip-in-blackList`，表示调用来源 IP 不在白名单。此结果不证明密钥、签名或业务授权有效。已补充该网关信封的安全错误映射与回归测试。需经用户确认添加指定测试出口 IP 后再试；生产部署应另行核实实际执行服务的出口 IP，不能使用 Web 公网域名解析地址代替。
+
+用户随后明确批准添加单个测试出口 IP，平台已显示创建成功。再次调用返回 HTTP 200、`returnCode: "0"`、`result: null`。已修正成功信封解析，并再次真实运行得到 `gatewayResponseReceived: true`。这仅确认本机 healthCheck 请求被网关接受，不证明 CheckResult 健康或供应商业务数据访问。19项单元测试通过；业务查询、Railway 出口及生产密钥配置、同步仍待完成。
