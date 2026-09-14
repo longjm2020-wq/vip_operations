@@ -10,7 +10,7 @@
 
 1. API 部署前运行 `pnpm db:migrate`，应用 `003_vop_sync.sql`；这是新增表迁移，不重写业务表。Web 与 API 发布后可访问「系统设置 → 唯品会接入」。页面和手动请求需要 `vip.settings` 权限。
 2. Worker 保留 `REDIS_URL`，增加指向同项目 Postgres 的私网 `DATABASE_URL`。配置 `VIP_MODE=catalog`、`VOP_APP_KEY`、`VOP_APP_SECRET`、`VOP_VENDOR_ID`、`VOP_REQUEST_IP`（应用出口 IP），以及首次授权的 `VOP_ACCESS_TOKEN`、`VOP_REFRESH_TOKEN`、`VOP_TOKEN_EXPIRES_AT`（Unix 毫秒）。所有生产出口地址均须在唯品会白名单内。
-3. 启动命令保持 `pnpm start:worker`。每 15 秒检查管理员请求；通常每 5 分钟启动增量窗口，单批最多 10 页，每页 200 条，批间 15 秒、请求间 1 秒。此频率是本系统保守配置，不代表平台额度承诺。
+3. 启动命令保持 `pnpm start:worker`。每 15 秒检查管理员请求；通常每小时启动增量窗口，可重试的失败等待 5 分钟，单批最多 10 页，每页 200 条，批间 15 秒、请求间 1 秒。此频率是本系统保守配置，不代表平台额度承诺。
 4. 首次从时间 0 开始全量读取，随后按成功水位向前重叠 300 秒，截止时间延迟 120 秒。固定窗口跨批、跨重启续传；每日从 0 重新核对，以补偿迟到数据和分页变化。平台没有公开稳定快照排序保证，所以不能承诺绝对无遗漏；保留历史数据，不据缺失执行删除。
 
 ## 正确性与恢复
@@ -28,6 +28,6 @@
 
 `pnpm test:unit`；`pnpm test:integration`；`pnpm exec tsx tests/integration/vop-sync.ts`（根据本地 `DATABASE_URL` 创建并清理独立测试数据库）；`pnpm typecheck`；`pnpm lint`；`pnpm build`。
 
-上线后查看 Worker 的 `vop-catalog` 日志，以及接入页的商品数、最近成功时间、异常数、授权到期时间。超过 10 分钟未报告状态会显示告警。运行历史保存在 `vop_sync_runs`，目前没有自动删除策略，按数据库增长安排备份和归档。备份数据库同时安全备份 AppSecret，否则无法解密令牌。
+上线后查看 Worker 的 `vop-catalog` 日志，以及接入页的商品数、最近成功时间、异常数、授权到期时间。超过 70 分钟未报告状态会显示告警，避免每小时调度的等待阶段误报。运行历史保存在 `vop_sync_runs`，目前没有自动删除策略，按数据库增长安排备份和归档。备份数据库同时安全备份 AppSecret，否则无法解密令牌。
 
 回退：先把 Worker `VIP_MODE` 改为 `disabled` 并重新部署。保留四张新增表和已保存的平台资料，再回滚应用版本；不需要删除或回滚业务数据。

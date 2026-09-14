@@ -33,7 +33,13 @@ export function startVopScheduler() {
         config.namespace,
         config.token,
       );
-      nextRun = Date.now() + (result.status === "CONTINUING" ? 15000 : 300000);
+      nextRun =
+        Date.now() +
+        (result.status === "CONTINUING"
+          ? 15000
+          : result.status === "FAILED"
+            ? 300000
+            : 3600000);
       console.log(JSON.stringify({ event: "vop-catalog", ...result }));
     } catch {
       nextRun = Date.now() + 300000;

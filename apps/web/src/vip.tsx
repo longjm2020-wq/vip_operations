@@ -81,7 +81,7 @@ export function VipPage() {
           type="info"
           showIcon
           title="当前同步范围：唯品会档期商品"
-          description="每 5 分钟检查更新，每日重新核对全量数据。此处保留平台原始资料供核对，不会覆盖内部商品、库存或采购单。默认查询范围不包含 OXO 业务；订单、销售和库存同步尚未启用。"
+          description="每小时检查更新，每日重新核对全量数据；需要时可点击立即同步。此处保留平台原始资料供核对，不会覆盖内部商品、库存或采购单。默认查询范围不包含 OXO 业务；订单、销售和库存同步尚未启用。"
         />
         {(overview.error || catalog.error) && (
           <Alert
@@ -107,11 +107,11 @@ export function VipPage() {
               <span>授权到期：{when(c.tokenExpiresAt)}</span>
             </Space>
             {(!c.heartbeatAt ||
-              Date.now() - new Date(c.heartbeatAt).getTime() > 600000) && (
+              Date.now() - new Date(c.heartbeatAt).getTime() > 4200000) && (
               <Alert
                 style={{ marginTop: 16 }}
                 type="warning"
-                title="Worker 超过 10 分钟未报告状态，请检查服务运行情况"
+                title="Worker 超过 70 分钟未报告状态，请检查服务运行情况"
               />
             )}
             {c.lastError && (
