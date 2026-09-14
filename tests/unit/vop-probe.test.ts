@@ -51,6 +51,32 @@ describe("VOP read-only connection preparation", () => {
       }),
     ).rejects.toThrow("VOP_CREDENTIALS_MISSING");
   });
+  it("recognizes the real gateway IP rejection without exposing its message", async () => {
+    await expect(
+      probeVopHealth(
+        { appKey: "test", appSecret: "secret" },
+        async () =>
+          new Response(
+            JSON.stringify({
+              returnCode: "vipapis.ip-in-blackList",
+              returnMessage: "private response details",
+            }),
+          ),
+      ),
+    ).rejects.toThrow(/^VOP_IP_NOT_ALLOWLISTED$/);
+    await expect(
+      probeVopHealth(
+        { appKey: "test", appSecret: "secret" },
+        async () =>
+          new Response(
+            JSON.stringify({
+              returnCode: "private-token",
+              returnMessage: "secret",
+            }),
+          ),
+      ),
+    ).rejects.toThrow(/^VOP_GATEWAY_REJECTED$/);
+  });
   it("does not leak signed URLs or raw errors", async () => {
     await expect(
       probeVopHealth({ appKey: "test", appSecret: "secret" }, async () => {

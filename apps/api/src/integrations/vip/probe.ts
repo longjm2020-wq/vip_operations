@@ -66,6 +66,12 @@ export async function probeVopHealth(
   if (!data || typeof data !== "object" || Array.isArray(data))
     throw new VopProbeError("VOP_INVALID_RESPONSE");
   const record = data as Record<string, unknown>;
+  // Gateway-level rejections use a different envelope from OSP service errors.
+  // Only map known codes; never expose the gateway message or arbitrary values.
+  if (record.returnCode === "vipapis.ip-in-blackList")
+    throw new VopProbeError("VOP_IP_NOT_ALLOWLISTED");
+  if (Object.hasOwn(record, "returnCode"))
+    throw new VopProbeError("VOP_GATEWAY_REJECTED");
   if ("error" in record) throw new VopProbeError("VOP_GATEWAY_REJECTED");
   if (!Object.hasOwn(record, "success"))
     throw new VopProbeError("VOP_UNRECOGNIZED_RESPONSE");
