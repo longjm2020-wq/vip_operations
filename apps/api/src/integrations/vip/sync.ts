@@ -67,11 +67,15 @@ export async function syncCatalog(
         new Date(bootstrap.expiresAt),
       ],
     );
-    const state = (
-      await c.query("SELECT * FROM vop_connections WHERE namespace=$1", [
-        namespace,
-      ])
-    ).rows[0];
+    const state =
+      // Preserve PostgreSQL microseconds when consuming only the observed request.
+      // pg's Date parser truncates to milliseconds and would leave the flag pending.
+      (
+        await c.query(
+          "SELECT *,requested_at::text AS requested_at FROM vop_connections WHERE namespace=$1",
+          [namespace],
+        )
+      ).rows[0];
     await c.query(
       "UPDATE vop_connections SET heartbeat_at=now() WHERE namespace=$1",
       [namespace],

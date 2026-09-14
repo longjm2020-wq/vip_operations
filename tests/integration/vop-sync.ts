@@ -182,6 +182,27 @@ try {
   };
   await syncCatalog(pool, client, "test:123", initial);
   pass("daily full reconciliation revisits late changes");
+  await pool.query(
+    "UPDATE vop_connections SET requested_at='2026-09-14T00:00:00.123456Z'",
+  );
+  client.page = async () => ({ list: [], has_next: false });
+  await syncCatalog(pool, client, "test:123", initial);
+  assert.equal(
+    (await pool.query("SELECT requested_at FROM vop_connections")).rows[0]
+      .requested_at,
+    null,
+  );
+  pass("manual request with microsecond precision is consumed exactly once");
+  client.page = async () => {
+    await pool.query("UPDATE vop_connections SET requested_at=now()");
+    return { list: [], has_next: false };
+  };
+  await syncCatalog(pool, client, "test:123", initial);
+  assert.ok(
+    (await pool.query("SELECT requested_at FROM vop_connections")).rows[0]
+      .requested_at,
+  );
+  pass("a newer request arriving during a run stays pending");
   await pool.query("UPDATE vop_connections SET token_cipher=$1", [
     seal(expired, credentials.appSecret, "test:123"),
   ]);
