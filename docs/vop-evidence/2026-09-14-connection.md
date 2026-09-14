@@ -50,3 +50,9 @@ VIS 授权账号页面已核实：供应商身份与当前 VOP 开发者账号�
 携带 accessToken 再次调用供应商品牌关系查询：首次请求出现未分类的读取失败，随后一次重试返回 HTTP 200、returnCode 0、品牌关系列表1条。真实结果字段为 brand_name_eng、vendor_id、vendor_name、brand_name、brand_id；仅保存字段名和数量作为证据，无商品、订单、库存同步完成的含义。
 
 本机 `.local/vop-production.env` 已准备给用户输入 Railway Worker。应用标识与供应商ID已在 Worker 暂存为变量变更，敏感凭据等待用户粘贴；尚未部署此批配置。现有前端不具备自动处理 OAuth 回调能力，后续需实现正式回调与生产令牌生命周期管理。
+
+## Railway 生产连接已验证
+
+用户粘贴六项 VOP 环境变量后，已核对名称并部署。新部署 `52fea353-8b39-4be8-8548-0c4e54cfd12d` 状态 Active，控制台连接新实例 `ec0d8cb2-f81e-4906-a150-a6e5408f67ce`。通过该实例 Node 进程从环境读取凭据，签名调用供应商品牌关系接口，输出仅包含安全摘要：HTTP 200、success true、brandCount 1、vendorMatches true。未输出令牌、密钥或品牌原始记录。
+
+该验证确认生产固定出口与平台白名单、应用凭据及供应商 OAuth 令牌共同可用。生产 main 仍为原内部管理系统版本，Worker 仍只监听内部健康检查队列；本次手动只读查询没有写数据库。数据同步、增量分页、正式授权回调、持久化令牌刷新及业务适配尚未实现。
