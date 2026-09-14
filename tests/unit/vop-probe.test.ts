@@ -5,6 +5,20 @@ import {
 } from "../../apps/api/src/integrations/vip/probe.js";
 
 describe("VOP read-only connection preparation", () => {
+  it("reports the observed authorization rejection without exposing response text", async () => {
+    await expect(
+      probeVopHealth(
+        { appKey: "test", appSecret: "secret" },
+        async () =>
+          new Response(
+            JSON.stringify({
+              returnCode: "vipapis.oauth-invalidate-failure",
+              returnMessage: "private details",
+            }),
+          ),
+      ),
+    ).rejects.toThrow(/^VOP_AUTHORIZATION_REQUIRED$/);
+  });
   it("accepts the observed gateway success envelope without asserting vendor access", async () => {
     const result = await probeVopHealth(
       { appKey: "test", appSecret: "secret" },

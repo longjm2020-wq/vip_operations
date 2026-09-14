@@ -70,6 +70,8 @@ export async function probeVopHealth(
   // Only map known codes; never expose the gateway message or arbitrary values.
   if (record.returnCode === "vipapis.ip-in-blackList")
     throw new VopProbeError("VOP_IP_NOT_ALLOWLISTED");
+  if (record.returnCode === "vipapis.oauth-invalidate-failure")
+    throw new VopProbeError("VOP_AUTHORIZATION_REQUIRED");
   const gatewaySuccess =
     record.returnCode === "0" && Object.hasOwn(record, "result");
   if (Object.hasOwn(record, "returnCode") && !gatewaySuccess)

@@ -27,3 +27,10 @@ VIS 授权账号页面已核实：供应商身份与当前 VOP 开发者账号�
 用户配置密钥后已执行 healthCheck。网关返回 HTTP 200，但响应为 `returnCode` / `returnMessage`，错误码 `vipapis.ip-in-blackList`，表示调用来源 IP 不在白名单。此结果不证明密钥、签名或业务授权有效。已补充该网关信封的安全错误映射与回归测试。需经用户确认添加指定测试出口 IP 后再试；生产部署应另行核实实际执行服务的出口 IP，不能使用 Web 公网域名解析地址代替。
 
 用户随后明确批准添加单个测试出口 IP，平台已显示创建成功。再次调用返回 HTTP 200、`returnCode: "0"`、`result: null`。已修正成功信封解析，并再次真实运行得到 `gatewayResponseReceived: true`。这仅确认本机 healthCheck 请求被网关接受，不证明 CheckResult 健康或供应商业务数据访问。19项单元测试通过；业务查询、Railway 出口及生产密钥配置、同步仍待完成。
+
+## 供应商业务查询与生产出口核对
+
+- 已读取官方 `vipapis.brand.BrandService-1.0.0/getVendorBrandRelationshipByVendorId` 页面：业务参数仅必填整数 `vendor_id`，响应声明为品牌关系列表，页面标注“不需要授权”。文档地址：https://vop.vip.com/home#/api/method/detail/vipapis.brand.BrandService-1.0.0/getVendorBrandRelationshipByVendorId 。
+- 使用已由 VIS 核实的供应商 ID 执行一次只读查询，实际返回 `vipapis.oauth-invalidate-failure`，未返回品牌数据。实际错误与方法页面授权标注存在差异；不能推断业务授权已完成，也不能将其当作空数据。需登录后核对当前应用授权，并按官方 OAuth 流程取得必要授权：https://vop.vip.com/doccenter/viewdoc/33 。
+- Railway 项目五个服务均显示 Online，Worker 仍连接 main；当前工作区处于试用状态，设置页没有静态出口选项。官方静态出口功能要求 Pro，启用后须记录该服务列出的全部 IPv4 地址、添加平台白名单并重新部署：https://docs.railway.com/networking/static-outbound-ips 。不能使用本机测试出口替代生产出口。
+- 同步尚未实现或启用；现有 Worker 仅处理内部健康检查任务。完成授权、出口与生产凭据配置后，才可验证实际业务响应，并据此实现数据适配、幂等入库、失败恢复和逐项验收。
