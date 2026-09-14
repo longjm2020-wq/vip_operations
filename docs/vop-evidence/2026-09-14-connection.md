@@ -42,3 +42,11 @@ VIS 授权账号页面已核实：供应商身份与当前 VOP 开发者账号�
 `scripts/vop-oauth.ts prepare` 创建随机 state 和本机授权尝试记录，使用已注册 HTTPS 回调地址。用户完成授权后，将完整返回地址保存至 Git 忽略的 `.local/vop-oauth-return.txt`，运行 `scripts/vop-oauth.ts exchange` 校验来源、路径、state、重复参数及本机尝试时效，通过 HTTPS POST 向官方 token 端点交换令牌。官方授权码有效期5分钟，必须及时交换；本机尝试15分钟上限不是平台授权码有效期。state 缺失或不匹配不得绕过校验。
 
 令牌只保存本机 Git 忽略的 `.local/vop-token.json`，不输出到终端或聊天，不自动上传生产。该文件是明文本机凭据文件，须按密钥保护。生产令牌存储、刷新与同步调度尚待实现。授权程序已通过单元测试、类型检查和 lint，整个单元测试集23项通过。
+
+## OAuth 与首个业务查询已验证
+
+用户在官方授权页完成操作后返回衣序首页，前端重定向到 products 并清除了查询参数。通过该次浏览器跳转记录恢复原始回调，验证 state 与回调地址后，在授权码有效期内成功换取访问令牌及刷新令牌。凭据保存在本机忽略目录，未输出明文。
+
+携带 accessToken 再次调用供应商品牌关系查询：首次请求出现未分类的读取失败，随后一次重试返回 HTTP 200、returnCode 0、品牌关系列表1条。真实结果字段为 brand_name_eng、vendor_id、vendor_name、brand_name、brand_id；仅保存字段名和数量作为证据，无商品、订单、库存同步完成的含义。
+
+本机 `.local/vop-production.env` 已准备给用户输入 Railway Worker。应用标识与供应商ID已在 Worker 暂存为变量变更，敏感凭据等待用户粘贴；尚未部署此批配置。现有前端不具备自动处理 OAuth 回调能力，后续需实现正式回调与生产令牌生命周期管理。
