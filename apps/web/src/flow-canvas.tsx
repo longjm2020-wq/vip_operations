@@ -39,6 +39,7 @@ export function FlowCanvas({
   const [source, setSource] = useState<string | null>(null);
   const [cursor, setCursor] = useState({ x: 0, y: 0 });
   const [edge, setEdge] = useState<{ from: string; to: string } | null>(null);
+  const [selectedNode, setSelectedNode] = useState<string | null>(null);
   const drag = useRef<{
     id?: string;
     x: number;
@@ -51,6 +52,87 @@ export function FlowCanvas({
     ...s,
     position: positions[s.id] || s.position,
   }));
+  const selected = nodes.find((n) => n.id === selectedNode);
+  const addAfter = () => {
+    if (!onChange || !selected || nodes.length >= 30) return;
+    const id = crypto.randomUUID();
+    onChange([
+      ...nodes,
+      {
+        id,
+        name: "新环节",
+        description: "",
+        dependsOn: [selected.id],
+        position: {
+          x: selected.position.x + 340,
+          y: selected.position.y + 260,
+        },
+      },
+    ]);
+    setSelectedNode(id);
+    setEdge(null);
+    setSource(null);
+  };
+  const removeNode = () => {
+    if (!onChange || !selected) return;
+    if (nodes.length === 1) {
+      message.warning("至少保留一个环节");
+      return;
+    }
+    onChange(
+      nodes
+        .filter((n) => n.id !== selected.id)
+        .map((n) => ({
+          ...n,
+          dependsOn: n.dependsOn.filter((id) => id !== selected.id),
+        })),
+    );
+    setSelectedNode(null);
+    setEdge(null);
+    setSource(null);
+  };
+  const removeEdge = () => {
+    if (!onChange || !edge) return;
+    onChange(
+      nodes.map((n) =>
+        n.id === edge.to
+          ? { ...n, dependsOn: n.dependsOn.filter((id) => id !== edge.from) }
+          : n,
+      ),
+    );
+    setEdge(null);
+    setSource(null);
+  };
+  const insertOnEdge = () => {
+    if (!onChange || !edge || nodes.length >= 30) return;
+    const from = nodes.find((n) => n.id === edge.from),
+      to = nodes.find((n) => n.id === edge.to);
+    if (!from || !to) return;
+    const id = crypto.randomUUID();
+    onChange([
+      ...nodes.map((n) =>
+        n.id === to.id
+          ? {
+              ...n,
+              dependsOn: n.dependsOn.map((p) => (p === from.id ? id : p)),
+            }
+          : n,
+      ),
+      {
+        id,
+        name: "新环节",
+        description: "",
+        dependsOn: [from.id],
+        position: {
+          x: (from.position.x + to.position.x) / 2,
+          y: (from.position.y + to.position.y) / 2 + 260,
+        },
+      },
+    ]);
+    setSelectedNode(id);
+    setEdge(null);
+    setSource(null);
+  };
   const point = (x: number, y: number) => {
     const box = root.current!.getBoundingClientRect();
     return {
@@ -134,25 +216,37 @@ export function FlowCanvas({
           </Button>
         )}
         <Typography.Text>{Math.round(view.scale * 100)}%</Typography.Text>
+        {onChange && selected && (
+          <>
+            <Typography.Text>已选：{selected.name}</Typography.Text>
+            <Button disabled={nodes.length >= 30} onClick={addAfter}>
+              ＋ 后续环节
+            </Button>
+            <Button
+              onClick={() => {
+                setSource(selected.id);
+                setCursor({
+                  x: selected.position.x + 330,
+                  y: selected.position.y + 105,
+                });
+              }}
+            >
+              ＋ 连线
+            </Button>
+            <Button danger disabled={nodes.length === 1} onClick={removeNode}>
+              － 删除卡片
+            </Button>
+          </>
+        )}
         {onChange && edge && (
-          <Button
-            danger
-            onClick={() => {
-              onChange(
-                nodes.map((s) =>
-                  s.id === edge.to
-                    ? {
-                        ...s,
-                        dependsOn: s.dependsOn.filter((p) => p !== edge.from),
-                      }
-                    : s,
-                ),
-              );
-              setEdge(null);
-            }}
-          >
-            删除选中连线
-          </Button>
+          <>
+            <Button disabled={nodes.length >= 30} onClick={insertOnEdge}>
+              ＋ 在线上插入环节
+            </Button>
+            <Button danger onClick={removeEdge}>
+              － 删除选中连线
+            </Button>
+          </>
         )}
         {source && <Button onClick={() => setSource(null)}>取消连线</Button>}
         <Typography.Text type="secondary">
@@ -172,6 +266,15 @@ export function FlowCanvas({
           if (e.key === "Escape") {
             setSource(null);
             setEdge(null);
+            setSelectedNode(null);
+          }
+          if (
+            e.key === "Delete" &&
+            !(e.target as Element).closest("input,textarea,button")
+          ) {
+            e.preventDefault();
+            if (edge) removeEdge();
+            else removeNode();
           }
         }}
         onWheel={(e) => {
@@ -202,6 +305,7 @@ export function FlowCanvas({
           };
           e.currentTarget.setPointerCapture(e.pointerId);
           setEdge(null);
+          setSelectedNode(null);
         }}
         onPointerMove={(e) => {
           if (source) setCursor(point(e.clientX, e.clientY));
@@ -281,6 +385,8 @@ export function FlowCanvas({
                     onClick={(e) => {
                       e.stopPropagation();
                       setEdge({ from, to: n.id });
+                      setSelectedNode(null);
+                      setSource(null);
                     }}
                   >
                     <path
@@ -330,7 +436,7 @@ export function FlowCanvas({
               <div
                 key={s.id}
                 data-flow-interactive="node"
-                className={`project-flow-node ${ts.some((t) => t.status === "DISPUTED") ? "disputed" : ts.length && done === ts.length ? "done" : ""}`}
+                className={`project-flow-node ${selectedNode === s.id ? "flow-node-selected" : ""} ${ts.some((t) => t.status === "DISPUTED") ? "disputed" : ts.length && done === ts.length ? "done" : ""}`}
                 style={{
                   left: s.position.x,
                   top: s.position.y,
@@ -340,6 +446,8 @@ export function FlowCanvas({
                   if (e.button !== 0 || (e.target as Element).closest("button"))
                     return;
                   e.stopPropagation();
+                  setSelectedNode(s.id);
+                  setEdge(null);
                   drag.current = {
                     id: s.id,
                     x: e.clientX,
@@ -368,6 +476,27 @@ export function FlowCanvas({
                   · {s.department || "SOP"}
                 </span>
                 <h3>{s.name}</h3>
+                {onChange && selectedNode === s.id && (
+                  <Space className="flow-node-actions">
+                    <Button
+                      size="small"
+                      aria-label={`在${s.name}后增加环节`}
+                      disabled={nodes.length >= 30}
+                      onClick={addAfter}
+                    >
+                      ＋
+                    </Button>
+                    <Button
+                      size="small"
+                      danger
+                      aria-label={`删除${s.name}卡片`}
+                      disabled={nodes.length === 1}
+                      onClick={removeNode}
+                    >
+                      －
+                    </Button>
+                  </Space>
+                )}
                 <p>{s.description}</p>
                 {ts.length > 0 && (
                   <small>

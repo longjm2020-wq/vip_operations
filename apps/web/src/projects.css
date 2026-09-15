@@ -139,6 +139,15 @@
 .flow-port.output {
   right: -11px;
 }
+.project-flow-node.flow-node-selected {
+  border: 2px solid #e89b36;
+  box-shadow: 0 0 0 4px #e89b3626;
+}
+.flow-node-actions {
+  position: absolute;
+  right: 12px;
+  bottom: 10px;
+}
 .project-flow-tools {
   margin-bottom: 14px;
 }
