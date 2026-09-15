@@ -8,3 +8,5 @@
 - Document implemented behavior, not planned capability. Never include production credentials or personal data.
 - For changes with no user-visible impact, state why no manual update is needed in the change description.
 - Validate manual text against actual UI/API behavior and run typecheck/build when changing the help UI or imports. Release manual updates with the corresponding application version.
+
+- Keep the shared coreFeatureSummary in apps/web/src/main.tsx aligned with the main implemented product capabilities when scope changes. Sidebar and footer must use the same summary; keep it concise and exclude planned features.

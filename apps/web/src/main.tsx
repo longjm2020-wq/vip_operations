@@ -61,6 +61,7 @@ import {
   ProjectNotifications,
 } from "./projects";
 import "./style.css";
+const coreFeatureSummary = "ERP经营 · 项目协作";
 const useUi = create<{ collapsed: boolean; toggle: () => void }>((set) => ({
   collapsed: false,
   toggle: () => set((s) => ({ collapsed: !s.collapsed })),
@@ -360,7 +361,7 @@ function Workspace({ user }: { user: Row }) {
             <div className="sidebar-footer">
               <span className="status-dot" /> 内部管理系统
               <br />
-              <small>商品 · 库存 · 采购</small>
+              <small>{coreFeatureSummary}</small>
             </div>
           )}
         </Layout.Sider>
@@ -473,7 +474,7 @@ function Workspace({ user }: { user: Row }) {
               <Route path="*" element={<Navigate to="/products" replace />} />
             </Routes>
             <footer className="page-footer">
-              XUTI <span>商品 · 库存 · 采购</span>
+              XUTI <span>{coreFeatureSummary}</span>
             </footer>
           </Layout.Content>
         </Layout>
