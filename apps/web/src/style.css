@@ -28,7 +28,7 @@
 }
 body {
   margin: 0;
-  background: #f7f3ed;
+  background: #fff8f1;
 }
 a {
   font-weight: 500;
@@ -37,7 +37,7 @@ a {
   min-height: 100vh;
 }
 .sidebar {
-  background: #2f211b !important;
+  background: #35251f !important;
   position: sticky !important;
   top: 0;
   height: 100vh;
@@ -84,7 +84,7 @@ a {
   background: transparent !important;
 }
 .ant-menu-dark .ant-menu-item-selected {
-  background: #a94d1e !important;
+  background: #d3540b !important;
 }
 .ant-menu-item {
   margin-block: 5px !important;
@@ -105,7 +105,7 @@ a {
   display: inline-block;
   width: 6px;
   height: 6px;
-  background: #c9682b;
+  background: #f58220;
   border-radius: 50%;
   margin-right: 6px;
 }
@@ -154,7 +154,7 @@ a {
   margin-top: 5px;
 }
 .stock-number {
-  color: #a94d1e;
+  color: #d3540b;
   font-size: 17px;
 }
 .zero {
@@ -210,7 +210,7 @@ pre {
   grid-template-columns: 1.1fr 1fr;
 }
 .login-story {
-  background: #2f211b;
+  background: #35251f;
   color: #fff8eb;
   display: flex;
   flex-direction: column;
@@ -272,7 +272,7 @@ pre {
 .login-panel {
   display: grid;
   place-items: center;
-  background: #fffcf7;
+  background: #fffdf9;
   padding: 45px;
 }
 .login-box {
@@ -320,7 +320,7 @@ pre {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  background: #fbf4eb;
+  background: #fff2e4;
   flex-wrap: wrap;
 }
 .sheet-help {
@@ -351,7 +351,7 @@ pre {
 .entry-sheet thead th {
   position: sticky;
   top: 0;
-  background: #f7ecdf;
+  background: #ffecd7;
   padding: 10px 12px;
   z-index: 2;
   font-weight: 600;
@@ -368,7 +368,7 @@ pre {
   width: 66px;
   position: sticky;
   left: 0;
-  background: #fbf5ec;
+  background: #fff2e4;
   z-index: 1;
   text-align: center;
   color: #91775f;
@@ -395,7 +395,7 @@ pre {
   font: inherit;
 }
 .entry-sheet td input:focus {
-  box-shadow: inset 0 0 0 2px #a94d1e;
+  box-shadow: inset 0 0 0 2px #d3540b;
   background: #fff5e7;
 }
 .entry-sheet .sheet-locked {

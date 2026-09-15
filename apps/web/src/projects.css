@@ -18,7 +18,7 @@
   color: #c43131;
 }
 .project-card {
-  border-top: 3px solid #b55a26;
+  border-top: 3px solid #e66b18;
 }
 .project-card h2 {
   font-size: 21px;
@@ -125,13 +125,13 @@
   height: 20px;
   padding: 0;
   border-radius: 50%;
-  border: 3px solid #b55a26;
+  border: 3px solid #e66b18;
   background: white;
   cursor: crosshair;
   touch-action: none;
 }
 .flow-port:hover {
-  background: #f3c59f;
+  background: #ffd09d;
 }
 .flow-port.input {
   left: -11px;
@@ -193,7 +193,7 @@
   min-height: 54px;
 }
 .gantt-head {
-  background: #fbf4eb;
+  background: #fff2e4;
   padding-top: 14px;
 }
 .gantt-label {
@@ -213,7 +213,7 @@
   position: absolute;
   top: 13px;
   height: 26px;
-  background: #c58a60;
+  background: #ed9a55;
   border-radius: 5px;
   color: white;
   font-size: 12px;

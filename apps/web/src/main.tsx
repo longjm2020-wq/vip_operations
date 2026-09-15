@@ -365,7 +365,7 @@ function Workspace({ user }: { user: Row }) {
               <ProjectNotifications />
               <Avatar
                 size={30}
-                style={{ background: "#f5dfc9", color: "#a94d1e" }}
+                style={{ background: "#f5dfc9", color: "#d3540b" }}
               >
                 {user.displayName?.slice(0, 1)}
               </Avatar>
@@ -485,18 +485,18 @@ createRoot(document.getElementById("root")!).render(
       locale={zhCN}
       theme={{
         token: {
-          colorPrimary: "#a94d1e",
-          colorInfo: "#a94d1e",
+          colorPrimary: "#d3540b",
+          colorInfo: "#d3540b",
           colorInfoBg: "#fff4e7",
           colorInfoBorder: "#ecd3b9",
           borderRadius: 7,
           fontFamily: 'Inter, "Microsoft YaHei", sans-serif',
-          colorBgLayout: "#f7f3ed",
+          colorBgLayout: "#fff8f1",
           colorText: "#362a22",
         },
         components: {
           Table: {
-            headerBg: "#fbf5ec",
+            headerBg: "#fff2e4",
             headerColor: "#78604d",
             cellPaddingBlock: 16,
           },
