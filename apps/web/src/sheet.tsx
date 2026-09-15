@@ -377,7 +377,14 @@ export function Sheet({
                         <Select
                           aria-label={`第${ri + 1}行 ${col.label}`}
                           style={{ width: "100%", minWidth: 190 }}
-                          value={row[col.key] || undefined}
+                          mode={col.multiple ? "multiple" : undefined}
+                          value={
+                            col.multiple
+                              ? String(row[col.key] || "")
+                                  .split(";")
+                                  .filter(Boolean)
+                              : row[col.key] || undefined
+                          }
                           placeholder="请选择"
                           allowClear
                           showSearch={{ optionFilterProp: "label" }}
@@ -394,7 +401,9 @@ export function Sheet({
                           }))}
                           onChange={(v) => {
                             const next = value.map((r) => ({ ...r }));
-                            next[ri][col.key] = v || "";
+                            next[ri][col.key] = col.multiple
+                              ? (v || []).join(";")
+                              : v || "";
                             commit(next);
                           }}
                         />

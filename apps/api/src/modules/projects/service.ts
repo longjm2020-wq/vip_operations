@@ -12,6 +12,7 @@ import {
   ProjectTask,
   departments,
   flowSteps,
+  taskAssignees,
 } from "../../../../../packages/contracts/src/projects.js";
 import {
   Context,
@@ -308,7 +309,7 @@ export async function save(c: Context, input: unknown, value?: string) {
       if (!stages.some((s) => s.id === t.stage))
         fail("VALIDATION_ERROR", "任务环节不在所选 SOP 中", 400);
       if (
-        [t.assignee, t.receiver]
+        [...taskAssignees(t.assignee), t.receiver]
           .filter(Boolean)
           .some((u) => u !== c.actor.id && !b.collaborators.includes(u))
       )
@@ -456,7 +457,7 @@ export async function act(c: Context, value: string, input: unknown) {
         fail("INVALID_STATE", "请先完成连线前置环节的全部交付验收");
       const isOwner = String(p.owner_id) === c.actor.id || admin(c);
       if (b.action === "submit") {
-        if (!isOwner && task.assignee !== c.actor.id)
+        if (!isOwner && !taskAssignees(task.assignee).includes(c.actor.id))
           fail("FORBIDDEN", "仅任务接收人可以交付", 403);
         if (!["PENDING", "DISPUTED"].includes(task.status))
           fail("INVALID_STATE", "任务当前不可交付");
@@ -475,7 +476,7 @@ export async function act(c: Context, value: string, input: unknown) {
         task.reason = b.reason;
         task.completedAt =
           b.action === "approve" ? new Date().toISOString() : undefined;
-        recipients = [task.assignee, task.receiver];
+        recipients = [...taskAssignees(task.assignee), task.receiver];
       }
       if (doc.tasks.every((t: ProjectTask) => t.status === "DONE"))
         status = "DONE";
@@ -560,7 +561,7 @@ export async function send(c: Context, value: string, input: unknown) {
           ...b.mentions,
           ...tasks
             .filter((t) => b.taskIds.includes(t.id))
-            .flatMap((t) => [t.assignee, t.receiver]),
+            .flatMap((t) => [...taskAssignees(t.assignee), t.receiver]),
         ].filter(Boolean),
       ),
     ];

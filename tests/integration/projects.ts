@@ -128,7 +128,7 @@ try {
     id,
     stage: sop.id + ":" + stage,
     title: "任务" + id,
-    assignee: buyer.id,
+    assignee: buyer.id + ";" + reviewer.id,
     receiver: reviewer.id,
     start: "2026-09-15",
     end: "2026-09-19",
@@ -224,7 +224,7 @@ try {
     ).status,
     409,
   );
-  await action(buyer, "submit", { taskId: "1", reason: "计划已交付" });
+  await action(reviewer, "submit", { taskId: "1", reason: "共同接收人交付" });
   assert.equal(
     (
       await request(buyer, `/projects/${p.id}/actions`, "POST", {

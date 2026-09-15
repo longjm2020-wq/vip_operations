@@ -25,6 +25,8 @@ export const taskStates: Record<string, string> = {
   DISPUTED: "✗ 有异议",
 };
 const short = z.string().trim().max(255);
+export const taskAssignees = (value: string) =>
+  value.split(";").filter(Boolean);
 const uid = z.string().regex(/^[1-9]\d{0,18}$/);
 const day = z.union([
   z.literal(""),
@@ -134,7 +136,18 @@ export const taskSchema = z
     id: short.min(1),
     stage: short.min(1),
     title: z.string().trim().min(1).max(2000),
-    assignee: uid.or(z.literal("")),
+    assignee: z
+      .string()
+      .max(2000)
+      .refine(
+        (v) =>
+          !v ||
+          (/^[1-9]\d{0,18}(;[1-9]\d{0,18})*$/.test(v) &&
+            taskAssignees(v).length <= 100 &&
+            taskAssignees(v).every((id) => /^[1-9]\d{0,18}$/.test(id)) &&
+            new Set(taskAssignees(v)).size === taskAssignees(v).length),
+        "接收人无效或重复",
+      ),
     receiver: uid.or(z.literal("")),
     start: day,
     end: day,

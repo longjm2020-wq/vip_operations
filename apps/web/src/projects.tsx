@@ -32,6 +32,7 @@ import { Sheet } from "./sheet";
 import { SheetColumn, resolveCell, validateSheet } from "./sheet-data";
 import {
   flowSteps,
+  taskAssignees,
   departments,
   priceBands,
   taskStates,
@@ -208,7 +209,13 @@ export function Gantt({
             <span className="gantt-label" title={t.title}>
               {t.title}
               <small>
-                {people.find((p) => String(p.id) === t.assignee)?.displayName}
+                {taskAssignees(t.assignee)
+                  .map(
+                    (id) =>
+                      people.find((p) => String(p.id) === id)?.displayName ||
+                      id,
+                  )
+                  .join("、")}
               </small>
             </span>
             <div style={{ width, position: "relative" }}>
@@ -875,12 +882,12 @@ function ProjectEditor({
     { key: "title", label: "任务详情列表", required: true, editor: "textarea" },
     {
       key: "assignee",
+      multiple: true,
       label: "接收人",
       required: true,
       editor: "select",
       options: peopleOptions(options.people || []),
     },
-    { key: "role", label: "岗位角色", readonly: true },
     { key: "start", label: "接收日期 YYYY-MM-DD", required: true },
     { key: "end", label: "交付日期 YYYY-MM-DD", required: true },
     { key: "duration", label: "耗时（天，含首尾）", readonly: true },
@@ -1061,7 +1068,9 @@ function ProjectEditor({
             return message.error("请完成任务表必填字段并修正重复环节或日期");
           setTaskOpen(false);
         }}
-        width="95vw"
+        width="calc(100vw - 16px)"
+        className="project-task-modal"
+        style={{ top: 8, maxWidth: "calc(100vw - 16px)", paddingBottom: 0 }}
         okText="完成填写"
       >
         <Alert
@@ -1074,9 +1083,13 @@ function ProjectEditor({
           value={value.tasks.map((t: Row) => ({
             ...t,
             role:
-              options.people?.find(
-                (p: Row) => String(p.id) === String(t.assignee),
-              )?.role ||
+              taskAssignees(t.assignee || "")
+                .map(
+                  (id) =>
+                    options.people?.find((p: Row) => String(p.id) === id)?.role,
+                )
+                .filter(Boolean)
+                .join("、") ||
               t.role ||
               "",
             duration:
@@ -1125,9 +1138,14 @@ function ProjectEditor({
                   ...next,
                   id: r.id || uuid(),
                   role:
-                    options.people?.find(
-                      (p: Row) => String(p.id) === String(next.assignee),
-                    )?.role || "",
+                    taskAssignees(next.assignee || "")
+                      .map(
+                        (id) =>
+                          options.people?.find((p: Row) => String(p.id) === id)
+                            ?.role,
+                      )
+                      .filter(Boolean)
+                      .join("、") || "",
                   duration:
                     next.start &&
                     next.end &&
@@ -1496,7 +1514,7 @@ export function ProjectDetailPage() {
           {
             title: "接收人 / 岗位",
             render: (_, t) =>
-              `${person(t.assignee)} · ${t.role || members.find((m: Row) => String(m.id) === t.assignee)?.role || "未指定"}`,
+              `${taskAssignees(t.assignee).map(person).join("、")} · ${t.role || members.find((m: Row) => String(m.id) === t.assignee)?.role || "未指定"}`,
           },
           { title: "接收日期", dataIndex: "start" },
           { title: "交付日期", dataIndex: "end" },
@@ -1518,7 +1536,8 @@ export function ProjectDetailPage() {
               p.status === "ACTIVE" && (
                 <Space wrap>
                   {["PENDING", "DISPUTED"].includes(t.status) &&
-                    (owner || t.assignee === String(user.id)) && (
+                    (owner ||
+                      taskAssignees(t.assignee).includes(String(user.id))) && (
                       <Button
                         onClick={() => {
                           setAction({
@@ -1820,7 +1839,7 @@ function ProjectChat({
       ...new Set(
         tasks
           .filter((t: Row) => taskIds.includes(t.id))
-          .flatMap((t: Row) => [t.assignee, t.receiver])
+          .flatMap((t: Row) => [...taskAssignees(t.assignee), t.receiver])
           .filter(Boolean),
       ),
     ];

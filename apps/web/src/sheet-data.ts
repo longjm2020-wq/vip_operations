@@ -5,6 +5,7 @@ export type SheetColumn = {
   required?: boolean;
   editor?: "select" | "textarea";
   unique?: boolean;
+  multiple?: boolean;
   type?: "number" | "money" | "status";
   options?: { value: string; label: string; aliases?: string[] }[];
   readonly?: boolean | ((row: SheetRow) => boolean);
@@ -47,6 +48,12 @@ export function parseDelimited(text: string, delimiter = "\t"): string[][] {
 }
 export function displayCell(value: any, column: SheetColumn): string {
   if (value == null) return "";
+  if (column.multiple)
+    return String(value)
+      .split(";")
+      .filter(Boolean)
+      .map((v) => displayCell(v, { ...column, multiple: false }))
+      .join("；");
   return (
     column.options?.find((o) => o.value === String(value))?.label ??
     String(value)
@@ -55,6 +62,17 @@ export function displayCell(value: any, column: SheetColumn): string {
 export function resolveCell(raw: any, column: SheetColumn): any {
   const value = String(raw ?? "").trim();
   if (!value) return null;
+  if (column.multiple)
+    return (
+      [
+        ...new Set(
+          value
+            .split(/[;；]/)
+            .filter((v) => v.trim())
+            .map((v) => resolveCell(v, { ...column, multiple: false })),
+        ),
+      ].join(";") || null
+    );
   if (column.options) {
     // Prefer explicit codes/IDs; duplicate names must not silently choose a record.
     const exact = column.options.find((o) => o.value === value);
