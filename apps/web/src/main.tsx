@@ -53,6 +53,7 @@ import {
 } from "./operations";
 import { AccessPage, AuditPage } from "./system";
 import { VipPage } from "./vip";
+import { ManualPage } from "./manual";
 import {
   SopPage,
   ProjectsPage,
@@ -300,6 +301,7 @@ function Workspace({ user }: { user: Row }) {
               </Typography.Text>
             </Space>
             <Space size={14}>
+              <Link to="/help">使用手册</Link>
               <ProjectNotifications />
               <Avatar
                 size={30}
@@ -327,6 +329,7 @@ function Workspace({ user }: { user: Row }) {
           </Layout.Header>
           <Layout.Content className="content">
             <Routes>
+              <Route path="/help" element={<ManualPage />} />
               <Route path="/products/:id" element={<ProductDetail />} />
               <Route path="/purchase-orders/new" element={<PurchaseNew />} />
               <Route path="/purchase-orders/:id" element={<DocumentDetail />} />

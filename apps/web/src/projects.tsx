@@ -37,6 +37,7 @@ import {
   taskStates,
 } from "../../../packages/contracts/src/projects";
 import { FlowCanvas } from "./flow-canvas";
+import { projectPeriod, projectBaseName } from "./project-period";
 import "./projects.css";
 const projectStates: Record<string, string> = {
   DRAFT: "草稿",
@@ -772,7 +773,11 @@ function ProjectEditor({
     initial
       ? {
           ...initial.document,
-          name: initial.name,
+          name: projectBaseName(
+            initial.name,
+            initial.document.start,
+            initial.document.end,
+          ),
           tag: initial.tag,
           version: initial.version,
         }
@@ -810,6 +815,9 @@ function ProjectEditor({
     try {
       const normalized = {
         ...value,
+        name: value.name.trim()
+          ? value.name.trim() + projectPeriod(value.start, value.end)
+          : "",
         tasks: value.tasks.map((t: Row) => ({
           id: t.id || uuid(),
           stage: t.stage || "",
@@ -955,7 +963,8 @@ function ProjectEditor({
             <Input
               value={value.name}
               onChange={(e) => patch("name", e.target.value)}
-              placeholder="商品周上新（第X周 9.14-9.20）"
+              placeholder="商品周上新"
+              suffix={projectPeriod(value.start, value.end) || undefined}
             />
           </Form.Item>
           <Form.Item label="协作人员" required>
