@@ -66,7 +66,6 @@ export function Header({
   return (
     <div className="page-heading">
       <div>
-        <div className="eyebrow">XUTI / 经营工作台</div>
         <Typography.Title level={2}>{title}</Typography.Title>
         <Typography.Text type="secondary">{subtitle}</Typography.Text>
       </div>

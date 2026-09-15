@@ -119,7 +119,7 @@ a {
   border-bottom: 1px solid #eee2d7;
 }
 .content {
-  padding: 32px 36px 0;
+  padding: 14px 24px 0;
   max-width: 1800px;
   width: 100%;
   margin: 0 auto;
@@ -129,11 +129,11 @@ a {
   align-items: center;
   justify-content: space-between;
   gap: 20px;
-  margin: 4px 0 28px;
+  margin: 0 0 12px;
 }
 .page-heading h2 {
-  margin: 8px 0 !important;
-  font-size: 28px !important;
+  margin: 0 0 3px !important;
+  font-size: 22px !important;
   font-weight: 650 !important;
 }
 .eyebrow {
@@ -185,7 +185,7 @@ a {
   justify-content: space-between;
   color: #9e8d7f;
   font-size: 11px;
-  padding: 30px 2px;
+  padding: 8px 2px;
   letter-spacing: 1px;
 }
 .page-footer span {
@@ -296,7 +296,7 @@ pre {
 }
 @media (max-width: 1000px) {
   .content {
-    padding: 24px 18px;
+    padding: 12px 18px;
   }
   .login-story {
     padding: 40px;
@@ -502,4 +502,15 @@ pre {
   width: 280px;
   max-width: 100%;
   height: 100px;
+}
+
+.page-heading > div:first-child {
+  min-width: 0;
+}
+.page-heading > div:first-child > .ant-typography:not(h2) {
+  font-size: 12px;
+  line-height: 1.5;
+}
+.page-heading h2 {
+  line-height: 1.3;
 }
