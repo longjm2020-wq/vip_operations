@@ -936,7 +936,7 @@ function ProjectEditor({
       open
       title={initial ? "编辑项目" : "新建项目"}
       onClose={onClose}
-      styles={{ wrapper: { width: "min(1300px,96vw)" } }}
+      styles={{ wrapper: { width: "calc(100vw - 16px)" } }}
       extra={
         <Space>
           <Button loading={busy} onClick={() => save(false)}>
