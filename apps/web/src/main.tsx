@@ -72,7 +72,7 @@ function Login() {
     <div className="login">
       <section className="login-story">
         <div className="login-brand">
-          衣序 <span>YIXU</span>
+          <img className="login-logo" src="/xuti-logo.png" alt="XUTI" />
         </div>
         <div>
           <div className="eyebrow">APPAREL OPERATIONS</div>
@@ -258,10 +258,10 @@ function Workspace({ user }: { user: Row }) {
       <Layout className="workspace">
         <Layout.Sider width={224} collapsed={ui.collapsed} className="sidebar">
           <Link to="/products" className="brand">
-            <span className="brand-mark">衣</span>
+            <img className="brand-logo" src="/xuti-logo.png" alt="XUTI" />
             {!ui.collapsed && (
               <span>
-                衣序 <small>经营管理</small>
+                XUTI <small>经营管理</small>
               </span>
             )}
           </Link>
@@ -312,7 +312,7 @@ function Workspace({ user }: { user: Row }) {
               <ProjectNotifications />
               <Avatar
                 size={30}
-                style={{ background: "#dce9e7", color: "#24594f" }}
+                style={{ background: "#f5dfc9", color: "#a94d1e" }}
               >
                 {user.displayName?.slice(0, 1)}
               </Avatar>
@@ -395,7 +395,7 @@ function Workspace({ user }: { user: Row }) {
               <Route path="*" element={<Navigate to="/products" replace />} />
             </Routes>
             <footer className="page-footer">
-              衣序 YIXU <span>商品 · 库存 · 采购</span>
+              XUTI <span>商品 · 库存 · 采购</span>
             </footer>
           </Layout.Content>
         </Layout>
@@ -432,19 +432,19 @@ createRoot(document.getElementById("root")!).render(
       locale={zhCN}
       theme={{
         token: {
-          colorPrimary: "#24675d",
-          colorInfo: "#24675d",
-          colorInfoBg: "#edf5f1",
-          colorInfoBorder: "#d5e5dd",
+          colorPrimary: "#a94d1e",
+          colorInfo: "#a94d1e",
+          colorInfoBg: "#fff4e7",
+          colorInfoBorder: "#ecd3b9",
           borderRadius: 7,
           fontFamily: 'Inter, "Microsoft YaHei", sans-serif',
-          colorBgLayout: "#f3f5f5",
-          colorText: "#25343a",
+          colorBgLayout: "#f7f3ed",
+          colorText: "#362a22",
         },
         components: {
           Table: {
-            headerBg: "#f5f8f7",
-            headerColor: "#516461",
+            headerBg: "#fbf5ec",
+            headerColor: "#78604d",
             cellPaddingBlock: 16,
           },
           Button: { controlHeight: 36 },
