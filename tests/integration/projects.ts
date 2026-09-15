@@ -149,6 +149,15 @@ try {
     requirements: [],
   };
   let p = await ok(owner, "/projects", "POST", body);
+  assert.equal(
+    (
+      await request(owner, "/projects", "POST", {
+        ...body,
+        tasks: [task("dup1", "a"), task("dup2", "a")],
+      })
+    ).status,
+    400,
+  );
   assert.equal(p.document.tasks[0].status, "PENDING");
   assert.equal((await request(buyer, "/projects/" + p.id)).status, 403);
   assert.equal((await ok(outsider, "/projects")).length, 0);

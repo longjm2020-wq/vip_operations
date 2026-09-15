@@ -20,6 +20,7 @@ export function Sheet({
   title = "批量资料",
   errors = {},
   defaults = {},
+  rowClassName,
 }: {
   columns: SheetColumn[];
   value?: SheetRow[];
@@ -29,6 +30,7 @@ export function Sheet({
   title?: string;
   errors?: Record<string, string>;
   defaults?: SheetRow;
+  rowClassName?: (row: SheetRow) => string;
 }) {
   const { message } = App.useApp();
   const root = useRef<HTMLDivElement>(null);
@@ -291,7 +293,7 @@ export function Sheet({
             {value.map((row, ri) => (
               <tr
                 key={ri}
-                className={selected.includes(ri) ? "sheet-selected" : ""}
+                className={`${selected.includes(ri) ? "sheet-selected" : ""} ${rowClassName?.(row) || ""}`}
               >
                 <th className="sheet-row-number">
                   <label>
@@ -324,57 +326,132 @@ export function Sheet({
                       key={col.key}
                       className={`${locked ? "sheet-locked" : ""} ${error ? "sheet-error" : ""}`}
                       title={error}
-                    >
-                      <input
-                        aria-label={`第${ri + 1}行 ${col.label}`}
-                        aria-invalid={!!error}
-                        data-row={ri}
-                        data-col={ci}
-                        readOnly={!!locked}
-                        list={
-                          col.options ? `sheet-${title}-${col.key}` : undefined
+                      onPaste={(e) => {
+                        if (!col.editor || locked) return;
+                        const text = e.clipboardData.getData("text/plain");
+                        if (
+                          !text.includes("\t") &&
+                          (col.editor === "textarea" || !/[\r\n]/.test(text))
+                        )
+                          return;
+                        e.preventDefault();
+                        e.stopPropagation();
+                        try {
+                          commit(
+                            applyMatrix(
+                              value,
+                              columns,
+                              parseDelimited(text),
+                              ri,
+                              ci,
+                              fixed,
+                            ).map((r) => ({ ...defaults, ...r })),
+                          );
+                        } catch (err) {
+                          message.error((err as Error).message);
                         }
-                        value={displayCell(row[col.key], col)}
-                        onChange={(e) => {
-                          const next = value.map((r) => ({ ...r }));
-                          next[ri][col.key] = e.target.value;
-                          commit(next);
-                        }}
-                        onPaste={(e) => {
-                          if (locked) return;
-                          const text = e.clipboardData.getData("text/plain");
-                          if (!/[\t\r\n]/.test(text)) return;
-                          e.preventDefault();
-                          try {
-                            commit(
-                              applyMatrix(
-                                value,
-                                columns,
-                                parseDelimited(text),
-                                ri,
-                                ci,
-                                fixed,
-                              ).map((r) => ({ ...defaults, ...r })),
-                            );
-                          } catch (err) {
-                            message.error((err as Error).message);
+                      }}
+                    >
+                      {col.editor === "textarea" ? (
+                        <textarea
+                          aria-label={`第${ri + 1}行 ${col.label}`}
+                          readOnly={!!locked}
+                          rows={3}
+                          style={{
+                            minWidth: 260,
+                            width: "100%",
+                            border: 0,
+                            padding: 10,
+                            background: "transparent",
+                            font: "inherit",
+                            resize: "vertical",
+                          }}
+                          value={displayCell(row[col.key], col)}
+                          onChange={(e) => {
+                            const next = value.map((r) => ({ ...r }));
+                            next[ri][col.key] = e.target.value;
+                            commit(next);
+                          }}
+                        />
+                      ) : col.editor === "select" && !locked ? (
+                        <Select
+                          aria-label={`第${ri + 1}行 ${col.label}`}
+                          style={{ width: "100%", minWidth: 190 }}
+                          value={row[col.key] || undefined}
+                          placeholder="请选择"
+                          allowClear
+                          showSearch={{ optionFilterProp: "label" }}
+                          options={col.options?.map((o) => ({
+                            ...o,
+                            disabled:
+                              col.unique &&
+                              value.some(
+                                (r, index) =>
+                                  index !== ri &&
+                                  (String(r[col.key]) === o.value ||
+                                    r[col.key] === o.label),
+                              ),
+                          }))}
+                          onChange={(v) => {
+                            const next = value.map((r) => ({ ...r }));
+                            next[ri][col.key] = v || "";
+                            commit(next);
+                          }}
+                        />
+                      ) : (
+                        <input
+                          aria-label={`第${ri + 1}行 ${col.label}`}
+                          aria-invalid={!!error}
+                          data-row={ri}
+                          data-col={ci}
+                          readOnly={!!locked}
+                          list={
+                            col.options
+                              ? `sheet-${title}-${col.key}`
+                              : undefined
                           }
-                        }}
-                        onKeyDown={(e) => {
-                          if (
-                            e.key === "Enter" ||
-                            (e.altKey &&
-                              ["ArrowDown", "ArrowUp"].includes(e.key))
-                          ) {
+                          value={displayCell(row[col.key], col)}
+                          onChange={(e) => {
+                            const next = value.map((r) => ({ ...r }));
+                            next[ri][col.key] = e.target.value;
+                            commit(next);
+                          }}
+                          onPaste={(e) => {
+                            if (locked) return;
+                            const text = e.clipboardData.getData("text/plain");
+                            if (!/[\t\r\n]/.test(text)) return;
                             e.preventDefault();
-                            root.current
-                              ?.querySelector<HTMLInputElement>(
-                                `input[data-row="${ri + (e.shiftKey || e.key === "ArrowUp" ? -1 : 1)}"][data-col="${ci}"]`,
-                              )
-                              ?.focus();
-                          }
-                        }}
-                      />
+                            try {
+                              commit(
+                                applyMatrix(
+                                  value,
+                                  columns,
+                                  parseDelimited(text),
+                                  ri,
+                                  ci,
+                                  fixed,
+                                ).map((r) => ({ ...defaults, ...r })),
+                              );
+                            } catch (err) {
+                              message.error((err as Error).message);
+                            }
+                          }}
+                          onKeyDown={(e) => {
+                            if (
+                              e.key === "Enter" ||
+                              (e.altKey &&
+                                ["ArrowDown", "ArrowUp"].includes(e.key))
+                            ) {
+                              e.preventDefault();
+                              root.current
+                                ?.querySelector<HTMLInputElement>(
+                                  `input[data-row="${ri + (e.shiftKey || e.key === "ArrowUp" ? -1 : 1)}"][data-col="${ci}"]`,
+                                )
+                                ?.focus();
+                            }
+                          }}
+                        />
+                      )}
                       {error && <small>{error}</small>}
                     </td>
                   );

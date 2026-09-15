@@ -3,6 +3,8 @@ export type SheetColumn = {
   key: string;
   label: string;
   required?: boolean;
+  editor?: "select" | "textarea";
+  unique?: boolean;
   type?: "number" | "money" | "status";
   options?: { value: string; label: string; aliases?: string[] }[];
   readonly?: boolean | ((row: SheetRow) => boolean);
@@ -97,6 +99,17 @@ export function validateSheet(rows: SheetRow[], columns: SheetColumn[]) {
     }
     return next;
   });
+  columns
+    .filter((c) => c.unique)
+    .forEach((col) => {
+      values.forEach((row, i) => {
+        if (
+          row[col.key] &&
+          values.some((other, j) => j !== i && other[col.key] === row[col.key])
+        )
+          errors[`${i}:${col.key}`] = "该选项只能选择一次";
+      });
+    });
   return { values, errors };
 }
 export function applyMatrix(

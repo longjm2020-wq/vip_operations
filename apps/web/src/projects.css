@@ -4,6 +4,19 @@
   gap: 22px;
   align-items: start;
 }
+.entry-sheet .task-sheet-done input,
+.entry-sheet .task-sheet-done textarea {
+  color: #929b98;
+  text-decoration: line-through;
+}
+.entry-sheet .task-sheet-disputed td {
+  background: #fff1f0;
+  border-color: #efb3ae;
+}
+.entry-sheet .task-sheet-disputed input,
+.entry-sheet .task-sheet-disputed textarea {
+  color: #c43131;
+}
 .project-card {
   border-top: 3px solid #347e6d;
 }
@@ -64,8 +77,24 @@
   border-radius: 12px;
 }
 .flow-infinite {
-  height: max(650px, calc(100dvh - 240px));
+  height: max(650px, calc(100dvh - 110px));
   overscroll-behavior: contain;
+}
+.flow-shell {
+  position: relative;
+}
+.flow-shell .project-flow-tools {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  right: 12px;
+  z-index: 2;
+  width: fit-content;
+  max-width: calc(100% - 24px);
+  padding: 8px;
+  border-radius: 8px;
+  background: #ffffffed;
+  box-shadow: 0 2px 10px #183c2b16;
 }
 .flow-fullscreen {
   position: fixed;
@@ -76,7 +105,7 @@
   overflow: auto;
 }
 .flow-fullscreen .flow-infinite {
-  height: calc(100dvh - 140px);
+  height: calc(100dvh - 50px);
   min-height: 360px;
 }
 .flow-infinite .project-flow-node {

@@ -170,6 +170,10 @@ export const projectSchema = z
   .refine(
     (v) => new Set(v.tasks.map((t) => t.id)).size === v.tasks.length,
     "任务编号不能重复",
+  )
+  .refine(
+    (v) => new Set(v.tasks.map((t) => t.stage)).size === v.tasks.length,
+    "每个任务环节只能选择一次，请将同一环节的事项填写在任务详情中",
   );
 export type ProjectTask = z.infer<typeof taskSchema>;
 export type ProjectInput = z.infer<typeof projectSchema>;

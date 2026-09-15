@@ -88,7 +88,7 @@ export function FlowCanvas({
     return `M ${a.x} ${a.y} C ${a.x + bend} ${a.y}, ${b.x - bend} ${b.y}, ${b.x} ${b.y}`;
   };
   return (
-    <div className={expanded ? "flow-fullscreen" : undefined}>
+    <div className={expanded ? "flow-shell flow-fullscreen" : "flow-shell"}>
       <Space wrap className="project-flow-tools">
         <Button
           aria-label="放大画布"

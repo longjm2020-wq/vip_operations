@@ -29,6 +29,7 @@ import { BellOutlined, CommentOutlined, PlusOutlined } from "@ant-design/icons";
 import { api, queryClient } from "./api";
 import { Header, Row, useCan, useUser, when } from "./shared";
 import { Sheet } from "./sheet";
+import { SheetColumn, resolveCell, validateSheet } from "./sheet-data";
 import {
   flowSteps,
   departments,
@@ -564,7 +565,7 @@ export function SopPage() {
         open={!!view}
         onClose={() => setView(null)}
         size="large"
-        styles={{ wrapper: { width: "98vw" } }}
+        styles={{ wrapper: { width: "98vw" }, body: { padding: 12 } }}
         extra={
           view &&
           (String(view.ownerId) === String(user.id) ||
@@ -582,8 +583,8 @@ export function SopPage() {
       >
         {view && (
           <>
-            <RichView value={view.description} />
             <FlowCanvas key={view.id} stages={view.steps} />
+            <RichView value={view.description} />
             <Alert
               type="info"
               title="这是流程模板；在项目实例中填写任务、交付结果并进行验收。"
@@ -831,25 +832,32 @@ function ProjectEditor({
       setBusy(false);
     }
   };
-  const columns = [
+  const columns: SheetColumn[] = [
     {
       key: "stage",
       label: "任务环节",
       required: true,
+      editor: "select",
+      unique: true,
       options: stages.map((s: Row) => ({ value: s.id, label: s.name })),
     },
-    { key: "title", label: "任务详情", required: true },
+    { key: "title", label: "任务详情列表", required: true, editor: "textarea" },
     {
       key: "assignee",
       label: "接收人",
+      required: true,
+      editor: "select",
       options: peopleOptions(options.people || []),
     },
-    { key: "role", label: "岗位角色" },
-    { key: "start", label: "接收日期 YYYY-MM-DD" },
-    { key: "end", label: "交付日期 YYYY-MM-DD" },
+    { key: "role", label: "岗位角色", readonly: true },
+    { key: "start", label: "接收日期 YYYY-MM-DD", required: true },
+    { key: "end", label: "交付日期 YYYY-MM-DD", required: true },
+    { key: "duration", label: "耗时（天，含首尾）", readonly: true },
     {
       key: "receiver",
       label: "下一流程接收人",
+      required: true,
+      editor: "select",
       options: peopleOptions(options.people || []),
     },
     {
@@ -861,7 +869,30 @@ function ProjectEditor({
         label,
       })),
     },
+    { key: "reason", label: "异议原因", readonly: true },
   ];
+  const taskErrors = () => {
+    const errors = validateSheet(value.tasks, columns).errors;
+    value.tasks.forEach((t: Row, i: number) => {
+      if (
+        t.stage &&
+        value.tasks.some(
+          (other: Row, j: number) => i !== j && other.stage === t.stage,
+        )
+      )
+        errors[`${i}:stage`] = "该环节已被其他行选择，每个环节只能选一次";
+      if (
+        t.start &&
+        t.end &&
+        (!/^\d{4}-\d{2}-\d{2}$/.test(t.start) ||
+          !/^\d{4}-\d{2}-\d{2}$/.test(t.end) ||
+          !Number.isFinite(days(t.start, t.end)) ||
+          t.end < t.start)
+      )
+        errors[`${i}:end`] = "请填写有效日期，交付日期不能早于接收日期";
+    });
+    return errors;
+  };
   return (
     <Drawer
       open
@@ -947,7 +978,7 @@ function ProjectEditor({
           />
         </Form.Item>
         <Space className="project-filters">
-          <Button onClick={() => setTaskOpen(true)}>
+          <Button disabled={!stages.length} onClick={() => setTaskOpen(true)}>
             任务设置 · {value.tasks.length} 项
           </Button>
           <Button
@@ -989,7 +1020,11 @@ function ProjectEditor({
         title="在线任务表"
         open={taskOpen}
         onCancel={() => setTaskOpen(false)}
-        onOk={() => setTaskOpen(false)}
+        onOk={() => {
+          if (!value.tasks.length || Object.keys(taskErrors()).length)
+            return message.error("请完成任务表必填字段并修正重复环节或日期");
+          setTaskOpen(false);
+        }}
         width="95vw"
         okText="完成填写"
       >
@@ -1000,9 +1035,32 @@ function ProjectEditor({
         <Sheet
           title="项目任务"
           columns={columns}
-          value={value.tasks}
+          value={value.tasks.map((t: Row) => ({
+            ...t,
+            role:
+              options.people?.find(
+                (p: Row) => String(p.id) === String(t.assignee),
+              )?.role ||
+              t.role ||
+              "",
+            duration:
+              t.start &&
+              t.end &&
+              Number.isFinite(days(t.start, t.end)) &&
+              t.end >= t.start
+                ? String(days(t.start, t.end))
+                : "",
+          }))}
+          errors={taskErrors()}
+          rowClassName={(row) =>
+            row.status === "DONE"
+              ? "task-sheet-done"
+              : row.status === "DISPUTED"
+                ? "task-sheet-disputed"
+                : ""
+          }
           defaults={{
-            stage: stages[0]?.id || "",
+            stage: "",
             status: "PENDING",
             role: "",
             start: value.start,
@@ -1011,7 +1069,40 @@ function ProjectEditor({
           onChange={(rows) =>
             patch(
               "tasks",
-              rows.map((r) => ({ ...r, id: r.id || uuid() })),
+              rows.map((r) => {
+                const next = { ...r };
+                for (const key of ["stage", "assignee", "receiver"]) {
+                  try {
+                    next[key] =
+                      resolveCell(
+                        r[key],
+                        columns.find((c) => c.key === key)!,
+                      ) || "";
+                  } catch {
+                    /* Show invalid pasted/imported values for correction. */
+                  }
+                }
+                const original = value.tasks.find(
+                  (t: Row) => t.id && t.id === r.id,
+                );
+                return {
+                  ...next,
+                  id: r.id || uuid(),
+                  role:
+                    options.people?.find(
+                      (p: Row) => String(p.id) === String(next.assignee),
+                    )?.role || "",
+                  duration:
+                    next.start &&
+                    next.end &&
+                    Number.isFinite(days(next.start, next.end)) &&
+                    next.end >= next.start
+                      ? String(days(next.start, next.end))
+                      : "",
+                  status: original?.status || "PENDING",
+                  reason: original?.reason || "",
+                };
+              }),
             )
           }
         />
