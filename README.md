@@ -20,7 +20,9 @@
 
 无真实销售数据时，采购建议会明确跳过，仍可手工创建采购单。真实VOP未启用。
 
-`START_LOCAL.cmd`依赖当前工作区 `../../work/runtime` 中的便携工具。复制代码到其他电脑后请按下面标准安装方式配置，不能只复制此启动器就运行。
+魔方罗盘取数 API 的平台开通问题与待确认项见 [支持申请草稿](docs/VOP_SUPPORT_REQUEST.md)。
+
+`START_LOCAL.cmd` 默认使用 `../../work/runtime` 中的便携工具，也支持通过不加入 Git 的 `.local/runtime.json` 指定本机路径，详见 [本地开发配置](docs/LOCAL_DEVELOPMENT.md)。复制代码到其他电脑后需要先配置工具、数据库及依赖，不能只复制此启动器就运行。
 
 ## 已实现
 
