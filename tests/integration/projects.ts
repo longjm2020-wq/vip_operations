@@ -109,6 +109,24 @@ try {
   const buyer = await login("buyer"),
     reviewer = await login("reviewer"),
     outsider = await login("outsider");
+  assert.equal((await request(empty, "/help")).status, 401);
+  const adminHelp = await ok(owner, "/help");
+  assert.equal(adminHelp.length, 20);
+  const buyerHelp = await ok(buyer, "/help?chapter=19-vip.md");
+  assert.ok(
+    buyerHelp.some((chapter: { id: string }) => chapter.id === "00-start.md"),
+  );
+  assert.ok(
+    buyerHelp.some(
+      (chapter: { id: string }) => chapter.id === "07-purchases.md",
+    ),
+  );
+  assert.ok(
+    !buyerHelp.some((chapter: { id: string }) =>
+      ["19-vip.md", "17-roles.md"].includes(chapter.id),
+    ),
+  );
+  pass("手册认证、角色过滤及指定无权章节不泄露内容");
   const template = {
     name: "验收流程",
     department: "运营",

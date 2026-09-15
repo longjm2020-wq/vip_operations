@@ -19,7 +19,9 @@ import {
 import { AuthGuard, Envelope, ErrorFilter } from "./http.js";
 import { validateIntegrationMode } from "./integrations/vip/index.js";
 import { enrichOpenApi } from "./openapi.js";
+import { ManualController } from "./manual.js";
 @Module({
+  controllers: [ManualController],
   imports: [
     AuthModule,
     InventoryModule,

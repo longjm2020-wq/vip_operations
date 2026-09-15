@@ -1,7 +1,10 @@
 import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Button, Card, Empty, Input, Select, Space, Typography } from "antd";
-import { Header } from "./shared";
+import { Header, useUser } from "./shared";
+import { useQuery } from "@tanstack/react-query";
+import { api } from "./api";
+import { Alert, Spin } from "antd";
 
 const moduleChapters: Record<string, string> = {
   products: "02-products",
@@ -31,20 +34,15 @@ export function manualHref(path: string) {
   return chapter ? `/help?chapter=${chapter}.md` : "/help";
 }
 
-const sources = import.meta.glob("../../../docs/manual/*.md", {
-  eager: true,
-  query: "?raw",
-  import: "default",
-}) as Record<string, string>;
-const chapters = Object.entries(sources)
-  .sort(([a], [b]) => a.localeCompare(b))
-  .map(([path, text]) => ({
-    id: path.split("/").pop()!,
-    title: text.split(/\r?\n/)[0].replace(/^# /, ""),
-    text,
-  }));
-
 export function ManualPage() {
+  const user = useUser();
+  const manual = useQuery<{ id: string; title: string; text: string }[]>({
+    queryKey: ["help", user.id, user.permissions],
+    queryFn: async () => (await api("/help")).data,
+    staleTime: 0,
+    refetchInterval: 15000,
+  });
+  const chapters = manual.error ? [] : manual.data || [];
   const [params, setParams] = useSearchParams();
   const [search, setSearch] = useState("");
   const selected = params.get("chapter") || chapters[0]?.id;
@@ -57,8 +55,15 @@ export function ManualPage() {
     <>
       <Header
         title="使用手册"
-        subtitle="按功能模块查阅操作步骤、保存规则和常见问题。内容随系统版本发布更新。"
+        subtitle="仅显示当前账号有权访问的模块手册。阅读权限不代表操作权限，具体按钮以账号权限为准。"
       />
+      {manual.isLoading && <Spin />}
+      {manual.error && <Alert type="error" title="手册读取失败，请刷新重试" />}
+      {params.get("chapter") &&
+        !manual.isLoading &&
+        !chapters.some((c) => c.id === params.get("chapter")) && (
+          <Alert type="warning" title="该章节不存在或当前账号没有查看权限" />
+        )}
       <Space wrap style={{ marginBottom: 20 }}>
         <Input.Search
           aria-label="搜索使用手册"
