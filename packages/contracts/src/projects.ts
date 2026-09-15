@@ -39,7 +39,47 @@ export const stepSchema = z.object({
   id: z.string().min(1).max(100),
   name: short.min(1),
   description: z.string().max(4000).default(""),
+  position: z
+    .object({ x: z.number().finite(), y: z.number().finite() })
+    .optional(),
+  dependsOn: z.array(z.string().min(1).max(100)).max(30).optional(),
 });
+// Missing dependencies identify legacy sequential workflows. An explicit [] is a root.
+export function flowSteps<
+  T extends {
+    id: string;
+    dependsOn?: string[];
+    position?: { x: number; y: number };
+  },
+>(steps: T[]) {
+  return steps.map((s, i) => ({
+    ...s,
+    dependsOn: s.dependsOn ?? (i ? [steps[i - 1].id] : []),
+    position: s.position ?? { x: i * 340, y: 0 },
+  }));
+}
+export function validFlow(steps: { id: string; dependsOn?: string[] }[]) {
+  const nodes = flowSteps(steps),
+    ids = new Set(nodes.map((s) => s.id));
+  if (ids.size !== nodes.length) return false;
+  const done = new Set<string>(),
+    visiting = new Set<string>();
+  const visit = (id: string): boolean => {
+    if (visiting.has(id)) return false;
+    if (done.has(id)) return true;
+    visiting.add(id);
+    const node = nodes.find((s) => s.id === id)!;
+    if (
+      new Set(node.dependsOn).size !== node.dependsOn.length ||
+      node.dependsOn.some((p) => !ids.has(p) || !visit(p))
+    )
+      return false;
+    visiting.delete(id);
+    done.add(id);
+    return true;
+  };
+  return nodes.every((s) => visit(s.id));
+}
 export const sopSchema = z
   .object({
     name: short.min(1),
@@ -51,6 +91,10 @@ export const sopSchema = z
   .refine(
     (v) => new Set(v.steps.map((s) => s.id)).size === v.steps.length,
     "环节编号不能重复",
+  )
+  .refine(
+    (v) => validFlow(v.steps),
+    "连线不能形成循环、重复或指向不存在的环节",
   );
 const image = z
   .string()

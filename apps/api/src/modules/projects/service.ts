@@ -11,6 +11,7 @@ import {
   projectSchema,
   ProjectTask,
   departments,
+  flowSteps,
 } from "../../../../../packages/contracts/src/projects.js";
 import {
   Context,
@@ -251,10 +252,13 @@ export async function save(c: Context, input: unknown, value?: string) {
         sid,
       );
       if (!sop) fail("VALIDATION_ERROR", "请选择已建立的 SOP", 400);
-      for (const step of sop.steps)
+      for (const step of flowSteps(
+        sop.steps as { id: string; dependsOn?: string[] }[],
+      ))
         stages.push({
           ...step,
           id: sid + ":" + step.id,
+          dependsOn: step.dependsOn.map((p) => sid + ":" + p),
           sopName: sop.name,
           department: sop.department,
         });
@@ -438,15 +442,17 @@ export async function act(c: Context, value: string, input: unknown) {
         (t: ProjectTask) => t.id === b.taskId,
       );
       if (!task) fail("NOT_FOUND", "任务不存在", 404);
-      const stage = doc.stages.findIndex((s: Row) => s.id === task.stage);
+      const dependencies =
+        flowSteps(doc.stages as { id: string; dependsOn?: string[] }[]).find(
+          (s) => s.id === task.stage,
+        )?.dependsOn || [];
       if (
         doc.tasks.some(
           (t: ProjectTask) =>
-            doc.stages.findIndex((s: Row) => s.id === t.stage) < stage &&
-            t.status !== "DONE",
+            dependencies.includes(t.stage) && t.status !== "DONE",
         )
       )
-        fail("INVALID_STATE", "请先完成前序环节交付验收");
+        fail("INVALID_STATE", "请先完成连线前置环节的全部交付验收");
       const isOwner = String(p.owner_id) === c.actor.id || admin(c);
       if (b.action === "submit") {
         if (!isOwner && task.assignee !== c.actor.id)

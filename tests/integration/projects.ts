@@ -311,6 +311,81 @@ try {
     ) > 5,
   );
   pass("迁移幂等、数据持久化与操作审计");
+  const branching = {
+    ...template,
+    name: "并行分支验收",
+    steps: [
+      { id: "a", name: "起点", dependsOn: [], position: { x: -300, y: 10 } },
+      {
+        id: "b",
+        name: "并行一",
+        dependsOn: ["a"],
+        position: { x: 40, y: -200 },
+      },
+      {
+        id: "c",
+        name: "并行二",
+        dependsOn: ["a"],
+        position: { x: 40, y: 200 },
+      },
+      {
+        id: "d",
+        name: "汇合",
+        dependsOn: ["b", "c"],
+        position: { x: 400, y: 10 },
+      },
+    ],
+  };
+  for (const steps of [
+    [{ id: "a", name: "循环", dependsOn: ["a"] }],
+    [{ id: "a", name: "丢失", dependsOn: ["missing"] }],
+    [
+      { id: "a", name: "A", dependsOn: ["b"] },
+      { id: "b", name: "B", dependsOn: ["a"] },
+    ],
+  ])
+    assert.equal(
+      (await request(owner, "/projects/sops", "POST", { ...template, steps }))
+        .status,
+      400,
+    );
+  const graph = await ok(owner, "/projects/sops", "POST", branching);
+  assert.deepEqual(graph.steps[0].position, { x: -300, y: 10 });
+  p = await ok(owner, "/projects", "POST", {
+    ...body,
+    sopIds: [graph.id],
+    tasks: branching.steps.map((s) => ({
+      ...task(s.id, s.id),
+      stage: graph.id + ":" + s.id,
+    })),
+  });
+  await action(owner, "publish");
+  await action(buyer, "submit", { taskId: "a", reason: "起点交付" });
+  await action(reviewer, "approve", { taskId: "a" });
+  // C may complete while B is pending, regardless of array order.
+  await action(buyer, "submit", { taskId: "c", reason: "并行二交付" });
+  await action(reviewer, "approve", { taskId: "c" });
+  assert.equal(
+    (
+      await request(buyer, `/projects/${p.id}/actions`, "POST", {
+        action: "submit",
+        version: p.version,
+        taskId: "d",
+        reason: "提前汇合",
+      })
+    ).status,
+    409,
+  );
+  await action(buyer, "submit", { taskId: "b", reason: "并行一交付" });
+  await action(reviewer, "approve", { taskId: "b" });
+  await action(buyer, "submit", { taskId: "d", reason: "汇合交付" });
+  await action(reviewer, "approve", { taskId: "d" });
+  assert.equal(p.status, "DONE");
+  assert.deepEqual(p.document.stages[3].dependsOn, [
+    graph.id + ":b",
+    graph.id + ":c",
+  ]);
+  pass("分支并行、汇合依赖、非法循环拒绝及画布位置持久化");
   console.log("Project integration:", checks, "scenarios passed.");
 } finally {
   if (child.exitCode === null && child.signalCode === null) {

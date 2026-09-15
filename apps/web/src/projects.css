@@ -63,6 +63,53 @@
   border: 1px solid #e0e9e3;
   border-radius: 12px;
 }
+.flow-infinite {
+  height: max(650px, calc(100dvh - 240px));
+  overscroll-behavior: contain;
+}
+.flow-fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  background: #fff;
+  padding: 20px;
+  overflow: auto;
+}
+.flow-fullscreen .flow-infinite {
+  height: calc(100dvh - 140px);
+  min-height: 360px;
+}
+.flow-infinite .project-flow-node {
+  height: 220px;
+  user-select: none;
+}
+.flow-infinite .project-flow-node p {
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+.flow-port {
+  position: absolute;
+  top: 95px;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border-radius: 50%;
+  border: 3px solid #347e6d;
+  background: white;
+  cursor: crosshair;
+  touch-action: none;
+}
+.flow-port:hover {
+  background: #b8e0cb;
+}
+.flow-port.input {
+  left: -11px;
+}
+.flow-port.output {
+  right: -11px;
+}
 .project-flow-tools {
   margin-bottom: 14px;
 }

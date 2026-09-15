@@ -25,21 +25,17 @@ import {
   Typography,
   Upload,
 } from "antd";
-import {
-  BellOutlined,
-  CommentOutlined,
-  PlusOutlined,
-  ZoomInOutlined,
-  ZoomOutOutlined,
-} from "@ant-design/icons";
+import { BellOutlined, CommentOutlined, PlusOutlined } from "@ant-design/icons";
 import { api, queryClient } from "./api";
 import { Header, Row, useCan, useUser, when } from "./shared";
 import { Sheet } from "./sheet";
 import {
+  flowSteps,
   departments,
   priceBands,
   taskStates,
 } from "../../../packages/contracts/src/projects";
+import { FlowCanvas } from "./flow-canvas";
 import "./projects.css";
 const projectStates: Record<string, string> = {
   DRAFT: "草稿",
@@ -160,142 +156,6 @@ function RichView({
           {expanded ? "收起" : "展开全文"}
         </Button>
       )}
-    </div>
-  );
-}
-export function FlowCanvas({
-  stages,
-  tasks = [],
-  onStage,
-}: {
-  stages: Row[];
-  tasks?: Row[];
-  onStage?: (id: string) => void;
-}) {
-  const [view, setView] = useState({ x: 30, y: 50, scale: 0.8 });
-  const drag = useRef<{ x: number; y: number; vx: number; vy: number } | null>(
-    null,
-  );
-  return (
-    <div>
-      <Space className="project-flow-tools">
-        <Button
-          aria-label="放大画布"
-          icon={<ZoomInOutlined />}
-          onClick={() =>
-            setView((v) => ({ ...v, scale: Math.min(2, v.scale + 0.15) }))
-          }
-        />
-        <Button
-          aria-label="缩小画布"
-          icon={<ZoomOutOutlined />}
-          onClick={() =>
-            setView((v) => ({ ...v, scale: Math.max(0.2, v.scale - 0.15) }))
-          }
-        />
-        <Button onClick={() => setView({ x: 30, y: 50, scale: 0.8 })}>
-          重置画布
-        </Button>
-        <Typography.Text type="secondary">
-          拖动画布平移 · 点击环节查看任务
-        </Typography.Text>
-      </Space>
-      <div
-        className="project-canvas"
-        onPointerDown={(e) => {
-          if ((e.target as HTMLElement).closest("button")) return;
-          drag.current = { x: e.clientX, y: e.clientY, vx: view.x, vy: view.y };
-          e.currentTarget.setPointerCapture(e.pointerId);
-        }}
-        onPointerMove={(e) => {
-          if (drag.current)
-            setView((v) => ({
-              ...v,
-              x: drag.current!.vx + e.clientX - drag.current!.x,
-              y: drag.current!.vy + e.clientY - drag.current!.y,
-            }));
-        }}
-        onPointerUp={() => {
-          drag.current = null;
-        }}
-        onPointerCancel={() => {
-          drag.current = null;
-        }}
-      >
-        <div
-          style={{
-            transform: `translate(${view.x}px,${view.y}px) scale(${view.scale})`,
-            transformOrigin: "0 0",
-            position: "absolute",
-          }}
-        >
-          <svg
-            width={Math.max(1000, stages.length * 340)}
-            height={250}
-            style={{ position: "absolute", pointerEvents: "none" }}
-          >
-            <defs>
-              <marker
-                id="flow-arrow"
-                markerWidth="10"
-                markerHeight="10"
-                refX="8"
-                refY="3"
-                orient="auto"
-              >
-                <path d="M0,0 L0,6 L8,3 z" fill="#83a49c" />
-              </marker>
-            </defs>
-            {stages.slice(1).map((s, i) => (
-              <path
-                key={s.id}
-                d={`M ${i * 340 + 270} 95 L ${i * 340 + 330} 95`}
-                stroke="#83a49c"
-                strokeWidth={2}
-                markerEnd="url(#flow-arrow)"
-              />
-            ))}
-          </svg>
-          {stages.map((s, i) => {
-            const ts = tasks.filter((t) => t.stage === s.id),
-              done = ts.filter((t) => t.status === "DONE").length,
-              bad = ts.some((t) => t.status === "DISPUTED");
-            return (
-              <button
-                key={s.id}
-                className={
-                  "project-flow-node " +
-                  (bad
-                    ? "disputed"
-                    : ts.length && done === ts.length
-                      ? "done"
-                      : "")
-                }
-                style={{ left: i * 340, top: 0 }}
-                onClick={() => onStage?.(s.id)}
-              >
-                <span className="eyebrow">
-                  环节 {String(i + 1).padStart(2, "0")} ·{" "}
-                  {s.department || "SOP"}
-                </span>
-                <h3>{s.name}</h3>
-                <p>{s.description}</p>
-                {ts.length > 0 && (
-                  <>
-                    <Progress
-                      percent={Math.round((done / ts.length) * 100)}
-                      size="small"
-                    />
-                    <small>
-                      {bad ? "存在异议" : `${done}/${ts.length} 项任务已验收`}
-                    </small>
-                  </>
-                )}
-              </button>
-            );
-          })}
-        </div>
-      </div>
     </div>
   );
 }
@@ -704,14 +564,14 @@ export function SopPage() {
         open={!!view}
         onClose={() => setView(null)}
         size="large"
-        styles={{ wrapper: { width: "90vw" } }}
+        styles={{ wrapper: { width: "98vw" } }}
         extra={
           view &&
           (String(view.ownerId) === String(user.id) ||
             user.permissions.includes("user.manage")) && (
             <Button
               onClick={() => {
-                setEdit({ ...view });
+                setEdit({ ...view, steps: flowSteps(view.steps) });
                 setView(null);
               }}
             >
@@ -723,7 +583,7 @@ export function SopPage() {
         {view && (
           <>
             <RichView value={view.description} />
-            <FlowCanvas stages={view.steps} />
+            <FlowCanvas key={view.id} stages={view.steps} />
             <Alert
               type="info"
               title="这是流程模板；在项目实例中填写任务、交付结果并进行验收。"
@@ -733,6 +593,7 @@ export function SopPage() {
       </Drawer>
       <Drawer
         title={edit?.id ? "编辑 SOP" : "新建 SOP"}
+        styles={{ wrapper: { width: "98vw" } }}
         open={!!edit}
         onClose={() => setEdit(null)}
         size="large"
@@ -765,9 +626,12 @@ export function SopPage() {
                 }
               />
             </Form.Item>
-            <Typography.Title level={5}>
-              流程环节（按顺序执行）
-            </Typography.Title>
+            <Typography.Title level={5}>流程环节与分支</Typography.Title>
+            <FlowCanvas
+              key={edit.id || "new"}
+              stages={edit.steps}
+              onChange={(steps) => setEdit({ ...edit, steps })}
+            />
             {edit.steps.map((s: Row, i: number) => (
               <Card
                 key={s.id}
@@ -790,7 +654,17 @@ export function SopPage() {
                       onClick={() =>
                         setEdit({
                           ...edit,
-                          steps: edit.steps.filter((x: Row) => x.id !== s.id),
+                          steps: flowSteps(
+                            edit.steps as {
+                              id: string;
+                              dependsOn?: string[];
+                            }[],
+                          )
+                            .filter((x) => x.id !== s.id)
+                            .map((x) => ({
+                              ...x,
+                              dependsOn: x.dependsOn.filter((p) => p !== s.id),
+                            })),
                         })
                       }
                     >
@@ -834,7 +708,13 @@ export function SopPage() {
                   ...edit,
                   steps: [
                     ...edit.steps,
-                    { id: uuid(), name: "新环节", description: "" },
+                    {
+                      id: uuid(),
+                      name: "新环节",
+                      description: "",
+                      dependsOn: [],
+                      position: { x: 40, y: edit.steps.length * 260 },
+                    },
                   ],
                 })
               }
@@ -1246,8 +1126,15 @@ export function ProjectsPage() {
                   .every((t: Row) => t.status === "DONE"),
             ).length,
             bad = tasks.some((t: Row) => t.status === "DISPUTED"),
-            current = stages.find(
+            current = flowSteps(
+              stages as { id: string; name: string; dependsOn?: string[] }[],
+            ).filter(
               (s: Row) =>
+                s.dependsOn.every((id: string) =>
+                  tasks
+                    .filter((t: Row) => t.stage === id)
+                    .every((t: Row) => t.status === "DONE"),
+                ) &&
                 !tasks
                   .filter((t: Row) => t.stage === s.id)
                   .every((t: Row) => t.status === "DONE"),
@@ -1277,8 +1164,8 @@ export function ProjectsPage() {
               <h2>{p.name || "未命名草稿"}</h2>
               <RichView value={p.document.description} summary />
               <p>
-                {current
-                  ? `正在进行：${current.name}`
+                {current.length
+                  ? `可推进：${current.map((s) => s.name).join("、")}`
                   : p.status === "DONE"
                     ? "全部环节已验收"
                     : "等待启动"}
