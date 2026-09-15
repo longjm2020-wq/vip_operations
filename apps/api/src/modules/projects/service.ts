@@ -316,6 +316,7 @@ export async function save(c: Context, input: unknown, value?: string) {
     }
     const doc = {
       ...b,
+      attachments: b.attachments ?? old?.document.attachments ?? [],
       tasks,
       stages: old?.status === "ACTIVE" ? old.document.stages : stages,
     };

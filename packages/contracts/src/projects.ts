@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { attachmentsSchema } from "./project-attachments.js";
 export const departments = [
   "运营",
   "商品",
@@ -155,6 +156,7 @@ export const projectSchema = z
     name: short,
     tag: short.min(1),
     description: z.string().max(20000).default(""),
+    attachments: attachmentsSchema.optional(),
     start: day,
     end: day,
     sopIds: z.array(uid).max(10),

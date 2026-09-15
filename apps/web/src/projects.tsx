@@ -38,6 +38,7 @@ import {
 } from "../../../packages/contracts/src/projects";
 import { FlowCanvas } from "./flow-canvas";
 import { projectPeriod, projectBaseName } from "./project-period";
+import { ProjectAttachments } from "./project-attachments";
 import "./projects.css";
 const projectStates: Record<string, string> = {
   DRAFT: "草稿",
@@ -995,6 +996,10 @@ function ProjectEditor({
             value={value.description}
             onChange={(v) => patch("description", v)}
           />
+          <ProjectAttachments
+            files={value.attachments}
+            onChange={(files) => patch("attachments", files)}
+          />
         </Form.Item>
         <Form.Item label="操作流程 SOP（发布时必选）" required>
           <Select
@@ -1624,6 +1629,7 @@ export function ProjectDetailPage() {
           ))}
         </div>
         <RichView value={d.description} summary />
+        <ProjectAttachments files={d.attachments} />
       </Card>
       <Tabs
         activeKey={tab}

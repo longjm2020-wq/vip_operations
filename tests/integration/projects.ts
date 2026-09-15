@@ -141,6 +141,15 @@ try {
     name: "项目测试",
     tag: "周上新",
     description: "**目标**\n安全文本<script>alert(1)</script>",
+    attachments: [
+      {
+        id: randomUUID(),
+        name: "requirements.txt",
+        type: "text/plain",
+        size: 5,
+        data: "data:text/plain;base64,aGVsbG8=",
+      },
+    ],
     start: "2026-09-15",
     end: "2026-09-19",
     sopIds: [sop.id],
@@ -149,6 +158,19 @@ try {
     requirements: [],
   };
   let p = await ok(owner, "/projects", "POST", body);
+  assert.deepEqual(
+    (await ok(owner, "/projects/" + p.id)).document.attachments,
+    body.attachments,
+  );
+  assert.equal(
+    (
+      await request(owner, "/projects", "POST", {
+        ...body,
+        attachments: [{ ...body.attachments[0], name: "unsafe.html" }],
+      })
+    ).status,
+    400,
+  );
   assert.equal(
     (
       await request(owner, "/projects", "POST", {
@@ -179,6 +201,10 @@ try {
     return r;
   };
   await action(owner, "publish");
+  assert.deepEqual(
+    (await ok(reviewer, "/projects/" + p.id)).document.attachments,
+    body.attachments,
+  );
   assert.equal(p.status, "ACTIVE");
   assert.equal((await ok(reviewer, "/projects/notifications")).length, 1);
   assert.equal((await request(outsider, "/projects/" + p.id)).status, 403);
