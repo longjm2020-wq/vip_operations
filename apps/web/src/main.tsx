@@ -53,7 +53,7 @@ import {
 } from "./operations";
 import { AccessPage, AuditPage } from "./system";
 import { VipPage } from "./vip";
-import { ManualPage } from "./manual";
+import { ManualPage, manualHref } from "./manual";
 import {
   SopPage,
   ProjectsPage,
@@ -301,7 +301,14 @@ function Workspace({ user }: { user: Row }) {
               </Typography.Text>
             </Space>
             <Space size={14}>
-              <Link to="/help">使用手册</Link>
+              <Link
+                to={manualHref(location.pathname)}
+                target="_blank"
+                rel="noopener noreferrer"
+                title="打开当前模块使用手册，保留当前页面"
+              >
+                使用手册
+              </Link>
               <ProjectNotifications />
               <Avatar
                 size={30}

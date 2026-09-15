@@ -1,6 +1,35 @@
 import { useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { Button, Card, Empty, Input, Select, Space, Typography } from "antd";
 import { Header } from "./shared";
+
+const moduleChapters: Record<string, string> = {
+  products: "02-products",
+  skus: "03-skus",
+  inventory: "04-inventory",
+  "purchase-suggestions": "06-suggestions",
+  "purchase-orders": "07-purchases",
+  receipts: "08-receipts",
+  suppliers: "09-suppliers",
+  sops: "10-sop",
+  projects: "11-projects",
+  warehouses: "12-warehouses",
+  categories: "13-categories",
+  "color-size-mappings": "14-mappings",
+  "color-mappings": "14-mappings",
+  "size-mappings": "14-mappings",
+  brands: "15-brands",
+  users: "16-users",
+  roles: "17-roles",
+  "audit-logs": "18-audit",
+  vip: "19-vip",
+};
+export function manualHref(path: string) {
+  const chapter = path.startsWith("/inventory/transactions")
+    ? "05-transactions"
+    : moduleChapters[path.split("/")[1]];
+  return chapter ? `/help?chapter=${chapter}.md` : "/help";
+}
 
 const sources = import.meta.glob("../../../docs/manual/*.md", {
   eager: true,
@@ -16,8 +45,10 @@ const chapters = Object.entries(sources)
   }));
 
 export function ManualPage() {
+  const [params, setParams] = useSearchParams();
   const [search, setSearch] = useState("");
-  const [selected, setSelected] = useState(chapters[0]?.id);
+  const selected = params.get("chapter") || chapters[0]?.id;
+  const setSelected = (chapter: string) => setParams({ chapter });
   const matches = chapters.filter((c) =>
     c.text.toLowerCase().includes(search.trim().toLowerCase()),
   );
