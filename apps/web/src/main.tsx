@@ -8,6 +8,7 @@ import {
   Route,
   Routes,
   useLocation,
+  useSearchParams,
 } from "react-router-dom";
 import { create } from "zustand";
 import {
@@ -22,6 +23,7 @@ import {
   Menu,
   Space,
   Spin,
+  Tabs,
   Typography,
 } from "antd";
 import zhCN from "antd/locale/zh_CN";
@@ -137,6 +139,23 @@ function Login() {
     </div>
   );
 }
+function ColorSizeMappingsPage() {
+  const [params, setParams] = useSearchParams();
+  const tab = params.get("tab") === "size" ? "size" : "color";
+  return (
+    <>
+      <Tabs
+        activeKey={tab}
+        onChange={(key) => setParams({ tab: key })}
+        items={[
+          { key: "color", label: "颜色映射" },
+          { key: "size", label: "尺码映射" },
+        ]}
+      />
+      <MasterPage key={tab} resource={`${tab}-mappings`} />
+    </>
+  );
+}
 function Workspace({ user }: { user: Row }) {
   const location = useLocation(),
     ui = useUi();
@@ -207,13 +226,8 @@ function Workspace({ user }: { user: Row }) {
         { key: "/warehouses", label: "仓库", permission: "warehouse.read" },
         { key: "/categories", label: "品类", permission: "product.read" },
         {
-          key: "/color-mappings",
-          label: "颜色映射",
-          permission: "product.read",
-        },
-        {
-          key: "/size-mappings",
-          label: "尺码映射",
+          key: "/color-size-mappings",
+          label: "颜色尺码映射",
           permission: "product.read",
         },
         { key: "/brands", label: "品牌", permission: "product.read" },
@@ -327,8 +341,6 @@ function Workspace({ user }: { user: Row }) {
                 "warehouses",
                 "categories",
                 "brands",
-                "color-mappings",
-                "size-mappings",
               ].map((r) => (
                 <Route
                   key={r}
@@ -336,6 +348,22 @@ function Workspace({ user }: { user: Row }) {
                   element={<MasterPage resource={r} />}
                 />
               ))}
+              <Route
+                path="/color-size-mappings"
+                element={<ColorSizeMappingsPage />}
+              />
+              <Route
+                path="/color-mappings"
+                element={
+                  <Navigate to="/color-size-mappings?tab=color" replace />
+                }
+              />
+              <Route
+                path="/size-mappings"
+                element={
+                  <Navigate to="/color-size-mappings?tab=size" replace />
+                }
+              />
               <Route path="/inventory" element={<InventoryPage />} />
               <Route
                 path="/inventory/transactions"
