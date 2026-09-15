@@ -65,6 +65,64 @@ const useUi = create<{ collapsed: boolean; toggle: () => void }>((set) => ({
   collapsed: false,
   toggle: () => set((s) => ({ collapsed: !s.collapsed })),
 }));
+function BrandMark({ collapsed = false }: { collapsed?: boolean }) {
+  return (
+    <svg
+      className="brand-wordmark"
+      viewBox={collapsed ? "42 0 80 121" : "30 0 340 121"}
+      role="img"
+      aria-label="XUTI"
+    >
+      <defs>
+        <filter id="brand-mask-filter" colorInterpolationFilters="sRGB">
+          <feColorMatrix type="luminanceToAlpha" />
+          <feComponentTransfer>
+            <feFuncA type="discrete" tableValues="0 1 1 1 1 1 1 1" />
+          </feComponentTransfer>
+        </filter>
+        <mask
+          id="brand-wordmark-mask"
+          maskUnits="userSpaceOnUse"
+          x="0"
+          y="0"
+          width="399"
+          height="121"
+          style={{ maskType: "alpha" }}
+        >
+          <image
+            href="/xuti-wordmark.png"
+            width="399"
+            height="121"
+            filter="url(#brand-mask-filter)"
+          />
+        </mask>
+        <linearGradient id="brand-silver" x1="0" y1="0" x2="1" y2="0">
+          <stop
+            className="brand-stop brand-stop-a"
+            offset="0%"
+            stopColor="#718093"
+          />
+          <stop
+            className="brand-stop brand-stop-b"
+            offset="50%"
+            stopColor="#f4f6fa"
+          />
+          <stop
+            className="brand-stop brand-stop-c"
+            offset="100%"
+            stopColor="#a3adba"
+          />
+        </linearGradient>
+      </defs>
+      <rect
+        width="399"
+        height="121"
+        fill="url(#brand-silver)"
+        mask="url(#brand-wordmark-mask)"
+      />
+    </svg>
+  );
+}
 function Login() {
   const [busy, setBusy] = useState(false),
     [error, setError] = useState("");
@@ -72,7 +130,7 @@ function Login() {
     <div className="login">
       <section className="login-story">
         <div className="login-brand">
-          <img className="login-logo" src="/xuti-logo.png" alt="XUTI" />
+          <BrandMark />
         </div>
         <div>
           <div className="eyebrow">APPAREL OPERATIONS</div>
@@ -258,12 +316,7 @@ function Workspace({ user }: { user: Row }) {
       <Layout className="workspace">
         <Layout.Sider width={224} collapsed={ui.collapsed} className="sidebar">
           <Link to="/products" className="brand">
-            <img className="brand-logo" src="/xuti-logo.png" alt="XUTI" />
-            {!ui.collapsed && (
-              <span>
-                XUTI <small>经营管理</small>
-              </span>
-            )}
+            <BrandMark collapsed={ui.collapsed} />
           </Link>
           {!ui.collapsed && <div className="sidebar-label">OPERATIONS</div>}
           <Menu
