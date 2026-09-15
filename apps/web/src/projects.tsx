@@ -483,6 +483,7 @@ export function SopPage() {
   const [dept, setDept] = useState<string>(),
     [view, setView] = useState<Row | null>(null),
     [edit, setEdit] = useState<Row | null>(null),
+    [settingsOpen, setSettingsOpen] = useState(false),
     [busy, setBusy] = useState(false);
   const save = async () => {
     if (!edit) return;
@@ -493,6 +494,7 @@ export function SopPage() {
         edit.id ? "PATCH" : "POST",
         edit,
       );
+      setSettingsOpen(false);
       setEdit(null);
       await refreshProjects();
       message.success("SOP 已保存");
@@ -594,135 +596,155 @@ export function SopPage() {
       </Drawer>
       <Drawer
         title={edit?.id ? "编辑 SOP" : "新建 SOP"}
-        styles={{ wrapper: { width: "98vw" } }}
+        styles={{ wrapper: { width: "98vw" }, body: { padding: 12 } }}
         open={!!edit}
-        onClose={() => setEdit(null)}
+        onClose={() => {
+          setSettingsOpen(false);
+          setEdit(null);
+        }}
         size="large"
         extra={
-          <Button type="primary" loading={busy} onClick={save}>
-            保存模板
-          </Button>
+          <Space>
+            <Button onClick={() => setSettingsOpen(true)}>编辑设置</Button>
+            <Button type="primary" loading={busy} onClick={save}>
+              保存模板
+            </Button>
+          </Space>
         }
       >
         {edit && (
-          <Form layout="vertical">
-            <Form.Item label="名称" required>
-              <Input
-                value={edit.name}
-                onChange={(e) => setEdit({ ...edit, name: e.target.value })}
-              />
-            </Form.Item>
-            <Form.Item label="归属岗位" required>
-              <Select
-                value={edit.department}
-                options={opt(options.data?.departments || [])}
-                onChange={(v) => setEdit({ ...edit, department: v })}
-              />
-            </Form.Item>
-            <Form.Item label="说明">
-              <Input.TextArea
-                value={edit.description}
-                onChange={(e) =>
-                  setEdit({ ...edit, description: e.target.value })
-                }
-              />
-            </Form.Item>
-            <Typography.Title level={5}>流程环节与分支</Typography.Title>
+          <>
             <FlowCanvas
               key={edit.id || "new"}
               stages={edit.steps}
               onChange={(steps) => setEdit({ ...edit, steps })}
             />
-            {edit.steps.map((s: Row, i: number) => (
-              <Card
-                key={s.id}
-                size="small"
-                title={`环节 ${i + 1}`}
-                extra={
-                  <Space>
-                    <Button
-                      disabled={i === 0}
-                      onClick={() => {
-                        const a = [...edit.steps];
-                        [a[i - 1], a[i]] = [a[i], a[i - 1]];
-                        setEdit({ ...edit, steps: a });
-                      }}
-                    >
-                      上移
-                    </Button>
-                    <Button
-                      danger
-                      onClick={() =>
+            <Drawer
+              title="编辑设置"
+              placement="right"
+              open={settingsOpen}
+              onClose={() => setSettingsOpen(false)}
+              push={false}
+              styles={{ wrapper: { width: "min(560px, 95vw)" } }}
+            >
+              <Form layout="vertical">
+                <Form.Item label="名称" required>
+                  <Input
+                    value={edit.name}
+                    onChange={(e) => setEdit({ ...edit, name: e.target.value })}
+                  />
+                </Form.Item>
+                <Form.Item label="归属岗位" required>
+                  <Select
+                    value={edit.department}
+                    options={opt(options.data?.departments || [])}
+                    onChange={(v) => setEdit({ ...edit, department: v })}
+                  />
+                </Form.Item>
+                <Form.Item label="说明">
+                  <Input.TextArea
+                    value={edit.description}
+                    onChange={(e) =>
+                      setEdit({ ...edit, description: e.target.value })
+                    }
+                  />
+                </Form.Item>
+                <Typography.Title level={5}>流程环节与分支</Typography.Title>
+
+                {edit.steps.map((s: Row, i: number) => (
+                  <Card
+                    key={s.id}
+                    size="small"
+                    title={`环节 ${i + 1}`}
+                    extra={
+                      <Space>
+                        <Button
+                          disabled={i === 0}
+                          onClick={() => {
+                            const a = [...edit.steps];
+                            [a[i - 1], a[i]] = [a[i], a[i - 1]];
+                            setEdit({ ...edit, steps: a });
+                          }}
+                        >
+                          上移
+                        </Button>
+                        <Button
+                          danger
+                          onClick={() =>
+                            setEdit({
+                              ...edit,
+                              steps: flowSteps(
+                                edit.steps as {
+                                  id: string;
+                                  dependsOn?: string[];
+                                }[],
+                              )
+                                .filter((x) => x.id !== s.id)
+                                .map((x) => ({
+                                  ...x,
+                                  dependsOn: x.dependsOn.filter(
+                                    (p) => p !== s.id,
+                                  ),
+                                })),
+                            })
+                          }
+                        >
+                          移除
+                        </Button>
+                      </Space>
+                    }
+                  >
+                    <Input
+                      placeholder="环节名称"
+                      value={s.name}
+                      onChange={(e) =>
                         setEdit({
                           ...edit,
-                          steps: flowSteps(
-                            edit.steps as {
-                              id: string;
-                              dependsOn?: string[];
-                            }[],
-                          )
-                            .filter((x) => x.id !== s.id)
-                            .map((x) => ({
-                              ...x,
-                              dependsOn: x.dependsOn.filter((p) => p !== s.id),
-                            })),
+                          steps: edit.steps.map((x: Row) =>
+                            x.id === s.id ? { ...x, name: e.target.value } : x,
+                          ),
                         })
                       }
-                    >
-                      移除
-                    </Button>
-                  </Space>
-                }
-              >
-                <Input
-                  placeholder="环节名称"
-                  value={s.name}
-                  onChange={(e) =>
+                    />
+                    <Input.TextArea
+                      placeholder="交付内容与验收要求"
+                      value={s.description}
+                      onChange={(e) =>
+                        setEdit({
+                          ...edit,
+                          steps: edit.steps.map((x: Row) =>
+                            x.id === s.id
+                              ? { ...x, description: e.target.value }
+                              : x,
+                          ),
+                        })
+                      }
+                    />
+                  </Card>
+                ))}
+                <Button
+                  block
+                  onClick={() =>
                     setEdit({
                       ...edit,
-                      steps: edit.steps.map((x: Row) =>
-                        x.id === s.id ? { ...x, name: e.target.value } : x,
-                      ),
+                      steps: [
+                        ...edit.steps,
+                        {
+                          id: uuid(),
+                          name: "新环节",
+                          description: "",
+                          dependsOn: [],
+                          position: { x: 40, y: edit.steps.length * 260 },
+                        },
+                      ],
                     })
                   }
-                />
-                <Input.TextArea
-                  placeholder="交付内容与验收要求"
-                  value={s.description}
-                  onChange={(e) =>
-                    setEdit({
-                      ...edit,
-                      steps: edit.steps.map((x: Row) =>
-                        x.id === s.id
-                          ? { ...x, description: e.target.value }
-                          : x,
-                      ),
-                    })
-                  }
-                />
-              </Card>
-            ))}
-            <Button
-              block
-              onClick={() =>
-                setEdit({
-                  ...edit,
-                  steps: [
-                    ...edit.steps,
-                    {
-                      id: uuid(),
-                      name: "新环节",
-                      description: "",
-                      dependsOn: [],
-                      position: { x: 40, y: edit.steps.length * 260 },
-                    },
-                  ],
-                })
-              }
-            >
-              添加环节
-            </Button>
-          </Form>
+                >
+                  添加环节
+                </Button>
+              </Form>
+            </Drawer>
+          </>
         )}
       </Drawer>
     </>
