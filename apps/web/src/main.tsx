@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClientProvider, useQuery } from "@tanstack/react-query";
 import {
@@ -218,7 +218,7 @@ function ColorSizeMappingsPage() {
 function Workspace({ user }: { user: Row }) {
   const location = useLocation(),
     ui = useUi();
-  const items = [
+  const originalItems = [
     {
       key: "/products",
       label: "商品档案",
@@ -297,20 +297,49 @@ function Workspace({ user }: { user: Row }) {
       ],
     },
   ];
+  const settings = originalItems.find((i) => i.key === "/settings")!;
+  const adminKeys = ["/users", "/roles", "/audit-logs"];
+  const items = [
+    {
+      key: "/erp",
+      label: "ERP系统",
+      icon: <AppstoreOutlined />,
+      children: [
+        ...originalItems.filter((i) => !i.children),
+        ...settings.children!.filter((i) => !adminKeys.includes(i.key)),
+      ],
+    },
+    originalItems.find((i) => i.key === "/project-management")!,
+    {
+      ...settings,
+      children: settings.children!.filter((i) => adminKeys.includes(i.key)),
+    },
+  ];
   const menu = items
     .filter((i) => !i.permission || user.permissions.includes(i.permission))
     .map((i) => ({
       ...i,
       label: i.children ? i.label : <Link to={i.key}>{i.label}</Link>,
       children: i.children
-        ?.filter((c) => user.permissions.includes(c.permission))
+        ?.filter(
+          (c) => !c.permission || user.permissions.includes(c.permission),
+        )
         .map((c) => ({ ...c, label: <Link to={c.key}>{c.label}</Link> })),
-    }));
+    }))
+    .filter((i) => !i.children || i.children.length > 0);
   const selected = items
     .flatMap((i) => i.children || [i])
     .map((i) => i.key)
     .sort((a, b) => b.length - a.length)
     .find((k) => location.pathname.startsWith(k));
+  const parent = items.find((i) =>
+    i.children?.some((c) => c.key === selected),
+  )?.key;
+  const [openKeys, setOpenKeys] = useState<string[]>(parent ? [parent] : []);
+  useEffect(() => {
+    if (parent)
+      setOpenKeys((keys) => (keys.includes(parent) ? keys : [...keys, parent]));
+  }, [parent]);
   return (
     <UserContext.Provider value={user}>
       <Layout className="workspace">
@@ -323,12 +352,8 @@ function Workspace({ user }: { user: Row }) {
             mode="inline"
             theme="dark"
             selectedKeys={selected ? [selected] : []}
-            defaultOpenKeys={
-              location.pathname.startsWith("/projects") ||
-              location.pathname === "/sops"
-                ? ["/project-management"]
-                : ["/settings"]
-            }
+            openKeys={openKeys}
+            onOpenChange={setOpenKeys}
             items={menu}
           />
           {!ui.collapsed && (
