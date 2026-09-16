@@ -32,6 +32,7 @@ export const permissions = [
   "supply.portal",
   "supply.review",
   "supply.manage",
+  "supply.purchase",
 ];
 const buyer = [
   "product.read",
@@ -120,7 +121,7 @@ for (const [code, name] of Object.entries({
 roleSeeds.SUPPLIER = { name: "供应商", permissions: ["supply.portal"] };
 roleSeeds.SUPPLY_MANAGER = {
   name: "供应链负责人",
-  permissions: ["supply.review", "supply.manage"],
+  permissions: ["supply.review", "supply.manage", "supply.purchase"],
 };
 export const inTransitStatuses = [
   "CONFIRMED",

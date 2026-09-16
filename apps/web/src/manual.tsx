@@ -28,7 +28,20 @@ const moduleChapters: Record<string, string> = {
   vip: "19-vip",
 };
 export function manualHref(path: string) {
-  if(path.startsWith("/supply/"))return "/help?chapter="+(path.includes("/review")?"21-supply-review":path.includes("/catalog")?"22-supply-products":"20-supply-portal")+".md";
+  if (path.startsWith("/supply/procurement"))
+    return "/help?chapter=23-supply-orders.md";
+  if (path.startsWith("/supply/orders"))
+    return "/help?chapter=24-supplier-orders.md";
+  if (path.startsWith("/supply/"))
+    return (
+      "/help?chapter=" +
+      (path.includes("/review")
+        ? "21-supply-review"
+        : path.includes("/catalog")
+          ? "22-supply-products"
+          : "20-supply-portal") +
+      ".md"
+    );
   const chapter = path.startsWith("/inventory/transactions")
     ? "05-transactions"
     : moduleChapters[path.split("/")[1]];

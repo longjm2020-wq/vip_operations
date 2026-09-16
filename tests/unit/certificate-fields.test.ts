@@ -50,3 +50,21 @@ it("preserves disagreements between multiple OCR passes instead of guessing a va
     ),
   ).toEqual({ legalName: ["张三", "李四"] });
 });
+it("rejects company OCR noise and interleaved license labels instead of auto-filling it", () => {
+  for (const value of [
+    "注册资本、=2FY9019409有限公司(RAABBEad)pKazAOH38",
+    "测试服装有限公司随机识别乱码",
+    "=AB1234有限公司",
+    "注册资本100万元有限公司",
+  ])
+    expect(
+      extractCertificateFields("名称：" + value + "\n法定代表人张三", "license")
+        .company,
+    ).toBeUndefined();
+  expect(
+    extractCertificateFields(
+      "名称：测试服装(杭州)有限公司\n类型有限责任公司",
+      "license",
+    ).company,
+  ).toEqual(["测试服装(杭州)有限公司"]);
+});

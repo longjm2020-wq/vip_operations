@@ -1,96 +1,132 @@
-﻿import {
+import {
   extractCertificateFields,
   mergeCertificateFields,
   expectedFields,
   type CertificateKind,
   type CertificateFields,
 } from "../../../packages/contracts/src/certificate-fields";
-
-async function prepare(file: Blob, rotation: number) {
-  const bitmap = await createImageBitmap(file);
-  try {
-    const scale = Math.min(2, 2600 / Math.max(bitmap.width, bitmap.height));
-    const width = Math.round(bitmap.width * scale),
-      height = Math.round(bitmap.height * scale);
-    const canvas = document.createElement("canvas");
-    canvas.width = rotation % 180 ? height : width;
-    canvas.height = rotation % 180 ? width : height;
-    const ctx = canvas.getContext("2d")!;
-    ctx.fillStyle = "white";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.translate(canvas.width / 2, canvas.height / 2);
-    ctx.rotate((rotation * Math.PI) / 180);
-    ctx.filter = "grayscale(1) contrast(1.25)";
-    ctx.drawImage(bitmap, -width / 2, -height / 2, width, height);
-    return canvas;
-  } finally {
-    bitmap.close();
-  }
+import type { Worker } from "tesseract.js";
+let cached: Worker | undefined;
+let idleTimer: ReturnType<typeof setTimeout> | undefined;
+let queue: Promise<unknown> = Promise.resolve();
+function prepare(bitmap: ImageBitmap, rotation: number, contrast = false) {
+  const scale = Math.min(contrast ? 2 : 1, 2000 / Math.max(bitmap.width, bitmap.height));
+  const width = Math.round(bitmap.width * scale),
+    height = Math.round(bitmap.height * scale);
+  const canvas = document.createElement("canvas");
+  canvas.width = rotation % 180 ? height : width;
+  canvas.height = rotation % 180 ? width : height;
+  const ctx = canvas.getContext("2d")!;
+  ctx.fillStyle = "white";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.translate(canvas.width / 2, canvas.height / 2);
+  ctx.rotate((rotation * Math.PI) / 180);
+  if (contrast) ctx.filter = "grayscale(1) contrast(1.25)";
+  ctx.drawImage(bitmap, -width / 2, -height / 2, width, height);
+  return canvas;
 }
-
-export async function recognizeCertificate(
+async function run(
   file: Blob,
   kind: CertificateKind,
-  progress: (message: string) => void,
   signal?: AbortSignal,
+  onFields?: (f: CertificateFields) => void,
 ): Promise<CertificateFields> {
-  const { createWorker, PSM } = await import("tesseract.js");
-  let worker: Awaited<ReturnType<typeof createWorker>> | undefined;
-  let stopped = false;
-  let pass = "加载识别资源";
+  if (signal?.aborted) throw Error("识别已取消");
+  if (idleTimer) clearTimeout(idleTimer);
+  let bitmap: ImageBitmap | undefined,
+    worker: Worker | undefined,
+    stopped = false;
+  let fields: CertificateFields = {};
   let timer: ReturnType<typeof setTimeout> | undefined;
-  let abort: (() => void) | undefined;
+  let abort: () => void = () => {};
   try {
     return await Promise.race([
       (async () => {
-        progress("加载识别资源，首次识别可能需要较长时间…");
-        worker = await createWorker(["chi_sim", "eng"], 1, {
-          workerPath: location.origin + "/ocr/worker.min.js",
-          corePath: location.origin + "/ocr/core",
-          langPath: location.origin + "/ocr",
-          logger: (m) => {
-            if (!stopped && m.status === "recognizing text")
-              progress(`${pass} ${Math.round(m.progress * 100)}%`);
-          },
-        });
+        const { createWorker, PSM } = await import("tesseract.js");
+        worker =
+          cached ||
+          (await createWorker(["chi_sim", "eng"], 1, {
+            workerPath: location.origin + "/ocr/worker.min.js",
+            corePath: location.origin + "/ocr/core",
+            langPath: location.origin + "/ocr",
+          }));
         if (stopped) {
           await worker.terminate();
           throw Error("识别已取消");
         }
+        cached = worker;
         await worker.setParameters({ tessedit_pageseg_mode: PSM.SPARSE_TEXT });
-        let fields: CertificateFields = {};
-        for (const rotation of [null, 0, 90, 270, 180]) {
+        bitmap = await createImageBitmap(file);
+        if (stopped) {bitmap.close();throw Error("识别已取消");}
+        const rotations =
+          kind === "idFront" && bitmap.height > bitmap.width
+            ? [90, 270, 0, 180]
+            : [0, 90, 270, 180];
+        for (const rotation of rotations) {
           if (stopped) throw Error("识别已取消");
-          pass = rotation ? `尝试旋转${rotation}°识别` : "识别证件文字";
-          const canvas =
-            rotation === null ? file : await prepare(file, rotation);
+          const { data } = await worker.recognize(prepare(bitmap, rotation));
           if (stopped) throw Error("识别已取消");
-          const { data } = await worker.recognize(canvas);
           fields = mergeCertificateFields(
             fields,
             extractCertificateFields(data.text, kind),
           );
+          onFields?.(fields);
           if (expectedFields[kind].every((f) => fields[f]?.length)) break;
+          // A valid identifier gives us the orientation; one contrast retry is enough.
+          if (fields[kind === "idFront" ? "legalId" : "creditCode"]?.length) {
+            const retry = await worker.recognize(
+              prepare(bitmap, rotation, true),
+            );
+            if (stopped) throw Error("识别已取消");
+            fields = mergeCertificateFields(
+              fields,
+              extractCertificateFields(retry.data.text, kind),
+            );
+            onFields?.(fields);
+            break;
+          }
         }
         return fields;
       })(),
-      new Promise<never>((_, reject) => {
+      new Promise<CertificateFields>((resolve, reject) => {
         abort = () => {
           stopped = true;
           reject(Error("识别已取消"));
         };
-        if (signal?.aborted) abort();
-        else signal?.addEventListener("abort", abort, { once: true });
+        signal?.addEventListener("abort", abort, { once: true });
         timer = setTimeout(() => {
           stopped = true;
-          reject(Error("识别超时，请重试或上传文字清晰、证件占满画面的照片"));
-        }, 180000);
+          if (Object.keys(fields).length) resolve(fields);
+          else
+            reject(Error("未可靠识别，请使用清晰、完整的证件照片或手动填写"));
+        }, 45000);
       }),
     ]);
+  } catch(e) {
+    stopped=true;throw e;
   } finally {
-    stopped = true;
     if (timer) clearTimeout(timer);
-    if (abort) signal?.removeEventListener("abort", abort);
-    if (worker) await worker.terminate();
+    signal?.removeEventListener("abort", abort);
+    bitmap?.close();
+    if (stopped && worker) {
+      if (cached === worker) cached = undefined;
+      await worker.terminate();
+    } else if (cached)
+      idleTimer = setTimeout(() => {
+        const old = cached;
+        cached = undefined;
+        void old?.terminate();
+      }, 60000);
   }
+}
+export function recognizeCertificate(
+  file: Blob,
+  kind: CertificateKind,
+  _progress: (message: string) => void = () => {},
+  signal?: AbortSignal,
+  onFields?: (f: CertificateFields) => void,
+) {
+  const result = queue.then(() => run(file, kind, signal, onFields));
+  queue = result.catch(() => {});
+  return result;
 }

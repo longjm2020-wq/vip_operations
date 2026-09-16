@@ -547,6 +547,18 @@ try {
   pass(
     "产品库存校验、款号权限、卖点长度、上架资料门禁、多原因下架和批量款号搜索",
   );
+  const { testSupplyOrders } = await import("./supply-orders.js");
+  await testSupplyOrders({
+    owner,
+    vendor,
+    other,
+    ok,
+    request,
+    db,
+    profile,
+    saved,
+    pass,
+  });
   console.log("Supply integration:", checks, "scenarios passed.");
 } finally {
   if (child.exitCode === null && child.signalCode === null) {

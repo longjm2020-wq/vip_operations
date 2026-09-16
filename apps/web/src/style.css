@@ -212,7 +212,7 @@ pre {
 .login {
   min-height: 100vh;
   display: grid;
-  grid-template-columns: 1.1fr 1fr;
+  grid-template-columns: minmax(0, 61.8fr) minmax(0, 38.2fr);
 }
 .login-story {
   background: #35251f;
@@ -278,11 +278,12 @@ pre {
   display: grid;
   place-items: center;
   background: #fffdf9;
-  padding: 45px;
+  min-width: 0;
+  padding: 40px clamp(24px, 3vw, 64px);
 }
 .login-box {
   width: 100%;
-  max-width: 370px;
+  max-width: 420px;
 }
 .login-box h2 {
   font-size: 32px;
@@ -616,3 +617,13 @@ pre {
 
 
 .login-story .login-video-copy{margin-top:auto;margin-bottom:46px}.login-story .login-video-copy h1{font-size:clamp(32px,3.4vw,54px);line-height:1.4;letter-spacing:1px;text-shadow:0 2px 20px #0005}.login-story .brand-wordmark{filter:brightness(1.3)}
+
+@media (max-width: 850px) {
+  .login { min-height: 100dvh; grid-template-columns: minmax(0,1fr); grid-template-rows: 240px 1fr; }
+  .login-story { display:flex; min-height:240px; padding:20px 24px; }
+  .login-brand .brand-wordmark { width:160px; height:54px; }
+  .login-story .login-video-copy { margin:0; }
+  .login-story .login-video-copy h1 { margin:0; font-size:26px; line-height:1.35; }
+  .login-panel { padding:30px 24px; }
+  .login-box { max-width:420px; }
+}

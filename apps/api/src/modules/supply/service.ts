@@ -1,4 +1,5 @@
 import { randomUUID, createHash } from "node:crypto";
+import { protectReservedStock } from "./reservations.js";
 import { z } from "zod";
 import {
   db,
@@ -470,6 +471,7 @@ export async function productWrite(c: Context, input: unknown, id?: string) {
       : null;
     if (id && !old) fail("NOT_FOUND", "产品不存在", 404);
     if (old) version(old, b.version || 0);
+    if (old) await protectReservedStock(tx, id!, b.document.stock);
     await filesBelong(
       tx,
       a,

@@ -36,8 +36,14 @@ export function extractCertificateFields(
           ? /^[\p{Script=Han}·•]{2,30}$/u.test(v)
           : v.length >= 4 &&
             v.length <= 100 &&
-            /[\p{Script=Han}]/u.test(v) &&
-            /公司|企业|厂|店|中心|合作社|事务所|商行|工作室|经营部/.test(v),
+            /^[\p{Script=Han}A-Za-z0-9()·&-]+$/u.test(v) &&
+            /(?:公司|企业|厂|店|中心|合作社|事务所|商行|工作室|经营部)$/.test(
+              v,
+            ) &&
+            !/注册资本|统一社会信用|法定代表|成立日期|人民币|营业期限|经营范围/.test(
+              v,
+            ) &&
+            (v.match(/[\p{Script=Han}]/gu)?.length || 0) / v.length >= 0.6,
       );
     if (values.length) fields[field] = [...new Set(values)];
   };

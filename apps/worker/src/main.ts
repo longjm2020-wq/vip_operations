@@ -2,6 +2,8 @@ import "dotenv/config";
 import { Worker } from "bullmq";
 import { validateIntegrationMode } from "../../api/src/integrations/vip/index.js";
 import { startVopScheduler } from "./vop-scheduler.js";
+import { startSupplyLogistics } from "./supply-logistics.js";
+const stopSupplyLogistics = startSupplyLogistics();
 validateIntegrationMode();
 const stopVop =
   process.env.VIP_MODE === "catalog" ? startVopScheduler() : async () => {};
@@ -36,7 +38,9 @@ worker.on("failed", (job, error) =>
 worker.on("error", () => console.error("Queue unavailable"));
 for (const signal of ["SIGINT", "SIGTERM"] as const)
   process.on(signal, () => {
-    void Promise.all([worker.close(), stopVop()]).then(() => process.exit(0));
+    void Promise.all([worker.close(), stopVop(), stopSupplyLogistics()]).then(
+      () => process.exit(0),
+    );
   });
 console.log(
   process.env.VIP_MODE === "catalog"

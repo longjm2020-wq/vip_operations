@@ -15,8 +15,50 @@ import { AuthRequest, context, Permission, Public } from "../../http.js";
 import { parse, id } from "../../core.js";
 import { z } from "zod";
 import * as s from "./service.js";
+import * as orders from "./orders.js";
 @Controller("api/v1/supply")
 export class SupplyController {
+  @Get("order-settings") settings(@Req() r: AuthRequest) {
+    return orders.orderSettings(context(r));
+  }
+  @Post("order-settings") settingsWrite(
+    @Req() r: AuthRequest,
+    @Body() b: unknown,
+  ) {
+    return orders.saveOrderSettings(context(r), b);
+  }
+  @Get("purchase-quote") quote(@Req() r: AuthRequest, @Query() q: any) {
+    return orders.purchaseQuote(context(r), q);
+  }
+  @Get("order-notices") notices(@Req() r: AuthRequest, @Query() q: any) {
+    return orders.orderNotices(context(r), q);
+  }
+  @Get("orders") orderList(@Req() r: AuthRequest, @Query() q: any) {
+    return orders.orderList(context(r), q);
+  }
+  @Post("orders") orderCreate(@Req() r: AuthRequest, @Body() b: unknown) {
+    return orders.createOrder(context(r), b);
+  }
+  @Get("orders/:id") orderDetail(
+    @Req() r: AuthRequest,
+    @Param("id") v: string,
+  ) {
+    return orders.orderDetail(context(r), parse(id, v));
+  }
+  @Post("orders/:id/read") orderRead(
+    @Req() r: AuthRequest,
+    @Param("id") v: string,
+    @Body() b: unknown,
+  ) {
+    return orders.readOrder(context(r), parse(id, v), b);
+  }
+  @Post("orders/:id/actions") orderAction(
+    @Req() r: AuthRequest,
+    @Param("id") v: string,
+    @Body() b: unknown,
+  ) {
+    return orders.orderAction(context(r), parse(id, v), b);
+  }
   @Get("banks") banks(@Req() r: AuthRequest, @Query("q") q: string) {
     return s.bankSearch(context(r), q || "", String(r.query.bank || ""));
   }

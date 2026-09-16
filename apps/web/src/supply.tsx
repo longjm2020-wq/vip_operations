@@ -1,3 +1,5 @@
+import { PurchaseDrawer } from "./supply-orders";
+import { downloadSheet } from "./download-sheet";
 import { useQualificationOcr } from "./qualification-ocr";
 import { BrandVideo } from "./brand-video";
 import { useState, useEffect } from "react";
@@ -387,17 +389,11 @@ function ContactMethod({
 }
 export function QualificationFields({
   readonly = false,
-  onOcrBusyChange,
 }: {
   readonly?: boolean;
-  onOcrBusyChange?: (busy: boolean) => void;
 }) {
   const form = Form.useFormInstance();
   const ocr = useQualificationOcr(form, readonly);
-  useEffect(() => {
-    onOcrBusyChange?.(ocr.busy);
-    return () => onOcrBusyChange?.(false);
-  }, [ocr.busy, onOcrBusyChange]);
   const selectedBank = Form.useWatch("bankName", { form, preserve: true });
   const branch = Form.useWatch("bank", { form, preserve: true });
   const payee = Form.useWatch("payee", { form, preserve: true });
@@ -497,7 +493,7 @@ export function QualificationFields({
           <Form.Item key={k} name={k} label={label} rules={required}>
             <PhotoUpload
               purpose="QUALIFICATION"
-              disabled={readonly || ocr.busy}
+              disabled={readonly}
               onUploaded={k === "idBack" ? undefined : ocr.onUploaded}
             />
           </Form.Item>
@@ -606,7 +602,6 @@ const emptyQualification = {
   taxRates: [],
 };
 export function SupplyProfile() {
-  const [ocrBusy, setOcrBusy] = useState(false);
   const [editVersion, setEditVersion] = useState(0);
   const q = useQuery({
     queryKey: ["supply-profile"],
@@ -760,7 +755,6 @@ export function SupplyProfile() {
           <Space>
             <Button
               loading={busy}
-              disabled={ocrBusy}
               onClick={() => save(false)}
             >
               保存草稿
@@ -768,7 +762,6 @@ export function SupplyProfile() {
             <Button
               type="primary"
               loading={busy}
-              disabled={ocrBusy}
               onClick={() => save(true)}
             >
               提交审核
@@ -777,7 +770,7 @@ export function SupplyProfile() {
         }
       >
         <Form layout="vertical" form={form}>
-          <QualificationFields onOcrBusyChange={setOcrBusy} />
+          <QualificationFields />
         </Form>
       </Drawer>
     </>
@@ -1292,26 +1285,9 @@ function ProductEditor({
     </Drawer>
   );
 }
-async function downloadSheet(name: string, records: Row[]) {
-  const Excel = (await import("exceljs")).default;
-  const book = new Excel.Workbook();
-  const sheet = book.addWorksheet("数据");
-  const keys = Object.keys(records[0] || {});
-  sheet.columns = keys.map((key) => ({ header: key, key, width: 22 }));
-  for (const r of records) sheet.addRow(r);
-  const buffer = await book.xlsx.writeBuffer();
-  const url = URL.createObjectURL(
-    new Blob([buffer as BlobPart], {
-      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    }),
-  );
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = name + ".xlsx";
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
 export function SupplyProducts({ internal = false }: { internal?: boolean }) {
+  const canPurchase = useCan("supply.purchase");
+  const [purchaseIds, setPurchaseIds] = useState<string[] | null>(null);
   const [stockEditing, setStockEditing] = useState<Row | null>(null);
   const [detail, setDetail] = useState<Row | null>(null);
   const { message, modal } = App.useApp();
@@ -1585,6 +1561,15 @@ export function SupplyProducts({ internal = false }: { internal?: boolean }) {
             导出 Excel
           </Button>
           <span>已选 {selected.length} 款</span>
+          {internal && canPurchase && (
+            <Button
+              type="primary"
+              disabled={!selected.length}
+              onClick={() => setPurchaseIds(selected.map(String))}
+            >
+              采买已选产品
+            </Button>
+          )}
         </Space>
         {list.error && <Alert type="error" title={list.error.message} />}
         <Table<Row>
@@ -1742,7 +1727,17 @@ export function SupplyProducts({ internal = false }: { internal?: boolean }) {
               title: "操作",
               fixed: "right",
               render: (_, r) =>
-                !internal && (
+                internal ? (
+                  canPurchase && (
+                    <Button
+                      type="primary"
+                      disabled={r.status !== "ON" || !r.document.stockConfirmed}
+                      onClick={() => setPurchaseIds([r.id])}
+                    >
+                      采买
+                    </Button>
+                  )
+                ) : (
                   <Space>
                     <Button type="link" onClick={() => setEditing(r)}>
                       编辑
@@ -1756,6 +1751,13 @@ export function SupplyProducts({ internal = false }: { internal?: boolean }) {
           ]}
         />
       </Card>
+      {purchaseIds && (
+        <PurchaseDrawer
+          accountId={accountId}
+          productIds={purchaseIds}
+          onClose={() => setPurchaseIds(null)}
+        />
+      )}
       <Drawer
         title="产品详情"
         open={!!detail}

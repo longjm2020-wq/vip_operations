@@ -68,7 +68,8 @@ import {
   SupplyProducts,
   SupplyReview,
 } from "./supply";
-const coreFeatureSummary = "ERP经营 · 供应链 · 项目协作";
+import { SupplyOrders, SupplyOrderNotice } from "./supply-orders";
+const coreFeatureSummary = "ERP经营 · 供应链采买 · 项目协作";
 const useUi = create<{ collapsed: boolean; toggle: () => void }>((set) => ({
   collapsed: false,
   toggle: () => set((s) => ({ collapsed: !s.collapsed })),
@@ -281,6 +282,11 @@ function Workspace({ user }: { user: Row }) {
                 label: "供应商产品库",
                 permission: "supply.portal",
               },
+              {
+                key: "/supply/orders",
+                label: "采购订单 / 配货发货",
+                permission: "supply.portal",
+              },
             ]
           : []),
         {
@@ -292,6 +298,11 @@ function Workspace({ user }: { user: Row }) {
           key: "/supply/catalog",
           label: "供应链产品库",
           permission: "supply.manage",
+        },
+        {
+          key: "/supply/procurement",
+          label: "供应链采购订单",
+          permission: "supply.purchase",
         },
       ],
     },
@@ -395,6 +406,7 @@ function Workspace({ user }: { user: Row }) {
                 使用手册
               </Link>
               <ProjectNotifications />
+              <SupplyOrderNotice />
               <Avatar
                 size={30}
                 style={{ background: "#f5dfc9", color: "#d3540b" }}
@@ -424,6 +436,11 @@ function Workspace({ user }: { user: Row }) {
             <Routes>
               <Route path="/supply/profile" element={<SupplyProfile />} />
               <Route path="/supply/products" element={<SupplyProducts />} />
+              <Route path="/supply/orders" element={<SupplyOrders />} />
+              <Route
+                path="/supply/procurement"
+                element={<SupplyOrders internal />}
+              />
               <Route path="/supply/review" element={<SupplyReview />} />
               <Route
                 path="/supply/catalog"
