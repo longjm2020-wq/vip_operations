@@ -70,9 +70,9 @@ function BrandMark({ collapsed = false }: { collapsed?: boolean }) {
   return (
     <svg
       className="brand-wordmark"
-      viewBox={collapsed ? "42 0 80 121" : "30 0 340 121"}
+      viewBox={collapsed ? "100 70 500 560" : "100 60 1980 560"}
       role="img"
-      aria-label="XUTI"
+      aria-label="XUTI 衣序"
     >
       <defs>
         <filter id="brand-mask-filter" colorInterpolationFilters="sRGB">
@@ -86,14 +86,14 @@ function BrandMark({ collapsed = false }: { collapsed?: boolean }) {
           maskUnits="userSpaceOnUse"
           x="0"
           y="0"
-          width="399"
-          height="121"
+          width="2172"
+          height="724"
           style={{ maskType: "alpha" }}
         >
           <image
             href="/xuti-wordmark.png"
-            width="399"
-            height="121"
+            width="2172"
+            height="724"
             filter="url(#brand-mask-filter)"
           />
         </mask>
@@ -116,8 +116,8 @@ function BrandMark({ collapsed = false }: { collapsed?: boolean }) {
         </linearGradient>
       </defs>
       <rect
-        width="399"
-        height="121"
+        width="2172"
+        height="724"
         fill="url(#brand-silver)"
         mask="url(#brand-wordmark-mask)"
       />
