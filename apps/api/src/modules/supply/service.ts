@@ -19,6 +19,7 @@ import {
 import {
   qualificationSchema,
   supplyProductSchema,
+  reorderCycleSchema,
   splitValues,
   offReasons,
 } from "../../../../../packages/contracts/src/supply.js";
@@ -539,6 +540,15 @@ export async function productAction(c: Context, id: string, input: unknown) {
       if (String(p.user_id) !== c.actor.id || !allowed(c, "supply.portal"))
         fail("FORBIDDEN", "仅供应商可以操作上下架", 403);
       if (!b.status) fail("VALIDATION_ERROR", "请选择上下架状态", 400);
+      if (
+        b.status === "ON" &&
+        !reorderCycleSchema.safeParse(p.document.reorderCycle).success
+      )
+        fail(
+          "VALIDATION_ERROR",
+          "请先编辑产品，补充有效的翻单周期后再上架",
+          400,
+        );
       if (
         b.status === "ON" &&
         (!p.document.stockConfirmed ||

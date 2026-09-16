@@ -92,6 +92,10 @@ const tags = z
   .min(1)
   .max(50)
   .refine((v) => new Set(v).size === v.length, "不能重复");
+export const reorderCycleSchema = z
+  .number({ error: "翻单周期必填，请填写非负整数" })
+  .int("翻单周期必须是整数")
+  .min(0, "翻单周期不能小于0");
 export const supplyProductSchema = z
   .object({
     sellingPoints: z
@@ -112,6 +116,7 @@ export const supplyProductSchema = z
     material: required,
     taxPrice: z.number().finite().min(0).max(10000000),
     netPrice: z.number().finite().min(0).max(10000000),
+    reorderCycle: reorderCycleSchema,
     colors: tags,
     sizes: tags,
     stock: z

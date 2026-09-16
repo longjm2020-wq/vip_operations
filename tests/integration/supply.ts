@@ -399,6 +399,7 @@ try {
     sellingPoints: "柔软舒适",
     taxPrice: 12,
     netPrice: 10,
+    reorderCycle: 12,
     colors: ["红", "蓝"],
     sizes: ["S", "M"],
     images: [],
@@ -410,6 +411,16 @@ try {
     ],
     stockConfirmed: false,
   };
+  for (const reorderCycle of [undefined, null, 1.5, -1]) {
+    assert.equal(
+      (
+        await request(vendor, "/supply/products", "POST", {
+          document: { ...product, reorderCycle },
+        })
+      ).status,
+      400,
+    );
+  }
   const saved = await ok(vendor, "/supply/products", "POST", {
     document: product,
   });
@@ -465,6 +476,28 @@ try {
     },
   });
   prod = (await ok(vendor, "/supply/products"))[0];
+  assert.equal(prod.document.reorderCycle, 12);
+  await db.$executeRawUnsafe(
+    "UPDATE supply_products SET document=document-'reorderCycle' WHERE id=$1::bigint",
+    String(saved.id),
+  );
+  const legacy = (await ok(vendor, "/supply/products"))[0];
+  assert.equal(legacy.document.reorderCycle, undefined);
+  const legacyPublish = await request(
+    vendor,
+    `/supply/products/${saved.id}/actions`,
+    "POST",
+    { version: legacy.version, status: "ON" },
+  );
+  assert.equal(legacyPublish.status, 400);
+  assert.ok(JSON.stringify(legacyPublish.data).includes("翻单周期"));
+  await ok(vendor, `/supply/products/${saved.id}`, "PATCH", {
+    version: legacy.version,
+    document: { ...legacy.document, reorderCycle: 0 },
+  });
+  prod = (await ok(vendor, "/supply/products"))[0];
+  assert.equal(prod.document.reorderCycle, 0);
+  pass("翻单周期必填整数、历史产品补录和零值保存");
   await ok(owner, `/supply/products/${saved.id}/actions`, "POST", {
     version: prod.version,
     xutiStyle: "XUTI-1",

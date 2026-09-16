@@ -1041,6 +1041,7 @@ const blankProduct = () => ({
   sellingPoints: "",
   taxPrice: undefined,
   netPrice: undefined,
+  reorderCycle: undefined,
   colors: [],
   sizes: [],
   images: [],
@@ -1233,6 +1234,21 @@ function ProductEditor({
           <Input.TextArea maxLength={1000} showCount rows={4} />
         </Form.Item>
         <Form.Item
+          name="reorderCycle"
+          label="翻单周期（天）"
+          rules={[
+            ...required,
+            {
+              validator: (_, value) =>
+                value == null || (Number.isSafeInteger(value) && value >= 0)
+                  ? Promise.resolve()
+                  : Promise.reject(Error("请填写非负整数")),
+            },
+          ]}
+        >
+          <InputNumber step={1} placeholder="请输入非负整数" />
+        </Form.Item>
+        <Form.Item
           name="colors"
           label="颜色（输入后回车添加）"
           rules={required}
@@ -1368,6 +1384,7 @@ export function SupplyProducts({ internal = false }: { internal?: boolean }) {
             产品卖点: d.sellingPoints || "",
             含税供货价: d.taxPrice,
             不含税供货价: d.netPrice,
+            "翻单周期（天）": d.reorderCycle ?? "",
             颜色: d.colors.join("；"),
             尺码: d.sizes.join("；"),
             总库存: d.stock.reduce((n: number, s: Row) => n + s.quantity, 0),
@@ -1422,6 +1439,14 @@ export function SupplyProducts({ internal = false }: { internal?: boolean }) {
   };
   const shelf = (r: Row) => {
     if (r.status === "OFF") {
+      if (
+        !Number.isSafeInteger(r.document.reorderCycle) ||
+        r.document.reorderCycle < 0
+      ) {
+        message.warning("请先编辑产品，补充翻单周期后再上架");
+        setEditing(r);
+        return;
+      }
       void send(`/products/${r.id}/actions`, {
         version: r.version,
         status: "ON",
@@ -1669,6 +1694,11 @@ export function SupplyProducts({ internal = false }: { internal?: boolean }) {
             },
             { title: "含税供货价", render: (_, r) => r.document.taxPrice },
             { title: "不含税供货价", render: (_, r) => r.document.netPrice },
+            {
+              title: "翻单周期（天，必填）",
+              render: (_, r) =>
+                r.document.reorderCycle ?? <Tag color="orange">待补充</Tag>,
+            },
             { title: "颜色", render: (_, r) => r.document.colors.join("、") },
             { title: "尺码", render: (_, r) => r.document.sizes.join("、") },
             {
@@ -1681,7 +1711,17 @@ export function SupplyProducts({ internal = false }: { internal?: boolean }) {
                   )}
                   <br />
                   {!internal && (
-                    <Button type="link" onClick={() => setStockEditing(r)}>
+                    <Button
+                      type="link"
+                      onClick={() => {
+                        if (r.document.reorderCycle == null) {
+                          message.info(
+                            "请先补充翻单周期，可在编辑产品中继续维护库存",
+                          );
+                          setEditing(r);
+                        } else setStockEditing(r);
+                      }}
+                    >
                       维护库存
                     </Button>
                   )}
@@ -1753,6 +1793,11 @@ export function SupplyProducts({ internal = false }: { internal?: boolean }) {
                   key: "net",
                   label: "不含税供货价",
                   children: detail.document.netPrice,
+                },
+                {
+                  key: "reorderCycle",
+                  label: "翻单周期（天）",
+                  children: detail.document.reorderCycle ?? "待补充",
                 },
                 {
                   key: "colors",
@@ -1882,6 +1927,13 @@ export function SupplyProducts({ internal = false }: { internal?: boolean }) {
               label: "不含税供货价",
               required: true,
               type: "number",
+            },
+            {
+              key: "reorderCycle",
+              label: "翻单周期（天）",
+              required: true,
+              type: "number",
+              min: 0,
             },
             { key: "colors", label: "颜色（分号分隔）", required: true },
             { key: "sizes", label: "尺码（分号分隔）", required: true },
