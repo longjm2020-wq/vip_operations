@@ -74,9 +74,9 @@ function BrandMark({ collapsed = false }: { collapsed?: boolean }) {
           ? "brand-wordmark brand-wordmark-collapsed"
           : "brand-wordmark"
       }
-    >
-      <img src="/xuti-logo2.png" alt="XUTI 衣序" />
-    </span>
+      role="img"
+      aria-label="XUTI 衣序"
+    />
   );
 }
 function Login() {
