@@ -68,60 +68,15 @@ const useUi = create<{ collapsed: boolean; toggle: () => void }>((set) => ({
 }));
 function BrandMark({ collapsed = false }: { collapsed?: boolean }) {
   return (
-    <svg
-      className="brand-wordmark"
-      viewBox={collapsed ? "100 70 500 560" : "100 60 1980 560"}
-      role="img"
-      aria-label="XUTI 衣序"
+    <span
+      className={
+        collapsed
+          ? "brand-wordmark brand-wordmark-collapsed"
+          : "brand-wordmark"
+      }
     >
-      <defs>
-        <filter id="brand-mask-filter" colorInterpolationFilters="sRGB">
-          <feColorMatrix type="luminanceToAlpha" />
-          <feComponentTransfer>
-            <feFuncA type="discrete" tableValues="0 1 1 1 1 1 1 1" />
-          </feComponentTransfer>
-        </filter>
-        <mask
-          id="brand-wordmark-mask"
-          maskUnits="userSpaceOnUse"
-          x="0"
-          y="0"
-          width="2172"
-          height="724"
-          style={{ maskType: "alpha" }}
-        >
-          <image
-            href="/xuti-wordmark.png"
-            width="2172"
-            height="724"
-            filter="url(#brand-mask-filter)"
-          />
-        </mask>
-        <linearGradient id="brand-silver" x1="0" y1="0" x2="1" y2="0">
-          <stop
-            className="brand-stop brand-stop-a"
-            offset="0%"
-            stopColor="#718093"
-          />
-          <stop
-            className="brand-stop brand-stop-b"
-            offset="50%"
-            stopColor="#f4f6fa"
-          />
-          <stop
-            className="brand-stop brand-stop-c"
-            offset="100%"
-            stopColor="#a3adba"
-          />
-        </linearGradient>
-      </defs>
-      <rect
-        width="2172"
-        height="724"
-        fill="url(#brand-silver)"
-        mask="url(#brand-wordmark-mask)"
-      />
-    </svg>
+      <img src="/xuti-logo2.png" alt="XUTI 衣序" />
+    </span>
   );
 }
 function Login() {

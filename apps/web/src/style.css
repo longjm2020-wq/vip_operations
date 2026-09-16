@@ -467,6 +467,13 @@ pre {
   width: 100%;
   height: 66px;
   display: block;
+  overflow: hidden;
+}
+.brand-wordmark img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
 }
 .sidebar .brand {
   padding: 0 22px;
@@ -475,27 +482,10 @@ pre {
 .sidebar.ant-layout-sider-collapsed .brand {
   padding: 0 20px;
 }
-.brand-stop {
-  animation: brand-silver-shift 7s ease-in-out infinite alternate;
-}
-.brand-stop-b {
-  animation-delay: -3.5s;
-}
-.brand-stop-c {
-  animation-delay: -1.75s;
-}
-@keyframes brand-silver-shift {
-  from {
-    stop-color: #728093;
-  }
-  to {
-    stop-color: #f2f4f8;
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .brand-stop {
-    animation: none;
-  }
+.brand-wordmark-collapsed img {
+  width: 175px;
+  max-width: none;
+  transform: translateX(-10px);
 }
 
 .login-brand .brand-wordmark {
