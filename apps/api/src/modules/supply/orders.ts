@@ -58,7 +58,7 @@ export async function saveOrderSettings(c: Context, input: unknown) {
     return { saved: true };
   });
 }
-async function supplierId(c: Context) {
+export async function supplierId(c: Context) {
   requirePermission(c.actor, "supply.portal");
   const a = await one(
     db,
@@ -68,7 +68,12 @@ async function supplierId(c: Context) {
   if (!a) fail("FORBIDDEN", "入驻审核通过后才能处理采购订单", 403);
   return String(a.id);
 }
-async function accessible(tx: Tx, c: Context, orderId: string, lock = false) {
+export async function accessible(
+  tx: Tx,
+  c: Context,
+  orderId: string,
+  lock = false,
+) {
   const o = await one(
     tx,
     "SELECT o.*,a.user_id FROM supply_orders o JOIN supply_accounts a ON a.id=o.account_id WHERE o.id=$1::bigint" +
@@ -94,6 +99,7 @@ export async function orderList(c: Context, q: Row) {
         .enum(["", "PENDING", "PICKING", "SHIPPED", "DELIVERED", "CANCELLED"])
         .default(""),
       search: z.string().trim().max(100).default(""),
+      aftersale: z.enum(["", "ACTIVE", "REFUND", "EXCHANGE"]).default(""),
       page: z.coerce.number().int().min(1).default(1),
     }),
     q,
@@ -102,8 +108,8 @@ export async function orderList(c: Context, q: Row) {
   if (internal) requirePermission(c.actor, "supply.purchase");
   const account = internal ? null : await supplierId(c);
   const where =
-    "($1::bigint IS NULL OR o.account_id=$1::bigint) AND ($2='' OR o.status=$2) AND ($3='' OR o.order_no ILIKE $4 OR o.supplier_name ILIKE $4)";
-  const args = [account, f.status, f.search, "%" + f.search + "%"];
+    "($1::bigint IS NULL OR o.account_id=$1::bigint) AND ($2='' OR o.status=$2) AND ($3='' OR o.order_no ILIKE $4 OR o.supplier_name ILIKE $4) AND ($5='' OR EXISTS(SELECT 1 FROM supply_aftersales a WHERE a.order_id=o.id AND (($5='ACTIVE' AND a.status NOT IN ('DONE','REJECTED','CANCELLED')) OR a.kind=$5)))";
+  const args = [account, f.status, f.search, "%" + f.search + "%", f.aftersale];
   const total = await one(
     db,
     "SELECT count(*)::int AS n FROM supply_orders o WHERE " + where,
@@ -111,7 +117,7 @@ export async function orderList(c: Context, q: Row) {
   );
   const data = await rows(
     db,
-    `SELECT o.*,u.display_name AS buyer_name FROM supply_orders o JOIN users u ON u.id=o.buyer_id WHERE ${where} ORDER BY o.id DESC LIMIT 20 OFFSET $5`,
+    `SELECT o.*,u.display_name AS buyer_name,(SELECT count(*)::int FROM supply_aftersales a WHERE a.order_id=o.id AND a.status NOT IN ('DONE','REJECTED','CANCELLED')) AS active_aftersales FROM supply_orders o JOIN users u ON u.id=o.buyer_id WHERE ${where} ORDER BY o.id DESC LIMIT 20 OFFSET $6`,
     ...args,
     (f.page - 1) * 20,
   );
@@ -121,7 +127,7 @@ export async function orderDetail(c: Context, orderId: string) {
   const order = await accessible(db, c, orderId);
   const items = await rows(
     db,
-    "SELECT * FROM supply_order_items WHERE order_id=$1::bigint ORDER BY id",
+    "SELECT i.*,i.quantity-coalesce((SELECT sum(ai.quantity) FROM supply_aftersale_items ai JOIN supply_aftersales a ON a.id=ai.aftersale_id WHERE ai.order_item_id=i.id AND (a.status NOT IN ('DONE','REJECTED','CANCELLED') OR (a.status='DONE' AND a.kind='REFUND'))),0)::int AS aftersale_available FROM supply_order_items i WHERE i.order_id=$1::bigint ORDER BY i.id",
     orderId,
   );
   const events = await rows(
@@ -129,7 +135,28 @@ export async function orderDetail(c: Context, orderId: string) {
     "SELECT e.*,u.display_name AS actor_name FROM supply_order_events e LEFT JOIN users u ON u.id=e.actor_id WHERE order_id=$1::bigint ORDER BY e.id DESC",
     orderId,
   );
-  return { ...order, items, events, trackingEnabled: trackingEnabled() };
+  const aftersales = await rows(
+    db,
+    "SELECT * FROM supply_aftersales WHERE order_id=$1::bigint ORDER BY id DESC",
+    orderId,
+  );
+  const aftersaleItems = await rows(
+    db,
+    "SELECT ai.* FROM supply_aftersale_items ai JOIN supply_aftersales a ON a.id=ai.aftersale_id WHERE a.order_id=$1::bigint ORDER BY ai.id",
+    orderId,
+  );
+  return {
+    ...order,
+    items,
+    events,
+    aftersales: aftersales.map((a) => ({
+      ...a,
+      items: aftersaleItems.filter(
+        (i) => String(i.aftersale_id) === String(a.id),
+      ),
+    })),
+    trackingEnabled: trackingEnabled(),
+  };
 }
 export async function orderNotices(c: Context, q: Row) {
   const internal = q.internal === "1";
@@ -212,7 +239,7 @@ export async function createOrder(c: Context, input: unknown) {
       "SELECT recipient FROM supply_order_settings WHERE id=1 FOR SHARE",
     );
     if (!settings)
-      fail("VALIDATION_ERROR", "请先在采购订单中设置统一收货信息", 400);
+      fail("VALIDATION_ERROR", "请先在订单中心中设置统一收货信息", 400);
     const recipient = parse(recipientSchema, settings.recipient);
     const a = await one(
       tx,

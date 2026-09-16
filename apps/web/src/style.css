@@ -129,6 +129,61 @@ a {
   width: 100%;
   margin: 0 auto;
 }
+.account-menu-trigger.ant-btn {
+  height: 36px;
+  padding: 2px 6px;
+  gap: 8px;
+}
+.account-menu-trigger .ant-avatar,
+.avatar-editor .ant-avatar {
+  flex-shrink: 0;
+  background: #f5dfc9;
+  color: #d3540b;
+}
+.account-menu-name {
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.account-menu-chevron {
+  font-size: 10px;
+  color: #988171;
+}
+.account-dropdown {
+  width: 220px;
+  max-width: calc(100vw - 24px);
+  padding: 4px;
+  background: #fff;
+  border: 1px solid #eee2d7;
+  border-radius: 10px;
+  box-shadow: 0 6px 24px #36251d1c;
+}
+.account-dropdown-profile {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 8px 10px 12px;
+  border-bottom: 1px solid #f0e8e0;
+  overflow-wrap: anywhere;
+}
+.account-dropdown-profile small {
+  color: #988171;
+}
+.account-dropdown .ant-dropdown-menu {
+  box-shadow: none;
+}
+.avatar-editor {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+  padding: 18px 0 8px;
+}
+.avatar-editor p {
+  margin: 0;
+  font-size: 12px;
+  text-align: center;
+}
 .page-heading {
   display: flex;
   align-items: center;
@@ -213,6 +268,27 @@ pre {
   min-height: 100vh;
   display: grid;
   grid-template-columns: minmax(0, 61.8fr) minmax(0, 38.2fr);
+}
+.aftersale-address-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0 16px;
+}
+.statement-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+  margin: 0 0 12px;
+}
+.statement-summary strong {
+  display: block;
+  font-size: 22px;
+  margin-top: 6px;
+  font-variant-numeric: tabular-nums;
+}
+.statement-label {
+  font-size: 13px;
+  color: #866953;
 }
 .login-story {
   background: #35251f;

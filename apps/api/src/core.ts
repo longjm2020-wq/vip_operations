@@ -19,6 +19,7 @@ export type Actor = {
   id: string;
   username: string;
   displayName: string;
+  avatarId?: string | null;
   permissions: string[];
   roleCodes?: string[];
   roleNames?: string[];

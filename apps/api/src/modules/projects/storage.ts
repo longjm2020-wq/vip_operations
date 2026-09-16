@@ -78,7 +78,7 @@ export async function storeFiles(
     }
     return result;
   } catch {
-    fail("STORAGE_UNAVAILABLE", "附件上传失败，项目未保存，请重试", 503);
+    fail("STORAGE_UNAVAILABLE", "附件上传失败，请重试", 503);
   } finally {
     client.destroy();
   }

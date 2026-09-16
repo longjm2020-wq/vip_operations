@@ -330,4 +330,10 @@ export async function testSupplyOrders(h: Record<string, any>) {
     409,
   );
   pass("快递轨迹失败重试、定时限频、更正单号失效旧查询及真实签收状态闭环");
+  const { testSupplyAftersales } = await import("./supply-aftersales.js");
+  await testSupplyAftersales({
+    ...h,
+    orderId: first.id,
+    expressId: express.id,
+  });
 }

@@ -16,8 +16,43 @@ import { parse, id } from "../../core.js";
 import { z } from "zod";
 import * as s from "./service.js";
 import * as orders from "./orders.js";
+import * as aftersales from "./aftersales.js";
+import * as statements from "./statements.js";
 @Controller("api/v1/supply")
 export class SupplyController {
+  @Get("statements") statements(@Req() r: AuthRequest, @Query() q: any) {
+    return statements.statementList(context(r), q);
+  }
+  @Get("statement-suppliers") statementSuppliers(@Req() r: AuthRequest) {
+    return statements.statementSuppliers(context(r));
+  }
+  @Get("statements/export") exportStatement(
+    @Req() r: AuthRequest,
+    @Query() q: any,
+    @Res() res: Response,
+  ) {
+    return statements.exportStatement(context(r), q, res);
+  }
+  @Post("orders/:id/aftersales") aftersaleCreate(
+    @Req() r: AuthRequest,
+    @Param("id") v: string,
+    @Body() b: unknown,
+  ) {
+    return aftersales.createAftersale(context(r), parse(id, v), b);
+  }
+  @Post("orders/:id/aftersales/:caseId/actions") aftersaleAction(
+    @Req() r: AuthRequest,
+    @Param("id") v: string,
+    @Param("caseId") a: string,
+    @Body() b: unknown,
+  ) {
+    return aftersales.aftersaleAction(
+      context(r),
+      parse(id, v),
+      parse(id, a),
+      b,
+    );
+  }
   @Get("order-settings") settings(@Req() r: AuthRequest) {
     return orders.orderSettings(context(r));
   }

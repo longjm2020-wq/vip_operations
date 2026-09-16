@@ -15,7 +15,6 @@ import { create } from "zustand";
 import {
   App,
   Alert,
-  Avatar,
   Button,
   ConfigProvider,
   Form,
@@ -36,12 +35,12 @@ import {
   TeamOutlined,
   SettingOutlined,
   AuditOutlined,
-  LogoutOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
 } from "@ant-design/icons";
 import { api, queryClient, setCsrf } from "./api";
-import { UserContext, Row, UserRoles } from "./shared";
+import { UserContext, Row } from "./shared";
+import { AccountMenu } from "./account-menu";
 import { MasterPage } from "./master";
 import {
   InventoryPage,
@@ -69,7 +68,8 @@ import {
   SupplyReview,
 } from "./supply";
 import { SupplyOrders, SupplyOrderNotice } from "./supply-orders";
-const coreFeatureSummary = "ERP经营 · 供应链采买 · 项目协作";
+import { SupplyStatements } from "./supply-statements";
+const coreFeatureSummary = "ERP经营 · 供应链订单对账 · 项目协作";
 const useUi = create<{ collapsed: boolean; toggle: () => void }>((set) => ({
   collapsed: false,
   toggle: () => set((s) => ({ collapsed: !s.collapsed })),
@@ -284,7 +284,12 @@ function Workspace({ user }: { user: Row }) {
               },
               {
                 key: "/supply/orders",
-                label: "采购订单 / 配货发货",
+                label: "订单中心",
+                permission: "supply.portal",
+              },
+              {
+                key: "/supply/statements",
+                label: "对账中心",
                 permission: "supply.portal",
               },
             ]
@@ -301,8 +306,13 @@ function Workspace({ user }: { user: Row }) {
         },
         {
           key: "/supply/procurement",
-          label: "供应链采购订单",
+          label: "订单中心",
           permission: "supply.purchase",
+        },
+        {
+          key: "/supply/reconciliation",
+          label: "对账中心",
+          permission: "supply.reconcile",
         },
       ],
     },
@@ -407,19 +417,9 @@ function Workspace({ user }: { user: Row }) {
               </Link>
               <ProjectNotifications />
               <SupplyOrderNotice />
-              <Avatar
-                size={30}
-                style={{ background: "#f5dfc9", color: "#d3540b" }}
-              >
-                {user.displayName?.slice(0, 1)}
-              </Avatar>
-              <span>{user.displayName}</span>
-              <UserRoles names={user.roleNames} />
-              <Button
-                type="text"
-                aria-label="退出"
-                icon={<LogoutOutlined />}
-                onClick={async () => {
+              <AccountMenu
+                user={user}
+                onLogout={async () => {
                   await api("/auth/logout", "POST", {});
                   queryClient.removeQueries({
                     predicate: (q) => q.queryKey[0] !== "me",
@@ -427,9 +427,7 @@ function Workspace({ user }: { user: Row }) {
                   setCsrf("");
                   queryClient.setQueryData(["me"], null);
                 }}
-              >
-                退出
-              </Button>
+              />
             </Space>
           </Layout.Header>
           <Layout.Content className="content">
@@ -437,6 +435,11 @@ function Workspace({ user }: { user: Row }) {
               <Route path="/supply/profile" element={<SupplyProfile />} />
               <Route path="/supply/products" element={<SupplyProducts />} />
               <Route path="/supply/orders" element={<SupplyOrders />} />
+              <Route path="/supply/statements" element={<SupplyStatements />} />
+              <Route
+                path="/supply/reconciliation"
+                element={<SupplyStatements internal />}
+              />
               <Route
                 path="/supply/procurement"
                 element={<SupplyOrders internal />}

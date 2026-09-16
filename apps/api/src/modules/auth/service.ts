@@ -25,7 +25,7 @@ export async function actorFor(token?: string): Promise<Actor> {
   if (!token) fail("UNAUTHENTICATED", "请先登录", 401);
   const u = await one(
     db,
-    "SELECT u.id,u.username,u.display_name,s.csrf_token FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=$1 AND s.revoked_at IS NULL AND s.expires_at>now() AND u.status='ACTIVE'",
+    "SELECT u.id,u.username,u.display_name,u.avatar->>'id' AS avatar_id,s.csrf_token FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=$1 AND s.revoked_at IS NULL AND s.expires_at>now() AND u.status='ACTIVE'",
     hash(token),
   );
   if (!u) fail("UNAUTHENTICATED", "登录已失效", 401);
@@ -43,6 +43,7 @@ export async function actorFor(token?: string): Promise<Actor> {
     id: String(u.id),
     username: u.username,
     displayName: u.display_name,
+    avatarId: u.avatar_id,
     permissions: p.map((x) => x.code),
     roleCodes: assignedRoles.map((r) => r.code),
     roleNames: assignedRoles.map((r) => r.name),

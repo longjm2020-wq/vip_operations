@@ -27,6 +27,7 @@ import {
   audit,
 } from "./core.js";
 import * as auth from "./modules/auth/service.js";
+import { saveAvatar, avatarUrl } from "./modules/auth/avatar.js";
 import * as master from "./modules/master/service.js";
 import * as inventory from "./modules/inventory/service.js";
 import * as purchase from "./modules/purchases/service.js";
@@ -56,6 +57,19 @@ class AuthController {
   }
   @Get("auth/me") me(@Req() r: AuthRequest) {
     return r.actor;
+  }
+  @Post("auth/avatar") @HttpCode(200) avatar(
+    @Req() r: AuthRequest,
+    @Body() b: unknown,
+  ) {
+    return saveAvatar(context(r), b);
+  }
+  @Get("auth/avatar") async avatarImage(
+    @Req() r: AuthRequest,
+    @Res() res: Response,
+  ) {
+    res.setHeader("Cache-Control", "private, no-store");
+    res.redirect(await avatarUrl(context(r)));
   }
   @Post("auth/logout") @HttpCode(204) async logout(
     @Req() r: AuthRequest,

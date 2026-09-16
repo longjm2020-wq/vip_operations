@@ -153,6 +153,85 @@ try {
   });
   const vendor = await login("vendor-one"),
     other = await login("vendor-two");
+  const avatarBody = {
+    type: "image/png",
+    data: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6VbIAAAAASUVORK5CYII=",
+  };
+  assert.equal(
+    (await request(empty, "/auth/avatar", "POST", avatarBody)).status,
+    401,
+  );
+  assert.equal(
+    (
+      await request(vendor, "/auth/avatar", "POST", {
+        ...avatarBody,
+        userId: owner.id,
+      })
+    ).status,
+    400,
+  );
+  assert.equal(
+    (
+      await request(vendor, "/auth/avatar", "POST", {
+        ...avatarBody,
+        data:
+          "data:image/png;base64," +
+          Buffer.from("not an image!").toString("base64"),
+      })
+    ).status,
+    400,
+  );
+  assert.equal(
+    (
+      await request(vendor, "/auth/avatar", "POST", {
+        type: "image/svg+xml",
+        data: "data:image/svg+xml;base64,",
+      })
+    ).status,
+    400,
+  );
+  const avatarKey = randomUUID(),
+    objectsBeforeAvatar = objects.size;
+  const savedAvatar = await ok(
+    vendor,
+    "/auth/avatar",
+    "POST",
+    avatarBody,
+    avatarKey,
+  );
+  assert.equal(
+    (await ok(vendor, "/auth/avatar", "POST", avatarBody, avatarKey)).avatarId,
+    savedAvatar.avatarId,
+  );
+  assert.equal(objects.size, objectsBeforeAvatar + 1);
+  assert.equal((await ok(vendor, "/auth/me")).avatarId, savedAvatar.avatarId);
+  assert.equal(
+    (await ok(await login("vendor-one"), "/auth/me")).avatarId,
+    savedAvatar.avatarId,
+  );
+  assert.equal((await ok(other, "/auth/me")).avatarId, null);
+  assert.equal((await ok(owner, "/auth/me")).avatarId, null);
+  const ownAvatarImage = await fetch(
+    `http://127.0.0.1:${process.env.PORT}/api/v1/auth/avatar`,
+    { headers: { Cookie: vendor.cookie } },
+  );
+  assert.equal(ownAvatarImage.status, 200);
+  assert.deepEqual(
+    Buffer.from(await ownAvatarImage.arrayBuffer()),
+    Buffer.from(avatarBody.data.split(",")[1], "base64"),
+  );
+  assert.equal(
+    (await request(other, `/auth/avatar?userId=${vendor.id}`)).status,
+    404,
+  );
+  assert.equal((await request(empty, "/auth/avatar")).status, 401);
+  const replacedAvatar = await ok(vendor, "/auth/avatar", "POST", avatarBody);
+  assert.notEqual(replacedAvatar.avatarId, savedAvatar.avatarId);
+  assert.equal(
+    (await ok(vendor, "/auth/me")).avatarId,
+    replacedAvatar.avatarId,
+  );
+  pass("头像私有存储、图片校验、重复提交、持久保存与跨账号隔离");
   assert.equal((await request(vendor, "/users")).status, 403);
   assert.equal((await request(vendor, "/supply/products")).status, 403);
   assert.equal(

@@ -15,8 +15,9 @@ const modules: Record<string, string> = {
   sop: "操作流程 SOP",
 };
 export const permissionLabels: Record<string, string> = {
-  "supply.portal": "供应商资质、产品库与订单配货发货",
-  "supply.purchase": "供应链采买、订单跟进与收货设置",
+  "supply.portal": "供应商资质、产品库、订单售后与本人对账",
+  "supply.purchase": "供应链采买、订单售后与收货设置",
+  "supply.reconcile": "供应链对账与账单导出",
   "supply.review": "入驻、资质审核及邀请码管理",
   "supply.manage": "查看供应链产品与维护序缇款号",
   "user.read": "查看用户",

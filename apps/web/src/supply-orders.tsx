@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
 import { Decimal } from "decimal.js";
+import { AftersalesPanel } from "./supply-aftersales";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -60,7 +61,7 @@ export function SupplyOrderNotice() {
   return (
     <Badge count={q.data?.count || 0} overflowCount={99}>
       <Link to={supplier ? "/supply/orders" : "/supply/procurement"}>
-        采购订单
+        订单中心
       </Link>
     </Badge>
   );
@@ -201,7 +202,7 @@ export function PurchaseDrawer({
           title={
             <span>
               尚未设置统一收货信息，请先前往
-              <Link to="/supply/procurement">采购订单 → 收货设置</Link>。
+              <Link to="/supply/procurement">订单中心 → 收货设置</Link>。
             </span>
           }
         />
@@ -351,13 +352,14 @@ function RecipientSettings({
 }
 export function SupplyOrders({ internal = false }: { internal?: boolean }) {
   const [search, setSearch] = useState(""),
+    [aftersale, setAftersale] = useState(""),
     [status, setStatus] = useState(""),
     [page, setPage] = useState(1),
     [settingsOpen, setSettingsOpen] = useState(false);
   const [params, setParams] = useSearchParams();
   const orderId = params.get("order");
   const list = useQuery({
-    queryKey: ["supply-orders", internal, search, status, page],
+    queryKey: ["supply-orders", internal, search, status, aftersale, page],
     queryFn: () =>
       api(
         "/supply/orders?" +
@@ -365,6 +367,7 @@ export function SupplyOrders({ internal = false }: { internal?: boolean }) {
             internal: internal ? "1" : "0",
             search,
             status,
+            aftersale,
             page: String(page),
           }),
       ),
@@ -378,11 +381,11 @@ export function SupplyOrders({ internal = false }: { internal?: boolean }) {
   return (
     <>
       <Header
-        title={internal ? "供应链采购订单" : "供应商采购订单"}
+        title="订单中心"
         subtitle={
           internal
-            ? "从产品库采买，跟进供应商配货、发货与送达。"
-            : "接收序缇采买清单，按要求配货发货并反馈配送结果。"
+            ? "采买、交付与售后统一跟进。"
+            : "接单配货、发货交付，处理退货退款与换货。"
         }
         extra={
           internal ? (
@@ -429,6 +432,21 @@ export function SupplyOrders({ internal = false }: { internal?: boolean }) {
           ]}
         />
         <Button onClick={() => void refresh()}>刷新</Button>
+        <Select
+          aria-label="售后筛选"
+          value={aftersale}
+          style={{ width: 160 }}
+          onChange={(v) => {
+            setAftersale(v);
+            setPage(1);
+          }}
+          options={[
+            { value: "", label: "全部售后情况" },
+            { value: "ACTIVE", label: "有进行中售后" },
+            { value: "REFUND", label: "有退货退款" },
+            { value: "EXCHANGE", label: "有换货" },
+          ]}
+        />
       </Space>
       {list.error && <Alert type="error" title={list.error.message} />}
       <Card>
@@ -487,6 +505,15 @@ export function SupplyOrders({ internal = false }: { internal?: boolean }) {
                   : r.shippingMethod === "DELIVERY"
                     ? "送货上门"
                     : "待发货",
+            },
+            {
+              title: "售后",
+              render: (_, r) =>
+                r.activeAftersales ? (
+                  <Tag color="orange">{r.activeAftersales} 笔处理中</Tag>
+                ) : (
+                  "—"
+                ),
             },
             { title: "下单时间", render: (_, r) => dateText(r.createdAt) },
             {
@@ -787,6 +814,7 @@ function SupplyOrderDetail({
               )}
             </>
           )}
+          <AftersalesPanel order={o} internal={internal} />
           <Typography.Title level={5}>订单动态</Typography.Title>
           <Timeline
             items={o.events.map((e: Row) => ({

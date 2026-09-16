@@ -28,6 +28,10 @@ const moduleChapters: Record<string, string> = {
   vip: "19-vip",
 };
 export function manualHref(path: string) {
+  if (path.startsWith("/supply/reconciliation"))
+    return "/help?chapter=25-supply-statements.md";
+  if (path.startsWith("/supply/statements"))
+    return "/help?chapter=26-supplier-statements.md";
   if (path.startsWith("/supply/procurement"))
     return "/help?chapter=23-supply-orders.md";
   if (path.startsWith("/supply/orders"))
