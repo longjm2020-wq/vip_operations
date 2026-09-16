@@ -344,7 +344,7 @@ function Workspace({ user }: { user: Row }) {
   return (
     <UserContext.Provider value={user}>
       <Layout className="workspace">
-        <Layout.Sider width={224} collapsed={ui.collapsed} className="sidebar">
+        <Layout.Sider width={200} collapsed={ui.collapsed} className="sidebar">
           <Link to="/products" className="brand">
             <BrandMark collapsed={ui.collapsed} />
           </Link>
@@ -515,7 +515,8 @@ createRoot(document.getElementById("root")!).render(
           colorInfo: "#d3540b",
           colorInfoBg: "#fff4e7",
           colorInfoBorder: "#ecd3b9",
-          borderRadius: 7,
+          borderRadius: 6,
+          controlHeight: 30,
           fontFamily: 'Inter, "Microsoft YaHei", sans-serif',
           colorBgLayout: "#fff8f1",
           colorText: "#362a22",
@@ -524,9 +525,16 @@ createRoot(document.getElementById("root")!).render(
           Table: {
             headerBg: "#fff2e4",
             headerColor: "#78604d",
-            cellPaddingBlock: 16,
+            cellPaddingBlock: 6,
+            cellPaddingBlockMD: 6,
+            cellPaddingBlockSM: 5,
+            cellPaddingInline: 10,
+            cellFontSize: 13,
           },
-          Button: { controlHeight: 36 },
+          Button: { controlHeight: 30 },
+          Card: { bodyPadding: 14, headerPadding: 14, headerHeight: 40 },
+          Form: { itemMarginBottom: 12, verticalLabelPadding: "0 0 4px" },
+          Menu: { itemHeight: 34, itemMarginBlock: 2 },
         },
       }}
     >

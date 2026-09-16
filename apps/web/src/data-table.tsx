@@ -55,7 +55,7 @@ export function Table<T extends Record<string, any>>(props: TableProps<T>) {
         style={{
           display: "flex",
           justifyContent: "flex-end",
-          marginBottom: 10,
+          marginBottom: 6,
         }}
       >
         <Button
