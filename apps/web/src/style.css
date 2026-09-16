@@ -595,3 +595,16 @@ pre {
     justify-content: flex-start;
   }
 }
+
+/* Search input and action share one height, including clearable inputs. */
+.ant-input-search .ant-input-group > .ant-input,
+.ant-input-search .ant-input-group > .ant-input-affix-wrapper,
+.ant-input-search .ant-input-search-button {
+  height: 32px;
+}
+.ant-input-search .ant-input-search-button {
+  box-shadow: none;
+}
+.ant-input-search .ant-input-group-addon {
+  vertical-align: top;
+}
