@@ -9,3 +9,6 @@ test-results/
 *.log
 
 LOCAL_ACCESS.md
+
+apps/web/public/ocr/core/
+apps/web/public/ocr/worker.min.js

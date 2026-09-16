@@ -1,5 +1,7 @@
-import { useState } from "react";
+import { BrandVideo } from "./brand-video";
+import { useState, useEffect, useRef } from "react";
 import { prepareUpload, readUpload } from "./upload-file";
+import { qualificationFieldError } from "../../../packages/contracts/src/qualification-validation";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import {
@@ -17,6 +19,7 @@ import {
   Input,
   InputNumber,
   Modal,
+  Radio,
   Select,
   Space,
   Table,
@@ -51,95 +54,155 @@ export function SupplierRegister() {
   const [busy, setBusy] = useState(false),
     [done, setDone] = useState(false);
   return (
-    <div style={{ maxWidth: 520, margin: "40px auto", padding: 20 }}>
-      <Card>
-        <h2>序缇供应链 · 供应商注册</h2>
-        <p>
-          请向序缇供应链负责人获取邀请码。注册后提交入驻材料，审核通过即可使用产品库。
-        </p>
-        {done ? (
-          <Alert
-            type="success"
-            title="账号已创建"
-            description={
-              <Link to="/supply/profile">前往登录并填写入驻材料</Link>
-            }
-          />
-        ) : (
-          <Form
-            layout="vertical"
-            onFinish={async (b) => {
-              setBusy(true);
-              try {
-                const { confirm, ...body } = b;
-                await api("/supply/register", "POST", body);
-                setDone(true);
-              } catch (e) {
-                message.error((e as Error).message);
-              } finally {
-                setBusy(false);
+    <div className="supplier-registration">
+      <aside className="supplier-registration-brand"><BrandVideo />
+        <img src="/xuti-wordmark.png" alt="XUTI 序缇" />
+        <div className="supplier-registration-story">
+          <span className="supplier-registration-eyebrow">
+            XUTI SUPPLY CHAIN
+          </span>
+          <h1>
+            好产品，
+            <br />
+            从这里连接。
+          </h1>
+          <p>加入序缇供应链，让产品资料、库存维护与合作交付有序衔接。</p>
+          <ol>
+            <li>
+              <span>01</span>
+              <div>
+                <strong>邀请码注册</strong>
+                <p>获取供应链负责人邀请码，创建专属账号。</p>
+              </div>
+            </li>
+            <li>
+              <span>02</span>
+              <div>
+                <strong>提交企业资质</strong>
+                <p>完善企业、联系人及结算资料，提交审核。</p>
+              </div>
+            </li>
+            <li>
+              <span>03</span>
+              <div>
+                <strong>开启供应合作</strong>
+                <p>审核通过后，上传产品并维护颜色尺码库存。</p>
+              </div>
+            </li>
+          </ol>
+        </div>
+        <footer>序缇 · 与优质供应商共同成长</footer>
+      </aside>
+      <main className="supplier-registration-main">
+        <header>
+          <span>供应商入驻</span>
+          <Link to="/supply/profile">已有账号？登录 ↗</Link>
+        </header>
+        <section className="supplier-registration-form">
+          <span className="supplier-registration-step">第一步 · 创建账号</span>
+          <h2>{done ? "欢迎加入序缇" : "开启新的合作"}</h2>
+          <p className="supplier-registration-intro">
+            请填写供应链负责人提供的邀请码，完成注册后即可提交入驻资料。
+          </p>
+          {done ? (
+            <Alert
+              type="success"
+              title="账号已创建"
+              description={
+                <Link to="/supply/profile">前往登录并填写入驻材料</Link>
               }
-            }}
-          >
-            <Form.Item
-              name="inviteCode"
-              label="供应链负责人邀请码"
-              rules={[{ required: true }]}
+            />
+          ) : (
+            <Form
+              layout="vertical"
+              onFinish={async (b) => {
+                setBusy(true);
+                try {
+                  const { confirm, ...body } = b;
+                  await api("/supply/register", "POST", body);
+                  setDone(true);
+                } catch (e) {
+                  message.error((e as Error).message);
+                } finally {
+                  setBusy(false);
+                }
+              }}
             >
-              <Input autoComplete="off" />
-            </Form.Item>
-            <Form.Item
-              name="username"
-              label="登录用户名"
-              rules={[
-                { required: true },
-                {
-                  pattern: /^[a-zA-Z0-9_-]{4,40}$/,
-                  message: "4至40位字母、数字、下划线或短横线",
-                },
-              ]}
-            >
-              <Input autoComplete="username" />
-            </Form.Item>
-            <Form.Item
-              name="displayName"
-              label="联系人姓名"
-              rules={[{ required: true }]}
-            >
-              <Input maxLength={80} />
-            </Form.Item>
-            <Form.Item
-              name="password"
-              label="密码（至少12位）"
-              rules={[{ required: true, min: 12 }]}
-            >
-              <Input.Password autoComplete="new-password" />
-            </Form.Item>
-            <Form.Item
-              name="confirm"
-              label="确认密码"
-              dependencies={["password"]}
-              rules={[
-                { required: true },
-                ({ getFieldValue }) => ({
-                  validator: (_, v) =>
-                    v === getFieldValue("password")
-                      ? Promise.resolve()
-                      : Promise.reject(Error("两次密码不一致")),
-                }),
-              ]}
-            >
-              <Input.Password autoComplete="new-password" />
-            </Form.Item>
-            <Button type="primary" htmlType="submit" loading={busy} block>
-              注册申请账号
-            </Button>
-            <p>
-              <Link to="/supply/profile">已有账号，前往登录</Link>
-            </p>
-          </Form>
-        )}
-      </Card>
+              <Form.Item
+                name="inviteCode"
+                label="供应链负责人邀请码"
+                rules={[{ required: true }]}
+              >
+                <Input
+                  autoComplete="off"
+                  placeholder="输入供应链负责人提供的邀请码"
+                />
+              </Form.Item>
+              <Form.Item
+                name="username"
+                label="登录用户名"
+                rules={[
+                  { required: true },
+                  {
+                    pattern: /^[a-zA-Z0-9_-]{4,40}$/,
+                    message: "4至40位字母、数字、下划线或短横线",
+                  },
+                ]}
+              >
+                <Input
+                  autoComplete="username"
+                  placeholder="4–40位字母、数字、下划线或短横线"
+                />
+              </Form.Item>
+              <Form.Item
+                name="displayName"
+                label="联系人姓名"
+                rules={[{ required: true }]}
+              >
+                <Input maxLength={80} placeholder="请输入联系人姓名" />
+              </Form.Item>
+              <Form.Item
+                name="password"
+                label="密码（至少12位）"
+                rules={[{ required: true, min: 12 }]}
+              >
+                <Input.Password
+                  autoComplete="new-password"
+                  placeholder="设置至少12位密码"
+                />
+              </Form.Item>
+              <Form.Item
+                name="confirm"
+                label="确认密码"
+                dependencies={["password"]}
+                rules={[
+                  { required: true },
+                  ({ getFieldValue }) => ({
+                    validator: (_, v) =>
+                      v === getFieldValue("password")
+                        ? Promise.resolve()
+                        : Promise.reject(Error("两次密码不一致")),
+                  }),
+                ]}
+              >
+                <Input.Password
+                  autoComplete="new-password"
+                  placeholder="再次输入密码"
+                />
+              </Form.Item>
+              <Button type="primary" htmlType="submit" loading={busy} block>
+                创建账号，开始入驻 →
+              </Button>
+              <p>
+                <span className="supplier-registration-note">
+                  没有邀请码？请先联系序缇供应链负责人。
+                </span>
+              </p>
+            </Form>
+          )}
+        </section>
+        <footer>企业资质审核通过后开放产品库</footer>
+      </main>
     </div>
   );
 }
@@ -148,11 +211,13 @@ function PhotoUpload({
   onChange,
   purpose,
   disabled = false,
+  onUploaded,
 }: {
   value?: string;
   onChange?: (v: string) => void;
   purpose: "QUALIFICATION" | "PRODUCT";
   disabled?: boolean;
+  onUploaded?: (file: File) => Promise<void>;
 }) {
   const [busy, setBusy] = useState(false);
   const { message } = App.useApp();
@@ -160,6 +225,7 @@ function PhotoUpload({
     if (!file) return;
     setBusy(true);
     try {
+      const original = file;
       file = await prepareUpload(file);
       const data = await readUpload(file);
       const r = await send("/files", {
@@ -169,6 +235,7 @@ function PhotoUpload({
         purpose,
       });
       onChange?.(r.data.id);
+      await onUploaded?.(original);
     } catch (e) {
       message.error((e as Error).message);
     } finally {
@@ -241,7 +308,145 @@ const banks = [
   "江苏银行",
 ];
 const required = [{ required: true, message: "必填项不能为空" }];
-function QualificationFields({ readonly = false }: { readonly?: boolean }) {
+const fieldRules = (field: string) => [
+  {
+    validator: (_: unknown, value: unknown) => {
+      const error = qualificationFieldError(field, value);
+      return error ? Promise.reject(Error(error)) : Promise.resolve();
+    },
+  },
+];
+const contactMethods = [
+  { value: "email", label: "邮箱" },
+  { value: "wechat", label: "微信" },
+  { value: "ding", label: "钉钉" },
+];
+function ContactMethod({
+  name,
+  readonly,
+}: {
+  name: string;
+  readonly: boolean;
+}) {
+  return (
+    <Form.Item noStyle shouldUpdate>
+      {(form) => {
+        const contact = form.getFieldValue(name) || {};
+        const method =
+          contact.method ||
+          contactMethods.find((m) => contact[m.value])?.value ||
+          "email";
+        if (readonly && !contact.method)
+          return (
+            <Space wrap>
+              {contactMethods
+                .filter((m) => contact[m.value])
+                .map((m) => (
+                  <span key={m.value}>
+                    {m.label}：{contact[m.value]}
+                  </span>
+                ))}
+            </Space>
+          );
+        return (
+          <>
+            <Form.Item label="联系方式（三选一）">
+              <Radio.Group
+                disabled={readonly}
+                value={method}
+                options={contactMethods}
+                onChange={(e) =>
+                  form.setFieldValue([name, "method"], e.target.value)
+                }
+              />
+            </Form.Item>
+            <Form.Item name={[name, "method"]} hidden initialValue={method}>
+              <Input />
+            </Form.Item>
+            <Form.Item
+              key={method}
+              name={[name, method]}
+              label={contactMethods.find((m) => m.value === method)?.label}
+              rules={[
+                ...required,
+                ...(method === "email"
+                  ? [{ type: "email" as const, message: "请输入有效邮箱" }]
+                  : []),
+              ]}
+            >
+              <Input
+                maxLength={method === "email" ? 200 : 100}
+                placeholder="请输入所选联系方式"
+              />
+            </Form.Item>
+          </>
+        );
+      }}
+    </Form.Item>
+  );
+}
+export function QualificationFields({
+  readonly = false,
+}: {
+  readonly?: boolean;
+}) {
+  const alive = useRef(true);
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
+  const form = Form.useFormInstance();
+  const { message, modal } = App.useApp();
+  const [ocrProgress, setOcrProgress] = useState("");
+  const recognize = async (file: File, field: "legalId" | "creditCode") => {
+    const label = field === "legalId" ? "身份证号" : "统一社会信用代码";
+    setOcrProgress(`正在识别${label}，首次使用需加载识别资源…`);
+    try {
+      const { recognizeCertificate } = await import("./certificate-ocr");
+      const candidates = await recognizeCertificate(file, field, (p) => {
+        if (alive.current) setOcrProgress(`正在识别${label}：${p}%`);
+      });
+      if (!alive.current) return;
+      if (candidates.length !== 1) {
+        message.warning(
+          candidates.length
+            ? `识别到多个${label}，请对照原件手动填写`
+            : `未识别到通过校验的${label}，请上传清晰正向照片或手动填写`,
+        );
+        return;
+      }
+      const value = candidates[0];
+      const apply = () => {
+        form.setFieldValue(field, value);
+        void form.validateFields([field]);
+        message.success(`${label}已填入，请对照原件核对`);
+      };
+      const current = String(form.getFieldValue(field) || "")
+        .trim()
+        .toUpperCase();
+      if (current && current !== value)
+        modal.confirm({
+          title: `识别结果与已填${label}不同`,
+          content: (
+            <>
+              <p>当前填写：{current}</p>
+              <p>图片识别：{value}</p>
+            </>
+          ),
+          okText: "使用识别结果",
+          cancelText: "保留原填写",
+          onOk: apply,
+        });
+      else apply();
+    } catch (e) {
+      if (alive.current)
+        message.warning((e as Error).message || "识别失败，请手动填写");
+    } finally {
+      if (alive.current) setOcrProgress("");
+    }
+  };
   const [bankSearch, setBankSearch] = useState("");
   const matches = useQuery({
     queryKey: ["supply-banks", bankSearch],
@@ -252,7 +457,12 @@ function QualificationFields({ readonly = false }: { readonly?: boolean }) {
   return (
     <>
       <div className="supply-grid">
-        <Form.Item name="shortName" label="供应商简称" rules={required}>
+        <Form.Item
+          name="shortName"
+          label="供应商简称"
+          rules={fieldRules("shortName")}
+          validateTrigger="onBlur"
+        >
           <Input />
         </Form.Item>
       </div>
@@ -263,37 +473,21 @@ function QualificationFields({ readonly = false }: { readonly?: boolean }) {
             <Form.Item
               name={[k, "name"]}
               label={k === "business" ? "商务联系人" : "财务联系人"}
-              rules={required}
+              rules={fieldRules("name")}
+              validateTrigger="onBlur"
             >
               <Input />
             </Form.Item>
             <Form.Item
               name={[k, "phone"]}
               label="手机号"
-              rules={[
-                ...required,
-                { pattern: /^1\d{10}$/, message: "请填写11位手机号" },
-              ]}
+              rules={fieldRules("phone")}
+              validateTrigger="onBlur"
             >
               <Input maxLength={11} />
             </Form.Item>
           </div>
-          <p>邮箱 / 微信 / 钉钉：至少填写一项</p>
-          <div className="supply-grid">
-            <Form.Item
-              name={[k, "email"]}
-              label="邮箱"
-              rules={[{ type: "email" }]}
-            >
-              <Input />
-            </Form.Item>
-            <Form.Item name={[k, "wechat"]} label="微信">
-              <Input />
-            </Form.Item>
-            <Form.Item name={[k, "ding"]} label="钉钉">
-              <Input />
-            </Form.Item>
-          </div>
+          <ContactMethod name={k} readonly={readonly} />
         </section>
       ))}
       <h3>企业资质</h3>
@@ -305,8 +499,19 @@ function QualificationFields({ readonly = false }: { readonly?: boolean }) {
           ["legalId", "法人身份证号"],
           ["address", "办公地址"],
         ].map(([k, label]) => (
-          <Form.Item key={k} name={k} label={label} rules={required}>
-            <Input maxLength={200} />
+          <Form.Item
+            key={k}
+            name={k}
+            label={label}
+            rules={fieldRules(k)}
+            validateTrigger="onBlur"
+            normalize={(v) =>
+              ["legalId", "creditCode"].includes(k) ? v.toUpperCase() : v
+            }
+          >
+            <Input
+              maxLength={["legalId", "creditCode"].includes(k) ? 18 : 200}
+            />
           </Form.Item>
         ))}
       </div>
@@ -321,10 +526,29 @@ function QualificationFields({ readonly = false }: { readonly?: boolean }) {
           ["license", "营业执照副本"],
         ].map(([k, label]) => (
           <Form.Item key={k} name={k} label={label} rules={required}>
-            <PhotoUpload purpose="QUALIFICATION" disabled={readonly} />
+            <PhotoUpload
+              purpose="QUALIFICATION"
+              disabled={readonly || !!ocrProgress}
+              onUploaded={
+                k === "idFront"
+                  ? (file) => recognize(file, "legalId")
+                  : k === "license"
+                    ? (file) => recognize(file, "creditCode")
+                    : undefined
+              }
+            />
           </Form.Item>
         ))}
       </div>
+      {!readonly && (
+        <Alert
+          type="info"
+          title={
+            ocrProgress ||
+            "上传身份证正面和营业执照后自动识别号码；识别在浏览器本地运行，请核对结果。格式校验不代表证件真实性或企业认证。"
+          }
+        />
+      )}
       <h3>账单结算</h3>
       <div className="supply-grid">
         <Form.Item name="cycle" label="结算周期">
@@ -333,13 +557,28 @@ function QualificationFields({ readonly = false }: { readonly?: boolean }) {
         <Form.Item name="payment" label="打款方式">
           <Input disabled />
         </Form.Item>
-        <Form.Item name="payee" label="收款账户户名" rules={required}>
+        <Form.Item
+          name="payee"
+          label="收款账户户名"
+          rules={fieldRules("payee")}
+          validateTrigger="onBlur"
+        >
           <Input placeholder="请输入收款人户名" />
         </Form.Item>
-        <Form.Item name="bankAccount" label="银行账号" rules={required}>
+        <Form.Item
+          name="bankAccount"
+          label="银行账号"
+          rules={fieldRules("bankAccount")}
+          validateTrigger="onBlur"
+        >
           <Input placeholder="请输入收款人账号" />
         </Form.Item>
-        <Form.Item name="bank" label="开户行（填写完整支行）" rules={required}>
+        <Form.Item
+          name="bank"
+          label="开户行（填写完整支行）"
+          rules={fieldRules("bank")}
+          validateTrigger="onBlur"
+        >
           <AutoComplete
             options={[
               ...new Set([
@@ -402,8 +641,15 @@ export function SupplyProfile() {
           ding: "",
           ...doc[key],
         };
-        if (submit && !doc[key].email && !doc[key].wechat && !doc[key].ding)
-          throw Error("商务和财务联系均需至少填写邮箱、微信、钉钉中的一项");
+        const method =
+          doc[key].method ||
+          contactMethods.find((m) => doc[key][m.value])?.value ||
+          "email";
+        doc[key].method = method;
+        for (const m of contactMethods)
+          if (m.value !== method) doc[key][m.value] = "";
+        if (submit && !doc[key][method]?.trim())
+          throw Error("商务和财务联系均需选择并填写一种联系方式");
       }
       await send("/profile", { version: editVersion, submit, document: doc });
       message.success(submit ? "已提交，等待供应链负责人审核" : "草稿已保存");
@@ -514,7 +760,8 @@ export function SupplyProfile() {
       )}
       <Drawer
         title="填写企业资质"
-        width="min(1100px,98vw)"
+        destroyOnHidden
+        size="98vw"
         open={editing}
         onClose={() => !busy && setEditing(false)}
         extra={
@@ -711,7 +958,7 @@ export function SupplyReview() {
         ]}
       />
       <Drawer
-        width="min(1100px,98vw)"
+        size="98vw"
         open={!!selected}
         title="入驻 / 资质变更材料审核"
         onClose={() => !busy && setSelected(null)}
@@ -827,7 +1074,7 @@ function InventoryEditor({
     <Modal
       title="维护库存明细"
       open
-      width="min(1400px,98vw)"
+      width="98vw"
       onCancel={onClose}
       onOk={async () => {
         if (
@@ -929,7 +1176,7 @@ function ProductEditor({
     <Drawer
       open
       title={initial ? "编辑供应商产品" : "新增供应商产品"}
-      width="min(950px,98vw)"
+      size="98vw"
       onClose={() => !busy && onClose()}
       extra={
         <Button
@@ -1472,7 +1719,7 @@ export function SupplyProducts({ internal = false }: { internal?: boolean }) {
         title="产品详情"
         open={!!detail}
         onClose={() => setDetail(null)}
-        width="min(1100px, 96vw)"
+        size="98vw"
       >
         {detail && (
           <>

@@ -1,3 +1,4 @@
+import { BrandVideo } from "./brand-video";
 import React, { useState, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClientProvider, useQuery } from "@tanstack/react-query";
@@ -89,23 +90,17 @@ function Login() {
     [error, setError] = useState("");
   return (
     <div className="login">
-      <section className="login-story">
+      <section className="login-story"><BrandVideo />
         <div className="login-brand">
           <BrandMark />
         </div>
-        <div>
-          <div className="eyebrow">APPAREL OPERATIONS</div>
+        <div className="login-video-copy">
           <h1>
-            每一件服装，
+            让好产品，
             <br />
-            都有清晰的经营脉络。
+            遇见新的可能。
           </h1>
-          <p>商品、库存与采购，连接成一个可追溯的工作流。</p>
-          <div className="story-line">
-            01 建立商品 <span>—</span> 02 管理库存 <span>—</span> 03 采购入库
-          </div>
         </div>
-        <small>供应商经营管理系统 / v0.1</small>
       </section>
       <section className="login-panel">
         <div className="login-box">

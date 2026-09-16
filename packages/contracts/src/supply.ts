@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { qualificationFieldError } from "./qualification-validation.js";
 const required = z.string().trim().min(1, "必填项不能为空").max(200);
 const contact = z
   .object({
@@ -7,11 +8,23 @@ const contact = z
     email: z.string().trim().email().or(z.literal("")),
     wechat: z.string().trim().max(100),
     ding: z.string().trim().max(100),
+    method: z.enum(["email", "wechat", "ding"]).optional(),
   })
   .strict()
   .refine((v) => v.email || v.wechat || v.ding, {
     message: "邮箱、微信、钉钉至少填写一项",
-  });
+  })
+  .refine(
+    (v) =>
+      !v.method ||
+      (!!v[v.method] &&
+        ["email", "wechat", "ding"].filter(
+          (k) => !!v[k as "email" | "wechat" | "ding"],
+        ).length === 1),
+    {
+      message: "请选择并填写一种联系方式",
+    },
+  );
 export const qualificationSchema = z
   .object({
     shortName: required,
@@ -19,9 +32,15 @@ export const qualificationSchema = z
     company: required,
     creditCode: z
       .string()
+      .trim()
+      .toUpperCase()
       .regex(/^[0-9A-HJ-NPQRTUWXY]{18}$/, "统一社会信用代码应为18位"),
     legalName: required,
-    legalId: z.string().regex(/^\d{17}[\dXx]$/, "请填写18位法人身份证号"),
+    legalId: z
+      .string()
+      .trim()
+      .toUpperCase()
+      .regex(/^\d{17}[\dX]$/, "请填写18位法人身份证号"),
     address: required,
     idFront: z.string().uuid(),
     idBack: z.string().uuid(),
@@ -35,7 +54,30 @@ export const qualificationSchema = z
     invoiceTypes: z.array(z.enum(["普票", "专票"])).min(1),
     taxRates: z.array(z.enum(["1%", "3%", "6%", "13%"])).min(1),
   })
-  .strict();
+  .strict()
+  .superRefine((doc, ctx) => {
+    for (const key of [
+      "shortName",
+      "company",
+      "creditCode",
+      "legalName",
+      "legalId",
+      "address",
+      "payee",
+      "bankAccount",
+      "bank",
+    ] as const) {
+      const message = qualificationFieldError(key, doc[key]);
+      if (message) ctx.addIssue({ code: "custom", path: [key], message });
+    }
+    for (const key of ["business", "finance"] as const)
+      for (const field of ["name", "phone", "wechat", "ding"] as const) {
+        if (["wechat", "ding"].includes(field) && !doc[key][field]) continue;
+        const message = qualificationFieldError(field, doc[key][field]);
+        if (message)
+          ctx.addIssue({ code: "custom", path: [key, field], message });
+      }
+  });
 export const splitValues = (v: string) => [
   ...new Set(
     v
