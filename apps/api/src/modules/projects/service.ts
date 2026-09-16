@@ -1,4 +1,10 @@
-import { assertReferences, storeFiles, fileUrl } from "./storage.js";
+import {
+  assertReferences,
+  storeFiles,
+  fileUrl,
+  storageEnabled,
+} from "./storage.js";
+import { attachmentSchema } from "../../../../../packages/contracts/src/project-attachments.js";
 import type { ProjectAttachment } from "../../../../../packages/contracts/src/project-attachments.js";
 import { z } from "zod";
 import {
@@ -285,6 +291,36 @@ async function addMembers(tx: Tx, c: Context, value: string, users: string[]) {
     );
   }
 }
+export async function uploadAttachment(c: Context, input: unknown) {
+  requirePermission(c.actor, "project.create");
+  const file = parse(attachmentSchema, input);
+  if (file.storageKey) fail("VALIDATION_ERROR", "请提交文件内容", 400);
+  if (!storageEnabled()) fail("STORAGE_UNAVAILABLE", "文件存储尚未配置", 503);
+  const [stored] = await storeFiles([file], c.actor.id);
+  await rows(
+    db,
+    "INSERT INTO project_uploads(id,user_id,metadata) VALUES($1::uuid,$2::bigint,$3::jsonb) RETURNING id",
+    file.id,
+    c.actor.id,
+    JSON.stringify(stored),
+  );
+  return { ...stored, url: `/api/v1/projects/uploads/${file.id}` };
+}
+export async function uploadedAttachment(
+  c: Context,
+  fileId: string,
+  preview: boolean,
+) {
+  requirePermission(c.actor, "project.create");
+  const row = await one(
+    db,
+    "SELECT metadata FROM project_uploads WHERE id=$1::uuid AND user_id=$2::bigint",
+    parse(z.string().uuid(), fileId),
+    c.actor.id,
+  );
+  if (!row) fail("NOT_FOUND", "附件不存在", 404);
+  return fileUrl(row!.metadata, preview);
+}
 export async function save(c: Context, input: unknown, value?: string) {
   requirePermission(c.actor, "project.create");
   const b = parse(projectSchema, input);
@@ -295,7 +331,19 @@ export async function save(c: Context, input: unknown, value?: string) {
       fail("INVALID_STATE", "已完成或作废项目不能编辑");
   }
   const requested = b.attachments ?? before?.document.attachments ?? [];
-  assertReferences(requested, before?.document.attachments ?? []);
+  const uploaded = requested.length
+    ? await rows(
+        db,
+        "SELECT metadata FROM project_uploads WHERE user_id=$1::bigint AND id=ANY($2::uuid[])",
+        c.actor.id,
+        requested.map((f: ProjectAttachment) => f.id),
+      )
+    : [];
+  const uploadedFiles = uploaded.map((f) => f.metadata as ProjectAttachment);
+  assertReferences(requested, [
+    ...(before?.document.attachments ?? []),
+    ...uploadedFiles,
+  ]);
   const stored = await storeFiles(requested, c.actor.id);
   return command(c, "project.save/" + (value || "new"), b, async (tx) => {
     let old: Row | undefined;
@@ -306,7 +354,10 @@ export async function save(c: Context, input: unknown, value?: string) {
         fail("INVALID_STATE", "已完成或作废项目不能编辑");
       version(old, b.version || 0);
     }
-    assertReferences(requested, old?.document.attachments ?? []);
+    assertReferences(requested, [
+      ...(old?.document.attachments ?? []),
+      ...uploadedFiles,
+    ]);
     const stages: Row[] =
       old?.status === "ACTIVE" ? [...old.document.stages] : [];
     for (const sid of old?.status === "ACTIVE" ? [] : b.sopIds) {

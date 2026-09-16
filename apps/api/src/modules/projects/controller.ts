@@ -17,6 +17,23 @@ import { parse, id } from "../../core.js";
 import * as s from "./service.js";
 @Controller("api/v1/projects")
 export class ProjectsController {
+  @Permission("project.create") @Post("uploads") upload(
+    @Req() r: AuthRequest,
+    @Body() b: unknown,
+  ) {
+    return s.uploadAttachment(context(r), b);
+  }
+  @Permission("project.create") @Get("uploads/:fileId") async uploaded(
+    @Req() r: AuthRequest,
+    @Param("fileId") fileId: string,
+    @Query("preview") preview: string,
+    @Res() res: Response,
+  ) {
+    res.setHeader("Cache-Control", "private, no-store");
+    res.redirect(
+      await s.uploadedAttachment(context(r), fileId, preview === "1"),
+    );
+  }
   @Permission("project.read") @Get("options") options(@Req() r: AuthRequest) {
     return s.options(context(r));
   }

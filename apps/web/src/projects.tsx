@@ -1,3 +1,4 @@
+import { prepareUpload, readUpload } from "./upload-file";
 import { TreeSelect } from "antd";
 import { categoryTree } from "./category-tree";
 import { useState, useRef, useEffect } from "react";
@@ -251,23 +252,19 @@ function RequirementsEditor({
   const set = (i: number, key: string, v: unknown) =>
     onChange(value.map((r, j) => (j === i ? { ...r, [key]: v } : r)));
   const upload = async (file: File, i: number, j: number) => {
-    if (
-      !["image/jpeg", "image/png", "image/webp"].includes(file.type) ||
-      file.size > 600000
-    ) {
-      message.error("请上传 600KB 以内的 JPG、PNG 或 WebP 图片");
-      return false;
-    }
-    const r = new FileReader();
-    r.onload = () =>
+    try {
+      const prepared = await prepareUpload(file);
+      const image = await readUpload(prepared);
       set(
         i,
         "examples",
         value[i].examples.map((x: Row, k: number) =>
-          k === j ? { ...x, image: String(r.result) } : x,
+          k === j ? { ...x, image } : x,
         ),
       );
-    r.readAsDataURL(file);
+    } catch (e) {
+      message.error((e as Error).message);
+    }
     return false;
   };
   return (

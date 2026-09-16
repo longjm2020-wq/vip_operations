@@ -6,9 +6,11 @@ import { SwaggerModule, DocumentBuilder } from "@nestjs/swagger";
 import cookieParser from "cookie-parser";
 import helmet from "helmet";
 import { randomUUID } from "node:crypto";
-import { Request, Response, NextFunction } from "express";
+import { Request, Response, NextFunction, json } from "express";
+import { actorFor } from "./modules/auth/service.js";
 import { NestExpressApplication } from "@nestjs/platform-express";
 import { ProjectsModule } from "./modules/projects/controller.js";
+import { SupplyModule } from "./modules/supply/controller.js";
 import {
   AuthModule,
   InventoryModule,
@@ -24,6 +26,7 @@ import { ManualController } from "./manual.js";
   controllers: [ManualController],
   imports: [
     AuthModule,
+    SupplyModule,
     InventoryModule,
     PurchaseModule,
     SystemModule,
@@ -44,8 +47,26 @@ export async function start() {
     logger: ["warn", "error", "log"],
   });
   app.use(helmet());
-  app.useBodyParser("json", { limit: "8mb" });
   app.use(cookieParser());
+  app.use(
+    "/api/v1/projects/uploads",
+    async (req: Request, res: Response, next: NextFunction) => {
+      if (req.method !== "POST") return next();
+      try {
+        const actor = await actorFor(req.cookies?.session);
+        if (
+          !actor.permissions.includes("project.create") ||
+          req.get("X-CSRF-Token") !== actor.csrfToken ||
+          req.get("Origin") !== process.env.APP_ORIGIN
+        )
+          return res.status(403).json({ error: { message: "无权上传文件" } });
+        return json({ limit: "70mb" })(req, res, next);
+      } catch {
+        return res.status(401).json({ error: { message: "请先登录" } });
+      }
+    },
+  );
+  app.useBodyParser("json", { limit: "8mb" });
   app.use(
     (
       req: Request & { requestId?: string },

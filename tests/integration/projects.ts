@@ -209,7 +209,7 @@ try {
     outsider = await login("outsider");
   assert.equal((await request(empty, "/help")).status, 401);
   const adminHelp = await ok(owner, "/help");
-  assert.equal(adminHelp.length, 20);
+  assert.equal(adminHelp.length, 22);
   const buyerHelp = await ok(buyer, "/help?chapter=19-vip.md");
   assert.ok(
     buyerHelp.some((chapter: { id: string }) => chapter.id === "00-start.md"),

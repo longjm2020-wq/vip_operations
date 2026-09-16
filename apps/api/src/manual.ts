@@ -25,6 +25,9 @@ export const manualPermissions: Record<string, string | null> = {
   "17-roles": "role.read",
   "18-audit": "audit.read",
   "19-vip": "vip.settings",
+  "20-supply-portal": "supply.portal",
+  "21-supply-review": "supply.review",
+  "22-supply-products": "supply.manage",
 };
 @Controller("api/v1/help")
 export class ManualController {

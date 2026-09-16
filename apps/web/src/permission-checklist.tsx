@@ -1,5 +1,6 @@
 ﻿import { Checkbox, Space, Typography } from "antd";
 const modules: Record<string, string> = {
+  supply: "供应链端",
   user: "用户管理",
   role: "角色权限",
   product: "商品与基础资料",
@@ -14,6 +15,9 @@ const modules: Record<string, string> = {
   sop: "操作流程 SOP",
 };
 export const permissionLabels: Record<string, string> = {
+  "supply.portal": "供应商企业资质与产品库",
+  "supply.review": "入驻、资质审核及邀请码管理",
+  "supply.manage": "查看供应链产品与维护序缇款号",
   "user.read": "查看用户",
   "user.manage": "管理用户与重置密码",
   "role.read": "查看角色",

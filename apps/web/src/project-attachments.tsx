@@ -1,3 +1,5 @@
+import { prepareUpload, readUpload } from "./upload-file";
+import { api } from "./api";
 import { useState } from "react";
 import { App, Button, Image, Space, Typography, Upload } from "antd";
 import {
@@ -17,31 +19,24 @@ export function ProjectAttachments({
   const [busy, setBusy] = useState(false);
   const add = async (file: File) => {
     if (busy) return false;
-    const type =
-      attachmentTypes[file.name.split(".").pop()?.toLowerCase() || ""];
-    if (!type || file.size === 0 || file.size > 2 * 1024 * 1024) {
-      message.error("请选择支持的图片或文档，单个文件不超过 2 MB，不能为空");
+    let type = attachmentTypes[file.name.split(".").pop()?.toLowerCase() || ""];
+    if (!type || file.size === 0) {
+      message.error("请选择支持的图片或文档，不能为空");
       return false;
     }
     setBusy(true);
     try {
-      const data = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () =>
-          resolve(`data:${type};base64,${String(reader.result).split(",")[1]}`);
-        reader.onerror = () => reject(new Error("读取文件失败，请重试"));
-        reader.readAsDataURL(file);
+      file = await prepareUpload(new File([file], file.name, { type }));
+      type = file.type;
+      const data = await readUpload(file);
+      const result = await api("/projects/uploads", "POST", {
+        id: crypto.randomUUID(),
+        name: file.name,
+        type,
+        size: file.size,
+        data,
       });
-      const next = [
-        ...files,
-        {
-          id: crypto.randomUUID(),
-          name: file.name,
-          type,
-          size: file.size,
-          data,
-        },
-      ];
+      const next = [...files, result.data];
       const valid = attachmentsSchema.safeParse(next);
       if (!valid.success) throw new Error(valid.error.issues[0].message);
       onChange?.(valid.data);
@@ -84,8 +79,8 @@ export function ProjectAttachments({
             <Button loading={busy}>添加图片 / 文档</Button>
           </Upload>
           <Typography.Text type="secondary">
-            支持 JPG、PNG、WebP、PDF、Word、Excel、PPT、TXT、CSV；单个 2
-            MB，合计 3 MB，最多 10 个。随项目保存后生效。
+            支持图片及常见文档，最多10个。图片自动压缩至1 MB以下；文档须小于50
+            MB，超限尝试无损压缩为.gz，仍超限则提示拆分。随项目保存后关联生效。
           </Typography.Text>
         </>
       )}

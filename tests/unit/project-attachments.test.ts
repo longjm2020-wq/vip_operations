@@ -1,5 +1,8 @@
 import { expect, it } from "vitest";
-import { attachmentsSchema } from "../../packages/contracts/src/project-attachments.js";
+import {
+  attachmentsSchema,
+  attachmentSchema,
+} from "../../packages/contracts/src/project-attachments.js";
 const file = {
   id: "51b8a044-786a-4b31-8500-e1c6c58586cd",
   name: "notes.txt",
@@ -7,6 +10,21 @@ const file = {
   size: 5,
   data: "data:text/plain;base64,aGVsbG8=",
 };
+it("rejects images at 1MB and documents at 50MB", () => {
+  const size = 1024 * 1024;
+  expect(
+    attachmentSchema.safeParse({
+      ...file,
+      name: "image.png",
+      type: "image/png",
+      size,
+      data: "data:image/png;base64," + Buffer.alloc(size).toString("base64"),
+    }).success,
+  ).toBe(false);
+  expect(
+    attachmentSchema.safeParse({ ...file, size: 50 * 1024 * 1024 }).success,
+  ).toBe(false);
+});
 it("checks attachment type, encoding and actual size", () => {
   expect(attachmentsSchema.safeParse([file]).success).toBe(true);
   for (const patch of [

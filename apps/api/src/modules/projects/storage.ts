@@ -72,7 +72,7 @@ export async function storeFiles(
           Body: bytes,
           ContentType: file.type,
         }),
-        { abortSignal: AbortSignal.timeout(15000) },
+        { abortSignal: AbortSignal.timeout(120000) },
       );
       result.push({ ...file, data: "", storageKey });
     }

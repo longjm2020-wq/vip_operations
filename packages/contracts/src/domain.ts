@@ -29,6 +29,9 @@ export const permissions = [
   "project.read",
   "project.create",
   "sop.manage",
+  "supply.portal",
+  "supply.review",
+  "supply.manage",
 ];
 const buyer = [
   "product.read",
@@ -47,7 +50,10 @@ export const roleSeeds: Record<
   { name: string; permissions: string[] }
 > = {
   SUPER_ADMIN: { name: "超级管理员", permissions },
-  ADMIN: { name: "管理员", permissions },
+  ADMIN: {
+    name: "管理员",
+    permissions: permissions.filter((p) => p !== "supply.portal"),
+  },
   OPERATOR: {
     name: "商品运营",
     permissions: [
@@ -111,6 +117,11 @@ for (const [code, name] of Object.entries({
     name,
     permissions: ["project.read", "project.create", "sop.manage"],
   };
+roleSeeds.SUPPLIER = { name: "供应商", permissions: ["supply.portal"] };
+roleSeeds.SUPPLY_MANAGER = {
+  name: "供应链负责人",
+  permissions: ["supply.review", "supply.manage"],
+};
 export const inTransitStatuses = [
   "CONFIRMED",
   "IN_PRODUCTION",

@@ -101,7 +101,15 @@ export const sopSchema = z
   );
 const image = z
   .string()
-  .max(800000)
+  .max(1400000)
+  .refine((v) => {
+    if (!v.startsWith("data:")) return true;
+    const b = v.split(",")[1] || "";
+    return (
+      (b.length / 4) * 3 - (b.endsWith("==") ? 2 : b.endsWith("=") ? 1 : 0) <
+      1024 * 1024
+    );
+  }, "图片须压缩至1 MB以下")
   .refine(
     (v) =>
       /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(v) ||

@@ -61,7 +61,13 @@ import {
   ProjectNotifications,
 } from "./projects";
 import "./style.css";
-const coreFeatureSummary = "ERP经营 · 项目协作";
+import {
+  SupplierRegister,
+  SupplyProfile,
+  SupplyProducts,
+  SupplyReview,
+} from "./supply";
+const coreFeatureSummary = "ERP经营 · 供应链 · 项目协作";
 const useUi = create<{ collapsed: boolean; toggle: () => void }>((set) => ({
   collapsed: false,
   toggle: () => set((s) => ({ collapsed: !s.collapsed })),
@@ -70,9 +76,7 @@ function BrandMark({ collapsed = false }: { collapsed?: boolean }) {
   return (
     <span
       className={
-        collapsed
-          ? "brand-wordmark brand-wordmark-collapsed"
-          : "brand-wordmark"
+        collapsed ? "brand-wordmark brand-wordmark-collapsed" : "brand-wordmark"
       }
       role="img"
       aria-label="XUTI 衣序"
@@ -80,6 +84,7 @@ function BrandMark({ collapsed = false }: { collapsed?: boolean }) {
   );
 }
 function Login() {
+  const supplierLogin = useLocation().pathname.startsWith("/supply");
   const [busy, setBusy] = useState(false),
     [error, setError] = useState("");
   return (
@@ -106,7 +111,14 @@ function Login() {
         <div className="login-box">
           <span className="eyebrow">工作台登录</span>
           <h2>欢迎回来</h2>
-          <p className="secondary">使用管理员为您建立的账户登录。</p>
+          <p className="secondary">
+            {supplierLogin
+              ? "供应商登录序缇供应链后台。"
+              : "使用管理员为您建立的账户登录。"}
+          </p>
+          <p>
+            <Link to="/supply/register">供应商持邀请码注册入驻</Link>
+          </p>
           {error && <Alert type="error" title={error} className="notice" />}
           <Form
             layout="vertical"
@@ -257,6 +269,37 @@ function Workspace({ user }: { user: Row }) {
   const adminKeys = ["/users", "/roles", "/audit-logs"];
   const items = [
     {
+      key: "/supply",
+      label: "供应链端",
+      icon: <TeamOutlined />,
+      children: [
+        ...(user.roleCodes?.includes("SUPPLIER")
+          ? [
+              {
+                key: "/supply/profile",
+                label: "企业资质管理",
+                permission: "supply.portal",
+              },
+              {
+                key: "/supply/products",
+                label: "供应商产品库",
+                permission: "supply.portal",
+              },
+            ]
+          : []),
+        {
+          key: "/supply/review",
+          label: "入驻审核 / 邀请码",
+          permission: "supply.review",
+        },
+        {
+          key: "/supply/catalog",
+          label: "供应链产品库",
+          permission: "supply.manage",
+        },
+      ],
+    },
+    {
       key: "/erp",
       label: "ERP系统",
       icon: <AppstoreOutlined />,
@@ -300,7 +343,14 @@ function Workspace({ user }: { user: Row }) {
     <UserContext.Provider value={user}>
       <Layout className="workspace">
         <Layout.Sider width={200} collapsed={ui.collapsed} className="sidebar">
-          <Link to="/products" className="brand">
+          <Link
+            to={
+              user.roleCodes?.includes("SUPPLIER")
+                ? "/supply/profile"
+                : "/products"
+            }
+            className="brand"
+          >
             <BrandMark collapsed={ui.collapsed} />
           </Link>
           {!ui.collapsed && <div className="sidebar-label">OPERATIONS</div>}
@@ -314,7 +364,10 @@ function Workspace({ user }: { user: Row }) {
           />
           {!ui.collapsed && (
             <div className="sidebar-footer">
-              <span className="status-dot" /> 内部管理系统
+              <span className="status-dot" />{" "}
+              {user.roleCodes?.includes("SUPPLIER")
+                ? "序缇供应链后台"
+                : "内部管理系统"}
               <br />
               <small>{coreFeatureSummary}</small>
             </div>
@@ -331,7 +384,9 @@ function Workspace({ user }: { user: Row }) {
                 }
               />
               <Typography.Text type="secondary">
-                服装供应商经营工作台
+                {user.roleCodes?.includes("SUPPLIER")
+                  ? "序缇供应链后台"
+                  : "服装供应商经营工作台"}
               </Typography.Text>
             </Space>
             <Space size={14}>
@@ -370,6 +425,13 @@ function Workspace({ user }: { user: Row }) {
           </Layout.Header>
           <Layout.Content className="content">
             <Routes>
+              <Route path="/supply/profile" element={<SupplyProfile />} />
+              <Route path="/supply/products" element={<SupplyProducts />} />
+              <Route path="/supply/review" element={<SupplyReview />} />
+              <Route
+                path="/supply/catalog"
+                element={<SupplyProducts internal />}
+              />
               <Route path="/help" element={<ManualPage />} />
               <Route path="/products/:id" element={<ProductDetail />} />
               <Route path="/purchase-orders/new" element={<PurchaseNew />} />
@@ -426,7 +488,21 @@ function Workspace({ user }: { user: Row }) {
               <Route path="/sops" element={<SopPage />} />
               <Route path="/projects" element={<ProjectsPage />} />
               <Route path="/projects/:id" element={<ProjectDetailPage />} />
-              <Route path="*" element={<Navigate to="/products" replace />} />
+              <Route
+                path="*"
+                element={
+                  <Navigate
+                    to={
+                      user.roleCodes?.includes("SUPPLIER")
+                        ? "/supply/profile"
+                        : user.roleCodes?.includes("SUPPLY_MANAGER")
+                          ? "/supply/review"
+                          : "/products"
+                    }
+                    replace
+                  />
+                }
+              />
             </Routes>
             <footer className="page-footer">
               XUTI <span>{coreFeatureSummary}</span>
@@ -438,6 +514,7 @@ function Workspace({ user }: { user: Row }) {
   );
 }
 function Root() {
+  const location = useLocation();
   const me = useQuery({
     queryKey: ["me"],
     queryFn: async () => {
@@ -457,7 +534,19 @@ function Root() {
         <Spin size="large" />
       </div>
     );
-  return me.data ? <Workspace user={me.data} /> : <Login />;
+  if (
+    me.data?.roleCodes?.includes("SUPPLIER") &&
+    !location.pathname.startsWith("/supply/") &&
+    location.pathname !== "/help"
+  )
+    return <Navigate to="/supply/profile" replace />;
+  return me.data ? (
+    <Workspace user={me.data} />
+  ) : location.pathname === "/supply/register" ? (
+    <SupplierRegister />
+  ) : (
+    <Login />
+  );
 }
 createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

@@ -608,3 +608,5 @@ pre {
 .ant-input-search .ant-input-group-addon {
   vertical-align: top;
 }
+
+.supply-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:8px 20px}.supply-upload{position:relative;display:inline-block;border:1px solid #dfc9b6;border-radius:5px;padding:4px 10px;cursor:pointer;font-size:13px}.supply-upload input{position:absolute;width:100%;height:100%;inset:0;opacity:0;cursor:pointer}.supply-grid .ant-input-number{width:100%}
