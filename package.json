@@ -23,6 +23,7 @@
     "start:api": "node dist/apps/api/src/main.js",
     "start:worker": "node dist/apps/worker/src/main.js",
     "test:queue": "tsx scripts/test-queue.ts",
+    "vop:compass:probe": "tsx scripts/vop-compass-probe.ts",
     "format": "prettier --write apps packages scripts tests"
   },
   "dependencies": {

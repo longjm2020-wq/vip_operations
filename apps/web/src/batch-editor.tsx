@@ -10,10 +10,11 @@ export type BatchField = SheetColumn & {
   optionLabel?: string;
 };
 export async function allOptions(path: string) {
-  const first = await api(path + "?pageSize=100");
+  const join = path.includes("?") ? "&" : "?";
+  const first = await api(path + join + "pageSize=100");
   const data = [...first.data];
   for (let page = 2; data.length < (first.total || 0); page++) {
-    const next = await api(path + "?pageSize=100&page=" + page);
+    const next = await api(path + join + "pageSize=100&page=" + page);
     if (!next.data.length) break;
     data.push(...next.data);
   }
@@ -47,8 +48,12 @@ export function useSheetColumns(fields: BatchField[], resource = "") {
         const code = r.skuCode || r.styleNo || r.supplierCode || r.code || r.id;
         return {
           value: String(mapping ? r.code : r.id),
-          label: `${code} · ${r.name || r.displayName || r.skuCode || ""}`,
-          aliases: [String(code), String(r.name || "")],
+          label: `${code} · ${r[f.optionLabel || ""] || r.name || r.displayName || r.skuCode || ""}`,
+          aliases: [
+            String(code),
+            String(r[f.optionLabel || ""] || ""),
+            String(r.name || ""),
+          ],
         };
       }),
     };

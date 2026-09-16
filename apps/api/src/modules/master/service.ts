@@ -1,6 +1,7 @@
 import { z } from "zod";
 import {
   db,
+  Tx,
   rows,
   one,
   insert,
@@ -78,6 +79,7 @@ export const resources = {
         code: text,
         name: text,
         parentId: id.nullable().optional(),
+        parentCode: z.string().trim().max(50).nullable().optional(),
         status,
       })
       .strict(),
@@ -133,9 +135,116 @@ export function getResource(name: string) {
   if (!Object.hasOwn(resources, name)) fail("NOT_FOUND", "接口不存在", 404);
   return resources[name as Resource];
 }
+const womenCategoryTemplate = [
+  ["WOMEN", "女装"],
+  ["WOMEN-ACCESSORIES", "服饰配件", "WOMEN"],
+  ["WOMEN-ACCESSORIES-SHAWL", "女款披肩", "WOMEN-ACCESSORIES"],
+  ["WOMEN-TOPS", "女上装", "WOMEN"],
+  ["WOMEN-TOPS-LEATHER", "女式皮衣/皮草", "WOMEN-TOPS"],
+  ["WOMEN-TOPS-POLO", "女式Polo衫", "WOMEN-TOPS"],
+  ["WOMEN-TOPS-TSHIRT", "女式T恤", "WOMEN-TOPS"],
+  ["WOMEN-TOPS-VEST", "女式背心", "WOMEN-TOPS"],
+  ["WOMEN-TOPS-SHIRT", "女式衬衫", "WOMEN-TOPS"],
+  ["WOMEN-TOPS-BASE", "女式打底衫", "WOMEN-TOPS"],
+  ["WOMEN-TOPS-COAT", "女式大衣", "WOMEN-TOPS"],
+  ["WOMEN-TOPS-TRENCH", "女式风衣", "WOMEN-TOPS"],
+  ["WOMEN-TOPS-JACKET", "女式夹克", "WOMEN-TOPS"],
+  ["WOMEN-TOPS-GILET", "女式马夹", "WOMEN-TOPS"],
+  ["WOMEN-TOPS-SWEATER", "女式毛衣", "WOMEN-TOPS"],
+  ["WOMEN-TOPS-PADDED", "女式棉衣", "WOMEN-TOPS"],
+  ["WOMEN-TOPS-OUTER", "女式外套", "WOMEN-TOPS"],
+  ["WOMEN-TOPS-HOODIE", "女式卫衣", "WOMEN-TOPS"],
+  ["WOMEN-TOPS-BLAZER", "女式西服", "WOMEN-TOPS"],
+  ["WOMEN-TOPS-WOOL", "女式羊毛衫", "WOMEN-TOPS"],
+  ["WOMEN-TOPS-CASHMERE", "女式羊绒衫", "WOMEN-TOPS"],
+  ["WOMEN-TOPS-DOWN", "女式羽绒服", "WOMEN-TOPS"],
+  ["WOMEN-TOPS-KNIT", "女式针织衫", "WOMEN-TOPS"],
+  ["WOMEN-TOPS-DRESS", "女式礼服", "WOMEN-TOPS"],
+  ["WOMEN-DRESS-SETS", "女式礼服套装", "WOMEN"],
+  ["WOMEN-DRESS-SETS-SUIT", "女式套装", "WOMEN-DRESS-SETS"],
+  ["WOMEN-BOTTOMS", "女下装", "WOMEN"],
+  ["WOMEN-BOTTOMS-LEGGINGS", "女式打底裤", "WOMEN-BOTTOMS"],
+  ["WOMEN-BOTTOMS-JUMPSUIT", "女式连体裤", "WOMEN-BOTTOMS"],
+  ["WOMEN-BOTTOMS-JEANS", "女式牛仔裤", "WOMEN-BOTTOMS"],
+  ["WOMEN-BOTTOMS-TROUSERS", "女式西裤", "WOMEN-BOTTOMS"],
+  ["WOMEN-BOTTOMS-CASUAL", "女式休闲裤", "WOMEN-BOTTOMS"],
+  ["WOMEN-SKIRTS", "裙装", "WOMEN"],
+  ["WOMEN-SKIRTS-HALF", "半截裙", "WOMEN-SKIRTS"],
+  ["WOMEN-SKIRTS-DRESS", "连衣裙", "WOMEN-SKIRTS"],
+] as const;
+async function categoryDepth(tx: Tx, categoryId: string) {
+  const row = await one(
+    tx,
+    `WITH RECURSIVE ancestors AS (
+      SELECT id,parent_id,1 AS depth FROM categories WHERE id=$1::bigint
+      UNION ALL
+      SELECT c.id,c.parent_id,a.depth+1 FROM categories c JOIN ancestors a ON a.parent_id=c.id
+    ) SELECT max(depth)::int AS depth FROM ancestors`,
+    categoryId,
+  );
+  return Number(row?.depth || 0);
+}
+async function categoryHeight(tx: Tx, categoryId: string) {
+  const row = await one(
+    tx,
+    `WITH RECURSIVE descendants AS (
+      SELECT id,1 AS depth FROM categories WHERE id=$1::bigint
+      UNION ALL
+      SELECT c.id,d.depth+1 FROM categories c JOIN descendants d ON c.parent_id=d.id
+    ) SELECT max(depth)::int AS depth FROM descendants`,
+    categoryId,
+  );
+  return Number(row?.depth || 1);
+}
+async function categoryList(q: Record<string, any>, p: ReturnType<typeof pagination>) {
+  const values: unknown[] = [];
+  const where: string[] = [];
+  if (q.q) {
+    values.push("%" + String(q.q).slice(0, 100) + "%");
+    where.push(
+      `(code ILIKE $${values.length} OR path_name ILIKE $${values.length})`,
+    );
+  }
+  if (q.status) {
+    values.push(String(q.status));
+    where.push(`status=$${values.length}`);
+  }
+  if (q.forProduct === "true") {
+    where.push(
+      "status='ACTIVE' AND NOT EXISTS(SELECT 1 FROM categories child WHERE child.parent_id=category_tree.id)",
+    );
+  }
+  const clause = where.length ? " WHERE " + where.join(" AND ") : "";
+  const tree = `WITH RECURSIVE category_tree AS (
+    SELECT c.*,1 AS level,c.name::text AS level1_name,NULL::text AS level2_name,NULL::text AS level3_name,
+      c.name::text AS path_name,NULL::text AS parent_code
+    FROM categories c WHERE c.parent_id IS NULL
+    UNION ALL
+    SELECT c.*,t.level+1,
+      t.level1_name,
+      CASE WHEN t.level=1 THEN c.name ELSE t.level2_name END,
+      CASE WHEN t.level=2 THEN c.name ELSE t.level3_name END,
+      concat(t.path_name,' / ',c.name),parent.code
+    FROM categories c
+    JOIN category_tree t ON c.parent_id=t.id
+    LEFT JOIN categories parent ON parent.id=c.parent_id
+  )`;
+  const count = await one(
+    db,
+    `${tree} SELECT count(*)::int AS n FROM category_tree${clause}`,
+    ...values,
+  );
+  const data = await rows(
+    db,
+    `${tree} SELECT * FROM category_tree${clause} ORDER BY level1_name,level2_name NULLS FIRST,level3_name NULLS FIRST,code LIMIT ${p.pageSize} OFFSET ${(p.page - 1) * p.pageSize}`,
+    ...values,
+  );
+  return { data, total: count!.n, ...p };
+}
 export async function masterList(name: Resource, q: Record<string, any>) {
   const r = getResource(name),
     p = pagination(q);
+  if (name === "categories") return categoryList(q, p);
   const values: unknown[] = [];
   const where: string[] = [];
   if (q.q) {
@@ -199,6 +308,21 @@ export async function masterWrite(
       : r.schema,
     input,
   ) as Row;
+  if (name === "categories" && b.parentCode !== undefined) {
+    const parentCode = String(b.parentCode || "").trim();
+    if (b.parentId !== undefined && parentCode)
+      fail("VALIDATION_ERROR", "上级品类只能使用编码或下拉选择其中一种", 400);
+    if (parentCode) {
+      const parent = await one(
+        db,
+        "SELECT id FROM categories WHERE code=$1",
+        parentCode,
+      );
+      if (!parent) fail("INVALID_PARENT", "未找到上级品类编码", 400);
+      b.parentId = String(parent.id);
+    } else if (b.parentId === undefined) b.parentId = null;
+    delete b.parentCode;
+  }
   if (!Object.keys(b).some((key) => key !== "expectedUpdatedAt"))
     fail("VALIDATION_ERROR", "没有可更新字段", 400);
   return command(c, name + "/" + (value ?? "create"), b, async (tx) => {
@@ -271,17 +395,35 @@ export async function masterWrite(
       }
     }
     if (b.productId) await active(tx, "products", b.productId);
-    if (b.categoryId) await active(tx, "categories", b.categoryId);
+    if (b.categoryId) {
+      await active(tx, "categories", b.categoryId);
+      if (
+        await one(
+          tx,
+          "SELECT id FROM categories WHERE parent_id=$1::bigint LIMIT 1",
+          b.categoryId,
+        )
+      )
+        fail("INVALID_CATEGORY", "商品只能选择末级品类", 400);
+    }
     if (b.brandId) await active(tx, "brands", b.brandId);
     if (b.defaultSupplierId) await active(tx, "suppliers", b.defaultSupplierId);
-    if (name === "categories" && b.parentId) {
-      let next = b.parentId;
-      const seen = new Set<string>(value ? [value] : []);
-      while (next) {
-        if (seen.has(next)) fail("INVALID_PARENT", "品类不能循环引用");
-        seen.add(next);
-        next = String((await entity(tx, "categories", next)).parent_id ?? "");
+    if (name === "categories") {
+      const parentId = String(b.parentId ?? before?.parent_id ?? "");
+      if (parentId) {
+        await active(tx, "categories", parentId);
+        let next = parentId;
+        const seen = new Set<string>(value ? [value] : []);
+        while (next) {
+          if (seen.has(next)) fail("INVALID_PARENT", "品类不能循环引用");
+          seen.add(next);
+          next = String((await entity(tx, "categories", next)).parent_id ?? "");
+        }
       }
+      const depth = parentId ? await categoryDepth(tx, parentId) : 0;
+      const height = value ? await categoryHeight(tx, value) : 1;
+      if (depth + height > 3)
+        fail("INVALID_CATEGORY_LEVEL", "品类最多只能建立三级", 400);
     }
     if (name === "warehouses" && value && b.status === "INACTIVE") {
       const occupied = await one(
@@ -312,6 +454,56 @@ export async function masterWrite(
     );
     return result;
   });
+}
+export async function initializeWomenCategories(c: Context) {
+  return command(
+    c,
+    "categories/initialize-women-template",
+    { template: "women-apparel-v1" },
+    async (tx) => {
+      await rows(tx, "SELECT pg_advisory_xact_lock(91002)::text");
+      const used = await one(
+        tx,
+        "SELECT count(*)::int AS n FROM products WHERE category_id IS NOT NULL",
+      );
+      if (used?.n)
+        fail(
+          "CATEGORY_IN_USE",
+          "已有商品关联品类，不能清空；请先调整商品品类后再初始化",
+          409,
+        );
+      const existing = await one(
+        tx,
+        "SELECT count(*)::int AS n FROM categories",
+      );
+      await rows(tx, "DELETE FROM categories");
+      for (const [code, name, parentCode] of womenCategoryTemplate) {
+        const parent = parentCode
+          ? await one(tx, "SELECT id FROM categories WHERE code=$1", parentCode)
+          : null;
+        await insert(tx, "categories", {
+          code,
+          name,
+          parentId: parent ? String(parent.id) : null,
+          status: "ACTIVE",
+        });
+      }
+      const result = {
+        cleared: existing?.n || 0,
+        created: womenCategoryTemplate.length,
+      };
+      await audit(
+        tx,
+        c,
+        "INITIALIZE",
+        "categories",
+        null,
+        { count: existing?.n || 0 },
+        result,
+      );
+      return result;
+    },
+  );
 }
 
 export async function mappingDelete(c: Context, name: Resource, value: string) {

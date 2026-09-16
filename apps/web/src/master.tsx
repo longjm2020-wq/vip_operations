@@ -36,6 +36,8 @@ type Field = {
   type?: "number" | "money" | "status";
   source?: string;
   optionLabel?: string;
+  form?: boolean;
+  batch?: boolean;
 };
 export const configurations: Record<
   string,
@@ -80,7 +82,8 @@ export const configurations: Record<
         key: "categoryId",
         label: "品类",
         required: true,
-        source: "/categories",
+        source: "/categories?forProduct=true",
+        optionLabel: "pathName",
       },
       { key: "brandId", label: "品牌", source: "/brands" },
       { key: "defaultSupplierId", label: "默认供应商", source: "/suppliers" },
@@ -169,15 +172,35 @@ export const configurations: Record<
   },
   categories: {
     title: "品类",
-    description: "为商品建立一致的分类。",
+    description: "按一级、二级、三级建立服装品类；商品只能选择末级品类。",
     permission: "product",
     fields: [
+      { key: "level1Name", label: "一级品类", form: false, batch: false },
+      { key: "level2Name", label: "二级品类", form: false, batch: false },
+      { key: "level3Name", label: "三级品类", form: false, batch: false },
       { key: "code", label: "品类编码", required: true },
       { key: "name", label: "名称", required: true },
-      { key: "parentId", label: "上级品类", source: "/categories" },
+      {
+        key: "parentId",
+        label: "上级品类（一级不选，二级选一级，三级选二级）",
+        source: "/categories",
+        optionLabel: "pathName",
+        batch: false,
+      },
+      {
+        key: "parentCode",
+        label: "上级品类编码（表格按父级到子级顺序填写）",
+        form: false,
+      },
       { key: "status", label: "状态", type: "status" },
     ],
-    columns: ["code", "name", "status"],
+    columns: [
+      "level1Name",
+      "level2Name",
+      "level3Name",
+      "code",
+      "status",
+    ],
   },
   brands: {
     title: "品牌",
@@ -241,7 +264,16 @@ function FieldControl({ field, resource, ...props }: any) {
                   value: x.code,
                   label: `${x.code} · ${x.name}`,
                 }))
-            : options(q.data, field.optionLabel)
+            : options(q.data, field.optionLabel).filter((option: Row) => {
+                const item = (q.data?.data || []).find(
+                  (row: Row) => String(row.id) === String(option.value),
+                );
+                return !(
+                  resource === "categories" &&
+                  field.key === "parentId" &&
+                  Number(item?.level || 1) >= 3
+                );
+              })
         }
         loading={q.isLoading}
       />
@@ -361,6 +393,39 @@ export function MasterPage({
                 表格编辑 / Excel 导入
               </Button>
             )}
+            {resource === "categories" && create && (
+              <Button
+                danger
+                onClick={() =>
+                  modal.confirm({
+                    title: "初始化女装三级品类？",
+                    content:
+                      "将清空当前未被商品使用的品类，并建立女装 / 服饰配件、女上装、女下装、裙装等三级品类。商品、SKU、库存和采购数据不会被删除；如已有商品关联品类，系统会拒绝执行。",
+                    okText: "清空并初始化",
+                    cancelText: "取消",
+                    onOk: async () => {
+                      try {
+                        const result = await api(
+                          "/categories/initialize",
+                          "POST",
+                          {},
+                          crypto.randomUUID(),
+                        );
+                        await queryClient.invalidateQueries();
+                        message.success(
+                          `已清空 ${result.data.cleared} 条并建立 ${result.data.created} 条品类`,
+                        );
+                      } catch (e) {
+                        message.error((e as Error).message);
+                        throw e;
+                      }
+                    },
+                  })
+                }
+              >
+                初始化女装三级品类
+              </Button>
+            )}
             {create && (
               <Button
                 type="primary"
@@ -472,7 +537,7 @@ export function MasterPage({
           layout="vertical"
           onValuesChange={() => setKey(crypto.randomUUID())}
         >
-          {conf.fields.map((f) => (
+          {conf.fields.filter((f) => f.form !== false).map((f) => (
             <Form.Item
               key={f.key}
               name={f.key}
@@ -493,7 +558,7 @@ export function MasterPage({
         <BatchEditor
           title={conf.title}
           resource={resource}
-          fields={conf.fields.map((f) => ({
+          fields={conf.fields.filter((f) => f.batch !== false).map((f) => ({
             ...f,
             readonly:
               f.key === "productId"

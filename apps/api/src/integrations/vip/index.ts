@@ -10,6 +10,20 @@ export function validateIntegrationMode() {
   )
     throw Error("Fixture sales cannot run in production");
 }
+function compassConfiguration() {
+  const configured = {
+    account: Boolean(process.env.VOP_COMPASS_ACCOUNT),
+    privateKeyFile: Boolean(process.env.VOP_COMPASS_PRIVATE_KEY_FILE),
+    apiCode: Boolean(process.env.VOP_COMPASS_API_CODE),
+  };
+  return {
+    status: "AWAITING_COMPASS_ACCOUNT_ENABLEMENT",
+    configured,
+    readyForReadOnlyProbe:
+      configured.account && configured.privateKeyFile && configured.apiCode,
+  };
+}
+
 export async function vipStatus() {
   const { db, rows } =
     await import("../../../../../packages/database/src/index.js");
@@ -28,6 +42,7 @@ export async function vipStatus() {
       reason: "NOT_CONFIGURED",
       connections: [],
       runs: [],
+      compass: compassConfiguration(),
     };
   const runs = await rows(
     db,
@@ -56,6 +71,7 @@ export async function vipStatus() {
     runs,
     total: totals.total,
     rejected: rejected.total,
+    compass: compassConfiguration(),
   };
 }
 export interface SalesMetricsProvider {

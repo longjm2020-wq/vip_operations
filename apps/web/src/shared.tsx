@@ -100,10 +100,11 @@ export function useOptions(path: string, enabled = true) {
   return useQuery({
     queryKey: ["options", path],
     queryFn: async () => {
-      const first = await api(path + "?pageSize=100");
+      const join = path.includes("?") ? "&" : "?";
+      const first = await api(path + join + "pageSize=100");
       const data = [...first.data];
       for (let page = 2; data.length < first.total; page++) {
-        const next = await api(path + "?pageSize=100&page=" + page);
+        const next = await api(path + join + "pageSize=100&page=" + page);
         if (!next.data.length) break;
         data.push(...next.data);
       }
