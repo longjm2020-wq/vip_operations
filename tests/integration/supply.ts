@@ -14,7 +14,7 @@ await admin.query("CREATE DATABASE " + database);
 url.pathname = "/" + database;
 process.env.DATABASE_URL = url.toString();
 process.env.ADMIN_PASSWORD = "test-only-" + randomUUID();
-process.env.PORT = "3102";
+process.env.PORT = process.env.SUPPLY_TEST_PORT || "3102";
 process.env.APP_ORIGIN = "http://localhost:5175";
 process.env.VIP_MODE = "disabled";
 await migrate();
@@ -68,7 +68,7 @@ const request = async (
   body?: unknown,
   key: string = randomUUID(),
 ) => {
-  const r = await fetch("http://127.0.0.1:3102/api/v1" + path, {
+  const r = await fetch(`http://127.0.0.1:${process.env.PORT}/api/v1` + path, {
     method,
     headers: {
       "Content-Type": "application/json",
@@ -112,11 +112,21 @@ const pass = (s: string) => {
 try {
   for (let i = 0; i < 100; i++) {
     try {
-      if ((await fetch("http://127.0.0.1:3102/api/v1/health")).ok) break;
+      if (
+        (await fetch(`http://127.0.0.1:${process.env.PORT}/api/v1/health`)).ok
+      )
+        break;
     } catch {}
     await new Promise((r) => setTimeout(r, 100));
   }
   const owner = await login("admin");
+  const current = await ok(owner, "/auth/me");
+  assert.ok(current.roleNames.length > 0);
+  assert.equal(current.roleNames.length, current.roleCodes.length);
+  const listedUsers = await ok(owner, "/users");
+  assert.ok(
+    listedUsers.find((u: any) => u.username === "admin").roleNames.length > 0,
+  );
   const invite = await ok(owner, "/supply/invites", "POST", {
     days: 30,
     maxUses: 10,
@@ -222,6 +232,24 @@ try {
     await upload(vendor),
   ];
   assert.equal((await request(other, "/supply/files/" + ids[0])).status, 403);
+  const rawImage = async (u: User) =>
+    fetch(
+      `http://127.0.0.1:${process.env.PORT}/api/v1/supply/files/${ids[0]}/content`,
+      { headers: { Cookie: u.cookie } },
+    );
+  for (const u of [vendor, owner]) {
+    const response = await rawImage(u);
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("content-type"), "image/png");
+    assert.equal(response.headers.get("cache-control"), "private, no-store");
+    assert.deepEqual(
+      Buffer.from(await response.arrayBuffer()),
+      Buffer.from(png.split(",")[1], "base64"),
+    );
+  }
+  assert.equal((await rawImage(other)).status, 403);
+  assert.equal((await rawImage(empty)).status, 401);
+  pass("证件同源读取保持供应商隔离、审核权限和禁止缓存");
   assert.equal(
     (
       await request(vendor, "/supply/files", "POST", {
@@ -259,6 +287,7 @@ try {
     payee: "测试公司",
     bankAccount: "123456789012345678",
     bank: "测试银行杭州支行",
+    bankName: "测试银行",
     invoiceTypes: ["普票"],
     taxRates: ["3%"],
   };
@@ -337,6 +366,31 @@ try {
     doc.company,
   );
   pass("证件私有上传、入驻驳回重提、审批并发保护及变更待审不影响原资料");
+  assert.equal(
+    (await ok(vendor, "/supply/profile")).effective.bankName,
+    "测试银行",
+  );
+  assert.deepEqual(
+    await ok(
+      vendor,
+      "/supply/banks?bank=" +
+        encodeURIComponent("测试银行") +
+        "&q=" +
+        encodeURIComponent("杭州"),
+    ),
+    [{ name: "测试银行杭州支行" }],
+  );
+  assert.deepEqual(
+    await ok(
+      vendor,
+      "/supply/banks?bank=" +
+        encodeURIComponent("其他银行") +
+        "&q=" +
+        encodeURIComponent("杭州"),
+    ),
+    [],
+  );
+  pass("开户银行保存及支行搜索按银行筛选");
   const image = await upload(vendor, "PRODUCT");
   const product = {
     supplierStyle: "A001",

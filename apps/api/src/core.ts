@@ -21,6 +21,7 @@ export type Actor = {
   displayName: string;
   permissions: string[];
   roleCodes?: string[];
+  roleNames?: string[];
   csrfToken?: string;
 };
 export type Context = { actor: Actor; requestId: string; key?: string };

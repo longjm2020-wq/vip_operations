@@ -18,7 +18,7 @@ import * as s from "./service.js";
 @Controller("api/v1/supply")
 export class SupplyController {
   @Get("banks") banks(@Req() r: AuthRequest, @Query("q") q: string) {
-    return s.bankSearch(context(r), q || "");
+    return s.bankSearch(context(r), q || "", String(r.query.bank || ""));
   }
   @Permission("supply.review") @Get("invites") invites(@Req() r: AuthRequest) {
     return s.invites(context(r));
@@ -82,6 +82,19 @@ export class SupplyController {
   ) {
     res.setHeader("Cache-Control", "private, no-store");
     res.redirect(await s.download(context(r), parse(z.string().uuid(), v)));
+  }
+  @Get("files/:id/content") async certificateImage(
+    @Req() r: AuthRequest,
+    @Param("id") v: string,
+    @Res() res: Response,
+  ) {
+    const file = await s.certificateImage(
+      context(r),
+      parse(z.string().uuid(), v),
+    );
+    res.setHeader("Cache-Control", "private, no-store");
+    res.setHeader("Content-Type", file.type);
+    res.send(file.bytes);
   }
   @Permission("supply.manage") @Get("suppliers") suppliers(
     @Req() r: AuthRequest,

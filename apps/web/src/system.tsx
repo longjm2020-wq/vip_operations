@@ -16,6 +16,7 @@ import {
   options,
   QueryState,
   when,
+  UserRoles,
 } from "./shared";
 export function AccessPage({ roles = false }: { roles?: boolean }) {
   const [batch, setBatch] = useState(false);
@@ -144,7 +145,23 @@ export function AccessPage({ roles = false }: { roles?: boolean }) {
                   },
                 ]
               : [
-                  { title: "用户名", dataIndex: "username" },
+                  {
+                    title: "用户名 / 角色",
+                    dataIndex: "username",
+                    render: (name, r) => (
+                      <div
+                        style={{
+                          display: "flex",
+                          gap: 8,
+                          flexWrap: "wrap",
+                          alignItems: "center",
+                        }}
+                      >
+                        <span>{name}</span>
+                        <UserRoles names={r.roleNames} />
+                      </div>
+                    ),
+                  },
                   { title: "姓名", dataIndex: "displayName" },
                   {
                     title: "状态",

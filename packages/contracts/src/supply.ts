@@ -51,6 +51,7 @@ export const qualificationSchema = z
     payee: required,
     bankAccount: z.string().regex(/^\d{8,32}$/, "银行账号须为8至32位数字"),
     bank: required,
+    bankName: z.string().trim().max(100).optional(),
     invoiceTypes: z.array(z.enum(["普票", "专票"])).min(1),
     taxRates: z.array(z.enum(["1%", "3%", "6%", "13%"])).min(1),
   })

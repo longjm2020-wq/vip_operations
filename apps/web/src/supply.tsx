@@ -1,5 +1,6 @@
+import { useQualificationOcr } from "./qualification-ocr";
 import { BrandVideo } from "./brand-video";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import { prepareUpload, readUpload } from "./upload-file";
 import { qualificationFieldError } from "../../../packages/contracts/src/qualification-validation";
 import { useQuery } from "@tanstack/react-query";
@@ -55,7 +56,8 @@ export function SupplierRegister() {
     [done, setDone] = useState(false);
   return (
     <div className="supplier-registration">
-      <aside className="supplier-registration-brand"><BrandVideo />
+      <aside className="supplier-registration-brand">
+        <BrandVideo />
         <img src="/xuti-wordmark.png" alt="XUTI 序缇" />
         <div className="supplier-registration-story">
           <span className="supplier-registration-eyebrow">
@@ -217,7 +219,7 @@ function PhotoUpload({
   onChange?: (v: string) => void;
   purpose: "QUALIFICATION" | "PRODUCT";
   disabled?: boolean;
-  onUploaded?: (file: File) => Promise<void>;
+  onUploaded?: (file: File, fileId: string) => Promise<void>;
 }) {
   const [busy, setBusy] = useState(false);
   const { message } = App.useApp();
@@ -235,7 +237,7 @@ function PhotoUpload({
         purpose,
       });
       onChange?.(r.data.id);
-      await onUploaded?.(original);
+      await onUploaded?.(original, r.data.id);
     } catch (e) {
       message.error((e as Error).message);
     } finally {
@@ -351,13 +353,11 @@ function ContactMethod({
         return (
           <>
             <Form.Item label="联系方式（三选一）">
-              <Radio.Group
+              <Select
                 disabled={readonly}
                 value={method}
                 options={contactMethods}
-                onChange={(e) =>
-                  form.setFieldValue([name, "method"], e.target.value)
-                }
+                onChange={(e) => form.setFieldValue([name, "method"], e)}
               />
             </Form.Item>
             <Form.Item name={[name, "method"]} hidden initialValue={method}>
@@ -387,72 +387,36 @@ function ContactMethod({
 }
 export function QualificationFields({
   readonly = false,
+  onOcrBusyChange,
 }: {
   readonly?: boolean;
+  onOcrBusyChange?: (busy: boolean) => void;
 }) {
-  const alive = useRef(true);
-  useEffect(() => {
-    alive.current = true;
-    return () => {
-      alive.current = false;
-    };
-  }, []);
   const form = Form.useFormInstance();
-  const { message, modal } = App.useApp();
-  const [ocrProgress, setOcrProgress] = useState("");
-  const recognize = async (file: File, field: "legalId" | "creditCode") => {
-    const label = field === "legalId" ? "身份证号" : "统一社会信用代码";
-    setOcrProgress(`正在识别${label}，首次使用需加载识别资源…`);
-    try {
-      const { recognizeCertificate } = await import("./certificate-ocr");
-      const candidates = await recognizeCertificate(file, field, (p) => {
-        if (alive.current) setOcrProgress(`正在识别${label}：${p}%`);
-      });
-      if (!alive.current) return;
-      if (candidates.length !== 1) {
-        message.warning(
-          candidates.length
-            ? `识别到多个${label}，请对照原件手动填写`
-            : `未识别到通过校验的${label}，请上传清晰正向照片或手动填写`,
-        );
-        return;
-      }
-      const value = candidates[0];
-      const apply = () => {
-        form.setFieldValue(field, value);
-        void form.validateFields([field]);
-        message.success(`${label}已填入，请对照原件核对`);
-      };
-      const current = String(form.getFieldValue(field) || "")
-        .trim()
-        .toUpperCase();
-      if (current && current !== value)
-        modal.confirm({
-          title: `识别结果与已填${label}不同`,
-          content: (
-            <>
-              <p>当前填写：{current}</p>
-              <p>图片识别：{value}</p>
-            </>
-          ),
-          okText: "使用识别结果",
-          cancelText: "保留原填写",
-          onOk: apply,
-        });
-      else apply();
-    } catch (e) {
-      if (alive.current)
-        message.warning((e as Error).message || "识别失败，请手动填写");
-    } finally {
-      if (alive.current) setOcrProgress("");
-    }
-  };
+  const ocr = useQualificationOcr(form, readonly);
+  useEffect(() => {
+    onOcrBusyChange?.(ocr.busy);
+    return () => onOcrBusyChange?.(false);
+  }, [ocr.busy, onOcrBusyChange]);
+  const selectedBank = Form.useWatch("bankName", { form, preserve: true });
+  const branch = Form.useWatch("bank", { form, preserve: true });
+  const payee = Form.useWatch("payee", { form, preserve: true });
+  const company = Form.useWatch("company", { form, preserve: true });
+  const bankName =
+    selectedBank || banks.find((b) => String(branch || "").includes(b)) || "";
   const [bankSearch, setBankSearch] = useState("");
   const matches = useQuery({
-    queryKey: ["supply-banks", bankSearch],
+    queryKey: ["supply-banks", bankSearch, bankName],
     queryFn: async () =>
-      (await api("/supply/banks?q=" + encodeURIComponent(bankSearch))).data,
-    enabled: !readonly && bankSearch.length > 0,
+      (
+        await api(
+          "/supply/banks?q=" +
+            encodeURIComponent(bankSearch) +
+            "&bank=" +
+            encodeURIComponent(bankName),
+        )
+      ).data,
+    enabled: !readonly && !!bankName,
   });
   return (
     <>
@@ -503,6 +467,11 @@ export function QualificationFields({
             key={k}
             name={k}
             label={label}
+            extra={
+              ocr.warning(k) ? (
+                <span style={{ color: "#cf1322" }}>{ocr.warning(k)}</span>
+              ) : undefined
+            }
             rules={fieldRules(k)}
             validateTrigger="onBlur"
             normalize={(v) =>
@@ -528,27 +497,13 @@ export function QualificationFields({
           <Form.Item key={k} name={k} label={label} rules={required}>
             <PhotoUpload
               purpose="QUALIFICATION"
-              disabled={readonly || !!ocrProgress}
-              onUploaded={
-                k === "idFront"
-                  ? (file) => recognize(file, "legalId")
-                  : k === "license"
-                    ? (file) => recognize(file, "creditCode")
-                    : undefined
-              }
+              disabled={readonly || ocr.busy}
+              onUploaded={k === "idBack" ? undefined : ocr.onUploaded}
             />
           </Form.Item>
         ))}
       </div>
-      {!readonly && (
-        <Alert
-          type="info"
-          title={
-            ocrProgress ||
-            "上传身份证正面和营业执照后自动识别号码；识别在浏览器本地运行，请核对结果。格式校验不代表证件真实性或企业认证。"
-          }
-        />
-      )}
+      {ocr.panel}
       <h3>账单结算</h3>
       <div className="supply-grid">
         <Form.Item name="cycle" label="结算周期">
@@ -562,6 +517,16 @@ export function QualificationFields({
           label="收款账户户名"
           rules={fieldRules("payee")}
           validateTrigger="onBlur"
+          extra={
+            payee &&
+            company &&
+            String(payee).replace(/\s/g, "") !==
+              String(company).replace(/\s/g, "") ? (
+              <span style={{ color: "#cf1322" }}>
+                对公收款户名与入驻公司名称不同，请核对。此提示不代表银行账号归属核验结果。
+              </span>
+            ) : undefined
+          }
         >
           <Input placeholder="请输入收款人户名" />
         </Form.Item>
@@ -573,27 +538,53 @@ export function QualificationFields({
         >
           <Input placeholder="请输入收款人账号" />
         </Form.Item>
+        <Form.Item label="开户银行">
+          <AutoComplete
+            value={bankName}
+            options={banks.map((value) => ({ value }))}
+            filterOption={(input, option) =>
+              String(option?.value).includes(input)
+            }
+            onChange={(value) => {
+              form.setFieldValue("bankName", value);
+              if (bankName && value !== bankName)
+                form.setFieldValue("bank", "");
+              setBankSearch("");
+            }}
+            placeholder="选择或输入银行名称"
+          />
+        </Form.Item>
+        <Form.Item name="bankName" hidden>
+          <Input />
+        </Form.Item>
         <Form.Item
           name="bank"
-          label="开户行（填写完整支行）"
+          label="开户支行"
           rules={fieldRules("bank")}
           validateTrigger="onBlur"
         >
           <AutoComplete
-            options={[
-              ...new Set([
-                ...banks,
-                ...(matches.data || []).map((r: Row) => r.name),
-              ]),
-            ].map((value) => ({ value }))}
+            options={(matches.data || []).map((r: Row) => ({ value: r.name }))}
+            disabled={readonly || !bankName}
             onSearch={setBankSearch}
             filterOption={(input, option) =>
               String(option?.value).includes(input.trim())
             }
-            placeholder="输入银行名称搜索，或直接填写完整开户支行"
+            placeholder="搜索地区或支行名，未找到可输入完整支行"
+            notFoundContent={
+              matches.isFetching
+                ? "查询中…"
+                : "系统暂无匹配支行，请输入完整开户支行"
+            }
           />
         </Form.Item>
       </div>
+      <Alert
+        type="info"
+        showIcon
+        title="银行账户待核验"
+        description="暂未接入银行账户核验服务，无法确认账号归属行及户名是否匹配。开户支行搜索范围为系统已有的生效支行资料，请按银行提供的信息填写，由负责人核对。"
+      />
       <h3>开票方式</h3>
       <div className="supply-grid">
         <Form.Item name="invoiceTypes" label="支持开票类型" rules={required}>
@@ -615,6 +606,7 @@ const emptyQualification = {
   taxRates: [],
 };
 export function SupplyProfile() {
+  const [ocrBusy, setOcrBusy] = useState(false);
   const [editVersion, setEditVersion] = useState(0);
   const q = useQuery({
     queryKey: ["supply-profile"],
@@ -766,17 +758,26 @@ export function SupplyProfile() {
         onClose={() => !busy && setEditing(false)}
         extra={
           <Space>
-            <Button loading={busy} onClick={() => save(false)}>
+            <Button
+              loading={busy}
+              disabled={ocrBusy}
+              onClick={() => save(false)}
+            >
               保存草稿
             </Button>
-            <Button type="primary" loading={busy} onClick={() => save(true)}>
+            <Button
+              type="primary"
+              loading={busy}
+              disabled={ocrBusy}
+              onClick={() => save(true)}
+            >
               提交审核
             </Button>
           </Space>
         }
       >
         <Form layout="vertical" form={form}>
-          <QualificationFields />
+          <QualificationFields onOcrBusyChange={setOcrBusy} />
         </Form>
       </Drawer>
     </>

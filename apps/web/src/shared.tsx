@@ -7,6 +7,24 @@ export type Row = Record<string, any>;
 export const UserContext = createContext<Row>({ permissions: [] });
 export const useUser = () => useContext(UserContext);
 export const useCan = (p: string) => useUser().permissions.includes(p);
+export function UserRoles({ names = [] }: { names?: string[] }) {
+  return (
+    <Space size={2} wrap>
+      {(names.length ? names : ["未分配角色"]).map((name) => (
+        <Tag key={name} color={name === "超级管理员" ? "volcano" : undefined}>
+          {name}
+        </Tag>
+      ))}
+    </Space>
+  );
+}
+export function personLabel(person?: Row, fallback = "未指定") {
+  if (!person) return fallback;
+  const name = person.displayName || person.username || fallback;
+  const username =
+    person.username && person.username !== name ? `（${person.username}）` : "";
+  return `${name}${username} · ${person.role || person.roleNames?.join(" / ") || "未分配角色"}`;
+}
 export const stateLabels: Record<string, string> = {
   ACTIVE: "正常",
   INACTIVE: "已停用",

@@ -30,7 +30,7 @@ import {
 } from "antd";
 import { BellOutlined, CommentOutlined, PlusOutlined } from "@ant-design/icons";
 import { api, queryClient } from "./api";
-import { Header, Row, useCan, useUser, when } from "./shared";
+import { Header, Row, useCan, useUser, when, personLabel } from "./shared";
 import { Sheet } from "./sheet";
 import { SheetColumn, resolveCell, validateSheet } from "./sheet-data";
 import {
@@ -55,7 +55,7 @@ const opt = (a: string[]) => a.map((value) => ({ value, label: value }));
 const peopleOptions = (p: Row[]) =>
   p.map((x) => ({
     value: String(x.id),
-    label: `${x.displayName} · ${x.role}`,
+    label: personLabel(x),
   }));
 const taskColor = (s: string) =>
   s === "DONE"
@@ -1678,9 +1678,7 @@ export function ProjectDetailPage() {
         </Space>
         <div className="project-members">
           {members.map((m: Row) => (
-            <Tag key={m.id}>
-              {m.displayName} · {m.role}
-            </Tag>
+            <Tag key={m.id}>{personLabel(m)}</Tag>
           ))}
         </div>
         <RichView value={d.description} summary />

@@ -41,7 +41,7 @@ import {
   MenuUnfoldOutlined,
 } from "@ant-design/icons";
 import { api, queryClient, setCsrf } from "./api";
-import { UserContext, Row } from "./shared";
+import { UserContext, Row, UserRoles } from "./shared";
 import { MasterPage } from "./master";
 import {
   InventoryPage,
@@ -90,7 +90,8 @@ function Login() {
     [error, setError] = useState("");
   return (
     <div className="login">
-      <section className="login-story"><BrandVideo />
+      <section className="login-story">
+        <BrandVideo />
         <div className="login-brand">
           <BrandMark />
         </div>
@@ -401,6 +402,7 @@ function Workspace({ user }: { user: Row }) {
                 {user.displayName?.slice(0, 1)}
               </Avatar>
               <span>{user.displayName}</span>
+              <UserRoles names={user.roleNames} />
               <Button
                 type="text"
                 aria-label="退出"

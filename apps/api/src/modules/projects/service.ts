@@ -67,7 +67,7 @@ export async function options(c: Context) {
     departments: await myDepartments(c),
     people: await rows(
       db,
-      `SELECT u.id,u.display_name,COALESCE(string_agg(r.name,' / '),'未分配岗位') AS role FROM users u LEFT JOIN user_roles ur ON ur.user_id=u.id LEFT JOIN roles r ON r.id=ur.role_id WHERE u.status='ACTIVE' GROUP BY u.id ORDER BY u.display_name`,
+      `SELECT u.id,u.username,u.display_name,COALESCE(string_agg(r.name,' / '),'未分配岗位') AS role FROM users u LEFT JOIN user_roles ur ON ur.user_id=u.id LEFT JOIN roles r ON r.id=ur.role_id WHERE u.status='ACTIVE' GROUP BY u.id ORDER BY u.display_name`,
     ),
     categories: await rows(
       db,
@@ -186,7 +186,7 @@ async function notify(
 async function members(tx: Tx, value: string) {
   return rows(
     tx,
-    `SELECT u.id,u.display_name,COALESCE(string_agg(r.name,' / '),'未分配岗位') AS role FROM project_members m JOIN users u ON u.id=m.user_id LEFT JOIN user_roles ur ON ur.user_id=u.id LEFT JOIN roles r ON r.id=ur.role_id WHERE m.project_id=$1::bigint GROUP BY u.id ORDER BY u.id`,
+    `SELECT u.id,u.username,u.display_name,COALESCE(string_agg(r.name,' / '),'未分配岗位') AS role FROM project_members m JOIN users u ON u.id=m.user_id LEFT JOIN user_roles ur ON ur.user_id=u.id LEFT JOIN roles r ON r.id=ur.role_id WHERE m.project_id=$1::bigint GROUP BY u.id ORDER BY u.id`,
     value,
   );
 }

@@ -34,18 +34,18 @@ export async function actorFor(token?: string): Promise<Actor> {
     "SELECT DISTINCT p.code FROM user_roles ur JOIN role_permissions rp ON rp.role_id=ur.role_id JOIN permissions p ON p.id=rp.permission_id WHERE ur.user_id=$1::bigint",
     String(u.id),
   );
+  const assignedRoles = await rows(
+    db,
+    "SELECT r.code,r.name FROM user_roles ur JOIN roles r ON r.id=ur.role_id WHERE ur.user_id=$1::bigint ORDER BY CASE r.code WHEN 'SUPER_ADMIN' THEN 0 WHEN 'ADMIN' THEN 1 ELSE 2 END,r.name",
+    String(u.id),
+  );
   return {
     id: String(u.id),
     username: u.username,
     displayName: u.display_name,
     permissions: p.map((x) => x.code),
-    roleCodes: (
-      await rows(
-        db,
-        "SELECT r.code FROM user_roles ur JOIN roles r ON r.id=ur.role_id WHERE ur.user_id=$1::bigint",
-        String(u.id),
-      )
-    ).map((r) => r.code),
+    roleCodes: assignedRoles.map((r) => r.code),
+    roleNames: assignedRoles.map((r) => r.name),
     csrfToken: u.csrf_token,
   };
 }
@@ -95,7 +95,7 @@ export async function logout(token: string) {
 export async function users() {
   return rows(
     db,
-    "SELECT u.id,u.username,u.display_name,u.status,COALESCE((SELECT json_agg(ur.role_id::text) FROM user_roles ur WHERE ur.user_id=u.id),'[]') AS role_ids FROM users u ORDER BY u.id",
+    "SELECT u.id,u.username,u.display_name,u.status,COALESCE((SELECT json_agg(ur.role_id::text) FROM user_roles ur WHERE ur.user_id=u.id),'[]') AS role_ids,COALESCE((SELECT json_agg(r.name ORDER BY CASE r.code WHEN 'SUPER_ADMIN' THEN 0 WHEN 'ADMIN' THEN 1 ELSE 2 END,r.name) FROM user_roles ur JOIN roles r ON r.id=ur.role_id WHERE ur.user_id=u.id),'[]') AS role_names FROM users u ORDER BY u.id",
   );
 }
 export async function roles() {

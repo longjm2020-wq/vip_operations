@@ -22,17 +22,25 @@ import {
   splitValues,
   offReasons,
 } from "../../../../../packages/contracts/src/supply.js";
-import { storeFiles, fileUrl, storageEnabled } from "../projects/storage.js";
+import {
+  storeFiles,
+  fileUrl,
+  storageEnabled,
+  imageBytes,
+} from "../projects/storage.js";
 const allowed = (c: Context, p: string) => c.actor.permissions.includes(p);
-export async function bankSearch(c: Context, q: string) {
+export async function bankSearch(c: Context, q: string, bank = "") {
   if (!allowed(c, "supply.portal") && !allowed(c, "supply.review"))
     fail("FORBIDDEN", "无权限", 403);
   const text = parse(z.string().trim().max(200), q);
-  if (!text) return [];
+  const name = parse(z.string().trim().max(100), bank);
+  if (!text && !name) return [];
   return rows(
     db,
-    "SELECT DISTINCT effective->>'bank' AS name FROM supply_accounts WHERE effective IS NOT NULL AND effective->>'bank' ILIKE $1 ORDER BY name LIMIT 50",
+    "SELECT DISTINCT effective->>'bank' AS name FROM supply_accounts WHERE effective IS NOT NULL AND effective->>'bank' ILIKE $1 AND ($2='' OR effective->>'bankName'=$2 OR effective->>'bank' ILIKE $3) ORDER BY name LIMIT 50",
     "%" + text + "%",
+    name,
+    "%" + name + "%",
   );
 }
 export async function register(input: unknown, ip: string, origin?: string) {
@@ -373,7 +381,7 @@ export async function upload(c: Context, input: unknown) {
   );
   return { id };
 }
-export async function download(c: Context, id: string) {
+async function authorizedFile(c: Context, id: string) {
   const f = await one(
     db,
     "SELECT f.*,a.user_id FROM supply_files f JOIN supply_accounts a ON a.id=f.account_id WHERE f.id=$1::uuid",
@@ -388,7 +396,16 @@ export async function download(c: Context, id: string) {
     )
   )
     fail("FORBIDDEN", "无权查看附件", 403);
-  return fileUrl(f.metadata, true);
+  return f;
+}
+export async function download(c: Context, id: string) {
+  return fileUrl((await authorizedFile(c, id)).metadata, true);
+}
+export async function certificateImage(c: Context, id: string) {
+  const f = await authorizedFile(c, id);
+  if (f.purpose !== "QUALIFICATION")
+    fail("FORBIDDEN", "仅支持企业资质证件", 403);
+  return { bytes: await imageBytes(f.metadata), type: f.metadata.type };
 }
 export async function suppliers(c: Context) {
   if (!allowed(c, "supply.manage")) fail("FORBIDDEN", "无权限", 403);

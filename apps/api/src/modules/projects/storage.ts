@@ -103,3 +103,20 @@ export async function fileUrl(file: ProjectAttachment, preview: boolean) {
     client.destroy();
   }
 }
+
+// Same-origin reading for local OCR; callers must authorize the file first.
+export async function imageBytes(file: ProjectAttachment) {
+  if (!file.type.startsWith("image/") || file.size > 1024 * 1024)
+    fail("VALIDATION", "仅支持读取1 MB以内的证件图片", 400);
+  const { bucket, client } = config();
+  try {
+    const result = await client.send(
+      new GetObjectCommand({ Bucket: bucket, Key: file.storageKey! }),
+      { abortSignal: AbortSignal.timeout(30000) },
+    );
+    if (!result.Body) fail("NOT_FOUND", "图片内容不存在", 404);
+    return Buffer.from(await result.Body!.transformToByteArray());
+  } finally {
+    client.destroy();
+  }
+}
