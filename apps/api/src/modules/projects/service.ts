@@ -1,3 +1,5 @@
+import { assertReferences, storeFiles, fileUrl } from "./storage.js";
+import type { ProjectAttachment } from "../../../../../packages/contracts/src/project-attachments.js";
 import { z } from "zod";
 import {
   db,
@@ -213,7 +215,34 @@ export async function list(c: Context, q: Row) {
 }
 export async function detail(c: Context, value: string): Promise<Row> {
   const p = await access(db, c, value);
-  return { ...p, members: await members(db, value) };
+  return {
+    ...p,
+    document: {
+      ...p.document,
+      attachments: (p.document.attachments || []).map(
+        (f: ProjectAttachment) => ({
+          ...f,
+          ...(f.storageKey
+            ? { url: `/api/v1/projects/${value}/attachments/${f.id}` }
+            : {}),
+        }),
+      ),
+    },
+    members: await members(db, value),
+  };
+}
+export async function attachmentUrl(
+  c: Context,
+  value: string,
+  fileId: string,
+  preview: boolean,
+) {
+  const p = await access(db, c, value);
+  const file = (p.document.attachments || []).find(
+    (f: ProjectAttachment) => f.id === fileId,
+  );
+  if (!file?.storageKey) fail("NOT_FOUND", "附件不存在", 404);
+  return fileUrl(file, preview);
 }
 async function addMembers(tx: Tx, c: Context, value: string, users: string[]) {
   for (const user of new Set(users)) {
@@ -235,6 +264,15 @@ async function addMembers(tx: Tx, c: Context, value: string, users: string[]) {
 export async function save(c: Context, input: unknown, value?: string) {
   requirePermission(c.actor, "project.create");
   const b = parse(projectSchema, input);
+  const before = value ? await access(db, c, value) : undefined;
+  if (before) {
+    ownerOnly(c, before);
+    if (["VOID", "DONE"].includes(before.status))
+      fail("INVALID_STATE", "已完成或作废项目不能编辑");
+  }
+  const requested = b.attachments ?? before?.document.attachments ?? [];
+  assertReferences(requested, before?.document.attachments ?? []);
+  const stored = await storeFiles(requested, c.actor.id);
   return command(c, "project.save/" + (value || "new"), b, async (tx) => {
     let old: Row | undefined;
     if (value) {
@@ -244,6 +282,7 @@ export async function save(c: Context, input: unknown, value?: string) {
         fail("INVALID_STATE", "已完成或作废项目不能编辑");
       version(old, b.version || 0);
     }
+    assertReferences(requested, old?.document.attachments ?? []);
     const stages: Row[] =
       old?.status === "ACTIVE" ? [...old.document.stages] : [];
     for (const sid of old?.status === "ACTIVE" ? [] : b.sopIds) {
@@ -317,7 +356,7 @@ export async function save(c: Context, input: unknown, value?: string) {
     }
     const doc = {
       ...b,
-      attachments: b.attachments ?? old?.document.attachments ?? [],
+      attachments: stored,
       tasks,
       stages: old?.status === "ACTIVE" ? old.document.stages : stages,
     };

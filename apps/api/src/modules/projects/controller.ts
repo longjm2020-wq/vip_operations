@@ -1,3 +1,4 @@
+import type { Response } from "express";
 import {
   Controller,
   Get,
@@ -8,6 +9,7 @@ import {
   Query,
   Req,
   Module,
+  Res,
 } from "@nestjs/common";
 import { AuthRequest, context, Permission } from "../../http.js";
 import { parse, id } from "../../core.js";
@@ -55,6 +57,22 @@ export class ProjectsController {
     @Param("id") v: string,
   ) {
     return s.detail(context(r), parse(id, v));
+  }
+  @Permission("project.read") @Get(":id/attachments/:fileId") async attachment(
+    @Req() r: AuthRequest,
+    @Param("id") v: string,
+    @Param("fileId") fileId: string,
+    @Query("preview") preview: string,
+    @Res() res: Response,
+  ) {
+    const url = await s.attachmentUrl(
+      context(r),
+      parse(id, v),
+      fileId,
+      preview === "1",
+    );
+    res.setHeader("Cache-Control", "private, no-store");
+    res.redirect(url);
   }
   @Permission("project.read") @Get(":id/revision") async revision(
     @Req() r: AuthRequest,

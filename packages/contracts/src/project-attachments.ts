@@ -31,10 +31,16 @@ export const attachmentSchema = z
       .positive()
       .max(2 * 1024 * 1024),
     data: z.string().max(2800000),
+    storageKey: z
+      .string()
+      .regex(/^projects\/[0-9]+\/[0-9a-f-]{36}-[0-9a-f]{64}$/)
+      .optional(),
+    url: z.string().max(500).optional(),
   })
   .refine((v) => {
     const ext = v.name.split(".").pop()?.toLowerCase() || "";
     if (attachmentTypes[ext] !== v.type) return false;
+    if (v.storageKey) return v.data === "";
     const prefix = `data:${v.type};base64,`;
     if (!v.data.startsWith(prefix)) return false;
     const base64 = v.data.slice(prefix.length);

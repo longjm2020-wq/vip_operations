@@ -1,3 +1,4 @@
+import { createServer } from "node:http";
 import "dotenv/config";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -21,6 +22,35 @@ const { seed } = await import("../../scripts/seed.js");
 await seed();
 const { db, one, rows } = await import("../../packages/database/src/index.js");
 const { passwordHash } = await import("../../apps/api/src/core.js");
+const objects = new Map<string, Buffer>();
+const bucketTest = process.env.PROJECT_STORAGE_TEST === "1";
+const bucketServer = bucketTest
+  ? createServer(async (req, res) => {
+      const key = new URL(req.url!, "http://localhost").pathname;
+      if (req.method === "PUT") {
+        const chunks: Buffer[] = [];
+        for await (const c of req) chunks.push(Buffer.from(c));
+        objects.set(key, Buffer.concat(chunks));
+        res.writeHead(200);
+        res.end();
+      } else {
+        const bytes = objects.get(key);
+        res.writeHead(bytes ? 200 : 404);
+        res.end(bytes);
+      }
+    })
+  : undefined;
+if (bucketServer) {
+  await new Promise<void>((r) => bucketServer.listen(0, "127.0.0.1", r));
+  const port = (bucketServer.address() as { port: number }).port;
+  Object.assign(process.env, {
+    AWS_ENDPOINT_URL: `http://127.0.0.1:${port}`,
+    AWS_S3_BUCKET_NAME: "test",
+    AWS_ACCESS_KEY_ID: "test",
+    AWS_SECRET_ACCESS_KEY: "test",
+    AWS_DEFAULT_REGION: "auto",
+  });
+}
 const child = spawn(
   process.execPath,
   ["node_modules/tsx/dist/cli.mjs", "apps/api/src/main.ts"],
@@ -176,10 +206,51 @@ try {
     requirements: [],
   };
   let p = await ok(owner, "/projects", "POST", body);
-  assert.deepEqual(
-    (await ok(owner, "/projects/" + p.id)).document.attachments,
-    body.attachments,
-  );
+  const savedFiles = (await ok(owner, "/projects/" + p.id)).document
+    .attachments;
+  if (bucketTest) {
+    assert.equal(savedFiles[0].data, "");
+    assert.ok(savedFiles[0].storageKey);
+    const storedRow = await one(
+      db,
+      "SELECT document FROM projects WHERE id=$1::bigint",
+      p.id,
+    );
+    assert.equal(storedRow!.document.attachments[0].data, "");
+    assert.equal(storedRow!.document.attachments[0].url, undefined);
+    const filePath = `http://127.0.0.1:3102${savedFiles[0].url}`;
+    assert.equal((await fetch(filePath, { redirect: "manual" })).status, 401);
+    assert.equal(
+      (
+        await fetch(filePath, {
+          headers: { Cookie: outsider.cookie },
+          redirect: "manual",
+        })
+      ).status,
+      403,
+    );
+    const redirect = await fetch(filePath, {
+      headers: { Cookie: owner.cookie },
+      redirect: "manual",
+    });
+    assert.equal(redirect.status, 302);
+    assert.equal(
+      await (await fetch(redirect.headers.get("location")!)).text(),
+      "hello",
+    );
+    assert.equal(
+      (
+        await request(owner, "/projects", "POST", {
+          ...body,
+          attachments: savedFiles,
+        })
+      ).status,
+      403,
+    );
+    pass(
+      "Object storage: bytes, metadata, download and cross-project isolation",
+    );
+  } else assert.deepEqual(savedFiles, body.attachments);
   assert.equal(
     (
       await request(owner, "/projects", "POST", {
@@ -221,7 +292,7 @@ try {
   await action(owner, "publish");
   assert.deepEqual(
     (await ok(reviewer, "/projects/" + p.id)).document.attachments,
-    body.attachments,
+    savedFiles,
   );
   assert.equal(p.status, "ACTIVE");
   assert.equal((await ok(reviewer, "/projects/notifications")).length, 1);
@@ -446,6 +517,8 @@ try {
     child.kill();
     await exited;
   }
+  if (bucketServer)
+    await new Promise<void>((r) => bucketServer.close(() => r()));
   log.end();
   await db.$disconnect();
   await admin.query("DROP DATABASE " + database + " WITH (FORCE)");

@@ -53,6 +53,10 @@ export function ProjectAttachments({
     return false;
   };
   const download = (file: ProjectAttachment) => {
+    if (file.storageKey && file.url) {
+      window.open(file.url, "_blank", "noopener,noreferrer");
+      return;
+    }
     const bytes = Uint8Array.from(atob(file.data.split(",")[1]), (c) =>
       c.charCodeAt(0),
     );
@@ -96,7 +100,7 @@ export function ProjectAttachments({
               width={100}
               height={75}
               style={{ objectFit: "contain" }}
-              src={file.data}
+              src={file.storageKey ? `${file.url}?preview=1` : file.data}
               alt={file.name}
             />
           )}
