@@ -102,6 +102,12 @@ class AuthController {
   ) {
     return auth.roleWrite(context(r), b, paramId(v));
   }
+  @Permission("role.manage") @Delete("roles/:id") roleDelete(
+    @Req() r: AuthRequest,
+    @Param("id") v: string,
+  ) {
+    return auth.roleDelete(context(r), paramId(v));
+  }
   @Permission("role.read") @Get("permissions") permissions() {
     return rows(db, "SELECT code,name FROM permissions ORDER BY code");
   }
@@ -343,9 +349,9 @@ class SystemController {
 @ApiTags("商品与基础资料")
 @Controller("api/v1")
 class MasterController {
-  @Permission("product.update") @Post("categories/initialize") initializeCategories(
-    @Req() r: AuthRequest,
-  ) {
+  @Permission("product.update")
+  @Post("categories/initialize")
+  initializeCategories(@Req() r: AuthRequest) {
     return master.initializeWomenCategories(context(r));
   }
   @Delete(":resource/:id") remove(

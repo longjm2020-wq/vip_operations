@@ -118,6 +118,74 @@ try {
   }
   assert.equal((await request(empty, "/projects")).status, 401);
   const owner = await login("admin");
+  const roleList = await ok(owner, "/roles");
+  const adminRole = roleList.find((r: any) => r.code === "ADMIN");
+  const superRole = roleList.find((r: any) => r.code === "SUPER_ADMIN");
+  assert.ok(superRole);
+  assert.equal(
+    (
+      await request(owner, `/roles/${adminRole.id}`, "PATCH", {
+        name: "管理员",
+      })
+    ).status,
+    403,
+  );
+  assert.equal(
+    (await request(owner, `/roles/${adminRole.id}`, "DELETE", {})).status,
+    403,
+  );
+  assert.equal(
+    (
+      await request(owner, `/users/${owner.id}`, "PATCH", {
+        roleIds: [superRole.id],
+      })
+    ).status,
+    403,
+  );
+  await rows(
+    db,
+    "INSERT INTO user_roles(user_id,role_id) VALUES($1::bigint,$2::bigint) RETURNING user_id",
+    owner.id,
+    superRole.id,
+  );
+  await ok(owner, `/roles/${adminRole.id}`, "PATCH", {
+    name: "管理员",
+    permissionCodes: [],
+  });
+  assert.equal(
+    (await request(owner, `/roles/${adminRole.id}`, "DELETE", {})).status,
+    409,
+  );
+  assert.equal(
+    (await request(owner, `/roles/${superRole.id}`, "PATCH", { name: "test" }))
+      .status,
+    409,
+  );
+  await ok(owner, `/roles/${adminRole.id}`, "PATCH", {
+    name: "管理员",
+    permissionCodes: adminRole.permissionCodes,
+  });
+  assert.equal(
+    (
+      await request(owner, `/users/${owner.id}`, "PATCH", {
+        roleIds: [adminRole.id],
+      })
+    ).status,
+    409,
+  );
+  const disposableRole = await ok(owner, "/roles", "POST", {
+    code: "DELETE_TEST",
+    name: "临时角色",
+    permissionCodes: [],
+  });
+  await ok(owner, `/roles/${disposableRole.id}`, "DELETE", {});
+  await rows(
+    db,
+    "DELETE FROM user_roles WHERE user_id=$1::bigint AND role_id=$2::bigint RETURNING user_id",
+    owner.id,
+    superRole.id,
+  );
+  pass("中文权限保存、超级管理员边界、自提权拒绝、在用角色保护及角色删除");
   for (const [name, role] of [
     ["buyer", "BUYER"],
     ["reviewer", "OPERATOR"],
@@ -510,6 +578,35 @@ try {
     graph.id + ":c",
   ]);
   pass("分支并行、汇合依赖、非法循环拒绝及画布位置持久化");
+  assert.equal(
+    (await request(owner, `/projects/${p.id}`, "DELETE", {})).status,
+    409,
+  );
+  const trash = await ok(owner, "/projects", "POST", body);
+  await ok(owner, `/projects/${trash.id}/actions`, "POST", {
+    action: "void",
+    version: trash.version,
+    reason: "删除测试",
+  });
+  assert.equal(
+    (await request(outsider, `/projects/${trash.id}`, "DELETE", {})).status,
+    403,
+  );
+  const deleteKey = randomUUID();
+  await ok(owner, `/projects/${trash.id}`, "DELETE", {}, deleteKey);
+  await ok(owner, `/projects/${trash.id}`, "DELETE", {}, deleteKey);
+  assert.equal((await request(owner, `/projects/${trash.id}`)).status, 404);
+  assert.ok(
+    !(await ok(owner, "/projects")).some((x: any) => x.id === trash.id),
+  );
+  assert.ok(
+    await one(
+      db,
+      "SELECT 1 FROM projects WHERE id=$1::bigint AND deleted_at IS NOT NULL",
+      trash.id,
+    ),
+  );
+  pass("仅作废项目可删除、权限限制、幂等重试及列表详情同步移除");
   console.log("Project integration:", checks, "scenarios passed.");
 } finally {
   if (child.exitCode === null && child.signalCode === null) {

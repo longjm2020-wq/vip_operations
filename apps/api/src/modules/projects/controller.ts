@@ -1,6 +1,7 @@
 import type { Response } from "express";
 import {
   Controller,
+  Delete,
   Get,
   Post,
   Patch,
@@ -51,6 +52,12 @@ export class ProjectsController {
     @Body() b: unknown,
   ) {
     return s.save(context(r), b);
+  }
+  @Permission("project.create") @Delete(":id") remove(
+    @Req() r: AuthRequest,
+    @Param("id") v: string,
+  ) {
+    return s.remove(context(r), parse(id, v));
   }
   @Permission("project.read") @Get(":id") detail(
     @Req() r: AuthRequest,

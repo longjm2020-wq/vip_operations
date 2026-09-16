@@ -20,6 +20,7 @@ export type Actor = {
   username: string;
   displayName: string;
   permissions: string[];
+  roleCodes?: string[];
   csrfToken?: string;
 };
 export type Context = { actor: Actor; requestId: string; key?: string };

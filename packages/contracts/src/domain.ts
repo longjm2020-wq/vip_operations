@@ -46,6 +46,7 @@ export const roleSeeds: Record<
   string,
   { name: string; permissions: string[] }
 > = {
+  SUPER_ADMIN: { name: "超级管理员", permissions },
   ADMIN: { name: "管理员", permissions },
   OPERATOR: {
     name: "商品运营",

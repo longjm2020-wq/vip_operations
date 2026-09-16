@@ -29,6 +29,7 @@ import {
 } from "../../core.js";
 const admin = (c: Context) => c.actor.permissions.includes("user.manage");
 const roles: Record<string, string[]> = {
+  SUPER_ADMIN: [...departments],
   ADMIN: [...departments],
   OPERATOR: ["运营", "商品"],
   PRODUCT: ["商品"],
@@ -64,7 +65,7 @@ export async function options(c: Context) {
     ),
     categories: await rows(
       db,
-      "SELECT id,name FROM categories WHERE status='ACTIVE' ORDER BY name",
+      "SELECT id,name,parent_id FROM categories WHERE status='ACTIVE' ORDER BY name",
     ),
   };
 }
@@ -117,7 +118,7 @@ export async function writeSop(c: Context, input: unknown, value?: string) {
 async function access(tx: Tx, c: Context, value: string, lock = false) {
   const p = await one(
     tx,
-    "SELECT *,created_at::text AS created_at,updated_at::text AS updated_at,published_at::text AS published_at FROM projects WHERE id=$1::bigint" +
+    "SELECT *,created_at::text AS created_at,updated_at::text AS updated_at,published_at::text AS published_at FROM projects WHERE deleted_at IS NULL AND id=$1::bigint" +
       (lock ? " FOR UPDATE" : ""),
     value,
   );
@@ -132,6 +133,29 @@ async function access(tx: Tx, c: Context, value: string, lock = false) {
   if (!admin(c) && !owner && (!member || p.status === "DRAFT"))
     fail("FORBIDDEN", "无权访问此项目", 403);
   return p;
+}
+export async function remove(c: Context, value: string) {
+  requirePermission(c.actor, "project.create");
+  return command(c, "project.delete/" + value, {}, async (tx) => {
+    const p = await access(tx, c, value, true);
+    ownerOnly(c, p);
+    if (p.status !== "VOID") fail("INVALID_STATE", "仅已作废项目可以删除");
+    await rows(
+      tx,
+      "UPDATE projects SET deleted_at=now(),updated_at=now(),version=version+1 WHERE id=$1::bigint RETURNING id",
+      value,
+    );
+    await audit(
+      tx,
+      c,
+      "PROJECT_DELETE",
+      "project",
+      value,
+      { name: p.name, status: p.status },
+      { deleted: true },
+    );
+    return { id: value };
+  });
 }
 function ownerOnly(c: Context, p: Row) {
   if (!admin(c) && String(p.owner_id) !== c.actor.id)
@@ -180,7 +204,7 @@ export async function list(c: Context, q: Row) {
   );
   const result = await rows(
     db,
-    `SELECT p.*,p.created_at::text AS created_at,p.updated_at::text AS updated_at,p.published_at::text AS published_at,u.display_name AS owner_name,(SELECT jsonb_agg(jsonb_build_object('id',u2.id::text,'name',u2.display_name)) FROM project_members m JOIN users u2 ON u2.id=m.user_id WHERE m.project_id=p.id) AS members FROM projects p JOIN users u ON u.id=p.owner_id WHERE ($1::boolean OR p.owner_id=$2::bigint OR (p.status<>'DRAFT' AND EXISTS(SELECT 1 FROM project_members m WHERE m.project_id=p.id AND m.user_id=$2::bigint))) AND ($3::text IS NULL OR p.tag=$3) AND ($4::bigint IS NULL OR p.owner_id=$4::bigint) AND ($5::date IS NULL OR (p.created_at AT TIME ZONE 'Asia/Shanghai')::date >= $5::date) AND ($6::date IS NULL OR (p.created_at AT TIME ZONE 'Asia/Shanghai')::date <= $6::date) AND ($7::text IS NULL OR EXISTS(SELECT 1 FROM jsonb_array_elements(p.document->'tasks') t WHERE t->>'status'='DISPUTED')=($7='yes')) ORDER BY p.created_at DESC,p.id DESC LIMIT 51 OFFSET $8`,
+    `SELECT p.*,p.created_at::text AS created_at,p.updated_at::text AS updated_at,p.published_at::text AS published_at,u.display_name AS owner_name,(SELECT jsonb_agg(jsonb_build_object('id',u2.id::text,'name',u2.display_name)) FROM project_members m JOIN users u2 ON u2.id=m.user_id WHERE m.project_id=p.id) AS members FROM projects p JOIN users u ON u.id=p.owner_id WHERE p.deleted_at IS NULL AND ($1::boolean OR p.owner_id=$2::bigint OR (p.status<>'DRAFT' AND EXISTS(SELECT 1 FROM project_members m WHERE m.project_id=p.id AND m.user_id=$2::bigint))) AND ($3::text IS NULL OR p.tag=$3) AND ($4::bigint IS NULL OR p.owner_id=$4::bigint) AND ($5::date IS NULL OR (p.created_at AT TIME ZONE 'Asia/Shanghai')::date >= $5::date) AND ($6::date IS NULL OR (p.created_at AT TIME ZONE 'Asia/Shanghai')::date <= $6::date) AND ($7::text IS NULL OR EXISTS(SELECT 1 FROM jsonb_array_elements(p.document->'tasks') t WHERE t->>'status'='DISPUTED')=($7='yes')) ORDER BY p.created_at DESC,p.id DESC LIMIT 51 OFFSET $8`,
     admin(c),
     c.actor.id,
     f.tag || null,
@@ -633,7 +657,7 @@ export async function send(c: Context, value: string, input: unknown) {
 export async function notifications(c: Context) {
   return rows(
     db,
-    `SELECT n.*,n.created_at::text AS created_at,n.read_at::text AS read_at,p.name AS project_name FROM project_notifications n JOIN projects p ON p.id=n.project_id WHERE n.user_id=$1::bigint AND EXISTS(SELECT 1 FROM project_members m WHERE m.project_id=p.id AND m.user_id=$1::bigint) ORDER BY n.id DESC LIMIT 100`,
+    `SELECT n.*,n.created_at::text AS created_at,n.read_at::text AS read_at,p.name AS project_name FROM project_notifications n JOIN projects p ON p.id=n.project_id WHERE p.deleted_at IS NULL AND n.user_id=$1::bigint AND EXISTS(SELECT 1 FROM project_members m WHERE m.project_id=p.id AND m.user_id=$1::bigint) ORDER BY n.id DESC LIMIT 100`,
     c.actor.id,
   );
 }

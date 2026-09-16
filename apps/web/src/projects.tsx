@@ -1,3 +1,5 @@
+import { TreeSelect } from "antd";
+import { categoryTree } from "./category-tree";
 import { useState, useRef, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router-dom";
@@ -303,14 +305,16 @@ function RequirementsEditor({
           {
             title: "品类",
             render: (_, r, i) => (
-              <Select
+              <TreeSelect
                 aria-label="需求品类"
-                style={{ width: 140 }}
+                treeNodeLabelProp="value"
+                style={{ width: 240 }}
                 value={r.category || undefined}
-                options={categories.map((c) => ({
-                  label: c.name,
-                  value: c.name,
-                }))}
+                treeData={categoryTree(categories as any)}
+                showSearch
+                treeNodeFilterProp="title"
+                placeholder="选择三级品类"
+                popupMatchSelectWidth={320}
                 onChange={(v) => set(i, "category", v)}
               />
             ),
@@ -1165,6 +1169,8 @@ function ProjectEditor({
   );
 }
 export function ProjectsPage() {
+  const user = useUser();
+  const { modal } = App.useApp();
   const can = useCan("project.read"),
     create = useCan("project.create"),
     { message } = App.useApp(),
@@ -1305,6 +1311,39 @@ export function ProjectsPage() {
                   {projectStates[p.status]}
                 </Tag>
                 {bad && <Tag color="red">存在异议</Tag>}
+                {p.status === "VOID" &&
+                  create &&
+                  (String(p.ownerId) === String(user.id) ||
+                    user.permissions.includes("user.manage")) && (
+                    <Button
+                      type="link"
+                      danger
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        modal.confirm({
+                          title: "删除已作废项目？",
+                          content: "删除后将从项目列表移除，操作记录保留。",
+                          onOk: async () => {
+                            try {
+                              await api(
+                                "/projects/" + p.id,
+                                "DELETE",
+                                {},
+                                uuid(),
+                              );
+                              await refreshProjects();
+                              message.success("已删除");
+                            } catch (e) {
+                              message.error((e as Error).message);
+                              throw e;
+                            }
+                          },
+                        });
+                      }}
+                    >
+                      删除
+                    </Button>
+                  )}
               </Space>
               <h2>{p.name || "未命名草稿"}</h2>
               <RichView value={p.document.description} summary />

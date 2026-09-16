@@ -39,6 +39,13 @@ export async function actorFor(token?: string): Promise<Actor> {
     username: u.username,
     displayName: u.display_name,
     permissions: p.map((x) => x.code),
+    roleCodes: (
+      await rows(
+        db,
+        "SELECT r.code FROM user_roles ur JOIN roles r ON r.id=ur.role_id WHERE ur.user_id=$1::bigint",
+        String(u.id),
+      )
+    ).map((r) => r.code),
     csrfToken: u.csrf_token,
   };
 }
@@ -117,6 +124,21 @@ export async function userWrite(c: Context, input: unknown, value?: string) {
   return command(c, "users/" + (value ?? "create"), b, async (tx) => {
     await rows(tx, "SELECT pg_advisory_xact_lock(91001)::text");
     const before = value ? await entity(tx, "users", value, true) : null;
+    const targetSuper =
+      value &&
+      (await one(
+        tx,
+        "SELECT 1 FROM user_roles ur JOIN roles r ON r.id=ur.role_id WHERE ur.user_id=$1::bigint AND r.code='SUPER_ADMIN'",
+        value,
+      ));
+    const assignsSuper =
+      b.roleIds?.length &&
+      (await one(
+        tx,
+        "SELECT 1 FROM roles WHERE id=ANY($1::bigint[]) AND code='SUPER_ADMIN'",
+        b.roleIds,
+      ));
+    if (targetSuper || assignsSuper) await requireSuperAdmin(tx, c);
     const u = value
       ? await update(tx, "users", value, {
           displayName: b.displayName ?? before!.display_name,
@@ -143,6 +165,14 @@ export async function userWrite(c: Context, input: unknown, value?: string) {
         );
     }
     await ensureAdmin(tx);
+    if (
+      targetSuper &&
+      !(await one(
+        tx,
+        "SELECT 1 FROM users u JOIN user_roles ur ON ur.user_id=u.id JOIN roles r ON r.id=ur.role_id WHERE u.status='ACTIVE' AND r.code='SUPER_ADMIN' LIMIT 1",
+      ))
+    )
+      fail("LAST_SUPER_ADMIN", "必须保留至少一名可用超级管理员");
     await audit(
       tx,
       c,
@@ -163,7 +193,7 @@ export async function userWrite(c: Context, input: unknown, value?: string) {
 async function ensureAdmin(tx: Parameters<typeof rows>[0]) {
   const r = await one(
     tx,
-    "SELECT count(*)::int AS n FROM users u WHERE status='ACTIVE' AND EXISTS(SELECT 1 FROM user_roles ur JOIN roles r ON r.id=ur.role_id WHERE ur.user_id=u.id AND r.code='ADMIN')",
+    "SELECT count(*)::int AS n FROM users u WHERE status='ACTIVE' AND EXISTS(SELECT 1 FROM user_roles ur JOIN roles r ON r.id=ur.role_id WHERE ur.user_id=u.id AND r.code IN ('ADMIN','SUPER_ADMIN'))",
   );
   if (!r?.n) fail("LAST_ADMIN", "必须保留至少一名可用管理员");
 }
@@ -174,6 +204,14 @@ export async function resetPassword(c: Context, value: string, input: unknown) {
   );
   return command(c, "password/" + value, b, async (tx) => {
     await entity(tx, "users", value);
+    if (
+      await one(
+        tx,
+        "SELECT 1 FROM user_roles ur JOIN roles r ON r.id=ur.role_id WHERE ur.user_id=$1::bigint AND r.code='SUPER_ADMIN'",
+        value,
+      )
+    )
+      await requireSuperAdmin(tx, c);
     await update(tx, "users", value, {
       passwordHash: passwordHash(b.newPassword),
     });
@@ -200,7 +238,11 @@ export async function roleWrite(c: Context, input: unknown, value?: string) {
   return command(c, "roles/" + (value ?? "create"), b, async (tx) => {
     await rows(tx, "SELECT pg_advisory_xact_lock(91001)::text");
     const old = value ? await entity(tx, "roles", value, true) : null;
-    if (old?.code === "ADMIN") fail("PROTECTED_ROLE", "管理员角色权限不可修改");
+    if (old?.code === "SUPER_ADMIN")
+      fail("PROTECTED_ROLE", "超级管理员为内置角色，不可修改");
+    if (old?.code === "ADMIN") await requireSuperAdmin(tx, c);
+    if (!value && ["ADMIN", "SUPER_ADMIN"].includes(b.code!))
+      fail("PROTECTED_ROLE", "内置角色代码不可新建");
     const r = value
       ? await update(tx, "roles", value, { name: b.name })
       : await insert(tx, "roles", { name: b.name, code: b.code });
@@ -230,5 +272,38 @@ export async function roleWrite(c: Context, input: unknown, value?: string) {
       permissionCodes: b.permissionCodes,
     });
     return r;
+  });
+}
+async function requireSuperAdmin(tx: Parameters<typeof rows>[0], c: Context) {
+  const role = await one(
+    tx,
+    "SELECT 1 FROM user_roles ur JOIN roles r ON r.id=ur.role_id WHERE ur.user_id=$1::bigint AND r.code='SUPER_ADMIN'",
+    c.actor.id,
+  );
+  if (!role) fail("FORBIDDEN", "此操作仅限超级管理员", 403);
+}
+export async function roleDelete(c: Context, value: string) {
+  return command(c, "roles/delete/" + value, {}, async (tx) => {
+    await rows(tx, "SELECT pg_advisory_xact_lock(91001)::text");
+    const role = await entity(tx, "roles", value, true);
+    if (role.code === "SUPER_ADMIN")
+      fail("PROTECTED_ROLE", "超级管理员为内置角色，不可删除");
+    if (role.code === "ADMIN") await requireSuperAdmin(tx, c);
+    if (
+      await one(
+        tx,
+        "SELECT 1 FROM user_roles WHERE role_id=$1::bigint LIMIT 1",
+        value,
+      )
+    )
+      fail("ROLE_IN_USE", "该角色仍有用户使用，请先调整用户角色");
+    await rows(
+      tx,
+      "DELETE FROM role_permissions WHERE role_id=$1::bigint RETURNING role_id",
+      value,
+    );
+    await rows(tx, "DELETE FROM roles WHERE id=$1::bigint RETURNING id", value);
+    await audit(tx, c, "ROLE_DELETE", "role", value, role, null);
+    return { id: value };
   });
 }

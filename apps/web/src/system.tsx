@@ -1,3 +1,4 @@
+import { PermissionChecklist } from "./permission-checklist";
 import { BatchEditor } from "./batch-editor";
 import { Table } from "./data-table";
 import { useState } from "react";
@@ -10,6 +11,7 @@ import {
   Status,
   useList,
   useCan,
+  useUser,
   useOptions,
   options,
   QueryState,
@@ -18,6 +20,9 @@ import {
 export function AccessPage({ roles = false }: { roles?: boolean }) {
   const [batch, setBatch] = useState(false);
   const manage = useCan(roles ? "role.manage" : "user.manage");
+  const isSuperAdmin = useUser().roleCodes?.includes("SUPER_ADMIN");
+  const canEditRole = (r: Row) =>
+    manage && r.code !== "SUPER_ADMIN" && (r.code !== "ADMIN" || isSuperAdmin);
   const path = roles ? "/roles" : "/users",
     q = useQuery({ queryKey: [path], queryFn: () => api(path) }),
     roleOptions = useOptions("/roles", !roles),
@@ -27,6 +32,7 @@ export function AccessPage({ roles = false }: { roles?: boolean }) {
     [editing, setEditing] = useState<Row | null>(null),
     [busy, setBusy] = useState(false),
     [key, setKey] = useState(crypto.randomUUID());
+  const protectedRole = roles && (!!editing ? !canEditRole(editing) : !manage);
   const { message, modal } = App.useApp();
   const reset = (row: Row) => {
     let password = "";
@@ -100,13 +106,40 @@ export function AccessPage({ roles = false }: { roles?: boolean }) {
                   {
                     title: "操作",
                     render: (_, r) => (
-                      <Button
-                        type="link"
-                        disabled={r.code === "ADMIN"}
-                        onClick={() => start(r)}
-                      >
-                        编辑权限
-                      </Button>
+                      <>
+                        <Button type="link" onClick={() => start(r)}>
+                          {canEditRole(r) ? "编辑权限" : "查看权限"}
+                        </Button>
+                        {canEditRole(r) && (
+                          <Button
+                            type="link"
+                            danger
+                            onClick={() =>
+                              modal.confirm({
+                                title: "删除角色：" + r.name,
+                                content: "仍有用户使用的角色不可删除。",
+                                onOk: async () => {
+                                  try {
+                                    await api(
+                                      "/roles/" + r.id,
+                                      "DELETE",
+                                      {},
+                                      crypto.randomUUID(),
+                                    );
+                                    await queryClient.invalidateQueries();
+                                    message.success("已删除");
+                                  } catch (e) {
+                                    message.error((e as Error).message);
+                                    throw e;
+                                  }
+                                },
+                              })
+                            }
+                          >
+                            删除
+                          </Button>
+                        )}
+                      </>
                     ),
                   },
                 ]
@@ -136,13 +169,15 @@ export function AccessPage({ roles = false }: { roles?: boolean }) {
         />
       </Card>
       <Drawer
-        title={editing ? "编辑" : "新建"}
+        width={roles ? "min(760px, 96vw)" : undefined}
+        title={protectedRole ? "查看内置角色权限" : editing ? "编辑" : "新建"}
         open={open}
         onClose={() => setOpen(false)}
         extra={
           <Button
             type="primary"
             loading={busy}
+            disabled={protectedRole}
             onClick={async () => {
               const body = await form.validateFields();
               setBusy(true);
@@ -168,6 +203,7 @@ export function AccessPage({ roles = false }: { roles?: boolean }) {
         }
       >
         <Form
+          disabled={protectedRole}
           layout="vertical"
           form={form}
           onValuesChange={() => setKey(crypto.randomUUID())}
@@ -188,17 +224,10 @@ export function AccessPage({ roles = false }: { roles?: boolean }) {
               >
                 <Input />
               </Form.Item>
-              <Form.Item
-                name="permissionCodes"
-                label="权限"
-                rules={[{ required: true }]}
-              >
-                <Select
-                  mode="multiple"
-                  options={(permissions.data?.data || []).map((p: Row) => ({
-                    value: p.code,
-                    label: p.code,
-                  }))}
+              <Form.Item name="permissionCodes" label="权限">
+                <PermissionChecklist
+                  disabled={protectedRole}
+                  codes={(permissions.data?.data || []).map((p: Row) => p.code)}
                 />
               </Form.Item>
             </>
@@ -251,7 +280,7 @@ export function AccessPage({ roles = false }: { roles?: boolean }) {
           title={roles ? "角色名称" : "用户资料"}
           allowCreate={false}
           initial={(q.data?.data || []).filter(
-            (r: Row) => !roles || r.code !== "ADMIN",
+            (r: Row) => !roles || canEditRole(r),
           )}
           fields={
             roles
