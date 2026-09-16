@@ -96,17 +96,59 @@ try {
   });
   assert.equal(logged.status, 200, JSON.stringify(logged.body.error));
   session = { cookie: logged.cookie, csrf: logged.body.data.csrfToken };
+  const initialized = await ok("/categories/initialize", "POST", {});
+  assert.deepEqual(initialized, { cleared: 0, created: 35 });
+  const templateLeaves = await ok("/categories?forProduct=true&pageSize=100");
+  assert.ok(
+    templateLeaves.some(
+      (category: any) =>
+        category.code === "WOMEN-TOPS-KNIT" &&
+        category.pathName === "女装 / 女上装 / 女式针织衫",
+    ),
+    "初始化应建立可供商品选择的三级品类",
+  );
   const wh = await ok("/warehouses", "POST", { code: "WH", name: "测试仓" }),
     wh2 = await ok("/warehouses", "POST", { code: "WH2", name: "第二测试仓" }),
     su = await ok("/suppliers", "POST", {
       supplierCode: "SUP",
       name: "测试供应商",
     }),
-    ca = await ok("/categories", "POST", { code: "CAT", name: "针织" });
+    _ca = await ok("/categories", "POST", { code: "CAT", name: "女装" });
+  const ca2 = await ok("/categories", "POST", {
+      code: "CAT-TOP",
+      name: "女上装",
+      parentCode: "CAT",
+    }),
+    ca3 = await ok("/categories", "POST", {
+      code: "CAT-KNIT",
+      name: "女式针织衫",
+      parentCode: "CAT-TOP",
+    });
+  assert.equal(
+    (await request("/categories", "POST", {
+      code: "CAT-LEVEL-4",
+      name: "不允许的四级品类",
+      parentId: ca3.id,
+    })).status,
+    400,
+  );
+  const categoryList = await ok("/categories?forProduct=true&pageSize=100");
+  assert.ok(
+    categoryList.some(
+      (category: any) =>
+        category.id === ca3.id && category.pathName === "女装 / 女上装 / 女式针织衫",
+    ),
+    "末级品类应返回完整三级路径",
+  );
+  assert.equal(
+    categoryList.some((category: any) => category.id === ca2.id),
+    false,
+    "有下级的二级品类不应出现在商品品类选项中",
+  );
   const pr = await ok("/products", "POST", {
     styleNo: "STYLE",
     name: "验收针织衫",
-    categoryId: ca.id,
+    categoryId: ca3.id,
     defaultSupplierId: su.id,
   });
   const sku = await ok("/products/" + pr.id + "/skus", "POST", {
@@ -121,7 +163,7 @@ try {
       await request("/products", "POST", {
         styleNo: "STYLE",
         name: "重复",
-        categoryId: ca.id,
+        categoryId: ca3.id,
       })
     ).status,
     409,

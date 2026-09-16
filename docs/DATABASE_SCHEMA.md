@@ -42,7 +42,7 @@ UNIQUE(supplier_code)；交期非负；MOQ 若提供 >0；status ACTIVE/INACTIVE
 
 ### products
 
-`id`；`style_no VARCHAR(64)`；`name VARCHAR(255)`；`brand_id BIGINT? FK brands`；`category_id BIGINT FK categories`；`default_supplier_id BIGINT? FK suppliers`；`year SMALLINT?`；`season VARCHAR(32)?`；`tag_price NUMERIC(14,2)?`；`main_image_url TEXT?`；`status VARCHAR(32)`；`remark TEXT?`；公共可变字段；`deleted_at TIMESTAMPTZ?`。
+`id`；`style_no VARCHAR(64)`；`name VARCHAR(255)`；`brand_id BIGINT? FK brands`；`category_id BIGINT FK categories`；`default_supplier_id BIGINT? FK suppliers`；`year SMALLINT?`；`season VARCHAR(32)?`；`tag_price NUMERIC(14,2)?`；`main_image_url TEXT?`；`status VARCHAR(32)`；`remark TEXT?`；公共可变字段；`deleted_at TIMESTAMPTZ?`。品类以 `parent_id` 自关联组织为一级、二级、三级；新建商品仅选择末级品类。
 
 UNIQUE(style_no)；INDEX(category_id), INDEX(default_supplier_id)；tag_price≥0（若有）；status ACTIVE/STOPPED/ARCHIVED。品类必填采用原页面要求。图片第一阶段保存 URL，不引入完整媒体系统。
 

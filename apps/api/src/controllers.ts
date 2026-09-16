@@ -343,6 +343,11 @@ class SystemController {
 @ApiTags("商品与基础资料")
 @Controller("api/v1")
 class MasterController {
+  @Permission("product.update") @Post("categories/initialize") initializeCategories(
+    @Req() r: AuthRequest,
+  ) {
+    return master.initializeWomenCategories(context(r));
+  }
   @Delete(":resource/:id") remove(
     @Req() r: AuthRequest,
     @Param("resource") name: master.Resource,
