@@ -153,6 +153,9 @@ try {
   });
   const vendor = await login("vendor-one"),
     other = await login("vendor-two");
+  await (
+    await import("./product-archive.js")
+  ).testProductArchive({ owner, vendor, ok, request, pass });
   const avatarBody = {
     type: "image/png",
     data: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6VbIAAAAASUVORK5CYII=",

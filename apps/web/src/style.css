@@ -703,3 +703,7 @@ pre {
   .login-panel { padding:30px 24px; }
   .login-box { max-width:420px; }
 }
+.product-archive{background:#fff;border:1px solid #e8ded5;border-radius:8px;padding:10px 10px 0}
+.product-archive-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px}.product-toolbar-spacer{flex:1}
+.product-archive .ant-table-small .ant-table-cell{padding:5px 8px!important;font-size:13px}.product-cell-value{white-space:pre-wrap;overflow-wrap:anywhere;max-height:76px;overflow:auto}.product-archive .ant-form-item-explain{font-size:11px}.product-column-options{display:block}.product-column-options section{display:flex;flex-direction:column;gap:8px;margin-bottom:20px}.product-column-options h4{margin:0 0 4px;color:#8b6348}.product-create-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 16px}.product-field-list{max-height:220px;overflow:auto;margin-bottom:12px}.product-field-list>div{display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #eee;padding:4px 0}@media(max-width:600px){.product-create-grid{grid-template-columns:1fr}}
+.product-archive .ant-table-body{overflow-y:auto!important}

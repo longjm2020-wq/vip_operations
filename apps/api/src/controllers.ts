@@ -29,6 +29,10 @@ import {
 import * as auth from "./modules/auth/service.js";
 import { saveAvatar, avatarUrl } from "./modules/auth/avatar.js";
 import * as master from "./modules/master/service.js";
+import {
+  productFields,
+  writeProductField,
+} from "./modules/master/product-fields.js";
 import * as inventory from "./modules/inventory/service.js";
 import * as purchase from "./modules/purchases/service.js";
 import * as suggestion from "./modules/suggestions/service.js";
@@ -363,6 +367,24 @@ class SystemController {
 @ApiTags("商品与基础资料")
 @Controller("api/v1")
 class MasterController {
+  @Permission("product.read") @Get("product-fields") productFields() {
+    return productFields();
+  }
+  @Permission("product.update") @Post("product-fields") addProductField(
+    @Req() r: AuthRequest,
+    @Body() b: unknown,
+  ) {
+    return writeProductField(context(r), b);
+  }
+  @Permission("product.update")
+  @Patch("product-fields/:field")
+  editProductField(
+    @Req() r: AuthRequest,
+    @Param("field") field: string,
+    @Body() b: unknown,
+  ) {
+    return writeProductField(context(r), b, field);
+  }
   @Permission("product.update")
   @Post("categories/initialize")
   initializeCategories(@Req() r: AuthRequest) {

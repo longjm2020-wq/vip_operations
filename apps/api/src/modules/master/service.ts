@@ -1,5 +1,10 @@
 import { z } from "zod";
 import {
+  customValues,
+  validateCustom,
+  customFilter,
+} from "./product-fields.js";
+import {
   db,
   Tx,
   rows,
@@ -97,6 +102,7 @@ export const resources = {
     schema: z
       .object({
         styleNo: text,
+        customFields: customValues.optional(),
         name: text,
         categoryId: id,
         brandId: id.nullable().optional(),
@@ -196,7 +202,10 @@ async function categoryHeight(tx: Tx, categoryId: string) {
   );
   return Number(row?.depth || 1);
 }
-async function categoryList(q: Record<string, any>, p: ReturnType<typeof pagination>) {
+async function categoryList(
+  q: Record<string, any>,
+  p: ReturnType<typeof pagination>,
+) {
   const values: unknown[] = [];
   const where: string[] = [];
   if (q.q) {
@@ -279,6 +288,8 @@ export async function masterList(name: Resource, q: Record<string, any>) {
         `${snake(k)}=$${values.length}${k.endsWith("Id") ? "::bigint" : k === "year" ? "::int" : ""}`,
       );
     }
+  if (name === "products" && q.customFilters)
+    await customFilter(q.customFilters, values, where);
   const clause = where.length ? " WHERE " + where.join(" AND ") : "";
   const count = await one(
     db,
@@ -341,6 +352,11 @@ export async function masterWrite(
       );
     const changes = { ...b };
     delete changes.expectedUpdatedAt;
+    if (name === "products" && b.customFields !== undefined) {
+      changes.customFields = JSON.stringify(
+        await validateCustom(tx, b.customFields, before?.custom_fields || {}),
+      );
+    }
     if (
       name === "skus" &&
       value &&
@@ -442,7 +458,7 @@ export async function masterWrite(
       );
     const result = value
       ? await update(tx, r.table, value, changes)
-      : await insert(tx, r.table, b);
+      : await insert(tx, r.table, changes);
     await audit(
       tx,
       c,

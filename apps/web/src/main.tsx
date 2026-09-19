@@ -42,6 +42,7 @@ import { api, queryClient, setCsrf } from "./api";
 import { UserContext, Row } from "./shared";
 import { AccountMenu } from "./account-menu";
 import { MasterPage } from "./master";
+import { ProductArchive } from "./product-archive";
 import {
   InventoryPage,
   TransactionsPage,
@@ -468,7 +469,7 @@ function Workspace({ user }: { user: Row }) {
                 <Route
                   key={r}
                   path={"/" + r}
-                  element={<MasterPage resource={r} />}
+                  element={r === "products" ? <ProductArchive key={user.id}/> : <MasterPage resource={r} />}
                 />
               ))}
               <Route

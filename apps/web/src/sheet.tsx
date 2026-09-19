@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { Alert, App, Button, Modal, Select, Space, Table, Upload } from "antd";
 import {
   SheetColumn,
+  sheetColumnLabel,
   SheetRow,
   MAX_SHEET_ROWS,
   applyMatrix,
@@ -280,9 +281,7 @@ export function Sheet({
               <th className="sheet-row-number">行</th>
               {columns.map((c, i) => (
                 <th key={c.key}>
-                  <span className="sheet-letter">
-                    {String.fromCharCode(65 + i)}
-                  </span>
+                  <span className="sheet-letter">{sheetColumnLabel(i)}</span>
                   {c.label}
                   {c.required && <span className="required"> *</span>}
                 </th>

@@ -247,7 +247,7 @@ function FieldInput({ field, resource }: { field: Field; resource: string }) {
   return <Input />;
 }
 // Form.Item must receive its input directly; render function preserves controlled field props.
-function FieldControl({ field, resource, ...props }: any) {
+export function FieldControl({ field, resource, ...props }: any) {
   const q = useOptions(field.source || "/brands", !!field.source);
   if (field.source)
     return (

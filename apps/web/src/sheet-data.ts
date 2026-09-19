@@ -13,6 +13,16 @@ export type SheetColumn = {
   max?: number;
 };
 export const MAX_SHEET_ROWS = 500;
+export function sheetColumnLabel(index: number) {
+  let label = "",
+    n = index + 1;
+  while (n > 0) {
+    n--;
+    label = String.fromCharCode(65 + (n % 26)) + label;
+    n = Math.floor(n / 26);
+  }
+  return label;
+}
 export function parseDelimited(text: string, delimiter = "\t"): string[][] {
   const result: string[][] = [];
   let row: string[] = [],
