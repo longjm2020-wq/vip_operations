@@ -1,5 +1,5 @@
-import { Fragment, useEffect, useRef, useState } from "react";
-import { Alert, App, Button, Card, Collapse, Descriptions, Empty, Form, Image, Input, InputNumber, Modal, Popconfirm, QRCode, Select, Space, Spin, Table, Tabs, Tag, Typography } from "antd";
+import { useEffect, useRef, useState } from "react";
+import { Alert, App, Button, Card, Collapse, Descriptions, Drawer, Empty, Form, Image, Input, InputNumber, Modal, Popconfirm, QRCode, Select, Space, Spin, Table, Tabs, Tag, Typography } from "antd";
 import { AppstoreOutlined, EditOutlined, CheckCircleOutlined, CameraOutlined, ShareAltOutlined } from "@ant-design/icons";
 import { api, queryClient } from "./api";
 import { prepareUpload, readUpload } from "./upload-file";
@@ -84,7 +84,7 @@ export function PublicSelectionCollection() {
   const {message}=App.useApp();
   const [data,setData]=useState<Row|null>(null),[error,setError]=useState(""),[selected,setSelected]=useState(""),[query,setQuery]=useState(""),[busy,setBusy]=useState(false);
   const [info,setInfo]=useState<CollectionInfo|null>(null),[color,setColor]=useState(""),[qr,setQr]=useState(false),[saving,setSaving]=useState(false);
-  const [view,setView]=useState("form");
+  const [view,setView]=useState("form"),[drawerOpen,setDrawerOpen]=useState(false);
   const [picker,setPicker]=useState<"all"|"pending"|"submitted"|null>(null);
   const dataRef=useRef<Row|null>(null),infoRef=useRef<CollectionInfo|null>(null),selectedRef=useRef("");
   dataRef.current=data;infoRef.current=info;selectedRef.current=selected;
@@ -164,7 +164,7 @@ export function PublicSelectionCollection() {
   useEffect(()=>{
     if(new URLSearchParams(location.search).get("photo")==="1" && current) document.getElementById("collection-photos")?.scrollIntoView({block:"start"});
   },[selected]);
-  const choose=(item:Row)=>void run(async()=>{await flush();activate(dataRef.current!.items.find((row:Row)=>String(row.id)===String(item.id)) || item);});
+  const choose=(item:Row)=>void run(async()=>{await flush();activate(dataRef.current!.items.find((row:Row)=>String(row.id)===String(item.id)) || item);if(view==="table")setDrawerOpen(true);});
   const patch=(key:keyof CollectionInfo,value:any)=>setInfo(previous=>{
     if(!previous)return previous;const next={...previous,[key]:value};
     if(key==="color" || key==="sizeRange")next.inventory=collectionInventory(next.color,next.sizeRange,previous.inventory);
@@ -219,7 +219,7 @@ export function PublicSelectionCollection() {
     <header><h1>{data.title}</h1><Space wrap><Tag>已提交 {data.items.filter((item:Row)=>["SUBMITTED","APPROVED"].includes(item.status)).length}/{data.items.length} 款</Tag><span>有效期：{data.expiresAt?new Date(data.expiresAt).toLocaleString():"长期"}</span></Space><Input.Search aria-label="搜索款号" placeholder="搜索序缇款号 / 供应商款号" value={query} onChange={event=>{setQuery(event.target.value);setPicker("all");}}/></header>
     {error && <Alert closable onClose={()=>setError("")} type="error" title={error} description="未保存内容仍保留在当前页面；如提示其他设备更新，请先保留输入，再重新打开链接核对。" />}
     {current?.feedback && <Alert type="warning" title="本款退回意见" description={current.feedback}/>}
-    <Tabs activeKey={view} onChange={key=>void run(async()=>{await flush();setView(key);setPicker(null);})} items={[{key:"form",label:"收集表视图",disabled:busy},{key:"table",label:"表格视图",disabled:busy}]} />
+    <Tabs activeKey={view} onChange={key=>void run(async()=>{await flush();setView(key);setPicker(null);setDrawerOpen(false);})} items={[{key:"form",label:"收集表视图",disabled:busy},{key:"table",label:"表格视图",disabled:busy}]} />
     {view==="form" && <><div className="collection-mobile-picker">
       <nav aria-label="按提交状态选择款式">{([
         {key:"all",label:"全部",icon:<AppstoreOutlined/>,count:data.items.length},
@@ -231,22 +231,29 @@ export function PublicSelectionCollection() {
     <div className="collection-layout"><aside>{results.map(styleButton)}{!results.length && <Empty description="没有匹配的款式"/>}</aside>
     {editor}</div></>}
     {view==="table" && <div className="collection-table-scroll"><table className="collection-data-table">
-      <caption>产品信息汇总 · 点击填写或查看展开本款资料</caption>
+      <caption>产品信息汇总 · 点击填写或查看，在侧边栏编辑本款资料</caption>
       <thead><tr>{["款式 / 状态","图片","序缇款号","供应商款号","颜色","尺码范围","材质成分","供货价（不含税）","产品卖点/简介","翻单周期（天）","库存数","操作"].map(label=><th key={label} scope="col">{label}</th>)}</tr></thead>
       <tbody>{results.map((item:Row)=>{
         const active=String(item.id)===selected,value=active && info?info:infoOf(item);
         const cell=(label:string,content:React.ReactNode)=><td data-label={label}><div>{content ?? "—"}</div></td>;
-        return <Fragment key={item.id}><tr className={active?"collection-table-active":""}>
+        return <tr key={item.id} className={active?"collection-table-active":""}>
           {cell("款式 / 状态",<>第{data.items.findIndex((row:Row)=>row.id===item.id)+1}款<br/><Tag>{item.status==="SUBMITTED"?"已提交":statusNames[item.status]}</Tag></>)}
           {cell("图片",item.images?.length?<div className="collection-table-photo"><CollectionImage token={token} itemId={String(item.id)} image={item.images[0]}/><small>共 {item.images.length} 张</small></div>:"暂无图片")}
           {cell("序缇款号",item.xutiStyleNo || "—")}{cell("供应商款号",value.supplierStyleNo || "—")}
           {cell("颜色",value.color || "—")}{cell("尺码范围",value.sizeRange || "—")}{cell("材质成分",value.material || "—")}
           {cell("供货价（不含税）",value.supplyPriceExclTax)}{cell("产品卖点/简介",value.sellingPoints || "—")}{cell("翻单周期（天）",value.reorderDays)}
           {cell("库存数",<CollectionStockEditor inventory={value.inventory} readOnly={!active || !editable || busy} onChange={inventory=>patch("inventory",inventory)}/>)}
-          {cell("操作",<Button disabled={busy} type={active?"primary":"default"} onClick={()=>choose(item)}>{active?"当前款":["DRAFT","REJECTED"].includes(item.status)?"填写":"查看"}</Button>)}
-        </tr>{active && <tr className="collection-table-editor"><td colSpan={12}>{editor}</td></tr>}</Fragment>;
+          {cell("操作",<Button disabled={busy} type={active?"primary":"default"} onClick={()=>choose(item)}>{["DRAFT","REJECTED"].includes(item.status)?"填写":"查看"}</Button>)}
+        </tr>;
       })}{!results.length && <tr><td colSpan={12}><Empty description="没有匹配的款式"/></td></tr>}</tbody>
     </table></div>}
+    <Drawer title="产品信息" placement="right" width="min(760px, 100vw)" open={view==="table" && drawerOpen} onClose={()=>void run(async()=>{await flush();setDrawerOpen(false);})} className="collection-editor-drawer">
+      <div className="collection-public collection-drawer-body">
+        {error && <Alert type="error" title={error} description="修改仍保留在当前侧边栏，请处理后重试保存或关闭。"/>}
+        {current?.feedback && <Alert type="warning" title="本款退回意见" description={current.feedback}/>}
+        {view==="table" && drawerOpen && editor}
+      </div>
+    </Drawer>
     <input hidden ref={camera} type="file" accept="image/jpeg,image/png,image/webp" capture="environment" onChange={event=>{const files=Array.from(event.target.files || []);event.currentTarget.value="";upload(files);}}/>
     <input hidden ref={album} type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={event=>{const files=Array.from(event.target.files || []);event.currentTarget.value="";upload(files);}}/>
     <Modal open={qr} title="手机免登录拍图" footer={null} onCancel={()=>setQr(false)}><QRCode value={shareUrl(token,true,selected)}/><p>手机扫码后直接进入本款拍图区，无需登录。照片先保存在收集表，本款提交并经内部确认后更新选款登记。</p></Modal>
