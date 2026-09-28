@@ -230,6 +230,8 @@ export function StyleSelectionsPage() {
   const [cellAnchor, setCellAnchor] = useState<{ rowKey: string; columnKey: string } | null>(null);
   const [selectingCells, setSelectingCells] = useState(false);
   const axisSelection = useRef<{ type: "row" | "column"; key: string } | null>(null);
+  const shiftDrag=useRef<{type:"row"|"column";key:string}|null>(null);
+  const [shiftTarget,setShiftTarget]=useState<string|null>(null);
   const [draggedRow, setDraggedRow] = useState<string | null>(null);
   const [draggedColumn, setDraggedColumn] = useState<string | null>(null);
   const [resizingColumn, setResizingColumn] = useState<{ key: string; startX: number; startWidth: number } | null>(null);
@@ -330,13 +332,27 @@ export function StyleSelectionsPage() {
     }));
   };
   const moveRow = (fromKey: string, toKey: string) => {
-    if (fromKey === toKey) return;
+    if (!canEdit || fromKey === toKey) return;
     setRows((current) => { const copy = [...current]; const from = copy.findIndex((row) => row._key === fromKey), to = copy.findIndex((row) => row._key === toKey); if (from < 0 || to < 0) return current; const [row] = copy.splice(from, 1); copy.splice(to, 0, row); return copy.map((item, index) => ({ ...item, sortOrder: index + 1 })); });
   };
   const moveColumn = (fromKey: string, toKey: string) => {
     if (fromKey === toKey) return;
     setColumns((current) => { const copy = [...current]; const from = copy.findIndex((column) => column.key === fromKey), to = copy.findIndex((column) => column.key === toKey); if (from < 0 || to < 0) return current; const [column] = copy.splice(from, 1); copy.splice(to, 0, column); return copy; });
   };
+  useEffect(()=>{
+    const cancel=()=>{shiftDrag.current=null;setShiftTarget(null);};
+    const drop=(event:MouseEvent)=>{
+      const drag=shiftDrag.current;
+      const target=event.target instanceof Element?event.target.closest<HTMLElement>("[data-reorder-axis]"):null;
+      if(drag && target?.dataset.reorderAxis===drag.type && target.dataset.reorderKey){
+        if(drag.type==="row")moveRow(drag.key,target.dataset.reorderKey);else moveColumn(drag.key,target.dataset.reorderKey);
+      }
+      cancel();
+    };
+    const escape=(event:KeyboardEvent)=>{if(event.key==="Escape")cancel();};
+    window.addEventListener("mouseup",drop);window.addEventListener("blur",cancel);window.addEventListener("keydown",escape);
+    return()=>{window.removeEventListener("mouseup",drop);window.removeEventListener("blur",cancel);window.removeEventListener("keydown",escape);};
+  },[canEdit]);
   const addColumn = () => {
     const label = window.prompt("请输入新文本列名称");
     if (!label?.trim()) return;
@@ -371,9 +387,16 @@ export function StyleSelectionsPage() {
     if (event.button !== 0) return;
     event.preventDefault(); event.currentTarget.focus();
     setCellTextEditing(false); setSelectingCells(false); setEditingId(null);
+    if(event.shiftKey){
+      axisSelection.current=null;
+      if(type==="row" && (!canEdit || saving || deleting))return;
+      if(type==="row" && (sort!=="sortOrder" || direction!=="asc" || columnSort || groupBy!=="none")){message.info("请先切换到手动排序并取消分组，再拖动行");return;}
+      shiftDrag.current={type,key};setShiftTarget(type+":"+key);return;
+    }
     axisSelection.current = { type, key }; selectAxis(type, key, key);
   };
   const axisMouseEnter = (type: "row" | "column", key: string) => {
+    if(shiftDrag.current){if(shiftDrag.current.type===type)setShiftTarget(type+":"+key);return;}
     const anchor = axisSelection.current;
     if (anchor?.type === type) selectAxis(type, anchor.key, key);
   };
@@ -583,8 +606,8 @@ export function StyleSelectionsPage() {
           setSelectedCells(selectionAllCells(displayedRows, activeColumns)); setCellTextEditing(false);
           setSelectingCells(false);
         }
-      }} aria-label="选款登记在线智能表格" style={{ width: activeColumns.reduce((width, column) => width + column.width, 96) }}><colgroup><col style={{ width: 48 }} /><col style={{ width: 48 }} />{activeColumns.map((column) => <col key={column.key} style={{ width: column.width }} />)}</colgroup><thead><tr><th className="selection-check"><Checkbox aria-label="选择全部可见行" checked={!!filteredRows.length && filteredRows.every(row => selectedRows.includes(row._key))} indeterminate={filteredRows.some(row => selectedRows.includes(row._key)) && !filteredRows.every(row => selectedRows.includes(row._key))} onChange={(event) => setSelectedRows(event.target.checked ? filteredRows.map((row) => row._key) : [])} /></th><th className="selection-index">#</th>{activeColumns.map((column) => <th key={column.key} tabIndex={0} aria-label={`选择整列：${column.label}`} onMouseDown={event => axisMouseDown(event, "column", column.key)} onMouseEnter={() => axisMouseEnter("column", column.key)} style={{ width: column.width, minWidth: column.width }}><span>{column.label}{columnSort?.key === column.key ? columnSort.direction === "asc" ? " ↑" : " ↓" : ""}</span><Popover destroyOnHidden trigger="click" open={filterColumn === column.key} onOpenChange={open => { setFilterColumn(open ? column.key : null); if (open) { setFilterRevision(sharedView.data?.data?.revision || 0); setFilterSession(value => value + 1); } }} content={columnFilterEditor(column)}><Button className="selection-column-filter-button" type="text" size="small" aria-label={`筛选${column.label}`} title={`筛选${column.label}`} icon={<FilterOutlined />} style={{ color: columnFilters[column.key] ? "#d3540b" : undefined }} onMouseDown={event => event.stopPropagation()} /></Popover><i className="selection-column-resize" aria-label={`调整 ${column.label} 列宽`} onMouseDown={(event) => { event.preventDefault(); event.stopPropagation(); setResizingColumn({ key: column.key, startX: event.clientX, startWidth: column.width }); }} /></th>)}</tr></thead><tbody>
+      }} aria-label="选款登记在线智能表格" style={{ width: activeColumns.reduce((width, column) => width + column.width, 96) }}><colgroup><col style={{ width: 48 }} /><col style={{ width: 48 }} />{activeColumns.map((column) => <col key={column.key} style={{ width: column.width }} />)}</colgroup><thead><tr><th className="selection-check"><Checkbox aria-label="选择全部可见行" checked={!!filteredRows.length && filteredRows.every(row => selectedRows.includes(row._key))} indeterminate={filteredRows.some(row => selectedRows.includes(row._key)) && !filteredRows.every(row => selectedRows.includes(row._key))} onChange={(event) => setSelectedRows(event.target.checked ? filteredRows.map((row) => row._key) : [])} /></th><th className="selection-index">#</th>{activeColumns.map((column) => <th key={column.key} data-reorder-axis="column" data-reorder-key={column.key} data-reorder-target={shiftTarget==="column:"+column.key || undefined} title="按住 Shift 拖动调整列顺序" tabIndex={0} aria-label={`选择整列：${column.label}`} onMouseDown={event => axisMouseDown(event, "column", column.key)} onMouseEnter={() => axisMouseEnter("column", column.key)} style={{ width: column.width, minWidth: column.width }}><span>{column.label}{columnSort?.key === column.key ? columnSort.direction === "asc" ? " ↑" : " ↓" : ""}</span><Popover destroyOnHidden trigger="click" open={filterColumn === column.key} onOpenChange={open => { setFilterColumn(open ? column.key : null); if (open) { setFilterRevision(sharedView.data?.data?.revision || 0); setFilterSession(value => value + 1); } }} content={columnFilterEditor(column)}><Button className="selection-column-filter-button" type="text" size="small" aria-label={`筛选${column.label}`} title={`筛选${column.label}`} icon={<FilterOutlined />} style={{ color: columnFilters[column.key] ? "#d3540b" : undefined }} onMouseDown={event => event.stopPropagation()} /></Popover><i className="selection-column-resize" aria-label={`调整 ${column.label} 列宽`} onMouseDown={(event) => { event.preventDefault(); event.stopPropagation(); setResizingColumn({ key: column.key, startX: event.clientX, startWidth: column.width }); }} /></th>)}</tr></thead><tbody>
         {data.isLoading && <tr><td colSpan={activeColumns.length + 2} className="selection-placeholder">正在读取选款登记…</td></tr>}{!data.isLoading && !filteredRows.length && <tr><td colSpan={activeColumns.length + 2} className="selection-placeholder"><Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无选款登记，点击添加一行开始录入" /></td></tr>}
-        {grouped.map((group) => <Fragment key={group.label || "all"}>{group.label && <tr className="selection-group-row"><td colSpan={activeColumns.length + 2}>{group.label}<span>{group.rows.length} 条</span></td></tr>}{group.rows.map((row, index) => <tr key={row._key}><td className="selection-check"><Checkbox aria-label={`选择 ${row.xutiStyleNo || "未填写序缇款号"}`} checked={selectedRows.includes(row._key)} onChange={(event) => setSelectedRows((current) => event.target.checked ? [...current, row._key] : current.filter((key) => key !== row._key))} /></td><td className={`selection-index selection-row-drag ${selectedRows.includes(row._key) ? "selection-axis-active" : ""}`} tabIndex={0} aria-label={`选择第${displayedRows.indexOf(row) + 1}行`} onMouseDown={event => axisMouseDown(event, "row", row._key)} onMouseEnter={() => axisMouseEnter("row", row._key)} onDragOver={(event: DragEvent) => event.preventDefault()} onDrop={() => { if (draggedRow) moveRow(draggedRow, row._key); setDraggedRow(null); }}>{index + 1}<span className="selection-row-reorder" title="拖动调整行顺序" draggable onMouseDown={event => event.stopPropagation()} onDragStart={() => setDraggedRow(row._key)} onDragEnd={() => setDraggedRow(null)}>⋮⋮</span></td>{activeColumns.map((column) => renderCell(row, column))}</tr>)}</Fragment>)}
-      </tbody></table></div><div className="selection-bulk-add"><Select aria-label="批量添加行数" value={addCount} onChange={setAddCount} options={[10, 20, 50, 100, 200].map(value => ({ value, label: `${value} 行` }))} /><Button icon={<PlusOutlined />} disabled={!canEdit} onClick={() => add(addCount)}>添加 {addCount} 行</Button><span>空白行填写后自动保存</span><SelectionStatistics values={statisticsValues}/></div><div className="selection-bottom-bar"><span>拖动可选择多个单元格后填色；Ctrl/Cmd+C 复制、Ctrl/Cmd+V 粘贴；点击或拖动行号/表头选择整行整列；行顺序用小手柄调整，列顺序在表格设置中调整。</span><span>{canEdit ? "图片支持网址、本地上传和粘贴。" : "当前账号仅可查看。"}</span></div></Card></>;
+        {grouped.map((group) => <Fragment key={group.label || "all"}>{group.label && <tr className="selection-group-row"><td colSpan={activeColumns.length + 2}>{group.label}<span>{group.rows.length} 条</span></td></tr>}{group.rows.map((row, index) => <tr key={row._key}><td className="selection-check"><Checkbox aria-label={`选择 ${row.xutiStyleNo || "未填写序缇款号"}`} checked={selectedRows.includes(row._key)} onChange={(event) => setSelectedRows((current) => event.target.checked ? [...current, row._key] : current.filter((key) => key !== row._key))} /></td><td data-reorder-axis="row" data-reorder-key={row._key} data-reorder-target={shiftTarget==="row:"+row._key || undefined} title="按住 Shift 拖动调整行顺序" className={`selection-index selection-row-drag ${selectedRows.includes(row._key) ? "selection-axis-active" : ""}`} tabIndex={0} aria-label={`选择第${displayedRows.indexOf(row) + 1}行`} onMouseDown={event => axisMouseDown(event, "row", row._key)} onMouseEnter={() => axisMouseEnter("row", row._key)} onDragOver={(event: DragEvent) => event.preventDefault()} onDrop={() => { if (draggedRow) moveRow(draggedRow, row._key); setDraggedRow(null); }}>{index + 1}<span className="selection-row-reorder" title="拖动调整行顺序" draggable onMouseDown={event => event.stopPropagation()} onDragStart={() => setDraggedRow(row._key)} onDragEnd={() => setDraggedRow(null)}>⋮⋮</span></td>{activeColumns.map((column) => renderCell(row, column))}</tr>)}</Fragment>)}
+      </tbody></table></div><div className="selection-bulk-add"><Select aria-label="批量添加行数" value={addCount} onChange={setAddCount} options={[10, 20, 50, 100, 200].map(value => ({ value, label: `${value} 行` }))} /><Button icon={<PlusOutlined />} disabled={!canEdit} onClick={() => add(addCount)}>添加 {addCount} 行</Button><span>空白行填写后自动保存</span><SelectionStatistics values={statisticsValues}/></div><div className="selection-bottom-bar"><span>拖动可选择多个单元格后填色；Ctrl/Cmd+C 复制、Ctrl/Cmd+V 粘贴；点击或拖动行号/表头选择整行整列；按住 Shift 拖动行号或表头调整行列顺序。</span><span>{canEdit ? "图片支持网址、本地上传和粘贴。" : "当前账号仅可查看。"}</span></div></Card></>;
 }
