@@ -14,20 +14,20 @@ function PhotoMetadata({ row, onClose, onSaved }: { row?: Row; onClose: () => vo
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const attempt = useRef<{ body: string; key: string } | null>(null);
-  return <Modal open title={row ? "补充款号与颜色" : "新增款式"} footer={null} onCancel={() => { if (!busy) onClose(); }} mask={{closable:!busy}} closable={!busy}>
+  return <Modal className="mobile-photo-metadata" open title={row ? "补充款号与颜色" : "新增款式"} footer={null} onCancel={() => { if (!busy) onClose(); }} mask={{closable:!busy}} closable={!busy}>
     {error && <Alert type="error" title={error} style={{marginBottom:12}} />}
     <Form layout="vertical" initialValues={{ xutiStyleNo: row?.xutiStyleNo || "", supplierStyleNo: row?.supplierStyleNo || "", supplierCode: row?.supplierCode || "", colors: colorsOf(row) }} onFinish={async values => {
       if (busy) return;
       const colors = [...new Set((values.colors as string[]).flatMap(value => value.split("/")).map(value=>value.trim()).filter(Boolean))];
       if (!colors.length || colors.join("/").length > 100) { setError("请填写颜色，全部颜色合计不超过100个字符"); return; }
-      const body = { xutiStyleNo: values.xutiStyleNo.trim(), supplierStyleNo: values.supplierStyleNo?.trim() || null, supplierCode: values.supplierCode?.trim() || null, color: colors.join("/"), ...(row ? { expectedUpdatedAt: row.updatedAt } : {}) };
+      const body = { xutiStyleNo: values.xutiStyleNo?.trim() || null, supplierStyleNo: values.supplierStyleNo?.trim() || null, supplierCode: values.supplierCode?.trim() || null, color: colors.join("/"), ...(row ? { expectedUpdatedAt: row.updatedAt } : {}) };
       const encoded = JSON.stringify(body);
       if (!attempt.current || attempt.current.body !== encoded) attempt.current = { body: encoded, key: crypto.randomUUID() };
       setBusy(true); setError("");
       try { const result = await api(`/style-selections${row ? "/"+row.id : ""}`, row ? "PATCH" : "POST", body, attempt.current.key); onSaved(result.data); }
       catch (error) { setError((error as Error).message); } finally { setBusy(false); }
     }}>
-      <Form.Item name="xutiStyleNo" label="序缇款号" rules={[{ required:true, whitespace:true, message:"请填写序缇款号" },{max:64}]}><Input maxLength={64} /></Form.Item>
+      <Form.Item name="xutiStyleNo" label="序缇款号" rules={[{max:64}]}><Input maxLength={64} /></Form.Item>
       <Form.Item name="supplierStyleNo" label="供应商款号"><Input maxLength={64} /></Form.Item>
       <Form.Item name="supplierCode" label="供应商编码"><Input maxLength={50} /></Form.Item>
       <Form.Item name="colors" label="颜色" rules={[{required:true,message:"请至少添加一种颜色"}]}><Select mode="tags" tokenSeparators={["/",";","；",","]} placeholder="输入颜色后回车，多个颜色用 / 分隔" /></Form.Item>
@@ -82,7 +82,7 @@ export function SelectionMobilePhotos() {
   };
   const capture = (files: File[]) => {
     const target = captureTarget.current;
-    if (!target) { message.info("请先补充序缇款号和颜色"); return; }
+    if (!target) { message.info("请先选择款式和颜色"); return; }
     void runUploads(files.map(file=>({id:crypto.randomUUID(),rowId:target.rowId,color:target.color,file})));
   };
   const removePhoto = async (id: string) => {
@@ -102,11 +102,11 @@ export function SelectionMobilePhotos() {
   const unassigned: Row[] = (current?.images || []).filter((image:Row)=>!image.color || !colors.includes(image.color));
   const gallery = (items: Row[]) => <Image.PreviewGroup><div className="mobile-photo-grid">{items.map(image=><div className="mobile-photo-item" key={image.id}><Image src={image.url} fallback={invalidSelectionImage} alt={`${current?.xutiStyleNo || "款式"} ${image.color || "未标颜色"}`} /><span>{image.color || "未标颜色"}</span>{canEdit && <Popconfirm title="移除这张图片？" description="会同步从电脑端该款图片中移除。" okText="移除" cancelText="取消" onConfirm={()=>removePhoto(image.id)}><Button danger size="small" disabled={busy} icon={<DeleteOutlined />} aria-label="删除图片" /></Popconfirm>}</div>)}</div></Image.PreviewGroup>;
   return <div className="mobile-photos">
-    <header className="mobile-photo-header"><div><strong>XUTI · 手机拍图</strong><Link to="/style-selections">电脑表格</Link></div><Input.Search size="large" allowClear aria-label="搜索款号或供应商编码" placeholder="序缇款号 / 供应商款号 / 供应商编码" value={search} onChange={event=>{setSearch(event.target.value);setShowResults(true);}} onSearch={()=>{setQuery(search.trim());setShowResults(true);setPage(1);}} /><div className="mobile-photo-header-actions"><Button onClick={()=>setShowResults(value=>!value)}>{showResults?"收起搜索结果":"选择款式"}</Button>{canEdit && <Button icon={<PlusOutlined />} disabled={busy} onClick={()=>setEdit("new")}>新增款式</Button>}</div></header>
+    <header className="mobile-photo-header"><div><strong>XUTI · 手机拍图</strong></div><Input.Search size="large" allowClear aria-label="搜索款号或供应商编码" placeholder="序缇款号 / 供应商款号 / 供应商编码" value={search} onChange={event=>{setSearch(event.target.value);setShowResults(true);}} onSearch={()=>{setQuery(search.trim());setShowResults(true);setPage(1);}} /><div className="mobile-photo-header-actions"><Button onClick={()=>setShowResults(value=>!value)}>{showResults?"收起搜索结果":"选择款式"}</Button>{canEdit && <Button icon={<PlusOutlined />} disabled={busy} onClick={()=>setEdit("new")}>新增款式</Button>}</div></header>
     {showResults && <section className="mobile-photo-results">{list.isLoading?<Spin/>:list.error?<Alert type="error" title={(list.error as Error).message} action={<Button onClick={()=>void list.refetch()}>重试</Button>}/>:<><p>共 {list.data?.total || 0} 款</p>{(list.data?.data || []).map((row:Row)=><button key={row.id} className="mobile-photo-result" onClick={()=>choose(String(row.id))}><strong>{row.xutiStyleNo || "未填写序缇款号"}</strong><span>供应商款号：{row.supplierStyleNo || "—"} · 编码：{row.supplierCode || "—"}</span><small>{row.color || "未填写颜色"} · {row.images?.length || 0} 张图片</small></button>)}{!list.data?.total && <Empty description="未找到款式，可新增款式后拍图"/>}<Space><Button disabled={page===1} onClick={()=>setPage(page-1)}>上一页</Button><span>第 {page} 页</span><Button disabled={page*20 >= (list.data?.total || 0)} onClick={()=>setPage(page+1)}>下一页</Button></Space></>}</section>}
     {detail.isLoading && selectedId && <Spin/>}{detail.error && <Alert type="error" title={(detail.error as Error).message} action={<Button onClick={()=>void detail.refetch()}>重试</Button>}/>}
-    {current && <main><section className="mobile-photo-style"><div><h1>{current.xutiStyleNo || "请补充序缇款号"}</h1>{canEdit && <Button disabled={busy} onClick={()=>setEdit("current")}>编辑款号 / 颜色</Button>}</div><p>供应商款号：{current.supplierStyleNo || "—"}　供应商编码：{current.supplierCode || "—"}</p><div className="mobile-photo-colors">{colors.map(value=><Button key={value} type={value===color?"primary":"default"} onClick={()=>setColor(value)}>{value} · {(current.images || []).filter((image:Row)=>image.color===value).length} 张</Button>)}</div>{(!current.xutiStyleNo || !colors.length) && <Alert type="info" title="先补充序缇款号与颜色，再按颜色拍图" action={canEdit?<Button onClick={()=>setEdit("current")}>补充资料</Button>:undefined}/>}</section>
-      <section className="mobile-photo-current"><h2>当前拍图 {color && <Tag>{color}</Tag>} <small>{photos.length} 张</small></h2>{photos.length?gallery(photos):<Empty description={color?`还没有${color}的图片，请拍照补充`:"请选择或补充颜色"}/>}<div className="mobile-photo-capture"><Button type="primary" size="large" icon={<CameraOutlined/>} disabled={!canEdit || busy || !current.xutiStyleNo || !color} onClick={()=>{captureTarget.current={rowId:String(current.id),color};camera.current?.click();}}>拍照上传</Button><Button size="large" icon={<UploadOutlined/>} disabled={!canEdit || busy || !current.xutiStyleNo || !color} onClick={()=>{captureTarget.current={rowId:String(current.id),color};album.current?.click();}}>相册选择</Button></div><p className="mobile-photo-hint">每张自动压缩至 1 MB 以下，上传后电脑端自动同步。</p></section>
+    {current && <main><section className="mobile-photo-style"><div><h1>{current.xutiStyleNo || current.supplierStyleNo || "未填写序缇款号"}</h1>{canEdit && <Button disabled={busy} onClick={()=>setEdit("current")}>编辑款号 / 颜色</Button>}</div><p>供应商款号：{current.supplierStyleNo || "—"}　供应商编码：{current.supplierCode || "—"}</p><div className="mobile-photo-colors">{colors.map(value=><Button key={value} type={value===color?"primary":"default"} onClick={()=>setColor(value)}>{value} · {(current.images || []).filter((image:Row)=>image.color===value).length} 张</Button>)}</div>{(!colors.length) && <Alert type="info" title="先补充颜色，再按颜色拍图" action={canEdit?<Button onClick={()=>setEdit("current")}>补充资料</Button>:undefined}/>}</section>
+      <section className="mobile-photo-current"><h2>当前拍图 {color && <Tag>{color}</Tag>} <small>{photos.length} 张</small></h2>{photos.length?gallery(photos):<Empty description={color?`还没有${color}的图片，请拍照补充`:"请选择或补充颜色"}/>}<div className="mobile-photo-capture"><Button type="primary" size="large" icon={<CameraOutlined/>} disabled={!canEdit || busy || !color} onClick={()=>{captureTarget.current={rowId:String(current.id),color};camera.current?.click();}}>拍照上传</Button><Button size="large" icon={<UploadOutlined/>} disabled={!canEdit || busy || !color} onClick={()=>{captureTarget.current={rowId:String(current.id),color};album.current?.click();}}>相册选择</Button></div><p className="mobile-photo-hint">每张自动压缩至 1 MB 以下，上传后电脑端自动同步。</p></section>
       {!!unassigned.length && <section><h2>未标颜色图片</h2>{gallery(unassigned)}</section>}
       <footer className="mobile-photo-next"><Button block size="large" onClick={()=>void next()} disabled={busy}>完成本款 · 下一款</Button></footer>
     </main>}

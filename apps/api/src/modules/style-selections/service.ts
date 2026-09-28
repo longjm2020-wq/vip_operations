@@ -319,7 +319,6 @@ export async function changePhoto(c: Context, value: string, input: unknown) {
     const before = await entity(tx, "style_selections", value, true);
     let images = Array.isArray(before.images) ? before.images : [];
     if (body.action === "add") {
-      if (!before.xuti_style_no?.trim()) fail("VALIDATION_ERROR", "请先补充序缇款号", 400);
       validateImageColors([body.image], before.color);
       const existing = images.find((item: Row) => item.id === body.image.id);
       if (existing && (existing.url !== body.image.url || existing.color !== body.image.color)) fail("EDIT_CONFLICT", "图片标识已被使用，请重新上传", 409);

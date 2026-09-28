@@ -4,6 +4,13 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/png" href="/xuti-logo.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <script>
+      if (location.pathname === "/mobile/style-photos") {
+        document.querySelector('meta[name="viewport"]').setAttribute("content", "width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover");
+        document.documentElement.classList.add("mobile-photo-page");
+        document.addEventListener("gesturestart", function (event) { event.preventDefault(); }, { passive: false });
+      }
+    </script>
     <meta name="theme-color" content="#c9682b" />
     <title>XUTI · 供应商经营管理</title>
   </head>

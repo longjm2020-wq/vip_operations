@@ -614,7 +614,7 @@ try {
   assert.deepEqual(removedPhoto.images.map((image:any)=>image.id),[photoBodyB.image.id]);
   assert.equal((await request(`/style-selections/${photoStyle.id}`,"PATCH",{material:"过期手机编辑",expectedUpdatedAt:photoRead.updatedAt})).status,409);
   const blankPhotoStyle = await ok("/style-selections","POST",{color:"红"});
-  assert.equal((await request(`/style-selections/${blankPhotoStyle.id}/photos`,"POST",photoBodyA)).status,400);
+  assert.equal((await ok(`/style-selections/${blankPhotoStyle.id}/photos`,"POST",photoBodyA)).images.length,1);
   check("mobile photo search, next style, concurrent append, retries, color validation and image deletion");
 
   assert.equal(
