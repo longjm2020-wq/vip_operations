@@ -317,7 +317,7 @@
 .selection-image-editor { max-width: 340px; }
 .selection-image-editor .selection-image-color-select { width: 74px; min-width: 0; }
 .selection-image-summary { position: relative; padding: 5px 26px 5px 5px; min-height: 40px; }
-.selection-image-thumbs { display: flex; flex-wrap: nowrap; overflow-x: auto; gap: 3px; padding-bottom: 3px; scrollbar-width: thin; touch-action: pan-x; }
+.selection-image-thumbs { display: flex; flex-wrap: nowrap; overflow-x: auto; gap: 3px; padding-bottom: 3px; scrollbar-width: none; touch-action: pan-x; }
 .selection-image-thumb { position: relative; width: 32px; height: 32px; flex: none; }
 .selection-image-thumb .ant-image-img { object-fit: cover; cursor: zoom-in; border-radius: 3px; }
 .selection-image-thumb > span { position: absolute; bottom: 0; left: 0; right: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: #fff; background: #0008; font-size: 9px; line-height: 12px; pointer-events: none; }
@@ -352,3 +352,7 @@
 .selection-bulk-add > span { color: #977b68; font-size: 12px; }
 
 .selection-image-item > .ant-image { height: 60px !important; }
+
+.selection-image-list { scrollbar-width: none; }
+.selection-image-thumbs::-webkit-scrollbar,
+.selection-image-list::-webkit-scrollbar { display: none; }
