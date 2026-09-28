@@ -511,27 +511,34 @@ try {
   );
   check("RBAC buyer cannot confirm via direct HTTP");
   const selection = await ok("/style-selections", "POST", {
-    registrationBatch: "2026 秋季第一批",
-    imageUrl: "https://example.com/style/select-001.jpg",
+    registrationBatch: "2026-10-01",
+    images: [{ id: randomUUID(), url: "https://example.com/style/select-001.jpg", color: "奶油白" }],
     xutiStyleNo: "XUTI-SELECT-001",
     supplierStyleNo: "SUP-SELECT-001",
     supplierCode: "SUP-001",
-    color: "奶油白",
-    sizeRange: "S-XL",
+    color: "奶油白/烟灰",
+    sizeRange: "S/M/L",
     material: "100% 羊毛",
     supplyPriceExclTax: "88.50",
     vipPrice: "199.00",
     livePrice: "179.00",
     tagPrice: "399.00",
+    cellColors: { vipPrice: "YELLOW" },
+    extraFields: { "custom:test": "样衣已确认" },
+    sortOrder: 3,
     rowColor: "BLUE",
   });
   assert.equal(selection.xutiStyleNo, "XUTI-SELECT-001");
+  assert.equal(selection.images[0].color, "奶油白");
+  assert.equal(selection.cellColors.vipPrice, "YELLOW");
+  await ok("/style-selections/presence", "POST", { editingId: selection.id });
+  assert.ok((await ok("/style-selections/presence")).some((person: any) => person.editingId === selection.id));
   const selectionList = await ok("/style-selections?q=SUP-SELECT-001&pageSize=100");
   assert.equal(selectionList.length, 1);
   assert.equal(selectionList[0].supplierCode, "SUP-001");
   const selectedStyle = await ok("/style-selections/" + selection.id, "PATCH", {
     vipPrice: "209.00",
-    rowColor: "GREEN",
+    cellColors: { vipPrice: "GREEN" },
     expectedUpdatedAt: selection.updatedAt,
   });
   assert.equal(selectedStyle.vipPrice, "209");
@@ -544,7 +551,9 @@ try {
     ).status,
     409,
   );
-  check("style selections persist 12 business fields, row color and stale-edit protection");
+  await ok("/style-selections/" + selection.id, "DELETE");
+  assert.equal((await ok("/style-selections?q=SUP-SELECT-001&pageSize=100")).length, 0);
+  check("style selections persist formatted cells, online presence, deletion and stale-edit protection");
   const forged = await request("/purchase-orders", "POST", {
     supplierId: su.id,
     warehouseId: wh.id,

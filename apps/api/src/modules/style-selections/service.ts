@@ -13,12 +13,33 @@ import {
 
 const optionalText = (limit: number) => z.string().trim().max(limit).nullable().optional();
 const rowColors = ["NONE", "ORANGE", "YELLOW", "GREEN", "BLUE", "PINK"] as const;
-const optionalUrl = z.string().url("请输入有效图片网址").max(2000).nullable().optional();
+const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "请输入 YYYY-MM-DD 日期");
+const imageUrl = z
+  .string()
+  .max(1_500_000)
+  .refine(
+    (value) =>
+      /^https?:\/\//i.test(value) ||
+      /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/]+={0,2}$/i.test(value),
+    "图片仅支持 http(s) 网址或 JPG、PNG、WebP 文件",
+  );
+const image = z
+  .object({
+    id: z.string().min(1).max(100),
+    url: imageUrl,
+    color: z.string().trim().max(100).default(""),
+  })
+  .strict();
+const cellColors = z.record(z.string(), z.enum(rowColors));
+const extraFields = z.record(z.string().max(100), z.string().max(2000));
+const presenceInput = z.object({ editingId: z.string().regex(/^[1-9]\d{0,18}$/).nullable().optional() }).strict();
 
 export const styleSelectionInput = z
   .object({
-    registrationBatch: optionalText(100),
-    imageUrl: optionalUrl,
+    registrationBatch: date.nullable().optional(),
+    images: z.array(image).max(5, "每行最多添加 5 张图片").default([]),
+    cellColors: cellColors.default({}),
+    extraFields: extraFields.default({}),
     xutiStyleNo: optionalText(64),
     supplierStyleNo: optionalText(64),
     supplierCode: optionalText(50),
@@ -29,6 +50,7 @@ export const styleSelectionInput = z
     vipPrice: money.nullable().optional(),
     livePrice: money.nullable().optional(),
     tagPrice: money.nullable().optional(),
+    sortOrder: z.number().int().min(0).max(10_000_000).optional(),
     rowColor: z.enum(rowColors).default("NONE"),
   })
   .strict();
@@ -39,11 +61,25 @@ const updateInput = styleSelectionInput
   .strict();
 
 const selectColumns = `
-  s.id,s.registration_batch,s.image_url,s.xuti_style_no,s.supplier_style_no,
+  s.id,s.registration_batch::text,s.images,s.cell_colors,s.extra_fields,s.xuti_style_no,s.supplier_style_no,
   s.supplier_code,s.color,s.size_range,s.material,s.supply_price_excl_tax,
-  s.vip_price,s.live_price,s.tag_price,s.row_color,s.created_by,s.version,
+  s.vip_price,s.live_price,s.tag_price,s.row_color,s.sort_order,s.created_by,s.version,
   s.created_at,s.updated_at`;
 const source = " FROM style_selections s";
+
+function tagValues(value: unknown) {
+  return [
+    ...new Set(
+      String(value || "")
+        .split("/")
+        .map((item) => item.trim())
+        .filter(Boolean),
+    ),
+  ];
+}
+function normalizedTags(value: unknown) {
+  return tagValues(value).join("/") || null;
+}
 
 export async function list(query: Record<string, unknown>) {
   const p = pagination(query);
@@ -52,7 +88,7 @@ export async function list(query: Record<string, unknown>) {
   if (query.q) {
     values.push("%" + String(query.q).slice(0, 100) + "%");
     where.push(
-      `(concat_ws(' ',s.registration_batch,s.xuti_style_no,s.supplier_style_no,s.supplier_code,s.color,s.size_range,s.material) ILIKE $${values.length})`,
+      `(concat_ws(' ',s.registration_batch::text,s.xuti_style_no,s.supplier_style_no,s.supplier_code,s.color,s.size_range,s.material) ILIKE $${values.length})`,
     );
   }
   const clause = where.length ? " WHERE " + where.join(" AND ") : "";
@@ -67,6 +103,7 @@ export async function list(query: Record<string, unknown>) {
     "vipPrice",
     "livePrice",
     "tagPrice",
+    "sortOrder",
   ].includes(String(query.sort))
     ? String(query.sort).replace(/[A-Z]/g, (c) => "_" + c.toLowerCase())
     : "updated_at";
@@ -78,6 +115,45 @@ export async function list(query: Record<string, unknown>) {
     ...values,
   );
   return { data, total: total!.n, ...p };
+}
+
+export async function presence(_c: Context) {
+  return rows(
+    db,
+    `SELECT p.user_id,p.editing_id,u.display_name,p.active_at
+     FROM style_selection_presence p JOIN users u ON u.id=p.user_id
+     WHERE p.active_at > now()-interval '45 seconds' ORDER BY p.active_at DESC`,
+  );
+}
+
+export async function heartbeat(c: Context, input: unknown) {
+  const body = parse(presenceInput, input);
+  if (body.editingId) await entity(db, "style_selections", body.editingId);
+  await rows(
+    db,
+    `INSERT INTO style_selection_presence(user_id,editing_id,active_at)
+     VALUES($1::bigint,$2::bigint,now())
+     ON CONFLICT(user_id) DO UPDATE SET editing_id=EXCLUDED.editing_id,active_at=EXCLUDED.active_at`,
+    c.actor.id,
+    body.editingId || null,
+  );
+  return { ok: true };
+}
+
+function validateImageColors(images: unknown, colors: unknown) {
+  const allowed = new Set(tagValues(colors));
+  for (const item of Array.isArray(images) ? images : [])
+    if (item?.color && !allowed.has(item.color))
+      fail("VALIDATION_ERROR", "图片颜色必须来自颜色字段", 400);
+}
+
+export async function remove(c: Context, value: string) {
+  return command(c, "style-selections/delete/" + value, {}, async (tx) => {
+    const before = await entity(tx, "style_selections", value, true);
+    await rows(tx, "DELETE FROM style_selections WHERE id=$1::bigint", value);
+    await audit(tx, c, "DELETE", "style-selection", value, before, null);
+    return { id: value };
+  });
 }
 
 export async function write(c: Context, input: unknown, value?: string) {
@@ -94,6 +170,15 @@ export async function write(c: Context, input: unknown, value?: string) {
       fail("EDIT_CONFLICT", "记录已被其他人修改，请刷新后核对", 409);
     const changes = { ...body };
     delete changes.expectedUpdatedAt;
+    if ("color" in changes) changes.color = normalizedTags(changes.color);
+    if ("sizeRange" in changes) changes.sizeRange = normalizedTags(changes.sizeRange);
+    validateImageColors(changes.images ?? before?.images ?? [], changes.color ?? before?.color);
+    for (const key of ["images", "cellColors", "extraFields"])
+      if (key in changes) changes[key] = JSON.stringify(changes[key]);
+    if (!before && changes.sortOrder === undefined) {
+      const last = await one(tx, "SELECT coalesce(max(sort_order),0)::int AS value FROM style_selections");
+      changes.sortOrder = last!.value + 1;
+    }
     const result = before
       ? await update(tx, "style_selections", value!, { ...changes, version: before.version + 1 })
       : await insert(tx, "style_selections", { ...changes, createdBy: c.actor.id });
