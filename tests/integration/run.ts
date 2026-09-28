@@ -678,6 +678,21 @@ try {
   assert.equal((await ok("/style-selections/"+collectSource.id)).version,appliedCollection.version);
   await rows(db,"UPDATE selection_collections SET expires_at=now()-interval '1 second' WHERE id=$1::bigint",conflictShare.id);
   assert.equal((await ext("","GET",undefined,conflictShare.token)).status,404);
+  const perItem=await ok("/selection-collections","POST",{title:"PER ITEM",ids:[collectSource.id,collectOther.id],days:7});
+  const draftInfo={...info,inventory:info.inventory.map(item=>({...item,sellOutDate:null,shipDate:null}))};
+  assert.equal((await ext("/"+collectSource.id,"POST",{revision:0,info:draftInfo},perItem.token)).status,201);
+  assert.equal((await ext("/submit","POST",{revision:1,itemId:collectSource.id},perItem.token)).status,400);
+  assert.equal((await ext("/"+collectSource.id,"POST",{revision:1,info},perItem.token)).status,201);
+  assert.equal((await ext("/submit","POST",{revision:2,itemId:collectSource.id},perItem.token)).status,201);
+  let itemStates=(await ext("","GET",undefined,perItem.token)).body.data.items;
+  assert.deepEqual(itemStates.map((item:any)=>item.status),["SUBMITTED","DRAFT"]);
+  assert.equal((await ext("/submit","POST",{revision:3,itemId:collectSource.id,action:"withdraw"},perItem.token)).status,201);
+  assert.equal((await ext("/submit","POST",{revision:4,itemId:collectSource.id},perItem.token)).status,201);
+  await ok("/selection-collections/"+perItem.id+"/review","POST",{action:"approve",revision:5,itemId:collectSource.id});
+  itemStates=(await ext("","GET",undefined,perItem.token)).body.data.items;
+  assert.deepEqual(itemStates.map((item:any)=>item.status),["APPROVED","DRAFT"]);
+  assert.equal((await ext("/submit","POST",{revision:6,itemId:collectSource.id,action:"withdraw"},perItem.token)).status,409);
+  assert.equal((await ext("/"+collectOther.id,"POST",{revision:6,info},perItem.token)).status,201);
   check("external collections isolate fields and images, save drafts, reject/resubmit, approve atomically, revoke and expire");
 
   const preview = await ok("/style-selections/import/preview", "POST", { rows: [

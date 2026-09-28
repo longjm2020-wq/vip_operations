@@ -44,3 +44,6 @@ export function collectionInventory(colors: string, sizes: string, previous: Col
     previous.find(item => item.color === color && item.size === size) || { color, size, available: 0, production: 0, sellOutDate: null, shipDate: null }));
 }
 export const collectionStockTotal = (inventory: CollectionStock[]) => inventory.reduce((total, item) => total + item.available + item.production, 0);
+
+// Drafts retain partially entered dates; complete stock dates are required at submission.
+export const collectionDraftSchema = collectionInfoSchema.safeExtend({ inventory: z.array(z.object({ color:z.string().trim().min(1).max(100),size:z.string().trim().min(1).max(100),available:quantity,production:quantity,sellOutDate:z.string().max(10).nullable(),shipDate:z.string().max(10).nullable() }).strict()).max(400) });
