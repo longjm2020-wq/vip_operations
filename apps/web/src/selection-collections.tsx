@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Alert, App, Button, Card, Collapse, Descriptions, Empty, Form, Image, Input, InputNumber, Modal, Popconfirm, QRCode, Select, Space, Spin, Table, Tag, Typography } from "antd";
-import { CameraOutlined, ShareAltOutlined } from "@ant-design/icons";
+import { AppstoreOutlined, EditOutlined, CheckCircleOutlined, CameraOutlined, ShareAltOutlined } from "@ant-design/icons";
 import { api, queryClient } from "./api";
 import { prepareUpload, readUpload } from "./upload-file";
 import { CollectionStockEditor } from "./selection-collection-stock";
@@ -84,6 +84,7 @@ export function PublicSelectionCollection() {
   const {message}=App.useApp();
   const [data,setData]=useState<Row|null>(null),[error,setError]=useState(""),[selected,setSelected]=useState(""),[query,setQuery]=useState(""),[busy,setBusy]=useState(false);
   const [info,setInfo]=useState<CollectionInfo|null>(null),[color,setColor]=useState(""),[qr,setQr]=useState(false),[saving,setSaving]=useState(false);
+  const [picker,setPicker]=useState<"all"|"pending"|"submitted"|null>(null);
   const dataRef=useRef<Row|null>(null),infoRef=useRef<CollectionInfo|null>(null),selectedRef=useRef("");
   dataRef.current=data;infoRef.current=info;selectedRef.current=selected;
   const camera=useRef<HTMLInputElement>(null),album=useRef<HTMLInputElement>(null);
@@ -95,6 +96,7 @@ export function PublicSelectionCollection() {
   const dirty=!!current && !!info && JSON.stringify(info)!==JSON.stringify(infoOf(current));
   const editable=!!current && ["DRAFT","REJECTED"].includes(current.status);
   const activate=(item:Row)=>{
+    setPicker(null);
     selectedRef.current=String(item.id);infoRef.current=infoOf(item);setSelected(String(item.id));setInfo(infoRef.current);
     setColor(collectionTags(item.color)[0] || "");failedDraft.current="";
   };
@@ -187,11 +189,22 @@ export function PublicSelectionCollection() {
   });
   if(!data)return <div className="collection-public">{error?<Alert type="error" title={error}/>:<Spin/>}</div>;
   const results=data.items.filter((item:Row)=>(item.xutiStyleNo+" "+item.supplierStyleNo).toLowerCase().includes(query.toLowerCase()));
+  const isSubmitted=(item:Row)=>["SUBMITTED","APPROVED"].includes(item.status);
+  const pickerItems=results.filter((item:Row)=>picker==="pending"?!isSubmitted(item):picker==="submitted"?isSubmitted(item):true);
+  const styleButton=(item:Row)=><Button block type={String(item.id)===selected?"primary":"default"} disabled={busy} key={item.id} onClick={()=>choose(item)}>第{data.items.findIndex((row:Row)=>row.id===item.id)+1}款 · {item.status==="SUBMITTED"?"已提交":statusNames[item.status]}</Button>;
   return <div className="collection-public">
-    <header><h1>{data.title}</h1><Space wrap><Tag>已提交 {data.items.filter((item:Row)=>["SUBMITTED","APPROVED"].includes(item.status)).length}/{data.items.length} 款</Tag><span>有效期：{data.expiresAt?new Date(data.expiresAt).toLocaleString():"长期"}</span></Space><Input.Search aria-label="搜索款号" placeholder="搜索序缇款号 / 供应商款号" value={query} onChange={event=>setQuery(event.target.value)}/></header>
+    <header><h1>{data.title}</h1><Space wrap><Tag>已提交 {data.items.filter((item:Row)=>["SUBMITTED","APPROVED"].includes(item.status)).length}/{data.items.length} 款</Tag><span>有效期：{data.expiresAt?new Date(data.expiresAt).toLocaleString():"长期"}</span></Space><Input.Search aria-label="搜索款号" placeholder="搜索序缇款号 / 供应商款号" value={query} onChange={event=>{setQuery(event.target.value);setPicker("all");}}/></header>
     {error && <Alert closable onClose={()=>setError("")} type="error" title={error} description="未保存内容仍保留在当前页面；如提示其他设备更新，请先保留输入，再重新打开链接核对。" />}
     {current?.feedback && <Alert type="warning" title="本款退回意见" description={current.feedback}/>}
-    <div className="collection-layout"><aside>{results.map((item:Row,index:number)=><Button block type={String(item.id)===selected?"primary":"default"} disabled={busy} key={item.id} onClick={()=>choose(item)}>第{data.items.findIndex((row:Row)=>row.id===item.id)+1}款 · {item.status==="SUBMITTED"?"已提交":statusNames[item.status]}</Button>)}{!results.length && <Empty description="没有匹配的款式"/>}</aside>
+    <div className="collection-mobile-picker">
+      <nav aria-label="按提交状态选择款式">{([
+        {key:"all",label:"全部",icon:<AppstoreOutlined/>,count:data.items.length},
+        {key:"pending",label:"待提交",icon:<EditOutlined/>,count:data.items.filter((item:Row)=>!isSubmitted(item)).length},
+        {key:"submitted",label:"已提交",icon:<CheckCircleOutlined/>,count:data.items.filter(isSubmitted).length}
+      ] as const).map(group=><Button key={group.key} icon={group.icon} type={picker===group.key?"primary":"default"} aria-expanded={picker===group.key} aria-controls="collection-mobile-styles" onClick={()=>setPicker(picker===group.key?null:group.key)}>{group.label} {group.count}</Button>)}</nav>
+      {picker && <div id="collection-mobile-styles" className="collection-mobile-styles">{pickerItems.map(styleButton)}{!pickerItems.length && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有匹配的款式"/>}</div>}
+    </div>
+    <div className="collection-layout"><aside>{results.map(styleButton)}{!results.length && <Empty description="没有匹配的款式"/>}</aside>
     {current && info && <Card title={`第${data.items.findIndex((item:Row)=>item.id===current.id)+1}款${current.xutiStyleNo?" · "+current.xutiStyleNo:""}`}>
       <Form layout="vertical" disabled={!editable || busy}><div className="collection-fields">
         <Form.Item label="序缇款号"><Input value={current.xutiStyleNo} readOnly disabled/></Form.Item>
