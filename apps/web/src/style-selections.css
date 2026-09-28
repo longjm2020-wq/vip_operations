@@ -437,3 +437,7 @@
 .selection-column-setting .selection-column-name { flex: 1; min-width: 0; padding-inline: 4px; }
 .selection-column-setting .selection-column-name:hover, .selection-column-setting .selection-column-name:focus { background: #fff8f1; }
 .selection-column-setting .ant-checkbox-wrapper { flex: 0 0 auto; }
+
+.selection-sheet th, .selection-row-drag { user-select: none; cursor: cell; }
+.selection-sheet .selection-axis-active { background: #e6f4ff; color: #1677ff; }
+.selection-row-reorder { display: block; font-size: 11px; line-height: 14px; cursor: grab; color: #999; }
