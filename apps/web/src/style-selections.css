@@ -433,3 +433,7 @@
 .selection-filter-option-tools { flex-wrap: wrap; }
 .selection-filter-option-tools .ant-btn-link { padding-inline: 4px; }
 .selection-filter-footer > .ant-btn { padding-inline: 10px; }
+
+.selection-column-setting .selection-column-name { flex: 1; min-width: 0; padding-inline: 4px; }
+.selection-column-setting .selection-column-name:hover, .selection-column-setting .selection-column-name:focus { background: #fff8f1; }
+.selection-column-setting .ant-checkbox-wrapper { flex: 0 0 auto; }

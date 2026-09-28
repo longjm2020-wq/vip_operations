@@ -53,6 +53,18 @@ const storedColumns = () => {
     return Array.isArray(value) ? value.filter((column): column is Column => column?.custom && typeof column.key === "string" && typeof column.label === "string") : [];
   } catch { return []; }
 };
+const columnLabelsKey = "style-selection-column-labels-v1";
+const initialColumns = (): Column[] => {
+  let labels: Record<string, string> = {};
+  try { labels = JSON.parse(localStorage.getItem(columnLabelsKey) || "{}") || {}; } catch {}
+  return [...baseColumns, ...storedColumns()].map(column => ({ ...column, label: typeof labels[column.key] === "string" && labels[column.key].trim() ? labels[column.key].trim().slice(0, 40) : column.label }));
+};
+function ColumnNameEditor({ column, onSave }: { column: Column; onSave: (name: string) => void }) {
+  const [value, setValue] = useState(column.label);
+  useEffect(() => setValue(column.label), [column.label]);
+  const save = () => { const name = value.trim(); if (name) onSave(name); else setValue(column.label); };
+  return <Input className="selection-column-name" variant="borderless" aria-label={`编辑字段名：${column.label}`} title="编辑字段名，回车或离开后保存" maxLength={40} value={value} onChange={event => setValue(event.target.value)} onBlur={save} onPressEnter={event => { event.currentTarget.blur(); }} onKeyDown={event => { event.stopPropagation(); if (event.key === "Escape") setValue(column.label); }} onMouseDown={event => event.stopPropagation()} onDragStart={event => { event.preventDefault(); event.stopPropagation(); }} />;
+}
 const rowImages = (row: Row): SelectionImage[] => Array.isArray(row.images) ? row.images : [];
 const valueAt = (row: Row, column: Column) => column.custom ? row.extraFields?.[column.key] || "" : row[column.key];
 const withValue = (row: Row, column: Column, value: unknown) => column.custom
@@ -189,7 +201,7 @@ export function StyleSelectionsPage() {
   const user = useUser();
   const { message } = App.useApp();
   const [filterOpen, setFilterOpen] = useState(false);
-  const [columns, setColumns] = useState<Column[]>(() => [...baseColumns, ...storedColumns()]);
+  const [columns, setColumns] = useState<Column[]>(initialColumns);
   const [visible, setVisible] = useState<string[]>(() => [...baseKeys, ...storedColumns().map((column) => column.key)]);
   const [search, setSearch] = useState("");
   const [columnFilters, setColumnFilters] = useState<SelectionFilters>({});
@@ -236,6 +248,7 @@ export function StyleSelectionsPage() {
   }, [sharedSnapshot, followShared, filterColumn]);
   const snapshot = JSON.stringify(data.data?.data || []);
   useEffect(() => { localStorage.setItem(customColumnsKey, JSON.stringify(columns.filter((column) => column.custom))); }, [columns]);
+  useEffect(() => { localStorage.setItem(columnLabelsKey, JSON.stringify(Object.fromEntries(columns.map(column => [column.key, column.label])))); }, [columns]);
   useEffect(() => {
     const stop = () => setSelectingCells(false);
     window.addEventListener("mouseup", stop);
@@ -476,7 +489,7 @@ export function StyleSelectionsPage() {
     {editorError && <span className="selection-editor-error" role="status">{editorError}</span>}
   </div>;
   const filterContent = <div className="selection-popover"><Input.Search autoFocus allowClear placeholder="搜索批次、款号、供应商、颜色或材质" value={search} onChange={(event) => setSearch(event.target.value)} /><Button onClick={() => { setSearch(""); setFilterOpen(false); }}>清除筛选</Button></div>;
-  const settings = <div className="selection-column-settings"><Button type="dashed" icon={<PlusOutlined />} onClick={addColumn}>新增文本列</Button>{columns.map((column) => <div key={column.key} className="selection-column-setting" draggable onDragStart={() => setDraggedColumn(column.key)} onDragOver={(event) => event.preventDefault()} onDrop={() => { if (draggedColumn) moveColumn(draggedColumn, column.key); setDraggedColumn(null); }}><Checkbox checked={visible.includes(column.key)} onChange={(event) => setVisible((current) => event.target.checked ? [...current, column.key] : current.filter((key) => key !== column.key))}>{column.label}</Checkbox><Button type="text" size="small" icon={<DeleteOutlined />} aria-label={`移除 ${column.label}`} onClick={() => removeColumn(column)} /></div>)}</div>;
+  const settings = <div className="selection-column-settings"><Button type="dashed" icon={<PlusOutlined />} onClick={addColumn}>新增文本列</Button>{columns.map((column) => <div key={column.key} className="selection-column-setting" draggable onDragStart={() => setDraggedColumn(column.key)} onDragOver={(event) => event.preventDefault()} onDrop={() => { if (draggedColumn) moveColumn(draggedColumn, column.key); setDraggedColumn(null); }}><Checkbox checked={visible.includes(column.key)} onChange={(event) => setVisible((current) => event.target.checked ? [...current, column.key] : current.filter((key) => key !== column.key))} aria-label={`显示${column.label}`} /><ColumnNameEditor column={column} onSave={label => setColumns(current => current.map(item => item.key === column.key ? { ...item, label } : item))} /><Button type="text" size="small" icon={<DeleteOutlined />} aria-label={`移除 ${column.label}`} onClick={() => removeColumn(column)} /></div>)}</div>;
   const collaborators = (presence.data?.data || []).filter((person: Row) => String(person.userId) !== String(user.id || ""));
   const applyFormat = (patch: FormatPatch) => {
     if (!canEdit || !formatTarget) return;
