@@ -85,6 +85,7 @@ export function PublicSelectionCollection() {
   const [data,setData]=useState<Row|null>(null),[error,setError]=useState(""),[selected,setSelected]=useState(""),[query,setQuery]=useState(""),[busy,setBusy]=useState(false);
   const [info,setInfo]=useState<CollectionInfo|null>(null),[color,setColor]=useState(""),[qr,setQr]=useState(false),[saving,setSaving]=useState(false);
   const [view,setView]=useState("form"),[drawerOpen,setDrawerOpen]=useState(false);
+  const [scrollRequest,setScrollRequest]=useState({sequence:0,photo:false});
   const [picker,setPicker]=useState<"all"|"pending"|"submitted"|null>(null);
   const dataRef=useRef<Row|null>(null),infoRef=useRef<CollectionInfo|null>(null),selectedRef=useRef("");
   dataRef.current=data;infoRef.current=info;selectedRef.current=selected;
@@ -96,7 +97,8 @@ export function PublicSelectionCollection() {
   const current=data?.items.find((item:Row)=>String(item.id)===selected);
   const dirty=!!current && !!info && JSON.stringify(info)!==JSON.stringify(infoOf(current));
   const editable=!!current && ["DRAFT","REJECTED"].includes(current.status);
-  const activate=(item:Row)=>{
+  const activate=(item:Row,initial=false)=>{
+    if(!initial || new URLSearchParams(location.search).get("photo")==="1")setScrollRequest(previous=>({sequence:previous.sequence+1,photo:initial}));
     setPicker(null);
     selectedRef.current=String(item.id);infoRef.current=infoOf(item);setSelected(String(item.id));setInfo(infoRef.current);
     setColor(collectionTags(item.color)[0] || "");failedDraft.current="";
@@ -106,7 +108,7 @@ export function PublicSelectionCollection() {
       const next=await external(token);dataRef.current=next;setData(next);
       if(initial && next.items.length){
         const wanted=new URLSearchParams(location.search).get("item");
-        activate(next.items.find((item:Row)=>String(item.id)===wanted) || next.items[0]);
+        activate(next.items.find((item:Row)=>String(item.id)===wanted) || next.items[0],true);
       }
       return next;
     } catch(error){setError((error as Error).message);throw error;}
@@ -162,9 +164,21 @@ export function PublicSelectionCollection() {
     return()=>window.clearInterval(timer);
   },[dirty,busy,saving,selected]);
   useEffect(()=>{
-    if(new URLSearchParams(location.search).get("photo")==="1" && current) document.getElementById("collection-photos")?.scrollIntoView({block:"start"});
-  },[selected]);
-  const choose=(item:Row)=>void run(async()=>{await flush();activate(dataRef.current!.items.find((row:Row)=>String(row.id)===String(item.id)) || item);if(view==="table")setDrawerOpen(true);});
+    if(!scrollRequest.sequence)return;
+    let frame=0;
+    frame=requestAnimationFrame(()=>{frame=requestAnimationFrame(()=>{
+      if(view==="table"){
+        if(drawerOpen)document.querySelector(".collection-editor-drawer .ant-drawer-body")?.scrollTo({top:0,behavior:"instant"});
+        return;
+      }
+      if(!scrollRequest.photo && !window.matchMedia("(max-width:650px)").matches)return;
+      const target=document.getElementById(scrollRequest.photo?"collection-photos":"collection-current-editor");
+      const header=document.querySelector(".collection-public > header");
+      if(target)window.scrollTo({top:Math.max(0,window.scrollY+target.getBoundingClientRect().top-(header?.getBoundingClientRect().height || 0)-8),behavior:"instant"});
+    });});
+    return()=>cancelAnimationFrame(frame);
+  },[scrollRequest,view,drawerOpen]);
+  const choose=(item:Row)=>void run(async()=>{await flush();if(document.activeElement instanceof HTMLElement)document.activeElement.blur();activate(dataRef.current!.items.find((row:Row)=>String(row.id)===String(item.id)) || item);if(view==="table")setDrawerOpen(true);});
   const patch=(key:keyof CollectionInfo,value:any)=>setInfo(previous=>{
     if(!previous)return previous;const next={...previous,[key]:value};
     if(key==="color" || key==="sizeRange")next.inventory=collectionInventory(next.color,next.sizeRange,previous.inventory);
@@ -193,7 +207,7 @@ export function PublicSelectionCollection() {
   const isSubmitted=(item:Row)=>["SUBMITTED","APPROVED"].includes(item.status);
   const pickerItems=results.filter((item:Row)=>picker==="pending"?!isSubmitted(item):picker==="submitted"?isSubmitted(item):true);
   const styleButton=(item:Row)=><Button block type={String(item.id)===selected?"primary":"default"} disabled={busy} key={item.id} onClick={()=>choose(item)}>第{data.items.findIndex((row:Row)=>row.id===item.id)+1}款 · {item.status==="SUBMITTED"?"已提交":statusNames[item.status]}</Button>;
-  const editor=current && info && <Card title={`第${data.items.findIndex((item:Row)=>item.id===current.id)+1}款${current.xutiStyleNo?" · "+current.xutiStyleNo:""}`}>
+  const editor=current && info && <Card id="collection-current-editor" title={`第${data.items.findIndex((item:Row)=>item.id===current.id)+1}款${current.xutiStyleNo?" · "+current.xutiStyleNo:""}`}>
       <Form layout="vertical" disabled={!editable || busy}><div className="collection-fields">
         <Form.Item label="序缇款号"><Input value={current.xutiStyleNo} readOnly disabled/></Form.Item>
         <Form.Item label="供应商款号"><Input maxLength={64} value={info.supplierStyleNo} onChange={event=>patch("supplierStyleNo",event.target.value)}/></Form.Item>
@@ -247,7 +261,7 @@ export function PublicSelectionCollection() {
         </tr>;
       })}{!results.length && <tr><td colSpan={12}><Empty description="没有匹配的款式"/></td></tr>}</tbody>
     </table></div>}
-    <Drawer title="产品信息" placement="right" width="min(760px, 100vw)" open={view==="table" && drawerOpen} onClose={()=>void run(async()=>{await flush();setDrawerOpen(false);})} className="collection-editor-drawer">
+    <Drawer afterOpenChange={open=>{if(open)document.querySelector(".collection-editor-drawer .ant-drawer-body")?.scrollTo({top:0,behavior:"instant"});}} title="产品信息" placement="right" width="min(760px, 100vw)" open={view==="table" && drawerOpen} onClose={()=>void run(async()=>{await flush();setDrawerOpen(false);})} className="collection-editor-drawer">
       <div className="collection-public collection-drawer-body">
         {error && <Alert type="error" title={error} description="修改仍保留在当前侧边栏，请处理后重试保存或关闭。"/>}
         {current?.feedback && <Alert type="warning" title="本款退回意见" description={current.feedback}/>}
