@@ -417,13 +417,19 @@
 
 .selection-formatted-value { padding: 7px 10px; min-height: 32px; box-sizing: border-box; white-space: pre-wrap; overflow-wrap: anywhere; outline: none; }
 
-.selection-filter-panel { width: min(430px, calc(100vw - 48px)); }
+.selection-filter-panel { width: min(340px, calc(100vw - 40px)); max-height: calc(100dvh - 64px); overflow-y: auto; }
 .selection-filter-panel .ant-tabs-nav-list { width: 100%; justify-content: space-around; }
-.selection-filter-option-tools, .selection-filter-sharing, .selection-filter-footer { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+.selection-filter-option-tools, .selection-filter-sharing, .selection-filter-footer { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
 .selection-filter-option-tools > .ant-select { width: 115px; }
-.selection-filter-values { height: 240px; overflow: auto; border: 1px solid #eee; border-radius: 6px; padding: 8px; margin-top: 8px; }
+.selection-filter-values { max-height: 180px; overflow: auto; border: 1px solid #eee; border-radius: 6px; padding: 8px; margin-top: 8px; }
 .selection-filter-values .ant-checkbox-wrapper { display: flex; margin: 0; padding: 5px 0; align-items: flex-start; }
 .selection-filter-values .ant-checkbox-wrapper > span:last-child { min-width: 0; overflow-wrap: anywhere; }
 .selection-filter-values small { color: #999; }
-.selection-filter-sharing { justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #eee; }
+.selection-filter-sharing { justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #eee; }
 .selection-filter-footer { justify-content: space-between; flex-wrap: wrap; }
+
+.selection-filter-panel .ant-tabs-nav { margin-bottom: 10px; }
+.selection-filter-panel .ant-tabs-tab { padding-block: 8px; }
+.selection-filter-option-tools { flex-wrap: wrap; }
+.selection-filter-option-tools .ant-btn-link { padding-inline: 4px; }
+.selection-filter-footer > .ant-btn { padding-inline: 10px; }
