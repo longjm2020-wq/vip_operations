@@ -1,11 +1,12 @@
 import { Fragment, useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { App, Button, Card, Checkbox, Empty, Image, Input, Popover, Select, Space, Tooltip } from "antd";
+import { App, Button, Card, Checkbox, Empty, Image, Input, Modal, Popover, Select, Space, Tooltip } from "antd";
 import { BgColorsOutlined, CalendarOutlined, CloseOutlined, DeleteOutlined, FilterOutlined, LinkOutlined, PlusOutlined, SettingOutlined, SortAscendingOutlined, TeamOutlined, UnorderedListOutlined, UploadOutlined } from "@ant-design/icons";
 import { api, queryClient } from "./api";
 import { prepareUpload, readUpload } from "./upload-file";
 import { Header, QueryState, Row, useCan, useUser } from "./shared";
 import { mergeSelectionSave, normalizeSelection, SelectionSaveAttempts } from "./selection-autosave";
+import { fetchSelectionRows, SelectionTransfer } from "./selection-transfer";
 import "./style-selections.css";
 
 const colorOptions = [
@@ -69,6 +70,7 @@ function ImageCell({ images, colors, disabled, onChange }: { images: SelectionIm
   const [url, setUrl] = useState("");
   const [busy, setBusy] = useState(false);
   const [linkOpen, setLinkOpen] = useState(false);
+  const [allOpen, setAllOpen] = useState(false);
   const uploadInput = useRef<HTMLInputElement>(null);
   const latestImages = useRef(images);
   latestImages.current = images;
@@ -96,8 +98,9 @@ function ImageCell({ images, colors, disabled, onChange }: { images: SelectionIm
     event.preventDefault(); event.stopPropagation(); void addFiles(files);
   };
   const editor = <div className="selection-images selection-image-editor" tabIndex={disabled ? -1 : 0} aria-label="图片，支持粘贴" onPaste={paste}>
-    <Image.PreviewGroup><div className="selection-image-list">{images.map((image) => <div className="selection-image-item" key={image.id}>
-      <Image src={image.url} alt={image.color || "款式图片"} width={74} height={60} preview={{ mask: false }} />
+    <Image.PreviewGroup><div className="selection-image-list">{images.map((image, index) => <div className="selection-image-item" key={image.id}>
+      <i className="selection-image-badge">{index + 1}/{images.length}</i>
+      <Image src={image.url} alt={image.color || "款式图片"} width="100%" height="100%" preview={{ mask: false }} />
       {image.color && <span className="selection-image-color">{image.color}</span>}
       {!disabled && <Button className="selection-image-remove" type="text" size="small" aria-label="移除图片" icon={<DeleteOutlined />} onClick={() => onChange(images.filter((item) => item.id !== image.id))} />}
       <Select className="selection-image-color-select" size="small" disabled={disabled} allowClear value={image.color || undefined} placeholder="命名颜色" options={colors.map((color) => ({ value: color, label: color }))} onChange={(color) => onChange(images.map((item) => item.id === image.id ? { ...item, color: color || "" } : item))} />
@@ -112,10 +115,11 @@ function ImageCell({ images, colors, disabled, onChange }: { images: SelectionIm
       <input ref={uploadInput} hidden type="file" multiple accept="image/jpeg,image/png,image/webp" onChange={(event) => { const files = Array.from(event.target.files || []); event.currentTarget.value = ""; void addFiles(files); }} />
     </div>}
   </div>;
-  if (!images.length) return editor;
+  const all = <><Button className="selection-mini-tag" size="small" onClick={() => setAllOpen(true)}>全部</Button><Modal title={`全部图片 · ${images.length} 张`} open={allOpen} onCancel={() => setAllOpen(false)} footer={null} width={560}><div className="selection-image-gallery">{editor}{!images.length && <Empty description="暂无图片，可添加链接、上传或粘贴图片" />}</div></Modal></>;
+  if (!images.length) return <div className="selection-image-empty">{!allOpen && editor}{all}</div>;
   return <div className="selection-image-summary" tabIndex={disabled ? -1 : 0} aria-label="图片，点击缩略图放大" onPaste={paste}>
-    <Image.PreviewGroup><div className="selection-image-thumbs">{images.map((image) => <div key={image.id} className="selection-image-thumb"><Image src={image.url} alt={image.color || "款式图片"} width={32} height={32} preview={{ mask: false }} />{image.color && <span>{image.color}</span>}</div>)}</div></Image.PreviewGroup>
-    {!disabled && <Popover trigger="click" title={`图片管理 · ${images.length} 张`} content={editor}><Button className="selection-mini-tag selection-image-manage" size="small" aria-label="管理图片" icon={<PlusOutlined />} /></Popover>}
+    <Image.PreviewGroup><div className="selection-image-thumbs">{images.map((image, index) => <div key={image.id} className="selection-image-thumb"><i className="selection-image-badge">{index + 1}/{images.length}</i><Image src={image.url} alt={image.color || "款式图片"} width="100%" height="100%" preview={{ mask: false }} />{image.color && <span>{image.color}</span>}</div>)}</div></Image.PreviewGroup>
+    <div className="selection-image-actions">{all}</div>
   </div>;
 }
 
@@ -130,8 +134,9 @@ export function StyleSelectionsPage() {
   const [groupBy, setGroupBy] = useState<"none" | "batch" | "supplier" | "color">("none");
   const [sort, setSort] = useState("sortOrder");
   const [direction, setDirection] = useState<"asc" | "desc">("asc");
-  const [rowHeight, setRowHeight] = useState<"compact" | "normal" | "loose">("normal");
+  const [rowHeight, setRowHeight] = useState<"compact" | "normal" | "loose" | "extra">("normal");
   const [rows, setRows] = useState<Row[]>([]);
+  const [addCount, setAddCount] = useState(10);
   const [selectedRows, setSelectedRows] = useState<string[]>([]);
   const [selectedCells, setSelectedCells] = useState<Set<string>>(new Set());
   const [cellAnchor, setCellAnchor] = useState<{ rowKey: string; columnKey: string } | null>(null);
@@ -149,7 +154,7 @@ export function StyleSelectionsPage() {
   const original = useRef(new Map<string, Row>());
   const appliedSnapshot = useRef("");
   const queryString = new URLSearchParams({ page: "1", pageSize: "100", ...(search ? { q: search } : {}), sort, direction }).toString();
-  const data = useQuery({ queryKey: ["style-selections", queryString], queryFn: () => api("/style-selections?" + queryString), refetchInterval: saving ? false : 10000, refetchOnWindowFocus: !saving });
+  const data = useQuery({ queryKey: ["style-selections", queryString], queryFn: () => fetchSelectionRows(search, sort, direction), refetchInterval: saving ? false : 10000, refetchOnWindowFocus: !saving });
   const presence = useQuery({ queryKey: ["style-selection-presence"], queryFn: () => api("/style-selections/presence"), refetchInterval: 10000 });
   const snapshot = JSON.stringify(data.data?.data || []);
   useEffect(() => { localStorage.setItem(customColumnsKey, JSON.stringify(columns.filter((column) => column.custom))); }, [columns]);
@@ -173,9 +178,9 @@ export function StyleSelectionsPage() {
     return () => window.clearInterval(timer);
   }, [editingId]);
   useEffect(() => {
-    if (!data.data || appliedSnapshot.current === snapshot || saving || rows.some((row) => !row.id || !sameRow(row, original.current.get(row._key) || {}))) return;
+    if (!data.data || appliedSnapshot.current === snapshot || saving || rows.some((row) => (row.id || hasContent(row)) && (!row.id || !sameRow(row, original.current.get(row._key) || {})))) return;
     const next = (data.data.data || []).map((row: Row) => ({ ...normalizeSelection(row), _key: rows.find((current) => current.id === row.id)?._key || String(row.id) }));
-    setRows(next); setErrors({});
+    setRows([...next, ...rows.filter(row => !row.id && !hasContent(row))]); setErrors({});
     original.current = new Map(next.map((row: Row) => [row._key, { ...row }])); appliedSnapshot.current = snapshot;
   }, [data.data, saving, snapshot, rows]);
 
@@ -186,17 +191,18 @@ export function StyleSelectionsPage() {
     if (groupBy === "none") return [{ label: "", rows }];
     return rows.reduce<{ label: string; rows: Row[] }[]>((result, row) => { const key = label(row); const target = result.find((item) => item.label === key); if (target) target.rows.push(row); else result.push({ label: key, rows: [row] }); return result; }, []);
   }, [groupBy, rows]);
-  const hasContent = (row: Row) => baseKeys.some((key) => key === "images" ? rowImages(row).length : Boolean(clean(row[key]))) || Object.values(row.extraFields || {}).some(Boolean);
+  const hasContent = (row: Row) => baseKeys.some((key) => key === "images" ? rowImages(row).length : Boolean(clean(row[key]))) || Object.values(row.extraFields || {}).some(Boolean) || Object.keys(row.cellColors || {}).length > 0;
   const dirtyCount = rows.filter((row) => (row.id || hasContent(row)) && (!row.id || !sameRow(row, original.current.get(row._key) || {}))).length;
 
   const update = (key: string, column: Column, value: unknown) => {
     setRows((current) => current.map((row) => row._key === key ? withValue(row, column, value) : row));
     setErrors((current) => { const next = { ...current }; delete next[`${key}:${column.key}`]; return next; });
   };
-  const add = () => {
+  const add = (count = 1) => {
     if (!canEdit) return;
     const nextOrder = Math.max(0, ...rows.map((row) => Number(row.sortOrder || 0))) + 1;
-    const key = crypto.randomUUID(); setRows((current) => [...current, { _key: key, images: [], cellColors: {}, extraFields: {}, sortOrder: nextOrder, rowColor: "NONE" }]); setSelectedRows([key]);
+    const next = Array.from({ length: count }, (_, index) => ({ _key: crypto.randomUUID(), images: [], cellColors: {}, extraFields: {}, sortOrder: nextOrder + index, rowColor: "NONE" }));
+    setRows(current => [...current, ...next]); setSelectedRows(next.map(row => row._key));
   };
   const deleteRows = async () => {
     if (!canEdit || !selectedRows.length || deleting) return message.warning("请先勾选需要删除的行");
@@ -315,7 +321,7 @@ export function StyleSelectionsPage() {
   const renderCell = (row: Row, column: Column) => {
     const disabled = !canEdit, error = errors[`${row._key}:${column.key}`] || errors[`${row._key}:save`], selected = selectedCells.has(cellId(row._key, column.key));
     const common = { className: `${error ? "selection-cell-error " : ""}${selected ? "selection-cell-active" : ""}`, title: error, onMouseDown: () => cellMouseDown(row._key, column.key), onMouseEnter: () => cellMouseEnter(row._key, column.key), onCopy: (event: ClipboardEvent<HTMLTableCellElement>) => copyCells(event, row._key, column.key), onPaste: (event: ClipboardEvent<HTMLTableCellElement>) => pasteCells(event, row._key, column.key) };
-    const cell = (content: React.ReactNode) => <td {...common}><div className="selection-cell-content">{content}</div></td>;
+    const cell = (content: React.ReactNode) => <td key={column.key} {...common} style={{ backgroundColor: colorOptions.find(option => option.value === (row.cellColors?.[column.key] || row.rowColor))?.color }}><div className="selection-cell-content">{content}</div></td>;
     if (column.key === "images") return cell(<ImageCell images={rowImages(row)} colors={splitTags(row.color)} disabled={disabled} onChange={(value) => update(row._key, column, value)} />);
     if (column.key === "color") return cell(<TagCell value={row.color} disabled={disabled} placeholder="+ 颜色" options={colorSuggestions} onChange={(value) => update(row._key, column, value)} />);
     if (column.key === "sizeRange") return cell(<TagCell value={row.sizeRange} disabled={disabled} placeholder="+ 尺码" options={sizes} onChange={(value) => update(row._key, column, value)} />);
@@ -328,16 +334,17 @@ export function StyleSelectionsPage() {
   const collaborators = (presence.data?.data || []).filter((person: Row) => String(person.userId) !== String(user.id || ""));
   return <><Header title="选款登记" subtitle="集中登记候选款的图片、款号、供应商、颜色、材质与定价信息。" />
     <Card className="selection-card"><div className="selection-toolbar" aria-label="选款登记表格工具栏"><Space wrap size={4}>
-      <Button type="link" icon={<PlusOutlined />} disabled={!canEdit} onClick={add}>添加一行</Button><Button type="link" danger icon={<DeleteOutlined />} disabled={!canEdit || !selectedRows.length || saving} loading={deleting} onClick={deleteRows}>删除行</Button>
+      <Button type="link" icon={<PlusOutlined />} disabled={!canEdit} onClick={() => add()}>添加一行</Button><Button type="link" danger icon={<DeleteOutlined />} disabled={!canEdit || !selectedRows.length || saving} loading={deleting} onClick={deleteRows}>删除行</Button>
       <Popover trigger="click" content={settings}><Button type="text" icon={<SettingOutlined />}>表格设置</Button></Popover><Popover trigger="click" open={filterOpen} onOpenChange={setFilterOpen} content={filterContent}><Button type="text" icon={<FilterOutlined />}>筛选</Button></Popover>
       <Select className="selection-tool-select" value={groupBy} suffixIcon={<TeamOutlined />} options={[{ value: "none", label: "不分组" }, { value: "batch", label: "按登记批次分组" }, { value: "supplier", label: "按供应商编码分组" }, { value: "color", label: "按颜色分组" }]} onChange={setGroupBy} />
       <Select className="selection-tool-select" value={`${sort}:${direction}`} suffixIcon={<SortAscendingOutlined />} options={[{ value: "sortOrder:asc", label: "手动排序" }, { value: "updatedAt:desc", label: "最近修改" }, { value: "createdAt:desc", label: "最新登记" }, { value: "registrationBatch:desc", label: "登记批次" }, { value: "xutiStyleNo:asc", label: "序缇款号" }, { value: "supplierCode:asc", label: "供应商编码" }, { value: "supplyPriceExclTax:asc", label: "供货价" }, { value: "vipPrice:asc", label: "唯品价" }]} onChange={(value) => { const [nextSort, nextDirection] = value.split(":"); setSort(nextSort); setDirection(nextDirection as "asc" | "desc"); }} />
-      <Select className="selection-tool-select" value={rowHeight} suffixIcon={<UnorderedListOutlined />} options={[{ value: "compact", label: "紧凑行高" }, { value: "normal", label: "标准行高" }, { value: "loose", label: "宽松行高" }]} onChange={setRowHeight} />
+      <Select className="selection-tool-select" value={rowHeight} suffixIcon={<UnorderedListOutlined />} options={[{ value: "compact", label: "紧凑行高" }, { value: "normal", label: "标准行高" }, { value: "loose", label: "宽松行高" }, { value: "extra", label: "超宽行高 · 120px" }]} onChange={setRowHeight} />
       <Popover trigger="click" content={<div className="selection-color-menu">{colorOptions.map((option) => <Button key={option.value} type="text" onClick={() => applyColor(option.value)}><span className="selection-color-dot" style={{ background: option.color }} />{option.label}</Button>)}</div>}><Button type="text" icon={<BgColorsOutlined />}>填色</Button></Popover>
+    <SelectionTransfer canEdit={canEdit} blocked={!!dirtyCount || saving || deleting} selectedRows={rows.filter(row => selectedRows.includes(row._key))} query={search} onImported={() => { appliedSnapshot.current = ""; void queryClient.invalidateQueries({ queryKey: ["style-selections"] }); }} />
     </Space><span className="selection-record-count">{!!Object.keys(errors).length && <Tooltip title="修改尚未保存；悬停红色单元格查看原因，修正后重试"><Button type="text" size="small" danger disabled={saving} onClick={() => { attempts.current.retry(); setRetryVersion((value) => value + 1); }}>未保存 · 重试</Button></Tooltip>} 记录数 {rows.length} <b>·</b> 行 {selectedRows.length} <b>·</b> 单元格 {selectedCells.size}</span></div>
     {!!collaborators.length && <div className="selection-collaborators" aria-label="在线协作者">{collaborators.map((person: Row) => <span key={person.userId} title={person.editingId ? `正在编辑第 ${person.editingId} 行` : "在线"}><i>{String(person.displayName || "协").slice(0, 1)}</i>{person.displayName}{person.editingId ? " · 编辑中" : " · 在线"}</span>)}</div>}
       <QueryState error={data.error || presence.error} reload={() => { data.refetch(); presence.refetch(); }} /><div className={`selection-sheet row-${rowHeight}`}><table aria-label="选款登记在线智能表格" style={{ width: activeColumns.reduce((width, column) => width + column.width, 96) }}><colgroup><col style={{ width: 48 }} /><col style={{ width: 48 }} />{activeColumns.map((column) => <col key={column.key} style={{ width: column.width }} />)}</colgroup><thead><tr><th className="selection-check"><Checkbox aria-label="选择全部可见行" checked={!!rows.length && selectedRows.length === rows.length} indeterminate={selectedRows.length > 0 && selectedRows.length < rows.length} onChange={(event) => setSelectedRows(event.target.checked ? rows.map((row) => row._key) : [])} /></th><th className="selection-index">#</th>{activeColumns.map((column) => <th key={column.key} draggable onDragStart={() => setDraggedColumn(column.key)} onDragOver={(event) => event.preventDefault()} onDrop={() => { if (draggedColumn) moveColumn(draggedColumn, column.key); setDraggedColumn(null); }} style={{ width: column.width, minWidth: column.width }}><span>{column.label}</span><i className="selection-column-resize" aria-label={`调整 ${column.label} 列宽`} onMouseDown={(event) => { event.preventDefault(); event.stopPropagation(); setResizingColumn({ key: column.key, startX: event.clientX, startWidth: column.width }); }} /></th>)}</tr></thead><tbody>
         {data.isLoading && <tr><td colSpan={activeColumns.length + 2} className="selection-placeholder">正在读取选款登记…</td></tr>}{!data.isLoading && !rows.length && <tr><td colSpan={activeColumns.length + 2} className="selection-placeholder"><Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无选款登记，点击添加一行开始录入" /></td></tr>}
         {grouped.map((group) => <Fragment key={group.label || "all"}>{group.label && <tr className="selection-group-row"><td colSpan={activeColumns.length + 2}>{group.label}<span>{group.rows.length} 条</span></td></tr>}{group.rows.map((row, index) => <tr key={row._key}><td className="selection-check"><Checkbox aria-label={`选择 ${row.xutiStyleNo || "未填写序缇款号"}`} checked={selectedRows.includes(row._key)} onChange={(event) => setSelectedRows((current) => event.target.checked ? [...current, row._key] : current.filter((key) => key !== row._key))} /></td><td className="selection-index selection-row-drag" draggable onDragStart={() => setDraggedRow(row._key)} onDragOver={(event: DragEvent) => event.preventDefault()} onDrop={() => { if (draggedRow) moveRow(draggedRow, row._key); setDraggedRow(null); }}>{index + 1}</td>{activeColumns.map((column) => renderCell(row, column))}</tr>)}</Fragment>)}
-      </tbody></table></div><div className="selection-bottom-bar"><span>拖动可选择多个单元格后填色；Ctrl/Cmd+C 复制、Ctrl/Cmd+V 粘贴；拖动序号调整行，拖动列标题调整列。</span><span>{canEdit ? "图片支持网址、本地上传和粘贴。" : "当前账号仅可查看。"}</span></div></Card></>;
+      </tbody></table></div><div className="selection-bulk-add"><Select aria-label="批量添加行数" value={addCount} onChange={setAddCount} options={[10, 20, 50, 100, 200].map(value => ({ value, label: `${value} 行` }))} /><Button icon={<PlusOutlined />} disabled={!canEdit} onClick={() => add(addCount)}>添加 {addCount} 行</Button><span>空白行填写后自动保存</span></div><div className="selection-bottom-bar"><span>拖动可选择多个单元格后填色；Ctrl/Cmd+C 复制、Ctrl/Cmd+V 粘贴；拖动序号调整行，拖动列标题调整列。</span><span>{canEdit ? "图片支持网址、本地上传和粘贴。" : "当前账号仅可查看。"}</span></div></Card></>;
 }

@@ -576,6 +576,36 @@ try {
     ).status,
     409,
   );
+  const preview = await ok("/style-selections/import/preview", "POST", { rows: [
+    { xutiStyleNo: "IMPORT-001", color: "黑/白", vipPrice: "99.00", images: [{ id: "first", url: uploadedImage.url, color: "黑" }] },
+    { xutiStyleNo: selection.xutiStyleNo, material: "导入更新" }
+  ] });
+  assert.equal(preview.created, 1); assert.equal(preview.updated, 1);
+  const importKey = randomUUID();
+  const imported = await ok("/style-selections/import", "POST", { rows: preview.rows }, importKey);
+  assert.deepEqual(imported, { created: 1, updated: 1 });
+  assert.deepEqual(await ok("/style-selections/import", "POST", { rows: preview.rows }, importKey), imported);
+  const kept = (await ok("/style-selections?q=" + selection.xutiStyleNo))[0];
+  assert.equal(kept.images.length, manyImages.length);
+  assert.deepEqual(kept.cellColors, manySaved.cellColors);
+  assert.equal(kept.cellColors.vipPrice, "GREEN");
+  assert.equal(kept.material, "导入更新");
+  assert.equal((await request("/style-selections/import/preview", "POST", { rows: [{ xutiStyleNo: "DUP" }, { xutiStyleNo: " DUP " }] })).status, 400);
+  assert.equal((await request("/style-selections/import/preview", "POST", { rows: [{ xutiStyleNo: "BAD-COLOR", color: "黑", images: [{ id: "x", url: uploadedImage.url, color: "白" }] }] })).status, 400);
+  const stalePlan = await ok("/style-selections/import/preview", "POST", { rows: [{ xutiStyleNo: "ROLLBACK-NEW" }, { xutiStyleNo: "IMPORT-001", material: "旧预览" }] });
+  const existingImport = (await ok("/style-selections?q=IMPORT-001"))[0];
+  await ok("/style-selections/" + existingImport.id, "PATCH", { material: "并发修改", expectedUpdatedAt: existingImport.updatedAt });
+  assert.equal((await request("/style-selections/import", "POST", { rows: stalePlan.rows })).status, 409);
+  assert.equal((await ok("/style-selections?q=ROLLBACK-NEW")).length, 0);
+  const duplicate = await ok("/style-selections", "POST", { xutiStyleNo: "IMPORT-001" });
+  assert.equal((await request("/style-selections/import/preview", "POST", { rows: [{ xutiStyleNo: "IMPORT-001" }] })).status, 400);
+  await ok("/style-selections/" + duplicate.id, "DELETE");
+  const fillOnly = await ok("/style-selections", "POST", { cellColors: { supplierCode: "PINK" } });
+  assert.equal((await ok("/style-selections?pageSize=100")).find((row: any) => row.id === fillOnly.id).cellColors.supplierCode, "PINK");
+  const bulkPlan = await ok("/style-selections/import/preview", "POST", { rows: Array.from({ length: 500 }, (_, index) => ({ xutiStyleNo: `BULK-QA-${index}`, registrationBatch: "2026-09-28" })) });
+  assert.deepEqual(await ok("/style-selections/import", "POST", { rows: bulkPlan.rows }), { created: 500, updated: 0 });
+  assert.equal((await request("/style-selections?q=BULK-QA&pageSize=100&page=5")).body.total, 500);
+  check("style workbook import matches, preserves blank fields, rejects duplicates, rolls back conflicts and retries idempotently");
   await ok("/style-selections/" + selection.id, "DELETE");
   assert.equal((await ok("/style-selections?q=SUP-SELECT-001&pageSize=100")).length, 0);
   check("style selections persist formatted cells, online presence, deletion and stale-edit protection");

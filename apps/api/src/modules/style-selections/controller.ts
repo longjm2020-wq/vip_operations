@@ -8,6 +8,12 @@ const paramId = (value: string) => parse(id, value);
 
 @Controller("api/v1/style-selections")
 class StyleSelectionsController {
+  @Permission("selection.manage") @Post("import/preview") previewImport(@Body() body: unknown) {
+    return selections.previewImport(body);
+  }
+  @Permission("selection.manage") @Post("import") commitImport(@Req() request: AuthRequest, @Body() body: unknown) {
+    return selections.commitImport(context(request), body);
+  }
   @Permission("selection.manage") @Post("images") uploadImage(@Req() request: AuthRequest, @Body() body: unknown) {
     return selections.uploadImage(context(request), body);
   }
