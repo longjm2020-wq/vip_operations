@@ -26,6 +26,8 @@ export const permissions = [
   "receipt.post",
   "audit.read",
   "vip.settings",
+  "selection.read",
+  "selection.manage",
   "project.read",
   "project.create",
   "sop.manage",
@@ -46,6 +48,8 @@ const buyer = [
   "purchase.update",
   "purchase.submit",
   "receipt.read",
+  "selection.read",
+  "selection.manage",
 ];
 export const roleSeeds: Record<
   string,
@@ -65,6 +69,8 @@ export const roleSeeds: Record<
       "supplier.read",
       "warehouse.read",
       "inventory.read",
+      "selection.read",
+      "selection.manage",
     ],
   },
   BUYER: { name: "采购员", permissions: buyer },
@@ -75,6 +81,8 @@ export const roleSeeds: Record<
       "purchase.confirm",
       "purchase.cancel",
       "supplier.manage",
+      "selection.read",
+      "selection.manage",
     ],
   },
   STOCK: {
@@ -98,6 +106,7 @@ export const roleSeeds: Record<
       "inventory.read",
       "purchase.read",
       "receipt.read",
+      "selection.read",
     ],
   },
 };

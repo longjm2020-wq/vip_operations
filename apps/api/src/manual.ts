@@ -32,6 +32,7 @@ export const manualPermissions: Record<string, string | null> = {
   "24-supplier-orders": "supply.portal",
   "25-supply-statements": "supply.reconcile",
   "26-supplier-statements": "supply.portal",
+  "27-style-selections": "selection.read",
 };
 @Controller("api/v1/help")
 export class ManualController {

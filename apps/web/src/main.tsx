@@ -54,6 +54,7 @@ import {
 } from "./operations";
 import { AccessPage, AuditPage } from "./system";
 import { VipPage } from "./vip";
+import { StyleSelectionsPage } from "./style-selections";
 import { ManualPage, manualHref } from "./manual";
 import {
   SopPage,
@@ -70,7 +71,7 @@ import {
 } from "./supply";
 import { SupplyOrders, SupplyOrderNotice } from "./supply-orders";
 import { SupplyStatements } from "./supply-statements";
-const coreFeatureSummary = "ERP经营 · 供应链订单对账 · 项目协作";
+const coreFeatureSummary = "ERP经营 · 选款登记 · 供应链订单对账 · 项目协作";
 const useUi = create<{ collapsed: boolean; toggle: () => void }>((set) => ({
   collapsed: false,
   toggle: () => set((s) => ({ collapsed: !s.collapsed })),
@@ -214,6 +215,12 @@ function Workspace({ user }: { user: Row }) {
       label: "采购建议",
       icon: <ShoppingCartOutlined />,
       permission: "purchase.read",
+    },
+    {
+      key: "/style-selections",
+      label: "选款登记",
+      icon: <DatabaseOutlined />,
+      permission: "selection.read",
     },
     {
       key: "/purchase-orders",
@@ -499,6 +506,7 @@ function Workspace({ user }: { user: Row }) {
                 path="/purchase-suggestions"
                 element={<SuggestionsPage />}
               />
+              <Route path="/style-selections" element={<StyleSelectionsPage />} />
               <Route path="/users" element={<AccessPage />} />
               <Route path="/roles" element={<AccessPage roles />} />
               <Route path="/audit-logs" element={<AuditPage />} />

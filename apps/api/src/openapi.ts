@@ -6,6 +6,7 @@ import {
   receiptInput,
   cmdInput,
 } from "./modules/purchases/service.js";
+import { styleSelectionInput } from "./modules/style-selections/service.js";
 import { id, qty, positive, money, text } from "./core.js";
 export function enrichOpenApi(doc: OpenAPIObject) {
   const schema = (s: z.ZodType) =>
@@ -101,6 +102,14 @@ export function enrichOpenApi(doc: OpenAPIObject) {
     );
   }
   set("/api/v1/products/{id}/skus", "get");
+  set("/api/v1/style-selections", "get", undefined, "分页查询选款登记");
+  set("/api/v1/style-selections", "post", styleSelectionInput, "创建选款登记");
+  set(
+    "/api/v1/style-selections/{id}",
+    "patch",
+    styleSelectionInput.partial(),
+    "编辑选款登记",
+  );
   set(
     "/api/v1/products/{id}/skus",
     "post",

@@ -11,6 +11,7 @@ const moduleChapters: Record<string, string> = {
   skus: "03-skus",
   inventory: "04-inventory",
   "purchase-suggestions": "06-suggestions",
+  "style-selections": "27-style-selections",
   "purchase-orders": "07-purchases",
   receipts: "08-receipts",
   suppliers: "09-suppliers",

@@ -11,6 +11,7 @@ import { actorFor } from "./modules/auth/service.js";
 import { NestExpressApplication } from "@nestjs/platform-express";
 import { ProjectsModule } from "./modules/projects/controller.js";
 import { SupplyModule } from "./modules/supply/controller.js";
+import { StyleSelectionsModule } from "./modules/style-selections/controller.js";
 import {
   AuthModule,
   InventoryModule,
@@ -31,6 +32,7 @@ import { ManualController } from "./manual.js";
     PurchaseModule,
     SystemModule,
     ProjectsModule,
+    StyleSelectionsModule,
     MasterModule,
   ],
   providers: [
