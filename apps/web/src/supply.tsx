@@ -2,7 +2,7 @@ import { PurchaseDrawer } from "./supply-orders";
 import { downloadSheet } from "./download-sheet";
 import { useQualificationOcr } from "./qualification-ocr";
 import { BrandVideo } from "./brand-video";
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { prepareUpload, readUpload } from "./upload-file";
 import { qualificationFieldError } from "../../../packages/contracts/src/qualification-validation";
 import { useQuery } from "@tanstack/react-query";
@@ -22,7 +22,6 @@ import {
   Input,
   InputNumber,
   Modal,
-  Radio,
   Select,
   Space,
   Table,
@@ -122,7 +121,8 @@ export function SupplierRegister() {
               onFinish={async (b) => {
                 setBusy(true);
                 try {
-                  const { confirm, ...body } = b;
+                  const body = { ...b };
+                  delete body.confirm;
                   await api("/supply/register", "POST", body);
                   setDone(true);
                 } catch (e) {

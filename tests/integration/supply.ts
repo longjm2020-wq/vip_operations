@@ -20,8 +20,7 @@ process.env.VIP_MODE = "disabled";
 await migrate();
 const { seed } = await import("../../scripts/seed.js");
 await seed();
-const { db, one, rows } = await import("../../packages/database/src/index.js");
-const { passwordHash } = await import("../../apps/api/src/core.js");
+const { db, one } = await import("../../packages/database/src/index.js");
 const objects = new Map<string, Buffer>();
 const bucketTest = true;
 const bucketServer = bucketTest

@@ -96,7 +96,7 @@ function CustomControl({ field, ...props }: any) {
   );
 }
 export function ProductArchive() {
-  const { message, modal } = App.useApp(),
+  const { message } = App.useApp(),
     user = useUser(),
     canEdit = useCan("product.update"),
     canCreate = useCan("product.create");

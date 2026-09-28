@@ -1,6 +1,13 @@
 import tseslint from "typescript-eslint";
 export default tseslint.config(
-  { ignores: ["dist/**", "node_modules/**", "**/generated/**"] },
+  {
+    ignores: [
+      "dist/**",
+      "node_modules/**",
+      "**/generated/**",
+      "apps/web/public/ocr/**",
+    ],
+  },
   ...tseslint.configs.recommended,
   {
     rules: {
