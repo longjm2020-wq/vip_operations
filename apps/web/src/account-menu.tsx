@@ -196,7 +196,7 @@ export function AccountMenu({
             />
           </label>
           <p className="secondary">
-            支持 JPG、PNG、WebP；居中裁切并压缩至1 MB以下，确认预览后保存。
+            支持 JPG、PNG、WebP；居中裁切并压缩至500 KB以下，确认预览后保存。
           </p>
         </div>
       </Modal>

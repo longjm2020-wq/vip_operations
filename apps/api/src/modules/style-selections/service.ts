@@ -72,7 +72,7 @@ const updateInput = styleSelectionInput
 const selectColumns = `
   s.id,s.registration_batch::text,s.images,s.cell_colors,s.cell_alignments,s.cell_vertical_alignments,s.cell_text_colors,s.cell_number_formats,s.extra_fields,s.xuti_style_no,s.supplier_style_no,
   s.supplier_code,s.color,s.size_range,s.material,s.supply_price_excl_tax,
-  s.vip_price,s.live_price,s.tag_price,s.row_color,s.sort_order,s.created_by,s.version,
+  s.selling_points,s.reorder_days,s.collection_inventory,s.vip_price,s.live_price,s.tag_price,s.row_color,s.sort_order,s.created_by,s.version,
   s.created_at,s.updated_at`;
 const source = " FROM style_selections s";
 
@@ -85,7 +85,7 @@ export async function uploadImage(c: Context, input: unknown) {
   const valid = type === "image/png" ? bytes.subarray(0, 8).equals(Buffer.from("89504e470d0a1a0a", "hex"))
     : type === "image/jpeg" ? bytes.subarray(0, 3).equals(Buffer.from("ffd8ff", "hex"))
     : bytes.toString("ascii", 0, 4) === "RIFF" && bytes.toString("ascii", 8, 12) === "WEBP";
-  if (!valid || !bytes.length || bytes.length >= 1024 * 1024) fail("VALIDATION_ERROR", "图片格式无效或未压缩至 1 MB 以下", 400);
+  if (!valid || !bytes.length || bytes.length >= 500 * 1024) fail("VALIDATION_ERROR", "图片格式无效或未压缩至 500 KB 以下", 400);
   return command(c, "style-selections/image-upload", body, async (tx) => {
     const id = randomUUID();
     await rows(tx, "INSERT INTO style_selection_images(id,content_type,content,created_by) VALUES($1::uuid,$2,$3,$4::bigint)", id, type, bytes, c.actor.id);

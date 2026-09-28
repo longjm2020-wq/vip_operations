@@ -1,3 +1,5 @@
+import { SelectionCollections } from "./selection-collections";
+import { CollectionStockEditor } from "./selection-collection-stock";
 import { SelectionPhotoQr } from "./selection-photo-qr";
 import { SelectionFilterPanel } from "./selection-filter-panel";
 import type { SelectionView } from "../../../packages/contracts/src/selection-view";
@@ -40,6 +42,8 @@ const baseColumns: Column[] = [
   { key: "livePrice", label: "直播价", width: 120 }, { key: "tagPrice", label: "吊牌价", width: 120 },
 ];
 const baseKeys = baseColumns.map((column) => column.key);
+const collectionColumns: Column[] = [{key:"sellingPoints",label:"产品卖点/简介",width:200},{key:"reorderDays",label:"翻单周期（天）",width:120},{key:"collectionInventory",label:"库存数",width:160}];
+const collectionKeys = new Set(collectionColumns.map(column => column.key));
 const moneyKeys = new Set(["supplyPriceExclTax", "vipPrice", "livePrice", "tagPrice"]);
 const clean = (value: unknown) => (value === "" || value === undefined ? null : value);
 const splitTags = (value: unknown) => [...new Set(String(value || "").split("/").map((item) => item.trim()).filter(Boolean))];
@@ -57,7 +61,7 @@ const columnLabelsKey = "style-selection-column-labels-v1";
 const initialColumns = (): Column[] => {
   let labels: Record<string, string> = {};
   try { labels = JSON.parse(localStorage.getItem(columnLabelsKey) || "{}") || {}; } catch {}
-  return [...baseColumns, ...storedColumns()].map(column => ({ ...column, label: typeof labels[column.key] === "string" && labels[column.key].trim() ? labels[column.key].trim().slice(0, 40) : column.label }));
+  return [...baseColumns, ...collectionColumns, ...storedColumns()].map(column => ({ ...column, label: typeof labels[column.key] === "string" && labels[column.key].trim() ? labels[column.key].trim().slice(0, 40) : column.label }));
 };
 function ColumnNameEditor({ column, onSave }: { column: Column; onSave: (name: string) => void }) {
   const [value, setValue] = useState(column.label);
@@ -67,7 +71,7 @@ function ColumnNameEditor({ column, onSave }: { column: Column; onSave: (name: s
 }
 const rowImages = (row: Row): SelectionImage[] => Array.isArray(row.images) ? row.images : [];
 const valueAt = (row: Row, column: Column) => column.custom ? row.extraFields?.[column.key] || "" : row[column.key];
-const withValue = (row: Row, column: Column, value: unknown) => column.custom
+const withValue = (row: Row, column: Column, value: unknown) => collectionKeys.has(column.key) ? row : column.custom
   ? { ...row, extraFields: { ...(row.extraFields || {}), [column.key]: String(value || "") } }
   : { ...row, [column.key]: column.key === "sizeRange" ? sortSelectionSizes(value) : value };
 const sameRow = (a: Row, b: Row) =>
@@ -177,7 +181,7 @@ function ImageCell({ images, colors, disabled, onChange, mobileId }: { mobileId?
       <Popover trigger="click" open={linkOpen} onOpenChange={setLinkOpen} title="添加图片链接" content={<Space.Compact className="selection-image-url"><Input size="small" aria-label="图片网址" value={url} placeholder="粘贴图片网址" onChange={(event) => setUrl(event.target.value)} onPressEnter={addUrl} /><Button size="small" onClick={addUrl}>添加</Button></Space.Compact>}>
         <Button className="selection-mini-tag" size="small" icon={<LinkOutlined />}>链接</Button>
       </Popover>
-      <Tooltip title="上传或在单元格粘贴图片；每张压缩至 1 MB 以下，支持多选">
+      <Tooltip title="上传或在单元格粘贴图片；每张压缩至 500 KB 以下，支持多选">
         <Button className="selection-mini-tag" size="small" icon={<UploadOutlined />} loading={busy} onClick={() => uploadInput.current?.click()}>上传</Button>
       </Tooltip>
       <input ref={uploadInput} hidden type="file" multiple accept="image/jpeg,image/png,image/webp" onChange={(event) => { const files = Array.from(event.target.files || []); event.currentTarget.value = ""; void addFiles(files); }} />
@@ -202,7 +206,7 @@ export function StyleSelectionsPage() {
   const { message } = App.useApp();
   const [filterOpen, setFilterOpen] = useState(false);
   const [columns, setColumns] = useState<Column[]>(initialColumns);
-  const [visible, setVisible] = useState<string[]>(() => [...baseKeys, ...storedColumns().map((column) => column.key)]);
+  const [visible, setVisible] = useState<string[]>(() => [...baseKeys, ...collectionColumns.map(column => column.key), ...storedColumns().map((column) => column.key)]);
   const [search, setSearch] = useState("");
   const [columnFilters, setColumnFilters] = useState<SelectionFilters>({});
   const [columnSort, setColumnSort] = useState<SelectionView["sort"]>(null);
@@ -449,7 +453,7 @@ export function StyleSelectionsPage() {
     return () => window.clearTimeout(timer);
   }, [canEdit, dirtyCount, saving, deleting, rows, retryVersion]);
   const renderCell = (row: Row, column: Column) => {
-    const disabled = !canEdit, error = errors[`${row._key}:${column.key}`] || errors[`${row._key}:save`], selected = selectedCells.has(cellId(row._key, column.key));
+    const disabled = !canEdit || collectionKeys.has(column.key), error = errors[`${row._key}:${column.key}`] || errors[`${row._key}:save`], selected = selectedCells.has(cellId(row._key, column.key));
     const common = { tabIndex: 0, onDoubleClick: () => setCellTextEditing(true), onFocusCapture: () => { setCellAnchor({ rowKey: row._key, columnKey: column.key }); setEditingId(row.id || null); if (!selectedCells.has(cellId(row._key, column.key))) setSelectedCells(new Set([cellId(row._key, column.key)])); }, className: `${error ? "selection-cell-error " : ""}${selected ? "selection-cell-active" : ""}${copiedCells.has(cellId(row._key, column.key)) ? " selection-cell-copied" : ""}`, title: error, onMouseDown: (event: React.MouseEvent) => { if (event.button === 0) cellMouseDown(row._key, column.key); else if (event.button === 2) { event.preventDefault(); if (!selected) { setSelectedCells(new Set([cellId(row._key, column.key)])); setCellAnchor({ rowKey: row._key, columnKey: column.key }); } } }, onDragStart: (event: React.DragEvent) => { if (selectingCells) event.preventDefault(); }, onMouseEnter: () => cellMouseEnter(row._key, column.key), onCopy: (event: ClipboardEvent<HTMLTableCellElement>) => copyCells(event, row._key, column.key), onPaste: (event: ClipboardEvent<HTMLTableCellElement>) => pasteCells(event, row._key, column.key) };
     const openFormat = () => {
       const ids = selectedCells.has(cellId(row._key, column.key)) ? new Set(selectedCells) : new Set([cellId(row._key, column.key)]);
@@ -464,6 +468,8 @@ export function StyleSelectionsPage() {
     const displayValue = String(valueAt(row, column) ?? "");
     if (numberFormat && !["general", "text"].includes(numberFormat.type) && focusedCell !== cellId(row._key, column.key)) return cell(<div className="selection-formatted-value" tabIndex={0} role="textbox" aria-label={column.label} aria-readonly={!canEdit} onFocus={() => { if (canEdit) setFocusedCell(cellId(row._key, column.key)); }}>{formatSelectionValue(displayValue, numberFormat) || (column.key === "registrationBatch" ? "+ 日期" : "")}</div>);
     const focusProps = { autoFocus: !!numberFormat && focusedCell === cellId(row._key, column.key), onFocus: () => setFocusedCell(cellId(row._key, column.key)), onBlur: () => setFocusedCell(null) };
+    if (column.key === "collectionInventory") return cell(<CollectionStockEditor readOnly inventory={row.collectionInventory || []} onChange={()=>{}}/>);
+    if (collectionKeys.has(column.key)) return cell(<span title="由产品信息收集表内部确认后更新">{row[column.key] ?? "—"}</span>);
     if (column.key === "registrationBatch") return cell(<input className="selection-date-input" aria-label="登记批次日期" title="输入日期 YYYY-MM-DD，也可在顶部编辑栏选择" placeholder="+ 日期" maxLength={10} readOnly={disabled} {...focusProps} value={displayValue} onChange={event => update(row._key, column, event.target.value)} />);
     if (moneyKeys.has(column.key)) return cell(<div className="selection-money-input">{(!numberFormat || numberFormat.type === "general") && <span>￥</span>}<input {...focusProps} disabled={disabled} inputMode="decimal" placeholder="0.00" value={displayValue} onChange={(event) => update(row._key, column, event.target.value)} /></div>);
     return cell(<textarea {...focusProps} className="selection-text-input" aria-label={column.label} readOnly={disabled} value={displayValue} onChange={(event) => update(row._key, column, event.target.value)} />);
@@ -507,7 +513,7 @@ export function StyleSelectionsPage() {
     {editorColumn?.key === "registrationBatch" && editorRow ? <input aria-label="编辑登记批次" type="date" value={editorValue.slice(0, 10)} disabled={!canEdit} onChange={(event) => editCurrent(event.target.value)} /> :
       editorColumn?.key === "sizeRange" && editorRow ? <SizeEditor key={editorRow._key} value={editorValue} disabled={!canEdit} onChange={editCurrent} /> :
       editorColumn?.key === "color" && editorRow ? <Select aria-label={`编辑${editorColumn.label}`} mode="tags" className="selection-editor-tags" value={splitTags(editorValue)} disabled={!canEdit} tokenSeparators={["/"]} placeholder="输入后按 Enter 添加，多项用 / 分隔" options={colorSuggestions.map(value => ({ value, label: value }))} onChange={(value) => editCurrent(joinTags(value))} /> :
-      <Input.TextArea aria-label="编辑当前单元格" autoSize={{ minRows: 1, maxRows: 3 }} value={editorValue} disabled={!editorEnabled} readOnly={!canEdit} placeholder={editorColumn?.key === "images" ? "图片请在单元格内上传或查看" : "点击单元格，在此编辑内容"} onChange={(event) => editCurrent(event.target.value)} />}
+      <Input.TextArea aria-label="编辑当前单元格" autoSize={{ minRows: 1, maxRows: 3 }} value={editorValue} disabled={!editorEnabled} readOnly={!canEdit || !!editorColumn && collectionKeys.has(editorColumn.key)} placeholder={editorColumn?.key === "images" ? "图片请在单元格内上传或查看" : "点击单元格，在此编辑内容"} onChange={(event) => editCurrent(event.target.value)} />}
     {editorError && <span className="selection-editor-error" role="status">{editorError}</span>}
   </div>;
   const filterContent = <div className="selection-popover"><Input.Search autoFocus allowClear placeholder="搜索批次、款号、供应商、颜色或材质" value={search} onChange={(event) => setSearch(event.target.value)} /><Button onClick={() => { setSearch(""); setFilterOpen(false); }}>清除筛选</Button></div>;
@@ -532,7 +538,7 @@ export function StyleSelectionsPage() {
   };
   return <>{formatTarget && <SelectionFormatModal count={formatTarget.ids.size} sample={formatTarget.sample} initial={formatTarget.initial} onCancel={() => setFormatTarget(null)} onApply={applyFormat} />}<Header title="选款登记" subtitle="集中登记候选款的图片、款号、供应商、颜色、材质与定价信息。" />
     <Card className="selection-card"><div className="selection-toolbar" aria-label="选款登记表格工具栏"><Space wrap size={4}>
-      {canEdit && <SelectionPhotoQr />}<Button type="link" icon={<PlusOutlined />} disabled={!canEdit} onClick={() => add()}>添加一行</Button><Button type="link" danger icon={<DeleteOutlined />} disabled={!canEdit || !selectedRows.length || saving} loading={deleting} onClick={deleteRows}>删除行</Button>
+      {canEdit && <SelectionCollections selectedRows={filteredRows.filter(row => selectedRows.includes(row._key))} blocked={!!dirtyCount || saving || deleting}/>} {canEdit && <SelectionPhotoQr />}<Button type="link" icon={<PlusOutlined />} disabled={!canEdit} onClick={() => add()}>添加一行</Button><Button type="link" danger icon={<DeleteOutlined />} disabled={!canEdit || !selectedRows.length || saving} loading={deleting} onClick={deleteRows}>删除行</Button>
       <Popover trigger="click" content={settings}><Button type="text" icon={<SettingOutlined />}>表格设置</Button></Popover><Popover trigger="click" open={filterOpen} onOpenChange={setFilterOpen} content={filterContent}><Button type="text" icon={<FilterOutlined />}>筛选</Button></Popover>
       <Select className="selection-tool-select" value={groupBy} suffixIcon={<TeamOutlined />} options={[{ value: "none", label: "不分组" }, { value: "batch", label: "按登记批次分组" }, { value: "supplier", label: "按供应商编码分组" }, { value: "color", label: "按颜色分组" }]} onChange={setGroupBy} />
       <Select className="selection-tool-select" value={columnSort ? "column" : `${sort}:${direction}`} suffixIcon={<SortAscendingOutlined />} options={[...(columnSort ? [{ value: "column", label: `${columns.find(column => column.key === columnSort.key)?.label || "当前列"}${columnSort.direction === "asc" ? "升序" : "降序"}` }] : []),{ value: "sortOrder:asc", label: "手动排序" }, { value: "updatedAt:desc", label: "最近修改" }, { value: "createdAt:desc", label: "最新登记" }, { value: "registrationBatch:desc", label: "登记批次" }, { value: "xutiStyleNo:asc", label: "序缇款号" }, { value: "supplierCode:asc", label: "供应商编码" }, { value: "supplyPriceExclTax:asc", label: "供货价" }, { value: "vipPrice:asc", label: "唯品价" }]} onChange={(value) => { if (value === "column") return; setColumnSort(null); setFollowShared(false); const [nextSort, nextDirection] = value.split(":"); setSort(nextSort); setDirection(nextDirection as "asc" | "desc"); }} />

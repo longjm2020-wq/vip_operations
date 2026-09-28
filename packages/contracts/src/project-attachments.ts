@@ -42,7 +42,7 @@ export const attachmentSchema = z
     const ext = v.name.split(".").pop()?.toLowerCase() || "";
     if (attachmentTypes[ext] !== v.type) return false;
     if (v.storageKey) return v.data === "";
-    if (v.type.startsWith("image/") && v.size >= 1024 * 1024) return false;
+    if (v.type.startsWith("image/") && v.size >= 500 * 1024) return false;
     const prefix = `data:${v.type};base64,`;
     if (!v.data.startsWith(prefix)) return false;
     const base64 = v.data.slice(prefix.length);
@@ -52,7 +52,7 @@ export const attachmentSchema = z
       (base64.length / 4) * 3 -
       (base64.endsWith("==") ? 2 : base64.endsWith("=") ? 1 : 0);
     return size === v.size;
-  }, "附件类型或内容无效；图片须小于1 MB，文档须小于50 MB");
+  }, "附件类型或内容无效；图片须小于500 KB，文档须小于50 MB");
 export const attachmentsSchema = z
   .array(attachmentSchema)
   .max(10)

@@ -349,8 +349,8 @@ export async function upload(c: Context, input: unknown) {
   );
   if (!match) fail("VALIDATION_ERROR", "图片编码无效", 400);
   const bytes = Buffer.from(match[1], "base64");
-  if (bytes.length >= 1024 * 1024 || bytes.length < 12)
-    fail("VALIDATION_ERROR", "图片须压缩至1 MB以下，支持JPG、PNG或WebP", 400);
+  if (bytes.length >= 500 * 1024 || bytes.length < 12)
+    fail("VALIDATION_ERROR", "图片须压缩至500 KB以下，支持JPG、PNG或WebP", 400);
   const actual =
     bytes.subarray(0, 3).toString("hex") === "ffd8ff"
       ? "image/jpeg"

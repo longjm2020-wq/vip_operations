@@ -1,3 +1,4 @@
+import { PublicSelectionCollection } from "./selection-collections";
 import { SelectionMobilePhotos } from "./selection-mobile-photos";
 import { BrandVideo } from "./brand-video";
 import React, { useState, useEffect } from "react";
@@ -72,7 +73,7 @@ import {
 } from "./supply";
 import { SupplyOrders, SupplyOrderNotice } from "./supply-orders";
 import { SupplyStatements } from "./supply-statements";
-const coreFeatureSummary = "ERP经营 · 选款登记与拍图 · 供应链订单对账 · 项目协作";
+const coreFeatureSummary = "ERP经营 · 选款与外部资料收集 · 供应链订单对账 · 项目协作";
 const useUi = create<{ collapsed: boolean; toggle: () => void }>((set) => ({
   collapsed: false,
   toggle: () => set((s) => ({ collapsed: !s.collapsed })),
@@ -542,8 +543,10 @@ function Workspace({ user }: { user: Row }) {
 }
 function Root() {
   const location = useLocation();
+  const publicCollection = location.pathname === "/collect/products";
   const me = useQuery({
     queryKey: ["me"],
+    enabled: !publicCollection,
     queryFn: async () => {
       try {
         const r = await api("/auth/me");
@@ -555,6 +558,7 @@ function Root() {
     },
     retry: false,
   });
+  if (publicCollection) return <PublicSelectionCollection />;
   if (me.isLoading)
     return (
       <div className="loading">

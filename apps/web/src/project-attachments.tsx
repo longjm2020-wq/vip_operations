@@ -79,7 +79,7 @@ export function ProjectAttachments({
             <Button loading={busy}>添加图片 / 文档</Button>
           </Upload>
           <Typography.Text type="secondary">
-            支持图片及常见文档，最多10个。图片自动压缩至1 MB以下；文档须小于50
+            支持图片及常见文档，最多10个。图片自动压缩至500 KB以下；文档须小于50
             MB，超限尝试无损压缩为.gz，仍超限则提示拆分。随项目保存后关联生效。
           </Typography.Text>
         </>

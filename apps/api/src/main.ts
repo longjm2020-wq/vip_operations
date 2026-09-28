@@ -50,6 +50,7 @@ export async function start() {
   });
   app.use(helmet());
   app.use(cookieParser());
+  app.use("/api/v1/public/selection-collection", (_req: Request, res: Response, next: NextFunction) => { res.setHeader("Cache-Control", "private, no-store"); res.setHeader("Referrer-Policy", "no-referrer"); next(); });
   app.use(
     "/api/v1/projects/uploads",
     async (req: Request, res: Response, next: NextFunction) => {

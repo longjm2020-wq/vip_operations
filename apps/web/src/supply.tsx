@@ -482,7 +482,7 @@ export function QualificationFields({
       </div>
       <Alert
         type="info"
-        title="请上传原件实拍照片；若使用复印件，需加盖红色公章。支持电脑上传、手机相册或拍摄，JPG / PNG / WebP，自动压缩至每张1 MB以下，上传后请核对证件文字清晰度。"
+        title="请上传原件实拍照片；若使用复印件，需加盖红色公章。支持电脑上传、手机相册或拍摄，JPG / PNG / WebP，自动压缩至每张500 KB以下，上传后请核对证件文字清晰度。"
       />
       <div className="supply-grid">
         {[

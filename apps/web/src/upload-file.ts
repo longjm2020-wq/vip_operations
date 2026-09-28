@@ -1,4 +1,4 @@
-const IMAGE_LIMIT = 1024 * 1024;
+const IMAGE_LIMIT = 500 * 1024;
 const DOCUMENT_LIMIT = 50 * 1024 * 1024;
 
 export async function prepareUpload(file: File): Promise<File> {
@@ -33,7 +33,7 @@ export async function prepareUpload(file: File): Promise<File> {
           );
         scale *= 0.78;
       }
-      throw new Error("图片无法压缩至1 MB以下，请缩小尺寸后重试");
+      throw new Error("图片无法压缩至500 KB以下，请缩小尺寸后重试");
     } finally {
       bitmap.close();
     }

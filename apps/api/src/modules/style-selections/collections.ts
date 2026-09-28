@@ -1,0 +1,173 @@
+import { randomBytes, randomUUID } from "node:crypto";
+import { z } from "zod";
+import { db, rows, one, json, type Tx, type Row } from "../../../../../packages/database/src/index.js";
+import { parse, id, fail, command, hash, canonical, audit, type Context } from "../../core.js";
+import { collectionInfoSchema, collectionInventory, collectionTags } from "../../../../../packages/contracts/src/selection-collection.js";
+
+const snapshot = (row: Row) => ({
+  supplierStyleNo: row.supplier_style_no || "", color: row.color || "", sizeRange: row.size_range || "",
+  material: row.material || "", supplyPriceExclTax: row.supply_price_excl_tax == null ? null : String(row.supply_price_excl_tax),
+  sellingPoints: row.selling_points || "", reorderDays: row.reorder_days ?? null,
+  inventory: collectionInventory(row.color || "", row.size_range || "", row.collection_inventory || []), images: row.images || []
+});
+const tokenSchema = z.string().regex(/^[a-f0-9]{64}$/);
+const editable = (share: Row) => { if (!["DRAFT","REJECTED"].includes(share.status)) fail("INVALID_STATE","收集表已提交或已确认，暂不可编辑",409); };
+async function access(tx: Tx, token: string, lock = false) {
+  parse(tokenSchema, token);
+  const share = await one(tx, "SELECT *, (expires_at <= now()) AS expired FROM selection_collections WHERE token_hash=$1" + (lock ? " FOR UPDATE" : ""), hash(token));
+  if (!share || share.closed || share.expired) fail("NOT_FOUND","链接已失效或已关闭，请联系分享人",404);
+  return share!;
+}
+async function internal(tx: Tx, value: string) {
+  const share = await one(tx,"SELECT * FROM selection_collections WHERE id=$1::bigint FOR UPDATE",value);
+  if (!share) fail("NOT_FOUND","收集表不存在",404);
+  return share!;
+}
+async function event(tx: Tx, share: Row, action: string, actor?: string) {
+  await rows(tx,"INSERT INTO selection_collection_events(collection_id,actor_id,action) VALUES($1::bigint,$2::bigint,$3)",share.id,actor || null,action);
+}
+async function publicWrite(token: string, key: string, input: unknown, run: (tx: Tx, share: Row) => Promise<any>) {
+  parse(z.string().min(1).max(128),key);
+  return db.$transaction(async tx => {
+    const share = await access(tx,token,true);
+    const fingerprint = hash(canonical(input));
+    const old = await one(tx,"SELECT * FROM selection_collection_requests WHERE collection_id=$1::bigint AND request_key=$2",share.id,key);
+    if (old) { if (old.fingerprint !== fingerprint) fail("CONFLICT","请求标识冲突",409); return old.result; }
+    const result = json(await run(tx,share));
+    await rows(tx,"INSERT INTO selection_collection_requests(collection_id,request_key,fingerprint,result) VALUES($1::bigint,$2,$3,$4::jsonb)",share.id,key,fingerprint,JSON.stringify(result));
+    return result;
+  },{timeout:15000});
+}
+async function bump(tx: Tx, share: Row, action: string) {
+  await rows(tx,"UPDATE selection_collections SET revision=revision+1,updated_at=now() WHERE id=$1::bigint",share.id);
+  await event(tx,share,action);
+  return {revision:share.revision+1};
+}
+function version(share: Row, revision: number) {
+  if (share.revision !== revision) fail("EDIT_CONFLICT","资料已在其他设备更新，请刷新后核对再编辑",409);
+}
+export async function create(c: Context, input: unknown) {
+  const body = parse(z.object({title:z.string().trim().min(1).max(100),ids:z.array(id).min(1).max(100),days:z.union([z.literal(7),z.literal(30),z.literal(0)])}).strict(),input);
+  return command(c,"selection-collections/create",body,async tx => {
+    const ids = [...new Set(body.ids)];
+    const source = await rows(tx,"SELECT * FROM style_selections WHERE id=ANY($1::bigint[]) ORDER BY id FOR SHARE",ids);
+    if (source.length !== ids.length) fail("NOT_FOUND","部分款式不存在，请刷新后重试",404);
+    const token = randomBytes(32).toString("hex");
+    const share = (await one(tx,"INSERT INTO selection_collections(title,token_hash,expires_at,created_by) VALUES($1,$2,CASE WHEN $3::int=0 THEN NULL ELSE now()+make_interval(days=>$3::int) END,$4::bigint) RETURNING id",body.title,hash(token),body.days,c.actor.id))!;
+    for (const [index,value] of ids.entries()) {
+      const row = source.find(row=>String(row.id)===value)!; const data = JSON.stringify(snapshot(row));
+      await rows(tx,"INSERT INTO selection_collection_items(collection_id,selection_id,position,source_version,xuti_style_no,original,draft) VALUES($1::bigint,$2::bigint,$3,$4,$5,$6::jsonb,$6::jsonb)",share.id,value,index,row.version,row.xuti_style_no || "",data);
+    }
+    await event(tx,share,"CREATE",c.actor.id);
+    await audit(tx,c,"CREATE","selection-collection",share.id,null,{title:body.title,ids,days:body.days});
+    return {id:share.id,token};
+  });
+}
+export async function list() {
+  return rows(db,"SELECT c.id,c.title,c.status,c.closed,c.expires_at,c.revision,c.feedback,c.created_at,count(i.selection_id)::int AS count FROM selection_collections c LEFT JOIN selection_collection_items i ON i.collection_id=c.id GROUP BY c.id ORDER BY c.id DESC LIMIT 100");
+}
+export async function detail(value: string) {
+  const share = await one(db,"SELECT id,title,status,closed,expires_at,revision,feedback FROM selection_collections WHERE id=$1::bigint",value);
+  if (!share) fail("NOT_FOUND","收集表不存在",404);
+  return {...share,items:await rows(db,"SELECT selection_id AS id,xuti_style_no,source_version,original,draft FROM selection_collection_items WHERE collection_id=$1::bigint ORDER BY position",value)};
+}
+export async function publicDetail(token: string) {
+  const share = await access(db,token);
+  const items = await rows(db,"SELECT selection_id AS id,xuti_style_no,draft FROM selection_collection_items WHERE collection_id=$1::bigint ORDER BY position",share.id);
+  // Explicit allowlist: never expose source data, audit metadata or internal prices.
+  return {title:share.title,status:share.status,revision:share.revision,feedback:share.feedback,expiresAt:share.expires_at,items:items.map(item=>({id:item.id,xutiStyleNo:item.xuti_style_no,...item.draft,images:(item.draft.images || []).map((image:Row)=>({id:image.id,color:image.color,url:/^\/api\/v1\/style-selections\/images\//.test(image.url) ? null : image.url}))}))};
+}
+export async function save(token: string, key: string, value: string, input: unknown) {
+  const body = parse(z.object({revision:z.number().int().min(0),info:collectionInfoSchema}).strict(),input);
+  return publicWrite(token,key,{op:"save",value,body},async(tx,share)=>{
+    editable(share); version(share,body.revision);
+    const item = await one(tx,"SELECT * FROM selection_collection_items WHERE collection_id=$1::bigint AND selection_id=$2::bigint",share.id,value);
+    if (!item) fail("NOT_FOUND","款式不在收集表内",404);
+    const colors = collectionTags(body.info.color);
+    if (item.draft.images.some((image:Row)=>image.color && !colors.includes(image.color))) fail("VALIDATION_ERROR","请保留已有图片的颜色，或先移除相关图片",400);
+    await rows(tx,"UPDATE selection_collection_items SET draft=$3::jsonb WHERE collection_id=$1::bigint AND selection_id=$2::bigint",share.id,value,JSON.stringify({...body.info,images:item.draft.images}));
+    return bump(tx,share,"SAVE");
+  });
+}
+export async function submit(token: string,key: string,input: unknown) {
+  const body=parse(z.object({revision:z.number().int().min(0)}).strict(),input);
+  return publicWrite(token,key,{op:"submit",body},async(tx,share)=>{
+    editable(share);version(share,body.revision);
+    const items=await rows(tx,"SELECT draft FROM selection_collection_items WHERE collection_id=$1::bigint",share.id);
+    for (const item of items) { const {images,...info}=item.draft; parse(collectionInfoSchema,info); }
+    await rows(tx,"UPDATE selection_collections SET status='SUBMITTED',feedback='' WHERE id=$1::bigint",share.id);
+    return bump(tx,share,"SUBMIT");
+  });
+}
+export async function photo(token: string,key: string,value: string,input: unknown) {
+  const body=parse(z.discriminatedUnion("action",[
+    z.object({action:z.literal("add"),revision:z.number().int(),color:z.string().max(100),data:z.string().max(1500000)}).strict(),
+    z.object({action:z.literal("remove"),revision:z.number().int(),imageId:z.string().max(100)}).strict()
+  ]),input);
+  return publicWrite(token,key,{op:"photo",value,body},async(tx,share)=>{
+    editable(share);version(share,body.revision);
+    const item=await one(tx,"SELECT * FROM selection_collection_items WHERE collection_id=$1::bigint AND selection_id=$2::bigint",share.id,value);
+    if(!item) fail("NOT_FOUND","款式不在收集表内",404);
+    let images=item.draft.images || [];
+    if(body.action==="remove") images=images.filter((image:Row)=>image.id!==body.imageId);
+    else {
+      if(!collectionTags(item.draft.color).includes(body.color)) fail("VALIDATION_ERROR","请先保存对应颜色",400);
+      if(images.length>=30) fail("VALIDATION_ERROR","每款最多30张图片",400);
+      const quota=await one(tx,"SELECT count(*)::int AS n FROM selection_collection_events WHERE collection_id=$1::bigint AND action='PHOTO_ADD'",share.id);
+      if(quota!.n>=500) fail("VALIDATION_ERROR","本收集表上传已达500张，请联系分享人",400);
+      const match=/^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/]+={0,2})$/.exec(body.data);
+      if(!match) fail("VALIDATION_ERROR","仅支持 JPG、PNG、WebP 图片",400);
+      const bytes=Buffer.from(match![2],"base64"),type=match![1];
+      const valid=type==="image/png"?bytes.subarray(0,8).equals(Buffer.from("89504e470d0a1a0a","hex")):type==="image/jpeg"?bytes.subarray(0,3).equals(Buffer.from("ffd8ff","hex")):bytes.toString("ascii",0,4)==="RIFF" && bytes.toString("ascii",8,12)==="WEBP";
+      if(!valid || !bytes.length || bytes.length>=500*1024) fail("VALIDATION_ERROR","图片无效或超过500KB",400);
+      const imageId=randomUUID();
+      await rows(tx,"INSERT INTO style_selection_images(id,content_type,content,created_by) VALUES($1::uuid,$2,$3,$4::bigint)",imageId,type,bytes,share.created_by);
+      images=[...images,{id:imageId,url:"/api/v1/style-selections/images/"+imageId,color:body.color}];
+    }
+    await rows(tx,"UPDATE selection_collection_items SET draft=$3::jsonb WHERE collection_id=$1::bigint AND selection_id=$2::bigint",share.id,value,JSON.stringify({...item.draft,images}));
+    return bump(tx,share,body.action==="add"?"PHOTO_ADD":"PHOTO_REMOVE");
+  });
+}
+export async function image(token:string,value:string,imageId:string) {
+  const share=await access(db,token);
+  const item=await one(db,"SELECT draft FROM selection_collection_items WHERE collection_id=$1::bigint AND selection_id=$2::bigint",share.id,value);
+  const image=item?.draft.images.find((image:Row)=>image.id===imageId);
+  if(!image) fail("NOT_FOUND","图片不在收集表内",404);
+  const match=/^\/api\/v1\/style-selections\/images\/([a-f0-9-]{36})$/.exec(image.url);
+  if(!match) fail("NOT_FOUND","图片不存在",404);
+  const file=await one(db,"SELECT content_type,content FROM style_selection_images WHERE id=$1::uuid",match![1]);
+  if(!file) fail("NOT_FOUND","图片不存在",404);
+  return file!;
+}
+export async function review(c:Context,value:string,input:unknown) {
+  const body=parse(z.object({action:z.enum(["approve","reject","close","renew"]),revision:z.number().int(),reason:z.string().trim().max(1000).default(""),days:z.union([z.literal(7),z.literal(30),z.literal(0)]).optional()}).strict(),input);
+  return command(c,"selection-collections/review/"+value,body,async tx=>{
+    const share=await internal(tx,value);version(share,body.revision);
+    let token: string | undefined;
+    if(body.action==="close") await rows(tx,"UPDATE selection_collections SET closed=true WHERE id=$1::bigint",value);
+    else if(body.action==="renew") {
+      if(body.days===undefined) fail("VALIDATION_ERROR","请选择有效期",400);
+      token=randomBytes(32).toString("hex");
+      await rows(tx,"UPDATE selection_collections SET token_hash=$2,closed=false,expires_at=CASE WHEN $3::int=0 THEN NULL ELSE now()+make_interval(days=>$3::int) END WHERE id=$1::bigint",value,hash(token),body.days);
+    } else {
+      if(share.status!=="SUBMITTED") fail("INVALID_STATE","仅待确认的收集表可处理",409);
+      if(body.action==="reject") {
+        if(!body.reason) fail("VALIDATION_ERROR","请填写退回原因",400);
+        await rows(tx,"UPDATE selection_collections SET status='REJECTED',feedback=$2 WHERE id=$1::bigint",value,body.reason);
+      } else {
+        const items=await rows(tx,"SELECT * FROM selection_collection_items WHERE collection_id=$1::bigint ORDER BY selection_id",value);
+        for(const item of items) {
+          const source=await one(tx,"SELECT * FROM style_selections WHERE id=$1::bigint FOR UPDATE",item.selection_id);
+          if(!source || source.version!==item.source_version) fail("EDIT_CONFLICT","原款资料已发生修改，本次未更新任何款式。请核对后重新生成收集表",409);
+          const {images,...info}=item.draft;parse(collectionInfoSchema,info);
+          const after=await one(tx,"UPDATE style_selections SET supplier_style_no=$2,color=$3,size_range=$4,material=$5,supply_price_excl_tax=$6::numeric,selling_points=$7,reorder_days=$8,collection_inventory=$9::jsonb,images=$10::jsonb,version=version+1,updated_at=now() WHERE id=$1::bigint RETURNING *",item.selection_id,info.supplierStyleNo || null,info.color || null,info.sizeRange || null,info.material || null,info.supplyPriceExclTax,info.sellingPoints,info.reorderDays,JSON.stringify(info.inventory),JSON.stringify(images));
+          await audit(tx,c,"UPDATE","style-selection",item.selection_id,source,after,"确认外部产品信息收集表");
+        }
+        await rows(tx,"UPDATE selection_collections SET status='APPROVED' WHERE id=$1::bigint",value);
+      }
+    }
+    await rows(tx,"UPDATE selection_collections SET revision=revision+1,updated_at=now() WHERE id=$1::bigint",value);
+    await event(tx,share,body.action.toUpperCase(),c.actor.id);
+    return {revision:share.revision+1,...(token?{token}:{})};
+  });
+}

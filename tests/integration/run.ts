@@ -626,6 +626,60 @@ try {
     ).status,
     409,
   );
+
+  const collectSource = await ok("/style-selections","POST",{xutiStyleNo:"COLLECT-ONE",supplierStyleNo:"OLD",color:"白",sizeRange:"S",vipPrice:"999.00",images:[{id:"shared-existing",url:uploadedImage.url,color:"白"}]});
+  const collectOther = await ok("/style-selections","POST",{xutiStyleNo:"COLLECT-TWO",color:"黑",sizeRange:"M"});
+  const collection = await ok("/selection-collections","POST",{title:"TEST COLLECTION",ids:[collectSource.id,collectOther.id],days:7});
+  const ext = async(path="",method="GET",body?:any,token=collection.token,key=randomUUID())=>{
+    const response=await fetch(base+"/public/selection-collection"+path,{method,headers:{"Content-Type":"application/json","X-Collection-Token":token,"Idempotency-Key":key,Origin:process.env.APP_ORIGIN!},...(body?{body:JSON.stringify(body)}:{})});
+    return {status:response.status,body:await response.json()};
+  };
+  const shared = (await ext()).body.data;
+  assert.equal(shared.items.length,2);
+  assert.equal(shared.items[0].xutiStyleNo,"COLLECT-ONE");
+  assert.equal(shared.items[0].vipPrice,undefined);
+  assert.equal(shared.items[0].supplierCode,undefined);
+  assert.equal((await ext("","GET",undefined,"0".repeat(64))).status,404);
+  const sharedImage=await fetch(base+`/public/selection-collection/${collectSource.id}/images/shared-existing`,{headers:{"X-Collection-Token":collection.token}});
+  assert.equal(sharedImage.status,200);
+  assert.equal((await ext(`/${collectOther.id}/images/shared-existing`)).status,404);
+  const info={supplierStyleNo:"NEW",color:"白",sizeRange:"S",material:"棉100%",supplyPriceExclTax:"20.00",sellingPoints:"柔软",reorderDays:7,inventory:[{color:"白",size:"S",available:3,production:5,sellOutDate:"2026-10-10",shipDate:"2026-10-12"}]};
+  assert.equal((await ext("/"+collectSource.id,"POST",{revision:0,info:{...info,xutiStyleNo:"ILLEGAL"}})).status,400);
+  assert.equal((await ext("/"+selection.id,"POST",{revision:0,info})).status,404);
+  const saveKey=randomUUID();
+  assert.equal((await ext("/"+collectSource.id,"POST",{revision:0,info},collection.token,saveKey)).status,201);
+  assert.equal((await ext("/"+collectSource.id,"POST",{revision:0,info},collection.token,saveKey)).status,201);
+  assert.equal((await ext("/"+collectSource.id,"POST",{revision:0,info})).status,409);
+  assert.equal((await ok("/style-selections/"+collectSource.id)).supplierStyleNo,"OLD");
+  assert.equal((await ext("/submit","POST",{revision:1})).status,201);
+  assert.equal((await ext("/"+collectSource.id,"POST",{revision:2,info})).status,409);
+  await ok("/selection-collections/"+collection.id+"/review","POST",{action:"reject",revision:2,reason:"补拍"});
+  const oversizedPhoto=Buffer.alloc(500*1024);Buffer.from("89504e470d0a1a0a","hex").copy(oversizedPhoto);
+  const oversizedData="data:image/png;base64,"+oversizedPhoto.toString("base64");
+  assert.equal((await request("/style-selections/images","POST",{data:oversizedData})).status,400);
+  assert.equal((await ext("/"+collectSource.id+"/photos","POST",{action:"add",revision:3,color:"白",data:oversizedData})).status,400);
+  const photoData="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jz1sAAAAASUVORK5CYII=";
+  assert.equal((await ext("/"+collectSource.id+"/photos","POST",{action:"add",revision:3,color:"白",data:photoData})).status,201);
+  assert.equal((await ext("/submit","POST",{revision:4})).status,201);
+  await ok("/selection-collections/"+collection.id+"/review","POST",{action:"approve",revision:5});
+  const appliedCollection=await ok("/style-selections/"+collectSource.id);
+  assert.equal(appliedCollection.xutiStyleNo,"COLLECT-ONE");
+  assert.equal(appliedCollection.supplierStyleNo,"NEW");
+  assert.equal(appliedCollection.vipPrice,"999.00");
+  assert.equal(appliedCollection.collectionInventory[0].available,3);
+  assert.equal(appliedCollection.images.length,2);
+  await ok("/selection-collections/"+collection.id+"/review","POST",{action:"close",revision:6});
+  assert.equal((await ext()).status,404);
+  assert.equal((await fetch(base+`/public/selection-collection/${collectSource.id}/images/shared-existing`,{headers:{"X-Collection-Token":collection.token}})).status,404);
+  const conflictShare=await ok("/selection-collections","POST",{title:"CONFLICT",ids:[collectSource.id,collectOther.id],days:7});
+  assert.equal((await ext("/submit","POST",{revision:0},conflictShare.token)).status,201);
+  await ok("/style-selections/"+collectOther.id,"PATCH",{material:"internal edit"});
+  assert.equal((await request("/selection-collections/"+conflictShare.id+"/review","POST",{action:"approve",revision:1})).status,409);
+  assert.equal((await ok("/style-selections/"+collectSource.id)).version,appliedCollection.version);
+  await rows(db,"UPDATE selection_collections SET expires_at=now()-interval '1 second' WHERE id=$1::bigint",conflictShare.id);
+  assert.equal((await ext("","GET",undefined,conflictShare.token)).status,404);
+  check("external collections isolate fields and images, save drafts, reject/resubmit, approve atomically, revoke and expire");
+
   const preview = await ok("/style-selections/import/preview", "POST", { rows: [
     { xutiStyleNo: "IMPORT-001", color: "黑/白", vipPrice: "99.00", images: [{ id: "first", url: uploadedImage.url, color: "黑" }] },
     { xutiStyleNo: selection.xutiStyleNo, material: "导入更新" }

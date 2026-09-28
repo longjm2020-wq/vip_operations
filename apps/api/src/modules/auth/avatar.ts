@@ -32,10 +32,10 @@ export async function saveAvatar(c: Context, input: unknown) {
             bytes.toString("ascii", 8, 12) === "WEBP"
           ? "image/webp"
           : "";
-  if (bytes.length < 12 || bytes.length >= 1024 * 1024 || actual !== b.type)
+  if (bytes.length < 12 || bytes.length >= 500 * 1024 || actual !== b.type)
     fail(
       "VALIDATION_ERROR",
-      "请选择有效的 JPG、PNG 或 WebP 图片，须小于1 MB",
+      "请选择有效的 JPG、PNG 或 WebP 图片，须小于500 KB",
       400,
     );
   if (!storageEnabled())

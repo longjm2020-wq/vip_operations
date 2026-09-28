@@ -1,8 +1,10 @@
 import { Body, Controller, Delete, Get, Module, Param, Patch, Post, Query, Req, Res } from "@nestjs/common";
 import type { Response } from "express";
-import { AuthRequest, Permission, context } from "../../http.js";
+import { AuthRequest, Permission, Public, context } from "../../http.js";
 import { id, parse } from "../../core.js";
 import * as selections from "./service.js";
+import * as collections from "./collections.js";
+import { fail } from "../../core.js";
 
 const paramId = (value: string) => parse(id, value);
 
@@ -59,5 +61,36 @@ class StyleSelectionsController {
   }
 }
 
-@Module({ controllers: [StyleSelectionsController] })
+
+const publicLimits = new Map<string, { count: number; reset: number }>();
+function externalToken(request: AuthRequest) {
+  const now = Date.now();
+  if (publicLimits.size > 5000) for (const [key,value] of publicLimits) if (value.reset < now) publicLimits.delete(key);
+  const key = request.ip || "unknown";
+  const limit = publicLimits.get(key);
+  if (limit && limit.reset > now) { if (++limit.count > 240) fail("RATE_LIMIT","操作过于频繁，请稍后重试",429); }
+  else publicLimits.set(key,{count:1,reset:now+60000});
+  if (request.method !== "GET" && request.get("Origin") !== process.env.APP_ORIGIN) fail("FORBIDDEN","请求来源无效",403);
+  return request.get("X-Collection-Token") || "";
+}
+@Controller("api/v1/selection-collections")
+class SelectionCollectionsController {
+  @Permission("selection.manage") @Post() create(@Req() req: AuthRequest,@Body() body: unknown) { return collections.create(context(req),body); }
+  @Permission("selection.manage") @Get() list() { return collections.list(); }
+  @Permission("selection.manage") @Get(":id") detail(@Param("id") value:string) { return collections.detail(paramId(value)); }
+  @Permission("selection.manage") @Post(":id/review") review(@Req() req:AuthRequest,@Param("id") value:string,@Body() body:unknown) { return collections.review(context(req),paramId(value),body); }
+}
+@Controller("api/v1/public/selection-collection")
+class PublicSelectionCollectionController {
+  @Public() @Get() detail(@Req() req:AuthRequest) { return collections.publicDetail(externalToken(req)); }
+  @Public() @Post("submit") submit(@Req() req:AuthRequest,@Body() body:unknown) { return collections.submit(externalToken(req),req.get("Idempotency-Key") || "",body); }
+  @Public() @Post(":id") save(@Req() req:AuthRequest,@Param("id") value:string,@Body() body:unknown) { return collections.save(externalToken(req),req.get("Idempotency-Key") || "",paramId(value),body); }
+  @Public() @Post(":id/photos") photo(@Req() req:AuthRequest,@Param("id") value:string,@Body() body:unknown) { return collections.photo(externalToken(req),req.get("Idempotency-Key") || "",paramId(value),body); }
+  @Public() @Get(":id/images/:imageId") async image(@Req() req:AuthRequest,@Param("id") value:string,@Param("imageId") imageId:string,@Res() res:Response) {
+    const file=await collections.image(externalToken(req),paramId(value),imageId);
+    res.setHeader("Content-Type",file.content_type);res.setHeader("Cache-Control","private, no-store");res.send(Buffer.from(file.content));
+  }
+}
+
+@Module({ controllers: [StyleSelectionsController, SelectionCollectionsController, PublicSelectionCollectionController] })
 export class StyleSelectionsModule {}

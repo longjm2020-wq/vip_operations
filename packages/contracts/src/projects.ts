@@ -107,9 +107,9 @@ const image = z
     const b = v.split(",")[1] || "";
     return (
       (b.length / 4) * 3 - (b.endsWith("==") ? 2 : b.endsWith("=") ? 1 : 0) <
-      1024 * 1024
+      500 * 1024
     );
-  }, "图片须压缩至1 MB以下")
+  }, "图片须压缩至500 KB以下")
   .refine(
     (v) =>
       /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(v) ||
