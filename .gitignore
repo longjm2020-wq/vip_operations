@@ -6,6 +6,8 @@ dist/
 .local/
 playwright-report/
 test-results/
+.artifact-build/
+deliverables/
 *.log
 
 LOCAL_ACCESS.md
