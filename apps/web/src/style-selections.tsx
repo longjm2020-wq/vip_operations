@@ -1,3 +1,6 @@
+import { selectionImageLinks, invalidSelectionImage } from "./selection-image-links";
+import { SelectionFormatModal, type FormatPatch } from "./selection-format-modal";
+import { formatSelectionValue } from "../../../packages/contracts/src/selection-format";
 import { Fragment, useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { App, Button, Card, Checkbox, Empty, Image, Input, Modal, Popover, Dropdown, Select, Space, Tooltip } from "antd";
@@ -54,7 +57,7 @@ const withValue = (row: Row, column: Column, value: unknown) => column.custom
   : { ...row, [column.key]: column.key === "sizeRange" ? sortSelectionSizes(value) : value };
 const sameRow = (a: Row, b: Row) =>
   baseKeys.every((key) => comparable(a[key]) === comparable(b[key])) &&
-  comparable(a.cellTextColors) === comparable(b.cellTextColors) && comparable(a.cellVerticalAlignments) === comparable(b.cellVerticalAlignments) && comparable(a.cellAlignments) === comparable(b.cellAlignments) && comparable(a.extraFields) === comparable(b.extraFields) && comparable(a.cellColors) === comparable(b.cellColors) &&
+  comparable(a.cellNumberFormats) === comparable(b.cellNumberFormats) && comparable(a.cellTextColors) === comparable(b.cellTextColors) && comparable(a.cellVerticalAlignments) === comparable(b.cellVerticalAlignments) && comparable(a.cellAlignments) === comparable(b.cellAlignments) && comparable(a.extraFields) === comparable(b.extraFields) && comparable(a.cellColors) === comparable(b.cellColors) &&
   Number(a.sortOrder || 0) === Number(b.sortOrder || 0);
 
 function SizeEditor({ value, disabled, onChange }: { value: string; disabled: boolean; onChange: (value: string) => void }) {
@@ -98,6 +101,8 @@ function ImagePreviewClose({ children, onClose }: { children: React.ReactNode; o
 function ImageCell({ images, colors, disabled, onChange }: { images: SelectionImage[]; colors: string[]; disabled: boolean; onChange: (images: SelectionImage[]) => void }) {
   const { message } = App.useApp();
   const [url, setUrl] = useState("");
+  const [failedImages, setFailedImages] = useState<Set<string>>(new Set());
+  const imageError = (url: string) => setFailedImages(current => new Set([...current, url]));
   const [busy, setBusy] = useState(false);
   const [linkOpen, setLinkOpen] = useState(false);
   const [allOpen, setAllOpen] = useState(false);
@@ -121,7 +126,7 @@ function ImageCell({ images, colors, disabled, onChange }: { images: SelectionIm
   const addUrl = () => {
     const value = url.trim();
     if (!value) return;
-    if (!/^https?:\/\//i.test(value)) return message.error("请输入以 http:// 或 https:// 开头的图片网址");
+    if (!selectionImageLinks(value).length) return message.error("请输入以 http:// 或 https:// 开头的图片网址");
     add([{ id: crypto.randomUUID(), url: value, color: colors[0] || "" }]); setUrl(""); setLinkOpen(false);
   };
   const addFiles = async (files: File[]) => {
@@ -134,13 +139,20 @@ function ImageCell({ images, colors, disabled, onChange }: { images: SelectionIm
   };
   const paste = (event: ClipboardEvent<HTMLDivElement>) => {
     const files = Array.from(event.clipboardData.items).filter((item) => item.type.startsWith("image/")).map((item) => item.getAsFile()).filter((file): file is File => !!file);
-    if (!files.length) return;
-    event.preventDefault(); event.stopPropagation(); void addFiles(files);
+    if (disabled || event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return;
+    if (files.length) { event.preventDefault(); event.stopPropagation(); void addFiles(files); return; }
+    const text = event.clipboardData.getData("text/plain");
+    if (!text.trim()) return;
+    event.preventDefault(); event.stopPropagation();
+    const links = selectionImageLinks(text);
+    if (!links.length) { message.warning("请粘贴完整的 http(s) 图片链接，多张图片每行一个链接"); return; }
+    add(links.map(url => ({ id: crypto.randomUUID(), url, color: colors[0] || "" })));
+
   };
   const editor = <div className="selection-images selection-image-editor" tabIndex={disabled ? -1 : 0} aria-label="图片，支持粘贴" onPaste={paste}>
     <Image.PreviewGroup preview={{ open: galleryPreviewOpen, onOpenChange: setGalleryPreviewOpen, closeIcon: false, imageRender: node => galleryPreviewOpen ? <ImagePreviewClose onClose={() => setGalleryPreviewOpen(false)}>{node}</ImagePreviewClose> : node }}><div className="selection-image-list">{images.map((image, index) => <div className="selection-image-item" key={image.id}>
       <i className="selection-image-badge">{index + 1}/{images.length}</i>
-      <Image src={image.url} alt={image.color || "款式图片"} width="100%" height="100%" preview={{ mask: false }} />
+      <Image src={image.url} fallback={invalidSelectionImage} onError={() => imageError(image.url)} alt={failedImages.has(image.url) ? "无效图片，链接无法加载" : image.color || "款式图片"} width="100%" height="100%" preview={failedImages.has(image.url) ? false : { mask: false }} />
       {image.color && <span className="selection-image-color">{image.color}</span>}
       {!disabled && <Button className="selection-image-remove" type="text" size="small" aria-label="移除图片" icon={<DeleteOutlined />} onClick={() => onChange(images.filter((item) => item.id !== image.id))} />}
       <Select className="selection-image-color-select" size="small" disabled={disabled} allowClear value={image.color || undefined} placeholder="命名颜色" options={colors.map((color) => ({ value: color, label: color }))} onChange={(color) => onChange(images.map((item) => item.id === image.id ? { ...item, color: color || "" } : item))} />
@@ -155,10 +167,11 @@ function ImageCell({ images, colors, disabled, onChange }: { images: SelectionIm
       <input ref={uploadInput} hidden type="file" multiple accept="image/jpeg,image/png,image/webp" onChange={(event) => { const files = Array.from(event.target.files || []); event.currentTarget.value = ""; void addFiles(files); }} />
     </div>}
   </div>;
-  const all = <><Button className="selection-mini-tag" size="small" onClick={() => setAllOpen(true)}>全部</Button><Modal title={`全部图片 · ${images.length} 张`} open={allOpen} onCancel={() => setAllOpen(false)} footer={null} width={560}><div className="selection-image-gallery">{editor}{!images.length && <Empty description="暂无图片，可添加链接、上传或粘贴图片" />}</div></Modal></>;
-  if (!images.length) return <div className="selection-image-empty">{!allOpen && editor}{all}</div>;
+  const gallery = <Modal title={`全部图片 · ${images.length} 张`} open={allOpen} onCancel={() => setAllOpen(false)} footer={null} width={560}><div className="selection-image-gallery">{editor}{!images.length && <Empty description="暂无图片，可添加链接、上传或粘贴图片" />}</div></Modal>;
+  const all = <><Button className="selection-mini-tag" size="small" onClick={() => setAllOpen(true)}>全部</Button>{gallery}</>;
+  if (!images.length) return <div className="selection-image-empty" tabIndex={0} aria-label="图片，支持粘贴链接或图片" onPaste={paste}><button className="selection-image-placeholder" type="button" disabled={disabled} onClick={() => setAllOpen(true)}>+ 图片</button>{gallery}</div>;
   return <div className="selection-image-summary" tabIndex={0} aria-label="图片轮播，点击图片放大" onMouseEnter={() => setCarouselPaused(true)} onMouseLeave={() => setCarouselPaused(false)} onFocus={() => setCarouselPaused(true)} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) setCarouselPaused(false); }} onPaste={paste}>
-    <div className="selection-image-slide"><Image src={images[currentImageIndex].url} alt={images[currentImageIndex].color || "款式图片"} width="100%" height="100%" preview={{ mask: false, open: previewOpen, onOpenChange: setPreviewOpen, closeIcon: false, imageRender: node => previewOpen ? <ImagePreviewClose onClose={() => setPreviewOpen(false)}>{node}</ImagePreviewClose> : node }} />
+    <div className="selection-image-slide"><Image src={images[currentImageIndex].url} fallback={invalidSelectionImage} onError={() => imageError(images[currentImageIndex].url)} alt={failedImages.has(images[currentImageIndex].url) ? "无效图片，链接无法加载" : images[currentImageIndex].color || "款式图片"} width="100%" height="100%" preview={failedImages.has(images[currentImageIndex].url) ? false : { mask: false, open: previewOpen, onOpenChange: setPreviewOpen, closeIcon: false, imageRender: node => previewOpen ? <ImagePreviewClose onClose={() => setPreviewOpen(false)}>{node}</ImagePreviewClose> : node }} />
       <i className="selection-image-badge">{currentImageIndex + 1}/{images.length}</i>
       {images[currentImageIndex].color && <span className="selection-slide-color">{images[currentImageIndex].color}</span>}
       {images.length > 1 && <div className="selection-carousel-controls"><button type="button" aria-label="上一张图片" onClick={() => setImageIndex((currentImageIndex + images.length - 1) % images.length)}>‹</button><button type="button" aria-label="下一张图片" onClick={() => setImageIndex((currentImageIndex + 1) % images.length)}>›</button></div>}
@@ -184,6 +197,8 @@ export function StyleSelectionsPage() {
   const [addCount, setAddCount] = useState(10);
   const [selectedRows, setSelectedRows] = useState<string[]>([]);
   const [copiedCells, setCopiedCells] = useState<Set<string>>(new Set());
+  const [focusedCell, setFocusedCell] = useState<string | null>(null);
+  const [formatTarget, setFormatTarget] = useState<{ ids: Set<string>; sample: unknown; initial: FormatPatch } | null>(null);
   const [cellTextEditing, setCellTextEditing] = useState(false);
   const [selectedCells, setSelectedCells] = useState<Set<string>>(new Set());
   const [cellAnchor, setCellAnchor] = useState<{ rowKey: string; columnKey: string } | null>(null);
@@ -245,7 +260,7 @@ export function StyleSelectionsPage() {
     setSelectedRows(current => { const next = current.filter(key => rowKeys.has(key)); return next.length === current.length ? current : next; });
     setSelectedCells(current => { const next = new Set([...current].filter(id => { const [rowKey, columnKey] = id.split("::"); return rowKeys.has(rowKey) && visible.includes(columnKey); })); return next.size === current.size ? current : next; });
   }, [filteredRows, visible]);
-  const hasContent = (row: Row) => baseKeys.some((key) => key === "images" ? rowImages(row).length : Boolean(clean(row[key]))) || Object.values(row.extraFields || {}).some(Boolean) || Object.keys(row.cellColors || {}).length > 0 || Object.keys(row.cellAlignments || {}).length > 0 || Object.keys(row.cellVerticalAlignments || {}).length > 0 || Object.keys(row.cellTextColors || {}).length > 0;
+  const hasContent = (row: Row) => baseKeys.some((key) => key === "images" ? rowImages(row).length : Boolean(clean(row[key]))) || Object.values(row.extraFields || {}).some(Boolean) || Object.keys(row.cellColors || {}).length > 0 || Object.keys(row.cellAlignments || {}).length > 0 || Object.keys(row.cellVerticalAlignments || {}).length > 0 || Object.keys(row.cellTextColors || {}).length > 0 || Object.keys(row.cellNumberFormats || {}).length > 0;
   const dirtyCount = rows.filter((row) => (row.id || hasContent(row)) && (!row.id || !sameRow(row, original.current.get(row._key) || {}))).length;
 
   const update = (key: string, column: Column, value: unknown) => {
@@ -320,6 +335,14 @@ export function StyleSelectionsPage() {
   const pasteCells = (event: ClipboardEvent<HTMLTableCellElement>, rowKey: string, columnKey: string) => {
     if (!canEdit || event.defaultPrevented || event.target instanceof HTMLTextAreaElement || (event.target instanceof HTMLInputElement && columnKey === "images")) return;
     const text = event.clipboardData.getData("text/plain"); if (!text) return;
+    if (columnKey === "images") {
+      event.preventDefault(); setCopiedCells(new Set());
+      const links = selectionImageLinks(text);
+      if (!links.length) { message.warning("请粘贴完整的 http(s) 图片链接，多张图片每行一个链接"); return; }
+      setRows(current => current.map(row => row._key === rowKey ? { ...row, images: [...rowImages(row), ...links.map(url => ({ id: crypto.randomUUID(), url, color: splitTags(row.color)[0] || "" }))] } : row));
+      return;
+    }
+
     const rowStart = displayedRows.findIndex((row) => row._key === rowKey), columnStart = activeColumns.findIndex((column) => column.key === columnKey); if (rowStart < 0 || columnStart < 0) return;
     event.preventDefault(); setCopiedCells(new Set()); const matrix = text.replace(/\r/g, "").split("\n").map((line) => line.split("\t"));
     setRows((current) => current.map((row) => { const rowIndex = displayedRows.findIndex(item => item._key === row._key); const source = rowIndex < rowStart ? undefined : matrix[rowIndex - rowStart]; if (!source) return row; let next = row; source.forEach((value, offset) => { const column = activeColumns[columnStart + offset]; if (!column || column.key === "images") return; next = withValue(next, column, value); }); return next; }));
@@ -338,7 +361,7 @@ export function StyleSelectionsPage() {
       for (const row of changed) {
         const body: Row = Object.fromEntries(baseKeys.map((key) => [key, clean(row[key])]));
         body.registrationBatch = normalizeSelection(row).registrationBatch;
-        body.images = rowImages(row); body.cellColors = row.cellColors || {}; body.cellAlignments = row.cellAlignments || {}; body.cellVerticalAlignments = row.cellVerticalAlignments || {}; body.cellTextColors = row.cellTextColors || {}; body.extraFields = row.extraFields || {}; body.sortOrder = Number(row.sortOrder || 0); body.rowColor = row.rowColor || "NONE";
+        body.images = rowImages(row); body.cellColors = row.cellColors || {}; body.cellAlignments = row.cellAlignments || {}; body.cellVerticalAlignments = row.cellVerticalAlignments || {}; body.cellTextColors = row.cellTextColors || {}; body.cellNumberFormats = row.cellNumberFormats || {}; body.extraFields = row.extraFields || {}; body.sortOrder = Number(row.sortOrder || 0); body.rowColor = row.rowColor || "NONE";
         if (row.id) body.expectedUpdatedAt = row.updatedAt;
         const attempt = attempts.current.start(row, body);
         try {
@@ -376,14 +399,23 @@ export function StyleSelectionsPage() {
   }, [canEdit, dirtyCount, saving, deleting, rows, retryVersion]);
   const renderCell = (row: Row, column: Column) => {
     const disabled = !canEdit, error = errors[`${row._key}:${column.key}`] || errors[`${row._key}:save`], selected = selectedCells.has(cellId(row._key, column.key));
-    const common = { tabIndex: 0, onDoubleClick: () => setCellTextEditing(true), onFocusCapture: () => { setCellAnchor({ rowKey: row._key, columnKey: column.key }); setEditingId(row.id || null); if (!selectedCells.has(cellId(row._key, column.key))) setSelectedCells(new Set([cellId(row._key, column.key)])); }, className: `${error ? "selection-cell-error " : ""}${selected ? "selection-cell-active" : ""}${copiedCells.has(cellId(row._key, column.key)) ? " selection-cell-copied" : ""}`, title: error, onMouseDown: () => cellMouseDown(row._key, column.key), onMouseEnter: () => cellMouseEnter(row._key, column.key), onCopy: (event: ClipboardEvent<HTMLTableCellElement>) => copyCells(event, row._key, column.key), onPaste: (event: ClipboardEvent<HTMLTableCellElement>) => pasteCells(event, row._key, column.key) };
-    const cell = (content: React.ReactNode) => <td key={column.key} {...common} data-vertical-align={row.cellVerticalAlignments?.[column.key] || "middle"} data-text-color={row.cellTextColors?.[column.key]} style={{ color: row.cellTextColors?.[column.key], textAlign: row.cellAlignments?.[column.key] || "left", backgroundColor: colorOptions.find(option => option.value === (row.cellColors?.[column.key] || row.rowColor))?.color }}><div className="selection-cell-content">{content}</div></td>;
+    const common = { tabIndex: 0, onDoubleClick: () => setCellTextEditing(true), onFocusCapture: () => { setCellAnchor({ rowKey: row._key, columnKey: column.key }); setEditingId(row.id || null); if (!selectedCells.has(cellId(row._key, column.key))) setSelectedCells(new Set([cellId(row._key, column.key)])); }, className: `${error ? "selection-cell-error " : ""}${selected ? "selection-cell-active" : ""}${copiedCells.has(cellId(row._key, column.key)) ? " selection-cell-copied" : ""}`, title: error, onMouseDown: (event: React.MouseEvent) => { if (event.button === 0) cellMouseDown(row._key, column.key); else if (event.button === 2) { event.preventDefault(); if (!selected) { setSelectedCells(new Set([cellId(row._key, column.key)])); setCellAnchor({ rowKey: row._key, columnKey: column.key }); } } }, onMouseEnter: () => cellMouseEnter(row._key, column.key), onCopy: (event: ClipboardEvent<HTMLTableCellElement>) => copyCells(event, row._key, column.key), onPaste: (event: ClipboardEvent<HTMLTableCellElement>) => pasteCells(event, row._key, column.key) };
+    const openFormat = () => {
+      const ids = selectedCells.has(cellId(row._key, column.key)) ? new Set(selectedCells) : new Set([cellId(row._key, column.key)]);
+      setFormatTarget({ ids, sample: valueAt(row, column), initial: ids.size === 1 ? Object.fromEntries(["cellNumberFormats", "cellAlignments", "cellVerticalAlignments", "cellColors", "cellTextColors"].map(key => [key, row[key]?.[column.key]])) : {} });
+      setSelectingCells(false);
+    };
+    const cell = (content: React.ReactNode) => <Dropdown key={column.key} trigger={["contextMenu"]} menu={{ items: [{ key: "format", label: "设置单元格格式", icon: <SettingOutlined />, disabled: !canEdit }], onClick: openFormat }}><td {...common} data-vertical-align={row.cellVerticalAlignments?.[column.key] || "middle"} data-text-color={row.cellTextColors?.[column.key]} style={{ color: row.cellTextColors?.[column.key], textAlign: row.cellAlignments?.[column.key] || "left", backgroundColor: colorOptions.find(option => option.value === (row.cellColors?.[column.key] || row.rowColor))?.color }}><div className="selection-cell-content">{content}</div></td></Dropdown>;
     if (column.key === "images") return cell(<ImageCell images={rowImages(row)} colors={splitTags(row.color)} disabled={disabled} onChange={(value) => update(row._key, column, value)} />);
     if (column.key === "color") return cell(<TagCell value={row.color} disabled={disabled} placeholder="+ 颜色"  />);
     if (column.key === "sizeRange") return cell(<TagCell value={row.sizeRange} disabled={disabled} placeholder="+ 尺码"  />);
-    if (column.key === "registrationBatch") return cell(<input className="selection-date-input" aria-label="登记批次日期" title="输入日期 YYYY-MM-DD，也可在顶部编辑栏选择" placeholder="+ 日期" maxLength={10} readOnly={disabled} value={row.registrationBatch || ""} onChange={event => update(row._key, column, event.target.value)} />);
-    if (moneyKeys.has(column.key)) return cell(<div className="selection-money-input"><span>￥</span><input disabled={disabled} inputMode="decimal" placeholder="0.00" value={valueAt(row, column) || ""} onChange={(event) => update(row._key, column, event.target.value)} /></div>);
-    return cell(<textarea className="selection-text-input" aria-label={column.label} readOnly={disabled} value={valueAt(row, column) || ""} onChange={(event) => update(row._key, column, event.target.value)} />);
+    const numberFormat = row.cellNumberFormats?.[column.key];
+    const displayValue = String(valueAt(row, column) ?? "");
+    if (numberFormat && !["general", "text"].includes(numberFormat.type) && focusedCell !== cellId(row._key, column.key)) return cell(<div className="selection-formatted-value" tabIndex={0} role="textbox" aria-label={column.label} aria-readonly={!canEdit} onFocus={() => { if (canEdit) setFocusedCell(cellId(row._key, column.key)); }}>{formatSelectionValue(displayValue, numberFormat) || (column.key === "registrationBatch" ? "+ 日期" : "")}</div>);
+    const focusProps = { autoFocus: !!numberFormat && focusedCell === cellId(row._key, column.key), onFocus: () => setFocusedCell(cellId(row._key, column.key)), onBlur: () => setFocusedCell(null) };
+    if (column.key === "registrationBatch") return cell(<input className="selection-date-input" aria-label="登记批次日期" title="输入日期 YYYY-MM-DD，也可在顶部编辑栏选择" placeholder="+ 日期" maxLength={10} readOnly={disabled} {...focusProps} value={displayValue} onChange={event => update(row._key, column, event.target.value)} />);
+    if (moneyKeys.has(column.key)) return cell(<div className="selection-money-input">{(!numberFormat || numberFormat.type === "general") && <span>￥</span>}<input {...focusProps} disabled={disabled} inputMode="decimal" placeholder="0.00" value={displayValue} onChange={(event) => update(row._key, column, event.target.value)} /></div>);
+    return cell(<textarea {...focusProps} className="selection-text-input" aria-label={column.label} readOnly={disabled} value={displayValue} onChange={(event) => update(row._key, column, event.target.value)} />);
   };
   const applyAlignment = (alignment: "left" | "center" | "right" | "top" | "middle" | "bottom", vertical = false) => {
     const field = vertical ? "cellVerticalAlignments" : "cellAlignments";
@@ -426,7 +458,24 @@ export function StyleSelectionsPage() {
   const filterContent = <div className="selection-popover"><Input.Search autoFocus allowClear placeholder="搜索批次、款号、供应商、颜色或材质" value={search} onChange={(event) => setSearch(event.target.value)} /><Button onClick={() => { setSearch(""); setFilterOpen(false); }}>清除筛选</Button></div>;
   const settings = <div className="selection-column-settings"><Button type="dashed" icon={<PlusOutlined />} onClick={addColumn}>新增文本列</Button>{columns.map((column) => <div key={column.key} className="selection-column-setting" draggable onDragStart={() => setDraggedColumn(column.key)} onDragOver={(event) => event.preventDefault()} onDrop={() => { if (draggedColumn) moveColumn(draggedColumn, column.key); setDraggedColumn(null); }}><Checkbox checked={visible.includes(column.key)} onChange={(event) => setVisible((current) => event.target.checked ? [...current, column.key] : current.filter((key) => key !== column.key))}>{column.label}</Checkbox><Button type="text" size="small" icon={<DeleteOutlined />} aria-label={`移除 ${column.label}`} onClick={() => removeColumn(column)} /></div>)}</div>;
   const collaborators = (presence.data?.data || []).filter((person: Row) => String(person.userId) !== String(user.id || ""));
-  return <><Header title="选款登记" subtitle="集中登记候选款的图片、款号、供应商、颜色、材质与定价信息。" />
+  const applyFormat = (patch: FormatPatch) => {
+    if (!canEdit || !formatTarget) return;
+    setRows(current => current.map(row => {
+      const targets = columns.filter(column => formatTarget.ids.has(cellId(row._key, column.key)));
+      if (!targets.length) return row;
+      const next = { ...row };
+      for (const [field, value] of Object.entries(patch)) {
+        next[field] = { ...(row[field] || {}) };
+        for (const column of targets) {
+          if (field === "cellNumberFormats" && ["images", "color", "sizeRange"].includes(column.key)) continue;
+          if (value === "") delete next[field][column.key]; else next[field][column.key] = value;
+        }
+      }
+      return next;
+    }));
+    setFormatTarget(null);
+  };
+  return <>{formatTarget && <SelectionFormatModal count={formatTarget.ids.size} sample={formatTarget.sample} initial={formatTarget.initial} onCancel={() => setFormatTarget(null)} onApply={applyFormat} />}<Header title="选款登记" subtitle="集中登记候选款的图片、款号、供应商、颜色、材质与定价信息。" />
     <Card className="selection-card"><div className="selection-toolbar" aria-label="选款登记表格工具栏"><Space wrap size={4}>
       <Button type="link" icon={<PlusOutlined />} disabled={!canEdit} onClick={() => add()}>添加一行</Button><Button type="link" danger icon={<DeleteOutlined />} disabled={!canEdit || !selectedRows.length || saving} loading={deleting} onClick={deleteRows}>删除行</Button>
       <Popover trigger="click" content={settings}><Button type="text" icon={<SettingOutlined />}>表格设置</Button></Popover><Popover trigger="click" open={filterOpen} onOpenChange={setFilterOpen} content={filterContent}><Button type="text" icon={<FilterOutlined />}>筛选</Button></Popover>

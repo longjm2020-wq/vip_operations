@@ -36,7 +36,7 @@ export class SelectionSaveAttempts {
 
 export function normalizeSelection(row: Row): Row {
   return { ...row, sizeRange: sortSelectionSizes(row.sizeRange) || null, registrationBatch: row.registrationBatch ? String(row.registrationBatch).slice(0, 10) : null,
-    images: row.images || [], cellColors: row.cellColors || {}, cellAlignments: row.cellAlignments || {}, cellVerticalAlignments: row.cellVerticalAlignments || {}, cellTextColors: row.cellTextColors || {}, extraFields: row.extraFields || {} };
+    images: row.images || [], cellColors: row.cellColors || {}, cellAlignments: row.cellAlignments || {}, cellVerticalAlignments: row.cellVerticalAlignments || {}, cellTextColors: row.cellTextColors || {}, cellNumberFormats: row.cellNumberFormats || {}, extraFields: row.extraFields || {} };
 }
 
 /** Accept server metadata while retaining fields edited during the request. */

@@ -1,3 +1,4 @@
+import { cellNumberFormatSchema } from "../../../../../packages/contracts/src/selection-format.js";
 import { sortSelectionSizes } from "../../../../../packages/contracts/src/selection-sizes.js";
 import { z } from "zod";
 import { randomUUID } from "node:crypto";
@@ -42,6 +43,7 @@ export const styleSelectionInput = z
     registrationBatch: date.nullable().optional(),
     images: z.array(image).default([]),
     cellColors: cellColors.default({}),
+    cellNumberFormats: z.record(z.string().max(100), cellNumberFormatSchema).default({}),
     cellTextColors: z.record(z.string().max(100), z.enum(["#262626", "#cf1322", "#d46b08", "#ad8b00", "#389e0d", "#0958d9", "#531dab", "#c41d7f", "#595959"])).default({}),
     cellVerticalAlignments: z.record(z.string().max(100), z.enum(["top", "middle", "bottom"])).default({}),
     cellAlignments: z.record(z.string().max(100), z.enum(["left", "center", "right"])).default({}),
@@ -67,7 +69,7 @@ const updateInput = styleSelectionInput
   .strict();
 
 const selectColumns = `
-  s.id,s.registration_batch::text,s.images,s.cell_colors,s.cell_alignments,s.cell_vertical_alignments,s.cell_text_colors,s.extra_fields,s.xuti_style_no,s.supplier_style_no,
+  s.id,s.registration_batch::text,s.images,s.cell_colors,s.cell_alignments,s.cell_vertical_alignments,s.cell_text_colors,s.cell_number_formats,s.extra_fields,s.xuti_style_no,s.supplier_style_no,
   s.supplier_code,s.color,s.size_range,s.material,s.supply_price_excl_tax,
   s.vip_price,s.live_price,s.tag_price,s.row_color,s.sort_order,s.created_by,s.version,
   s.created_at,s.updated_at`;
@@ -212,7 +214,7 @@ async function persist(tx: Tx, c: Context, body: Row, value?: string) {
     if ("color" in changes) changes.color = normalizedTags(changes.color);
     if ("sizeRange" in changes) changes.sizeRange = sortSelectionSizes(changes.sizeRange) || null;
     validateImageColors(changes.images ?? before?.images ?? [], changes.color ?? before?.color);
-    for (const key of ["images", "cellColors", "cellAlignments", "cellVerticalAlignments", "cellTextColors", "extraFields"])
+    for (const key of ["images", "cellColors", "cellAlignments", "cellVerticalAlignments", "cellTextColors", "cellNumberFormats", "extraFields"])
       if (key in changes) changes[key] = JSON.stringify(changes[key]);
     if (!before && changes.sortOrder === undefined) {
       const last = await one(tx, "SELECT coalesce(max(sort_order),0)::int AS value FROM style_selections");

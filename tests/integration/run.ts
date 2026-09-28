@@ -527,6 +527,7 @@ try {
     cellAlignments: { vipPrice: "right", material: "center" },
     cellVerticalAlignments: { material: "bottom" },
     cellTextColors: { material: "#cf1322" },
+    cellNumberFormats: { vipPrice: { type: "currency", decimals: 2, pattern: "0.00" } },
     extraFields: { "custom:test": "样衣已确认" },
     sortOrder: 3,
     rowColor: "BLUE",
@@ -539,6 +540,8 @@ try {
   assert.equal(selection.cellAlignments.material, "center");
   assert.equal(selection.cellVerticalAlignments.material, "bottom");
   assert.equal(selection.cellTextColors.material, "#cf1322");
+  assert.equal(selection.cellNumberFormats.vipPrice.type, "currency");
+  assert.equal((await request("/style-selections/" + selection.id, "PATCH", { cellNumberFormats: { vipPrice: { type: "number", decimals: 99 } } })).status, 400);
   assert.equal((await request("/style-selections/" + selection.id, "PATCH", { cellTextColors: { material: "invalid" } })).status, 400);
   assert.equal((await request("/style-selections/" + selection.id, "PATCH", { cellVerticalAlignments: { material: "invalid" } })).status, 400);
   assert.equal((await request("/style-selections/" + selection.id, "PATCH", { cellAlignments: { material: "invalid" } })).status, 400);
@@ -557,6 +560,7 @@ try {
   assert.deepEqual(selectedStyle.cellAlignments, selection.cellAlignments);
   assert.deepEqual(selectedStyle.cellVerticalAlignments, selection.cellVerticalAlignments);
   assert.deepEqual(selectedStyle.cellTextColors, selection.cellTextColors);
+  assert.deepEqual(selectedStyle.cellNumberFormats, selection.cellNumberFormats);
   const savedAgain = await ok("/style-selections/" + selection.id, "PATCH", {
     registrationBatch: selectedStyle.registrationBatch,
     material: "连续编辑",
