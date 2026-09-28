@@ -309,7 +309,7 @@
 .selection-sheet.row-loose { --selection-cell-height: 64px; }
 .selection-cell-content { height: calc(var(--selection-cell-height) - 1px); overflow: hidden; min-width: 0; overflow-wrap: anywhere; }
 .selection-text-input { box-sizing: border-box; width: 100%; height: 100%; padding: 7px 9px; border: 0; outline: 0; resize: none; overflow: hidden; white-space: pre-wrap; overflow-wrap: anywhere; color: inherit; font: inherit; line-height: 18px; background: transparent; }
-.selection-text-input:focus { box-shadow: inset 0 0 0 2px #d3540b; }
+.selection-sheet .selection-text-input:focus, .selection-sheet .selection-text-input:focus-visible { box-shadow: none !important; outline: none !important; }
 .selection-cell-content .selection-tags { max-width: 100%; }
 .selection-cell-content .selection-tags .ant-select-selection-item { max-width: 100%; white-space: normal; height: auto; min-height: 20px; }
 .selection-cell-content .selection-tags .ant-select-selection-item-content { white-space: normal; overflow-wrap: anywhere; }
@@ -405,3 +405,7 @@
 .selection-sheet td[data-text-color] .selection-chip,
 .selection-sheet td[data-text-color] .selection-money-input > span,
 .selection-sheet td[data-text-color] .selection-date-tag.ant-btn { color: inherit; }
+
+.selection-size-editor { flex: 1; min-width: 0; display: flex; gap: 8px; flex-wrap: wrap; }
+.selection-size-editor > .ant-select { flex: 1; min-width: 160px; }
+.selection-size-editor > .ant-space-compact { max-width: 100%; }

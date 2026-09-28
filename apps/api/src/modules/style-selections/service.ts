@@ -1,3 +1,4 @@
+import { sortSelectionSizes } from "../../../../../packages/contracts/src/selection-sizes.js";
 import { z } from "zod";
 import { randomUUID } from "node:crypto";
 import { db, insert, one, rows, update, type Row, type Tx } from "../../../../../packages/database/src/index.js";
@@ -209,7 +210,7 @@ async function persist(tx: Tx, c: Context, body: Row, value?: string) {
     const changes = { ...body };
     delete changes.expectedUpdatedAt;
     if ("color" in changes) changes.color = normalizedTags(changes.color);
-    if ("sizeRange" in changes) changes.sizeRange = normalizedTags(changes.sizeRange);
+    if ("sizeRange" in changes) changes.sizeRange = sortSelectionSizes(changes.sizeRange) || null;
     validateImageColors(changes.images ?? before?.images ?? [], changes.color ?? before?.color);
     for (const key of ["images", "cellColors", "cellAlignments", "cellVerticalAlignments", "cellTextColors", "extraFields"])
       if (key in changes) changes[key] = JSON.stringify(changes[key]);

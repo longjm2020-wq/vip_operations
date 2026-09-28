@@ -517,7 +517,7 @@ try {
     supplierStyleNo: "SUP-SELECT-001",
     supplierCode: "SUP-001",
     color: "奶油白/烟灰",
-    sizeRange: "S/M/L",
+    sizeRange: "L/S/M",
     material: "100% 羊毛",
     supplyPriceExclTax: "88.50",
     vipPrice: "199.00",
@@ -532,6 +532,7 @@ try {
     rowColor: "BLUE",
   });
   assert.equal(selection.xutiStyleNo, "XUTI-SELECT-001");
+  assert.equal(selection.sizeRange, "S/M/L");
   assert.equal(selection.registrationBatch, "2026-10-01");
   assert.equal(selection.images[0].color, "奶油白");
   assert.equal(selection.cellColors.vipPrice, "YELLOW");

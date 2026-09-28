@@ -1,3 +1,4 @@
+import { sortSelectionSizes } from "../../../packages/contracts/src/selection-sizes.js";
 type Row = Record<string, any>;
 
 /** Each logical write gets its own key; uncertain retries reuse the exact request. */
@@ -34,7 +35,7 @@ export class SelectionSaveAttempts {
 }
 
 export function normalizeSelection(row: Row): Row {
-  return { ...row, registrationBatch: row.registrationBatch ? String(row.registrationBatch).slice(0, 10) : null,
+  return { ...row, sizeRange: sortSelectionSizes(row.sizeRange) || null, registrationBatch: row.registrationBatch ? String(row.registrationBatch).slice(0, 10) : null,
     images: row.images || [], cellColors: row.cellColors || {}, cellAlignments: row.cellAlignments || {}, cellVerticalAlignments: row.cellVerticalAlignments || {}, cellTextColors: row.cellTextColors || {}, extraFields: row.extraFields || {} };
 }
 
