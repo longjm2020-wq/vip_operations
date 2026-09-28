@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { App, Button, Card, Checkbox, Empty, Image, Input, Modal, Popover, Select, Space, Tooltip } from "antd";
-import { BgColorsOutlined, CloseOutlined, AlignLeftOutlined, AlignCenterOutlined, AlignRightOutlined, DeleteOutlined, FilterOutlined, LinkOutlined, PlusOutlined, SettingOutlined, SortAscendingOutlined, TeamOutlined, UnorderedListOutlined, UploadOutlined } from "@ant-design/icons";
+import { App, Button, Card, Checkbox, Empty, Image, Input, Modal, Popover, Dropdown, Select, Space, Tooltip } from "antd";
+import { BgColorsOutlined, FontColorsOutlined, VerticalAlignTopOutlined, VerticalAlignMiddleOutlined, VerticalAlignBottomOutlined, CloseOutlined, AlignLeftOutlined, AlignCenterOutlined, AlignRightOutlined, DeleteOutlined, FilterOutlined, LinkOutlined, PlusOutlined, SettingOutlined, SortAscendingOutlined, TeamOutlined, UnorderedListOutlined, UploadOutlined } from "@ant-design/icons";
 import { api, queryClient } from "./api";
 import { prepareUpload, readUpload } from "./upload-file";
 import { Header, QueryState, Row, useCan, useUser } from "./shared";
@@ -14,6 +14,13 @@ const colorOptions = [
   { value: "NONE", label: "无填色", color: "#ffffff" }, { value: "ORANGE", label: "橙色", color: "#fff1e7" },
   { value: "YELLOW", label: "黄色", color: "#fff8cf" }, { value: "GREEN", label: "绿色", color: "#eef9e8" },
   { value: "BLUE", label: "蓝色", color: "#edf5ff" }, { value: "PINK", label: "粉色", color: "#fff0f3" },
+];
+const textColorOptions = [
+  { value: "", label: "默认颜色" }, { value: "#262626", label: "黑色" },
+  { value: "#cf1322", label: "红色" }, { value: "#d46b08", label: "橙色" },
+  { value: "#ad8b00", label: "金色" }, { value: "#389e0d", label: "绿色" },
+  { value: "#0958d9", label: "蓝色" }, { value: "#531dab", label: "紫色" },
+  { value: "#c41d7f", label: "粉色" }, { value: "#595959", label: "灰色" },
 ];
 const sizes = ["XS", "S", "M", "L", "XL", "2XL", "3XL", "4XL", "5XL", "6XL"];
 type SelectionImage = { id: string; url: string; color: string };
@@ -47,7 +54,7 @@ const withValue = (row: Row, column: Column, value: unknown) => column.custom
   : { ...row, [column.key]: value };
 const sameRow = (a: Row, b: Row) =>
   baseKeys.every((key) => comparable(a[key]) === comparable(b[key])) &&
-  comparable(a.cellAlignments) === comparable(b.cellAlignments) && comparable(a.extraFields) === comparable(b.extraFields) && comparable(a.cellColors) === comparable(b.cellColors) &&
+  comparable(a.cellTextColors) === comparable(b.cellTextColors) && comparable(a.cellVerticalAlignments) === comparable(b.cellVerticalAlignments) && comparable(a.cellAlignments) === comparable(b.cellAlignments) && comparable(a.extraFields) === comparable(b.extraFields) && comparable(a.cellColors) === comparable(b.cellColors) &&
   Number(a.sortOrder || 0) === Number(b.sortOrder || 0);
 
 function TagCell({ value, disabled, placeholder }: { value: unknown; disabled: boolean; placeholder: string }) {
@@ -224,7 +231,7 @@ export function StyleSelectionsPage() {
     setSelectedRows(current => { const next = current.filter(key => rowKeys.has(key)); return next.length === current.length ? current : next; });
     setSelectedCells(current => { const next = new Set([...current].filter(id => { const [rowKey, columnKey] = id.split("::"); return rowKeys.has(rowKey) && visible.includes(columnKey); })); return next.size === current.size ? current : next; });
   }, [filteredRows, visible]);
-  const hasContent = (row: Row) => baseKeys.some((key) => key === "images" ? rowImages(row).length : Boolean(clean(row[key]))) || Object.values(row.extraFields || {}).some(Boolean) || Object.keys(row.cellColors || {}).length > 0 || Object.keys(row.cellAlignments || {}).length > 0;
+  const hasContent = (row: Row) => baseKeys.some((key) => key === "images" ? rowImages(row).length : Boolean(clean(row[key]))) || Object.values(row.extraFields || {}).some(Boolean) || Object.keys(row.cellColors || {}).length > 0 || Object.keys(row.cellAlignments || {}).length > 0 || Object.keys(row.cellVerticalAlignments || {}).length > 0 || Object.keys(row.cellTextColors || {}).length > 0;
   const dirtyCount = rows.filter((row) => (row.id || hasContent(row)) && (!row.id || !sameRow(row, original.current.get(row._key) || {}))).length;
 
   const update = (key: string, column: Column, value: unknown) => {
@@ -317,7 +324,7 @@ export function StyleSelectionsPage() {
       for (const row of changed) {
         const body: Row = Object.fromEntries(baseKeys.map((key) => [key, clean(row[key])]));
         body.registrationBatch = normalizeSelection(row).registrationBatch;
-        body.images = rowImages(row); body.cellColors = row.cellColors || {}; body.cellAlignments = row.cellAlignments || {}; body.extraFields = row.extraFields || {}; body.sortOrder = Number(row.sortOrder || 0); body.rowColor = row.rowColor || "NONE";
+        body.images = rowImages(row); body.cellColors = row.cellColors || {}; body.cellAlignments = row.cellAlignments || {}; body.cellVerticalAlignments = row.cellVerticalAlignments || {}; body.cellTextColors = row.cellTextColors || {}; body.extraFields = row.extraFields || {}; body.sortOrder = Number(row.sortOrder || 0); body.rowColor = row.rowColor || "NONE";
         if (row.id) body.expectedUpdatedAt = row.updatedAt;
         const attempt = attempts.current.start(row, body);
         try {
@@ -356,7 +363,7 @@ export function StyleSelectionsPage() {
   const renderCell = (row: Row, column: Column) => {
     const disabled = !canEdit, error = errors[`${row._key}:${column.key}`] || errors[`${row._key}:save`], selected = selectedCells.has(cellId(row._key, column.key));
     const common = { tabIndex: 0, onDoubleClick: () => setCellTextEditing(true), onFocusCapture: () => { setCellAnchor({ rowKey: row._key, columnKey: column.key }); setEditingId(row.id || null); if (!selectedCells.has(cellId(row._key, column.key))) setSelectedCells(new Set([cellId(row._key, column.key)])); }, className: `${error ? "selection-cell-error " : ""}${selected ? "selection-cell-active" : ""}${copiedCells.has(cellId(row._key, column.key)) ? " selection-cell-copied" : ""}`, title: error, onMouseDown: () => cellMouseDown(row._key, column.key), onMouseEnter: () => cellMouseEnter(row._key, column.key), onCopy: (event: ClipboardEvent<HTMLTableCellElement>) => copyCells(event, row._key, column.key), onPaste: (event: ClipboardEvent<HTMLTableCellElement>) => pasteCells(event, row._key, column.key) };
-    const cell = (content: React.ReactNode) => <td key={column.key} {...common} style={{ textAlign: row.cellAlignments?.[column.key] || "left", backgroundColor: colorOptions.find(option => option.value === (row.cellColors?.[column.key] || row.rowColor))?.color }}><div className="selection-cell-content">{content}</div></td>;
+    const cell = (content: React.ReactNode) => <td key={column.key} {...common} data-vertical-align={row.cellVerticalAlignments?.[column.key] || "middle"} data-text-color={row.cellTextColors?.[column.key]} style={{ color: row.cellTextColors?.[column.key], textAlign: row.cellAlignments?.[column.key] || "left", backgroundColor: colorOptions.find(option => option.value === (row.cellColors?.[column.key] || row.rowColor))?.color }}><div className="selection-cell-content">{content}</div></td>;
     if (column.key === "images") return cell(<ImageCell images={rowImages(row)} colors={splitTags(row.color)} disabled={disabled} onChange={(value) => update(row._key, column, value)} />);
     if (column.key === "color") return cell(<TagCell value={row.color} disabled={disabled} placeholder="+ 颜色"  />);
     if (column.key === "sizeRange") return cell(<TagCell value={row.sizeRange} disabled={disabled} placeholder="+ 尺码"  />);
@@ -364,11 +371,22 @@ export function StyleSelectionsPage() {
     if (moneyKeys.has(column.key)) return cell(<div className="selection-money-input"><span>￥</span><input disabled={disabled} inputMode="decimal" placeholder="0.00" value={valueAt(row, column) || ""} onChange={(event) => update(row._key, column, event.target.value)} /></div>);
     return cell(<textarea className="selection-text-input" aria-label={column.label} readOnly={disabled} value={valueAt(row, column) || ""} onChange={(event) => update(row._key, column, event.target.value)} />);
   };
-  const applyAlignment = (alignment: "left" | "center" | "right") => {
+  const applyAlignment = (alignment: "left" | "center" | "right" | "top" | "middle" | "bottom", vertical = false) => {
+    const field = vertical ? "cellVerticalAlignments" : "cellAlignments";
     if (!canEdit || !selectedCells.size) return;
     setRows(current => current.map(row => {
       const selected = activeColumns.filter(column => selectedCells.has(cellId(row._key, column.key)));
-      return selected.length ? { ...row, cellAlignments: { ...(row.cellAlignments || {}), ...Object.fromEntries(selected.map(column => [column.key, alignment])) } } : row;
+      return selected.length ? { ...row, [field]: { ...(row[field] || {}), ...Object.fromEntries(selected.map(column => [column.key, alignment])) } } : row;
+    }));
+  };
+  const applyTextColor = (color: string) => {
+    if (!canEdit || !selectedCells.size) return;
+    setRows(current => current.map(row => {
+      const selected = activeColumns.filter(column => selectedCells.has(cellId(row._key, column.key)));
+      if (!selected.length) return row;
+      const cellTextColors = { ...(row.cellTextColors || {}) };
+      for (const column of selected) { if (color) cellTextColors[column.key] = color; else delete cellTextColors[column.key]; }
+      return { ...row, cellTextColors };
     }));
   };
   const setColumnFilter = (key: string, filter?: SelectionFilters[string]) => setColumnFilters(current => { const next = { ...current }; if (filter) next[key] = filter; else delete next[key]; return next; });
@@ -402,6 +420,8 @@ export function StyleSelectionsPage() {
       <Select className="selection-tool-select" value={rowHeight} suffixIcon={<UnorderedListOutlined />} options={[{ value: "compact", label: "紧凑行高" }, { value: "normal", label: "标准行高" }, { value: "loose", label: "宽松行高" }, { value: "extra", label: "超宽行高" }]} onChange={setRowHeight} />
       <Popover trigger="click" content={<div className="selection-color-menu">{colorOptions.map((option) => <Button key={option.value} type="text" onClick={() => applyColor(option.value)}><span className="selection-color-dot" style={{ background: option.color }} />{option.label}</Button>)}</div>}><Button type="text" icon={<BgColorsOutlined />}>填色</Button></Popover>
     <Space.Compact>{([{ value: "left", label: "左对齐", icon: <AlignLeftOutlined /> }, { value: "center", label: "居中对齐", icon: <AlignCenterOutlined /> }, { value: "right", label: "右对齐", icon: <AlignRightOutlined /> }] as const).map(item => <Tooltip key={item.value} title={item.label}><Button aria-label={item.label} disabled={!canEdit || !selectedCells.size} icon={item.icon} onClick={() => applyAlignment(item.value)} /></Tooltip>)}</Space.Compact>
+    <Dropdown trigger={["click"]} menu={{ selectable: true, selectedKeys: editorRow && editorColumn ? [editorRow.cellVerticalAlignments?.[editorColumn.key] || "middle"] : [], items: [{ key: "top", label: "顶端对齐", icon: <VerticalAlignTopOutlined /> }, { key: "middle", label: "垂直居中", icon: <VerticalAlignMiddleOutlined /> }, { key: "bottom", label: "底端对齐", icon: <VerticalAlignBottomOutlined /> }], onClick: ({ key }) => applyAlignment(key as "top" | "middle" | "bottom", true) }}><Button aria-label="垂直对齐" title="垂直对齐" disabled={!canEdit || !selectedCells.size} icon={<VerticalAlignMiddleOutlined />} /></Dropdown>
+    <Dropdown trigger={["click"]} menu={{ selectable: true, selectedKeys: editorRow && editorColumn ? [editorRow.cellTextColors?.[editorColumn.key] || "default"] : [], items: textColorOptions.map(option => ({ key: option.value || "default", label: option.label, icon: <span className="selection-color-dot" style={{ background: option.value || "#46352a" }} /> })), onClick: ({ key }) => applyTextColor(key === "default" ? "" : key) }}><Button aria-label="字体颜色" title="字体颜色" disabled={!canEdit || !selectedCells.size} icon={<FontColorsOutlined />} /></Dropdown>
     {!!Object.keys(columnFilters).length && <Button type="text" onClick={() => setColumnFilters({})}>清除列筛选 ({Object.keys(columnFilters).length})</Button>}
     <SelectionTransfer filteredRows={Object.keys(columnFilters).length ? filteredRows : undefined} canEdit={canEdit} blocked={!!dirtyCount || saving || deleting} selectedRows={filteredRows.filter(row => selectedRows.includes(row._key))} query={search} onImported={() => { appliedSnapshot.current = ""; void queryClient.invalidateQueries({ queryKey: ["style-selections"] }); }} />
     </Space><span className="selection-record-count">{!!Object.keys(errors).length && <Tooltip title="修改尚未保存；悬停红色单元格查看原因，修正后重试"><Button type="text" size="small" danger disabled={saving} onClick={() => { attempts.current.retry(); setRetryVersion((value) => value + 1); }}>未保存 · 重试</Button></Tooltip>} 记录数 {filteredRows.length}{filteredRows.length !== rows.length ? ` / ${rows.length}` : ""} <b>·</b> 行 {selectedRows.length} <b>·</b> 单元格 {selectedCells.size}</span></div>

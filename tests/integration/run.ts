@@ -525,6 +525,8 @@ try {
     tagPrice: "399.00",
     cellColors: { vipPrice: "YELLOW" },
     cellAlignments: { vipPrice: "right", material: "center" },
+    cellVerticalAlignments: { material: "bottom" },
+    cellTextColors: { material: "#cf1322" },
     extraFields: { "custom:test": "样衣已确认" },
     sortOrder: 3,
     rowColor: "BLUE",
@@ -534,6 +536,10 @@ try {
   assert.equal(selection.images[0].color, "奶油白");
   assert.equal(selection.cellColors.vipPrice, "YELLOW");
   assert.equal(selection.cellAlignments.material, "center");
+  assert.equal(selection.cellVerticalAlignments.material, "bottom");
+  assert.equal(selection.cellTextColors.material, "#cf1322");
+  assert.equal((await request("/style-selections/" + selection.id, "PATCH", { cellTextColors: { material: "invalid" } })).status, 400);
+  assert.equal((await request("/style-selections/" + selection.id, "PATCH", { cellVerticalAlignments: { material: "invalid" } })).status, 400);
   assert.equal((await request("/style-selections/" + selection.id, "PATCH", { cellAlignments: { material: "invalid" } })).status, 400);
   await ok("/style-selections/presence", "POST", { editingId: selection.id });
   assert.ok((await ok("/style-selections/presence")).some((person: any) => person.editingId === selection.id));
@@ -548,6 +554,8 @@ try {
   assert.equal(selectedStyle.vipPrice, "209");
   assert.equal(selectedStyle.registrationBatch, "2026-10-01");
   assert.deepEqual(selectedStyle.cellAlignments, selection.cellAlignments);
+  assert.deepEqual(selectedStyle.cellVerticalAlignments, selection.cellVerticalAlignments);
+  assert.deepEqual(selectedStyle.cellTextColors, selection.cellTextColors);
   const savedAgain = await ok("/style-selections/" + selection.id, "PATCH", {
     registrationBatch: selectedStyle.registrationBatch,
     material: "连续编辑",

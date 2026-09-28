@@ -206,6 +206,8 @@ model style_selections {
   images                 Json      @default("[]")
   cell_colors            Json      @default("{}")
   cell_alignments        Json      @default("{}")
+  cell_vertical_alignments Json    @default("{}")
+  cell_text_colors         Json    @default("{}")
   extra_fields           Json      @default("{}")
   xuti_style_no          String?  @db.VarChar(64)
   supplier_style_no      String?  @db.VarChar(64)
