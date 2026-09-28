@@ -19,8 +19,8 @@ export async function fetchSelectionRows(query: string, sort = "createdAt", dire
   return { data, total };
 }
 
-export function SelectionTransfer({ canEdit, blocked, selectedRows, query, onImported }: {
-  canEdit: boolean; blocked: boolean; selectedRows: Row[]; query: string; onImported: () => void;
+export function SelectionTransfer({ canEdit, blocked, selectedRows, filteredRows, query, onImported }: {
+  canEdit: boolean; blocked: boolean; selectedRows: Row[]; filteredRows?: Row[]; query: string; onImported: () => void;
 }) {
   const input = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
@@ -34,7 +34,7 @@ export function SelectionTransfer({ canEdit, blocked, selectedRows, query, onImp
     try {
       const records = template ? [] : [...selectedRows];
       if (!template && !records.length) {
-        records.push(...(await fetchSelectionRows(query)).data);
+        records.push(...(filteredRows ?? (await fetchSelectionRows(query)).data));
       }
       if (!template && !records.length) throw Error("没有可导出的款式");
       await downloadSelectionWorkbook(records, template);

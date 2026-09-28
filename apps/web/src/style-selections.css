@@ -356,3 +356,29 @@
 .selection-image-list { scrollbar-width: none; }
 .selection-image-thumbs::-webkit-scrollbar,
 .selection-image-list::-webkit-scrollbar { display: none; }
+
+/* The editor stays outside the scrolling sheet, directly above its header. */
+.selection-editor-bar { display: flex; align-items: center; gap: 8px; min-height: 38px; padding: 4px 12px; border-bottom: 1px solid #eaded3; background: #fffdf9; }
+.selection-editor-label { flex: 0 0 140px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12px; color: #78604d; }
+.selection-editor-bar > textarea, .selection-editor-tags { flex: 1; min-width: 0; }
+.selection-editor-bar > input { padding: 4px 8px; border: 1px solid #eaded3; border-radius: 4px; font: inherit; }
+.selection-editor-error { max-width: 240px; font-size: 12px; color: #b42318; }
+@media (max-width: 600px) { .selection-editor-label { flex-basis: 90px; } .selection-editor-bar { flex-wrap: wrap; } .selection-editor-error { flex-basis: 100%; } }
+
+.selection-text-input, .selection-money-input input { text-align: inherit; }
+.selection-money-input { justify-content: inherit; }
+.selection-tag-preview { display: block; text-align: inherit; }
+.selection-tag-preview .selection-chip { margin: 1px; }
+.selection-date-tag { display: inline-block; }
+.selection-column-filter { display: grid; gap: 8px; width: 240px; }
+.selection-sheet thead th { padding-right: 26px; }
+.selection-column-filter-button.ant-btn { position: absolute; right: 5px; top: 50%; transform: translateY(-50%); width: 20px; min-width: 20px; padding: 0; }
+.selection-column-filter-button.ant-btn span::before { content: none; }
+
+.selection-image-summary { display: block; height: 100%; box-sizing: border-box; padding: 3px; min-height: 0; }
+.selection-image-slide { position: relative; height: 100%; width: 100%; }
+.selection-image-slide .ant-image-img { height: 100%; object-fit: contain; }
+.selection-image-slide .selection-image-actions { position: absolute; right: 2px; bottom: 2px; z-index: 2; }
+.selection-slide-color { position: absolute; bottom: 2px; left: 2px; max-width: calc(100% - 42px); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: white; background: #422e21bb; font-size: 10px; pointer-events: none; }
+.selection-carousel-controls { position: absolute; top: 0; left: 0; z-index: 3; display: flex; gap: 2px; pointer-events: none; }
+.selection-carousel-controls button { pointer-events: auto; border: 0; padding: 0 4px; color: white; background: #422e2199; cursor: pointer; line-height: 18px; }

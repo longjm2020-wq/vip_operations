@@ -1,12 +1,13 @@
 import { Fragment, useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { App, Button, Card, Checkbox, Empty, Image, Input, Modal, Popover, Select, Space, Tooltip } from "antd";
-import { BgColorsOutlined, CalendarOutlined, CloseOutlined, DeleteOutlined, FilterOutlined, LinkOutlined, PlusOutlined, SettingOutlined, SortAscendingOutlined, TeamOutlined, UnorderedListOutlined, UploadOutlined } from "@ant-design/icons";
+import { BgColorsOutlined, AlignLeftOutlined, AlignCenterOutlined, AlignRightOutlined, DeleteOutlined, FilterOutlined, LinkOutlined, PlusOutlined, SettingOutlined, SortAscendingOutlined, TeamOutlined, UnorderedListOutlined, UploadOutlined } from "@ant-design/icons";
 import { api, queryClient } from "./api";
 import { prepareUpload, readUpload } from "./upload-file";
 import { Header, QueryState, Row, useCan, useUser } from "./shared";
 import { mergeSelectionSave, normalizeSelection, SelectionSaveAttempts } from "./selection-autosave";
 import { fetchSelectionRows, SelectionTransfer } from "./selection-transfer";
+import { matchesSelectionFilters, selectionAllCells, type SelectionFilters } from "./selection-filters";
 import "./style-selections.css";
 
 const colorOptions = [
@@ -46,23 +47,11 @@ const withValue = (row: Row, column: Column, value: unknown) => column.custom
   : { ...row, [column.key]: value };
 const sameRow = (a: Row, b: Row) =>
   baseKeys.every((key) => comparable(a[key]) === comparable(b[key])) &&
-  comparable(a.extraFields) === comparable(b.extraFields) && comparable(a.cellColors) === comparable(b.cellColors) &&
+  comparable(a.cellAlignments) === comparable(b.cellAlignments) && comparable(a.extraFields) === comparable(b.extraFields) && comparable(a.cellColors) === comparable(b.cellColors) &&
   Number(a.sortOrder || 0) === Number(b.sortOrder || 0);
 
-function TagCell({ value, onChange, options = [], disabled, placeholder }: { value: unknown; onChange: (value: string) => void; options?: string[]; disabled: boolean; placeholder: string }) {
-  const tags = splitTags(value);
-  return <Popover trigger="click" content={<Select className="selection-tags" style={{ width: 280 }} size="small" mode="tags" value={tags} disabled={disabled} tokenSeparators={["/"]} placeholder={placeholder} options={options.map((item) => ({ value: item, label: item }))} onChange={(values) => onChange(joinTags(values))} />}>
-    <div className="selection-tag-preview" tabIndex={disabled ? -1 : 0} role="group" aria-label={placeholder.slice(2)}>{tags.map((tag) => <span className="selection-chip" key={tag}>{tag}{!disabled && <button aria-label={`删除${tag}`} onClick={(event) => { event.stopPropagation(); onChange(joinTags(tags.filter((item) => item !== tag))); }}><CloseOutlined /></button>}</span>)}{!tags.length && <span className="selection-tag-placeholder">{placeholder}</span>}</div>
-  </Popover>;
-}
-
-function DateCell({ value, disabled, onChange }: { value: string; disabled: boolean; onChange: (value: string) => void }) {
-  const [open, setOpen] = useState(false);
-  const [draft, setDraft] = useState("");
-  const date = value ? value.slice(0, 10) : "";
-  return <Popover trigger="click" open={open} onOpenChange={(next) => { setDraft(date); setOpen(next); }} content={<Space><input className="selection-date-editor" aria-label="登记批次日期" type="date" value={draft} disabled={disabled} onInput={(event) => setDraft(event.currentTarget.value)} onChange={(event) => setDraft(event.target.value)} /><Button size="small" onClick={() => { onChange(draft); setOpen(false); }}>确定</Button></Space>}>
-    <Button className="selection-mini-tag selection-date-tag" size="small" disabled={disabled} icon={<CalendarOutlined />} aria-label={date ? `登记批次 ${date}` : "选择登记批次日期"}>{date || "日期"}</Button>
-  </Popover>;
+function TagCell({ value, disabled, placeholder }: { value: unknown; disabled: boolean; placeholder: string }) {
+  return <div className="selection-tag-preview" tabIndex={0} role="group" aria-label={placeholder.slice(2)} aria-readonly={disabled}>{splitTags(value).map((tag) => <span className="selection-chip" key={tag}>{tag}</span>)}{!splitTags(value).length && <span className="selection-tag-placeholder">{placeholder}</span>}</div>;
 }
 
 function ImageCell({ images, colors, disabled, onChange }: { images: SelectionImage[]; colors: string[]; disabled: boolean; onChange: (images: SelectionImage[]) => void }) {
@@ -71,6 +60,14 @@ function ImageCell({ images, colors, disabled, onChange }: { images: SelectionIm
   const [busy, setBusy] = useState(false);
   const [linkOpen, setLinkOpen] = useState(false);
   const [allOpen, setAllOpen] = useState(false);
+  const [imageIndex, setImageIndex] = useState(0);
+  const [carouselPaused, setCarouselPaused] = useState(false);
+  const currentImageIndex = Math.min(imageIndex, Math.max(0, images.length - 1));
+  useEffect(() => {
+    if (images.length < 2 || allOpen || carouselPaused || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    const timer = window.setInterval(() => setImageIndex(index => (index + 1) % images.length), 4000);
+    return () => window.clearInterval(timer);
+  }, [images.length, allOpen, carouselPaused]);
   const uploadInput = useRef<HTMLInputElement>(null);
   const latestImages = useRef(images);
   latestImages.current = images;
@@ -117,9 +114,13 @@ function ImageCell({ images, colors, disabled, onChange }: { images: SelectionIm
   </div>;
   const all = <><Button className="selection-mini-tag" size="small" onClick={() => setAllOpen(true)}>全部</Button><Modal title={`全部图片 · ${images.length} 张`} open={allOpen} onCancel={() => setAllOpen(false)} footer={null} width={560}><div className="selection-image-gallery">{editor}{!images.length && <Empty description="暂无图片，可添加链接、上传或粘贴图片" />}</div></Modal></>;
   if (!images.length) return <div className="selection-image-empty">{!allOpen && editor}{all}</div>;
-  return <div className="selection-image-summary" tabIndex={disabled ? -1 : 0} aria-label="图片，点击缩略图放大" onPaste={paste}>
-    <Image.PreviewGroup><div className="selection-image-thumbs">{images.map((image, index) => <div key={image.id} className="selection-image-thumb"><i className="selection-image-badge">{index + 1}/{images.length}</i><Image src={image.url} alt={image.color || "款式图片"} width="100%" height="100%" preview={{ mask: false }} />{image.color && <span>{image.color}</span>}</div>)}</div></Image.PreviewGroup>
-    <div className="selection-image-actions">{all}</div>
+  return <div className="selection-image-summary" tabIndex={0} aria-label="图片轮播，点击图片放大" onMouseEnter={() => setCarouselPaused(true)} onMouseLeave={() => setCarouselPaused(false)} onFocus={() => setCarouselPaused(true)} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) setCarouselPaused(false); }} onPaste={paste}>
+    <div className="selection-image-slide"><Image src={images[currentImageIndex].url} alt={images[currentImageIndex].color || "款式图片"} width="100%" height="100%" preview={{ mask: false }} />
+      <i className="selection-image-badge">{currentImageIndex + 1}/{images.length}</i>
+      {images[currentImageIndex].color && <span className="selection-slide-color">{images[currentImageIndex].color}</span>}
+      {images.length > 1 && <div className="selection-carousel-controls"><button type="button" aria-label="上一张图片" onClick={() => setImageIndex((currentImageIndex + images.length - 1) % images.length)}>‹</button><button type="button" aria-label="下一张图片" onClick={() => setImageIndex((currentImageIndex + 1) % images.length)}>›</button></div>}
+      <div className="selection-image-actions">{all}</div>
+    </div>
   </div>;
 }
 
@@ -131,6 +132,7 @@ export function StyleSelectionsPage() {
   const [columns, setColumns] = useState<Column[]>(() => [...baseColumns, ...storedColumns()]);
   const [visible, setVisible] = useState<string[]>(() => [...baseKeys, ...storedColumns().map((column) => column.key)]);
   const [search, setSearch] = useState("");
+  const [columnFilters, setColumnFilters] = useState<SelectionFilters>({});
   const [groupBy, setGroupBy] = useState<"none" | "batch" | "supplier" | "color">("none");
   const [sort, setSort] = useState("sortOrder");
   const [direction, setDirection] = useState<"asc" | "desc">("asc");
@@ -186,12 +188,19 @@ export function StyleSelectionsPage() {
 
   const activeColumns = columns.filter((column) => visible.includes(column.key));
   const colorSuggestions = useMemo(() => [...new Set(rows.flatMap((row) => splitTags(row.color)))], [rows]);
+  const filteredRows = useMemo(() => rows.filter(row => matchesSelectionFilters(row, columnFilters)), [rows, columnFilters]);
   const grouped = useMemo(() => {
     const label = (row: Row) => groupBy === "batch" ? row.registrationBatch || "未填写登记批次" : groupBy === "supplier" ? row.supplierCode || "未填写供应商编码" : row.color || "未填写颜色";
-    if (groupBy === "none") return [{ label: "", rows }];
-    return rows.reduce<{ label: string; rows: Row[] }[]>((result, row) => { const key = label(row); const target = result.find((item) => item.label === key); if (target) target.rows.push(row); else result.push({ label: key, rows: [row] }); return result; }, []);
-  }, [groupBy, rows]);
-  const hasContent = (row: Row) => baseKeys.some((key) => key === "images" ? rowImages(row).length : Boolean(clean(row[key]))) || Object.values(row.extraFields || {}).some(Boolean) || Object.keys(row.cellColors || {}).length > 0;
+    if (groupBy === "none") return [{ label: "", rows: filteredRows }];
+    return filteredRows.reduce<{ label: string; rows: Row[] }[]>((result, row) => { const key = label(row); const target = result.find((item) => item.label === key); if (target) target.rows.push(row); else result.push({ label: key, rows: [row] }); return result; }, []);
+  }, [groupBy, filteredRows]);
+  const displayedRows = grouped.flatMap(group => group.rows);
+  useEffect(() => {
+    const rowKeys = new Set(filteredRows.map(row => row._key));
+    setSelectedRows(current => { const next = current.filter(key => rowKeys.has(key)); return next.length === current.length ? current : next; });
+    setSelectedCells(current => { const next = new Set([...current].filter(id => { const [rowKey, columnKey] = id.split("::"); return rowKeys.has(rowKey) && visible.includes(columnKey); })); return next.size === current.size ? current : next; });
+  }, [filteredRows, visible]);
+  const hasContent = (row: Row) => baseKeys.some((key) => key === "images" ? rowImages(row).length : Boolean(clean(row[key]))) || Object.values(row.extraFields || {}).some(Boolean) || Object.keys(row.cellColors || {}).length > 0 || Object.keys(row.cellAlignments || {}).length > 0;
   const dirtyCount = rows.filter((row) => (row.id || hasContent(row)) && (!row.id || !sameRow(row, original.current.get(row._key) || {}))).length;
 
   const update = (key: string, column: Column, value: unknown) => {
@@ -244,29 +253,29 @@ export function StyleSelectionsPage() {
     setRows((current) => current.map((row) => { const fields = { ...(row.extraFields || {}) }; delete fields[column.key]; return { ...row, extraFields: fields }; }));
   };
   const selectRectangle = (from: { rowKey: string; columnKey: string }, to: { rowKey: string; columnKey: string }) => {
-    const r1 = rows.findIndex((row) => row._key === from.rowKey), r2 = rows.findIndex((row) => row._key === to.rowKey);
+    const r1 = displayedRows.findIndex((row) => row._key === from.rowKey), r2 = displayedRows.findIndex((row) => row._key === to.rowKey);
     const c1 = activeColumns.findIndex((column) => column.key === from.columnKey), c2 = activeColumns.findIndex((column) => column.key === to.columnKey);
     if (r1 < 0 || r2 < 0 || c1 < 0 || c2 < 0) return;
     const next = new Set<string>();
-    for (let row = Math.min(r1, r2); row <= Math.max(r1, r2); row++) for (let column = Math.min(c1, c2); column <= Math.max(c1, c2); column++) next.add(cellId(rows[row]._key, activeColumns[column].key));
+    for (let row = Math.min(r1, r2); row <= Math.max(r1, r2); row++) for (let column = Math.min(c1, c2); column <= Math.max(c1, c2); column++) next.add(cellId(displayedRows[row]._key, activeColumns[column].key));
     setSelectedCells(next);
   };
   const cellMouseDown = (rowKey: string, columnKey: string) => { const point = { rowKey, columnKey }; setCellAnchor(point); setSelectingCells(true); setEditingId(rows.find((row) => row._key === rowKey)?.id || null); setSelectedCells(new Set([cellId(rowKey, columnKey)])); };
   const cellMouseEnter = (rowKey: string, columnKey: string) => { if (selectingCells && cellAnchor) selectRectangle(cellAnchor, { rowKey, columnKey }); };
   const copyCells = (event: ClipboardEvent<HTMLTableCellElement>, rowKey: string, columnKey: string) => {
     const selected = selectedCells.size ? selectedCells : new Set([cellId(rowKey, columnKey)]);
-    const positions = [...selected].map((value) => { const [r, c] = value.split("::"); return { r: rows.findIndex((row) => row._key === r), c: activeColumns.findIndex((column) => column.key === c) }; }).filter((item) => item.r >= 0 && item.c >= 0);
+    const positions = [...selected].map((value) => { const [r, c] = value.split("::"); return { r: displayedRows.findIndex((row) => row._key === r), c: activeColumns.findIndex((column) => column.key === c) }; }).filter((item) => item.r >= 0 && item.c >= 0);
     if (!positions.length) return;
     const minRow = Math.min(...positions.map((item) => item.r)), maxRow = Math.max(...positions.map((item) => item.r)), minCol = Math.min(...positions.map((item) => item.c)), maxCol = Math.max(...positions.map((item) => item.c));
-    const text = Array.from({ length: maxRow - minRow + 1 }, (_, r) => Array.from({ length: maxCol - minCol + 1 }, (_, c) => String(valueAt(rows[minRow + r], activeColumns[minCol + c]) || "")).join("\t")).join("\n");
+    const text = Array.from({ length: maxRow - minRow + 1 }, (_, r) => Array.from({ length: maxCol - minCol + 1 }, (_, c) => String(valueAt(displayedRows[minRow + r], activeColumns[minCol + c]) || "")).join("\t")).join("\n");
     event.preventDefault(); event.clipboardData.setData("text/plain", text);
   };
   const pasteCells = (event: ClipboardEvent<HTMLTableCellElement>, rowKey: string, columnKey: string) => {
-    if (event.defaultPrevented || event.target instanceof HTMLTextAreaElement || (event.target instanceof HTMLInputElement && columnKey === "images")) return;
+    if (!canEdit || event.defaultPrevented || event.target instanceof HTMLTextAreaElement || (event.target instanceof HTMLInputElement && columnKey === "images")) return;
     const text = event.clipboardData.getData("text/plain"); if (!text) return;
-    const rowStart = rows.findIndex((row) => row._key === rowKey), columnStart = activeColumns.findIndex((column) => column.key === columnKey); if (rowStart < 0 || columnStart < 0) return;
+    const rowStart = displayedRows.findIndex((row) => row._key === rowKey), columnStart = activeColumns.findIndex((column) => column.key === columnKey); if (rowStart < 0 || columnStart < 0) return;
     event.preventDefault(); const matrix = text.replace(/\r/g, "").split("\n").map((line) => line.split("\t"));
-    setRows((current) => current.map((row, rowIndex) => { const source = matrix[rowIndex - rowStart]; if (!source) return row; let next = row; source.forEach((value, offset) => { const column = activeColumns[columnStart + offset]; if (!column || column.key === "images") return; next = withValue(next, column, value); }); return next; }));
+    setRows((current) => current.map((row) => { const rowIndex = displayedRows.findIndex(item => item._key === row._key); const source = rowIndex < rowStart ? undefined : matrix[rowIndex - rowStart]; if (!source) return row; let next = row; source.forEach((value, offset) => { const column = activeColumns[columnStart + offset]; if (!column || column.key === "images") return; next = withValue(next, column, value); }); return next; }));
   };
   const save = async () => {
     if (!canEdit || saveLock.current) return;
@@ -282,7 +291,7 @@ export function StyleSelectionsPage() {
       for (const row of changed) {
         const body: Row = Object.fromEntries(baseKeys.map((key) => [key, clean(row[key])]));
         body.registrationBatch = normalizeSelection(row).registrationBatch;
-        body.images = rowImages(row); body.cellColors = row.cellColors || {}; body.extraFields = row.extraFields || {}; body.sortOrder = Number(row.sortOrder || 0); body.rowColor = row.rowColor || "NONE";
+        body.images = rowImages(row); body.cellColors = row.cellColors || {}; body.cellAlignments = row.cellAlignments || {}; body.extraFields = row.extraFields || {}; body.sortOrder = Number(row.sortOrder || 0); body.rowColor = row.rowColor || "NONE";
         if (row.id) body.expectedUpdatedAt = row.updatedAt;
         const attempt = attempts.current.start(row, body);
         try {
@@ -320,15 +329,41 @@ export function StyleSelectionsPage() {
   }, [canEdit, dirtyCount, saving, deleting, rows, retryVersion]);
   const renderCell = (row: Row, column: Column) => {
     const disabled = !canEdit, error = errors[`${row._key}:${column.key}`] || errors[`${row._key}:save`], selected = selectedCells.has(cellId(row._key, column.key));
-    const common = { className: `${error ? "selection-cell-error " : ""}${selected ? "selection-cell-active" : ""}`, title: error, onMouseDown: () => cellMouseDown(row._key, column.key), onMouseEnter: () => cellMouseEnter(row._key, column.key), onCopy: (event: ClipboardEvent<HTMLTableCellElement>) => copyCells(event, row._key, column.key), onPaste: (event: ClipboardEvent<HTMLTableCellElement>) => pasteCells(event, row._key, column.key) };
-    const cell = (content: React.ReactNode) => <td key={column.key} {...common} style={{ backgroundColor: colorOptions.find(option => option.value === (row.cellColors?.[column.key] || row.rowColor))?.color }}><div className="selection-cell-content">{content}</div></td>;
+    const common = { onFocusCapture: () => { setCellAnchor({ rowKey: row._key, columnKey: column.key }); setEditingId(row.id || null); }, className: `${error ? "selection-cell-error " : ""}${selected ? "selection-cell-active" : ""}`, title: error, onMouseDown: () => cellMouseDown(row._key, column.key), onMouseEnter: () => cellMouseEnter(row._key, column.key), onCopy: (event: ClipboardEvent<HTMLTableCellElement>) => copyCells(event, row._key, column.key), onPaste: (event: ClipboardEvent<HTMLTableCellElement>) => pasteCells(event, row._key, column.key) };
+    const cell = (content: React.ReactNode) => <td key={column.key} {...common} style={{ textAlign: row.cellAlignments?.[column.key] || "left", backgroundColor: colorOptions.find(option => option.value === (row.cellColors?.[column.key] || row.rowColor))?.color }}><div className="selection-cell-content">{content}</div></td>;
     if (column.key === "images") return cell(<ImageCell images={rowImages(row)} colors={splitTags(row.color)} disabled={disabled} onChange={(value) => update(row._key, column, value)} />);
-    if (column.key === "color") return cell(<TagCell value={row.color} disabled={disabled} placeholder="+ 颜色" options={colorSuggestions} onChange={(value) => update(row._key, column, value)} />);
-    if (column.key === "sizeRange") return cell(<TagCell value={row.sizeRange} disabled={disabled} placeholder="+ 尺码" options={sizes} onChange={(value) => update(row._key, column, value)} />);
-    if (column.key === "registrationBatch") return cell(<DateCell disabled={disabled} value={row.registrationBatch || ""} onChange={(value) => update(row._key, column, value)} />);
+    if (column.key === "color") return cell(<TagCell value={row.color} disabled={disabled} placeholder="+ 颜色"  />);
+    if (column.key === "sizeRange") return cell(<TagCell value={row.sizeRange} disabled={disabled} placeholder="+ 尺码"  />);
+    if (column.key === "registrationBatch") return cell(<button className="selection-mini-tag selection-date-tag" type="button">{row.registrationBatch?.slice(0, 10) || "日期"}</button>);
     if (moneyKeys.has(column.key)) return cell(<div className="selection-money-input"><span>￥</span><input disabled={disabled} inputMode="decimal" placeholder="0.00" value={valueAt(row, column) || ""} onChange={(event) => update(row._key, column, event.target.value)} /></div>);
-    return cell(<Popover trigger="click" content={<Input.TextArea aria-label={`编辑${column.label}`} value={valueAt(row, column) || ""} disabled={disabled} rows={4} style={{ width: 280 }} onChange={(event) => update(row._key, column, event.target.value)} />}><textarea className="selection-text-input" aria-label={column.label} disabled={disabled} value={valueAt(row, column) || ""} onChange={(event) => update(row._key, column, event.target.value)} /></Popover>);
+    return cell(<textarea className="selection-text-input" aria-label={column.label} readOnly={disabled} value={valueAt(row, column) || ""} onChange={(event) => update(row._key, column, event.target.value)} />);
   };
+  const applyAlignment = (alignment: "left" | "center" | "right") => {
+    if (!canEdit || !selectedCells.size) return;
+    setRows(current => current.map(row => {
+      const selected = activeColumns.filter(column => selectedCells.has(cellId(row._key, column.key)));
+      return selected.length ? { ...row, cellAlignments: { ...(row.cellAlignments || {}), ...Object.fromEntries(selected.map(column => [column.key, alignment])) } } : row;
+    }));
+  };
+  const setColumnFilter = (key: string, filter?: SelectionFilters[string]) => setColumnFilters(current => { const next = { ...current }; if (filter) next[key] = filter; else delete next[key]; return next; });
+  const columnFilterEditor = (column: Column) => <div className="selection-column-filter">
+    <Select aria-label={`${column.label}筛选方式`} value={columnFilters[column.key]?.mode || "contains"} options={[{ value: "contains", label: "包含" }, { value: "equals", label: "等于" }, { value: "empty", label: "为空" }, { value: "filled", label: "不为空" }]} onChange={mode => setColumnFilter(column.key, { mode, value: columnFilters[column.key]?.value || "" })} />
+    {!["empty", "filled"].includes(columnFilters[column.key]?.mode || "") && <Input aria-label={`${column.label}筛选内容`} placeholder={column.key === "images" ? "按图片颜色或网址筛选" : "输入筛选内容"} value={columnFilters[column.key]?.value || ""} onChange={event => setColumnFilter(column.key, { mode: columnFilters[column.key]?.mode || "contains", value: event.target.value })} />}
+    <Button size="small" onClick={() => setColumnFilter(column.key)}>清除此列筛选</Button>
+  </div>;
+  const editorRow = filteredRows.find((row) => row._key === cellAnchor?.rowKey);
+  const editorColumn = activeColumns.find((column) => column.key === cellAnchor?.columnKey);
+  const editorEnabled = !!editorRow && !!editorColumn && editorColumn.key !== "images";
+  const editorValue = editorEnabled ? String(valueAt(editorRow!, editorColumn!) ?? "") : "";
+  const editCurrent = (value: string) => { if (canEdit && editorEnabled) update(editorRow!._key, editorColumn!, value); };
+  const editorError = editorRow && editorColumn ? errors[`${editorRow._key}:${editorColumn.key}`] || errors[`${editorRow._key}:save`] : undefined;
+  const editor = <div className="selection-editor-bar" role="group" aria-label="单元格编辑栏">
+    <span className="selection-editor-label" title={editorColumn?.label}>{editorRow && editorColumn ? `${rows.indexOf(editorRow) + 1} · ${editorColumn.label}` : "单元格"}</span>
+    {editorColumn?.key === "registrationBatch" && editorRow ? <input aria-label="编辑登记批次" type="date" value={editorValue.slice(0, 10)} disabled={!canEdit} onChange={(event) => editCurrent(event.target.value)} /> :
+      (editorColumn?.key === "color" || editorColumn?.key === "sizeRange") && editorRow ? <Select aria-label={`编辑${editorColumn.label}`} mode="tags" className="selection-editor-tags" value={splitTags(editorValue)} disabled={!canEdit} tokenSeparators={["/"]} placeholder="输入后按 Enter 添加，多项用 / 分隔" options={(editorColumn.key === "color" ? colorSuggestions : sizes).map(value => ({ value, label: value }))} onChange={(value) => editCurrent(joinTags(value))} /> :
+      <Input.TextArea aria-label="编辑当前单元格" autoSize={{ minRows: 1, maxRows: 3 }} value={editorValue} disabled={!editorEnabled} readOnly={!canEdit} placeholder={editorColumn?.key === "images" ? "图片请在单元格内上传或查看" : "点击单元格，在此编辑内容"} onChange={(event) => editCurrent(event.target.value)} />}
+    {editorError && <span className="selection-editor-error" role="status">{editorError}</span>}
+  </div>;
   const filterContent = <div className="selection-popover"><Input.Search autoFocus allowClear placeholder="搜索批次、款号、供应商、颜色或材质" value={search} onChange={(event) => setSearch(event.target.value)} /><Button onClick={() => { setSearch(""); setFilterOpen(false); }}>清除筛选</Button></div>;
   const settings = <div className="selection-column-settings"><Button type="dashed" icon={<PlusOutlined />} onClick={addColumn}>新增文本列</Button>{columns.map((column) => <div key={column.key} className="selection-column-setting" draggable onDragStart={() => setDraggedColumn(column.key)} onDragOver={(event) => event.preventDefault()} onDrop={() => { if (draggedColumn) moveColumn(draggedColumn, column.key); setDraggedColumn(null); }}><Checkbox checked={visible.includes(column.key)} onChange={(event) => setVisible((current) => event.target.checked ? [...current, column.key] : current.filter((key) => key !== column.key))}>{column.label}</Checkbox><Button type="text" size="small" icon={<DeleteOutlined />} aria-label={`移除 ${column.label}`} onClick={() => removeColumn(column)} /></div>)}</div>;
   const collaborators = (presence.data?.data || []).filter((person: Row) => String(person.userId) !== String(user.id || ""));
@@ -340,11 +375,21 @@ export function StyleSelectionsPage() {
       <Select className="selection-tool-select" value={`${sort}:${direction}`} suffixIcon={<SortAscendingOutlined />} options={[{ value: "sortOrder:asc", label: "手动排序" }, { value: "updatedAt:desc", label: "最近修改" }, { value: "createdAt:desc", label: "最新登记" }, { value: "registrationBatch:desc", label: "登记批次" }, { value: "xutiStyleNo:asc", label: "序缇款号" }, { value: "supplierCode:asc", label: "供应商编码" }, { value: "supplyPriceExclTax:asc", label: "供货价" }, { value: "vipPrice:asc", label: "唯品价" }]} onChange={(value) => { const [nextSort, nextDirection] = value.split(":"); setSort(nextSort); setDirection(nextDirection as "asc" | "desc"); }} />
       <Select className="selection-tool-select" value={rowHeight} suffixIcon={<UnorderedListOutlined />} options={[{ value: "compact", label: "紧凑行高" }, { value: "normal", label: "标准行高" }, { value: "loose", label: "宽松行高" }, { value: "extra", label: "超宽行高 · 120px" }]} onChange={setRowHeight} />
       <Popover trigger="click" content={<div className="selection-color-menu">{colorOptions.map((option) => <Button key={option.value} type="text" onClick={() => applyColor(option.value)}><span className="selection-color-dot" style={{ background: option.color }} />{option.label}</Button>)}</div>}><Button type="text" icon={<BgColorsOutlined />}>填色</Button></Popover>
-    <SelectionTransfer canEdit={canEdit} blocked={!!dirtyCount || saving || deleting} selectedRows={rows.filter(row => selectedRows.includes(row._key))} query={search} onImported={() => { appliedSnapshot.current = ""; void queryClient.invalidateQueries({ queryKey: ["style-selections"] }); }} />
-    </Space><span className="selection-record-count">{!!Object.keys(errors).length && <Tooltip title="修改尚未保存；悬停红色单元格查看原因，修正后重试"><Button type="text" size="small" danger disabled={saving} onClick={() => { attempts.current.retry(); setRetryVersion((value) => value + 1); }}>未保存 · 重试</Button></Tooltip>} 记录数 {rows.length} <b>·</b> 行 {selectedRows.length} <b>·</b> 单元格 {selectedCells.size}</span></div>
+    <Space.Compact>{([{ value: "left", label: "左对齐", icon: <AlignLeftOutlined /> }, { value: "center", label: "居中对齐", icon: <AlignCenterOutlined /> }, { value: "right", label: "右对齐", icon: <AlignRightOutlined /> }] as const).map(item => <Tooltip key={item.value} title={item.label}><Button aria-label={item.label} disabled={!canEdit || !selectedCells.size} icon={item.icon} onClick={() => applyAlignment(item.value)} /></Tooltip>)}</Space.Compact>
+    {!!Object.keys(columnFilters).length && <Button type="text" onClick={() => setColumnFilters({})}>清除列筛选 ({Object.keys(columnFilters).length})</Button>}
+    <SelectionTransfer filteredRows={Object.keys(columnFilters).length ? filteredRows : undefined} canEdit={canEdit} blocked={!!dirtyCount || saving || deleting} selectedRows={filteredRows.filter(row => selectedRows.includes(row._key))} query={search} onImported={() => { appliedSnapshot.current = ""; void queryClient.invalidateQueries({ queryKey: ["style-selections"] }); }} />
+    </Space><span className="selection-record-count">{!!Object.keys(errors).length && <Tooltip title="修改尚未保存；悬停红色单元格查看原因，修正后重试"><Button type="text" size="small" danger disabled={saving} onClick={() => { attempts.current.retry(); setRetryVersion((value) => value + 1); }}>未保存 · 重试</Button></Tooltip>} 记录数 {filteredRows.length}{filteredRows.length !== rows.length ? ` / ${rows.length}` : ""} <b>·</b> 行 {selectedRows.length} <b>·</b> 单元格 {selectedCells.size}</span></div>
     {!!collaborators.length && <div className="selection-collaborators" aria-label="在线协作者">{collaborators.map((person: Row) => <span key={person.userId} title={person.editingId ? `正在编辑第 ${person.editingId} 行` : "在线"}><i>{String(person.displayName || "协").slice(0, 1)}</i>{person.displayName}{person.editingId ? " · 编辑中" : " · 在线"}</span>)}</div>}
-      <QueryState error={data.error || presence.error} reload={() => { data.refetch(); presence.refetch(); }} /><div className={`selection-sheet row-${rowHeight}`}><table aria-label="选款登记在线智能表格" style={{ width: activeColumns.reduce((width, column) => width + column.width, 96) }}><colgroup><col style={{ width: 48 }} /><col style={{ width: 48 }} />{activeColumns.map((column) => <col key={column.key} style={{ width: column.width }} />)}</colgroup><thead><tr><th className="selection-check"><Checkbox aria-label="选择全部可见行" checked={!!rows.length && selectedRows.length === rows.length} indeterminate={selectedRows.length > 0 && selectedRows.length < rows.length} onChange={(event) => setSelectedRows(event.target.checked ? rows.map((row) => row._key) : [])} /></th><th className="selection-index">#</th>{activeColumns.map((column) => <th key={column.key} draggable onDragStart={() => setDraggedColumn(column.key)} onDragOver={(event) => event.preventDefault()} onDrop={() => { if (draggedColumn) moveColumn(draggedColumn, column.key); setDraggedColumn(null); }} style={{ width: column.width, minWidth: column.width }}><span>{column.label}</span><i className="selection-column-resize" aria-label={`调整 ${column.label} 列宽`} onMouseDown={(event) => { event.preventDefault(); event.stopPropagation(); setResizingColumn({ key: column.key, startX: event.clientX, startWidth: column.width }); }} /></th>)}</tr></thead><tbody>
-        {data.isLoading && <tr><td colSpan={activeColumns.length + 2} className="selection-placeholder">正在读取选款登记…</td></tr>}{!data.isLoading && !rows.length && <tr><td colSpan={activeColumns.length + 2} className="selection-placeholder"><Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无选款登记，点击添加一行开始录入" /></td></tr>}
+      {editor}
+      <QueryState error={data.error || presence.error} reload={() => { data.refetch(); presence.refetch(); }} /><div className={`selection-sheet row-${rowHeight}`}><table tabIndex={0} onKeyDown={event => {
+        if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "a" && !event.altKey) {
+          event.preventDefault(); event.stopPropagation();
+          setSelectedRows(displayedRows.map(row => row._key));
+          setSelectedCells(selectionAllCells(displayedRows, activeColumns));
+          setSelectingCells(false);
+        }
+      }} aria-label="选款登记在线智能表格" style={{ width: activeColumns.reduce((width, column) => width + column.width, 96) }}><colgroup><col style={{ width: 48 }} /><col style={{ width: 48 }} />{activeColumns.map((column) => <col key={column.key} style={{ width: column.width }} />)}</colgroup><thead><tr><th className="selection-check"><Checkbox aria-label="选择全部可见行" checked={!!filteredRows.length && filteredRows.every(row => selectedRows.includes(row._key))} indeterminate={filteredRows.some(row => selectedRows.includes(row._key)) && !filteredRows.every(row => selectedRows.includes(row._key))} onChange={(event) => setSelectedRows(event.target.checked ? filteredRows.map((row) => row._key) : [])} /></th><th className="selection-index">#</th>{activeColumns.map((column) => <th key={column.key} draggable onDragStart={() => setDraggedColumn(column.key)} onDragOver={(event) => event.preventDefault()} onDrop={() => { if (draggedColumn) moveColumn(draggedColumn, column.key); setDraggedColumn(null); }} style={{ width: column.width, minWidth: column.width }}><span>{column.label}</span><Popover trigger="click" content={columnFilterEditor(column)}><Button className="selection-column-filter-button" type="text" size="small" aria-label={`筛选${column.label}`} title={`筛选${column.label}`} icon={<FilterOutlined />} style={{ color: columnFilters[column.key] ? "#d3540b" : undefined }} onMouseDown={event => event.stopPropagation()} /></Popover><i className="selection-column-resize" aria-label={`调整 ${column.label} 列宽`} onMouseDown={(event) => { event.preventDefault(); event.stopPropagation(); setResizingColumn({ key: column.key, startX: event.clientX, startWidth: column.width }); }} /></th>)}</tr></thead><tbody>
+        {data.isLoading && <tr><td colSpan={activeColumns.length + 2} className="selection-placeholder">正在读取选款登记…</td></tr>}{!data.isLoading && !filteredRows.length && <tr><td colSpan={activeColumns.length + 2} className="selection-placeholder"><Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无选款登记，点击添加一行开始录入" /></td></tr>}
         {grouped.map((group) => <Fragment key={group.label || "all"}>{group.label && <tr className="selection-group-row"><td colSpan={activeColumns.length + 2}>{group.label}<span>{group.rows.length} 条</span></td></tr>}{group.rows.map((row, index) => <tr key={row._key}><td className="selection-check"><Checkbox aria-label={`选择 ${row.xutiStyleNo || "未填写序缇款号"}`} checked={selectedRows.includes(row._key)} onChange={(event) => setSelectedRows((current) => event.target.checked ? [...current, row._key] : current.filter((key) => key !== row._key))} /></td><td className="selection-index selection-row-drag" draggable onDragStart={() => setDraggedRow(row._key)} onDragOver={(event: DragEvent) => event.preventDefault()} onDrop={() => { if (draggedRow) moveRow(draggedRow, row._key); setDraggedRow(null); }}>{index + 1}</td>{activeColumns.map((column) => renderCell(row, column))}</tr>)}</Fragment>)}
       </tbody></table></div><div className="selection-bulk-add"><Select aria-label="批量添加行数" value={addCount} onChange={setAddCount} options={[10, 20, 50, 100, 200].map(value => ({ value, label: `${value} 行` }))} /><Button icon={<PlusOutlined />} disabled={!canEdit} onClick={() => add(addCount)}>添加 {addCount} 行</Button><span>空白行填写后自动保存</span></div><div className="selection-bottom-bar"><span>拖动可选择多个单元格后填色；Ctrl/Cmd+C 复制、Ctrl/Cmd+V 粘贴；拖动序号调整行，拖动列标题调整列。</span><span>{canEdit ? "图片支持网址、本地上传和粘贴。" : "当前账号仅可查看。"}</span></div></Card></>;
 }

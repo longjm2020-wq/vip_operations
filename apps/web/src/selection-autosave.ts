@@ -35,7 +35,7 @@ export class SelectionSaveAttempts {
 
 export function normalizeSelection(row: Row): Row {
   return { ...row, registrationBatch: row.registrationBatch ? String(row.registrationBatch).slice(0, 10) : null,
-    images: row.images || [], cellColors: row.cellColors || {}, extraFields: row.extraFields || {} };
+    images: row.images || [], cellColors: row.cellColors || {}, cellAlignments: row.cellAlignments || {}, extraFields: row.extraFields || {} };
 }
 
 /** Accept server metadata while retaining fields edited during the request. */

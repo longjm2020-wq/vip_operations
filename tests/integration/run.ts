@@ -524,6 +524,7 @@ try {
     livePrice: "179.00",
     tagPrice: "399.00",
     cellColors: { vipPrice: "YELLOW" },
+    cellAlignments: { vipPrice: "right", material: "center" },
     extraFields: { "custom:test": "样衣已确认" },
     sortOrder: 3,
     rowColor: "BLUE",
@@ -532,6 +533,8 @@ try {
   assert.equal(selection.registrationBatch, "2026-10-01");
   assert.equal(selection.images[0].color, "奶油白");
   assert.equal(selection.cellColors.vipPrice, "YELLOW");
+  assert.equal(selection.cellAlignments.material, "center");
+  assert.equal((await request("/style-selections/" + selection.id, "PATCH", { cellAlignments: { material: "invalid" } })).status, 400);
   await ok("/style-selections/presence", "POST", { editingId: selection.id });
   assert.ok((await ok("/style-selections/presence")).some((person: any) => person.editingId === selection.id));
   const selectionList = await ok("/style-selections?q=SUP-SELECT-001&pageSize=100");
@@ -544,6 +547,7 @@ try {
   });
   assert.equal(selectedStyle.vipPrice, "209");
   assert.equal(selectedStyle.registrationBatch, "2026-10-01");
+  assert.deepEqual(selectedStyle.cellAlignments, selection.cellAlignments);
   const savedAgain = await ok("/style-selections/" + selection.id, "PATCH", {
     registrationBatch: selectedStyle.registrationBatch,
     material: "连续编辑",

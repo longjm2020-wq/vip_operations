@@ -41,6 +41,7 @@ export const styleSelectionInput = z
     registrationBatch: date.nullable().optional(),
     images: z.array(image).default([]),
     cellColors: cellColors.default({}),
+    cellAlignments: z.record(z.string().max(100), z.enum(["left", "center", "right"])).default({}),
     extraFields: extraFields.default({}),
     xutiStyleNo: optionalText(64),
     supplierStyleNo: optionalText(64),
@@ -63,7 +64,7 @@ const updateInput = styleSelectionInput
   .strict();
 
 const selectColumns = `
-  s.id,s.registration_batch::text,s.images,s.cell_colors,s.extra_fields,s.xuti_style_no,s.supplier_style_no,
+  s.id,s.registration_batch::text,s.images,s.cell_colors,s.cell_alignments,s.extra_fields,s.xuti_style_no,s.supplier_style_no,
   s.supplier_code,s.color,s.size_range,s.material,s.supply_price_excl_tax,
   s.vip_price,s.live_price,s.tag_price,s.row_color,s.sort_order,s.created_by,s.version,
   s.created_at,s.updated_at`;
@@ -208,7 +209,7 @@ async function persist(tx: Tx, c: Context, body: Row, value?: string) {
     if ("color" in changes) changes.color = normalizedTags(changes.color);
     if ("sizeRange" in changes) changes.sizeRange = normalizedTags(changes.sizeRange);
     validateImageColors(changes.images ?? before?.images ?? [], changes.color ?? before?.color);
-    for (const key of ["images", "cellColors", "extraFields"])
+    for (const key of ["images", "cellColors", "cellAlignments", "extraFields"])
       if (key in changes) changes[key] = JSON.stringify(changes[key]);
     if (!before && changes.sortOrder === undefined) {
       const last = await one(tx, "SELECT coalesce(max(sort_order),0)::int AS value FROM style_selections");
