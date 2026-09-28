@@ -83,11 +83,11 @@ export function Header({
 }) {
   return (
     <div className="page-heading">
-      <div>
-        <Typography.Title level={2}>{title}</Typography.Title>
-        <Typography.Text type="secondary">{subtitle}</Typography.Text>
+      <div className="page-heading-copy">
+        <Typography.Title level={2} title={title}>{title}</Typography.Title>
+        <Typography.Text className="page-heading-subtitle" type="secondary" title={subtitle}>{subtitle}</Typography.Text>
       </div>
-      <Space>{extra}</Space>
+      {extra && <Space className="page-heading-actions">{extra}</Space>}
     </div>
   );
 }

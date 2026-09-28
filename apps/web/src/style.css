@@ -192,7 +192,7 @@ a {
   margin: 0 0 8px;
 }
 .page-heading h2 {
-  margin: 0 0 3px !important;
+  margin: 0 !important;
   font-size: 20px !important;
   font-weight: 650 !important;
 }
@@ -527,8 +527,7 @@ pre {
     display: none;
   }
   .page-heading {
-    align-items: flex-start;
-    flex-direction: column;
+    gap: 8px;
   }
   .form-grid {
     grid-template-columns: 1fr;
@@ -620,8 +619,26 @@ pre {
   height: 100px;
 }
 
-.page-heading > div:first-child {
+.page-heading > .page-heading-copy {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex: 1;
   min-width: 0;
+  overflow: hidden;
+}
+.page-heading-copy > h2 {
+  flex-shrink: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.page-heading-subtitle {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .page-heading > div:first-child > .ant-typography:not(h2) {
   font-size: 12px;
@@ -637,8 +654,12 @@ pre {
   flex-wrap: wrap;
 }
 .page-heading > .ant-space {
-  flex-wrap: wrap;
-  justify-content: flex-end;
+  flex-wrap: nowrap;
+  flex-shrink: 0;
+  max-width: 60%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  white-space: nowrap;
 }
 .ant-table-tbody .ant-btn-link {
   height: 24px;
