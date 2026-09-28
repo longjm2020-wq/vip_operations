@@ -441,3 +441,17 @@
 .selection-sheet th, .selection-row-drag { user-select: none; cursor: cell; }
 .selection-sheet .selection-axis-active { background: #e6f4ff; color: #1677ff; }
 .selection-row-reorder { display: block; font-size: 11px; line-height: 14px; cursor: grab; color: #999; }
+
+/* A contiguous selected range has one perimeter, not a box around every cell. */
+.selection-sheet td.selection-cell-active { position:relative; box-shadow:none !important; border-color:transparent; }
+.selection-cell-active::before { content:""; position:absolute; inset:0; pointer-events:none; z-index:4; border:0 solid #1677ff; }
+.selection-cell-active[data-selection-edges~="top"]::before { border-top-width:2px; }
+.selection-cell-active[data-selection-edges~="bottom"]::before { border-bottom-width:2px; }
+.selection-cell-active[data-selection-edges~="left"]::before { border-left-width:2px; }
+.selection-cell-active[data-selection-edges~="right"]::before { border-right-width:2px; }
+.selection-cell-copied { --copy-top:0px; --copy-bottom:0px; --copy-left:0px; --copy-right:0px; }
+.selection-cell-copied[data-copy-edges~="top"] { --copy-top:2px; }
+.selection-cell-copied[data-copy-edges~="bottom"] { --copy-bottom:2px; }
+.selection-cell-copied[data-copy-edges~="left"] { --copy-left:2px; }
+.selection-cell-copied[data-copy-edges~="right"] { --copy-right:2px; }
+.selection-cell-copied::after { background-size:100% var(--copy-top),100% var(--copy-bottom),var(--copy-left) 100%,var(--copy-right) 100%; }

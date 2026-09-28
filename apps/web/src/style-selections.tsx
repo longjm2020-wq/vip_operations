@@ -378,13 +378,18 @@ export function StyleSelectionsPage() {
   };
   const cellMouseDown = (rowKey: string, columnKey: string) => { axisSelection.current = null; setSelectedRows([]); setCellTextEditing(false); const point = { rowKey, columnKey }; setCellAnchor(point); setSelectingCells(true); setEditingId(rows.find((row) => row._key === rowKey)?.id || null); setSelectedCells(new Set([cellId(rowKey, columnKey)])); };
   const cellMouseEnter = (rowKey: string, columnKey: string) => { if (selectingCells && cellAnchor) selectRectangle(cellAnchor, { rowKey, columnKey }); };
-  const copyCells = (event: ClipboardEvent<HTMLTableCellElement>, rowKey: string, columnKey: string) => {
+  const copyValue = (row: Row, column: Column) => {
+    const value = column.key === "images" ? rowImages(row).map(image => image.url).join("; ") : column.key === "collectionInventory" ? (row.collectionInventory || []).reduce((sum:number,item:Row)=>sum+item.available+item.production,0) : valueAt(row,column);
+    const text = String(value ?? "");
+    return /[\t\n\r"]/.test(text) ? '"' + text.replace(/"/g, '""') + '"' : text;
+  };
+  const copyCells = (event: ClipboardEvent<HTMLElement>, rowKey: string, columnKey: string) => {
     if (!event.currentTarget.contains(event.target as Node) || (cellTextEditing && selectedCells.size <= 1)) return;
     const selected = selectedCells.size ? selectedCells : new Set([cellId(rowKey, columnKey)]);
     const positions = [...selected].map((value) => { const [r, c] = value.split("::"); return { r: displayedRows.findIndex((row) => row._key === r), c: activeColumns.findIndex((column) => column.key === c) }; }).filter((item) => item.r >= 0 && item.c >= 0);
     if (!positions.length) return;
     const minRow = Math.min(...positions.map((item) => item.r)), maxRow = Math.max(...positions.map((item) => item.r)), minCol = Math.min(...positions.map((item) => item.c)), maxCol = Math.max(...positions.map((item) => item.c));
-    const text = Array.from({ length: maxRow - minRow + 1 }, (_, r) => Array.from({ length: maxCol - minCol + 1 }, (_, c) => String(valueAt(displayedRows[minRow + r], activeColumns[minCol + c]) || "")).join("\t")).join("\n");
+    const text = Array.from({ length: maxRow - minRow + 1 }, (_, r) => Array.from({ length: maxCol - minCol + 1 }, (_, c) => copyValue(displayedRows[minRow + r], activeColumns[minCol + c])).join("\t")).join("\n");
     event.preventDefault(); event.clipboardData.setData("text/plain", text); setCopiedCells(new Set(selected));
   };
   const pasteCells = (event: ClipboardEvent<HTMLTableCellElement>, rowKey: string, columnKey: string) => {
@@ -452,9 +457,16 @@ export function StyleSelectionsPage() {
     const timer = window.setTimeout(() => { void save(); }, 900);
     return () => window.clearTimeout(timer);
   }, [canEdit, dirtyCount, saving, deleting, rows, retryVersion]);
+  const cellEdges = (set: Set<string>, rowKey: string, columnKey: string) => {
+    if (!set.has(cellId(rowKey,columnKey))) return "";
+    const r=displayedRows.findIndex(row=>row._key===rowKey), c=activeColumns.findIndex(column=>column.key===columnKey);
+    const group=grouped.find(group=>group.rows.some(row=>row._key===rowKey));
+    const has=(ri:number,ci:number)=>!!displayedRows[ri] && !!activeColumns[ci] && !!group?.rows.some(row=>row._key===displayedRows[ri]._key) && set.has(cellId(displayedRows[ri]._key,activeColumns[ci].key));
+    return [!has(r-1,c)?"top":"",!has(r+1,c)?"bottom":"",!has(r,c-1)?"left":"",!has(r,c+1)?"right":""].filter(Boolean).join(" ");
+  };
   const renderCell = (row: Row, column: Column) => {
     const disabled = !canEdit || collectionKeys.has(column.key), error = errors[`${row._key}:${column.key}`] || errors[`${row._key}:save`], selected = selectedCells.has(cellId(row._key, column.key));
-    const common = { tabIndex: 0, onDoubleClick: () => setCellTextEditing(true), onFocusCapture: () => { setCellAnchor({ rowKey: row._key, columnKey: column.key }); setEditingId(row.id || null); if (!selectedCells.has(cellId(row._key, column.key))) setSelectedCells(new Set([cellId(row._key, column.key)])); }, className: `${error ? "selection-cell-error " : ""}${selected ? "selection-cell-active" : ""}${copiedCells.has(cellId(row._key, column.key)) ? " selection-cell-copied" : ""}`, title: error, onMouseDown: (event: React.MouseEvent) => { if (event.button === 0) cellMouseDown(row._key, column.key); else if (event.button === 2) { event.preventDefault(); if (!selected) { setSelectedCells(new Set([cellId(row._key, column.key)])); setCellAnchor({ rowKey: row._key, columnKey: column.key }); } } }, onDragStart: (event: React.DragEvent) => { if (selectingCells) event.preventDefault(); }, onMouseEnter: () => cellMouseEnter(row._key, column.key), onCopy: (event: ClipboardEvent<HTMLTableCellElement>) => copyCells(event, row._key, column.key), onPaste: (event: ClipboardEvent<HTMLTableCellElement>) => pasteCells(event, row._key, column.key) };
+    const common = { "data-selection-edges": cellEdges(selectedCells,row._key,column.key), "data-copy-edges": cellEdges(copiedCells,row._key,column.key), tabIndex: 0, onDoubleClick: () => setCellTextEditing(true), onFocusCapture: () => { setCellAnchor({ rowKey: row._key, columnKey: column.key }); setEditingId(row.id || null); if (!selectedCells.has(cellId(row._key, column.key))) setSelectedCells(new Set([cellId(row._key, column.key)])); }, className: `${error ? "selection-cell-error " : ""}${selected ? "selection-cell-active" : ""}${copiedCells.has(cellId(row._key, column.key)) ? " selection-cell-copied" : ""}`, title: error, onMouseDown: (event: React.MouseEvent) => { if (event.button === 0) cellMouseDown(row._key, column.key); else if (event.button === 2) { event.preventDefault(); if (!selected) { setSelectedCells(new Set([cellId(row._key, column.key)])); setCellAnchor({ rowKey: row._key, columnKey: column.key }); } } }, onDragStart: (event: React.DragEvent) => { if (selectingCells) event.preventDefault(); }, onMouseEnter: () => cellMouseEnter(row._key, column.key), onPaste: (event: ClipboardEvent<HTMLTableCellElement>) => pasteCells(event, row._key, column.key) };
     const openFormat = () => {
       const ids = selectedCells.has(cellId(row._key, column.key)) ? new Set(selectedCells) : new Set([cellId(row._key, column.key)]);
       setFormatTarget({ ids, sample: valueAt(row, column), initial: ids.size === 1 ? Object.fromEntries(["cellNumberFormats", "cellAlignments", "cellVerticalAlignments", "cellColors", "cellTextColors"].map(key => [key, row[key]?.[column.key]])) : {} });
@@ -554,7 +566,7 @@ export function StyleSelectionsPage() {
     </Space><span className="selection-record-count">{!!Object.keys(errors).length && <Tooltip title="修改尚未保存；悬停红色单元格查看原因，修正后重试"><Button type="text" size="small" danger disabled={saving} onClick={() => { attempts.current.retry(); setRetryVersion((value) => value + 1); }}>未保存 · 重试</Button></Tooltip>} 记录数 {filteredRows.length}{filteredRows.length !== rows.length ? ` / ${rows.length}` : ""} <b>·</b> 行 {selectedRows.length} <b>·</b> 单元格 {selectedCells.size}</span></div>
     {!!collaborators.length && <div className="selection-collaborators" aria-label="在线协作者">{collaborators.map((person: Row) => <span key={person.userId} title={person.editingId ? `正在编辑第 ${person.editingId} 行` : "在线"}><i>{String(person.displayName || "协").slice(0, 1)}</i>{person.displayName}{person.editingId ? " · 编辑中" : " · 在线"}</span>)}</div>}
       {editor}
-      <QueryState error={data.error || presence.error || sharedView.error} reload={() => { data.refetch(); presence.refetch(); sharedView.refetch(); }} /><div className={`selection-sheet row-${rowHeight}`}><table tabIndex={0} onKeyDown={event => {
+      <QueryState error={data.error || presence.error || sharedView.error} reload={() => { data.refetch(); presence.refetch(); sharedView.refetch(); }} /><div className={`selection-sheet row-${rowHeight}`}><table tabIndex={0} onCopy={event => { const point = cellAnchor || (displayedRows[0] && activeColumns[0] ? {rowKey:displayedRows[0]._key,columnKey:activeColumns[0].key} : null); if (point) copyCells(event,point.rowKey,point.columnKey); }} onKeyDown={event => {
         if (!event.currentTarget.contains(event.target as Node) || event.nativeEvent.isComposing) return;
         if (event.key === "Escape") { setCopiedCells(new Set()); setCellTextEditing(false); return; }
         if (event.key === "Delete" && (!cellTextEditing || selectedCells.size > 1)) {
