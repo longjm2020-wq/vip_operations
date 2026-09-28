@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { App, Button, Card, Checkbox, Empty, Image, Input, Modal, Popover, Select, Space, Tooltip } from "antd";
-import { BgColorsOutlined, AlignLeftOutlined, AlignCenterOutlined, AlignRightOutlined, DeleteOutlined, FilterOutlined, LinkOutlined, PlusOutlined, SettingOutlined, SortAscendingOutlined, TeamOutlined, UnorderedListOutlined, UploadOutlined } from "@ant-design/icons";
+import { BgColorsOutlined, CloseOutlined, AlignLeftOutlined, AlignCenterOutlined, AlignRightOutlined, DeleteOutlined, FilterOutlined, LinkOutlined, PlusOutlined, SettingOutlined, SortAscendingOutlined, TeamOutlined, UnorderedListOutlined, UploadOutlined } from "@ant-design/icons";
 import { api, queryClient } from "./api";
 import { prepareUpload, readUpload } from "./upload-file";
 import { Header, QueryState, Row, useCan, useUser } from "./shared";
@@ -54,20 +54,42 @@ function TagCell({ value, disabled, placeholder }: { value: unknown; disabled: b
   return <div className="selection-tag-preview" tabIndex={0} role="group" aria-label={placeholder.slice(2)} aria-readonly={disabled}>{splitTags(value).map((tag) => <span className="selection-chip" key={tag}>{tag}</span>)}{!splitTags(value).length && <span className="selection-tag-placeholder">{placeholder}</span>}</div>;
 }
 
+function ImagePreviewClose({ children, onClose }: { children: React.ReactNode; onClose: () => void }) {
+  const container = useRef<HTMLDivElement>(null);
+  const button = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    let frame = 0;
+    const position = () => {
+      const image = container.current?.querySelector("img");
+      if (image && button.current) {
+        const rect = image.getBoundingClientRect();
+        button.current.style.top = `${Math.max(8, Math.min(window.innerHeight - 40, rect.top + 8))}px`;
+        button.current.style.left = `${Math.max(8, Math.min(window.innerWidth - 40, rect.right - 40))}px`;
+      }
+      frame = requestAnimationFrame(position);
+    };
+    position();
+    return () => cancelAnimationFrame(frame);
+  }, []);
+  return <div ref={container} style={{ display: "contents" }}>{children}<button ref={button} type="button" className="selection-preview-close" aria-label="关闭图片预览" onPointerDown={event => event.stopPropagation()} onClick={event => { event.stopPropagation(); onClose(); }}><CloseOutlined /></button></div>;
+}
+
 function ImageCell({ images, colors, disabled, onChange }: { images: SelectionImage[]; colors: string[]; disabled: boolean; onChange: (images: SelectionImage[]) => void }) {
   const { message } = App.useApp();
   const [url, setUrl] = useState("");
   const [busy, setBusy] = useState(false);
   const [linkOpen, setLinkOpen] = useState(false);
   const [allOpen, setAllOpen] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [galleryPreviewOpen, setGalleryPreviewOpen] = useState(false);
   const [imageIndex, setImageIndex] = useState(0);
   const [carouselPaused, setCarouselPaused] = useState(false);
   const currentImageIndex = Math.min(imageIndex, Math.max(0, images.length - 1));
   useEffect(() => {
-    if (images.length < 2 || allOpen || carouselPaused || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    if (images.length < 2 || allOpen || previewOpen || carouselPaused || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
     const timer = window.setInterval(() => setImageIndex(index => (index + 1) % images.length), 4000);
     return () => window.clearInterval(timer);
-  }, [images.length, allOpen, carouselPaused]);
+  }, [images.length, allOpen, previewOpen, carouselPaused]);
   const uploadInput = useRef<HTMLInputElement>(null);
   const latestImages = useRef(images);
   latestImages.current = images;
@@ -95,7 +117,7 @@ function ImageCell({ images, colors, disabled, onChange }: { images: SelectionIm
     event.preventDefault(); event.stopPropagation(); void addFiles(files);
   };
   const editor = <div className="selection-images selection-image-editor" tabIndex={disabled ? -1 : 0} aria-label="图片，支持粘贴" onPaste={paste}>
-    <Image.PreviewGroup><div className="selection-image-list">{images.map((image, index) => <div className="selection-image-item" key={image.id}>
+    <Image.PreviewGroup preview={{ open: galleryPreviewOpen, onOpenChange: setGalleryPreviewOpen, closeIcon: false, imageRender: node => galleryPreviewOpen ? <ImagePreviewClose onClose={() => setGalleryPreviewOpen(false)}>{node}</ImagePreviewClose> : node }}><div className="selection-image-list">{images.map((image, index) => <div className="selection-image-item" key={image.id}>
       <i className="selection-image-badge">{index + 1}/{images.length}</i>
       <Image src={image.url} alt={image.color || "款式图片"} width="100%" height="100%" preview={{ mask: false }} />
       {image.color && <span className="selection-image-color">{image.color}</span>}
@@ -115,7 +137,7 @@ function ImageCell({ images, colors, disabled, onChange }: { images: SelectionIm
   const all = <><Button className="selection-mini-tag" size="small" onClick={() => setAllOpen(true)}>全部</Button><Modal title={`全部图片 · ${images.length} 张`} open={allOpen} onCancel={() => setAllOpen(false)} footer={null} width={560}><div className="selection-image-gallery">{editor}{!images.length && <Empty description="暂无图片，可添加链接、上传或粘贴图片" />}</div></Modal></>;
   if (!images.length) return <div className="selection-image-empty">{!allOpen && editor}{all}</div>;
   return <div className="selection-image-summary" tabIndex={0} aria-label="图片轮播，点击图片放大" onMouseEnter={() => setCarouselPaused(true)} onMouseLeave={() => setCarouselPaused(false)} onFocus={() => setCarouselPaused(true)} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) setCarouselPaused(false); }} onPaste={paste}>
-    <div className="selection-image-slide"><Image src={images[currentImageIndex].url} alt={images[currentImageIndex].color || "款式图片"} width="100%" height="100%" preview={{ mask: false }} />
+    <div className="selection-image-slide"><Image src={images[currentImageIndex].url} alt={images[currentImageIndex].color || "款式图片"} width="100%" height="100%" preview={{ mask: false, open: previewOpen, onOpenChange: setPreviewOpen, closeIcon: false, imageRender: node => previewOpen ? <ImagePreviewClose onClose={() => setPreviewOpen(false)}>{node}</ImagePreviewClose> : node }} />
       <i className="selection-image-badge">{currentImageIndex + 1}/{images.length}</i>
       {images[currentImageIndex].color && <span className="selection-slide-color">{images[currentImageIndex].color}</span>}
       {images.length > 1 && <div className="selection-carousel-controls"><button type="button" aria-label="上一张图片" onClick={() => setImageIndex((currentImageIndex + images.length - 1) % images.length)}>‹</button><button type="button" aria-label="下一张图片" onClick={() => setImageIndex((currentImageIndex + 1) % images.length)}>›</button></div>}
