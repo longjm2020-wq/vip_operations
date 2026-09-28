@@ -229,3 +229,19 @@
     max-height: calc(100vh - 330px);
   }
 }
+
+.selection-image-cell {
+  display: grid;
+  grid-template-columns: 54px minmax(160px, 1fr);
+  align-items: center;
+  height: 100%;
+}
+.selection-image-cell img {
+  width: 42px;
+  height: 42px;
+  margin-left: 8px;
+  border: 1px solid #eaded3;
+  border-radius: 4px;
+  background: #fff;
+  object-fit: cover;
+}

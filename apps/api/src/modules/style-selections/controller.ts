@@ -7,9 +7,6 @@ const paramId = (value: string) => parse(id, value);
 
 @Controller("api/v1/style-selections")
 class StyleSelectionsController {
-  @Permission("selection.read") @Get("options") options() {
-    return selections.options();
-  }
   @Permission("selection.read") @Get() list(@Query() query: Record<string, unknown>) {
     return selections.list(query);
   }

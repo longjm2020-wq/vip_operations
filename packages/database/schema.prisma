@@ -22,8 +22,6 @@ model User {
   purchase_orders        purchase_orders[]
   receipts               receipts[]
   sessions               sessions[]
-  style_selections_created style_selections[] @relation("style_selection_created_by")
-  style_selections_selected style_selections[] @relation("style_selection_selector")
   user_roles             user_roles[]
 
   @@map("users")
@@ -72,7 +70,6 @@ model categories {
   categories       categories?  @relation("categoriesTocategories", fields: [parent_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   other_categories categories[] @relation("categoriesTocategories")
   products         products[]
-  style_selections style_selections[]
 }
 
 model idempotency_records {
@@ -196,30 +193,28 @@ model products {
 }
 
 model style_selections {
-  id                BigInt    @id @default(autoincrement())
-  style_no          String    @db.VarChar(64)
-  name              String    @db.VarChar(255)
-  category_id       BigInt?
-  supplier_id       BigInt?
-  source_url        String?
-  selection_status  String    @default("PENDING") @db.VarChar(32)
-  selector_id       BigInt?
-  estimated_cost    Decimal?  @db.Decimal(14, 2)
-  planned_sample_at DateTime? @db.Date
-  remark            String?
-  row_color         String    @default("NONE") @db.VarChar(16)
-  created_by        BigInt
-  version           Int       @default(0)
-  created_at        DateTime  @default(now()) @db.Timestamptz(6)
-  updated_at        DateTime  @default(now()) @db.Timestamptz(6)
-  categories        categories? @relation(fields: [category_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  suppliers         suppliers? @relation(fields: [supplier_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  created_user      User      @relation("style_selection_created_by", fields: [created_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  selector_user     User?     @relation("style_selection_selector", fields: [selector_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  id                     BigInt   @id @default(autoincrement())
+  registration_batch     String?  @db.VarChar(100)
+  image_url              String?
+  xuti_style_no          String?  @db.VarChar(64)
+  supplier_style_no      String?  @db.VarChar(64)
+  supplier_code          String?  @db.VarChar(50)
+  color                  String?  @db.VarChar(100)
+  size_range             String?  @db.VarChar(100)
+  material               String?
+  supply_price_excl_tax  Decimal? @db.Decimal(14, 2)
+  vip_price              Decimal? @db.Decimal(14, 2)
+  live_price             Decimal? @db.Decimal(14, 2)
+  tag_price              Decimal? @db.Decimal(14, 2)
+  row_color              String   @default("NONE") @db.VarChar(16)
+  created_by             BigInt
+  version                Int      @default(0)
+  created_at             DateTime @default(now()) @db.Timestamptz(6)
+  updated_at             DateTime @default(now()) @db.Timestamptz(6)
 
-  @@index([selection_status, updated_at, id])
-  @@index([supplier_id, updated_at, id])
-  @@index([selector_id, updated_at, id])
+  @@index([registration_batch, updated_at, id])
+  @@index([xuti_style_no, updated_at, id])
+  @@index([supplier_code, updated_at, id])
 }
 
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
@@ -425,7 +420,6 @@ model suppliers {
   products               products[]
   purchase_orders        purchase_orders[]
   purchase_suggestions   purchase_suggestions[]
-  style_selections       style_selections[]
 }
 
 model user_roles {

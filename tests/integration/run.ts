@@ -510,57 +510,41 @@ try {
     403,
   );
   check("RBAC buyer cannot confirm via direct HTTP");
-  const selectionOptions = await ok("/style-selections/options");
-  assert.ok(
-    selectionOptions.categories.some((category: any) => category.id === ca3.id),
-    "选款登记只应提供末级品类",
-  );
-  const selectionUser = (await ok("/users")).find(
-    (user: any) => user.username === "buyer",
-  );
-  assert.equal(
-    (
-      await request("/style-selections", "POST", {
-        styleNo: "SELECT-PARENT",
-        name: "不允许使用二级品类",
-        categoryId: ca2.id,
-      })
-    ).status,
-    400,
-  );
   const selection = await ok("/style-selections", "POST", {
-    styleNo: "SELECT-001",
-    name: "候选针织衫",
-    categoryId: ca3.id,
-    supplierId: su.id,
-    selectionStatus: "PENDING",
-    selectorId: selectionUser.id,
-    estimatedCost: "88.50",
-    plannedSampleAt: "2026-10-08",
-    sourceUrl: "https://example.com/style/select-001",
-    remark: "首批候选",
+    registrationBatch: "2026 秋季第一批",
+    imageUrl: "https://example.com/style/select-001.jpg",
+    xutiStyleNo: "XUTI-SELECT-001",
+    supplierStyleNo: "SUP-SELECT-001",
+    supplierCode: "SUP-001",
+    color: "奶油白",
+    sizeRange: "S-XL",
+    material: "100% 羊毛",
+    supplyPriceExclTax: "88.50",
+    vipPrice: "199.00",
+    livePrice: "179.00",
+    tagPrice: "399.00",
     rowColor: "BLUE",
   });
-  assert.equal(selection.selectionStatus, "PENDING");
-  const selectionList = await ok("/style-selections?q=SELECT-001&pageSize=100");
+  assert.equal(selection.xutiStyleNo, "XUTI-SELECT-001");
+  const selectionList = await ok("/style-selections?q=SUP-SELECT-001&pageSize=100");
   assert.equal(selectionList.length, 1);
-  assert.equal(selectionList[0].supplierName, "测试供应商");
+  assert.equal(selectionList[0].supplierCode, "SUP-001");
   const selectedStyle = await ok("/style-selections/" + selection.id, "PATCH", {
-    selectionStatus: "SELECTED",
+    vipPrice: "209.00",
     rowColor: "GREEN",
     expectedUpdatedAt: selection.updatedAt,
   });
-  assert.equal(selectedStyle.selectionStatus, "SELECTED");
+  assert.equal(selectedStyle.vipPrice, "209");
   assert.equal(
     (
       await request("/style-selections/" + selection.id, "PATCH", {
-        remark: "过期编辑",
+        material: "过期编辑",
         expectedUpdatedAt: selection.updatedAt,
       })
     ).status,
     409,
   );
-  check("style selections persist options, editable fields, row color and stale-edit protection");
+  check("style selections persist 12 business fields, row color and stale-edit protection");
   const forged = await request("/purchase-orders", "POST", {
     supplierId: su.id,
     warehouseId: wh.id,

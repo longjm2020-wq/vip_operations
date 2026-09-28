@@ -4,4 +4,4 @@ RUN npm install -g pnpm@10.32.1
 COPY . .
 RUN pnpm install --frozen-lockfile
 RUN pnpm db:generate && pnpm build
-CMD ["pnpm", "start:api"]
+CMD ["sh", "-c", "pnpm db:migrate && pnpm start:api"]
