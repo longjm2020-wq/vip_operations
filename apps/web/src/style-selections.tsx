@@ -381,7 +381,7 @@ export function StyleSelectionsPage() {
     if (column.key === "images") return cell(<ImageCell images={rowImages(row)} colors={splitTags(row.color)} disabled={disabled} onChange={(value) => update(row._key, column, value)} />);
     if (column.key === "color") return cell(<TagCell value={row.color} disabled={disabled} placeholder="+ 颜色"  />);
     if (column.key === "sizeRange") return cell(<TagCell value={row.sizeRange} disabled={disabled} placeholder="+ 尺码"  />);
-    if (column.key === "registrationBatch") return cell(<button className="selection-mini-tag selection-date-tag" type="button">{row.registrationBatch?.slice(0, 10) || "日期"}</button>);
+    if (column.key === "registrationBatch") return cell(<input className="selection-date-input" aria-label="登记批次日期" title="输入日期 YYYY-MM-DD，也可在顶部编辑栏选择" placeholder="+ 日期" maxLength={10} readOnly={disabled} value={row.registrationBatch || ""} onChange={event => update(row._key, column, event.target.value)} />);
     if (moneyKeys.has(column.key)) return cell(<div className="selection-money-input"><span>￥</span><input disabled={disabled} inputMode="decimal" placeholder="0.00" value={valueAt(row, column) || ""} onChange={(event) => update(row._key, column, event.target.value)} /></div>);
     return cell(<textarea className="selection-text-input" aria-label={column.label} readOnly={disabled} value={valueAt(row, column) || ""} onChange={(event) => update(row._key, column, event.target.value)} />);
   };

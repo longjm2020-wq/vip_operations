@@ -409,3 +409,7 @@
 .selection-size-editor { flex: 1; min-width: 0; display: flex; gap: 8px; flex-wrap: wrap; }
 .selection-size-editor > .ant-select { flex: 1; min-width: 160px; }
 .selection-size-editor > .ant-space-compact { max-width: 100%; }
+
+.selection-date-input { display: block; box-sizing: border-box; width: 100%; height: 32px; padding: 5px; flex-shrink: 0; border: 0; border-radius: 0; background: transparent; color: inherit; font: inherit; text-align: inherit; }
+.selection-date-input::placeholder { color: #aaa; font-size: 11px; }
+.selection-date-input:focus, .selection-date-input:focus-visible { outline: none !important; box-shadow: none !important; }
