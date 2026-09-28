@@ -544,3 +544,11 @@ model size_mappings {
   created_at DateTime @default(now()) @db.Timestamptz(6)
   updated_at DateTime @default(now()) @db.Timestamptz(6)
 }
+
+model style_selection_shared_view {
+  id         Int      @id
+  view       Json     @default("{\"filters\":{},\"sort\":null}")
+  revision   Int      @default(0)
+  updated_by BigInt?
+  updated_at DateTime @default(now()) @db.Timestamptz
+}

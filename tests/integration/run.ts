@@ -532,6 +532,14 @@ try {
     sortOrder: 3,
     rowColor: "BLUE",
   });
+  const initialView = await ok("/style-selections/shared-view");
+  assert.equal(initialView.revision, 0);
+  const sharedSelectionView = { filters: { vipPrice: { mode: "gte", value: "100", colors: ["YELLOW"], colorType: "fill" } }, sort: { key: "vipPrice", direction: "desc" } };
+  const savedView = await ok("/style-selections/shared-view", "POST", { view: sharedSelectionView, revision: initialView.revision });
+  assert.equal(savedView.revision, 1);
+  assert.deepEqual((await ok("/style-selections/shared-view")).view, sharedSelectionView);
+  assert.equal((await request("/style-selections/shared-view", "POST", { view: sharedSelectionView, revision: 0 })).status, 409);
+  assert.equal((await request("/style-selections/shared-view", "POST", { view: { filters: { vipPrice: { mode: "invalid" } }, sort: null }, revision: 1 })).status, 400);
   assert.equal(selection.xutiStyleNo, "XUTI-SELECT-001");
   assert.equal(selection.sizeRange, "S/M/L");
   assert.equal(selection.registrationBatch, "2026-10-01");

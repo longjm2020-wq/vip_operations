@@ -1,3 +1,4 @@
+import { selectionViewSchema } from "../../../../../packages/contracts/src/selection-view.js";
 import { cellNumberFormatSchema } from "../../../../../packages/contracts/src/selection-format.js";
 import { sortSelectionSizes } from "../../../../../packages/contracts/src/selection-sizes.js";
 import { z } from "zod";
@@ -278,5 +279,19 @@ export async function commitImport(c: Context, input: unknown) {
       if (before) updated++; else created++;
     }
     return { created, updated };
+  });
+}
+
+export async function sharedView() {
+  return one(db, "SELECT view,revision FROM style_selection_shared_view WHERE id=1");
+}
+export async function saveSharedView(c: Context, input: unknown) {
+  const body = parse(z.object({ view: selectionViewSchema, revision: z.number().int().min(0) }).strict(), input);
+  return command(c, "selection.shared-view", body, async tx => {
+    const before = await one(tx, "SELECT view,revision FROM style_selection_shared_view WHERE id=1 FOR UPDATE");
+    if (!before || before.revision !== body.revision) fail("CONFLICT", "共享筛选已被其他人更新，请关闭面板后重新打开", 409);
+    const saved = await one(tx, "UPDATE style_selection_shared_view SET view=$1::jsonb,revision=revision+1,updated_by=$2::bigint,updated_at=now() WHERE id=1 RETURNING view,revision", JSON.stringify(body.view), c.actor.id);
+    await audit(tx, c, "SELECTION_SHARED_VIEW_UPDATE", "style_selection_shared_view", "1", before, saved);
+    return saved;
   });
 }
