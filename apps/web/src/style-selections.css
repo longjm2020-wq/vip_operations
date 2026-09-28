@@ -382,3 +382,8 @@
 .selection-slide-color { position: absolute; bottom: 2px; left: 2px; max-width: calc(100% - 42px); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: white; background: #422e21bb; font-size: 10px; pointer-events: none; }
 .selection-carousel-controls { position: absolute; top: 0; left: 0; z-index: 3; display: flex; gap: 2px; pointer-events: none; }
 .selection-carousel-controls button { pointer-events: auto; border: 0; padding: 0 4px; color: white; background: #422e2199; cursor: pointer; line-height: 18px; }
+
+.selection-cell-copied { position: relative; }
+.selection-cell-copied::after { content: ""; position: absolute; inset: 0; pointer-events: none; z-index: 5; background: repeating-linear-gradient(90deg,#d3540b 0 4px,transparent 4px 8px) 0 0 / 100% 2px repeat-x, repeating-linear-gradient(90deg,#d3540b 0 4px,transparent 4px 8px) 0 100% / 100% 2px repeat-x, repeating-linear-gradient(0deg,#d3540b 0 4px,transparent 4px 8px) 0 0 / 2px 100% repeat-y, repeating-linear-gradient(0deg,#d3540b 0 4px,transparent 4px 8px) 100% 0 / 2px 100% repeat-y; animation: selection-copy-march 1s linear infinite; }
+@keyframes selection-copy-march { to { background-position: 8px 0, -8px 100%, 0 -8px, 100% 8px; } }
+@media (prefers-reduced-motion: reduce) { .selection-cell-copied::after { animation: none; } }

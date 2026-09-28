@@ -7,7 +7,7 @@ import { prepareUpload, readUpload } from "./upload-file";
 import { Header, QueryState, Row, useCan, useUser } from "./shared";
 import { mergeSelectionSave, normalizeSelection, SelectionSaveAttempts } from "./selection-autosave";
 import { fetchSelectionRows, SelectionTransfer } from "./selection-transfer";
-import { matchesSelectionFilters, selectionAllCells, type SelectionFilters } from "./selection-filters";
+import { matchesSelectionFilters, selectionAllCells, clearSelectionCells, type SelectionFilters } from "./selection-filters";
 import "./style-selections.css";
 
 const colorOptions = [
@@ -136,10 +136,12 @@ export function StyleSelectionsPage() {
   const [groupBy, setGroupBy] = useState<"none" | "batch" | "supplier" | "color">("none");
   const [sort, setSort] = useState("sortOrder");
   const [direction, setDirection] = useState<"asc" | "desc">("asc");
-  const [rowHeight, setRowHeight] = useState<"compact" | "normal" | "loose" | "extra">("normal");
+  const [rowHeight, setRowHeight] = useState<"compact" | "normal" | "loose" | "extra">("extra");
   const [rows, setRows] = useState<Row[]>([]);
   const [addCount, setAddCount] = useState(10);
   const [selectedRows, setSelectedRows] = useState<string[]>([]);
+  const [copiedCells, setCopiedCells] = useState<Set<string>>(new Set());
+  const [cellTextEditing, setCellTextEditing] = useState(false);
   const [selectedCells, setSelectedCells] = useState<Set<string>>(new Set());
   const [cellAnchor, setCellAnchor] = useState<{ rowKey: string; columnKey: string } | null>(null);
   const [selectingCells, setSelectingCells] = useState(false);
@@ -204,6 +206,7 @@ export function StyleSelectionsPage() {
   const dirtyCount = rows.filter((row) => (row.id || hasContent(row)) && (!row.id || !sameRow(row, original.current.get(row._key) || {}))).length;
 
   const update = (key: string, column: Column, value: unknown) => {
+    setCopiedCells(new Set());
     setRows((current) => current.map((row) => row._key === key ? withValue(row, column, value) : row));
     setErrors((current) => { const next = { ...current }; delete next[`${key}:${column.key}`]; return next; });
   };
@@ -260,21 +263,22 @@ export function StyleSelectionsPage() {
     for (let row = Math.min(r1, r2); row <= Math.max(r1, r2); row++) for (let column = Math.min(c1, c2); column <= Math.max(c1, c2); column++) next.add(cellId(displayedRows[row]._key, activeColumns[column].key));
     setSelectedCells(next);
   };
-  const cellMouseDown = (rowKey: string, columnKey: string) => { const point = { rowKey, columnKey }; setCellAnchor(point); setSelectingCells(true); setEditingId(rows.find((row) => row._key === rowKey)?.id || null); setSelectedCells(new Set([cellId(rowKey, columnKey)])); };
+  const cellMouseDown = (rowKey: string, columnKey: string) => { setCellTextEditing(false); const point = { rowKey, columnKey }; setCellAnchor(point); setSelectingCells(true); setEditingId(rows.find((row) => row._key === rowKey)?.id || null); setSelectedCells(new Set([cellId(rowKey, columnKey)])); };
   const cellMouseEnter = (rowKey: string, columnKey: string) => { if (selectingCells && cellAnchor) selectRectangle(cellAnchor, { rowKey, columnKey }); };
   const copyCells = (event: ClipboardEvent<HTMLTableCellElement>, rowKey: string, columnKey: string) => {
+    if (!event.currentTarget.contains(event.target as Node) || (cellTextEditing && selectedCells.size <= 1)) return;
     const selected = selectedCells.size ? selectedCells : new Set([cellId(rowKey, columnKey)]);
     const positions = [...selected].map((value) => { const [r, c] = value.split("::"); return { r: displayedRows.findIndex((row) => row._key === r), c: activeColumns.findIndex((column) => column.key === c) }; }).filter((item) => item.r >= 0 && item.c >= 0);
     if (!positions.length) return;
     const minRow = Math.min(...positions.map((item) => item.r)), maxRow = Math.max(...positions.map((item) => item.r)), minCol = Math.min(...positions.map((item) => item.c)), maxCol = Math.max(...positions.map((item) => item.c));
     const text = Array.from({ length: maxRow - minRow + 1 }, (_, r) => Array.from({ length: maxCol - minCol + 1 }, (_, c) => String(valueAt(displayedRows[minRow + r], activeColumns[minCol + c]) || "")).join("\t")).join("\n");
-    event.preventDefault(); event.clipboardData.setData("text/plain", text);
+    event.preventDefault(); event.clipboardData.setData("text/plain", text); setCopiedCells(new Set(selected));
   };
   const pasteCells = (event: ClipboardEvent<HTMLTableCellElement>, rowKey: string, columnKey: string) => {
     if (!canEdit || event.defaultPrevented || event.target instanceof HTMLTextAreaElement || (event.target instanceof HTMLInputElement && columnKey === "images")) return;
     const text = event.clipboardData.getData("text/plain"); if (!text) return;
     const rowStart = displayedRows.findIndex((row) => row._key === rowKey), columnStart = activeColumns.findIndex((column) => column.key === columnKey); if (rowStart < 0 || columnStart < 0) return;
-    event.preventDefault(); const matrix = text.replace(/\r/g, "").split("\n").map((line) => line.split("\t"));
+    event.preventDefault(); setCopiedCells(new Set()); const matrix = text.replace(/\r/g, "").split("\n").map((line) => line.split("\t"));
     setRows((current) => current.map((row) => { const rowIndex = displayedRows.findIndex(item => item._key === row._key); const source = rowIndex < rowStart ? undefined : matrix[rowIndex - rowStart]; if (!source) return row; let next = row; source.forEach((value, offset) => { const column = activeColumns[columnStart + offset]; if (!column || column.key === "images") return; next = withValue(next, column, value); }); return next; }));
   };
   const save = async () => {
@@ -329,7 +333,7 @@ export function StyleSelectionsPage() {
   }, [canEdit, dirtyCount, saving, deleting, rows, retryVersion]);
   const renderCell = (row: Row, column: Column) => {
     const disabled = !canEdit, error = errors[`${row._key}:${column.key}`] || errors[`${row._key}:save`], selected = selectedCells.has(cellId(row._key, column.key));
-    const common = { onFocusCapture: () => { setCellAnchor({ rowKey: row._key, columnKey: column.key }); setEditingId(row.id || null); }, className: `${error ? "selection-cell-error " : ""}${selected ? "selection-cell-active" : ""}`, title: error, onMouseDown: () => cellMouseDown(row._key, column.key), onMouseEnter: () => cellMouseEnter(row._key, column.key), onCopy: (event: ClipboardEvent<HTMLTableCellElement>) => copyCells(event, row._key, column.key), onPaste: (event: ClipboardEvent<HTMLTableCellElement>) => pasteCells(event, row._key, column.key) };
+    const common = { tabIndex: 0, onDoubleClick: () => setCellTextEditing(true), onFocusCapture: () => { setCellAnchor({ rowKey: row._key, columnKey: column.key }); setEditingId(row.id || null); if (!selectedCells.has(cellId(row._key, column.key))) setSelectedCells(new Set([cellId(row._key, column.key)])); }, className: `${error ? "selection-cell-error " : ""}${selected ? "selection-cell-active" : ""}${copiedCells.has(cellId(row._key, column.key)) ? " selection-cell-copied" : ""}`, title: error, onMouseDown: () => cellMouseDown(row._key, column.key), onMouseEnter: () => cellMouseEnter(row._key, column.key), onCopy: (event: ClipboardEvent<HTMLTableCellElement>) => copyCells(event, row._key, column.key), onPaste: (event: ClipboardEvent<HTMLTableCellElement>) => pasteCells(event, row._key, column.key) };
     const cell = (content: React.ReactNode) => <td key={column.key} {...common} style={{ textAlign: row.cellAlignments?.[column.key] || "left", backgroundColor: colorOptions.find(option => option.value === (row.cellColors?.[column.key] || row.rowColor))?.color }}><div className="selection-cell-content">{content}</div></td>;
     if (column.key === "images") return cell(<ImageCell images={rowImages(row)} colors={splitTags(row.color)} disabled={disabled} onChange={(value) => update(row._key, column, value)} />);
     if (column.key === "color") return cell(<TagCell value={row.color} disabled={disabled} placeholder="+ 颜色"  />);
@@ -373,7 +377,7 @@ export function StyleSelectionsPage() {
       <Popover trigger="click" content={settings}><Button type="text" icon={<SettingOutlined />}>表格设置</Button></Popover><Popover trigger="click" open={filterOpen} onOpenChange={setFilterOpen} content={filterContent}><Button type="text" icon={<FilterOutlined />}>筛选</Button></Popover>
       <Select className="selection-tool-select" value={groupBy} suffixIcon={<TeamOutlined />} options={[{ value: "none", label: "不分组" }, { value: "batch", label: "按登记批次分组" }, { value: "supplier", label: "按供应商编码分组" }, { value: "color", label: "按颜色分组" }]} onChange={setGroupBy} />
       <Select className="selection-tool-select" value={`${sort}:${direction}`} suffixIcon={<SortAscendingOutlined />} options={[{ value: "sortOrder:asc", label: "手动排序" }, { value: "updatedAt:desc", label: "最近修改" }, { value: "createdAt:desc", label: "最新登记" }, { value: "registrationBatch:desc", label: "登记批次" }, { value: "xutiStyleNo:asc", label: "序缇款号" }, { value: "supplierCode:asc", label: "供应商编码" }, { value: "supplyPriceExclTax:asc", label: "供货价" }, { value: "vipPrice:asc", label: "唯品价" }]} onChange={(value) => { const [nextSort, nextDirection] = value.split(":"); setSort(nextSort); setDirection(nextDirection as "asc" | "desc"); }} />
-      <Select className="selection-tool-select" value={rowHeight} suffixIcon={<UnorderedListOutlined />} options={[{ value: "compact", label: "紧凑行高" }, { value: "normal", label: "标准行高" }, { value: "loose", label: "宽松行高" }, { value: "extra", label: "超宽行高 · 120px" }]} onChange={setRowHeight} />
+      <Select className="selection-tool-select" value={rowHeight} suffixIcon={<UnorderedListOutlined />} options={[{ value: "compact", label: "紧凑行高" }, { value: "normal", label: "标准行高" }, { value: "loose", label: "宽松行高" }, { value: "extra", label: "超宽行高" }]} onChange={setRowHeight} />
       <Popover trigger="click" content={<div className="selection-color-menu">{colorOptions.map((option) => <Button key={option.value} type="text" onClick={() => applyColor(option.value)}><span className="selection-color-dot" style={{ background: option.color }} />{option.label}</Button>)}</div>}><Button type="text" icon={<BgColorsOutlined />}>填色</Button></Popover>
     <Space.Compact>{([{ value: "left", label: "左对齐", icon: <AlignLeftOutlined /> }, { value: "center", label: "居中对齐", icon: <AlignCenterOutlined /> }, { value: "right", label: "右对齐", icon: <AlignRightOutlined /> }] as const).map(item => <Tooltip key={item.value} title={item.label}><Button aria-label={item.label} disabled={!canEdit || !selectedCells.size} icon={item.icon} onClick={() => applyAlignment(item.value)} /></Tooltip>)}</Space.Compact>
     {!!Object.keys(columnFilters).length && <Button type="text" onClick={() => setColumnFilters({})}>清除列筛选 ({Object.keys(columnFilters).length})</Button>}
@@ -382,10 +386,18 @@ export function StyleSelectionsPage() {
     {!!collaborators.length && <div className="selection-collaborators" aria-label="在线协作者">{collaborators.map((person: Row) => <span key={person.userId} title={person.editingId ? `正在编辑第 ${person.editingId} 行` : "在线"}><i>{String(person.displayName || "协").slice(0, 1)}</i>{person.displayName}{person.editingId ? " · 编辑中" : " · 在线"}</span>)}</div>}
       {editor}
       <QueryState error={data.error || presence.error} reload={() => { data.refetch(); presence.refetch(); }} /><div className={`selection-sheet row-${rowHeight}`}><table tabIndex={0} onKeyDown={event => {
+        if (!event.currentTarget.contains(event.target as Node) || event.nativeEvent.isComposing) return;
+        if (event.key === "Escape") { setCopiedCells(new Set()); setCellTextEditing(false); return; }
+        if (event.key === "Delete" && (!cellTextEditing || selectedCells.size > 1)) {
+          event.preventDefault();
+          if (canEdit && selectedCells.size) { setRows(current => clearSelectionCells(current, selectedCells)); setCopiedCells(new Set()); }
+          return;
+        }
+        if (event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) setCellTextEditing(true);
         if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "a" && !event.altKey) {
           event.preventDefault(); event.stopPropagation();
           setSelectedRows(displayedRows.map(row => row._key));
-          setSelectedCells(selectionAllCells(displayedRows, activeColumns));
+          setSelectedCells(selectionAllCells(displayedRows, activeColumns)); setCellTextEditing(false);
           setSelectingCells(false);
         }
       }} aria-label="选款登记在线智能表格" style={{ width: activeColumns.reduce((width, column) => width + column.width, 96) }}><colgroup><col style={{ width: 48 }} /><col style={{ width: 48 }} />{activeColumns.map((column) => <col key={column.key} style={{ width: column.width }} />)}</colgroup><thead><tr><th className="selection-check"><Checkbox aria-label="选择全部可见行" checked={!!filteredRows.length && filteredRows.every(row => selectedRows.includes(row._key))} indeterminate={filteredRows.some(row => selectedRows.includes(row._key)) && !filteredRows.every(row => selectedRows.includes(row._key))} onChange={(event) => setSelectedRows(event.target.checked ? filteredRows.map((row) => row._key) : [])} /></th><th className="selection-index">#</th>{activeColumns.map((column) => <th key={column.key} draggable onDragStart={() => setDraggedColumn(column.key)} onDragOver={(event) => event.preventDefault()} onDrop={() => { if (draggedColumn) moveColumn(draggedColumn, column.key); setDraggedColumn(null); }} style={{ width: column.width, minWidth: column.width }}><span>{column.label}</span><Popover trigger="click" content={columnFilterEditor(column)}><Button className="selection-column-filter-button" type="text" size="small" aria-label={`筛选${column.label}`} title={`筛选${column.label}`} icon={<FilterOutlined />} style={{ color: columnFilters[column.key] ? "#d3540b" : undefined }} onMouseDown={event => event.stopPropagation()} /></Popover><i className="selection-column-resize" aria-label={`调整 ${column.label} 列宽`} onMouseDown={(event) => { event.preventDefault(); event.stopPropagation(); setResizingColumn({ key: column.key, startX: event.clientX, startWidth: column.width }); }} /></th>)}</tr></thead><tbody>
