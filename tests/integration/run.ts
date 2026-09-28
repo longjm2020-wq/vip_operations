@@ -592,6 +592,31 @@ try {
   const manySaved = await ok("/style-selections/" + selection.id, "PATCH", { images: manyImages, expectedUpdatedAt: savedAgain.updatedAt });
   assert.equal(manySaved.images.length, 12);
   check("selection images upload independently, enforce size and access, and allow more than five images");
+  const photoStyle = await ok("/style-selections", "POST", { xutiStyleNo:"PHOTO-QA-001", supplierStyleNo:"CAMERA-SUP-1", supplierCode:"CAMERA-CODE-1", color:"红/蓝", sortOrder:9000, material:"PHOTO-SEARCH-EXCLUDED" });
+  const photoStyleNext = await ok("/style-selections", "POST", { xutiStyleNo:"PHOTO-QA-002", color:"黑", sortOrder:9001 });
+  const photoBodyA = {action:"add",image:{id:randomUUID(),url:uploadedImage.url,color:"红"}};
+  const photoBodyB = {action:"add",image:{id:randomUUID(),url:uploadedImage.url,color:"蓝"}};
+  const photoKey = randomUUID();
+  await Promise.all([ok(`/style-selections/${photoStyle.id}/photos`,"POST",photoBodyA,photoKey),ok(`/style-selections/${photoStyle.id}/photos`,"POST",photoBodyB)]);
+  await ok(`/style-selections/${photoStyle.id}/photos`,"POST",photoBodyA,photoKey);
+  await ok(`/style-selections/${photoStyle.id}/photos`,"POST",photoBodyA);
+  const photoRead = await ok(`/style-selections/${photoStyle.id}`);
+  assert.equal(photoRead.images.length,2);
+  assert.equal(photoRead.material,"PHOTO-SEARCH-EXCLUDED");
+  assert.equal((await request(`/style-selections/${photoStyle.id}/photos`,"POST",{action:"add",image:{id:randomUUID(),url:uploadedImage.url,color:"不存在"}})).status,400);
+  assert.equal((await request(`/style-selections/${photoStyle.id}/photos`,"POST",photoBodyA,randomUUID(),{cookie:"",csrf:""})).status,401);
+  assert.equal((await ok("/style-selections?photoSearch=true&q=CAMERA-CODE-1"))[0].id,photoStyle.id);
+  assert.equal((await ok("/style-selections?photoSearch=true&q=CAMERA-SUP-1"))[0].id,photoStyle.id);
+  assert.equal((await ok("/style-selections?photoSearch=true&q=PHOTO-SEARCH-EXCLUDED")).length,0);
+  assert.equal((await ok(`/style-selections/${photoStyle.id}/photo-next?q=PHOTO-QA`)).id,photoStyleNext.id);
+  assert.equal(await ok(`/style-selections/${photoStyleNext.id}/photo-next?q=PHOTO-QA`),null);
+  const removedPhoto = await ok(`/style-selections/${photoStyle.id}/photos`,"POST",{action:"remove",imageId:photoBodyA.image.id});
+  assert.deepEqual(removedPhoto.images.map((image:any)=>image.id),[photoBodyB.image.id]);
+  assert.equal((await request(`/style-selections/${photoStyle.id}`,"PATCH",{material:"过期手机编辑",expectedUpdatedAt:photoRead.updatedAt})).status,409);
+  const blankPhotoStyle = await ok("/style-selections","POST",{color:"红"});
+  assert.equal((await request(`/style-selections/${blankPhotoStyle.id}/photos`,"POST",photoBodyA)).status,400);
+  check("mobile photo search, next style, concurrent append, retries, color validation and image deletion");
+
   assert.equal(
     (
       await request("/style-selections/" + selection.id, "PATCH", {

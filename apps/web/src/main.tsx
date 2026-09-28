@@ -1,3 +1,4 @@
+import { SelectionMobilePhotos } from "./selection-mobile-photos";
 import { BrandVideo } from "./brand-video";
 import React, { useState, useEffect } from "react";
 import { createRoot } from "react-dom/client";
@@ -71,7 +72,7 @@ import {
 } from "./supply";
 import { SupplyOrders, SupplyOrderNotice } from "./supply-orders";
 import { SupplyStatements } from "./supply-statements";
-const coreFeatureSummary = "ERP经营 · 选款登记 · 供应链订单对账 · 项目协作";
+const coreFeatureSummary = "ERP经营 · 选款登记与拍图 · 供应链订单对账 · 项目协作";
 const useUi = create<{ collapsed: boolean; toggle: () => void }>((set) => ({
   collapsed: false,
   toggle: () => set((s) => ({ collapsed: !s.collapsed })),
@@ -566,6 +567,7 @@ function Root() {
     location.pathname !== "/help"
   )
     return <Navigate to="/supply/profile" replace />;
+  if (me.data && location.pathname === "/mobile/style-photos") return <UserContext.Provider value={me.data}><SelectionMobilePhotos /></UserContext.Provider>;
   return me.data ? (
     <Workspace user={me.data} />
   ) : location.pathname === "/supply/register" ? (

@@ -1,3 +1,4 @@
+import { SelectionPhotoQr } from "./selection-photo-qr";
 import { SelectionFilterPanel } from "./selection-filter-panel";
 import type { SelectionView } from "../../../packages/contracts/src/selection-view";
 import { selectionImageLinks, invalidSelectionImage } from "./selection-image-links";
@@ -100,7 +101,7 @@ function ImagePreviewClose({ children, onClose }: { children: React.ReactNode; o
   return <div ref={container} style={{ display: "contents" }}>{children}<button ref={button} type="button" className="selection-preview-close" aria-label="关闭图片预览" onPointerDown={event => event.stopPropagation()} onClick={event => { event.stopPropagation(); onClose(); }}><CloseOutlined /></button></div>;
 }
 
-function ImageCell({ images, colors, disabled, onChange }: { images: SelectionImage[]; colors: string[]; disabled: boolean; onChange: (images: SelectionImage[]) => void }) {
+function ImageCell({ images, colors, disabled, onChange, mobileId }: { mobileId?: string; images: SelectionImage[]; colors: string[]; disabled: boolean; onChange: (images: SelectionImage[]) => void }) {
   const { message } = App.useApp();
   const [url, setUrl] = useState("");
   const [failedImages, setFailedImages] = useState<Set<string>>(new Set());
@@ -160,6 +161,7 @@ function ImageCell({ images, colors, disabled, onChange }: { images: SelectionIm
       <Select className="selection-image-color-select" size="small" disabled={disabled} allowClear value={image.color || undefined} placeholder="命名颜色" options={colors.map((color) => ({ value: color, label: color }))} onChange={(color) => onChange(images.map((item) => item.id === image.id ? { ...item, color: color || "" } : item))} />
     </div>)}</div></Image.PreviewGroup>
     {!disabled && <div className="selection-image-adders">
+      <SelectionPhotoQr rowId={mobileId} disabled={!mobileId} />
       <Popover trigger="click" open={linkOpen} onOpenChange={setLinkOpen} title="添加图片链接" content={<Space.Compact className="selection-image-url"><Input size="small" aria-label="图片网址" value={url} placeholder="粘贴图片网址" onChange={(event) => setUrl(event.target.value)} onPressEnter={addUrl} /><Button size="small" onClick={addUrl}>添加</Button></Space.Compact>}>
         <Button className="selection-mini-tag" size="small" icon={<LinkOutlined />}>链接</Button>
       </Popover>
@@ -420,7 +422,7 @@ export function StyleSelectionsPage() {
       setSelectingCells(false);
     };
     const cell = (content: React.ReactNode) => <Dropdown key={column.key} trigger={["contextMenu"]} menu={{ items: [{ key: "format", label: "设置单元格格式", icon: <SettingOutlined />, disabled: !canEdit }], onClick: openFormat }}><td {...common} data-vertical-align={row.cellVerticalAlignments?.[column.key] || "middle"} data-text-color={row.cellTextColors?.[column.key]} style={{ color: row.cellTextColors?.[column.key], textAlign: row.cellAlignments?.[column.key] || "left", backgroundColor: colorOptions.find(option => option.value === (row.cellColors?.[column.key] || row.rowColor))?.color }}><div className="selection-cell-content">{content}</div></td></Dropdown>;
-    if (column.key === "images") return cell(<ImageCell images={rowImages(row)} colors={splitTags(row.color)} disabled={disabled} onChange={(value) => update(row._key, column, value)} />);
+    if (column.key === "images") return cell(<ImageCell mobileId={row.id && sameRow(row, original.current.get(row._key) || {}) ? String(row.id) : undefined} images={rowImages(row)} colors={splitTags(row.color)} disabled={disabled} onChange={(value) => update(row._key, column, value)} />);
     if (column.key === "color") return cell(<TagCell value={row.color} disabled={disabled} placeholder="+ 颜色"  />);
     if (column.key === "sizeRange") return cell(<TagCell value={row.sizeRange} disabled={disabled} placeholder="+ 尺码"  />);
     const numberFormat = row.cellNumberFormats?.[column.key];
@@ -495,7 +497,7 @@ export function StyleSelectionsPage() {
   };
   return <>{formatTarget && <SelectionFormatModal count={formatTarget.ids.size} sample={formatTarget.sample} initial={formatTarget.initial} onCancel={() => setFormatTarget(null)} onApply={applyFormat} />}<Header title="选款登记" subtitle="集中登记候选款的图片、款号、供应商、颜色、材质与定价信息。" />
     <Card className="selection-card"><div className="selection-toolbar" aria-label="选款登记表格工具栏"><Space wrap size={4}>
-      <Button type="link" icon={<PlusOutlined />} disabled={!canEdit} onClick={() => add()}>添加一行</Button><Button type="link" danger icon={<DeleteOutlined />} disabled={!canEdit || !selectedRows.length || saving} loading={deleting} onClick={deleteRows}>删除行</Button>
+      {canEdit && <SelectionPhotoQr />}<Button type="link" icon={<PlusOutlined />} disabled={!canEdit} onClick={() => add()}>添加一行</Button><Button type="link" danger icon={<DeleteOutlined />} disabled={!canEdit || !selectedRows.length || saving} loading={deleting} onClick={deleteRows}>删除行</Button>
       <Popover trigger="click" content={settings}><Button type="text" icon={<SettingOutlined />}>表格设置</Button></Popover><Popover trigger="click" open={filterOpen} onOpenChange={setFilterOpen} content={filterContent}><Button type="text" icon={<FilterOutlined />}>筛选</Button></Popover>
       <Select className="selection-tool-select" value={groupBy} suffixIcon={<TeamOutlined />} options={[{ value: "none", label: "不分组" }, { value: "batch", label: "按登记批次分组" }, { value: "supplier", label: "按供应商编码分组" }, { value: "color", label: "按颜色分组" }]} onChange={setGroupBy} />
       <Select className="selection-tool-select" value={columnSort ? "column" : `${sort}:${direction}`} suffixIcon={<SortAscendingOutlined />} options={[...(columnSort ? [{ value: "column", label: `${columns.find(column => column.key === columnSort.key)?.label || "当前列"}${columnSort.direction === "asc" ? "升序" : "降序"}` }] : []),{ value: "sortOrder:asc", label: "手动排序" }, { value: "updatedAt:desc", label: "最近修改" }, { value: "createdAt:desc", label: "最新登记" }, { value: "registrationBatch:desc", label: "登记批次" }, { value: "xutiStyleNo:asc", label: "序缇款号" }, { value: "supplierCode:asc", label: "供应商编码" }, { value: "supplyPriceExclTax:asc", label: "供货价" }, { value: "vipPrice:asc", label: "唯品价" }]} onChange={(value) => { if (value === "column") return; setColumnSort(null); setFollowShared(false); const [nextSort, nextDirection] = value.split(":"); setSort(nextSort); setDirection(nextDirection as "asc" | "desc"); }} />

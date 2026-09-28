@@ -1,0 +1,12 @@
+.mobile-photos { max-width: 760px; margin: 0 auto; padding: 0 14px calc(85px + env(safe-area-inset-bottom)); background: #fff8f1; min-height: 100dvh; }
+.mobile-photo-header { position: sticky; top: 0; z-index: 20; padding: calc(12px + env(safe-area-inset-top)) 0 10px; background: #fff8f1; border-bottom: 1px solid #eaded3; }
+.mobile-photo-header > div:first-child, .mobile-photo-style > div:first-child { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 10px; }
+.mobile-photo-header-actions { display: flex; justify-content: space-between; margin-top: 8px; }
+.mobile-photos section { padding: 14px 0; }
+.mobile-photo-result { display: flex; flex-direction: column; gap: 6px; width: 100%; text-align: left; padding: 14px; margin-bottom: 8px; border: 1px solid #eaded3; background: #fff; border-radius: 10px; color: inherit; cursor: pointer; }
+.mobile-photo-result strong { font-size: 18px; }.mobile-photo-result span,.mobile-photo-result small,.mobile-photo-style p { color: #88715f; overflow-wrap: anywhere; }
+.mobile-photos h1 { font-size: 22px; margin: 0; overflow-wrap: anywhere; }.mobile-photos h2 { font-size: 16px; }.mobile-photos h2 small { font-size: 12px; color: #999; }
+.mobile-photo-colors { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0; }.mobile-photo-colors .ant-btn { min-height: 40px; }
+.mobile-photo-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; }.mobile-photo-item { position: relative; overflow: hidden; background: #fff; border-radius: 8px; }.mobile-photo-item .ant-image { width: 100%; }.mobile-photo-item .ant-image-img { width: 100%; aspect-ratio: 1; object-fit: contain; }.mobile-photo-item > span { display: block; padding: 6px 10px; }.mobile-photo-item > button { position: absolute; right: 6px; top: 6px; background: #fff; }
+.mobile-photo-capture { display: flex; gap: 10px; margin-top: 14px; }.mobile-photo-capture .ant-btn { flex: 1; height: 46px; }.mobile-photo-hint { font-size: 12px; color: #8f7c6e; line-height: 1.6; }
+.mobile-photo-next { position: fixed; bottom: 0; left: 50%; transform: translateX(-50%); width: min(760px,100%); padding: 10px 14px calc(10px + env(safe-area-inset-bottom)); background: #fff8f1; border-top: 1px solid #eaded3; box-sizing: border-box; z-index: 15; }.mobile-photo-next .ant-btn { height: 44px; }.mobile-photo-progress { position: sticky; bottom: 70px; z-index: 16; }

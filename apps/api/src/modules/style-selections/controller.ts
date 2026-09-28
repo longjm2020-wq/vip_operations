@@ -41,6 +41,9 @@ class StyleSelectionsController {
   @Permission("selection.manage") @Post() create(@Req() request: AuthRequest, @Body() body: unknown) {
     return selections.write(context(request), body);
   }
+  @Permission("selection.read") @Get(":id/photo-next") nextPhoto(@Param("id") value: string, @Query("q") query: string) { return selections.nextPhotoStyle(paramId(value), query); }
+  @Permission("selection.read") @Get(":id") detail(@Param("id") value: string) { return selections.photoDetail(paramId(value)); }
+  @Permission("selection.manage") @Post(":id/photos") changePhoto(@Req() request: AuthRequest, @Param("id") value: string, @Body() body: unknown) { return selections.changePhoto(context(request), paramId(value), body); }
   @Permission("selection.manage") @Patch(":id") edit(
     @Req() request: AuthRequest,
     @Param("id") value: string,

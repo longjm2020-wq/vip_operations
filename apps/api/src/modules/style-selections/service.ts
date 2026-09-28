@@ -122,7 +122,7 @@ export async function list(query: Record<string, unknown>) {
   if (query.q) {
     values.push("%" + String(query.q).slice(0, 100) + "%");
     where.push(
-      `(concat_ws(' ',s.registration_batch::text,s.xuti_style_no,s.supplier_style_no,s.supplier_code,s.color,s.size_range,s.material) ILIKE $${values.length})`,
+      query.photoSearch === 'true' ? `(concat_ws(' ',s.xuti_style_no,s.supplier_style_no,s.supplier_code) ILIKE $${values.length})` : `(concat_ws(' ',s.registration_batch::text,s.xuti_style_no,s.supplier_style_no,s.supplier_code,s.color,s.size_range,s.material) ILIKE $${values.length})`,
     );
   }
   const clause = where.length ? " WHERE " + where.join(" AND ") : "";
@@ -293,5 +293,38 @@ export async function saveSharedView(c: Context, input: unknown) {
     const saved = await one(tx, "UPDATE style_selection_shared_view SET view=$1::jsonb,revision=revision+1,updated_by=$2::bigint,updated_at=now() WHERE id=1 RETURNING view,revision", JSON.stringify(body.view), c.actor.id);
     await audit(tx, c, "SELECTION_SHARED_VIEW_UPDATE", "style_selection_shared_view", "1", before, saved);
     return saved;
+  });
+}
+
+export async function photoDetail(value: string) {
+  const result = await one(db, `SELECT ${selectColumns} ${source} WHERE s.id=$1::bigint`, value);
+  if (!result) fail("NOT_FOUND", "该款已不存在，请重新搜索", 404);
+  return result;
+}
+export async function nextPhotoStyle(value: string, query: unknown) {
+  const current = await entity(db, "style_selections", value);
+  const q = String(query || "").trim().slice(0, 100);
+  return (await one(db, `SELECT ${selectColumns} ${source}
+    WHERE (s.sort_order>$1 OR (s.sort_order=$1 AND s.id<$2::bigint))
+    AND ($3='' OR concat_ws(' ',s.xuti_style_no,s.supplier_style_no,s.supplier_code) ILIKE $4)
+    ORDER BY s.sort_order ASC,s.id DESC LIMIT 1`, current.sort_order, value, q, "%"+q+"%")) || null;
+}
+/** Granular image operations merge under the row lock instead of replacing a stale array. */
+export async function changePhoto(c: Context, value: string, input: unknown) {
+  const body = parse(z.discriminatedUnion("action", [
+    z.object({ action: z.literal("add"), image: image.extend({ color: z.string().trim().min(1).max(100) }) }).strict(),
+    z.object({ action: z.literal("remove"), imageId: z.string().min(1).max(100) }).strict(),
+  ]), input);
+  return command(c, "selection.photo/"+value, body, async tx => {
+    const before = await entity(tx, "style_selections", value, true);
+    let images = Array.isArray(before.images) ? before.images : [];
+    if (body.action === "add") {
+      if (!before.xuti_style_no?.trim()) fail("VALIDATION_ERROR", "请先补充序缇款号", 400);
+      validateImageColors([body.image], before.color);
+      const existing = images.find((item: Row) => item.id === body.image.id);
+      if (existing && (existing.url !== body.image.url || existing.color !== body.image.color)) fail("EDIT_CONFLICT", "图片标识已被使用，请重新上传", 409);
+      if (!existing) images = [...images, body.image];
+    } else images = images.filter((item: Row) => item.id !== body.imageId);
+    return persist(tx, c, { images }, value);
   });
 }
