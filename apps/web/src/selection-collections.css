@@ -14,7 +14,7 @@
 .collection-public .ant-input-number {width:100%;}
 @media(max-width:650px){.collection-public{padding:10px;width:100%;}.collection-layout{display:block;}.collection-layout aside{max-height:160px;margin-bottom:12px;}.collection-fields{grid-template-columns:1fr;}.collection-public .ant-card-body{padding:14px;}.collection-public input,.collection-public textarea,.collection-public .ant-select{font-size:16px!important;}}
 
-.collection-mobile-picker,.collection-stock-mobile{display:none;}
+.collection-mobile-picker{display:none;}
 @media(max-width:650px){
   .collection-public{max-width:100%;overflow-x:clip;touch-action:pan-y;}
   .collection-public *{min-width:0;}
@@ -27,12 +27,15 @@
   .collection-stock-modal{max-width:calc(100vw - 20px);margin:10px auto;top:0;padding-bottom:0;touch-action:pan-y;}
   .collection-stock-modal .ant-modal-content{padding:16px;max-height:calc(100dvh - 20px);overflow-y:auto;overflow-x:hidden;}
   .collection-stock-modal .ant-modal-body{overflow-wrap:anywhere;min-width:0;}
-  .collection-stock-desktop{display:none;}
-  .collection-stock-mobile{display:flex;flex-direction:column;gap:10px;}
-  .collection-stock-mobile section{display:grid;grid-template-columns:minmax(0,1fr);gap:8px;padding:12px;border:1px solid #eee;border-radius:8px;}
-  .collection-stock-mobile label{display:flex;flex-direction:column;gap:4px;min-width:0;}
-  .collection-stock-mobile input,.collection-stock-mobile .ant-input-number{width:100%;min-width:0;max-width:100%;box-sizing:border-box;font-size:16px!important;}
-  .collection-stock-mobile input[type=date]{min-height:38px;}
+  .collection-stock-modal .ant-modal-content{padding:12px;}
+  .collection-stock-desktop .ant-table{font-size:12px;}
+  .collection-stock-desktop .ant-table-cell{padding:6px 3px!important;overflow-wrap:anywhere;}
+  .collection-stock-desktop .ant-input-number{width:100%;min-width:0;}
+  .collection-stock-desktop .ant-input-number-input{padding-inline:4px;font-size:16px;}
+  .collection-stock-desktop input[type=date]{width:100%;min-width:0;max-width:100%;padding-inline:2px;box-sizing:border-box;font-size:16px;}
+  .collection-stock-desktop input[type=date]::-webkit-date-and-time-value{text-align:left;}
+  .collection-stock-desktop .ant-input-number-handler-wrap{display:none;}
+
 }
 
 .collection-table-view{max-width:100%;}
