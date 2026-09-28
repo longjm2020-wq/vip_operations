@@ -529,6 +529,7 @@ try {
     rowColor: "BLUE",
   });
   assert.equal(selection.xutiStyleNo, "XUTI-SELECT-001");
+  assert.equal(selection.registrationBatch, "2026-10-01");
   assert.equal(selection.images[0].color, "奶油白");
   assert.equal(selection.cellColors.vipPrice, "YELLOW");
   await ok("/style-selections/presence", "POST", { editingId: selection.id });
@@ -542,6 +543,30 @@ try {
     expectedUpdatedAt: selection.updatedAt,
   });
   assert.equal(selectedStyle.vipPrice, "209");
+  assert.equal(selectedStyle.registrationBatch, "2026-10-01");
+  const savedAgain = await ok("/style-selections/" + selection.id, "PATCH", {
+    registrationBatch: selectedStyle.registrationBatch,
+    material: "连续编辑",
+    expectedUpdatedAt: selectedStyle.updatedAt,
+  });
+  assert.equal(savedAgain.material, "连续编辑");
+  const imageData = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aTAAAAABJRU5ErkJggg==";
+  const uploadKey = randomUUID();
+  const uploadedImage = await ok("/style-selections/images", "POST", { data: imageData }, uploadKey);
+  assert.deepEqual(await ok("/style-selections/images", "POST", { data: imageData }, uploadKey), uploadedImage);
+  const imagePath = uploadedImage.url.replace("/api/v1", "");
+  assert.equal((await request(imagePath, "GET", undefined, randomUUID(), { cookie: "", csrf: "" })).status, 401);
+  const downloadedImage = await fetch(base + imagePath, { headers: { Cookie: session.cookie } });
+  assert.equal(downloadedImage.headers.get("content-type"), "image/png");
+  assert.deepEqual(Buffer.from(await downloadedImage.arrayBuffer()), Buffer.from(imageData.split(",")[1], "base64"));
+  assert.equal((await request("/style-selections/images", "POST", { data: "data:image/png;base64,YWJj" })).status, 400);
+  const oversizedImage = Buffer.alloc(1024 * 1024);
+  Buffer.from("89504e470d0a1a0a", "hex").copy(oversizedImage);
+  assert.equal((await request("/style-selections/images", "POST", { data: `data:image/png;base64,${oversizedImage.toString("base64")}` })).status, 400);
+  const manyImages = Array.from({ length: 12 }, () => ({ id: randomUUID(), url: uploadedImage.url, color: "奶油白" }));
+  const manySaved = await ok("/style-selections/" + selection.id, "PATCH", { images: manyImages, expectedUpdatedAt: savedAgain.updatedAt });
+  assert.equal(manySaved.images.length, 12);
+  check("selection images upload independently, enforce size and access, and allow more than five images");
   assert.equal(
     (
       await request("/style-selections/" + selection.id, "PATCH", {

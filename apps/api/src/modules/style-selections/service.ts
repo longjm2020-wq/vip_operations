@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { randomUUID } from "node:crypto";
 import { db, insert, one, rows, update, type Row } from "../../../../../packages/database/src/index.js";
 import {
   audit,
@@ -20,6 +21,7 @@ const imageUrl = z
   .refine(
     (value) =>
       /^https?:\/\//i.test(value) ||
+      /^\/api\/v1\/style-selections\/images\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value) ||
       /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/]+={0,2}$/i.test(value),
     "图片仅支持 http(s) 网址或 JPG、PNG、WebP 文件",
   );
@@ -37,7 +39,7 @@ const presenceInput = z.object({ editingId: z.string().regex(/^[1-9]\d{0,18}$/).
 export const styleSelectionInput = z
   .object({
     registrationBatch: date.nullable().optional(),
-    images: z.array(image).max(5, "每行最多添加 5 张图片").default([]),
+    images: z.array(image).default([]),
     cellColors: cellColors.default({}),
     extraFields: extraFields.default({}),
     xutiStyleNo: optionalText(64),
@@ -66,6 +68,31 @@ const selectColumns = `
   s.vip_price,s.live_price,s.tag_price,s.row_color,s.sort_order,s.created_by,s.version,
   s.created_at,s.updated_at`;
 const source = " FROM style_selections s";
+
+export async function uploadImage(c: Context, input: unknown) {
+  const body = parse(z.object({ data: z.string().max(1_500_000) }).strict(), input);
+  const match = /^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/]+={0,2})$/.exec(body.data);
+  if (!match) fail("VALIDATION_ERROR", "请选择 JPG、PNG 或 WebP 图片", 400);
+  const bytes = Buffer.from(match![2], "base64");
+  const type = match![1];
+  const valid = type === "image/png" ? bytes.subarray(0, 8).equals(Buffer.from("89504e470d0a1a0a", "hex"))
+    : type === "image/jpeg" ? bytes.subarray(0, 3).equals(Buffer.from("ffd8ff", "hex"))
+    : bytes.toString("ascii", 0, 4) === "RIFF" && bytes.toString("ascii", 8, 12) === "WEBP";
+  if (!valid || !bytes.length || bytes.length >= 1024 * 1024) fail("VALIDATION_ERROR", "图片格式无效或未压缩至 1 MB 以下", 400);
+  return command(c, "style-selections/image-upload", body, async (tx) => {
+    const id = randomUUID();
+    await rows(tx, "INSERT INTO style_selection_images(id,content_type,content,created_by) VALUES($1::uuid,$2,$3,$4::bigint)", id, type, bytes, c.actor.id);
+    await audit(tx, c, "CREATE", "style-selection-image", null, null, { id, type, size: bytes.length });
+    return { url: `/api/v1/style-selections/images/${id}` };
+  });
+}
+
+export async function readImage(value: string) {
+  const id = parse(z.string().uuid(), value);
+  const file = await one(db, "SELECT content_type,content FROM style_selection_images WHERE id=$1::uuid", id);
+  if (!file) fail("NOT_FOUND", "图片不存在", 404);
+  return file!;
+}
 
 function tagValues(value: unknown) {
   return [
@@ -183,6 +210,7 @@ export async function write(c: Context, input: unknown, value?: string) {
       ? await update(tx, "style_selections", value!, { ...changes, version: before.version + 1 })
       : await insert(tx, "style_selections", { ...changes, createdBy: c.actor.id });
     await audit(tx, c, before ? "UPDATE" : "CREATE", "style-selection", result.id, before, result);
-    return result;
+    // Keep date-only fields identical to list responses (rather than ISO timestamps).
+    return (await one(tx, `SELECT ${selectColumns} ${source} WHERE s.id=$1::bigint`, result.id))!;
   });
 }

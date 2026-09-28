@@ -1,4 +1,5 @@
-import { Body, Controller, Delete, Get, Module, Param, Patch, Post, Query, Req } from "@nestjs/common";
+import { Body, Controller, Delete, Get, Module, Param, Patch, Post, Query, Req, Res } from "@nestjs/common";
+import type { Response } from "express";
 import { AuthRequest, Permission, context } from "../../http.js";
 import { id, parse } from "../../core.js";
 import * as selections from "./service.js";
@@ -7,6 +8,15 @@ const paramId = (value: string) => parse(id, value);
 
 @Controller("api/v1/style-selections")
 class StyleSelectionsController {
+  @Permission("selection.manage") @Post("images") uploadImage(@Req() request: AuthRequest, @Body() body: unknown) {
+    return selections.uploadImage(context(request), body);
+  }
+  @Permission("selection.read") @Get("images/:imageId") async image(@Param("imageId") value: string, @Res() response: Response) {
+    const file = await selections.readImage(value);
+    response.setHeader("Content-Type", file.content_type);
+    response.setHeader("Cache-Control", "private, no-store");
+    response.send(Buffer.from(file.content));
+  }
   @Permission("selection.read") @Get("presence") presence(@Req() request: AuthRequest) {
     return selections.presence(context(request));
   }
