@@ -5,14 +5,15 @@ import { SelectionPhotoQr } from "./selection-photo-qr";
 import { SelectionFilterPanel } from "./selection-filter-panel";
 import type { SelectionView } from "../../../packages/contracts/src/selection-view";
 import { selectionImageLinks, invalidSelectionImage } from "./selection-image-links";
+import { copySelectionImage, downloadSelectionImage } from "./selection-image-actions";
 import { parseSelectionClipboard } from "./selection-clipboard";
 import { duplicateStyleCounts, selectionStyleKey } from "./selection-duplicates";
 import { SelectionFormatModal, type FormatPatch } from "./selection-format-modal";
 import { formatSelectionValue } from "../../../packages/contracts/src/selection-format";
 import { Fragment, useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { App, Button, Card, Checkbox, Empty, Image, Input, Modal, Popover, Dropdown, Select, Space, Tooltip } from "antd";
-import { BgColorsOutlined, FontColorsOutlined, VerticalAlignTopOutlined, VerticalAlignMiddleOutlined, VerticalAlignBottomOutlined, CloseOutlined, AlignLeftOutlined, AlignCenterOutlined, AlignRightOutlined, DeleteOutlined, FilterOutlined, LinkOutlined, PlusOutlined, SettingOutlined, SortAscendingOutlined, TeamOutlined, UnorderedListOutlined, UploadOutlined } from "@ant-design/icons";
+import { App, Button, Card, Checkbox, Empty, Image, Input, Modal, Pagination, Popover, Dropdown, Select, Space, Tooltip } from "antd";
+import { BgColorsOutlined, CopyOutlined, DownloadOutlined, FontColorsOutlined, VerticalAlignTopOutlined, VerticalAlignMiddleOutlined, VerticalAlignBottomOutlined, CloseOutlined, AlignLeftOutlined, AlignCenterOutlined, AlignRightOutlined, DeleteOutlined, FilterOutlined, LinkOutlined, PlusOutlined, SettingOutlined, SortAscendingOutlined, TeamOutlined, UnorderedListOutlined, UploadOutlined } from "@ant-design/icons";
 import { api, queryClient } from "./api";
 import { prepareUpload, readUpload } from "./upload-file";
 import { Header, QueryState, Row, useCan, useUser } from "./shared";
@@ -55,6 +56,17 @@ const splitTags = (value: unknown) => [...new Set(String(value || "").split("/")
 const joinTags = (value: string[]) => [...new Set(value.map((item) => item.trim()).filter(Boolean))].join("/");
 const comparable = (value: unknown) => value && typeof value === "object" ? JSON.stringify(value) : String(clean(value) ?? "");
 const cellId = (rowKey: string, columnKey: string) => `${rowKey}::${columnKey}`;
+const pageSizes = [20, 50, 100, 200, 500, 1000];
+const pageSizeKey = "style-selection-page-size-v1";
+const imageVisibilityCallbacks = new WeakMap<Element, (visible: boolean) => void>();
+let imageVisibilityObserver: IntersectionObserver | null = null;
+function observeImageVisibility(element: Element, callback: (visible: boolean) => void) {
+  if (typeof IntersectionObserver === "undefined") { callback(true); return () => {}; }
+  imageVisibilityObserver ||= new IntersectionObserver(entries => entries.forEach(entry => imageVisibilityCallbacks.get(entry.target)?.(entry.isIntersecting)));
+  imageVisibilityCallbacks.set(element, callback);
+  imageVisibilityObserver.observe(element);
+  return () => { imageVisibilityObserver?.unobserve(element); imageVisibilityCallbacks.delete(element); };
+}
 const customColumnsKey = "style-selection-custom-columns-v1";
 const storedColumns = () => {
   try {
@@ -135,12 +147,15 @@ function ImageCell({ images, colors, disabled, onChange, mobileId, labelImages =
   const [galleryPreviewOpen, setGalleryPreviewOpen] = useState(false);
   const [imageIndex, setImageIndex] = useState(0);
   const [carouselPaused, setCarouselPaused] = useState(false);
+  const [onScreen, setOnScreen] = useState(false);
+  const summaryRef = useRef<HTMLDivElement>(null);
   const currentImageIndex = Math.min(imageIndex, Math.max(0, images.length - 1));
+  useEffect(() => summaryRef.current ? observeImageVisibility(summaryRef.current, setOnScreen) : undefined, [images.length > 0]);
   useEffect(() => {
-    if (images.length < 2 || allOpen || previewOpen || carouselPaused || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    if (images.length < 2 || !onScreen || allOpen || previewOpen || carouselPaused || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
     const timer = window.setInterval(() => setImageIndex(index => (index + 1) % images.length), 4000);
     return () => window.clearInterval(timer);
-  }, [images.length, allOpen, previewOpen, carouselPaused]);
+  }, [images.length, onScreen, allOpen, previewOpen, carouselPaused]);
   const uploadInput = useRef<HTMLInputElement>(null);
   const latestImages = useRef(images);
   latestImages.current = images;
@@ -177,7 +192,7 @@ function ImageCell({ images, colors, disabled, onChange, mobileId, labelImages =
   const editor = <div className="selection-images selection-image-editor" tabIndex={disabled ? -1 : 0} aria-label="图片，支持粘贴" onPaste={paste}>
     <Image.PreviewGroup preview={{ open: galleryPreviewOpen, onOpenChange: setGalleryPreviewOpen, closeIcon: false, imageRender: node => galleryPreviewOpen ? <ImagePreviewClose onClose={() => setGalleryPreviewOpen(false)}>{node}</ImagePreviewClose> : node }}><div className="selection-image-list">{images.map((image, index) => <div className="selection-image-item" key={image.id}>
       <i className="selection-image-badge">{index + 1}/{images.length}</i>
-      <Image src={image.url} fallback={invalidSelectionImage} onError={() => imageError(image.url)} alt={failedImages.has(image.url) ? "无效图片，链接无法加载" : labelImages ? "洗唛/吊牌图" : image.color || "款式图片"} width="100%" height="100%" preview={failedImages.has(image.url) ? false : { mask: false }} />
+      <Image loading="lazy" src={image.url} fallback={invalidSelectionImage} onError={() => imageError(image.url)} alt={failedImages.has(image.url) ? "无效图片，链接无法加载" : labelImages ? "洗唛/吊牌图" : image.color || "款式图片"} width="100%" height="100%" preview={failedImages.has(image.url) ? false : { mask: false }} />
       {image.color && <span className="selection-image-color">{image.color}</span>}
       {!disabled && <Button className="selection-image-remove" type="text" size="small" aria-label="移除图片" icon={<DeleteOutlined />} onClick={() => onChange(images.filter((item) => item.id !== image.id))} />}
       {!labelImages && <Select className="selection-image-color-select" size="small" disabled={disabled} allowClear value={image.color || undefined} placeholder="命名颜色" options={colors.map((color) => ({ value: color, label: color }))} onChange={(color) => onChange(images.map((item) => item.id === image.id ? { ...item, color: color || "" } : item))} />}
@@ -193,11 +208,11 @@ function ImageCell({ images, colors, disabled, onChange, mobileId, labelImages =
       <input ref={uploadInput} hidden type="file" multiple accept="image/jpeg,image/png,image/webp" onChange={(event) => { const files = Array.from(event.target.files || []); event.currentTarget.value = ""; void addFiles(files); }} />
     </div>}
   </div>;
-  const gallery = <Modal title={`${labelImages ? "洗唛/吊牌图" : "全部图片"} · ${images.length} 张`} open={allOpen} onCancel={() => setAllOpen(false)} footer={null} width={560}><div className="selection-image-gallery">{editor}{!images.length && <Empty description="暂无图片，可添加链接、上传或粘贴图片" />}</div></Modal>;
+  const gallery = allOpen && <Modal title={`${labelImages ? "洗唛/吊牌图" : "全部图片"} · ${images.length} 张`} open={allOpen} onCancel={() => setAllOpen(false)} footer={null} width={560}><div className="selection-image-gallery">{editor}{!images.length && <Empty description="暂无图片，可添加链接、上传或粘贴图片" />}</div></Modal>;
   const all = <><Button className="selection-mini-tag" size="small" onClick={() => setAllOpen(true)}>全部</Button>{gallery}</>;
   if (!images.length) return <div className="selection-image-empty" tabIndex={0} aria-label={`${labelImages ? "洗唛/吊牌图" : "图片"}，支持粘贴链接或图片`} onPaste={paste}><button className="selection-image-placeholder" type="button" disabled={disabled} onClick={() => setAllOpen(true)}>+ 图片</button>{gallery}</div>;
-  return <div className="selection-image-summary" tabIndex={0} aria-label="图片轮播，点击图片放大" onMouseEnter={() => setCarouselPaused(true)} onMouseLeave={() => setCarouselPaused(false)} onFocus={() => setCarouselPaused(true)} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) setCarouselPaused(false); }} onPaste={paste}>
-    <div className="selection-image-slide"><Image src={images[currentImageIndex].url} fallback={invalidSelectionImage} onError={() => imageError(images[currentImageIndex].url)} alt={failedImages.has(images[currentImageIndex].url) ? "无效图片，链接无法加载" : labelImages ? "洗唛/吊牌图" : images[currentImageIndex].color || "款式图片"} width="100%" height="100%" preview={failedImages.has(images[currentImageIndex].url) ? false : { mask: false, open: previewOpen, onOpenChange: setPreviewOpen, closeIcon: false, imageRender: node => previewOpen ? <ImagePreviewClose onClose={() => setPreviewOpen(false)}>{node}</ImagePreviewClose> : node }} />
+  return <div ref={summaryRef} className="selection-image-summary" data-selection-image-url={images[currentImageIndex].url} data-selection-image-index={currentImageIndex + 1} tabIndex={0} aria-label="图片轮播，点击图片放大" onMouseEnter={() => setCarouselPaused(true)} onMouseLeave={() => setCarouselPaused(false)} onFocus={() => setCarouselPaused(true)} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) setCarouselPaused(false); }} onPaste={paste}>
+    <div className="selection-image-slide"><Image loading="lazy" src={images[currentImageIndex].url} fallback={invalidSelectionImage} onError={() => imageError(images[currentImageIndex].url)} alt={failedImages.has(images[currentImageIndex].url) ? "无效图片，链接无法加载" : labelImages ? "洗唛/吊牌图" : images[currentImageIndex].color || "款式图片"} width="100%" height="100%" preview={failedImages.has(images[currentImageIndex].url) ? false : { mask: false, open: previewOpen, onOpenChange: setPreviewOpen, closeIcon: false, imageRender: node => previewOpen ? <ImagePreviewClose onClose={() => setPreviewOpen(false)}>{node}</ImagePreviewClose> : node }} />
       <i className="selection-image-badge">{currentImageIndex + 1}/{images.length}</i>
       {images[currentImageIndex].color && <span className="selection-slide-color">{images[currentImageIndex].color}</span>}
       {images.length > 1 && <div className="selection-carousel-controls"><button type="button" aria-label="上一张图片" onClick={() => setImageIndex((currentImageIndex + images.length - 1) % images.length)}>‹</button><button type="button" aria-label="下一张图片" onClick={() => setImageIndex((currentImageIndex + 1) % images.length)}>›</button></div>}
@@ -226,6 +241,11 @@ export function StyleSelectionsPage() {
   const [rowHeight, setRowHeight] = useState<"compact" | "normal" | "loose" | "extra">("extra");
   const [rows, setRows] = useState<Row[]>([]);
   const [addCount, setAddCount] = useState(10);
+  const [pageSize, setPageSize] = useState(() => {
+    const stored = Number(localStorage.getItem(pageSizeKey));
+    return pageSizes.includes(stored) ? stored : 20;
+  });
+  const [page, setPage] = useState(1);
   const [selectedRows, setSelectedRows] = useState<string[]>([]);
   const [copiedCells, setCopiedCells] = useState<Set<string>>(new Set());
   const copiedSingleValue = useRef<string | null>(null);
@@ -234,6 +254,7 @@ export function StyleSelectionsPage() {
   const [cellTextEditing, setCellTextEditing] = useState(false);
   const [selectedCells, setSelectedCells] = useState<Set<string>>(new Set());
   const [cellAnchor, setCellAnchor] = useState<{ rowKey: string; columnKey: string } | null>(null);
+  const contextImage = useRef<{ url: string; name: string } | null>(null);
   const [selectingCells, setSelectingCells] = useState(false);
   const axisSelection = useRef<{ type: "row" | "column"; key: string } | null>(null);
   const shiftDrag=useRef<{type:"row"|"column";key:string}|null>(null);
@@ -264,6 +285,7 @@ export function StyleSelectionsPage() {
   const snapshot = JSON.stringify(data.data?.data || []);
   useEffect(() => { localStorage.setItem(customColumnsKey, JSON.stringify(columns.filter((column) => column.custom))); }, [columns]);
   useEffect(() => { localStorage.setItem(columnLabelsKey, JSON.stringify(Object.fromEntries(columns.map(column => [column.key, column.label])))); }, [columns]);
+  useEffect(() => { localStorage.setItem(pageSizeKey, String(pageSize)); }, [pageSize]);
   useEffect(() => {
     const stop = () => { setSelectingCells(false); axisSelection.current = null; };
     window.addEventListener("mouseup", stop); window.addEventListener("blur", stop);
@@ -294,17 +316,29 @@ export function StyleSelectionsPage() {
   const repeatedStyles = useMemo(() => duplicateStyleCounts(rows, styleCounts.data?.data, original.current), [rows, styleCounts.data]);
   const colorSuggestions = useMemo(() => [...new Set(rows.flatMap((row) => splitTags(row.color)))], [rows]);
   const filteredRows = useMemo(() => sortSelectionRows(rows.filter(row => matchesSelectionFilters(row, columnFilters)), columnSort), [rows, columnFilters, columnSort]);
-  const grouped = useMemo(() => {
+  const allGrouped = useMemo(() => {
     const label = (row: Row) => groupBy === "batch" ? row.registrationBatch || "未填写登记批次" : groupBy === "supplier" ? row.supplierCode || "未填写供应商编码" : row.color || "未填写颜色";
     if (groupBy === "none") return [{ label: "", rows: filteredRows }];
     return filteredRows.reduce<{ label: string; rows: Row[] }[]>((result, row) => { const key = label(row); const target = result.find((item) => item.label === key); if (target) target.rows.push(row); else result.push({ label: key, rows: [row] }); return result; }, []);
   }, [groupBy, filteredRows]);
-  const displayedRows = grouped.flatMap(group => group.rows);
+  const allDisplayedRows = useMemo(() => allGrouped.flatMap(group => group.rows), [allGrouped]);
+  const pageCount = Math.max(1, Math.ceil(allDisplayedRows.length / pageSize));
+  const currentPage = Math.min(page, pageCount);
+  const pageStart = (currentPage - 1) * pageSize;
+  const displayedRows = useMemo(() => allDisplayedRows.slice(pageStart, pageStart + pageSize), [allDisplayedRows, pageStart, pageSize]);
+  const pageRowKeys = useMemo(() => new Set(displayedRows.map(row => row._key)), [displayedRows]);
+  const rowNumberByKey = useMemo(() => new Map(displayedRows.map((row, index) => [row._key, pageStart + index + 1])), [displayedRows, pageStart]);
+  const grouped = useMemo(() => {
+    return allGrouped.map(group => ({...group, rows: group.rows.filter(row => pageRowKeys.has(row._key))})).filter(group => group.rows.length);
+  }, [allGrouped, pageRowKeys]);
+  useEffect(() => { setPage(1); }, [search, columnFilters, columnSort, groupBy]);
+  useEffect(() => { if (page > pageCount) setPage(pageCount); }, [page, pageCount]);
+  useEffect(() => { setCellAnchor(null); setFocusedCell(null); setCopiedCells(new Set()); setCellTextEditing(false); }, [currentPage, pageSize]);
   useEffect(() => {
     const rowKeys = new Set(filteredRows.map(row => row._key));
     setSelectedRows(current => { const next = current.filter(key => rowKeys.has(key)); return next.length === current.length ? current : next; });
-    setSelectedCells(current => { const next = new Set([...current].filter(id => { const [rowKey, columnKey] = id.split("::"); return rowKeys.has(rowKey) && visible.includes(columnKey); })); return next.size === current.size ? current : next; });
-  }, [filteredRows, visible]);
+    setSelectedCells(current => { const next = new Set([...current].filter(id => { const [rowKey, columnKey] = id.split("::"); return pageRowKeys.has(rowKey) && visible.includes(columnKey); })); return next.size === current.size ? current : next; });
+  }, [filteredRows, pageRowKeys, visible]);
   const dirtyCount = rows.filter((row) => !row.id || !sameRow(row, original.current.get(row._key) || {})).length;
 
   const update = (key: string, column: Column, value: unknown) => {
@@ -455,14 +489,14 @@ export function StyleSelectionsPage() {
       return;
     }
 
-    const rowStart = displayedRows.findIndex((row) => row._key === rowKey), columnStart = activeColumns.findIndex((column) => column.key === columnKey); if (rowStart < 0 || columnStart < 0) return;
+    const rowStart = allDisplayedRows.findIndex((row) => row._key === rowKey), columnStart = activeColumns.findIndex((column) => column.key === columnKey); if (rowStart < 0 || columnStart < 0) return;
     if (!activeColumns.slice(columnStart, columnStart + Math.max(...matrix.map(row => row.length))).some(column => !imageKeys.has(column.key) && !collectionKeys.has(column.key))) return;
     event.preventDefault(); setCopiedCells(new Set()); copiedSingleValue.current = null;
     setRows((current) => {
-      const missing = Math.max(0, rowStart + matrix.length - displayedRows.length);
+      const missing = Math.max(0, rowStart + matrix.length - allDisplayedRows.length);
       const nextOrder = Math.max(0, ...current.map(row => Number(row.sortOrder || 0))) + 1;
       const added = Array.from({ length: missing }, (_, index) => ({ _key: crypto.randomUUID(), images: [], labelImages: [], cellColors: {}, extraFields: {}, sortOrder: nextOrder + index, rowColor: "NONE" }));
-      const targets = [...displayedRows, ...added];
+      const targets = [...allDisplayedRows, ...added];
       const sourceByKey = new Map(targets.slice(rowStart, rowStart + matrix.length).map((row, index) => [row._key, matrix[index]]));
       return [...current, ...added].map(row => {
         const source = sourceByKey.get(row._key);
@@ -542,7 +576,23 @@ export function StyleSelectionsPage() {
       setFormatTarget({ ids, sample: valueAt(row, column), initial: ids.size === 1 ? Object.fromEntries(["cellNumberFormats", "cellAlignments", "cellVerticalAlignments", "cellColors", "cellTextColors"].map(key => [key, row[key]?.[column.key]])) : {} });
       setSelectingCells(false);
     };
-    const cell = (content: React.ReactNode) => <Dropdown key={column.key} trigger={["contextMenu"]} menu={{ items: [{ key: "format", label: "设置单元格格式", icon: <SettingOutlined />, disabled: !canEdit }], onClick: openFormat }}><td {...common} data-vertical-align={row.cellVerticalAlignments?.[column.key] || "middle"} data-text-color={row.cellTextColors?.[column.key]} style={{ color: row.cellTextColors?.[column.key], textAlign: row.cellAlignments?.[column.key] || "left", backgroundColor: colorOptions.find(option => option.value === (row.cellColors?.[column.key] || row.rowColor))?.color }}><div className="selection-cell-content">{content}</div></td></Dropdown>;
+    const hasImage = imageKeys.has(column.key) && (column.key === "images" ? rowImages(row) : rowLabelImages(row)).length > 0;
+    const cell = (content: React.ReactNode) => <Dropdown key={column.key} trigger={["contextMenu"]} menu={{ items: [...(hasImage ? [
+      { key: "copy-image", label: "复制当前图片", icon: <CopyOutlined /> },
+      { key: "download-image", label: "下载当前图片", icon: <DownloadOutlined /> },
+      { key: "copy-image-url", label: "复制图片地址", icon: <LinkOutlined /> },
+      { type: "divider" as const },
+    ] : []), { key: "format", label: "设置单元格格式", icon: <SettingOutlined />, disabled: !canEdit }], onClick: ({ key }) => {
+      if (key === "format") { openFormat(); return; }
+      const image = contextImage.current;
+      if (!image) return message.error("未找到当前图片，请重新右键单元格");
+      if (key === "copy-image") void copySelectionImage(image.url).then(() => message.success("图片已复制")).catch(() => message.error("无法复制图片；外部图片可能禁止跨域读取，可尝试复制图片地址"));
+      if (key === "download-image") void downloadSelectionImage(image.url, image.name).then(() => message.success("图片已下载")).catch(() => message.error("无法下载图片；外部图片可能禁止跨域读取，可复制图片地址后打开保存"));
+      if (key === "copy-image-url") void navigator.clipboard.writeText(image.url).then(() => message.success("图片地址已复制")).catch(() => message.error("无法复制图片地址"));
+    } }}><td {...common} onContextMenu={event => {
+      const summary = event.currentTarget.querySelector<HTMLElement>("[data-selection-image-url]");
+      contextImage.current = summary?.dataset.selectionImageUrl ? { url: summary.dataset.selectionImageUrl, name: `${row.xutiStyleNo || row.supplierStyleNo || "选款"}-${column.label}-${summary.dataset.selectionImageIndex || "1"}` } : null;
+    }} data-vertical-align={row.cellVerticalAlignments?.[column.key] || "middle"} data-text-color={row.cellTextColors?.[column.key]} style={{ color: row.cellTextColors?.[column.key], textAlign: row.cellAlignments?.[column.key] || "left", backgroundColor: colorOptions.find(option => option.value === (row.cellColors?.[column.key] || row.rowColor))?.color }}><div className="selection-cell-content">{content}</div></td></Dropdown>;
     if (column.key === "images") return cell(<ImageCell mobileId={row.id && sameRow(row, original.current.get(row._key) || {}) ? String(row.id) : undefined} images={rowImages(row)} colors={splitTags(row.color)} disabled={disabled} onChange={(value) => update(row._key, column, value)} />);
     if (column.key === "labelImages") return cell(<ImageCell labelImages mobileId={row.id && sameRow(row, original.current.get(row._key) || {}) ? String(row.id) : undefined} images={rowLabelImages(row)} colors={[]} disabled={disabled} onChange={(value) => update(row._key, column, value)} />);
     if (column.key === "color") return cell(<TagCell value={row.color} disabled={disabled} placeholder="+ 颜色"  />);
@@ -655,8 +705,8 @@ export function StyleSelectionsPage() {
           setSelectedCells(selectionAllCells(displayedRows, activeColumns)); setCellTextEditing(false);
           setSelectingCells(false);
         }
-      }} aria-label="选款登记在线智能表格" style={{ width: activeColumns.reduce((width, column) => width + column.width, 96) }}><colgroup><col style={{ width: 48 }} /><col style={{ width: 48 }} />{activeColumns.map((column) => <col key={column.key} style={{ width: column.width }} />)}</colgroup><thead><tr><th className="selection-check"><Checkbox aria-label="选择全部可见行" checked={!!filteredRows.length && filteredRows.every(row => selectedRows.includes(row._key))} indeterminate={filteredRows.some(row => selectedRows.includes(row._key)) && !filteredRows.every(row => selectedRows.includes(row._key))} onChange={(event) => setSelectedRows(event.target.checked ? filteredRows.map((row) => row._key) : [])} /></th><th className="selection-index">#</th>{activeColumns.map((column) => <th key={column.key} data-reorder-axis="column" data-reorder-key={column.key} data-reorder-target={shiftTarget==="column:"+column.key || undefined} title="按住 Shift 拖动调整列顺序" tabIndex={0} aria-label={`选择整列：${column.label}`} onMouseDown={event => axisMouseDown(event, "column", column.key)} onMouseEnter={() => axisMouseEnter("column", column.key)} style={{ width: column.width, minWidth: column.width }}><span>{column.label}{columnSort?.key === column.key ? columnSort.direction === "asc" ? " ↑" : " ↓" : ""}</span><Popover destroyOnHidden trigger="click" open={filterColumn === column.key} onOpenChange={open => { setFilterColumn(open ? column.key : null); if (open) { setFilterRevision(sharedView.data?.data?.revision || 0); setFilterSession(value => value + 1); } }} content={columnFilterEditor(column)}><Button className="selection-column-filter-button" type="text" size="small" aria-label={`筛选${column.label}`} title={`筛选${column.label}`} icon={<FilterOutlined />} style={{ color: columnFilters[column.key] ? "#d3540b" : undefined }} onMouseDown={event => event.stopPropagation()} /></Popover><i className="selection-column-resize" aria-label={`调整 ${column.label} 列宽`} onMouseDown={(event) => { event.preventDefault(); event.stopPropagation(); setResizingColumn({ key: column.key, startX: event.clientX, startWidth: column.width }); }} /></th>)}</tr></thead><tbody>
+      }} aria-label="选款登记在线智能表格" style={{ width: activeColumns.reduce((width, column) => width + column.width, 96) }}><colgroup><col style={{ width: 48 }} /><col style={{ width: 48 }} />{activeColumns.map((column) => <col key={column.key} style={{ width: column.width }} />)}</colgroup><thead><tr><th className="selection-check"><Checkbox aria-label="选择全部可见行" checked={!!displayedRows.length && displayedRows.every(row => selectedRows.includes(row._key))} indeterminate={displayedRows.some(row => selectedRows.includes(row._key)) && !displayedRows.every(row => selectedRows.includes(row._key))} onChange={(event) => setSelectedRows(current => event.target.checked ? [...new Set([...current, ...displayedRows.map(row => row._key)])] : current.filter(key => !pageRowKeys.has(key)))} /></th><th className="selection-index">#</th>{activeColumns.map((column) => <th key={column.key} data-reorder-axis="column" data-reorder-key={column.key} data-reorder-target={shiftTarget==="column:"+column.key || undefined} title="按住 Shift 拖动调整列顺序" tabIndex={0} aria-label={`选择整列：${column.label}`} onMouseDown={event => axisMouseDown(event, "column", column.key)} onMouseEnter={() => axisMouseEnter("column", column.key)} style={{ width: column.width, minWidth: column.width }}><span>{column.label}{columnSort?.key === column.key ? columnSort.direction === "asc" ? " ↑" : " ↓" : ""}</span><Popover destroyOnHidden trigger="click" open={filterColumn === column.key} onOpenChange={open => { setFilterColumn(open ? column.key : null); if (open) { setFilterRevision(sharedView.data?.data?.revision || 0); setFilterSession(value => value + 1); } }} content={columnFilterEditor(column)}><Button className="selection-column-filter-button" type="text" size="small" aria-label={`筛选${column.label}`} title={`筛选${column.label}`} icon={<FilterOutlined />} style={{ color: columnFilters[column.key] ? "#d3540b" : undefined }} onMouseDown={event => event.stopPropagation()} /></Popover><i className="selection-column-resize" aria-label={`调整 ${column.label} 列宽`} onMouseDown={(event) => { event.preventDefault(); event.stopPropagation(); setResizingColumn({ key: column.key, startX: event.clientX, startWidth: column.width }); }} /></th>)}</tr></thead><tbody>
         {data.isLoading && <tr><td colSpan={activeColumns.length + 2} className="selection-placeholder">正在读取选款登记…</td></tr>}{!data.isLoading && !filteredRows.length && <tr><td colSpan={activeColumns.length + 2} className="selection-placeholder"><Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无选款登记，点击添加一行开始录入" /></td></tr>}
-        {grouped.map((group) => <Fragment key={group.label || "all"}>{group.label && <tr className="selection-group-row"><td colSpan={activeColumns.length + 2}>{group.label}<span>{group.rows.length} 条</span></td></tr>}{group.rows.map((row, index) => <tr key={row._key}><td className="selection-check"><Checkbox aria-label={`选择 ${row.xutiStyleNo || "未填写序缇款号"}`} checked={selectedRows.includes(row._key)} onChange={(event) => setSelectedRows((current) => event.target.checked ? [...current, row._key] : current.filter((key) => key !== row._key))} /></td><td data-reorder-axis="row" data-reorder-key={row._key} data-reorder-target={shiftTarget==="row:"+row._key || undefined} title="按住 Shift 拖动调整行顺序" className={`selection-index selection-row-drag ${selectedRows.includes(row._key) ? "selection-axis-active" : ""}`} tabIndex={0} aria-label={`选择第${displayedRows.indexOf(row) + 1}行`} onMouseDown={event => axisMouseDown(event, "row", row._key)} onMouseEnter={() => axisMouseEnter("row", row._key)} onDragOver={(event: DragEvent) => event.preventDefault()} onDrop={() => { if (draggedRow) moveRow(draggedRow, row._key); setDraggedRow(null); }}>{index + 1}<span className="selection-row-reorder" title="拖动调整行顺序" draggable onMouseDown={event => event.stopPropagation()} onDragStart={() => setDraggedRow(row._key)} onDragEnd={() => setDraggedRow(null)}>⋮⋮</span></td>{activeColumns.map((column) => renderCell(row, column))}</tr>)}</Fragment>)}
-      </tbody></table></div><div className="selection-bulk-add"><Select aria-label="批量添加行数" value={addCount} onChange={setAddCount} options={[10, 20, 50, 100, 200].map(value => ({ value, label: `${value} 行` }))} /><Button icon={<PlusOutlined />} disabled={!canEdit} onClick={() => add(addCount)}>添加 {addCount} 行</Button><span>空白行自动保存</span><SelectionStatistics values={statisticsValues}/></div><div className="selection-bottom-bar"><span>拖动可选择多个单元格后填色；Ctrl/Cmd+C 复制、Ctrl/Cmd+V 粘贴；点击或拖动行号/表头选择整行整列；按住 Shift 拖动行号或表头调整行列顺序。</span><span>{canEdit ? "图片支持网址、本地上传和粘贴。" : "当前账号仅可查看。"}</span></div></Card></>;
+        {grouped.map((group) => <Fragment key={group.label || "all"}>{group.label && <tr className="selection-group-row"><td colSpan={activeColumns.length + 2}>{group.label}<span>{group.rows.length} 条</span></td></tr>}{group.rows.map((row) => <tr key={row._key}><td className="selection-check"><Checkbox aria-label={`选择 ${row.xutiStyleNo || "未填写序缇款号"}`} checked={selectedRows.includes(row._key)} onChange={(event) => setSelectedRows((current) => event.target.checked ? [...current, row._key] : current.filter((key) => key !== row._key))} /></td><td data-reorder-axis="row" data-reorder-key={row._key} data-reorder-target={shiftTarget==="row:"+row._key || undefined} title="按住 Shift 拖动调整行顺序" className={`selection-index selection-row-drag ${selectedRows.includes(row._key) ? "selection-axis-active" : ""}`} tabIndex={0} aria-label={`选择第${rowNumberByKey.get(row._key)}行`} onMouseDown={event => axisMouseDown(event, "row", row._key)} onMouseEnter={() => axisMouseEnter("row", row._key)} onDragOver={(event: DragEvent) => event.preventDefault()} onDrop={() => { if (draggedRow) moveRow(draggedRow, row._key); setDraggedRow(null); }}>{rowNumberByKey.get(row._key)}<span className="selection-row-reorder" title="拖动调整行顺序" draggable onMouseDown={event => event.stopPropagation()} onDragStart={() => setDraggedRow(row._key)} onDragEnd={() => setDraggedRow(null)}>⋮⋮</span></td>{activeColumns.map((column) => renderCell(row, column))}</tr>)}</Fragment>)}
+      </tbody></table></div><div className="selection-bulk-add"><Select aria-label="批量添加行数" value={addCount} onChange={setAddCount} options={[10, 20, 50, 100, 200].map(value => ({ value, label: `${value} 行` }))} /><Button icon={<PlusOutlined />} disabled={!canEdit} onClick={() => add(addCount)}>添加 {addCount} 行</Button><span>空白行自动保存</span><Pagination className="selection-pagination" current={currentPage} pageSize={pageSize} total={allDisplayedRows.length} pageSizeOptions={pageSizes} showSizeChanger showTotal={total => `共 ${total} 条`} onChange={(nextPage, nextPageSize) => { if (nextPageSize !== pageSize) { setPageSize(nextPageSize); setPage(1); } else setPage(nextPage); }} /><SelectionStatistics values={statisticsValues}/></div><div className="selection-bottom-bar"><span>拖动可选择多个单元格后填色；Ctrl/Cmd+C 复制、Ctrl/Cmd+V 粘贴；点击或拖动行号/表头选择整行整列；按住 Shift 拖动行号或表头调整行列顺序。</span><span>{canEdit ? "图片支持网址、本地上传和粘贴。" : "当前账号仅可查看。"}</span></div></Card></>;
 }

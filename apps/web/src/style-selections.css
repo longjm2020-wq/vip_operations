@@ -463,6 +463,7 @@
 .selection-cell-copied::after { background-size:100% var(--copy-top),100% var(--copy-bottom),var(--copy-left) 100%,var(--copy-right) 100%; }
 
 .selection-bulk-add{flex-wrap:wrap;}
+.selection-pagination{margin-left:auto;}
 .selection-statistics{margin-left:auto;display:flex;align-items:center;gap:8px;color:#76533c;font-size:12px;}
 .selection-statistics>span{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:12px;}
 .selection-statistics-menu{width:230px;}
