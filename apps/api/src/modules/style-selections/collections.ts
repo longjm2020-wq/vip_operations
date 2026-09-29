@@ -16,9 +16,18 @@ const collectionFieldNames: Record<(typeof collectionFields)[number], string> = 
   supplyPriceExclTax: "供货价（不含税）", sellingPoints: "产品卖点/简介", reorderDays: "翻单周期",
   inventory: "库存数", images: "图片"
 };
-function conflictingFields(item: Row, source: Row) {
+function reconcile(item: Row, source: Row) {
   const current = snapshot(source);
-  return collectionFields.filter(field => canonical(current[field]) !== canonical(item.original[field]) && canonical(current[field]) !== canonical(item.draft[field]));
+  let merged = {...current};
+  for(const field of collectionFields) {
+    const before=canonical(item.original[field]), outside=canonical(item.draft[field]);
+    if(outside===before) continue;
+    (merged as Row)[field]=item.draft[field];
+  }
+  const info=Object.fromEntries(Object.entries(merged).filter(([field])=>field!=="images"));
+  if(!collectionInfoSchema.safeParse(info).success) merged=item.draft;
+  const overwritten=collectionFields.filter(field=>canonical(current[field])!==canonical(item.original[field]) && canonical(current[field])!==canonical(merged[field]));
+  return {merged,overwritten};
 }
 const tokenSchema = z.string().regex(/^[a-f0-9]{64}$/);
 const editable = (share: Row) => { if (!["DRAFT","REJECTED"].includes(share.status)) fail("INVALID_STATE","本款已提交或已确认，暂不可编辑",409); };
@@ -87,12 +96,12 @@ export async function detail(value: string) {
   const share = await one(db,"SELECT id,title,status,closed,expires_at,revision,feedback FROM selection_collections WHERE id=$1::bigint",value);
   if (!share) fail("NOT_FOUND","收集表不存在",404);
   const items=await rows(db,"SELECT selection_id AS id,xuti_style_no,status,feedback,source_version,original,draft FROM selection_collection_items WHERE collection_id=$1::bigint ORDER BY position",value);
-  const sources=await rows(db,"SELECT * FROM style_selections WHERE id=ANY($1::bigint[])",items.map(item=>item.id));
+  const sources=await rows(db,"SELECT id,supplier_style_no,color,size_range,material,supply_price_excl_tax,selling_points,reorder_days,collection_inventory,images FROM style_selections WHERE id=ANY($1::bigint[])",items.map(item=>item.id));
   const byId=new Map(sources.map(source=>[String(source.id),source]));
   return {...share,items:items.map(item=>{
     const source=byId.get(String(item.id));
-    return {...item,current:source?snapshot(source):null,currentVersion:source?.version ?? null,
-      conflictFields:source?conflictingFields(item,source).map(field=>collectionFieldNames[field]):["原款已删除"]};
+    return {...item,current:source?snapshot(source):null,
+      overwrittenFields:source?reconcile(item,source).overwritten.map(field=>collectionFieldNames[field]):[]};
   })};
 }
 export async function withdrawItem(c: Context, value: string, itemId: string, input: unknown) {
@@ -231,10 +240,7 @@ export async function image(token:string,value:string,imageId:string) {
   return file!;
 }
 export async function review(c:Context,value:string,input:unknown) {
-  const body=parse(z.object({itemId:id.optional(),action:z.enum(["approve","reject","close","renew"]),revision:z.number().int(),reason:z.string().trim().max(1000).default(""),days:z.union([z.literal(7),z.literal(30),z.literal(0)]).optional(),expectedSourceVersion:z.number().int().min(0).optional()}).strict().superRefine((value,ctx)=>{
-    if(value.expectedSourceVersion!==undefined && (value.action!=="approve" || !value.itemId))
-      ctx.addIssue({code:"custom",path:["expectedSourceVersion"],message:"仅逐款确认可核对原款版本"});
-  }),input);
+  const body=parse(z.object({itemId:id.optional(),action:z.enum(["approve","reject","close","renew"]),revision:z.number().int(),reason:z.string().trim().max(1000).default(""),days:z.union([z.literal(7),z.literal(30),z.literal(0)]).optional()}).strict(),input);
   return command(c,"selection-collections/review/"+value,body,async tx=>{
     const share=await internal(tx,value);version(share,body.revision);
     let token: string | undefined;
@@ -253,12 +259,8 @@ export async function review(c:Context,value:string,input:unknown) {
         for(const item of items) {
           const source=await one(tx,"SELECT * FROM style_selections WHERE id=$1::bigint FOR UPDATE",item.selection_id);
           if(!source) fail("EDIT_CONFLICT",`第${item.position+1}款原款已删除，本次未更新任何款式`,409);
-          const conflicts=conflictingFields(item,source);
-          if(body.expectedSourceVersion!==undefined && (items.length!==1 || source.version!==body.expectedSourceVersion))
-            fail("EDIT_CONFLICT","原款资料再次发生修改，请刷新后核对",409);
-          if(conflicts.length && (items.length!==1 || body.expectedSourceVersion===undefined))
-            fail("EDIT_CONFLICT",`第${item.position+1}款的${conflicts.map(field=>collectionFieldNames[field]).join("、")}已在内部修改，本次未更新任何款式。请展开该款核对后单款确认`,409);
-          const {images,...info}=item.draft;parse(collectionInfoSchema,info);
+          const {merged}=reconcile(item,source);
+          const {images,...info}=merged;parse(collectionInfoSchema,info);
           const after=await one(tx,"UPDATE style_selections SET supplier_style_no=$2,color=$3,size_range=$4,material=$5,supply_price_excl_tax=$6::numeric,selling_points=$7,reorder_days=$8,collection_inventory=$9::jsonb,images=$10::jsonb,version=version+1,updated_at=now() WHERE id=$1::bigint RETURNING *",item.selection_id,info.supplierStyleNo || null,info.color || null,info.sizeRange || null,info.material || null,info.supplyPriceExclTax,info.sellingPoints,info.reorderDays,JSON.stringify(info.inventory),JSON.stringify(images));
           await audit(tx,c,"UPDATE","style-selection",item.selection_id,source,after,"确认外部产品信息收集表");
           await rows(tx,"UPDATE selection_collection_items SET status='APPROVED' WHERE collection_id=$1::bigint AND selection_id=$2::bigint",value,item.selection_id);
