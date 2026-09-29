@@ -11,6 +11,7 @@ test("external multiline paste fills successive style rows", async ({ page }) =>
   await page.getByText("添加一行", { exact: true }).click();
 
   const cells = page.locator('textarea[aria-label="序缇款号"]');
+  await expect(cells.first()).toBeVisible();
   const count = await cells.count();
   const values = Array.from({ length: 3 }, (_, index) => `PASTE-${randomUUID().slice(0, 8)}-${index}`);
   await cells.last().evaluate((element, text) => {
