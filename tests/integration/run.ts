@@ -626,6 +626,16 @@ try {
   const photoRead = await ok(`/style-selections/${photoStyle.id}`);
   assert.equal(photoRead.images.length,2);
   assert.equal(photoRead.material,"PHOTO-SEARCH-EXCLUDED");
+  const labelPhotoA = {action:"add",field:"labelImages",image:{id:randomUUID(),url:uploadedImage.url,color:""}};
+  const labelPhotoB = {action:"add",field:"labelImages",image:{id:randomUUID(),url:uploadedImage.url,color:""}};
+  const labelPhotoKey = randomUUID();
+  await Promise.all([ok(`/style-selections/${photoStyle.id}/photos`,"POST",labelPhotoA,labelPhotoKey),ok(`/style-selections/${photoStyle.id}/photos`,"POST",labelPhotoB)]);
+  await ok(`/style-selections/${photoStyle.id}/photos`,"POST",labelPhotoA,labelPhotoKey);
+  assert.equal((await ok(`/style-selections/${photoStyle.id}`)).labelImages.length,2);
+  assert.equal((await request(`/style-selections/${photoStyle.id}/photos`,"POST",{action:"add",field:"labelImages",image:{id:randomUUID(),url:uploadedImage.url,color:"红"}})).status,400);
+  const labelRemoved = await ok(`/style-selections/${photoStyle.id}/photos`,"POST",{action:"remove",field:"labelImages",imageId:labelPhotoA.image.id});
+  assert.deepEqual(labelRemoved.labelImages.map((image:any)=>image.id),[labelPhotoB.image.id]);
+  assert.equal(labelRemoved.images.length,2);
   assert.equal((await request(`/style-selections/${photoStyle.id}/photos`,"POST",{action:"add",image:{id:randomUUID(),url:uploadedImage.url,color:"不存在"}})).status,400);
   assert.equal((await request(`/style-selections/${photoStyle.id}/photos`,"POST",photoBodyA,randomUUID(),{cookie:"",csrf:""})).status,401);
   assert.equal((await ok("/style-selections?photoSearch=true&q=CAMERA-CODE-1"))[0].id,photoStyle.id);

@@ -345,18 +345,21 @@ export async function nextPhotoStyle(value: string, query: unknown) {
 /** Granular image operations merge under the row lock instead of replacing a stale array. */
 export async function changePhoto(c: Context, value: string, input: unknown) {
   const body = parse(z.discriminatedUnion("action", [
-    z.object({ action: z.literal("add"), image: image.extend({ color: z.string().trim().min(1).max(100) }) }).strict(),
-    z.object({ action: z.literal("remove"), imageId: z.string().min(1).max(100) }).strict(),
+    z.object({ action: z.literal("add"), field: z.enum(["images", "labelImages"]).default("images"), image }).strict(),
+    z.object({ action: z.literal("remove"), field: z.enum(["images", "labelImages"]).default("images"), imageId: z.string().min(1).max(100) }).strict(),
   ]), input);
   return command(c, "selection.photo/"+value, body, async tx => {
     const before = await entity(tx, "style_selections", value, true);
-    let images = Array.isArray(before.images) ? before.images : [];
+    const field = body.field;
+    const storedField = field === "labelImages" ? "label_images" : "images";
+    let images = Array.isArray(before[storedField]) ? before[storedField] : [];
     if (body.action === "add") {
-      validateImageColors([body.image], before.color);
+      if (field === "images") { parse(image.extend({ color: z.string().trim().min(1).max(100) }), body.image); validateImageColors([body.image], before.color); }
+      else parse(labelImage, body.image);
       const existing = images.find((item: Row) => item.id === body.image.id);
       if (existing && (existing.url !== body.image.url || existing.color !== body.image.color)) fail("EDIT_CONFLICT", "图片标识已被使用，请重新上传", 409);
       if (!existing) images = [...images, body.image];
     } else images = images.filter((item: Row) => item.id !== body.imageId);
-    return persist(tx, c, { images }, value);
+    return persist(tx, c, { [field]: images }, value);
   });
 }

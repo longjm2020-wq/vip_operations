@@ -22,3 +22,4 @@ html.mobile-photo-page, .mobile-photo-page body, .mobile-photo-page #root { widt
 .mobile-photo-metadata { max-width: calc(100vw - 24px); margin-inline: auto; top: 16px; padding-bottom: 16px; }
 .mobile-photo-metadata .ant-modal-container { max-height: calc(100dvh - 32px); overflow-y: auto; overscroll-behavior: contain; }
 .mobile-photo-header .ant-input-search { width: 100%; min-width: 0; }
+#mobile-label-photos { scroll-margin-top: 130px; }

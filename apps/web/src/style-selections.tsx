@@ -183,7 +183,7 @@ function ImageCell({ images, colors, disabled, onChange, mobileId, labelImages =
       {!labelImages && <Select className="selection-image-color-select" size="small" disabled={disabled} allowClear value={image.color || undefined} placeholder="命名颜色" options={colors.map((color) => ({ value: color, label: color }))} onChange={(color) => onChange(images.map((item) => item.id === image.id ? { ...item, color: color || "" } : item))} />}
     </div>)}</div></Image.PreviewGroup>
     {!disabled && <div className="selection-image-adders">
-      {!labelImages && <SelectionPhotoQr rowId={mobileId} disabled={!mobileId} />}
+      <SelectionPhotoQr rowId={mobileId} disabled={!mobileId} labelImages={labelImages} />
       <Popover trigger="click" open={linkOpen} onOpenChange={setLinkOpen} title="添加图片链接" content={<Space.Compact className="selection-image-url"><Input size="small" aria-label="图片网址" value={url} placeholder="粘贴图片网址" onChange={(event) => setUrl(event.target.value)} onPressEnter={addUrl} /><Button size="small" onClick={addUrl}>添加</Button></Space.Compact>}>
         <Button className="selection-mini-tag" size="small" icon={<LinkOutlined />}>链接</Button>
       </Popover>
@@ -544,7 +544,7 @@ export function StyleSelectionsPage() {
     };
     const cell = (content: React.ReactNode) => <Dropdown key={column.key} trigger={["contextMenu"]} menu={{ items: [{ key: "format", label: "设置单元格格式", icon: <SettingOutlined />, disabled: !canEdit }], onClick: openFormat }}><td {...common} data-vertical-align={row.cellVerticalAlignments?.[column.key] || "middle"} data-text-color={row.cellTextColors?.[column.key]} style={{ color: row.cellTextColors?.[column.key], textAlign: row.cellAlignments?.[column.key] || "left", backgroundColor: colorOptions.find(option => option.value === (row.cellColors?.[column.key] || row.rowColor))?.color }}><div className="selection-cell-content">{content}</div></td></Dropdown>;
     if (column.key === "images") return cell(<ImageCell mobileId={row.id && sameRow(row, original.current.get(row._key) || {}) ? String(row.id) : undefined} images={rowImages(row)} colors={splitTags(row.color)} disabled={disabled} onChange={(value) => update(row._key, column, value)} />);
-    if (column.key === "labelImages") return cell(<ImageCell labelImages images={rowLabelImages(row)} colors={[]} disabled={disabled} onChange={(value) => update(row._key, column, value)} />);
+    if (column.key === "labelImages") return cell(<ImageCell labelImages mobileId={row.id && sameRow(row, original.current.get(row._key) || {}) ? String(row.id) : undefined} images={rowLabelImages(row)} colors={[]} disabled={disabled} onChange={(value) => update(row._key, column, value)} />);
     if (column.key === "color") return cell(<TagCell value={row.color} disabled={disabled} placeholder="+ 颜色"  />);
     if (column.key === "sizeRange") return cell(<TagCell value={row.sizeRange} disabled={disabled} placeholder="+ 尺码"  />);
     const numberFormat = row.cellNumberFormats?.[column.key];
