@@ -597,6 +597,22 @@ try {
   const manySaved = await ok("/style-selections/" + selection.id, "PATCH", { images: manyImages, expectedUpdatedAt: savedAgain.updatedAt });
   assert.equal(manySaved.images.length, 12);
   check("selection images upload independently, enforce size and access, and allow more than five images");
+  const occupiedText = await ok("/style-selections", "POST", { xutiStyleNo: "OCCUPIED-TEXT", sortOrder: 0 });
+  const occupiedImage = await ok("/style-selections", "POST", { images: [{ id: randomUUID(), url: uploadedImage.url, color: "" }], sortOrder: 0 });
+  const occupiedLabel = await ok("/style-selections", "POST", { labelImages: [{ id: randomUUID(), url: uploadedImage.url, color: "" }], sortOrder: 0 });
+  const firstEmpty = await ok("/style-selections", "POST", { cellColors: { xutiStyleNo: "PINK" }, sortOrder: 0 });
+  const firstKey = randomUUID();
+  assert.equal((await ok("/style-selections/photo-next-blank", "POST", {}, firstKey)).id, firstEmpty.id);
+  assert.equal((await ok("/style-selections/photo-next-blank", "POST", {}, firstKey)).id, firstEmpty.id);
+  await ok(`/style-selections/${firstEmpty.id}`, "PATCH", { supplierCode: "OCCUPIED-CODE" });
+  const secondEmpty = await ok("/style-selections", "POST", { sortOrder: 0 });
+  assert.equal((await ok("/style-selections/photo-next-blank", "POST", {})).id, secondEmpty.id);
+  await ok(`/style-selections/${secondEmpty.id}`, "PATCH", { supplierStyleNo: "OCCUPIED-SUPPLIER" });
+  const nextAfterOccupied = await ok("/style-selections/photo-next-blank", "POST", {});
+  for (const occupied of [occupiedText, occupiedImage, occupiedLabel, firstEmpty, secondEmpty])
+    assert.notEqual(nextAfterOccupied.id, occupied.id);
+  assert.equal((await request("/style-selections/photo-next-blank", "POST", {}, randomUUID(), { cookie: "", csrf: "" })).status, 401);
+  check("mobile add style reuses the first unoccupied row and skips text and both image fields");
   const photoStyle = await ok("/style-selections", "POST", { xutiStyleNo:"PHOTO-QA-001", supplierStyleNo:"CAMERA-SUP-1", supplierCode:"CAMERA-CODE-1", color:"红/蓝", sortOrder:9000, material:"PHOTO-SEARCH-EXCLUDED" });
   const photoStyleNext = await ok("/style-selections", "POST", { xutiStyleNo:"PHOTO-QA-002", color:"黑", sortOrder:9001 });
   const photoBodyA = {action:"add",image:{id:randomUUID(),url:uploadedImage.url,color:"红"}};

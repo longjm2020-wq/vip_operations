@@ -303,6 +303,30 @@ export async function photoDetail(value: string) {
   if (!result) fail("NOT_FOUND", "该款已不存在，请重新搜索", 404);
   return result;
 }
+/** Reuse the first content-free row in manual order, creating one only when none exists. */
+export async function nextBlankPhotoStyle(c: Context) {
+  return command(c, "style-selections/photo-next-blank", {}, async (tx) => {
+    await tx.$executeRawUnsafe("LOCK TABLE style_selections IN SHARE ROW EXCLUSIVE MODE");
+    const blank = await one(tx, `SELECT ${selectColumns} ${source}
+      WHERE s.registration_batch IS NULL
+        AND (s.images IS NULL OR s.images = '[]'::jsonb)
+        AND (s.label_images IS NULL OR s.label_images = '[]'::jsonb)
+        AND nullif(btrim(s.xuti_style_no), '') IS NULL
+        AND nullif(btrim(s.supplier_style_no), '') IS NULL
+        AND nullif(btrim(s.supplier_code), '') IS NULL
+        AND nullif(btrim(s.color), '') IS NULL
+        AND nullif(btrim(s.size_range), '') IS NULL
+        AND nullif(btrim(s.material), '') IS NULL
+        AND s.supply_price_excl_tax IS NULL AND s.vip_price IS NULL
+        AND s.live_price IS NULL AND s.tag_price IS NULL
+        AND nullif(btrim(s.selling_points), '') IS NULL
+        AND s.reorder_days IS NULL
+        AND (s.collection_inventory IS NULL OR s.collection_inventory = '[]'::jsonb)
+        AND NOT EXISTS (SELECT 1 FROM jsonb_each_text(s.extra_fields) AS field WHERE btrim(field.value) <> '')
+      ORDER BY s.sort_order ASC,s.id DESC LIMIT 1`);
+    return blank || persist(tx, c, {}, undefined);
+  });
+}
 export async function nextPhotoStyle(value: string, query: unknown) {
   const current = await entity(db, "style_selections", value);
   const q = String(query || "").trim().slice(0, 100);

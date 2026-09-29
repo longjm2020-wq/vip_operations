@@ -281,9 +281,9 @@ export function StyleSelectionsPage() {
     return () => window.clearInterval(timer);
   }, [editingId]);
   useEffect(() => {
-    if (!data.data || appliedSnapshot.current === snapshot || saving || rows.some((row) => (row.id || hasContent(row)) && (!row.id || !sameRow(row, original.current.get(row._key) || {})))) return;
+    if (!data.data || appliedSnapshot.current === snapshot || saving || rows.some((row) => !row.id || !sameRow(row, original.current.get(row._key) || {}))) return;
     const next = (data.data.data || []).map((row: Row) => ({ ...normalizeSelection(row), _key: rows.find((current) => current.id === row.id)?._key || String(row.id) }));
-    setRows([...next, ...rows.filter(row => !row.id && !hasContent(row))]); setErrors({});
+    setRows(next); setErrors({});
     original.current = new Map(next.map((row: Row) => [row._key, { ...row }])); appliedSnapshot.current = snapshot;
   }, [data.data, saving, snapshot, rows]);
 
@@ -301,8 +301,7 @@ export function StyleSelectionsPage() {
     setSelectedRows(current => { const next = current.filter(key => rowKeys.has(key)); return next.length === current.length ? current : next; });
     setSelectedCells(current => { const next = new Set([...current].filter(id => { const [rowKey, columnKey] = id.split("::"); return rowKeys.has(rowKey) && visible.includes(columnKey); })); return next.size === current.size ? current : next; });
   }, [filteredRows, visible]);
-  const hasContent = (row: Row) => baseKeys.some((key) => imageKeys.has(key) ? (key === "images" ? rowImages(row) : rowLabelImages(row)).length : Boolean(clean(row[key]))) || Object.values(row.extraFields || {}).some(Boolean) || Object.keys(row.cellColors || {}).length > 0 || Object.keys(row.cellAlignments || {}).length > 0 || Object.keys(row.cellVerticalAlignments || {}).length > 0 || Object.keys(row.cellTextColors || {}).length > 0 || Object.keys(row.cellNumberFormats || {}).length > 0;
-  const dirtyCount = rows.filter((row) => (row.id || hasContent(row)) && (!row.id || !sameRow(row, original.current.get(row._key) || {}))).length;
+  const dirtyCount = rows.filter((row) => !row.id || !sameRow(row, original.current.get(row._key) || {})).length;
 
   const update = (key: string, column: Column, value: unknown) => {
     setCopiedCells(new Set());
@@ -456,7 +455,7 @@ export function StyleSelectionsPage() {
   };
   const save = async () => {
     if (!canEdit || saveLock.current) return;
-    const changed = rows.filter((row) => attempts.current.eligible(row) && (!row.id || !sameRow(row, original.current.get(row._key) || {})) && (row.id || hasContent(row)));
+    const changed = rows.filter((row) => attempts.current.eligible(row) && (!row.id || !sameRow(row, original.current.get(row._key) || {})));
     if (!changed.length) return;
     saveLock.current = true;
     setSaving(true);
