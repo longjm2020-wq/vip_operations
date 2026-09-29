@@ -1,5 +1,9 @@
+export function absoluteSelectionImageUrl(url: string): string {
+  return new URL(url, window.location.origin).href;
+}
+
 async function imageBlob(url: string): Promise<Blob> {
-  const response = await fetch(url, { credentials: "same-origin" });
+  const response = await fetch(absoluteSelectionImageUrl(url), { credentials: "same-origin" });
   if (!response.ok) throw new Error(`图片下载失败（HTTP ${response.status}）`);
   const blob = await response.blob();
   if (!blob.type.startsWith("image/")) throw new Error("图片地址没有返回可用的图片文件");
@@ -27,6 +31,10 @@ export async function copySelectionImage(url: string): Promise<void> {
   if (!navigator.clipboard?.write || typeof ClipboardItem === "undefined") throw new Error("当前浏览器不支持复制图片，请改用下载图片");
   // Start the clipboard write in the menu click's user gesture; the image can load asynchronously.
   await navigator.clipboard.write([new ClipboardItem({ "image/png": pngBlob(url) })]);
+}
+
+export async function copySelectionImageAddress(url: string): Promise<void> {
+  await navigator.clipboard.writeText(absoluteSelectionImageUrl(url));
 }
 
 export async function downloadSelectionImage(url: string, name: string): Promise<void> {

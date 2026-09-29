@@ -5,7 +5,7 @@ import { SelectionPhotoQr } from "./selection-photo-qr";
 import { SelectionFilterPanel } from "./selection-filter-panel";
 import type { SelectionView } from "../../../packages/contracts/src/selection-view";
 import { selectionImageLinks, invalidSelectionImage } from "./selection-image-links";
-import { copySelectionImage, downloadSelectionImage } from "./selection-image-actions";
+import { copySelectionImage, copySelectionImageAddress, downloadSelectionImage } from "./selection-image-actions";
 import { parseSelectionClipboard } from "./selection-clipboard";
 import { duplicateStyleCounts, selectionStyleKey } from "./selection-duplicates";
 import { SelectionFormatModal, type FormatPatch } from "./selection-format-modal";
@@ -48,6 +48,11 @@ const baseColumns: Column[] = [
 ];
 const baseKeys = baseColumns.map((column) => column.key);
 const imageKeys = new Set(["images", "labelImages"]);
+const imageContextItems = [
+  { key: "copy-image", label: "复制当前图片", icon: <CopyOutlined /> },
+  { key: "download-image", label: "下载当前图片", icon: <DownloadOutlined /> },
+  { key: "copy-image-url", label: "复制图片地址", icon: <LinkOutlined /> },
+];
 const collectionColumns: Column[] = [{key:"sellingPoints",label:"产品卖点/简介",width:200},{key:"reorderDays",label:"翻单周期（天）",width:120},{key:"collectionInventory",label:"库存数",width:160}];
 const collectionKeys = new Set(collectionColumns.map(column => column.key));
 const moneyKeys = new Set(["supplyPriceExclTax", "vipPrice", "livePrice", "tagPrice"]);
@@ -115,7 +120,8 @@ function TagCell({ value, disabled, placeholder }: { value: unknown; disabled: b
   return <div className="selection-tag-preview" tabIndex={0} role="group" aria-label={placeholder.slice(2)} aria-readonly={disabled}>{splitTags(value).map((tag) => <span className="selection-chip" key={tag}>{tag}</span>)}{!splitTags(value).length && <span className="selection-tag-placeholder">{placeholder}</span>}</div>;
 }
 
-function ImagePreviewClose({ children, onClose }: { children: React.ReactNode; onClose: () => void }) {
+function ImagePreviewClose({ children, onClose, imageUrl, imageName }: { children: React.ReactNode; onClose: () => void; imageUrl: string; imageName: string }) {
+  const { message } = App.useApp();
   const container = useRef<HTMLDivElement>(null);
   const button = useRef<HTMLButtonElement>(null);
   useEffect(() => {
@@ -132,7 +138,11 @@ function ImagePreviewClose({ children, onClose }: { children: React.ReactNode; o
     position();
     return () => cancelAnimationFrame(frame);
   }, []);
-  return <div ref={container} style={{ display: "contents" }}>{children}<button ref={button} type="button" className="selection-preview-close" aria-label="关闭图片预览" onPointerDown={event => event.stopPropagation()} onClick={event => { event.stopPropagation(); onClose(); }}><CloseOutlined /></button></div>;
+  return <div ref={container} style={{ display: "contents" }}><Dropdown trigger={["contextMenu"]} overlayStyle={{ zIndex: 9999 }} menu={{ items: imageContextItems, onClick: ({ key }) => {
+    if (key === "copy-image") void copySelectionImage(imageUrl).then(() => message.success("图片已复制")).catch(() => message.error("无法复制图片；外部图片可能禁止跨域读取，可尝试复制图片地址"));
+    if (key === "download-image") void downloadSelectionImage(imageUrl, imageName).then(() => message.success("图片已下载")).catch(() => message.error("无法下载图片；外部图片可能禁止跨域读取，可复制图片地址后打开保存"));
+    if (key === "copy-image-url") void copySelectionImageAddress(imageUrl).then(() => message.success("图片地址已复制")).catch(() => message.error("无法复制图片地址"));
+  } }}><div style={{ display: "contents" }}>{children}</div></Dropdown><button ref={button} type="button" className="selection-preview-close" aria-label="关闭图片预览" onPointerDown={event => event.stopPropagation()} onClick={event => { event.stopPropagation(); onClose(); }}><CloseOutlined /></button></div>;
 }
 
 function ImageCell({ images, colors, disabled, onChange, mobileId, labelImages = false }: { mobileId?: string; images: SelectionImage[]; colors: string[]; disabled: boolean; onChange: (images: SelectionImage[]) => void; labelImages?: boolean }) {
@@ -190,7 +200,7 @@ function ImageCell({ images, colors, disabled, onChange, mobileId, labelImages =
 
   };
   const editor = <div className="selection-images selection-image-editor" tabIndex={disabled ? -1 : 0} aria-label="图片，支持粘贴" onPaste={paste}>
-    <Image.PreviewGroup preview={{ open: galleryPreviewOpen, onOpenChange: setGalleryPreviewOpen, closeIcon: false, imageRender: node => galleryPreviewOpen ? <ImagePreviewClose onClose={() => setGalleryPreviewOpen(false)}>{node}</ImagePreviewClose> : node }}><div className="selection-image-list">{images.map((image, index) => <div className="selection-image-item" key={image.id}>
+    <Image.PreviewGroup preview={{ open: galleryPreviewOpen, onOpenChange: setGalleryPreviewOpen, closeIcon: false, imageRender: (node, info) => galleryPreviewOpen ? <ImagePreviewClose onClose={() => setGalleryPreviewOpen(false)} imageUrl={info.image.url} imageName={`${labelImages ? "洗唛吊牌图" : "款式图片"}-${info.current + 1}`}>{node}</ImagePreviewClose> : node }}><div className="selection-image-list">{images.map((image, index) => <div className="selection-image-item" key={image.id}>
       <i className="selection-image-badge">{index + 1}/{images.length}</i>
       <Image loading="lazy" src={image.url} fallback={invalidSelectionImage} onError={() => imageError(image.url)} alt={failedImages.has(image.url) ? "无效图片，链接无法加载" : labelImages ? "洗唛/吊牌图" : image.color || "款式图片"} width="100%" height="100%" preview={failedImages.has(image.url) ? false : { mask: false }} />
       {image.color && <span className="selection-image-color">{image.color}</span>}
@@ -212,7 +222,7 @@ function ImageCell({ images, colors, disabled, onChange, mobileId, labelImages =
   const all = <><Button className="selection-mini-tag" size="small" onClick={() => setAllOpen(true)}>全部</Button>{gallery}</>;
   if (!images.length) return <div className="selection-image-empty" tabIndex={0} aria-label={`${labelImages ? "洗唛/吊牌图" : "图片"}，支持粘贴链接或图片`} onPaste={paste}><button className="selection-image-placeholder" type="button" disabled={disabled} onClick={() => setAllOpen(true)}>+ 图片</button>{gallery}</div>;
   return <div ref={summaryRef} className="selection-image-summary" data-selection-image-url={images[currentImageIndex].url} data-selection-image-index={currentImageIndex + 1} tabIndex={0} aria-label="图片轮播，点击图片放大" onMouseEnter={() => setCarouselPaused(true)} onMouseLeave={() => setCarouselPaused(false)} onFocus={() => setCarouselPaused(true)} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) setCarouselPaused(false); }} onPaste={paste}>
-    <div className="selection-image-slide"><Image loading="lazy" src={images[currentImageIndex].url} fallback={invalidSelectionImage} onError={() => imageError(images[currentImageIndex].url)} alt={failedImages.has(images[currentImageIndex].url) ? "无效图片，链接无法加载" : labelImages ? "洗唛/吊牌图" : images[currentImageIndex].color || "款式图片"} width="100%" height="100%" preview={failedImages.has(images[currentImageIndex].url) ? false : { mask: false, open: previewOpen, onOpenChange: setPreviewOpen, closeIcon: false, imageRender: node => previewOpen ? <ImagePreviewClose onClose={() => setPreviewOpen(false)}>{node}</ImagePreviewClose> : node }} />
+    <div className="selection-image-slide"><Image loading="lazy" src={images[currentImageIndex].url} fallback={invalidSelectionImage} onError={() => imageError(images[currentImageIndex].url)} alt={failedImages.has(images[currentImageIndex].url) ? "无效图片，链接无法加载" : labelImages ? "洗唛/吊牌图" : images[currentImageIndex].color || "款式图片"} width="100%" height="100%" preview={failedImages.has(images[currentImageIndex].url) ? false : { mask: false, open: previewOpen, onOpenChange: setPreviewOpen, closeIcon: false, imageRender: (node, info) => previewOpen ? <ImagePreviewClose onClose={() => setPreviewOpen(false)} imageUrl={info.image.url} imageName={`${labelImages ? "洗唛吊牌图" : "款式图片"}-${currentImageIndex + 1}`}>{node}</ImagePreviewClose> : node }} />
       <i className="selection-image-badge">{currentImageIndex + 1}/{images.length}</i>
       {images[currentImageIndex].color && <span className="selection-slide-color">{images[currentImageIndex].color}</span>}
       {images.length > 1 && <div className="selection-carousel-controls"><button type="button" aria-label="上一张图片" onClick={() => setImageIndex((currentImageIndex + images.length - 1) % images.length)}>‹</button><button type="button" aria-label="下一张图片" onClick={() => setImageIndex((currentImageIndex + 1) % images.length)}>›</button></div>}
@@ -578,9 +588,7 @@ export function StyleSelectionsPage() {
     };
     const hasImage = imageKeys.has(column.key) && (column.key === "images" ? rowImages(row) : rowLabelImages(row)).length > 0;
     const cell = (content: React.ReactNode) => <Dropdown key={column.key} trigger={["contextMenu"]} menu={{ items: [...(hasImage ? [
-      { key: "copy-image", label: "复制当前图片", icon: <CopyOutlined /> },
-      { key: "download-image", label: "下载当前图片", icon: <DownloadOutlined /> },
-      { key: "copy-image-url", label: "复制图片地址", icon: <LinkOutlined /> },
+      ...imageContextItems,
       { type: "divider" as const },
     ] : []), { key: "format", label: "设置单元格格式", icon: <SettingOutlined />, disabled: !canEdit }], onClick: ({ key }) => {
       if (key === "format") { openFormat(); return; }
@@ -588,7 +596,7 @@ export function StyleSelectionsPage() {
       if (!image) return message.error("未找到当前图片，请重新右键单元格");
       if (key === "copy-image") void copySelectionImage(image.url).then(() => message.success("图片已复制")).catch(() => message.error("无法复制图片；外部图片可能禁止跨域读取，可尝试复制图片地址"));
       if (key === "download-image") void downloadSelectionImage(image.url, image.name).then(() => message.success("图片已下载")).catch(() => message.error("无法下载图片；外部图片可能禁止跨域读取，可复制图片地址后打开保存"));
-      if (key === "copy-image-url") void navigator.clipboard.writeText(image.url).then(() => message.success("图片地址已复制")).catch(() => message.error("无法复制图片地址"));
+      if (key === "copy-image-url") void copySelectionImageAddress(image.url).then(() => message.success("图片地址已复制")).catch(() => message.error("无法复制图片地址"));
     } }}><td {...common} onContextMenu={event => {
       const summary = event.currentTarget.querySelector<HTMLElement>("[data-selection-image-url]");
       contextImage.current = summary?.dataset.selectionImageUrl ? { url: summary.dataset.selectionImageUrl, name: `${row.xutiStyleNo || row.supplierStyleNo || "选款"}-${column.label}-${summary.dataset.selectionImageIndex || "1"}` } : null;
