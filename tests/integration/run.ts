@@ -513,6 +513,7 @@ try {
   const selection = await ok("/style-selections", "POST", {
     registrationBatch: "2026-10-01",
     images: [{ id: randomUUID(), url: "https://example.com/style/select-001.jpg", color: "奶油白" }],
+    labelImages: [{ id: randomUUID(), url: "https://example.com/style/wash-label.jpg", color: "" }, { id: randomUUID(), url: "https://example.com/style/hang-tag.jpg", color: "" }],
     xutiStyleNo: "XUTI-SELECT-001",
     supplierStyleNo: "SUP-SELECT-001",
     supplierCode: "SUP-001",
@@ -544,6 +545,8 @@ try {
   assert.equal(selection.sizeRange, "S/M/L");
   assert.equal(selection.registrationBatch, "2026-10-01");
   assert.equal(selection.images[0].color, "奶油白");
+  assert.equal(selection.labelImages.length, 2);
+  assert.equal(selection.labelImages[1].url, "https://example.com/style/hang-tag.jpg");
   assert.equal(selection.cellColors.vipPrice, "YELLOW");
   assert.equal(selection.cellAlignments.material, "center");
   assert.equal(selection.cellVerticalAlignments.material, "bottom");
@@ -558,6 +561,8 @@ try {
   const selectionList = await ok("/style-selections?q=SUP-SELECT-001&pageSize=100");
   assert.equal(selectionList.length, 1);
   assert.equal(selectionList[0].supplierCode, "SUP-001");
+  assert.equal(selectionList[0].labelImages.length, 2);
+  assert.equal((await request("/style-selections/" + selection.id, "PATCH", { labelImages: [{ id: randomUUID(), url: "https://example.com/invalid.jpg", color: "红" }] })).status, 400);
   const selectedStyle = await ok("/style-selections/" + selection.id, "PATCH", {
     vipPrice: "209.00",
     cellColors: { vipPrice: "GREEN" },

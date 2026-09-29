@@ -15,6 +15,8 @@ describe("selection column filters and selection", () => {
   it("filters images by color and missing images", () => {
     expect(matchesSelectionFilters(row, { images: { mode: "contains", value: "红" } })).toBe(true);
     expect(matchesSelectionFilters({ images: [] }, { images: { mode: "filled", value: "" } })).toBe(false);
+    expect(matchesSelectionFilters({ labelImages: [{ url: "https://example.com/wash-label.jpg" }] }, { labelImages: { mode: "contains", value: "wash-label" } })).toBe(true);
+    expect(matchesSelectionFilters({ labelImages: [] }, { labelImages: { mode: "filled", value: "" } })).toBe(false);
   });
   it("selects only supplied visible rows and columns", () => {
     expect([...selectionAllCells([row], [{ key: "material" }, { key: "custom:a" }])]).toEqual(["1::material", "1::custom:a"]);
@@ -31,6 +33,7 @@ it("clears selected values without losing formatting or leaving invalid image co
   expect(cleared.material).toBe("cotton");
   expect(cleared.cellAlignments).toEqual(row.cellAlignments);
   expect(clearSelectionCells([row], new Set(["1::images"]))[0].images).toEqual([]);
+  expect(clearSelectionCells([{ ...row, labelImages: [{ id: "label" }] }], new Set(["1::labelImages"]))[0].labelImages).toEqual([]);
   expect(row.color).toBe("red");
 });
 

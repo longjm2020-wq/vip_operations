@@ -46,7 +46,7 @@ export function SelectionTransfer({ canEdit, blocked, selectedRows, filteredRows
     try {
       if (!/\.xlsx$/i.test(file.name) || file.size > 20 * 1024 * 1024) throw Error("请选择不超过 20 MB 的 .xlsx 文件");
       const records = await parseSelectionWorkbook(await file.arrayBuffer());
-      for (const row of records) for (const image of row.images || []) {
+      for (const row of records) for (const image of [...(row.images || []), ...(row.labelImages || [])]) {
         if (!image.url.startsWith("data:image/")) continue;
         const [header, base64] = image.url.split(","), mime = header.slice(5, header.indexOf(";"));
         const bytes = Uint8Array.from(atob(base64), char => char.charCodeAt(0));
@@ -77,6 +77,6 @@ export function SelectionTransfer({ canEdit, blocked, selectedRows, filteredRows
       {busy && !plan && <p>正在处理表格资料…</p>}
       {error && <Alert type="error" showIcon title={error} />}
       {result && <Alert type="success" showIcon title={result} />}
-      {plan && <><p>新增 {plan.created} 款，更新 {plan.updated} 款。空白字段保留原值；填写图片将替换原图片。确认后整批写入，任一冲突则整批不写入。</p><Table size="small" rowKey={row => row.values.xutiStyleNo} dataSource={plan.rows} pagination={{ pageSize: 8 }} columns={[{ title: "序缇款号", render: (_, row) => row.values.xutiStyleNo }, { title: "操作", render: (_, row) => row.id ? "更新" : "新增" }, { title: "颜色", render: (_, row) => row.values.color || "保留原值" }, { title: "图片", render: (_, row) => row.values.images ? `${row.values.images.length} 张` : "保留原值" }]} /></>}
+      {plan && <><p>新增 {plan.created} 款，更新 {plan.updated} 款。空白字段保留原值；填写图片或洗唛/吊牌图会分别替换原有对应图片。确认后整批写入，任一冲突则整批不写入。</p><Table size="small" rowKey={row => row.values.xutiStyleNo} dataSource={plan.rows} pagination={{ pageSize: 8 }} columns={[{ title: "序缇款号", render: (_, row) => row.values.xutiStyleNo }, { title: "操作", render: (_, row) => row.id ? "更新" : "新增" }, { title: "颜色", render: (_, row) => row.values.color || "保留原值" }, { title: "图片", render: (_, row) => row.values.images ? `${row.values.images.length} 张` : "保留原值" }, { title: "洗唛/吊牌图", render: (_, row) => row.values.labelImages ? `${row.values.labelImages.length} 张` : "保留原值" }]} /></>}
     </Modal></>;
 }

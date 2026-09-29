@@ -36,6 +36,7 @@ type SelectionImage = { id: string; url: string; color: string };
 type Column = { key: string; label: string; width: number; custom?: boolean };
 const baseColumns: Column[] = [
   { key: "registrationBatch", label: "登记批次", width: 120 }, { key: "images", label: "图片", width: 120 },
+  { key: "labelImages", label: "洗唛/吊牌图", width: 140 },
   { key: "xutiStyleNo", label: "序缇款号", width: 120 }, { key: "supplierStyleNo", label: "供应商款号", width: 120 },
   { key: "supplierCode", label: "供应商编码", width: 120 }, { key: "color", label: "颜色", width: 120 },
   { key: "sizeRange", label: "尺码范围", width: 120 }, { key: "material", label: "材质", width: 120 },
@@ -43,6 +44,7 @@ const baseColumns: Column[] = [
   { key: "livePrice", label: "直播价", width: 120 }, { key: "tagPrice", label: "吊牌价", width: 120 },
 ];
 const baseKeys = baseColumns.map((column) => column.key);
+const imageKeys = new Set(["images", "labelImages"]);
 const collectionColumns: Column[] = [{key:"sellingPoints",label:"产品卖点/简介",width:200},{key:"reorderDays",label:"翻单周期（天）",width:120},{key:"collectionInventory",label:"库存数",width:160}];
 const collectionKeys = new Set(collectionColumns.map(column => column.key));
 const moneyKeys = new Set(["supplyPriceExclTax", "vipPrice", "livePrice", "tagPrice"]);
@@ -71,6 +73,7 @@ function ColumnNameEditor({ column, onSave }: { column: Column; onSave: (name: s
   return <Input className="selection-column-name" variant="borderless" aria-label={`编辑字段名：${column.label}`} title="编辑字段名，回车或离开后保存" maxLength={40} value={value} onChange={event => setValue(event.target.value)} onBlur={save} onPressEnter={event => { event.currentTarget.blur(); }} onKeyDown={event => { event.stopPropagation(); if (event.key === "Escape") setValue(column.label); }} onMouseDown={event => event.stopPropagation()} onDragStart={event => { event.preventDefault(); event.stopPropagation(); }} />;
 }
 const rowImages = (row: Row): SelectionImage[] => Array.isArray(row.images) ? row.images : [];
+const rowLabelImages = (row: Row): SelectionImage[] => Array.isArray(row.labelImages) ? row.labelImages : [];
 const valueAt = (row: Row, column: Column) => column.custom ? row.extraFields?.[column.key] || "" : row[column.key];
 const withValue = (row: Row, column: Column, value: unknown) => collectionKeys.has(column.key) ? row : column.custom
   ? { ...row, extraFields: { ...(row.extraFields || {}), [column.key]: String(value || "") } }
@@ -118,7 +121,7 @@ function ImagePreviewClose({ children, onClose }: { children: React.ReactNode; o
   return <div ref={container} style={{ display: "contents" }}>{children}<button ref={button} type="button" className="selection-preview-close" aria-label="关闭图片预览" onPointerDown={event => event.stopPropagation()} onClick={event => { event.stopPropagation(); onClose(); }}><CloseOutlined /></button></div>;
 }
 
-function ImageCell({ images, colors, disabled, onChange, mobileId }: { mobileId?: string; images: SelectionImage[]; colors: string[]; disabled: boolean; onChange: (images: SelectionImage[]) => void }) {
+function ImageCell({ images, colors, disabled, onChange, mobileId, labelImages = false }: { mobileId?: string; images: SelectionImage[]; colors: string[]; disabled: boolean; onChange: (images: SelectionImage[]) => void; labelImages?: boolean }) {
   const { message } = App.useApp();
   const [url, setUrl] = useState("");
   const [failedImages, setFailedImages] = useState<Set<string>>(new Set());
@@ -147,14 +150,14 @@ function ImageCell({ images, colors, disabled, onChange, mobileId }: { mobileId?
     const value = url.trim();
     if (!value) return;
     if (!selectionImageLinks(value).length) return message.error("请输入以 http:// 或 https:// 开头的图片网址");
-    add([{ id: crypto.randomUUID(), url: value, color: colors[0] || "" }]); setUrl(""); setLinkOpen(false);
+    add([{ id: crypto.randomUUID(), url: value, color: labelImages ? "" : colors[0] || "" }]); setUrl(""); setLinkOpen(false);
   };
   const addFiles = async (files: File[]) => {
     if (disabled || !files.length || busy) return;
     setBusy(true);
     const next: SelectionImage[] = [];
     try {
-      for (let file of files) { file = await prepareUpload(file); const uploaded = await api("/style-selections/images", "POST", { data: await readUpload(file) }); next.push({ id: crypto.randomUUID(), url: uploaded.data.url, color: colors[0] || "" }); }
+      for (let file of files) { file = await prepareUpload(file); const uploaded = await api("/style-selections/images", "POST", { data: await readUpload(file) }); next.push({ id: crypto.randomUUID(), url: uploaded.data.url, color: labelImages ? "" : colors[0] || "" }); }
     } catch (error) { message.error((error as Error).message); } finally { if (next.length) add(next); setBusy(false); }
   };
   const paste = (event: ClipboardEvent<HTMLDivElement>) => {
@@ -166,19 +169,19 @@ function ImageCell({ images, colors, disabled, onChange, mobileId }: { mobileId?
     event.preventDefault(); event.stopPropagation();
     const links = selectionImageLinks(text);
     if (!links.length) { message.warning("请粘贴完整的 http(s) 图片链接，多张图片每行一个链接"); return; }
-    add(links.map(url => ({ id: crypto.randomUUID(), url, color: colors[0] || "" })));
+    add(links.map(url => ({ id: crypto.randomUUID(), url, color: labelImages ? "" : colors[0] || "" })));
 
   };
   const editor = <div className="selection-images selection-image-editor" tabIndex={disabled ? -1 : 0} aria-label="图片，支持粘贴" onPaste={paste}>
     <Image.PreviewGroup preview={{ open: galleryPreviewOpen, onOpenChange: setGalleryPreviewOpen, closeIcon: false, imageRender: node => galleryPreviewOpen ? <ImagePreviewClose onClose={() => setGalleryPreviewOpen(false)}>{node}</ImagePreviewClose> : node }}><div className="selection-image-list">{images.map((image, index) => <div className="selection-image-item" key={image.id}>
       <i className="selection-image-badge">{index + 1}/{images.length}</i>
-      <Image src={image.url} fallback={invalidSelectionImage} onError={() => imageError(image.url)} alt={failedImages.has(image.url) ? "无效图片，链接无法加载" : image.color || "款式图片"} width="100%" height="100%" preview={failedImages.has(image.url) ? false : { mask: false }} />
+      <Image src={image.url} fallback={invalidSelectionImage} onError={() => imageError(image.url)} alt={failedImages.has(image.url) ? "无效图片，链接无法加载" : labelImages ? "洗唛/吊牌图" : image.color || "款式图片"} width="100%" height="100%" preview={failedImages.has(image.url) ? false : { mask: false }} />
       {image.color && <span className="selection-image-color">{image.color}</span>}
       {!disabled && <Button className="selection-image-remove" type="text" size="small" aria-label="移除图片" icon={<DeleteOutlined />} onClick={() => onChange(images.filter((item) => item.id !== image.id))} />}
-      <Select className="selection-image-color-select" size="small" disabled={disabled} allowClear value={image.color || undefined} placeholder="命名颜色" options={colors.map((color) => ({ value: color, label: color }))} onChange={(color) => onChange(images.map((item) => item.id === image.id ? { ...item, color: color || "" } : item))} />
+      {!labelImages && <Select className="selection-image-color-select" size="small" disabled={disabled} allowClear value={image.color || undefined} placeholder="命名颜色" options={colors.map((color) => ({ value: color, label: color }))} onChange={(color) => onChange(images.map((item) => item.id === image.id ? { ...item, color: color || "" } : item))} />}
     </div>)}</div></Image.PreviewGroup>
     {!disabled && <div className="selection-image-adders">
-      <SelectionPhotoQr rowId={mobileId} disabled={!mobileId} />
+      {!labelImages && <SelectionPhotoQr rowId={mobileId} disabled={!mobileId} />}
       <Popover trigger="click" open={linkOpen} onOpenChange={setLinkOpen} title="添加图片链接" content={<Space.Compact className="selection-image-url"><Input size="small" aria-label="图片网址" value={url} placeholder="粘贴图片网址" onChange={(event) => setUrl(event.target.value)} onPressEnter={addUrl} /><Button size="small" onClick={addUrl}>添加</Button></Space.Compact>}>
         <Button className="selection-mini-tag" size="small" icon={<LinkOutlined />}>链接</Button>
       </Popover>
@@ -188,11 +191,11 @@ function ImageCell({ images, colors, disabled, onChange, mobileId }: { mobileId?
       <input ref={uploadInput} hidden type="file" multiple accept="image/jpeg,image/png,image/webp" onChange={(event) => { const files = Array.from(event.target.files || []); event.currentTarget.value = ""; void addFiles(files); }} />
     </div>}
   </div>;
-  const gallery = <Modal title={`全部图片 · ${images.length} 张`} open={allOpen} onCancel={() => setAllOpen(false)} footer={null} width={560}><div className="selection-image-gallery">{editor}{!images.length && <Empty description="暂无图片，可添加链接、上传或粘贴图片" />}</div></Modal>;
+  const gallery = <Modal title={`${labelImages ? "洗唛/吊牌图" : "全部图片"} · ${images.length} 张`} open={allOpen} onCancel={() => setAllOpen(false)} footer={null} width={560}><div className="selection-image-gallery">{editor}{!images.length && <Empty description="暂无图片，可添加链接、上传或粘贴图片" />}</div></Modal>;
   const all = <><Button className="selection-mini-tag" size="small" onClick={() => setAllOpen(true)}>全部</Button>{gallery}</>;
-  if (!images.length) return <div className="selection-image-empty" tabIndex={0} aria-label="图片，支持粘贴链接或图片" onPaste={paste}><button className="selection-image-placeholder" type="button" disabled={disabled} onClick={() => setAllOpen(true)}>+ 图片</button>{gallery}</div>;
+  if (!images.length) return <div className="selection-image-empty" tabIndex={0} aria-label={`${labelImages ? "洗唛/吊牌图" : "图片"}，支持粘贴链接或图片`} onPaste={paste}><button className="selection-image-placeholder" type="button" disabled={disabled} onClick={() => setAllOpen(true)}>+ 图片</button>{gallery}</div>;
   return <div className="selection-image-summary" tabIndex={0} aria-label="图片轮播，点击图片放大" onMouseEnter={() => setCarouselPaused(true)} onMouseLeave={() => setCarouselPaused(false)} onFocus={() => setCarouselPaused(true)} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) setCarouselPaused(false); }} onPaste={paste}>
-    <div className="selection-image-slide"><Image src={images[currentImageIndex].url} fallback={invalidSelectionImage} onError={() => imageError(images[currentImageIndex].url)} alt={failedImages.has(images[currentImageIndex].url) ? "无效图片，链接无法加载" : images[currentImageIndex].color || "款式图片"} width="100%" height="100%" preview={failedImages.has(images[currentImageIndex].url) ? false : { mask: false, open: previewOpen, onOpenChange: setPreviewOpen, closeIcon: false, imageRender: node => previewOpen ? <ImagePreviewClose onClose={() => setPreviewOpen(false)}>{node}</ImagePreviewClose> : node }} />
+    <div className="selection-image-slide"><Image src={images[currentImageIndex].url} fallback={invalidSelectionImage} onError={() => imageError(images[currentImageIndex].url)} alt={failedImages.has(images[currentImageIndex].url) ? "无效图片，链接无法加载" : labelImages ? "洗唛/吊牌图" : images[currentImageIndex].color || "款式图片"} width="100%" height="100%" preview={failedImages.has(images[currentImageIndex].url) ? false : { mask: false, open: previewOpen, onOpenChange: setPreviewOpen, closeIcon: false, imageRender: node => previewOpen ? <ImagePreviewClose onClose={() => setPreviewOpen(false)}>{node}</ImagePreviewClose> : node }} />
       <i className="selection-image-badge">{currentImageIndex + 1}/{images.length}</i>
       {images[currentImageIndex].color && <span className="selection-slide-color">{images[currentImageIndex].color}</span>}
       {images.length > 1 && <div className="selection-carousel-controls"><button type="button" aria-label="上一张图片" onClick={() => setImageIndex((currentImageIndex + images.length - 1) % images.length)}>‹</button><button type="button" aria-label="下一张图片" onClick={() => setImageIndex((currentImageIndex + 1) % images.length)}>›</button></div>}
@@ -223,6 +226,7 @@ export function StyleSelectionsPage() {
   const [addCount, setAddCount] = useState(10);
   const [selectedRows, setSelectedRows] = useState<string[]>([]);
   const [copiedCells, setCopiedCells] = useState<Set<string>>(new Set());
+  const copiedSingleValue = useRef<string | null>(null);
   const [focusedCell, setFocusedCell] = useState<string | null>(null);
   const [formatTarget, setFormatTarget] = useState<{ ids: Set<string>; sample: unknown; initial: FormatPatch } | null>(null);
   const [cellTextEditing, setCellTextEditing] = useState(false);
@@ -297,7 +301,7 @@ export function StyleSelectionsPage() {
     setSelectedRows(current => { const next = current.filter(key => rowKeys.has(key)); return next.length === current.length ? current : next; });
     setSelectedCells(current => { const next = new Set([...current].filter(id => { const [rowKey, columnKey] = id.split("::"); return rowKeys.has(rowKey) && visible.includes(columnKey); })); return next.size === current.size ? current : next; });
   }, [filteredRows, visible]);
-  const hasContent = (row: Row) => baseKeys.some((key) => key === "images" ? rowImages(row).length : Boolean(clean(row[key]))) || Object.values(row.extraFields || {}).some(Boolean) || Object.keys(row.cellColors || {}).length > 0 || Object.keys(row.cellAlignments || {}).length > 0 || Object.keys(row.cellVerticalAlignments || {}).length > 0 || Object.keys(row.cellTextColors || {}).length > 0 || Object.keys(row.cellNumberFormats || {}).length > 0;
+  const hasContent = (row: Row) => baseKeys.some((key) => imageKeys.has(key) ? (key === "images" ? rowImages(row) : rowLabelImages(row)).length : Boolean(clean(row[key]))) || Object.values(row.extraFields || {}).some(Boolean) || Object.keys(row.cellColors || {}).length > 0 || Object.keys(row.cellAlignments || {}).length > 0 || Object.keys(row.cellVerticalAlignments || {}).length > 0 || Object.keys(row.cellTextColors || {}).length > 0 || Object.keys(row.cellNumberFormats || {}).length > 0;
   const dirtyCount = rows.filter((row) => (row.id || hasContent(row)) && (!row.id || !sameRow(row, original.current.get(row._key) || {}))).length;
 
   const update = (key: string, column: Column, value: unknown) => {
@@ -308,7 +312,7 @@ export function StyleSelectionsPage() {
   const add = (count = 1) => {
     if (!canEdit) return;
     const nextOrder = Math.max(0, ...rows.map((row) => Number(row.sortOrder || 0))) + 1;
-    const next = Array.from({ length: count }, (_, index) => ({ _key: crypto.randomUUID(), images: [], cellColors: {}, extraFields: {}, sortOrder: nextOrder + index, rowColor: "NONE" }));
+    const next = Array.from({ length: count }, (_, index) => ({ _key: crypto.randomUUID(), images: [], labelImages: [], cellColors: {}, extraFields: {}, sortOrder: nextOrder + index, rowColor: "NONE" }));
     setRows(current => [...current, ...next]); setSelectedRows(next.map(row => row._key));
   };
   const deleteRows = async () => {
@@ -403,9 +407,8 @@ export function StyleSelectionsPage() {
   const cellMouseDown = (rowKey: string, columnKey: string) => { axisSelection.current = null; setSelectedRows([]); setCellTextEditing(false); const point = { rowKey, columnKey }; setCellAnchor(point); setSelectingCells(true); setEditingId(rows.find((row) => row._key === rowKey)?.id || null); setSelectedCells(new Set([cellId(rowKey, columnKey)])); };
   const cellMouseEnter = (rowKey: string, columnKey: string) => { if (selectingCells && cellAnchor) selectRectangle(cellAnchor, { rowKey, columnKey }); };
   const copyValue = (row: Row, column: Column) => {
-    const value = column.key === "images" ? rowImages(row).map(image => image.url).join("; ") : column.key === "collectionInventory" ? (row.collectionInventory || []).reduce((sum:number,item:Row)=>sum+item.available+item.production,0) : valueAt(row,column);
-    const text = String(value ?? "");
-    return /[\t\n\r"]/.test(text) ? '"' + text.replace(/"/g, '""') + '"' : text;
+    const value = imageKeys.has(column.key) ? (column.key === "images" ? rowImages(row) : rowLabelImages(row)).map(image => image.url).join("; ") : column.key === "collectionInventory" ? (row.collectionInventory || []).reduce((sum:number,item:Row)=>sum+item.available+item.production,0) : valueAt(row,column);
+    return String(value ?? "");
   };
   const copyCells = (event: ClipboardEvent<HTMLElement>, rowKey: string, columnKey: string) => {
     if (!event.currentTarget.contains(event.target as Node) || (cellTextEditing && selectedCells.size <= 1)) return;
@@ -413,23 +416,43 @@ export function StyleSelectionsPage() {
     const positions = [...selected].map((value) => { const [r, c] = value.split("::"); return { r: displayedRows.findIndex((row) => row._key === r), c: activeColumns.findIndex((column) => column.key === c) }; }).filter((item) => item.r >= 0 && item.c >= 0);
     if (!positions.length) return;
     const minRow = Math.min(...positions.map((item) => item.r)), maxRow = Math.max(...positions.map((item) => item.r)), minCol = Math.min(...positions.map((item) => item.c)), maxCol = Math.max(...positions.map((item) => item.c));
-    const text = Array.from({ length: maxRow - minRow + 1 }, (_, r) => Array.from({ length: maxCol - minCol + 1 }, (_, c) => copyValue(displayedRows[minRow + r], activeColumns[minCol + c])).join("\t")).join("\n");
+    const text = positions.length === 1
+      ? copyValue(displayedRows[minRow], activeColumns[minCol])
+      : Array.from({ length: maxRow - minRow + 1 }, (_, r) => Array.from({ length: maxCol - minCol + 1 }, (_, c) => {
+        const value = copyValue(displayedRows[minRow + r], activeColumns[minCol + c]);
+        return /[\t\n\r"]/.test(value) ? '"' + value.replace(/"/g, '""') + '"' : value;
+      }).join("\t")).join("\n");
+    copiedSingleValue.current = positions.length === 1 ? text : null;
     event.preventDefault(); event.clipboardData.setData("text/plain", text); setCopiedCells(new Set(selected));
   };
   const pasteCells = (event: ClipboardEvent<HTMLTableCellElement>, rowKey: string, columnKey: string) => {
-    if (!canEdit || event.defaultPrevented || event.target instanceof HTMLTextAreaElement || (event.target instanceof HTMLInputElement && columnKey === "images")) return;
-    const text = event.clipboardData.getData("text/plain"); if (!text) return;
-    if (columnKey === "images") {
-      event.preventDefault(); setCopiedCells(new Set());
+    if (!canEdit || event.defaultPrevented) return;
+    const editingText = event.target instanceof HTMLTextAreaElement || event.target instanceof HTMLInputElement;
+    if (editingText && (cellTextEditing || selectedCells.size <= 1)) return;
+    const text = event.clipboardData.getData("text/plain"); if (!text && copiedSingleValue.current !== "") return;
+    const matrix = text.replace(/\r/g, "").split("\n").map((line) => line.split("\t"));
+    if (selectedCells.size > 1 && ((matrix.length === 1 && matrix[0].length === 1) || (copiedSingleValue.current !== null && copiedSingleValue.current.replace(/\r/g, "") === text.replace(/\r/g, "")))) {
+      event.preventDefault(); setCopiedCells(new Set()); copiedSingleValue.current = null;
+      setRows(current => current.map(row => {
+        let next = row;
+        for (const column of activeColumns) {
+          if (!imageKeys.has(column.key) && !collectionKeys.has(column.key) && selectedCells.has(cellId(row._key, column.key))) next = withValue(next, column, text);
+        }
+        return next;
+      }));
+      return;
+    }
+    if (imageKeys.has(columnKey)) {
+      event.preventDefault(); setCopiedCells(new Set()); copiedSingleValue.current = null;
       const links = selectionImageLinks(text);
       if (!links.length) { message.warning("请粘贴完整的 http(s) 图片链接，多张图片每行一个链接"); return; }
-      setRows(current => current.map(row => row._key === rowKey ? { ...row, images: [...rowImages(row), ...links.map(url => ({ id: crypto.randomUUID(), url, color: splitTags(row.color)[0] || "" }))] } : row));
+      setRows(current => current.map(row => row._key === rowKey ? { ...row, [columnKey]: [...(columnKey === "images" ? rowImages(row) : rowLabelImages(row)), ...links.map(url => ({ id: crypto.randomUUID(), url, color: columnKey === "images" ? splitTags(row.color)[0] || "" : "" }))] } : row));
       return;
     }
 
     const rowStart = displayedRows.findIndex((row) => row._key === rowKey), columnStart = activeColumns.findIndex((column) => column.key === columnKey); if (rowStart < 0 || columnStart < 0) return;
-    event.preventDefault(); setCopiedCells(new Set()); const matrix = text.replace(/\r/g, "").split("\n").map((line) => line.split("\t"));
-    setRows((current) => current.map((row) => { const rowIndex = displayedRows.findIndex(item => item._key === row._key); const source = rowIndex < rowStart ? undefined : matrix[rowIndex - rowStart]; if (!source) return row; let next = row; source.forEach((value, offset) => { const column = activeColumns[columnStart + offset]; if (!column || column.key === "images") return; next = withValue(next, column, value); }); return next; }));
+    event.preventDefault(); setCopiedCells(new Set()); copiedSingleValue.current = null;
+    setRows((current) => current.map((row) => { const rowIndex = displayedRows.findIndex(item => item._key === row._key); const source = rowIndex < rowStart ? undefined : matrix[rowIndex - rowStart]; if (!source) return row; let next = row; source.forEach((value, offset) => { const column = activeColumns[columnStart + offset]; if (!column || imageKeys.has(column.key)) return; next = withValue(next, column, value); }); return next; }));
   };
   const save = async () => {
     if (!canEdit || saveLock.current) return;
@@ -445,7 +468,7 @@ export function StyleSelectionsPage() {
       for (const row of changed) {
         const body: Row = Object.fromEntries(baseKeys.map((key) => [key, clean(row[key])]));
         body.registrationBatch = normalizeSelection(row).registrationBatch;
-        body.images = rowImages(row); body.cellColors = row.cellColors || {}; body.cellAlignments = row.cellAlignments || {}; body.cellVerticalAlignments = row.cellVerticalAlignments || {}; body.cellTextColors = row.cellTextColors || {}; body.cellNumberFormats = row.cellNumberFormats || {}; body.extraFields = row.extraFields || {}; body.sortOrder = Number(row.sortOrder || 0); body.rowColor = row.rowColor || "NONE";
+        body.images = rowImages(row); body.labelImages = rowLabelImages(row); body.cellColors = row.cellColors || {}; body.cellAlignments = row.cellAlignments || {}; body.cellVerticalAlignments = row.cellVerticalAlignments || {}; body.cellTextColors = row.cellTextColors || {}; body.cellNumberFormats = row.cellNumberFormats || {}; body.extraFields = row.extraFields || {}; body.sortOrder = Number(row.sortOrder || 0); body.rowColor = row.rowColor || "NONE";
         if (row.id) body.expectedUpdatedAt = row.updatedAt;
         const attempt = attempts.current.start(row, body);
         try {
@@ -498,6 +521,7 @@ export function StyleSelectionsPage() {
     };
     const cell = (content: React.ReactNode) => <Dropdown key={column.key} trigger={["contextMenu"]} menu={{ items: [{ key: "format", label: "设置单元格格式", icon: <SettingOutlined />, disabled: !canEdit }], onClick: openFormat }}><td {...common} data-vertical-align={row.cellVerticalAlignments?.[column.key] || "middle"} data-text-color={row.cellTextColors?.[column.key]} style={{ color: row.cellTextColors?.[column.key], textAlign: row.cellAlignments?.[column.key] || "left", backgroundColor: colorOptions.find(option => option.value === (row.cellColors?.[column.key] || row.rowColor))?.color }}><div className="selection-cell-content">{content}</div></td></Dropdown>;
     if (column.key === "images") return cell(<ImageCell mobileId={row.id && sameRow(row, original.current.get(row._key) || {}) ? String(row.id) : undefined} images={rowImages(row)} colors={splitTags(row.color)} disabled={disabled} onChange={(value) => update(row._key, column, value)} />);
+    if (column.key === "labelImages") return cell(<ImageCell labelImages images={rowLabelImages(row)} colors={[]} disabled={disabled} onChange={(value) => update(row._key, column, value)} />);
     if (column.key === "color") return cell(<TagCell value={row.color} disabled={disabled} placeholder="+ 颜色"  />);
     if (column.key === "sizeRange") return cell(<TagCell value={row.sizeRange} disabled={disabled} placeholder="+ 尺码"  />);
     const numberFormat = row.cellNumberFormats?.[column.key];
@@ -540,17 +564,17 @@ export function StyleSelectionsPage() {
   const columnFilterEditor = (column: Column) => <SelectionFilterPanel key={`${column.key}:${filterSession}`} column={column} rows={rows} view={{ filters: columnFilters, sort: columnSort }} shared={followShared && (sharedView.data?.data?.revision || 0) > 0} canShare={canEdit && !!sharedView.data?.data} onCancel={() => setFilterColumn(null)} onApply={applyView} />;
   const editorRow = filteredRows.find((row) => row._key === cellAnchor?.rowKey);
   const editorColumn = activeColumns.find((column) => column.key === cellAnchor?.columnKey);
-  const editorEnabled = !!editorRow && !!editorColumn && editorColumn.key !== "images";
+  const editorEnabled = !!editorRow && !!editorColumn && !imageKeys.has(editorColumn.key);
   const editorValue = editorEnabled ? String(valueAt(editorRow!, editorColumn!) ?? "") : "";
   const editCurrent = (value: string) => { if (canEdit && editorEnabled) update(editorRow!._key, editorColumn!, value); };
   const editorError = editorRow && editorColumn ? errors[`${editorRow._key}:${editorColumn.key}`] || errors[`${editorRow._key}:save`] : undefined;
-  const statisticsValues=displayedRows.flatMap(row=>activeColumns.filter(column=>selectedCells.has(cellId(row._key,column.key))).map(column=>column.key==="images"?(rowImages(row).length?"图片":null):column.key==="collectionInventory"?(row.collectionInventory || []).reduce((sum:number,item:Row)=>sum+item.available+item.production,0):column.custom?row.extraFields?.[column.key]:valueAt(row,column)));
+  const statisticsValues=displayedRows.flatMap(row=>activeColumns.filter(column=>selectedCells.has(cellId(row._key,column.key))).map(column=>imageKeys.has(column.key)?((column.key==="images"?rowImages(row):rowLabelImages(row)).length?"图片":null):column.key==="collectionInventory"?(row.collectionInventory || []).reduce((sum:number,item:Row)=>sum+item.available+item.production,0):column.custom?row.extraFields?.[column.key]:valueAt(row,column)));
   const editor = <div className="selection-editor-bar" role="group" aria-label="单元格编辑栏">
     <span className="selection-editor-label" title={editorColumn?.label}>{editorRow && editorColumn ? `${rows.indexOf(editorRow) + 1} · ${editorColumn.label}` : "单元格"}</span>
     {editorColumn?.key === "registrationBatch" && editorRow ? <input aria-label="编辑登记批次" type="date" value={editorValue.slice(0, 10)} disabled={!canEdit} onChange={(event) => editCurrent(event.target.value)} /> :
       editorColumn?.key === "sizeRange" && editorRow ? <SizeEditor key={editorRow._key} value={editorValue} disabled={!canEdit} onChange={editCurrent} /> :
       editorColumn?.key === "color" && editorRow ? <Select aria-label={`编辑${editorColumn.label}`} mode="tags" className="selection-editor-tags" value={splitTags(editorValue)} disabled={!canEdit} tokenSeparators={["/"]} placeholder="输入后按 Enter 添加，多项用 / 分隔" options={colorSuggestions.map(value => ({ value, label: value }))} onChange={(value) => editCurrent(joinTags(value))} /> :
-      <Input.TextArea aria-label="编辑当前单元格" autoSize={{ minRows: 1, maxRows: 3 }} value={editorValue} disabled={!editorEnabled} readOnly={!canEdit || !!editorColumn && collectionKeys.has(editorColumn.key)} placeholder={editorColumn?.key === "images" ? "图片请在单元格内上传或查看" : "点击单元格，在此编辑内容"} onChange={(event) => editCurrent(event.target.value)} />}
+      <Input.TextArea aria-label="编辑当前单元格" autoSize={{ minRows: 1, maxRows: 3 }} value={editorValue} disabled={!editorEnabled} readOnly={!canEdit || !!editorColumn && collectionKeys.has(editorColumn.key)} placeholder={editorColumn && imageKeys.has(editorColumn.key) ? "图片请在单元格内上传或查看" : "点击单元格，在此编辑内容"} onChange={(event) => editCurrent(event.target.value)} />}
     {editorError && <span className="selection-editor-error" role="status">{editorError}</span>}
   </div>;
   const filterContent = <div className="selection-popover"><Input.Search autoFocus allowClear placeholder="搜索批次、款号、供应商、颜色或材质" value={search} onChange={(event) => setSearch(event.target.value)} /><Button onClick={() => { setSearch(""); setFilterOpen(false); }}>清除筛选</Button></div>;
@@ -565,7 +589,7 @@ export function StyleSelectionsPage() {
       for (const [field, value] of Object.entries(patch)) {
         next[field] = { ...(row[field] || {}) };
         for (const column of targets) {
-          if (field === "cellNumberFormats" && ["images", "color", "sizeRange"].includes(column.key)) continue;
+          if (field === "cellNumberFormats" && ["images", "labelImages", "color", "sizeRange"].includes(column.key)) continue;
           if (value === "") delete next[field][column.key]; else next[field][column.key] = value;
         }
       }

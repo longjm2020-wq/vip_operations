@@ -108,7 +108,7 @@ export async function submit(token: string,key: string,input: unknown) {
         if(item.status!=="SUBMITTED")fail("INVALID_STATE","仅未被内部确认的已提交款式可撤回",409);
       } else {
         editable(item);
-        const {images,...info}=item.draft;parse(collectionInfoSchema,info);
+        const {images: _images,...info}=item.draft;parse(collectionInfoSchema,info);
       }
       await rows(tx,"UPDATE selection_collection_items SET status=$3,feedback='' WHERE collection_id=$1::bigint AND selection_id=$2::bigint",share.id,item.selection_id,body.action==="withdraw"?"DRAFT":"SUBMITTED");
     }

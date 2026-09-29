@@ -5,7 +5,7 @@ const optionSets = new WeakMap<SelectionFilter, Set<string>>();
 const moneyKeys = new Set(["supplyPriceExclTax", "vipPrice", "livePrice", "tagPrice"]);
 export function selectionFilterValue(row: Row, key: string): string {
   if (key === "collectionInventory") return String((row.collectionInventory || []).reduce((sum: number, item: Row) => sum + item.available + item.production, 0));
-  const value = key === "images" ? (row.images || []).map((image: Row) => `${image.color || ""} ${image.url || ""}`.trim()).join("\n") : key.startsWith("custom:") ? row.extraFields?.[key] : row[key];
+  const value = key === "images" ? (row.images || []).map((image: Row) => `${image.color || ""} ${image.url || ""}`.trim()).join("\n") : key === "labelImages" ? (row.labelImages || []).map((image: Row) => image.url || "").join("\n") : key.startsWith("custom:") ? row.extraFields?.[key] : row[key];
   const text = String(value ?? "").trim();
   return moneyKeys.has(key) && text && Number.isFinite(Number(text)) ? String(Number(text)) : text;
 }
@@ -66,7 +66,7 @@ export function clearSelectionCells(rows: Row[], selected: Set<string>): Row[] {
     for (const key of keys) {
       if (["sellingPoints","reorderDays","collectionInventory"].includes(key)) continue;
       if (key.startsWith("custom:")) next.extraFields = { ...(next.extraFields || {}), [key]: "" };
-      else next[key] = key === "images" ? [] : null;
+      else next[key] = key === "images" || key === "labelImages" ? [] : null;
     }
     // Removing color labels must not leave orphan image-color references.
     if (keys.includes("color") && !keys.includes("images")) next.images = (row.images || []).map((image: Row) => ({ ...image, color: "" }));

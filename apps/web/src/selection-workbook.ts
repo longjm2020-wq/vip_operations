@@ -2,7 +2,7 @@ import type ExcelJS from "exceljs";
 
 type Row = Record<string, any>;
 export const selectionSheetColumns = [
-  ["registrationBatch", "登记批次"], ["images", "图片"], ["xutiStyleNo", "序缇款号"],
+  ["registrationBatch", "登记批次"], ["images", "图片"], ["labelImages", "洗唛/吊牌图"], ["xutiStyleNo", "序缇款号"],
   ["supplierStyleNo", "供应商款号"], ["supplierCode", "供应商编码"], ["color", "颜色"],
   ["sizeRange", "尺码范围"], ["material", "材质"], ["supplyPriceExclTax", "供货价（不含税）"],
   ["vipPrice", "唯品价"], ["livePrice", "直播价"], ["tagPrice", "吊牌价"],
@@ -22,6 +22,8 @@ export async function createSelectionWorkbook(records: Row[] = []) {
   sheet.columns = selectionSheetColumns.map(([key, header]) => ({ key, header, width: key === "material" ? 32 : 20, style: { numFmt: "@" } }));
   const pictures = book.addWorksheet("图片明细");
   pictures.columns = [{ key: "style", header: "序缇款号", width: 24 }, { key: "color", header: "颜色", width: 18 }, { key: "url", header: "图片URL", width: 70 }].map(c => ({ ...c, style: { numFmt: "@" } }));
+  const labels = book.addWorksheet("洗唛吊牌图明细");
+  labels.columns = [{ key: "style", header: "序缇款号", width: 24 }, { key: "url", header: "图片URL", width: 70 }].map(c => ({ ...c, style: { numFmt: "@" } }));
   let dataSheet: ExcelJS.Worksheet | undefined;
   let imageNumber = 0;
   const codes = new Set<string>();
@@ -30,7 +32,7 @@ export async function createSelectionWorkbook(records: Row[] = []) {
     if (!style) throw Error("请先为要导出的每款填写序缇款号");
     if (codes.has(style)) throw Error(`序缇款号「${style}」存在多条记录，请勾选唯一款式后导出`);
     codes.add(style);
-    const values = Object.fromEntries(selectionSheetColumns.map(([key]) => [key, key === "images" ? (record.images?.length ? "见图片明细" : "") : key === "registrationBatch" ? String(record[key] || "").slice(0, 10) : String(record[key] ?? "")]));
+    const values = Object.fromEntries(selectionSheetColumns.map(([key]) => [key, key === "images" ? (record.images?.length ? "见图片明细" : "") : key === "labelImages" ? (record.labelImages?.length ? "见洗唛吊牌图明细" : "") : key === "registrationBatch" ? String(record[key] || "").slice(0, 10) : String(record[key] ?? "")]));
     values.xutiStyleNo = style;
     sheet.addRow(values);
     for (const image of record.images || []) {
@@ -44,8 +46,18 @@ export async function createSelectionWorkbook(records: Row[] = []) {
       }
       pictures.addRow({ style, color: image.color || "", url });
     }
+    for (const image of record.labelImages || []) {
+      let url = String(image.url || "");
+      if (url.startsWith("data:image/")) {
+        dataSheet ||= book.addWorksheet("图片内容", { state: "hidden" });
+        const reference = `内嵌图片:${++imageNumber}`;
+        for (let offset = 0; offset < url.length; offset += 30000) dataSheet.addRow([reference, offset / 30000, url.slice(offset, offset + 30000)]);
+        url = reference;
+      }
+      labels.addRow({ style, url });
+    }
   }
-  styleSheet(sheet); styleSheet(pictures);
+  styleSheet(sheet); styleSheet(pictures); styleSheet(labels);
   const notes = book.addWorksheet("填写说明");
   notes.getColumn(1).width = 110;
   notes.addRows([
@@ -55,6 +67,7 @@ export async function createSelectionWorkbook(records: Row[] = []) {
     ["多图在「图片明细」中逐图填写序缇款号、颜色、图片URL；图片颜色必须在该款颜色字段中。"],
     ["也可在主表图片列逐行填写「颜色 | https://图片地址」；不填颜色时可仅填网址。"],
     ["图片明细与主表图片不能同时填写同款；填写图片将替换该款原图片，留空则保留。"],
+    ["洗唛/吊牌图可在「洗唛吊牌图明细」逐图填写款号和图片URL；填写后替换该款原洗唛/吊牌图，留空保留。"],
     ["系统内图片地址须登录同一系统查看。旧版内嵌图片自动保存在隐藏工作表中，请保留该表。"],
     ["仅支持本模板的数据与图片地址，不解析 Excel 浮动图片。公式请先粘贴为值。"],
     ["每次导入最多 500 款、文件 20 MB；导入预览确认后整批写入，冲突则整批不写入。"],
@@ -110,11 +123,11 @@ export async function parseSelectionWorkbook(buffer: ArrayBuffer) {
     const record: Row = {};
     for (const [key, label] of selectionSheetColumns) {
       const index = headers.get(label); if (!index) continue;
-      let text = cellText(sheet.getRow(r).getCell(index)); if (!text || (key === "images" && text === "见图片明细")) continue;
+      let text = cellText(sheet.getRow(r).getCell(index)); if (!text || (key === "images" && text === "见图片明细") || (key === "labelImages" && text === "见洗唛吊牌图明细")) continue;
       if (priceKeys.has(key)) { text = text.replace(/[￥¥,，\s]/g, ""); if (!/^\d{1,10}(\.\d{1,2})?$/.test(text)) throw Error(`第 ${r} 行${label}应为非负金额，最多两位小数`); }
       if (key === "registrationBatch" && (!/^\d{4}-\d{2}-\d{2}$/.test(text) || !Number.isFinite(Date.parse(text)) || new Date(text).toISOString().slice(0, 10) !== text)) throw Error(`第 ${r} 行日期应为有效的 YYYY-MM-DD`);
       if (key === "color" || key === "sizeRange") text = [...new Set(text.split("/").map(v => v.trim()).filter(Boolean))].join("/");
-      record[key] = key === "images" ? text.split(/\r?\n/).filter(Boolean).map(line => { const i = line.indexOf(" | "); return imageValue(i < 0 ? "" : line.slice(0, i), i < 0 ? line.trim() : line.slice(i + 3).trim()); }) : text;
+      record[key] = key === "images" ? text.split(/\r?\n/).filter(Boolean).map(line => { const i = line.indexOf(" | "); return imageValue(i < 0 ? "" : line.slice(0, i), i < 0 ? line.trim() : line.slice(i + 3).trim()); }) : key === "labelImages" ? text.split(/\r?\n/).filter(Boolean).map(line => imageValue("", line.trim())) : text;
     }
     if (!Object.keys(record).length) continue;
     if (!record.xutiStyleNo) throw Error(`第 ${r} 行缺少序缇款号`);
@@ -132,6 +145,19 @@ export async function parseSelectionWorkbook(buffer: ArrayBuffer) {
       const record = byStyle.get(style); if (!record || !url) throw Error(`图片明细第 ${r} 行缺少对应款号或图片URL`);
       if (!seen.has(style)) { if (record.images) throw Error(`「${style}」的图片请只填写在主表或图片明细其中一处`); record.images = []; seen.add(style); }
       record.images.push(imageValue(color, url));
+    }
+  }
+  const labels = book.getWorksheet("洗唛吊牌图明细");
+  if (labels) {
+    if (["序缇款号", "图片URL"].some((label, i) => cellText(labels.getRow(1).getCell(i + 1)) !== label) || labels.columnCount > 2) throw Error("洗唛吊牌图明细表头应依次为：序缇款号、图片URL");
+    if (labels.getImages().length) throw Error("请在洗唛吊牌图明细填写图片地址，不支持 Excel 浮动图片");
+    const seen = new Set<string>();
+    for (let r = 2; r <= labels.rowCount; r++) {
+      const style = cellText(labels.getRow(r).getCell(1)), url = cellText(labels.getRow(r).getCell(2));
+      if (!style && !url) continue;
+      const record = byStyle.get(style); if (!record || !url) throw Error(`洗唛吊牌图明细第 ${r} 行缺少对应款号或图片URL`);
+      if (!seen.has(style)) { if (record.labelImages) throw Error(`「${style}」的洗唛/吊牌图请只填写在主表或图片明细其中一处`); record.labelImages = []; seen.add(style); }
+      record.labelImages.push(imageValue("", url));
     }
   }
   if (!result.length) throw Error("文件中没有可导入的款式");

@@ -204,6 +204,7 @@ model style_selections {
   id                     BigInt   @id @default(autoincrement())
   registration_batch     DateTime? @db.Date
   images                 Json      @default("[]")
+  label_images           Json      @default("[]")
   cell_colors            Json      @default("{}")
   cell_alignments        Json      @default("{}")
   cell_vertical_alignments Json    @default("{}")
