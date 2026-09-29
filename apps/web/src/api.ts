@@ -36,6 +36,7 @@ export async function api(
       queryClient.setQueryData(["me"], null);
     throw Object.assign(new Error(result.error?.message || "请求失败"), {
       status: response.status,
+      details: result.error?.details,
     });
   }
   return result;

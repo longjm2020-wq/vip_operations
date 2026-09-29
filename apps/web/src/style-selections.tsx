@@ -5,6 +5,7 @@ import { SelectionPhotoQr } from "./selection-photo-qr";
 import { SelectionFilterPanel } from "./selection-filter-panel";
 import type { SelectionView } from "../../../packages/contracts/src/selection-view";
 import { selectionImageLinks, invalidSelectionImage } from "./selection-image-links";
+import { parseSelectionClipboard } from "./selection-clipboard";
 import { SelectionFormatModal, type FormatPatch } from "./selection-format-modal";
 import { formatSelectionValue } from "../../../packages/contracts/src/selection-format";
 import { Fragment, useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent } from "react";
@@ -427,15 +428,17 @@ export function StyleSelectionsPage() {
   const pasteCells = (event: ClipboardEvent<HTMLTableCellElement>, rowKey: string, columnKey: string) => {
     if (!canEdit || event.defaultPrevented) return;
     const editingText = event.target instanceof HTMLTextAreaElement || event.target instanceof HTMLInputElement;
-    if (editingText && (cellTextEditing || selectedCells.size <= 1)) return;
     const text = event.clipboardData.getData("text/plain"); if (!text && copiedSingleValue.current !== "") return;
-    const matrix = text.replace(/\r/g, "").split("\n").map((line) => line.split("\t"));
-    if (selectedCells.size > 1 && ((matrix.length === 1 && matrix[0].length === 1) || (copiedSingleValue.current !== null && copiedSingleValue.current.replace(/\r/g, "") === text.replace(/\r/g, "")))) {
+    const copiedSingle = copiedSingleValue.current !== null && copiedSingleValue.current.replace(/\r/g, "") === text.replace(/\r/g, "");
+    const matrix = copiedSingle ? [[text]] : parseSelectionClipboard(text);
+    const grid = matrix.length > 1 || matrix[0].length > 1;
+    if (editingText && (cellTextEditing || (!grid && matrix[0][0] === text && selectedCells.size <= 1))) return;
+    if (selectedCells.size > 1 && !grid) {
       event.preventDefault(); setCopiedCells(new Set()); copiedSingleValue.current = null;
       setRows(current => current.map(row => {
         let next = row;
         for (const column of activeColumns) {
-          if (!imageKeys.has(column.key) && !collectionKeys.has(column.key) && selectedCells.has(cellId(row._key, column.key))) next = withValue(next, column, text);
+          if (!imageKeys.has(column.key) && !collectionKeys.has(column.key) && selectedCells.has(cellId(row._key, column.key))) next = withValue(next, column, matrix[0][0]);
         }
         return next;
       }));
@@ -450,8 +453,22 @@ export function StyleSelectionsPage() {
     }
 
     const rowStart = displayedRows.findIndex((row) => row._key === rowKey), columnStart = activeColumns.findIndex((column) => column.key === columnKey); if (rowStart < 0 || columnStart < 0) return;
+    if (!activeColumns.slice(columnStart, columnStart + Math.max(...matrix.map(row => row.length))).some(column => !imageKeys.has(column.key) && !collectionKeys.has(column.key))) return;
     event.preventDefault(); setCopiedCells(new Set()); copiedSingleValue.current = null;
-    setRows((current) => current.map((row) => { const rowIndex = displayedRows.findIndex(item => item._key === row._key); const source = rowIndex < rowStart ? undefined : matrix[rowIndex - rowStart]; if (!source) return row; let next = row; source.forEach((value, offset) => { const column = activeColumns[columnStart + offset]; if (!column || imageKeys.has(column.key)) return; next = withValue(next, column, value); }); return next; }));
+    setRows((current) => {
+      const missing = Math.max(0, rowStart + matrix.length - displayedRows.length);
+      const nextOrder = Math.max(0, ...current.map(row => Number(row.sortOrder || 0))) + 1;
+      const added = Array.from({ length: missing }, (_, index) => ({ _key: crypto.randomUUID(), images: [], labelImages: [], cellColors: {}, extraFields: {}, sortOrder: nextOrder + index, rowColor: "NONE" }));
+      const targets = [...displayedRows, ...added];
+      const sourceByKey = new Map(targets.slice(rowStart, rowStart + matrix.length).map((row, index) => [row._key, matrix[index]]));
+      return [...current, ...added].map(row => {
+        const source = sourceByKey.get(row._key);
+        if (!source) return row;
+        let next = row;
+        source.forEach((value, offset) => { const column = activeColumns[columnStart + offset]; if (!column || imageKeys.has(column.key) || collectionKeys.has(column.key)) return; next = withValue(next, column, value); });
+        return next;
+      });
+    });
   };
   const save = async () => {
     if (!canEdit || saveLock.current) return;
@@ -480,14 +497,17 @@ export function StyleSelectionsPage() {
           original.current.set(row._key, saved);
           attempts.current.succeed(row._key);
         } catch (error) {
-          failed[row._key] = (error as Error).message;
+          const fieldErrors = (error as { details?: { fieldErrors?: Record<string, string[]> } }).details?.fieldErrors;
+          const knownFields = Object.entries(fieldErrors || {}).filter(([field, messages]) => baseKeys.includes(field) && messages.length);
+          if (knownFields.length) for (const [field, messages] of knownFields) failed[`${row._key}:${field}`] = messages.join("；");
+          else failed[`${row._key}:save`] = (error as Error).message;
           attempts.current.fail(row._key, row, (error as { status?: number }).status);
         }
       }
       setErrors((current) => {
         const next = { ...current };
         for (const row of changed) for (const key of Object.keys(next)) if (key.startsWith(`${row._key}:`)) delete next[key];
-        for (const [key, value] of Object.entries(failed)) next[`${key}:save`] = value;
+        for (const [key, value] of Object.entries(failed)) next[key] = value;
         return next;
       });
       if (Object.keys(savedRows).length) {
@@ -632,5 +652,5 @@ export function StyleSelectionsPage() {
       }} aria-label="选款登记在线智能表格" style={{ width: activeColumns.reduce((width, column) => width + column.width, 96) }}><colgroup><col style={{ width: 48 }} /><col style={{ width: 48 }} />{activeColumns.map((column) => <col key={column.key} style={{ width: column.width }} />)}</colgroup><thead><tr><th className="selection-check"><Checkbox aria-label="选择全部可见行" checked={!!filteredRows.length && filteredRows.every(row => selectedRows.includes(row._key))} indeterminate={filteredRows.some(row => selectedRows.includes(row._key)) && !filteredRows.every(row => selectedRows.includes(row._key))} onChange={(event) => setSelectedRows(event.target.checked ? filteredRows.map((row) => row._key) : [])} /></th><th className="selection-index">#</th>{activeColumns.map((column) => <th key={column.key} data-reorder-axis="column" data-reorder-key={column.key} data-reorder-target={shiftTarget==="column:"+column.key || undefined} title="按住 Shift 拖动调整列顺序" tabIndex={0} aria-label={`选择整列：${column.label}`} onMouseDown={event => axisMouseDown(event, "column", column.key)} onMouseEnter={() => axisMouseEnter("column", column.key)} style={{ width: column.width, minWidth: column.width }}><span>{column.label}{columnSort?.key === column.key ? columnSort.direction === "asc" ? " ↑" : " ↓" : ""}</span><Popover destroyOnHidden trigger="click" open={filterColumn === column.key} onOpenChange={open => { setFilterColumn(open ? column.key : null); if (open) { setFilterRevision(sharedView.data?.data?.revision || 0); setFilterSession(value => value + 1); } }} content={columnFilterEditor(column)}><Button className="selection-column-filter-button" type="text" size="small" aria-label={`筛选${column.label}`} title={`筛选${column.label}`} icon={<FilterOutlined />} style={{ color: columnFilters[column.key] ? "#d3540b" : undefined }} onMouseDown={event => event.stopPropagation()} /></Popover><i className="selection-column-resize" aria-label={`调整 ${column.label} 列宽`} onMouseDown={(event) => { event.preventDefault(); event.stopPropagation(); setResizingColumn({ key: column.key, startX: event.clientX, startWidth: column.width }); }} /></th>)}</tr></thead><tbody>
         {data.isLoading && <tr><td colSpan={activeColumns.length + 2} className="selection-placeholder">正在读取选款登记…</td></tr>}{!data.isLoading && !filteredRows.length && <tr><td colSpan={activeColumns.length + 2} className="selection-placeholder"><Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无选款登记，点击添加一行开始录入" /></td></tr>}
         {grouped.map((group) => <Fragment key={group.label || "all"}>{group.label && <tr className="selection-group-row"><td colSpan={activeColumns.length + 2}>{group.label}<span>{group.rows.length} 条</span></td></tr>}{group.rows.map((row, index) => <tr key={row._key}><td className="selection-check"><Checkbox aria-label={`选择 ${row.xutiStyleNo || "未填写序缇款号"}`} checked={selectedRows.includes(row._key)} onChange={(event) => setSelectedRows((current) => event.target.checked ? [...current, row._key] : current.filter((key) => key !== row._key))} /></td><td data-reorder-axis="row" data-reorder-key={row._key} data-reorder-target={shiftTarget==="row:"+row._key || undefined} title="按住 Shift 拖动调整行顺序" className={`selection-index selection-row-drag ${selectedRows.includes(row._key) ? "selection-axis-active" : ""}`} tabIndex={0} aria-label={`选择第${displayedRows.indexOf(row) + 1}行`} onMouseDown={event => axisMouseDown(event, "row", row._key)} onMouseEnter={() => axisMouseEnter("row", row._key)} onDragOver={(event: DragEvent) => event.preventDefault()} onDrop={() => { if (draggedRow) moveRow(draggedRow, row._key); setDraggedRow(null); }}>{index + 1}<span className="selection-row-reorder" title="拖动调整行顺序" draggable onMouseDown={event => event.stopPropagation()} onDragStart={() => setDraggedRow(row._key)} onDragEnd={() => setDraggedRow(null)}>⋮⋮</span></td>{activeColumns.map((column) => renderCell(row, column))}</tr>)}</Fragment>)}
-      </tbody></table></div><div className="selection-bulk-add"><Select aria-label="批量添加行数" value={addCount} onChange={setAddCount} options={[10, 20, 50, 100, 200].map(value => ({ value, label: `${value} 行` }))} /><Button icon={<PlusOutlined />} disabled={!canEdit} onClick={() => add(addCount)}>添加 {addCount} 行</Button><span>空白行填写后自动保存</span><SelectionStatistics values={statisticsValues}/></div><div className="selection-bottom-bar"><span>拖动可选择多个单元格后填色；Ctrl/Cmd+C 复制、Ctrl/Cmd+V 粘贴；点击或拖动行号/表头选择整行整列；按住 Shift 拖动行号或表头调整行列顺序。</span><span>{canEdit ? "图片支持网址、本地上传和粘贴。" : "当前账号仅可查看。"}</span></div></Card></>;
+      </tbody></table></div><div className="selection-bulk-add"><Select aria-label="批量添加行数" value={addCount} onChange={setAddCount} options={[10, 20, 50, 100, 200].map(value => ({ value, label: `${value} 行` }))} /><Button icon={<PlusOutlined />} disabled={!canEdit} onClick={() => add(addCount)}>添加 {addCount} 行</Button><span>空白行自动保存</span><SelectionStatistics values={statisticsValues}/></div><div className="selection-bottom-bar"><span>拖动可选择多个单元格后填色；Ctrl/Cmd+C 复制、Ctrl/Cmd+V 粘贴；点击或拖动行号/表头选择整行整列；按住 Shift 拖动行号或表头调整行列顺序。</span><span>{canEdit ? "图片支持网址、本地上传和粘贴。" : "当前账号仅可查看。"}</span></div></Card></>;
 }
