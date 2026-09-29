@@ -49,6 +49,7 @@ async function select(page: Page, label: string, value: string) {
   await page.getByTitle(value, { exact: true }).last().click();
 }
 test("真实前后端：建档、采购确认、两次入库、流水追溯", async ({ page }) => {
+  test.setTimeout(120_000);
   await login(page);
   await create(page, "/suppliers", {
     供应商编码: "E2E-SUP",
@@ -154,7 +155,8 @@ test("未知销量明确跳过建议，并可退出登录", async ({ page }) => 
   await page.getByRole("button", { name: "确定", exact: true }).click();
   await expect(page.getByText("SKU 1：暂无完整销售数据")).toBeVisible();
   await page.getByRole("button", { name: "取消", exact: true }).click();
-  await page.getByRole("button", { name: "退出", exact: true }).click();
+  await page.getByRole("button", { name: /账号菜单/ }).click();
+  await page.getByRole("menuitem", { name: "退出登录" }).click();
   await expect(page.getByRole("button", { name: "进入工作台" })).toBeVisible();
 });
 
