@@ -8,13 +8,7 @@ test("external multiline paste fills successive style rows", async ({ page }) =>
   await page.getByRole("button", { name: "进入工作台" }).click();
   await expect(page.getByRole("heading", { name: "商品档案" })).toBeVisible();
   await page.goto("/style-selections");
-  const addButton = page.getByRole("button", { name: "添加一行", exact: true });
-  try { await expect(addButton).toBeVisible({ timeout: 5000 }); }
-  catch (error) {
-    console.log("Selection page:", page.url(), (await page.locator("body").innerText()).slice(0, 1500));
-    throw error;
-  }
-  await addButton.click();
+  await page.getByText("添加一行", { exact: true }).click();
 
   const cells = page.locator('textarea[aria-label="序缇款号"]');
   const count = await cells.count();
