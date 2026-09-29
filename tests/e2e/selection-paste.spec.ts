@@ -24,4 +24,8 @@ test("external multiline paste fills successive style rows", async ({ page }) =>
   for (let index = 0; index < values.length; index++)
     await expect(cells.nth(count - 1 + index)).toHaveValue(values[index]);
   await expect(page.locator("td.selection-cell-error")).toHaveCount(0);
+  await cells.nth(count).fill(values[0]);
+  await expect(page.locator('td[data-duplicate-count="2"]')).toHaveCount(2);
+  await cells.nth(count).fill(values[1]);
+  await expect(page.locator('td[data-duplicate-count="2"]')).toHaveCount(0);
 });

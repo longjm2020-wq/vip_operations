@@ -125,6 +125,12 @@
   background: #fff1f0 !important;
   box-shadow: inset 0 0 0 1px #f0a9a4;
 }
+.selection-sheet td.selection-cell-duplicate:not(.selection-cell-error) {
+  background: #fff3c4 !important;
+  box-shadow: inset 3px 0 0 #d39b16;
+}
+.selection-sheet td.selection-cell-duplicate .selection-text-input { font-weight: 700; }
+.selection-duplicate-note { flex: none; padding: 2px 6px; border-radius: 4px; background: #fff0bd; color: #865900; font-size: 12px; font-weight: 600; }
 .selection-cell-active {
   box-shadow: inset 0 0 0 2px #1677ff !important;
   /* Keep the saved cell fill visible while the selection outline is active. */

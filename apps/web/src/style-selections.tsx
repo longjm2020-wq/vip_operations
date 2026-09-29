@@ -6,6 +6,7 @@ import { SelectionFilterPanel } from "./selection-filter-panel";
 import type { SelectionView } from "../../../packages/contracts/src/selection-view";
 import { selectionImageLinks, invalidSelectionImage } from "./selection-image-links";
 import { parseSelectionClipboard } from "./selection-clipboard";
+import { duplicateStyleCounts, selectionStyleKey } from "./selection-duplicates";
 import { SelectionFormatModal, type FormatPatch } from "./selection-format-modal";
 import { formatSelectionValue } from "../../../packages/contracts/src/selection-format";
 import { Fragment, useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent } from "react";
@@ -251,6 +252,7 @@ export function StyleSelectionsPage() {
   const appliedSnapshot = useRef("");
   const queryString = new URLSearchParams({ page: "1", pageSize: "100", ...(search ? { q: search } : {}), sort, direction }).toString();
   const data = useQuery({ queryKey: ["style-selections", queryString], queryFn: () => fetchSelectionRows(search, sort, direction), refetchInterval: saving ? false : 10000, refetchOnWindowFocus: !saving });
+  const styleCounts = useQuery({ queryKey: ["style-selection-style-counts"], queryFn: () => api("/style-selections/style-counts"), refetchInterval: 10000 });
   const presence = useQuery({ queryKey: ["style-selection-presence"], queryFn: () => api("/style-selections/presence"), refetchInterval: 10000 });
   const sharedView = useQuery({ queryKey: ["selection-shared-view"], queryFn: () => api("/style-selections/shared-view"), refetchInterval: 10000 });
   const sharedSnapshot = JSON.stringify(sharedView.data?.data);
@@ -289,6 +291,7 @@ export function StyleSelectionsPage() {
   }, [data.data, saving, snapshot, rows]);
 
   const activeColumns = columns.filter((column) => visible.includes(column.key));
+  const repeatedStyles = useMemo(() => duplicateStyleCounts(rows, styleCounts.data?.data, original.current), [rows, styleCounts.data]);
   const colorSuggestions = useMemo(() => [...new Set(rows.flatMap((row) => splitTags(row.color)))], [rows]);
   const filteredRows = useMemo(() => sortSelectionRows(rows.filter(row => matchesSelectionFilters(row, columnFilters)), columnSort), [rows, columnFilters, columnSort]);
   const grouped = useMemo(() => {
@@ -322,7 +325,7 @@ export function StyleSelectionsPage() {
       const current = rows.filter((row) => selectedRows.includes(row._key));
       for (const row of current.filter((row) => row.id)) await api(`/style-selections/${row.id}`, "DELETE", undefined, row._key);
       setRows((items) => items.filter((row) => !selectedRows.includes(row._key))); setSelectedRows([]); setSelectedCells(new Set()); appliedSnapshot.current = "";
-      await queryClient.invalidateQueries({ queryKey: ["style-selections"] }); message.success(`已删除 ${current.length} 行`);
+      await Promise.all([queryClient.invalidateQueries({ queryKey: ["style-selections"] }), queryClient.invalidateQueries({ queryKey: ["style-selection-style-counts"] })]); message.success(`已删除 ${current.length} 行`);
     } catch (error) { message.error((error as Error).message); } finally { setDeleting(false); }
   };
   const applyColor = (color: string) => {
@@ -514,7 +517,7 @@ export function StyleSelectionsPage() {
         setRows((current) => current.map((row) => savedRows[row._key] ? mergeSelectionSave(row, savedRows[row._key].sent, savedRows[row._key].saved) : row));
         // Ignore the old cached list until a new read completes.
         appliedSnapshot.current = snapshot;
-        await queryClient.invalidateQueries({ queryKey: ["style-selections"] });
+        await Promise.all([queryClient.invalidateQueries({ queryKey: ["style-selections"] }), queryClient.invalidateQueries({ queryKey: ["style-selection-style-counts"] })]);
       }
     } finally { saveLock.current = false; setSaving(false); }
   };
@@ -532,7 +535,8 @@ export function StyleSelectionsPage() {
   };
   const renderCell = (row: Row, column: Column) => {
     const disabled = !canEdit || collectionKeys.has(column.key), error = errors[`${row._key}:${column.key}`] || errors[`${row._key}:save`], selected = selectedCells.has(cellId(row._key, column.key));
-    const common = { "data-selection-edges": cellEdges(selectedCells,row._key,column.key), "data-copy-edges": cellEdges(copiedCells,row._key,column.key), tabIndex: 0, onDoubleClick: () => setCellTextEditing(true), onFocusCapture: () => { setCellAnchor({ rowKey: row._key, columnKey: column.key }); setEditingId(row.id || null); if (!selectedCells.has(cellId(row._key, column.key))) setSelectedCells(new Set([cellId(row._key, column.key)])); }, className: `${error ? "selection-cell-error " : ""}${selected ? "selection-cell-active" : ""}${copiedCells.has(cellId(row._key, column.key)) ? " selection-cell-copied" : ""}`, title: error, onMouseDown: (event: React.MouseEvent) => { if (event.button === 0) cellMouseDown(row._key, column.key); else if (event.button === 2) { event.preventDefault(); if (!selected) { setSelectedCells(new Set([cellId(row._key, column.key)])); setCellAnchor({ rowKey: row._key, columnKey: column.key }); } } }, onDragStart: (event: React.DragEvent) => { if (selectingCells) event.preventDefault(); }, onMouseEnter: () => cellMouseEnter(row._key, column.key), onPaste: (event: ClipboardEvent<HTMLTableCellElement>) => pasteCells(event, row._key, column.key) };
+    const duplicateCount = column.key === "xutiStyleNo" ? repeatedStyles.get(selectionStyleKey(row.xutiStyleNo)) || 0 : 0;
+    const common = { "data-selection-edges": cellEdges(selectedCells,row._key,column.key), "data-copy-edges": cellEdges(copiedCells,row._key,column.key), "data-duplicate-count": duplicateCount || undefined, tabIndex: 0, onDoubleClick: () => setCellTextEditing(true), onFocusCapture: () => { setCellAnchor({ rowKey: row._key, columnKey: column.key }); setEditingId(row.id || null); if (!selectedCells.has(cellId(row._key, column.key))) setSelectedCells(new Set([cellId(row._key, column.key)])); }, className: `${error ? "selection-cell-error " : ""}${duplicateCount ? "selection-cell-duplicate " : ""}${selected ? "selection-cell-active" : ""}${copiedCells.has(cellId(row._key, column.key)) ? " selection-cell-copied" : ""}`, title: error || (duplicateCount ? `序缇款号重复，共 ${duplicateCount} 行` : undefined), onMouseDown: (event: React.MouseEvent) => { if (event.button === 0) cellMouseDown(row._key, column.key); else if (event.button === 2) { event.preventDefault(); if (!selected) { setSelectedCells(new Set([cellId(row._key, column.key)])); setCellAnchor({ rowKey: row._key, columnKey: column.key }); } } }, onDragStart: (event: React.DragEvent) => { if (selectingCells) event.preventDefault(); }, onMouseEnter: () => cellMouseEnter(row._key, column.key), onPaste: (event: ClipboardEvent<HTMLTableCellElement>) => pasteCells(event, row._key, column.key) };
     const openFormat = () => {
       const ids = selectedCells.has(cellId(row._key, column.key)) ? new Set(selectedCells) : new Set([cellId(row._key, column.key)]);
       setFormatTarget({ ids, sample: valueAt(row, column), initial: ids.size === 1 ? Object.fromEntries(["cellNumberFormats", "cellAlignments", "cellVerticalAlignments", "cellColors", "cellTextColors"].map(key => [key, row[key]?.[column.key]])) : {} });
@@ -587,9 +591,11 @@ export function StyleSelectionsPage() {
   const editorValue = editorEnabled ? String(valueAt(editorRow!, editorColumn!) ?? "") : "";
   const editCurrent = (value: string) => { if (canEdit && editorEnabled) update(editorRow!._key, editorColumn!, value); };
   const editorError = editorRow && editorColumn ? errors[`${editorRow._key}:${editorColumn.key}`] || errors[`${editorRow._key}:save`] : undefined;
+  const editorDuplicateCount = editorColumn?.key === "xutiStyleNo" ? repeatedStyles.get(selectionStyleKey(editorRow?.xutiStyleNo)) || 0 : 0;
   const statisticsValues=displayedRows.flatMap(row=>activeColumns.filter(column=>selectedCells.has(cellId(row._key,column.key))).map(column=>imageKeys.has(column.key)?((column.key==="images"?rowImages(row):rowLabelImages(row)).length?"图片":null):column.key==="collectionInventory"?(row.collectionInventory || []).reduce((sum:number,item:Row)=>sum+item.available+item.production,0):column.custom?row.extraFields?.[column.key]:valueAt(row,column)));
   const editor = <div className="selection-editor-bar" role="group" aria-label="单元格编辑栏">
     <span className="selection-editor-label" title={editorColumn?.label}>{editorRow && editorColumn ? `${rows.indexOf(editorRow) + 1} · ${editorColumn.label}` : "单元格"}</span>
+    {!!editorDuplicateCount && <span className="selection-duplicate-note" role="status">重复 {editorDuplicateCount} 行</span>}
     {editorColumn?.key === "registrationBatch" && editorRow ? <input aria-label="编辑登记批次" type="date" value={editorValue.slice(0, 10)} disabled={!canEdit} onChange={(event) => editCurrent(event.target.value)} /> :
       editorColumn?.key === "sizeRange" && editorRow ? <SizeEditor key={editorRow._key} value={editorValue} disabled={!canEdit} onChange={editCurrent} /> :
       editorColumn?.key === "color" && editorRow ? <Select aria-label={`编辑${editorColumn.label}`} mode="tags" className="selection-editor-tags" value={splitTags(editorValue)} disabled={!canEdit} tokenSeparators={["/"]} placeholder="输入后按 Enter 添加，多项用 / 分隔" options={colorSuggestions.map(value => ({ value, label: value }))} onChange={(value) => editCurrent(joinTags(value))} /> :
@@ -630,7 +636,7 @@ export function StyleSelectionsPage() {
     <Dropdown trigger={["click"]} menu={{ selectable: true, selectedKeys: editorRow && editorColumn ? [editorRow.cellTextColors?.[editorColumn.key] || "default"] : [], items: textColorOptions.map(option => ({ key: option.value || "default", label: option.label, icon: <span className="selection-color-dot" style={{ background: option.value || "#46352a" }} /> })), onClick: ({ key }) => applyTextColor(key === "default" ? "" : key) }}><Button aria-label="字体颜色" title="字体颜色" disabled={!canEdit || !selectedCells.size} icon={<FontColorsOutlined />} /></Dropdown>
     {!!Object.keys(columnFilters).length && <Button type="text" onClick={() => { void applyView({ filters: {}, sort: columnSort }, followShared && canEdit && !!sharedView.data?.data?.revision, sharedView.data?.data?.revision || 0).catch(error => message.error((error as Error).message)); }}>清除列筛选 ({Object.keys(columnFilters).length})</Button>}
     {!followShared && !!sharedView.data?.data?.revision && <Button type="text" onClick={() => setFollowShared(true)}>使用共享筛选</Button>}
-    <SelectionTransfer filteredRows={Object.keys(columnFilters).length || columnSort ? filteredRows : undefined} canEdit={canEdit} blocked={!!dirtyCount || saving || deleting} selectedRows={filteredRows.filter(row => selectedRows.includes(row._key))} query={search} onImported={() => { appliedSnapshot.current = ""; void queryClient.invalidateQueries({ queryKey: ["style-selections"] }); }} />
+    <SelectionTransfer filteredRows={Object.keys(columnFilters).length || columnSort ? filteredRows : undefined} canEdit={canEdit} blocked={!!dirtyCount || saving || deleting} selectedRows={filteredRows.filter(row => selectedRows.includes(row._key))} query={search} onImported={() => { appliedSnapshot.current = ""; void queryClient.invalidateQueries({ queryKey: ["style-selections"] }); void queryClient.invalidateQueries({ queryKey: ["style-selection-style-counts"] }); }} />
     </Space><span className="selection-record-count">{!!Object.keys(errors).length && <Tooltip title="修改尚未保存；悬停红色单元格查看原因，修正后重试"><Button type="text" size="small" danger disabled={saving} onClick={() => { attempts.current.retry(); setRetryVersion((value) => value + 1); }}>未保存 · 重试</Button></Tooltip>}</span></div>
     {!!collaborators.length && <div className="selection-collaborators" aria-label="在线协作者">{collaborators.map((person: Row) => <span key={person.userId} title={person.editingId ? `正在编辑第 ${person.editingId} 行` : "在线"}><i>{String(person.displayName || "协").slice(0, 1)}</i>{person.displayName}{person.editingId ? " · 编辑中" : " · 在线"}</span>)}</div>}
       {editor}

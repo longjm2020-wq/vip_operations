@@ -153,6 +153,13 @@ export async function list(query: Record<string, unknown>) {
   return { data, total: total!.n, ...p };
 }
 
+export async function styleCounts() {
+  return rows(db, `SELECT btrim(xuti_style_no) AS "xutiStyleNo",count(*)::int AS count
+    FROM style_selections
+    WHERE xuti_style_no IS NOT NULL AND btrim(xuti_style_no) <> ''
+    GROUP BY btrim(xuti_style_no)`);
+}
+
 export async function presence(_c: Context) {
   return rows(
     db,

@@ -598,6 +598,8 @@ try {
   assert.equal(manySaved.images.length, 12);
   check("selection images upload independently, enforce size and access, and allow more than five images");
   const occupiedText = await ok("/style-selections", "POST", { xutiStyleNo: "OCCUPIED-TEXT", sortOrder: 0 });
+  await ok("/style-selections", "POST", { xutiStyleNo: " OCCUPIED-TEXT ", sortOrder: 0 });
+  assert.equal((await ok("/style-selections/style-counts")).find((item:any) => item.xutiStyleNo === "OCCUPIED-TEXT")?.count, 2);
   const occupiedImage = await ok("/style-selections", "POST", { images: [{ id: randomUUID(), url: uploadedImage.url, color: "" }], sortOrder: 0 });
   const occupiedLabel = await ok("/style-selections", "POST", { labelImages: [{ id: randomUUID(), url: uploadedImage.url, color: "" }], sortOrder: 0 });
   const firstEmpty = await ok("/style-selections", "POST", { cellColors: { xutiStyleNo: "PINK" }, sortOrder: 0 });

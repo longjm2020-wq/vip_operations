@@ -40,6 +40,7 @@ class StyleSelectionsController {
   @Permission("selection.read") @Get() list(@Query() query: Record<string, unknown>) {
     return selections.list(query);
   }
+  @Permission("selection.read") @Get("style-counts") styleCounts() { return selections.styleCounts(); }
   @Permission("selection.manage") @Post() create(@Req() request: AuthRequest, @Body() body: unknown) {
     return selections.write(context(request), body);
   }
