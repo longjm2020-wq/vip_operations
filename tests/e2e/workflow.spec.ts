@@ -60,9 +60,9 @@ test("真实前后端：建档、采购确认、两次入库、流水追溯", as
   await page.getByRole("button", { name: "新增商品" }).click();
   await page.getByLabel("款号", { exact: true }).fill("E2E-STYLE");
   await page.getByLabel("商品名称", { exact: true }).fill("秋季针织开衫");
-  await select(page, "品类", "针织衫");
+  await select(page, "三级分类", "针织衫");
   await select(page, "默认供应商", "验收服饰供应商");
-  await page.getByRole("button", { name: "保存", exact: true }).click();
+  await page.getByRole("button", { name: "保存商品", exact: true }).click();
   await expect(page.getByRole("link", { name: "E2E-STYLE" })).toBeVisible();
   await page.goto("/skus");
   await page.getByRole("button", { name: "新建资料" }).click();
