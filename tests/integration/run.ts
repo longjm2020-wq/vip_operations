@@ -674,7 +674,8 @@ try {
   assert.equal((await ext("/"+collectSource.id,"POST",{revision:0,info},collection.token,saveKey)).status,201);
   assert.equal((await ext("/"+collectSource.id,"POST",{revision:0,info})).status,409);
   assert.equal((await ok("/style-selections/"+collectSource.id)).supplierStyleNo,"OLD");
-  assert.equal((await ext("/submit","POST",{revision:1})).status,201);
+  assert.equal((await ext("/submit","POST",{revision:1,itemId:collectOther.id})).status,400);
+  assert.equal((await ext("/submit","POST",{revision:1,itemId:collectSource.id})).status,201);
   assert.equal((await ext("/"+collectSource.id,"POST",{revision:2,info})).status,409);
   await ok("/selection-collections/"+collection.id+"/review","POST",{action:"reject",revision:2,reason:"补拍"});
   const oversizedPhoto=Buffer.alloc(500*1024);Buffer.from("89504e470d0a1a0a","hex").copy(oversizedPhoto);
@@ -683,7 +684,7 @@ try {
   assert.equal((await ext("/"+collectSource.id+"/photos","POST",{action:"add",revision:3,color:"白",data:oversizedData})).status,400);
   const photoData="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jz1sAAAAASUVORK5CYII=";
   assert.equal((await ext("/"+collectSource.id+"/photos","POST",{action:"add",revision:3,color:"白",data:photoData})).status,201);
-  assert.equal((await ext("/submit","POST",{revision:4})).status,201);
+  assert.equal((await ext("/submit","POST",{revision:4,itemId:collectSource.id})).status,201);
   await ok("/selection-collections/"+collection.id+"/review","POST",{action:"approve",revision:5});
   const appliedCollection=await ok("/style-selections/"+collectSource.id);
   assert.equal(appliedCollection.xutiStyleNo,"COLLECT-ONE");
@@ -694,11 +695,11 @@ try {
   await ok("/selection-collections/"+collection.id+"/review","POST",{action:"close",revision:6});
   assert.equal((await ext()).status,404);
   assert.equal((await fetch(base+`/public/selection-collection/${collectSource.id}/images/shared-existing`,{headers:{"X-Collection-Token":collection.token}})).status,404);
-  const conflictShare=await ok("/selection-collections","POST",{title:"CONFLICT",ids:[collectSource.id,collectOther.id],days:7});
+  const conflictShare=await ok("/selection-collections","POST",{title:"CONFLICT",ids:[collectSource.id],days:7});
   assert.equal((await ext("/submit","POST",{revision:0},conflictShare.token)).status,201);
-  await ok("/style-selections/"+collectOther.id,"PATCH",{material:"internal edit"});
+  await ok("/style-selections/"+collectSource.id,"PATCH",{material:"internal edit"});
   assert.equal((await request("/selection-collections/"+conflictShare.id+"/review","POST",{action:"approve",revision:1})).status,409);
-  assert.equal((await ok("/style-selections/"+collectSource.id)).version,appliedCollection.version);
+  assert.equal((await ok("/style-selections/"+collectSource.id)).material,"internal edit");
   await rows(db,"UPDATE selection_collections SET expires_at=now()-interval '1 second' WHERE id=$1::bigint",conflictShare.id);
   assert.equal((await ext("","GET",undefined,conflictShare.token)).status,404);
   const perItem=await ok("/selection-collections","POST",{title:"PER ITEM",ids:[collectSource.id,collectOther.id],days:7});
@@ -716,6 +717,29 @@ try {
   assert.deepEqual(itemStates.map((item:any)=>item.status),["APPROVED","DRAFT"]);
   assert.equal((await ext("/submit","POST",{revision:6,itemId:collectSource.id,action:"withdraw"},perItem.token)).status,409);
   assert.equal((await ext("/"+collectOther.id,"POST",{revision:6,info},perItem.token)).status,201);
+  const batchSecond=await ok("/style-selections","POST",{color:"白",sizeRange:"S",images:[{id:"batch-existing",url:uploadedImage.url,color:"白"}]});
+  const batchShare=await ok("/selection-collections","POST",{title:"BATCH SUBMIT",ids:[collectSource.id,batchSecond.id],days:7});
+  assert.equal((await ext("/submit","POST",{revision:0,itemIds:[collectSource.id,batchSecond.id]},batchShare.token)).status,400);
+  assert.deepEqual((await ext("","GET",undefined,batchShare.token)).body.data.items.map((item:any)=>item.status),["DRAFT","DRAFT"]);
+  assert.equal((await ext("/"+batchSecond.id,"POST",{revision:0,info},batchShare.token)).status,201);
+  assert.equal((await ext("/submit","POST",{revision:1,itemIds:[collectSource.id,batchSecond.id]},batchShare.token)).status,201);
+  assert.deepEqual((await ext("","GET",undefined,batchShare.token)).body.data.items.map((item:any)=>item.status),["SUBMITTED","SUBMITTED"]);
+  assert.equal((await ext("/submit","POST",{revision:2,itemIds:[collectSource.id,collectSource.id]},batchShare.token)).status,400);
+  const correction=await ok("/selection-collections","POST",{title:"CORRECT ITEM",ids:[collectSource.id,batchSecond.id],days:7});
+  await ok(`/selection-collections/${correction.id}/items/${collectSource.id}/edit`,"POST",{revision:0,action:"rename",xutiStyleNo:"COLLECT-CORRECTED"});
+  assert.equal((await ext("","GET",undefined,correction.token)).body.data.items[0].xutiStyleNo,"COLLECT-CORRECTED");
+  assert.equal((await ok("/style-selections/"+collectSource.id)).xutiStyleNo,"COLLECT-CORRECTED");
+  assert.equal((await ext("/submit","POST",{revision:1,itemId:collectSource.id},correction.token)).status,201);
+  await ok(`/selection-collections/${correction.id}/items/${collectSource.id}/edit`,"POST",{revision:2,action:"rename",xutiStyleNo:"COLLECT-CORRECTED-2"});
+  assert.equal((await ext("","GET",undefined,correction.token)).body.data.items[0].status,"REJECTED");
+  await ok(`/selection-collections/${correction.id}/items/${batchSecond.id}/edit`,"POST",{revision:3,action:"replace",targetId:collectOther.id});
+  assert.deepEqual((await ext("","GET",undefined,correction.token)).body.data.items.map((item:any)=>String(item.id)),[String(collectSource.id),String(collectOther.id)]);
+  assert.equal((await request(`/selection-collections/${correction.id}/items/${collectSource.id}/edit`,"POST",{revision:4,action:"replace",targetId:collectOther.id})).status,409);
+  await ok(`/selection-collections/${correction.id}/items/${collectOther.id}/withdraw`,"POST",{revision:4});
+  assert.equal((await ext("","GET",undefined,correction.token)).body.data.items.length,1);
+  assert.equal((await ext("/submit","POST",{revision:5,itemId:collectSource.id},correction.token)).status,201);
+  await ok("/selection-collections/"+correction.id+"/review","POST",{action:"approve",revision:6,itemId:collectSource.id});
+  assert.equal((await request(`/selection-collections/${correction.id}/items/${collectSource.id}/withdraw`,"POST",{revision:7})).status,409);
   check("external collections isolate fields and images, save drafts, reject/resubmit, approve atomically, revoke and expire");
 
   const preview = await ok("/style-selections/import/preview", "POST", { rows: [

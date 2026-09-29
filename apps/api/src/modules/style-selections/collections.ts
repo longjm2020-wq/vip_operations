@@ -2,7 +2,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { z } from "zod";
 import { db, rows, one, json, type Tx, type Row } from "../../../../../packages/database/src/index.js";
 import { parse, id, fail, command, hash, canonical, audit, type Context } from "../../core.js";
-import { collectionInfoSchema, collectionDraftSchema, collectionInventory, collectionTags } from "../../../../../packages/contracts/src/selection-collection.js";
+import { collectionInfoSchema, collectionSubmissionSchema, collectionDraftSchema, collectionInventory, collectionTags } from "../../../../../packages/contracts/src/selection-collection.js";
 
 const snapshot = (row: Row) => ({
   supplierStyleNo: row.supplier_style_no || "", color: row.color || "", sizeRange: row.size_range || "",
@@ -78,6 +78,55 @@ export async function detail(value: string) {
   if (!share) fail("NOT_FOUND","收集表不存在",404);
   return {...share,items:await rows(db,"SELECT selection_id AS id,xuti_style_no,status,feedback,source_version,original,draft FROM selection_collection_items WHERE collection_id=$1::bigint ORDER BY position",value)};
 }
+export async function withdrawItem(c: Context, value: string, itemId: string, input: unknown) {
+  const body=parse(z.object({revision:z.number().int().min(0)}).strict(),input);
+  return command(c,"selection-collections/withdraw-item/"+value+"/"+itemId,body,async tx=>{
+    const share=await internal(tx,value);version(share,body.revision);
+    if(share.closed)fail("INVALID_STATE","收集表已关闭，请先重新生成分享链接",409);
+    const item=await one(tx,"SELECT * FROM selection_collection_items WHERE collection_id=$1::bigint AND selection_id=$2::bigint",value,itemId);
+    if(!item)fail("NOT_FOUND","款式不在收集表内",404);
+    if(item.status==="APPROVED")fail("INVALID_STATE","已确认款式不可撤回",409);
+    await rows(tx,"DELETE FROM selection_collection_items WHERE collection_id=$1::bigint AND selection_id=$2::bigint",value,itemId);
+    await aggregate(tx,share);
+    await rows(tx,"UPDATE selection_collections SET revision=revision+1,updated_at=now() WHERE id=$1::bigint",value);
+    await event(tx,share,"ITEM_WITHDRAW",c.actor.id);
+    await audit(tx,c,"DELETE","selection-collection-item",itemId,item,null,`从收集表 ${value} 撤回单款`);
+    return {revision:share.revision+1};
+  });
+}
+export async function editItem(c: Context, value: string, itemId: string, input: unknown) {
+  const body=parse(z.discriminatedUnion("action",[
+    z.object({action:z.literal("rename"),revision:z.number().int().min(0),xutiStyleNo:z.string().trim().max(64)}).strict(),
+    z.object({action:z.literal("replace"),revision:z.number().int().min(0),targetId:id}).strict(),
+  ]),input);
+  return command(c,"selection-collections/edit-item/"+value+"/"+itemId,body,async tx=>{
+    const share=await internal(tx,value);version(share,body.revision);
+    if(share.closed)fail("INVALID_STATE","收集表已关闭，请先重新生成分享链接",409);
+    const item=await one(tx,"SELECT * FROM selection_collection_items WHERE collection_id=$1::bigint AND selection_id=$2::bigint",value,itemId);
+    if(!item)fail("NOT_FOUND","款式不在收集表内",404);
+    if(item.status==="APPROVED")fail("INVALID_STATE","已确认款式不可重新编辑",409);
+    if(body.action==="rename"){
+      const source=await one(tx,"SELECT * FROM style_selections WHERE id=$1::bigint FOR UPDATE",itemId);
+      if(!source || source.version!==item.source_version)fail("EDIT_CONFLICT","原款资料已变化，请重新生成收集表后再编辑",409);
+      const after=await one(tx,"UPDATE style_selections SET xuti_style_no=$2,version=version+1,updated_at=now() WHERE id=$1::bigint RETURNING *",itemId,body.xutiStyleNo || null);
+      await audit(tx,c,"UPDATE","style-selection",itemId,source,after,`更正收集表 ${value} 的序缇款号`);
+      await rows(tx,"UPDATE selection_collection_items SET xuti_style_no=$3,source_version=$4,status=CASE WHEN status='SUBMITTED' THEN 'REJECTED' ELSE status END,feedback='内部已更新序缇款号，请核对并重新提交' WHERE collection_id=$1::bigint AND selection_id=$2::bigint",value,itemId,body.xutiStyleNo,after!.version);
+    } else {
+      if(body.targetId===itemId)fail("VALIDATION_ERROR","请选择另一款替换",400);
+      const exists=await one(tx,"SELECT selection_id FROM selection_collection_items WHERE collection_id=$1::bigint AND selection_id=$2::bigint",value,body.targetId);
+      if(exists)fail("CONFLICT","目标款式已在这张收集表中",409);
+      const source=await one(tx,"SELECT * FROM style_selections WHERE id=$1::bigint FOR SHARE",body.targetId);
+      if(!source)fail("NOT_FOUND","目标款式不存在",404);
+      const draft=JSON.stringify(snapshot(source));
+      await rows(tx,"UPDATE selection_collection_items SET selection_id=$3::bigint,source_version=$4,xuti_style_no=$5,original=$6::jsonb,draft=$6::jsonb,status='DRAFT',feedback='内部已更换款式，请重新填写本款' WHERE collection_id=$1::bigint AND selection_id=$2::bigint",value,itemId,body.targetId,source.version,source.xuti_style_no || "",draft);
+    }
+    await aggregate(tx,share);
+    await rows(tx,"UPDATE selection_collections SET revision=revision+1,updated_at=now() WHERE id=$1::bigint",value);
+    await event(tx,share,body.action==="rename"?"ITEM_RENAME":"ITEM_REPLACE",c.actor.id);
+    await audit(tx,c,"UPDATE","selection-collection-item",itemId,item,{...item,selection_id:body.action==="replace"?body.targetId:itemId,action:body.action},`更新收集表 ${value} 中的单款`);
+    return {revision:share.revision+1};
+  });
+}
 export async function publicDetail(token: string) {
   const share = await access(db,token);
   const items = await rows(db,"SELECT selection_id AS id,xuti_style_no,status,feedback,draft FROM selection_collection_items WHERE collection_id=$1::bigint ORDER BY position",share.id);
@@ -89,7 +138,7 @@ export async function save(token: string, key: string, value: string, input: unk
   return publicWrite(token,key,{op:"save",value,body},async(tx,share)=>{
     version(share,body.revision);
     const item = await one(tx,"SELECT * FROM selection_collection_items WHERE collection_id=$1::bigint AND selection_id=$2::bigint",share.id,value);
-    if (!item) fail("NOT_FOUND","款式不在收集表内",404);
+    if (!item) fail("NOT_FOUND","本款已被内部撤回或替换，请刷新收集表核对",404);
     editable(item);
     const colors = collectionTags(body.info.color);
     if (item.draft.images.some((image:Row)=>image.color && !colors.includes(image.color))) fail("VALIDATION_ERROR","请保留已有图片的颜色，或先移除相关图片",400);
@@ -98,17 +147,23 @@ export async function save(token: string, key: string, value: string, input: unk
   });
 }
 export async function submit(token: string,key: string,input: unknown) {
-  const body=parse(z.object({revision:z.number().int().min(0),itemId:id.optional(),action:z.enum(["submit","withdraw"]).default("submit")}).strict(),input);
+  const body=parse(z.object({revision:z.number().int().min(0),itemId:id.optional(),itemIds:z.array(id).min(1).max(100).optional(),action:z.enum(["submit","withdraw"]).default("submit")}).strict().superRefine((value,ctx)=>{
+    if(value.itemId && value.itemIds)ctx.addIssue({code:"custom",message:"请选择单款或多款提交"});
+    if(value.itemIds && new Set(value.itemIds).size!==value.itemIds.length)ctx.addIssue({code:"custom",message:"所选款式不可重复"});
+    if(value.action==="withdraw" && value.itemIds)ctx.addIssue({code:"custom",message:"仅支持逐款撤回"});
+  }),input);
   return publicWrite(token,key,{op:"submit",body},async(tx,share)=>{
     version(share,body.revision);
-    const items=await rows(tx,"SELECT * FROM selection_collection_items WHERE collection_id=$1::bigint"+(body.itemId?" AND selection_id=$2::bigint":""),share.id,...(body.itemId?[body.itemId]:[]));
-    if(!items.length)fail("NOT_FOUND","款式不在收集表内",404);
+    const items=await rows(tx,"SELECT * FROM selection_collection_items WHERE collection_id=$1::bigint"+(body.itemId?" AND selection_id=$2::bigint":body.itemIds?" AND selection_id=ANY($2::bigint[])":"")+" ORDER BY position",share.id,...(body.itemId?[body.itemId]:body.itemIds?[body.itemIds]:[]));
+    if(!items.length || (body.itemIds && items.length!==body.itemIds.length))fail("NOT_FOUND","所选款式不在收集表内",404);
     for (const item of items) {
       if(body.action==="withdraw") {
         if(item.status!=="SUBMITTED")fail("INVALID_STATE","仅未被内部确认的已提交款式可撤回",409);
       } else {
         editable(item);
-        const {images: _images,...info}=item.draft;parse(collectionInfoSchema,info);
+        const {images,...info}=item.draft;
+        const checked=collectionSubmissionSchema.safeParse({images,info});
+        if(!checked.success)fail("VALIDATION_ERROR",`第${item.position+1}款：${checked.error.issues.map(issue=>issue.message).join("；")}`,400);
       }
       await rows(tx,"UPDATE selection_collection_items SET status=$3,feedback='' WHERE collection_id=$1::bigint AND selection_id=$2::bigint",share.id,item.selection_id,body.action==="withdraw"?"DRAFT":"SUBMITTED");
     }

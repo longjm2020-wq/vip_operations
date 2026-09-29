@@ -80,6 +80,8 @@ class SelectionCollectionsController {
   @Permission("selection.manage") @Post() create(@Req() req: AuthRequest,@Body() body: unknown) { return collections.create(context(req),body); }
   @Permission("selection.manage") @Get() list() { return collections.list(); }
   @Permission("selection.manage") @Get(":id") detail(@Param("id") value:string) { return collections.detail(paramId(value)); }
+  @Permission("selection.manage") @Post(":id/items/:itemId/withdraw") withdrawItem(@Req() req:AuthRequest,@Param("id") value:string,@Param("itemId") itemId:string,@Body() body:unknown) { return collections.withdrawItem(context(req),paramId(value),paramId(itemId),body); }
+  @Permission("selection.manage") @Post(":id/items/:itemId/edit") editItem(@Req() req:AuthRequest,@Param("id") value:string,@Param("itemId") itemId:string,@Body() body:unknown) { return collections.editItem(context(req),paramId(value),paramId(itemId),body); }
   @Permission("selection.manage") @Post(":id/review") review(@Req() req:AuthRequest,@Param("id") value:string,@Body() body:unknown) { return collections.review(context(req),paramId(value),body); }
 }
 @Controller("api/v1/public/selection-collection")

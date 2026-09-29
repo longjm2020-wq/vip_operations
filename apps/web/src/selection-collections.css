@@ -12,6 +12,11 @@
 .collection-images .ant-image-img {width:120px;height:120px;object-fit:contain;}
 .collection-image-missing {height:120px;background:#fafafa;display:grid;place-items:center;color:#999;}
 .collection-public .ant-input-number {width:100%;}
+.collection-submit-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin:0 0 12px;}
+.collection-submit-toolbar>span{color:#876b58;}
+#collection-photos h3 span[aria-label="必填"]{color:#ff4d4f;}
+.collection-internal-correction{margin:16px 0;padding:12px;border:1px solid #ead8ca;border-radius:8px;background:#fffaf5;}
+.collection-internal-correction .ant-space{display:flex;margin:8px 0;}
 @media(max-width:650px){.collection-public{padding:10px;width:100%;}.collection-layout{display:block;}.collection-layout aside{max-height:160px;margin-bottom:12px;}.collection-fields{grid-template-columns:1fr;}.collection-public .ant-card-body{padding:14px;}.collection-public input,.collection-public textarea,.collection-public .ant-select{font-size:16px!important;}}
 
 .collection-mobile-picker{display:none;}

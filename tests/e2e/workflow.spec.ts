@@ -57,7 +57,7 @@ test("真实前后端：建档、采购确认、两次入库、流水追溯", as
   await create(page, "/warehouses", { 仓库编码: "E2E-WH", 仓库名称: "验收仓" });
   await create(page, "/categories", { 品类编码: "E2E-CAT", 名称: "针织衫" });
   await page.goto("/products");
-  await page.getByRole("button", { name: "新建商品" }).click();
+  await page.getByRole("button", { name: "新增商品" }).click();
   await page.getByLabel("款号", { exact: true }).fill("E2E-STYLE");
   await page.getByLabel("商品名称", { exact: true }).fill("秋季针织开衫");
   await select(page, "品类", "针织衫");
