@@ -123,7 +123,8 @@ export async function editItem(c: Context, value: string, itemId: string, input:
     await aggregate(tx,share);
     await rows(tx,"UPDATE selection_collections SET revision=revision+1,updated_at=now() WHERE id=$1::bigint",value);
     await event(tx,share,body.action==="rename"?"ITEM_RENAME":"ITEM_REPLACE",c.actor.id);
-    await audit(tx,c,"UPDATE","selection-collection-item",itemId,item,{...item,selection_id:body.action==="replace"?body.targetId:itemId,action:body.action},`更新收集表 ${value} 中的单款`);
+    const updated=await one(tx,"SELECT * FROM selection_collection_items WHERE collection_id=$1::bigint AND selection_id=$2::bigint",value,body.action==="replace"?body.targetId:itemId);
+    await audit(tx,c,"UPDATE","selection-collection-item",itemId,item,updated,`更新收集表 ${value} 中的单款`);
     return {revision:share.revision+1};
   });
 }
