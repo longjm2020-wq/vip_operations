@@ -2,7 +2,7 @@ export const fieldTypes = {text:"文本",number:"数字",date:"日期",single:"�
 export const systemFieldTypes=new Set<string>(["creator","modifier","createdTime","modifiedTime","autonumber"]);
 export const systemField=(field:SelectionField)=>systemFieldTypes.has(field.type || field.fallbackType || "");
 export type FieldType = keyof typeof fieldTypes;
-export type SelectionField = {key:string;label:string;width:number;custom?:boolean;type?:FieldType;fallbackType?:FieldType;options?:string[];personDisplay?:"name"|"username"|"both";timeDisplay?:"date"|"datetime";numberConfig?:{prefix:string;suffix:string;digits:number};tagConfig?:{allowCustom:boolean;multiple:boolean;max:number;order:"selection"|"options"|"alphabetical";color:string};imageConfig?:{colors:boolean;links:boolean;upload:boolean;mobile:boolean;max:number}};
+export type SelectionField = {key:string;label:string;width:number;custom?:boolean;deleted?:boolean;type?:FieldType;fallbackType?:FieldType;options?:string[];personDisplay?:"name"|"username"|"both";timeDisplay?:"date"|"datetime";numberConfig?:{prefix:string;suffix:string;digits:number};tagConfig?:{allowCustom:boolean;multiple:boolean;max:number;order:"selection"|"options"|"alphabetical";color:string};imageConfig?:{colors:boolean;links:boolean;upload:boolean;mobile:boolean;max:number}};
 export function resetFieldTypes(fields:SelectionField[]):SelectionField[]{
   return fields.map(field=>({...field,fallbackType:field.type || field.fallbackType,type:undefined}));
 }

@@ -2,7 +2,7 @@ import {SelectionFieldManager,SelectionFieldInput} from "./selection-field-manag
 import { SelectionProtectionControl, editableSelectionCell, readableSelectionCell } from "./selection-protection";
 import { SelectionOrganization } from "./selection-organization";
 import { useSelectionDrag } from "./selection-drag";
-import { parseExactStyleNumbers } from "./selection-style-search";
+import { parseSelectionSearch,matchesSelectionSearch } from "./selection-style-search";
 import {resetFieldTypes,defaultTagConfig,orderedFieldTags,fieldValueError,fieldImages,defaultImageConfig,systemField,type SelectionField} from "./selection-field-types";
 import { selectionSystemValue } from "./selection-system-fields";
 import { SelectionStatistics } from "./selection-statistics";
@@ -20,7 +20,7 @@ import { formatSelectionValue } from "../../../packages/contracts/src/selection-
 import { Fragment, useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { App, Button, Card, Checkbox, Empty, Image, Input, Modal, Pagination, Popover, Dropdown, Select, Space, Tag, Tooltip } from "antd";
-import { BgColorsOutlined, CopyOutlined, DownloadOutlined, FontColorsOutlined, VerticalAlignTopOutlined, VerticalAlignMiddleOutlined, VerticalAlignBottomOutlined, CloseOutlined, AlignLeftOutlined, AlignCenterOutlined, AlignRightOutlined, DeleteOutlined, FilterOutlined, LinkOutlined, PlusOutlined, SettingOutlined, UnorderedListOutlined, UploadOutlined } from "@ant-design/icons";
+import { BgColorsOutlined, CopyOutlined, DownloadOutlined, FontColorsOutlined, VerticalAlignTopOutlined, VerticalAlignMiddleOutlined, VerticalAlignBottomOutlined, CloseOutlined, AlignLeftOutlined, AlignCenterOutlined, AlignRightOutlined, DeleteOutlined, FilterOutlined, LinkOutlined, PlusOutlined, SettingOutlined, SearchOutlined, UnorderedListOutlined, UploadOutlined } from "@ant-design/icons";
 import { api, queryClient } from "./api";
 import { prepareUpload, readUpload } from "./upload-file";
 import { Header, QueryState, Row, useCan, useUser } from "./shared";
@@ -247,20 +247,11 @@ export function StyleSelectionsPage() {
   const user = useUser();
   const { message } = App.useApp();
   const [columns, setColumns] = useState<Column[]>(initialColumns);
-  const [visible, setVisible] = useState<string[]>(() => {const keys=initialColumns().map(column=>column.key);try{const hidden=JSON.parse(localStorage.getItem("selection-hidden-fields-v1") || "[]");return keys.filter(key=>!Array.isArray(hidden) || !hidden.includes(key));}catch{return keys;}});
+  const [visible, setVisible] = useState<string[]>(() => {const keys=initialColumns().filter(column=>!column.deleted).map(column=>column.key);try{const hidden=JSON.parse(localStorage.getItem("selection-hidden-fields-v1") || "[]");return keys.filter(key=>!Array.isArray(hidden) || !hidden.includes(key));}catch{return keys;}});
   useEffect(()=>{localStorage.setItem("selection-hidden-fields-v1",JSON.stringify(columns.filter(column=>!visible.includes(column.key)).map(column=>column.key)));},[columns,visible]);
-  const [searchMode, setSearchMode] = useState<"exact" | "keyword">("exact");
-  const [exactSearchText, setExactSearchText] = useState("");
-  const [keywordSearchText, setKeywordSearchText] = useState("");
-  const searchText = searchMode === "exact" ? exactSearchText : keywordSearchText;
-  const setSearchText = (value: string) => { if (searchMode === "exact") setExactSearchText(value); else setKeywordSearchText(value); };
-  const changeSearchMode = (mode: "exact" | "keyword") => {
-    if (mode === "keyword" && !keywordSearchText && exactSearchText.length <= 100) setKeywordSearchText(exactSearchText);
-    if (mode === "exact" && !exactSearchText) setExactSearchText(keywordSearchText);
-    setSearchMode(mode);
-  };
-  const search = searchMode === "keyword" ? keywordSearchText.trim() : "";
-  const exactStyleNumbers = useMemo(() => parseExactStyleNumbers(searchMode === "exact" ? searchText : ""), [searchMode, searchText]);
+  const [searchText,setSearchText]=useState("");
+  const search="";
+  const searchTerms=useMemo(()=>parseSelectionSearch(searchText),[searchText]);
   const [columnFilters, setColumnFilters] = useState<SelectionFilters>({});
   const [columnSort, setColumnSort] = useState<SelectionView["sort"]>(null);
   const [filterColumn, setFilterColumn] = useState<string | null>(null);
@@ -306,7 +297,7 @@ export function StyleSelectionsPage() {
   const [retryVersion, setRetryVersion] = useState(0);
   const original = useRef(new Map<string, Row>());
   const appliedSnapshot = useRef("");
-  const queryString = new URLSearchParams({ page: "1", pageSize: "100", ...(search ? { q: search } : {}), sort, direction }).toString();
+  const queryString = new URLSearchParams({ page: "1", pageSize: "100", sort, direction }).toString();
   const data = useQuery({ queryKey: ["style-selections", queryString], queryFn: () => fetchSelectionRows(search, sort, direction, queryClient.getQueryData(["style-selections", queryString])), refetchInterval: saving ? false : 10000, refetchOnWindowFocus: !saving });
   const styleCounts = useQuery({ queryKey: ["style-selection-style-counts"], queryFn: () => api("/style-selections/style-counts"), refetchInterval: 30000 });
   const presence = useQuery({ queryKey: ["style-selection-presence"], queryFn: () => api("/style-selections/presence"), refetchInterval: 2000 });
@@ -321,9 +312,10 @@ export function StyleSelectionsPage() {
   const sharedSnapshot = JSON.stringify(sharedView.data?.data);
   useEffect(() => {
     if (!followShared || filterColumn || !sharedView.data?.data) return;
-    setColumnFilters(sharedView.data.data.view.filters);
-    setColumnSort(sharedView.data.data.view.sort);
-  }, [sharedSnapshot, followShared, filterColumn]);
+    const removed=new Set(columns.filter(column=>column.deleted).map(column=>column.key));
+    setColumnFilters(Object.fromEntries(Object.entries(sharedView.data.data.view.filters as SelectionFilters).filter(([key])=>!removed.has(key))));
+    const nextSort=sharedView.data.data.view.sort;setColumnSort(nextSort && removed.has(nextSort.key)?null:nextSort);
+  }, [sharedSnapshot, followShared, filterColumn, columns]);
   const snapshot = useMemo(() => JSON.stringify(data.data?.data || []), [data.data]);
   useEffect(()=>{localStorage.setItem("selection-field-config-v1",JSON.stringify(Object.fromEntries(columns.map(column=>[column.key,column]))));localStorage.setItem("selection-field-types-initialized-v2","true");},[columns]);
   useEffect(() => { localStorage.setItem(customColumnsKey, JSON.stringify(columns.filter((column) => column.custom))); }, [columns]);
@@ -366,11 +358,12 @@ export function StyleSelectionsPage() {
     original.current = new Map(next.map((row: Row) => [row._key, { ...row }])); appliedSnapshot.current = snapshot;
   }, [data.data, saving, snapshot, rows]);
 
-  const activeColumns = columns.filter((column) => visible.includes(column.key)).map(column=>({...column,type:column.type || column.fallbackType}));
+  const availableColumns=columns.filter(column=>!column.deleted);
+  const activeColumns = availableColumns.filter((column) => visible.includes(column.key)).map(column=>({...column,type:column.type || column.fallbackType}));
   const repeatedStyles = useMemo(() => duplicateStyleCounts(rows, styleCounts.data?.data, original.current), [rows, styleCounts.data]);
   const colorSuggestions = useMemo(() => [...new Set(rows.flatMap((row) => splitTags(row.color)))], [rows]);
   const fieldViewRows=useMemo<Row[]>(()=>rows.map(row=>({...row,extraFields:{...(row.extraFields || {}),...Object.fromEntries(columns.filter(systemField).map(column=>[column.key,readableSelectionCell(row,column.key)?selectionSystemValue(row,column):""]))}})),[rows,columns]);
-  const filteredRows = useMemo(() => {const originalRows=new Map(rows.map(row=>[row._key,row]));return sortSelectionRows(fieldViewRows.filter(row => (!exactStyleNumbers.size || exactStyleNumbers.has(String(row.xutiStyleNo || "").trim())) && matchesSelectionFilters(row, columnFilters)), columnSort).map(row=>originalRows.get(row._key)!);}, [rows, fieldViewRows, columnFilters, columnSort, exactStyleNumbers]);
+  const filteredRows = useMemo(() => {const originalRows=new Map(rows.map(row=>[row._key,row]));return sortSelectionRows(fieldViewRows.filter(row => matchesSelectionSearch(row,searchTerms) && matchesSelectionFilters(row, columnFilters)), columnSort).map(row=>originalRows.get(row._key)!);}, [rows, fieldViewRows, columnFilters, columnSort, searchTerms]);
   const allGrouped = useMemo(() => {
     const key=groupBy==="batch"?"registrationBatch":groupBy==="supplier"?"supplierCode":groupBy.slice(6);
     const column=columns.find(column=>column.key===key);
@@ -388,7 +381,7 @@ export function StyleSelectionsPage() {
   const grouped = useMemo(() => {
     return allGrouped.map(group => ({...group, rows: group.rows.filter(row => pageRowKeys.has(row._key))})).filter(group => group.rows.length);
   }, [allGrouped, pageRowKeys]);
-  useEffect(() => { setPage(1); }, [searchText, searchMode, columnFilters, columnSort, groupBy]);
+  useEffect(() => { setPage(1); }, [searchText, columnFilters, columnSort, groupBy]);
   useEffect(() => { if (page > pageCount) setPage(pageCount); }, [page, pageCount]);
   useEffect(() => { setCellAnchor(null); setFocusedCell(null); setCopiedCells(new Set()); setCellTextEditing(false); }, [currentPage, pageSize]);
   useEffect(() => {
@@ -596,7 +589,7 @@ export function StyleSelectionsPage() {
         if(row.id)body=selectionDelta(body,original.current.get(row._key) || {});
         const attempt = attempts.current.start(row, body);
         try {
-          for(const column of columns.filter(column=>(column.type || column.fallbackType) && !collectionKeys.has(column.key) && (column.custom?column.key in (attempt.body.extraFields || {}):column.key in attempt.body))){const issue=fieldValueError({...column,type:column.type || column.fallbackType},column.custom?attempt.body.extraFields?.[column.key]:imageKeys.has(column.key)?JSON.stringify(attempt.body[column.key] || []):attempt.body[column.key]);if(issue)throw Object.assign(new Error(column.label+"："+issue),{status:400});}
+          for(const column of columns.filter(column=>!column.deleted && (column.type || column.fallbackType) && !collectionKeys.has(column.key) && (column.custom?column.key in (attempt.body.extraFields || {}):column.key in attempt.body))){const issue=fieldValueError({...column,type:column.type || column.fallbackType},column.custom?attempt.body.extraFields?.[column.key]:imageKeys.has(column.key)?JSON.stringify(attempt.body[column.key] || []):attempt.body[column.key]);if(issue)throw Object.assign(new Error(column.label+"："+issue),{status:400});}
           const colors = new Set(splitTags(attempt.sent.color));
           if ((attempt.body.images || []).some((image: SelectionImage) => image.color && !colors.has(image.color)) && readableSelectionCell(attempt.sent,"color")) throw Object.assign(new Error("图片颜色必须来自颜色字段"), { status: 400 });
           for (const key of moneyKeys) if (attempt.body[key] && !/^\d+(\.\d{1,2})?$/.test(String(attempt.body[key]))) throw Object.assign(new Error("金额最多两位小数且不能为负数"), { status: 400 });
@@ -750,12 +743,12 @@ export function StyleSelectionsPage() {
     }));
     setFormatTarget(null);
   };
-  return <>{formatTarget && <SelectionFormatModal count={formatTarget.ids.size} sample={formatTarget.sample} initial={formatTarget.initial} onCancel={() => setFormatTarget(null)} onApply={applyFormat} />}<Header title="选款登记" subtitle="集中登记候选款的图片、款号、供应商、颜色、材质与定价信息。" extra={<div className="selection-header-search"><Select aria-label="搜索方式" className="selection-search-mode" value={searchMode} options={[{value:"exact",label:"款号精确"},{value:"keyword",label:"关键词"}]} onChange={changeSearchMode}/><Input.TextArea className="selection-exact-search" aria-label={searchMode==="exact"?"序缇款号精确搜索":"关键词搜索"} placeholder={searchMode==="exact"?"多个款号用中英文逗号或换行分隔":"搜索批次、款号、供应商、颜色、材质"} allowClear autoSize={{minRows:1,maxRows:4}} maxLength={searchMode==="keyword"?100:undefined} value={searchText} onChange={event=>setSearchText(event.target.value)} /></div>} />
+  return <>{formatTarget && <SelectionFormatModal count={formatTarget.ids.size} sample={formatTarget.sample} initial={formatTarget.initial} onCancel={() => setFormatTarget(null)} onApply={applyFormat} />}<Header title="选款登记" subtitle="集中登记候选款的图片、款号、供应商、颜色、材质与定价信息。" extra={<div className="selection-header-search"><SearchOutlined aria-hidden="true"/><Input.TextArea variant="borderless" className="selection-search-input" aria-label="搜索选款" placeholder="搜索款号、供应商、颜色、材质…" allowClear autoSize={{minRows:1,maxRows:4}} value={searchText} onChange={event=>setSearchText(event.target.value)} /></div>} />
     <Card className="selection-card"><div className="selection-toolbar" aria-label="选款登记表格工具栏"><Space wrap size={4}>
       {canEdit && <SelectionCollections selectedRows={filteredRows.filter(row => selectedRows.includes(row._key))} blocked={!!dirtyCount || saving || deleting}/>} {canEdit && <SelectionPhotoQr />}<Button type="link" icon={<PlusOutlined />} disabled={!canEdit} onClick={() => add()}>添加一行</Button><Button type="link" danger icon={<DeleteOutlined />} disabled={!canEdit || !selectedRows.length || saving} loading={deleting} onClick={deleteRows}>删除行</Button>
-      <SelectionFieldManager columns={columns} visible={visible} canEdit={canEdit} onReset={()=>setColumns(current=>resetFieldTypes(current))} onVisible={key=>setVisible(current=>current.includes(key)?current.filter(item=>item!==key):[...current,key])} onMove={moveColumn} onSave={field=>{if(imageKeys.has(field.key) && rows.some(row=>(row[field.key]?.length || 0)>(field.imageConfig?.max || 30))){message.error("已有图片超过新上限，请先移除部分图片");return false;}if(field.type && !systemField(field)){const issue=rows.map(row=>fieldValueError(field,imageKeys.has(field.key)?JSON.stringify(row[field.key] || []):valueAt(row,field))).find(Boolean);if(issue){message.error("现有内容与设置不兼容："+issue);return false;}}const exists=columns.some(column=>column.key===field.key);setColumns(current=>exists?current.map(column=>column.key===field.key?field:column):[...current,field]);if(!exists)setVisible(current=>[...current,field.key]);}}/>
-      <SelectionProtectionControl rows={rows} columns={columns} selectedCells={selectedCells} selectedRows={selectedRows} currentRow={editorRow} blocked={!!dirtyCount || saving || deleting} onRefresh={()=>{appliedSnapshot.current="";void data.refetch();}}/>
-      <SelectionOrganization columns={columns} group={groupBy} sort={columnSort?`field:${columnSort.key}:${columnSort.direction}`:`${sort}:${direction}`} onGroup={setGroupBy} onSort={value=>{setFollowShared(false);if(value.startsWith("field:")){setColumnSort({key:value.slice(6,value.lastIndexOf(":")),direction:value.endsWith(":asc")?"asc":"desc"});return;}setColumnSort(null);const [nextSort,nextDirection]=value.split(":");setSort(nextSort);setDirection(nextDirection as "asc"|"desc");}}/>
+      <SelectionFieldManager columns={columns} visible={visible} canEdit={canEdit} blocked={!!dirtyCount || saving || deleting} onDelete={key=>{setColumns(current=>current.map(column=>column.key===key?{...column,deleted:true}:column));setVisible(current=>current.filter(item=>item!==key));setColumnFilters(current=>Object.fromEntries(Object.entries(current).filter(([fieldKey])=>fieldKey!==key)));if(columnSort?.key===key)setColumnSort(null);if(groupBy===`field:${key}`)setGroupBy("none");setFilterColumn(null);setCellAnchor(null);setFocusedCell(null);setSelectedCells(new Set());setCopiedCells(new Set());setCellTextEditing(false);setFormatTarget(null);}} onRestore={key=>{setColumns(current=>current.map(column=>column.key===key?{...column,deleted:false}:column));setVisible(current=>[...new Set([...current,key])]);}} onReset={()=>setColumns(current=>resetFieldTypes(current))} onVisible={key=>setVisible(current=>current.includes(key)?current.filter(item=>item!==key):[...current,key])} onMove={moveColumn} onSave={field=>{if(imageKeys.has(field.key) && rows.some(row=>(row[field.key]?.length || 0)>(field.imageConfig?.max || 30))){message.error("已有图片超过新上限，请先移除部分图片");return false;}if(field.type && !systemField(field)){const issue=rows.map(row=>fieldValueError(field,imageKeys.has(field.key)?JSON.stringify(row[field.key] || []):valueAt(row,field))).find(Boolean);if(issue){message.error("现有内容与设置不兼容："+issue);return false;}}const exists=columns.some(column=>column.key===field.key);setColumns(current=>exists?current.map(column=>column.key===field.key?field:column):[...current,field]);if(!exists)setVisible(current=>[...current,field.key]);}}/>
+      <SelectionProtectionControl rows={rows} columns={availableColumns} selectedCells={selectedCells} selectedRows={selectedRows} currentRow={editorRow} blocked={!!dirtyCount || saving || deleting} onRefresh={()=>{appliedSnapshot.current="";void data.refetch();}}/>
+      <SelectionOrganization columns={availableColumns} group={groupBy} sort={columnSort?`field:${columnSort.key}:${columnSort.direction}`:`${sort}:${direction}`} onGroup={setGroupBy} onSort={value=>{setFollowShared(false);if(value.startsWith("field:")){setColumnSort({key:value.slice(6,value.lastIndexOf(":")),direction:value.endsWith(":asc")?"asc":"desc"});return;}setColumnSort(null);const [nextSort,nextDirection]=value.split(":");setSort(nextSort);setDirection(nextDirection as "asc"|"desc");}}/>
       <Select className="selection-tool-select" value={rowHeight} suffixIcon={<UnorderedListOutlined />} options={[{ value: "compact", label: "紧凑行高" }, { value: "normal", label: "标准行高" }, { value: "loose", label: "宽松行高" }, { value: "extra", label: "超宽行高" }]} onChange={setRowHeight} />
 
     <Space.Compact>{([{ value: "left", label: "左对齐", icon: <AlignLeftOutlined /> }, { value: "center", label: "居中对齐", icon: <AlignCenterOutlined /> }, { value: "right", label: "右对齐", icon: <AlignRightOutlined /> }] as const).map(item => <Tooltip key={item.value} title={item.label}><Button aria-label={item.label} disabled={!canEdit || !selectedCells.size} icon={item.icon} onClick={() => applyAlignment(item.value)} /></Tooltip>)}</Space.Compact>
@@ -764,7 +757,7 @@ export function StyleSelectionsPage() {
     <Dropdown trigger={["click"]} menu={{ selectable: true, selectedKeys: editorRow && editorColumn ? [editorRow.cellTextColors?.[editorColumn.key] || "default"] : [], items: textColorOptions.map(option => ({ key: option.value || "default", label: option.label, icon: <span className="selection-color-dot" style={{ background: option.value || "#46352a" }} /> })), onClick: ({ key }) => applyTextColor(key === "default" ? "" : key) }}><Button aria-label="字体颜色" title="字体颜色" disabled={!canEdit || !selectedCells.size} icon={<FontColorsOutlined />} /></Dropdown>
     {!!Object.keys(columnFilters).length && <Button type="text" onClick={() => { void applyView({ filters: {}, sort: columnSort }, followShared && canEdit && !!sharedView.data?.data?.revision, sharedView.data?.data?.revision || 0).catch(error => message.error((error as Error).message)); }}>清除列筛选 ({Object.keys(columnFilters).length})</Button>}
     {!followShared && !!sharedView.data?.data?.revision && <Button type="text" onClick={() => setFollowShared(true)}>使用共享筛选</Button>}
-    <SelectionTransfer filteredRows={exactStyleNumbers.size || Object.keys(columnFilters).length || columnSort ? filteredRows : undefined} canEdit={canEdit} blocked={!!dirtyCount || saving || deleting} selectedRows={filteredRows.filter(row => selectedRows.includes(row._key))} query={search} onImported={() => { appliedSnapshot.current = ""; void queryClient.invalidateQueries({ queryKey: ["style-selections"] }); void queryClient.invalidateQueries({ queryKey: ["style-selection-style-counts"] }); }} />
+    <SelectionTransfer filteredRows={searchTerms.length || Object.keys(columnFilters).length || columnSort ? filteredRows : undefined} canEdit={canEdit} blocked={!!dirtyCount || saving || deleting} selectedRows={filteredRows.filter(row => selectedRows.includes(row._key))} query={search} onImported={() => { appliedSnapshot.current = ""; void queryClient.invalidateQueries({ queryKey: ["style-selections"] }); void queryClient.invalidateQueries({ queryKey: ["style-selection-style-counts"] }); }} />
     </Space><span className="selection-record-count">{!!Object.keys(errors).length && <Tooltip title="修改尚未保存；悬停红色单元格查看原因，修正后重试"><Button type="text" size="small" danger disabled={saving} onClick={() => { attempts.current.retry(); setRetryVersion((value) => value + 1); }}>未保存 · 重试</Button></Tooltip>}</span></div>
     {!!collaborators.length && <div className="selection-collaborators" aria-label="在线协作者">{collaborators.map((person: Row) => <span key={person.userId} style={{ color: collaboratorColor(String(person.userId)) }} title={person.editingId ? `正在选中：${rows.find(row => String(row.id) === String(person.editingId))?.xutiStyleNo || "未填款号"} · ${columns.find(column => column.key === person.editingColumn)?.label || "单元格"}` : "在线"}><i>{String(person.displayName || "协").slice(0, 1)}</i>{person.displayName}{person.editingId ? ` · ${columns.find(column => column.key === person.editingColumn)?.label || "选中中"}` : " · 在线"}</span>)}</div>}
       {editor}

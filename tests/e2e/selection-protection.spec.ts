@@ -14,7 +14,7 @@ test.beforeEach(async ({ page }) => {
     sortOrder: index,
     images: [],
     labelImages: [],
-    extraFields: {},
+    extraFields: { "custom:note": "保留资料" },
     createdBy: "1",
     createdByName: "管理员",
     createdByUsername: "admin",
@@ -65,6 +65,198 @@ test.beforeEach(async ({ page }) => {
   await expect(
     page.locator('td[data-selection-column="xutiStyleNo"]'),
   ).toHaveCount(3);
+});
+test("field deletion confirms, persists, cancels selection and restores original data", async ({
+  page,
+}) => {
+  await page
+    .locator('td[data-selection-row="1"][data-selection-column="material"]')
+    .click();
+  await page.getByRole("button", { name: "字段管理", exact: true }).click();
+  await page.getByRole("button", { name: "删除字段材质", exact: true }).click();
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "取消", exact: true })
+    .click();
+  await expect(
+    page.locator('td[data-selection-column="material"]'),
+  ).toHaveCount(3);
+  await page.getByRole("button", { name: "字段管理", exact: true }).click();
+  await page.getByRole("button", { name: "删除字段材质", exact: true }).click();
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "删除字段", exact: true })
+    .click();
+  await expect(
+    page.locator('td[data-selection-column="material"]'),
+  ).toHaveCount(0);
+  await expect(
+    page.getByLabel("编辑当前单元格", { exact: true }),
+  ).toBeDisabled();
+  await page.reload();
+  await expect(
+    page.locator('td[data-selection-column="xutiStyleNo"]'),
+  ).toHaveCount(3);
+  await expect(
+    page.locator('td[data-selection-column="material"]'),
+  ).toHaveCount(0);
+  await page.getByRole("button", { name: "字段管理", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "编辑字段材质", exact: true }),
+  ).toHaveCount(0);
+  await page
+    .getByRole("button", { name: "初始化字段类型", exact: true })
+    .click();
+  await page
+    .getByRole("button", { name: "已删除字段（1）", exact: true })
+    .click();
+  await page.getByRole("button", { name: "恢复字段材质", exact: true }).click();
+  await expect(
+    page.locator('td[data-selection-column="material"]'),
+  ).toHaveCount(3);
+  await expect(
+    page.locator(
+      'td[data-selection-row="1"][data-selection-column="material"]',
+    ),
+  ).toContainText("棉");
+});
+
+test("custom field recovery retains definition and values without writing records", async ({
+  page,
+}) => {
+  await page.evaluate(() =>
+    localStorage.setItem(
+      "style-selection-custom-columns-v1",
+      JSON.stringify([
+        {
+          key: "custom:note",
+          label: "备注资料",
+          width: 150,
+          custom: true,
+          type: "text",
+        },
+      ]),
+    ),
+  );
+  await page.reload();
+  const cell = page.locator(
+    'td[data-selection-row="1"][data-selection-column="custom:note"]',
+  );
+  await expect(cell).toContainText("保留资料");
+  const recordWrites: string[] = [];
+  page.on("request", (request) => {
+    if (
+      request.method() === "POST" &&
+      /\/style-selections(?:\/\d+)?$/.test(new URL(request.url()).pathname)
+    )
+      recordWrites.push(request.url());
+  });
+  await page.getByRole("button", { name: "字段管理", exact: true }).click();
+  await page
+    .getByRole("button", { name: "删除字段备注资料", exact: true })
+    .click();
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "删除字段", exact: true })
+    .click();
+  await page.reload();
+  await expect(cell).toHaveCount(0);
+  await page.getByRole("button", { name: "字段管理", exact: true }).click();
+  await page
+    .getByRole("button", { name: "已删除字段（1）", exact: true })
+    .click();
+  await page
+    .getByRole("button", { name: "恢复字段备注资料", exact: true })
+    .click();
+  await expect(cell).toContainText("保留资料");
+  expect(recordWrites).toEqual([]);
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "关闭", exact: true })
+    .last()
+    .click();
+  await page.getByRole("button", { name: "字段管理", exact: true }).click();
+  await page
+    .getByRole("button", { name: "编辑字段备注资料", exact: true })
+    .click();
+  await expect(page.getByLabel("字段名称", { exact: true })).toHaveValue(
+    "备注资料",
+  );
+  await expect(page.getByLabel("字段类型", { exact: true })).toHaveValue("");
+  await expect(page.getByRole("dialog")).toContainText("文本");
+});
+
+test("deleted shared-filter field does not keep rows filtered after reload", async ({
+  page,
+}) => {
+  await page.route("**/api/v1/style-selections/shared-view", (route) =>
+    route.fulfill({
+      json: {
+        data: {
+          revision: 1,
+          view: {
+            filters: { material: { mode: "equals", value: "丝绸" } },
+            sort: { key: "material", direction: "asc" },
+          },
+        },
+      },
+    }),
+  );
+  await page.reload();
+  await expect(
+    page.locator('td[data-selection-column="xutiStyleNo"]'),
+  ).toHaveCount(0);
+  await page.getByRole("button", { name: "字段管理", exact: true }).click();
+  await page.getByRole("button", { name: "删除字段材质", exact: true }).click();
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "删除字段", exact: true })
+    .click();
+  await expect(
+    page.locator('td[data-selection-column="xutiStyleNo"]'),
+  ).toHaveCount(3);
+  await page.reload();
+  await expect(
+    page.locator('td[data-selection-column="xutiStyleNo"]'),
+  ).toHaveCount(3);
+  await expect(
+    page.locator('td[data-selection-column="material"]'),
+  ).toHaveCount(0);
+});
+
+test("read-only users cannot delete or restore field definitions", async ({
+  page,
+}) => {
+  await page.route("**/api/v1/auth/me", (route) =>
+    route.fulfill({
+      json: {
+        data: {
+          id: "3",
+          displayName: "查看者",
+          permissions: ["selection.read"],
+          roleCodes: [],
+          csrfToken: "test",
+        },
+      },
+    }),
+  );
+  await page.evaluate(() =>
+    localStorage.setItem(
+      "selection-field-config-v1",
+      JSON.stringify({ color: { deleted: true } }),
+    ),
+  );
+  await page.reload();
+  await page.getByRole("button", { name: "字段管理", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "删除字段材质", exact: true }),
+  ).toBeDisabled();
+  await page
+    .getByRole("button", { name: "已删除字段（1）", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "恢复字段颜色", exact: true }),
+  ).toBeDisabled();
 });
 test("administrator configures a selected region, named-user access and independent default rights", async ({
   page,
