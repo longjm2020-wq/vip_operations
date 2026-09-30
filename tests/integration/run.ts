@@ -863,6 +863,11 @@ try {
   const firstSync = await ok("/style-selections/sync", "POST", syncQuery);
   assert.deepEqual(firstSync.index.map((item: any) => item.id), [syncA.id, syncB.id]);
   assert.equal(firstSync.data.length, 2);
+  const parallelSync = await Promise.all(Array.from({ length: 10 }, () => request("/style-selections/sync", "POST", syncQuery)));
+  assert.equal(new Set(parallelSync.map(result => result.body.requestId)).size, 10, "shared serialization must preserve individual request IDs");
+  for (const result of parallelSync) assert.deepEqual(result.body.data, firstSync);
+  assert.equal((await request("/style-selections/sync", "POST", syncQuery, randomUUID(), { cookie: "", csrf: "" })).status, 401);
+  assert.equal((await request("/style-selections/sync", "POST", syncQuery, randomUUID(), { ...session, csrf: "invalid" })).status, 403);
   const known = Object.fromEntries(firstSync.index.map((item: any) => [item.id, item.token]));
   assert.equal((await ok("/style-selections/sync", "POST", { ...syncQuery, known })).data.length, 0);
   await ok("/style-selections/" + syncA.id, "PATCH", { xutiStyleNo: "SYNC-Z" });

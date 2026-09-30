@@ -4,7 +4,8 @@ import { sortSelectionSizes } from "../../../../../packages/contracts/src/select
 import { z } from "zod";
 import { randomUUID } from "node:crypto";
 import { insertImage, readStoredImage } from "./image-storage.js";
-import { db, insert, one, rows, update, type Row, type Tx } from "../../../../../packages/database/src/index.js";
+import { db, insert, one, rows, update, camel, type Row, type Tx } from "../../../../../packages/database/src/index.js";
+import { setImmediate as yieldToRequests } from "node:timers/promises";
 import {
   audit,
   command,
@@ -148,7 +149,7 @@ function listSpec(query: Record<string, unknown>) {
   return { values, clause, order: `s.${sort} ${direction} NULLS LAST,s.id DESC` };
 }
 
-const pendingSyncs = new Map<string, Promise<unknown>>();
+const pendingSyncs = new Map<string, Promise<string>>();
 export async function sync(input: unknown) {
   const body = parse(z.object({ q: z.string().max(100).default(""), sort: z.string().max(40).default("createdAt"), direction: z.enum(["asc", "desc"]).default("asc"), known: z.record(z.string().regex(/^[1-9]\d{0,18}$/), z.string().regex(/^[a-f0-9]{32}$/)).refine(value => Object.keys(value).length <= 100000).default({}) }).strict(), input);
   // All authorized selection readers share the same scope. Coalesce identical
@@ -164,7 +165,18 @@ export async function sync(input: unknown) {
     const changed = index.filter(row => body.known[row.id] !== row.token).map(row => row.id);
     const data = changed.length ? await rows(tx, `SELECT ${selectColumns} ${source} WHERE s.id=ANY($1::bigint[])`, changed) : [];
     return { revision, index, data };
-  }, { isolationLevel: "RepeatableRead", timeout: 15000 });
+  }, { isolationLevel: "RepeatableRead", timeout: 15000 }).then(async snapshot => {
+    // Large first loads must not monopolize the event loop while converting
+    // database values. Release the transaction before yielding/serialization.
+    const data: Row[] = [];
+    for (let offset = 0; offset < snapshot.data.length; offset += 100) {
+      data.push(...camel(snapshot.data.slice(offset, offset + 100)));
+      await yieldToRequests();
+    }
+    // Share conversion and JSON serialization as well as SQL among readers.
+    // The per-request envelope is added by the controller after authorization.
+    return JSON.stringify({ revision: snapshot.revision, index: snapshot.index, data });
+  });
   if (pendingSyncs.size >= 100) return request;
   pendingSyncs.set(key, request);
   try { return await request; }
