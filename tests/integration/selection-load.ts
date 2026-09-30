@@ -65,6 +65,7 @@ export async function selectionLoad(base: string, durationMs = 120000) {
   await Promise.all(users.map(async (user, index) => {
     await new Promise(resolve => setTimeout(resolve, index * 10));
     for (let tick = 0; Date.now() - start < durationMs; tick++) {
+      if (cloud && index === 0 && tick % 30 === 0) console.log(JSON.stringify({ event: "selection-load-progress", elapsedSeconds: Math.round((Date.now() - start) / 1000), errors: errors.length, downloadedMiB: Math.round(bytesReceived / 1024 / 1024) }));
       const cycle = Date.now();
       const jobs = [call(user, "presence-read", "/style-selections/presence")];
       if (tick % 5 === 0) jobs.push(fullList(user));
