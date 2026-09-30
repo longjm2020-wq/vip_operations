@@ -5,7 +5,9 @@ import { db, one, rows } from "../../packages/database/src/index.js";
 // Called only by the integration harness against its newly-created database.
 export async function selectionLoad(base: string, durationMs = 120000) {
   const database = (await one(db, "SELECT current_database() AS name"))!.name;
-  if (!/^vip_erp_test_\d+$/.test(database) || !base.startsWith("http://127.0.0.1:")) throw Error("Load test requires an isolated local integration database");
+  const cloud = process.env.SELECTION_LOAD_ISOLATED === "1" && /^load-test-/.test(process.env.RAILWAY_ENVIRONMENT_NAME || "");
+  const target = new URL(base);
+  if (!/^vip_erp_test_\d+$/.test(database) || !(base.startsWith("http://127.0.0.1:") || (cloud && target.hostname.endsWith(".railway.internal")))) throw Error("Load test requires an isolated test database and approved target");
   const users: { cookie: string; csrf: string; id: string }[] = [];
   for (let i = 0; i < 100; i++) {
     const user = await one(db, "INSERT INTO users(username,display_name,password_hash) SELECT $1,$1,password_hash FROM users WHERE username='admin' RETURNING id", `load-user-${i}`);
@@ -15,7 +17,11 @@ export async function selectionLoad(base: string, durationMs = 120000) {
     const row = await one(db, "INSERT INTO style_selections(xuti_style_no,created_by) VALUES($1,$2::bigint) RETURNING id", `LOAD-${i}`, user!.id);
     users.push({ cookie: `session=${token}`, csrf, id: String(row!.id) });
   }
-  await rows(db, "INSERT INTO style_selections(xuti_style_no,created_by) SELECT 'LOAD-EXTRA-'||n,u.id FROM generate_series(1,900) n CROSS JOIN users u WHERE u.username='admin'");
+  await rows(db, "INSERT INTO style_selections(xuti_style_no,created_by) SELECT 'LOAD-EXTRA-'||n,u.id FROM generate_series(1,$1::int) n CROSS JOIN users u WHERE u.username='admin'", cloud ? 1415 : 900);
+  // Prove that the API uses this isolated database before any upload/write.
+  const probe = await fetch(base + "/style-selections?q=LOAD-0", { headers: { Cookie: users[0].cookie }, signal: AbortSignal.timeout(15000) });
+  const probeBody = await probe.json();
+  if (!probe.ok || !probeBody.data?.some((row: { id: string }) => row.id === users[0].id)) throw Error("Target API does not match the isolated test database");
   const png = Buffer.concat([Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jz1sAAAAASUVORK5CYII=", "base64"), randomBytes(300 * 1024)]);
   const samples: Record<string, number[]> = {}, errors: { operation: string; status: number }[] = [];
   let bytesReceived = 0;
@@ -75,7 +81,7 @@ export async function selectionLoad(base: string, durationMs = 120000) {
     const percentile = (p: number) => Math.round(values[Math.min(values.length - 1, Math.ceil(values.length * p) - 1)]);
     return [key, { requests: values.length, p50Ms: percentile(.5), p95Ms: percentile(.95), p99Ms: percentile(.99), maxMs: Math.round(values.at(-1)!) }];
   }));
-  const result = { completedAt: new Date().toISOString(), environment: "isolated local API + PostgreSQL + local S3 protocol fixture; excludes public internet and real object-storage latency", users: 100, selectionRows, durationSeconds: Math.round((Date.now() - start) / 1000), downloadedMB: +(bytesReceived / 1024 / 1024).toFixed(2), errors, operations };
+  const result = { completedAt: new Date().toISOString(), environment: cloud ? "isolated Railway API + PostgreSQL + private test bucket; load generator on a separate service over private network; excludes end-user public internet and browser rendering" : "isolated local API + PostgreSQL + local S3 protocol fixture; excludes public internet and real object-storage latency", users: 100, selectionRows, durationSeconds: Math.round((Date.now() - start) / 1000), downloadedMB: +(bytesReceived / 1024 / 1024).toFixed(2), errors, operations };
   await writeFile(`.local/selection-load-${mode}.json`, JSON.stringify({ ...result, mode }, null, 2));
   console.log(JSON.stringify(result));
   if (errors.length) throw Error(`Load test failed: ${errors.length} request errors`);
