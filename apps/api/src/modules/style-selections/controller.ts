@@ -10,6 +10,7 @@ const paramId = (value: string) => parse(id, value);
 
 @Controller("api/v1/style-selections")
 class StyleSelectionsController {
+  @Permission("selection.read") @Post("sync") sync(@Body() body: unknown) { return selections.sync(body); }
   @Permission("selection.read") @Get("revision") revision() { return selections.revision(); }
   @Permission("selection.read") @Get("shared-view") sharedView() { return selections.sharedView(); }
   @Permission("selection.manage") @Post("shared-view") saveSharedView(@Req() request: AuthRequest, @Body() body: unknown) { return selections.saveSharedView(context(request), body); }

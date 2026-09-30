@@ -41,16 +41,27 @@ export async function selectionLoad(base: string, durationMs = 120000) {
   delete samples["setup-upload"];
   bytesReceived = 0;
   const start = Date.now();
+  const mode = process.env.SELECTION_LOAD_MODE === "legacy" ? "legacy" : "incremental";
+  const snapshots = new Map<string, { revision: string; known: Record<string, string> }>();
   const selectionRows = (await one(db, "SELECT count(*)::int AS n FROM style_selections"))!.n;
   async function fullList(user: typeof users[number]) {
-    for (let page = 1; page <= Math.ceil(selectionRows / 100); page++) await call(user, "list-page", `/style-selections?pageSize=100&page=${page}`);
+    const revision = (await call(user, "revision", "/style-selections/revision"))?.data?.revision;
+    const previous = snapshots.get(user.id);
+    if (previous?.revision === revision && revision) return;
+    if (mode === "legacy") {
+      for (let page = 1; page <= Math.ceil(selectionRows / 100); page++) await call(user, "list-page", `/style-selections?pageSize=100&page=${page}`);
+      snapshots.set(user.id, { revision, known: {} });
+    } else {
+      const snapshot = (await call(user, "sync", "/style-selections/sync", { q: "", sort: "createdAt", direction: "asc", known: previous?.known || {} }))?.data;
+      if (snapshot) snapshots.set(user.id, { revision: snapshot.revision, known: Object.fromEntries(snapshot.index.map((item: { id: string; token: string }) => [item.id, item.token])) });
+    }
   }
   await Promise.all(users.map(async (user, index) => {
     await new Promise(resolve => setTimeout(resolve, index * 10));
     for (let tick = 0; Date.now() - start < durationMs; tick++) {
       const cycle = Date.now();
       const jobs = [call(user, "presence-read", "/style-selections/presence")];
-      if (tick % 5 === 0) { jobs.push(call(user, "revision", "/style-selections/revision")); jobs.push(fullList(user)); }
+      if (tick % 5 === 0) jobs.push(fullList(user));
       if (tick % 6 === 0) jobs.push(call(user, "presence-write", "/style-selections/presence", { editingId: user.id, editingColumn: "supplierStyleNo" }));
       if (tick % 5 === 0) jobs.push(call(user, "image-read", images[index]));
       if (index < 30 && tick % 10 === 0) jobs.push(call(user, "cell-save", "/style-selections/" + user.id, { supplierStyleNo: `LOAD-${index}-${tick}` }, "PATCH"));
@@ -65,7 +76,7 @@ export async function selectionLoad(base: string, durationMs = 120000) {
     return [key, { requests: values.length, p50Ms: percentile(.5), p95Ms: percentile(.95), p99Ms: percentile(.99), maxMs: Math.round(values.at(-1)!) }];
   }));
   const result = { completedAt: new Date().toISOString(), environment: "isolated local API + PostgreSQL + local S3 protocol fixture; excludes public internet and real object-storage latency", users: 100, selectionRows, durationSeconds: Math.round((Date.now() - start) / 1000), downloadedMB: +(bytesReceived / 1024 / 1024).toFixed(2), errors, operations };
-  await writeFile(".local/selection-load-result.json", JSON.stringify(result, null, 2));
+  await writeFile(`.local/selection-load-${mode}.json`, JSON.stringify({ ...result, mode }, null, 2));
   console.log(JSON.stringify(result));
   if (errors.length) throw Error(`Load test failed: ${errors.length} request errors`);
 }

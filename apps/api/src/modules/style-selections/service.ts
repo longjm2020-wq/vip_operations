@@ -116,12 +116,10 @@ function normalizedTags(value: unknown) {
   return tagValues(value).join("/") || null;
 }
 
-export async function revision() {
-  return one(db, "SELECT md5(coalesce(string_agg(id::text || ':' || version::text || ':' || updated_at::text, ',' ORDER BY id), '')) AS revision FROM style_selections");
-}
+const revisionSql = "SELECT md5(coalesce(string_agg(id::text || ':' || version::text || ':' || updated_at::text, ',' ORDER BY id), '')) AS revision FROM style_selections";
+export async function revision() { return one(db, revisionSql); }
 
-export async function list(query: Record<string, unknown>) {
-  const p = pagination(query);
+function listSpec(query: Record<string, unknown>) {
   const values: unknown[] = [];
   const where: string[] = [];
   if (query.q) {
@@ -147,10 +145,39 @@ export async function list(query: Record<string, unknown>) {
     ? String(query.sort).replace(/[A-Z]/g, (c) => "_" + c.toLowerCase())
     : "updated_at";
   const direction = String(query.direction).toLowerCase() === "asc" ? "ASC" : "DESC";
+  return { values, clause, order: `s.${sort} ${direction} NULLS LAST,s.id DESC` };
+}
+
+const pendingSyncs = new Map<string, Promise<unknown>>();
+export async function sync(input: unknown) {
+  const body = parse(z.object({ q: z.string().max(100).default(""), sort: z.string().max(40).default("createdAt"), direction: z.enum(["asc", "desc"]).default("asc"), known: z.record(z.string().regex(/^[1-9]\d{0,18}$/), z.string().regex(/^[a-f0-9]{32}$/)).refine(value => Object.keys(value).length <= 100000).default({}) }).strict(), input);
+  // All authorized selection readers share the same scope. Coalesce identical
+  // in-flight reads only; never reuse a completed snapshot after a write.
+  const key = JSON.stringify(body);
+  const pending = pendingSyncs.get(key);
+  if (pending) return pending;
+  const { values, clause, order } = listSpec(body);
+  // Index, changed rows and revision must describe one committed database snapshot.
+  const request = db.$transaction(async tx => {
+    const revision = (await one(tx, revisionSql))!.revision;
+    const index = await rows(tx, `SELECT s.id::text AS id,md5(s.version::text || ':' || s.updated_at::text) AS token ${source}${clause} ORDER BY ${order}`, ...values);
+    const changed = index.filter(row => body.known[row.id] !== row.token).map(row => row.id);
+    const data = changed.length ? await rows(tx, `SELECT ${selectColumns} ${source} WHERE s.id=ANY($1::bigint[])`, changed) : [];
+    return { revision, index, data };
+  }, { isolationLevel: "RepeatableRead", timeout: 15000 });
+  if (pendingSyncs.size >= 100) return request;
+  pendingSyncs.set(key, request);
+  try { return await request; }
+  finally { pendingSyncs.delete(key); }
+}
+
+export async function list(query: Record<string, unknown>) {
+  const p = pagination(query);
+  const { values, clause, order } = listSpec(query);
   const total = await one(db, `SELECT count(*)::int AS n ${source}${clause}`, ...values);
   const data = await rows(
     db,
-    `SELECT ${selectColumns} ${source}${clause} ORDER BY s.${sort} ${direction} NULLS LAST,s.id DESC LIMIT ${p.pageSize} OFFSET ${(p.page - 1) * p.pageSize}`,
+    `SELECT ${selectColumns} ${source}${clause} ORDER BY ${order} LIMIT ${p.pageSize} OFFSET ${(p.page - 1) * p.pageSize}`,
     ...values,
   );
   return { data, total: total!.n, ...p };
