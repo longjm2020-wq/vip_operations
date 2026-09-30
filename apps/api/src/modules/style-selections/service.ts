@@ -96,9 +96,9 @@ export async function uploadImage(c: Context, input: unknown) {
   });
 }
 
-export async function readImage(value: string) {
+export async function readImage(value: string, metadataOnly = false) {
   const id = parse(z.string().uuid(), value);
-  const file = await one(db, "SELECT content_type,content FROM style_selection_images WHERE id=$1::uuid", id);
+  const file = await one(db, `SELECT content_type${metadataOnly ? "" : ",content"} FROM style_selection_images WHERE id=$1::uuid`, id);
   if (!file) fail("NOT_FOUND", "图片不存在", 404);
   return file!;
 }
@@ -115,6 +115,10 @@ function tagValues(value: unknown) {
 }
 function normalizedTags(value: unknown) {
   return tagValues(value).join("/") || null;
+}
+
+export async function revision() {
+  return one(db, "SELECT md5(coalesce(string_agg(id::text || ':' || version::text || ':' || updated_at::text, ',' ORDER BY id), '')) AS revision FROM style_selections");
 }
 
 export async function list(query: Record<string, unknown>) {

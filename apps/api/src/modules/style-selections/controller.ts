@@ -10,6 +10,7 @@ const paramId = (value: string) => parse(id, value);
 
 @Controller("api/v1/style-selections")
 class StyleSelectionsController {
+  @Permission("selection.read") @Get("revision") revision() { return selections.revision(); }
   @Permission("selection.read") @Get("shared-view") sharedView() { return selections.sharedView(); }
   @Permission("selection.manage") @Post("shared-view") saveSharedView(@Req() request: AuthRequest, @Body() body: unknown) { return selections.saveSharedView(context(request), body); }
 
@@ -22,10 +23,14 @@ class StyleSelectionsController {
   @Permission("selection.manage") @Post("images") uploadImage(@Req() request: AuthRequest, @Body() body: unknown) {
     return selections.uploadImage(context(request), body);
   }
-  @Permission("selection.read") @Get("images/:imageId") async image(@Param("imageId") value: string, @Res() response: Response) {
-    const file = await selections.readImage(value);
+  @Permission("selection.read") @Get("images/:imageId") async image(@Param("imageId") value: string, @Req() request: AuthRequest, @Res() response: Response) {
+    const etag = `"selection-image-${value}"`;
+    const unchanged = request.get("If-None-Match") === etag;
+    const file = await selections.readImage(value, unchanged);
+    response.setHeader("ETag", etag);
+    response.setHeader("Cache-Control", "private, no-cache");
+    if (unchanged) { response.status(304).end(); return; }
     response.setHeader("Content-Type", file.content_type);
-    response.setHeader("Cache-Control", "private, no-store");
     response.send(Buffer.from(file.content));
   }
   @Permission("selection.read") @Get("presence") presence(@Req() request: AuthRequest) {

@@ -67,9 +67,10 @@ export class ErrorFilter implements ExceptionFilter {
         e.meta?.code ||
         e.code;
       if (["23505", "P2002"].includes(code)) {
-        status = 409;
+        const selectionNumber = JSON.stringify(e.meta || {}).includes("style_selection_number_unique");
+        status = selectionNumber ? 400 : 409;
         body = {
-          error: { code: "DUPLICATE_CODE", message: "编码或业务记录已存在" },
+          error: { code: selectionNumber ? "DUPLICATE_STYLE_NUMBER" : "DUPLICATE_CODE", message: selectionNumber ? "序缇款号已存在，不允许重复，请修改款号后保存" : "编码或业务记录已存在" },
         };
       } else if (["23503", "23514", "22001", "22P02"].includes(code)) {
         status = 400;

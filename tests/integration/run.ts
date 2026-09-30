@@ -563,12 +563,15 @@ try {
   assert.equal(selectionList[0].supplierCode, "SUP-001");
   assert.equal(selectionList[0].labelImages.length, 2);
   assert.equal((await request("/style-selections/" + selection.id, "PATCH", { labelImages: [{ id: randomUUID(), url: "https://example.com/invalid.jpg", color: "红" }] })).status, 400);
+  const beforeRevision = (await ok("/style-selections/revision")).revision;
+  assert.equal((await ok("/style-selections/revision")).revision, beforeRevision);
   const selectedStyle = await ok("/style-selections/" + selection.id, "PATCH", {
     vipPrice: "209.00",
     cellColors: { vipPrice: "GREEN" },
     expectedUpdatedAt: selection.updatedAt,
   });
   assert.equal(selectedStyle.vipPrice, "209");
+  assert.notEqual((await ok("/style-selections/revision")).revision, beforeRevision);
   assert.equal(selectedStyle.registrationBatch, "2026-10-01");
   assert.deepEqual(selectedStyle.cellAlignments, selection.cellAlignments);
   assert.deepEqual(selectedStyle.cellVerticalAlignments, selection.cellVerticalAlignments);
@@ -588,6 +591,12 @@ try {
   assert.equal((await request(imagePath, "GET", undefined, randomUUID(), { cookie: "", csrf: "" })).status, 401);
   const downloadedImage = await fetch(base + imagePath, { headers: { Cookie: session.cookie } });
   assert.equal(downloadedImage.headers.get("content-type"), "image/png");
+  assert.equal(downloadedImage.headers.get("cache-control"), "private, no-cache");
+  const imageEtag = downloadedImage.headers.get("etag")!;
+  const cachedImage = await fetch(base + imagePath, { headers: { Cookie: session.cookie, "If-None-Match": imageEtag } });
+  assert.equal(cachedImage.status, 304);
+  assert.equal((await cachedImage.arrayBuffer()).byteLength, 0);
+  assert.equal((await fetch(base + imagePath, { headers: { "If-None-Match": imageEtag } })).status, 401);
   assert.deepEqual(Buffer.from(await downloadedImage.arrayBuffer()), Buffer.from(imageData.split(",")[1], "base64"));
   assert.equal((await request("/style-selections/images", "POST", { data: "data:image/png;base64,YWJj" })).status, 400);
   const oversizedImage = Buffer.alloc(1024 * 1024);
@@ -598,8 +607,16 @@ try {
   assert.equal(manySaved.images.length, 12);
   check("selection images upload independently, enforce size and access, and allow more than five images");
   const occupiedText = await ok("/style-selections", "POST", { xutiStyleNo: "OCCUPIED-TEXT", sortOrder: 0 });
-  await ok("/style-selections", "POST", { xutiStyleNo: " OCCUPIED-TEXT ", sortOrder: 0 });
-  assert.equal((await ok("/style-selections/style-counts")).find((item:any) => item.xutiStyleNo === "OCCUPIED-TEXT")?.count, 2);
+  const duplicateNumber = await request("/style-selections", "POST", { xutiStyleNo: " OCCUPIED-TEXT ", sortOrder: 0 });
+  assert.equal(duplicateNumber.status, 400);
+  assert.match(duplicateNumber.body.error.message, /序缇款号已存在/);
+  assert.equal((await ok("/style-selections/style-counts")).find((item:any) => item.xutiStyleNo === "OCCUPIED-TEXT")?.count, 1);
+  const concurrentNumbers = await Promise.all([request("/style-selections", "POST", { xutiStyleNo: "UNIQUE-RACE" }), request("/style-selections", "POST", { xutiStyleNo: "UNIQUE-RACE" })]);
+  assert.equal(concurrentNumbers.filter(result => result.status < 300).length, 1);
+  assert.equal(concurrentNumbers.filter(result => result.status === 400).length, 1);
+  const uniqueOwner = concurrentNumbers.find(result => result.status < 300)!.body.data;
+  await ok(`/style-selections/${uniqueOwner.id}`, "DELETE");
+  await ok("/style-selections", "POST", { xutiStyleNo: "UNIQUE-RACE" });
   const occupiedImage = await ok("/style-selections", "POST", { images: [{ id: randomUUID(), url: uploadedImage.url, color: "" }], sortOrder: 0 });
   const occupiedLabel = await ok("/style-selections", "POST", { labelImages: [{ id: randomUUID(), url: uploadedImage.url, color: "" }], sortOrder: 0 });
   const firstEmpty = await ok("/style-selections", "POST", { cellColors: { xutiStyleNo: "PINK" }, sortOrder: 0 });
@@ -795,9 +812,8 @@ try {
   await ok("/style-selections/" + existingImport.id, "PATCH", { material: "并发修改", expectedUpdatedAt: existingImport.updatedAt });
   assert.equal((await request("/style-selections/import", "POST", { rows: stalePlan.rows })).status, 409);
   assert.equal((await ok("/style-selections?q=ROLLBACK-NEW")).length, 0);
-  const duplicate = await ok("/style-selections", "POST", { xutiStyleNo: "IMPORT-001" });
-  assert.equal((await request("/style-selections/import/preview", "POST", { rows: [{ xutiStyleNo: "IMPORT-001" }] })).status, 400);
-  await ok("/style-selections/" + duplicate.id, "DELETE");
+  assert.equal((await request("/style-selections", "POST", { xutiStyleNo: "IMPORT-001" })).status, 400);
+  assert.equal((await request("/style-selections/" + selection.id, "PATCH", { xutiStyleNo: "IMPORT-001" })).status, 400);
   const fillOnly = await ok("/style-selections", "POST", { cellColors: { supplierCode: "PINK" } });
   assert.equal((await ok("/style-selections?pageSize=100")).find((row: any) => row.id === fillOnly.id).cellColors.supplierCode, "PINK");
   const bulkPlan = await ok("/style-selections/import/preview", "POST", { rows: Array.from({ length: 500 }, (_, index) => ({ xutiStyleNo: `BULK-QA-${index}`, registrationBatch: "2026-09-28" })) });

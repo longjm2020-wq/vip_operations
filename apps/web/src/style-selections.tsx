@@ -158,9 +158,10 @@ function ImageCell({ images, colors, disabled, onChange, mobileId, labelImages =
   const [imageIndex, setImageIndex] = useState(0);
   const [carouselPaused, setCarouselPaused] = useState(false);
   const [onScreen, setOnScreen] = useState(false);
+  const [hasBeenVisible, setHasBeenVisible] = useState(false);
   const summaryRef = useRef<HTMLDivElement>(null);
   const currentImageIndex = Math.min(imageIndex, Math.max(0, images.length - 1));
-  useEffect(() => summaryRef.current ? observeImageVisibility(summaryRef.current, setOnScreen) : undefined, [images.length > 0]);
+  useEffect(() => summaryRef.current ? observeImageVisibility(summaryRef.current, visible => { setOnScreen(visible); if (visible) setHasBeenVisible(true); }) : undefined, [images.length > 0]);
   useEffect(() => {
     if (images.length < 2 || !onScreen || allOpen || previewOpen || carouselPaused || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
     const timer = window.setInterval(() => setImageIndex(index => (index + 1) % images.length), 4000);
@@ -222,7 +223,7 @@ function ImageCell({ images, colors, disabled, onChange, mobileId, labelImages =
   const all = <><Button className="selection-mini-tag" size="small" onClick={() => setAllOpen(true)}>全部</Button>{gallery}</>;
   if (!images.length) return <div className="selection-image-empty" tabIndex={0} aria-label={`${labelImages ? "洗唛/吊牌图" : "图片"}，支持粘贴链接或图片`} onPaste={paste}><button className="selection-image-placeholder" type="button" disabled={disabled} onClick={() => setAllOpen(true)}>+ 图片</button>{gallery}</div>;
   return <div ref={summaryRef} className="selection-image-summary" data-selection-image-url={images[currentImageIndex].url} data-selection-image-index={currentImageIndex + 1} tabIndex={0} aria-label="图片轮播，点击图片放大" onMouseEnter={() => setCarouselPaused(true)} onMouseLeave={() => setCarouselPaused(false)} onFocus={() => setCarouselPaused(true)} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) setCarouselPaused(false); }} onPaste={paste}>
-    <div className="selection-image-slide"><Image loading="lazy" src={images[currentImageIndex].url} fallback={invalidSelectionImage} onError={() => imageError(images[currentImageIndex].url)} alt={failedImages.has(images[currentImageIndex].url) ? "无效图片，链接无法加载" : labelImages ? "洗唛/吊牌图" : images[currentImageIndex].color || "款式图片"} width="100%" height="100%" preview={failedImages.has(images[currentImageIndex].url) ? false : { mask: false, open: previewOpen, onOpenChange: setPreviewOpen, closeIcon: false, imageRender: (node, info) => previewOpen ? <ImagePreviewClose onClose={() => setPreviewOpen(false)} imageUrl={info.image.url} imageName={`${labelImages ? "洗唛吊牌图" : "款式图片"}-${currentImageIndex + 1}`}>{node}</ImagePreviewClose> : node }} />
+    <div className="selection-image-slide">{hasBeenVisible && <Image loading="lazy" src={images[currentImageIndex].url} fallback={invalidSelectionImage} onError={() => imageError(images[currentImageIndex].url)} alt={failedImages.has(images[currentImageIndex].url) ? "无效图片，链接无法加载" : labelImages ? "洗唛/吊牌图" : images[currentImageIndex].color || "款式图片"} width="100%" height="100%" preview={failedImages.has(images[currentImageIndex].url) ? false : { mask: false, open: previewOpen, onOpenChange: setPreviewOpen, closeIcon: false, imageRender: (node, info) => previewOpen ? <ImagePreviewClose onClose={() => setPreviewOpen(false)} imageUrl={info.image.url} imageName={`${labelImages ? "洗唛吊牌图" : "款式图片"}-${currentImageIndex + 1}`}>{node}</ImagePreviewClose> : node }} />}
       <i className="selection-image-badge">{currentImageIndex + 1}/{images.length}</i>
       {images[currentImageIndex].color && <span className="selection-slide-color">{images[currentImageIndex].color}</span>}
       {images.length > 1 && <div className="selection-carousel-controls"><button type="button" aria-label="上一张图片" onClick={() => setImageIndex((currentImageIndex + images.length - 1) % images.length)}>‹</button><button type="button" aria-label="下一张图片" onClick={() => setImageIndex((currentImageIndex + 1) % images.length)}>›</button></div>}
@@ -282,8 +283,8 @@ export function StyleSelectionsPage() {
   const original = useRef(new Map<string, Row>());
   const appliedSnapshot = useRef("");
   const queryString = new URLSearchParams({ page: "1", pageSize: "100", ...(search ? { q: search } : {}), sort, direction }).toString();
-  const data = useQuery({ queryKey: ["style-selections", queryString], queryFn: () => fetchSelectionRows(search, sort, direction), refetchInterval: saving ? false : 10000, refetchOnWindowFocus: !saving });
-  const styleCounts = useQuery({ queryKey: ["style-selection-style-counts"], queryFn: () => api("/style-selections/style-counts"), refetchInterval: 10000 });
+  const data = useQuery({ queryKey: ["style-selections", queryString], queryFn: () => fetchSelectionRows(search, sort, direction, queryClient.getQueryData(["style-selections", queryString])), refetchInterval: saving ? false : 10000, refetchOnWindowFocus: !saving });
+  const styleCounts = useQuery({ queryKey: ["style-selection-style-counts"], queryFn: () => api("/style-selections/style-counts"), refetchInterval: 30000 });
   const presence = useQuery({ queryKey: ["style-selection-presence"], queryFn: () => api("/style-selections/presence"), refetchInterval: 10000 });
   const sharedView = useQuery({ queryKey: ["selection-shared-view"], queryFn: () => api("/style-selections/shared-view"), refetchInterval: 10000 });
   const sharedSnapshot = JSON.stringify(sharedView.data?.data);
@@ -292,7 +293,7 @@ export function StyleSelectionsPage() {
     setColumnFilters(sharedView.data.data.view.filters);
     setColumnSort(sharedView.data.data.view.sort);
   }, [sharedSnapshot, followShared, filterColumn]);
-  const snapshot = JSON.stringify(data.data?.data || []);
+  const snapshot = useMemo(() => JSON.stringify(data.data?.data || []), [data.data]);
   useEffect(() => { localStorage.setItem(customColumnsKey, JSON.stringify(columns.filter((column) => column.custom))); }, [columns]);
   useEffect(() => { localStorage.setItem(columnLabelsKey, JSON.stringify(Object.fromEntries(columns.map(column => [column.key, column.label])))); }, [columns]);
   useEffect(() => { localStorage.setItem(pageSizeKey, String(pageSize)); }, [pageSize]);
@@ -311,7 +312,7 @@ export function StyleSelectionsPage() {
     return () => { window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", stop); };
   }, [resizingColumn]);
   useEffect(() => {
-    const heartbeat = () => { void api("/style-selections/presence", "POST", { editingId }).catch(() => undefined); };
+    const heartbeat = () => { if (document.hidden) return; void api("/style-selections/presence", "POST", { editingId }).catch(() => undefined); };
     heartbeat(); const timer = window.setInterval(heartbeat, 12000);
     return () => window.clearInterval(timer);
   }, [editingId]);
@@ -547,6 +548,7 @@ export function StyleSelectionsPage() {
           const fieldErrors = (error as { details?: { fieldErrors?: Record<string, string[]> } }).details?.fieldErrors;
           const knownFields = Object.entries(fieldErrors || {}).filter(([field, messages]) => baseKeys.includes(field) && messages.length);
           if (knownFields.length) for (const [field, messages] of knownFields) failed[`${row._key}:${field}`] = messages.join("；");
+          else if ((error as Error).message.includes("序缇款号已存在")) failed[`${row._key}:xutiStyleNo`] = (error as Error).message;
           else failed[`${row._key}:save`] = (error as Error).message;
           attempts.current.fail(row._key, row, (error as { status?: number }).status);
         }

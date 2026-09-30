@@ -1,5 +1,5 @@
-import { PublicSelectionCollection } from "./selection-collections";
-import { SelectionMobilePhotos } from "./selection-mobile-photos";
+const PublicSelectionCollection = React.lazy(() => import("./selection-collections").then(module => ({ default: module.PublicSelectionCollection })));
+const SelectionMobilePhotos = React.lazy(() => import("./selection-mobile-photos").then(module => ({ default: module.SelectionMobilePhotos })));
 import { BrandVideo } from "./brand-video";
 import React, { useState, useEffect } from "react";
 import { createRoot } from "react-dom/client";
@@ -43,36 +43,32 @@ import {
 import { api, queryClient, setCsrf } from "./api";
 import { UserContext, Row } from "./shared";
 import { AccountMenu } from "./account-menu";
-import { MasterPage } from "./master";
-import { ProductArchive } from "./product-archive";
-import {
-  InventoryPage,
-  TransactionsPage,
-  PurchaseList,
-  PurchaseNew,
-  DocumentDetail,
-  SuggestionsPage,
-  ProductDetail,
-} from "./operations";
-import { AccessPage, AuditPage } from "./system";
-import { VipPage } from "./vip";
-import { StyleSelectionsPage } from "./style-selections";
+const MasterPage = React.lazy(() => import("./master").then(module => ({ default: module.MasterPage })));
+const ProductArchive = React.lazy(() => import("./product-archive").then(module => ({ default: module.ProductArchive })));
+const InventoryPage = React.lazy(() => import("./operations").then(module => ({ default: module.InventoryPage })));
+const TransactionsPage = React.lazy(() => import("./operations").then(module => ({ default: module.TransactionsPage })));
+const PurchaseList = React.lazy(() => import("./operations").then(module => ({ default: module.PurchaseList })));
+const PurchaseNew = React.lazy(() => import("./operations").then(module => ({ default: module.PurchaseNew })));
+const DocumentDetail = React.lazy(() => import("./operations").then(module => ({ default: module.DocumentDetail })));
+const SuggestionsPage = React.lazy(() => import("./operations").then(module => ({ default: module.SuggestionsPage })));
+const ProductDetail = React.lazy(() => import("./operations").then(module => ({ default: module.ProductDetail })));
+const AccessPage = React.lazy(() => import("./system").then(module => ({ default: module.AccessPage })));
+const AuditPage = React.lazy(() => import("./system").then(module => ({ default: module.AuditPage })));
+const VipPage = React.lazy(() => import("./vip").then(module => ({ default: module.VipPage })));
+const StyleSelectionsPage = React.lazy(() => import("./style-selections").then(module => ({ default: module.StyleSelectionsPage })));
 import { ManualPage, manualHref } from "./manual";
-import {
-  SopPage,
-  ProjectsPage,
-  ProjectDetailPage,
-  ProjectNotifications,
-} from "./projects";
+const SopPage = React.lazy(() => import("./projects").then(module => ({ default: module.SopPage })));
+const ProjectsPage = React.lazy(() => import("./projects").then(module => ({ default: module.ProjectsPage })));
+const ProjectDetailPage = React.lazy(() => import("./projects").then(module => ({ default: module.ProjectDetailPage })));
+const ProjectNotifications = React.lazy(() => import("./projects").then(module => ({ default: module.ProjectNotifications })));
 import "./style.css";
-import {
-  SupplierRegister,
-  SupplyProfile,
-  SupplyProducts,
-  SupplyReview,
-} from "./supply";
-import { SupplyOrders, SupplyOrderNotice } from "./supply-orders";
-import { SupplyStatements } from "./supply-statements";
+const SupplierRegister = React.lazy(() => import("./supply").then(module => ({ default: module.SupplierRegister })));
+const SupplyProfile = React.lazy(() => import("./supply").then(module => ({ default: module.SupplyProfile })));
+const SupplyProducts = React.lazy(() => import("./supply").then(module => ({ default: module.SupplyProducts })));
+const SupplyReview = React.lazy(() => import("./supply").then(module => ({ default: module.SupplyReview })));
+const SupplyOrders = React.lazy(() => import("./supply-orders").then(module => ({ default: module.SupplyOrders })));
+const SupplyOrderNotice = React.lazy(() => import("./supply-orders").then(module => ({ default: module.SupplyOrderNotice })));
+const SupplyStatements = React.lazy(() => import("./supply-statements").then(module => ({ default: module.SupplyStatements })));
 const coreFeatureSummary = "ERP经营 · 选款与外部资料收集 · 供应链订单对账 · 项目协作";
 const useUi = create<{ collapsed: boolean; toggle: () => void }>((set) => ({
   collapsed: false,
@@ -617,7 +613,7 @@ createRoot(document.getElementById("root")!).render(
       <App>
         <QueryClientProvider client={queryClient}>
           <BrowserRouter>
-            <Root />
+            <React.Suspense fallback={<div className="loading"><Spin size="large" /></div>}><Root /></React.Suspense>
           </BrowserRouter>
         </QueryClientProvider>
       </App>
