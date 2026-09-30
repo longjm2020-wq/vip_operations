@@ -482,3 +482,7 @@
 .selection-field-form{display:flex;flex-direction:column;gap:16px;}
 .selection-field-form label{display:flex;flex-direction:column;gap:6px;}
 .selection-field-form .ant-select{width:100%;}
+
+.selection-custom-tags{display:flex;flex-wrap:wrap;justify-content:inherit;gap:4px;max-width:100%;}
+.selection-custom-tags .ant-tag{margin:0;white-space:normal;overflow-wrap:anywhere;}
+.selection-tag-empty{color:#999;font-size:12px;}
