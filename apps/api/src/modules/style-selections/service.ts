@@ -39,7 +39,11 @@ const image = z
   .strict();
 const labelImage = image.extend({ color: z.literal("").default("") });
 const cellColors = z.record(z.string(), z.enum(rowColors));
-const extraFields = z.record(z.string().max(100), z.string().max(2000));
+const extraFields = z.record(z.string().max(100), z.string().max(100000).superRefine((value,ctx)=>{
+  if(value.length<=2000)return;
+  try{if(z.array(image).max(30).safeParse(JSON.parse(value)).success)return;}catch{}
+  ctx.addIssue({code:"custom",message:"文本最多2000字，图片字段最多30张"});
+}));
 const presenceInput = z.object({ editingId: z.string().regex(/^[1-9]\d{0,18}$/).nullable().optional(), editingColumn: z.string().regex(/^[a-zA-Z][a-zA-Z0-9:_-]{0,99}$/).nullable().optional() }).strict();
 
 export const styleSelectionInput = z
@@ -388,21 +392,24 @@ export async function nextPhotoStyle(value: string, query: unknown) {
 /** Granular image operations merge under the row lock instead of replacing a stale array. */
 export async function changePhoto(c: Context, value: string, input: unknown) {
   const body = parse(z.discriminatedUnion("action", [
-    z.object({ action: z.literal("add"), field: z.enum(["images", "labelImages"]).default("images"), image }).strict(),
-    z.object({ action: z.literal("remove"), field: z.enum(["images", "labelImages"]).default("images"), imageId: z.string().min(1).max(100) }).strict(),
+    z.object({ action: z.literal("add"), field: z.union([z.enum(["images", "labelImages"]),z.string().regex(/^custom:[a-zA-Z0-9:-]+$/).max(100)]).default("images"), image }).strict(),
+    z.object({ action: z.literal("remove"), field: z.union([z.enum(["images", "labelImages"]),z.string().regex(/^custom:[a-zA-Z0-9:-]+$/).max(100)]).default("images"), imageId: z.string().min(1).max(100) }).strict(),
   ]), input);
   return command(c, "selection.photo/"+value, body, async tx => {
     const before = await entity(tx, "style_selections", value, true);
     const field = body.field;
+    const custom=field.startsWith("custom:");
     const storedField = field === "labelImages" ? "label_images" : "images";
     let images = Array.isArray(before[storedField]) ? before[storedField] : [];
+    if(custom){try{images=parse(z.array(image).max(30),JSON.parse(before.extra_fields?.[field] || "[]"));}catch{fail("INVALID_FIELD","该字段包含非图片内容，不能覆盖",400);}}
     if (body.action === "add") {
       if (field === "images") { parse(image.extend({ color: z.string().trim().min(1).max(100) }), body.image); validateImageColors([body.image], before.color); }
-      else parse(labelImage, body.image);
+      else if(!custom)parse(labelImage, body.image);
       const existing = images.find((item: Row) => item.id === body.image.id);
       if (existing && (existing.url !== body.image.url || existing.color !== body.image.color)) fail("EDIT_CONFLICT", "图片标识已被使用，请重新上传", 409);
       if (!existing) images = [...images, body.image];
     } else images = images.filter((item: Row) => item.id !== body.imageId);
+    if(custom){parse(z.array(image).max(30),images);return persist(tx,c,{extraFields:{...(before.extra_fields || {}),[field]:JSON.stringify(images)}},value);}
     return persist(tx, c, { [field]: images }, value);
   });
 }

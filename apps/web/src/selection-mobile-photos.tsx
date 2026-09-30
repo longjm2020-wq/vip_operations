@@ -1,3 +1,4 @@
+import {SelectionCustomPhoto} from "./selection-custom-photo";
 import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useSearchParams } from "react-router-dom";
@@ -37,7 +38,8 @@ function PhotoMetadata({ row, onClose, onSaved }: { row?: Row; onClose: () => vo
     </Form>
   </Modal>;
 }
-export function SelectionMobilePhotos() {
+export function SelectionMobilePhotos(){return new URLSearchParams(location.search).get("field")?.startsWith("custom:")?<SelectionCustomPhoto/>:<StandardSelectionMobilePhotos/>;}
+function StandardSelectionMobilePhotos() {
   const canRead = useCan("selection.read"), canEdit = useCan("selection.manage");
   const { message } = App.useApp();
   const [params, setParams] = useSearchParams();

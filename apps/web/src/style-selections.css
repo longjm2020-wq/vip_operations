@@ -474,3 +474,11 @@
 .selection-statistics-menu .ant-radio-group{display:flex;flex-direction:column;gap:10px;}
 
 .selection-sheet [data-reorder-target=true]{box-shadow:inset 0 0 0 2px #d3540b;background:#fff1e5!important;cursor:move;}
+
+.selection-field-manager{width:min(420px,calc(100vw - 48px));}
+.selection-field-list{max-height:400px;overflow:auto;margin:10px 0;}
+.selection-field-list>div{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 0;border-bottom:1px solid #eee;}
+.selection-field-title{display:flex;flex-wrap:wrap;align-items:center;gap:6px;overflow-wrap:anywhere;min-width:0;}
+.selection-field-form{display:flex;flex-direction:column;gap:16px;}
+.selection-field-form label{display:flex;flex-direction:column;gap:6px;}
+.selection-field-form .ant-select{width:100%;}
