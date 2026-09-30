@@ -2,7 +2,7 @@ export const fieldTypes = {text:"文本",number:"数字",date:"日期",single:"�
 export const systemFieldTypes=new Set<string>(["creator","modifier","createdTime","modifiedTime","autonumber"]);
 export const systemField=(field:SelectionField)=>systemFieldTypes.has(field.type || field.fallbackType || "");
 export type FieldType = keyof typeof fieldTypes;
-export type SelectionField = {key:string;label:string;width:number;custom?:boolean;deleted?:boolean;type?:FieldType;fallbackType?:FieldType;options?:string[];personDisplay?:"name"|"username"|"both";timeDisplay?:"date"|"datetime";numberConfig?:{prefix:string;suffix:string;digits:number};tagConfig?:{allowCustom:boolean;multiple:boolean;max:number;order:"selection"|"options"|"alphabetical";color:string};imageConfig?:{colors:boolean;links:boolean;upload:boolean;mobile:boolean;max:number}};
+export type SelectionField = {key:string;label:string;width:number;custom?:boolean;deleted?:boolean;type?:FieldType;fallbackType?:FieldType;options?:string[];personDisplay?:"name"|"username"|"both";timeDisplay?:"date"|"datetime";numberConfig?:{prefix:string;suffix:string;digits:number};tagConfig?:{allowCustom:boolean;multiple:boolean;max:number;order:"selection"|"options"|"alphabetical";color:string};imageConfig?:{autoplay?:boolean;colors:boolean;links:boolean;upload:boolean;mobile:boolean;max:number}};
 export function resetFieldTypes(fields:SelectionField[]):SelectionField[]{
   return fields.map(field=>({...field,fallbackType:field.type || field.fallbackType,type:undefined}));
 }
@@ -35,7 +35,7 @@ export function fieldValueError(field:SelectionField,raw:unknown):string|null {
   return null;
 }
 
-export const defaultImageConfig={colors:true,links:true,upload:true,mobile:true,max:30};
+export const defaultImageConfig={autoplay:true,colors:true,links:true,upload:true,mobile:true,max:30};
 export function fieldImages(value:unknown):{id:string;url:string;color:string}[]{try{const parsed=JSON.parse(String(value || "[]"));return Array.isArray(parsed)?parsed.filter(item=>item && typeof item.id==="string" && typeof item.url==="string"):[];}catch{return [];}}
 
 export const defaultTagConfig={allowCustom:true,multiple:true,max:30,order:"selection" as const,color:"orange"};

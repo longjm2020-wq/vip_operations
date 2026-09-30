@@ -8,7 +8,7 @@ import {prepareUpload,readUpload} from "./upload-file";
 import {defaultImageConfig,fieldImages} from "./selection-field-types";
 export function SelectionCustomPhoto(){
  const params=new URLSearchParams(location.search),id=params.get("id") || "",field=params.get("field") || "",name=params.get("fieldName") || "图片";
- let config={...defaultImageConfig};try{const input=JSON.parse(params.get("fieldConfig") || "{}");config={colors:input.colors!==false,links:input.links!==false,upload:input.upload!==false,mobile:input.mobile!==false,max:Math.min(30,Math.max(1,Number(input.max) || 30))};}catch{}
+ let config={...defaultImageConfig};try{const input=JSON.parse(params.get("fieldConfig") || "{}");config={autoplay:input.autoplay!==false,colors:input.colors!==false,links:input.links!==false,upload:input.upload!==false,mobile:input.mobile!==false,max:Math.min(30,Math.max(1,Number(input.max) || 30))};}catch{}
  const user=useUser(); const canRead=useCan("selection.read"),canEdit=useCan("selection.manage");
  const [busy,setBusy]=useState(false),[error,setError]=useState(""),[color,setColor]=useState("");const camera=useRef<HTMLInputElement>(null),album=useRef<HTMLInputElement>(null),lock=useRef(false);
  const data=useQuery({queryKey:["custom-photo",id,field],enabled:canRead && /^\d+$/.test(id),queryFn:()=>api("/style-selections/"+id),refetchInterval:busy?false:10000});

@@ -169,10 +169,10 @@ function ImageCell({ images, colors, disabled, onChange, mobileId, labelImages =
   const currentImageIndex = Math.min(imageIndex, Math.max(0, images.length - 1));
   useEffect(() => summaryRef.current ? observeImageVisibility(summaryRef.current, visible => { setOnScreen(visible); if (visible) setHasBeenVisible(true); }) : undefined, [images.length > 0]);
   useEffect(() => {
-    if (images.length < 2 || !onScreen || allOpen || previewOpen || carouselPaused || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    if (!config.autoplay || images.length < 2 || !onScreen || allOpen || previewOpen || carouselPaused || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
     const timer = window.setInterval(() => setImageIndex(index => (index + 1) % images.length), 4000);
     return () => window.clearInterval(timer);
-  }, [images.length, onScreen, allOpen, previewOpen, carouselPaused]);
+  }, [config.autoplay, images.length, onScreen, allOpen, previewOpen, carouselPaused]);
   const uploadInput = useRef<HTMLInputElement>(null);
   const latestImages = useRef(images);
   latestImages.current = images;
