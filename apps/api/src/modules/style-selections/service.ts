@@ -3,6 +3,7 @@ import { cellNumberFormatSchema } from "../../../../../packages/contracts/src/se
 import { sortSelectionSizes } from "../../../../../packages/contracts/src/selection-sizes.js";
 import { z } from "zod";
 import { randomUUID } from "node:crypto";
+import { insertImage, readStoredImage } from "./image-storage.js";
 import { db, insert, one, rows, update, type Row, type Tx } from "../../../../../packages/database/src/index.js";
 import {
   audit,
@@ -90,7 +91,7 @@ export async function uploadImage(c: Context, input: unknown) {
   if (!valid || !bytes.length || bytes.length >= 500 * 1024) fail("VALIDATION_ERROR", "图片格式无效或未压缩至 500 KB 以下", 400);
   return command(c, "style-selections/image-upload", body, async (tx) => {
     const id = randomUUID();
-    await rows(tx, "INSERT INTO style_selection_images(id,content_type,content,created_by) VALUES($1::uuid,$2,$3,$4::bigint)", id, type, bytes, c.actor.id);
+    await insertImage(tx, id, type, bytes, c.actor.id);
     await audit(tx, c, "CREATE", "style-selection-image", null, null, { id, type, size: bytes.length });
     return { url: `/api/v1/style-selections/images/${id}` };
   });
@@ -98,9 +99,7 @@ export async function uploadImage(c: Context, input: unknown) {
 
 export async function readImage(value: string, metadataOnly = false) {
   const id = parse(z.string().uuid(), value);
-  const file = await one(db, `SELECT content_type${metadataOnly ? "" : ",content"} FROM style_selection_images WHERE id=$1::uuid`, id);
-  if (!file) fail("NOT_FOUND", "图片不存在", 404);
-  return file!;
+  return readStoredImage(id, metadataOnly);
 }
 
 function tagValues(value: unknown) {

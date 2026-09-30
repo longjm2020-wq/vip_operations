@@ -1,5 +1,6 @@
 import "reflect-metadata";
 import "dotenv/config";
+import { startImageMigration } from "./modules/style-selections/image-storage.js";
 import { Module } from "@nestjs/common";
 import { NestFactory, APP_GUARD, APP_INTERCEPTOR } from "@nestjs/core";
 import { SwaggerModule, DocumentBuilder } from "@nestjs/swagger";
@@ -105,6 +106,7 @@ export async function start() {
     Number(process.env.PORT || 3100),
     process.env.HOST || "127.0.0.1",
   );
+  startImageMigration();
   return app;
 }
 await start();

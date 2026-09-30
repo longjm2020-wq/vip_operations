@@ -1,4 +1,5 @@
 import { randomBytes, randomUUID } from "node:crypto";
+import { insertImage, readStoredImage } from "./image-storage.js";
 import { z } from "zod";
 import { db, rows, one, json, type Tx, type Row } from "../../../../../packages/database/src/index.js";
 import { parse, id, fail, command, hash, canonical, audit, type Context } from "../../core.js";
@@ -221,7 +222,7 @@ export async function photo(token: string,key: string,value: string,input: unkno
       const valid=type==="image/png"?bytes.subarray(0,8).equals(Buffer.from("89504e470d0a1a0a","hex")):type==="image/jpeg"?bytes.subarray(0,3).equals(Buffer.from("ffd8ff","hex")):bytes.toString("ascii",0,4)==="RIFF" && bytes.toString("ascii",8,12)==="WEBP";
       if(!valid || !bytes.length || bytes.length>=500*1024) fail("VALIDATION_ERROR","图片无效或超过500KB",400);
       const imageId=randomUUID();
-      await rows(tx,"INSERT INTO style_selection_images(id,content_type,content,created_by) VALUES($1::uuid,$2,$3,$4::bigint)",imageId,type,bytes,share.created_by);
+      await insertImage(tx,imageId,type,bytes,share.created_by);
       images=[...images,{id:imageId,url:"/api/v1/style-selections/images/"+imageId,color:body.color}];
     }
     await rows(tx,"UPDATE selection_collection_items SET draft=$3::jsonb WHERE collection_id=$1::bigint AND selection_id=$2::bigint",share.id,value,JSON.stringify({...item.draft,images}));
@@ -235,9 +236,7 @@ export async function image(token:string,value:string,imageId:string) {
   if(!image) fail("NOT_FOUND","图片不在收集表内",404);
   const match=/^\/api\/v1\/style-selections\/images\/([a-f0-9-]{36})$/.exec(image.url);
   if(!match) fail("NOT_FOUND","图片不存在",404);
-  const file=await one(db,"SELECT content_type,content FROM style_selection_images WHERE id=$1::uuid",match![1]);
-  if(!file) fail("NOT_FOUND","图片不存在",404);
-  return file!;
+  return readStoredImage(match![1]);
 }
 export async function review(c:Context,value:string,input:unknown) {
   const body=parse(z.object({itemId:id.optional(),action:z.enum(["approve","reject","close","renew"]),revision:z.number().int(),reason:z.string().trim().max(1000).default(""),days:z.union([z.literal(7),z.literal(30),z.literal(0)]).optional()}).strict(),input);

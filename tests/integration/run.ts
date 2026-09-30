@@ -6,6 +6,7 @@ import { createWriteStream } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import pg from "pg";
 import { migrate } from "../../scripts/migrate.js";
+import { imageStore } from "./image-store.js";
 const baseUrl = new URL(process.env.DATABASE_URL!);
 const database = "vip_erp_test_" + Date.now();
 const admin = new pg.Client({ connectionString: baseUrl.toString() });
@@ -35,6 +36,7 @@ assert.equal(
 );
 await mkdir(".local", { recursive: true });
 const log = createWriteStream(".local/integration-api.log");
+const objectStore = await imageStore();
 const child = spawn(
   process.execPath,
   ["node_modules/tsx/dist/cli.mjs", "apps/api/src/main.ts"],
@@ -593,6 +595,10 @@ try {
   const uploadedImage = await ok("/style-selections/images", "POST", { data: imageData }, uploadKey);
   assert.deepEqual(await ok("/style-selections/images", "POST", { data: imageData }, uploadKey), uploadedImage);
   const imagePath = uploadedImage.url.replace("/api/v1", "");
+  const storedImage = await one(db, "SELECT content,storage_key,byte_size FROM style_selection_images WHERE id=$1::uuid", uploadedImage.url.split("/").at(-1));
+  assert.equal(storedImage!.content, null, "New uploads must not store image bytes in PostgreSQL");
+  assert.ok(storedImage!.storage_key);
+  assert.ok(objectStore.objects.size > 0);
   assert.equal((await request(imagePath, "GET", undefined, randomUUID(), { cookie: "", csrf: "" })).status, 401);
   const downloadedImage = await fetch(base + imagePath, { headers: { Cookie: session.cookie } });
   assert.equal(downloadedImage.headers.get("content-type"), "image/png");
@@ -611,6 +617,32 @@ try {
   const manySaved = await ok("/style-selections/" + selection.id, "PATCH", { images: manyImages, expectedUpdatedAt: savedAgain.updatedAt });
   assert.equal(manySaved.images.length, 12);
   check("selection images upload independently, enforce size and access, and allow more than five images");
+  const legacyId = randomUUID();
+  const legacyBytes = Buffer.from(imageData.split(",")[1], "base64");
+  await rows(db, "INSERT INTO style_selection_images(id,content_type,content,created_by) SELECT $1::uuid,'image/png',$2,id FROM users WHERE username='admin'", legacyId, legacyBytes);
+  const { migrateImageBatch, readStoredImage } = await import("../../apps/api/src/modules/style-selections/image-storage.js");
+  await migrateImageBatch();
+  const migratedImage = await one(db, "SELECT storage_key,storage_verified_at,content FROM style_selection_images WHERE id=$1::uuid", legacyId);
+  assert.ok(migratedImage!.storage_verified_at);
+  assert.deepEqual(Buffer.from(migratedImage!.content), legacyBytes, "Migration must retain the recovery copy");
+  const readsBefore = objectStore.reads();
+  const parallelReads = await Promise.all(Array.from({ length: 20 }, () => readStoredImage(legacyId)));
+  assert.ok(parallelReads.every(file => Buffer.from(file.content).equals(legacyBytes)));
+  assert.equal(objectStore.reads() - readsBefore, 1, "Concurrent reads should share one object request");
+  assert.equal((await migrateImageBatch()).migrated, 0, "Migration can safely resume without copying completed objects");
+  const recoveryId = randomUUID();
+  await rows(db, "INSERT INTO style_selection_images(id,content_type,content,created_by) SELECT $1::uuid,'image/png',$2,id FROM users WHERE username='admin'", recoveryId, legacyBytes);
+  objectStore.setUnavailable(true);
+  try {
+    assert.equal((await request("/style-selections/images", "POST", { data: imageData })).status, 503);
+    await assert.rejects(() => migrateImageBatch());
+    assert.equal((await one(db, "SELECT storage_key FROM style_selection_images WHERE id=$1::uuid", recoveryId))!.storage_key, null);
+  } finally { objectStore.setUnavailable(false); }
+  await migrateImageBatch();
+  objectStore.setUnavailable(true);
+  try { assert.deepEqual(Buffer.from((await readStoredImage(recoveryId)).content), legacyBytes, "Verified legacy copies remain readable during an object-store outage"); }
+  finally { objectStore.setUnavailable(false); }
+  check("object storage uploads, verified legacy migration, retained recovery copies and coalesced reads");
   const occupiedText = await ok("/style-selections", "POST", { xutiStyleNo: "OCCUPIED-TEXT", sortOrder: 0 });
   const duplicateNumber = await request("/style-selections", "POST", { xutiStyleNo: " OCCUPIED-TEXT ", sortOrder: 0 });
   assert.equal(duplicateNumber.status, 400);
@@ -966,8 +998,13 @@ try {
     ),
   );
   console.log(`Integration: ${passed} scenarios passed.`);
+  if (process.env.SELECTION_LOAD_TEST === "1") {
+    const { selectionLoad } = await import("./selection-load.js");
+    await selectionLoad(base);
+  }
 } finally {
   child.kill();
+  await objectStore.close();
   log.end();
   await db.$disconnect();
 }
