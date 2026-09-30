@@ -307,6 +307,9 @@
 .selection-sheet.row-compact { --selection-cell-height: 40px; }
 .selection-sheet.row-loose { --selection-cell-height: 64px; }
 .selection-cell-content { height: calc(var(--selection-cell-height) - 1px); overflow: hidden; min-width: 0; overflow-wrap: anywhere; }
+.selection-sheet td { position: relative; }
+.selection-remote-cell { position: absolute; inset: 3px; border: 2px solid; pointer-events: none; z-index: 5; }
+.selection-remote-names { position: absolute; top: -2px; right: -2px; max-width: calc(100% + 4px); padding: 0 4px; color: white; font-size: 10px; line-height: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .selection-text-input { box-sizing: border-box; width: 100%; height: 100%; padding: 7px 9px; border: 0; outline: 0; resize: none; overflow: hidden; white-space: pre-wrap; overflow-wrap: anywhere; color: inherit; font: inherit; line-height: 18px; background: transparent; }
 .selection-sheet .selection-text-input:focus, .selection-sheet .selection-text-input:focus-visible { box-shadow: none !important; outline: none !important; }
 .selection-cell-content .selection-tags { max-width: 100%; }

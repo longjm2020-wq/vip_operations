@@ -556,8 +556,13 @@ try {
   assert.equal((await request("/style-selections/" + selection.id, "PATCH", { cellTextColors: { material: "invalid" } })).status, 400);
   assert.equal((await request("/style-selections/" + selection.id, "PATCH", { cellVerticalAlignments: { material: "invalid" } })).status, 400);
   assert.equal((await request("/style-selections/" + selection.id, "PATCH", { cellAlignments: { material: "invalid" } })).status, 400);
-  await ok("/style-selections/presence", "POST", { editingId: selection.id });
-  assert.ok((await ok("/style-selections/presence")).some((person: any) => person.editingId === selection.id));
+  await ok("/style-selections/presence", "POST", { editingId: selection.id, editingColumn: "supplierStyleNo" });
+  assert.ok((await ok("/style-selections/presence")).some((person: any) => person.editingId === selection.id && person.editingColumn === "supplierStyleNo"));
+  await ok("/style-selections/presence", "POST", { editingId: selection.id, editingColumn: "labelImages" });
+  assert.ok((await ok("/style-selections/presence")).some((person: any) => person.editingId === selection.id && person.editingColumn === "labelImages"));
+  assert.equal((await request("/style-selections/presence", "POST", { editingId: selection.id, editingColumn: "x".repeat(101) })).status, 400);
+  await ok("/style-selections/presence", "POST", { editingId: null, editingColumn: "labelImages" });
+  assert.ok(!(await ok("/style-selections/presence")).some((person: any) => person.editingColumn));
   const selectionList = await ok("/style-selections?q=SUP-SELECT-001&pageSize=100");
   assert.equal(selectionList.length, 1);
   assert.equal(selectionList[0].supplierCode, "SUP-001");

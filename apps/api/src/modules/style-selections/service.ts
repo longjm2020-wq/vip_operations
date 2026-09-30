@@ -38,7 +38,7 @@ const image = z
 const labelImage = image.extend({ color: z.literal("").default("") });
 const cellColors = z.record(z.string(), z.enum(rowColors));
 const extraFields = z.record(z.string().max(100), z.string().max(2000));
-const presenceInput = z.object({ editingId: z.string().regex(/^[1-9]\d{0,18}$/).nullable().optional() }).strict();
+const presenceInput = z.object({ editingId: z.string().regex(/^[1-9]\d{0,18}$/).nullable().optional(), editingColumn: z.string().regex(/^[a-zA-Z][a-zA-Z0-9:_-]{0,99}$/).nullable().optional() }).strict();
 
 export const styleSelectionInput = z
   .object({
@@ -167,7 +167,7 @@ export async function styleCounts() {
 export async function presence(_c: Context) {
   return rows(
     db,
-    `SELECT p.user_id,p.editing_id,u.display_name,p.active_at
+    `SELECT p.user_id,p.editing_id,p.editing_column,u.display_name,p.active_at
      FROM style_selection_presence p JOIN users u ON u.id=p.user_id
      WHERE p.active_at > now()-interval '45 seconds' ORDER BY p.active_at DESC`,
   );
@@ -178,11 +178,12 @@ export async function heartbeat(c: Context, input: unknown) {
   if (body.editingId) await entity(db, "style_selections", body.editingId);
   await rows(
     db,
-    `INSERT INTO style_selection_presence(user_id,editing_id,active_at)
-     VALUES($1::bigint,$2::bigint,now())
-     ON CONFLICT(user_id) DO UPDATE SET editing_id=EXCLUDED.editing_id,active_at=EXCLUDED.active_at`,
+    `INSERT INTO style_selection_presence(user_id,editing_id,editing_column,active_at)
+     VALUES($1::bigint,$2::bigint,$3,now())
+     ON CONFLICT(user_id) DO UPDATE SET editing_id=EXCLUDED.editing_id,editing_column=EXCLUDED.editing_column,active_at=EXCLUDED.active_at`,
     c.actor.id,
     body.editingId || null,
+    body.editingId ? body.editingColumn || null : null,
   );
   return { ok: true };
 }

@@ -61,6 +61,7 @@ const splitTags = (value: unknown) => [...new Set(String(value || "").split("/")
 const joinTags = (value: string[]) => [...new Set(value.map((item) => item.trim()).filter(Boolean))].join("/");
 const comparable = (value: unknown) => value && typeof value === "object" ? JSON.stringify(value) : String(clean(value) ?? "");
 const cellId = (rowKey: string, columnKey: string) => `${rowKey}::${columnKey}`;
+const collaboratorColor = (id: string) => ["#722ed1", "#08979c", "#c41d7f", "#389e0d", "#d46b08", "#1d39c4"][Array.from(id).reduce((hash, char) => (hash * 31 + char.charCodeAt(0)) >>> 0, 0) % 6];
 const pageSizes = [20, 50, 100, 200, 500, 1000];
 const pageSizeKey = "style-selection-page-size-v1";
 const imageVisibilityCallbacks = new WeakMap<Element, (visible: boolean) => void>();
@@ -273,7 +274,9 @@ export function StyleSelectionsPage() {
   const [draggedRow, setDraggedRow] = useState<string | null>(null);
   const [draggedColumn, setDraggedColumn] = useState<string | null>(null);
   const [resizingColumn, setResizingColumn] = useState<{ key: string; startX: number; startWidth: number } | null>(null);
-  const [editingId, setEditingId] = useState<string | null>(null);
+  const editingId = cellAnchor ? String(rows.find(row => row._key === cellAnchor.rowKey)?.id || "") || null : null;
+  const editingColumn = editingId ? cellAnchor?.columnKey || null : null;
+  const presenceWrites = useRef<Promise<unknown>>(Promise.resolve());
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -285,7 +288,14 @@ export function StyleSelectionsPage() {
   const queryString = new URLSearchParams({ page: "1", pageSize: "100", ...(search ? { q: search } : {}), sort, direction }).toString();
   const data = useQuery({ queryKey: ["style-selections", queryString], queryFn: () => fetchSelectionRows(search, sort, direction, queryClient.getQueryData(["style-selections", queryString])), refetchInterval: saving ? false : 10000, refetchOnWindowFocus: !saving });
   const styleCounts = useQuery({ queryKey: ["style-selection-style-counts"], queryFn: () => api("/style-selections/style-counts"), refetchInterval: 30000 });
-  const presence = useQuery({ queryKey: ["style-selection-presence"], queryFn: () => api("/style-selections/presence"), refetchInterval: 10000 });
+  const presence = useQuery({ queryKey: ["style-selection-presence"], queryFn: () => api("/style-selections/presence"), refetchInterval: 2000 });
+
+  const collaborators = (presence.data?.data || []).filter((person: Row) => String(person.userId) !== String(user.id || ""));
+  const remoteCells = new Map<string, Row[]>();
+  for (const person of collaborators) if (person.editingId && person.editingColumn) {
+    const key = cellId(String(person.editingId), person.editingColumn);
+    remoteCells.set(key, [...(remoteCells.get(key) || []), person]);
+  }
   const sharedView = useQuery({ queryKey: ["selection-shared-view"], queryFn: () => api("/style-selections/shared-view"), refetchInterval: 10000 });
   const sharedSnapshot = JSON.stringify(sharedView.data?.data);
   useEffect(() => {
@@ -312,10 +322,18 @@ export function StyleSelectionsPage() {
     return () => { window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", stop); };
   }, [resizingColumn]);
   useEffect(() => {
-    const heartbeat = () => { if (document.hidden) return; void api("/style-selections/presence", "POST", { editingId }).catch(() => undefined); };
-    heartbeat(); const timer = window.setInterval(heartbeat, 12000);
-    return () => window.clearInterval(timer);
-  }, [editingId]);
+    const publish = () => {
+      const body = document.hidden ? { editingId: null, editingColumn: null } : { editingId, editingColumn };
+      presenceWrites.current = presenceWrites.current.then(() => api("/style-selections/presence", "POST", body)).catch(() => undefined);
+    };
+    const debounce = window.setTimeout(publish, 200);
+    const timer = window.setInterval(() => { if (!document.hidden) publish(); }, 12000);
+    document.addEventListener("visibilitychange", publish);
+    return () => { window.clearTimeout(debounce); window.clearInterval(timer); document.removeEventListener("visibilitychange", publish); };
+  }, [editingId, editingColumn]);
+  useEffect(() => () => {
+    presenceWrites.current = presenceWrites.current.then(() => api("/style-selections/presence", "POST", { editingId: null, editingColumn: null })).catch(() => undefined);
+  }, []);
   useEffect(() => {
     if (!data.data || appliedSnapshot.current === snapshot || saving || rows.some((row) => !row.id || !sameRow(row, original.current.get(row._key) || {}))) return;
     const next = (data.data.data || []).map((row: Row) => ({ ...normalizeSelection(row), _key: rows.find((current) => current.id === row.id)?._key || String(row.id) }));
@@ -438,7 +456,7 @@ export function StyleSelectionsPage() {
   const axisMouseDown = (event: React.MouseEvent<HTMLElement>, type: "row" | "column", key: string) => {
     if (event.button !== 0) return;
     event.preventDefault(); event.currentTarget.focus();
-    setCellTextEditing(false); setSelectingCells(false); setEditingId(null);
+    setCellTextEditing(false); setSelectingCells(false); setCellAnchor(null);
     if(event.shiftKey){
       axisSelection.current=null;
       if(type==="row" && (!canEdit || saving || deleting))return;
@@ -452,7 +470,7 @@ export function StyleSelectionsPage() {
     const anchor = axisSelection.current;
     if (anchor?.type === type) selectAxis(type, anchor.key, key);
   };
-  const cellMouseDown = (rowKey: string, columnKey: string) => { axisSelection.current = null; setSelectedRows([]); setCellTextEditing(false); const point = { rowKey, columnKey }; setCellAnchor(point); setSelectingCells(true); setEditingId(rows.find((row) => row._key === rowKey)?.id || null); setSelectedCells(new Set([cellId(rowKey, columnKey)])); };
+  const cellMouseDown = (rowKey: string, columnKey: string) => { axisSelection.current = null; setSelectedRows([]); setCellTextEditing(false); const point = { rowKey, columnKey }; setCellAnchor(point); setSelectingCells(true); setSelectedCells(new Set([cellId(rowKey, columnKey)])); };
   const cellMouseEnter = (rowKey: string, columnKey: string) => { if (selectingCells && cellAnchor) selectRectangle(cellAnchor, { rowKey, columnKey }); };
   const copyValue = (row: Row, column: Column) => {
     const value = imageKeys.has(column.key) ? (column.key === "images" ? rowImages(row) : rowLabelImages(row)).map(image => image.url).join("; ") : column.key === "collectionInventory" ? (row.collectionInventory || []).reduce((sum:number,item:Row)=>sum+item.available+item.production,0) : valueAt(row,column);
@@ -580,9 +598,11 @@ export function StyleSelectionsPage() {
     return [!has(r-1,c)?"top":"",!has(r+1,c)?"bottom":"",!has(r,c-1)?"left":"",!has(r,c+1)?"right":""].filter(Boolean).join(" ");
   };
   const renderCell = (row: Row, column: Column) => {
+    const observers = row.id ? remoteCells.get(cellId(String(row.id), column.key)) || [] : [];
+    const observerNames = observers.map(person => person.displayName || "协作者").join("、");
     const disabled = !canEdit || collectionKeys.has(column.key), error = errors[`${row._key}:${column.key}`] || errors[`${row._key}:save`], selected = selectedCells.has(cellId(row._key, column.key));
     const duplicateCount = column.key === "xutiStyleNo" ? repeatedStyles.get(selectionStyleKey(row.xutiStyleNo)) || 0 : 0;
-    const common = { "data-selection-edges": cellEdges(selectedCells,row._key,column.key), "data-copy-edges": cellEdges(copiedCells,row._key,column.key), "data-duplicate-count": duplicateCount || undefined, tabIndex: 0, onDoubleClick: () => setCellTextEditing(true), onFocusCapture: () => { setCellAnchor({ rowKey: row._key, columnKey: column.key }); setEditingId(row.id || null); if (!selectedCells.has(cellId(row._key, column.key))) setSelectedCells(new Set([cellId(row._key, column.key)])); }, className: `${error ? "selection-cell-error " : ""}${duplicateCount ? "selection-cell-duplicate " : ""}${selected ? "selection-cell-active" : ""}${copiedCells.has(cellId(row._key, column.key)) ? " selection-cell-copied" : ""}`, title: error || (duplicateCount ? `序缇款号重复，共 ${duplicateCount} 行` : undefined), onMouseDown: (event: React.MouseEvent) => { if (event.button === 0) cellMouseDown(row._key, column.key); else if (event.button === 2) { event.preventDefault(); if (!selected) { setSelectedCells(new Set([cellId(row._key, column.key)])); setCellAnchor({ rowKey: row._key, columnKey: column.key }); } } }, onDragStart: (event: React.DragEvent) => { if (selectingCells) event.preventDefault(); }, onMouseEnter: () => cellMouseEnter(row._key, column.key), onPaste: (event: ClipboardEvent<HTMLTableCellElement>) => pasteCells(event, row._key, column.key) };
+    const common = { "data-selection-edges": cellEdges(selectedCells,row._key,column.key), "data-copy-edges": cellEdges(copiedCells,row._key,column.key), "data-duplicate-count": duplicateCount || undefined, tabIndex: 0, onDoubleClick: () => setCellTextEditing(true), onFocusCapture: () => { setCellAnchor({ rowKey: row._key, columnKey: column.key }); if (!selectedCells.has(cellId(row._key, column.key))) setSelectedCells(new Set([cellId(row._key, column.key)])); }, className: `${error ? "selection-cell-error " : ""}${duplicateCount ? "selection-cell-duplicate " : ""}${selected ? "selection-cell-active" : ""}${copiedCells.has(cellId(row._key, column.key)) ? " selection-cell-copied" : ""}`, title: error || (duplicateCount ? `序缇款号重复，共 ${duplicateCount} 行` : undefined), onMouseDown: (event: React.MouseEvent) => { if (event.button === 0) cellMouseDown(row._key, column.key); else if (event.button === 2) { event.preventDefault(); if (!selected) { setSelectedCells(new Set([cellId(row._key, column.key)])); setCellAnchor({ rowKey: row._key, columnKey: column.key }); } } }, onDragStart: (event: React.DragEvent) => { if (selectingCells) event.preventDefault(); }, onMouseEnter: () => cellMouseEnter(row._key, column.key), onPaste: (event: ClipboardEvent<HTMLTableCellElement>) => pasteCells(event, row._key, column.key) };
     const openFormat = () => {
       const ids = selectedCells.has(cellId(row._key, column.key)) ? new Set(selectedCells) : new Set([cellId(row._key, column.key)]);
       setFormatTarget({ ids, sample: valueAt(row, column), initial: ids.size === 1 ? Object.fromEntries(["cellNumberFormats", "cellAlignments", "cellVerticalAlignments", "cellColors", "cellTextColors"].map(key => [key, row[key]?.[column.key]])) : {} });
@@ -602,7 +622,7 @@ export function StyleSelectionsPage() {
     } }}><td {...common} onContextMenu={event => {
       const summary = event.currentTarget.querySelector<HTMLElement>("[data-selection-image-url]");
       contextImage.current = summary?.dataset.selectionImageUrl ? { url: summary.dataset.selectionImageUrl, name: `${row.xutiStyleNo || row.supplierStyleNo || "选款"}-${column.label}-${summary.dataset.selectionImageIndex || "1"}` } : null;
-    }} data-vertical-align={row.cellVerticalAlignments?.[column.key] || "middle"} data-text-color={row.cellTextColors?.[column.key]} style={{ color: row.cellTextColors?.[column.key], textAlign: row.cellAlignments?.[column.key] || "left", backgroundColor: colorOptions.find(option => option.value === (row.cellColors?.[column.key] || row.rowColor))?.color }}><div className="selection-cell-content">{content}</div></td></Dropdown>;
+    }} data-vertical-align={row.cellVerticalAlignments?.[column.key] || "middle"} data-text-color={row.cellTextColors?.[column.key]} style={{ color: row.cellTextColors?.[column.key], textAlign: row.cellAlignments?.[column.key] || "left", backgroundColor: colorOptions.find(option => option.value === (row.cellColors?.[column.key] || row.rowColor))?.color }}><div className="selection-cell-content">{content}</div>{!!observers.length && <span className="selection-remote-cell" style={{ borderColor: collaboratorColor(String(observers[0].userId)) }} aria-label={`${observerNames}正在选中此单元格`}><span className="selection-remote-names" style={{ backgroundColor: collaboratorColor(String(observers[0].userId)) }}>{observerNames}</span></span>}</td></Dropdown>;
     if (column.key === "images") return cell(<ImageCell mobileId={row.id && sameRow(row, original.current.get(row._key) || {}) ? String(row.id) : undefined} images={rowImages(row)} colors={splitTags(row.color)} disabled={disabled} onChange={(value) => update(row._key, column, value)} />);
     if (column.key === "labelImages") return cell(<ImageCell labelImages mobileId={row.id && sameRow(row, original.current.get(row._key) || {}) ? String(row.id) : undefined} images={rowLabelImages(row)} colors={[]} disabled={disabled} onChange={(value) => update(row._key, column, value)} />);
     if (column.key === "color") return cell(<TagCell value={row.color} disabled={disabled} placeholder="+ 颜色"  />);
@@ -664,7 +684,7 @@ export function StyleSelectionsPage() {
   </div>;
   const filterContent = <div className="selection-popover"><Input.Search autoFocus allowClear placeholder="搜索批次、款号、供应商、颜色或材质" value={search} onChange={(event) => setSearch(event.target.value)} /><Button onClick={() => { setSearch(""); setFilterOpen(false); }}>清除筛选</Button></div>;
   const settings = <div className="selection-column-settings"><Button type="dashed" icon={<PlusOutlined />} onClick={addColumn}>新增文本列</Button>{columns.map((column) => <div key={column.key} className="selection-column-setting" draggable onDragStart={() => setDraggedColumn(column.key)} onDragOver={(event) => event.preventDefault()} onDrop={() => { if (draggedColumn) moveColumn(draggedColumn, column.key); setDraggedColumn(null); }}><Checkbox checked={visible.includes(column.key)} onChange={(event) => setVisible((current) => event.target.checked ? [...current, column.key] : current.filter((key) => key !== column.key))} aria-label={`显示${column.label}`} /><ColumnNameEditor column={column} onSave={label => setColumns(current => current.map(item => item.key === column.key ? { ...item, label } : item))} /><Button type="text" size="small" icon={<DeleteOutlined />} aria-label={`移除 ${column.label}`} onClick={() => removeColumn(column)} /></div>)}</div>;
-  const collaborators = (presence.data?.data || []).filter((person: Row) => String(person.userId) !== String(user.id || ""));
+
   const applyFormat = (patch: FormatPatch) => {
     if (!canEdit || !formatTarget) return;
     setRows(current => current.map(row => {
@@ -698,7 +718,7 @@ export function StyleSelectionsPage() {
     {!followShared && !!sharedView.data?.data?.revision && <Button type="text" onClick={() => setFollowShared(true)}>使用共享筛选</Button>}
     <SelectionTransfer filteredRows={Object.keys(columnFilters).length || columnSort ? filteredRows : undefined} canEdit={canEdit} blocked={!!dirtyCount || saving || deleting} selectedRows={filteredRows.filter(row => selectedRows.includes(row._key))} query={search} onImported={() => { appliedSnapshot.current = ""; void queryClient.invalidateQueries({ queryKey: ["style-selections"] }); void queryClient.invalidateQueries({ queryKey: ["style-selection-style-counts"] }); }} />
     </Space><span className="selection-record-count">{!!Object.keys(errors).length && <Tooltip title="修改尚未保存；悬停红色单元格查看原因，修正后重试"><Button type="text" size="small" danger disabled={saving} onClick={() => { attempts.current.retry(); setRetryVersion((value) => value + 1); }}>未保存 · 重试</Button></Tooltip>}</span></div>
-    {!!collaborators.length && <div className="selection-collaborators" aria-label="在线协作者">{collaborators.map((person: Row) => <span key={person.userId} title={person.editingId ? `正在编辑第 ${person.editingId} 行` : "在线"}><i>{String(person.displayName || "协").slice(0, 1)}</i>{person.displayName}{person.editingId ? " · 编辑中" : " · 在线"}</span>)}</div>}
+    {!!collaborators.length && <div className="selection-collaborators" aria-label="在线协作者">{collaborators.map((person: Row) => <span key={person.userId} style={{ color: collaboratorColor(String(person.userId)) }} title={person.editingId ? `正在选中：${rows.find(row => String(row.id) === String(person.editingId))?.xutiStyleNo || "未填款号"} · ${columns.find(column => column.key === person.editingColumn)?.label || "单元格"}` : "在线"}><i>{String(person.displayName || "协").slice(0, 1)}</i>{person.displayName}{person.editingId ? ` · ${columns.find(column => column.key === person.editingColumn)?.label || "选中中"}` : " · 在线"}</span>)}</div>}
       {editor}
       <QueryState error={data.error || presence.error || sharedView.error} reload={() => { data.refetch(); presence.refetch(); sharedView.refetch(); }} /><div className={`selection-sheet row-${rowHeight}`}><table tabIndex={0} onCopy={event => { const point = cellAnchor || (displayedRows[0] && activeColumns[0] ? {rowKey:displayedRows[0]._key,columnKey:activeColumns[0].key} : null); if (point) copyCells(event,point.rowKey,point.columnKey); }} onKeyDown={event => {
         if (!event.currentTarget.contains(event.target as Node) || event.nativeEvent.isComposing) return;
