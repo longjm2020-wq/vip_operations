@@ -1,0 +1,21 @@
+{
+  "completedAt": "2026-09-30T04:55:26.584Z",
+  "environment": "isolated Railway API + PostgreSQL + private test bucket; separate load generator over private network; excludes end-user public internet and browser rendering",
+  "businessCommit": "b2849450cfe63239fb12b1da85a9e2a137737c8e",
+  "harnessCommit": "7b91258fe8e485402e26b64ba62640a7e73c79fe",
+  "users": 100,
+  "selectionRows": 1515,
+  "durationSeconds": 902,
+  "measuredRequests": 80867,
+  "downloadedMiB": 4088.07,
+  "errors": [],
+  "operations": {
+    "presence-read": {"requests":44939,"p50Ms":34,"p95Ms":160,"p99Ms":397,"maxMs":3471},
+    "revision": {"requests":9000,"p50Ms":75,"p95Ms":288,"p99Ms":940,"maxMs":3496},
+    "presence-write": {"requests":7500,"p50Ms":46,"p95Ms":388,"p99Ms":1640,"maxMs":3629},
+    "cell-save": {"requests":1350,"p50Ms":169,"p95Ms":476,"p99Ms":1357,"maxMs":1965},
+    "image-upload": {"requests":300,"p50Ms":268,"p95Ms":591,"p99Ms":942,"maxMs":1152},
+    "image-read": {"requests":9000,"p50Ms":126,"p95Ms":396,"p99Ms":1791,"maxMs":6452},
+    "sync": {"requests":8778,"p50Ms":119,"p95Ms":341,"p99Ms":897,"maxMs":3821}
+  }
+}
