@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
-import { Alert, Button, Modal, Space, Table, Tooltip } from "antd";
+import { Alert, App, Button, Dropdown, Modal, Space, Table, Tooltip, Upload } from "antd";
+import { DownOutlined, DownloadOutlined, InboxOutlined, UploadOutlined } from "@ant-design/icons";
 import { api } from "./api";
 import { downloadSelectionWorkbook, parseSelectionWorkbook } from "./selection-workbook";
 import { prepareUpload, readUpload } from "./upload-file";
@@ -11,7 +12,8 @@ import { fetchSelectionRows } from "./selection-data";
 export function SelectionTransfer({ canEdit, blocked, selectedRows, filteredRows, query, onImported }: {
   canEdit: boolean; blocked: boolean; selectedRows: Row[]; filteredRows?: Row[]; query: string; onImported: () => void;
 }) {
-  const input = useRef<HTMLInputElement>(null);
+  const { message } = App.useApp();
+  const loadLock = useRef(false);
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState(false);
   const [error, setError] = useState("");
@@ -27,10 +29,12 @@ export function SelectionTransfer({ canEdit, blocked, selectedRows, filteredRows
       }
       if (!template && !records.length) throw Error("没有可导出的款式");
       await downloadSelectionWorkbook(records, template);
-    } catch (e) { setError((e as Error).message); setOpen(true); }
+    } catch (e) { if (template) setError((e as Error).message); else message.error((e as Error).message); }
     finally { setBusy(false); }
   };
   const load = async (file: File) => {
+    if (!canEdit || blocked || busy || loadLock.current) return;
+    loadLock.current = true;
     setOpen(true); setBusy(true); setError(""); setResult(""); setPlan(null);
     try {
       if (!/\.xlsx$/i.test(file.name) || file.size > 20 * 1024 * 1024) throw Error("请选择不超过 20 MB 的 .xlsx 文件");
@@ -45,10 +49,10 @@ export function SelectionTransfer({ canEdit, blocked, selectedRows, filteredRows
       setPlan((await api("/style-selections/import/preview", "POST", { rows: records })).data);
       key.current = crypto.randomUUID();
     } catch (e) { setError((e as Error).message); }
-    finally { setBusy(false); }
+    finally { loadLock.current = false; setBusy(false); }
   };
   const commit = async () => {
-    if (!plan || blocked) return;
+    if (!plan || !canEdit || blocked || busy) return;
     setBusy(true); setError("");
     try {
       const response = await api("/style-selections/import", "POST", { rows: plan.rows }, key.current);
@@ -57,12 +61,19 @@ export function SelectionTransfer({ canEdit, blocked, selectedRows, filteredRows
     } catch (e) { setError((e as Error).message); }
     finally { setBusy(false); }
   };
-  return <><Space size={2}>
-    <Tooltip title={blocked ? "请先处理未保存的修改" : selectedRows.length ? `导出勾选的 ${selectedRows.length} 款` : "导出当前筛选下的全部款式"}><Button type="text" disabled={busy || blocked} onClick={() => { setPlan(null); void download(false); }}>按款导出</Button></Tooltip>
-    <Button type="text" disabled={!canEdit || busy || blocked} onClick={() => input.current?.click()}>导入资料</Button>
-    <Button type="text" disabled={busy} onClick={() => { setPlan(null); void download(true); }}>模板下载</Button>
-  </Space><input ref={input} hidden type="file" accept=".xlsx" onChange={event => { const file = event.target.files?.[0]; event.target.value = ""; if (file) void load(file); }} />
-    <Modal title="按款导入资料" width={720} open={open} maskClosable={!busy} closable={!busy} onCancel={() => setOpen(false)} footer={<Space><Button disabled={busy} onClick={() => setOpen(false)}>关闭</Button>{plan && <Button type="primary" loading={busy} disabled={blocked} onClick={() => void commit()}>确认导入</Button>}</Space>}>
+  const openImport = () => { setPlan(null); setError(""); setResult(""); setOpen(true); };
+  return <><Space size={8}>
+    <Dropdown trigger={["click"]} disabled={busy} menu={{ items: [{ key: "excel", label: "从 Excel 导入商品", disabled: !canEdit || blocked }, { key: "template", label: "下载模板" }], onClick: ({ key }) => { openImport(); if (key === "template") void download(true); } }}><Button aria-label="导入" disabled={busy} icon={<DownloadOutlined />}>导入 <DownOutlined /></Button></Dropdown>
+    <Tooltip title={blocked ? "请先处理未保存的修改" : selectedRows.length ? `导出勾选的 ${selectedRows.length} 款` : "导出当前筛选下的全部款式"}><Dropdown trigger={["click"]} disabled={busy || blocked} menu={{ items: [{ key: "excel", label: "导出 Excel" }], onClick: () => { void download(false); } }}><Button aria-label="导出" disabled={busy || blocked} icon={<UploadOutlined />}>导出 <DownOutlined /></Button></Dropdown></Tooltip>
+  </Space>
+    <Modal title="从 Excel 导入商品" width={960} open={open} maskClosable={!busy} closable={!busy} onCancel={() => setOpen(false)} footer={<Space><Button disabled={busy} onClick={() => setOpen(false)}>关闭</Button>{plan && <Button type="primary" loading={busy} disabled={!canEdit || blocked} onClick={() => void commit()}>确认导入</Button>}</Space>}>
+      <div className="selection-import-guide"><span>请使用模板填写资料，按序缇款号匹配：已有款更新，新款新增。空白字段保留原值，导入前可预览核对。</span><Button icon={<DownloadOutlined />} disabled={busy} onClick={() => void download(true)}>下载模板</Button></div>
+      <Upload.Dragger className="selection-import-upload" accept=".xlsx" multiple={false} showUploadList={false} disabled={!canEdit || busy || blocked} beforeUpload={file => { void load(file); return false; }}>
+        <p className="ant-upload-drag-icon"><InboxOutlined /></p>
+        <p className="ant-upload-text">点击或拖拽 Excel 文件到这里上传</p>
+        <p className="ant-upload-hint">仅支持 .xlsx 文件，不超过 20 MB，每次最多 500 款</p>
+      </Upload.Dragger>
+      {(!canEdit || blocked) && <p>{!canEdit ? "当前账号仅可下载模板，导入资料需要编辑权限。" : "请先处理表格中未保存的修改，再上传文件。"}</p>}
       {busy && !plan && <p>正在处理表格资料…</p>}
       {error && <Alert type="error" showIcon title={error} />}
       {result && <Alert type="success" showIcon title={result} />}

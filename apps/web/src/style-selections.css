@@ -490,5 +490,10 @@
 .selection-custom-tags{display:flex;flex-wrap:wrap;justify-content:inherit;gap:4px;max-width:100%;}
 .selection-custom-tags .ant-tag{margin:0;white-space:normal;overflow-wrap:anywhere;}
 .selection-tag-empty{color:#999;font-size:12px;}
-.selection-exact-search { width: 350px !important; font-size: 12px; }
-@media (max-width: 600px) { .selection-exact-search { width: min(350px, calc(100vw - 48px)) !important; } }
+.selection-header-search { display: flex; align-items: flex-start; gap: 6px; width: 420px; }
+.selection-search-mode { flex: none; width: 108px; }
+.selection-exact-search { flex: 1; min-width: 0; width: auto !important; font-size: 12px; }
+.selection-import-guide { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; padding: 14px 16px; margin: 16px 0; background: #fff5eb; border-radius: 6px; }
+.selection-import-guide > span { flex: 1; min-width: 200px; color: #78604d; }
+.selection-import-upload .ant-upload-drag-container { padding: 22px 12px; }
+@media (max-width: 600px) { .selection-header-search { width: min(420px, calc(100vw - 48px)); } }

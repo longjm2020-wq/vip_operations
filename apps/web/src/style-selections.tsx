@@ -243,13 +243,21 @@ export function StyleSelectionsPage() {
   const canEdit = useCan("selection.manage");
   const user = useUser();
   const { message } = App.useApp();
-  const [filterOpen, setFilterOpen] = useState(false);
   const [columns, setColumns] = useState<Column[]>(initialColumns);
   const [visible, setVisible] = useState<string[]>(() => {const keys=initialColumns().map(column=>column.key);try{const hidden=JSON.parse(localStorage.getItem("selection-hidden-fields-v1") || "[]");return keys.filter(key=>!Array.isArray(hidden) || !hidden.includes(key));}catch{return keys;}});
   useEffect(()=>{localStorage.setItem("selection-hidden-fields-v1",JSON.stringify(columns.filter(column=>!visible.includes(column.key)).map(column=>column.key)));},[columns,visible]);
-  const [search, setSearch] = useState("");
-  const [exactStyleSearch, setExactStyleSearch] = useState("");
-  const exactStyleNumbers = useMemo(() => parseExactStyleNumbers(exactStyleSearch), [exactStyleSearch]);
+  const [searchMode, setSearchMode] = useState<"exact" | "keyword">("exact");
+  const [exactSearchText, setExactSearchText] = useState("");
+  const [keywordSearchText, setKeywordSearchText] = useState("");
+  const searchText = searchMode === "exact" ? exactSearchText : keywordSearchText;
+  const setSearchText = (value: string) => { if (searchMode === "exact") setExactSearchText(value); else setKeywordSearchText(value); };
+  const changeSearchMode = (mode: "exact" | "keyword") => {
+    if (mode === "keyword" && !keywordSearchText && exactSearchText.length <= 100) setKeywordSearchText(exactSearchText);
+    if (mode === "exact" && !exactSearchText) setExactSearchText(keywordSearchText);
+    setSearchMode(mode);
+  };
+  const search = searchMode === "keyword" ? keywordSearchText.trim() : "";
+  const exactStyleNumbers = useMemo(() => parseExactStyleNumbers(searchMode === "exact" ? searchText : ""), [searchMode, searchText]);
   const [columnFilters, setColumnFilters] = useState<SelectionFilters>({});
   const [columnSort, setColumnSort] = useState<SelectionView["sort"]>(null);
   const [filterColumn, setFilterColumn] = useState<string | null>(null);
@@ -371,7 +379,7 @@ export function StyleSelectionsPage() {
   const grouped = useMemo(() => {
     return allGrouped.map(group => ({...group, rows: group.rows.filter(row => pageRowKeys.has(row._key))})).filter(group => group.rows.length);
   }, [allGrouped, pageRowKeys]);
-  useEffect(() => { setPage(1); }, [search, exactStyleSearch, columnFilters, columnSort, groupBy]);
+  useEffect(() => { setPage(1); }, [searchText, searchMode, columnFilters, columnSort, groupBy]);
   useEffect(() => { if (page > pageCount) setPage(pageCount); }, [page, pageCount]);
   useEffect(() => { setCellAnchor(null); setFocusedCell(null); setCopiedCells(new Set()); setCellTextEditing(false); }, [currentPage, pageSize]);
   useEffect(() => {
@@ -707,7 +715,6 @@ export function StyleSelectionsPage() {
       <Input.TextArea aria-label="编辑当前单元格" autoSize={{ minRows: 1, maxRows: 3 }} value={editorValue} disabled={!editorEnabled} readOnly={!canEdit || !!editorColumn && collectionKeys.has(editorColumn.key)} placeholder={editorColumn && imageKeys.has(editorColumn.key) ? "图片请在单元格内上传或查看" : "点击单元格，在此编辑内容"} onChange={(event) => editCurrent(event.target.value)} />}
     {editorError && <span className="selection-editor-error" role="status">{editorError}</span>}
   </div>;
-  const filterContent = <div className="selection-popover"><Input.Search autoFocus allowClear placeholder="搜索批次、款号、供应商、颜色或材质" value={search} onChange={(event) => setSearch(event.target.value)} /><Button onClick={() => { setSearch(""); setFilterOpen(false); }}>清除筛选</Button></div>;
 
 
   const applyFormat = (patch: FormatPatch) => {
@@ -727,10 +734,10 @@ export function StyleSelectionsPage() {
     }));
     setFormatTarget(null);
   };
-  return <>{formatTarget && <SelectionFormatModal count={formatTarget.ids.size} sample={formatTarget.sample} initial={formatTarget.initial} onCancel={() => setFormatTarget(null)} onApply={applyFormat} />}<Header title="选款登记" subtitle="集中登记候选款的图片、款号、供应商、颜色、材质与定价信息。" extra={<Input.TextArea className="selection-exact-search" aria-label="序缇款号精确搜索" placeholder="精确查找序缇款号，多个用逗号或换行分隔" allowClear autoSize={{minRows:1,maxRows:4}} value={exactStyleSearch} onChange={event=>setExactStyleSearch(event.target.value)} />} />
+  return <>{formatTarget && <SelectionFormatModal count={formatTarget.ids.size} sample={formatTarget.sample} initial={formatTarget.initial} onCancel={() => setFormatTarget(null)} onApply={applyFormat} />}<Header title="选款登记" subtitle="集中登记候选款的图片、款号、供应商、颜色、材质与定价信息。" extra={<div className="selection-header-search"><Select aria-label="搜索方式" className="selection-search-mode" value={searchMode} options={[{value:"exact",label:"款号精确"},{value:"keyword",label:"关键词"}]} onChange={changeSearchMode}/><Input.TextArea className="selection-exact-search" aria-label={searchMode==="exact"?"序缇款号精确搜索":"关键词搜索"} placeholder={searchMode==="exact"?"多个款号用中英文逗号或换行分隔":"搜索批次、款号、供应商、颜色、材质"} allowClear autoSize={{minRows:1,maxRows:4}} maxLength={searchMode==="keyword"?100:undefined} value={searchText} onChange={event=>setSearchText(event.target.value)} /></div>} />
     <Card className="selection-card"><div className="selection-toolbar" aria-label="选款登记表格工具栏"><Space wrap size={4}>
       {canEdit && <SelectionCollections selectedRows={filteredRows.filter(row => selectedRows.includes(row._key))} blocked={!!dirtyCount || saving || deleting}/>} {canEdit && <SelectionPhotoQr />}<Button type="link" icon={<PlusOutlined />} disabled={!canEdit} onClick={() => add()}>添加一行</Button><Button type="link" danger icon={<DeleteOutlined />} disabled={!canEdit || !selectedRows.length || saving} loading={deleting} onClick={deleteRows}>删除行</Button>
-      <SelectionFieldManager columns={columns} visible={visible} canEdit={canEdit} onReset={()=>setColumns(current=>resetFieldTypes(current))} onVisible={key=>setVisible(current=>current.includes(key)?current.filter(item=>item!==key):[...current,key])} onMove={moveColumn} onSave={field=>{if(imageKeys.has(field.key) && rows.some(row=>(row[field.key]?.length || 0)>(field.imageConfig?.max || 30))){message.error("已有图片超过新上限，请先移除部分图片");return false;}if(field.type){const issue=rows.map(row=>fieldValueError(field,imageKeys.has(field.key)?JSON.stringify(row[field.key] || []):valueAt(row,field))).find(Boolean);if(issue){message.error("现有内容与设置不兼容："+issue);return false;}}const exists=columns.some(column=>column.key===field.key);setColumns(current=>exists?current.map(column=>column.key===field.key?field:column):[...current,field]);if(!exists)setVisible(current=>[...current,field.key]);}}/><Popover trigger="click" open={filterOpen} onOpenChange={setFilterOpen} content={filterContent}><Button type="text" icon={<FilterOutlined />}>筛选</Button></Popover>
+      <SelectionFieldManager columns={columns} visible={visible} canEdit={canEdit} onReset={()=>setColumns(current=>resetFieldTypes(current))} onVisible={key=>setVisible(current=>current.includes(key)?current.filter(item=>item!==key):[...current,key])} onMove={moveColumn} onSave={field=>{if(imageKeys.has(field.key) && rows.some(row=>(row[field.key]?.length || 0)>(field.imageConfig?.max || 30))){message.error("已有图片超过新上限，请先移除部分图片");return false;}if(field.type){const issue=rows.map(row=>fieldValueError(field,imageKeys.has(field.key)?JSON.stringify(row[field.key] || []):valueAt(row,field))).find(Boolean);if(issue){message.error("现有内容与设置不兼容："+issue);return false;}}const exists=columns.some(column=>column.key===field.key);setColumns(current=>exists?current.map(column=>column.key===field.key?field:column):[...current,field]);if(!exists)setVisible(current=>[...current,field.key]);}}/>
       <Select className="selection-tool-select" value={groupBy} suffixIcon={<TeamOutlined />} options={[{ value: "none", label: "不分组" }, { value: "batch", label: "按登记批次分组" }, { value: "supplier", label: "按供应商编码分组" }]} onChange={setGroupBy} />
       <Select className="selection-tool-select" value={columnSort ? "column" : `${sort}:${direction}`} suffixIcon={<SortAscendingOutlined />} options={[...(columnSort ? [{ value: "column", label: `${columns.find(column => column.key === columnSort.key)?.label || "当前列"}${columnSort.direction === "asc" ? "升序" : "降序"}` }] : []),{ value: "sortOrder:asc", label: "手动排序" }, { value: "updatedAt:desc", label: "最近修改" }, { value: "createdAt:desc", label: "最新登记" }, { value: "registrationBatch:desc", label: "登记批次" }]} onChange={(value) => { if (value === "column") return; setColumnSort(null); setFollowShared(false); const [nextSort, nextDirection] = value.split(":"); setSort(nextSort); setDirection(nextDirection as "asc" | "desc"); }} />
       <Select className="selection-tool-select" value={rowHeight} suffixIcon={<UnorderedListOutlined />} options={[{ value: "compact", label: "紧凑行高" }, { value: "normal", label: "标准行高" }, { value: "loose", label: "宽松行高" }, { value: "extra", label: "超宽行高" }]} onChange={setRowHeight} />

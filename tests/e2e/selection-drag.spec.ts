@@ -7,7 +7,11 @@ test.beforeEach(async ({ page }) => {
     let data: unknown = [];
     if (path.endsWith("/auth/me")) data = { id: "drag-tester", displayName: "拖选测试", permissions: ["selection.read", "selection.manage"], roleCodes: [], csrfToken: "fixture" };
     if (path.endsWith("/revision")) data = { revision: "drag-fixture" };
-    if (path.endsWith("/sync")) data = { revision: "drag-fixture", index: rows.map(row => ({ id: row.id, token: "1" })), data: rows };
+    if (path.endsWith("/sync")) {
+      const q = route.request().postDataJSON().q;
+      const matches = q ? rows.filter(row => `${row.xutiStyleNo} ${row.supplierStyleNo} ${row.color}`.includes(q)) : rows;
+      data = { revision: "drag-fixture", index: matches.map(row => ({ id: row.id, token: "1" })), data: matches };
+    }
     if (path.endsWith("/shared-view")) data = { revision: 0, view: { filters: {}, sort: null } };
     await route.fulfill({ json: { data } });
   });
@@ -105,4 +109,29 @@ test("multiple full style numbers search exactly and color grouping is absent", 
   await page.locator(".selection-tool-select").nth(1).click();
   const options = page.locator(".ant-select-dropdown:visible .ant-select-item-option-content");
   await expect(options).toHaveText(["手动排序", "最近修改", "最新登记", "登记批次"]);
+});
+
+test("top right search unifies exact styles and keywords without the toolbar filter button", async ({ page }) => {
+  await expect(page.getByRole("button", { name: "筛选", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "筛选颜色", exact: true })).toBeVisible();
+  await page.getByLabel("序缇款号精确搜索", { exact: true }).fill("Supplier 12");
+  await expect(page.locator('td[data-selection-column="xutiStyleNo"]')).toHaveCount(0);
+  await page.getByLabel("搜索方式", { exact: true }).click();
+  await page.getByText("关键词", { exact: true }).click();
+  const search = page.getByLabel("关键词搜索", { exact: true });
+  await expect(search).toHaveValue("Supplier 12");
+  await expect(page.locator('td[data-selection-column="xutiStyleNo"]')).toHaveCount(1);
+  await expect(page.locator('tr[data-selection-row="drag-12"]')).toBeVisible();
+  await search.fill("");
+  await expect(page.locator('td[data-selection-column="xutiStyleNo"]')).toHaveCount(20);
+  await page.getByLabel("搜索方式", { exact: true }).click();
+  await page.getByText("款号精确", { exact: true }).click();
+  const manyStyles = Array.from({ length: 20 }, (_, index) => `DRAG-${index}`).join(",");
+  await page.getByLabel("序缇款号精确搜索", { exact: true }).fill(manyStyles);
+  await page.getByLabel("搜索方式", { exact: true }).click();
+  await page.getByText("关键词", { exact: true }).click();
+  await expect(page.getByLabel("关键词搜索", { exact: true })).toHaveValue("");
+  await page.getByLabel("搜索方式", { exact: true }).click();
+  await page.getByText("款号精确", { exact: true }).click();
+  await expect(page.getByLabel("序缇款号精确搜索", { exact: true })).toHaveValue(manyStyles);
 });
