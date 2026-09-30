@@ -1,8 +1,37 @@
 import "dotenv/config";
 import { PrismaClient, Prisma } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
-export const db = new PrismaClient({
+import { selectionScope, selectionSchema } from "./selection-scope.js";
+const client = new PrismaClient({
   adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }),
+});
+// SET LOCAL is transaction-bound: pooled connections never retain a table scope.
+async function scopedTransaction(fn: (tx: Tx) => Promise<any>, options?: any) {
+  const scope = selectionScope.getStore();
+  return client.$transaction(async (tx) => {
+    if (scope)
+      await tx.$executeRawUnsafe(
+        `SET LOCAL search_path TO "${selectionSchema(scope)}", public`,
+      );
+    return fn(tx);
+  }, options);
+}
+export const db = new Proxy(client, {
+  get(target, property) {
+    if (property === "$transaction")
+      return (fn: any, options?: any) =>
+        selectionScope.getStore()
+          ? scopedTransaction(fn, options)
+          : target.$transaction(fn, options);
+    if (
+      (property === "$queryRawUnsafe" || property === "$executeRawUnsafe") &&
+      selectionScope.getStore()
+    )
+      return (...args: any[]) =>
+        scopedTransaction((tx) => (tx[property] as any)(...args));
+    const value = Reflect.get(target, property);
+    return typeof value === "function" ? value.bind(target) : value;
+  },
 });
 export type Tx = Prisma.TransactionClient;
 // SQL identifiers are exclusively internal allowlists; all values use bind parameters.

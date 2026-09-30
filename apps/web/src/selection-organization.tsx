@@ -1,3 +1,4 @@
+import {useSelectionWorkspace} from "./selection-workspace";
 import { useState } from "react";
 import { Button, Checkbox, Modal, Select, Space, Tabs, Typography } from "antd";
 import {
@@ -25,8 +26,9 @@ export function SelectionOrganization({
   onGroup: (key: string) => void;
   onSort: (key: string) => void;
 }) {
+  const {storageKey: keyFor} = useSelectionWorkspace();
   const user = useUser(),
-    storageKey = `selection-organization-v1:${user.id}`;
+    storageKey = keyFor(`selection-organization-v1:${user.id}`);
   const [configured, setConfigured] = useState<{
     groups: string[];
     sorts: string[];

@@ -115,7 +115,7 @@ export async function parseSelectionWorkbook(buffer: ArrayBuffer) {
       const chunks = data.get(url); if (!chunks || [...chunks.keys()].some((_, i) => !chunks.has(i))) throw Error("内嵌图片内容缺失");
       url = [...chunks.entries()].sort(([a], [b]) => a - b).map(([, text]) => text).join("");
     }
-    if (!/^https?:\/\//i.test(url) && !/^\/api\/v1\/style-selections\/images\/[0-9a-f-]{36}$/i.test(url) && !/^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/]+={0,2}$/.test(url)) throw Error("图片URL须为 http(s) 网址或本系统导出的图片地址");
+    if (!/^https?:\/\//i.test(url) && !/^\/api\/v1\/style-selections\/images\/[0-9a-f-]{36}(?:\?tableId=[1-9]\d*)?$/i.test(url) && !/^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/]+={0,2}$/.test(url)) throw Error("图片URL须为 http(s) 网址或本系统导出的图片地址");
     if (url.length > 1500000) throw Error("单张内嵌图片过大");
     return { id: crypto.randomUUID(), color: color.trim(), url };
   };

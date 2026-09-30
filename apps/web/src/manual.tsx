@@ -17,6 +17,7 @@ const moduleChapters: Record<string, string> = {
   suppliers: "09-suppliers",
   sops: "10-sop",
   projects: "11-projects",
+  "project-tables": "28-project-tables",
   warehouses: "12-warehouses",
   categories: "13-categories",
   "color-size-mappings": "14-mappings",

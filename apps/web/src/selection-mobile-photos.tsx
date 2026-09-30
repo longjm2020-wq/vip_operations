@@ -4,7 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Link, useSearchParams } from "react-router-dom";
 import { Alert, App, Button, Empty, Form, Image, Input, Modal, Popconfirm, Select, Space, Spin, Tag } from "antd";
 import { CameraOutlined, DeleteOutlined, PlusOutlined, UploadOutlined } from "@ant-design/icons";
-import { api, queryClient } from "./api";
+import { useSelectionWorkspace } from "./selection-workspace";
 import { useCan, useUser, type Row } from "./shared";
 import { editableSelectionCell, readableSelectionCell } from "./selection-protection";
 import { prepareUpload, readUpload } from "./upload-file";
@@ -14,6 +14,8 @@ const colorsOf = (row?: Row) => [...new Set(String(row?.color || "").split("/").
 type PhotoField = "images" | "labelImages";
 type PendingPhoto = { id: string; rowId: string; field: PhotoField; color: string; file: File; url?: string; error?: string };
 function PhotoMetadata({ row, onClose, onSaved }: { row?: Row; onClose: () => void; onSaved: (row: Row) => void }) {
+  const { api } = useSelectionWorkspace();
+
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const attempt = useRef<{ body: string; key: string } | null>(null);
@@ -42,6 +44,8 @@ function PhotoMetadata({ row, onClose, onSaved }: { row?: Row; onClose: () => vo
 }
 export function SelectionMobilePhotos(){return new URLSearchParams(location.search).get("field")?.startsWith("custom:")?<SelectionCustomPhoto/>:<StandardSelectionMobilePhotos/>;}
 function StandardSelectionMobilePhotos() {
+  const { api, queryClient } = useSelectionWorkspace();
+
   const user=useUser();
   const canRead = useCan("selection.read"), canEdit = useCan("selection.manage");
   const { message } = App.useApp();
@@ -68,7 +72,7 @@ function StandardSelectionMobilePhotos() {
   const colors = colorsOf(current);
   useEffect(() => { setColor(value => colors.includes(value) ? value : colors[0] || ""); }, [selectedId, current?.color]);
   useEffect(() => { if (!current || section !== "labels") return; const timer = window.setTimeout(() => document.getElementById("mobile-label-photos")?.scrollIntoView({block:"start"}), 100); return () => window.clearTimeout(timer); }, [current?.id, section]);
-  const choose = (id: string) => { setParams({id,...(query?{q:query}:{})}); setShowResults(false); setEdit(null); };
+  const choose = (id: string) => { const next=new URLSearchParams(params);next.set("id",id);if(query)next.set("q",query);else next.delete("q");setParams(next); setShowResults(false); setEdit(null); };
   const refresh = async () => { await Promise.all([queryClient.invalidateQueries({queryKey:["mobile-photo-detail"]}),queryClient.invalidateQueries({queryKey:["mobile-photo-list"]}),queryClient.invalidateQueries({queryKey:["style-selections"]})]); };
   const addStyle = async () => {
     if (!canEdit || busy) return;

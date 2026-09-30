@@ -1,3 +1,4 @@
+import { selectionUrl } from "../../../../../packages/database/src/selection-scope.js";
 import { randomBytes, randomUUID } from "node:crypto";
 import { insertImage, readStoredImage } from "./image-storage.js";
 import { z } from "zod";
@@ -241,7 +242,7 @@ export async function photo(token: string,key: string,value: string,input: unkno
       if(!valid || !bytes.length || bytes.length>=500*1024) fail("VALIDATION_ERROR","图片无效或超过500KB",400);
       const imageId=randomUUID();
       await insertImage(tx,imageId,type,bytes,share.created_by);
-      images=[...images,{id:imageId,url:"/api/v1/style-selections/images/"+imageId,color:body.color}];
+      images=[...images,{id:imageId,url:selectionUrl("/api/v1/style-selections/images/"+imageId),color:body.color}];
     }
     await rows(tx,"UPDATE selection_collection_items SET draft=$3::jsonb WHERE collection_id=$1::bigint AND selection_id=$2::bigint",share.id,value,JSON.stringify({...item.draft,images}));
     return bump(tx,share,body.action==="add"?"PHOTO_ADD":"PHOTO_REMOVE");
@@ -252,7 +253,7 @@ export async function image(token:string,value:string,imageId:string) {
   const item=await one(db,"SELECT draft FROM selection_collection_items WHERE collection_id=$1::bigint AND selection_id=$2::bigint",share.id,value);
   const image=item?.draft.images.find((image:Row)=>image.id===imageId);
   if(!image) fail("NOT_FOUND","图片不在收集表内",404);
-  const match=/^\/api\/v1\/style-selections\/images\/([a-f0-9-]{36})$/.exec(image.url);
+  const match=/^\/api\/v1\/style-selections\/images\/([a-f0-9-]{36})(?:\?tableId=[1-9]\d*)?$/.exec(image.url);
   if(!match) fail("NOT_FOUND","图片不存在",404);
   return readStoredImage(match![1]);
 }

@@ -1,12 +1,14 @@
 import {useRef,useState} from "react";
 import {useQuery} from "@tanstack/react-query";
 import {Alert,Button,Image,Popconfirm,Select,Space,Spin} from "antd";
-import {api} from "./api";
+import { useSelectionWorkspace } from "./selection-workspace";
 import {useCan,useUser} from "./shared";
 import {editableSelectionCell,readableSelectionCell} from "./selection-protection";
 import {prepareUpload,readUpload} from "./upload-file";
 import {defaultImageConfig,fieldImages} from "./selection-field-types";
 export function SelectionCustomPhoto(){
+  const { api } = useSelectionWorkspace();
+
  const params=new URLSearchParams(location.search),id=params.get("id") || "",field=params.get("field") || "",name=params.get("fieldName") || "图片";
  let config={...defaultImageConfig};try{const input=JSON.parse(params.get("fieldConfig") || "{}");config={autoplay:input.autoplay!==false,colors:input.colors!==false,links:input.links!==false,upload:input.upload!==false,mobile:input.mobile!==false,max:Math.min(30,Math.max(1,Number(input.max) || 30))};}catch{}
  const user=useUser(); const canRead=useCan("selection.read"),canEdit=useCan("selection.manage");

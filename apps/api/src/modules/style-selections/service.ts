@@ -1,3 +1,4 @@
+import { selectionScope, selectionUrl } from "../../../../../packages/database/src/selection-scope.js";
 import { selectionViewSchema } from "../../../../../packages/contracts/src/selection-view.js";
 import { cellNumberFormatSchema } from "../../../../../packages/contracts/src/selection-format.js";
 import { sortSelectionSizes } from "../../../../../packages/contracts/src/selection-sizes.js";
@@ -27,7 +28,7 @@ const imageUrl = z
   .refine(
     (value) =>
       /^https?:\/\//i.test(value) ||
-      /^\/api\/v1\/style-selections\/images\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value) ||
+      /^\/api\/v1\/style-selections\/images\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?:\?tableId=[1-9]\d*)?$/i.test(value) ||
       /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/]+={0,2}$/i.test(value),
     "图片仅支持 http(s) 网址或 JPG、PNG、WebP 文件",
   );
@@ -103,7 +104,7 @@ export async function uploadImage(c: Context, input: unknown) {
     const id = randomUUID();
     await insertImage(tx, id, type, bytes, c.actor.id);
     await audit(tx, c, "CREATE", "style-selection-image", null, null, { id, type, size: bytes.length });
-    return { url: `/api/v1/style-selections/images/${id}` };
+    return { url: selectionUrl(`/api/v1/style-selections/images/${id}`) };
   });
 }
 
@@ -128,7 +129,7 @@ function normalizedTags(value: unknown) {
 }
 
 const revisionSql = "SELECT md5(coalesce(string_agg(id::text || ':' || version::text || ':' || updated_at::text, ',' ORDER BY id), '')) AS revision FROM style_selections";
-export async function revision(c: Context) { const p = await protection.policy(db); const value = await one(db, revisionSql); return { revision: protection.digest([value!.revision,p.revision,c.actor.id,c.actor.permissions,c.actor.roleCodes]) }; }
+export async function revision(c: Context) { const p = await protection.policy(db); const value = await one(db, revisionSql); return { revision: protection.digest([selectionScope.getStore(),value!.revision,p.revision,c.actor.id,c.actor.permissions,c.actor.roleCodes]) }; }
 
 function listSpec(query: Record<string, unknown>) {
   const values: unknown[] = [];
@@ -164,7 +165,7 @@ export async function sync(c: Context, input: unknown) {
   const body = parse(z.object({ q: z.string().max(100).default(""), sort: z.string().max(40).default("createdAt"), direction: z.enum(["asc", "desc"]).default("asc"), known: z.record(z.string().regex(/^[1-9]\d{0,18}$/), z.string().regex(/^[a-f0-9]{32}$/)).refine(value => Object.keys(value).length <= 100000).default({}) }).strict(), input);
   // Permission scopes differ per actor. Only coalesce that actor's identical
   // in-flight reads; never reuse a completed snapshot after a write.
-  const key = JSON.stringify([c.actor,body]);
+  const key = JSON.stringify([selectionScope.getStore(),c.actor,body]);
   const pending = pendingSyncs.get(key);
   if (pending) return pending;
   const { values, clause, order } = listSpec(body);
@@ -172,7 +173,7 @@ export async function sync(c: Context, input: unknown) {
   const request = db.$transaction(async tx => {
     const p = await protection.policy(tx);
     const rawRevision=(await one(tx,revisionSql))!.revision;
-    const scopedRevision=protection.digest([rawRevision,p.revision,c.actor.id,c.actor.permissions,c.actor.roleCodes]);
+    const scopedRevision=protection.digest([selectionScope.getStore(),rawRevision,p.revision,c.actor.id,c.actor.permissions,c.actor.roleCodes]);
     if (protection.activePolicy(p)) {
       const sourceRows = await rows(tx, `SELECT ${selectColumns} ${source}`);
       const projected = protection.filtered(sourceRows.map(row => protection.project(p,c.actor,row)), body);

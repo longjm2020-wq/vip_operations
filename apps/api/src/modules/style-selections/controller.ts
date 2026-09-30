@@ -1,4 +1,5 @@
-import { Body, Controller, Delete, Get, Module, Param, Patch, Post, Query, Req, Res } from "@nestjs/common";
+import { SelectionWorkspaceInterceptor, ProjectTablesController } from "./workspaces.js";
+import { UseInterceptors, Body, Controller, Delete, Get, Module, Param, Patch, Post, Query, Req, Res } from "@nestjs/common";
 import type { Response } from "express";
 import { AuthRequest, Permission, Public, context } from "../../http.js";
 import { id, parse } from "../../core.js";
@@ -10,6 +11,7 @@ import { fail } from "../../core.js";
 const paramId = (value: string) => parse(id, value);
 
 @Controller("api/v1/style-selections")
+@UseInterceptors(SelectionWorkspaceInterceptor)
 class StyleSelectionsController {
   @Permission("selection.read") @Post("sync") async sync(@Body() body: unknown, @Req() request: AuthRequest, @Res() response: Response) {
     const data = await selections.sync(context(request),body);
@@ -91,6 +93,7 @@ function externalToken(request: AuthRequest) {
   return request.get("X-Collection-Token") || "";
 }
 @Controller("api/v1/selection-collections")
+@UseInterceptors(SelectionWorkspaceInterceptor)
 class SelectionCollectionsController {
   @Permission("selection.manage") @Post() create(@Req() req: AuthRequest,@Body() body: unknown) { return collections.create(context(req),body); }
   @Permission("selection.manage") @Get() list(@Req() req:AuthRequest) { return collections.list(context(req)); }
@@ -100,6 +103,7 @@ class SelectionCollectionsController {
   @Permission("selection.manage") @Post(":id/review") review(@Req() req:AuthRequest,@Param("id") value:string,@Body() body:unknown) { return collections.review(context(req),paramId(value),body); }
 }
 @Controller("api/v1/public/selection-collection")
+@UseInterceptors(SelectionWorkspaceInterceptor)
 class PublicSelectionCollectionController {
   @Public() @Get() detail(@Req() req:AuthRequest) { return collections.publicDetail(externalToken(req)); }
   @Public() @Post("submit") submit(@Req() req:AuthRequest,@Body() body:unknown) { return collections.submit(externalToken(req),req.get("Idempotency-Key") || "",body); }
@@ -111,5 +115,5 @@ class PublicSelectionCollectionController {
   }
 }
 
-@Module({ controllers: [StyleSelectionsController, SelectionCollectionsController, PublicSelectionCollectionController] })
+@Module({ providers: [SelectionWorkspaceInterceptor], controllers: [ProjectTablesController, StyleSelectionsController, SelectionCollectionsController, PublicSelectionCollectionController] })
 export class StyleSelectionsModule {}

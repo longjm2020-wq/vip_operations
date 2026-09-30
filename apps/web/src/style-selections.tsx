@@ -21,7 +21,7 @@ import { Fragment, useEffect, useMemo, useRef, useState, type ClipboardEvent, ty
 import { useQuery } from "@tanstack/react-query";
 import { App, Button, Card, Checkbox, Empty, Image, Input, Modal, Pagination, Popover, Dropdown, Select, Space, Tag, Tooltip } from "antd";
 import { BgColorsOutlined, CopyOutlined, DownloadOutlined, FontColorsOutlined, VerticalAlignTopOutlined, VerticalAlignMiddleOutlined, VerticalAlignBottomOutlined, CloseOutlined, AlignLeftOutlined, AlignCenterOutlined, AlignRightOutlined, DeleteOutlined, FilterOutlined, LinkOutlined, PlusOutlined, SettingOutlined, SearchOutlined, UnorderedListOutlined, UploadOutlined } from "@ant-design/icons";
-import { api, queryClient } from "./api";
+import { useSelectionWorkspace } from "./selection-workspace";
 import { prepareUpload, readUpload } from "./upload-file";
 import { Header, QueryState, Row, useCan, useUser } from "./shared";
 import { mergeSelectionSave, normalizeSelection, selectionDelta, SelectionSaveAttempts } from "./selection-autosave";
@@ -81,20 +81,20 @@ function observeImageVisibility(element: Element, callback: (visible: boolean) =
   return () => { imageVisibilityObserver?.unobserve(element); imageVisibilityCallbacks.delete(element); };
 }
 const customColumnsKey = "style-selection-custom-columns-v1";
-const storedColumns = () => {
+const storedColumns = (storageKey: (key:string)=>string) => {
   try {
-    const value = JSON.parse(localStorage.getItem(customColumnsKey) || "[]");
+    const value = JSON.parse(localStorage.getItem(storageKey(customColumnsKey)) || "[]");
     return Array.isArray(value) ? value.filter((column): column is Column => column?.custom && typeof column.key === "string" && typeof column.label === "string") : [];
   } catch { return []; }
 };
 const columnLabelsKey = "style-selection-column-labels-v1";
-const initialColumns = (): Column[] => {
+const initialColumns = (storageKey: (key:string)=>string): Column[] => {
   let config:Record<string,Partial<Column>>={};
-  try{config=JSON.parse(localStorage.getItem("selection-field-config-v1") || "{}");}catch{}
+  try{config=JSON.parse(localStorage.getItem(storageKey("selection-field-config-v1")) || "{}");}catch{}
   let labels: Record<string, string> = {};
-  try { labels = JSON.parse(localStorage.getItem(columnLabelsKey) || "{}") || {}; } catch {}
-  const fields = [...baseColumns, ...collectionColumns, ...storedColumns()].map(column => ({ ...column, ...config[column.key],key:column.key,custom:column.custom,label: typeof labels[column.key] === "string" && labels[column.key].trim() ? labels[column.key].trim().slice(0, 40) : column.label })).sort((a,b)=>{const keys=Object.keys(config);const rank=(key:string)=>keys.includes(key)?keys.indexOf(key):keys.length;return rank(a.key)-rank(b.key);});
-  return localStorage.getItem("selection-field-types-initialized-v2") ? fields : resetFieldTypes(fields);
+  try { labels = JSON.parse(localStorage.getItem(storageKey(columnLabelsKey)) || "{}") || {}; } catch {}
+  const fields = [...baseColumns, ...collectionColumns, ...storedColumns(storageKey)].map(column => ({ ...column, ...config[column.key],key:column.key,custom:column.custom,label: typeof labels[column.key] === "string" && labels[column.key].trim() ? labels[column.key].trim().slice(0, 40) : column.label })).sort((a,b)=>{const keys=Object.keys(config);const rank=(key:string)=>keys.includes(key)?keys.indexOf(key):keys.length;return rank(a.key)-rank(b.key);});
+  return localStorage.getItem(storageKey("selection-field-types-initialized-v2")) ? fields : resetFieldTypes(fields);
 };
 const rowImages = (row: Row): SelectionImage[] => Array.isArray(row.images) ? row.images : [];
 const rowLabelImages = (row: Row): SelectionImage[] => Array.isArray(row.labelImages) ? row.labelImages : [];
@@ -151,6 +151,8 @@ function ImagePreviewClose({ children, onClose, imageUrl, imageName }: { childre
 }
 
 function ImageCell({ images, colors, disabled, onChange, mobileId, labelImages = false,field }: {field?:Column; mobileId?: string; images: SelectionImage[]; colors: string[]; disabled: boolean; onChange: (images: SelectionImage[]) => void; labelImages?: boolean }) {
+  const { api } = useSelectionWorkspace();
+
   const { message } = App.useApp();
   const config={...defaultImageConfig,colors:!labelImages,...field?.imageConfig};
   const [url, setUrl] = useState("");
@@ -243,12 +245,14 @@ function ImageCell({ images, colors, disabled, onChange, mobileId, labelImages =
 }
 
 export function StyleSelectionsPage() {
+  const { api, queryClient, storageKey, title } = useSelectionWorkspace();
+
   const canEdit = useCan("selection.manage");
   const user = useUser();
   const { message } = App.useApp();
-  const [columns, setColumns] = useState<Column[]>(initialColumns);
-  const [visible, setVisible] = useState<string[]>(() => {const keys=initialColumns().filter(column=>!column.deleted).map(column=>column.key);try{const hidden=JSON.parse(localStorage.getItem("selection-hidden-fields-v1") || "[]");return keys.filter(key=>!Array.isArray(hidden) || !hidden.includes(key));}catch{return keys;}});
-  useEffect(()=>{localStorage.setItem("selection-hidden-fields-v1",JSON.stringify(columns.filter(column=>!visible.includes(column.key)).map(column=>column.key)));},[columns,visible]);
+  const [columns, setColumns] = useState<Column[]>(()=>initialColumns(storageKey));
+  const [visible, setVisible] = useState<string[]>(() => {const keys=initialColumns(storageKey).filter(column=>!column.deleted).map(column=>column.key);try{const hidden=JSON.parse(localStorage.getItem(storageKey("selection-hidden-fields-v1")) || "[]");return keys.filter(key=>!Array.isArray(hidden) || !hidden.includes(key));}catch{return keys;}});
+  useEffect(()=>{localStorage.setItem(storageKey("selection-hidden-fields-v1"),JSON.stringify(columns.filter(column=>!visible.includes(column.key)).map(column=>column.key)));},[columns,visible]);
   const [searchText,setSearchText]=useState("");
   const search="";
   const searchTerms=useMemo(()=>parseSelectionSearch(searchText),[searchText]);
@@ -265,7 +269,7 @@ export function StyleSelectionsPage() {
   const [rows, setRows] = useState<Row[]>([]);
   const [addCount, setAddCount] = useState(10);
   const [pageSize, setPageSize] = useState(() => {
-    const stored = Number(localStorage.getItem(pageSizeKey));
+    const stored = Number(localStorage.getItem(storageKey(pageSizeKey)));
     return pageSizes.includes(stored) ? stored : 20;
   });
   const [page, setPage] = useState(1);
@@ -298,7 +302,7 @@ export function StyleSelectionsPage() {
   const original = useRef(new Map<string, Row>());
   const appliedSnapshot = useRef("");
   const queryString = new URLSearchParams({ page: "1", pageSize: "100", sort, direction }).toString();
-  const data = useQuery({ queryKey: ["style-selections", queryString], queryFn: () => fetchSelectionRows(search, sort, direction, queryClient.getQueryData(["style-selections", queryString])), refetchInterval: saving ? false : 10000, refetchOnWindowFocus: !saving });
+  const data = useQuery({ queryKey: ["style-selections", queryString], queryFn: () => fetchSelectionRows(search, sort, direction, queryClient.getQueryData(["style-selections", queryString]), api), refetchInterval: saving ? false : 10000, refetchOnWindowFocus: !saving });
   const styleCounts = useQuery({ queryKey: ["style-selection-style-counts"], queryFn: () => api("/style-selections/style-counts"), refetchInterval: 30000 });
   const presence = useQuery({ queryKey: ["style-selection-presence"], queryFn: () => api("/style-selections/presence"), refetchInterval: 2000 });
 
@@ -317,10 +321,10 @@ export function StyleSelectionsPage() {
     const nextSort=sharedView.data.data.view.sort;setColumnSort(nextSort && removed.has(nextSort.key)?null:nextSort);
   }, [sharedSnapshot, followShared, filterColumn, columns]);
   const snapshot = useMemo(() => JSON.stringify(data.data?.data || []), [data.data]);
-  useEffect(()=>{localStorage.setItem("selection-field-config-v1",JSON.stringify(Object.fromEntries(columns.map(column=>[column.key,column]))));localStorage.setItem("selection-field-types-initialized-v2","true");},[columns]);
-  useEffect(() => { localStorage.setItem(customColumnsKey, JSON.stringify(columns.filter((column) => column.custom))); }, [columns]);
-  useEffect(() => { localStorage.setItem(columnLabelsKey, JSON.stringify(Object.fromEntries(columns.map(column => [column.key, column.label])))); }, [columns]);
-  useEffect(() => { localStorage.setItem(pageSizeKey, String(pageSize)); }, [pageSize]);
+  useEffect(()=>{localStorage.setItem(storageKey("selection-field-config-v1"),JSON.stringify(Object.fromEntries(columns.map(column=>[column.key,column]))));localStorage.setItem(storageKey("selection-field-types-initialized-v2"),"true");},[columns]);
+  useEffect(() => { localStorage.setItem(storageKey(customColumnsKey), JSON.stringify(columns.filter((column) => column.custom))); }, [columns]);
+  useEffect(() => { localStorage.setItem(storageKey(columnLabelsKey), JSON.stringify(Object.fromEntries(columns.map(column => [column.key, column.label])))); }, [columns]);
+  useEffect(() => { localStorage.setItem(storageKey(pageSizeKey), String(pageSize)); }, [pageSize]);
   useEffect(() => {
     const stop = () => { setSelectingCells(false); axisSelection.current = null; dragCellAnchor.current = null; };
     window.addEventListener("mouseup", stop); window.addEventListener("blur", stop);
@@ -743,8 +747,8 @@ export function StyleSelectionsPage() {
     }));
     setFormatTarget(null);
   };
-  return <>{formatTarget && <SelectionFormatModal count={formatTarget.ids.size} sample={formatTarget.sample} initial={formatTarget.initial} onCancel={() => setFormatTarget(null)} onApply={applyFormat} />}<Header title="选款登记" subtitle="集中登记候选款的图片、款号、供应商、颜色、材质与定价信息。" extra={<div className="selection-header-search"><SearchOutlined aria-hidden="true"/><Input.TextArea variant="borderless" className="selection-search-input" aria-label="搜索选款" placeholder="搜索款号、供应商、颜色、材质…" allowClear autoSize={{minRows:1,maxRows:4}} value={searchText} onChange={event=>setSearchText(event.target.value)} /></div>} />
-    <Card className="selection-card"><div className="selection-toolbar" aria-label="选款登记表格工具栏"><Space wrap size={4}>
+  return <>{formatTarget && <SelectionFormatModal count={formatTarget.ids.size} sample={formatTarget.sample} initial={formatTarget.initial} onCancel={() => setFormatTarget(null)} onApply={applyFormat} />}<Header title={title || "选款登记"} subtitle="集中登记候选款的图片、款号、供应商、颜色、材质与定价信息。" extra={<div className="selection-header-search"><SearchOutlined aria-hidden="true"/><Input.TextArea variant="borderless" className="selection-search-input" aria-label="搜索选款" placeholder="搜索款号、供应商、颜色、材质…" allowClear autoSize={{minRows:1,maxRows:4}} value={searchText} onChange={event=>setSearchText(event.target.value)} /></div>} />
+    <Card className="selection-card"><div className="selection-toolbar" aria-label={`${title || "选款登记"}表格工具栏`}><Space wrap size={4}>
       {canEdit && <SelectionCollections selectedRows={filteredRows.filter(row => selectedRows.includes(row._key))} blocked={!!dirtyCount || saving || deleting}/>} {canEdit && <SelectionPhotoQr />}<Button type="link" icon={<PlusOutlined />} disabled={!canEdit} onClick={() => add()}>添加一行</Button><Button type="link" danger icon={<DeleteOutlined />} disabled={!canEdit || !selectedRows.length || saving} loading={deleting} onClick={deleteRows}>删除行</Button>
       <SelectionFieldManager columns={columns} visible={visible} canEdit={canEdit} blocked={!!dirtyCount || saving || deleting} onDelete={key=>{setColumns(current=>current.map(column=>column.key===key?{...column,deleted:true}:column));setVisible(current=>current.filter(item=>item!==key));setColumnFilters(current=>Object.fromEntries(Object.entries(current).filter(([fieldKey])=>fieldKey!==key)));if(columnSort?.key===key)setColumnSort(null);if(groupBy===`field:${key}`)setGroupBy("none");setFilterColumn(null);setCellAnchor(null);setFocusedCell(null);setSelectedCells(new Set());setCopiedCells(new Set());setCellTextEditing(false);setFormatTarget(null);}} onRestore={key=>{setColumns(current=>current.map(column=>column.key===key?{...column,deleted:false}:column));setVisible(current=>[...new Set([...current,key])]);}} onReset={()=>setColumns(current=>resetFieldTypes(current))} onVisible={key=>setVisible(current=>current.includes(key)?current.filter(item=>item!==key):[...current,key])} onMove={moveColumn} onSave={field=>{if(imageKeys.has(field.key) && rows.some(row=>(row[field.key]?.length || 0)>(field.imageConfig?.max || 30))){message.error("已有图片超过新上限，请先移除部分图片");return false;}if(field.type && !systemField(field)){const issue=rows.map(row=>fieldValueError(field,imageKeys.has(field.key)?JSON.stringify(row[field.key] || []):valueAt(row,field))).find(Boolean);if(issue){message.error("现有内容与设置不兼容："+issue);return false;}}const exists=columns.some(column=>column.key===field.key);setColumns(current=>exists?current.map(column=>column.key===field.key?field:column):[...current,field]);if(!exists)setVisible(current=>[...current,field.key]);}}/>
       <SelectionProtectionControl rows={rows} columns={availableColumns} selectedCells={selectedCells} selectedRows={selectedRows} currentRow={editorRow} blocked={!!dirtyCount || saving || deleting} onRefresh={()=>{appliedSnapshot.current="";void data.refetch();}}/>
@@ -776,8 +780,8 @@ export function StyleSelectionsPage() {
           setSelectedCells(selectionAllCells(displayedRows, activeColumns)); setCellTextEditing(false);
           setSelectingCells(false);
         }
-      }} aria-label="选款登记在线智能表格" style={{ width: activeColumns.reduce((width, column) => width + column.width, 96) }}><colgroup><col style={{ width: 48 }} /><col style={{ width: 48 }} />{activeColumns.map((column) => <col key={column.key} style={{ width: column.width }} />)}</colgroup><thead><tr><th className="selection-check"><Checkbox aria-label="选择全部可见行" checked={!!displayedRows.length && displayedRows.every(row => selectedRows.includes(row._key))} indeterminate={displayedRows.some(row => selectedRows.includes(row._key)) && !displayedRows.every(row => selectedRows.includes(row._key))} onChange={(event) => setSelectedRows(current => event.target.checked ? [...new Set([...current, ...displayedRows.map(row => row._key)])] : current.filter(key => !pageRowKeys.has(key)))} /></th><th className="selection-index">#</th>{activeColumns.map((column) => <th key={column.key} data-selection-column={column.key} data-reorder-axis="column" data-reorder-key={column.key} data-reorder-target={shiftTarget==="column:"+column.key || undefined} title="按住 Shift 拖动调整列顺序" tabIndex={0} aria-label={`选择整列：${column.label}`} onMouseDown={event => axisMouseDown(event, "column", column.key)} onMouseEnter={() => axisMouseEnter("column", column.key)} style={{ width: column.width, minWidth: column.width }}><span>{column.label}{columnSort?.key === column.key ? columnSort.direction === "asc" ? " ↑" : " ↓" : ""}</span><Popover destroyOnHidden trigger="click" open={filterColumn === column.key} onOpenChange={open => { setFilterColumn(open ? column.key : null); if (open) { setFilterRevision(sharedView.data?.data?.revision || 0); setFilterSession(value => value + 1); } }} content={columnFilterEditor(column)}><Button className="selection-column-filter-button" type="text" size="small" aria-label={`筛选${column.label}`} title={`筛选${column.label}`} icon={<FilterOutlined />} style={{ color: columnFilters[column.key] ? "#d3540b" : undefined }} onMouseDown={event => event.stopPropagation()} /></Popover><i className="selection-column-resize" aria-label={`调整 ${column.label} 列宽`} onMouseDown={(event) => { event.preventDefault(); event.stopPropagation(); setResizingColumn({ key: column.key, startX: event.clientX, startWidth: column.width }); }} /></th>)}</tr></thead><tbody>
-        {data.isLoading && <tr><td colSpan={activeColumns.length + 2} className="selection-placeholder">正在读取选款登记…</td></tr>}{!data.isLoading && !filteredRows.length && <tr><td colSpan={activeColumns.length + 2} className="selection-placeholder"><Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无选款登记，点击添加一行开始录入" /></td></tr>}
+      }} aria-label={`${title || "选款登记"}在线智能表格`} style={{ width: activeColumns.reduce((width, column) => width + column.width, 96) }}><colgroup><col style={{ width: 48 }} /><col style={{ width: 48 }} />{activeColumns.map((column) => <col key={column.key} style={{ width: column.width }} />)}</colgroup><thead><tr><th className="selection-check"><Checkbox aria-label="选择全部可见行" checked={!!displayedRows.length && displayedRows.every(row => selectedRows.includes(row._key))} indeterminate={displayedRows.some(row => selectedRows.includes(row._key)) && !displayedRows.every(row => selectedRows.includes(row._key))} onChange={(event) => setSelectedRows(current => event.target.checked ? [...new Set([...current, ...displayedRows.map(row => row._key)])] : current.filter(key => !pageRowKeys.has(key)))} /></th><th className="selection-index">#</th>{activeColumns.map((column) => <th key={column.key} data-selection-column={column.key} data-reorder-axis="column" data-reorder-key={column.key} data-reorder-target={shiftTarget==="column:"+column.key || undefined} title="按住 Shift 拖动调整列顺序" tabIndex={0} aria-label={`选择整列：${column.label}`} onMouseDown={event => axisMouseDown(event, "column", column.key)} onMouseEnter={() => axisMouseEnter("column", column.key)} style={{ width: column.width, minWidth: column.width }}><span>{column.label}{columnSort?.key === column.key ? columnSort.direction === "asc" ? " ↑" : " ↓" : ""}</span><Popover destroyOnHidden trigger="click" open={filterColumn === column.key} onOpenChange={open => { setFilterColumn(open ? column.key : null); if (open) { setFilterRevision(sharedView.data?.data?.revision || 0); setFilterSession(value => value + 1); } }} content={columnFilterEditor(column)}><Button className="selection-column-filter-button" type="text" size="small" aria-label={`筛选${column.label}`} title={`筛选${column.label}`} icon={<FilterOutlined />} style={{ color: columnFilters[column.key] ? "#d3540b" : undefined }} onMouseDown={event => event.stopPropagation()} /></Popover><i className="selection-column-resize" aria-label={`调整 ${column.label} 列宽`} onMouseDown={(event) => { event.preventDefault(); event.stopPropagation(); setResizingColumn({ key: column.key, startX: event.clientX, startWidth: column.width }); }} /></th>)}</tr></thead><tbody>
+        {data.isLoading && <tr><td colSpan={activeColumns.length + 2} className="selection-placeholder">正在读取选款登记…</td></tr>}{!data.isLoading && !filteredRows.length && <tr><td colSpan={activeColumns.length + 2} className="selection-placeholder"><Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={title ? "暂无数据，点击添加一行开始录入" : "暂无选款登记，点击添加一行开始录入"} /></td></tr>}
         {grouped.map((group) => <Fragment key={group.label || "all"}>{group.label && <tr className="selection-group-row"><td colSpan={activeColumns.length + 2}>{group.label}<span>{group.rows.length} 条</span></td></tr>}{group.rows.map((row) => <tr key={row._key} data-selection-row={row._key}><td className="selection-check"><Checkbox aria-label={`选择 ${row.xutiStyleNo || "未填写序缇款号"}`} checked={selectedRows.includes(row._key)} onChange={(event) => setSelectedRows((current) => event.target.checked ? [...current, row._key] : current.filter((key) => key !== row._key))} /></td><td data-reorder-axis="row" data-reorder-key={row._key} data-reorder-target={shiftTarget==="row:"+row._key || undefined} title="按住 Shift 拖动调整行顺序" className={`selection-index selection-row-drag ${selectedRows.includes(row._key) ? "selection-axis-active" : ""}`} tabIndex={0} aria-label={`选择第${rowNumberByKey.get(row._key)}行`} onMouseDown={event => axisMouseDown(event, "row", row._key)} onMouseEnter={() => axisMouseEnter("row", row._key)} onDragOver={(event: DragEvent) => event.preventDefault()} onDrop={() => { if (draggedRow) moveRow(draggedRow, row._key); setDraggedRow(null); }}>{rowNumberByKey.get(row._key)}<span className="selection-row-reorder" title="拖动调整行顺序" draggable onMouseDown={event => event.stopPropagation()} onDragStart={() => setDraggedRow(row._key)} onDragEnd={() => setDraggedRow(null)}>⋮⋮</span></td>{activeColumns.map((column) => renderCell(row, column))}</tr>)}</Fragment>)}
       </tbody></table></div><div className="selection-bulk-add"><Select aria-label="批量添加行数" value={addCount} onChange={setAddCount} options={[10, 20, 50, 100, 200].map(value => ({ value, label: `${value} 行` }))} /><Button icon={<PlusOutlined />} disabled={!canEdit} onClick={() => add(addCount)}>添加 {addCount} 行</Button><span>空白行自动保存</span><Pagination className="selection-pagination" current={currentPage} pageSize={pageSize} total={allDisplayedRows.length} pageSizeOptions={pageSizes} showSizeChanger showTotal={total => `共 ${total} 条`} onChange={(nextPage, nextPageSize) => { if (nextPageSize !== pageSize) { setPageSize(nextPageSize); setPage(1); } else setPage(nextPage); }} /><SelectionStatistics values={statisticsValues}/></div><div className="selection-bottom-bar"><span>拖动可选择多个单元格后填色；Ctrl/Cmd+C 复制、Ctrl/Cmd+V 粘贴；点击或拖动行号/表头选择整行整列；按住 Shift 拖动行号或表头调整行列顺序。</span><span>{canEdit ? "图片支持网址、本地上传和粘贴。" : "当前账号仅可查看。"}</span></div></Card></>;
 }

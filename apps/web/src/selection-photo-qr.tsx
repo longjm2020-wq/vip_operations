@@ -1,10 +1,13 @@
+import {useSelectionWorkspace} from "./selection-workspace";
 import {type SelectionField,defaultImageConfig} from "./selection-field-types";
 import { useState } from "react";
 import { Button, Modal, QRCode, Typography } from "antd";
 import { QrcodeOutlined } from "@ant-design/icons";
 export function SelectionPhotoQr({ rowId, disabled = false, labelImages = false,field }: {field?:SelectionField; rowId?: string; disabled?: boolean; labelImages?: boolean }) {
+  const {tableId}=useSelectionWorkspace();
   const [open, setOpen] = useState(false);
   const url = new URL("/mobile/style-photos", window.location.origin);
+  if(tableId)url.searchParams.set("tableId",tableId);
   if (rowId) url.searchParams.set("id", rowId);
   if(field){url.searchParams.set("field",field.key);url.searchParams.set("fieldName",field.label);url.searchParams.set("fieldConfig",JSON.stringify({...defaultImageConfig,...field.imageConfig}));}
   if (labelImages) url.searchParams.set("section", "labels");

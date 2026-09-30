@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Alert, App, Button, Card, Checkbox, Collapse, Descriptions, Drawer, Empty, Form, Image, Input, InputNumber, Modal, Popconfirm, QRCode, Select, Space, Spin, Table, Tabs, Tag, Typography } from "antd";
 import { AppstoreOutlined, EditOutlined, CheckCircleOutlined, CameraOutlined, ShareAltOutlined } from "@ant-design/icons";
-import { api, queryClient } from "./api";
+import { useSelectionWorkspace } from "./selection-workspace";
 import { prepareUpload, readUpload } from "./upload-file";
 import { CollectionStockEditor } from "./selection-collection-stock";
 import { collectionSubmissionSchema, collectionDraftSchema, collectionInventory, collectionTags, type CollectionInfo } from "../../../packages/contracts/src/selection-collection";
@@ -44,6 +44,8 @@ function SourceOverwrite({item}:{item:Row}) {
     description={<><p>外部没有修改的收集字段仍保留内部最新值。可展开查看当前选款登记资料，核对外部稿。</p><Collapse items={[{key:"current",label:"查看当前选款登记资料",children:<Summary info={item.current}/>}]} /></>} />;
 }
 export function SelectionCollections({selectedRows,blocked}:{selectedRows:Row[];blocked:boolean}) {
+  const { api, queryClient } = useSelectionWorkspace();
+
   const {message}=App.useApp();
   const [open,setOpen]=useState(false),[title,setTitle]=useState("产品信息收集表"),[busy,setBusy]=useState(false);
   const [list,setList]=useState<Row[]>([]),[detail,setDetail]=useState<Row|null>(null),[link,setLink]=useState(""),[reason,setReason]=useState("");

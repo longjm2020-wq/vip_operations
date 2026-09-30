@@ -23,7 +23,7 @@ import {
   LockOutlined,
   PlusOutlined,
 } from "@ant-design/icons";
-import { api, queryClient } from "./api";
+import { useSelectionWorkspace } from "./selection-workspace";
 import { useUser, type Row } from "./shared";
 import {
   defaultProtection,
@@ -59,6 +59,7 @@ export function SelectionProtectionControl({
   currentRow?: Row;
   onRefresh: () => void;
 }) {
+  const { api, queryClient } = useSelectionWorkspace();
   const { message } = App.useApp(),
     user = useUser();
   const [open, setOpen] = useState(false),

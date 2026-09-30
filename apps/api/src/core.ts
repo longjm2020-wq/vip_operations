@@ -15,6 +15,7 @@ import {
   Row,
 } from "../../../packages/database/src/index.js";
 import { z } from "zod";
+import { selectionScope } from "../../../packages/database/src/selection-scope.js";
 export type Actor = {
   id: string;
   username: string;
@@ -104,6 +105,8 @@ export async function command(
 ) {
   if (!c.key || c.key.length > 128)
     fail("VALIDATION_ERROR", "缺少有效的 Idempotency-Key", 400);
+  const workspace = selectionScope.getStore();
+  if (workspace) operation = `table:${workspace}/${operation}`;
   const fingerprint = hash(canonical(input));
   return db.$transaction(
     async (tx) => {

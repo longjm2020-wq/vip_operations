@@ -1,3 +1,4 @@
+import { selectionScope, selectionUrl } from "../../../../../packages/database/src/selection-scope.js";
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import {
@@ -188,7 +189,7 @@ export async function writeLocks(tx: Tx, c: Context) {
     await rows(
       tx,
       "SELECT pg_advisory_xact_lock(hashtextextended($1,0))::text",
-      "selection-claim:" + c.actor.id,
+      "selection-claim:" + (selectionScope.getStore() || "default") + ":" + c.actor.id,
     );
   return p;
 }
@@ -435,7 +436,7 @@ export async function claim(c: Context, value: string, input: unknown) {
       await rows(
         tx,
         "SELECT pg_advisory_xact_lock(hashtextextended($1,0))::text",
-        "selection-claim:" + c.actor.id,
+        "selection-claim:" + (selectionScope.getStore() || "default") + ":" + c.actor.id,
       );
     if (!p.settings.claimsEnabled) fail("INVALID_STATE", "抢占填表未开启", 409);
     const row = await one(
@@ -481,7 +482,7 @@ export async function claim(c: Context, value: string, input: unknown) {
 }
 
 export async function imageAccess(c: Context, imageId: string) {
-  const url = "/api/v1/style-selections/images/" + imageId;
+  const url = selectionUrl("/api/v1/style-selections/images/" + imageId);
   return db.$transaction(
     async (tx) => {
       const p = await policy(tx);

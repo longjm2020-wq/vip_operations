@@ -1,3 +1,4 @@
+import {SelectionWorkspace} from "./selection-workspace";
 import { BrandVideo } from "./brand-video";
 import React, { useState, useEffect } from "react";
 const PublicSelectionCollection = React.lazy(() => import("./selection-collections").then(module => ({ default: module.PublicSelectionCollection })));
@@ -55,6 +56,8 @@ const ProductDetail = React.lazy(() => import("./operations").then(module => ({ 
 const AccessPage = React.lazy(() => import("./system").then(module => ({ default: module.AccessPage })));
 const AuditPage = React.lazy(() => import("./system").then(module => ({ default: module.AuditPage })));
 const VipPage = React.lazy(() => import("./vip").then(module => ({ default: module.VipPage })));
+const ProjectTablesPage = React.lazy(()=>import("./project-tables").then(module=>({default:module.ProjectTablesPage})));
+const ProjectTablePage = React.lazy(()=>import("./project-tables").then(module=>({default:module.ProjectTablePage})));
 const StyleSelectionsPage = React.lazy(() => import("./style-selections").then(module => ({ default: module.StyleSelectionsPage })));
 import { ManualPage, manualHref } from "./manual";
 const SopPage = React.lazy(() => import("./projects").then(module => ({ default: module.SopPage })));
@@ -69,7 +72,7 @@ const SupplyReview = React.lazy(() => import("./supply").then(module => ({ defau
 const SupplyOrders = React.lazy(() => import("./supply-orders").then(module => ({ default: module.SupplyOrders })));
 const SupplyOrderNotice = React.lazy(() => import("./supply-orders").then(module => ({ default: module.SupplyOrderNotice })));
 const SupplyStatements = React.lazy(() => import("./supply-statements").then(module => ({ default: module.SupplyStatements })));
-const coreFeatureSummary = "ERP经营 · 选款协作与资料收集 · 供应链订单对账 · 项目协作";
+const coreFeatureSummary = "ERP经营 · 协作表格与资料收集 · 供应链订单对账 · 项目协作";
 const useUi = create<{ collapsed: boolean; toggle: () => void }>((set) => ({
   collapsed: false,
   toggle: () => set((s) => ({ collapsed: !s.collapsed })),
@@ -242,10 +245,10 @@ function Workspace({ user }: { user: Row }) {
       key: "/project-management",
       label: "项目管理",
       icon: <TeamOutlined />,
-      permission: "project.read",
       children: [
         { key: "/sops", label: "操作流程 SOP", permission: "project.read" },
         { key: "/projects", label: "新建项目", permission: "project.read" },
+        {key:"/project-tables",label:"新建表格",permission:"selection.read"},
       ],
     },
     {
@@ -505,6 +508,8 @@ function Workspace({ user }: { user: Row }) {
                 element={<SuggestionsPage />}
               />
               <Route path="/style-selections" element={<StyleSelectionsPage />} />
+              <Route path="/project-tables" element={<ProjectTablesPage/>}/>
+              <Route path="/project-tables/:id" element={<ProjectTablePage/>}/>
               <Route path="/users" element={<AccessPage />} />
               <Route path="/roles" element={<AccessPage roles />} />
               <Route path="/audit-logs" element={<AuditPage />} />
@@ -567,7 +572,7 @@ function Root() {
     location.pathname !== "/help"
   )
     return <Navigate to="/supply/profile" replace />;
-  if (me.data && location.pathname === "/mobile/style-photos") return <UserContext.Provider value={me.data}><SelectionMobilePhotos /></UserContext.Provider>;
+  if (me.data && location.pathname === "/mobile/style-photos") return <UserContext.Provider value={me.data}><SelectionWorkspace key={new URLSearchParams(location.search).get("tableId") || "default"} tableId={new URLSearchParams(location.search).get("tableId") || undefined}><SelectionMobilePhotos /></SelectionWorkspace></UserContext.Provider>;
   return me.data ? (
     <Workspace user={me.data} />
   ) : location.pathname === "/supply/register" ? (
