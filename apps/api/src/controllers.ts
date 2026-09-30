@@ -335,10 +335,11 @@ class SystemController {
   @Permission("vip.settings") @Get("integrations/vip/status") vip() {
     return vipStatus();
   }
-  @Permission("audit.read") @Get("audit-logs") async audit(@Query() q: any) {
+  @Permission("audit.read") @Get("audit-logs") async audit(@Req() request:AuthRequest,@Query() q: any) {
     const p = pagination(q),
       v: unknown[] = [],
       w: string[] = [];
+    if(!request.actor?.roleCodes?.some(code=>code==="ADMIN" || code==="SUPER_ADMIN"))w.push("entity_type NOT IN ('style-selection','selection-collection','selection-collection-item','selection-protection')");
     for (const [k, col] of Object.entries({
       entityType: "entity_type",
       entityId: "entity_id",

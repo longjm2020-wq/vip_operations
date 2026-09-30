@@ -69,7 +69,7 @@ const SupplyReview = React.lazy(() => import("./supply").then(module => ({ defau
 const SupplyOrders = React.lazy(() => import("./supply-orders").then(module => ({ default: module.SupplyOrders })));
 const SupplyOrderNotice = React.lazy(() => import("./supply-orders").then(module => ({ default: module.SupplyOrderNotice })));
 const SupplyStatements = React.lazy(() => import("./supply-statements").then(module => ({ default: module.SupplyStatements })));
-const coreFeatureSummary = "ERP经营 · 选款与外部资料收集 · 供应链订单对账 · 项目协作";
+const coreFeatureSummary = "ERP经营 · 选款协作与资料收集 · 供应链订单对账 · 项目协作";
 const useUi = create<{ collapsed: boolean; toggle: () => void }>((set) => ({
   collapsed: false,
   toggle: () => set((s) => ({ collapsed: !s.collapsed })),

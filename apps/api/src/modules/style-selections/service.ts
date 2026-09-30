@@ -3,6 +3,7 @@ import { cellNumberFormatSchema } from "../../../../../packages/contracts/src/se
 import { sortSelectionSizes } from "../../../../../packages/contracts/src/selection-sizes.js";
 import { z } from "zod";
 import { randomUUID } from "node:crypto";
+import * as protection from "./protection.js";
 import { insertImage, readStoredImage } from "./image-storage.js";
 import { db, insert, one, rows, update, camel, type Row, type Tx } from "../../../../../packages/database/src/index.js";
 import { setImmediate as yieldToRequests } from "node:timers/promises";
@@ -38,7 +39,7 @@ const image = z
   })
   .strict();
 const labelImage = image.extend({ color: z.literal("").default("") });
-const cellColors = z.record(z.string(), z.enum(rowColors));
+const cellColors = z.record(z.string(), z.enum(rowColors).nullable());
 const extraFields = z.record(z.string().max(100), z.string().max(100000).superRefine((value,ctx)=>{
   if(value.length<=2000)return;
   try{if(z.array(image).max(30).safeParse(JSON.parse(value)).success)return;}catch{}
@@ -52,10 +53,10 @@ export const styleSelectionInput = z
     images: z.array(image).default([]),
     labelImages: z.array(labelImage).default([]),
     cellColors: cellColors.default({}),
-    cellNumberFormats: z.record(z.string().max(100), cellNumberFormatSchema).default({}),
-    cellTextColors: z.record(z.string().max(100), z.enum(["#262626", "#cf1322", "#d46b08", "#ad8b00", "#389e0d", "#0958d9", "#531dab", "#c41d7f", "#595959"])).default({}),
-    cellVerticalAlignments: z.record(z.string().max(100), z.enum(["top", "middle", "bottom"])).default({}),
-    cellAlignments: z.record(z.string().max(100), z.enum(["left", "center", "right"])).default({}),
+    cellNumberFormats: z.record(z.string().max(100), cellNumberFormatSchema.nullable()).default({}),
+    cellTextColors: z.record(z.string().max(100), z.enum(["#262626", "#cf1322", "#d46b08", "#ad8b00", "#389e0d", "#0958d9", "#531dab", "#c41d7f", "#595959"]).nullable()).default({}),
+    cellVerticalAlignments: z.record(z.string().max(100), z.enum(["top", "middle", "bottom"]).nullable()).default({}),
+    cellAlignments: z.record(z.string().max(100), z.enum(["left", "center", "right"]).nullable()).default({}),
     extraFields: extraFields.default({}),
     xutiStyleNo: optionalText(64),
     supplierStyleNo: optionalText(64),
@@ -81,7 +82,11 @@ const selectColumns = `
   s.id,s.registration_batch::text,s.images,s.label_images,s.cell_colors,s.cell_alignments,s.cell_vertical_alignments,s.cell_text_colors,s.cell_number_formats,s.extra_fields,s.xuti_style_no,s.supplier_style_no,
   s.supplier_code,s.color,s.size_range,s.material,s.supply_price_excl_tax,
   s.selling_points,s.reorder_days,s.collection_inventory,s.vip_price,s.live_price,s.tag_price,s.row_color,s.sort_order,s.created_by,s.version,
-  s.created_at,s.updated_at`;
+  s.created_at,s.updated_at,s.cell_owners,s.claimed_by,s.updated_by,
+  (SELECT display_name FROM users WHERE id=s.created_by) AS created_by_name,
+  (SELECT username FROM users WHERE id=s.created_by) AS created_by_username,
+  (SELECT display_name FROM users WHERE id=s.updated_by) AS updated_by_name,
+  (SELECT username FROM users WHERE id=s.updated_by) AS updated_by_username`;
 const source = " FROM style_selections s";
 
 export async function uploadImage(c: Context, input: unknown) {
@@ -102,8 +107,9 @@ export async function uploadImage(c: Context, input: unknown) {
   });
 }
 
-export async function readImage(value: string, metadataOnly = false) {
+export async function readImage(c: Context, value: string, metadataOnly = false) {
   const id = parse(z.string().uuid(), value);
+  await protection.imageAccess(c, id);
   return readStoredImage(id, metadataOnly);
 }
 
@@ -122,7 +128,7 @@ function normalizedTags(value: unknown) {
 }
 
 const revisionSql = "SELECT md5(coalesce(string_agg(id::text || ':' || version::text || ':' || updated_at::text, ',' ORDER BY id), '')) AS revision FROM style_selections";
-export async function revision() { return one(db, revisionSql); }
+export async function revision(c: Context) { const p = await protection.policy(db); const value = await one(db, revisionSql); return { revision: protection.digest([value!.revision,p.revision,c.actor.id,c.actor.permissions,c.actor.roleCodes]) }; }
 
 function listSpec(query: Record<string, unknown>) {
   const values: unknown[] = [];
@@ -154,21 +160,31 @@ function listSpec(query: Record<string, unknown>) {
 }
 
 const pendingSyncs = new Map<string, Promise<string>>();
-export async function sync(input: unknown) {
+export async function sync(c: Context, input: unknown) {
   const body = parse(z.object({ q: z.string().max(100).default(""), sort: z.string().max(40).default("createdAt"), direction: z.enum(["asc", "desc"]).default("asc"), known: z.record(z.string().regex(/^[1-9]\d{0,18}$/), z.string().regex(/^[a-f0-9]{32}$/)).refine(value => Object.keys(value).length <= 100000).default({}) }).strict(), input);
-  // All authorized selection readers share the same scope. Coalesce identical
-  // in-flight reads only; never reuse a completed snapshot after a write.
-  const key = JSON.stringify(body);
+  // Permission scopes differ per actor. Only coalesce that actor's identical
+  // in-flight reads; never reuse a completed snapshot after a write.
+  const key = JSON.stringify([c.actor,body]);
   const pending = pendingSyncs.get(key);
   if (pending) return pending;
   const { values, clause, order } = listSpec(body);
   // Index, changed rows and revision must describe one committed database snapshot.
   const request = db.$transaction(async tx => {
-    const revision = (await one(tx, revisionSql))!.revision;
-    const index = await rows(tx, `SELECT s.id::text AS id,md5(s.version::text || ':' || s.updated_at::text) AS token ${source}${clause} ORDER BY ${order}`, ...values);
+    const p = await protection.policy(tx);
+    const rawRevision=(await one(tx,revisionSql))!.revision;
+    const scopedRevision=protection.digest([rawRevision,p.revision,c.actor.id,c.actor.permissions,c.actor.roleCodes]);
+    if (protection.activePolicy(p)) {
+      const sourceRows = await rows(tx, `SELECT ${selectColumns} ${source}`);
+      const projected = protection.filtered(sourceRows.map(row => protection.project(p,c.actor,row)), body);
+      const index = projected.map(row => ({id:String(row.id),token:protection.digest([row,c.actor.id,c.actor.permissions,c.actor.roleCodes])}));
+      const tokens=new Map(index.map(item=>[item.id,item.token]));
+      return {revision:scopedRevision,index,data:projected.filter(row=>body.known[String(row.id)]!==tokens.get(String(row.id)))};
+    }
+    const revision = scopedRevision;
+    const index = await rows(tx, `SELECT s.id::text AS id,md5(s.version::text || ':' || s.updated_at::text || ':' || $${values.length+1}) AS token ${source}${clause} ORDER BY ${order}`, ...values,protection.digest([p.revision,c.actor.id,c.actor.permissions,c.actor.roleCodes]));
     const changed = index.filter(row => body.known[row.id] !== row.token).map(row => row.id);
     const data = changed.length ? await rows(tx, `SELECT ${selectColumns} ${source} WHERE s.id=ANY($1::bigint[])`, changed) : [];
-    return { revision, index, data };
+    return { revision, index, data:data.map(row=>protection.project(p,c.actor,row)) };
   }, { isolationLevel: "RepeatableRead", timeout: 15000 }).then(async snapshot => {
     // Large first loads must not monopolize the event loop while converting
     // database values. Release the transaction before yielding/serialization.
@@ -187,19 +203,32 @@ export async function sync(input: unknown) {
   finally { pendingSyncs.delete(key); }
 }
 
-export async function list(query: Record<string, unknown>) {
+export async function list(c: Context, query: Record<string, unknown>) {
+  return db.$transaction(async tx=>{
+  const policy = await protection.policy(tx);
   const p = pagination(query);
+  if(protection.activePolicy(policy)) {
+    const projected = protection.filtered((await rows(tx,`SELECT ${selectColumns} ${source}`)).map(row=>protection.project(policy,c.actor,row)),query);
+    return {data:projected.slice((p.page-1)*p.pageSize,p.page*p.pageSize),total:projected.length,...p};
+  }
   const { values, clause, order } = listSpec(query);
-  const total = await one(db, `SELECT count(*)::int AS n ${source}${clause}`, ...values);
+  const total = await one(tx, `SELECT count(*)::int AS n ${source}${clause}`, ...values);
   const data = await rows(
-    db,
+    tx,
     `SELECT ${selectColumns} ${source}${clause} ORDER BY ${order} LIMIT ${p.pageSize} OFFSET ${(p.page - 1) * p.pageSize}`,
     ...values,
   );
-  return { data, total: total!.n, ...p };
+  return { data:data.map(row=>protection.project(policy,c.actor,row)), total: total!.n, ...p };
+  },{isolationLevel:"RepeatableRead",timeout:15000});
 }
 
-export async function styleCounts() {
+export async function styleCounts(c: Context) {
+  const p=await protection.policy(db);
+  if(protection.activePolicy(p)) {
+    const counts=new Map<string,number>();
+    for(const row of await rows(db,"SELECT * FROM style_selections")){const style=protection.project(p,c.actor,row).xutiStyleNo?.trim();if(style)counts.set(style,(counts.get(style)||0)+1);}
+    return [...counts].map(([xutiStyleNo,count])=>({xutiStyleNo,count}));
+  }
   return rows(db, `SELECT btrim(xuti_style_no) AS "xutiStyleNo",count(*)::int AS count
     FROM style_selections
     WHERE xuti_style_no IS NOT NULL AND btrim(xuti_style_no) <> ''
@@ -238,8 +267,12 @@ function validateImageColors(images: unknown, colors: unknown) {
 }
 
 export async function remove(c: Context, value: string) {
+  const existing=await one(db,"SELECT * FROM style_selections WHERE id=$1::bigint",value);
+  protection.assertFields(await protection.policy(db),c,existing || {id:value},protection.rowFields(existing || {}));
   return command(c, "style-selections/delete/" + value, {}, async (tx) => {
+    const p=await protection.writeLocks(tx,c);
     const before = await entity(tx, "style_selections", value, true);
+    protection.assertFields(p,c,before,protection.rowFields(before));
     await rows(tx, "DELETE FROM style_selections WHERE id=$1::bigint", value);
     await audit(tx, c, "DELETE", "style-selection", value, before, null);
     return { id: value };
@@ -252,13 +285,16 @@ export async function write(c: Context, input: unknown, value?: string) {
   const body = value ? Object.fromEntries(Object.entries(parsed).filter(([key]) => Object.prototype.hasOwnProperty.call(input, key))) : parsed;
   if (value && !Object.keys(body).some((key) => key !== "expectedUpdatedAt"))
     fail("VALIDATION_ERROR", "没有可更新字段", 400);
-  return command(c, "style-selections/" + (value || "create"), body, async (tx) => {
+  await protection.preflight(c,value,body);
+  const result=await command(c, "style-selections/" + (value || "create"), body, async (tx) => {
     return persist(tx, c, body, value);
   });
+  return protection.detail(c,String(result.id));
 }
 
 
 async function persist(tx: Tx, c: Context, body: Row, value?: string) {
+    const policy=await protection.writeLocks(tx,c);
     const before = value ? await entity(tx, "style_selections", value, true) : null;
     if (
       before &&
@@ -268,8 +304,10 @@ async function persist(tx: Tx, c: Context, body: Row, value?: string) {
       fail("EDIT_CONFLICT", "记录已被其他人修改，请刷新后核对", 409);
     const changes = { ...body };
     delete changes.expectedUpdatedAt;
+    for(const key of ["extraFields","cellColors","cellAlignments","cellVerticalAlignments","cellTextColors","cellNumberFormats"])if(key in changes){const stored=camel(before || {})[key] || {};const merged={...stored,...changes[key]};for(const field of Object.keys(merged))if(merged[field]===null)delete merged[field];changes[key]=merged;}
     if ("color" in changes) changes.color = normalizedTags(changes.color);
     if ("sizeRange" in changes) changes.sizeRange = sortSelectionSizes(changes.sizeRange) || null;
+    const security=await protection.assertWrite(tx,c,before,changes,policy);
     validateImageColors(changes.images ?? before?.images ?? [], changes.color ?? before?.color);
     for (const key of ["images", "labelImages", "cellColors", "cellAlignments", "cellVerticalAlignments", "cellTextColors", "cellNumberFormats", "extraFields"])
       if (key in changes) changes[key] = JSON.stringify(changes[key]);
@@ -278,8 +316,8 @@ async function persist(tx: Tx, c: Context, body: Row, value?: string) {
       changes.sortOrder = last!.value + 1;
     }
     const result = before
-      ? await update(tx, "style_selections", value!, { ...changes, version: before.version + 1 })
-      : await insert(tx, "style_selections", { ...changes, createdBy: c.actor.id });
+      ? await update(tx, "style_selections", value!, { ...changes, ...security, updatedBy:c.actor.id, version: before.version + 1 })
+      : await insert(tx, "style_selections", { ...changes, ...security, updatedBy:c.actor.id, createdBy: c.actor.id });
     await audit(tx, c, before ? "UPDATE" : "CREATE", "style-selection", result.id, before, result);
     // Keep date-only fields identical to list responses (rather than ISO timestamps).
     return (await one(tx, `SELECT ${selectColumns} ${source} WHERE s.id=$1::bigint`, result.id))!;
@@ -310,12 +348,14 @@ async function findImportMatch(tx: Tx, values: Row) {
   validateImageColors(values.images ?? before?.images ?? [], values.color ?? before?.color);
   return before;
 }
-export async function previewImport(input: unknown) {
+export async function previewImport(c: Context, input: unknown) {
   const body = parse(z.object({ rows: z.array(z.record(z.string(), z.unknown())).min(1).max(500) }).strict(), input);
   const values = body.rows.map(importPatch); distinctStyles(values);
   const plan = [];
   for (const value of values) {
     const before = await findImportMatch(db, value);
+    if(before)protection.assertFields(await protection.policy(db),c,before,["xutiStyleNo"],false);
+    await protection.preflight(c,before?String(before.id):undefined,value);
     plan.push({ values: value, id: before ? String(before.id) : null, expectedUpdatedAt: before ? new Date(before.updated_at).toISOString() : null });
   }
   return { rows: plan, created: plan.filter(row => !row.id).length, updated: plan.filter(row => row.id).length };
@@ -323,7 +363,9 @@ export async function previewImport(input: unknown) {
 export async function commitImport(c: Context, input: unknown) {
   const body = parse(z.object({ rows: z.array(importPlan).min(1).max(500) }).strict(), input);
   const patches = body.rows.map(row => importPatch(row.values)); distinctStyles(patches);
+  for(const [index,patch] of patches.entries())await protection.preflight(c,body.rows[index].id || undefined,patch);
   return command(c, "style-selections/import", body, async tx => {
+    await protection.writeLocks(tx,c);
     // Matching and writes must be atomic, including concurrently created styles.
     await tx.$executeRawUnsafe("LOCK TABLE style_selections IN SHARE ROW EXCLUSIVE MODE");
     let created = 0, updated = 0;
@@ -338,10 +380,12 @@ export async function commitImport(c: Context, input: unknown) {
   });
 }
 
-export async function sharedView() {
+export async function sharedView(c: Context) {
+  if(protection.activePolicy(await protection.policy(db)) && !protection.protectionAdmin(c.actor))return {view:{filters:{},sort:null},revision:0};
   return one(db, "SELECT view,revision FROM style_selection_shared_view WHERE id=1");
 }
 export async function saveSharedView(c: Context, input: unknown) {
+  if(protection.activePolicy(await protection.policy(db)) && !protection.protectionAdmin(c.actor))fail("FORBIDDEN","保护开启时，请使用个人筛选；共享筛选由管理员设置",403);
   const body = parse(z.object({ view: selectionViewSchema, revision: z.number().int().min(0) }).strict(), input);
   return command(c, "selection.shared-view", body, async tx => {
     const before = await one(tx, "SELECT view,revision FROM style_selection_shared_view WHERE id=1 FOR UPDATE");
@@ -352,14 +396,13 @@ export async function saveSharedView(c: Context, input: unknown) {
   });
 }
 
-export async function photoDetail(value: string) {
-  const result = await one(db, `SELECT ${selectColumns} ${source} WHERE s.id=$1::bigint`, value);
-  if (!result) fail("NOT_FOUND", "该款已不存在，请重新搜索", 404);
-  return result;
+export async function photoDetail(c: Context,value: string) {
+  return protection.detail(c,value);
 }
 /** Reuse the first content-free row in manual order, creating one only when none exists. */
 export async function nextBlankPhotoStyle(c: Context) {
-  return command(c, "style-selections/photo-next-blank", {}, async (tx) => {
+  const result=await command(c, "style-selections/photo-next-blank", {}, async (tx) => {
+    const p=await protection.writeLocks(tx,c);
     await tx.$executeRawUnsafe("LOCK TABLE style_selections IN SHARE ROW EXCLUSIVE MODE");
     const blank = await one(tx, `SELECT ${selectColumns} ${source}
       WHERE s.registration_batch IS NULL
@@ -378,16 +421,27 @@ export async function nextBlankPhotoStyle(c: Context) {
         AND (s.collection_inventory IS NULL OR s.collection_inventory = '[]'::jsonb)
         AND NOT EXISTS (SELECT 1 FROM jsonb_each_text(s.extra_fields) AS field WHERE btrim(field.value) <> '')
       ORDER BY s.sort_order ASC,s.id DESC LIMIT 1`);
+    if(blank)protection.assertFields(p,c,blank,protection.rowFields(blank));
     return blank || persist(tx, c, {}, undefined);
   });
+  const row=await protection.detail(c,String(result.id));
+  protection.assertFields(await protection.policy(db),c,row,protection.rowFields(row));
+  return row;
 }
-export async function nextPhotoStyle(value: string, query: unknown) {
+export async function nextPhotoStyle(c:Context,value: string, query: unknown) {
+  const policy=await protection.policy(db);
+  if(protection.activePolicy(policy)){
+    const data=protection.filtered((await rows(db,`SELECT ${selectColumns} ${source}`)).map(row=>protection.project(policy,c.actor,row)),{q:String(query || ""),photoSearch:"true",sort:"sortOrder",direction:"asc"});
+    const current=await protection.detail(c,value);
+    return data.find(row=>Number(row.sortOrder)>Number(current.sortOrder) || Number(row.sortOrder)===Number(current.sortOrder) && BigInt(row.id)<BigInt(value)) || null;
+  }
   const current = await entity(db, "style_selections", value);
   const q = String(query || "").trim().slice(0, 100);
-  return (await one(db, `SELECT ${selectColumns} ${source}
+  const result=await one(db, `SELECT ${selectColumns} ${source}
     WHERE (s.sort_order>$1 OR (s.sort_order=$1 AND s.id<$2::bigint))
     AND ($3='' OR concat_ws(' ',s.xuti_style_no,s.supplier_style_no,s.supplier_code) ILIKE $4)
-    ORDER BY s.sort_order ASC,s.id DESC LIMIT 1`, current.sort_order, value, q, "%"+q+"%")) || null;
+    ORDER BY s.sort_order ASC,s.id DESC LIMIT 1`, current.sort_order, value, q, "%"+q+"%");
+  return result?protection.project(policy,c.actor,result):null;
 }
 /** Granular image operations merge under the row lock instead of replacing a stale array. */
 export async function changePhoto(c: Context, value: string, input: unknown) {
@@ -395,7 +449,9 @@ export async function changePhoto(c: Context, value: string, input: unknown) {
     z.object({ action: z.literal("add"), field: z.union([z.enum(["images", "labelImages"]),z.string().regex(/^custom:[a-zA-Z0-9:-]+$/).max(100)]).default("images"), image }).strict(),
     z.object({ action: z.literal("remove"), field: z.union([z.enum(["images", "labelImages"]),z.string().regex(/^custom:[a-zA-Z0-9:-]+$/).max(100)]).default("images"), imageId: z.string().min(1).max(100) }).strict(),
   ]), input);
-  return command(c, "selection.photo/"+value, body, async tx => {
+  protection.assertFields(await protection.policy(db),c,await entity(db,"style_selections",value),[body.field]);
+  const result=await command(c, "selection.photo/"+value, body, async tx => {
+    await protection.writeLocks(tx,c);
     const before = await entity(tx, "style_selections", value, true);
     const field = body.field;
     const custom=field.startsWith("custom:");
@@ -412,4 +468,5 @@ export async function changePhoto(c: Context, value: string, input: unknown) {
     if(custom){parse(z.array(image).max(30),images);return persist(tx,c,{extraFields:{...(before.extra_fields || {}),[field]:JSON.stringify(images)}},value);}
     return persist(tx, c, { [field]: images }, value);
   });
+  return protection.detail(c,String(result.id));
 }

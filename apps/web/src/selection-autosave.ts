@@ -43,8 +43,28 @@ export function normalizeSelection(row: Row): Row {
 export function mergeSelectionSave(current: Row, sent: Row, saved: Row): Row {
   const next: Row = { ...saved, _key: current._key };
   for (const key of Object.keys(current)) {
-    if (["id", "updatedAt", "createdAt", "version", "_key"].includes(key)) continue;
+    if (["id", "updatedAt", "createdAt", "version", "_key", "cellAccess", "hiddenCells", "defaultCellAccess", "policyRevision", "claimedBy"].includes(key)) continue;
+    if(saved.cellAccess?.[key] && saved.cellAccess[key]!=="edit")continue;
+    if(["extraFields","cellColors","cellAlignments","cellVerticalAlignments","cellTextColors","cellNumberFormats"].includes(key)) {
+      const values={...(saved[key] || {})};
+      for(const field of Object.keys(current[key] || {}))if((!saved.cellAccess || (saved.cellAccess[field] || saved.defaultCellAccess)==="edit") && JSON.stringify(current[key]?.[field])!==JSON.stringify(sent[key]?.[field]))values[field]=current[key][field];
+      next[key]=values;continue;
+    }
     if (JSON.stringify(current[key]) !== JSON.stringify(sent[key])) next[key] = current[key];
   }
   return next;
+}
+
+/** JSON maps are patches: missing fields are preserved; null removes formatting. */
+export function selectionDelta(body: Row, before: Row): Row {
+  const delta: Row = {};
+  for(const [key,value] of Object.entries(body)) {
+    if(key==="expectedUpdatedAt"){delta[key]=value;continue;}
+    if(["extraFields","cellColors","cellAlignments","cellVerticalAlignments","cellTextColors","cellNumberFormats"].includes(key)) {
+      const changes:Row={};
+      for(const field of new Set([...Object.keys(value || {}),...Object.keys(before[key] || {})]))if(JSON.stringify(value?.[field])!==JSON.stringify(before[key]?.[field]))changes[field]=value?.[field] ?? null;
+      if(Object.keys(changes).length)delta[key]=changes;
+    } else if(JSON.stringify(value)!==JSON.stringify(before[key] ?? (["images","labelImages"].includes(key)?[]:key==="rowColor"?"NONE":null)))delta[key]=value;
+  }
+  return delta;
 }

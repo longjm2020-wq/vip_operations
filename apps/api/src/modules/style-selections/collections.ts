@@ -1,6 +1,7 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { insertImage, readStoredImage } from "./image-storage.js";
 import { z } from "zod";
+import * as protection from "./protection.js";
 import { db, rows, one, json, type Tx, type Row } from "../../../../../packages/database/src/index.js";
 import { parse, id, fail, command, hash, canonical, audit, type Context } from "../../core.js";
 import { collectionInfoSchema, collectionSubmissionSchema, collectionDraftSchema, collectionInventory, collectionTags } from "../../../../../packages/contracts/src/selection-collection.js";
@@ -36,6 +37,7 @@ async function access(tx: Tx, token: string, lock = false) {
   parse(tokenSchema, token);
   const share = await one(tx, "SELECT *, (expires_at <= now()) AS expired FROM selection_collections WHERE token_hash=$1" + (lock ? " FOR UPDATE" : ""), hash(token));
   if (!share || share.closed || share.expired) fail("NOT_FOUND","链接已失效或已关闭，请联系分享人",404);
+  await protection.delegatedShare(tx,share!,await protection.policy(tx,lock));
   return share!;
 }
 async function internal(tx: Tx, value: string) {
@@ -75,7 +77,10 @@ function version(share: Row, revision: number) {
 }
 export async function create(c: Context, input: unknown) {
   const body = parse(z.object({title:z.string().trim().min(1).max(100),ids:z.array(id).min(1).max(100),days:z.union([z.literal(7),z.literal(30),z.literal(0)])}).strict(),input);
+  await protection.collectionRights(db,c,body.ids,true);
   return command(c,"selection-collections/create",body,async tx => {
+    const p=await protection.writeLocks(tx,c);
+    await protection.collectionRights(tx,c,body.ids,true,p);
     const ids = [...new Set(body.ids)];
     const source = await rows(tx,"SELECT * FROM style_selections WHERE id=ANY($1::bigint[]) ORDER BY id FOR SHARE",ids);
     if (source.length !== ids.length) fail("NOT_FOUND","部分款式不存在，请刷新后重试",404);
@@ -90,10 +95,14 @@ export async function create(c: Context, input: unknown) {
     return {id:share.id,token};
   });
 }
-export async function list() {
-  return rows(db,"SELECT c.id,c.title,c.status,c.closed,c.expires_at,c.revision,c.feedback,c.created_at,count(i.selection_id)::int AS count FROM selection_collections c LEFT JOIN selection_collection_items i ON i.collection_id=c.id GROUP BY c.id ORDER BY c.id DESC LIMIT 100");
+export async function list(c:Context) {
+  const shares=await rows(db,"SELECT c.id,c.title,c.status,c.closed,c.expires_at,c.revision,c.feedback,c.created_at,count(i.selection_id)::int AS count FROM selection_collections c LEFT JOIN selection_collection_items i ON i.collection_id=c.id GROUP BY c.id ORDER BY c.id DESC LIMIT 100");
+  const visible=[];
+  for(const share of shares){try{await protection.shareRights(db,c,String(share.id));visible.push(share);}catch(error){if(![403,404].includes((error as {getStatus?:()=>number}).getStatus?.() || 0))throw error;}}
+  return visible;
 }
-export async function detail(value: string) {
+export async function detail(c:Context,value: string) {
+  await protection.shareRights(db,c,value);
   const share = await one(db,"SELECT id,title,status,closed,expires_at,revision,feedback FROM selection_collections WHERE id=$1::bigint",value);
   if (!share) fail("NOT_FOUND","收集表不存在",404);
   const items=await rows(db,"SELECT selection_id AS id,xuti_style_no,status,feedback,source_version,original,draft FROM selection_collection_items WHERE collection_id=$1::bigint ORDER BY position",value);
@@ -107,7 +116,9 @@ export async function detail(value: string) {
 }
 export async function withdrawItem(c: Context, value: string, itemId: string, input: unknown) {
   const body=parse(z.object({revision:z.number().int().min(0)}).strict(),input);
+  await protection.shareRights(db,c,value,true);
   return command(c,"selection-collections/withdraw-item/"+value+"/"+itemId,body,async tx=>{
+    const policy=await protection.writeLocks(tx,c);await protection.shareRights(tx,c,value,true,policy);
     const share=await internal(tx,value);version(share,body.revision);
     if(share.closed)fail("INVALID_STATE","收集表已关闭，请先重新生成分享链接",409);
     const item=await one(tx,"SELECT * FROM selection_collection_items WHERE collection_id=$1::bigint AND selection_id=$2::bigint",value,itemId);
@@ -126,7 +137,11 @@ export async function editItem(c: Context, value: string, itemId: string, input:
     z.object({action:z.literal("rename"),revision:z.number().int().min(0),xutiStyleNo:z.string().trim().max(64)}).strict(),
     z.object({action:z.literal("replace"),revision:z.number().int().min(0),targetId:id}).strict(),
   ]),input);
+  await protection.shareRights(db,c,value,true);
+  if(body.action==="replace")await protection.collectionRights(db,c,[body.targetId],true);
+  else await protection.preflight(c,itemId,{xutiStyleNo:body.xutiStyleNo || null});
   return command(c,"selection-collections/edit-item/"+value+"/"+itemId,body,async tx=>{
+    const policy=await protection.writeLocks(tx,c);await protection.shareRights(tx,c,value,true,policy);
     const share=await internal(tx,value);version(share,body.revision);
     if(share.closed)fail("INVALID_STATE","收集表已关闭，请先重新生成分享链接",409);
     const item=await one(tx,"SELECT * FROM selection_collection_items WHERE collection_id=$1::bigint AND selection_id=$2::bigint",value,itemId);
@@ -135,6 +150,8 @@ export async function editItem(c: Context, value: string, itemId: string, input:
     if(body.action==="rename"){
       const source=await one(tx,"SELECT * FROM style_selections WHERE id=$1::bigint FOR UPDATE",itemId);
       if(!source || source.version!==item.source_version)fail("EDIT_CONFLICT","原款资料已变化，请重新生成收集表后再编辑",409);
+      const security=await protection.assertWrite(tx,c,source!,{xutiStyleNo:body.xutiStyleNo || null},policy);
+      await rows(tx,"UPDATE style_selections SET cell_owners=$2::jsonb,claimed_by=coalesce($3::bigint,claimed_by),updated_by=$4::bigint WHERE id=$1::bigint",itemId,security.cellOwners,security.claimedBy || null,c.actor.id);
       const after=await one(tx,"UPDATE style_selections SET xuti_style_no=$2,version=version+1,updated_at=now() WHERE id=$1::bigint RETURNING *",itemId,body.xutiStyleNo || null);
       await audit(tx,c,"UPDATE","style-selection",itemId,source,after,`更正收集表 ${value} 的序缇款号`);
       await rows(tx,"UPDATE selection_collection_items SET xuti_style_no=$3,source_version=$4,status=CASE WHEN status='SUBMITTED' THEN 'REJECTED' ELSE status END,feedback='内部已更新序缇款号，请核对并重新提交' WHERE collection_id=$1::bigint AND selection_id=$2::bigint",value,itemId,body.xutiStyleNo,after!.version);
@@ -144,6 +161,7 @@ export async function editItem(c: Context, value: string, itemId: string, input:
       if(exists)fail("CONFLICT","目标款式已在这张收集表中",409);
       const source=await one(tx,"SELECT * FROM style_selections WHERE id=$1::bigint FOR SHARE",body.targetId);
       if(!source)fail("NOT_FOUND","目标款式不存在",404);
+      await protection.collectionRights(tx,c,[body.targetId],true,policy);
       const draft=JSON.stringify(snapshot(source));
       await rows(tx,"UPDATE selection_collection_items SET selection_id=$3::bigint,source_version=$4,xuti_style_no=$5,original=$6::jsonb,draft=$6::jsonb,status='DRAFT',feedback='内部已更换款式，请重新填写本款' WHERE collection_id=$1::bigint AND selection_id=$2::bigint",value,itemId,body.targetId,source.version,source.xuti_style_no || "",draft);
     }
@@ -240,7 +258,10 @@ export async function image(token:string,value:string,imageId:string) {
 }
 export async function review(c:Context,value:string,input:unknown) {
   const body=parse(z.object({itemId:id.optional(),action:z.enum(["approve","reject","close","renew"]),revision:z.number().int(),reason:z.string().trim().max(1000).default(""),days:z.union([z.literal(7),z.literal(30),z.literal(0)]).optional()}).strict(),input);
+  if(body.action!=="close" || !protection.protectionAdmin(c.actor))await protection.shareRights(db,c,value,body.action!=="close");
   return command(c,"selection-collections/review/"+value,body,async tx=>{
+    const policy=await protection.writeLocks(tx,c);
+    if(body.action!=="close" || !protection.protectionAdmin(c.actor))await protection.shareRights(tx,c,value,body.action!=="close",policy);
     const share=await internal(tx,value);version(share,body.revision);
     let token: string | undefined;
     if(body.action==="close") await rows(tx,"UPDATE selection_collections SET closed=true WHERE id=$1::bigint",value);
@@ -260,6 +281,9 @@ export async function review(c:Context,value:string,input:unknown) {
           if(!source) fail("EDIT_CONFLICT",`第${item.position+1}款原款已删除，本次未更新任何款式`,409);
           const {merged}=reconcile(item,source);
           const {images,...info}=merged;parse(collectionInfoSchema,info);
+          const patch={supplierStyleNo:info.supplierStyleNo || null,color:info.color || null,sizeRange:info.sizeRange || null,material:info.material || null,supplyPriceExclTax:info.supplyPriceExclTax,sellingPoints:info.sellingPoints,reorderDays:info.reorderDays,collectionInventory:info.inventory,images};
+          const security=await protection.assertWrite(tx,c,source!,patch,policy);
+          await rows(tx,"UPDATE style_selections SET cell_owners=$2::jsonb,claimed_by=coalesce($3::bigint,claimed_by),updated_by=$4::bigint WHERE id=$1::bigint",item.selection_id,security.cellOwners,security.claimedBy || null,c.actor.id);
           const after=await one(tx,"UPDATE style_selections SET supplier_style_no=$2,color=$3,size_range=$4,material=$5,supply_price_excl_tax=$6::numeric,selling_points=$7,reorder_days=$8,collection_inventory=$9::jsonb,images=$10::jsonb,version=version+1,updated_at=now() WHERE id=$1::bigint RETURNING *",item.selection_id,info.supplierStyleNo || null,info.color || null,info.sizeRange || null,info.material || null,info.supplyPriceExclTax,info.sellingPoints,info.reorderDays,JSON.stringify(info.inventory),JSON.stringify(images));
           await audit(tx,c,"UPDATE","style-selection",item.selection_id,source,after,"确认外部产品信息收集表");
           await rows(tx,"UPDATE selection_collection_items SET status='APPROVED' WHERE collection_id=$1::bigint AND selection_id=$2::bigint",value,item.selection_id);

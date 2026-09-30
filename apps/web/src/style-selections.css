@@ -497,3 +497,5 @@
 .selection-import-guide > span { flex: 1; min-width: 200px; color: #78604d; }
 .selection-import-upload .ant-upload-drag-container { padding: 22px 12px; }
 @media (max-width: 600px) { .selection-header-search { width: min(420px, calc(100vw - 48px)); } }
+.selection-hidden-value { color: #8c8c8c; letter-spacing: 3px; }
+.selection-sheet td[data-cell-access="deny"] { background-image: repeating-linear-gradient(135deg, transparent, transparent 7px, rgba(140,140,140,.06) 7px, rgba(140,140,140,.06) 8px); }

@@ -27,7 +27,9 @@ export function SelectionTransfer({ canEdit, blocked, selectedRows, filteredRows
       if (!template && !records.length) {
         records.push(...(filteredRows ?? (await fetchSelectionRows(query)).data));
       }
+      if(!template && records.length){const fresh=new Map((await fetchSelectionRows("")).data.map((row:Row)=>[String(row.id),row]));for(let index=0;index<records.length;index++){const row=fresh.get(String(records[index].id));if(!row)throw Error("导出范围已变化，请刷新后重新选择");records[index]=row;}}
       if (!template && !records.length) throw Error("没有可导出的款式");
+      if(!template && records.some(row=>row.hiddenCells?.length))throw Error("选中款式包含禁止查看的字段，请联系管理员调整权限后导出");
       await downloadSelectionWorkbook(records, template);
     } catch (e) { if (template) setError((e as Error).message); else message.error((e as Error).message); }
     finally { setBusy(false); }

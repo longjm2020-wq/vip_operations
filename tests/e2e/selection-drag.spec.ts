@@ -108,7 +108,7 @@ test("multiple full style numbers search exactly and color grouping is absent", 
   await page.keyboard.press("Escape");
   await page.locator(".selection-tool-select").nth(1).click();
   const options = page.locator(".ant-select-dropdown:visible .ant-select-item-option-content");
-  await expect(options).toHaveText(["手动排序", "最近修改", "最新登记", "登记批次"]);
+  await expect(options).toHaveText(["手动排序", "最近修改", "最新登记", "登记批次", "配置排序字段"]);
 });
 
 test("top right search unifies exact styles and keywords without the toolbar filter button", async ({ page }) => {

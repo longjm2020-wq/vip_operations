@@ -4,6 +4,7 @@ import { AuthRequest, Permission, Public, context } from "../../http.js";
 import { id, parse } from "../../core.js";
 import * as selections from "./service.js";
 import * as collections from "./collections.js";
+import * as protection from "./protection.js";
 import { fail } from "../../core.js";
 
 const paramId = (value: string) => parse(id, value);
@@ -11,16 +12,20 @@ const paramId = (value: string) => parse(id, value);
 @Controller("api/v1/style-selections")
 class StyleSelectionsController {
   @Permission("selection.read") @Post("sync") async sync(@Body() body: unknown, @Req() request: AuthRequest, @Res() response: Response) {
-    const data = await selections.sync(body);
+    const data = await selections.sync(context(request),body);
     response.setHeader("Cache-Control", "private, no-store");
     response.type("application/json").send(`{"data":${data},"requestId":${JSON.stringify(request.requestId)}}`);
   }
-  @Permission("selection.read") @Get("revision") revision() { return selections.revision(); }
-  @Permission("selection.read") @Get("shared-view") sharedView() { return selections.sharedView(); }
+  @Permission("selection.read") @Get("protection") protection(@Req() request:AuthRequest) { return protection.readSettings(context(request)); }
+  @Permission("selection.read") @Get("protection/users") protectionUsers(@Req() request:AuthRequest) { return protection.users(context(request)); }
+  @Permission("selection.read") @Post("protection") saveProtection(@Req() request:AuthRequest,@Body() body:unknown) { return protection.saveSettings(context(request),body); }
+  @Permission("selection.manage") @Post(":id/claim") claim(@Req() request:AuthRequest,@Param("id") value:string,@Body() body:unknown) { return protection.claim(context(request),paramId(value),body); }
+  @Permission("selection.read") @Get("revision") revision(@Req() request:AuthRequest) { return selections.revision(context(request)); }
+  @Permission("selection.read") @Get("shared-view") sharedView(@Req() request:AuthRequest) { return selections.sharedView(context(request)); }
   @Permission("selection.manage") @Post("shared-view") saveSharedView(@Req() request: AuthRequest, @Body() body: unknown) { return selections.saveSharedView(context(request), body); }
 
-  @Permission("selection.manage") @Post("import/preview") previewImport(@Body() body: unknown) {
-    return selections.previewImport(body);
+  @Permission("selection.manage") @Post("import/preview") previewImport(@Req() request:AuthRequest,@Body() body: unknown) {
+    return selections.previewImport(context(request),body);
   }
   @Permission("selection.manage") @Post("import") commitImport(@Req() request: AuthRequest, @Body() body: unknown) {
     return selections.commitImport(context(request), body);
@@ -31,7 +36,7 @@ class StyleSelectionsController {
   @Permission("selection.read") @Get("images/:imageId") async image(@Param("imageId") value: string, @Req() request: AuthRequest, @Res() response: Response) {
     const etag = `"selection-image-${value}"`;
     const unchanged = request.get("If-None-Match") === etag;
-    const file = await selections.readImage(value, unchanged);
+    const file = await selections.readImage(context(request),value, unchanged);
     response.setHeader("ETag", etag);
     response.setHeader("Cache-Control", "private, no-cache");
     if (unchanged) { response.status(304).end(); return; }
@@ -47,16 +52,16 @@ class StyleSelectionsController {
   ) {
     return selections.heartbeat(context(request), body);
   }
-  @Permission("selection.read") @Get() list(@Query() query: Record<string, unknown>) {
-    return selections.list(query);
+  @Permission("selection.read") @Get() list(@Req() request:AuthRequest,@Query() query: Record<string, unknown>) {
+    return selections.list(context(request),query);
   }
-  @Permission("selection.read") @Get("style-counts") styleCounts() { return selections.styleCounts(); }
+  @Permission("selection.read") @Get("style-counts") styleCounts(@Req() request:AuthRequest) { return selections.styleCounts(context(request)); }
   @Permission("selection.manage") @Post() create(@Req() request: AuthRequest, @Body() body: unknown) {
     return selections.write(context(request), body);
   }
   @Permission("selection.manage") @Post("photo-next-blank") nextBlankPhoto(@Req() request: AuthRequest) { return selections.nextBlankPhotoStyle(context(request)); }
-  @Permission("selection.read") @Get(":id/photo-next") nextPhoto(@Param("id") value: string, @Query("q") query: string) { return selections.nextPhotoStyle(paramId(value), query); }
-  @Permission("selection.read") @Get(":id") detail(@Param("id") value: string) { return selections.photoDetail(paramId(value)); }
+  @Permission("selection.read") @Get(":id/photo-next") nextPhoto(@Req() request:AuthRequest,@Param("id") value: string, @Query("q") query: string) { return selections.nextPhotoStyle(context(request),paramId(value), query); }
+  @Permission("selection.read") @Get(":id") detail(@Req() request:AuthRequest,@Param("id") value: string) { return selections.photoDetail(context(request),paramId(value)); }
   @Permission("selection.manage") @Post(":id/photos") changePhoto(@Req() request: AuthRequest, @Param("id") value: string, @Body() body: unknown) { return selections.changePhoto(context(request), paramId(value), body); }
   @Permission("selection.manage") @Patch(":id") edit(
     @Req() request: AuthRequest,
@@ -88,8 +93,8 @@ function externalToken(request: AuthRequest) {
 @Controller("api/v1/selection-collections")
 class SelectionCollectionsController {
   @Permission("selection.manage") @Post() create(@Req() req: AuthRequest,@Body() body: unknown) { return collections.create(context(req),body); }
-  @Permission("selection.manage") @Get() list() { return collections.list(); }
-  @Permission("selection.manage") @Get(":id") detail(@Param("id") value:string) { return collections.detail(paramId(value)); }
+  @Permission("selection.manage") @Get() list(@Req() req:AuthRequest) { return collections.list(context(req)); }
+  @Permission("selection.manage") @Get(":id") detail(@Req() req:AuthRequest,@Param("id") value:string) { return collections.detail(context(req),paramId(value)); }
   @Permission("selection.manage") @Post(":id/items/:itemId/withdraw") withdrawItem(@Req() req:AuthRequest,@Param("id") value:string,@Param("itemId") itemId:string,@Body() body:unknown) { return collections.withdrawItem(context(req),paramId(value),paramId(itemId),body); }
   @Permission("selection.manage") @Post(":id/items/:itemId/edit") editItem(@Req() req:AuthRequest,@Param("id") value:string,@Param("itemId") itemId:string,@Body() body:unknown) { return collections.editItem(context(req),paramId(value),paramId(itemId),body); }
   @Permission("selection.manage") @Post(":id/review") review(@Req() req:AuthRequest,@Param("id") value:string,@Body() body:unknown) { return collections.review(context(req),paramId(value),body); }

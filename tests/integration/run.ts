@@ -577,7 +577,7 @@ try {
     cellColors: { vipPrice: "GREEN" },
     expectedUpdatedAt: selection.updatedAt,
   });
-  assert.equal(selectedStyle.vipPrice, "209");
+  assert.equal(selectedStyle.vipPrice, "209.00");
   assert.notEqual((await ok("/style-selections/revision")).revision, beforeRevision);
   assert.equal(selectedStyle.registrationBatch, "2026-10-01");
   assert.deepEqual(selectedStyle.cellAlignments, selection.cellAlignments);

@@ -60,16 +60,17 @@ export function selectionAllCells(rows: Row[], columns: { key: string }[]) {
 /** Clear values only; formatting and row identity are retained. */
 export function clearSelectionCells(rows: Row[], selected: Set<string>): Row[] {
   return rows.map(row => {
-    const keys = [...selected].filter(id => id.startsWith(`${row._key}::`)).map(id => id.slice(`${row._key}::`.length));
+    const keys = [...selected].filter(id => id.startsWith(`${row._key}::`)).map(id => id.slice(`${row._key}::`.length)).filter(key=>!row.cellAccess || (row.cellAccess[key] || row.defaultCellAccess)==="edit");
     if (!keys.length) return row;
     const next = { ...row };
     for (const key of keys) {
+      if(key==="color" && row.cellAccess?.images && row.cellAccess.images!=="edit")continue;
       if (["sellingPoints","reorderDays","collectionInventory"].includes(key)) continue;
       if (key.startsWith("custom:")) next.extraFields = { ...(next.extraFields || {}), [key]: "" };
       else next[key] = key === "images" || key === "labelImages" ? [] : null;
     }
     // Removing color labels must not leave orphan image-color references.
-    if (keys.includes("color") && !keys.includes("images")) next.images = (row.images || []).map((image: Row) => ({ ...image, color: "" }));
+    if (keys.includes("color") && !keys.includes("images") && (!row.cellAccess || row.cellAccess.images==="edit")) next.images = (row.images || []).map((image: Row) => ({ ...image, color: "" }));
     return next;
   });
 }

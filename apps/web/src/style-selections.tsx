@@ -1,7 +1,10 @@
 import {SelectionFieldManager,SelectionFieldInput} from "./selection-field-manager";
+import { SelectionProtectionControl, editableSelectionCell, readableSelectionCell } from "./selection-protection";
+import { SelectionOrganization } from "./selection-organization";
 import { useSelectionDrag } from "./selection-drag";
 import { parseExactStyleNumbers } from "./selection-style-search";
-import {resetFieldTypes,defaultTagConfig,orderedFieldTags,fieldValueError,fieldImages,defaultImageConfig,type SelectionField} from "./selection-field-types";
+import {resetFieldTypes,defaultTagConfig,orderedFieldTags,fieldValueError,fieldImages,defaultImageConfig,systemField,type SelectionField} from "./selection-field-types";
+import { selectionSystemValue } from "./selection-system-fields";
 import { SelectionStatistics } from "./selection-statistics";
 import { SelectionCollections } from "./selection-collections";
 import { CollectionStockEditor } from "./selection-collection-stock";
@@ -21,7 +24,7 @@ import { BgColorsOutlined, CopyOutlined, DownloadOutlined, FontColorsOutlined, V
 import { api, queryClient } from "./api";
 import { prepareUpload, readUpload } from "./upload-file";
 import { Header, QueryState, Row, useCan, useUser } from "./shared";
-import { mergeSelectionSave, normalizeSelection, SelectionSaveAttempts } from "./selection-autosave";
+import { mergeSelectionSave, normalizeSelection, selectionDelta, SelectionSaveAttempts } from "./selection-autosave";
 import { fetchSelectionRows, SelectionTransfer } from "./selection-transfer";
 import { matchesSelectionFilters, sortSelectionRows, selectionAllCells, clearSelectionCells, type SelectionFilters } from "./selection-filters";
 import { selectionSizes as sizes, sortSelectionSizes } from "../../../packages/contracts/src/selection-sizes";
@@ -95,8 +98,8 @@ const initialColumns = (): Column[] => {
 };
 const rowImages = (row: Row): SelectionImage[] => Array.isArray(row.images) ? row.images : [];
 const rowLabelImages = (row: Row): SelectionImage[] => Array.isArray(row.labelImages) ? row.labelImages : [];
-const valueAt = (row: Row, column: Column) => column.key === "collectionInventory" ? (row.collectionInventory || []).reduce((sum:number,item:Row)=>sum+Number(item.available || 0)+Number(item.production || 0),0) : column.custom ? row.extraFields?.[column.key] ?? "" : row[column.key];
-const withValue = (row: Row, column: Column, value: unknown) => collectionKeys.has(column.key) ? row : column.custom
+const valueAt = (row: Row, column: Column) => systemField(column)?selectionSystemValue(row,column):column.key === "collectionInventory" ? (row.collectionInventory || []).reduce((sum:number,item:Row)=>sum+Number(item.available || 0)+Number(item.production || 0),0) : column.custom ? row.extraFields?.[column.key] ?? "" : row[column.key];
+const withValue = (row: Row, column: Column, value: unknown) => systemField(column) || collectionKeys.has(column.key) || !editableSelectionCell(row,column.key) ? row : column.custom
   ? { ...row, extraFields: { ...(row.extraFields || {}), [column.key]: String(value ?? "") } }
   : { ...row, [column.key]: column.key === "sizeRange" ? sortSelectionSizes(value) : value };
 const sameRow = (a: Row, b: Row) =>
@@ -264,7 +267,7 @@ export function StyleSelectionsPage() {
   const [filterSession, setFilterSession] = useState(0);
   const [filterRevision, setFilterRevision] = useState(0);
   const [followShared, setFollowShared] = useState(true);
-  const [groupBy, setGroupBy] = useState<"none" | "batch" | "supplier">("none");
+  const [groupBy, setGroupBy] = useState<string>("none");
   const [sort, setSort] = useState("sortOrder");
   const [direction, setDirection] = useState<"asc" | "desc">("asc");
   const [rowHeight, setRowHeight] = useState<"compact" | "normal" | "loose" | "extra">("extra");
@@ -354,7 +357,10 @@ export function StyleSelectionsPage() {
     presenceWrites.current = presenceWrites.current.then(() => api("/style-selections/presence", "POST", { editingId: null, editingColumn: null })).catch(() => undefined);
   }, []);
   useEffect(() => {
-    if (!data.data || appliedSnapshot.current === snapshot || saving || rows.some((row) => !row.id || !sameRow(row, original.current.get(row._key) || {}))) return;
+    if (!data.data || appliedSnapshot.current === snapshot || saving) return;
+    const rightsChanged=(data.data.data || []).some((incoming:Row)=>{const existing=rows.find(row=>String(row.id)===String(incoming.id));return existing && (existing.policyRevision!==incoming.policyRevision || JSON.stringify(existing.cellAccess)!==JSON.stringify(incoming.cellAccess));});
+    if(!rightsChanged && rows.some((row) => !row.id || !sameRow(row, original.current.get(row._key) || {})))return;
+    if(rightsChanged){attempts.current=new SelectionSaveAttempts();setFocusedCell(null);setCellTextEditing(false);}
     const next = (data.data.data || []).map((row: Row) => ({ ...normalizeSelection(row), _key: rows.find((current) => current.id === row.id)?._key || String(row.id) }));
     setRows(next); setErrors({});
     original.current = new Map(next.map((row: Row) => [row._key, { ...row }])); appliedSnapshot.current = snapshot;
@@ -363,12 +369,15 @@ export function StyleSelectionsPage() {
   const activeColumns = columns.filter((column) => visible.includes(column.key)).map(column=>({...column,type:column.type || column.fallbackType}));
   const repeatedStyles = useMemo(() => duplicateStyleCounts(rows, styleCounts.data?.data, original.current), [rows, styleCounts.data]);
   const colorSuggestions = useMemo(() => [...new Set(rows.flatMap((row) => splitTags(row.color)))], [rows]);
-  const filteredRows = useMemo(() => sortSelectionRows(rows.filter(row => (!exactStyleNumbers.size || exactStyleNumbers.has(String(row.xutiStyleNo || "").trim())) && matchesSelectionFilters(row, columnFilters)), columnSort), [rows, columnFilters, columnSort, exactStyleNumbers]);
+  const fieldViewRows=useMemo<Row[]>(()=>rows.map(row=>({...row,extraFields:{...(row.extraFields || {}),...Object.fromEntries(columns.filter(systemField).map(column=>[column.key,readableSelectionCell(row,column.key)?selectionSystemValue(row,column):""]))}})),[rows,columns]);
+  const filteredRows = useMemo(() => {const originalRows=new Map(rows.map(row=>[row._key,row]));return sortSelectionRows(fieldViewRows.filter(row => (!exactStyleNumbers.size || exactStyleNumbers.has(String(row.xutiStyleNo || "").trim())) && matchesSelectionFilters(row, columnFilters)), columnSort).map(row=>originalRows.get(row._key)!);}, [rows, fieldViewRows, columnFilters, columnSort, exactStyleNumbers]);
   const allGrouped = useMemo(() => {
-    const label = (row: Row) => groupBy === "batch" ? row.registrationBatch || "未填写登记批次" : row.supplierCode || "未填写供应商编码";
+    const key=groupBy==="batch"?"registrationBatch":groupBy==="supplier"?"supplierCode":groupBy.slice(6);
+    const column=columns.find(column=>column.key===key);
+    const label = (row: Row) => !readableSelectionCell(row,key)?"受保护内容":String(column?valueAt(row,column) ?? "":row[key] || "") || `未填写${column?.label || "字段"}`;
     if (groupBy === "none") return [{ label: "", rows: filteredRows }];
     return filteredRows.reduce<{ label: string; rows: Row[] }[]>((result, row) => { const key = label(row); const target = result.find((item) => item.label === key); if (target) target.rows.push(row); else result.push({ label: key, rows: [row] }); return result; }, []);
-  }, [groupBy, filteredRows]);
+  }, [groupBy, filteredRows, columns]);
   const allDisplayedRows = useMemo(() => allGrouped.flatMap(group => group.rows), [allGrouped]);
   const pageCount = Math.max(1, Math.ceil(allDisplayedRows.length / pageSize));
   const currentPage = Math.min(page, pageCount);
@@ -405,6 +414,7 @@ export function StyleSelectionsPage() {
     setDeleting(true);
     try {
       const current = rows.filter((row) => selectedRows.includes(row._key));
+      if(current.some(row=>columns.some(column=>!editableSelectionCell(row,column.key))))throw Error("选中行包含没有编辑权限的区域，不能删除");
       for (const row of current.filter((row) => row.id)) await api(`/style-selections/${row.id}`, "DELETE", undefined, row._key);
       setRows((items) => items.filter((row) => !selectedRows.includes(row._key))); setSelectedRows([]); setSelectedCells(new Set()); appliedSnapshot.current = "";
       await Promise.all([queryClient.invalidateQueries({ queryKey: ["style-selections"] }), queryClient.invalidateQueries({ queryKey: ["style-selection-style-counts"] })]); message.success(`已删除 ${current.length} 行`);
@@ -413,7 +423,7 @@ export function StyleSelectionsPage() {
   const applyColor = (color: string) => {
     if (!canEdit || !selectedCells.size) return message.warning("请单击或拖动选择需要填色的单元格");
     setRows((current) => current.map((row) => {
-      const matches = activeColumns.filter((column) => selectedCells.has(cellId(row._key, column.key)));
+      const matches = activeColumns.filter((column) => selectedCells.has(cellId(row._key, column.key)) && editableSelectionCell(row,column.key));
       if (!matches.length) return row;
       const cellColors = { ...(row.cellColors || {}) };
       for (const column of matches) { if (color === "NONE") delete cellColors[column.key]; else cellColors[column.key] = color; }
@@ -422,6 +432,7 @@ export function StyleSelectionsPage() {
   };
   const moveRow = (fromKey: string, toKey: string) => {
     if (!canEdit || fromKey === toKey) return;
+    if(rows.some(row=>columns.some(column=>!editableSelectionCell(row,column.key))))return void message.warning("存在受保护或他人认领的行，不能调整行顺序");
     setRows((current) => { const copy = [...current]; const from = copy.findIndex((row) => row._key === fromKey), to = copy.findIndex((row) => row._key === toKey); if (from < 0 || to < 0) return current; const [row] = copy.splice(from, 1); copy.splice(to, 0, row); return copy.map((item, index) => ({ ...item, sortOrder: index + 1 })); });
   };
   const moveColumn = (fromKey: string, toKey: string) => {
@@ -502,6 +513,7 @@ export function StyleSelectionsPage() {
   };
   const cellMouseEnter = (rowKey: string, columnKey: string) => { if (dragCellAnchor.current) selectRectangle(dragCellAnchor.current, { rowKey, columnKey }); };
   const copyValue = (row: Row, column: Column) => {
+    if(!readableSelectionCell(row,column.key))return "••••";
     const value = imageKeys.has(column.key) ? (column.key === "images" ? rowImages(row) : rowLabelImages(row)).map(image => image.url).join("; ") : column.key === "collectionInventory" ? (row.collectionInventory || []).reduce((sum:number,item:Row)=>sum+item.available+item.production,0) : valueAt(row,column);
     return String(value ?? "");
   };
@@ -543,7 +555,7 @@ export function StyleSelectionsPage() {
       event.preventDefault(); setCopiedCells(new Set()); copiedSingleValue.current = null;
       const links = selectionImageLinks(text);
       if (!links.length) { message.warning("请粘贴完整的 http(s) 图片链接，多张图片每行一个链接"); return; }
-      setRows(current => current.map(row => row._key === rowKey ? { ...row, [columnKey]: [...(columnKey === "images" ? rowImages(row) : rowLabelImages(row)), ...links.map(url => ({ id: crypto.randomUUID(), url, color: columnKey === "images" ? splitTags(row.color)[0] || "" : "" }))] } : row));
+      setRows(current => current.map(row => row._key === rowKey && editableSelectionCell(row,columnKey) ? { ...row, [columnKey]: [...(columnKey === "images" ? rowImages(row) : rowLabelImages(row)), ...links.map(url => ({ id: crypto.randomUUID(), url, color: columnKey === "images" ? splitTags(row.color)[0] || "" : "" }))] } : row));
       return;
     }
 
@@ -577,15 +589,16 @@ export function StyleSelectionsPage() {
     const savedRows: Record<string, { sent: Row; saved: Row }> = {};
     try {
       for (const row of changed) {
-        const body: Row = Object.fromEntries(baseKeys.map((key) => [key, clean(row[key])]));
+        let body: Row = Object.fromEntries(baseKeys.map((key) => [key, clean(row[key])]));
         body.registrationBatch = normalizeSelection(row).registrationBatch;
         body.images = rowImages(row); body.labelImages = rowLabelImages(row); body.cellColors = row.cellColors || {}; body.cellAlignments = row.cellAlignments || {}; body.cellVerticalAlignments = row.cellVerticalAlignments || {}; body.cellTextColors = row.cellTextColors || {}; body.cellNumberFormats = row.cellNumberFormats || {}; body.extraFields = row.extraFields || {}; body.sortOrder = Number(row.sortOrder || 0); body.rowColor = row.rowColor || "NONE";
         if (row.id) body.expectedUpdatedAt = row.updatedAt;
+        if(row.id)body=selectionDelta(body,original.current.get(row._key) || {});
         const attempt = attempts.current.start(row, body);
         try {
-          for(const column of columns.filter(column=>(column.type || column.fallbackType) && !collectionKeys.has(column.key))){const issue=fieldValueError({...column,type:column.type || column.fallbackType},column.custom?attempt.body.extraFields?.[column.key]:imageKeys.has(column.key)?JSON.stringify(attempt.body[column.key] || []):attempt.body[column.key]);if(issue)throw Object.assign(new Error(column.label+"："+issue),{status:400});}
-          const colors = new Set(splitTags(attempt.body.color));
-          if (attempt.body.images.some((image: SelectionImage) => image.color && !colors.has(image.color))) throw Object.assign(new Error("图片颜色必须来自颜色字段"), { status: 400 });
+          for(const column of columns.filter(column=>(column.type || column.fallbackType) && !collectionKeys.has(column.key) && (column.custom?column.key in (attempt.body.extraFields || {}):column.key in attempt.body))){const issue=fieldValueError({...column,type:column.type || column.fallbackType},column.custom?attempt.body.extraFields?.[column.key]:imageKeys.has(column.key)?JSON.stringify(attempt.body[column.key] || []):attempt.body[column.key]);if(issue)throw Object.assign(new Error(column.label+"："+issue),{status:400});}
+          const colors = new Set(splitTags(attempt.sent.color));
+          if ((attempt.body.images || []).some((image: SelectionImage) => image.color && !colors.has(image.color)) && readableSelectionCell(attempt.sent,"color")) throw Object.assign(new Error("图片颜色必须来自颜色字段"), { status: 400 });
           for (const key of moneyKeys) if (attempt.body[key] && !/^\d+(\.\d{1,2})?$/.test(String(attempt.body[key]))) throw Object.assign(new Error("金额最多两位小数且不能为负数"), { status: 400 });
           const result = await api(attempt.sent.id ? `/style-selections/${attempt.sent.id}` : "/style-selections", attempt.sent.id ? "PATCH" : "POST", attempt.body, attempt.key);
           const saved = { ...attempt.sent, ...normalizeSelection(result.data), _key: row._key };
@@ -630,7 +643,7 @@ export function StyleSelectionsPage() {
   const renderCell = (row: Row, column: Column) => {
     const observers = row.id ? remoteCells.get(cellId(String(row.id), column.key)) || [] : [];
     const observerNames = observers.map(person => person.displayName || "协作者").join("、");
-    const disabled = !canEdit || collectionKeys.has(column.key), error = errors[`${row._key}:${column.key}`] || errors[`${row._key}:save`], selected = selectedCells.has(cellId(row._key, column.key));
+    const disabled = !canEdit || !editableSelectionCell(row,column.key) || systemField(column) || collectionKeys.has(column.key), error = errors[`${row._key}:${column.key}`] || errors[`${row._key}:save`], selected = selectedCells.has(cellId(row._key, column.key));
     const duplicateCount = column.key === "xutiStyleNo" ? repeatedStyles.get(selectionStyleKey(row.xutiStyleNo)) || 0 : 0;
     const common = { "data-selection-row": row._key, "data-selection-column": column.key, "data-selection-edges": cellEdges(selectedCells,row._key,column.key), "data-copy-edges": cellEdges(copiedCells,row._key,column.key), "data-duplicate-count": duplicateCount || undefined, tabIndex: 0, onDoubleClick: () => { selectionDrag.stop(); setCellTextEditing(true); }, onFocusCapture: () => { setCellAnchor({ rowKey: row._key, columnKey: column.key }); if (!selectedCells.has(cellId(row._key, column.key))) setSelectedCells(new Set([cellId(row._key, column.key)])); }, className: `${error ? "selection-cell-error " : ""}${duplicateCount ? "selection-cell-duplicate " : ""}${selected ? "selection-cell-active" : ""}${copiedCells.has(cellId(row._key, column.key)) ? " selection-cell-copied" : ""}`, title: error || (duplicateCount ? `序缇款号重复，共 ${duplicateCount} 行` : undefined), onMouseDown: (event: React.MouseEvent<HTMLElement>) => { if (event.button === 0) cellMouseDown(event, row._key, column.key); else if (event.button === 2) { event.preventDefault(); if (!selected) { setSelectedCells(new Set([cellId(row._key, column.key)])); setCellAnchor({ rowKey: row._key, columnKey: column.key }); } } }, onDragStart: (event: React.DragEvent) => { if (selectingCells) event.preventDefault(); }, onMouseEnter: () => cellMouseEnter(row._key, column.key), onPaste: (event: ClipboardEvent<HTMLTableCellElement>) => pasteCells(event, row._key, column.key) };
     const openFormat = () => {
@@ -642,7 +655,7 @@ export function StyleSelectionsPage() {
     const cell = (content: React.ReactNode) => <Dropdown key={column.key} trigger={["contextMenu"]} menu={{ items: [...(hasImage ? [
       ...imageContextItems,
       { type: "divider" as const },
-    ] : []), { key: "format", label: "设置单元格格式", icon: <SettingOutlined />, disabled: !canEdit }], onClick: ({ key }) => {
+    ] : []), { key: "format", label: "设置单元格格式", icon: <SettingOutlined />, disabled: disabled }], onClick: ({ key }) => {
       if (key === "format") { openFormat(); return; }
       const image = contextImage.current;
       if (!image) return message.error("未找到当前图片，请重新右键单元格");
@@ -652,7 +665,9 @@ export function StyleSelectionsPage() {
     } }}><td {...common} onContextMenu={event => {
       const summary = event.currentTarget.querySelector<HTMLElement>("[data-selection-image-url]");
       contextImage.current = summary?.dataset.selectionImageUrl ? { url: summary.dataset.selectionImageUrl, name: `${row.xutiStyleNo || row.supplierStyleNo || "选款"}-${column.label}-${summary.dataset.selectionImageIndex || "1"}` } : null;
-    }} data-vertical-align={row.cellVerticalAlignments?.[column.key] || "middle"} data-text-color={row.cellTextColors?.[column.key]} style={{ color: row.cellTextColors?.[column.key], textAlign: row.cellAlignments?.[column.key] || "left", backgroundColor: colorOptions.find(option => option.value === (row.cellColors?.[column.key] || row.rowColor))?.color }}><div className="selection-cell-content">{content}</div>{!!observers.length && <span className="selection-remote-cell" style={{ borderColor: collaboratorColor(String(observers[0].userId)) }} aria-label={`${observerNames}正在选中此单元格`}><span className="selection-remote-names" style={{ backgroundColor: collaboratorColor(String(observers[0].userId)) }}>{observerNames}</span></span>}</td></Dropdown>;
+    }} data-cell-access={row.cellAccess?.[column.key] || "edit"} data-vertical-align={row.cellVerticalAlignments?.[column.key] || "middle"} data-text-color={row.cellTextColors?.[column.key]} style={{ color: row.cellTextColors?.[column.key], textAlign: row.cellAlignments?.[column.key] || "left", backgroundColor: colorOptions.find(option => option.value === (row.cellColors?.[column.key] || row.rowColor))?.color }}><div className="selection-cell-content">{content}</div>{!!observers.length && <span className="selection-remote-cell" style={{ borderColor: collaboratorColor(String(observers[0].userId)) }} aria-label={`${observerNames}正在选中此单元格`}><span className="selection-remote-names" style={{ backgroundColor: collaboratorColor(String(observers[0].userId)) }}>{observerNames}</span></span>}</td></Dropdown>;
+    if(!readableSelectionCell(row,column.key))return cell(<span className="selection-hidden-value" aria-label="受保护内容">••••</span>);
+    if(systemField(column))return cell(<span aria-label={column.label} title="系统自动生成，不可手动编辑">{selectionSystemValue(row,column) || (row.id?"未记录":"保存后生成")}</span>);
     if(column.custom && column.type==="image")return cell(<ImageCell field={column} mobileId={row.id && sameRow(row,original.current.get(row._key) || {})?String(row.id):undefined} images={fieldImages(valueAt(row,column))} colors={splitTags(row.color)} disabled={disabled} onChange={images=>update(row._key,column,JSON.stringify(images))}/>);
     if(column.type==="tags"){const tags=orderedFieldTags(column,valueAt(row,column));return cell(<div className="selection-custom-tags">{tags.length?tags.map(tag=><Tag key={tag} color={{...defaultTagConfig,...column.tagConfig}.color}>{tag}</Tag>):<span className="selection-tag-empty">+ {column.label}</span>}</div>);}
     if(column.type && !imageKeys.has(column.key) && !collectionKeys.has(column.key))return cell(<SelectionFieldInput field={column} value={String(valueAt(row,column) ?? "")} disabled={disabled} onChange={value=>update(row._key,column,value)}/>);
@@ -674,14 +689,14 @@ export function StyleSelectionsPage() {
     const field = vertical ? "cellVerticalAlignments" : "cellAlignments";
     if (!canEdit || !selectedCells.size) return;
     setRows(current => current.map(row => {
-      const selected = activeColumns.filter(column => selectedCells.has(cellId(row._key, column.key)));
+      const selected = activeColumns.filter(column => selectedCells.has(cellId(row._key, column.key)) && editableSelectionCell(row,column.key));
       return selected.length ? { ...row, [field]: { ...(row[field] || {}), ...Object.fromEntries(selected.map(column => [column.key, alignment])) } } : row;
     }));
   };
   const applyTextColor = (color: string) => {
     if (!canEdit || !selectedCells.size) return;
     setRows(current => current.map(row => {
-      const selected = activeColumns.filter(column => selectedCells.has(cellId(row._key, column.key)));
+      const selected = activeColumns.filter(column => selectedCells.has(cellId(row._key, column.key)) && editableSelectionCell(row,column.key));
       if (!selected.length) return row;
       const cellTextColors = { ...(row.cellTextColors || {}) };
       for (const column of selected) { if (color) cellTextColors[column.key] = color; else delete cellTextColors[column.key]; }
@@ -697,11 +712,12 @@ export function StyleSelectionsPage() {
     }
     setFollowShared(shared); setColumnFilters(view.filters); setColumnSort(view.sort); setFilterColumn(null);
   };
-  const columnFilterEditor = (column: Column) => <SelectionFilterPanel key={`${column.key}:${filterSession}`} column={column} rows={rows} view={{ filters: columnFilters, sort: columnSort }} shared={followShared && (sharedView.data?.data?.revision || 0) > 0} canShare={canEdit && !!sharedView.data?.data} onCancel={() => setFilterColumn(null)} onApply={applyView} />;
+  const columnFilterEditor = (column: Column) => <SelectionFilterPanel key={`${column.key}:${filterSession}`} column={column} rows={fieldViewRows} view={{ filters: columnFilters, sort: columnSort }} shared={followShared && (sharedView.data?.data?.revision || 0) > 0} canShare={canEdit && !!sharedView.data?.data} onCancel={() => setFilterColumn(null)} onApply={applyView} />;
   const editorRow = filteredRows.find((row) => row._key === cellAnchor?.rowKey);
   const editorColumn = activeColumns.find((column) => column.key === cellAnchor?.columnKey);
   const editorEnabled = !!editorRow && !!editorColumn && !imageKeys.has(editorColumn.key) && editorColumn.type!=="image";
-  const editorValue = editorEnabled ? String(valueAt(editorRow!, editorColumn!) ?? "") : "";
+  const editorCanEdit=canEdit && !!editorRow && !!editorColumn && !systemField(editorColumn) && editableSelectionCell(editorRow,editorColumn.key);
+  const editorValue = editorEnabled ? readableSelectionCell(editorRow!,editorColumn!.key)?String(valueAt(editorRow!, editorColumn!) ?? ""):"••••" : "";
   const editCurrent = (value: string) => { if (canEdit && editorEnabled) update(editorRow!._key, editorColumn!, value); };
   const editorError = editorRow && editorColumn ? errors[`${editorRow._key}:${editorColumn.key}`] || errors[`${editorRow._key}:save`] : undefined;
   const editorDuplicateCount = editorColumn?.key === "xutiStyleNo" ? repeatedStyles.get(selectionStyleKey(editorRow?.xutiStyleNo)) || 0 : 0;
@@ -709,10 +725,10 @@ export function StyleSelectionsPage() {
   const editor = <div className="selection-editor-bar" role="group" aria-label="单元格编辑栏">
     <span className="selection-editor-label" title={editorColumn?.label}>{editorRow && editorColumn ? `${rows.indexOf(editorRow) + 1} · ${editorColumn.label}` : "单元格"}</span>
     {!!editorDuplicateCount && <span className="selection-duplicate-note" role="status">重复 {editorDuplicateCount} 行</span>}
-    {editorColumn?.type && editorColumn.type!=="image" && !collectionKeys.has(editorColumn.key) ? <SelectionFieldInput field={editorColumn} value={editorValue} disabled={!canEdit} onChange={editCurrent}/> : editorColumn?.custom && editorColumn.type==="image" ? <span>点击图片单元格管理图片</span> : editorColumn?.key === "registrationBatch" && editorRow ? <input aria-label="编辑登记批次" type="date" value={editorValue.slice(0, 10)} disabled={!canEdit} onChange={(event) => editCurrent(event.target.value)} /> :
-      editorColumn?.key === "sizeRange" && editorRow ? <SizeEditor key={editorRow._key} value={editorValue} disabled={!canEdit} onChange={editCurrent} /> :
-      editorColumn?.key === "color" && editorRow ? <Select aria-label={`编辑${editorColumn.label}`} mode="tags" className="selection-editor-tags" value={splitTags(editorValue)} disabled={!canEdit} tokenSeparators={["/"]} placeholder="输入后按 Enter 添加，多项用 / 分隔" options={colorSuggestions.map(value => ({ value, label: value }))} onChange={(value) => editCurrent(joinTags(value))} /> :
-      <Input.TextArea aria-label="编辑当前单元格" autoSize={{ minRows: 1, maxRows: 3 }} value={editorValue} disabled={!editorEnabled} readOnly={!canEdit || !!editorColumn && collectionKeys.has(editorColumn.key)} placeholder={editorColumn && imageKeys.has(editorColumn.key) ? "图片请在单元格内上传或查看" : "点击单元格，在此编辑内容"} onChange={(event) => editCurrent(event.target.value)} />}
+    {editorColumn?.type && editorColumn.type!=="image" && !collectionKeys.has(editorColumn.key) ? <SelectionFieldInput field={editorColumn} value={editorValue} disabled={!editorCanEdit} onChange={editCurrent}/> : editorColumn?.custom && editorColumn.type==="image" ? <span>点击图片单元格管理图片</span> : editorColumn?.key === "registrationBatch" && editorRow ? <input aria-label="编辑登记批次" type="date" value={editorValue.slice(0, 10)} disabled={!editorCanEdit} onChange={(event) => editCurrent(event.target.value)} /> :
+      editorColumn?.key === "sizeRange" && editorRow ? <SizeEditor key={editorRow._key} value={editorValue} disabled={!editorCanEdit} onChange={editCurrent} /> :
+      editorColumn?.key === "color" && editorRow ? <Select aria-label={`编辑${editorColumn.label}`} mode="tags" className="selection-editor-tags" value={splitTags(editorValue)} disabled={!editorCanEdit} tokenSeparators={["/"]} placeholder="输入后按 Enter 添加，多项用 / 分隔" options={colorSuggestions.map(value => ({ value, label: value }))} onChange={(value) => editCurrent(joinTags(value))} /> :
+      <Input.TextArea aria-label="编辑当前单元格" autoSize={{ minRows: 1, maxRows: 3 }} value={editorValue} disabled={!editorEnabled} readOnly={!editorCanEdit || !!editorColumn && collectionKeys.has(editorColumn.key)} placeholder={editorColumn && imageKeys.has(editorColumn.key) ? "图片请在单元格内上传或查看" : "点击单元格，在此编辑内容"} onChange={(event) => editCurrent(event.target.value)} />}
     {editorError && <span className="selection-editor-error" role="status">{editorError}</span>}
   </div>;
 
@@ -720,7 +736,7 @@ export function StyleSelectionsPage() {
   const applyFormat = (patch: FormatPatch) => {
     if (!canEdit || !formatTarget) return;
     setRows(current => current.map(row => {
-      const targets = columns.filter(column => formatTarget.ids.has(cellId(row._key, column.key)));
+      const targets = columns.filter(column => formatTarget.ids.has(cellId(row._key, column.key)) && editableSelectionCell(row,column.key));
       if (!targets.length) return row;
       const next = { ...row };
       for (const [field, value] of Object.entries(patch)) {
@@ -737,9 +753,9 @@ export function StyleSelectionsPage() {
   return <>{formatTarget && <SelectionFormatModal count={formatTarget.ids.size} sample={formatTarget.sample} initial={formatTarget.initial} onCancel={() => setFormatTarget(null)} onApply={applyFormat} />}<Header title="选款登记" subtitle="集中登记候选款的图片、款号、供应商、颜色、材质与定价信息。" extra={<div className="selection-header-search"><Select aria-label="搜索方式" className="selection-search-mode" value={searchMode} options={[{value:"exact",label:"款号精确"},{value:"keyword",label:"关键词"}]} onChange={changeSearchMode}/><Input.TextArea className="selection-exact-search" aria-label={searchMode==="exact"?"序缇款号精确搜索":"关键词搜索"} placeholder={searchMode==="exact"?"多个款号用中英文逗号或换行分隔":"搜索批次、款号、供应商、颜色、材质"} allowClear autoSize={{minRows:1,maxRows:4}} maxLength={searchMode==="keyword"?100:undefined} value={searchText} onChange={event=>setSearchText(event.target.value)} /></div>} />
     <Card className="selection-card"><div className="selection-toolbar" aria-label="选款登记表格工具栏"><Space wrap size={4}>
       {canEdit && <SelectionCollections selectedRows={filteredRows.filter(row => selectedRows.includes(row._key))} blocked={!!dirtyCount || saving || deleting}/>} {canEdit && <SelectionPhotoQr />}<Button type="link" icon={<PlusOutlined />} disabled={!canEdit} onClick={() => add()}>添加一行</Button><Button type="link" danger icon={<DeleteOutlined />} disabled={!canEdit || !selectedRows.length || saving} loading={deleting} onClick={deleteRows}>删除行</Button>
-      <SelectionFieldManager columns={columns} visible={visible} canEdit={canEdit} onReset={()=>setColumns(current=>resetFieldTypes(current))} onVisible={key=>setVisible(current=>current.includes(key)?current.filter(item=>item!==key):[...current,key])} onMove={moveColumn} onSave={field=>{if(imageKeys.has(field.key) && rows.some(row=>(row[field.key]?.length || 0)>(field.imageConfig?.max || 30))){message.error("已有图片超过新上限，请先移除部分图片");return false;}if(field.type){const issue=rows.map(row=>fieldValueError(field,imageKeys.has(field.key)?JSON.stringify(row[field.key] || []):valueAt(row,field))).find(Boolean);if(issue){message.error("现有内容与设置不兼容："+issue);return false;}}const exists=columns.some(column=>column.key===field.key);setColumns(current=>exists?current.map(column=>column.key===field.key?field:column):[...current,field]);if(!exists)setVisible(current=>[...current,field.key]);}}/>
-      <Select className="selection-tool-select" value={groupBy} suffixIcon={<TeamOutlined />} options={[{ value: "none", label: "不分组" }, { value: "batch", label: "按登记批次分组" }, { value: "supplier", label: "按供应商编码分组" }]} onChange={setGroupBy} />
-      <Select className="selection-tool-select" value={columnSort ? "column" : `${sort}:${direction}`} suffixIcon={<SortAscendingOutlined />} options={[...(columnSort ? [{ value: "column", label: `${columns.find(column => column.key === columnSort.key)?.label || "当前列"}${columnSort.direction === "asc" ? "升序" : "降序"}` }] : []),{ value: "sortOrder:asc", label: "手动排序" }, { value: "updatedAt:desc", label: "最近修改" }, { value: "createdAt:desc", label: "最新登记" }, { value: "registrationBatch:desc", label: "登记批次" }]} onChange={(value) => { if (value === "column") return; setColumnSort(null); setFollowShared(false); const [nextSort, nextDirection] = value.split(":"); setSort(nextSort); setDirection(nextDirection as "asc" | "desc"); }} />
+      <SelectionFieldManager columns={columns} visible={visible} canEdit={canEdit} onReset={()=>setColumns(current=>resetFieldTypes(current))} onVisible={key=>setVisible(current=>current.includes(key)?current.filter(item=>item!==key):[...current,key])} onMove={moveColumn} onSave={field=>{if(imageKeys.has(field.key) && rows.some(row=>(row[field.key]?.length || 0)>(field.imageConfig?.max || 30))){message.error("已有图片超过新上限，请先移除部分图片");return false;}if(field.type && !systemField(field)){const issue=rows.map(row=>fieldValueError(field,imageKeys.has(field.key)?JSON.stringify(row[field.key] || []):valueAt(row,field))).find(Boolean);if(issue){message.error("现有内容与设置不兼容："+issue);return false;}}const exists=columns.some(column=>column.key===field.key);setColumns(current=>exists?current.map(column=>column.key===field.key?field:column):[...current,field]);if(!exists)setVisible(current=>[...current,field.key]);}}/>
+      <SelectionProtectionControl rows={rows} columns={columns} selectedCells={selectedCells} selectedRows={selectedRows} currentRow={editorRow} blocked={!!dirtyCount || saving || deleting} onRefresh={()=>{appliedSnapshot.current="";void data.refetch();}}/>
+      <SelectionOrganization columns={columns} group={groupBy} sort={columnSort?`field:${columnSort.key}:${columnSort.direction}`:`${sort}:${direction}`} onGroup={setGroupBy} onSort={value=>{setFollowShared(false);if(value.startsWith("field:")){setColumnSort({key:value.slice(6,value.lastIndexOf(":")),direction:value.endsWith(":asc")?"asc":"desc"});return;}setColumnSort(null);const [nextSort,nextDirection]=value.split(":");setSort(nextSort);setDirection(nextDirection as "asc"|"desc");}}/>
       <Select className="selection-tool-select" value={rowHeight} suffixIcon={<UnorderedListOutlined />} options={[{ value: "compact", label: "紧凑行高" }, { value: "normal", label: "标准行高" }, { value: "loose", label: "宽松行高" }, { value: "extra", label: "超宽行高" }]} onChange={setRowHeight} />
 
     <Space.Compact>{([{ value: "left", label: "左对齐", icon: <AlignLeftOutlined /> }, { value: "center", label: "居中对齐", icon: <AlignCenterOutlined /> }, { value: "right", label: "右对齐", icon: <AlignRightOutlined /> }] as const).map(item => <Tooltip key={item.value} title={item.label}><Button aria-label={item.label} disabled={!canEdit || !selectedCells.size} icon={item.icon} onClick={() => applyAlignment(item.value)} /></Tooltip>)}</Space.Compact>
@@ -757,7 +773,7 @@ export function StyleSelectionsPage() {
         if (event.key === "Escape") { setCopiedCells(new Set()); setCellTextEditing(false); return; }
         if (event.key === "Delete" && (!cellTextEditing || selectedCells.size > 1)) {
           event.preventDefault();
-          if (canEdit && selectedCells.size) { setRows(current => clearSelectionCells(current, selectedCells)); setCopiedCells(new Set()); }
+          if (canEdit && selectedCells.size) { const editable=new Set([...selectedCells].filter(id=>!systemField(columns.find(column=>column.key===id.split("::")[1]) || {key:"",label:"",width:0})));setRows(current => clearSelectionCells(current, editable)); setCopiedCells(new Set()); }
           return;
         }
         if (event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) setCellTextEditing(true);
