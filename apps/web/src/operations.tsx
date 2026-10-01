@@ -134,7 +134,8 @@ function InventoryBalances() {
     { title: "款号", dataIndex: "styleNo", width: 140 },
     { title: "货号", dataIndex: "articleNo", render: (v) => v || "—" },
     {
-      title: "SKU / 条码",
+      title: "商品编码",
+      dataIndex: "skuCode",
       render: (_, r) => (
         <>
           <strong>{r.productName}</strong>

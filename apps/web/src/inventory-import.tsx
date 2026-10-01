@@ -306,7 +306,23 @@ export function InventoryImport({
             try {
               await downloadWorkbook(
                 "库存资料导入模板",
-                inventoryImportFields.map((f) => ({
+                [
+                  { key: "mainImageUrl", label: "图片" },
+                  { key: "styleNo", label: "款号" },
+                  ...[
+                    "articleNo",
+                    "skuCode",
+                    "colorName",
+                    "sizeName",
+                    "physicalQty",
+                    "dailySales",
+                    "returnRatePercent",
+                    "estimatedReturns",
+                    "warehouse",
+                  ].map((key) =>
+                    inventoryImportFields.find((f) => f.key === key)!,
+                  ),
+                ].map((f) => ({
                   key: f.key,
                   label: f.label,
                   required: "required" in f && f.required,
