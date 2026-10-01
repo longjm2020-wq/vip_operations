@@ -1,12 +1,23 @@
 import { expect, test, type Page } from "@playwright/test";
 
-async function fixture(page: Page, readonly = false) {
+function blankRows() {
+  return Array.from({ length: 3 }, (_, index) => ({
+    id: String(300 + index),
+    sortOrder: index + 1,
+    extraFields: {},
+    images: [],
+    labelImages: [],
+    updatedAt: "2026-10-01T00:00:00Z",
+  }));
+}
+async function fixture(page: Page, readonly = false, blank = false) {
   const tables = [
     {
       id: "1",
       name: "已有空表",
       createdAt: "2026-10-01T00:00:00Z",
       createdByName: "管理员",
+      initialLayout: blank ? "blank" : "selection",
     },
   ];
   const records: Record<string, any[]> = {
@@ -19,7 +30,7 @@ async function fixture(page: Page, readonly = false) {
         updatedAt: "2026-10-01T00:00:00Z",
       },
     ],
-    "1": [],
+    "1": blank ? blankRows() : [],
   };
   const writes: { scope: string; path: string }[] = [];
   let serial = 200,
@@ -56,9 +67,10 @@ async function fixture(page: Page, readonly = false) {
           ...tables[0],
           id: String(tables.length + 1),
           name: route.request().postDataJSON().name,
+          initialLayout: "blank",
         };
         tables.push(table);
-        records[table.id] = [];
+        records[table.id] = blankRows();
         data = table;
       } else data = tables;
     }
@@ -126,7 +138,7 @@ async function fixture(page: Page, readonly = false) {
   return { records, writes };
 }
 
-test("create from project management opens an empty full-featured table and saves independently", async ({
+test("new tables start with one text field and three blank records, save independently and add rows inline", async ({
   page,
 }) => {
   const { records, writes } = await fixture(page);
@@ -141,30 +153,57 @@ test("create from project management opens an empty full-featured table and save
   await expect(
     page.getByRole("heading", { name: "秋季协作表", exact: true }),
   ).toBeVisible();
-  await expect(page.locator("tbody tr[data-selection-row]")).toHaveCount(0);
+  await expect(page.locator("tbody tr[data-selection-row]")).toHaveCount(3);
   for (const name of ["字段管理", "导入", "导出", "保护区域", "手机拍图"])
     await expect(
       page.getByRole("button", { name: new RegExp(name) }).first(),
     ).toBeVisible();
   await expect(
-    page.getByRole("columnheader", { name: "选择整列：材质", exact: true }),
+    page.getByRole("columnheader", { name: "选择整列：文本", exact: true }),
   ).toBeVisible();
   await expect(
     page.getByRole("columnheader", {
       name: "选择整列：供应商编码",
       exact: true,
     }),
-  ).toHaveCount(1);
-  await page.getByRole("button", { name: /添加一行$/ }).click();
-  await expect.poll(() => records["2"].length).toBe(1);
-  await page.locator('td[data-selection-column="xutiStyleNo"]').click();
-  await page.getByLabel("编辑当前单元格", { exact: true }).fill("NEW-STYLE");
-  await expect.poll(() => records["2"][0].xutiStyleNo).toBe("NEW-STYLE");
+  ).toHaveCount(0);
+  await expect(page.locator("thead th[data-selection-column]")).toHaveCount(1);
+  await page.screenshot({ path: ".local/project-table-blank.png" });
+  await page.locator('td[data-selection-column="custom:text"]').first().click();
+  await page
+    .getByRole("group", { name: "单元格编辑栏", exact: true })
+    .getByLabel("文本", { exact: true })
+    .fill("NEW-STYLE");
+  await expect
+    .poll(() => records["2"][0].extraFields["custom:text"])
+    .toBe("NEW-STYLE");
   expect(writes.every((write) => write.scope === "2")).toBe(true);
   await page.reload();
   await expect(
-    page.locator('td[data-selection-column="xutiStyleNo"]'),
-  ).toHaveText("NEW-STYLE");
+    page
+      .locator('td[data-selection-column="custom:text"]')
+      .first()
+      .getByRole("textbox"),
+  ).toHaveValue("NEW-STYLE");
+  await expect(page.locator("tbody tr[data-selection-row]")).toHaveCount(3);
+  await page
+    .getByRole("textbox", { name: "搜索选款", exact: true })
+    .fill("new-st");
+  await expect(page.locator("tbody tr[data-selection-row]")).toHaveCount(1);
+  await page.getByRole("button", { name: "字段管理", exact: true }).click();
+  await page.getByRole("button", { name: "隐藏文本", exact: true }).click();
+  await expect(page.locator("tbody tr[data-selection-row]")).toHaveCount(0);
+  await page.getByRole("button", { name: "显示文本", exact: true }).click();
+  await expect(page.locator("tbody tr[data-selection-row]")).toHaveCount(1);
+  await page.getByRole("button", { name: "字段管理", exact: true }).click();
+  await page.getByRole("textbox", { name: "搜索选款", exact: true }).fill("");
+  await page
+    .locator(".selection-add-record")
+    .getByRole("button", { name: "添加一行", exact: true })
+    .click();
+  await expect.poll(() => records["2"].length).toBe(4);
+  await page.reload();
+  await expect(page.locator("tbody tr[data-selection-row]")).toHaveCount(4);
   await page.goto("/style-selections");
   await expect(
     page.locator('td[data-selection-column="xutiStyleNo"]'),
@@ -206,14 +245,14 @@ test("field settings persist per table and do not leak to another table or origi
   await page.getByLabel("表格名称", { exact: true }).fill("第二张表");
   await page.getByRole("button", { name: "创建空表", exact: true }).click();
   await expect(
-    page.getByRole("columnheader", { name: "选择整列：材质", exact: true }),
+    page.getByRole("columnheader", { name: "选择整列：文本", exact: true }),
   ).toHaveCount(1);
 });
 
 test("read-only users can open tables but cannot create or add rows", async ({
   page,
 }) => {
-  await fixture(page, true);
+  await fixture(page, true, true);
   await page.goto("/project-tables");
   await expect(
     page.getByRole("button", { name: "新建表格", exact: true }),
@@ -222,7 +261,48 @@ test("read-only users can open tables but cannot create or add rows", async ({
   await expect(
     page.getByRole("heading", { name: "已有空表", exact: true }),
   ).toBeVisible();
-  await expect(page.getByRole("button", { name: /添加一行$/ })).toBeDisabled();
+  await expect(
+    page.getByRole("button", { name: /添加一行$/ }).first(),
+  ).toBeDisabled();
+  await expect(
+    page.locator(".selection-add-record").getByRole("button"),
+  ).toBeDisabled();
+  await expect(
+    page.locator(".selection-add-field").getByRole("button"),
+  ).toBeDisabled();
+  await expect(page.locator("tbody tr[data-selection-row]")).toHaveCount(3);
+});
+
+test("inline field creation preserves the minimal layout and persists settings", async ({
+  page,
+}) => {
+  await fixture(page, false, true);
+  await page.goto("/project-tables/1");
+  await page
+    .locator(".selection-add-field")
+    .getByRole("button", { name: "添加字段", exact: true })
+    .click();
+  await page.getByLabel("字段名称", { exact: true }).fill("备注");
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "保存", exact: true })
+    .click();
+  await expect(page.locator("thead th[data-selection-column]")).toHaveCount(2);
+  await expect(
+    page.getByRole("columnheader", { name: "选择整列：备注", exact: true }),
+  ).toBeVisible();
+  await page.reload();
+  await expect(page.locator("thead th[data-selection-column]")).toHaveCount(2);
+  await page.getByRole("button", { name: "字段管理", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "编辑字段文本", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "编辑字段备注", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "编辑字段序缇款号", exact: true }),
+  ).toHaveCount(0);
 });
 
 test("mobile QR links and changing rows retain the originating table", async ({

@@ -137,7 +137,7 @@ export function ProjectTablesPage() {
             <Input autoFocus maxLength={100} placeholder="请输入表格名称" />
           </Form.Item>
           <Typography.Paragraph type="secondary">
-            新表保留选款登记的默认字段，初始没有数据。字段类型及其他设置可在表内配置。
+            新表初始包含一个「文本」字段和三行空白记录。可通过「＋」添加字段或行，并在表内配置字段类型及其他功能。
           </Typography.Paragraph>
           <Button block type="primary" htmlType="submit" loading={busy}>
             创建空表
@@ -163,7 +163,12 @@ export function ProjectTablePage() {
       <Space style={{ marginBottom: 12 }}>
         <Link to="/project-tables">返回表格列表</Link>
       </Space>
-      <SelectionWorkspace key={id} tableId={id} title={table.data.data.name}>
+      <SelectionWorkspace
+        key={id}
+        tableId={id}
+        title={table.data.data.name}
+        blankLayout={table.data.data.initialLayout === "blank"}
+      >
         <StyleSelectionsPage />
       </SelectionWorkspace>
     </>

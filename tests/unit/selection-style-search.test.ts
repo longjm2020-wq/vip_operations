@@ -51,3 +51,25 @@ it("matches partial field values, multiple queries and literal punctuation witho
     true,
   );
 });
+
+it("searches chosen custom fields while honoring visibility and regional protection", () => {
+  const row = {
+    extraFields: { "custom:text": "秋季样品", "custom:removed": "私密备注" },
+  };
+  expect(matchesSelectionSearch(row, ["秋季"], ["custom:text"])).toBe(true);
+  expect(matchesSelectionSearch(row, ["私密"], ["custom:text"])).toBe(false);
+  expect(
+    matchesSelectionSearch(
+      { ...row, cellAccess: { "custom:text": "deny" } },
+      ["秋季"],
+      ["custom:text"],
+    ),
+  ).toBe(false);
+  expect(
+    matchesSelectionSearch(
+      { ...row, hiddenCells: ["custom:text"] },
+      ["秋季"],
+      ["custom:text"],
+    ),
+  ).toBe(false);
+});

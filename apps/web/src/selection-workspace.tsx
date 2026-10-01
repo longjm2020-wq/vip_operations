@@ -11,6 +11,7 @@ import { api, queryClient } from "./api";
 type Workspace = {
   tableId?: string;
   title?: string;
+  blankLayout?: boolean;
   api: typeof api;
   queryClient: QueryClient;
   storageKey: (key: string) => string;
@@ -25,10 +26,12 @@ export const useSelectionWorkspace = () => useContext(WorkspaceContext);
 export function SelectionWorkspace({
   tableId,
   title,
+  blankLayout = false,
   children,
 }: {
   tableId?: string;
   title?: string;
+  blankLayout?: boolean;
   children: ReactNode;
 }) {
   const [client] = useState(() =>
@@ -45,6 +48,7 @@ export function SelectionWorkspace({
     () => ({
       tableId,
       title,
+      blankLayout,
       queryClient: client,
       api: (path, ...args) =>
         api(
@@ -55,7 +59,7 @@ export function SelectionWorkspace({
         ),
       storageKey: (key) => (tableId ? `project-table:${tableId}:${key}` : key),
     }),
-    [tableId, title, client],
+    [tableId, title, blankLayout, client],
   );
   return (
     <WorkspaceContext.Provider value={workspace}>

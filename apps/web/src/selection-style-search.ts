@@ -20,6 +20,7 @@ export function parseSelectionSearch(value: string): string[] {
 export function matchesSelectionSearch(
   row: Record<string, any>,
   terms: string[],
+  customKeys: string[] = [],
 ): boolean {
   if (!terms.length) return true;
   const values = [
@@ -36,5 +37,13 @@ export function matchesSelectionSearch(
         row.cellAccess?.[key] !== "deny" && !row.hiddenCells?.includes(key),
     )
     .map((key) => String(row[key] ?? "").toLocaleLowerCase());
+  values.push(
+    ...customKeys
+      .filter(
+        (key) =>
+          row.cellAccess?.[key] !== "deny" && !row.hiddenCells?.includes(key),
+      )
+      .map((key) => String(row.extraFields?.[key] ?? "").toLocaleLowerCase()),
+  );
   return terms.some((term) => values.some((value) => value.includes(term)));
 }

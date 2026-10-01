@@ -101,12 +101,41 @@ try {
   const b = await ok("/project-tables", "POST", { name: "项目 B" });
   const path = (table: any, endpoint = "") =>
     `/style-selections${endpoint}${endpoint.includes("?") ? "&" : "?"}tableId=${table.id}`;
-  assert.equal((await ok(path(a))).length, 0);
+  const initialA = await ok(path(a)),
+    initialB = await ok(path(b));
+  assert.equal(a.initialLayout, "blank");
+  assert.equal(aAgain.initialLayout, "blank");
+  for (const initial of [initialA, initialB]) {
+    assert.equal(initial.length, 3);
+    assert.deepEqual(
+      initial
+        .map((row: any) => row.sortOrder)
+        .sort((a: number, b: number) => a - b),
+      [1, 2, 3],
+    );
+    assert.ok(
+      initial.every(
+        (row: any) =>
+          !row.xutiStyleNo &&
+          !row.material &&
+          !row.images.length &&
+          Object.keys(row.extraFields).length === 0,
+      ),
+    );
+  }
+  assert.equal(
+    new Set([...initialA, ...initialB].map((row) => row.id)).size,
+    6,
+  );
+  // Opening and creation retries cannot seed duplicates; deleting cannot reseed.
+  for (const row of initialB) await ok(path(b, "/" + row.id), "DELETE");
+  assert.equal((await ok(path(b))).length, 0);
+  await ok(`/project-tables/${b.id}`);
   assert.equal((await ok(path(b))).length, 0);
   assert.equal((await ok("/project-tables")).length, 2);
   assert.equal((await ok(`/project-tables/${a.id}`)).name, "项目 A");
   check(
-    "new tables are empty, named, discoverable and creation retries are idempotent",
+    "new tables start with three blank rows, creation retries are idempotent and empty tables never reseed",
   );
   const sharedKey = randomUUID();
   const first = await ok(
@@ -139,7 +168,10 @@ try {
     ok(path(a, "/sync"), "POST", {}),
     ok(path(b, "/sync"), "POST", {}),
   ]);
-  assert.equal(snapshots[0].data[0].material, "TABLE-A");
+  assert.equal(
+    snapshots[0].data.find((row: any) => row.id === first.id).material,
+    "TABLE-A",
+  );
   assert.equal(snapshots[1].data[0].material, "TABLE-B");
   const counts = await ok(path(a, "/style-counts"));
   assert.ok(JSON.stringify(counts).includes("SAME-STYLE"));

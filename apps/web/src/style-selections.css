@@ -52,6 +52,26 @@
   color: #46352a;
   font-size: 13px;
 }
+.selection-blank-sheet { padding: 16px; }
+.selection-blank-sheet table { border: 1px solid #d9d9d9; border-radius: 12px; overflow: hidden; }
+.selection-sheet.selection-blank-sheet thead th { height: 48px; background: #fff; color: #595959; font-weight: 400; }
+.selection-blank-sheet.row-compact td { height: 40px; }
+.selection-blank-sheet .selection-index { position: relative; left: 0 !important; width: 88px; color: #8c8c8c; }
+.selection-blank-sheet .selection-index .selection-row-reorder { display: none; }
+.selection-blank-row-check { display: none; position: absolute; inset: 0; align-items: center; justify-content: center; background: #fff; }
+.selection-blank-sheet .selection-index:hover .selection-blank-row-check, .selection-blank-sheet .selection-index:focus-within .selection-blank-row-check { display: flex; }
+.selection-blank-sheet .selection-index:hover .selection-row-number, .selection-blank-sheet .selection-index:focus-within .selection-row-number { visibility: hidden; }
+.selection-blank-sheet th.selection-add-field { padding: 0; text-align: center; }
+.selection-blank-sheet .selection-add-field .ant-btn, .selection-blank-sheet .selection-add-record .ant-btn { color: #8c8c8c; }
+.selection-blank-sheet .selection-add-field-space { border-bottom: 0; }
+.selection-blank-sheet .selection-add-field, .selection-blank-sheet .selection-add-field-space { border-right: 0; }
+.selection-blank-sheet .selection-add-record td { border-bottom: 0; text-align: center; }
+.selection-blank-sheet .selection-add-record td:last-child { border-right: 0; }
+.selection-blank-sheet .selection-column-filter-button { opacity: 0; }
+.selection-blank-sheet th:hover .selection-column-filter-button, .selection-blank-sheet th:focus-within .selection-column-filter-button { opacity: 1; }
+.selection-field-kind { margin-right: 8px; color: #8c8c8c; font-size: 18px; font-style: normal; }
+.selection-blank-hint { padding: 56px 24px; text-align: center; color: #999; }
+.selection-blank-sheet td .ant-input { border: 0; background: transparent; border-radius: 0; box-shadow: none; resize: none; }
 .selection-sheet th,
 .selection-sheet td {
   height: 50px;
