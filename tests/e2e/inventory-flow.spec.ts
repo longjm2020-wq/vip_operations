@@ -123,9 +123,10 @@ test("库存管理：发货核销、SKU 差异质检、进货仓入库与人工�
   expect(
     balance.data.find((r: any) => r.warehouseId === warehouse.id).physicalQty,
   ).toBe(2);
-  await page.getByRole("tab", { name: "SKU 资料" }).click();
-  await expect(page.getByRole("button", { name: /新建资料/ })).toBeVisible();
-  await page.getByRole("tab", { name: "库存明细", exact: true }).click();
+  await expect(page.getByRole("tab", { name: "SKU 资料" })).toHaveCount(0);
+  const downloadPromise = page.waitForEvent("download");
+  await page.getByRole("button", { name: "导出", exact: true }).click();
+  expect((await downloadPromise).suggestedFilename()).toBe("当前页数据.xlsx");
   await page.screenshot({
     path: ".local/inventory-management-preview.png",
     fullPage: true,

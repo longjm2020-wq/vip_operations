@@ -1,4 +1,4 @@
-import { Table } from "./data-table";
+import { Table, exportTableData } from "./data-table";
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -16,10 +16,17 @@ import {
   Space,
   Tabs,
   Tag,
+  type TableProps,
 } from "antd";
-import { PlusOutlined, ArrowLeftOutlined } from "@ant-design/icons";
+import {
+  PlusOutlined,
+  ArrowLeftOutlined,
+  ImportOutlined,
+  ExportOutlined,
+} from "@ant-design/icons";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api, queryClient } from "./api";
+import { MasterPage } from "./master";
 import {
   Header,
   Row,
@@ -34,7 +41,6 @@ import {
   amount,
   when,
 } from "./shared";
-import { MasterPage } from "./master";
 import { BatchEditor } from "./batch-editor";
 import { LineSheet, lineRule, purchaseFields } from "./line-sheet";
 import { Sheet } from "./sheet";
@@ -68,7 +74,6 @@ function useAction() {
   };
 }
 export function InventoryPage() {
-  const product = useCan("product.read");
   return (
     <>
       <Header
@@ -90,15 +95,6 @@ export function InventoryPage() {
           },
           { key: "staging", label: "进货仓待入库", children: <StagingPanel /> },
           { key: "transfers", label: "调拨订单", children: <TransfersPanel /> },
-          ...(product
-            ? [
-                {
-                  key: "skus",
-                  label: "SKU 资料",
-                  children: <MasterPage resource="skus" />,
-                },
-              ]
-            : []),
         ]}
       />
     </>
@@ -107,50 +103,129 @@ export function InventoryPage() {
 function InventoryBalances() {
   const [reference, setReference] = useState<Row>();
   const [batch, setBatch] = useState(false);
+  const { message } = App.useApp();
+  const [exporting, setExporting] = useState(false);
   const [search, setSearch] = useState(""),
-    [warehouse, setWarehouse] = useState<string>(),
-    [open, setOpen] = useState(false),
-    [key, setKey] = useState(crypto.randomUUID()),
-    [form] = Form.useForm();
+    [warehouse, setWarehouse] = useState<string>();
   const q = useList("/inventory", {
       ...(search ? { q: search } : {}),
       ...(warehouse ? { warehouseId: warehouse } : {}),
     }),
-    wh = useOptions("/warehouses"),
-    skus = useOptions("/skus");
-  const can = useCan("inventory.adjust"),
-    action = useAction();
+    wh = useOptions("/warehouses");
+  const can = useCan("inventory.adjust");
+  const columns: TableProps<Row>["columns"] = [
+    {
+      title: "图片",
+      dataIndex: "mainImageUrl",
+      width: 84,
+      render: (v) =>
+        v ? (
+          <img
+            src={v}
+            alt="商品图片"
+            style={{ width: 56, height: 66, objectFit: "contain" }}
+          />
+        ) : (
+          "—"
+        ),
+    },
+    { title: "款号", dataIndex: "styleNo", width: 140 },
+    { title: "货号", dataIndex: "articleNo", render: (v) => v || "—" },
+    {
+      title: "SKU / 条码",
+      render: (_, r) => (
+        <>
+          <strong>{r.productName}</strong>
+          <div className="secondary">
+            {r.skuCode}
+            {r.barcode ? " / " + r.barcode : ""}
+          </div>
+        </>
+      ),
+    },
+    {
+      title: "供应商款式编码",
+      dataIndex: "supplierStyleCode",
+      render: (v) => v || "—",
+    },
+    { title: "颜色", dataIndex: "colorName" },
+    { title: "尺码", dataIndex: "sizeName" },
+    { title: "仓库", dataIndex: "warehouseName" },
+    ...[
+      "physicalQty",
+      "inTransitQty",
+      "transferTransitQty",
+      "incomingQty",
+      "estimatedReturns",
+      "dailySales",
+    ].map((k, i) => ({
+      title: [
+        "在仓库存数",
+        "采购在途数",
+        "调拨在途数",
+        "进货仓库存",
+        "预估销退数",
+        "渠道日销参考",
+      ][i],
+      dataIndex: k,
+      render: (v: number) => v ?? "暂无数据",
+    })),
+    {
+      title: "退货率",
+      dataIndex: "returnRate",
+      render: (v) =>
+        v == null ? "暂无数据" : Number((Number(v) * 100).toFixed(4)) + "%",
+    },
+    {
+      title: "可售天数",
+      dataIndex: "coverageDays",
+      render: (v, r) =>
+        v == null
+          ? r.dailySales != null && Number(r.dailySales) === 0
+            ? "无日销"
+            : "暂无数据"
+          : v + "天",
+    },
+    {
+      title: "补货建议",
+      dataIndex: "replenishmentQty",
+      render: (v) => (v == null ? "暂无数据" : v + "件"),
+    },
+    {
+      title: "可售 / 锁定 / 次品",
+      render: (_, r) =>
+        `${r.availableQty} / ${r.reservedQty} / ${r.damagedQty}`,
+    },
+    {
+      title: "参考来源 / 日期",
+      render: (_, r) =>
+        r.sourceNote ? (
+          <>
+            {r.sourceNote}
+            <div className="secondary">
+              人工维护 · {r.referenceDate?.slice(0, 10)}
+            </div>
+          </>
+        ) : (
+          "未配置"
+        ),
+    },
+    {
+      title: "操作",
+      render: (_, r) => (
+        <Space>
+          <Link to={"/inventory/transactions?skuId=" + r.skuId}>库存流水</Link>
+          {can && (
+            <Button size="small" onClick={() => setReference(r)}>
+              参考值设置
+            </Button>
+          )}
+        </Space>
+      ),
+    },
+  ];
   return (
     <>
-      <Header
-        title="库存明细"
-        subtitle="按 SKU 与仓库查询库存，人工参考值注明渠道来源和日期。"
-        extra={
-          can && (
-            <Space>
-              <Button onClick={() => setBatch(true)}>
-                批量库存调整 / Excel 导入
-              </Button>
-              <Button
-                type="primary"
-                onClick={() => {
-                  form.resetFields();
-                  setKey(crypto.randomUUID());
-                  setOpen(true);
-                }}
-              >
-                库存调整
-              </Button>
-            </Space>
-          )
-        }
-      />
-      <Alert
-        className="notice"
-        type="info"
-        showIcon
-        title="可售 = 在仓 − 锁定 − 次品。实际发货才计入在途，包裹送达不等于入库；无日销参考时不推算补货建议。"
-      />
       <Card>
         <div className="table-toolbar">
           <Space>
@@ -172,130 +247,46 @@ function InventoryBalances() {
               }}
             />
           </Space>
-          <Refresh onClick={() => q.refetch()} />
+          <Space>
+            {can && (
+              <Button
+                aria-label="导入"
+                icon={<ImportOutlined />}
+                onClick={() => setBatch(true)}
+              >
+                导入
+              </Button>
+            )}
+            <Button
+              aria-label="导出"
+              icon={<ExportOutlined />}
+              disabled={!q.items.length}
+              loading={exporting}
+              onClick={async () => {
+                setExporting(true);
+                try {
+                  await exportTableData({ dataSource: q.items, columns });
+                } catch (error) {
+                  message.error((error as Error).message);
+                } finally {
+                  setExporting(false);
+                }
+              }}
+            >
+              导出
+            </Button>
+            <Refresh onClick={() => q.refetch()} />
+          </Space>
         </div>
         <QueryState error={q.error} reload={() => q.refetch()} />
         <Table<Row>
+          showExport={false}
           rowKey="id"
           loading={q.isLoading}
           locale={empty}
           dataSource={q.items}
           scroll={{ x: 2700 }}
-          columns={[
-            {
-              title: "图片",
-              dataIndex: "mainImageUrl",
-              width: 84,
-              render: (v) =>
-                v ? (
-                  <img
-                    src={v}
-                    alt="商品图片"
-                    style={{ width: 56, height: 66, objectFit: "contain" }}
-                  />
-                ) : (
-                  "—"
-                ),
-            },
-            { title: "款号", dataIndex: "styleNo", width: 140 },
-            { title: "货号", dataIndex: "articleNo", render: (v) => v || "—" },
-            {
-              title: "SKU / 条码",
-              render: (_, r) => (
-                <>
-                  <strong>{r.productName}</strong>
-                  <div className="secondary">
-                    {r.skuCode}
-                    {r.barcode ? " / " + r.barcode : ""}
-                  </div>
-                </>
-              ),
-            },
-            {
-              title: "供应商款式编码",
-              dataIndex: "supplierStyleCode",
-              render: (v) => v || "—",
-            },
-            { title: "颜色", dataIndex: "colorName" },
-            { title: "尺码", dataIndex: "sizeName" },
-            { title: "仓库", dataIndex: "warehouseName" },
-            ...[
-              "physicalQty",
-              "inTransitQty",
-              "transferTransitQty",
-              "incomingQty",
-              "estimatedReturns",
-              "dailySales",
-            ].map((k, i) => ({
-              title: [
-                "在仓库存数",
-                "采购在途数",
-                "调拨在途数",
-                "进货仓库存",
-                "预估销退数",
-                "渠道日销参考",
-              ][i],
-              dataIndex: k,
-              render: (v: number) => v ?? "暂无数据",
-            })),
-            {
-              title: "退货率",
-              dataIndex: "returnRate",
-              render: (v) =>
-                v == null
-                  ? "暂无数据"
-                  : Number((Number(v) * 100).toFixed(4)) + "%",
-            },
-            {
-              title: "可售天数",
-              dataIndex: "coverageDays",
-              render: (v, r) =>
-                v == null
-                  ? r.dailySales != null && Number(r.dailySales) === 0
-                    ? "无日销"
-                    : "暂无数据"
-                  : v + "天",
-            },
-            {
-              title: "补货建议",
-              dataIndex: "replenishmentQty",
-              render: (v) => (v == null ? "暂无数据" : v + "件"),
-            },
-            {
-              title: "可售 / 锁定 / 次品",
-              render: (_, r) =>
-                `${r.availableQty} / ${r.reservedQty} / ${r.damagedQty}`,
-            },
-            {
-              title: "参考来源 / 日期",
-              render: (_, r) =>
-                r.sourceNote ? (
-                  <>
-                    {r.sourceNote}
-                    <div className="secondary">
-                      人工维护 · {r.referenceDate?.slice(0, 10)}
-                    </div>
-                  </>
-                ) : (
-                  "未配置"
-                ),
-            },
-            {
-              title: "操作",
-              render: (_, r) => (
-                <Space>
-                  <Link to={"/inventory/transactions?skuId=" + r.skuId}>
-                    库存流水
-                  </Link>
-                  {can && (
-                    <Button size="small" onClick={() => setReference(r)}>
-                      参考值设置
-                    </Button>
-                  )}
-                </Space>
-              ),
-            },
-          ]}
+          columns={columns}
           pagination={{
             current: q.page,
             total: q.total,
@@ -312,61 +303,6 @@ function InventoryBalances() {
           onClose={() => setReference(undefined)}
         />
       )}
-      <Modal
-        title="库存调整"
-        open={open}
-        onCancel={() => setOpen(false)}
-        confirmLoading={action.busy}
-        onOk={async () => {
-          const b = await form.validateFields();
-          if (
-            await action.run(() =>
-              api("/inventory/adjustments", "POST", b, key),
-            )
-          )
-            setOpen(false);
-        }}
-      >
-        <Form
-          form={form}
-          layout="vertical"
-          onValuesChange={() => setKey(crypto.randomUUID())}
-        >
-          <Form.Item name="skuId" label="SKU" rules={[{ required: true }]}>
-            <Select
-              showSearch
-              optionFilterProp="label"
-              options={options(skus.data, "skuCode")}
-            />
-          </Form.Item>
-          <Form.Item
-            name="warehouseId"
-            label="仓库"
-            rules={[{ required: true }]}
-          >
-            <Select options={options(wh.data)} />
-          </Form.Item>
-          <Form.Item
-            name="quantity"
-            label="变化数量（正数增加，负数减少）"
-            rules={[{ required: true }]}
-          >
-            <InputNumber precision={0} />
-          </Form.Item>
-          <Form.Item name="reason" label="原因" rules={[{ required: true }]}>
-            <Select
-              options={[
-                { value: "OPENING", label: "期初建账" },
-                { value: "STOCKTAKE", label: "盘点差异" },
-                { value: "MANUAL", label: "人工调整" },
-              ]}
-            />
-          </Form.Item>
-          <Form.Item name="remark" label="说明" rules={[{ required: true }]}>
-            <Input.TextArea />
-          </Form.Item>
-        </Form>
-      </Modal>
       {batch && (
         <BatchEditor
           title="批量库存调整"

@@ -46,66 +46,73 @@ const exportLabels: Record<string, string> = {
   address: "地址",
   email: "邮箱",
 };
-export function Table<T extends Record<string, any>>(props: TableProps<T>) {
+export async function exportTableData<T extends Record<string, any>>(
+  props: TableProps<T>,
+) {
+  const data = [...(props.dataSource || [])];
+  const keys = [
+    ...new Set(
+      data.flatMap((r) =>
+        Object.keys(r).filter(
+          (k) =>
+            r[k] == null ||
+            ["string", "number", "boolean"].includes(typeof r[k]),
+        ),
+      ),
+    ),
+  ];
+  const labels = new Map(
+    (props.columns || []).flatMap((c) =>
+      "dataIndex" in c &&
+      typeof c.dataIndex === "string" &&
+      typeof c.title === "string"
+        ? [[c.dataIndex, c.title]]
+        : [],
+    ),
+  );
+  await downloadWorkbook(
+    "当前页数据",
+    keys
+      .filter((key) => labels.has(key) || exportLabels[key])
+      .map((key) => ({ key, label: labels.get(key) || exportLabels[key] })),
+    data,
+  );
+}
+export function Table<T extends Record<string, any>>({
+  showExport = true,
+  ...props
+}: TableProps<T> & { showExport?: boolean }) {
   const { message } = App.useApp();
   const [busy, setBusy] = useState(false);
   return (
     <>
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "flex-end",
-          marginBottom: 6,
-        }}
-      >
-        <Button
-          size="small"
-          disabled={!props.dataSource?.length}
-          loading={busy}
-          onClick={async () => {
-            setBusy(true);
-            try {
-              const data = [...(props.dataSource || [])];
-              const keys = [
-                ...new Set(
-                  data.flatMap((r) =>
-                    Object.keys(r).filter(
-                      (k) =>
-                        r[k] == null ||
-                        ["string", "number", "boolean"].includes(typeof r[k]),
-                    ),
-                  ),
-                ),
-              ];
-              const labels = new Map(
-                (props.columns || []).flatMap((c) =>
-                  "dataIndex" in c &&
-                  typeof c.dataIndex === "string" &&
-                  typeof c.title === "string"
-                    ? [[c.dataIndex, c.title]]
-                    : [],
-                ),
-              );
-              await downloadWorkbook(
-                "当前页数据",
-                keys
-                  .filter((key) => labels.has(key) || exportLabels[key])
-                  .map((key) => ({
-                    key,
-                    label: labels.get(key) || exportLabels[key],
-                  })),
-                data,
-              );
-            } catch (e) {
-              message.error((e as Error).message);
-            } finally {
-              setBusy(false);
-            }
+      {showExport && (
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "flex-end",
+            marginBottom: 6,
           }}
         >
-          导出当前页 Excel
-        </Button>
-      </div>
+          <Button
+            size="small"
+            disabled={!props.dataSource?.length}
+            loading={busy}
+            onClick={async () => {
+              setBusy(true);
+              try {
+                await exportTableData(props);
+              } catch (e) {
+                message.error((e as Error).message);
+              } finally {
+                setBusy(false);
+              }
+            }}
+          >
+            导出当前页 Excel
+          </Button>
+        </div>
+      )}
       <AntTable<T> {...props} />
     </>
   );

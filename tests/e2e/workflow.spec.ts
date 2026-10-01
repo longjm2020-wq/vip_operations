@@ -295,7 +295,7 @@ test("表格库存调整留下真实流水", async ({ page }) => {
   });
   await page.goto("/inventory");
   await page
-    .getByRole("button", { name: "批量库存调整 / Excel 导入", exact: true })
+    .getByRole("button", { name: "导入", exact: true })
     .click();
   await page.getByRole("button", { name: "添加行", exact: true }).click();
   for (const [label, value] of Object.entries({
