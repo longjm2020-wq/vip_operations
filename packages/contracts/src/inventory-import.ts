@@ -1,4 +1,8 @@
 import { z } from "zod";
+export const inventoryImportLimits = {
+  maxFileSizeMB: 100,
+  maxRows: 50000,
+} as const;
 export const inventoryImportFields = [
   {
     key: "skuCode",

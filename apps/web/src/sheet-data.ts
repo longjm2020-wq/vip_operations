@@ -23,7 +23,11 @@ export function sheetColumnLabel(index: number) {
   }
   return label;
 }
-export function parseDelimited(text: string, delimiter = "\t"): string[][] {
+export function parseDelimited(
+  text: string,
+  delimiter = "\t",
+  maxRows = MAX_SHEET_ROWS,
+): string[][] {
   const result: string[][] = [];
   let row: string[] = [],
     cell = "",
@@ -52,8 +56,8 @@ export function parseDelimited(text: string, delimiter = "\t"): string[][] {
   row.push(cell);
   result.push(row);
   while (result.length && result.at(-1)!.every((x) => x === "")) result.pop();
-  if (result.length > MAX_SHEET_ROWS + 1)
-    throw Error(`每批最多 ${MAX_SHEET_ROWS} 行，请分批导入`);
+  if (result.length > maxRows + 1)
+    throw Error(`每批最多 ${maxRows} 行，请分批导入`);
   return result;
 }
 export function displayCell(value: any, column: SheetColumn): string {

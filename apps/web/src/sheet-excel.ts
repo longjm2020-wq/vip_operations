@@ -7,12 +7,23 @@ import {
 } from "./sheet-data.js";
 export async function readWorkbook(
   file: File,
-  options: { formattedCells?: boolean } = {},
+  options: {
+    formattedCells?: boolean;
+    maxFileSizeMB?: number;
+    maxRows?: number;
+  } = {},
 ) {
-  if (file.size > 5 * 1024 * 1024)
-    throw Error("文件不能超过 5MB，请拆分后导入");
+  const maxFileSizeMB = options.maxFileSizeMB ?? 5,
+    maxRows = options.maxRows ?? MAX_SHEET_ROWS;
+  if (file.size > maxFileSizeMB * 1024 * 1024)
+    throw Error(`文件不能超过 ${maxFileSizeMB}MB，请拆分后导入`);
   if (/\.csv$/i.test(file.name))
-    return [{ name: file.name, rows: parseDelimited(await file.text(), ",") }];
+    return [
+      {
+        name: file.name,
+        rows: parseDelimited(await file.text(), ",", maxRows),
+      },
+    ];
   if (!/\.xlsx$/i.test(file.name))
     throw Error("支持 .xlsx 和 UTF-8 CSV；旧版 .xls 请另存为 .xlsx");
   const { Workbook } = (await import("exceljs")).default;
@@ -20,12 +31,14 @@ export async function readWorkbook(
   await book.xlsx.load(await file.arrayBuffer());
   return book.worksheets
     .map((sheet) => {
-      if (sheet.rowCount > MAX_SHEET_ROWS + 1 || sheet.columnCount > 100)
-        throw Error("表格超过 500 行或 100 列，请拆分并清除多余格式");
+      // ExcelJS derives columnCount by scanning rows; compute it once for large sheets.
+      const columnCount = sheet.columnCount;
+      if (sheet.rowCount > maxRows + 1 || columnCount > 100)
+        throw Error(`表格超过 ${maxRows} 行或 100 列，请拆分并清除多余格式`);
       const rows: string[][] = [];
       sheet.eachRow({ includeEmpty: true }, (row) => {
         const values: string[] = [];
-        for (let c = 1; c <= sheet.columnCount; c++) {
+        for (let c = 1; c <= columnCount; c++) {
           const cell = row.getCell(c),
             value = cell.value;
           if (
