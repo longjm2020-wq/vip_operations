@@ -64,7 +64,7 @@ export const inventoryImportSchema = z
           .int()
           .min(-10000000)
           .max(10000000)
-          .refine((v) => v !== 0)
+          .refine((v) => v !== 0, "不能为 0")
           .optional(),
         reason: z.enum(["OPENING", "STOCKTAKE", "MANUAL"]).optional(),
         remark: z.string().trim().min(1).max(1000).optional(),

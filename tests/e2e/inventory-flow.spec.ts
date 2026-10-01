@@ -147,6 +147,17 @@ test("库存管理：发货核销、SKU 差异质检、进货仓入库与人工�
   await expect(page.getByText("共 50000 行，更新列：参考来源")).toBeVisible({
     timeout: 30000,
   });
+  await page.locator('.ant-modal input[type="file"]').setInputFiles({
+    name: "负数库存.csv",
+    mimeType: "text/csv",
+    buffer: Buffer.from(`商品编码,在仓库存数\n${sku.skuCode},-3`, "utf8"),
+  });
+  await expect(
+    page.getByText("第 2 行 B 列「在仓库存数」不能小于 0（当前值：-3）"),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "确认导入", exact: true }),
+  ).toBeDisabled();
   const book = new ExcelJS.Workbook(),
     sheet = book.addWorksheet("数据");
   sheet.addRow(["商品编码", "颜色"]);

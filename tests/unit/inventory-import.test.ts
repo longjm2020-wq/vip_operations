@@ -15,6 +15,81 @@ const entry = (i: number, skuCode = "SKU-" + i): Entry => ({
   input: { skuCode, warehouseId: String(i + 1), changes: { quantity: 1 } },
 });
 describe("large inventory imports", () => {
+  it("identifies the spreadsheet row, column, field and negative value", () => {
+    const rows = [
+      ["图片", "款号", "货号", "商品编码", "颜色", "尺码", "在仓库存数"],
+      ...Array.from({ length: 1292 }, (_, i) => [
+        "",
+        "",
+        "",
+        "SKU-" + i,
+        "",
+        "",
+        i === 1291 ? "-3" : "0",
+      ]),
+    ];
+    expect(() => parseInventoryRows(rows)).toThrow(
+      "第 1293 行 G 列「在仓库存数」不能小于 0（当前值：-3）",
+    );
+  });
+  it.each(["在仓库存数", "渠道日销参考", "退货率", "预估销退数"])(
+    "explains negative %s values in Chinese",
+    (label) => {
+      expect(() =>
+        parseInventoryRows([
+          ["商品编码", label],
+          ["SKU-A", "-1"],
+        ]),
+      ).toThrow(`第 2 行 B 列「${label}」不能小于 0（当前值：-1）`);
+    },
+  );
+  it("retains valid zero stock and negative inventory deltas", () => {
+    expect(
+      parseInventoryRows([
+        ["商品编码", "在仓库存数"],
+        ["SKU-A", "0"],
+      ]).entries[0].input.changes.physicalQty,
+    ).toBe(0);
+    expect(
+      parseInventoryRows([
+        ["商品编码", "变化数量"],
+        ["SKU-A", "-3"],
+      ]).entries[0].input.changes.quantity,
+    ).toBe(-3);
+  });
+  it("handles row-level errors with read-only template columns", () => {
+    expect(() =>
+      parseInventoryRows([
+        ["图片", "商品编码", "颜色"],
+        ["https://example.com/image.jpg", "SKU-A", ""],
+      ]),
+    ).toThrow("第 2 行：没有可修改的列");
+    expect(() =>
+      parseInventoryRows([
+        ["图片", "商品编码", "在仓库存数", "变化数量"],
+        ["", "SKU-A", "3", "1"],
+      ]),
+    ).toThrow("第 2 行：在仓库存数与变化数量只能填写一项");
+  });
+  it("localizes integer, date, missing code and zero delta errors", () => {
+    for (const [label, value, message] of [
+      ["在仓库存数", "1.5", "必须填写整数"],
+      ["参考日期", "2026-13-01", "日期必须使用 YYYY-MM-DD 格式"],
+      ["变化数量", "0", "不能为 0"],
+    ])
+      expect(() =>
+        parseInventoryRows([
+          ["商品编码", label],
+          ["SKU-A", value],
+        ]),
+      ).toThrow(message);
+    expect(() =>
+      parseInventoryRows([
+        ["商品编码", "颜色"],
+        ["", "蓝色"],
+      ]),
+    ).toThrow("A 列「商品编码」不能为空（当前值：空白）");
+  });
   it("reads and validates 50000 CSV records above the old 5MB cap", async () => {
     const csv = [
       "商品编码,参考来源",

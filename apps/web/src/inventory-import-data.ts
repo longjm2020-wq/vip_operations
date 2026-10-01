@@ -4,6 +4,7 @@ import {
   inventoryImportSchema,
   type InventoryImportInput,
 } from "../../../packages/contracts/src/inventory-import.js";
+import { sheetColumnLabel } from "./sheet-data.js";
 export type Entry = {
   line: number;
   input: InventoryImportInput;
@@ -35,6 +36,14 @@ const readonlyHeaders = [
   "锁定库存",
   "次品数量",
 ];
+const cellError = (
+  row: number,
+  column: number,
+  label: string,
+  message: string,
+  value: string,
+) =>
+  `第 ${row} 行 ${sheetColumnLabel(column)} 列「${label}」${message}（当前值：${value ? value.slice(0, 100) + (value.length > 100 ? "…" : "") : "空白"}）`;
 export function parseInventoryRows(rows: string[][], warehouseId?: string) {
   const header = rows[0] || [],
     mapping = header.map((label) =>
@@ -81,7 +90,9 @@ export function parseInventoryRows(rows: string[][], warehouseId?: string) {
         if ("number" in field) {
           v = Number(value.replaceAll(",", "").replace(/%$/, ""));
           if (!Number.isFinite(v))
-            throw Error(`第 ${i + 1} 行「${field.label}」必须是数字。`);
+            throw Error(
+              cellError(i + 1, col, field.label, "必须填写有效数字", value),
+            );
         }
         if (field.key === "reason")
           v =
@@ -104,10 +115,53 @@ export function parseInventoryRows(rows: string[][], warehouseId?: string) {
         names.add(field.label);
       }
     });
-    const parsed = inventoryImportSchema.safeParse(input);
+    const parsed = inventoryImportSchema.safeParse(input, {
+      error: (issue) => {
+        if (issue.code === "too_small")
+          return issue.origin === "number"
+            ? `不能小于 ${issue.minimum}`
+            : `至少需要 ${issue.minimum} 个字符`;
+        if (issue.code === "too_big")
+          return issue.origin === "number"
+            ? `不能大于 ${issue.maximum}`
+            : `最多填写 ${issue.maximum} 个字符`;
+        if (issue.code === "invalid_type") {
+          if (issue.expected === "int") return "必须填写整数";
+          if (issue.input === undefined) return "不能为空";
+          return issue.expected === "number"
+            ? "必须填写有效数字"
+            : "必须填写文本";
+        }
+        if (issue.code === "invalid_format")
+          return issue.format === "date"
+            ? "日期必须使用 YYYY-MM-DD 格式，并填写有效日期"
+            : "格式不正确，请按模板说明填写";
+        if (issue.code === "invalid_value")
+          return "请填写期初建账、盘点差异或人工调整";
+        return "填写内容不符合要求，请按模板说明检查";
+      },
+    });
     if (!parsed.success)
       throw Error(
-        `第 ${i + 1} 行：${parsed.error.issues.map((issue) => issue.message).join("；")}`,
+        parsed.error.issues
+          .map((issue) => {
+            const key =
+              issue.path[0] === "changes" ? issue.path[1] : issue.path[0];
+            const col =
+              key === undefined
+                ? -1
+                : mapping.findIndex((field) => field?.key === key);
+            return col < 0
+              ? `第 ${i + 1} 行：${issue.message}`
+              : cellError(
+                  i + 1,
+                  col,
+                  mapping[col]!.label,
+                  issue.message,
+                  String(rows[i][col] || "").trim(),
+                );
+          })
+          .join("；"),
       );
     const target =
       parsed.data.skuCode +
