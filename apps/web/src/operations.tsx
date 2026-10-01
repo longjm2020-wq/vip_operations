@@ -1,4 +1,5 @@
 import { Table, exportTableData } from "./data-table";
+import { InventoryImport } from "./inventory-import";
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -112,7 +113,8 @@ function InventoryBalances() {
       ...(warehouse ? { warehouseId: warehouse } : {}),
     }),
     wh = useOptions("/warehouses");
-  const can = useCan("inventory.adjust");
+  const can = useCan("inventory.adjust"),
+    canMetadata = useCan("product.update");
   const columns: TableProps<Row>["columns"] = [
     {
       title: "图片",
@@ -248,7 +250,7 @@ function InventoryBalances() {
             />
           </Space>
           <Space>
-            {can && (
+            {(can || canMetadata) && (
               <Button
                 aria-label="导入"
                 icon={<ImportOutlined />}
@@ -265,7 +267,16 @@ function InventoryBalances() {
               onClick={async () => {
                 setExporting(true);
                 try {
-                  await exportTableData({ dataSource: q.items, columns });
+                  await exportTableData({
+                    dataSource: q.items.map((row: Row) => ({
+                      ...row,
+                      returnRate:
+                        row.returnRate == null
+                          ? null
+                          : Number((Number(row.returnRate) * 100).toFixed(4)),
+                    })),
+                    columns,
+                  });
                 } catch (error) {
                   message.error((error as Error).message);
                 } finally {
@@ -304,39 +315,8 @@ function InventoryBalances() {
         />
       )}
       {batch && (
-        <BatchEditor
-          title="批量库存调整"
-          fields={[
-            { key: "skuId", label: "SKU", required: true, source: "/skus" },
-            {
-              key: "warehouseId",
-              label: "仓库",
-              required: true,
-              source: "/warehouses",
-            },
-            {
-              key: "quantity",
-              label: "变化数量",
-              required: true,
-              type: "number",
-              min: -2147483647,
-            },
-            {
-              key: "reason",
-              label: "原因",
-              required: true,
-              options: [
-                { value: "OPENING", label: "期初建账" },
-                { value: "STOCKTAKE", label: "盘点差异" },
-                { value: "MANUAL", label: "人工调整" },
-              ],
-            },
-            { key: "remark", label: "说明", required: true },
-          ]}
-          defaults={{ warehouseId: warehouse }}
-          saveRow={(body, key) =>
-            api("/inventory/adjustments", "POST", body, key)
-          }
+        <InventoryImport
+          warehouseId={warehouse}
           onClose={() => setBatch(false)}
         />
       )}

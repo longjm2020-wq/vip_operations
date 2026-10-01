@@ -130,7 +130,10 @@ test("真实前后端：建档、采购确认、两次入库、流水追溯", as
   await expect(page.getByText("已完成", { exact: true }).first()).toBeVisible();
   await page.goto("/inventory");
   await expect(
-    page.getByRole("row").filter({ hasText: "E2E-BK-L" }).filter({has:page.getByRole('cell',{name:'验收仓',exact:true})}),
+    page
+      .getByRole("row")
+      .filter({ hasText: "E2E-BK-L" })
+      .filter({ has: page.getByRole("cell", { name: "验收仓", exact: true }) }),
   ).toContainText("100");
   await page.screenshot({
     path: ".local/inventory-preview.png",
@@ -138,9 +141,7 @@ test("真实前后端：建档、采购确认、两次入库、流水追溯", as
     animations: "disabled",
   });
   await page.goto("/inventory/transactions");
-  await expect(
-    page.getByRole("cell", { name: "原到货入库" }),
-  ).toHaveCount(2);
+  await expect(page.getByRole("cell", { name: "原到货入库" })).toHaveCount(2);
   await page.goto("/audit-logs");
   await expect(
     page.getByRole("cell", { name: "RECEIPT_POST" }).first(),
@@ -282,41 +283,46 @@ test("采购明细可切换表格并保存真实草稿", async ({ page }) => {
   await expect(page.getByRole("link", { name: "查看库存流水" })).toBeVisible();
 });
 
-test("表格库存调整留下真实流水", async ({ page }) => {
+test("小卡片 Excel 库存导入，网络重试不重复增加库存", async ({ page }) => {
   await login(page);
   let loseResponse = true;
-  await page.route("**/api/v1/inventory/adjustments", async (route) => {
-    const response = await route.fetch();
-    if (loseResponse) {
-      expect(response.ok()).toBeTruthy();
-      loseResponse = false;
-      await route.abort("failed");
-    } else await route.fulfill({ response });
-  });
+  await page.route(
+    "**/api/v1/inventory/fulfilment/import-row",
+    async (route) => {
+      const response = await route.fetch();
+      if (loseResponse) {
+        expect(response.ok()).toBeTruthy();
+        loseResponse = false;
+        await route.abort("failed");
+      } else await route.fulfill({ response });
+    },
+  );
   await page.goto("/inventory");
+  await page.getByRole("button", { name: "导入", exact: true }).click();
+  const book = new Workbook(),
+    sheet = book.addWorksheet("数据");
+  sheet.addRow(["商品编码", "仓库", "变化数量", "原因", "说明"]);
+  sheet.addRow(["E2E-BK-L", "E2E-WH", 3, "人工调整", "导入盘点验收"]);
   await page
-    .getByRole("button", { name: "导入", exact: true })
-    .click();
-  await page.getByRole("button", { name: "添加行", exact: true }).click();
-  for (const [label, value] of Object.entries({
-    SKU: "E2E-BK-L",
-    仓库: "验收仓",
-    变化数量: "3",
-    原因: "人工调整",
-    说明: "表格盘点验收",
-  })) {
-    await page.getByLabel("第1行 " + label, { exact: true }).fill(value);
-  }
-  await page.getByRole("button", { name: "保存表格", exact: true }).click();
-  await expect(page.getByText(/保存成功 0 行，失败 1 行/)).toBeVisible();
-  await expect(
-    page.getByLabel("第1行 变化数量", { exact: true }),
-  ).toHaveAttribute("readonly", "");
-  await page.getByRole("button", { name: "保存表格", exact: true }).click();
-  await expect(page.getByText(/保存成功 1 行，失败 0 行/)).toBeVisible();
+    .locator('.ant-modal input[type="file"]')
+    .setInputFiles({
+      name: "库存调整.xlsx",
+      mimeType:
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      buffer: Buffer.from(await book.xlsx.writeBuffer()),
+    });
+  await expect(page.getByText(/共 1 行，更新列/)).toBeVisible();
+  await page.getByRole("button", { name: "确认导入", exact: true }).click();
+  await expect(page.getByText(/导入成功 0 行，失败 1 行/)).toBeVisible();
+  await expect(page.locator('.ant-modal input[type="file"]')).toBeDisabled();
+  await page.getByRole("button", { name: "重试失败行", exact: true }).click();
+  await expect(page.getByText(/导入成功 1 行，失败 0 行/)).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(
-    page.getByRole("row").filter({ hasText: "E2E-BK-L" }).filter({has:page.getByRole('cell',{name:'验收仓',exact:true})}),
+    page
+      .getByRole("row")
+      .filter({ hasText: "E2E-BK-L" })
+      .filter({ has: page.getByRole("cell", { name: "验收仓", exact: true }) }),
   ).toContainText("115");
   await page.goto("/inventory/transactions");
   await expect(

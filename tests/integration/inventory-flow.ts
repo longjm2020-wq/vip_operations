@@ -542,4 +542,85 @@ export async function testInventoryFlow(h: Record<string, any>) {
     2,
   );
   assert.ok(db);
+  const importPath = root + "/import-row",
+    beforeSku = await ok(owner, "/skus/" + sku.id),
+    beforeBalance = await row();
+  const imported = await ok(owner, importPath, "POST", {
+    skuCode: sku.skuCode,
+    changes: { colorName: "进口验收色" },
+  });
+  assert.equal(imported.skuId, sku.id);
+  const afterSku = await ok(owner, "/skus/" + sku.id);
+  assert.equal(afterSku.colorName, "进口验收色");
+  for (const k of ["colorCode", "sizeCode", "sizeName", "barcode", "productId"])
+    assert.equal(afterSku[k], beforeSku[k]);
+  assert.equal((await row()).physicalQty, beforeBalance.physicalQty);
+  assert.equal(
+    (
+      await request(vendor, importPath, "POST", {
+        skuCode: sku.skuCode,
+        changes: { colorName: "越权色" },
+      })
+    ).status,
+    403,
+  );
+  assert.equal(
+    (
+      await request(owner, importPath, "POST", {
+        skuCode: "MISSING-SKU",
+        changes: { colorName: "不存在" },
+      })
+    ).status,
+    422,
+  );
+  assert.equal(
+    (
+      await request(owner, importPath, "POST", {
+        skuCode: sku.skuCode,
+        warehouse: "MISSING-WH",
+        changes: { colorName: "应回滚", quantity: 1 },
+      })
+    ).status,
+    422,
+  );
+  assert.equal((await ok(owner, "/skus/" + sku.id)).colorName, "进口验收色");
+  const importKey = randomUUID(),
+    input = {
+      skuCode: sku.skuCode,
+      warehouse: warehouses[0].code,
+      changes: { quantity: 3, remark: "导入幂等验收" },
+    };
+  const firstImport = await ok(owner, importPath, "POST", input, importKey);
+  assert.equal(
+    (await ok(owner, importPath, "POST", input, importKey)).adjustmentId,
+    firstImport.adjustmentId,
+  );
+  assert.equal((await row()).physicalQty, beforeBalance.physicalQty + 3);
+  await ok(owner, importPath, "POST", {
+    skuCode: sku.skuCode,
+    warehouseId: warehouses[0].id,
+    changes: { physicalQty: beforeBalance.physicalQty + 1 },
+  });
+  assert.equal((await row()).physicalQty, beforeBalance.physicalQty + 1);
+  const oldRef = (await balances())[0];
+  await ok(owner, importPath, "POST", {
+    skuCode: sku.skuCode,
+    changes: { articleNo: "PARTIAL-ARTICLE" },
+  });
+  const newRef = (await balances())[0];
+  assert.equal(newRef.articleNo, "PARTIAL-ARTICLE");
+  for (const k of ["dailySales", "returnRate", "sourceNote", "referenceDate"])
+    assert.equal(newRef[k], oldRef[k]);
+  assert.equal(
+    (
+      await request(owner, importPath, "POST", {
+        skuCode: sku.skuCode,
+        changes: { physicalQty: 1, quantity: 1 },
+      })
+    ).status,
+    400,
+  );
+  pass(
+    "库存导入：精确匹配、仅改提供列、整行回滚、权限与缺失编码、绝对库存和幂等重试",
+  );
 }

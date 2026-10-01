@@ -5,7 +5,10 @@ import {
   displayCell,
   parseDelimited,
 } from "./sheet-data.js";
-export async function readWorkbook(file: File) {
+export async function readWorkbook(
+  file: File,
+  options: { formattedCells?: boolean } = {},
+) {
   if (file.size > 5 * 1024 * 1024)
     throw Error("文件不能超过 5MB，请拆分后导入");
   if (/\.csv$/i.test(file.name))
@@ -35,9 +38,15 @@ export async function readWorkbook(file: File) {
             );
           // Excel may store codes as numbers with a zero-padding display format.
           values.push(
-            typeof value === "number" && /^0+$/.test(cell.numFmt || "")
-              ? String(value).padStart(cell.numFmt.length, "0")
-              : cell.text,
+            options.formattedCells && value instanceof Date
+              ? value.toISOString().slice(0, 10)
+              : options.formattedCells &&
+                  typeof value === "number" &&
+                  /%/.test(cell.numFmt || "")
+                ? Number((value * 100).toPrecision(12)) + "%"
+                : typeof value === "number" && /^0+$/.test(cell.numFmt || "")
+                  ? String(value).padStart(cell.numFmt.length, "0")
+                  : cell.text,
           );
         }
         rows.push(values);
@@ -51,6 +60,7 @@ export async function downloadWorkbook(
   name: string,
   columns: SheetColumn[],
   rows: SheetRow[] = [],
+  instructions?: string[],
 ) {
   const { Workbook } = (await import("exceljs")).default;
   const book = new Workbook(),
@@ -76,8 +86,12 @@ export async function downloadWorkbook(
   sheet.views = [{ state: "frozen", ySplit: 1 }];
   const notes = book.addWorksheet("填写说明");
   notes.addRows([
-    ["首行是列名；每批最多500行；编码和条码请使用文本格式；公式请转为值。"],
-    ["导入只进入待保存表格，不会自动修改线上数据。"],
+    ...(
+      instructions || [
+        "首行是列名；每批最多500行；编码和条码请使用文本格式；公式请转为值。",
+        "导入只进入待保存表格，不会自动修改线上数据。",
+      ]
+    ).map((line) => [line]),
     ...columns.map((c) => [
       c.label,
       c.required ? "必填" : "选填",

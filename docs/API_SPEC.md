@@ -74,6 +74,7 @@ Product筛选 q（款号/名称）、categoryId、brandId、supplierId、year、
 | GET/POST transfers、GET transfers/:id | 分页调拨/建草稿/明细 | inventory.read；inventory.adjust |
 | POST transfers/:id/dispatch、cancel | version,shipment；version,reason | inventory.adjust |
 | POST references/:skuId | articleNo,dailySales,returnRate(0..1),estimatedReturns,targetDays,sourceNote,referenceDate | inventory.adjust |
+| POST import-row | skuCode,warehouse 或 warehouseId,changes（仅提供列）；按 SKU 精确匹配，行内原子更新，库存走不可改流水，幂等重试 | inventory.read；规格资料 product.update，参考/库存 inventory.adjust |
 
 `shipment` 使用 DELIVERY 或 COURIER。DELIVERY 每包裹生成四位随机码；仅发货人/对应供应商可从查询取码；接收方核验十次错误限流十五分钟。COURIER 要求白名单快递公司与6至32位字母数字单号。签收仅转包裹 DELIVERED，不计仓库库存。物流 worker 的持久 claim/token 防止旧轨迹覆盖更正单号。
 

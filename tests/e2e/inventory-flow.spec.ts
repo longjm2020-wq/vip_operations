@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import ExcelJS from "exceljs";
 test("库存管理：发货核销、SKU 差异质检、进货仓入库与人工参考值", async ({
   page,
 }) => {
@@ -127,6 +128,50 @@ test("库存管理：发货核销、SKU 差异质检、进货仓入库与人工�
   const downloadPromise = page.waitForEvent("download");
   await page.getByRole("button", { name: "导出", exact: true }).click();
   expect((await downloadPromise).suggestedFilename()).toBe("当前页数据.xlsx");
+  await page.getByRole("button", { name: "导入", exact: true }).click();
+  const templatePromise = page.waitForEvent("download");
+  await page.getByRole("button", { name: "下载模板", exact: true }).click();
+  expect((await templatePromise).suggestedFilename()).toBe(
+    "库存资料导入模板.xlsx",
+  );
+  const book = new ExcelJS.Workbook(),
+    sheet = book.addWorksheet("数据");
+  sheet.addRow(["商品编码", "颜色"]);
+  sheet.addRow([sku.skuCode, "蓝色"]);
+  await page.locator('.ant-modal input[type="file"]').setInputFiles({
+    name: "改颜色.xlsx",
+    mimeType:
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    buffer: Buffer.from(await book.xlsx.writeBuffer()),
+  });
+  await expect(page.getByText("共 1 行，更新列：颜色")).toBeVisible();
+  const before = (
+    await (await page.request.get("/api/v1/skus/" + sku.id)).json()
+  ).data;
+  await page.getByRole("button", { name: "确认导入", exact: true }).click();
+  await expect(page.getByText(/导入成功 1 行，失败 0 行/)).toBeVisible();
+  const after = (
+    await (await page.request.get("/api/v1/skus/" + sku.id)).json()
+  ).data;
+  expect(after.colorName).toBe("蓝色");
+  for (const key of [
+    "barcode",
+    "colorCode",
+    "sizeCode",
+    "sizeName",
+    "productId",
+  ])
+    expect(after[key]).toBe(before[key]);
+  expect(
+    (
+      await (await page.request.get("/api/v1/inventory?skuId=" + sku.id)).json()
+    ).data.find((r: any) => r.warehouseId === warehouse.id).physicalQty,
+  ).toBe(2);
+  await page.screenshot({
+    path: ".local/inventory-import-preview.png",
+    animations: "disabled",
+  });
+  await page.keyboard.press("Escape");
   await page.screenshot({
     path: ".local/inventory-management-preview.png",
     fullPage: true,

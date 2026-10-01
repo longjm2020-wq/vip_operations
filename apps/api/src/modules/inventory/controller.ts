@@ -3,9 +3,13 @@ import { context, AuthRequest } from "../../http.js";
 import { parse, id, requirePermission, fail } from "../../core.js";
 import { db, rows } from "../../../../../packages/database/src/index.js";
 import * as flow from "./fulfilment.js";
+import { importInventoryRow } from "./import.js";
 const param = (v: string) => parse(id, v);
 @Controller("api/v1/inventory/fulfilment")
 export class InventoryFulfilmentController {
+  @Post("import-row") importRow(@Req() r: AuthRequest, @Body() b: unknown) {
+    return importInventoryRow(context(r), b);
+  }
   @Get("accounts") accounts(@Req() r: AuthRequest) {
     if (
       !r.actor.permissions.includes("purchase.update") &&

@@ -89,4 +89,17 @@ describe("spreadsheet input", () => {
       ),
     ).rejects.toThrow("含公式");
   });
+  it("reads displayed percentages and dates for inventory imports", async () => {
+    const book = new Workbook(),
+      sheet = book.addWorksheet("数据");
+    sheet.addRow(["商品编码", "退货率", "参考日期"]);
+    sheet.addRow([1, 0.015, new Date("2026-10-01T00:00:00Z")]);
+    sheet.getCell("A2").numFmt = "00000";
+    sheet.getCell("B2").numFmt = "0.00%";
+    const result = await readWorkbook(
+      new File([(await book.xlsx.writeBuffer()) as BlobPart], "inventory.xlsx"),
+      { formattedCells: true },
+    );
+    expect(result[0].rows[1]).toEqual(["00001", "1.5%", "2026-10-01"]);
+  });
 });
