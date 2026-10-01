@@ -283,8 +283,8 @@ try {
     return r;
   }
   const p = await newPo(100);
-  assert.equal((await ok("/inventory/" + sku.id)).totals.transit, 100);
-  check("A06 confirmed-only in transit");
+  assert.equal((await ok("/inventory/" + sku.id)).totals.transit, 0);
+  check("A06 confirmed but unshipped purchases are not transit");
   const r = await receipt(p, 40),
     postKey = randomUUID();
   await ok(
@@ -304,7 +304,7 @@ try {
   });
   const stock = await ok("/inventory/" + sku.id);
   assert.equal(stock.totals.available, 70);
-  assert.equal(stock.totals.transit, 60);
+  assert.equal(stock.totals.transit, 0);
   check("A07/A08 partial receipt and repeated post with different keys");
   const remainder = await receipt(p, 60);
   await ok("/receipts/" + remainder.id + "/post", "POST", {
@@ -462,7 +462,7 @@ try {
     targetStockDays: 21,
   });
   const sid = generated.generatedIds[0];
-  assert.equal((await ok("/purchase-suggestions/" + sid)).suggestedQty, 160);
+  assert.equal((await ok("/purchase-suggestions/" + sid)).suggestedQty, 180);
   await ok("/purchase-suggestions/" + sid + "/accept", "POST", {
     purchaseQty: 150,
     reason: "调整补货",
@@ -480,9 +480,9 @@ try {
     ],
   });
   assert.ok(converted.id);
-  assert.equal((await ok("/purchase-suggestions/" + sid)).suggestedQty, 160);
+  assert.equal((await ok("/purchase-suggestions/" + sid)).suggestedQty, 180);
   assert.equal((await ok("/purchase-suggestions/" + sid)).status, "CONVERTED");
-  check("A04/A05 snapshot 160 preserved while actual purchase 150");
+  check("A04/A05 snapshot 180 preserved while actual purchase 150");
   const roleList = await ok("/roles");
   const buyerRole = roleList.find((r: any) => r.code === "BUYER");
   await ok("/users", "POST", {

@@ -18,8 +18,13 @@ import {
   pagination,
 } from "../../core.js";
 import { z } from "zod";
+import { calculateReference } from "../../../../../packages/contracts/src/inventory-reference.js";
 export const transitSql =
-  "COALESCE((SELECT sum(i.ordered_qty-i.received_qty-i.cancelled_qty)::int FROM purchase_order_items i JOIN purchase_orders p ON p.id=i.purchase_order_id WHERE i.sku_id=s.id AND p.warehouse_id=w.id AND p.status IN ('CONFIRMED','IN_PRODUCTION','SHIPPED','PARTIALLY_RECEIVED')),0)";
+  "COALESCE((SELECT sum(i.quantity)::int FROM inventory_shipment_items i JOIN inventory_shipments sh ON sh.id=i.shipment_id WHERE i.sku_id=s.id AND sh.warehouse_id=w.id AND sh.purchase_order_id IS NOT NULL AND sh.status IN ('SHIPPED','DELIVERED')),0)";
+export const transferTransitSql =
+  "COALESCE((SELECT sum(i.quantity)::int FROM inventory_shipment_items i JOIN inventory_shipments sh ON sh.id=i.shipment_id WHERE i.sku_id=s.id AND sh.warehouse_id=w.id AND sh.transfer_id IS NOT NULL AND sh.status IN ('SHIPPED','DELIVERED')),0)";
+export const incomingSql =
+  "COALESCE((SELECT sum(i.qualified_qty-i.putaway_qty)::int FROM inventory_shipment_items i JOIN inventory_shipments sh ON sh.id=i.shipment_id WHERE i.sku_id=s.id AND sh.warehouse_id=w.id AND sh.status='INSPECTED'),0)";
 export async function balances(q: Row) {
   const p = pagination(q);
   const vals: unknown[] = [];
@@ -42,14 +47,14 @@ export async function balances(q: Row) {
       `(s.sku_code ILIKE $${vals.length} OR pr.style_no ILIKE $${vals.length} OR pr.name ILIKE $${vals.length} OR s.barcode ILIKE $${vals.length})`,
     );
   }
-  const from = ` FROM skus s JOIN products pr ON pr.id=s.product_id CROSS JOIN warehouses w LEFT JOIN inventory_balances b ON b.sku_id=s.id AND b.warehouse_id=w.id WHERE ${conditions.join(" AND ")}`;
+  const from = ` FROM skus s JOIN products pr ON pr.id=s.product_id CROSS JOIN warehouses w LEFT JOIN inventory_balances b ON b.sku_id=s.id AND b.warehouse_id=w.id LEFT JOIN inventory_sku_references ref ON ref.sku_id=s.id WHERE ${conditions.join(" AND ")}`;
   const data = await rows(
     db,
-    `SELECT s.id::text||'-'||w.id::text AS id,s.id AS sku_id,s.sku_code,s.color_name,s.size_name,pr.name AS product_name,pr.style_no,w.id AS warehouse_id,w.name AS warehouse_name,COALESCE(b.physical_qty,0) AS physical_qty,COALESCE(b.reserved_qty,0) AS reserved_qty,COALESCE(b.damaged_qty,0) AS damaged_qty,COALESCE(b.physical_qty-b.reserved_qty-b.damaged_qty,0) AS available_qty,${transitSql} AS in_transit_qty,COALESCE(b.version,0) AS version${from} ORDER BY s.id,w.id LIMIT ${p.pageSize} OFFSET ${(p.page - 1) * p.pageSize}`,
+    `SELECT s.id::text||'-'||w.id::text AS id,s.id AS sku_id,s.sku_code,s.barcode,s.color_name,s.size_name,pr.name AS product_name,pr.style_no,pr.main_image_url,pr.custom_fields->>'f00000000000000000000000000000001' AS supplier_style_code,w.id AS warehouse_id,w.name AS warehouse_name,COALESCE(b.physical_qty,0) AS physical_qty,COALESCE(b.reserved_qty,0) AS reserved_qty,COALESCE(b.damaged_qty,0) AS damaged_qty,COALESCE(b.physical_qty-b.reserved_qty-b.damaged_qty,0) AS available_qty,${transitSql} AS in_transit_qty,${transferTransitSql} AS transfer_transit_qty,${incomingSql} AS incoming_qty,ref.article_no,ref.daily_sales::text AS daily_sales,ref.return_rate::text AS return_rate,ref.estimated_returns,ref.target_days,ref.source_note,ref.reference_date,COALESCE(b.version,0) AS version${from} ORDER BY s.id,w.id LIMIT ${p.pageSize} OFFSET ${(p.page - 1) * p.pageSize}`,
     ...vals,
   );
   return {
-    data,
+    data: data.map(calculateReference),
     ...p,
     total: (await one(db, "SELECT count(*)::int AS n" + from, ...vals))!.n,
   };
@@ -57,7 +62,7 @@ export async function balances(q: Row) {
 export async function snapshot(tx: Tx, sku: string) {
   return (await one(
     tx,
-    "SELECT COALESCE((SELECT sum(physical_qty-reserved_qty-damaged_qty)::int FROM inventory_balances WHERE sku_id=$1::bigint),0) AS available,COALESCE((SELECT sum(i.ordered_qty-i.received_qty-i.cancelled_qty)::int FROM purchase_order_items i JOIN purchase_orders p ON p.id=i.purchase_order_id WHERE i.sku_id=$1::bigint AND p.status IN ('CONFIRMED','IN_PRODUCTION','SHIPPED','PARTIALLY_RECEIVED')),0) AS transit",
+    "SELECT COALESCE((SELECT sum(physical_qty-reserved_qty-damaged_qty)::int FROM inventory_balances WHERE sku_id=$1::bigint),0) AS available,COALESCE((SELECT sum(CASE WHEN sh.status='INSPECTED' THEN i.qualified_qty-i.putaway_qty ELSE i.quantity END)::int FROM inventory_shipment_items i JOIN inventory_shipments sh ON sh.id=i.shipment_id WHERE i.sku_id=$1::bigint),0) AS transit",
     sku,
   ))!;
 }

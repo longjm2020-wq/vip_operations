@@ -1,6 +1,11 @@
 import { useRef, useState } from "react";
 import { Decimal } from "decimal.js";
 import { AftersalesPanel } from "./supply-aftersales";
+import {
+  InventoryDialog,
+  ProcurementPanel,
+  ProcurementList,
+} from "./inventory-flow";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -31,7 +36,10 @@ import {
 } from "../../../packages/contracts/src/supply-orders";
 const refresh = () =>
   queryClient.invalidateQueries({
-    predicate: (q) => String(q.queryKey[0]).startsWith("supply"),
+    predicate: (q) =>
+      ["supply", "inventory", "/inventory", "/purchase-orders"].some((prefix) =>
+        String(q.queryKey[0]).startsWith(prefix),
+      ),
   });
 const send = (path: string, body: unknown, key?: string) =>
   api("/supply/" + path, "POST", body, key);
@@ -531,6 +539,11 @@ export function SupplyOrders({ internal = false }: { internal?: boolean }) {
           ]}
         />
       </Card>
+      {!internal && (
+        <div style={{ marginTop: 16 }}>
+          <ProcurementList />
+        </div>
+      )}
       {settingsOpen && (
         <RecipientSettings
           value={settings.data?.recipient || null}
@@ -559,6 +572,9 @@ function SupplyOrderDetail({
   const { message, modal } = App.useApp();
   const [busy, setBusy] = useState(false),
     [shipping, setShipping] = useState(false);
+  const [binding, setBinding] = useState(false),
+    bind = useCan("purchase.create"),
+    inventory = useCan("inventory.read");
   const q = useQuery({
     queryKey: ["supply-order-detail", id],
     queryFn: async () => (await api("/supply/orders/" + id)).data,
@@ -675,6 +691,7 @@ function SupplyOrderDetail({
               </Button>
             )}
             {!internal &&
+              !o.inventoryPurchaseOrderId &&
               o.status === "SHIPPED" &&
               o.shippingMethod === "DELIVERY" && (
                 <Button
@@ -815,6 +832,30 @@ function SupplyOrderDetail({
             </>
           )}
           <AftersalesPanel order={o} internal={internal} />
+          {o.inventoryPurchaseOrderId && (!internal || inventory) && (
+            <>
+              <Typography.Title level={5}>SKU 配送与质检跟踪</Typography.Title>
+              <ProcurementPanel id={o.inventoryPurchaseOrderId} />
+            </>
+          )}
+          {internal &&
+            bind &&
+            !o.inventoryPurchaseOrderId &&
+            o.status !== "CANCELLED" && (
+              <Button
+                style={{ marginTop: 16 }}
+                onClick={() => setBinding(true)}
+              >
+                关联内部 SKU 并接入库存
+              </Button>
+            )}
+          {binding && (
+            <InventoryDialog
+              mode="bind"
+              order={o}
+              onClose={() => setBinding(false)}
+            />
+          )}
           <Typography.Title level={5}>订单动态</Typography.Title>
           <Timeline
             items={o.events.map((e: Row) => ({
@@ -929,7 +970,10 @@ function ShipmentDialog({
           <Select
             disabled={correction}
             options={[
-              { value: "DELIVERY", label: "送货上门" },
+              {
+                value: "DELIVERY",
+                label: "无需物流配送（送货上门 / 自提 / 闪送）",
+              },
               { value: "COURIER", label: "发快递" },
             ]}
           />

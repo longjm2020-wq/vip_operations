@@ -97,7 +97,7 @@ export const configurations: Record<
     columns: ["styleNo", "name", "year", "season", "tagPrice", "status"],
   },
   skus: {
-    title: "SKU 管理",
+    title: "SKU 资料",
     description: "库存、采购和入库都精确到每一个 SKU。",
     permission: "product",
     fields: [

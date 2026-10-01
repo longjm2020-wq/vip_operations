@@ -14,7 +14,7 @@ export async function pollSupplyLogistics(
   const job = await db.$transaction(async (tx) => {
     const o = await one(
       tx,
-      "SELECT * FROM supply_orders WHERE status='SHIPPED' AND shipping_method='COURIER' AND next_poll_at<=now() ORDER BY next_poll_at LIMIT 1 FOR UPDATE SKIP LOCKED",
+      "SELECT * FROM supply_orders WHERE inventory_purchase_order_id IS NULL AND status='SHIPPED' AND shipping_method='COURIER' AND next_poll_at<=now() ORDER BY next_poll_at LIMIT 1 FOR UPDATE SKIP LOCKED",
     );
     if (!o) return null;
     await rows(

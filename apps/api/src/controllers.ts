@@ -34,6 +34,7 @@ import {
   writeProductField,
 } from "./modules/master/product-fields.js";
 import * as inventory from "./modules/inventory/service.js";
+import { InventoryFulfilmentController } from "./modules/inventory/controller.js";
 import * as purchase from "./modules/purchases/service.js";
 import * as suggestion from "./modules/suggestions/service.js";
 import { vipStatus } from "./integrations/vip/index.js";
@@ -469,7 +470,7 @@ class MasterController {
 }
 @Module({ controllers: [AuthController] })
 export class AuthModule {}
-@Module({ controllers: [InventoryController] })
+@Module({ controllers: [InventoryFulfilmentController, InventoryController] })
 export class InventoryModule {}
 @Module({
   controllers: [PurchaseController, ReceiptController, SuggestionController],

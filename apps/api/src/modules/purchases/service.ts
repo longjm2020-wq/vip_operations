@@ -238,7 +238,8 @@ export async function poCommand(
           "SELECT EXISTS(SELECT 1 FROM purchase_order_items WHERE purchase_order_id=$1::bigint AND received_qty>0) OR EXISTS(SELECT 1 FROM receipts WHERE purchase_order_id=$1::bigint AND status IN ('DRAFT','RECEIVED')) AS busy",
           value,
         );
-        if (busy?.busy) fail("INVALID_STATE", "存在入库或活动入库单，不能取消");
+        if (busy?.busy || p.tracked_receiving)
+          fail("INVALID_STATE", "存在入库、配送或活动入库单，不能取消");
         next = "CANCELLED";
         await rows(
           tx,
@@ -283,6 +284,11 @@ export async function createReceipt(c: Context, input: unknown) {
   return command(c, "receipts/create", b, async (tx) => {
     await rows(tx, "SELECT pg_advisory_xact_lock(91002)::text");
     const po = await entity(tx, "purchase_orders", b.purchaseOrderId, true);
+    if (po.tracked_receiving)
+      fail(
+        "TRACKED_RECEIVING",
+        "该采购单已使用配送质检流程，请在库存管理中验收并入库",
+      );
     state(po, ["CONFIRMED", "PARTIALLY_RECEIVED"]);
     if (String(po.warehouse_id) !== b.warehouseId)
       fail("INVALID_RELATION", "仓库必须与采购单一致", 400);
@@ -349,6 +355,11 @@ export async function receiptCommand(
     const r = await entity(tx, "receipts", value, true);
     if (action === "post" && r.status === "POSTED")
       return detail("receipts", value, tx);
+    if (action === "post" && po.tracked_receiving)
+      fail(
+        "TRACKED_RECEIVING",
+        "已发货采购单请通过包裹质检和进货仓入库，不能重复过账",
+      );
     version(r, b.expectedVersion);
     if (action === "mark-received") {
       state(r, ["DRAFT"]);

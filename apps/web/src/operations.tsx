@@ -39,6 +39,13 @@ import { BatchEditor } from "./batch-editor";
 import { LineSheet, lineRule, purchaseFields } from "./line-sheet";
 import { Sheet } from "./sheet";
 import { DocumentEditor } from "./document-editor";
+import {
+  InventoryDialog,
+  ProcurementList,
+  ProcurementPanel,
+  StagingPanel,
+  TransfersPanel,
+} from "./inventory-flow";
 function useAction() {
   const { message } = App.useApp();
   const [busy, setBusy] = useState(false);
@@ -61,6 +68,44 @@ function useAction() {
   };
 }
 export function InventoryPage() {
+  const product = useCan("product.read");
+  return (
+    <>
+      <Header
+        title="库存管理"
+        subtitle="采购配送、SKU 盘点质检、进货仓暂存和分仓库存统一管理。"
+      />
+      <Tabs
+        destroyOnHidden
+        items={[
+          {
+            key: "balances",
+            label: "库存明细",
+            children: <InventoryBalances />,
+          },
+          {
+            key: "procurement",
+            label: "采购配送",
+            children: <ProcurementList />,
+          },
+          { key: "staging", label: "进货仓待入库", children: <StagingPanel /> },
+          { key: "transfers", label: "调拨订单", children: <TransfersPanel /> },
+          ...(product
+            ? [
+                {
+                  key: "skus",
+                  label: "SKU 资料",
+                  children: <MasterPage resource="skus" />,
+                },
+              ]
+            : []),
+        ]}
+      />
+    </>
+  );
+}
+function InventoryBalances() {
+  const [reference, setReference] = useState<Row>();
   const [batch, setBatch] = useState(false);
   const [search, setSearch] = useState(""),
     [warehouse, setWarehouse] = useState<string>(),
@@ -78,8 +123,8 @@ export function InventoryPage() {
   return (
     <>
       <Header
-        title="SKU 库存"
-        subtitle="实际库存、可售数量和已确认采购在途，分仓清晰可查。"
+        title="库存明细"
+        subtitle="按 SKU 与仓库查询库存，人工参考值注明渠道来源和日期。"
         extra={
           can && (
             <Space>
@@ -104,7 +149,7 @@ export function InventoryPage() {
         className="notice"
         type="info"
         showIcon
-        title="可售 = 实际 − 锁定 − 次品。在途来自已确认采购单；无销售数据时不推算补货风险。"
+        title="可售 = 在仓 − 锁定 − 次品。实际发货才计入在途，包裹送达不等于入库；无日销参考时不推算补货建议。"
       />
       <Card>
         <div className="table-toolbar">
@@ -135,44 +180,119 @@ export function InventoryPage() {
           loading={q.isLoading}
           locale={empty}
           dataSource={q.items}
-          scroll={{ x: 1050 }}
+          scroll={{ x: 2700 }}
           columns={[
             {
-              title: "商品 / SKU",
+              title: "图片",
+              dataIndex: "mainImageUrl",
+              width: 84,
+              render: (v) =>
+                v ? (
+                  <img
+                    src={v}
+                    alt="商品图片"
+                    style={{ width: 56, height: 66, objectFit: "contain" }}
+                  />
+                ) : (
+                  "—"
+                ),
+            },
+            { title: "款号", dataIndex: "styleNo", width: 140 },
+            { title: "货号", dataIndex: "articleNo", render: (v) => v || "—" },
+            {
+              title: "SKU / 条码",
               render: (_, r) => (
                 <>
                   <strong>{r.productName}</strong>
                   <div className="secondary">
-                    {r.skuCode} · {r.colorName} / {r.sizeName}
+                    {r.skuCode}
+                    {r.barcode ? " / " + r.barcode : ""}
                   </div>
                 </>
               ),
             },
+            {
+              title: "供应商款式编码",
+              dataIndex: "supplierStyleCode",
+              render: (v) => v || "—",
+            },
+            { title: "颜色", dataIndex: "colorName" },
+            { title: "尺码", dataIndex: "sizeName" },
             { title: "仓库", dataIndex: "warehouseName" },
             ...[
               "physicalQty",
-              "reservedQty",
-              "damagedQty",
-              "availableQty",
               "inTransitQty",
+              "transferTransitQty",
+              "incomingQty",
+              "estimatedReturns",
+              "dailySales",
             ].map((k, i) => ({
-              title: ["实际", "锁定", "次品", "可售", "有效在途"][i],
+              title: [
+                "在仓库存数",
+                "采购在途数",
+                "调拨在途数",
+                "进货仓库存",
+                "预估销退数",
+                "渠道日销参考",
+              ][i],
               dataIndex: k,
-              render: (v: number) =>
-                k === "availableQty" ? (
-                  <strong className={v === 0 ? "zero" : "stock-number"}>
-                    {v}
-                  </strong>
-                ) : (
-                  v
-                ),
+              render: (v: number) => v ?? "暂无数据",
             })),
+            {
+              title: "退货率",
+              dataIndex: "returnRate",
+              render: (v) =>
+                v == null
+                  ? "暂无数据"
+                  : Number((Number(v) * 100).toFixed(4)) + "%",
+            },
+            {
+              title: "可售天数",
+              dataIndex: "coverageDays",
+              render: (v, r) =>
+                v == null
+                  ? r.dailySales != null && Number(r.dailySales) === 0
+                    ? "无日销"
+                    : "暂无数据"
+                  : v + "天",
+            },
+            {
+              title: "补货建议",
+              dataIndex: "replenishmentQty",
+              render: (v) => (v == null ? "暂无数据" : v + "件"),
+            },
+            {
+              title: "可售 / 锁定 / 次品",
+              render: (_, r) =>
+                `${r.availableQty} / ${r.reservedQty} / ${r.damagedQty}`,
+            },
+            {
+              title: "参考来源 / 日期",
+              render: (_, r) =>
+                r.sourceNote ? (
+                  <>
+                    {r.sourceNote}
+                    <div className="secondary">
+                      人工维护 · {r.referenceDate?.slice(0, 10)}
+                    </div>
+                  </>
+                ) : (
+                  "未配置"
+                ),
+            },
             {
               title: "操作",
               render: (_, r) => (
-                <Link to={"/inventory/transactions?skuId=" + r.skuId}>
-                  库存流水
-                </Link>
+                <Space>
+                  <Link to={"/inventory/transactions?skuId=" + r.skuId}>
+                    库存流水
+                  </Link>
+                  {can && (
+                    <Button size="small" onClick={() => setReference(r)}>
+                      参考值设置
+                    </Button>
+                  )}
+                </Space>
               ),
             },
           ]}
@@ -185,6 +305,13 @@ export function InventoryPage() {
           }}
         />
       </Card>
+      {reference && (
+        <InventoryDialog
+          mode="reference"
+          record={reference}
+          onClose={() => setReference(undefined)}
+        />
+      )}
       <Modal
         title="库存调整"
         open={open}
@@ -304,7 +431,21 @@ export function TransactionsPage() {
             { title: "时间", dataIndex: "occurredAt", render: when },
             { title: "SKU", dataIndex: "skuCode" },
             { title: "仓库", dataIndex: "warehouseName" },
-            { title: "类型", dataIndex: "transactionType" },
+            {
+              title: "类型",
+              dataIndex: "transactionType",
+              render: (v) =>
+                (
+                  ({
+                    PROCUREMENT_PUTAWAY: "采购正式入库",
+                    TRANSFER_OUT: "调拨出库",
+                    TRANSFER_IN: "调拨入库",
+                    PURCHASE_RECEIPT: "原到货入库",
+                    STOCK_ADJUSTMENT: "库存调整",
+                    STOCKTAKE: "盘点调整",
+                  }) as Row
+                )[v] || v,
+            },
             {
               title: "源单号",
               render: (_, r) =>
@@ -366,7 +507,7 @@ export function PurchaseList({ receipt = false }: { receipt?: boolean }) {
         subtitle={
           receipt
             ? "从采购单建立入库单。确认到货后，过账才会增加库存。"
-            : "先保存草稿，再提交确认；确认后计入有效在途。"
+            : "先保存草稿，再提交确认；实际发货后才计入采购在途。"
         }
         extra={
           !receipt &&
@@ -627,7 +768,7 @@ export function DocumentDetail({ receipt = false }: { receipt?: boolean }) {
         act === "post"
           ? "确认过账并增加库存？"
           : act === "confirm"
-            ? "确认采购单并计入在途？"
+            ? "确认采购单？实际发货后才计入在途。"
             : act === "cancel"
               ? "取消此单据？"
               : "确认此操作？",
@@ -725,6 +866,7 @@ export function DocumentDetail({ receipt = false }: { receipt?: boolean }) {
               </Button>
             )}
           {!receipt &&
+            !r.trackedReceiving &&
             ["CONFIRMED", "PARTIALLY_RECEIVED"].includes(r.status) &&
             userCan.createReceipt && (
               <Button type="primary" onClick={openReceipt}>
@@ -745,12 +887,17 @@ export function DocumentDetail({ receipt = false }: { receipt?: boolean }) {
             "DRAFT",
             ...(receipt ? ["RECEIVED"] : ["PENDING_CONFIRMATION", "CONFIRMED"]),
           ].includes(r.status) &&
-            userCan.cancel && (
+            userCan.cancel &&
+            (receipt || !r.trackedReceiving) && (
               <Button danger onClick={() => command("cancel")}>
                 取消单据
               </Button>
             )}
         </Space>
+        {!receipt &&
+          ["CONFIRMED", "PARTIALLY_RECEIVED", "COMPLETED", "SHIPPED"].includes(
+            r.status,
+          ) && <ProcurementPanel id={r.id} />}
         {receipt && r.status === "RECEIVED" && (
           <Alert
             className="notice"

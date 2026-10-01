@@ -57,6 +57,28 @@ Product筛选 q（款号/名称）、categoryId、brandId、supplierId、year、
 
 ## 4. 库存
 
+2026-10-01：库存查询按 SKU 与仓库返回采购实际发货在途、调拨实际发货在途和质检合格待入库数量，以及人工 SKU 货号/日销/退货/预估销退参考及来源日期。确认但未实际发出的采购量不计在途。`totals.transit` 为全仓尚未正式入库供给（在途及合格暂存），用于采购建议供给快照。
+
+新增 `/inventory/fulfilment` 认证接口，所有 POST 要求 CSRF、同源及 Idempotency-Key：
+
+| 路径（相对前缀） | 操作 | 服务端权限 |
+|---|---|---|
+| GET purchases、purchases/:id、shipments/:id | 分页采购、SKU明细、包裹 | inventory.read；供应商仅自己的派单 |
+| POST purchases/:id/assign | version,accountId，发货账号关联 | purchase.update |
+| POST supply-orders/:id/bind | version,supplierId,warehouseId,items:[supplyItemId,skuId] | supply.purchase + purchase.create |
+| POST purchases/:id/dispatch | version,shipment,items:[itemId,quantity] | purchase.update；关联供应链订单仅本人供应商 |
+| POST shipments/:id/receive | version,code（无需物流）或signedNote（实际快递签收） | receipt.update |
+| POST shipments/:id/inspect | version,items:[itemId,qualifiedQty,issues:[type,quantity],note] | receipt.update |
+| POST shipments/:id/correct-tracking | version,shipment,reason | 对应供应商/采购编辑；调拨需要inventory.adjust |
+| GET staging；POST putaway | 合格暂存列表；itemId,warehouseId,quantity 正式入库 | inventory.read；receipt.post |
+| GET/POST transfers、GET transfers/:id | 分页调拨/建草稿/明细 | inventory.read；inventory.adjust |
+| POST transfers/:id/dispatch、cancel | version,shipment；version,reason | inventory.adjust |
+| POST references/:skuId | articleNo,dailySales,returnRate(0..1),estimatedReturns,targetDays,sourceNote,referenceDate | inventory.adjust |
+
+`shipment` 使用 DELIVERY 或 COURIER。DELIVERY 每包裹生成四位随机码；仅发货人/对应供应商可从查询取码；接收方核验十次错误限流十五分钟。COURIER 要求白名单快递公司与6至32位字母数字单号。签收仅转包裹 DELIVERED，不计仓库库存。物流 worker 的持久 claim/token 防止旧轨迹覆盖更正单号。
+
+质检数量要求：合格数+问题数=本次发货数，问题类型 SHORTAGE/WRONG/DAMAGED/DEFECT/STAIN/QUALITY 不重复且有说明。每个原采购明细剩余可发量扣除已入库、取消、活动包裹数量及合格暂存；补发可换配送方式。正式入库只从已质检合格待入库数量扣减，调拨只能入目标仓。旧到货活动单与新流程互斥，已经启用新流程的单不得旧流程过账；历史流水保留不重写。
+
 | 方法/路径 | 契约 | 权限 |
 |---|---|---|
 | GET /inventory | q,warehouseId?,supplierId?,categoryId?,colorCode?,sizeCode?；默认按仓+SKU行返回 | inventory.read |

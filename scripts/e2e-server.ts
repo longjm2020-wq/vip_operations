@@ -46,6 +46,9 @@ const children = [
       "node_modules/vite/bin/vite.js",
       "--config",
       "apps/web/vite.config.ts",
+      ...(process.env.VITE_CONFIG_LOADER
+        ? ["--configLoader", process.env.VITE_CONFIG_LOADER]
+        : []),
       "--port",
       "5174",
     ],

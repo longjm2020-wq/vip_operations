@@ -130,7 +130,7 @@ test("真实前后端：建档、采购确认、两次入库、流水追溯", as
   await expect(page.getByText("已完成", { exact: true }).first()).toBeVisible();
   await page.goto("/inventory");
   await expect(
-    page.getByRole("row").filter({ hasText: "E2E-BK-L" }),
+    page.getByRole("row").filter({ hasText: "E2E-BK-L" }).filter({has:page.getByRole('cell',{name:'验收仓',exact:true})}),
   ).toContainText("100");
   await page.screenshot({
     path: ".local/inventory-preview.png",
@@ -139,7 +139,7 @@ test("真实前后端：建档、采购确认、两次入库、流水追溯", as
   });
   await page.goto("/inventory/transactions");
   await expect(
-    page.getByRole("cell", { name: "PURCHASE_RECEIPT" }),
+    page.getByRole("cell", { name: "原到货入库" }),
   ).toHaveCount(2);
   await page.goto("/audit-logs");
   await expect(
@@ -153,7 +153,7 @@ test("未知销量明确跳过建议，并可退出登录", async ({ page }) => 
   await select(page, "SKU", "E2E-BK-L");
   await page.getByLabel("目标库存天数（需明确填写）").fill("21");
   await page.getByRole("button", { name: "确定", exact: true }).click();
-  await expect(page.getByText("SKU 1：暂无完整销售数据")).toBeVisible();
+  await expect(page.getByText(/SKU \d+：暂无完整销售数据/)).toBeVisible();
   await page.getByRole("button", { name: "取消", exact: true }).click();
   await page.getByRole("button", { name: /账号菜单/ }).click();
   await page.getByRole("menuitem", { name: "退出登录" }).click();
@@ -316,10 +316,10 @@ test("表格库存调整留下真实流水", async ({ page }) => {
   await expect(page.getByText(/保存成功 1 行，失败 0 行/)).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(
-    page.getByRole("row").filter({ hasText: "E2E-BK-L" }),
+    page.getByRole("row").filter({ hasText: "E2E-BK-L" }).filter({has:page.getByRole('cell',{name:'验收仓',exact:true})}),
   ).toContainText("115");
   await page.goto("/inventory/transactions");
   await expect(
-    page.getByRole("cell", { name: "STOCK_ADJUSTMENT", exact: true }),
+    page.getByRole("cell", { name: "库存调整", exact: true }),
   ).toBeVisible();
 });

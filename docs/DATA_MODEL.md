@@ -82,7 +82,7 @@ suggested_qty = max(0, ceil(target_stock_days * avg_daily_sales
 | PARTIALLY_RECEIVED | 正常入库 | PARTIALLY_RECEIVED / COMPLETED |
 | COMPLETED/CANCELLED | 查询 | 无 |
 
-确认前不计在途。第一阶段只允许 DRAFT 编辑，提交后修改走后续明确流程，不能偷偷改回草稿。CONFIRMED 整单取消只在累计入库0、无 DRAFT/RECEIVED 活动入库单时允许；cancelled_qty 原子设为全部未收量。已有入库或部分取消属于 B06，暂拒绝。完成状态只由后台数量推导，不能手工 PATCH。
+2026-10-01 起，采购在途改为实际发货包裹数量，确认但未发货不计在途。第一阶段只允许 DRAFT 编辑，提交后修改走后续明确流程，不能偷偷改回草稿。CONFIRMED 整单取消只在累计入库0、无 DRAFT/RECEIVED 活动入库单且未开启配送质检时允许；cancelled_qty 原子设为全部未收量。已有入库或部分取消属于 B06，暂拒绝。完成状态只由后台数量推导，不能手工 PATCH。
 
 ## 6. 到货、验收与过账
 

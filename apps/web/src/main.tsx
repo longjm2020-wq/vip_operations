@@ -72,7 +72,7 @@ const SupplyReview = React.lazy(() => import("./supply").then(module => ({ defau
 const SupplyOrders = React.lazy(() => import("./supply-orders").then(module => ({ default: module.SupplyOrders })));
 const SupplyOrderNotice = React.lazy(() => import("./supply-orders").then(module => ({ default: module.SupplyOrderNotice })));
 const SupplyStatements = React.lazy(() => import("./supply-statements").then(module => ({ default: module.SupplyStatements })));
-const coreFeatureSummary = "ERP经营 · 协作表格与资料收集 · 供应链订单对账 · 项目协作";
+const coreFeatureSummary = "采购库存经营 · 协作表格与资料收集 · 供应链订单对账 · 项目协作";
 const useUi = create<{ collapsed: boolean; toggle: () => void }>((set) => ({
   collapsed: false,
   toggle: () => set((s) => ({ collapsed: !s.collapsed })),
@@ -194,14 +194,8 @@ function Workspace({ user }: { user: Row }) {
       permission: "product.read",
     },
     {
-      key: "/skus",
-      label: "SKU 管理",
-      icon: <DatabaseOutlined />,
-      permission: "product.read",
-    },
-    {
       key: "/inventory",
-      label: "SKU 库存",
+      label: "库存管理",
       icon: <InboxOutlined />,
       permission: "inventory.read",
     },

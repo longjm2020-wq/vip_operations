@@ -26,6 +26,7 @@ import {
 } from "../../../../../packages/contracts/src/supply-orders.js";
 import { reservedStock } from "./reservations.js";
 import { trackingEnabled } from "../../integrations/logistics.js";
+import { createSupplyPackage } from "../inventory/fulfilment.js";
 const canBuy = (c: Context) => c.actor.permissions.includes("supply.purchase");
 export async function orderSettings(c: Context) {
   requirePermission(c.actor, "supply.purchase");
@@ -351,6 +352,7 @@ async function event(tx: Tx, c: Context, orderId: string, body: string) {
 export async function orderAction(c: Context, orderId: string, input: unknown) {
   const b = parse(orderActionSchema, input);
   return command(c, "supply.order.action/" + orderId, b, async (tx) => {
+    await rows(tx, "SELECT pg_advisory_xact_lock(91002)::text");
     const o = await accessible(tx, c, orderId, true);
     version(o, b.version);
     if (b.action === "CANCEL") requirePermission(c.actor, "supply.purchase");
@@ -366,11 +368,28 @@ export async function orderAction(c: Context, orderId: string, input: unknown) {
         fail("INVALID_STATE", "仅未发货订单可取消");
       status = "CANCELLED";
       body = "采购订单已取消：" + b.reason;
+      if (o.inventory_purchase_order_id) {
+        await rows(
+          tx,
+          "UPDATE purchase_orders SET status='CANCELLED',version=version+1,updated_at=now() WHERE id=$1::bigint RETURNING id",
+          String(o.inventory_purchase_order_id),
+        );
+        await rows(
+          tx,
+          "UPDATE purchase_order_items SET cancelled_qty=ordered_qty-received_qty WHERE purchase_order_id=$1::bigint RETURNING id",
+          String(o.inventory_purchase_order_id),
+        );
+      }
     } else if (b.action === "ACCEPT") {
       if (o.status !== "PENDING") fail("INVALID_STATE", "该订单已接单或已关闭");
       status = "PICKING";
       body = "供应商已接单，开始按清单配货";
     } else if (b.action === "DELIVER") {
+      if (o.inventory_purchase_order_id)
+        fail(
+          "RECEIVER_VERIFICATION",
+          "该订单由接收方核验四位发货码，供应商不能代替核销",
+        );
       if (o.status !== "SHIPPED" || o.shipping_method !== "DELIVERY")
         fail(
           "INVALID_STATE",
@@ -426,6 +445,23 @@ export async function orderAction(c: Context, orderId: string, input: unknown) {
       }
       const sh = b.shipment,
         courier = sh.method === "COURIER";
+      if (!correction) await createSupplyPackage(tx, c, o, sh);
+      else if (o.inventory_purchase_order_id) {
+        const pkg = await one(
+          tx,
+          "SELECT * FROM inventory_shipments WHERE purchase_order_id=$1::bigint ORDER BY id LIMIT 1 FOR UPDATE",
+          String(o.inventory_purchase_order_id),
+        );
+        if (!pkg || pkg.status !== "SHIPPED")
+          fail("INVALID_STATE", "包裹已签收，请在配送明细核对后续包裹信息");
+        await rows(
+          tx,
+          "UPDATE inventory_shipments SET carrier=$2,tracking_no=$3,tracking='{}',tracking_error='',tracking_checked_at=NULL,next_poll_at=now(),poll_token=NULL,version=version+1,updated_at=now() WHERE id=$1::bigint RETURNING id",
+          String(pkg.id),
+          courier ? sh.carrier : null,
+          courier ? sh.trackingNo.toUpperCase() : null,
+        );
+      }
       await rows(
         tx,
         "UPDATE supply_orders SET shipping_method=$2,carrier=$3,tracking_no=$4,shipping_note=$5,tracking='{}',tracking_error='',tracking_checked_at=NULL,next_poll_at=CASE WHEN $6 THEN now() ELSE NULL END,poll_token=NULL,shipped_at=coalesce(shipped_at,now()) WHERE id=$1::bigint RETURNING id",

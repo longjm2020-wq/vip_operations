@@ -336,4 +336,6 @@ export async function testSupplyOrders(h: Record<string, any>) {
     orderId: first.id,
     expressId: express.id,
   });
+  const { testInventoryFlow } = await import("./inventory-flow.js");
+  await testInventoryFlow(h);
 }

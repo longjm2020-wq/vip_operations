@@ -29,5 +29,6 @@ jobs:
       - run: pnpm db:generate
       - run: pnpm lint && pnpm typecheck && pnpm test:unit && pnpm build
       - run: pnpm test:integration
+      - run: pnpm exec tsx tests/integration/supply.ts
       - run: pnpm exec playwright install --with-deps chromium
       - run: pnpm test:e2e

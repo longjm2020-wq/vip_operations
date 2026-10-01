@@ -136,6 +136,14 @@ roleSeeds.SUPPLY_MANAGER = {
     "supply.manage",
     "supply.purchase",
     "supply.reconcile",
+    "inventory.read",
+    "product.read",
+    "warehouse.read",
+    "supplier.read",
+    "purchase.read",
+    "purchase.create",
+    "receipt.update",
+    "receipt.post",
   ],
 };
 export const inTransitStatuses = [
