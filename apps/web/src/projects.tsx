@@ -44,6 +44,8 @@ import { FlowCanvas } from "./flow-canvas";
 import { projectPeriod, projectBaseName } from "./project-period";
 import { ProjectAttachments } from "./project-attachments";
 import "./projects.css";
+import { LibraryActions, LibraryToolbar, VisibilityTag, useLibraryView } from "./project-library";
+import { visibilityOptions } from "../../../packages/contracts/src/project-library";
 const projectStates: Record<string, string> = {
   DRAFT: "草稿",
   ACTIVE: "进行中",
@@ -485,6 +487,7 @@ function RequirementsEditor({
   );
 }
 export function SopPage() {
+  const library=useLibraryView("sop");
   const { message } = App.useApp(),
     can = useCan("project.read"),
     user = useUser(),
@@ -531,6 +534,7 @@ export function SopPage() {
                 name: "",
                 department: options.data?.departments?.[0] || "运营",
                 description: "",
+                visibility: "PRIVATE",
                 steps: [{ id: uuid(), name: "启动计划", description: "" }],
               })
             }
@@ -539,7 +543,7 @@ export function SopPage() {
           </Button>,
         )}
       />
-      <Space className="project-filters">
+      <div className="library-toolbar">
         <Select
           allowClear
           placeholder="按岗位筛选"
@@ -548,9 +552,19 @@ export function SopPage() {
           options={opt([...departments])}
           onChange={setDept}
         />
-      </Space>
+        <LibraryToolbar kind="sop" view={library.view} onView={library.setView}/>
+      </div>
       {list.error && <Alert type="error" title={list.error.message} />}
-      <div className="project-card-grid">
+      {library.view==="list" ? <Card><Table<Row> rowKey="id" loading={list.isLoading} pagination={{pageSize:20}} scroll={{x:850}}
+        dataSource={(list.data||[]).filter((s:Row)=>!dept||s.department===dept)} columns={[
+          {title:"SOP名称",dataIndex:"name",render:(name:string,s:Row)=><Button type="link" onClick={()=>setView(s)}>{name}</Button>},
+          {title:"岗位",dataIndex:"department"},
+          {title:"环节",render:(_:unknown,s:Row)=>s.steps.length},
+          {title:"创建人",dataIndex:"ownerName",render:(name:string)=>name||"系统模板"},
+          {title:"公开范围",dataIndex:"visibility",render:(v:string)=><VisibilityTag value={v}/>},
+          {title:"创建时间",dataIndex:"createdAt",render:when},
+          {title:"操作",render:(_:unknown,s:Row)=><Space><Button type="link" onClick={()=>setView(s)}>打开</Button><LibraryActions kind="sop" row={s}/></Space>},
+        ]}/></Card> : <div className="project-card-grid">
         {(list.data || [])
           .filter((s: Row) => !dept || s.department === dept)
           .map((s: Row) => (
@@ -560,7 +574,7 @@ export function SopPage() {
               hoverable
               onClick={() => setView(s)}
             >
-              <Tag color="green">{s.department}</Tag>
+              <div className="library-card-heading"><Space wrap><Tag color="green">{s.department}</Tag><VisibilityTag value={s.visibility}/></Space><LibraryActions kind="sop" row={s}/></div>
               <h2>{s.name}</h2>
               <p>{s.description}</p>
               <footer>
@@ -568,8 +582,8 @@ export function SopPage() {
               </footer>
             </Card>
           ))}
-      </div>
-      {!list.isLoading && !list.data?.length && (
+      </div>}
+      {library.view==="card" && !list.isLoading && !(list.data||[]).some((s:Row)=>!dept||s.department===dept) && (
         <Empty description="还没有 SOP 模板" />
       )}
       <Drawer
@@ -580,8 +594,7 @@ export function SopPage() {
         styles={{ wrapper: { width: "98vw" }, body: { padding: 12 } }}
         extra={
           view &&
-          (String(view.ownerId) === String(user.id) ||
-            user.permissions.includes("user.manage")) && (
+          view.canManage && (
             <Button
               onClick={() => {
                 setEdit({ ...view, steps: flowSteps(view.steps) });
@@ -638,6 +651,9 @@ export function SopPage() {
               styles={{ wrapper: { width: "min(560px, 95vw)" } }}
             >
               <Form layout="vertical">
+                <Form.Item label="公开范围" extra="公开后，系统内有项目查看权限的用户可查看。">
+                  <Select value={edit.visibility||"PRIVATE"} options={visibilityOptions} onChange={visibility=>setEdit({...edit,visibility})}/>
+                </Form.Item>
                 <Form.Item label="名称" required>
                   <Input
                     value={edit.name}
@@ -789,9 +805,11 @@ function ProjectEditor({
           ),
           tag: initial.tag,
           version: initial.version,
+          visibility: initial.visibility || "PRIVATE",
         }
       : {
           name: "",
+          visibility: "PRIVATE",
           tag: "周上新",
           description: "",
           start: "",
@@ -952,6 +970,9 @@ function ProjectEditor({
       }
     >
       <Form layout="vertical">
+        <Form.Item label="公开范围" extra="公开后，系统内有项目查看权限的用户可查看；任务执行和群聊仍限协作成员。">
+          <Select value={value.visibility} options={visibilityOptions} onChange={v=>patch("visibility",v)}/>
+        </Form.Item>
         <div className="project-form-grid">
           <Form.Item label="标签归类" required>
             <Select
@@ -1166,8 +1187,7 @@ function ProjectEditor({
   );
 }
 export function ProjectsPage() {
-  const user = useUser();
-  const { modal } = App.useApp();
+  const library=useLibraryView("project");
   const can = useCan("project.read"),
     create = useCan("project.create"),
     { message } = App.useApp(),
@@ -1199,7 +1219,7 @@ export function ProjectsPage() {
   return (
     <>
       <Header
-        title="项目管理"
+        title="新建项目"
         subtitle="从计划到交付，让每个环节都有人负责。"
         extra={
           create && (
@@ -1261,8 +1281,18 @@ export function ProjectsPage() {
           onChange={(e) => setFilters({ ...filters, to: e.target.value })}
         />
       </Space>
+      <div className="library-toolbar"><span>查看项目与协作进度</span><LibraryToolbar kind="project" view={library.view} onView={library.setView}/></div>
       {list.error && <Alert type="error" title={list.error.message} />}
-      <div className="project-card-grid">
+      {library.view==="list" ? <Card><Table<Row> rowKey="id" pagination={false} loading={list.isLoading} scroll={{x:950}} dataSource={(list.data||[]).slice(0,50)} columns={[
+        {title:"项目名称",dataIndex:"name",render:(name:string,p:Row)=><Link to={`/projects/${p.id}`}>{name||"未命名草稿"}</Link>},
+        {title:"分类",dataIndex:"tag"},
+        {title:"状态",dataIndex:"status",render:(v:string)=>projectStates[v]},
+        {title:"任务进度",render:(_:unknown,p:Row)=>{const tasks=p.document.tasks||[];return `${tasks.filter((t:Row)=>t.status==="DONE").length}/${tasks.length} 项`; }},
+        {title:"创建人",dataIndex:"ownerName"},
+        {title:"公开范围",dataIndex:"visibility",render:(v:string)=><VisibilityTag value={v}/>},
+        {title:"创建时间",dataIndex:"createdAt",render:when},
+        {title:"操作",render:(_:unknown,p:Row)=><Space><Link to={`/projects/${p.id}`}>打开</Link><LibraryActions kind="project" row={p}/></Space>},
+      ]}/></Card> : <div className="project-card-grid">
         {(list.data || []).slice(0, 50).map((p: Row) => {
           const tasks = p.document.tasks || [],
             stages = p.document.stages || [],
@@ -1294,7 +1324,7 @@ export function ProjectsPage() {
               key={p.id}
               onClick={() => nav("/projects/" + p.id)}
             >
-              <Space>
+              <div className="library-card-heading"><Space wrap>
                 <Tag>{p.tag}</Tag>
                 <Tag
                   color={
@@ -1308,40 +1338,8 @@ export function ProjectsPage() {
                   {projectStates[p.status]}
                 </Tag>
                 {bad && <Tag color="red">存在异议</Tag>}
-                {p.status === "VOID" &&
-                  create &&
-                  (String(p.ownerId) === String(user.id) ||
-                    user.permissions.includes("user.manage")) && (
-                    <Button
-                      type="link"
-                      danger
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        modal.confirm({
-                          title: "删除已作废项目？",
-                          content: "删除后将从项目列表移除，操作记录保留。",
-                          onOk: async () => {
-                            try {
-                              await api(
-                                "/projects/" + p.id,
-                                "DELETE",
-                                {},
-                                uuid(),
-                              );
-                              await refreshProjects();
-                              message.success("已删除");
-                            } catch (e) {
-                              message.error((e as Error).message);
-                              throw e;
-                            }
-                          },
-                        });
-                      }}
-                    >
-                      删除
-                    </Button>
-                  )}
-              </Space>
+                <VisibilityTag value={p.visibility}/>
+              </Space><LibraryActions kind="project" row={p}/></div>
               <h2>{p.name || "未命名草稿"}</h2>
               <RichView value={p.document.description} summary />
               <p>
@@ -1376,8 +1374,8 @@ export function ProjectsPage() {
             </Card>
           );
         })}
-      </div>
-      {!list.isLoading && !list.data?.length && (
+      </div>}
+      {library.view==="card" && !list.isLoading && !list.data?.length && (
         <Empty description="暂无项目，点击新建项目开始协作" />
       )}
       <Space className="project-filters">
@@ -1478,6 +1476,7 @@ export function ProjectDetailPage() {
     tasks = d.tasks || [],
     members = p.members || [],
     stages = d.stages || [];
+  const collaborate=p.canCollaborate ?? (owner||members.some((m:Row)=>String(m.id)===String(user.id)));
   const visible = stage ? tasks.filter((t: Row) => t.stage === stage) : tasks;
   const person = (v: string) =>
     members.find((m: Row) => String(m.id) === v)?.displayName || "未指定";
@@ -1494,7 +1493,7 @@ export function ProjectDetailPage() {
         />
         <Button
           disabled={
-            !selected.length || p.status === "DRAFT" || p.status === "VOID"
+            !collaborate || !selected.length || p.status === "DRAFT" || p.status === "VOID"
           }
           onClick={() => setChat(true)}
         >
@@ -1625,7 +1624,6 @@ export function ProjectDetailPage() {
   );
   return (
     <>
-      <Link to="/projects">← 项目列表</Link>
       <Header
         title={p.name || "未命名草稿"}
         subtitle={`${p.tag} · ${projectStates[p.status]} · 发起时间 ${when(p.createdAt)}`}
@@ -1649,7 +1647,7 @@ export function ProjectDetailPage() {
                 推送项目
               </Button>
             )}
-            {!["VOID", "DONE"].includes(p.status) && (
+            {collaborate && !["VOID", "DONE"].includes(p.status) && (
               <Button onClick={() => setInvite(true)}>添加协作人</Button>
             )}
             {owner && !["VOID", "DONE"].includes(p.status) && (
@@ -1765,7 +1763,7 @@ export function ProjectDetailPage() {
           },
         ]}
       />
-      <Button
+      {collaborate && <Button
         className="project-chat-toggle"
         shape="circle"
         size="large"
@@ -1773,7 +1771,7 @@ export function ProjectDetailPage() {
         aria-label="打开项目群聊"
         icon={<CommentOutlined />}
         onClick={() => setChat(!chat)}
-      />
+      />}
       <ProjectChat
         open={chat}
         onClose={() => setChat(false)}

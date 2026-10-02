@@ -15,6 +15,7 @@ import {
 import { AuthRequest, context, Permission } from "../../http.js";
 import { parse, id } from "../../core.js";
 import * as s from "./service.js";
+import { ProjectLibraryController } from "./library-controller.js";
 @Controller("api/v1/projects")
 export class ProjectsController {
   @Permission("project.create") @Post("uploads") upload(
@@ -37,8 +38,8 @@ export class ProjectsController {
   @Permission("project.read") @Get("options") options(@Req() r: AuthRequest) {
     return s.options(context(r));
   }
-  @Permission("project.read") @Get("sops") sops() {
-    return s.sops();
+  @Permission("project.read") @Get("sops") sops(@Req() r: AuthRequest) {
+    return s.sops(context(r));
   }
   @Permission("sop.manage") @Post("sops") addSop(
     @Req() r: AuthRequest,
@@ -140,5 +141,5 @@ export class ProjectsController {
     return s.readNotifications(context(r), parse(id, v));
   }
 }
-@Module({ controllers: [ProjectsController] })
+@Module({ controllers: [ProjectsController, ProjectLibraryController] })
 export class ProjectsModule {}

@@ -139,20 +139,6 @@ a {
   flex: 1;
   margin: 0 16px;
 }
-.workspace-subnav .ant-tabs-nav {
-  height: 47px;
-  margin: 0;
-}
-.workspace-subnav .ant-tabs-nav::before {
-  border-bottom: 0;
-}
-.workspace-subnav .ant-tabs-tab {
-  margin: 0;
-  padding: 12px;
-}
-.workspace-subnav .ant-tabs-content-holder {
-  display: none;
-}
 .workspace-subnav a {
   white-space: nowrap;
 }
@@ -188,12 +174,8 @@ a {
     flex-basis: 100%;
     margin: 0;
   }
-  .workspace-subnav .ant-tabs-nav,
   .workspace-path {
     height: 38px;
-  }
-  .workspace-subnav .ant-tabs-tab {
-    padding-block: 8px;
   }
   .workspace-subnav:empty {
     display: none;

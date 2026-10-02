@@ -5,6 +5,8 @@ import { startVopScheduler } from "./vop-scheduler.js";
 import { startSupplyLogistics } from "./supply-logistics.js";
 import { startInventoryLogistics } from "./inventory-logistics.js";
 import { startCompassMail } from "./compass-mail.js";
+import { startRecycleCleanup } from "../../api/src/modules/projects/recycle.js";
+const stopRecycleCleanup = startRecycleCleanup();
 const stopCompassMail = startCompassMail();
 const stopInventoryLogistics = startInventoryLogistics();
 const stopSupplyLogistics = startSupplyLogistics();
@@ -48,6 +50,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const)
       stopSupplyLogistics(),
       stopInventoryLogistics(),
       stopCompassMail(),
+      stopRecycleCleanup(),
     ]).then(() => process.exit(0));
   });
 console.log(

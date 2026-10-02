@@ -95,6 +95,7 @@ export async function audit(
     beforeData: before === null ? null : JSON.stringify(json(before)),
     afterData: after === null ? null : JSON.stringify(json(after)),
     reason,
+    ...(selectionScope.getStore() ? { selectionTableId: selectionScope.getStore() } : {}),
   });
 }
 export async function command(

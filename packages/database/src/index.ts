@@ -1,7 +1,7 @@
 import "dotenv/config";
 import { PrismaClient, Prisma } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
-import { selectionScope, selectionSchema } from "./selection-scope.js";
+import { selectionScope, selectionSchema, selectionGuard } from "./selection-scope.js";
 const client = new PrismaClient({
   adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }),
 });
@@ -9,6 +9,7 @@ const client = new PrismaClient({
 async function scopedTransaction(fn: (tx: Tx) => Promise<any>, options?: any) {
   const scope = selectionScope.getStore();
   return client.$transaction(async (tx) => {
+    await selectionGuard.getStore()?.(tx);
     if (scope)
       await tx.$executeRawUnsafe(
         `SET LOCAL search_path TO "${selectionSchema(scope)}", public`,

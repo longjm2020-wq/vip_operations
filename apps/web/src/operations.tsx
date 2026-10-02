@@ -21,7 +21,6 @@ import {
 } from "antd";
 import {
   PlusOutlined,
-  ArrowLeftOutlined,
   ImportOutlined,
   ExportOutlined,
 } from "@ant-design/icons";
@@ -543,11 +542,6 @@ export function PurchaseNew() {
       <Header
         title="新建采购单"
         subtitle="一张采购单对应一个供应商和一个目标仓库。"
-        extra={
-          <Link to="/purchase-orders">
-            <Button icon={<ArrowLeftOutlined />}>返回列表</Button>
-          </Link>
-        }
       />
       <Card>
         <Form
@@ -740,9 +734,6 @@ export function DocumentDetail({ receipt = false }: { receipt?: boolean }) {
         extra={
           <Space>
             <Status value={r.status} />
-            <Link to={receipt ? "/receipts" : "/purchase-orders"}>
-              <Button>返回列表</Button>
-            </Link>
           </Space>
         }
       />
@@ -1256,11 +1247,6 @@ export function ProductDetail() {
       <Header
         title={p.name}
         subtitle={"款号 " + p.styleNo}
-        extra={
-          <Link to="/products">
-            <Button>返回商品档案</Button>
-          </Link>
-        }
       />
       <Card>
         <Tabs

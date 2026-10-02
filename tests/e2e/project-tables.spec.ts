@@ -145,23 +145,13 @@ test("new tables start with one text field and three blank records, save indepen
   await page.goto("/project-tables");
   await expect(
     page.locator(".sidebar").getByRole("link", {
-      name: "项目协作",
-      exact: true,
-    }),
-  ).toHaveAttribute("aria-current", "page");
-  await expect(
-    page.locator(".sidebar").getByRole("link", {
       name: "新建表格",
       exact: true,
     }),
-  ).toHaveCount(0);
-  const projectNavigation = page.getByRole("navigation", {
-    name: "项目协作功能导航",
-    exact: true,
-  });
-  await expect(projectNavigation.getByRole("tab")).toHaveText(["新建表格"]);
+  ).toHaveAttribute("aria-current", "page");
+  const projectNavigation = page.locator(".sidebar");
   await expect(
-    projectNavigation.getByRole("tab", { name: "新建表格", exact: true }),
+    projectNavigation.getByRole("link", { name: "新建表格", exact: true }),
   ).toBeVisible();
   await page.getByRole("button", { name: "新建表格", exact: true }).click();
   await page.getByLabel("表格名称", { exact: true }).fill("秋季协作表");

@@ -209,7 +209,22 @@ try {
     outsider = await login("outsider");
   assert.equal((await request(empty, "/help")).status, 401);
   const adminHelp = await ok(owner, "/help");
-  assert.equal(adminHelp.length, 22);
+  const { manualPermissions } = await import("../../apps/api/src/manual.js");
+  const ownerPermissions = await rows(
+    db,
+    "SELECT DISTINCT p.code FROM user_roles ur JOIN role_permissions rp ON rp.role_id=ur.role_id JOIN permissions p ON p.id=rp.permission_id WHERE ur.user_id=$1::bigint",
+    owner.id,
+  );
+  const expectedChapters = Object.entries(manualPermissions)
+    .filter(
+      ([, permission]) =>
+        !permission || ownerPermissions.some((p) => p.code === permission),
+    )
+    .map(([chapter]) => `${chapter}.md`);
+  assert.deepEqual(
+    adminHelp.map((chapter: { id: string }) => chapter.id).sort(),
+    expectedChapters.sort(),
+  );
   const buyerHelp = await ok(buyer, "/help?chapter=19-vip.md");
   assert.ok(
     buyerHelp.some((chapter: { id: string }) => chapter.id === "00-start.md"),
@@ -578,10 +593,14 @@ try {
     graph.id + ":c",
   ]);
   pass("分支并行、汇合依赖、非法循环拒绝及画布位置持久化");
-  assert.equal(
-    (await request(owner, `/projects/${p.id}`, "DELETE", {})).status,
-    409,
-  );
+  await ok(owner, `/projects/${p.id}`, "DELETE", {});
+  const completedTrash = (
+    await ok(owner, "/project-library/trash?kind=project")
+  ).find((row: any) => row.id === p.id);
+  await ok(owner, `/project-library/project/${p.id}/restore`, "POST", {
+    version: completedTrash.version,
+  });
+  assert.equal((await ok(owner, `/projects/${p.id}`)).status, "DONE");
   const trash = await ok(owner, "/projects", "POST", body);
   await ok(owner, `/projects/${trash.id}/actions`, "POST", {
     action: "void",
@@ -606,7 +625,7 @@ try {
       trash.id,
     ),
   );
-  pass("仅作废项目可删除、权限限制、幂等重试及列表详情同步移除");
+  pass("各状态项目可移入回收站、完成状态可恢复、权限限制与幂等重试");
   console.log("Project integration:", checks, "scenarios passed.");
 } finally {
   if (child.exitCode === null && child.signalCode === null) {

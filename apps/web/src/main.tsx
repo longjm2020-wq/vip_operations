@@ -14,7 +14,6 @@ import {
   Route,
   Routes,
   useLocation,
-  useNavigate,
   useSearchParams,
 } from "react-router-dom";
 import { create } from "zustand";
@@ -73,7 +72,6 @@ const SupplyProfile = React.lazy(() => import("./supply").then(module => ({ defa
 const SupplyProducts = React.lazy(() => import("./supply").then(module => ({ default: module.SupplyProducts })));
 const SupplyReview = React.lazy(() => import("./supply").then(module => ({ default: module.SupplyReview })));
 const SupplyOrders = React.lazy(() => import("./supply-orders").then(module => ({ default: module.SupplyOrders })));
-const SupplyOrderNotice = React.lazy(() => import("./supply-orders").then(module => ({ default: module.SupplyOrderNotice })));
 const SupplyStatements = React.lazy(() => import("./supply-statements").then(module => ({ default: module.SupplyStatements })));
 const coreFeatureSummary = "采购库存与经营分析 · 协作表格 · 供应链订单对账 · 项目协作";
 const useUi = create<{ collapsed: boolean; toggle: () => void }>((set) => ({
@@ -188,7 +186,6 @@ function ColorSizeMappingsPage() {
 }
 function Workspace({ user }: { user: Row }) {
   const location = useLocation(),
-    navigate = useNavigate(),
     ui = useUi();
   const originalItems = [
     { key: "/analytics/compass", label: "经营分析", icon: <DatabaseOutlined />, permission: "analytics.read" },
@@ -370,6 +367,10 @@ function Workspace({ user }: { user: Row }) {
   const parent = items.find((i) =>
     i.children?.some((c) => c.key === selected),
   )?.key;
+  const [openMenuKeys,setOpenMenuKeys]=useState<string[]>([]);
+  React.useEffect(()=>{
+    if (parent) setOpenMenuKeys(keys=>keys.includes(parent) ? keys : [...keys,parent]);
+  },[parent]);
   const activeKey = parent || selected;
   const activeWorkspace = visibleItems.find((i) => i.key === activeKey);
   const tableDetail = location.pathname.startsWith("/project-tables/");
@@ -381,27 +382,28 @@ function Workspace({ user }: { user: Row }) {
   const menu = visibleItems.map((item) => ({
     key: item.key,
     icon: item.icon,
-    label: (
+    label: item.children ? item.label : (
       <Link
         to={
           item.key === activeKey
             ? location.pathname + location.search
-            : item.children?.[0]?.key || item.key
+            : item.key
         }
         aria-current={item.key === activeKey ? "page" : undefined}
       >
         {item.label}
       </Link>
     ),
+    children:item.children?.map(child=>({
+      key:child.key,
+      label:<Link to={child.key} aria-current={selected===child.key ? "page" : undefined}>{child.label}</Link>,
+    })),
   }));
-  const subTabs = activeWorkspace?.children?.map((item) => ({
-    key: item.key,
-    label: tableDetail && item.key === "/project-tables" ? (
-      <Link to={item.key} aria-label="返回表格列表">
-        <ArrowLeftOutlined /> 表格列表
-      </Link>
-    ) : item.label,
-  }));
+  const routeBack=tableDetail ? {href:"/project-tables",label:"返回表格列表"}
+    : location.pathname.startsWith("/projects/") ? {href:"/projects",label:"返回项目列表"}
+    : selected && location.pathname!==selected && activeWorkspace?.children?.some(child=>child.key===selected)
+      ? {href:selected,label:`返回${activeWorkspace.children.find(child=>child.key===selected)!.label}`}
+      : undefined;
   return (
     <UserContext.Provider value={user}>
       <Layout className="workspace">
@@ -421,7 +423,9 @@ function Workspace({ user }: { user: Row }) {
             mode="inline"
             theme="dark"
             aria-label="工作区导航"
-            selectedKeys={activeKey ? [activeKey] : []}
+            selectedKeys={selected ? [selected] : []}
+            openKeys={openMenuKeys}
+            onOpenChange={setOpenMenuKeys}
             items={menu}
           />
           {!ui.collapsed && (
@@ -454,15 +458,7 @@ function Workspace({ user }: { user: Row }) {
               className="workspace-subnav"
               aria-label={`${activeWorkspace?.label || "工作台"}功能导航`}
             >
-              {subTabs?.length ? (
-                <Tabs
-                  aria-label={`${activeWorkspace?.label || "工作台"}功能 TAB`}
-                  activeKey={selected}
-                  onChange={(key) => navigate(key)}
-                  items={subTabs}
-                  more={{ icon: <span>更多</span> }}
-                />
-              ) : operationTool ? (
+              {routeBack ? <div className="workspace-path"><Link to={routeBack.href} aria-label={routeBack.label}><ArrowLeftOutlined/> {routeBack.label}</Link></div> : operationTool ? (
                 <div className="workspace-path">
                   <Link to="/operations?platform=vip">
                     <ArrowLeftOutlined /> 唯品会工作区
@@ -482,7 +478,6 @@ function Workspace({ user }: { user: Row }) {
                 使用手册
               </Link>
               <ProjectNotifications />
-              <SupplyOrderNotice />
               <AccountMenu
                 user={user}
                 onLogout={async () => {

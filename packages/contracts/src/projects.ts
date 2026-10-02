@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { attachmentsSchema } from "./project-attachments.js";
+import { visibilitySchema } from "./project-library.js";
 export const departments = [
   "运营",
   "商品",
@@ -90,6 +91,7 @@ export const sopSchema = z
     description: z.string().max(4000).default(""),
     steps: z.array(stepSchema).min(1).max(30),
     version: z.number().int().positive().optional(),
+    visibility: visibilitySchema.optional(),
   })
   .refine(
     (v) => new Set(v.steps.map((s) => s.id)).size === v.steps.length,
@@ -175,6 +177,7 @@ export const taskSchema = z
 export const projectSchema = z
   .object({
     name: short,
+    visibility: visibilitySchema.optional(),
     tag: short.min(1),
     description: z.string().max(20000).default(""),
     attachments: attachmentsSchema.optional(),

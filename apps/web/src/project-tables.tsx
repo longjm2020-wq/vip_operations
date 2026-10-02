@@ -9,6 +9,8 @@ import {
   Form,
   Input,
   Modal,
+  Select,
+  Space,
   Spin,
   Table,
   Typography,
@@ -18,14 +20,17 @@ import { api, queryClient } from "./api";
 import { Header, QueryState, useCan, type Row } from "./shared";
 import { StyleSelectionsPage } from "./style-selections";
 import { SelectionWorkspace } from "./selection-workspace";
+import { LibraryActions, LibraryToolbar, VisibilityTag, useLibraryView } from "./project-library";
+import { visibilityOptions } from "../../../packages/contracts/src/project-library";
 
 export function ProjectTablesPage() {
+  const library=useLibraryView("table","list");
   const canCreate = useCan("selection.manage"),
     navigate = useNavigate(),
     { message } = App.useApp();
   const [open, setOpen] = useState(false),
     [busy, setBusy] = useState(false);
-  const attempt = useRef<{ name: string; key: string } | undefined>(undefined);
+  const attempt = useRef<{ name: string; visibility: string; key: string } | undefined>(undefined);
   const tables = useQuery({
     queryKey: ["project-tables"],
     queryFn: () => api("/project-tables"),
@@ -54,7 +59,16 @@ export function ProjectTablesPage() {
         }
       />
       <QueryState error={tables.error} reload={() => void tables.refetch()} />
-      <Card>
+      <div className="library-toolbar"><span>表格内容独立保存</span><LibraryToolbar kind="table" view={library.view} onView={library.setView}/></div>
+      {library.view==="card" ? <div className="library-card-grid">
+        {(tables.data?.data||[]).map((row:Row)=><Card key={row.id} hoverable onClick={()=>navigate(`/project-tables/${row.id}`)}>
+          <div className="library-card-heading"><VisibilityTag value={row.visibility}/><LibraryActions kind="table" row={row}/></div>
+          <h3><Link to={`/project-tables/${row.id}`}>{row.name}</Link></h3>
+          <Typography.Text type="secondary">{row.createdByName}</Typography.Text>
+          <footer>{new Date(row.createdAt).toLocaleString("zh-CN",{hour12:false})}</footer>
+        </Card>)}
+        {!tables.isLoading&&!tables.data?.data?.length&&<Empty description="暂无表格，新建后即可开始录入"/>}
+      </div> : <Card>
         <Table
           rowKey="id"
           loading={tables.isLoading}
@@ -72,6 +86,7 @@ export function ProjectTablesPage() {
               ),
             },
             { title: "创建人", dataIndex: "createdByName" },
+            { title:"公开范围",dataIndex:"visibility",render:(v:string)=><VisibilityTag value={v}/> },
             {
               title: "创建时间",
               dataIndex: "createdAt",
@@ -81,12 +96,12 @@ export function ProjectTablesPage() {
             {
               title: "操作",
               render: (_: unknown, row: Row) => (
-                <Link to={`/project-tables/${row.id}`}>打开表格</Link>
+                <Space><Link to={`/project-tables/${row.id}`}>打开表格</Link><LibraryActions kind="table" row={row}/></Space>
               ),
             },
           ]}
         />
-      </Card>
+      </Card>}
       <Modal
         title="新建表格"
         open={open}
@@ -100,17 +115,18 @@ export function ProjectTablesPage() {
         <Form
           form={form}
           layout="vertical"
-          onFinish={async ({ name }: { name: string }) => {
+          initialValues={{visibility:"PRIVATE"}}
+          onFinish={async ({ name,visibility }: { name: string;visibility:string }) => {
             if (busy) return;
             const trimmed = name.trim();
-            if (attempt.current?.name !== trimmed)
-              attempt.current = { name: trimmed, key: crypto.randomUUID() };
+            if (attempt.current?.name !== trimmed || attempt.current?.visibility !== visibility)
+              attempt.current = { name: trimmed, visibility, key: crypto.randomUUID() };
             setBusy(true);
             try {
               const result = await api(
                 "/project-tables",
                 "POST",
-                { name: trimmed },
+                { name: trimmed,visibility },
                 attempt.current!.key,
               );
               await queryClient.invalidateQueries({
@@ -134,6 +150,9 @@ export function ProjectTablesPage() {
             ]}
           >
             <Input autoFocus maxLength={100} placeholder="请输入表格名称" />
+          </Form.Item>
+          <Form.Item name="visibility" label="公开范围" extra="公开后，系统内有选款登记查看权限的用户可访问；保护区域权限继续生效。">
+            <Select options={visibilityOptions}/>
           </Form.Item>
           <Typography.Paragraph type="secondary">
             新表初始包含一个「文本」字段和三行空白记录。可通过「＋」添加字段或行，并在表内配置字段类型及其他功能。

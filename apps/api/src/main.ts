@@ -1,6 +1,7 @@
 import "reflect-metadata";
 import "dotenv/config";
 import { startImageMigration } from "./modules/style-selections/image-storage.js";
+import { startRecycleCleanup } from "./modules/projects/recycle.js";
 import { Module } from "@nestjs/common";
 import { NestFactory, APP_GUARD, APP_INTERCEPTOR } from "@nestjs/core";
 import { SwaggerModule, DocumentBuilder } from "@nestjs/swagger";
@@ -109,6 +110,8 @@ export async function start() {
     process.env.HOST || "127.0.0.1",
   );
   startImageMigration();
+  const stopRecycle = startRecycleCleanup();
+  for (const signal of ["SIGINT","SIGTERM"] as const) process.once(signal,() => void stopRecycle());
   return app;
 }
 await start();

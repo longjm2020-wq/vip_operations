@@ -3,6 +3,7 @@ import {
   S3Client,
   PutObjectCommand,
   GetObjectCommand,
+  DeleteObjectCommand,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import type { ProjectAttachment } from "../../../../../packages/contracts/src/project-attachments.js";
@@ -10,6 +11,12 @@ import { fail } from "../../core.js";
 
 export function storageEnabled() {
   return Boolean(process.env.AWS_S3_BUCKET_NAME);
+}
+export async function deleteStoredObject(key: string) {
+  const { bucket,client }=config();
+  try {
+    await client.send(new DeleteObjectCommand({Bucket:bucket,Key:key}),{abortSignal:AbortSignal.timeout(10000)});
+  } finally { client.destroy(); }
 }
 function config() {
   const {
