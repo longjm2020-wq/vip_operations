@@ -54,7 +54,8 @@ const mailState: Record<string, string> = {
 };
 
 function Trend({ data }: { data: Row[] }) {
-  const [active, setActive] = useState<number | null>(null);
+  const [active, setActive] = useState<string | null>(null);
+  const activePoint = data.find((row) => row.date === active);
   if (!data.length) return <Empty description="该区间没有每日明细" />;
   const width = 780,
     height = 240,
@@ -108,8 +109,8 @@ function Trend({ data }: { data: Row[] }) {
         {data.map((v, i) => (
           <g
             key={v.date}
-            onMouseEnter={() => setActive(i)}
-            onFocus={() => setActive(i)}
+            onMouseEnter={() => setActive(v.date)}
+            onFocus={() => setActive(v.date)}
             tabIndex={0}
             role="button"
             aria-label={`${v.date}，销售额 ${number(v.salesAmount)}，退货金额 ${number(v.returnsAmount)}`}
@@ -131,7 +132,7 @@ function Trend({ data }: { data: Row[] }) {
             <circle
               cx={x(i)}
               cy={y(v.salesAmount)}
-              r={active === i ? 5 : 3}
+              r={active === v.date ? 5 : 3}
               fill="#d95200"
             />
             {(i === 0 ||
@@ -157,9 +158,9 @@ function Trend({ data }: { data: Row[] }) {
           退货金额
         </span>
         <span>
-          {active === null
+          {!activePoint
             ? "悬停或聚焦查看每日数值"
-            : `${data[active].date} · 销售 ${money(data[active].salesAmount)} · 退货 ${money(data[active].returnsAmount)}`}
+            : `${activePoint.date} · 销售 ${money(activePoint.salesAmount)} · 退货 ${money(activePoint.returnsAmount)}`}
         </span>
       </div>
     </div>
@@ -181,9 +182,7 @@ function ImportReports({
     [results, setResults] = useState<string[]>([]);
   const workerRef = useRef<Worker | null>(null);
   useEffect(() => () => workerRef.current?.terminate(), []);
-  async function read(
-    file: File,
-  ): Promise<{
+  async function read(file: File): Promise<{
     fileHash: string;
     report: {
       dimension: CompassDimension;
@@ -632,7 +631,7 @@ export function CompassAnalyticsPage() {
         extra={
           <>
             <Button
-            icon={<ReloadOutlined aria-hidden="true" />}
+              icon={<ReloadOutlined aria-hidden="true" />}
               onClick={() => q.refetch()}
               loading={q.isFetching}
             >
@@ -641,13 +640,13 @@ export function CompassAnalyticsPage() {
             {manage && (
               <>
                 <Button
-                icon={<UploadOutlined aria-hidden="true" />}
+                  icon={<UploadOutlined aria-hidden="true" />}
                   onClick={() => setImportOpen(true)}
                 >
                   导入报表
                 </Button>
                 <Button
-                icon={<MailOutlined aria-hidden="true" />}
+                  icon={<MailOutlined aria-hidden="true" />}
                   onClick={() => setMailOpen(true)}
                 >
                   每日邮件
@@ -884,7 +883,7 @@ export function CompassAnalyticsPage() {
                     ]}
                   />
                   <Button
-                  icon={<DownloadOutlined aria-hidden="true" />}
+                    icon={<DownloadOutlined aria-hidden="true" />}
                     disabled={!data.items?.length}
                     onClick={() => void exportView()}
                   >

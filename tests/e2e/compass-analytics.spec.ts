@@ -83,6 +83,21 @@ test("罗盘报表后台导入、五个周期、维度下钻与邮件配置", as
         .getByText(`¥ ${days * 10}`, { exact: true }),
     ).toBeVisible();
   }
+  await page.locator('.compass-trend g[role="button"]').first().focus();
+  await expect(page.locator(".compass-chart-caption")).toContainText(
+    shiftCompassDate(end, -29),
+  );
+  await page.getByText("近 1 天", { exact: true }).click();
+  await expect(
+    page.locator(".compass-kpis").getByText("¥ 10", { exact: true }),
+  ).toBeVisible();
+  await expect(page.locator(".compass-chart-caption")).not.toContainText(
+    shiftCompassDate(end, -29),
+  );
+  await page.getByText("近 30 天", { exact: true }).click();
+  await expect(
+    page.locator(".compass-kpis").getByText("¥ 300", { exact: true }),
+  ).toBeVisible();
   await page
     .getByRole("row")
     .filter({ hasText: "E2E-ST-1" })
