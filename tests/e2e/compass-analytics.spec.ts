@@ -176,16 +176,18 @@ test("罗盘导入、日期区间、五种明细视图、维度下钻与邮件�
     ).toBeVisible();
   }
   await page.locator('.compass-trend g[role="button"]').first().focus();
-  await expect(page.locator(".compass-chart-caption")).toContainText(
+  await expect(page.getByRole("tooltip")).toContainText(
     shiftCompassDate(end, -29),
   );
+  await expect(page.getByRole("tooltip")).toContainText("退货金额");
+  await expect(
+    page.locator('.compass-trend g[role="button"]').first(),
+  ).toHaveCSS("outline-style", "none");
   await page.getByRole("button", { name: "近 1 天", exact: true }).click();
   await expect(
     page.locator(".compass-kpis").getByText("¥ 10", { exact: true }),
   ).toBeVisible();
-  await expect(page.locator(".compass-chart-caption")).not.toContainText(
-    shiftCompassDate(end, -29),
-  );
+  await expect(page.getByRole("tooltip")).toHaveCount(0);
   await page.getByRole("button", { name: "近 30 天", exact: true }).click();
   await expect(
     page.locator(".compass-kpis").getByText("¥ 300", { exact: true }),

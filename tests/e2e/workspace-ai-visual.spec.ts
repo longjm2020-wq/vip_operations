@@ -312,6 +312,18 @@ test("只读分析账号可打开侧面板，移动屏幕不溢出", async ({ pa
   // Browser transforms may introduce subpixel rounding during drawer animation.
   expect(rect!.width).toBeLessThanOrEqual(390.05);
   expect(rect!.x).toBeGreaterThanOrEqual(-0.05);
+  const trend = page.getByRole("dialog").locator(".compass-trend-plot");
+  await trend.locator('g[role="button"]').last().focus();
+  const tooltip = page.getByRole("tooltip");
+  await expect(tooltip).toContainText("退货金额");
+  const plotRect = await trend.boundingBox();
+  const tooltipRect = await tooltip.boundingBox();
+  expect(tooltipRect!.x).toBeGreaterThanOrEqual(plotRect!.x);
+  expect(tooltipRect!.x + tooltipRect!.width).toBeLessThanOrEqual(
+    plotRect!.x + plotRect!.width + 0.05,
+  );
+  await trend.locator('g[role="button"]').last().press("Escape");
+  await expect(tooltip).toHaveCount(0);
 });
 
 test("明细内部滚动表头固定，分页条数与查询同步且切换后回到首页", async ({

@@ -90,8 +90,74 @@
   padding: 18px;
 }
 .compass-trend svg {
+  display: block;
   width: 100%;
   height: 240px;
+}
+.compass-trend-plot {
+  position: relative;
+  --compass-tooltip-width: min(220px, calc(100% - 16px));
+}
+.compass-trend-point {
+  outline: none;
+}
+.compass-trend-focus-ring {
+  opacity: 0;
+  pointer-events: none;
+}
+.compass-trend-point:focus-visible .compass-trend-focus-ring {
+  opacity: 1;
+}
+.compass-trend-tooltip {
+  position: absolute;
+  top: 10px;
+  z-index: 2;
+  width: var(--compass-tooltip-width);
+  box-sizing: border-box;
+  padding: 12px 14px;
+  border: 1px solid #efdfd1;
+  border-radius: 10px;
+  background: #fffcf8;
+  color: #59453a;
+  box-shadow: 0 4px 16px #49302114;
+  font-size: 12px;
+  line-height: 1.6;
+  pointer-events: none;
+}
+.compass-trend-tooltip-date {
+  display: block;
+  margin-bottom: 6px;
+  color: #49372c;
+  font-weight: 600;
+}
+.compass-trend-tooltip-metric {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 2px 10px;
+  margin-top: 4px;
+}
+.compass-trend-tooltip-metric span {
+  white-space: nowrap;
+  color: #947c6c;
+}
+.compass-trend-tooltip-metric i {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  margin-right: 6px;
+}
+.compass-trend-sales-dot {
+  background: #d95200;
+}
+.compass-trend-returns-dot {
+  background: #8972c7;
+}
+.compass-trend-tooltip-metric b {
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
 }
 .compass-chart-caption {
   display: flex;
