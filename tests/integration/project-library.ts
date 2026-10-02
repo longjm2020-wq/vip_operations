@@ -82,7 +82,7 @@ async function request(
   path: string,
   method = "GET",
   body?: unknown,
-  key = randomUUID(),
+  key: string = randomUUID(),
 ) {
   const response = await fetch(base + path, {
     method,
