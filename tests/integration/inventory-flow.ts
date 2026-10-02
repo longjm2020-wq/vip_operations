@@ -424,7 +424,7 @@ export async function testInventoryFlow(h: Record<string, any>) {
   const stock = supplyProduct.document.stock[0];
   let supplyOrder = await ok(owner, "/supply/orders", "POST", {
     accountId: profile.id,
-    requiredDate: "2026-10-02",
+    requiredDate: new Date(Date.now() + 86400000).toISOString().slice(0, 10),
     requirement: "配送质检测试",
     items: [
       {
