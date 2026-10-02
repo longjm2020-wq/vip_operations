@@ -39,6 +39,7 @@ export const manualPermissions: Record<string, string | null> = {
   "30-compass-analytics": "analytics.read",
   "31-ai-settings": "analytics.manage",
   "32-personal-workspace": null,
+  "33-competitor-analysis": "analytics.read",
 };
 export function canReadManual(
   actor: Actor,

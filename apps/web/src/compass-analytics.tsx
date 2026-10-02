@@ -44,6 +44,8 @@ import {
   CompassRecord,
   CompassPeriod,
   CompassDateRange,
+  parseCompassSearch,
+  compassNormalizationVersion,
 } from "../../../packages/contracts/src/compass-analytics";
 import "./compass-analytics.css";
 const number = (value: any) =>
@@ -125,6 +127,7 @@ function ImportReports({
             startDate: report.startDate,
             endDate: report.endDate,
             expectedRows: rows.length,
+            normalizationVersion: compassNormalizationVersion,
           })
         ).data;
         if (task.status !== "COMPLETE") {
@@ -133,7 +136,7 @@ function ImportReports({
               `/analytics/compass/imports/${task.id}/chunks`,
               "POST",
               { records: rows.slice(start, start + 1000) },
-              `compass-${fileHash}-${start}`,
+              `compass-v${compassNormalizationVersion}-${fileHash}-${start}`,
             );
             setProgress(
               Math.round(
@@ -150,7 +153,7 @@ function ImportReports({
             `/analytics/compass/imports/${task.id}/finish`,
             "POST",
             {},
-            `compass-finish-${fileHash}`,
+            `compass-finish-v${compassNormalizationVersion}-${fileHash}`,
           );
         }
         setResults((old) => [
@@ -436,11 +439,13 @@ export function CompassAnalyticsPage() {
     [dateRange, setDateRange] = useState<CompassDateRange | null>(null),
     [search, setSearch] = useState(""),
     [qText, setQText] = useState(""),
+    [searchError, setSearchError] = useState(""),
     [styleNo, setStyleNo] = useState(""),
     [articleNo, setArticleNo] = useState(""),
     [page, setPage] = useState(1),
     [pageSize, setPageSize] = useState(20),
     [sort, setSort] = useState("salesAmount"),
+    [miniMetric,setMiniMetric] = useState("salesAmount"),
     [importOpen, setImportOpen] = useState(false),
     [mailOpen, setMailOpen] = useState(false),
     [aiOpen, setAIOpen] = useState(false);
@@ -448,8 +453,12 @@ export function CompassAnalyticsPage() {
     useState<CompassImageTarget | null>(null);
   useEffect(() => {
     const timer = setTimeout(() => {
-      setQText(search);
-      setPage(1);
+      try {
+        parseCompassSearch(search);
+        setSearchError("");
+        setQText(search);
+        setPage(1);
+      } catch (e) { setSearchError((e as Error).message); }
     }, 300);
     return () => clearTimeout(timer);
   }, [search]);
@@ -463,7 +472,8 @@ export function CompassAnalyticsPage() {
     articleNo,
   ];
   const q = useQuery({
-    queryKey: [...queryScope, page, pageSize, sort],
+    enabled: !searchError,
+    queryKey: [...queryScope, page, pageSize, sort, miniMetric],
     queryFn: () =>
       api(
         "/analytics/compass?" +
@@ -479,6 +489,7 @@ export function CompassAnalyticsPage() {
             page: String(page),
             pageSize: String(pageSize),
             sort,
+            miniMetric,
           }),
       ),
     // Keep the dashboard mounted while sorting or paging so its scroll anchor survives.
@@ -497,7 +508,7 @@ export function CompassAnalyticsPage() {
     setDimension(value as CompassDimension);
     if (
       value === "barcode" &&
-      ["exposure", "detailViews", "clickRate", "conversionRate"].includes(sort)
+      ["exposure", "detailViews", "clickRate", "conversionRate", "favoriteRate", "cartRate", "saleAge", "firstListedAt"].includes(sort)
     )
       setSort("salesAmount");
     setPage(1);
@@ -572,16 +583,22 @@ export function CompassAnalyticsPage() {
             setPage(1);
           }}
         />
-        <Input
-          aria-label="搜索款号货号条码"
-          prefix={<SearchOutlined />}
-          placeholder="搜索款号 / 货号 / 条码"
-          value={search}
-          allowClear
-          onChange={(e) => setSearch(e.target.value)}
-          style={{ width: 290 }}
-        />
+        <Tooltip title="单个编码支持模糊搜索；多个编码用英文逗号、中文逗号或换行隔开，按完整编码批量查询，最多100项。">
+          <div className="compass-batch-search">
+            <SearchOutlined aria-hidden="true" />
+            <Input.TextArea
+              aria-label="搜索款号货号条码"
+              placeholder="搜索款号 / 货号 / 条码，支持逗号或换行批量查询"
+              value={search}
+              allowClear
+              autoSize={{ minRows: 1, maxRows: 4 }}
+              maxLength={5000}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          </div>
+        </Tooltip>
       </div>
+      {searchError && <Alert type="warning" title={searchError} showIcon />}
       <Tabs
         activeKey={dimension}
         onChange={changeDimension}
@@ -763,6 +780,7 @@ export function CompassAnalyticsPage() {
               dimension={dimension}
               data={data}
               loading={q.isFetching}
+              invalidSearch={!!searchError}
               page={page}
               pageSize={pageSize}
               sort={sort}
@@ -775,6 +793,10 @@ export function CompassAnalyticsPage() {
                 setPage(1);
               }}
               onDrill={drill}
+              onMiniMetric={setMiniMetric}
+              styleNo={styleNo}
+              articleNo={articleNo}
+              search={qText}
             />
             <details className="compass-notes">
               <summary>数据来源与计算口径</summary>

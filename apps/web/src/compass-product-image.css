@@ -37,3 +37,16 @@
   object-fit: contain;
   border-radius: 4px;
 }
+.compass-product-reference {
+  border: 0;
+  border-bottom: 1px dotted #d68b58;
+  padding: 0;
+  background: transparent;
+  color: #c45b20;
+  font: inherit;
+  line-height: inherit;
+  cursor: pointer;
+  text-align: inherit;
+}
+.compass-product-reference:hover { color: #f06819; }
+.compass-product-reference:focus-visible { outline: 2px solid #ed985c; outline-offset: 2px; border-radius: 2px; }

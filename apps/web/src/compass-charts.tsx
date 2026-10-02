@@ -1,6 +1,7 @@
-import { useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { Empty } from "antd";
 import { Row } from "./shared";
+import "./compass-charts.css";
 const number = (value: any) =>
   value == null
     ? "—"
@@ -9,13 +10,23 @@ const money = (value: any) => (value == null ? "—" : "¥ " + number(value));
 export function CompassTrend({ data }: { data: Row[] }) {
   const [hovered, setHovered] = useState<string | null>(null);
   const [focused, setFocused] = useState<string | null>(null);
+  const plotRef = useRef<HTMLDivElement>(null);
+  const [width, setWidth] = useState(780);
+  useEffect(() => {
+    const plot = plotRef.current;
+    if (!plot) return;
+    const observer = new ResizeObserver(([entry]) =>
+      setWidth(Math.max(280, Math.min(780, entry.contentRect.width))),
+    );
+    observer.observe(plot);
+    return () => observer.disconnect();
+  }, [data.length > 0]);
   const tooltipId = useId();
   const active = hovered ?? focused;
   const activeIndex = data.findIndex((row) => row.date === active);
   const activePoint = data[activeIndex];
   if (!data.length) return <Empty description="该区间没有每日明细" />;
-  const width = 780,
-    height = 240,
+  const height = 240,
     pad = 35,
     max = Math.max(
       1,
@@ -32,7 +43,7 @@ export function CompassTrend({ data }: { data: Row[] }) {
     data.map((v, i) => `${x(i)},${y(v[key])}`).join(" ");
   return (
     <div className="compass-trend">
-      <div className="compass-trend-plot">
+      <div className="compass-trend-plot" ref={plotRef}>
         <svg
           viewBox={`0 0 ${width} ${height}`}
           role="img"
@@ -71,6 +82,7 @@ export function CompassTrend({ data }: { data: Row[] }) {
               className="compass-trend-point"
               onMouseEnter={() => setHovered(v.date)}
               onFocus={() => setFocused(v.date)}
+              onClick={() => setFocused(v.date)}
               onBlur={() => setFocused(null)}
               onKeyDown={(event) => {
                 if (event.key === "Escape") {
@@ -158,7 +170,7 @@ export function CompassTrend({ data }: { data: Row[] }) {
           销售额 <i style={{ background: "#8972c7" }} />
           退货金额
         </span>
-        <span>悬停或聚焦查看每日数值</span>
+        <span>悬停、点击或聚焦查看每日数值</span>
       </div>
     </div>
   );

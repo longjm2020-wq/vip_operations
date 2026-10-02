@@ -112,6 +112,7 @@ test("罗盘导入、日期区间、五种明细视图、维度下钻与邮件�
       "换货件数",
       "换货金额",
       "在售库存",
+      ...(dimension !== "条码" ? ["售龄", "首次上架时间"] : []),
     ]);
     for (let i = 29; i >= 0; i--)
       sheet.addRow([
@@ -139,6 +140,7 @@ test("罗盘导入、日期区间、五种明细视图、维度下钻与邮件�
         0,
         0,
         i === 29 ? 120 : 11,
+        ...(dimension !== "条码" ? [39-i, "2026-02-10 11:56:42"] : []),
       ]);
     files.push({
       name: `按${dimension}.xlsx`,
@@ -221,6 +223,10 @@ test("罗盘导入、日期区间、五种明细视图、维度下钻与邮件�
       detail.getByRole("columnheader").getByText(name, { exact: true });
   await detail.getByRole("tab", { name: "流量", exact: true }).click();
   await expect(column("曝光 UV")).toBeVisible();
+  await expect(column("收藏率")).toBeVisible();
+  await expect(column("加购率")).toBeVisible();
+  await expect(detail.getByRole("cell", { name: "30.00%", exact: true })).toBeVisible();
+  await expect(detail.getByRole("cell", { name: "20.00%", exact: true })).toBeVisible();
   await expect(column("销售额")).toHaveCount(0);
   await expect(
     detail.getByRole("cell", { name: "3,000", exact: true }),
@@ -235,6 +241,10 @@ test("罗盘导入、日期区间、五种明细视图、维度下钻与邮件�
   await expect(column("换货件数")).toBeVisible();
   await detail.getByRole("tab", { name: "库存", exact: true }).click();
   await expect(column("截止日在售库存")).toBeVisible();
+  await expect(column("售龄（天）")).toBeVisible();
+  await expect(column("首次上架时间")).toBeVisible();
+  await expect(detail.getByRole("cell", { name: "39", exact: true })).toBeVisible();
+  await expect(detail.getByRole("cell", { name: "2026-02-10 11:56:42", exact: true })).toBeVisible();
   await expect(
     detail.getByRole("cell", { name: "11", exact: true }),
   ).toBeVisible();
@@ -342,6 +352,11 @@ test("罗盘导入、日期区间、五种明细视图、维度下钻与邮件�
   await expect(
     page.getByRole("row").filter({ hasText: "000012345" }),
   ).toBeVisible();
+  await page.getByLabel("搜索款号货号条码").fill("000012345，E2E-AR-1\nnot-found");
+  await expect(page.getByRole("row").filter({ hasText: "000012345" })).toBeVisible();
+  await page.getByLabel("搜索款号货号条码").fill("0123,E2E-ST");
+  await expect(page.getByRole("row").filter({ hasText: "000012345" })).toHaveCount(0);
+  await page.getByLabel("搜索款号货号条码").fill("000012345");
   await page.getByRole("button", { name: "AI 经营分析", exact: true }).click();
   await expect(page.getByRole("dialog")).toContainText("AI 分析尚未开启");
   await expect(

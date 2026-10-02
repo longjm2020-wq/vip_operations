@@ -5,9 +5,11 @@ import { startVopScheduler } from "./vop-scheduler.js";
 import { startSupplyLogistics } from "./supply-logistics.js";
 import { startInventoryLogistics } from "./inventory-logistics.js";
 import { startCompassMail } from "./compass-mail.js";
+import { startCompetitorCrawler } from "./competitor-crawler.js";
 import { startRecycleCleanup } from "../../api/src/modules/projects/recycle.js";
 const stopRecycleCleanup = startRecycleCleanup();
 const stopCompassMail = startCompassMail();
+const stopCompetitorCrawler = startCompetitorCrawler();
 const stopInventoryLogistics = startInventoryLogistics();
 const stopSupplyLogistics = startSupplyLogistics();
 validateIntegrationMode();
@@ -50,11 +52,12 @@ for (const signal of ["SIGINT", "SIGTERM"] as const)
       stopSupplyLogistics(),
       stopInventoryLogistics(),
       stopCompassMail(),
+      stopCompetitorCrawler(),
       stopRecycleCleanup(),
     ]).then(() => process.exit(0));
   });
 console.log(
   process.env.VIP_MODE === "catalog"
     ? "Worker ready. VOP schedule catalog sync enabled."
-    : "Worker ready. Only internal health-check tasks are enabled.",
+    : "Worker ready. Internal schedules and competitor collection are enabled.",
 );

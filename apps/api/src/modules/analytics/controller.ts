@@ -16,6 +16,10 @@ import * as mail from "./mail.js";
 import * as ai from "./ai.js";
 @Controller("api/v1/analytics/compass")
 export class CompassAnalyticsController {
+  @Get("entity-trend") @Permission("analytics.read") trend(@Query() q: unknown, @Res({ passthrough: true }) res: Response) {
+    res.setHeader("Cache-Control", "private, no-store");
+    return service.entityTrend(q);
+  }
   @Get() @Permission("analytics.read") view(@Query() q: unknown) {
     return service.dashboard(q);
   }

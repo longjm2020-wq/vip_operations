@@ -9,6 +9,7 @@ export async function readWorkbook(
   file: File,
   options: {
     formattedCells?: boolean;
+    dateTimeColumns?: string[];
     maxFileSizeMB?: number;
     maxRows?: number;
   } = {},
@@ -52,7 +53,7 @@ export async function readWorkbook(
           // Excel may store codes as numbers with a zero-padding display format.
           values.push(
             options.formattedCells && value instanceof Date
-              ? value.toISOString().slice(0, 10)
+              ? value.toISOString().slice(0, options.dateTimeColumns?.includes(sheet.getRow(1).getCell(c).text.trim()) ? 19 : 10).replace("T", " ")
               : options.formattedCells &&
                   typeof value === "number" &&
                   /%/.test(cell.numFmt || "")

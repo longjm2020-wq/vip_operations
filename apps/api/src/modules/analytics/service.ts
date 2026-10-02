@@ -23,6 +23,7 @@ import {
   compassRecordSchema,
   shiftCompassDate,
   shanghaiDate,
+  parseCompassSearch,
 } from "../../../../../packages/contracts/src/compass-analytics.js";
 
 const dimensionSchema = z.enum(compassDimensions);
@@ -34,6 +35,7 @@ export const beginSchema = z
     startDate: z.iso.date(),
     endDate: z.iso.date(),
     expectedRows: z.number().int().min(1).max(200000),
+    normalizationVersion: z.union([z.literal(1),z.literal(2)]).default(1),
   })
   .strict();
 export async function beginImport(c: Context, input: unknown) {
@@ -53,9 +55,10 @@ export async function beginImport(c: Context, input: unknown) {
     );
     const old = await one(
       tx,
-      "SELECT *, (SELECT count(*)::int FROM compass_records WHERE import_id=i.id) AS received_rows FROM compass_imports i WHERE dimension=$1 AND file_hash=$2",
+      "SELECT *, (SELECT count(*)::int FROM compass_records WHERE import_id=i.id) AS received_rows FROM compass_imports i WHERE dimension=$1 AND file_hash=$2 AND normalization_version=$3",
       b.dimension,
       b.fileHash,
+      b.normalizationVersion,
     );
     if (old) {
       if (
@@ -68,7 +71,7 @@ export async function beginImport(c: Context, input: unknown) {
     }
     return one(
       tx,
-      "INSERT INTO compass_imports(dimension,file_name,file_hash,start_date,end_date,expected_rows,imported_by) VALUES($1,$2,$3,$4::date,$5::date,$6,$7::bigint) RETURNING *,0 AS received_rows",
+      "INSERT INTO compass_imports(dimension,file_name,file_hash,start_date,end_date,expected_rows,imported_by,normalization_version) VALUES($1,$2,$3,$4::date,$5::date,$6,$7::bigint,$8) RETURNING *,0 AS received_rows",
       b.dimension,
       b.fileName,
       b.fileHash,
@@ -76,6 +79,7 @@ export async function beginImport(c: Context, input: unknown) {
       b.endDate,
       b.expectedRows,
       c.actor.id,
+      b.normalizationVersion,
     );
   });
 }
@@ -190,6 +194,8 @@ export async function finishImport(c: Context, value: string) {
     );
     if (active && active.end_date > task.end_date)
       fail("OLD_REPORT", "已有更新日期的报表，不能用旧报表覆盖", 400);
+    if (active && active.file_hash === task.file_hash && active.normalization_version > task.normalization_version)
+      fail("OLD_NORMALIZATION", "此报表已补充新字段，请刷新页面后重新导入", 400);
     const result = await one(
       tx,
       "UPDATE compass_imports SET status='COMPLETE',completed_at=now() WHERE id=$1::bigint RETURNING *",
@@ -236,12 +242,13 @@ const querySchema = z.object({
     .default(7),
   endDate: z.iso.date().optional(),
   startDate: z.iso.date().optional(),
-  q: z.string().trim().max(150).default(""),
+  q: z.string().trim().max(5000).default(""),
   styleNo: z.string().max(150).default(""),
   articleNo: z.string().max(150).default(""),
   page: z.coerce.number().int().min(1).max(10000).default(1),
   pageSize: z.coerce.number().int().min(1).max(1000).default(20),
   sort: z.enum(compassSortFields).default("salesAmount"),
+  miniMetric: z.enum(["salesAmount", "salesQty", "detailViews", "returnsQty", "saleableStock", "cartUsers"]).optional(),
 });
 const ratioSortInputs: Record<string, [string, string]> = {
   returnRate: ["returnsQty", "salesQty"],
@@ -249,6 +256,10 @@ const ratioSortInputs: Record<string, [string, string]> = {
   conversionRate: ["customers", "detailViews"],
   clickRate: ["detailViews", "exposure"],
   averagePrice: ["salesAmount", "salesQty"],
+  favoriteRate: ["favorites", "detailViews"],
+  cartRate: ["cartUsers", "detailViews"],
+  exchangeRate: ["exchangesQty", "salesQty"],
+  rejectedReturnRate: ["rejectedReturnQty", "salesQty"],
 };
 const metricSQL = (prefix: string) =>
   Object.keys(compassMetrics)
@@ -288,11 +299,16 @@ export async function dashboard(
     article: "article_no",
     barcode: "barcode",
   }[b.dimension];
-  const params = [source.id, startDate, endDate, b.q, b.styleNo, b.articleNo];
-  const where = `import_id=$1::bigint AND business_date BETWEEN $2::date AND $3::date AND ($4='' OR position(lower($4) in lower(style_no||' '||article_no||' '||barcode||' '||coalesce(payload->>'category','')||' '||coalesce(payload->>'size','')))>0) AND ($5='' OR style_no=$5) AND ($6='' OR article_no=$6)`;
+  let search: ReturnType<typeof parseCompassSearch>;
+  try { search = parseCompassSearch(b.q); } catch (e) { fail("INVALID_SEARCH", (e as Error).message, 400); }
+  const params = [source.id, startDate, endDate, search.text, b.styleNo, b.articleNo, search.batch ? search.codes : null];
+  const where = `import_id=$1::bigint AND business_date BETWEEN $2::date AND $3::date AND ($4='' OR ($7::text[] IS NULL AND position(lower($4) in lower(style_no||' '||article_no||' '||barcode||' '||coalesce(payload->>'category','')||' '||coalesce(payload->>'size','')))>0) OR ($7::text[] IS NOT NULL AND (lower(style_no)=ANY($7::text[]) OR lower(article_no)=ANY($7::text[]) OR lower(barcode)=ANY($7::text[])))) AND ($5='' OR style_no=$5) AND ($6='' OR article_no=$6)`;
   const cte = `WITH filtered AS (SELECT * FROM compass_records WHERE ${where}), grouped AS (SELECT ${column} AS code,
     min(style_no) AS style_no,min(article_no) AS article_no,min(barcode) AS barcode,
     (array_agg(payload->>'image' ORDER BY business_date DESC) FILTER(WHERE payload->>'image'<>''))[1] AS image,
+    (array_agg((payload->>'saleAge')::numeric ORDER BY business_date DESC,entity_key) FILTER(WHERE payload->>'saleAge' IS NOT NULL))[1] AS "saleAge",
+    min(nullif(payload->>'firstListedAt','')) AS "firstListedAt",
+    sum((payload->'metrics'->>'returnsQty')::numeric)+sum((payload->'metrics'->>'rejectedQty')::numeric) AS "rejectedReturnQty",
     string_agg(DISTINCT nullif(payload->>'size',''),'、') AS sizes, ${metricSQL("")},
     sum((payload->'metrics'->>'onSaleStock')::numeric) FILTER(WHERE business_date=$3::date) AS "onSaleStock",
     sum((payload->'metrics'->>'saleableStock')::numeric) FILTER(WHERE business_date=$3::date) AS "saleableStock",
@@ -318,18 +334,27 @@ export async function dashboard(
       ratioSortInputs[b.sort]
         ? `CASE WHEN "${ratioSortInputs[b.sort][1]}">0 THEN "${ratioSortInputs[b.sort][0]}"/"${ratioSortInputs[b.sort][1]}" END`
         : `"${b.sort}"`
-    } DESC NULLS LAST,code OFFSET $7 LIMIT $8`,
+    } DESC NULLS LAST,code OFFSET $8 LIMIT $9`,
     ...params,
     (b.page - 1) * b.pageSize,
     b.pageSize,
   );
   const top = await rows(
     tx,
-    `${cte} SELECT * FROM grouped ORDER BY "salesAmount" DESC NULLS LAST,code LIMIT $7`,
+    `${cte} SELECT * FROM grouped ORDER BY "salesAmount" DESC NULLS LAST,code LIMIT $8`,
     ...params,
     topLimit,
   );
   const format = (row: any) => ({ ...json(row), ...compassRatios(row) });
+  const miniRows = b.miniMetric && items.length ? await rows(tx,
+    `SELECT ${column} AS code,business_date::text AS date,sum((payload->'metrics'->>'${b.miniMetric}')::numeric) AS value FROM compass_records WHERE ${where} AND ${column}=ANY($8::text[]) GROUP BY ${column},business_date ORDER BY business_date`,
+    ...params, items.map(item => item.code)) : [];
+  const miniature = new Map<string, any[]>();
+  for (const row of miniRows) {
+    const points = miniature.get(row.code) || [];
+    points.push({date:row.date,value:row.value});
+    miniature.set(row.code,points);
+  }
   const complete = startDate >= source.start_date && endDate <= source.end_date;
   return {
     sources,
@@ -342,7 +367,8 @@ export async function dashboard(
     stale: source.end_date < shiftCompassDate(shanghaiDate(), -1),
     summary: format(summary),
     daily: daily.map(format),
-    items: items.map(format),
+    items: items.map(item => ({...format(item), ...(b.miniMetric ? {trend:json(miniature.get(item.code) || [])} : {})})),
+    miniMetric: b.miniMetric,
     top: top.map(format),
     total: total!.n,
     source,
@@ -353,4 +379,28 @@ export async function dashboard(
       "退货率按期间退货件数 / 销售量重算，可能超过 100%，不代表同一订单批次。",
     ],
   };
+}
+
+const entityTrendSchema = querySchema.pick({dimension:true,days:true,startDate:true,endDate:true,styleNo:true,articleNo:true,q:true}).extend({
+  code: z.string().trim().min(1).max(150),
+  sourceId: id.optional(),
+});
+export async function entityTrend(input: unknown, tx: Tx = db) {
+  const b = parse(entityTrendSchema, input), sources = await compassSources(tx), source = sources.find(s => s.dimension === b.dimension);
+  if (!source) fail("NOT_FOUND", "该维度尚未导入报表", 404);
+  if (b.sourceId && String(source.id) !== b.sourceId) fail("SOURCE_CHANGED", "报表已更新，请刷新经营分析后再查看趋势", 409);
+  const endDate = b.endDate || source.end_date, startDate = b.startDate || shiftCompassDate(endDate,1-b.days);
+  const days = Math.round((Date.parse(endDate)-Date.parse(startDate))/86400000)+1;
+  if (days < 1 || days > 366 || endDate > shiftCompassDate(shanghaiDate(),-1)) fail("INVALID_PERIOD", "统计日期须在昨日以前且不超过366天",400);
+  const column = {style:"style_no",article:"article_no",barcode:"barcode"}[b.dimension];
+  let search: ReturnType<typeof parseCompassSearch>;
+  try { search = parseCompassSearch(b.q); } catch (e) { fail("INVALID_SEARCH", (e as Error).message,400); }
+  const daily = await rows(tx,`SELECT business_date::text AS date,${metricSQL("")},
+    sum((payload->'metrics'->>'onSaleStock')::numeric) AS "onSaleStock",sum((payload->'metrics'->>'saleableStock')::numeric) AS "saleableStock",
+    (array_agg((payload->>'saleAge')::numeric ORDER BY entity_key) FILTER(WHERE payload->>'saleAge' IS NOT NULL))[1] AS "saleAge",
+    sum((payload->'metrics'->>'returnsQty')::numeric)+sum((payload->'metrics'->>'rejectedQty')::numeric) AS "rejectedReturnQty"
+    FROM compass_records WHERE import_id=$1::bigint AND business_date BETWEEN $2::date AND $3::date AND ${column}=$4 AND ($5='' OR style_no=$5) AND ($6='' OR article_no=$6)
+    AND ($7='' OR ($8::text[] IS NULL AND position(lower($7) in lower(style_no||' '||article_no||' '||barcode||' '||coalesce(payload->>'category','')||' '||coalesce(payload->>'size','')))>0) OR ($8::text[] IS NOT NULL AND (lower(style_no)=ANY($8::text[]) OR lower(article_no)=ANY($8::text[]) OR lower(barcode)=ANY($8::text[]))))
+    GROUP BY business_date ORDER BY business_date`,source.id,startDate,endDate,b.code,b.styleNo,b.articleNo,search.text,search.batch ? search.codes : null);
+  return {dimension:b.dimension,code:b.code,startDate,endDate,sourceId:String(source.id),daily:daily.map(row=>({...json(row),...compassRatios(row)}))};
 }

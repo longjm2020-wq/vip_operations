@@ -236,9 +236,79 @@
   }
   .ai-metric-grid strong {
     font-size: 21px;
+    overflow-wrap: anywhere;
   }
   .compass-ai-drawer .ant-drawer-header {
     flex-wrap: wrap;
     gap: 10px;
+  }
+  .compass-ai-drawer .ant-drawer-header-title {
+    flex: 1 1 100%;
+  }
+  .compass-ai-drawer .ant-drawer-extra {
+    margin-left: auto;
+  }
+  .ai-metric-grid {
+    gap: 10px;
+  }
+  .ai-metric-grid .ant-card-body {
+    padding: 14px 12px;
+  }
+  .ai-summary,
+  .ai-complete {
+    padding: 14px;
+  }
+  .ai-summary p,
+  .ai-action-grid p {
+    display: block;
+    overflow: visible;
+    overflow-wrap: anywhere;
+  }
+  .ai-chart-grid .ant-card-head,
+  .ai-attention .ant-card-head {
+    flex-wrap: wrap;
+    min-height: 48px;
+  }
+  .ai-attention .ant-card-head-wrapper {
+    align-items: start;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 10px 0;
+  }
+  .ai-attention .ant-card-head-title {
+    flex: 1 1 100%;
+  }
+  .ai-attention .ant-card-extra {
+    margin-inline-start: 0;
+  }
+  .ai-attention-table > .ai-attention-head {
+    display: none;
+  }
+  .ai-attention-table > div {
+    min-width: 0;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+    padding: 14px 0;
+  }
+  .ai-attention-product {
+    grid-column: 1 / -1;
+  }
+  .ai-attention-table [data-label]::before {
+    content: attr(data-label);
+    display: block;
+    color: #998072;
+    font-size: 11px;
+    margin-bottom: 4px;
+  }
+  .ai-average-bars > div {
+    grid-template-columns: 48px minmax(20px, 1fr) 90px;
+    gap: 6px;
+  }
+  .ai-complete ul {
+    padding-left: 20px;
+  }
+  .ai-complete p,
+  .ai-complete li {
+    overflow-wrap: anywhere;
   }
 }

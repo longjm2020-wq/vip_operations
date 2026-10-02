@@ -210,6 +210,24 @@ export async function testCompassAnalytics(h: Record<string, any>) {
   const sku = await ok(
     endpoint + "?dimension=barcode&days=7&styleNo=CMP-ST-1&articleNo=CMP-AR-1",
   );
+  const exactTrend = await ok(`${endpoint}/entity-trend?dimension=barcode&code=000012345&startDate=${shiftCompassDate(end,-2)}&endDate=${end}&styleNo=CMP-ST-1&articleNo=CMP-AR-1`);
+  assert.equal(exactTrend.daily.length,3);
+  assert.equal(Number(exactTrend.daily[0].salesAmount),10,"entity trend uses daily values, not the period sum");
+  assert.equal(Number(exactTrend.daily[0].saleableStock),8,"stock is each day's snapshot");
+  assert.equal(exactTrend.daily[0].exposure,null,"unreported metrics must remain null");
+  assert.equal((await ok(`${endpoint}/entity-trend?dimension=barcode&code=000012345&styleNo=OTHER`)).daily.length,0);
+  assert.equal((await ok(`${endpoint}/entity-trend?dimension=barcode&code=000012345&q=OTHER`)).daily.length,0,"trend preserves the dashboard's text filter");
+  assert.equal((await ok(`${endpoint}/entity-trend?dimension=barcode&code=000012345&q=${encodeURIComponent('cmp-ar-1，OTHER')}`)).daily.length,7,"batch query scope uses complete identifiers");
+  assert.equal((await ok(`${endpoint}/entity-trend?dimension=barcode&code=00001234`)).daily.length,0,"codes match exactly");
+  assert.equal((await request(`${endpoint}/entity-trend?code=CMP-ST-1`,'GET',undefined,undefined,buyer)).status,403);
+  assert.equal((await request(`${endpoint}/entity-trend?code=CMP-ST-1&sourceId=999999999`)).status,409);
+  assert.equal((await request(`${endpoint}/entity-trend?code=CMP-ST-1&startDate=${end}&endDate=${start}`)).status,400);
+  const mini = await ok(`${endpoint}?dimension=style&days=7&pageSize=1&miniMetric=salesQty`);
+  assert.equal(mini.items.length,1);
+  assert.equal(mini.items[0].trend.length,7);
+  assert.equal(Number(mini.items[0].trend[0].value),2);
+  assert.equal((await request(`${endpoint}?miniMetric=not-a-field`)).status,400);
+  check("Compass per-product daily trends preserve exact scope, source versions, stock snapshots and null values with paged bulk mini charts");
   assert.equal(sku.items[0].code, "000012345");
   assert.equal(sku.summary.exposure, null);
   assert.equal(sku.summary.clickRate, null);
@@ -258,6 +276,26 @@ export async function testCompassAnalytics(h: Record<string, any>) {
   });
   await ok(`${endpoint}/imports/${sortingImport.id}/finish`, "POST", {});
   try {
+    const batch=await ok(`${endpoint}?days=30&q=${encodeURIComponent(" sort-a，SORT-B\nSORT-A,missing ")}`);
+    assert.equal(batch.total,2);assert.equal(Number(batch.summary.salesAmount),1500);assert.equal(batch.top.length,2);
+    assert.equal((await ok(`${endpoint}?days=30&q=SORT`)).total,3,"single search remains fuzzy");
+    assert.equal((await ok(`${endpoint}?days=30&q=${encodeURIComponent("SORT,missing")}`)).total,0,"batch identifiers require exact matches");
+    assert.equal((await ok(`${endpoint}?days=30&q=${encodeURIComponent("' OR 1=1 --,missing")}`)).total,0);
+    assert.equal((await request(`${endpoint}?q=${encodeURIComponent(Array.from({length:101},(_,i)=>`X${i}`).join(","))}`)).status,400);
+    const barcodes=await ok(`${endpoint}?dimension=barcode&days=7&q=${encodeURIComponent("000012345，CMP-AR-1\nUNKNOWN")}`);
+    assert.equal(barcodes.total,1);assert.equal(Number(barcodes.summary.salesAmount),70,"matching multiple identifiers must not count one row twice");
+    const enriched=sortingRecords.map((row,i)=>({...row,saleAge:row.styleNo==="SORT-C"?null:Math.floor(i/3)+10,firstListedAt:row.styleNo==="SORT-C"?null:`${start} 11:56:42`,metrics:{...row.metrics,favorites:row.styleNo==="SORT-A"?1:2,cartUsers:row.styleNo==="SORT-A"?1:3,rejectedQty:1,exchangesQty:1}}));
+    const hash=createHash("sha256").update(JSON.stringify(sortingRecords)+"sorting").digest("hex");
+    const upgraded=await ok(`${endpoint}/imports`,"POST",{dimension:"style",fileName:"sorting.xlsx",fileHash:hash,startDate:start,endDate:end,expectedRows:enriched.length,normalizationVersion:2});
+    assert.notEqual(upgraded.id,sortingImport.id);
+    await ok(`${endpoint}/imports/${upgraded.id}/chunks`,"POST",{records:enriched});
+    await ok(`${endpoint}/imports/${upgraded.id}/finish`,"POST",{});
+    const meta=await ok(`${endpoint}?days=30&sort=saleAge`);
+    assert.equal(Number(meta.items[0].saleAge),39,"sale age uses the latest value, not the sum of daily ages");
+    assert.equal(meta.items[0].firstListedAt,`${start} 11:56:42`);
+    assert.equal(Number((await ok(`${endpoint}?days=30&sort=favoriteRate`)).items[0].favoriteRate),1);
+    assert.equal(Number((await ok(`${endpoint}?days=30&sort=cartRate`)).items[0].cartRate),1);
+    assert.equal((await ok(`${endpoint}/imports`,"POST",{dimension:"style",fileName:"sorting.xlsx",fileHash:hash,startDate:start,endDate:end,expectedRows:enriched.length,normalizationVersion:2})).id,upgraded.id,"same parser version resumes without duplicates");
     for (const sort of compassSortFields)
       assert.equal(
         (await ok(`${endpoint}?dimension=style&days=30&sort=${sort}`)).items
@@ -502,6 +540,30 @@ export async function testCompassAnalytics(h: Record<string, any>) {
     await db.$executeRawUnsafe("UPDATE compass_ai_reports SET visual_data=NULL WHERE id=$1::bigint",generatedAPI.id);
     assert.deepEqual((await getAIReport()).visuals,visual,"旧缓存补存同一批图表快照");
     assert.equal(aiCalls,1,"图表升级不会再次调用模型");
+    const shareKey=randomUUID(), shareBody={days:7,reportId:generatedAPI.id};
+    const share=await ok(`${endpoint}/shares`,"POST",shareBody,shareKey);
+    assert.equal((await ok(`${endpoint}/shares`,"POST",shareBody,shareKey)).path,share.path);
+    assert.match(share.path,/^\/share\/compass\/[a-f0-9]{64}$/);
+    const token=share.path.split("/").at(-1), publicPath=`/public/compass-reports/${token}`, anonymous={cookie:"",csrf:""};
+    const publicResult=await request(publicPath,"GET",undefined,undefined,anonymous);
+    assert.equal(publicResult.status,200);assert.equal(publicResult.body.data.reportDate,end);
+    for(const field of ["model","provider","usage","responseId","responseModel","importedIds"]) assert.equal(field in publicResult.body.data,false);
+    const saved=(await one(db,"SELECT token_hash,snapshot FROM compass_report_shares WHERE id=$1::bigint",share.id));
+    assert.notEqual(saved.token_hash,token);assert.equal(JSON.stringify(saved.snapshot).includes(aiKey),false);
+    await db.$executeRawUnsafe("UPDATE compass_ai_reports SET content=jsonb_set(content,'{summary}','\"Changed after share\"'::jsonb) WHERE id=$1::bigint",generatedAPI.id);
+    assert.equal((await request(publicPath,"GET",undefined,undefined,anonymous)).body.data.content.summary,saved.snapshot.content.summary,"share remains an immutable snapshot");
+    await db.$executeRawUnsafe("UPDATE compass_ai_reports SET content=$2::jsonb WHERE id=$1::bigint",generatedAPI.id,JSON.stringify(saved.snapshot.content));
+    assert.equal((await request(`${endpoint}/shares`,"POST",shareBody,undefined,buyer)).status,403);
+    assert.equal((await request(`${endpoint}/shares/${share.id}/revoke`,"POST",{},undefined,buyer)).status,403);
+    assert.equal((await request(`${endpoint}/shares`,"POST",{...shareBody,reportId:"99999999"})).status,409);
+    const expired=await ok(`${endpoint}/shares`,"POST",{...shareBody,days:1});
+    await db.$executeRawUnsafe("UPDATE compass_report_shares SET expires_at=now()-interval '1 second' WHERE id=$1::bigint",expired.id);
+    assert.equal((await request(`/public/compass-reports/${expired.path.split('/').at(-1)}`,"GET",undefined,undefined,anonymous)).status,404);
+    const history=await ok(`${endpoint}/shares`);assert.equal("path" in history[0],false);assert.equal("token" in history[0],false);
+    await ok(`${endpoint}/shares/${share.id}/revoke`,"POST",{});
+    assert.equal((await request(publicPath,"GET",undefined,undefined,anonymous)).status,404);
+    assert.equal((await request("/public/compass-reports/not-a-token","GET",undefined,undefined,anonymous)).status,404);
+    assert.equal(aiCalls,1,"sharing and public viewing never call the paid model");
     assert.equal(
       aiCalls,
       1,

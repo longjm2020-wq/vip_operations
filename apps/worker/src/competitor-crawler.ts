@@ -1,0 +1,390 @@
+import { randomUUID } from "node:crypto";
+import { chromium, type Browser, type Page } from "@playwright/test";
+import { db, one, rows } from "../../../packages/database/src/index.js";
+import { type Context } from "../../api/src/core.js";
+import { scheduleCrawls } from "../../api/src/modules/competitors/crawl-jobs.js";
+import {
+  importSnapshot,
+  enrichDetails,
+} from "../../api/src/modules/competitors/service.js";
+import { captureVipPage } from "../../../packages/contracts/src/competitor-capture.js";
+import {
+  competitorProductSchema,
+  vipListUrl,
+  vipSearchUrl,
+  type CompetitorProduct,
+} from "../../../packages/contracts/src/competitor-analysis.js";
+
+export class CrawlIssue extends Error {
+  constructor(
+    public readonly verification: boolean,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+async function guard(page: Page) {
+  if (
+    (await page.locator('input[placeholder*="验证码"]:visible').count()) ||
+    /验证|captcha/i.test(new URL(page.url()).pathname) ||
+    (await page
+      .getByText(/请输入图中的.*字符|请完成.*验证|拖动.*滑块/)
+      .filter({ visible: true })
+      .count())
+  )
+    throw new CrawlIssue(
+      true,
+      "唯品会要求验证，后台采集已暂停；保留上次有效数据，可通过浏览器补充后重试",
+    );
+}
+async function waitForProduct(page: Page, selector: string) {
+  await guard(page);
+  try {
+    await page
+      .locator(selector)
+      .first()
+      .waitFor({ state: "visible", timeout: 15000 });
+  } catch {
+    await guard(page);
+    throw new CrawlIssue(
+      false,
+      "唯品会没有返回有效商品数据，保留上次数据，请稍后重试",
+    );
+  }
+  await guard(page);
+}
+export async function crawlPublicBrand(
+  page: Page,
+  brand: { id: string; name: string; brandSn: string | null },
+  hooks: {
+    list: (data: any) => Promise<void>;
+    detail: (products: CompetitorProduct[]) => Promise<void>;
+  },
+) {
+  let url = vipSearchUrl(brand.name, brand.brandSn);
+  await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+  await waitForProduct(page, ".c-goods-item__name");
+  if (!brand.brandSn) {
+    const matches = await page.locator('a[href*="brand_sn="]').evaluateAll(
+      (links, name) =>
+        links
+          .map((a) => ({
+            name: a.textContent?.trim(),
+            url: (a as HTMLAnchorElement).href,
+          }))
+          .filter((a) => a.name === name),
+      brand.name,
+    );
+    const brandSns = [
+      ...new Set(
+        matches
+          .filter((x) => vipListUrl(x.url))
+          .map((x) => new URL(x.url).searchParams.get("brand_sn"))
+          .filter(Boolean),
+      ),
+    ];
+    if (brandSns.length !== 1)
+      throw new CrawlIssue(
+        false,
+        "未能确定唯一品牌，请在新增品牌时填写唯品会品牌ID，或通过浏览器补充准确品牌排名",
+      );
+    url = vipSearchUrl(brand.name, brandSns[0]);
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+    await waitForProduct(page, ".c-goods-item__name");
+  }
+  // Bound each run to the first loaded sales page. All comparisons disclose this
+  // sample scope instead of claiming a complete market catalogue.
+  for (let scroll = 0; scroll < 4; scroll++) {
+    const count = await page.locator(".c-goods-item__name").count();
+    if (count >= 120) break;
+    await page.locator(".c-goods-item__name").last().scrollIntoViewIfNeeded();
+    await page.waitForTimeout(1000);
+    await guard(page);
+  }
+  const captured = await page.evaluate(captureVipPage, {
+    href: page.url(),
+    observedAt: new Date().toISOString(),
+  });
+  if (captured.kind !== "LIST")
+    throw new CrawlIssue(false, "排名页面格式变化，未替换原数据");
+  const products = captured.products
+    .slice(0, 120)
+    .map((p) => competitorProductSchema.parse(p));
+  const { kind: _kind, ...data } = captured;
+  await hooks.list({
+    ...data,
+    products,
+    scope: `后台采集品牌销量榜第一页已加载${products.length}款商品（最多120款，非全品牌目录）`,
+  });
+  let buffered: CompetitorProduct[] = [];
+  let skipped = 0,
+    consecutiveFailures = 0;
+  try {
+    for (const product of products) {
+      let verified: CompetitorProduct;
+      try {
+        await page.waitForTimeout(2000);
+        await page.goto(product.productUrl, {
+          waitUntil: "domcontentloaded",
+          timeout: 30000,
+        });
+        await waitForProduct(page, ".J_brandName");
+        await page
+          .locator(".dc-table-tit")
+          .first()
+          .waitFor({ state: "attached", timeout: 15000 });
+        const detail = await page.evaluate(captureVipPage, {
+          href: page.url(),
+          observedAt: new Date().toISOString(),
+        });
+        if (
+          detail.kind !== "DETAILS" ||
+          !detail.brandName.includes(brand.name) ||
+          detail.products[0]?.productId !== product.productId
+        )
+          throw new CrawlIssue(
+            false,
+            "商品详情与榜单商品不一致，未采用该商品的材质信息",
+          );
+        verified = competitorProductSchema.parse(detail.products[0]);
+      } catch (error) {
+        await guard(page);
+        if (error instanceof CrawlIssue && error.verification) throw error;
+        skipped++;
+        if (++consecutiveFailures >= 3)
+          throw new CrawlIssue(
+            false,
+            "连续3款商品详情未能读取，已保留核对完成的数据，可稍后补充",
+          );
+        continue;
+      }
+      consecutiveFailures = 0;
+      buffered.push(verified);
+      if (buffered.length >= 5) {
+        const batch = buffered;
+        buffered = [];
+        await hooks.detail(batch);
+      }
+    }
+  } finally {
+    // Keep verified details even when the next page requires verification.
+    if (buffered.length) await hooks.detail(buffered);
+  }
+  if (skipped)
+    throw new CrawlIssue(
+      false,
+      `${skipped}款商品详情未能核对，已保留榜单和核对完成的材质信息，可稍后补充`,
+    );
+}
+
+async function jobContext(job: any): Promise<Context> {
+  const actor = await one(
+    db,
+    `SELECT u.id::text,u.username,u.display_name,array_agg(DISTINCT p.code) AS permissions,array_agg(DISTINCT r.code) AS role_codes FROM users u JOIN user_roles ur ON ur.user_id=u.id JOIN roles r ON r.id=ur.role_id JOIN role_permissions rp ON rp.role_id=r.id JOIN permissions p ON p.id=rp.permission_id WHERE u.status='ACTIVE' AND ($1::bigint IS NULL OR u.id=$1::bigint) GROUP BY u.id HAVING bool_or(p.code='analytics.manage') ORDER BY u.id LIMIT 1`,
+    job.requested_by,
+  );
+  if (!actor)
+    throw new CrawlIssue(false, "采集发起者没有经营分析管理权限，任务未执行");
+  return {
+    actor: {
+      id: actor.id,
+      username: actor.username,
+      displayName: actor.display_name,
+      permissions: actor.permissions,
+      roleCodes: actor.role_codes,
+    },
+    requestId: "competitor-worker-" + job.id,
+  };
+}
+export async function processCrawlJob(
+  launch: () => Promise<Browser> = () => chromium.launch({ headless: true }),
+  signal?: AbortSignal,
+) {
+  if (signal?.aborted) return;
+  const token = randomUUID();
+  const job = await db.$transaction(async (tx) => {
+    // One browser per deployment even if multiple Worker replicas are running.
+    await rows(tx, "SELECT pg_advisory_xact_lock(2026100341)::text");
+    if (
+      await one(
+        tx,
+        "SELECT 1 FROM competitor_crawl_jobs WHERE status='RUNNING'",
+      )
+    )
+      return null;
+    const next = await one(
+      tx,
+      "SELECT j.* FROM competitor_crawl_jobs j CROSS JOIN competitor_crawl_settings s WHERE j.status='QUEUED' AND (j.trigger='MANUAL' OR s.enabled) ORDER BY j.id LIMIT 1 FOR UPDATE OF j SKIP LOCKED",
+    );
+    if (!next) return null;
+    return one(
+      tx,
+      "UPDATE competitor_crawl_jobs SET status='RUNNING',claim_token=$2,started_at=now(),heartbeat_at=now(),note='' WHERE id=$1::bigint RETURNING *",
+      next.id,
+      token,
+    );
+  });
+  if (!job) return;
+  let browser: Browser | undefined,
+    capturedCount = 0,
+    detailCount = 0,
+    snapshotId: string | undefined,
+    timedOut = false;
+  const closeBrowser = () => {
+    void browser?.close().catch(() => {});
+  };
+  const deadline = setTimeout(
+    () => {
+      timedOut = true;
+      closeBrowser();
+    },
+    20 * 60 * 1000,
+  );
+  deadline.unref();
+  signal?.addEventListener("abort", closeBrowser, { once: true });
+  const heartbeat = setInterval(() => {
+    void db
+      .$executeRawUnsafe(
+        "UPDATE competitor_crawl_jobs SET heartbeat_at=now() WHERE id=$1::bigint AND claim_token=$2 AND status='RUNNING'",
+        job.id,
+        token,
+      )
+      .catch(() => {});
+  }, 30000);
+  heartbeat.unref();
+  const saveProgress = () =>
+    db.$executeRawUnsafe(
+      "UPDATE competitor_crawl_jobs SET captured_count=$3,detail_count=$4,heartbeat_at=now() WHERE id=$1::bigint AND claim_token=$2 AND status='RUNNING'",
+      job.id,
+      token,
+      capturedCount,
+      detailCount,
+    );
+  const requireLease = async () => {
+    if (signal?.aborted)
+      throw new CrawlIssue(
+        false,
+        "采集进程正在重启，已保留完成的数据，可重新采集",
+      );
+    if (timedOut)
+      throw new CrawlIssue(
+        false,
+        "本次采集已达到20分钟时限，已保留完成的数据，可稍后补充",
+      );
+    if (
+      !(await one(
+        db,
+        "SELECT id FROM competitor_crawl_jobs WHERE id=$1::bigint AND claim_token=$2 AND status='RUNNING'",
+        job.id,
+        token,
+      ))
+    )
+      throw new CrawlIssue(false, "采集任务已失效，保留已完成的数据");
+  };
+  try {
+    const c = await jobContext(job),
+      brand = await one(
+        db,
+        "SELECT id::text,name,brand_sn FROM competitor_brands WHERE id=$1::bigint",
+        job.brand_id,
+      );
+    browser = await launch();
+    await requireLease();
+    const context = await browser.newContext({
+      locale: "zh-CN",
+      viewport: { width: 1366, height: 900 },
+      acceptDownloads: false,
+    });
+    const page = await context.newPage();
+    page.setDefaultTimeout(15000);
+    await crawlPublicBrand(
+      page,
+      { id: brand!.id, name: brand!.name, brandSn: brand!.brand_sn },
+      {
+        list: async (data) => {
+          await requireLease();
+          const saved = await importSnapshot(
+            { ...c, key: `competitor-list-${job.id}` },
+            { ...data, brandId: brand!.id, brandName: brand!.name },
+          );
+          snapshotId = String(saved.id);
+          capturedCount = data.products.length;
+          await saveProgress();
+        },
+        detail: async (products) => {
+          await requireLease();
+          await enrichDetails(
+            { ...c, key: `competitor-detail-${job.id}-${detailCount}` },
+            {
+              brandId: brand!.id,
+              brandName: brand!.name,
+              snapshotId,
+              products,
+            },
+          );
+          detailCount += products.length;
+          await saveProgress();
+        },
+      },
+    );
+    await db.$executeRawUnsafe(
+      "UPDATE competitor_crawl_jobs SET status='READY',completed_at=now(),note='后台采集完成' WHERE id=$1::bigint AND claim_token=$2 AND status='RUNNING'",
+      job.id,
+      token,
+    );
+  } catch (error) {
+    const verification = error instanceof CrawlIssue && error.verification;
+    const note = signal?.aborted
+      ? "采集进程正在重启，已保留完成的数据，可重新采集"
+      : timedOut
+        ? "本次采集已达到20分钟时限，已保留完成的数据，可稍后补充"
+        : error instanceof CrawlIssue
+          ? error.message
+          : "后台采集未完成，已保留有效数据；请稍后重试或通过浏览器补充";
+    await db.$executeRawUnsafe(
+      "UPDATE competitor_crawl_jobs SET status=$3,note=$4,completed_at=now() WHERE id=$1::bigint AND claim_token=$2 AND status='RUNNING'",
+      job.id,
+      token,
+      verification
+        ? "VERIFICATION_REQUIRED"
+        : capturedCount
+          ? "PARTIAL"
+          : "FAILED",
+      note,
+    );
+  } finally {
+    clearInterval(heartbeat);
+    clearTimeout(deadline);
+    signal?.removeEventListener("abort", closeBrowser);
+    await browser?.close().catch(() => {});
+  }
+}
+export function startCompetitorCrawler() {
+  let busy = false,
+    stopped = false,
+    active: Promise<void> | undefined;
+  const controller = new AbortController();
+  const tick = () => {
+    if (busy || stopped) return;
+    busy = true;
+    active = (async () => {
+      try {
+        await scheduleCrawls();
+        await processCrawlJob(undefined, controller.signal);
+      } catch {
+        console.warn("Competitor background task unavailable");
+      } finally {
+        busy = false;
+      }
+    })();
+  };
+  const timer = setInterval(tick, 15000);
+  timer.unref();
+  tick();
+  return async () => {
+    stopped = true;
+    controller.abort();
+    clearInterval(timer);
+    await active;
+  };
+}

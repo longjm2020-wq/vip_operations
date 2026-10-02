@@ -27,9 +27,13 @@ import { enrichOpenApi } from "./openapi.js";
 import { ManualController } from "./manual.js";
 import { CompassAnalyticsModule } from "./modules/analytics/controller.js";
 import { PersonalWorkspaceModule } from "./modules/workspace/controller.js";
+import { CompetitorAnalysisModule } from "./modules/competitors/controller.js";
+import { CompassSharesModule } from "./modules/analytics/share-controller.js";
 @Module({
   controllers: [ManualController],
   imports: [
+    CompassSharesModule,
+    CompetitorAnalysisModule,
     PersonalWorkspaceModule,
     CompassAnalyticsModule,
     AuthModule,

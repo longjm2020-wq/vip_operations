@@ -1,0 +1,119 @@
+.compass-mini-trend {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 84px;
+  height: 38px;
+  padding: 3px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: #df7637;
+  cursor: pointer;
+}
+.compass-mini-trend svg {
+  width: 80px;
+  height: 30px;
+}
+.compass-mini-trend:hover,
+.compass-mini-trend:focus-visible {
+  background: #fff3e8;
+  border-color: #f2d4c1;
+  outline: none;
+}
+.compass-mini-trend span {
+  color: #ae9b90;
+}
+.compass-product .compass-mini-trend {
+  margin-left: auto;
+}
+.compass-product > div {
+  min-width: 0;
+}
+.compass-product .ant-btn-link {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  height: auto;
+  text-align: left;
+}
+.compass-entity-trend-modal .ant-modal-body {
+  max-height: calc(100dvh - 180px);
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+.compass-entity-period,
+.compass-entity-note {
+  color: #997f70;
+  font-size: 13px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.compass-entity-metrics {
+  width: 100%;
+  margin: 0 0 16px;
+}
+.compass-entity-charts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+.compass-entity-charts .ant-card {
+  min-width: 0;
+}
+.compass-metric-plot {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+  min-height: 180px;
+}
+.compass-metric-plot svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.compass-metric-plot g[role="button"] {
+  cursor: pointer;
+  outline: none;
+}
+.compass-metric-plot g[role="button"]:focus-visible circle {
+  stroke: #6b4733;
+  stroke-width: 2;
+}
+.compass-metric-tooltip {
+  position: absolute;
+  top: 4px;
+  width: 180px;
+  padding: 10px;
+  background: #fffdf9;
+  border: 1px solid #ead7ca;
+  border-radius: 8px;
+  box-shadow: 0 4px 14px #38231c18;
+  pointer-events: none;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.compass-metric-tooltip strong {
+  display: block;
+  margin-bottom: 4px;
+  color: #725d51;
+}
+.compass-metric-tooltip span {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+.compass-metric-tooltip b {
+  overflow-wrap: anywhere;
+  text-align: right;
+  min-width: 0;
+}
+@media (max-width: 600px) {
+  .compass-entity-charts {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+  .compass-entity-trend-modal .ant-modal-body {
+    max-height: calc(100dvh - 150px);
+  }
+}

@@ -5,6 +5,7 @@ self.onmessage = async (event: MessageEvent<File>) => {
     const file = event.data;
     const sheets = await readWorkbook(file, {
       formattedCells: true,
+      dateTimeColumns: ["首次上架时间"],
       maxFileSizeMB: 100,
       maxRows: 200000,
     });

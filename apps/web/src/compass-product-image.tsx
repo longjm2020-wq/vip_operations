@@ -1,6 +1,6 @@
 import { Image, Popover } from "antd";
 import { PictureOutlined } from "@ant-design/icons";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import "./compass-product-image.css";
 
 export type CompassImageTarget = { image: string; code: string };
@@ -69,6 +69,20 @@ export function CompassImagePreview({
   target: CompassImageTarget | null;
   onClose: () => void;
 }) {
+  useEffect(() => {
+    if (!target) return;
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        onClose();
+      }
+    };
+    // The image can open inside a Drawer. Escape should close the image even
+    // before the preview animation moves keyboard focus into its dialog.
+    document.addEventListener("keydown", escape, true);
+    return () => document.removeEventListener("keydown", escape, true);
+  }, [target, onClose]);
   return (
     <Image.PreviewGroup
       items={

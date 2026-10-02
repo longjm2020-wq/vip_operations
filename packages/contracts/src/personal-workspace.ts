@@ -2,6 +2,7 @@ import { z } from "zod";
 
 export type WorkspaceActor = { permissions: string[]; roleCodes?: string[] };
 export const workspaceTools = [
+  { id: "competitors", title: "竞品分析", description: "对比唯品会品牌、价格材质与商品 TOP20", path: "/analytics/competitors", permission: "analytics.read", group: "运营" },
   {
     id: "analytics",
     title: "经营分析",

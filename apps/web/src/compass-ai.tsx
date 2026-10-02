@@ -1,4 +1,8 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import {
+  CompassProductText,
+  productReferenceTargets,
+} from "./compass-product-text";
 import {
   Alert,
   App,
@@ -11,7 +15,12 @@ import {
   Tabs,
   Tag,
 } from "antd";
-import { ReloadOutlined, RobotOutlined } from "@ant-design/icons";
+import {
+  ReloadOutlined,
+  RobotOutlined,
+  ShareAltOutlined,
+} from "@ant-design/icons";
+import { CompassSharePanel } from "./compass-share";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "./api";
 import { QueryState } from "./shared";
@@ -33,6 +42,7 @@ import {
   type CompassDimension,
 } from "../../../packages/contracts/src/compass-analytics";
 import "./compass-ai.css";
+import "./compass-share.css";
 
 const states: Record<string, string> = {
   READY: "已生成",
@@ -74,9 +84,14 @@ function Change({ value, label }: { value: number | null; label: string }) {
     </span>
   );
 }
-function VisualReport({ visuals }: { visuals: CompassVisuals }) {
+function VisualReport({
+  visuals,
+  onPreview,
+}: {
+  visuals: CompassVisuals;
+  onPreview: (target: CompassImageTarget) => void;
+}) {
   const [dimension, setDimension] = useState<CompassDimension>("style");
-  const [preview, setPreview] = useState<CompassImageTarget | null>(null);
   const period = (days: number) => visuals.periods.find((p) => p.days === days),
     today = period(1)?.summary || {},
     week = period(7)?.summary || {},
@@ -193,7 +208,7 @@ function VisualReport({ visuals }: { visuals: CompassVisuals }) {
             <span role="columnheader">可售库存</span>
             <span role="columnheader">关注原因</span>
           </div>
-          {attention.slice(0, 5).map((row) => (
+          {attention.slice(0, 10).map((row) => (
             <div role="row" key={row.code}>
               <div
                 role="cell"
@@ -203,16 +218,26 @@ function VisualReport({ visuals }: { visuals: CompassVisuals }) {
                 <CompassProductImage
                   image={row.image}
                   code={row.code}
-                  onPreview={setPreview}
+                  onPreview={onPreview}
                 />
-                <strong>{row.code}</strong>
+                <strong>
+                  <CompassProductText
+                    text={row.code}
+                    targets={productReferenceTargets(visuals)}
+                    onPreview={onPreview}
+                  />
+                </strong>
               </div>
-              <span role="cell">{number(row.salesQty)} 件</span>
-              <span role="cell">
+              <span role="cell" data-label="近7天销量">
+                {number(row.salesQty)} 件
+              </span>
+              <span role="cell" data-label="退货 / 期间退货率">
                 {number(row.returnsQty)} 件 · {percent(row.returnRate)}
               </span>
-              <span role="cell">{number(row.saleableStock)}</span>
-              <span role="cell">
+              <span role="cell" data-label="可售库存">
+                {number(row.saleableStock)}
+              </span>
+              <span role="cell" data-label="关注原因">
                 <Space wrap size={0}>
                   {metricNumber(row.saleableStock) === 0 &&
                     (metricNumber(row.salesQty) || 0) > 0 && (
@@ -233,12 +258,112 @@ function VisualReport({ visuals }: { visuals: CompassVisuals }) {
           />
         )}
         <small className="ai-chart-note">
-          优先展示售罄及退货较多的商品，最多 5
+          优先展示售罄及退货较多的商品，最多 10
           项；并非全量库存预警。三种维度分别分析。
         </small>
       </Card>
-      <CompassImagePreview target={preview} onClose={() => setPreview(null)} />
     </>
+  );
+}
+export type CompassReportSnapshot = {
+  reportDate: string;
+  generatedAt: string;
+  content: {
+    summary: string;
+    actions: string[];
+    observations: string[];
+    risks: string[];
+  };
+  visuals?: CompassVisuals;
+};
+export function CompassReportView({
+  report,
+}: {
+  report: CompassReportSnapshot;
+}) {
+  const completeRef = useRef<HTMLDetailsElement>(null);
+  const [preview, setPreview] = useState<CompassImageTarget | null>(null);
+  useEffect(() => setPreview(null), [report]);
+  const content = report.content,
+    targets = productReferenceTargets(report.visuals);
+  const linkedText = (text: string) => (
+    <CompassProductText text={text} targets={targets} onPreview={setPreview} />
+  );
+  return (
+    <div className="compass-report-content">
+      <>
+        <div className="ai-report-meta">
+          数据截至 {report.reportDate} · 生成于{" "}
+          {new Date(report.generatedAt).toLocaleString("zh-CN", {
+            hour12: false,
+          })}
+        </div>
+        <section className="ai-summary">
+          <span>经营摘要</span>
+          <p>{linkedText(content.summary)}</p>
+          <a
+            href="#ai-complete-report"
+            onClick={(event) => {
+              event.preventDefault();
+              if (completeRef.current) {
+                completeRef.current.open = true;
+                completeRef.current.scrollIntoView({
+                  behavior: "smooth",
+                  block: "start",
+                });
+              }
+            }}
+          >
+            查看完整解读 ↓
+          </a>
+        </section>
+        {report.visuals ? (
+          <VisualReport visuals={report.visuals} onPreview={setPreview} />
+        ) : (
+          <Alert type="info" title="图表数据尚未就绪，请刷新分析" />
+        )}
+        <section className="ai-action-section">
+          <h3>建议先做这几件事</h3>
+          <div className="ai-action-grid">
+            {content.actions.slice(0, 3).map((action: string, i: number) => (
+              <Card size="small" key={i}>
+                <span className="ai-action-index">{i + 1}</span>
+                <p>{linkedText(action)}</p>
+              </Card>
+            ))}
+          </div>
+        </section>
+        <details
+          ref={completeRef}
+          id="ai-complete-report"
+          className="ai-complete"
+        >
+          <summary>完整经营观察、建议与风险</summary>
+          <p>{linkedText(content.summary)}</p>
+          {(
+            [
+              ["经营观察", content.observations],
+              ["行动建议", content.actions],
+              ["风险与数据限制", content.risks],
+            ] as [string, string[]][]
+          ).map(([label, items]) => (
+            <section key={label}>
+              <h4>{label}</h4>
+              <ul>
+                {items.map((item, i) => (
+                  <li key={i}>{linkedText(item)}</li>
+                ))}
+              </ul>
+            </section>
+          ))}
+        </details>
+        <p className="ai-report-footnote">
+          图表与解读来自生成报告时的同一批报表，与页面当前筛选无关。库存为截止日快照；期间退货率可超过
+          100%，不代表同批订单退货率。AI 建议供经营决策参考。
+        </p>
+      </>
+      <CompassImagePreview target={preview} onClose={() => setPreview(null)} />
+    </div>
   );
 }
 export function CompassAIReport({
@@ -254,7 +379,7 @@ export function CompassAIReport({
 }) {
   const { message } = App.useApp(),
     [busy, setBusy] = useState(false),
-    completeRef = useRef<HTMLDetailsElement>(null);
+    [sharing, setSharing] = useState(false);
   const q = useQuery({
     queryKey: ["compass-ai-report", sourceKey],
     queryFn: () => api("/analytics/compass/ai-report"),
@@ -265,6 +390,7 @@ export function CompassAIReport({
   const report = q.data?.data,
     content = report?.content,
     canGenerate = ["NOT_GENERATED", "FAILED"].includes(report?.state);
+
   const generate = async () => {
     setBusy(true);
     try {
@@ -282,7 +408,7 @@ export function CompassAIReport({
     <Drawer
       title={
         <Space>
-          <RobotOutlined />
+          <RobotOutlined aria-hidden="true" />
           <span>AI 经营分析</span>
           <Tag color={report?.state === "READY" ? "green" : "default"}>
             {states[report?.state] || "读取中"}
@@ -290,11 +416,23 @@ export function CompassAIReport({
         </Space>
       }
       open={open}
-      onClose={onClose}
+      onClose={() => {
+        setSharing(false);
+        onClose();
+      }}
       size="min(1180px, 100vw)"
       rootClassName="compass-ai-drawer"
+      destroyOnHidden
       extra={
         <Space>
+          {manage && (
+            <Button
+              icon={<ShareAltOutlined aria-hidden="true" />}
+              onClick={() => setSharing(true)}
+            >
+              分享报告
+            </Button>
+          )}
           <Button
             icon={<ReloadOutlined aria-hidden="true" />}
             onClick={() => void q.refetch()}
@@ -313,77 +451,7 @@ export function CompassAIReport({
       <QueryState error={q.error} reload={() => q.refetch()} />
       {q.isLoading && <Spin />}
       {content ? (
-        <>
-          <div className="ai-report-meta">
-            数据截至 {report.reportDate} · 生成于{" "}
-            {new Date(report.generatedAt).toLocaleString("zh-CN", {
-              hour12: false,
-            })}
-          </div>
-          <section className="ai-summary">
-            <span>经营摘要</span>
-            <p>{content.summary}</p>
-            <a
-              href="#ai-complete-report"
-              onClick={(event) => {
-                event.preventDefault();
-                if (completeRef.current) {
-                  completeRef.current.open = true;
-                  completeRef.current.scrollIntoView({
-                    behavior: "smooth",
-                    block: "start",
-                  });
-                }
-              }}
-            >
-              查看完整解读 ↓
-            </a>
-          </section>
-          {report.visuals ? (
-            <VisualReport visuals={report.visuals} />
-          ) : (
-            <Alert type="info" title="图表数据尚未就绪，请刷新分析" />
-          )}
-          <section className="ai-action-section">
-            <h3>建议先做这几件事</h3>
-            <div className="ai-action-grid">
-              {content.actions.slice(0, 3).map((action: string, i: number) => (
-                <Card size="small" key={i}>
-                  <span className="ai-action-index">{i + 1}</span>
-                  <p>{action}</p>
-                </Card>
-              ))}
-            </div>
-          </section>
-          <details
-            ref={completeRef}
-            id="ai-complete-report"
-            className="ai-complete"
-          >
-            <summary>完整经营观察、建议与风险</summary>
-            <p>{content.summary}</p>
-            {(
-              [
-                ["经营观察", content.observations],
-                ["行动建议", content.actions],
-                ["风险与数据限制", content.risks],
-              ] as [string, string[]][]
-            ).map(([label, items]) => (
-              <section key={label}>
-                <h4>{label}</h4>
-                <ul>
-                  {items.map((item, i) => (
-                    <li key={i}>{item}</li>
-                  ))}
-                </ul>
-              </section>
-            ))}
-          </details>
-          <p className="ai-report-footnote">
-            图表与解读来自生成报告时的同一批报表，与页面当前筛选无关。库存为截止日快照；期间退货率可超过
-            100%，不代表同批订单退货率。AI 建议供经营决策参考。
-          </p>
-        </>
+        <CompassReportView report={report} />
       ) : (
         !q.isLoading &&
         !q.error && (
@@ -398,6 +466,16 @@ export function CompassAIReport({
             }
           />
         )
+      )}
+      {manage && (
+        <CompassSharePanel
+          open={sharing && open}
+          onClose={() => setSharing(false)}
+          reportId={
+            report?.state === "READY" && content ? report.id : undefined
+          }
+          reportDate={report?.reportDate}
+        />
       )}
     </Drawer>
   );

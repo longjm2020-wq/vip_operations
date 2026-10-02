@@ -1013,6 +1013,10 @@ try {
   check("migrations rerun without modifying data");
   const {testCompassAnalytics}=await import("./compass-analytics.js");
   await testCompassAnalytics({ok,request,db,one,check,buyer});
+  const {testCompetitorAnalysis}=await import("./competitor-analysis.js");
+  await testCompetitorAnalysis({ok,request,db,one,check,buyer});
+  const {testCompetitorCrawler}=await import("./competitor-crawler.js");
+  await testCompetitorCrawler({ok,request,db,one,check,buyer});
   const {testPersonalWorkspace}=await import("./personal-workspace.js");
   await testPersonalWorkspace({ok,request,db,one,check,buyer});
   await writeFile(

@@ -3,5 +3,7 @@ WORKDIR /app
 RUN npm install -g pnpm@10.32.1
 COPY . .
 RUN pnpm install --frozen-lockfile
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+RUN pnpm exec playwright install --with-deps chromium --only-shell
 RUN pnpm db:generate && pnpm build
 CMD ["sh", "-c", "pnpm db:migrate && pnpm start:api"]

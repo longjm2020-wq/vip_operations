@@ -3,6 +3,7 @@ import {
   BarChartOutlined,
   DatabaseOutlined,
   ArrowRightOutlined,
+  FundProjectionScreenOutlined,
 } from "@ant-design/icons";
 import { Link, useSearchParams } from "react-router-dom";
 import { Header, useCan } from "./shared";
@@ -39,6 +40,13 @@ export function OperationsWorkspacePage() {
       icon: <DatabaseOutlined />,
       description: "选款资料登记、字段配置与团队协作",
       visible: selection,
+    },
+    {
+      name: "竞品分析",
+      href: "/analytics/competitors",
+      icon: <FundProjectionScreenOutlined />,
+      description: "品牌对比、价格材质分析与商品 TOP20",
+      visible: analytics,
     },
   ].filter((e) => e.visible);
   return (

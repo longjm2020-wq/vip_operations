@@ -1,5 +1,10 @@
 import { expect, test, type Page } from "@playwright/test";
-async function fixture(page: Page, role = "ADMIN", detailRows = 0) {
+async function fixture(
+  page: Page,
+  role = "ADMIN",
+  detailRows = 0,
+  fullAttention = false,
+) {
   await page.route("https://compass.example.test/product.svg", (route) =>
     route.fulfill({
       contentType: "image/svg+xml",
@@ -7,6 +12,7 @@ async function fixture(page: Page, role = "ADMIN", detailRows = 0) {
     }),
   );
   let settingsRequests = 0;
+  let reportSnapshot: any;
   const workspace = {
     version: 0,
     note: "",
@@ -77,12 +83,18 @@ async function fixture(page: Page, role = "ADMIN", detailRows = 0) {
       const params = new URL(route.request().url()).searchParams;
       const size = Number(params.get("pageSize") || 20);
       const current = Number(params.get("page") || 1);
+      const miniMetric = params.get("miniMetric") || "salesAmount";
       const items = Array.from({ length: detailRows }, (_, index) => ({
         code: `STYLE-${String(index + 1).padStart(3, "0")}`,
         image: "https://compass.example.test/product.svg",
         salesAmount: detailRows - index,
         salesQty: 1,
         lastDate: "2026-10-01",
+        trend: [
+          { date: "2026-09-25", value: 1 },
+          { date: "2026-09-27", value: 3 },
+          { date: "2026-10-01", value: 2 },
+        ],
       }));
       data = {
         dimension: "style",
@@ -93,10 +105,41 @@ async function fixture(page: Page, role = "ADMIN", detailRows = 0) {
         complete: true,
         total: detailRows,
         sources: [],
+        source: { id: "1" },
+        miniMetric,
         summary: { coveredDays: 7, entities: detailRows },
         top: items.slice(0, 20),
         items: items.slice((current - 1) * size, current * size),
         daily: [],
+      };
+    }
+    if (path === "/analytics/compass/entity-trend") {
+      const params = new URL(route.request().url()).searchParams;
+      data = {
+        code: params.get("code"),
+        dimension: params.get("dimension"),
+        startDate: params.get("startDate"),
+        endDate: params.get("endDate"),
+        sourceId: "1",
+        daily: Array.from({ length: 7 }, (_, index) => ({
+          date: `2026-09-${25 + index}`.replace("2026-09-31", "2026-10-01"),
+          salesAmount: index * 100,
+          salesQty: index,
+          exposure: index * 1000,
+          detailViews: index * 100,
+          clickRate: index ? 0.1 : null,
+          favoriteRate: index ? 0.03 : null,
+          cartRate: index ? 0.2 : null,
+          returnRate: index ? 1 / index : null,
+          returnsAmount: 30,
+          returnsQty: 1,
+          rejectedReturnRate: index ? 1 / index : null,
+          conversionRate: index ? 0.01 : null,
+          averagePrice: index ? 100 : null,
+          saleableStock: 10 - index,
+          onSaleStock: 12 - index,
+          saleAge: index + 30,
+        })),
       };
     }
     if (path === "/analytics/compass/ai-settings") {
@@ -110,6 +153,7 @@ async function fixture(page: Page, role = "ADMIN", detailRows = 0) {
     }
     if (path === "/analytics/compass/ai-report")
       data = {
+        id: "101",
         state: "READY",
         model: "openai/gpt-6.1-sol",
         responseModel: "openai/gpt-6.1-sol",
@@ -118,8 +162,12 @@ async function fixture(page: Page, role = "ADMIN", detailRows = 0) {
         generatedAt: "2026-10-02T12:00:00Z",
         content: {
           summary: "销售回落，优先核查缺货与退货原因。",
-          observations: ["销售波动"],
-          actions: ["先核对缺货商品", "再核查退货订单", "复盘流量变化"],
+          observations: ["款号STYLE-1销售波动，条码000012345需核对"],
+          actions: [
+            "先核对款号STYLE-1的缺货情况",
+            "核查条码000012345的退货订单",
+            "复盘流量变化",
+          ],
           risks: ["库存是快照，不能跨日相加"],
         },
         visuals: {
@@ -162,10 +210,276 @@ async function fixture(page: Page, role = "ADMIN", detailRows = 0) {
           })),
         },
       };
+    if (path === "/analytics/compass/ai-report") {
+      if (fullAttention) {
+        for (const dimension of (data as any).visuals.dimensions)
+          dimension.top10 = Array.from({ length: 10 }, (_, index) => ({
+            code: `${dimension.dimension}-ATTENTION-${index + 1}`,
+            image: "https://compass.example.test/product.svg",
+            salesQty: 10 - index,
+            returnsQty: 1,
+            returnRate: 1 / (10 - index),
+            saleableStock: 0,
+          }));
+      }
+      reportSnapshot = data;
+    }
     await route.fulfill({ json: { data } });
   });
-  return { workspace, settingsRequests: () => settingsRequests };
+  return {
+    workspace,
+    settingsRequests: () => settingsRequests,
+    reportSnapshot: () => reportSnapshot,
+  };
 }
+test("商品MINI图打开真实日期范围并按TAB分类，关闭保留滚动位置", async ({
+  page,
+}) => {
+  await fixture(page, "ADMIN", 74);
+  await page.goto("/analytics/compass");
+  const detail = page.locator(".compass-detail-card"),
+    body = detail.locator(".ant-table-body");
+  const change = page.waitForResponse((response) =>
+    response.url().includes("miniMetric=detailViews"),
+  );
+  await detail.getByRole("tab", { name: "流量", exact: true }).click();
+  await change;
+  await expect(detail.locator(".ant-spin-spinning")).toHaveCount(0);
+  await body.scrollIntoViewIfNeeded();
+  const box = (await body.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + 100);
+  await page.mouse.wheel(0, 160);
+  await expect
+    .poll(() => body.evaluate((element) => element.scrollTop))
+    .toBeGreaterThan(0);
+  const anchor = await page.evaluate(() => window.scrollY),
+    offset = await body.evaluate((element) => element.scrollTop);
+  await detail
+    .getByRole("button", { name: "查看STYLE-005每日趋势", exact: true })
+    .click();
+  const modal = page.getByRole("dialog", {
+    name: "款号 STYLE-005 · 每日数据趋势",
+    exact: true,
+  });
+  await expect(modal.locator(".compass-entity-period")).toContainText(
+    "2026-09-25 — 2026-10-01",
+  );
+  await expect(
+    modal.getByRole("tab", { name: "流量", exact: true }),
+  ).toHaveAttribute("aria-selected", "true");
+  await expect(
+    modal.getByRole("img", { name: "每日收藏率趋势", exact: true }),
+  ).toBeVisible();
+  for (const [tab, chart] of [
+    ["转化", "销售件数"],
+    ["售后", "退货件数"],
+    ["库存", "可售库存"],
+    ["自定义", "销售额"],
+  ]) {
+    await modal.getByRole("tab", { name: tab, exact: true }).click();
+    await expect(
+      modal.getByRole("img", {
+        name: `每日${chart}趋势`,
+        exact: true,
+      }),
+    ).toBeVisible();
+  }
+  await modal.locator('g[role="button"]').first().click();
+  await expect(modal.getByRole("tooltip")).toContainText("2026-09-25");
+  await modal.getByRole("button", { name: "关闭", exact: true }).click();
+  await expect(page).toHaveURL(/\/analytics\/compass$/);
+  expect(await body.evaluate((element) => element.scrollTop)).toBeCloseTo(
+    offset,
+    0,
+  );
+  expect(await page.evaluate(() => window.scrollY)).toBeCloseTo(anchor, 0);
+  await page.setViewportSize({ width: 375, height: 812 });
+  await detail
+    .getByRole("button", { name: "查看STYLE-005每日趋势", exact: true })
+    .click();
+  await expect(
+    modal.getByRole("img", { name: "每日商详 UV趋势", exact: true }),
+  ).toBeVisible();
+  const plot = (await modal
+    .locator(".compass-metric-plot")
+    .first()
+    .boundingBox())!;
+  expect(plot.x).toBeGreaterThanOrEqual(0);
+  expect(plot.x + plot.width).toBeLessThanOrEqual(375);
+  await page.screenshot({
+    path: ".local/compass-entity-trend-mobile.png",
+    fullPage: false,
+  });
+});
+
+test("重点商品关注三个维度均显示10项，保留图片和关注原因", async ({ page }) => {
+  await fixture(page, "ADMIN", 0, true);
+  await page.goto("/analytics/compass");
+  await page.getByRole("button", { name: "AI 经营分析", exact: true }).click();
+  const attention = page.locator(".ai-attention");
+  for (const [label, dimension] of [
+    ["款号", "style"],
+    ["货号", "article"],
+    ["条码", "barcode"],
+  ]) {
+    await attention.getByRole("tab", { name: label, exact: true }).click();
+    const rows = attention
+      .locator('.ai-attention-table > [role="row"]')
+      .filter({ has: page.locator('[role="cell"]') });
+    await expect(rows).toHaveCount(10);
+    await expect(rows.last()).toContainText(`${dimension}-ATTENTION-10`);
+    await expect(rows.last()).toContainText("核查退货");
+    await expect(
+      rows
+        .last()
+        .getByRole("button", {
+          name: `放大图片 ${dimension}-ATTENTION-10`,
+          exact: true,
+        })
+        .first(),
+    ).toBeVisible();
+  }
+  await expect(attention.locator(".ai-chart-note")).toContainText("最多 10 项");
+});
+
+test("AI正文编码预览、外部分享无需登录及手机布局、撤销失效", async ({
+  page,
+  browser,
+}) => {
+  const state = await fixture(page),
+    token = "f".repeat(64);
+  let created = false,
+    revoked = false;
+  const expiresAt = new Date(Date.now() + 7 * 86400000).toISOString();
+  await page.route("**/api/v1/analytics/compass/shares**", async (route) => {
+    const method = route.request().method(),
+      path = new URL(route.request().url()).pathname;
+    let data: unknown;
+    if (path.endsWith("/revoke")) {
+      revoked = true;
+      data = { revoked: true };
+    } else if (method === "POST") {
+      expect(route.request().postDataJSON()).toEqual({
+        days: 7,
+        reportId: "101",
+      });
+      created = true;
+      data = { id: "1", path: "/share/compass/" + token, expiresAt };
+    } else
+      data = created
+        ? [
+            {
+              id: "1",
+              reportDate: "2026-10-01",
+              createdAt: new Date().toISOString(),
+              expiresAt,
+              revokedAt: revoked ? new Date().toISOString() : null,
+            },
+          ]
+        : [];
+    await route.fulfill({ json: { data } });
+  });
+  await page.goto("/analytics/compass");
+  await page.getByRole("button", { name: "AI 经营分析", exact: true }).click();
+  const drawer = page.locator(".compass-ai-drawer");
+  const keyword = drawer
+    .locator(".ai-action-grid")
+    .getByRole("button", { name: "放大图片 STYLE-1", exact: true });
+  await keyword.hover();
+  await expect(
+    page.getByRole("img", { name: "商品预览 STYLE-1", exact: true }),
+  ).toHaveCSS("width", "120px");
+  await keyword.click();
+  await expect(page.locator(".compass-image-preview:visible")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await drawer.getByRole("button", { name: "分享报告", exact: true }).click();
+  const share = page.getByRole("dialog", {
+    name: "分享 AI 经营分析",
+    exact: true,
+  });
+  await share
+    .getByRole("button", { name: "创建分享链接", exact: true })
+    .click();
+  await expect(share.getByLabel("外部分享链接")).toHaveValue(
+    /\/share\/compass\/f{64}$/,
+  );
+  const snapshot = state.reportSnapshot();
+  const anonymous = await browser.newContext({
+    baseURL: "http://127.0.0.1:5174",
+    viewport: { width: 375, height: 812 },
+    isMobile: true,
+    hasTouch: true,
+  });
+  const external = await anonymous.newPage();
+  let authRequests = 0;
+  await external.route("https://compass.example.test/product.svg", (route) =>
+    route.fulfill({
+      contentType: "image/svg+xml",
+      body: '<svg xmlns="http://www.w3.org/2000/svg" width="120" height="160"><rect width="120" height="160" fill="#ead9cd"/></svg>',
+    }),
+  );
+  await external.route("**/api/v1/**", async (route) => {
+    if (route.request().url().includes("/auth/")) authRequests++;
+    await route.fulfill(
+      revoked
+        ? { status: 404, json: { error: { code: "NOT_FOUND" } } }
+        : {
+            json: {
+              data: {
+                reportDate: snapshot.reportDate,
+                generatedAt: snapshot.generatedAt,
+                content: snapshot.content,
+                visuals: snapshot.visuals,
+                expiresAt,
+              },
+            },
+          },
+    );
+  });
+  await external.goto("/share/compass/" + token);
+  await expect(
+    external.getByRole("heading", { name: "AI 经营分析", exact: true }),
+  ).toBeVisible();
+  await expect(external.locator(".ai-action-grid")).toContainText("STYLE-1");
+  await expect(external.locator(".sidebar")).toHaveCount(0);
+  await expect(external.getByLabel("用户名", { exact: true })).toHaveCount(0);
+  expect(authRequests).toBe(0);
+  expect(
+    await external.evaluate(() => document.documentElement.scrollWidth),
+  ).toBeLessThanOrEqual(375);
+  await external.locator('.compass-trend g[role="button"]').first().click();
+  await expect(external.getByRole("tooltip")).toContainText("2026-09-30");
+  const box = await external.getByRole("tooltip").boundingBox();
+  expect(box!.x).toBeGreaterThanOrEqual(0);
+  expect(box!.x + box!.width).toBeLessThanOrEqual(375);
+  await external
+    .locator(".ai-action-grid")
+    .getByRole("button", { name: "放大图片 000012345", exact: true })
+    .click();
+  await expect(
+    external.locator(".compass-image-preview:visible"),
+  ).toBeVisible();
+  await external.keyboard.press("Escape");
+  await expect(external.locator(".compass-image-preview:visible")).toHaveCount(
+    0,
+  );
+  await external.screenshot({
+    path: ".local/compass-share-mobile.png",
+    fullPage: true,
+  });
+  await share.getByRole("button", { name: "撤销链接", exact: true }).click();
+  await page
+    .locator(".ant-popconfirm:visible")
+    .getByRole("button", { name: "撤销链接", exact: true })
+    .click();
+  await expect(share.getByText("已撤销", { exact: true })).toBeVisible();
+  await external.reload();
+  await expect(
+    external.getByText("分享链接不存在、已过期或已撤销", { exact: true }),
+  ).toBeVisible();
+  expect(authRequests).toBe(0);
+  await anonymous.close();
+});
 test("AI侧面板展示同批数值图表，普通管理员不能配置模型", async ({ page }) => {
   const state = await fixture(page);
   await page.goto("/analytics/compass");
@@ -183,6 +497,7 @@ test("AI侧面板展示同批数值图表，普通管理员不能配置模型", 
   await expect(panel.locator(".ai-report-meta")).not.toContainText("OpenAI");
   await panel
     .getByRole("button", { name: "放大图片 STYLE-1", exact: true })
+    .first()
     .hover();
   const productHover = page.getByRole("img", {
     name: "商品预览 STYLE-1",
@@ -193,6 +508,7 @@ test("AI侧面板展示同批数值图表，普通管理员不能配置模型", 
   await expect(productHover).toHaveCSS("height", "120px");
   await panel
     .getByRole("button", { name: "放大图片 STYLE-1", exact: true })
+    .first()
     .click();
   await expect(page.locator(".compass-image-preview:visible")).toBeVisible();
   await page.keyboard.press("Escape");

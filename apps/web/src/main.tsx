@@ -2,10 +2,12 @@ import {SelectionWorkspace} from "./selection-workspace";
 import { BrandVideo } from "./brand-video";
 import React, { useState } from "react";
 const CompassAnalyticsPage = React.lazy(() => import("./compass-analytics").then(module => ({ default: module.CompassAnalyticsPage })));
+const CompetitorAnalysisPage = React.lazy(() => import("./competitor-analysis").then(module => ({ default: module.CompetitorAnalysisPage })));
 const OperationsWorkspacePage = React.lazy(() => import("./operations-workspace").then(module => ({ default: module.OperationsWorkspacePage })));
 const PersonalWorkspacePage = React.lazy(() => import("./personal-workspace").then(module => ({ default: module.PersonalWorkspacePage })));
 const CompassAISettingsPage = React.lazy(() => import("./compass-ai-settings").then(module => ({ default: module.CompassAISettingsPage })));
 const PublicSelectionCollection = React.lazy(() => import("./selection-collections").then(module => ({ default: module.PublicSelectionCollection })));
+const PublicCompassReport = React.lazy(() => import("./public-compass-report").then(module => ({ default: module.PublicCompassReport })));
 const SelectionMobilePhotos = React.lazy(() => import("./selection-mobile-photos").then(module => ({ default: module.SelectionMobilePhotos })));
 import { createRoot } from "react-dom/client";
 import { QueryClientProvider, useQuery } from "@tanstack/react-query";
@@ -77,7 +79,7 @@ const SupplyProducts = React.lazy(() => import("./supply").then(module => ({ def
 const SupplyReview = React.lazy(() => import("./supply").then(module => ({ default: module.SupplyReview })));
 const SupplyOrders = React.lazy(() => import("./supply-orders").then(module => ({ default: module.SupplyOrders })));
 const SupplyStatements = React.lazy(() => import("./supply-statements").then(module => ({ default: module.SupplyStatements })));
-const coreFeatureSummary = "采购库存与经营分析 · 协作表格 · 供应链订单对账 · 项目协作";
+const coreFeatureSummary = "经营与竞品分析 · 采购库存 · 协作表格 · 供应链订单对账";
 const useUi = create<{ collapsed: boolean; toggle: () => void }>((set) => ({
   collapsed: false,
   toggle: () => set((s) => ({ collapsed: !s.collapsed })),
@@ -193,6 +195,7 @@ function Workspace({ user }: { user: Row }) {
     ui = useUi();
   const originalItems = [
     { key: "/analytics/compass", label: "经营分析", icon: <DatabaseOutlined />, permission: "analytics.read" },
+    { key: "/analytics/competitors", label: "竞品分析", icon: <DatabaseOutlined />, permission: "analytics.read" },
     {
       key: "/products",
       label: "商品档案",
@@ -274,7 +277,7 @@ function Workspace({ user }: { user: Row }) {
   ];
   const settings = originalItems.find((i) => i.key === "/settings")!;
   const adminKeys = ["/users", "/roles", "/audit-logs", "/settings/ai"];
-  const operationKeys = ["/analytics/compass", "/style-selections"];
+  const operationKeys = ["/analytics/compass", "/analytics/competitors", "/style-selections"];
   const items = [
     ...(operationKeys.some((key) =>
       user.permissions.includes(originalItems.find((i) => i.key === key)!.permission!),
@@ -381,6 +384,8 @@ function Workspace({ user }: { user: Row }) {
   const tableDetail = location.pathname.startsWith("/project-tables/");
   const operationTool = location.pathname.startsWith("/analytics/compass")
     ? "经营分析"
+    : location.pathname.startsWith("/analytics/competitors")
+      ? "竞品分析"
     : location.pathname.startsWith("/style-selections")
       ? "选款登记"
       : undefined;
@@ -568,6 +573,7 @@ function Workspace({ user }: { user: Row }) {
               />
               <Route path="/inventory" element={<InventoryPage />} />
               <Route path="/analytics/compass" element={<CompassAnalyticsPage />} />
+              <Route path="/analytics/competitors" element={<CompetitorAnalysisPage />} />
               <Route
                 path="/inventory/transactions"
                 element={<TransactionsPage />}
@@ -612,9 +618,10 @@ function Workspace({ user }: { user: Row }) {
 function Root() {
   const location = useLocation();
   const publicCollection = location.pathname === "/collect/products";
+  const publicReport = location.pathname.startsWith("/share/compass/");
   const me = useQuery({
     queryKey: ["me"],
-    enabled: !publicCollection,
+    enabled: !publicCollection && !publicReport,
     queryFn: async () => {
       try {
         const r = await api("/auth/me");
@@ -627,6 +634,7 @@ function Root() {
     retry: false,
   });
   if (publicCollection) return <PublicSelectionCollection />;
+  if (publicReport) return <PublicCompassReport />;
   if (me.isLoading)
     return (
       <div className="loading">

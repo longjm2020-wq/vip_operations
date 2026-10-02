@@ -1,0 +1,108 @@
+.public-compass-report {
+  min-height: 100vh;
+  background: #fff8f1;
+}
+.public-compass-report > header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 18px max(24px, calc((100vw - 1180px) / 2));
+  background: #fff;
+  border-bottom: 1px solid #eee0d4;
+}
+.public-compass-report > header > div {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+.public-compass-brand {
+  color: #826657;
+  font-size: 21px;
+  letter-spacing: 3px;
+}
+.public-compass-report h1 {
+  font-size: 20px;
+  margin: 0;
+}
+.public-compass-report main {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 24px;
+}
+.public-compass-report footer {
+  border-top: 1px solid #eee0d4;
+  margin-top: 20px;
+  padding-top: 16px;
+  color: #998072;
+  font-size: 12px;
+}
+.public-compass-loading {
+  padding: 100px 0;
+  text-align: center;
+}
+.compass-share-create {
+  display: grid;
+  gap: 12px;
+  margin: 18px 0;
+}
+.compass-share-result {
+  display: grid;
+  grid-template-columns: 148px minmax(0, 1fr);
+  align-items: center;
+  gap: 16px;
+  padding: 16px;
+  border: 1px solid #f3ddc6;
+  border-radius: 10px;
+  background: #fffaf4;
+}
+.compass-share-result > div {
+  min-width: 0;
+}
+.compass-share-result .ant-space {
+  margin: 12px 0;
+}
+.compass-share-result small,
+.compass-share-history small {
+  display: block;
+  color: #998072;
+  font-size: 11px;
+  line-height: 1.8;
+}
+.compass-share-history {
+  max-height: 230px;
+  overflow-y: auto;
+}
+.compass-share-history > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 0;
+  border-bottom: 1px solid #f1e6dd;
+}
+@media (max-width: 600px) {
+  .public-compass-report > header {
+    padding: 14px;
+  }
+  .public-compass-report > header > div {
+    gap: 10px;
+  }
+  .public-compass-report h1 {
+    font-size: 17px;
+  }
+  .public-compass-brand {
+    font-size: 17px;
+    letter-spacing: 1px;
+  }
+  .public-compass-report main {
+    padding: 16px 12px;
+  }
+  .compass-share-result {
+    grid-template-columns: 1fr;
+    justify-items: center;
+  }
+  .compass-share-result > div {
+    width: 100%;
+  }
+}

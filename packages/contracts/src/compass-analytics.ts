@@ -1,5 +1,22 @@
 import { z } from "zod";
 
+export function parseCompassSearch(value: string) {
+  const text = value.trim(),
+    batch = /[,，\r\n]/.test(text);
+  const codes = [
+    ...new Set(
+      text
+        .split(/[,，\r\n]+/)
+        .map((x) => x.trim().toLowerCase())
+        .filter(Boolean),
+    ),
+  ];
+  if (codes.length > 100) throw Error("批量查询最多支持100个编码，请拆分查询");
+  if (codes.some((x) => x.length > 150))
+    throw Error("每个查询编码不能超过150个字符");
+  return { text: codes.length ? text : "", batch, codes };
+}
+
 export const compassDimensions = ["style", "article", "barcode"] as const;
 export type CompassDimension = (typeof compassDimensions)[number];
 export const compassLabels: Record<CompassDimension, string> = {
@@ -27,6 +44,7 @@ export const compassMetrics = {
   saleableStock: "可售库存",
 } as const;
 export type CompassMetric = keyof typeof compassMetrics;
+export const compassNormalizationVersion = 2;
 export const compassSortFields = [
   "salesAmount",
   "salesQty",
@@ -50,6 +68,12 @@ export const compassSortFields = [
   "conversionRate",
   "clickRate",
   "averagePrice",
+  "favoriteRate",
+  "cartRate",
+  "exchangeRate",
+  "rejectedReturnRate",
+  "saleAge",
+  "firstListedAt",
 ] as const;
 export type CompassSortField = (typeof compassSortFields)[number];
 const metricShape = Object.fromEntries(
@@ -71,6 +95,18 @@ export const compassRecordSchema = z
     size: z.string().max(100),
     category: z.string().max(200),
     image: z.string().max(2000),
+    saleAge: z.number().int().min(0).max(100000).nullable().optional(),
+    firstListedAt: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}( \d{2}:\d{2}:\d{2})?$/)
+      .refine(
+        (v) =>
+          z.iso.date().safeParse(v.slice(0, 10)).success &&
+          (!v.includes(" ") ||
+            /^\d{4}-\d{2}-\d{2} (?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d$/.test(v)),
+      )
+      .nullable()
+      .optional(),
     metrics: z.object(metricShape).strict(),
   })
   .strict();
@@ -157,6 +193,35 @@ export function normalizeCompassWorkbook(table: string[][], fileName: string) {
         );
       metrics[key as CompassMetric] = value;
     }
+    const ageText = read(row, "售龄"),
+      listedText = read(row, "首次上架时间");
+    const saleAge =
+      !ageText || ["-", "--", "—"].includes(ageText)
+        ? null
+        : Number(ageText.replace(/[,，]/g, ""));
+    if (
+      saleAge !== null &&
+      (!Number.isInteger(saleAge) || saleAge < 0 || saleAge > 100000)
+    )
+      throw Error(`第 ${i + 1} 行：售龄不是有效天数`);
+    let firstListedAt: string | null = null;
+    if (listedText && !["-", "--", "—"].includes(listedText)) {
+      const match = listedText.match(
+        /^(\d{4})[-/](\d{1,2})[-/](\d{1,2})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?(?:\.000Z)?)?$/,
+      );
+      if (match)
+        firstListedAt =
+          `${match[1]}-${match[2].padStart(2, "0")}-${match[3].padStart(2, "0")}` +
+          (match[4]
+            ? ` ${match[4].padStart(2, "0")}:${match[5]}:${match[6] || "00"}`
+            : "");
+      if (
+        !firstListedAt ||
+        !compassRecordSchema.shape.firstListedAt.safeParse(firstListedAt)
+          .success
+      )
+        throw Error(`第 ${i + 1} 行：首次上架时间格式不正确`);
+    }
     records.push({
       date,
       entityKey,
@@ -169,6 +234,8 @@ export function normalizeCompassWorkbook(table: string[][], fileName: string) {
       size: read(row, "尺码名称"),
       category: read(row, "三级分类名称"),
       image: read(row, "商品图片"),
+      saleAge,
+      firstListedAt,
       metrics,
     });
   }
@@ -247,5 +314,14 @@ export function compassRatios(values: Record<string, any>) {
     conversionRate: ratio(values.customers, values.detailViews),
     clickRate: ratio(values.detailViews, values.exposure),
     averagePrice: ratio(values.salesAmount, values.salesQty),
+    favoriteRate: ratio(values.favorites, values.detailViews),
+    cartRate: ratio(values.cartUsers, values.detailViews),
+    exchangeRate: ratio(values.exchangesQty, values.salesQty),
+    rejectedReturnRate: ratio(
+      values.returnsQty == null || values.rejectedQty == null
+        ? null
+        : Number(values.returnsQty) + Number(values.rejectedQty),
+      values.salesQty,
+    ),
   };
 }
