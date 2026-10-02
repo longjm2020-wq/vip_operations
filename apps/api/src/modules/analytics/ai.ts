@@ -64,7 +64,7 @@ export type CompassAIResult = {
   responseId?: string;
   usage?: Row;
   attempt?: number;
-  visuals?: ReturnType<typeof aiPayload>;
+  visuals?: ReturnType<typeof aiVisuals>;
 };
 export function requireAIConfiguration(c: Context) {
   requirePermission(c.actor, "analytics.manage");
@@ -322,6 +322,22 @@ export function aiPayload(bundle: CompassBundle) {
     })),
   };
 }
+function aiVisuals(bundle: CompassBundle, previous = aiPayload(bundle)) {
+  return {
+    ...previous,
+    imagesVersion: 1,
+    dimensions: previous.dimensions.map((dimension) => ({
+      ...dimension,
+      top10: dimension.top10.map((item: Row) => ({
+        ...item,
+        image:
+          bundle.snapshots
+            .find((snapshot) => snapshot.dimension === dimension.dimension)
+            ?.top.find((row: Row) => row.code === item.code)?.image || "",
+      })),
+    })),
+  };
+}
 function publicReport(r: Row): CompassAIResult {
   if (r.status === "GENERATING" && Date.now() - r.started_at.getTime() > 180000)
     return {
@@ -399,7 +415,7 @@ export async function getAIReport(): Promise<CompassAIResult> {
     PROMPT_VERSION,
   );
   // Upgrade existing cached reports without another paid model call.
-  if (report?.status === "READY" && !report.visual_data) {
+  if (report?.status === "READY" && report.visual_data?.imagesVersion !== 1) {
     const bundle = await collectCompassBundle(date);
     if (!bundle || canonical(bundle.ids) !== canonical(report.imported_ids))
       return {
@@ -407,10 +423,13 @@ export async function getAIReport(): Promise<CompassAIResult> {
         model: COMPASS_AI_MODEL,
         message: "报表正在更新，请刷新后查看",
       };
-    report.visual_data = aiPayload(bundle);
+    report.visual_data = aiVisuals(
+      bundle,
+      report.visual_data || aiPayload(bundle),
+    );
     await rows(
       db,
-      "UPDATE compass_ai_reports SET visual_data=$2::jsonb WHERE id=$1::bigint AND visual_data IS NULL",
+      "UPDATE compass_ai_reports SET visual_data=$2::jsonb WHERE id=$1::bigint AND (visual_data IS NULL OR visual_data->>'imagesVersion' IS DISTINCT FROM '1')",
       report.id,
       JSON.stringify(report.visual_data),
     );
@@ -487,7 +506,7 @@ export async function ensureAIAnalysis(
       COMPASS_AI_MODEL,
       PROMPT_VERSION,
       token,
-      JSON.stringify(payload),
+      JSON.stringify(aiVisuals(bundle, payload)),
     );
     return { id: r!.id };
   });

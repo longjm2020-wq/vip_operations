@@ -17,6 +17,11 @@ import { api } from "./api";
 import { QueryState } from "./shared";
 import { CompassTrend } from "./compass-charts";
 import {
+  CompassProductImage,
+  CompassImagePreview,
+  type CompassImageTarget,
+} from "./compass-product-image";
+import {
   attentionItems,
   dailyAverage,
   metricNumber,
@@ -71,6 +76,7 @@ function Change({ value, label }: { value: number | null; label: string }) {
 }
 function VisualReport({ visuals }: { visuals: CompassVisuals }) {
   const [dimension, setDimension] = useState<CompassDimension>("style");
+  const [preview, setPreview] = useState<CompassImageTarget | null>(null);
   const period = (days: number) => visuals.periods.find((p) => p.days === days),
     today = period(1)?.summary || {},
     week = period(7)?.summary || {},
@@ -189,7 +195,18 @@ function VisualReport({ visuals }: { visuals: CompassVisuals }) {
           </div>
           {attention.slice(0, 5).map((row) => (
             <div role="row" key={row.code}>
-              <strong role="cell">{row.code}</strong>
+              <div
+                role="cell"
+                className="ai-attention-product"
+                aria-label={row.code}
+              >
+                <CompassProductImage
+                  image={row.image}
+                  code={row.code}
+                  onPreview={setPreview}
+                />
+                <strong>{row.code}</strong>
+              </div>
               <span role="cell">{number(row.salesQty)} 件</span>
               <span role="cell">
                 {number(row.returnsQty)} 件 · {percent(row.returnRate)}
@@ -220,6 +237,7 @@ function VisualReport({ visuals }: { visuals: CompassVisuals }) {
           项；并非全量库存预警。三种维度分别分析。
         </small>
       </Card>
+      <CompassImagePreview target={preview} onClose={() => setPreview(null)} />
     </>
   );
 }
@@ -297,8 +315,7 @@ export function CompassAIReport({
       {content ? (
         <>
           <div className="ai-report-meta">
-            数据截至 {report.reportDate} · {report.responseModel} ·{" "}
-            {report.provider} ·{" "}
+            数据截至 {report.reportDate} · 生成于{" "}
             {new Date(report.generatedAt).toLocaleString("zh-CN", {
               hour12: false,
             })}

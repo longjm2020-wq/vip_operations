@@ -672,24 +672,43 @@ pre {
   -webkit-mask-position: -12.5px center;
   mask-position: -12.5px center;
 }
-.sidebar.ant-layout-sider-collapsed .ant-menu-item-selected {
+.sidebar.ant-layout-sider-collapsed .ant-menu-root > .ant-menu-item,
+.sidebar.ant-layout-sider-collapsed .ant-menu-root > .ant-menu-submenu > .ant-menu-submenu-title {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding-inline: 0 !important;
+  height: 42px;
   background: transparent !important;
 }
-.sidebar.ant-layout-sider-collapsed .ant-menu-item-selected .ant-menu-item-icon,
-.sidebar.ant-layout-sider-collapsed .ant-menu-submenu-selected > .ant-menu-submenu-title .ant-menu-item-icon {
+.sidebar.ant-layout-sider-collapsed .ant-menu-title-content {
+  position: absolute;
+  inset: 0;
+  width: 100% !important;
+  overflow: hidden;
+  opacity: 0;
+  margin: 0 !important;
+}
+.sidebar.ant-layout-sider-collapsed .workspace-menu-icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 34px;
-  height: 34px;
-  margin-inline-start: -9px;
-  color: #fff;
-  background: #d3540b;
-  border-radius: 9px;
-  vertical-align: middle;
+  flex: 0 0 24px;
+  width: 24px;
+  height: 24px;
+  margin: 0;
+  color: #bcaea6;
+  background: transparent;
 }
-.sidebar.ant-layout-sider-collapsed .ant-menu-submenu-selected > .ant-menu-submenu-title {
-  background: transparent !important;
+.sidebar.ant-layout-sider-collapsed .workspace-menu-icon svg {
+  display: block;
+}
+.sidebar.ant-layout-sider-collapsed .workspace-menu-icon[data-selected="true"] {
+  color: #f07835;
+}
+.sidebar.ant-layout-sider-collapsed .ant-menu-item:hover .workspace-menu-icon[data-selected="false"],
+.sidebar.ant-layout-sider-collapsed .ant-menu-submenu-title:hover .workspace-menu-icon[data-selected="false"] {
+  color: #f4d6c1;
 }
 .personal-workspace-entry { white-space: nowrap; color: #786356; }
 .personal-workspace-entry[aria-current="page"] { color: #d3540b; }
@@ -707,6 +726,27 @@ pre {
 .workspace-menu-popup .ant-menu-item a {
   color: #59453a !important;
   font-size: 13px;
+}
+.workspace-menu-popup .ant-menu-item-group-title {
+  position: sticky;
+  top: -6px;
+  z-index: 1;
+  padding: 9px 12px 10px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid #eee1d6;
+  background: #fffcf8;
+  line-height: 20px;
+}
+.workspace-menu-popup-heading {
+  color: #49372c;
+  font-size: 13px;
+  font-weight: 600;
+}
+.workspace-menu-popup .ant-menu-item-group-list {
+  margin: 0;
+}
+.workspace-menu-popup .ant-menu-item-group-list .ant-menu-item {
+  padding-inline: 12px !important;
 }
 .workspace-menu-popup .ant-menu-item {
   height: 34px !important;

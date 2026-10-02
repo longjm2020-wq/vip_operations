@@ -49,6 +49,7 @@ import {
 import { api, queryClient, setCsrf } from "./api";
 import { UserContext, Row } from "./shared";
 import { AccountMenu } from "./account-menu";
+import { WorkspaceMenuIcon } from "./workspace-menu-icon";
 const MasterPage = React.lazy(() => import("./master").then(module => ({ default: module.MasterPage })));
 const ProductArchive = React.lazy(() => import("./product-archive").then(module => ({ default: module.ProductArchive })));
 const InventoryPage = React.lazy(() => import("./operations").then(module => ({ default: module.InventoryPage })));
@@ -383,27 +384,37 @@ function Workspace({ user }: { user: Row }) {
     : location.pathname.startsWith("/style-selections")
       ? "选款登记"
       : undefined;
-  const menu = visibleItems.map((item) => ({
-    key: item.key,
-    icon: item.icon,
-    popupClassName: item.children ? "workspace-menu-popup" : undefined,
-    label: item.children ? item.label : (
-      <Link
-        to={
-          item.key === activeKey
-            ? location.pathname + location.search
-            : item.key
-        }
-        aria-current={item.key === activeKey ? "page" : undefined}
-      >
-        {item.label}
-      </Link>
-    ),
-    children:item.children?.map(child=>({
-      key:child.key,
-      label:<Link to={child.key} aria-current={selected===child.key ? "page" : undefined}>{child.label}</Link>,
-    })),
-  }));
+  const menu = visibleItems.map((item) => {
+    const children = item.children?.map((child) => ({
+      key: child.key,
+      label: (
+        <Link to={child.key} aria-current={selected === child.key ? "page" : undefined}>
+          {child.label}
+        </Link>
+      ),
+    }));
+    return {
+      key: item.key,
+      icon: ui.collapsed ? (
+        <WorkspaceMenuIcon workspace={item.key} selected={item.key === activeKey} />
+      ) : item.icon,
+      popupClassName: item.children ? "workspace-menu-popup" : undefined,
+      label: item.children ? item.label : (
+        <Link
+          to={item.key === activeKey ? location.pathname + location.search : item.key}
+          aria-current={item.key === activeKey ? "page" : undefined}
+        >
+          {item.label}
+        </Link>
+      ),
+      children: ui.collapsed && children ? [{
+        key: `${item.key}-heading`,
+        type: "group" as const,
+        label: <span className="workspace-menu-popup-heading">{item.label}</span>,
+        children,
+      }] : children,
+    };
+  });
   const routeBack=tableDetail ? {href:"/project-tables",label:"返回表格列表"}
     : location.pathname.startsWith("/projects/") ? {href:"/projects",label:"返回项目列表"}
     : selected && location.pathname!==selected && activeWorkspace?.children?.some(child=>child.key===selected)

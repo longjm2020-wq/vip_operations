@@ -10,6 +10,15 @@
   font-size: 12px;
   margin-bottom: 14px;
 }
+.ai-attention-product {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.ai-attention-product strong {
+  overflow-wrap: anywhere;
+}
 .ai-summary {
   background: #fff0df;
   border: 1px solid #f3ddc6;

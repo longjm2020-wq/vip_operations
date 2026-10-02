@@ -257,7 +257,11 @@ const metricSQL = (prefix: string) =>
       (k) => `sum((${prefix}payload->'metrics'->>'${k}')::numeric) AS "${k}"`,
     )
     .join(",");
-export async function dashboard(input: unknown, tx: Tx = db) {
+export async function dashboard(
+  input: unknown,
+  tx: Tx = db,
+  topLimit: 10 | 20 = 20,
+) {
   const b = parse(querySchema, input),
     sources = await compassSources(tx),
     source = sources.find((s) => s.dimension === b.dimension);
@@ -321,8 +325,9 @@ export async function dashboard(input: unknown, tx: Tx = db) {
   );
   const top = await rows(
     tx,
-    `${cte} SELECT * FROM grouped ORDER BY "salesAmount" DESC NULLS LAST,code LIMIT 10`,
+    `${cte} SELECT * FROM grouped ORDER BY "salesAmount" DESC NULLS LAST,code LIMIT $7`,
     ...params,
+    topLimit,
   );
   const format = (row: any) => ({ ...json(row), ...compassRatios(row) });
   const complete = startDate >= source.start_date && endDate <= source.end_date;

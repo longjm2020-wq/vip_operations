@@ -41,6 +41,110 @@
   padding: 5px 8px;
   color: #49392f;
 }
+.compass-period-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.compass-period-range {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 285px;
+  max-width: 100%;
+  padding-inline: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.compass-period-range-separator {
+  color: #b8afa8;
+  padding-inline: 10px;
+}
+.compass-period-range .anticon {
+  color: #b8afa8;
+}
+.compass-period-popup .ant-popover-container {
+  padding: 0;
+  border: 1px solid #ead9cd;
+}
+.compass-period-panel {
+  width: min(340px, calc(100vw - 32px));
+  padding: 14px;
+  color: #59453a;
+}
+.compass-period-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #eee1d6;
+}
+.compass-period-panel-header strong {
+  font-size: 14px;
+  font-weight: 500;
+}
+.compass-period-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin-block: 16px;
+}
+.compass-period-panel-quarter .compass-period-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.compass-period-option {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 42px;
+  padding: 8px 4px;
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  font: inherit;
+  color: #59453a;
+  cursor: pointer;
+}
+.compass-period-panel-quarter .compass-period-option {
+  min-height: 66px;
+}
+.compass-period-option small {
+  font-size: 11px;
+  color: #aa9281;
+}
+.compass-period-option:hover:not(:disabled) {
+  background: #fff3eb;
+  color: #c94f10;
+}
+.compass-period-option[aria-pressed="true"] {
+  background: #fff0e8;
+  color: #c94f10;
+  font-weight: 600;
+}
+.compass-period-option[aria-pressed="true"] small {
+  color: #c94f10;
+}
+.compass-period-option:disabled {
+  background: #f6f3f0;
+  color: #c0b5ad;
+  cursor: not-allowed;
+}
+.compass-period-option:focus-visible {
+  outline: 2px solid #e88950;
+  outline-offset: 2px;
+}
+.compass-period-panel-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid #eee1d6;
+  font-size: 11px;
+  color: #a48b7b;
+}
 .compass-sr-only {
   position: absolute;
   width: 1px;
@@ -174,9 +278,24 @@
   vertical-align: middle;
   margin: 0 6px 0 12px;
 }
-.compass-ranks button {
+.compass-ranks {
+  max-height: 360px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: #bca897 #f4eee8;
+  overscroll-behavior-y: contain;
+  padding-right: 6px;
+}
+.compass-rank-row {
   display: flex;
-  width: 100%;
+  align-items: center;
+  gap: 8px;
+  padding-block: 4px;
+}
+.compass-rank-link {
+  display: flex;
+  flex: 1;
+  min-width: 0;
   align-items: center;
   gap: 8px;
   border: 0;
@@ -187,8 +306,8 @@
   color: #5d483b;
   font-size: 12px;
 }
-.compass-ranks button:hover,
-.compass-ranks button:focus {
+.compass-rank-link:hover,
+.compass-rank-link:focus-visible {
   background: #fff5eb;
 }
 .compass-rank-number {
@@ -311,23 +430,11 @@
   background: #fff2e4 !important;
 }
 .compass-detail-table .ant-table-tbody > tr > td.ant-table-column-sort {
-  background: #fff6ed !important;
+  background: transparent !important;
+  font-weight: 600;
 }
 .compass-detail-table .ant-table-tbody > tr:hover > td.ant-table-column-sort {
-  background: #fff0df !important;
-}
-.compass-image-button {
-  padding: 0;
-  border: 0;
-  background: transparent;
-  cursor: zoom-in;
-  line-height: 0;
-  flex-shrink: 0;
-  border-radius: 4px;
-}
-.compass-image-button:focus-visible {
-  outline: 2px solid #d95200;
-  outline-offset: 3px;
+  background: #fafafa !important;
 }
 .compass-field-settings {
   width: min(360px, calc(100vw - 48px));

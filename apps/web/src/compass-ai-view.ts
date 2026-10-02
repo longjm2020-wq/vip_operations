@@ -13,6 +13,7 @@ export type VisualPeriod = {
 };
 export type VisualTop = VisualSummary & {
   code: string;
+  image?: string;
   returnsAmount?: unknown;
 };
 export type CompassVisuals = {

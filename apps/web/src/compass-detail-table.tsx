@@ -4,9 +4,7 @@ import {
   Button,
   Card,
   Checkbox,
-  Image,
   Popover,
-  Select,
   Space,
   Table,
   Tabs,
@@ -21,6 +19,10 @@ import {
 } from "../../../packages/contracts/src/compass-analytics";
 import { type Row, useUser } from "./shared";
 import { downloadWorkbook } from "./sheet-excel";
+import {
+  CompassProductImage,
+  CompassImagePreview,
+} from "./compass-product-image";
 
 type View = "custom" | "traffic" | "conversion" | "afterSales" | "inventory";
 type FieldKey = CompassSortField | "lastDate";
@@ -311,20 +313,12 @@ function DetailTable({
       width: preferences.image ? 220 : 180,
       render: (value, row) => (
         <div className="compass-product">
-          {preferences.image && row.image && /^https:\/\//i.test(row.image) && (
-            <button
-              type="button"
-              className="compass-image-button"
-              aria-label={`放大图片 ${value}`}
-              onClick={() => setPreview({ image: row.image, code: value })}
-            >
-              <img
-                src={row.image}
-                alt=""
-                loading="lazy"
-                referrerPolicy="no-referrer"
-              />
-            </button>
+          {preferences.image && (
+            <CompassProductImage
+              image={row.image}
+              code={value}
+              onPreview={setPreview}
+            />
           )}
           <div>
             <Button type="link" onClick={() => onDrill(row)}>
@@ -370,22 +364,9 @@ function DetailTable({
       title={`${compassLabels[dimension]}明细`}
       extra={
         <Space wrap>
-          <Select
-            aria-label="明细排序"
-            value={sort}
-            style={{ width: 190 }}
-            onChange={onSort}
-            showSearch={{ optionFilterProp: "label" }}
-            options={supported
-              .filter((field) => field.key !== "lastDate")
-              .map((field) => ({
-                value: field.key,
-                label: `按${field.label}排序`,
-              }))}
-          />
           <Button
             icon={<DownloadOutlined aria-hidden="true" />}
-            disabled={!data.items?.length}
+            disabled={loading || !data.items?.length}
             onClick={() => void exportView()}
           >
             导出当前页
@@ -529,6 +510,7 @@ function DetailTable({
         loading={loading}
         columns={columns}
         scroll={{
+          scrollToFirstRowOnChange: false,
           y: "min(560px, 60vh)",
           x: columns.reduce(
             (sum, column) => sum + Number(column.width || 130),
@@ -552,26 +534,7 @@ function DetailTable({
           }
         }}
       />
-      <Image.PreviewGroup
-        items={
-          preview
-            ? [
-                {
-                  src: preview.image,
-                  alt: `商品图片 ${preview.code}`,
-                  referrerPolicy: "no-referrer",
-                },
-              ]
-            : []
-        }
-        classNames={{ popup: { root: "compass-image-preview" } }}
-        preview={{
-          open: preview !== null,
-          onOpenChange: (open) => {
-            if (!open) setPreview(null);
-          },
-        }}
-      />
+      <CompassImagePreview target={preview} onClose={() => setPreview(null)} />
     </Card>
   );
 }

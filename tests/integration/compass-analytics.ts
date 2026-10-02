@@ -71,7 +71,7 @@ export async function testCompassAnalytics(h: Record<string, any>) {
       sizeId: dimension === "barcode" ? sizeId : "",
       size: "M",
       category: "针织衫",
-      image: "",
+      image: "https://compass.example.test/product.svg",
       metrics,
       entityKey: JSON.stringify(
         dimension === "style"
@@ -296,6 +296,35 @@ export async function testCompassAnalytics(h: Record<string, any>) {
       3,
     );
     assert.equal((await request(endpoint + "?pageSize=1001")).status, 400);
+    const rankingRecords = Array.from({ length: 30 }, (_, day) =>
+      Array.from({ length: 25 }, (_, index) => {
+        const code = `RANK-${String(index + 1).padStart(2, "0")}`;
+        const record = make(shiftCompassDate(start, day), "style", code, code);
+        record.metrics.salesAmount = index + 1;
+        return record;
+      }),
+    ).flat();
+    const rankingImport = await begin("style", rankingRecords, "ranking");
+    await ok(`${endpoint}/imports/${rankingImport.id}/chunks`, "POST", {
+      records: rankingRecords,
+    });
+    await ok(`${endpoint}/imports/${rankingImport.id}/finish`, "POST", {});
+    const ranked = await ok(
+      `${endpoint}?days=30&pageSize=1&page=2&sort=returnsQty`,
+    );
+    assert.equal(ranked.top.length, 20);
+    assert.equal(ranked.top[0].code, "RANK-25");
+    assert.equal(ranked.top[19].code, "RANK-06");
+    assert.equal(ranked.items.length, 1);
+    assert.equal((await ok(`${endpoint}?days=30&q=RANK-0`)).top.length, 9);
+    const { collectCompassBundle } =
+      await import("../../apps/api/src/modules/analytics/report-data.js");
+    const bundle = await collectCompassBundle(end);
+    assert.equal(
+      bundle!.snapshots[0].top.length,
+      10,
+      "AI and email snapshots retain their TOP 10 scope",
+    );
   } finally {
     await db.$executeRawUnsafe(
       "UPDATE compass_active_imports SET import_id=$1::bigint WHERE dimension='style'",
@@ -460,6 +489,13 @@ export async function testCompassAnalytics(h: Record<string, any>) {
     const visual=(await getAIReport()).visuals!;
     assert.equal(visual.dailyStyle.length,30);
     assert.equal(visual.dimensions.length,3);
+    assert.equal(visual.dimensions[0].top10[0].image,"https://compass.example.test/product.svg");
+    const legacyVisual=JSON.parse(JSON.stringify(visual));
+    delete legacyVisual.imagesVersion;
+    for(const dimension of legacyVisual.dimensions) for(const item of dimension.top10) delete item.image;
+    await db.$executeRawUnsafe("UPDATE compass_ai_reports SET visual_data=$2::jsonb WHERE id=$1::bigint",(await getAIReport()).id,JSON.stringify(legacyVisual));
+    assert.deepEqual((await getAIReport()).visuals,visual,"旧图表补齐图片并保留原有数值");
+    assert.equal(aiCalls,1,"图片预览升级不会再次调用模型");
     assert.equal(visual.dimensions.find(d=>d.dimension==="barcode")!.top10[0].code,"000012345");
     const generatedAPI = await ok(endpoint + "/ai-generate", "POST", {});
     assert.equal(generatedAPI.state, "READY");

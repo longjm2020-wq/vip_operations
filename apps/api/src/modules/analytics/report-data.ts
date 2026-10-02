@@ -36,6 +36,7 @@ export async function collectCompassBundle(
           await dashboard(
             { dimension, days: 7, endDate: date, pageSize: 1 },
             tx,
+            10,
           ),
         );
       const windows: Row[] = [];
@@ -46,6 +47,7 @@ export async function collectCompassBundle(
             : await dashboard(
                 { dimension: "style", days, endDate: date, pageSize: 1 },
                 tx,
+                10,
               ),
         );
       return {

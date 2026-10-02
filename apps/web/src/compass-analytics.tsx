@@ -31,6 +31,11 @@ import { CompassAIReport } from "./compass-ai";
 import { CompassTrend } from "./compass-charts";
 import { CompassDetailTable } from "./compass-detail-table";
 import { CompassDateFilter } from "./compass-date-filter";
+import {
+  CompassProductImage,
+  CompassImagePreview,
+  type CompassImageTarget,
+} from "./compass-product-image";
 import { Header, QueryState, Row, useCan } from "./shared";
 import {
   compassDimensions,
@@ -439,6 +444,8 @@ export function CompassAnalyticsPage() {
     [importOpen, setImportOpen] = useState(false),
     [mailOpen, setMailOpen] = useState(false),
     [aiOpen, setAIOpen] = useState(false);
+  const [productPreview, setProductPreview] =
+    useState<CompassImageTarget | null>(null);
   useEffect(() => {
     const timer = setTimeout(() => {
       setQText(search);
@@ -446,19 +453,17 @@ export function CompassAnalyticsPage() {
     }, 300);
     return () => clearTimeout(timer);
   }, [search]);
+  const queryScope = [
+    "compass-dashboard",
+    dimension,
+    period,
+    dateRange,
+    qText,
+    styleNo,
+    articleNo,
+  ];
   const q = useQuery({
-    queryKey: [
-      "compass-dashboard",
-      dimension,
-      period,
-      dateRange,
-      qText,
-      styleNo,
-      articleNo,
-      page,
-      pageSize,
-      sort,
-    ],
+    queryKey: [...queryScope, page, pageSize, sort],
     queryFn: () =>
       api(
         "/analytics/compass?" +
@@ -476,6 +481,12 @@ export function CompassAnalyticsPage() {
             sort,
           }),
       ),
+    // Keep the dashboard mounted while sorting or paging so its scroll anchor survives.
+    placeholderData: (previousData, previousQuery) =>
+      JSON.stringify(previousQuery?.queryKey.slice(0, queryScope.length)) ===
+      JSON.stringify(queryScope)
+        ? previousData
+        : undefined,
     staleTime: 30000,
   });
   const data = q.data?.data,
@@ -688,28 +699,37 @@ export function CompassAnalyticsPage() {
                 <CompassTrend data={data.daily} />
               </Card>
               <Card
-                title={`销售额 TOP 10 · ${compassLabels[dimension]}`}
+                title={`销售额 TOP 20 · ${compassLabels[dimension]}`}
                 extra={<span className="secondary">点击查看明细</span>}
               >
                 <div className="compass-ranks">
                   {top.length ? (
                     top.map((r, i) => (
-                      <button
-                        key={r.code}
-                        onClick={() => drill(r)}
-                        title={`查看 ${r.code}`}
-                      >
+                      <div className="compass-rank-row" key={r.code}>
                         <span className="compass-rank-number">{i + 1}</span>
-                        <span className="compass-rank-code">{r.code}</span>
-                        <span className="compass-rank-bar">
-                          <i
-                            style={{
-                              width: `${Math.max(1, (Number(r.salesAmount) / Math.max(1, Number(top[0].salesAmount))) * 100)}%`,
-                            }}
-                          />
-                        </span>
-                        <b>{money(r.salesAmount)}</b>
-                      </button>
+                        <CompassProductImage
+                          image={r.image}
+                          code={r.code}
+                          onPreview={setProductPreview}
+                        />
+                        <button
+                          className="compass-rank-link"
+                          type="button"
+                          key={r.code}
+                          onClick={() => drill(r)}
+                          title={`查看 ${r.code}`}
+                        >
+                          <span className="compass-rank-code">{r.code}</span>
+                          <span className="compass-rank-bar">
+                            <i
+                              style={{
+                                width: `${Math.max(1, (Number(r.salesAmount) / Math.max(1, Number(top[0].salesAmount))) * 100)}%`,
+                              }}
+                            />
+                          </span>
+                          <b>{money(r.salesAmount)}</b>
+                        </button>
+                      </div>
                     ))
                   ) : (
                     <Empty description="暂无排行" />
@@ -779,6 +799,10 @@ export function CompassAnalyticsPage() {
         sourceKey={sources.map((s) => s.id).join(":")}
         open={aiOpen}
         onClose={() => setAIOpen(false)}
+      />
+      <CompassImagePreview
+        target={productPreview}
+        onClose={() => setProductPreview(null)}
       />
       <ImportReports
         open={importOpen}

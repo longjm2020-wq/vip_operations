@@ -1,5 +1,11 @@
 import { expect, test, type Page } from "@playwright/test";
 async function fixture(page: Page, role = "ADMIN", detailRows = 0) {
+  await page.route("https://compass.example.test/product.svg", (route) =>
+    route.fulfill({
+      contentType: "image/svg+xml",
+      body: '<svg xmlns="http://www.w3.org/2000/svg" width="120" height="160"><rect width="120" height="160" fill="#ead9cd"/></svg>',
+    }),
+  );
   let settingsRequests = 0;
   const workspace = {
     version: 0,
@@ -73,6 +79,7 @@ async function fixture(page: Page, role = "ADMIN", detailRows = 0) {
       const current = Number(params.get("page") || 1);
       const items = Array.from({ length: detailRows }, (_, index) => ({
         code: `STYLE-${String(index + 1).padStart(3, "0")}`,
+        image: "https://compass.example.test/product.svg",
         salesAmount: detailRows - index,
         salesQty: 1,
         lastDate: "2026-10-01",
@@ -87,7 +94,7 @@ async function fixture(page: Page, role = "ADMIN", detailRows = 0) {
         total: detailRows,
         sources: [],
         summary: { coveredDays: 7, entities: detailRows },
-        top: [],
+        top: items.slice(0, 20),
         items: items.slice((current - 1) * size, current * size),
         daily: [],
       };
@@ -139,6 +146,7 @@ async function fixture(page: Page, role = "ADMIN", detailRows = 0) {
             top10: [
               {
                 code: dimension === "barcode" ? "000012345" : "STYLE-1",
+                image: "https://compass.example.test/product.svg",
                 salesQty: 3,
                 returnsQty: 1,
                 returnRate: 1 / 3,
@@ -166,6 +174,29 @@ test("AI侧面板展示同批数值图表，普通管理员不能配置模型", 
   ).toHaveCount(0);
   await page.getByRole("button", { name: "AI 经营分析", exact: true }).click();
   const panel = page.getByRole("dialog");
+  await expect(panel.locator(".ai-report-meta")).toContainText(
+    "数据截至 2026-10-01",
+  );
+  await expect(panel.locator(".ai-report-meta")).not.toContainText(
+    "openai/gpt-6.1-sol",
+  );
+  await expect(panel.locator(".ai-report-meta")).not.toContainText("OpenAI");
+  await panel
+    .getByRole("button", { name: "放大图片 STYLE-1", exact: true })
+    .hover();
+  const productHover = page.getByRole("img", {
+    name: "商品预览 STYLE-1",
+    exact: true,
+  });
+  await expect(productHover).toBeVisible();
+  await expect(productHover).toHaveCSS("width", "120px");
+  await expect(productHover).toHaveCSS("height", "120px");
+  await panel
+    .getByRole("button", { name: "放大图片 STYLE-1", exact: true })
+    .click();
+  await expect(page.locator(".compass-image-preview:visible")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".compass-image-preview:visible")).toHaveCount(0);
   await expect(panel.locator(".ai-metric-grid .ant-card").nth(0)).toContainText(
     "↓ 50.00%",
   );
@@ -230,7 +261,9 @@ test("超级管理员从系统设置访问模型，侧栏收起图标及悬浮�
   const icon = page.locator(
     ".sidebar .ant-menu-item-selected .ant-menu-item-icon",
   );
-  await expect(icon).toHaveCSS("background-color", "rgb(211, 84, 11)");
+  await expect(icon).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+  await expect(icon).toHaveCSS("color", "rgb(240, 120, 53)");
+  await expect(icon.locator("svg")).toHaveAttribute("fill", "currentColor");
   await expect(page.locator(".sidebar .ant-menu-item-selected")).toHaveCSS(
     "background-color",
     "rgba(0, 0, 0, 0)",
@@ -240,6 +273,17 @@ test("超级管理员从系统设置访问模型，侧栏收起图标及悬浮�
   expect(
     Math.abs(brand!.x + brand!.width / 2 - sidebar!.x - sidebar!.width / 2),
   ).toBeLessThan(1);
+  const iconCenters = await page
+    .locator(".sidebar .workspace-menu-icon")
+    .evaluateAll((icons) =>
+      icons.map((element) => {
+        const rect = element.getBoundingClientRect();
+        return rect.x + rect.width / 2;
+      }),
+    );
+  expect(iconCenters.length).toBeGreaterThan(2);
+  for (const center of iconCenters)
+    expect(Math.abs(center - sidebar!.x - sidebar!.width / 2)).toBeLessThan(1);
   await page
     .locator(".sidebar .ant-menu-submenu-title")
     .filter({ hasText: "ERP系统" })
@@ -248,6 +292,9 @@ test("超级管理员从系统设置访问模型，侧栏收起图标及悬浮�
   await expect(
     popup.getByRole("link", { name: "商品档案", exact: true }),
   ).toBeVisible();
+  await expect(popup.locator(".workspace-menu-popup-heading")).toHaveText(
+    "ERP系统",
+  );
   await expect(popup.locator(".ant-menu")).toHaveCSS(
     "background-color",
     "rgb(255, 252, 248)",
@@ -255,6 +302,38 @@ test("超级管理员从系统设置访问模型，侧栏收起图标及悬浮�
   await expect(
     popup.getByRole("link", { name: "商品档案", exact: true }),
   ).toHaveCSS("color", "rgb(89, 69, 58)");
+  await page.mouse.move(1000, 500);
+  await page
+    .locator(".sidebar .ant-menu-submenu-title")
+    .filter({ hasText: "系统设置" })
+    .hover();
+  const settingsPopup = page.locator(".workspace-menu-popup").filter({
+    has: page.locator(".workspace-menu-popup-heading", { hasText: "系统设置" }),
+  });
+  await expect(
+    settingsPopup.locator(".workspace-menu-popup-heading"),
+  ).toHaveText("系统设置");
+  await settingsPopup
+    .getByRole("link", { name: "AI 模型设置", exact: true })
+    .click();
+  await expect(page).toHaveURL(/\/settings\/ai$/);
+  await expect(
+    page.locator(
+      ".sidebar .ant-menu-submenu-selected .workspace-menu-icon svg",
+    ),
+  ).toHaveAttribute("fill", "currentColor");
+  await page
+    .locator(".sidebar .ant-menu-root > .ant-menu-item")
+    .filter({ hasText: "运营中心" })
+    .click();
+  await expect(page).toHaveURL(/\/operations$/);
+  await page
+    .locator(".sidebar .ant-menu-submenu-title")
+    .filter({ hasText: "ERP系统" })
+    .hover();
+  await expect(
+    popup.getByRole("link", { name: "商品档案", exact: true }),
+  ).toBeVisible();
 });
 test("个人工作台保存待办备忘，自己的表格可公开且显示创建者", async ({
   page,
@@ -334,6 +413,26 @@ test("明细内部滚动表头固定，分页条数与查询同步且切换后�
   const detail = page.locator(".compass-detail-card");
   const rows = detail.locator(".ant-table-body tr.ant-table-row");
   await expect(rows).toHaveCount(20);
+  await expect(
+    page.getByText("销售额 TOP 20 · 款号", { exact: true }),
+  ).toBeVisible();
+  await expect(page.locator(".compass-ranks .compass-rank-link")).toHaveCount(
+    20,
+  );
+  await expect(
+    detail.getByRole("combobox", { name: "明细排序", exact: true }),
+  ).toHaveCount(0);
+  const rankedImage = page
+    .locator(".compass-ranks")
+    .getByRole("button", { name: "放大图片 STYLE-001", exact: true });
+  await rankedImage.hover();
+  await expect(
+    page.getByRole("img", { name: "商品预览 STYLE-001", exact: true }),
+  ).toHaveCSS("width", "120px");
+  await rankedImage.click();
+  await expect(page.locator(".compass-image-preview:visible")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page).toHaveURL(/\/analytics\/compass$/);
   await expect(detail).toContainText("共 74 条");
   await expect(page.locator(".compass-page > .compass-ai")).toHaveCount(0);
   const sortedHeader = detail.getByRole("columnheader", { name: /销售件数/ });
@@ -345,7 +444,11 @@ test("明细内部滚动表头固定，分页条数与查询同步且切换后�
   await page.mouse.move(0, 0);
   await expect(rows.first().locator(".ant-table-column-sort")).toHaveCSS(
     "background-color",
-    "rgb(255, 246, 237)",
+    "rgba(0, 0, 0, 0)",
+  );
+  await expect(rows.first().locator(".ant-table-column-sort")).toHaveCSS(
+    "font-weight",
+    "600",
   );
   await detail.getByTitle("下一页").click();
   await expect(rows.first()).toContainText("STYLE-021");
@@ -375,8 +478,119 @@ test("明细内部滚动表头固定，分页条数与查询同步且切换后�
     .poll(() => body.evaluate((element) => element.scrollTop))
     .toBeGreaterThan(0);
   expect((await head.boundingBox())!.y).toBeCloseTo(fixedHeadY, 0);
+  const pageScrollY = await page.evaluate(() => window.scrollY);
+  const tableScrollY = await body.evaluate((element) => element.scrollTop);
+  const netSalesHeader = detail.getByRole("columnheader", { name: /净销售额/ });
+  // A delayed response exposes layout collapse that immediate fixtures can hide.
+  await page.route("**/api/v1/analytics/compass?**", async (route) => {
+    if (
+      new URL(route.request().url()).searchParams.get("sort") ===
+      "netSalesAmount"
+    )
+      await new Promise((resolve) => setTimeout(resolve, 400));
+    await route.fallback();
+  });
+  const sortResponse = page.waitForResponse((response) =>
+    response.url().includes("sort=netSalesAmount"),
+  );
+  await netSalesHeader.click();
+  await expect(detail.locator(".ant-spin-spinning")).toBeVisible();
+  expect(await page.evaluate(() => window.scrollY)).toBeCloseTo(pageScrollY, 0);
+  expect((await head.boundingBox())!.y).toBeCloseTo(fixedHeadY, 0);
+  expect(await body.evaluate((element) => element.scrollTop)).toBeCloseTo(
+    tableScrollY,
+    0,
+  );
+  await sortResponse;
+  await expect(detail.locator(".ant-spin-spinning")).toHaveCount(0);
+  expect(await page.evaluate(() => window.scrollY)).toBeCloseTo(pageScrollY, 0);
+  expect((await head.boundingBox())!.y).toBeCloseTo(fixedHeadY, 0);
+  expect(await body.evaluate((element) => element.scrollTop)).toBeCloseTo(
+    tableScrollY,
+    0,
+  );
   await pageSize.click();
   await dropdown.getByText("1000 条/页", { exact: true }).click();
   await expect(rows).toHaveCount(74);
   await expect(rows.last()).toContainText("STYLE-074");
+});
+
+test("月季年面板选取完整周期，限制未来日期且取消不改变筛选", async ({
+  page,
+}) => {
+  await page.clock.setFixedTime(new Date("2026-10-02T04:00:00Z"));
+  await fixture(page, "ADMIN", 74);
+  await page.goto("/analytics/compass");
+  const cycle = page.getByRole("combobox", { name: "统计日期", exact: true });
+  const chooseCycle = async (name: string) => {
+    await cycle.click();
+    await page
+      .locator(".ant-select-dropdown:visible")
+      .getByText(name, { exact: true })
+      .click();
+  };
+  const requestRange = (start: string, end: string) =>
+    page.waitForRequest((request) => {
+      const url = new URL(request.url());
+      return (
+        url.pathname === "/api/v1/analytics/compass" &&
+        url.searchParams.get("startDate") === start &&
+        url.searchParams.get("endDate") === end
+      );
+    });
+  await chooseCycle("月");
+  let panel = page.getByRole("dialog", { name: "选择统计月份", exact: true });
+  await expect(
+    panel.getByRole("button", { name: "2026年11月", exact: true }),
+  ).toBeDisabled();
+  const september = requestRange("2026-09-01", "2026-09-30");
+  await panel.getByRole("button", { name: "2026年9月", exact: true }).click();
+  await september;
+  await expect(page.locator(".compass-period-range")).toContainText(
+    "2026-09-01",
+  );
+  await expect(page.locator(".compass-period-range")).toContainText(
+    "2026-09-30",
+  );
+  await page.getByRole("button", { name: "选择统计月份", exact: true }).click();
+  await expect(
+    panel.getByRole("button", { name: "2026年9月", exact: true }),
+  ).toHaveAttribute("aria-pressed", "true");
+  await page.keyboard.press("Escape");
+  await expect(panel).not.toBeVisible();
+  await chooseCycle("季");
+  panel = page.getByRole("dialog", { name: "选择统计季度", exact: true });
+  await expect(panel).toContainText("4月、5月、6月");
+  await panel.getByRole("button", { name: "取消", exact: true }).click();
+  await expect(page.locator(".compass-period-range")).toContainText(
+    "2026-09-30",
+  );
+  await chooseCycle("季");
+  const quarter = requestRange("2026-04-01", "2026-06-30");
+  await panel
+    .getByRole("button", { name: "2026年第二季度", exact: true })
+    .click();
+  await quarter;
+  await chooseCycle("年");
+  panel = page.getByRole("dialog", { name: "选择统计年份", exact: true });
+  await expect(
+    panel.getByRole("button", { name: "2027年", exact: true }),
+  ).toBeDisabled();
+  await panel.getByRole("button", { name: "前十年", exact: true }).click();
+  await expect(panel).toContainText("2010 年 — 2019 年");
+  await panel.getByRole("button", { name: "后十年", exact: true }).click();
+  const leapYear = requestRange("2024-01-01", "2024-12-31");
+  await panel.getByRole("button", { name: "2024年", exact: true }).click();
+  await leapYear;
+  await chooseCycle("月");
+  panel = page.getByRole("dialog", { name: "选择统计月份", exact: true });
+  await panel.getByRole("button", { name: "下一年", exact: true }).click();
+  await panel.getByRole("button", { name: "下一年", exact: true }).click();
+  const currentMonth = requestRange("2026-10-01", "2026-10-01");
+  await panel.getByRole("button", { name: "2026年10月", exact: true }).click();
+  await currentMonth;
+  await page.getByRole("button", { name: "近 7 天", exact: true }).click();
+  await expect(page.getByLabel("统计开始日期", { exact: true })).toHaveValue(
+    "2026-09-25",
+  );
 });
