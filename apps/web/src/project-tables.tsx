@@ -9,7 +9,6 @@ import {
   Form,
   Input,
   Modal,
-  Space,
   Spin,
   Table,
   Typography,
@@ -160,9 +159,6 @@ export function ProjectTablePage() {
     );
   return (
     <>
-      <Space style={{ marginBottom: 12 }}>
-        <Link to="/project-tables">返回表格列表</Link>
-      </Space>
       <SelectionWorkspace
         key={id}
         tableId={id}

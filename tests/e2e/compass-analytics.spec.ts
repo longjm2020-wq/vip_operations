@@ -28,6 +28,34 @@ test("罗盘导入、日期区间、五种明细视图、维度下钻与邮件�
       ".ant-menu-root > .ant-menu-item, .ant-menu-root > .ant-menu-submenu > .ant-menu-submenu-title",
     ),
   ).toHaveText(["运营工作台", "项目协作", "ERP系统", "供应链端", "系统设置"]);
+  await expect(
+    sidebar.getByRole("link", { name: "ERP系统", exact: true }),
+  ).toHaveAttribute("aria-current", "page");
+  await expect(
+    sidebar.getByRole("link", { name: "商品档案", exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    page
+      .getByRole("navigation", { name: "ERP系统功能导航", exact: true })
+      .getByRole("tab", { name: "商品档案", exact: true }),
+  ).toBeVisible();
+  await sidebar.getByRole("link", { name: "项目协作", exact: true }).click();
+  const projectNavigation = page.getByRole("navigation", {
+    name: "项目协作功能导航",
+    exact: true,
+  });
+  await expect(projectNavigation.getByRole("tab")).toHaveText([
+    "新建SOP",
+    "新建项目",
+    "新建表格",
+  ]);
+  await projectNavigation
+    .getByRole("tab", {
+      name: "新建表格",
+      exact: true,
+    })
+    .click();
+  await expect(page).toHaveURL(/\/project-tables$/);
   await expect(operations).toBeVisible();
   await operations.click();
   await expect(

@@ -144,7 +144,24 @@ test("new tables start with one text field and three blank records, save indepen
   const { records, writes } = await fixture(page);
   await page.goto("/project-tables");
   await expect(
-    page.getByRole("menuitem", { name: "新建表格", exact: true }),
+    page.locator(".sidebar").getByRole("link", {
+      name: "项目协作",
+      exact: true,
+    }),
+  ).toHaveAttribute("aria-current", "page");
+  await expect(
+    page.locator(".sidebar").getByRole("link", {
+      name: "新建表格",
+      exact: true,
+    }),
+  ).toHaveCount(0);
+  const projectNavigation = page.getByRole("navigation", {
+    name: "项目协作功能导航",
+    exact: true,
+  });
+  await expect(projectNavigation.getByRole("tab")).toHaveText(["新建表格"]);
+  await expect(
+    projectNavigation.getByRole("tab", { name: "新建表格", exact: true }),
   ).toBeVisible();
   await page.getByRole("button", { name: "新建表格", exact: true }).click();
   await page.getByLabel("表格名称", { exact: true }).fill("秋季协作表");
@@ -152,6 +169,17 @@ test("new tables start with one text field and three blank records, save indepen
   await expect(page).toHaveURL(/\/project-tables\/2$/);
   await expect(
     page.getByRole("heading", { name: "秋季协作表", exact: true }),
+  ).toBeVisible();
+  const tableBack = page.getByRole("link", {
+    name: "返回表格列表",
+    exact: true,
+  });
+  await expect(tableBack).toHaveCount(1);
+  await expect(
+    page.locator(".topbar").getByRole("link", {
+      name: "返回表格列表",
+      exact: true,
+    }),
   ).toBeVisible();
   await expect(page.locator("tbody tr[data-selection-row]")).toHaveCount(3);
   for (const name of ["字段管理", "导入", "导出", "保护区域", "手机拍图"])
@@ -203,6 +231,11 @@ test("new tables start with one text field and three blank records, save indepen
     .click();
   await expect.poll(() => records["2"].length).toBe(4);
   await page.reload();
+  await expect(page.locator("tbody tr[data-selection-row]")).toHaveCount(4);
+  await tableBack.click();
+  await expect(page).toHaveURL(/\/project-tables$/);
+  await page.getByRole("link", { name: "秋季协作表", exact: true }).click();
+  await expect(page).toHaveURL(/\/project-tables\/2$/);
   await expect(page.locator("tbody tr[data-selection-row]")).toHaveCount(4);
   await page.goto("/style-selections");
   await expect(

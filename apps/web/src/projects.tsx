@@ -518,7 +518,7 @@ export function SopPage() {
   return (
     <>
       <Header
-        title="操作流程 SOP"
+        title="新建SOP"
         subtitle="让每一次交付都有清晰的接收人和验收标准。"
         extra={permissionButton(
           user,

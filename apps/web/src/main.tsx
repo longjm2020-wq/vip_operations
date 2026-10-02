@@ -1,6 +1,6 @@
 import {SelectionWorkspace} from "./selection-workspace";
 import { BrandVideo } from "./brand-video";
-import React, { useState, useEffect } from "react";
+import React, { useState } from "react";
 const CompassAnalyticsPage = React.lazy(() => import("./compass-analytics").then(module => ({ default: module.CompassAnalyticsPage })));
 const OperationsWorkspacePage = React.lazy(() => import("./operations-workspace").then(module => ({ default: module.OperationsWorkspacePage })));
 const PublicSelectionCollection = React.lazy(() => import("./selection-collections").then(module => ({ default: module.PublicSelectionCollection })));
@@ -14,6 +14,7 @@ import {
   Route,
   Routes,
   useLocation,
+  useNavigate,
   useSearchParams,
 } from "react-router-dom";
 import { create } from "zustand";
@@ -29,7 +30,6 @@ import {
   Space,
   Spin,
   Tabs,
-  Typography,
 } from "antd";
 import zhCN from "antd/locale/zh_CN";
 import {
@@ -42,6 +42,7 @@ import {
   AuditOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
+  ArrowLeftOutlined,
 } from "@ant-design/icons";
 import { api, queryClient, setCsrf } from "./api";
 import { UserContext, Row } from "./shared";
@@ -187,6 +188,7 @@ function ColorSizeMappingsPage() {
 }
 function Workspace({ user }: { user: Row }) {
   const location = useLocation(),
+    navigate = useNavigate(),
     ui = useUi();
   const originalItems = [
     { key: "/analytics/compass", label: "经营分析", icon: <DatabaseOutlined />, permission: "analytics.read" },
@@ -243,7 +245,7 @@ function Workspace({ user }: { user: Row }) {
       label: "项目协作",
       icon: <TeamOutlined />,
       children: [
-        { key: "/sops", label: "操作流程 SOP", permission: "project.read" },
+        { key: "/sops", label: "新建SOP", permission: "project.read" },
         { key: "/projects", label: "新建项目", permission: "project.read" },
         {key:"/project-tables",label:"新建表格",permission:"selection.read"},
       ],
@@ -349,16 +351,14 @@ function Workspace({ user }: { user: Row }) {
       children: settings.children!.filter((i) => adminKeys.includes(i.key)),
     },
   ];
-  const menu = items
+  const visibleItems = items
     .filter((i) => !i.permission || user.permissions.includes(i.permission))
     .map((i) => ({
       ...i,
-      label: i.children ? i.label : <Link to={i.key}>{i.label}</Link>,
       children: i.children
         ?.filter(
           (c) => !c.permission || user.permissions.includes(c.permission),
-        )
-        .map((c) => ({ ...c, label: <Link to={c.key}>{c.label}</Link> })),
+        ),
     }))
     .filter((i) => !i.children || i.children.length > 0);
   const selected = operationKeys.some((key) => location.pathname.startsWith(key))
@@ -370,11 +370,38 @@ function Workspace({ user }: { user: Row }) {
   const parent = items.find((i) =>
     i.children?.some((c) => c.key === selected),
   )?.key;
-  const [openKeys, setOpenKeys] = useState<string[]>(parent ? [parent] : []);
-  useEffect(() => {
-    if (parent)
-      setOpenKeys((keys) => (keys.includes(parent) ? keys : [...keys, parent]));
-  }, [parent]);
+  const activeKey = parent || selected;
+  const activeWorkspace = visibleItems.find((i) => i.key === activeKey);
+  const tableDetail = location.pathname.startsWith("/project-tables/");
+  const operationTool = location.pathname.startsWith("/analytics/compass")
+    ? "经营分析"
+    : location.pathname.startsWith("/style-selections")
+      ? "选款登记"
+      : undefined;
+  const menu = visibleItems.map((item) => ({
+    key: item.key,
+    icon: item.icon,
+    label: (
+      <Link
+        to={
+          item.key === activeKey
+            ? location.pathname + location.search
+            : item.children?.[0]?.key || item.key
+        }
+        aria-current={item.key === activeKey ? "page" : undefined}
+      >
+        {item.label}
+      </Link>
+    ),
+  }));
+  const subTabs = activeWorkspace?.children?.map((item) => ({
+    key: item.key,
+    label: tableDetail && item.key === "/project-tables" ? (
+      <Link to={item.key} aria-label="返回表格列表">
+        <ArrowLeftOutlined /> 表格列表
+      </Link>
+    ) : item.label,
+  }));
   return (
     <UserContext.Provider value={user}>
       <Layout className="workspace">
@@ -389,13 +416,12 @@ function Workspace({ user }: { user: Row }) {
           >
             <BrandMark collapsed={ui.collapsed} />
           </Link>
-          {!ui.collapsed && <div className="sidebar-label">OPERATIONS</div>}
+          {!ui.collapsed && <div className="sidebar-label">工作区</div>}
           <Menu
             mode="inline"
             theme="dark"
-            selectedKeys={selected ? [selected] : []}
-            openKeys={openKeys}
-            onOpenChange={setOpenKeys}
+            aria-label="工作区导航"
+            selectedKeys={activeKey ? [activeKey] : []}
             items={menu}
           />
           {!ui.collapsed && (
@@ -411,21 +437,42 @@ function Workspace({ user }: { user: Row }) {
         </Layout.Sider>
         <Layout>
           <Layout.Header className="topbar">
-            <Space>
+            <div className="topbar-main">
               <Button
                 type="text"
+                aria-label={ui.collapsed ? "展开工作区导航" : "收起工作区导航"}
                 onClick={ui.toggle}
                 icon={
                   ui.collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />
                 }
               />
-              <Typography.Text type="secondary">
-                {user.roleCodes?.includes("SUPPLIER")
-                  ? "序缇供应链后台"
-                  : "服装供应商经营工作台"}
-              </Typography.Text>
-            </Space>
-            <Space size={14}>
+              <span className="workspace-title">
+                {activeWorkspace?.label || "使用手册"}
+              </span>
+            </div>
+            <nav
+              className="workspace-subnav"
+              aria-label={`${activeWorkspace?.label || "工作台"}功能导航`}
+            >
+              {subTabs?.length ? (
+                <Tabs
+                  aria-label={`${activeWorkspace?.label || "工作台"}功能 TAB`}
+                  activeKey={selected}
+                  onChange={(key) => navigate(key)}
+                  items={subTabs}
+                  more={{ icon: <span>更多</span> }}
+                />
+              ) : operationTool ? (
+                <div className="workspace-path">
+                  <Link to="/operations?platform=vip">
+                    <ArrowLeftOutlined /> 唯品会工作区
+                  </Link>
+                  <span aria-hidden="true">/</span>
+                  <span aria-current="page">{operationTool}</span>
+                </div>
+              ) : null}
+            </nav>
+            <Space className="topbar-actions" size={10}>
               <Link
                 to={manualHref(location.pathname)}
                 target="_blank"
