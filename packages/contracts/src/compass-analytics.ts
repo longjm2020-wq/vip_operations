@@ -27,6 +27,31 @@ export const compassMetrics = {
   saleableStock: "可售库存",
 } as const;
 export type CompassMetric = keyof typeof compassMetrics;
+export const compassSortFields = [
+  "salesAmount",
+  "salesQty",
+  "netSalesAmount",
+  "netSalesQty",
+  "customers",
+  "returnsQty",
+  "returnsAmount",
+  "rejectedQty",
+  "rejectedAmount",
+  "exchangesQty",
+  "exchangesAmount",
+  "exposure",
+  "detailViews",
+  "favorites",
+  "cartUsers",
+  "onSaleStock",
+  "saleableStock",
+  "returnRate",
+  "rejectionRate",
+  "conversionRate",
+  "clickRate",
+  "averagePrice",
+] as const;
+export type CompassSortField = (typeof compassSortFields)[number];
 const metricShape = Object.fromEntries(
   Object.keys(compassMetrics).map((k) => [
     k,
@@ -171,6 +196,47 @@ export function shiftCompassDate(date: string, days: number) {
 }
 export function shanghaiDate(now = new Date()) {
   return new Date(now.getTime() + 8 * 3600000).toISOString().slice(0, 10);
+}
+export const compassRecentDays = [1, 7, 15, 30] as const;
+export type CompassPeriod =
+  | `recent:${(typeof compassRecentDays)[number]}`
+  | "day"
+  | "week"
+  | "month"
+  | "quarter"
+  | "year"
+  | "custom";
+export type CompassDateRange = [string, string];
+export function compassPeriodRange(
+  period: CompassPeriod,
+  anchor: string,
+  maxEnd = anchor,
+): CompassDateRange {
+  if (period.startsWith("recent:"))
+    return [shiftCompassDate(anchor, 1 - Number(period.slice(7))), anchor];
+  if (period === "custom") return [shiftCompassDate(anchor, -6), anchor];
+  const date = new Date(anchor),
+    year = date.getUTCFullYear(),
+    month = date.getUTCMonth();
+  const format = (year: number, month: number, day: number) =>
+    new Date(Date.UTC(year, month, day)).toISOString().slice(0, 10);
+  if (period === "day") return [anchor, anchor];
+  let start: string, end: string;
+  if (period === "week") {
+    start = shiftCompassDate(anchor, -((date.getUTCDay() + 6) % 7));
+    end = shiftCompassDate(start, 6);
+  } else if (period === "month") {
+    start = format(year, month, 1);
+    end = format(year, month + 1, 0);
+  } else if (period === "quarter") {
+    const firstMonth = Math.floor(month / 3) * 3;
+    start = format(year, firstMonth, 1);
+    end = format(year, firstMonth + 3, 0);
+  } else {
+    start = format(year, 0, 1);
+    end = format(year, 12, 0);
+  }
+  return [start, end < maxEnd ? end : maxEnd];
 }
 export function compassRatios(values: Record<string, any>) {
   const ratio = (a: any, b: any) =>

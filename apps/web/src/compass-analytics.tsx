@@ -19,7 +19,6 @@ import {
   Tooltip,
 } from "antd";
 import {
-  DownloadOutlined,
   MailOutlined,
   ReloadOutlined,
   SearchOutlined,
@@ -29,16 +28,17 @@ import {
 import { useQuery } from "@tanstack/react-query";
 import { api, queryClient } from "./api";
 import { CompassAIReport, CompassAISettings } from "./compass-ai";
+import { CompassDetailTable } from "./compass-detail-table";
+import { CompassDateFilter } from "./compass-date-filter";
 import { Header, QueryState, Row, useCan } from "./shared";
 import {
   compassDimensions,
   CompassDimension,
   compassLabels,
   CompassRecord,
-  shanghaiDate,
-  shiftCompassDate,
+  CompassPeriod,
+  CompassDateRange,
 } from "../../../packages/contracts/src/compass-analytics";
-import { downloadWorkbook } from "./sheet-excel";
 import "./compass-analytics.css";
 const number = (value: any) =>
   value == null
@@ -539,8 +539,8 @@ function MailSettings({
 export function CompassAnalyticsPage() {
   const manage = useCan("analytics.manage"),
     [dimension, setDimension] = useState<CompassDimension>("style"),
-    [days, setDays] = useState(7),
-    [endDate, setEndDate] = useState(""),
+    [period, setPeriod] = useState<CompassPeriod>("recent:7"),
+    [dateRange, setDateRange] = useState<CompassDateRange | null>(null),
     [search, setSearch] = useState(""),
     [qText, setQText] = useState(""),
     [styleNo, setStyleNo] = useState(""),
@@ -561,8 +561,8 @@ export function CompassAnalyticsPage() {
     queryKey: [
       "compass-dashboard",
       dimension,
-      days,
-      endDate,
+      period,
+      dateRange,
       qText,
       styleNo,
       articleNo,
@@ -574,8 +574,10 @@ export function CompassAnalyticsPage() {
         "/analytics/compass?" +
           new URLSearchParams({
             dimension,
-            days: String(days),
-            ...(endDate ? { endDate } : {}),
+            days: period.startsWith("recent:") ? period.slice(7) : "7",
+            ...(dateRange
+              ? { startDate: dateRange[0], endDate: dateRange[1] }
+              : {}),
             q: qText,
             styleNo,
             articleNo,
@@ -591,6 +593,11 @@ export function CompassAnalyticsPage() {
     sources: Row[] = data?.sources || [];
   const changeDimension = (value: string) => {
     setDimension(value as CompassDimension);
+    if (
+      value === "barcode" &&
+      ["exposure", "detailViews", "clickRate", "conversionRate"].includes(sort)
+    )
+      setSort("salesAmount");
     setPage(1);
   };
   const drill = (row: Row) => {
@@ -603,27 +610,6 @@ export function CompassAnalyticsPage() {
       changeDimension("barcode");
     } else setSearch(row.code);
   };
-  const exportView = () =>
-    downloadWorkbook(
-      `罗盘${compassLabels[dimension]}分析_${data?.startDate || ""}_${data?.endDate || ""}`,
-      [
-        { key: "code", label: compassLabels[dimension] },
-        { key: "salesAmount", label: "销售额" },
-        { key: "netSalesAmount", label: "净销售额" },
-        { key: "salesQty", label: "销售件数" },
-        { key: "returnsQty", label: "退货件数" },
-        { key: "returnRate", label: "期间退货率" },
-        { key: "saleableStock", label: "截止日可售库存" },
-      ],
-      (data?.items || []).map((r: Row) => ({
-        ...r,
-        returnRate: percent(r.returnRate),
-      })),
-      [
-        "导出为当前页分析结果；三个报表各自统计，不合并相加。",
-        "库存为截止日快照。退货率为期间流量比；客户数和 UV 跨日未去重。",
-      ],
-    );
   const coverage = data?.summary?.coveredDays;
   return (
     <div className="compass-page">
@@ -670,40 +656,18 @@ export function CompassAnalyticsPage() {
         }
       />
       <div className="compass-toolbar">
-        <Space wrap>
-          <span className="secondary">统计日期</span>
-          <Select
-            aria-label="统计日期"
-            style={{ width: 120 }}
-            options={[1, 3, 7, 15, 30].map((value) => ({
-              value,
-              label: `近 ${value} 天`,
-            }))}
-            value={days}
-            onChange={(value) => {
-              setDays(Number(value));
-              setPage(1);
-            }}
-          />
-          <label className="compass-date">
-            截至{" "}
-            <input
-              aria-label="分析截止日期"
-              type="date"
-              value={endDate || data?.endDate || ""}
-              max={shiftCompassDate(shanghaiDate(), -1)}
-              onChange={(e) => {
-                setEndDate(e.target.value);
-                setPage(1);
-              }}
-            />
-          </label>
-          {endDate && (
-            <Button type="link" onClick={() => setEndDate("")}>
-              最新报表
-            </Button>
-          )}
-        </Space>
+        <CompassDateFilter
+          period={period}
+          range={dateRange}
+          sourceEnd={
+            sources.find((source) => source.dimension === dimension)?.endDate
+          }
+          onChange={(value, range) => {
+            setPeriod(value);
+            setDateRange(range);
+            setPage(1);
+          }}
+        />
         <Input
           aria-label="搜索款号货号条码"
           prefix={<SearchOutlined />}
@@ -780,10 +744,15 @@ export function CompassAnalyticsPage() {
               {data.startDate} — {data.endDate} · {number(summary.entities)} 个
               {compassLabels[dimension]}
               {data.stale && <Tag color="orange">报表尚未更新至昨日</Tag>}
-              {(!data.complete || coverage !== days) && (
-                <Tag color="orange">
-                  日期覆盖不足：{coverage || 0}/{days} 天
-                </Tag>
+              {(!data.complete || coverage !== data.days) && (
+                <>
+                  <Tag color="orange">
+                    日期覆盖不足：{coverage || 0}/{data.days} 天
+                  </Tag>
+                  <span>
+                    报表覆盖 {data.source.startDate} — {data.source.endDate}
+                  </span>
+                </>
               )}
             </p>
             <div className="compass-kpis">
@@ -877,125 +846,19 @@ export function CompassAnalyticsPage() {
                 </Tooltip>
               </div>
             )}
-            <Card
-              title={`${compassLabels[dimension]}明细`}
-              extra={
-                <Space>
-                  <Select
-                    aria-label="明细排序"
-                    value={sort}
-                    onChange={(value) => {
-                      setSort(value);
-                      setPage(1);
-                    }}
-                    style={{ width: 160 }}
-                    options={[
-                      { value: "salesAmount", label: "按销售额排序" },
-                      { value: "netSalesAmount", label: "按净销售额排序" },
-                      { value: "salesQty", label: "按销量排序" },
-                      { value: "returnsQty", label: "按退货数排序" },
-                      { value: "saleableStock", label: "按可售库存排序" },
-                    ]}
-                  />
-                  <Button
-                    icon={<DownloadOutlined aria-hidden="true" />}
-                    disabled={!data.items?.length}
-                    onClick={() => void exportView()}
-                  >
-                    导出当前页
-                  </Button>
-                </Space>
-              }
-            >
-              <Table<Row>
-                rowKey="code"
-                size="small"
-                dataSource={data.items}
-                loading={q.isFetching}
-                scroll={{ x: 1250 }}
-                pagination={{
-                  current: page,
-                  pageSize: 20,
-                  total: data.total,
-                  showSizeChanger: false,
-                  onChange: setPage,
-                }}
-                columns={[
-                  {
-                    title: compassLabels[dimension],
-                    dataIndex: "code",
-                    fixed: "left",
-                    width: 220,
-                    render: (value, r) => (
-                      <div className="compass-product">
-                        {r.image && /^https:\/\//i.test(r.image) && (
-                          <img
-                            src={r.image}
-                            alt=""
-                            loading="lazy"
-                            referrerPolicy="no-referrer"
-                          />
-                        )}
-                        <div>
-                          <Button type="link" onClick={() => drill(r)}>
-                            {value}
-                          </Button>
-                          {dimension !== "style" && (
-                            <small>
-                              {r.styleNo}
-                              {r.sizes ? ` · ${r.sizes}` : ""}
-                            </small>
-                          )}
-                        </div>
-                      </div>
-                    ),
-                  },
-                  {
-                    title: "销售额",
-                    dataIndex: "salesAmount",
-                    render: money,
-                    width: 130,
-                  },
-                  {
-                    title: "净销售额",
-                    dataIndex: "netSalesAmount",
-                    render: money,
-                    width: 135,
-                  },
-                  {
-                    title: "销售件数",
-                    dataIndex: "salesQty",
-                    render: number,
-                    width: 105,
-                  },
-                  {
-                    title: "退货件数",
-                    dataIndex: "returnsQty",
-                    render: number,
-                    width: 105,
-                  },
-                  {
-                    title: "期间退货率",
-                    dataIndex: "returnRate",
-                    render: percent,
-                    width: 125,
-                  },
-                  {
-                    title: "退货金额",
-                    dataIndex: "returnsAmount",
-                    render: money,
-                    width: 130,
-                  },
-                  {
-                    title: "截止日可售库存",
-                    dataIndex: "saleableStock",
-                    render: number,
-                    width: 145,
-                  },
-                  { title: "最后数据日期", dataIndex: "lastDate", width: 130 },
-                ]}
-              />
-            </Card>
+            <CompassDetailTable
+              dimension={dimension}
+              data={data}
+              loading={q.isFetching}
+              page={page}
+              sort={sort}
+              onPage={setPage}
+              onSort={(value) => {
+                setSort(value);
+                setPage(1);
+              }}
+              onDrill={drill}
+            />
             <details className="compass-notes">
               <summary>数据来源与计算口径</summary>
               <p>

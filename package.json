@@ -40,6 +40,7 @@
     "antd": "6.6.3",
     "bullmq": "^5.70.0",
     "cookie-parser": "^1.4.7",
+    "dayjs": "1.11.23",
     "decimal.js": "^10.6.0",
     "dotenv": "^17.3.0",
     "exceljs": "4.4.0",

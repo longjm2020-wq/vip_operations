@@ -3,6 +3,7 @@ import { randomBytes, randomUUID, createHash } from "node:crypto";
 import nodemailer from "nodemailer";
 import {
   compassMetrics,
+  compassSortFields,
   CompassDimension,
   CompassRecord,
   shanghaiDate,
@@ -166,6 +167,38 @@ export async function testCompassAnalytics(h: Record<string, any>) {
     60,
   );
   assert.equal((await ok(endpoint + "?q=no-match")).total, 0);
+  const customRange = await ok(
+    `${endpoint}?dimension=style&startDate=${shiftCompassDate(end, -4)}&endDate=${shiftCompassDate(end, -2)}`,
+  );
+  assert.equal(customRange.days, 3);
+  assert.equal(Number(customRange.summary.salesAmount), 60);
+  assert.equal(Number(customRange.summary.saleableStock), 8);
+  assert.equal(customRange.daily.length, 3);
+  assert.equal(
+    (
+      await ok(
+        `${endpoint}?startDate=${shiftCompassDate(start, -1)}&endDate=${end}`,
+      )
+    ).complete,
+    false,
+  );
+  assert.equal(
+    (await request(`${endpoint}?startDate=${end}&endDate=${start}`)).status,
+    400,
+  );
+  assert.equal(
+    (
+      await request(
+        `${endpoint}?startDate=${shiftCompassDate(end, -366)}&endDate=${end}`,
+      )
+    ).status,
+    400,
+  );
+  assert.equal(
+    (await request(`${endpoint}?startDate=${end}&endDate=${shanghaiDate()}`))
+      .status,
+    400,
+  );
   for (const dimension of ["article", "barcode"] as const) {
     const records = Array.from({ length: 30 }, (_, i) =>
         make(shiftCompassDate(start, i), dimension),
@@ -192,6 +225,80 @@ export async function testCompassAnalytics(h: Record<string, any>) {
   assert.ok(help.some((c: any) => c.id === "30-compass-analytics.md"));
   check(
     "Compass atomic imports, retries, precise IDs, 5 date presets, snapshots and separate dimensions",
+  );
+  const sortingRecords = Array.from({ length: 30 }, (_, i) => {
+    const date = shiftCompassDate(start, i);
+    return ["SORT-A", "SORT-B", "SORT-C"].map((code) => {
+      const record = make(date, "style", code, code);
+      record.metrics =
+        code === "SORT-C"
+          ? {
+              ...record.metrics,
+              salesAmount: null,
+              salesQty: 0,
+              returnsQty: null,
+              exposure: 0,
+              detailViews: 0,
+            }
+          : {
+              ...record.metrics,
+              salesAmount: code === "SORT-A" ? 10 : 40,
+              salesQty: code === "SORT-A" ? 2 : 4,
+              exposure: code === "SORT-A" ? (i === 0 ? 1000 : 1) : 100,
+              detailViews: code === "SORT-A" ? 1 : 20,
+              customers: code === "SORT-A" ? 1 : 2,
+              saleableStock: i === 29 ? (code === "SORT-A" ? 8 : 4) : 100,
+            };
+      return record;
+    });
+  }).flat();
+  const sortingImport = await begin("style", sortingRecords, "sorting");
+  await ok(`${endpoint}/imports/${sortingImport.id}/chunks`, "POST", {
+    records: sortingRecords,
+  });
+  await ok(`${endpoint}/imports/${sortingImport.id}/finish`, "POST", {});
+  try {
+    for (const sort of compassSortFields)
+      assert.equal(
+        (await ok(`${endpoint}?dimension=style&days=30&sort=${sort}`)).items
+          .length,
+        3,
+      );
+    const clickSorted = await ok(
+      `${endpoint}?days=30&sort=clickRate&pageSize=1`,
+    );
+    assert.equal(
+      clickSorted.items[0].code,
+      "SORT-B",
+      "weighted period ratios must be sorted before pagination, not averaged daily",
+    );
+    const second = await ok(
+      `${endpoint}?days=30&sort=clickRate&pageSize=1&page=2`,
+    );
+    assert.equal(second.items[0].code, "SORT-A");
+    assert.equal(Number(second.items[0].clickRate), 30 / 1029);
+    const missing = await ok(
+      `${endpoint}?days=30&sort=clickRate&pageSize=1&page=3`,
+    );
+    assert.equal(missing.items[0].code, "SORT-C");
+    assert.equal(missing.items[0].clickRate, null);
+    assert.equal(
+      (await ok(`${endpoint}?days=30&sort=averagePrice`)).items[0].code,
+      "SORT-B",
+    );
+    assert.equal(
+      (await ok(`${endpoint}?days=30&sort=saleableStock`)).items[0].code,
+      "SORT-A",
+    );
+    assert.equal((await request(endpoint + "?sort=not-a-metric")).status, 400);
+  } finally {
+    await db.$executeRawUnsafe(
+      "UPDATE compass_active_imports SET import_id=$1::bigint WHERE dimension='style'",
+      partial.id,
+    );
+  }
+  check(
+    "Compass metric sorting uses cumulative ratios, stock snapshots, global pagination and null-last ordering",
   );
   const { sendDailyReport, saveMailSettings, testMail } =
     await import("../../apps/api/src/modules/analytics/mail.js");

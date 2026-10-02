@@ -19,6 +19,17 @@
   padding: 5px 8px;
   color: #49392f;
 }
+.compass-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
 .compass-period {
   color: #917b6e;
   display: flex;
@@ -157,6 +168,76 @@
 .compass-product small {
   display: block;
   color: #a48b7b;
+}
+.compass-detail-card .ant-card-head {
+  gap: 12px;
+}
+.compass-detail-card .ant-card-extra {
+  margin-left: auto;
+}
+.compass-detail-toolbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+.compass-detail-toolbar .ant-tabs {
+  min-width: 0;
+  flex: 1;
+}
+.compass-detail-toolbar .ant-tabs-nav {
+  margin-bottom: 0;
+}
+.compass-view-note {
+  margin: 12px 0;
+  color: #927c70;
+  font-size: 12px;
+}
+.compass-image-button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: zoom-in;
+  line-height: 0;
+  flex-shrink: 0;
+  border-radius: 4px;
+}
+.compass-image-button:focus-visible {
+  outline: 2px solid #d95200;
+  outline-offset: 3px;
+}
+.compass-field-settings {
+  width: min(360px, calc(100vw - 48px));
+}
+.compass-field-settings > p {
+  font-size: 12px;
+  margin: 8px 0 12px;
+}
+.compass-field-groups {
+  max-height: 360px;
+  overflow-y: auto;
+  margin: 12px 0;
+  padding-right: 6px;
+}
+.compass-field-groups section {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px 8px;
+}
+.compass-field-groups h4 {
+  grid-column: 1 / -1;
+  margin: 14px 0 0;
+  color: #745847;
+}
+.compass-field-groups .ant-checkbox-wrapper {
+  margin-inline-start: 0;
+}
+.compass-field-actions {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid #eee5df;
 }
 .compass-notes {
   margin-top: 16px;

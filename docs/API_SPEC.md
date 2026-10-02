@@ -6,7 +6,7 @@ API 前缀已确定为 `/api/v1`。下述补充路径、DTO、错误码与幂等
 
 ### 魔方罗盘经营分析（2026-10-02）
 
-- `GET /analytics/compass`：analytics.read；dimension=style/article/barcode，days=1/3/7/15/30，endDate 可选，q 模糊查询，styleNo/articleNo 精确范围，page/pageSize，sort 白名单。返回来源、期间汇总、每日趋势、TOP 10 和分页明细。三种报表独立计算，库存仅取截止日期快照。
+- `GET /analytics/compass`：analytics.read；dimension=style/article/barcode，兼容 days=1/3/7/15/30（看板最近周期菜单为1/7/15/30），startDate/endDate 可选；传入 startDate 时使用显式起止区间，日期需先后有序，含首尾最多366天，截止日不得晚于昨日。q 模糊查询，styleNo/articleNo 精确范围，page/pageSize。sort 支持已归一化的 17 项数值指标及 returnRate/rejectionRate/conversionRate/clickRate/averagePrice；全部筛选结果降序排序，缺失值最后，比例由期间累计分子/分母重算，不平均每日比例。返回来源、期间汇总、每日趋势、TOP 10 和分页明细，days 为实际区间天数，complete 标示当前来源是否完整覆盖所选区间。仍仅查询当前维度的完整来源，不拼接历史导入批次。三种报表独立计算，库存仅取截止日期快照。自定义视图字段选择仅为浏览器按账号及维度保存的显示偏好，不改变响应数据。
 - `GET /analytics/compass/sources`：analytics.read；当前三个维度的已完成来源。
 - `POST /analytics/compass/imports`：analytics.manage；fileName、SHA-256 fileHash、dimension、startDate/endDate、expectedRows（最多 200000）。返回新建或续传任务。同文件不重复建任务。
 - `POST /analytics/compass/imports/:id/chunks`：analytics.manage；records 数组（最多 1000）；强类型日期、平台 ID、维度和数值指标。按文件和批次使用稳定幂等键，冲突行拒绝。

@@ -18,6 +18,7 @@ import {
 import {
   compassDimensions,
   compassMetrics,
+  compassSortFields,
   compassRatios,
   compassRecordSchema,
   shiftCompassDate,
@@ -234,21 +235,21 @@ const querySchema = z.object({
     )
     .default(7),
   endDate: z.iso.date().optional(),
+  startDate: z.iso.date().optional(),
   q: z.string().trim().max(150).default(""),
   styleNo: z.string().max(150).default(""),
   articleNo: z.string().max(150).default(""),
   page: z.coerce.number().int().min(1).max(10000).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(20),
-  sort: z
-    .enum([
-      "salesAmount",
-      "netSalesAmount",
-      "salesQty",
-      "returnsQty",
-      "saleableStock",
-    ])
-    .default("salesAmount"),
+  sort: z.enum(compassSortFields).default("salesAmount"),
 });
+const ratioSortInputs: Record<string, [string, string]> = {
+  returnRate: ["returnsQty", "salesQty"],
+  rejectionRate: ["rejectedQty", "salesQty"],
+  conversionRate: ["customers", "detailViews"],
+  clickRate: ["detailViews", "exposure"],
+  averagePrice: ["salesAmount", "salesQty"],
+};
 const metricSQL = (prefix: string) =>
   Object.keys(compassMetrics)
     .filter((k) => !k.endsWith("Stock"))
@@ -271,7 +272,11 @@ export async function dashboard(input: unknown, tx: Tx = db) {
       total: 0,
     };
   const endDate = b.endDate || source.end_date,
-    startDate = shiftCompassDate(endDate, 1 - b.days);
+    startDate = b.startDate || shiftCompassDate(endDate, 1 - b.days),
+    periodDays =
+      Math.round((Date.parse(endDate) - Date.parse(startDate)) / 86400000) + 1;
+  if (periodDays < 1 || periodDays > 366)
+    fail("INVALID_PERIOD", "统计日期须按先后顺序选择，且最多支持 366 天", 400);
   if (endDate > shiftCompassDate(shanghaiDate(), -1))
     fail("INVALID_PERIOD", "截止日期不能晚于昨日", 400);
   const column = {
@@ -305,7 +310,11 @@ export async function dashboard(input: unknown, tx: Tx = db) {
   );
   const items = await rows(
     tx,
-    `${cte} SELECT * FROM grouped ORDER BY "${b.sort}" DESC NULLS LAST,code OFFSET $7 LIMIT $8`,
+    `${cte} SELECT * FROM grouped ORDER BY ${
+      ratioSortInputs[b.sort]
+        ? `CASE WHEN "${ratioSortInputs[b.sort][1]}">0 THEN "${ratioSortInputs[b.sort][0]}"/"${ratioSortInputs[b.sort][1]}" END`
+        : `"${b.sort}"`
+    } DESC NULLS LAST,code OFFSET $7 LIMIT $8`,
     ...params,
     (b.page - 1) * b.pageSize,
     b.pageSize,
@@ -323,7 +332,7 @@ export async function dashboard(input: unknown, tx: Tx = db) {
     empty: false,
     startDate,
     endDate,
-    days: b.days,
+    days: periodDays,
     complete,
     stale: source.end_date < shiftCompassDate(shanghaiDate(), -1),
     summary: format(summary),

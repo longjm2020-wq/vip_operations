@@ -4,6 +4,7 @@ import {
   compassRatios,
   shiftCompassDate,
   shanghaiDate,
+  compassPeriodRange,
 } from "../../packages/contracts/src/compass-analytics.js";
 import {
   decryptMailPassword,
@@ -113,6 +114,32 @@ describe("Compass daily report normalization", () => {
   it("uses Shanghai dates and crosses month/year boundaries correctly", () => {
     expect(shanghaiDate(new Date("2026-10-01T16:10:00Z"))).toBe("2026-10-02");
     expect(shiftCompassDate("2026-01-01", -1)).toBe("2025-12-31");
+  });
+  it("computes rolling and natural date periods, including leap years, Monday weeks and current-period cutoff", () => {
+    expect(compassPeriodRange("recent:1", "2026-10-01")).toEqual([
+      "2026-10-01",
+      "2026-10-01",
+    ]);
+    expect(compassPeriodRange("recent:7", "2026-10-01")).toEqual([
+      "2026-09-25",
+      "2026-10-01",
+    ]);
+    expect(compassPeriodRange("week", "2026-01-01", "2026-01-04")).toEqual([
+      "2025-12-29",
+      "2026-01-04",
+    ]);
+    expect(compassPeriodRange("month", "2024-02-15", "2024-03-01")).toEqual([
+      "2024-02-01",
+      "2024-02-29",
+    ]);
+    expect(compassPeriodRange("quarter", "2026-10-01")).toEqual([
+      "2026-10-01",
+      "2026-10-01",
+    ]);
+    expect(compassPeriodRange("year", "2024-12-31")).toEqual([
+      "2024-01-01",
+      "2024-12-31",
+    ]);
   });
 });
 describe("Compass email safety", () => {

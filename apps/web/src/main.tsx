@@ -96,8 +96,8 @@ function Login() {
     [error, setError] = useState("");
   return (
     <div className="login">
+      <BrandVideo />
       <section className="login-story">
-        <BrandVideo />
         <div className="login-brand">
           <BrandMark />
         </div>
