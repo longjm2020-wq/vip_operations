@@ -21,11 +21,13 @@ const normalize = (s: string) =>
     .replaceAll("（", "(")
     .replaceAll("）", ")")
     .toUpperCase();
+const creationKeys = new Set([
+  "styleNo",
+  "name",
+  "mainImageUrl",
+  "supplierStyleCode",
+]);
 const readonlyHeaders = [
-  "图片",
-  "款号",
-  "商品名称",
-  "供应商款式编码",
   "采购在途数",
   "在途数量",
   "调拨在途数",
@@ -85,7 +87,13 @@ export function parseInventoryRows(rows: string[][], warehouseId?: string) {
       if (!field || !value) return;
       if (field.key === "skuCode" || field.key === "warehouse")
         input[field.key] = value;
-      else {
+      else if (creationKeys.has(field.key)) {
+        // Embedded images and display labels are not URL values.
+        if (field.key === "mainImageUrl" && !/^https?:\/\//i.test(value))
+          return;
+        input.creation ||= {};
+        input.creation[field.key] = value;
+      } else {
         let v: string | number = value;
         if ("number" in field) {
           v = Number(value.replaceAll(",", "").replace(/%$/, ""));
@@ -146,7 +154,9 @@ export function parseInventoryRows(rows: string[][], warehouseId?: string) {
         parsed.error.issues
           .map((issue) => {
             const key =
-              issue.path[0] === "changes" ? issue.path[1] : issue.path[0];
+              issue.path[0] === "changes" || issue.path[0] === "creation"
+                ? issue.path[1]
+                : issue.path[0];
             const col =
               key === undefined
                 ? -1
@@ -176,7 +186,10 @@ export function parseInventoryRows(rows: string[][], warehouseId?: string) {
   return {
     entries,
     names: [...names],
-    ignored: header.filter((label, i) => label.trim() && !mapping[i]),
+    ignored: header.filter(
+      (label, i) =>
+        label.trim() && (!mapping[i] || creationKeys.has(mapping[i]!.key)),
+    ),
   };
 }
 export type ImportProgress = {
@@ -184,60 +197,102 @@ export type ImportProgress = {
   total: number;
   saved: number;
   failed: number;
+  firstError?: string;
 };
+export type BatchResult = { key: string; saved: boolean; error?: string };
 export async function importInventoryRows(
   entries: Entry[],
-  submit: (entry: Entry) => Promise<unknown>,
+  submit: (entries: Entry[]) => Promise<BatchResult[]>,
   onProgress: (progress: ImportProgress) => void,
 ) {
-  const updated = [...entries],
-    queues: number[][] = Array.from({ length: 4 }, () => []);
+  const updated = [...entries];
   let saved = entries.filter((e) => e.saved).length,
     completed = saved,
     failed = 0,
     lastProgress = 0;
+  let firstError: string | undefined;
   const publish = (force = false) => {
     const now = Date.now();
     if (force || now - lastProgress >= 500) {
-      onProgress({ completed, total: entries.length, saved, failed });
+      onProgress({
+        completed,
+        total: entries.length,
+        saved,
+        failed,
+        ...(firstError ? { firstError } : {}),
+      });
       lastProgress = now;
     }
   };
-  // Keep rows for the same SKU in file order, including rows in different warehouses.
+  const queues = new Map<string, { indices: number[]; offset: number }>();
   entries.forEach((entry, index) => {
     if (entry.saved) return;
-    let lane = 0;
-    for (const char of entry.input.skuCode)
-      lane = (lane * 31 + char.charCodeAt(0)) % queues.length;
-    queues[lane].push(index);
+    let queue = queues.get(entry.input.skuCode);
+    if (!queue) {
+      queue = { indices: [], offset: 0 };
+      queues.set(entry.input.skuCode, queue);
+    }
+    queue.indices.push(index);
   });
   publish(true);
-  await Promise.all(
-    queues.map(async (queue) => {
-      for (const index of queue) {
-        try {
-          await submit(updated[index]);
+  while (queues.size) {
+    const indices: number[] = [];
+    // Group adjacent multi-warehouse rows without degrading into tiny requests.
+    // Each SKU retains its own file order; distinct SKUs can share a batch.
+    for (const [code, queue] of queues) {
+      indices.push(queue.indices[queue.offset++]);
+      if (queue.offset === queue.indices.length) queues.delete(code);
+      if (indices.length === inventoryImportLimits.batchSize) break;
+    }
+    try {
+      const result = await submit(indices.map((i) => updated[i]));
+      const byKey = new Map(result.map((r) => [r.key, r]));
+      if (
+        result.length !== indices.length ||
+        indices.some((i) => !byKey.has(updated[i].key))
+      )
+        throw Error("导入响应不完整，请直接重试核对结果");
+      for (const index of indices) {
+        const r = byKey.get(updated[index].key)!;
+        updated[index] = {
+          ...updated[index],
+          saved: r.saved,
+          error: r.saved ? undefined : r.error || "导入失败",
+          uncertain: false,
+        };
+        if (r.saved) saved++;
+        else {
+          failed++;
+          firstError ||= `第 ${updated[index].line} 行：${updated[index].error}`;
+        }
+        completed++;
+      }
+    } catch (e) {
+      const status = (e as Error & { status?: number }).status;
+      for (const index of indices)
+        updated[index] = {
+          ...updated[index],
+          error: (e as Error).message,
+          uncertain: !status || status >= 500,
+        };
+      failed += indices.length;
+      completed += indices.length;
+      firstError ||= `第 ${updated[indices[0]].line} 行：${(e as Error).message}`;
+      // A disconnected/auth-expired request must not cascade through the whole file.
+      for (const queue of queues.values())
+        for (const index of queue.indices.slice(queue.offset)) {
           updated[index] = {
             ...updated[index],
-            saved: true,
-            error: undefined,
-            uncertain: false,
-          };
-          saved++;
-        } catch (e) {
-          const status = (e as Error & { status?: number }).status;
-          updated[index] = {
-            ...updated[index],
-            error: (e as Error).message,
-            uncertain: !status || status >= 500,
+            error: "尚未提交，请重试",
+            uncertain: updated[index].uncertain,
           };
           failed++;
         }
-        completed++;
-        publish();
-      }
-    }),
-  );
+      publish(true);
+      break;
+    }
+    publish();
+  }
   publish(true);
   return updated;
 }

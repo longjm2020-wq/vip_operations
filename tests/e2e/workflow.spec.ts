@@ -287,7 +287,7 @@ test("小卡片 Excel 库存导入，网络重试不重复增加库存", async (
   await login(page);
   let loseResponse = true;
   await page.route(
-    "**/api/v1/inventory/fulfilment/import-row",
+    "**/api/v1/inventory/fulfilment/import-batch",
     async (route) => {
       const response = await route.fetch();
       if (loseResponse) {
@@ -303,14 +303,12 @@ test("小卡片 Excel 库存导入，网络重试不重复增加库存", async (
     sheet = book.addWorksheet("数据");
   sheet.addRow(["商品编码", "仓库", "变化数量", "原因", "说明"]);
   sheet.addRow(["E2E-BK-L", "E2E-WH", 3, "人工调整", "导入盘点验收"]);
-  await page
-    .locator('.ant-modal input[type="file"]')
-    .setInputFiles({
-      name: "库存调整.xlsx",
-      mimeType:
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-      buffer: Buffer.from(await book.xlsx.writeBuffer()),
-    });
+  await page.locator('.ant-modal input[type="file"]').setInputFiles({
+    name: "库存调整.xlsx",
+    mimeType:
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    buffer: Buffer.from(await book.xlsx.writeBuffer()),
+  });
   await expect(page.getByText(/共 1 行，更新列/)).toBeVisible();
   await page.getByRole("button", { name: "确认导入", exact: true }).click();
   await expect(page.getByText(/导入成功 0 行，失败 1 行/)).toBeVisible();

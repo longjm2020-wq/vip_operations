@@ -157,7 +157,7 @@ describe("large inventory imports", () => {
       "500 行",
     );
   });
-  it("processes 50000 records with at most four active requests and bounded progress updates", async () => {
+  it("processes 50000 records in 50 bounded requests with bounded progress updates", async () => {
     const entries = Array.from({ length: 50000 }, (_, i) => entry(i));
     let active = 0,
       peak = 0,
@@ -165,17 +165,19 @@ describe("large inventory imports", () => {
     const progress: ImportProgress[] = [];
     const result = await importInventoryRows(
       entries,
-      async () => {
+      async (batch) => {
+        expect(batch.length).toBeLessThanOrEqual(1000);
         active++;
         peak = Math.max(peak, active);
         await Promise.resolve();
         active--;
         count++;
+        return batch.map((e) => ({ key: e.key, saved: true }));
       },
       (value) => progress.push(value),
     );
-    expect(count).toBe(50000);
-    expect(peak).toBe(4);
+    expect(count).toBe(50);
+    expect(peak).toBe(1);
     expect(result.every((e) => e.saved)).toBe(true);
     expect(entries.every((e) => !e.saved)).toBe(true);
     expect(progress.length).toBeLessThan(20);
@@ -194,12 +196,16 @@ describe("large inventory imports", () => {
       order: number[] = [];
     await importInventoryRows(
       entries,
-      async (e) => {
-        expect(active.has(e.input.skuCode)).toBe(false);
-        active.add(e.input.skuCode);
+      async (batch) => {
+        expect(new Set(batch.map((e) => e.input.skuCode)).size).toBe(
+          batch.length,
+        );
         await Promise.resolve();
-        order.push(e.line);
-        active.delete(e.input.skuCode);
+        for (const e of batch) {
+          expect(active.has(e.input.skuCode)).toBe(false);
+          order.push(e.line);
+        }
+        return batch.map((e) => ({ key: e.key, saved: true }));
       },
       () => {},
     );
@@ -214,22 +220,114 @@ describe("large inventory imports", () => {
     const entries = Array.from({ length: 8 }, (_, i) => entry(i));
     const first = await importInventoryRows(
       entries,
-      async (e) => {
-        if (e.line === 5)
-          throw Object.assign(new Error("连接中断"), { status: 502 });
-      },
+      async (batch) =>
+        batch.map((e) => ({
+          key: e.key,
+          saved: e.line !== 5,
+          error: e.line === 5 ? "仓库未找到" : undefined,
+        })),
       () => {},
     );
-    expect(first[3].uncertain).toBe(true);
+    expect(first[3].uncertain).toBe(false);
     const submitted: string[] = [];
     const second = await importInventoryRows(
       first,
-      async (e) => {
-        submitted.push(e.key);
+      async (batch) => {
+        submitted.push(...batch.map((e) => e.key));
+        return batch.map((e) => ({ key: e.key, saved: true }));
       },
       () => {},
     );
     expect(submitted).toEqual([entries[3].key]);
     expect(second.every((e) => e.saved && !e.uncertain && !e.error)).toBe(true);
+  });
+  it("batches adjacent multi-warehouse rows instead of sending one request per SKU occurrence", async () => {
+    const entries = Array.from({ length: 6885 }, (_, i) =>
+      entry(i, "SKU-" + Math.floor(i / 2)),
+    );
+    let count = 0;
+    const order = new Map<string, number[]>();
+    const result = await importInventoryRows(
+      entries,
+      async (batch) => {
+        count++;
+        expect(new Set(batch.map((e) => e.input.skuCode)).size).toBe(
+          batch.length,
+        );
+        for (const e of batch) {
+          const values = order.get(e.input.skuCode) || [];
+          values.push(e.line);
+          order.set(e.input.skuCode, values);
+        }
+        return batch.map((e) => ({ key: e.key, saved: true }));
+      },
+      () => {},
+    );
+    expect(count).toBeLessThanOrEqual(8);
+    expect(result.every((e) => e.saved)).toBe(true);
+    for (const values of order.values())
+      expect(values).toEqual([...values].sort((a, b) => a - b));
+  });
+  it("keeps creation metadata separate from partial updates", () => {
+    const result = parseInventoryRows([
+      [
+        "商品编码",
+        "款号",
+        "商品名称",
+        "图片",
+        "供应商款式编码",
+        "颜色",
+        "尺码",
+      ],
+      [
+        "001234",
+        "STYLE",
+        "衬衫",
+        "https://example.com/a.jpg",
+        "S-1",
+        "白色",
+        "L",
+      ],
+    ]);
+    expect(result.entries[0].input.creation).toEqual({
+      styleNo: "STYLE",
+      name: "衬衫",
+      mainImageUrl: "https://example.com/a.jpg",
+      supplierStyleCode: "S-1",
+    });
+    expect(result.entries[0].input.changes).toEqual({
+      colorName: "白色",
+      sizeName: "L",
+    });
+  });
+  it("stops on lost responses and retries original keys including unsubmitted chunks", async () => {
+    const entries = Array.from({ length: 2001 }, (_, i) => entry(i));
+    let calls = 0;
+    const result = await importInventoryRows(
+      entries,
+      async () => {
+        calls++;
+        throw Object.assign(Error("连接中断"), { status: 502 });
+      },
+      () => {},
+    );
+    expect(calls).toBe(1);
+    expect(result.slice(0, 1000).every((e) => e.uncertain)).toBe(true);
+    expect(
+      result
+        .slice(1000)
+        .every((e) => !e.uncertain && e.error === "尚未提交，请重试"),
+    ).toBe(true);
+    const keys: string[] = [];
+    const retry = await importInventoryRows(
+      result,
+      async (batch) => {
+        keys.push(...batch.map((e) => e.key));
+        return batch.map((e) => ({ key: e.key, saved: true }));
+      },
+      () => {},
+    );
+    expect(keys).toEqual(entries.map((e) => e.key));
+    expect(retry.every((e) => e.saved)).toBe(true);
   });
 });

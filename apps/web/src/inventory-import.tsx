@@ -95,27 +95,39 @@ export function InventoryImport({
   };
   const save = async () => {
     if (locked.current || !entries.length) return;
+    const missing = entries.find(
+      (e) =>
+        !e.saved &&
+        (e.input.changes.physicalQty !== undefined ||
+          e.input.changes.quantity !== undefined) &&
+        !e.input.warehouse &&
+        !e.input.warehouseId,
+    );
+    if (missing) {
+      setError(`第 ${missing.line} 行：修改库存需填写仓库列或选择导入仓库`);
+      return;
+    }
     locked.current = true;
     attempted.current = true;
     setBusy(true);
     setError("");
+    const started = performance.now();
     try {
       const updated = await importInventoryRows(
         entries,
-        (entry) =>
-          api(
-            "/inventory/fulfilment/import-row",
-            "POST",
-            entry.input,
-            entry.key,
-          ),
+        async (batch) =>
+          (
+            await api("/inventory/fulfilment/import-batch", "POST", {
+              rows: batch.map(({ key, input }) => ({ key, input })),
+            })
+          ).data.results,
         setProgress,
       );
       setEntries(updated);
       const saved = updated.filter((e) => e.saved).length,
         failed = updated.length - saved;
       setReport(
-        `导入成功 ${saved} 行，失败 ${failed} 行。${failed ? "重试仅提交失败行。修正文件重新导入时，请仅保留失败行。" : ""}`,
+        `导入成功 ${saved} 行，失败 ${failed} 行。本次保存用时 ${((performance.now() - started) / 1000).toFixed(1)} 秒。${failed ? "重试仅提交失败行。修正文件重新导入时，请仅保留失败行。" : ""}`,
       );
       await queryClient.invalidateQueries();
     } finally {
@@ -157,7 +169,11 @@ export function InventoryImport({
             disabled={!hasPending || !!error || reading}
             onClick={save}
           >
-            {attempted.current && hasPending ? "重试失败行" : "确认导入"}
+            {busy
+              ? "正在导入"
+              : attempted.current && hasPending
+                ? "重试失败行"
+                : "确认导入"}
           </Button>
         </Space>
       }
@@ -211,7 +227,7 @@ export function InventoryImport({
                 })),
                 [],
                 [
-                  "商品编码使用内部 SKU 编码；仅修改已有资料，不会创建 SKU。",
+                  "商品编码使用内部 SKU 编码；未建档商品首次导入需填写款号、颜色和尺码，需要商品新建权限。新款默认归入导入待分类，可在商品档案完善品类。",
                   "首行保留列名，可删除不需要修改的列；空白单元格保留原值。",
                   "上传后点击确认导入才保存；编码、条码请使用文本格式，公式请粘贴为值。",
                   "在仓库存数为调整后的绝对数量，变化数量为增减数量，两者每行只能填一项；修改库存必须填写仓库或选择导入仓库。",
@@ -231,8 +247,7 @@ export function InventoryImport({
         </Button>
       </div>
       <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
-        商品编码按 SKU
-        编码精确匹配；空白单元格保留原值。颜色、尺码和条码修改需要商品编辑权限。库存或经营参考修改需要库存调整权限。
+        已有商品按编码更新，空白单元格保留原值。首次导入需款号、颜色、尺码及商品新建权限，新款归入「导入待分类」。图片（链接）、款号、商品名称、供应商款式编码仅用于新款建档。修改资料需商品编辑权限，修改库存或参考值需库存调整权限。
       </Typography.Paragraph>
       {canStock && (
         <Space style={{ marginBottom: 12 }}>
@@ -298,7 +313,7 @@ export function InventoryImport({
       )}
       {!!ignored.length && (
         <Typography.Paragraph type="secondary">
-          只读列将保留原值：{ignored.join("、")}
+          已有资料保留原值（新款可用于建档）：{ignored.join("、")}
         </Typography.Paragraph>
       )}
       {error && <Alert type="error" title={error} showIcon />}
@@ -320,6 +335,9 @@ export function InventoryImport({
             正在导入：{progress.completed} / {progress.total} 行，成功{" "}
             {progress.saved} 行，失败 {progress.failed} 行
           </Typography.Text>
+          {progress.firstError && (
+            <Alert type="warning" title={progress.firstError} showIcon />
+          )}
         </div>
       )}
       {!busy && !!failures.length && (

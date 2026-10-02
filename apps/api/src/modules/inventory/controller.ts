@@ -4,9 +4,13 @@ import { parse, id, requirePermission, fail } from "../../core.js";
 import { db, rows } from "../../../../../packages/database/src/index.js";
 import * as flow from "./fulfilment.js";
 import { importInventoryRow } from "./import.js";
+import { importInventoryBatch } from "./import-batch.js";
 const param = (v: string) => parse(id, v);
 @Controller("api/v1/inventory/fulfilment")
 export class InventoryFulfilmentController {
+  @Post("import-batch") importBatch(@Req() r: AuthRequest, @Body() b: unknown) {
+    return importInventoryBatch(context(r), b);
+  }
   @Post("import-row") importRow(@Req() r: AuthRequest, @Body() b: unknown) {
     return importInventoryRow(context(r), b);
   }

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import { testInventoryImportBatch } from "./inventory-import-batch.js";
 export async function testInventoryFlow(h: Record<string, any>) {
   const { owner, vendor, other, ok, request, db, profile, pass } = h;
   const root = "/inventory/fulfilment",
@@ -623,4 +624,5 @@ export async function testInventoryFlow(h: Record<string, any>) {
   pass(
     "库存导入：精确匹配、仅改提供列、整行回滚、权限与缺失编码、绝对库存和幂等重试",
   );
+  await testInventoryImportBatch(h, warehouses[0]);
 }

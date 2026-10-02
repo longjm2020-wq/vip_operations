@@ -2,6 +2,7 @@ import { z } from "zod";
 export const inventoryImportLimits = {
   maxFileSizeMB: 100,
   maxRows: 50000,
+  batchSize: 1000,
 } as const;
 export const inventoryImportFields = [
   {
@@ -10,6 +11,10 @@ export const inventoryImportFields = [
     aliases: ["SKU", "SKU 编码", "SKU编码"],
     required: true,
   },
+  { key: "styleNo", label: "款号", aliases: [] },
+  { key: "name", label: "商品名称", aliases: [] },
+  { key: "mainImageUrl", label: "图片", aliases: ["图片链接"] },
+  { key: "supplierStyleCode", label: "供应商款式编码", aliases: [] },
   { key: "colorName", label: "颜色", aliases: ["颜色名称"] },
   { key: "sizeName", label: "尺码", aliases: ["尺码名称"] },
   { key: "barcode", label: "条码", aliases: [] },
@@ -45,6 +50,19 @@ export const inventoryImportSchema = z
     warehouseId: z
       .string()
       .regex(/^[1-9][0-9]*$/)
+      .optional(),
+    creation: z
+      .object({
+        styleNo: z.string().trim().min(1).max(64).optional(),
+        name: z.string().trim().min(1).max(255).optional(),
+        mainImageUrl: z
+          .url()
+          .max(2048)
+          .regex(/^https?:\/\//i, "图片请填写 http 或 https 链接")
+          .optional(),
+        supplierStyleCode: text.optional(),
+      })
+      .strict()
       .optional(),
     changes: z
       .object({

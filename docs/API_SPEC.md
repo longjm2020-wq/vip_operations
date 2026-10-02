@@ -75,6 +75,9 @@ Product筛选 q（款号/名称）、categoryId、brandId、supplierId、year、
 | POST transfers/:id/dispatch、cancel | version,shipment；version,reason | inventory.adjust |
 | POST references/:skuId | articleNo,dailySales,returnRate(0..1),estimatedReturns,targetDays,sourceNote,referenceDate | inventory.adjust |
 | POST import-row | skuCode,warehouse 或 warehouseId,changes（仅提供列）；按 SKU 精确匹配，行内原子更新，库存走不可改流水，幂等重试 | inventory.read；规格资料 product.update，参考/库存 inventory.adjust |
+| POST import-batch | rows:[key,input]，每批最多1000行且同批商品编码/键不可重复；input沿用import-row并可含creation:{styleNo,name?,mainImageUrl?,supplierStyleCode?}；返回results:[key,saved,result?,code?,error?] | inventory.read；更新规格 product.update，首次建档 product.create，参考/库存 inventory.adjust |
+
+`import-batch` 先验证每行业务条件再按实体批量写入，业务失败行没有写入，其余行正常提交；数据库异常使整批回滚。未知 SKU 须提供款号、颜色、尺码，关联启用的已有款或新建「导入待分类」商品，复用或分配有效颜色/尺码映射；不猜测编码含义。creation 仅用于首次建档，不更新已有商品资料。每行 key 与旧 import-row 共用 actor+operation+key 的请求哈希和成功响应，网络重试、并发重复与切换接口不会重复写库存；当前权限仍须满足。单批超时30秒，客户端保持原键并停止提交后续批次以便重试。
 
 `shipment` 使用 DELIVERY 或 COURIER。DELIVERY 每包裹生成四位随机码；仅发货人/对应供应商可从查询取码；接收方核验十次错误限流十五分钟。COURIER 要求白名单快递公司与6至32位字母数字单号。签收仅转包裹 DELIVERED，不计仓库库存。物流 worker 的持久 claim/token 防止旧轨迹覆盖更正单号。
 
