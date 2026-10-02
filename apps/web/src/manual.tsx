@@ -7,6 +7,7 @@ import { api } from "./api";
 import { Alert, Spin } from "antd";
 
 const moduleChapters: Record<string, string> = {
+  "my-workspace": "32-personal-workspace",
   analytics: "30-compass-analytics",
   products: "02-products",
   skus: "03-skus",
@@ -31,6 +32,7 @@ const moduleChapters: Record<string, string> = {
   vip: "19-vip",
 };
 export function manualHref(path: string) {
+  if(path.startsWith("/settings/ai")) return "/help?chapter=31-ai-settings.md";
   if (path.startsWith("/supply/reconciliation"))
     return "/help?chapter=25-supply-statements.md";
   if (path.startsWith("/supply/statements"))
@@ -58,7 +60,7 @@ export function manualHref(path: string) {
 export function ManualPage() {
   const user = useUser();
   const manual = useQuery<{ id: string; title: string; text: string }[]>({
-    queryKey: ["help", user.id, user.permissions],
+    queryKey: ["help", user.id, user.permissions, user.roleCodes],
     queryFn: async () => (await api("/help")).data,
     staleTime: 0,
     refetchInterval: 15000,

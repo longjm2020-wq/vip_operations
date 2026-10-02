@@ -43,7 +43,7 @@ export function OperationsWorkspacePage() {
   ].filter((e) => e.visible);
   return (
     <div className="operations-workspace">
-      <Header title="运营工作台" subtitle="按平台查看运营工具" />
+      <Header title="运营中心" subtitle="按平台查看运营工具" />
       <Tabs
         aria-label="运营平台"
         activeKey={platform}

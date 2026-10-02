@@ -5,7 +5,7 @@ test("mobile capture saves wash label photos independently without a color", asy
   await page.getByLabel("用户名", { exact: true }).fill("admin");
   await page.getByLabel("密码", { exact: true }).fill(process.env.E2E_PASSWORD!);
   await page.getByRole("button", { name: "进入工作台" }).click();
-  await expect(page.getByRole("heading", { name: "商品档案" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "我的工作台" })).toBeVisible();
 
   await page.goto("/mobile/style-photos");
   await page.getByRole("button", { name: "新增款式" }).click();

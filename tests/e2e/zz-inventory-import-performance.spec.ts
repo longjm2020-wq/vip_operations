@@ -11,7 +11,7 @@ test("6885 行首次库存导入：浏览器读取与真实建档保存在 15 �
     .getByLabel("密码", { exact: true })
     .fill(process.env.E2E_PASSWORD!);
   await page.getByRole("button", { name: "进入工作台" }).click();
-  await expect(page.getByRole("heading", { name: "商品档案" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "我的工作台" })).toBeVisible();
   const me = (await (await page.request.get("/api/v1/auth/me")).json()).data;
   const response = await page.request.post("/api/v1/warehouses", {
     headers: {

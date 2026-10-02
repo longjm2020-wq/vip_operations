@@ -291,6 +291,11 @@ export async function testCompassAnalytics(h: Record<string, any>) {
       "SORT-A",
     );
     assert.equal((await request(endpoint + "?sort=not-a-metric")).status, 400);
+    assert.equal(
+      (await ok(`${endpoint}?days=30&pageSize=1000`)).items.length,
+      3,
+    );
+    assert.equal((await request(endpoint + "?pageSize=1001")).status, 400);
   } finally {
     await db.$executeRawUnsafe(
       "UPDATE compass_active_imports SET import_id=$1::bigint WHERE dimension='style'",
@@ -309,6 +314,7 @@ export async function testCompassAnalytics(h: Record<string, any>) {
         displayName: "测试管理员",
         username: "admin",
         permissions: ["analytics.manage"],
+        roleCodes: ["SUPER_ADMIN"],
       },
       requestId: randomUUID(),
       key: randomUUID(),
@@ -322,6 +328,16 @@ export async function testCompassAnalytics(h: Record<string, any>) {
     COMPASS_AI_ENDPOINT,
     COMPASS_AI_MODEL,
   } = await import("../../apps/api/src/modules/analytics/ai.js");
+  for (const [path,method,body] of [["ai-settings","GET",undefined],["ai-settings","POST",{enabled:false}],["ai-test","POST",{}]] as const)
+    assert.equal((await request(`${endpoint}/${path}`,method,body)).status,403,"普通管理员不能配置模型");
+  assert.ok(!(await ok("/help")).some((chapter:any)=>chapter.id==="31-ai-settings.md"));
+  await db.$executeRawUnsafe("INSERT INTO user_roles(user_id,role_id) SELECT $1::bigint,id FROM roles WHERE code='SUPER_ADMIN' ON CONFLICT DO NOTHING",admin.id);
+  try {
+    assert.equal((await request(`${endpoint}/ai-settings`)).status,200);
+    assert.ok((await ok("/help")).some((chapter:any)=>chapter.id==="31-ai-settings.md"));
+  } finally {
+    await db.$executeRawUnsafe("DELETE FROM user_roles WHERE user_id=$1::bigint AND role_id=(SELECT id FROM roles WHERE code='SUPER_ADMIN')",admin.id);
+  }
   const { collectCompassBundle } =
     await import("../../apps/api/src/modules/analytics/report-data.js");
   const aiKey = "sk-or-v1-test-never-log-this-key",
@@ -421,10 +437,10 @@ export async function testCompassAnalytics(h: Record<string, any>) {
   }) as typeof fetch;
   let aiBundle: any;
   try {
-    await testAIConnection();
+    await testAIConnection(c);
     assert.equal(testCalls, 1);
     await assert.rejects(
-      testAIConnection,
+      () => testAIConnection(c),
       (e: any) => e.getResponse().error.code === "AI_TEST_WAIT",
     );
     aiBundle = await collectCompassBundle(end);
@@ -441,8 +457,15 @@ export async function testCompassAnalytics(h: Record<string, any>) {
     assert.equal((await ensureAIAnalysis(aiBundle)).state, "READY");
     assert.equal(aiCalls, 1, "identical data reuses successful analysis");
     assert.equal((await getAIReport()).responseModel, COMPASS_AI_MODEL);
+    const visual=(await getAIReport()).visuals!;
+    assert.equal(visual.dailyStyle.length,30);
+    assert.equal(visual.dimensions.length,3);
+    assert.equal(visual.dimensions.find(d=>d.dimension==="barcode")!.top10[0].code,"000012345");
     const generatedAPI = await ok(endpoint + "/ai-generate", "POST", {});
     assert.equal(generatedAPI.state, "READY");
+    await db.$executeRawUnsafe("UPDATE compass_ai_reports SET visual_data=NULL WHERE id=$1::bigint",generatedAPI.id);
+    assert.deepEqual((await getAIReport()).visuals,visual,"旧缓存补存同一批图表快照");
+    assert.equal(aiCalls,1,"图表升级不会再次调用模型");
     assert.equal(
       aiCalls,
       1,
@@ -545,7 +568,7 @@ export async function testCompassAnalytics(h: Record<string, any>) {
       returnStatus = 402;
       globalThis.fetch = (async () =>
         new Response("", { status: returnStatus })) as typeof fetch;
-      await assert.rejects(testAIConnection, (e: any) =>
+      await assert.rejects(() => testAIConnection(c), (e: any) =>
         e.getResponse().error.message.includes("余额或密钥额度不足"),
       );
       assert.equal((await getAIReport()).state, "WAITING_VERIFICATION");

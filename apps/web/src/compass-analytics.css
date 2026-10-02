@@ -12,6 +12,28 @@
   gap: 8px;
   color: #907a6e;
 }
+.compass-recent-buttons {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+.compass-recent-buttons .ant-btn {
+  height: 30px;
+  padding-inline: 10px;
+  border: 1px solid transparent;
+  color: #786356;
+  border-radius: 6px;
+}
+.compass-recent-buttons .ant-btn[aria-pressed="true"] {
+  color: #c44f0a;
+  background: #fff0df;
+  border-color: #ebc5a6;
+  font-weight: 500;
+}
+.compass-recent-buttons .ant-btn:hover {
+  color: #c44f0a !important;
+  background: #fff2e4 !important;
+}
 .compass-date input {
   border: 1px solid #ead9cd;
   border-radius: 6px;
@@ -193,6 +215,41 @@
   color: #927c70;
   font-size: 12px;
 }
+.compass-detail-table .ant-table-body {
+  overscroll-behavior-y: contain;
+  scrollbar-width: thin;
+  scrollbar-color: #bca897 #f4eee8;
+}
+.compass-detail-table .ant-table-body::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.compass-detail-table .ant-table-body::-webkit-scrollbar-thumb {
+  background: #bca897;
+  border: 2px solid #f4eee8;
+  border-radius: 8px;
+}
+.compass-detail-table .ant-table-body::-webkit-scrollbar-track {
+  background: #f4eee8;
+}
+.compass-detail-table .ant-table-pagination {
+  margin-bottom: 0;
+  padding-top: 12px;
+  border-top: 1px solid #eee5df;
+}
+.compass-detail-table .ant-table-thead > tr > th.ant-table-column-sort,
+.compass-detail-table
+  .ant-table-thead
+  > tr
+  > th.ant-table-column-has-sorters:hover {
+  background: #fff2e4 !important;
+}
+.compass-detail-table .ant-table-tbody > tr > td.ant-table-column-sort {
+  background: #fff6ed !important;
+}
+.compass-detail-table .ant-table-tbody > tr:hover > td.ant-table-column-sort {
+  background: #fff0df !important;
+}
 .compass-image-button {
   padding: 0;
   border: 0;
@@ -273,37 +330,12 @@
   grid-template-columns: 1fr 1fr;
   gap: 0 16px;
 }
-.compass-ai {
-  margin-top: 20px;
-}
-.compass-ai small {
-  display: block;
-  color: #927c70;
-  margin-top: 12px;
-}
-.compass-ai summary {
-  cursor: pointer;
-  color: #c34d00;
-}
-.compass-ai-columns {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 24px;
-}
-.compass-ai-columns ul {
-  padding-left: 20px;
-  line-height: 1.9;
-}
 @media (max-width: 1150px) {
   .compass-kpis {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
   .compass-charts {
     grid-template-columns: 1fr;
-  }
-  .compass-ai-columns {
-    grid-template-columns: 1fr;
-    gap: 0;
   }
 }
 @media (max-width: 600px) {

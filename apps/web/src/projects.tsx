@@ -3,7 +3,7 @@ import { TreeSelect } from "antd";
 import { categoryTree } from "./category-tree";
 import { useState, useRef, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
   Alert,
   App,
@@ -44,7 +44,7 @@ import { FlowCanvas } from "./flow-canvas";
 import { projectPeriod, projectBaseName } from "./project-period";
 import { ProjectAttachments } from "./project-attachments";
 import "./projects.css";
-import { LibraryActions, LibraryToolbar, VisibilityTag, useLibraryView } from "./project-library";
+import { LibraryActions, LibraryToolbar, LibraryScope, VisibilityTag, useLibraryView } from "./project-library";
 import { visibilityOptions } from "../../../packages/contracts/src/project-library";
 const projectStates: Record<string, string> = {
   DRAFT: "草稿",
@@ -488,6 +488,7 @@ function RequirementsEditor({
 }
 export function SopPage() {
   const library=useLibraryView("sop");
+  const [params]=useSearchParams(), [scope,setScope]=useState("all");
   const { message } = App.useApp(),
     can = useCan("project.read"),
     user = useUser(),
@@ -498,6 +499,9 @@ export function SopPage() {
     [edit, setEdit] = useState<Row | null>(null),
     [settingsOpen, setSettingsOpen] = useState(false),
     [busy, setBusy] = useState(false);
+  const opened=useRef<string>("");
+  useEffect(()=>{const value=params.get("open") || "",selected=(list.data||[]).find((s:Row)=>String(s.id)===value);if(selected&&opened.current!==value){setView(selected);opened.current=value;}},[list.data,params]);
+  const displayed=(list.data||[]).filter((s:Row)=>(!dept||s.department===dept) && (scope==="all" || scope==="public" && s.visibility==="PUBLIC" || scope==="mine" && String(s.ownerId)===String(user.id)));
   const save = async () => {
     if (!edit) return;
     setBusy(true);
@@ -552,11 +556,11 @@ export function SopPage() {
           options={opt([...departments])}
           onChange={setDept}
         />
-        <LibraryToolbar kind="sop" view={library.view} onView={library.setView}/>
+        <Space><LibraryScope value={scope} onChange={setScope}/><LibraryToolbar kind="sop" view={library.view} onView={library.setView}/></Space>
       </div>
       {list.error && <Alert type="error" title={list.error.message} />}
       {library.view==="list" ? <Card><Table<Row> rowKey="id" loading={list.isLoading} pagination={{pageSize:20}} scroll={{x:850}}
-        dataSource={(list.data||[]).filter((s:Row)=>!dept||s.department===dept)} columns={[
+        dataSource={displayed} columns={[
           {title:"SOP名称",dataIndex:"name",render:(name:string,s:Row)=><Button type="link" onClick={()=>setView(s)}>{name}</Button>},
           {title:"岗位",dataIndex:"department"},
           {title:"环节",render:(_:unknown,s:Row)=>s.steps.length},
@@ -565,8 +569,7 @@ export function SopPage() {
           {title:"创建时间",dataIndex:"createdAt",render:when},
           {title:"操作",render:(_:unknown,s:Row)=><Space><Button type="link" onClick={()=>setView(s)}>打开</Button><LibraryActions kind="sop" row={s}/></Space>},
         ]}/></Card> : <div className="project-card-grid">
-        {(list.data || [])
-          .filter((s: Row) => !dept || s.department === dept)
+        {displayed
           .map((s: Row) => (
             <Card
               key={s.id}
@@ -1281,7 +1284,7 @@ export function ProjectsPage() {
           onChange={(e) => setFilters({ ...filters, to: e.target.value })}
         />
       </Space>
-      <div className="library-toolbar"><span>查看项目与协作进度</span><LibraryToolbar kind="project" view={library.view} onView={library.setView}/></div>
+      <div className="library-toolbar"><LibraryScope value={filters.scope || "all"} onChange={scope=>setFilters({...filters,scope})}/><LibraryToolbar kind="project" view={library.view} onView={library.setView}/></div>
       {list.error && <Alert type="error" title={list.error.message} />}
       {library.view==="list" ? <Card><Table<Row> rowKey="id" pagination={false} loading={list.isLoading} scroll={{x:950}} dataSource={(list.data||[]).slice(0,50)} columns={[
         {title:"项目名称",dataIndex:"name",render:(name:string,p:Row)=><Link to={`/projects/${p.id}`}>{name||"未命名草稿"}</Link>},

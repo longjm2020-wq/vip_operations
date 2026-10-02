@@ -64,7 +64,13 @@ export type CompassAIResult = {
   responseId?: string;
   usage?: Row;
   attempt?: number;
+  visuals?: ReturnType<typeof aiPayload>;
 };
+export function requireAIConfiguration(c: Context) {
+  requirePermission(c.actor, "analytics.manage");
+  if (!c.actor.roleCodes?.includes("SUPER_ADMIN"))
+    fail("FORBIDDEN", "仅超级管理员可以配置 AI 模型", 403);
+}
 function publicSettings(s: Row) {
   return {
     enabled: s.enabled,
@@ -77,13 +83,14 @@ function publicSettings(s: Row) {
     updatedAt: s.updated_at,
   };
 }
-export async function getAISettings() {
+export async function getAISettings(c: Context) {
+  requireAIConfiguration(c);
   return publicSettings(
     (await one(db, "SELECT * FROM compass_ai_settings WHERE id=1"))!,
   );
 }
 export async function saveAISettings(c: Context, input: unknown) {
-  requirePermission(c.actor, "analytics.manage");
+  requireAIConfiguration(c);
   const b = parse(aiSettingsSchema, input);
   if (b.clearKey && b.apiKey)
     fail("INVALID_AI_KEY", "清除密钥时不能同时填写新密钥", 400);
@@ -248,7 +255,8 @@ async function callOpenRouter(settings: Row, data: unknown, test = false) {
     usage: result.usage || {},
   };
 }
-export async function testAIConnection() {
+export async function testAIConnection(c: Context) {
+  requireAIConfiguration(c);
   const settings = await one(
     db,
     "UPDATE compass_ai_settings SET last_test_at=now() WHERE id=1 AND api_key_encrypted IS NOT NULL AND (last_test_at IS NULL OR last_test_at<now()-interval '1 minute') RETURNING *",
@@ -328,6 +336,7 @@ function publicReport(r: Row): CompassAIResult {
     model: r.model,
     reportDate: r.report_date,
     content: r.status === "READY" ? r.content : undefined,
+    visuals: r.status === "READY" ? r.visual_data || undefined : undefined,
     generatedAt: r.completed_at,
     responseModel: r.response_model,
     provider: r.provider,
@@ -389,6 +398,23 @@ export async function getAIReport(): Promise<CompassAIResult> {
     COMPASS_AI_MODEL,
     PROMPT_VERSION,
   );
+  // Upgrade existing cached reports without another paid model call.
+  if (report?.status === "READY" && !report.visual_data) {
+    const bundle = await collectCompassBundle(date);
+    if (!bundle || canonical(bundle.ids) !== canonical(report.imported_ids))
+      return {
+        state: "WAITING_DATA",
+        model: COMPASS_AI_MODEL,
+        message: "报表正在更新，请刷新后查看",
+      };
+    report.visual_data = aiPayload(bundle);
+    await rows(
+      db,
+      "UPDATE compass_ai_reports SET visual_data=$2::jsonb WHERE id=$1::bigint AND visual_data IS NULL",
+      report.id,
+      JSON.stringify(report.visual_data),
+    );
+  }
   return report
     ? publicReport(report)
     : {
@@ -454,13 +480,14 @@ export async function ensureAIAnalysis(
       return { existing: publicReport(previous) };
     const r = await one(
       tx,
-      "INSERT INTO compass_ai_reports(report_date,input_hash,imported_ids,model,prompt_version,status,claim_token) VALUES($1::date,$2,$3::jsonb,$4,$5,'GENERATING',$6) ON CONFLICT(input_hash) DO UPDATE SET status='GENERATING',claim_token=excluded.claim_token,attempt=compass_ai_reports.attempt+1,started_at=now(),error_note='' RETURNING id",
+      "INSERT INTO compass_ai_reports(report_date,input_hash,imported_ids,model,prompt_version,status,claim_token,visual_data) VALUES($1::date,$2,$3::jsonb,$4,$5,'GENERATING',$6,$7::jsonb) ON CONFLICT(input_hash) DO UPDATE SET status='GENERATING',claim_token=excluded.claim_token,visual_data=excluded.visual_data,attempt=compass_ai_reports.attempt+1,started_at=now(),error_note='' RETURNING id",
       bundle.date,
       inputHash,
       JSON.stringify(bundle.ids),
       COMPASS_AI_MODEL,
       PROMPT_VERSION,
       token,
+      JSON.stringify(payload),
     );
     return { id: r!.id };
   });

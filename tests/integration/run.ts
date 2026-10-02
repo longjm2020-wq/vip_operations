@@ -1013,6 +1013,8 @@ try {
   check("migrations rerun without modifying data");
   const {testCompassAnalytics}=await import("./compass-analytics.js");
   await testCompassAnalytics({ok,request,db,one,check,buyer});
+  const {testPersonalWorkspace}=await import("./personal-workspace.js");
+  await testPersonalWorkspace({ok,request,db,one,check,buyer});
   await writeFile(
     ".local/integration-result.json",
     JSON.stringify(

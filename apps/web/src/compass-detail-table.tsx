@@ -211,8 +211,9 @@ type Props = {
   data: Row;
   loading: boolean;
   page: number;
+  pageSize: number;
   sort: string;
-  onPage: (page: number) => void;
+  onPage: (page: number, pageSize: number) => void;
   onSort: (sort: string) => void;
   onDrill: (row: Row) => void;
 };
@@ -226,6 +227,7 @@ function DetailTable({
   data,
   loading,
   page,
+  pageSize,
   sort,
   onPage,
   onSort,
@@ -527,6 +529,7 @@ function DetailTable({
         loading={loading}
         columns={columns}
         scroll={{
+          y: "min(560px, 60vh)",
           x: columns.reduce(
             (sum, column) => sum + Number(column.width || 130),
             0,
@@ -534,9 +537,12 @@ function DetailTable({
         }}
         pagination={{
           current: page,
-          pageSize: 20,
+          pageSize,
           total: data.total,
-          showSizeChanger: false,
+          showTotal: (total) => `共 ${formatNumber(total)} 条`,
+          showSizeChanger: { "aria-label": "明细每页条数" },
+          pageSizeOptions: [20, 50, 100, 200, 500, 1000],
+          responsive: true,
           onChange: onPage,
         }}
         onChange={(_pagination, _filters, sorter, info) => {

@@ -3,6 +3,8 @@ import { BrandVideo } from "./brand-video";
 import React, { useState } from "react";
 const CompassAnalyticsPage = React.lazy(() => import("./compass-analytics").then(module => ({ default: module.CompassAnalyticsPage })));
 const OperationsWorkspacePage = React.lazy(() => import("./operations-workspace").then(module => ({ default: module.OperationsWorkspacePage })));
+const PersonalWorkspacePage = React.lazy(() => import("./personal-workspace").then(module => ({ default: module.PersonalWorkspacePage })));
+const CompassAISettingsPage = React.lazy(() => import("./compass-ai-settings").then(module => ({ default: module.CompassAISettingsPage })));
 const PublicSelectionCollection = React.lazy(() => import("./selection-collections").then(module => ({ default: module.PublicSelectionCollection })));
 const SelectionMobilePhotos = React.lazy(() => import("./selection-mobile-photos").then(module => ({ default: module.SelectionMobilePhotos })));
 import { createRoot } from "react-dom/client";
@@ -42,6 +44,7 @@ import {
   MenuFoldOutlined,
   MenuUnfoldOutlined,
   ArrowLeftOutlined,
+  HomeOutlined,
 } from "@ant-design/icons";
 import { api, queryClient, setCsrf } from "./api";
 import { UserContext, Row } from "./shared";
@@ -263,12 +266,13 @@ function Workspace({ user }: { user: Row }) {
         { key: "/users", label: "用户", permission: "user.read" },
         { key: "/roles", label: "角色权限", permission: "role.read" },
         { key: "/audit-logs", label: "操作日志", permission: "audit.read" },
+        ...(user.roleCodes?.includes("SUPER_ADMIN") ? [{ key: "/settings/ai", label: "AI 模型设置", permission: "analytics.manage" }] : []),
         { key: "/vip", label: "唯品会接入", permission: "vip.settings" },
       ],
     },
   ];
   const settings = originalItems.find((i) => i.key === "/settings")!;
-  const adminKeys = ["/users", "/roles", "/audit-logs"];
+  const adminKeys = ["/users", "/roles", "/audit-logs", "/settings/ai"];
   const operationKeys = ["/analytics/compass", "/style-selections"];
   const items = [
     ...(operationKeys.some((key) =>
@@ -276,7 +280,7 @@ function Workspace({ user }: { user: Row }) {
     )
       ? [{
           key: "/operations",
-          label: "运营工作台",
+          label: "运营中心",
           icon: <DatabaseOutlined />,
           permission: undefined,
           children: undefined,
@@ -382,6 +386,7 @@ function Workspace({ user }: { user: Row }) {
   const menu = visibleItems.map((item) => ({
     key: item.key,
     icon: item.icon,
+    popupClassName: item.children ? "workspace-menu-popup" : undefined,
     label: item.children ? item.label : (
       <Link
         to={
@@ -410,9 +415,7 @@ function Workspace({ user }: { user: Row }) {
         <Layout.Sider width={200} collapsed={ui.collapsed} className="sidebar">
           <Link
             to={
-              user.roleCodes?.includes("SUPPLIER")
-                ? "/supply/profile"
-                : "/products"
+              "/my-workspace"
             }
             className="brand"
           >
@@ -451,7 +454,7 @@ function Workspace({ user }: { user: Row }) {
                 }
               />
               <span className="workspace-title">
-                {activeWorkspace?.label || "使用手册"}
+                {location.pathname === "/my-workspace" ? "我的工作台" : activeWorkspace?.label || "使用手册"}
               </span>
             </div>
             <nav
@@ -469,6 +472,7 @@ function Workspace({ user }: { user: Row }) {
               ) : null}
             </nav>
             <Space className="topbar-actions" size={10}>
+              <Link to="/my-workspace" className="personal-workspace-entry" aria-current={location.pathname === "/my-workspace" ? "page" : undefined}><HomeOutlined aria-hidden="true" /> 我的工作台</Link>
               <Link
                 to={manualHref(location.pathname)}
                 target="_blank"
@@ -493,6 +497,8 @@ function Workspace({ user }: { user: Row }) {
           </Layout.Header>
           <Layout.Content className="content">
             <Routes>
+              <Route path="/my-workspace" element={<PersonalWorkspacePage key={user.id} />} />
+              <Route path="/settings/ai" element={<CompassAISettingsPage />} />
               <Route path="/supply/profile" element={<SupplyProfile />} />
               <Route path="/supply/products" element={<SupplyProducts />} />
               <Route path="/supply/orders" element={<SupplyOrders />} />
@@ -576,11 +582,7 @@ function Workspace({ user }: { user: Row }) {
                 element={
                   <Navigate
                     to={
-                      user.roleCodes?.includes("SUPPLIER")
-                        ? "/supply/profile"
-                        : user.roleCodes?.includes("SUPPLY_MANAGER")
-                          ? "/supply/review"
-                          : "/products"
+                      "/my-workspace"
                     }
                     replace
                   />
@@ -623,9 +625,10 @@ function Root() {
   if (
     me.data?.roleCodes?.includes("SUPPLIER") &&
     !location.pathname.startsWith("/supply/") &&
+    location.pathname !== "/my-workspace" &&
     location.pathname !== "/help"
   )
-    return <Navigate to="/supply/profile" replace />;
+    return <Navigate to="/my-workspace" replace />;
   if (me.data && location.pathname === "/mobile/style-photos") return <UserContext.Provider value={me.data}><SelectionWorkspace key={new URLSearchParams(location.search).get("tableId") || "default"} tableId={new URLSearchParams(location.search).get("tableId") || undefined}><SelectionMobilePhotos /></SelectionWorkspace></UserContext.Provider>;
   return me.data ? (
     <Workspace user={me.data} />

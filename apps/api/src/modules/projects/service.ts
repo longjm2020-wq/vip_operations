@@ -185,6 +185,7 @@ export async function list(c: Context, q: Row) {
       tag: z.string().max(100).optional(),
       page: z.coerce.number().int().min(1).max(100000).default(1),
       owner: id.optional(),
+      scope: z.enum(["all","public","mine"]).default("all"),
       objection: z.enum(["yes", "no"]).optional(),
       from: z
         .string()
@@ -199,7 +200,7 @@ export async function list(c: Context, q: Row) {
   );
   const result = await rows(
     db,
-    `SELECT p.*,p.created_at::text AS created_at,p.updated_at::text AS updated_at,p.published_at::text AS published_at,u.display_name AS owner_name,(SELECT jsonb_agg(jsonb_build_object('id',u2.id::text,'name',u2.display_name)) FROM project_members m JOIN users u2 ON u2.id=m.user_id WHERE m.project_id=p.id) AS members FROM projects p JOIN users u ON u.id=p.owner_id WHERE p.deleted_at IS NULL AND ${readableSql("project","p")} AND ($3::text IS NULL OR p.tag=$3) AND ($4::bigint IS NULL OR p.owner_id=$4::bigint) AND ($5::date IS NULL OR (p.created_at AT TIME ZONE 'Asia/Shanghai')::date >= $5::date) AND ($6::date IS NULL OR (p.created_at AT TIME ZONE 'Asia/Shanghai')::date <= $6::date) AND ($7::text IS NULL OR EXISTS(SELECT 1 FROM jsonb_array_elements(p.document->'tasks') t WHERE t->>'status'='DISPUTED')=($7='yes')) ORDER BY p.created_at DESC,p.id DESC LIMIT 51 OFFSET $8`,
+    `SELECT p.*,p.created_at::text AS created_at,p.updated_at::text AS updated_at,p.published_at::text AS published_at,u.display_name AS owner_name,(SELECT jsonb_agg(jsonb_build_object('id',u2.id::text,'name',u2.display_name)) FROM project_members m JOIN users u2 ON u2.id=m.user_id WHERE m.project_id=p.id) AS members FROM projects p JOIN users u ON u.id=p.owner_id WHERE p.deleted_at IS NULL AND ${readableSql("project","p")} AND ($3::text IS NULL OR p.tag=$3) AND ($4::bigint IS NULL OR p.owner_id=$4::bigint) AND ($5::date IS NULL OR (p.created_at AT TIME ZONE 'Asia/Shanghai')::date >= $5::date) AND ($6::date IS NULL OR (p.created_at AT TIME ZONE 'Asia/Shanghai')::date <= $6::date) AND ($7::text IS NULL OR EXISTS(SELECT 1 FROM jsonb_array_elements(p.document->'tasks') t WHERE t->>'status'='DISPUTED')=($7='yes')) AND ($9='all' OR ($9='public' AND p.visibility='PUBLIC') OR ($9='mine' AND p.owner_id=$2::bigint)) ORDER BY p.created_at DESC,p.id DESC LIMIT 51 OFFSET $8`,
     admin(c),
     c.actor.id,
     f.tag || null,
@@ -208,6 +209,7 @@ export async function list(c: Context, q: Row) {
     f.to || null,
     f.objection || null,
     (f.page - 1) * 50,
+    f.scope,
   );
   return result
     .filter(

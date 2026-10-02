@@ -5,7 +5,7 @@ test("selection presence publishes a cell and displays moving collaborator marke
   await page.getByLabel("用户名", { exact: true }).fill("admin");
   await page.getByLabel("密码", { exact: true }).fill(process.env.E2E_PASSWORD!);
   await page.getByRole("button", { name: "进入工作台" }).click();
-  await expect(page.getByRole("heading", { name: "商品档案" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "我的工作台" })).toBeVisible();
   let peerCell: { editingId: string; editingColumn: string } | null = null;
   await page.route("**/api/v1/style-selections/presence", async route => {
     if (route.request().method() !== "GET") return route.continue();

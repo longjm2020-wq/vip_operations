@@ -63,10 +63,11 @@ export class CompassAnalyticsController {
     return mail.mailHistory();
   }
   @Get("ai-settings") @Permission("analytics.manage") aiSettings(
+    @Req() r: AuthRequest,
     @Res({ passthrough: true }) res: Response,
   ) {
     res.setHeader("Cache-Control", "private, no-store");
-    return ai.getAISettings();
+    return ai.getAISettings(context(r));
   }
   @Post("ai-settings") @Permission("analytics.manage") saveAI(
     @Req() r: AuthRequest,
@@ -74,8 +75,8 @@ export class CompassAnalyticsController {
   ) {
     return ai.saveAISettings(context(r), b);
   }
-  @Post("ai-test") @Permission("analytics.manage") testAI() {
-    return ai.testAIConnection();
+  @Post("ai-test") @Permission("analytics.manage") testAI(@Req() r: AuthRequest) {
+    return ai.testAIConnection(context(r));
   }
   @Get("ai-report") @Permission("analytics.read") aiReport() {
     return ai.getAIReport();

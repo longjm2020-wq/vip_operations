@@ -657,11 +657,71 @@ pre {
   height: 64px;
 }
 .sidebar.ant-layout-sider-collapsed .brand {
-  padding: 0 20px;
+  padding: 0;
+  justify-content: center;
+}
+.sidebar.ant-layout-sider-collapsed .brand-wordmark {
+  width: 36px;
+  flex: 0 0 36px;
 }
 .brand-wordmark-collapsed::after {
-  inset: 0 auto 0 -10px;
-  width: 175px;
+  inset: 0;
+  width: 100%;
+  -webkit-mask-size: 190px auto;
+  mask-size: 190px auto;
+  -webkit-mask-position: -12.5px center;
+  mask-position: -12.5px center;
+}
+.sidebar.ant-layout-sider-collapsed .ant-menu-item-selected {
+  background: transparent !important;
+}
+.sidebar.ant-layout-sider-collapsed .ant-menu-item-selected .ant-menu-item-icon,
+.sidebar.ant-layout-sider-collapsed .ant-menu-submenu-selected > .ant-menu-submenu-title .ant-menu-item-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  margin-inline-start: -9px;
+  color: #fff;
+  background: #d3540b;
+  border-radius: 9px;
+  vertical-align: middle;
+}
+.sidebar.ant-layout-sider-collapsed .ant-menu-submenu-selected > .ant-menu-submenu-title {
+  background: transparent !important;
+}
+.personal-workspace-entry { white-space: nowrap; color: #786356; }
+.personal-workspace-entry[aria-current="page"] { color: #d3540b; }
+.workspace-menu-popup .ant-menu {
+  background: #fffcf8 !important;
+  border: 1px solid #ecdcd0;
+  border-radius: 10px;
+  padding: 6px;
+  box-shadow: 0 8px 24px rgb(53 37 31 / 14%);
+  min-width: 196px;
+  max-height: calc(100vh - 96px);
+  overflow-y: auto;
+}
+.workspace-menu-popup .ant-menu-item,
+.workspace-menu-popup .ant-menu-item a {
+  color: #59453a !important;
+  font-size: 13px;
+}
+.workspace-menu-popup .ant-menu-item {
+  height: 34px !important;
+  line-height: 34px !important;
+  border-radius: 6px;
+  margin-inline: 0 !important;
+  width: 100% !important;
+}
+.workspace-menu-popup .ant-menu-item:hover,
+.workspace-menu-popup .ant-menu-item-selected {
+  background: #fff0df !important;
+}
+.workspace-menu-popup .ant-menu-item-selected a,
+.workspace-menu-popup .ant-menu-item:hover a {
+  color: #c44f0a !important;
 }
 @keyframes brand-gradient-flow {
   0% {

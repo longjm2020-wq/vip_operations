@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { Response } from "express";
 import { AuthRequest } from "./http.js";
+import type { Actor } from "./core.js";
 
 export const manualPermissions: Record<string, string | null> = {
   "00-start": null,
@@ -36,7 +37,19 @@ export const manualPermissions: Record<string, string | null> = {
   "28-project-tables": "selection.read",
   "29-inventory-transfers": "inventory.read",
   "30-compass-analytics": "analytics.read",
+  "31-ai-settings": "analytics.manage",
+  "32-personal-workspace": null,
 };
+export function canReadManual(
+  actor: Actor,
+  id: string,
+  permission: string | null,
+) {
+  return (
+    (!permission || actor.permissions.includes(permission)) &&
+    (id !== "31-ai-settings" || !!actor.roleCodes?.includes("SUPER_ADMIN"))
+  );
+}
 @Controller("api/v1/help")
 export class ManualController {
   @Get()
@@ -47,9 +60,8 @@ export class ManualController {
     response.setHeader("Cache-Control", "private, no-store");
     return Promise.all(
       Object.entries(manualPermissions)
-        .filter(
-          ([, permission]) =>
-            !permission || request.actor.permissions.includes(permission),
+        .filter(([id, permission]) =>
+          canReadManual(request.actor, id, permission),
         )
         .map(async ([id]) => {
           const text = await readFile(

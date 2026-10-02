@@ -168,8 +168,16 @@ test("existing fields initialize without losing data and allow a saved tag type"
   await expect(manager.getByText("内置", { exact: true })).toHaveCount(0);
   await expect(manager.getByText("未设置", { exact: true })).toHaveCount(16);
   await page.getByRole("button", { name: "编辑字段颜色", exact: true }).click();
-  await page.getByLabel("字段类型", { exact: true }).click();
-  await page.getByText("自定义标签", { exact: true }).click();
+  const fieldType = page.getByRole("combobox", {
+    name: "字段类型",
+    exact: true,
+  });
+  await fieldType.click();
+  await page
+    .locator(".ant-select-dropdown:visible")
+    .getByText("自定义标签", { exact: true })
+    .click();
+  await expect(fieldType).toHaveAttribute("aria-expanded", "false");
   await page.getByRole("button", { name: "保存", exact: true }).click();
   await expect(
     page.locator('td[data-selection-column="color"] .selection-custom-tags'),

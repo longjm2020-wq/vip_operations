@@ -1,0 +1,195 @@
+.personal-workspace {
+  max-width: 1600px;
+  margin: auto;
+}
+.personal-welcome {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 24px;
+  padding: 26px;
+  margin: 16px 0;
+  border: 1px solid #ead8c9;
+  border-radius: 12px;
+  background: linear-gradient(120deg, #fff0df, #fffdfb);
+}
+.personal-welcome h2 {
+  margin: 12px 0 8px;
+  font-size: 25px;
+}
+.personal-welcome p,
+.personal-tool p {
+  color: #947c6d;
+  margin: 5px 0 0;
+}
+.personal-counts {
+  display: flex;
+  gap: 36px;
+  text-align: center;
+}
+.personal-counts strong {
+  display: block;
+  font-size: 30px;
+}
+.personal-counts span {
+  font-size: 12px;
+  color: #947c6d;
+}
+.personal-tools {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+.personal-tool {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 18px;
+  border: 1px solid #eee0d4;
+  border-radius: 9px;
+  color: #35251f;
+  transition: background 0.15s;
+}
+.personal-tool:hover {
+  background: #fff8ef;
+}
+.personal-tool-group {
+  color: #d3540b;
+  background: #fff0df;
+  border-radius: 8px;
+  padding: 12px 8px;
+  flex-shrink: 0;
+  font-size: 12px;
+}
+.personal-tool strong {
+  font-size: 16px;
+}
+.personal-tool p {
+  font-size: 12px;
+}
+.personal-tool > .anticon {
+  margin-left: auto;
+  color: #b39989;
+}
+.personal-lower {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr;
+  gap: 16px;
+  margin-top: 16px;
+  align-items: start;
+}
+.personal-content {
+  margin-top: 16px;
+}
+.personal-content-cards {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+.personal-content-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid #eee0d4;
+  border-radius: 8px;
+  padding: 16px;
+}
+.personal-content-item p {
+  font-size: 12px;
+  color: #947c6d;
+  margin: 8px 0 0;
+}
+.personal-content-item a {
+  overflow-wrap: anywhere;
+}
+.personal-content-list {
+  display: grid;
+  gap: 8px;
+}
+.personal-content-footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  align-items: center;
+  margin-top: 16px;
+}
+.personal-content-footer small {
+  color: #947c6d;
+}
+@media (max-width: 900px) {
+  .personal-content-cards {
+    grid-template-columns: 1fr;
+  }
+  .personal-content-footer {
+    flex-wrap: wrap;
+  }
+}
+.personal-todo-add {
+  display: flex;
+  gap: 8px;
+}
+.personal-todo-add input[type="date"] {
+  max-width: 150px;
+}
+.personal-todos {
+  max-height: 390px;
+  overflow: auto;
+  margin: 12px 0;
+}
+.personal-todo {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 0;
+  border-bottom: 1px solid #f0e8e1;
+}
+.personal-todo .ant-checkbox-wrapper {
+  flex: 1;
+  overflow-wrap: anywhere;
+}
+.personal-todo.done .ant-checkbox-label {
+  text-decoration: line-through;
+  color: #a08f84;
+}
+.personal-tool-options {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.personal-tool-order {
+  max-height: 270px;
+  overflow: auto;
+  margin-top: 18px;
+}
+.personal-tool-order > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px;
+  border-bottom: 1px solid #f0e8e1;
+}
+@media (max-width: 1150px) {
+  .personal-tools {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .personal-lower {
+    grid-template-columns: 1fr;
+  }
+}
+@media (max-width: 700px) {
+  .personal-tools {
+    grid-template-columns: 1fr;
+  }
+  .personal-welcome {
+    flex-direction: column;
+    align-items: start;
+    padding: 18px;
+  }
+  .personal-todo-add {
+    flex-wrap: wrap;
+  }
+  .personal-todo-add > .ant-input:first-child {
+    width: 100%;
+  }
+}

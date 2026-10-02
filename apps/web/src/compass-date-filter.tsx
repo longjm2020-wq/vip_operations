@@ -33,20 +33,41 @@ export function CompassDateFilter({
   return (
     <Space wrap className="compass-date-filter">
       <span className="secondary">统计日期</span>
+      <div
+        className="compass-recent-buttons"
+        role="group"
+        aria-label="快捷统计日期"
+      >
+        {compassRecentDays.map((days) => {
+          const value = `recent:${days}` as CompassPeriod;
+          return (
+            <Button
+              key={days}
+              type="text"
+              size="small"
+              aria-pressed={period === value}
+              onClick={() =>
+                onChange(
+                  value,
+                  range
+                    ? compassPeriodRange(value, displayed[1], maxEnd)
+                    : null,
+                )
+              }
+            >
+              近 {days} 天
+            </Button>
+          );
+        })}
+      </div>
       <Tooltip title="最近周期相对截止日期；自然周从周一开始，当前自然周期截至昨日。">
         <Select
           aria-label="统计日期"
           style={{ width: 120 }}
           virtual={false}
-          value={period}
+          placeholder="更多周期"
+          value={period.startsWith("recent:") ? undefined : period}
           options={[
-            {
-              label: "最近",
-              options: compassRecentDays.map((days) => ({
-                value: `recent:${days}`,
-                label: `近 ${days} 天`,
-              })),
-            },
             {
               label: "自然周期",
               options: [
@@ -61,8 +82,6 @@ export function CompassDateFilter({
           ]}
           onChange={(value: CompassPeriod) => {
             if (value === "custom") onChange(value, displayed);
-            else if (value.startsWith("recent:") && !range)
-              onChange(value, null);
             else
               onChange(value, compassPeriodRange(value, displayed[1], maxEnd));
           }}

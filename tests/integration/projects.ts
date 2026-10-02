@@ -217,8 +217,8 @@ try {
   );
   const expectedChapters = Object.entries(manualPermissions)
     .filter(
-      ([, permission]) =>
-        !permission || ownerPermissions.some((p) => p.code === permission),
+      ([id, permission]) =>
+        id!=="31-ai-settings" && (!permission || ownerPermissions.some((p) => p.code === permission)),
     )
     .map(([chapter]) => `${chapter}.md`);
   assert.deepEqual(

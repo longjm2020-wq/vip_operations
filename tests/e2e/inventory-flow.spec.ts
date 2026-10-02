@@ -10,7 +10,7 @@ test("库存管理：发货核销、SKU 差异质检、进货仓入库与人工�
     .getByLabel("密码", { exact: true })
     .fill(process.env.E2E_PASSWORD!);
   await page.getByRole("button", { name: "进入工作台" }).click();
-  await expect(page.getByRole("heading", { name: "商品档案" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "我的工作台" })).toBeVisible();
   await expect(
     page.getByRole("menuitem", { name: "SKU 管理", exact: true }),
   ).toHaveCount(0);

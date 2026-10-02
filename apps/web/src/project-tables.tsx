@@ -17,14 +17,15 @@ import {
 } from "antd";
 import { PlusOutlined } from "@ant-design/icons";
 import { api, queryClient } from "./api";
-import { Header, QueryState, useCan, type Row } from "./shared";
+import { Header, QueryState, useCan, useUser, type Row } from "./shared";
 import { StyleSelectionsPage } from "./style-selections";
 import { SelectionWorkspace } from "./selection-workspace";
-import { LibraryActions, LibraryToolbar, VisibilityTag, useLibraryView } from "./project-library";
+import { LibraryActions, LibraryToolbar, LibraryScope, VisibilityTag, useLibraryView } from "./project-library";
 import { visibilityOptions } from "../../../packages/contracts/src/project-library";
 
 export function ProjectTablesPage() {
   const library=useLibraryView("table","list");
+  const user=useUser(),[scope,setScope]=useState("all");
   const canCreate = useCan("selection.manage"),
     navigate = useNavigate(),
     { message } = App.useApp();
@@ -36,6 +37,7 @@ export function ProjectTablesPage() {
     queryFn: () => api("/project-tables"),
   });
   const [form] = Form.useForm();
+  const displayed=(tables.data?.data||[]).filter((row:Row)=>scope==="all" || scope==="public" && row.visibility==="PUBLIC" || scope==="mine" && String(row.createdBy)===String(user.id));
   return (
     <>
       <Header
@@ -59,20 +61,20 @@ export function ProjectTablesPage() {
         }
       />
       <QueryState error={tables.error} reload={() => void tables.refetch()} />
-      <div className="library-toolbar"><span>表格内容独立保存</span><LibraryToolbar kind="table" view={library.view} onView={library.setView}/></div>
+      <div className="library-toolbar"><LibraryScope value={scope} onChange={setScope}/><LibraryToolbar kind="table" view={library.view} onView={library.setView}/></div>
       {library.view==="card" ? <div className="library-card-grid">
-        {(tables.data?.data||[]).map((row:Row)=><Card key={row.id} hoverable onClick={()=>navigate(`/project-tables/${row.id}`)}>
+        {displayed.map((row:Row)=><Card key={row.id} hoverable onClick={()=>navigate(`/project-tables/${row.id}`)}>
           <div className="library-card-heading"><VisibilityTag value={row.visibility}/><LibraryActions kind="table" row={row}/></div>
           <h3><Link to={`/project-tables/${row.id}`}>{row.name}</Link></h3>
           <Typography.Text type="secondary">{row.createdByName}</Typography.Text>
           <footer>{new Date(row.createdAt).toLocaleString("zh-CN",{hour12:false})}</footer>
         </Card>)}
-        {!tables.isLoading&&!tables.data?.data?.length&&<Empty description="暂无表格，新建后即可开始录入"/>}
+        {!tables.isLoading&&!displayed.length&&<Empty description="暂无表格，新建后即可开始录入"/>}
       </div> : <Card>
         <Table
           rowKey="id"
           loading={tables.isLoading}
-          dataSource={tables.data?.data || []}
+          dataSource={displayed}
           pagination={{ pageSize: 20 }}
           locale={{
             emptyText: <Empty description="暂无表格，新建后即可开始录入" />,

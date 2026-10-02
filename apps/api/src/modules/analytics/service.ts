@@ -240,7 +240,7 @@ const querySchema = z.object({
   styleNo: z.string().max(150).default(""),
   articleNo: z.string().max(150).default(""),
   page: z.coerce.number().int().min(1).max(10000).default(1),
-  pageSize: z.coerce.number().int().min(1).max(100).default(20),
+  pageSize: z.coerce.number().int().min(1).max(1000).default(20),
   sort: z.enum(compassSortFields).default("salesAmount"),
 });
 const ratioSortInputs: Record<string, [string, string]> = {

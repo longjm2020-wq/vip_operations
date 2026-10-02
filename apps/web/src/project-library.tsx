@@ -8,6 +8,7 @@ import {
   Empty,
   Modal,
   Segmented,
+  Select,
   Space,
   Table,
   Tag,
@@ -31,8 +32,11 @@ import "./project-library.css";
 
 export async function refreshLibrary() {
   await queryClient.invalidateQueries({
-    predicate: (q) => String(q.queryKey[0]).startsWith("project-"),
+    predicate: (q) => String(q.queryKey[0]).startsWith("project-") || q.queryKey[0] === "workspace-content",
   });
+}
+export function LibraryScope({value,onChange}:{value:string;onChange:(value:string)=>void}) {
+  return <Select aria-label="内容范围" value={value} onChange={onChange} style={{width:150}} options={[{value:"all",label:"全部可访问"},{value:"public",label:"公共区域"},{value:"mine",label:"我创建的"}]} />;
 }
 export function useLibraryView(
   kind: LibraryKind,

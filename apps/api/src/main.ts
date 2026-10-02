@@ -26,9 +26,11 @@ import { validateIntegrationMode } from "./integrations/vip/index.js";
 import { enrichOpenApi } from "./openapi.js";
 import { ManualController } from "./manual.js";
 import { CompassAnalyticsModule } from "./modules/analytics/controller.js";
+import { PersonalWorkspaceModule } from "./modules/workspace/controller.js";
 @Module({
   controllers: [ManualController],
   imports: [
+    PersonalWorkspaceModule,
     CompassAnalyticsModule,
     AuthModule,
     SupplyModule,
