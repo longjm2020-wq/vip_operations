@@ -10,6 +10,7 @@ import { styleSelectionInput } from "./modules/style-selections/service.js";
 import { id, qty, positive, money, text } from "./core.js";
 import { beginSchema, chunkSchema } from "./modules/analytics/service.js";
 import { settingsSchema } from "./modules/analytics/mail.js";
+import { aiSettingsSchema } from "./modules/analytics/ai.js";
 export function enrichOpenApi(doc: OpenAPIObject) {
   const schema = (s: z.ZodType) =>
     z.toJSONSchema(s, { target: "openapi-3.0", io: "input" });
@@ -234,5 +235,23 @@ export function enrichOpenApi(doc: OpenAPIObject) {
     "发送完整且最新的每日报告，同日收件人防重复",
   );
   void money;
+  set(
+    compass + "/ai-settings",
+    "post",
+    aiSettingsSchema,
+    "加密保存指定 OpenRouter 模型的配置，密钥留空保留",
+  );
+  set(
+    compass + "/ai-test",
+    "post",
+    z.object({}).strict(),
+    "使用少量测试内容验证指定模型，会产生 API 费用",
+  );
+  set(
+    compass + "/ai-generate",
+    "post",
+    z.object({}).strict(),
+    "使用全量经营汇总生成并缓存 AI 日报，同数据防重复调用",
+  );
   return doc;
 }

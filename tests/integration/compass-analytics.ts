@@ -21,6 +21,19 @@ export async function testCompassAnalytics(h: Record<string, any>) {
     (await request(endpoint + "/imports", "POST", {}, undefined, buyer)).status,
     403,
   );
+  for (const path of ["ai-settings", "ai-report", "ai-test", "ai-generate"])
+    assert.equal(
+      (
+        await request(
+          `${endpoint}/${path}`,
+          path.startsWith("ai-t") || path.endsWith("generate") ? "POST" : "GET",
+          undefined,
+          undefined,
+          buyer,
+        )
+      ).status,
+      403,
+    );
   function make(
     date: string,
     dimension: CompassDimension,
@@ -194,6 +207,140 @@ export async function testCompassAnalytics(h: Record<string, any>) {
       key: randomUUID(),
     };
   process.env.COMPASS_MAIL_KEY = randomBytes(32).toString("hex");
+  const {
+    saveAISettings,
+    testAIConnection,
+    ensureAIAnalysis,
+    getAIReport,
+    COMPASS_AI_ENDPOINT,
+    COMPASS_AI_MODEL,
+  } = await import("../../apps/api/src/modules/analytics/ai.js");
+  const { collectCompassBundle } =
+    await import("../../apps/api/src/modules/analytics/report-data.js");
+  const aiKey = "sk-or-v1-test-never-log-this-key",
+    aiConfig = { enabled: true, apiKey: aiKey },
+    originalFetch = globalThis.fetch;
+  const aiSaved = await saveAISettings({ ...c, key: randomUUID() }, aiConfig);
+  assert.equal(aiSaved.apiKeyConfigured, true);
+  assert.equal(JSON.stringify(aiSaved).includes(aiKey), false);
+  assert.equal((await getAIReport()).state, "WAITING_VERIFICATION");
+  const aiCipher = await one(
+    db,
+    "SELECT api_key_encrypted FROM compass_ai_settings WHERE id=1",
+  );
+  assert.ok(
+    aiCipher.api_key_encrypted && !aiCipher.api_key_encrypted.includes(aiKey),
+  );
+  assert.equal(
+    JSON.stringify(
+      await one(
+        db,
+        "SELECT after_data FROM audit_logs WHERE action='COMPASS_AI_SETTINGS' ORDER BY id DESC LIMIT 1",
+      ),
+    ).includes(aiKey),
+    false,
+  );
+  let aiCalls = 0,
+    testCalls = 0,
+    returnStatus = 200;
+  let releaseAI!: () => void, notifyAIStarted!: () => void;
+  const aiGate = new Promise<void>((resolve) => {
+      releaseAI = resolve;
+    }),
+    aiStarted = new Promise<void>((resolve) => {
+      notifyAIStarted = resolve;
+    });
+  globalThis.fetch = (async (url: any, init: any) => {
+    if (url !== COMPASS_AI_ENDPOINT) return originalFetch(url, init);
+    const body = JSON.parse(init.body),
+      test = body.response_format.json_schema.name === "connection_test";
+    assert.equal(init.redirect, "error");
+    assert.equal(body.model, COMPASS_AI_MODEL);
+    assert.equal(body.stream, false);
+    assert.equal(body.provider.require_parameters, true);
+    assert.equal(body.provider.data_collection, "deny");
+    assert.equal(body.response_format.json_schema.strict, true);
+    if (test) testCalls++;
+    else {
+      aiCalls++;
+      assert.equal(body.max_tokens, 4096);
+      const payload = JSON.parse(body.messages[1].content);
+      assert.equal(payload.dataThrough, end);
+      assert.equal(payload.dimensions.length, 3);
+      assert.equal(payload.dailyStyle.length, 30);
+      assert.equal(payload.dimensions[2].top10[0].code, "000012345");
+      assert.equal(
+        Number(
+          payload.periods.find((p: any) => p.days === 7).summary.salesAmount,
+        ),
+        140,
+      );
+      assert.equal(JSON.stringify(payload).includes("image"), false);
+      assert.equal(JSON.stringify(payload).includes(aiKey), false);
+      notifyAIStarted();
+      await aiGate;
+    }
+    return new Response(
+      JSON.stringify({
+        id: "response-test",
+        model: COMPASS_AI_MODEL,
+        provider: "OpenAI",
+        choices: [
+          {
+            finish_reason: "stop",
+            message: {
+              content: JSON.stringify(
+                test
+                  ? { ok: true }
+                  : {
+                      summary: "近7天销售额140元。<script>unsafe</script>",
+                      observations: ["各维度独立统计"],
+                      actions: ["核对高退货款号"],
+                      risks: ["缺少成本数据，不估算利润"],
+                    },
+              ),
+            },
+          },
+        ],
+        usage: {
+          prompt_tokens: 100,
+          completion_tokens: 150,
+          total_tokens: 250,
+          cost: 0.001,
+        },
+      }),
+      { status: returnStatus, headers: { "Content-Type": "application/json" } },
+    );
+  }) as typeof fetch;
+  let aiBundle: any;
+  try {
+    await testAIConnection();
+    assert.equal(testCalls, 1);
+    await assert.rejects(
+      testAIConnection,
+      (e: any) => e.getResponse().error.code === "AI_TEST_WAIT",
+    );
+    aiBundle = await collectCompassBundle(end);
+    const first = ensureAIAnalysis(aiBundle);
+    await aiStarted;
+    assert.equal((await ensureAIAnalysis(aiBundle)).state, "PENDING");
+    releaseAI();
+    assert.equal((await first).state, "READY");
+    assert.equal(
+      aiCalls,
+      1,
+      "concurrent requests must incur only one model call",
+    );
+    assert.equal((await ensureAIAnalysis(aiBundle)).state, "READY");
+    assert.equal(aiCalls, 1, "identical data reuses successful analysis");
+    assert.equal((await getAIReport()).responseModel, COMPASS_AI_MODEL);
+  } finally {
+    releaseAI();
+    globalThis.fetch = originalFetch;
+  }
+  check(
+    "OpenRouter credentials are encrypted and redacted, exact model and structured output verified, concurrent generation deduplicated",
+  );
   const config = {
     enabled: true,
     smtpHost: "smtp.test.example",
@@ -216,6 +363,9 @@ export async function testCompassAnalytics(h: Record<string, any>) {
     sendMail: async (options: any) => {
       sends++;
       assert.ok(options.html.includes("每日经营分析"));
+      assert.ok(options.html.includes(COMPASS_AI_MODEL));
+      assert.ok(!options.html.includes("<script>unsafe</script>"));
+      assert.ok(options.html.includes("&lt;script&gt;unsafe&lt;/script&gt;"));
       return { accepted: [options.to], messageId: "test-" + sends };
     },
   })) as any;
@@ -242,6 +392,52 @@ export async function testCompassAnalytics(h: Record<string, any>) {
       "SELECT after_data FROM audit_logs WHERE action='COMPASS_MAIL_SETTINGS' ORDER BY id DESC LIMIT 1",
     );
     assert.equal(JSON.stringify(log).includes(config.password), false);
+    await db.$executeRawUnsafe("DELETE FROM compass_ai_reports");
+    let failedCalls = 0;
+    const mockFetch = (async (_url: any, _init: any) => {
+      failedCalls++;
+      return new Response(
+        JSON.stringify({
+          id: "wrong-model",
+          model: "another-model",
+          choices: [],
+        }),
+        { status: 200 },
+      );
+    }) as typeof fetch;
+    globalThis.fetch = mockFetch;
+    try {
+      const failed = await ensureAIAnalysis(aiBundle);
+      assert.equal(failed.state, "FAILED");
+      assert.match(failed.message!, /模型标识或数据格式/);
+      assert.equal(
+        (await ensureAIAnalysis(aiBundle)).state,
+        "FAILED",
+        "immediate failed retry does not call model again",
+      );
+      assert.equal(failedCalls, 1);
+      await db.$executeRawUnsafe(
+        "UPDATE compass_ai_settings SET last_test_at=NULL WHERE id=1",
+      );
+      returnStatus = 402;
+      globalThis.fetch = (async () =>
+        new Response("", { status: returnStatus })) as typeof fetch;
+      await assert.rejects(testAIConnection, (e: any) =>
+        e.getResponse().error.message.includes("余额或密钥额度不足"),
+      );
+      assert.equal((await getAIReport()).state, "WAITING_VERIFICATION");
+      const disabled = await saveAISettings(
+        { ...c, key: randomUUID() },
+        { enabled: false, clearKey: true },
+      );
+      assert.equal(disabled.apiKeyConfigured, false);
+      assert.equal((await ensureAIAnalysis(aiBundle)).state, "DISABLED");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+    check(
+      "AI wrong-model responses are rejected, failures are throttled, billing errors are clear and keys can be removed",
+    );
     await db.$executeRawUnsafe(
       "UPDATE compass_imports SET end_date=end_date-1 WHERE dimension='barcode' AND status='COMPLETE'",
     );

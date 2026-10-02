@@ -12,7 +12,39 @@ test("罗盘报表后台导入、五个周期、维度下钻与邮件配置", as
     .fill(process.env.E2E_PASSWORD!);
   await page.getByRole("button", { name: "进入工作台" }).click();
   await expect(page.getByRole("heading", { name: "商品档案" })).toBeVisible();
-  await page.goto("/analytics/compass");
+  const sidebar = page.locator(".sidebar"),
+    operations = sidebar.getByRole("link", { name: "运营工作台", exact: true });
+  await expect(operations).toBeVisible();
+  await operations.click();
+  await expect(
+    page.getByRole("heading", { name: "运营工作台", exact: true }),
+  ).toBeVisible();
+  const operationPage = page.locator(".operations-workspace");
+  await expect(operationPage.getByRole("tab")).toHaveCount(8);
+  await operationPage.getByRole("tab", { name: "淘宝", exact: true }).click();
+  await expect(
+    operationPage.getByText("暂无已配置功能入口", { exact: true }),
+  ).toBeVisible();
+  await page.reload();
+  await expect(
+    operationPage.getByRole("tab", { name: "淘宝", exact: true }),
+  ).toHaveAttribute("aria-selected", "true");
+  await operationPage.getByRole("tab", { name: "唯品会", exact: true }).click();
+  await expect(
+    operationPage.getByRole("link", { name: "经营分析", exact: true }),
+  ).toBeVisible();
+  await expect(
+    operationPage.getByRole("link", { name: "选款登记", exact: true }),
+  ).toBeVisible();
+  await expect(
+    sidebar.getByRole("link", { name: "经营分析", exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    sidebar.getByRole("link", { name: "选款登记", exact: true }),
+  ).toHaveCount(0);
+  await operationPage
+    .getByRole("link", { name: "经营分析", exact: true })
+    .click();
   await expect(
     page.getByRole("heading", { name: "经营分析", exact: true }),
   ).toBeVisible();
@@ -76,7 +108,11 @@ test("罗盘报表后台导入、五个周期、维度下钻与邮件配置", as
     page.locator(".compass-kpis").getByText("8", { exact: true }),
   ).toBeVisible();
   for (const days of [1, 3, 7, 15, 30]) {
-    await page.getByText(`近 ${days} 天`, { exact: true }).click();
+    await page.getByRole("combobox", { name: "统计日期", exact: true }).click();
+    await page
+      .locator(".ant-select-dropdown:visible")
+      .getByText(`近 ${days} 天`, { exact: true })
+      .click();
     await expect(
       page
         .locator(".compass-kpis")
@@ -87,14 +123,22 @@ test("罗盘报表后台导入、五个周期、维度下钻与邮件配置", as
   await expect(page.locator(".compass-chart-caption")).toContainText(
     shiftCompassDate(end, -29),
   );
-  await page.getByText("近 1 天", { exact: true }).click();
+  await page.getByRole("combobox", { name: "统计日期", exact: true }).click();
+  await page
+    .locator(".ant-select-dropdown:visible")
+    .getByText("近 1 天", { exact: true })
+    .click();
   await expect(
     page.locator(".compass-kpis").getByText("¥ 10", { exact: true }),
   ).toBeVisible();
   await expect(page.locator(".compass-chart-caption")).not.toContainText(
     shiftCompassDate(end, -29),
   );
-  await page.getByText("近 30 天", { exact: true }).click();
+  await page.getByRole("combobox", { name: "统计日期", exact: true }).click();
+  await page
+    .locator(".ant-select-dropdown:visible")
+    .getByText("近 30 天", { exact: true })
+    .click();
   await expect(
     page.locator(".compass-kpis").getByText("¥ 300", { exact: true }),
   ).toBeVisible();
@@ -129,6 +173,18 @@ test("罗盘报表后台导入、五个周期、维度下钻与邮件配置", as
   await expect(
     page.getByRole("row").filter({ hasText: "000012345" }),
   ).toBeVisible();
+  await page.getByRole("button", { name: "AI 设置", exact: true }).click();
+  await expect(page.getByLabel("AI 分析模型", { exact: true })).toHaveValue(
+    "openai/gpt-6.1-sol",
+  );
+  await expect(
+    page.getByLabel("OpenRouter API Key", { exact: true }),
+  ).toHaveValue("");
+  await expect(page.getByText("模型连接待验证", { exact: true })).toBeVisible();
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "关闭", exact: true })
+    .click();
   await page.getByRole("button", { name: "每日邮件", exact: true }).click();
   await expect(page.getByLabel("收件邮箱", { exact: true })).toBeVisible();
   await expect(page.getByLabel("SMTP 授权码", { exact: true })).toHaveValue("");

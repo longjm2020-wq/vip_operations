@@ -2,6 +2,7 @@ import {SelectionWorkspace} from "./selection-workspace";
 import { BrandVideo } from "./brand-video";
 import React, { useState, useEffect } from "react";
 const CompassAnalyticsPage = React.lazy(() => import("./compass-analytics").then(module => ({ default: module.CompassAnalyticsPage })));
+const OperationsWorkspacePage = React.lazy(() => import("./operations-workspace").then(module => ({ default: module.OperationsWorkspacePage })));
 const PublicSelectionCollection = React.lazy(() => import("./selection-collections").then(module => ({ default: module.PublicSelectionCollection })));
 const SelectionMobilePhotos = React.lazy(() => import("./selection-mobile-photos").then(module => ({ default: module.SelectionMobilePhotos })));
 import { createRoot } from "react-dom/client";
@@ -269,7 +270,19 @@ function Workspace({ user }: { user: Row }) {
   ];
   const settings = originalItems.find((i) => i.key === "/settings")!;
   const adminKeys = ["/users", "/roles", "/audit-logs"];
+  const operationKeys = ["/analytics/compass", "/style-selections"];
   const items = [
+    ...(operationKeys.some((key) =>
+      user.permissions.includes(originalItems.find((i) => i.key === key)!.permission!),
+    )
+      ? [{
+          key: "/operations",
+          label: "运营工作台",
+          icon: <DatabaseOutlined />,
+          permission: undefined,
+          children: undefined,
+        }]
+      : []),
     {
       key: "/supply",
       label: "供应链端",
@@ -326,7 +339,7 @@ function Workspace({ user }: { user: Row }) {
       label: "ERP系统",
       icon: <AppstoreOutlined />,
       children: [
-        ...originalItems.filter((i) => !i.children),
+        ...originalItems.filter((i) => !i.children && !operationKeys.includes(i.key)),
         ...settings.children!.filter((i) => !adminKeys.includes(i.key)),
       ],
     },
@@ -348,11 +361,12 @@ function Workspace({ user }: { user: Row }) {
         .map((c) => ({ ...c, label: <Link to={c.key}>{c.label}</Link> })),
     }))
     .filter((i) => !i.children || i.children.length > 0);
-  const selected = items
-    .flatMap((i) => i.children || [i])
-    .map((i) => i.key)
-    .sort((a, b) => b.length - a.length)
-    .find((k) => location.pathname.startsWith(k));
+  const selected = operationKeys.some((key) => location.pathname.startsWith(key))
+    ? "/operations"
+    : items
+        .flatMap((i) => i.children?.map((c) => c.key) || [i.key])
+        .sort((a, b) => b.length - a.length)
+        .find((k) => location.pathname.startsWith(k));
   const parent = items.find((i) =>
     i.children?.some((c) => c.key === selected),
   )?.key;
@@ -455,6 +469,7 @@ function Workspace({ user }: { user: Row }) {
                 element={<SupplyProducts internal />}
               />
               <Route path="/help" element={<ManualPage />} />
+              <Route path="/operations" element={<OperationsWorkspacePage />} />
               <Route path="/products/:id" element={<ProductDetail />} />
               <Route path="/purchase-orders/new" element={<PurchaseNew />} />
               <Route path="/purchase-orders/:id" element={<DocumentDetail />} />

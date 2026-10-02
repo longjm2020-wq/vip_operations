@@ -1,5 +1,4 @@
 import nodemailer from "nodemailer";
-import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 import { z } from "zod";
 import {
   audit,
@@ -16,43 +15,19 @@ import {
   rows,
 } from "../../../../../packages/database/src/index.js";
 import {
-  compassDimensions,
   compassLabels,
   shanghaiDate,
   shiftCompassDate,
 } from "../../../../../packages/contracts/src/compass-analytics.js";
-import { compassSources, dashboard } from "./service.js";
+import { compassSources } from "./service.js";
+import { collectCompassBundle } from "./report-data.js";
+import { CompassAIResult, ensureAIAnalysis } from "./ai.js";
+import {
+  decryptSecret as decryptMailPassword,
+  encryptSecret as encryptMailPassword,
+} from "./secrets.js";
+export { decryptMailPassword, encryptMailPassword };
 
-function encryptionKey() {
-  const key = process.env.COMPASS_MAIL_KEY;
-  if (!key || !/^[a-f0-9]{64}$/i.test(key))
-    fail("MAIL_KEY_MISSING", "服务器尚未配置邮件加密密钥，请联系管理员", 503);
-  return Buffer.from(key, "hex");
-}
-export function encryptMailPassword(password: string) {
-  const iv = randomBytes(12),
-    cipher = createCipheriv("aes-256-gcm", encryptionKey(), iv);
-  return [
-    iv.toString("hex"),
-    Buffer.concat([cipher.update(password, "utf8"), cipher.final()]).toString(
-      "hex",
-    ),
-    cipher.getAuthTag().toString("hex"),
-  ].join(":");
-}
-export function decryptMailPassword(value: string) {
-  const [iv, data, tag] = value.split(":"),
-    decipher = createDecipheriv(
-      "aes-256-gcm",
-      encryptionKey(),
-      Buffer.from(iv, "hex"),
-    );
-  decipher.setAuthTag(Buffer.from(tag, "hex"));
-  return Buffer.concat([
-    decipher.update(Buffer.from(data, "hex")),
-    decipher.final(),
-  ]).toString("utf8");
-}
 const publicSettings = (r: any) => ({
   enabled: r.enabled,
   smtpHost: r.smtp_host,
@@ -209,6 +184,7 @@ export function buildCompassEmail(
   date: string,
   snapshots: any[],
   windows: any[],
+  ai?: CompassAIResult,
 ) {
   const style = snapshots.find((s) => s.dimension === "style"),
     s = style.summary;
@@ -237,7 +213,33 @@ export function buildCompassEmail(
             .join("")}</tr>`,
       )
       .join("")}</tbody></table>`;
-  const html = `<div style="font:14px/1.8 sans-serif;color:#33261d;max-width:1000px;margin:auto"><h1>唯品会每日经营分析</h1><p>数据截止：${esc(date)} · 来源：中台·魔方罗盘三张每日明细报表</p><h2>经营摘要</h2><ul>${observations.map((v) => `<li>${esc(v)}</li>`).join("")}</ul><h2>款号维度 · 日期比较</h2>${table(windows, ["周期", "销售额", "净销售额", "销售件数", "退货率"], (r) => [`近 ${r.days} 天`, num(r.summary.salesAmount), num(r.summary.netSalesAmount), num(r.summary.salesQty), pct(r.summary.returnRate)])}
+  const aiLines =
+    ai?.state === "READY" && ai.content
+      ? [
+          `AI 经营分析 · ${ai.responseModel} · ${ai.provider} · ${ai.generatedAt?.toISOString() || ""}`,
+          ai.content.summary,
+          "经营观察",
+          ...ai.content.observations,
+          "建议",
+          ...ai.content.actions,
+          "风险与数据限制",
+          ...ai.content.risks,
+        ]
+      : [ai?.message || "AI 分析尚未开启，本日报使用报表汇总"];
+  const aiHtml =
+    ai?.state === "READY" && ai.content
+      ? `<h2>AI 经营分析</h2><p>模型：${esc(ai.responseModel)} · ${esc(ai.provider)} · 数据截止 ${esc(ai.reportDate)} · AI 建议供经营决策参考</p><p>${esc(ai.content.summary)}</p>${[
+          ["经营观察", ai.content.observations],
+          ["建议", ai.content.actions],
+          ["风险与数据限制", ai.content.risks],
+        ]
+          .map(
+            ([label, items]) =>
+              `<h3>${esc(label)}</h3><ul>${(items as string[]).map((v) => `<li>${esc(v)}</li>`).join("")}</ul>`,
+          )
+          .join("")}`
+      : `<p>AI 状态：${esc(aiLines[0])}。以下为报表汇总。</p>`;
+  const html = `<div style="font:14px/1.8 sans-serif;color:#33261d;max-width:1000px;margin:auto"><h1>唯品会每日经营分析</h1><p>数据截止：${esc(date)} · 来源：中台·魔方罗盘三张每日明细报表</p>${aiHtml}<h2>报表摘要</h2><ul>${observations.map((v) => `<li>${esc(v)}</li>`).join("")}</ul><h2>款号维度 · 日期比较</h2>${table(windows, ["周期", "销售额", "净销售额", "销售件数", "退货率"], (r) => [`近 ${r.days} 天`, num(r.summary.salesAmount), num(r.summary.netSalesAmount), num(r.summary.salesQty), pct(r.summary.returnRate)])}
     <h2>三个维度 · 近 7 天</h2>${table(snapshots, ["维度", "销售额", "净销售额", "销售件数", "退货件数", "截止日可售库存"], (r) => [compassLabels[r.dimension as keyof typeof compassLabels], num(r.summary.salesAmount), num(r.summary.netSalesAmount), num(r.summary.salesQty), num(r.summary.returnsQty), num(r.summary.saleableStock)])}
     ${snapshots.map((r) => `<h2>${compassLabels[r.dimension as keyof typeof compassLabels]} TOP 10</h2>${table(r.top, ["编码", "销售额", "销售件数", "退货率", "可售库存"], (v) => [v.code, num(v.salesAmount), num(v.salesQty), pct(v.returnRate), num(v.saleableStock)])}`).join("")}
     <p>三个维度各自统计，不相加；UV 和客户数跨日未去重。退货率为当期流量比，不代表同批订单退货率。平台库存不会覆盖 ERP 实物库存。本报告按报表数值生成，未包含成本或利润。</p><p><a href="${esc(process.env.APP_ORIGIN || "")}/analytics/compass">打开经营分析面板</a></p></div>`;
@@ -246,6 +248,7 @@ export function buildCompassEmail(
     html,
     text: [
       `唯品会经营日报 · 数据截止 ${date}`,
+      ...aiLines,
       ...observations,
       `面板：${process.env.APP_ORIGIN || ""}/analytics/compass`,
     ].join("\n"),
@@ -302,50 +305,17 @@ export async function sendDailyReport(automatic = false) {
         state: r.status,
       })),
     };
-  const bundle = await db.$transaction(
-    async (tx) => {
-      const pinned = await compassSources(tx);
-      if (
-        pinned.length !== 3 ||
-        pinned.some(
-          (s) =>
-            s.end_date !== date || s.start_date > shiftCompassDate(date, -29),
-        )
-      )
-        return null;
-      const snapshots = [];
-      for (const dimension of compassDimensions)
-        snapshots.push(
-          await dashboard(
-            { dimension, days: 7, endDate: date, pageSize: 1 },
-            tx,
-          ),
-        );
-      const windows = [];
-      for (const days of [1, 3, 7, 15, 30])
-        windows.push(
-          days === 7
-            ? snapshots[0]
-            : await dashboard(
-                { dimension: "style", days, endDate: date, pageSize: 1 },
-                tx,
-              ),
-        );
-      return {
-        snapshots,
-        windows,
-        ids: pinned.map((s) => s.id),
-        summary: snapshots.map((s) => ({
-          dimension: s.dimension,
-          summary: s.summary,
-        })),
-      };
-    },
-    { isolationLevel: "RepeatableRead", timeout: 30000 },
-  );
+  const bundle = await collectCompassBundle(date);
   if (!bundle)
     return { state: "WAITING_DATA", message: "报表更新中，等待完整数据" };
-  const message = buildCompassEmail(date, bundle.snapshots, bundle.windows),
+  const ai = await ensureAIAnalysis(bundle);
+  if (ai.state === "PENDING")
+    return {
+      state: "WAITING_AI",
+      message: "AI 正在生成，稍后将发送今日报告",
+      reportDate: date,
+    };
+  const message = buildCompassEmail(date, bundle.snapshots, bundle.windows, ai),
     smtp = transport(settings);
   const results = [];
   try {
@@ -381,7 +351,17 @@ export async function sendDailyReport(automatic = false) {
           date,
           recipient,
           JSON.stringify(json(bundle.ids)),
-          JSON.stringify(json(bundle.summary)),
+          JSON.stringify(
+            json({
+              metrics: bundle.summary,
+              ai: {
+                state: ai.state,
+                model: ai.model,
+                responseId: ai.responseId,
+                message: ai.message,
+              },
+            }),
+          ),
         );
       });
       if (!claimed) {
@@ -429,6 +409,7 @@ export async function sendDailyReport(automatic = false) {
       ? "ATTENTION"
       : "COMPLETE",
     reportDate: date,
+    ai: { state: ai.state, model: ai.model, message: ai.message },
     results,
   };
 }

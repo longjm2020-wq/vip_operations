@@ -15,8 +15,14 @@ API 前缀已确定为 `/api/v1`。下述补充路径、DTO、错误码与幂等
 - `POST /analytics/compass/mail-test`：analytics.manage；验证已保存的 SMTP 连接及认证，不发送邮件。修改发件凭据后须重新验证。
 - `POST /analytics/compass/send-daily`：analytics.manage；仅在三个报表覆盖截至昨日的完整近 30 天后发送每日报告。以数据日期与收件邮箱防重复；已接受或不确定发送不自动重发。
 - `GET /analytics/compass/mail-history`：analytics.manage；最近 50 条收件人状态，不返回秘密或 SMTP 原始错误。
+- `GET/POST /analytics/compass/ai-settings`：analytics.manage；enabled、可选 apiKey、clearKey。固定模型 `openai/gpt-6.1-sol` 与 OpenRouter 官方 HTTPS 地址。密钥以 COMPASS_MAIL_KEY 加密，只返回 apiKeyConfigured 等状态，审计及幂等结果不含密钥。
+- `POST /analytics/compass/ai-test`：analytics.manage；空对象，使用少量合成内容实际调用指定模型验证，会计费；每分钟最多一次，验证失败返回脱敏原因。更换密钥后重新验证。
+- `GET /analytics/compass/ai-report`：analytics.read；当前三个完整来源的缓存分析及状态，GET 不触发模型调用。不受看板关键词、日期或下钻筛选影响。
+- `POST /analytics/compass/ai-generate`：analytics.manage；空对象。用同日期完整近30天来源收集汇总，上传汇总/趋势/TOP10商品编码，以来源、输入及模型/提示版本指纹缓存；并发仅一个调用，已有结果复用。90秒模型超时、最多4096输出token。失败至少间隔一分钟，单份输入最多三次。返回实际模型、供应商、响应ID、用量、截止日期及生成时间；模型身份、格式或完整性异常时拒绝结果。
 
 所有写入需要登录、CSRF 与权限；导入和设置保存需要幂等键。每日发送在 Worker 08:00（Asia/Shanghai）后等待新报表，SMTP 确认失败最多自动尝试三次，间隔至少 30 分钟。采集使用另设的本机 Codex 自动化任务，不存储或复制罗盘浏览器会话到服务器。
+
+AI 请求仅到固定 OpenRouter 地址，不跟随重定向，不启用外部工具；要求供应商支持结构化结果并按 `data_collection=deny` 路由。每日邮件复用缓存 AI 分析；生成中返回 WAITING_AI，失败/未启用/未验证则明确标注状态并发送原报表汇总。模型结果不覆盖原始数值，不改变业务数据。
 
 JSON camelCase；ID 为字符串；金额十进制字符串（如 `"78.00"`），数量整数，时间ISO 8601含时区。拒绝未知写字段，所有列表 page≥1、pageSize默认20且≤100、排序字段白名单，稳定追加id排序；筛选在服务器执行。
 

@@ -13,6 +13,7 @@ import type { Response } from "express";
 import { AuthRequest, context, Permission } from "../../http.js";
 import * as service from "./service.js";
 import * as mail from "./mail.js";
+import * as ai from "./ai.js";
 @Controller("api/v1/analytics/compass")
 export class CompassAnalyticsController {
   @Get() @Permission("analytics.read") view(@Query() q: unknown) {
@@ -60,6 +61,29 @@ export class CompassAnalyticsController {
   }
   @Get("mail-history") @Permission("analytics.manage") history() {
     return mail.mailHistory();
+  }
+  @Get("ai-settings") @Permission("analytics.manage") aiSettings(
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    res.setHeader("Cache-Control", "private, no-store");
+    return ai.getAISettings();
+  }
+  @Post("ai-settings") @Permission("analytics.manage") saveAI(
+    @Req() r: AuthRequest,
+    @Body() b: unknown,
+  ) {
+    return ai.saveAISettings(context(r), b);
+  }
+  @Post("ai-test") @Permission("analytics.manage") testAI() {
+    return ai.testAIConnection();
+  }
+  @Get("ai-report") @Permission("analytics.read") aiReport() {
+    return ai.getAIReport();
+  }
+  @Post("ai-generate") @Permission("analytics.manage") generateAI(
+    @Req() r: AuthRequest,
+  ) {
+    return ai.generateAIReport(context(r));
   }
 }
 @Module({ controllers: [CompassAnalyticsController] })

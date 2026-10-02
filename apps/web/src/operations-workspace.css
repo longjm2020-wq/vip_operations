@@ -1,0 +1,61 @@
+.operations-workspace .ant-tabs {
+  margin-top: 18px;
+}
+.operations-entry-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 340px));
+  gap: 16px;
+  margin-top: 6px;
+}
+.operations-entry-link {
+  color: inherit;
+  border-radius: 8px;
+}
+.operations-entry-link:focus-visible {
+  outline: 2px solid #d3540b;
+  outline-offset: 3px;
+}
+.operations-entry-link .ant-card-body {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 18px;
+}
+.operations-entry-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  flex-shrink: 0;
+  border-radius: 10px;
+  background: #fff1e3;
+  color: #d3540b;
+  font-size: 22px;
+}
+.operations-entry-link h3 {
+  font-size: 16px;
+  margin: 0 0 6px;
+}
+.operations-entry-link p {
+  font-size: 12px;
+  line-height: 1.7;
+  margin: 0;
+  color: #927c70;
+}
+.operations-entry-arrow {
+  margin-left: auto;
+  color: #ae9686;
+}
+.operations-platform-empty {
+  margin: 28px 0;
+  padding: 36px;
+  background: #fff;
+  border: 1px solid #ecdccf;
+  border-radius: 8px;
+}
+@media (max-width: 400px) {
+  .operations-entry-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

@@ -9,7 +9,6 @@ import {
   Input,
   Modal,
   Progress,
-  Segmented,
   Select,
   Space,
   Spin,
@@ -25,9 +24,11 @@ import {
   ReloadOutlined,
   SearchOutlined,
   UploadOutlined,
+  RobotOutlined,
 } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
-import { api } from "./api";
+import { api, queryClient } from "./api";
+import { CompassAIReport, CompassAISettings } from "./compass-ai";
 import { Header, QueryState, Row, useCan } from "./shared";
 import {
   compassDimensions,
@@ -547,7 +548,8 @@ export function CompassAnalyticsPage() {
     [page, setPage] = useState(1),
     [sort, setSort] = useState("salesAmount"),
     [importOpen, setImportOpen] = useState(false),
-    [mailOpen, setMailOpen] = useState(false);
+    [mailOpen, setMailOpen] = useState(false),
+    [aiOpen, setAIOpen] = useState(false);
   useEffect(() => {
     const timer = setTimeout(() => {
       setQText(search);
@@ -632,7 +634,12 @@ export function CompassAnalyticsPage() {
           <>
             <Button
               icon={<ReloadOutlined aria-hidden="true" />}
-              onClick={() => q.refetch()}
+              onClick={() => {
+                void q.refetch();
+                void queryClient.invalidateQueries({
+                  queryKey: ["compass-ai-report"],
+                });
+              }}
               loading={q.isFetching}
             >
               刷新
@@ -644,6 +651,12 @@ export function CompassAnalyticsPage() {
                   onClick={() => setImportOpen(true)}
                 >
                   导入报表
+                </Button>
+                <Button
+                  icon={<RobotOutlined aria-hidden="true" />}
+                  onClick={() => setAIOpen(true)}
+                >
+                  AI 设置
                 </Button>
                 <Button
                   icon={<MailOutlined aria-hidden="true" />}
@@ -658,8 +671,10 @@ export function CompassAnalyticsPage() {
       />
       <div className="compass-toolbar">
         <Space wrap>
-          <Segmented
-            aria-label="分析周期"
+          <span className="secondary">统计日期</span>
+          <Select
+            aria-label="统计日期"
+            style={{ width: 120 }}
             options={[1, 3, 7, 15, 30].map((value) => ({
               value,
               label: `近 ${value} 天`,
@@ -999,13 +1014,21 @@ export function CompassAnalyticsPage() {
           </>
         )
       )}
+      <CompassAIReport
+        manage={manage}
+        sourceKey={sources.map((s) => s.id).join(":")}
+        onSettings={() => setAIOpen(true)}
+      />
       <ImportReports
         open={importOpen}
         onClose={() => setImportOpen(false)}
         onImported={() => void q.refetch()}
       />
       {manage && (
-        <MailSettings open={mailOpen} onClose={() => setMailOpen(false)} />
+        <>
+          <MailSettings open={mailOpen} onClose={() => setMailOpen(false)} />
+          <CompassAISettings open={aiOpen} onClose={() => setAIOpen(false)} />
+        </>
       )}
     </div>
   );

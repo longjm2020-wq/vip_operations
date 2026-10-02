@@ -192,12 +192,37 @@
   grid-template-columns: 1fr 1fr;
   gap: 0 16px;
 }
+.compass-ai {
+  margin-top: 20px;
+}
+.compass-ai small {
+  display: block;
+  color: #927c70;
+  margin-top: 12px;
+}
+.compass-ai summary {
+  cursor: pointer;
+  color: #c34d00;
+}
+.compass-ai-columns {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 24px;
+}
+.compass-ai-columns ul {
+  padding-left: 20px;
+  line-height: 1.9;
+}
 @media (max-width: 1150px) {
   .compass-kpis {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
   .compass-charts {
     grid-template-columns: 1fr;
+  }
+  .compass-ai-columns {
+    grid-template-columns: 1fr;
+    gap: 0;
   }
 }
 @media (max-width: 600px) {
@@ -212,8 +237,5 @@
   }
   .compass-page .ant-card-head {
     flex-wrap: wrap;
-  }
-  .compass-toolbar .ant-segmented-item-label {
-    padding: 0 7px;
   }
 }
