@@ -214,7 +214,7 @@
   margin: 8px 0 12px;
 }
 .compass-field-groups {
-  max-height: 360px;
+  max-height: min(360px, calc(100dvh - 240px));
   overflow-y: auto;
   margin: 12px 0;
   padding-right: 6px;

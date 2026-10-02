@@ -96,8 +96,8 @@ function Login() {
     [error, setError] = useState("");
   return (
     <div className="login">
-      <BrandVideo />
       <section className="login-story">
+        <BrandVideo />
         <div className="login-brand">
           <BrandMark />
         </div>
@@ -240,7 +240,7 @@ function Workspace({ user }: { user: Row }) {
     },
     {
       key: "/project-management",
-      label: "项目管理",
+      label: "项目协作",
       icon: <TeamOutlined />,
       children: [
         { key: "/sops", label: "操作流程 SOP", permission: "project.read" },
@@ -283,6 +283,16 @@ function Workspace({ user }: { user: Row }) {
           children: undefined,
         }]
       : []),
+    originalItems.find((i) => i.key === "/project-management")!,
+    {
+      key: "/erp",
+      label: "ERP系统",
+      icon: <AppstoreOutlined />,
+      children: [
+        ...originalItems.filter((i) => !i.children && !operationKeys.includes(i.key)),
+        ...settings.children!.filter((i) => !adminKeys.includes(i.key)),
+      ],
+    },
     {
       key: "/supply",
       label: "供应链端",
@@ -334,16 +344,6 @@ function Workspace({ user }: { user: Row }) {
         },
       ],
     },
-    {
-      key: "/erp",
-      label: "ERP系统",
-      icon: <AppstoreOutlined />,
-      children: [
-        ...originalItems.filter((i) => !i.children && !operationKeys.includes(i.key)),
-        ...settings.children!.filter((i) => !adminKeys.includes(i.key)),
-      ],
-    },
-    originalItems.find((i) => i.key === "/project-management")!,
     {
       ...settings,
       children: settings.children!.filter((i) => adminKeys.includes(i.key)),

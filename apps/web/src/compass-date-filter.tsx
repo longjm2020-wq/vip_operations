@@ -1,5 +1,6 @@
 import { App, Button, DatePicker, Select, Space, Tooltip } from "antd";
-import dayjs from "dayjs";
+import dayjs, { type Dayjs } from "dayjs";
+import { useMemo } from "react";
 import "dayjs/locale/zh-cn";
 import zhCN from "antd/es/date-picker/locale/zh_CN";
 import {
@@ -25,6 +26,10 @@ export function CompassDateFilter({
     maxEnd = shiftCompassDate(shanghaiDate(), -1),
     anchor = sourceEnd || maxEnd,
     displayed = range || compassPeriodRange(period, anchor, maxEnd);
+  const pickerValue = useMemo<[Dayjs, Dayjs]>(
+    () => [dayjs(displayed[0]), dayjs(displayed[1])],
+    [displayed[0], displayed[1]],
+  );
   return (
     <Space wrap className="compass-date-filter">
       <span className="secondary">统计日期</span>
@@ -75,7 +80,7 @@ export function CompassDateFilter({
         format="YYYY-MM-DD"
         allowClear={false}
         style={{ width: 285, maxWidth: "100%" }}
-        value={[dayjs(displayed[0]), dayjs(displayed[1])]}
+        value={pickerValue}
         maxDate={dayjs(maxEnd)}
         disabledDate={(date, info) =>
           date.format("YYYY-MM-DD") > maxEnd ||

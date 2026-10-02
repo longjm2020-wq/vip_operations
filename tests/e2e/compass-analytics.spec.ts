@@ -23,6 +23,11 @@ test("罗盘导入、日期区间、五种明细视图、维度下钻与邮件�
   await expect(page.getByRole("heading", { name: "商品档案" })).toBeVisible();
   const sidebar = page.locator(".sidebar"),
     operations = sidebar.getByRole("link", { name: "运营工作台", exact: true });
+  await expect(
+    sidebar.locator(
+      ".ant-menu-root > .ant-menu-item, .ant-menu-root > .ant-menu-submenu > .ant-menu-submenu-title",
+    ),
+  ).toHaveText(["运营工作台", "项目协作", "ERP系统", "供应链端", "系统设置"]);
   await expect(operations).toBeVisible();
   await operations.click();
   await expect(
@@ -235,6 +240,9 @@ test("罗盘导入、日期区间、五种明细视图、维度下钻与邮件�
     name: "明细字段设置",
     exact: true,
   });
+  await expect(
+    settings.getByRole("button", { name: "应用", exact: true }),
+  ).toBeInViewport({ ratio: 1 });
   await settings
     .getByRole("checkbox", { name: "全选数据字段", exact: true })
     .check();

@@ -402,7 +402,7 @@ function DetailTable({
         {preferences.view === "custom" && (
           <Popover
             trigger="click"
-            placement="bottomRight"
+            placement="bottom"
             open={settingsOpen}
             onOpenChange={(open) => {
               setSettingsOpen(open);

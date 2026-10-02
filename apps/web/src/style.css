@@ -265,23 +265,9 @@ pre {
   place-items: center;
 }
 .login {
-  position: relative;
-  isolation: isolate;
-  overflow: hidden;
-  background: #35251f;
   min-height: 100vh;
   display: grid;
   grid-template-columns: minmax(0, 61.8fr) minmax(0, 38.2fr);
-}
-.login > .brand-video {
-  position: absolute;
-  inset: 0;
-  z-index: 0;
-  pointer-events: none;
-}
-.login > section {
-  position: relative;
-  z-index: 1;
 }
 .aftersale-address-grid {
   display: grid;
@@ -305,7 +291,7 @@ pre {
   color: #866953;
 }
 .login-story {
-  background: transparent;
+  background: #35251f;
   color: #fff8eb;
   display: flex;
   flex-direction: column;
@@ -367,11 +353,7 @@ pre {
 .login-panel {
   display: grid;
   place-items: center;
-  background: linear-gradient(135deg, #fffdf9cc, #fff8eead);
-  -webkit-backdrop-filter: blur(28px) saturate(125%);
-  backdrop-filter: blur(28px) saturate(125%);
-  border-left: 1px solid #ffffff73;
-  box-shadow: -12px 0 40px #1a120d14;
+  background: #fffdf9;
   min-width: 0;
   padding: 40px clamp(24px, 3vw, 64px);
 }
@@ -385,38 +367,14 @@ pre {
   margin: 14px 0;
 }
 .login-box .secondary {
-  color: #6f5140;
   font-size: 13px;
   margin: 8px 0 34px;
 }
 .login-note {
   font-size: 11px;
   text-align: center;
-  color: #705748;
+  color: #9e8d7f;
   margin-top: 25px;
-}
-.login-box .eyebrow {
-  color: #67442f;
-}
-.login-box .ant-input,
-.login-box .ant-input-affix-wrapper {
-  background: #ffffffb8;
-  border-color: #66432e38;
-}
-.login-box .ant-input-affix-wrapper .ant-input {
-  background: transparent;
-}
-@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  .login-panel {
-    background: #fffdf9f0;
-  }
-}
-@media (prefers-reduced-transparency: reduce) {
-  .login-panel {
-    background: #fffdf9;
-    -webkit-backdrop-filter: none;
-    backdrop-filter: none;
-  }
 }
 @media (max-width: 1000px) {
   .content {
@@ -763,7 +721,7 @@ pre {
   .login-brand .brand-wordmark { width:160px; height:54px; }
   .login-story .login-video-copy { margin:0; }
   .login-story .login-video-copy h1 { margin:0; font-size:26px; line-height:1.35; }
-  .login-panel { padding:30px 24px; border-left:0; border-top:1px solid #ffffff73; }
+  .login-panel { padding:30px 24px; }
   .login-box { max-width:420px; }
 }
 .product-archive{background:#fff;border:1px solid #e8ded5;border-radius:8px;padding:10px 10px 0}
