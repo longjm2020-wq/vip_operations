@@ -117,6 +117,16 @@ export const competitorProductSchema = z
       c.addIssue({ code: "custom", message: "商品ID与详情链接不一致" });
   });
 export type CompetitorProduct = z.infer<typeof competitorProductSchema>;
+export type CompetitorProductPreview = Pick<
+  CompetitorProduct,
+  | "productId"
+  | "title"
+  | "styleCode"
+  | "productUrl"
+  | "imageUrl"
+  | "salePrice"
+  | "publicRank"
+>;
 export const competitorImportSchema = z
   .object({
     brandId: z.string().regex(/^[1-9]\d{0,18}$/),
@@ -294,20 +304,27 @@ export function analyzeCompetitor(
       : sort === "rank"
         ? x.publicRank
         : x.salePrice;
-  const ranked = [...products]
-    .sort((a, b) => {
-      const av = value(a),
-        bv = value(b);
-      return av === null
-        ? bv === null
-          ? a.productId.localeCompare(b.productId)
-          : 1
-        : bv === null
-          ? -1
-          : (sort === "priceDesc" || sort === "sales" ? bv - av : av - bv) ||
-            a.productId.localeCompare(b.productId);
-    })
-    .slice(0, 20);
+  const ordered = [...products].sort((a, b) => {
+    const av = value(a),
+      bv = value(b);
+    return av === null
+      ? bv === null
+        ? a.productId.localeCompare(b.productId)
+        : 1
+      : bv === null
+        ? -1
+        : (sort === "priceDesc" || sort === "sales" ? bv - av : av - bv) ||
+          a.productId.localeCompare(b.productId);
+  });
+  const preview = (p: CompetitorProduct): CompetitorProductPreview => ({
+    productId: p.productId,
+    title: p.title,
+    styleCode: p.styleCode,
+    productUrl: p.productUrl,
+    imageUrl: p.imageUrl,
+    salePrice: p.salePrice,
+    publicRank: p.publicRank,
+  });
   const prices = products
     .map((x) => x.salePrice)
     .filter((x): x is number => x !== null)
@@ -318,13 +335,21 @@ export function analyzeCompetitor(
       2
     : null;
   const distribution = (fn: (x: CompetitorProduct) => string[]) => {
-    const counts = new Map<string, number>();
-    products.forEach((p) =>
-      new Set(fn(p)).forEach((k) => counts.set(k, (counts.get(k) || 0) + 1)),
+    const groups = new Map<
+      string,
+      { name: string; count: number; top10: CompetitorProductPreview[] }
+    >();
+    ordered.forEach((p) =>
+      new Set(fn(p)).forEach((name) => {
+        const group = groups.get(name) || { name, count: 0, top10: [] };
+        group.count++;
+        if (group.top10.length < 10) group.top10.push(preview(p));
+        groups.set(name, group);
+      }),
     );
-    return [...counts]
-      .map(([name, count]) => ({ name, count }))
-      .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+    return [...groups.values()].sort(
+      (a, b) => b.count - a.count || a.name.localeCompare(b.name),
+    );
   };
   return {
     brand,
@@ -340,7 +365,7 @@ export function analyzeCompetitor(
         : null,
     materialCoverage: products.filter((x) => x.detailVerified && x.materialInfo)
       .length,
-    top20: ranked,
+    top20: ordered.slice(0, 20),
     categories: distribution((x) => [x.category || titleCategory(x.title)]),
     materials: distribution((x) =>
       materialTags(x.materialInfo || x.title).concat(x.materialTags).length
@@ -348,12 +373,16 @@ export function analyzeCompetitor(
         : ["未公开"],
     ),
     seasons: distribution((x) => (x.seasons.length ? x.seasons : ["未公开"])),
-    prices: competitorPriceBands.map((b) => ({
-      name: b.label,
-      count: products.filter(
+    prices: competitorPriceBands.map((b) => {
+      const matching = ordered.filter(
         (x) =>
           x.salePrice !== null && x.salePrice >= b.min && x.salePrice < b.max,
-      ).length,
-    })),
+      );
+      return {
+        name: b.label,
+        count: matching.length,
+        top10: matching.slice(0, 10).map(preview),
+      };
+    }),
   };
 }

@@ -14,6 +14,53 @@ const list = ids
   .join("");
 const detail =
   '<div class="J_brandName">序缇/XUTI</div><div class="pib-title-detail">羊绒桑蚕丝针织衫</div><div id="J_detail_barCode">商品编码：CT-001</div><table><tr><td class="dc-table-tit">详细材质信息：</td><td>【面料】羊绒70% 桑蚕丝30%</td></tr><tr><td class="dc-table-tit">主款式：</td><td>针织衫</td></tr><tr><td class="dc-table-tit">适用季节：</td><td>春秋</td></tr></table>';
+
+test("每品牌保留50款排名样本并核对全部50款详情", async ({ page }) => {
+  const sampleIds = Array.from({ length: 53 }, (_, i) =>
+    String(6921659409327812200n + BigInt(i)),
+  );
+  const sampleList = sampleIds
+    .map(
+      (id, i) =>
+        `<a href="${detailUrl(id)}"><div class="c-goods-item__name">序缇羊绒衫${i}</div><span class="J-goods-item__sale-price">${500 + i}</span></a>`,
+    )
+    .join("");
+  await page.route("https://**.vip.com/**", (route) =>
+    route.fulfill({
+      contentType: "text/html; charset=utf-8",
+      body: route.request().url().includes("category.vip.com")
+        ? sampleList
+        : detail,
+    }),
+  );
+  // All pages are local fixtures; skip pacing that protects the real source.
+  page.waitForTimeout = async () => {};
+  const saved: any[] = [],
+    verified: any[] = [];
+  await crawlPublicBrand(
+    page,
+    { id: "1", name: "序缇", brandSn: "10204477" },
+    {
+      list: async (data) => {
+        saved.push(data);
+      },
+      detail: async (products) => {
+        verified.push(...products);
+      },
+    },
+  );
+  expect(saved[0].products).toHaveLength(50);
+  expect(saved[0].scope).toContain("最多50款");
+  expect(saved[0].products.map((p: any) => p.productId)).toEqual(
+    sampleIds.slice(0, 50),
+  );
+  expect(verified.map((p) => p.productId)).toEqual(sampleIds.slice(0, 50));
+  expect(
+    verified.every(
+      (p) => p.detailVerified && p.materialInfo.includes("羊绒70%"),
+    ),
+  ).toBe(true);
+});
 test("后台DOM采集保留精确商品ID和已核对详情，验证页停止", async ({ page }) => {
   test.setTimeout(45000);
   await page.route("https://**.vip.com/**", (route) =>

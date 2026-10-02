@@ -1,15 +1,15 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   Alert,
   App,
   Button,
   Card,
-  DatePicker,
   Drawer,
   Empty,
   Form,
   Input,
   Modal,
+  Popover,
   Segmented,
   Select,
   Space,
@@ -27,8 +27,7 @@ import {
   PictureOutlined,
   SettingOutlined,
 } from "@ant-design/icons";
-import { useQuery } from "@tanstack/react-query";
-import dayjs from "dayjs";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { api, queryClient } from "./api";
 import { Header, useCan, when } from "./shared";
 import {
@@ -37,7 +36,13 @@ import {
   type CompetitorBrand,
   type CompetitorSource,
   type CompetitorProduct,
+  type CompetitorProductPreview,
 } from "../../../packages/contracts/src/competitor-analysis";
+import {
+  CompassProductImage,
+  CompassImagePreview,
+  type CompassImageTarget,
+} from "./compass-product-image";
 import { captureBookmarkUrl } from "./competitor-capture";
 import { readCompetitorFile } from "./competitor-import";
 import { downloadSheet } from "./download-sheet";
@@ -70,42 +75,69 @@ const colors = [
   "#7ea6a0",
   "#ae7c7c",
 ];
-function ProductPhoto({ product }: { product: CompetitorProduct }) {
-  const [failed, setFailed] = useState(false);
-  useEffect(() => setFailed(false), [product.imageUrl]);
+function ProductPhoto({
+  product,
+  onPreview,
+}: {
+  product: CompetitorProduct;
+  onPreview: (target: CompassImageTarget) => void;
+}) {
   return (
-    <a
-      className="competitor-photo"
-      href={product.productUrl}
-      target="_blank"
-      rel="noopener noreferrer"
-      aria-label={`查看${product.title}商品详情`}
-    >
-      {product.imageUrl && !failed ? (
-        <>
-          <img
-            src={product.imageUrl}
-            alt={product.title}
-            onError={() => setFailed(true)}
-          />
-          <span className="competitor-photo-hover">
-            <img src={product.imageUrl} alt="" />
-          </span>
-        </>
-      ) : (
-        <PictureOutlined />
-      )}
-    </a>
+    <span className="competitor-photo">
+      <CompassProductImage
+        image={product.imageUrl || undefined}
+        code={product.styleCode || product.title}
+        onPreview={onPreview}
+      />
+    </span>
+  );
+}
+function DistributionPreview({
+  products,
+}: {
+  products: CompetitorProductPreview[];
+}) {
+  return (
+    <div className="competitor-bar-products">
+      {products.map((p) => (
+        <a
+          key={p.productId}
+          href={p.productUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label={`打开${p.title}商品详情`}
+        >
+          {p.imageUrl ? (
+            <img
+              src={p.imageUrl}
+              alt={p.title}
+              loading="lazy"
+              referrerPolicy="no-referrer"
+            />
+          ) : (
+            <span className="competitor-bar-placeholder">
+              <PictureOutlined aria-hidden="true" />
+            </span>
+          )}
+          <span>{p.styleCode || p.title}</span>
+          <strong>{money(p.salePrice)}</strong>
+        </a>
+      ))}
+    </div>
   );
 }
 function Distribution({
   title,
   field,
   results,
+  activePreview,
+  onPreviewChange,
 }: {
   title: string;
   field: "categories" | "materials" | "prices" | "seasons";
   results: Result[];
+  activePreview: string | null;
+  onPreviewChange: (key: string, open: boolean) => void;
 }) {
   const combined = new Map<string, number>();
   results.forEach((r) =>
@@ -124,29 +156,47 @@ function Distribution({
   return (
     <Card size="small" title={title} className="competitor-distribution">
       {labels.length ? (
-        <div role="img" aria-label={`${title}，按品牌比较当前样本的商品款数`}>
+        <div role="group" aria-label={`${title}，按品牌比较当前样本`}>
           {labels.map((name) => (
             <div className="competitor-bar-group" key={name}>
               <strong>{name}</strong>
               {results.map((r, i) => {
-                const count = r[field].find((x) => x.name === name)?.count || 0;
+                const bucket = r[field].find((x) => x.name === name);
+                const count = bucket?.count || 0;
+                const previewKey = `${field}:${r.brand.id}:${name}`;
                 return (
-                  <div
-                    className="competitor-bar-row"
+                  <Popover
                     key={r.brand.id}
-                    title={`${r.brand.name}：${count}款`}
+                    trigger={["hover", "click"]}
+                    placement="top"
+                    mouseEnterDelay={0.15}
+                    mouseLeaveDelay={0.25}
+                    title={`${r.brand.name} · ${name} · 前${bucket?.top10?.length || 0}款`}
+                    content={
+                      <DistributionPreview products={bucket?.top10 || []} />
+                    }
+                    classNames={{ root: "competitor-bar-popover" }}
+                    open={count > 0 && activePreview === previewKey}
+                    onOpenChange={(open) => onPreviewChange(previewKey, open)}
                   >
-                    <span>{r.brand.name}</span>
-                    <div className="competitor-bar-track">
-                      <i
-                        style={{
-                          width: (count / max) * 100 + "%",
-                          background: colors[i % colors.length],
-                        }}
-                      />
-                    </div>
-                    <b>{count}</b>
-                  </div>
+                    <button
+                      type="button"
+                      className="competitor-bar-row"
+                      disabled={!count}
+                      aria-label={`${r.brand.name} · ${name}，${count}款，查看前10款商品`}
+                    >
+                      <span>{r.brand.name}</span>
+                      <span className="competitor-bar-track" aria-hidden="true">
+                        <i
+                          style={{
+                            width: (count / max) * 100 + "%",
+                            background: colors[i % colors.length],
+                          }}
+                        />
+                      </span>
+                      <b>{count}</b>
+                    </button>
+                  </Popover>
                 );
               })}
             </div>
@@ -197,8 +247,7 @@ function CaptureGuide({
           向下滚动，让需要分析的商品完成加载。点击书签栏中的「采集唯品会商品」，保存排名文件。
         </li>
         <li>
-          打开 TOP20
-          的商品详情页，查看「规格参数」，再点击同一书签，保存详细材质与季节文件。
+          逐款打开已采集样本的商品详情页（每品牌50款），查看「规格参数」，再点击同一书签，保存详细材质与季节文件。
         </li>
         <li>
           回到竞品分析，点击「导入数据」，选择对应品牌，上传排名文件；然后可一次上传多个详情文件，补齐成分信息。
@@ -242,8 +291,7 @@ function ImportPanel({
     [prepared, setPrepared] = useState<any[]>([]),
     [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
-    [phase, setPhase] = useState(""),
-    [dates, setDates] = useState<[dayjs.Dayjs, dayjs.Dayjs] | null>(null);
+    [phase, setPhase] = useState("");
   const brand = brands.find((x) => x.id === brandId) || brands[0];
   useEffect(() => {
     setPrepared([]);
@@ -259,8 +307,17 @@ function ImportPanel({
     try {
       if (!brand) throw Error("请先选择品牌");
       const loaded = [];
-      for (const file of selected)
-        loaded.push(await readCompetitorFile(file, brand));
+      for (const file of selected) {
+        if (!file.name.toLowerCase().endsWith(".json"))
+          throw Error("请选择公开商品采集的 JSON 文件");
+        const data = await readCompetitorFile(file, brand);
+        if (
+          data.kind === "SALES" ||
+          (data.kind === "LIST" && data.source !== "PUBLIC_RANK")
+        )
+          throw Error("仅支持公开销量排名和商品详情文件");
+        loaded.push(data);
+      }
       setPrepared(loaded);
     } catch (e) {
       setError((e as Error).message);
@@ -278,24 +335,7 @@ function ImportPanel({
         const { kind, ...body } = data;
         if (kind === "DETAILS")
           await api("/analytics/competitors/details", "POST", body);
-        else {
-          if (kind === "SALES" && !dates)
-            throw Error("请填写销量报表的统计起止日期");
-          await api(
-            "/analytics/competitors/imports",
-            "POST",
-            kind === "SALES"
-              ? {
-                  ...body,
-                  asOfDate: dayjs().format("YYYY-MM-DD"),
-                  periodStart: dates![0].format("YYYY-MM-DD"),
-                  periodEnd: dates![1].format("YYYY-MM-DD"),
-                  scope: `导入销量报表：${files[i].name}`,
-                  sourceUrl: null,
-                }
-              : body,
-          );
-        }
+        else await api("/analytics/competitors/imports", "POST", body);
         onImported();
       }
       setPhase("全部导入完成");
@@ -342,65 +382,26 @@ function ImportPanel({
           />
         </Form.Item>
         <p>
-          采集文件使用 JSON；实际销量报表支持 Excel 和 UTF-8
-          CSV。每个文件最多5MB、5000款商品，数据日期不能晚于今天。
+          支持公开销量排名和商品详情 JSON
+          文件。每个文件最多5MB、5000款商品，数据日期不能晚于今天。
         </p>
         <Space wrap>
-          <Button
-            icon={<DownloadOutlined aria-hidden="true" />}
-            onClick={() =>
-              void downloadSheet("竞品销量导入模板", [
-                {
-                  品牌: brand?.name || "",
-                  商品ID: "",
-                  商品名称: "",
-                  款号: "",
-                  品类: "",
-                  销量: "",
-                  特卖价: "",
-                  划线价: "",
-                  详细材质信息: "",
-                  季节: "",
-                  预览图链接: "",
-                  商品详情链接: "",
-                },
-              ])
-            }
-          >
-            下载销量模板
-          </Button>
           <label className="competitor-file-button">
             <UploadOutlined aria-hidden="true" /> 选择文件
             <input
               aria-label="选择竞品数据文件"
               type="file"
-              accept=".json,.xlsx,.csv"
+              accept=".json"
               multiple
               disabled={busy}
               onChange={(e) => void choose(Array.from(e.target.files || []))}
             />
           </label>
         </Space>
-        {prepared.some((x) => x.kind === "SALES") && (
-          <Form.Item label="实际销量统计区间" style={{ marginTop: 16 }}>
-            <DatePicker.RangePicker
-              aria-label="实际销量统计区间"
-              value={dates}
-              onChange={(v) =>
-                setDates(v && v[0] && v[1] ? [v[0], v[1]] : null)
-              }
-              disabledDate={(d) => d.isAfter(dayjs(), "day")}
-            />
-          </Form.Item>
-        )}
         {prepared.map((p, i) => (
           <p key={i}>
             {files[i].name} · {p.products.length}款 ·{" "}
-            {p.kind === "DETAILS"
-              ? "补充详情材质"
-              : p.kind === "LIST"
-                ? "公开销量排名"
-                : "实际销量"}
+            {p.kind === "DETAILS" ? "补充详情材质" : "公开销量排名"}
           </p>
         ))}
         {phase && <p>{phase}</p>}
@@ -415,7 +416,6 @@ export function CompetitorAnalysisPage() {
     { message } = App.useApp();
   const [mode, setMode] = useState("multi"),
     [selected, setSelected] = useState<string[]>([]),
-    [source, setSource] = useState<CompetitorSource>("PUBLIC_RANK"),
     [filters, setFilters] = useState<Record<string, string>>({}),
     [keyword, setKeyword] = useState(""),
     [search, setSearch] = useState(""),
@@ -427,14 +427,41 @@ export function CompetitorAnalysisPage() {
     [addOpen, setAddOpen] = useState(false),
     [adding, setAdding] = useState(false),
     [addError, setAddError] = useState("");
+  const [preview, setPreview] = useState<CompassImageTarget | null>(null);
+  const [distributionPreview, setDistributionPreview] = useState<string | null>(
+    null,
+  );
+  const top20Ref = useRef<HTMLDivElement>(null);
+  const sortOpen = useRef(false);
+  const sortAnchor = useRef<{
+    panelTop: number;
+    pageX: number;
+    tableTop: number;
+    tableLeft: number;
+    pending: boolean;
+  } | null>(null);
+  const captureSortAnchor = () => {
+    const panel = top20Ref.current;
+    if (!panel) return;
+    const body = panel.querySelector(".ant-table-body");
+    sortAnchor.current = {
+      panelTop: panel.getBoundingClientRect().top,
+      pageX: window.scrollX,
+      tableTop: body?.scrollTop || 0,
+      tableLeft: body?.scrollLeft || 0,
+      pending: false,
+    };
+  };
   const [form] = Form.useForm();
   useEffect(() => {
     const t = setTimeout(() => setSearch(keyword.trim()), 300);
     return () => clearTimeout(t);
   }, [keyword]);
   const q = useQuery<Dashboard>({
-    queryKey: ["competitor-dashboard", selected, source, filters, search],
+    queryKey: ["competitor-dashboard", selected, filters, search],
     enabled: canRead,
+    // Keep the panels mounted so a new filter cannot collapse the page scroll range.
+    placeholderData: keepPreviousData,
     refetchInterval: (query) =>
       query.state.data?.crawl.jobs.some((j) =>
         ["QUEUED", "RUNNING"].includes(j.status),
@@ -446,7 +473,7 @@ export function CompetitorAnalysisPage() {
         await api(
           "/analytics/competitors?" +
             new URLSearchParams({
-              source,
+              source: "PUBLIC_RANK",
               ...filters,
               ...(selected.length ? { brandIds: selected.join(",") } : {}),
               ...(search ? { keyword: search } : {}),
@@ -460,6 +487,43 @@ export function CompetitorAnalysisPage() {
     competitors = brands.filter((b) => !b.isOwn),
     results = data?.results || [];
   const current = results.find((r) => r.brand.id === active) || results[0];
+  useLayoutEffect(() => {
+    const anchor = sortAnchor.current;
+    if (!anchor?.pending) return;
+    const restore = () => {
+      const panel = top20Ref.current;
+      if (!panel || sortAnchor.current !== anchor) return;
+      window.scrollTo({
+        left: anchor.pageX,
+        top:
+          window.scrollY + panel.getBoundingClientRect().top - anchor.panelTop,
+        behavior: "instant",
+      });
+      panel.querySelector(".ant-table-body")?.scrollTo({
+        top: anchor.tableTop,
+        left: anchor.tableLeft,
+        behavior: "instant",
+      });
+    };
+    restore();
+    const frame = requestAnimationFrame(() => {
+      restore();
+      if (!q.isFetching && !q.isPlaceholderData) sortAnchor.current = null;
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [filters, q.data, q.isFetching, q.isPlaceholderData]);
+  useEffect(() => {
+    // Respect a user's new scroll intent while a slow request is pending.
+    const release = () => {
+      sortAnchor.current = null;
+    };
+    window.addEventListener("wheel", release, { passive: true });
+    window.addEventListener("touchmove", release, { passive: true });
+    return () => {
+      window.removeEventListener("wheel", release);
+      window.removeEventListener("touchmove", release);
+    };
+  }, []);
   const refresh = () =>
     void queryClient.invalidateQueries({ queryKey: ["competitor-dashboard"] });
   async function crawl() {
@@ -467,9 +531,16 @@ export function CompetitorAnalysisPage() {
     try {
       const ids = results.map((r) => r.brand.id);
       if (!ids.length) return;
-      const requested = await api("/analytics/competitors/crawl", "POST", { brandIds: ids });
+      const requested = await api("/analytics/competitors/crawl", "POST", {
+        brandIds: ids,
+      });
       refresh();
-      if (requested.data.jobs.some((job: {status: string}) => ["QUEUED", "RUNNING"].includes(job.status))) message.success("后台采集已排队，可继续使用页面");
+      if (
+        requested.data.jobs.some((job: { status: string }) =>
+          ["QUEUED", "RUNNING"].includes(job.status),
+        )
+      )
+        message.success("后台采集已排队，可继续使用页面");
       else message.info("5分钟内已有采集记录，可查看采集状态后再更新");
     } catch (e) {
       message.error((e as Error).message);
@@ -508,8 +579,7 @@ export function CompetitorAnalysisPage() {
       title: "排名",
       dataIndex: "publicRank",
       width: 64,
-      render: (v: number | null, _p: CompetitorProduct, index: number) =>
-        source === "PUBLIC_RANK" ? number(v) : index + 1,
+      render: number,
     },
     {
       title: "商品",
@@ -517,7 +587,7 @@ export function CompetitorAnalysisPage() {
       width: 340,
       render: (_v: unknown, p: CompetitorProduct) => (
         <div className="competitor-product">
-          <ProductPhoto product={p} />
+          <ProductPhoto product={p} onPreview={setPreview} />
           <div>
             <a href={p.productUrl} target="_blank" rel="noopener noreferrer">
               {p.title}
@@ -533,16 +603,6 @@ export function CompetitorAnalysisPage() {
       width: 105,
       render: (v: number | null) => <strong>{money(v)}</strong>,
     },
-    ...(source === "SALES_REPORT"
-      ? [
-          {
-            title: "实际销量",
-            dataIndex: "salesCount",
-            width: 90,
-            render: number,
-          },
-        ]
-      : []),
     {
       title: "品类 / 季节",
       key: "category",
@@ -693,18 +753,6 @@ export function CompetitorAnalysisPage() {
             className="competitor-brand-select"
             placeholder="选择竞品，最多11个"
           />
-          <Select
-            aria-label="竞品数据口径"
-            value={source}
-            onChange={(v) => {
-              setSource(v);
-              setFilters({});
-            }}
-            options={[
-              { value: "PUBLIC_RANK", label: "公开销量排名" },
-              { value: "SALES_REPORT", label: "实际销量报表" },
-            ]}
-          />
         </div>
         <div className="competitor-facet-line">
           {(
@@ -755,9 +803,7 @@ export function CompetitorAnalysisPage() {
         </div>
       </Card>
       <p className="competitor-scope-note">
-        {source === "PUBLIC_RANK"
-          ? "公开排名按品牌分别统计，未公开实际销售件数。分析范围为已采集商品，详细材质以规格参数为准；未补齐详情时，品类和材质标签仅按标题识别。"
-          : "实际销量按导入报表的统计区间分析，价格与材质来自该批报表。"}
+        公开排名按品牌分别统计，未公开实际销售件数。分析范围为已采集商品，详细材质以规格参数为准；未补齐详情时，品类和材质标签仅按标题识别。
       </p>
       {q.isLoading && <Spin />}
       {q.error && (
@@ -767,7 +813,7 @@ export function CompetitorAnalysisPage() {
         <Alert
           type="warning"
           showIcon
-          title="品牌的数据日期或销量统计区间不同，请更新到相同区间后评估差异。当前各品牌独立展示。"
+          title="品牌的数据日期不同，请更新到相同日期后评估差异。当前各品牌独立展示。"
         />
       )}
       {!!data && (
@@ -797,7 +843,7 @@ export function CompetitorAnalysisPage() {
               <strong>
                 {number(results.reduce((n, r) => n + r.materialCoverage, 0))}
               </strong>
-              <small>以商品规格或导入报表核对</small>
+              <small>以商品规格参数核对</small>
             </Card>
           </div>
           <Card size="small" title="品牌概览">
@@ -832,15 +878,6 @@ export function CompetitorAnalysisPage() {
                       ? "—"
                       : `${money(r.minPrice)}–${money(r.maxPrice)}`,
                 },
-                ...(source === "SALES_REPORT"
-                  ? [
-                      {
-                        title: "实际销量",
-                        render: (_v: unknown, r: Result) =>
-                          number(r.salesCount),
-                      },
-                    ]
-                  : []),
                 {
                   title: "材质完整",
                   render: (_v, r) => `${r.materialCoverage} / ${r.total}`,
@@ -848,11 +885,7 @@ export function CompetitorAnalysisPage() {
                 {
                   title: "数据日期",
                   render: (_v, r) =>
-                    r.snapshot
-                      ? source === "SALES_REPORT"
-                        ? `${r.snapshot.periodStart}—${r.snapshot.periodEnd}`
-                        : r.snapshot.asOfDate
-                      : "未采集",
+                    r.snapshot ? r.snapshot.asOfDate : "未采集",
                 },
               ]}
             />
@@ -868,39 +901,70 @@ export function CompetitorAnalysisPage() {
             ).map(([title, field]) => (
               <Distribution
                 key={field}
-                title={`${title} · 商品款数`}
+                title={title}
                 field={field}
                 results={results}
+                activePreview={distributionPreview}
+                onPreviewChange={(key, open) =>
+                  setDistributionPreview((old) =>
+                    open ? key : old === key ? null : old,
+                  )
+                }
               />
             ))}
           </div>
           <Card
             size="small"
             title="商品 TOP20"
+            className="competitor-top20"
+            ref={top20Ref}
             extra={
               <Space>
-                <Select
-                  aria-label="TOP20排序指标"
-                  value={
-                    filters.sort ||
-                    (source === "PUBLIC_RANK" ? "rank" : "sales")
-                  }
-                  onChange={(v) => setFilter("sort", v)}
-                  options={[
-                    {
-                      value: source === "PUBLIC_RANK" ? "rank" : "sales",
-                      label:
-                        source === "PUBLIC_RANK"
-                          ? "公开销量排名"
-                          : "实际销量降序",
-                    },
-                    { value: "priceAsc", label: "特卖价从低到高" },
-                    { value: "priceDesc", label: "特卖价从高到低" },
-                  ]}
-                />
+                <span
+                  onPointerDownCapture={(event) => {
+                    // The option menu is a portal: its React events also bubble
+                    // here, but must not replace the anchor before the menu opened.
+                    if (
+                      !sortOpen.current &&
+                      event.currentTarget.contains(event.target as Node)
+                    )
+                      captureSortAnchor();
+                  }}
+                  onKeyDownCapture={(event) => {
+                    if (
+                      !sortOpen.current &&
+                      event.currentTarget.contains(event.target as Node)
+                    )
+                      captureSortAnchor();
+                  }}
+                >
+                  <Select
+                    aria-label="TOP20排序指标"
+                    value={filters.sort || "rank"}
+                    onOpenChange={(open) => {
+                      sortOpen.current = open;
+                      if (open && !sortAnchor.current) captureSortAnchor();
+                      if (!open && !sortAnchor.current?.pending)
+                        sortAnchor.current = null;
+                    }}
+                    onChange={(v) => {
+                      if (!sortAnchor.current) captureSortAnchor();
+                      if (sortAnchor.current) sortAnchor.current.pending = true;
+                      setFilter("sort", v);
+                    }}
+                    options={[
+                      {
+                        value: "rank",
+                        label: "公开销量排名",
+                      },
+                      { value: "priceAsc", label: "特卖价从低到高" },
+                      { value: "priceDesc", label: "特卖价从高到低" },
+                    ]}
+                  />
+                </span>
                 <Button
                   icon={<DownloadOutlined aria-hidden="true" />}
-                  disabled={!current?.top20.length}
+                  disabled={q.isFetching || !current?.top20.length}
                   onClick={() =>
                     current &&
                     void downloadSheet(
@@ -908,7 +972,6 @@ export function CompetitorAnalysisPage() {
                       current.top20.map((p) => ({
                         品牌: current.brand.name,
                         公开排名: p.publicRank,
-                        实际销量: p.salesCount,
                         商品名称: p.title,
                         款号: p.styleCode,
                         特卖价: p.salePrice,
@@ -935,60 +998,67 @@ export function CompetitorAnalysisPage() {
                 label: `${r.brand.name} ${Math.min(r.total, 20)}款`,
               }))}
             />
-            {current?.snapshot ? (
-              <>
-                <p className="competitor-scope-note">
-                  {current.snapshot.scope} · 数据日期{" "}
-                  {current.snapshot.asOfDate} · 更新于{" "}
-                  {when(current.snapshot.createdAt)}
-                  {current.snapshot.sourceUrl && (
-                    <>
-                      {" "}
-                      ·{" "}
-                      <a
-                        href={current.snapshot.sourceUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                      >
-                        查看榜单来源
-                      </a>
-                    </>
-                  )}
-                </p>
-                <Table
-                  rowKey="productId"
-                  dataSource={current.top20}
-                  columns={columns}
-                  size="small"
-                  pagination={false}
-                  scroll={{ x: 1250, y: 560 }}
-                  locale={{ emptyText: "当前筛选没有匹配商品" }}
-                />
-              </>
-            ) : (
-              <Empty
-                image={Empty.PRESENTED_IMAGE_SIMPLE}
-                description="该品牌尚未采集数据"
-              >
-                <a
-                  href={current?.brand.searchUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
+            <div className="competitor-top20-content" aria-busy={q.isFetching}>
+              {current?.snapshot ? (
+                <>
+                  <p className="competitor-scope-note">
+                    {current.snapshot.scope} · 数据日期{" "}
+                    {current.snapshot.asOfDate} · 更新于{" "}
+                    {when(current.snapshot.createdAt)}
+                    {current.snapshot.sourceUrl && (
+                      <>
+                        {" "}
+                        ·{" "}
+                        <a
+                          href={current.snapshot.sourceUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        >
+                          查看榜单来源
+                        </a>
+                      </>
+                    )}
+                  </p>
+                  <Table
+                    rowKey="productId"
+                    dataSource={current.top20}
+                    columns={columns}
+                    size="small"
+                    loading={q.isFetching}
+                    pagination={false}
+                    scroll={{
+                      x: 1250,
+                      y: 560,
+                      scrollToFirstRowOnChange: false,
+                    }}
+                    locale={{ emptyText: "当前筛选没有匹配商品" }}
+                  />
+                </>
+              ) : (
+                <Empty
+                  image={Empty.PRESENTED_IMAGE_SIMPLE}
+                  description="该品牌尚未采集数据"
                 >
-                  打开唯品会品牌页
-                </a>
-                {manage && (
-                  <Button
-                    type="primary"
-                    loading={queuing}
-                    onClick={() => void crawl()}
-                    style={{ marginLeft: 12 }}
+                  <a
+                    href={current?.brand.searchUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
                   >
-                    后台采集
-                  </Button>
-                )}
-              </Empty>
-            )}
+                    打开唯品会品牌页
+                  </a>
+                  {manage && (
+                    <Button
+                      type="primary"
+                      loading={queuing}
+                      onClick={() => void crawl()}
+                      style={{ marginLeft: 12 }}
+                    >
+                      后台采集
+                    </Button>
+                  )}
+                </Empty>
+              )}
+            </div>
           </Card>
         </>
       )}
@@ -997,6 +1067,7 @@ export function CompetitorAnalysisPage() {
         onClose={() => setCapture(false)}
         brands={brands}
       />
+      <CompassImagePreview target={preview} onClose={() => setPreview(null)} />
       <ImportPanel
         open={importOpen}
         onClose={() => setImportOpen(false)}

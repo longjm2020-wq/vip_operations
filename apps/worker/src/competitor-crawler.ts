@@ -96,7 +96,7 @@ export async function crawlPublicBrand(
   // sample scope instead of claiming a complete market catalogue.
   for (let scroll = 0; scroll < 4; scroll++) {
     const count = await page.locator(".c-goods-item__name").count();
-    if (count >= 120) break;
+    if (count >= 50) break;
     await page.locator(".c-goods-item__name").last().scrollIntoViewIfNeeded();
     await page.waitForTimeout(1000);
     await guard(page);
@@ -108,13 +108,13 @@ export async function crawlPublicBrand(
   if (captured.kind !== "LIST")
     throw new CrawlIssue(false, "排名页面格式变化，未替换原数据");
   const products = captured.products
-    .slice(0, 120)
+    .slice(0, 50)
     .map((p) => competitorProductSchema.parse(p));
   const { kind: _kind, ...data } = captured;
   await hooks.list({
     ...data,
     products,
-    scope: `后台采集品牌销量榜第一页已加载${products.length}款商品（最多120款，非全品牌目录）`,
+    scope: `后台采集品牌销量榜前${products.length}款商品（最多50款，非全品牌目录）`,
   });
   let buffered: CompetitorProduct[] = [];
   let skipped = 0,
