@@ -392,6 +392,8 @@ test("AI正文编码预览、外部分享无需登录及手机布局、撤销失
   await keyword.click();
   await expect(page.locator(".compass-image-preview:visible")).toBeVisible();
   await page.keyboard.press("Escape");
+  await expect(page.locator(".compass-image-preview:visible")).toHaveCount(0);
+  await expect(drawer).toBeVisible();
   await drawer.getByRole("button", { name: "分享报告", exact: true }).click();
   const share = page.getByRole("dialog", {
     name: "分享 AI 经营分析",
@@ -513,6 +515,7 @@ test("AI侧面板展示同批数值图表，普通管理员不能配置模型", 
   await expect(page.locator(".compass-image-preview:visible")).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(page.locator(".compass-image-preview:visible")).toHaveCount(0);
+  await expect(panel).toBeVisible();
   await expect(panel.locator(".ai-metric-grid .ant-card").nth(0)).toContainText(
     "↓ 50.00%",
   );

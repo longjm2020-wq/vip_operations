@@ -1,6 +1,6 @@
 import { Image, Popover } from "antd";
 import { PictureOutlined } from "@ant-design/icons";
-import { useEffect, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import "./compass-product-image.css";
 
 export type CompassImageTarget = { image: string; code: string };
@@ -69,36 +69,45 @@ export function CompassImagePreview({
   target: CompassImageTarget | null;
   onClose: () => void;
 }) {
-  useEffect(() => {
-    if (!target) return;
+  const onCloseRef = useRef(onClose);
+  const open = target !== null;
+  useLayoutEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
+  useLayoutEffect(() => {
+    if (!open) return;
+    const trigger = document.activeElement;
     const escape = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
         event.stopImmediatePropagation();
-        onClose();
+        onCloseRef.current();
       }
     };
-    // The image can open inside a Drawer. Escape should close the image even
-    // before the preview animation moves keyboard focus into its dialog.
-    document.addEventListener("keydown", escape, true);
-    return () => document.removeEventListener("keydown", escape, true);
-  }, [target, onClose]);
+    // Install before the preview paints, and handle Escape before either
+    // the Drawer or image portal processes it during its focus animation.
+    window.addEventListener("keydown", escape, true);
+    return () => {
+      window.removeEventListener("keydown", escape, true);
+      if (trigger instanceof HTMLElement && trigger.isConnected)
+        trigger.focus({ preventScroll: true });
+    };
+  }, [open]);
+  // Remove the portal when closing so a canceled enter animation cannot
+  // leave an invisible mask blocking the report underneath it.
+  if (!target) return null;
   return (
     <Image.PreviewGroup
-      items={
-        target
-          ? [
-              {
-                src: target.image,
-                alt: `商品图片 ${target.code}`,
-                referrerPolicy: "no-referrer",
-              },
-            ]
-          : []
-      }
+      items={[
+        {
+          src: target.image,
+          alt: `商品图片 ${target.code}`,
+          referrerPolicy: "no-referrer",
+        },
+      ]}
       classNames={{ popup: { root: "compass-image-preview" } }}
       preview={{
-        open: target !== null,
+        open: true,
         onOpenChange: (open) => {
           if (!open) onClose();
         },
