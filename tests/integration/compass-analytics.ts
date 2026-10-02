@@ -334,6 +334,22 @@ export async function testCompassAnalytics(h: Record<string, any>) {
     assert.equal((await ensureAIAnalysis(aiBundle)).state, "READY");
     assert.equal(aiCalls, 1, "identical data reuses successful analysis");
     assert.equal((await getAIReport()).responseModel, COMPASS_AI_MODEL);
+    const generatedAPI = await ok(endpoint + "/ai-generate", "POST", {});
+    assert.equal(generatedAPI.state, "READY");
+    assert.equal(
+      aiCalls,
+      1,
+      "HTTP generation also reuses the verified analysis",
+    );
+    const generatedAudit = await one(
+      db,
+      "SELECT entity_id,after_data FROM audit_logs WHERE action='COMPASS_AI_GENERATE' ORDER BY id DESC LIMIT 1",
+    );
+    assert.equal(String(generatedAudit.entity_id), generatedAPI.id);
+    assert.equal(
+      JSON.stringify(generatedAudit.after_data).includes(aiKey),
+      false,
+    );
   } finally {
     releaseAI();
     globalThis.fetch = originalFetch;

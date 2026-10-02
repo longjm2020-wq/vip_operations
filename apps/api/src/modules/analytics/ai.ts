@@ -52,6 +52,7 @@ export const aiContentSchema = z
   })
   .strict();
 export type CompassAIResult = {
+  id?: string;
   state: string;
   message?: string;
   model: string;
@@ -322,6 +323,7 @@ function publicReport(r: Row): CompassAIResult {
       message: "上次 AI 请求结果未确认；如需重试，请手动生成",
     };
   return {
+    id: String(r.id),
     state: r.status === "GENERATING" ? "PENDING" : r.status,
     model: r.model,
     reportDate: r.report_date,
@@ -520,7 +522,7 @@ export async function generateAIReport(c: Context) {
     c,
     "COMPASS_AI_GENERATE",
     "compass_ai_reports",
-    bundle.date,
+    result.id || null,
     null,
     json({
       state: result.state,
