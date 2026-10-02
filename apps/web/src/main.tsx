@@ -1,6 +1,7 @@
 import {SelectionWorkspace} from "./selection-workspace";
 import { BrandVideo } from "./brand-video";
 import React, { useState, useEffect } from "react";
+const CompassAnalyticsPage = React.lazy(() => import("./compass-analytics").then(module => ({ default: module.CompassAnalyticsPage })));
 const PublicSelectionCollection = React.lazy(() => import("./selection-collections").then(module => ({ default: module.PublicSelectionCollection })));
 const SelectionMobilePhotos = React.lazy(() => import("./selection-mobile-photos").then(module => ({ default: module.SelectionMobilePhotos })));
 import { createRoot } from "react-dom/client";
@@ -72,7 +73,7 @@ const SupplyReview = React.lazy(() => import("./supply").then(module => ({ defau
 const SupplyOrders = React.lazy(() => import("./supply-orders").then(module => ({ default: module.SupplyOrders })));
 const SupplyOrderNotice = React.lazy(() => import("./supply-orders").then(module => ({ default: module.SupplyOrderNotice })));
 const SupplyStatements = React.lazy(() => import("./supply-statements").then(module => ({ default: module.SupplyStatements })));
-const coreFeatureSummary = "采购库存经营 · 协作表格与资料收集 · 供应链订单对账 · 项目协作";
+const coreFeatureSummary = "采购库存与经营分析 · 协作表格 · 供应链订单对账 · 项目协作";
 const useUi = create<{ collapsed: boolean; toggle: () => void }>((set) => ({
   collapsed: false,
   toggle: () => set((s) => ({ collapsed: !s.collapsed })),
@@ -187,6 +188,7 @@ function Workspace({ user }: { user: Row }) {
   const location = useLocation(),
     ui = useUi();
   const originalItems = [
+    { key: "/analytics/compass", label: "经营分析", icon: <DatabaseOutlined />, permission: "analytics.read" },
     {
       key: "/products",
       label: "商品档案",
@@ -491,6 +493,7 @@ function Workspace({ user }: { user: Row }) {
                 }
               />
               <Route path="/inventory" element={<InventoryPage />} />
+              <Route path="/analytics/compass" element={<CompassAnalyticsPage />} />
               <Route
                 path="/inventory/transactions"
                 element={<TransactionsPage />}

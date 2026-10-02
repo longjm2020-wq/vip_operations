@@ -4,6 +4,20 @@ API 前缀已确定为 `/api/v1`。下述补充路径、DTO、错误码与幂等
 
 ## 1. 通用协议
 
+### 魔方罗盘经营分析（2026-10-02）
+
+- `GET /analytics/compass`：analytics.read；dimension=style/article/barcode，days=1/3/7/15/30，endDate 可选，q 模糊查询，styleNo/articleNo 精确范围，page/pageSize，sort 白名单。返回来源、期间汇总、每日趋势、TOP 10 和分页明细。三种报表独立计算，库存仅取截止日期快照。
+- `GET /analytics/compass/sources`：analytics.read；当前三个维度的已完成来源。
+- `POST /analytics/compass/imports`：analytics.manage；fileName、SHA-256 fileHash、dimension、startDate/endDate、expectedRows（最多 200000）。返回新建或续传任务。同文件不重复建任务。
+- `POST /analytics/compass/imports/:id/chunks`：analytics.manage；records 数组（最多 1000）；强类型日期、平台 ID、维度和数值指标。按文件和批次使用稳定幂等键，冲突行拒绝。
+- `POST /analytics/compass/imports/:id/finish`：analytics.manage；原子检查行数、日期连续性并切换当前来源；未完成上传不进入面板。旧报表不覆盖更新区间。
+- `GET/POST /analytics/compass/mail-settings`：analytics.manage；启用状态、SMTP 主机、465/587 加密端口、账号、同账号发件邮箱、最多 20 个收件邮箱、可选授权码。GET 只返回是否配置密码，永不回显密文或明文。POST 以 COMPASS_MAIL_KEY 加密授权码，审计仅保存脱敏状态。
+- `POST /analytics/compass/mail-test`：analytics.manage；验证已保存的 SMTP 连接及认证，不发送邮件。修改发件凭据后须重新验证。
+- `POST /analytics/compass/send-daily`：analytics.manage；仅在三个报表覆盖截至昨日的完整近 30 天后发送每日报告。以数据日期与收件邮箱防重复；已接受或不确定发送不自动重发。
+- `GET /analytics/compass/mail-history`：analytics.manage；最近 50 条收件人状态，不返回秘密或 SMTP 原始错误。
+
+所有写入需要登录、CSRF 与权限；导入和设置保存需要幂等键。每日发送在 Worker 08:00（Asia/Shanghai）后等待新报表，SMTP 确认失败最多自动尝试三次，间隔至少 30 分钟。采集使用另设的本机 Codex 自动化任务，不存储或复制罗盘浏览器会话到服务器。
+
 JSON camelCase；ID 为字符串；金额十进制字符串（如 `"78.00"`），数量整数，时间ISO 8601含时区。拒绝未知写字段，所有列表 page≥1、pageSize默认20且≤100、排序字段白名单，稳定追加id排序；筛选在服务器执行。
 
 成功单项 `{ "data": {...}, "requestId": "..." }`；列表 `{ "data": [], "page":1, "pageSize":20, "total":0, "requestId":"..." }`。创建201，查询/命令成功200，无内容退出204。

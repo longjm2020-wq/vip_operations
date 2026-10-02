@@ -35,6 +35,7 @@ export const manualPermissions: Record<string, string | null> = {
   "27-style-selections": "selection.read",
   "28-project-tables": "selection.read",
   "29-inventory-transfers": "inventory.read",
+  "30-compass-analytics": "analytics.read",
 };
 @Controller("api/v1/help")
 export class ManualController {

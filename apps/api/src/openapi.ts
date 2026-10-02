@@ -8,6 +8,8 @@ import {
 } from "./modules/purchases/service.js";
 import { styleSelectionInput } from "./modules/style-selections/service.js";
 import { id, qty, positive, money, text } from "./core.js";
+import { beginSchema, chunkSchema } from "./modules/analytics/service.js";
+import { settingsSchema } from "./modules/analytics/mail.js";
 export function enrichOpenApi(doc: OpenAPIObject) {
   const schema = (s: z.ZodType) =>
     z.toJSONSchema(s, { target: "openapi-3.0", io: "input" });
@@ -198,7 +200,39 @@ export function enrichOpenApi(doc: OpenAPIObject) {
   set("/api/v1/roles", "post", role);
   set("/api/v1/roles/{id}", "patch", role.partial({ code: true }));
   doc.info.description =
-    "内部ERP v0.1。所有ID/金额用字符串。写请求需当前会话、CSRF及幂等键；权限仍在后端校验。详细状态和字段见docs/API_SPEC.md。真实VOP未启用。";
+    "内部ERP v0.1。写请求需当前会话、CSRF及相应幂等键；权限仍在后端校验。魔方罗盘分析来自已导入的每日明细报表，不代表官方指标接口已启用。详细状态和字段见docs/API_SPEC.md。";
+  const compass = "/api/v1/analytics/compass";
+  set(compass + "/imports", "post", beginSchema, "创建或继续罗盘报表导入");
+  set(
+    compass + "/imports/{id}/chunks",
+    "post",
+    chunkSchema,
+    "分批上传每日明细",
+  );
+  set(
+    compass + "/imports/{id}/finish",
+    "post",
+    z.object({}).strict(),
+    "原子完成报表并更新分析来源",
+  );
+  set(
+    compass + "/mail-settings",
+    "post",
+    settingsSchema,
+    "安全保存每日邮件配置",
+  );
+  set(
+    compass + "/mail-test",
+    "post",
+    z.object({}).strict(),
+    "验证 SMTP 配置，不发信",
+  );
+  set(
+    compass + "/send-daily",
+    "post",
+    z.object({}).strict(),
+    "发送完整且最新的每日报告，同日收件人防重复",
+  );
   void money;
   return doc;
 }

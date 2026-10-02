@@ -7,6 +7,7 @@ import { api } from "./api";
 import { Alert, Spin } from "antd";
 
 const moduleChapters: Record<string, string> = {
+  analytics: "30-compass-analytics",
   products: "02-products",
   skus: "03-skus",
   inventory: "04-inventory",

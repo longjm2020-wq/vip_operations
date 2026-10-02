@@ -11,6 +11,7 @@ const modules: Record<string, string> = {
   receipt: "到货入库",
   audit: "操作日志",
   vip: "唯品会接入",
+  analytics: "经营分析",
   project: "项目管理",
   sop: "操作流程 SOP",
 };
@@ -46,6 +47,8 @@ export const permissionLabels: Record<string, string> = {
   "receipt.post": "入库过账",
   "audit.read": "查看操作日志",
   "vip.settings": "管理唯品会接入与同步",
+  "analytics.read": "查看经营分析",
+  "analytics.manage": "导入分析报表与配置每日邮件",
   "project.read": "查看项目",
   "project.create": "创建与管理本人项目",
   "sop.manage": "管理流程模板",

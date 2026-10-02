@@ -24,9 +24,11 @@ import { AuthGuard, Envelope, ErrorFilter } from "./http.js";
 import { validateIntegrationMode } from "./integrations/vip/index.js";
 import { enrichOpenApi } from "./openapi.js";
 import { ManualController } from "./manual.js";
+import { CompassAnalyticsModule } from "./modules/analytics/controller.js";
 @Module({
   controllers: [ManualController],
   imports: [
+    CompassAnalyticsModule,
     AuthModule,
     SupplyModule,
     InventoryModule,

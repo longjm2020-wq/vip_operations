@@ -1011,6 +1011,8 @@ try {
   );
   await migrate();
   check("migrations rerun without modifying data");
+  const {testCompassAnalytics}=await import("./compass-analytics.js");
+  await testCompassAnalytics({ok,request,db,one,check,buyer});
   await writeFile(
     ".local/integration-result.json",
     JSON.stringify(

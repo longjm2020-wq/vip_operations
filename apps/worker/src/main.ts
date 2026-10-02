@@ -4,6 +4,8 @@ import { validateIntegrationMode } from "../../api/src/integrations/vip/index.js
 import { startVopScheduler } from "./vop-scheduler.js";
 import { startSupplyLogistics } from "./supply-logistics.js";
 import { startInventoryLogistics } from "./inventory-logistics.js";
+import { startCompassMail } from "./compass-mail.js";
+const stopCompassMail = startCompassMail();
 const stopInventoryLogistics = startInventoryLogistics();
 const stopSupplyLogistics = startSupplyLogistics();
 validateIntegrationMode();
@@ -45,6 +47,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const)
       stopVop(),
       stopSupplyLogistics(),
       stopInventoryLogistics(),
+      stopCompassMail(),
     ]).then(() => process.exit(0));
   });
 console.log(

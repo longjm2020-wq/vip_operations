@@ -1,0 +1,219 @@
+.compass-page .compass-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 20px 0 6px;
+  flex-wrap: wrap;
+}
+.compass-date {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #907a6e;
+}
+.compass-date input {
+  border: 1px solid #ead9cd;
+  border-radius: 6px;
+  background: #fff;
+  padding: 5px 8px;
+  color: #49392f;
+}
+.compass-period {
+  color: #917b6e;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.compass-kpis {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 14px;
+  margin: 16px 0 20px;
+}
+.compass-kpis .ant-card-body {
+  padding: 18px;
+}
+.compass-kpis strong {
+  display: block;
+  font-size: 26px;
+  line-height: 1.5;
+  margin: 8px 0;
+  color: #37261e;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.compass-kpis small {
+  color: #9b867a;
+}
+.compass-charts {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(380px, 1fr);
+  gap: 18px;
+  margin-bottom: 20px;
+}
+.compass-charts .ant-card-body {
+  padding: 18px;
+}
+.compass-trend svg {
+  width: 100%;
+  height: 240px;
+}
+.compass-chart-caption {
+  display: flex;
+  justify-content: space-between;
+  color: #927c70;
+  font-size: 12px;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.compass-chart-caption i {
+  display: inline-block;
+  width: 10px;
+  height: 3px;
+  vertical-align: middle;
+  margin: 0 6px 0 12px;
+}
+.compass-ranks button {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  padding: 6px 0;
+  cursor: pointer;
+  color: #5d483b;
+  font-size: 12px;
+}
+.compass-ranks button:hover,
+.compass-ranks button:focus {
+  background: #fff5eb;
+}
+.compass-rank-number {
+  color: #b29b8c;
+  width: 18px;
+}
+.compass-rank-code {
+  width: 125px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.compass-rank-bar {
+  flex: 1;
+  background: #fff0e1;
+  height: 7px;
+  border-radius: 4px;
+  overflow: hidden;
+}
+.compass-rank-bar i {
+  display: block;
+  height: 100%;
+  background: #dc762e;
+  border-radius: 4px;
+}
+.compass-ranks b {
+  width: 92px;
+  text-align: right;
+  font-weight: 500;
+}
+.compass-traffic {
+  display: flex;
+  gap: 26px;
+  flex-wrap: wrap;
+  padding: 14px 18px;
+  margin-bottom: 20px;
+  background: #fff;
+  border: 1px solid #ecdccf;
+  border-radius: 8px;
+  color: #958174;
+  font-size: 13px;
+}
+.compass-traffic b {
+  color: #594235;
+  margin-left: 6px;
+  font-variant-numeric: tabular-nums;
+}
+.compass-product {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+.compass-product img {
+  height: 48px;
+  width: 36px;
+  object-fit: cover;
+  border-radius: 4px;
+}
+.compass-product .ant-btn-link {
+  padding: 0;
+  height: auto;
+  text-align: left;
+  white-space: normal;
+}
+.compass-product small {
+  display: block;
+  color: #a48b7b;
+}
+.compass-notes {
+  margin-top: 16px;
+  color: #a28a7c;
+  font-size: 12px;
+  line-height: 1.8;
+}
+.compass-notes summary {
+  cursor: pointer;
+}
+.compass-drill {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.compass-upload {
+  text-align: center;
+  border: 1px dashed #e3c8b3;
+  border-radius: 8px;
+  padding: 24px;
+  background: #fffaf5;
+}
+.compass-upload .anticon {
+  font-size: 28px;
+  color: #d95200;
+}
+.compass-upload input {
+  max-width: 100%;
+}
+.compass-form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 16px;
+}
+@media (max-width: 1150px) {
+  .compass-kpis {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .compass-charts {
+    grid-template-columns: 1fr;
+  }
+}
+@media (max-width: 600px) {
+  .compass-kpis {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .compass-kpis strong {
+    font-size: 20px;
+  }
+  .compass-form-grid {
+    grid-template-columns: 1fr;
+  }
+  .compass-page .ant-card-head {
+    flex-wrap: wrap;
+  }
+  .compass-toolbar .ant-segmented-item-label {
+    padding: 0 7px;
+  }
+}

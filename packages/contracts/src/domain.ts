@@ -26,6 +26,8 @@ export const permissions = [
   "receipt.post",
   "audit.read",
   "vip.settings",
+  "analytics.read",
+  "analytics.manage",
   "selection.read",
   "selection.manage",
   "project.read",
@@ -102,6 +104,7 @@ export const roleSeeds: Record<
   ANALYST: {
     name: "数据分析",
     permissions: [
+      "analytics.read",
       "product.read",
       "inventory.read",
       "purchase.read",
