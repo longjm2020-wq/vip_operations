@@ -142,10 +142,19 @@ test("竞品单品牌TOP20、详细材质、商品预览及后台队列设置", 
       .filter({ has: page.getByText(title, { exact: true }) });
     await expect(chart.locator(".ant-card-head-title")).toHaveText(title);
     const bar = chart.locator(".competitor-bar-row:enabled").first();
+    const bucketName = (await bar.getAttribute("aria-label"))!
+      .split(" · ")[1]
+      .split("，")[0];
     await bar.hover();
-    const popup = page.locator(".competitor-bar-popover:visible");
+    // Wait for this bar's content rather than the previous popup's exit motion.
+    const popup = page.locator(".competitor-bar-popover:visible").filter({
+      has: page.getByText(`${own.name} · ${bucketName} · 前10款`, {
+        exact: true,
+      }),
+    });
     await expect(popup.locator(".competitor-bar-products a")).toHaveCount(10);
     await expect(popup.locator(".competitor-bar-products img")).toHaveCount(10);
+    await expect(popup).not.toHaveClass(/ant-zoom-big-(enter|appear|leave)/);
     // The popup stays open when the pointer moves from the bar to a product.
     await popup.locator(".competitor-bar-products a").first().hover();
     await expect(popup).toBeVisible();
