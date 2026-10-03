@@ -191,7 +191,7 @@ test("竞品单品牌TOP20、详细材质、商品预览及后台队列设置", 
   await expect(mobilePopup).toHaveCount(0);
   await page.setViewportSize({ width: 1440, height: 760 });
   await page
-    .getByRole("tab", { name: `${competitor.name} 20款`, exact: true })
+    .getByRole("tab", { name: competitor.name, exact: true })
     .click();
   const top20 = page.locator(".competitor-page > .ant-card").filter({
     has: page.getByText("商品 TOP20", { exact: true }),
@@ -259,7 +259,7 @@ test("竞品单品牌TOP20、详细材质、商品预览及后台队列设置", 
       firstCode,
     );
     await expect(
-      top20.getByRole("tab", { name: `${competitor.name} 20款`, exact: true }),
+      top20.getByRole("tab", { name: competitor.name, exact: true }),
     ).toHaveAttribute("aria-selected", "true");
     expect(await page.evaluate(() => window.scrollY)).toBeCloseTo(anchor, 0);
     expect((await top20.boundingBox())!.y).toBeCloseTo(panelTop, 0);

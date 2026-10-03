@@ -995,7 +995,7 @@ export function CompetitorAnalysisPage() {
               onChange={setActive}
               items={results.map((r) => ({
                 key: r.brand.id,
-                label: `${r.brand.name} ${Math.min(r.total, 20)}款`,
+                label: r.brand.name,
               }))}
             />
             <div className="competitor-top20-content" aria-busy={q.isFetching}>
