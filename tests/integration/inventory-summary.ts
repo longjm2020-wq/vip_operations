@@ -620,6 +620,198 @@ try {
     },
   );
   await check(
+    "Matched records are prioritized across pages and filters report full coverage and correct totals",
+    async () => {
+      await sql(
+        "UPDATE skus SET barcode='0012345678901234567890' WHERE id=$1",
+        [skus[0]],
+      );
+      await activateReport(completeSource);
+      await sql(
+        `INSERT INTO compass_records(import_id,business_date,entity_key,style_no,article_no,barcode,payload)
+        VALUES($1,$2,'late-inventory','SUM-LARGE','','SKU-LARGE',$3::jsonb)`,
+        [
+          completeSource,
+          reportEnd,
+          JSON.stringify({ metrics: { salesQty: 0 }, reportedReturnRate: 0 }),
+        ],
+      );
+      const all = await summary();
+      assert.equal(all.reportCoverage.total, 32);
+      assert.equal(all.reportCoverage.matched, 3);
+      assert.equal(all.reportCoverage.unmatched, 29);
+      assert.equal(all.reportCoverage.source.id, completeSource);
+      assert.deepEqual(
+        all.data.slice(0, 3).map((r: any) => r.skuId),
+        [skus[0], skus[1], skus[31]],
+      );
+      assert.equal((await summary({ page: 2 })).reportCoverage.matched, 3);
+      assert.deepEqual(all.totals, expected);
+      const matched = await summary({ reportMatch: "matched" });
+      assert.equal(matched.total, 3);
+      assert.equal(matched.totals.physicalQty, 4_000_000_019);
+      assert.ok(matched.data.every((r: any) => r.compassMatched));
+      const unmatched = await summary({ reportMatch: "unmatched" });
+      assert.equal(unmatched.total, 29);
+      assert.equal(unmatched.totals.physicalQty, 17);
+      assert.ok(unmatched.data.every((r: any) => !r.compassMatched));
+      const narrowed = await summary({
+        productId: products[0],
+        warehouseId: warehouses[0].id,
+        reportMatch: "matched",
+      });
+      assert.equal(narrowed.reportCoverage.total, 3);
+      assert.equal(narrowed.reportCoverage.matched, 2);
+      assert.equal(narrowed.totals.physicalQty, 14);
+      const empty = await summary({ skuId: skus[2], reportMatch: "matched" });
+      assert.equal(empty.total, 0);
+      assert.deepEqual(empty.data, []);
+      assert.equal(empty.reportCoverage.source.id, completeSource);
+      assert.ok(Object.values(empty.totals).every((v) => v === 0));
+      assert.deepEqual(
+        (await summary({ dimension: "style", reportMatch: "matched" })).totals,
+        expected,
+      );
+      await assert.rejects(() => summary({ reportMatch: "invalid" }));
+    },
+  );
+  await check(
+    "Image matching uses each color's exact article and style without writing catalog data",
+    async () => {
+      await sql(
+        "UPDATE products SET main_image_url='https://example.com/catalog.jpg' WHERE id=ANY($1::bigint[])",
+        [products],
+      );
+      const [source] = await sql(
+        "INSERT INTO compass_imports(dimension,file_name,file_hash,start_date,end_date,expected_rows,status,imported_by,completed_at,normalization_version) VALUES('article','货号图片.xlsx',$1,$2,$3,3,'COMPLETE',$4,now(),3) RETURNING id",
+        ["a".repeat(64), reportStart, reportEnd, user.id],
+      );
+      for (const [style, article, image] of [
+        ["SUM-A", "ARTICLE-A-01", "https://example.com/black.jpg"],
+        ["SUM-A", "ARTICLE-A-02", "https://example.com/white.jpg"],
+        ["SUM-B", "ARTICLE-A-01", "https://example.com/other-style.jpg"],
+      ]) {
+        await sql(
+          "INSERT INTO compass_records(import_id,business_date,entity_key,style_no,article_no,barcode,payload) VALUES($1,$2,$3,$4,$5,'',$6::jsonb)",
+          [
+            source.id,
+            reportEnd,
+            style + article,
+            style,
+            article,
+            JSON.stringify({ image }),
+          ],
+        );
+      }
+      await sql(
+        "INSERT INTO compass_active_imports(dimension,import_id) VALUES('article',$1)",
+        [source.id],
+      );
+      const black = (await summary({ skuId: skus[1] })).data[0];
+      assert.equal(black.mainImageUrl, "https://example.com/black.jpg");
+      assert.equal(black.inventoryImage.articleNo, "ARTICLE-A-01");
+      assert.equal(black.inventoryImage.sourceId, source.id);
+      assert.equal(
+        (await summary({ skuId: skus[2] })).data[0].mainImageUrl,
+        "https://example.com/white.jpg",
+      );
+      assert.equal(
+        (await summary({ skuId: skus[3] })).data[0].mainImageUrl,
+        "https://example.com/other-style.jpg",
+      );
+      const grouped = await summary({
+        dimension: "article",
+        productId: products[0],
+      });
+      assert.deepEqual(
+        grouped.data.map((r: any) => r.mainImageUrl),
+        ["https://example.com/black.jpg", "https://example.com/white.jpg"],
+      );
+      const unknown = (await summary({ skuId: skus[4] })).data[0];
+      assert.equal(unknown.mainImageUrl, "https://example.com/catalog.jpg");
+      assert.equal(unknown.inventoryImage, undefined);
+      const [catalog] = await sql(
+        "SELECT main_image_url FROM products WHERE id=$1",
+        [products[0]],
+      );
+      assert.equal(catalog.main_image_url, "https://example.com/catalog.jpg");
+      assert.equal(
+        (await summary({ dimension: "style", productId: products[0] })).data[0]
+          .mainImageUrl,
+        "https://example.com/catalog.jpg",
+      );
+    },
+  );
+  await check(
+    "Only current complete image reports apply; exact barcode fallback and unknown colors stay explicit",
+    async () => {
+      const [articleSource] = await sql(
+        "SELECT import_id FROM compass_active_imports WHERE dimension='article'",
+      );
+      await sql("UPDATE compass_imports SET status='STAGING' WHERE id=$1", [
+        articleSource.import_id,
+      ]);
+      assert.equal(
+        (await summary({ skuId: skus[1] })).data[0].mainImageUrl,
+        "https://example.com/catalog.jpg",
+      );
+      const [barcodeSource] = await sql(
+        "SELECT import_id FROM compass_active_imports WHERE dimension='barcode'",
+      );
+      await sql(
+        "UPDATE compass_records SET payload=jsonb_set(payload,'{image}','\"https://example.com/barcode-black.jpg\"') WHERE import_id=$1",
+        [barcodeSource.import_id],
+      );
+      assert.equal(
+        (await summary({ skuId: skus[1] })).data[0].mainImageUrl,
+        "https://example.com/barcode-black.jpg",
+      );
+      await sql(
+        "INSERT INTO compass_records(import_id,business_date,entity_key,style_no,article_no,barcode,payload) VALUES($1,$2,'white-image','SUM-A','ARTICLE-A-02','SKU-A-WHITE-M',$3::jsonb)",
+        [
+          barcodeSource.import_id,
+          reportEnd,
+          JSON.stringify({
+            metrics: { salesQty: 0 },
+            reportedReturnRate: 0,
+            image: "https://example.com/barcode-white.jpg",
+          }),
+        ],
+      );
+      assert.equal(
+        (await summary({ skuId: skus[2] })).data[0].mainImageUrl,
+        "https://example.com/barcode-white.jpg",
+      );
+      await sql("UPDATE skus SET color_name='白色' WHERE id=$1", [skus[1]]);
+      const multi = (
+        await summary({ dimension: "article", productId: products[0] })
+      ).data.find((r: any) => r.articleNo === "ARTICLE-A-01");
+      assert.equal(multi.colorName, "多颜色");
+      assert.equal(multi.inventoryImage, undefined);
+      await sql("UPDATE skus SET color_name='黑色' WHERE id=$1", [skus[1]]);
+      await sql("UPDATE compass_imports SET status='COMPLETE' WHERE id=$1", [
+        articleSource.import_id,
+      ]);
+      await sql(
+        "UPDATE compass_records SET payload=jsonb_set(payload,'{image}','\"javascript:invalid\"') WHERE import_id=$1",
+        [articleSource.import_id],
+      );
+      assert.equal(
+        (await summary({ skuId: skus[1] })).data[0].mainImageUrl,
+        "https://example.com/barcode-black.jpg",
+      );
+      await sql(
+        "UPDATE compass_records SET payload=jsonb_set(payload,'{image}','\"https://example.com/stale.jpg\"') WHERE import_id=$1",
+        [articleSource.import_id],
+      );
+      await sql("DELETE FROM compass_active_imports WHERE dimension='article'");
+      assert.equal(
+        (await summary({ skuId: skus[1] })).data[0].mainImageUrl,
+        "https://example.com/barcode-black.jpg",
+      );
+    },
+  );
+  await check(
     "Version 3 original report import persists daily percentages, retries safely, and keeps period ratios unchanged",
     async () => {
       const { beginImport, appendImport, finishImport, dashboard } =

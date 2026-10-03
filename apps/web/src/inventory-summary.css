@@ -8,3 +8,14 @@
 .inventory-summary-table .ant-table-body {
   overscroll-behavior: contain;
 }
+
+.inventory-summary-table .compass-product-image-thumb {
+  width: 56px;
+  height: 66px;
+  object-fit: contain;
+}
+
+.inventory-report-coverage {
+  margin-bottom: 10px;
+  font-size: 12px;
+}

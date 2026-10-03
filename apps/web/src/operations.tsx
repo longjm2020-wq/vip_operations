@@ -1,6 +1,11 @@
 import { Table, exportTableData } from "./data-table";
 import { InventoryImport } from "./inventory-import";
 import { InventoryReferenceValue } from "./inventory-reference-value";
+import {
+  CompassProductImage,
+  CompassImagePreview,
+  type CompassImageTarget,
+} from "./compass-product-image";
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -57,6 +62,7 @@ import {
   inventoryDimensions,
   inventoryStockFields,
   type InventoryDimension,
+  type InventoryReportMatch,
 } from "../../../packages/contracts/src/inventory-summary";
 import "./inventory-summary.css";
 function useAction() {
@@ -118,6 +124,10 @@ export function InventoryDetailsPage() {
 function InventoryBalances() {
   const [dimension, setDimension] = useState<InventoryDimension>("sku");
   const skuView = dimension === "sku";
+  const [reportMatch, setReportMatch] = useState<InventoryReportMatch>("all");
+  const [imagePreview, setImagePreview] = useState<CompassImageTarget | null>(
+    null,
+  );
   const [batch, setBatch] = useState(false);
   const { message } = App.useApp();
   const [exporting, setExporting] = useState(false);
@@ -125,6 +135,7 @@ function InventoryBalances() {
     [warehouse, setWarehouse] = useState<string>();
   const q = useList("/inventory/summary", {
       dimension,
+      ...(skuView ? { reportMatch } : {}),
       ...(search ? { q: search } : {}),
       ...(warehouse ? { warehouseId: warehouse } : {}),
     }),
@@ -136,12 +147,14 @@ function InventoryBalances() {
       title: "图片",
       dataIndex: "mainImageUrl",
       width: 84,
-      render: (v) =>
+      render: (v, r) =>
         v ? (
-          <img
-            src={v}
-            alt="商品图片"
-            style={{ width: 56, height: 66, objectFit: "contain" }}
+          <CompassProductImage
+            image={v}
+            code={[r.articleNo || r.styleNo, r.colorName]
+              .filter(Boolean)
+              .join(" · ")}
+            onPreview={setImagePreview}
           />
         ) : (
           "—"
@@ -196,9 +209,11 @@ function InventoryBalances() {
       ][i],
       dataIndex: k,
       render: (v: number, r: Row) =>
-        k === "dailySales" || k === "estimatedReturns"
-          ? <InventoryReferenceValue row={r} field={k} />
-          : v ?? "暂无数据",
+        k === "dailySales" || k === "estimatedReturns" ? (
+          <InventoryReferenceValue row={r} field={k} />
+        ) : (
+          (v ?? "暂无数据")
+        ),
     })),
     {
       title: "退货率",
@@ -261,7 +276,7 @@ function InventoryBalances() {
       />
       <Card>
         <div className="table-toolbar">
-          <Space>
+          <Space wrap>
             <Input.Search
               placeholder="商品编码 / 货号 / 款号 / 条码"
               onSearch={(v) => {
@@ -280,6 +295,22 @@ function InventoryBalances() {
                 q.setPage(1);
               }}
             />
+            {skuView && (
+              <Select<InventoryReportMatch>
+                aria-label="筛选罗盘匹配情况"
+                style={{ width: 210 }}
+                value={reportMatch}
+                options={[
+                  { value: "all", label: "全部商品 · 已匹配优先" },
+                  { value: "matched", label: "仅看罗盘已匹配" },
+                  { value: "unmatched", label: "仅看未匹配报表" },
+                ]}
+                onChange={(v) => {
+                  setReportMatch(v);
+                  q.setPage(1);
+                }}
+              />
+            )}
           </Space>
           <Space>
             {(can || canMetadata) && (
@@ -314,11 +345,14 @@ function InventoryBalances() {
                     Object.fromEntries(
                       keys.map((key) => [
                         key,
-                        key === "articleNo" && dimension === "article" && !row[key] && row.skuCode
+                        key === "articleNo" &&
+                        dimension === "article" &&
+                        !row[key] &&
+                        row.skuCode
                           ? `未维护货号（${row.skuCode}）`
                           : key === "returnRate" && row[key] != null
-                          ? Number((Number(row[key]) * 100).toFixed(4))
-                          : (row[key] ?? null),
+                            ? Number((Number(row[key]) * 100).toFixed(4))
+                            : (row[key] ?? null),
                       ]),
                     );
                   await exportTableData({
@@ -343,6 +377,13 @@ function InventoryBalances() {
             <Refresh onClick={() => q.refetch()} />
           </Space>
         </div>
+        {skuView && q.data?.reportCoverage && (
+          <div className="inventory-report-coverage secondary" role="status">
+            {q.data.reportCoverage.source
+              ? `罗盘匹配 ${count(q.data.reportCoverage.matched)} / ${count(q.data.reportCoverage.total)} · ${q.data.reportCoverage.source.startDate} — ${q.data.reportCoverage.source.endDate}`
+              : "尚未导入完整的条码近30天报表"}
+          </div>
+        )}
         <QueryState error={q.error} reload={() => q.refetch()} />
         <Table<Row>
           className="inventory-summary-table"
@@ -389,6 +430,10 @@ function InventoryBalances() {
           }}
         />
       </Card>
+      <CompassImagePreview
+        target={imagePreview}
+        onClose={() => setImagePreview(null)}
+      />
       {batch && (
         <InventoryImport
           warehouseId={warehouse}
@@ -1319,10 +1364,7 @@ export function ProductDetail() {
   const p = q.data.data;
   return (
     <>
-      <Header
-        title={p.name}
-        subtitle={"款号 " + p.styleNo}
-      />
+      <Header title={p.name} subtitle={"款号 " + p.styleNo} />
       <Card>
         <Tabs
           items={[

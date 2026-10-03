@@ -18,6 +18,16 @@ export function InventoryReferenceValue({
   const reference = row.channelReference;
   const mode = reference?.[field];
   const fromReport = mode?.value != null;
+  const missingLabel =
+    reference?.reason === "NO_MATCH"
+      ? "未匹配报表"
+      : reference?.reason === "NO_COMPLETE_REPORT"
+        ? "未导入报表"
+        : reference?.reason === "AMBIGUOUS_BARCODE"
+          ? "记录有歧义"
+          : reference?.needsReturnRateImport && field !== "dailySales"
+            ? "待补退货率"
+            : "有效数据不足";
   const reason =
     reference?.reason === "NO_COMPLETE_REPORT"
       ? "尚无完整的条码近30天报表"
@@ -66,13 +76,19 @@ export function InventoryReferenceValue({
       <div>
         {row[field] != null ? "人工导入参考；" : "暂无数据；"}
         {reason}
+        {reference?.source && (
+          <div>
+            {reference.source.startDate} — {reference.source.endDate}
+          </div>
+        )}
+        {reference?.barcode && <div>条码：{reference.barcode}</div>}
       </div>
     );
   return (
     <Tooltip title={title} trigger={["hover", "focus"]}>
       <span tabIndex={0}>
         {row[field] == null
-          ? "暂无数据"
+          ? missingLabel
           : format(row[field], field === "returnRate")}
       </span>
     </Tooltip>
