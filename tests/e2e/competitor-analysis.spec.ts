@@ -162,10 +162,7 @@ test("竞品单品牌TOP20、详细材质、商品预览及后台队列设置", 
     });
     await expect(popup.locator(".competitor-bar-products a")).toHaveCount(10);
     await expect(popup.locator(".competitor-bar-products img")).toHaveCount(10);
-    await expect(popup.locator(".competitor-bar-material")).toHaveCount(10);
-    await expect(popup.locator(".competitor-bar-material").first()).toHaveText(
-      "【面料】羊绒70% 桑蚕丝30%\n【里料】聚酯纤维100%",
-    );
+    await expect(popup.locator(".competitor-bar-material")).toHaveCount(0);
     await expect(popup.locator(".competitor-bar-products button")).toHaveCount(
       10,
     );

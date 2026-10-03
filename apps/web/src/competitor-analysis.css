@@ -179,15 +179,6 @@
   text-overflow: ellipsis;
   text-align: center;
 }
-.competitor-bar-material {
-  width: 100%;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  line-height: 1.5;
-  font-size: 11px;
-  text-align: left;
-  color: #937d70;
-}
 .competitor-product-preview .ant-modal-body {
   max-height: calc(100dvh - 150px);
   overflow-y: auto;

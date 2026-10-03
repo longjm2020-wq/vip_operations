@@ -115,9 +115,6 @@ function DistributionPreview({
               {p.styleCode || p.title}
             </span>
             <strong>{money(p.salePrice)}</strong>
-            <small className="competitor-bar-material">
-              {competitorMaterialDisplay(p.materialInfo) || "材质未公开"}
-            </small>
           </a>
         </div>
       ))}
