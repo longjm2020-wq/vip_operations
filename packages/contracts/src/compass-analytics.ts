@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { Decimal } from "decimal.js";
 
 export function parseCompassSearch(value: string) {
   const text = value.trim(),
@@ -44,7 +45,7 @@ export const compassMetrics = {
   saleableStock: "可售库存",
 } as const;
 export type CompassMetric = keyof typeof compassMetrics;
-export const compassNormalizationVersion = 2;
+export const compassNormalizationVersion = 3;
 export const compassSortFields = [
   "salesAmount",
   "salesQty",
@@ -107,6 +108,7 @@ export const compassRecordSchema = z
       )
       .nullable()
       .optional(),
+    reportedReturnRate: z.number().finite().min(0).max(1e14).nullable().optional(),
     metrics: z.object(metricShape).strict(),
   })
   .strict();
@@ -195,6 +197,21 @@ export function normalizeCompassWorkbook(table: string[][], fileName: string) {
     }
     const ageText = read(row, "售龄"),
       listedText = read(row, "首次上架时间");
+    const returnRateColumn = col("退货率(退货件数/销售量)");
+    const returnRateText = returnRateColumn < 0
+      ? ""
+      : (row[returnRateColumn] || "").trim();
+    const returnRateRaw = returnRateText.replace(/[,，%％\s]/g, "");
+    const returnRateNumber = returnRateRaw ? Number(returnRateRaw) : NaN;
+    const reportedReturnRate =
+      !returnRateText || ["-", "--", "—"].includes(returnRateText)
+        ? null
+        : Number.isFinite(returnRateNumber)
+          ? new Decimal(returnRateRaw).div(100).toNumber()
+          : NaN;
+    if (reportedReturnRate !== null &&
+      (!Number.isFinite(reportedReturnRate) || reportedReturnRate < 0 || reportedReturnRate > 1e14))
+      throw Error(`第 ${i + 1} 行：退货率不是有效的非负百分数`);
     const saleAge =
       !ageText || ["-", "--", "—"].includes(ageText)
         ? null
@@ -236,6 +253,7 @@ export function normalizeCompassWorkbook(table: string[][], fileName: string) {
       image: read(row, "商品图片"),
       saleAge,
       firstListedAt,
+      ...(returnRateColumn >= 0 ? { reportedReturnRate } : {}),
       metrics,
     });
   }

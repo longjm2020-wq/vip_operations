@@ -12,6 +12,7 @@ import {
   inventoryDimensionSchema,
   inventoryStockFields,
 } from "../../../../../packages/contracts/src/inventory-summary.js";
+import { applyCompassReferences } from "./compass-reference.js";
 
 export async function inventorySummary(q: Row, tx: Tx = db) {
   const dimension = parse(inventoryDimensionSchema, q.dimension ?? "sku");
@@ -107,7 +108,16 @@ export async function inventorySummary(q: Row, tx: Tx = db) {
         ),
       );
       for (const k of stockFields) record[k] = quantity(record[k]);
-      return skuView ? calculateReference(record) : record;
+      return record;
     });
-  return { data, ...p, total: first.group_count, totals, dimension };
+  const references = skuView
+    ? (await applyCompassReferences(data, tx)).map(calculateReference)
+    : data;
+  return {
+    data: references,
+    ...p,
+    total: first.group_count,
+    totals,
+    dimension,
+  };
 }

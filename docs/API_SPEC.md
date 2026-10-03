@@ -93,6 +93,8 @@ Product筛选 q（款号/名称）、categoryId、brandId、supplierId、year、
 
 2026-10-01：库存查询按 SKU 与仓库返回采购实际发货在途、调拨实际发货在途和质检合格待入库数量，以及人工 SKU 货号/日销/退货/预估销退参考及来源日期。确认但未实际发出的采购量不计在途。`totals.transit` 为全仓尚未正式入库供给（在途及合格暂存），用于采购建议供给快照。
 
+2026-10-04：`GET /inventory/summary?dimension=sku` 在分页库存查询后，读取最新 COMPLETE 条码来源的末30天记录，按完整条码（未维护时使用商品编码）匹配。`dailySales` 为每日销量众数的均值，`returnRate` 为原始每日退货率众数的均值；`estimatedReturns` 为完整30天销量合计乘该退货率，最多4位小数。`channelReference` 返回来源、条码、有效天数、并列值、最高频次、销量合计和不可用原因。0值计入，缺失不补0；同条码同日多记录不混用。报表参考不可用时保留该项人工值，查询不会改写库存或参考记录。货号/款号汇总不返回 SKU 参考计算。旧 `/inventory/balances` 仍返回原人工记录；导入解析版本3新增可选 `reportedReturnRate`（比例，可超过1），旧快照保持不变。
+
 新增 `/inventory/fulfilment` 认证接口，所有 POST 要求 CSRF、同源及 Idempotency-Key：
 
 | 路径（相对前缀） | 操作 | 服务端权限 |

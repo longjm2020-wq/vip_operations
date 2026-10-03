@@ -1,5 +1,6 @@
 import { Table, exportTableData } from "./data-table";
 import { InventoryImport } from "./inventory-import";
+import { InventoryReferenceValue } from "./inventory-reference-value";
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -194,13 +195,15 @@ function InventoryBalances() {
         "渠道日销参考",
       ][i],
       dataIndex: k,
-      render: (v: number) => v ?? "暂无数据",
+      render: (v: number, r: Row) =>
+        k === "dailySales" || k === "estimatedReturns"
+          ? <InventoryReferenceValue row={r} field={k} />
+          : v ?? "暂无数据",
     })),
     {
       title: "退货率",
       dataIndex: "returnRate",
-      render: (v) =>
-        v == null ? "暂无数据" : Number((Number(v) * 100).toFixed(4)) + "%",
+      render: (_, r) => <InventoryReferenceValue row={r} field="returnRate" />,
     },
     {
       title: "可售天数",

@@ -35,7 +35,7 @@ export const beginSchema = z
     startDate: z.iso.date(),
     endDate: z.iso.date(),
     expectedRows: z.number().int().min(1).max(200000),
-    normalizationVersion: z.union([z.literal(1),z.literal(2)]).default(1),
+    normalizationVersion: z.union([z.literal(1),z.literal(2),z.literal(3)]).default(1),
   })
   .strict();
 export async function beginImport(c: Context, input: unknown) {

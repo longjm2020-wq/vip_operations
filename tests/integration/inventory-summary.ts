@@ -1,8 +1,14 @@
 import "dotenv/config";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
+import { randomUUID } from "node:crypto";
+import { HttpException } from "@nestjs/common";
 import pg from "pg";
 import { migrate } from "../../scripts/migrate.js";
+import {
+  normalizeCompassWorkbook,
+  shiftCompassDate,
+} from "../../packages/contracts/src/compass-analytics.js";
 
 // Creates and drops only a generated database on a dedicated loopback test port.
 // Run with DATABASE_URL=postgresql://postgres@127.0.0.1:55538/postgres.
@@ -354,6 +360,366 @@ try {
       inventorySummary({ warehouseId: "0; DROP TABLE skus" }),
     );
   });
+  const reportEnd = "2026-10-02",
+    reportStart = shiftCompassDate(reportEnd, -29);
+  let importIndex = 0;
+  const salesValues = [
+    1,
+    1,
+    1,
+    3,
+    3,
+    3,
+    5,
+    5,
+    5,
+    ...Array.from({ length: 21 }, (_, i) => 10 + i),
+  ];
+  const rateValues = [
+    0.1,
+    0.1,
+    0.1,
+    0.3,
+    0.3,
+    0.3,
+    0.5,
+    0.5,
+    0.5,
+    ...Array.from({ length: 21 }, (_, i) => (60 + i) / 100),
+  ];
+  const referenceReport = async ({
+    version = 3,
+    status = "COMPLETE",
+    start = reportStart,
+    omitDate = "",
+    missingSaleDate = "",
+    duplicate = false,
+    zero = false,
+  } = {}) => {
+    const records: Record<string, unknown>[] = [];
+    for (
+      let date = start;
+      date <= reportEnd;
+      date = shiftCompassDate(date, 1)
+    ) {
+      // Filler ensures that sparse SKU data does not remove a global report date.
+      records.push({
+        date,
+        entityKey: "filler",
+        barcode: "UNMATCHED-FILLER",
+        metrics: { salesQty: 0 },
+        reportedReturnRate: 0,
+      });
+      if (date === omitDate) continue;
+      const index = Math.round(
+        (Date.parse(date) - Date.parse(reportStart)) / 86400000,
+      );
+      const record = {
+        date,
+        entityKey: "primary",
+        barcode: "0012345678901234567890",
+        metrics: {
+          salesQty:
+            date === missingSaleDate
+              ? null
+              : zero
+                ? 0
+                : index < 0
+                  ? 999
+                  : salesValues[index],
+        },
+        ...(version >= 3
+          ? { reportedReturnRate: zero ? 0 : index < 0 ? 9 : rateValues[index] }
+          : {}),
+      };
+      records.push(record);
+      if (duplicate && date === reportStart)
+        records.push({ ...record, entityKey: "different-platform-product" });
+    }
+    const [source] = await sql(
+      "INSERT INTO compass_imports(dimension,file_name,file_hash,start_date,end_date,expected_rows,status,imported_by,completed_at,normalization_version) VALUES('barcode','条码测试.xlsx',$1,$2,$3,$4,$5,$6,now(),$7) RETURNING id",
+      [
+        (++importIndex).toString(16).padStart(64, "0"),
+        start,
+        reportEnd,
+        records.length,
+        status,
+        user.id,
+        version,
+      ],
+    );
+    await sql(
+      `INSERT INTO compass_records(import_id,business_date,entity_key,style_no,article_no,barcode,payload)
+      SELECT $1,(p->>'date')::date,p->>'entityKey','SUM-A','ARTICLE-A-01',p->>'barcode',p FROM jsonb_array_elements($2::jsonb) p`,
+      [source.id, JSON.stringify(records)],
+    );
+    return source.id;
+  };
+  const activateReport = async (source: string) =>
+    sql(
+      "INSERT INTO compass_active_imports(dimension,import_id) VALUES('barcode',$1) ON CONFLICT(dimension) DO UPDATE SET import_id=excluded.import_id",
+      [source],
+    );
+  const completeSource = await referenceReport();
+  await activateReport(completeSource);
+  await check(
+    "Barcode report modes, tied percentages and estimated returns use the full 30 days",
+    async () => {
+      const row = (await summary({ skuId: skus[0] })).data[0];
+      assert.equal(row.dailySales, 3);
+      assert.equal(row.returnRate, 0.3);
+      assert.equal(row.estimatedReturns, 134.1);
+      assert.deepEqual(row.channelReference.dailySales, {
+        value: 3,
+        values: [1, 3, 5],
+        frequency: 3,
+        samples: 30,
+      });
+      assert.deepEqual(row.channelReference.returnRate.values, [0.1, 0.3, 0.5]);
+      assert.equal(row.channelReference.salesQty, 447);
+      assert.equal(row.channelReference.source.id, completeSource);
+      assert.equal(row.channelReference.source.startDate, reportStart);
+      assert.equal(row.channelReference.source.endDate, reportEnd);
+      assert.equal(row.channelReference.barcode, "0012345678901234567890");
+      assert.equal(row.coverageDays, 3.7);
+      assert.equal(row.replenishmentQty, 12);
+      assert.deepEqual(
+        (await summary({ dimension: "style" })).totals,
+        expected,
+      );
+      const [manual] = await sql(
+        "SELECT daily_sales::text,return_rate::text,estimated_returns FROM inventory_sku_references WHERE sku_id=$1",
+        [skus[0]],
+      );
+      assert.deepEqual(manual, {
+        daily_sales: "2.5000",
+        return_rate: "0.100000",
+        estimated_returns: 2,
+      });
+    },
+  );
+  await check(
+    "References are unchanged by warehouse filters and duplicate internal barcodes",
+    async () => {
+      const result = await summary({
+        q: "0012345678901234567890",
+        warehouseId: warehouses[0].id,
+      });
+      assert.equal(result.total, 2);
+      assert.ok(
+        result.data.every(
+          (r: any) => r.dailySales === 3 && r.estimatedReturns === 134.1,
+        ),
+      );
+    },
+  );
+  await check(
+    "Staging imports and unrelated style dimensions never change references",
+    async () => {
+      await referenceReport({ status: "STAGING", zero: true });
+      assert.equal((await summary({ skuId: skus[0] })).data[0].dailySales, 3);
+      const style = (
+        await summary({ dimension: "style", productId: products[0] })
+      ).data[0];
+      assert.equal(style.dailySales, null);
+      assert.equal(style.channelReference, undefined);
+    },
+  );
+  await check(
+    "Complete replacement reports replace references and preserve known zeroes",
+    async () => {
+      await activateReport(await referenceReport({ zero: true }));
+      const row = (await summary({ skuId: skus[0] })).data[0];
+      assert.equal(row.dailySales, 0);
+      assert.equal(row.returnRate, 0);
+      assert.equal(row.estimatedReturns, 0);
+      assert.equal(row.coverageDays, null);
+      assert.equal(row.replenishmentQty, 0);
+    },
+  );
+  await check(
+    "Legacy reports retain manual rates until the original percentage is reimported",
+    async () => {
+      await activateReport(await referenceReport({ version: 2 }));
+      const row = (await summary({ skuId: skus[0] })).data[0];
+      assert.equal(row.dailySales, 3);
+      assert.equal(row.returnRate, "0.100000");
+      assert.equal(row.estimatedReturns, 2);
+      assert.equal(row.channelReference.needsReturnRateImport, true);
+    },
+  );
+  await check(
+    "Missing cells and dates are not zero-filled or estimated as complete sales",
+    async () => {
+      for (const config of [
+        { omitDate: reportStart },
+        { missingSaleDate: reportStart },
+      ]) {
+        await activateReport(await referenceReport(config));
+        const row = (await summary({ skuId: skus[0] })).data[0];
+        assert.equal(row.channelReference.dailySales.samples, 29);
+        assert.equal(row.channelReference.estimatedReturns.value, null);
+        assert.equal(row.estimatedReturns, 2);
+      }
+    },
+  );
+  await check(
+    "Same-day platform ambiguity, insufficient windows and unmatched codes remain explicit",
+    async () => {
+      await activateReport(await referenceReport({ duplicate: true }));
+      const ambiguous = (await summary({ skuId: skus[0] })).data[0];
+      assert.equal(ambiguous.dailySales, "2.5000");
+      assert.equal(ambiguous.channelReference.reason, "AMBIGUOUS_BARCODE");
+      await activateReport(
+        await referenceReport({ start: shiftCompassDate(reportStart, 1) }),
+      );
+      assert.equal(
+        (await summary({ skuId: skus[0] })).data[0].channelReference.reason,
+        "NO_COMPLETE_REPORT",
+      );
+      await activateReport(completeSource);
+      const unmatched = (await summary({ skuId: skus[2] })).data[0];
+      assert.equal(unmatched.dailySales, null);
+      assert.equal(unmatched.channelReference.reason, "NO_MATCH");
+    },
+  );
+  await check(
+    "Reports longer than 30 days only use the final 30-day window",
+    async () => {
+      await activateReport(
+        await referenceReport({ start: shiftCompassDate(reportStart, -30) }),
+      );
+      const row = (await summary({ skuId: skus[0] })).data[0];
+      assert.equal(row.dailySales, 3);
+      assert.equal(row.returnRate, 0.3);
+      assert.equal(row.estimatedReturns, 134.1);
+      assert.equal(row.channelReference.dailySales.samples, 30);
+    },
+  );
+  await check(
+    "Unmaintained barcodes use the full internal SKU code as an exact fallback",
+    async () => {
+      await sql(
+        "UPDATE skus SET barcode=NULL,sku_code='0012345678901234567890' WHERE id=$1",
+        [skus[0]],
+      );
+      assert.equal((await summary({ skuId: skus[0] })).data[0].dailySales, 3);
+      await sql("UPDATE skus SET barcode='DIFFERENT-BARCODE' WHERE id=$1", [
+        skus[0],
+      ]);
+      assert.equal(
+        (await summary({ skuId: skus[0] })).data[0].channelReference.reason,
+        "NO_MATCH",
+      );
+    },
+  );
+  await check(
+    "Version 3 original report import persists daily percentages, retries safely, and keeps period ratios unchanged",
+    async () => {
+      const { beginImport, appendImport, finishImport, dashboard } =
+        await import("../../apps/api/src/modules/analytics/service.js");
+      const context = () => ({
+        actor: {
+          id: user.id,
+          username: "summary-test",
+          displayName: "库存测试",
+          permissions: ["analytics.manage"],
+        },
+        requestId: randomUUID(),
+        key: randomUUID(),
+      });
+      const report = normalizeCompassWorkbook(
+        [
+          [
+            "日期",
+            "P_SPU_ID",
+            "款号",
+            "商品ID",
+            "货号",
+            "条码",
+            "SIZE_ID",
+            "销售额",
+            "销售量",
+            "销售额(不含拒退)",
+            "销售量(不含拒退)",
+            "退货件数",
+            "退货金额",
+            "可售库存",
+            "退货率(退货件数/销售量)",
+          ],
+          ...Array.from({ length: 30 }, (_, i) => [
+            shiftCompassDate(reportStart, i),
+            "900719925474099312345",
+            "SUM-A",
+            "900719925474099312346",
+            "ARTICLE-A-01",
+            "0012345678901234567890",
+            "900719925474099312347",
+            "30",
+            "3",
+            "20",
+            "2",
+            "1",
+            "10",
+            "5",
+            "33.3%",
+          ]),
+        ],
+        "original-test.xlsx",
+      );
+      const input = {
+        dimension: report.dimension,
+        fileName: "original-test.xlsx",
+        fileHash: "f".repeat(64),
+        startDate: report.startDate,
+        endDate: report.endDate,
+        expectedRows: report.records.length,
+        normalizationVersion: 3,
+      };
+      const task = (await beginImport(context(), input))!;
+      await appendImport(context(), task.id, { records: report.records });
+      await finishImport(context(), task.id);
+      const row = (await summary({ skuId: skus[1] })).data[0];
+      assert.equal(row.dailySales, 3);
+      assert.equal(row.returnRate, 0.333);
+      assert.equal(row.estimatedReturns, 29.97);
+      assert.equal(row.channelReference.source.id, task.id);
+      assert.equal((await beginImport(context(), input))!.id, task.id);
+      await appendImport(context(), task.id, { records: report.records });
+      await finishImport(context(), task.id);
+      assert.equal(
+        (
+          await sql(
+            "SELECT count(*)::int AS n FROM compass_records WHERE import_id=$1",
+            [task.id],
+          )
+        )[0].n,
+        30,
+      );
+      const period = await dashboard({
+        dimension: "barcode",
+        days: 30,
+        q: "0012345678901234567890",
+      });
+      assert.equal(Number(period.summary.returnRate), 1 / 3);
+      const old = (await beginImport(context(), {
+        ...input,
+        normalizationVersion: 2,
+      }))!;
+      await appendImport(context(), old.id, { records: report.records });
+      await assert.rejects(
+        () => finishImport(context(), old.id),
+        (error: unknown) =>
+          error instanceof HttpException &&
+          (error.getResponse() as { error: { code: string } }).error.code ===
+            "OLD_NORMALIZATION",
+      );
+      assert.equal(
+        (await summary({ skuId: skus[1] })).data[0].channelReference.source.id,
+        task.id,
+      );
+    },
+  );
   console.log(`Inventory summary: ${passed} database scenarios passed`);
   if (process.argv.includes("--serve")) {
     const server = createServer(async (req, res) => {
