@@ -38,7 +38,10 @@ import {
   type CompetitorProductPreview,
 } from "../../../packages/contracts/src/competitor-analysis";
 import { CompassProductImage } from "./compass-product-image";
-import { CompetitorProductPreviewDialog } from "./competitor-product-preview";
+import {
+  CompetitorProductPreviewCard,
+  CompetitorProductPreviewDialog,
+} from "./competitor-product-preview";
 import { competitorMaterialDisplay } from "./competitor-material-display";
 import { captureBookmarkUrl } from "./competitor-capture";
 import { readCompetitorFile } from "./competitor-import";
@@ -89,36 +92,73 @@ function ProductPhoto({
     </span>
   );
 }
-function DistributionPreview({
+export function DistributionPreview({
   products,
   onPreview,
 }: {
   products: CompetitorProductPreview[];
   onPreview: (product: CompetitorProductPreview) => void;
 }) {
+  const [hovered, setHovered] = useState<CompetitorProductPreview | null>(null);
+  const [sidePreview, setSidePreview] = useState(false);
+  useEffect(() => {
+    const media = window.matchMedia("(hover: hover) and (min-width: 1100px)");
+    const update = () => {
+      setSidePreview(media.matches);
+      if (!media.matches) setHovered(null);
+    };
+    update();
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
+  const enlarge = (product: CompetitorProductPreview) => {
+    setHovered(null);
+    onPreview(product);
+  };
   return (
-    <div className="competitor-bar-products">
-      {products.map((p) => (
-        <div key={p.productId} className="competitor-bar-product">
-          <CompassProductImage
-            image={p.imageUrl || undefined}
-            code={p.styleCode || p.title}
-            onPreview={() => onPreview(p)}
+    <Popover
+      trigger={[]}
+      placement="rightTop"
+      align={{ offset: [20, 0] }}
+      arrow={false}
+      motion={{ motionName: "" }}
+      open={sidePreview && hovered !== null}
+      classNames={{ root: "competitor-product-hover" }}
+      content={
+        hovered && (
+          <CompetitorProductPreviewCard
+            product={hovered}
+            onClose={() => setHovered(null)}
+            onPreview={() => enlarge(hovered)}
           />
-          <a
-            href={p.productUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            aria-label={`打开${p.title}商品详情`}
-          >
-            <span className="competitor-bar-code">
-              {p.styleCode || p.title}
-            </span>
-            <strong>{money(p.salePrice)}</strong>
-          </a>
-        </div>
-      ))}
-    </div>
+        )
+      }
+    >
+      <div className="competitor-bar-products">
+        {products.map((p) => (
+          <div key={p.productId} className="competitor-bar-product">
+            <CompassProductImage
+              image={p.imageUrl || undefined}
+              code={p.styleCode || p.title}
+              hoverPreview={!sidePreview}
+              onHover={() => sidePreview && setHovered(p)}
+              onPreview={() => enlarge(p)}
+            />
+            <a
+              href={p.productUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label={`打开${p.title}商品详情`}
+            >
+              <span className="competitor-bar-code">
+                {p.styleCode || p.title}
+              </span>
+              <strong>{money(p.salePrice)}</strong>
+            </a>
+          </div>
+        ))}
+      </div>
+    </Popover>
   );
 }
 function Distribution({
@@ -166,6 +206,8 @@ function Distribution({
                     key={r.brand.id}
                     trigger={["hover", "click"]}
                     placement="top"
+                    // Stable bounds keep the adjacent card aligned during rapid hover.
+                    motion={{ motionName: "" }}
                     mouseEnterDelay={0.15}
                     mouseLeaveDelay={0.25}
                     title={`${r.brand.name} · ${name} · 前${bucket?.top10?.length || 0}款`}
@@ -176,6 +218,7 @@ function Distribution({
                       />
                     }
                     classNames={{ root: "competitor-bar-popover" }}
+                    destroyOnHidden
                     open={count > 0 && activePreview === previewKey}
                     onOpenChange={(open) => onPreviewChange(previewKey, open)}
                   >

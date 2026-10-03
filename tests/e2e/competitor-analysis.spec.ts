@@ -167,6 +167,18 @@ test("竞品单品牌TOP20、详细材质、商品预览及后台队列设置", 
       10,
     );
     await expect(popup).not.toHaveClass(/ant-zoom-big-(enter|appear|leave)/);
+    await popup
+      .getByRole("button", { name: "放大图片 UI-CT-1", exact: true })
+      .hover();
+    const sideCard = page.locator(".competitor-product-hover:visible");
+    await expect(sideCard).toBeVisible();
+    await expect(sideCard).toContainText("款号：UI-CT-1");
+    await expect(
+      sideCard.locator(".competitor-product-preview-material"),
+    ).toHaveText("【面料】羊绒70% 桑蚕丝30%\n【里料】聚酯纤维100%");
+    await sideCard.locator(".competitor-product-preview-material").hover();
+    await expect(popup).toBeVisible();
+    await expect(popup.locator(".competitor-bar-products img")).toHaveCount(10);
     const tabsBeforePreview = context.pages().length;
     await popup
       .getByRole("button", { name: "放大图片 UI-CT-1", exact: true })

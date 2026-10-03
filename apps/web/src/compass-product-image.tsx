@@ -9,10 +9,14 @@ export function CompassProductImage({
   image,
   code,
   onPreview,
+  onHover,
+  hoverPreview = true,
 }: {
   image?: string;
   code: string;
   onPreview: (target: CompassImageTarget) => void;
+  onHover?: () => void;
+  hoverPreview?: boolean;
 }) {
   const [failedImage, setFailedImage] = useState<string>();
   if (!image || !/^https:\/\//i.test(image) || failedImage === image)
@@ -28,6 +32,7 @@ export function CompassProductImage({
   return (
     <Popover
       trigger={["hover", "focus"]}
+      open={hoverPreview ? undefined : false}
       placement="right"
       mouseEnterDelay={0.15}
       classNames={{ root: "compass-product-image-popover" }}
@@ -44,6 +49,8 @@ export function CompassProductImage({
         type="button"
         className="compass-image-button"
         aria-label={`放大图片 ${code}`}
+        onMouseEnter={onHover}
+        onFocus={onHover}
         onClick={(event) => {
           event.stopPropagation();
           onPreview({ image, code });
