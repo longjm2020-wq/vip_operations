@@ -112,22 +112,40 @@ test("库存管理：发货核销、SKU 差异质检、进货仓入库与人工�
   await expect(
     page.getByRole("heading", { name: "库存明细", exact: true }),
   ).toBeVisible();
-  const stockRow = page
-    .getByRole("row")
-    .filter({ hasText: sku.skuCode })
-    .filter({ hasText: warehouse.name });
-  await stockRow.getByRole("button", { name: "参考值设置" }).click();
-  dialog = page.getByRole("dialog");
-  await dialog.getByLabel("货号", { exact: true }).fill("ARTICLE-IF");
-  await dialog.getByLabel("渠道日销参考（件/日，未知留空）").fill("1.25");
-  await dialog.getByLabel("退货率（%，未知留空）").fill("1.5");
-  await dialog.getByLabel("预估销退数（件，未知留空）").fill("1");
-  await dialog.getByLabel("参考来源 / 渠道").fill("人工渠道验收");
-  await dialog.getByRole("button", { name: "保存", exact: true }).click();
-  await expect(dialog).toHaveCount(0);
+  await page.getByRole("combobox", { name: "筛选库存仓库" }).click();
+  await page.getByText(warehouse.name, { exact: true }).last().click();
+  const stockRow = page.getByRole("row").filter({ hasText: sku.skuCode });
+  // The row action column was removed; existing SKU reference records still apply.
+  await post("/inventory/references/" + sku.id, {
+    articleNo: "ARTICLE-IF",
+    dailySales: 1.25,
+    returnRate: 0.015,
+    estimatedReturns: 1,
+    targetDays: 14,
+    sourceNote: "人工渠道验收",
+    referenceDate: "2026-10-03",
+  });
+  await page.getByRole("button", { name: /刷新/ }).click();
   await expect(stockRow).toContainText("ARTICLE-IF");
   await expect(stockRow).toContainText("1.5%");
-  await expect(stockRow).toContainText("人工渠道验收");
+  for (const name of ["仓库", "可售 / 锁定 / 次品", "参考来源 / 日期", "操作"])
+    await expect(
+      page.getByRole("columnheader", { name, exact: true }),
+    ).toHaveCount(0);
+  await expect(
+    page.getByRole("row", { name: "当前筛选库存总计" }),
+  ).toBeVisible();
+  await page.getByRole("tab", { name: "货号", exact: true }).click();
+  await expect(
+    page.getByRole("columnheader", { name: "尺码", exact: true }),
+  ).toHaveCount(0);
+  await page.getByRole("tab", { name: "款号", exact: true }).click();
+  await expect(
+    page.getByRole("columnheader", { name: "货号", exact: true }),
+  ).toHaveCount(0);
+  await page
+    .getByRole("tab", { name: "条码（商品编码）", exact: true })
+    .click();
   const balance = await (
     await page.request.get("/api/v1/inventory?skuId=" + sku.id)
   ).json();

@@ -34,6 +34,7 @@ import {
   writeProductField,
 } from "./modules/master/product-fields.js";
 import * as inventory from "./modules/inventory/service.js";
+import { inventorySummary } from "./modules/inventory/summary.js";
 import { InventoryFulfilmentController } from "./modules/inventory/controller.js";
 import * as purchase from "./modules/purchases/service.js";
 import * as suggestion from "./modules/suggestions/service.js";
@@ -139,6 +140,9 @@ class AuthController {
 class InventoryController {
   @Permission("inventory.read") @Get() list(@Query() q: any) {
     return inventory.balances(q);
+  }
+  @Permission("inventory.read") @Get("summary") summary(@Query() q: any) {
+    return inventorySummary(q);
   }
   @Permission("inventory.read") @Get("transactions") transactions(
     @Query() q: any,

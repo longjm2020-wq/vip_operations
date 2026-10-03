@@ -25,8 +25,7 @@ export const transferTransitSql =
   "COALESCE((SELECT sum(i.quantity)::int FROM inventory_shipment_items i JOIN inventory_shipments sh ON sh.id=i.shipment_id WHERE i.sku_id=s.id AND sh.warehouse_id=w.id AND sh.transfer_id IS NOT NULL AND sh.status IN ('SHIPPED','DELIVERED')),0)";
 export const incomingSql =
   "COALESCE((SELECT sum(i.qualified_qty-i.putaway_qty)::int FROM inventory_shipment_items i JOIN inventory_shipments sh ON sh.id=i.shipment_id WHERE i.sku_id=s.id AND sh.warehouse_id=w.id AND sh.status='INSPECTED'),0)";
-export async function balances(q: Row) {
-  const p = pagination(q);
+export function balanceFilters(q: Row) {
   const vals: unknown[] = [];
   const conditions = ["true"];
   for (const [key, col] of Object.entries({
@@ -44,9 +43,14 @@ export async function balances(q: Row) {
   if (q.q) {
     vals.push("%" + String(q.q).slice(0, 100) + "%");
     conditions.push(
-      `(s.sku_code ILIKE $${vals.length} OR pr.style_no ILIKE $${vals.length} OR pr.name ILIKE $${vals.length} OR s.barcode ILIKE $${vals.length})`,
+      `(s.sku_code ILIKE $${vals.length} OR pr.style_no ILIKE $${vals.length} OR pr.name ILIKE $${vals.length} OR s.barcode ILIKE $${vals.length} OR ref.article_no ILIKE $${vals.length})`,
     );
   }
+  return { vals, conditions };
+}
+export async function balances(q: Row) {
+  const p = pagination(q);
+  const { vals, conditions } = balanceFilters(q);
   const from = ` FROM skus s JOIN products pr ON pr.id=s.product_id CROSS JOIN warehouses w LEFT JOIN inventory_balances b ON b.sku_id=s.id AND b.warehouse_id=w.id LEFT JOIN inventory_sku_references ref ON ref.sku_id=s.id WHERE ${conditions.join(" AND ")}`;
   const data = await rows(
     db,

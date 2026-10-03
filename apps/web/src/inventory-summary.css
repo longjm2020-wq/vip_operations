@@ -1,0 +1,10 @@
+.inventory-summary-table .inventory-total-row > td {
+  background: #fff3e5;
+  color: #7c3c13;
+  font-weight: 700;
+  border-bottom: 1px solid #e9d3bd;
+}
+
+.inventory-summary-table .ant-table-body {
+  overscroll-behavior: contain;
+}

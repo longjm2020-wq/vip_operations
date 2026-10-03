@@ -158,6 +158,12 @@ export function enrichOpenApi(doc: OpenAPIObject) {
   );
   for (const action of ["mark-received", "post", "cancel"])
     set("/api/v1/receipts/{id}/" + action, "post", cmdInput);
+  set("/api/v1/inventory/summary", "get", undefined, "按条码（商品编码）、货号或款号汇总库存；totals覆盖全部筛选结果");
+  doc.paths["/api/v1/inventory/summary"].get!.parameters!.push(
+    { name: "dimension", in: "query", schema: { type: "string", enum: ["sku", "article", "style"], default: "sku" } },
+    { name: "q", in: "query", schema: { type: "string", maxLength: 100 }, description: "商品编码、货号、款号、名称或条码关键词" },
+    ...["warehouseId", "skuId", "productId", "supplierId", "categoryId"].map((name) => ({ name, in: "query" as const, schema: { type: "string" as const, pattern: "^[1-9][0-9]*$" } })),
+  );
   set(
     "/api/v1/inventory/adjustments",
     "post",

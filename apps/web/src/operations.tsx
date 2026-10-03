@@ -16,6 +16,7 @@ import {
   Select,
   Space,
   Tabs,
+  Table as AntTable,
   Tag,
   type TableProps,
 } from "antd";
@@ -46,12 +47,17 @@ import { LineSheet, lineRule, purchaseFields } from "./line-sheet";
 import { Sheet } from "./sheet";
 import { DocumentEditor } from "./document-editor";
 import {
-  InventoryDialog,
   ProcurementList,
   ProcurementPanel,
   StagingPanel,
   TransfersPanel,
 } from "./inventory-flow";
+import {
+  inventoryDimensions,
+  inventoryStockFields,
+  type InventoryDimension,
+} from "../../../packages/contracts/src/inventory-summary";
+import "./inventory-summary.css";
 function useAction() {
   const { message } = App.useApp();
   const [busy, setBusy] = useState(false);
@@ -109,20 +115,22 @@ export function InventoryDetailsPage() {
   );
 }
 function InventoryBalances() {
-  const [reference, setReference] = useState<Row>();
+  const [dimension, setDimension] = useState<InventoryDimension>("sku");
+  const skuView = dimension === "sku";
   const [batch, setBatch] = useState(false);
   const { message } = App.useApp();
   const [exporting, setExporting] = useState(false);
   const [search, setSearch] = useState(""),
     [warehouse, setWarehouse] = useState<string>();
-  const q = useList("/inventory", {
+  const q = useList("/inventory/summary", {
+      dimension,
       ...(search ? { q: search } : {}),
       ...(warehouse ? { warehouseId: warehouse } : {}),
     }),
     wh = useOptions("/warehouses");
   const can = useCan("inventory.adjust"),
     canMetadata = useCan("product.update");
-  const columns: TableProps<Row>["columns"] = [
+  const allColumns: NonNullable<TableProps<Row>["columns"]> = [
     {
       title: "图片",
       dataIndex: "mainImageUrl",
@@ -139,7 +147,19 @@ function InventoryBalances() {
         ),
     },
     { title: "款号", dataIndex: "styleNo", width: 140 },
-    { title: "货号", dataIndex: "articleNo", render: (v) => v || "—" },
+    {
+      title: "货号",
+      dataIndex: "articleNo",
+      render: (v, r) =>
+        v ||
+        (dimension === "article" ? (
+          <>
+            未维护货号<div className="secondary">{r.skuCode}</div>
+          </>
+        ) : (
+          "—"
+        )),
+    },
     {
       title: "商品编码",
       dataIndex: "skuCode",
@@ -157,7 +177,6 @@ function InventoryBalances() {
     },
     { title: "颜色", dataIndex: "colorName" },
     { title: "尺码", dataIndex: "sizeName" },
-    { title: "仓库", dataIndex: "warehouseName" },
     ...[
       "physicalQty",
       "inTransitQty",
@@ -198,52 +217,57 @@ function InventoryBalances() {
       dataIndex: "replenishmentQty",
       render: (v) => (v == null ? "暂无数据" : v + "件"),
     },
-    {
-      title: "可售 / 锁定 / 次品",
-      render: (_, r) =>
-        `${r.availableQty} / ${r.reservedQty} / ${r.damagedQty}`,
-    },
-    {
-      title: "参考来源 / 日期",
-      render: (_, r) =>
-        r.sourceNote ? (
-          <>
-            {r.sourceNote}
-            <div className="secondary">
-              人工维护 · {r.referenceDate?.slice(0, 10)}
-            </div>
-          </>
-        ) : (
-          "未配置"
-        ),
-    },
-    {
-      title: "操作",
-      render: (_, r) => (
-        <Space>
-          <Link to={"/inventory/transactions?skuId=" + r.skuId}>库存流水</Link>
-          {can && (
-            <Button size="small" onClick={() => setReference(r)}>
-              参考值设置
-            </Button>
-          )}
-        </Space>
-      ),
-    },
   ];
+  const skuOnly = new Set([
+    "skuCode",
+    "sizeName",
+    "estimatedReturns",
+    "dailySales",
+    "returnRate",
+    "coverageDays",
+    "replenishmentQty",
+  ]);
+  const columns = allColumns.filter((column) => {
+    const key =
+      "dataIndex" in column ? String(column.dataIndex) : String(column.key);
+    if (!skuView && skuOnly.has(key)) return false;
+    return dimension !== "style" || !["articleNo", "colorName"].includes(key);
+  });
+  const stockStart = columns.findIndex(
+    (column) => "dataIndex" in column && column.dataIndex === "physicalQty",
+  );
+  const count = (value: unknown) => Number(value).toLocaleString("zh-CN");
+  const totalValue = (column: (typeof columns)[number], totals: Row) => {
+    return "dataIndex" in column &&
+      inventoryStockFields.includes(
+        column.dataIndex as (typeof inventoryStockFields)[number],
+      )
+      ? count(totals[String(column.dataIndex)])
+      : "—";
+  };
   return (
     <>
+      <Tabs
+        aria-label="库存汇总维度"
+        activeKey={dimension}
+        items={inventoryDimensions.map((item) => ({ ...item }))}
+        onChange={(key) => {
+          setDimension(key as InventoryDimension);
+          q.setPage(1);
+        }}
+      />
       <Card>
         <div className="table-toolbar">
           <Space>
             <Input.Search
-              placeholder="SKU / 款号 / 商品名称"
+              placeholder="商品编码 / 货号 / 款号 / 条码"
               onSearch={(v) => {
                 setSearch(v);
                 q.setPage(1);
               }}
             />
             <Select
+              aria-label="筛选库存仓库"
               style={{ width: 180 }}
               placeholder="全部仓库"
               allowClear
@@ -272,15 +296,37 @@ function InventoryBalances() {
               onClick={async () => {
                 setExporting(true);
                 try {
+                  const exportColumns = [
+                    ...columns,
+                    ...(skuView
+                      ? [{ title: "条码", dataIndex: "barcode" }]
+                      : []),
+                  ];
+                  const keys = exportColumns.flatMap((c) =>
+                    "dataIndex" in c && typeof c.dataIndex === "string"
+                      ? [c.dataIndex]
+                      : [],
+                  );
+                  const exportRow = (row: Row) =>
+                    Object.fromEntries(
+                      keys.map((key) => [
+                        key,
+                        key === "articleNo" && dimension === "article" && !row[key] && row.skuCode
+                          ? `未维护货号（${row.skuCode}）`
+                          : key === "returnRate" && row[key] != null
+                          ? Number((Number(row[key]) * 100).toFixed(4))
+                          : (row[key] ?? null),
+                      ]),
+                    );
                   await exportTableData({
-                    dataSource: q.items.map((row: Row) => ({
-                      ...row,
-                      returnRate:
-                        row.returnRate == null
-                          ? null
-                          : Number((Number(row.returnRate) * 100).toFixed(4)),
-                    })),
-                    columns,
+                    dataSource: [
+                      exportRow({
+                        styleNo: "总计（全部筛选结果）",
+                        ...q.data!.totals,
+                      }),
+                      ...q.items.map(exportRow),
+                    ],
+                    columns: exportColumns,
                   });
                 } catch (error) {
                   message.error((error as Error).message);
@@ -296,13 +342,41 @@ function InventoryBalances() {
         </div>
         <QueryState error={q.error} reload={() => q.refetch()} />
         <Table<Row>
+          className="inventory-summary-table"
           showExport={false}
           rowKey="id"
           loading={q.isLoading}
           locale={empty}
           dataSource={q.items}
-          scroll={{ x: 2700 }}
+          scroll={{
+            x: skuView ? 2200 : dimension === "article" ? 1250 : 1050,
+            y: "max(220px, calc(100dvh - 285px))",
+          }}
           columns={columns}
+          summary={() =>
+            q.data?.totals ? (
+              <AntTable.Summary fixed="top">
+                <AntTable.Summary.Row
+                  className="inventory-total-row"
+                  aria-label="当前筛选库存总计"
+                >
+                  <AntTable.Summary.Cell index={0} colSpan={stockStart}>
+                    <span title="当前筛选范围内全部库存，包含所有分页">
+                      总计
+                    </span>
+                  </AntTable.Summary.Cell>
+                  {columns.slice(stockStart).map((column, offset) => (
+                    <AntTable.Summary.Cell
+                      key={offset}
+                      index={stockStart + offset}
+                    >
+                      {totalValue(column, q.data!.totals)}
+                    </AntTable.Summary.Cell>
+                  ))}
+                </AntTable.Summary.Row>
+              </AntTable.Summary>
+            ) : null
+          }
           pagination={{
             current: q.page,
             total: q.total,
@@ -312,13 +386,6 @@ function InventoryBalances() {
           }}
         />
       </Card>
-      {reference && (
-        <InventoryDialog
-          mode="reference"
-          record={reference}
-          onClose={() => setReference(undefined)}
-        />
-      )}
       {batch && (
         <InventoryImport
           warehouseId={warehouse}

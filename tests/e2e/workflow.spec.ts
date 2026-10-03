@@ -129,11 +129,10 @@ test("真实前后端：建档、采购确认、两次入库、流水追溯", as
   await page.goto(poUrl);
   await expect(page.getByText("已完成", { exact: true }).first()).toBeVisible();
   await page.goto("/operations/vip/inventory");
+  await page.getByRole("combobox", { name: "筛选库存仓库" }).click();
+  await page.getByText("验收仓", { exact: true }).last().click();
   await expect(
-    page
-      .getByRole("row")
-      .filter({ hasText: "E2E-BK-L" })
-      .filter({ has: page.getByRole("cell", { name: "验收仓", exact: true }) }),
+    page.getByRole("row").filter({ hasText: "E2E-BK-L" }),
   ).toContainText("100");
   await page.screenshot({
     path: ".local/inventory-preview.png",
