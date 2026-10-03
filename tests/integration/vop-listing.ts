@@ -5,6 +5,7 @@ import pg from "pg";
 import {
   VipClient,
   VipError,
+  seal,
 } from "../../apps/api/src/integrations/vip/client.js";
 import { syncListing } from "../../apps/api/src/integrations/vip/listing.js";
 
@@ -28,6 +29,7 @@ const client = new VipClient({
 let calls = 0;
 let fail: VipError | undefined;
 let ambiguous = false;
+let expectedAuthorization: string | undefined;
 const now = Date.now() - 1000;
 const values: Record<string, unknown> = {
   abc001: {
@@ -50,7 +52,7 @@ client.call = async (service, method, body, token) => {
   calls++;
   assert.equal(service, "com.vip.somp.sales.backend.service.SalesVopService");
   assert.equal(method, "queryConsignmentBarcodeListingInfo");
-  assert.equal(token, undefined);
+  assert.equal(token, expectedAuthorization);
   const input = body as {
     req_context: { vendor_code: number };
     barcode_listing_req: { barcode_list: string[] };
@@ -256,6 +258,35 @@ try {
   );
   assert.equal(calls - start, 2);
   pass("bounded batches resume without skipping or refetching successful rows");
+  expectedAuthorization = "test-only-access";
+  const authorizedToken = {
+    accessToken: expectedAuthorization,
+    refreshToken: "test-only-refresh",
+    expiresAt: Date.now() + 3600000,
+  };
+  await pool.query(
+    "UPDATE vop_connections SET token_cipher=$2,token_expires_at=now()+interval '1 hour' WHERE namespace=$1",
+    [
+      largeNamespace,
+      seal(authorizedToken, client.credentials.appSecret, largeNamespace),
+    ],
+  );
+  await pool.query(
+    "UPDATE vop_listing_jobs SET next_run_at=now() WHERE namespace=$1",
+    [largeNamespace],
+  );
+  await pool.query(
+    "UPDATE vop_listing_states SET next_run_at=now() WHERE namespace=$1 AND barcode_key='batch-000'",
+    [largeNamespace],
+  );
+  assert.equal(
+    await syncListing(pool, client, largeNamespace, 2, 0),
+    "SUCCESS",
+  );
+  assert.equal(calls - start, 3);
+  pass(
+    "valid existing connection authorization is reused internally without new grants or credential exposure",
+  );
   assert.equal(
     (await pool.query("SELECT count(*) FROM stock_balances")).rows[0].count,
     "0",

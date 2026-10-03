@@ -38,6 +38,34 @@ describe("official barcode listing contract", () => {
     expect(url?.searchParams.has("accessToken")).toBe(false);
     expect(value.state).toBe("LISTED");
   });
+  it("can reuse the current optional authorization without changing the supplier or request scope", async () => {
+    let url: URL | undefined;
+    let body: unknown;
+    const client = new VipClient(
+      {
+        appKey: "test",
+        appSecret: "test-only",
+        vendorId: 123,
+        requestIp: "127.0.0.1",
+      },
+      async (input, init) => {
+        url = new URL(String(input));
+        body = JSON.parse(String(init?.body));
+        return new Response(
+          JSON.stringify({
+            returnCode: "0",
+            result: { abc: { code: 200, listing_status: 1 } },
+          }),
+        );
+      },
+    );
+    await queryListing(client, ["abc"], "test-only-access");
+    expect(url?.searchParams.get("accessToken")).toBe("test-only-access");
+    expect(body).toEqual({
+      req_context: { vendor_code: 123 },
+      barcode_listing_req: { barcode_list: ["abc"] },
+    });
+  });
   it("correlates lowercase keys, preserves leading-zero long barcodes and handles the SDK wrapper", () => {
     const values = adaptListingResponse(
       {

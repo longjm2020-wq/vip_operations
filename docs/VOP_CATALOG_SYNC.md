@@ -36,7 +36,7 @@
 
 ### 商品状态只读核对（2026-10-03）
 
-`SalesVopService-1.0.0.queryConsignmentBarcodeListingInfo` 使用现有应用签名和 `req_context.vendor_code`，官方方法不要求 OAuth。请求 `barcode_listing_req.barcode_list` 仅来自已采集档期条码；返回键按小写关联，条码与平台长ID始终保留字符串。网关成功与单条状态分别验证：200的0/1为下线/上线，404为不存在，500为未发布；缺失、无效或重复大小写键不冒充下线。
+`SalesVopService-1.0.0.queryConsignmentBarcodeListingInfo` 使用现有应用签名和 `req_context.vendor_code`，官方方法标为不要求OAuth，系统参数允许可选 `accessToken`。生产网关在省略令牌时实际返回授权失效，因此连接存在有效授权时复用现有加密令牌；不新建授权、不输出令牌。请求 `barcode_listing_req.barcode_list` 仅来自已采集档期条码；返回键按小写关联，条码与平台长ID始终保留字符串。网关成功与单条状态分别验证：200的0/1为下线/上线，404为不存在，500为未发布；缺失、无效或重复大小写键不冒充下线。
 
 API部署应用新增迁移 `042_vop_listing_status.sql`；状态和断点独立保存在 `vop_listing_states/vop_listing_jobs`。Worker在 `VIP_MODE=catalog` 时默认启用；`VOP_LISTING_SYNC_ENABLED=off` 可暂停状态请求，保留已存资料。每次最多10批、每批最多50条，批间隔一秒；每小时重新核对，资料更新会提前入队。每连接沿用商品同步会话锁，多个Worker不重复查询同一批。网络暂时失败等待五分钟，权限或契约错误停止，修复后由页面手动重试。
 

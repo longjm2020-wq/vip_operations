@@ -1,6 +1,6 @@
 import type pg from "pg";
 import { z } from "zod";
-import { VipClient, VipError } from "./client.js";
+import { VipClient, VipError, unseal } from "./client.js";
 
 export const listingService =
   "com.vip.somp.sales.backend.service.SalesVopService";
@@ -121,7 +121,11 @@ export function adaptListingResponse(
   });
 }
 
-export async function queryListing(client: VipClient, barcodes: string[]) {
+export async function queryListing(
+  client: VipClient,
+  barcodes: string[],
+  accessToken?: string,
+) {
   const requested = [...new Set(barcodes)];
   if (
     !requested.length ||
@@ -129,10 +133,15 @@ export async function queryListing(client: VipClient, barcodes: string[]) {
     requested.some((value) => !value || value.length > 1000)
   )
     throw new VipError("LISTING_REQUEST_INVALID");
-  const response = await client.call(listingService, listingMethod, {
-    req_context: { vendor_code: client.credentials.vendorId },
-    barcode_listing_req: { barcode_list: requested },
-  }); // Documented no-OAuth method: use the existing signed application connection only.
+  const response = await client.call(
+    listingService,
+    listingMethod,
+    {
+      req_context: { vendor_code: client.credentials.vendorId },
+      barcode_listing_req: { barcode_list: requested },
+    },
+    accessToken,
+  ); // The documented optional token is reused when the current connection has valid authorization.
   return adaptListingResponse(response, requested);
 }
 
@@ -156,7 +165,7 @@ export async function syncListing(
     if (!locked) return "BUSY";
     const connection = (
       await c.query(
-        "SELECT vendor_id FROM vop_connections WHERE namespace=$1",
+        "SELECT vendor_id,token_cipher,token_expires_at FROM vop_connections WHERE namespace=$1",
         [namespace],
       )
     ).rows[0];
@@ -177,6 +186,15 @@ export async function syncListing(
       [namespace],
     );
     if (new Date(job.next_run_at).getTime() > Date.now()) return "IDLE";
+    let accessToken: string | undefined;
+    if (new Date(connection.token_expires_at).getTime() > Date.now()) {
+      const token = unseal(
+        connection.token_cipher,
+        client.credentials.appSecret,
+        namespace,
+      );
+      if (token.expiresAt > Date.now()) accessToken = token.accessToken;
+    }
     await c.query(
       `INSERT INTO vop_listing_states(namespace,barcode_key,source_updated_at)
       SELECT namespace,lower(barcode),max(source_updated_at) FROM vop_catalog WHERE namespace=$1 AND barcode<>'' GROUP BY 1,2
@@ -216,7 +234,7 @@ export async function syncListing(
         "UPDATE vop_listing_jobs SET status='RUNNING',last_error=NULL,heartbeat_at=now(),updated_at=now() WHERE namespace=$1",
         [namespace],
       );
-      const observations = await queryListing(client, batch);
+      const observations = await queryListing(client, batch, accessToken);
       await c.query("BEGIN");
       try {
         for (const v of observations) {
