@@ -36,7 +36,8 @@ export function InventoryReferenceValue({
           {reference.source.startDate} — {reference.source.endDate}
         </div>
         <div>条码：{reference.barcode}</div>
-        <div>近30天销售件数合计 × 参考退货率</div>
+        <div>近30天报表销售件数合计 × 参考退货率</div>
+        <div>已提供销量记录 {mode.samples} 天；缺失日期不补0。</div>
         <div>
           {format(mode.salesQty)} × {format(mode.returnRate, true)} ={" "}
           {format(mode.value)}
@@ -68,7 +69,7 @@ export function InventoryReferenceValue({
       </div>
     );
   return (
-    <Tooltip title={title}>
+    <Tooltip title={title} trigger={["hover", "focus"]}>
       <span tabIndex={0}>
         {row[field] == null
           ? "暂无数据"

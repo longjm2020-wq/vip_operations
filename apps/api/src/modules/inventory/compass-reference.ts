@@ -51,10 +51,10 @@ export async function applyCompassReferences(data: Row[], tx: Tx) {
   return data.map((row) => {
     const barcode = code(row);
     const reference = compassInventoryReference(byBarcode.get(barcode) || []);
-    const estimate =
-      reference.recordedDays === 30
-        ? estimatedReturns(reference.salesQty, reference.returnRate.value)
-        : null;
+    const estimate = estimatedReturns(
+      reference.salesQty,
+      reference.returnRate.value,
+    );
     return {
       ...row,
       daily_sales: reference.dailySales.value ?? row.daily_sales,
@@ -69,6 +69,7 @@ export async function applyCompassReferences(data: Row[], tx: Tx) {
           value: estimate,
           sales_qty: reference.salesQty,
           return_rate: reference.returnRate.value,
+          samples: reference.dailySales.samples,
         },
         sales_qty: reference.salesQty,
         recorded_days: reference.recordedDays,

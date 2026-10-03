@@ -549,7 +549,7 @@ try {
     },
   );
   await check(
-    "Missing cells and dates are not zero-filled or estimated as complete sales",
+    "Missing dates are disclosed and not zero-filled; unknown sales cells prevent estimates",
     async () => {
       for (const config of [
         { omitDate: reportStart },
@@ -558,8 +558,14 @@ try {
         await activateReport(await referenceReport(config));
         const row = (await summary({ skuId: skus[0] })).data[0];
         assert.equal(row.channelReference.dailySales.samples, 29);
-        assert.equal(row.channelReference.estimatedReturns.value, null);
-        assert.equal(row.estimatedReturns, 2);
+        if ("omitDate" in config) {
+          assert.equal(row.channelReference.salesQty, 446);
+          assert.equal(row.estimatedReturns, 178.4);
+          assert.equal(row.channelReference.estimatedReturns.samples, 29);
+        } else {
+          assert.equal(row.channelReference.estimatedReturns.value, null);
+          assert.equal(row.estimatedReturns, 2);
+        }
       }
     },
   );
