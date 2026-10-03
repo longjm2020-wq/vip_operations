@@ -128,7 +128,7 @@ test("真实前后端：建档、采购确认、两次入库、流水追溯", as
   }
   await page.goto(poUrl);
   await expect(page.getByText("已完成", { exact: true }).first()).toBeVisible();
-  await page.goto("/inventory");
+  await page.goto("/operations/vip/inventory");
   await expect(
     page
       .getByRole("row")
@@ -297,7 +297,7 @@ test("小卡片 Excel 库存导入，网络重试不重复增加库存", async (
       } else await route.fulfill({ response });
     },
   );
-  await page.goto("/inventory");
+  await page.goto("/operations/vip/inventory");
   await page.getByRole("button", { name: "导入", exact: true }).click();
   const book = new Workbook(),
     sheet = book.addWorksheet("数据");

@@ -101,7 +101,17 @@ test("库存管理：发货核销、SKU 差异质检、进货仓入库与人工�
   await dialog.getByRole("button", { name: "确认正式入库" }).click();
   await expect(dialog).toHaveCount(0);
   await expect(row).toHaveCount(0);
-  await page.getByRole("tab", { name: "库存明细", exact: true }).click();
+  await expect(
+    page.getByRole("tab", { name: "库存明细", exact: true }),
+  ).toHaveCount(0);
+  await page
+    .locator(".sidebar")
+    .getByRole("link", { name: "运营中心", exact: true })
+    .click();
+  await page.getByRole("link", { name: "库存明细", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "库存明细", exact: true }),
+  ).toBeVisible();
   const stockRow = page
     .getByRole("row")
     .filter({ hasText: sku.skuCode })

@@ -29,9 +29,9 @@ export const workspaceTools = [
   },
   {
     id: "inventory",
-    title: "库存管理",
+    title: "库存明细",
     description: "核对在库、在途及仓库库存",
-    path: "/inventory",
+    path: "/operations/vip/inventory",
     permission: "inventory.read",
     group: "仓储",
   },

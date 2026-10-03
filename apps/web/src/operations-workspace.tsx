@@ -4,6 +4,7 @@ import {
   DatabaseOutlined,
   ArrowRightOutlined,
   FundProjectionScreenOutlined,
+  InboxOutlined,
 } from "@ant-design/icons";
 import { Link, useSearchParams } from "react-router-dom";
 import { Header, useCan } from "./shared";
@@ -22,7 +23,8 @@ const platforms = [
 export function OperationsWorkspacePage() {
   const [params, setParams] = useSearchParams(),
     analytics = useCan("analytics.read"),
-    selection = useCan("selection.read");
+    selection = useCan("selection.read"),
+    inventory = useCan("inventory.read");
   const platform = platforms.some((p) => p.key === params.get("platform"))
     ? params.get("platform")!
     : "vip";
@@ -47,6 +49,13 @@ export function OperationsWorkspacePage() {
       icon: <FundProjectionScreenOutlined />,
       description: "品牌对比、价格材质分析与商品 TOP20",
       visible: analytics,
+    },
+    {
+      name: "库存明细",
+      href: "/operations/vip/inventory",
+      icon: <InboxOutlined />,
+      description: "分仓库存、在途数量与经营参考",
+      visible: inventory,
     },
   ].filter((e) => e.visible);
   return (

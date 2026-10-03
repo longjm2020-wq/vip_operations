@@ -45,7 +45,7 @@ test("6885 行首次库存导入：浏览器读取与真实建档保存在 15 �
       warehouse.code,
     ]);
   const buffer = Buffer.from(await book.xlsx.writeBuffer());
-  await page.goto("/inventory");
+  await page.goto("/operations/vip/inventory");
   await page.getByRole("button", { name: "导入", exact: true }).click();
   let requests = 0;
   page.on("request", (request) => {

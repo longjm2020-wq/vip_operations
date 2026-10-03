@@ -78,16 +78,11 @@ export function InventoryPage() {
     <>
       <Header
         title="库存管理"
-        subtitle="采购配送、SKU 盘点质检、进货仓暂存和分仓库存统一管理。"
+        subtitle="采购配送、SKU 盘点质检、进货仓暂存与调拨管理。"
       />
       <Tabs
         destroyOnHidden
         items={[
-          {
-            key: "balances",
-            label: "库存明细",
-            children: <InventoryBalances />,
-          },
           {
             key: "procurement",
             label: "采购配送",
@@ -97,6 +92,19 @@ export function InventoryPage() {
           { key: "transfers", label: "调拨订单", children: <TransfersPanel /> },
         ]}
       />
+    </>
+  );
+}
+export function InventoryDetailsPage() {
+  const canRead = useCan("inventory.read");
+  return (
+    <>
+      <Header title="库存明细" subtitle="查询分仓库存与在途数量" />
+      {canRead ? (
+        <InventoryBalances />
+      ) : (
+        <Alert type="warning" showIcon title="当前账号没有库存查看权限" />
+      )}
     </>
   );
 }
@@ -137,11 +145,8 @@ function InventoryBalances() {
       dataIndex: "skuCode",
       render: (_, r) => (
         <>
-          <strong>{r.productName}</strong>
-          <div className="secondary">
-            {r.skuCode}
-            {r.barcode ? " / " + r.barcode : ""}
-          </div>
+          {r.skuCode}
+          {r.barcode && <div className="secondary">{r.barcode}</div>}
         </>
       ),
     },

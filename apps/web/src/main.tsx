@@ -55,6 +55,7 @@ import { WorkspaceMenuIcon } from "./workspace-menu-icon";
 const MasterPage = React.lazy(() => import("./master").then(module => ({ default: module.MasterPage })));
 const ProductArchive = React.lazy(() => import("./product-archive").then(module => ({ default: module.ProductArchive })));
 const InventoryPage = React.lazy(() => import("./operations").then(module => ({ default: module.InventoryPage })));
+const InventoryDetailsPage = React.lazy(() => import("./operations").then(module => ({ default: module.InventoryDetailsPage })));
 const TransactionsPage = React.lazy(() => import("./operations").then(module => ({ default: module.TransactionsPage })));
 const PurchaseList = React.lazy(() => import("./operations").then(module => ({ default: module.PurchaseList })));
 const PurchaseNew = React.lazy(() => import("./operations").then(module => ({ default: module.PurchaseNew })));
@@ -196,6 +197,7 @@ function Workspace({ user }: { user: Row }) {
   const originalItems = [
     { key: "/analytics/compass", label: "经营分析", icon: <DatabaseOutlined />, permission: "analytics.read" },
     { key: "/analytics/competitors", label: "竞品分析", icon: <DatabaseOutlined />, permission: "analytics.read" },
+    { key: "/operations/vip/inventory", label: "库存明细", icon: <InboxOutlined />, permission: "inventory.read" },
     {
       key: "/products",
       label: "商品档案",
@@ -277,7 +279,7 @@ function Workspace({ user }: { user: Row }) {
   ];
   const settings = originalItems.find((i) => i.key === "/settings")!;
   const adminKeys = ["/users", "/roles", "/audit-logs", "/settings/ai"];
-  const operationKeys = ["/analytics/compass", "/analytics/competitors", "/style-selections"];
+  const operationKeys = ["/analytics/compass", "/analytics/competitors", "/style-selections", "/operations/vip/inventory"];
   const items = [
     ...(operationKeys.some((key) =>
       user.permissions.includes(originalItems.find((i) => i.key === key)!.permission!),
@@ -388,6 +390,8 @@ function Workspace({ user }: { user: Row }) {
       ? "竞品分析"
     : location.pathname.startsWith("/style-selections")
       ? "选款登记"
+    : location.pathname.startsWith("/operations/vip/inventory")
+      ? "库存明细"
       : undefined;
   const menu = visibleItems.map((item) => {
     const children = item.children?.map((child) => ({
@@ -534,6 +538,7 @@ function Workspace({ user }: { user: Row }) {
               />
               <Route path="/help" element={<ManualPage />} />
               <Route path="/operations" element={<OperationsWorkspacePage />} />
+              <Route path="/operations/vip/inventory" element={<InventoryDetailsPage />} />
               <Route path="/products/:id" element={<ProductDetail />} />
               <Route path="/purchase-orders/new" element={<PurchaseNew />} />
               <Route path="/purchase-orders/:id" element={<DocumentDetail />} />
