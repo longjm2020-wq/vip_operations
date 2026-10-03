@@ -11,6 +11,13 @@ API 前缀已确定为 `/api/v1`。下述补充路径、DTO、错误码与幂等
 - `RESPONSE_RECEIVED` 表示结构符合官方 SDK，但不宣称业务成功或指标口径已验证；VOP 网关 `returnCode=0` 不能代替内部 `CompassDataResponse.code`。已公开的403/405/400业务错误分别提示权限或并发、参数及查询失败。
 - 状态和元数据独立保存于 `vop_compass_probes`，每个命名空间共用现有 VOP 锁；配置指纹改变后旧验证结果失效。此准备阶段没有官方指标自动同步能力。
 
+### 唯品会商品上下架状态（2026-10-03）
+
+- `GET /integrations/vip/status`：vip.settings；`listing` 包含已采集档期条码范围、两小时有效期及各连接任务的已核对数、总条码数、未解决错误数、心跳及最近成功时间，不返回应用密钥或接口原始消息。
+- `GET /integrations/vip/catalog`：vip.settings；`state` 可选 `LISTED/UNLISTED/PARTIAL/UNPUBLISHED/NOT_FOUND/UNKNOWN`，按本库全部已采集条码汇总的款号状态在服务器筛选，分页总数使用同一条件。返回每条记录的条码状态、款号汇总及数量、上次状态、最后变更和核验时间。失败或过期状态不参与当前上下线结论；商品ID及条码保留字符串。
+- `POST /integrations/vip/listing/sync`：vip.settings；严格输入 `{namespace}`，需要会话、CSRF、幂等键与审计。已有待执行或进行中任务复用，手动请求至少间隔一分钟；重新核对本库条码，不操作平台上下架、不修改ERP库存或报表。
+- Worker 调用 `SalesVopService-1.0.0#queryConsignmentBarcodeListingInfo`，每批最多50个已采集条码，按返回小写条码键关联。200的0/1表示下线/上线，404为不存在，500为未发布。保存原始长时间戳；无法核对时间单位时只给提示。状态保存在独立 `vop_listing_states/vop_listing_jobs` 表；默认每小时核对，暂时失败五分钟后重试，权限或契约问题停止自动请求。
+
 ### 魔方罗盘经营分析（2026-10-02）
 
 - `GET /analytics/compass`：analytics.read；dimension=style/article/barcode，兼容 days=1/3/7/15/30（看板最近周期菜单为1/7/15/30），startDate/endDate 可选；传入 startDate 时使用显式起止区间，日期需先后有序，含首尾最多366天，截止日不得晚于昨日。q 模糊查询，styleNo/articleNo 精确范围，page/pageSize。sort 支持已归一化的 17 项数值指标及 returnRate/rejectionRate/conversionRate/clickRate/averagePrice；全部筛选结果降序排序，缺失值最后，比例由期间累计分子/分母重算，不平均每日比例。返回来源、期间汇总、每日趋势、TOP 10 和分页明细，days 为实际区间天数，complete 标示当前来源是否完整覆盖所选区间。仍仅查询当前维度的完整来源，不拼接历史导入批次。三种报表独立计算，库存仅取截止日期快照。自定义视图字段选择仅为浏览器按账号及维度保存的显示偏好，不改变响应数据。

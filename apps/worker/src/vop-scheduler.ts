@@ -1,6 +1,7 @@
 import pg from "pg";
 import { VipClient } from "../../api/src/integrations/vip/client.js";
 import { syncDetails } from "../../api/src/integrations/vip/details.js";
+import { syncListing } from "../../api/src/integrations/vip/listing.js";
 import {
   loadCompassProbeSetup,
   probeCompass,
@@ -58,6 +59,13 @@ export function startVopScheduler() {
         console.log(
           JSON.stringify({ event: "vop-compass-probe", status: compass }),
         );
+      if (process.env.VOP_LISTING_SYNC_ENABLED !== "off") {
+        const listing = await syncListing(pool, client, config.namespace);
+        if (!["IDLE", "BUSY", "NOT_CONFIGURED"].includes(listing))
+          console.log(
+            JSON.stringify({ event: "vop-listing", status: listing }),
+          );
+      }
       const details = await syncDetails(pool, client, config.namespace);
       if (!["IDLE", "BUSY"].includes(details))
         console.log(JSON.stringify({ event: "vop-details", status: details }));

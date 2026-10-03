@@ -2,7 +2,7 @@
 
 ## 范围
 
-使用官方 `vipapis.inventory.InventoryService.getSkuList`（1.0.0）。当前能力为 `SCHEDULE_CATALOG`，默认范围不包含 OXO。不是全平台商品全集，不包括订单、销售、库存、发货或采购自动写回。平台商品独立保存在 `vop_catalog`，不会修改内部商品主数据和库存流水，也不根据列表缺失删除商品。
+使用官方 `vipapis.inventory.InventoryService.getSkuList`（1.0.0）。当前能力包括 `SCHEDULE_CATALOG`、`PRODUCT_DETAILS` 和 `BARCODE_LISTING`，默认范围不包含 OXO。不是全平台商品全集，不包括订单、销售、库存、发货或采购自动写回。平台商品独立保存在 `vop_catalog`，不会修改内部商品主数据和库存流水，也不根据列表缺失删除商品。
 
 官方字段说明：https://vop.vip.com/home#/api/method/detail/vipapis.inventory.InventoryService-1.0.0/getSkuList
 
@@ -33,6 +33,18 @@
 刷新文档：https://vop.vip.com/home#/api/method/detail/vipapis.oauth.OauthService-1.0.0/refreshToken
 
 ## 验证与运维
+
+### 商品状态只读核对（2026-10-03）
+
+`SalesVopService-1.0.0.queryConsignmentBarcodeListingInfo` 使用现有应用签名和 `req_context.vendor_code`，官方方法不要求 OAuth。请求 `barcode_listing_req.barcode_list` 仅来自已采集档期条码；返回键按小写关联，条码与平台长ID始终保留字符串。网关成功与单条状态分别验证：200的0/1为下线/上线，404为不存在，500为未发布；缺失、无效或重复大小写键不冒充下线。
+
+API部署应用新增迁移 `042_vop_listing_status.sql`；状态和断点独立保存在 `vop_listing_states/vop_listing_jobs`。Worker在 `VIP_MODE=catalog` 时默认启用；`VOP_LISTING_SYNC_ENABLED=off` 可暂停状态请求，保留已存资料。每次最多10批、每批最多50条，批间隔一秒；每小时重新核对，资料更新会提前入队。每连接沿用商品同步会话锁，多个Worker不重复查询同一批。网络暂时失败等待五分钟，权限或契约错误停止，修复后由页面手动重试。
+
+款号汇总只依据本库已采集条码；全部0、全部1或已完整核对的0/1混合分别是下线、上线或部分上线。未知、失败、超过两小时或其他混合状态保持待确认。最后变更时间保留平台原值；仅对合理的毫秒时间戳显示日期，无法验证单位时标记待核对。平台状态不写回上下架操作、ERP商品或库存，不影响经营分析来源及每日邮件开关。
+
+官方契约：https://vop.vip.com/home#/api/method/detail/com.vip.somp.sales.backend.service.SalesVopService-1.0.0/queryConsignmentBarcodeListingInfo
+
+状态测试：`pnpm exec vitest run tests/unit/vop-listing.test.ts`、`pnpm exec tsx tests/integration/vop-listing.ts`。集成测试仅允许本机临时数据库，模拟官方返回，不向真实平台请求。真实生产返回和部署证据单独记入 `docs/vop-evidence/2026-10-03-listing-status.md`。
 
 `pnpm test:unit`；`pnpm test:integration`；`pnpm exec tsx tests/integration/vop-sync.ts`（根据本地 `DATABASE_URL` 创建并清理独立测试数据库）；`pnpm typecheck`；`pnpm lint`；`pnpm build`。
 

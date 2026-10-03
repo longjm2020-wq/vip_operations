@@ -24,7 +24,6 @@ import {
   ReloadOutlined,
   LinkOutlined,
   UploadOutlined,
-  PictureOutlined,
   SettingOutlined,
 } from "@ant-design/icons";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
@@ -94,34 +93,35 @@ function ProductPhoto({
 }
 function DistributionPreview({
   products,
+  onPreview,
 }: {
   products: CompetitorProductPreview[];
+  onPreview: (target: CompassImageTarget) => void;
 }) {
   return (
     <div className="competitor-bar-products">
       {products.map((p) => (
-        <a
-          key={p.productId}
-          href={p.productUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          aria-label={`打开${p.title}商品详情`}
-        >
-          {p.imageUrl ? (
-            <img
-              src={p.imageUrl}
-              alt={p.title}
-              loading="lazy"
-              referrerPolicy="no-referrer"
-            />
-          ) : (
-            <span className="competitor-bar-placeholder">
-              <PictureOutlined aria-hidden="true" />
+        <div key={p.productId} className="competitor-bar-product">
+          <CompassProductImage
+            image={p.imageUrl || undefined}
+            code={p.styleCode || p.title}
+            onPreview={onPreview}
+          />
+          <a
+            href={p.productUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label={`打开${p.title}商品详情`}
+          >
+            <span className="competitor-bar-code">
+              {p.styleCode || p.title}
             </span>
-          )}
-          <span>{p.styleCode || p.title}</span>
-          <strong>{money(p.salePrice)}</strong>
-        </a>
+            <strong>{money(p.salePrice)}</strong>
+            <small className="competitor-bar-material">
+              {p.materialInfo || "材质未公开"}
+            </small>
+          </a>
+        </div>
       ))}
     </div>
   );
@@ -132,12 +132,14 @@ function Distribution({
   results,
   activePreview,
   onPreviewChange,
+  onPreview,
 }: {
   title: string;
   field: "categories" | "materials" | "prices" | "seasons";
   results: Result[];
   activePreview: string | null;
   onPreviewChange: (key: string, open: boolean) => void;
+  onPreview: (target: CompassImageTarget) => void;
 }) {
   const combined = new Map<string, number>();
   results.forEach((r) =>
@@ -173,7 +175,10 @@ function Distribution({
                     mouseLeaveDelay={0.25}
                     title={`${r.brand.name} · ${name} · 前${bucket?.top10?.length || 0}款`}
                     content={
-                      <DistributionPreview products={bucket?.top10 || []} />
+                      <DistributionPreview
+                        products={bucket?.top10 || []}
+                        onPreview={onPreview}
+                      />
                     }
                     classNames={{ root: "competitor-bar-popover" }}
                     open={count > 0 && activePreview === previewKey}
@@ -905,6 +910,7 @@ export function CompetitorAnalysisPage() {
                 field={field}
                 results={results}
                 activePreview={distributionPreview}
+                onPreview={setPreview}
                 onPreviewChange={(key, open) =>
                   setDistributionPreview((old) =>
                     open ? key : old === key ? null : old,

@@ -79,7 +79,13 @@ describe("Competitor analysis integrity", () => {
     expect(filtered.prices.find((x) => x.name === "200元以下")!.top10).toEqual(
       [],
     );
-    expect(filtered.categories[0].top10[0]).not.toHaveProperty("materialInfo");
+    expect(filtered.categories[0].top10[0].materialInfo).toBe(
+      "羊绒70% 桑蚕丝30%",
+    );
+    expect(
+      analyzeCompetitor(brand, snapshot("PUBLIC_RANK", [product(1)]), {})
+        .categories[0].top10[0].materialInfo,
+    ).toBe("");
   });
   it("validates official product identity and URLs, leaving missing prices and pictures missing", () => {
     expect(product(1).productId).toBe("6921659409327812001");

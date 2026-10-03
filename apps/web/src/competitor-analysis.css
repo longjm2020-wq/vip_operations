@@ -147,8 +147,11 @@
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 10px;
-  width: min(440px, calc(100vw - 56px));
+  width: min(660px, calc(100vw - 56px));
+  max-height: min(520px, calc(100dvh - 120px));
+  overflow-y: auto;
 }
+.competitor-bar-product,
 .competitor-bar-products a {
   display: flex;
   flex-direction: column;
@@ -158,24 +161,32 @@
   font-size: 11px;
   color: #725749;
 }
+.competitor-bar-products a {
+  width: 100%;
+}
 .competitor-bar-products img,
-.competitor-bar-placeholder {
+.competitor-bar-products .compass-product-image-placeholder {
   width: 56px;
   height: 70px;
   object-fit: contain;
   border-radius: 4px;
   background: #f6f0eb;
 }
-.competitor-bar-placeholder {
-  display: grid;
-  place-items: center;
-}
-.competitor-bar-products a > span:not(.competitor-bar-placeholder) {
+.competitor-bar-code {
   width: 100%;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   text-align: center;
+}
+.competitor-bar-material {
+  width: 100%;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.5;
+  font-size: 11px;
+  text-align: left;
+  color: #937d70;
 }
 .competitor-bar-products a:hover {
   color: #d95200;
@@ -188,8 +199,7 @@
 @media (max-width: 480px) {
   .competitor-bar-products {
     grid-template-columns: repeat(3, minmax(0, 1fr));
-    max-height: 340px;
-    overflow-y: auto;
+    max-height: min(420px, calc(100dvh - 120px));
   }
 }
 .competitor-material {

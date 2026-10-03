@@ -39,6 +39,8 @@ import * as purchase from "./modules/purchases/service.js";
 import * as suggestion from "./modules/suggestions/service.js";
 import { vipStatus } from "./integrations/vip/index.js";
 import { compassProbeRequestSchema } from "./integrations/vip/compass.js";
+import { platformCatalog } from "./integrations/vip/catalog.js";
+import { listingRequestSchema } from "./integrations/vip/listing.js";
 const paramId = (v: string) => parse(id, v);
 @ApiTags("登录与权限")
 @Controller("api/v1")
@@ -295,21 +297,7 @@ class SystemController {
   @Permission("vip.settings") @Get("integrations/vip/catalog") async catalog(
     @Query() q: any,
   ) {
-    const p = pagination(q);
-    const list = await rows(
-      db,
-      `SELECT c.namespace,c.external_key,c.barcode,c.style_no,c.product_name,c.cooperation_no,c.warehouse,c.source_updated_at,
-       d.detail,
-       to_char(d.synced_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS detail_synced_at,
-       to_char(c.synced_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS synced_at
-       FROM vop_catalog c LEFT JOIN vop_product_details d ON d.namespace=c.namespace AND d.barcode=c.barcode
-       ORDER BY c.synced_at DESC,c.namespace,c.external_key LIMIT $1 OFFSET $2`,
-      p.pageSize,
-      (p.page - 1) * p.pageSize,
-    );
-    const total = (await one(db, "SELECT count(*) AS total FROM vop_catalog"))!
-      .total;
-    return { items: list, total: Number(total), ...p };
+    return platformCatalog(q);
   }
   @Permission("vip.settings") @Post("integrations/vip/sync") async sync(
     @Req() r: AuthRequest,
@@ -328,6 +316,8 @@ class SystemController {
         tx,
         "UPDATE vop_detail_tasks SET next_run_at=now() RETURNING namespace",
       );
+      await rows(tx, "UPDATE vop_listing_states SET next_run_at=now() RETURNING namespace");
+      await rows(tx, "UPDATE vop_listing_jobs SET status='READY',next_run_at=now() RETURNING namespace");
       await audit(tx, context(r), "VIP_SYNC_REQUEST", "vip", null, null, {
         capability: "SCHEDULE_CATALOG",
       });
@@ -336,6 +326,23 @@ class SystemController {
   }
   @Permission("vip.settings") @Get("integrations/vip/status") vip() {
     return vipStatus();
+  }
+  @Permission("vip.settings") @Post("integrations/vip/listing/sync") async listingSync(
+    @Req() r: AuthRequest, @Body() b: unknown,
+  ) {
+    const input = parse(listingRequestSchema, b);
+    return command(context(r), "vip.listing.request", input, async (tx) => {
+      const connection = await one(tx, "SELECT namespace FROM vop_connections WHERE namespace=$1", input.namespace);
+      if (!connection) fail("NOT_CONFIGURED", "商品状态采集连接尚未配置", 409);
+      const job = await one(tx, "SELECT status,requested_at FROM vop_listing_jobs WHERE namespace=$1 FOR UPDATE", input.namespace);
+      if (job && ["READY","RUNNING","CONTINUING"].includes(job.status)) return { requested: true };
+      if (job?.requested_at && Date.now()-new Date(job.requested_at).getTime()<60000)
+        fail("LISTING_REQUEST_RATE_LIMIT", "请等待一分钟再更新商品状态", 429);
+      await rows(tx, "INSERT INTO vop_listing_jobs(namespace,requested_at) VALUES($1,now()) ON CONFLICT(namespace) DO UPDATE SET status='READY',next_run_at=now(),requested_at=now(),last_error=NULL,updated_at=now() RETURNING namespace", input.namespace);
+      await rows(tx, "UPDATE vop_listing_states SET next_run_at=now() WHERE namespace=$1 RETURNING barcode_key", input.namespace);
+      await audit(tx, context(r), "VIP_LISTING_SYNC_REQUEST", "vip", null, null, { namespace: input.namespace, capability: "BARCODE_LISTING" });
+      return { requested: true };
+    });
   }
   @Permission("vip.settings") @Post("integrations/vip/compass/probe") async compassProbe(
     @Req() r: AuthRequest,

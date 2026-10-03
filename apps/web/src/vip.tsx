@@ -6,9 +6,11 @@ import {
   Button,
   Card,
   Image,
+  Select,
   Space,
   Table,
   Tag,
+  Tooltip,
   Typography,
 } from "antd";
 import { api, queryClient } from "./api";
@@ -51,6 +53,31 @@ const compassErrors: Record<string, string> = {
   GATEWAY_REJECTED: "VOP 网关拒绝请求，请管理员核对应用权限与配置。",
   NETWORK_FAILED: "网络连接失败，可在一分钟后重新验证。",
 };
+const listingLabels: Record<string, string> = {
+  LISTED: "上线",
+  UNLISTED: "下线",
+  PARTIAL: "部分上线",
+  UNPUBLISHED: "未发布",
+  NOT_FOUND: "不存在",
+  UNKNOWN: "待确认",
+  ERROR: "查询失败",
+  STALE: "待更新",
+};
+const listingTag = (value: string, label?: string) => (
+  <Tag
+    color={
+      value === "LISTED"
+        ? "green"
+        : value === "PARTIAL"
+          ? "orange"
+          : value === "ERROR"
+            ? "red"
+            : "default"
+    }
+  >
+    {label || listingLabels[value] || "待确认"}
+  </Tag>
+);
 const status = (value: string, names = labels) => (
   <Tag
     color={
@@ -69,7 +96,9 @@ export function VipPage() {
   const { message } = App.useApp();
   const [page, setPage] = useState(1),
     [busy, setBusy] = useState(false),
-    [probing, setProbing] = useState<string | null>(null);
+    [probing, setProbing] = useState<string | null>(null),
+    [listingFilter, setListingFilter] = useState<string | undefined>(),
+    [listingUpdating, setListingUpdating] = useState<string | null>(null);
   const overview = useQuery({
     queryKey: ["vip-status"],
     queryFn: () => api("/integrations/vip/status"),
@@ -77,8 +106,12 @@ export function VipPage() {
     refetchInterval: 15000,
   });
   const catalog = useQuery({
-    queryKey: ["vip-catalog", page],
-    queryFn: () => api(`/integrations/vip/catalog?page=${page}&pageSize=50`),
+    queryKey: ["vip-catalog", page, listingFilter],
+    queryFn: () =>
+      api(
+        `/integrations/vip/catalog?page=${page}&pageSize=50${listingFilter ? `&state=${listingFilter}` : ""}`,
+      ),
+    placeholderData: (previous) => previous,
     enabled: can,
     refetchInterval: 15000,
   });
@@ -106,6 +139,18 @@ export function VipPage() {
       message.error((e as Error).message);
     } finally {
       setProbing(null);
+    }
+  }
+  async function requestListing(namespace: string) {
+    setListingUpdating(namespace);
+    try {
+      await api("/integrations/vip/listing/sync", "POST", { namespace });
+      message.success("已提交商品状态核对任务，请等待后台更新");
+      await queryClient.invalidateQueries({ queryKey: ["vip-status"] });
+    } catch (e) {
+      message.error((e as Error).message);
+    } finally {
+      setListingUpdating(null);
     }
   }
   return (
@@ -268,7 +313,30 @@ export function VipPage() {
             当前经营分析使用已导入报表。取数验证只核对一页响应，指标口径及完整分页尚待确认；收到响应不代表完整同步，也不自动替换报表或启用每日邮件。
           </Typography.Paragraph>
         </Card>
-        <Card title="平台商品库">
+        <Card
+          title="平台商品库"
+          extra={
+            <Select
+              aria-label="款号上线状态筛选"
+              placeholder="全部商品状态"
+              allowClear
+              style={{ width: 170 }}
+              value={listingFilter}
+              options={[
+                "LISTED",
+                "UNLISTED",
+                "PARTIAL",
+                "UNPUBLISHED",
+                "NOT_FOUND",
+                "UNKNOWN",
+              ].map((value) => ({ value, label: listingLabels[value] }))}
+              onChange={(value) => {
+                setListingFilter(value);
+                setPage(1);
+              }}
+            />
+          }
+        >
           <Typography.Paragraph type="secondary">
             颜色、尺码、品牌、品类、图片与价格来自已发布商品资料，每小时分批核对。详情同步不会修改内部商品档案，原有单款编辑继续保留。售价、供货价为资料接口返回值，不代表实时成交价；返回
             0 时标注“未提供有效价格”。
@@ -281,80 +349,165 @@ export function VipPage() {
               {j.lastError && <Tag color="red">{j.lastError}</Tag>}
             </Typography.Paragraph>
           ))}
-          <Table<Row>
-            loading={catalog.isLoading}
-            rowKey={(r) => r.namespace + ":" + r.externalKey}
-            scroll={{ x: 2450 }}
-            dataSource={catalog.data?.data?.items || []}
-            pagination={{
-              current: page,
-              pageSize: 50,
-              total: catalog.data?.data?.total || 0,
-              onChange: setPage,
-              showSizeChanger: false,
-            }}
-            columns={[
-              {
-                title: "图片",
-                width: 90,
-                render: (_, r) =>
-                  r.detail?.images?.length ? (
-                    <Image
-                      width={56}
-                      height={70}
-                      style={{ objectFit: "contain" }}
-                      src={r.detail.images[0]}
-                      alt={r.productName}
-                    />
-                  ) : (
-                    "暂无图片"
+          <Typography.Paragraph type="secondary">
+            上下架状态来自官方条码查询；款号状态按本库已采集条码汇总。缺失、失败或超过两小时未核对的数据标为待确认，范围不代表
+            VC 全部商品。
+          </Typography.Paragraph>
+          {data?.listing?.jobs?.map((j: Row) => (
+            <div key={j.namespace} style={{ marginBottom: 16 }}>
+              <Space wrap>
+                <span>商品状态：{status(j.status)}</span>
+                <span>
+                  已核对 {String(j.checked)} / {String(j.total)} 个条码
+                </span>
+                <span>待处理 {String(j.unresolved)} 个</span>
+                <span>最近完整核对：{when(j.lastSuccessAt)}</span>
+                <Button
+                  size="small"
+                  loading={listingUpdating === j.namespace}
+                  disabled={
+                    ["READY", "RUNNING", "CONTINUING"].includes(j.status) ||
+                    !j.heartbeatAt ||
+                    Date.now() - new Date(j.heartbeatAt).getTime() > 120000
+                  }
+                  onClick={() => requestListing(j.namespace)}
+                >
+                  更新商品状态
+                </Button>
+              </Space>
+              {j.lastError && (
+                <Alert
+                  style={{ marginTop: 8 }}
+                  type="warning"
+                  title={`商品状态核对未完成：${j.lastError}`}
+                  description="已保存的记录继续保留；当前查询失败会单独标记，请管理员核对应用权限、白名单或网络后重试。"
+                />
+              )}
+            </div>
+          ))}
+          <div style={{ minHeight: 660 }}>
+            <Table<Row>
+              loading={catalog.isLoading}
+              rowKey={(r) => r.namespace + ":" + r.externalKey}
+              scroll={{ x: 3000, y: 580 }}
+              dataSource={catalog.data?.data?.items || []}
+              pagination={{
+                current: page,
+                pageSize: 50,
+                total: catalog.data?.data?.total || 0,
+                onChange: setPage,
+                showSizeChanger: false,
+              }}
+              columns={[
+                {
+                  title: "图片",
+                  width: 90,
+                  render: (_, r) =>
+                    r.detail?.images?.length ? (
+                      <Image
+                        width={56}
+                        height={70}
+                        style={{ objectFit: "contain" }}
+                        src={r.detail.images[0]}
+                        alt={r.productName}
+                      />
+                    ) : (
+                      "暂无图片"
+                    ),
+                },
+                { title: "款号", dataIndex: "styleNo" },
+                { title: "条码", dataIndex: "barcode" },
+                {
+                  title: "条码状态",
+                  width: 130,
+                  render: (_, r) => (
+                    <Tooltip
+                      title={
+                        r.listingError
+                          ? `本次核对失败；上次记录：${listingLabels[r.lastKnownListingState] || "未知"}（${when(r.listingCheckedAt)}）`
+                          : r.barcodeListingState === "STALE"
+                            ? `上次记录：${listingLabels[r.lastKnownListingState] || "未知"}（${when(r.listingCheckedAt)}）`
+                            : undefined
+                      }
+                    >
+                      {listingTag(
+                        r.barcodeListingState,
+                        r.barcodeListingState === "UNKNOWN"
+                          ? "待同步"
+                          : undefined,
+                      )}
+                    </Tooltip>
                   ),
-              },
-              { title: "款号", dataIndex: "styleNo" },
-              { title: "条码", dataIndex: "barcode" },
-              { title: "商品名称", dataIndex: "productName", width: 320 },
-              ...[
-                ["颜色", "color"],
-                ["尺码", "size"],
-                ["品牌", "brandName"],
-                ["品类", "categoryName"],
-              ].map(([title, key]) => ({
-                title,
-                width: 110,
-                render: (_: unknown, r: Row) =>
-                  r.detail?.[key] || (r.detail ? "未提供" : "待同步"),
-              })),
-              ...[
-                ["吊牌价", "marketPrice"],
-                ["资料售价", "sellPrice"],
-                ["资料供货价", "supplyPrice"],
-              ].map(([title, key]) => ({
-                title,
-                width: 160,
-                render: (_: unknown, r: Row) =>
-                  !r.detail
-                    ? "待同步"
-                    : r.detail[key] == null
-                      ? "未提供"
-                      : Number(r.detail[key]) === 0
-                        ? "0（未提供有效价格）"
-                        : `${r.detail.currency || "币种未提供"} ${Number(r.detail[key]).toFixed(2)}`,
-              })),
-              { title: "合作编码", dataIndex: "cooperationNo" },
-              { title: "仓库", dataIndex: "warehouse" },
-              {
-                title: "平台更新时间",
-                dataIndex: "sourceUpdatedAt",
-                render: (v) => when(Number(v) * 1000),
-              },
-              { title: "入库时间", dataIndex: "syncedAt", render: when },
-              {
-                title: "详情同步时间",
-                dataIndex: "detailSyncedAt",
-                render: when,
-              },
-            ]}
-          />
+                },
+                {
+                  title: "款号状态",
+                  width: 130,
+                  render: (_, r) => (
+                    <Tooltip
+                      title={`本库已采集 ${r.styleBarcodeCount} 个条码；上线 ${r.styleListedCount}、下线 ${r.styleUnlistedCount}、待核对 ${r.styleUnknownCount}。未发布或不存在不归为下线。`}
+                    >
+                      {listingTag(r.styleListingState)}
+                    </Tooltip>
+                  ),
+                },
+                { title: "商品名称", dataIndex: "productName", width: 320 },
+                ...[
+                  ["颜色", "color"],
+                  ["尺码", "size"],
+                  ["品牌", "brandName"],
+                  ["品类", "categoryName"],
+                ].map(([title, key]) => ({
+                  title,
+                  width: 110,
+                  render: (_: unknown, r: Row) =>
+                    r.detail?.[key] || (r.detail ? "未提供" : "待同步"),
+                })),
+                ...[
+                  ["吊牌价", "marketPrice"],
+                  ["资料售价", "sellPrice"],
+                  ["资料供货价", "supplyPrice"],
+                ].map(([title, key]) => ({
+                  title,
+                  width: 160,
+                  render: (_: unknown, r: Row) =>
+                    !r.detail
+                      ? "待同步"
+                      : r.detail[key] == null
+                        ? "未提供"
+                        : Number(r.detail[key]) === 0
+                          ? "0（未提供有效价格）"
+                          : `${r.detail.currency || "币种未提供"} ${Number(r.detail[key]).toFixed(2)}`,
+                })),
+                { title: "合作编码", dataIndex: "cooperationNo" },
+                { title: "仓库", dataIndex: "warehouse" },
+                {
+                  title: "最后上下架时间",
+                  width: 190,
+                  render: (_, r) =>
+                    r.timeWarning
+                      ? "平台时间待核对"
+                      : when(r.lastListingChangeAt),
+                },
+                {
+                  title: "状态核验时间",
+                  width: 190,
+                  dataIndex: "listingCheckedAt",
+                  render: when,
+                },
+                {
+                  title: "平台更新时间",
+                  dataIndex: "sourceUpdatedAt",
+                  render: (v) => when(Number(v) * 1000),
+                },
+                { title: "入库时间", dataIndex: "syncedAt", render: when },
+                {
+                  title: "详情同步时间",
+                  dataIndex: "detailSyncedAt",
+                  render: when,
+                },
+              ]}
+            />
+          </div>
         </Card>
         <Card title="最近同步记录">
           <Typography.Paragraph type="secondary">
@@ -367,7 +520,7 @@ export function VipPage() {
             scroll={{ x: 900 }}
             columns={[
               { title: "开始时间", dataIndex: "startedAt", render: when },
-              { title: "状态", dataIndex: "status", render: status },
+              { title: "状态", dataIndex: "status", render: (v) => status(v) },
               { title: "页数", dataIndex: "pages" },
               { title: "接收", dataIndex: "received" },
               { title: "新增 / 更新", dataIndex: "changed" },

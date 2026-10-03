@@ -14,6 +14,23 @@ export async function vipStatus() {
   const { db, rows } =
     await import("../../../../../packages/database/src/index.js");
   const { compassDocumentation } = await import("./compass.js");
+  const { listingDocumentation } = await import("./listing.js");
+  const listing = {
+    documentation: listingDocumentation,
+    scope: "COLLECTED_SCHEDULE_BARCODES",
+    freshnessSeconds: 7200,
+    jobs: await rows(
+      db,
+      `SELECT j.namespace,j.status,j.scanned,j.last_error,
+      to_char(j.heartbeat_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS heartbeat_at,
+      to_char(j.last_success_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS last_success_at,
+      (SELECT count(DISTINCT lower(c.barcode)) FROM vop_catalog c WHERE c.namespace=j.namespace) AS total,
+      (SELECT count(*) FROM vop_listing_states s WHERE s.namespace=j.namespace AND s.checked_at>now()-interval '2 hours'
+        AND s.last_error IS NULL AND EXISTS(SELECT 1 FROM vop_catalog c WHERE c.namespace=s.namespace AND lower(c.barcode)=s.barcode_key)) AS checked,
+      (SELECT count(*) FROM vop_listing_states s WHERE s.namespace=j.namespace AND s.last_error IS NOT NULL) AS unresolved
+      FROM vop_listing_jobs j ORDER BY j.namespace`,
+    ),
+  };
   const compass = {
     documentation: compassDocumentation,
     metricContractVerified: false,
@@ -43,6 +60,7 @@ export async function vipStatus() {
       connections: [],
       runs: [],
       compass,
+      listing,
     };
   const runs = await rows(
     db,
@@ -59,7 +77,7 @@ export async function vipStatus() {
   )[0];
   return {
     mode: "catalog",
-    capabilities: ["SCHEDULE_CATALOG", "PRODUCT_DETAILS"],
+    capabilities: ["SCHEDULE_CATALOG", "PRODUCT_DETAILS", "BARCODE_LISTING"],
     detailJobs: await rows(
       db,
       `SELECT j.namespace,j.status,j.next_page,j.scanned,j.last_error,
@@ -72,6 +90,7 @@ export async function vipStatus() {
     total: totals.total,
     rejected: rejected.total,
     compass,
+    listing,
   };
 }
 export interface SalesMetricsProvider {

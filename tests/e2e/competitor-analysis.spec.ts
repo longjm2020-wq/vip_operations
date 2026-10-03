@@ -154,7 +154,24 @@ test("竞品单品牌TOP20、详细材质、商品预览及后台队列设置", 
     });
     await expect(popup.locator(".competitor-bar-products a")).toHaveCount(10);
     await expect(popup.locator(".competitor-bar-products img")).toHaveCount(10);
+    await expect(popup.locator(".competitor-bar-material")).toHaveCount(10);
+    await expect(popup.locator(".competitor-bar-material").first()).toHaveText(
+      "【面料】羊绒70% 桑蚕丝30%",
+    );
+    await expect(popup.locator(".competitor-bar-products button")).toHaveCount(
+      10,
+    );
     await expect(popup).not.toHaveClass(/ant-zoom-big-(enter|appear|leave)/);
+    const tabsBeforePreview = context.pages().length;
+    await popup
+      .getByRole("button", { name: "放大图片 UI-CT-1", exact: true })
+      .click();
+    await expect(page.locator(".compass-image-preview")).toBeVisible();
+    expect(context.pages()).toHaveLength(tabsBeforePreview);
+    await page.keyboard.press("Escape");
+    await expect(page.locator(".compass-image-preview")).toHaveCount(0);
+    await bar.hover();
+    await expect(popup).toBeVisible();
     // The popup stays open when the pointer moves from the bar to a product.
     await popup.locator(".competitor-bar-products a").first().hover();
     await expect(popup).toBeVisible();
@@ -190,9 +207,7 @@ test("竞品单品牌TOP20、详细材质、商品预览及后台队列设置", 
   await page.mouse.move(0, 0);
   await expect(mobilePopup).toHaveCount(0);
   await page.setViewportSize({ width: 1440, height: 760 });
-  await page
-    .getByRole("tab", { name: competitor.name, exact: true })
-    .click();
+  await page.getByRole("tab", { name: competitor.name, exact: true }).click();
   const top20 = page.locator(".competitor-page > .ant-card").filter({
     has: page.getByText("商品 TOP20", { exact: true }),
   });

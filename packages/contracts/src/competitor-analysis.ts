@@ -126,6 +126,7 @@ export type CompetitorProductPreview = Pick<
   | "imageUrl"
   | "salePrice"
   | "publicRank"
+  | "materialInfo"
 >;
 export const competitorImportSchema = z
   .object({
@@ -324,6 +325,7 @@ export function analyzeCompetitor(
     imageUrl: p.imageUrl,
     salePrice: p.salePrice,
     publicRank: p.publicRank,
+    materialInfo: p.materialInfo,
   });
   const prices = products
     .map((x) => x.salePrice)
