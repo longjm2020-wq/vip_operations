@@ -28,5 +28,13 @@ export function competitorMaterialDisplay(value: string) {
       (label, space: string, color: string, part: string) =>
         isColorName(color) ? `${space}${part}` : label,
     )
+    .replace(
+      new RegExp(
+        `(^|[\\s；;。])([\\p{Script=Han}/、]{1,40}?)[：:]\\s*(?=(?:${materialPart})[：:])`,
+        "gu",
+      ),
+      (label, space: string, color: string) =>
+        isColorName(color) ? space : label,
+    )
     .trim();
 }

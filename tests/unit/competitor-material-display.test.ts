@@ -15,6 +15,13 @@ describe("Competitor material display", () => {
     ).toBe(
       "面料：67.8%粘纤 32.2%亚麻 里料：100%棉\n面料：67.6%粘纤 23.7%莱赛尔 8.7%亚麻 里料：100%棉",
     );
+    expect(
+      competitorMaterialDisplay(
+        "面料：100%桑蚕丝 规格：270cmX58cm 温馨提示：轻薄织物。 湖绿色/黑金/白金/芭比粉：面料：95.9%桑蚕丝 4.1%金属镀膜纤维 规格：270cmX58cm",
+      ),
+    ).toBe(
+      "面料：100%桑蚕丝 规格：270cmX58cm 温馨提示：轻薄织物。 面料：95.9%桑蚕丝 4.1%金属镀膜纤维 规格：270cmX58cm",
+    );
   });
 
   it("preserves functional fabric labels, notes, and missing data", () => {
