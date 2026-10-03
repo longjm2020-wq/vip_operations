@@ -37,11 +37,9 @@ import {
   type CompetitorProduct,
   type CompetitorProductPreview,
 } from "../../../packages/contracts/src/competitor-analysis";
-import {
-  CompassProductImage,
-  CompassImagePreview,
-  type CompassImageTarget,
-} from "./compass-product-image";
+import { CompassProductImage } from "./compass-product-image";
+import { CompetitorProductPreviewDialog } from "./competitor-product-preview";
+import { competitorMaterialDisplay } from "./competitor-material-display";
 import { captureBookmarkUrl } from "./competitor-capture";
 import { readCompetitorFile } from "./competitor-import";
 import { downloadSheet } from "./download-sheet";
@@ -79,14 +77,14 @@ function ProductPhoto({
   onPreview,
 }: {
   product: CompetitorProduct;
-  onPreview: (target: CompassImageTarget) => void;
+  onPreview: (product: CompetitorProductPreview) => void;
 }) {
   return (
     <span className="competitor-photo">
       <CompassProductImage
         image={product.imageUrl || undefined}
         code={product.styleCode || product.title}
-        onPreview={onPreview}
+        onPreview={() => onPreview(product)}
       />
     </span>
   );
@@ -96,7 +94,7 @@ function DistributionPreview({
   onPreview,
 }: {
   products: CompetitorProductPreview[];
-  onPreview: (target: CompassImageTarget) => void;
+  onPreview: (product: CompetitorProductPreview) => void;
 }) {
   return (
     <div className="competitor-bar-products">
@@ -105,7 +103,7 @@ function DistributionPreview({
           <CompassProductImage
             image={p.imageUrl || undefined}
             code={p.styleCode || p.title}
-            onPreview={onPreview}
+            onPreview={() => onPreview(p)}
           />
           <a
             href={p.productUrl}
@@ -118,7 +116,7 @@ function DistributionPreview({
             </span>
             <strong>{money(p.salePrice)}</strong>
             <small className="competitor-bar-material">
-              {p.materialInfo || "材质未公开"}
+              {competitorMaterialDisplay(p.materialInfo) || "材质未公开"}
             </small>
           </a>
         </div>
@@ -139,7 +137,7 @@ function Distribution({
   results: Result[];
   activePreview: string | null;
   onPreviewChange: (key: string, open: boolean) => void;
-  onPreview: (target: CompassImageTarget) => void;
+  onPreview: (product: CompetitorProductPreview) => void;
 }) {
   const combined = new Map<string, number>();
   results.forEach((r) =>
@@ -432,10 +430,14 @@ export function CompetitorAnalysisPage() {
     [addOpen, setAddOpen] = useState(false),
     [adding, setAdding] = useState(false),
     [addError, setAddError] = useState("");
-  const [preview, setPreview] = useState<CompassImageTarget | null>(null);
+  const [preview, setPreview] = useState<CompetitorProductPreview | null>(null);
   const [distributionPreview, setDistributionPreview] = useState<string | null>(
     null,
   );
+  const showProductPreview = (product: CompetitorProductPreview) => {
+    setDistributionPreview(null);
+    setPreview(product);
+  };
   const top20Ref = useRef<HTMLDivElement>(null);
   const sortOpen = useRef(false);
   const sortAnchor = useRef<{
@@ -592,7 +594,7 @@ export function CompetitorAnalysisPage() {
       width: 340,
       render: (_v: unknown, p: CompetitorProduct) => (
         <div className="competitor-product">
-          <ProductPhoto product={p} onPreview={setPreview} />
+          <ProductPhoto product={p} onPreview={showProductPreview} />
           <div>
             <a href={p.productUrl} target="_blank" rel="noopener noreferrer">
               {p.title}
@@ -625,7 +627,7 @@ export function CompetitorAnalysisPage() {
       width: 330,
       render: (_v: unknown, p: CompetitorProduct) => (
         <div className="competitor-material">
-          {p.materialInfo || (
+          {competitorMaterialDisplay(p.materialInfo) || (
             <span className="competitor-muted">未公开 / 待补充详情</span>
           )}
           {p.detailObservedAt && (
@@ -910,7 +912,7 @@ export function CompetitorAnalysisPage() {
                 field={field}
                 results={results}
                 activePreview={distributionPreview}
-                onPreview={setPreview}
+                onPreview={showProductPreview}
                 onPreviewChange={(key, open) =>
                   setDistributionPreview((old) =>
                     open ? key : old === key ? null : old,
@@ -982,7 +984,7 @@ export function CompetitorAnalysisPage() {
                         款号: p.styleCode,
                         特卖价: p.salePrice,
                         品类: p.category,
-                        详细材质信息: p.materialInfo,
+                        详细材质信息: competitorMaterialDisplay(p.materialInfo),
                         季节: p.seasons.join("、"),
                         预览图链接: p.imageUrl,
                         商品详情链接: p.productUrl,
@@ -1073,7 +1075,10 @@ export function CompetitorAnalysisPage() {
         onClose={() => setCapture(false)}
         brands={brands}
       />
-      <CompassImagePreview target={preview} onClose={() => setPreview(null)} />
+      <CompetitorProductPreviewDialog
+        product={preview}
+        onClose={() => setPreview(null)}
+      />
       <ImportPanel
         open={importOpen}
         onClose={() => setImportOpen(false)}

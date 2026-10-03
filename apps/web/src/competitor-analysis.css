@@ -188,6 +188,60 @@
   text-align: left;
   color: #937d70;
 }
+.competitor-product-preview .ant-modal-body {
+  max-height: calc(100dvh - 150px);
+  overflow-y: auto;
+}
+.competitor-product-preview-card {
+  border: 1px solid #efe5dd;
+  border-radius: 6px;
+  overflow: hidden;
+}
+.competitor-product-preview-image {
+  display: block;
+  width: 100%;
+  height: 320px;
+  max-height: 45dvh;
+  object-fit: contain;
+  background: #f8f3ef;
+}
+.competitor-product-preview-details {
+  padding: 14px;
+  color: #49382e;
+  overflow-wrap: anywhere;
+}
+.competitor-product-preview-price {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.competitor-product-preview-price > span {
+  border-radius: 12px;
+  padding: 2px 8px;
+  background: #f725aa;
+  color: white;
+  font-size: 12px;
+}
+.competitor-product-preview-price > strong {
+  font-size: 25px;
+  line-height: 1.4;
+}
+.competitor-product-preview-code {
+  margin-top: 8px;
+  font-size: 13px;
+  color: #937d70;
+}
+.competitor-product-preview-details h4 {
+  margin: 16px 0 6px;
+  font-size: 13px;
+}
+.competitor-product-preview-material {
+  margin: 0 0 16px;
+  white-space: pre-wrap;
+  line-height: 1.7;
+  font-size: 14px;
+}
 .competitor-bar-products a:hover {
   color: #d95200;
 }

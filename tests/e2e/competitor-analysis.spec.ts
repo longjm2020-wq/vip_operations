@@ -49,7 +49,8 @@ test("竞品单品牌TOP20、详细材质、商品预览及后台队列设置", 
     salePrice: 500 + i,
     publicRank: i + 1,
     styleCode: `UI-CT-${i + 1}`,
-    materialInfo: "【面料】羊绒70% 桑蚕丝30%",
+    materialInfo:
+      "【烟雨蓝的面料】羊绒70% 桑蚕丝30%\n【烟雨蓝的里料】聚酯纤维100%",
     seasons: ["秋"],
     detailVerified: true,
     detailObservedAt: new Date().toISOString(),
@@ -131,11 +132,18 @@ test("竞品单品牌TOP20、详细材质、商品预览及后台队列设置", 
     products[0].productUrl,
   );
   await page.locator(".competitor-photo button").first().click();
+  await expect(page.locator(".competitor-product-preview-image")).toBeVisible();
+  const productPreview = page.getByRole("dialog", { name: "商品预览" });
+  await expect(productPreview).toContainText("款号：UI-CT-1");
   await expect(
-    page.locator(".compass-image-preview .ant-image-preview-img"),
-  ).toBeVisible();
+    productPreview.locator(".competitor-product-preview-price"),
+  ).toContainText("¥ 500");
+  await expect(
+    productPreview.locator(".competitor-product-preview-material"),
+  ).toHaveText("【面料】羊绒70% 桑蚕丝30%\n【里料】聚酯纤维100%");
+  await expect(productPreview).not.toContainText("烟雨蓝");
   await page.keyboard.press("Escape");
-  await expect(page.locator(".ant-image-preview-mask")).toHaveCount(0);
+  await expect(page.locator(".competitor-product-preview-root")).toHaveCount(0);
   for (const title of ["品类分布", "特卖价区间", "材质分布", "季节分布"]) {
     const chart = page
       .locator(".competitor-distribution")
@@ -156,7 +164,7 @@ test("竞品单品牌TOP20、详细材质、商品预览及后台队列设置", 
     await expect(popup.locator(".competitor-bar-products img")).toHaveCount(10);
     await expect(popup.locator(".competitor-bar-material")).toHaveCount(10);
     await expect(popup.locator(".competitor-bar-material").first()).toHaveText(
-      "【面料】羊绒70% 桑蚕丝30%",
+      "【面料】羊绒70% 桑蚕丝30%\n【里料】聚酯纤维100%",
     );
     await expect(popup.locator(".competitor-bar-products button")).toHaveCount(
       10,
@@ -166,10 +174,15 @@ test("竞品单品牌TOP20、详细材质、商品预览及后台队列设置", 
     await popup
       .getByRole("button", { name: "放大图片 UI-CT-1", exact: true })
       .click();
-    await expect(page.locator(".compass-image-preview")).toBeVisible();
+    await expect(productPreview).toBeVisible();
+    await expect(
+      productPreview.locator(".competitor-product-preview-material"),
+    ).toHaveText("【面料】羊绒70% 桑蚕丝30%\n【里料】聚酯纤维100%");
     expect(context.pages()).toHaveLength(tabsBeforePreview);
     await page.keyboard.press("Escape");
-    await expect(page.locator(".compass-image-preview")).toHaveCount(0);
+    await expect(page.locator(".competitor-product-preview-root")).toHaveCount(
+      0,
+    );
     await bar.hover();
     await expect(popup).toBeVisible();
     // The popup stays open when the pointer moves from the bar to a product.
