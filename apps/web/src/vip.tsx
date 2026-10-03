@@ -25,8 +25,33 @@ const labels: Record<string, string> = {
   BLOCKED: "需要处理",
   FAILED: "失败",
   INTERRUPTED: "已恢复断点",
+  NOT_CONFIGURED: "等待配置",
+  PENDING: "等待验证",
+  RESPONSE_RECEIVED: "已收到响应，待核对口径",
 };
-const status = (value: string) => (
+const compassLabels: Record<string, string> = {
+  ...labels,
+  READY: "待验证",
+  RUNNING: "验证中",
+};
+const compassErrors: Record<string, string> = {
+  COMPASS_PRIVATE_KEY_UNAVAILABLE:
+    "Worker 无法读取有效的 RSA 私钥，请管理员核对部署配置。",
+  COMPASS_PARAMETERS_INVALID:
+    "查询参数格式无效，请按平台提供的 API code 参数说明配置。",
+  COMPASS_PARAMETERS_REJECTED:
+    "平台拒绝查询参数，请核对 API code 和该接口的参数说明。",
+  COMPASS_ACCESS_OR_CONCURRENCY_REJECTED:
+    "罗盘权限、白名单或并发限制未通过，请联系对接商务核对开通状态。",
+  COMPASS_QUERY_FAILED: "罗盘查询失败，请核对平台当前状态及参数。",
+  COMPASS_RESPONSE_INVALID: "返回格式与官方接口不一致，请管理员核对接口版本。",
+  COMPASS_PROBE_INTERRUPTED: "验证期间 Worker 中断，可在一分钟后重新验证。",
+  AUTH_REQUIRED: "平台授权未通过，请管理员检查现有授权。",
+  IP_NOT_ALLOWLISTED: "服务器出口 IP 未通过白名单，请管理员核对。",
+  GATEWAY_REJECTED: "VOP 网关拒绝请求，请管理员核对应用权限与配置。",
+  NETWORK_FAILED: "网络连接失败，可在一分钟后重新验证。",
+};
+const status = (value: string, names = labels) => (
   <Tag
     color={
       value === "SUCCESS"
@@ -36,14 +61,15 @@ const status = (value: string) => (
           : "blue"
     }
   >
-    {labels[value] || value}
+    {names[value] || value}
   </Tag>
 );
 export function VipPage() {
   const can = useCan("vip.settings");
   const { message } = App.useApp();
   const [page, setPage] = useState(1),
-    [busy, setBusy] = useState(false);
+    [busy, setBusy] = useState(false),
+    [probing, setProbing] = useState<string | null>(null);
   const overview = useQuery({
     queryKey: ["vip-status"],
     queryFn: () => api("/integrations/vip/status"),
@@ -68,6 +94,18 @@ export function VipPage() {
       message.error((e as Error).message);
     } finally {
       setBusy(false);
+    }
+  }
+  async function requestCompass(namespace: string) {
+    setProbing(namespace);
+    try {
+      await api("/integrations/vip/compass/probe", "POST", { namespace });
+      message.success("已提交只读取数验证，请等待 Worker 返回结果");
+      await queryClient.invalidateQueries({ queryKey: ["vip-status"] });
+    } catch (e) {
+      message.error((e as Error).message);
+    } finally {
+      setProbing(null);
     }
   }
   return (
@@ -134,6 +172,102 @@ export function VipPage() {
             )}
           </Card>
         ))}
+        <Card title="罗盘官方取数接入">
+          <Typography.Paragraph type="secondary">
+            首次接入需由唯品会对接商务开通罗盘取数，登记 RSA 公钥并取得指标 API
+            code 与查询参数说明。管理员将对应私钥及参数配置到 Worker
+            后，可验证一次只读取数。
+          </Typography.Paragraph>
+          <Typography.Paragraph>
+            <a
+              href={
+                data?.compass?.documentation ||
+                "https://vop.vip.com/home#/api/method/detail/com.vip.data.compass.service.vop.CompassDataOspService-1.0.0"
+              }
+              target="_blank"
+              rel="noreferrer"
+            >
+              查看官方接口
+            </a>
+            {" · "}
+            <a href="/analytics/compass">查看经营分析</a>
+          </Typography.Paragraph>
+          {!data?.compass?.probes?.length && (
+            <Alert type="info" title="等待 Worker 检查罗盘取数配置" />
+          )}
+          {data?.compass?.probes?.map((p: Row) => (
+            <div key={p.namespace} style={{ marginTop: 16 }}>
+              <Space wrap>
+                {status(p.status, compassLabels)}
+                <Button
+                  onClick={() => requestCompass(p.namespace)}
+                  loading={probing === p.namespace}
+                  disabled={
+                    !p.readyForProbe ||
+                    ["PENDING", "RUNNING"].includes(p.status) ||
+                    Boolean(
+                      p.lastProbeAt &&
+                      Date.now() - new Date(p.lastProbeAt).getTime() < 60000,
+                    ) ||
+                    Boolean(
+                      !p.heartbeatAt ||
+                      Date.now() - new Date(p.heartbeatAt).getTime() > 120000,
+                    )
+                  }
+                >
+                  验证官方取数
+                </Button>
+                <span>最近验证：{when(p.lastProbeAt)}</span>
+              </Space>
+              <Space wrap style={{ marginTop: 12, display: "flex" }}>
+                {[
+                  ["罗盘账号", "account"],
+                  ["RSA 私钥", "privateKeyFile"],
+                  ["指标 API code", "apiCode"],
+                  ["查询参数", "parameters"],
+                ].map(([label, key]) => (
+                  <span key={key}>
+                    {label}：
+                    <Tag color={p.configured?.[key] ? "green" : "default"}>
+                      {p.configured?.[key] ? "已配置" : "待配置"}
+                    </Tag>
+                  </span>
+                ))}
+              </Space>
+              {p.lastError && (
+                <Alert
+                  style={{ marginTop: 12 }}
+                  type="warning"
+                  title={
+                    compassErrors[p.lastError] ||
+                    "只读取数验证未通过，请管理员核对平台配置。"
+                  }
+                />
+              )}
+              {p.status === "RESPONSE_RECEIVED" && (
+                <>
+                  <Typography.Paragraph style={{ marginTop: 12 }}>
+                    业务状态码：{p.businessCode} · 本页 {p.rowCount ?? 0} 行 ·
+                    {p.hasNextCursor
+                      ? "平台返回了下一页游标"
+                      : "平台未返回下一页游标"}
+                    {p.sourceUpdateTime &&
+                      ` · 平台更新时间：${p.sourceUpdateTime}`}
+                  </Typography.Paragraph>
+                  <Typography.Paragraph type="secondary">
+                    字段：{p.fieldNames?.join("、") || "本页无字段"}
+                  </Typography.Paragraph>
+                </>
+              )}
+            </div>
+          ))}
+          <Typography.Paragraph
+            type="secondary"
+            style={{ marginTop: 16, marginBottom: 0 }}
+          >
+            当前经营分析使用已导入报表。取数验证只核对一页响应，指标口径及完整分页尚待确认；收到响应不代表完整同步，也不自动替换报表或启用每日邮件。
+          </Typography.Paragraph>
+        </Card>
         <Card title="平台商品库">
           <Typography.Paragraph type="secondary">
             颜色、尺码、品牌、品类、图片与价格来自已发布商品资料，每小时分批核对。详情同步不会修改内部商品档案，原有单款编辑继续保留。售价、供货价为资料接口返回值，不代表实时成交价；返回

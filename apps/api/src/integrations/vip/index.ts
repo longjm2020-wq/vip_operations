@@ -10,23 +10,23 @@ export function validateIntegrationMode() {
   )
     throw Error("Fixture sales cannot run in production");
 }
-function compassConfiguration() {
-  const configured = {
-    account: Boolean(process.env.VOP_COMPASS_ACCOUNT),
-    privateKeyFile: Boolean(process.env.VOP_COMPASS_PRIVATE_KEY_FILE),
-    apiCode: Boolean(process.env.VOP_COMPASS_API_CODE),
-  };
-  return {
-    status: "AWAITING_COMPASS_ACCOUNT_ENABLEMENT",
-    configured,
-    readyForReadOnlyProbe:
-      configured.account && configured.privateKeyFile && configured.apiCode,
-  };
-}
-
 export async function vipStatus() {
   const { db, rows } =
     await import("../../../../../packages/database/src/index.js");
+  const { compassDocumentation } = await import("./compass.js");
+  const compass = {
+    documentation: compassDocumentation,
+    metricContractVerified: false,
+    analyticsSource: "IMPORTED_REPORTS",
+    probes: await rows(
+      db,
+      `SELECT namespace,configured,ready_for_probe,status,last_error,business_code,row_count,
+      field_names,has_next_cursor,source_update_time,
+      to_char(last_probe_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS last_probe_at,
+      to_char(heartbeat_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS heartbeat_at
+      FROM vop_compass_probes ORDER BY namespace`,
+    ),
+  };
   const connections = await rows(
     db,
     `SELECT namespace,vendor_id,watermark,next_page,status,last_error,
@@ -42,7 +42,7 @@ export async function vipStatus() {
       reason: "NOT_CONFIGURED",
       connections: [],
       runs: [],
-      compass: compassConfiguration(),
+      compass,
     };
   const runs = await rows(
     db,
@@ -71,7 +71,7 @@ export async function vipStatus() {
     runs,
     total: totals.total,
     rejected: rejected.total,
-    compass: compassConfiguration(),
+    compass,
   };
 }
 export interface SalesMetricsProvider {

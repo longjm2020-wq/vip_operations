@@ -38,6 +38,7 @@ import { InventoryFulfilmentController } from "./modules/inventory/controller.js
 import * as purchase from "./modules/purchases/service.js";
 import * as suggestion from "./modules/suggestions/service.js";
 import { vipStatus } from "./integrations/vip/index.js";
+import { compassProbeRequestSchema } from "./integrations/vip/compass.js";
 const paramId = (v: string) => parse(id, v);
 @ApiTags("登录与权限")
 @Controller("api/v1")
@@ -335,6 +336,31 @@ class SystemController {
   }
   @Permission("vip.settings") @Get("integrations/vip/status") vip() {
     return vipStatus();
+  }
+  @Permission("vip.settings") @Post("integrations/vip/compass/probe") async compassProbe(
+    @Req() r: AuthRequest,
+    @Body() b: unknown,
+  ) {
+    const input = parse(compassProbeRequestSchema, b);
+    return command(context(r), "vip.compass.probe", input, async (tx) => {
+      const job = await one(tx,
+        "SELECT ready_for_probe,status,last_probe_at FROM vop_compass_probes WHERE namespace=$1 FOR UPDATE",
+        input.namespace,
+      );
+      if (!job?.ready_for_probe)
+        fail("COMPASS_NOT_CONFIGURED", "请先由商务开通罗盘取数，并在 Worker 配置账号、公钥对应的私钥、API code 和查询参数", 409);
+      if (["RUNNING", "PENDING"].includes(job.status)) return { requested: true };
+      if (job.last_probe_at && Date.now() - new Date(job.last_probe_at).getTime() < 60000)
+        fail("COMPASS_PROBE_RATE_LIMIT", "验证后请等待一分钟再重试", 429);
+      await rows(tx,
+        "UPDATE vop_compass_probes SET requested_at=now(),status='PENDING',updated_at=now() WHERE namespace=$1 RETURNING namespace",
+        input.namespace,
+      );
+      await audit(tx, context(r), "VIP_COMPASS_PROBE_REQUEST", "vip", null, null, {
+        namespace: input.namespace, pageLimit: 1, writesAnalytics: false,
+      });
+      return { requested: true };
+    });
   }
   @Permission("audit.read") @Get("audit-logs") async audit(@Req() request:AuthRequest,@Query() q: any) {
     const p = pagination(q),

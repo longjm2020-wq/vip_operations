@@ -1,7 +1,12 @@
-import { readFile } from "node:fs/promises";
 import { isIP } from "node:net";
 import { config } from "dotenv";
-import { CompassClient } from "../apps/api/src/integrations/vip/compass.js";
+import {
+  CompassClient,
+  compassBusinessError,
+  compassResponseMetadata,
+} from "../apps/api/src/integrations/vip/compass.js";
+import { loadCompassProbeSetup } from "../apps/api/src/integrations/vip/compass-probe.js";
+import { VipError } from "../apps/api/src/integrations/vip/client.js";
 import { VipClient } from "../apps/api/src/integrations/vip/client.js";
 
 config({ path: ".env", quiet: true });
@@ -16,15 +21,9 @@ function required(name: string) {
 try {
   const requestIp = required("VOP_REQUEST_IP");
   if (!isIP(requestIp)) throw Error("INVALID_VOP_REQUEST_IP");
-  const queryText = process.env.VOP_COMPASS_QUERY_JSON || "{}";
-  const query = JSON.parse(queryText) as unknown;
-  if (
-    !query ||
-    typeof query !== "object" ||
-    Array.isArray(query) ||
-    Object.values(query).some((value) => typeof value !== "string")
-  )
-    throw Error("INVALID_VOP_COMPASS_QUERY_JSON");
+  const setup = await loadCompassProbeSetup();
+  if (setup.status !== "READY")
+    throw new VipError(setup.error || "COMPASS_NOT_CONFIGURED");
   const vop = new VipClient({
     appKey: required("VOP_APP_KEY"),
     appSecret: required("VOP_APP_SECRET"),
@@ -33,14 +32,17 @@ try {
   });
   if (!Number.isSafeInteger(vop.credentials.vendorId))
     throw Error("INVALID_VOP_VENDOR_ID");
-  const compass = new CompassClient(vop, {
-    account: required("VOP_COMPASS_ACCOUNT"),
-    privateKey: await readFile(required("VOP_COMPASS_PRIVATE_KEY_FILE")),
-    apiCode: required("VOP_COMPASS_API_CODE"),
-    accessToken: process.env.VOP_ACCESS_TOKEN?.trim() || undefined,
-  });
-  await compass.query(query as Record<string, string>);
-  console.log(JSON.stringify({ compassResponseReceived: true }));
+  const compass = new CompassClient(vop, setup.configuration!);
+  const response = await compass.query(setup.parameters);
+  const error = compassBusinessError(response.code);
+  if (error) throw new VipError(error);
+  console.log(
+    JSON.stringify({
+      compassResponseReceived: true,
+      ...compassResponseMetadata(response),
+      writesAnalytics: false,
+    }),
+  );
 } catch (error) {
   const code = error instanceof Error ? error.message : "COMPASS_PROBE_FAILED";
   console.error(/^[A-Z0-9_]+$/.test(code) ? code : "COMPASS_PROBE_FAILED");

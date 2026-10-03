@@ -2,6 +2,10 @@ import pg from "pg";
 import { VipClient } from "../../api/src/integrations/vip/client.js";
 import { syncDetails } from "../../api/src/integrations/vip/details.js";
 import {
+  loadCompassProbeSetup,
+  probeCompass,
+} from "../../api/src/integrations/vip/compass-probe.js";
+import {
   syncCatalog,
   syncConfig,
 } from "../../api/src/integrations/vip/sync.js";
@@ -13,6 +17,7 @@ export function startVopScheduler() {
     connectionTimeoutMillis: 10000,
   });
   const client = new VipClient(config.credentials);
+  const compassSetup = loadCompassProbeSetup();
   let running = false,
     stopped = false,
     nextRun = 0,
@@ -43,6 +48,16 @@ export function startVopScheduler() {
               : 3600000);
         console.log(JSON.stringify({ event: "vop-catalog", ...result }));
       }
+      const compass = await probeCompass(
+        pool,
+        client,
+        config.namespace,
+        await compassSetup,
+      );
+      if (!["IDLE", "BUSY", "NOT_CONFIGURED", "BLOCKED"].includes(compass))
+        console.log(
+          JSON.stringify({ event: "vop-compass-probe", status: compass }),
+        );
       const details = await syncDetails(pool, client, config.namespace);
       if (!["IDLE", "BUSY"].includes(details))
         console.log(JSON.stringify({ event: "vop-details", status: details }));

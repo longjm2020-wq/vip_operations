@@ -11,6 +11,7 @@ import { id, qty, positive, money, text } from "./core.js";
 import { beginSchema, chunkSchema } from "./modules/analytics/service.js";
 import { settingsSchema } from "./modules/analytics/mail.js";
 import { aiSettingsSchema } from "./modules/analytics/ai.js";
+import { compassProbeRequestSchema } from "./integrations/vip/compass.js";
 export function enrichOpenApi(doc: OpenAPIObject) {
   const schema = (s: z.ZodType) =>
     z.toJSONSchema(s, { target: "openapi-3.0", io: "input" });
@@ -203,6 +204,8 @@ export function enrichOpenApi(doc: OpenAPIObject) {
   doc.info.description =
     "内部ERP v0.1。写请求需当前会话、CSRF及相应幂等键；权限仍在后端校验。魔方罗盘分析来自已导入的每日明细报表，不代表官方指标接口已启用。详细状态和字段见docs/API_SPEC.md。";
   const compass = "/api/v1/analytics/compass";
+  set("/api/v1/integrations/vip/compass/probe", "post", compassProbeRequestSchema,
+    "请求单页只读罗盘取数验证；不更新经营分析报表");
   set(compass + "/imports", "post", beginSchema, "创建或继续罗盘报表导入");
   set(
     compass + "/imports/{id}/chunks",

@@ -1,10 +1,11 @@
-import {
-  constants,
-  generateKeyPairSync,
-  publicDecrypt,
-} from "node:crypto";
+import { constants, generateKeyPairSync, publicDecrypt } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
-import { CompassClient } from "../../apps/api/src/integrations/vip/compass.js";
+import {
+  CompassClient,
+  compassBusinessError,
+  compassResponseMetadata,
+  parseCompassResponse,
+} from "../../apps/api/src/integrations/vip/compass.js";
 import { VipClient } from "../../apps/api/src/integrations/vip/client.js";
 
 describe("Compass read-only client", () => {
@@ -12,11 +13,16 @@ describe("Compass read-only client", () => {
     const { privateKey, publicKey } = generateKeyPairSync("rsa", {
       modulusLength: 1024,
     });
-    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
-      new Response(
-        JSON.stringify({ returnCode: "0", result: { data: [] } }),
-      ),
-    );
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            returnCode: "0",
+            result: { code: "example-status", data: [] },
+          }),
+        ),
+      );
     const vop = new VipClient(
       {
         appKey: "app",
@@ -78,5 +84,66 @@ describe("Compass read-only client", () => {
       }).query(),
     ).rejects.toThrow("COMPASS_API_CODE_MISSING");
     expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("preserves long IDs as strings and exposes only response metadata", () => {
+    const response = parseCompassResponse({
+      code: "example-status",
+      msg: "do not retain provider messages",
+      data: [{ product_id: "12345678901234567890", sales: "15.80", missing_metric: null }],
+      searchAfterIndex: "opaque-next-cursor",
+      updateTime: "2026-10-03 08:21:00",
+      unexpected: "not retained",
+    });
+    expect(response.data?.[0].product_id).toBe("12345678901234567890");
+    expect(response.data?.[0].missing_metric).toBeNull();
+    expect(compassResponseMetadata(response)).toEqual({
+      businessCode: "example-status",
+      rowCount: 1,
+      fieldNames: ["missing_metric", "product_id", "sales"],
+      hasNextCursor: true,
+      sourceUpdateTime: "2026-10-03 08:21:00",
+      metricContractVerified: false,
+    });
+    expect(JSON.stringify(compassResponseMetadata(response))).not.toContain(
+      "12345678901234567890",
+    );
+    expect(response).not.toHaveProperty("unexpected");
+  });
+
+  it("rejects coerced numeric identifiers and malformed provider envelopes", () => {
+    expect(() =>
+      parseCompassResponse({ code: "example-status", data: [{ id: 123 }] }),
+    ).toThrow("COMPASS_RESPONSE_INVALID");
+    expect(() => parseCompassResponse({ data: [] })).toThrow(
+      "COMPASS_RESPONSE_INVALID",
+    );
+  });
+
+  it("does not confuse VOP gateway acceptance with Compass business success", () => {
+    expect(compassBusinessError("403")).toBe(
+      "COMPASS_ACCESS_OR_CONCURRENCY_REJECTED",
+    );
+    expect(compassBusinessError("405")).toBe("COMPASS_PARAMETERS_REJECTED");
+    expect(compassBusinessError("400")).toBe("COMPASS_QUERY_FAILED");
+    expect(
+      compassResponseMetadata(parseCompassResponse({ code: "other-code" }))
+        .metricContractVerified,
+    ).toBe(false);
+  });
+
+  it("omits arbitrary provider text from diagnostics", () => {
+    const metadata = compassResponseMetadata(
+      parseCompassResponse({
+        code: "unexpected provider message with personal values",
+        msg: "secret provider detail",
+        updateTime: "not a timestamp",
+        data: null,
+        searchAfterIndex: null,
+      }),
+    );
+    expect(metadata.businessCode).toBe("UNRECOGNIZED");
+    expect(metadata.sourceUpdateTime).toBeNull();
+    expect(JSON.stringify(metadata)).not.toContain("secret provider detail");
   });
 });
