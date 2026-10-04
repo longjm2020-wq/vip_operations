@@ -1,3 +1,4 @@
+import { PageSearch } from "./page-search";
 import { Table } from "./data-table";
 import { useState } from "react";
 import {
@@ -303,9 +304,11 @@ export function FieldControl({ field, resource, ...props }: any) {
 export function MasterPage({
   resource: explicit,
   filter,
+  searchActive = true,
 }: {
   resource?: string;
   filter?: Row;
+  searchActive?: boolean;
 }) {
   const { resource: param } = useParams();
   const resource = explicit || param || "products",
@@ -440,7 +443,7 @@ export function MasterPage({
       />
       <Card className="surface">
         <div className="table-toolbar">
-          <Input.Search
+          <PageSearch active={searchActive}><Input.Search
             placeholder="搜索编码或名称"
             allowClear
             onSearch={(v) => {
@@ -448,7 +451,7 @@ export function MasterPage({
               q.setPage(1);
             }}
             style={{ maxWidth: 320 }}
-          />
+          /></PageSearch>
           <Refresh onClick={() => q.refetch()} />
         </div>
         <QueryState error={q.error} reload={() => q.refetch()} />

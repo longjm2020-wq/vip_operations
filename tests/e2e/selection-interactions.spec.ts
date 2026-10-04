@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 
 const imageUrls = ["/api/v1/style-selections/images/preview-a", "/api/v1/style-selections/images/preview-b"];
 async function fixture(page: Page, readonly = false, choiceFields = false, rowCount = 26) {
@@ -52,8 +52,23 @@ async function fixture(page: Page, readonly = false, choiceFields = false, rowCo
   await expect(page.locator('td[data-selection-column="xutiStyleNo"]')).toHaveCount(20);
 }
 const cell = (page: Page, row: number, column: string) => page.locator(`td[data-selection-row="shortcut-${row}"][data-selection-column="${column}"]`);
+const columnHeader = (page: Page, key: string) => page.locator(`thead th[data-selection-column="${key}"]`);
+const columnOrder = (page: Page) => page.locator("thead th[data-selection-column]").evaluateAll(elements => elements.map(element => (element as HTMLElement).dataset.selectionColumn));
+async function dragColumns(page: Page, from: string, to: string, shift = false) {
+  const start = (await columnHeader(page, from).boundingBox())!, end = (await columnHeader(page, to).boundingBox())!;
+  await page.mouse.move(start.x + 18, start.y + 14);
+  if (shift) await page.keyboard.down("Shift");
+  await page.mouse.down();
+  await page.mouse.move(end.x + 18, end.y + 14, { steps: 8 });
+  await page.mouse.up();
+  if (shift) await page.keyboard.up("Shift");
+}
 async function clickColumnAction(page: Page, label: string, action: string) {
-  const item = page.getByRole("menu", { name: `列操作：${label}`, exact: true }).getByRole("menuitem", { name: action });
+  const escapedAction = action.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const item = page.getByRole("menu", { name: `列操作：${label}`, exact: true }).getByRole("menuitem", { name: new RegExp(`(?:^|\\s)${escapedAction}$`) });
+  await clickReadyMenuItem(item);
+}
+async function clickReadyMenuItem(item: Locator) {
   // Wait for the opening animation and popup alignment before moving the pointer.
   await expect.poll(async () => {
     const state = await item.evaluate(element => {
@@ -69,6 +84,38 @@ async function clickColumnAction(page: Page, label: string, action: string) {
   }).toEqual({ positioned: true, moving: false, hit: true });
   await item.click();
 }
+
+test("search occupies the shared topbar and the selection footer stays at the viewport bottom on scroll and resize", async ({ page }) => {
+  await fixture(page);
+  const search = page.getByRole("search", { name: "当前页面搜索", exact: true });
+  await expect(search.getByLabel("搜索选款", { exact: true })).toBeVisible();
+  await expect(page.locator(".content > .page-heading")).toHaveCount(0);
+  const footer = page.locator(".selection-bulk-add"), sheet = page.locator(".selection-sheet");
+  const bottom = async () => { const bounds = (await footer.boundingBox())!; return Math.round(bounds.y + bounds.height); };
+  await expect.poll(async () => Math.abs(await bottom() - 1000)).toBeLessThanOrEqual(1);
+  await sheet.evaluate(element => { element.scrollTop = 500; });
+  await expect.poll(async () => Math.abs(await bottom() - 1000)).toBeLessThanOrEqual(1);
+  await search.getByLabel("搜索选款", { exact: true }).fill("SHORTCUT-24");
+  await expect(page.locator("td[data-selection-column='xutiStyleNo']")).toHaveCount(1);
+  await expect.poll(async () => Math.abs(await bottom() - 1000)).toBeLessThanOrEqual(1);
+  await search.getByLabel("搜索选款", { exact: true }).fill("SHORTCUT-0\nSHORTCUT-24");
+  await expect(page.locator("td[data-selection-column='xutiStyleNo']")).toHaveCount(2);
+  await expect.poll(async () => {
+    const control = (await search.boundingBox())!, header = (await page.getByRole("banner").boundingBox())!;
+    return control.y >= header.y && control.y + control.height <= header.y + header.height + 1;
+  }).toBe(true);
+  await expect.poll(async () => Math.abs(await bottom() - 1000)).toBeLessThanOrEqual(1);
+  await search.getByLabel("搜索选款", { exact: true }).fill("");
+  await page.screenshot({ path: ".local/selection-compact-layout.png" });
+  await page.setViewportSize({ width: 900, height: 700 });
+  await expect(search.getByLabel("搜索选款", { exact: true })).toBeVisible();
+  await expect.poll(async () => Math.abs(await bottom() - 700)).toBeLessThanOrEqual(1);
+  await expect(footer.getByRole("button", { name: "添加 10 行" })).toBeVisible();
+  await page.goto("/help");
+  await expect(search.getByLabel("搜索使用手册", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("搜索选款", { exact: true })).toHaveCount(0);
+  await expect(page.locator(".selection-workspace-content")).toHaveCount(0);
+});
 
 test("filled-axis shortcuts include internal gaps and zero but stop before trailing blanks and other pages", async ({ page }) => {
   await fixture(page);
@@ -149,7 +196,7 @@ test("floating preview permits saving and scrolling the table, retains drag posi
   await image.click({ button: "right" });
   await expect(page.getByRole("menuitem", { name: "复制当前图片" })).toBeVisible();
   await expect(page.getByRole("menuitem", { name: "下载当前图片" })).toBeVisible();
-  await page.getByRole("menuitem", { name: "复制图片地址" }).click();
+  await clickReadyMenuItem(page.getByRole("menuitem", { name: "复制图片地址" }));
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(`http://127.0.0.1:5174${imageUrls[0]}`);
   await page.getByRole("button", { name: "向右旋转图片", exact: true }).click();
   await page.getByRole("button", { name: "重置图片预览", exact: true }).click();
@@ -207,6 +254,126 @@ test("readonly users can fix multiple columns from headers or cells, retain alig
   console.log("Measured selection header heights:", heights);
 });
 
+test("header drag and mixed selections batch pin and unpin columns without disturbing other saved pins", async ({ page }) => {
+  await fixture(page, true);
+  await columnHeader(page, "supplierCode").click({ button: "right" });
+  await clickColumnAction(page, "供应商编码", "固定此列");
+  await dragColumns(page, "images", "xutiStyleNo");
+  await expect(page.locator("thead th[data-column-selected]")).toHaveCount(3);
+  await expect(page.locator("td.selection-cell-active")).toHaveCount(60);
+  await cell(page, 0, "images").click({ button: "right", position: { x: 2, y: 2 } });
+  await clickColumnAction(page, "图片", "固定所选 3 列");
+  await expect(page.locator("thead th[data-fixed-column]")).toHaveCount(4);
+  expect((await columnOrder(page)).slice(0, 4)).toEqual(["images", "labelImages", "xutiStyleNo", "supplierCode"]);
+  await columnHeader(page, "xutiStyleNo").click();
+  await columnHeader(page, "registrationBatch").click({ modifiers: ["Shift"] });
+  await columnHeader(page, "xutiStyleNo").click({ button: "right" });
+  const menu = page.getByRole("menu", { name: "列操作：序缇款号", exact: true });
+  await expect(menu.getByRole("menuitem", { name: "取消固定所选 3 列" })).toBeVisible();
+  await clickColumnAction(page, "序缇款号", "固定所选 3 列");
+  await expect(page.locator("thead th[data-fixed-column]")).toHaveCount(5);
+  // Right clicking outside a multi-column selection acts only on that column.
+  await columnHeader(page, "images").click();
+  await columnHeader(page, "xutiStyleNo").click({ modifiers: ["Shift"] });
+  await columnHeader(page, "supplierStyleNo").click({ button: "right" });
+  await clickColumnAction(page, "供应商款号", "固定此列");
+  await expect(page.locator("thead th[data-fixed-column]")).toHaveCount(6);
+  await columnHeader(page, "images").click();
+  await columnHeader(page, "xutiStyleNo").click({ modifiers: ["Shift"] });
+  await columnHeader(page, "labelImages").click({ button: "right" });
+  await clickColumnAction(page, "洗唛/吊牌图", "取消固定所选 3 列");
+  await expect(page.locator("thead th[data-fixed-column]")).toHaveCount(3);
+  await page.reload();
+  await expect(page.locator("thead th[data-fixed-column]")).toHaveCount(3);
+  expect((await columnOrder(page)).slice(0, 3)).toEqual(["registrationBatch", "supplierStyleNo", "supplierCode"]);
+});
+
+test("Shift header clicks extend and shrink the range while Shift drag still reorders and Escape cancels", async ({ page }) => {
+  await fixture(page, true);
+  const originalOrder = await columnOrder(page);
+  await columnHeader(page, "xutiStyleNo").click();
+  await columnHeader(page, "supplierCode").click({ modifiers: ["Shift"] });
+  await expect(page.locator("thead th[data-column-selected]")).toHaveCount(3);
+  expect(await columnOrder(page)).toEqual(originalOrder);
+  await columnHeader(page, "supplierStyleNo").click({ modifiers: ["Shift"] });
+  await expect(page.locator("thead th[data-column-selected]")).toHaveCount(2);
+  await expect(columnHeader(page, "supplierCode")).toHaveAttribute("aria-selected", "false");
+  await columnHeader(page, "labelImages").click({ modifiers: ["Shift"] });
+  await expect(page.locator("thead th[data-column-selected]")).toHaveCount(2);
+  await expect(columnHeader(page, "labelImages")).toHaveAttribute("aria-selected", "true");
+  await dragColumns(page, "color", "sizeRange", true);
+  const reordered = [...originalOrder];
+  reordered.splice(reordered.indexOf("color"), 1);
+  reordered.splice(reordered.indexOf("sizeRange") + 1, 0, "color");
+  await expect.poll(() => columnOrder(page)).toEqual(reordered);
+  const start = (await columnHeader(page, "sizeRange").boundingBox())!, end = (await columnHeader(page, "color").boundingBox())!;
+  await page.keyboard.down("Shift");
+  await page.mouse.move(start.x + 18, start.y + 14);
+  await page.mouse.down();
+  await page.mouse.move(end.x + 18, end.y + 14, { steps: 6 });
+  await page.keyboard.press("Escape");
+  await page.mouse.up();
+  await page.keyboard.up("Shift");
+  expect(await columnOrder(page)).toEqual(reordered);
+  await cell(page, 0, "xutiStyleNo").click();
+  await columnHeader(page, "supplierCode").click({ modifiers: ["Shift"] });
+  await expect(page.locator("thead th[data-column-selected]")).toHaveCount(1);
+  await page.getByRole("textbox", { name: "搜索选款" }).fill("no-matching-record");
+  await expect(page.locator("td[data-selection-column]")).toHaveCount(0);
+  await columnHeader(page, "images").click();
+  await columnHeader(page, "xutiStyleNo").click({ modifiers: ["Shift"] });
+  await expect(page.locator("thead th[data-column-selected]")).toHaveCount(3);
+  await columnHeader(page, "images").click({ button: "right" });
+  await clickColumnAction(page, "图片", "固定所选 3 列");
+  await expect(page.locator("thead th[data-fixed-column]")).toHaveCount(3);
+});
+
+test("column width menus apply pixels or centimeters to the selection, preserve unit conversions and sticky offsets", async ({ page }) => {
+  await fixture(page, true);
+  await columnHeader(page, "images").click();
+  await columnHeader(page, "xutiStyleNo").click({ modifiers: ["Shift"] });
+  await columnHeader(page, "labelImages").click({ button: "right" });
+  await clickColumnAction(page, "洗唛/吊牌图", "设置列宽");
+  const dialog = page.getByRole("dialog", { name: "设置列宽", exact: true });
+  const number = dialog.getByRole("spinbutton", { name: "列宽数值" });
+  await expect(dialog).toContainText("已选择 3 列");
+  await expect(number).toHaveValue("120");
+  const changeUnit = async (name: string) => {
+    await dialog.getByRole("combobox", { name: "列宽单位" }).click();
+    await page.locator(".ant-select-dropdown:visible .ant-select-item-option").filter({ hasText: name }).click();
+  };
+  await changeUnit("厘米 (cm)");
+  await expect(number).toHaveValue("3.18");
+  await changeUnit("像素 (px)");
+  await expect(number).toHaveValue("120");
+  await changeUnit("厘米 (cm)");
+  await number.fill("8.38");
+  await dialog.getByRole("button", { name: "确定", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  for (const key of ["images", "labelImages", "xutiStyleNo"]) await expect(columnHeader(page, key)).toHaveCSS("width", "317px");
+  await expect(columnHeader(page, "supplierStyleNo")).toHaveCSS("width", "120px");
+  await columnHeader(page, "labelImages").click({ button: "right" });
+  await clickColumnAction(page, "洗唛/吊牌图", "固定所选 3 列");
+  await cell(page, 0, "images").click({ button: "right", position: { x: 2, y: 2 } });
+  await clickColumnAction(page, "图片", "设置列宽");
+  await number.fill("260");
+  await dialog.getByRole("button", { name: "确定", exact: true }).click();
+  await expect(columnHeader(page, "images")).toHaveCSS("width", "260px");
+  const imageBounds = (await columnHeader(page, "images").boundingBox())!, labelBounds = (await columnHeader(page, "labelImages").boundingBox())!;
+  expect(labelBounds.x - imageBounds.x).toBe(260);
+  await columnHeader(page, "xutiStyleNo").click({ button: "right" });
+  await clickColumnAction(page, "序缇款号", "设置列宽");
+  await number.fill("");
+  await expect(dialog.getByRole("button", { name: "确定", exact: true })).toBeDisabled();
+  await dialog.getByRole("button", { name: "取消", exact: true }).click();
+  await expect(columnHeader(page, "xutiStyleNo")).toHaveCSS("width", "317px");
+  await page.reload();
+  await expect(columnHeader(page, "images")).toHaveCSS("width", "260px");
+  await expect(columnHeader(page, "xutiStyleNo")).toHaveCSS("width", "317px");
+  await expect(page.locator("thead th[data-fixed-column]")).toHaveCount(3);
+  await page.screenshot({ path: ".local/selection-column-widths.png" });
+});
+
 test("gallery enlargement becomes modeless for readonly users and switching another field keeps one preview", async ({ page }) => {
   await fixture(page, true);
   await cell(page, 0, "images").getByRole("button", { name: "全部", exact: true }).click();
@@ -244,12 +411,16 @@ test("choice cells start blank, save colored single and multiple labels and reta
   await expect(cell(page, 1, "custom:check").locator(".selection-choice-pill")).toHaveText("规范");
   await expect(cell(page, 2, "custom:action").locator(".selection-choice-pill")).toHaveCount(2);
   await single.click();
+  await expect(page.locator(".ant-select-dropdown:visible")).toHaveCount(0);
+  await expect(single.locator(".ant-select")).toHaveCount(0);
+  await single.getByRole("button", { name: "展开洗涤标志核对选项", exact: true }).click();
   await expect(page.locator(".ant-select-dropdown:visible")).toHaveCount(1);
   await single.getByRole("button", { name: "收起洗涤标志核对选项", exact: true }).click();
   await expect(page.locator(".ant-select-dropdown:visible")).toHaveCount(0);
   await single.getByRole("button", { name: "展开洗涤标志核对选项", exact: true }).click();
   await page.locator(".ant-select-dropdown:visible .ant-select-item-option").filter({ hasText: /^不规范$/ }).click();
   await multiple.click();
+  await multiple.getByRole("button", { name: "展开衣服整改措施选项", exact: true }).click();
   await page.locator(".ant-select-dropdown:visible .ant-select-item-option").filter({ hasText: /^换洗唛$/ }).click();
   await page.locator(".ant-select-dropdown:visible .ant-select-item-option").filter({ hasText: /^缝领标$/ }).click();
   const saved = page.waitForResponse(response => response.url().endsWith("/style-selections/shortcut-0") && response.request().method() === "PATCH");
@@ -271,9 +442,47 @@ test("choice cells start blank, save colored single and multiple labels and reta
   await single.scrollIntoViewIfNeeded();
   await page.screenshot({ path: ".local/selection-choice-labels.png" });
   await multiple.click();
+  await multiple.getByRole("button", { name: "展开衣服整改措施选项", exact: true }).click();
   await multiple.getByRole("button", { name: "移除换洗唛", exact: true }).click();
   await cell(page, 0, "material").click();
   await expect(multiple.locator(".selection-choice-pill")).toHaveText("缝领标");
+});
+
+test("choice cells open only from the icon, close on table scroll and retain selections and option-list scrolling", async ({ page }) => {
+  await fixture(page, false, true);
+  const sheet = page.locator(".selection-sheet"), single = cell(page, 0, "custom:check"), multiple = cell(page, 2, "custom:action");
+  const popup = page.locator(".ant-select-dropdown:visible");
+  await single.click();
+  await expect(popup).toHaveCount(0);
+  await single.click();
+  await expect(popup).toHaveCount(0);
+  await single.getByRole("button", { name: "展开洗涤标志核对选项", exact: true }).click();
+  await expect(popup).toHaveCount(1);
+  await popup.dispatchEvent("scroll");
+  await expect(popup).toHaveCount(1);
+  const bounds = (await sheet.boundingBox())!;
+  await page.mouse.move(bounds.x + 20, bounds.y + 140);
+  await page.mouse.wheel(0, 180);
+  await expect(popup).toHaveCount(0);
+  await single.scrollIntoViewIfNeeded();
+  await single.getByRole("button", { name: "展开洗涤标志核对选项", exact: true }).click();
+  await expect(popup).toHaveCount(1);
+  await sheet.evaluate(element => { element.scrollTop += 200; });
+  await expect(popup).toHaveCount(0);
+  await multiple.click();
+  await expect(popup).toHaveCount(0);
+  await multiple.getByRole("button", { name: "展开衣服整改措施选项", exact: true }).click();
+  await expect(popup).toHaveCount(1);
+  await popup.dispatchEvent("wheel", { deltaY: 60 });
+  await expect(popup).toHaveCount(1);
+  await sheet.evaluate(element => { element.scrollLeft -= 100; });
+  await expect(popup).toHaveCount(0);
+  await expect(multiple.locator(".selection-choice-pill")).toHaveCount(2);
+  await multiple.getByRole("group", { name: "衣服整改措施", exact: true }).focus();
+  await page.keyboard.press("ArrowDown");
+  await expect(popup).toHaveCount(1);
+  await page.keyboard.press("Escape");
+  await expect(popup).toHaveCount(0);
 });
 
 test("readonly choice cells show saved labels and keep empty cells free of editors", async ({ page }) => {
@@ -299,6 +508,7 @@ test("field group tabs locate columns without pins and move groups after pins wh
   for (const name of ["洗涤标志核对", "衣服整改措施", "洗唛/吊牌图"]) {
     await picker.fill(name);
     await page.locator(".ant-select-dropdown:visible .ant-select-item-option").filter({ hasText: new RegExp(`^${name}$`) }).click();
+    await expect(dialog.locator(".selection-column-group-config .ant-select")).toContainText(name);
   }
   await dialog.getByLabel("分组名称1", { exact: true }).click();
   await dialog.getByRole("button", { name: "保存分组", exact: true }).click();

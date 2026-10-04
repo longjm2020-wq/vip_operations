@@ -474,6 +474,8 @@
 
 .selection-sheet th, .selection-row-drag { user-select: none; cursor: cell; }
 .selection-sheet thead th:focus, .selection-sheet thead th:focus-visible { outline: none; }
+.selection-sheet thead th[data-column-selected] { background: #ffe9d3; }
+.selection-column-width-help { color: #8c7564; font-size: 12px; }
 .selection-sheet input, .selection-sheet textarea { user-select: text; }
 /* Drag selection is blocked by preventDefault/selectstart in selection-drag.
    Avoid changing styles on every descendant when a cell is pressed. */
@@ -549,5 +551,10 @@
 .selection-import-guide > span { flex: 1; min-width: 200px; color: #78604d; }
 .selection-import-upload .ant-upload-drag-container { padding: 22px 12px; }
 @media (max-width: 600px) { .selection-header-search { width: min(420px, calc(100vw - 48px)); } }
+.selection-workspace-content .selection-card .ant-card-body { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.selection-workspace-content .selection-card .selection-sheet { order: 1; flex: 1; min-height: 0; max-height: none; }
+.selection-workspace-content .selection-card .selection-bulk-add { order: 3; flex: none; background: #fffaf5; }
+.selection-workspace-content .selection-card .selection-bottom-bar { order: 2; flex: none; padding-block: 5px; }
+.selection-workspace-content .selection-card .selection-toolbar, .selection-workspace-content .selection-card .selection-edit-bar, .selection-workspace-content .selection-card .selection-column-group-tabs { flex: none; }
 .selection-hidden-value { color: #8c8c8c; letter-spacing: 3px; }
 .selection-sheet td[data-cell-access="deny"] { background-image: repeating-linear-gradient(135deg, transparent, transparent 7px, rgba(140,140,140,.06) 7px, rgba(140,140,140,.06) 8px); }

@@ -266,8 +266,9 @@ test("simple top right search matches styles and suppliers without a mode dropdo
     page.locator('td[data-selection-column="xutiStyleNo"]'),
   ).toHaveCount(20);
   const box = await search.boundingBox();
-  const heading = await page
-    .getByRole("heading", { name: "选款登记", exact: true })
-    .boundingBox();
-  expect(box!.x).toBeGreaterThan(heading!.x);
+  const banner = (await page.getByRole("banner").boundingBox())!;
+  expect(box!.y).toBeGreaterThanOrEqual(banner.y);
+  expect(box!.y + box!.height).toBeLessThanOrEqual(banner.y + banner.height);
+  await expect(page.getByRole("search", { name: "当前页面搜索" }).getByLabel("搜索选款", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "选款登记", exact: true })).toHaveCount(0);
 });

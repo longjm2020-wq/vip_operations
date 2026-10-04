@@ -1,3 +1,4 @@
+import { PageSearch } from "./page-search";
 import { useRef, useState } from "react";
 import { Decimal } from "decimal.js";
 import { AftersalesPanel } from "./supply-aftersales";
@@ -415,7 +416,7 @@ export function SupplyOrders({ internal = false }: { internal?: boolean }) {
         />
       )}
       <Space wrap style={{ margin: "12px 0" }}>
-        <Input.Search
+        <PageSearch><Input.Search
           placeholder="搜索订单号或供应商"
           allowClear
           onSearch={(v) => {
@@ -423,7 +424,7 @@ export function SupplyOrders({ internal = false }: { internal?: boolean }) {
             setPage(1);
           }}
           style={{ width: 300 }}
-        />
+        /></PageSearch>
         <Select
           value={status}
           style={{ width: 170 }}

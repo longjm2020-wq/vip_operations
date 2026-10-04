@@ -1,7 +1,9 @@
+import { PageSearch } from "./page-search";
 import {SelectionFieldManager,SelectionFieldInput} from "./selection-field-manager";
 import { SelectionProtectionControl, editableSelectionCell, readableSelectionCell } from "./selection-protection";
 import { SelectionOrganization } from "./selection-organization";
 import { SelectionColumnGroupManager, SelectionColumnGroupTabs, selectionColumnGroupsKey, storedSelectionColumnGroups } from "./selection-column-groups";
+import { SelectionColumnWidthModal } from "./selection-column-width";
 import { useSelectionDrag } from "./selection-drag";
 import { parseSelectionSearch,matchesSelectionSearch } from "./selection-style-search";
 import {resetFieldTypes,defaultTagConfig,orderedFieldTags,fieldValueError,fieldImages,defaultImageConfig,systemField,type SelectionField} from "./selection-field-types";
@@ -279,6 +281,9 @@ export function StyleSelectionsPage() {
   const [formatTarget, setFormatTarget] = useState<{ ids: Set<string>; sample: unknown; initial: FormatPatch } | null>(null);
   const [cellTextEditing, setCellTextEditing] = useState(false);
   const [selectedCells, setSelectedCells] = useState<Set<string>>(new Set());
+  const [selectedColumnKeys, setSelectedColumnKeys] = useState<string[]>([]);
+  const columnSelectionAnchor = useRef<string | null>(null);
+  const [columnWidthTarget, setColumnWidthTarget] = useState<Column[] | null>(null);
   const [cellAnchor, setCellAnchor] = useState<{ rowKey: string; columnKey: string } | null>(null);
   const [imagePreview, setImagePreview] = useState<{ rowKey: string; columnKey: string; index: number } | null>(null);
   const contextImage = useRef<{ url: string; name: string } | null>(null);
@@ -287,7 +292,7 @@ export function StyleSelectionsPage() {
   const axisSelection = useRef<{ type: "row" | "column"; key: string } | null>(null);
   const sheetRef = useRef<HTMLDivElement>(null);
   const dragCellAnchor = useRef<{ rowKey: string; columnKey: string } | null>(null);
-  const shiftDrag=useRef<{type:"row"|"column";key:string}|null>(null);
+  const shiftDrag=useRef<{type:"row"|"column";key:string;startX:number;startY:number;moved:boolean}|null>(null);
   const [shiftTarget,setShiftTarget]=useState<string|null>(null);
   const [draggedRow, setDraggedRow] = useState<string | null>(null);
   const [resizingColumn, setResizingColumn] = useState<{ key: string; startX: number; startWidth: number } | null>(null);
@@ -392,14 +397,31 @@ export function StyleSelectionsPage() {
     return offsets;
   }, [activeColumns, fixedColumns]);
   const lastFixedColumn = [...fixedOffsets.keys()].at(-1);
-  const fixedColumnMenu = (column: Column) => [
-    { key: "fix-column", label: fixedOffsets.has(column.key) ? "取消固定此列" : "固定此列", icon: <PushpinOutlined /> },
-    ...(fixedColumns.length ? [{ key: "unfix-all", label: "取消所有固定列" }] : []),
-  ];
-  const changeFixedColumn = (columnKey: string, action: string) => {
+  const selectedFields = useMemo(() => {
+    const keys = new Set(selectedColumnKeys);
+    for (const id of selectedCells) keys.add(id.slice(id.indexOf("::") + 2));
+    return activeColumns.filter(column => keys.has(column.key)).map(column => column.key);
+  }, [selectedColumnKeys, selectedCells, activeColumns]);
+  const columnActionKeys = (key: string) => selectedFields.includes(key) ? selectedFields : [key];
+  const columnMenuItems = (column: Column) => {
+    const keys = columnActionKeys(column.key);
+    return [
+      ...(keys.length > 1 ? [
+        ...(keys.some(key => !fixedOffsets.has(key)) ? [{ key: "fix-selected", label: `固定所选 ${keys.length} 列`, icon: <PushpinOutlined /> }] : []),
+        ...(keys.some(key => fixedOffsets.has(key)) ? [{ key: "unfix-selected", label: `取消固定所选 ${keys.length} 列` }] : []),
+      ] : [{ key: "fix-column", label: fixedOffsets.has(column.key) ? "取消固定此列" : "固定此列", icon: <PushpinOutlined /> }]),
+      ...(fixedColumns.length ? [{ key: "unfix-all", label: "取消所有固定列" }] : []),
+      { type: "divider" as const },
+      { key: "column-width", label: "设置列宽" },
+    ];
+  };
+  const handleColumnAction = (columnKey: string, action: string) => {
+    const keys = columnActionKeys(columnKey);
     selectionDrag.stop(); setCopiedCells(new Set()); setContextCell(null);
+    if (action === "column-width") { setColumnWidthTarget(activeColumns.filter(column => keys.includes(column.key))); return; }
+    setSelectedColumnKeys([]); columnSelectionAnchor.current = null;
     setSelectedCells(cellAnchor ? new Set([cellId(cellAnchor.rowKey, cellAnchor.columnKey)]) : new Set());
-    setFixedColumns(current => action === "unfix-all" ? [] : current.includes(columnKey) ? current.filter(key => key !== columnKey) : [...current, columnKey]);
+    setFixedColumns(current => action === "unfix-all" ? [] : action === "fix-selected" ? [...new Set([...current, ...keys])] : action === "unfix-selected" ? current.filter(key => !keys.includes(key)) : current.includes(columnKey) ? current.filter(key => key !== columnKey) : [...current, columnKey]);
   };
   const repeatedStyles = useMemo(() => duplicateStyleCounts(rows, styleCounts.data?.data, original.current), [rows, styleCounts.data]);
   const colorSuggestions = useMemo(() => [...new Set(rows.flatMap((row) => splitTags(row.color)))], [rows]);
@@ -424,11 +446,13 @@ export function StyleSelectionsPage() {
   }, [allGrouped, pageRowKeys]);
   useEffect(() => { setPage(1); }, [searchText, columnFilters, columnSort, groupBy]);
   useEffect(() => { if (page > pageCount) setPage(pageCount); }, [page, pageCount]);
-  useEffect(() => { setCellAnchor(null); setFocusedCell(null); setCopiedCells(new Set()); setCellTextEditing(false); }, [currentPage, pageSize]);
+  useEffect(() => { setCellAnchor(null); setFocusedCell(null); setCopiedCells(new Set()); setCellTextEditing(false); setSelectedColumnKeys([]); columnSelectionAnchor.current = null; }, [currentPage, pageSize]);
   useEffect(() => {
     const rowKeys = new Set(filteredRows.map(row => row._key));
     setSelectedRows(current => { const next = current.filter(key => rowKeys.has(key)); return next.length === current.length ? current : next; });
     setSelectedCells(current => { const next = new Set([...current].filter(id => { const [rowKey, columnKey] = id.split("::"); return pageRowKeys.has(rowKey) && visible.includes(columnKey); })); return next.size === current.size ? current : next; });
+    setSelectedColumnKeys(current => { const next = current.filter(key => visible.includes(key)); return next.length === current.length ? current : next; });
+    if (columnSelectionAnchor.current && !visible.includes(columnSelectionAnchor.current)) columnSelectionAnchor.current = null;
   }, [filteredRows, pageRowKeys, visible]);
   const dirtyRows = useMemo(() => new Set(rows.filter((row) => !row.id || !sameRow(row, original.current.get(row._key) || {})).map(row => row._key)), [rows, saving]);
   const dirtyCount = dirtyRows.size;
@@ -472,22 +496,33 @@ export function StyleSelectionsPage() {
   };
   const moveColumn = (fromKey: string, toKey: string) => {
     if (fromKey === toKey) return;
+    setSelectedColumnKeys([]); columnSelectionAnchor.current = null; setSelectedCells(new Set()); setCopiedCells(new Set()); setCellAnchor(null); setFocusedCell(null);
     setColumns((current) => { const copy = [...current]; const from = copy.findIndex((column) => column.key === fromKey), to = copy.findIndex((column) => column.key === toKey); if (from < 0 || to < 0) return current; const [column] = copy.splice(from, 1); copy.splice(to, 0, column); return copy; });
   };
+  const reorderActions = useRef({ moveRow, moveColumn }); reorderActions.current = { moveRow, moveColumn };
   useEffect(()=>{
     const cancel=()=>{shiftDrag.current=null;setShiftTarget(null);};
+    const move=(event:MouseEvent)=>{
+      const drag=shiftDrag.current;
+      if (!drag) return;
+      if (!(event.buttons & 1)) return cancel();
+      if (!drag.moved && Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) < 6) return;
+      drag.moved = true;
+      const target=event.target instanceof Element?event.target.closest<HTMLElement>("[data-reorder-axis]"):null;
+      setShiftTarget(target?.dataset.reorderAxis === drag.type && target.dataset.reorderKey ? drag.type + ":" + target.dataset.reorderKey : null);
+    };
     const drop=(event:MouseEvent)=>{
       const drag=shiftDrag.current;
       const target=event.target instanceof Element?event.target.closest<HTMLElement>("[data-reorder-axis]"):null;
-      if(drag && target?.dataset.reorderAxis===drag.type && target.dataset.reorderKey){
-        if(drag.type==="row")moveRow(drag.key,target.dataset.reorderKey);else moveColumn(drag.key,target.dataset.reorderKey);
+      if(drag?.moved && target?.dataset.reorderAxis===drag.type && target.dataset.reorderKey){
+        if(drag.type==="row")reorderActions.current.moveRow(drag.key,target.dataset.reorderKey);else reorderActions.current.moveColumn(drag.key,target.dataset.reorderKey);
       }
       cancel();
     };
     const escape=(event:KeyboardEvent)=>{if(event.key==="Escape")cancel();};
-    window.addEventListener("mouseup",drop);window.addEventListener("blur",cancel);window.addEventListener("keydown",escape);
-    return()=>{window.removeEventListener("mouseup",drop);window.removeEventListener("blur",cancel);window.removeEventListener("keydown",escape);};
-  },[canEdit]);
+    window.addEventListener("mousemove",move);window.addEventListener("mouseup",drop);window.addEventListener("blur",cancel);window.addEventListener("keydown",escape);
+    return()=>{window.removeEventListener("mousemove",move);window.removeEventListener("mouseup",drop);window.removeEventListener("blur",cancel);window.removeEventListener("keydown",escape);};
+  },[]);
   const selectRectangle = (from: { rowKey: string; columnKey: string }, to: { rowKey: string; columnKey: string }) => {
     const r1 = displayedRows.findIndex((row) => row._key === from.rowKey), r2 = displayedRows.findIndex((row) => row._key === to.rowKey);
     const c1 = activeColumns.findIndex((column) => column.key === from.columnKey), c2 = activeColumns.findIndex((column) => column.key === to.columnKey);
@@ -503,7 +538,11 @@ export function StyleSelectionsPage() {
     const range = new Set(keys.slice(Math.min(first, last), Math.max(first, last) + 1));
     const chosenRows = type === "row" ? displayedRows.filter(row => range.has(row._key)) : displayedRows;
     const chosenColumns = type === "column" ? activeColumns.filter(column => range.has(column.key)) : activeColumns;
-    setSelectedCells(new Set(chosenRows.flatMap(row => chosenColumns.map(column => cellId(row._key, column.key)))));
+    const next = new Set(chosenRows.flatMap(row => chosenColumns.map(column => cellId(row._key, column.key))));
+    setSelectedCells(current => current.size === next.size && [...next].every(id => current.has(id)) ? current : next);
+    const columnKeys = type === "column" ? chosenColumns.map(column => column.key) : [];
+    setSelectedColumnKeys(current => current.length === columnKeys.length && current.every((key, index) => key === columnKeys[index]) ? current : columnKeys);
+    if (type === "row") columnSelectionAnchor.current = null;
     setSelectedRows(type === "row" ? chosenRows.map(row => row._key) : []);
     if (chosenRows.length && chosenColumns.length) setCellAnchor({ rowKey: chosenRows[0]._key, columnKey: chosenColumns[0].key });
   };
@@ -519,22 +558,30 @@ export function StyleSelectionsPage() {
   const changeColumnGroup = (key: string) => {
     selectionDrag.stop(); setColumnGroupId(key); setColumnTabVisit(current => current + 1); setCopiedCells(new Set()); setSelectedCells(new Set());
     setCellAnchor(null); setFocusedCell(null); setCellTextEditing(false); setFilterColumn(null); setContextCell(null);
+    setSelectedColumnKeys([]); columnSelectionAnchor.current = null;
   };
   const axisMouseDown = (event: React.MouseEvent<HTMLElement>, type: "row" | "column", key: string) => {
+    if (event.button === 2 && type === "column") {
+      event.preventDefault();
+      if (!selectedFields.includes(key)) { columnSelectionAnchor.current = key; selectAxis(type, key, key); }
+      return;
+    }
     if (event.button !== 0) return;
-    event.preventDefault(); event.currentTarget.focus();
+    event.preventDefault(); event.currentTarget.focus({ preventScroll: true }); selectionDrag.stop();
     setCellTextEditing(false); setSelectingCells(false); setCellAnchor(null);
     if(event.shiftKey){
       axisSelection.current=null;
       if(type==="row" && (!canEdit || saving || deleting))return;
       if(type==="row" && (sort!=="sortOrder" || direction!=="asc" || columnSort || groupBy!=="none")){message.info("请先切换到手动排序并取消分组，再拖动行");return;}
-      shiftDrag.current={type,key};setShiftTarget(type+":"+key);return;
+      if (type === "column") { const anchor = columnSelectionAnchor.current || key; columnSelectionAnchor.current = anchor; selectAxis(type, anchor, key); }
+      shiftDrag.current={type,key,startX:event.clientX,startY:event.clientY,moved:false};setShiftTarget(null);return;
     }
     selectionDrag.start(event, type);
+    if (type === "column") columnSelectionAnchor.current = key;
     axisSelection.current = { type, key }; selectAxis(type, key, key);
   };
   const axisMouseEnter = (type: "row" | "column", key: string) => {
-    if(shiftDrag.current){if(shiftDrag.current.type===type)setShiftTarget(type+":"+key);return;}
+    if(shiftDrag.current)return;
     const anchor = axisSelection.current;
     if (anchor?.type === type) selectAxis(type, anchor.key, key);
   };
@@ -545,6 +592,7 @@ export function StyleSelectionsPage() {
     const control = target?.closest("button, a, .ant-select, input[type=checkbox], input[type=date]");
     if (!control) { event.preventDefault(); selectionDrag.start(event); }
     axisSelection.current = null; setSelectedRows([]); setCellTextEditing(false);
+    setSelectedColumnKeys([]); columnSelectionAnchor.current = null;
     const point = { rowKey, columnKey };
     dragCellAnchor.current = control ? null : point;
     setCellAnchor(point); setSelectingCells(!control); setSelectedCells(new Set([cellId(rowKey, columnKey)]));
@@ -555,6 +603,7 @@ export function StyleSelectionsPage() {
     const row = displayedRows.find(row => row._key === cellAnchor?.rowKey);
     const column = activeColumns.find(column => column.key === cellAnchor?.columnKey);
     if (!row || !column) return;
+    setSelectedColumnKeys([]); columnSelectionAnchor.current = null;
     const hasContent = (row: Row, column: Column) => {
       if (!readableSelectionCell(row, column.key)) return false;
       if (column.key === "images") return rowImages(row).length > 0;
@@ -716,9 +765,9 @@ export function StyleSelectionsPage() {
   const interactions = {
     mouseDown: (event: React.MouseEvent<HTMLElement>, rowKey: string, columnKey: string) => {
       if (event.button === 0) cellMouseDown(event, rowKey, columnKey);
-      else if (event.button === 2) { event.preventDefault(); if (!selectedCells.has(cellId(rowKey, columnKey))) { setSelectedCells(new Set([cellId(rowKey, columnKey)])); setCellAnchor({ rowKey, columnKey }); } }
+      else if (event.button === 2) { event.preventDefault(); if (!selectedCells.has(cellId(rowKey, columnKey))) { setSelectedColumnKeys([]); columnSelectionAnchor.current = null; setSelectedCells(new Set([cellId(rowKey, columnKey)])); setCellAnchor({ rowKey, columnKey }); } }
     },
-    focus: (rowKey: string, columnKey: string) => { setCellAnchor({ rowKey, columnKey }); if (!selectedCells.has(cellId(rowKey, columnKey))) setSelectedCells(new Set([cellId(rowKey, columnKey)])); },
+    focus: (rowKey: string, columnKey: string) => { setCellAnchor({ rowKey, columnKey }); if (!selectedCells.has(cellId(rowKey, columnKey))) { setSelectedColumnKeys([]); columnSelectionAnchor.current = null; setSelectedCells(new Set([cellId(rowKey, columnKey)])); } },
     mouseEnter: cellMouseEnter,
     paste: pasteCells,
     dragStart: (event: React.DragEvent) => { if (selectingCells) event.preventDefault(); },
@@ -745,10 +794,10 @@ export function StyleSelectionsPage() {
   const cellContextMenu = { "aria-label": `列操作：${contextColumn?.label || "单元格"}`, items: contextColumn && contextRow ? [...(contextHasImage ? [
       ...imageContextItems,
       { type: "divider" as const },
-    ] : []), ...fixedColumnMenu(contextColumn), { type: "divider" as const }, { key: "format", label: "设置单元格格式", icon: <SettingOutlined />, disabled: !canEdit || !editableSelectionCell(contextRow, contextColumn.key) || systemField(contextColumn) || collectionKeys.has(contextColumn.key) }] : [], onClick: ({ key }: { key: string }) => {
+    ] : []), ...columnMenuItems(contextColumn), { type: "divider" as const }, { key: "format", label: "设置单元格格式", icon: <SettingOutlined />, disabled: !canEdit || !editableSelectionCell(contextRow, contextColumn.key) || systemField(contextColumn) || collectionKeys.has(contextColumn.key) }] : [], onClick: ({ key }: { key: string }) => {
       if (!contextRow || !contextColumn) return;
       setContextCell(null);
-      if (key === "fix-column" || key === "unfix-all") { changeFixedColumn(contextColumn.key, key); return; }
+      if (["fix-column", "fix-selected", "unfix-selected", "unfix-all", "column-width"].includes(key)) { handleColumnAction(contextColumn.key, key); return; }
       if (key === "format") { openCellFormat(contextRow, contextColumn); return; }
       const image = contextImage.current;
       if (!image) return message.error("未找到当前图片，请重新右键单元格");
@@ -858,11 +907,11 @@ export function StyleSelectionsPage() {
     }));
     setFormatTarget(null);
   };
-  return <>{imagePreview && previewImages.length > 0 && <SelectionImagePreview key={cellId(imagePreview.rowKey, imagePreview.columnKey)} images={previewImages} index={Math.min(imagePreview.index, previewImages.length - 1)} name={previewColumn!.label} onIndexChange={index => setImagePreview(current => current ? { ...current, index } : null)} onClose={() => setImagePreview(null)} />}{formatTarget && <SelectionFormatModal count={formatTarget.ids.size} sample={formatTarget.sample} initial={formatTarget.initial} onCancel={() => setFormatTarget(null)} onApply={applyFormat} />}<Header title={title || "选款登记"} subtitle={blankLayout?"从文本字段开始，按需添加字段和记录，配置表格功能。":"集中登记候选款的图片、款号、供应商、颜色、材质与定价信息。"} extra={<div className="selection-header-search"><SearchOutlined aria-hidden="true"/><Input.TextArea variant="borderless" className="selection-search-input" aria-label="搜索选款" placeholder="搜索款号、供应商、颜色、材质…" allowClear autoSize={{minRows:1,maxRows:4}} value={searchText} onChange={event=>setSearchText(event.target.value)} /></div>} />
+  return <>{columnWidthTarget && <SelectionColumnWidthModal columns={columnWidthTarget} onCancel={() => setColumnWidthTarget(null)} onApply={width => { const keys = new Set(columnWidthTarget.map(column => column.key)); setColumns(current => current.map(column => keys.has(column.key) ? { ...column, width } : column)); setColumnWidthTarget(null); }}/>} {imagePreview && previewImages.length > 0 && <SelectionImagePreview key={cellId(imagePreview.rowKey, imagePreview.columnKey)} images={previewImages} index={Math.min(imagePreview.index, previewImages.length - 1)} name={previewColumn!.label} onIndexChange={index => setImagePreview(current => current ? { ...current, index } : null)} onClose={() => setImagePreview(null)} />}{formatTarget && <SelectionFormatModal count={formatTarget.ids.size} sample={formatTarget.sample} initial={formatTarget.initial} onCancel={() => setFormatTarget(null)} onApply={applyFormat} />}<PageSearch><div className="selection-header-search"><SearchOutlined aria-hidden="true"/><Input.TextArea variant="borderless" className="selection-search-input" aria-label="搜索选款" placeholder="搜索款号、供应商、颜色、材质…" allowClear autoSize={{minRows:1,maxRows:4}} value={searchText} onChange={event=>setSearchText(event.target.value)} /></div></PageSearch>{title && <Header title={title} subtitle="从文本字段开始，按需添加字段和记录，配置表格功能。"/>}
     <Dropdown trigger={["contextMenu"]} open={!!contextRow && !!contextColumn} onOpenChange={open => { if (!open) setContextCell(null); }} overlayStyle={{ zIndex: 1201 }} menu={cellContextMenu}><span aria-hidden="true" style={{ position: "fixed", left: contextCell?.x || 0, top: contextCell?.y || 0, width: 1, height: 1, pointerEvents: "none" }}/></Dropdown>
     <Card className="selection-card"><div className="selection-toolbar" aria-label={`${title || "选款登记"}表格工具栏`}><Space wrap size={4}>
       {canEdit && <SelectionCollections selectedRows={filteredRows.filter(row => selectedRows.includes(row._key))} blocked={!!dirtyCount || saving || deleting}/>} {canEdit && <SelectionPhotoQr />}<Button type="link" icon={<PlusOutlined />} disabled={!canEdit} onClick={() => add()}>添加一行</Button><Button type="link" danger icon={<DeleteOutlined />} disabled={!canEdit || !selectedRows.length || saving} loading={deleting} onClick={deleteRows}>删除行</Button>
-      <SelectionFieldManager addFieldRef={addFieldRef} columns={columns} visible={visible} canEdit={canEdit} blocked={!!dirtyCount || saving || deleting} onDelete={key=>{setColumns(current=>current.map(column=>column.key===key?{...column,deleted:true}:column));setVisible(current=>current.filter(item=>item!==key));setColumnFilters(current=>Object.fromEntries(Object.entries(current).filter(([fieldKey])=>fieldKey!==key)));if(columnSort?.key===key)setColumnSort(null);if(groupBy===`field:${key}`)setGroupBy("none");setFilterColumn(null);setCellAnchor(null);setFocusedCell(null);setSelectedCells(new Set());setCopiedCells(new Set());setCellTextEditing(false);setFormatTarget(null);}} onRestore={key=>{setColumns(current=>current.map(column=>column.key===key?{...column,deleted:false}:column));setVisible(current=>[...new Set([...current,key])]);}} onReset={()=>setColumns(current=>resetFieldTypes(current))} onVisible={key=>setVisible(current=>current.includes(key)?current.filter(item=>item!==key):[...current,key])} onMove={moveColumn} onSave={field=>{if(imageKeys.has(field.key) && rows.some(row=>(row[field.key]?.length || 0)>(field.imageConfig?.max || 30))){message.error("已有图片超过新上限，请先移除部分图片");return false;}if(field.type && !systemField(field)){const issue=rows.map(row=>fieldValueError(field,imageKeys.has(field.key)?JSON.stringify(row[field.key] || []):valueAt(row,field))).find(Boolean);if(issue){message.error("现有内容与设置不兼容："+issue);return false;}}const exists=columns.some(column=>column.key===field.key);setColumns(current=>exists?current.map(column=>column.key===field.key?field:column):[...current,field]);if(!exists)setVisible(current=>[...current,field.key]);}}/>
+      <SelectionFieldManager addFieldRef={addFieldRef} columns={columns} visible={visible} canEdit={canEdit} blocked={!!dirtyCount || saving || deleting} onDelete={key=>{setColumns(current=>current.map(column=>column.key===key?{...column,deleted:true}:column));setVisible(current=>current.filter(item=>item!==key));setColumnFilters(current=>Object.fromEntries(Object.entries(current).filter(([fieldKey])=>fieldKey!==key)));if(columnSort?.key===key)setColumnSort(null);if(groupBy===`field:${key}`)setGroupBy("none");setFilterColumn(null);setCellAnchor(null);setFocusedCell(null);setSelectedColumnKeys([]);columnSelectionAnchor.current=null;setSelectedCells(new Set());setCopiedCells(new Set());setCellTextEditing(false);setFormatTarget(null);}} onRestore={key=>{setColumns(current=>current.map(column=>column.key===key?{...column,deleted:false}:column));setVisible(current=>[...new Set([...current,key])]);}} onReset={()=>setColumns(current=>resetFieldTypes(current))} onVisible={key=>setVisible(current=>current.includes(key)?current.filter(item=>item!==key):[...current,key])} onMove={moveColumn} onSave={field=>{if(imageKeys.has(field.key) && rows.some(row=>(row[field.key]?.length || 0)>(field.imageConfig?.max || 30))){message.error("已有图片超过新上限，请先移除部分图片");return false;}if(field.type && !systemField(field)){const issue=rows.map(row=>fieldValueError(field,imageKeys.has(field.key)?JSON.stringify(row[field.key] || []):valueAt(row,field))).find(Boolean);if(issue){message.error("现有内容与设置不兼容："+issue);return false;}}const exists=columns.some(column=>column.key===field.key);setColumns(current=>exists?current.map(column=>column.key===field.key?field:column):[...current,field]);if(!exists)setVisible(current=>[...current,field.key]);}}/>
       <SelectionColumnGroupManager columns={columns} visible={visible} groups={columnGroups} onSave={groups => { setColumnGroups(groups); changeColumnGroup(columnGroupId); }}/>
       <SelectionProtectionControl rows={rows} columns={availableColumns} selectedCells={selectedCells} selectedRows={selectedRows} currentRow={editorRow} blocked={!!dirtyCount || saving || deleting} onRefresh={()=>{appliedSnapshot.current="";void data.refetch();}}/>
       <SelectionOrganization columns={availableColumns} group={groupBy} sort={columnSort?`field:${columnSort.key}:${columnSort.direction}`:`${sort}:${direction}`} onGroup={setGroupBy} onSort={value=>{setFollowShared(false);if(value.startsWith("field:")){setColumnSort({key:value.slice(6,value.lastIndexOf(":")),direction:value.endsWith(":asc")?"asc":"desc"});return;}setColumnSort(null);const [nextSort,nextDirection]=value.split(":");setSort(nextSort);setDirection(nextDirection as "asc"|"desc");}}/>
@@ -896,11 +945,11 @@ export function StyleSelectionsPage() {
         if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "a" && !event.altKey) {
           event.preventDefault(); event.stopPropagation();
           setSelectedRows(displayedRows.map(row => row._key));
-          setSelectedCells(selectionAllCells(displayedRows, activeColumns)); setCellTextEditing(false);
+          setSelectedCells(selectionAllCells(displayedRows, activeColumns)); setCellTextEditing(false); setSelectedColumnKeys([]); columnSelectionAnchor.current = null;
           setSelectingCells(false);
         }
-      }} aria-label={`${title || "选款登记"}在线智能表格`} style={{ width: activeColumns.reduce((width, column) => width + column.width, blankLayout?148:96) }}><colgroup><col style={{ width: 48 }} /><col style={{ width: 48 }} />{activeColumns.map((column) => <col key={column.key} style={{ width: column.width }} />)}{blankLayout && <col style={{width:52}}/>}</colgroup><thead><tr><th className="selection-check"><Checkbox aria-label="选择全部可见行" checked={!!displayedRows.length && displayedRows.every(row => selectedRows.includes(row._key))} indeterminate={displayedRows.some(row => selectedRows.includes(row._key)) && !displayedRows.every(row => selectedRows.includes(row._key))} onChange={(event) => setSelectedRows(current => event.target.checked ? [...new Set([...current, ...displayedRows.map(row => row._key)])] : current.filter(key => !pageRowKeys.has(key)))} /></th><th className="selection-index">#</th>{activeColumns.map((column) => <Dropdown key={column.key} trigger={["contextMenu"]} overlayStyle={{ zIndex: 1201 }} menu={{ "aria-label": `列操作：${column.label}`, items: fixedColumnMenu(column), onClick: ({ key }) => changeFixedColumn(column.key, key) }}><th data-selection-column={column.key} data-reorder-axis="column" data-reorder-key={column.key} data-reorder-target={shiftTarget==="column:"+column.key || undefined} title="按住 Shift 拖动调整列顺序" tabIndex={0} aria-label={`选择整列：${column.label}`} onMouseDown={event => axisMouseDown(event, "column", column.key)} onMouseEnter={() => axisMouseEnter("column", column.key)} data-fixed-column={fixedOffsets.has(column.key) || undefined} data-fixed-last={lastFixedColumn === column.key || undefined} style={{ width: column.width, minWidth: column.width, left: fixedOffsets.get(column.key) }}><span>{blankLayout && column.type==="text" && <i className="selection-field-kind" aria-hidden="true">A</i>}{fixedOffsets.has(column.key) && <PushpinOutlined className="selection-column-pin" />}{column.label}{columnSort?.key === column.key ? columnSort.direction === "asc" ? " ↑" : " ↓" : ""}</span><Popover destroyOnHidden trigger="click" open={filterColumn === column.key} onOpenChange={open => { setFilterColumn(open ? column.key : null); if (open) { setFilterRevision(sharedView.data?.data?.revision || 0); setFilterSession(value => value + 1); } }} content={columnFilterEditor(column)}><Button className="selection-column-filter-button" type="text" size="small" aria-label={`筛选${column.label}`} title={`筛选${column.label}`} icon={<FilterOutlined />} style={{ color: columnFilters[column.key] ? "#d3540b" : undefined }} onMouseDown={event => event.stopPropagation()} /></Popover><i className="selection-column-resize" aria-label={`调整 ${column.label} 列宽`} onMouseDown={(event) => { event.preventDefault(); event.stopPropagation(); setResizingColumn({ key: column.key, startX: event.clientX, startWidth: column.width }); }} /></th></Dropdown>)}{blankLayout && <th className="selection-add-field"><Button type="text" aria-label="添加字段" icon={<PlusOutlined/>} disabled={!canEdit} onClick={()=>addFieldRef.current?.add()}/></th>}</tr></thead><tbody>
+      }} aria-label={`${title || "选款登记"}在线智能表格`} style={{ width: activeColumns.reduce((width, column) => width + column.width, blankLayout?148:96) }}><colgroup><col style={{ width: 48 }} /><col style={{ width: 48 }} />{activeColumns.map((column) => <col key={column.key} style={{ width: column.width }} />)}{blankLayout && <col style={{width:52}}/>}</colgroup><thead><tr><th className="selection-check"><Checkbox aria-label="选择全部可见行" checked={!!displayedRows.length && displayedRows.every(row => selectedRows.includes(row._key))} indeterminate={displayedRows.some(row => selectedRows.includes(row._key)) && !displayedRows.every(row => selectedRows.includes(row._key))} onChange={(event) => setSelectedRows(current => event.target.checked ? [...new Set([...current, ...displayedRows.map(row => row._key)])] : current.filter(key => !pageRowKeys.has(key)))} /></th><th className="selection-index">#</th>{activeColumns.map((column) => <Dropdown key={column.key} trigger={["contextMenu"]} overlayStyle={{ zIndex: 1201 }} menu={{ "aria-label": `列操作：${column.label}`, items: columnMenuItems(column), onClick: ({ key }) => handleColumnAction(column.key, key) }}><th data-selection-column={column.key} data-reorder-axis="column" data-reorder-key={column.key} data-reorder-target={shiftTarget==="column:"+column.key || undefined} data-column-selected={selectedColumnKeys.includes(column.key) || undefined} aria-selected={selectedColumnKeys.includes(column.key)} title="拖动或 Shift 点选多列；按住 Shift 拖动调整列顺序" tabIndex={0} aria-label={`选择整列：${column.label}`} onMouseDown={event => axisMouseDown(event, "column", column.key)} onMouseEnter={() => axisMouseEnter("column", column.key)} data-fixed-column={fixedOffsets.has(column.key) || undefined} data-fixed-last={lastFixedColumn === column.key || undefined} style={{ width: column.width, minWidth: column.width, left: fixedOffsets.get(column.key) }}><span>{blankLayout && column.type==="text" && <i className="selection-field-kind" aria-hidden="true">A</i>}{fixedOffsets.has(column.key) && <PushpinOutlined className="selection-column-pin" />}{column.label}{columnSort?.key === column.key ? columnSort.direction === "asc" ? " ↑" : " ↓" : ""}</span><Popover destroyOnHidden trigger="click" open={filterColumn === column.key} onOpenChange={open => { setFilterColumn(open ? column.key : null); if (open) { setFilterRevision(sharedView.data?.data?.revision || 0); setFilterSession(value => value + 1); } }} content={columnFilterEditor(column)}><Button className="selection-column-filter-button" type="text" size="small" aria-label={`筛选${column.label}`} title={`筛选${column.label}`} icon={<FilterOutlined />} style={{ color: columnFilters[column.key] ? "#d3540b" : undefined }} onMouseDown={event => event.stopPropagation()} /></Popover><i className="selection-column-resize" aria-label={`调整 ${column.label} 列宽`} onMouseDown={(event) => { event.preventDefault(); event.stopPropagation(); setResizingColumn({ key: column.key, startX: event.clientX, startWidth: column.width }); }} /></th></Dropdown>)}{blankLayout && <th className="selection-add-field"><Button type="text" aria-label="添加字段" icon={<PlusOutlined/>} disabled={!canEdit} onClick={()=>addFieldRef.current?.add()}/></th>}</tr></thead><tbody>
         {data.isLoading && <tr><td colSpan={activeColumns.length + (blankLayout ? 3 : 2)} className="selection-placeholder">正在读取选款登记…</td></tr>}{!data.isLoading && !filteredRows.length && <tr><td colSpan={activeColumns.length + (blankLayout ? 3 : 2)} className="selection-placeholder"><Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={title ? "暂无数据，点击添加一行开始录入" : "暂无选款登记，点击添加一行开始录入"} /></td></tr>}
         {grouped.map((group) => <Fragment key={group.label || "all"}>{group.label && <tr className="selection-group-row"><td colSpan={activeColumns.length + (blankLayout ? 3 : 2)}>{group.label}<span>{group.rows.length} 条</span></td></tr>}{group.rows.map((row) => <CachedSelectionRow key={row._key} dependencies={rowRenderDependencies(row)} render={() => <tr key={row._key} data-selection-row={row._key}><td className="selection-check"><Checkbox aria-label={`选择 ${row.xutiStyleNo || "未填写序缇款号"}`} checked={selectedRows.includes(row._key)} onChange={(event) => setSelectedRows((current) => event.target.checked ? [...current, row._key] : current.filter((key) => key !== row._key))} /></td><td data-reorder-axis="row" data-reorder-key={row._key} data-reorder-target={shiftTarget==="row:"+row._key || undefined} title="按住 Shift 拖动调整行顺序" className={`selection-index selection-row-drag ${selectedRows.includes(row._key) ? "selection-axis-active" : ""}`} tabIndex={0} aria-label={`选择第${rowNumberByKey.get(row._key)}行`} onMouseDown={event => liveInteractions.current.axisMouseDown(event, "row", row._key)} onMouseEnter={() => liveInteractions.current.axisMouseEnter("row", row._key)} onDragOver={(event: DragEvent) => event.preventDefault()} onDrop={() => { liveInteractions.current.dropRow(row._key); }}><span className="selection-row-number">{rowNumberByKey.get(row._key)}</span><span className="selection-row-reorder" title="拖动调整行顺序" draggable onMouseDown={event => event.stopPropagation()} onDragStart={() => setDraggedRow(row._key)} onDragEnd={() => setDraggedRow(null)}>⋮⋮</span></td>{activeColumns.map((column) => renderCell(row, column))}{blankLayout && <td className="selection-add-field-space"/>}</tr>}/>)}</Fragment>)}
-      {blankLayout && <tr className="selection-add-record"><td className="selection-check"><Button type="text" aria-label="添加一行" icon={<PlusOutlined/>} disabled={!canEdit} onClick={()=>add()}/></td><td className="selection-index"/><td colSpan={activeColumns.length+1}/></tr>}</tbody></table>{blankLayout && rows.length===3 && activeColumns.length===1 && rows.every(row=>!valueAt(row,activeColumns[0])) && <div className="selection-blank-hint">点击单元格开始录入<br/>通过「＋」添加字段和行</div>}</div><div className="selection-bulk-add"><Select aria-label="批量添加行数" value={addCount} onChange={setAddCount} options={[10, 20, 50, 100, 200].map(value => ({ value, label: `${value} 行` }))} /><Button icon={<PlusOutlined />} disabled={!canEdit} onClick={() => add(addCount)}>添加 {addCount} 行</Button><span>空白行自动保存</span><Pagination className="selection-pagination" current={currentPage} pageSize={pageSize} total={allDisplayedRows.length} pageSizeOptions={pageSizes} showSizeChanger showTotal={total => `共 ${total} 条`} onChange={(nextPage, nextPageSize) => { if (nextPageSize !== pageSize) { setPageSize(nextPageSize); setPage(1); } else setPage(nextPage); }} /><SelectionStatistics values={statisticsValues}/></div><div className="selection-bottom-bar"><span>拖动可选择多个单元格后填色；Ctrl/Cmd+C 复制、Ctrl/Cmd+V 粘贴；点击或拖动行号/表头选择整行整列；按住 Shift 拖动行号或表头调整行列顺序。</span><span>{canEdit ? "图片支持网址、本地上传和粘贴。" : "当前账号仅可查看。"}</span></div></Card></>;
+      {blankLayout && <tr className="selection-add-record"><td className="selection-check"><Button type="text" aria-label="添加一行" icon={<PlusOutlined/>} disabled={!canEdit} onClick={()=>add()}/></td><td className="selection-index"/><td colSpan={activeColumns.length+1}/></tr>}</tbody></table>{blankLayout && rows.length===3 && activeColumns.length===1 && rows.every(row=>!valueAt(row,activeColumns[0])) && <div className="selection-blank-hint">点击单元格开始录入<br/>通过「＋」添加字段和行</div>}</div><div className="selection-bulk-add"><Select aria-label="批量添加行数" value={addCount} onChange={setAddCount} options={[10, 20, 50, 100, 200].map(value => ({ value, label: `${value} 行` }))} /><Button icon={<PlusOutlined />} disabled={!canEdit} onClick={() => add(addCount)}>添加 {addCount} 行</Button><span>空白行自动保存</span><Pagination className="selection-pagination" current={currentPage} pageSize={pageSize} total={allDisplayedRows.length} pageSizeOptions={pageSizes} showSizeChanger showTotal={total => `共 ${total} 条`} onChange={(nextPage, nextPageSize) => { if (nextPageSize !== pageSize) { setPageSize(nextPageSize); setPage(1); } else setPage(nextPage); }} /><SelectionStatistics values={statisticsValues}/></div><div className="selection-bottom-bar"><span>拖动可选择多个单元格后填色；Ctrl/Cmd+C 复制、Ctrl/Cmd+V 粘贴；点击或拖动行号/表头选择整行整列；Shift 点选表头可选连续多列，右键固定或设置列宽；Shift 拖动可调序。</span><span>{canEdit ? "图片支持网址、本地上传和粘贴。" : "当前账号仅可查看。"}</span></div></Card></>;
 }

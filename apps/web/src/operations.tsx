@@ -1,3 +1,4 @@
+import { PageSearch } from "./page-search";
 import { Table, exportTableData } from "./data-table";
 import { InventoryImport } from "./inventory-import";
 import { InventoryReferenceValue } from "./inventory-reference-value";
@@ -277,13 +278,13 @@ function InventoryBalances() {
       <Card>
         <div className="table-toolbar">
           <Space wrap>
-            <Input.Search
+            <PageSearch><Input.Search
               placeholder="商品编码 / 货号 / 款号 / 条码"
               onSearch={(v) => {
                 setSearch(v);
                 q.setPage(1);
               }}
-            />
+            /></PageSearch>
             <Select
               aria-label="筛选库存仓库"
               style={{ width: 180 }}
@@ -1352,6 +1353,7 @@ export function SuggestionsPage() {
   );
 }
 export function ProductDetail() {
+  const [activeTab, setActiveTab] = useState("overview");
   const canInventory = useCan("inventory.read"),
     canPurchase = useCan("purchase.read"),
     canAudit = useCan("audit.read");
@@ -1367,6 +1369,8 @@ export function ProductDetail() {
       <Header title={p.name} subtitle={"款号 " + p.styleNo} />
       <Card>
         <Tabs
+          activeKey={activeTab}
+          onChange={setActiveTab}
           items={[
             {
               key: "overview",
@@ -1391,7 +1395,7 @@ export function ProductDetail() {
               key: "skus",
               label: "SKU",
               children: (
-                <MasterPage resource="skus" filter={{ productId: id }} />
+                <MasterPage resource="skus" filter={{ productId: id }} searchActive={activeTab === "skus"}/>
               ),
             },
             {

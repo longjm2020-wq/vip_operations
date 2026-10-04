@@ -50,6 +50,7 @@ import {
 } from "@ant-design/icons";
 import { api, queryClient, setCsrf } from "./api";
 import { UserContext, Row } from "./shared";
+import { PageSearchContext } from "./page-search";
 import { AccountMenu } from "./account-menu";
 import { WorkspaceMenuIcon } from "./workspace-menu-icon";
 const MasterPage = React.lazy(() => import("./master").then(module => ({ default: module.MasterPage })));
@@ -194,6 +195,15 @@ function ColorSizeMappingsPage() {
 function Workspace({ user }: { user: Row }) {
   const location = useLocation(),
     ui = useUi();
+  const [searchHost, setSearchHost] = useState<HTMLDivElement | null>(null);
+  React.useEffect(() => {
+    const header = searchHost?.closest<HTMLElement>(".topbar");
+    if (!header) return;
+    const publishHeight = () => header.parentElement?.style.setProperty("--workspace-topbar-height", `${header.getBoundingClientRect().height}px`);
+    const observer = new ResizeObserver(publishHeight);
+    observer.observe(header); publishHeight();
+    return () => observer.disconnect();
+  }, [searchHost]);
   const originalItems = [
     { key: "/analytics/compass", label: "经营分析", icon: <DatabaseOutlined />, permission: "analytics.read" },
     { key: "/analytics/competitors", label: "竞品分析", icon: <DatabaseOutlined />, permission: "analytics.read" },
@@ -430,7 +440,7 @@ function Workspace({ user }: { user: Row }) {
       ? {href:selected,label:`返回${activeWorkspace.children.find(child=>child.key===selected)!.label}`}
       : undefined;
   return (
-    <UserContext.Provider value={user}>
+    <PageSearchContext.Provider value={searchHost}><UserContext.Provider value={user}>
       <Layout className="workspace">
         <Layout.Sider width={200} collapsed={ui.collapsed} className="sidebar">
           <Link
@@ -491,6 +501,7 @@ function Workspace({ user }: { user: Row }) {
                 </div>
               ) : null}
             </nav>
+            <div ref={setSearchHost} className="topbar-search-host" role="search" aria-label="当前页面搜索"/>
             <Space className="topbar-actions" size={10}>
               <Link to="/my-workspace" className="personal-workspace-entry" aria-current={location.pathname === "/my-workspace" ? "page" : undefined}><HomeOutlined aria-hidden="true" /> 我的工作台</Link>
               <Link
@@ -515,7 +526,7 @@ function Workspace({ user }: { user: Row }) {
               />
             </Space>
           </Layout.Header>
-          <Layout.Content className="content">
+          <Layout.Content className={`content${location.pathname.startsWith("/style-selections") || tableDetail ? " selection-workspace-content" : ""}`}>
             <Routes>
               <Route path="/my-workspace" element={<PersonalWorkspacePage key={user.id} />} />
               <Route path="/settings/ai" element={<CompassAISettingsPage />} />
@@ -617,7 +628,7 @@ function Workspace({ user }: { user: Row }) {
           </Layout.Content>
         </Layout>
       </Layout>
-    </UserContext.Provider>
+    </UserContext.Provider></PageSearchContext.Provider>
   );
 }
 function Root() {

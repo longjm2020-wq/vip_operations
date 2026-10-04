@@ -1,3 +1,4 @@
+import { PageSearch } from "./page-search";
 import { PurchaseDrawer } from "./supply-orders";
 import { downloadSheet } from "./download-sheet";
 import { useQualificationOcr } from "./qualification-ocr";
@@ -1508,7 +1509,7 @@ export function SupplyProducts({ internal = false }: { internal?: boolean }) {
             }}
           />
         )}
-        <Input.Search
+        <PageSearch><Input.Search
           style={{ width: 340 }}
           value={styles}
           placeholder="单个款号，多个款号用 ; 或 ；分隔"
@@ -1518,7 +1519,7 @@ export function SupplyProducts({ internal = false }: { internal?: boolean }) {
             setPage(1);
             setSelected([]);
           }}
-        />
+        /></PageSearch>
         <Select
           value={status}
           options={[

@@ -1,3 +1,4 @@
+import { PageSearch } from "./page-search";
 import { useEffect, useRef, useState } from "react";
 import {
   Alert,
@@ -583,7 +584,7 @@ export function CompassAnalyticsPage() {
             setPage(1);
           }}
         />
-        <Tooltip title="单个编码支持模糊搜索；多个编码用英文逗号、中文逗号或换行隔开，按完整编码批量查询，最多100项。">
+        <PageSearch><Tooltip title="单个编码支持模糊搜索；多个编码用英文逗号、中文逗号或换行隔开，按完整编码批量查询，最多100项。">
           <div className="compass-batch-search">
             <SearchOutlined aria-hidden="true" />
             <Input.TextArea
@@ -596,7 +597,7 @@ export function CompassAnalyticsPage() {
               onChange={(e) => setSearch(e.target.value)}
             />
           </div>
-        </Tooltip>
+        </Tooltip></PageSearch>
       </div>
       {searchError && <Alert type="warning" title={searchError} showIcon />}
       <Tabs
