@@ -329,6 +329,10 @@ async function buildPlan(tx: Tx, c: Context, body: Input, lock = false) {
         let value = from.custom
           ? (row.extraFields?.[from.key] ?? "")
           : row[from.key];
+        // PostgreSQL DATE is decoded as an ISO timestamp by camel(), while
+        // sheets and the date validator use the original calendar date.
+        if (!from.custom && from.key === "registrationBatch" && value)
+          value = String(value).slice(0, 10);
         const fromImage =
             (from.type || from.fallbackType) === "image" ||
             ["images", "labelImages"].includes(from.key),

@@ -191,6 +191,15 @@ try {
   const table = await ok(owner, "/project-tables", "POST", {
     name: "私有表格",
   });
+  assert.equal(
+    (await ok(owner, `/style-selections?tableId=${table.id}`)).length,
+    0,
+    "新建表格必须为空，权限检查数据由测试显式添加",
+  );
+  for (let index = 1; index <= 3; index++)
+    await ok(owner, `/style-selections?tableId=${table.id}`, "POST", {
+      xutiStyleNo: `LIBRARY-FIXTURE-${index}`,
+    });
   for (const item of [sop, project, table])
     assert.equal(item.visibility, "PRIVATE");
   assert.ok(

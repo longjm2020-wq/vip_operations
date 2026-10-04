@@ -188,6 +188,7 @@ try {
   const photo = { id: "photo-1", url: upload.url, color: "米白色" };
   const source = await ok("/style-selections", "POST", {
     xutiStyleNo: "TRANSMIT-01",
+    registrationBatch: "2026-09-28",
     material: "100%山羊绒",
     color: "米白色",
     images: [photo],
@@ -200,7 +201,15 @@ try {
   });
   const body = {
     rowIds: [source.id],
-    fields: [...selectionBaseFields, custom, imageField],
+    fields: [
+      ...selectionBaseFields.map((field) =>
+        field.key === "registrationBatch"
+          ? { ...field, type: "date" as const }
+          : field,
+      ),
+      custom,
+      imageField,
+    ],
     target: target.id,
     mappings: [],
     copyMissingFields: true,
@@ -227,6 +236,7 @@ try {
   assert.equal(locked.migrationLocked, true);
   assert.equal(locked.migrationTargetWorkspace, target.id);
   assert.equal(locked.migrationTargetRowId, copied.id);
+  assert.equal(copied.registrationBatch, "2026-09-28");
   assert.equal(copied.extraFields[custom.key], "同格\n多行备注");
   assert.equal(copied.images[0].url, upload.url + "?tableId=" + target.id);
   assert.equal(
