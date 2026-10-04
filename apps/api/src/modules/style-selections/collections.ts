@@ -1,4 +1,5 @@
 import { selectionUrl } from "../../../../../packages/database/src/selection-scope.js";
+import { isArchive, mirrorArchiveRow } from "./archive.js";
 import { randomBytes, randomUUID } from "node:crypto";
 import { insertImage, readStoredImage } from "./image-storage.js";
 import { z } from "zod";
@@ -142,6 +143,7 @@ export async function editItem(c: Context, value: string, itemId: string, input:
   if(body.action==="replace")await protection.collectionRights(db,c,[body.targetId],true);
   else await protection.preflight(c,itemId,{xutiStyleNo:body.xutiStyleNo || null});
   return command(c,"selection-collections/edit-item/"+value+"/"+itemId,body,async tx=>{
+    if(await isArchive(tx))await rows(tx,"SELECT pg_advisory_xact_lock(91002)::text");
     const policy=await protection.writeLocks(tx,c);await protection.shareRights(tx,c,value,true,policy);
     const share=await internal(tx,value);version(share,body.revision);
     if(share.closed)fail("INVALID_STATE","收集表已关闭，请先重新生成分享链接",409);
@@ -154,6 +156,7 @@ export async function editItem(c: Context, value: string, itemId: string, input:
       const security=await protection.assertWrite(tx,c,source!,{xutiStyleNo:body.xutiStyleNo || null},policy);
       await rows(tx,"UPDATE style_selections SET cell_owners=$2::jsonb,claimed_by=coalesce($3::bigint,claimed_by),updated_by=$4::bigint WHERE id=$1::bigint",itemId,security.cellOwners,security.claimedBy || null,c.actor.id);
       const after=await one(tx,"UPDATE style_selections SET xuti_style_no=$2,version=version+1,updated_at=now() WHERE id=$1::bigint RETURNING *",itemId,body.xutiStyleNo || null);
+      await mirrorArchiveRow(tx,c,after!);
       await audit(tx,c,"UPDATE","style-selection",itemId,source,after,`更正收集表 ${value} 的序缇款号`);
       await rows(tx,"UPDATE selection_collection_items SET xuti_style_no=$3,source_version=$4,status=CASE WHEN status='SUBMITTED' THEN 'REJECTED' ELSE status END,feedback='内部已更新序缇款号，请核对并重新提交' WHERE collection_id=$1::bigint AND selection_id=$2::bigint",value,itemId,body.xutiStyleNo,after!.version);
     } else {
@@ -261,6 +264,7 @@ export async function review(c:Context,value:string,input:unknown) {
   const body=parse(z.object({itemId:id.optional(),action:z.enum(["approve","reject","close","renew"]),revision:z.number().int(),reason:z.string().trim().max(1000).default(""),days:z.union([z.literal(7),z.literal(30),z.literal(0)]).optional()}).strict(),input);
   if(body.action!=="close" || !protection.protectionAdmin(c.actor))await protection.shareRights(db,c,value,body.action!=="close");
   return command(c,"selection-collections/review/"+value,body,async tx=>{
+    if(await isArchive(tx))await rows(tx,"SELECT pg_advisory_xact_lock(91002)::text");
     const policy=await protection.writeLocks(tx,c);
     if(body.action!=="close" || !protection.protectionAdmin(c.actor))await protection.shareRights(tx,c,value,body.action!=="close",policy);
     const share=await internal(tx,value);version(share,body.revision);
@@ -286,6 +290,7 @@ export async function review(c:Context,value:string,input:unknown) {
           const security=await protection.assertWrite(tx,c,source!,patch,policy);
           await rows(tx,"UPDATE style_selections SET cell_owners=$2::jsonb,claimed_by=coalesce($3::bigint,claimed_by),updated_by=$4::bigint WHERE id=$1::bigint",item.selection_id,security.cellOwners,security.claimedBy || null,c.actor.id);
           const after=await one(tx,"UPDATE style_selections SET supplier_style_no=$2,color=$3,size_range=$4,material=$5,supply_price_excl_tax=$6::numeric,selling_points=$7,reorder_days=$8,collection_inventory=$9::jsonb,images=$10::jsonb,version=version+1,updated_at=now() WHERE id=$1::bigint RETURNING *",item.selection_id,info.supplierStyleNo || null,info.color || null,info.sizeRange || null,info.material || null,info.supplyPriceExclTax,info.sellingPoints,info.reorderDays,JSON.stringify(info.inventory),JSON.stringify(images));
+          await mirrorArchiveRow(tx,c,after!);
           await audit(tx,c,"UPDATE","style-selection",item.selection_id,source,after,"确认外部产品信息收集表");
           await rows(tx,"UPDATE selection_collection_items SET status='APPROVED' WHERE collection_id=$1::bigint AND selection_id=$2::bigint",value,item.selection_id);
         }

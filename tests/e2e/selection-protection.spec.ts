@@ -302,7 +302,9 @@ test("keeps fixed grouping / sorting choices and lets users opt into other field
   ).toContainText("STYLE-3");
   await page.reload();
   await page.getByLabel("分组方式", { exact: true }).click();
-  await expect(page.getByText("按颜色分组", { exact: true })).toBeVisible();
+  await expect(
+    page.locator(".ant-select-dropdown:visible").getByText("按颜色分组", { exact: true }),
+  ).toBeVisible();
 });
 test("new system fields use server identities and immutable numbering with configurable presentation", async ({
   page,

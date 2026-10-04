@@ -103,9 +103,9 @@ export async function testInternalCollaborationPermissions(h: Record<string, any
   const table = await ownRequest("/project-tables", "POST", { name: "内部协作表格" });
   for (const content of [sop, project, table]) assert.equal(content.visibility, "PRIVATE");
   const path = `/style-selections?tableId=${table.id}`;
-  assert.equal((await ownRequest(path)).length, 3);
+  assert.equal((await ownRequest(path)).length, 0, "new tables start empty");
   const row = await ownRequest(path, "POST", { xutiStyleNo: "COLLAB-ONLY" });
-  assert.equal((await ownRequest(`/style-selections/sync?tableId=${table.id}`, "POST", {})).data.length, 4);
+  assert.equal((await ownRequest(`/style-selections/sync?tableId=${table.id}`, "POST", {})).data.length, 1);
   const share = await ownRequest(`/selection-collections?tableId=${table.id}`, "POST", {
     title: "独立表格收集", ids: [row.id], days: 7,
   });

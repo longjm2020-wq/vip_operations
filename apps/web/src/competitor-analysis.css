@@ -382,6 +382,12 @@
   color: #44342b;
   margin-right: 10px;
 }
+.competitor-crawl-progress { margin-top: 10px; }
+.competitor-crawl-counts { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; color: #927b6e; }
+.competitor-crawl-counts b { font-weight: 500; }
+.competitor-browser-login { display: inline-flex; align-items: center; gap: 2px; margin-left: 10px; flex-wrap: wrap; }
+.competitor-browser-login .ant-tag { margin: 0; }
+.competitor-page .page-heading-copy { flex-wrap: wrap; }
 .competitor-crawl-job small {
   display: block;
   margin-top: 8px;

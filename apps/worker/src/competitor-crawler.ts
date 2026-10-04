@@ -19,11 +19,29 @@ export class CrawlIssue extends Error {
   constructor(
     public readonly verification: boolean,
     message: string,
+    public readonly login = false,
   ) {
     super(message);
   }
 }
 async function guard(page: Page) {
+  const url = new URL(page.url());
+  if (
+    url.hostname === "passport.vip.com" ||
+    (await page
+      .getByText("扫码登录", { exact: true })
+      .filter({ visible: true })
+      .count()) ||
+    (await page
+      .getByText("账户登录", { exact: true })
+      .filter({ visible: true })
+      .count())
+  )
+    throw new CrawlIssue(
+      false,
+      "唯品会要求登录，后台采集已停止；保留上次有效数据。请在本机唯品会浏览器登录后补充数据，本机登录不会自动授权后台服务器",
+      true,
+    );
   if (
     (await page.locator('input[placeholder*="验证码"]:visible').count()) ||
     /验证|captcha/i.test(new URL(page.url()).pathname) ||
@@ -334,6 +352,7 @@ export async function processCrawlJob(
     );
   } catch (error) {
     const verification = error instanceof CrawlIssue && error.verification;
+    const login = error instanceof CrawlIssue && error.login;
     const note = signal?.aborted
       ? "采集进程正在重启，已保留完成的数据，可重新采集"
       : timedOut
@@ -345,11 +364,13 @@ export async function processCrawlJob(
       "UPDATE competitor_crawl_jobs SET status=$3,note=$4,completed_at=now() WHERE id=$1::bigint AND claim_token=$2 AND status='RUNNING'",
       job.id,
       token,
-      verification
-        ? "VERIFICATION_REQUIRED"
-        : capturedCount
-          ? "PARTIAL"
-          : "FAILED",
+      login
+        ? "LOGIN_REQUIRED"
+        : verification
+          ? "VERIFICATION_REQUIRED"
+          : capturedCount
+            ? "PARTIAL"
+            : "FAILED",
       note,
     );
   } finally {

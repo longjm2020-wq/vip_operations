@@ -1,5 +1,6 @@
 import { selectionScope, selectionUrl } from "../../../../../packages/database/src/selection-scope.js";
-import { tableSelectionPermissions } from "../../../../../packages/contracts/src/table-permissions.js";
+import { archiveSelectionPermissions, tableSelectionPermissions } from "../../../../../packages/contracts/src/table-permissions.js";
+import { isArchive } from "./archive.js";
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import {
@@ -70,7 +71,8 @@ const nonempty = (value: unknown) =>
 export function access(policy: Policy, actor: Actor, raw: Row, key: string) {
   const row = camel(raw),
     value = key.startsWith("custom:") ? row.extraFields?.[key] : row[key];
-  return selectionCellAccess(policy.settings, actor, row, key, nonempty(value));
+  const level = selectionCellAccess(policy.settings, actor, row, key, nonempty(value));
+  return row.migrationLocked && level === "edit" ? "read" : level;
 }
 export function project(policy: Policy, actor: Actor, raw: Row): Row {
   const row = camel(raw),
@@ -102,13 +104,7 @@ export function project(policy: Policy, actor: Actor, raw: Row): Row {
     ...row,
     cellAccess,
     hiddenCells,
-    defaultCellAccess: selectionCellAccess(
-      policy.settings,
-      actor,
-      row,
-      "custom:unconfigured",
-      false,
-    ),
+    defaultCellAccess: access(policy,actor,row,"custom:unconfigured"),
     policyRevision: policy.revision,
   };
 }
@@ -169,6 +165,7 @@ export function assertFields(
   keys: string[],
   edit = true,
 ) {
+  if(edit && camel(row).migrationLocked) fail("MIGRATION_LOCKED","此行已跨表传送，点击 # 列的小铅笔释放后再编辑",409);
   if (
     keys.some((key) =>
       edit
@@ -349,7 +346,7 @@ export async function users(c: Context) {
   return rows(
     db,
     "SELECT DISTINCT u.id,u.username,u.display_name FROM users u JOIN user_roles ur ON ur.user_id=u.id JOIN role_permissions rp ON rp.role_id=ur.role_id JOIN permissions p ON p.id=rp.permission_id WHERE u.status='ACTIVE' AND p.code=$1 ORDER BY u.id",
-    selectionScope.getStore() ? "project.read" : "selection.read",
+    await isArchive(db) ? "product.read" : selectionScope.getStore() ? "project.read" : "selection.read",
   );
 }
 export async function saveSettings(c: Context, input: unknown) {
@@ -629,7 +626,7 @@ export async function delegatedShare(tx: Tx, share: Row, p?: Policy) {
     username: user.username,
     displayName: user.display_name,
     permissions: selectionScope.getStore()
-      ? tableSelectionPermissions(permissions.map((row) => row.code))
+      ? (await isArchive(tx) ? archiveSelectionPermissions : tableSelectionPermissions)(permissions.map((row) => row.code))
       : permissions.map((row) => row.code),
     roleCodes: roles.map((row) => row.code),
   };

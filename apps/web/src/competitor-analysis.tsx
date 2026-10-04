@@ -46,6 +46,7 @@ import {
 import { competitorMaterialDisplay } from "./competitor-material-display";
 import { captureBookmarkUrl } from "./competitor-capture";
 import { readCompetitorFile } from "./competitor-import";
+import {CompetitorBrowserLogin} from "./competitor-browser-login";
 import { downloadSheet } from "./download-sheet";
 import {
   CompetitorCrawlPanel,
@@ -264,11 +265,6 @@ function CaptureGuide({
   onClose: () => void;
   brands: CompetitorBrand[];
 }) {
-  const linkRef = useRef<HTMLAnchorElement>(null);
-  useEffect(() => {
-    if (open && linkRef.current)
-      linkRef.current.setAttribute("href", captureBookmarkUrl());
-  }, [open]);
   return (
     <Drawer title="采集唯品会公开商品" open={open} onClose={onClose} size={520}>
       <p>
@@ -276,7 +272,7 @@ function CaptureGuide({
         文件，不读取账号信息。
       </p>
       <a
-        ref={linkRef}
+        ref={element=>{if(element)element.setAttribute("href",captureBookmarkUrl());}}
         className="competitor-bookmark"
         draggable
         onClick={(e) => {
@@ -700,6 +696,7 @@ export function CompetitorAnalysisPage() {
       <Header
         title="竞品分析"
         subtitle="唯品会 · 我的品牌与竞品对比"
+        subtitleExtra={brands[0] && <CompetitorBrowserLogin sourceUrl={brands.find(brand=>brand.isOwn)?.searchUrl || brands[0].searchUrl}/>}
         extra={
           <>
             <Button

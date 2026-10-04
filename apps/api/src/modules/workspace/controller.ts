@@ -44,7 +44,7 @@ export class PersonalWorkspaceController {
     requirePermission(request.actor, config.read);
     const data = await rows(
       db,
-      `SELECT t.id,t.name,t.visibility,t.version,t.created_at,u.display_name AS owner_name FROM public.${config.table} t JOIN public.users u ON u.id=t.${config.owner} WHERE t.${config.owner}=$1::bigint AND t.deleted_at IS NULL ORDER BY t.id DESC LIMIT 21 OFFSET $2`,
+      `SELECT t.id,t.name,t.visibility,t.version,t.created_at,u.display_name AS owner_name FROM public.${config.table} t JOIN public.users u ON u.id=t.${config.owner} WHERE t.${config.owner}=$1::bigint AND t.deleted_at IS NULL ${kind === "table" ? "AND t.system_key IS NULL" : ""} ORDER BY t.id DESC LIMIT 21 OFFSET $2`,
       request.actor.id,
       (page - 1) * 20,
     );

@@ -1,5 +1,6 @@
 import { captureVipPage } from "../../../packages/contracts/src/competitor-capture";
 export { captureVipPage } from "../../../packages/contracts/src/competitor-capture";
-export function captureBookmarkUrl() {
-  return `javascript:(()=>{try{const collect=${captureVipPage.toString()};const data=collect({href:location.href,observedAt:new Date().toISOString()});const u=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:'application/json'}));const a=document.createElement('a');a.href=u;a.download=data.brandName+'-'+data.kind+'-'+Date.now()+'.json';a.click();setTimeout(()=>URL.revokeObjectURL(u),1000);}catch(e){alert(e.message);}})()`;
+export function captureBookmarkUrl(reportOrigin?: string) {
+  const report = reportOrigin ? `if(['category.vip.com','detail.vip.com','passport.vip.com'].includes(location.hostname)&&window.opener){const signedIn=!!document.querySelector('a[href="//myi.vip.com/index.html"],a[href="https://myi.vip.com/index.html"]');window.opener.postMessage({kind:'XUTI_VIP_BROWSER_LOGIN',status:signedIn?'LOGGED_IN':location.hostname==='passport.vip.com'?'LOGGED_OUT':'UNKNOWN'},${JSON.stringify(reportOrigin)});}if(location.hostname==='passport.vip.com'){alert('请先在唯品会完成登录，再打开品牌销量榜采集。');return;}` : "";
+  return `javascript:(()=>{try{${report}const collect=${captureVipPage.toString()};const data=collect({href:location.href,observedAt:new Date().toISOString()});const u=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:'application/json'}));const a=document.createElement('a');a.href=u;a.download=data.brandName+'-'+data.kind+'-'+Date.now()+'.json';a.click();setTimeout(()=>URL.revokeObjectURL(u),1000);}catch(e){alert(e.message);}})()`;
 }

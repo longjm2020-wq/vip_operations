@@ -43,7 +43,7 @@ export function normalizeSelection(row: Row): Row {
 export function mergeSelectionSave(current: Row, sent: Row, saved: Row): Row {
   const next: Row = { ...saved, _key: current._key };
   for (const key of Object.keys(current)) {
-    if (["id", "updatedAt", "createdAt", "version", "_key", "cellAccess", "hiddenCells", "defaultCellAccess", "policyRevision", "claimedBy"].includes(key)) continue;
+    if (["id", "updatedAt", "createdAt", "version", "_key", "cellAccess", "hiddenCells", "defaultCellAccess", "policyRevision", "claimedBy", "migrationLocked", "migrationTargetWorkspace", "migrationTargetRowId", "migratedAt", "productId"].includes(key)) continue;
     if(saved.cellAccess?.[key] && saved.cellAccess[key]!=="edit")continue;
     if(["extraFields","cellColors","cellAlignments","cellVerticalAlignments","cellTextColors","cellNumberFormats"].includes(key)) {
       const values={...(saved[key] || {})};

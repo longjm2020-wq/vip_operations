@@ -5,6 +5,7 @@ import {
   Button,
   Form,
   Modal,
+  Progress,
   Select,
   Space,
   Switch,
@@ -13,6 +14,7 @@ import {
 import { api } from "./api";
 import { when } from "./shared";
 import type { CompetitorBrand } from "../../../packages/contracts/src/competitor-analysis";
+import { competitorCrawlProgress } from "../../../packages/contracts/src/competitor-crawl-progress";
 
 export type CompetitorCrawlStatus = {
   settings: { enabled: boolean; dailyHour: number; version: number };
@@ -35,6 +37,7 @@ const labels: Record<string, [string, string]> = {
   PARTIAL: ["部分完成", "warning"],
   FAILED: ["未完成", "error"],
   VERIFICATION_REQUIRED: ["需要验证", "warning"],
+  LOGIN_REQUIRED: ["需要登录", "warning"],
 };
 export function CompetitorCrawlPanel({
   data,
@@ -112,17 +115,43 @@ export function CompetitorCrawlPanel({
                 "待首次采集",
                 "default",
               ];
+              const progress = competitorCrawlProgress(job);
+              const strokeColor =
+                job?.status === "FAILED"
+                  ? "#ff4d4f"
+                  : job?.status === "READY"
+                    ? "#527761"
+                    : "#f47b38";
               return (
                 <div className="competitor-crawl-job" key={brand.id}>
                   <strong>{brand.name}</strong>
                   <Tag color={color}>{label}</Tag>
+                  <div className="competitor-crawl-progress">
+                    <Progress
+                      aria-label={`${brand.name}采集进度`}
+                      aria-valuetext={
+                        progress.captured
+                          ? `榜单 ${progress.captured} 款，详情 ${progress.details} / ${progress.captured} 款`
+                          : "尚未取得榜单，目标最多50款"
+                      }
+                      percent={progress.percent}
+                      size="small"
+                      showInfo={false}
+                      strokeColor={strokeColor}
+                      status={job?.status === "RUNNING" ? "active" : "normal"}
+                    />
+                    <span className="competitor-crawl-counts">
+                      {progress.captured
+                        ? `榜单 ${progress.captured} 款 · 详情 ${progress.details} / ${progress.captured} 款`
+                        : "榜单 0 / 50 款 · 详情待开始"}
+                      <b>{progress.percent}%</b>
+                    </span>
+                  </div>
                   {job && (
                     <small>
                       {when(
                         job.completedAt || job.startedAt || job.requestedAt,
                       )}
-                      {job.capturedCount > 0 &&
-                        ` · 排名 ${job.capturedCount} 款 · 本次核对详情 ${job.detailCount} 款`}
                     </small>
                   )}
                   {job?.note && <p>{job.note}</p>}
@@ -170,7 +199,7 @@ export function CompetitorCrawlPanel({
           type="info"
           showIcon
           title="采集失败保留已有数据"
-          description="新品牌会进入首次采集；已有品牌每天更新一次。暂停后，正在执行的任务会继续完成。平台要求验证时，本次任务停止，可用浏览器补充数据。"
+          description="新品牌会进入首次采集；已有品牌每天更新一次。暂停后，正在执行的任务会继续完成。平台要求登录或验证时，本次任务停止，可在本机浏览器登录后补充数据；本机登录不会自动授权后台服务器。"
         />
         <Space style={{ marginTop: 16 }}>
           <Button

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { selectionViewSchema } from "./selection-view.js";
+import { migrationConfigSchema } from "./selection-migration-config.js";
 
 export const selectionFieldTypeSchema = z.enum([
   "text",
@@ -93,6 +94,7 @@ export const selectionTypeCatalogSchema = z
   .strict();
 export const selectionLayoutSchema = z
   .object({
+    migrationConfig: migrationConfigSchema.nullable().default(null),
     columns: z
       .array(selectionFieldSchema)
       .max(500)

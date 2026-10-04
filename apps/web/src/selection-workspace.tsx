@@ -8,13 +8,17 @@ import {
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { api, queryClient } from "./api";
 import { UserContext, useUser } from "./shared";
-import { tableSelectionPermissions } from "../../../packages/contracts/src/table-permissions";
+import { archiveSelectionPermissions, tableSelectionPermissions } from "../../../packages/contracts/src/table-permissions";
+import type { SelectionField } from "../../../packages/contracts/src/selection-layout";
 
 type Workspace = {
   tableId?: string;
   title?: string;
   blankLayout?: boolean;
   emptyLayout?: boolean;
+  archive?: boolean;
+  defaultColumns?: SelectionField[];
+  archiveReferences?: Record<string,{id:string;name:string;status:string;hasChildren?:boolean}[]>;
   api: typeof api;
   queryClient: QueryClient;
   storageKey: (key: string) => string;
@@ -31,18 +35,24 @@ export function SelectionWorkspace({
   title,
   blankLayout = false,
   emptyLayout = false,
+  archive = false,
+  defaultColumns,
+  archiveReferences,
   children,
 }: {
   tableId?: string;
   title?: string;
   blankLayout?: boolean;
   emptyLayout?: boolean;
+  archive?: boolean;
+  defaultColumns?: SelectionField[];
+  archiveReferences?: Workspace["archiveReferences"];
   children: ReactNode;
 }) {
   const user = useUser();
   const scopedUser = useMemo(() => tableId
-    ? { ...user, permissions: tableSelectionPermissions(user.permissions) }
-    : user, [tableId, user]);
+    ? { ...user, permissions: (archive ? archiveSelectionPermissions : tableSelectionPermissions)(user.permissions) }
+    : user, [tableId, archive, user]);
   const [client] = useState(() =>
     tableId
       ? new QueryClient({
@@ -59,6 +69,9 @@ export function SelectionWorkspace({
       title,
       blankLayout,
       emptyLayout,
+      archive,
+      defaultColumns,
+      archiveReferences,
       queryClient: client,
       api: (path, ...args) =>
         api(
@@ -69,7 +82,7 @@ export function SelectionWorkspace({
         ),
       storageKey: (key) => (tableId ? `project-table:${tableId}:${key}` : key),
     }),
-    [tableId, title, blankLayout, emptyLayout, client],
+    [tableId, title, blankLayout, emptyLayout, archive, defaultColumns, archiveReferences, client],
   );
   return (
     <WorkspaceContext.Provider value={workspace}>

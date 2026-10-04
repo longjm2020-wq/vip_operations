@@ -75,10 +75,12 @@ export const when = (v: any) =>
 export function Header({
   title,
   subtitle,
+  subtitleExtra,
   extra,
 }: {
   title: string;
   subtitle: string;
+  subtitleExtra?: React.ReactNode;
   extra?: React.ReactNode;
 }) {
   return (
@@ -86,6 +88,7 @@ export function Header({
       <div className="page-heading-copy">
         <Typography.Title level={2} title={title}>{title}</Typography.Title>
         <Typography.Text className="page-heading-subtitle" type="secondary" title={subtitle}>{subtitle}</Typography.Text>
+        {subtitleExtra}
       </div>
       {extra && <Space className="page-heading-actions">{extra}</Space>}
     </div>

@@ -29,6 +29,8 @@ jobs:
       - run: pnpm db:generate
       - run: pnpm lint && pnpm typecheck && pnpm test:unit && pnpm build
       - run: pnpm test:integration
+      - name: Verify cross-table transfer transactions and product archive
+        run: SELECTION_TRANSFER_TEST_DATABASE_URL="$DATABASE_URL" pnpm exec tsx tests/integration/selection-transfer.ts
       - run: pnpm exec tsx tests/integration/project-library.ts
       - run: pnpm exec tsx tests/integration/supply.ts
       - run: pnpm exec playwright install --with-deps chromium

@@ -38,7 +38,7 @@ const accessOptions = [
   { value: "deny", label: "禁止查看" },
 ];
 export const editableSelectionCell = (row: Row, key: string) =>
-  !row.cellAccess || (row.cellAccess[key] || row.defaultCellAccess) === "edit";
+  !row.migrationLocked && (!row.cellAccess || (row.cellAccess[key] || row.defaultCellAccess) === "edit");
 export const readableSelectionCell = (row: Row, key: string) =>
   row.cellAccess?.[key] !== "deny";
 

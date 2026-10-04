@@ -5,6 +5,7 @@ import { sortSelectionSizes } from "../../../../../packages/contracts/src/select
 import { z } from "zod";
 import { randomUUID } from "node:crypto";
 import * as protection from "./protection.js";
+import { isArchive, mirrorArchiveRow } from "./archive.js";
 import { insertImage, readStoredImage } from "./image-storage.js";
 import { db, insert, one, rows, update, camel, type Row, type Tx } from "../../../../../packages/database/src/index.js";
 import { setImmediate as yieldToRequests } from "node:timers/promises";
@@ -83,7 +84,7 @@ const selectColumns = `
   s.id,s.registration_batch::text,s.images,s.label_images,s.cell_colors,s.cell_alignments,s.cell_vertical_alignments,s.cell_text_colors,s.cell_number_formats,s.extra_fields,s.xuti_style_no,s.supplier_style_no,
   s.supplier_code,s.color,s.size_range,s.material,s.supply_price_excl_tax,
   s.selling_points,s.reorder_days,s.collection_inventory,s.vip_price,s.live_price,s.tag_price,s.row_color,s.sort_order,s.created_by,s.version,
-  s.created_at,s.updated_at,s.cell_owners,s.claimed_by,s.updated_by,
+  s.created_at,s.updated_at,s.cell_owners,s.claimed_by,s.updated_by,s.migration_locked,s.migration_target_workspace,s.migration_target_row_id,s.migrated_at,s.product_id,
   (SELECT display_name FROM users WHERE id=s.created_by) AS created_by_name,
   (SELECT username FROM users WHERE id=s.created_by) AS created_by_username,
   (SELECT display_name FROM users WHERE id=s.updated_by) AS updated_by_name,
@@ -274,6 +275,7 @@ export async function remove(c: Context, value: string) {
     const p=await protection.writeLocks(tx,c);
     const before = await entity(tx, "style_selections", value, true);
     protection.assertFields(p,c,before,protection.rowFields(before));
+    if(before.product_id && await isArchive(tx)) fail("PRODUCT_IN_USE","商品档案保留商品与库存、采购的关联；请修改商品状态为停用或归档。仅空白草稿行可删除。",409);
     await rows(tx, "DELETE FROM style_selections WHERE id=$1::bigint", value);
     await audit(tx, c, "DELETE", "style-selection", value, before, null);
     return { id: value };
@@ -294,7 +296,8 @@ export async function write(c: Context, input: unknown, value?: string) {
 }
 
 
-async function persist(tx: Tx, c: Context, body: Row, value?: string) {
+export async function persist(tx: Tx, c: Context, body: Row, value?: string) {
+    if(await isArchive(tx)) await rows(tx,"SELECT pg_advisory_xact_lock(91002)::text");
     const policy=await protection.writeLocks(tx,c);
     const before = value ? await entity(tx, "style_selections", value, true) : null;
     if (
@@ -319,6 +322,7 @@ async function persist(tx: Tx, c: Context, body: Row, value?: string) {
     const result = before
       ? await update(tx, "style_selections", value!, { ...changes, ...security, updatedBy:c.actor.id, version: before.version + 1 })
       : await insert(tx, "style_selections", { ...changes, ...security, updatedBy:c.actor.id, createdBy: c.actor.id });
+    await mirrorArchiveRow(tx,c,result);
     await audit(tx, c, before ? "UPDATE" : "CREATE", "style-selection", result.id, before, result);
     // Keep date-only fields identical to list responses (rather than ISO timestamps).
     return (await one(tx, `SELECT ${selectColumns} ${source} WHERE s.id=$1::bigint`, result.id))!;
@@ -366,6 +370,7 @@ export async function commitImport(c: Context, input: unknown) {
   const patches = body.rows.map(row => importPatch(row.values)); distinctStyles(patches);
   for(const [index,patch] of patches.entries())await protection.preflight(c,body.rows[index].id || undefined,patch);
   return command(c, "style-selections/import", body, async tx => {
+    if(await isArchive(tx))await rows(tx,"SELECT pg_advisory_xact_lock(91002)::text");
     await protection.writeLocks(tx,c);
     // Matching and writes must be atomic, including concurrently created styles.
     await tx.$executeRawUnsafe("LOCK TABLE style_selections IN SHARE ROW EXCLUSIVE MODE");
@@ -403,6 +408,7 @@ export async function photoDetail(c: Context,value: string) {
 /** Reuse the first content-free row in manual order, creating one only when none exists. */
 export async function nextBlankPhotoStyle(c: Context) {
   const result=await command(c, "style-selections/photo-next-blank", {}, async (tx) => {
+    if(await isArchive(tx))await rows(tx,"SELECT pg_advisory_xact_lock(91002)::text");
     const p=await protection.writeLocks(tx,c);
     await tx.$executeRawUnsafe("LOCK TABLE style_selections IN SHARE ROW EXCLUSIVE MODE");
     const blank = await one(tx, `SELECT ${selectColumns} ${source}
@@ -452,6 +458,7 @@ export async function changePhoto(c: Context, value: string, input: unknown) {
   ]), input);
   protection.assertFields(await protection.policy(db),c,await entity(db,"style_selections",value),[body.field]);
   const result=await command(c, "selection.photo/"+value, body, async tx => {
+    if(await isArchive(tx))await rows(tx,"SELECT pg_advisory_xact_lock(91002)::text");
     await protection.writeLocks(tx,c);
     const before = await entity(tx, "style_selections", value, true);
     const field = body.field;

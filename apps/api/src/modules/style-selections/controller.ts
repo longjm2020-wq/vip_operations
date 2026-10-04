@@ -7,13 +7,25 @@ import * as selections from "./service.js";
 import * as collections from "./collections.js";
 import * as protection from "./protection.js";
 import * as layout from "./layout-preferences.js";
+import * as migration from "./migration.js";
+import { archiveMetadata } from "./archive.js";
 import { fail } from "../../core.js";
 
 const paramId = (value: string) => parse(id, value);
+const transferContext = (request:AuthRequest) => ({...context(request),actor:request.originalActor || request.actor});
+
+@Controller("api/v1/product-archive-table")
+class ProductArchiveTableController {
+  @Permission("product.read") @Get() get(@Req() request:AuthRequest) { return archiveMetadata(context(request)); }
+}
 
 @Controller("api/v1/style-selections")
 @UseInterceptors(SelectionWorkspaceInterceptor)
 class StyleSelectionsController {
+  @Permission("selection.manage") @Get("migration/targets") migrationTargets(@Req() request:AuthRequest) { return migration.targets(transferContext(request)); }
+  @Permission("selection.manage") @Post("migration/preview") migrationPreview(@Req() request:AuthRequest,@Body() body:unknown) { return migration.preview(transferContext(request),body); }
+  @Permission("selection.manage") @Post("migration") migrationCommit(@Req() request:AuthRequest,@Body() body:unknown) { return migration.commit(transferContext(request),body); }
+  @Permission("selection.manage") @Post(":id/release-migration") migrationRelease(@Req() request:AuthRequest,@Param("id") value:string,@Body() body:unknown) { return migration.release(transferContext(request),paramId(value),body); }
   @Permission("selection.read") @Post("sync") async sync(@Body() body: unknown, @Req() request: AuthRequest, @Res() response: Response) {
     const data = await selections.sync(context(request),body);
     response.setHeader("Cache-Control", "private, no-store");
@@ -118,5 +130,5 @@ class PublicSelectionCollectionController {
   }
 }
 
-@Module({ providers: [SelectionWorkspaceInterceptor], controllers: [ProjectTablesController, StyleSelectionsController, SelectionCollectionsController, PublicSelectionCollectionController] })
+@Module({ providers: [SelectionWorkspaceInterceptor], controllers: [ProjectTablesController, ProductArchiveTableController, StyleSelectionsController, SelectionCollectionsController, PublicSelectionCollectionController] })
 export class StyleSelectionsModule {}

@@ -46,6 +46,7 @@ export const libraryConfig = {
   },
 } as const;
 export function canManageContent(actor: Actor, kind: LibraryKind, row: Row) {
+  if (kind === "table" && row.system_key) return false;
   const config = libraryConfig[kind];
   return (
     actor.permissions.includes(config.write) &&
@@ -75,11 +76,12 @@ export async function tableAccess(
     tx,
     `SELECT t.* FROM public.project_tables t WHERE t.id=$3::bigint AND t.deleted_at IS NULL
      AND EXISTS(SELECT 1 FROM pg_namespace WHERE nspname='selection_table_' || t.id::text)
-     AND ($4::boolean OR ${readableSql("table", "t")}) FOR SHARE`,
+     AND ($4::boolean OR (t.system_key='PRODUCT_ARCHIVE' AND $5::boolean) OR (t.system_key IS NULL AND ${readableSql("table", "t")})) FOR SHARE`,
     actor ? libraryAdmin(actor) : false,
     actor?.id || "0",
     value,
     !actor,
+    !!actor?.permissions.includes("product.read"),
   );
   if (!table) fail("NOT_FOUND", "表格不存在或无权访问", 404);
   return table;

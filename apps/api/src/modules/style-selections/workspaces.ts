@@ -75,7 +75,7 @@ export class ProjectTablesController {
     return (
       await rows(
         db,
-        `SELECT t.*,u.display_name AS created_by_name FROM project_tables t JOIN users u ON u.id=t.created_by WHERE t.deleted_at IS NULL AND ${readableSql("table", "t")} ORDER BY t.id DESC`,
+        `SELECT t.*,u.display_name AS created_by_name FROM project_tables t JOIN users u ON u.id=t.created_by WHERE t.deleted_at IS NULL AND t.system_key IS NULL AND ${readableSql("table", "t")} ORDER BY t.id DESC`,
         libraryAdmin(request.actor),
         request.actor.id,
       )

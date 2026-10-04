@@ -16,9 +16,9 @@ import { Request, Response } from "express";
 import { Observable, map } from "rxjs";
 import { actorFor } from "./modules/auth/service.js";
 import { Actor, Context, fail, requirePermission, parse, id } from "./core.js";
-import { camel } from "../../../packages/database/src/index.js";
-import { tableSelectionPermissions } from "../../../packages/contracts/src/table-permissions.js";
-export type AuthRequest = Request & { actor: Actor; requestId: string };
+import { camel, db, one } from "../../../packages/database/src/index.js";
+import { archiveSelectionPermissions, tableSelectionPermissions } from "../../../packages/contracts/src/table-permissions.js";
+export type AuthRequest = Request & { actor: Actor; originalActor?: Actor; requestId: string };
 export const Public = () => SetMetadata("public", true);
 export const Permission = (p: string) => SetMetadata("permission", p);
 export function context(req: AuthRequest): Context {
@@ -45,9 +45,12 @@ export class AuthGuard implements CanActivate {
     const p = this.reflector.get<string>("permission", c.getHandler());
     if (p && ["selection.read", "selection.manage"].includes(p) && r.query.tableId !== undefined &&
       (r.path.startsWith("/api/v1/style-selections") || r.path.startsWith("/api/v1/selection-collections"))) {
-      parse(id, r.query.tableId);
-      requirePermission(r.actor, p === "selection.read" ? "project.read" : "project.create");
-      r.actor = { ...r.actor, permissions: tableSelectionPermissions(r.actor.permissions) };
+      const tableId = parse(id, r.query.tableId);
+      const table = await one(db,"SELECT system_key FROM public.project_tables WHERE id=$1::bigint",tableId);
+      const archive = table?.system_key === "PRODUCT_ARCHIVE";
+      requirePermission(r.actor, archive ? (p === "selection.read" ? "product.read" : "product.update") : (p === "selection.read" ? "project.read" : "project.create"));
+      r.originalActor = r.actor;
+      r.actor = { ...r.actor, permissions: (archive ? archiveSelectionPermissions : tableSelectionPermissions)(r.actor.permissions) };
     } else if (p) requirePermission(r.actor, p);
     return true;
   }

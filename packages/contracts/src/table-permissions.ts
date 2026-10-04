@@ -6,3 +6,11 @@ export function tableSelectionPermissions(permissions: string[]): string[] {
     ...(permissions.includes("project.create") ? ["selection.manage"] : []),
   ];
 }
+
+export function archiveSelectionPermissions(permissions: string[]): string[] {
+  return [
+    ...permissions.filter(permission=>!["selection.read","selection.manage"].includes(permission)),
+    ...(permissions.includes("product.read")?["selection.read"]:[]),
+    ...(permissions.includes("product.update")?["selection.manage"]:[]),
+  ];
+}

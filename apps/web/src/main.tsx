@@ -664,7 +664,7 @@ function Root() {
     location.pathname !== "/help"
   )
     return <Navigate to="/my-workspace" replace />;
-  if (me.data && location.pathname === "/mobile/style-photos") return <UserContext.Provider value={me.data}><SelectionWorkspace key={new URLSearchParams(location.search).get("tableId") || "default"} tableId={new URLSearchParams(location.search).get("tableId") || undefined}><SelectionMobilePhotos /></SelectionWorkspace></UserContext.Provider>;
+  if (me.data && location.pathname === "/mobile/style-photos") return <UserContext.Provider value={me.data}><SelectionWorkspace key={new URLSearchParams(location.search).get("tableId") || "default"} tableId={new URLSearchParams(location.search).get("tableId") || undefined} archive={new URLSearchParams(location.search).get("archive")==="1"}><SelectionMobilePhotos /></SelectionWorkspace></UserContext.Provider>;
   return me.data ? (
     <Workspace user={me.data} />
   ) : location.pathname === "/supply/register" ? (

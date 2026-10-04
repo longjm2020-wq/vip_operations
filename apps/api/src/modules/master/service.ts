@@ -336,7 +336,11 @@ export async function masterWrite(
   }
   if (!Object.keys(b).some((key) => key !== "expectedUpdatedAt"))
     fail("VALIDATION_ERROR", "没有可更新字段", 400);
-  return command(c, name + "/" + (value ?? "create"), b, async (tx) => {
+  return command(c, name + "/" + (value ?? "create"), b, tx => persistMaster(tx,c,name,b,value));
+}
+
+export async function persistMaster(tx: Tx, c: Context, name: Resource, b: Row, value?: string) {
+  const r = getResource(name);
     // This lock also serializes inventory/PO checks against warehouse disabling.
     await rows(tx, "SELECT pg_advisory_xact_lock(91002)::text");
     const before = value ? await entity(tx, r.table, value, true) : null;
@@ -469,8 +473,8 @@ export async function masterWrite(
       result,
     );
     return result;
-  });
 }
+
 export async function initializeWomenCategories(c: Context) {
   return command(
     c,

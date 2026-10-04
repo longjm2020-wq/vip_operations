@@ -187,6 +187,38 @@ export async function testCompetitorCrawler(h: Record<string, any>) {
     "stale leases are recovered even while schedules are paused",
   );
   const settings = (await ok(endpoint)).crawl.settings;
+  const loginJob = await ok(endpoint + "/crawl", "POST", {
+    brandIds: [initial.brands[4].id],
+  });
+  await processCrawlJob(
+    async () =>
+      ({
+        newContext: async () => ({
+          newPage: async () => ({
+            setDefaultTimeout() {},
+            goto: async () => {},
+            url: () => "https://passport.vip.com/login?src=public-product-list",
+          }),
+        }),
+        close: async () => {},
+      }) as any,
+  );
+  const loginResult = (await ok(endpoint)).crawl.jobs.find(
+    (job: any) => job.id === loginJob.jobs[0].id,
+  );
+  assert.equal(loginResult.status, "LOGIN_REQUIRED");
+  assert.equal(loginResult.capturedCount, 0);
+  assert.match(loginResult.note, /要求登录/);
+  assert.equal(
+    (
+      await one(
+        db,
+        "SELECT count(*)::int AS n FROM competitor_snapshots WHERE brand_id=$1::bigint",
+        initial.brands[4].id,
+      )
+    ).n,
+    0,
+  );
   await ok(endpoint + "/crawl-settings", "POST", {
     enabled: true,
     dailyHour: 0,
