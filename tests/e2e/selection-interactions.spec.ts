@@ -54,6 +54,22 @@ async function fixture(page: Page, readonly = false, choiceFields = false, rowCo
 const cell = (page: Page, row: number, column: string) => page.locator(`td[data-selection-row="shortcut-${row}"][data-selection-column="${column}"]`);
 const columnHeader = (page: Page, key: string) => page.locator(`thead th[data-selection-column="${key}"]`);
 const columnOrder = (page: Page) => page.locator("thead th[data-selection-column]").evaluateAll(elements => elements.map(element => (element as HTMLElement).dataset.selectionColumn));
+async function photoFixture(page: Page, readonly = false) {
+  await fixture(page, readonly);
+  const png = await page.evaluate(() => {
+    const canvas = document.createElement("canvas"); canvas.width = 900; canvas.height = 700;
+    const context = canvas.getContext("2d")!;
+    context.fillStyle = "white"; context.fillRect(0, 0, 900, 700);
+    context.fillStyle = "black"; context.font = "48px Arial";
+    ["OUTSIDE REGION", "61.3% Polyester", "33.7% Viscose fiber", "2.1% Vinegar fiber", "1.8% Spandex", "1.1% Sheep wool"].forEach((line, index) => context.fillText(line, 60, 80 + index * 95));
+    return canvas.toDataURL("image/png").split(",")[1];
+  });
+  const body = Buffer.from(png, "base64");
+  await page.route("**/api/v1/style-selections/images/preview-*", route => route.fulfill({ contentType: "image/png", body }));
+  await page.reload();
+  await expect(cell(page, 0, "labelImages").locator("img")).toBeVisible();
+  return body;
+}
 async function dragColumns(page: Page, from: string, to: string, shift = false) {
   const start = (await columnHeader(page, from).boundingBox())!, end = (await columnHeader(page, to).boundingBox())!;
   await page.mouse.move(start.x + 18, start.y + 14);
@@ -106,6 +122,8 @@ test("search occupies the shared topbar and the selection footer stays at the vi
   }).toBe(true);
   await expect.poll(async () => Math.abs(await bottom() - 1000)).toBeLessThanOrEqual(1);
   await search.getByLabel("搜索选款", { exact: true }).fill("");
+  await search.getByLabel("搜索选款", { exact: true }).focus();
+  await search.screenshot({ path: ".local/selection-search-focus.png" });
   await page.screenshot({ path: ".local/selection-compact-layout.png" });
   await page.setViewportSize({ width: 900, height: 700 });
   await expect(search.getByLabel("搜索选款", { exact: true })).toBeVisible();
@@ -515,12 +533,14 @@ test("field group tabs locate columns without pins and move groups after pins wh
   const tab = page.getByRole("tab", { name: "质检", exact: true });
   await tab.click();
   await expect(tab).toHaveAttribute("aria-selected", "true");
+  await expect(page.locator("th[data-column-group-active]")).toHaveCount(3);
   expect(await order()).toEqual(initial);
   await expect.poll(() => page.locator(".selection-sheet").evaluate(element => element.scrollLeft)).toBeGreaterThan(150);
   await page.locator(".selection-sheet").evaluate(element => { element.scrollLeft = 0; });
   await tab.click();
   await expect.poll(() => page.locator(".selection-sheet").evaluate(element => element.scrollLeft)).toBeGreaterThan(150);
   await page.getByRole("tab", { name: "全部字段", exact: true }).click();
+  await expect(page.locator("th[data-column-group-active]")).toHaveCount(0);
   await header("xutiStyleNo").click({ button: "right" });
   await clickColumnAction(page, "序缇款号", "固定此列");
   await header("registrationBatch").click({ button: "right" });
@@ -555,6 +575,229 @@ test("field group tabs locate columns without pins and move groups after pins wh
   await dialog.getByRole("button", { name: "保存分组", exact: true }).click();
   await expect(page.locator(".selection-column-group-tabs")).toHaveCount(0);
   expect(await order()).toEqual(["registrationBatch", "xutiStyleNo", ...initial.filter(key => key !== "registrationBatch" && key !== "xutiStyleNo")]);
+});
+
+test("image text OCR starts on demand, copies from the right-click menu and preserves multiline text in one saved cell", async ({ page, context }) => {
+  test.setTimeout(120000);
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  let ocrRequests = 0;
+  page.on("request", request => { if (new URL(request.url()).pathname.startsWith("/ocr/")) ocrRequests++; });
+  await photoFixture(page);
+  await cell(page, 0, "labelImages").locator("img").click();
+  expect(ocrRequests).toBe(0);
+  const image = page.locator(".selection-preview-image"), text = page.getByRole("textbox", { name: "图片识别文字", exact: true });
+  await image.click({ button: "right" });
+  await clickReadyMenuItem(page.getByRole("menuitem", { name: /复制图片文字$/ }));
+  await expect(text).toHaveValue(/61.3% Polyester/, { timeout: 60000 });
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toMatch(/Viscose fiber/);
+  expect(ocrRequests).toBeGreaterThan(0);
+  const edited = "面料：61.3%聚酯纤维\n33.7%粘胶纤维\n里料：100%棉";
+  await text.fill(edited);
+  await page.getByRole("button", { name: "复制文字", exact: true }).click();
+  await expect.poll(() => page.evaluate(async () => (await navigator.clipboard.readText()).replace(/\r\n?/g, "\n"))).toBe(edited);
+  await page.screenshot({ path: ".local/selection-image-text.png" });
+  await page.getByRole("button", { name: "关闭图片预览", exact: true }).click();
+  await cell(page, 0, "material").click();
+  const saved = page.waitForResponse(response => response.url().endsWith("/style-selections/shortcut-0") && response.request().method() === "PATCH");
+  await page.keyboard.press("Control+V");
+  await expect(cell(page, 0, "material").locator("textarea")).toHaveValue(edited);
+  expect((await saved).request().postDataJSON().material).toBe(edited);
+  await expect(cell(page, 1, "material").locator("textarea")).toHaveValue("");
+  await expect(page.locator("td[data-selection-column='material']")).toHaveCount(20);
+});
+
+test("readonly users can crop OCR, select and copy text without changing pictures and recover from image fetch failures", async ({ page, context }) => {
+  test.setTimeout(120000);
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  const body = await photoFixture(page, true);
+  await cell(page, 0, "labelImages").locator("img").click();
+  const image = page.locator(".selection-preview-image"), text = page.getByRole("textbox", { name: "图片识别文字", exact: true });
+  await page.getByRole("button", { name: "框选识别文字", exact: true }).click();
+  const bounds = (await image.boundingBox())!;
+  await page.mouse.move(bounds.x + bounds.width * .04, bounds.y + bounds.height * .18);
+  await page.mouse.down();
+  await page.mouse.move(bounds.x + bounds.width * .8, bounds.y + bounds.height * .43, { steps: 8 });
+  await page.mouse.up();
+  await expect(text).toHaveValue(/61.3% Polyester/, { timeout: 60000 });
+  await expect(text).toHaveValue(/Viscose fiber/);
+  expect(await text.inputValue()).not.toMatch(/OUTSIDE|Sheep|Spandex/);
+  await text.focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(image).toHaveAttribute("src", imageUrls[0]);
+  await text.fill("棉60%\n粘胶40%");
+  await text.evaluate(element => (element as HTMLTextAreaElement).select());
+  await page.keyboard.press("Control+C");
+  await expect.poll(() => page.evaluate(async () => (await navigator.clipboard.readText()).replace(/\r\n?/g, "\n"))).toBe("棉60%\n粘胶40%");
+  await page.route(`**${imageUrls[1]}`, route => route.request().resourceType() === "fetch" ? route.fulfill({ status: 403 }) : route.fulfill({ contentType: "image/png", body }));
+  await page.getByRole("button", { name: "下一张大图", exact: true }).click();
+  await expect(text).toHaveCount(0);
+  await page.getByRole("button", { name: "识别图片文字", exact: true }).click();
+  await expect(page.locator(".selection-preview-text-error")).toContainText("HTTP 403");
+  await page.getByRole("button", { name: "关闭图片预览", exact: true }).click();
+  await expect(cell(page, 0, "material").locator("textarea")).toHaveAttribute("readonly", "");
+});
+
+test("switching a picture cancels pending text recognition without putting the previous result on the next image", async ({ page }) => {
+  const body = await photoFixture(page);
+  let fetched!: () => void, release!: () => void;
+  const started = new Promise<void>(resolve => { fetched = resolve; }), finish = new Promise<void>(resolve => { release = resolve; });
+  await page.route(`**${imageUrls[0]}`, async route => {
+    if (route.request().resourceType() === "fetch") { fetched(); await finish; }
+    await route.fulfill({ contentType: "image/png", body }).catch(() => {});
+  });
+  await cell(page, 0, "labelImages").locator("img").click();
+  await page.getByRole("button", { name: "识别图片文字", exact: true }).click();
+  await started;
+  await expect(page.locator(".selection-preview-text-panel")).toContainText("正在读取图片");
+  await page.getByRole("button", { name: "下一张大图", exact: true }).click();
+  release();
+  await expect(page.locator(".selection-preview-image")).toHaveAttribute("src", imageUrls[1]);
+  await expect(page.locator(".selection-preview-text-panel")).toHaveCount(0);
+  await page.getByRole("button", { name: "关闭图片预览", exact: true }).click();
+  await expect(page.locator(".selection-image-preview-layer")).toHaveCount(0);
+});
+
+test("clicking selected text places the caret, mouse dragging selects text and native select-all deletes only that text", async ({ page, context }) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await fixture(page);
+  const editor = cell(page, 3, "supplierStyleNo").locator("textarea");
+  await editor.click();
+  const points = await editor.evaluate(element => {
+    const input = element as HTMLTextAreaElement, rect = input.getBoundingClientRect(), style = getComputedStyle(input);
+    const context = document.createElement("canvas").getContext("2d")!; context.font = style.font;
+    const left = rect.x + (rect.width - context.measureText(input.value).width) / 2;
+    return { left: left + 1, wordEnd: left + context.measureText("Supplier").width + 1, y: rect.y + rect.height / 2 };
+  });
+  await page.mouse.click(points.wordEnd, points.y);
+  const caret = await editor.evaluate(element => (element as HTMLTextAreaElement).selectionStart);
+  expect(caret).toBeGreaterThan(0); expect(caret).toBeLessThan("Supplier words".length);
+  await page.mouse.move(points.left, points.y); await page.mouse.down();
+  await page.mouse.move(points.wordEnd, points.y, { steps: 8 }); await page.mouse.up();
+  expect(await editor.evaluate(element => { const input = element as HTMLTextAreaElement; return input.value.slice(input.selectionStart, input.selectionEnd).trim(); })).toBe("Supplier");
+  await expect(page.locator("td.selection-cell-active")).toHaveCount(1);
+  await expect(page.locator(".selection-sheet")).not.toHaveClass(/selection-dragging/);
+  await page.keyboard.press("Control+C");
+  expect((await page.evaluate(() => navigator.clipboard.readText())).trim()).toBe("Supplier");
+  await page.keyboard.type("Edited");
+  await expect(editor).toHaveValue(/Edited.*words/);
+  await page.keyboard.press("Control+A");
+  expect(await editor.evaluate(element => { const input = element as HTMLTextAreaElement; return input.selectionEnd - input.selectionStart; })).toBe((await editor.inputValue()).length);
+  await expect(page.locator("td.selection-cell-active")).toHaveCount(1);
+  await page.keyboard.press("Delete");
+  await expect(editor).toHaveValue("");
+  await expect(cell(page, 3, "material").locator("textarea")).toHaveValue("Cotton");
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("Control+Shift+ArrowRight");
+  await expect(page.locator("td.selection-cell-active")).toHaveCount(9);
+});
+
+test("transparent rectangular selections retain cell grid lines and saved label content", async ({ page }) => {
+  await fixture(page, false, true);
+  const first = cell(page, 0, "custom:check"), last = cell(page, 3, "custom:action");
+  await first.scrollIntoViewIfNeeded();
+  const before = await first.evaluate(element => ({ bottom: getComputedStyle(element).borderBottomColor, right: getComputedStyle(element).borderRightColor, background: getComputedStyle(element).backgroundColor }));
+  const start = (await first.boundingBox())!, end = (await last.boundingBox())!;
+  await page.mouse.move(start.x + 10, start.y + 10); await page.mouse.down();
+  await page.mouse.move(end.x + end.width - 10, end.y + end.height - 10, { steps: 8 }); await page.mouse.up();
+  await expect(page.locator("td.selection-cell-active")).toHaveCount(8);
+  const after = await first.evaluate(element => ({ bottom: getComputedStyle(element).borderBottomColor, right: getComputedStyle(element).borderRightColor, background: getComputedStyle(element).backgroundColor }));
+  expect(after).toEqual(before);
+  expect(after.bottom).not.toBe("rgba(0, 0, 0, 0)");
+  await expect(cell(page, 1, "custom:check")).toContainText("规范");
+  await expect(cell(page, 2, "custom:action")).toContainText("换洗唛");
+  await page.screenshot({ path: ".local/selection-range-grid.png" });
+});
+
+test("type catalog replaces reset, adds reusable named choice types and disabling keeps existing fields working after reload", async ({ page }) => {
+  await fixture(page);
+  const openCatalog = async () => { await page.getByRole("button", { name: "字段管理", exact: true }).click(); await page.getByRole("button", { name: "字段类型管理", exact: true }).click(); };
+  await page.getByRole("button", { name: "字段管理", exact: true }).click();
+  await expect(page.getByRole("button", { name: "初始化字段类型", exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: "字段类型管理", exact: true }).click();
+  const catalog = page.getByRole("dialog", { name: "字段类型管理", exact: true });
+  await catalog.getByRole("button", { name: "新增类型", exact: true }).click();
+  const create = page.getByRole("dialog", { name: "新增字段类型", exact: true });
+  await create.getByLabel("类型名称", { exact: true }).fill("质检结果");
+  await create.getByLabel("基础类型", { exact: true }).click();
+  await page.locator(".ant-select-dropdown:visible .ant-select-item-option").filter({ hasText: /^单选$/ }).click();
+  await create.getByLabel("默认候选选项", { exact: true }).fill("规范\n不规范");
+  await create.getByRole("button", { name: "保存类型", exact: true }).click();
+  await expect(catalog.getByRole("switch", { name: "启用类型：质检结果", exact: true })).toBeChecked();
+  await catalog.locator(".ant-modal-footer").getByRole("button", { name: "关闭", exact: true }).click();
+  await page.getByRole("button", { name: "字段管理", exact: true }).click();
+  await page.getByRole("button", { name: /添加字段/ }).click();
+  const field = page.getByRole("dialog", { name: "添加字段", exact: true });
+  await field.getByLabel("字段名称", { exact: true }).fill("面料质检");
+  await field.getByLabel("字段类型", { exact: true }).fill("质检结果");
+  await page.locator(".ant-select-dropdown:visible .ant-select-item-option").filter({ hasText: /^质检结果$/ }).click();
+  await expect(field.getByLabel("字段选项", { exact: true })).toHaveValue("规范\n不规范");
+  await field.getByRole("button", { name: "保存", exact: true }).click();
+  const key = (await page.getByRole("columnheader", { name: "选择整列：面料质检", exact: true }).getAttribute("data-selection-column"))!;
+  const quality = cell(page, 0, key);
+  await quality.click();
+  await quality.getByRole("button", { name: "展开面料质检选项", exact: true }).click();
+  await page.locator(".ant-select-dropdown:visible .ant-select-item-option").filter({ hasText: /^规范$/ }).click();
+  await expect(quality).toContainText("规范");
+  await openCatalog();
+  await catalog.getByRole("switch", { name: "启用类型：质检结果", exact: true }).click();
+  await page.screenshot({ path: ".local/selection-type-catalog.png" });
+  await catalog.locator(".ant-modal-footer").getByRole("button", { name: "关闭", exact: true }).click();
+  await page.getByRole("button", { name: "字段管理", exact: true }).click();
+  await page.getByRole("button", { name: "编辑字段面料质检", exact: true }).click();
+  const edit = page.getByRole("dialog", { name: "编辑字段", exact: true });
+  await expect(edit.getByLabel("字段类型", { exact: true }).locator(".." )).toContainText("质检结果（已停用）");
+  await edit.getByRole("button", { name: "取消", exact: true }).click();
+  await page.reload();
+  await expect(quality).toContainText("规范");
+  await openCatalog();
+  await expect(catalog.getByRole("switch", { name: "启用类型：质检结果", exact: true })).not.toBeChecked();
+  await catalog.getByRole("switch", { name: "启用类型：质检结果", exact: true }).click();
+  await expect(catalog.getByRole("switch", { name: "启用类型：质检结果", exact: true })).toBeChecked();
+});
+
+test("readonly type catalogs can be inspected but cannot create or disable types", async ({ page }) => {
+  await fixture(page, true);
+  await page.getByRole("button", { name: "字段管理", exact: true }).click();
+  await page.getByRole("button", { name: "字段类型管理", exact: true }).click();
+  const catalog = page.getByRole("dialog", { name: "字段类型管理", exact: true });
+  await expect(catalog.getByRole("button", { name: "新增类型", exact: true })).toBeDisabled();
+  for (const control of await catalog.getByRole("switch").all()) await expect(control).toBeDisabled();
+});
+
+test("clicking different cell types retains editor height, header position and vertical scroll", async ({ page }) => {
+  await fixture(page, false, true);
+  await page.evaluate(() => {
+    const visible = ["registrationBatch", "xutiStyleNo", "color", "sizeRange", "material", "custom:check", "custom:action"];
+    const keys = [...document.querySelectorAll<HTMLElement>("thead th[data-selection-column]")].map(element => element.dataset.selectionColumn!);
+    localStorage.setItem("selection-hidden-fields-v1", JSON.stringify(keys.filter(key => !visible.includes(key))));
+  });
+  await page.reload();
+  const sheet = page.locator(".selection-sheet");
+  await sheet.evaluate(element => { element.scrollTop = 180; });
+  const positions = () => page.evaluate(() => {
+    const sheet = document.querySelector<HTMLElement>(".selection-sheet")!, editor = document.querySelector<HTMLElement>(".selection-editor-bar")!;
+    return { scroll: sheet.scrollTop, window: window.scrollY, top: sheet.getBoundingClientRect().top, editor: editor.getBoundingClientRect().height };
+  });
+  const before = await positions(), samples: Record<string, Awaited<ReturnType<typeof positions>>> = {};
+  for (const column of ["custom:check", "custom:action", "xutiStyleNo", "color", "sizeRange", "material", "registrationBatch"]) {
+    await cell(page, 3, column).click();
+    samples[column] = await positions();
+  }
+  await cell(page, 3, "material").click();
+  await page.getByRole("group", { name: "单元格编辑栏", exact: true }).locator("textarea").fill("棉60%\n粘胶40%\n里料：棉100%");
+  samples.multiline = await positions();
+  await cell(page, 3, "sizeRange").click();
+  const sizes = page.getByLabel("编辑尺码范围", { exact: true });
+  await sizes.click();
+  await page.locator(".ant-select-dropdown:visible .ant-select-item-option").filter({ hasText: /^其他$/ }).click();
+  await page.getByLabel("补充尺码", { exact: true }).fill("均码加长");
+  samples.customSize = await positions();
+  await page.getByLabel("补充尺码", { exact: true }).press("Enter");
+  await expect(cell(page, 3, "sizeRange")).toContainText("均码加长");
+  samples.savedSize = await positions();
+  for (const sample of Object.values(samples)) {
+    expect(sample.top).toBeCloseTo(before.top, 0); expect(sample.editor).toBeCloseTo(before.editor, 0); expect(sample.scroll).toBe(before.scroll); expect(sample.window).toBe(before.window);
+  }
 });
 
 test("large page selection timing", async ({ page }) => {

@@ -160,7 +160,7 @@ test("row drag extends whole rows and double clicking retains normal text select
   ).toBe("text");
 });
 
-test("existing fields initialize without losing data and allow a saved tag type", async ({
+test("existing fields retain data and saved tag types when the type catalog replaces initialization", async ({
   page,
 }) => {
   await page.getByRole("button", { name: "字段管理", exact: true }).click();
@@ -192,10 +192,12 @@ test("existing fields initialize without losing data and allow a saved tag type"
     ),
   ).toContainText("白色");
   await page.getByRole("button", { name: "字段管理", exact: true }).click();
-  await page
-    .getByRole("button", { name: "初始化字段类型", exact: true })
-    .click();
-  await expect(manager.getByText("未设置", { exact: true })).toHaveCount(16);
+  await expect(page.getByRole("button", { name: "初始化字段类型", exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: "字段类型管理", exact: true }).click();
+  const catalog = page.getByRole("dialog", { name: "字段类型管理", exact: true });
+  await catalog.getByRole("switch", { name: "启用类型：自定义标签", exact: true }).click();
+  await catalog.locator(".ant-modal-footer").getByRole("button", { name: "关闭", exact: true }).click();
+  await expect(page.locator('td[data-selection-column="color"] .selection-custom-tags')).toHaveCount(20);
   await expect(
     page.locator(
       'td[data-selection-row="drag-0"][data-selection-column="color"]',

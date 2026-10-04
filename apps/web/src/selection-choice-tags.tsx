@@ -24,7 +24,7 @@ export function SelectionChoiceSelect({ field, value, disabled, onChange, inCell
   useEffect(() => { if (inCell && open) select.current?.focus({ preventScroll: true }); }, [inCell, open]);
   const multiple = field.type === "multiple";
   return <Select<string | string[]> ref={select} aria-label={field.label} className={inCell ? "selection-choice-select" : "selection-choice-editor"} style={{ width: "100%" }}
-    variant={inCell ? "borderless" : "outlined"} disabled={disabled} allowClear showSearch={{ optionFilterProp: "value" }} suffixIcon={inCell ? null : <DownOutlined />} mode={multiple ? "multiple" : undefined}
+    variant={inCell ? "borderless" : "outlined"} disabled={disabled} allowClear showSearch={{ optionFilterProp: "value" }} suffixIcon={inCell ? null : <DownOutlined />} mode={multiple ? "multiple" : undefined} maxTagCount={inCell ? undefined : "responsive"}
     value={multiple ? splitFieldTags(value) : value || undefined} open={open} onOpenChange={onOpenChange}
     options={(field.options || []).map(option => ({ value: option, label: <SelectionChoicePill field={field} value={option} /> }))}
     labelRender={option => <SelectionChoicePill field={field} value={String(option.value)} />}
