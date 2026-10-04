@@ -1011,6 +1011,9 @@ try {
   );
   await migrate();
   check("migrations rerun without modifying data");
+  const { testOperationsViewPermissions, testInternalCollaborationPermissions } = await import("./operations-view-permissions.js");
+  await testOperationsViewPermissions({ok,request,db,rows,check});
+  await testInternalCollaborationPermissions({ok,request,db,rows,check});
   const {testCompassAnalytics}=await import("./compass-analytics.js");
   await testCompassAnalytics({ok,request,db,one,check,buyer});
   const {testCompetitorAnalysis}=await import("./competitor-analysis.js");

@@ -70,7 +70,7 @@ export class SelectionWorkspaceInterceptor implements NestInterceptor {
 
 @Controller("api/v1/project-tables")
 export class ProjectTablesController {
-  @Permission("selection.read")
+  @Permission("project.read")
   @Get()
   async list(@Req() request: AuthRequest) {
     return (
@@ -83,7 +83,7 @@ export class ProjectTablesController {
     ).map((t) => contentSummary(request.actor, "table", t));
   }
 
-  @Permission("selection.read")
+  @Permission("project.read")
   @Get(":id")
   async detail(@Req() request: AuthRequest, @Param("id") value: string) {
     return db.$transaction(async (tx) => {
@@ -98,7 +98,7 @@ export class ProjectTablesController {
     });
   }
 
-  @Permission("selection.manage")
+  @Permission("project.create")
   @Post()
   create(@Req() request: AuthRequest, @Body() input: unknown) {
     const body = parse(

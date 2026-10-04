@@ -253,7 +253,7 @@ function Workspace({ user }: { user: Row }) {
       children: [
         { key: "/sops", label: "新建SOP", permission: "project.read" },
         { key: "/projects", label: "新建项目", permission: "project.read" },
-        {key:"/project-tables",label:"新建表格",permission:"selection.read"},
+        {key:"/project-tables",label:"新建表格",permission:"project.read"},
       ],
     },
     {

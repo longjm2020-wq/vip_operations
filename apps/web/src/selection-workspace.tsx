@@ -7,6 +7,8 @@ import {
 } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { api, queryClient } from "./api";
+import { UserContext, useUser } from "./shared";
+import { tableSelectionPermissions } from "../../../packages/contracts/src/table-permissions";
 
 type Workspace = {
   tableId?: string;
@@ -34,6 +36,10 @@ export function SelectionWorkspace({
   blankLayout?: boolean;
   children: ReactNode;
 }) {
+  const user = useUser();
+  const scopedUser = useMemo(() => tableId
+    ? { ...user, permissions: tableSelectionPermissions(user.permissions) }
+    : user, [tableId, user]);
   const [client] = useState(() =>
     tableId
       ? new QueryClient({
@@ -63,7 +69,9 @@ export function SelectionWorkspace({
   );
   return (
     <WorkspaceContext.Provider value={workspace}>
-      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+      <UserContext.Provider value={scopedUser}>
+        <QueryClientProvider client={client}>{children}</QueryClientProvider>
+      </UserContext.Provider>
     </WorkspaceContext.Provider>
   );
 }

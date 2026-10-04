@@ -197,7 +197,7 @@ export function RecycleBinButton({ kind }: { kind: LibraryKind }) {
       ? "sop.manage"
       : kind === "project"
         ? "project.create"
-        : "selection.manage",
+        : "project.create",
   );
   const [open, setOpen] = useState(false),
     [restoring, setRestoring] = useState<string>(),

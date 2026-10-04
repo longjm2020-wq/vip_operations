@@ -26,7 +26,7 @@ import { visibilityOptions } from "../../../packages/contracts/src/project-libra
 export function ProjectTablesPage() {
   const library=useLibraryView("table","list");
   const user=useUser(),[scope,setScope]=useState("all");
-  const canCreate = useCan("selection.manage"),
+  const canCreate = useCan("project.create"),
     navigate = useNavigate(),
     { message } = App.useApp();
   const [open, setOpen] = useState(false),
@@ -153,7 +153,7 @@ export function ProjectTablesPage() {
           >
             <Input autoFocus maxLength={100} placeholder="请输入表格名称" />
           </Form.Item>
-          <Form.Item name="visibility" label="公开范围" extra="公开后，系统内有选款登记查看权限的用户可访问；保护区域权限继续生效。">
+          <Form.Item name="visibility" label="公开范围" extra="公开后，系统内有项目查看权限的用户可访问；保护区域权限继续生效。">
             <Select options={visibilityOptions}/>
           </Form.Item>
           <Typography.Paragraph type="secondary">

@@ -56,8 +56,8 @@ async function fixture(page: Page, readonly = false, blank = false) {
         id: "1",
         displayName: "管理员",
         permissions: readonly
-          ? ["selection.read"]
-          : ["selection.read", "selection.manage"],
+          ? ["project.read"]
+          : ["project.read", "project.create"],
         roleCodes: ["SUPER_ADMIN"],
         csrfToken: "fixture",
       };

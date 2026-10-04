@@ -41,8 +41,8 @@ export const libraryConfig = {
   table: {
     table: "project_tables",
     owner: "created_by",
-    read: "selection.read",
-    write: "selection.manage",
+    read: "project.read",
+    write: "project.create",
   },
 } as const;
 export function canManageContent(actor: Actor, kind: LibraryKind, row: Row) {

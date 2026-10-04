@@ -13,7 +13,7 @@ import {
 const kinds = [
   { key: "sop", permission: "project.read", path: "/sops" },
   { key: "project", permission: "project.read", path: "/projects" },
-  { key: "table", permission: "selection.read", path: "/project-tables" },
+  { key: "table", permission: "project.read", path: "/project-tables" },
 ] as const;
 export function PersonalWorkspaceContent() {
   const user = useUser(),

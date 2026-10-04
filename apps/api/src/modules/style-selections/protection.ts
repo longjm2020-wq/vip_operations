@@ -1,4 +1,5 @@
 import { selectionScope, selectionUrl } from "../../../../../packages/database/src/selection-scope.js";
+import { tableSelectionPermissions } from "../../../../../packages/contracts/src/table-permissions.js";
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import {
@@ -347,7 +348,8 @@ export async function users(c: Context) {
     fail("FORBIDDEN", "只有管理员可设置用户区域权限", 403);
   return rows(
     db,
-    "SELECT DISTINCT u.id,u.username,u.display_name FROM users u JOIN user_roles ur ON ur.user_id=u.id JOIN role_permissions rp ON rp.role_id=ur.role_id JOIN permissions p ON p.id=rp.permission_id WHERE u.status='ACTIVE' AND p.code='selection.read' ORDER BY u.id",
+    "SELECT DISTINCT u.id,u.username,u.display_name FROM users u JOIN user_roles ur ON ur.user_id=u.id JOIN role_permissions rp ON rp.role_id=ur.role_id JOIN permissions p ON p.id=rp.permission_id WHERE u.status='ACTIVE' AND p.code=$1 ORDER BY u.id",
+    selectionScope.getStore() ? "project.read" : "selection.read",
   );
 }
 export async function saveSettings(c: Context, input: unknown) {
@@ -626,7 +628,9 @@ export async function delegatedShare(tx: Tx, share: Row, p?: Policy) {
     id: String(user.id),
     username: user.username,
     displayName: user.display_name,
-    permissions: permissions.map((row) => row.code),
+    permissions: selectionScope.getStore()
+      ? tableSelectionPermissions(permissions.map((row) => row.code))
+      : permissions.map((row) => row.code),
     roleCodes: roles.map((row) => row.code),
   };
   if (!actor.permissions.includes("selection.manage"))

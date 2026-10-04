@@ -15,8 +15,9 @@ import { Reflector } from "@nestjs/core";
 import { Request, Response } from "express";
 import { Observable, map } from "rxjs";
 import { actorFor } from "./modules/auth/service.js";
-import { Actor, Context, fail, requirePermission } from "./core.js";
+import { Actor, Context, fail, requirePermission, parse, id } from "./core.js";
 import { camel } from "../../../packages/database/src/index.js";
+import { tableSelectionPermissions } from "../../../packages/contracts/src/table-permissions.js";
 export type AuthRequest = Request & { actor: Actor; requestId: string };
 export const Public = () => SetMetadata("public", true);
 export const Permission = (p: string) => SetMetadata("permission", p);
@@ -42,7 +43,12 @@ export class AuthGuard implements CanActivate {
         fail("FORBIDDEN", "请求来源或安全令牌无效", 403);
     }
     const p = this.reflector.get<string>("permission", c.getHandler());
-    if (p) requirePermission(r.actor, p);
+    if (p && ["selection.read", "selection.manage"].includes(p) && r.query.tableId !== undefined &&
+      (r.path.startsWith("/api/v1/style-selections") || r.path.startsWith("/api/v1/selection-collections"))) {
+      parse(id, r.query.tableId);
+      requirePermission(r.actor, p === "selection.read" ? "project.read" : "project.create");
+      r.actor = { ...r.actor, permissions: tableSelectionPermissions(r.actor.permissions) };
+    } else if (p) requirePermission(r.actor, p);
     return true;
   }
 }

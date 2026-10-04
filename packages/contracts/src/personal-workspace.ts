@@ -88,7 +88,7 @@ export const workspaceTools = [
     title: "新建表格",
     description: "创建和查看协作表格",
     path: "/project-tables",
-    permission: "selection.read",
+    permission: "project.read",
     group: "协作",
   },
   {

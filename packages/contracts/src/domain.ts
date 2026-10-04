@@ -113,15 +113,6 @@ export const roleSeeds: Record<
     ],
   },
 };
-for (const r of Object.values(roleSeeds))
-  r.permissions = [
-    ...new Set([
-      ...r.permissions,
-      "project.read",
-      "project.create",
-      "sop.manage",
-    ]),
-  ];
 for (const [code, name] of Object.entries({
   PRODUCT: "商品",
   CUSTOMER: "客服",
@@ -149,6 +140,12 @@ roleSeeds.SUPPLY_MANAGER = {
     "receipt.post",
   ],
 };
+for (const [code, role] of Object.entries(roleSeeds)) {
+  if (code === "SUPPLIER") continue;
+  role.permissions = [...new Set([
+    ...role.permissions, "project.read", "project.create", "sop.manage",
+  ])];
+}
 export const inTransitStatuses = [
   "CONFIRMED",
   "IN_PRODUCTION",

@@ -11,7 +11,16 @@ import {
   relativeChange,
 } from "../../apps/web/src/compass-ai-view.js";
 import { canReadManual } from "../../apps/api/src/manual.js";
+import { roleSeeds } from "../../packages/contracts/src/domain.js";
 describe("private workspace role defaults and validation", () => {
+  test("all built-in internal roles include collaboration, supplier stays excluded", () => {
+    for (const [code, role] of Object.entries(roleSeeds)) {
+      const collaboration = ["project.read", "project.create", "sop.manage"];
+      if (code === "SUPPLIER")
+        expect(role.permissions.some((permission) => collaboration.includes(permission))).toBe(false);
+      else for (const permission of collaboration) expect(role.permissions).toContain(permission);
+    }
+  });
   test("roles never add permissions, multiple roles merge and unknown roles fall back", () => {
     const buyer = {
       roleCodes: ["BUYER", "OPERATOR"],
@@ -21,7 +30,6 @@ describe("private workspace role defaults and validation", () => {
       "purchases",
       "selection",
       "suggestions",
-      "tables",
     ]);
     expect(availableWorkspaceTools(buyer).some((t) => t.id === "users")).toBe(
       false,

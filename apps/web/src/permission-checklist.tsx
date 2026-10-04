@@ -49,8 +49,8 @@ export const permissionLabels: Record<string, string> = {
   "vip.settings": "管理唯品会接入与同步",
   "analytics.read": "查看经营分析",
   "analytics.manage": "导入分析报表与配置每日邮件",
-  "project.read": "查看项目",
-  "project.create": "创建与管理本人项目",
+  "project.read": "查看 SOP、项目与协作表格",
+  "project.create": "创建与管理本人项目、协作表格",
   "sop.manage": "管理流程模板",
 };
 export function PermissionChecklist({

@@ -34,7 +34,7 @@ export const manualPermissions: Record<string, string | null> = {
   "25-supply-statements": "supply.reconcile",
   "26-supplier-statements": "supply.portal",
   "27-style-selections": "selection.read",
-  "28-project-tables": "selection.read",
+  "28-project-tables": "project.read",
   "29-inventory-transfers": "inventory.read",
   "30-compass-analytics": "analytics.read",
   "31-ai-settings": "analytics.manage",
