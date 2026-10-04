@@ -24,6 +24,16 @@
 .selection-tool-select {
   width: 130px;
 }
+.selection-column-group-tabs { padding: 0 14px; background: #fffaf5; }
+.selection-column-group-tabs .ant-tabs-nav { margin: 0; }
+.selection-column-group-tabs .ant-tabs-tab { padding: 8px 0; }
+.selection-column-group-tabs .ant-tabs-content-holder { display: none; }
+.selection-column-group-list { display: grid; gap: 12px; max-height: 420px; overflow: auto; margin-bottom: 12px; }
+.selection-column-group-config { padding: 12px; border: 1px solid #eaded3; border-radius: 6px; background: #fffaf5; }
+.selection-column-group-name { display: flex; gap: 8px; margin-bottom: 8px; }
+.selection-column-group-config .ant-select { width: 100%; }
+.selection-column-group-help { color: #8c7564; font-size: 12px; }
+.selection-card:has(.selection-column-group-tabs) .selection-sheet { max-height: calc(100vh - 305px); }
 .selection-tool-select .ant-select-selector {
   border: 0 !important;
   background: transparent !important;
@@ -62,6 +72,8 @@
 .selection-sheet td {
   height: 50px;
   padding: 0;
+  text-align: center;
+  vertical-align: middle;
   border-right: 1px solid #e7e0db;
   border-bottom: 1px solid #e7e0db;
   background: inherit;
@@ -72,7 +84,7 @@
   z-index: 10;
   height: 45px;
   padding: 0 12px;
-  text-align: left;
+  text-align: center;
   color: #624b3c;
   font-weight: 600;
   background: #fffaf5;
@@ -238,13 +250,11 @@
   border: 1px solid #d8c8bc;
   border-radius: 3px;
 }
-.selection-sheet.row-compact th,
-.selection-sheet.row-compact td {
+.selection-sheet.row-compact tbody td {
   height: 40px;
 }
 
-.selection-sheet.row-loose th,
-.selection-sheet.row-loose td {
+.selection-sheet.row-loose tbody td {
   height: 64px;
 }
 
@@ -374,7 +384,7 @@
 .selection-editor-error { max-width: 240px; font-size: 12px; color: #b42318; }
 @media (max-width: 600px) { .selection-editor-label { flex-basis: 90px; } .selection-editor-bar { flex-wrap: wrap; } .selection-editor-error { flex-basis: 100%; } }
 
-.selection-text-input, .selection-money-input input { text-align: inherit; }
+.selection-text-input, .selection-money-input input, .selection-sheet .ant-input { text-align: inherit; }
 .selection-money-input { justify-content: inherit; }
 .selection-tag-preview { display: block; text-align: inherit; }
 .selection-tag-preview .selection-chip { margin: 1px; }
@@ -400,6 +410,14 @@
 .selection-preview-close { position: fixed; z-index: 10; width: 32px; height: 32px; display: grid; place-items: center; padding: 0; border: 1px solid #ffffffa0; border-radius: 50%; color: white; background: #33251ecc; cursor: pointer; pointer-events: auto; box-shadow: 0 1px 5px #0003; }
 .selection-preview-close:hover { background: #d3540b; }
 .selection-preview-close:focus-visible { outline: 2px solid #ed6500; outline-offset: 2px; }
+.selection-image-preview-layer { position: fixed; inset: 0; z-index: 1100; pointer-events: none; }
+.selection-preview-image { position: fixed; left: 50%; top: 50%; display: block; max-width: none; max-height: none; object-fit: contain; cursor: grab; pointer-events: auto; touch-action: none; user-select: none; box-shadow: 0 4px 24px #0003; }
+.selection-preview-image.is-dragging { cursor: grabbing; }
+.selection-preview-toolbar { position: fixed; display: flex; align-items: center; flex-wrap: wrap; gap: 2px; max-width: calc(100vw - 16px); padding: 4px 8px; border-radius: 24px; color: white; background: #33251ecc; pointer-events: auto; box-shadow: 0 1px 5px #0003; }
+.selection-preview-toolbar .ant-btn { width: 30px; min-width: 30px; height: 30px; padding: 0; color: white; }
+.selection-preview-toolbar .ant-btn:not(:disabled):hover { color: white; background: #ffffff30; }
+.selection-preview-toolbar .ant-btn:disabled { color: #ffffff50; }
+.selection-preview-toolbar > span { font-size: 12px; }
 
 .selection-sheet td[data-vertical-align] .selection-cell-content { display: flex; flex-direction: column; justify-content: center; }
 .selection-sheet td[data-vertical-align="top"] .selection-cell-content { justify-content: flex-start; }
@@ -457,9 +475,18 @@
 .selection-sheet th, .selection-row-drag { user-select: none; cursor: cell; }
 .selection-sheet thead th:focus, .selection-sheet thead th:focus-visible { outline: none; }
 .selection-sheet input, .selection-sheet textarea { user-select: text; }
-.selection-sheet.selection-dragging, .selection-sheet.selection-dragging * { user-select: none !important; }
+/* Drag selection is blocked by preventDefault/selectstart in selection-drag.
+   Avoid changing styles on every descendant when a cell is pressed. */
 .selection-sheet .selection-axis-active { background: #e6f4ff; color: #1677ff; }
 .selection-row-reorder { display: block; font-size: 11px; line-height: 14px; cursor: grab; color: #999; }
+.selection-sheet thead th { z-index: 30; }
+.selection-sheet thead .selection-check { left: 0; z-index: 33; }
+.selection-sheet thead .selection-index { left: 48px; z-index: 33; }
+.selection-sheet tbody .selection-check, .selection-sheet tbody .selection-index { z-index: 21; }
+.selection-sheet tbody td[data-fixed-column] { position: sticky; z-index: 20; background-color: #fff; }
+.selection-sheet thead th[data-fixed-column] { z-index: 32; }
+.selection-sheet [data-fixed-last] { border-right-color: #bda58f; }
+.selection-column-pin { margin-right: 4px; color: #bd5d18; font-size: 12px; }
 
 /* A contiguous selected range has one perimeter, not a box around every cell. */
 .selection-sheet td.selection-cell-active { position:relative; box-shadow:none !important; border-color:transparent; }
@@ -495,6 +522,24 @@
 
 .selection-custom-tags{display:flex;flex-wrap:wrap;justify-content:inherit;gap:4px;max-width:100%;}
 .selection-custom-tags .ant-tag{margin:0;white-space:normal;overflow-wrap:anywhere;}
+.selection-choice-pill { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; min-height: 20px; padding: 1px 9px; border-radius: 12px; color: #fff; font-size: 12px; line-height: 18px; vertical-align: middle; }
+.selection-choice-pill > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.selection-choice-pill > button { display: inline-flex; align-items: center; justify-content: center; width: 13px; height: 16px; padding: 0; border: 0; color: inherit; background: transparent; cursor: pointer; font-size: 9px; }
+.selection-choice-cell { position: relative; display: flex; align-items: var(--choice-vertical, center); justify-content: var(--choice-horizontal, center); width: 100%; height: 100%; min-height: 32px; outline: none; }
+.selection-choice-values { display: flex; flex-direction: column; align-items: var(--choice-horizontal, center); gap: 4px; width: 100%; max-width: 100%; padding: 4px 6px; }
+.selection-choice-cell .selection-choice-select { height: 100%; min-height: 32px; }
+.selection-choice-select .ant-select-content, .selection-choice-select .ant-select-selection-overflow { display: flex; flex-direction: column; align-items: var(--choice-horizontal, center); justify-content: var(--choice-vertical, center); gap: 4px; padding: 4px 6px; min-height: 0; }
+.selection-choice-select .ant-select-selection-item { display: flex; justify-content: var(--choice-horizontal, center); }
+.selection-choice-select .ant-select-input { text-align: inherit; }
+.selection-choice-toggle { position: absolute; z-index: 2; right: 3px; bottom: 3px; width: 18px; height: 18px; margin: 0; padding: 0; border: 0; border-radius: 3px; color: white; background: #ad4c0c; display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: 11px; }
+.selection-choice-toggle:focus-visible { outline: 2px solid #ed6500; outline-offset: 2px; }
+.selection-choice-select .ant-select-clear { right: 4px; }
+.selection-choice-editor .ant-select-content { gap: 4px; }
+.selection-option-color-settings { margin: 8px 0 0; padding: 10px 12px; border: 1px solid #eaded3; border-radius: 6px; }
+.selection-option-color-settings > div { max-height: 240px; overflow: auto; }
+.selection-option-color-settings label { display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: 12px; margin: 6px 0; }
+.selection-option-color-settings .ant-select { flex: 0 0 110px; }
+.selection-option-color-settings p { margin-bottom: 0; color: #78604d; font-size: 12px; }
 .selection-tag-empty{color:#999;font-size:12px;}
 .selection-header-search { display: flex; align-items: flex-start; gap: 6px; width: 340px; max-width: 100%; padding: 0 8px; border: 1px solid #d9d9d9; border-radius: 6px; background: #fff; }
 .selection-header-search:focus-within { border-color: #e97827; }

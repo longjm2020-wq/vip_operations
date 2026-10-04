@@ -2,7 +2,22 @@ export const fieldTypes = {text:"文本",number:"数字",date:"日期",single:"�
 export const systemFieldTypes=new Set<string>(["creator","modifier","createdTime","modifiedTime","autonumber"]);
 export const systemField=(field:SelectionField)=>systemFieldTypes.has(field.type || field.fallbackType || "");
 export type FieldType = keyof typeof fieldTypes;
-export type SelectionField = {key:string;label:string;width:number;custom?:boolean;deleted?:boolean;type?:FieldType;fallbackType?:FieldType;options?:string[];personDisplay?:"name"|"username"|"both";timeDisplay?:"date"|"datetime";numberConfig?:{prefix:string;suffix:string;digits:number};tagConfig?:{allowCustom:boolean;multiple:boolean;max:number;order:"selection"|"options"|"alphabetical";color:string};imageConfig?:{autoplay?:boolean;colors:boolean;links:boolean;upload:boolean;mobile:boolean;max:number}};
+export type SelectionField = {key:string;label:string;width:number;custom?:boolean;deleted?:boolean;type?:FieldType;fallbackType?:FieldType;options?:string[];optionColors?:Record<string,string>;personDisplay?:"name"|"username"|"both";timeDisplay?:"date"|"datetime";numberConfig?:{prefix:string;suffix:string;digits:number};tagConfig?:{allowCustom:boolean;multiple:boolean;max:number;order:"selection"|"options"|"alphabetical";color:string};imageConfig?:{autoplay?:boolean;colors:boolean;links:boolean;upload:boolean;mobile:boolean;max:number}};
+export const selectionOptionPalette = [
+  { key: "orange", label: "暖橙", background: "#ad4c0c" },
+  { key: "green", label: "松绿", background: "#527761" },
+  { key: "blue", label: "雾蓝", background: "#557399" },
+  { key: "teal", label: "青色", background: "#427b80" },
+  { key: "purple", label: "灰紫", background: "#80658b" },
+  { key: "brown", label: "棕色", background: "#886447" },
+  { key: "red", label: "陶红", background: "#aa5b4c" },
+  { key: "gray", label: "暖灰", background: "#77736f" },
+];
+export function selectionOptionColor(field: SelectionField, value: string) {
+  const configured = selectionOptionPalette.find(color => color.key === field.optionColors?.[value]);
+  const index = Math.max(0, field.options?.indexOf(value) ?? 0);
+  return configured || selectionOptionPalette[index % selectionOptionPalette.length];
+}
 export function resetFieldTypes(fields:SelectionField[]):SelectionField[]{
   return fields.map(field=>({...field,fallbackType:field.type || field.fallbackType,type:undefined}));
 }
