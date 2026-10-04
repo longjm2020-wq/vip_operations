@@ -1,4 +1,4 @@
-import { PageSearch } from "./page-search";
+import { PageSearch, PageSearchInput } from "./page-search";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   Alert,
@@ -831,13 +831,12 @@ export function CompetitorAnalysisPage() {
               label: b.label,
             }))}
           />
-          <PageSearch><Input
+          <PageSearch><PageSearchInput
             aria-label="搜索竞品商品"
             placeholder="搜索商品 / 款号"
             allowClear
             value={keyword}
             onChange={(e) => setKeyword(e.target.value)}
-            style={{ width: 200 }}
           /></PageSearch>
           <Button
             type="text"

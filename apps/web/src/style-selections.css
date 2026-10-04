@@ -566,20 +566,9 @@
 .selection-option-color-settings .ant-select { flex: 0 0 110px; }
 .selection-option-color-settings p { margin-bottom: 0; color: #78604d; font-size: 12px; }
 .selection-tag-empty{color:#999;font-size:12px;}
-.selection-header-search { display: flex; align-items: flex-start; gap: 8px; width: 340px; max-width: 100%; padding: 0 10px; border: 1px solid #e8ddd3; border-radius: 18px; background: #fffaf6; transition: border-color .16s, box-shadow .16s, background .16s; }
-.selection-header-search:hover { border-color: #d9bca5; }
-.selection-header-search:focus-within { border-color: #d7793e; background: #fffdf9; box-shadow: 0 0 0 2px #d3540b0d; }
-.selection-header-search > .anticon { flex: none; margin-top: 8px; color: #9b8573; }
-.selection-header-search:focus-within > .anticon { color: #bb601f; }
-.selection-search-input { flex: 1; min-width: 0; width: auto !important; font-size: 12px; }
-.selection-header-search .ant-input, .selection-header-search .ant-input-affix-wrapper { border: 0 !important; border-radius: 0; outline: none !important; background: transparent !important; box-shadow: none !important; color: #49372a; }
-.selection-header-search .ant-input-affix-wrapper { padding-inline: 0; }
-.selection-header-search textarea.ant-input { padding-left: 0; }
-.selection-header-search .ant-input::placeholder { color: #a69485; }
 .selection-import-guide { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; padding: 14px 16px; margin: 16px 0; background: #fff5eb; border-radius: 6px; }
 .selection-import-guide > span { flex: 1; min-width: 200px; color: #78604d; }
 .selection-import-upload .ant-upload-drag-container { padding: 22px 12px; }
-@media (max-width: 600px) { .selection-header-search { width: min(420px, calc(100vw - 48px)); } }
 .selection-workspace-content .selection-card .ant-card-body { display: flex; flex-direction: column; height: 100%; min-height: 0; }
 .selection-workspace-content .selection-card .selection-sheet { order: 1; flex: 1; min-height: 0; max-height: none; }
 .selection-workspace-content .selection-card .selection-bulk-add { order: 3; flex: none; background: #fffaf5; }

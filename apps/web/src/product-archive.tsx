@@ -1,4 +1,4 @@
-import { PageSearch } from "./page-search";
+import { PageSearch, PageSearchInput } from "./page-search";
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -325,12 +325,11 @@ export function ProductArchive() {
       />
       <section className="product-archive">
         <div className="product-archive-toolbar">
-          <PageSearch><Input.Search
+          <PageSearch><PageSearchInput
             aria-label="搜索商品"
             placeholder="搜索款号 / 商品名称"
             allowClear
             disabled={!!editing}
-            style={{ width: 280 }}
             onSearch={(v) => {
               setSearch(v);
               q.setPage(1);

@@ -1,7 +1,7 @@
-import { PageSearch } from "./page-search";
+import { PageSearch, PageSearchInput } from "./page-search";
 import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { Button, Card, Empty, Input, Select, Space, Typography } from "antd";
+import { Button, Card, Empty, Select, Space, Typography } from "antd";
 import { Header, useUser } from "./shared";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "./api";
@@ -91,13 +91,12 @@ export function ManualPage() {
           <Alert type="warning" title="该章节不存在或当前账号没有查看权限" />
         )}
       <Space wrap style={{ marginBottom: 20 }}>
-        <PageSearch><Input.Search
+        <PageSearch><PageSearchInput
           aria-label="搜索使用手册"
           placeholder="搜索功能或问题，例如：入库、连线"
           allowClear
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          style={{ width: 320, maxWidth: "100%" }}
         /></PageSearch>
         <Select
           aria-label="选择手册章节"

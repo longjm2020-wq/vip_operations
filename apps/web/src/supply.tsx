@@ -1,4 +1,4 @@
-import { PageSearch } from "./page-search";
+import { PageSearch, PageSearchInput } from "./page-search";
 import { PurchaseDrawer } from "./supply-orders";
 import { downloadSheet } from "./download-sheet";
 import { useQualificationOcr } from "./qualification-ocr";
@@ -1509,8 +1509,7 @@ export function SupplyProducts({ internal = false }: { internal?: boolean }) {
             }}
           />
         )}
-        <PageSearch><Input.Search
-          style={{ width: 340 }}
+        <PageSearch><PageSearchInput
           value={styles}
           placeholder="单个款号，多个款号用 ; 或 ；分隔"
           onChange={(e) => setStyles(e.target.value)}

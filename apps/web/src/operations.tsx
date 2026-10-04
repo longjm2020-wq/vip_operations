@@ -1,4 +1,4 @@
-import { PageSearch } from "./page-search";
+import { PageSearch, PageSearchInput } from "./page-search";
 import { Table, exportTableData } from "./data-table";
 import { InventoryImport } from "./inventory-import";
 import { InventoryReferenceValue } from "./inventory-reference-value";
@@ -278,7 +278,7 @@ function InventoryBalances() {
       <Card>
         <div className="table-toolbar">
           <Space wrap>
-            <PageSearch><Input.Search
+            <PageSearch><PageSearchInput
               placeholder="商品编码 / 货号 / 款号 / 条码"
               onSearch={(v) => {
                 setSearch(v);

@@ -1,4 +1,4 @@
-import { PageSearch } from "./page-search";
+import { PageSearch, PageSearchInput } from "./page-search";
 import { Table } from "./data-table";
 import { useState } from "react";
 import {
@@ -443,14 +443,13 @@ export function MasterPage({
       />
       <Card className="surface">
         <div className="table-toolbar">
-          <PageSearch active={searchActive}><Input.Search
+          <PageSearch active={searchActive}><PageSearchInput
             placeholder="搜索编码或名称"
             allowClear
             onSearch={(v) => {
               setSearch(v);
               q.setPage(1);
             }}
-            style={{ maxWidth: 320 }}
           /></PageSearch>
           <Refresh onClick={() => q.refetch()} />
         </div>

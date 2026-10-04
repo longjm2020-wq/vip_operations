@@ -1,4 +1,4 @@
-import { PageSearch } from "./page-search";
+import { PageSearch, PageSearchInput } from "./page-search";
 import { useEffect, useRef, useState } from "react";
 import {
   Alert,
@@ -22,7 +22,6 @@ import {
 import {
   MailOutlined,
   ReloadOutlined,
-  SearchOutlined,
   UploadOutlined,
   RobotOutlined,
 } from "@ant-design/icons";
@@ -584,20 +583,17 @@ export function CompassAnalyticsPage() {
             setPage(1);
           }}
         />
-        <PageSearch><Tooltip title="单个编码支持模糊搜索；多个编码用英文逗号、中文逗号或换行隔开，按完整编码批量查询，最多100项。">
-          <div className="compass-batch-search">
-            <SearchOutlined aria-hidden="true" />
-            <Input.TextArea
+        <PageSearch><Tooltip title="单个编码支持模糊搜索；多个编码用英文逗号、中文逗号或换行隔开，按完整编码批量查询，最多100项。"><div>
+            <PageSearchInput
+              multiline
               aria-label="搜索款号货号条码"
-              placeholder="搜索款号 / 货号 / 条码，支持逗号或换行批量查询"
+              placeholder="搜索款号 / 货号 / 条码…"
               value={search}
               allowClear
-              autoSize={{ minRows: 1, maxRows: 4 }}
               maxLength={5000}
               onChange={(e) => setSearch(e.target.value)}
             />
-          </div>
-        </Tooltip></PageSearch>
+        </div></Tooltip></PageSearch>
       </div>
       {searchError && <Alert type="warning" title={searchError} showIcon />}
       <Tabs
