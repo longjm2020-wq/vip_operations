@@ -116,7 +116,7 @@ test("库存管理：发货核销、SKU 差异质检、进货仓入库与人工�
   await page.getByText(warehouse.name, { exact: true }).last().click();
   const stockRow = page.getByRole("row").filter({ hasText: sku.skuCode });
   // The row action column was removed; existing SKU reference records still apply.
-  await post("/inventory/references/" + sku.id, {
+  await post("/inventory/fulfilment/references/" + sku.id, {
     articleNo: "ARTICLE-IF",
     dailySales: 1.25,
     returnRate: 0.015,

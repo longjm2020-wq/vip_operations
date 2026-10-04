@@ -315,11 +315,12 @@ test("小卡片 Excel 库存导入，网络重试不重复增加库存", async (
   await page.getByRole("button", { name: "重试失败行", exact: true }).click();
   await expect(page.getByText(/导入成功 1 行，失败 0 行/)).toBeVisible();
   await page.keyboard.press("Escape");
+  await page.getByRole("combobox", { name: "筛选库存仓库" }).click();
+  await page.getByText("验收仓", { exact: true }).last().click();
   await expect(
     page
       .getByRole("row")
-      .filter({ hasText: "E2E-BK-L" })
-      .filter({ has: page.getByRole("cell", { name: "验收仓", exact: true }) }),
+      .filter({ hasText: "E2E-BK-L" }),
   ).toContainText("115");
   await page.goto("/inventory/transactions");
   await expect(
