@@ -684,7 +684,7 @@ export function StyleSelectionsPage() {
     if (column.key === "collectionInventory") return cell(<CollectionStockEditor readOnly inventory={row.collectionInventory || []} onChange={()=>{}}/>);
     if (collectionKeys.has(column.key)) return cell(<span title="由产品信息收集表内部确认后更新">{row[column.key] ?? "—"}</span>);
     if (column.key === "registrationBatch") return cell(<input className="selection-date-input" aria-label="登记批次日期" title="输入日期 YYYY-MM-DD，也可在顶部编辑栏选择" placeholder="+ 日期" maxLength={10} readOnly={disabled} {...focusProps} value={displayValue} onChange={event => update(row._key, column, event.target.value)} />);
-    if (moneyKeys.has(column.key)) return cell(<div className="selection-money-input">{(!numberFormat || numberFormat.type === "general") && <span>￥</span>}<input {...focusProps} disabled={disabled} inputMode="decimal" placeholder="0.00" value={displayValue} onChange={(event) => update(row._key, column, event.target.value)} /></div>);
+    if (moneyKeys.has(column.key)) return cell(<div className="selection-money-input">{displayValue.trim() !== "" && (!numberFormat || numberFormat.type === "general") && <span>￥</span>}<input {...focusProps} disabled={disabled} inputMode="decimal" value={displayValue} onChange={(event) => update(row._key, column, event.target.value)} /></div>);
     return cell(<textarea {...focusProps} className="selection-text-input" aria-label={column.label} readOnly={disabled} value={displayValue} onChange={(event) => update(row._key, column, event.target.value)} />);
   };
   const applyAlignment = (alignment: "left" | "center" | "right" | "top" | "middle" | "bottom", vertical = false) => {
