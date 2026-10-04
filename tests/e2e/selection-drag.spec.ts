@@ -13,9 +13,15 @@ test.beforeEach(async ({ page }) => {
     labelImages: [],
     updatedAt: "2026-10-01T00:00:00Z",
   }));
+  const personalLayouts = new Map<string, { preferences: unknown; revision: number }>();
   await page.route("**/api/v1/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
     let data: unknown = [];
+    if (path.endsWith("/layout-preferences")) {
+      const layoutKey = "default", current = personalLayouts.get(layoutKey) || { preferences: null, revision: 0 };
+      if (route.request().method() === "POST") personalLayouts.set(layoutKey, { preferences: route.request().postDataJSON().preferences, revision: current.revision + 1 });
+      data = personalLayouts.get(layoutKey) || current;
+    }
     if (path.endsWith("/auth/me"))
       data = {
         id: "drag-tester",

@@ -37,9 +37,15 @@ test.beforeEach(async ({ page }) => {
       ),
     }),
   );
+  const personalLayouts = new Map<string, { preferences: unknown; revision: number }>();
   await page.route("**/api/v1/**", (route) => {
     const path = new URL(route.request().url()).pathname;
     let data: any = [];
+    if (path.endsWith("/layout-preferences")) {
+      const layoutKey = "default", current = personalLayouts.get(layoutKey) || { preferences: null, revision: 0 };
+      if (route.request().method() === "POST") personalLayouts.set(layoutKey, { preferences: route.request().postDataJSON().preferences, revision: current.revision + 1 });
+      data = personalLayouts.get(layoutKey) || current;
+    }
     if (path.endsWith("/auth/me"))
       data = {
         id: "1",

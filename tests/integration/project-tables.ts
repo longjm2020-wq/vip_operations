@@ -95,10 +95,10 @@ try {
     xutiStyleNo: "SAME-STYLE",
   });
   const key = randomUUID();
-  const a = await ok("/project-tables", "POST", { name: "项目 A" }, key),
-    aAgain = await ok("/project-tables", "POST", { name: "项目 A" }, key);
+  const a = await ok("/project-tables", "POST", { name: "项目 A", visibility: "PUBLIC" }, key),
+    aAgain = await ok("/project-tables", "POST", { name: "项目 A", visibility: "PUBLIC" }, key);
   assert.equal(a.id, aAgain.id);
-  const b = await ok("/project-tables", "POST", { name: "项目 B" });
+  const b = await ok("/project-tables", "POST", { name: "项目 B", visibility: "PUBLIC" });
   const path = (table: any, endpoint = "") =>
     `/style-selections${endpoint}${endpoint.includes("?") ? "&" : "?"}tableId=${table.id}`;
   const initialA = await ok(path(a)),
@@ -342,12 +342,45 @@ try {
     "INSERT INTO users(username,display_name,password_hash) VALUES('table-reader','只读',$1) RETURNING id",
     passwordHash(password),
   );
+  const readerRole = await one(db, "INSERT INTO roles(code,name) VALUES('TABLE_READER','表格只读测试') RETURNING id");
+  await rows(db, "INSERT INTO role_permissions(role_id,permission_id) SELECT $1::bigint,id FROM permissions WHERE code IN ('project.read','selection.read')", readerRole!.id);
   await rows(
     db,
-    "INSERT INTO user_roles(user_id,role_id) SELECT $1::bigint,id FROM roles WHERE code='ANALYST'",
+    "INSERT INTO user_roles(user_id,role_id) VALUES($1::bigint,$2::bigint)",
     readonly!.id,
+    readerRole!.id,
   );
   const reader = await login("table-reader", password);
+  const { selectionLayoutSchema } = await import("../../packages/contracts/src/selection-layout.js");
+  const preferencePath = "/style-selections/layout-preferences";
+  const layout = selectionLayoutSchema.parse({
+    columns: [{ key: "custom:test", label: "保留字段", width: 180, custom: true, type: "text" }],
+    fixedColumns: ["custom:test"], columnGroups: [{ id: "quality", name: "质检", columnKeys: ["custom:test"] }], columnGroupId: "quality", rowHeight: "compact",
+  });
+  assert.deepEqual(await ok(preferencePath), { preferences: null, revision: 0 });
+  const preferenceKey = randomUUID();
+  const preferencesSaved = await ok(preferencePath, "POST", { preferences: layout, revision: 0 }, preferenceKey);
+  assert.deepEqual(await ok(preferencePath, "POST", { preferences: layout, revision: 0 }, preferenceKey), preferencesSaved);
+  assert.deepEqual((await ok(preferencePath)).preferences, layout);
+  assert.equal((await request(preferencePath, "POST", { preferences: layout, revision: 0 })).status, 409);
+  assert.equal((await request(preferencePath, "POST", { preferences: layout, revision: 1, userId: String(readonly!.id) })).status, 400);
+  assert.equal((await request(preferencePath, "GET", undefined, randomUUID(), { cookie: "", csrf: "" })).status, 401);
+  assert.equal((await request(preferencePath, "POST", { preferences: layout, revision: 1 }, randomUUID(), { ...session, csrf: "invalid" })).status, 403);
+  assert.deepEqual((await request(preferencePath, "GET", undefined, randomUUID(), reader)).result.data, { preferences: null, revision: 0 });
+  assert.equal((await request(preferencePath, "POST", { preferences: { ...layout, columnGroups: [], columnGroupId: "" }, revision: 0 }, randomUUID(), reader)).status, 201);
+  assert.deepEqual((await ok(preferencePath)).preferences, layout);
+  assert.deepEqual(await ok(path(b, "/layout-preferences")), { preferences: null, revision: 0 });
+  const layoutTable = await ok("/project-tables", "POST", { name: "账号设置隔离", visibility: "PUBLIC" });
+  const tablePreferences = path(layoutTable, "/layout-preferences");
+  assert.equal((await request(tablePreferences, "POST", { preferences: layout, revision: 0 }, randomUUID(), reader)).status, 201);
+  assert.deepEqual(await ok(tablePreferences), { preferences: null, revision: 0 });
+  assert.deepEqual((await request(tablePreferences, "GET", undefined, randomUUID(), reader)).result.data.preferences, layout);
+  const privateLayoutTable = await ok("/project-tables", "POST", { name: "私有设置", visibility: "PRIVATE" });
+  assert.equal((await request(path(privateLayoutTable, "/layout-preferences"), "GET", undefined, randomUUID(), reader)).status, 404);
+  const race = await Promise.all(["第一设备", "第二设备"].map(label => request(preferencePath, "POST", { preferences: { ...layout, columns: [{ ...layout.columns[0], label }] }, revision: 1 })));
+  assert.deepEqual(race.map(result => result.status).sort(), [201, 409]);
+  assert.equal((await ok(path(layoutTable))).length, 3);
+  check("personal layouts preserve fields and active groups, isolate users and tables, allow readers and reject stale writes and impersonation");
   assert.equal(
     (
       await request(

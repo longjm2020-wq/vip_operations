@@ -1,4 +1,3 @@
-import {useSelectionWorkspace} from "./selection-workspace";
 import { useState } from "react";
 import { Button, Checkbox, Modal, Select, Space, Tabs, Typography } from "antd";
 import {
@@ -6,7 +5,6 @@ import {
   SortAscendingOutlined,
   TeamOutlined,
 } from "@ant-design/icons";
-import { useUser } from "./shared";
 type Column = {
   key: string;
   label: string;
@@ -19,28 +17,17 @@ export function SelectionOrganization({
   sort,
   onGroup,
   onSort,
+  configured,
+  onConfigure,
 }: {
   columns: Column[];
   group: string;
   sort: string;
   onGroup: (key: string) => void;
   onSort: (key: string) => void;
+  configured: { groups: string[]; sorts: string[] };
+  onConfigure: (value: { groups: string[]; sorts: string[] }) => void;
 }) {
-  const {storageKey: keyFor} = useSelectionWorkspace();
-  const user = useUser(),
-    storageKey = keyFor(`selection-organization-v1:${user.id}`);
-  const [configured, setConfigured] = useState<{
-    groups: string[];
-    sorts: string[];
-  }>(() => {
-    try {
-      return JSON.parse(
-        localStorage.getItem(storageKey) || '{"groups":[],"sorts":[]}',
-      );
-    } catch {
-      return { groups: [], sorts: [] };
-    }
-  });
   const [draft, setDraft] = useState(configured),
     [open, setOpen] = useState(false),
     [tab, setTab] = useState("groups");
@@ -136,8 +123,7 @@ export function SelectionOrganization({
         open={open}
         onCancel={() => setOpen(false)}
         onOk={() => {
-          setConfigured(draft);
-          localStorage.setItem(storageKey, JSON.stringify(draft));
+          onConfigure(draft);
           if (
             group.startsWith("field:") &&
             !draft.groups.includes(group.slice(6))

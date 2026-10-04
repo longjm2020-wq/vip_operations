@@ -2,7 +2,8 @@ export const fieldTypes = {text:"文本",number:"数字",date:"日期",single:"�
 export const systemFieldTypes=new Set<string>(["creator","modifier","createdTime","modifiedTime","autonumber"]);
 export const systemField=(field:SelectionField)=>systemFieldTypes.has(field.type || field.fallbackType || "");
 export type FieldType = keyof typeof fieldTypes;
-export type SelectionField = {key:string;label:string;width:number;custom?:boolean;deleted?:boolean;type?:FieldType;typePreset?:string;fallbackType?:FieldType;options?:string[];optionColors?:Record<string,string>;personDisplay?:"name"|"username"|"both";timeDisplay?:"date"|"datetime";numberConfig?:{prefix:string;suffix:string;digits:number};tagConfig?:{allowCustom:boolean;multiple:boolean;max:number;order:"selection"|"options"|"alphabetical";color:string};imageConfig?:{autoplay?:boolean;colors:boolean;links:boolean;upload:boolean;mobile:boolean;max:number}};
+import type { SelectionField } from "../../../packages/contracts/src/selection-layout.js";
+export type { SelectionField };
 export const selectionOptionPalette = [
   { key: "orange", label: "暖橙", background: "#ad4c0c" },
   { key: "green", label: "松绿", background: "#527761" },

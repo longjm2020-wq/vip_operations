@@ -1,12 +1,13 @@
-import { useState } from "react";
+import type { SelectionLayout } from "../../../packages/contracts/src/selection-layout";
 import { Button, Checkbox, Divider, Popover, Radio } from "antd";
 import { UnorderedListOutlined } from "@ant-design/icons";
 
 const labels = {sum:"求和",average:"平均值",count:"计数",numeric:"数值计数",max:"最大值",min:"最小值"};
 type Metric = keyof typeof labels;
-export function SelectionStatistics({values}:{values:unknown[]}) {
-  const [visible,setVisible]=useState<Metric[]>(["sum","average","count"]);
-  const [format,setFormat]=useState("plain");
+export function SelectionStatistics({values,settings,onChange}:{values:unknown[];settings:SelectionLayout["statistics"];onChange:(value:SelectionLayout["statistics"])=>void}) {
+  const {visible,format}=settings;
+  const setVisible=(value:Metric[]|((previous:Metric[])=>Metric[]))=>onChange({...settings,visible:typeof value==="function"?value(visible):value});
+  const setFormat=(format:SelectionLayout["statistics"]["format"])=>onChange({...settings,format});
   const filled=values.filter(value=>value!==null && value!==undefined && String(value).trim()!=="");
   const numbers=filled.filter(value=>typeof value==="number" || (typeof value==="string" && /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(value.trim()))).map(Number).filter(Number.isFinite);
   const sum=numbers.reduce((total,value)=>total+value,0);

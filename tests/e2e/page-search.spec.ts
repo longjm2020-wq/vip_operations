@@ -25,7 +25,7 @@ test("shared search stays compact across page controls when a query exceeds the 
     await input.fill(longQuery);
     await expect(input).toHaveValue(longQuery);
     await expect.poll(async () => Math.round((await control.boundingBox())!.height), { message: path }).toBe(28);
-    expect(Math.round((await control.boundingBox())!.width), path).toBe(320);
+    expect(Math.round((await control.boundingBox())!.width), path).toBe(224);
     const after = (await page.locator(".topbar").boundingBox())!;
     expect(after.height, path).toBe(before.height);
     await expect(control).toHaveCSS("border-radius", "18px");
@@ -55,7 +55,7 @@ test("compact batch search preserves every line and scrolls inside the unchanged
     await expect(input).toHaveValue(batch);
     const bounds = (await control.boundingBox())!, after = (await page.locator(".topbar").boundingBox())!;
     expect(Math.round(bounds.height)).toBe(28);
-    expect(bounds.width).toBeLessThanOrEqual(320);
+    expect(bounds.width).toBeLessThanOrEqual(224);
     expect(after.height).toBe(before.height);
     expect(bounds.x + bounds.width).toBeLessThanOrEqual(viewport.width);
     expect(bounds.y + bounds.height).toBeLessThanOrEqual(after.y + after.height);

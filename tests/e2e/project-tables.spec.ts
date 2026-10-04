@@ -45,12 +45,18 @@ async function fixture(page: Page, readonly = false, blank = false) {
       JSON.stringify(["supplierCode"]),
     );
   });
+  const personalLayouts = new Map<string, { preferences: unknown; revision: number }>();
   await page.route("**/api/v1/**", async (route) => {
     const url = new URL(route.request().url()),
       path = url.pathname,
       scope = url.searchParams.get("tableId") || "default",
       method = route.request().method();
     let data: any = [];
+    if (path.endsWith("/layout-preferences")) {
+      const layoutKey = scope, current = personalLayouts.get(layoutKey) || { preferences: null, revision: 0 };
+      if (route.request().method() === "POST") personalLayouts.set(layoutKey, { preferences: route.request().postDataJSON().preferences, revision: current.revision + 1 });
+      data = personalLayouts.get(layoutKey) || current;
+    }
     if (path.endsWith("/auth/me"))
       data = {
         id: "1",

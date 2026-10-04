@@ -42,7 +42,7 @@ export function SelectionColumnGroupManager({ columns, visible, groups, onSave }
         <Select aria-label={`分组字段${index + 1}`} mode="multiple" value={group.columnKeys} placeholder="选择本组字段，可包含图片" optionFilterProp="label" options={columns.map(column => ({ value: column.key, label: `${column.label}${column.deleted ? "（已删除）" : !visible.includes(column.key) ? "（已隐藏）" : ""}`, disabled: column.deleted }))} onChange={columnKeys => update(group.id, { columnKeys })} />
       </div>)}</div>
       <Button aria-label="添加分组" icon={<PlusOutlined />} onClick={() => setDraft(current => [...current, { id: crypto.randomUUID(), name: "", columnKeys: [] }])}>添加分组</Button>
-      <p className="selection-column-group-help">可为同一字段配置多个分组。隐藏或删除的字段暂不显示，恢复后沿用分组设置。分组只保存在当前浏览器，并按表格分别保存。</p>
+      <p className="selection-column-group-help">可为同一字段配置多个分组。隐藏或删除的字段暂不显示，恢复后沿用分组设置。分组按账号和表格保存到服务器，其他设备会恢复上次使用的分组。</p>
     </Modal>
   </>;
 }

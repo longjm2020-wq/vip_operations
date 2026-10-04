@@ -157,7 +157,7 @@ a {
 .topbar-actions {
   flex-shrink: 0;
 }
-.topbar-search-host { flex: 0 0 320px; width: 320px; max-width: 100%; min-width: 0; margin-right: 16px; padding-block: 4px; }
+.topbar-search-host { flex: 0 0 224px; width: 224px; max-width: 100%; min-width: 0; margin-right: 16px; padding-block: 4px; }
 .topbar-search-host:empty { display: none; }
 .page-top-search { width: 100%; min-width: 0; height: 28px; line-height: normal; }
 .page-top-search > * { max-width: 100%; }
@@ -209,7 +209,7 @@ a {
   .workspace-subnav:empty {
     display: none;
   }
-  .topbar-search-host { order: 4; flex-basis: 320px; margin: 0 0 8px auto; }
+  .topbar-search-host { order: 4; flex-basis: 224px; margin: 0 0 8px auto; }
 }
 @media (max-width: 600px) {
   .topbar-actions .account-menu-name,
