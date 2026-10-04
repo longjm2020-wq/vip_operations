@@ -73,10 +73,10 @@ async function fixture(page: Page, readonly = false, blank = false) {
           ...tables[0],
           id: String(tables.length + 1),
           name: route.request().postDataJSON().name,
-          initialLayout: "blank",
+          initialLayout: "empty",
         };
         tables.push(table);
-        records[table.id] = blankRows();
+        records[table.id] = [];
         data = table;
       } else data = tables;
     }
@@ -144,7 +144,7 @@ async function fixture(page: Page, readonly = false, blank = false) {
   return { records, writes };
 }
 
-test("new tables start with one text field and three blank records, save independently and add rows inline", async ({
+test("new tables start with no fields or records, share table functions and save independently", async ({
   page,
 }) => {
   const { records, writes } = await fixture(page);
@@ -177,39 +177,54 @@ test("new tables start with one text field and three blank records, save indepen
       exact: true,
     }),
   ).toBeVisible();
-  await expect(page.locator("tbody tr[data-selection-row]")).toHaveCount(3);
+  await expect(page.locator("tbody tr[data-selection-row]")).toHaveCount(0);
   for (const name of ["字段管理", "导入", "导出", "保护区域", "手机拍图"])
     await expect(
       page.getByRole("button", { name: new RegExp(name) }).first(),
     ).toBeVisible();
-  await expect(
-    page.getByRole("columnheader", { name: "选择整列：文本", exact: true }),
-  ).toBeVisible();
+  await expect(page.getByRole("columnheader", { name:"选择整列：文本", exact:true })).toHaveCount(0);
   await expect(
     page.getByRole("columnheader", {
       name: "选择整列：供应商编码",
       exact: true,
     }),
   ).toHaveCount(0);
-  await expect(page.locator("thead th[data-selection-column]")).toHaveCount(1);
+  await expect(page.locator("thead th[data-selection-column]")).toHaveCount(0);
+  await expect(page.getByLabel("个人设置同步")).toHaveCount(0);
+  const toolbar = page.locator(".selection-toolbar");
+  for (const label of ["手机拍图", "字段管理", "字段分组", "保护区域", "导入", "导出"]) {
+    const control = toolbar.getByRole("button", { name: new RegExp(label) });
+    await expect(control).toHaveCSS("width", "135px");
+  }
+  const selects = toolbar.locator(".selection-tool-select");
+  await expect(selects).toHaveCount(3);
+  for (const select of await selects.all()) await expect(select).toHaveCSS("width", "135px");
+  await expect(toolbar.getByRole("button", { name: /产品信息收集表/ })).toHaveAttribute("data-selection-control-width", "auto");
+  await expect(toolbar.getByRole("button", { name: "左对齐", exact: true })).not.toHaveCSS("width", "135px");
   await page.screenshot({ path: ".local/project-table-blank.png" });
-  await page.locator('td[data-selection-column="custom:text"]').first().click();
+  await page.getByRole("button", { name:"添加字段", exact:true }).click();
+  await page.getByRole("dialog", { name:"添加字段", exact:true }).getByLabel("字段名称", { exact:true }).fill("文本");
+  await page.getByRole("dialog", { name:"添加字段", exact:true }).getByRole("button", { name:"保存", exact:true }).click();
+  const textKey = (await page.getByRole("columnheader", { name:"选择整列：文本", exact:true }).getAttribute("data-selection-column"))!;
+  await page.locator(".selection-add-record").getByRole("button", { name:"添加一行", exact:true }).click();
+  await expect.poll(()=>records["2"].length).toBe(1);
+  await page.locator(`td[data-selection-column="${textKey}"]`).first().click();
   await page
     .getByRole("group", { name: "单元格编辑栏", exact: true })
     .getByLabel("文本", { exact: true })
     .fill("NEW-STYLE");
   await expect
-    .poll(() => records["2"][0].extraFields["custom:text"])
+    .poll(() => records["2"][0].extraFields[textKey])
     .toBe("NEW-STYLE");
   expect(writes.every((write) => write.scope === "2")).toBe(true);
   await page.reload();
   await expect(
     page
-      .locator('td[data-selection-column="custom:text"]')
+      .locator(`td[data-selection-column="${textKey}"]`)
       .first()
       .getByRole("textbox"),
   ).toHaveValue("NEW-STYLE");
-  await expect(page.locator("tbody tr[data-selection-row]")).toHaveCount(3);
+  await expect(page.locator("tbody tr[data-selection-row]")).toHaveCount(1);
   await page
     .getByRole("textbox", { name: "搜索选款", exact: true })
     .fill("new-st");
@@ -225,14 +240,14 @@ test("new tables start with one text field and three blank records, save indepen
     .locator(".selection-add-record")
     .getByRole("button", { name: "添加一行", exact: true })
     .click();
-  await expect.poll(() => records["2"].length).toBe(4);
+  await expect.poll(() => records["2"].length).toBe(2);
   await page.reload();
-  await expect(page.locator("tbody tr[data-selection-row]")).toHaveCount(4);
+  await expect(page.locator("tbody tr[data-selection-row]")).toHaveCount(2);
   await tableBack.click();
   await expect(page).toHaveURL(/\/project-tables$/);
   await page.getByRole("link", { name: "秋季协作表", exact: true }).click();
   await expect(page).toHaveURL(/\/project-tables\/2$/);
-  await expect(page.locator("tbody tr[data-selection-row]")).toHaveCount(4);
+  await expect(page.locator("tbody tr[data-selection-row]")).toHaveCount(2);
   await page.goto("/style-selections");
   await expect(
     page.locator('td[data-selection-column="xutiStyleNo"]'),
@@ -275,7 +290,9 @@ test("field settings persist per table and do not leak to another table or origi
   await page.getByRole("button", { name: "创建空表", exact: true }).click();
   await expect(
     page.getByRole("columnheader", { name: "选择整列：文本", exact: true }),
-  ).toHaveCount(1);
+  ).toHaveCount(0);
+  await expect(page.locator("thead th[data-selection-column]")).toHaveCount(0);
+  await expect(page.locator("tbody tr[data-selection-row]")).toHaveCount(0);
 });
 
 test("read-only users can open tables but cannot create or add rows", async ({

@@ -4,8 +4,12 @@ import {
   selectionFields,
 } from "../../packages/contracts/src/selection-protection.js";
 test.beforeEach(async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem("style-selection-custom-columns-v1", JSON.stringify([
+    { key:"custom:note", label:"备注资料", width:150, custom:true, type:"text" },
+  ])));
   let revision = 0,
     settings = { ...defaultProtection };
+  let personalLayout: { preferences: unknown; revision: number } = { preferences:null, revision:0 };
   const rows = Array.from({ length: 3 }, (_, index) => ({
     id: String(index + 1),
     xutiStyleNo: `STYLE-${index + 1}`,
@@ -30,6 +34,10 @@ test.beforeEach(async ({ page }) => {
   await page.route("**/api/v1/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
     let data: any = [];
+    if (path.endsWith("/layout-preferences")) {
+      if (route.request().method() === "POST") personalLayout = { preferences:route.request().postDataJSON().preferences, revision:personalLayout.revision+1 };
+      data = personalLayout;
+    }
     if (path.endsWith("/auth/me"))
       data = {
         id: "1",
@@ -66,7 +74,7 @@ test.beforeEach(async ({ page }) => {
     page.locator('td[data-selection-column="xutiStyleNo"]'),
   ).toHaveCount(3);
 });
-test("field deletion confirms, persists, cancels selection and restores original data", async ({
+test("field deletion confirms, persists and cancels selection without a deleted-field entry", async ({
   page,
 }) => {
   await page
@@ -104,41 +112,14 @@ test("field deletion confirms, persists, cancels selection and restores original
   await expect(
     page.getByRole("button", { name: "编辑字段材质", exact: true }),
   ).toHaveCount(0);
-  await page
-    .getByRole("button", { name: "初始化字段类型", exact: true })
-    .click();
-  await page
-    .getByRole("button", { name: "已删除字段（1）", exact: true })
-    .click();
-  await page.getByRole("button", { name: "恢复字段材质", exact: true }).click();
-  await expect(
-    page.locator('td[data-selection-column="material"]'),
-  ).toHaveCount(3);
-  await expect(
-    page.locator(
-      'td[data-selection-row="1"][data-selection-column="material"]',
-    ),
-  ).toContainText("棉");
+  await expect(page.getByRole("button", { name: /已删除字段/ })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "字段类型管理", exact:true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "添加字段", exact:true })).toBeVisible();
 });
 
-test("custom field recovery retains definition and values without writing records", async ({
+test("deleted custom fields keep record data while a new same-name field starts empty", async ({
   page,
 }) => {
-  await page.evaluate(() =>
-    localStorage.setItem(
-      "style-selection-custom-columns-v1",
-      JSON.stringify([
-        {
-          key: "custom:note",
-          label: "备注资料",
-          width: 150,
-          custom: true,
-          type: "text",
-        },
-      ]),
-    ),
-  );
-  await page.reload();
   const cell = page.locator(
     'td[data-selection-row="1"][data-selection-column="custom:note"]',
   );
@@ -162,19 +143,14 @@ test("custom field recovery retains definition and values without writing record
   await page.reload();
   await expect(cell).toHaveCount(0);
   await page.getByRole("button", { name: "字段管理", exact: true }).click();
-  await page
-    .getByRole("button", { name: "已删除字段（1）", exact: true })
-    .click();
-  await page
-    .getByRole("button", { name: "恢复字段备注资料", exact: true })
-    .click();
-  await expect(cell).toContainText("保留资料");
+  await expect(page.getByRole("button", { name: /已删除字段/ })).toHaveCount(0);
+  await page.getByRole("button", { name:"添加字段", exact:true }).click();
+  await page.getByRole("dialog", { name:"添加字段", exact:true }).getByLabel("字段名称", { exact:true }).fill("备注资料");
+  await page.getByRole("dialog", { name:"添加字段", exact:true }).getByRole("button", { name:"保存", exact:true }).click();
+  const newKey = await page.getByRole("columnheader", { name:"选择整列：备注资料", exact:true }).getAttribute("data-selection-column");
+  expect(newKey).not.toBe("custom:note");
+  await expect(page.locator(`td[data-selection-row="1"][data-selection-column="${newKey}"]`).getByRole("textbox")).toHaveValue("");
   expect(recordWrites).toEqual([]);
-  await page
-    .getByRole("dialog")
-    .getByRole("button", { name: "关闭", exact: true })
-    .last()
-    .click();
   await page.getByRole("button", { name: "字段管理", exact: true }).click();
   await page
     .getByRole("button", { name: "编辑字段备注资料", exact: true })
@@ -224,7 +200,7 @@ test("deleted shared-filter field does not keep rows filtered after reload", asy
   ).toHaveCount(0);
 });
 
-test("read-only users cannot delete or restore field definitions", async ({
+test("read-only users cannot delete field definitions and see no recovery controls", async ({
   page,
 }) => {
   await page.route("**/api/v1/auth/me", (route) =>
@@ -240,23 +216,12 @@ test("read-only users cannot delete or restore field definitions", async ({
       },
     }),
   );
-  await page.evaluate(() =>
-    localStorage.setItem(
-      "selection-field-config-v1",
-      JSON.stringify({ color: { deleted: true } }),
-    ),
-  );
   await page.reload();
   await page.getByRole("button", { name: "字段管理", exact: true }).click();
   await expect(
     page.getByRole("button", { name: "删除字段材质", exact: true }),
   ).toBeDisabled();
-  await page
-    .getByRole("button", { name: "已删除字段（1）", exact: true })
-    .click();
-  await expect(
-    page.getByRole("button", { name: "恢复字段颜色", exact: true }),
-  ).toBeDisabled();
+  await expect(page.getByRole("button", { name:/已删除字段|恢复字段/ })).toHaveCount(0);
 });
 test("administrator configures a selected region, named-user access and independent default rights", async ({
   page,

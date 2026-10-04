@@ -14,6 +14,7 @@ type Workspace = {
   tableId?: string;
   title?: string;
   blankLayout?: boolean;
+  emptyLayout?: boolean;
   api: typeof api;
   queryClient: QueryClient;
   storageKey: (key: string) => string;
@@ -29,11 +30,13 @@ export function SelectionWorkspace({
   tableId,
   title,
   blankLayout = false,
+  emptyLayout = false,
   children,
 }: {
   tableId?: string;
   title?: string;
   blankLayout?: boolean;
+  emptyLayout?: boolean;
   children: ReactNode;
 }) {
   const user = useUser();
@@ -55,6 +58,7 @@ export function SelectionWorkspace({
       tableId,
       title,
       blankLayout,
+      emptyLayout,
       queryClient: client,
       api: (path, ...args) =>
         api(
@@ -65,7 +69,7 @@ export function SelectionWorkspace({
         ),
       storageKey: (key) => (tableId ? `project-table:${tableId}:${key}` : key),
     }),
-    [tableId, title, blankLayout, client],
+    [tableId, title, blankLayout, emptyLayout, client],
   );
   return (
     <WorkspaceContext.Provider value={workspace}>

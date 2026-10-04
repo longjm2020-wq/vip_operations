@@ -2,6 +2,7 @@ import { expect, it } from "vitest";
 import {
   imageTextScore,
   normalizeImageText,
+  preferImageTextLine,
 } from "../../apps/web/src/selection-image-text-quality.js";
 it("cleans Chinese spacing and percentage layout while retaining material numbers, English words and line breaks", () => {
   expect(
@@ -12,6 +13,13 @@ it("cleans Chinese spacing and percentage layout while retaining material number
   expect(normalizeImageText("棉 61.3 % + 聚酯纤维 33.7 %\n(A / B)")).toBe(
     "棉 61.3% + 聚酯纤维 33.7%\n(A / B)",
   );
+});
+it("accepts a stronger reading of the original line but rejects a short or multiline replacement", () => {
+  const doubtful = { text: "100%LLI=E 4%", confidence: 25 };
+  expect(preferImageTextLine(doubtful, { text: "100%山羊绒", confidence: 75 })).toBe(true);
+  expect(preferImageTextLine(doubtful, { text: "100", confidence: 99 })).toBe(false);
+  expect(preferImageTextLine(doubtful, { text: "100%\n山羊绒", confidence: 99 })).toBe(false);
+  expect(preferImageTextLine({ text: "100%山羊绒", confidence: 90 }, { text: "100%山羊线", confidence: 92 })).toBe(false);
 });
 it("prefers a reliable recognition and rejects punctuation noise without inventing replacement material or percentages", () => {
   expect(

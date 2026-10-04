@@ -576,4 +576,6 @@
 .selection-workspace-content .selection-card .selection-toolbar, .selection-workspace-content .selection-card .selection-edit-bar, .selection-workspace-content .selection-card .selection-column-group-tabs { flex: none; }
 .selection-hidden-value { color: #8c8c8c; letter-spacing: 3px; }
 .selection-layout-status { font-size: 12px; color: #8c8c8c; }
+.selection-toolbar [data-selection-control-width="short"] { width: 135px; min-width: 135px; max-width: 135px; flex: 0 0 135px; box-sizing: border-box; }
+.selection-toolbar .selection-tool-select[data-selection-control-width="auto"] { width: max-content; min-width: 0; max-width: none; }
 .selection-sheet td[data-cell-access="deny"] { background-image: repeating-linear-gradient(135deg, transparent, transparent 7px, rgba(140,140,140,.06) 7px, rgba(140,140,140,.06) 8px); }

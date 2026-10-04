@@ -1,6 +1,6 @@
-import type { Worker } from "tesseract.js";
+import type { Line, Worker } from "tesseract.js";
 import { absoluteSelectionImageUrl } from "./selection-image-actions";
-import { enhanceTextImage, imageTextScore, normalizeImageText } from "./selection-image-text-quality";
+import { enhanceTextImage, imageTextScore, normalizeImageText, preferImageTextLine } from "./selection-image-text-quality";
 
 export type ImageTextRegion = { left: number; top: number; width: number; height: number };
 export type ImageTextView = { rotation: number; flipX: boolean; flipY: boolean; region?: ImageTextRegion };
@@ -17,11 +17,11 @@ function abortable<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
 
 // Crop in the coordinates of the displayed, rotated/flipped image. Bound the canvas
 // so a large source photo does not require a large OCR working image.
-function prepare(bitmap: ImageBitmap, view: ImageTextView) {
+function prepare(bitmap: ImageBitmap, view: ImageTextView, maximumScale = 3) {
   const turned = Math.abs(view.rotation % 180) === 90;
   const width = turned ? bitmap.height : bitmap.width, height = turned ? bitmap.width : bitmap.height;
   const region = view.region || { left: 0, top: 0, width: 1, height: 1 };
-  const scale = Math.min(3, 2800 / Math.max(width * region.width, height * region.height));
+  const scale = Math.min(maximumScale, 2800 / Math.max(width * region.width, height * region.height));
   const border = 24;
   const canvas = document.createElement("canvas");
   canvas.width = Math.max(1, Math.round(width * region.width * scale)) + border * 2;
@@ -56,7 +56,6 @@ export async function recognizeSelectionImageText(url: string, view: ImageTextVi
     bitmap = await createImageBitmap(file);
     if (stop.signal.aborted) throw new DOMException("识别已取消", "AbortError");
     const canvas = prepare(bitmap, view);
-    bitmap.close(); bitmap = undefined;
     progress({ label: "正在准备文字识别…" });
     const { createWorker, PSM } = await import("tesseract.js");
     stop.signal.throwIfAborted();
@@ -73,14 +72,39 @@ export async function recognizeSelectionImageText(url: string, view: ImageTextVi
     await abortable(worker.setParameters({ tessedit_pageseg_mode: PSM.AUTO, user_defined_dpi: "300", preserve_interword_spaces: "1" }), stop.signal);
     // Photograph perspective can make automatic angle detection rotate away
     // valid lines. Use the direction already chosen in the image preview.
-    let { data: best } = await abortable(worker.recognize(canvas), stop.signal);
+    let { data: best } = await abortable(worker.recognize(canvas, {}, { blocks: true }), stop.signal);
     if (best.confidence < 85 || !best.text.trim()) {
       progress({ label: "正在增强图像并核对识别结果…" });
       const enhanced = enhanceTextImage(canvas);
       await abortable(worker.setParameters({ tessedit_pageseg_mode: view.region ? PSM.SINGLE_BLOCK : PSM.SPARSE_TEXT }), stop.signal);
-      const { data } = await abortable(worker.recognize(enhanced), stop.signal);
+      const { data } = await abortable(worker.recognize(enhanced, {}, { blocks: true }), stop.signal);
       if (imageTextScore(data) > imageTextScore(best)) best = data;
     }
+    // A high overall score can hide a poorly recognized Chinese material line.
+    // Re-read doubtful lines from the original pixels rather than guessing words.
+    const lines = best.blocks?.flatMap(block => block.paragraphs.flatMap(paragraph => paragraph.lines)) || [];
+    const doubtful = lines.filter(line => line.confidence < 65 && (line.text.match(/[\p{L}\p{N}]/gu)?.length || 0) >= 3)
+      .sort((a,b) => a.confidence - b.confidence).slice(0,8);
+    const replacements = new Map<Line,string>();
+    if (doubtful.length) {
+      await abortable(worker.setParameters({ tessedit_pageseg_mode: PSM.RAW_LINE }), stop.signal);
+      const base = view.region || { left:0, top:0, width:1, height:1 };
+      const width = canvas.width - 48, height = canvas.height - 48;
+      const sourceHeight = Math.abs(view.rotation % 180) === 90 ? bitmap.width : bitmap.height;
+      for (const [index,line] of doubtful.entries()) {
+        progress({ label:`正在复核模糊文字（${index+1}/${doubtful.length}）…` });
+        const left = Math.max(0,line.bbox.x0-24-12), top = Math.max(0,line.bbox.y0-24-8);
+        const right = Math.min(width,line.bbox.x1-24+12), bottom = Math.min(height,line.bbox.y1-24+8);
+        if (right <= left || bottom <= top) continue;
+        const region = { left:base.left+left/width*base.width, top:base.top+top/height*base.height,
+          width:(right-left)/width*base.width, height:(bottom-top)/height*base.height };
+        const lineCanvas = prepare(bitmap, { ...view, region }, Math.min(3,96/(sourceHeight*region.height)));
+        const { data } = await abortable(worker.recognize(lineCanvas), stop.signal);
+        if (preferImageTextLine(line,data)) replacements.set(line,normalizeImageText(data.text));
+      }
+    }
+    if (replacements.size) best.text = best.blocks!.map(block => block.paragraphs.map(paragraph =>
+      paragraph.lines.map(line => replacements.get(line) || line.text.trim()).join("\n")).join("\n\n")).join("\n\n");
     const text = normalizeImageText(best.text);
     if (!text) throw Error("未识别到文字，请框选文字区域或换一张更清晰的图片");
     if (imageTextScore(best) < 25) throw Error("文字识别可靠度较低，请框选吊牌上的文字区域后重试");

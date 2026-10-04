@@ -525,7 +525,7 @@ test("readonly choice cells show saved labels and keep empty cells free of edito
 });
 
 test("field group tabs locate columns without pins and move groups after pins while retaining other fields", async ({ page }) => {
-  await fixture(page, true, true);
+  const layouts = await fixture(page, true, true);
   const header = (key: string) => page.locator(`thead th[data-selection-column="${key}"]`);
   const order = () => page.locator("thead th[data-selection-column]").evaluateAll(elements => elements.map(element => (element as HTMLElement).dataset.selectionColumn));
   const initial = await order();
@@ -571,7 +571,8 @@ test("field group tabs locate columns without pins and move groups after pins wh
   });
   expect(copied.split("\t").slice(0, 5)).toEqual(["", "SHORTCUT-2", "", "", "换洗唛/缝领标"]);
   await page.screenshot({ path: ".local/selection-column-groups.png" });
-  await expect(page.getByLabel("个人设置同步")).toContainText("个人设置已同步");
+  await expect.poll(() => layouts.get("interaction-tester")?.preferences?.columnGroupId).toBeTruthy();
+  await expect(page.getByLabel("个人设置同步")).toHaveCount(0);
   await page.reload();
   await expect(tab).toHaveAttribute("aria-selected", "true");
   expect((await order()).slice(0, 5)).toEqual(["registrationBatch", "xutiStyleNo", "labelImages", "custom:check", "custom:action"]);
@@ -595,7 +596,8 @@ test("field group tabs locate columns without pins and move groups after pins wh
 
 test("personal fields, ordering, pins, groups and view settings restore in fresh browsers without leaking to another account", async ({ page, browser }) => {
   const layouts = await fixture(page, false, true);
-  await expect(page.getByLabel("个人设置同步")).toContainText("个人设置已同步");
+  await expect.poll(() => layouts.get("interaction-tester")?.revision || 0).toBeGreaterThan(0);
+  await expect(page.getByLabel("个人设置同步")).toHaveCount(0);
   await dragColumns(page, "supplierCode", "images", true);
   await columnHeader(page, "xutiStyleNo").click({ button: "right" });
   await clickColumnAction(page, "序缇款号", "固定此列");
@@ -618,7 +620,8 @@ test("personal fields, ordering, pins, groups and view settings restore in fresh
   await page.locator(".selection-pagination .ant-select").click();
   await page.getByText("50 条/页", { exact: true }).click();
   await page.getByRole("textbox", { name: "搜索选款", exact: true }).fill("SHORTCUT");
-  await expect(page.getByLabel("个人设置同步")).toContainText("个人设置已同步");
+  await expect.poll(() => layouts.get("interaction-tester")?.preferences?.searchText).toBe("SHORTCUT");
+  await expect(page.getByLabel("个人设置同步")).toHaveCount(0);
   const savedOrder = await columnOrder(page);
   const fresh = await browser.newContext(), second = await fresh.newPage();
   try {
@@ -641,7 +644,7 @@ test("personal fields, ordering, pins, groups and view settings restore in fresh
 
 test("failed saves retain pending personal settings across reload and can retry without overwriting a newer device", async ({ page }) => {
   const layouts = await fixture(page, true);
-  await expect(page.getByLabel("个人设置同步")).toContainText("个人设置已同步");
+  await expect.poll(() => layouts.get("interaction-tester")?.revision || 0).toBeGreaterThan(0);
   const failure = async (route: import("@playwright/test").Route) => route.request().method() === "POST" ? route.fulfill({ status: 503, json: { error: { message: "测试网络中断" } } }) : route.fallback();
   await page.route("**/api/v1/style-selections/layout-preferences", failure);
   await columnHeader(page, "xutiStyleNo").click({ button: "right" });
@@ -652,7 +655,8 @@ test("failed saves retain pending personal settings across reload and can retry 
   await expect(page.getByLabel("个人设置同步")).toContainText("测试网络中断");
   await page.unroute("**/api/v1/style-selections/layout-preferences", failure);
   await page.getByRole("button", { name: "重试保存", exact: true }).click();
-  await expect(page.getByLabel("个人设置同步")).toContainText("个人设置已同步");
+  await expect.poll(() => layouts.get("interaction-tester")?.preferences?.fixedColumns).toContain("xutiStyleNo");
+  await expect(page.getByLabel("个人设置同步")).toHaveCount(0);
   const saved = layouts.get("interaction-tester")!;
   layouts.set("interaction-tester", { preferences: { ...saved.preferences!, fixedColumns: ["images"] }, revision: saved.revision + 1 });
   await columnHeader(page, "supplierStyleNo").click({ button: "right" });
@@ -692,11 +696,11 @@ test("image text OCR starts on demand, copies from the right-click menu and pres
   await expect(page.locator("td[data-selection-column='material']")).toHaveCount(20);
 });
 
-test("care label OCR recognizes Chinese material and percentage using bundled accurate models", async ({ page }) => {
+test("original full-photo care label OCR recognizes Chinese material and percentage using bundled accurate models", async ({ page }) => {
   test.setTimeout(120000);
   await fixture(page, true);
-  const label = await readFile("tests/fixtures/selection-care-label.png");
-  await page.route("**/api/v1/style-selections/images/preview-*", route => route.fulfill({ contentType: "image/png", body: label }));
+  const label = await readFile("tests/fixtures/selection-care-label-original.webp");
+  await page.route("**/api/v1/style-selections/images/preview-*", route => route.fulfill({ contentType: "image/webp", body: label }));
   await page.reload();
   await cell(page, 0, "labelImages").locator("img").click();
   await page.getByRole("button", { name: "识别图片文字", exact: true }).click();

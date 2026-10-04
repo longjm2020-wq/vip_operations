@@ -20,7 +20,6 @@ import {
 } from "../../../../../packages/database/src/index.js";
 import {
   selectionScope,
-  selectionSchema,
   selectionGuard,
 } from "../../../../../packages/database/src/selection-scope.js";
 import { audit, command, fail, hash, id, parse } from "../../core.js";
@@ -115,20 +114,13 @@ export class ProjectTablesController {
       const table = await insert(tx, "project_tables", {
         name: body.name,
         createdBy: c.actor.id,
-        initialLayout: "blank",
+        initialLayout: "empty",
         visibility: body.visibility,
       });
       await rows(
         tx,
         "SELECT create_project_table_workspace($1::bigint)::text",
         table.id,
-      );
-      // Seed blank records once, inside the same idempotent creation transaction.
-      await rows(
-        tx,
-        `INSERT INTO "${selectionSchema(String(table.id))}".style_selections(created_by,updated_by,sort_order)
-        SELECT $1::bigint,$1::bigint,n FROM generate_series(1,3) AS n`,
-        c.actor.id,
       );
       await audit(
         tx,

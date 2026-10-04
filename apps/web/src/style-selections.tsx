@@ -5,6 +5,7 @@ import { SelectionOrganization } from "./selection-organization";
 import { SelectionColumnGroupManager, SelectionColumnGroupTabs, selectionColumnGroupsKey, storedSelectionColumnGroups } from "./selection-column-groups";
 import { SelectionLayoutLoading, SelectionLayoutStatus, useSelectionLayoutPreferences, type SelectionLayoutController } from "./selection-layout-preferences";
 import { migrateSelectionLayout } from "./selection-layout-storage";
+import { useSelectionToolbarWidths } from "./selection-toolbar-widths";
 import { parseFieldTypeCatalog } from "./selection-type-catalog";
 import { SelectionColumnWidthModal } from "./selection-column-width";
 import { useSelectionDrag } from "./selection-drag";
@@ -92,8 +93,8 @@ const storedColumns = (storageKey: (key:string)=>string) => {
   } catch { return []; }
 };
 const columnLabelsKey = "style-selection-column-labels-v1";
-const initialColumns = (storageKey: (key:string)=>string,blankLayout=false,legacy=true): Column[] => {
-  if (!legacy) return blankLayout ? [{key:"custom:text",label:"文本",width:120,custom:true,type:"text"}] : resetFieldTypes([...baseColumns,...collectionColumns]);
+const initialColumns = (storageKey: (key:string)=>string,blankLayout=false,legacy=true,emptyLayout=false): Column[] => {
+  if (!legacy) return emptyLayout ? [] : blankLayout ? [{key:"custom:text",label:"文本",width:120,custom:true,type:"text"}] : resetFieldTypes([...baseColumns,...collectionColumns]);
   let config:Record<string,Partial<Column>>={};
   try{const value=JSON.parse(localStorage.getItem(storageKey("selection-field-config-v1")) || "{}");if(value && typeof value==="object" && !Array.isArray(value))config=value;}catch{}
   let labels: Record<string, string> = {};
@@ -101,7 +102,7 @@ const initialColumns = (storageKey: (key:string)=>string,blankLayout=false,legac
   const custom=storedColumns(storageKey);
   let initialized: string | null = null;
   try { initialized=localStorage.getItem(storageKey("selection-field-types-initialized-v2")); } catch {}
-  const defaults:Column[]=blankLayout ? (initialized ? custom : [{key:"custom:text",label:"文本",width:120,custom:true,type:"text"}]) : [...baseColumns,...collectionColumns,...custom];
+  const defaults:Column[]=emptyLayout ? custom : blankLayout ? (initialized ? custom : [{key:"custom:text",label:"文本",width:120,custom:true,type:"text"}]) : [...baseColumns,...collectionColumns,...custom];
   const fields = defaults.map(column => ({ ...column, ...config[column.key],key:column.key,custom:column.custom,label: typeof labels[column.key] === "string" && labels[column.key].trim() ? labels[column.key].trim().slice(0, 40) : column.label })).sort((a,b)=>{const keys=Object.keys(config);const rank=(key:string)=>keys.includes(key)?keys.indexOf(key):keys.length;return rank(a.key)-rank(b.key);});
   if(blankLayout)return fields;
   return initialized ? fields : resetFieldTypes(fields);
@@ -247,12 +248,12 @@ export function StyleSelectionsPage() {
 }
 
 function StyleSelectionsLayout() {
-  const { storageKey, blankLayout } = useSelectionWorkspace(), user = useUser();
+  const { storageKey, blankLayout, emptyLayout } = useSelectionWorkspace(), user = useUser();
   const layout = useSelectionLayoutPreferences(legacy => {
     const read = (key: string, fallback: unknown) => { try { return legacy ? JSON.parse(localStorage.getItem(storageKey(key)) || "null") ?? fallback : fallback; } catch { return fallback; } };
     const strings = (value: unknown) => Array.isArray(value) ? [...new Set(value.filter((key): key is string => typeof key === "string"))] : [];
     const pageSize = Number(read(pageSizeKey, 20));
-    return migrateSelectionLayout(initialColumns(storageKey,blankLayout,legacy), {
+    return migrateSelectionLayout(initialColumns(storageKey,blankLayout,legacy,emptyLayout), {
       hiddenColumns: strings(read("selection-hidden-fields-v1", [])),
       fixedColumns: strings(read("selection-fixed-columns-v1", [])),
       columnGroups: legacy ? storedSelectionColumnGroups(storageKey(selectionColumnGroupsKey)) : [],
@@ -266,6 +267,7 @@ function StyleSelectionsLayout() {
 }
 
 function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController }) {
+  const toolbarRef = useSelectionToolbarWidths();
   const { api, queryClient, title, blankLayout } = useSelectionWorkspace();
 
   const canEdit = useCan("selection.manage");
@@ -916,11 +918,11 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
     }));
     setFormatTarget(null);
   };
-  return <>{columnWidthTarget && <SelectionColumnWidthModal columns={columnWidthTarget} onCancel={() => setColumnWidthTarget(null)} onApply={width => { const keys = new Set(columnWidthTarget.map(column => column.key)); setColumns(current => current.map(column => keys.has(column.key) ? { ...column, width } : column)); setColumnWidthTarget(null); }}/>} {imagePreview && previewImages.length > 0 && <SelectionImagePreview key={cellId(imagePreview.rowKey, imagePreview.columnKey)} images={previewImages} index={Math.min(imagePreview.index, previewImages.length - 1)} name={previewColumn!.label} onTextCopied={text => { copiedSingleValue.current = text; setCopiedCells(new Set()); }} onIndexChange={index => setImagePreview(current => current ? { ...current, index } : null)} onClose={() => setImagePreview(null)} />}{formatTarget && <SelectionFormatModal count={formatTarget.ids.size} sample={formatTarget.sample} initial={formatTarget.initial} onCancel={() => setFormatTarget(null)} onApply={applyFormat} />}<PageSearch><PageSearchInput multiline aria-label="搜索选款" placeholder="搜索款号、供应商、颜色、材质…" allowClear value={searchText} onChange={event=>setSearchText(event.target.value)} /></PageSearch>{title && <Header title={title} subtitle="从文本字段开始，按需添加字段和记录，配置表格功能。"/>}
+  return <>{columnWidthTarget && <SelectionColumnWidthModal columns={columnWidthTarget} onCancel={() => setColumnWidthTarget(null)} onApply={width => { const keys = new Set(columnWidthTarget.map(column => column.key)); setColumns(current => current.map(column => keys.has(column.key) ? { ...column, width } : column)); setColumnWidthTarget(null); }}/>} {imagePreview && previewImages.length > 0 && <SelectionImagePreview key={cellId(imagePreview.rowKey, imagePreview.columnKey)} images={previewImages} index={Math.min(imagePreview.index, previewImages.length - 1)} name={previewColumn!.label} onTextCopied={text => { copiedSingleValue.current = text; setCopiedCells(new Set()); }} onIndexChange={index => setImagePreview(current => current ? { ...current, index } : null)} onClose={() => setImagePreview(null)} />}{formatTarget && <SelectionFormatModal count={formatTarget.ids.size} sample={formatTarget.sample} initial={formatTarget.initial} onCancel={() => setFormatTarget(null)} onApply={applyFormat} />}<PageSearch><PageSearchInput multiline aria-label="搜索选款" placeholder="搜索款号、供应商、颜色、材质…" allowClear value={searchText} onChange={event=>setSearchText(event.target.value)} /></PageSearch>{title && <Header title={title} subtitle="按需添加字段和记录，配置表格功能。"/>}
     <Dropdown trigger={["contextMenu"]} open={!!contextRow && !!contextColumn} onOpenChange={open => { if (!open) setContextCell(null); }} overlayStyle={{ zIndex: 1201 }} menu={cellContextMenu}><span aria-hidden="true" style={{ position: "fixed", left: contextCell?.x || 0, top: contextCell?.y || 0, width: 1, height: 1, pointerEvents: "none" }}/></Dropdown>
-    <Card className="selection-card"><div className="selection-toolbar" aria-label={`${title || "选款登记"}表格工具栏`}><Space wrap size={4}>
+    <Card className="selection-card"><div ref={toolbarRef} className="selection-toolbar" aria-label={`${title || "选款登记"}表格工具栏`}><Space wrap size={4}>
       {canEdit && <SelectionCollections selectedRows={filteredRows.filter(row => selectedRows.includes(row._key))} blocked={!!dirtyCount || saving || deleting}/>} {canEdit && <SelectionPhotoQr />}<Button type="link" icon={<PlusOutlined />} disabled={!canEdit} onClick={() => add()}>添加一行</Button><Button type="link" danger icon={<DeleteOutlined />} disabled={!canEdit || !selectedRows.length || saving} loading={deleting} onClick={deleteRows}>删除行</Button>
-      <SelectionFieldManager addFieldRef={addFieldRef} columns={columns} visible={visible} canEdit={canEdit} blocked={!!dirtyCount || saving || deleting} onDelete={key=>{setColumns(current=>current.map(column=>column.key===key?{...column,deleted:true}:column));setVisible(current=>current.filter(item=>item!==key));setColumnFilters(current=>Object.fromEntries(Object.entries(current).filter(([fieldKey])=>fieldKey!==key)));if(columnSort?.key===key)setColumnSort(null);if(groupBy===`field:${key}`)setGroupBy("none");setFilterColumn(null);setCellAnchor(null);setFocusedCell(null);setSelectedColumnKeys([]);columnSelectionAnchor.current=null;setSelectedCells(new Set());setCopiedCells(new Set());setCellTextEditing(false);setFormatTarget(null);}} onRestore={key=>{setColumns(current=>current.map(column=>column.key===key?{...column,deleted:false}:column));setVisible(current=>[...new Set([...current,key])]);}} catalog={layout.preferences!.typeCatalog} onCatalogChange={value => layout.update("typeCatalog", value)} onVisible={key=>setVisible(current=>current.includes(key)?current.filter(item=>item!==key):[...current,key])} onMove={moveColumn} onSave={field=>{if(imageKeys.has(field.key) && rows.some(row=>(row[field.key]?.length || 0)>(field.imageConfig?.max || 30))){message.error("已有图片超过新上限，请先移除部分图片");return false;}if(field.type && !systemField(field)){const issue=rows.map(row=>fieldValueError(field,imageKeys.has(field.key)?JSON.stringify(row[field.key] || []):valueAt(row,field))).find(Boolean);if(issue){message.error("现有内容与设置不兼容："+issue);return false;}}const exists=columns.some(column=>column.key===field.key);setColumns(current=>exists?current.map(column=>column.key===field.key?field:column):[...current,field]);if(!exists)setVisible(current=>[...current,field.key]);}}/>
+      <SelectionFieldManager addFieldRef={addFieldRef} columns={columns} visible={visible} canEdit={canEdit} blocked={!!dirtyCount || saving || deleting} onDelete={key=>{setColumns(current=>current.map(column=>column.key===key?{...column,deleted:true}:column));setVisible(current=>current.filter(item=>item!==key));setColumnFilters(current=>Object.fromEntries(Object.entries(current).filter(([fieldKey])=>fieldKey!==key)));if(columnSort?.key===key)setColumnSort(null);if(groupBy===`field:${key}`)setGroupBy("none");setFilterColumn(null);setCellAnchor(null);setFocusedCell(null);setSelectedColumnKeys([]);columnSelectionAnchor.current=null;setSelectedCells(new Set());setCopiedCells(new Set());setCellTextEditing(false);setFormatTarget(null);}} catalog={layout.preferences!.typeCatalog} onCatalogChange={value => layout.update("typeCatalog", value)} onVisible={key=>setVisible(current=>current.includes(key)?current.filter(item=>item!==key):[...current,key])} onMove={moveColumn} onSave={field=>{if(imageKeys.has(field.key) && rows.some(row=>(row[field.key]?.length || 0)>(field.imageConfig?.max || 30))){message.error("已有图片超过新上限，请先移除部分图片");return false;}if(field.type && !systemField(field)){const issue=rows.map(row=>fieldValueError(field,imageKeys.has(field.key)?JSON.stringify(row[field.key] || []):valueAt(row,field))).find(Boolean);if(issue){message.error("现有内容与设置不兼容："+issue);return false;}}const exists=columns.some(column=>column.key===field.key);setColumns(current=>exists?current.map(column=>column.key===field.key?field:column):[...current,field]);if(!exists)setVisible(current=>[...current,field.key]);}}/>
       <SelectionColumnGroupManager columns={columns} visible={visible} groups={columnGroups} onSave={groups => { setColumnGroups(groups); changeColumnGroup(columnGroupId); }}/>
       <SelectionProtectionControl rows={rows} columns={availableColumns} selectedCells={selectedCells} selectedRows={selectedRows} currentRow={editorRow} blocked={!!dirtyCount || saving || deleting} onRefresh={()=>{appliedSnapshot.current="";void data.refetch();}}/>
       <SelectionOrganization columns={availableColumns} configured={layout.preferences!.organization} onConfigure={value => layout.update("organization", value)} group={groupBy} sort={columnSort?`field:${columnSort.key}:${columnSort.direction}`:`${sort}:${direction}`} onGroup={setGroupBy} onSort={value=>{setFollowShared(false);if(value.startsWith("field:")){setColumnSort({key:value.slice(6,value.lastIndexOf(":")),direction:value.endsWith(":asc")?"asc":"desc"});return;}setColumnSort(null);const [nextSort,nextDirection]=value.split(":");setSort(nextSort);setDirection(nextDirection as "asc"|"desc");}}/>

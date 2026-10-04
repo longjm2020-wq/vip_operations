@@ -21,6 +21,22 @@ export function imageTextScore(result: { text: string; confidence: number }) {
   );
 }
 
+/** Only replace a doubtful line when recognition of the same pixels improves. */
+export function preferImageTextLine(
+  before: { text: string; confidence: number },
+  candidate: { text: string; confidence: number },
+) {
+  const text = normalizeImageText(candidate.text);
+  const characters = (value: string) =>
+    value.match(/[\p{L}\p{N}]/gu)?.length || 0;
+  return (
+    candidate.confidence >= 45 &&
+    !text.includes("\n") &&
+    characters(text) >= Math.max(3, characters(before.text) * 0.55) &&
+    imageTextScore(candidate) > imageTextScore(before) + 12
+  );
+}
+
 /** Normalize local illumination without thresholding away thin Chinese strokes. */
 export function enhanceTextImage(source: HTMLCanvasElement) {
   const canvas = document.createElement("canvas");

@@ -346,6 +346,7 @@ export function SelectionLayoutStatus({
 }: {
   layout: SelectionLayoutController;
 }) {
+  if (!layout.error && !layout.conflict) return null;
   return (
     <Space
       className="selection-layout-status"
@@ -356,11 +357,7 @@ export function SelectionLayoutStatus({
       <span>
         {layout.conflict
           ? "其他设备已更新设置"
-          : layout.error
-            ? `个人设置未保存：${layout.error}`
-            : layout.dirty || layout.saving
-              ? "个人设置保存中…"
-              : "个人设置已同步"}
+          : `个人设置未保存：${layout.error}`}
       </span>
       {layout.error && (
         <Button size="small" onClick={layout.retry}>

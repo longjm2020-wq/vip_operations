@@ -157,7 +157,7 @@ export function ProjectTablesPage() {
             <Select options={visibilityOptions}/>
           </Form.Item>
           <Typography.Paragraph type="secondary">
-            新表初始包含一个「文本」字段和三行空白记录。可通过「＋」添加字段或行，并在表内配置字段类型及其他功能。
+            新表初始没有字段和记录。可通过「＋」添加字段或行；字段管理、账号设置同步、图片识别等功能与选款登记同步更新。
           </Typography.Paragraph>
           <Button block type="primary" htmlType="submit" loading={busy}>
             创建空表
@@ -184,7 +184,8 @@ export function ProjectTablePage() {
         key={id}
         tableId={id}
         title={table.data.data.name}
-        blankLayout={table.data.data.initialLayout === "blank"}
+        blankLayout={["blank", "empty"].includes(table.data.data.initialLayout)}
+        emptyLayout={table.data.data.initialLayout === "empty"}
       >
         <StyleSelectionsPage />
       </SelectionWorkspace>

@@ -103,29 +103,14 @@ try {
     `/style-selections${endpoint}${endpoint.includes("?") ? "&" : "?"}tableId=${table.id}`;
   const initialA = await ok(path(a)),
     initialB = await ok(path(b));
-  assert.equal(a.initialLayout, "blank");
-  assert.equal(aAgain.initialLayout, "blank");
+  assert.equal(a.initialLayout, "empty");
+  assert.equal(aAgain.initialLayout, "empty");
   for (const initial of [initialA, initialB]) {
-    assert.equal(initial.length, 3);
-    assert.deepEqual(
-      initial
-        .map((row: any) => row.sortOrder)
-        .sort((a: number, b: number) => a - b),
-      [1, 2, 3],
-    );
-    assert.ok(
-      initial.every(
-        (row: any) =>
-          !row.xutiStyleNo &&
-          !row.material &&
-          !row.images.length &&
-          Object.keys(row.extraFields).length === 0,
-      ),
-    );
+    assert.deepEqual(initial, []);
   }
   assert.equal(
     new Set([...initialA, ...initialB].map((row) => row.id)).size,
-    6,
+    0,
   );
   // Opening and creation retries cannot seed duplicates; deleting cannot reseed.
   for (const row of initialB) await ok(path(b, "/" + row.id), "DELETE");
@@ -135,7 +120,7 @@ try {
   assert.equal((await ok("/project-tables")).length, 2);
   assert.equal((await ok(`/project-tables/${a.id}`)).name, "项目 A");
   check(
-    "new tables start with three blank rows, creation retries are idempotent and empty tables never reseed",
+    "new tables have no records, creation retries are idempotent and opening never seeds rows",
   );
   const sharedKey = randomUUID();
   const first = await ok(
@@ -379,7 +364,7 @@ try {
   assert.equal((await request(path(privateLayoutTable, "/layout-preferences"), "GET", undefined, randomUUID(), reader)).status, 404);
   const race = await Promise.all(["第一设备", "第二设备"].map(label => request(preferencePath, "POST", { preferences: { ...layout, columns: [{ ...layout.columns[0], label }] }, revision: 1 })));
   assert.deepEqual(race.map(result => result.status).sort(), [201, 409]);
-  assert.equal((await ok(path(layoutTable))).length, 3);
+  assert.equal((await ok(path(layoutTable))).length, 0);
   check("personal layouts preserve fields and active groups, isolate users and tables, allow readers and reject stale writes and impersonation");
   assert.equal(
     (
