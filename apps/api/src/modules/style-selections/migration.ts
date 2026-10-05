@@ -23,7 +23,9 @@ import {
 import {
   selectionLayoutSchema,
   type SelectionField,
+  mergeSelectionFields,
 } from "../../../../../packages/contracts/src/selection-layout.js";
+import { sharedFields, shareTransferredFields } from "./shared-fields.js";
 import {
   archiveChoiceColumns,
   archiveTableFields,
@@ -157,6 +159,11 @@ async function layout(tx: Tx, c: Context, key: string, archive: boolean) {
   const preferences = selectionLayoutSchema.parse(
     stored?.preferences || { columns: defaults },
   );
+  const shared = await sharedFields(tx, key);
+  preferences.columns = mergeSelectionFields(
+    preferences.columns,
+    shared.fields,
+  );
   return {
     preferences: archive
       ? {
@@ -165,6 +172,7 @@ async function layout(tx: Tx, c: Context, key: string, archive: boolean) {
         }
       : preferences,
     revision: stored?.revision || 0,
+    sharedRevision: shared.revision,
     productFields,
   };
 }
@@ -552,6 +560,7 @@ async function buildPlan(tx: Tx, c: Context, body: Input, lock = false) {
         plan,
         preferences,
         layoutRevision: targetLayout.revision,
+        sharedRevision: targetLayout.sharedRevision,
         productFields: targetLayout.productFields
           .filter((field) =>
             mappings.some(
@@ -571,6 +580,9 @@ async function buildPlan(tx: Tx, c: Context, body: Input, lock = false) {
       token,
       plan,
       preferences,
+      transferredFields: preferences.columns.filter((field) =>
+        mappings.some((mapping) => mapping.target === field.key),
+      ),
       layoutRevision: targetLayout.revision,
       sourceKey,
       source,
@@ -740,6 +752,12 @@ export async function commit(c: Context, input: unknown) {
         body.target,
         body.target === "default" ? null : body.target,
         JSON.stringify(plan.preferences),
+      );
+      await shareTransferredFields(
+        tx,
+        body.target,
+        plan.transferredFields,
+        c.actor.id,
       );
     });
     for (const item of moved) {

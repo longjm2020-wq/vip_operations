@@ -58,6 +58,7 @@ export function SelectionTextDetail({
     const resize = () =>
       setPosition((current) => constrain(current.left, current.top));
     const escape = (event: KeyboardEvent) => {
+      if ((event.target as Element)?.closest?.(".selection-image-preview-layer")) return;
       if (event.key === "Escape" && !event.defaultPrevented) {
         event.preventDefault();
         close.current();

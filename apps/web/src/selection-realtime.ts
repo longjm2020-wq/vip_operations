@@ -7,10 +7,13 @@ export function useSelectionRealtime(
   client: QueryClient,
   tableId: string | undefined,
   onAccessLost: () => void,
+  onFieldsChanged: () => Promise<void>,
 ) {
   const [connected, setConnected] = useState(false);
   const lost = useRef(onAccessLost);
   lost.current = onAccessLost;
+  const fieldsChanged = useRef(onFieldsChanged);
+  fieldsChanged.current = onFieldsChanged;
   useEffect(() => {
     let stream: EventSource | undefined;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -19,6 +22,7 @@ export function useSelectionRealtime(
     let revoked = false;
     let pending = false;
     let permissions = false;
+    let fields = false;
     let running = false;
     const drain = async () => {
       timer = undefined;
@@ -28,10 +32,12 @@ export function useSelectionRealtime(
         while (pending && !stopped && !revoked) {
           pending = false;
           const rights = permissions;
-          permissions = false;
+          const definitions = fields;
+          permissions = fields = false;
           // A notification received during a fetch schedules another read, so a
           // write committed after that snapshot cannot be lost or cancel it.
           await Promise.all([
+            ...(definitions ? [fieldsChanged.current()] : []),
             client.invalidateQueries(
               { queryKey: ["style-selections"] },
               { cancelRefetch: false },
@@ -62,9 +68,10 @@ export function useSelectionRealtime(
         running = false;
       }
     };
-    const refresh = (rights = false) => {
+    const refresh = (rights = false, definitions = false) => {
       pending = true;
       permissions ||= rights;
+      fields ||= definitions || rights;
       if (!timer && !running) timer = setTimeout(() => void drain(), 80);
     };
     const close = () => {
@@ -86,13 +93,16 @@ export function useSelectionRealtime(
       stream.addEventListener("refresh", (event) => {
         if (stream !== source) return;
         let rights = false;
+        let definitions = false;
         try {
           rights =
             JSON.parse((event as MessageEvent).data).permissions === true;
+          definitions =
+            JSON.parse((event as MessageEvent).data).fields === true;
         } catch {
           /* Re-fetch without accepting any event content. */
         }
-        refresh(rights);
+        refresh(rights, definitions);
       });
       stream.addEventListener("access-revoked", () => {
         if (stream !== source) return;

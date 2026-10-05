@@ -16,13 +16,14 @@ type PreviewImage = { id: string; url: string; color: string };
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 
 /** A modeless image viewer: only the picture and its controls intercept input. */
-export function SelectionImagePreview({ images, index, name, onIndexChange, onClose, onTextCopied }: {
+export function SelectionImagePreview({ images, index, name, onIndexChange, onClose, onTextCopied, alongsideDetails = false }: {
   images: PreviewImage[];
   index: number;
   name: string;
   onIndexChange: (index: number) => void;
   onClose: () => void;
   onTextCopied: (text: string) => void;
+  alongsideDetails?: boolean;
 }) {
   const { message } = App.useApp();
   const image = images[Math.min(index, images.length - 1)];
@@ -50,11 +51,12 @@ export function SelectionImagePreview({ images, index, name, onIndexChange, onCl
   const [cropMode, setCropMode] = useState(false);
   const cropDrag = useRef<{ id: number; x: number; y: number; bounds: DOMRect } | null>(null);
   const [cropRect, setCropRect] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
-  const fit = Math.min(1, Math.max(1, viewport.width - 32) / naturalSize.width, Math.max(1, viewport.height - 112) / naturalSize.height);
+  const availableWidth = alongsideDetails && viewport.width >= 1000 ? viewport.width - 528 : viewport.width;
+  const fit = Math.min(1, Math.max(1, availableWidth - 32) / naturalSize.width, Math.max(1, viewport.height - 112) / naturalSize.height);
   const width = naturalSize.width * fit, height = naturalSize.height * fit;
   useEffect(() => {
     const resize = () => setViewport({ width: window.innerWidth, height: window.innerHeight });
-    const escape = (event: KeyboardEvent) => { if (event.key === "Escape" && !event.defaultPrevented) onCloseRef.current(); };
+    const escape = (event: KeyboardEvent) => { if ((event.target as Element)?.closest?.("#selection-cell-detail")) return; if (event.key === "Escape" && !event.defaultPrevented) { event.preventDefault(); onCloseRef.current(); } };
     window.addEventListener("resize", resize);
     window.addEventListener("keydown", escape);
     return () => { window.removeEventListener("resize", resize); window.removeEventListener("keydown", escape); };
@@ -90,7 +92,7 @@ export function SelectionImagePreview({ images, index, name, onIndexChange, onCl
       toolbar.style.left = `${clamp((rect.left + rect.right - toolbar.offsetWidth) / 2, 8, viewport.width - toolbar.offsetWidth - 8)}px`;
       toolbar.style.top = `${clamp(rect.bottom + 8, 8, viewport.height - toolbar.offsetHeight - 8)}px`;
     }
-  }, [width, height, scale, rotate, offset.x, offset.y, viewport.width, viewport.height, result?.phase]);
+  }, [width, height, availableWidth, scale, rotate, offset.x, offset.y, viewport.width, viewport.height, result?.phase]);
   const recognize = async (region?: ImageTextRegion) => {
     textJob.current?.abort();
     const controller = new AbortController();
@@ -161,7 +163,7 @@ export function SelectionImagePreview({ images, index, name, onIndexChange, onCl
     if (!current || current.id !== event.pointerId) return;
     const halfWidth = (rotate % 180 ? height : width) * scale / 2, halfHeight = (rotate % 180 ? width : height) * scale / 2;
     setOffset({
-      x: clamp(current.originX + event.clientX - current.x, -viewport.width / 2 - halfWidth + 32, viewport.width / 2 + halfWidth - 32),
+      x: clamp(current.originX + event.clientX - current.x, -availableWidth / 2 - halfWidth + 32, viewport.width - availableWidth / 2 + halfWidth - 32),
       y: clamp(current.originY + event.clientY - current.y, -viewport.height / 2 - halfHeight + 32, viewport.height / 2 + halfHeight - 32),
     });
   };
@@ -191,7 +193,7 @@ export function SelectionImagePreview({ images, index, name, onIndexChange, onCl
       if (key === "recognize-text") { setCropMode(false); void recognize().catch(() => {}); }
       if (key === "crop-text") beginCrop();
       if (key === "copy-text") { setCropMode(false); void copyText(); }
-    } }}><img ref={imageRef} className={`selection-preview-image${dragging ? " is-dragging" : ""}${cropMode ? " is-cropping" : ""}`} src={image.url} alt={`${name} ${image.color || ""} ${index + 1}/${images.length}`} draggable={false} style={{ width, height, transform: `translate(calc(-50% + ${offset.x}px), calc(-50% + ${offset.y}px)) rotate(${rotate}deg) scale(${flipX ? -scale : scale}, ${flipY ? -scale : scale})` }} onLoad={event => { const img = event.currentTarget; setNaturalSize({ width: img.naturalWidth || 1, height: img.naturalHeight || 1 }); }} onError={event => { if (event.currentTarget.src !== invalidSelectionImage) event.currentTarget.src = invalidSelectionImage; }} onPointerDown={startDrag} onPointerMove={moveDrag} onPointerUp={finishDrag} onPointerCancel={cancelDrag} onLostPointerCapture={cancelDrag} onDoubleClick={() => { if (!cropMode) setScale(current => current === 1 ? 2 : 1); }} /></Dropdown>
+    } }}><img ref={imageRef} className={`selection-preview-image${dragging ? " is-dragging" : ""}${cropMode ? " is-cropping" : ""}`} src={image.url} alt={`${name} ${image.color || ""} ${index + 1}/${images.length}`} draggable={false} style={{ width, height, left: availableWidth / 2, transform: `translate(calc(-50% + ${offset.x}px), calc(-50% + ${offset.y}px)) rotate(${rotate}deg) scale(${flipX ? -scale : scale}, ${flipY ? -scale : scale})` }} onLoad={event => { const img = event.currentTarget; setNaturalSize({ width: img.naturalWidth || 1, height: img.naturalHeight || 1 }); }} onError={event => { if (event.currentTarget.src !== invalidSelectionImage) event.currentTarget.src = invalidSelectionImage; }} onPointerDown={startDrag} onPointerMove={moveDrag} onPointerUp={finishDrag} onPointerCancel={cancelDrag} onLostPointerCapture={cancelDrag} onDoubleClick={() => { if (!cropMode) setScale(current => current === 1 ? 2 : 1); }} /></Dropdown>
     {cropRect && <div className="selection-preview-text-crop" style={cropRect} />}
     {cropMode && <div className="selection-preview-crop-hint">拖动框选图片上的文字区域<Button type="text" size="small" onClick={() => { setCropMode(false); cancelDrag(); }}>取消</Button></div>}
     <button ref={closeRef} type="button" className="selection-preview-close" aria-label="关闭图片预览" title="关闭图片预览" onClick={onClose}><CloseOutlined /></button>

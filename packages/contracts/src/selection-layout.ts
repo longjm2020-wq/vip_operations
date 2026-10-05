@@ -176,3 +176,12 @@ export type SelectionLayoutSnapshot = z.infer<
   typeof selectionLayoutSnapshotSchema
 >;
 export type SelectionField = z.infer<typeof selectionFieldSchema>;
+
+/** Fill missing definitions without replacing personal order, width or tombstones. */
+export function mergeSelectionFields(
+  personal: SelectionField[],
+  shared: SelectionField[],
+) {
+  const keys = new Set(personal.map((field) => field.key));
+  return [...personal, ...shared.filter((field) => !keys.has(field.key))];
+}

@@ -279,10 +279,149 @@ try {
     ).rows[0].count,
     "1",
   );
-  const stillEmpty = (await archiveMetadata(context())).fields;
-  assert.deepEqual(stillEmpty, []);
+  const visibleFields = (await archiveMetadata(context())).fields;
+  assert.deepEqual(
+    visibleFields.map((field) => field.key),
+    ["xutiStyleNo", "material"],
+  );
   console.log(
     "PASS transfer introduces bound fields into an empty archive and creates the actual product",
+  );
+
+  const peerLayout = await selectionScope.run(archive, () =>
+    layoutPreferences(context(users[1])),
+  );
+  assert.deepEqual(
+    peerLayout.preferences?.columns.map((field) => field.key),
+    ["xutiStyleNo", "material"],
+  );
+  const personalLayout = await selectionScope.run(archive, () =>
+    layoutPreferences(context()),
+  );
+  assert.deepEqual(
+    personalLayout.preferences?.columns.map((field) => field.key),
+    ["custom:note", "xutiStyleNo", "material"],
+  );
+  assert.equal(peerLayout.revision, 8); // Adding shared definitions does not overwrite a personal revision.
+  const savedEmpty = await selectionScope.run(archive, () =>
+    saveLayoutPreferences(context(users[1]), {
+      preferences: selectionLayoutSchema.parse({
+        columns: [],
+        rowHeight: "compact",
+      }),
+      revision: 8,
+    }),
+  );
+  assert.deepEqual(
+    savedEmpty.preferences.columns.map((field: { key: string }) => field.key),
+    ["xutiStyleNo", "material"],
+  );
+  const overrides = selectionLayoutSchema.parse({
+    ...savedEmpty.preferences,
+    columns: savedEmpty.preferences.columns.map((field: { key: string }) =>
+      field.key === "material"
+        ? { ...field, deleted: true }
+        : { ...field, width: 210, label: "我的款号" },
+    ),
+    hiddenColumns: ["xutiStyleNo"],
+    fixedColumns: ["xutiStyleNo"],
+  });
+  await selectionScope.run(archive, () =>
+    saveLayoutPreferences(context(users[1]), {
+      preferences: overrides,
+      revision: savedEmpty.revision,
+    }),
+  );
+  assert.deepEqual(
+    (
+      await selectionScope.run(archive, () =>
+        layoutPreferences(context(users[1])),
+      )
+    ).preferences,
+    overrides,
+  );
+  const newcomer = String(
+    (
+      await client.query(
+        "INSERT INTO users(username,display_name,password_hash) VALUES('viewer','Viewer','unused') RETURNING id",
+      )
+    ).rows[0].id,
+  );
+  const newLayout = await selectionScope.run(archive, () =>
+    layoutPreferences(context(newcomer)),
+  );
+  assert.deepEqual(
+    newLayout.preferences?.columns.map((field) => field.key),
+    ["xutiStyleNo", "material"],
+  );
+  assert.equal(newLayout.revision, 0);
+  console.log(
+    "PASS empty and new viewers receive transferred definitions; stale empty saves retain fields and personal overrides stay independent",
+  );
+
+  // Reproduce a completed pre-fix transfer, then apply the actual repair migration.
+  const beforeRepair = (
+    await client.query(
+      `SELECT * FROM "selection_table_${archive}".style_selections ORDER BY id`,
+    )
+  ).rows;
+  const layoutsBeforeRepair = (
+    await client.query(
+      "SELECT * FROM selection_layout_preferences ORDER BY user_id,workspace_key",
+    )
+  ).rows;
+  // Historical transfers before the explicit reset must not repopulate the archive.
+  await client.query(
+    `INSERT INTO audit_logs(actor_id,actor_label,action,entity_type,request_id,after_data,occurred_at)
+     SELECT $1,'Fixture','CROSS_TABLE_TRANSFER','style-selection','pre-reset',
+       jsonb_build_object('migration_target_workspace',$2::text),applied_at-interval '1 day'
+     FROM schema_migrations WHERE name='053_product_archive_empty_fields.sql'`,
+    [users[0],archive],
+  );
+  await client.query(
+    "DROP TABLE selection_shared_fields; DROP FUNCTION notify_selection_fields_change(); DELETE FROM schema_migrations WHERE name='054_selection_shared_transfer_fields.sql'",
+  );
+  await migrate();
+  assert.deepEqual(
+    (await archiveMetadata(context())).fields.map((field) => field.key),
+    ["xutiStyleNo", "material"],
+  );
+  assert.deepEqual(
+    (
+      await client.query(
+        `SELECT * FROM "selection_table_${archive}".style_selections ORDER BY id`,
+      )
+    ).rows,
+    beforeRepair,
+  );
+  assert.deepEqual(
+    (
+      await client.query(
+        "SELECT * FROM selection_layout_preferences ORDER BY user_id,workspace_key",
+      )
+    ).rows,
+    layoutsBeforeRepair,
+  );
+  assert.deepEqual(
+    (
+      await selectionScope.run(archive, () =>
+        layoutPreferences(context(users[1])),
+      )
+    ).preferences,
+    overrides,
+  );
+  await migrate();
+  assert.equal(
+    (
+      await client.query(
+        "SELECT revision FROM selection_shared_fields WHERE workspace_key=$1",
+        [archive],
+      )
+    ).rows[0].revision,
+    1,
+  );
+  console.log(
+    "PASS completed transfers repaired once without changing rows, personal settings or importing unrelated private fields",
   );
 } finally {
   await disconnect?.();

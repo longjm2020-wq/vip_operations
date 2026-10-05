@@ -14,7 +14,7 @@ import { tableAccess } from "../projects/library.js";
 
 type Change = {
   tableId: string | null;
-  kind: "records" | "permissions" | "view";
+  kind: "records" | "permissions" | "view" | "fields";
 };
 type Listener = (change: Change) => void;
 
@@ -66,7 +66,7 @@ export class SelectionChangeListener {
         if (
           (change.tableId !== null &&
             !/^(?:|[1-9]\d{0,18})$/.test(change.tableId)) ||
-          !["records", "permissions", "view"].includes(change.kind)
+          !["records", "permissions", "view", "fields"].includes(change.kind)
         )
           return;
         this.publish(change);
@@ -154,6 +154,7 @@ export class SelectionRealtime implements OnModuleInit, OnModuleDestroy {
     response.flushHeaders();
     let closed = false;
     let pendingPermissions = false;
+    let pendingFields = false;
     let pending = false;
     let running = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -181,9 +182,10 @@ export class SelectionRealtime implements OnModuleInit, OnModuleDestroy {
       try {
         while (pending && !closed) {
           const permissions = pendingPermissions;
-          pending = pendingPermissions = false;
+          const fields = pendingFields;
+          pending = pendingPermissions = pendingFields = false;
           if (permissions) await authorize();
-          send("refresh", { permissions });
+          send("refresh", { permissions, fields });
         }
       } catch (error) {
         // No row values or protected identifiers are sent over the stream.
@@ -202,6 +204,7 @@ export class SelectionRealtime implements OnModuleInit, OnModuleDestroy {
       if (change.tableId !== null && change.tableId !== tableId) return;
       pending = true;
       pendingPermissions ||= change.kind === "permissions";
+      pendingFields ||= change.kind === "fields";
       if (!timer && !running) timer = setTimeout(() => void flush(), 100);
     });
     this.connections.add(close);

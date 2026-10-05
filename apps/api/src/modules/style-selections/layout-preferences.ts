@@ -8,12 +8,15 @@ import { selectionScope } from "../../../../../packages/database/src/selection-s
 import {
   selectionLayoutSchema,
   selectionLayoutWriteSchema,
+  mergeSelectionFields,
 } from "../../../../../packages/contracts/src/selection-layout.js";
+import { selectionBaseFields } from "../../../../../packages/contracts/src/selection-migration.js";
 import {
   archiveChoiceColumns,
   archiveTableFields,
 } from "../../../../../packages/contracts/src/product-archive-table.js";
 import { command, fail, parse, type Context } from "../../core.js";
+import { sharedFields } from "./shared-fields.js";
 
 export async function layoutPreferences(c: Context) {
   const workspace = selectionScope.getStore() || "default";
@@ -23,35 +26,61 @@ export async function layoutPreferences(c: Context) {
     c.actor.id,
     workspace,
   );
-  if (!stored) return { preferences: null, revision: 0 };
-  if (
-    workspace !== "default" &&
-    (
-      await one(
-        db,
-        "SELECT system_key FROM public.project_tables WHERE id=$1::bigint",
-        workspace,
-      )
-    )?.system_key === "PRODUCT_ARCHIVE"
-  ) {
+  const shared = await sharedFields(db, workspace);
+  if (!stored && !shared.fields.length)
+    return { preferences: null, revision: 0 };
+  const table =
+    workspace === "default"
+      ? null
+      : await one(
+          db,
+          "SELECT system_key,initial_layout FROM public.project_tables WHERE id=$1::bigint",
+          workspace,
+        );
+  const defaults =
+    workspace === "default" || table?.initial_layout === "selection"
+      ? selectionBaseFields
+      : table?.initial_layout === "blank"
+        ? [
+            {
+              key: "custom:text",
+              label: "文本",
+              width: 120,
+              custom: true,
+              type: "text" as const,
+            },
+          ]
+        : [];
+  const preferences = selectionLayoutSchema.parse(
+    stored?.preferences || { columns: defaults },
+  );
+  preferences.columns = mergeSelectionFields(
+    preferences.columns,
+    shared.fields,
+  );
+  if (table?.system_key === "PRODUCT_ARCHIVE") {
     const canonical = archiveTableFields(
-        camel(
-          await rows(
-            db,
-            "SELECT * FROM public.product_fields WHERE active ORDER BY created_at,id",
-          ),
+      camel(
+        await rows(
+          db,
+          "SELECT * FROM public.product_fields WHERE active ORDER BY created_at,id",
         ),
       ),
-      preferences = selectionLayoutSchema.parse(stored.preferences);
+    );
+    if (!stored && table.initial_layout !== "empty")
+      preferences.columns = mergeSelectionFields(canonical, shared.fields);
     return {
-      ...stored,
+      revision: stored?.revision || 0,
       preferences: {
         ...preferences,
         columns: archiveChoiceColumns(preferences.columns, canonical),
       },
     };
   }
-  return stored;
+  return {
+    preferences,
+    revision: stored?.revision || 0,
+  };
 }
 
 export async function saveLayoutPreferences(c: Context, input: unknown) {
@@ -78,7 +107,12 @@ export async function saveLayoutPreferences(c: Context, input: unknown) {
         "其他设备已更新个人设置，请选择使用云端设置或保留当前设置",
         409,
       );
-    return one(
+    const shared = await sharedFields(tx, workspace);
+    const preferences = selectionLayoutSchema.parse({
+      ...body.preferences,
+      columns: mergeSelectionFields(body.preferences.columns, shared.fields),
+    });
+    const saved = await one(
       tx,
       `INSERT INTO public.selection_layout_preferences(user_id,workspace_key,table_id,preferences) VALUES($1::bigint,$2,$3::bigint,$4::jsonb)
       ON CONFLICT(user_id,workspace_key) DO UPDATE SET preferences=EXCLUDED.preferences,revision=selection_layout_preferences.revision+1,updated_at=now()
@@ -86,7 +120,8 @@ export async function saveLayoutPreferences(c: Context, input: unknown) {
       c.actor.id,
       workspace,
       tableId,
-      JSON.stringify(body.preferences),
+      JSON.stringify(preferences),
     );
+    return saved;
   });
 }

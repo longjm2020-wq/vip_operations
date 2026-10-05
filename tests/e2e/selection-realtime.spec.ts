@@ -1,5 +1,6 @@
 import { test, expect, type Browser, type Page } from "@playwright/test";
 import { randomUUID } from "node:crypto";
+import { selectionBaseFields } from "../../packages/contracts/src/selection-migration.js";
 
 async function login(
   page: Page,
@@ -241,5 +242,104 @@ test("a simultaneous edit to the same cell retains the local draft and reports a
     expect(stored.material).toBe("remote saved");
   } finally {
     await other.context.close();
+  }
+});
+
+test("transfer fields and rows reach already-open empty targets for the sender and a read-only account", async ({
+  page,
+  browser,
+}) => {
+  const csrf = await login(page),
+    suffix = randomUUID().slice(0, 8),
+    password = randomUUID();
+  const role = await api(page, csrf, "/roles", "POST", {
+    code: "FIELD_VIEW_" + suffix,
+    name: "传送字段只读",
+    permissionCodes: ["project.read"],
+  });
+  await api(page, csrf, "/users", "POST", {
+    username: "field-view-" + suffix,
+    displayName: "字段只读",
+    password,
+    roleIds: [role.id],
+  });
+  const target = await api(page, csrf, "/project-tables", "POST", {
+    name: "字段同步-" + suffix,
+    visibility: "PUBLIC",
+  });
+  const source = await api(page, csrf, "/style-selections", "POST", {
+    xutiStyleNo: "FIELDS-" + suffix,
+    material: "共享材质内容",
+  });
+  const viewerContext = await browser.newContext({
+    viewport: { width: 1440, height: 1000 },
+  });
+  const viewer = await viewerContext.newPage();
+  try {
+    await login(viewer, "field-view-" + suffix, password);
+    for (const tab of [page, viewer]) {
+      await tab.goto("/project-tables/" + target.id);
+      await expect(tab.locator(".selection-sheet")).toHaveAttribute(
+        "data-realtime-connected",
+        "true",
+      );
+      await expect(tab.locator("thead th[data-selection-column]")).toHaveCount(
+        0,
+      );
+    }
+    // Both accounts have saved an explicitly empty personal layout before the transfer.
+    await expect
+      .poll(
+        async () =>
+          (
+            await api(
+              page,
+              csrf,
+              "/style-selections/layout-preferences?tableId=" + target.id,
+              "GET",
+            )
+          ).revision,
+      )
+      .toBeGreaterThan(0);
+    const body = {
+      target: String(target.id),
+      rowIds: [String(source.id)],
+      fields: selectionBaseFields.filter((field) =>
+        ["xutiStyleNo", "material"].includes(field.key),
+      ),
+      mappings: [],
+      copyMissingFields: true,
+    };
+    const preview = await api(
+      page,
+      csrf,
+      "/style-selections/migration/preview",
+      "POST",
+      body,
+    );
+    await api(page, csrf, "/style-selections/migration", "POST", {
+      ...body,
+      token: preview.token,
+    });
+    for (const tab of [page, viewer]) {
+      await expect(
+        tab.locator('thead th[data-selection-column="material"]'),
+      ).toBeVisible({ timeout: 5000 });
+      await expect(
+        tab.getByRole("textbox", { name: "材质成分", exact: true }),
+      ).toHaveValue("共享材质内容");
+      await expect(
+        tab.getByRole("textbox", { name: "序缇款号", exact: true }),
+      ).toHaveValue("FIELDS-" + suffix);
+    }
+    await expect(
+      viewer.getByRole("textbox", { name: "材质成分", exact: true }),
+    ).toHaveAttribute("readonly", "");
+    await viewer.reload();
+    await expect(
+      viewer.getByRole("textbox", { name: "材质成分", exact: true }),
+    ).toHaveValue("共享材质内容");
+  } finally {
+    await viewerContext.close();
   }
 });

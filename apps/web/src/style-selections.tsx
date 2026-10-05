@@ -305,6 +305,7 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
   const [cellAnchor, setCellAnchor] = useState<{ rowKey: string; columnKey: string } | null>(null);
   const [imagePreview, setImagePreview] = useState<{ rowKey: string; columnKey: string; index: number } | null>(null);
   const [textDetailOpen, setTextDetailOpen] = useState(false);
+  const [textDetailTarget, setTextDetailTarget] = useState<{rowKey:string;columnKey:string} | null>(null);
   const contextImage = useRef<{ url: string; name: string } | null>(null);
   const [contextCell, setContextCell] = useState<{ rowKey: string; columnKey: string; x: number; y: number } | null>(null);
   const [selectingCells, setSelectingCells] = useState(false);
@@ -326,7 +327,7 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
   const [retryVersion, setRetryVersion] = useState(0);
   const original = useRef(new Map<string, Row>());
   const appliedSnapshot = useRef("");
-  const connected = useSelectionRealtime(queryClient, tableId, () => setAccessLost(true));
+  const connected = useSelectionRealtime(queryClient, tableId, () => setAccessLost(true), layout.refresh);
   const queryString = new URLSearchParams({ page: "1", pageSize: "100", sort, direction }).toString();
   const data = useQuery({ queryKey: ["style-selections", queryString], queryFn: ({signal}) => fetchSelectionRows(search, sort, direction, queryClient.getQueryData(["style-selections", queryString]), api, signal), enabled: !accessLost, refetchInterval: connected ? 30000 : 10000, refetchOnWindowFocus: true });
   const styleCounts = useQuery({ queryKey: ["style-selection-style-counts"], queryFn: () => api("/style-selections/style-counts"), refetchInterval: 30000 });
@@ -915,8 +916,17 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
   const editorCanEdit=canEdit && !!editorRow && !!editorColumn && !systemField(editorColumn) && editableSelectionCell(editorRow,editorColumn.key);
   const editorValue = editorEnabled ? readableSelectionCell(editorRow!,editorColumn!.key)?String(valueAt(editorRow!, editorColumn!) ?? ""):"••••" : "";
   const editorDetailEnabled = editorEnabled && readableSelectionCell(editorRow!, editorColumn!.key);
-  const editorDetailEditable = editorCanEdit && (editorColumn?.type || editorColumn?.fallbackType || "text") === "text" && !["registrationBatch", "color", "sizeRange", "supplyPriceExclTax", "vipPrice", "livePrice", "tagPrice"].includes(editorColumn!.key) && !collectionKeys.has(editorColumn!.key) && !(archive && (archiveReferences?.[archiveReferenceKey(editorColumn!.key)] || archiveReferenceKey(editorColumn!.key) === "status"));
   const editorLabel = editorRow && editorColumn ? `${rows.indexOf(editorRow) + 1} · ${editorColumn.label}` : "单元格";
+  // Opening a picture must not discard the text being compared with it.
+  useEffect(() => {
+    if (textDetailOpen && editorDetailEnabled && cellAnchor)
+      setTextDetailTarget(current => current?.rowKey === cellAnchor.rowKey && current?.columnKey === cellAnchor.columnKey ? current : cellAnchor);
+  }, [textDetailOpen, editorDetailEnabled, cellAnchor]);
+  const detailTarget = editorDetailEnabled ? cellAnchor : editorRow && editorColumn && (imageKeys.has(editorColumn.key) || editorColumn.type === "image") ? textDetailTarget : null;
+  const detailRow = filteredRows.find(row => row._key === detailTarget?.rowKey);
+  const detailColumn = activeColumns.find(column => column.key === detailTarget?.columnKey);
+  const detailVisible = textDetailOpen && !!detailRow && !!detailColumn && readableSelectionCell(detailRow, detailColumn.key);
+  const detailEditable = canEdit && !!detailRow && !!detailColumn && editableSelectionCell(detailRow,detailColumn.key) && !systemField(detailColumn) && (detailColumn.type || detailColumn.fallbackType || "text") === "text" && !["registrationBatch","color","sizeRange","supplyPriceExclTax","vipPrice","livePrice","tagPrice"].includes(detailColumn.key) && !collectionKeys.has(detailColumn.key) && !(archive && (archiveReferences?.[archiveReferenceKey(detailColumn.key)] || archiveReferenceKey(detailColumn.key) === "status"));
   const editCurrent = (value: string) => { if (canEdit && editorEnabled) update(editorRow!._key, editorColumn!, value); };
   const editorError = editorRow && editorColumn ? errors[`${editorRow._key}:${editorColumn.key}`] || errors[`${editorRow._key}:save`] : undefined;
   const editorDuplicateCount = editorColumn?.key === "xutiStyleNo" ? repeatedStyles.get(selectionStyleKey(editorRow?.xutiStyleNo)) || 0 : 0;
@@ -933,8 +943,8 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
       editorColumn?.key === "color" && editorRow ? <Select aria-label={`编辑${editorColumn.label}`} mode="tags" maxTagCount="responsive" className="selection-editor-tags" value={splitTags(editorValue)} disabled={!editorCanEdit} tokenSeparators={["/"]} placeholder="输入后按 Enter 添加，多项用 / 分隔" options={colorSuggestions.map(value => ({ value, label: value }))} onChange={(value) => editCurrent(joinTags(value))} /> :
       <Input.TextArea aria-label="编辑当前单元格" rows={1} value={editorValue} disabled={!editorEnabled} readOnly={!editorCanEdit || !!editorColumn && collectionKeys.has(editorColumn.key)} placeholder={editorColumn && imageKeys.has(editorColumn.key) ? "图片请在单元格内上传或查看" : "点击单元格，在此编辑内容"} onChange={(event) => editCurrent(event.target.value)} />}</div>
     {editorError && <span className="selection-editor-error" title={editorError} role="status">{editorError}</span>}
-    <Button className="selection-editor-expand" type="text" aria-label={textDetailOpen && editorDetailEnabled ? "收起单元格详情" : "展开单元格详情"} title={textDetailOpen && editorDetailEnabled ? "收起详情" : "展开详情"} aria-expanded={textDetailOpen && editorDetailEnabled} aria-controls="selection-cell-detail" disabled={!editorDetailEnabled} icon={textDetailOpen && editorDetailEnabled ? <CompressOutlined/> : <ExpandAltOutlined/>} onClick={()=>setTextDetailOpen(current=>!current)}/>
-    {textDetailOpen && editorDetailEnabled && <SelectionTextDetail title={editorLabel} value={editorValue} editable={editorDetailEditable} onChange={editCurrent} onClose={()=>setTextDetailOpen(false)}/>}
+    <Button className="selection-editor-expand" type="text" aria-label={detailVisible ? "收起单元格详情" : "展开单元格详情"} title={detailVisible ? "收起详情" : "展开详情"} aria-expanded={detailVisible} aria-controls="selection-cell-detail" disabled={!editorDetailEnabled && !detailVisible} icon={detailVisible ? <CompressOutlined/> : <ExpandAltOutlined/>} onClick={()=>setTextDetailOpen(current=>!current)}/>
+    {detailVisible && <SelectionTextDetail title={`${rows.indexOf(detailRow!) + 1} · ${detailColumn!.label}`} value={String(valueAt(detailRow!,detailColumn!) ?? "")} editable={detailEditable} onChange={value=>{if(detailEditable)update(detailRow!._key,detailColumn!,value);}} onClose={()=>setTextDetailOpen(false)}/>}
   </div>;
 
 
@@ -961,7 +971,7 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
     setFormatTarget(null);
   };
   if(accessLost)return <Alert type="error" showIcon message="表格访问权限已失效，请重新登录或联系管理员" />;
-  return <>{columnWidthTarget && <SelectionColumnWidthModal columns={columnWidthTarget} onCancel={() => setColumnWidthTarget(null)} onApply={width => { const keys = new Set(columnWidthTarget.map(column => column.key)); setColumns(current => current.map(column => keys.has(column.key) ? { ...column, width } : column)); setColumnWidthTarget(null); }}/>} {imagePreview && previewImages.length > 0 && <SelectionImagePreview key={cellId(imagePreview.rowKey, imagePreview.columnKey)} images={previewImages} index={Math.min(imagePreview.index, previewImages.length - 1)} name={previewColumn!.label} onTextCopied={text => { copiedSingleValue.current = text; setCopiedCells(new Set()); }} onIndexChange={index => setImagePreview(current => current ? { ...current, index } : null)} onClose={() => setImagePreview(null)} />}{formatTarget && <SelectionFormatModal count={formatTarget.ids.size} sample={formatTarget.sample} initial={formatTarget.initial} onCancel={() => setFormatTarget(null)} onApply={applyFormat} />}<PageSearch><PageSearchInput multiline aria-label="搜索选款" placeholder="搜索款号、供应商、颜色、材质…" allowClear value={searchText} onChange={event=>setSearchText(event.target.value)} /></PageSearch>{title && <Header title={title} subtitle="按需添加字段和记录，配置表格功能。"/>}
+  return <>{columnWidthTarget && <SelectionColumnWidthModal columns={columnWidthTarget} onCancel={() => setColumnWidthTarget(null)} onApply={width => { const keys = new Set(columnWidthTarget.map(column => column.key)); setColumns(current => current.map(column => keys.has(column.key) ? { ...column, width } : column)); setColumnWidthTarget(null); }}/>} {imagePreview && previewImages.length > 0 && <SelectionImagePreview key={cellId(imagePreview.rowKey, imagePreview.columnKey)} images={previewImages} index={Math.min(imagePreview.index, previewImages.length - 1)} name={previewColumn!.label} alongsideDetails={detailVisible} onTextCopied={text => { copiedSingleValue.current = text; setCopiedCells(new Set()); }} onIndexChange={index => setImagePreview(current => current ? { ...current, index } : null)} onClose={() => setImagePreview(null)} />}{formatTarget && <SelectionFormatModal count={formatTarget.ids.size} sample={formatTarget.sample} initial={formatTarget.initial} onCancel={() => setFormatTarget(null)} onApply={applyFormat} />}<PageSearch><PageSearchInput multiline aria-label="搜索选款" placeholder="搜索款号、供应商、颜色、材质…" allowClear value={searchText} onChange={event=>setSearchText(event.target.value)} /></PageSearch>{title && <Header title={title} subtitle="按需添加字段和记录，配置表格功能。"/>}
     <Dropdown trigger={["contextMenu"]} open={!!contextRow && !!contextColumn} onOpenChange={open => { if (!open) setContextCell(null); }} overlayStyle={{ zIndex: 1201 }} menu={cellContextMenu}><span aria-hidden="true" style={{ position: "fixed", left: contextCell?.x || 0, top: contextCell?.y || 0, width: 1, height: 1, pointerEvents: "none" }}/></Dropdown>
     <Card className="selection-card"><div className="selection-toolbar" aria-label={`${title || "选款登记"}表格工具栏`}><Space className="selection-toolbar-controls" wrap size={4}>
       {canEdit && <SelectionCollections selectedRows={filteredRows.filter(row => selectedRows.includes(row._key))} blocked={!!dirtyCount || saving || deleting}/>}

@@ -11,7 +11,9 @@ import { selectionScope } from "../../../../../packages/database/src/selection-s
 import {
   archiveMappedFields,
   archiveTableFields,
+  archiveChoiceColumns,
 } from "../../../../../packages/contracts/src/product-archive-table.js";
+import { sharedFields } from "./shared-fields.js";
 import { archiveSelectionPermissions } from "../../../../../packages/contracts/src/table-permissions.js";
 import {
   audit,
@@ -101,7 +103,12 @@ export async function archiveMetadata(c: Context) {
         initialLayout: table.initial_layout,
         layoutGeneration: table.layout_generation,
         fields:
-          table.initial_layout === "empty" ? [] : archiveTableFields(fields),
+          table.initial_layout === "empty"
+            ? archiveChoiceColumns(
+                (await sharedFields(tx, String(table.id))).fields,
+                archiveTableFields(fields),
+              )
+            : archiveTableFields(fields),
         references: {
           categoryId: categories,
           brandId: brands,

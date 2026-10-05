@@ -1017,6 +1017,47 @@ test("cell details expand long text, drag without shifting the sheet, follow sel
   await expect(detail).toHaveCount(0);
 });
 
+test("picture enlargement keeps draggable text details editable for their original cell", async ({page}) => {
+  await fixture(page);
+  await cell(page,3,"material").click();
+  await page.getByRole("button",{name:"展开单元格详情",exact:true}).click();
+  const detail = page.getByRole("dialog",{name:"单元格详情",exact:true});
+  const content = detail.getByLabel("单元格详情内容",{exact:true});
+  await cell(page,0,"images").locator(".selection-image-slide img").click();
+  const preview = page.locator(".selection-image-preview-layer");
+  await expect(preview).toBeVisible();
+  await expect(detail).toBeVisible();
+  await expect(detail.locator("strong")).toHaveText("4 · 材质");
+  await expect(content).toHaveValue("Cotton");
+  const picture = (await preview.locator(".selection-preview-image").boundingBox())!;
+  const panel = (await detail.boundingBox())!;
+  expect(picture.x+picture.width).toBeLessThanOrEqual(panel.x);
+  const header = (await detail.locator("header").boundingBox())!;
+  await page.mouse.move(header.x+60,header.y+20);await page.mouse.down();
+  await page.mouse.move(header.x-380,header.y+80,{steps:8});await page.mouse.up();
+  const saved = page.waitForResponse(response=>response.request().method()==="PATCH" && response.url().endsWith("/style-selections/shortcut-3"));
+  await content.fill("对照图片核对材质");
+  await saved;
+  await page.getByRole("button",{name:"关闭图片预览",exact:true}).click();
+  await expect(preview).toHaveCount(0);
+  await expect(content).toHaveValue("对照图片核对材质");
+  await cell(page,3,"material").click();
+  await expect(page.getByRole("group",{name:"单元格编辑栏",exact:true}).getByLabel("编辑当前单元格",{exact:true})).toHaveValue("对照图片核对材质");
+  await detail.getByRole("button",{name:"收起单元格详情",exact:true}).click();
+  // The reverse order must also reposition the image controls correctly.
+  await cell(page,0,"images").locator(".selection-image-slide img").click();
+  await cell(page,3,"material").click();
+  await page.getByRole("button",{name:"展开单元格详情",exact:true}).click();
+  await expect(content).toHaveValue("对照图片核对材质");
+  const shiftedImage = (await preview.locator(".selection-preview-image").boundingBox())!;
+  const close = (await page.getByRole("button",{name:"关闭图片预览",exact:true}).boundingBox())!;
+  expect(close.x+close.width).toBeLessThanOrEqual(shiftedImage.x+shiftedImage.width);
+  await content.press("Escape");
+  await expect(detail).toHaveCount(0);
+  await expect(preview).toBeVisible();
+  await page.getByRole("button",{name:"关闭图片预览",exact:true}).click();
+});
+
 test("cell details let readonly users select text but never expose denied cells", async ({ page }) => {
   await fixture(page,true);
   let writes=0;

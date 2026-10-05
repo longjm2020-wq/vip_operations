@@ -401,7 +401,7 @@
 .selection-editor-expand.ant-btn { flex: 0 0 30px; width: 30px; height: 30px; padding: 0; color: #8a6044; }
 .selection-editor-expand.ant-btn:not(:disabled):hover { color: #cf5100; background: #fff1e7; }
 .selection-editor-expand.ant-btn:disabled { color: #b9aea6; }
-.selection-text-detail { position: fixed; z-index: 1090; display: flex; flex-direction: column; width: min(480px, calc(100vw - 32px)); height: min(380px, calc(100dvh - 96px)); box-sizing: border-box; overflow: hidden; border: 1px solid #e6cfbc; border-radius: 10px; color: #624b3c; background: #fffdf9; box-shadow: 0 8px 28px #33251e26; }
+.selection-text-detail { position: fixed; z-index: 1110; display: flex; flex-direction: column; width: min(480px, calc(100vw - 32px)); height: min(380px, calc(100dvh - 96px)); box-sizing: border-box; overflow: hidden; border: 1px solid #e6cfbc; border-radius: 10px; color: #624b3c; background: #fffdf9; box-shadow: 0 8px 28px #33251e26; }
 .selection-text-detail header { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex: 0 0 42px; padding: 0 12px; border-bottom: 1px solid #eaded3; background: #fff7ef; cursor: grab; touch-action: none; user-select: none; }
 .selection-text-detail.is-dragging header { cursor: grabbing; }
 .selection-text-detail header strong { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 13px; }

@@ -10,6 +10,7 @@ import { Alert, Button, Space, Spin } from "antd";
 import {
   selectionLayoutSchema,
   selectionLayoutSnapshotSchema,
+  mergeSelectionFields,
   type SelectionLayout,
   type SelectionLayoutSnapshot,
 } from "../../../packages/contracts/src/selection-layout.js";
@@ -74,7 +75,18 @@ export function useSelectionLayoutPreferences(
         (await apiRef.current("/style-selections/layout-preferences")).data,
       );
       if (!mounted.current || request !== sequence.current) return;
-      if (wasReady && (current.current.dirty || current.current.saving)) return;
+      if (wasReady && (current.current.dirty || current.current.saving)) {
+        // Shared definitions may arrive while a personal view is being edited.
+        // Append them without replacing unsaved preferences or their CAS revision.
+        const preferences = current.current.preferences!;
+        const columns = mergeSelectionFields(
+          preferences.columns,
+          remote.preferences?.columns || [],
+        );
+        if (columns.length !== preferences.columns.length)
+          publish({ preferences: { ...preferences, columns }, dirty: true });
+        return;
+      }
       const cache = wasReady
         ? null
         : readLayoutCache(browserLayoutStorage(), cacheKey);
@@ -89,7 +101,13 @@ export function useSelectionLayoutPreferences(
         JSON.stringify(cache.preferences) !== JSON.stringify(remote.preferences)
       ) {
         publish({
-          preferences: cache.preferences,
+          preferences: {
+            ...cache.preferences,
+            columns: mergeSelectionFields(
+              cache.preferences.columns,
+              remote.preferences?.columns || [],
+            ),
+          },
           revision: cache.revision,
           dirty: true,
           error: "",
@@ -145,12 +163,23 @@ export function useSelectionLayoutPreferences(
             )
           ).data,
         );
+        const unchanged =
+          JSON.stringify(current.current.preferences) ===
+          JSON.stringify(preferences);
+        const currentPreferences = current.current.preferences!;
         publish({
+          preferences: unchanged
+            ? saved.preferences
+            : {
+                ...currentPreferences,
+                columns: mergeSelectionFields(
+                  currentPreferences.columns,
+                  saved.preferences?.columns || [],
+                ),
+              },
           revision: saved.revision,
           saving: false,
-          dirty:
-            JSON.stringify(current.current.preferences) !==
-            JSON.stringify(preferences),
+          dirty: !unchanged,
           error: "",
         });
       } catch (error) {
@@ -336,7 +365,7 @@ export function useSelectionLayoutPreferences(
       error: "",
     });
   };
-  return { ...state, ...setters, update, retry, resolve };
+  return { ...state, ...setters, update, retry, resolve, refresh: load };
 }
 export type SelectionLayoutController = ReturnType<
   typeof useSelectionLayoutPreferences
