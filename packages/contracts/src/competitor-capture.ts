@@ -110,3 +110,9 @@ export function captureVipPage(input: { href: string; observedAt: string }) {
   }
   throw Error("请在唯品会品牌销量排序页或商品详情页使用采集工具。");
 }
+
+export function captureVipScript(input: { href: string; observedAt: string }) {
+  // tsx adds name annotations inside serialized functions. Supply its identity
+  // helper in the browser closure; input remains JSON data, never source code.
+  return `(() => { const __name = (fn) => fn; return (${captureVipPage.toString()})(${JSON.stringify(input)}); })()`;
+}

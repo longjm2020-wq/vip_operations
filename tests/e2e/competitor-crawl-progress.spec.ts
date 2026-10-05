@@ -117,6 +117,7 @@ test("login opens a local VIP popup and accepts only that official window's logi
     }),
   );
   await page.goto("/analytics/competitors");
+  await page.getByRole("button", { name: "采集设置", exact: true }).click();
   await expect(
     page.getByText("唯品会 · 本机登录待核验", { exact: true }),
   ).toBeVisible();
@@ -149,8 +150,78 @@ test("login opens a local VIP popup and accepts only that official window's logi
   ).toBeVisible();
   await page.getByRole("button", { name: "返回竞品分析", exact: true }).click();
   await page.reload();
+  await page.getByRole("button", { name: "采集设置", exact: true }).click();
   await expect(
     page.getByText("唯品会 · 本机已登录", { exact: true }),
   ).toBeVisible();
   await popup.close();
+});
+
+test("云端扫码只在窗口内轮询画面，核验成功后清除画面并显示连接", async ({
+  page,
+}) => {
+  await fixture(page);
+  const id = "fe0ee591-002b-4975-a20a-9a32e19e5731",
+    frameId = "83f8e28b-0c67-40f2-b702-19d6c8d201b1";
+  let connected = false,
+    cancelled = false;
+  const graphic =
+    '<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="760"><rect width="1080" height="760" fill="#fff7ef"/><rect x="650" y="190" width="220" height="220" fill="#5d4130"/></svg>';
+  await page.route("**/api/v1/analytics/competitors/cloud**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    let data: unknown;
+    if (path.endsWith("/cloud-session"))
+      data = {
+        enabled: true,
+        status: connected ? "READY" : "DISCONNECTED",
+        encryptionReady: true,
+        workerOnline: true,
+      };
+    else if (path.endsWith("/cloud-login")) data = { id };
+    else if (path.endsWith("/actions")) {
+      connected = route.request().postDataJSON().kind === "CHECK";
+      data = { queued: true };
+    } else if (path.endsWith("/cancel")) {
+      cancelled = true;
+      data = { cancelled: true };
+    } else
+      data = {
+        id,
+        status: connected ? "SAVED" : "WAITING",
+        expiresAt: "2026-10-05T03:00:00Z",
+        frameId,
+        frame: connected
+          ? null
+          : "data:image/svg+xml;base64," +
+            Buffer.from(graphic).toString("base64"),
+        note: connected
+          ? "云端登录已核验并保存"
+          : "请使用唯品会 App 扫描云端二维码",
+      };
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ data }),
+    });
+  });
+  await page.goto("/analytics/competitors");
+  await page.getByRole("button", { name: "云端登录", exact: true }).click();
+  await expect(
+    page.getByRole("img", { name: "唯品会云端登录画面" }),
+  ).toBeVisible();
+  await expect(page.getByText("保存后无需保持电脑或 Codex 在线")).toBeVisible();
+  await page.getByRole("button", { name: "核验并保存", exact: true }).click();
+  await expect(
+    page.getByRole("img", { name: "唯品会云端登录画面" }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByText("云端已连接", { exact: true }).first(),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "返回竞品分析", exact: true }).click();
+  expect(cancelled, "closing a saved login must preserve credentials").toBe(
+    false,
+  );
+  await page.getByRole("button", { name: "管理云端登录" }).click();
+  // This fixture returns an already saved window, which remains safely closable.
+  await page.getByRole("button", { name: "返回竞品分析", exact: true }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
 });

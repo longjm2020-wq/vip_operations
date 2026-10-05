@@ -6,10 +6,12 @@ import { startSupplyLogistics } from "./supply-logistics.js";
 import { startInventoryLogistics } from "./inventory-logistics.js";
 import { startCompassMail } from "./compass-mail.js";
 import { startCompetitorCrawler } from "./competitor-crawler.js";
+import { startCompetitorCloudLogin } from "./competitor-cloud-login.js";
 import { startRecycleCleanup } from "../../api/src/modules/projects/recycle.js";
 const stopRecycleCleanup = startRecycleCleanup();
 const stopCompassMail = startCompassMail();
 const stopCompetitorCrawler = startCompetitorCrawler();
+const stopCompetitorCloudLogin = startCompetitorCloudLogin();
 const stopInventoryLogistics = startInventoryLogistics();
 const stopSupplyLogistics = startSupplyLogistics();
 validateIntegrationMode();
@@ -53,6 +55,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const)
       stopInventoryLogistics(),
       stopCompassMail(),
       stopCompetitorCrawler(),
+      stopCompetitorCloudLogin(),
       stopRecycleCleanup(),
     ]).then(() => process.exit(0));
   });

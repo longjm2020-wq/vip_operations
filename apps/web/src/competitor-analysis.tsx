@@ -46,7 +46,7 @@ import {
 import { competitorMaterialDisplay } from "./competitor-material-display";
 import { captureBookmarkUrl } from "./competitor-capture";
 import { readCompetitorFile } from "./competitor-import";
-import {CompetitorBrowserLogin} from "./competitor-browser-login";
+import { CompetitorCloudLogin } from "./competitor-cloud-login";
 import { downloadSheet } from "./download-sheet";
 import {
   CompetitorCrawlPanel,
@@ -272,7 +272,9 @@ function CaptureGuide({
         文件，不读取账号信息。
       </p>
       <a
-        ref={element=>{if(element)element.setAttribute("href",captureBookmarkUrl());}}
+        ref={(element) => {
+          if (element) element.setAttribute("href", captureBookmarkUrl());
+        }}
         className="competitor-bookmark"
         draggable
         onClick={(e) => {
@@ -696,7 +698,9 @@ export function CompetitorAnalysisPage() {
       <Header
         title="竞品分析"
         subtitle="唯品会 · 我的品牌与竞品对比"
-        subtitleExtra={brands[0] && <CompetitorBrowserLogin sourceUrl={brands.find(brand=>brand.isOwn)?.searchUrl || brands[0].searchUrl}/>}
+        subtitleExtra={
+          <CompetitorCloudLogin manage={manage} onConnected={refresh} />
+        }
         extra={
           <>
             <Button
@@ -752,6 +756,7 @@ export function CompetitorAnalysisPage() {
         onClose={() => setCrawlSettings(false)}
         onRefresh={refresh}
         onCapture={() => setCapture(true)}
+        localLoginSource={own?.searchUrl || brands[0]?.searchUrl}
       />
       <Card size="small" className="competitor-filters">
         <div className="competitor-brand-line">
@@ -828,13 +833,15 @@ export function CompetitorAnalysisPage() {
               label: b.label,
             }))}
           />
-          <PageSearch><PageSearchInput
-            aria-label="搜索竞品商品"
-            placeholder="搜索商品 / 款号"
-            allowClear
-            value={keyword}
-            onChange={(e) => setKeyword(e.target.value)}
-          /></PageSearch>
+          <PageSearch>
+            <PageSearchInput
+              aria-label="搜索竞品商品"
+              placeholder="搜索商品 / 款号"
+              allowClear
+              value={keyword}
+              onChange={(e) => setKeyword(e.target.value)}
+            />
+          </PageSearch>
           <Button
             type="text"
             onClick={() => {

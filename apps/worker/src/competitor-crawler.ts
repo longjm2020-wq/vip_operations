@@ -1,5 +1,13 @@
 import { randomUUID } from "node:crypto";
-import { chromium, type Browser, type Page } from "@playwright/test";
+import {
+  chromium,
+  type Browser,
+  type BrowserContext,
+  type Page,
+} from "@playwright/test";
+import { loadCloudState, refreshCloudState } from "./competitor-cloud-state.js";
+import { configureVipContext } from "./competitor-cloud-login.js";
+import { competitorCloudViewport } from "../../../packages/contracts/src/competitor-cloud.js";
 import { db, one, rows } from "../../../packages/database/src/index.js";
 import { type Context } from "../../api/src/core.js";
 import { scheduleCrawls } from "../../api/src/modules/competitors/crawl-jobs.js";
@@ -7,7 +15,10 @@ import {
   importSnapshot,
   enrichDetails,
 } from "../../api/src/modules/competitors/service.js";
-import { captureVipPage } from "../../../packages/contracts/src/competitor-capture.js";
+import {
+  captureVipPage,
+  captureVipScript,
+} from "../../../packages/contracts/src/competitor-capture.js";
 import {
   competitorProductSchema,
   vipListUrl,
@@ -39,7 +50,7 @@ async function guard(page: Page) {
   )
     throw new CrawlIssue(
       false,
-      "唯品会要求登录，后台采集已停止；保留上次有效数据。请在本机唯品会浏览器登录后补充数据，本机登录不会自动授权后台服务器",
+      "唯品会要求登录，后台采集已停止；保留上次有效数据。请打开「云端登录」重新扫码并核验，再更新竞品数据",
       true,
     );
   if (
@@ -52,7 +63,7 @@ async function guard(page: Page) {
   )
     throw new CrawlIssue(
       true,
-      "唯品会要求验证，后台采集已暂停；保留上次有效数据，可通过浏览器补充后重试",
+      "唯品会要求验证，后台采集已暂停；保留上次有效数据，请打开「云端登录」处理验证并重新核验",
     );
 }
 async function waitForProduct(page: Page, selector: string) {
@@ -75,10 +86,12 @@ export async function crawlPublicBrand(
   page: Page,
   brand: { id: string; name: string; brandSn: string | null },
   hooks: {
+    check?: () => Promise<void>;
     list: (data: any) => Promise<void>;
     detail: (products: CompetitorProduct[]) => Promise<void>;
   },
 ) {
+  await hooks.check?.();
   let url = vipSearchUrl(brand.name, brand.brandSn);
   await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
   await waitForProduct(page, ".c-goods-item__name");
@@ -119,10 +132,12 @@ export async function crawlPublicBrand(
     await page.waitForTimeout(1000);
     await guard(page);
   }
-  const captured = await page.evaluate(captureVipPage, {
-    href: page.url(),
-    observedAt: new Date().toISOString(),
-  });
+  const captured = await page.evaluate<ReturnType<typeof captureVipPage>>(
+    captureVipScript({
+      href: page.url(),
+      observedAt: new Date().toISOString(),
+    }),
+  );
   if (captured.kind !== "LIST")
     throw new CrawlIssue(false, "排名页面格式变化，未替换原数据");
   const products = captured.products
@@ -139,6 +154,7 @@ export async function crawlPublicBrand(
     consecutiveFailures = 0;
   try {
     for (const product of products) {
+      await hooks.check?.();
       let verified: CompetitorProduct;
       try {
         await page.waitForTimeout(2000);
@@ -151,10 +167,12 @@ export async function crawlPublicBrand(
           .locator(".dc-table-tit")
           .first()
           .waitFor({ state: "attached", timeout: 15000 });
-        const detail = await page.evaluate(captureVipPage, {
-          href: page.url(),
-          observedAt: new Date().toISOString(),
-        });
+        const detail = await page.evaluate<ReturnType<typeof captureVipPage>>(
+          captureVipScript({
+            href: page.url(),
+            observedAt: new Date().toISOString(),
+          }),
+        );
         if (
           detail.kind !== "DETAILS" ||
           !detail.brandName.includes(brand.name) ||
@@ -226,6 +244,13 @@ export async function processCrawlJob(
     if (
       await one(
         tx,
+        "SELECT 1 FROM competitor_cloud_logins WHERE status IN ('QUEUED','RUNNING','WAITING','CHECKING') AND expires_at>now()",
+      )
+    )
+      return null;
+    if (
+      await one(
+        tx,
         "SELECT 1 FROM competitor_crawl_jobs WHERE status='RUNNING'",
       )
     )
@@ -244,6 +269,8 @@ export async function processCrawlJob(
   });
   if (!job) return;
   let browser: Browser | undefined,
+    browserContext: BrowserContext | undefined,
+    cloud: Awaited<ReturnType<typeof loadCloudState>> = null,
     capturedCount = 0,
     detailCount = 0,
     snapshotId: string | undefined,
@@ -279,6 +306,28 @@ export async function processCrawlJob(
       detailCount,
     );
   const requireLease = async () => {
+    if (
+      await one(
+        db,
+        "SELECT 1 FROM competitor_cloud_logins WHERE status='QUEUED' AND expires_at>now()",
+      )
+    )
+      throw new CrawlIssue(
+        false,
+        "正在准备云端登录，本次采集暂停；已保留完成的数据，登录后可重新采集",
+      );
+    if (
+      cloud &&
+      !(await one(
+        db,
+        "SELECT 1 FROM competitor_cloud_session WHERE id=1 AND enabled AND status='READY' AND state_version=$1",
+        cloud.version,
+      ))
+    )
+      throw new CrawlIssue(
+        false,
+        "云端会话已变更或断开，采集停止；已保留完成的数据",
+      );
     if (signal?.aborted)
       throw new CrawlIssue(
         false,
@@ -306,19 +355,32 @@ export async function processCrawlJob(
         "SELECT id::text,name,brand_sn FROM competitor_brands WHERE id=$1::bigint",
         job.brand_id,
       );
+    try {
+      cloud = await loadCloudState();
+    } catch {
+      throw new CrawlIssue(
+        false,
+        "云端会话未就绪或无法读取，请打开「云端登录」扫码并核验后重新采集",
+        true,
+      );
+    }
     browser = await launch();
     await requireLease();
     const context = await browser.newContext({
       locale: "zh-CN",
-      viewport: { width: 1366, height: 900 },
+      viewport: competitorCloudViewport,
       acceptDownloads: false,
+      ...(cloud ? { storageState: cloud.state } : {}),
     });
+    browserContext = context;
     const page = await context.newPage();
+    if (cloud) await configureVipContext(page);
     page.setDefaultTimeout(15000);
     await crawlPublicBrand(
       page,
       { id: brand!.id, name: brand!.name, brandSn: brand!.brand_sn },
       {
+        check: requireLease,
         list: async (data) => {
           await requireLease();
           const saved = await importSnapshot(
@@ -345,6 +407,12 @@ export async function processCrawlJob(
         },
       },
     );
+    await requireLease();
+    if (cloud)
+      await refreshCloudState(
+        await context.storageState({ indexedDB: true }),
+        cloud.version,
+      );
     await db.$executeRawUnsafe(
       "UPDATE competitor_crawl_jobs SET status='READY',completed_at=now(),note='后台采集完成' WHERE id=$1::bigint AND claim_token=$2 AND status='RUNNING'",
       job.id,
@@ -353,6 +421,26 @@ export async function processCrawlJob(
   } catch (error) {
     const verification = error instanceof CrawlIssue && error.verification;
     const login = error instanceof CrawlIssue && error.login;
+    if (cloud && (login || verification))
+      await db.$executeRawUnsafe(
+        "UPDATE competitor_cloud_session SET status=$1,note=$2 WHERE id=1 AND state_version=$3",
+        login ? "LOGIN_REQUIRED" : "VERIFICATION_REQUIRED",
+        login
+          ? "唯品会要求重新登录，请在云端扫码核验"
+          : "唯品会要求验证，请打开云端登录处理后核验",
+        cloud.version,
+      );
+    else if (
+      cloud &&
+      browserContext &&
+      capturedCount &&
+      !signal?.aborted &&
+      !timedOut
+    )
+      await refreshCloudState(
+        await browserContext.storageState({ indexedDB: true }),
+        cloud.version,
+      ).catch(() => {});
     const note = signal?.aborted
       ? "采集进程正在重启，已保留完成的数据，可重新采集"
       : timedOut

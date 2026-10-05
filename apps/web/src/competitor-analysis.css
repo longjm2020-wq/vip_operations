@@ -398,3 +398,22 @@
   line-height: 1.7;
   overflow-wrap: anywhere;
 }
+.competitor-cloud-frame {
+  display: block;
+  width: 100%;
+  height: auto;
+  margin-top: 12px;
+  border: 1px solid #eaded4;
+  border-radius: 8px;
+  cursor: pointer;
+  user-select: none;
+  touch-action: none;
+}
+.competitor-cloud-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  min-height: 160px;
+  color: #a17d66;
+}

@@ -15,6 +15,7 @@ import { api } from "./api";
 import { when } from "./shared";
 import type { CompetitorBrand } from "../../../packages/contracts/src/competitor-analysis";
 import { competitorCrawlProgress } from "../../../packages/contracts/src/competitor-crawl-progress";
+import { CompetitorBrowserLogin } from "./competitor-browser-login";
 
 export type CompetitorCrawlStatus = {
   settings: { enabled: boolean; dailyHour: number; version: number };
@@ -47,6 +48,7 @@ export function CompetitorCrawlPanel({
   onClose,
   onRefresh,
   onCapture,
+  localLoginSource,
 }: {
   data?: CompetitorCrawlStatus;
   brands: CompetitorBrand[];
@@ -55,6 +57,7 @@ export function CompetitorCrawlPanel({
   onClose: () => void;
   onRefresh: () => void;
   onCapture: () => void;
+  localLoginSource?: string;
 }) {
   const [enabled, setEnabled] = useState(true),
     [hour, setHour] = useState(8),
@@ -199,7 +202,7 @@ export function CompetitorCrawlPanel({
           type="info"
           showIcon
           title="采集失败保留已有数据"
-          description="新品牌会进入首次采集；已有品牌每天更新一次。暂停后，正在执行的任务会继续完成。平台要求登录或验证时，本次任务停止，可在本机浏览器登录后补充数据；本机登录不会自动授权后台服务器。"
+          description="云端扫码并核验后，后台复用加密保存的会话，无需保持电脑或 Codex 在线。新品牌会进入首次采集；已有品牌每天更新一次。暂停后，正在执行的任务会继续完成。平台要求登录或验证时，请打开云端登录处理后核验。"
         />
         <Space style={{ marginTop: 16 }}>
           <Button
@@ -211,6 +214,11 @@ export function CompetitorCrawlPanel({
             浏览器补充数据
           </Button>
         </Space>
+        {localLoginSource && (
+          <div style={{ marginTop: 12 }}>
+            <CompetitorBrowserLogin sourceUrl={localLoginSource} />
+          </div>
+        )}
         {error && (
           <Alert
             type="error"
