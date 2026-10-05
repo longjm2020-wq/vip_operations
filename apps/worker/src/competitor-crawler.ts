@@ -75,6 +75,29 @@ async function waitForProduct(page: Page, selector: string) {
       .waitFor({ state: "visible", timeout: 15000 });
   } catch {
     await guard(page);
+    // Only public page structure is logged; never account text, query strings,
+    // cookies, storage state or response bodies from the authenticated session.
+    const location = new URL(page.url());
+    console.warn(
+      JSON.stringify({
+        event: "competitor-page-empty",
+        host: location.hostname,
+        path: location.pathname,
+        selector,
+        matches: await page.locator(selector).count(),
+        frames: page.frames().length,
+        pageErrorVisible: await page
+          .getByText(
+            /access denied|页面出错|服务异常|网络异常|网络错误|没有找到|暂无商品/i,
+          )
+          .filter({ visible: true })
+          .count(),
+        accountVisible: await page.locator("#J_user_logined:visible").count(),
+        signInVisible: await page
+          .locator("#J_user_noId:visible,#J_user_unLogin:visible")
+          .count(),
+      }),
+    );
     throw new CrawlIssue(
       false,
       "唯品会没有返回有效商品数据，保留上次数据，请稍后重试",
