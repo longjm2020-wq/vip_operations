@@ -37,6 +37,14 @@ export async function testCompetitorCloud(h: Record<string, any>) {
     await cloudWorkerHeartbeat();
     assert.equal((await ok(base + "/cloud-session")).workerOnline, true);
     const login = await ok(base + "/cloud-login", "POST", {});
+    const remaining =
+      new Date(
+        (await ok(base + "/cloud-login/" + login.id)).expiresAt,
+      ).getTime() - Date.now();
+    assert.ok(
+      remaining > 9 * 60_000 && remaining <= 10 * 60_000,
+      "login expires in ten minutes regardless of database timezone",
+    );
     assert.equal(
       (await ok(base + "/cloud-login", "POST", {})).id,
       login.id,

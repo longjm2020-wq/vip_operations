@@ -20,7 +20,7 @@ const active = "('QUEUED','RUNNING','WAITING','CHECKING')";
 export async function cloudStatus() {
   return one(
     db,
-    `SELECT enabled,status,saved_at,checked_at,encryption_ready,
+    `SELECT enabled,status,saved_at::text,checked_at::text,encryption_ready,
     coalesce(worker_heartbeat_at>now()-interval '1 minute',false) AS worker_online,note
     FROM competitor_cloud_session WHERE id=1`,
   );
@@ -35,7 +35,7 @@ async function owned(c: Context, value: string, tx: Tx = db) {
   const loginId = parse(z.uuid(), value);
   const row = await one(
     tx,
-    "SELECT * FROM competitor_cloud_logins WHERE id=$1::uuid FOR UPDATE",
+    "SELECT *, (extract(epoch FROM expires_at)*1000)::bigint AS expires_ms FROM competitor_cloud_logins WHERE id=$1::uuid FOR UPDATE",
     loginId,
   );
   if (!row) fail("NOT_FOUND", "云端登录不存在", 404);
@@ -50,7 +50,7 @@ export async function openCloudLogin(c: Context) {
     await rows(tx, "SELECT pg_advisory_xact_lock(2026100341)::text");
     const config = await one(
       tx,
-      "SELECT encryption_ready,worker_heartbeat_at FROM competitor_cloud_session WHERE id=1 FOR UPDATE",
+      "SELECT encryption_ready,coalesce(worker_heartbeat_at>now()-interval '1 minute',false) AS worker_online FROM competitor_cloud_session WHERE id=1 FOR UPDATE",
     );
     if (!config?.encryption_ready)
       fail(
@@ -58,10 +58,7 @@ export async function openCloudLogin(c: Context) {
         "云端采集尚未配置会话加密密钥，请联系管理员",
         503,
       );
-    if (
-      !config.worker_heartbeat_at ||
-      Date.now() - new Date(config.worker_heartbeat_at).getTime() > 60000
-    )
+    if (!config.worker_online)
       fail("CLOUD_WORKER_OFFLINE", "云端采集程序未在线，请稍后重试", 503);
     const running = await one(
       tx,
@@ -100,7 +97,7 @@ export async function cloudLoginView(c: Context, value: string) {
   return {
     id: row.id,
     status: row.status,
-    expires_at: row.expires_at,
+    expires_at: new Date(Number(row.expires_ms)).toISOString(),
     frame_id: row.frame_id,
     frame: row.frame_jpeg ? "data:image/jpeg;base64," + row.frame_jpeg : null,
     note: row.note,
@@ -122,7 +119,7 @@ export async function cloudLoginAction(
       const row = await owned(c, value, tx);
       if (
         !["WAITING", "CHECKING"].includes(row.status) ||
-        new Date(row.expires_at).getTime() <= Date.now()
+        Number(row.expires_ms) <= Date.now()
       )
         fail(
           "CLOUD_LOGIN_NOT_ACTIVE",

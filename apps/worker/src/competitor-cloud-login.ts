@@ -106,7 +106,7 @@ export async function processCloudLogin(
     if (!next) return null;
     return one(
       tx,
-      "UPDATE competitor_cloud_logins SET status='RUNNING',claim_token=$2::uuid,heartbeat_at=now(),note='正在打开唯品会云端登录页面' WHERE id=$1::uuid RETURNING *",
+      "UPDATE competitor_cloud_logins SET status='RUNNING',claim_token=$2::uuid,heartbeat_at=now(),note='正在打开唯品会云端登录页面' WHERE id=$1::uuid RETURNING *, (extract(epoch FROM expires_at)*1000)::bigint AS expires_ms",
       next.id,
       token,
     );
@@ -116,7 +116,7 @@ export async function processCloudLogin(
   const close = () => void browser?.close().catch(() => {});
   const deadline = setTimeout(
     close,
-    Math.max(1, new Date(job.expires_at).getTime() - Date.now()),
+    Math.max(1, Number(job.expires_ms) - Date.now()),
   );
   deadline.unref();
   signal?.addEventListener("abort", close, { once: true });
@@ -186,10 +186,7 @@ export async function processCloudLogin(
     let frameId = randomUUID(),
       lastUrl = page.url(),
       lastFrame = 0;
-    while (
-      !signal?.aborted &&
-      Date.now() < new Date(job.expires_at).getTime()
-    ) {
+    while (!signal?.aborted && Date.now() < Number(job.expires_ms)) {
       const current = await one(
         db,
         `SELECT status,frame_id FROM competitor_cloud_logins WHERE id=$1::uuid AND claim_token=$2::uuid AND status IN ${active}`,
