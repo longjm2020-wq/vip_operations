@@ -9,6 +9,24 @@ export const archiveMappedFields: Record<string, string> = {
   sizeRange: ids.sizeRange,
   material: ids.composition,
 };
+export function archiveChoiceColumns(
+  columns: SelectionField[],
+  canonical: SelectionField[],
+): SelectionField[] {
+  const options = new Map(
+    canonical
+      .filter(
+        (field) =>
+          field.key.startsWith("custom:product:") && field.type === "single",
+      )
+      .map((field) => [field.key, field.options || []]),
+  );
+  return columns.map((field) =>
+    options.has(field.key)
+      ? { ...field, options: [...options.get(field.key)!] }
+      : field,
+  );
+}
 export function archiveTableFields(
   definitions: {
     id: string;

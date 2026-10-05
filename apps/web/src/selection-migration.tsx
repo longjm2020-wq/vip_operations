@@ -29,7 +29,12 @@ type Preview = {
   created: number;
   updated: number;
   addedFields: number;
-  optionChanges?: { key: string; label: string; addedOptions: string[] }[];
+  optionChanges?: {
+    key: string;
+    label: string;
+    addedOptions: string[];
+    shared?: boolean;
+  }[];
   targetName: string;
   rows: Row[];
 };
@@ -394,6 +399,11 @@ export function SelectionMigration({
                 description={
                   <>
                     确认后添加以下选项，保留目标已有选项及配色。
+                    {preview.optionChanges.some((change) => change.shared) && (
+                      <p style={{ margin: "8px 0 0" }}>
+                        商品共享字段的新增选项将对所有用户生效；类型及已有选项不变。
+                      </p>
+                    )}
                     <ul
                       style={{
                         margin: "8px 0 0",
@@ -404,7 +414,9 @@ export function SelectionMigration({
                     >
                       {preview.optionChanges.map((change) => (
                         <li key={change.key}>
-                          {change.label}：{change.addedOptions.join("、")}
+                          {change.label}
+                          {change.shared ? "（商品共享）" : ""}：
+                          {change.addedOptions.join("、")}
                         </li>
                       ))}
                     </ul>

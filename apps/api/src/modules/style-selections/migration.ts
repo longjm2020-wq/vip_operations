@@ -24,7 +24,10 @@ import {
   selectionLayoutSchema,
   type SelectionField,
 } from "../../../../../packages/contracts/src/selection-layout.js";
-import { archiveTableFields } from "../../../../../packages/contracts/src/product-archive-table.js";
+import {
+  archiveChoiceColumns,
+  archiveTableFields,
+} from "../../../../../packages/contracts/src/product-archive-table.js";
 import { fieldValueError } from "../../../../../packages/contracts/src/selection-field-validation.js";
 import {
   audit,
@@ -55,6 +58,7 @@ const readonlyTypes = new Set([
 const choiceTypes = new Set(["single", "multiple", "tags"]);
 const isChoice = (field: SelectionField) =>
   choiceTypes.has(field.type || field.fallbackType || "text");
+type ProductField = Row & Parameters<typeof archiveTableFields>[0][number];
 async function inWorkspace<T>(
   tx: Tx,
   key: string,
@@ -110,17 +114,17 @@ async function layout(tx: Tx, c: Context, key: string, archive: boolean) {
     c.actor.id,
     key,
   );
-  let defaults: SelectionField[] = [];
-  if (archive)
-    defaults = archiveTableFields(
-      camel(
-        await rows(
-          tx,
-          "SELECT * FROM public.product_fields WHERE active ORDER BY created_at,id",
-        ),
+  let defaults: SelectionField[] = [],
+    productFields: ProductField[] = [];
+  if (archive) {
+    productFields = camel(
+      await rows(
+        tx,
+        "SELECT *,updated_at::text AS option_version FROM public.product_fields WHERE active ORDER BY created_at,id",
       ),
     );
-  else if (key === "default") defaults = selectionBaseFields;
+    defaults = archiveTableFields(productFields);
+  } else if (key === "default") defaults = selectionBaseFields;
   else {
     const initial = (
       await one(
@@ -141,11 +145,18 @@ async function layout(tx: Tx, c: Context, key: string, archive: boolean) {
         },
       ];
   }
+  const preferences = selectionLayoutSchema.parse(
+    stored?.preferences || { columns: defaults },
+  );
   return {
-    preferences: selectionLayoutSchema.parse(
-      stored?.preferences || { columns: defaults },
-    ),
+    preferences: archive
+      ? {
+          ...preferences,
+          columns: archiveChoiceColumns(preferences.columns, defaults),
+        }
+      : preferences,
     revision: stored?.revision || 0,
+    productFields,
   };
 }
 export async function targets(c: Context) {
@@ -316,16 +327,23 @@ async function buildPlan(tx: Tx, c: Context, body: Input, lock = false) {
       key: string;
       label: string;
       addedOptions: string[];
+      shared?: boolean;
     }[] = [];
+    const productFields = new Map(
+        targetLayout.productFields.map((field) => [
+          "custom:product:" + field.id,
+          field,
+        ]),
+      ),
+      productOptionChanges: { before: Row; options: string[] }[] = [];
     for (const mapping of mappings) {
       const from = sourceFields.get(mapping.source)!,
-        to = targetFields.get(mapping.target)!;
-      // Sheet choice definitions are personal layout settings. Real product
-      // extension options remain governed by the shared product field catalog.
+        to = targetFields.get(mapping.target)!,
+        productField = productFields.get(to.key);
       if (
         !isChoice(from) ||
         !isChoice(to) ||
-        (target.archive && to.key.startsWith("custom:product:"))
+        (productField && productField.type !== "select")
       )
         continue;
       const addedOptions = [...new Set(from.options || [])].filter(
@@ -333,10 +351,11 @@ async function buildPlan(tx: Tx, c: Context, body: Input, lock = false) {
       );
       if (!addedOptions.length) continue;
       const options = [...(to.options || []), ...addedOptions];
-      if (options.length > 100)
+      const limit = productField ? 50 : 100;
+      if (options.length > limit)
         fail(
           "VALIDATION_ERROR",
-          `字段「${to.label}」合并后超过100个选项，请精简字段选项后重新预览`,
+          `字段「${to.label}」合并后超过${limit}个选项，请精简字段选项后重新预览`,
           400,
         );
       const optionColors: Record<string, string> = Object.assign(
@@ -356,7 +375,14 @@ async function buildPlan(tx: Tx, c: Context, body: Input, lock = false) {
       };
       columns[columns.findIndex((field) => field.key === to.key)] = merged;
       targetFields.set(to.key, merged);
-      optionChanges.push({ key: to.key, label: to.label, addedOptions });
+      optionChanges.push({
+        key: to.key,
+        label: to.label,
+        addedOptions,
+        ...(productField ? { shared: true } : {}),
+      });
+      if (productField)
+        productOptionChanges.push({ before: productField, options });
     }
     const targetPolicy = await protection.policy(tx, lock),
       plan: Row[] = [],
@@ -415,10 +441,23 @@ async function buildPlan(tx: Tx, c: Context, body: Input, lock = false) {
             color: to.key === "labelImages" ? "" : photo.color || "",
           }));
         }
-        const issue = fieldValueError(
+        let issue = fieldValueError(
           to,
           fromImage ? JSON.stringify(value || []) : value,
         );
+        const productField = productFields.get(to.key);
+        if (!issue && productField?.type === "select")
+          issue = fieldValueError(
+            {
+              ...to,
+              type: "single",
+              options:
+                productOptionChanges.find(
+                  (change) => change.before.id === productField.id,
+                )?.options || productField.options,
+            },
+            value,
+          );
         if (issue)
           fail(
             "VALIDATION_ERROR",
@@ -504,6 +543,18 @@ async function buildPlan(tx: Tx, c: Context, body: Input, lock = false) {
         plan,
         preferences,
         layoutRevision: targetLayout.revision,
+        productFields: targetLayout.productFields
+          .filter((field) =>
+            mappings.some(
+              (mapping) => mapping.target === "custom:product:" + field.id,
+            ),
+          )
+          .map((field) => ({
+            id: field.id,
+            type: field.type,
+            options: field.options,
+            version: field.optionVersion,
+          })),
         actorId: c.actor.id,
       }),
     );
@@ -517,6 +568,7 @@ async function buildPlan(tx: Tx, c: Context, body: Input, lock = false) {
       target,
       addedFields: columns.length - targetLayout.preferences.columns.length,
       optionChanges,
+      productOptionChanges,
     };
   });
 }
@@ -621,6 +673,31 @@ export async function commit(c: Context, input: unknown) {
         409,
       );
     const moved: Row[] = [];
+    for (const change of plan.productOptionChanges) {
+      const after = await one(
+        tx,
+        "UPDATE public.product_fields SET options=$2::jsonb,updated_at=now() WHERE id=$1 AND active AND type='select' AND options=$3::jsonb AND updated_at=$4::timestamptz RETURNING *",
+        change.before.id,
+        JSON.stringify(change.options),
+        JSON.stringify(change.before.options),
+        change.before.optionVersion,
+      );
+      if (!after)
+        fail(
+          "EDIT_CONFLICT",
+          "商品字段选项已变化，请重新预览；整批未传送",
+          409,
+        );
+      await audit(
+        tx,
+        c,
+        "PRODUCT_FIELD_OPTIONS_TRANSFER",
+        "product_field",
+        null,
+        change.before,
+        after,
+      );
+    }
     await inWorkspace(tx, body.target, async () => {
       for (const item of plan.plan) {
         await copyImages(

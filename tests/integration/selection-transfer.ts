@@ -849,7 +849,10 @@ try {
     "POST",
     {
       ...invalidBody,
-      fields: [choiceFields[0], { ...washing, options: ["纯文本未知选项"] }],
+      fields: [
+        choiceFields[0],
+        { ...washing, type: "text", options: ["纯文本未知选项"] },
+      ],
       mappings: [
         choiceBody.mappings[0],
         { source: washing.key, target: productChoiceKey },
@@ -872,13 +875,317 @@ try {
   );
   passed++;
   console.log(
-    "PASS undeclared choices, text-to-choice values and option overflow remain invalid; global product choice definitions are preserved",
+    "PASS undeclared choices, text-to-choice values and personal option overflow remain invalid without expanding product choices",
+  );
+  await ok("/style-selections/" + invalidChoice.id, "PATCH", {
+    extraFields: { [washing.key]: "规范" },
+  });
+  const sharedWashingKey = "custom:product:" + ids.washingCheck,
+    sharedBefore = await one(
+      db,
+      "SELECT * FROM product_fields WHERE id=$1",
+      ids.washingCheck,
+    ),
+    sharedBody = {
+      ...invalidBody,
+      fields: [choiceFields[0], washing],
+      mappings: [
+        choiceBody.mappings[0],
+        { source: washing.key, target: sharedWashingKey },
+      ],
+    },
+    sharedPreview = await ok(
+      "/style-selections/migration/preview",
+      "POST",
+      sharedBody,
+    );
+  assert.deepEqual(sharedPreview.optionChanges, [
+    {
+      key: sharedWashingKey,
+      label: washing.label,
+      addedOptions: ["规范", "不规范"],
+      shared: true,
+    },
+  ]);
+  assert.deepEqual(
+    (await one(
+      db,
+      "SELECT options FROM product_fields WHERE id=$1",
+      ids.washingCheck,
+    ))!.options,
+    sharedBefore!.options,
+  );
+  assert.equal(
+    (await ok("/style-selections/" + invalidChoice.id)).migrationLocked,
+    false,
+  );
+  await ok("/product-fields/" + ids.washingCheck, "PATCH", {
+    name: "共享洗涤核对",
+    type: "select",
+    options: sharedBefore!.options,
+    expectedUpdatedAt: new Date(sharedBefore!.updated_at).toISOString(),
+  });
+  const sharedConflict = await request("/style-selections/migration", "POST", {
+    ...sharedBody,
+    token: sharedPreview.token,
+  });
+  assert.equal(sharedConflict.status, 409);
+  assert.deepEqual(
+    (await one(
+      db,
+      "SELECT options FROM product_fields WHERE id=$1",
+      ids.washingCheck,
+    ))!.options,
+    sharedBefore!.options,
+  );
+  const sharedFreshPreview = await ok(
+      "/style-selections/migration/preview",
+      "POST",
+      sharedBody,
+    ),
+    sharedCommand = { ...sharedBody, token: sharedFreshPreview.token },
+    sharedCommandKey = randomUUID(),
+    sharedResult = await ok(
+      "/style-selections/migration",
+      "POST",
+      sharedCommand,
+      sharedCommandKey,
+    );
+  assert.deepEqual(
+    await ok(
+      "/style-selections/migration",
+      "POST",
+      sharedCommand,
+      sharedCommandKey,
+    ),
+    sharedResult,
+  );
+  const sharedOptions = [...sharedBefore!.options, "规范", "不规范"],
+    sharedRow = (await ok(scoped(archive))).find(
+      (row: any) => row.xutiStyleNo === invalidChoice.xutiStyleNo,
+    );
+  assert.deepEqual(
+    (await one(
+      db,
+      "SELECT options FROM product_fields WHERE id=$1",
+      ids.washingCheck,
+    ))!.options,
+    sharedOptions,
+  );
+  assert.equal(
+    (await one(
+      db,
+      "SELECT custom_fields FROM products WHERE id=$1::bigint",
+      sharedRow.productId,
+    ))!.custom_fields[ids.washingCheck],
+    "规范",
+  );
+  choiceLayout = await ok(scoped(archive, "/layout-preferences"));
+  assert.deepEqual(
+    choiceLayout.preferences.columns.find(
+      (field: SelectionField) => field.key === sharedWashingKey,
+    ).options,
+    sharedOptions,
+  );
+  passed++;
+  console.log(
+    "PASS the built-in product washing field appends explicitly previewed shared choices and writes real product values, with catalog conflict checks and idempotency",
+  );
+  const rollbackSharedFirst = await ok("/style-selections", "POST", {
+      xutiStyleNo: "GLOBAL-ROLLBACK-1",
+      supplierCode: "2026",
+      extraFields: { [washing.key]: "传送新选项" },
+    }),
+    rollbackSharedSecond = await ok("/style-selections", "POST", {
+      xutiStyleNo: "GLOBAL-ROLLBACK-2",
+      supplierCode: "2300",
+      extraFields: { [washing.key]: "传送新选项" },
+    }),
+    rollbackSharedBody = {
+      ...sharedBody,
+      rowIds: [rollbackSharedFirst.id, rollbackSharedSecond.id],
+      fields: [
+        choiceFields[0],
+        { ...washing, options: ["传送新选项"] },
+        selectionBaseFields.find((field) => field.key === "supplierCode")!,
+      ],
+      mappings: [
+        ...sharedBody.mappings,
+        { source: "supplierCode", target: "custom:product:year" },
+      ],
+    },
+    rollbackSharedPreview = await ok(
+      "/style-selections/migration/preview",
+      "POST",
+      rollbackSharedBody,
+    ),
+    rollbackSharedResult = await request(
+      "/style-selections/migration",
+      "POST",
+      { ...rollbackSharedBody, token: rollbackSharedPreview.token },
+    );
+  assert.equal(rollbackSharedResult.status, 400);
+  assert.match(JSON.stringify(rollbackSharedResult.result), /2200/);
+  assert.deepEqual(
+    (await one(
+      db,
+      "SELECT options FROM product_fields WHERE id=$1",
+      ids.washingCheck,
+    ))!.options,
+    sharedOptions,
+  );
+  assert.deepEqual(
+    await ok(scoped(archive, "/layout-preferences")),
+    choiceLayout,
+  );
+  assert.equal(
+    (await one(
+      db,
+      "SELECT count(*)::int AS n FROM products WHERE style_no LIKE 'GLOBAL-ROLLBACK-%'",
+    ))!.n,
+    0,
+  );
+  assert.equal(
+    (await ok("/style-selections/" + rollbackSharedFirst.id)).migrationLocked,
+    false,
+  );
+  assert.equal(
+    (await ok("/style-selections/" + rollbackSharedSecond.id)).migrationLocked,
+    false,
+  );
+  passed++;
+  console.log(
+    "PASS a later product validation failure rolls back shared option additions, personal layouts, every product row and every source lock",
+  );
+  const maxProductChoice = await ok("/product-fields", "POST", {
+      name: "50选项共享字段",
+      type: "select",
+      options: Array.from({ length: 50 }, (_, i) => "共享选项" + i),
+    }),
+    maxProductChoiceKey = "custom:product:" + maxProductChoice.id;
+  choiceLayout = await ok(scoped(archive, "/layout-preferences"), "POST", {
+    revision: choiceLayout.revision,
+    preferences: {
+      ...choiceLayout.preferences,
+      columns: [
+        ...choiceLayout.preferences.columns,
+        {
+          ...washing,
+          key: maxProductChoiceKey,
+          label: maxProductChoice.name,
+          options: maxProductChoice.options,
+        },
+      ],
+    },
+  });
+  const sharedLimitSource = await ok("/style-selections", "POST", {
+      xutiStyleNo: "GLOBAL-LIMIT",
+      extraFields: { [washing.key]: "规范", [actions.key]: "换洗唛/缝领标" },
+    }),
+    sharedOverflow = await request(
+      "/style-selections/migration/preview",
+      "POST",
+      {
+        ...sharedBody,
+        rowIds: [sharedLimitSource.id],
+        mappings: [
+          choiceBody.mappings[0],
+          { source: washing.key, target: maxProductChoiceKey },
+        ],
+      },
+    );
+  assert.equal(sharedOverflow.status, 400);
+  assert.match(JSON.stringify(sharedOverflow.result), /50.*选项/);
+  assert.deepEqual(
+    (await one(
+      db,
+      "SELECT options FROM product_fields WHERE id=$1",
+      maxProductChoice.id,
+    ))!.options,
+    maxProductChoice.options,
+  );
+  const sharedMultiple = await request(
+    "/style-selections/migration/preview",
+    "POST",
+    {
+      ...sharedBody,
+      rowIds: [sharedLimitSource.id],
+      fields: [choiceFields[0], actions],
+      mappings: [
+        choiceBody.mappings[0],
+        { source: actions.key, target: sharedWashingKey },
+      ],
+    },
+  );
+  assert.equal(sharedMultiple.status, 400);
+  assert.match(JSON.stringify(sharedMultiple.result), /请选择已配置的选项/);
+  assert.deepEqual(
+    (await one(
+      db,
+      "SELECT options FROM product_fields WHERE id=$1",
+      ids.washingCheck,
+    ))!.options,
+    sharedOptions,
+  );
+  passed++;
+  console.log(
+    "PASS shared product options retain their 50-choice limit and single-choice business validation",
   );
   const productReader = await userWith("product-only-reader", ["product.read"]),
     productEditor = await userWith("product-only-editor", [
       "product.read",
       "product.update",
     ]);
+  const readerLayout = await ok(
+    scoped(archive, "/layout-preferences"),
+    "POST",
+    {
+      revision: 0,
+      preferences: selectionLayoutSchema.parse({
+        columns: [
+          {
+            ...washing,
+            key: sharedWashingKey,
+            label: "个人质检名称",
+            width: 222,
+            options: sharedBefore!.options,
+            optionColors: { 规范: "orange" },
+          },
+        ],
+      }),
+    },
+    undefined,
+    productReader,
+  );
+  const readerFreshLayout = await ok(
+    scoped(archive, "/layout-preferences"),
+    "GET",
+    undefined,
+    undefined,
+    productReader,
+  );
+  assert.equal(readerFreshLayout.revision, readerLayout.revision);
+  assert.deepEqual(
+    readerFreshLayout.preferences.columns[0].options,
+    sharedOptions,
+  );
+  assert.equal(readerFreshLayout.preferences.columns[0].label, "个人质检名称");
+  assert.equal(readerFreshLayout.preferences.columns[0].width, 222);
+  assert.deepEqual(readerFreshLayout.preferences.columns[0].optionColors, {
+    规范: "orange",
+  });
+  assert.equal(
+    (
+      await request(
+        scoped(archive, "/migration/preview"),
+        "POST",
+        { ...sharedBody, target: "default", rowIds: [sharedRow.id] },
+        undefined,
+        productReader,
+      )
+    ).status,
+    403,
+  );
   assert.equal(
     (await request(scoped(archive), "GET", undefined, undefined, productReader))
       .status,

@@ -1,17 +1,57 @@
-import { db, one, rows } from "../../../../../packages/database/src/index.js";
+import {
+  camel,
+  db,
+  one,
+  rows,
+} from "../../../../../packages/database/src/index.js";
 import { selectionScope } from "../../../../../packages/database/src/selection-scope.js";
-import { selectionLayoutWriteSchema } from "../../../../../packages/contracts/src/selection-layout.js";
+import {
+  selectionLayoutSchema,
+  selectionLayoutWriteSchema,
+} from "../../../../../packages/contracts/src/selection-layout.js";
+import {
+  archiveChoiceColumns,
+  archiveTableFields,
+} from "../../../../../packages/contracts/src/product-archive-table.js";
 import { command, fail, parse, type Context } from "../../core.js";
 
 export async function layoutPreferences(c: Context) {
-  return (
-    (await one(
-      db,
-      "SELECT preferences,revision FROM public.selection_layout_preferences WHERE user_id=$1::bigint AND workspace_key=$2",
-      c.actor.id,
-      selectionScope.getStore() || "default",
-    )) || { preferences: null, revision: 0 }
+  const workspace = selectionScope.getStore() || "default";
+  const stored = await one(
+    db,
+    "SELECT preferences,revision FROM public.selection_layout_preferences WHERE user_id=$1::bigint AND workspace_key=$2",
+    c.actor.id,
+    workspace,
   );
+  if (!stored) return { preferences: null, revision: 0 };
+  if (
+    workspace !== "default" &&
+    (
+      await one(
+        db,
+        "SELECT system_key FROM public.project_tables WHERE id=$1::bigint",
+        workspace,
+      )
+    )?.system_key === "PRODUCT_ARCHIVE"
+  ) {
+    const canonical = archiveTableFields(
+        camel(
+          await rows(
+            db,
+            "SELECT * FROM public.product_fields WHERE active ORDER BY created_at,id",
+          ),
+        ),
+      ),
+      preferences = selectionLayoutSchema.parse(stored.preferences);
+    return {
+      ...stored,
+      preferences: {
+        ...preferences,
+        columns: archiveChoiceColumns(preferences.columns, canonical),
+      },
+    };
+  }
+  return stored;
 }
 
 export async function saveLayoutPreferences(c: Context, input: unknown) {

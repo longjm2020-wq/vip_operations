@@ -69,7 +69,15 @@ async function fixture(page: Page, productOnly = false, choiceSync = false) {
   }
   const archiveFields = [
     ...archiveTableFields([]),
-    ...(choiceSync ? [{ ...washing, options: [] }] : []),
+    ...(choiceSync
+      ? [
+          {
+            ...washing,
+            key: "custom:product:f00000000000000000000000000000011",
+            options: ["未核对", "一致", "不一致"],
+          },
+        ]
+      : []),
   ];
   await page.route("**/api/v1/**", async (route) => {
     const url = new URL(route.request().url()),
@@ -137,9 +145,10 @@ async function fixture(page: Page, productOnly = false, choiceSync = false) {
           choiceSync && body.target === "9"
             ? [
                 {
-                  key: washing.key,
+                  key: "custom:product:f00000000000000000000000000000011",
                   label: washing.label,
                   addedOptions: washing.options,
+                  shared: true,
                 },
               ]
             : [],
@@ -331,7 +340,13 @@ test("choice additions are listed in transfer preview and require explicit confi
     modal.getByText("补齐目标字段选项 · 2 个", { exact: true }),
   ).toBeVisible();
   await expect(
-    modal.getByText("洗涤标志核对：规范、不规范", { exact: true }),
+    modal.getByText("洗涤标志核对（商品共享）：规范、不规范", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    modal.getByText(
+      "商品共享字段的新增选项将对所有用户生效；类型及已有选项不变。",
+      { exact: true },
+    ),
   ).toBeVisible();
   await expect(
     modal.getByRole("button", { name: "确认传送", exact: true }),
