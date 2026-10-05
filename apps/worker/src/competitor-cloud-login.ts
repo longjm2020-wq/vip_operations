@@ -13,6 +13,13 @@ import {
   decryptCloudState,
   encryptCloudState,
 } from "./competitor-cloud-state.js";
+import {
+  CatalogAccessRestricted,
+  catalogRestricted,
+  catalogRestrictionNote,
+  waitForCatalogItem,
+  watchCatalogPage,
+} from "./competitor-page-state.js";
 
 const active = "('QUEUED','RUNNING','WAITING','CHECKING')";
 const pause = (ms: number) =>
@@ -46,6 +53,7 @@ export async function configureVipContext(page: Page) {
   page.on("popup", (popup) => void popup.close());
 }
 export async function checkCloudLogin(page: Page, sourceUrl: string) {
+  watchCatalogPage(page, true);
   await page.goto(sourceUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
   if (
     !isVipOrigin(page.url()) ||
@@ -53,11 +61,14 @@ export async function checkCloudLogin(page: Page, sourceUrl: string) {
   )
     return { verified: false, note: "尚未完成云端登录，请扫码后再次核验" };
   try {
-    await page
-      .locator(".c-goods-item__name")
-      .first()
-      .waitFor({ state: "visible", timeout: 15000 });
-  } catch {
+    await waitForCatalogItem(page, ".c-goods-item__name");
+  } catch (error) {
+    if (error instanceof CatalogAccessRestricted)
+      return {
+        verified: false,
+        restricted: true,
+        note: catalogRestrictionNote,
+      };
     return {
       verified: false,
       note: "尚未读到品牌商品，请在云端画面处理登录或验证后再次核验",
@@ -74,8 +85,20 @@ export async function checkCloudLogin(page: Page, sourceUrl: string) {
       .filter({ visible: true })
       .first()
       .waitFor({ state: "visible", timeout: 15000 });
+    if (catalogRestricted(page))
+      return {
+        verified: false,
+        restricted: true,
+        note: catalogRestrictionNote,
+      };
     return { verified: true, note: "云端登录已核验并保存" };
   } catch {
+    if (catalogRestricted(page))
+      return {
+        verified: false,
+        restricted: true,
+        note: catalogRestrictionNote,
+      };
     return {
       verified: false,
       note: "品牌页面可以访问，但尚未确认账号登录；请查看云端画面，已登录可再次核验，未登录请刷新二维码扫码",
@@ -163,7 +186,7 @@ export async function processCloudLogin(
     const sourceUrl = vipSearchUrl(brand!.name, brand!.brand_sn);
     const saved = await one(
       db,
-      "SELECT encrypted_state FROM competitor_cloud_session WHERE id=1",
+      "SELECT encrypted_state,state_version FROM competitor_cloud_session WHERE id=1",
     );
     let storageState;
     try {
@@ -172,6 +195,14 @@ export async function processCloudLogin(
     } catch {
       /* Reconnecting repairs expired or unreadable state. */
     }
+    const markRestricted = async (note: string) => {
+      if (saved?.encrypted_state)
+        await db.$executeRawUnsafe(
+          "UPDATE competitor_cloud_session SET status='VERIFICATION_REQUIRED',note=$1 WHERE id=1 AND enabled AND state_version=$2",
+          note,
+          saved.state_version,
+        );
+    };
     browser = await launch();
     const context = await browser.newContext({
       locale: "zh-CN",
@@ -235,11 +266,14 @@ export async function processCloudLogin(
               storageState: state,
             });
             let reusable = false;
+            let probeResult:
+              Awaited<ReturnType<typeof checkCloudLogin>> | undefined;
             let verifiedState = state;
             try {
               const probePage = await probe.newPage();
               await configureVipContext(probePage);
-              reusable = (await checkCloudLogin(probePage, sourceUrl)).verified;
+              probeResult = await checkCloudLogin(probePage, sourceUrl);
+              reusable = probeResult.verified;
               // Verification can refresh server-issued cookies. Persist the
               // verified context's latest state, not its pre-navigation copy.
               if (reusable)
@@ -248,6 +282,11 @@ export async function processCloudLogin(
               await probe.close();
             }
             if (!reusable) {
+              if (probeResult?.restricted) {
+                await markRestricted(probeResult.note);
+                await update(probeResult.note);
+                continue;
+              }
               await update(
                 "当前登录尚不能在新的云端浏览器中复用，请刷新二维码重新扫码",
               );
@@ -290,6 +329,7 @@ export async function processCloudLogin(
             if (stored) return;
             break;
           }
+          if (result.restricted) await markRestricted(result.note);
           await update(result.note);
         } else if (b.kind === "REFRESH") {
           await page.goto("https://passport.vip.com/login", {

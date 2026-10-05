@@ -30,6 +30,7 @@ export async function testCompetitorCloud(h: Record<string, any>) {
   let running: Promise<void> | undefined;
   let currentSession = "synthetic-session";
   let sessionRevision = 0;
+  let blockCatalog = false;
   try {
     assert.equal(
       (await request(base + "/cloud-login", "POST", {})).status,
@@ -118,15 +119,23 @@ export async function testCompetitorCloud(h: Record<string, any>) {
             .includes("cloud_test_session=" + currentSession);
           let html = "";
           const headers: Record<string, string> = {};
+          if (hostname === "mapi-pc.vip.com") {
+            await route.fulfill({
+              status: 920,
+              body: "restricted",
+              headers: { "access-control-allow-origin": "*" },
+            });
+            return;
+          }
           if (hostname === "passport.vip.com")
             html = `<button style="position:absolute;left:100px;top:100px;width:100px;height:50px" onclick="document.cookie='cloud_test_session=synthetic-session;domain=.vip.com;path=/;secure;samesite=lax'">Synthetic QR consent</button>`;
           else if (hostname === "category.vip.com") {
-            if (signedIn) {
+            if (signedIn && !blockCatalog) {
               currentSession = "synthetic-session-" + ++sessionRevision;
               headers["set-cookie"] =
                 `cloud_test_session=${currentSession}; Domain=.vip.com; Path=/; Secure; SameSite=Lax`;
             }
-            html = `<a href="https://myi.vip.com/index.html" style="display:none">缓存的账号昵称</a>${signedIn ? '<script>setTimeout(() => { const account=document.createElement("a");account.href="https://myi.vip.com/index.html";account.textContent="已登录";document.body.append(account); }, 600);</script>' : ""}<a href="https://detail.vip.com/detail-1-100000001.html"><span class="c-goods-item__name">合成测试羊毛针织衫</span><span class="J-goods-item__sale-price">100</span></a>`;
+            html = `<a href="https://myi.vip.com/index.html" style="display:none">缓存的账号昵称</a>${signedIn ? '<script>setTimeout(() => { const account=document.createElement("a");account.href="https://myi.vip.com/index.html";account.textContent="已登录";document.body.append(account); }, 600);</script>' : ""}${blockCatalog ? '<p>没有找到符合条件的商品</p><script>fetch("https://mapi-pc.vip.com/vips-mobile/rest/shopping/pc/search/product/rank").catch(() => {});</script>' : '<a href="https://detail.vip.com/detail-1-100000001.html"><span class="c-goods-item__name">合成测试羊毛针织衫</span><span class="J-goods-item__sale-price">100</span></a>'}`;
           } else
             html = `<span class="J_brandName">${initial.name}</span><span class="pib-title-detail">合成测试羊毛针织衫</span><span id="J_detail_barCode">商品编码：CLOUD-TEST</span><table><tr><td class="dc-table-tit">详细材质信息</td><td>100%羊毛</td></tr><tr><td class="dc-table-tit">适用季节</td><td>冬季</td></tr></table>`;
           await route.fulfill({
@@ -211,6 +220,95 @@ export async function testCompetitorCloud(h: Record<string, any>) {
     assert.equal(job.status, "READY", JSON.stringify(job));
     assert.equal(job.capturedCount, 1);
     assert.equal(job.detailCount, 1);
+    const retained = await one(
+      db,
+      "SELECT encrypted_state,state_version FROM competitor_cloud_session WHERE id=1",
+    );
+    const beforeRestriction = (await ok(base)).results.find(
+      (r: any) => r.brand.id === initial.id,
+    );
+    blockCatalog = true;
+    const other = (await ok(base)).brands.find((b: any) => b.id !== initial.id);
+    await db.$executeRawUnsafe(
+      "UPDATE competitor_crawl_jobs SET requested_at=now()-interval '6 minutes'",
+    );
+    await ok(base + "/crawl", "POST", { brandIds: [initial.id, other.id] });
+    await processCrawlJob(launch);
+    const blocked = (await ok(base)).crawl.jobs.find(
+      (j: any) => j.brandId === initial.id,
+    );
+    assert.equal(blocked.status, "VERIFICATION_REQUIRED");
+    assert.match(blocked.note, /HTTP 920/);
+    assert.equal(
+      blocked.capturedCount,
+      0,
+      "a restricted empty page must never replace the ranking",
+    );
+    assert.equal(
+      (await ok(base + "/cloud-session")).status,
+      "VERIFICATION_REQUIRED",
+    );
+    assert.deepEqual(
+      await one(
+        db,
+        "SELECT encrypted_state,state_version FROM competitor_cloud_session WHERE id=1",
+      ),
+      retained,
+    );
+    assert.deepEqual(
+      (await ok(base)).results.find((r: any) => r.brand.id === initial.id),
+      beforeRestriction,
+      "previous valid samples are unchanged",
+    );
+    launched = false;
+    await processCrawlJob(async () => {
+      launched = true;
+      throw Error("must not launch while restricted");
+    });
+    assert.equal(
+      launched,
+      false,
+      "remaining queued brands do not launch a browser or fall back to anonymous access",
+    );
+    const queuedBlocked = (await ok(base)).crawl.jobs.find(
+      (j: any) => j.brandId === other.id,
+    );
+    assert.equal(queuedBlocked.status, "VERIFICATION_REQUIRED");
+    assert.match(queuedBlocked.note, /HTTP 920/);
+    const recheck = await ok(base + "/cloud-login", "POST", {});
+    running = processCloudLogin(launch);
+    await until(
+      async () => !!(await ok(base + "/cloud-login/" + recheck.id)).frame,
+    );
+    await ok(base + "/cloud-login/" + recheck.id + "/actions", "POST", {
+      kind: "CHECK",
+    });
+    await until(async () =>
+      (await ok(base + "/cloud-login/" + recheck.id)).note.includes("HTTP 920"),
+    );
+    assert.equal(
+      (await ok(base + "/cloud-login/" + recheck.id)).status,
+      "WAITING",
+    );
+    assert.deepEqual(
+      await one(
+        db,
+        "SELECT encrypted_state,state_version FROM competitor_cloud_session WHERE id=1",
+      ),
+      retained,
+    );
+    blockCatalog = false;
+    await ok(base + "/cloud-login/" + recheck.id + "/actions", "POST", {
+      kind: "CHECK",
+    });
+    await running;
+    running = undefined;
+    assert.equal(
+      (await ok(base + "/cloud-login/" + recheck.id)).status,
+      "SAVED",
+      "after access resumes the same window rechecks saved credentials without rescanning",
+    );
+    assert.equal((await ok(base + "/cloud-session")).status, "READY");
     await ok(base + "/cloud-session/disconnect", "POST", {});
     assert.equal(
       (
@@ -231,7 +329,7 @@ export async function testCompetitorCloud(h: Record<string, any>) {
     assert.equal(ended.status, "EXPIRED");
     assert.equal(ended.frame, null);
     check(
-      "Cloud QR login ownership, exclusive browser lease, delayed visible account verification, hidden signed-out marker rejection, reusable encrypted session, actual crawl, disconnect and temporary frame cleanup",
+      "Cloud QR login ownership, delayed visible account verification, reusable rotated encrypted session, actual crawl, HTTP 920 pause with data/session retention and no queued browser launch, same-window recovery, disconnect and frame cleanup",
     );
   } finally {
     await db.$executeRawUnsafe(

@@ -17,7 +17,7 @@ export async function crawlStatus() {
   );
   const jobs = await rows(
     db,
-    "SELECT DISTINCT ON(brand_id) id::text,brand_id::text,status,requested_at,started_at,completed_at,captured_count,detail_count,note FROM competitor_crawl_jobs ORDER BY brand_id,id DESC",
+    "SELECT DISTINCT ON(j.brand_id) j.id::text,j.brand_id::text,j.status,j.requested_at,j.started_at,j.completed_at,j.captured_count,j.detail_count,j.note FROM competitor_crawl_jobs j ORDER BY j.brand_id,j.id DESC",
   );
   return { settings, jobs };
 }
@@ -56,7 +56,7 @@ export async function requestCrawl(c: Context, input: unknown) {
       }
       const recent = await one(
         tx,
-        "SELECT id::text,status FROM competitor_crawl_jobs WHERE brand_id=$1::bigint AND requested_at>now()-interval '5 minutes' ORDER BY id DESC LIMIT 1",
+        "SELECT j.id::text,j.status FROM competitor_crawl_jobs j WHERE j.brand_id=$1::bigint AND j.requested_at>now()-interval '5 minutes' ORDER BY j.id DESC LIMIT 1",
         brand.id,
       );
       if (recent) {

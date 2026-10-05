@@ -34,6 +34,14 @@ const stateSchema = z.object({
     .max(100),
 });
 export type CloudBrowserState = z.infer<typeof stateSchema>;
+export class CloudSessionUnavailable extends Error {
+  constructor(
+    public readonly status: string,
+    public readonly note: string,
+  ) {
+    super("Cloud login is required");
+  }
+}
 export function cloudEncryptionReady() {
   return /^[a-f0-9]{64}$/i.test(process.env.COMPETITOR_SESSION_KEY || "");
 }
@@ -85,11 +93,11 @@ export function decryptCloudState(value: string): CloudBrowserState {
 export async function loadCloudState() {
   const row = await one(
     db,
-    "SELECT enabled,status,encrypted_state,state_version FROM competitor_cloud_session WHERE id=1",
+    "SELECT enabled,status,note,encrypted_state,state_version FROM competitor_cloud_session WHERE id=1",
   );
   if (!row?.enabled) return null;
   if (row.status !== "READY" || !row.encrypted_state)
-    throw Error("Cloud login is required");
+    throw new CloudSessionUnavailable(row.status, row.note || "");
   try {
     return {
       version: row.state_version as number,

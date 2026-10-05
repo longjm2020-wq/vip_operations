@@ -114,10 +114,12 @@ export function CompetitorCrawlPanel({
           <summary>采集状态</summary>
           <div className="competitor-crawl-jobs">
             {rows.map(({ brand, job }) => {
-              const [label, color] = labels[job?.status || ""] || [
-                "待首次采集",
-                "default",
-              ];
+              const restricted =
+                job?.status === "VERIFICATION_REQUIRED" &&
+                job.note.includes("HTTP 920");
+              const [label, color] = (restricted
+                ? ["访问受限", "warning"]
+                : labels[job?.status || ""]) || ["待首次采集", "default"];
               const progress = competitorCrawlProgress(job);
               const strokeColor =
                 job?.status === "FAILED"

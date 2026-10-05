@@ -4,7 +4,7 @@ import {
   vipSearchUrl,
 } from "../../packages/contracts/src/competitor-analysis.js";
 
-async function fixture(page: Page) {
+async function fixture(page: Page, restricted = false) {
   const brands = [
     "序缇",
     "帕罗",
@@ -38,11 +38,13 @@ async function fixture(page: Page) {
     capturedCount: i < 2 ? 0 : i === 5 ? 20 : 50,
     detailCount: i < 2 ? 0 : i === 5 ? 20 : 15,
     note:
-      status === "LOGIN_REQUIRED"
-        ? "唯品会要求登录，保留上次数据"
-        : status === "FAILED"
-          ? "没有返回有效商品数据，保留上次数据"
-          : "",
+      restricted && status === "VERIFICATION_REQUIRED"
+        ? "唯品会商品接口返回 HTTP 920，云端访问受限，采集已停止；已保留上次有效数据。"
+        : status === "LOGIN_REQUIRED"
+          ? "唯品会要求登录，保留上次数据"
+          : status === "FAILED"
+            ? "没有返回有效商品数据，保留上次数据"
+            : "",
   }));
   await page.route("**/api/v1/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
@@ -104,6 +106,40 @@ test("every brand card shows real collection progress including failures and uns
   await expect(
     page.getByRole("progressbar", { name: "南宋丝府采集进度" }),
   ).toBeVisible();
+});
+test("HTTP 920 shows access restriction while ordinary challenges keep their verification label", async ({
+  page,
+}) => {
+  await fixture(page, true);
+  await page.route("**/api/v1/analytics/competitors/cloud-session", (route) =>
+    route.fulfill({
+      json: {
+        data: {
+          enabled: true,
+          status: "VERIFICATION_REQUIRED",
+          encryptionReady: true,
+          workerOnline: true,
+          note: "唯品会商品接口返回 HTTP 920，云端访问受限，采集已停止；已保留上次有效数据。",
+          savedAt: "2026-10-05T01:00:00Z",
+        },
+      },
+    }),
+  );
+  await page.goto("/analytics/competitors");
+  await expect(page.getByText("云端访问受限", { exact: true })).toBeVisible();
+  await page.getByText("采集状态", { exact: true }).click();
+  const blocked = page
+    .locator(".competitor-crawl-job")
+    .filter({ hasText: "生活在左" });
+  await expect(blocked.getByText("访问受限", { exact: true })).toBeVisible();
+  await expect(blocked).toContainText("HTTP 920");
+  await expect(blocked).toContainText("详情 15 / 50 款");
+  await fixture(page);
+  await page.reload();
+  await page.getByText("采集状态", { exact: true }).click();
+  await expect(
+    page.locator(".competitor-crawl-job").filter({ hasText: "生活在左" }),
+  ).toContainText("需要验证");
 });
 test("login opens a local VIP popup and accepts only that official window's login check", async ({
   page,

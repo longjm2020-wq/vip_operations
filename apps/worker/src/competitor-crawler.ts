@@ -5,7 +5,18 @@ import {
   type BrowserContext,
   type Page,
 } from "@playwright/test";
-import { loadCloudState, refreshCloudState } from "./competitor-cloud-state.js";
+import {
+  CloudSessionUnavailable,
+  loadCloudState,
+  refreshCloudState,
+} from "./competitor-cloud-state.js";
+import {
+  catalogRestricted,
+  catalogRestrictionNote,
+  catalogTrace,
+  waitForCatalogItem,
+  watchCatalogPage,
+} from "./competitor-page-state.js";
 import { configureVipContext } from "./competitor-cloud-login.js";
 import { competitorCloudViewport } from "../../../packages/contracts/src/competitor-cloud.js";
 import { db, one, rows } from "../../../packages/database/src/index.js";
@@ -35,48 +46,9 @@ export class CrawlIssue extends Error {
     super(message);
   }
 }
-type CatalogTrace = {
-  responses: { status: number; code: string | null; json: boolean }[];
-  failures: number;
-};
-const catalogTraces = new WeakMap<Page, CatalogTrace>();
-function watchCatalogPage(page: Page) {
-  if (catalogTraces.has(page)) return;
-  const trace: CatalogTrace = { responses: [], failures: 0 };
-  catalogTraces.set(page, trace);
-  const catalogRequest = (value: string) => {
-    const url = new URL(value);
-    return (
-      url.hostname === "mapi-pc.vip.com" &&
-      /\/shopping\/pc\/search\/product\//.test(url.pathname)
-    );
-  };
-  page.on("requestfailed", (request) => {
-    if (catalogRequest(request.url())) trace.failures++;
-  });
-  page.on("response", (response) => {
-    if (!catalogRequest(response.url()) || trace.responses.length >= 12) return;
-    const entry = {
-      status: response.status(),
-      code: null as string | null,
-      json: (response.headers()["content-type"] || "").includes("json"),
-    };
-    trace.responses.push(entry);
-    if (entry.json)
-      void response
-        .json()
-        .then((data) => {
-          const code = data?.code ?? data?.status ?? data?.retcode;
-          if (
-            (typeof code === "number" && Number.isFinite(code)) ||
-            (typeof code === "string" && /^-?\d{1,12}$/.test(code))
-          )
-            entry.code = String(code);
-        })
-        .catch(() => {});
-  });
-}
 async function guard(page: Page) {
+  if (catalogRestricted(page))
+    throw new CrawlIssue(true, catalogRestrictionNote);
   const url = new URL(page.url());
   if (
     url.hostname === "passport.vip.com" ||
@@ -110,10 +82,7 @@ async function guard(page: Page) {
 async function waitForProduct(page: Page, selector: string) {
   await guard(page);
   try {
-    await page
-      .locator(selector)
-      .first()
-      .waitFor({ state: "visible", timeout: 15000 });
+    await waitForCatalogItem(page, selector);
   } catch {
     await guard(page);
     // Only public page structure is logged; never account text, query strings,
@@ -134,7 +103,7 @@ async function waitForProduct(page: Page, selector: string) {
             return "";
           }
         }),
-        catalog: catalogTraces.get(page),
+        catalog: catalogTrace(page),
         pageErrorVisible: await page
           .getByText(
             /access denied|页面出错|服务异常|网络异常|网络错误|没有找到|暂无商品/i,
@@ -430,7 +399,16 @@ export async function processCrawlJob(
       );
     try {
       cloud = await loadCloudState();
-    } catch {
+    } catch (error) {
+      if (
+        error instanceof CloudSessionUnavailable &&
+        error.status === "VERIFICATION_REQUIRED"
+      )
+        throw new CrawlIssue(
+          true,
+          error.note ||
+            "云端需验证，采集已停止；请打开「云端登录」处理后重新核验",
+        );
       throw new CrawlIssue(
         false,
         "云端会话未就绪或无法读取，请打开「云端登录」扫码并核验后重新采集",
@@ -498,9 +476,7 @@ export async function processCrawlJob(
       await db.$executeRawUnsafe(
         "UPDATE competitor_cloud_session SET status=$1,note=$2 WHERE id=1 AND state_version=$3",
         login ? "LOGIN_REQUIRED" : "VERIFICATION_REQUIRED",
-        login
-          ? "唯品会要求重新登录，请在云端扫码核验"
-          : "唯品会要求验证，请打开云端登录处理后核验",
+        login ? "唯品会要求重新登录，请在云端扫码核验" : error.message,
         cloud.version,
       );
     else if (

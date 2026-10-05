@@ -112,19 +112,22 @@ export function CompetitorCloudLogin({
     }
   }
   const data = session.data,
-    [label, color] = labels[data?.status || ""] || [
-      "云端状态待核验",
-      "default",
-    ];
+    restricted =
+      data?.status === "VERIFICATION_REQUIRED" &&
+      data.note.includes("HTTP 920"),
+    [label, color] = (restricted
+      ? ["云端访问受限", "warning"]
+      : labels[data?.status || ""]) || ["云端状态待核验", "default"];
   return (
     <>
       <span className="competitor-browser-login">
         <Tag
           color={color}
           title={
-            data?.savedAt
+            data?.note ||
+            (data?.savedAt
               ? `云端登录保存于 ${when(data.savedAt)}；${data.workerOnline ? "采集程序在线" : "采集程序离线"}`
-              : "云端使用独立会话，完成扫码并核验后供后台定时采集使用"
+              : "云端使用独立会话，完成扫码并核验后供后台定时采集使用")
           }
         >
           {label}
