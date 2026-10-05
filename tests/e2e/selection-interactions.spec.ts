@@ -795,6 +795,80 @@ test("clicking selected text places the caret, mouse dragging selects text and n
   await expect(page.locator("td.selection-cell-active")).toHaveCount(9);
 });
 
+test("formatted empty prices accept typing from the cell, save decimals and remain blank after clearing", async ({ page }) => {
+  await fixture(page);
+  const price = cell(page, 0, "supplyPriceExclTax");
+  await price.click({ button: "right" });
+  await clickColumnAction(page, "供货价（不含税）", "设置单元格格式");
+  const format = page.getByRole("dialog", { name: /^设置单元格格式/ });
+  await format.getByRole("combobox", { name: "数字格式", exact: true }).click();
+  await page.locator(".ant-select-dropdown:visible .ant-select-item-option").filter({ hasText: /^货币$/ }).click();
+  await format.getByRole("button", { name: "应用", exact: true }).click();
+  await expect(price.locator(".selection-formatted-value")).toHaveText("");
+
+  await price.click();
+  const input = price.locator("input");
+  await expect(input).toBeFocused();
+  const firstSave = page.waitForResponse(response => response.url().endsWith("/style-selections/shortcut-0") && response.request().method() === "PATCH" && response.request().postDataJSON().supplyPriceExclTax === "58.25");
+  await page.keyboard.type("58.25");
+  await expect(input).toHaveValue("58.25");
+  await firstSave;
+  await cell(page, 0, "supplierStyleNo").click();
+  await expect(price.locator(".selection-formatted-value")).toHaveText("¥ 58.25");
+  await page.reload();
+  await expect(price.locator(".selection-formatted-value")).toHaveText("¥ 58.25");
+
+  await price.click();
+  await expect(input).toBeFocused();
+  await input.click();
+  await page.keyboard.press("Control+A");
+  expect(await input.evaluate(element => { const editor = element as HTMLInputElement; return editor.selectionEnd! - editor.selectionStart!; })).toBe(5);
+  const cleared = page.waitForResponse(response => response.url().endsWith("/style-selections/shortcut-0") && response.request().method() === "PATCH" && response.request().postDataJSON().supplyPriceExclTax === null);
+  await page.keyboard.press("Backspace");
+  await expect(input).toHaveValue("");
+  await cleared;
+  await cell(page, 0, "supplierStyleNo").click();
+  await expect(price.locator(".selection-formatted-value")).toHaveText("");
+  await page.reload();
+  await expect(price.locator(".selection-formatted-value")).toHaveText("");
+
+  await price.scrollIntoViewIfNeeded();
+  const start = (await price.boundingBox())!, end = (await cell(page, 1, "supplyPriceExclTax").boundingBox())!;
+  await page.mouse.move(start.x + start.width / 2, start.y + start.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(end.x + end.width / 2, end.y + end.height / 2, { steps: 8 });
+  await page.mouse.up();
+  await expect(page.locator("td.selection-cell-active")).toHaveCount(2);
+  await expect(input).toHaveValue("");
+});
+
+for (const readonly of [true, false]) {
+  test(`formatted prices keep ${readonly ? "view-only account" : "protected cell"} readonly on click and typing`, async ({ page }) => {
+    await fixture(page, readonly);
+    const row = {
+      id: "shortcut-0", xutiStyleNo: "FORMATTED-READONLY", sortOrder: 0,
+      supplyPriceExclTax: "42.50", images: [], labelImages: [], extraFields: {},
+      updatedAt: "2026-10-04T00:00:00Z",
+      cellNumberFormats: { supplyPriceExclTax: { type: "currency", decimals: 2 } },
+      ...(!readonly ? { cellAccess: { supplyPriceExclTax: "read" }, defaultCellAccess: "edit" } : {}),
+    };
+    await page.route("**/api/v1/style-selections/sync*", route => route.fulfill({ json: { data: {
+      revision: "interactions-0", index: [{ id: row.id, token: row.updatedAt }], data: [row],
+    } } }));
+    let writes = 0;
+    page.on("request", request => { if (request.method() === "PATCH" && request.url().endsWith("/style-selections/shortcut-0")) writes++; });
+    await page.reload();
+    const price = cell(page, 0, "supplyPriceExclTax");
+    const display = price.getByRole("textbox", { name: "供货价（不含税）", exact: true });
+    await expect(display).toHaveAttribute("aria-readonly", "true");
+    await price.click();
+    await page.keyboard.type("99");
+    await expect(display).toHaveText("¥ 42.50");
+    await expect(price.locator("input,textarea")).toHaveCount(0);
+    expect(writes).toBe(0);
+  });
+}
+
 test("transparent rectangular selections retain cell grid lines and saved label content", async ({ page }) => {
   await fixture(page, false, true);
   const first = cell(page, 0, "custom:check"), last = cell(page, 3, "custom:action");

@@ -611,7 +611,7 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
     const point = { rowKey, columnKey };
     dragCellAnchor.current = control ? null : point;
     setCellAnchor(point); setSelectingCells(!control); setSelectedCells(new Set([cellId(rowKey, columnKey)]));
-    if (!control) (textInput || event.currentTarget).focus({ preventScroll: true });
+    if (!control) (textInput || event.currentTarget.querySelector<HTMLElement>(".selection-formatted-value") || event.currentTarget).focus({ preventScroll: true });
   };
   const cellMouseEnter = (rowKey: string, columnKey: string) => { if (dragCellAnchor.current) selectRectangle(dragCellAnchor.current, { rowKey, columnKey }); };
   const selectFilledAxis = (vertical: boolean, towardEnd: boolean) => {
@@ -846,12 +846,12 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
     if (column.key === "sizeRange") return cell(<MemoTagCell value={row.sizeRange} disabled={disabled} placeholder="+ 尺码"  />);
     const numberFormat = row.cellNumberFormats?.[column.key];
     const displayValue = String(valueAt(row, column) ?? "");
-    if (numberFormat && !["general", "text"].includes(numberFormat.type) && focusedCell !== cellId(row._key, column.key)) return cell(<div className="selection-formatted-value" tabIndex={0} role="textbox" aria-label={column.label} aria-readonly={!canEdit} onFocus={() => { if (canEdit) setFocusedCell(cellId(row._key, column.key)); }}>{formatSelectionValue(displayValue, numberFormat) || (column.key === "registrationBatch" ? "+ 日期" : "")}</div>);
+    if (numberFormat && !["general", "text"].includes(numberFormat.type) && focusedCell !== cellId(row._key, column.key)) return cell(<div className="selection-formatted-value" tabIndex={0} role="textbox" aria-label={column.label} aria-readonly={disabled} onFocus={() => { if (!disabled) setFocusedCell(cellId(row._key, column.key)); }}>{formatSelectionValue(displayValue, numberFormat) || (column.key === "registrationBatch" ? "+ 日期" : "")}</div>);
     const focusProps = { autoFocus: !!numberFormat && focusedCell === cellId(row._key, column.key), onFocus: () => setFocusedCell(cellId(row._key, column.key)), onBlur: () => setFocusedCell(null) };
     if (column.key === "collectionInventory") return cell(<ReadOnlyStockCell inventory={row.collectionInventory || []}/>);
     if (collectionKeys.has(column.key)) return cell(<span title="由产品信息收集表内部确认后更新">{row[column.key] ?? "—"}</span>);
     if (column.key === "registrationBatch") return cell(<input className="selection-date-input" aria-label="登记批次日期" title="输入日期 YYYY-MM-DD，也可在顶部编辑栏选择" placeholder="+ 日期" maxLength={10} readOnly={disabled} {...focusProps} value={displayValue} onChange={event => update(row._key, column, event.target.value)} />);
-    if (moneyKeys.has(column.key)) return cell(<div className="selection-money-input">{displayValue.trim() !== "" && (!numberFormat || numberFormat.type === "general") && <span>￥</span>}<input {...focusProps} disabled={disabled} inputMode="decimal" value={displayValue} onChange={(event) => update(row._key, column, event.target.value)} /></div>);
+    if (moneyKeys.has(column.key)) return cell(<div className="selection-money-input">{displayValue.trim() !== "" && (!numberFormat || numberFormat.type === "general") && <span>￥</span>}<input {...focusProps} aria-label={column.label} disabled={disabled} inputMode="decimal" value={displayValue} onChange={(event) => update(row._key, column, event.target.value)} /></div>);
     return cell(<textarea {...focusProps} className="selection-text-input" aria-label={column.label} readOnly={disabled} value={displayValue} onChange={(event) => update(row._key, column, event.target.value)} />);
   };
   const applyAlignment = (alignment: "left" | "center" | "right" | "top" | "middle" | "bottom", vertical = false) => {
