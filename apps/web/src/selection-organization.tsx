@@ -75,6 +75,7 @@ export function SelectionOrganization({
       <Select
         aria-label="分组方式"
         className="selection-tool-select"
+        popupMatchSelectWidth={false}
         value={group}
         suffixIcon={<TeamOutlined />}
         options={[
@@ -101,6 +102,7 @@ export function SelectionOrganization({
       <Select
         aria-label="排序方式"
         className="selection-tool-select"
+        popupMatchSelectWidth={false}
         value={sort}
         suffixIcon={<SortAscendingOutlined />}
         options={[
