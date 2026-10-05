@@ -7,6 +7,14 @@
 .mobile-photo-result strong { font-size: 18px; }.mobile-photo-result span,.mobile-photo-result small,.mobile-photo-style p { color: #88715f; overflow-wrap: anywhere; }
 .mobile-photos h1 { font-size: 22px; margin: 0; overflow-wrap: anywhere; }.mobile-photos h2 { font-size: 16px; }.mobile-photos h2 small { font-size: 12px; color: #999; }
 .mobile-photo-colors { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0; }.mobile-photo-colors .ant-btn { min-height: 40px; }
+.mobile-photo-color { display: inline-flex; max-width: 100%; align-items: stretch; overflow: hidden; border: 1px solid #eaded3; border-radius: 8px; background: #fff; }
+.mobile-photo-color.is-selected { border-color: #d45400; background: #d45400; }
+.mobile-photo-color .ant-btn { border: 0; border-radius: 0; box-shadow: none; background: transparent; }
+.mobile-photo-color .mobile-photo-color-select { flex: 1; min-width: 0; height: auto; padding: 8px 12px; white-space: normal; overflow-wrap: anywhere; }
+.mobile-photo-color .mobile-photo-color-edit { flex: 0 0 36px; width: 36px; height: auto; border-left: 1px solid #eaded3; }
+.mobile-photo-color.is-selected .ant-btn:not(:disabled) { color: #fff; }
+.mobile-photo-color.is-selected .mobile-photo-color-edit { border-left-color: #ffffff40; }
+.mobile-photo-color.is-selected .ant-btn:not(:disabled):hover { background: #ffffff20; }
 .mobile-photo-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; }.mobile-photo-item { position: relative; overflow: hidden; background: #fff; border-radius: 8px; }.mobile-photo-item .ant-image { width: 100%; }.mobile-photo-item .ant-image-img { width: 100%; aspect-ratio: 1; object-fit: contain; }.mobile-photo-item > span { display: block; padding: 6px 10px; }.mobile-photo-item > button { position: absolute; right: 6px; top: 6px; background: #fff; }
 .mobile-photo-capture { display: flex; gap: 10px; margin-top: 14px; }.mobile-photo-capture .ant-btn { flex: 1; height: 46px; }.mobile-photo-hint { font-size: 12px; color: #8f7c6e; line-height: 1.6; }
 .mobile-photo-next { position: fixed; bottom: 0; left: 50%; transform: translateX(-50%); width: min(760px,100%); padding: 10px 14px calc(10px + env(safe-area-inset-bottom)); background: #fff8f1; border-top: 1px solid #eaded3; box-sizing: border-box; z-index: 15; }.mobile-photo-next .ant-btn { height: 44px; }.mobile-photo-progress { position: sticky; bottom: 70px; z-index: 16; }

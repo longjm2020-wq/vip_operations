@@ -63,18 +63,24 @@ export async function checkCloudLogin(page: Page, sourceUrl: string) {
       note: "尚未读到品牌商品，请在云端画面处理登录或验证后再次核验",
     };
   }
-  const signedIn = await page
-    .locator(
-      'a[href="//myi.vip.com/index.html"],a[href="https://myi.vip.com/index.html"]',
-    )
-    .filter({ visible: true })
-    .count();
-  return signedIn
-    ? { verified: true, note: "云端登录已核验并保存" }
-    : {
-        verified: false,
-        note: "品牌页面可以访问，但尚未确认账号登录；请刷新二维码重新扫码",
-      };
+  try {
+    // VIP loads its account header asynchronously, separately from products.
+    // Hidden account links also exist for signed-out visitors; wait for a
+    // visible account link rather than accepting its presence in the DOM.
+    await page
+      .locator(
+        'a[href="//myi.vip.com/index.html"],a[href="https://myi.vip.com/index.html"]',
+      )
+      .filter({ visible: true })
+      .first()
+      .waitFor({ state: "visible", timeout: 15000 });
+    return { verified: true, note: "云端登录已核验并保存" };
+  } catch {
+    return {
+      verified: false,
+      note: "品牌页面可以访问，但尚未确认账号登录；请查看云端画面，已登录可再次核验，未登录请刷新二维码扫码",
+    };
+  }
 }
 export async function processCloudLogin(
   launch: () => Promise<Browser> = () => chromium.launch({ headless: true }),

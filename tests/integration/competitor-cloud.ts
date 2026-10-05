@@ -20,7 +20,7 @@ export async function testCompetitorCloud(h: Record<string, any>) {
   const pause = (ms: number) =>
     new Promise((resolve) => setTimeout(resolve, ms));
   const until = async (fn: () => Promise<boolean>) => {
-    for (let i = 0; i < 160; i++) {
+    for (let i = 0; i < 450; i++) {
       if (await fn()) return;
       await pause(100);
     }
@@ -118,7 +118,7 @@ export async function testCompetitorCloud(h: Record<string, any>) {
           if (hostname === "passport.vip.com")
             html = `<button style="position:absolute;left:100px;top:100px;width:100px;height:50px" onclick="document.cookie='cloud_test_session=synthetic-session;domain=.vip.com;path=/;secure;samesite=lax'">Synthetic QR consent</button>`;
           else if (hostname === "category.vip.com")
-            html = `${signedIn ? '<a href="https://myi.vip.com/index.html">已登录</a>' : ""}<a href="https://detail.vip.com/detail-1-100000001.html"><span class="c-goods-item__name">合成测试羊毛针织衫</span><span class="J-goods-item__sale-price">100</span></a>`;
+            html = `<a href="https://myi.vip.com/index.html" style="display:none">缓存的账号昵称</a>${signedIn ? '<script>setTimeout(() => { const account=document.createElement("a");account.href="https://myi.vip.com/index.html";account.textContent="已登录";document.body.append(account); }, 600);</script>' : ""}<a href="https://detail.vip.com/detail-1-100000001.html"><span class="c-goods-item__name">合成测试羊毛针织衫</span><span class="J-goods-item__sale-price">100</span></a>`;
           else
             html = `<span class="J_brandName">${initial.name}</span><span class="pib-title-detail">合成测试羊毛针织衫</span><span id="J_detail_barCode">商品编码：CLOUD-TEST</span><table><tr><td class="dc-table-tit">详细材质信息</td><td>100%羊毛</td></tr><tr><td class="dc-table-tit">适用季节</td><td>冬季</td></tr></table>`;
           await route.fulfill({
@@ -143,7 +143,7 @@ export async function testCompetitorCloud(h: Record<string, any>) {
     assert.notEqual(
       (await ok(base + "/cloud-session")).status,
       "READY",
-      "public products alone never imply login",
+      "public products and hidden cached account links never imply login",
     );
     await ok(base + "/cloud-login/" + login.id + "/actions", "POST", {
       kind: "REFRESH",
@@ -219,7 +219,7 @@ export async function testCompetitorCloud(h: Record<string, any>) {
     assert.equal(ended.status, "EXPIRED");
     assert.equal(ended.frame, null);
     check(
-      "Cloud QR login ownership, exclusive browser lease, verified reusable encrypted session, actual crawl, disconnect and temporary frame cleanup",
+      "Cloud QR login ownership, exclusive browser lease, delayed visible account verification, hidden signed-out marker rejection, reusable encrypted session, actual crawl, disconnect and temporary frame cleanup",
     );
   } finally {
     await db.$executeRawUnsafe(

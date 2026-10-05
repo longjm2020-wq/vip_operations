@@ -3,7 +3,8 @@ import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useSearchParams } from "react-router-dom";
 import { Alert, App, Button, Empty, Form, Image, Input, Modal, Popconfirm, Select, Space, Spin, Tag } from "antd";
-import { CameraOutlined, DeleteOutlined, PlusOutlined, UploadOutlined } from "@ant-design/icons";
+import { CameraOutlined, DeleteOutlined, EditOutlined, PlusOutlined, UploadOutlined } from "@ant-design/icons";
+import { PhotoColorEditor } from "./selection-photo-color-editor";
 import { useSelectionWorkspace } from "./selection-workspace";
 import { useCan, useUser, type Row } from "./shared";
 import { editableSelectionCell, readableSelectionCell } from "./selection-protection";
@@ -37,7 +38,7 @@ function PhotoMetadata({ row, onClose, onSaved }: { row?: Row; onClose: () => vo
       <Form.Item name="supplierStyleNo" label="供应商款号"><Input disabled={!!row && !editableSelectionCell(row,"supplierStyleNo")} maxLength={64} /></Form.Item>
       <Form.Item name="supplierCode" label="供应商编码"><Input disabled={!!row && !editableSelectionCell(row,"supplierCode")} maxLength={50} /></Form.Item>
       <Form.Item name="colors" label="颜色" rules={[{required:true,message:"请至少添加一种颜色"}]}><Select disabled={!!row && !editableSelectionCell(row,"color")} mode="tags" tokenSeparators={["/",";","；",","]} placeholder="输入颜色后回车，多个颜色用 / 分隔" /></Form.Item>
-      <p className="mobile-photo-hint">已有图片的颜色需保留；新增颜色后即可分别补拍。保存会同步到电脑端。</p>
+      <p className="mobile-photo-hint">已有图片的颜色需保留；改名可点击颜色标签旁的小铅笔。新增颜色后即可分别补拍，保存会同步到电脑端。</p>
       <Button block type="primary" htmlType="submit" loading={busy} size="large">保存并拍图</Button>
     </Form>
   </Modal>;
@@ -57,6 +58,7 @@ function StandardSelectionMobilePhotos() {
   const [page, setPage] = useState(1);
   const [showResults, setShowResults] = useState(!selectedId);
   const [edit, setEdit] = useState<"empty" | "current" | null>(null);
+  const [colorEdit, setColorEdit] = useState<{ row: Row; color: string } | null>(null);
   const [emptyRow, setEmptyRow] = useState<Row | null>(null);
   const [color, setColor] = useState("");
   const [busy, setBusy] = useState(false);
@@ -67,12 +69,12 @@ function StandardSelectionMobilePhotos() {
   const camera = useRef<HTMLInputElement>(null), album = useRef<HTMLInputElement>(null);
   useEffect(() => { const timer = window.setTimeout(() => { setQuery(search.trim()); setPage(1); }, 250); return () => clearTimeout(timer); }, [search]);
   const list = useQuery({ queryKey:["mobile-photo-list",query,page], enabled:canRead, queryFn:()=>api("/style-selections?"+new URLSearchParams({q:query,photoSearch:"true",sort:"sortOrder",direction:"asc",page:String(page),pageSize:"20"})), refetchOnWindowFocus:!busy });
-  const detail = useQuery({ queryKey:["mobile-photo-detail",selectedId], enabled:canRead && !!selectedId, queryFn:()=>api("/style-selections/"+selectedId), refetchInterval:busy || edit ? false : 10000, refetchOnWindowFocus:!busy && !edit });
+  const detail = useQuery({ queryKey:["mobile-photo-detail",selectedId], enabled:canRead && !!selectedId, queryFn:()=>api("/style-selections/"+selectedId), refetchInterval:busy || edit || colorEdit ? false : 10000, refetchOnWindowFocus:!busy && !edit && !colorEdit });
   const current: Row | undefined = detail.data?.data;
   const colors = colorsOf(current);
   useEffect(() => { setColor(value => colors.includes(value) ? value : colors[0] || ""); }, [selectedId, current?.color]);
   useEffect(() => { if (!current || section !== "labels") return; const timer = window.setTimeout(() => document.getElementById("mobile-label-photos")?.scrollIntoView({block:"start"}), 100); return () => window.clearTimeout(timer); }, [current?.id, section]);
-  const choose = (id: string) => { const next=new URLSearchParams(params);next.set("id",id);if(query)next.set("q",query);else next.delete("q");setParams(next); setShowResults(false); setEdit(null); };
+  const choose = (id: string) => { const next=new URLSearchParams(params);next.set("id",id);if(query)next.set("q",query);else next.delete("q");setParams(next); setShowResults(false); setEdit(null); setColorEdit(null); };
   const refresh = async () => { await Promise.all([queryClient.invalidateQueries({queryKey:["mobile-photo-detail"]}),queryClient.invalidateQueries({queryKey:["mobile-photo-list"]}),queryClient.invalidateQueries({queryKey:["style-selections"]})]); };
   const addStyle = async () => {
     if (!canEdit || busy) return;
@@ -133,7 +135,13 @@ function StandardSelectionMobilePhotos() {
     <header className="mobile-photo-header"><div><strong>XUTI · 手机拍图</strong></div><Input.Search size="large" allowClear aria-label="搜索款号或供应商编码" placeholder="序缇款号 / 供应商款号 / 供应商编码" value={search} onChange={event=>{setSearch(event.target.value);setShowResults(true);}} onSearch={()=>{setQuery(search.trim());setShowResults(true);setPage(1);}} /><div className="mobile-photo-header-actions"><Button onClick={()=>setShowResults(value=>!value)}>{showResults?"收起搜索结果":"选择款式"}</Button>{canEdit && <Button icon={<PlusOutlined />} disabled={busy} onClick={()=>void addStyle()}>新增款式</Button>}</div></header>
     {showResults && <section className="mobile-photo-results">{list.isLoading?<Spin/>:list.error?<Alert type="error" title={(list.error as Error).message} action={<Button onClick={()=>void list.refetch()}>重试</Button>}/>:<><p>共 {list.data?.total || 0} 款</p>{(list.data?.data || []).map((row:Row)=><button key={row.id} className="mobile-photo-result" onClick={()=>choose(String(row.id))}><strong>{row.xutiStyleNo || "未填写序缇款号"}</strong><span>供应商款号：{row.supplierStyleNo || "—"} · 编码：{row.supplierCode || "—"}</span><small>{row.color || "未填写颜色"} · {row.images?.length || 0} 张款式图 · {row.labelImages?.length || 0} 张洗唛/吊牌图</small></button>)}{!list.data?.total && <Empty description="未找到款式，可新增款式后拍图"/>}<Space><Button disabled={page===1} onClick={()=>setPage(page-1)}>上一页</Button><span>第 {page} 页</span><Button disabled={page*20 >= (list.data?.total || 0)} onClick={()=>setPage(page+1)}>下一页</Button></Space></>}</section>}
     {detail.isLoading && selectedId && <Spin/>}{detail.error && <Alert type="error" title={(detail.error as Error).message} action={<Button onClick={()=>void detail.refetch()}>重试</Button>}/>}
-    {current && <main><section className="mobile-photo-style"><div><h1>{current.xutiStyleNo || current.supplierStyleNo || "未填写序缇款号"}</h1>{canEdit && <Button disabled={busy} onClick={()=>setEdit("current")}>编辑款号 / 颜色</Button>}</div><p>供应商款号：{current.supplierStyleNo || "—"}　供应商编码：{current.supplierCode || "—"}</p><div className="mobile-photo-colors">{colors.map(value=><Button key={value} type={value===color?"primary":"default"} onClick={()=>setColor(value)}>{value} · {(current.images || []).filter((image:Row)=>image.color===value).length} 张</Button>)}</div>{(!colors.length) && <Alert type="info" title="先补充颜色，再按颜色拍图" action={canEdit?<Button onClick={()=>setEdit("current")}>补充资料</Button>:undefined}/>}</section>
+    {current && <main><section className="mobile-photo-style"><div><h1>{current.xutiStyleNo || current.supplierStyleNo || "未填写序缇款号"}</h1>{canEdit && <Button disabled={busy} onClick={()=>setEdit("current")}>编辑款号 / 颜色</Button>}</div><p>供应商款号：{current.supplierStyleNo || "—"}　供应商编码：{current.supplierCode || "—"}</p><div className="mobile-photo-colors">{colors.map(value=>{
+      const pending = failed.some(task => task.rowId === String(current.id) && task.field === "images" && task.color === value);
+      return <span key={value} className={`mobile-photo-color${value===color?" is-selected":""}`}>
+        <Button className="mobile-photo-color-select" aria-pressed={value===color} onClick={()=>setColor(value)}>{value} · {(current.images || []).filter((image:Row)=>image.color===value).length} 张</Button>
+        {canEdit && editableSelectionCell(current,"color") && editableSelectionCell(current,"images") && <Button className="mobile-photo-color-edit" type="text" icon={<EditOutlined/>} aria-label={`修改颜色 ${value}`} title={pending?"该颜色有待重试图片，请先处理上传":"修改颜色名称"} disabled={busy || pending} onClick={()=>setColorEdit({row:current,color:value})}/>}
+      </span>;
+    })}</div>{(!colors.length) && <Alert type="info" title="先补充颜色，再按颜色拍图" action={canEdit?<Button onClick={()=>setEdit("current")}>补充资料</Button>:undefined}/>}</section>
       <section className="mobile-photo-current">{!readableSelectionCell(current,"images") && <Alert type="info" title="图片内容受保护"/>}<h2>当前拍图 {color && <Tag>{color}</Tag>} <small>{photos.length} 张</small></h2>{photos.length?gallery(photos,"images"):<Empty description={color?`还没有${color}的图片，请拍照补充`:"请选择或补充颜色"}/>}<div className="mobile-photo-capture"><Button type="primary" size="large" icon={<CameraOutlined/>} disabled={!canEdit || busy || !color || !editableSelectionCell(current,"images")} onClick={()=>{captureTarget.current={rowId:String(current.id),field:"images",color};camera.current?.click();}}>拍照上传</Button><Button size="large" icon={<UploadOutlined/>} disabled={!canEdit || busy || !color || !editableSelectionCell(current,"images")} onClick={()=>{captureTarget.current={rowId:String(current.id),field:"images",color};album.current?.click();}}>相册选择</Button></div><p className="mobile-photo-hint">每张自动压缩至 500 KB 以下，上传后电脑端自动同步。</p></section>
       <section id="mobile-label-photos"><h2>洗唛/吊牌图 <small>{labelPhotos.length} 张</small></h2>{labelPhotos.length?gallery(labelPhotos,"labelImages"):<Empty description="还没有洗唛/吊牌图，请拍照补充"/>}<div className="mobile-photo-capture"><Button type="primary" size="large" icon={<CameraOutlined/>} disabled={!canEdit || busy || !editableSelectionCell(current,"labelImages")} onClick={()=>{captureTarget.current={rowId:String(current.id),field:"labelImages",color:""};camera.current?.click();}}>拍照上传</Button><Button size="large" icon={<UploadOutlined/>} disabled={!canEdit || busy || !editableSelectionCell(current,"labelImages")} onClick={()=>{captureTarget.current={rowId:String(current.id),field:"labelImages",color:""};album.current?.click();}}>相册选择</Button></div><p className="mobile-photo-hint">洗唛/吊牌图不需要选择颜色，可连续拍摄或从相册多选；上传后与电脑端同字段同步。</p></section>
       {!!unassigned.length && <section><h2>未标颜色图片</h2>{gallery(unassigned,"images")}</section>}
@@ -143,5 +151,11 @@ function StandardSelectionMobilePhotos() {
     {!!failed.length && <section><Alert type="error" title={`${failed.length} 张图片未确认上传成功`} description="可重试，系统会避免重复添加。请保持页面打开。"/><ul>{failed.map(task=><li key={task.id}>{task.field==="labelImages"?"洗唛/吊牌图":task.color}：{task.error}</li>)}</ul><Button disabled={busy} onClick={()=>void runUploads(failed)}>重试失败图片</Button></section>}
     <input hidden ref={camera} type="file" accept="image/jpeg,image/png,image/webp" capture="environment" onChange={event=>{const files=Array.from(event.target.files || []);event.currentTarget.value="";capture(files);}}/><input hidden ref={album} type="file" multiple accept="image/jpeg,image/png,image/webp" onChange={event=>{const files=Array.from(event.target.files || []);event.currentTarget.value="";capture(files);}}/>
     {edit && <PhotoMetadata key={edit+":"+(edit === "empty" ? emptyRow?.id : current?.id || "")} row={edit==="empty"?emptyRow || undefined:current} onClose={()=>setEdit(null)} onSaved={row=>{queryClient.setQueryData(["mobile-photo-detail",String(row.id)],{data:row});setEdit(null);choose(String(row.id));void refresh();}}/>}
+    {colorEdit && <PhotoColorEditor row={colorEdit.row} color={colorEdit.color} onClose={()=>{setColorEdit(null);void refresh();}} onSaved={(row,nextColor)=>{
+      queryClient.setQueryData(["mobile-photo-detail",String(row.id)],{data:row});
+      setColor(value=>value===colorEdit.color?nextColor:value);
+      if(captureTarget.current?.rowId===String(row.id) && captureTarget.current.field==="images" && captureTarget.current.color===colorEdit.color)captureTarget.current.color=nextColor;
+      setColorEdit(null);message.success("颜色名称已修改，图片及电脑端同步更新");void refresh();
+    }}/>}
   </div>;
 }
