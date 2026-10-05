@@ -14,6 +14,7 @@ export function useSelectionRealtime(
   useEffect(() => {
     let stream: EventSource | undefined;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
     let stopped = false;
     let revoked = false;
     let pending = false;
@@ -67,20 +68,23 @@ export function useSelectionRealtime(
       if (!timer && !running) timer = setTimeout(() => void drain(), 80);
     };
     const close = () => {
+      clearTimeout(reconnectTimer);
       stream?.close();
       stream = undefined;
       setConnected(false);
     };
     const open = () => {
       if (document.hidden || stream || stopped || revoked) return;
-      stream = new EventSource(
+      const source = (stream = new EventSource(
         `/api/v1/style-selections/events${tableId ? `?tableId=${encodeURIComponent(tableId)}` : ""}`,
-      );
+      ));
       stream.addEventListener("ready", () => {
+        if (stream !== source) return;
         setConnected(true);
         refresh(true);
       });
       stream.addEventListener("refresh", (event) => {
+        if (stream !== source) return;
         let rights = false;
         try {
           rights =
@@ -91,12 +95,23 @@ export function useSelectionRealtime(
         refresh(rights);
       });
       stream.addEventListener("access-revoked", () => {
+        if (stream !== source) return;
         revoked = true;
         close();
         lost.current();
         void rootQueryClient.invalidateQueries({ queryKey: ["me"] });
       });
-      stream.onerror = () => setConnected(false); // EventSource retries; polling covers interruptions.
+      stream.onerror = () => {
+        if (stream !== source) return;
+        setConnected(false);
+        // A rolling release may briefly return 404/503. Browsers permanently
+        // close those streams; explicitly retry as well as native reconnects.
+        if (source.readyState === EventSource.CLOSED) {
+          close();
+          if (!stopped && !revoked && !document.hidden)
+            reconnectTimer = setTimeout(open, 3000);
+        }
+      };
     };
     const visibility = () => {
       if (document.hidden) close();

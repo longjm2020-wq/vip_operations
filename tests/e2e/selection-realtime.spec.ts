@@ -52,7 +52,14 @@ async function peer(
   });
   const page = await context.newPage();
   await login(page, username, password);
+  let connectionAttempts = 0;
+  await page.route("**/api/v1/style-selections/events", async (route) => {
+    if (++connectionAttempts === 1)
+      await route.fulfill({ status: 404, body: "restarting" });
+    else await route.continue();
+  });
   await openTable(page);
+  expect(connectionAttempts).toBeGreaterThan(1);
   return { page, context };
 }
 
