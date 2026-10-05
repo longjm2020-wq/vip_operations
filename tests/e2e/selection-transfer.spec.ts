@@ -1,7 +1,9 @@
 import { expect, test, type Page } from "@playwright/test";
 import { archiveTableFields } from "../../packages/contracts/src/product-archive-table.js";
+import { selectionBaseFields } from "../../packages/contracts/src/selection-migration.js";
+import { selectionLayoutSchema } from "../../packages/contracts/src/selection-layout.js";
 
-async function fixture(page: Page, productOnly = false) {
+async function fixture(page: Page, productOnly = false, choiceSync = false) {
   let revision = 0;
   const records: Record<string, any[]> = {
     default: [
@@ -47,6 +49,28 @@ async function fixture(page: Page, productOnly = false) {
   };
   const layouts = new Map<string, any>(),
     writes: any[] = [];
+  const washing = {
+    key: "custom:washing",
+    label: "洗涤标志核对",
+    custom: true,
+    width: 120,
+    type: "single" as const,
+    options: ["规范", "不规范"],
+    optionColors: { 规范: "green", 不规范: "gray" },
+  };
+  if (choiceSync) {
+    records.default[0].extraFields[washing.key] = "不规范";
+    layouts.set("default", {
+      revision: 1,
+      preferences: selectionLayoutSchema.parse({
+        columns: [...selectionBaseFields, washing],
+      }),
+    });
+  }
+  const archiveFields = [
+    ...archiveTableFields([]),
+    ...(choiceSync ? [{ ...washing, options: [] }] : []),
+  ];
   await page.route("**/api/v1/**", async (route) => {
     const url = new URL(route.request().url()),
       path = url.pathname,
@@ -75,7 +99,7 @@ async function fixture(page: Page, productOnly = false) {
       data = {
         id: "9",
         name: "商品档案",
-        fields: archiveTableFields([]),
+        fields: archiveFields,
         references: {
           categoryId: [
             { id: "3", name: "针织衫", status: "ACTIVE", hasChildren: false },
@@ -97,7 +121,7 @@ async function fixture(page: Page, productOnly = false) {
           key: "9",
           name: "商品档案",
           archive: true,
-          fields: archiveTableFields([]),
+          fields: archiveFields,
         },
         { key: "2", name: "目标空表", archive: false, fields: [] },
       ];
@@ -109,6 +133,16 @@ async function fixture(page: Page, productOnly = false) {
         created: body.rowIds.length,
         updated: 0,
         addedFields: body.target === "2" ? body.fields.length : 0,
+        optionChanges:
+          choiceSync && body.target === "9"
+            ? [
+                {
+                  key: washing.key,
+                  label: washing.label,
+                  addedOptions: washing.options,
+                },
+              ]
+            : [],
         targetName: body.target === "2" ? "目标空表" : "商品档案",
         rows: records[scope]
           .filter((row) => body.rowIds.includes(row.id))
@@ -275,4 +309,46 @@ test("product archive shares sheet controls and existing records for a product-o
   );
   await body.fill("修改后的档案名");
   await expect(body).toHaveValue("修改后的档案名");
+});
+
+test("choice additions are listed in transfer preview and require explicit confirmation", async ({
+  page,
+}) => {
+  const state = await fixture(page, false, true);
+  await page.goto("/style-selections");
+  await page
+    .getByRole("checkbox", { name: "选择 TRANSFER-1", exact: true })
+    .check();
+  await page.getByRole("button", { name: "跨表传送", exact: true }).click();
+  const modal = page.getByRole("dialog", { name: "跨表传送" });
+  await modal.getByRole("combobox", { name: "目标表格" }).click();
+  await page
+    .locator(".ant-select-dropdown")
+    .getByText("商品档案", { exact: true })
+    .click();
+  await modal.getByRole("button", { name: "预览传送", exact: true }).click();
+  await expect(
+    modal.getByText("补齐目标字段选项 · 2 个", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    modal.getByText("洗涤标志核对：规范、不规范", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    modal.getByRole("button", { name: "确认传送", exact: true }),
+  ).toBeVisible();
+  expect(state.writes.filter((write) => write.type === "commit")).toHaveLength(
+    0,
+  );
+  expect(state.records.default[0].migrationLocked).toBeUndefined();
+  await modal.screenshot({
+    path: ".local/selection-transfer-choice-preview.png",
+  });
+  await modal.getByRole("button", { name: "返回配置", exact: true }).click();
+  await expect(
+    modal.getByText("补齐目标字段选项 · 2 个", { exact: true }),
+  ).not.toBeVisible();
+  await modal.getByRole("button", { name: "取消", exact: true }).click();
+  expect(state.writes.filter((write) => write.type === "commit")).toHaveLength(
+    0,
+  );
 });

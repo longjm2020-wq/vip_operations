@@ -29,6 +29,7 @@ type Preview = {
   created: number;
   updated: number;
   addedFields: number;
+  optionChanges?: { key: string; label: string; addedOptions: string[] }[];
   targetName: string;
   rows: Row[];
 };
@@ -262,7 +263,9 @@ export function SelectionMigration({
             </Button>
             <Button
               type="primary"
-              aria-label={preview ? uncertain ? "核对并重试" : "确认传送" : "预览传送"}
+              aria-label={
+                preview ? (uncertain ? "核对并重试" : "确认传送") : "预览传送"
+              }
               loading={busy}
               disabled={!target || !candidates.length}
               onClick={() => void (preview ? send() : inspect())}
@@ -382,6 +385,33 @@ export function SelectionMigration({
                   : "确认后整批执行，任何一行失败时整批不写入。"
               }
             />
+            {!!preview.optionChanges?.length && (
+              <Alert
+                type="info"
+                showIcon
+                style={{ marginTop: 12 }}
+                title={`补齐目标字段选项 · ${preview.optionChanges.reduce((count, change) => count + change.addedOptions.length, 0)} 个`}
+                description={
+                  <>
+                    确认后添加以下选项，保留目标已有选项及配色。
+                    <ul
+                      style={{
+                        margin: "8px 0 0",
+                        paddingLeft: 20,
+                        maxHeight: 130,
+                        overflowY: "auto",
+                      }}
+                    >
+                      {preview.optionChanges.map((change) => (
+                        <li key={change.key}>
+                          {change.label}：{change.addedOptions.join("、")}
+                        </li>
+                      ))}
+                    </ul>
+                  </>
+                }
+              />
+            )}
             <Table
               style={{ marginTop: 16 }}
               size="small"

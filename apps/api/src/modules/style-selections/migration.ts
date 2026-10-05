@@ -52,6 +52,9 @@ const readonlyTypes = new Set([
   "modifiedTime",
   "autonumber",
 ]);
+const choiceTypes = new Set(["single", "multiple", "tags"]);
+const isChoice = (field: SelectionField) =>
+  choiceTypes.has(field.type || field.fallbackType || "text");
 async function inWorkspace<T>(
   tx: Tx,
   key: string,
@@ -309,6 +312,52 @@ async function buildPlan(tx: Tx, c: Context, body: Input, lock = false) {
       }
     if (!mappings.length)
       fail("VALIDATION_ERROR", "请至少配置一个传送字段", 400);
+    const optionChanges: {
+      key: string;
+      label: string;
+      addedOptions: string[];
+    }[] = [];
+    for (const mapping of mappings) {
+      const from = sourceFields.get(mapping.source)!,
+        to = targetFields.get(mapping.target)!;
+      // Sheet choice definitions are personal layout settings. Real product
+      // extension options remain governed by the shared product field catalog.
+      if (
+        !isChoice(from) ||
+        !isChoice(to) ||
+        (target.archive && to.key.startsWith("custom:product:"))
+      )
+        continue;
+      const addedOptions = [...new Set(from.options || [])].filter(
+        (option) => !to.options?.includes(option),
+      );
+      if (!addedOptions.length) continue;
+      const options = [...(to.options || []), ...addedOptions];
+      if (options.length > 100)
+        fail(
+          "VALIDATION_ERROR",
+          `字段「${to.label}」合并后超过100个选项，请精简字段选项后重新预览`,
+          400,
+        );
+      const optionColors: Record<string, string> = Object.assign(
+        Object.create(null),
+        to.optionColors,
+      );
+      for (const option of addedOptions)
+        if (
+          Object.hasOwn(from.optionColors || {}, option) &&
+          !Object.hasOwn(optionColors, option)
+        )
+          optionColors[option] = from.optionColors![option];
+      const merged = {
+        ...to,
+        options,
+        ...(Object.keys(optionColors).length ? { optionColors } : {}),
+      };
+      columns[columns.findIndex((field) => field.key === to.key)] = merged;
+      targetFields.set(to.key, merged);
+      optionChanges.push({ key: to.key, label: to.label, addedOptions });
+    }
     const targetPolicy = await protection.policy(tx, lock),
       plan: Row[] = [],
       used = new Set<string>();
@@ -333,6 +382,14 @@ async function buildPlan(tx: Tx, c: Context, body: Input, lock = false) {
         // sheets and the date validator use the original calendar date.
         if (!from.custom && from.key === "registrationBatch" && value)
           value = String(value).slice(0, 10);
+        const sourceIssue =
+          isChoice(from) && isChoice(to) ? fieldValueError(from, value) : null;
+        if (sourceIssue)
+          fail(
+            "VALIDATION_ERROR",
+            `款号「${row.xutiStyleNo || row.id}」→「${from.label}」：原字段${sourceIssue}，请先修正后传送`,
+            400,
+          );
         const fromImage =
             (from.type || from.fallbackType) === "image" ||
             ["images", "labelImages"].includes(from.key),
@@ -459,6 +516,7 @@ async function buildPlan(tx: Tx, c: Context, body: Input, lock = false) {
       source,
       target,
       addedFields: columns.length - targetLayout.preferences.columns.length,
+      optionChanges,
     };
   });
 }
@@ -472,6 +530,7 @@ export async function preview(c: Context, input: unknown) {
         created: plan.plan.filter((row) => !row.destinationId).length,
         updated: plan.plan.filter((row) => row.destinationId).length,
         addedFields: plan.addedFields,
+        optionChanges: plan.optionChanges,
         targetName: plan.target.name,
         rows: plan.plan.map((row) => ({
           sourceId: row.sourceId,

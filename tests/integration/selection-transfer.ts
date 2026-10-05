@@ -6,7 +6,10 @@ import { createWriteStream } from "node:fs";
 import pg from "pg";
 import { migrate } from "../../scripts/migrate.js";
 import { selectionBaseFields } from "../../packages/contracts/src/selection-migration.js";
-import { selectionLayoutSchema } from "../../packages/contracts/src/selection-layout.js";
+import {
+  selectionLayoutSchema,
+  type SelectionField,
+} from "../../packages/contracts/src/selection-layout.js";
 import { archiveFieldIds as ids } from "../../packages/contracts/src/product-archive.js";
 const root =
     process.env.SELECTION_TRANSFER_TEST_DATABASE_URL ||
@@ -549,6 +552,327 @@ try {
   passed++;
   console.log(
     "PASS destination field types are validated and a later master validation failure rolls back every product, target row and source lock",
+  );
+  const washing: SelectionField = {
+      key: "custom:washing",
+      label: "洗涤标志核对",
+      width: 120,
+      custom: true,
+      type: "single",
+      options: ["规范", "不规范"],
+      optionColors: { 规范: "green", 不规范: "gray" },
+    },
+    actions: SelectionField = {
+      key: "custom:actions",
+      label: "衣服整改措施",
+      width: 120,
+      custom: true,
+      type: "multiple",
+      options: ["换洗唛", "缝领标"],
+      optionColors: { 换洗唛: "blue", 缝领标: "teal" },
+    },
+    tags: SelectionField = {
+      key: "custom:tags",
+      label: "质检标签",
+      width: 120,
+      custom: true,
+      type: "tags",
+      options: ["原候选"],
+      tagConfig: {
+        allowCustom: false,
+        multiple: true,
+        max: 30,
+        order: "selection",
+        color: "orange",
+      },
+    };
+  let choiceLayout = await ok(scoped(archive, "/layout-preferences"));
+  const originalColumns = choiceLayout.preferences.columns;
+  choiceLayout = await ok(scoped(archive, "/layout-preferences"), "POST", {
+    revision: choiceLayout.revision,
+    preferences: selectionLayoutSchema.parse({
+      ...choiceLayout.preferences,
+      columns: [
+        ...originalColumns,
+        {
+          ...washing,
+          options: ["待复核", "规范", "目标独有选项"],
+          optionColors: { 待复核: "brown", 规范: "orange" },
+        },
+        {
+          ...actions,
+          options: ["保留动作"],
+          optionColors: { 保留动作: "brown" },
+        },
+        { ...tags, options: ["目标标签"] },
+      ],
+    }),
+  });
+  const choiceBefore = await ok(scoped(archive), "POST", {
+      xutiStyleNo: "TRANSFER-CHOICES",
+      material: "保留原内容",
+      extraFields: { [washing.key]: "待复核" },
+    }),
+    choiceSource = await ok("/style-selections", "POST", {
+      xutiStyleNo: "TRANSFER-CHOICES",
+      extraFields: {
+        [washing.key]: "不规范",
+        [actions.key]: "换洗唛/缝领标",
+        [tags.key]: "原候选",
+      },
+    }),
+    choiceFields = [
+      selectionBaseFields.find((field) => field.key === "xutiStyleNo")!,
+      washing,
+      actions,
+      tags,
+    ],
+    choiceBody = {
+      rowIds: [choiceSource.id],
+      fields: choiceFields,
+      target: archive.id,
+      mappings: choiceFields.map((field) => ({
+        source: field.key,
+        target: field.key,
+      })),
+      copyMissingFields: false,
+    };
+  const choicePreview = await ok(
+    "/style-selections/migration/preview",
+    "POST",
+    choiceBody,
+  );
+  assert.equal(choicePreview.created, 0);
+  assert.equal(choicePreview.updated, 1);
+  assert.equal(choicePreview.addedFields, 0);
+  assert.deepEqual(choicePreview.optionChanges, [
+    { key: washing.key, label: washing.label, addedOptions: ["不规范"] },
+    {
+      key: actions.key,
+      label: actions.label,
+      addedOptions: ["换洗唛", "缝领标"],
+    },
+    { key: tags.key, label: tags.label, addedOptions: ["原候选"] },
+  ]);
+  assert.deepEqual(
+    await ok(scoped(archive, "/layout-preferences")),
+    choiceLayout,
+  );
+  assert.deepEqual(
+    await ok(scoped(archive, "/" + choiceBefore.id)),
+    choiceBefore,
+  );
+  // A layout edit after preview invalidates the entire plan, including option additions.
+  choiceLayout = await ok(scoped(archive, "/layout-preferences"), "POST", {
+    revision: choiceLayout.revision,
+    preferences: {
+      ...choiceLayout.preferences,
+      columns: choiceLayout.preferences.columns.map((field: SelectionField) =>
+        field.key === washing.key ? { ...field, width: 140 } : field,
+      ),
+    },
+  });
+  assert.equal(
+    (
+      await request("/style-selections/migration", "POST", {
+        ...choiceBody,
+        token: choicePreview.token,
+      })
+    ).status,
+    409,
+  );
+  assert.deepEqual(
+    await ok(scoped(archive, "/" + choiceBefore.id)),
+    choiceBefore,
+  );
+  assert.equal(
+    (await ok("/style-selections/" + choiceSource.id)).migrationLocked,
+    false,
+  );
+  const freshChoicePreview = await ok(
+      "/style-selections/migration/preview",
+      "POST",
+      choiceBody,
+    ),
+    choiceCommand = { ...choiceBody, token: freshChoicePreview.token },
+    choiceKey = randomUUID(),
+    choiceResult = await ok(
+      "/style-selections/migration",
+      "POST",
+      choiceCommand,
+      choiceKey,
+    );
+  assert.deepEqual(
+    await ok("/style-selections/migration", "POST", choiceCommand, choiceKey),
+    choiceResult,
+  );
+  const choiceAfter = await ok(scoped(archive, "/" + choiceBefore.id));
+  assert.equal(choiceAfter.productId, choiceBefore.productId);
+  assert.equal(choiceAfter.material, "保留原内容");
+  assert.equal(choiceAfter.extraFields[washing.key], "不规范");
+  assert.equal(choiceAfter.extraFields[actions.key], "换洗唛/缝领标");
+  assert.equal(choiceAfter.extraFields[tags.key], "原候选");
+  choiceLayout = await ok(scoped(archive, "/layout-preferences"));
+  const mergedWashing = choiceLayout.preferences.columns.find(
+      (field: SelectionField) => field.key === washing.key,
+    ),
+    mergedActions = choiceLayout.preferences.columns.find(
+      (field: SelectionField) => field.key === actions.key,
+    );
+  assert.deepEqual(mergedWashing.options, [
+    "待复核",
+    "规范",
+    "目标独有选项",
+    "不规范",
+  ]);
+  assert.deepEqual(mergedWashing.optionColors, {
+    待复核: "brown",
+    规范: "orange",
+    不规范: "gray",
+  });
+  assert.equal(mergedWashing.type, "single");
+  assert.equal(mergedWashing.width, 140);
+  assert.deepEqual(mergedActions.options, ["保留动作", "换洗唛", "缝领标"]);
+  assert.deepEqual(mergedActions.optionColors, {
+    保留动作: "brown",
+    换洗唛: "blue",
+    缝领标: "teal",
+  });
+  passed++;
+  console.log(
+    "PASS existing choice fields merge configured options and colors atomically, with read-only previews, conflict checks and idempotent retries",
+  );
+  const invalidChoice = await ok("/style-selections", "POST", {
+      xutiStyleNo: "INVALID-CHOICES",
+      extraFields: { [washing.key]: "目标独有选项" },
+    }),
+    invalidBody = {
+      ...choiceBody,
+      rowIds: [invalidChoice.id],
+      fields: [choiceFields[0], washing],
+      mappings: choiceBody.mappings.slice(0, 2),
+    };
+  let invalidPreview = await request(
+    "/style-selections/migration/preview",
+    "POST",
+    invalidBody,
+  );
+  assert.equal(invalidPreview.status, 400);
+  assert.match(JSON.stringify(invalidPreview.result), /原字段/);
+  await ok("/style-selections/" + invalidChoice.id, "PATCH", {
+    extraFields: { [washing.key]: "纯文本未知选项" },
+  });
+  invalidPreview = await request(
+    "/style-selections/migration/preview",
+    "POST",
+    {
+      ...invalidBody,
+      fields: [
+        choiceFields[0],
+        { ...washing, type: "text", options: ["纯文本未知选项"] },
+      ],
+    },
+  );
+  assert.equal(invalidPreview.status, 400);
+  assert.match(JSON.stringify(invalidPreview.result), /请选择已配置的选项/);
+  assert.deepEqual(
+    await ok(scoped(archive, "/layout-preferences")),
+    choiceLayout,
+  );
+  assert.equal(
+    (await ok("/style-selections/" + invalidChoice.id)).migrationLocked,
+    false,
+  );
+  const limitedLayout = await ok(
+    scoped(archive, "/layout-preferences"),
+    "POST",
+    {
+      revision: choiceLayout.revision,
+      preferences: {
+        ...choiceLayout.preferences,
+        columns: choiceLayout.preferences.columns.map(
+          (field: SelectionField) =>
+            field.key === washing.key
+              ? {
+                  ...field,
+                  options: Array.from(
+                    { length: 100 },
+                    (_, i) => "目标选项" + i,
+                  ),
+                }
+              : field,
+        ),
+      },
+    },
+  );
+  const overflowPreview = await request(
+    "/style-selections/migration/preview",
+    "POST",
+    {
+      ...invalidBody,
+      fields: [choiceFields[0], washing],
+    },
+  );
+  assert.equal(overflowPreview.status, 400);
+  assert.match(JSON.stringify(overflowPreview.result), /100.*选项/);
+  assert.deepEqual(
+    await ok(scoped(archive, "/layout-preferences")),
+    limitedLayout,
+  );
+  choiceLayout = await ok(scoped(archive, "/layout-preferences"), "POST", {
+    revision: limitedLayout.revision,
+    preferences: choiceLayout.preferences,
+  });
+  const productChoice = await ok("/product-fields", "POST", {
+    name: "商品专用质检",
+    type: "select",
+    options: ["商品已配置"],
+  });
+  const productChoiceKey = "custom:product:" + productChoice.id;
+  choiceLayout = await ok(scoped(archive, "/layout-preferences"), "POST", {
+    revision: choiceLayout.revision,
+    preferences: {
+      ...choiceLayout.preferences,
+      columns: [
+        ...choiceLayout.preferences.columns,
+        {
+          ...washing,
+          key: productChoiceKey,
+          label: productChoice.name,
+          options: productChoice.options,
+        },
+      ],
+    },
+  });
+  const globalPreview = await request(
+    "/style-selections/migration/preview",
+    "POST",
+    {
+      ...invalidBody,
+      fields: [choiceFields[0], { ...washing, options: ["纯文本未知选项"] }],
+      mappings: [
+        choiceBody.mappings[0],
+        { source: washing.key, target: productChoiceKey },
+      ],
+    },
+  );
+  assert.equal(globalPreview.status, 400);
+  assert.match(JSON.stringify(globalPreview.result), /请选择已配置的选项/);
+  assert.deepEqual(
+    (await one(
+      db,
+      "SELECT options FROM product_fields WHERE id=$1",
+      productChoice.id,
+    ))!.options,
+    ["商品已配置"],
+  );
+  assert.deepEqual(
+    await ok(scoped(archive, "/layout-preferences")),
+    choiceLayout,
+  );
+  passed++;
+  console.log(
+    "PASS undeclared choices, text-to-choice values and option overflow remain invalid; global product choice definitions are preserved",
   );
   const productReader = await userWith("product-only-reader", ["product.read"]),
     productEditor = await userWith("product-only-editor", [
