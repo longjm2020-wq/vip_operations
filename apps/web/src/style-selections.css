@@ -398,6 +398,17 @@
 .selection-editor-control > input:not([type="checkbox"]) { height: 34px; box-sizing: border-box; padding: 4px 8px; border: 1px solid #eaded3; border-radius: 4px; font: inherit; }
 .selection-editor-control .ant-select { flex: 1; min-width: 0; }
 .selection-editor-error { max-width: 240px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12px; color: #b42318; }
+.selection-editor-expand.ant-btn { flex: 0 0 30px; width: 30px; height: 30px; padding: 0; color: #8a6044; }
+.selection-editor-expand.ant-btn:not(:disabled):hover { color: #cf5100; background: #fff1e7; }
+.selection-editor-expand.ant-btn:disabled { color: #b9aea6; }
+.selection-text-detail { position: fixed; z-index: 1090; display: flex; flex-direction: column; width: min(480px, calc(100vw - 32px)); height: min(380px, calc(100dvh - 96px)); box-sizing: border-box; overflow: hidden; border: 1px solid #e6cfbc; border-radius: 10px; color: #624b3c; background: #fffdf9; box-shadow: 0 8px 28px #33251e26; }
+.selection-text-detail header { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex: 0 0 42px; padding: 0 12px; border-bottom: 1px solid #eaded3; background: #fff7ef; cursor: grab; touch-action: none; user-select: none; }
+.selection-text-detail.is-dragging header { cursor: grabbing; }
+.selection-text-detail header strong { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 13px; }
+.selection-text-detail header .ant-btn { flex: 0 0 28px; color: #8a6044; }
+.selection-text-detail textarea { flex: 1; min-height: 0; margin: 12px; padding: 10px; border: 1px solid #e6d7ca; border-radius: 6px; outline: none; color: #46352a; background: white; font: inherit; font-size: 13px; line-height: 1.7; resize: none; user-select: text; }
+.selection-text-detail textarea:focus { border-color: #d7793e; box-shadow: 0 0 0 2px #d3540b0d; }
+.selection-text-detail footer { flex: 0 0 auto; padding: 0 12px 10px; color: #947a68; font-size: 12px; }
 @media (max-width: 600px) { .selection-editor-label { flex-basis: 90px; } .selection-editor-error { max-width: 80px; } }
 
 .selection-text-input, .selection-money-input input, .selection-sheet .ant-input { text-align: inherit; }

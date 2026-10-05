@@ -115,6 +115,7 @@ async function layout(tx: Tx, c: Context, key: string, archive: boolean) {
     key,
   );
   let defaults: SelectionField[] = [],
+    canonical: SelectionField[] = [],
     productFields: ProductField[] = [];
   if (archive) {
     productFields = camel(
@@ -123,7 +124,15 @@ async function layout(tx: Tx, c: Context, key: string, archive: boolean) {
         "SELECT *,updated_at::text AS option_version FROM public.product_fields WHERE active ORDER BY created_at,id",
       ),
     );
-    defaults = archiveTableFields(productFields);
+    canonical = archiveTableFields(productFields);
+    const initial = (
+      await one(
+        tx,
+        "SELECT initial_layout FROM public.project_tables WHERE id=$1::bigint",
+        key,
+      )
+    )?.initial_layout;
+    defaults = initial === "empty" ? [] : canonical;
   } else if (key === "default") defaults = selectionBaseFields;
   else {
     const initial = (
@@ -152,7 +161,7 @@ async function layout(tx: Tx, c: Context, key: string, archive: boolean) {
     preferences: archive
       ? {
           ...preferences,
-          columns: archiveChoiceColumns(preferences.columns, defaults),
+          columns: archiveChoiceColumns(preferences.columns, canonical),
         }
       : preferences,
     revision: stored?.revision || 0,

@@ -16,10 +16,12 @@ export function ProductArchive() {
   if (!query.data) return <Spin />;
   return (
     <SelectionWorkspace
-      key={query.data.id}
+      key={`${query.data.id}:${query.data.layoutGeneration || 0}`}
       tableId={query.data.id}
       title="商品档案"
       archive
+      emptyLayout={query.data.initialLayout === "empty"}
+      layoutGeneration={query.data.layoutGeneration}
       defaultColumns={query.data.fields}
       archiveReferences={query.data.references}
     >

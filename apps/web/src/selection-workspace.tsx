@@ -8,7 +8,10 @@ import {
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { api, queryClient } from "./api";
 import { UserContext, useUser } from "./shared";
-import { archiveSelectionPermissions, tableSelectionPermissions } from "../../../packages/contracts/src/table-permissions";
+import {
+  archiveSelectionPermissions,
+  tableSelectionPermissions,
+} from "../../../packages/contracts/src/table-permissions";
 import type { SelectionField } from "../../../packages/contracts/src/selection-layout";
 
 type Workspace = {
@@ -18,7 +21,10 @@ type Workspace = {
   emptyLayout?: boolean;
   archive?: boolean;
   defaultColumns?: SelectionField[];
-  archiveReferences?: Record<string,{id:string;name:string;status:string;hasChildren?:boolean}[]>;
+  archiveReferences?: Record<
+    string,
+    { id: string; name: string; status: string; hasChildren?: boolean }[]
+  >;
   api: typeof api;
   queryClient: QueryClient;
   storageKey: (key: string) => string;
@@ -35,6 +41,7 @@ export function SelectionWorkspace({
   title,
   blankLayout = false,
   emptyLayout = false,
+  layoutGeneration = 0,
   archive = false,
   defaultColumns,
   archiveReferences,
@@ -44,15 +51,25 @@ export function SelectionWorkspace({
   title?: string;
   blankLayout?: boolean;
   emptyLayout?: boolean;
+  layoutGeneration?: number;
   archive?: boolean;
   defaultColumns?: SelectionField[];
   archiveReferences?: Workspace["archiveReferences"];
   children: ReactNode;
 }) {
   const user = useUser();
-  const scopedUser = useMemo(() => tableId
-    ? { ...user, permissions: (archive ? archiveSelectionPermissions : tableSelectionPermissions)(user.permissions) }
-    : user, [tableId, archive, user]);
+  const scopedUser = useMemo(
+    () =>
+      tableId
+        ? {
+            ...user,
+            permissions: (archive
+              ? archiveSelectionPermissions
+              : tableSelectionPermissions)(user.permissions),
+          }
+        : user,
+    [tableId, archive, user],
+  );
   const [client] = useState(() =>
     tableId
       ? new QueryClient({
@@ -80,9 +97,22 @@ export function SelectionWorkspace({
             : path,
           ...args,
         ),
-      storageKey: (key) => (tableId ? `project-table:${tableId}:${key}` : key),
+      storageKey: (key) =>
+        tableId
+          ? `project-table:${tableId}:${layoutGeneration > 0 ? `generation:${layoutGeneration}:` : ""}${key}`
+          : key,
     }),
-    [tableId, title, blankLayout, emptyLayout, archive, defaultColumns, archiveReferences, client],
+    [
+      tableId,
+      title,
+      blankLayout,
+      emptyLayout,
+      layoutGeneration,
+      archive,
+      defaultColumns,
+      archiveReferences,
+      client,
+    ],
   );
   return (
     <WorkspaceContext.Provider value={workspace}>

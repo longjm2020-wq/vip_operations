@@ -3,7 +3,12 @@ import { archiveTableFields } from "../../packages/contracts/src/product-archive
 import { selectionBaseFields } from "../../packages/contracts/src/selection-migration.js";
 import { selectionLayoutSchema } from "../../packages/contracts/src/selection-layout.js";
 
-async function fixture(page: Page, productOnly = false, choiceSync = false) {
+async function fixture(
+  page: Page,
+  productOnly = false,
+  choiceSync = false,
+  emptyArchive = false,
+) {
   let revision = 0;
   const records: Record<string, any[]> = {
     default: [
@@ -49,6 +54,7 @@ async function fixture(page: Page, productOnly = false, choiceSync = false) {
   };
   const layouts = new Map<string, any>(),
     writes: any[] = [];
+  if (emptyArchive) records["9"] = [];
   const washing = {
     key: "custom:washing",
     label: "洗涤标志核对",
@@ -107,7 +113,9 @@ async function fixture(page: Page, productOnly = false, choiceSync = false) {
       data = {
         id: "9",
         name: "商品档案",
-        fields: archiveFields,
+        fields: emptyArchive ? [] : archiveFields,
+        initialLayout: emptyArchive ? "empty" : "selection",
+        layoutGeneration: emptyArchive ? 1 : 0,
         references: {
           categoryId: [
             { id: "3", name: "针织衫", status: "ACTIVE", hasChildren: false },
@@ -230,6 +238,54 @@ async function fixture(page: Page, productOnly = false, choiceSync = false) {
   });
   return { records, layouts, writes };
 }
+test("cleared archive ignores old browser fields, starts empty for new users and persists added fields", async ({
+  page,
+}) => {
+  const state = await fixture(page, true, false, true);
+  await page.addInitScript(() => {
+    const old = {
+      columns: [
+        {
+          key: "custom:old",
+          label: "旧字段",
+          width: 120,
+          custom: true,
+          type: "text",
+        },
+      ],
+    };
+    localStorage.setItem(
+      "project-table:9:selection-layout-v2:1",
+      JSON.stringify({ preferences: old, revision: 0, dirty: true }),
+    );
+    localStorage.setItem(
+      "project-table:9:selection-columns-v1",
+      JSON.stringify(old.columns),
+    );
+  });
+  await page.goto("/products");
+  await expect(page.locator("thead th[data-selection-column]")).toHaveCount(0);
+  await expect(page.locator("tbody tr[data-selection-row]")).toHaveCount(0);
+  await page.getByRole("button", { name: "字段管理", exact: true }).click();
+  await expect(page.getByText("旧字段", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("图片", { exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: "添加字段", exact: true }).click();
+  const modal = page.getByRole("dialog", { name: "添加字段", exact: true });
+  await modal.getByLabel("字段名称", { exact: true }).fill("新备注");
+  await modal.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(
+    page.getByRole("columnheader", { name: "选择整列：新备注", exact: true }),
+  ).toBeVisible();
+  await expect
+    .poll(() => state.layouts.get("9")?.preferences.columns.length)
+    .toBe(1);
+  await page.reload();
+  await expect(page.locator("thead th[data-selection-column]")).toHaveCount(1);
+  await expect(
+    page.getByRole("columnheader", { name: "选择整列：新备注", exact: true }),
+  ).toBeVisible();
+  await expect(page.getByText("旧字段", { exact: true })).toHaveCount(0);
+});
 test("bulk cross-table sending previews destinations, remembers mappings, locks rows and releases editing", async ({
   page,
 }) => {

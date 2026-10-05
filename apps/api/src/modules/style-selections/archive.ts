@@ -49,7 +49,7 @@ export async function archiveWorkspace(tx: Tx, c: Context) {
     table = await insert(tx, "public.project_tables", {
       name: "商品档案",
       createdBy: c.actor.id,
-      initialLayout: "selection",
+      initialLayout: "empty",
       visibility: "PRIVATE",
       systemKey: "PRODUCT_ARCHIVE",
     });
@@ -98,7 +98,10 @@ export async function archiveMetadata(c: Context) {
       return {
         id: String(table.id),
         name: table.name,
-        fields: archiveTableFields(fields),
+        initialLayout: table.initial_layout,
+        layoutGeneration: table.layout_generation,
+        fields:
+          table.initial_layout === "empty" ? [] : archiveTableFields(fields),
         references: {
           categoryId: categories,
           brandId: brands,

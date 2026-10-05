@@ -9,6 +9,7 @@ import { SelectionLayoutLoading, SelectionLayoutStatus, useSelectionLayoutPrefer
 import { migrateSelectionLayout } from "./selection-layout-storage";
 import { parseFieldTypeCatalog } from "./selection-type-catalog";
 import { SelectionColumnWidthModal } from "./selection-column-width";
+import { SelectionTextDetail } from "./selection-text-detail";
 import { useSelectionDrag } from "./selection-drag";
 import { parseSelectionSearch,matchesSelectionSearch } from "./selection-style-search";
 import {resetFieldTypes,defaultTagConfig,orderedFieldTags,fieldValueError,fieldImages,defaultImageConfig,systemField,type SelectionField} from "./selection-field-types";
@@ -31,7 +32,7 @@ import { formatSelectionValue } from "../../../packages/contracts/src/selection-
 import { Fragment, memo, useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Alert, App, Button, Card, Checkbox, Empty, Image, Input, Modal, Pagination, Popover, Dropdown, Select, Space, Tag, Tooltip } from "antd";
-import { EditOutlined, BgColorsOutlined, FontColorsOutlined, VerticalAlignTopOutlined, VerticalAlignMiddleOutlined, VerticalAlignBottomOutlined, AlignLeftOutlined, AlignCenterOutlined, AlignRightOutlined, DeleteOutlined, FilterOutlined, LinkOutlined, PlusOutlined, PushpinOutlined, SettingOutlined, UnorderedListOutlined, UploadOutlined } from "@ant-design/icons";
+import { ExpandAltOutlined, CompressOutlined, EditOutlined, BgColorsOutlined, FontColorsOutlined, VerticalAlignTopOutlined, VerticalAlignMiddleOutlined, VerticalAlignBottomOutlined, AlignLeftOutlined, AlignCenterOutlined, AlignRightOutlined, DeleteOutlined, FilterOutlined, LinkOutlined, PlusOutlined, PushpinOutlined, SettingOutlined, UnorderedListOutlined, UploadOutlined } from "@ant-design/icons";
 import { useSelectionWorkspace } from "./selection-workspace";
 import { prepareUpload, readUpload } from "./upload-file";
 import { Header, QueryState, Row, useCan, useUser } from "./shared";
@@ -303,6 +304,7 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
   const [columnWidthTarget, setColumnWidthTarget] = useState<Column[] | null>(null);
   const [cellAnchor, setCellAnchor] = useState<{ rowKey: string; columnKey: string } | null>(null);
   const [imagePreview, setImagePreview] = useState<{ rowKey: string; columnKey: string; index: number } | null>(null);
+  const [textDetailOpen, setTextDetailOpen] = useState(false);
   const contextImage = useRef<{ url: string; name: string } | null>(null);
   const [contextCell, setContextCell] = useState<{ rowKey: string; columnKey: string; x: number; y: number } | null>(null);
   const [selectingCells, setSelectingCells] = useState(false);
@@ -912,6 +914,9 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
   const editorEnabled = !!editorRow && !!editorColumn && !imageKeys.has(editorColumn.key) && editorColumn.type!=="image";
   const editorCanEdit=canEdit && !!editorRow && !!editorColumn && !systemField(editorColumn) && editableSelectionCell(editorRow,editorColumn.key);
   const editorValue = editorEnabled ? readableSelectionCell(editorRow!,editorColumn!.key)?String(valueAt(editorRow!, editorColumn!) ?? ""):"••••" : "";
+  const editorDetailEnabled = editorEnabled && readableSelectionCell(editorRow!, editorColumn!.key);
+  const editorDetailEditable = editorCanEdit && (editorColumn?.type || editorColumn?.fallbackType || "text") === "text" && !["registrationBatch", "color", "sizeRange", "supplyPriceExclTax", "vipPrice", "livePrice", "tagPrice"].includes(editorColumn!.key) && !collectionKeys.has(editorColumn!.key) && !(archive && (archiveReferences?.[archiveReferenceKey(editorColumn!.key)] || archiveReferenceKey(editorColumn!.key) === "status"));
+  const editorLabel = editorRow && editorColumn ? `${rows.indexOf(editorRow) + 1} · ${editorColumn.label}` : "单元格";
   const editCurrent = (value: string) => { if (canEdit && editorEnabled) update(editorRow!._key, editorColumn!, value); };
   const editorError = editorRow && editorColumn ? errors[`${editorRow._key}:${editorColumn.key}`] || errors[`${editorRow._key}:save`] : undefined;
   const editorDuplicateCount = editorColumn?.key === "xutiStyleNo" ? repeatedStyles.get(selectionStyleKey(editorRow?.xutiStyleNo)) || 0 : 0;
@@ -921,13 +926,15 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
   useEffect(() => { if (imagePreview && !previewImages.length) setImagePreview(null); }, [imagePreview, previewImages.length]);
   const statisticsValues=displayedRows.flatMap(row=>activeColumns.filter(column=>selectedCells.has(cellId(row._key,column.key))).map(column=>imageKeys.has(column.key)?((column.key==="images"?rowImages(row):rowLabelImages(row)).length?"图片":null):column.key==="collectionInventory"?(row.collectionInventory || []).reduce((sum:number,item:Row)=>sum+item.available+item.production,0):column.custom && column.type==="image"?(fieldImages(row.extraFields?.[column.key]).length?"图片":null):column.custom?row.extraFields?.[column.key]:valueAt(row,column)));
   const editor = <div className="selection-editor-bar" role="group" aria-label="单元格编辑栏">
-    <span className="selection-editor-label" title={editorColumn?.label}>{editorRow && editorColumn ? `${rows.indexOf(editorRow) + 1} · ${editorColumn.label}` : "单元格"}</span>
+    <span className="selection-editor-label" title={editorColumn?.label}>{editorLabel}</span>
     {!!editorDuplicateCount && <span className="selection-duplicate-note" role="status">重复 {editorDuplicateCount} 行</span>}
     <div className="selection-editor-control">{archive && editorColumn && (archiveReferences?.[archiveReferenceKey(editorColumn.key)] || archiveReferenceKey(editorColumn.key)==="status") ? <ArchiveReferenceCell columnKey={editorColumn.key} label={editorColumn.label} value={editorValue} disabled={!editorCanEdit} onChange={editCurrent}/> : editorColumn?.type && editorColumn.type!=="image" && !collectionKeys.has(editorColumn.key) ? <SelectionFieldInput field={editorColumn} compact value={editorValue} disabled={!editorCanEdit} onChange={editCurrent}/> : editorColumn?.custom && editorColumn.type==="image" ? <span>点击图片单元格管理图片</span> : editorColumn?.key === "registrationBatch" && editorRow ? <input aria-label="编辑登记批次" type="date" value={editorValue.slice(0, 10)} disabled={!editorCanEdit} onChange={(event) => editCurrent(event.target.value)} /> :
       editorColumn?.key === "sizeRange" && editorRow ? <SizeEditor key={editorRow._key} value={editorValue} disabled={!editorCanEdit} onChange={editCurrent} /> :
       editorColumn?.key === "color" && editorRow ? <Select aria-label={`编辑${editorColumn.label}`} mode="tags" maxTagCount="responsive" className="selection-editor-tags" value={splitTags(editorValue)} disabled={!editorCanEdit} tokenSeparators={["/"]} placeholder="输入后按 Enter 添加，多项用 / 分隔" options={colorSuggestions.map(value => ({ value, label: value }))} onChange={(value) => editCurrent(joinTags(value))} /> :
       <Input.TextArea aria-label="编辑当前单元格" rows={1} value={editorValue} disabled={!editorEnabled} readOnly={!editorCanEdit || !!editorColumn && collectionKeys.has(editorColumn.key)} placeholder={editorColumn && imageKeys.has(editorColumn.key) ? "图片请在单元格内上传或查看" : "点击单元格，在此编辑内容"} onChange={(event) => editCurrent(event.target.value)} />}</div>
     {editorError && <span className="selection-editor-error" title={editorError} role="status">{editorError}</span>}
+    <Button className="selection-editor-expand" type="text" aria-label={textDetailOpen && editorDetailEnabled ? "收起单元格详情" : "展开单元格详情"} title={textDetailOpen && editorDetailEnabled ? "收起详情" : "展开详情"} aria-expanded={textDetailOpen && editorDetailEnabled} aria-controls="selection-cell-detail" disabled={!editorDetailEnabled} icon={textDetailOpen && editorDetailEnabled ? <CompressOutlined/> : <ExpandAltOutlined/>} onClick={()=>setTextDetailOpen(current=>!current)}/>
+    {textDetailOpen && editorDetailEnabled && <SelectionTextDetail title={editorLabel} value={editorValue} editable={editorDetailEditable} onChange={editCurrent} onClose={()=>setTextDetailOpen(false)}/>}
   </div>;
 
 

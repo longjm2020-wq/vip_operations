@@ -161,6 +161,14 @@ try {
   });
   const archive = await ok("/product-archive-table");
   assert.equal((await ok("/product-archive-table")).id, archive.id);
+  assert.deepEqual(archive.fields, []);
+  assert.equal(archive.initialLayout, "empty");
+  // The remaining scenarios cover legacy archive fields and their business mappings.
+  await rows(
+    db,
+    "UPDATE project_tables SET initial_layout='selection' WHERE id=$1::bigint",
+    archive.id,
+  );
   const old = (await ok(scoped(archive))).find(
     (row: any) => row.xutiStyleNo === "EXISTING",
   );

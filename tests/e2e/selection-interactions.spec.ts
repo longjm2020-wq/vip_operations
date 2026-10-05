@@ -978,6 +978,70 @@ test("clicking different cell types retains editor height, header position and v
   }
 });
 
+test("cell details expand long text, drag without shifting the sheet, follow selection and save edits", async ({ page }) => {
+  await fixture(page);
+  const bar = page.getByRole("group", { name:"单元格编辑栏",exact:true });
+  await expect(bar.getByRole("button",{name:"展开单元格详情",exact:true})).toBeDisabled();
+  await cell(page,3,"material").click();
+  const text = ["面料底布：桑蚕丝100%","面料绒毛：粘纤100%","面料填充物：桑蚕丝100%","（含微量其他纤维）",...Array.from({length:15},(_,index)=>`配料${index+1}：桑蚕丝100%`)].join("\n");
+  await bar.getByLabel("编辑当前单元格",{exact:true}).fill(text);
+  const geometry = () => page.evaluate(()=>({top:document.querySelector(".selection-sheet")!.getBoundingClientRect().top,height:document.querySelector(".selection-editor-bar")!.getBoundingClientRect().height}));
+  const before = await geometry();
+  await bar.getByRole("button",{name:"展开单元格详情",exact:true}).click();
+  const detail = page.getByRole("dialog",{name:"单元格详情",exact:true}), content = detail.getByLabel("单元格详情内容",{exact:true});
+  await expect(content).toHaveValue(text);
+  await expect(detail).toHaveAttribute("aria-modal","false");
+  const initial = (await detail.boundingBox())!, header = (await detail.locator("header").boundingBox())!;
+  await page.mouse.move(header.x+60,header.y+20);
+  await page.mouse.down();
+  await page.mouse.move(header.x-200,header.y+110,{steps:12});
+  await page.mouse.up();
+  const moved = (await detail.boundingBox())!;
+  expect(moved.x).toBeCloseTo(initial.x-260,0);
+  expect(moved.y).toBeCloseTo(initial.y+90,0);
+  expect(await geometry()).toEqual(before);
+  await content.fill(text+"\n已核对");
+  await expect(bar.getByLabel("编辑当前单元格",{exact:true})).toHaveValue(text+"\n已核对");
+  const saved = page.waitForResponse(response=>response.request().method()==="PATCH" && response.url().includes("/style-selections/shortcut-3"));
+  await cell(page,0,"registrationBatch").click();
+  await saved;
+  await expect(detail.locator("strong")).toHaveText("1 · 登记批次");
+  await expect(content).toHaveAttribute("readonly","");
+  await bar.getByRole("button",{name:"收起单元格详情",exact:true}).click();
+  await expect(detail).toHaveCount(0);
+  await cell(page,3,"material").click();
+  await bar.getByRole("button",{name:"展开单元格详情",exact:true}).click();
+  await expect(content).toHaveValue(text+"\n已核对");
+  await page.screenshot({path:".local/selection-text-detail-e2e-20261005.png"});
+  await detail.getByRole("button",{name:"收起单元格详情",exact:true}).click();
+  await expect(detail).toHaveCount(0);
+});
+
+test("cell details let readonly users select text but never expose denied cells", async ({ page }) => {
+  await fixture(page,true);
+  let writes=0;
+  page.on("request",request=>{if(request.method()==="PATCH") writes++;});
+  const bar = page.getByRole("group",{name:"单元格编辑栏",exact:true});
+  await cell(page,3,"material").click();
+  await bar.getByRole("button",{name:"展开单元格详情",exact:true}).click();
+  const detail = page.getByRole("dialog",{name:"单元格详情",exact:true}), content = detail.getByLabel("单元格详情内容",{exact:true});
+  await expect(content).toHaveValue("Cotton");
+  await expect(content).toHaveAttribute("readonly","");
+  await content.press("Control+A");
+  expect(await content.evaluate(element => (element as HTMLTextAreaElement).selectionEnd-(element as HTMLTextAreaElement).selectionStart)).toBe(6);
+  await page.keyboard.type("cannot change");
+  await expect(content).toHaveValue("Cotton");
+  await content.press("Escape");
+  await expect(detail).toHaveCount(0);
+  expect(writes).toBe(0);
+  const hidden = {id:"shortcut-0",xutiStyleNo:"HIDDEN",material:"",images:[],labelImages:[],extraFields:{},updatedAt:"2026-10-04T00:00:00Z",cellAccess:{material:"deny"}};
+  await page.route("**/api/v1/style-selections/sync*",route=>route.fulfill({json:{data:{revision:"interactions-0",index:[{id:hidden.id,token:hidden.updatedAt}],data:[hidden]}}}));
+  await page.reload();
+  await cell(page,0,"material").click();
+  await expect(bar.getByRole("button",{name:"展开单元格详情",exact:true})).toBeDisabled();
+  await expect(detail).toHaveCount(0);
+});
+
 test("large page selection timing", async ({ page }) => {
   test.skip(!process.env.SELECTION_PERF, "Run on demand to compare browser selection latency");
   test.setTimeout(180000);
