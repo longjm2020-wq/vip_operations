@@ -235,10 +235,15 @@ export async function processCloudLogin(
               storageState: state,
             });
             let reusable = false;
+            let verifiedState = state;
             try {
               const probePage = await probe.newPage();
               await configureVipContext(probePage);
               reusable = (await checkCloudLogin(probePage, sourceUrl)).verified;
+              // Verification can refresh server-issued cookies. Persist the
+              // verified context's latest state, not its pre-navigation copy.
+              if (reusable)
+                verifiedState = await probe.storageState({ indexedDB: true });
             } finally {
               await probe.close();
             }
@@ -248,7 +253,7 @@ export async function processCloudLogin(
               );
               continue;
             }
-            const encrypted = encryptCloudState(state);
+            const encrypted = encryptCloudState(verifiedState);
             const stored = await db.$transaction(async (tx) => {
               await rows(tx, "SELECT pg_advisory_xact_lock(2026100341)::text");
               const valid = await one(

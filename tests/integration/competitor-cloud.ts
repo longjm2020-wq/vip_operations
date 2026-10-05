@@ -28,6 +28,8 @@ export async function testCompetitorCloud(h: Record<string, any>) {
   };
   const created: Browser[] = [];
   let running: Promise<void> | undefined;
+  let currentSession = "synthetic-session";
+  let sessionRevision = 0;
   try {
     assert.equal(
       (await request(base + "/cloud-login", "POST", {})).status,
@@ -111,19 +113,26 @@ export async function testCompetitorCloud(h: Record<string, any>) {
         const context = await original(options);
         await context.route("https://**.vip.com/**", async (route) => {
           const hostname = new URL(route.request().url()).hostname;
-          const signedIn = (route.request().headers()["cookie"] || "").includes(
-            "cloud_test_session=synthetic-session",
-          );
+          const signedIn = (route.request().headers()["cookie"] || "")
+            .split("; ")
+            .includes("cloud_test_session=" + currentSession);
           let html = "";
+          const headers: Record<string, string> = {};
           if (hostname === "passport.vip.com")
             html = `<button style="position:absolute;left:100px;top:100px;width:100px;height:50px" onclick="document.cookie='cloud_test_session=synthetic-session;domain=.vip.com;path=/;secure;samesite=lax'">Synthetic QR consent</button>`;
-          else if (hostname === "category.vip.com")
+          else if (hostname === "category.vip.com") {
+            if (signedIn) {
+              currentSession = "synthetic-session-" + ++sessionRevision;
+              headers["set-cookie"] =
+                `cloud_test_session=${currentSession}; Domain=.vip.com; Path=/; Secure; SameSite=Lax`;
+            }
             html = `<a href="https://myi.vip.com/index.html" style="display:none">缓存的账号昵称</a>${signedIn ? '<script>setTimeout(() => { const account=document.createElement("a");account.href="https://myi.vip.com/index.html";account.textContent="已登录";document.body.append(account); }, 600);</script>' : ""}<a href="https://detail.vip.com/detail-1-100000001.html"><span class="c-goods-item__name">合成测试羊毛针织衫</span><span class="J-goods-item__sale-price">100</span></a>`;
-          else
+          } else
             html = `<span class="J_brandName">${initial.name}</span><span class="pib-title-detail">合成测试羊毛针织衫</span><span id="J_detail_barCode">商品编码：CLOUD-TEST</span><table><tr><td class="dc-table-tit">详细材质信息</td><td>100%羊毛</td></tr><tr><td class="dc-table-tit">适用季节</td><td>冬季</td></tr></table>`;
           await route.fulfill({
             contentType: "text/html; charset=utf-8",
             body: html,
+            headers,
           });
         });
         return context;
@@ -189,8 +198,11 @@ export async function testCompetitorCloud(h: Record<string, any>) {
       false,
     );
     assert.equal(
-      (await loadCloudState())!.state.cookies[0].value,
-      "synthetic-session",
+      (await loadCloudState())!.state.cookies.find(
+        (c) => c.name === "cloud_test_session",
+      )!.value,
+      currentSession,
+      "save the refreshed cookie from the verified browser, not the pre-probe cookie",
     );
     await processCrawlJob(launch);
     const job = (await ok(base)).crawl.jobs.find(

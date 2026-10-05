@@ -35,6 +35,47 @@ export class CrawlIssue extends Error {
     super(message);
   }
 }
+type CatalogTrace = {
+  responses: { status: number; code: string | null; json: boolean }[];
+  failures: number;
+};
+const catalogTraces = new WeakMap<Page, CatalogTrace>();
+function watchCatalogPage(page: Page) {
+  if (catalogTraces.has(page)) return;
+  const trace: CatalogTrace = { responses: [], failures: 0 };
+  catalogTraces.set(page, trace);
+  const catalogRequest = (value: string) => {
+    const url = new URL(value);
+    return (
+      url.hostname === "mapi-pc.vip.com" &&
+      /\/shopping\/pc\/search\/product\//.test(url.pathname)
+    );
+  };
+  page.on("requestfailed", (request) => {
+    if (catalogRequest(request.url())) trace.failures++;
+  });
+  page.on("response", (response) => {
+    if (!catalogRequest(response.url()) || trace.responses.length >= 12) return;
+    const entry = {
+      status: response.status(),
+      code: null as string | null,
+      json: (response.headers()["content-type"] || "").includes("json"),
+    };
+    trace.responses.push(entry);
+    if (entry.json)
+      void response
+        .json()
+        .then((data) => {
+          const code = data?.code ?? data?.status ?? data?.retcode;
+          if (
+            (typeof code === "number" && Number.isFinite(code)) ||
+            (typeof code === "string" && /^-?\d{1,12}$/.test(code))
+          )
+            entry.code = String(code);
+        })
+        .catch(() => {});
+  });
+}
 async function guard(page: Page) {
   const url = new URL(page.url());
   if (
@@ -86,6 +127,14 @@ async function waitForProduct(page: Page, selector: string) {
         selector,
         matches: await page.locator(selector).count(),
         frames: page.frames().length,
+        frameHosts: page.frames().map((frame) => {
+          try {
+            return new URL(frame.url()).hostname;
+          } catch {
+            return "";
+          }
+        }),
+        catalog: catalogTraces.get(page),
         pageErrorVisible: await page
           .getByText(
             /access denied|页面出错|服务异常|网络异常|网络错误|没有找到|暂无商品/i,
@@ -114,6 +163,7 @@ export async function crawlPublicBrand(
     detail: (products: CompetitorProduct[]) => Promise<void>;
   },
 ) {
+  watchCatalogPage(page);
   await hooks.check?.();
   let url = vipSearchUrl(brand.name, brand.brandSn);
   await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });

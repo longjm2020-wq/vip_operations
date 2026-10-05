@@ -196,6 +196,7 @@ export async function testCompetitorCrawler(h: Record<string, any>) {
         newContext: async () => ({
           newPage: async () => ({
             setDefaultTimeout() {},
+            on() {},
             goto: async () => {},
             url: () => "https://passport.vip.com/login?src=public-product-list",
           }),
