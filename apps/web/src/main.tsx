@@ -289,7 +289,7 @@ function Workspace({ user }: { user: Row }) {
   ];
   const settings = originalItems.find((i) => i.key === "/settings")!;
   const adminKeys = ["/users", "/roles", "/audit-logs", "/settings/ai"];
-  const operationKeys = ["/analytics/compass", "/analytics/competitors", "/style-selections", "/operations/vip/inventory"];
+  const operationKeys = ["/analytics/compass", "/analytics/competitors", "/style-selections", "/products", "/operations/vip/inventory"];
   const items = [
     ...(operationKeys.some((key) =>
       user.permissions.includes(originalItems.find((i) => i.key === key)!.permission!),
@@ -400,6 +400,8 @@ function Workspace({ user }: { user: Row }) {
       ? "竞品分析"
     : location.pathname.startsWith("/style-selections")
       ? "选款登记"
+    : location.pathname.startsWith("/products")
+      ? "商品档案"
     : location.pathname.startsWith("/operations/vip/inventory")
       ? "库存明细"
       : undefined;

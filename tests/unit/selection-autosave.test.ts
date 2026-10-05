@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mergeSelectionSave, normalizeSelection, SelectionSaveAttempts } from "../../apps/web/src/selection-autosave.js";
+import { mergeSelectionRemote, mergeSelectionSave, normalizeSelection, SelectionSaveAttempts } from "../../apps/web/src/selection-autosave.js";
 
 describe("selection autosave", () => {
   it("uses distinct keys for successive edits to the same row", () => {
@@ -52,6 +52,36 @@ describe("selection autosave", () => {
     expect(normalizeSelection({ registrationBatch: "2026-09-28T00:00:00.000Z" }).registrationBatch).toBe("2026-09-28");
     expect(normalizeSelection({ registrationBatch: "2026-09-28" }).registrationBatch).toBe("2026-09-28");
     expect(normalizeSelection({ registrationBatch: null }).registrationBatch).toBeNull();
+  });
+
+  it("shows remote changes to other fields while retaining a draft and rebasing its version", () => {
+    const before = { _key:"a",id:"1",color:"白",material:"棉",updatedAt:"old",version:1,extraFields:{"custom:one":"a","custom:two":"b"} };
+    const current = { ...before,color:"黑",extraFields:{...before.extraFields,"custom:one":"local"} };
+    const incoming = { ...before,material:"羊毛",extraFields:{...before.extraFields,"custom:two":"remote"},updatedAt:"new",version:2 };
+    expect(mergeSelectionRemote(current,before,incoming)).toEqual({row:{...incoming,color:"黑",extraFields:{"custom:one":"local","custom:two":"remote"}},conflicts:[]});
+  });
+
+  it("retains a colliding draft and the old version so a retry cannot overwrite another user", () => {
+    const before = { _key:"a",id:"1",material:"棉",color:"白",updatedAt:"old",version:1 };
+    const result = mergeSelectionRemote({...before,material:"local"},before,{...before,material:"remote",color:"黑",updatedAt:"new",version:2});
+    expect(result.conflicts).toEqual(["material"]);
+    expect(result.row).toMatchObject({material:"local",color:"黑",updatedAt:"old",version:1});
+    const attempts = new SelectionSaveAttempts(); attempts.fail("a",result.row,409);
+    expect(attempts.eligible({...result.row,material:"another draft"})).toBe(false);
+  });
+
+  it("drops newly forbidden local values and formatting instead of retaining a private draft", () => {
+    const before = {_key:"a",id:"1",material:"private",color:"白",extraFields:{"custom:secret":"secret"},cellColors:{material:"red"}};
+    const current = {...before,material:"private draft",color:"黑",extraFields:{"custom:secret":"secret draft"},cellColors:{material:"blue"}};
+    const incoming = {...before,material:null,extraFields:{"custom:secret":""},cellColors:{},cellAccess:{material:"deny","custom:secret":"deny",color:"edit"},defaultCellAccess:"edit",policyRevision:1};
+    expect(mergeSelectionRemote(current,before,incoming)).toEqual({row:{...incoming,color:"黑"},conflicts:[]});
+  });
+
+  it("keeps local format removal and separate remote format changes", () => {
+    const before = {_key:"a",id:"1",cellColors:{material:"red",color:"green"}};
+    const result = mergeSelectionRemote({...before,cellColors:{color:"green"}},before,{...before,cellColors:{material:"red",color:"blue"}});
+    expect(result.row.cellColors).toEqual({color:"blue"});
+    expect(result.conflicts).toEqual([]);
   });
 });
 

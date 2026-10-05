@@ -1,5 +1,5 @@
 import { SelectionWorkspaceInterceptor, ProjectTablesController } from "./workspaces.js";
-import { UseInterceptors, Body, Controller, Delete, Get, Module, Param, Patch, Post, Query, Req, Res } from "@nestjs/common";
+import { UseInterceptors, Body, Controller, Delete, Get, Inject, Module, Param, Patch, Post, Query, Req, Res } from "@nestjs/common";
 import type { Response } from "express";
 import { AuthRequest, Permission, Public, context } from "../../http.js";
 import { id, parse } from "../../core.js";
@@ -10,6 +10,7 @@ import * as layout from "./layout-preferences.js";
 import * as migration from "./migration.js";
 import { archiveMetadata } from "./archive.js";
 import { fail } from "../../core.js";
+import { SelectionRealtime } from "./realtime.js";
 
 const paramId = (value: string) => parse(id, value);
 const transferContext = (request:AuthRequest) => ({...context(request),actor:request.originalActor || request.actor});
@@ -22,6 +23,8 @@ class ProductArchiveTableController {
 @Controller("api/v1/style-selections")
 @UseInterceptors(SelectionWorkspaceInterceptor)
 class StyleSelectionsController {
+  constructor(@Inject(SelectionRealtime) private realtime: SelectionRealtime) {}
+  @Permission("selection.read") @Get("events") events(@Req() request:AuthRequest,@Res() response:Response) { return this.realtime.open(request,response); }
   @Permission("selection.manage") @Get("migration/targets") migrationTargets(@Req() request:AuthRequest) { return migration.targets(transferContext(request)); }
   @Permission("selection.manage") @Post("migration/preview") migrationPreview(@Req() request:AuthRequest,@Body() body:unknown) { return migration.preview(transferContext(request),body); }
   @Permission("selection.manage") @Post("migration") migrationCommit(@Req() request:AuthRequest,@Body() body:unknown) { return migration.commit(transferContext(request),body); }
@@ -130,5 +133,5 @@ class PublicSelectionCollectionController {
   }
 }
 
-@Module({ providers: [SelectionWorkspaceInterceptor], controllers: [ProjectTablesController, ProductArchiveTableController, StyleSelectionsController, SelectionCollectionsController, PublicSelectionCollectionController] })
+@Module({ providers: [SelectionWorkspaceInterceptor, SelectionRealtime], controllers: [ProjectTablesController, ProductArchiveTableController, StyleSelectionsController, SelectionCollectionsController, PublicSelectionCollectionController] })
 export class StyleSelectionsModule {}

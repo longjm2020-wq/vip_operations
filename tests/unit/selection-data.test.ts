@@ -29,3 +29,13 @@ it("falls back only for an unsupported endpoint, not a server failure", async ()
   await expect(fetchSelectionRows("")).rejects.toEqual({ status: 503 });
   expect(api).toHaveBeenCalledTimes(2);
 });
+
+it("does not swallow a revoked permission or continue downloading with an aborted request", async () => {
+  vi.mocked(api).mockRejectedValueOnce({ status:403 });
+  await expect(fetchSelectionRows("")).rejects.toEqual({status:403});
+  expect(api).toHaveBeenCalledTimes(1);
+  const controller=new AbortController(); controller.abort();
+  vi.mocked(api).mockReset().mockRejectedValueOnce(new DOMException("aborted","AbortError"));
+  await expect(fetchSelectionRows("","createdAt","asc",undefined,api,controller.signal)).rejects.toHaveProperty("name","AbortError");
+  expect(api).toHaveBeenCalledTimes(1);
+});

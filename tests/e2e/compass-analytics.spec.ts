@@ -72,6 +72,12 @@ test("罗盘导入、日期区间、五种明细视图、维度下钻与邮件�
     operationPage.getByRole("link", { name: "选款登记", exact: true }),
   ).toBeVisible();
   await expect(
+    operationPage.getByRole("link", { name: "商品档案", exact: true }),
+  ).toHaveAttribute("href", "/products");
+  await expect(
+    sidebar.getByRole("link", { name: "商品档案", exact: true }),
+  ).toHaveCount(0);
+  await expect(
     operationPage.getByRole("link", { name: "库存明细", exact: true }),
   ).toHaveAttribute("href", "/operations/vip/inventory");
   await expect(

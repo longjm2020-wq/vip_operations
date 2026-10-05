@@ -55,6 +55,36 @@ export function mergeSelectionSave(current: Row, sent: Row, saved: Row): Row {
   return next;
 }
 
+/** Merge disjoint remote edits and retain colliding drafts for manual resolution. */
+export function mergeSelectionRemote(current: Row, before: Row, incoming: Row) {
+  const next: Row = { ...incoming, _key: current._key };
+  const conflicts: string[] = [];
+  const metadata = new Set(["id","updatedAt","createdAt","version","_key","createdBy","updatedBy","createdByName","createdByUsername","updatedByName","updatedByUsername","cellAccess","hiddenCells","defaultCellAccess","policyRevision","claimedBy","claimedAt","cellOwners","migrationLocked","migrationTargetWorkspace","migrationTargetRowId","migratedAt","productId","collectionInventory","reorderDays","sellingPoints"]);
+  const maps = new Set(["extraFields","cellColors","cellAlignments","cellVerticalAlignments","cellTextColors","cellNumberFormats"]);
+  const equal = (a: unknown, b: unknown) => JSON.stringify(a === "" ? null : a ?? null) === JSON.stringify(b === "" ? null : b ?? null);
+  const editable = (key: string) => !incoming.migrationLocked && (!incoming.cellAccess || (incoming.cellAccess[key] || incoming.defaultCellAccess) === "edit");
+  const merge = (key: string, local: unknown, base: unknown, remote: unknown) => {
+    if (!editable(key) || equal(local, base)) return remote;
+    if (!equal(remote, base) && !equal(remote, local)) conflicts.push(key);
+    return local;
+  };
+  for (const key of new Set([...Object.keys(before), ...Object.keys(current)])) {
+    if (metadata.has(key)) continue;
+    if (maps.has(key)) {
+      const value = { ...(incoming[key] || {}) };
+      for (const field of new Set([...Object.keys(before[key] || {}), ...Object.keys(current[key] || {})])) {
+        const merged = merge(field, current[key]?.[field], before[key]?.[field], incoming[key]?.[field]);
+        if (merged === undefined) delete value[field]; else value[field] = merged;
+      }
+      next[key] = value;
+    } else next[key] = merge(key, current[key], before[key], incoming[key]);
+  }
+  // A retry of a colliding draft must still fail the version check until the
+  // user reloads and resolves it; never silently overwrite the remote edit.
+  if (conflicts.length) { next.updatedAt = before.updatedAt; next.version = before.version; }
+  return { row: next, conflicts: [...new Set(conflicts)] };
+}
+
 /** JSON maps are patches: missing fields are preserved; null removes formatting. */
 export function selectionDelta(body: Row, before: Row): Row {
   const delta: Row = {};

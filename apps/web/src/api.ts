@@ -14,11 +14,12 @@ export async function api(
   method = "GET",
   body?: unknown,
   key?: string,
-  options?: { keepalive?: boolean },
+  options?: { keepalive?: boolean; signal?: AbortSignal },
 ) {
   const response = await fetch("/api/v1" + path, {
     method,
     credentials: "include",
+    ...(options?.signal ? { signal: options.signal } : {}),
     ...(options?.keepalive ? { keepalive: true } : {}),
     headers: {
       ...(body ? { "Content-Type": "application/json" } : {}),

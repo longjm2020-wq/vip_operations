@@ -30,12 +30,13 @@ import { SelectionFormatModal, type FormatPatch } from "./selection-format-modal
 import { formatSelectionValue } from "../../../packages/contracts/src/selection-format";
 import { Fragment, memo, useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { App, Button, Card, Checkbox, Empty, Image, Input, Modal, Pagination, Popover, Dropdown, Select, Space, Tag, Tooltip } from "antd";
+import { Alert, App, Button, Card, Checkbox, Empty, Image, Input, Modal, Pagination, Popover, Dropdown, Select, Space, Tag, Tooltip } from "antd";
 import { EditOutlined, BgColorsOutlined, FontColorsOutlined, VerticalAlignTopOutlined, VerticalAlignMiddleOutlined, VerticalAlignBottomOutlined, AlignLeftOutlined, AlignCenterOutlined, AlignRightOutlined, DeleteOutlined, FilterOutlined, LinkOutlined, PlusOutlined, PushpinOutlined, SettingOutlined, UnorderedListOutlined, UploadOutlined } from "@ant-design/icons";
 import { useSelectionWorkspace } from "./selection-workspace";
 import { prepareUpload, readUpload } from "./upload-file";
 import { Header, QueryState, Row, useCan, useUser } from "./shared";
-import { mergeSelectionSave, normalizeSelection, selectionDelta, SelectionSaveAttempts } from "./selection-autosave";
+import { mergeSelectionRemote, mergeSelectionSave, normalizeSelection, selectionDelta, SelectionSaveAttempts } from "./selection-autosave";
+import { useSelectionRealtime } from "./selection-realtime";
 import { fetchSelectionRows, SelectionTransfer } from "./selection-transfer";
 import { matchesSelectionFilters, sortSelectionRows, selectionAllCells, clearSelectionCells, type SelectionFilters } from "./selection-filters";
 import { selectionSizes as sizes, sortSelectionSizes } from "../../../packages/contracts/src/selection-sizes";
@@ -268,13 +269,14 @@ function StyleSelectionsLayout() {
 }
 
 function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController }) {
-  const { api, queryClient, title, blankLayout, archive, archiveReferences } = useSelectionWorkspace();
+  const { api, queryClient, title, blankLayout, archive, archiveReferences, tableId } = useSelectionWorkspace();
   const canCreateProduct = useCan("product.create");
   const canAdd = useCan("selection.manage") && (!archive || canCreateProduct);
   const [transferring,setTransferring] = useState(false);
   const [releasing,setReleasing] = useState<string | null>(null);
 
-  const canEdit = useCan("selection.manage");
+  const [accessLost,setAccessLost] = useState(false);
+  const canEdit = useCan("selection.manage") && !accessLost;
   const user = useUser();
   const { message } = App.useApp();
   const addFieldRef=useRef<{add:()=>void}>(null);
@@ -322,8 +324,9 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
   const [retryVersion, setRetryVersion] = useState(0);
   const original = useRef(new Map<string, Row>());
   const appliedSnapshot = useRef("");
+  const connected = useSelectionRealtime(queryClient, tableId, () => setAccessLost(true));
   const queryString = new URLSearchParams({ page: "1", pageSize: "100", sort, direction }).toString();
-  const data = useQuery({ queryKey: ["style-selections", queryString], queryFn: () => fetchSelectionRows(search, sort, direction, queryClient.getQueryData(["style-selections", queryString]), api), refetchInterval: saving ? false : 10000, refetchOnWindowFocus: !saving });
+  const data = useQuery({ queryKey: ["style-selections", queryString], queryFn: ({signal}) => fetchSelectionRows(search, sort, direction, queryClient.getQueryData(["style-selections", queryString]), api, signal), enabled: !accessLost, refetchInterval: connected ? 30000 : 10000, refetchOnWindowFocus: true });
   const styleCounts = useQuery({ queryKey: ["style-selection-style-counts"], queryFn: () => api("/style-selections/style-counts"), refetchInterval: 30000 });
   const presence = useQuery({ queryKey: ["style-selection-presence"], queryFn: () => api("/style-selections/presence"), refetchInterval: 2000 });
 
@@ -347,6 +350,15 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
     const nextSort=sharedView.data.data.view.sort;setColumnSort(nextSort && removed.has(nextSort.key)?null:nextSort);
   }, [sharedSnapshot, followShared, filterColumn, columns]);
   const snapshot = useMemo(() => JSON.stringify(data.data?.data || []), [data.data]);
+  useEffect(() => {
+    if ([401,403,404,410].includes((data.error as { status?:number } | null)?.status || 0)) setAccessLost(true);
+  }, [data.error]);
+  useEffect(() => {
+    if (!accessLost) return;
+    void queryClient.cancelQueries({ queryKey:["style-selections"] });
+    queryClient.removeQueries({ queryKey:["style-selections"] });
+    setRows([]); original.current.clear(); setFocusedCell(null); setCellTextEditing(false);
+  }, [accessLost,queryClient]);
   useEffect(() => {
     const stop = () => { setSelectingCells(false); axisSelection.current = null; dragCellAnchor.current = null; };
     window.addEventListener("mouseup", stop); window.addEventListener("blur", stop);
@@ -375,14 +387,27 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
     presenceWrites.current = presenceWrites.current.then(() => api("/style-selections/presence", "POST", { editingId: null, editingColumn: null })).catch(() => undefined);
   }, []);
   useEffect(() => {
-    if (!data.data || appliedSnapshot.current === snapshot || saving) return;
-    const rightsChanged=(data.data.data || []).some((incoming:Row)=>{const existing=rows.find(row=>String(row.id)===String(incoming.id));return existing && (existing.migrationLocked!==incoming.migrationLocked || existing.policyRevision!==incoming.policyRevision || JSON.stringify(existing.cellAccess)!==JSON.stringify(incoming.cellAccess));});
-    if(!rightsChanged && rows.some((row) => !row.id || !sameRow(row, original.current.get(row._key) || {})))return;
-    if(rightsChanged){attempts.current=new SelectionSaveAttempts();setFocusedCell(null);setCellTextEditing(false);}
-    const next = (data.data.data || []).map((row: Row) => ({ ...normalizeSelection(row), _key: rows.find((current) => current.id === row.id)?._key || String(row.id) }));
-    setRows(next); setErrors({});
-    original.current = new Map(next.map((row: Row) => [row._key, { ...row }])); appliedSnapshot.current = snapshot;
-  }, [data.data, saving, snapshot, rows]);
+    if (accessLost || !data.data || appliedSnapshot.current === snapshot || saving) return;
+    const byId=new Map(rows.filter(row=>row.id).map(row=>[String(row.id),row]));
+    const rightsChanged=(data.data.data || []).some((incoming:Row)=>{const existing=byId.get(String(incoming.id));return existing && (existing.migrationLocked!==incoming.migrationLocked || existing.policyRevision!==incoming.policyRevision || JSON.stringify(existing.cellAccess)!==JSON.stringify(incoming.cellAccess));});
+    if(rightsChanged){setFocusedCell(null);setCellTextEditing(false);}
+    const baselines = new Map<string,Row>();
+    const conflicts:Record<string,string> = {};
+    const next = (data.data.data || []).map((raw:Row) => {
+      const incoming=normalizeSelection(raw), current=byId.get(String(incoming.id));
+      const before=current && original.current.get(current._key);
+      if(current && before && before.updatedAt===incoming.updatedAt && before.version===incoming.version && before.policyRevision===incoming.policyRevision && before.migrationLocked===incoming.migrationLocked && before.claimedBy===incoming.claimedBy && before.defaultCellAccess===incoming.defaultCellAccess && comparable(before.cellAccess)===comparable(incoming.cellAccess) && sameRow(before,incoming)){
+        baselines.set(current._key,before);return current;
+      }
+      const merged=current && before ? mergeSelectionRemote(current,before,incoming) : {row:{...incoming,_key:current?._key || String(incoming.id)},conflicts:[]};
+      baselines.set(merged.row._key,merged.conflicts.length ? before! : {...incoming,_key:merged.row._key});
+      if(merged.conflicts.length){attempts.current.fail(merged.row._key,merged.row,409);for(const key of merged.conflicts)conflicts[`${merged.row._key}:${key}`]="此单元格已被其他用户修改，已保留本地输入；请复制后刷新核对再编辑";}
+      return merged.row;
+    });
+    for(const row of rows.filter(row=>!row.id))next.push(row);
+    setRows(next); setErrors(current=>({...Object.fromEntries(Object.entries(current).filter(([key])=>next.some(row=>key.startsWith(`${row._key}:`)))),...conflicts}));
+    original.current = baselines; appliedSnapshot.current = snapshot;
+  }, [data.data, saving, snapshot, rows, accessLost]);
 
   const availableColumns=useMemo(() => columns.filter(column=>!column.deleted), [columns]);
   const visibleColumns = useMemo(() => availableColumns.filter((column) => visible.includes(column.key)).map(column=>({...column,type:column.type || column.fallbackType})), [availableColumns, visible]);
@@ -928,6 +953,7 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
     }));
     setFormatTarget(null);
   };
+  if(accessLost)return <Alert type="error" showIcon message="表格访问权限已失效，请重新登录或联系管理员" />;
   return <>{columnWidthTarget && <SelectionColumnWidthModal columns={columnWidthTarget} onCancel={() => setColumnWidthTarget(null)} onApply={width => { const keys = new Set(columnWidthTarget.map(column => column.key)); setColumns(current => current.map(column => keys.has(column.key) ? { ...column, width } : column)); setColumnWidthTarget(null); }}/>} {imagePreview && previewImages.length > 0 && <SelectionImagePreview key={cellId(imagePreview.rowKey, imagePreview.columnKey)} images={previewImages} index={Math.min(imagePreview.index, previewImages.length - 1)} name={previewColumn!.label} onTextCopied={text => { copiedSingleValue.current = text; setCopiedCells(new Set()); }} onIndexChange={index => setImagePreview(current => current ? { ...current, index } : null)} onClose={() => setImagePreview(null)} />}{formatTarget && <SelectionFormatModal count={formatTarget.ids.size} sample={formatTarget.sample} initial={formatTarget.initial} onCancel={() => setFormatTarget(null)} onApply={applyFormat} />}<PageSearch><PageSearchInput multiline aria-label="搜索选款" placeholder="搜索款号、供应商、颜色、材质…" allowClear value={searchText} onChange={event=>setSearchText(event.target.value)} /></PageSearch>{title && <Header title={title} subtitle="按需添加字段和记录，配置表格功能。"/>}
     <Dropdown trigger={["contextMenu"]} open={!!contextRow && !!contextColumn} onOpenChange={open => { if (!open) setContextCell(null); }} overlayStyle={{ zIndex: 1201 }} menu={cellContextMenu}><span aria-hidden="true" style={{ position: "fixed", left: contextCell?.x || 0, top: contextCell?.y || 0, width: 1, height: 1, pointerEvents: "none" }}/></Dropdown>
     <Card className="selection-card"><div className="selection-toolbar" aria-label={`${title || "选款登记"}表格工具栏`}><Space className="selection-toolbar-controls" wrap size={4}>
@@ -953,7 +979,7 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
     {!!collaborators.length && <div className="selection-collaborators" aria-label="在线协作者">{collaborators.map((person: Row) => <span key={person.userId} style={{ color: collaboratorColor(String(person.userId)) }} title={person.editingId ? `正在选中：${rows.find(row => String(row.id) === String(person.editingId))?.xutiStyleNo || "未填款号"} · ${columns.find(column => column.key === person.editingColumn)?.label || "单元格"}` : "在线"}><i>{String(person.displayName || "协").slice(0, 1)}</i>{person.displayName}{person.editingId ? ` · ${columns.find(column => column.key === person.editingColumn)?.label || "选中中"}` : " · 在线"}</span>)}</div>}
       <SelectionColumnGroupTabs groups={columnGroups} visibleKeys={visibleColumns.map(column => column.key)} activeKey={selectedColumnGroup?.id || ""} onChange={changeColumnGroup}/>
     {editor}
-      <QueryState error={data.error || presence.error || sharedView.error} reload={() => { data.refetch(); presence.refetch(); sharedView.refetch(); }} /><div ref={sheetRef} className={`selection-sheet row-${rowHeight}${blankLayout?" selection-blank-sheet":""}`}><table tabIndex={0} onCopy={event => { const point = cellAnchor || (displayedRows[0] && activeColumns[0] ? {rowKey:displayedRows[0]._key,columnKey:activeColumns[0].key} : null); if (point) copyCells(event,point.rowKey,point.columnKey); }} onKeyDown={event => {
+      <QueryState error={data.error || presence.error || sharedView.error} reload={() => { data.refetch(); presence.refetch(); sharedView.refetch(); }} /><div ref={sheetRef} data-realtime-connected={connected ? "true" : "false"} className={`selection-sheet row-${rowHeight}${blankLayout?" selection-blank-sheet":""}`}><table tabIndex={0} onCopy={event => { const point = cellAnchor || (displayedRows[0] && activeColumns[0] ? {rowKey:displayedRows[0]._key,columnKey:activeColumns[0].key} : null); if (point) copyCells(event,point.rowKey,point.columnKey); }} onKeyDown={event => {
         if (!event.currentTarget.contains(event.target as Node) || event.nativeEvent.isComposing) return;
         if (event.key === "Escape") { setCopiedCells(new Set()); setCellTextEditing(false); return; }
         if (cellTextEditing && event.target instanceof HTMLElement && event.target.closest("input:not([type=checkbox]),textarea")) return;

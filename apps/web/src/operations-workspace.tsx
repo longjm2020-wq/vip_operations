@@ -2,6 +2,7 @@ import { Card, Empty, Tabs } from "antd";
 import {
   BarChartOutlined,
   DatabaseOutlined,
+  AppstoreOutlined,
   ArrowRightOutlined,
   FundProjectionScreenOutlined,
   InboxOutlined,
@@ -24,6 +25,7 @@ export function OperationsWorkspacePage() {
   const [params, setParams] = useSearchParams(),
     analytics = useCan("analytics.read"),
     selection = useCan("selection.read"),
+    products = useCan("product.read"),
     inventory = useCan("inventory.read");
   const platform = platforms.some((p) => p.key === params.get("platform"))
     ? params.get("platform")!
@@ -42,6 +44,13 @@ export function OperationsWorkspacePage() {
       icon: <DatabaseOutlined />,
       description: "选款资料登记、字段配置与团队协作",
       visible: selection,
+    },
+    {
+      name: "商品档案",
+      href: "/products",
+      icon: <AppstoreOutlined />,
+      description: "商品资料、字段配置与团队协作",
+      visible: products,
     },
     {
       name: "竞品分析",

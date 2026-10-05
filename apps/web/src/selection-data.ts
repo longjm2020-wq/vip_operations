@@ -1,12 +1,15 @@
 import { api } from "./api.js";
 type Row = Record<string, any>;
 
-export async function fetchSelectionRows(query: string, sort = "createdAt", direction = "asc", previous?: { data: Row[]; total: number; revision?: string; tokens?: Record<string, string> }, request: typeof api = api) {
+export async function fetchSelectionRows(query: string, sort = "createdAt", direction = "asc", previous?: { data: Row[]; total: number; revision?: string; tokens?: Record<string, string> }, request: typeof api = api, signal?: AbortSignal) {
   // During a rolling deployment the older API may not expose revision yet.
-  const revision = await request("/style-selections/revision").then(result => result.data.revision as string).catch(() => undefined);
+  const revision = await request("/style-selections/revision", "GET", undefined, undefined, { signal }).then(result => result.data.revision as string).catch(error => {
+    if (signal?.aborted || [401,403,410].includes(error.status)) throw error;
+    return undefined;
+  });
   if (revision && previous?.revision === revision) return previous;
   try {
-    const response = await request("/style-selections/sync", "POST", { q: query.slice(0, 100), sort, direction, known: previous?.tokens || {} });
+    const response = await request("/style-selections/sync", "POST", { q: query.slice(0, 100), sort, direction, known: previous?.tokens || {} }, undefined, { signal });
     const snapshot = response.data as { revision: string; index: { id: string; token: string }[]; data: Row[] };
     const records = new Map((previous?.data || []).map(row => [String(row.id), row]));
     for (const row of snapshot.data) records.set(String(row.id), row);
@@ -23,7 +26,7 @@ export async function fetchSelectionRows(query: string, sort = "createdAt", dire
   }
   const data: Row[] = []; let total = 0;
   for (let page = 1; ; page++) {
-    const response = await request("/style-selections?" + new URLSearchParams({ q: query, page: String(page), pageSize: "100", sort, direction }));
+    const response = await request("/style-selections?" + new URLSearchParams({ q: query, page: String(page), pageSize: "100", sort, direction }), "GET", undefined, undefined, { signal });
     if (page === 1) total = response.total;
     if (response.total !== total) throw Error("读取期间记录数发生变化，请刷新重试");
     data.push(...response.data);
