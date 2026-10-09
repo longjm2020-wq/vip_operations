@@ -305,8 +305,8 @@ function MailSettings({
         08:00（北京时间）采集，三张报表更新到昨日后发送日报。支持多个收件邮箱，每个地址单独发送。
       </p>
       <p className="secondary">
-        本机 Chrome 和 Codex
-        需在线并保持罗盘登录。平台尚未生成完整报表时等待更新，不发送旧数据。
+        Dot 云端浏览器需保持罗盘和经营系统登录，可在 Dot 定时任务中管理下载与导入。
+        平台尚未生成完整报表时等待更新，不发送旧数据。
       </p>
       {settings && !settings.encryptionReady && (
         <Alert
