@@ -39,12 +39,20 @@ export async function actorFor(token?: string): Promise<Actor> {
     "SELECT r.code,r.name FROM user_roles ur JOIN roles r ON r.id=ur.role_id WHERE ur.user_id=$1::bigint ORDER BY CASE r.code WHEN 'SUPER_ADMIN' THEN 0 WHEN 'ADMIN' THEN 1 ELSE 2 END,r.name",
     String(u.id),
   );
+  const permissions = new Set<string>(p.map(x=>x.code));
+  if (assignedRoles.some(role=>role.code === "SUPER_ADMIN"))
+    for (const permission of ["project.read","project.create","sop.manage"]) permissions.add(permission);
+  if (!permissions.has("project.read") && await one(db,`SELECT 1 WHERE
+    EXISTS(SELECT 1 FROM public.project_library_acl WHERE user_id=$1::bigint AND access IN ('READ','EDIT')) OR
+    EXISTS(SELECT 1 FROM public.project_tables WHERE created_by=$1::bigint AND system_key IS NULL) OR
+    EXISTS(SELECT 1 FROM public.project_sops WHERE owner_id=$1::bigint) OR
+    EXISTS(SELECT 1 FROM public.projects WHERE owner_id=$1::bigint)`,String(u.id))) permissions.add("project.read");
   return {
     id: String(u.id),
     username: u.username,
     displayName: u.display_name,
     avatarId: u.avatar_id,
-    permissions: p.map((x) => x.code),
+    permissions: [...permissions],
     roleCodes: assignedRoles.map((r) => r.code),
     roleNames: assignedRoles.map((r) => r.name),
     csrfToken: u.csrf_token,

@@ -16,9 +16,10 @@ import { Request, Response } from "express";
 import { Observable, map } from "rxjs";
 import { actorFor } from "./modules/auth/service.js";
 import { Actor, Context, fail, requirePermission, parse, id } from "./core.js";
-import { camel, db, one } from "../../../packages/database/src/index.js";
+import { camel, db } from "../../../packages/database/src/index.js";
 import { archiveSelectionPermissions, tableSelectionPermissions } from "../../../packages/contracts/src/table-permissions.js";
-export type AuthRequest = Request & { actor: Actor; originalActor?: Actor; requestId: string };
+import { effectiveContentAccess, tableAccess } from "./modules/projects/library.js";
+export type AuthRequest = Request & { actor: Actor; originalActor?: Actor; requestId: string; selectionPermission?: string };
 export const Public = () => SetMetadata("public", true);
 export const Permission = (p: string) => SetMetadata("permission", p);
 export function context(req: AuthRequest): Context {
@@ -46,11 +47,27 @@ export class AuthGuard implements CanActivate {
     if (p && ["selection.read", "selection.manage"].includes(p) && r.query.tableId !== undefined &&
       (r.path.startsWith("/api/v1/style-selections") || r.path.startsWith("/api/v1/selection-collections"))) {
       const tableId = parse(id, r.query.tableId);
-      const table = await one(db,"SELECT system_key FROM public.project_tables WHERE id=$1::bigint",tableId);
+      const table = await tableAccess(db,r.actor,tableId);
       const archive = table?.system_key === "PRODUCT_ARCHIVE";
-      requirePermission(r.actor, archive ? (p === "selection.read" ? "product.read" : "product.update") : (p === "selection.read" ? "project.read" : "project.create"));
+      requirePermission(r.actor, archive ? (p === "selection.read" ? "product.read" : "product.update") : "project.read");
+      const sharedLayoutWrite = r.method === "POST" && r.path.endsWith("/layout-preferences") && r.body?.sharedChanges && typeof r.body.sharedChanges === "object" && Object.keys(r.body.sharedChanges).length > 0;
+      const protectionWrite = r.method === "POST" && r.path.endsWith("/protection");
+      if ((p === "selection.manage" || sharedLayoutWrite) && !table.can_edit) fail("FORBIDDEN","仅获批准编辑的协作成员可以修改此表",403);
+      if (protectionWrite && !table.can_manage) fail("FORBIDDEN","仅创建者和超级管理员可以管理保护规则",403);
       r.originalActor = r.actor;
-      r.actor = { ...r.actor, permissions: (archive ? archiveSelectionPermissions : tableSelectionPermissions)(r.actor.permissions) };
+      const mapped = (archive ? archiveSelectionPermissions : tableSelectionPermissions)(r.actor.permissions);
+      r.actor = { ...r.actor, selectionWorkspaceScoped:true, permissions: [...mapped.filter(permission=>!["selection.manage","selection.protect"].includes(permission)),...(table.can_edit ? ["selection.manage"]:[]),...(table.can_manage ? ["selection.protect"]:[])] };
+      r.selectionPermission = protectionWrite ? "selection.protect" : sharedLayoutWrite ? "selection.manage" : p;
+    } else if (p && ["sop.manage", "project.create"].includes(p)) {
+      const sopId = r.method === "PATCH" && r.path.match(/^\/api\/v1\/projects\/sops\/([1-9]\d*)\/?$/)?.[1];
+      const projectId = r.method === "PATCH" && r.path.match(/^\/api\/v1\/projects\/([1-9]\d*)\/?$/)?.[1];
+      const uploadProject = r.method === "POST" && /^\/api\/v1\/projects\/uploads\/?$/.test(r.path) && r.query.projectId !== undefined ? parse(id, r.query.projectId) : undefined;
+      const resourceId = sopId || projectId || uploadProject;
+      if (resourceId) {
+        requirePermission(r.actor, "project.read");
+        if (await effectiveContentAccess(db,r.actor,sopId ? "sop" : "project",resourceId) !== "EDIT") fail("FORBIDDEN","仅获批准编辑的协作成员可以修改此内容",403);
+        r.actor = {...r.actor,permissions:[...new Set([...r.actor.permissions,p])]};
+      } else requirePermission(r.actor,p);
     } else if (p) requirePermission(r.actor, p);
     return true;
   }

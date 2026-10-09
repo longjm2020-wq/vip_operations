@@ -151,14 +151,14 @@ for (const { kind, label, route } of libraries) {
   });
 }
 
-test("仅查看账号可切换显示，但不能管理或进入回收站", async ({ page }) => {
+test("仅查看账号可切换显示和打开本人空回收站，但不能管理他人内容", async ({ page }) => {
   await fixture(page, false);
   for (const { route } of libraries) {
     await page.goto(route);
     await page.getByText("列表", { exact: true }).click();
     await expect(
       page.getByRole("button", { name: "回收站", exact: true }),
-    ).toHaveCount(0);
+    ).toBeVisible();
     await expect(page.getByRole("button", { name: /^管理/ })).toHaveCount(0);
     await page.getByText("卡片", { exact: true }).click();
     await expect(page.locator(".ant-segmented-item-selected")).toContainText(

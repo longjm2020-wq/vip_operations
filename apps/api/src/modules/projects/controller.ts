@@ -21,18 +21,20 @@ export class ProjectsController {
   @Permission("project.create") @Post("uploads") upload(
     @Req() r: AuthRequest,
     @Body() b: unknown,
+    @Query("projectId") projectId?: string,
   ) {
-    return s.uploadAttachment(context(r), b);
+    return s.uploadAttachment(context(r), b, projectId);
   }
-  @Permission("project.create") @Get("uploads/:fileId") async uploaded(
+  @Permission("project.read") @Get("uploads/:fileId") async uploaded(
     @Req() r: AuthRequest,
     @Param("fileId") fileId: string,
     @Query("preview") preview: string,
+    @Query("projectId") projectId: string,
     @Res() res: Response,
   ) {
     res.setHeader("Cache-Control", "private, no-store");
     res.redirect(
-      await s.uploadedAttachment(context(r), fileId, preview === "1"),
+      await s.uploadedAttachment(context(r), fileId, preview === "1", projectId),
     );
   }
   @Permission("project.read") @Get("options") options(@Req() r: AuthRequest) {
@@ -71,7 +73,7 @@ export class ProjectsController {
   ) {
     return s.save(context(r), b);
   }
-  @Permission("project.create") @Delete(":id") remove(
+  @Permission("project.read") @Delete(":id") remove(
     @Req() r: AuthRequest,
     @Param("id") v: string,
   ) {

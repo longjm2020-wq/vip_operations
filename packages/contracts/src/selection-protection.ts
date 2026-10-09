@@ -78,9 +78,11 @@ export type ProtectionActor = {
   id: string;
   permissions: string[];
   roleCodes?: string[];
+  selectionWorkspaceScoped?: boolean;
 };
 export const protectionAdmin = (actor: ProtectionActor) =>
-  !!actor.roleCodes?.some((code) => code === "SUPER_ADMIN" || code === "ADMIN");
+  actor.permissions.includes("selection.protect") ||
+  !!actor.roleCodes?.some((code) => code === "SUPER_ADMIN" || (!actor.selectionWorkspaceScoped && code === "ADMIN"));
 export function regionMatches(
   region: ProtectionRegion,
   rowId: string,

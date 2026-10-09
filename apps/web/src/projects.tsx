@@ -79,6 +79,7 @@ function useSops() {
   return useQuery({
     queryKey: ["project-sops"],
     queryFn: async () => (await api("/projects/sops")).data,
+    refetchInterval:10000,
   });
 }
 async function refreshProjects() {
@@ -501,6 +502,11 @@ export function SopPage() {
     [busy, setBusy] = useState(false);
   const opened=useRef<string>("");
   useEffect(()=>{const value=params.get("open") || "",selected=(list.data||[]).find((s:Row)=>String(s.id)===value);if(selected&&opened.current!==value){setView(selected);opened.current=value;}},[list.data,params]);
+  useEffect(()=>{
+    if (!list.data) return;
+    setView(current=>current ? (list.data.find((s:Row)=>String(s.id)===String(current.id)) || null) : null);
+    setEdit(current=>current?.id && !list.data.some((s:Row)=>String(s.id)===String(current.id) && s.canEdit) ? null : current);
+  },[list.data]);
   const displayed=(list.data||[]).filter((s:Row)=>(!dept||s.department===dept) && (scope==="all" || scope==="public" && s.visibility==="PUBLIC" || scope==="mine" && String(s.ownerId)===String(user.id)));
   const save = async () => {
     if (!edit) return;
@@ -597,7 +603,7 @@ export function SopPage() {
         styles={{ wrapper: { width: "98vw" }, body: { padding: 12 } }}
         extra={
           view &&
-          view.canManage && (
+          view.canEdit && (
             <Button
               onClick={() => {
                 setEdit({ ...view, steps: flowSteps(view.steps) });
@@ -655,7 +661,7 @@ export function SopPage() {
             >
               <Form layout="vertical">
                 <Form.Item label="公开范围" extra="公开后，系统内有项目查看权限的用户可查看。">
-                  <Select value={edit.visibility||"PRIVATE"} options={visibilityOptions} onChange={visibility=>setEdit({...edit,visibility})}/>
+                  <Select disabled={!!edit.id && !edit.canManage} value={edit.visibility||"PRIVATE"} options={visibilityOptions} onChange={visibility=>setEdit({...edit,visibility})}/>
                 </Form.Item>
                 <Form.Item label="名称" required>
                   <Input
@@ -964,7 +970,7 @@ function ProjectEditor({
           <Button loading={busy} onClick={() => save(false)}>
             {initial?.status === "ACTIVE" ? "保存修改" : "保存草稿"}
           </Button>
-          {(!initial || initial.status === "DRAFT") && (
+          {(!initial || initial.canManage && initial.status === "DRAFT") && (
             <Button type="primary" loading={busy} onClick={() => save(true)}>
               推送项目
             </Button>
@@ -974,7 +980,7 @@ function ProjectEditor({
     >
       <Form layout="vertical">
         <Form.Item label="公开范围" extra="公开后，系统内有项目查看权限的用户可查看；任务执行和群聊仍限协作成员。">
-          <Select value={value.visibility} options={visibilityOptions} onChange={v=>patch("visibility",v)}/>
+          <Select disabled={!!initial && !initial.canManage} value={value.visibility} options={visibilityOptions} onChange={v=>patch("visibility",v)}/>
         </Form.Item>
         <div className="project-form-grid">
           <Form.Item label="标签归类" required>
@@ -1002,6 +1008,7 @@ function ProjectEditor({
           </Form.Item>
           <Form.Item label="协作人员" required>
             <Select
+              disabled={!!initial && !initial.canManage}
               mode="multiple"
               options={peopleOptions(options.people || [])}
               value={value.collaborators}
@@ -1029,6 +1036,7 @@ function ProjectEditor({
             onChange={(v) => patch("description", v)}
           />
           <ProjectAttachments
+            projectId={initial?.id}
             files={value.attachments}
             onChange={(files) => patch("attachments", files)}
           />
@@ -1473,9 +1481,7 @@ export function ProjectDetailPage() {
   if (result.error) return <Alert type="error" title={result.error.message} />;
   if (!p) return null;
   const d = p.document,
-    owner =
-      String(p.ownerId) === String(user.id) ||
-      user.permissions.includes("user.manage"),
+    owner = !!p.canManage,
     tasks = d.tasks || [],
     members = p.members || [],
     stages = d.stages || [];
@@ -1632,7 +1638,8 @@ export function ProjectDetailPage() {
         subtitle={`${p.tag} · ${projectStates[p.status]} · 发起时间 ${when(p.createdAt)}`}
         extra={
           <Space wrap>
-            {owner && !["VOID", "DONE"].includes(p.status) && (
+            <LibraryActions kind="project" row={p}/>
+            {p.canEdit && !["VOID", "DONE"].includes(p.status) && (
               <Button onClick={() => setEdit(true)}>编辑</Button>
             )}
             {owner && p.status === "DRAFT" && (
@@ -1650,7 +1657,7 @@ export function ProjectDetailPage() {
                 推送项目
               </Button>
             )}
-            {collaborate && !["VOID", "DONE"].includes(p.status) && (
+            {owner && !["VOID", "DONE"].includes(p.status) && (
               <Button onClick={() => setInvite(true)}>添加协作人</Button>
             )}
             {owner && !["VOID", "DONE"].includes(p.status) && (

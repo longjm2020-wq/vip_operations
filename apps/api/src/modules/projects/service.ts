@@ -33,7 +33,7 @@ import {
   version,
   canonical,
 } from "../../core.js";
-import { libraryAdmin, contentSummary, readableSql, changeContent } from "./library.js";
+import { libraryAdmin, contentSummary, contentAccessSql, readableSql, changeContent, effectiveContentAccess, canManageContent } from "./library.js";
 const admin = (c: Context) => libraryAdmin(c.actor);
 const roles: Record<string, string[]> = {
   SUPER_ADMIN: [...departments],
@@ -79,15 +79,24 @@ export async function options(c: Context) {
 export async function sops(c: Context) {
   return (await rows(
     db,
-    `SELECT s.*,u.display_name AS owner_name FROM project_sops s LEFT JOIN users u ON u.id=s.owner_id WHERE s.deleted_at IS NULL AND ${readableSql("sop","s")} ORDER BY s.id DESC`,
+    `SELECT s.*,${contentAccessSql("sop","s")} AS content_access,u.display_name AS owner_name FROM project_sops s LEFT JOIN users u ON u.id=s.owner_id WHERE s.deleted_at IS NULL AND ${readableSql("sop","s")} ORDER BY s.id DESC`,
     admin(c),c.actor.id,
   )).map(row => contentSummary(c.actor,"sop",row));
 }
 export async function writeSop(c: Context, input: unknown, value?: string) {
-  requirePermission(c.actor, "sop.manage");
+  if (!value) requirePermission(c.actor, "sop.manage");
   const b = parse(sopSchema, input);
-  if (!admin(c) && !(await myDepartments(c)).includes(b.department))
+  if (!value && !admin(c) && !(await myDepartments(c)).includes(b.department))
     fail("FORBIDDEN", "只能创建自己岗位的 SOP", 403);
+  const canEdit = async (tx:Tx,row:Row) => {
+    if(await effectiveContentAccess(tx,c.actor,"sop",row)!=="EDIT")fail("FORBIDDEN","没有此SOP的编辑权限",403);
+    if(b.visibility && b.visibility!==row.visibility && !canManageContent(c.actor,"sop",row))fail("FORBIDDEN","只有创建者或超级管理员可以更改公开范围",403);
+  };
+  if (value) {
+    const row = await one(db,"SELECT * FROM project_sops WHERE id=$1::bigint AND deleted_at IS NULL",value);
+    if(!row)fail("NOT_FOUND","SOP不存在",404);
+    await canEdit(db,row!);
+  }
   return command(c, "sop.write/" + (value || "new"), b, async (tx) => {
     if (value) {
       const old = await one(
@@ -96,8 +105,7 @@ export async function writeSop(c: Context, input: unknown, value?: string) {
         value,
       );
       if (!old) fail("NOT_FOUND", "SOP 不存在", 404);
-      if (!admin(c) && String(old.owner_id) !== c.actor.id)
-        fail("FORBIDDEN", "只能修改自己建立的 SOP", 403);
+      await canEdit(tx,old!);
       version(old, b.version || 0);
     }
     const r = value
@@ -125,7 +133,7 @@ export async function writeSop(c: Context, input: unknown, value?: string) {
     return r;
   });
 }
-async function access(tx: Tx, c: Context, value: string, lock = false) {
+async function access(tx: Tx, c: Context, value: string, lock = false): Promise<Row> {
   const p = await one(
     tx,
     "SELECT *,created_at::text AS created_at,updated_at::text AS updated_at,published_at::text AS published_at FROM projects WHERE deleted_at IS NULL AND id=$1::bigint" +
@@ -133,24 +141,17 @@ async function access(tx: Tx, c: Context, value: string, lock = false) {
     value,
   );
   if (!p) fail("NOT_FOUND", "项目不存在", 404);
-  const owner = String(p.owner_id) === c.actor.id;
-  const member = await one(
-    tx,
-    "SELECT 1 FROM project_members WHERE project_id=$1::bigint AND user_id=$2::bigint",
-    value,
-    c.actor.id,
-  );
-  if (!admin(c) && !owner && p.visibility !== "PUBLIC" && (!member || p.status === "DRAFT"))
+  const level = await effectiveContentAccess(tx,c.actor,"project",p!);
+  if (level==="DENY")
     fail("FORBIDDEN", "无权访问此项目", 403);
-  return p;
+  return {...p,content_access:level};
 }
 export async function remove(c: Context, value: string) {
   return changeContent(c,"project",value,"delete",{});
 }
 async function collaboratorOnly(tx: Tx, c: Context, p: Row) {
-  if (admin(c) || String(p.owner_id) === c.actor.id) return;
-  if (!(await one(tx,"SELECT 1 FROM project_members WHERE project_id=$1::bigint AND user_id=$2::bigint",p.id,c.actor.id)) || p.status === "DRAFT")
-    fail("FORBIDDEN","仅项目协作人员可以执行任务、邀请或发消息",403);
+  if (await effectiveContentAccess(tx,c.actor,"project",p)!=="EDIT")
+    fail("FORBIDDEN","只有拥有编辑权限的协作人员可以执行任务或发消息",403);
 }
 function ownerOnly(c: Context, p: Row) {
   if (!admin(c) && String(p.owner_id) !== c.actor.id)
@@ -179,7 +180,7 @@ async function members(tx: Tx, value: string) {
     value,
   );
 }
-export async function list(c: Context, q: Row) {
+export async function list(c: Context, q: Row): Promise<Row[]> {
   const f = parse(
     z.object({
       tag: z.string().max(100).optional(),
@@ -200,7 +201,7 @@ export async function list(c: Context, q: Row) {
   );
   const result = await rows(
     db,
-    `SELECT p.*,p.created_at::text AS created_at,p.updated_at::text AS updated_at,p.published_at::text AS published_at,u.display_name AS owner_name,(SELECT jsonb_agg(jsonb_build_object('id',u2.id::text,'name',u2.display_name)) FROM project_members m JOIN users u2 ON u2.id=m.user_id WHERE m.project_id=p.id) AS members FROM projects p JOIN users u ON u.id=p.owner_id WHERE p.deleted_at IS NULL AND ${readableSql("project","p")} AND ($3::text IS NULL OR p.tag=$3) AND ($4::bigint IS NULL OR p.owner_id=$4::bigint) AND ($5::date IS NULL OR (p.created_at AT TIME ZONE 'Asia/Shanghai')::date >= $5::date) AND ($6::date IS NULL OR (p.created_at AT TIME ZONE 'Asia/Shanghai')::date <= $6::date) AND ($7::text IS NULL OR EXISTS(SELECT 1 FROM jsonb_array_elements(p.document->'tasks') t WHERE t->>'status'='DISPUTED')=($7='yes')) AND ($9='all' OR ($9='public' AND p.visibility='PUBLIC') OR ($9='mine' AND p.owner_id=$2::bigint)) ORDER BY p.created_at DESC,p.id DESC LIMIT 51 OFFSET $8`,
+    `SELECT p.*,${contentAccessSql("project","p")} AS content_access,p.created_at::text AS created_at,p.updated_at::text AS updated_at,p.published_at::text AS published_at,u.display_name AS owner_name,(SELECT jsonb_agg(jsonb_build_object('id',u2.id::text,'name',u2.display_name)) FROM project_members m JOIN users u2 ON u2.id=m.user_id WHERE m.project_id=p.id) AS members FROM projects p JOIN users u ON u.id=p.owner_id WHERE p.deleted_at IS NULL AND ${readableSql("project","p")} AND ($3::text IS NULL OR p.tag=$3) AND ($4::bigint IS NULL OR p.owner_id=$4::bigint) AND ($5::date IS NULL OR (p.created_at AT TIME ZONE 'Asia/Shanghai')::date >= $5::date) AND ($6::date IS NULL OR (p.created_at AT TIME ZONE 'Asia/Shanghai')::date <= $6::date) AND ($7::text IS NULL OR EXISTS(SELECT 1 FROM jsonb_array_elements(p.document->'tasks') t WHERE t->>'status'='DISPUTED')=($7='yes')) AND ($9='all' OR ($9='public' AND p.visibility='PUBLIC') OR ($9='mine' AND p.owner_id=$2::bigint)) ORDER BY p.created_at DESC,p.id DESC LIMIT 51 OFFSET $8`,
     admin(c),
     c.actor.id,
     f.tag || null,
@@ -238,7 +239,7 @@ export async function detail(c: Context, value: string): Promise<Row> {
   const p = await access(db, c, value);
   return {
     ...contentSummary(c.actor,"project",p),
-    can_collaborate: admin(c) || String(p.owner_id) === c.actor.id || (p.status !== "DRAFT" && !!(await one(db,"SELECT 1 FROM project_members WHERE project_id=$1::bigint AND user_id=$2::bigint",value,c.actor.id))),
+    can_collaborate: p.content_access==="EDIT",
     document: {
       ...p.document,
       attachments: (p.document.attachments || []).map(
@@ -266,7 +267,8 @@ export async function attachmentUrl(
   if (!file?.storageKey) fail("NOT_FOUND", "附件不存在", 404);
   return fileUrl(file, preview);
 }
-async function addMembers(tx: Tx, c: Context, value: string, users: string[]) {
+async function addMembers(tx: Tx, c: Context, value: string, users: string[], overwrite = false) {
+  const project = await one(tx,"SELECT owner_id FROM public.projects WHERE id=$1::bigint",value);
   for (const user of new Set(users)) {
     const active = await one(
       tx,
@@ -281,10 +283,16 @@ async function addMembers(tx: Tx, c: Context, value: string, users: string[]) {
       user,
       c.actor.id,
     );
+    if (String(project?.owner_id)!==user)
+      await rows(tx,`INSERT INTO public.project_library_acl(kind,resource_id,user_id,access,created_by) VALUES('project',$1::bigint,$2::bigint,'EDIT',$3::bigint)
+        ON CONFLICT(kind,resource_id,user_id) ${overwrite ? "DO UPDATE SET access='EDIT',updated_at=now()" : "DO NOTHING"}`,value,user,c.actor.id);
   }
 }
-export async function uploadAttachment(c: Context, input: unknown) {
-  requirePermission(c.actor, "project.create");
+export async function uploadAttachment(c: Context, input: unknown, projectId?: string) {
+  if (projectId) {
+    const project = await access(db,c,parse(id,projectId));
+    if(project.content_access!=="EDIT")fail("FORBIDDEN","只有项目编辑人员可以上传附件",403);
+  } else requirePermission(c.actor, "project.create");
   const file = parse(attachmentSchema, input);
   if (file.storageKey) fail("VALIDATION_ERROR", "请提交文件内容", 400);
   if (!storageEnabled()) fail("STORAGE_UNAVAILABLE", "文件存储尚未配置", 503);
@@ -296,31 +304,43 @@ export async function uploadAttachment(c: Context, input: unknown) {
     c.actor.id,
     JSON.stringify(stored),
   );
-  return { ...stored, url: `/api/v1/projects/uploads/${file.id}` };
+  return { ...stored, url: `/api/v1/projects/uploads/${file.id}${projectId ? `?projectId=${projectId}` : ""}` };
 }
 export async function uploadedAttachment(
   c: Context,
   fileId: string,
   preview: boolean,
+  projectId?: string,
 ) {
-  requirePermission(c.actor, "project.create");
+  if(projectId)await access(db,c,parse(id,projectId));
   const row = await one(
     db,
-    `SELECT upload.metadata FROM project_uploads upload WHERE upload.id=$1::uuid AND upload.user_id=$2::bigint
-      AND (NOT EXISTS(SELECT 1 FROM projects p,jsonb_array_elements(COALESCE(p.document->'attachments','[]')) file WHERE file->>'id'=upload.id::text)
-       OR EXISTS(SELECT 1 FROM projects p,jsonb_array_elements(COALESCE(p.document->'attachments','[]')) file WHERE file->>'id'=upload.id::text AND p.deleted_at IS NULL))`,
+    "SELECT metadata FROM project_uploads WHERE id=$1::uuid AND user_id=$2::bigint",
     parse(z.string().uuid(), fileId),
     c.actor.id,
   );
   if (!row) fail("NOT_FOUND", "附件不存在", 404);
+  const linked=await rows(db,"SELECT p.* FROM projects p WHERE EXISTS(SELECT 1 FROM jsonb_array_elements(COALESCE(p.document->'attachments','[]')) file WHERE file->>'id'=$1)",fileId);
+  if(linked.length) {
+    let allowed=false;
+    for(const project of linked)if(!project.deleted_at && await effectiveContentAccess(db,c.actor,"project",project)!=="DENY")allowed=true;
+    if(!allowed)fail("NOT_FOUND","附件不存在或无权访问",404);
+  }
   return fileUrl(row!.metadata, preview);
 }
 export async function save(c: Context, input: unknown, value?: string) {
-  requirePermission(c.actor, "project.create");
+  if (!value) requirePermission(c.actor, "project.create");
   const b = parse(projectSchema, input);
+  const checkEdit = async (tx:Tx,row:Row) => {
+    if(await effectiveContentAccess(tx,c.actor,"project",row)!=="EDIT")fail("FORBIDDEN","没有此项目的编辑权限",403);
+    if(!canManageContent(c.actor,"project",row)) {
+      if(b.visibility && b.visibility!==row.visibility)fail("FORBIDDEN","只有创建者或超级管理员可以更改公开范围",403);
+      if(canonical([...new Set(b.collaborators)].sort())!==canonical([...new Set(row.document.collaborators || [])].sort()))fail("FORBIDDEN","只有创建者或超级管理员可以修改项目成员",403);
+    }
+  };
   const before = value ? await access(db, c, value) : undefined;
   if (before) {
-    ownerOnly(c, before);
+    await checkEdit(db,before);
     if (["VOID", "DONE"].includes(before.status))
       fail("INVALID_STATE", "已完成或作废项目不能编辑");
   }
@@ -343,7 +363,7 @@ export async function save(c: Context, input: unknown, value?: string) {
     let old: Row | undefined;
     if (value) {
       old = await access(tx, c, value, true);
-      ownerOnly(c, old);
+      await checkEdit(tx,old);
       if (["VOID", "DONE"].includes(old.status))
         fail("INVALID_STATE", "已完成或作废项目不能编辑");
       version(old, b.version || 0);
@@ -453,7 +473,12 @@ export async function save(c: Context, input: unknown, value?: string) {
           b.visibility || "PRIVATE",
         );
     const pid = String(p!.id);
-    await addMembers(tx, c, pid, [c.actor.id, ...b.collaborators]);
+    if (!old || canManageContent(c.actor,"project",old)) {
+      const included = [String(p!.owner_id),...b.collaborators];
+      await rows(tx,"DELETE FROM public.project_members WHERE project_id=$1::bigint AND NOT(user_id=ANY($2::bigint[]))",pid,included);
+      await rows(tx,"DELETE FROM public.project_library_acl WHERE kind='project' AND resource_id=$1::bigint AND access<>'DENY' AND NOT(user_id=ANY($2::bigint[]))",pid,included);
+      await addMembers(tx, c, pid, included);
+    }
     await audit(tx, c, "PROJECT_SAVE", "project", pid, null, {
       name: b.name,
       tasks: tasks.length,
@@ -527,6 +552,9 @@ export async function act(c: Context, value: string, input: unknown) {
     }),
     input,
   );
+  const before = await access(db,c,value);
+  await collaboratorOnly(db,c,before);
+  if(["publish","void","invite"].includes(b.action))ownerOnly(c,before);
   return command(c, "project.action/" + value, b, async (tx) => {
     const p = await access(tx, c, value, true);
     await collaboratorOnly(tx,c,p);
@@ -547,8 +575,9 @@ export async function act(c: Context, value: string, input: unknown) {
       if (!b.reason) fail("VALIDATION_ERROR", "请填写作废原因", 400);
       status = "VOID";
     } else if (b.action === "invite") {
+      ownerOnly(c,p);
       if (!b.users.length) fail("VALIDATION_ERROR", "请选择协作人员", 400);
-      await addMembers(tx, c, value, b.users);
+      await addMembers(tx, c, value, b.users,true);
       doc.collaborators = [...new Set([...doc.collaborators, ...b.users])];
       recipients = b.users;
     } else {
@@ -659,6 +688,7 @@ export async function send(c: Context, value: string, input: unknown) {
     }),
     input,
   );
+  await collaboratorOnly(db,c,await access(db,c,value));
   return command(c, "project.message/" + value, b, async (tx) => {
     const p = await access(tx, c, value, true);
     await collaboratorOnly(tx,c,p);
@@ -708,7 +738,8 @@ export async function send(c: Context, value: string, input: unknown) {
 export async function notifications(c: Context) {
   return rows(
     db,
-    `SELECT n.*,n.created_at::text AS created_at,n.read_at::text AS read_at,p.name AS project_name FROM project_notifications n JOIN projects p ON p.id=n.project_id WHERE p.deleted_at IS NULL AND n.user_id=$1::bigint AND EXISTS(SELECT 1 FROM project_members m WHERE m.project_id=p.id AND m.user_id=$1::bigint) ORDER BY n.id DESC LIMIT 100`,
+    `SELECT n.*,n.created_at::text AS created_at,n.read_at::text AS read_at,p.name AS project_name FROM project_notifications n JOIN projects p ON p.id=n.project_id WHERE p.deleted_at IS NULL AND n.user_id=$2::bigint AND ${readableSql("project","p")} ORDER BY n.id DESC LIMIT 100`,
+    admin(c),
     c.actor.id,
   );
 }

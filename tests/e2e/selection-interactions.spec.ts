@@ -1,9 +1,47 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import type { SelectionLayoutSnapshot } from "../../packages/contracts/src/selection-layout.js";
+import type { z } from "zod";
+import type { selectionLayoutSnapshotSchema } from "../../packages/contracts/src/selection-layout.js";
+type SelectionLayoutSnapshot = z.input<typeof selectionLayoutSnapshotSchema>;
 import { readFile } from "node:fs/promises";
 
 const imageUrls = ["/api/v1/style-selections/images/preview-a", "/api/v1/style-selections/images/preview-b"];
-async function fixture(page: Page, readonly = false, choiceFields = false, rowCount = 26, userId = "interaction-tester", layouts = new Map<string, SelectionLayoutSnapshot>()) {
+test("readonly users add a private field and explicitly publish or withdraw it", async ({page})=>{
+  const userId="201", layouts=await fixture(page,true,false,3,userId);
+  await expect.poll(()=>layouts.get(userId)?.revision || 0).toBeGreaterThan(0);
+  const modern=()=>({...layouts.get(userId),sharedRevision:0,sharedPreferences:null,canEditShared:false});
+  await page.route("**/api/v1/style-selections/layout-preferences?**",async route=>{
+    if(route.request().method()==="POST") {
+      const body=route.request().postDataJSON(),before=layouts.get(userId)!;
+      expect(body.sharedChanges).toBeUndefined();
+      layouts.set(userId,{revision:before.revision+1,preferences:{...body.preferences,columns:body.preferences.columns.map((field:any)=>field.ownerId?{...field,ownerId:userId,visibility:field.visibility || "PRIVATE",fieldRevision:field.fieldRevision || 1}:field)}});
+    }
+    await route.fulfill({json:{data:modern()}});
+  });
+  const changes:boolean[]=[];
+  await page.route("**/api/v1/style-selections/fields/*/visibility",async route=>{
+    const body=route.request().postDataJSON(),key=decodeURIComponent(new URL(route.request().url()).pathname.split("/").at(-2)!);
+    const before=layouts.get(userId)!,field=before.preferences!.columns.find(field=>field.key===key)!;
+    expect(body.revision).toBe(field.fieldRevision);changes.push(body.public);
+    const saved={...field,visibility:body.public?"PUBLIC" as const:"PRIVATE" as const,fieldRevision:(field.fieldRevision || 0)+1};
+    layouts.set(userId,{...before,preferences:{...before.preferences!,columns:before.preferences!.columns.map(field=>field.key===key?saved:field)}});
+    await route.fulfill({json:{data:saved}});
+  });
+  await page.getByRole("button",{name:"字段管理",exact:true}).click();
+  await page.getByRole("button",{name:"添加字段",exact:true}).click();
+  const dialog=page.getByRole("dialog",{name:"添加字段",exact:true});
+  await expect(dialog).toContainText("默认私有");
+  await dialog.getByLabel("字段名称",{exact:true}).fill("我的备注");
+  await dialog.getByRole("button",{name:"保存",exact:true}).click();
+  await expect.poll(()=>layouts.get(userId)?.preferences?.columns.find(field=>field.label==="我的备注")?.visibility).toBe("PRIVATE");
+  await page.getByRole("button",{name:"字段管理",exact:true}).click();
+  await page.getByRole("button",{name:"公开字段我的备注",exact:true}).click();
+  await expect(page.getByRole("button",{name:"取消公开字段我的备注",exact:true})).toBeVisible();
+  await page.getByRole("button",{name:"取消公开字段我的备注",exact:true}).click();
+  await expect(page.getByRole("button",{name:"公开字段我的备注",exact:true})).toBeVisible();
+  expect(changes).toEqual([true,false]);
+  await expect(page.getByRole("button",{name:/添加一行$/})).toBeDisabled();
+});
+async function fixture(page: Page, readonly = false, choiceFields = false, rowCount = 26, userId = "101", layouts = new Map<string, SelectionLayoutSnapshot>()) {
   const images = imageUrls.map((url, index) => ({ id: `image-${index}`, url, color: "" }));
   const rows: Record<string, any>[] = Array.from({ length: rowCount }, (_, index) => ({
     id: `shortcut-${index}`, sortOrder: index, updatedAt: "2026-10-04T00:00:00Z",

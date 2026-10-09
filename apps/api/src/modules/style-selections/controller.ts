@@ -7,6 +7,7 @@ import * as selections from "./service.js";
 import * as collections from "./collections.js";
 import * as protection from "./protection.js";
 import * as layout from "./layout-preferences.js";
+import * as fields from "./field-registry.js";
 import * as migration from "./migration.js";
 import { archiveMetadata } from "./archive.js";
 import { fail } from "../../core.js";
@@ -41,8 +42,10 @@ class StyleSelectionsController {
   @Permission("selection.read") @Get("revision") revision(@Req() request:AuthRequest) { return selections.revision(context(request)); }
   @Permission("selection.read") @Get("shared-view") sharedView(@Req() request:AuthRequest) { return selections.sharedView(context(request)); }
   @Permission("selection.manage") @Post("shared-view") saveSharedView(@Req() request: AuthRequest, @Body() body: unknown) { return selections.saveSharedView(context(request), body); }
-  @Permission("selection.read") @Get("layout-preferences") layoutPreferences(@Req() request: AuthRequest) { return layout.layoutPreferences(context(request)); }
-  @Permission("selection.read") @Post("layout-preferences") saveLayoutPreferences(@Req() request: AuthRequest, @Body() body: unknown) { return layout.saveLayoutPreferences(context(request), body); }
+  @Permission("selection.read") @Get("layout-preferences") layoutPreferences(@Req() request: AuthRequest,@Query("shared") shared:string) { return layout.layoutPreferences(context(request),shared === "true"); }
+  @Permission("selection.read") @Post("layout-preferences") saveLayoutPreferences(@Req() request: AuthRequest, @Body() body: unknown,@Query("shared") shared:string) { return layout.saveLayoutPreferences(context(request), body,shared === "true"); }
+  @Permission("selection.manage") @Post("layout-preferences/initialize") initializeLayout(@Req() request:AuthRequest) { return layout.initializeSharedLayout(context(request)); }
+  @Permission("selection.read") @Post("fields/:key/visibility") fieldVisibility(@Req() request:AuthRequest,@Param("key") key:string,@Body() body:unknown) { return fields.setFieldVisibility(context(request),key,body); }
 
   @Permission("selection.manage") @Post("import/preview") previewImport(@Req() request:AuthRequest,@Body() body: unknown) {
     return selections.previewImport(context(request),body);

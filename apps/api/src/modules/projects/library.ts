@@ -9,7 +9,9 @@ import {
 import {
   libraryKindSchema,
   visibilitySchema,
+  libraryCollaboratorsSchema,
   type LibraryKind,
+  type LibraryAccess,
 } from "../../../../../packages/contracts/src/project-library.js";
 import {
   audit,
@@ -23,8 +25,7 @@ import {
 } from "../../core.js";
 
 export const libraryAdmin = (actor: Actor) =>
-  actor.permissions.includes("user.manage") ||
-  !!actor.roleCodes?.some((role) => role === "ADMIN" || role === "SUPER_ADMIN");
+  !!actor.roleCodes?.includes("SUPER_ADMIN");
 export const libraryConfig = {
   sop: {
     table: "project_sops",
@@ -46,51 +47,128 @@ export const libraryConfig = {
   },
 } as const;
 export function canManageContent(actor: Actor, kind: LibraryKind, row: Row) {
+  if (libraryAdmin(actor)) return true;
   if (kind === "table" && row.system_key) return false;
   const config = libraryConfig[kind];
-  return (
-    actor.permissions.includes(config.write) &&
-    (libraryAdmin(actor) || String(row[config.owner]) === actor.id)
-  );
+  return String(row[config.owner]) === actor.id;
 }
-export function contentSummary(actor: Actor, kind: LibraryKind, row: Row) {
-  return { ...row, can_manage: canManageContent(actor, kind, row) };
+export function contentSummary(actor: Actor, kind: LibraryKind, row: Row): Row {
+  const canManage = canManageContent(actor, kind, row);
+  return { ...row, can_manage: canManage, can_edit: canManage || row.content_access === "EDIT" };
+}
+const memberSql = (kind: LibraryKind, alias: string) =>
+  kind === "table"
+    ? `EXISTS(SELECT 1 FROM public.project_table_members m WHERE m.table_id=${alias}.id AND m.user_id=$2::bigint)`
+    : kind === "project"
+      ? `(${alias}.status<>'DRAFT' AND EXISTS(SELECT 1 FROM public.project_members m WHERE m.project_id=${alias}.id AND m.user_id=$2::bigint))`
+      : "false";
+export function contentAccessSql(kind: LibraryKind, alias: string) {
+  return `(CASE WHEN $1::boolean OR ${alias}.${libraryConfig[kind].owner}=$2::bigint THEN 'EDIT'
+    WHEN EXISTS(SELECT 1 FROM public.project_library_acl a WHERE a.kind='${kind}' AND a.resource_id=${alias}.id AND a.user_id=$2::bigint AND a.access='DENY') THEN 'DENY'
+    WHEN EXISTS(SELECT 1 FROM public.project_library_acl a WHERE a.kind='${kind}' AND a.resource_id=${alias}.id AND a.user_id=$2::bigint AND a.access='EDIT') THEN 'EDIT'
+    WHEN EXISTS(SELECT 1 FROM public.project_library_acl a WHERE a.kind='${kind}' AND a.resource_id=${alias}.id AND a.user_id=$2::bigint AND a.access='READ') THEN 'READ'
+    WHEN ${memberSql(kind,alias)} THEN 'EDIT'
+    WHEN ${alias}.visibility='PUBLIC' THEN 'READ' ELSE 'DENY' END)`;
 }
 export function readableSql(kind: LibraryKind, alias: string) {
-  const owner = `${alias}.${libraryConfig[kind].owner}`;
-  const collaborator =
-    kind === "table"
-      ? `EXISTS(SELECT 1 FROM public.project_table_members m WHERE m.table_id=${alias}.id AND m.user_id=$2::bigint)`
-      : kind === "project"
-        ? `(${alias}.status<>'DRAFT' AND EXISTS(SELECT 1 FROM public.project_members m WHERE m.project_id=${alias}.id AND m.user_id=$2::bigint))`
-        : "false";
-  return `($1::boolean OR ${owner}=$2::bigint OR ${alias}.visibility='PUBLIC' OR ${collaborator})`;
+  return `${contentAccessSql(kind,alias)}<>'DENY'`;
+}
+export async function effectiveContentAccess(tx: Tx, actor: Actor, kind: LibraryKind, value: Row | string): Promise<LibraryAccess> {
+  const row = typeof value === "string" ? await one(tx,`SELECT * FROM public.${libraryConfig[kind].table} WHERE id=$1::bigint AND deleted_at IS NULL`,value) : value;
+  if (!row) return "DENY";
+  if (libraryAdmin(actor) || String(row[libraryConfig[kind].owner])===actor.id) return "EDIT";
+  const grant = await one(tx,"SELECT access FROM public.project_library_acl WHERE kind=$1 AND resource_id=$2::bigint AND user_id=$3::bigint",kind,row.id,actor.id);
+  if (grant) return grant.access;
+  if (kind==="table" && row.system_key==="PRODUCT_ARCHIVE" && actor.permissions.includes("product.read"))
+    return actor.permissions.includes("product.update") ? "EDIT" : "READ";
+  if (kind!=="sop") {
+    const membership = await one(tx,kind==="table"
+      ? "SELECT 1 FROM public.project_table_members WHERE table_id=$1::bigint AND user_id=$2::bigint"
+      : "SELECT 1 FROM public.project_members WHERE project_id=$1::bigint AND user_id=$2::bigint",row.id,actor.id);
+    if (membership && (kind==="table" || row.status!=="DRAFT")) return "EDIT";
+  }
+  return row.visibility==="PUBLIC" ? "READ" : "DENY";
 }
 // Used by the workspace interceptor both before the handler and inside each transaction.
 export async function tableAccess(
   tx: Tx,
   actor: Actor | undefined,
   value: string,
-) {
+): Promise<Row> {
   const table = await one(
     tx,
-    `SELECT t.* FROM public.project_tables t WHERE t.id=$3::bigint AND t.deleted_at IS NULL
+    `SELECT t.* FROM public.project_tables t WHERE t.id=$1::bigint AND t.deleted_at IS NULL
      AND EXISTS(SELECT 1 FROM pg_namespace WHERE nspname='selection_table_' || t.id::text)
-     AND ($4::boolean OR (t.system_key='PRODUCT_ARCHIVE' AND $5::boolean) OR (t.system_key IS NULL AND ${readableSql("table", "t")})) FOR SHARE`,
-    actor ? libraryAdmin(actor) : false,
-    actor?.id || "0",
+     FOR SHARE`,
     value,
-    !actor,
-    !!actor?.permissions.includes("product.read"),
   );
   if (!table) fail("NOT_FOUND", "表格不存在或无权访问", 404);
-  return table;
+  if (!actor) return table;
+  const contentAccess = await effectiveContentAccess(tx,actor,"table",table!);
+  if (contentAccess==="DENY") fail("NOT_FOUND", "表格不存在或无权访问", 404);
+  return contentSummary(actor,"table",{...table,content_access:contentAccess});
+}
+async function manageableResource(tx: Tx, c: Context, kind: LibraryKind, value: string, lock = false) {
+  const row = await one(tx,`SELECT * FROM public.${libraryConfig[kind].table} WHERE id=$1::bigint AND deleted_at IS NULL${lock ? " FOR UPDATE" : ""}`,value);
+  if (!row) fail("NOT_FOUND","内容不存在或已移至回收站",404);
+  if (!canManageContent(c.actor,kind,row!)) fail("FORBIDDEN","只有创建者或超级管理员可以管理成员权限",403);
+  return row!;
+}
+export async function collaborators(c: Context, rawKind: unknown, value: string) {
+  const kind = parse(libraryKindSchema,rawKind);
+  const resource = await manageableResource(db,c,kind,value);
+  const users = await rows(db,
+    `SELECT u.id,u.username,u.display_name AS "displayName",EXISTS(SELECT 1 FROM public.user_roles ur JOIN public.roles r ON r.id=ur.role_id WHERE ur.user_id=u.id AND r.code='SUPER_ADMIN') AS "superAdmin"
+    FROM public.users u WHERE u.status='ACTIVE' ORDER BY u.display_name,u.id`);
+  const ownerId = String(resource[libraryConfig[kind].owner]);
+  const fixed = new Set([ownerId,...users.filter(user=>user.superAdmin).map(user=>String(user.id))]);
+  const members = await rows(db,"SELECT user_id::text AS \"userId\",access FROM public.project_library_acl WHERE kind=$1 AND resource_id=$2::bigint ORDER BY user_id",kind,value);
+  return {version:resource.version,ownerId,users,members:members.filter(member=>!fixed.has(member.userId))};
+}
+export async function saveCollaborators(c: Context, rawKind: unknown, value: string, input: unknown) {
+  const kind = parse(libraryKindSchema,rawKind),body = parse(libraryCollaboratorsSchema,input);
+  await manageableResource(db,c,kind,value);
+  await command(c,`library/${kind}/${value}/collaborators`,body,async tx=>{
+    const resource = await manageableResource(tx,c,kind,value,true);
+    version(resource,body.version);
+    const ownerId = String(resource[libraryConfig[kind].owner]);
+    const fixed = await rows(tx,"SELECT DISTINCT ur.user_id FROM public.user_roles ur JOIN public.roles r ON r.id=ur.role_id WHERE r.code='SUPER_ADMIN'");
+    const fixedIds = new Set([ownerId,...fixed.map(user=>String(user.user_id))]);
+    if (body.members.some(member=>fixedIds.has(member.userId)))
+      fail("VALIDATION_ERROR","创建者和超级管理员始终拥有管理权限，不能设置普通覆盖权限",400);
+    if (body.members.length) {
+      const valid = await rows(tx,"SELECT id FROM public.users WHERE id=ANY($1::bigint[]) AND status='ACTIVE'",body.members.map(member=>member.userId));
+      if (valid.length!==body.members.length) fail("VALIDATION_ERROR","协作用户不存在或已停用，请移除后重新选择",400);
+    }
+    const before = await rows(tx,"SELECT user_id,access FROM public.project_library_acl WHERE kind=$1 AND resource_id=$2::bigint",kind,value);
+    await rows(tx,"DELETE FROM public.project_library_acl WHERE kind=$1 AND resource_id=$2::bigint",kind,value);
+    if (body.members.length)
+      await rows(tx,`INSERT INTO public.project_library_acl(kind,resource_id,user_id,access,created_by)
+        SELECT $1,$2::bigint,(item->>'userId')::bigint,item->>'access',$4::bigint FROM jsonb_array_elements($3::jsonb) item`,kind,value,JSON.stringify(body.members),c.actor.id);
+    const included = body.members.filter(member=>member.access!=="DENY").map(member=>member.userId);
+    if (kind === "project" && included.length > 100)
+      fail("VALIDATION_ERROR", "一个项目最多设置100位可访问的协作人员", 400);
+    if (kind==="project") {
+      await rows(tx,"DELETE FROM public.project_members WHERE project_id=$1::bigint",value);
+      await rows(tx,`INSERT INTO public.project_members(project_id,user_id,added_by) SELECT $1::bigint,member,$3::bigint FROM unnest($2::bigint[]) member`,value,[ownerId,...included],c.actor.id);
+      await rows(tx,"UPDATE public.projects SET document=jsonb_set(document,'{collaborators}',$2::jsonb),version=version+1,updated_at=now() WHERE id=$1::bigint",value,JSON.stringify(included));
+    } else {
+      if (kind==="table") {
+        await rows(tx,"DELETE FROM public.project_table_members WHERE table_id=$1::bigint",value);
+        if (included.length) await rows(tx,"INSERT INTO public.project_table_members(table_id,user_id) SELECT $1::bigint,member FROM unnest($2::bigint[]) member",value,included);
+      }
+      await rows(tx,`UPDATE public.${libraryConfig[kind].table} SET version=version+1${kind==="sop" ? ",updated_at=now()" : ""} WHERE id=$1::bigint`,value);
+    }
+    await audit(tx,c,"LIBRARY_COLLABORATORS_UPDATE",kind,value,before,body.members);
+    return {ok:true};
+  });
+  // A retry must not return an old ACL snapshot after permissions changed.
+  return collaborators(c,kind,value);
 }
 export async function trash(c: Context, rawKind: unknown) {
   const kind = parse(libraryKindSchema, rawKind),
     config = libraryConfig[kind];
   requirePermission(c.actor, config.read);
-  requirePermission(c.actor, config.write);
   return rows(
     db,
     `SELECT t.id,t.name,t.visibility,t.version,t.deleted_at,
@@ -114,7 +192,6 @@ export async function changeContent(
   const kind = parse(libraryKindSchema, rawKind),
     config = libraryConfig[kind];
   requirePermission(c.actor, config.read);
-  requirePermission(c.actor, config.write);
   const body = parse(
     z
       .object({
@@ -134,7 +211,7 @@ export async function changeContent(
   );
   if (!old) fail("NOT_FOUND", "内容不存在", 404);
   if (!canManageContent(c.actor, kind, old))
-    fail("FORBIDDEN", "只有创建者或管理员可以管理此内容", 403);
+    fail("FORBIDDEN", "只有创建者或超级管理员可以管理此内容", 403);
   return command(c, `library/${kind}/${value}/${action}`, body, async (tx) => {
     const row = await one(
       tx,
@@ -143,7 +220,7 @@ export async function changeContent(
     );
     if (!row) fail("NOT_FOUND", "内容不存在", 404);
     if (!canManageContent(c.actor, kind, row))
-      fail("FORBIDDEN", "只有创建者或管理员可以管理此内容", 403);
+      fail("FORBIDDEN", "只有创建者或超级管理员可以管理此内容", 403);
     if (body.version !== undefined) version(row, body.version);
     if (action === "restore") {
       if (!row.deleted_at) fail("INVALID_STATE", "内容已恢复，请刷新列表");

@@ -44,7 +44,7 @@ const image = z
   .strict();
 const labelImage = image.extend({ color: z.literal("").default("") });
 const cellColors = z.record(z.string(), z.enum(rowColors).nullable());
-const extraFields = z.record(z.string().max(100), z.string().max(100000).superRefine((value,ctx)=>{
+const extraFields = z.record(z.string().regex(/^custom:[a-zA-Z0-9:-]+$/).max(100), z.string().max(100000).superRefine((value,ctx)=>{
   if(value.length<=2000)return;
   try{if(z.array(image).max(30).safeParse(JSON.parse(value)).success)return;}catch{}
   ctx.addIssue({code:"custom",message:"文本最多2000字，图片字段最多30张"});
@@ -133,7 +133,7 @@ function normalizedTags(value: unknown) {
 }
 
 const revisionSql = "SELECT md5(coalesce(string_agg(id::text || ':' || version::text || ':' || updated_at::text, ',' ORDER BY id), '')) AS revision FROM style_selections";
-export async function revision(c: Context) { const p = await protection.policy(db); const value = await one(db, revisionSql); return { revision: protection.digest([selectionScope.getStore(),value!.revision,p.revision,c.actor.id,c.actor.permissions,c.actor.roleCodes]) }; }
+export async function revision(c: Context) { const p = await protection.policy(db); const value = await one(db, revisionSql); return { revision: protection.digest([selectionScope.getStore(),value!.revision,p.revision,p.fieldRevision,c.actor.id,c.actor.permissions,c.actor.roleCodes]) }; }
 
 function listSpec(query: Record<string, unknown>) {
   const values: unknown[] = [];
@@ -177,16 +177,16 @@ export async function sync(c: Context, input: unknown) {
   const request = db.$transaction(async tx => {
     const p = await protection.policy(tx);
     const rawRevision=(await one(tx,revisionSql))!.revision;
-    const scopedRevision=protection.digest([selectionScope.getStore(),rawRevision,p.revision,c.actor.id,c.actor.permissions,c.actor.roleCodes]);
+    const scopedRevision=protection.digest([selectionScope.getStore(),rawRevision,p.revision,p.fieldRevision,c.actor.id,c.actor.permissions,c.actor.roleCodes]);
     if (protection.activePolicy(p)) {
       const sourceRows = await rows(tx, `SELECT ${selectColumns} ${source}`);
       const projected = protection.filtered(sourceRows.map(row => protection.project(p,c.actor,row)), body);
-      const index = projected.map(row => ({id:String(row.id),token:protection.digest([row,c.actor.id,c.actor.permissions,c.actor.roleCodes])}));
+      const index = projected.map(row => ({id:String(row.id),token:protection.digest([row,p.fieldRevision,c.actor.id,c.actor.permissions,c.actor.roleCodes])}));
       const tokens=new Map(index.map(item=>[item.id,item.token]));
       return {revision:scopedRevision,index,data:projected.filter(row=>body.known[String(row.id)]!==tokens.get(String(row.id)))};
     }
     const revision = scopedRevision;
-    const index = await rows(tx, `SELECT s.id::text AS id,md5(s.version::text || ':' || s.updated_at::text || ':' || $${values.length+1}) AS token ${source}${clause} ORDER BY ${order}`, ...values,protection.digest([p.revision,c.actor.id,c.actor.permissions,c.actor.roleCodes]));
+    const index = await rows(tx, `SELECT s.id::text AS id,md5(s.version::text || ':' || s.updated_at::text || ':' || $${values.length+1}) AS token ${source}${clause} ORDER BY ${order}`, ...values,protection.digest([p.revision,p.fieldRevision,c.actor.id,c.actor.permissions,c.actor.roleCodes]));
     const changed = index.filter(row => body.known[row.id] !== row.token).map(row => row.id);
     const data = changed.length ? await rows(tx, `SELECT ${selectColumns} ${source} WHERE s.id=ANY($1::bigint[])`, changed) : [];
     return { revision, index, data:data.map(row=>protection.project(p,c.actor,row)) };
@@ -240,18 +240,28 @@ export async function styleCounts(c: Context) {
     GROUP BY btrim(xuti_style_no)`);
 }
 
-export async function presence(_c: Context) {
-  return rows(
-    db,
-    `SELECT p.user_id,p.editing_id,p.editing_column,u.display_name,p.active_at
-     FROM style_selection_presence p JOIN users u ON u.id=p.user_id
-     WHERE p.active_at > now()-interval '45 seconds' ORDER BY p.active_at DESC`,
-  );
+export async function presence(c: Context) {
+  return db.$transaction(async tx => {
+    const policy = await protection.policy(tx);
+    const active = await rows(
+      tx,
+      `SELECT p.user_id,p.editing_id,p.editing_column,u.display_name,p.active_at
+       FROM style_selection_presence p JOIN users u ON u.id=p.user_id
+       WHERE p.active_at > now()-interval '45 seconds' ORDER BY p.active_at DESC`,
+    );
+    return active.map(row => row.editing_column && !protection.fieldVisible(policy,c.actor,row.editing_column)
+      ? { ...row, editing_column: null }
+      : row);
+  }, { isolationLevel: "RepeatableRead" });
 }
 
 export async function heartbeat(c: Context, input: unknown) {
   const body = parse(presenceInput, input);
-  if (body.editingId) await entity(db, "style_selections", body.editingId);
+  if (body.editingId) {
+    const row = await entity(db, "style_selections", body.editingId);
+    if (body.editingColumn)
+      protection.assertFields(await protection.policy(db),c,row,[body.editingColumn],false);
+  }
   await rows(
     db,
     `INSERT INTO style_selection_presence(user_id,editing_id,editing_column,active_at)
@@ -410,13 +420,28 @@ export async function commitImport(c: Context, input: unknown) {
 }
 
 export async function sharedView(c: Context) {
-  if(protection.activePolicy(await protection.policy(db)) && !protection.protectionAdmin(c.actor))return {view:{filters:{},sort:null},revision:0};
-  return one(db, "SELECT view,revision FROM style_selection_shared_view WHERE id=1");
+  return db.$transaction(async tx => {
+    const policy = await protection.policy(tx);
+    if((policy.settings.enabled || policy.settings.claimsEnabled || policy.settings.autoHide) && !protection.protectionAdmin(c.actor))return {view:{filters:{},sort:null},revision:0};
+    const stored = await one(tx, "SELECT view,revision FROM style_selection_shared_view WHERE id=1");
+    if (!stored) return stored;
+    return {
+      ...stored,
+      view: {
+        filters: Object.fromEntries(Object.entries(stored.view.filters || {}).filter(([key])=>protection.fieldVisible(policy,c.actor,key))),
+        sort: stored.view.sort && protection.fieldVisible(policy,c.actor,stored.view.sort.key) ? stored.view.sort : null,
+      },
+    };
+  }, { isolationLevel: "RepeatableRead" });
 }
 export async function saveSharedView(c: Context, input: unknown) {
-  if(protection.activePolicy(await protection.policy(db)) && !protection.protectionAdmin(c.actor))fail("FORBIDDEN","保护开启时，请使用个人筛选；共享筛选由管理员设置",403);
   const body = parse(z.object({ view: selectionViewSchema, revision: z.number().int().min(0) }).strict(), input);
   return command(c, "selection.shared-view", body, async tx => {
+    const policy = await protection.policy(tx, true);
+    if((policy.settings.enabled || policy.settings.claimsEnabled || policy.settings.autoHide) && !protection.protectionAdmin(c.actor))fail("FORBIDDEN","保护开启时，请使用个人筛选；共享筛选由管理员设置",403);
+    if ([...Object.keys(body.view.filters), ...(body.view.sort ? [body.view.sort.key] : [])].some(key=>
+      !protection.fieldVisible(policy,c.actor,key) || Object.hasOwn(policy.privateFieldOwners || {},key)))
+      fail("FORBIDDEN","不公开字段只能用于个人筛选；请先公开字段再设置共享筛选",403);
     const before = await one(tx, "SELECT view,revision FROM style_selection_shared_view WHERE id=1 FOR UPDATE");
     if (!before || before.revision !== body.revision) fail("CONFLICT", "共享筛选已被其他人更新，请关闭面板后重新打开", 409);
     const saved = await one(tx, "UPDATE style_selection_shared_view SET view=$1::jsonb,revision=revision+1,updated_by=$2::bigint,updated_at=now() WHERE id=1 RETURNING view,revision", JSON.stringify(body.view), c.actor.id);

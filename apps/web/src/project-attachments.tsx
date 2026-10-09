@@ -11,9 +11,11 @@ import {
 export function ProjectAttachments({
   files = [],
   onChange,
+  projectId,
 }: {
   files?: ProjectAttachment[];
   onChange?: (files: ProjectAttachment[]) => void;
+  projectId?: string;
 }) {
   const { message } = App.useApp();
   const [busy, setBusy] = useState(false);
@@ -29,7 +31,7 @@ export function ProjectAttachments({
       file = await prepareUpload(new File([file], file.name, { type }));
       type = file.type;
       const data = await readUpload(file);
-      const result = await api("/projects/uploads", "POST", {
+      const result = await api(`/projects/uploads${projectId ? `?projectId=${encodeURIComponent(projectId)}`:""}`, "POST", {
         id: crypto.randomUUID(),
         name: file.name,
         type,

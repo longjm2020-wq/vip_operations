@@ -30,20 +30,40 @@ import {
 } from "../../../../../packages/contracts/src/selection-protection.js";
 
 export { protectionAdmin };
-export type Policy = { settings: SelectionProtection; revision: number };
+export type Policy = {
+  settings: SelectionProtection;
+  revision: number;
+  registeredFieldKeys?: string[];
+  privateFieldOwners?: Record<string, string>;
+  fieldRevision?: string;
+};
 export const activePolicy = (policy: Policy) =>
   policy.settings.enabled ||
   policy.settings.claimsEnabled ||
-  policy.settings.autoHide;
+  policy.settings.autoHide ||
+  !!Object.keys(policy.privateFieldOwners || {}).length;
 export async function policy(tx: Tx, lock = false): Promise<Policy> {
   const value = await one(
     tx,
     "SELECT settings,revision FROM style_selection_protection WHERE id=1" +
       (lock ? " FOR SHARE" : ""),
   );
+  const fields = await rows(
+    tx,
+    "SELECT field_key,owner_id,visibility,revision,updated_at FROM public.selection_field_registry WHERE workspace_key=$1 ORDER BY field_key" +
+      (lock ? " FOR SHARE" : ""),
+    selectionScope.getStore() || "default",
+  );
   return {
     settings: value?.settings || defaultProtection,
     revision: value?.revision || 0,
+    registeredFieldKeys: fields.map((field) => field.field_key),
+    privateFieldOwners: Object.fromEntries(
+      fields
+        .filter((field) => field.visibility === "PRIVATE")
+        .map((field) => [field.field_key, String(field.owner_id)]),
+    ),
+    fieldRevision: digest(camel(fields)),
   };
 }
 const formats = [
@@ -68,7 +88,18 @@ const nonempty = (value: unknown) =>
   value !== undefined &&
   value !== "" &&
   (!Array.isArray(value) || !!value.length);
+export function fieldVisible(policy: Policy, actor: Actor, key: string) {
+  return (
+    (!key.startsWith("custom:") || !!policy.registeredFieldKeys?.includes(key)) &&
+    (actor.roleCodes?.includes("SUPER_ADMIN") ||
+      !Object.hasOwn(policy.privateFieldOwners || {}, key) ||
+      policy.privateFieldOwners![key] === actor.id)
+  );
+}
 export function access(policy: Policy, actor: Actor, raw: Row, key: string) {
+  // Only the designated super-administrator may override field privacy.
+  // Unregistered custom keys must not bypass the field-management API.
+  if (!fieldVisible(policy, actor, key)) return "deny";
   const row = camel(raw),
     value = key.startsWith("custom:") ? row.extraFields?.[key] : row[key];
   const level = selectionCellAccess(policy.settings, actor, row, key, nonempty(value));
@@ -78,12 +109,38 @@ export function project(policy: Policy, actor: Actor, raw: Row): Row {
   const row = camel(raw),
     cellAccess: Row = {},
     hiddenCells: string[] = [];
+  const originalFields = rowFields(row);
+  const unknownExtras = new Set(
+    Object.keys(row.extraFields || {}).filter(
+      (key) => !policy.registeredFieldKeys?.includes(key),
+    ),
+  );
+  if (unknownExtras.size) {
+    row.extraFields = { ...(row.extraFields || {}) };
+    for (const key of unknownExtras) delete row.extraFields[key];
+  }
   if (row.registrationBatch)
     row.registrationBatch = String(row.registrationBatch).slice(0, 10);
   for (const key of new Set([
-    ...rowFields(row),
+    ...originalFields,
+    ...(policy.registeredFieldKeys || []),
     ...policy.settings.regions.flatMap((region) => region.columnKeys),
   ])) {
+    if (
+      !fieldVisible(policy, actor, key) ||
+      (unknownExtras.has(key) && !selectionFields.includes(key))
+    ) {
+      row.extraFields = { ...(row.extraFields || {}) };
+      delete row.extraFields[key];
+      if (!key.startsWith("custom:")) delete row[key];
+      for (const field of formats) {
+        row[field] = { ...(row[field] || {}) };
+        delete row[field][key];
+      }
+      // Omit the key itself: an empty string or a hidden-cell marker would
+      // disclose another user's private field identifier.
+      continue;
+    }
     cellAccess[key] = access(policy, actor, row, key);
     if (cellAccess[key] !== "deny") continue;
     hiddenCells.push(key);
@@ -106,6 +163,7 @@ export function project(policy: Policy, actor: Actor, raw: Row): Row {
     hiddenCells,
     defaultCellAccess: access(policy,actor,row,"custom:unconfigured"),
     policyRevision: policy.revision,
+    fieldRevision: policy.fieldRevision,
   };
 }
 export async function detail(c: Context, value: string) {
@@ -202,6 +260,15 @@ export async function assertWrite(
   p ||= await policy(tx);
   patch = { ...patch };
   const original = camel(before || {});
+  if (
+    Object.entries(patch.extraFields || {}).some(
+      ([key, value]) =>
+        (!/^custom:[a-zA-Z0-9:-]+$/.test(key) ||
+          !p.registeredFieldKeys?.includes(key)) &&
+        !same(original.extraFields?.[key], value),
+    )
+  )
+    fail("REGION_FORBIDDEN", "字段尚未配置或没有编辑权限，请先通过字段管理新增字段", 403);
   for (const key of ["extraFields", ...formats])
     if (key in patch) {
       const merged = { ...(original[key] || {}), ...patch[key] };
@@ -329,16 +396,26 @@ export function filtered(rows: Row[], query: Row) {
       );
     });
 }
+function visibleSettings(p: Policy, actor: Actor) {
+  if (!protectionAdmin(actor))
+    return { ...p.settings, regions: [], hiddenReaders: [] };
+  return {
+    ...p.settings,
+    regions: p.settings.regions.filter(region =>
+      region.columnKeys.every(key => fieldVisible(p, actor, key))),
+  };
+}
 export async function readSettings(c: Context) {
-  const p = await policy(db),
+  return db.$transaction(async tx => {
+  const p = await policy(tx),
     admin = protectionAdmin(c.actor);
   return {
-    ...p,
-    settings: admin
-      ? p.settings
-      : { ...p.settings, regions: [], hiddenReaders: [] },
+    revision: p.revision,
+    fieldRevision: p.fieldRevision,
+    settings: visibleSettings(p, c.actor),
     canManage: admin,
   };
+  }, { isolationLevel: "RepeatableRead" });
 }
 export async function users(c: Context) {
   if (!protectionAdmin(c.actor))
@@ -361,7 +438,7 @@ export async function saveSettings(c: Context, input: unknown) {
       .strict(),
     input,
   );
-  return command(c, "selection-protection", body, async (tx) => {
+  await command(c, "selection-protection", body, async (tx) => {
     const before = await one(
       tx,
       "SELECT * FROM style_selection_protection WHERE id=1 FOR UPDATE",
@@ -372,10 +449,22 @@ export async function saveSettings(c: Context, input: unknown) {
         "权限已被其他管理员更新，请重新打开设置后核对",
         409,
       );
+    const p = await policy(tx, true);
+    const hidden = p.settings.regions.filter(region =>
+      !region.columnKeys.every(key => fieldVisible(p, c.actor, key)));
+    const hiddenIds = new Set(hidden.map(region => region.id));
+    if (body.settings.regions.some(region => hiddenIds.has(region.id) ||
+      region.columnKeys.some(key => !fieldVisible(p, c.actor, key))))
+      fail("FORBIDDEN", "不能设置无权查看的字段保护区域", 403);
+    // A full settings save must not remove rules the caller cannot inspect.
+    const settings = parse(selectionProtectionSchema, {
+      ...body.settings,
+      regions: [...body.settings.regions, ...hidden],
+    });
     const ids = [
       ...new Set([
-        ...body.settings.hiddenReaders,
-        ...body.settings.regions.flatMap((region) => Object.keys(region.users)),
+        ...settings.hiddenReaders,
+        ...settings.regions.flatMap((region) => Object.keys(region.users)),
       ]),
     ];
     if (
@@ -389,7 +478,7 @@ export async function saveSettings(c: Context, input: unknown) {
       ).length !== ids.length
     )
       fail("VALIDATION_ERROR", "指定用户已停用或不存在", 400);
-    if (!body.settings.claimsEnabled)
+    if (!settings.claimsEnabled)
       await rows(
         tx,
         "UPDATE style_selections SET claimed_by=NULL,version=version+1,updated_by=$1::bigint,updated_at=now() WHERE claimed_by IS NOT NULL",
@@ -398,12 +487,14 @@ export async function saveSettings(c: Context, input: unknown) {
     const after = await one(
       tx,
       "UPDATE style_selection_protection SET settings=$1::jsonb,revision=revision+1,updated_by=$2::bigint,updated_at=now() WHERE id=1 RETURNING settings,revision",
-      JSON.stringify(body.settings),
+      JSON.stringify(settings),
       c.actor.id,
     );
     await audit(tx, c, "UPDATE", "selection-protection", "1", before, after);
-    return { ...after, canManage: true };
+    return { ok: true };
   });
+  // Return the current projection on retries, never a cached private region.
+  return readSettings(c);
 }
 export async function claim(c: Context, value: string, input: unknown) {
   const body = parse(
@@ -485,7 +576,6 @@ export async function imageAccess(c: Context, imageId: string) {
   return db.$transaction(
     async (tx) => {
       const p = await policy(tx);
-      if (protectionAdmin(c.actor)) return;
       const candidates = await rows(
         tx,
         "SELECT * FROM style_selections WHERE images::text LIKE $1 OR label_images::text LIKE $1 OR extra_fields::text LIKE $1",
@@ -495,7 +585,8 @@ export async function imageAccess(c: Context, imageId: string) {
       for (const raw of candidates) {
         const row = camel(raw);
         for (const key of rowFields(row)) {
-          let value = key.startsWith("custom:")
+          const extra = Object.hasOwn(row.extraFields || {}, key);
+          let value = key.startsWith("custom:") || extra
             ? row.extraFields?.[key]
             : row[key];
           if (typeof value === "string") {
@@ -511,6 +602,7 @@ export async function imageAccess(c: Context, imageId: string) {
           )
             continue;
           linked = true;
+          if (extra && !p.registeredFieldKeys?.includes(key)) continue;
           if (access(p, c.actor, raw, key) !== "deny") return;
         }
       }

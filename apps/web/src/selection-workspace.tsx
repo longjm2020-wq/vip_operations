@@ -45,6 +45,8 @@ export function SelectionWorkspace({
   archive = false,
   defaultColumns,
   archiveReferences,
+  canEdit,
+  canManage,
   children,
 }: {
   tableId?: string;
@@ -55,6 +57,8 @@ export function SelectionWorkspace({
   archive?: boolean;
   defaultColumns?: SelectionField[];
   archiveReferences?: Workspace["archiveReferences"];
+  canEdit?: boolean;
+  canManage?: boolean;
   children: ReactNode;
 }) {
   const user = useUser();
@@ -63,12 +67,13 @@ export function SelectionWorkspace({
       tableId
         ? {
             ...user,
-            permissions: (archive
-              ? archiveSelectionPermissions
-              : tableSelectionPermissions)(user.permissions),
+            selectionWorkspaceScoped:true,
+            permissions: [
+              ...(archive ? archiveSelectionPermissions(user.permissions) : tableSelectionPermissions(user.permissions)).filter(permission=>!["selection.manage","selection.protect"].includes(permission)),
+              ...(canEdit ? ["selection.manage"] : []),...(canManage ? ["selection.protect"] : [])],
           }
         : user,
-    [tableId, archive, user],
+    [tableId, archive, user,canEdit,canManage],
   );
   const [client] = useState(() =>
     tableId

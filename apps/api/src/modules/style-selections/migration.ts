@@ -24,7 +24,10 @@ import {
   selectionLayoutSchema,
   type SelectionField,
   mergeSelectionFields,
+  applySelectionSharedLayout,
+  selectionSharedLayoutSchema,
 } from "../../../../../packages/contracts/src/selection-layout.js";
+import { canonicalizeLayout, registerArchiveFields, registerTransferredFields } from "./field-registry.js";
 import { sharedFields, shareTransferredFields } from "./shared-fields.js";
 import {
   archiveChoiceColumns,
@@ -92,17 +95,18 @@ async function workspace(tx: Tx, c: Context, key: string, edit = true) {
         ? "product.update"
         : "product.read"
       : edit
-        ? "project.create"
+        ? "project.read"
         : "project.read",
   );
+  if (edit && !table.can_edit) fail("FORBIDDEN","仅获批准编辑的成员可以跨表传送",403);
+  const permissions = (archive ? archiveSelectionPermissions : tableSelectionPermissions)(c.actor.permissions);
   return {
     context: {
       ...c,
       actor: {
         ...c.actor,
-        permissions: (archive
-          ? archiveSelectionPermissions
-          : tableSelectionPermissions)(c.actor.permissions),
+        selectionWorkspaceScoped:true,
+        permissions: [...permissions.filter(permission=>!["selection.manage","selection.protect"].includes(permission)),...(table.can_edit?["selection.manage"]:[]),...(table.can_manage?["selection.protect"]:[])],
       },
     },
     name: table.name,
@@ -164,15 +168,19 @@ async function layout(tx: Tx, c: Context, key: string, archive: boolean) {
     preferences.columns,
     shared.fields,
   );
+  if (archive) await registerArchiveFields(tx,c,canonical.filter(field=>preferences.columns.some(item=>item.key===field.key)),key);
+  const template = await one(tx,"SELECT preferences,revision FROM public.selection_shared_layouts WHERE workspace_key=$1",key);
+  const normalized = await canonicalizeLayout(tx,c,preferences,key);
+  const projected = template ? applySelectionSharedLayout(normalized,selectionSharedLayoutSchema.parse(template.preferences)) : normalized;
   return {
     preferences: archive
       ? {
-          ...preferences,
-          columns: archiveChoiceColumns(preferences.columns, canonical),
+          ...projected,
+          columns: archiveChoiceColumns(projected.columns, canonical),
         }
-      : preferences,
+      : projected,
     revision: stored?.revision || 0,
-    sharedRevision: shared.revision,
+    sharedRevision: `${shared.revision}:${template?.revision || 0}`,
     productFields,
   };
 }
@@ -199,25 +207,15 @@ export async function targets(c: Context) {
             archive: true,
           });
       }
-      if (
-        c.actor.permissions.includes("project.read") &&
-        c.actor.permissions.includes("project.create")
-      ) {
+      if (c.actor.permissions.includes("project.read")) {
         const tables = await rows(
           tx,
           `SELECT t.id,t.name FROM public.project_tables t WHERE t.system_key IS NULL AND t.deleted_at IS NULL AND ${readableSql("table", "t")} ORDER BY t.id DESC`,
           libraryAdmin(c.actor),
           c.actor.id,
         );
-        result.push(
-          ...tables
-            .filter((table) => String(table.id) !== source)
-            .map((table) => ({
-              key: String(table.id),
-              name: table.name,
-              archive: false,
-            })),
-        );
+        for (const table of tables) if (String(table.id)!==source && (await tableAccess(tx,c.actor,String(table.id))).can_edit)
+          result.push({key:String(table.id),name:table.name,archive:false});
       }
       for (const target of result)
         target.fields = (
@@ -251,7 +249,14 @@ async function buildPlan(tx: Tx, c: Context, body: Input, lock = false) {
       row,
       protection.rowFields(row),
     );
-  const fields = body.fields.filter(
+  const sourceLayout = await layout(tx,c,sourceKey,source.archive);
+  const sourceDefinitions = new Map(sourceLayout.preferences.columns.map(field=>[field.key,field]));
+  const fields = body.fields.map(field=> {
+    if (!field.key.startsWith("custom:")) return { ...field, visibility: "PUBLIC" as const };
+    const saved = sourceDefinitions.get(field.key);
+    if (!saved) fail("FORBIDDEN","原表字段不可查看或尚未保存",403);
+    return saved;
+  }).filter(
     (field) =>
       !field.deleted &&
       !readonlyTypes.has(field.type || field.fallbackType || "") &&
@@ -273,6 +278,7 @@ async function buildPlan(tx: Tx, c: Context, body: Input, lock = false) {
   const sourceFields = new Map(fields.map((field) => [field.key, field]));
   return inWorkspace(tx, body.target, async () => {
     if (lock) {
+      await rows(tx,"SELECT pg_advisory_xact_lock(hashtextextended($1,0))::text",`selection-layout-shared:${body.target}`);
       await tx.$executeRawUnsafe(
         "LOCK TABLE style_selections IN SHARE ROW EXCLUSIVE MODE",
       );
@@ -340,6 +346,11 @@ async function buildPlan(tx: Tx, c: Context, body: Input, lock = false) {
       }
     if (!mappings.length)
       fail("VALIDATION_ERROR", "请至少配置一个传送字段", 400);
+    for (const mapping of mappings) {
+      const from = sourceFields.get(mapping.source)!, to = targetFields.get(mapping.target)!;
+      if (from.visibility === "PRIVATE" && to.visibility !== "PRIVATE")
+        fail("VALIDATION_ERROR",`私有字段「${from.label}」不能传入公开字段，请选择私有目标或先公开原字段`,400);
+    }
     const optionChanges: {
       key: string;
       label: string;
@@ -367,6 +378,8 @@ async function buildPlan(tx: Tx, c: Context, body: Input, lock = false) {
         (option) => !to.options?.includes(option),
       );
       if (!addedOptions.length) continue;
+      if (to.ownerId && to.ownerId !== c.actor.id && !c.actor.roleCodes?.includes("SUPER_ADMIN"))
+        fail("FORBIDDEN",`目标字段「${to.label}」的选项只能由创建者修改`,403);
       const options = [...(to.options || []), ...addedOptions];
       const limit = productField ? 50 : 100;
       if (options.length > limit)
@@ -404,6 +417,9 @@ async function buildPlan(tx: Tx, c: Context, body: Input, lock = false) {
     const targetPolicy = await protection.policy(tx, lock),
       plan: Row[] = [],
       used = new Set<string>();
+    const newFields = columns.filter(field=>field.custom && !targetLayout.preferences.columns.some(existing=>existing.key===field.key));
+    targetPolicy.registeredFieldKeys = [...new Set([...(targetPolicy.registeredFieldKeys || []),...newFields.map(field=>field.key)])];
+    targetPolicy.privateFieldOwners = { ...targetPolicy.privateFieldOwners,...Object.fromEntries(newFields.filter(field=>field.visibility === "PRIVATE").map(field=>[field.key,c.actor.id])) };
     for (const raw of sourceRows) {
       const row = camel(raw),
         values: Row = {},
@@ -555,8 +571,8 @@ async function buildPlan(tx: Tx, c: Context, body: Input, lock = false) {
       canonical({
         sourceKey,
         targetKey: body.target,
-        sourcePolicy: sourcePolicy.revision,
-        targetPolicy: targetPolicy.revision,
+        sourcePolicy: [sourcePolicy.revision,sourcePolicy.fieldRevision],
+        targetPolicy: [targetPolicy.revision,targetPolicy.fieldRevision],
         plan,
         preferences,
         layoutRevision: targetLayout.revision,
@@ -720,6 +736,7 @@ export async function commit(c: Context, input: unknown) {
       );
     }
     await inWorkspace(tx, body.target, async () => {
+      await registerTransferredFields(tx,plan.target.context,body.target,plan.transferredFields);
       for (const item of plan.plan) {
         await copyImages(
           tx,
@@ -756,7 +773,7 @@ export async function commit(c: Context, input: unknown) {
       await shareTransferredFields(
         tx,
         body.target,
-        plan.transferredFields,
+        plan.transferredFields.filter(field=>field.visibility !== "PRIVATE"),
         c.actor.id,
       );
     });

@@ -14,6 +14,8 @@ import {
   archiveChoiceColumns,
 } from "../../../../../packages/contracts/src/product-archive-table.js";
 import { sharedFields } from "./shared-fields.js";
+import { canonicalizeLayout, registerArchiveFields } from "./field-registry.js";
+import { selectionLayoutSchema } from "../../../../../packages/contracts/src/selection-layout.js";
 import { archiveSelectionPermissions } from "../../../../../packages/contracts/src/table-permissions.js";
 import {
   audit,
@@ -26,6 +28,7 @@ import {
 import { persistMaster } from "../master/service.js";
 import { customValues } from "../master/product-fields.js";
 import { z } from "zod";
+import { tableAccess } from "../projects/library.js";
 
 export async function isArchive(tx: Tx) {
   const scope = selectionScope.getStore();
@@ -76,12 +79,17 @@ export async function archiveMetadata(c: Context) {
   return db.$transaction(
     async (tx) => {
       const table = await archiveWorkspace(tx, c);
+      const access = await tableAccess(tx,c.actor,String(table.id));
       const fields = camel(
         await rows(
           tx,
           "SELECT * FROM public.product_fields WHERE active ORDER BY created_at,id",
         ),
       );
+      const canonicalFields = archiveTableFields(fields);
+      const visibleFields = table.initial_layout === "empty" ? (await sharedFields(tx,String(table.id))).fields : canonicalFields;
+      await registerArchiveFields(tx,c,canonicalFields.filter(field=>visibleFields.some(item=>item.key===field.key)),String(table.id));
+      const layout = await canonicalizeLayout(tx,c,selectionLayoutSchema.parse({columns:visibleFields}),String(table.id));
       const categories = camel(
         await rows(
           tx,
@@ -102,13 +110,9 @@ export async function archiveMetadata(c: Context) {
         name: table.name,
         initialLayout: table.initial_layout,
         layoutGeneration: table.layout_generation,
-        fields:
-          table.initial_layout === "empty"
-            ? archiveChoiceColumns(
-                (await sharedFields(tx, String(table.id))).fields,
-                archiveTableFields(fields),
-              )
-            : archiveTableFields(fields),
+        canEdit:access.can_edit,
+        canManage:access.can_manage,
+        fields: archiveChoiceColumns(layout.columns,canonicalFields),
         references: {
           categoryId: categories,
           brandId: brands,

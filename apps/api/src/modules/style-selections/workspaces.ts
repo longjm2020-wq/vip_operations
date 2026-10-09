@@ -28,6 +28,8 @@ import {
   tableAccess,
   libraryAdmin,
   readableSql,
+  contentAccessSql,
+  effectiveContentAccess,
   contentSummary,
 } from "../projects/library.js";
 import { visibilitySchema } from "../../../../../packages/contracts/src/project-library.js";
@@ -53,7 +55,13 @@ export class SelectionWorkspaceInterceptor implements NestInterceptor {
     }
     const guard = async (tx: Parameters<typeof tableAccess>[0]) => {
       if (tableId)
-        await tableAccess(tx, external ? undefined : request.actor, tableId);
+      {
+        const table = await tableAccess(tx,external ? undefined : request.originalActor || request.actor,tableId);
+        if (request.selectionPermission === "selection.manage" && !table.can_edit)
+          fail("FORBIDDEN","表格编辑授权已变更，请刷新页面",403);
+        if (request.selectionPermission === "selection.protect" && !table.can_manage)
+          fail("FORBIDDEN","表格管理授权已变更，请刷新页面",403);
+      }
     };
     await guard(db);
     return new Observable((subscriber) =>
@@ -75,7 +83,7 @@ export class ProjectTablesController {
     return (
       await rows(
         db,
-        `SELECT t.*,u.display_name AS created_by_name FROM project_tables t JOIN users u ON u.id=t.created_by WHERE t.deleted_at IS NULL AND t.system_key IS NULL AND ${readableSql("table", "t")} ORDER BY t.id DESC`,
+        `SELECT t.*,${contentAccessSql("table","t")} AS content_access,u.display_name AS created_by_name FROM project_tables t JOIN users u ON u.id=t.created_by WHERE t.deleted_at IS NULL AND t.system_key IS NULL AND ${readableSql("table", "t")} ORDER BY t.id DESC`,
         libraryAdmin(request.actor),
         request.actor.id,
       )
@@ -93,7 +101,7 @@ export class ProjectTablesController {
         parse(id, value),
       );
       if (!table) fail("NOT_FOUND", "表格不存在", 404);
-      return contentSummary(request.actor, "table", table!);
+      return contentSummary(request.actor, "table", {...table!,content_access:await effectiveContentAccess(tx,request.actor,"table",table!)});
     });
   }
 

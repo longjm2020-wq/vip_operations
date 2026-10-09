@@ -21,7 +21,6 @@ import {
   id,
   requirePermission,
   entity,
-  pagination,
   command,
   fail,
   audit,
@@ -38,6 +37,7 @@ import { inventorySummary } from "./modules/inventory/summary.js";
 import { InventoryFulfilmentController } from "./modules/inventory/controller.js";
 import * as purchase from "./modules/purchases/service.js";
 import * as suggestion from "./modules/suggestions/service.js";
+import { list as auditLogs } from "./modules/audit/service.js";
 import { vipStatus } from "./integrations/vip/index.js";
 import { compassProbeRequestSchema } from "./integrations/vip/compass.js";
 import { platformCatalog } from "./integrations/vip/catalog.js";
@@ -374,33 +374,7 @@ class SystemController {
     });
   }
   @Permission("audit.read") @Get("audit-logs") async audit(@Req() request:AuthRequest,@Query() q: any) {
-    const p = pagination(q),
-      v: unknown[] = [],
-      w: string[] = [];
-    if(!request.actor?.roleCodes?.some(code=>code==="ADMIN" || code==="SUPER_ADMIN"))w.push("entity_type NOT IN ('style-selection','selection-collection','selection-collection-item','selection-protection')");
-    for (const [k, col] of Object.entries({
-      entityType: "entity_type",
-      entityId: "entity_id",
-      actorId: "actor_id",
-      action: "action",
-    }))
-      if (q[k]) {
-        v.push(q[k]);
-        w.push(`${col}=$${v.length}${k.endsWith("Id") ? "::bigint" : ""}`);
-      }
-    const f =
-      " FROM audit_logs" + (w.length ? " WHERE " + w.join(" AND ") : "");
-    return {
-      data: await rows(
-        db,
-        "SELECT *" +
-          f +
-          ` ORDER BY id DESC LIMIT ${p.pageSize} OFFSET ${(p.page - 1) * p.pageSize}`,
-        ...v,
-      ),
-      ...p,
-      total: (await one(db, "SELECT count(*)::int AS n" + f, ...v))!.n,
-    };
+    return auditLogs(context(request),q);
   }
 }
 @ApiTags("商品与基础资料")

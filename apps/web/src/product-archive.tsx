@@ -10,6 +10,7 @@ export function ProductArchive() {
   const query = useQuery({
     queryKey: ["product-archive-table", user.id],
     queryFn: async () => (await api("/product-archive-table")).data,
+    refetchInterval:10000,
   });
   if (query.error)
     return <QueryState error={query.error} reload={() => query.refetch()} />;
@@ -24,6 +25,8 @@ export function ProductArchive() {
       layoutGeneration={query.data.layoutGeneration}
       defaultColumns={query.data.fields}
       archiveReferences={query.data.references}
+      canEdit={query.data.canEdit}
+      canManage={query.data.canManage}
     >
       <StyleSelectionsPage />
     </SelectionWorkspace>

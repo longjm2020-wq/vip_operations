@@ -32,10 +32,12 @@ const context = (id = adminId, roles = ["SUPER_ADMIN"]): Context => ({
 const count = async () => Number((await one(db, "SELECT count(*)::int AS count FROM style_selections"))!.count);
 const tail = async () => camel((await one(db, "SELECT * FROM style_selections ORDER BY sort_order DESC,id ASC LIMIT 1"))!);
 const reset = () => rows(db, "TRUNCATE style_selections CASCADE");
+const register = async (key:string,workspace="default")=>rows(db,"INSERT INTO public.selection_field_registry(workspace_key,table_id,field_key,visibility,definition) VALUES($1,$2::bigint,$3,'PUBLIC',$4::jsonb) ON CONFLICT DO NOTHING",workspace,workspace==="default"?null:workspace,key,JSON.stringify({key,label:key,width:120,custom:true,type:key.endsWith("photo")?"image":"text"}));
 let passed = 0;
 const check = (label: string) => { passed++; console.log("PASS", label); };
 
 try {
+  await register("custom:note");await register("custom:photo");
   assert.equal(await count(), 0);
   await s.list(context(), {});
   assert.equal(await count(), 0);
@@ -114,6 +116,7 @@ try {
   const table = await one(db, "INSERT INTO project_tables(name,created_by,initial_layout) VALUES('trailing-test',$1::bigint,'empty') RETURNING id", adminId);
   await rows(db, "SELECT create_project_table_workspace($1::bigint)::text", table!.id);
   await selectionScope.run(String(table!.id), async () => {
+    await register("custom:text",String(table!.id));
     assert.equal(await count(), 0);
     await s.write(context(), { extraFields: { "custom:text": "新表内容" }, ensureTrailingBlank: true });
     assert.equal(await count(), 2);
@@ -125,6 +128,7 @@ try {
   const archive = await archiveMetadata(context());
   const productCount = Number((await one(db, "SELECT count(*)::int AS count FROM products"))!.count);
   await selectionScope.run(String(archive.id), async () => {
+    await register("custom:text",String(archive.id));
     await reset();
     const draft = await s.write(context(), {});
     const editor = context();

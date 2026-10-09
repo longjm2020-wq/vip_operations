@@ -25,6 +25,7 @@ export type Actor = {
   roleCodes?: string[];
   roleNames?: string[];
   csrfToken?: string;
+  selectionWorkspaceScoped?: boolean;
 };
 export type Context = { actor: Actor; requestId: string; key?: string };
 export function fail(

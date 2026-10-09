@@ -78,6 +78,8 @@ async function settings(value: any) {
   });
 }
 try {
+  for (const key of ["custom:secret","custom:public"])
+    await rows(db,"INSERT INTO public.selection_field_registry(workspace_key,field_key,visibility,definition) VALUES('default',$1,'PUBLIC',$2::jsonb)",key,JSON.stringify({key,label:key,width:120,custom:true,type:"text"}));
   const image = (
     await s.uploadImage(fresh(admin), {
       data: "data:image/jpeg;base64,/9j/AA==",

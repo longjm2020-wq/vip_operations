@@ -172,6 +172,7 @@ export function ProjectTablePage() {
   const table = useQuery({
     queryKey: ["project-table", id],
     queryFn: () => api(`/project-tables/${id}`),
+    refetchInterval:10000,
   });
   if (table.isLoading) return <Spin />;
   if (table.error || !table.data)
@@ -184,6 +185,8 @@ export function ProjectTablePage() {
         key={id}
         tableId={id}
         title={table.data.data.name}
+        canEdit={table.data.data.canEdit}
+        canManage={table.data.data.canManage}
         blankLayout={["blank", "empty"].includes(table.data.data.initialLayout)}
         emptyLayout={table.data.data.initialLayout === "empty"}
       >
