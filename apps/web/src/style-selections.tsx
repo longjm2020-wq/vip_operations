@@ -41,6 +41,7 @@ import { useSelectionRealtime } from "./selection-realtime";
 import { fetchSelectionRows, SelectionTransfer } from "./selection-transfer";
 import { matchesSelectionFilters, sortSelectionRows, selectionAllCells, clearSelectionCells, type SelectionFilters } from "./selection-filters";
 import { selectionSizes as sizes, sortSelectionSizes } from "../../../packages/contracts/src/selection-sizes";
+import { selectionLastRow } from "../../../packages/contracts/src/selection-trailing-row";
 import "./style-selections.css";
 
 const colorOptions = [
@@ -739,6 +740,7 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
     if (!canEdit || saveLock.current) return;
     const changed = rows.filter((row) => attempts.current.eligible(row) && (!row.id || !sameRow(row, original.current.get(row._key) || {})));
     if (!changed.length) return;
+    const lastRow = canAdd ? selectionLastRow(rows) : undefined;
     saveLock.current = true;
     setSaving(true);
     // A read started before this write must not replace the successful response.
@@ -752,6 +754,8 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
         body.images = rowImages(row); body.labelImages = rowLabelImages(row); body.cellColors = row.cellColors || {}; body.cellAlignments = row.cellAlignments || {}; body.cellVerticalAlignments = row.cellVerticalAlignments || {}; body.cellTextColors = row.cellTextColors || {}; body.cellNumberFormats = row.cellNumberFormats || {}; body.extraFields = row.extraFields || {}; body.sortOrder = Number(row.sortOrder || 0); body.rowColor = row.rowColor || "NONE";
         if (row.id) body.expectedUpdatedAt = row.updatedAt;
         if(row.id)body=selectionDelta(body,original.current.get(row._key) || {});
+        // Unsaved pasted rows participate too, so only the final row can append.
+        if (row === lastRow) body.ensureTrailingBlank = true;
         const attempt = attempts.current.start(row, body);
         try {
           for(const column of columns.filter(column=>!column.deleted && (column.type || column.fallbackType) && !collectionKeys.has(column.key) && (column.custom?column.key in (attempt.body.extraFields || {}):column.key in attempt.body))){const issue=fieldValueError({...column,type:column.type || column.fallbackType},column.custom?attempt.body.extraFields?.[column.key]:imageKeys.has(column.key)?JSON.stringify(attempt.body[column.key] || []):attempt.body[column.key]);if(issue)throw Object.assign(new Error(column.label+"："+issue),{status:400});}

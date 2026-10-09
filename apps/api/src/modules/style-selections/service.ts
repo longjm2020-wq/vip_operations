@@ -2,6 +2,8 @@ import { selectionScope, selectionUrl } from "../../../../../packages/database/s
 import { selectionViewSchema } from "../../../../../packages/contracts/src/selection-view.js";
 import { cellNumberFormatSchema } from "../../../../../packages/contracts/src/selection-format.js";
 import { sortSelectionSizes } from "../../../../../packages/contracts/src/selection-sizes.js";
+import { selectionRowHasContent } from "../../../../../packages/contracts/src/selection-trailing-row.js";
+import { HttpException } from "@nestjs/common";
 import { z } from "zod";
 import { randomUUID } from "node:crypto";
 import * as protection from "./protection.js";
@@ -75,7 +77,8 @@ export const styleSelectionInput = z
   })
   .strict();
 
-const updateInput = styleSelectionInput
+const writeInput = styleSelectionInput.extend({ ensureTrailingBlank: z.boolean().optional() });
+const updateInput = writeInput
   .partial()
   .extend({ expectedUpdatedAt: z.iso.datetime().optional() })
   .strict();
@@ -283,16 +286,36 @@ export async function remove(c: Context, value: string) {
 }
 
 export async function write(c: Context, input: unknown, value?: string) {
-  const parsed = parse<Row>(value ? updateInput : styleSelectionInput, input);
+  const parsed = parse<Row>(value ? updateInput : writeInput, input);
   // A PATCH must not reset omitted JSON fields through schema defaults.
   const body = value ? Object.fromEntries(Object.entries(parsed).filter(([key]) => Object.prototype.hasOwnProperty.call(input, key))) : parsed;
-  if (value && !Object.keys(body).some((key) => key !== "expectedUpdatedAt"))
+  const { ensureTrailingBlank, ...patch } = body;
+  if (value && !Object.keys(patch).some((key) => key !== "expectedUpdatedAt"))
     fail("VALIDATION_ERROR", "没有可更新字段", 400);
-  await protection.preflight(c,value,body);
+  await protection.preflight(c,value,patch);
   const result=await command(c, "style-selections/" + (value || "create"), body, async (tx) => {
-    return persist(tx, c, body, value);
+    const saved = await persist(tx, c, patch, value);
+    if (ensureTrailingBlank && selectionRowHasContent(patch)) await appendTrailingBlank(tx, c, String(saved.id));
+    return saved;
   });
   return protection.detail(c,String(result.id));
+}
+
+async function appendTrailingBlank(tx: Tx, c: Context, savedId: string) {
+  // Serialize checks across collaborators, independently for each table.
+  await rows(tx, "SELECT pg_advisory_xact_lock(hashtextextended($1,0))::text", `selection-trailing-blank:${selectionScope.getStore() || "default"}`);
+  const last = await one(tx, "SELECT * FROM style_selections ORDER BY sort_order DESC,id ASC LIMIT 1");
+  if (!last || String(last.id) !== savedId || !selectionRowHasContent(camel(last)) || last.sort_order >= 10_000_000) return;
+  if (await isArchive(tx) && !c.actor.permissions.includes("product.create")) return;
+  const policy = await protection.policy(tx, true);
+  try {
+    // Lack of permission to add a row must not discard an authorized edit.
+    await protection.assertWrite(tx, c, null, {}, policy, false);
+  } catch (error) {
+    if (error instanceof HttpException && error.getStatus() === 403) return;
+    throw error;
+  }
+  await persist(tx, c, { sortOrder: last.sort_order + 1 });
 }
 
 
