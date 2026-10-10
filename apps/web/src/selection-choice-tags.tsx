@@ -1,7 +1,7 @@
 import { memo, useEffect, useRef, useState, type CSSProperties } from "react";
 import { Select, type RefSelectProps } from "antd";
 import { CloseOutlined, DownOutlined } from "@ant-design/icons";
-import { selectionOptionColor, splitFieldTags, type SelectionField } from "./selection-field-types";
+import { selectionOptionColor, splitChoiceValues, joinChoiceValues, type SelectionField } from "./selection-field-types";
 
 export function SelectionChoicePill({ field, value, onRemove, onEdit }: { field: SelectionField; value: string; onRemove?: () => void; onEdit?: () => void }) {
   const color = selectionOptionColor(field, value);
@@ -25,11 +25,11 @@ export function SelectionChoiceSelect({ field, value, disabled, onChange, inCell
   const multiple = field.type === "multiple";
   return <Select<string | string[]> ref={select} aria-label={field.label} className={inCell ? "selection-choice-select" : "selection-choice-editor"} style={{ width: "100%" }}
     variant={inCell ? "borderless" : "outlined"} disabled={disabled} allowClear showSearch={{ optionFilterProp: "value" }} suffixIcon={inCell ? null : <DownOutlined />} mode={multiple ? "multiple" : undefined} maxTagCount={inCell ? undefined : "responsive"}
-    value={multiple ? splitFieldTags(value) : value || undefined} open={open} onOpenChange={onOpenChange}
+    value={multiple ? splitChoiceValues(field, value) : value || undefined} open={open} onOpenChange={onOpenChange}
     options={(field.options || []).map(option => ({ value: option, label: <SelectionChoicePill field={field} value={option} /> }))}
     labelRender={option => <SelectionChoicePill field={field} value={String(option.value)} />}
     tagRender={tag => <SelectionChoicePill field={field} value={String(tag.value)} onRemove={tag.closable && !disabled ? tag.onClose : undefined} />}
-    onChange={next => onChange(Array.isArray(next) ? next.join("/") : next || "")}
+    onChange={next => onChange(Array.isArray(next) ? joinChoiceValues(next) : next || "")}
   />;
 }
 
@@ -68,7 +68,7 @@ export const SelectionChoiceCell = memo(function SelectionChoiceCell({ field, va
     window.addEventListener("wheel", wheel, { capture: true, passive: true });
     return () => { window.removeEventListener("scroll", scroll, true); window.removeEventListener("wheel", wheel, true); };
   }, [open]);
-  const values = field.type === "multiple" ? splitFieldTags(value) : value ? [value] : [];
+  const values = field.type === "multiple" ? splitChoiceValues(field, value) : value ? [value] : [];
   return <div ref={cell} className="selection-choice-cell" role="group" aria-label={field.label} aria-readonly={disabled} tabIndex={0}
     style={{ "--choice-horizontal": alignment === "left" ? "flex-start" : alignment === "right" ? "flex-end" : "center", "--choice-vertical": verticalAlignment === "top" ? "flex-start" : verticalAlignment === "bottom" ? "flex-end" : "center" } as CSSProperties}
     onKeyDown={event => {

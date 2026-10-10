@@ -3,6 +3,7 @@ import type { SelectionField, SelectionLayout } from "../../../packages/contract
 import { selectionRowHasContent } from "../../../packages/contracts/src/selection-trailing-row.js";
 import { fieldImages, orderedFieldTags, systemField } from "./selection-field-types.js";
 import { selectionSystemValue } from "./selection-system-fields.js";
+import { choiceDisplayText } from "./selection-choice-display.js";
 
 type Row = Record<string, any>;
 type Options = { archiveReferences?: Record<string, Row[]> };
@@ -36,7 +37,8 @@ function valueAt(row: Row, field: SelectionField, options: Options): string {
   if (reference && options.archiveReferences?.[reference])
     return options.archiveReferences[reference].find(item => String(item.id) === String(value))?.name || String(value ?? "");
   if ((field.type || field.fallbackType) === "checkbox") return value == null || value === "" ? "" : value === true || value === "true" ? "是" : "否";
-  if (["multiple", "tags"].includes(field.type || field.fallbackType || "")) return orderedFieldTags(field, value).join("/");
+  if ((field.type || field.fallbackType) === "multiple") return choiceDisplayText(field, value);
+  if ((field.type || field.fallbackType) === "tags") return orderedFieldTags(field, value).join("/");
   if (field.key === "registrationBatch") return String(value ?? "").slice(0, 10);
   return String(value ?? "");
 }

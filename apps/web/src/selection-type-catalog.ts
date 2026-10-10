@@ -1,16 +1,17 @@
 import { allowedFieldTypes, fieldTypes, type FieldType, type SelectionField } from "./selection-field-types.js";
+import { choiceOptionsError, parseChoiceOptions } from "./selection-choice-options.js";
 
 export type NamedFieldType = { key: string; name: string; baseType: FieldType; enabled: boolean; options: string[] };
 export type FieldTypeCatalog = { disabled: FieldType[]; custom: NamedFieldType[] };
 const isType = (value: unknown): value is FieldType => typeof value === "string" && Object.hasOwn(fieldTypes, value);
-export const typeOptions = (text: string) => [...new Set(text.split("\n").map(value => value.trim()).filter(Boolean))];
+export const typeOptions = parseChoiceOptions;
 
 export function namedTypeError(name: string, baseType: FieldType, options: string[], catalog: FieldTypeCatalog): string | null {
   if (!name.trim() || name.trim().length > 40) return "类型名称须为1至40字";
   if ((Object.values(fieldTypes) as string[]).includes(name.trim()) || catalog.custom.some(type => type.name === name.trim())) return "类型名称已存在";
   if (!isType(baseType)) return "请选择基础类型";
-  if (["single", "multiple"].includes(baseType) && !options.length) return "请填写候选选项，每行一个";
-  if (options.length > 100 || options.some(value => value.includes("/") || value.length > 80)) return "候选选项最多100项，每项最多80字且不能含 /";
+  const issue = choiceOptionsError(options, ["single", "multiple"].includes(baseType), ["single", "multiple"].includes(baseType));
+  if (issue) return issue;
   return null;
 }
 

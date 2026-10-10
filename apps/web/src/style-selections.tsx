@@ -26,6 +26,8 @@ import type { CollectionStock } from "../../../packages/contracts/src/selection-
 import { selectionImageLinks, invalidSelectionImage } from "./selection-image-links";
 import { copySelectionImage, copySelectionImageAddress, downloadSelectionImage } from "./selection-image-actions";
 import { SelectionImagePreview, selectionImageContextItems as imageContextItems } from "./selection-image-preview";
+import { choiceDisplayText, choiceClipboardText } from "./selection-choice-display";
+import { joinChoiceValues, splitChoiceValues, isEncodedChoiceValue } from "./selection-field-types";
 import { SelectionChoiceCell } from "./selection-choice-tags";
 import { SelectionInlineTags } from "./selection-inline-tags";
 import { parseSelectionClipboard } from "./selection-clipboard";
@@ -117,9 +119,12 @@ const initialColumns = (storageKey: (key:string)=>string,blankLayout=false,legac
 const rowImages = (row: Row): SelectionImage[] => Array.isArray(row.images) ? row.images : [];
 const rowLabelImages = (row: Row): SelectionImage[] => Array.isArray(row.labelImages) ? row.labelImages : [];
 const valueAt = (row: Row, column: Column) => systemField(column)?selectionSystemValue(row,column):column.key === "collectionInventory" ? (row.collectionInventory || []).reduce((sum:number,item:Row)=>sum+Number(item.available || 0)+Number(item.production || 0),0) : column.custom ? row.extraFields?.[column.key] ?? "" : row[column.key];
-const withValue = (row: Row, column: Column, value: unknown) => systemField(column) || collectionKeys.has(column.key) || !editableSelectionCell(row,column.key) ? row : column.custom
-  ? { ...row, extraFields: { ...(row.extraFields || {}), [column.key]: String(value ?? "") } }
-  : { ...row, [column.key]: column.key === "sizeRange" ? sortSelectionSizes(value) : value };
+const withValue = (row: Row, column: Column, value: unknown) => {
+  if (systemField(column) || collectionKeys.has(column.key) || !editableSelectionCell(row,column.key)) return row;
+  const normalized = (column.type || column.fallbackType) === "multiple" && !fieldValueError(column,value) ? joinChoiceValues(splitChoiceValues(column,value)) : value;
+  return column.custom ? { ...row, extraFields: { ...(row.extraFields || {}), [column.key]: String(normalized ?? "") } }
+    : { ...row, [column.key]: column.key === "sizeRange" ? sortSelectionSizes(normalized) : normalized };
+};
 const sameRow = (a: Row, b: Row) =>
   baseKeys.every((key) => comparable(a[key]) === comparable(b[key])) &&
   comparable(a.cellNumberFormats) === comparable(b.cellNumberFormats) && comparable(a.cellTextColors) === comparable(b.cellTextColors) && comparable(a.cellVerticalAlignments) === comparable(b.cellVerticalAlignments) && comparable(a.cellAlignments) === comparable(b.cellAlignments) && comparable(a.extraFields) === comparable(b.extraFields) && comparable(a.cellColors) === comparable(b.cellColors) &&
@@ -467,7 +472,7 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
   };
   const repeatedStyles = useMemo(() => duplicateStyleCounts(rows, styleCounts.data?.data, original.current), [rows, styleCounts.data]);
   const colorSuggestions = useMemo(() => [...new Set(rows.flatMap((row) => splitTags(row.color)))], [rows]);
-  const fieldViewRows=useMemo<Row[]>(()=>rows.map(row=>({...row,extraFields:{...(row.extraFields || {}),...Object.fromEntries(columns.filter(systemField).map(column=>[column.key,readableSelectionCell(row,column.key)?selectionSystemValue(row,column):""]))}})),[rows,columns]);
+  const fieldViewRows=useMemo<Row[]>(()=>rows.map(row=>({...row,selectionChoiceTexts:Object.fromEntries(columns.filter(column=>(column.type || column.fallbackType)==="multiple").map(column=>[column.key,readableSelectionCell(row,column.key)?choiceDisplayText(column,valueAt(row,column)):""])),extraFields:{...(row.extraFields || {}),...Object.fromEntries(columns.filter(systemField).map(column=>[column.key,readableSelectionCell(row,column.key)?selectionSystemValue(row,column):""]))}})),[rows,columns]);
   const editView = JSON.stringify([searchText,imageSearchRowId,columnFilters,columnSort,groupBy,sort,direction,page,pageSize,columnViewSignature,activeColumns.map(column=>[column.key,column.type,column.fallbackType])]);
   const editingRow = editSession ? rows.find(row=>row._key===editSession.rowKey) : undefined;
   const heldEdit = editSession && editSession.view===editView && canEdit && editingRow &&
@@ -513,7 +518,7 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
     const originalRows=new Map(rows.map(row=>[row._key,row]));
     const matching=sortSelectionRows(fieldViewRows.filter(row => imageSearchRowId !== null
       ? String(row.id) === imageSearchRowId && readableSelectionCell(row,"images")
-      : matchesSelectionSearch(row,searchTerms,visibleColumns.filter(column=>column.custom && column.type!=="image").map(column=>column.key)) && matchesSelectionFilters(row, columnFilters)), columnSort, columns).map(row=>originalRows.get(row._key)!);
+      : matchesSelectionSearch({...row,extraFields:{...(row.extraFields || {}),...row.selectionChoiceTexts}},searchTerms,visibleColumns.filter(column=>column.custom && column.type!=="image").map(column=>column.key)) && matchesSelectionFilters(row, columnFilters)), columnSort, columns).map(row=>originalRows.get(row._key)!);
     if(!heldEdit || !editingRow)return matching;
     // Use the latest permission-projected row while keeping its editing position.
     // Autosave may clear dirty state before the user finishes typing.
@@ -524,7 +529,7 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
   const allGrouped = useMemo(() => {
     const key=groupBy==="batch"?"registrationBatch":groupBy==="supplier"?"supplierCode":groupBy.slice(6);
     const column=columns.find(column=>column.key===key);
-    const label = (row: Row) => heldEdit && heldEdit.rowKey===row._key ? heldEdit.groupLabel : !readableSelectionCell(row,key)?"受保护内容":String(column?valueAt(row,column) ?? "":row[key] || "") || `未填写${column?.label || "字段"}`;
+    const label = (row: Row) => heldEdit && heldEdit.rowKey===row._key ? heldEdit.groupLabel : !readableSelectionCell(row,key)?"受保护内容":String(column?choiceDisplayText(column,valueAt(row,column)):row[key] || "") || `未填写${column?.label || "字段"}`;
     if (groupBy === "none") return [{ label: "", rows: filteredRows }];
     return filteredRows.reduce<{ label: string; rows: Row[] }[]>((result, row) => { const key = label(row); const target = result.find((item) => item.label === key); if (target) target.rows.push(row); else result.push({ label: key, rows: [row] }); return result; }, []);
   }, [groupBy, filteredRows, columns, heldEdit]);
@@ -761,7 +766,7 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
   const copyValue = (row: Row, column: Column) => {
     if(!readableSelectionCell(row,column.key))return "••••";
     const value = imageKeys.has(column.key) ? (column.key === "images" ? rowImages(row) : rowLabelImages(row)).map(image => image.url).join("; ") : column.key === "collectionInventory" ? (row.collectionInventory || []).reduce((sum:number,item:Row)=>sum+item.available+item.production,0) : valueAt(row,column);
-    return String(value ?? "");
+    return choiceClipboardText(column,value);
   };
   const copyCells = (event: ClipboardEvent<HTMLElement>, rowKey: string, columnKey: string) => {
     if (!event.currentTarget.contains(event.target as Node) || (cellTextEditing && selectedCells.size <= 1)) return;
@@ -1036,7 +1041,7 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
       <Input.TextArea aria-label="编辑当前单元格" rows={1} value={editorValue} disabled={!editorEnabled} readOnly={!editorCanEdit || !!editorColumn && collectionKeys.has(editorColumn.key)} placeholder={editorColumn && imageKeys.has(editorColumn.key) ? "图片请在单元格内上传或查看" : "点击单元格，在此编辑内容"} onChange={(event) => editCurrent(event.target.value)} />}</div>
     {editorError && <span className="selection-editor-error" title={editorError} role="status">{editorError}</span>}
     <Button className="selection-editor-expand" type="text" aria-label={detailVisible ? "收起单元格详情" : "展开单元格详情"} title={detailVisible ? "收起详情" : "展开详情"} aria-expanded={detailVisible} aria-controls="selection-cell-detail" disabled={!editorDetailEnabled && !detailVisible} icon={detailVisible ? <CompressOutlined/> : <ExpandAltOutlined/>} onClick={()=>setTextDetailOpen(current=>!current)}/>
-    {detailVisible && <SelectionTextDetail title={`${rows.indexOf(detailRow!) + 1} · ${detailColumn!.label}`} value={String(valueAt(detailRow!,detailColumn!) ?? "")} editable={detailEditable} onChange={value=>{if(detailEditable)update(detailRow!._key,detailColumn!,value);}} onClose={()=>setTextDetailOpen(false)}/>}
+    {detailVisible && <SelectionTextDetail title={`${rows.indexOf(detailRow!) + 1} · ${detailColumn!.label}`} value={choiceDisplayText(detailColumn!,valueAt(detailRow!,detailColumn!))} editable={detailEditable} onChange={value=>{if(detailEditable)update(detailRow!._key,detailColumn!,value);}} onClose={()=>setTextDetailOpen(false)}/>}
   </div>;
 
 
@@ -1070,7 +1075,7 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
       {canEdit && <SelectionPhotoQr />}
       <Button type="link" icon={<PlusOutlined />} disabled={!canAdd} onClick={() => add()}>添加一行</Button><Button type="link" danger icon={<DeleteOutlined />} disabled={!canEdit || !selectedRows.length || saving} loading={deleting} onClick={deleteRows}>删除行</Button>
       {canEdit && <SelectionMigration rows={filteredRows.filter(row=>selectedRows.includes(row._key))} fields={availableColumns} blocked={!!dirtyCount || saving || deleting || transferring || !!releasing} layout={layout} onBusy={setTransferring} onComplete={()=>{setSelectedRows([]);appliedSnapshot.current="";void data.refetch();void styleCounts.refetch();}}/>}
-      <SelectionFieldManager addFieldRef={addFieldRef} columns={columns} visible={visible} canEdit={canEdit} canAdd={canAddField} userId={String(user.id)} isSuperAdmin={user.roleCodes?.includes("SUPER_ADMIN")} onVisibilityChange={layout.setFieldVisibility} blocked={!!dirtyCount || saving || deleting} onDelete={key=>{setColumns(current=>current.map(column=>column.key===key?{...column,deleted:true}:column));setVisible(current=>current.filter(item=>item!==key));setColumnFilters(current=>Object.fromEntries(Object.entries(current).filter(([fieldKey])=>fieldKey!==key)));if(columnSort?.key===key)setColumnSort(null);if(groupBy===`field:${key}`)setGroupBy("none");setFilterColumn(null);setCellAnchor(null);setFocusedCell(null);setSelectedColumnKeys([]);columnSelectionAnchor.current=null;setSelectedCells(new Set());setCopiedCells(new Set());setCellTextEditing(false);setFormatTarget(null);}} catalog={layout.preferences!.typeCatalog} onCatalogChange={value => layout.update("typeCatalog", value)} onVisible={key=>setVisible(current=>current.includes(key)?current.filter(item=>item!==key):[...current,key])} onMove={moveColumn} onSave={field=>{if(imageKeys.has(field.key) && rows.some(row=>(row[field.key]?.length || 0)>(field.imageConfig?.max || 30))){message.error("已有图片超过新上限，请先移除部分图片");return false;}if(field.type && !systemField(field)){const issue=rows.map(row=>fieldValueError(field,imageKeys.has(field.key)?JSON.stringify(row[field.key] || []):valueAt(row,field))).find(Boolean);if(issue){message.error("现有内容与设置不兼容："+issue);return false;}}const exists=columns.some(column=>column.key===field.key);setColumns(current=>exists?current.map(column=>column.key===field.key?field:column):[...current,field]);if(!exists)setVisible(current=>[...current,field.key]);}}/>
+      <SelectionFieldManager addFieldRef={addFieldRef} columns={columns} visible={visible} canEdit={canEdit} canAdd={canAddField} userId={String(user.id)} isSuperAdmin={user.roleCodes?.includes("SUPER_ADMIN")} onVisibilityChange={layout.setFieldVisibility} blocked={!!dirtyCount || saving || deleting} onDelete={key=>{setColumns(current=>current.map(column=>column.key===key?{...column,deleted:true}:column));setVisible(current=>current.filter(item=>item!==key));setColumnFilters(current=>Object.fromEntries(Object.entries(current).filter(([fieldKey])=>fieldKey!==key)));if(columnSort?.key===key)setColumnSort(null);if(groupBy===`field:${key}`)setGroupBy("none");setFilterColumn(null);setCellAnchor(null);setFocusedCell(null);setSelectedColumnKeys([]);columnSelectionAnchor.current=null;setSelectedCells(new Set());setCopiedCells(new Set());setCellTextEditing(false);setFormatTarget(null);}} catalog={layout.preferences!.typeCatalog} onCatalogChange={value => layout.update("typeCatalog", value)} onVisible={key=>setVisible(current=>current.includes(key)?current.filter(item=>item!==key):[...current,key])} onMove={moveColumn} onSave={field=>{const previous=columns.find(column=>column.key===field.key);if((previous?.type || previous?.fallbackType)==="multiple" && (field.type || field.fallbackType)!=="multiple" && rows.some(row=>isEncodedChoiceValue(valueAt(row,previous!)))){message.error("已有含 / 的多选内容，请先调整内容后再修改字段类型");return false;}if(imageKeys.has(field.key) && rows.some(row=>(row[field.key]?.length || 0)>(field.imageConfig?.max || 30))){message.error("已有图片超过新上限，请先移除部分图片");return false;}if(field.type && !systemField(field)){const issue=rows.map(row=>fieldValueError(field,imageKeys.has(field.key)?JSON.stringify(row[field.key] || []):valueAt(row,field))).find(Boolean);if(issue){message.error("现有内容与设置不兼容："+issue);return false;}}const exists=columns.some(column=>column.key===field.key);setColumns(current=>exists?current.map(column=>column.key===field.key?field:column):[...current,field]);if(!exists)setVisible(current=>[...current,field.key]);}}/>
       <SelectionColumnGroupManager columns={columns} visible={visible} groups={columnGroups} onSave={groups => { setColumnGroups(groups); changeColumnGroup(columnGroupId); }}/>
       <SelectionProtectionControl rows={rows} columns={availableColumns} selectedCells={selectedCells} selectedRows={selectedRows} currentRow={editorRow} blocked={!!dirtyCount || saving || deleting} onRefresh={()=>{appliedSnapshot.current="";void data.refetch();}}/>
       <SelectionOrganization columns={availableColumns} configured={layout.preferences!.organization} onConfigure={value => layout.update("organization", value)} group={groupBy} sort={columnSort?`field:${columnSort.key}:${columnSort.direction}`:`${sort}:${direction}`} onGroup={setGroupBy} onSort={value=>{setFollowShared(false);if(value.startsWith("field:")){setColumnSort({key:value.slice(6,value.lastIndexOf(":")),direction:value.endsWith(":asc")?"asc":"desc"});return;}setColumnSort(null);const [nextSort,nextDirection]=value.split(":");setSort(nextSort);setDirection(nextDirection as "asc"|"desc");}}/>

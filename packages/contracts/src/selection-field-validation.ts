@@ -17,6 +17,51 @@ export function splitFieldTags(value: unknown): string[] {
     ),
   ];
 }
+
+// A valid legacy value joins nonempty, slash-free labels with one slash, so
+// it can never contain the double slash in this version marker.
+const choiceValuePrefix = "@choices//v1:";
+export const isEncodedChoiceValue = (raw: unknown) =>
+  String(raw ?? "").trim().startsWith(choiceValuePrefix);
+const uniqueChoiceValues = (values: readonly string[]) =>
+  [...new Set(values.map(value => value.trim()).filter(Boolean))];
+
+export const supportsSlashChoices = (field: Pick<SelectionField, "key" | "custom">) =>
+  !!field.custom && field.key.startsWith("custom:") && !field.key.startsWith("custom:product:");
+
+export function joinChoiceValues(values: readonly string[]): string {
+  const choices = uniqueChoiceValues(values);
+  return choices.some(value => value.includes("/"))
+    ? choiceValuePrefix + JSON.stringify(choices)
+    : choices.join("/");
+}
+
+export function splitChoiceValues(field: Pick<SelectionField, "options"> & Partial<Pick<SelectionField, "key" | "custom">>, raw: unknown): string[] {
+  const value = String(raw ?? "").trim();
+  if (!value) return [];
+  if (isEncodedChoiceValue(value)) {
+    try {
+      const parsed: unknown = JSON.parse(value.slice(choiceValuePrefix.length));
+      if (Array.isArray(parsed) && parsed.every(item => typeof item === "string" && item.trim()))
+        return uniqueChoiceValues(parsed);
+    } catch { /* Invalid encoded input is validated as ordinary pasted text. */ }
+  }
+  const legacy = splitFieldTags(value);
+  // Preserve existing A/B selections even if a new literal A/B label is later
+  // configured. A newly selected literal label is encoded by joinChoiceValues.
+  if (legacy.every(item => field.options?.includes(item))) return legacy;
+  if (field.options?.includes(value)) return [value];
+  // Clipboard text can use a readable JSON label list without the transport
+  // marker. Exact configured names and valid old selections retain priority.
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (supportsSlashChoices({ key: field.key || "", custom: field.custom }) &&
+      Array.isArray(parsed) && parsed.length &&
+      parsed.every(item => typeof item === "string" && item.trim() && field.options?.includes(item.trim())))
+      return uniqueChoiceValues(parsed);
+  } catch { /* Ordinary labels need not be JSON. */ }
+  return legacy;
+}
 export function fieldValueError(
   field: SelectionField,
   raw: unknown,
@@ -81,12 +126,18 @@ export function fieldValueError(
     )
       return "只能选择候选标签";
   }
+  if (type === "single" && value.includes("/") && !supportsSlashChoices(field))
+    return "此业务字段的选项不能含 /，请使用自建单选或多选字段";
   if (type === "single" && !field.options?.includes(value))
     return "请选择已配置的选项";
-  if (
-    type === "multiple" &&
-    value.split("/").some((item) => !field.options?.includes(item))
-  )
-    return "多选值须来自已配置选项，使用 / 分隔";
+  if (type === "multiple") {
+    const values = splitChoiceValues(field, value);
+    if (!supportsSlashChoices(field) && isEncodedChoiceValue(value))
+      return "此业务字段的多选值须使用 / 分隔，请使用自建单选或多选字段";
+    if (!values.length || values.some(item => !field.options?.includes(item)))
+      return "多选值须来自已配置选项";
+    if (!supportsSlashChoices(field) && values.some(item => item.includes("/")))
+      return "此业务字段的选项不能含 /，请使用自建单选或多选字段";
+  }
   return null;
 }

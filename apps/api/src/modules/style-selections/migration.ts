@@ -33,7 +33,8 @@ import {
   archiveChoiceColumns,
   archiveTableFields,
 } from "../../../../../packages/contracts/src/product-archive-table.js";
-import { fieldValueError } from "../../../../../packages/contracts/src/selection-field-validation.js";
+import { fieldValueError, supportsSlashChoices } from "../../../../../packages/contracts/src/selection-field-validation.js";
+import { migrateChoiceValue } from "./migration-choice-values.js";
 import {
   audit,
   canonical,
@@ -377,6 +378,9 @@ async function buildPlan(tx: Tx, c: Context, body: Input, lock = false) {
       const addedOptions = [...new Set(from.options || [])].filter(
         (option) => !to.options?.includes(option),
       );
+      if (addedOptions.some(option => option.includes("/")) &&
+        ((to.type || to.fallbackType) === "tags" || !supportsSlashChoices(to)))
+        fail("VALIDATION_ERROR", `字段「${to.label}」不能接收名称含 / 的选项，请选择单选或多选自建字段`, 400);
       if (!addedOptions.length) continue;
       if (to.ownerId && to.ownerId !== c.actor.id && !c.actor.roleCodes?.includes("SUPER_ADMIN"))
         fail("FORBIDDEN",`目标字段「${to.label}」的选项只能由创建者修改`,403);
@@ -442,13 +446,19 @@ async function buildPlan(tx: Tx, c: Context, body: Input, lock = false) {
         if (!from.custom && from.key === "registrationBatch" && value)
           value = String(value).slice(0, 10);
         const sourceIssue =
-          isChoice(from) && isChoice(to) ? fieldValueError(from, value) : null;
+          isChoice(from) ? fieldValueError(from, value) : null;
         if (sourceIssue)
           fail(
             "VALIDATION_ERROR",
             `款号「${row.xutiStyleNo || row.id}」→「${from.label}」：原字段${sourceIssue}，请先修正后传送`,
             400,
           );
+        if (isChoice(from)) {
+          const converted = migrateChoiceValue(from, to, value);
+          if (converted.issue)
+            fail("VALIDATION_ERROR", `款号「${row.xutiStyleNo || row.id}」→「${to.label}」：${converted.issue}`, 400);
+          value = converted.value;
+        }
         const fromImage =
             (from.type || from.fallbackType) === "image" ||
             ["images", "labelImages"].includes(from.key),

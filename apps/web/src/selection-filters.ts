@@ -9,10 +9,11 @@ export function selectionFilterValue(row: Row, key: string): string {
   const text = String(value ?? "").trim();
   return moneyKeys.has(key) && text && Number.isFinite(Number(text)) ? String(Number(text)) : text;
 }
+export const selectionFilterText = (row: Row, key: string): string => row.selectionChoiceTexts?.[key] ?? selectionFilterValue(row, key);
 export const selectionCellColor = (row: Row, key: string, type: "fill" | "text") => type === "text" ? row.cellTextColors?.[key] || "default" : row.cellColors?.[key] || row.rowColor || "NONE";
 export function matchesSelectionFilters(row: Row, filters: SelectionFilters) {
   return Object.entries(filters).every(([key, filter]) => {
-    const raw = selectionFilterValue(row, key), text = raw.toLocaleLowerCase(), query = filter.value.trim().toLocaleLowerCase();
+    const raw = selectionFilterValue(row, key), text = selectionFilterText(row, key).toLocaleLowerCase(), query = filter.value.trim().toLocaleLowerCase();
     if (filter.values) { let selected = optionSets.get(filter); if (!selected) { selected = new Set(filter.values); optionSets.set(filter, selected); } if (!selected.has(raw)) return false; }
     if (filter.colors && !filter.colors.includes(selectionCellColor(row, key, filter.colorType || "fill"))) return false;
     if (filter.mode === "empty") return !text;
@@ -42,7 +43,7 @@ export function sortSelectionRows(rows: Row[], sort: SelectionView["sort"], colu
   if (!sort) return rows;
   const numericColumn = moneyKeys.has(sort.key) || columns?.find(column => column.key === sort.key)?.type === "number";
   return [...rows].sort((a, b) => {
-    const left = selectionFilterValue(a, sort.key), right = selectionFilterValue(b, sort.key);
+    const left = selectionFilterText(a, sort.key), right = selectionFilterText(b, sort.key);
     if (!left || !right) return left === right ? 0 : left ? -1 : 1;
     const numeric = numericColumn && Number.isFinite(Number(left)) && Number.isFinite(Number(right));
     const result = numeric ? Number(left) - Number(right) : left.localeCompare(right, "zh-CN", { numeric: true });
@@ -51,12 +52,13 @@ export function sortSelectionRows(rows: Row[], sort: SelectionView["sort"], colu
 }
 export function selectionFilterOptions(rows: Row[], key: string) {
   const counts = new Map<string, number>();
-  rows.forEach(row => { const value = selectionFilterValue(row, key); counts.set(value, (counts.get(value) || 0) + 1); });
-  return [...counts].map(([value, count]) => ({ value, count }));
+  const labels = new Map<string, string>();
+  rows.forEach(row => { const value = selectionFilterValue(row, key); counts.set(value, (counts.get(value) || 0) + 1); labels.set(value, selectionFilterText(row, key)); });
+  return [...counts].map(([value, count]) => ({ value, count, ...(labels.get(value) !== value ? { label: labels.get(value)! } : {}) }));
 }
-export function searchSelectionFilterOptions<T extends { value: string }>(options: T[], query: string): T[] {
+export function searchSelectionFilterOptions<T extends { value: string; label?: string }>(options: T[], query: string): T[] {
   const words = query.toLocaleLowerCase().split(/\s+/).filter(Boolean);
-  return options.filter(option => !words.length || words.some(word => (option.value || "(空白)").toLocaleLowerCase().includes(word)));
+  return options.filter(option => !words.length || words.some(word => ((option.label ?? option.value) || "(空白)").toLocaleLowerCase().includes(word)));
 }
 /** Commit the searched option scope without changing the panel's checkbox draft. */
 export function applySelectionOptionSearch(draft: SelectionFilter, options: { value: string }[], query: string): SelectionFilter {

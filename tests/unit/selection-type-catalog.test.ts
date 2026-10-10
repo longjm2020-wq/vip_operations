@@ -36,7 +36,9 @@ it("invalid local catalog data and duplicate names cannot break opening or creat
   expect(namedTypeError(" 文本 ", "single", ["是"], catalog)).toBe("类型名称已存在");
   expect(namedTypeError("质检结果", "single", ["是"], catalog)).toBe("类型名称已存在");
   expect(namedTypeError("新类型", "single", [], catalog)).not.toBeNull();
-  expect(namedTypeError("新类型", "multiple", ["是/否"], catalog)).not.toBeNull();
+  expect(namedTypeError("新类型", "multiple", ["是/否"], catalog)).toBeNull();
+  expect(namedTypeError("新类型", "single", ["女士皮衣/皮草"], catalog)).toBeNull();
+  expect(namedTypeError("新类型", "tags", ["是/否"], catalog)).not.toBeNull();
   const parsed = parseFieldTypeCatalog(JSON.stringify({ disabled: ["text", "unknown", "text"], custom: [catalog.custom[0], catalog.custom[0], { key: "preset:bad", name: "错误", baseType: "arbitrary" }] }));
   expect(parsed.disabled).toEqual(["text"]);
   expect(parsed.custom).toEqual(catalog.custom);

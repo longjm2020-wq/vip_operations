@@ -5,7 +5,7 @@ export type FieldType = keyof typeof fieldTypes;
 import type { SelectionField } from "../../../packages/contracts/src/selection-layout.js";
 export type { SelectionField };
 import {splitFieldTags} from "../../../packages/contracts/src/selection-field-validation.js";
-export {defaultTagConfig,splitFieldTags,fieldValueError} from "../../../packages/contracts/src/selection-field-validation.js";
+export {defaultTagConfig,splitFieldTags,fieldValueError,splitChoiceValues,joinChoiceValues,supportsSlashChoices,isEncodedChoiceValue} from "../../../packages/contracts/src/selection-field-validation.js";
 export const selectionOptionPalette = [
   { key: "orange", label: "暖橙", background: "#ad4c0c" },
   { key: "green", label: "松绿", background: "#527761" },
