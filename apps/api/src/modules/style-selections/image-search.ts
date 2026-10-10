@@ -14,8 +14,8 @@ type Image = { id: string; url: string; color: string };
 type Candidate = { rowId: string; image: Image };
 // Similarity is (1 - distance) * 100, a visual comparison score rather than
 // a same-product probability. Apply the strict threshold to the same score
-// returned to the client so floating-point rounding cannot admit a 90% result.
-const maximumImages = 2000, maximumResults = 3, minimumSimilarity = 90;
+// returned to the client so floating-point rounding cannot admit a 60% result.
+const maximumImages = 2000, maximumResults = 3, minimumSimilarity = 60;
 const cache = new Map<string, { features: SelectionImageFeatures; expires: number }>();
 let activeSearches = 0, activeFeatures = 0;
 const searchesInFlight = new Set<string>();

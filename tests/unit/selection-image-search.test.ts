@@ -241,31 +241,33 @@ describe("permission-aware selection image search", () => {
     expect(new Set(fixture.imageReads.map(value => value.id)).size).toBe(25);
   });
 
-  it("excludes an exact 90% similarity and includes only strictly higher scores", async () => {
+  it("excludes an exact 60% similarity and includes strictly higher scores, including the 60–90% range", async () => {
     fixture.styles.set("default", [row("10", [image(1)])]);
     fixture.imageBytes.set(uuid(1), original);
     const distance = vi.spyOn(imageFeatures, "selectionImageDistance");
     try {
-      for (const value of [0.1, 0.100001, 0.09999999999999999]) {
+      for (const value of [0.4, 0.400001, 0.4000000000000001]) {
         distance.mockReturnValue(value);
         const result = await searchSelectionImages(reader, { data: dataUrl(original) });
         expect(result.data).toEqual([]);
         expect(result.total).toBe(0);
         expect(result.scannedImages).toBe(1);
       }
-      distance.mockReturnValue(0.099999);
-      const result = await searchSelectionImages(reader, { data: dataUrl(original) });
-      expect(result.data).toHaveLength(1);
-      expect(result.data[0].imageSimilarity).toBeCloseTo(90.0001, 8);
-      expect(result.data[0].imageSimilarity).toBeGreaterThan(90);
-      expect(result.total).toBe(1);
+      for (const [value, expectedScore] of [[0.399999, 60.0001], [0.2, 80], [0.1, 90]]) {
+        distance.mockReturnValue(value);
+        const result = await searchSelectionImages(reader, { data: dataUrl(original) });
+        expect(result.data).toHaveLength(1);
+        expect(result.data[0].imageSimilarity).toBeCloseTo(expectedScore, 8);
+        expect(result.data[0].imageSimilarity).toBeGreaterThan(60);
+        expect(result.total).toBe(1);
+      }
     } finally { distance.mockRestore(); }
   });
 
   it("returns the three greatest image similarity scores in descending order after scanning every row", async () => {
     const input = [row("10", [image(1)]), row("20", [image(2)]), row("30", [image(3)]), row("40", [image(4)]), row("50", [image(5)])];
     fixture.imageBytes = new Map(input.map((_value, index) => [uuid(index + 1), original]));
-    const distances = [0.07, 0.001, 0.09, 0.04, 0.095];
+    const distances = [0.35, 0.001, 0.39, 0.25, 0.2];
     const scores = new Map<imageFeatures.SelectionImageFeatures, number>();
     const distance = vi.spyOn(imageFeatures, "selectionImageDistance");
     try {
@@ -284,8 +286,8 @@ describe("permission-aware selection image search", () => {
         return score;
       });
       const result = await searchSelectionImages(reader, { data: dataUrl(original) });
-      expect(result.data.map(value => value.id)).toEqual(["20", "40", "10"]);
-      expect(result.data.map(value => value.imageSimilarity)).toEqual([99.9, 96, 93]);
+      expect(result.data.map(value => value.id)).toEqual(["20", "50", "40"]);
+      expect(result.data.map(value => value.imageSimilarity)).toEqual([99.9, 80, 75]);
       expect(result.total).toBe(5);
       expect(result.scannedImages).toBe(5);
       expect(result.skippedImages).toBe(0);

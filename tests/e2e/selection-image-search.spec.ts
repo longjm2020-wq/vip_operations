@@ -191,7 +191,7 @@ test("网页图片候选缺款号仍按记录定位，保留原文字与列筛�
   expect(state.businessWrites).toEqual([]);
 });
 
-for (const web of [false, true]) test(`${web ? "网页" : "手机"}只显示严格大于90%的前三款，混合旧响应也按相似度降序且无合格结果时显示空状态`, async ({ page }) => {
+for (const web of [false, true]) test(`${web ? "网页" : "手机"}只显示严格大于60%的前三款，60至90分也合格且混合旧响应按相似度降序`, async ({ page }) => {
   if (!web) await page.setViewportSize({ width: 393, height: 852 });
   const state = await fixture(page, { web });
   const ranked = (id: string, score: unknown) => ({ ...candidate, id, xutiStyleNo: `RANK-${id}`, imageSimilarity: score });
@@ -199,8 +199,8 @@ for (const web of [false, true]) test(`${web ? "网页" : "手机"}只显示严�
   delete legacy.imageSimilarity;
   state.response = {
     ...result([
-      ranked("91", 91), ranked("90", 90), ranked("100", 100), ranked("99", 99.5),
-      ranked("95", 95), ranked("89", 89.9), ranked("over", 100.1),
+      ranked("65", 65), ranked("60", 60), ranked("100", 100), ranked("80", 80),
+      ranked("75", 75), ranked("59", 59.9), ranked("over", 100.1),
       ranked("text", "99"), ranked("nonfinite", Number.NaN), legacy,
     ]),
     total: 4, scannedImages: 10,
@@ -208,16 +208,21 @@ for (const web of [false, true]) test(`${web ? "网页" : "手机"}只显示严�
   await open(page); await upload(page);
   const matches = dialog(page).getByRole("button", { name: /^选择图片候选 / });
   await expect(matches).toHaveCount(3);
-  await expect(matches.locator("strong")).toHaveText(["RANK-100", "RANK-99", "RANK-95"]);
-  await expect(dialog(page).getByText("共 4 款相似度大于 90% 的候选，当前显示 3 款（最多 3 款）", { exact: true })).toBeVisible();
-  await expect(dialog(page).getByText("仅显示图片相似度大于 90% 的前 3 款同款候选，请核对款号与图片。查询原图不保存到款式。", { exact: true })).toBeVisible();
+  await expect(matches.locator("strong")).toHaveText(["RANK-100", "RANK-80", "RANK-75"]);
+  await expect(dialog(page).getByText("共 4 款相似度大于 60% 的候选，当前显示 3 款（最多 3 款）", { exact: true })).toBeVisible();
+  await expect(dialog(page).getByText("仅显示图片相似度大于 60% 的前 3 款同款候选，请核对款号与图片。查询原图不保存到款式。", { exact: true })).toBeVisible();
   await expect(dialog(page).getByText("点「是同款并选择」或「不是同款」可帮助本表识别；仅保存比较特征和反馈，不保存查询原图。", { exact: true })).toBeVisible();
 
-  state.response = { ...result([ranked("90", 90), ranked("89", 89.9), legacy]), total: 0, scannedImages: 3 };
+  state.response = { ...result([ranked("60", 60), ranked("59", 59.9), legacy]), total: 0, scannedImages: 3 };
   await upload(page);
-  await expect(dialog(page).getByText("未找到相似度大于 90% 的同款候选，可换一张图片重试", { exact: true })).toBeVisible();
+  await expect(dialog(page).getByText("未找到相似度大于 60% 的同款候选，可换一张图片重试", { exact: true })).toBeVisible();
   await expect(matches).toHaveCount(0);
-  expect(state.searches).toHaveLength(2);
+
+  state.response = { ...result([ranked("just-above", 60.0001), ranked("90", 90)]), total: 2, scannedImages: 2 };
+  await upload(page);
+  await expect(matches).toHaveCount(2);
+  await expect(matches.locator("strong")).toHaveText(["RANK-90", "RANK-just-above"]);
+  expect(state.searches).toHaveLength(3);
   expect(state.businessWrites).toEqual([]);
 });
 
