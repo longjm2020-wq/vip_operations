@@ -1,4 +1,4 @@
-import { selectionImageDistance, type SelectionImageFeatures } from "./image-search-features.js";
+import { selectionImageStrictDistance, type SelectionImageFeatures } from "./image-search-features.js";
 
 type FeedbackExample = {
   rowId: string; imageId: string; imageUrl: string; features: SelectionImageFeatures;
@@ -12,11 +12,11 @@ export function selectionImageLearningEvidence(query: SelectionImageFeatures, fe
   const evidence = new Map<string, LearningEvidence>();
   const conflictedRows = new Set<string>(), confirmationsByRow = new Map<string, number>();
   for (const example of feedback.rejected) {
-    if ((1 - selectionImageDistance(query, example.features)) * 100 <= 90) continue;
+    if ((1 - selectionImageStrictDistance(query, example.features)) * 100 <= 90) continue;
     conflictedRows.add(example.rowId);
   }
   for (const example of feedback.examples) {
-    const similarity = (1 - selectionImageDistance(query, example.features)) * 100;
+    const similarity = (1 - selectionImageStrictDistance(query, example.features)) * 100;
     if (similarity <= 90) continue;
     const key = imageKey(example.rowId, example.imageId, example.imageUrl), prior = evidence.get(key);
     if (conflictedRows.has(example.rowId) || example.negativeCount > 0) continue;

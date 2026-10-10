@@ -4,7 +4,7 @@ import type { SelectionImageFeatures } from "../../apps/api/src/modules/style-se
 // Test learning and focus gates independently; real image comparisons remain
 // covered by selection-image-search-features.test.ts and backend integration.
 vi.mock("../../apps/api/src/modules/style-selections/image-search-features.js", () => ({
-  selectionImageDistance: (_query: unknown, features: { testDistance: number }) => features.testDistance,
+  selectionImageStrictDistance: (_query: unknown, features: { testDistance: number }) => features.testDistance,
 }));
 import { canFocusSelectionImageMatch, selectionImageLearningEvidence } from "../../apps/api/src/modules/style-selections/image-search-learning.js";
 

@@ -5,6 +5,7 @@ import {
   decodeSelectionSearchImage,
   selectionImageFeatureVersion,
   selectionImageDistance,
+  selectionImageStrictDistance,
   type SelectionImageFeatures,
 } from "../../apps/api/src/modules/style-selections/image-search-features.js";
 
@@ -44,6 +45,26 @@ const sameColorGarment = (detail: "stripes" | "neckline" | "pocket", change = 0)
     <circle cx="124" cy="153" r="4" fill="#e8c997"/>
   </svg>`);
 };
+
+// Keep the complete garment visible while varying photography rather than
+// its construction. These inputs exercise real pixel decoding and ranking.
+async function photographicCopies(png: Buffer) {
+  const background = "#ddd8cf";
+  const shiftedCanvas = await sharp(png).extend({ left: 12, right: 12, top: 8, bottom: 8, background }).png().toBuffer();
+  const captures = [
+    { label: "brightness ×0.8", bytes: sharp(png).modulate({ brightness: 0.8 }).png().toBuffer() },
+    { label: "brightness ×1.2", bytes: sharp(png).modulate({ brightness: 1.2 }).png().toBuffer() },
+    { label: "translation +12px,+8px", bytes: sharp(shiftedCanvas).extract({ left: 0, top: 0, width: 240, height: 320 }).png().toBuffer() },
+    { label: "translation -12px,-8px", bytes: sharp(shiftedCanvas).extract({ left: 24, top: 16, width: 240, height: 320 }).png().toBuffer() },
+    { label: "8% same-color canvas on each side", bytes: sharp(png).extend({ left: 19, right: 19, top: 26, bottom: 26, background }).png().toBuffer() },
+    { label: "8% white margin on each side", bytes: sharp(png).extend({ left: 19, right: 19, top: 26, bottom: 26, background: "#fff" }).png().toBuffer() },
+    { label: "rotation +3 degrees", bytes: sharp(png).rotate(3, { background }).png().toBuffer() },
+    { label: "rotation -3 degrees", bytes: sharp(png).rotate(-3, { background }).png().toBuffer() },
+    { label: "90×120 JPEG quality 45", bytes: sharp(png).resize(90, 120).jpeg({ quality: 45 }).toBuffer() },
+    { label: "horizontal mirror WebP quality 65", bytes: sharp(png).flop().webp({ quality: 65 }).toBuffer() },
+  ];
+  return Promise.all(captures.map(async capture => ({ label: capture.label, bytes: await capture.bytes })));
+}
 
 // Retain the prior global-only comparison as a regression witness. All three
 // hard negatives passed a 90-point threshold before local structure was added.
@@ -141,9 +162,57 @@ describe("selection image visual ranking", () => {
       createSelectionImageFeatures(png), createSelectionImageFeatures(differentPng), createSelectionImageFeatures(jpeg),
     ]);
     expect(globalOnlyDistance(query, different)).toBeLessThan(0.1);
-    expect(selectionImageDistance(query, different)).toBeGreaterThanOrEqual(0.1);
-    expect(selectionImageDistance(query, compressed)).toBeLessThan(0.1);
+    expect(selectionImageStrictDistance(query, different)).toBeGreaterThanOrEqual(0.1);
+    expect(selectionImageStrictDistance(query, compressed)).toBeLessThan(0.1);
+    expect((1 - selectionImageDistance(query, different)) * 100).toBeLessThan(98);
     expect(selectionImageDistance(query, compressed)).toBeLessThan(selectionImageDistance(query, different));
+  });
+
+  it.each([
+    ["stripes", 8], ["neckline", 35], ["pocket", 35],
+  ] as const)("ranks the same garment's photographic changes ahead of changed %s details", async (detail, change) => {
+    const [png, differentPng] = await Promise.all([
+      sharp(sameColorGarment(detail)).png().toBuffer(),
+      sharp(sameColorGarment(detail, change)).png().toBuffer(),
+    ]);
+    const copies = await photographicCopies(png);
+    const [query, different, ...transformed] = await Promise.all([
+      createSelectionImageFeatures(png), createSelectionImageFeatures(differentPng),
+      ...copies.map(copy => createSelectionImageFeatures(copy.bytes)),
+    ]);
+    const differentDistance = selectionImageDistance(query, different);
+    for (let index = 0; index < transformed.length; index++) {
+      const sameDistance = selectionImageDistance(query, transformed[index]);
+      expect.soft(Number.isFinite(sameDistance), `${detail}: ${copies[index].label}`).toBe(true);
+      expect.soft(sameDistance, `${detail}: ${copies[index].label}, reference-to-capture should rank before a different garment detail`).toBeLessThan(differentDistance);
+
+      // Production compares the uploaded photograph on the left with gallery
+      // images on the right; bounded capture tolerance need not be symmetric.
+      const capturedQueryDistance = selectionImageDistance(transformed[index], query);
+      const capturedDifferentDistance = selectionImageDistance(transformed[index], different);
+      expect.soft(Number.isFinite(capturedQueryDistance), `${detail}: ${copies[index].label}, captured query`).toBe(true);
+      expect.soft(capturedQueryDistance, `${detail}: ${copies[index].label}, captured-query direction should rank the original before a different garment detail`).toBeLessThan(capturedDifferentDistance);
+    }
+  });
+
+  it("improves brightness and white-margin captures without promoting tolerance-only scores above 97", async () => {
+    const captures = await Promise.all([
+      sharp(original).modulate({ brightness: 0.8 }).png().toBuffer(),
+      sharp(original).extend({ left: 19, right: 19, top: 26, bottom: 26, background: "#fff" }).png().toBuffer(),
+    ]);
+    const [reference, ...queries] = await Promise.all([
+      createSelectionImageFeatures(original), ...captures.map(bytes => createSelectionImageFeatures(bytes)),
+    ]);
+    for (let index = 0; index < queries.length; index++) {
+      const label = index ? "8% white margins" : "brightness ×0.8";
+      const strict = selectionImageStrictDistance(queries[index], reference);
+      const tolerant = selectionImageDistance(queries[index], reference);
+      // A score improved by the capture branch cannot qualify for the >=98
+      // learned-result shortcut, which must continue to rely on strict v2.
+      expect(strict, label).toBeGreaterThan(0.03);
+      expect(tolerant, label).toBeLessThan(strict);
+      expect((1 - tolerant) * 100, label).toBeLessThanOrEqual(97);
+    }
   });
 
   it("versions bounded local descriptors and preserves a perfect match after typed-array serialization", async () => {
