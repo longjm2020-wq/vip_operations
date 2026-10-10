@@ -41,7 +41,7 @@ export async function actorFor(token?: string): Promise<Actor> {
   );
   const permissions = new Set<string>(p.map(x=>x.code));
   if (assignedRoles.some(role=>role.code === "SUPER_ADMIN"))
-    for (const permission of ["project.read","project.create","sop.manage"]) permissions.add(permission);
+    for (const permission of await rows(db, "SELECT code FROM permissions")) permissions.add(permission.code);
   if (!permissions.has("project.read") && await one(db,`SELECT 1 WHERE
     EXISTS(SELECT 1 FROM public.project_library_acl WHERE user_id=$1::bigint AND access IN ('READ','EDIT')) OR
     EXISTS(SELECT 1 FROM public.project_tables WHERE created_by=$1::bigint AND system_key IS NULL) OR

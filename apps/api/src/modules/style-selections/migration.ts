@@ -824,12 +824,16 @@ export async function release(c: Context, value: string, input: unknown) {
       value,
     );
     if (!before) fail("NOT_FOUND", "原行已不存在", 404);
-    protection.assertFields(
-      await protection.policy(tx, true),
-      source.context,
-      { ...before, migration_locked: false },
-      protection.rowFields(before),
-    );
+    const policy = await protection.policy(tx, true);
+    // Restoring a transfer lock is a management action. Historical deleted
+    // fields must not prevent the super-administrator from restoring the row.
+    if (!source.context.actor.roleCodes?.includes("SUPER_ADMIN"))
+      protection.assertFields(
+        policy,
+        source.context,
+        { ...before, migration_locked: false },
+        protection.rowFields(before),
+      );
     if (new Date(before.updated_at).toISOString() !== body.expectedUpdatedAt)
       fail("EDIT_CONFLICT", "原行已更新，请刷新后重试", 409);
     const after = await update(tx, "style_selections", value, {
