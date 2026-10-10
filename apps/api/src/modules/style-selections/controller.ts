@@ -13,6 +13,7 @@ import { archiveMetadata } from "./archive.js";
 import { fail } from "../../core.js";
 import { SelectionRealtime } from "./realtime.js";
 import { searchSelectionImages } from "./image-search.js";
+import { submitSelectionImageFeedback } from "./image-search-feedback.js";
 
 const paramId = (value: string) => parse(id, value);
 const transferContext = (request:AuthRequest) => ({...context(request),actor:request.originalActor || request.actor});
@@ -44,6 +45,11 @@ class StyleSelectionsController {
   @Permission("selection.read") @Post("image-search") async imageSearch(@Req() request:AuthRequest,@Body() body:unknown,@Res() response:Response) {
     response.setHeader("Cache-Control", "private, no-store");
     const data = await searchSelectionImages(context(request),body);
+    response.json({ data, requestId: request.requestId });
+  }
+  @Permission("selection.read") @Post("image-search/feedback") async imageSearchFeedback(@Req() request:AuthRequest,@Body() body:unknown,@Res() response:Response) {
+    response.setHeader("Cache-Control", "private, no-store");
+    const data = await submitSelectionImageFeedback(context(request),body);
     response.json({ data, requestId: request.requestId });
   }
   @Permission("selection.read") @Get("shared-view") sharedView(@Req() request:AuthRequest) { return selections.sharedView(context(request)); }

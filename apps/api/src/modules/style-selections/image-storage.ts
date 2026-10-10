@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { S3Client, PutObjectCommand, GetObjectCommand } from "@aws-sdk/client-s3";
-import { db, one, rows, type Tx } from "../../../../../packages/database/src/index.js";
+import { db, one, rows, type Row, type Tx } from "../../../../../packages/database/src/index.js";
 import { fail } from "../../core.js";
 
 export const imageStorageEnabled = () => Boolean(process.env.AWS_S3_BUCKET_NAME);
@@ -58,8 +58,10 @@ export async function insertImage(tx: Tx, id: string, type: string, bytes: Buffe
     VALUES($1::uuid,$2,$3,$4::bigint,$5,$6::int,$7)`, id, type, key ? null : bytes, actor, key, bytes.length, hash);
 }
 
-export async function readStoredImage(id: string, metadataOnly = false) {
-  const file = await one(db, "SELECT content_type,storage_key,byte_size,sha256 FROM style_selection_images WHERE id=$1::uuid", id);
+// Internal callers may reuse metadata read from this table in the same request.
+// The metadata's identifier must match; normal controller calls still read it here.
+export async function readStoredImage(id: string, metadataOnly = false, metadata?: Row) {
+  const file = metadata?.id === id ? metadata : await one(db, "SELECT content_type,storage_key,byte_size,sha256 FROM style_selection_images WHERE id=$1::uuid", id);
   if (!file) fail("NOT_FOUND", "图片不存在", 404);
   if (metadataOnly) return file!;
   if (file!.storage_key) {

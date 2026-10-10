@@ -10,6 +10,9 @@
 .selection-image-search-query .ant-image-img { width: 96px; height: 96px; object-fit: contain; border-radius: 6px; }
 .selection-image-search-notice { margin: 12px 0; }
 .selection-image-search-results { display: grid; gap: 8px; }
+.selection-image-search-card { border: 1px solid #eaded3; border-radius: 8px; overflow: hidden; background: #fff; }
+.selection-image-search-card .selection-image-search-result { border: 0; border-radius: 0; }
+.selection-image-search-feedback { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; padding: 0 10px 10px; }
 .selection-image-search-result { display: flex; width: 100%; min-width: 0; align-items: center; gap: 12px; padding: 10px; border: 1px solid #eaded3; border-radius: 8px; background: #fff; color: inherit; text-align: left; cursor: pointer; }
 .selection-image-search-result:hover:not(:disabled) { border-color: #d45400; background: #fff8f1; }
 .selection-image-search-result:disabled { cursor: wait; opacity: .7; }
