@@ -1,4 +1,5 @@
 import type ExcelJS from "exceljs";
+import { selectionRowHasContent } from "../../../packages/contracts/src/selection-trailing-row.js";
 
 type Row = Record<string, any>;
 export const selectionSheetColumns = [
@@ -8,6 +9,20 @@ export const selectionSheetColumns = [
   ["vipPrice", "唯品价"], ["livePrice", "直播价"], ["tagPrice", "吊牌价"],
 ] as const;
 const priceKeys = new Set(["supplyPriceExclTax", "vipPrice", "livePrice", "tagPrice"]);
+export function prepareSelectionWorkbookRecords(records: Row[]): Row[] {
+  const populated = records.map((record, index) => ({ record, index })).filter(({ record }) => selectionRowHasContent(record));
+  const missing = populated.filter(({ record }) => !String(record.xutiStyleNo ?? "").trim());
+  if (missing.length) {
+    const examples = missing.slice(0, 5).map(({ record, index }) => {
+      const details = [["供应商款号", record.supplierStyleNo], ["供应商编码", record.supplierCode]]
+        .filter(([, value]) => String(value ?? "").trim())
+        .map(([label, value]) => `${label}：${String(value).trim()}`).join("；");
+      return `第 ${index + 1} 条${details ? `（${details}）` : ""}`;
+    }).join("、");
+    throw Error(`导出范围内有 ${missing.length} 条已填写内容的记录缺少序缇款号：${examples}${missing.length > 5 ? "等" : ""}。请补齐后导出，空白行会自动忽略`);
+  }
+  return populated.map(({ record }) => record);
+}
 function styleSheet(sheet: ExcelJS.Worksheet) {
   sheet.views = [{ state: "frozen", ySplit: 1 }];
   sheet.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } };
@@ -27,9 +42,8 @@ export async function createSelectionWorkbook(records: Row[] = []) {
   let dataSheet: ExcelJS.Worksheet | undefined;
   let imageNumber = 0;
   const codes = new Set<string>();
-  for (const record of records) {
-    const style = String(record.xutiStyleNo || "").trim();
-    if (!style) throw Error("请先为要导出的每款填写序缇款号");
+  for (const record of prepareSelectionWorkbookRecords(records)) {
+    const style = String(record.xutiStyleNo ?? "").trim();
     if (codes.has(style)) throw Error(`序缇款号「${style}」存在多条记录，请勾选唯一款式后导出`);
     codes.add(style);
     const values = Object.fromEntries(selectionSheetColumns.map(([key]) => [key, key === "images" ? (record.images?.length ? "见图片明细" : "") : key === "labelImages" ? (record.labelImages?.length ? "见洗唛吊牌图明细" : "") : key === "registrationBatch" ? String(record[key] || "").slice(0, 10) : String(record[key] ?? "")]));
