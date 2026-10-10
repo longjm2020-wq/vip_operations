@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { matchesSelectionFilters, selectionAllCells, clearSelectionCells, selectionFilterOptions, sortSelectionRows } from "../../apps/web/src/selection-filters.js";
+import { applySelectionOptionSearch, matchesSelectionFilters, searchSelectionFilterOptions, selectionAllCells, clearSelectionCells, selectionFilterOptions, sortSelectionRows } from "../../apps/web/src/selection-filters.js";
+import type { SelectionFilter } from "../../packages/contracts/src/selection-view.js";
 
 describe("selection column filters and selection", () => {
   const row = { _key: "1", material: "Cotton", vipPrice: "12.00", extraFields: { "custom:a": "夏季" }, images: [{ color: "红", url: "https://example.com/image" }] };
@@ -54,4 +55,62 @@ it("sorts built-in/custom columns and keeps empty values last without mutating r
   expect(sortSelectionRows(rows, { key: "vipPrice", direction: "asc" }).map(row => row.vipPrice)).toEqual(["2", "12", null]);
   expect(sortSelectionRows(rows, { key: "custom:a", direction: "desc" }).map(row => row.vipPrice)).toEqual(["12", "2", null]);
   expect(rows[0].vipPrice).toBe("12");
+});
+
+describe("searched checkbox filter submission", () => {
+  const rows = [
+    { material: "面料底布：桑蚕丝100%\n面料绒毛：粘纤100%" },
+    { material: "面料：100%山羊绒" },
+    { material: "面料：70%桑蚕丝30%棉" },
+    { material: "  Cotton  " },
+    { material: "" },
+  ];
+  const options = selectionFilterOptions(rows, "material");
+  const draft: SelectionFilter = { mode: "contains", value: "" };
+  it("limits default checked options to the full search results when confirming", () => {
+    const filter = applySelectionOptionSearch(draft, options, "桑蚕丝");
+    expect(filter.values).toEqual([rows[0].material, rows[2].material]);
+    expect(rows.filter(row => matchesSelectionFilters(row, { material: filter }))).toEqual([rows[0], rows[2]]);
+    expect(draft.values).toBeUndefined();
+  });
+  it("intersects explicit checks without retaining checked nonmatching options", () => {
+    const explicit = { ...draft, values: [rows[0].material, rows[1].material] };
+    expect(applySelectionOptionSearch(explicit, options, "桑蚕丝").values).toEqual([rows[0].material]);
+    expect(explicit.values).toEqual([rows[0].material, rows[1].material]);
+  });
+  it("keeps the draft unchanged when search is cleared or whitespace only", () => {
+    const explicit = { ...draft, values: [rows[0].material, "temporarily excluded by another filter"] };
+    applySelectionOptionSearch(explicit, options, "山羊绒");
+    expect(applySelectionOptionSearch(explicit, options, "")).toBe(explicit);
+    expect(applySelectionOptionSearch(explicit, options, " \t\n ")).toBe(explicit);
+    expect(applySelectionOptionSearch(draft, options, "")).toBe(draft);
+  });
+  it("applies empty matches and unchecked matches as an empty selection", () => {
+    for (const filter of [applySelectionOptionSearch(draft, options, "不存在"), applySelectionOptionSearch({ ...draft, values: [] }, options, "桑蚕丝")]) {
+      expect(filter.values).toEqual([]);
+      expect(rows.filter(row => matchesSelectionFilters(row, { material: filter }))).toEqual([]);
+    }
+  });
+  it("matches any whitespace-separated keyword without case sensitivity and supports blanks", () => {
+    expect(searchSelectionFilterOptions(options, "  COT 山羊绒\n").map(option => option.value)).toEqual([rows[1].material, "Cotton"]);
+    expect(applySelectionOptionSearch(draft, options, "空白").values).toEqual([""]);
+  });
+  it("keeps complete tag and normalized money tokens compatible with row matching", () => {
+    const tags = [{ color: "红/蓝" }, { color: "红" }, { color: "绿" }];
+    const tagFilter = applySelectionOptionSearch(draft, selectionFilterOptions(tags, "color"), "红");
+    expect(tagFilter.values).toEqual(["红/蓝", "红"]);
+    expect(tags.filter(row => matchesSelectionFilters(row, { color: tagFilter }))).toHaveLength(2);
+    const money = [{ vipPrice: "12.00" }, { vipPrice: "12" }, { vipPrice: "2" }];
+    const moneyFilter = applySelectionOptionSearch(draft, selectionFilterOptions(money, "vipPrice"), "12");
+    expect(moneyFilter.values).toEqual(["12"]);
+    expect(money.filter(row => matchesSelectionFilters(row, { vipPrice: moneyFilter }))).toHaveLength(2);
+  });
+  it("preserves conditions and format restrictions and only commits supplied candidates", () => {
+    const colored: SelectionFilter = { ...draft, value: "100%", colorType: "fill", colors: ["YELLOW"] };
+    const filter = applySelectionOptionSearch(colored, options.slice(0, 1), "桑蚕丝");
+    expect(filter).toEqual({ ...colored, values: [rows[0].material] });
+    expect(matchesSelectionFilters({ ...rows[0], cellColors: { material: "YELLOW" } }, { material: filter })).toBe(true);
+    expect(matchesSelectionFilters({ ...rows[0], cellColors: { material: "BLUE" } }, { material: filter })).toBe(false);
+    expect(matchesSelectionFilters(rows[2], { material: filter })).toBe(false);
+  });
 });

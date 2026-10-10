@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { App, Button, Checkbox, Dropdown, Input, Select, Space, Switch, Tabs } from "antd";
 import { ArrowUpOutlined, ArrowDownOutlined, DownloadOutlined } from "@ant-design/icons";
 import type { SelectionFilter, SelectionView } from "../../../packages/contracts/src/selection-view";
-import { matchesSelectionFilters, selectionCellColor, selectionFilterOptions, selectionFilterValue, sortSelectionRows } from "./selection-filters";
+import { applySelectionOptionSearch, matchesSelectionFilters, searchSelectionFilterOptions, selectionCellColor, selectionFilterOptions, selectionFilterValue, sortSelectionRows } from "./selection-filters";
 import { downloadSheet } from "./download-sheet";
 type Row = Record<string, any>;
 const modes = [["contains", "包含"], ["notContains", "不包含"], ["equals", "等于"], ["notEquals", "不等于"], ["starts", "开头是"], ["ends", "结尾是"], ["gt", "大于 / 晚于"], ["gte", "大于等于"], ["lt", "小于 / 早于"], ["lte", "小于等于"], ["between", "介于"], ["empty", "为空"], ["filled", "不为空"]];
@@ -21,8 +21,8 @@ export function SelectionFilterPanel({ column, rows, view, shared, canShare, onC
   const candidates = useMemo(() => rows.filter(row => matchesSelectionFilters(row, otherFilters)), [rows, JSON.stringify(otherFilters)]);
   const allOptions = useMemo(() => selectionFilterOptions(candidates, column.key), [candidates, column.key]);
   const options = useMemo(() => {
-    const words = query.toLocaleLowerCase().split(/\s+/).filter(Boolean), [field, direction] = listOrder.split(":");
-    return allOptions.filter(option => !words.length || words.some(word => (option.value || "(空白)").toLocaleLowerCase().includes(word))).sort((a, b) => (field === "count" ? a.count - b.count || a.value.localeCompare(b.value, "zh-CN", { numeric: true }) : a.value.localeCompare(b.value, "zh-CN", { numeric: true })) * (direction === "asc" ? 1 : -1));
+    const [field, direction] = listOrder.split(":");
+    return searchSelectionFilterOptions(allOptions, query).sort((a, b) => (field === "count" ? a.count - b.count || a.value.localeCompare(b.value, "zh-CN", { numeric: true }) : a.value.localeCompare(b.value, "zh-CN", { numeric: true })) * (direction === "asc" ? 1 : -1));
   }, [allOptions, query, listOrder]);
   const selected = new Set(draft.values ?? allOptions.map(option => option.value));
   const setValues = (values: Set<string>) => setDraft(current => ({ ...current, values: [...values] }));
@@ -31,8 +31,9 @@ export function SelectionFilterPanel({ column, rows, view, shared, canShare, onC
   const colorOptions = [...new Set(candidates.map(row => selectionCellColor(row, column.key, colorType)))];
   const nextView = (): SelectionView => {
     const filters = { ...view.filters };
-    const active = draft.values !== undefined || draft.colors !== undefined || ["empty", "filled"].includes(draft.mode) || !!draft.value.trim();
-    if (active) filters[column.key] = draft; else delete filters[column.key];
+    const committed = applySelectionOptionSearch(draft, allOptions, query);
+    const active = committed.values !== undefined || committed.colors !== undefined || ["empty", "filled"].includes(committed.mode) || !!committed.value.trim();
+    if (active) filters[column.key] = committed; else delete filters[column.key];
     return { filters, sort };
   };
   const apply = async () => { if (draft.mode === "between" && (!draft.value.trim() || !draft.end?.trim())) { message.warning("请填写区间的开始值和结束值"); return; } setBusy(true); try { await onApply(nextView(), share); } catch (error) { message.error((error as Error).message); } finally { setBusy(false); } };

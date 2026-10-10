@@ -53,6 +53,17 @@ export function selectionFilterOptions(rows: Row[], key: string) {
   rows.forEach(row => { const value = selectionFilterValue(row, key); counts.set(value, (counts.get(value) || 0) + 1); });
   return [...counts].map(([value, count]) => ({ value, count }));
 }
+export function searchSelectionFilterOptions<T extends { value: string }>(options: T[], query: string): T[] {
+  const words = query.toLocaleLowerCase().split(/\s+/).filter(Boolean);
+  return options.filter(option => !words.length || words.some(word => (option.value || "(空白)").toLocaleLowerCase().includes(word)));
+}
+/** Commit the searched option scope without changing the panel's checkbox draft. */
+export function applySelectionOptionSearch(draft: SelectionFilter, options: { value: string }[], query: string): SelectionFilter {
+  if (!query.trim()) return draft;
+  const selected = draft.values === undefined ? null : new Set(draft.values);
+  const values = searchSelectionFilterOptions(options, query).filter(option => !selected || selected.has(option.value)).map(option => option.value);
+  return { ...draft, values };
+}
 export function selectionAllCells(rows: Row[], columns: { key: string }[]) {
   return new Set(rows.flatMap(row => columns.map(column => `${row._key}::${column.key}`)));
 }

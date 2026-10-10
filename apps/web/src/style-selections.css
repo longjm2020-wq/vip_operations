@@ -81,7 +81,6 @@
 .selection-blank-sheet .selection-add-record td { text-align: center; }
 .selection-field-kind { margin-right: 8px; color: #8c8c8c; font-size: 18px; font-style: normal; }
 .selection-blank-hint { padding: 56px 24px; text-align: center; color: #999; }
-.selection-blank-sheet td .ant-input { border: 0; background: transparent; border-radius: 0; box-shadow: none; resize: none; }
 .selection-sheet th,
 .selection-sheet td {
   height: 50px;
@@ -141,18 +140,9 @@
   color: inherit;
   font: inherit;
 }
-.selection-sheet td > input:focus {
-  box-shadow: inset 0 0 0 2px #d3540b;
-  background: #fff7ee;
-}
 .selection-sheet .ant-select {
   width: 100%;
   min-width: 100%;
-}
-.selection-sheet .ant-select-selector { border: 0 !important; background: transparent !important; box-shadow: none !important; }
-.selection-sheet .ant-select-focused .ant-select-selector {
-  box-shadow: inset 0 0 0 2px #d3540b !important;
-  background: #fff7ee !important;
 }
 .selection-cell-error {
   background: #fff1f0 !important;
@@ -311,7 +301,7 @@
   box-shadow: none;
 }
 .selection-date-tag.ant-btn { margin: 4px; }
-.selection-date-editor { padding: 5px 8px; border: 1px solid #eaded3; border-radius: 5px; font: inherit; }
+.selection-date-editor { padding: 5px 8px; font: inherit; }
 .selection-image-url { width: 280px; }
 .selection-image-list:not(:empty) { margin-bottom: 5px; }
 .selection-images:focus-visible { outline: 2px solid #d3540b; outline-offset: -2px; }
@@ -325,7 +315,7 @@
   font-size: 11px;
   color: #76543f;
   background: #fff1e5;
-  border: 1px solid #efddcd;
+  border: 0;
   border-radius: 4px;
 }
 .selection-sheet .selection-tags .ant-select-selection-item-remove { font-size: 9px; }
@@ -341,12 +331,23 @@
 .selection-remote-cell { position: absolute; inset: 3px; border: 2px solid; pointer-events: none; z-index: 5; }
 .selection-remote-names { position: absolute; top: -2px; right: -2px; max-width: calc(100% + 4px); padding: 0 4px; color: white; font-size: 10px; line-height: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .selection-text-input { box-sizing: border-box; width: 100%; height: 100%; padding: 7px 9px; border: 0; outline: 0; resize: none; overflow: hidden; white-space: pre-wrap; overflow-wrap: anywhere; color: inherit; font: inherit; line-height: 18px; background: transparent; }
-.selection-sheet .selection-text-input:focus, .selection-sheet .selection-text-input:focus-visible { box-shadow: none !important; outline: none !important; }
-.selection-sheet td textarea.ant-input,
-.selection-sheet td textarea.ant-input:hover,
-.selection-sheet td textarea.ant-input:focus,
-.selection-sheet td textarea.ant-input:focus-visible,
-.selection-sheet td textarea.ant-input:disabled { border: 0; border-radius: 0; background: transparent; box-shadow: none; outline: none; color: inherit; resize: none; }
+/* Keep editing chrome inside the sheet and its text tools borderless in every state. */
+.selection-sheet td :is(input:not([type="checkbox"]):not([type="file"]), textarea, .ant-input-affix-wrapper, .ant-select, .ant-select-selector),
+.selection-editor-control :is(input:not([type="checkbox"]):not([type="file"]), textarea, .ant-input-affix-wrapper, .ant-select, .ant-select-selector),
+.selection-text-detail textarea,
+.selection-preview-text-panel textarea,
+.selection-image-url input.ant-input,
+.selection-date-editor {
+  border: 0 !important;
+  border-radius: 0 !important;
+  outline: none !important;
+  box-shadow: none !important;
+  background: transparent !important;
+  color: inherit;
+}
+.selection-sheet td textarea.ant-input { resize: none; }
+.selection-sheet td :is(.selection-chip, .ant-tag, .ant-select-selection-item),
+.selection-editor-control :is(.selection-chip, .ant-tag, .ant-select-selection-item) { border: 0 !important; }
 .selection-cell-content .selection-tags { max-width: 100%; }
 .selection-cell-content .selection-tags .ant-select-selection-item { max-width: 100%; white-space: normal; height: auto; min-height: 20px; }
 .selection-cell-content .selection-tags .ant-select-selection-item-content { white-space: normal; overflow-wrap: anywhere; }
@@ -360,7 +361,7 @@
 .selection-image-thumb > span { position: absolute; bottom: 0; left: 0; right: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: #fff; background: #0008; font-size: 9px; line-height: 12px; pointer-events: none; }
 .selection-image-manage.ant-btn { position: absolute; top: 6px; right: 3px; width: 20px; padding: 0; }
 .selection-tag-preview { display: flex; flex-wrap: wrap; align-content: flex-start; gap: 3px; min-height: 100%; padding: 5px; cursor: text; box-sizing: border-box; }
-.selection-chip { display: inline-flex; align-items: baseline; max-width: 100%; overflow-wrap: anywhere; padding: 0 4px; color: #76543f; background: #fff1e5; border: 1px solid #efddcd; border-radius: 4px; font-size: 11px; line-height: 18px; }
+.selection-chip { display: inline-flex; align-items: baseline; max-width: 100%; overflow-wrap: anywhere; padding: 0 4px; color: #76543f; background: #fff1e5; border: 0; border-radius: 4px; font-size: 11px; line-height: 18px; }
 .selection-chip button { flex: none; padding: 0 0 0 3px; border: 0; color: #a18a7b; background: transparent; font-size: 9px; cursor: pointer; }
 .selection-tag-placeholder { color: #aaa; font-size: 11px; }
 .selection-sheet.row-extra { --selection-cell-height: 120px; }
@@ -400,7 +401,7 @@
 .selection-editor-control { display: flex; align-items: center; flex: 1; min-width: 0; height: 34px; }
 .selection-editor-control > :not(input[type="checkbox"]) { width: 100%; min-width: 0; }
 .selection-editor-control textarea.ant-input { height: 34px !important; min-height: 34px !important; max-height: 34px !important; overflow-y: auto !important; resize: none; }
-.selection-editor-control > input:not([type="checkbox"]) { height: 34px; box-sizing: border-box; padding: 4px 8px; border: 1px solid #eaded3; border-radius: 4px; font: inherit; }
+.selection-editor-control > input:not([type="checkbox"]) { height: 34px; box-sizing: border-box; padding: 4px 8px; font: inherit; }
 .selection-editor-control .ant-select { flex: 1; min-width: 0; }
 .selection-editor-error { max-width: 240px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12px; color: #b42318; }
 .selection-editor-expand.ant-btn { flex: 0 0 30px; width: 30px; height: 30px; padding: 0; color: #8a6044; }
@@ -411,8 +412,7 @@
 .selection-text-detail.is-dragging header { cursor: grabbing; }
 .selection-text-detail header strong { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 13px; }
 .selection-text-detail header .ant-btn { flex: 0 0 28px; color: #8a6044; }
-.selection-text-detail textarea { flex: 1; min-height: 0; margin: 12px; padding: 10px; border: 1px solid #e6d7ca; border-radius: 6px; outline: none; color: #46352a; background: white; font: inherit; font-size: 13px; line-height: 1.7; resize: none; user-select: text; }
-.selection-text-detail textarea:focus { border-color: #d7793e; box-shadow: 0 0 0 2px #d3540b0d; }
+.selection-text-detail textarea { flex: 1; min-height: 0; margin: 12px; padding: 10px; color: #46352a; font: inherit; font-size: 13px; line-height: 1.7; resize: none; user-select: text; }
 .selection-text-detail footer { flex: 0 0 auto; padding: 0 12px 10px; color: #947a68; font-size: 12px; }
 @media (max-width: 600px) { .selection-editor-label { flex-basis: 90px; } .selection-editor-error { max-width: 80px; } }
 
@@ -452,8 +452,7 @@
 .selection-preview-text-panel header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .selection-preview-text-panel header strong { font-size: 14px; }
 .selection-preview-text-panel p { margin: 8px 0 12px; color: #947a68; font-size: 12px; line-height: 1.6; }
-.selection-preview-text-panel textarea { display: block; width: 100%; height: min(300px, 42dvh); min-height: 100px; padding: 10px; border: 1px solid #e6d7ca; border-radius: 6px; outline: none; color: #46352a; background: white; font: inherit; font-size: 13px; line-height: 1.7; resize: vertical; user-select: text; }
-.selection-preview-text-panel textarea:focus { border-color: #d7793e; box-shadow: 0 0 0 2px #d3540b0d; }
+.selection-preview-text-panel textarea { display: block; width: 100%; height: min(300px, 42dvh); min-height: 100px; padding: 10px; color: #46352a; font: inherit; font-size: 13px; line-height: 1.7; resize: vertical; user-select: text; }
 .selection-preview-text-panel footer { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
 .selection-preview-text-panel .selection-preview-text-error { color: #a94328; }
 .selection-preview-text-status { padding: 18px 0 4px; font-size: 12px; }
@@ -483,7 +482,6 @@
 
 .selection-date-input { display: block; box-sizing: border-box; width: 100%; height: 32px; padding: 5px; flex-shrink: 0; border: 0; border-radius: 0; background: transparent; color: inherit; font: inherit; text-align: inherit; }
 .selection-date-input::placeholder { color: #aaa; font-size: 11px; }
-.selection-date-input:focus, .selection-date-input:focus-visible { outline: none !important; box-shadow: none !important; }
 
 .selection-format-field { display: flex; flex-direction: column; gap: 8px; width: 100%; }
 .selection-format-preview { padding: 14px; border: 1px solid #eee; border-radius: 8px; overflow-wrap: anywhere; }
@@ -582,8 +580,8 @@
 .selection-inline-tag-label, .selection-choice-text { padding: 0; margin: 0; border: 0; color: inherit; background: transparent; font: inherit; line-height: inherit; cursor: text; }
 .selection-chip .selection-inline-tag-label { padding: 0; color: inherit; font-size: inherit; }
 .selection-choice-text { cursor: pointer; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.selection-inline-tag-label:focus-visible, .selection-choice-text:focus-visible { outline: 1px solid #ed6500; outline-offset: 2px; }
-.selection-sheet .selection-inline-tag-input { display: inline-block; width: 76px; max-width: 100%; min-width: 30px; height: 20px; padding: 0 2px; margin: 0; border: 0; border-radius: 2px; background: transparent; color: inherit; font: inherit; line-height: inherit; box-shadow: none; outline: 1px solid #ed6500; }
+.selection-inline-tag-label:focus-visible, .selection-choice-text:focus-visible { outline: none; box-shadow: none; }
+.selection-sheet .selection-inline-tag-input { display: inline-block; width: 76px; max-width: 100%; min-width: 30px; height: 20px; padding: 0 2px; margin: 0; background: transparent; color: inherit; font: inherit; line-height: inherit; }
 .selection-custom-tags .ant-tag { display: inline-flex; align-items: center; }
 .selection-tag-selector { max-width: 100%; }
 .selection-tag-append { display: inline-flex; align-items: center; max-width: 100%; margin: 1px; color: #9a806c; font-size: 11px; }
