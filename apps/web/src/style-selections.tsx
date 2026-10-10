@@ -45,6 +45,7 @@ import { mergeSelectionRemote, mergeSelectionSave, normalizeSelection, selection
 import { useSelectionRealtime } from "./selection-realtime";
 import { fetchSelectionRows, SelectionTransfer } from "./selection-transfer";
 import { matchesSelectionFilters, sortSelectionRows, selectionAllCells, clearSelectionCells, type SelectionFilters } from "./selection-filters";
+import { retainSelectionResults, type RetainedSelectionResults } from "./selection-retained-results";
 import { selectionSizes as sizes, sortSelectionSizes } from "../../../packages/contracts/src/selection-sizes";
 import { selectionLastRow } from "../../../packages/contracts/src/selection-trailing-row";
 import "./style-selections.css";
@@ -296,6 +297,8 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
   const [filterColumn, setFilterColumn] = useState<string | null>(null);
   const [filterSession, setFilterSession] = useState(0);
   const [filterRevision, setFilterRevision] = useState(0);
+  const [filterRefresh, setFilterRefresh] = useState(0);
+  const [retainedFilterRows, setRetainedFilterRows] = useState<RetainedSelectionResults | null>(null);
   const [rows, setRows] = useState<Row[]>([]);
   const [addCount, setAddCount] = useState(10);
   const [selectedRows, setSelectedRows] = useState<string[]>([]);
@@ -337,6 +340,7 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
   const appliedSnapshot = useRef("");
   const connected = useSelectionRealtime(queryClient, tableId, () => setAccessLost(true), layout.refresh);
   const queryString = new URLSearchParams({ page: "1", pageSize: "100", sort, direction }).toString();
+  const loadedSortScope = useRef(queryString);
   const data = useQuery({ queryKey: ["style-selections", queryString], queryFn: ({signal}) => fetchSelectionRows(search, sort, direction, queryClient.getQueryData(["style-selections", queryString]), api, signal), enabled: !accessLost, refetchInterval: connected ? 30000 : 10000, refetchOnWindowFocus: true });
   const styleCounts = useQuery({ queryKey: ["style-selection-style-counts"], queryFn: () => api("/style-selections/style-counts"), refetchInterval: 30000 });
   const presence = useQuery({ queryKey: ["style-selection-presence"], queryFn: () => api("/style-selections/presence"), refetchInterval: 2000 });
@@ -398,7 +402,15 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
     presenceWrites.current = presenceWrites.current.then(() => api("/style-selections/presence", "POST", { editingId: null, editingColumn: null })).catch(() => undefined);
   }, []);
   useEffect(() => {
-    if (accessLost || !data.data || appliedSnapshot.current === snapshot || saving) return;
+    if (accessLost || !data.data || saving) return;
+    const sortChanged=loadedSortScope.current !== queryString;
+    // A cached ordering can contain values from before recent edits. Wait for its
+    // fresh response before making that ordering the new retained filter scope.
+    if (sortChanged && data.isFetching || !sortChanged && appliedSnapshot.current === snapshot) return;
+    if (sortChanged) {
+      loadedSortScope.current = queryString;
+      setFilterRefresh(value=>value+1);
+    }
     const byId=new Map(rows.filter(row=>row.id).map(row=>[String(row.id),row]));
     const rightsChanged=(data.data.data || []).some((incoming:Row)=>{const existing=byId.get(String(incoming.id));return existing && (existing.migrationLocked!==incoming.migrationLocked || existing.policyRevision!==incoming.policyRevision || JSON.stringify(existing.cellAccess)!==JSON.stringify(incoming.cellAccess));});
     if(rightsChanged){setFocusedCell(null);setCellTextEditing(false);}
@@ -418,7 +430,7 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
     for(const row of rows.filter(row=>!row.id))next.push(row);
     setRows(next); setErrors(current=>({...Object.fromEntries(Object.entries(current).filter(([key])=>next.some(row=>key.startsWith(`${row._key}:`)))),...conflicts}));
     original.current = baselines; appliedSnapshot.current = snapshot;
-  }, [data.data, saving, snapshot, rows, accessLost]);
+  }, [data.data, data.isFetching, saving, snapshot, rows, accessLost, queryString]);
 
   const availableColumns=useMemo(() => columns.filter(column=>!column.deleted), [columns]);
   const visibleColumns = useMemo(() => availableColumns.filter((column) => visible.includes(column.key)).map(column=>({...column,type:column.type || column.fallbackType})), [availableColumns, visible]);
@@ -514,25 +526,37 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
       window.removeEventListener("blur",windowBlur);
     };
   },[editSession]);
-  const filteredRows = useMemo(() => {
+  const matchingRows = useMemo(() => {
     const originalRows=new Map(rows.map(row=>[row._key,row]));
-    const matching=sortSelectionRows(fieldViewRows.filter(row => imageSearchRowId !== null
+    return sortSelectionRows(fieldViewRows.filter(row => imageSearchRowId !== null
       ? String(row.id) === imageSearchRowId && readableSelectionCell(row,"images")
-      : matchesSelectionSearch({...row,extraFields:{...(row.extraFields || {}),...row.selectionChoiceTexts}},searchTerms,visibleColumns.filter(column=>column.custom && column.type!=="image").map(column=>column.key)) && matchesSelectionFilters(row, columnFilters)), columnSort, columns).map(row=>originalRows.get(row._key)!);
-    if(!heldEdit || !editingRow)return matching;
+      : Object.keys(columnFilters).every(key=>readableSelectionCell(row,key)) && matchesSelectionSearch({...row,extraFields:{...(row.extraFields || {}),...row.selectionChoiceTexts}},searchTerms,visibleColumns.filter(column=>column.custom && column.type!=="image").map(column=>column.key)) && matchesSelectionFilters(row, columnFilters)), columnSort, columns).map(row=>originalRows.get(row._key)!);
+  }, [rows, fieldViewRows, columnFilters, columnSort, searchTerms, imageSearchRowId, columns, visibleColumns]);
+  const groupKey=groupBy==="batch"?"registrationBatch":groupBy==="supplier"?"supplierCode":groupBy.slice(6);
+  const groupColumn=columns.find(column=>column.key===groupKey);
+  const groupLabel=(row:Row)=>!readableSelectionCell(row,groupKey)?"受保护内容":String(groupColumn?choiceDisplayText(groupColumn,valueAt(row,groupColumn)):row[groupKey] || "") || `未填写${groupColumn?.label || "字段"}`;
+  const filterScope=imageSearchRowId===null && Object.keys(columnFilters).length ? JSON.stringify([
+    filterRefresh,searchText,columnFilters,columnSort,groupBy,sort,direction,
+    followShared?sharedView.data?.data?.revision:0,
+    [...availableColumns].sort((left,right)=>left.key.localeCompare(right.key)).map(column=>[column.key,column.type,column.fallbackType]),
+  ]) : null;
+  const retainedResults=useMemo(()=>retainSelectionResults(retainedFilterRows,filterScope,rows,matchingRows,row=>groupBy==="none"?"":groupLabel(row),row=>Object.keys(columnFilters).every(key=>readableSelectionCell(row,key))),[retainedFilterRows,filterScope,rows,matchingRows]);
+  useEffect(()=>{if(retainedResults!==retainedFilterRows)setRetainedFilterRows(retainedResults);},[retainedResults,retainedFilterRows]);
+  const retainedGroupLabels=useMemo(()=>new Map(retainedResults?.entries.map(entry=>[entry.key,entry.groupLabel]) || []),[retainedResults]);
+  const filteredRows = useMemo(() => {
+    if(retainedResults){const current=new Map(rows.map(row=>[row._key,row]));return retainedResults.entries.map(entry=>current.get(entry.key)!);}
+    if(!heldEdit || !editingRow)return matchingRows;
     // Use the latest permission-projected row while keeping its editing position.
     // Autosave may clear dirty state before the user finishes typing.
-    const retained=matching.filter(row=>row._key!==heldEdit.rowKey);
+    const retained=matchingRows.filter(row=>row._key!==heldEdit.rowKey);
     retained.splice(Math.min(heldEdit.index,retained.length),0,editingRow);
     return retained;
-  }, [rows, fieldViewRows, columnFilters, columnSort, searchTerms, imageSearchRowId, columns, visible, heldEdit, editingRow]);
+  }, [rows, matchingRows, retainedResults, heldEdit, editingRow]);
   const allGrouped = useMemo(() => {
-    const key=groupBy==="batch"?"registrationBatch":groupBy==="supplier"?"supplierCode":groupBy.slice(6);
-    const column=columns.find(column=>column.key===key);
-    const label = (row: Row) => heldEdit && heldEdit.rowKey===row._key ? heldEdit.groupLabel : !readableSelectionCell(row,key)?"受保护内容":String(column?choiceDisplayText(column,valueAt(row,column)):row[key] || "") || `未填写${column?.label || "字段"}`;
+    const label = (row: Row) => retainedGroupLabels.get(row._key) ?? (heldEdit && heldEdit.rowKey===row._key ? heldEdit.groupLabel : groupLabel(row));
     if (groupBy === "none") return [{ label: "", rows: filteredRows }];
     return filteredRows.reduce<{ label: string; rows: Row[] }[]>((result, row) => { const key = label(row); const target = result.find((item) => item.label === key); if (target) target.rows.push(row); else result.push({ label: key, rows: [row] }); return result; }, []);
-  }, [groupBy, filteredRows, columns, heldEdit]);
+  }, [groupBy, filteredRows, columns, heldEdit, retainedGroupLabels]);
   const allDisplayedRows = useMemo(() => allGrouped.flatMap(group => group.rows), [allGrouped]);
   const pageCount = Math.max(1, Math.ceil(allDisplayedRows.length / pageSize));
   const currentPage = Math.min(page, pageCount);
@@ -606,6 +630,7 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
     if (sort !== "sortOrder" || direction !== "asc" || columnSort || groupBy !== "none") return void message.info("请先切换到手动排序并取消分组，再拖动行");
     if(rows.some(row=>columns.some(column=>!editableSelectionCell(row,column.key))))return void message.warning("存在受保护或他人认领的行，不能调整行顺序");
     setCopiedCells(new Set()); setCellAnchor(null); setFocusedCell(null); setCellTextEditing(false);
+    setRetainedFilterRows(current=>current?{...current,entries:reorderSelectionItems(current.entries,keys,fromKey,toKey,entry=>entry.key)}:current);
     setRows(current => { const next = reorderSelectionItems(current, keys, fromKey, toKey, row => row._key); return next === current ? current : next.map((item, index) => ({ ...item, sortOrder: index + 1 })); });
   };
   const moveColumn = (fromKey: string, toKey: string, keys?: string[]) => {
@@ -1005,6 +1030,7 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
       } catch (error) { void queryClient.invalidateQueries({ queryKey: ["selection-shared-view"] }); throw error; }
     }
     setFollowShared(shared); setColumnFilters(view.filters); setColumnSort(view.sort); setFilterColumn(null);
+    setEditSession(null); setFilterRefresh(value=>value+1);
   };
   const columnFilterEditor = (column: Column) => <SelectionFilterPanel key={`${column.key}:${filterSession}`} column={column} columns={columns} rows={fieldViewRows} view={{ filters: columnFilters, sort: columnSort }} shared={followShared && (sharedView.data?.data?.revision || 0) > 0} canShare={canEdit && !!sharedView.data?.data} onCancel={() => setFilterColumn(null)} onApply={applyView} />;
   const editorRow = filteredRows.find((row) => row._key === cellAnchor?.rowKey);
