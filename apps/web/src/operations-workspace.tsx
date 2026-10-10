@@ -82,6 +82,8 @@ export function OperationsWorkspacePage() {
             <Link
               key={entry.href}
               to={entry.href}
+              target="_blank"
+              rel="noopener noreferrer"
               aria-label={entry.name}
               className="operations-entry-link"
             >
