@@ -342,6 +342,11 @@
 .selection-remote-names { position: absolute; top: -2px; right: -2px; max-width: calc(100% + 4px); padding: 0 4px; color: white; font-size: 10px; line-height: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .selection-text-input { box-sizing: border-box; width: 100%; height: 100%; padding: 7px 9px; border: 0; outline: 0; resize: none; overflow: hidden; white-space: pre-wrap; overflow-wrap: anywhere; color: inherit; font: inherit; line-height: 18px; background: transparent; }
 .selection-sheet .selection-text-input:focus, .selection-sheet .selection-text-input:focus-visible { box-shadow: none !important; outline: none !important; }
+.selection-sheet td textarea.ant-input,
+.selection-sheet td textarea.ant-input:hover,
+.selection-sheet td textarea.ant-input:focus,
+.selection-sheet td textarea.ant-input:focus-visible,
+.selection-sheet td textarea.ant-input:disabled { border: 0; border-radius: 0; background: transparent; box-shadow: none; outline: none; color: inherit; resize: none; }
 .selection-cell-content .selection-tags { max-width: 100%; }
 .selection-cell-content .selection-tags .ant-select-selection-item { max-width: 100%; white-space: normal; height: auto; min-height: 20px; }
 .selection-cell-content .selection-tags .ant-select-selection-item-content { white-space: normal; overflow-wrap: anywhere; }
