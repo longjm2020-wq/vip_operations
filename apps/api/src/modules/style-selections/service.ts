@@ -2,7 +2,7 @@ import { selectionScope, selectionUrl } from "../../../../../packages/database/s
 import { selectionViewSchema } from "../../../../../packages/contracts/src/selection-view.js";
 import { cellNumberFormatSchema } from "../../../../../packages/contracts/src/selection-format.js";
 import { sortSelectionSizes } from "../../../../../packages/contracts/src/selection-sizes.js";
-import { selectionRowHasContent } from "../../../../../packages/contracts/src/selection-trailing-row.js";
+import { selectionRowHasContent, selectionRowMissingStyleNo } from "../../../../../packages/contracts/src/selection-trailing-row.js";
 import { HttpException } from "@nestjs/common";
 import { z } from "zod";
 import { randomUUID } from "node:crypto";
@@ -208,13 +208,18 @@ export async function sync(c: Context, input: unknown) {
   finally { pendingSyncs.delete(key); }
 }
 
-export async function list(c: Context, query: Record<string, unknown>) {
+export async function list(c: Context, query: Record<string, unknown>): Promise<{data: Row[]; total: number; page: number; pageSize: number; missingStyleNoCount?: number}> {
   return db.$transaction(async tx=>{
   const policy = await protection.policy(tx);
   const p = pagination(query);
-  if(protection.activePolicy(policy)) {
+  const photoSearch = query.photoSearch === "true", missingOnly = query.missingStyleNo === "true";
+  if(protection.activePolicy(policy) || photoSearch || missingOnly) {
     const projected = protection.filtered((await rows(tx,`SELECT ${selectColumns} ${source}`)).map(row=>protection.project(policy,c.actor,row)),query);
-    return {data:projected.slice((p.page-1)*p.pageSize,p.page*p.pageSize),total:projected.length,...p};
+    // Count after permission projection and search, before the shortcut and page.
+    // Hidden values cannot make a row appear filled or disclose a missing style.
+    const missing = photoSearch || missingOnly ? projected.filter(selectionRowMissingStyleNo) : [];
+    const matching = missingOnly ? missing : projected;
+    return {data:matching.slice((p.page-1)*p.pageSize,p.page*p.pageSize),total:matching.length,...p,...(photoSearch || missingOnly ? {missingStyleNoCount:missing.length} : {})};
   }
   const { values, clause, order } = listSpec(query);
   const total = await one(tx, `SELECT count(*)::int AS n ${source}${clause}`, ...values);
@@ -484,19 +489,25 @@ export async function nextBlankPhotoStyle(c: Context) {
   return row;
 }
 export async function nextPhotoStyle(c:Context,value: string, query: unknown) {
-  const policy=await protection.policy(db);
-  if(protection.activePolicy(policy)){
-    const data=protection.filtered((await rows(db,`SELECT ${selectColumns} ${source}`)).map(row=>protection.project(policy,c.actor,row)),{q:String(query || ""),photoSearch:"true",sort:"sortOrder",direction:"asc"});
-    const current=await protection.detail(c,value);
-    return data.find(row=>Number(row.sortOrder)>Number(current.sortOrder) || Number(row.sortOrder)===Number(current.sortOrder) && BigInt(row.id)<BigInt(value)) || null;
+  const options = query && typeof query === "object" && !Array.isArray(query) ? query as Record<string, unknown> : {q:String(query || "")};
+  return db.$transaction(async tx => {
+  const policy=await protection.policy(tx);
+  const current = await entity(tx, "style_selections", value);
+  if(protection.activePolicy(policy) || options.missingStyleNo === "true"){
+    const matching=protection.filtered((await rows(tx,`SELECT ${selectColumns} ${source}`)).map(row=>protection.project(policy,c.actor,row)),{q:String(options.q || ""),photoSearch:"true",sort:"sortOrder",direction:"asc"});
+    const data=options.missingStyleNo === "true" ? matching.filter(selectionRowMissingStyleNo) : matching;
+    // The current style may have just been completed and left this filter.
+    // Locate the next row using its stable manual-order anchor regardless.
+    const anchor=camel(current);
+    return data.find(row=>Number(row.sortOrder)>Number(anchor.sortOrder) || Number(row.sortOrder)===Number(anchor.sortOrder) && BigInt(row.id)<BigInt(value)) || null;
   }
-  const current = await entity(db, "style_selections", value);
-  const q = String(query || "").trim().slice(0, 100);
-  const result=await one(db, `SELECT ${selectColumns} ${source}
+  const q = String(options.q || "").trim().slice(0, 100);
+  const result=await one(tx, `SELECT ${selectColumns} ${source}
     WHERE (s.sort_order>$1 OR (s.sort_order=$1 AND s.id<$2::bigint))
     AND ($3='' OR concat_ws(' ',s.xuti_style_no,s.supplier_style_no,s.supplier_code) ILIKE $4)
     ORDER BY s.sort_order ASC,s.id DESC LIMIT 1`, current.sort_order, value, q, "%"+q+"%");
   return result?protection.project(policy,c.actor,result):null;
+  },{isolationLevel:"RepeatableRead",timeout:15000});
 }
 /** Granular image operations merge under the row lock instead of replacing a stale array. */
 export async function changePhoto(c: Context, value: string, input: unknown) {

@@ -18,6 +18,16 @@ export function selectionRowHasContent(row: SelectionRow): boolean {
   });
 }
 
+/** Call on permission-projected rows; an omitted or protected style field is not a missing value. */
+export function selectionRowMissingStyleNo(row: SelectionRow): boolean {
+  const access = row.cellAccess as Record<string, unknown> | undefined;
+  return Object.hasOwn(row, "xutiStyleNo") &&
+    access?.xutiStyleNo !== "deny" &&
+    !(Array.isArray(row.hiddenCells) && row.hiddenCells.includes("xutiStyleNo")) &&
+    !String(row.xutiStyleNo ?? "").trim() &&
+    selectionRowHasContent(row);
+}
+
 /** Manual order is sortOrder ASC, id DESC, regardless of the current view. */
 export function selectionLastRow<T extends SelectionRow>(rows: readonly T[]): T | undefined {
   let last: T | undefined;

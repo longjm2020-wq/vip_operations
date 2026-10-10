@@ -1,0 +1,98 @@
+.mobile-photo-result-preview,
+.mobile-photo-result-placeholder {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 64px;
+  width: 64px;
+  height: 64px;
+  overflow: hidden;
+  border: 1px solid #e8ded6;
+  border-radius: 9px;
+  background: #f7f3ef;
+}
+.mobile-photo-result-preview {
+  padding: 0;
+  cursor: zoom-in;
+  line-height: 0;
+}
+.mobile-photo-result-preview:focus-visible {
+  outline: 2px solid #d95200;
+  outline-offset: 3px;
+}
+.mobile-photo-result-preview .ant-image,
+.mobile-photo-result-preview .ant-image-img {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: cover;
+}
+.mobile-photo-result .mobile-photo-result-image-total {
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  padding: 2px 4px;
+  border-radius: 4px;
+  background: rgb(0 0 0 / 58%);
+  color: white;
+  font-size: 10px;
+  line-height: 1.2;
+}
+.mobile-photo-result-placeholder {
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  color: #a69a91;
+  font-size: 20px;
+}
+.mobile-photo-result-placeholder small {
+  font-size: 10px;
+  line-height: 1.2;
+}
+.mobile-photo-result-image-preview .mobile-photo-result-swipe {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+}
+.mobile-photo-result-image-preview .ant-image-preview-close,
+.mobile-photo-result-image-preview .ant-image-preview-switch {
+  min-width: 44px;
+  min-height: 44px;
+}
+.mobile-photo-result-preview-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-inline: 12px;
+}
+.mobile-photo-result-preview-actions button {
+  min-width: 44px;
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 1px solid rgb(255 255 255 / 32%);
+  border-radius: 8px;
+  background: rgb(0 0 0 / 24%);
+  color: #fff;
+  font: inherit;
+  cursor: pointer;
+}
+.mobile-photo-result-preview-actions button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.mobile-photo-result-preview-actions button:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+}
+.mobile-photo-result-preview-actions span {
+  color: rgb(255 255 255 / 80%);
+  font-size: 12px;
+}
+.mobile-photo-result-image-count {
+  font-size: 14px;
+}
