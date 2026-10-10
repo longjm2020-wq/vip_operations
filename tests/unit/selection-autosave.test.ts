@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mergeSelectionRemote, mergeSelectionSave, normalizeSelection, SelectionSaveAttempts } from "../../apps/web/src/selection-autosave.js";
+import { mergeSelectionRemote, mergeSelectionSave, normalizeSelection, selectionDelta, SelectionSaveAttempts } from "../../apps/web/src/selection-autosave.js";
 
 describe("selection autosave", () => {
   it("uses distinct keys for successive edits to the same row", () => {
@@ -82,6 +82,33 @@ describe("selection autosave", () => {
     const result = mergeSelectionRemote({...before,cellColors:{color:"green"}},before,{...before,cellColors:{material:"red",color:"blue"}});
     expect(result.row.cellColors).toEqual({color:"blue"});
     expect(result.conflicts).toEqual([]);
+  });
+
+  it.each([
+    ["cellColors", "BLUE"],
+    ["cellAlignments", "right"],
+    ["cellVerticalAlignments", "top"],
+    ["cellTextColors", "#0958d9"],
+    ["cellNumberFormats", {type:"currency",decimals:2}],
+  ])("publishes a %s removal made while an earlier save is pending", (key, value) => {
+    const sent = {_key:"a",id:"1",[key]:{material:value,color:value}};
+    const current = {...sent,[key]:{color:value}};
+    const saved = {...sent,updatedAt:"saved",version:2};
+    const merged = mergeSelectionSave(current,sent,saved);
+    expect(merged[key]).toEqual({color:value});
+    expect(selectionDelta({[key]:merged[key]},saved)).toEqual({[key]:{material:null}});
+  });
+
+  it("adopts every remote format for a read-only cell and removes denied formatting", () => {
+    const before = {_key:"a",id:"1",material:"visible",cellColors:{},cellAlignments:{},cellVerticalAlignments:{},cellTextColors:{},cellNumberFormats:{}};
+    const formats = {
+      cellColors:{material:"BLUE"},cellAlignments:{material:"right"},cellVerticalAlignments:{material:"top"},
+      cellTextColors:{material:"#0958d9"},cellNumberFormats:{material:{type:"currency",decimals:2}},
+    };
+    const incoming = {...before,...formats,cellAccess:{material:"read"},defaultCellAccess:"read",version:2};
+    expect(mergeSelectionRemote(before,before,incoming)).toEqual({row:incoming,conflicts:[]});
+    const denied = {...incoming,material:null,cellColors:{},cellAlignments:{},cellVerticalAlignments:{},cellTextColors:{},cellNumberFormats:{},cellAccess:{material:"deny"},version:3};
+    expect(mergeSelectionRemote({...incoming,cellColors:{material:"GREEN"}},incoming,denied)).toEqual({row:denied,conflicts:[]});
   });
 });
 

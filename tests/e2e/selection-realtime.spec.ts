@@ -343,3 +343,99 @@ test("transfer fields and rows reach already-open empty targets for the sender a
     await viewerContext.close();
   }
 });
+
+test("format-only writes and public layout changes reach a read-only browser without exposing denied formats", async ({
+  page,
+  browser,
+}) => {
+  const csrf = await login(page), suffix = randomUUID().slice(0, 8), password = randomUUID();
+  const role = await api(page, csrf, "/roles", "POST", {
+    code: "FORMAT_VIEW_" + suffix, name: "格式实时只读测试", permissionCodes: ["selection.read"],
+  });
+  await api(page, csrf, "/users", "POST", {
+    username: "format-view-" + suffix, displayName: "格式只读测试", password, roleIds: [role.id],
+  });
+  const row = await api(page, csrf, "/style-selections", "POST", {
+    xutiStyleNo: "FORMAT-LIVE-" + suffix, material: "原始内容保持不变", supplyPriceExclTax: "42.50",
+  });
+  let layout = await api(page, csrf, "/style-selections/layout-preferences?shared=true", "GET");
+  if (!layout.sharedPreferences) layout = await api(page, csrf, "/style-selections/layout-preferences/initialize", "POST", {});
+  const originalShared = layout.sharedPreferences;
+  const originalProtection = await api(page, csrf, "/style-selections/protection", "GET");
+  await openTable(page);
+  const viewer = await peer(browser, "format-view-" + suffix, password);
+  const price = cell(viewer.page, row.id, "supplyPriceExclTax");
+  const formatMaps = {
+    cellColors: { supplyPriceExclTax: "BLUE", material: "GREEN" },
+    cellAlignments: { supplyPriceExclTax: "right", material: "left" },
+    cellVerticalAlignments: { supplyPriceExclTax: "top", material: "bottom" },
+    cellTextColors: { supplyPriceExclTax: "#0958d9", material: "#389e0d" },
+    cellNumberFormats: { supplyPriceExclTax: { type: "currency", decimals: 2 }, material: { type: "text" } },
+  };
+  try {
+    // No field value changes: only formatting advances the row and stream token.
+    await api(page, csrf, "/style-selections/" + row.id, "PATCH", {
+      ...formatMaps, expectedUpdatedAt: row.updatedAt,
+    });
+    await expect(price.locator(".selection-formatted-value")).toHaveText("¥ 42.50", { timeout: 4000 });
+    await expect(price.locator(".selection-formatted-value")).toHaveAttribute("aria-readonly", "true");
+    await expect(price).toHaveCSS("background-color", "rgb(237, 245, 255)");
+    await expect(price).toHaveCSS("color", "rgb(9, 88, 217)");
+    await expect(price).toHaveCSS("text-align", "right");
+    await expect(price).toHaveAttribute("data-vertical-align", "top");
+    const saved = await api(page, csrf, "/style-selections/" + row.id, "GET");
+    expect(saved.supplyPriceExclTax).toBe("42.50");
+    expect(saved.material).toBe("原始内容保持不变");
+
+    // Public column widths and row height follow the same live field invalidation.
+    layout = await api(page, csrf, "/style-selections/layout-preferences?shared=true", "GET");
+    await api(page, csrf, "/style-selections/layout-preferences?shared=true", "POST", {
+      preferences: layout.preferences, revision: layout.revision, sharedRevision: layout.sharedRevision,
+      sharedChanges: {
+        rowHeight: "compact",
+        columns: layout.sharedPreferences.columns.map((field: { key: string; width: number }) => field.key === "supplierStyleNo" ? { ...field, width: 243 } : field),
+      },
+    });
+    await expect(viewer.page.locator(".selection-sheet")).toHaveClass(/row-compact/, { timeout: 4000 });
+    await expect(viewer.page.locator('thead th[data-selection-column="supplierStyleNo"]')).toHaveCSS("width", "243px");
+
+    // Clearing formatting is also visible promptly; default cell display returns.
+    await api(page, csrf, "/style-selections/" + row.id, "PATCH", {
+      expectedUpdatedAt: saved.updatedAt,
+      ...Object.fromEntries(Object.keys(formatMaps).map((key) => [key, { supplyPriceExclTax: null }])),
+    });
+    await expect(price.locator(".selection-formatted-value")).toHaveCount(0, { timeout: 4000 });
+    await expect(price.locator("input")).toHaveValue("42.50");
+    await expect(price).toHaveCSS("text-align", "center");
+    await expect(price).not.toHaveCSS("color", "rgb(9, 88, 217)");
+
+    await api(page, csrf, "/style-selections/" + row.id, "PATCH", formatMaps);
+    const protection = await api(page, csrf, "/style-selections/protection", "GET");
+    await api(page, csrf, "/style-selections/protection", "POST", {
+      revision: protection.revision,
+      settings: { ...protection.settings, enabled: true, regions: [...protection.settings.regions, {
+        id: randomUUID(), name: "格式查看过滤", scope: "cells", rowIds: [row.id], columnKeys: ["supplyPriceExclTax"], users: {}, others: "deny",
+      }] },
+    });
+    await expect(price).toContainText("••••", { timeout: 4000 });
+    await expect(price.locator(".selection-formatted-value,input")).toHaveCount(0);
+    await expect(price).not.toHaveCSS("background-color", "rgb(237, 245, 255)");
+    await expect(price).not.toHaveCSS("color", "rgb(9, 88, 217)");
+    const viewerCsrf = (await (await viewer.page.request.get("/api/v1/auth/me")).json()).data.csrfToken;
+    const scoped = await api(viewer.page, viewerCsrf, "/style-selections/sync", "POST", { known: {} });
+    const filteredRow = scoped.data.find((item: { id: string }) => String(item.id) === String(row.id));
+    expect(filteredRow.supplyPriceExclTax).toBeNull();
+    for (const key of Object.keys(formatMaps)) {
+      expect(filteredRow[key]).not.toHaveProperty("supplyPriceExclTax");
+      expect(filteredRow[key]).toHaveProperty("material");
+    }
+  } finally {
+    await viewer.context.close();
+    const protection = await api(page, csrf, "/style-selections/protection", "GET");
+    await api(page, csrf, "/style-selections/protection", "POST", { revision: protection.revision, settings: originalProtection.settings });
+    layout = await api(page, csrf, "/style-selections/layout-preferences?shared=true", "GET");
+    await api(page, csrf, "/style-selections/layout-preferences?shared=true", "POST", {
+      preferences: layout.preferences, revision: layout.revision, sharedRevision: layout.sharedRevision, sharedChanges: originalShared,
+    });
+  }
+});

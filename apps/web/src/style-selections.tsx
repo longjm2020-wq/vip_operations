@@ -12,7 +12,7 @@ import { SelectionColumnWidthModal } from "./selection-column-width";
 import { SelectionTextDetail } from "./selection-text-detail";
 import { useSelectionDrag } from "./selection-drag";
 import { parseSelectionSearch,matchesSelectionSearch } from "./selection-style-search";
-import {resetFieldTypes,defaultTagConfig,orderedFieldTags,fieldValueError,fieldImages,defaultImageConfig,systemField,type SelectionField} from "./selection-field-types";
+import {resetFieldTypes,fieldValueError,fieldImages,defaultImageConfig,systemField,type SelectionField} from "./selection-field-types";
 import { selectionSystemValue } from "./selection-system-fields";
 import { SelectionStatistics } from "./selection-statistics";
 import { SelectionCollections } from "./selection-collections";
@@ -25,13 +25,14 @@ import { selectionImageLinks, invalidSelectionImage } from "./selection-image-li
 import { copySelectionImage, copySelectionImageAddress, downloadSelectionImage } from "./selection-image-actions";
 import { SelectionImagePreview, selectionImageContextItems as imageContextItems } from "./selection-image-preview";
 import { SelectionChoiceCell } from "./selection-choice-tags";
+import { SelectionInlineTags } from "./selection-inline-tags";
 import { parseSelectionClipboard } from "./selection-clipboard";
 import { duplicateStyleCounts, selectionStyleKey } from "./selection-duplicates";
 import { SelectionFormatModal, type FormatPatch } from "./selection-format-modal";
 import { formatSelectionValue } from "../../../packages/contracts/src/selection-format";
 import { Fragment, memo, useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Alert, App, Button, Card, Checkbox, Empty, Image, Input, Modal, Pagination, Popover, Dropdown, Select, Space, Tag, Tooltip } from "antd";
+import { Alert, App, Button, Card, Checkbox, Empty, Image, Input, Modal, Pagination, Popover, Dropdown, Select, Space, Tooltip } from "antd";
 import { ExpandAltOutlined, CompressOutlined, EditOutlined, BgColorsOutlined, FontColorsOutlined, VerticalAlignTopOutlined, VerticalAlignMiddleOutlined, VerticalAlignBottomOutlined, AlignLeftOutlined, AlignCenterOutlined, AlignRightOutlined, DeleteOutlined, FilterOutlined, LinkOutlined, PlusOutlined, PushpinOutlined, SettingOutlined, UnorderedListOutlined, UploadOutlined } from "@ant-design/icons";
 import { useSelectionWorkspace } from "./selection-workspace";
 import { prepareUpload, readUpload } from "./upload-file";
@@ -136,10 +137,6 @@ function SizeEditor({ value, disabled, onChange }: { value: string; disabled: bo
   }} />{customOpen && <Space.Compact><Input autoFocus aria-label="补充尺码" value={customValue} disabled={disabled} placeholder="输入尺码，按回车添加" onChange={event => setCustomValue(event.target.value)} onPressEnter={addCustom} /><Button disabled={disabled || !customValue.trim()} onClick={addCustom}>添加</Button><Button onClick={() => { setCustomOpen(false); setCustomValue(""); }}>取消</Button></Space.Compact>}</div>;
 }
 
-function TagCell({ value, disabled, placeholder }: { value: unknown; disabled: boolean; placeholder: string }) {
-  return <div className="selection-tag-preview" tabIndex={0} role="group" aria-label={placeholder.slice(2)} aria-readonly={disabled}>{splitTags(value).map((tag) => <span className="selection-chip" key={tag}>{tag}</span>)}{!splitTags(value).length && <span className="selection-tag-placeholder">{placeholder}</span>}</div>;
-}
-
 function ImageCell({ images, colors, disabled, onChange, mobileId, labelImages = false,field, previewing, onPreview }: {field?:Column; mobileId?: string; images: SelectionImage[]; colors: string[]; disabled: boolean; onChange: (images: SelectionImage[]) => void; labelImages?: boolean; previewing: boolean; onPreview: (index: number) => void }) {
   const { api } = useSelectionWorkspace();
 
@@ -235,7 +232,6 @@ function ImageCell({ images, colors, disabled, onChange, mobileId, labelImages =
 // These callbacks bind a row/field identity and use state updaters. Selection changes
 // do not change their behavior or require rebuilding image controls in every cell.
 const MemoImageCell = memo(ImageCell, (before, after) => before.field === after.field && before.mobileId === after.mobileId && before.disabled === after.disabled && before.labelImages === after.labelImages && before.previewing === after.previewing && comparable(before.images) === comparable(after.images) && comparable(before.colors) === comparable(after.colors));
-const MemoTagCell = memo(TagCell);
 const ReadOnlyStockCell = memo(({ inventory }: { inventory: CollectionStock[] }) => <CollectionStockEditor readOnly inventory={inventory} onChange={()=>{}}/>, (before, after) => comparable(before.inventory) === comparable(after.inventory));
 // Cache row output by its data and local visual state. Event handlers read the
 // live interaction ref below so skipped rows still act on the current selection.
@@ -501,6 +497,14 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
     setCopiedCells(new Set());
     setRows((current) => current.map((row) => row._key === key ? withValue(row, column, value) : row));
     setErrors((current) => { const next = { ...current }; delete next[`${key}:${column.key}`]; return next; });
+  };
+  const updateTags = (row: Row, column: Column, value: string, rename?: { from: string; to: string }) => {
+    if (column.key !== "color" || !rename || rename.from === rename.to) { update(row._key, column, value); return; }
+    const linked = rowImages(row).some(image => image.color === rename.from);
+    if (!readableSelectionCell(row, "images") || linked && !editableSelectionCell(row, "images")) return "关联图片受保护，请先取得图片编辑权限再修改颜色";
+    setCopiedCells(new Set());
+    setRows(current => current.map(item => item._key === row._key && editableSelectionCell(item, column.key) && (!linked || editableSelectionCell(item, "images")) ? { ...withValue(item, column, value), ...(linked ? { images: rowImages(item).map(image => image.color === rename.from ? { ...image, color: rename.to } : image) } : {}) } : item));
+    setErrors(current => { const next = { ...current }; delete next[`${row._key}:${column.key}`]; return next; });
   };
   const add = (count = 1) => {
     if (!canAdd) return;
@@ -873,12 +877,11 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
     if(systemField(column))return cell(<span aria-label={column.label} title="系统自动生成，不可手动编辑">{selectionSystemValue(row,column) || (row.id?"未记录":"保存后生成")}</span>);
     if(column.custom && column.type==="image")return cell(<MemoImageCell {...imagePreviewProps} field={column} mobileId={row.id && !dirtyRows.has(row._key)?String(row.id):undefined} images={fieldImages(valueAt(row,column))} colors={splitTags(row.color)} disabled={disabled} onChange={images=>update(row._key,column,JSON.stringify(images))}/>);
     if(column.type==="single" || column.type==="multiple")return cell(<SelectionChoiceCell field={column} value={String(valueAt(row,column) ?? "")} disabled={disabled} active={selected && selectedCells.size===1} alignment={row.cellAlignments?.[column.key]} verticalAlignment={row.cellVerticalAlignments?.[column.key]} onChange={value=>update(row._key,column,value)}/>);
-    if(column.type==="tags"){const tags=orderedFieldTags(column,valueAt(row,column));return cell(<div className="selection-custom-tags">{tags.length?tags.map(tag=><Tag key={tag} color={{...defaultTagConfig,...column.tagConfig}.color}>{tag}</Tag>):<span className="selection-tag-empty">+ {column.label}</span>}</div>);}
+    if(column.type==="tags")return cell(<SelectionInlineTags field={column} value={String(valueAt(row,column) ?? "")} disabled={disabled} onChange={(value,rename)=>updateTags(row,column,value,rename)}/>);
     if(column.type && !imageKeys.has(column.key) && !collectionKeys.has(column.key))return cell(<SelectionFieldInput field={column} value={String(valueAt(row,column) ?? "")} disabled={disabled} onChange={value=>update(row._key,column,value)}/>);
     if (column.key === "images") return cell(<MemoImageCell {...imagePreviewProps} field={column} mobileId={row.id && !dirtyRows.has(row._key) ? String(row.id) : undefined} images={rowImages(row)} colors={splitTags(row.color)} disabled={disabled} onChange={(value) => update(row._key, column, value)} />);
     if (column.key === "labelImages") return cell(<MemoImageCell {...imagePreviewProps} field={column} labelImages mobileId={row.id && !dirtyRows.has(row._key) ? String(row.id) : undefined} images={rowLabelImages(row)} colors={[]} disabled={disabled} onChange={(value) => update(row._key, column, value)} />);
-    if (column.key === "color") return cell(<MemoTagCell value={row.color} disabled={disabled} placeholder="+ 颜色"  />);
-    if (column.key === "sizeRange") return cell(<MemoTagCell value={row.sizeRange} disabled={disabled} placeholder="+ 尺码"  />);
+    if (column.key === "color" || column.key === "sizeRange") return cell(<SelectionInlineTags field={column} value={String(valueAt(row,column) ?? "")} disabled={disabled} onChange={(value,rename)=>updateTags(row,column,value,rename)}/>);
     const numberFormat = row.cellNumberFormats?.[column.key];
     const displayValue = String(valueAt(row, column) ?? "");
     if (numberFormat && !["general", "text"].includes(numberFormat.type) && focusedCell !== cellId(row._key, column.key)) return cell(<div className="selection-formatted-value" tabIndex={0} role="textbox" aria-label={column.label} aria-readonly={disabled} onFocus={() => { if (!disabled) setFocusedCell(cellId(row._key, column.key)); }}>{formatSelectionValue(displayValue, numberFormat) || (column.key === "registrationBatch" ? "+ 日期" : "")}</div>);

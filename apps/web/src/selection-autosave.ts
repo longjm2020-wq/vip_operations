@@ -47,7 +47,12 @@ export function mergeSelectionSave(current: Row, sent: Row, saved: Row): Row {
     if(saved.cellAccess?.[key] && saved.cellAccess[key]!=="edit")continue;
     if(["extraFields","cellColors","cellAlignments","cellVerticalAlignments","cellTextColors","cellNumberFormats"].includes(key)) {
       const values={...(saved[key] || {})};
-      for(const field of Object.keys(current[key] || {}))if((!saved.cellAccess || (saved.cellAccess[field] || saved.defaultCellAccess)==="edit") && JSON.stringify(current[key]?.[field])!==JSON.stringify(sent[key]?.[field]))values[field]=current[key][field];
+      // Removing a format while the preceding save is pending is another edit.
+      // Keep that deletion so the next delta can publish an explicit null patch.
+      for(const field of new Set([...Object.keys(current[key] || {}),...Object.keys(sent[key] || {})]))if((!saved.cellAccess || (saved.cellAccess[field] || saved.defaultCellAccess)==="edit") && JSON.stringify(current[key]?.[field])!==JSON.stringify(sent[key]?.[field])) {
+        if(current[key]?.[field]===undefined)delete values[field];
+        else values[field]=current[key][field];
+      }
       next[key]=values;continue;
     }
     if (JSON.stringify(current[key]) !== JSON.stringify(sent[key])) next[key] = current[key];
