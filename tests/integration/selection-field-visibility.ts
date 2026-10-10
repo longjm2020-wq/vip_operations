@@ -246,7 +246,7 @@ try {
   await setProtection({ ...defaultProtection, enabled: true, regions: [{ id: randomUUID(), name: "unchanged deny", scope: "columns", rowIds: [], columnKeys: [publicText], users: { [owner.actor.id]: "edit" }, others: "deny" }] });
   assert.equal((await service.photoDetail(other, row.id)).extraFields[publicText], "");
   await rejected(() => service.write(fresh(other), { extraFields: { [publicText]: "no bypass" } }, row.id));
-  await setProtection({ ...defaultProtection, autoHide: true });
+  await setProtection({ ...defaultProtection, autoHide: true, autoHideRegions: [{ id: randomUUID(), name: "public field hiding", scope: "columns", rowIds: [], columnKeys: [publicText] }] });
   assert.equal((await service.photoDetail(other, row.id)).extraFields[publicText], "");
   assert.equal((await service.photoDetail(owner, row.id)).extraFields[publicText], "PUBLIC-CONTENT");
   await setProtection(defaultProtection);
@@ -263,6 +263,18 @@ try {
   await rejected(() => protection.saveSettings(fresh(ordinaryAdmin), { revision: managerSaved.revision, settings: { ...managerSaved.settings, regions: [hiddenRegion] } }));
   await setProtection(defaultProtection);
   check("ordinary administrators cannot inspect private protection regions; full saves preserve hidden rules while SUPER_ADMIN can manage them");
+
+  const hiddenAutoHideRegion = { id: randomUUID(), name: "PRIVATE HIDDEN AREA", scope: "columns", rowIds: [], columnKeys: [privateText] };
+  await setProtection({ ...defaultProtection, autoHide: true, autoHideRegions: [hiddenAutoHideRegion] });
+  const hideManagerSettings = await protection.readSettings(ordinaryAdmin);
+  assert.equal(JSON.stringify(hideManagerSettings).includes("PRIVATE HIDDEN AREA"), false);
+  assert.equal(JSON.stringify(hideManagerSettings).includes(privateText), false);
+  const hideManagerSaved = await protection.saveSettings(fresh(ordinaryAdmin), { revision: hideManagerSettings.revision, settings: { ...hideManagerSettings.settings, claimsEnabled: true } });
+  assert.equal(JSON.stringify(hideManagerSaved).includes(privateText), false);
+  assert.deepEqual((await protection.readSettings(admin)).settings.autoHideRegions, [hiddenAutoHideRegion]);
+  await rejected(() => protection.saveSettings(fresh(ordinaryAdmin), { revision: hideManagerSaved.revision, settings: { ...hideManagerSaved.settings, autoHideRegions: [hiddenAutoHideRegion] } }));
+  await setProtection(defaultProtection);
+  check("private automatic-hide areas are omitted and preserved during ordinary-manager full saves");
 
   const table = await one(db, "INSERT INTO project_tables(name,created_by,initial_layout) VALUES('visibility-scope',$1::bigint,'empty') RETURNING id", adminId);
   await rows(db, "SELECT create_project_table_workspace($1::bigint)::text", table!.id);

@@ -3,6 +3,8 @@ import {
   defaultProtection,
   selectionCellAccess,
   selectionProtectionSchema,
+  normalizeSelectionProtection,
+  legacyAutoHideRegion,
   type SelectionProtection,
 } from "../../packages/contracts/src/selection-protection.js";
 import {
@@ -96,6 +98,7 @@ describe("selection protection policy", () => {
     const settings = {
       ...defaultProtection,
       autoHide: true,
+      autoHideRegions: [{ ...legacyAutoHideRegion }],
       hiddenReaders: ["4"],
     };
     expect(selectionCellAccess(settings, actor, row, "material")).toBe("edit");
@@ -125,6 +128,42 @@ describe("selection protection policy", () => {
         "material",
       ),
     ).toBe("deny");
+  });
+  it("automatically hides only selected cells; outside rows and fields retain their existing access", () => {
+    const area = { id: rule.id, name: "supplier area", scope: "cells" as const, rowIds: ["10"], columnKeys: ["supplierCode"] };
+    const settings: SelectionProtection = { ...defaultProtection, autoHide: true, autoHideRegions: [area] };
+    expect(selectionCellAccess(settings, actor, row, "supplierCode")).toBe("deny");
+    expect(selectionCellAccess(settings, actor, row, "color")).toBe("edit");
+    expect(selectionCellAccess(settings, actor, { ...row, id: "11" }, "supplierCode")).toBe("edit");
+    expect(selectionCellAccess(settings, actor, row, "supplierCode", false)).toBe("edit");
+    expect(selectionCellAccess({ ...settings, autoHide: false }, actor, row, "supplierCode")).toBe("edit");
+  });
+  it("auto-hide rows include new fields, columns include new rows, and sheet scope is explicit", () => {
+    const settings: SelectionProtection = { ...defaultProtection, autoHide: true, autoHideRegions: [{ ...legacyAutoHideRegion, scope: "rows", rowIds: ["10"] }] };
+    expect(selectionCellAccess(settings, actor, row, "custom:new")).toBe("deny");
+    expect(selectionCellAccess(settings, actor, { ...row, id: "11" }, "supplierCode")).toBe("edit");
+    const columns: SelectionProtection = { ...settings, autoHideRegions: [{ ...legacyAutoHideRegion, scope: "columns", columnKeys: ["supplierCode"] }] };
+    expect(selectionCellAccess(columns, actor, { ...row, id: "999" }, "supplierCode")).toBe("deny");
+    expect(selectionCellAccess(columns, actor, row, "color")).toBe("edit");
+    expect(selectionCellAccess({ ...settings, autoHideRegions: [legacyAutoHideRegion] }, actor, { ...row, id: "999" }, "custom:new")).toBe("deny");
+  });
+  it("requires an explicit nonempty valid auto-hide area list and distinct identities", () => {
+    const settings = { ...defaultProtection, autoHide: true };
+    expect(selectionProtectionSchema.safeParse(settings).success).toBe(false);
+    expect(selectionCellAccess(settings, actor, row, "supplierCode")).toBe("edit");
+    expect(selectionProtectionSchema.safeParse({ ...settings, autoHideRegions: [legacyAutoHideRegion] }).success).toBe(true);
+    expect(selectionProtectionSchema.safeParse({ ...settings, autoHideRegions: [{ ...legacyAutoHideRegion, scope: "cells", rowIds: ["10"] }] }).success).toBe(false);
+    expect(selectionProtectionSchema.safeParse({ ...settings, autoHideRegions: [{ ...legacyAutoHideRegion, scope: "columns", columnKeys: ["password"] }] }).success).toBe(false);
+    expect(selectionProtectionSchema.safeParse({ ...settings, autoHideRegions: [legacyAutoHideRegion, legacyAutoHideRegion] }).success).toBe(false);
+  });
+  it("normalizes legacy enabled policies to a visible sheet rule without enabling disabled policies", () => {
+    const { autoHideRegions: _areas, ...legacy } = defaultProtection;
+    const enabled = normalizeSelectionProtection({ ...legacy, autoHide: true });
+    expect(enabled.autoHideRegions).toEqual([legacyAutoHideRegion]);
+    expect(selectionCellAccess(enabled, actor, row, "supplierCode")).toBe("deny");
+    expect(normalizeSelectionProtection(legacy)).toEqual(defaultProtection);
+    expect(normalizeSelectionProtection({ ...defaultProtection, autoHide: true }).autoHideRegions).toEqual([]);
+    expect(normalizeSelectionProtection(null)).toEqual(defaultProtection);
   });
   it("locks a claimed row for another editor but leaves readable values visible", () => {
     expect(

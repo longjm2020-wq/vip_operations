@@ -1,6 +1,7 @@
 import { selectionScope, selectionUrl } from "../../../../../packages/database/src/selection-scope.js";
 import { archiveSelectionPermissions, tableSelectionPermissions } from "../../../../../packages/contracts/src/table-permissions.js";
 import { isArchive } from "./archive.js";
+import { tableAccess } from "../projects/library.js";
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import {
@@ -21,7 +22,8 @@ import {
   type Actor,
 } from "../../core.js";
 import {
-  defaultProtection,
+  normalizeSelectionProtection,
+  selectionProtectionDraftSchema,
   selectionProtectionSchema,
   selectionCellAccess,
   selectionFields,
@@ -55,7 +57,7 @@ export async function policy(tx: Tx, lock = false): Promise<Policy> {
     selectionScope.getStore() || "default",
   );
   return {
-    settings: value?.settings || defaultProtection,
+    settings: normalizeSelectionProtection(value?.settings),
     revision: value?.revision || 0,
     registeredFieldKeys: fields.map((field) => field.field_key),
     privateFieldOwners: Object.fromEntries(
@@ -125,6 +127,7 @@ export function project(policy: Policy, actor: Actor, raw: Row): Row {
     ...originalFields,
     ...(policy.registeredFieldKeys || []),
     ...policy.settings.regions.flatMap((region) => region.columnKeys),
+    ...policy.settings.autoHideRegions.flatMap((region) => region.columnKeys),
   ])) {
     if (
       !fieldVisible(policy, actor, key) ||
@@ -398,10 +401,12 @@ export function filtered(rows: Row[], query: Row) {
 }
 function visibleSettings(p: Policy, actor: Actor) {
   if (!protectionAdmin(actor))
-    return { ...p.settings, regions: [], hiddenReaders: [] };
+    return { ...p.settings, regions: [], autoHideRegions: [], hiddenReaders: [] };
   return {
     ...p.settings,
     regions: p.settings.regions.filter(region =>
+      region.columnKeys.every(key => fieldVisible(p, actor, key))),
+    autoHideRegions: p.settings.autoHideRegions.filter(region =>
       region.columnKeys.every(key => fieldVisible(p, actor, key))),
   };
 }
@@ -432,7 +437,7 @@ export async function saveSettings(c: Context, input: unknown) {
   const body = parse(
     z
       .object({
-        settings: selectionProtectionSchema,
+        settings: selectionProtectionDraftSchema,
         revision: z.number().int().min(0),
       })
       .strict(),
@@ -453,13 +458,20 @@ export async function saveSettings(c: Context, input: unknown) {
     const hidden = p.settings.regions.filter(region =>
       !region.columnKeys.every(key => fieldVisible(p, c.actor, key)));
     const hiddenIds = new Set(hidden.map(region => region.id));
+    const hiddenAutoHideRegions = p.settings.autoHideRegions.filter(region =>
+      !region.columnKeys.every(key => fieldVisible(p, c.actor, key)));
+    const hiddenAutoHideIds = new Set(hiddenAutoHideRegions.map(region => region.id));
     if (body.settings.regions.some(region => hiddenIds.has(region.id) ||
       region.columnKeys.some(key => !fieldVisible(p, c.actor, key))))
       fail("FORBIDDEN", "不能设置无权查看的字段保护区域", 403);
+    if (body.settings.autoHideRegions.some(region => hiddenAutoHideIds.has(region.id) ||
+      region.columnKeys.some(key => !fieldVisible(p, c.actor, key))))
+      fail("FORBIDDEN", "不能设置无权查看的字段自动隐藏区域", 403);
     // A full settings save must not remove rules the caller cannot inspect.
     const settings = parse(selectionProtectionSchema, {
       ...body.settings,
       regions: [...body.settings.regions, ...hidden],
+      autoHideRegions: [...body.settings.autoHideRegions, ...hiddenAutoHideRegions],
     });
     const ids = [
       ...new Set([
@@ -713,15 +725,29 @@ export async function delegatedShare(tx: Tx, share: Row, p?: Policy) {
     "SELECT r.code FROM user_roles ur JOIN roles r ON r.id=ur.role_id WHERE ur.user_id=$1::bigint",
     user.id,
   );
-  const actor: Actor = {
+  let actor: Actor = {
     id: String(user.id),
     username: user.username,
     displayName: user.display_name,
-    permissions: selectionScope.getStore()
-      ? (await isArchive(tx) ? archiveSelectionPermissions : tableSelectionPermissions)(permissions.map((row) => row.code))
-      : permissions.map((row) => row.code),
+    permissions: permissions.map((row) => row.code),
     roleCodes: roles.map((row) => row.code),
   };
+  const workspace = selectionScope.getStore();
+  if (workspace) {
+    // Anonymous links inherit the sharer's current table grant. A global ADMIN
+    // role must not become a protection administrator inside another user's table.
+    const table = await tableAccess(tx, actor, workspace);
+    const mapped = (await isArchive(tx) ? archiveSelectionPermissions : tableSelectionPermissions)(actor.permissions);
+    actor = {
+      ...actor,
+      selectionWorkspaceScoped: true,
+      permissions: [
+        ...mapped.filter(permission => !["selection.manage", "selection.protect"].includes(permission)),
+        ...(table.can_edit ? ["selection.manage"] : []),
+        ...(table.can_manage ? ["selection.protect"] : []),
+      ],
+    };
+  }
   if (!actor.permissions.includes("selection.manage"))
     fail("FORBIDDEN", "分享权限已变更，请联系分享人", 403);
   await shareRights(

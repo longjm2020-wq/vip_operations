@@ -27,6 +27,8 @@ import { useSelectionWorkspace } from "./selection-workspace";
 import { useUser, type Row } from "./shared";
 import {
   defaultProtection,
+  normalizeSelectionProtection,
+  type AutoHideRegion,
   type ProtectionRegion,
   type SelectionProtection,
   type SelectionAccess,
@@ -38,7 +40,9 @@ const accessOptions = [
   { value: "deny", label: "禁止查看" },
 ];
 export const editableSelectionCell = (row: Row, key: string) =>
-  !row.migrationLocked && (!row.cellAccess || (row.cellAccess[key] || row.defaultCellAccess) === "edit");
+  !row.migrationLocked &&
+  (!row.cellAccess ||
+    (row.cellAccess[key] || row.defaultCellAccess) === "edit");
 export const readableSelectionCell = (row: Row, key: string) =>
   row.cellAccess?.[key] !== "deny";
 
@@ -80,6 +84,7 @@ export function SelectionProtectionControl({
     [revision, setRevision] = useState(0);
   const [region, setRegion] = useState<ProtectionRegion | null>(null),
     [onlyMe, setOnlyMe] = useState(false);
+  const [hideRegion, setHideRegion] = useState<AutoHideRegion | null>(null);
   const initialized = useRef(false);
   useEffect(() => {
     if (!open) {
@@ -88,7 +93,7 @@ export function SelectionProtectionControl({
     }
     if (!initialized.current && settings.data?.data) {
       initialized.current = true;
-      setDraft(settings.data.data.settings);
+      setDraft(normalizeSelectionProtection(settings.data.data.settings));
       setRevision(settings.data.data.revision);
     }
   }, [open, settings.data]);
@@ -110,9 +115,10 @@ export function SelectionProtectionControl({
         settings: next,
         revision,
       });
-      setDraft(result.data.settings);
+      setDraft(normalizeSelectionProtection(result.data.settings));
       setRevision(result.data.revision);
       setRegion(null);
+      setHideRegion(null);
       queryClient.setQueryData(["selection-protection"], result);
       await queryClient.invalidateQueries({ queryKey: ["style-selections"] });
       await queryClient.invalidateQueries({
@@ -126,7 +132,7 @@ export function SelectionProtectionControl({
       setBusy(false);
     }
   };
-  const add = () => {
+  const selectedArea = () => {
     const chosenRows = [
       ...new Set(
         [...selectedCells].map((id) => id.split("::")[0]).concat(selectedRows),
@@ -136,11 +142,19 @@ export function SelectionProtectionControl({
       .map((key) => rows.find((row) => row._key === key)?.id)
       .filter(Boolean)
       .map(String);
-    if (chosenRows.length !== rowIds.length)
-      return void message.warning("请先保存选中行，再设置保护区域");
+    if (chosenRows.length !== rowIds.length) {
+      message.warning("请先保存选中行，再设置区域");
+      return null;
+    }
     const columnKeys = [
       ...new Set([...selectedCells].map((id) => id.split("::")[1])),
     ].filter((key) => columns.some((column) => column.key === key));
+    return { rowIds, columnKeys };
+  };
+  const add = () => {
+    const area = selectedArea();
+    if (!area) return;
+    const { rowIds, columnKeys } = area;
     setOnlyMe(false);
     setRegion({
       id: crypto.randomUUID(),
@@ -157,6 +171,16 @@ export function SelectionProtectionControl({
       others: "read",
     });
   };
+  const addHideRegion = () => {
+    const area = selectedArea();
+    if (!area) return;
+    setHideRegion({
+      id: crypto.randomUUID(),
+      name: `隐藏区域 ${draft.autoHideRegions.length + 1}`,
+      scope: area.rowIds.length && !area.columnKeys.length ? "rows" : "cells",
+      ...area,
+    });
+  };
   const claim = async (row: Row, action: "claim" | "release") => {
     if (busy || blocked) return;
     setBusy(true);
@@ -171,7 +195,9 @@ export function SelectionProtectionControl({
     }
   };
   const live = settings.data?.data.settings as SelectionProtection | undefined;
-  const description = (item: ProtectionRegion) =>
+  const description = (
+    item: Pick<ProtectionRegion, "scope" | "rowIds" | "columnKeys">,
+  ) =>
     item.scope === "sheet"
       ? "当前工作表（含新增行、字段）"
       : `${item.scope !== "columns" ? `${item.rowIds.length} 行` : "所有行"} · ${item.scope !== "rows" ? item.columnKeys.map((key) => columns.find((column) => column.key === key)?.label || key).join("、") : "所有字段"}`;
@@ -405,16 +431,76 @@ export function SelectionProtectionControl({
                     <Switch
                       aria-label="开启内容自动隐藏"
                       checked={admin ? draft.autoHide : live?.autoHide}
-                      disabled={!admin || busy || blocked}
+                      disabled={
+                        !admin ||
+                        busy ||
+                        blocked ||
+                        (!draft.autoHide && !draft.autoHideRegions.length)
+                      }
                       onChange={(autoHide) => void save({ ...draft, autoHide })}
                     />
                   </Space>
                   <Typography.Text>
-                    填写后的内容显示为
-                    ••••。管理员、该行创建人、该字段最近填写人及下方指定用户可查看；区域的“禁止查看”仍然有效。空白字段可按区域权限填写。
+                    仅隐藏下方已设置区域内的已填内容，其他区域正常显示。本表保护管理者、该行创建人、该字段最近填写人及下方指定用户可查看；区域的“禁止查看”仍然有效。空白字段可按区域权限填写。
                   </Typography.Text>
                   {admin && (
                     <>
+                      {!draft.autoHide && !draft.autoHideRegions.length && (
+                        <Alert
+                          type="info"
+                          title="请先添加隐藏区域，再开启内容自动隐藏。"
+                        />
+                      )}
+                      {draft.autoHideRegions.map((item) => (
+                        <Card
+                          key={item.id}
+                          size="small"
+                          title={item.name}
+                          extra={
+                            <Space>
+                              <Button
+                                type="text"
+                                aria-label={`编辑隐藏区域${item.name}`}
+                                icon={<EditOutlined />}
+                                disabled={busy || blocked}
+                                onClick={() => setHideRegion(item)}
+                              />
+                              <Button
+                                type="text"
+                                aria-label={`删除隐藏区域${item.name}`}
+                                icon={<DeleteOutlined />}
+                                disabled={busy || blocked}
+                                onClick={() => {
+                                  const autoHideRegions =
+                                    draft.autoHideRegions.filter(
+                                      (value) => value.id !== item.id,
+                                    );
+                                  void save({
+                                    ...draft,
+                                    autoHideRegions,
+                                    autoHide:
+                                      draft.autoHide &&
+                                      !!autoHideRegions.length,
+                                  });
+                                }}
+                              />
+                            </Space>
+                          }
+                        >
+                          {description(item)}
+                        </Card>
+                      ))}
+                      <Button
+                        block
+                        type="primary"
+                        icon={<PlusOutlined />}
+                        disabled={
+                          busy || blocked || draft.autoHideRegions.length >= 100
+                        }
+                        onClick={addHideRegion}
+                      >
+                        添加隐藏区域
+                      </Button>
                       <Typography.Text>额外允许查看的用户</Typography.Text>
                       <Select
                         aria-label="自动隐藏指定查看人"
@@ -440,6 +526,112 @@ export function SelectionProtectionControl({
           ]}
         />
       </Drawer>
+      <Modal
+        title="设置隐藏区域"
+        open={!!hideRegion}
+        width={620}
+        confirmLoading={busy}
+        okButtonProps={{
+          disabled:
+            blocked ||
+            !hideRegion?.name.trim() ||
+            ((hideRegion.scope === "cells" || hideRegion.scope === "rows") &&
+              !hideRegion.rowIds.length) ||
+            ((hideRegion.scope === "cells" || hideRegion.scope === "columns") &&
+              !hideRegion.columnKeys.length),
+        }}
+        onCancel={() => setHideRegion(null)}
+        onOk={() => {
+          if (!hideRegion) return;
+          const item = {
+            ...hideRegion,
+            name: hideRegion.name.trim(),
+            rowIds:
+              hideRegion.scope === "columns" || hideRegion.scope === "sheet"
+                ? []
+                : hideRegion.rowIds,
+            columnKeys:
+              hideRegion.scope === "rows" || hideRegion.scope === "sheet"
+                ? []
+                : hideRegion.columnKeys,
+          };
+          void save({
+            ...draft,
+            autoHideRegions: [
+              ...draft.autoHideRegions.filter((value) => value.id !== item.id),
+              item,
+            ],
+          });
+        }}
+      >
+        {hideRegion && (
+          <Space orientation="vertical" size={16} style={{ width: "100%" }}>
+            <Input
+              aria-label="隐藏区域名称"
+              placeholder="隐藏区域名称"
+              maxLength={80}
+              value={hideRegion.name}
+              onChange={(event) =>
+                setHideRegion({ ...hideRegion, name: event.target.value })
+              }
+            />
+            <Select
+              getPopupContainer={(trigger) => trigger.parentElement!}
+              aria-label="隐藏范围"
+              style={{ width: "100%" }}
+              value={hideRegion.scope}
+              options={[
+                { value: "cells", label: "选中单元格" },
+                { value: "rows", label: "选中整行" },
+                { value: "columns", label: "整列（所有行）" },
+                { value: "sheet", label: "当前工作表" },
+              ]}
+              onChange={(scope) => setHideRegion({ ...hideRegion, scope })}
+            />
+            {(hideRegion.scope === "cells" || hideRegion.scope === "rows") && (
+              <Select
+                getPopupContainer={(trigger) => trigger.parentElement!}
+                aria-label="隐藏行"
+                mode="multiple"
+                showSearch
+                optionFilterProp="label"
+                style={{ width: "100%" }}
+                value={hideRegion.rowIds}
+                options={rows
+                  .filter((row) => row.id)
+                  .map((row, index) => ({
+                    value: String(row.id),
+                    label: `${index + 1} · ${row.xutiStyleNo || row.supplierStyleNo || "未填款号"}`,
+                  }))}
+                onChange={(rowIds) => setHideRegion({ ...hideRegion, rowIds })}
+              />
+            )}
+            {(hideRegion.scope === "cells" ||
+              hideRegion.scope === "columns") && (
+              <Select
+                getPopupContainer={(trigger) => trigger.parentElement!}
+                aria-label="隐藏字段"
+                mode="multiple"
+                showSearch
+                optionFilterProp="label"
+                style={{ width: "100%" }}
+                value={hideRegion.columnKeys}
+                options={columns.map((column) => ({
+                  value: column.key,
+                  label: column.label,
+                }))}
+                onChange={(columnKeys) =>
+                  setHideRegion({ ...hideRegion, columnKeys })
+                }
+              />
+            )}
+            <Alert
+              type="info"
+              title="保存区域后，开启内容自动隐藏才会生效。整列包括新增行，整行包括新增字段；区域外不自动隐藏。"
+            />
+          </Space>
+        )}
+      </Modal>
       <Modal
         title="设置保护区域"
         open={!!region}
