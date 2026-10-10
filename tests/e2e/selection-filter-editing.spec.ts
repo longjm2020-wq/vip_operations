@@ -74,8 +74,9 @@ async function fixture(page: Page, options: { permission?: "readonly" | "read" |
     const filter = page.locator(".selection-filter-panel:visible");
     await filter.locator(".selection-filter-values").getByRole("checkbox", { name: /^已有标准\s*\(1\)$/ }).uncheck();
     await filter.getByRole("button", { name: "确认", exact: true }).click();
+    await expect(filter).toHaveCount(0);
     await expect(page.locator("tr[data-selection-row]")).toHaveCount(2);
-    await expect(page.getByRole("button", { name: "清除列筛选 (1)", exact: true })).toBeVisible();
+    await expect(page.locator('tr[data-selection-row="editing-2"]')).toHaveCount(0);
   }
   return { writes, savedValue: () => rows[0].extraFields[fieldKey] };
 }

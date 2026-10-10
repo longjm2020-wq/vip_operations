@@ -509,7 +509,7 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
   },[editSession]);
   const filteredRows = useMemo(() => {
     const originalRows=new Map(rows.map(row=>[row._key,row]));
-    const matching=sortSelectionRows(fieldViewRows.filter(row => matchesSelectionSearch(row,searchTerms,visibleColumns.filter(column=>column.custom && column.type!=="image").map(column=>column.key)) && matchesSelectionFilters(row, columnFilters)), columnSort).map(row=>originalRows.get(row._key)!);
+    const matching=sortSelectionRows(fieldViewRows.filter(row => matchesSelectionSearch(row,searchTerms,visibleColumns.filter(column=>column.custom && column.type!=="image").map(column=>column.key)) && matchesSelectionFilters(row, columnFilters)), columnSort, columns).map(row=>originalRows.get(row._key)!);
     if(!heldEdit || !editingRow)return matching;
     // Use the latest permission-projected row while keeping its editing position.
     // Autosave may clear dirty state before the user finishes typing.
@@ -997,7 +997,7 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
     }
     setFollowShared(shared); setColumnFilters(view.filters); setColumnSort(view.sort); setFilterColumn(null);
   };
-  const columnFilterEditor = (column: Column) => <SelectionFilterPanel key={`${column.key}:${filterSession}`} column={column} rows={fieldViewRows} view={{ filters: columnFilters, sort: columnSort }} shared={followShared && (sharedView.data?.data?.revision || 0) > 0} canShare={canEdit && !!sharedView.data?.data} onCancel={() => setFilterColumn(null)} onApply={applyView} />;
+  const columnFilterEditor = (column: Column) => <SelectionFilterPanel key={`${column.key}:${filterSession}`} column={column} columns={columns} rows={fieldViewRows} view={{ filters: columnFilters, sort: columnSort }} shared={followShared && (sharedView.data?.data?.revision || 0) > 0} canShare={canEdit && !!sharedView.data?.data} onCancel={() => setFilterColumn(null)} onApply={applyView} />;
   const editorRow = filteredRows.find((row) => row._key === cellAnchor?.rowKey);
   const editorColumn = activeColumns.find((column) => column.key === cellAnchor?.columnKey);
   const editorEnabled = !!editorRow && !!editorColumn && !imageKeys.has(editorColumn.key) && editorColumn.type!=="image";
@@ -1077,7 +1077,6 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
       <Popover trigger="click" content={<div className="selection-color-menu">{colorOptions.map((option) => <Button key={option.value} type="text" onClick={() => applyColor(option.value)}><span className="selection-color-dot" style={{ background: option.color }} />{option.label}</Button>)}</div>}><Button aria-label="填色" title="填色" disabled={!canEdit || !selectedCells.size} icon={<BgColorsOutlined />} /></Popover>
     <Dropdown trigger={["click"]} menu={{ selectable: true, selectedKeys: editorRow && editorColumn ? [editorRow.cellTextColors?.[editorColumn.key] || "default"] : [], items: textColorOptions.map(option => ({ key: option.value || "default", label: option.label, icon: <span className="selection-color-dot" style={{ background: option.value || "#46352a" }} /> })), onClick: ({ key }) => applyTextColor(key === "default" ? "" : key) }}><Button aria-label="字体颜色" title="字体颜色" disabled={!canEdit || !selectedCells.size} icon={<FontColorsOutlined />} /></Dropdown>
     <SelectionLayoutStatus layout={layout} />
-    {!followShared && !!sharedView.data?.data?.revision && <Button type="text" onClick={() => setFollowShared(true)}>使用共享筛选</Button>}
     <SelectionTransfer filteredRows={searchTerms.length || Object.keys(columnFilters).length || columnSort ? filteredRows : undefined} canEdit={canEdit} blocked={!!dirtyCount || saving || deleting} selectedRows={filteredRows.filter(row => selectedRows.includes(row._key))} query={search} onImported={() => { appliedSnapshot.current = ""; void queryClient.invalidateQueries({ queryKey: ["style-selections"] }); void queryClient.invalidateQueries({ queryKey: ["style-selection-style-counts"] }); }} />
     </Space>{!!Object.keys(errors).length && <span className="selection-record-count"><Tooltip title="修改尚未保存；悬停红色单元格查看原因，修正后重试"><Button type="text" size="small" danger disabled={saving} onClick={() => { attempts.current.retry(); setRetryVersion((value) => value + 1); }}>未保存 · 重试</Button></Tooltip></span>}</div>
     {!!collaborators.length && <div className="selection-collaborators" aria-label="在线协作者">{collaborators.map((person: Row) => <span key={person.userId} style={{ color: collaboratorColor(String(person.userId)) }} title={person.editingId ? `正在选中：${rows.find(row => String(row.id) === String(person.editingId))?.xutiStyleNo || "未填款号"} · ${columns.find(column => column.key === person.editingColumn)?.label || "单元格"}` : "在线"}><i>{String(person.displayName || "协").slice(0, 1)}</i>{person.displayName}{person.editingId ? ` · ${columns.find(column => column.key === person.editingColumn)?.label || "选中中"}` : " · 在线"}</span>)}</div>}

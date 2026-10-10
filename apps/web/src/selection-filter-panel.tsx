@@ -8,7 +8,7 @@ type Row = Record<string, any>;
 const modes = [["contains", "包含"], ["notContains", "不包含"], ["equals", "等于"], ["notEquals", "不等于"], ["starts", "开头是"], ["ends", "结尾是"], ["gt", "大于 / 晚于"], ["gte", "大于等于"], ["lt", "小于 / 早于"], ["lte", "小于等于"], ["between", "介于"], ["empty", "为空"], ["filled", "不为空"]];
 const colorNames: Record<string, string> = { NONE: "无填色", ORANGE: "橙色", YELLOW: "黄色", GREEN: "绿色", BLUE: "蓝色", PINK: "粉色", default: "默认字体", "#262626": "黑色", "#cf1322": "红色", "#d46b08": "橙色", "#ad8b00": "金色", "#389e0d": "绿色", "#0958d9": "蓝色", "#531dab": "紫色", "#c41d7f": "粉色", "#595959": "灰色" };
 const fillHex: Record<string, string> = { NONE: "#fff", ORANGE: "#fff1e7", YELLOW: "#fff8cf", GREEN: "#eef9e8", BLUE: "#edf5ff", PINK: "#fff0f3", default: "#46352a" };
-export function SelectionFilterPanel({ column, rows, view, shared, canShare, onCancel, onApply }: { column: { key: string; label: string }; rows: Row[]; view: SelectionView; shared: boolean; canShare: boolean; onCancel: () => void; onApply: (view: SelectionView, shared: boolean) => Promise<void> }) {
+export function SelectionFilterPanel({ column, columns = [column], rows, view, shared, canShare, onCancel, onApply }: { column: { key: string; label: string; type?: string }; columns?: readonly { key: string; type?: string }[]; rows: Row[]; view: SelectionView; shared: boolean; canShare: boolean; onCancel: () => void; onApply: (view: SelectionView, shared: boolean) => Promise<void> }) {
   const { message } = App.useApp();
   const [draft, setDraft] = useState<SelectionFilter>(view.filters[column.key] || { mode: "contains", value: "" });
   const [sort, setSort] = useState(view.sort);
@@ -47,7 +47,7 @@ export function SelectionFilterPanel({ column, rows, view, shared, canShare, onC
   const clear = () => submit({ filters: otherFilters, sort: view.sort });
   const exportData = async (type: string) => {
     try {
-      const records = type === "options" ? options.map(option => ({ [column.label]: option.value || "(空白)", 数量: option.count, 已勾选: selected.has(option.value) ? "是" : "否" })) : sortSelectionRows(rows.filter(row => matchesSelectionFilters(row, nextView().filters)), sort).map(row => ({ 序缇款号: row.xutiStyleNo || "", 供应商款号: row.supplierStyleNo || "", [column.label]: selectionFilterValue(row, column.key) }));
+      const records = type === "options" ? options.map(option => ({ [column.label]: option.value || "(空白)", 数量: option.count, 已勾选: selected.has(option.value) ? "是" : "否" })) : sortSelectionRows(rows.filter(row => matchesSelectionFilters(row, nextView().filters)), sort, columns).map(row => ({ 序缇款号: row.xutiStyleNo || "", 供应商款号: row.supplierStyleNo || "", [column.label]: selectionFilterValue(row, column.key) }));
       if (!records.length) { message.info("没有可导出的数据"); return; }
       await downloadSheet(`${column.label}-${type === "options" ? "筛选选项" : "筛选结果"}`, records);
     } catch (error) { message.error((error as Error).message); }

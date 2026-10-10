@@ -38,12 +38,13 @@ export function matchesSelectionFilters(row: Row, filters: SelectionFilters) {
     return text.includes(query);
   });
 }
-export function sortSelectionRows(rows: Row[], sort: SelectionView["sort"]): Row[] {
+export function sortSelectionRows(rows: Row[], sort: SelectionView["sort"], columns?: readonly { key: string; type?: string }[]): Row[] {
   if (!sort) return rows;
+  const numericColumn = moneyKeys.has(sort.key) || columns?.find(column => column.key === sort.key)?.type === "number";
   return [...rows].sort((a, b) => {
     const left = selectionFilterValue(a, sort.key), right = selectionFilterValue(b, sort.key);
     if (!left || !right) return left === right ? 0 : left ? -1 : 1;
-    const numeric = moneyKeys.has(sort.key) && Number.isFinite(Number(left)) && Number.isFinite(Number(right));
+    const numeric = numericColumn && Number.isFinite(Number(left)) && Number.isFinite(Number(right));
     const result = numeric ? Number(left) - Number(right) : left.localeCompare(right, "zh-CN", { numeric: true });
     return sort.direction === "asc" ? result : -result;
   });

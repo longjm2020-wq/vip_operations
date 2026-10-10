@@ -57,6 +57,36 @@ it("sorts built-in/custom columns and keeps empty values last without mutating r
   expect(rows[0].vipPrice).toBe("12");
 });
 
+describe("typed numeric column sorting", () => {
+  const key = "custom:measurement";
+  const numericColumns = [{ key: "custom:other", type: "text" }, { key, type: "number" }];
+  const values = (rows: Record<string, unknown>[]) => rows.map(row => (row.extraFields as Record<string, unknown>)[key]);
+
+  it("sorts negative numbers and decimals numerically in both directions and leaves blanks last", () => {
+    const rows = ["2.5", "-2", "2.12", "-10", "0", " ", null].map(value => ({ extraFields: { [key]: value } }));
+    const original = structuredClone(rows);
+    expect(values(sortSelectionRows(rows, { key, direction: "asc" }, numericColumns))).toEqual(["-10", "-2", "0", "2.12", "2.5", " ", null]);
+    expect(values(sortSelectionRows(rows, { key, direction: "desc" }, numericColumns))).toEqual(["2.5", "2.12", "0", "-2", "-10", " ", null]);
+    expect(rows).toEqual(original);
+  });
+
+  it("preserves natural text sorting when a numeric-looking column is text or has no supplied type", () => {
+    const rows = ["2.12", "2.5", "-10", "-2"].map(value => ({ extraFields: { [key]: value } }));
+    const sort = { key, direction: "asc" as const };
+    expect(values(sortSelectionRows(rows, sort, numericColumns))).toEqual(["-10", "-2", "2.12", "2.5"]);
+    expect(values(sortSelectionRows(rows, sort, [{ key, type: "text" }]))).toEqual(["-2", "-10", "2.5", "2.12"]);
+    expect(values(sortSelectionRows(rows, sort))).toEqual(["-2", "-10", "2.5", "2.12"]);
+  });
+
+  it("keeps long style identifiers distinct without converting them to imprecise numbers", () => {
+    const rows = ["9007199254740993", "9007199254740992", "09007199254740995"].map(xutiStyleNo => ({ xutiStyleNo }));
+    const columns = [{ key, type: "number" }, { key: "xutiStyleNo", type: "text" }];
+    expect(sortSelectionRows(rows, { key: "xutiStyleNo", direction: "asc" }, columns).map(row => row.xutiStyleNo)).toEqual(["9007199254740992", "9007199254740993", "09007199254740995"]);
+    expect(sortSelectionRows(rows, { key: "xutiStyleNo", direction: "desc" }, columns).map(row => row.xutiStyleNo)).toEqual(["09007199254740995", "9007199254740993", "9007199254740992"]);
+    expect(rows.map(row => row.xutiStyleNo)).toEqual(["9007199254740993", "9007199254740992", "09007199254740995"]);
+  });
+});
+
 describe("searched checkbox filter submission", () => {
   const rows = [
     { material: "面料底布：桑蚕丝100%\n面料绒毛：粘纤100%" },
