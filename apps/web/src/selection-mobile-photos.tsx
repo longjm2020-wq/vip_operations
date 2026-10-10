@@ -2,10 +2,11 @@ import {SelectionCustomPhoto} from "./selection-custom-photo";
 import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useSearchParams } from "react-router-dom";
-import { Alert, App, Button, Empty, Form, Image, Input, Modal, Popconfirm, Select, Space, Spin, Tag } from "antd";
+import { Alert, App, Button, Empty, Form, Image, Input, Modal, Popconfirm, Select, Spin, Tag } from "antd";
 import { CameraOutlined, DeleteOutlined, EditOutlined, PlusOutlined, UploadOutlined } from "@ant-design/icons";
 import { PhotoColorEditor } from "./selection-photo-color-editor";
 import { MobilePhotoResultPreview } from "./mobile-photo-result-preview";
+import { SelectionImageSearch } from "./selection-image-search";
 import { useSelectionWorkspace } from "./selection-workspace";
 import { useCan, useUser, type Row } from "./shared";
 import { editableSelectionCell, readableSelectionCell } from "./selection-protection";
@@ -13,6 +14,7 @@ import { prepareUpload, readUpload } from "./upload-file";
 import { invalidSelectionImage } from "./selection-image-links";
 import "./selection-mobile-photos.css";
 const colorsOf = (row?: Row) => [...new Set(String(row?.color || "").split("/").map(value => value.trim()).filter(Boolean))];
+const photoSearchPageSize = 20;
 type PhotoField = "images" | "labelImages";
 type PendingPhoto = { id: string; rowId: string; field: PhotoField; color: string; file: File; url?: string; error?: string };
 function PhotoMetadata({ row, onClose, onSaved }: { row?: Row; onClose: () => void; onSaved: (row: Row) => void }) {
@@ -58,6 +60,7 @@ function StandardSelectionMobilePhotos() {
   const [search, setSearch] = useState(params.get("q") || "");
   const [query, setQuery] = useState(search);
   const [page, setPage] = useState(1);
+  const [pageInput, setPageInput] = useState("1");
   const [showResults, setShowResults] = useState(!selectedId);
   const [edit, setEdit] = useState<"empty" | "current" | null>(null);
   const [colorEdit, setColorEdit] = useState<{ row: Row; color: string } | null>(null);
@@ -69,8 +72,21 @@ function StandardSelectionMobilePhotos() {
   const [failed, setFailed] = useState<PendingPhoto[]>([]);
   const captureTarget = useRef<{ rowId: string; field: PhotoField; color: string } | null>(null);
   const camera = useRef<HTMLInputElement>(null), album = useRef<HTMLInputElement>(null);
-  useEffect(() => { const timer = window.setTimeout(() => { setQuery(search.trim()); setPage(1); }, 250); return () => clearTimeout(timer); }, [search]);
-  const list = useQuery({ queryKey:["mobile-photo-list",query,page,missingStyleNo], enabled:canRead, queryFn:()=>api("/style-selections?"+new URLSearchParams({q:query,photoSearch:"true",sort:"sortOrder",direction:"asc",page:String(page),pageSize:"20",...(missingStyleNo?{missingStyleNo:"true"}:{})})), refetchOnWindowFocus:!busy });
+  useEffect(() => { const timer = window.setTimeout(() => { if(search.trim()!==query){setQuery(search.trim());setPage(1);} }, 250); return () => clearTimeout(timer); }, [search,query]);
+  const list = useQuery({ queryKey:["mobile-photo-list",query,page,missingStyleNo], enabled:canRead, queryFn:()=>api("/style-selections?"+new URLSearchParams({q:query,photoSearch:"true",sort:"sortOrder",direction:"asc",page:String(page),pageSize:String(photoSearchPageSize),...(missingStyleNo?{missingStyleNo:"true"}:{})})), refetchOnWindowFocus:!busy });
+  const resultTotal = Number(list.data?.total || 0);
+  const totalPages = Math.ceil(resultTotal / photoSearchPageSize);
+  const lastPage = Math.max(1,totalPages);
+  const paginationDisabled = busy || list.isFetching || !resultTotal;
+  useEffect(() => { setPageInput(String(page)); }, [page]);
+  useEffect(() => { if(list.data && !list.isFetching && page>lastPage)setPage(lastPage); }, [list.data,list.isFetching,page,lastPage]);
+  const movePage = (nextPage:number) => { if(!paginationDisabled)setPage(Math.min(lastPage,Math.max(1,nextPage))); };
+  const jumpPage = () => {
+    if(paginationDisabled)return;
+    const value=pageInput.trim(), target=Number(value);
+    if(!/^[1-9]\d*$/.test(value) || !Number.isSafeInteger(target) || target>lastPage){message.info(`请输入 1 至 ${lastPage} 的整数页码`);return;}
+    movePage(target);setPageInput(String(target));
+  };
   const detail = useQuery({ queryKey:["mobile-photo-detail",selectedId], enabled:canRead && !!selectedId, queryFn:()=>api("/style-selections/"+selectedId), refetchInterval:busy || edit || colorEdit ? false : 10000, refetchOnWindowFocus:!busy && !edit && !colorEdit });
   const current: Row | undefined = detail.data?.data;
   const colors = colorsOf(current);
@@ -135,8 +151,8 @@ function StandardSelectionMobilePhotos() {
   const labelPhotos: Row[] = current?.labelImages || [];
   const gallery = (items: Row[], field: PhotoField) => <Image.PreviewGroup><div className="mobile-photo-grid">{items.map(image=><div className="mobile-photo-item" key={image.id}><Image src={image.url} fallback={invalidSelectionImage} alt={field==="labelImages"?"洗唛/吊牌图":`${current?.xutiStyleNo || "款式"} ${image.color || "未标颜色"}`} />{field==="images" && <span>{image.color || "未标颜色"}</span>}{canEdit && current && editableSelectionCell(current,field) && <Popconfirm title="移除这张图片？" description={`会同步从电脑端该款${field==="labelImages"?"洗唛/吊牌图":"图片"}中移除。`} okText="移除" cancelText="取消" onConfirm={()=>removePhoto(image.id,field)}><Button danger size="small" disabled={busy} icon={<DeleteOutlined />} aria-label={field==="labelImages"?"删除洗唛/吊牌图":"删除图片"} /></Popconfirm>}</div>)}</div></Image.PreviewGroup>;
   return <div className="mobile-photos">
-    <header className="mobile-photo-header"><div><strong>XUTI · 手机拍图</strong></div><Input.Search size="large" allowClear aria-label="搜索款号或供应商编码" placeholder="序缇款号 / 供应商款号 / 供应商编码" value={search} onChange={event=>{setSearch(event.target.value);setShowResults(true);}} onSearch={()=>{setQuery(search.trim());setShowResults(true);setPage(1);}} /><div className="mobile-photo-header-actions"><Button onClick={()=>setShowResults(value=>!value)}>{showResults?"收起搜索结果":"选择款式"}</Button>{canEdit && <Button icon={<PlusOutlined />} disabled={busy} onClick={()=>void addStyle()}>新增款式</Button>}</div></header>
-    {showResults && <section className="mobile-photo-results">{list.isLoading?<Spin/>:list.error?<Alert type="error" title={(list.error as Error).message} action={<Button onClick={()=>void list.refetch()}>重试</Button>}/>:<><div className="mobile-photo-results-summary"><p>共 {list.data?.total || 0} 款</p><Button type={missingStyleNo?"primary":"default"} aria-label="筛选序缇款号缺失" aria-pressed={missingStyleNo} disabled={busy} title="仅显示有内容且未填写序缇款号的记录，空白行不计入" onClick={toggleMissingStyleNo}>款号缺失（{list.data?.missingStyleNoCount ?? 0}）</Button></div>{(list.data?.data || []).map((row:Row)=><div key={row.id} className="mobile-photo-result"><button type="button" className="mobile-photo-result-select" onClick={()=>choose(String(row.id))}><strong>{row.xutiStyleNo || "未填写序缇款号"}</strong><span>供应商款号：{row.supplierStyleNo || "—"} · 编码：{row.supplierCode || "—"}</span><small>{row.color || "未填写颜色"} · {row.images?.length || 0} 张款式图 · {row.labelImages?.length || 0} 张洗唛/吊牌图</small></button><MobilePhotoResultPreview row={row}/></div>)}{!list.data?.total && <Empty description={missingStyleNo?"当前搜索范围内没有款号缺失的记录":"未找到款式，可新增款式后拍图"}/>}<Space><Button disabled={page===1} onClick={()=>setPage(page-1)}>上一页</Button><span>第 {page} 页</span><Button disabled={page*20 >= (list.data?.total || 0)} onClick={()=>setPage(page+1)}>下一页</Button></Space></>}</section>}
+    <header className="mobile-photo-header"><div><strong>XUTI · 手机拍图</strong></div><Input.Search size="large" allowClear suffix={<SelectionImageSearch disabled={busy} onSelect={row=>choose(String(row.id))}/>} aria-label="搜索款号或供应商编码" placeholder="序缇款号 / 供应商款号 / 供应商编码" value={search} onChange={event=>{setSearch(event.target.value);setShowResults(true);}} onSearch={()=>{setQuery(search.trim());setShowResults(true);setPage(1);}} /><div className="mobile-photo-header-actions"><Button onClick={()=>setShowResults(value=>!value)}>{showResults?"收起搜索结果":"选择款式"}</Button>{canEdit && <Button icon={<PlusOutlined />} disabled={busy} onClick={()=>void addStyle()}>新增款式</Button>}</div></header>
+    {showResults && <section className="mobile-photo-results">{list.isLoading?<Spin/>:list.error?<Alert type="error" title={(list.error as Error).message} action={<Button onClick={()=>void list.refetch()}>重试</Button>}/>:<><div className="mobile-photo-results-summary"><p>共 {list.data?.total || 0} 款</p><Button type={missingStyleNo?"primary":"default"} aria-label="筛选序缇款号缺失" aria-pressed={missingStyleNo} disabled={busy} title="仅显示有内容且未填写序缇款号的记录，空白行不计入" onClick={toggleMissingStyleNo}>款号缺失（{list.data?.missingStyleNoCount ?? 0}）</Button></div>{(list.data?.data || []).map((row:Row)=><div key={row.id} className="mobile-photo-result"><button type="button" className="mobile-photo-result-select" onClick={()=>choose(String(row.id))}><strong>{row.xutiStyleNo || "未填写序缇款号"}</strong><span>供应商款号：{row.supplierStyleNo || "—"} · 编码：{row.supplierCode || "—"}</span><small>{row.color || "未填写颜色"} · {row.images?.length || 0} 张款式图 · {row.labelImages?.length || 0} 张洗唛/吊牌图</small></button><MobilePhotoResultPreview row={row}/></div>)}{!list.data?.total && <Empty description={missingStyleNo?"当前搜索范围内没有款号缺失的记录":"未找到款式，可新增款式后拍图"}/>}<nav className="mobile-photo-pagination" aria-label="搜索结果分页"><div className="mobile-photo-pagination-nav"><Button size="small" disabled={paginationDisabled || page===1} onClick={()=>movePage(1)}>首页</Button><Button size="small" disabled={paginationDisabled || page===1} onClick={()=>movePage(page-1)}>上一页</Button><div className="mobile-photo-page-count"><span>第 {page} 页</span><small>共 {totalPages} 页</small></div><Button size="small" disabled={paginationDisabled || page>=lastPage} onClick={()=>movePage(page+1)}>下一页</Button><Button size="small" disabled={paginationDisabled || page>=lastPage} onClick={()=>movePage(lastPage)}>尾页</Button></div><form className="mobile-photo-page-jump" onSubmit={event=>{event.preventDefault();jumpPage();}}><label htmlFor="mobile-photo-page-input">跳至</label><Input id="mobile-photo-page-input" aria-label="跳转页码" inputMode="numeric" autoComplete="off" size="small" disabled={paginationDisabled} value={pageInput} onChange={event=>setPageInput(event.target.value)}/><span>页</span><Button size="small" htmlType="submit" disabled={paginationDisabled}>跳转</Button></form></nav></>}</section>}
     {detail.isLoading && selectedId && <Spin/>}{detail.error && <Alert type="error" title={(detail.error as Error).message} action={<Button onClick={()=>void detail.refetch()}>重试</Button>}/>}
     {current && <main><section className="mobile-photo-style"><div><h1>{current.xutiStyleNo || current.supplierStyleNo || "未填写序缇款号"}</h1>{canEdit && <Button disabled={busy} onClick={()=>setEdit("current")}>编辑款号 / 颜色</Button>}</div><p>供应商款号：{current.supplierStyleNo || "—"}　供应商编码：{current.supplierCode || "—"}</p><div className="mobile-photo-colors">{colors.map(value=>{
       const pending = failed.some(task => task.rowId === String(current.id) && task.field === "images" && task.color === value);

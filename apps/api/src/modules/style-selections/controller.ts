@@ -12,6 +12,7 @@ import * as migration from "./migration.js";
 import { archiveMetadata } from "./archive.js";
 import { fail } from "../../core.js";
 import { SelectionRealtime } from "./realtime.js";
+import { searchSelectionImages } from "./image-search.js";
 
 const paramId = (value: string) => parse(id, value);
 const transferContext = (request:AuthRequest) => ({...context(request),actor:request.originalActor || request.actor});
@@ -40,6 +41,11 @@ class StyleSelectionsController {
   @Permission("selection.read") @Post("protection") saveProtection(@Req() request:AuthRequest,@Body() body:unknown) { return protection.saveSettings(context(request),body); }
   @Permission("selection.manage") @Post(":id/claim") claim(@Req() request:AuthRequest,@Param("id") value:string,@Body() body:unknown) { return protection.claim(context(request),paramId(value),body); }
   @Permission("selection.read") @Get("revision") revision(@Req() request:AuthRequest) { return selections.revision(context(request)); }
+  @Permission("selection.read") @Post("image-search") async imageSearch(@Req() request:AuthRequest,@Body() body:unknown,@Res() response:Response) {
+    response.setHeader("Cache-Control", "private, no-store");
+    const data = await searchSelectionImages(context(request),body);
+    response.json({ data, requestId: request.requestId });
+  }
   @Permission("selection.read") @Get("shared-view") sharedView(@Req() request:AuthRequest) { return selections.sharedView(context(request)); }
   @Permission("selection.manage") @Post("shared-view") saveSharedView(@Req() request: AuthRequest, @Body() body: unknown) { return selections.saveSharedView(context(request), body); }
   @Permission("selection.read") @Get("layout-preferences") layoutPreferences(@Req() request: AuthRequest,@Query("shared") shared:string) { return layout.layoutPreferences(context(request),shared === "true"); }

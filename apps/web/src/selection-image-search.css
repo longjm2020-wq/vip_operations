@@ -1,0 +1,21 @@
+.selection-image-search-trigger.ant-btn { width: 24px; height: 24px; min-width: 24px; padding: 0; color: #8b776a; }
+.selection-image-search-modal { max-width: calc(100vw - 24px); }
+.selection-image-search-modal .ant-modal-container { max-height: calc(100dvh - 40px); overflow-y: auto; }
+.selection-image-search-guide, .selection-image-search-count { color: #88715f; font-size: 13px; line-height: 1.6; }
+.selection-image-search-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.selection-image-search-actions .ant-btn { flex: 1 1 120px; height: 36px; }
+.selection-image-search-loading { display: flex; justify-content: center; align-items: center; gap: 10px; padding: 16px 0; }
+.selection-image-search-query { display: flex; align-items: center; gap: 12px; margin: 12px 0; color: #88715f; font-size: 13px; }
+.selection-image-search-query .ant-image { width: 96px; }
+.selection-image-search-query .ant-image-img { width: 96px; height: 96px; object-fit: contain; border-radius: 6px; }
+.selection-image-search-notice { margin: 12px 0; }
+.selection-image-search-results { display: grid; gap: 8px; }
+.selection-image-search-result { display: flex; width: 100%; min-width: 0; align-items: center; gap: 12px; padding: 10px; border: 1px solid #eaded3; border-radius: 8px; background: #fff; color: inherit; text-align: left; cursor: pointer; }
+.selection-image-search-result:hover:not(:disabled) { border-color: #d45400; background: #fff8f1; }
+.selection-image-search-result:disabled { cursor: wait; opacity: .7; }
+.selection-image-search-result .ant-image { flex: 0 0 72px; width: 72px; }
+.selection-image-search-result .ant-image-img { width: 72px; height: 72px; object-fit: contain; }
+.selection-image-search-result > span { display: flex; min-width: 0; flex-direction: column; gap: 5px; overflow-wrap: anywhere; }
+.selection-image-search-result strong { font-size: 15px; }
+.selection-image-search-result small { color: #88715f; }
+@media (max-width: 600px) { .selection-image-search-modal { top: 16px; padding-bottom: 16px; } .selection-image-search-modal .ant-modal-container { max-height: calc(100dvh - 32px); } }
