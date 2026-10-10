@@ -302,6 +302,7 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
   const columnSelectionAnchor = useRef<string | null>(null);
   const [columnWidthTarget, setColumnWidthTarget] = useState<Column[] | null>(null);
   const [cellAnchor, setCellAnchor] = useState<{ rowKey: string; columnKey: string } | null>(null);
+  const [editSession, setEditSession] = useState<{ rowKey: string; columnKey: string; index: number; groupLabel: string; view: string; access: string } | null>(null);
   const [imagePreview, setImagePreview] = useState<{ rowKey: string; columnKey: string; index: number } | null>(null);
   const [textDetailOpen, setTextDetailOpen] = useState(false);
   const [textDetailTarget, setTextDetailTarget] = useState<{rowKey:string;columnKey:string} | null>(null);
@@ -465,14 +466,64 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
   const repeatedStyles = useMemo(() => duplicateStyleCounts(rows, styleCounts.data?.data, original.current), [rows, styleCounts.data]);
   const colorSuggestions = useMemo(() => [...new Set(rows.flatMap((row) => splitTags(row.color)))], [rows]);
   const fieldViewRows=useMemo<Row[]>(()=>rows.map(row=>({...row,extraFields:{...(row.extraFields || {}),...Object.fromEntries(columns.filter(systemField).map(column=>[column.key,readableSelectionCell(row,column.key)?selectionSystemValue(row,column):""]))}})),[rows,columns]);
-  const filteredRows = useMemo(() => {const originalRows=new Map(rows.map(row=>[row._key,row]));return sortSelectionRows(fieldViewRows.filter(row => matchesSelectionSearch(row,searchTerms,visibleColumns.filter(column=>column.custom && column.type!=="image").map(column=>column.key)) && matchesSelectionFilters(row, columnFilters)), columnSort).map(row=>originalRows.get(row._key)!);}, [rows, fieldViewRows, columnFilters, columnSort, searchTerms, columns, visible]);
+  const editView = JSON.stringify([searchText,columnFilters,columnSort,groupBy,sort,direction,page,pageSize,columnViewSignature,activeColumns.map(column=>[column.key,column.type,column.fallbackType])]);
+  const editingRow = editSession ? rows.find(row=>row._key===editSession.rowKey) : undefined;
+  const heldEdit = editSession && editSession.view===editView && canEdit && editingRow &&
+    editSession.access===JSON.stringify([editingRow.cellAccess,editingRow.hiddenCells,editingRow.defaultCellAccess,editingRow.migrationLocked]) &&
+    cellAnchor?.rowKey===editSession.rowKey && cellAnchor.columnKey===editSession.columnKey &&
+    activeColumns.some(column=>column.key===editSession.columnKey && !systemField(column)) &&
+    editableSelectionCell(editingRow,editSession.columnKey) && readableSelectionCell(editingRow,editSession.columnKey)
+    ? editSession : null;
+  useEffect(()=>{if(editSession && !heldEdit)setEditSession(null);},[editSession,heldEdit]);
+  useEffect(()=>{
+    if(!editSession)return;
+    let blurTimer: number | undefined;
+    const withinEditor=(target: EventTarget | null)=>{
+      if(!(target instanceof Element))return false;
+      if(target.closest(".selection-editor-bar, #selection-cell-detail"))return true;
+      const cell=target.closest<HTMLElement>("td[data-selection-row][data-selection-column]");
+      return cell?.dataset.selectionRow===editSession.rowKey && cell.dataset.selectionColumn===editSession.columnKey;
+    };
+    const leave=(event: Event)=>{if(!withinEditor(event.target))setEditSession(null);};
+    const blur=(event: FocusEvent)=>{
+      if(!withinEditor(event.target) || withinEditor(event.relatedTarget))return;
+      if(event.relatedTarget){setEditSession(null);return;}
+      // Focus can briefly move through body when switching to the detail portal.
+      blurTimer=window.setTimeout(()=>{if(!withinEditor(document.activeElement))setEditSession(null);},0);
+    };
+    const escape=(event: KeyboardEvent)=>{if(event.key==="Escape" && !event.isComposing)setEditSession(null);};
+    const windowBlur=()=>setEditSession(null);
+    document.addEventListener("pointerdown",leave,true);
+    document.addEventListener("focusin",leave,true);
+    document.addEventListener("blur",blur,true);
+    document.addEventListener("keydown",escape,true);
+    window.addEventListener("blur",windowBlur);
+    return ()=>{
+      if(blurTimer!==undefined)window.clearTimeout(blurTimer);
+      document.removeEventListener("pointerdown",leave,true);
+      document.removeEventListener("focusin",leave,true);
+      document.removeEventListener("blur",blur,true);
+      document.removeEventListener("keydown",escape,true);
+      window.removeEventListener("blur",windowBlur);
+    };
+  },[editSession]);
+  const filteredRows = useMemo(() => {
+    const originalRows=new Map(rows.map(row=>[row._key,row]));
+    const matching=sortSelectionRows(fieldViewRows.filter(row => matchesSelectionSearch(row,searchTerms,visibleColumns.filter(column=>column.custom && column.type!=="image").map(column=>column.key)) && matchesSelectionFilters(row, columnFilters)), columnSort).map(row=>originalRows.get(row._key)!);
+    if(!heldEdit || !editingRow)return matching;
+    // Use the latest permission-projected row while keeping its editing position.
+    // Autosave may clear dirty state before the user finishes typing.
+    const retained=matching.filter(row=>row._key!==heldEdit.rowKey);
+    retained.splice(Math.min(heldEdit.index,retained.length),0,editingRow);
+    return retained;
+  }, [rows, fieldViewRows, columnFilters, columnSort, searchTerms, columns, visible, heldEdit, editingRow]);
   const allGrouped = useMemo(() => {
     const key=groupBy==="batch"?"registrationBatch":groupBy==="supplier"?"supplierCode":groupBy.slice(6);
     const column=columns.find(column=>column.key===key);
-    const label = (row: Row) => !readableSelectionCell(row,key)?"受保护内容":String(column?valueAt(row,column) ?? "":row[key] || "") || `未填写${column?.label || "字段"}`;
+    const label = (row: Row) => heldEdit && heldEdit.rowKey===row._key ? heldEdit.groupLabel : !readableSelectionCell(row,key)?"受保护内容":String(column?valueAt(row,column) ?? "":row[key] || "") || `未填写${column?.label || "字段"}`;
     if (groupBy === "none") return [{ label: "", rows: filteredRows }];
     return filteredRows.reduce<{ label: string; rows: Row[] }[]>((result, row) => { const key = label(row); const target = result.find((item) => item.label === key); if (target) target.rows.push(row); else result.push({ label: key, rows: [row] }); return result; }, []);
-  }, [groupBy, filteredRows, columns]);
+  }, [groupBy, filteredRows, columns, heldEdit]);
   const allDisplayedRows = useMemo(() => allGrouped.flatMap(group => group.rows), [allGrouped]);
   const pageCount = Math.max(1, Math.ceil(allDisplayedRows.length / pageSize));
   const currentPage = Math.min(page, pageCount);
@@ -496,6 +547,12 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
   const dirtyCount = dirtyRows.size;
 
   const update = (key: string, column: Column, value: unknown) => {
+    const row=rows.find(row=>row._key===key);
+    if(!canEdit || !row || !editableSelectionCell(row,column.key) || !readableSelectionCell(row,column.key) || systemField(column) || collectionKeys.has(column.key))return;
+    if((column.type || column.fallbackType || "text")==="text" && pageRowKeys.has(key) &&
+      comparable(valueAt(row,column))!==comparable(value) && (!heldEdit || heldEdit.rowKey!==key || heldEdit.columnKey!==column.key)) {
+      setEditSession({rowKey:key,columnKey:column.key,index:filteredRows.findIndex(row=>row._key===key),groupLabel:allGrouped.find(group=>group.rows.some(row=>row._key===key))?.label || "",view:editView,access:JSON.stringify([row.cellAccess,row.hiddenCells,row.defaultCellAccess,row.migrationLocked])});
+    }
     setCopiedCells(new Set());
     setRows((current) => current.map((row) => row._key === key ? withValue(row, column, value) : row));
     setErrors((current) => { const next = { ...current }; delete next[`${key}:${column.key}`]; return next; });
