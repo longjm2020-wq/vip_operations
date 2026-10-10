@@ -52,6 +52,7 @@ async function fixture(
     detailRows?: MobileResult[];
     query?: string;
     listResponse?: (query: URLSearchParams) => { data: MobileResult[]; total: number; [key: string]: unknown };
+    imageResponse?: (url: string) => Promise<void>;
   } = {},
 ) {
   const rows = options.rows || standardRows;
@@ -62,6 +63,7 @@ async function fixture(
   const nextRequests: URLSearchParams[] = [];
   await page.route("https://mobile-photos.example.test/**", async (route) => {
     imageRequests.push(route.request().url());
+    await options.imageResponse?.(route.request().url());
     if (route.request().url().endsWith("/broken.png")) {
       await route.fulfill({ status: 404, body: "missing image" });
       return;
@@ -118,6 +120,68 @@ const resultFor = (page: Page, styleNo: string) =>
 const viewer = (page: Page) => page.locator(".mobile-photo-result-image-preview");
 const previewImage = (page: Page) => viewer(page).locator(".ant-image-preview-img");
 const previewCount = (page: Page) => viewer(page).locator(".mobile-photo-result-image-count");
+const swipeSurface = (page: Page) => viewer(page).locator(".mobile-photo-result-swipe");
+const swipeTrack = (page: Page) => viewer(page).locator(".mobile-photo-result-swipe-track");
+
+type TouchPoint = { identifier: number; x: number; y: number };
+type WarmImageState = { requested: string[]; decoded: string[] };
+
+async function observeImageWarming(page: Page) {
+  await page.addInitScript(() => {
+    const nativeImage = window.Image;
+    const source = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, "src")!;
+    const state: WarmImageState = { requested: [], decoded: [] };
+    (window as typeof window & { __photoWarmState: WarmImageState }).__photoWarmState = state;
+    const trackedImage = function (width?: number, height?: number) {
+      const image = new nativeImage(width, height);
+      Object.defineProperty(image, "src", {
+        get: () => source.get!.call(image),
+        set: (value: string) => {
+          state.requested.push(value);
+          source.set!.call(image, value);
+        },
+      });
+      const decode = image.decode.bind(image);
+      image.decode = async () => {
+        await decode();
+        state.decoded.push(image.src);
+      };
+      return image;
+    } as unknown as typeof Image;
+    trackedImage.prototype = nativeImage.prototype;
+    window.Image = trackedImage;
+  });
+  return () => page.evaluate(() =>
+    (window as typeof window & { __photoWarmState: WarmImageState }).__photoWarmState,
+  );
+}
+
+async function touches(
+  surface: Locator,
+  type: "touchstart" | "touchmove" | "touchend" | "touchcancel",
+  active: TouchPoint[],
+  changed = active,
+) {
+  await surface.evaluate((element, { type, active, changed }) => {
+    const touch = (point: TouchPoint) => new Touch({
+      identifier: point.identifier,
+      target: element,
+      clientX: point.x,
+      clientY: point.y,
+    });
+    element.dispatchEvent(new TouchEvent(type, {
+      bubbles: true,
+      cancelable: true,
+      touches: active.map(touch),
+      changedTouches: changed.map(touch),
+    }));
+  }, { type, active, changed });
+}
+
+const trackOffset = (page: Page) => swipeTrack(page).evaluate(element => {
+  const transform = getComputedStyle(element).transform;
+  return transform === "none" ? 0 : new DOMMatrixReadOnly(transform).m41;
+});
 
 async function swipe(surface: Locator, direction: "next" | "previous", vertical = false) {
   await surface.evaluate((element, { direction, vertical }) => {
@@ -168,6 +232,195 @@ test("只读账号可从搜索缩略图预览并滑动同款图片，关闭后�
   expect(new URL(page.url()).searchParams.get("id")).toBeNull();
   expect(state.detailRequests).toEqual([]);
   expect(state.writes).toEqual([]);
+});
+
+test("仅打开预览后预热当前和相邻图片，等待慢图不阻塞预览，返回已预热图片不会重复解码", async ({ page }) => {
+  const warmState = await observeImageWarming(page);
+  const gallery = [
+    ...photos,
+    { id: "side", url: "https://mobile-photos.example.test/side.png" },
+    { id: "fabric", url: "https://mobile-photos.example.test/fabric.png" },
+  ];
+  let releaseBack!: () => void;
+  const backResponse = new Promise<void>(resolve => { releaseBack = resolve; });
+  const state = await fixture(page, {
+    readonly: true,
+    rows: [{ ...standardRows[0], images: gallery }, standardRows[1]],
+    imageResponse: async url => { if (url === photos[1].url) await backResponse; },
+  });
+  const card = resultFor(page, "PREVIEW-STYLE");
+  await expect(card.locator(".mobile-photo-result-preview img")).toBeVisible();
+  expect(await warmState()).toEqual({ requested: [], decoded: [] });
+  expect(state.imageRequests).not.toContain(photos[1].url);
+  expect(state.imageRequests).not.toContain(photos[2].url);
+  try {
+    await card.locator(".mobile-photo-result-preview").tap();
+    await expect(previewCount(page)).toHaveText("1 / 5");
+    await expect(previewImage(page)).toHaveAttribute("src", photos[0].url);
+    await expect.poll(async () => (await warmState()).requested).toEqual([photos[0].url, photos[1].url]);
+    await expect.poll(() => state.imageRequests.includes(photos[1].url)).toBe(true);
+    expect((await warmState()).decoded).not.toContain(photos[1].url);
+    for (const url of [photos[2].url, gallery[3].url, gallery[4].url, standardRows[0].labelImages![0].url, standardRows[1].images[0].url]) {
+      expect((await warmState()).requested).not.toContain(url);
+    }
+  } finally {
+    releaseBack();
+  }
+  await expect.poll(async () => (await warmState()).decoded.includes(photos[1].url)).toBe(true);
+  await swipe(swipeSurface(page), "next");
+  await expect(previewCount(page)).toHaveText("2 / 5");
+  await expect.poll(async () => (await warmState()).decoded.includes(photos[2].url)).toBe(true);
+  expect((await warmState()).requested).toEqual(gallery.slice(0, 3).map(photo => photo.url));
+  await swipe(swipeSurface(page), "next");
+  await expect(previewCount(page)).toHaveText("3 / 5");
+  await expect.poll(async () => (await warmState()).decoded.includes(gallery[3].url)).toBe(true);
+  const warmed = await warmState();
+  expect(warmed.requested).toEqual(gallery.slice(0, 4).map(photo => photo.url));
+  await swipe(swipeSurface(page), "previous");
+  await expect(previewCount(page)).toHaveText("2 / 5");
+  await swipe(swipeSurface(page), "previous");
+  await expect(previewCount(page)).toHaveText("1 / 5");
+  await swipe(swipeSurface(page), "next");
+  await expect(previewCount(page)).toHaveText("2 / 5");
+  expect(await warmState()).toEqual(warmed);
+  expect(state.writes).toEqual([]);
+});
+
+test("图片拖动按帧跟手，连续来回切换后归零，边界、短拖、纵向和取消不误切页", async ({ page }) => {
+  await fixture(page, { readonly: true });
+  await resultFor(page, "PREVIEW-STYLE").locator(".mobile-photo-result-preview").tap();
+  await expect(previewCount(page)).toHaveText("1 / 3");
+  const surface = swipeSurface(page);
+  const first = { identifier: 1, x: 270, y: 350 };
+  const moved = { identifier: 1, x: 120, y: 354 };
+
+  await touches(surface, "touchstart", [first]);
+  await touches(surface, "touchmove", [moved]);
+  await expect.poll(() => trackOffset(page)).toBeLessThan(0);
+  await expect(previewCount(page)).toHaveText("1 / 3");
+  await touches(surface, "touchend", [], [moved]);
+  await expect(previewCount(page)).toHaveText("2 / 3");
+  await expect.poll(() => trackOffset(page)).toBe(0);
+
+  for (const [direction, count] of [
+    ["next", "3 / 3"], ["previous", "2 / 3"], ["previous", "1 / 3"],
+    ["next", "2 / 3"], ["previous", "1 / 3"],
+  ] as const) {
+    await swipe(surface, direction);
+    await expect(previewCount(page)).toHaveText(count);
+    await expect.poll(() => trackOffset(page)).toBe(0);
+  }
+
+  await swipe(surface, "previous");
+  await expect(previewCount(page)).toHaveText("1 / 3");
+  await expect.poll(() => trackOffset(page)).toBe(0);
+  await touches(surface, "touchstart", [first]);
+  const short = { identifier: 1, x: first.x - 47, y: first.y };
+  await touches(surface, "touchmove", [short]);
+  await expect.poll(() => trackOffset(page)).toBeLessThan(0);
+  await touches(surface, "touchend", [], [short]);
+  await expect(previewCount(page)).toHaveText("1 / 3");
+  await expect.poll(() => trackOffset(page)).toBe(0);
+
+  await touches(surface, "touchstart", [first]);
+  const vertical = { identifier: 1, x: first.x - 8, y: first.y + 170 };
+  await touches(surface, "touchmove", [vertical]);
+  await expect.poll(() => trackOffset(page)).toBe(0);
+  await touches(surface, "touchend", [], [vertical]);
+  await expect(previewCount(page)).toHaveText("1 / 3");
+  await touches(surface, "touchstart", [first]);
+  await touches(surface, "touchmove", [moved]);
+  await expect.poll(() => trackOffset(page)).toBeLessThan(0);
+  await touches(surface, "touchcancel", [], [moved]);
+  await expect.poll(() => trackOffset(page)).toBe(0);
+  await expect(previewCount(page)).toHaveText("1 / 3");
+
+  await touches(surface, "touchstart", [first]);
+  const threshold = { identifier: 1, x: first.x - 48, y: first.y };
+  await touches(surface, "touchmove", [threshold]);
+  await touches(surface, "touchend", [], [threshold]);
+  await expect(previewCount(page)).toHaveText("2 / 3");
+  await swipe(surface, "next");
+  await expect(previewCount(page)).toHaveText("3 / 3");
+  await swipe(surface, "next");
+  await expect(previewCount(page)).toHaveText("3 / 3");
+  await expect.poll(() => trackOffset(page)).toBe(0);
+});
+
+test("同一地址重复出现在相邻图片时只预热和解码一次", async ({ page }) => {
+  const warmState = await observeImageWarming(page);
+  await fixture(page, {
+    readonly: true,
+    rows: [{
+      ...standardRows[0],
+      images: [photos[0], { ...photos[0], id: "front-repeat" }, photos[1]],
+    }],
+  });
+  await resultFor(page, "PREVIEW-STYLE").locator(".mobile-photo-result-preview").tap();
+  await expect(previewCount(page)).toHaveText("1 / 3");
+  await expect.poll(async () => (await warmState()).decoded).toEqual([photos[0].url]);
+  expect((await warmState()).requested).toEqual([photos[0].url]);
+  await swipe(swipeSurface(page), "next");
+  await expect(previewCount(page)).toHaveText("2 / 3");
+  await expect.poll(async () => (await warmState()).decoded).toEqual([photos[0].url, photos[1].url]);
+  await swipe(swipeSurface(page), "next");
+  await expect(previewCount(page)).toHaveText("3 / 3");
+  await swipe(swipeSurface(page), "previous");
+  await expect(previewCount(page)).toHaveText("2 / 3");
+  expect((await warmState()).requested).toEqual([photos[0].url, photos[1].url]);
+  expect((await warmState()).decoded).toEqual([photos[0].url, photos[1].url]);
+});
+
+test("放大后的拖图与双指手势保留当前图片，中途增加手指取消切页并归零", async ({ page }) => {
+  await fixture(page, { readonly: true });
+  await resultFor(page, "PREVIEW-STYLE").locator(".mobile-photo-result-preview").tap();
+  await expect(previewCount(page)).toHaveText("1 / 3");
+  const surface = swipeSurface(page);
+  await viewer(page).getByRole("button", { name: "放大图片", exact: true }).tap();
+  await expect.poll(() => previewImage(page).evaluate(element =>
+    new DOMMatrixReadOnly(getComputedStyle(element).transform).m11,
+  )).toBeGreaterThan(1);
+  const first = { identifier: 1, x: 270, y: 350 };
+  const moved = { identifier: 1, x: 100, y: 354 };
+  const second = { identifier: 2, x: 240, y: 430 };
+  const enlargedOffset = await previewImage(page).evaluate(element =>
+    new DOMMatrixReadOnly(getComputedStyle(element).transform).m41,
+  );
+  await touches(previewImage(page), "touchstart", [first]);
+  await touches(previewImage(page), "touchmove", [moved]);
+  await expect.poll(() => previewImage(page).evaluate(element =>
+    new DOMMatrixReadOnly(getComputedStyle(element).transform).m41,
+  )).not.toBe(enlargedOffset);
+  await expect(previewCount(page)).toHaveText("1 / 3");
+  await expect.poll(() => trackOffset(page)).toBe(0);
+  await touches(previewImage(page), "touchend", [], [moved]);
+  await viewer(page).getByRole("button", { name: "还原图片", exact: true }).tap();
+  await expect.poll(() => previewImage(page).evaluate(element =>
+    new DOMMatrixReadOnly(getComputedStyle(element).transform).m11,
+  )).toBe(1);
+
+  await touches(previewImage(page), "touchstart", [first, second]);
+  await touches(previewImage(page), "touchmove", [moved, second]);
+  await expect.poll(() => previewImage(page).evaluate(element =>
+    new DOMMatrixReadOnly(getComputedStyle(element).transform).m11,
+  )).toBeGreaterThan(1);
+  await touches(previewImage(page), "touchend", [], [moved, second]);
+  await expect(previewCount(page)).toHaveText("1 / 3");
+  await expect.poll(() => trackOffset(page)).toBe(0);
+  await viewer(page).getByRole("button", { name: "还原图片", exact: true }).tap();
+  await expect.poll(() => previewImage(page).evaluate(element =>
+    new DOMMatrixReadOnly(getComputedStyle(element).transform).m11,
+  )).toBe(1);
+
+  await touches(surface, "touchstart", [first]);
+  await touches(surface, "touchmove", [moved]);
+  await expect.poll(() => trackOffset(page)).toBeLessThan(0);
+  await touches(surface, "touchmove", [moved, second]);
+  await expect.poll(() => trackOffset(page)).toBe(0);
+  await touches(surface, "touchend", [], [moved, second]);
+  await expect(previewCount(page)).toHaveText("1 / 3");
+  await swipe(surface, "next");
+  await expect(previewCount(page)).toHaveText("2 / 3");
 });
 
 test("点击搜索结果文字继续选择款式，预览操作不会替代原有选择行为", async ({ page }) => {
