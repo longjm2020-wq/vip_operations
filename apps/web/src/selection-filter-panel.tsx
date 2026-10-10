@@ -36,7 +36,15 @@ export function SelectionFilterPanel({ column, rows, view, shared, canShare, onC
     if (active) filters[column.key] = committed; else delete filters[column.key];
     return { filters, sort };
   };
-  const apply = async () => { if (draft.mode === "between" && (!draft.value.trim() || !draft.end?.trim())) { message.warning("请填写区间的开始值和结束值"); return; } setBusy(true); try { await onApply(nextView(), share); } catch (error) { message.error((error as Error).message); } finally { setBusy(false); } };
+  const submit = async (next: SelectionView) => {
+    if (busy) return;
+    setBusy(true);
+    try { await onApply(next, share); }
+    catch (error) { message.error((error as Error).message); }
+    finally { setBusy(false); }
+  };
+  const apply = async () => { if (draft.mode === "between" && (!draft.value.trim() || !draft.end?.trim())) { message.warning("请填写区间的开始值和结束值"); return; } await submit(nextView()); };
+  const clear = () => submit({ filters: otherFilters, sort: view.sort });
   const exportData = async (type: string) => {
     try {
       const records = type === "options" ? options.map(option => ({ [column.label]: option.value || "(空白)", 数量: option.count, 已勾选: selected.has(option.value) ? "是" : "否" })) : sortSelectionRows(rows.filter(row => matchesSelectionFilters(row, nextView().filters)), sort).map(row => ({ 序缇款号: row.xutiStyleNo || "", 供应商款号: row.supplierStyleNo || "", [column.label]: selectionFilterValue(row, column.key) }));
@@ -56,7 +64,7 @@ export function SelectionFilterPanel({ column, rows, view, shared, canShare, onC
       { key: "colors", label: "按颜色", children: <Space orientation="vertical" style={{width:"100%"}}><Select aria-label="颜色类型" value={colorType} options={[{ value: "fill", label: "背景填色" }, { value: "text", label: "字体颜色" }]} onChange={colorType => setDraft(current => ({ ...current, colorType, colors: undefined }))} /><Button size="small" onClick={() => setDraft(current => ({ ...current, colors: undefined }))}>不限颜色</Button>{colorOptions.map(color => <Checkbox key={color} checked={!draft.colors || draft.colors.includes(color)} onChange={event => { const colors = new Set(draft.colors ?? colorOptions); if (event.target.checked) colors.add(color); else colors.delete(color); setDraft(current => ({ ...current, colorType, colors: [...colors] })); }}><i className="selection-color-dot" style={{background:fillHex[color] || color}} />{colorNames[color] || color} ({candidates.filter(row => selectionCellColor(row, column.key, colorType) === color).length})</Checkbox>)}</Space> },
       { key: "conditions", label: "按条件", children: <Space orientation="vertical" style={{width:"100%"}}><Select style={{width:"100%"}} aria-label="筛选条件" value={draft.mode} options={modes.map(([value, label]) => ({ value, label }))} onChange={mode => setDraft(current => ({ ...current, mode }))} />{!["empty", "filled"].includes(draft.mode) && <Input aria-label="条件值" placeholder="输入文本、数字或 YYYY-MM-DD" value={draft.value} onChange={event => setDraft(current => ({ ...current, value: event.target.value }))} />}{draft.mode === "between" && <Input aria-label="结束值" placeholder="结束值（含边界）" value={draft.end} onChange={event => setDraft(current => ({ ...current, end: event.target.value }))} />}<span className="selection-format-note">选项、颜色、条件同时生效。重复项/唯一项按本列完整内容统计；区间筛选包含范围端点。</span></Space> },
     ]} />
-    <div className="selection-filter-sharing"><span title="开启并确认后，同步给有本表查看权限的协作者；关闭仅对自己生效，不移除已有共享筛选。">筛选对所有人可见</span><Switch aria-label="筛选对所有人可见" disabled={!canShare} checked={share} onChange={setShare} /></div>
-    <div className="selection-filter-footer"><Button type="text" size="small" onClick={() => { setDraft({ mode: "contains", value: "" }); setQuery(""); }}>清除筛选</Button><Dropdown trigger={["click"]} menu={{ items:[{key:"options",label:"导出选项与计数"},{key:"results",label:"导出本列筛选结果"}], onClick:({key})=>void exportData(key) }}><Button type="text" size="small" icon={<DownloadOutlined />}>导出</Button></Dropdown><Button onClick={onCancel} disabled={busy}>取消</Button><Button type="primary" loading={busy} onClick={() => void apply()}>确认</Button></div>
+    <div className="selection-filter-sharing"><span title="开启后，确认或清除筛选时同步给有本表查看权限的协作者；关闭仅对自己生效，不移除已有共享筛选。">筛选对所有人可见</span><Switch aria-label="筛选对所有人可见" disabled={!canShare} checked={share} onChange={setShare} /></div>
+    <div className="selection-filter-footer"><Button type="text" size="small" disabled={busy} onClick={() => void clear()}>清除筛选</Button><Dropdown trigger={["click"]} menu={{ items:[{key:"options",label:"导出选项与计数"},{key:"results",label:"导出本列筛选结果"}], onClick:({key})=>void exportData(key) }}><Button type="text" size="small" icon={<DownloadOutlined />}>导出</Button></Dropdown><Button onClick={onCancel} disabled={busy}>取消</Button><Button type="primary" loading={busy} onClick={() => void apply()}>确认</Button></div>
   </div>;
 }

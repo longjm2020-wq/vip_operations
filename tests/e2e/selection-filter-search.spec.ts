@@ -22,6 +22,7 @@ async function fixture(page: Page, options: { readonly?: boolean; materials?: st
   }));
   const sharedWrites: { revision: number; view: SelectionView }[] = [];
   const rowWrites: string[] = [];
+  let rejectSharedWrite = false;
   await page.route("**/api/v1/**", async route => {
     const path = new URL(route.request().url()).pathname;
     let data: unknown = [];
@@ -41,6 +42,11 @@ async function fixture(page: Page, options: { readonly?: boolean; materials?: st
       if (route.request().method() === "POST") {
         const body = route.request().postDataJSON();
         sharedWrites.push(body);
+        if (rejectSharedWrite) {
+          rejectSharedWrite = false;
+          await route.fulfill({ status: 409, json: { error: { message: "共享筛选保存失败，请重试" } } });
+          return;
+        }
         shared = { revision: shared.revision + 1, view: body.view };
       }
       data = shared;
@@ -53,12 +59,14 @@ async function fixture(page: Page, options: { readonly?: boolean; materials?: st
   return {
     sharedWrites, rowWrites,
     savedFilter: () => layout.preferences!.columnFilters.material,
+    savedView: (): SelectionView => ({ filters: layout.preferences!.columnFilters, sort: layout.preferences!.columnSort }),
+    rejectNextSharedWrite: () => { rejectSharedWrite = true; },
   };
 }
 
 const visibleRows = (page: Page) => page.locator("tr[data-selection-row]").evaluateAll(elements => elements.map(element => element.getAttribute("data-selection-row")));
-async function openFilter(page: Page) {
-  await page.getByRole("button", { name: "筛选材质", exact: true }).click();
+async function openFilter(page: Page, label = "材质") {
+  await page.getByRole("button", { name: `筛选${label}`, exact: true }).click();
   const panel = page.locator(".selection-filter-panel:visible");
   await expect(panel).toBeVisible();
   return panel;
@@ -190,5 +198,88 @@ test("editors explicitly share only the searched and checked result", async ({ p
   await expect.poll(() => visibleRows(page)).toEqual(["filter-0", "filter-2"]);
   expect(state.sharedWrites).toHaveLength(1);
   expect(state.sharedWrites[0].view.filters.material.values?.slice().sort()).toEqual([materials[0], materials[2]].sort());
+  expect(state.rowWrites).toHaveLength(0);
+});
+
+test("clearing a personal column filter applies immediately and preserves other filters and committed sort", async ({ page }) => {
+  const state = await fixture(page);
+  let panel = await openFilter(page, "序缇款号");
+  for (const value of ["FILTER-0", "FILTER-2", "FILTER-5"]) await optionCheckbox(panel, value).uncheck();
+  await panel.getByRole("button", { name: /降序$/ }).click();
+  await confirm(panel);
+  await expect.poll(() => visibleRows(page)).toEqual(["filter-4", "filter-3", "filter-1"]);
+
+  panel = await openFilter(page);
+  await queryInput(panel).fill("桑蚕丝");
+  await confirm(panel);
+  await expect.poll(() => visibleRows(page)).toEqual(["filter-1"]);
+  await expect.poll(() => state.savedFilter()?.values).toEqual([materials[1]]);
+  const otherFilter = state.savedView().filters.xutiStyleNo;
+
+  panel = await openFilter(page);
+  await panel.getByRole("button", { name: /升序$/ }).click();
+  await queryInput(panel).fill("没有这种成分");
+  await panel.getByRole("button", { name: "清除筛选", exact: true }).click();
+
+  await expect(panel).toHaveCount(0);
+  await expect.poll(() => visibleRows(page)).toEqual(["filter-4", "filter-3", "filter-1"]);
+  await expect.poll(() => state.savedView()).toEqual({
+    filters: { xutiStyleNo: otherFilter }, sort: { key: "xutiStyleNo", direction: "desc" },
+  });
+  expect(state.sharedWrites).toHaveLength(0);
+  expect(state.rowWrites).toHaveLength(0);
+});
+
+test("clearing a shared column filter publishes and applies immediately without confirming", async ({ page }) => {
+  const state = await fixture(page);
+  let panel = await openFilter(page);
+  await queryInput(panel).fill("桑蚕丝");
+  await panel.getByRole("switch", { name: "筛选对所有人可见", exact: true }).click();
+  await confirm(panel);
+  await expect.poll(() => visibleRows(page)).toEqual(["filter-0", "filter-1", "filter-2"]);
+
+  panel = await openFilter(page);
+  await expect(panel.getByRole("switch", { name: "筛选对所有人可见", exact: true })).toBeChecked();
+  await queryInput(panel).fill("羊毛");
+  await panel.getByRole("button", { name: "清除筛选", exact: true }).click();
+
+  await expect(panel).toHaveCount(0);
+  await expect.poll(() => visibleRows(page)).toEqual(materials.map((_, index) => `filter-${index}`));
+  expect(state.sharedWrites).toHaveLength(2);
+  expect(state.sharedWrites[1]).toEqual({ revision: 1, view: { filters: {}, sort: null } });
+  await expect.poll(() => state.savedView()).toEqual({ filters: {}, sort: null });
+  expect(state.rowWrites).toHaveLength(0);
+});
+
+test("failed shared filter clearing retains the applied filter and draft panel and can be retried", async ({ page }) => {
+  const state = await fixture(page);
+  let panel = await openFilter(page);
+  await queryInput(panel).fill("桑蚕丝");
+  await panel.getByRole("switch", { name: "筛选对所有人可见", exact: true }).click();
+  await confirm(panel);
+  const retained = ["filter-0", "filter-1", "filter-2"];
+  await expect.poll(() => visibleRows(page)).toEqual(retained);
+  await expect.poll(() => state.savedFilter()?.values?.slice().sort()).toEqual(materials.slice(0, 3).sort());
+
+  panel = await openFilter(page);
+  await optionCheckbox(panel, materials[1]).uncheck();
+  state.rejectNextSharedWrite();
+  await panel.getByRole("button", { name: "清除筛选", exact: true }).click();
+
+  await expect(page.getByText("共享筛选保存失败，请重试", { exact: true })).toBeVisible();
+  await expect(panel).toBeVisible();
+  await expect(optionCheckbox(panel, materials[0])).toBeChecked();
+  await expect(optionCheckbox(panel, materials[1])).not.toBeChecked();
+  await expect(optionCheckbox(panel, materials[3])).not.toBeChecked();
+  expect(await visibleRows(page)).toEqual(retained);
+  expect(state.savedFilter()?.values?.slice().sort()).toEqual(materials.slice(0, 3).sort());
+  expect(state.sharedWrites).toHaveLength(2);
+  expect(state.sharedWrites[1]).toEqual({ revision: 1, view: { filters: {}, sort: null } });
+  await expect(panel.getByRole("button", { name: "清除筛选", exact: true })).toBeEnabled();
+
+  await panel.getByRole("button", { name: "清除筛选", exact: true }).click();
+  await expect(panel).toHaveCount(0);
+  await expect.poll(() => visibleRows(page)).toEqual(materials.map((_, index) => `filter-${index}`));
+  expect(state.sharedWrites).toHaveLength(3);
   expect(state.rowWrites).toHaveLength(0);
 });
