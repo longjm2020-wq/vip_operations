@@ -49,6 +49,7 @@ export type CompassLoginCheck = {
 const downloadDirectories = new Set<string>();
 const navTimeout = 30000;
 const maxFileSize = 100 * 1024 * 1024;
+const ssoSettleMs = 6000;
 const reportName = (dimension: CompassDimension) =>
   new RegExp(
     `按${{ style: "款号", article: "货号", barcode: "条码" }[dimension]}\\s*[（(]?\\s*近\\s*30\\s*天\\s*[）)]?`,
@@ -168,6 +169,46 @@ async function currentState(page: Page): Promise<CompassLoginCheck> {
     note: "尚未读到罗盘三张自助报表；供应商门户或水印页面不能作为登录成功",
   };
 }
+async function importantNotice(page: Page, signal?: AbortSignal) {
+  for (const frame of await visibleFrames(page)) {
+    const dialogs = frame.locator('[role="dialog"],[role="alertdialog"],.ant-modal,.el-dialog,.modal-dialog,[class*="modal"],[class*="Modal"],[class*="dialog"],[class*="Dialog"]').filter({ visible: true });
+    for (let index = 0; index < Math.min(await dialogs.count(), 20); index++) {
+      const dialog = dialogs.nth(index);
+      if (!(await dialog.getByText("重要提醒", { exact: true }).filter({ visible: true }).count())) continue;
+      const ack = dialog.getByText("已知晓", { exact: true }).filter({ visible: true }).first();
+      if (!(await ack.count())) continue;
+      const text = (await dialog.innerText()).replace(/\s+/g, "");
+      if (text.length > 4000 || /协议|条款|隐私|授权|同意|承诺|签约|签署|签订|接受|免责声明|责任|验证码|安全验证|人机验证|支付|付款|订购|购买|费用|收费|开通/.test(text) || await dialog.locator('input,textarea,select,[contenteditable="true"]').count()) return "REQUIRES_USER";
+      cancelled(signal);
+      await ack.click({ timeout: 2000 });
+      await pause(150, signal);
+      return "DISMISSED";
+    }
+  }
+  return "NONE";
+}
+async function settledState(page: Page, signal?: AbortSignal): Promise<CompassLoginCheck> {
+  const deadline = Date.now() + ssoSettleMs;
+  let last: CompassLoginCheck;
+  while (true) {
+    cancelled(signal);
+    try {
+      last = await currentState(page);
+      if (last.reason === "HUMAN_VERIFICATION") return last;
+      const notice = await importantNotice(page, signal);
+      if (notice === "REQUIRES_USER") return { verified: false, reason: "HUMAN_VERIFICATION", note: "罗盘的重要提醒需本人确认，请在服务器画面处理后重新核验" };
+      if (notice === "DISMISSED") last = await currentState(page);
+      // A visible passport iframe can be a transient SSO handoff. Its
+      // disappearance never proves login; only the actual catalogue can.
+      if (last.reason !== "LOGIN_REQUIRED") return last;
+    } catch (error) {
+      if (!(error instanceof Error) || !/frame.{0,30}detach|execution context.{0,30}destroy|cannot find context|navigation.{0,25}(?:progress|interrupt)|net::ERR_ABORTED/i.test(error.message)) throw error;
+      last = { verified: false, reason: "UNKNOWN_PAGE", note: "罗盘登录跳转尚未完成，请等待画面稳定后重新核验" };
+    }
+    if (Date.now() >= deadline) return last;
+    await pause(Math.min(500, deadline - Date.now()), signal);
+  }
+}
 function throwState(state: CompassLoginCheck) {
   if (
     state.reason === "LOGIN_REQUIRED" ||
@@ -222,7 +263,7 @@ export async function checkCompassLogin(
       });
     // The supplier login redirects asynchronously and uses a visible passport iframe.
     for (let attempt = 0; attempt < 4; attempt++) {
-      const state = await currentState(page);
+      const state = await settledState(page, options.signal);
       if (state.reason !== "UNKNOWN_PAGE") return state;
       if (
         await visibleText(
@@ -231,11 +272,11 @@ export async function checkCompassLogin(
         )
       ) {
         const reports = await openCompassReports(page, options.signal);
-        return currentState(reports);
+        return settledState(reports, options.signal);
       }
       await pause(500, options.signal);
     }
-    return currentState(page);
+    return settledState(page, options.signal);
   } catch (error) {
     if (error instanceof CompassBrowserError) {
       if (error.code === "CANCELLED") throw error;
@@ -268,7 +309,7 @@ export async function openCompassReports(
   const clicked = new Set<string>();
   for (let attempt = 0; attempt < 7; attempt++) {
     cancelled(signal);
-    const state = await currentState(target);
+    const state = await settledState(target, signal);
     throwState(state);
     if (state.verified) return target;
     let moved = false;
@@ -301,11 +342,11 @@ export function compassVisibleRange(
   text: string,
 ): { start: string; end: string } | null {
   const match = text.match(
-    /(\d{4}[-/]\d{1,2}[-/]\d{1,2})\s*(?:至|到|~|～|—|–|\s-\s)\s*(\d{4}[-/]\d{1,2}[-/]\d{1,2})/,
+    /(\d{4}[-/]\d{1,2}[-/]\d{1,2}|\d{8})\s*(?:至|到|~|～|—|–|\s-\s)\s*(\d{4}[-/]\d{1,2}[-/]\d{1,2}|\d{8})/,
   );
   if (!match) return null;
   const date = (value: string) =>
-    value
+    (/^\d{8}$/.test(value) ? `${value.slice(0,4)}-${value.slice(4,6)}-${value.slice(6,8)}` : value)
       .split(/[-/]/)
       .map((part, index) => (index ? part.padStart(2, "0") : part))
       .join("-");

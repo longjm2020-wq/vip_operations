@@ -207,6 +207,10 @@ export async function processCompassLogin(browserLaunch: () => Promise<Browser> 
             await configureCompassPage(probePage);
             const reusable = await checkCompassLogin(probePage);
             verified = reusable.verified;
+            let hostname = "unknown";
+            try { hostname = new URL(probePage.url()).hostname; } catch { /* Safe metadata only. */ }
+            const officialHosts = [...new Set(probe.pages().filter(candidate => !candidate.isClosed() && isCompassBrowserOrigin(candidate.url())).map(candidate => new URL(candidate.url()).hostname))].slice(0, 5);
+            console.warn(JSON.stringify({ event: "compass_reuse_check", reason: reusable.reason, hostname: /^[a-z0-9.-]{1,253}$/i.test(hostname) ? hostname : "unknown", officialHosts }));
           } finally { await probe.close(); }
           if (!verified) { await update("登录尚不能在后台浏览器中复用，请确认已进入自助报表后再次核验"); continue; }
           stage = "SAVE_SESSION";

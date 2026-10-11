@@ -116,6 +116,31 @@ describe("Compass official browser reports", () => {
       (await checkCompassLogin(page, { alreadyLoaded: true })).verified,
     ).toBe(false);
   }, 20000);
+  it("waits for a delayed SSO passport handoff but verifies only the resulting real catalogue", async () => {
+    const page = await fixture('<iframe src="https://passport.vip.com/login/bLogin"></iframe><script>setTimeout(()=>location.href="https://compass.vip.com/ready",1800)</script>');
+    await page.context().route("https://compass.vip.com/ready", route => route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", body: reportPage() }));
+    const result = await checkCompassLogin(page, { alreadyLoaded: true });
+    expect(await page.locator("body").innerText()).toContain(compassReportTitles.style);
+    expect({ result, path: new URL(page.url()).pathname }).toMatchObject({ result: { verified: true, reason: "READY" }, path: "/ready" });
+    expect(new URL(page.url()).pathname).toBe("/ready");
+  }, 12000);
+  it("dismisses a nonbinding important notice before navigating an intercepted report menu", async () => {
+    const page = await fixture(`<button onclick='document.body.innerHTML=${JSON.stringify(reportPage())}'>自助报表</button><div role="dialog" style="position:fixed;inset:0;background:white;z-index:99"><h2>重要提醒</h2><p>库存、税额和价格数据仅供报表参考，请及时核对。</p><button onclick="this.closest('[role=dialog]').remove()">已知晓</button></div>`);
+    expect(await checkCompassLogin(page, { alreadyLoaded: true })).toMatchObject({ verified: true, reason: "READY" });
+    expect(await page.getByRole("dialog").count()).toBe(0);
+  }, 12000);
+  it("requires the user for an agreement notice even with a catalogue visible behind it", async () => {
+    const page = await fixture(`${reportPage()}<div role="dialog"><h2>重要提醒</h2><p>点击已知晓表示同意授权协议和条款。</p><button onclick="this.closest('[role=dialog]').remove()">已知晓</button></div>`);
+    expect(await checkCompassLogin(page, { alreadyLoaded: true })).toMatchObject({ verified: false, reason: "HUMAN_VERIFICATION" });
+    expect(await page.getByRole("dialog").count()).toBe(1);
+  }, 12000);
+  it("returns a genuinely expired login after bounded SSO settling without claiming success", async () => {
+    const page = await fixture('<iframe src="https://passport.vip.com/login/bLogin"></iframe>');
+    const start = Date.now();
+    expect(await checkCompassLogin(page, { alreadyLoaded: true })).toMatchObject({ verified: false, reason: "LOGIN_REQUIRED" });
+    expect(Date.now() - start).toBeLessThan(10000);
+    expect(await page.locator("iframe").count()).toBe(1);
+  }, 15000);
   it("downloads three original files unchanged and cleans only its own temporary directory", async () => {
     const page = await fixture(reportPage());
     const notes: string[] = [];
@@ -214,6 +239,7 @@ describe("Compass official browser reports", () => {
       start: targetStart,
       end: targetEnd,
     });
+    expect(compassVisibleRange("20260911 \n-\n 20261010")).toEqual({ start: targetStart, end: targetEnd });
     expect(compassVisibleRange("创建时间 2026-10-11 08:00:00")).toBeNull();
     const page = await fixture(reportPage());
     const controller = new AbortController();
