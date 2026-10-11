@@ -69,7 +69,16 @@ async function importLayout(tx: Tx, c: Context, archive: boolean) {
   if (archive) effective.columns = archiveChoiceColumns(effective.columns, canonicalFields);
   // Include invisible registered definitions when resolving names. A private or
   // hidden field cannot be bypassed by creating another field with its name.
-  const all = new Map<string, SelectionField>([...canonicalFields.filter(field => field.key === archiveStandardColorKey), ...personal.columns, ...(template?.preferences.columns || []), ...registry.map(registeredField), ...effective.columns].map(field => [field.key, {
+  const persistedFields = [...(stored?.preferences.columns || []), ...shared.fields, ...(template?.preferences.columns || []), ...registry.map(registeredField), ...effective.columns];
+  const inferredCanonical = !stored && !persistedFields.some(field => field.key === archiveStandardColorKey) &&
+    persistedFields.some(field => field.label === "标准颜色");
+  // Default product columns are only an inferred layout. They must not shadow a
+  // standard-color field already registered under a transferred/custom key.
+  const existingFields = [...personal.columns, ...(template?.preferences.columns || []), ...registry.map(registeredField), ...effective.columns]
+    .filter(field => !inferredCanonical || field.key !== archiveStandardColorKey);
+  const archiveFallback = existingFields.some(field => field.key === archiveStandardColorKey || field.label === "标准颜色")
+    ? [] : canonicalFields.filter(field => field.key === archiveStandardColorKey);
+  const all = new Map<string, SelectionField>([...archiveFallback, ...existingFields].map(field => [field.key, {
     ...field, type: field.type || field.fallbackType || selectionImportTemplateFields.find(item => item.builtinKey === field.key)?.type || "text",
   }]));
   const policy = await protection.policy(tx);

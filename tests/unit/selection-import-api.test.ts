@@ -252,6 +252,72 @@ describe("atomic Excel style import", () => {
     expect((await read("SELECT color,material,images,extra_fields FROM style_selections"))[0]).toEqual({ color: "新厂家色", material: "更新成分", images: before.images, extra_fields: before.extra_fields });
     expect((await read("SELECT draft FROM selection_collection_items"))[0].draft.images).toEqual(before.images);
   });
+  it("reuses an existing noncanonical archive standard-color tags field for supplied values and image-only updates", async () => {
+    fixture.archive = true;
+    const standard = { ...field("标准颜色", "tags"), key: "custom:transferred-standard" };
+    await fixture.database!.query("INSERT INTO product_fields(id,name,type,options) VALUES($1,'标准颜色','text','[]')", [archiveFieldIds.standardColor]);
+    await fixture.database!.query("INSERT INTO products(id,style_no) VALUES(1,'ARCHIVE-TRANSFERRED-STANDARD')");
+    await fixture.database!.query(`INSERT INTO selection_field_registry(workspace_key,table_id,field_key,owner_id,visibility,definition)
+      VALUES('23',23,$1,7,'PUBLIC',$2)`, [standard.key, JSON.stringify(standard)]);
+    await fixture.database!.query(`INSERT INTO selection_layout_preferences(user_id,workspace_key,table_id,preferences)
+      VALUES(7,'23',23,$1)`, [JSON.stringify(selectionLayoutSchema.parse({ columns: [...selectionBaseFields, standard] }))]);
+    await fixture.database!.query(`INSERT INTO selection_table_23.style_selections(xuti_style_no,product_id,color,extra_fields)
+      VALUES('ARCHIVE-TRANSFERRED-STANDARD',1,'厂家黑',$1)`, [JSON.stringify({ [standard.key]: "旧颜色" })]);
+    await selectionScope.run("23", async () => {
+      const plan = await previewImport(actor("archive-transferred-main"), input([{ xutiStyleNo: "ARCHIVE-TRANSFERRED-STANDARD", fieldValues: { 标准颜色: "白色/灰色" }, images: [
+        { id: "white", color: "白色", colorFieldKey: "standard", url: "https://example.com/white.jpg" },
+      ] }]));
+      expect(plan.fields.find(binding => binding.header === "标准颜色")).toMatchObject({ key: standard.key, type: "tags", isNew: false });
+      expect(await read("SELECT field_key FROM selection_field_registry")).toEqual([{ field_key: standard.key }]);
+      expect(await commitImport(actor("archive-transferred-main"), payload(plan))).toMatchObject({ updated: 1, fieldsCreated: 0 });
+      const imagesOnly = await previewImport(actor("archive-transferred-images"), input([{ xutiStyleNo: "ARCHIVE-TRANSFERRED-STANDARD", images: [
+        { id: "gray", color: "灰色", colorFieldKey: "standard", url: "https://example.com/gray.jpg" },
+      ] }]));
+      expect(imagesOnly.fields.find(binding => binding.header === "标准颜色")).toMatchObject({ key: standard.key, type: "tags", isNew: false });
+      expect(await commitImport(actor("archive-transferred-images"), payload(imagesOnly))).toMatchObject({ updated: 1, fieldsCreated: 0 });
+    });
+    expect((await read("SELECT color,extra_fields,images FROM selection_table_23.style_selections"))[0]).toEqual({ color: "厂家黑", extra_fields: { [standard.key]: "白色/灰色" }, images: [
+      { id: "gray", color: "灰色", colorFieldKey: standard.key, url: "https://example.com/gray.jpg" },
+    ] });
+    expect(await read("SELECT field_key FROM selection_field_registry")).toEqual([{ field_key: standard.key }]);
+  });
+  it.each(["private", "hidden", "deleted"])("does not create an archive canonical fallback around an existing %s standard-color field", async mode => {
+    fixture.archive = true;
+    const standard = { ...field("标准颜色", "tags"), key: "custom:unavailable-standard", ...(mode === "deleted" ? { deleted: true } : {}) };
+    await fixture.database!.query("INSERT INTO product_fields(id,name,type,options) VALUES($1,'标准颜色','text','[]')", [archiveFieldIds.standardColor]);
+    await fixture.database!.query(`INSERT INTO selection_field_registry(workspace_key,table_id,field_key,owner_id,visibility,definition)
+      VALUES('23',23,$1,$2,$3,$4)`, [standard.key, mode === "private" ? 8 : 7, mode === "private" ? "PRIVATE" : "PUBLIC", JSON.stringify(standard)]);
+    await fixture.database!.query(`INSERT INTO selection_layout_preferences(user_id,workspace_key,table_id,preferences)
+      VALUES(7,'23',23,$1)`, [JSON.stringify(selectionLayoutSchema.parse({ columns: [...selectionBaseFields, standard], hiddenColumns: mode === "hidden" ? [standard.key] : [] }))]);
+    await selectionScope.run("23", async () => {
+      await expect(previewImport(actor(), input([{ xutiStyleNo: "ARCHIVE-UNAVAILABLE-STANDARD", fieldValues: { 标准颜色: "白色" }, images: [
+        { id: "white", color: "白色", colorFieldKey: "standard", url: "https://example.com/white.jpg" },
+      ] }]))).rejects.toMatchObject({ status: 403, response: { error: { message: "导入列包含不可访问的字段，请核对字段权限和显示设置" } } });
+    });
+    expect(await read("SELECT field_key FROM selection_field_registry")).toEqual([{ field_key: standard.key }]);
+    expect(await read("SELECT * FROM selection_table_23.style_selections")).toEqual([]);
+  });
+  it.each(["PUBLIC", "PRIVATE"])("resolves actual archive standard-color fields before inferred default columns without a saved layout (%s)", async visibility => {
+    fixture.archive = true;
+    const standard = { ...field("标准颜色", "tags"), key: "custom:registered-standard" };
+    await fixture.database!.query("UPDATE project_tables SET initial_layout='selection' WHERE id=23");
+    try {
+      await fixture.database!.query("INSERT INTO product_fields(id,name,type,options) VALUES($1,'标准颜色','text','[]')", [archiveFieldIds.standardColor]);
+      await fixture.database!.query(`INSERT INTO selection_field_registry(workspace_key,table_id,field_key,owner_id,visibility,definition)
+        VALUES('23',23,$1,8,$2,$3)`, [standard.key, visibility, JSON.stringify(standard)]);
+      await selectionScope.run("23", async () => {
+        const preview = previewImport(actor(), input([{ xutiStyleNo: "ARCHIVE-INFERRED-STANDARD", fieldValues: { 标准颜色: "白色" }, images: [
+          { id: "white", color: "白色", colorFieldKey: "standard", url: "https://example.com/white.jpg" },
+        ] }]));
+        if (visibility === "PRIVATE") await expect(preview).rejects.toMatchObject({ status: 403 });
+        else expect((await preview).fields.find(binding => binding.header === "标准颜色")).toMatchObject({ key: standard.key, type: "tags", isNew: false });
+      });
+      expect(await read("SELECT field_key FROM selection_field_registry")).toEqual([{ field_key: standard.key }]);
+      expect(await read("SELECT * FROM selection_layout_preferences")).toEqual([]);
+    } finally {
+      await fixture.database!.query("UPDATE project_tables SET initial_layout='empty' WHERE id=23");
+    }
+  });
   it("prefers canonical archive standard color, previews without writes, then mirrors linked images without supplier changes", async () => {
     fixture.archive = true;
     await fixture.database!.query("INSERT INTO product_fields(id,name,type,options) VALUES($1,'标准颜色','text','[]')", [archiveFieldIds.standardColor]);
