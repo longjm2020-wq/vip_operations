@@ -44,3 +44,23 @@ export function formatSelectionCreatedTime(value: unknown, timeDisplay: "date" |
   const formatted = `${get("year")}-${get("month")}-${get("day")}`;
   return timeDisplay === "date" ? formatted : `${formatted} ${get("hour")}:${get("minute")}:${get("second")}`;
 }
+
+export type SelectionCreatedTimeGroupUnit = "year" | "quarter" | "month" | "day";
+
+/** Group the actual creation instant by Beijing calendar boundaries, independent of display settings. */
+export function selectionCreatedTimeGroupLabel(value: unknown, unit: SelectionCreatedTimeGroupUnit): string {
+  const parsed = typeof value === "string" ? parseSelectionCreatedTime(value) : null;
+  const date = value instanceof Date ? value
+    : typeof value === "number" && Number.isFinite(value) ? new Date(value)
+      : parsed ? new Date(parsed) : null;
+  if (!date || !Number.isFinite(date.getTime()) || date.getUTCFullYear() < 1) return "";
+  const [rawYear, month, day] = formatSelectionCreatedTime(date, "date").split("-");
+  const year = rawYear.padStart(4, "0");
+  switch (unit) {
+    case "year": return `${year}年`;
+    case "quarter": return `${year}年第${Math.ceil(Number(month) / 3)}季度`;
+    case "month": return `${year}-${month}`;
+    case "day": return `${year}-${month}-${day}`;
+    default: return "";
+  }
+}

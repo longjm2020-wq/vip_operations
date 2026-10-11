@@ -61,6 +61,7 @@ import { retainSelectionResults, type RetainedSelectionResults } from "./selecti
 import { selectionSizes as sizes, sortSelectionSizes } from "../../../packages/contracts/src/selection-sizes";
 import { selectionLastRow } from "../../../packages/contracts/src/selection-trailing-row";
 import { selectionInitialColumnWidth } from "../../../packages/contracts/src/selection-layout";
+import { selectionCreatedTimeGroupLabel, type SelectionCreatedTimeGroupUnit } from "../../../packages/contracts/src/selection-created-time";
 import "./style-selections.css";
 
 const colorOptions = [
@@ -570,9 +571,10 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
       ? String(row.id) === imageSearchRowId && readableSelectionCell(row,"images")
       : Object.keys(columnFilters).every(key=>readableSelectionCell(row,key)) && matchesSelectionSearch({...row,extraFields:{...(row.extraFields || {}),...row.selectionChoiceTexts}},searchTerms,visibleColumns.filter(column=>column.custom && column.type!=="image").map(column=>column.key)) && matchesSelectionFilters(row, columnFilters)), columnSort, columns).map(row=>originalRows.get(row._key)!);
   }, [rows, fieldViewRows, columnFilters, columnSort, searchTerms, imageSearchRowId, columns, visibleColumns]);
-  const groupKey=groupBy==="batch"?"registrationBatch":groupBy==="supplier"?"supplierCode":groupBy.slice(6);
+  const creationGroupUnit = groupBy === "batch" ? "day" : groupBy.startsWith("createdTime:") ? groupBy.slice(12) as SelectionCreatedTimeGroupUnit : null;
+  const groupKey=creationGroupUnit?"registrationBatch":groupBy==="supplier"?"supplierCode":groupBy.slice(6);
   const groupColumn=columns.find(column=>column.key===groupKey);
-  const groupLabel=(row:Row)=>!readableSelectionCell(row,groupKey)?"受保护内容":String(groupColumn?choiceDisplayText(groupColumn,valueAt(row,groupColumn)):row[groupKey] || "") || `未填写${groupColumn?.label || "字段"}`;
+  const groupLabel=(row:Row)=>!readableSelectionCell(row,groupKey)?"受保护内容":creationGroupUnit ? selectionCreatedTimeGroupLabel(row.createdAt,creationGroupUnit) || "未填写创建时间" : String(groupColumn?choiceDisplayText(groupColumn,valueAt(row,groupColumn)):row[groupKey] || "") || `未填写${groupColumn?.label || "字段"}`;
   const filterScope=imageSearchRowId===null && Object.keys(columnFilters).length ? JSON.stringify([
     filterRefresh,searchText,columnFilters,columnSort,groupBy,sort,direction,
     followShared?sharedView.data?.data?.revision:0,
@@ -591,9 +593,15 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
     return retained;
   }, [rows, matchingRows, retainedResults, heldEdit, editingRow]);
   const allGrouped = useMemo(() => {
-    const label = (row: Row) => retainedGroupLabels.get(row._key) ?? (heldEdit && heldEdit.rowKey===row._key ? heldEdit.groupLabel : groupLabel(row));
+    const label = (row: Row) => !readableSelectionCell(row, groupKey) ? "受保护内容" : retainedGroupLabels.get(row._key) ?? (heldEdit && heldEdit.rowKey===row._key ? heldEdit.groupLabel : groupLabel(row));
     if (groupBy === "none") return [{ label: "", rows: filteredRows }];
-    return filteredRows.reduce<{ label: string; rows: Row[] }[]>((result, row) => { const key = label(row); const target = result.find((item) => item.label === key); if (target) target.rows.push(row); else result.push({ label: key, rows: [row] }); return result; }, []);
+    const groups = new Map<string, { label: string; rows: Row[] }>();
+    for (const row of filteredRows) {
+      const key = label(row), target = groups.get(key);
+      if (target) target.rows.push(row);
+      else groups.set(key, { label: key, rows: [row] });
+    }
+    return [...groups.values()];
   }, [groupBy, filteredRows, columns, heldEdit, retainedGroupLabels]);
   const allDisplayedRows = useMemo(() => allGrouped.flatMap(group => group.rows), [allGrouped]);
   const pageCount = Math.max(1, Math.ceil(allDisplayedRows.length / pageSize));

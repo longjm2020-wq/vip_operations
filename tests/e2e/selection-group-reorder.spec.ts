@@ -13,6 +13,7 @@ async function fixture(page: Page, options: { readonly?: boolean; protected?: bo
     columns: keys.map((key, index) => ({ key, label: labels[index], width: 120 })),
     fixedColumns: options.fixedColumns || [],
     rowHeight: "compact",
+    sort: "sortOrder", direction: "asc",
   });
   let layout: SelectionLayoutSnapshot = {
     preferences, revision: 1,

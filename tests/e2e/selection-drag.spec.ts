@@ -230,7 +230,8 @@ test("multiple search terms match partially and color grouping is absent", async
   ).toHaveCount(20);
   await page.locator(".selection-tool-select").first().click();
   await expect(page.getByText("按颜色分组", { exact: true })).toHaveCount(0);
-  await expect(page.getByText("按创建时间分组", { exact: true })).toBeVisible();
+  for (const unit of ["年", "季度", "月", "日"])
+    await expect(page.getByText(`按创建时间（${unit}）分组`, { exact: true })).toBeVisible();
   await expect(
     page.getByText("按供应商编码分组", { exact: true }),
   ).toBeVisible();
@@ -243,7 +244,8 @@ test("multiple search terms match partially and color grouping is absent", async
     "手动排序",
     "最近修改",
     "最新创建",
-    "创建时间",
+    "创建时间 ↑",
+    "创建时间 ↓",
     /^\s*配置排序字段$/,
   ]);
 });

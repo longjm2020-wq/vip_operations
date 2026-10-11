@@ -20,6 +20,7 @@ async function fixture(page: Page, options: {
         { key: fieldKey, label: "执行标准", width: 240, custom: true, type: options.type || "text", options: options.type && options.type !== "text" ? ["女士皮衣/皮草", "女士睡衣/家居服", "已有标准"] : undefined },
       ],
       rowHeight: "compact",
+      sort: "sortOrder", direction: "asc",
       pageSize: options.pageSize || 500,
     }),
     revision: 1,

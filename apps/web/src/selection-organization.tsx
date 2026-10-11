@@ -57,7 +57,8 @@ export function SelectionOrganization({
     { value: "sortOrder:asc", label: "手动排序" },
     { value: "updatedAt:desc", label: "最近修改" },
     { value: "createdAt:desc", label: "最新创建" },
-    { value: "registrationBatch:desc", label: "创建时间" },
+    { value: "registrationBatch:asc", label: "创建时间 ↑" },
+    { value: "registrationBatch:desc", label: "创建时间 ↓" },
     ...sorts.flatMap((key) => [
       { value: `field:${key}:asc`, label: `${label(key)} ↑` },
       { value: `field:${key}:desc`, label: `${label(key)} ↓` },
@@ -80,7 +81,10 @@ export function SelectionOrganization({
         suffixIcon={<TeamOutlined />}
         options={[
           { value: "none", label: "不分组" },
-          { value: "batch", label: "按创建时间分组" },
+          { value: "createdTime:year", label: "按创建时间（年）分组" },
+          { value: "createdTime:quarter", label: "按创建时间（季度）分组" },
+          { value: "createdTime:month", label: "按创建时间（月）分组" },
+          { value: "createdTime:day", label: "按创建时间（日）分组" },
           { value: "supplier", label: "按供应商编码分组" },
           ...groups.map((key) => ({
             value: `field:${key}`,

@@ -162,8 +162,8 @@ export const selectionLayoutSchema = z
     columnFilters: selectionViewSchema.shape.filters.default({}),
     columnSort: selectionViewSchema.shape.sort.default(null),
     followShared: z.boolean().default(true),
-    groupBy: z.string().max(120).default("none"),
-    sort: z.string().max(120).default("sortOrder"),
+    groupBy: z.string().max(120).default("none").transform(value => value === "batch" ? "createdTime:day" : value),
+    sort: z.string().max(120).default("registrationBatch"),
     direction: z.enum(["asc", "desc"]).default("asc"),
     rowHeight: z.enum(["compact", "normal", "loose", "extra"]).default("extra"),
     pageSize: z
