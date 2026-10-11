@@ -5,7 +5,7 @@ import type { api } from "./api";
 import { useSelectionWorkspace } from "./selection-workspace";
 import type { SelectionField } from "../../../packages/contracts/src/selection-layout.js";
 import type { SelectionTitleAICandidate, SelectionTitleAIStatus, SelectionTitleAIRow, SelectionTitleAIPreview } from "../../../packages/contracts/src/selection-title-ai.js";
-import { SELECTION_AI_LONG_TITLE_MIN_CHARACTERS } from "../../../packages/contracts/src/selection-title-ai.js";
+import { SELECTION_AI_LONG_TITLE_MIN_CHARACTERS, selectionTitleWordingIssue } from "../../../packages/contracts/src/selection-title-ai.js";
 import { countTextCharacters } from "../../../packages/contracts/src/selection-field-validation.js";
 import "./selection-title-ai.css";
 
@@ -35,7 +35,7 @@ const cellIssue = (title: CandidateTitle) => {
   const value = title.value.trim();
   if (!value) return "标题不能为空";
   if (countTextCharacters(value, "characters") < minimumCharacters(title.kind)) return `长标题至少${SELECTION_AI_LONG_TITLE_MIN_CHARACTERS}个字符`;
-  return countTextCharacters(value, title.countMode) > title.maxLength ? `超过${title.maxLength}${title.countMode === "han" ? "个汉字" : "个字符"}` : "";
+  return countTextCharacters(value, title.countMode) > title.maxLength ? `超过${title.maxLength}${title.countMode === "han" ? "个汉字" : "个字符"}` : selectionTitleWordingIssue(value) || "";
 };
 const fieldIssue = (field: SelectionTitleAiField) => field.label === "长标题" && field.textConfig?.countMode === "characters" && field.textConfig.maxLength < SELECTION_AI_LONG_TITLE_MIN_CHARACTERS
   ? `长标题字段最多 ${field.textConfig.maxLength} 字符，小于 AI 长标题至少 ${SELECTION_AI_LONG_TITLE_MIN_CHARACTERS} 字符的要求。请在字段管理中将上限调整至 ${SELECTION_AI_LONG_TITLE_MIN_CHARACTERS} 或以上。` : "";

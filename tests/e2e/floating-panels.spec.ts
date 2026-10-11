@@ -3,6 +3,12 @@ import ExcelJS from "exceljs";
 import { projectSelectionSharedLayout, selectionLayoutSchema } from "../../packages/contracts/src/selection-layout.js";
 
 async function fixture(page: Page) {
+  await page.addInitScript(() => {
+    const request = window.fetch.bind(window);
+    window.fetch = (input, init) => init?.keepalive && String(input).includes("/api/v1/")
+      ? Promise.resolve(new Response('{"data":null}', { headers: { "Content-Type": "application/json" } }))
+      : request(input, init);
+  });
   const preferences = selectionLayoutSchema.parse({ columns: [
     { key: "xutiStyleNo", label: "序缇款号", type: "text" },
     { key: "material", label: "成分", type: "text" },
@@ -20,7 +26,7 @@ async function fixture(page: Page) {
     if (path.endsWith("/shared-view")) data = { revision: 0, view: { filters: {}, sort: null } };
     if (path.endsWith("/layout-preferences")) data = { preferences, revision: 1, sharedPreferences: projectSelectionSharedLayout(preferences), sharedRevision: 1, canEditShared: true };
     if (path.endsWith("/ai-titles/status")) data = { ready: true, message: "AI 标题服务已就绪" };
-    if (path.endsWith("/ai-titles/generate")) data = { planToken: "fixture-title-token-abcdefghijklmnop", expiresAt: new Date(Date.now() + 30 * 60 * 1000).toISOString(), model: "fixture-model", warnings: [], rows: [{ id: "1", xutiStyleNo: "FLOAT-001", expectedUpdatedAt: rows[0].updatedAt, evidence: ["面料100%桑蚕丝", "图片识别圆领盘扣背心"], warnings: [], titles: [{ key: "custom:long", label: "长标题", kind: "long", value: "【100桑蚕丝】碧纨春秋冬新中式国风提花盘扣圆领背心女马甲", minCharacters: 29, maxLength: 30, countMode: "characters" }, { key: "custom:short", label: "短标题", kind: "short", value: "碧纨春盘扣女马甲", minCharacters: 1, maxLength: 30, countMode: "characters" }] }] };
+    if (path.endsWith("/ai-titles/generate")) data = { planToken: "fixture-title-token-abcdefghijklmnop", expiresAt: new Date(Date.now() + 30 * 60 * 1000).toISOString(), model: "fixture-model", warnings: [], rows: [{ id: "1", xutiStyleNo: "FLOAT-001", expectedUpdatedAt: rows[0].updatedAt, evidence: ["面料100%桑蚕丝", "图片识别圆领盘扣背心"], warnings: [], titles: [{ key: "custom:long", label: "长标题", kind: "long", value: "【100桑蚕丝】锦纨春秋冬新中式国风提花盘扣圆领背心女马甲", minCharacters: 29, maxLength: 30, countMode: "characters" }, { key: "custom:short", label: "短标题", kind: "short", value: "锦纨春盘扣女马甲", minCharacters: 1, maxLength: 30, countMode: "characters" }] }] };
     if (path.endsWith("/import/preview")) data = { rows: [], fields: [], fieldRevision: "11111111111111111111111111111111", layoutRevision: 1, created: 1, updated: 0, skipped: 0 };
     if (/\/style-selections\/1$/.test(path) && request.method() === "PATCH") writes.push(request.postDataJSON());
     await route.fulfill({ json: { data } });

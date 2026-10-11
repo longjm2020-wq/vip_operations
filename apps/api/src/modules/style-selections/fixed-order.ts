@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { HttpException } from "@nestjs/common";
-import { db, one, rows, type Tx } from "../../../../../packages/database/src/index.js";
+import { camel, db, one, rows, type Tx, type Row } from "../../../../../packages/database/src/index.js";
 import { selectionScope, selectionSchema } from "../../../../../packages/database/src/selection-scope.js";
 import { command, fail, id, parse, requirePermission, audit, type Context } from "../../core.js";
 import { tableAccess } from "../projects/library.js";
@@ -26,6 +26,31 @@ function adapter(tx: Tx): ArchiveOrderDatabase {
   };
 }
 
+function assertFixedOrderFields(policy: protection.Policy, c: Context, record: Row) {
+  const keys = protection.rowFields(record);
+  try {
+    protection.assertFields(policy, c, record, keys);
+  } catch (error) {
+    if (!(error instanceof HttpException)) throw error;
+    const code = (error.getResponse() as { error?: { code?: string } }).error?.code;
+    if (code !== "REGION_FORBIDDEN" && code !== "MIGRATION_LOCKED") throw error;
+    const row = camel(record);
+    const style = protection.access(policy, c.actor, record, "xutiStyleNo") !== "deny"
+      ? String(row.xutiStyleNo || "").trim().slice(0, 100) : "";
+    const prefix = style ? `款号「${style}」：` : "";
+    if (code === "MIGRATION_LOCKED")
+      fail(code, prefix + "此行有跨表传送锁，请先释放原行编辑后重新预览；固定排序未建立", 409);
+    const denied = keys.filter(key => protection.access(policy, c.actor, record, key) !== "edit");
+    if (denied.some(key => key.startsWith("custom:") && !policy.registeredFieldKeys?.includes(key)))
+      fail(code, prefix + "存在未登记的历史字段资料，请管理员核查字段登记后重新预览；固定排序未建立", 403);
+    if (denied.some(key => Object.hasOwn(policy.privateFieldOwners || {}, key) && !protection.fieldVisible(policy, c.actor, key)))
+      fail(code, prefix + "存在当前账号无权编辑的他人私有字段，请由有完整权限的用户处理；固定排序未建立", 403);
+    if (policy.settings.claimsEnabled && row.claimedBy && String(row.claimedBy) !== c.actor.id && !protection.protectionAdmin(c.actor))
+      fail(code, prefix + "此行已被其他用户认领，请先完成或释放认领后重新预览；固定排序未建立", 403);
+    fail(code, prefix + "存在只读或隐藏的受保护区域，请管理员核查编辑权限后重新预览；固定排序未建立", 403);
+  }
+}
+
 async function authorize(tx: Tx, c: Context, lock: boolean) {
   requirePermission(c.actor, "product.update");
   requirePermission(c.actor, "selection.manage");
@@ -43,7 +68,7 @@ async function authorize(tx: Tx, c: Context, lock: boolean) {
   // Reordering the full archive has the same field, claim and migration rules
   // as changing every row's sortOrder through the normal editor.
   const records = await rows(tx, `SELECT * FROM "${schema}".style_selections`);
-  for (const record of records) protection.assertFields(policy, c, record, protection.rowFields(record));
+  for (const record of records) assertFixedOrderFields(policy, c, record);
   return scope;
 }
 

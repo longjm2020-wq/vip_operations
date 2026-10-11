@@ -407,7 +407,7 @@ test("AI正文编码预览、外部分享无需登录及手机布局、撤销失
   );
   const snapshot = state.reportSnapshot();
   const anonymous = await browser.newContext({
-    baseURL: "http://127.0.0.1:5174",
+    baseURL: new URL(page.url()).origin,
     viewport: { width: 375, height: 812 },
     isMobile: true,
     hasTouch: true,
@@ -559,7 +559,7 @@ test("超级管理员从系统设置访问模型，侧栏收起图标及悬浮�
 }) => {
   await fixture(page, "SUPER_ADMIN");
   await page.goto("/settings/ai");
-  await expect(page.getByLabel("AI 分析模型", { exact: true })).toHaveValue(
+  await expect(page.getByLabel("AI 模型", { exact: true })).toHaveValue(
     "openai/gpt-6.1-sol",
   );
   await expect(
@@ -609,7 +609,7 @@ test("超级管理员从系统设置访问模型，侧栏收起图标及悬浮�
     .hover();
   const popup = page.locator(".workspace-menu-popup:visible");
   await expect(
-    popup.getByRole("link", { name: "商品档案", exact: true }),
+    popup.getByRole("link", { name: "库存管理", exact: true }),
   ).toBeVisible();
   await expect(popup.locator(".workspace-menu-popup-heading")).toHaveText(
     "ERP系统",
@@ -619,7 +619,7 @@ test("超级管理员从系统设置访问模型，侧栏收起图标及悬浮�
     "rgb(255, 252, 248)",
   );
   await expect(
-    popup.getByRole("link", { name: "商品档案", exact: true }),
+    popup.getByRole("link", { name: "库存管理", exact: true }),
   ).toHaveCSS("color", "rgb(89, 69, 58)");
   await page.mouse.move(1000, 500);
   await page
@@ -651,7 +651,7 @@ test("超级管理员从系统设置访问模型，侧栏收起图标及悬浮�
     .filter({ hasText: "ERP系统" })
     .hover();
   await expect(
-    popup.getByRole("link", { name: "商品档案", exact: true }),
+    popup.getByRole("link", { name: "库存管理", exact: true }),
   ).toBeVisible();
 });
 test("个人工作台保存待办备忘，自己的表格可公开且显示创建者", async ({

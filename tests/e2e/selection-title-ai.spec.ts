@@ -2,10 +2,16 @@ import { expect, test, type Page } from "@playwright/test";
 import { projectSelectionSharedLayout, selectionLayoutSchema } from "../../packages/contracts/src/selection-layout.js";
 
 type Values = Record<string, any>;
-type FixtureOptions = { count?: number; configured?: boolean; pauseFirst?: boolean; failApplyBatch?: number; shortHanLimit?: number; longCharacterLimit?: number; longHanLimit?: number; firstTtlMs?: number };
-const generatedLongTitle = "【100桑蚕丝】碧纨春秋冬新中式国风提花盘扣圆领背心女马甲";
+type FixtureOptions = { count?: number; configured?: boolean; pauseFirst?: boolean; failApplyBatch?: number; shortHanLimit?: number; longCharacterLimit?: number; longHanLimit?: number; firstTtlMs?: number; material?: string; longTitle?: string };
+const generatedLongTitle = "【100桑蚕丝】锦纨春秋冬新中式国风提花盘扣圆领背心女马甲";
 const editedLongTitle = "【100桑蚕丝】庭春漾秋冬新中式国风提花盘扣圆领背心女马甲";
 async function fixture(page: Page, options: FixtureOptions = {}) {
+  await page.addInitScript(() => {
+    const request = window.fetch.bind(window);
+    window.fetch = (input, init) => init?.keepalive && String(input).includes("/api/v1/")
+      ? Promise.resolve(new Response('{"data":null}', { headers: { "Content-Type": "application/json" } }))
+      : request(input, init);
+  });
   const longLimit = options.longHanLimit ?? options.longCharacterLimit ?? 30;
   const longCountMode = options.longHanLimit ? "han" : "characters";
   const preferences = selectionLayoutSchema.parse({ columns: [
@@ -17,7 +23,7 @@ async function fixture(page: Page, options: FixtureOptions = {}) {
     { key: "custom:short-title", label: "短标题", type: "text", custom: true, visibility: "PUBLIC", ...(options.shortHanLimit ? { textConfig: { countMode: "han", maxLength: options.shortHanLimit } } : {}) },
   ] });
   const rows: Values[] = Array.from({ length: options.count ?? 3 }, (_, index) => ({
-    id: String(index + 1), xutiStyleNo: `AI-${String(index + 1).padStart(3, "0")}`, category: "女式马夹", material: "面料：100%桑蚕丝",
+    id: String(index + 1), xutiStyleNo: `AI-${String(index + 1).padStart(3, "0")}`, category: "女式马夹", material: options.material || "面料：100%桑蚕丝",
     registrationBatch: "2026-10-11T00:00:00Z", createdAt: "2026-10-11T00:00:00Z", updatedAt: "2026-10-11T00:00:00Z", images: [], labelImages: [],
     extraFields: { "custom:long-title": index === 0 && options.count !== 12 ? "已填写长标题" : "", "custom:short-title": "" },
   }));
@@ -40,9 +46,9 @@ async function fixture(page: Page, options: FixtureOptions = {}) {
       data = { planToken: `title-ai-fixture-plan-${generations.length}-abcdefghijklmnop`, expiresAt: new Date(Date.now() + (generations.length === 1 ? options.firstTtlMs ?? 30 * 60 * 1000 : 30 * 60 * 1000)).toISOString(), model: "fixture-model", warnings: [],
         rows: body.rowIds.map((id: string) => {
           const row = rows.find(row => row.id === id)!;
-          return { id, xutiStyleNo: row.xutiStyleNo, expectedUpdatedAt: row.updatedAt, evidence: ["成分：面料100%桑蚕丝", "三级类目：女式马夹"], warnings: ["款名请人工核对"],
+          return { id, xutiStyleNo: row.xutiStyleNo, expectedUpdatedAt: row.updatedAt, evidence: [`成分：${row.material}`, "三级类目：女式马夹"], warnings: ["款名请人工核对"],
             titles: body.targetKeys.filter((key: string) => !row.extraFields[key]?.trim()).map((key: string) => ({ key, label: key === "custom:long-title" ? "长标题" : "短标题", kind: key === "custom:long-title" ? "long" : "short",
-              value: key === "custom:long-title" ? generatedLongTitle : "碧纨春马甲", minCharacters: key === "custom:long-title" ? 29 : 1, maxLength: key === "custom:long-title" ? longLimit : options.shortHanLimit || 30, countMode: key === "custom:long-title" ? longCountMode : key === "custom:short-title" && options.shortHanLimit ? "han" : "characters" })),
+              value: key === "custom:long-title" ? options.longTitle || generatedLongTitle : "锦纨春马甲", minCharacters: key === "custom:long-title" ? 29 : 1, maxLength: key === "custom:long-title" ? longLimit : options.shortHanLimit || 30, countMode: key === "custom:long-title" ? longCountMode : key === "custom:short-title" && options.shortHanLimit ? "han" : "characters" })),
           };
         }).filter((row: Values) => row.titles.length),
       };
@@ -82,11 +88,12 @@ test("候选先核对再填补，已有标题保留，可编辑和取消单元�
   await panel.getByRole("button", { name: "确认填补 2 个空白单元格", exact: true }).click();
   await expect(panel).toContainText("已填补 2 款的空白标题");
   expect(state.applies[0].rows).toEqual([
-    { id: "1", titles: [{ key: "custom:short-title", value: "碧纨春马甲" }] },
+    { id: "1", titles: [{ key: "custom:short-title", value: "锦纨春马甲" }] },
     { id: "2", titles: [{ key: "custom:long-title", value: editedLongTitle }] },
   ]);
   expect(state.rows[0].extraFields["custom:long-title"]).toBe("已填写长标题");
   expect(state.rows[2].extraFields["custom:short-title"]).toBe("原有短标题");
+  expect(state.rows[1].material).toBe("面料：100%桑蚕丝");
   expect(state.gridWrites).toHaveLength(0);
 });
 
@@ -109,15 +116,61 @@ test("用户修改候选超过汉字限制时阻止填补，修改后按原有�
   const state = await fixture(page, { shortHanLimit: 6 }), panel = await openPanel(page);
   await panel.getByRole("button", { name: "生成候选标题", exact: true }).click();
   const title = panel.getByLabel("AI-001 短标题候选");
-  await title.fill("碧纨春丝绸背心马甲");
+  await title.fill("锦纨春丝绸背心马甲");
   await expect(panel.getByRole("button", { name: /确认填补/ })).toBeDisabled();
   await expect(panel).toContainText("超过6个汉字");
   expect(state.applies).toHaveLength(0);
-  await title.fill("碧纨春 A B");
+  await title.fill("锦纨春 A B");
   await expect(panel.getByRole("button", { name: /确认填补/ })).toBeEnabled();
   await panel.getByRole("button", { name: /确认填补/ }).click();
   await expect.poll(() => state.applies.length).toBe(1);
-  expect(state.applies[0].rows[0].titles[0].value).toBe("碧纨春 A B");
+  expect(state.applies[0].rows[0].titles[0].value).toBe("锦纨春 A B");
+});
+
+test("编辑候选不允许部位标签、颜色、不足100%比例和普通化纤，准确混纺卖点可填补且保留已有标题", async ({ page }) => {
+  const legalMixedTitle = "【含山羊绒桑蚕丝】锦纨春秋冬新中式国风提花盘扣圆领背心女马甲";
+  const state = await fixture(page, {
+    material: "面料：70%山羊绒30%桑蚕丝\n里料：100%聚酯纤维",
+    longTitle: legalMixedTitle,
+  }), panel = await openPanel(page);
+  await panel.getByRole("button", { name: "生成候选标题", exact: true }).click();
+  const title = panel.getByLabel("AI-002 长标题候选");
+  const candidate = panel.locator(".selection-title-ai-candidate").filter({ hasText: "AI-002" });
+  const apply = panel.getByRole("button", { name: /确认填补/ });
+  await expect(title).toHaveValue(legalMixedTitle);
+  const invalidTitles = [
+    { value: "【面料100桑蚕丝】锦纨春秋冬新中式国风盘扣圆领背心女马甲", issue: "标题不填写面料、里料、填充物、配料等部位标签" },
+    { value: "【100桑蚕丝】碧纨春秋冬新中式国风提花盘扣圆领背心女马甲", issue: "标题不填写颜色描述，原创款名也应避开颜色词" },
+    { value: "【70山羊绒30桑蚕丝】锦纨春秋冬新中式国风提花盘扣背心马甲", issue: "不足100%的材质不写具体含量比例" },
+    { value: "【100聚酯纤维】锦纨春秋冬新中式国风提花盘扣圆领背心女马甲", issue: "标题不写化纤、聚酯、氨纶等普通材质" },
+  ];
+  for (const invalid of invalidTitles) {
+    expect(Array.from(invalid.value).length).toBeGreaterThanOrEqual(29);
+    expect(Array.from(invalid.value).length).toBeLessThanOrEqual(30);
+    await title.fill(invalid.value);
+    await expect(candidate.locator(".selection-title-ai-count.is-error")).toContainText(invalid.issue);
+    await expect(apply).toBeDisabled();
+    expect(state.applies).toHaveLength(0);
+  }
+  await title.fill(legalMixedTitle);
+  await expect(apply).toBeEnabled();
+  const short = panel.getByLabel("AI-001 短标题候选");
+  await short.fill("暖橙盘扣背心马甲");
+  await expect(apply).toBeDisabled();
+  await expect(panel.locator(".selection-title-ai-candidate").filter({ hasText: "AI-001" }).locator(".selection-title-ai-count.is-error")).toContainText("标题不填写颜色描述");
+  await short.fill("锦纨春盘扣背心马甲");
+  await expect(apply).toBeEnabled();
+  await apply.click();
+  await expect.poll(() => state.applies.length).toBe(1);
+  expect(state.applies[0].rows).toEqual([
+    { id: "1", titles: [{ key: "custom:short-title", value: "锦纨春盘扣背心马甲" }] },
+    { id: "2", titles: [{ key: "custom:long-title", value: legalMixedTitle }, { key: "custom:short-title", value: "锦纨春马甲" }] },
+  ]);
+  expect(state.rows[0].extraFields["custom:long-title"]).toBe("已填写长标题");
+  expect(state.rows[2].extraFields["custom:long-title"]).toBe("原有长标题");
+  expect(state.rows[2].extraFields["custom:short-title"]).toBe("原有短标题");
+  expect(state.rows[1].material).toBe("面料：70%山羊绒30%桑蚕丝\n里料：100%聚酯纤维");
+  expect(state.gridWrites).toHaveLength(0);
 });
 
 test("长标题至少29字符且不超过当前30字符上限，空格不能补足长度，短标题保持独立", async ({ page }) => {

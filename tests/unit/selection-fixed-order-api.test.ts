@@ -189,6 +189,43 @@ describe("authorized product-archive fixed-order API", () => {
     expect(fixture.applyCalls).toBe(0);
   });
 
+  it.each([false, true])("diagnoses unknown historical keys without exposing them, including for SUPER_ADMIN (apply=%s)", async apply => {
+    fixture.records[0].extra_fields = { "custom:historical-secret-key": "historical-secret-value" };
+    const c = actor(); c.actor.roleCodes = ["SUPER_ADMIN"];
+    const failure = await method(apply, c).catch(error => error);
+    expect(failure).toMatchObject({ ...error(403, "REGION_FORBIDDEN"), response: { error: { code: "REGION_FORBIDDEN", message: expect.stringContaining("未登记的历史字段") } } });
+    expect(failure.response.error.message).toContain("OCT05");
+    expect(JSON.stringify(failure.response)).not.toContain("historical-secret");
+    expect(fixture.previewCalls).toBe(0); expect(fixture.applyCalls).toBe(0);
+    expect(mutations()).toEqual([]);
+  });
+
+  it("diagnoses private fields without leaking their keys, labels, values or a hidden style number", async () => {
+    fixture.fields = [{ field_key: "custom:secret-key", visibility: "PRIVATE", owner_id: "8", definition: { key: "custom:secret-key", label: "secret-label", custom: true, type: "text" }, revision: 1 }];
+    fixture.records[0].extra_fields = { "custom:secret-key": "secret-value" };
+    fixture.settings = { ...defaultProtection, enabled: true, regions: [{ id: "123e4567-e89b-42d3-a456-426614174000", name: "Style", scope: "columns", rowIds: [], columnKeys: ["xutiStyleNo"], users: {}, others: "deny" }] };
+    const failure = await method(false).catch(error => error);
+    expect(failure).toMatchObject(error(403, "REGION_FORBIDDEN"));
+    expect(failure.response.error.message).toContain("他人私有字段");
+    for (const hidden of ["secret-key", "secret-label", "secret-value", "OCT05"])
+      expect(JSON.stringify(failure.response)).not.toContain(hidden);
+    expect(mutations()).toEqual([]);
+  });
+
+  it.each(["protected", "claimed", "migration"])("identifies %s restrictions while retaining their original denial and status", async category => {
+    if (category === "protected") fixture.settings = { ...defaultProtection, enabled: true, regions: [{ id: "123e4567-e89b-42d3-a456-426614174000", name: "Material", scope: "columns", rowIds: [], columnKeys: ["material"], users: {}, others: "read" }] };
+    if (category === "claimed") { fixture.settings.claimsEnabled = true; fixture.records[0].claimed_by = "8"; }
+    if (category === "migration") fixture.records[0].migration_locked = true;
+    for (const apply of [false, true]) {
+      const failure = await method(apply, actor(`diagnosis-${category}`)).catch(error => error);
+      expect(failure).toMatchObject(error(category === "migration" ? 409 : 403, category === "migration" ? "MIGRATION_LOCKED" : "REGION_FORBIDDEN"));
+      expect(failure.response.error.message).toContain(category === "protected" ? "受保护区域" : category === "claimed" ? "认领" : "跨表传送锁");
+      expect(failure.response.error.message).toContain("OCT05");
+    }
+    expect(fixture.previewCalls).toBe(0); expect(fixture.applyCalls).toBe(0);
+    expect(mutations()).toEqual([]);
+  });
+
   it("rechecks protections changed after preview", async () => {
     await method(false);
     fixture.settings = { ...defaultProtection, enabled: true, regions: [{ id: "123e4567-e89b-42d3-a456-426614174000", name: "Archive", scope: "sheet", rowIds: [], columnKeys: [], users: {}, others: "read" }] };

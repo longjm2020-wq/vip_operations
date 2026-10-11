@@ -4,7 +4,7 @@ import { db, one, rows, type Row, type Tx } from "../../../../../packages/databa
 import { selectionScope } from "../../../../../packages/database/src/selection-scope.js";
 import { selectionFieldSchema, type SelectionField } from "../../../../../packages/contracts/src/selection-layout.js";
 import { splitChoiceValues } from "../../../../../packages/contracts/src/selection-field-validation.js";
-import { selectionTitleAIApplySchema, selectionTitleAIGenerateSchema, type SelectionTitleAIPreview, type SelectionTitleAIStatus, type SelectionTitleAIRow } from "../../../../../packages/contracts/src/selection-title-ai.js";
+import { selectionTitleAIApplySchema, selectionTitleAIGenerateSchema, selectionTitleWordingIssue, type SelectionTitleAIPreview, type SelectionTitleAIStatus, type SelectionTitleAIRow } from "../../../../../packages/contracts/src/selection-title-ai.js";
 import { command, fail, parse, requirePermission, type Context } from "../../core.js";
 import { COMPASS_AI_ENDPOINT, COMPASS_AI_MODEL } from "../analytics/ai.js";
 import { decryptSecret, encryptionReady } from "../analytics/secrets.js";
@@ -149,10 +149,12 @@ export async function generateTitles(c: Context, input: unknown): Promise<Select
   requirePermission(c.actor, "selection.manage");
   const body = parse(selectionTitleAIGenerateSchema, input), caller = `${c.actor.id}:${scopeKey()}`;
   if (active.has(caller) || activeRequests >= 2) fail("AI_BUSY", "AI 标题正在生成，请稍后重试", 429);
-  const settings = await one(db, "SELECT enabled,api_key_encrypted,verified_at FROM public.compass_ai_settings WHERE id=1");
-  if (!verifiedSettings(settings)) fail("AI_NOT_READY", "请超级管理员先启用并测试 AI 连接", 503);
+  // Reserve before the first await; simultaneous clicks must not race the
+  // existing one-request-per-user/two-request global limit.
   active.add(caller); activeRequests++;
   try {
+    const settings = await one(db, "SELECT enabled,api_key_encrypted,verified_at FROM public.compass_ai_settings WHERE id=1");
+    if (!verifiedSettings(settings)) fail("AI_NOT_READY", "请超级管理员先启用并测试 AI 连接", 503);
     const initial = await snapshot(c, body.rowIds, body.targetKeys), products: Row[] = [], signedRows: SignedRow[] = [], skipped: string[] = [];
     for (const row of initial.projected) {
       const raw = initial.raw.find(value => String(value.id) === String(row.id))!;
@@ -172,26 +174,32 @@ export async function generateTitles(c: Context, input: unknown): Promise<Select
     }
     // At most two image reads run at once; a 25-second batch budget prevents slow links delaying every row.
     const imageDeadline = Date.now() + 25000; let imageCursor = 0;
+    // Batch-local only: no authorized pixels or stale permissions are cached
+    // across requests. Repeated photo URLs need only one download/resize.
+    const imageReads = new Map<string, Promise<string | null>>();
+    const pictureData = (url: string) => {
+      let pending = imageReads.get(url);
+      if (!pending) {
+        pending = titleImageData(c, url).catch(() => null);
+        imageReads.set(url, pending);
+      }
+      return pending;
+    };
     const readPictures = async () => {
       while (imageCursor < products.length) {
         const product = products[imageCursor++], row = initial.projected.find(row => String(row.id) === product.id)!;
-        for (const image of (Array.isArray(row.images) ? row.images : []).slice(0, 2)) {
+        const urls = [...new Set<string>((Array.isArray(row.images) ? row.images : []).map((image: Row) => String(image.url)))].slice(0, 2);
+        for (const url of urls) {
           if (Date.now() >= imageDeadline) break;
-          try { const data = await titleImageData(c, image.url); if (data) product.pictures.push(data); } catch { /* No invented visual evidence on failure. */ }
+          const data = await pictureData(url); if (data) product.pictures.push(data);
         }
         product.inputWarnings = product.pictures.length ? [] : ["未使用商品图片，仅依据可查看的文字资料生成"];
         signedRows.find(value => value.id === product.id)!.visual = !!product.pictures.length;
       }
     };
-    await Promise.all([readPictures(), readPictures()]);
-    for (let index = products.length - 1; index >= 0; index--) {
-      const product = products[index], source = initial.projected.find(row => String(row.id) === product.id)!;
-      if (!sourceFacts(source, initial.fields).facts && !product.pictures.length) { skipped.push(product.id); products.splice(index, 1); signedRows.splice(index, 1); }
-    }
-    const warnings = ["候选标题和款名需人工核对；系统未执行实时趋势、商标或侵权检索。", ...(skipped.length ? [`跳过 ${skipped.length} 行：标题已有内容、没有可编辑空白标题，或缺少产品资料。`] : [])];
-    let result: SelectionTitleAIRow[] = [];
-    if (products.length) {
-      const examples = await db.$transaction(async tx => {
+    const readExamples = async (): Promise<Row[]> => {
+      if (!products.length) return [];
+      return db.$transaction(async tx => {
         const currentPolicy = await protection.policy(tx);
         if (policyFingerprint(currentPolicy, c) !== initial.digest) fail("AI_SOURCE_CHANGED", "生成前字段或权限已变化，请刷新后重新生成", 409);
         const sample = await rows(tx, "SELECT * FROM style_selections WHERE id<>ALL($1::bigint[]) ORDER BY updated_at DESC,id DESC LIMIT 250", body.rowIds);
@@ -199,12 +207,29 @@ export async function generateTitles(c: Context, input: unknown): Promise<Select
         for (const raw of sample) {
           const row = protection.project(currentPolicy, c.actor, raw);
           for (const field of initial.fields) if (titleKind(field) && !field.deleted && row.cellAccess?.[field.key] !== "deny" && !blank(cell(row, field.key))) {
-            selected.push({ kind: titleKind(field), value: String(cell(row, field.key)).slice(0, 500) });
+            const value = String(cell(row, field.key)).slice(0, 500);
+            // Learn compatible format and rhythm without encouraging older
+            // color labels or composition tags in new titles.
+            if (selectionTitleWordingIssue(value)) continue;
+            selected.push({ kind: titleKind(field), value });
             if (selected.length >= 24) return selected;
           }
         }
         return selected;
       }, { isolationLevel: "RepeatableRead" });
+    };
+    // Permission-projected examples and authorized image loading are independent.
+    // Await both and retain the existing latest-source check before any paid call.
+    const prepared = await Promise.allSettled([readExamples(), Promise.all([readPictures(), readPictures()])]);
+    for (const outcome of prepared) if (outcome.status === "rejected") throw outcome.reason;
+    const examples = (prepared[0] as PromiseFulfilledResult<Row[]>).value;
+    for (let index = products.length - 1; index >= 0; index--) {
+      const product = products[index], source = initial.projected.find(row => String(row.id) === product.id)!;
+      if (!sourceFacts(source, initial.fields).facts && !product.pictures.length) { skipped.push(product.id); products.splice(index, 1); signedRows.splice(index, 1); }
+    }
+    const warnings = ["候选标题和款名需人工核对；系统未执行实时趋势、商标或侵权检索。", ...(skipped.length ? [`跳过 ${skipped.length} 行：标题已有内容、没有可编辑空白标题，或缺少产品资料。`] : [])];
+    let result: SelectionTitleAIRow[] = [];
+    if (products.length) {
       const beforeProvider = await snapshot(c, body.rowIds, body.targetKeys);
       if (beforeProvider.digest !== initial.digest || signedRows.some(row => sourceFingerprint(beforeProvider.projected.find(value => String(value.id) === row.id)!, beforeProvider.fields) !== row.fingerprint))
         fail("AI_SOURCE_CHANGED", "生成前产品资料或权限已变化，请刷新后重新生成", 409);
