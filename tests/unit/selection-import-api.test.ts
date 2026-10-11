@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { PGlite } from "@electric-sql/pglite";
+import Excel from "exceljs";
 import type { Context } from "../../apps/api/src/core.js";
 import type { Row, Tx } from "../../packages/database/src/index.js";
 import { selectionScope } from "../../packages/database/src/selection-scope.js";
@@ -38,6 +39,7 @@ import { previewImport, commitImport, write, changePhoto } from "../../apps/api/
 import { detail as selectionDetail } from "../../apps/api/src/modules/style-selections/protection.js";
 import { create as createCollection, detail as collectionDetail, publicDetail as publicCollectionDetail, save as saveCollection, submit as submitCollection, review as reviewCollection } from "../../apps/api/src/modules/style-selections/collections.js";
 import { collectionInventory } from "../../packages/contracts/src/selection-collection.js";
+import { parseSelectionWorkbook } from "../../apps/web/src/selection-workbook.js";
 
 const actor = (key = "import"): Context => ({ actor: { id: "7", username: "editor", displayName: "Editor", permissions: ["selection.read", "selection.manage", "product.read", "product.update", "product.create"], roleCodes: [] }, requestId: "import-test", key });
 const input = (rows: Row[], existingStrategy: "OVERWRITE" | "SKIP" = "OVERWRITE") => ({ rows, existingStrategy });
@@ -52,6 +54,20 @@ async function style(no = "EXIST", data: Row = {}) {
   return saved;
 }
 async function settings(value: Row) { await fixture.database!.query("UPDATE style_selection_protection SET settings=$1,revision=revision+1", [JSON.stringify({ ...defaultProtection, ...value })]); }
+async function parsedLegacyImageWorkbook(mainHeaders: string[], mainValues: unknown[], imageColor = "粉色") {
+  const book = new Excel.Workbook(), main = book.addWorksheet("选款资料"), pictures = book.addWorksheet("图片明细");
+  main.addRow(mainHeaders); main.addRow(mainValues);
+  pictures.addRow(["序缇款号", "颜色", "图片URL"]);
+  pictures.getRow(778).values = ["H49X2060", imageColor, "https://example.test/pink.jpg"];
+  return parseSelectionWorkbook(await book.xlsx.writeBuffer() as unknown as ArrayBuffer);
+}
+async function registerArchiveStandardTags() {
+  const standard = { ...field("标准颜色", "tags"), key: "custom:transferred-standard" };
+  await fixture.database!.query(`INSERT INTO selection_field_registry(workspace_key,table_id,field_key,owner_id,visibility,definition)
+    VALUES('23',23,$1,7,'PUBLIC',$2)`, [standard.key, JSON.stringify(standard)]);
+  fixture.archive = true;
+  return standard;
+}
 const conflict = { status: 409, response: { error: { code: "EDIT_CONFLICT" } } };
 const forbidden = { status: 403, response: { error: { code: "REGION_FORBIDDEN" } } };
 
@@ -106,6 +122,51 @@ beforeEach(async () => {
 afterAll(async () => { await fixture.database?.close(); });
 
 describe("atomic Excel style import", () => {
+  it.each(["", "供应商自定义粉"])("previews parsed legacy 颜色 detail against supplied archive standard 粉色 when supplier color is %j", async supplierColor => {
+    const standard = await registerArchiveStandardTags();
+    const parsed = await parsedLegacyImageWorkbook(["序缇款号", "标准颜色", "供应商颜色"], ["H49X2060", "粉色", supplierColor]);
+    expect(parsed[0]).toMatchObject({ xutiStyleNo: "H49X2060", fieldValues: { 标准颜色: "粉色" }, images: [{ color: "粉色", colorFieldKey: "standard" }] });
+    if (supplierColor) expect(parsed[0].color).toBe(supplierColor);
+    else expect(parsed[0]).not.toHaveProperty("color");
+    await selectionScope.run("23", async () => {
+      const plan = await previewImport(actor(), input(parsed));
+      expect(plan).toMatchObject({ created: 1, updated: 0 });
+      expect(plan.fields.find(binding => binding.header === "标准颜色")).toMatchObject({ key: standard.key, type: "tags", isNew: false });
+      expect(plan.fields.every(binding => !binding.isNew)).toBe(true);
+      expect(plan.rows[0].values).toEqual(parsed[0]);
+    });
+    expect(await read("SELECT * FROM selection_table_23.style_selections")).toEqual([]);
+    expect(await read("SELECT field_key FROM selection_field_registry")).toEqual([{ field_key: standard.key }]);
+  });
+  it("rejects parsed legacy 颜色 detail matching only supplier 粉色 when archive standard color is 白色", async () => {
+    await registerArchiveStandardTags();
+    const parsed = await parsedLegacyImageWorkbook(["序缇款号", "标准颜色", "供应商颜色"], ["H49X2060", "白色", "粉色"]);
+    await selectionScope.run("23", async () => {
+      await expect(previewImport(actor(), input(parsed))).rejects.toMatchObject({ status: 400, response: { error: {
+        message: expect.stringContaining("本次导入的标准颜色「白色」"), details: {
+          kind: "SELECTION_IMPORT_IMAGE_COLOR", rowIndex: 0, xutiStyleNo: "H49X2060", imageIndex: 0,
+          imageSource: "import", colorSource: "import", colorFieldLabel: "标准颜色", imageColor: "粉色", allowedColors: ["白色"],
+        },
+      } } });
+    });
+    expect(await read("SELECT * FROM selection_table_23.style_selections")).toEqual([]);
+  });
+  it("previews parsed image-only legacy 颜色 detail using retained archive standard 粉色 with an empty supplier color", async () => {
+    const standard = await registerArchiveStandardTags();
+    const before = (await read(`INSERT INTO selection_table_23.style_selections(xuti_style_no,color,extra_fields)
+      VALUES('H49X2060',NULL,$1) RETURNING *`, [JSON.stringify({ [standard.key]: "粉色" })]))[0];
+    const parsed = await parsedLegacyImageWorkbook(["序缇款号"], ["H49X2060"]);
+    expect(parsed[0]).not.toHaveProperty("fieldValues");
+    expect(parsed[0]).not.toHaveProperty("color");
+    await selectionScope.run("23", async () => {
+      const plan = await previewImport(actor(), input(parsed));
+      expect(plan).toMatchObject({ created: 0, updated: 1 });
+      expect(plan.fields.find(binding => binding.header === "标准颜色")).toMatchObject({ key: standard.key, type: "tags", isNew: false });
+      expect(plan.rows[0]).toMatchObject({ id: String(before.id), operation: "UPDATE", values: { images: [{ color: "粉色", colorFieldKey: "standard" }] } });
+    });
+    expect((await read("SELECT * FROM selection_table_23.style_selections"))[0]).toEqual(before);
+    expect(await read("SELECT field_key FROM selection_field_registry")).toEqual([{ field_key: standard.key }]);
+  });
   it("resolves standard-color links while leaving supplier colors intact, including ordinary edits and photo append", async () => {
     const standard = field("标准颜色", "multiple", ["白色", "灰色"]);
     await register(standard);

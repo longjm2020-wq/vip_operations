@@ -276,16 +276,18 @@ test("图片颜色错误定位实际Excel行和单元格，重新预览及更换
     await route.fulfill({ status: 400, json: { error: {
       code: "VALIDATION_ERROR", message: "图片颜色必须来自颜色字段",
       details: { kind: "SELECTION_IMPORT_IMAGE_COLOR", rowIndex: 0, xutiStyleNo: "IMPORT-001", imageIndex: 1,
-        imageSource: "import", colorSource: "import", imageColor: "红色", allowedColors: ["黑色", "白色"] },
+        imageSource: "import", colorSource: "import", imageColor: "红色", allowedColors: ["黑色", "白色"],
+        ...(body.rows[0].images[0].colorFieldKey === "standard" ? { colorFieldLabel: "标准颜色" } : {}) },
     } } });
   });
   await dialog.getByRole("radio", { name: "覆盖，仅更新本次填写的字段" }).check();
   const file = async (inline: boolean) => {
     const book = new ExcelJS.Workbook(), sheet = book.addWorksheet("选款资料");
-    sheet.addRow(["供应商颜色", "图片", "序缇款号"]);
+    sheet.addRow(["供应商颜色", "图片", "序缇款号", "标准颜色"]);
     const mainRow = inline ? 7 : 17;
     sheet.getCell(`A${mainRow}`).value = "黑色/白色";
     sheet.getCell(`C${mainRow}`).value = "IMPORT-001";
+    if (!inline) sheet.getCell(`D${mainRow}`).value = "黑色/白色";
     if (inline) sheet.getCell(`B${mainRow}`).value = "黑色 | https://example.test/black.png\n红色 | https://example.test/red.png";
     else {
       const pictures = book.addWorksheet("图片明细");
@@ -300,7 +302,7 @@ test("图片颜色错误定位实际Excel行和单元格，重新预览及更换
   await expect(error).toContainText("图片明细第 29 行");
   await expect(error).toContainText("B29");
   await expect(error).toContainText("选款资料第 17 行");
-  await expect(error).toContainText("A17");
+  await expect(error).toContainText("标准颜色单元格 D17");
   await expect(error).toContainText("IMPORT-001");
   await expect(error).toContainText("红色");
   await expect(error).toContainText("黑色、白色");
@@ -308,7 +310,8 @@ test("图片颜色错误定位实际Excel行和单元格，重新预览及更换
   await expect.poll(() => rejected.length).toBe(2);
   await expect(error).toContainText("图片明细第 29 行");
   expect(rejected[0]).toEqual(rejected[1]);
-  expect(Object.keys(rejected[0].rows[0]).sort()).toEqual(["color", "images", "xutiStyleNo"]);
+  expect(Object.keys(rejected[0].rows[0]).sort()).toEqual(["color", "fieldValues", "images", "xutiStyleNo"]);
+  expect(rejected[0].rows[0].images.every((image: Values) => image.colorFieldKey === "standard")).toBe(true);
   await dialog.locator('input[type="file"]').setInputFiles(await file(true));
   await expect(error).toContainText("选款资料第 7 行");
   await expect(error).toContainText("图片单元格 B7，第 2 行内容");

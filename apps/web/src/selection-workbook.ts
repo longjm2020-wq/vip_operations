@@ -91,9 +91,9 @@ export async function createSelectionWorkbook(records: Row[] = [], template = fa
     ["可仅保留「序缇款号」加任意一列或多列进行针对性更新。序缇款号必填，文件内同款重复会阻止导入。"],
     [`可添加自定义表头（1至40个字符，文件最多${selectionImportLimits.maxColumns}列），新自定义字段默认排在模板默认字段之后；已有同名可见字段按其设置校验，重名或无权限请先核对。`],
     ["供应商颜色、尺码用 / 分隔；金额为非负数字，整数最多10位、最多两位小数，数值0会正常导入。数值型金额的极小存储误差会纠正（例如228.00000000000003按228处理）；超过两位小数的金额仍需修正。金额错误显示行号、单元格位置和原值。"],
-    ["新模板「图片明细」表头依次为序缇款号、标准颜色、图片URL；图片按该款标准颜色匹配，多个标准颜色用 / 分隔，已有款未填写标准颜色时沿用系统值，不使用供应商颜色替代。旧文件的「颜色」表头仍按供应商颜色匹配。"],
+    ["「图片明细」表头依次为序缇款号、标准颜色、图片URL；旧文件的颜色或供应商颜色表头也按该款标准颜色匹配。多个标准颜色用 / 分隔，已有款未填写标准颜色时沿用系统值，不使用供应商颜色替代。"],
     ["图片颜色不匹配时，导入提示指出款号、具体颜色及图片所在工作表/行号/单元格；系统原图冲突会注明系统已有图片，修正后重新上传。"],
-    ["也可在主表图片列逐行填写「颜色 | https://图片地址」；不填颜色时可仅填网址。"],
+    ["也可在主表图片列逐行填写「供应商颜色 | https://图片地址」，此处匹配本行供应商颜色；不填颜色时可仅填网址。"],
     ["图片明细与主表图片不能同时填写同款；填写图片将替换该款原图片，留空则保留。"],
     ["洗唛/吊牌图可在「洗唛吊牌图明细」逐图填写款号和图片URL；填写后替换该款原洗唛/吊牌图，留空保留。"],
     ["系统内图片地址须登录同一系统查看。旧版内嵌图片自动保存在隐藏工作表中，请保留该表。"],
@@ -244,7 +244,7 @@ export async function parseSelectionWorkbook(buffer: ArrayBuffer) {
       if (!style && !color && !url) return;
       const record = imageDetailRecord("图片明细", r, style, url);
       if (!seen.has(style)) { if (record.images) throw Error(`「${style}」的图片请只填写在主表或图片明细其中一处`); record.images = []; seen.add(style); }
-      record.images.push(imageValue(color, url, colorHeader === "标准颜色"));
+      record.images.push(imageValue(color, url, true));
       // The registration stays on the same record used for retries; detail
       // coordinates remain valid after embedded image URLs are uploaded.
       const source = workbookSources.get(record)!;
