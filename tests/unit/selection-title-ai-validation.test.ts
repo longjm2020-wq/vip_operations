@@ -58,6 +58,53 @@ describe("AI product title validation", () => {
     expect(issue("【100桑蚕丝】庭春漾圆领马甲", "面料：1100%桑蚕丝")).toContain("比例");
     expect(issue("【纯桑蚕丝】庭春漾圆领马甲", "面料：1100%桑蚕丝")).toContain("100%");
   });
+  it("compares real full-width composition percentages without modifying the stored title", () => {
+    const composition = "面料：74.2％山羊绒25.8％桑蚕丝";
+    expect(issue("【74.2山羊绒25.8桑蚕丝】碧纨春马甲", composition)).toBeNull();
+    expect(issue("【７４．２％山羊绒２５．８％桑蚕丝】碧纨春马甲", composition)).toBeNull();
+    expect(issue("【74.2山羊绒】碧纨春马甲", "面料：７４．２０％山羊绒２５．８％桑蚕丝")).toBeNull();
+    expect(issue("【74山羊绒】碧纨春马甲", composition)).toContain("比例");
+  });
+  it.each(["山羊绒", "绵羊毛", "牦牛绒", "骆驼绒", "羊驼绒", "兔绒"])("validates the full fiber name and rejects invented 100%% %s claims", fiber => {
+    expect(issue(`【50${fiber}】碧纨春马甲`, `面料：50％${fiber}50％桑蚕丝`)).toBeNull();
+    expect(issue(`【100${fiber}】碧纨春马甲`, `面料：50％${fiber}50％桑蚕丝`)).toContain("比例");
+    expect(issue(`【纯${fiber}】碧纨春马甲`, `面料：50％${fiber}50％桑蚕丝`)).toContain("100%");
+    expect(issue(`【纯${fiber}】碧纨春马甲`, `面料：１００％${fiber}`)).toBeNull();
+  });
+  it("allows a general fiber name only when its specifically named source supplies the same percentage", () => {
+    expect(issue("【74.2羊绒】碧纨春马甲", "面料：74.2％山羊绒25.8％桑蚕丝")).toBeNull();
+    expect(issue("【100羊毛】碧纨春马甲", "面料：100％绵羊毛")).toBeNull();
+    expect(issue("【纯羊绒】碧纨春马甲", "面料：100％山羊绒")).toBeNull();
+    expect(issue("【74.2山羊绒】碧纨春马甲", "面料：74.2％羊绒25.8％桑蚕丝")).toContain("成分依据");
+    expect(issue("【山羊绒】碧纨春马甲", "面料：74.2％羊绒25.8％桑蚕丝")).toContain("成分依据");
+    expect(issue("【纯山羊绒】碧纨春马甲", "面料：100％羊绒")).toContain("成分依据");
+    expect(issue("【纯绵羊毛】碧纨春马甲", "面料：100％羊毛")).toContain("成分依据");
+  });
+  it("does not treat yak, camel or rabbit fiber as goat cashmere", () => {
+    for (const fiber of ["牦牛绒", "骆驼绒", "兔毛", "兔绒"]) expect(issue("【100羊绒】碧纨春马甲", `面料：100％${fiber}`)).toContain("成分依据");
+  });
+  it("preserves main/lining roles when matching generalized fiber names and full-width percentages", () => {
+    const composition = "主面料：74.2％山羊绒25.8％桑蚕丝\n里料：100％绵羊毛";
+    expect(issue("【100羊毛】碧纨春马甲", composition)).toContain("对应部位");
+    expect(issue("【100羊毛里料】碧纨春马甲", composition)).toBeNull();
+    expect(issue("【纯羊毛内里】碧纨春马甲", composition)).toBeNull();
+  });
+  it("rejects fractional substring, negative and adjacent-component percentage proofs", () => {
+    expect(issue("【40羊绒】碧纨春马甲", "面料：140％山羊绒")).toContain("比例");
+    expect(issue("【5.8桑蚕丝】碧纨春马甲", "面料：25.8％桑蚕丝")).toContain("比例");
+    expect(issue("【8桑蚕丝】碧纨春马甲", "面料：25.8％桑蚕丝")).toContain("比例");
+    expect(issue("【40羊绒】碧纨春马甲", "面料：-40％山羊绒")).toContain("比例");
+    expect(issue("【－40％山羊绒】碧纨春马甲", "面料：40％山羊绒")).toContain("比例");
+    expect(issue("【25.8山羊绒】碧纨春马甲", "面料：74.2％山羊绒25.8％桑蚕丝")).toContain("比例");
+  });
+  it("validates postfix percentage claims against explicitly matching source proportions", () => {
+    expect(issue("【山羊绒１００％】碧纨春马甲", "面料：山羊绒１００％")).toBeNull();
+    expect(issue("【山羊绒100％】碧纨春马甲", "面料：50％山羊绒50％桑蚕丝")).toContain("比例");
+    expect(issue("【100山羊绒】碧纨春马甲", "面料：山羊绒100％")).toBeNull();
+  });
+  it("counts the original title's characters even when the semantic comparison uses NFKC", () => {
+    expect(issue("碧ﬁ马甲", material, { ...short, textConfig: { countMode: "characters", maxLength: 4 } })).toBeNull();
+  });
 
   it("preserves legacy unlabelled main compositions", () => {
     expect(issue("【100桑蚕丝】庭春漾圆领马甲", "100%桑蚕丝（饰品辅料除外）")).toBeNull();

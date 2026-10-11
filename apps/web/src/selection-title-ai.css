@@ -12,8 +12,8 @@
 .selection-title-ai-candidate{padding:10px 12px;border:1px solid #eadbd1;border-radius:8px;background:#fffaf5}
 .selection-title-ai-candidate-heading{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px}
 .selection-title-ai-candidate-heading .ant-tag{margin-inline-end:0;font-size:11px;max-width:60%;overflow:hidden;text-overflow:ellipsis}
-.selection-title-ai-title{display:grid;grid-template-columns:72px minmax(0,1fr);gap:4px 8px;margin-top:8px;align-items:start}
-.selection-title-ai-title .ant-checkbox-wrapper{padding-top:5px}
+.selection-title-ai-title{display:grid;grid-template-columns:90px minmax(0,1fr);gap:4px 8px;margin-top:8px;align-items:start}
+.selection-title-ai-title .ant-checkbox-wrapper{padding-top:5px;white-space:nowrap}
 .selection-title-ai-count{grid-column:2;font-size:11px;color:#8b776a;justify-self:end}
 .selection-title-ai-count.is-error,.selection-title-ai-row-warning{color:#b24d12}
 .selection-title-ai-row-warning{font-size:12px;line-height:1.5;margin-top:7px}

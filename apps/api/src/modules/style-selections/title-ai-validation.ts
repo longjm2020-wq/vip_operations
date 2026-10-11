@@ -7,12 +7,25 @@ export function titleLimit(field: SelectionField) {
 }
 const forbidden = /(?:国家级|最高级|最佳|顶级|全网最低|全网第一|销量第一|百分百无侵权|100%无侵权|永久免疫|治疗|治愈|根治|抗癌|减肥|包治|绝对安全|零风险|唯一正品)/u;
 const knownNames = /(?:哈利波特|迪士尼|米老鼠|白雪公主|冰雪奇缘|艾莎公主|Hello\s*Kitty|哆啦A梦|蜡笔小新|海贼王|宝可梦|皮卡丘|三生三世|甄嬛传|琅琊榜|陈情令|庆余年|香奈儿|迪奥|路易威登|爱马仕)/iu;
-const fabricAliases: [RegExp, RegExp][] = [
-  [/桑蚕丝|真丝|蚕丝/u, /桑蚕丝|蚕丝|真丝/u], [/水貂/u, /水貂/u], [/羊绒/u, /羊绒/u], [/羊毛/u, /羊毛/u],
-  [/牦牛绒/u, /牦牛绒/u], [/骆驼绒/u, /骆驼绒/u], [/兔绒|兔毛/u, /兔绒|兔毛/u], [/鹅绒/u, /鹅绒/u], [/鸭绒/u, /鸭绒/u],
-  [/亚麻/u, /亚麻/u], [/苎麻/u, /苎麻/u], [/纯棉|全棉/u, /100\s*%?\s*棉|纯棉|全棉/u], [/天丝/u, /天丝/u],
-];
 const extraordinaryClaims = /(?:非遗|手工|抗菌|防晒|防水|阻燃|保暖|抗静电|有机|认证|真皮|进口|限量|稀有)/gu;
+const fibers = ["桑蚕丝", "柞蚕丝", "蚕丝", "真丝", "水貂毛皮", "水貂毛", "水貂", "山羊绒", "绵羊绒", "羊绒", "绵羊毛", "山羊毛", "美利奴羊毛", "羊毛",
+  "牦牛绒", "牦牛毛", "骆驼绒", "骆驼毛", "羊驼绒", "羊驼毛", "兔绒", "兔毛", "鹅绒", "鸭绒", "棉", "亚麻", "苎麻", "聚酯纤维", "氨纶", "莱赛尔纤维", "莫代尔纤维", "粘胶纤维", "锦纶", "天丝"];
+const fiberPattern = [...fibers].sort((left, right) => right.length - left.length).join("|");
+const generalFiberEvidence: Record<string, string[]> = { 羊绒: ["山羊绒"], 羊毛: ["绵羊毛", "美利奴羊毛"], 蚕丝: ["桑蚕丝", "柞蚕丝", "真丝"], 真丝: ["桑蚕丝", "柞蚕丝", "蚕丝"], 水貂毛: ["水貂毛皮"], 水貂: ["水貂毛皮", "水貂毛"] };
+const supportedFiber = (claim: string, evidence: string) => claim === evidence || !!generalFiberEvidence[claim]?.includes(evidence);
+const supportsFiber = (value: string, fiber: string) => [...value.matchAll(new RegExp(fiberPattern, "gu"))].some(match => supportedFiber(fiber, match[0]));
+function materialProportions(value: string) {
+  const before = new RegExp(`(?<![\\d.])(-?\\d+(?:\\.\\d+)?)\\s*%?\\s*(${fiberPattern})`, "gu");
+  // A following fiber means the number belongs to the next component, not a postfix percentage of this one.
+  const after = new RegExp(`(${fiberPattern})\\s*[:：]?\\s*(-?\\d+(?:\\.\\d+)?)\\s*%(?!\\s*(?:${fiberPattern}))`, "gu");
+  return [...[...value.matchAll(before)].map(match => ({ amount: Number(match[1]), fiber: match[2], expression: match[0] })),
+    ...[...value.matchAll(after)].map(match => ({ amount: Number(match[2]), fiber: match[1], expression: match[0] }))];
+}
+const supportsProportion = (value: string, amount: number, fiber: string) => materialProportions(value).some(part => part.amount === amount && supportedFiber(fiber, part.fiber));
+function supportsPure(value: string, fiber: string) {
+  if (supportsProportion(value, 100, fiber)) return true;
+  return [...value.matchAll(new RegExp(`(?<![非不无])(?:纯|全)(${fiberPattern})`, "gu"))].some(match => supportedFiber(fiber, match[1]));
+}
 
 type MaterialRole = "main" | "lining" | "filling" | "trim";
 const materialRoleMarkers = /(主面料|面料\d*|里料\d*|内里|衬里|填充物|填充料|配料|辅料|饰边|镶边)(?:成分)?\s*[:：]/gu;
@@ -51,48 +64,46 @@ function qualifiedRole(title: string, claim: RegExp, role: Exclude<MaterialRole,
 
 /** These checks supplement AI instructions; human review remains necessary for product facts and names. */
 export function titleValueIssue(field: SelectionField, value: string, material: string, facts: string, hasVisualEvidence: boolean): string | null {
-  const title = value.trim(), limit = titleLimit(field);
+  const originalTitle = value.trim(), title = originalTitle.normalize("NFKC"), limit = titleLimit(field);
+  const sourceMaterial = material.normalize("NFKC"), sourceFacts = facts.normalize("NFKC");
   if (!title || title.length > 2000 || /[\r\n\t\u0000-\u001f<>]|\p{Cf}|https?:\/\//iu.test(title)) return "标题应为单行纯文本";
-  if (countTextCharacters(title, limit.countMode) > limit.maxLength) return `标题超过${limit.maxLength}${limit.countMode === "han" ? "个汉字" : "个字符"}`;
+  if (countTextCharacters(originalTitle, limit.countMode) > limit.maxLength) return `标题超过${limit.maxLength}${limit.countMode === "han" ? "个汉字" : "个字符"}`;
   if (forbidden.test(title)) return "标题包含夸大、敏感或不允许使用的宣传词";
   if (knownNames.test(title)) return "标题包含已知影视、IP 或品牌名称，请修改候选款名";
   if (titleKind(field) === "long" && (!/^【[^【】]+】[^【】]+$/u.test(title))) return "长标题应使用【已核实卖点】后接产品描述的格式";
   if (titleKind(field) === "short" && /[【】]/u.test(title)) return "短标题请使用简洁的款名和品类描述";
-  if (!hasVisualEvidence && !facts.trim()) return "本款没有足够的可查看资料，无法校验标题";
-  const parts = materialParts(material);
-  for (const [claim, evidence] of fabricAliases) {
-    if (!claim.test(title)) continue;
-    if (!evidence.test(material)) return "标题中的面料或配料材质缺少可查看的成分依据";
-    if (!parts.main.some(value => evidence.test(value)) && !(["lining", "filling", "trim"] as const).some(role =>
-      parts[role].some(value => evidence.test(value)) && qualifiedRole(title, claim, role)))
+  if (!hasVisualEvidence && !sourceFacts.trim()) return "本款没有足够的可查看资料，无法校验标题";
+  const parts = materialParts(sourceMaterial);
+  for (const match of title.matchAll(new RegExp(fiberPattern, "gu"))) {
+    const fiber = match[0], claim = new RegExp(fiber, "u");
+    if (!supportsFiber(sourceMaterial, fiber)) return "标题中的面料或配料材质缺少可查看的成分依据";
+    if (!parts.main.some(value => supportsFiber(value, fiber)) && !(["lining", "filling", "trim"] as const).some(role =>
+      parts[role].some(value => supportsFiber(value, fiber)) && qualifiedRole(title, claim, role)))
       return "里料、填充物或配料材质须注明对应部位或拼接用途，不能写成主面料卖点";
   }
-  for (const match of title.matchAll(extraordinaryClaims)) if (!facts.includes(match[0])) return `「${match[0]}」缺少本款文字资料依据`;
+  for (const match of title.matchAll(extraordinaryClaims)) if (!sourceFacts.includes(match[0])) return `「${match[0]}」缺少本款文字资料依据`;
   const seasons = /春季|夏季|秋季|冬季|春夏|秋冬|四季|春装|夏装|秋装|冬装/gu;
-  const seasonFacts = [...facts.matchAll(/^(?:季节|适用季节|适穿季节)\s*[:：]([^\n]*)/gmu)].map(match => match[1]).join("、");
+  const seasonFacts = [...sourceFacts.matchAll(/^(?:季节|适用季节|适穿季节)\s*[:：]([^\n]*)/gmu)].map(match => match[1]).join("、");
   for (const match of title.matchAll(seasons)) {
     const characters = match[0] === "四季" ? ["春", "夏", "秋", "冬"] : [...match[0]].filter(value => "春夏秋冬".includes(value));
-    if (!facts.includes(match[0]) && !characters.every(value => seasonFacts.includes(value))) return `「${match[0]}」缺少本款季节文字资料依据`;
+    if (!sourceFacts.includes(match[0]) && !characters.every(value => seasonFacts.includes(value))) return `「${match[0]}」缺少本款季节文字资料依据`;
   }
   if (!hasVisualEvidence) {
     const designClaims = /圆领|V领|v领|翻领|立领|方领|盘扣|提花|刺绣|绣花|连帽|拉链|镂空|抽绳|开衩|收腰|无袖|短袖|长袖|花卉|条纹|格纹/gu;
-    for (const match of title.matchAll(designClaims)) if (!facts.toLocaleLowerCase().includes(match[0].toLocaleLowerCase())) return `「${match[0]}」缺少本款文字或可用图片依据`;
+    for (const match of title.matchAll(designClaims)) if (!sourceFacts.toLocaleLowerCase().includes(match[0].toLocaleLowerCase())) return `「${match[0]}」缺少本款文字或可用图片依据`;
   }
-  const quantitative = /(\d+(?:\.\d+)?)\s*%?\s*(桑蚕丝|蚕丝|真丝|水貂毛皮|水貂毛|水貂|牦牛绒|骆驼绒|兔绒|兔毛|鹅绒|鸭绒|羊绒|羊毛|棉|亚麻|苎麻|聚酯纤维|氨纶)/gu;
-  for (const match of title.matchAll(quantitative)) {
-    const amount = Number(match[1]), fabric = match[2];
-    const proportion = new RegExp(`(?<![\\d.])${match[1].replace(".", "\\.")}\\s*%?\\s*${fabric}`, "u");
-    if (amount > 100 || !proportion.test(material)) return "标题中的材质比例与可查看的成分资料不一致";
-    if (!parts.main.some(value => proportion.test(value)) && !(["lining", "filling", "trim"] as const).some(role =>
-      parts[role].some(value => proportion.test(value)) && qualifiedRole(title, proportion, role)))
+  for (const match of materialProportions(title)) {
+    const { amount, fiber: fabric } = match;
+    const proportion = new RegExp(match.expression.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "u");
+    if (amount <= 0 || amount > 100 || !supportsProportion(sourceMaterial, amount, fabric)) return "标题中的材质比例与可查看的成分资料不一致";
+    if (!parts.main.some(value => supportsProportion(value, amount, fabric)) && !(["lining", "filling", "trim"] as const).some(role =>
+      parts[role].some(value => supportsProportion(value, amount, fabric)) && qualifiedRole(title, proportion, role)))
       return "不得把里料、填充物或配料比例写成主面料卖点";
   }
-  for (const [pure, fabric] of [[/纯(?:桑蚕丝|真丝|蚕丝)|全(?:桑蚕丝|真丝|蚕丝)/u, "(?:桑蚕丝|真丝|蚕丝)"],
-    [/纯羊绒|全羊绒/u, "羊绒"], [/纯羊毛|全羊毛/u, "羊毛"]] as const) {
-    if (!pure.test(title)) continue;
-    const verifiedPure = new RegExp(`(?:(?<![\\d.])100\\s*%?\\s*${fabric}|${fabric}\\s*100\\s*%|(?:纯|全)${fabric})`, "u");
-    if (!parts.main.some(value => verifiedPure.test(value)) && !(["lining", "filling", "trim"] as const).some(role =>
-      parts[role].some(value => verifiedPure.test(value)) && qualifiedRole(title, pure, role)))
+  for (const match of title.matchAll(new RegExp(`(?:纯|全)(${fiberPattern})`, "gu"))) {
+    const pure = new RegExp(`(?:纯|全)${match[1]}`, "u");
+    if (!parts.main.some(value => supportsPure(value, match[1])) && !(["lining", "filling", "trim"] as const).some(role =>
+      parts[role].some(value => supportsPure(value, match[1])) && qualifiedRole(title, pure, role)))
       return "纯材质卖点缺少对应部位的100%成分依据";
   }
   return null;
