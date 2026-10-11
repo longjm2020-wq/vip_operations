@@ -12,6 +12,7 @@
   border-bottom: 1px solid #eaded3;
 }
 .selection-toolbar-controls {
+  flex: 1 1 0;
   min-width: 0;
   max-width: 100%;
 }
@@ -222,27 +223,32 @@
 }
 .selection-sheet thead th { position: sticky; }
 .selection-row-drag { cursor: grab; user-select: none; }
-.selection-collaborators {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  padding: 6px 14px;
-  color: #78604d;
-  font-size: 12px;
-  background: #fff8f2;
-  border-bottom: 1px solid #eaded3;
-}
-.selection-collaborators span { display: inline-flex; align-items: center; gap: 4px; }
-.selection-collaborators i {
+.selection-toolbar .selection-presence-trigger { flex: none; margin-left: auto; height: 30px; padding-inline: 4px; color: #78604d; }
+.selection-presence-avatars { position: relative; display: inline-flex; align-items: center; padding-right: 3px; }
+.selection-presence-avatar {
   display: inline-grid;
-  width: 20px;
-  height: 20px;
+  flex: none;
+  width: 24px;
+  height: 24px;
   place-items: center;
   color: #fff;
-  font-style: normal;
-  background: #c8793c;
+  font-size: 12px;
   border-radius: 50%;
 }
+.selection-presence-avatars .selection-presence-avatar + .selection-presence-avatar { margin-left: -5px; box-shadow: 0 0 0 2px #fffdf9; }
+.selection-presence-more { margin-left: 4px; font-size: 12px; }
+.selection-presence-dot { position: absolute; right: 0; bottom: 0; width: 7px; height: 7px; border-radius: 50%; background: #52a36c; box-shadow: 0 0 0 2px #fffdf9; }
+.selection-presence-card { width: min(300px, calc(100vw - 48px)); }
+.selection-presence-heading, .selection-presence-name { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.selection-presence-heading > span, .selection-presence-note { color: #8f8177; font-size: 12px; }
+.selection-presence-list { list-style: none; display: grid; gap: 14px; margin: 14px 0; padding: 0; max-height: 280px; overflow: auto; }
+.selection-presence-list li { display: flex; align-items: flex-start; gap: 10px; }
+.selection-presence-person { flex: 1; min-width: 0; }
+.selection-presence-name strong, .selection-presence-location { overflow-wrap: anywhere; }
+.selection-presence-status { flex: none; color: #4a9562; font-size: 12px; }
+.selection-presence-location { display: block; margin-top: 3px; color: #78604d; font-size: 12px; }
+.selection-presence-empty { margin: 16px 0; color: #8f8177; font-size: 12px; }
+.selection-presence-note { margin: 10px 0 0; }
 .selection-color-menu {
   display: grid;
   width: 140px;

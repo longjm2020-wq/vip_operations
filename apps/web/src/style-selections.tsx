@@ -20,6 +20,7 @@ import { parseSelectionSearch,matchesSelectionSearch } from "./selection-style-s
 import {resetFieldTypes,fieldValueError,fieldImages,defaultImageConfig,systemField,type SelectionField} from "./selection-field-types";
 import { selectionSystemValue } from "./selection-system-fields";
 import { SelectionStatistics } from "./selection-statistics";
+import { SelectionCollaborators, collaboratorColor } from "./selection-collaborators";
 import { SelectionCollections } from "./selection-collections";
 import { CollectionStockEditor } from "./selection-collection-stock";
 import { SelectionPhotoQr } from "./selection-photo-qr";
@@ -87,7 +88,6 @@ const splitTags = (value: unknown) => [...new Set(String(value ?? "").split("/")
 const joinTags = (value: string[]) => [...new Set(value.map((item) => item.trim()).filter(Boolean))].join("/");
 const comparable = (value: unknown) => value && typeof value === "object" ? JSON.stringify(value) : String(clean(value) ?? "");
 const cellId = (rowKey: string, columnKey: string) => `${rowKey}::${columnKey}`;
-const collaboratorColor = (id: string) => ["#722ed1", "#08979c", "#c41d7f", "#389e0d", "#d46b08", "#1d39c4"][Array.from(id).reduce((hash, char) => (hash * 31 + char.charCodeAt(0)) >>> 0, 0) % 6];
 const pageSizes = [20, 50, 100, 200, 500, 1000];
 const pageSizeKey = "style-selection-page-size-v1";
 const imageVisibilityCallbacks = new WeakMap<Element, (visible: boolean) => void>();
@@ -446,7 +446,9 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
     ...movableColumns.filter(column => !selectedColumnGroup.columnKeys.includes(column.key)),
   ] : movableColumns)], [pinnedColumns, movableColumns, selectedColumnGroup]);
   useEffect(() => { if (columnGroupId && !selectedColumnGroup) setColumnGroupId(""); }, [columnGroupId, selectedColumnGroup?.id]);
-  const columnViewSignature = JSON.stringify([selectedColumnGroup?.id, selectedColumnGroup?.columnKeys, pinnedColumns.length, activeColumns.map(column => [column.key, column.width])]);
+  // Locate a group only when its visible fields or order changes. Width updates
+  // (including shared saves) must not reset the user's current scroll position.
+  const columnViewSignature = JSON.stringify([selectedColumnGroup?.id, selectedColumnGroup?.columnKeys, pinnedColumns.length, activeColumns.map(column => column.key)]);
   useEffect(() => {
     const sheet = sheetRef.current;
     if (!sheet) return;
@@ -1123,9 +1125,8 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
     <Dropdown trigger={["click"]} menu={{ selectable: true, selectedKeys: editorRow && editorColumn ? [editorRow.cellTextColors?.[editorColumn.key] || "default"] : [], items: textColorOptions.map(option => ({ key: option.value || "default", label: option.label, icon: <span className="selection-color-dot" style={{ background: option.value || "#46352a" }} /> })), onClick: ({ key }) => applyTextColor(key === "default" ? "" : key) }}><Button aria-label="字体颜色" title="字体颜色" disabled={!canEdit || !selectedCells.size} icon={<FontColorsOutlined />} /></Dropdown>
     <SelectionLayoutStatus layout={layout} />
     <SelectionTransfer columns={activeColumns} ensureLayoutSaved={layout.ensureSaved} filteredRows={imageSearchRowId !== null || searchTerms.length || Object.keys(columnFilters).length || columnSort ? filteredRows : undefined} canEdit={canEdit} blocked={!!dirtyCount || saving || deleting} selectedRows={filteredRows.filter(row => selectedRows.includes(row._key))} query={search} onImported={() => { appliedSnapshot.current = ""; void queryClient.invalidateQueries({ queryKey: ["style-selections"] }); void queryClient.invalidateQueries({ queryKey: ["style-selection-style-counts"] }); }} />
-    </Space>{!!Object.keys(errors).length && <span className="selection-record-count"><Tooltip title="修改尚未保存；悬停红色单元格查看原因，修正后重试"><Button type="text" size="small" danger disabled={saving} onClick={() => { attempts.current.retry(); setRetryVersion((value) => value + 1); }}>未保存 · 重试</Button></Tooltip></span>}</div>
+    </Space>{!!Object.keys(errors).length && <span className="selection-record-count"><Tooltip title="修改尚未保存；悬停红色单元格查看原因，修正后重试"><Button type="text" size="small" danger disabled={saving} onClick={() => { attempts.current.retry(); setRetryVersion((value) => value + 1); }}>未保存 · 重试</Button></Tooltip></span>}<SelectionCollaborators people={collaborators} rows={rows} columns={availableColumns} loading={!presence.data && presence.isFetching} failed={!!presence.error} onRetry={() => { void presence.refetch(); }}/></div>
     {imageSearchRowId !== null && <Alert className="selection-image-search-location" type="info" title="图片查找：当前显示所选款式，清除后恢复原搜索与列筛选。" action={<Button size="small" onClick={()=>{setImageSearchRowId(null);setPage(1);}}>清除图片查找</Button>}/>}
-    {!!collaborators.length && <div className="selection-collaborators" aria-label="在线协作者">{collaborators.map((person: Row) => <span key={person.userId} style={{ color: collaboratorColor(String(person.userId)) }} title={person.editingId ? `正在选中：${rows.find(row => String(row.id) === String(person.editingId))?.xutiStyleNo || "未填款号"} · ${columns.find(column => column.key === person.editingColumn)?.label || "单元格"}` : "在线"}><i>{String(person.displayName || "协").slice(0, 1)}</i>{person.displayName}{person.editingId ? ` · ${columns.find(column => column.key === person.editingColumn)?.label || "选中中"}` : " · 在线"}</span>)}</div>}
       <SelectionColumnGroupTabs groups={columnGroups} visibleKeys={visibleColumns.map(column => column.key)} activeKey={selectedColumnGroup?.id || ""} onChange={changeColumnGroup}/>
     {editor}
       <QueryState error={data.error || presence.error || sharedView.error} reload={() => { data.refetch(); presence.refetch(); sharedView.refetch(); }} /><div ref={sheetRef} data-realtime-connected={connected ? "true" : "false"} className={`selection-sheet row-${rowHeight}${blankLayout?" selection-blank-sheet":""}`}><table tabIndex={0} onCopy={event => { const point = cellAnchor || (displayedRows[0] && activeColumns[0] ? {rowKey:displayedRows[0]._key,columnKey:activeColumns[0].key} : null); if (point) copyCells(event,point.rowKey,point.columnKey); }} onKeyDown={event => {
