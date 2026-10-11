@@ -20,6 +20,56 @@ describe("selection workbook", () => {
     expect(parsed[0].labelImages.map(({ url, color }: any) => ({ url, color }))).toEqual(rows[0].labelImages);
     expect(parsed[0]).not.toHaveProperty("material");
   });
+  it("explains a blank formatted main sheet with populated three-column image details and imports after styles are supplied", async () => {
+    const book = await createSelectionWorkbook([], true), sheet = book.getWorksheet("选款资料")!;
+    // Match the reported file: the main sheet has many formatted rows but no actual values.
+    sheet.getRow(1339).height = 26;
+    sheet.getCell("C2").numFmt = "@";
+    book.getWorksheet("图片明细")!.addRows([
+      { style: "IMPORT-001", color: "黑", url: "http://example.test/product-black.png" },
+      { style: "IMPORT-001", color: "白", url: "https://example.test/product-white.png" },
+    ]);
+    await expect(parseSelectionWorkbook(await bytes(book))).rejects.toThrow("「选款资料」中没有可导入的款式，请先在主表填写序缇款号；图片明细不能单独导入");
+    sheet.getCell("C2").value = "IMPORT-001";
+    sheet.getCell("G2").value = "黑/白";
+    const parsed = await parseSelectionWorkbook(await bytes(book));
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0]).toMatchObject({ xutiStyleNo: "IMPORT-001", color: "黑/白" });
+    expect(parsed[0].images.map(({ url, color }: any) => ({ url, color }))).toEqual([
+      { color: "黑", url: "http://example.test/product-black.png" },
+      { color: "白", url: "https://example.test/product-white.png" },
+    ]);
+  });
+  it("distinguishes missing style, missing URL and an unmatched main style in both image detail sheets", async () => {
+    for (const name of ["图片明细", "洗唛吊牌图明细"]) {
+      const values = name === "图片明细"
+        ? [["", "黑", "https://example.test/product.png"], ["IMPORT-001", "黑", ""], ["OTHER-STYLE", "黑", "https://example.test/product.png"]]
+        : [["", "https://example.test/label.png"], ["IMPORT-001", ""], ["OTHER-STYLE", "https://example.test/label.png"]];
+      const errors = ["缺少序缇款号", "缺少图片URL", "在「选款资料」中找不到对应款号「OTHER-STYLE」"];
+      for (const [index, row] of values.entries()) {
+        const book = await createSelectionWorkbook([{ xutiStyleNo: "IMPORT-001" }]);
+        book.getWorksheet(name)!.addRow(row);
+        await expect(parseSelectionWorkbook(await bytes(book))).rejects.toThrow(`${name}第 2 行${errors[index]}`);
+      }
+    }
+  });
+  it("continues to validate URLs, reject formulas and prevent mixed main/detail image sources", async () => {
+    for (const [name, key] of [["图片明细", "images"], ["洗唛吊牌图明细", "labelImages"]] as const) {
+      const book = await createSelectionWorkbook([{ xutiStyleNo: "IMPORT-001" }]);
+      const details = book.getWorksheet(name)!;
+      const urlColumn = name === "图片明细" ? 3 : 2;
+      details.getCell("A2").value = "IMPORT-001";
+      details.getRow(2).getCell(urlColumn).value = "javascript:alert(1)";
+      await expect(parseSelectionWorkbook(await bytes(book))).rejects.toThrow("图片URL须为 http(s)");
+      details.getRow(2).getCell(urlColumn).value = { formula: '"https://example.test/image.png"', result: "https://example.test/image.png" };
+      await expect(parseSelectionWorkbook(await bytes(book))).rejects.toThrow("含公式，请先粘贴为值");
+      const mixed = await createSelectionWorkbook([{ xutiStyleNo: "IMPORT-001", [key]: [{ url: "https://example.test/image.png", color: "" }] }]);
+      const sheet = mixed.getWorksheet("选款资料")!;
+      const mainImageColumn = mixed.getWorksheet("选款资料")!.columns.findIndex(column => column.key === key) + 1;
+      sheet.getRow(2).getCell(mainImageColumn).value = "https://example.test/second.png";
+      await expect(parseSelectionWorkbook(await bytes(mixed))).rejects.toThrow("请只填写在主表或图片明细其中一处");
+    }
+  });
   it("downloads a clean template and rejects duplicate styles and formulas", async () => {
     const book = await createSelectionWorkbook();
     expect(book.getWorksheet("选款资料")!.rowCount).toBe(1);

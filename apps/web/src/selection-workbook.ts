@@ -206,6 +206,14 @@ export async function parseSelectionWorkbook(buffer: ArrayBuffer) {
     if (result.length >= selectionImportLimits.maxRows) throw Error(`每次导入最多 ${selectionImportLimits.maxRows} 款，请拆分文件；空白行不计入款数`);
     result.push(record); byStyle.set(record.xutiStyleNo, record);
   });
+  if (!result.length) throw Error("「选款资料」中没有可导入的款式，请先在主表填写序缇款号；图片明细不能单独导入");
+  const imageDetailRecord = (name: string, row: number, style: string, url: string) => {
+    if (!style) throw Error(`${name}第 ${row} 行缺少序缇款号，请填写与「选款资料」一致的款号`);
+    if (!url) throw Error(`${name}第 ${row} 行缺少图片URL，请填写图片地址`);
+    const record = byStyle.get(style);
+    if (!record) throw Error(`${name}第 ${row} 行在「选款资料」中找不到对应款号「${style}」，请先在主表填写该款的序缇款号`);
+    return record;
+  };
   const pictures = book.getWorksheet("图片明细");
   if (pictures) {
     if (["序缇款号", "颜色", "图片URL"].some((label, i) => cellText(pictures.getRow(1).getCell(i + 1)) !== label) || pictures.columnCount > 3) throw Error("图片明细表头应依次为：序缇款号、颜色、图片URL");
@@ -215,7 +223,7 @@ export async function parseSelectionWorkbook(buffer: ArrayBuffer) {
       if (r === 1) return;
       const style = cellText(row.getCell(1)), color = cellText(row.getCell(2)), url = cellText(row.getCell(3));
       if (!style && !color && !url) return;
-      const record = byStyle.get(style); if (!record || !url) throw Error(`图片明细第 ${r} 行缺少对应款号或图片URL`);
+      const record = imageDetailRecord("图片明细", r, style, url);
       if (!seen.has(style)) { if (record.images) throw Error(`「${style}」的图片请只填写在主表或图片明细其中一处`); record.images = []; seen.add(style); }
       record.images.push(imageValue(color, url));
     });
@@ -229,11 +237,10 @@ export async function parseSelectionWorkbook(buffer: ArrayBuffer) {
       if (r === 1) return;
       const style = cellText(row.getCell(1)), url = cellText(row.getCell(2));
       if (!style && !url) return;
-      const record = byStyle.get(style); if (!record || !url) throw Error(`洗唛吊牌图明细第 ${r} 行缺少对应款号或图片URL`);
+      const record = imageDetailRecord("洗唛吊牌图明细", r, style, url);
       if (!seen.has(style)) { if (record.labelImages) throw Error(`「${style}」的洗唛/吊牌图请只填写在主表或图片明细其中一处`); record.labelImages = []; seen.add(style); }
       record.labelImages.push(imageValue("", url));
     });
   }
-  if (!result.length) throw Error("文件中没有可导入的款式");
   return result;
 }
