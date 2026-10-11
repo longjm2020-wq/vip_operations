@@ -21,7 +21,7 @@ export const migrationCommitSchema = migrationPreviewSchema
   .strict();
 
 export const selectionBaseFields = [
-  { key: "registrationBatch", label: "登记批次", width: selectionInitialColumnWidth },
+  { key: "registrationBatch", label: "创建时间", type: "createdTime" as const, timeDisplay: "datetime" as const, width: selectionInitialColumnWidth },
   { key: "images", label: "图片", width: selectionInitialColumnWidth },
   { key: "labelImages", label: "洗唛/吊牌图", width: selectionInitialColumnWidth },
   { key: "xutiStyleNo", label: "序缇款号", width: selectionInitialColumnWidth },

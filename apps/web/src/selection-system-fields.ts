@@ -1,4 +1,5 @@
 import type { SelectionField } from "./selection-field-types.js";
+import { formatSelectionCreatedTime } from "../../../packages/contracts/src/selection-created-time.js";
 export function selectionSystemValue(
   row: Record<string, any>,
   field: SelectionField,
@@ -19,27 +20,7 @@ export function selectionSystemValue(
   }
   if (type === "createdTime" || type === "modifiedTime") {
     const value = row[type === "createdTime" ? "createdAt" : "updatedAt"];
-    if (!value || !Number.isFinite(Date.parse(value))) return "";
-    const parts = new Intl.DateTimeFormat("en-CA", {
-      timeZone: "Asia/Shanghai",
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      ...(field.timeDisplay === "date"
-        ? {}
-        : {
-            hour: "2-digit",
-            minute: "2-digit",
-            second: "2-digit",
-            hourCycle: "h23",
-          }),
-    }).formatToParts(new Date(value));
-    const get = (type: string) =>
-      parts.find((part) => part.type === type)?.value || "";
-    const date = `${get("year")}-${get("month")}-${get("day")}`;
-    return field.timeDisplay === "date"
-      ? date
-      : `${date} ${get("hour")}:${get("minute")}:${get("second")}`;
+    return formatSelectionCreatedTime(value, field.timeDisplay);
   }
   if (type === "autonumber") {
     if (!/^\d+$/.test(String(row.id || ""))) return "";

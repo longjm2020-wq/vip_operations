@@ -6,7 +6,7 @@ it("initializes type metadata without changing fields or old rendering",()=>{
  const reset=resetFieldTypes([original])[0];expect(reset.type).toBeUndefined();expect(reset.fallbackType).toBe("tags");expect(reset.options).toEqual(["A","B"]);expect(reset.label).toBe(original.label);expect(original.type).toBe("tags");expect(resetFieldTypes([reset])[0].fallbackType).toBe("tags");
 });
 it("offers field types compatible with business storage",()=>{
- expect(allowedFieldTypes({...field(undefined),custom:false,key:"registrationBatch"})).toEqual(["date","text"]);
+ expect(allowedFieldTypes({...field(undefined),custom:false,key:"registrationBatch"})).toEqual(["createdTime"]);
  expect(allowedFieldTypes({...field(undefined),custom:false,key:"color"})).toContain("tags");
  expect(allowedFieldTypes({...field(undefined),custom:false,key:"images"})).toEqual(["image"]);
  expect(allowedFieldTypes(field(undefined))).toContain("image");

@@ -3,6 +3,7 @@ import { archiveSelectionPermissions, tableSelectionPermissions } from "../../..
 import { isArchive } from "./archive.js";
 import { tableAccess } from "../projects/library.js";
 import { assertTextPatch, lockTextDefinitions, textLimitDefinitions } from "./text-limits.js";
+import { readableSelectionCreatedAt, selectionCreatedAtSql, selectionCreatedAtText } from "./creation-time.js";
 import type { SelectionField } from "../../../../../packages/contracts/src/selection-layout.js";
 import { createHash } from "node:crypto";
 import { z } from "zod";
@@ -107,7 +108,7 @@ export function access(policy: Policy, actor: Actor, raw: Row, key: string) {
   // Unregistered custom keys must not bypass the field-management API.
   if (!fieldVisible(policy, actor, key)) return "deny";
   const row = camel(raw),
-    value = key.startsWith("custom:") ? row.extraFields?.[key] : row[key];
+    value = key === "registrationBatch" ? row.createdAt : key.startsWith("custom:") ? row.extraFields?.[key] : row[key];
   const level = selectionCellAccess(policy.settings, actor, row, key, nonempty(value));
   return row.migrationLocked && level === "edit" ? "read" : level;
 }
@@ -179,7 +180,7 @@ export async function detail(c: Context, value: string) {
       const p = await policy(tx),
         row = await one(
           tx,
-          `SELECT s.*, (SELECT display_name FROM users WHERE id=s.created_by) AS created_by_name,
+          `SELECT s.*, ${selectionCreatedAtSql()} AS created_at, (SELECT display_name FROM users WHERE id=s.created_by) AS created_by_name,
       (SELECT username FROM users WHERE id=s.created_by) AS created_by_username,
       (SELECT display_name FROM users WHERE id=s.updated_by) AS updated_by_name,
       (SELECT username FROM users WHERE id=s.updated_by) AS updated_by_username FROM style_selections s WHERE id=$1::bigint`,
@@ -368,6 +369,7 @@ export function filtered(rows: Row[], query: Row) {
           "sizeRange",
           "material",
         ];
+  const requestedSort = query.sort === "registrationBatch" ? "createdAt" : query.sort;
   const sort = [
     "updatedAt",
     "createdAt",
@@ -380,25 +382,27 @@ export function filtered(rows: Row[], query: Row) {
     "livePrice",
     "tagPrice",
     "sortOrder",
-  ].includes(query.sort)
-    ? query.sort
+  ].includes(requestedSort)
+    ? requestedSort
     : "updatedAt";
   return rows
     .filter(
       (row) =>
         !q ||
         keys
-          .map((key) => String(row[key] ?? ""))
+          .map((key) => key === "registrationBatch" ? selectionCreatedAtText(readableSelectionCreatedAt(row)) : String(row[key] ?? ""))
           .join(" ")
           .toLocaleLowerCase()
           .includes(q),
     )
     .sort((a, b) => {
-      if (a[sort] == null && b[sort] != null) return 1;
-      if (b[sort] == null && a[sort] != null) return -1;
+      const left = sort === "createdAt" ? readableSelectionCreatedAt(a) : a[sort];
+      const right = sort === "createdAt" ? readableSelectionCreatedAt(b) : b[sort];
+      if (left == null && right != null) return 1;
+      if (right == null && left != null) return -1;
       const value = /Price|sortOrder/.test(sort)
-        ? Number(a[sort] || 0) - Number(b[sort] || 0)
-        : String(a[sort] || "").localeCompare(String(b[sort] || ""));
+        ? Number(left || 0) - Number(right || 0)
+        : String(left || "").localeCompare(String(right || ""));
       return (
         (query.direction === "asc" ? value : -value) ||
         (BigInt(a.id) > BigInt(b.id) ? -1 : 1)

@@ -30,11 +30,11 @@ function styleSheet(sheet: ExcelJS.Worksheet) {
   sheet.getRow(1).height = 26;
   sheet.eachRow(row => { row.alignment = { vertical: "top", wrapText: true }; });
 }
-export async function createSelectionWorkbook(records: Row[] = []) {
+export async function createSelectionWorkbook(records: Row[] = [], template = false) {
   const { Workbook } = (await import("exceljs")).default;
   const book = new Workbook();
   const sheet = book.addWorksheet("选款资料");
-  sheet.columns = selectionSheetColumns.map(([key, header]) => ({ key, header, width: key === "material" ? 32 : 20, style: { numFmt: "@" } }));
+  sheet.columns = selectionSheetColumns.filter(([key]) => !template || key !== "registrationBatch").map(([key, header]) => ({ key, header, width: key === "material" ? 32 : 20, style: { numFmt: "@" } }));
   const pictures = book.addWorksheet("图片明细");
   pictures.columns = [{ key: "style", header: "序缇款号", width: 24 }, { key: "color", header: "颜色", width: 18 }, { key: "url", header: "图片URL", width: 70 }].map(c => ({ ...c, style: { numFmt: "@" } }));
   const labels = book.addWorksheet("洗唛吊牌图明细");
@@ -77,7 +77,8 @@ export async function createSelectionWorkbook(records: Row[] = []) {
   notes.addRows([
     ["一行一款，以序缇款号匹配；款号必填，保留文本格式（包括前导零）。"],
     ["已有款更新、新款新增。空白字段保留原值，不用于清空；表内或系统中同款重复时请先核对。"],
-    ["日期为 YYYY-MM-DD；颜色、尺码用 / 分隔；金额为非负数字，最多两位小数。"],
+    ["创建时间由服务器自动记录，不可填写或通过导入修改；旧模板中的登记批次仍可兼容导入，但不改变创建时间。"],
+    ["颜色、尺码用 / 分隔；金额为非负数字，最多两位小数。"],
     ["多图在「图片明细」中逐图填写序缇款号、颜色、图片URL；图片颜色必须在该款颜色字段中。"],
     ["也可在主表图片列逐行填写「颜色 | https://图片地址」；不填颜色时可仅填网址。"],
     ["图片明细与主表图片不能同时填写同款；填写图片将替换该款原图片，留空则保留。"],
@@ -90,7 +91,7 @@ export async function createSelectionWorkbook(records: Row[] = []) {
   return book;
 }
 export async function downloadSelectionWorkbook(records: Row[] = [], template = false) {
-  const book = await createSelectionWorkbook(records);
+  const book = await createSelectionWorkbook(records, template);
   const buffer = await book.xlsx.writeBuffer();
   const url = URL.createObjectURL(new Blob([buffer as BlobPart], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }));
   const link = document.createElement("a"); link.href = url; link.download = template ? "选款登记导入模板.xlsx" : "选款登记按款资料.xlsx"; link.click();

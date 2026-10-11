@@ -21,11 +21,14 @@ export function archiveChoiceColumns(
       )
       .map((field) => [field.key, field.options || []]),
   );
-  return columns.map((field) =>
+  const result = columns.map((field) =>
     options.has(field.key)
       ? { ...field, options: [...options.get(field.key)!] }
       : field,
   );
+  const created = canonical.find((field) => field.key === "registrationBatch");
+  if (columns.length && created && !columns.some((field) => field.key === created.key)) result.push({ ...created });
+  return result;
 }
 export function archiveTableFields(
   definitions: {
@@ -52,7 +55,7 @@ export function archiveTableFields(
             : /Price/.test(field.key)
               ? "currency"
               : field.key === "registrationBatch"
-                ? "date"
+                ? "createdTime"
                 : "text",
       }) as SelectionField,
   );

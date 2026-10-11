@@ -91,7 +91,19 @@ export const selectionFieldSchema = z
       .strict()
       .optional(),
   })
-  .strict();
+  .strict()
+  .transform((field) => {
+    if (field.key !== "registrationBatch") return field;
+    const upgraded = (field.type || field.fallbackType) !== "createdTime";
+    return {
+      ...field,
+      label: upgraded || field.label === "登记批次" ? "创建时间" : field.label,
+      type: "createdTime" as const,
+      fallbackType: undefined,
+      typePreset: undefined,
+      timeDisplay: field.timeDisplay || "datetime" as const,
+    };
+  });
 export const selectionColumnGroupSchema = z
   .object({ id: key, name: z.string().trim().min(1).max(40), columnKeys: keys })
   .strict();

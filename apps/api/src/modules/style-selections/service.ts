@@ -8,6 +8,7 @@ import { z } from "zod";
 import { randomUUID } from "node:crypto";
 import * as protection from "./protection.js";
 import { isArchive, mirrorArchiveRow } from "./archive.js";
+import { selectionCreatedAtSql, selectionCreatedTimeRevision } from "./creation-time.js";
 import { insertImage, readStoredImage } from "./image-storage.js";
 import { db, insert, one, rows, update, camel, type Row, type Tx } from "../../../../../packages/database/src/index.js";
 import { setImmediate as yieldToRequests } from "node:timers/promises";
@@ -83,11 +84,11 @@ const updateInput = writeInput
   .extend({ expectedUpdatedAt: z.iso.datetime().optional() })
   .strict();
 
-const selectColumns = `
+const selectColumns = () => `
   s.id,s.registration_batch::text,s.images,s.label_images,s.cell_colors,s.cell_alignments,s.cell_vertical_alignments,s.cell_text_colors,s.cell_number_formats,s.extra_fields,s.xuti_style_no,s.supplier_style_no,
   s.supplier_code,s.color,s.size_range,s.material,s.supply_price_excl_tax,
   s.selling_points,s.reorder_days,s.collection_inventory,s.vip_price,s.live_price,s.tag_price,s.row_color,s.sort_order,s.created_by,s.version,
-  s.created_at,s.updated_at,s.cell_owners,s.claimed_by,s.updated_by,s.migration_locked,s.migration_target_workspace,s.migration_target_row_id,s.migrated_at,s.product_id,
+  ${selectionCreatedAtSql()} AS created_at,s.updated_at,s.cell_owners,s.claimed_by,s.updated_by,s.migration_locked,s.migration_target_workspace,s.migration_target_row_id,s.migrated_at,s.product_id,
   (SELECT display_name FROM users WHERE id=s.created_by) AS created_by_name,
   (SELECT username FROM users WHERE id=s.created_by) AS created_by_username,
   (SELECT display_name FROM users WHERE id=s.updated_by) AS updated_by_name,
@@ -133,7 +134,7 @@ function normalizedTags(value: unknown) {
 }
 
 const revisionSql = "SELECT md5(coalesce(string_agg(id::text || ':' || version::text || ':' || updated_at::text, ',' ORDER BY id), '')) AS revision FROM style_selections";
-export async function revision(c: Context) { const p = await protection.policy(db); const value = await one(db, revisionSql); return { revision: protection.digest([selectionScope.getStore(),value!.revision,p.revision,p.fieldRevision,c.actor.id,c.actor.permissions,c.actor.roleCodes]) }; }
+export async function revision(c: Context) { const p = await protection.policy(db); const value = await one(db, revisionSql); return { revision: protection.digest([selectionScope.getStore(),value!.revision,p.revision,p.fieldRevision,c.actor.id,c.actor.permissions,c.actor.roleCodes,selectionCreatedTimeRevision]) }; }
 
 function listSpec(query: Record<string, unknown>) {
   const values: unknown[] = [];
@@ -141,7 +142,7 @@ function listSpec(query: Record<string, unknown>) {
   if (query.q) {
     values.push("%" + String(query.q).slice(0, 100) + "%");
     where.push(
-      query.photoSearch === 'true' ? `(concat_ws(' ',s.xuti_style_no,s.supplier_style_no,s.supplier_code) ILIKE $${values.length})` : `(concat_ws(' ',s.registration_batch::text,s.xuti_style_no,s.supplier_style_no,s.supplier_code,s.color,s.size_range,s.material) ILIKE $${values.length})`,
+      query.photoSearch === 'true' ? `(concat_ws(' ',s.xuti_style_no,s.supplier_style_no,s.supplier_code) ILIKE $${values.length})` : `(concat_ws(' ',to_char(${selectionCreatedAtSql()} AT TIME ZONE 'Asia/Shanghai','YYYY-MM-DD HH24:MI:SS'),s.xuti_style_no,s.supplier_style_no,s.supplier_code,s.color,s.size_range,s.material) ILIKE $${values.length})`,
     );
   }
   const clause = where.length ? " WHERE " + where.join(" AND ") : "";
@@ -158,10 +159,11 @@ function listSpec(query: Record<string, unknown>) {
     "tagPrice",
     "sortOrder",
   ].includes(String(query.sort))
-    ? String(query.sort).replace(/[A-Z]/g, (c) => "_" + c.toLowerCase())
+    ? String(query.sort === "registrationBatch" ? "createdAt" : query.sort).replace(/[A-Z]/g, (c) => "_" + c.toLowerCase())
     : "updated_at";
   const direction = String(query.direction).toLowerCase() === "asc" ? "ASC" : "DESC";
-  return { values, clause, order: `s.${sort} ${direction} NULLS LAST,s.id DESC` };
+  const sortColumn = sort === "created_at" ? selectionCreatedAtSql() : `s.${sort}`;
+  return { values, clause, order: `${sortColumn} ${direction} NULLS LAST,s.id DESC` };
 }
 
 const pendingSyncs = new Map<string, Promise<string>>();
@@ -177,18 +179,18 @@ export async function sync(c: Context, input: unknown) {
   const request = db.$transaction(async tx => {
     const p = await protection.policy(tx);
     const rawRevision=(await one(tx,revisionSql))!.revision;
-    const scopedRevision=protection.digest([selectionScope.getStore(),rawRevision,p.revision,p.fieldRevision,c.actor.id,c.actor.permissions,c.actor.roleCodes]);
+    const scopedRevision=protection.digest([selectionScope.getStore(),rawRevision,p.revision,p.fieldRevision,c.actor.id,c.actor.permissions,c.actor.roleCodes,selectionCreatedTimeRevision]);
     if (protection.activePolicy(p)) {
-      const sourceRows = await rows(tx, `SELECT ${selectColumns} ${source}`);
+      const sourceRows = await rows(tx, `SELECT ${selectColumns()} ${source}`);
       const projected = protection.filtered(sourceRows.map(row => protection.project(p,c.actor,row)), body);
-      const index = projected.map(row => ({id:String(row.id),token:protection.digest([row,p.fieldRevision,c.actor.id,c.actor.permissions,c.actor.roleCodes])}));
+      const index = projected.map(row => ({id:String(row.id),token:protection.digest([row,p.fieldRevision,c.actor.id,c.actor.permissions,c.actor.roleCodes,selectionCreatedTimeRevision])}));
       const tokens=new Map(index.map(item=>[item.id,item.token]));
       return {revision:scopedRevision,index,data:projected.filter(row=>body.known[String(row.id)]!==tokens.get(String(row.id)))};
     }
     const revision = scopedRevision;
-    const index = await rows(tx, `SELECT s.id::text AS id,md5(s.version::text || ':' || s.updated_at::text || ':' || $${values.length+1}) AS token ${source}${clause} ORDER BY ${order}`, ...values,protection.digest([p.revision,p.fieldRevision,c.actor.id,c.actor.permissions,c.actor.roleCodes]));
+    const index = await rows(tx, `SELECT s.id::text AS id,md5(s.version::text || ':' || s.updated_at::text || ':' || $${values.length+1}) AS token ${source}${clause} ORDER BY ${order}`, ...values,protection.digest([p.revision,p.fieldRevision,c.actor.id,c.actor.permissions,c.actor.roleCodes,selectionCreatedTimeRevision]));
     const changed = index.filter(row => body.known[row.id] !== row.token).map(row => row.id);
-    const data = changed.length ? await rows(tx, `SELECT ${selectColumns} ${source} WHERE s.id=ANY($1::bigint[])`, changed) : [];
+    const data = changed.length ? await rows(tx, `SELECT ${selectColumns()} ${source} WHERE s.id=ANY($1::bigint[])`, changed) : [];
     return { revision, index, data:data.map(row=>protection.project(p,c.actor,row)) };
   }, { isolationLevel: "RepeatableRead", timeout: 15000 }).then(async snapshot => {
     // Large first loads must not monopolize the event loop while converting
@@ -214,7 +216,7 @@ export async function list(c: Context, query: Record<string, unknown>): Promise<
   const p = pagination(query);
   const photoSearch = query.photoSearch === "true", missingOnly = query.missingStyleNo === "true";
   if(protection.activePolicy(policy) || photoSearch || missingOnly) {
-    const projected = protection.filtered((await rows(tx,`SELECT ${selectColumns} ${source}`)).map(row=>protection.project(policy,c.actor,row)),query);
+    const projected = protection.filtered((await rows(tx,`SELECT ${selectColumns()} ${source}`)).map(row=>protection.project(policy,c.actor,row)),query);
     // Count after permission projection and search, before the shortcut and page.
     // Hidden values cannot make a row appear filled or disclose a missing style.
     const missing = photoSearch || missingOnly ? projected.filter(selectionRowMissingStyleNo) : [];
@@ -225,7 +227,7 @@ export async function list(c: Context, query: Record<string, unknown>): Promise<
   const total = await one(tx, `SELECT count(*)::int AS n ${source}${clause}`, ...values);
   const data = await rows(
     tx,
-    `SELECT ${selectColumns} ${source}${clause} ORDER BY ${order} LIMIT ${p.pageSize} OFFSET ${(p.page - 1) * p.pageSize}`,
+    `SELECT ${selectColumns()} ${source}${clause} ORDER BY ${order} LIMIT ${p.pageSize} OFFSET ${(p.page - 1) * p.pageSize}`,
     ...values,
   );
   return { data:data.map(row=>protection.project(policy,c.actor,row)), total: total!.n, ...p };
@@ -363,7 +365,7 @@ export async function persist(tx: Tx, c: Context, body: Row, value?: string) {
     await mirrorArchiveRow(tx,c,result);
     await audit(tx, c, before ? "UPDATE" : "CREATE", "style-selection", result.id, before, result);
     // Keep date-only fields identical to list responses (rather than ISO timestamps).
-    return (await one(tx, `SELECT ${selectColumns} ${source} WHERE s.id=$1::bigint`, result.id))!;
+    return (await one(tx, `SELECT ${selectColumns()} ${source} WHERE s.id=$1::bigint`, result.id))!;
 }
 
 const importValues = styleSelectionInput.pick({ registrationBatch: true, images: true, labelImages: true, xutiStyleNo: true,
@@ -464,7 +466,7 @@ export async function nextBlankPhotoStyle(c: Context) {
     if(await isArchive(tx))await rows(tx,"SELECT pg_advisory_xact_lock(91002)::text");
     const p=await protection.writeLocks(tx,c);
     await tx.$executeRawUnsafe("LOCK TABLE style_selections IN SHARE ROW EXCLUSIVE MODE");
-    const blank = await one(tx, `SELECT ${selectColumns} ${source}
+    const blank = await one(tx, `SELECT ${selectColumns()} ${source}
       WHERE s.registration_batch IS NULL
         AND (s.images IS NULL OR s.images = '[]'::jsonb)
         AND (s.label_images IS NULL OR s.label_images = '[]'::jsonb)
@@ -494,7 +496,7 @@ export async function nextPhotoStyle(c:Context,value: string, query: unknown) {
   const policy=await protection.policy(tx);
   const current = await entity(tx, "style_selections", value);
   if(protection.activePolicy(policy) || options.missingStyleNo === "true"){
-    const matching=protection.filtered((await rows(tx,`SELECT ${selectColumns} ${source}`)).map(row=>protection.project(policy,c.actor,row)),{q:String(options.q || ""),photoSearch:"true",sort:"sortOrder",direction:"asc"});
+    const matching=protection.filtered((await rows(tx,`SELECT ${selectColumns()} ${source}`)).map(row=>protection.project(policy,c.actor,row)),{q:String(options.q || ""),photoSearch:"true",sort:"sortOrder",direction:"asc"});
     const data=options.missingStyleNo === "true" ? matching.filter(selectionRowMissingStyleNo) : matching;
     // The current style may have just been completed and left this filter.
     // Locate the next row using its stable manual-order anchor regardless.
@@ -502,7 +504,7 @@ export async function nextPhotoStyle(c:Context,value: string, query: unknown) {
     return data.find(row=>Number(row.sortOrder)>Number(anchor.sortOrder) || Number(row.sortOrder)===Number(anchor.sortOrder) && BigInt(row.id)<BigInt(value)) || null;
   }
   const q = String(options.q || "").trim().slice(0, 100);
-  const result=await one(tx, `SELECT ${selectColumns} ${source}
+  const result=await one(tx, `SELECT ${selectColumns()} ${source}
     WHERE (s.sort_order>$1 OR (s.sort_order=$1 AND s.id<$2::bigint))
     AND ($3='' OR concat_ws(' ',s.xuti_style_no,s.supplier_style_no,s.supplier_code) ILIKE $4)
     ORDER BY s.sort_order ASC,s.id DESC LIMIT 1`, current.sort_order, value, q, "%"+q+"%");

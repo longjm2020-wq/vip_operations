@@ -27,7 +27,7 @@ export function resetFieldTypes(fields:SelectionField[]):SelectionField[]{
 export function allowedFieldTypes(field:SelectionField):FieldType[]{
   if(field.custom)return Object.keys(fieldTypes) as FieldType[];
   if(["images","labelImages"].includes(field.key))return ["image"];
-  if(field.key==="registrationBatch")return ["date","text"];
+  if(field.key==="registrationBatch")return ["createdTime"];
   if(["supplyPriceExclTax","vipPrice","livePrice","tagPrice"].includes(field.key))return ["number","currency","percent","text"];
   if(["collectionInventory","reorderDays"].includes(field.key))return ["number","text"];
   return (Object.keys(fieldTypes) as FieldType[]).filter(type=>type!=="image" && !systemFieldTypes.has(type));

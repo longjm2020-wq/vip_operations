@@ -43,7 +43,7 @@ import { Alert, App, Button, Card, Checkbox, Empty, Image, Input, Modal, Paginat
 import { ExpandAltOutlined, CompressOutlined, EditOutlined, BgColorsOutlined, FontColorsOutlined, VerticalAlignTopOutlined, VerticalAlignMiddleOutlined, VerticalAlignBottomOutlined, AlignLeftOutlined, AlignCenterOutlined, AlignRightOutlined, DeleteOutlined, FilterOutlined, LinkOutlined, PlusOutlined, PushpinOutlined, SettingOutlined, UnorderedListOutlined, UploadOutlined } from "@ant-design/icons";
 import { useSelectionWorkspace } from "./selection-workspace";
 import { prepareUpload, readUpload } from "./upload-file";
-import { Header, QueryState, Row, useCan, useUser } from "./shared";
+import { QueryState, Row, useCan, useUser } from "./shared";
 import { mergeSelectionRemote, mergeSelectionSave, normalizeSelection, selectionDelta, SelectionSaveAttempts } from "./selection-autosave";
 import { useSelectionRealtime } from "./selection-realtime";
 import { fetchSelectionRows, SelectionTransfer } from "./selection-transfer";
@@ -69,7 +69,7 @@ const textColorOptions = [
 type SelectionImage = { id: string; url: string; color: string };
 type Column = SelectionField;
 const baseColumns: Column[] = [
-  { key: "registrationBatch", label: "登记批次", width: selectionInitialColumnWidth }, { key: "images", label: "图片", width: selectionInitialColumnWidth },
+  { key: "registrationBatch", label: "创建时间", width: selectionInitialColumnWidth, type: "createdTime", timeDisplay: "datetime" }, { key: "images", label: "图片", width: selectionInitialColumnWidth },
   { key: "labelImages", label: "洗唛/吊牌图", width: selectionInitialColumnWidth },
   { key: "xutiStyleNo", label: "序缇款号", width: selectionInitialColumnWidth }, { key: "supplierStyleNo", label: "供应商款号", width: selectionInitialColumnWidth },
   { key: "supplierCode", label: "供应商编码", width: selectionInitialColumnWidth }, { key: "color", label: "颜色", width: selectionInitialColumnWidth },
@@ -488,7 +488,12 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
   };
   const repeatedStyles = useMemo(() => duplicateStyleCounts(rows, styleCounts.data?.data, original.current), [rows, styleCounts.data]);
   const colorSuggestions = useMemo(() => [...new Set(rows.flatMap((row) => splitTags(row.color)))], [rows]);
-  const fieldViewRows=useMemo<Row[]>(()=>rows.map(row=>({...row,selectionChoiceTexts:Object.fromEntries(columns.filter(column=>(column.type || column.fallbackType)==="multiple").map(column=>[column.key,readableSelectionCell(row,column.key)?choiceDisplayText(column,valueAt(row,column)):""])),extraFields:{...(row.extraFields || {}),...Object.fromEntries(columns.filter(systemField).map(column=>[column.key,readableSelectionCell(row,column.key)?selectionSystemValue(row,column):""]))}})),[rows,columns]);
+  const fieldViewRows=useMemo<Row[]>(()=>rows.map(row=>{
+    const systemValues=Object.fromEntries(columns.filter(systemField).map(column=>[column.key,readableSelectionCell(row,column.key)?selectionSystemValue(row,column):""]));
+    // Query a derived view, keeping the saved legacy batch untouched in rows.
+    // Built-in system columns are read from the top level by search/filter code.
+    return {...row,...Object.fromEntries(columns.filter(column=>systemField(column) && !column.custom).map(column=>[column.key,systemValues[column.key]])),selectionChoiceTexts:Object.fromEntries(columns.filter(column=>(column.type || column.fallbackType)==="multiple").map(column=>[column.key,readableSelectionCell(row,column.key)?choiceDisplayText(column,valueAt(row,column)):""])),extraFields:{...(row.extraFields || {}),...systemValues}};
+  }),[rows,columns]);
   const editView = JSON.stringify([searchText,imageSearchRowId,columnFilters,columnSort,groupBy,sort,direction,page,pageSize,columnViewSignature,activeColumns.map(column=>[column.key,column.type,column.fallbackType])]);
   const editingRow = editSession ? rows.find(row=>row._key===editSession.rowKey) : undefined;
   const heldEdit = editSession && editSession.view===editView && canEdit && editingRow &&
@@ -1099,7 +1104,7 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
     setFormatTarget(null);
   };
   if(accessLost)return <Alert type="error" showIcon message="表格访问权限已失效，请重新登录或联系管理员" />;
-  return <>{columnWidthTarget && <SelectionColumnWidthModal columns={columnWidthTarget} onCancel={() => setColumnWidthTarget(null)} onApply={width => { const keys = new Set(columnWidthTarget.map(column => column.key)); setColumns(current => current.map(column => keys.has(column.key) ? { ...column, width } : column)); setColumnWidthTarget(null); }}/>} {imagePreview && previewImages.length > 0 && <SelectionImagePreview key={cellId(imagePreview.rowKey, imagePreview.columnKey)} images={previewImages} index={Math.min(imagePreview.index, previewImages.length - 1)} name={previewColumn!.label} alongsideDetails={detailVisible} onTextCopied={text => { copiedSingleValue.current = text; setCopiedCells(new Set()); }} onIndexChange={index => setImagePreview(current => current ? { ...current, index } : null)} onClose={() => setImagePreview(null)} />}{formatTarget && <SelectionFormatModal count={formatTarget.ids.size} sample={formatTarget.sample} initial={formatTarget.initial} onCancel={() => setFormatTarget(null)} onApply={applyFormat} />}<PageSearch><PageSearchInput multiline aria-label="搜索选款" placeholder="搜索款号、供应商、颜色、材质…" allowClear value={searchText} onChange={event=>{setImageSearchRowId(null);setSearchText(event.target.value);}} suffix={<SelectionImageSearch disabled={!!dirtyCount || saving || deleting || transferring} onSelect={row=>{setImageSearchRowId(String(row.id));setPage(1);setCellAnchor(null);setFocusedCell(null);setCellTextEditing(false);setSelectedRows([]);setSelectedCells(new Set());}}/>} /></PageSearch>{title && <Header title={title} subtitle="按需添加字段和记录，配置表格功能。"/>}
+  return <>{columnWidthTarget && <SelectionColumnWidthModal columns={columnWidthTarget} onCancel={() => setColumnWidthTarget(null)} onApply={width => { const keys = new Set(columnWidthTarget.map(column => column.key)); setColumns(current => current.map(column => keys.has(column.key) ? { ...column, width } : column)); setColumnWidthTarget(null); }}/>} {imagePreview && previewImages.length > 0 && <SelectionImagePreview key={cellId(imagePreview.rowKey, imagePreview.columnKey)} images={previewImages} index={Math.min(imagePreview.index, previewImages.length - 1)} name={previewColumn!.label} alongsideDetails={detailVisible} onTextCopied={text => { copiedSingleValue.current = text; setCopiedCells(new Set()); }} onIndexChange={index => setImagePreview(current => current ? { ...current, index } : null)} onClose={() => setImagePreview(null)} />}{formatTarget && <SelectionFormatModal count={formatTarget.ids.size} sample={formatTarget.sample} initial={formatTarget.initial} onCancel={() => setFormatTarget(null)} onApply={applyFormat} />}<PageSearch><PageSearchInput multiline aria-label="搜索选款" placeholder="搜索款号、供应商、颜色、材质…" allowClear value={searchText} onChange={event=>{setImageSearchRowId(null);setSearchText(event.target.value);}} suffix={<SelectionImageSearch disabled={!!dirtyCount || saving || deleting || transferring} onSelect={row=>{setImageSearchRowId(String(row.id));setPage(1);setCellAnchor(null);setFocusedCell(null);setCellTextEditing(false);setSelectedRows([]);setSelectedCells(new Set());}}/>} /></PageSearch>
     <Dropdown trigger={["contextMenu"]} open={!!contextRow && !!contextColumn} onOpenChange={open => { if (!open) setContextCell(null); }} overlayStyle={{ zIndex: 1201 }} menu={cellContextMenu}><span aria-hidden="true" style={{ position: "fixed", left: contextCell?.x || 0, top: contextCell?.y || 0, width: 1, height: 1, pointerEvents: "none" }}/></Dropdown>
     <Card className="selection-card"><div className="selection-toolbar" aria-label={`${title || "选款登记"}表格工具栏`}><Space className="selection-toolbar-controls" wrap size={4}>
       {canEdit && <SelectionCollections selectedRows={filteredRows.filter(row => selectedRows.includes(row._key))} blocked={!!dirtyCount || saving || deleting}/>}
