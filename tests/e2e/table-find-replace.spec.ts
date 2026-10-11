@@ -223,7 +223,7 @@ test("打开时的选区冻结，查找定位其他行后仍仅替换原选区",
   await expect(dialog.getByRole("status")).toContainText("找到 2 个匹配单元格");
   await dialog.getByRole("button", { name: "定位第 2 行 成分", exact: true }).click();
   await expect(cell(page, "2", "material")).toHaveClass(/selection-cell-active/);
-  await cell(page, "2", "material").click();
+  await cell(page, "2", "xutiStyleNo").click();
   await page.keyboard.press("Control+h");
   await chooseScope("打开时的选区");
   await expect(dialog.getByRole("status")).toContainText("找到 1 个匹配单元格");
