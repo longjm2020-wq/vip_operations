@@ -205,3 +205,33 @@ test("部署过渡中的旧版预览不允许确认导入，重试新版预览�
   await dialog.locator(".ant-modal-footer").getByRole("button", { name: "关闭", exact: true }).click();
   expect(state.commits).toHaveLength(0);
 });
+
+test("Excel第3行吊牌价仅规范浮点尾差，真实三位小数显示单元格原值并阻止预览", async ({ page }) => {
+  const state = await fixture(page), dialog = await openImport(page);
+  await dialog.getByRole("radio", { name: "覆盖，仅更新本次填写的字段" }).check();
+  const priceWorkbook = async (price: number) => {
+    const book = new ExcelJS.Workbook(), sheet = book.addWorksheet("选款资料");
+    sheet.addRow(["序缇款号", "长标题", "吊牌价"]);
+    sheet.addRow(["IMPORT-001", "第2行正常金额", 50]);
+    sheet.addRow(["PRICE-003", "第3行数值金额", price]);
+    return { name: "吊牌价检查.xlsx", mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", buffer: Buffer.from(await book.xlsx.writeBuffer()) };
+  };
+  for (const [price, expected] of [[0.1 + 0.2, "0.3"], [228.00000000000003, "228"]] as const) {
+    const before = state.previews.length;
+    await dialog.locator('input[type="file"]').setInputFiles(await priceWorkbook(price));
+    await expect.poll(() => state.previews.length).toBe(before + 1);
+    const row = state.previews.at(-1)!.rows[1];
+    expect(row.xutiStyleNo).toBe("PRICE-003");
+    expect(row.tagPrice).toBe(expected);
+    await expect(dialog.getByRole("button", { name: "确认导入" })).toBeVisible();
+  }
+  const before = state.previews.length;
+  await dialog.locator('input[type="file"]').setInputFiles(await priceWorkbook(1.005));
+  const error = dialog.getByText(/第 3 行吊牌价应为非负金额，最多两位小数/);
+  await expect(error).toBeVisible();
+  await expect(error).toContainText("C3");
+  await expect(error).toContainText("1.005");
+  expect(state.previews).toHaveLength(before);
+  await expect(dialog.getByRole("button", { name: "确认导入" })).toHaveCount(0);
+  expect(state.commits).toHaveLength(0);
+});

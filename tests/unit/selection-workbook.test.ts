@@ -65,6 +65,57 @@ describe("selection workbook", () => {
     const many = await partialWorkbook(["短标题", "序缇款号", "材质成分", "自定义备注"], [["短标题", "003", "100%棉", "仅更新这几列"], ["", "004", "", ""]]);
     expect(await parseSelectionWorkbook(await bytes(many))).toEqual([{ xutiStyleNo: "003", material: "100%棉", fieldValues: { "短标题": "短标题", "自定义备注": "仅更新这几列" } }, { xutiStyleNo: "004" }]);
   });
+  it("normalizes only one-ULP Excel numeric price tails and reads amounts independently of zero-padding formats", async () => {
+    const book = await partialWorkbook(["序缇款号", "供货价（不含税）", "唯品价", "直播价", "吊牌价"], [
+      [1, 0.1 + 0.2, 228.00000000000003, 0, 12],
+      [2, 228.5, 2050, 9999999999.99, 32 - 2 ** -48],
+    ]);
+    const sheet = book.getWorksheet("选款资料")!;
+    sheet.getCell("A2").numFmt = "0000";
+    sheet.getCell("A3").numFmt = "0000";
+    sheet.getCell("B2").numFmt = "0.00";
+    sheet.getCell("C2").numFmt = "0.00";
+    sheet.getCell("D2").numFmt = "0000";
+    sheet.getCell("E2").numFmt = "0000";
+    sheet.getCell("B3").numFmt = '"¥"#,##0.00';
+    sheet.getCell("C3").numFmt = '"￥"#,##0.00';
+    const buffer = await bytes(book), reloaded = new Excel.Workbook();
+    await reloaded.xlsx.load(buffer);
+    const loaded = reloaded.getWorksheet("选款资料")!;
+    expect(loaded.getCell("B2").value).toBe(0.30000000000000004);
+    expect(loaded.getCell("B2").text).toBe("0.30000000000000004");
+    expect(loaded.getCell("C2").value).toBe(228.00000000000003);
+    expect(await parseSelectionWorkbook(buffer)).toEqual([
+      { xutiStyleNo: "0001", supplyPriceExclTax: "0.3", vipPrice: "228", livePrice: "0", tagPrice: "12" },
+      { xutiStyleNo: "0002", supplyPriceExclTax: "228.5", vipPrice: "2050", livePrice: "9999999999.99", tagPrice: "32" },
+    ]);
+    const notes = (await createSelectionWorkbook([], true)).getWorksheet("填写说明")!.getColumn(1).values.join("\n");
+    expect(notes).toContain("超过两位小数的金额仍需修正");
+    expect(notes).toContain("单元格位置和原值");
+  });
+  it("rejects genuine price precision, negative or oversized amounts, two-ULP tails and unchanged text precision rules", async () => {
+    const twoUlps = 0.3000000000000001;
+    // A common EPSILON tolerance with a unit floor admits this value; one actual ULP must not.
+    expect(Math.abs(twoUlps - 0.3)).toBeLessThanOrEqual(Number.EPSILON * Math.max(1, twoUlps));
+    const belowPowerOfTwo = 32 - 2 ** -47;
+    expect(Math.log2(belowPowerOfTwo)).toBe(5); // A rounded log2 would double the allowed precision.
+    for (const value of [228.001, 1.005, 1e-7, -1, 10000000000, twoUlps, belowPowerOfTwo, "228.000", "2.05E+03"]) {
+      const book = await partialWorkbook(["序缇款号", "吊牌价"], [["001", value]]);
+      book.getWorksheet("选款资料")!.getCell("B2").numFmt = "0.00";
+      await expect(parseSelectionWorkbook(await bytes(book))).rejects.toThrow(`第 2 行吊牌价应为非负金额，最多两位小数（单元格 B2，原值 ${JSON.stringify(String(value))}）`);
+    }
+    const formula = await partialWorkbook(["序缇款号", "吊牌价"], [["001", { formula: "200+28", result: 228 }]]);
+    await expect(parseSelectionWorkbook(await bytes(formula))).rejects.toThrow("B2 含公式，请先粘贴为值");
+    const currency = await partialWorkbook(["序缇款号", "吊牌价"], [["001", "￥2,050.00"]]);
+    expect(await parseSelectionWorkbook(await bytes(currency))).toEqual([{ xutiStyleNo: "001", tagPrice: "2050.00" }]);
+  });
+  it("reports the original worksheet row, address and safely bounded raw amount", async () => {
+    const book = await partialWorkbook(["序缇款号", "长标题", "吊牌价"], [["001", "正常", 228], ["002", "待核对", 1.005]]);
+    await expect(parseSelectionWorkbook(await bytes(book))).rejects.toThrow('第 3 行吊牌价应为非负金额，最多两位小数（单元格 C3，原值 "1.005"）');
+    book.getWorksheet("选款资料")!.getCell("C3").value = "X".repeat(1000);
+    await expect(parseSelectionWorkbook(await bytes(book))).rejects.toThrow(`单元格 C3，原值 "${"X".repeat(80)}"…）`);
+    await expect(parseSelectionWorkbook(await bytes(book))).rejects.not.toThrow("X".repeat(81));
+  });
   it("parses 5000 actual XLSX styles without counting blank or format-only rows and rejects the 5001st style", async () => {
     expect(selectionImportLimits.maxRows).toBe(5000);
     const records = Array.from({ length: selectionImportLimits.maxRows }, (_, index) => [`IMPORT-${String(index + 1).padStart(4, "0")}`, 0]);

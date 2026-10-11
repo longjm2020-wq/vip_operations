@@ -88,7 +88,7 @@ export async function createSelectionWorkbook(records: Row[] = [], template = fa
     ["创建时间为系统只读字段，由服务器自动记录；填写此列不会修改创建时间。旧模板中的登记批次仍可兼容导入，但不改变创建时间。"],
     ["可仅保留「序缇款号」加任意一列或多列进行针对性更新。序缇款号必填，文件内同款重复会阻止导入。"],
     [`可添加自定义表头（1至40个字符，文件最多${selectionImportLimits.maxColumns}列），新自定义字段默认排在模板默认字段之后；已有同名可见字段按其设置校验，重名或无权限请先核对。`],
-    ["供应商颜色、尺码用 / 分隔；金额为非负数字，最多两位小数，数值0会正常导入。"],
+    ["供应商颜色、尺码用 / 分隔；金额为非负数字，整数最多10位、最多两位小数，数值0会正常导入。数值型金额的极小存储误差会纠正（例如228.00000000000003按228处理）；超过两位小数的金额仍需修正。金额错误显示行号、单元格位置和原值。"],
     ["多图在「图片明细」中逐图填写序缇款号、颜色、图片URL；图片颜色必须在该款颜色字段中。"],
     ["也可在主表图片列逐行填写「颜色 | https://图片地址」；不填颜色时可仅填网址。"],
     ["图片明细与主表图片不能同时填写同款；填写图片将替换该款原图片，留空则保留。"],
@@ -113,6 +113,29 @@ function cellText(cell: ExcelJS.Cell): string {
   if (value instanceof Date) return value.toISOString().slice(0, 10);
   if (typeof value === "number" && /^0+$/.test(cell.numFmt || "")) return String(value).padStart(cell.numFmt.length, "0");
   return cell.text.trim();
+}
+const pricePrecision = new DataView(new ArrayBuffer(8));
+function priceText(cell: ExcelJS.Cell, row: number, label: string, text: string): string {
+  const invalid = (): never => {
+    const raw = typeof cell.value === "number" ? String(cell.value) : cell.text;
+    throw Error(`第 ${row} 行${label}应为非负金额，最多两位小数（单元格 ${cell.address}，原值 ${JSON.stringify(raw.slice(0, 80))}${raw.length > 80 ? "…" : ""}）`);
+  };
+  const value = cell.value;
+  if (typeof value === "number") {
+    if (!Number.isFinite(value) || value < 0 || value > 9999999999.99) invalid();
+    const cents = Math.round(value * 100) / 100;
+    // Read the IEEE-754 exponent directly: Math.log2 can round up just below a power of two.
+    pricePrecision.setFloat64(0, value);
+    const exponent = (pricePrecision.getUint32(0) >>> 20) & 0x7ff;
+    const ulp = exponent ? 2 ** (exponent - 1023 - 52) : Number.MIN_VALUE;
+    if ((value !== 0 && cents === 0) || Math.abs(value - cents) > ulp) invalid();
+    // Number formats such as 0000 affect display, not the imported amount.
+    text = String(cents);
+  } else {
+    text = text.replace(/[￥¥,，\s]/g, "");
+  }
+  if (!/^\d{1,10}(\.\d{1,2})?$/.test(text)) invalid();
+  return text;
 }
 export async function parseSelectionWorkbook(buffer: ArrayBuffer) {
   if (buffer.byteLength > selectionImportLimits.maxFileBytes) throw Error(`文件不能超过 ${selectionImportLimits.maxFileBytes / 1024 / 1024} MB`);
@@ -171,7 +194,7 @@ export async function parseSelectionWorkbook(buffer: ArrayBuffer) {
       hasFilledCell = true;
       if (readonly || (key === "images" && text === "见图片明细") || (key === "labelImages" && text === "见洗唛吊牌图明细")) continue;
       if (!key) { fieldValues.push([label, text]); continue; }
-      if (priceKeys.has(key)) { text = text.replace(/[￥¥,，\s]/g, ""); if (!/^\d{1,10}(\.\d{1,2})?$/.test(text)) throw Error(`第 ${r} 行${label}应为非负金额，最多两位小数`); }
+      if (priceKeys.has(key)) text = priceText(row.getCell(index), r, label, text);
       if (key === "registrationBatch" && (!/^\d{4}-\d{2}-\d{2}$/.test(text) || !Number.isFinite(Date.parse(text)) || new Date(text).toISOString().slice(0, 10) !== text)) throw Error(`第 ${r} 行日期应为有效的 YYYY-MM-DD`);
       if (key === "color" || key === "sizeRange") text = [...new Set(text.split("/").map(v => v.trim()).filter(Boolean))].join("/");
       record[key] = key === "images" ? text.split(/\r?\n/).filter(Boolean).map(line => { const i = line.indexOf(" | "); return imageValue(i < 0 ? "" : line.slice(0, i), i < 0 ? line.trim() : line.slice(i + 3).trim()); }) : key === "labelImages" ? text.split(/\r?\n/).filter(Boolean).map(line => imageValue("", line.trim())) : text;
