@@ -29,6 +29,7 @@ import { CompassAnalyticsModule } from "./modules/analytics/controller.js";
 import { PersonalWorkspaceModule } from "./modules/workspace/controller.js";
 import { CompetitorAnalysisModule } from "./modules/competitors/controller.js";
 import { CompassSharesModule } from "./modules/analytics/share-controller.js";
+import { selectionImportBodyParser } from "./selection-import-body.js";
 @Module({
   controllers: [ManualController],
   imports: [
@@ -79,6 +80,7 @@ export async function start() {
       }
     },
   );
+  app.use(selectionImportBodyParser());
   app.useBodyParser("json", { limit: "8mb" });
   app.use(
     (

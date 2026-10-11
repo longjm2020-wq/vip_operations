@@ -1,6 +1,6 @@
 import type ExcelJS from "exceljs";
 import { selectionRowHasContent } from "../../../packages/contracts/src/selection-trailing-row.js";
-import { selectionImportHeader, selectionImportTemplateFields } from "../../../packages/contracts/src/selection-import-template.js";
+import { selectionImportHeader, selectionImportLimits, selectionImportTemplateFields } from "../../../packages/contracts/src/selection-import-template.js";
 
 type Row = Record<string, any>;
 export const selectionSheetColumns = [
@@ -87,7 +87,7 @@ export async function createSelectionWorkbook(records: Row[] = [], template = fa
     ["已有款由用户选择覆盖更新或跳过不覆盖，新款新增。覆盖仅更新文件中已填写的字段；空白和未提供的字段保留原值，不用于清空。"],
     ["创建时间为系统只读字段，由服务器自动记录；填写此列不会修改创建时间。旧模板中的登记批次仍可兼容导入，但不改变创建时间。"],
     ["可仅保留「序缇款号」加任意一列或多列进行针对性更新。序缇款号必填，文件内同款重复会阻止导入。"],
-    ["可添加自定义表头（1至40个字符，文件最多500列），新自定义字段默认排在模板默认字段之后；已有同名可见字段按其设置校验，重名或无权限请先核对。"],
+    [`可添加自定义表头（1至40个字符，文件最多${selectionImportLimits.maxColumns}列），新自定义字段默认排在模板默认字段之后；已有同名可见字段按其设置校验，重名或无权限请先核对。`],
     ["供应商颜色、尺码用 / 分隔；金额为非负数字，最多两位小数，数值0会正常导入。"],
     ["多图在「图片明细」中逐图填写序缇款号、颜色、图片URL；图片颜色必须在该款颜色字段中。"],
     ["也可在主表图片列逐行填写「颜色 | https://图片地址」；不填颜色时可仅填网址。"],
@@ -95,7 +95,7 @@ export async function createSelectionWorkbook(records: Row[] = [], template = fa
     ["洗唛/吊牌图可在「洗唛吊牌图明细」逐图填写款号和图片URL；填写后替换该款原洗唛/吊牌图，留空保留。"],
     ["系统内图片地址须登录同一系统查看。旧版内嵌图片自动保存在隐藏工作表中，请保留该表。"],
     ["仅支持本模板的数据与图片地址，不解析 Excel 浮动图片。公式请先粘贴为值。"],
-    ["每次导入最多 500 款、文件 20 MB；导入预览确认后整批写入，冲突则整批不写入。"],
+    [`每次导入最多 ${selectionImportLimits.maxRows} 款、文件 ${selectionImportLimits.maxFileBytes / 1024 / 1024} MB；空白行和仅有格式的空白行不计入款数。导入预览确认后整批写入，冲突则整批不写入。`],
     ["单元格填色和列布局不从文件导入，更新时保留系统现有设置；仅填写创建时间却未填款号也会提示缺少序缇款号，完全空白行会自动忽略。"],
   ]);
   return book;
@@ -115,18 +115,23 @@ function cellText(cell: ExcelJS.Cell): string {
   return cell.text.trim();
 }
 export async function parseSelectionWorkbook(buffer: ArrayBuffer) {
+  if (buffer.byteLength > selectionImportLimits.maxFileBytes) throw Error(`文件不能超过 ${selectionImportLimits.maxFileBytes / 1024 / 1024} MB`);
   const { Workbook } = (await import("exceljs")).default;
   const book = new Workbook(); await book.xlsx.load(buffer);
   const sheet = book.getWorksheet("选款资料");
   if (!sheet) throw Error("缺少「选款资料」工作表，请使用下载的模板");
-  if (sheet.rowCount > 501) throw Error("每次导入最多 500 款，请拆分文件并清除多余格式");
-  if (sheet.columnCount > 500) throw Error("每次导入最多 500 列，请减少字段并清除多余格式");
+  if (sheet.columnCount > selectionImportLimits.maxColumns) throw Error(`每次导入最多 ${selectionImportLimits.maxColumns} 列，请减少字段并清除多余格式`);
   if (sheet.getImages().length) throw Error("请在图片明细填写图片地址，不支持 Excel 浮动图片");
   const headers = new Map<string, { index: number; label: string; key?: string; readonly?: true }>();
   for (let index = 1; index <= sheet.columnCount; index++) {
     const name = cellText(sheet.getRow(1).getCell(index));
     if (!name) {
-      if (Array.from({ length: Math.max(0, sheet.rowCount - 1) }, (_, offset) => sheet.getRow(offset + 2).getCell(index)).some(cell => cell.value != null && cellText(cell))) throw Error(`第 ${index} 列缺少表头`);
+      sheet.eachRow((row, rowNumber) => {
+        if (rowNumber > 1) {
+          const cell = row.getCell(index);
+          if (cell.value != null && cellText(cell)) throw Error(`第 ${index} 列缺少表头`);
+        }
+      });
       continue;
     }
     if (name.length > 40) throw Error(`表头「${name}」最多40个字符`);
@@ -154,12 +159,14 @@ export async function parseSelectionWorkbook(buffer: ArrayBuffer) {
     if (url.length > 1500000) throw Error("单张内嵌图片过大");
     return { id: crypto.randomUUID(), color: color.trim(), url };
   };
-  for (let r = 2; r <= sheet.rowCount; r++) {
+  // Sparse iteration skips format-only rows without allocating every row up to an inflated XLSX dimension.
+  sheet.eachRow((row, r) => {
+    if (r === 1) return;
     const record: Row = {};
     const fieldValues: [string, string][] = [];
     let hasFilledCell = false;
     for (const { index, label, key, readonly } of headers.values()) {
-      let text = cellText(sheet.getRow(r).getCell(index));
+      let text = cellText(row.getCell(index));
       if (!text) continue;
       hasFilledCell = true;
       if (readonly || (key === "images" && text === "见图片明细") || (key === "labelImages" && text === "见洗唛吊牌图明细")) continue;
@@ -169,37 +176,40 @@ export async function parseSelectionWorkbook(buffer: ArrayBuffer) {
       if (key === "color" || key === "sizeRange") text = [...new Set(text.split("/").map(v => v.trim()).filter(Boolean))].join("/");
       record[key] = key === "images" ? text.split(/\r?\n/).filter(Boolean).map(line => { const i = line.indexOf(" | "); return imageValue(i < 0 ? "" : line.slice(0, i), i < 0 ? line.trim() : line.slice(i + 3).trim()); }) : key === "labelImages" ? text.split(/\r?\n/).filter(Boolean).map(line => imageValue("", line.trim())) : text;
     }
-    if (!hasFilledCell) continue;
+    if (!hasFilledCell) return;
     if (fieldValues.length) record.fieldValues = Object.fromEntries(fieldValues);
     if (!record.xutiStyleNo) throw Error(`第 ${r} 行缺少序缇款号`);
     if (byStyle.has(record.xutiStyleNo)) throw Error(`序缇款号「${record.xutiStyleNo}」在文件中重复`);
+    if (result.length >= selectionImportLimits.maxRows) throw Error(`每次导入最多 ${selectionImportLimits.maxRows} 款，请拆分文件；空白行不计入款数`);
     result.push(record); byStyle.set(record.xutiStyleNo, record);
-  }
+  });
   const pictures = book.getWorksheet("图片明细");
   if (pictures) {
     if (["序缇款号", "颜色", "图片URL"].some((label, i) => cellText(pictures.getRow(1).getCell(i + 1)) !== label) || pictures.columnCount > 3) throw Error("图片明细表头应依次为：序缇款号、颜色、图片URL");
     if (pictures.getImages().length) throw Error("请在图片明细填写图片地址，不支持 Excel 浮动图片");
     const seen = new Set<string>();
-    for (let r = 2; r <= pictures.rowCount; r++) {
-      const style = cellText(pictures.getRow(r).getCell(1)), color = cellText(pictures.getRow(r).getCell(2)), url = cellText(pictures.getRow(r).getCell(3));
-      if (!style && !color && !url) continue;
+    pictures.eachRow((row, r) => {
+      if (r === 1) return;
+      const style = cellText(row.getCell(1)), color = cellText(row.getCell(2)), url = cellText(row.getCell(3));
+      if (!style && !color && !url) return;
       const record = byStyle.get(style); if (!record || !url) throw Error(`图片明细第 ${r} 行缺少对应款号或图片URL`);
       if (!seen.has(style)) { if (record.images) throw Error(`「${style}」的图片请只填写在主表或图片明细其中一处`); record.images = []; seen.add(style); }
       record.images.push(imageValue(color, url));
-    }
+    });
   }
   const labels = book.getWorksheet("洗唛吊牌图明细");
   if (labels) {
     if (["序缇款号", "图片URL"].some((label, i) => cellText(labels.getRow(1).getCell(i + 1)) !== label) || labels.columnCount > 2) throw Error("洗唛吊牌图明细表头应依次为：序缇款号、图片URL");
     if (labels.getImages().length) throw Error("请在洗唛吊牌图明细填写图片地址，不支持 Excel 浮动图片");
     const seen = new Set<string>();
-    for (let r = 2; r <= labels.rowCount; r++) {
-      const style = cellText(labels.getRow(r).getCell(1)), url = cellText(labels.getRow(r).getCell(2));
-      if (!style && !url) continue;
+    labels.eachRow((row, r) => {
+      if (r === 1) return;
+      const style = cellText(row.getCell(1)), url = cellText(row.getCell(2));
+      if (!style && !url) return;
       const record = byStyle.get(style); if (!record || !url) throw Error(`洗唛吊牌图明细第 ${r} 行缺少对应款号或图片URL`);
       if (!seen.has(style)) { if (record.labelImages) throw Error(`「${style}」的洗唛/吊牌图请只填写在主表或图片明细其中一处`); record.labelImages = []; seen.add(style); }
       record.labelImages.push(imageValue("", url));
-    }
+    });
   }
   if (!result.length) throw Error("文件中没有可导入的款式");
   return result;

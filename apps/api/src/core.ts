@@ -104,6 +104,7 @@ export async function command(
   operation: string,
   input: unknown,
   fn: (tx: Tx) => Promise<any>,
+  transactionOptions?: { timeout?: number; maxWait?: number },
 ) {
   if (!c.key || c.key.length > 128)
     fail("VALIDATION_ERROR", "缺少有效的 Idempotency-Key", 400);
@@ -141,7 +142,7 @@ export async function command(
       });
       return result;
     },
-    { timeout: 15000, maxWait: 15000 },
+    { timeout: 15000, maxWait: 15000, ...transactionOptions },
   );
 }
 export async function entity(

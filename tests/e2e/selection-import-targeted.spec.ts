@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import ExcelJS from "exceljs";
 import { projectSelectionSharedLayout, selectionLayoutSchema } from "../../packages/contracts/src/selection-layout.js";
+import { selectionImportLimits } from "../../packages/contracts/src/selection-import-template.js";
 
 type Values = Record<string, any>;
 async function workbook(image = false) {
@@ -11,12 +12,12 @@ async function workbook(image = false) {
   return { name: "针对性更新.xlsx", mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", buffer: Buffer.from(await book.xlsx.writeBuffer()) };
 }
 
-async function fixture(page: Page, failFirstPreview = false, legacyFirstPreview = false) {
+async function fixture(page: Page, failFirstPreview = false, legacyFirstPreview = false, titleLimit?: number) {
   let preferences = selectionLayoutSchema.parse({ columns: [
     { key: "registrationBatch", label: "创建时间", type: "createdTime" },
     { key: "xutiStyleNo", label: "序缇款号", type: "text" },
     { key: "color", label: "供应商颜色", type: "tags" },
-    { key: "custom:title", label: "长标题", type: "text", custom: true, visibility: "PUBLIC" },
+    { key: "custom:title", label: "长标题", type: "text", custom: true, visibility: "PUBLIC", ...(titleLimit ? { textConfig: { countMode: "characters", maxLength: titleLimit } } : {}) },
   ] }), revision = 1;
   const rows: Values[] = [{ id: "1", xutiStyleNo: "IMPORT-001", color: "黑色", vipPrice: "580.00", registrationBatch: "2026-10-05T00:00:00Z", createdAt: "2026-10-05T00:00:00Z", updatedAt: "2026-10-11T00:00:00Z", images: [], labelImages: [], extraFields: { "custom:title": "旧标题" } }];
   const previews: Values[] = [], commits: Values[] = [], layoutWrites: Values[] = [], uploads: Values[] = [];
@@ -79,6 +80,7 @@ async function fixture(page: Page, failFirstPreview = false, legacyFirstPreview 
 
 async function openImport(page: Page) {
   await page.getByRole("button", { name: "导入", exact: true }).click();
+  await expect(page.getByRole("menuitem", { name: "下载模板", exact: true })).toHaveCount(0);
   await page.getByRole("menuitem", { name: "从 Excel 导入商品" }).click();
   return page.getByRole("dialog", { name: "从 Excel 导入商品" });
 }
@@ -114,6 +116,58 @@ test("同款选择不覆盖或针对性覆盖，自定义字段只在确认后�
   expect(state.rows[0]).toMatchObject({ color: "黑色", vipPrice: "580.00", createdAt: "2026-10-05T00:00:00Z", extraFields: { "custom:title": "本次更新标题", "custom:campaign": "新品上市" } });
   await dialog.locator(".ant-modal-footer").getByRole("button", { name: "关闭", exact: true }).click();
   await expect(page.locator('th[data-selection-column="custom:campaign"]')).toBeVisible();
+});
+
+test("文件上限包含200MB边界，超过一字节禁止预览", async ({ page }) => {
+  // Exercise the browser File.size branch with a real, small XLSX body, without
+  // allocating a 200 MB fixture merely to verify the inclusive boundary.
+  await page.addInitScript(({ maxFileBytes }) => {
+    const originalSize = Object.getOwnPropertyDescriptor(Blob.prototype, "size")!.get!;
+    Object.defineProperty(File.prototype, "size", { configurable: true, get() {
+      return this.name === "边界大小.xlsx" ? maxFileBytes : this.name === "超过边界.xlsx" ? maxFileBytes + 1 : originalSize.call(this);
+    } });
+  }, { maxFileBytes: selectionImportLimits.maxFileBytes });
+  const state = await fixture(page), dialog = await openImport(page), file = await workbook();
+  await expect(dialog.getByText("仅支持 .xlsx 文件，不超过 200 MB，每次最多 5000 款", { exact: true })).toBeVisible();
+  await dialog.getByRole("radio", { name: "不覆盖，保留已有款全部资料" }).check();
+  await dialog.locator('input[type="file"]').setInputFiles({ ...file, name: "超过边界.xlsx" });
+  await expect(dialog.getByText("请选择不超过 200 MB 的 .xlsx 文件", { exact: true })).toBeVisible();
+  expect(state.previews).toHaveLength(0);
+  await dialog.locator('input[type="file"]').setInputFiles({ ...file, name: "边界大小.xlsx" });
+  await expect(dialog.getByText("新增 1 款，覆盖更新 0 款，不覆盖 1 款。", { exact: false })).toBeVisible();
+  expect(state.previews).toHaveLength(1);
+  expect(state.commits).toHaveLength(0);
+});
+
+test("5000款可以生成预览，5001款不发送预览请求", async ({ page }) => {
+  const state = await fixture(page), dialog = await openImport(page);
+  await dialog.getByRole("radio", { name: "不覆盖，保留已有款全部资料" }).check();
+  const book = new ExcelJS.Workbook(), sheet = book.addWorksheet("选款资料");
+  sheet.addRow(["序缇款号", "长标题"]);
+  for (let index = 1; index <= selectionImportLimits.maxRows; index++) sheet.addRow([`BULK-${index}`, `批量标题${index}`]);
+  const file = async () => ({ name: "批量导入.xlsx", mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", buffer: Buffer.from(await book.xlsx.writeBuffer()) });
+  await dialog.locator('input[type="file"]').setInputFiles(await file());
+  await expect(dialog.getByText("新增 5000 款，覆盖更新 0 款，不覆盖 0 款。", { exact: false })).toBeVisible();
+  expect(state.previews[0].rows).toHaveLength(selectionImportLimits.maxRows);
+  sheet.addRow(["BULK-EXTRA", "超过上限"]);
+  await dialog.locator('input[type="file"]').setInputFiles(await file());
+  await expect(dialog.getByText(/每次导入最多 5000 款/)).toBeVisible();
+  expect(state.previews).toHaveLength(1);
+  await expect(dialog.getByRole("button", { name: "确认导入" })).toHaveCount(0);
+  expect(state.commits).toHaveLength(0);
+});
+
+test("存在未保存修改时仍可进入导入弹窗下载模板，上传继续禁用", async ({ page }) => {
+  const state = await fixture(page, false, false, 2);
+  await page.locator('td[data-selection-column="custom:title"]').getByRole("textbox").fill("超过字数限制");
+  const dialog = await openImport(page);
+  await expect(dialog.getByText("请先处理表格中未保存的修改，再上传文件。", { exact: true })).toBeVisible();
+  await expect(dialog.locator('input[type="file"]')).toBeDisabled();
+  const download = page.waitForEvent("download");
+  await dialog.getByRole("button", { name: /下载模板$/ }).click();
+  expect((await download).suggestedFilename()).toBe("选款登记导入模板.xlsx");
+  expect(state.previews).toHaveLength(0);
+  expect(state.commits).toHaveLength(0);
 });
 
 test("预览失败可重试，改变覆盖策略复用已上传的内嵌图片", async ({ page }) => {

@@ -217,7 +217,12 @@ test("导入下载模板保持标准固定字段，不受当前表格自定义�
   const syncCount = state.syncRequests.length;
   const ready = page.waitForEvent("download");
   await page.getByRole("button", { name: "导入", exact: true }).click();
-  await page.getByRole("menuitem", { name: "下载模板", exact: true }).click();
+  await expect(page.getByRole("menuitem", { name: "下载模板", exact: true })).toHaveCount(0);
+  await page.getByRole("menuitem", { name: "从 Excel 导入商品", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "从 Excel 导入商品" });
+  await expect(dialog.getByText("当前账号仅可下载模板，导入资料需要编辑权限。", { exact: true })).toBeVisible();
+  await expect(dialog.locator('input[type="file"]')).toBeDisabled();
+  await dialog.getByRole("button", { name: /下载模板$/ }).click();
   const download = await ready;
   const book = new Excel.Workbook();
   await book.xlsx.readFile((await download.path())!);

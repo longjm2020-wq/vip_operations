@@ -4,7 +4,7 @@ import { db, rows, one, camel, type Row, type Tx } from "../../../../../packages
 import { selectionScope } from "../../../../../packages/database/src/selection-scope.js";
 import { selectionLayoutSchema, selectionSharedLayoutSchema, applySelectionSharedLayout, mergeSelectionFields, selectionInitialColumnWidth, type SelectionField, type SelectionLayout } from "../../../../../packages/contracts/src/selection-layout.js";
 import { selectionBaseFields } from "../../../../../packages/contracts/src/selection-migration.js";
-import { selectionImportHeader, selectionImportTemplateFields } from "../../../../../packages/contracts/src/selection-import-template.js";
+import { selectionImportHeader, selectionImportTemplateFields, selectionImportLimits } from "../../../../../packages/contracts/src/selection-import-template.js";
 import { archiveTableFields, archiveChoiceColumns } from "../../../../../packages/contracts/src/product-archive-table.js";
 import { fieldValueError, joinChoiceValues, splitChoiceValues } from "../../../../../packages/contracts/src/selection-field-validation.js";
 import { audit, canonical, command, fail, parse, requirePermission, type Context } from "../../core.js";
@@ -16,6 +16,7 @@ import * as protection from "./protection.js";
 import { persist, styleSelectionInput } from "./service.js";
 
 const strategySchema = z.enum(["OVERWRITE", "SKIP"]).default("SKIP");
+const importTransactionTimeout = 600_000;
 const readonlyTypes = new Set(["creator", "modifier", "createdTime", "modifiedTime", "autonumber"]);
 const bindingSchema = z.object({ header: z.string().min(1).max(40), key: z.string().min(1).max(100), label: z.string().min(1).max(40), type: z.string().max(30), isNew: z.boolean() }).strict();
 type Binding = z.infer<typeof bindingSchema>;
@@ -28,7 +29,7 @@ function importValuesSchema() {
   return styleSelectionInput.pick({ registrationBatch: true, images: true, labelImages: true, xutiStyleNo: true,
     supplierStyleNo: true, supplierCode: true, color: true, sizeRange: true, material: true,
     supplyPriceExclTax: true, vipPrice: true, livePrice: true, tagPrice: true }).partial()
-    .extend({ xutiStyleNo: z.string().trim().min(1).max(64), fieldValues: z.record(z.string().trim().min(1).max(40), z.string().max(100000)).refine(value => Object.keys(value).length <= 500).optional() }).strict();
+    .extend({ xutiStyleNo: z.string().trim().min(1).max(64), fieldValues: z.record(z.string().trim().min(1).max(40), z.string().max(100000)).refine(value => Object.keys(value).length <= selectionImportLimits.maxColumns).optional() }).strict();
 }
 function importPatch(input: Row): Row {
   const parsed = parse<Row>(importValuesSchema(), input);
@@ -81,6 +82,7 @@ function resolveBindings(c: Context, snapshot: Snapshot, values: Row[]): { bindi
     return field ? [field.label] : [];
   }));
   const headers = [...new Set([...flatHeaders, ...values.flatMap(value => Object.keys(value.fieldValues || {}))])];
+  if (headers.length > selectionImportLimits.maxColumns) fail("VALIDATION_ERROR", `每批最多${selectionImportLimits.maxColumns}列，请减少导入字段`, 400);
   const templateOrder = new Map(selectionImportTemplateFields.map((field, index) => [field.label, index]));
   headers.sort((a, b) => (templateOrder.get(a) ?? 999) - (templateOrder.get(b) ?? 999));
   const definitions: SelectionField[] = [];
@@ -183,8 +185,21 @@ async function match(tx: Tx, archive: boolean, value: Row) {
   const product = archive ? await one(tx, "SELECT * FROM public.products WHERE btrim(style_no)=$1", value.xutiStyleNo) : undefined;
   return { before, product };
 }
+async function matchAll(tx: Tx, archive: boolean, values: Row[]) {
+  const numbers = values.map(value => value.xutiStyleNo);
+  const sheet = await rows(tx, "SELECT * FROM style_selections WHERE btrim(xuti_style_no)=ANY($1::text[])", numbers);
+  const products = archive ? await rows(tx, "SELECT * FROM public.products WHERE btrim(style_no)=ANY($1::text[])", numbers) : [];
+  const byNumber = new Map<string, Row>();
+  for (const before of sheet) {
+    const number = before.xuti_style_no.trim();
+    if (byNumber.has(number)) fail("VALIDATION_ERROR", `系统中款号「${number}」有多条记录，请先核对`, 400);
+    byNumber.set(number, before);
+  }
+  const byProduct = new Map(products.map(product => [product.style_no.trim(), product]));
+  return values.map(value => ({ before: byNumber.get(value.xutiStyleNo), product: byProduct.get(value.xutiStyleNo) }));
+}
 async function makePlan(tx: Tx, c: Context, archive: boolean, snapshot: Snapshot, values: Row[], strategy: "OVERWRITE" | "SKIP") {
-  const matched = await Promise.all(values.map(value => match(tx, archive, value)));
+  const matched = await matchAll(tx, archive, values);
   const actionable = values.filter((value, index) => !matched[index].before && !matched[index].product || strategy === "OVERWRITE" && Object.keys(value).some(key => key !== "xutiStyleNo"));
   const { bindings, definitions } = resolveBindings(c, snapshot, actionable);
   const virtual: protection.Policy = { ...snapshot.policy,
@@ -218,22 +233,22 @@ function fieldsLabel(snapshot: Snapshot, bindings: Binding[], key: string) { ret
 
 export async function previewImport(c: Context, input: unknown) {
   requirePermission(c.actor, "selection.manage");
-  const body = parse(z.object({ rows: z.array(z.record(z.string(), z.unknown())).min(1).max(500), existingStrategy: strategySchema }).strict(), input);
+  const body = parse(z.object({ rows: z.array(z.record(z.string(), z.unknown())).min(1).max(selectionImportLimits.maxRows), existingStrategy: strategySchema }).strict(), input);
   const values = body.rows.map(importPatch); distinctStyles(values);
   return db.$transaction(async tx => {
     const archive = await isArchive(tx), snapshot = await importLayout(tx, c, archive);
     const { definitions: _definitions, ...plan } = await makePlan(tx, c, archive, snapshot, values, body.existingStrategy);
     return { ...plan, existingStrategy: body.existingStrategy, fieldRevision: snapshot.fieldRevision, layoutRevision: snapshot.revision };
-  }, { isolationLevel: "RepeatableRead", timeout: 15000 });
+  }, { isolationLevel: "RepeatableRead", timeout: importTransactionTimeout });
 }
 
 export async function commitImport(c: Context, input: unknown) {
   requirePermission(c.actor, "selection.manage");
   const plannedRow = z.object({ values: importValuesSchema(), id: z.string().regex(/^[1-9]\d*$/).nullable(), expectedUpdatedAt: z.iso.datetime().nullable(),
     productId: z.string().regex(/^[1-9]\d*$/).nullable().optional(), expectedProductUpdatedAt: z.iso.datetime().nullable().optional(),
-    operation: z.enum(["CREATE", "UPDATE", "SKIP"]).optional(), changedFields: z.array(z.string().max(100)).max(500).optional() }).strict();
-  const body = parse(z.object({ rows: z.array(plannedRow).min(1).max(500), existingStrategy: strategySchema,
-    fields: z.array(bindingSchema).max(500).optional(), fieldRevision: z.string().regex(/^[a-f0-9]{32}$/).optional(), layoutRevision: z.number().int().min(0).optional() }).strict(), input);
+    operation: z.enum(["CREATE", "UPDATE", "SKIP"]).optional(), changedFields: z.array(z.string().max(100)).max(selectionImportLimits.maxColumns).optional() }).strict();
+  const body = parse(z.object({ rows: z.array(plannedRow).min(1).max(selectionImportLimits.maxRows), existingStrategy: strategySchema,
+    fields: z.array(bindingSchema).max(selectionImportLimits.maxColumns).optional(), fieldRevision: z.string().regex(/^[a-f0-9]{32}$/).optional(), layoutRevision: z.number().int().min(0).optional() }).strict(), input);
   const values = body.rows.map(row => importPatch(row.values)); distinctStyles(values);
   return command(c, "style-selections/import", body, async tx => {
     const archive = await isArchive(tx);
@@ -277,5 +292,5 @@ export async function commitImport(c: Context, input: unknown) {
       await persist(tx, c, patch, id || undefined);
     }
     return { created: plan.created, updated: plan.updated, skipped: plan.skipped, fieldsCreated: plan.definitions.length };
-  });
+  }, { timeout: importTransactionTimeout });
 }

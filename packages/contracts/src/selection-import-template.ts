@@ -1,5 +1,13 @@
 import type { SelectionField } from "./selection-layout.js";
 
+/** Keep workbook validation, upload hints and API batch limits in sync. */
+export const selectionImportLimits = {
+  maxFileBytes: 200 * 1024 * 1024,
+  maxRows: 5000,
+  maxColumns: 500,
+  requestBodyBytes: 200 * 1024 * 1024,
+} as const;
+
 /** Workbook labels are stable input names, never client-selected storage keys. */
 export type SelectionImportTemplateField = {
   label: string;

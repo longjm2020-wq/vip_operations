@@ -5,11 +5,13 @@ import { useSelectionWorkspace } from "./selection-workspace";
 import { downloadSelectionWorkbook, parseSelectionWorkbook } from "./selection-workbook";
 import { downloadVisibleSelectionWorkbook, visibleSelectionWorkbookFields } from "./selection-visible-workbook";
 import { selectionLayoutSnapshotSchema, type SelectionField } from "../../../packages/contracts/src/selection-layout.js";
+import { selectionImportLimits } from "../../../packages/contracts/src/selection-import-template.js";
 import { prepareUpload, readUpload } from "./upload-file";
 import type { Row } from "./shared";
 
 export { fetchSelectionRows } from "./selection-data";
 import { fetchSelectionRows } from "./selection-data";
+const importFileLimitMb = selectionImportLimits.maxFileBytes / (1024 * 1024);
 
 type ExistingStrategy = "OVERWRITE" | "SKIP";
 type ImportPreviewRow = {
@@ -56,6 +58,8 @@ export function SelectionTransfer({ canEdit, blocked, selectedRows, filteredRows
   const [existingStrategy, setExistingStrategy] = useState<ExistingStrategy | null>(null);
   const key = useRef("");
   const download = async (template: boolean) => {
+    if (busy || loadLock.current) return;
+    loadLock.current = true;
     setBusy(true); setError(""); setResult("");
     try {
       if (template) { await downloadSelectionWorkbook([], true); return; }
@@ -78,7 +82,7 @@ export function SelectionTransfer({ canEdit, blocked, selectedRows, filteredRows
       }
       await downloadVisibleSelectionWorkbook(records, exportColumns, title, { archiveReferences });
     } catch (e) { if (template) setError((e as Error).message); else message.error((e as Error).message); }
-    finally { setBusy(false); }
+    finally { loadLock.current = false; setBusy(false); }
   };
   const preview = async (source: Row[], strategy: ExistingStrategy) => {
     if (!(await ensureLayoutSaved())) throw Error("请先处理未保存或冲突的字段设置，再导入");
@@ -101,7 +105,7 @@ export function SelectionTransfer({ canEdit, blocked, selectedRows, filteredRows
     loadLock.current = true;
     setOpen(true); setBusy(true); setError(""); setResult(""); setPlan(null); setRecords(null); setFileName("");
     try {
-      if (!/\.xlsx$/i.test(file.name) || file.size > 20 * 1024 * 1024) throw Error("请选择不超过 20 MB 的 .xlsx 文件");
+      if (!/\.xlsx$/i.test(file.name) || file.size > selectionImportLimits.maxFileBytes) throw Error(`请选择不超过 ${importFileLimitMb} MB 的 .xlsx 文件`);
       const parsed = await parseSelectionWorkbook(await file.arrayBuffer());
       setRecords(parsed); setFileName(file.name);
       if (existingStrategy) await preview(parsed, existingStrategy);
@@ -132,9 +136,9 @@ export function SelectionTransfer({ canEdit, blocked, selectedRows, filteredRows
     finally { loadLock.current = false; setBusy(false); }
   };
   const closeImport = () => { if (busy || loadLock.current) return; setOpen(false); setPlan(null); setRecords(null); setFileName(""); setExistingStrategy(null); };
-  const openImport = () => { setPlan(null); setRecords(null); setFileName(""); setExistingStrategy(null); setError(""); setResult(""); setOpen(true); };
+  const openImport = () => { if (busy || loadLock.current) return; setPlan(null); setRecords(null); setFileName(""); setExistingStrategy(null); setError(""); setResult(""); setOpen(true); };
   return <><Space size={8}>
-    <Dropdown trigger={["click"]} disabled={busy} menu={{ items: [{ key: "excel", label: "从 Excel 导入商品", disabled: !canEdit || blocked }, { key: "template", label: "下载模板" }], onClick: ({ key }) => { openImport(); if (key === "template") void download(true); } }}><Button aria-label="导入" disabled={busy} icon={<DownloadOutlined />}>导入 <DownOutlined /></Button></Dropdown>
+    <Dropdown trigger={["click"]} disabled={busy} menu={{ items: [{ key: "excel", label: "从 Excel 导入商品" }], onClick: openImport }}><Button aria-label="导入" disabled={busy} icon={<DownloadOutlined />}>导入 <DownOutlined /></Button></Dropdown>
     <Tooltip title={blocked ? "请先处理未保存的修改" : selectedRows.length ? `导出勾选的 ${selectedRows.length} 款` : "导出当前筛选下的全部款式"}><Dropdown trigger={["click"]} disabled={busy || blocked} menu={{ items: [{ key: "excel", label: "导出 Excel" }], onClick: () => { void download(false); } }}><Button aria-label="导出" disabled={busy || blocked} icon={<UploadOutlined />}>导出 <DownOutlined /></Button></Dropdown></Tooltip>
   </Space>
     <Modal title="从 Excel 导入商品" width={960} open={open} maskClosable={!busy} closable={!busy} keyboard={!busy} onCancel={closeImport} footer={<Space><Button disabled={busy} onClick={closeImport}>关闭</Button>{plan && <Button type="primary" loading={busy} disabled={!canEdit || blocked} onClick={() => void commit()}>确认导入</Button>}</Space>}>
@@ -150,7 +154,7 @@ export function SelectionTransfer({ canEdit, blocked, selectedRows, filteredRows
       <Upload.Dragger className="selection-import-upload" accept=".xlsx" multiple={false} showUploadList={false} disabled={!canEdit || busy || blocked} beforeUpload={file => { void load(file); return false; }}>
         <p className="ant-upload-drag-icon"><InboxOutlined /></p>
         <p className="ant-upload-text">点击或拖拽 Excel 文件到这里上传</p>
-        <p className="ant-upload-hint">仅支持 .xlsx 文件，不超过 20 MB，每次最多 500 款</p>
+        <p className="ant-upload-hint">仅支持 .xlsx 文件，不超过 {importFileLimitMb} MB，每次最多 {selectionImportLimits.maxRows} 款</p>
       </Upload.Dragger>
       {(!canEdit || blocked) && <p>{!canEdit ? "当前账号仅可下载模板，导入资料需要编辑权限。" : "请先处理表格中未保存的修改，再上传文件。"}</p>}
       {busy && !plan && <p>正在处理表格资料…</p>}

@@ -7,6 +7,7 @@ import { defaultProtection } from "../../packages/contracts/src/selection-protec
 import { selectionBaseFields } from "../../packages/contracts/src/selection-migration.js";
 import { selectionLayoutSchema, type SelectionField } from "../../packages/contracts/src/selection-layout.js";
 import { archiveFieldIds } from "../../packages/contracts/src/product-archive.js";
+import { selectionImportLimits } from "../../packages/contracts/src/selection-import-template.js";
 
 const fixture = vi.hoisted(() => ({ database: null as PGlite | null, archive: false, mirrors: [] as Row[] }));
 vi.mock("../../packages/database/src/index.js", async importOriginal => {
@@ -88,6 +89,21 @@ beforeEach(async () => {
 afterAll(async () => { await fixture.database?.close(); });
 
 describe("atomic Excel style import", () => {
+  it("previews and atomically commits 5000 styles, rejecting 5001 before any writes", async () => {
+    const inputRows = Array.from({ length: selectionImportLimits.maxRows }, (_, index) => ({ xutiStyleNo: `LIMIT-${index}`, material: "棉" }));
+    const previewStart = performance.now();
+    const plan = await previewImport(actor("large-batch"), input(inputRows));
+    const previewMs = Math.round(performance.now() - previewStart);
+    expect(plan.rows).toHaveLength(5000);
+    expect(plan.created).toBe(5000);
+    await expect(previewImport(actor("over-limit"), input([...inputRows, { xutiStyleNo: "LIMIT-5001" }]))).rejects.toMatchObject({ status: 400 });
+    await expect(commitImport(actor("over-limit"), { ...payload(plan), rows: [...plan.rows, { ...plan.rows[0], values: { xutiStyleNo: "LIMIT-5001" } }] })).rejects.toMatchObject({ status: 400 });
+    expect(await read("SELECT * FROM style_selections")).toHaveLength(0);
+    const commitStart = performance.now();
+    expect(await commitImport(actor("large-batch"), payload(plan))).toMatchObject({ created: 5000, updated: 0 });
+    expect((await read("SELECT count(*)::int AS count FROM style_selections"))[0].count).toBe(5000);
+    process.stdout.write(`Synthetic PGlite 5000 styles: preview ${previewMs}ms, commit ${Math.round(performance.now() - commitStart)}ms, preview JSON ${Buffer.byteLength(JSON.stringify(plan))} bytes\n`);
+  }, 180000);
   it("updates only provided nonblank columns, including zero, while retaining extras and creation time", async () => {
     const existing = field("短标题"), untouched = field("备注");
     await register(existing); await register(untouched);

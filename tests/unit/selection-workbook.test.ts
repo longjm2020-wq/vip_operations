@@ -1,7 +1,7 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import Excel from "exceljs";
 import { createSelectionWorkbook, parseSelectionWorkbook, prepareSelectionWorkbookRecords } from "../../apps/web/src/selection-workbook.js";
-import { selectionImportHeader, selectionImportTemplateFields } from "../../packages/contracts/src/selection-import-template.js";
+import { selectionImportHeader, selectionImportLimits, selectionImportTemplateFields } from "../../packages/contracts/src/selection-import-template.js";
 const bytes = async (book: Awaited<ReturnType<typeof createSelectionWorkbook>>) => await book.xlsx.writeBuffer() as unknown as ArrayBuffer;
 async function partialWorkbook(headers: string[], records: unknown[][]) {
   const book = new Excel.Workbook();
@@ -41,6 +41,8 @@ describe("selection workbook", () => {
     expect(notes).toContain("覆盖更新或跳过不覆盖");
     expect(notes).toContain("任意一列或多列");
     expect(notes).toContain("新自定义字段默认排在模板默认字段之后");
+    expect(notes).toContain("最多 5000 款、文件 200 MB");
+    expect(notes).toContain("仅有格式的空白行不计入款数");
     const reloaded = new Excel.Workbook();
     await reloaded.xlsx.load(await bytes(book));
     expect(JSON.stringify(reloaded.getWorksheet("选款资料")!.getCell("A1").note)).toContain("系统只读字段");
@@ -62,6 +64,34 @@ describe("selection workbook", () => {
     expect(await parseSelectionWorkbook(await bytes(one))).toEqual([{ xutiStyleNo: "001", livePrice: "0" }, { xutiStyleNo: "002" }]);
     const many = await partialWorkbook(["短标题", "序缇款号", "材质成分", "自定义备注"], [["短标题", "003", "100%棉", "仅更新这几列"], ["", "004", "", ""]]);
     expect(await parseSelectionWorkbook(await bytes(many))).toEqual([{ xutiStyleNo: "003", material: "100%棉", fieldValues: { "短标题": "短标题", "自定义备注": "仅更新这几列" } }, { xutiStyleNo: "004" }]);
+  });
+  it("parses 5000 actual XLSX styles without counting blank or format-only rows and rejects the 5001st style", async () => {
+    expect(selectionImportLimits.maxRows).toBe(5000);
+    const records = Array.from({ length: selectionImportLimits.maxRows }, (_, index) => [`IMPORT-${String(index + 1).padStart(4, "0")}`, 0]);
+    records.splice(3, 0, ["", ""], [" ", " "]);
+    const book = await partialWorkbook(["序缇款号", "直播价"], records), sheet = book.getWorksheet("选款资料")!;
+    sheet.getRow(50000).height = 26;
+    const parsed = await parseSelectionWorkbook(await bytes(book));
+    expect(parsed).toHaveLength(5000);
+    expect(parsed[0]).toEqual({ xutiStyleNo: "IMPORT-0001", livePrice: "0" });
+    expect(parsed[4999]).toEqual({ xutiStyleNo: "IMPORT-5000", livePrice: "0" });
+    sheet.getRow(50001).getCell(1).value = "IMPORT-5001";
+    await expect(parseSelectionWorkbook(await bytes(book))).rejects.toThrow("最多 5000 款");
+  });
+  it("checks the 200MB file boundary before XLSX loading without allocating a giant workbook", async () => {
+    expect(selectionImportLimits.maxFileBytes).toBe(200 * 1024 * 1024);
+    const load = vi.fn().mockRejectedValue(Error("XLSX loading reached"));
+    const xlsx = vi.spyOn(Excel.Workbook.prototype, "xlsx", "get").mockReturnValue({ load } as unknown as Excel.Workbook["xlsx"]);
+    try {
+      // Only byteLength is inspected before the loader: small stubs exercise the byte guard independently.
+      for (const byteLength of [selectionImportLimits.maxFileBytes - 1, selectionImportLimits.maxFileBytes]) {
+        const buffer = { byteLength } as ArrayBuffer;
+        await expect(parseSelectionWorkbook(buffer)).rejects.toThrow("XLSX loading reached");
+        expect(load).toHaveBeenLastCalledWith(buffer);
+      }
+      await expect(parseSelectionWorkbook({ byteLength: selectionImportLimits.maxFileBytes + 1 } as ArrayBuffer)).rejects.toThrow("文件不能超过 200 MB");
+      expect(load).toHaveBeenCalledTimes(2);
+    } finally { xlsx.mockRestore(); }
   });
   it("requires a style even when only creation time, a custom value or zero was filled and rejects formulas in ignored time cells", async () => {
     for (const [header, value] of [["创建时间", "2026-10-11"], ["自定义字段", "内容"], ["直播价", 0]] as const) {
