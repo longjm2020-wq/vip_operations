@@ -13,7 +13,7 @@ import {
 } from "../../../packages/contracts/src/compass-analytics.js";
 import { isCompassBrowserOrigin } from "../../../packages/contracts/src/compass-update.js";
 
-export const compassSourceUrl = "https://compass.vip.com/";
+export const compassSourceUrl = "https://vis.vip.com/index.php#/homepage";
 export const compassReportTitles: Record<CompassDimension, string> = {
   style: "按款号（近30天）",
   article: "按货号（近30天）",

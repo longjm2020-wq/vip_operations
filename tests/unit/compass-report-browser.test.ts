@@ -8,6 +8,7 @@ import {
   checkCompassLogin,
   cleanupCompassDownloads,
   compassReportTitles,
+  compassSourceUrl,
   compassVisibleRange,
   downloadCompassReports,
 } from "../../apps/worker/src/compass-report-browser.js";
@@ -85,11 +86,20 @@ async function fixture(html: string, download = originalCsv) {
   });
   const page = await context.newPage();
   pages.push(page);
-  await page.goto("https://compass.vip.com/");
+  await page.goto(compassSourceUrl);
   return page;
 }
 
 describe("Compass official browser reports", () => {
+  it("enters through the observed supplier homepage and follows its visible Compass link to a real catalogue", async () => {
+    const page = await fixture('<h1>供应商平台</h1><a target="_blank" href="https://compass.vip.com/fixture-reports">魔方罗盘</a>');
+    await page.context().route("https://compass.vip.com/fixture-reports", route => route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", body: reportPage() }));
+    const navigations: string[] = [];
+    page.on("framenavigated", frame => { if (frame === page.mainFrame()) navigations.push(frame.url()); });
+    expect(await checkCompassLogin(page)).toMatchObject({ verified: true, reason: "READY" });
+    expect(navigations).toContain(compassSourceUrl);
+    expect(page.context().pages().some(candidate => new URL(candidate.url()).hostname === "compass.vip.com")).toBe(true);
+  }, 15000);
   it("does not verify a supplier watermark or an embedded passport login", async () => {
     const watermark = await fixture("<div>供应商平台 水印</div>");
     expect(

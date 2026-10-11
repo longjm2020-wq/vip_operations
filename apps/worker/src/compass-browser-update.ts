@@ -8,7 +8,7 @@ import { beginImport, appendImport, finishImport } from "../../api/src/modules/a
 import type { Context } from "../../api/src/core.js";
 import { compassEncryptionReady, decryptCompassState, encryptCompassState, encryptCompassLoginDraft, decryptCompassLoginDraft } from "./compass-browser-state.js";
 import { readCompassDownload, StaleCompassReportError } from "./compass-report-import.js";
-import { checkCompassLogin, openCompassReports, downloadCompassReports, cleanupCompassDownloads, CompassBrowserError } from "./compass-report-browser.js";
+import { checkCompassLogin, openCompassReports, downloadCompassReports, cleanupCompassDownloads, CompassBrowserError, compassSourceUrl } from "./compass-report-browser.js";
 
 const activeLogin = "('QUEUED','RUNNING','WAITING','CHECKING')";
 const pause = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
@@ -19,13 +19,13 @@ type CompassLoginStage = "OPEN_LOGIN" | "WAITING_ACTION" | "APPLY_ACTION" | "VER
 export function compassLoginDiagnostic(error: unknown, stage: CompassLoginStage, pageUrl: string, rejectedHost?: string) {
   const value = error instanceof Error ? error : null;
   const message = value?.message ?? "";
-  const category = rejectedHost ? "ORIGIN_REJECTED" :
-    value?.name === "TimeoutError" || /timed?\s*out|timeout/i.test(message) ? "TIMEOUT" :
-    /(?:page|context|browser).{0,25}(?:closed|closing)|Target closed/i.test(message) ? "PAGE_CLOSED" :
-    /frame.{0,30}detach|execution context.{0,30}destroy|cannot find context|navigation.{0,25}(?:progress|interrupt|supersed)|net::ERR_ABORTED|page.{0,25}navigating/i.test(message) ? "NAVIGATION_CHANGED" : "READ_FAILED";
   let hostname = "unknown";
   try { hostname = new URL(pageUrl).hostname; } catch { /* Diagnostic metadata only. */ }
   const host = rejectedHost ?? hostname;
+  const category = host === "err.vip.com" ? "PLATFORM_ERROR" : rejectedHost ? "ORIGIN_REJECTED" :
+    value?.name === "TimeoutError" || /timed?\s*out|timeout/i.test(message) ? "TIMEOUT" :
+    /(?:page|context|browser).{0,25}(?:closed|closing)|Target closed/i.test(message) ? "PAGE_CLOSED" :
+    /frame.{0,30}detach|execution context.{0,30}destroy|cannot find context|navigation.{0,25}(?:progress|interrupt|supersed)|net::ERR_ABORTED|page.{0,25}navigating/i.test(message) ? "NAVIGATION_CHANGED" : "READ_FAILED";
   return { stage, category, hostname: /^[a-z0-9.-]{1,253}$/i.test(host) ? host : "unknown" };
 }
 function compassNavigationRace(error: unknown) {
@@ -132,7 +132,7 @@ export async function processCompassLogin(browserLaunch: () => Promise<Browser> 
     let page = await context.newPage();
     diagnosticPage = page;
     await configureCompassPage(page);
-    try { await page.goto("https://compass.vip.com/", { waitUntil: "domcontentloaded", timeout: 30000 }); }
+    try { await page.goto(compassSourceUrl, { waitUntil: "domcontentloaded", timeout: 30000 }); }
     catch (error) {
       if (!compassNavigationRace(error)) throw error;
       // An SSO redirect may supersede the entry navigation. Reuse its actual
@@ -226,7 +226,7 @@ export async function processCompassLogin(browserLaunch: () => Promise<Browser> 
           });
           if (stored) return;
           break;
-        } else if (input.kind === "REFRESH") { await page.goto("https://compass.vip.com/", { waitUntil: "domcontentloaded", timeout: 30000 }); await update("已重新打开官方登录入口，请扫码后核验"); }
+        } else if (input.kind === "REFRESH") { await page.goto(compassSourceUrl, { waitUntil: "domcontentloaded", timeout: 30000 }); await update("已重新打开官方供应商入口，可继续登录后核验"); }
         else if (input.kind === "CLICK") await page.mouse.click(input.point.x * compassBrowserViewport.width, input.point.y * compassBrowserViewport.height);
         else if (input.kind === "SCROLL") await page.mouse.wheel(0, input.deltaY);
         } catch (error) { await recover(error); continue; }
@@ -258,7 +258,7 @@ export async function processCompassLogin(browserLaunch: () => Promise<Browser> 
     // Capture a final SSO transition when possible. The transaction still
     // requires the active claim and actor, so cancellation/disconnect cannot
     // resurrect it even if this bounded attempt finishes after the failure.
-    if (loginContext && !signal?.aborted) {
+    if (loginContext && !signal?.aborted && loginContext.pages().some(candidate => !candidate.isClosed() && isCompassBrowserOrigin(candidate.url()))) {
       let checkpointTimer: ReturnType<typeof setTimeout> | undefined;
       try {
         await Promise.race([
@@ -269,7 +269,8 @@ export async function processCompassLogin(browserLaunch: () => Promise<Browser> 
       finally { if (checkpointTimer) clearTimeout(checkpointTimer); }
     }
     const diagnostic = compassLoginDiagnostic(error, stage, diagnosticPage?.url() ?? "", loginContext ? rejectedCompassHosts.get(loginContext) : undefined);
-    const reason = diagnostic.category === "ORIGIN_REJECTED" ? `罗盘跳转到尚未支持的站点 ${diagnostic.hostname}` :
+    const reason = diagnostic.category === "PLATFORM_ERROR" ? "罗盘平台入口返回错误页" :
+      diagnostic.category === "ORIGIN_REJECTED" ? `罗盘跳转到尚未支持的站点 ${diagnostic.hostname}` :
       diagnostic.category === "TIMEOUT" ? "罗盘页面加载或读取超时" :
       diagnostic.category === "PAGE_CLOSED" || diagnostic.category === "NAVIGATION_CHANGED" ? "罗盘页面跳转中断" : "罗盘页面读取失败";
     const note = `${reason}，可重新打开登录继续本人未过期的进度；尚未核验成功，原有数据保留`;

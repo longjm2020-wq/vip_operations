@@ -20,6 +20,7 @@ vi.mock("../../apps/api/src/modules/analytics/service.js", () => ({ beginImport:
 vi.mock("../../apps/worker/src/compass-browser-state.js", () => ({ compassEncryptionReady: () => helpers.ready, decryptCompassState: helpers.decrypt, encryptCompassState: helpers.encrypt, decryptCompassLoginDraft: helpers.draftDecrypt, encryptCompassLoginDraft: helpers.draftEncrypt }));
 vi.mock("../../apps/worker/src/compass-report-import.js", () => ({ readCompassDownload: helpers.read, StaleCompassReportError: helpers.StaleReportError }));
 vi.mock("../../apps/worker/src/compass-report-browser.js", () => ({
+  compassSourceUrl: "https://vis.vip.com/index.php#/homepage",
   checkCompassLogin: helpers.check, openCompassReports: helpers.open, downloadCompassReports: helpers.download,
   cleanupCompassDownloads: helpers.cleanup, CompassBrowserError: helpers.BrowserError,
 }));
@@ -412,6 +413,7 @@ describe("interactive login completion", () => {
     const browser = createBrowser();
     await processCompassLogin(browser.launch);
     expect(browser.browser.newContext).toHaveBeenCalledTimes(2);
+    expect(browser.contexts[0].fixturePage.goto).toHaveBeenCalledWith("https://vis.vip.com/index.php#/homepage", expect.any(Object));
     expect(helpers.check).toHaveBeenCalledTimes(2);
     expect(helpers.encrypt).toHaveBeenCalledWith(state);
     expect(database.db.$executeRawUnsafe.mock.calls.some(([sql]) => String(sql).includes("status='SAVED'"))).toBe(true);
@@ -587,6 +589,7 @@ describe("interactive login completion", () => {
     await vi.advanceTimersByTimeAsync(1);
     const page = browser.contexts[0].fixturePage;
     const control = kind === "REFRESH" ? page.goto : page.mouse[kind === "CLICK" ? "click" : "wheel"];
+    if (kind === "REFRESH") expect(page.goto.mock.calls.map(([url]: [string]) => url)).toEqual(["https://vis.vip.com/index.php#/homepage", "https://vis.vip.com/index.php#/homepage"]);
     const firstDraftWrite = database.db.$executeRawUnsafe.mock.calls.findIndex(([sql]) => String(sql).startsWith("UPDATE compass_session SET draft_encrypted_state=$1"));
     const controlOrder = control.mock.invocationCallOrder[kind === "REFRESH" ? 1 : 0];
     expect(database.db.$executeRawUnsafe.mock.invocationCallOrder[firstDraftWrite]).toBeLessThan(controlOrder);
@@ -653,6 +656,23 @@ describe("interactive login completion", () => {
     const diagnostic = compassLoginDiagnostic(Error("password=SECRET token=SECRET full stack"), "VERIFY_LOGIN", "https://name:SECRET@vis.vip.com/?token=SECRET", "unrecognized.vip.com");
     expect(diagnostic).toEqual({ stage: "VERIFY_LOGIN", category: "ORIGIN_REJECTED", hostname: "unrecognized.vip.com" });
     expect(JSON.stringify(diagnostic)).not.toContain("SECRET");
+  });
+
+  it("identifies the platform error redirect without allowing its hostname or logging its query", () => {
+    expect(compassLoginDiagnostic(Error("Target page has been closed SECRET"), "WAITING_ACTION", "https://err.vip.com/?token=SECRET")).toEqual({ stage: "WAITING_ACTION", category: "PLATFORM_ERROR", hostname: "err.vip.com" });
+  });
+
+  it("preserves the last good draft when the restored browser is redirected entirely to a platform error page", async () => {
+    loginQueued = true; hasQueued = false; actionPending = false;
+    draftState = { draft_encrypted_state: "last-good-draft", draft_actor_id: "17", draft_login_id: "84e1c739-04d9-43f5-a4b3-65c1efb5ce3e", draft_expires_at: new Date(Date.now() + 60000) };
+    const browser = createBrowser(page => { page.url = () => "https://err.vip.com/?token=SECRET"; });
+    const run = processCompassLogin(browser.launch);
+    await vi.advanceTimersByTimeAsync(4500); await run;
+    expect(helpers.draftEncrypt).not.toHaveBeenCalled();
+    expect(draftState?.draft_encrypted_state).toBe("last-good-draft");
+    expect(console.warn).toHaveBeenCalledWith(JSON.stringify({ event: "compass_login_stopped", stage: "WAITING_ACTION", category: "PLATFORM_ERROR", hostname: "err.vip.com" }));
+    const failed = database.db.$executeRawUnsafe.mock.calls.find(([sql]) => String(sql).includes("status='FAILED'"));
+    expect(failed?.[3]).toContain("平台入口返回错误页");
   });
 });
 
