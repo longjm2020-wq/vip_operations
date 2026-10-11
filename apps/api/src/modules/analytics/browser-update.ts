@@ -30,6 +30,8 @@ export async function expireCompassTasks(tx: Tx = db) {
     WHERE status IN ${activeJobs} AND (deadline_at<=now() OR
       (status='QUEUED' AND requested_at<now()-interval '2 minutes') OR
       (status='RUNNING' AND (heartbeat_at IS NULL OR heartbeat_at<now()-interval '5 minutes')))`);
+  await tx.$executeRawUnsafe(`UPDATE compass_session SET draft_encrypted_state=NULL,draft_actor_id=NULL,
+    draft_login_id=NULL,draft_expires_at=NULL WHERE id=1 AND draft_expires_at<=now()`);
   await tx.$executeRawUnsafe("DELETE FROM compass_login_actions WHERE completed_at<now()-interval '10 minutes'");
   await tx.$executeRawUnsafe(`DELETE FROM compass_logins WHERE status NOT IN ${activeLogins} AND requested_at<now()-interval '1 day'`);
 }
@@ -179,6 +181,10 @@ export async function openCompassLogin(c: Context) {
     }
     const loginId = randomUUID();
     await tx.$executeRawUnsafe("INSERT INTO compass_logins(id,actor_id,note) VALUES($1::uuid,$2::bigint,'正在准备后台罗盘登录页面')", loginId, c.actor.id);
+    // A draft is private progress, not a verified session. Moving its ownership
+    // to a replacement window keeps the original absolute expiration intact.
+    await tx.$executeRawUnsafe(`UPDATE compass_session SET draft_login_id=$1::uuid
+      WHERE id=1 AND draft_actor_id=$2::bigint AND draft_encrypted_state IS NOT NULL AND draft_expires_at>now()`, loginId, c.actor.id);
     await tx.$executeRawUnsafe("UPDATE compass_session SET enabled=true,updated_by=$1::bigint WHERE id=1", c.actor.id);
     await audit(tx, c, "COMPASS_BROWSER_OPEN", "compass_login", null, null, { loginId, status: "QUEUED" });
     return { id: loginId };
@@ -212,9 +218,12 @@ export async function compassLoginAction(c: Context, value: string, input: unkno
 export async function cancelCompassLogin(c: Context, value: string) {
   requirePermission(c.actor, "analytics.manage");
   return command(c, "compass.browser.cancel", { id: value }, async tx => {
+    await rows(tx, "SELECT pg_advisory_xact_lock($1)::text", compassBrowserLock);
     const row = await ownedLogin(c, value, tx);
-    await tx.$executeRawUnsafe(`UPDATE compass_logins SET status='CANCELLED',frame_jpeg=NULL,frame_id=NULL,completed_at=now(),
+    await tx.$executeRawUnsafe(`UPDATE compass_logins SET status='CANCELLED',claim_token=NULL,frame_jpeg=NULL,frame_id=NULL,completed_at=now(),
       note='后台登录已取消' WHERE id=$1::uuid AND status IN ${activeLogins}`, row.id);
+    await tx.$executeRawUnsafe(`UPDATE compass_session SET draft_encrypted_state=NULL,draft_actor_id=NULL,
+      draft_login_id=NULL,draft_expires_at=NULL WHERE id=1 AND draft_login_id=$1::uuid`, row.id);
     await tx.$executeRawUnsafe("DELETE FROM compass_login_actions WHERE login_id=$1::uuid", row.id);
     return { cancelled: true };
   });
@@ -226,6 +235,7 @@ export async function disconnectCompassSession(c: Context) {
     await rows(tx, "SELECT pg_advisory_xact_lock($1)::text", compassBrowserLock);
     await tx.$executeRawUnsafe(`UPDATE compass_session SET enabled=false,status='DISCONNECTED',encrypted_state=NULL,
       state_version=state_version+1,saved_at=NULL,checked_at=NULL,auto_update_enabled=false,
+      draft_encrypted_state=NULL,draft_actor_id=NULL,draft_login_id=NULL,draft_expires_at=NULL,
       note='后台会话已断开，请重新登录',updated_by=$1::bigint WHERE id=1`, c.actor.id);
     await tx.$executeRawUnsafe(`UPDATE compass_logins SET status='CANCELLED',frame_jpeg=NULL,frame_id=NULL,
       completed_at=now(),note='后台会话已断开' WHERE status IN ${activeLogins}`);

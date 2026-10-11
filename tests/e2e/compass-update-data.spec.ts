@@ -12,6 +12,7 @@ async function fixture(
     loginStatus = "WAITING",
     scheduleEnabled = false,
     starts = 0,
+    cancels = 0,
     dashboardReads = 0;
   const actions: Record<string, unknown>[] = [],
     schedules: boolean[] = [],
@@ -121,6 +122,7 @@ async function fixture(
       data = { queued: true };
     }
     if (path.endsWith("/cancel")) {
+      cancels++;
       loginStatus = "CANCELLED";
       data = {};
     }
@@ -136,6 +138,9 @@ async function fixture(
     },
     get dashboardReads() {
       return dashboardReads;
+    },
+    get cancels() {
+      return cancels;
     },
     actions,
     schedules,
@@ -225,6 +230,97 @@ test("未登录仅请求扫码，保存真实会话后自动继续本次更新",
   await expect(
     panel.getByText("正在下载并导入", { exact: true }),
   ).toBeVisible();
+  await expect(
+    page.getByRole("dialog", { name: "取消服务器登录？", exact: true }),
+  ).toHaveCount(0);
+  expect(state.cancels).toBe(0);
+});
+
+test("扫码窗口忽略遮罩和Esc，未保存时只有明确确认才取消登录", async ({
+  page,
+}) => {
+  const state = await fixture(page, { loggedIn: false });
+  await page.getByRole("button", { name: "更新数据", exact: true }).click();
+  const panel = page.getByRole("dialog", { name: "更新罗盘数据", exact: true });
+  await panel
+    .getByRole("button", { name: "扫码登录罗盘", exact: true })
+    .click();
+  const login = page.getByRole("dialog", {
+    name: "魔方罗盘服务器登录",
+    exact: true,
+  });
+  await expect(
+    login.getByRole("button", { name: "核验并保存", exact: true }),
+  ).toBeEnabled();
+  await page.keyboard.press("Escape");
+  await expect(login).toBeVisible();
+  await page
+    .locator(".ant-modal-wrap")
+    .filter({ has: login })
+    .click({ position: { x: 5, y: 5 } });
+  await expect(login).toBeVisible();
+  expect(state.cancels).toBe(0);
+
+  await login.locator(".ant-modal-close").click();
+  const confirm = page.getByRole("dialog", {
+    name: "取消服务器登录？",
+    exact: true,
+  });
+  await expect(confirm.getByText(/即使已经扫码，取消也会丢弃/)).toBeVisible();
+  expect(state.cancels).toBe(0);
+  await confirm.getByRole("button", { name: "继续扫码", exact: true }).click();
+  await expect(confirm).not.toBeVisible();
+  await expect(login).toBeVisible();
+  expect(state.cancels).toBe(0);
+
+  await login
+    .getByRole("button", { name: "关闭登录窗口", exact: true })
+    .click();
+  await confirm
+    .getByRole("button", { name: "确认取消登录", exact: true })
+    .click();
+  await expect.poll(() => state.cancels).toBe(1);
+  await expect(login).not.toBeVisible();
+  await expect(panel).toBeVisible();
+});
+
+test("窄短视口扫码画面滚动，核验保存按钮始终在视口内", async ({ page }) => {
+  await page.setViewportSize({ width: 828, height: 892 });
+  await fixture(page, { loggedIn: false });
+  await page.getByRole("button", { name: "更新数据", exact: true }).click();
+  const panel = page.getByRole("dialog", { name: "更新罗盘数据", exact: true });
+  await panel
+    .getByRole("button", { name: "扫码登录罗盘", exact: true })
+    .click();
+  const login = page.getByRole("dialog", {
+      name: "魔方罗盘服务器登录",
+      exact: true,
+    }),
+    save = login.getByRole("button", { name: "核验并保存", exact: true }),
+    frame = login.getByRole("img", {
+      name: "魔方罗盘服务器登录画面",
+      exact: true,
+    });
+  await expect(frame).toBeVisible();
+  for (const viewport of [
+    { width: 828, height: 892 },
+    { width: 390, height: 640 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await expect(save).toBeVisible();
+    const buttonBox = await save.boundingBox(),
+      frameBox = await frame.boundingBox();
+    expect(buttonBox).not.toBeNull();
+    expect(buttonBox!.y).toBeGreaterThanOrEqual(0);
+    expect(buttonBox!.y + buttonBox!.height).toBeLessThanOrEqual(
+      viewport.height,
+    );
+    expect(frameBox!.height / frameBox!.width).toBeCloseTo(760 / 1080, 2);
+  }
+  const scrollable = await login
+    .locator(".ant-modal-body")
+    .evaluate((element) => element.scrollHeight > element.clientHeight);
+  expect(scrollable).toBe(true);
 });
 
 test("下载程序离线提示失败，不显示排队或完成", async ({ page }) => {

@@ -1,18 +1,62 @@
 import { randomUUID } from "node:crypto";
-import { chromium, type Browser, type Page } from "@playwright/test";
+import { chromium, type Browser, type BrowserContext, type Page } from "@playwright/test";
 import { db, one, rows, type Tx } from "../../../packages/database/src/index.js";
 import { compassDimensions, compassLabels, compassNormalizationVersion, shanghaiDate, shiftCompassDate, type CompassDimension } from "../../../packages/contracts/src/compass-analytics.js";
 import { compassBrowserActionSchema, compassBrowserViewport, isCompassBrowserOrigin } from "../../../packages/contracts/src/compass-update.js";
 import { expireCompassTasks, finishCompassUpdate, verifyCompassUpdateSources } from "../../api/src/modules/analytics/browser-update.js";
 import { beginImport, appendImport, finishImport } from "../../api/src/modules/analytics/service.js";
 import type { Context } from "../../api/src/core.js";
-import { compassEncryptionReady, decryptCompassState, encryptCompassState } from "./compass-browser-state.js";
+import { compassEncryptionReady, decryptCompassState, encryptCompassState, encryptCompassLoginDraft, decryptCompassLoginDraft } from "./compass-browser-state.js";
 import { readCompassDownload, StaleCompassReportError } from "./compass-report-import.js";
 import { checkCompassLogin, openCompassReports, downloadCompassReports, cleanupCompassDownloads, CompassBrowserError } from "./compass-report-browser.js";
 
 const activeLogin = "('QUEUED','RUNNING','WAITING','CHECKING')";
 const pause = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
 const launch = () => chromium.launch({ headless: true });
+const rejectedCompassHosts = new WeakMap<BrowserContext, string>();
+type CompassLoginStage = "OPEN_LOGIN" | "WAITING_ACTION" | "APPLY_ACTION" | "VERIFY_LOGIN" | "VERIFY_REUSE" | "SAVE_SESSION" | "CAPTURE_FRAME";
+
+export function compassLoginDiagnostic(error: unknown, stage: CompassLoginStage, pageUrl: string, rejectedHost?: string) {
+  const value = error instanceof Error ? error : null;
+  const message = value?.message ?? "";
+  const category = rejectedHost ? "ORIGIN_REJECTED" :
+    value?.name === "TimeoutError" || /timed?\s*out|timeout/i.test(message) ? "TIMEOUT" :
+    /(?:page|context|browser).{0,25}(?:closed|closing)|Target closed/i.test(message) ? "PAGE_CLOSED" :
+    /frame.{0,30}detach|execution context.{0,30}destroy|cannot find context|navigation.{0,25}(?:progress|interrupt|supersed)|net::ERR_ABORTED|page.{0,25}navigating/i.test(message) ? "NAVIGATION_CHANGED" : "READ_FAILED";
+  let hostname = "unknown";
+  try { hostname = new URL(pageUrl).hostname; } catch { /* Diagnostic metadata only. */ }
+  const host = rejectedHost ?? hostname;
+  return { stage, category, hostname: /^[a-z0-9.-]{1,253}$/i.test(host) ? host : "unknown" };
+}
+function compassNavigationRace(error: unknown) {
+  return error instanceof Error && /frame.{0,30}detach|execution context.{0,30}destroy|cannot find context|(?:page|context|browser).{0,25}(?:closed|closing)|Target closed|navigation.{0,25}(?:progress|interrupt|supersed)|net::ERR_ABORTED|page.{0,25}navigating/i.test(error.message);
+}
+function latestCompassPage(context: BrowserContext, preferred: Page) {
+  return context.pages().filter(candidate => !candidate.isClosed() && isCompassBrowserOrigin(candidate.url())).at(-1) ??
+    (!preferred.isClosed() && isCompassBrowserOrigin(preferred.url()) ? preferred : null);
+}
+export function scopedCompassLoginDraft(saved: Record<string, any> | undefined, actorId: unknown, loginId: unknown, now = Date.now()) {
+  const expiry = Number(saved?.draft_expires_ms ?? (saved?.draft_expires_at ? new Date(saved.draft_expires_at).getTime() : NaN));
+  return saved?.draft_encrypted_state && String(saved.draft_actor_id) === String(actorId) && String(saved.draft_login_id) === String(loginId) && Number.isFinite(expiry) && expiry > now
+    ? { encrypted: String(saved.draft_encrypted_state), expiresAtMs: expiry } : null;
+}
+export async function checkpointCompassLoginDraft(context: BrowserContext, job: { id: unknown; actor_id: unknown }, token: string, expiresAtMs?: number) {
+  const encrypted = encryptCompassLoginDraft(await context.storageState({ indexedDB: true }), String(job.actor_id));
+  return db.$transaction(async tx => {
+    await rows(tx, "SELECT pg_advisory_xact_lock(2026101140)::text");
+    const active = await one(tx, `SELECT id,actor_id FROM compass_logins WHERE id=$1::uuid AND actor_id=$3::bigint AND claim_token=$2::uuid AND status IN ${activeLogin} AND expires_at>now() FOR UPDATE`, job.id, token, job.actor_id);
+    if (!active) return { active: false, expiresAtMs: expiresAtMs ?? null };
+    await compassWorkerActor(job.actor_id, tx);
+    const saved = await one(tx, "SELECT draft_encrypted_state,draft_actor_id,draft_login_id,draft_expires_at,(extract(epoch FROM draft_expires_at)*1000)::bigint AS draft_expires_ms FROM compass_session WHERE id=1 FOR UPDATE");
+    const scoped = scopedCompassLoginDraft(saved, job.actor_id, job.id);
+    const retainedExpiry = String(saved?.draft_actor_id) === String(job.actor_id) && String(saved?.draft_login_id) === String(job.id)
+      ? Number(saved?.draft_expires_ms ?? (saved?.draft_expires_at ? new Date(saved.draft_expires_at).getTime() : NaN)) : undefined;
+    const deadline = Math.min(Date.now() + 30 * 60000, expiresAtMs ?? Infinity, scoped?.expiresAtMs ?? retainedExpiry ?? Infinity);
+    if (!Number.isFinite(deadline) || deadline <= Date.now()) return { active: true, expiresAtMs: expiresAtMs ?? retainedExpiry ?? null };
+    await tx.$executeRawUnsafe("UPDATE compass_session SET draft_encrypted_state=$1,draft_actor_id=$2::bigint,draft_login_id=$3::uuid,draft_expires_at=$4::timestamptz WHERE id=1", encrypted, job.actor_id, job.id, new Date(deadline).toISOString());
+    return { active: true, expiresAtMs: deadline };
+  });
+}
 
 export async function compassWorkerActor(actorId: unknown, tx: Tx = db) {
   const actor = await one(tx, `SELECT u.id,u.username,u.display_name FROM users u WHERE u.id=$1::bigint AND u.status='ACTIVE' AND (
@@ -25,14 +69,20 @@ export async function compassWorkerActor(actorId: unknown, tx: Tx = db) {
 export async function configureCompassPage(page: Page) {
   await page.context().route("**/*", async route => {
     const request = route.request();
-    if (request.isNavigationRequest() && !isCompassBrowserOrigin(request.url())) await route.abort();
+    if (request.isNavigationRequest() && !isCompassBrowserOrigin(request.url())) {
+      try { rejectedCompassHosts.set(page.context(), new URL(request.url()).hostname); } catch { /* Never log the raw URL. */ }
+      await route.abort();
+    }
     else await route.fallback();
   });
   // SSO/report menus may normally open a new official tab. Keep it inside
   // the same authenticated context; reject unrelated top-level destinations.
   page.context().on("page", popup => {
     popup.on("framenavigated", frame => {
-      if (frame === popup.mainFrame() && frame.url() !== "about:blank" && !isCompassBrowserOrigin(frame.url())) void popup.close();
+      if (frame === popup.mainFrame() && frame.url() !== "about:blank" && !isCompassBrowserOrigin(frame.url())) {
+        try { rejectedCompassHosts.set(page.context(), new URL(frame.url()).hostname); } catch { /* Never log the raw URL. */ }
+        void popup.close();
+      }
     });
   });
 }
@@ -57,6 +107,9 @@ export async function processCompassLogin(browserLaunch: () => Promise<Browser> 
   });
   if (!job) return;
   let browser: Browser | undefined;
+  let loginContext: BrowserContext | undefined, diagnosticPage: Page | undefined;
+  let draftExpiry: number | undefined;
+  let stage: CompassLoginStage = "OPEN_LOGIN";
   const close = () => void browser?.close().catch(() => {});
   const timer = setTimeout(close, Math.max(1, Number(job.expires_ms) - Date.now()));
   timer.unref(); signal?.addEventListener("abort", close, { once: true });
@@ -65,50 +118,104 @@ export async function processCompassLogin(browserLaunch: () => Promise<Browser> 
   const update = (note: string, status = "WAITING") => db.$executeRawUnsafe(`UPDATE compass_logins SET note=$3,status=$4 WHERE id=$1::uuid AND claim_token=$2::uuid AND status IN ${activeLogin} AND expires_at>now()`, job.id, token, note, status);
   try {
     await compassWorkerActor(job.actor_id);
-    const saved = await one(db, "SELECT encrypted_state,state_version FROM compass_session WHERE id=1");
+    const saved = await one(db, "SELECT encrypted_state,state_version,status,enabled,draft_encrypted_state,draft_actor_id,draft_login_id,draft_expires_at,(extract(epoch FROM draft_expires_at)*1000)::bigint AS draft_expires_ms FROM compass_session WHERE id=1");
+    const draft = scopedCompassLoginDraft(saved, job.actor_id, job.id);
+    draftExpiry = draft?.expiresAtMs;
     let state;
-    try { if (saved?.encrypted_state) state = decryptCompassState(saved.encrypted_state); } catch { /* A new sign-in repairs unreadable saved state. */ }
+    try {
+      if (draft) state = decryptCompassLoginDraft(draft.encrypted, String(job.actor_id));
+      else if (saved?.enabled && saved.encrypted_state) state = decryptCompassState(saved.encrypted_state);
+    } catch { /* A new sign-in repairs unreadable saved state. */ }
     browser = await browserLaunch();
     const context = await browser.newContext({ locale: "zh-CN", timezoneId: "Asia/Shanghai", viewport: compassBrowserViewport, acceptDownloads: false, ...(state ? { storageState: state } : {}) });
+    loginContext = context;
     let page = await context.newPage();
+    diagnosticPage = page;
     await configureCompassPage(page);
-    await page.goto("https://compass.vip.com/", { waitUntil: "domcontentloaded", timeout: 30000 });
+    try { await page.goto("https://compass.vip.com/", { waitUntil: "domcontentloaded", timeout: 30000 }); }
+    catch (error) {
+      if (!compassNavigationRace(error)) throw error;
+      // An SSO redirect may supersede the entry navigation. Reuse its actual
+      // official tab instead of replaying the entry URL over the transition.
+      let resumed: Page | null = null;
+      for (let attempt = 0; attempt < 8 && !resumed && !signal?.aborted; attempt++) {
+        await pause(500);
+        resumed = latestCompassPage(context, page);
+      }
+      if (!resumed) throw error;
+      page = resumed; diagnosticPage = page;
+    }
     await update("请在云端画面扫码登录，通过可见的「魔方罗盘」进入自助报表，再点击「核验并保存」");
-    let frameId = randomUUID(), lastUrl = page.url(), lastFrame = 0;
+    let frameId = randomUUID(), lastUrl = page.url(), lastFrame = 0, lastCheckpoint = 0, navigationRetries = 0;
+    const checkpoint = async () => {
+      const result = await checkpointCompassLoginDraft(context, { id: job.id, actor_id: job.actor_id }, token, draftExpiry);
+      if (result.expiresAtMs !== null) draftExpiry = result.expiresAtMs;
+      lastCheckpoint = Date.now();
+      return result.active;
+    };
+    const recover = async (error: unknown) => {
+      if (!compassNavigationRace(error) || ++navigationRetries > 8) throw error;
+      await db.$executeRawUnsafe(`UPDATE compass_logins SET frame_jpeg=NULL,frame_id=NULL WHERE id=$1::uuid AND claim_token=$2::uuid AND status IN ${activeLogin}`, job.id, token);
+      frameId = randomUUID(); lastFrame = 0;
+      await update("罗盘页面正在跳转，保留当前登录并等待画面恢复");
+      await pause(500);
+    };
     while (!signal?.aborted && Date.now() < Number(job.expires_ms)) {
       const current = await one(db, `SELECT status,frame_id FROM compass_logins WHERE id=$1::uuid AND claim_token=$2::uuid AND status IN ${activeLogin}`, job.id, token);
       if (!current) break;
+      stage = "WAITING_ACTION";
       // A normal SSO link can open its application in a new tab.
-      const newest = context.pages().filter(candidate => !candidate.isClosed()).at(-1);
-      if (newest && newest !== page && isCompassBrowserOrigin(newest.url())) { page = newest; frameId = randomUUID(); lastFrame = 0; }
+      const newest = latestCompassPage(context, page);
+      if (newest && newest !== page) {
+        page = newest; diagnosticPage = page; frameId = randomUUID(); lastFrame = 0;
+        current.frame_id = null;
+        await db.$executeRawUnsafe(`UPDATE compass_logins SET frame_jpeg=NULL,frame_id=NULL WHERE id=$1::uuid AND claim_token=$2::uuid AND status IN ${activeLogin}`, job.id, token);
+      }
+      if (!newest) {
+        if (++navigationRetries > 8) throw Error("Browser page closed during navigation");
+        await pause(500);
+        continue;
+      }
       if (!isCompassBrowserOrigin(page.url())) throw Error("罗盘登录页面离开官方域名");
+      if (Date.now() - lastCheckpoint >= 5000) {
+        try { if (!(await checkpoint())) break; }
+        catch (error) { await recover(error); continue; }
+      }
       const action = await one(db, "SELECT id,payload FROM compass_login_actions WHERE login_id=$1::uuid AND completed_at IS NULL ORDER BY id LIMIT 1", job.id);
       if (action) {
+        stage = "APPLY_ACTION";
+        try { if (!(await checkpoint())) break; }
+        catch (error) { await recover(error); continue; }
         await db.$executeRawUnsafe("UPDATE compass_login_actions SET completed_at=now() WHERE id=$1::bigint", action.id);
         await db.$executeRawUnsafe(`UPDATE compass_logins SET frame_jpeg=NULL,frame_id=NULL WHERE id=$1::uuid AND claim_token=$2::uuid AND status IN ${activeLogin}`, job.id, token);
         const input = compassBrowserActionSchema.parse(action.payload);
+        try {
         if ((input.kind === "CLICK" || input.kind === "SCROLL") && input.frameId !== current.frame_id) await update("云端画面已变化，请等待刷新后重新操作");
         else if (input.kind === "CHECK") {
+          stage = "VERIFY_LOGIN";
           await update("正在核验罗盘报表访问及会话复用", "CHECKING");
           const result = await checkCompassLogin(page, { load: false });
           if (!result.verified) { await update(result.note); continue; }
-          const original = await context.storageState({ indexedDB: true });
-          const probe = await browser.newContext({ locale: "zh-CN", timezoneId: "Asia/Shanghai", viewport: compassBrowserViewport, acceptDownloads: false, storageState: original });
-          let verifiedState;
+          // Verify the exact normalized snapshot that will be persisted. A raw
+          // context can include storage discarded by the Compass domain filter.
+          const encrypted = encryptCompassState(await context.storageState({ indexedDB: true }));
+          stage = "VERIFY_REUSE";
+          const probe = await browser.newContext({ locale: "zh-CN", timezoneId: "Asia/Shanghai", viewport: compassBrowserViewport, acceptDownloads: false, storageState: decryptCompassState(encrypted) });
+          let verified = false;
           try {
             const probePage = await probe.newPage();
             await configureCompassPage(probePage);
             const reusable = await checkCompassLogin(probePage);
-            if (reusable.verified) verifiedState = await probe.storageState({ indexedDB: true });
+            verified = reusable.verified;
           } finally { await probe.close(); }
-          if (!verifiedState) { await update("登录尚不能在后台浏览器中复用，请确认已进入自助报表并重新扫码后核验"); continue; }
-          const encrypted = encryptCompassState(verifiedState);
+          if (!verified) { await update("登录尚不能在后台浏览器中复用，请确认已进入自助报表后再次核验"); continue; }
+          stage = "SAVE_SESSION";
           await compassWorkerActor(job.actor_id);
           const stored = await db.$transaction(async tx => {
             await rows(tx, "SELECT pg_advisory_xact_lock(2026101140)::text");
-            if (!(await one(tx, `SELECT id FROM compass_logins WHERE id=$1::uuid AND claim_token=$2::uuid AND status IN ${activeLogin} AND expires_at>now() FOR UPDATE`, job.id, token))) return false;
+            if (!(await one(tx, `SELECT id FROM compass_logins WHERE id=$1::uuid AND actor_id=$3::bigint AND claim_token=$2::uuid AND status IN ${activeLogin} AND expires_at>now() FOR UPDATE`, job.id, token, job.actor_id))) return false;
             await compassWorkerActor(job.actor_id, tx);
-            await tx.$executeRawUnsafe("UPDATE compass_session SET enabled=true,status='READY',encrypted_state=$1,state_version=state_version+1,saved_at=now(),checked_at=now(),updated_by=$2::bigint,note='' WHERE id=1", encrypted, job.actor_id);
+            await tx.$executeRawUnsafe("UPDATE compass_session SET enabled=true,status='READY',encrypted_state=$1,state_version=state_version+1,saved_at=now(),checked_at=now(),updated_by=$2::bigint,note='',draft_encrypted_state=NULL,draft_actor_id=NULL,draft_login_id=NULL,draft_expires_at=NULL WHERE id=1", encrypted, job.actor_id);
             await tx.$executeRawUnsafe("UPDATE compass_logins SET status='SAVED',frame_jpeg=NULL,frame_id=NULL,completed_at=now(),note='罗盘登录已核验并加密保存' WHERE id=$1::uuid", job.id);
             await tx.$executeRawUnsafe("DELETE FROM compass_login_actions WHERE login_id=$1::uuid", job.id);
             return true;
@@ -118,22 +225,52 @@ export async function processCompassLogin(browserLaunch: () => Promise<Browser> 
         } else if (input.kind === "REFRESH") { await page.goto("https://compass.vip.com/", { waitUntil: "domcontentloaded", timeout: 30000 }); await update("已重新打开官方登录入口，请扫码后核验"); }
         else if (input.kind === "CLICK") await page.mouse.click(input.point.x * compassBrowserViewport.width, input.point.y * compassBrowserViewport.height);
         else if (input.kind === "SCROLL") await page.mouse.wheel(0, input.deltaY);
+        } catch (error) { await recover(error); continue; }
         frameId = randomUUID(); lastFrame = 0;
       }
       if (page.url() !== lastUrl) { lastUrl = page.url(); frameId = randomUUID(); }
       if (Date.now() - lastFrame >= 2500) {
+        stage = "CAPTURE_FRAME";
         // SSO often places its login form inside an iframe. Mask editable
         // content in every frame so password-manager values never leave it.
-        const frame = await page.screenshot({ type: "jpeg", quality: 65, mask: page.frames().map(child =>
-          child.locator('input:not([type="checkbox"]):not([type="radio"]),textarea,[contenteditable="true"]')) });
+        let frame: Buffer;
+        try {
+          frame = await page.screenshot({ type: "jpeg", quality: 65, mask: page.frames().map(child =>
+            child.locator('input:not([type="checkbox"]):not([type="radio"]),textarea,[contenteditable="true"]')) });
+        } catch (error) {
+          // Never publish a partially masked frame. Rebuild the full mask after
+          // SSO/iframe navigation settles, retaining the logged-in context.
+          await recover(error);
+          continue;
+        }
+        navigationRetries = 0;
         await db.$executeRawUnsafe(`UPDATE compass_logins SET frame_jpeg=$3,frame_id=$4::uuid,heartbeat_at=now() WHERE id=$1::uuid AND claim_token=$2::uuid AND status IN ${activeLogin} AND expires_at>now()`, job.id, token, frame.toString("base64"), frameId);
         lastFrame = Date.now();
       }
       await pause(500);
     }
     await db.$executeRawUnsafe(`UPDATE compass_logins SET status='EXPIRED',frame_jpeg=NULL,frame_id=NULL,completed_at=now(),note='登录窗口已过期，请重新打开' WHERE id=$1::uuid AND claim_token=$2::uuid AND status IN ${activeLogin}`, job.id, token);
-  } catch {
-    await db.$executeRawUnsafe(`UPDATE compass_logins SET status='FAILED',frame_jpeg=NULL,frame_id=NULL,completed_at=now(),note='罗盘登录页面未能打开或读取，请重新打开；原有数据保留' WHERE id=$1::uuid AND claim_token=$2::uuid AND status IN ${activeLogin}`, job.id, token);
+  } catch (error) {
+    // Capture a final SSO transition when possible. The transaction still
+    // requires the active claim and actor, so cancellation/disconnect cannot
+    // resurrect it even if this bounded attempt finishes after the failure.
+    if (loginContext && !signal?.aborted) {
+      let checkpointTimer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          checkpointCompassLoginDraft(loginContext, { id: job.id, actor_id: job.actor_id }, token, draftExpiry),
+          new Promise<void>(resolve => { checkpointTimer = setTimeout(resolve, 1500); }),
+        ]);
+      } catch { /* Preserve the original safe diagnostic and existing draft. */ }
+      finally { if (checkpointTimer) clearTimeout(checkpointTimer); }
+    }
+    const diagnostic = compassLoginDiagnostic(error, stage, diagnosticPage?.url() ?? "", loginContext ? rejectedCompassHosts.get(loginContext) : undefined);
+    const reason = diagnostic.category === "ORIGIN_REJECTED" ? `罗盘跳转到尚未支持的站点 ${diagnostic.hostname}` :
+      diagnostic.category === "TIMEOUT" ? "罗盘页面加载或读取超时" :
+      diagnostic.category === "PAGE_CLOSED" || diagnostic.category === "NAVIGATION_CHANGED" ? "罗盘页面跳转中断" : "罗盘页面读取失败";
+    const note = `${reason}，可重新打开登录继续本人未过期的进度；尚未核验成功，原有数据保留`;
+    console.warn(JSON.stringify({ event: "compass_login_stopped", ...diagnostic }));
+    await db.$executeRawUnsafe(`UPDATE compass_logins SET status='FAILED',frame_jpeg=NULL,frame_id=NULL,completed_at=now(),note=$3 WHERE id=$1::uuid AND claim_token=$2::uuid AND status IN ${activeLogin}`, job.id, token, note);
   } finally { clearTimeout(timer); clearInterval(beat); signal?.removeEventListener("abort", close); await browser?.close().catch(() => {}); }
 }
 

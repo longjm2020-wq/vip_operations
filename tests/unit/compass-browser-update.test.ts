@@ -49,10 +49,26 @@ beforeEach(() => {
   login = { id: loginId, actor_id: "17", status: "WAITING", frame_id: frameId, frame_jpeg: "fixture-image",
     expires_ms: Date.now() + 600000, note: "fixture", encrypted_state: "must-never-return" };
   database.db.$transaction.mockImplementation(fn => fn(database.db));
-  database.db.$executeRawUnsafe.mockImplementation(async (sql: string, enabled: boolean) => {
+  const clearDraft = () => {
+    session.draft_encrypted_state = null; session.draft_actor_id = null; session.draft_login_id = null; session.draft_expires_at = null;
+  };
+  database.db.$executeRawUnsafe.mockImplementation(async (sql: string, ...values: unknown[]) => {
+    const enabled = Boolean(values[0]);
     if (sql.startsWith("UPDATE compass_session SET auto_update_enabled")) {
       if (enabled && !autoEnabled && (new Date().getUTCHours() + 8) % 24 >= 8) lastScheduledDay = "2026-10-11";
       autoEnabled = enabled;
+    }
+    if (sql.startsWith("UPDATE compass_session SET draft_login_id=")) {
+      if (session.draft_actor_id === values[1] && session.draft_encrypted_state && (session.draft_expires_at as Date)?.getTime() > Date.now()) session.draft_login_id = values[0];
+    }
+    if (sql.startsWith("UPDATE compass_session SET draft_encrypted_state=NULL")) {
+      if (sql.includes("draft_login_id=$1::uuid") ? session.draft_login_id === values[0] : (session.draft_expires_at as Date)?.getTime() <= Date.now()) clearDraft();
+    }
+    if (sql.startsWith("UPDATE compass_logins SET status='CANCELLED'") && login.id === values[0] && ["QUEUED", "RUNNING", "WAITING", "CHECKING"].includes(String(login.status))) {
+      login.status = "CANCELLED"; login.claim_token = null;
+    }
+    if (sql.startsWith("UPDATE compass_session SET enabled=false")) {
+      clearDraft(); session.enabled = false; session.status = "DISCONNECTED"; session.encrypted_state = null;
     }
     return 1;
   });
@@ -76,6 +92,7 @@ beforeEach(() => {
     if (sql.includes("FROM compass_update_jobs")) return sql.includes("status='COMPLETE'") ? undefined : activeJob;
     if (sql.includes("FROM compass_login_actions")) return { n: pendingActions };
     if (sql.startsWith("SELECT 1 FROM compass_logins")) return loginBusy ? { busy: true } : undefined;
+    if (sql.startsWith("SELECT id::text,actor_id::text FROM compass_logins")) return loginBusy ? { id: login.id, actor_id: login.actor_id } : undefined;
     if (sql.includes("FROM compass_logins")) return login;
     throw Error("Unexpected compass fixture query");
   });
@@ -214,6 +231,102 @@ describe("private login and bounded interactions", () => {
       expect(isCompassBrowserOrigin(url)).toBe(true);
     for (const url of ["https://www.vip.com/", "https://vis.vip.com.attacker.example/", "https://attacker.vip.com/", "http://vis.vip.com/", "https://user:pass@vis.vip.com/", "https://vis.vip.com:8443/"])
       expect(isCompassBrowserOrigin(url)).toBe(false);
+  });
+});
+
+describe("short-lived private login drafts", () => {
+  function draft(actorId = "17", owner = loginId, expiresAt = new Date(Date.now() + 1800000)) {
+    Object.assign(session, { draft_encrypted_state: "private-fixture-draft", draft_actor_id: actorId, draft_login_id: owner, draft_expires_at: expiresAt });
+    return expiresAt;
+  }
+
+  it("transfers a same-owner draft to a replacement login without extending its absolute expiration", async () => {
+    const deadline = draft();
+    const first = await service.openCompassLogin(context);
+    expect(first.id).not.toBe(loginId);
+    expect(session.draft_login_id).toBe(first.id);
+    vi.setSystemTime(Date.now() + 600000);
+    const second = await service.openCompassLogin({ ...context, key: "second-open" });
+    expect(session.draft_login_id).toBe(second.id);
+    expect(session.draft_expires_at).toBe(deadline);
+    expect(session.draft_encrypted_state).toBe("private-fixture-draft");
+    expect(session.status).toBe("READY");
+    const transfers = database.db.$executeRawUnsafe.mock.calls.filter(([sql]) => String(sql).startsWith("UPDATE compass_session SET draft_login_id="));
+    expect(transfers).toHaveLength(2);
+    expect(transfers[0][0]).toContain("draft_actor_id=$2::bigint");
+    expect(transfers[0][0]).toContain("draft_expires_at>now()");
+    expect(transfers[0][0]).not.toContain("draft_expires_at=");
+    expect(transfers[0].slice(1)).toEqual([first.id, "17"]);
+    expect(JSON.stringify(first)).not.toContain("draft");
+  });
+
+  it("does not transfer another actor's draft even to a managing account", async () => {
+    draft("other-owner");
+    await service.openCompassLogin(context);
+    expect(session.draft_actor_id).toBe("other-owner");
+    expect(session.draft_login_id).toBe(loginId);
+    expect(session.draft_encrypted_state).toBe("private-fixture-draft");
+  });
+
+  it("deletes expired drafts before a new login without altering the verified session", async () => {
+    draft("17", loginId, new Date(Date.now()));
+    await service.openCompassLogin(context);
+    expect(session.draft_encrypted_state).toBeNull();
+    expect(session.draft_actor_id).toBeNull();
+    expect(session.draft_login_id).toBeNull();
+    expect(session.draft_expires_at).toBeNull();
+    expect(session.encrypted_state).toBe("private-fixture-state");
+    expect(session.status).toBe("READY");
+  });
+
+  it("cancels the active claim under its login lock and clears only that window's draft", async () => {
+    draft();
+    login.claim_token = "private-fixture-claim";
+    await service.cancelCompassLogin(context, loginId);
+    expect(login.status).toBe("CANCELLED");
+    expect(login.claim_token).toBeNull();
+    expect(session.draft_encrypted_state).toBeNull();
+    expect(session.encrypted_state).toBe("private-fixture-state");
+    const locked = database.one.mock.calls.find(([, sql]) => String(sql).includes("FROM compass_logins WHERE id="));
+    expect(locked?.[1]).toContain("FOR UPDATE");
+    const globalLock = database.rows.mock.calls.findIndex(([, sql], index) => index > 0 && String(sql).includes("pg_advisory_xact_lock($1)"));
+    expect(globalLock).toBeGreaterThan(0);
+    expect(database.rows.mock.invocationCallOrder[globalLock]).toBeLessThan(database.one.mock.invocationCallOrder[database.one.mock.calls.indexOf(locked!)]);
+    const writes = database.db.$executeRawUnsafe.mock.calls;
+    const cancel = writes.findIndex(([sql]) => String(sql).startsWith("UPDATE compass_logins SET status='CANCELLED'"));
+    const clear = writes.findIndex(([sql]) => String(sql).startsWith("UPDATE compass_session SET draft_encrypted_state=NULL"));
+    expect(cancel).toBeLessThan(clear);
+    expect(writes[cancel][0]).toContain("claim_token=NULL");
+    expect(writes[clear][0]).toContain("draft_login_id=$1::uuid");
+  });
+
+  it("does not clear a newer replacement window's draft when an old window is cancelled", async () => {
+    const replacement = "fb8c3b6b-85c7-439a-b139-ed445a00ff15";
+    draft("17", replacement); login.status = "FAILED";
+    await service.cancelCompassLogin(context, loginId);
+    expect(session.draft_login_id).toBe(replacement);
+    expect(session.draft_encrypted_state).toBe("private-fixture-draft");
+  });
+
+  it("disconnects both the verified session and every draft", async () => {
+    draft("other-owner");
+    await service.disconnectCompassSession(context);
+    expect(session.status).toBe("DISCONNECTED");
+    expect(session.encrypted_state).toBeNull();
+    expect(session.draft_encrypted_state).toBeNull();
+    expect(session.draft_login_id).toBeNull();
+    expect(session.draft_actor_id).toBeNull();
+    expect(session.draft_expires_at).toBeNull();
+  });
+
+  it("never exposes a draft or accepts it as a verified update session", async () => {
+    draft(); session.status = "LOGIN_REQUIRED";
+    const status = await service.compassUpdateStatus();
+    const view = await service.compassLoginView(context, loginId);
+    expect(JSON.stringify(status)).not.toContain("private-fixture");
+    expect(JSON.stringify(view)).not.toContain("draft");
+    await expect(service.requestCompassUpdate(context, {})).rejects.toMatchObject({ response: { error: { code: "COMPASS_LOGIN_REQUIRED" } } });
+    expect(database.one.mock.calls.some(([, sql]) => String(sql).startsWith("INSERT INTO compass_update_jobs"))).toBe(false);
   });
 });
 

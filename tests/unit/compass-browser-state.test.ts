@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { randomBytes } from "node:crypto";
-import { compassEncryptionReady, compassOnlyState, decryptCompassState, encryptCompassState } from "../../apps/worker/src/compass-browser-state.js";
+import { compassEncryptionReady, compassOnlyState, decryptCompassState, encryptCompassState, decryptCompassLoginDraft, encryptCompassLoginDraft } from "../../apps/worker/src/compass-browser-state.js";
 import { encryptCloudState } from "../../apps/worker/src/competitor-cloud-state.js";
 
 const originalCompass = process.env.COMPASS_BROWSER_KEY;
@@ -51,5 +51,14 @@ describe("independent Compass browser session", () => {
     expect(compassEncryptionReady()).toBe(false);
     process.env.COMPASS_BROWSER_KEY = randomBytes(32).toString("hex");
     expect(() => encryptCompassState({ ...state, origins: [{ origin: "https://compass.vip.com", localStorage: [{ name: "fixture", value: "x".repeat(600000) }] }] })).toThrow("存储限制");
+  });
+  it("binds draft ciphertext to its actor and excludes it from verified-session decryption", () => {
+    process.env.COMPASS_BROWSER_KEY = randomBytes(32).toString("hex");
+    const draft = encryptCompassLoginDraft(state, "17");
+    expect(decryptCompassLoginDraft(draft, "17")).toEqual(state);
+    expect(() => decryptCompassLoginDraft(draft, "18")).toThrow();
+    expect(() => decryptCompassState(draft)).toThrow();
+    expect(() => decryptCompassLoginDraft(encryptCompassState(state), "17")).toThrow();
+    expect(() => encryptCompassLoginDraft(state, "bad-actor")).toThrow("所属用户");
   });
 });

@@ -20,7 +20,7 @@ export function CompassBrowserLogin({
   onConnected: () => void;
   onDisconnected: () => void;
 }) {
-  const { message } = App.useApp();
+  const { message, modal } = App.useApp();
   const [open, setOpen] = useState(false),
     [loginId, setLoginId] = useState(""),
     [busy, setBusy] = useState(false),
@@ -101,6 +101,23 @@ export function CompassBrowserLogin({
       setBusy(false);
     }
   }
+  function requestClose() {
+    if (busy) return;
+    if (loginId && (!view || active)) {
+      modal.confirm({
+        title: "取消服务器登录？",
+        content:
+          "当前登录尚未核验保存。即使已经扫码，取消也会丢弃本次未保存的服务器会话；请继续扫码并点击「核验并保存」，或确认取消登录。",
+        okText: "确认取消登录",
+        cancelText: "继续扫码",
+        okButtonProps: { danger: true },
+        maskClosable: false,
+        onOk: close,
+      });
+      return;
+    }
+    void close();
+  }
   async function disconnect() {
     try {
       await api(endpoint + "/browser-session/disconnect", "POST", {});
@@ -119,8 +136,21 @@ export function CompassBrowserLogin({
       <Modal
         title="魔方罗盘服务器登录"
         open={open}
-        onCancel={() => void close()}
+        onCancel={requestClose}
+        maskClosable={false}
+        keyboard={false}
         width={1000}
+        style={{ top: 20 }}
+        styles={{
+          container: {
+            maxHeight: "calc(100dvh - 40px)",
+            display: "flex",
+            flexDirection: "column",
+          },
+          header: { flexShrink: 0 },
+          body: { minHeight: 0, overflowY: "auto" },
+          footer: { flexShrink: 0 },
+        }}
         destroyOnHidden
         footer={
           <Space wrap>
@@ -187,7 +217,7 @@ export function CompassBrowserLogin({
                 </Button>
               </Popconfirm>
             )}
-            <Button disabled={busy} onClick={() => void close()}>
+            <Button disabled={busy} onClick={requestClose}>
               {view?.status === "SAVED" ? "返回更新面板" : "关闭登录窗口"}
             </Button>
           </Space>
@@ -201,6 +231,9 @@ export function CompassBrowserLogin({
         />
         <p>
           可直接点击画面切换扫码入口、确认平台提示，或滚动画面。密码输入区域已遮蔽，本窗口不提供文字输入。
+        </p>
+        <p>
+          扫码后请点击「核验并保存」，看到「罗盘登录已保存」后再返回更新面板。
         </p>
         {(error || login.error) && (
           <Alert type="error" showIcon title={error || login.error?.message} />
