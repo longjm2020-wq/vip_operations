@@ -53,6 +53,8 @@ beforeAll(async () => {
       supply_price_excl_tax numeric,vip_price numeric,live_price numeric,tag_price numeric,selling_points text,
       reorder_days integer,collection_inventory jsonb DEFAULT '[]',images jsonb DEFAULT '[]',label_images jsonb DEFAULT '[]',
       extra_fields jsonb DEFAULT '{}',cell_colors jsonb DEFAULT '{}',row_color text DEFAULT 'NONE',
+      cell_alignments jsonb DEFAULT '{}',cell_vertical_alignments jsonb DEFAULT '{}',
+      cell_text_colors jsonb DEFAULT '{}',cell_number_formats jsonb DEFAULT '{}',
       sort_order integer NOT NULL DEFAULT 0,version integer NOT NULL DEFAULT 1,updated_by bigint DEFAULT 7,
       created_at timestamptz,updated_at timestamptz DEFAULT '2026-10-11T00:00:00Z'
     );
@@ -232,6 +234,48 @@ describe("explicit product-archive creation-order maintenance", () => {
       before_data: { digest: expected.digest },
       after_data: { digest: result.after.digest, changedRows: 0 },
     });
+  });
+
+  it("preserves all unregistered historical business and formatting values exactly while rebuilding only order metadata", async () => {
+    const extras = { "custom:orphan-text": "原始历史资料", "custom:orphan-complex": { nested: [null, false, 0, "", { raw: "  保留  " }] }, legacy_numeric: 12.5 };
+    const colors = { "custom:orphan-color": "PINK" }, alignments = { "custom:orphan-align": "right" }, vertical = { "custom:orphan-vertical": "bottom" }, text = { "custom:orphan-text-color": "#262626" }, numbers = { "custom:orphan-number": { type: "currency", decimals: 2, pattern: "0.00" } };
+    await database.query("UPDATE selection_table_23.style_selections SET extra_fields=$1::jsonb,cell_colors=$2::jsonb,cell_alignments=$3::jsonb,cell_vertical_alignments=$4::jsonb,cell_text_colors=$5::jsonb,cell_number_formats=$6::jsonb WHERE id=1", [extras, colors, alignments, vertical, text, numbers].map(value => JSON.stringify(value)));
+    const before = await rowState(), products = await productState();
+    const result = await applyProductArchiveOrder(client, await previewProductArchiveOrder(client), async () => {}, { actorId: "7" });
+    expect(result.changedRows).toBe(4);
+    const after = await rowState();
+    const business = ({ sort_order: _order, version: _version, updated_at: _time, updated_by: _actor, ...value }: Record<string, unknown>) => value;
+    expect(after.map(row => business(row.value))).toEqual(before.map(row => business(row.value)));
+    expect(after[0].value).toMatchObject({ extra_fields: extras, cell_colors: colors, cell_alignments: alignments, cell_vertical_alignments: vertical, cell_text_colors: text, cell_number_formats: numbers, sort_order: 3, version: 2 });
+    expect(await productState()).toEqual(products);
+  });
+
+  it.each(["extra_fields", "cell_colors", "cell_alignments", "cell_vertical_alignments", "cell_text_colors", "cell_number_formats"])("keeps unregistered history in the preview digest, including %s", async column => {
+    const expected = await previewProductArchiveOrder(client);
+    await database.query(`UPDATE selection_table_23.style_selections SET ${column}=$1::jsonb WHERE id=1`, [JSON.stringify({ "custom:orphan": "changed-since-preview" })]);
+    const before = await rowState();
+    let backedUp = false;
+    await expect(applyProductArchiveOrder(client, expected, async () => { backedUp = true; })).rejects.toThrow("changed since preview");
+    expect(backedUp).toBe(false);
+    expect(await rowState()).toEqual(before);
+    expect(await read("SELECT * FROM audit_logs")).toEqual([]);
+  });
+
+  it("rolls back order and backup if an unregistered historical value changes during the metadata update", async () => {
+    const expected = await previewProductArchiveOrder(client), before = await rowState(), products = await productState();
+    await database.exec(`CREATE FUNCTION change_order_history() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN NEW.extra_fields=jsonb_set(NEW.extra_fields,'{custom:orphan}','"unexpected-change"'::jsonb); RETURN NEW; END; $$;
+      CREATE TRIGGER change_order_history BEFORE UPDATE ON selection_table_23.style_selections FOR EACH ROW EXECUTE FUNCTION change_order_history();`);
+    try {
+      await expect(applyProductArchiveOrder(client, expected, async backup => {
+        await database.query("INSERT INTO fixture_order_backups(snapshot) VALUES($1::jsonb)", [JSON.stringify(backup)]);
+      })).rejects.toThrow("Fixed-order verification failed");
+      expect(await rowState()).toEqual(before);
+      expect(await productState()).toEqual(products);
+      expect(await read("SELECT * FROM fixture_order_backups")).toEqual([]);
+      expect(await read("SELECT * FROM audit_logs")).toEqual([]);
+    } finally {
+      await database.exec("DROP TRIGGER change_order_history ON selection_table_23.style_selections; DROP FUNCTION change_order_history()");
+    }
   });
 
   it.each([

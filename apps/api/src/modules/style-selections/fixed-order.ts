@@ -2,6 +2,7 @@ import { z } from "zod";
 import { HttpException } from "@nestjs/common";
 import { camel, db, one, rows, type Tx, type Row } from "../../../../../packages/database/src/index.js";
 import { selectionScope, selectionSchema } from "../../../../../packages/database/src/selection-scope.js";
+import { selectionFields } from "../../../../../packages/contracts/src/selection-protection.js";
 import { command, fail, id, parse, requirePermission, audit, type Context } from "../../core.js";
 import { tableAccess } from "../projects/library.js";
 import * as protection from "./protection.js";
@@ -26,8 +27,21 @@ function adapter(tx: Tx): ArchiveOrderDatabase {
   };
 }
 
-function assertFixedOrderFields(policy: protection.Policy, c: Context, record: Row) {
-  const keys = protection.rowFields(record);
+function fixedOrderFields(policy: protection.Policy) {
+  // This operation changes only order/version/update metadata. Unlike business
+  // writes, it need not authorize unregistered, unreferenced historical JSON
+  // keys: the full raw row remains hashed and must be preserved exactly. Every
+  // registered field (including blank/deleted ones) and rule reference still
+  // participates in the usual privacy, region, claim and migration checks.
+  return [...new Set([
+    ...selectionFields,
+    ...(policy.registeredFieldKeys || []).filter(key => key.startsWith("custom:")),
+    ...policy.settings.regions.flatMap(region => region.columnKeys),
+    ...policy.settings.autoHideRegions.flatMap(region => region.columnKeys),
+  ])];
+}
+
+function assertFixedOrderFields(policy: protection.Policy, c: Context, record: Row, keys: string[]) {
   try {
     protection.assertFields(policy, c, record, keys);
   } catch (error) {
@@ -42,7 +56,7 @@ function assertFixedOrderFields(policy: protection.Policy, c: Context, record: R
       fail(code, prefix + "此行有跨表传送锁，请先释放原行编辑后重新预览；固定排序未建立", 409);
     const denied = keys.filter(key => protection.access(policy, c.actor, record, key) !== "edit");
     if (denied.some(key => key.startsWith("custom:") && !policy.registeredFieldKeys?.includes(key)))
-      fail(code, prefix + "存在未登记的历史字段资料，请管理员核查字段登记后重新预览；固定排序未建立", 403);
+      fail(code, prefix + "保护规则引用了未登记的历史字段，请管理员核查字段登记与保护规则后重新预览；固定排序未建立", 403);
     if (denied.some(key => Object.hasOwn(policy.privateFieldOwners || {}, key) && !protection.fieldVisible(policy, c.actor, key)))
       fail(code, prefix + "存在当前账号无权编辑的他人私有字段，请由有完整权限的用户处理；固定排序未建立", 403);
     if (policy.settings.claimsEnabled && row.claimedBy && String(row.claimedBy) !== c.actor.id && !protection.protectionAdmin(c.actor))
@@ -65,10 +79,9 @@ async function authorize(tx: Tx, c: Context, lock: boolean) {
     await tx.$executeRawUnsafe(`LOCK TABLE public.products,"${schema}".style_selections IN SHARE ROW EXCLUSIVE MODE`);
   }
   const policy = lock ? await protection.writeLocks(tx, c) : await protection.policy(tx);
-  // Reordering the full archive has the same field, claim and migration rules
-  // as changing every row's sortOrder through the normal editor.
+  const keys = fixedOrderFields(policy);
   const records = await rows(tx, `SELECT * FROM "${schema}".style_selections`);
-  for (const record of records) assertFixedOrderFields(policy, c, record);
+  for (const record of records) assertFixedOrderFields(policy, c, record, keys);
   return scope;
 }
 

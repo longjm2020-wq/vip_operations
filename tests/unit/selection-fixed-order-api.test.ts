@@ -56,6 +56,7 @@ vi.mock("../../packages/database/src/index.js", async importOriginal => {
   return {
     ...original,
     db: {
+      $queryRawUnsafe: (sql: string, ...values: unknown[]) => query(fixture.state, 0)(sql, ...values),
       $transaction: async (work: (tx: Tx) => Promise<unknown>, options: unknown) => {
         fixture.transactionOptions.push(options);
         const transaction = ++fixture.transactions, state = structuredClone(fixture.state);
@@ -86,6 +87,7 @@ vi.mock("../../scripts/rebuild-product-archive-order.js", () => ({
 }));
 
 import { applyFixedOrder, previewFixedOrder } from "../../apps/api/src/modules/style-selections/fixed-order.js";
+import { write } from "../../apps/api/src/modules/style-selections/service.js";
 
 const actor = (key = "fixed-order", permissions = ["selection.read", "selection.manage", "product.read", "product.update"]): Context => ({
   actor: { id: "7", username: "editor", displayName: "Editor", permissions, roleCodes: [], selectionWorkspaceScoped: true }, requestId: "fixed-order-test", key,
@@ -189,14 +191,74 @@ describe("authorized product-archive fixed-order API", () => {
     expect(fixture.applyCalls).toBe(0);
   });
 
-  it.each([false, true])("diagnoses unknown historical keys without exposing them, including for SUPER_ADMIN (apply=%s)", async apply => {
+  it.each([false, true].flatMap(apply => [false, true].map(superAdmin => [apply, superAdmin] as const)))("permits only pure-order handling of unregistered, unreferenced historical data (apply=%s, superAdmin=%s)", async (apply, superAdmin) => {
+    fixture.records[0].extra_fields = { "custom:historical-secret-key": "historical-secret-value", legacy_value: { nested: [null, false, 0, "raw"] } };
+    Object.assign(fixture.records[0], {
+      cell_colors: { "custom:orphan-color": "PINK" },
+      cell_alignments: { "custom:orphan-align": "left" },
+      cell_vertical_alignments: { "custom:orphan-vertical": "bottom" },
+      cell_text_colors: { "custom:orphan-text": "#262626" },
+      cell_number_formats: { "custom:orphan-number": { type: "currency", decimals: 2, pattern: "0.00" } },
+    });
+    const before = structuredClone(fixture.records);
+    const c = actor(); if (superAdmin) c.actor.roleCodes = ["SUPER_ADMIN"];
+    const result = await method(apply, c);
+    expect(fixture.records).toEqual(before);
+    expect(JSON.stringify(result)).not.toMatch(/historical-secret|orphan-|legacy_value/);
+    expect(fixture.previewCalls).toBe(1);
+    expect(fixture.applyCalls).toBe(apply ? 1 : 0);
+    if (!apply) expect(mutations()).toEqual([]);
+  });
+
+  it.each(["region", "auto-hide"].flatMap(rule => [false, true].flatMap(apply => [false, true].map(superAdmin => [rule, apply, superAdmin] as const))))("rejects an unknown key referenced by %s without exposing it (apply=%s, superAdmin=%s)", async (rule, apply, superAdmin) => {
     fixture.records[0].extra_fields = { "custom:historical-secret-key": "historical-secret-value" };
-    const c = actor(); c.actor.roleCodes = ["SUPER_ADMIN"];
+    const region = { id: "123e4567-e89b-42d3-a456-426614174000", name: "historical-secret-rule", scope: "columns", rowIds: [], columnKeys: ["custom:historical-secret-key"] };
+    // Even inactive rule references must remain in the authorization set.
+    if (rule === "region") fixture.settings.regions = [{ ...region, users: {}, others: "edit" }];
+    else fixture.settings.autoHideRegions = [region];
+    const c = actor(); if (superAdmin) c.actor.roleCodes = ["SUPER_ADMIN"];
     const failure = await method(apply, c).catch(error => error);
     expect(failure).toMatchObject({ ...error(403, "REGION_FORBIDDEN"), response: { error: { code: "REGION_FORBIDDEN", message: expect.stringContaining("未登记的历史字段") } } });
     expect(failure.response.error.message).toContain("OCT05");
     expect(JSON.stringify(failure.response)).not.toContain("historical-secret");
     expect(fixture.previewCalls).toBe(0); expect(fixture.applyCalls).toBe(0);
+    expect(mutations()).toEqual([]);
+  });
+
+  it.each(["private", "region-read"].flatMap(kind => [false, true].flatMap(deleted => [false, true].map(apply => [kind, deleted, apply] as const))))("checks absent registered %s fields including deletion markers (deleted=%s, apply=%s)", async (kind, deleted, apply) => {
+    fixture.fields = [{ field_key: "custom:blank-secret", visibility: kind === "private" ? "PRIVATE" : "PUBLIC", owner_id: "8", definition: { key: "custom:blank-secret", label: "blank-secret-label", custom: true, type: "text", deleted }, revision: 1 }];
+    expect(fixture.records[0].extra_fields).toEqual({});
+    if (kind === "region-read") fixture.settings = { ...defaultProtection, enabled: true, regions: [{ id: "123e4567-e89b-42d3-a456-426614174000", name: "Read only", scope: "columns", rowIds: [], columnKeys: ["custom:blank-secret"], users: {}, others: "read" }] };
+    const failure = await method(apply).catch(error => error);
+    expect(failure).toMatchObject(error(403, "REGION_FORBIDDEN"));
+    expect(failure.response.error.message).toContain(kind === "private" ? "他人私有字段" : "受保护区域");
+    expect(JSON.stringify(failure.response)).not.toContain("blank-secret");
+    expect(fixture.previewCalls).toBe(0); expect(fixture.applyCalls).toBe(0);
+    expect(mutations()).toEqual([]);
+  });
+
+  it.each([false, true])("keeps registered auto-hidden business content protected (apply=%s)", async apply => {
+    fixture.fields = [{ field_key: "custom:hidden", visibility: "PUBLIC", owner_id: "8", definition: { key: "custom:hidden", label: "Hidden", custom: true, type: "text" }, revision: 1 }];
+    fixture.records[0].created_by = "8";
+    fixture.records[0].extra_fields = { "custom:hidden": "hidden-value" };
+    fixture.settings = { ...defaultProtection, autoHide: true, autoHideRegions: [{ id: "123e4567-e89b-42d3-a456-426614174000", name: "Hidden", scope: "columns", rowIds: [], columnKeys: ["custom:hidden"] }] };
+    await expect(method(apply)).rejects.toMatchObject(error(403, "REGION_FORBIDDEN"));
+    expect(fixture.applyCalls).toBe(0); expect(mutations()).toEqual([]);
+  });
+
+  it.each([
+    { extraFields: { "custom:historical-secret-key": "changed" } },
+    { cellColors: { "custom:historical-secret-key": "PINK" } },
+    { cellAlignments: { "custom:historical-secret-key": "left" } },
+    { cellVerticalAlignments: { "custom:historical-secret-key": "bottom" } },
+    { cellTextColors: { "custom:historical-secret-key": "#262626" } },
+    { cellNumberFormats: { "custom:historical-secret-key": { type: "currency", decimals: 2, pattern: "0.00" } } },
+    { sortOrder: 2 },
+  ])("leaves ordinary PATCH denial of unknown business/format keys and row ordering unchanged (%j)", async patch => {
+    fixture.records[0].extra_fields = { "custom:historical-secret-key": "historical-secret-value" };
+    const c = actor(); c.actor.roleCodes = ["SUPER_ADMIN"];
+    await expect(inArchive(() => write(c, patch, "1"))).rejects.toMatchObject(error(403, "REGION_FORBIDDEN"));
+    expect(fixture.transactions).toBe(0);
     expect(mutations()).toEqual([]);
   });
 
