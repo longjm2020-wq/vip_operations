@@ -1,0 +1,35 @@
+.ant-modal.floating-panel-movable {
+  translate: var(--floating-panel-x, 0px) var(--floating-panel-y, 0px);
+}
+.floating-panel-movable [data-floating-panel-handle] {
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+.floating-panel-dragging [data-floating-panel-handle] {
+  cursor: grabbing;
+}
+.floating-panel-movable [data-floating-panel-handle] :is(button, input, textarea, select, a, label, [contenteditable], [role="button"], [role="combobox"]) {
+  cursor: auto;
+  touch-action: auto;
+  user-select: auto;
+}
+.floating-panel-grip {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 2;
+  width: 28px;
+  height: 28px;
+  border: 1px solid rgba(120, 96, 77, .2);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, .92);
+  color: #78604d;
+  font-size: 21px;
+  line-height: 24px;
+  padding: 0;
+}
+.floating-panel-grip:focus-visible {
+  outline: 2px solid #d3540b;
+  outline-offset: 2px;
+}

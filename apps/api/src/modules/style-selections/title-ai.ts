@@ -12,7 +12,7 @@ import * as protection from "./protection.js";
 import { persist } from "./service.js";
 import { isArchive } from "./archive.js";
 import { titleImageData } from "./title-ai-images.js";
-import { productTitleSystemPrompt, titleKind, titleLimit, titleValueIssue } from "./title-ai-validation.js";
+import { productTitleSystemPrompt, titleFieldLimitIssue, titleKind, titleLimit, titleValueIssue } from "./title-ai-validation.js";
 
 const scopeKey = () => selectionScope.getStore() || "default";
 const blank = (value: unknown) => !String(value ?? "").trim();
@@ -159,6 +159,10 @@ export async function generateTitles(c: Context, input: unknown): Promise<Select
       if (blank(row.xutiStyleNo)) { skipped.push(String(row.id)); continue; }
       const targets = initial.targets.filter(field => blank(cell(row, field.key)) && protection.access(initial.policy, c.actor, raw, field.key) === "edit");
       if (!targets.length) { skipped.push(String(row.id)); continue; }
+      for (const field of targets) {
+        const issue = titleFieldLimitIssue(field);
+        if (issue) fail("AI_TITLE_LIMIT", `字段「${field.label}」：${issue}`, 400);
+      }
       const source = sourceFacts(row, initial.fields), pictures: string[] = [];
       products.push({ id: String(row.id), xutiStyleNo: String(row.xutiStyleNo || ""), facts: source.details, pictures,
         targets: targets.map(field => ({ key: field.key, label: field.label, kind: titleKind(field), ...titleLimit(field) })),

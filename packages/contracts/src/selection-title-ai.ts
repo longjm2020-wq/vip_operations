@@ -1,5 +1,8 @@
 import { z } from "zod";
 
+/** The AI long-title minimum always counts original Unicode code points. */
+export const SELECTION_AI_LONG_TITLE_MIN_CHARACTERS = 29;
+
 const rowId = z.string().regex(/^[1-9]\d{0,18}$/);
 const fieldKey = z.string().regex(/^custom:[a-zA-Z0-9:-]+$/).max(100);
 export const selectionTitleAIGenerateSchema = z.object({
@@ -18,7 +21,7 @@ export const selectionTitleAIApplySchema = z.object({
 export type SelectionTitleAIStatus = { ready: boolean; message: string };
 export type SelectionTitleAICandidate = {
   key: string; label: string; kind: "long" | "short"; value: string;
-  maxLength: number; countMode: "characters" | "han";
+  minCharacters: number; maxLength: number; countMode: "characters" | "han";
 };
 export type SelectionTitleAIRow = {
   id: string; xutiStyleNo: string; expectedUpdatedAt: string;

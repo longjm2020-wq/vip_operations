@@ -1,5 +1,6 @@
 import {SelectionWorkspace} from "./selection-workspace";
 import { BrandVideo } from "./brand-video";
+import { FloatingPanels } from "./floating-panels";
 import React, { useState } from "react";
 const CompassAnalyticsPage = React.lazy(() => import("./compass-analytics").then(module => ({ default: module.CompassAnalyticsPage })));
 const CompetitorAnalysisPage = React.lazy(() => import("./competitor-analysis").then(module => ({ default: module.CompetitorAnalysisPage })));
@@ -716,6 +717,7 @@ createRoot(document.getElementById("root")!).render(
       }}
     >
       <App>
+        <FloatingPanels />
         <QueryClientProvider client={queryClient}>
           <BrowserRouter>
             <React.Suspense fallback={<div className="loading"><Spin size="large" /></div>}><Root /></React.Suspense>

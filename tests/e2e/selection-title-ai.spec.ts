@@ -2,14 +2,18 @@ import { expect, test, type Page } from "@playwright/test";
 import { projectSelectionSharedLayout, selectionLayoutSchema } from "../../packages/contracts/src/selection-layout.js";
 
 type Values = Record<string, any>;
-type FixtureOptions = { count?: number; configured?: boolean; pauseFirst?: boolean; failApplyBatch?: number; shortHanLimit?: number; firstTtlMs?: number };
+type FixtureOptions = { count?: number; configured?: boolean; pauseFirst?: boolean; failApplyBatch?: number; shortHanLimit?: number; longCharacterLimit?: number; longHanLimit?: number; firstTtlMs?: number };
+const generatedLongTitle = "【100桑蚕丝】碧纨春秋冬新中式国风提花盘扣圆领背心女马甲";
+const editedLongTitle = "【100桑蚕丝】庭春漾秋冬新中式国风提花盘扣圆领背心女马甲";
 async function fixture(page: Page, options: FixtureOptions = {}) {
+  const longLimit = options.longHanLimit ?? options.longCharacterLimit ?? 30;
+  const longCountMode = options.longHanLimit ? "han" : "characters";
   const preferences = selectionLayoutSchema.parse({ columns: [
     { key: "registrationBatch", label: "创建时间", type: "createdTime" },
     { key: "xutiStyleNo", label: "序缇款号", type: "text" },
     { key: "category", label: "三级类目", type: "text" },
     { key: "material", label: "成分", type: "text" },
-    { key: "custom:long-title", label: "长标题", type: "text", custom: true, visibility: "PUBLIC", textConfig: { countMode: "characters", maxLength: 60 } },
+    { key: "custom:long-title", label: "长标题", type: "text", custom: true, visibility: "PUBLIC", textConfig: { countMode: longCountMode, maxLength: longLimit } },
     { key: "custom:short-title", label: "短标题", type: "text", custom: true, visibility: "PUBLIC", ...(options.shortHanLimit ? { textConfig: { countMode: "han", maxLength: options.shortHanLimit } } : {}) },
   ] });
   const rows: Values[] = Array.from({ length: options.count ?? 3 }, (_, index) => ({
@@ -38,7 +42,7 @@ async function fixture(page: Page, options: FixtureOptions = {}) {
           const row = rows.find(row => row.id === id)!;
           return { id, xutiStyleNo: row.xutiStyleNo, expectedUpdatedAt: row.updatedAt, evidence: ["成分：面料100%桑蚕丝", "三级类目：女式马夹"], warnings: ["款名请人工核对"],
             titles: body.targetKeys.filter((key: string) => !row.extraFields[key]?.trim()).map((key: string) => ({ key, label: key === "custom:long-title" ? "长标题" : "短标题", kind: key === "custom:long-title" ? "long" : "short",
-              value: key === "custom:long-title" ? "【100桑蚕丝】新中式马甲" : "碧纨春马甲", maxLength: key === "custom:long-title" ? 60 : options.shortHanLimit || 30, countMode: key === "custom:short-title" && options.shortHanLimit ? "han" : "characters" })),
+              value: key === "custom:long-title" ? generatedLongTitle : "碧纨春马甲", minCharacters: key === "custom:long-title" ? 29 : 1, maxLength: key === "custom:long-title" ? longLimit : options.shortHanLimit || 30, countMode: key === "custom:long-title" ? longCountMode : key === "custom:short-title" && options.shortHanLimit ? "han" : "characters" })),
           };
         }).filter((row: Values) => row.titles.length),
       };
@@ -73,13 +77,13 @@ test("候选先核对再填补，已有标题保留，可编辑和取消单元�
   await expect(panel.getByLabel("AI-002 长标题候选")).toBeVisible();
   expect(state.applies).toHaveLength(0);
   await expect(panel.getByLabel("AI-001 长标题候选")).toHaveCount(0);
-  await panel.getByLabel("AI-002 长标题候选").fill("【100桑蚕丝】碧纨春新中式马甲");
+  await panel.getByLabel("AI-002 长标题候选").fill(editedLongTitle);
   await panel.locator(".selection-title-ai-candidate").filter({ hasText: "AI-002" }).getByRole("checkbox", { name: "短标题", exact: true }).uncheck();
   await panel.getByRole("button", { name: "确认填补 2 个空白单元格", exact: true }).click();
   await expect(panel).toContainText("已填补 2 款的空白标题");
   expect(state.applies[0].rows).toEqual([
     { id: "1", titles: [{ key: "custom:short-title", value: "碧纨春马甲" }] },
-    { id: "2", titles: [{ key: "custom:long-title", value: "【100桑蚕丝】碧纨春新中式马甲" }] },
+    { id: "2", titles: [{ key: "custom:long-title", value: editedLongTitle }] },
   ]);
   expect(state.rows[0].extraFields["custom:long-title"]).toBe("已填写长标题");
   expect(state.rows[2].extraFields["custom:short-title"]).toBe("原有短标题");
@@ -114,6 +118,75 @@ test("用户修改候选超过汉字限制时阻止填补，修改后按原有�
   await panel.getByRole("button", { name: /确认填补/ }).click();
   await expect.poll(() => state.applies.length).toBe(1);
   expect(state.applies[0].rows[0].titles[0].value).toBe("碧纨春 A B");
+});
+
+test("长标题至少29字符且不超过当前30字符上限，空格不能补足长度，短标题保持独立", async ({ page }) => {
+  const state = await fixture(page), panel = await openPanel(page);
+  await expect(panel).toContainText("长标题（至少 29 字符；最多 30字符）");
+  await panel.getByRole("button", { name: "生成候选标题", exact: true }).click();
+  const title = panel.getByLabel("AI-002 长标题候选"), apply = panel.getByRole("button", { name: /确认填补/ });
+  await title.fill(`  ${generatedLongTitle.slice(0, -1)}  `);
+  await expect(panel).toContainText("长标题至少29个字符");
+  await expect(apply).toBeDisabled();
+  await title.fill(generatedLongTitle);
+  await expect(panel).toContainText("29 / 30 字符（至少 29）");
+  await expect(apply).toBeEnabled();
+  await title.fill(`${generatedLongTitle}款`);
+  await expect(panel).toContainText("30 / 30 字符（至少 29）");
+  await expect(apply).toBeEnabled();
+  await title.fill(`${generatedLongTitle}新款`);
+  await expect(panel).toContainText("超过30个字符");
+  await expect(apply).toBeDisabled();
+  await panel.locator(".selection-title-ai-candidate").filter({ hasText: "AI-002" }).getByRole("checkbox", { name: "长标题", exact: true }).uncheck();
+  await expect(apply).toBeEnabled();
+  await apply.click();
+  await expect.poll(() => state.applies.length).toBe(1);
+  expect(state.applies[0].rows.every((row: Values) => row.titles.every((item: Values) => item.key === "custom:short-title"))).toBe(true);
+});
+
+test("长标题字段字符上限小于29时清楚阻止生成，可取消长标题单独生成短标题", async ({ page }) => {
+  const state = await fixture(page, { longCharacterLimit: 28 }), panel = await openPanel(page);
+  await expect(panel).toContainText("长标题字段最多 28 字符，小于 AI 长标题至少 29 字符的要求");
+  await expect(panel).toContainText("请在字段管理中将上限调整至 29 或以上");
+  await expect(panel.getByRole("button", { name: "生成候选标题", exact: true })).toBeDisabled();
+  const long = panel.getByRole("checkbox", { name: /长标题（至少/ });
+  await expect(long).toBeChecked();
+  await long.uncheck();
+  await expect(long).toBeDisabled();
+  await panel.getByRole("button", { name: "生成候选标题", exact: true }).click();
+  await expect(panel.getByLabel("AI-001 短标题候选")).toBeVisible();
+  expect(state.generations[0].targetKeys).toEqual(["custom:short-title"]);
+  expect(state.applies).toHaveLength(0);
+});
+
+test("右键只生成长标题且字段上限不足29时保留目标并提示调整，不会无声改成短标题", async ({ page }) => {
+  const state = await fixture(page, { longCharacterLimit: 28 });
+  const titleCell = page.locator('td[data-selection-row="2"][data-selection-column="custom:long-title"]');
+  await titleCell.click();
+  await titleCell.click({ button: "right" });
+  await page.getByRole("menuitem", { name: /AI 填补空白标题/ }).click();
+  const panel = page.getByRole("dialog", { name: "AI 商品标题生成", exact: true });
+  await expect(panel.getByRole("checkbox", { name: /长标题（至少/ })).toBeChecked();
+  await expect(panel.getByRole("checkbox", { name: /短标题（/ })).not.toBeChecked();
+  await expect(panel.getByRole("button", { name: "生成候选标题", exact: true })).toBeDisabled();
+  await expect(panel).toContainText("当前不能生成长标题");
+  expect(state.generations).toHaveLength(0);
+});
+
+test("长标题最少29个Unicode字符和字段汉字上限分别计数", async ({ page }) => {
+  const state = await fixture(page, { longHanLimit: 26 }), panel = await openPanel(page);
+  await panel.getByRole("button", { name: "生成候选标题", exact: true }).click();
+  const title = panel.getByLabel("AI-002 长标题候选"), apply = panel.getByRole("button", { name: /确认填补/ });
+  await title.fill(`【A】${"衣".repeat(25)}`);
+  await expect(panel).toContainText("28 字符（至少 29） · 25 / 26 汉字");
+  await expect(apply).toBeDisabled();
+  await title.fill(`【A】${"衣".repeat(26)}`);
+  await expect(panel).toContainText("29 字符（至少 29） · 26 / 26 汉字");
+  await expect(apply).toBeEnabled();
+  await title.fill(`【A】${"衣".repeat(27)}`);
+  await expect(panel).toContainText("超过26个汉字");
+  await expect(apply).toBeDisabled();
+  expect(state.applies).toHaveLength(0);
 });
 
 test("后续批次冲突保留候选，已完成批次不会重复写入", async ({ page }) => {

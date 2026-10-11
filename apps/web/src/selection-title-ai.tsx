@@ -5,6 +5,7 @@ import type { api } from "./api";
 import { useSelectionWorkspace } from "./selection-workspace";
 import type { SelectionField } from "../../../packages/contracts/src/selection-layout.js";
 import type { SelectionTitleAICandidate, SelectionTitleAIStatus, SelectionTitleAIRow, SelectionTitleAIPreview } from "../../../packages/contracts/src/selection-title-ai.js";
+import { SELECTION_AI_LONG_TITLE_MIN_CHARACTERS } from "../../../packages/contracts/src/selection-title-ai.js";
 import { countTextCharacters } from "../../../packages/contracts/src/selection-field-validation.js";
 import "./selection-title-ai.css";
 
@@ -29,14 +30,22 @@ export type SelectionTitleAiProps = {
 const pageSize = 4;
 const batchSize = 10;
 const errorText = (error: unknown) => error instanceof Error ? error.message : "请求失败，请重试";
-const cellIssue = (title: CandidateTitle) => !title.value.trim() ? "标题不能为空" : countTextCharacters(title.value, title.countMode) > title.maxLength ? `超过${title.maxLength}${title.countMode === "han" ? "个汉字" : "个字符"}` : "";
+const minimumCharacters = (kind: SelectionTitleAICandidate["kind"]) => kind === "long" ? SELECTION_AI_LONG_TITLE_MIN_CHARACTERS : 1;
+const cellIssue = (title: CandidateTitle) => {
+  const value = title.value.trim();
+  if (!value) return "标题不能为空";
+  if (countTextCharacters(value, "characters") < minimumCharacters(title.kind)) return `长标题至少${SELECTION_AI_LONG_TITLE_MIN_CHARACTERS}个字符`;
+  return countTextCharacters(value, title.countMode) > title.maxLength ? `超过${title.maxLength}${title.countMode === "han" ? "个汉字" : "个字符"}` : "";
+};
+const fieldIssue = (field: SelectionTitleAiField) => field.label === "长标题" && field.textConfig?.countMode === "characters" && field.textConfig.maxLength < SELECTION_AI_LONG_TITLE_MIN_CHARACTERS
+  ? `长标题字段最多 ${field.textConfig.maxLength} 字符，小于 AI 长标题至少 ${SELECTION_AI_LONG_TITLE_MIN_CHARACTERS} 字符的要求。请在字段管理中将上限调整至 ${SELECTION_AI_LONG_TITLE_MIN_CHARACTERS} 或以上。` : "";
 const stringList = (value: unknown): value is string[] => Array.isArray(value) && value.every(item => typeof item === "string");
 function validPreview(value: unknown, rowIds: ReadonlySet<string>, targetKeys: ReadonlySet<string>): value is SelectionTitleAIPreview {
   if (!value || typeof value !== "object") return false;
   const plan = value as Partial<SelectionTitleAIPreview>;
   return typeof plan.planToken === "string" && plan.planToken.length >= 20 && typeof plan.expiresAt === "string" && Number.isFinite(Date.parse(plan.expiresAt)) && typeof plan.model === "string" && stringList(plan.warnings) &&
     Array.isArray(plan.rows) && plan.rows.every(row => row && rowIds.has(row.id) && typeof row.xutiStyleNo === "string" && typeof row.expectedUpdatedAt === "string" && stringList(row.evidence) && stringList(row.warnings) &&
-      Array.isArray(row.titles) && row.titles.length <= 2 && row.titles.every(title => title && targetKeys.has(title.key) && typeof title.label === "string" && ["long", "short"].includes(title.kind) && typeof title.value === "string" && Number.isInteger(title.maxLength) && title.maxLength > 0 && ["characters", "han"].includes(title.countMode)) && new Set(row.titles.map(title => title.key)).size === row.titles.length) && new Set(plan.rows.map(row => row.id)).size === plan.rows.length;
+      Array.isArray(row.titles) && row.titles.length <= 2 && row.titles.every(title => title && targetKeys.has(title.key) && typeof title.label === "string" && ["long", "short"].includes(title.kind) && typeof title.value === "string" && Number.isInteger(title.maxLength) && title.maxLength > 0 && ["characters", "han"].includes(title.countMode) && (title.minCharacters === undefined || title.minCharacters === minimumCharacters(title.kind))) && new Set(row.titles.map(title => title.key)).size === row.titles.length) && new Set(plan.rows.map(row => row.id)).size === plan.rows.length;
 }
 
 /** Candidates are never sent through grid autosave. The signed apply endpoint
@@ -70,6 +79,8 @@ export function SelectionTitleAi({ open, onClose, rows, fields, initialFieldKeys
   const expiringSoon = batches.some(batch => batch.rows.length && !expired(batch) && Date.parse(batch.expiresAt) - now <= 3 * 60 * 1000);
   const checkedTitles = candidates.filter(({ batch }) => !expired(batch)).flatMap(({ row }) => row.titles.filter(title => title.checked));
   const invalidChecked = checkedTitles.some(title => !!cellIssue(title));
+  const incompatibleFields = fields.filter(field => !!fieldIssue(field));
+  const invalidSelectedFields = incompatibleFields.some(field => fieldKeys.includes(field.key));
   const generated = new Set(completedIds);
   const remaining = savedRows.filter(row => !generated.has(row.id));
   const warnings = [...new Set(batches.flatMap(batch => batch.warnings))];
@@ -119,7 +130,7 @@ export function SelectionTitleAi({ open, onClose, rows, fields, initialFieldKeys
     setError(""); setResult("过期候选已移除，可继续生成这些款式。");
   };
   const generate = async () => {
-    if (running.current || !status?.ready || !fieldKeys.length || !remaining.length) return;
+    if (running.current || !status?.ready || !fieldKeys.length || invalidSelectedFields || !remaining.length) return;
     running.current = true; stopAfterBatch.current = false;
     setBusy("generate"); setStopping(false); setError(""); setResult("");
     const currentRun = runId.current;
@@ -140,7 +151,7 @@ export function SelectionTitleAi({ open, onClose, rows, fields, initialFieldKeys
         if (currentRun !== runId.current) return;
         const plan: unknown = response.data;
         if (!validPreview(plan, new Set(group.map(row => row.id)), new Set(fieldKeys))) throw Error("标题服务返回格式已变化，请刷新页面后重试");
-        const next = { ...plan, rows: plan.rows.map(row => ({ ...row, titles: row.titles.map(title => ({ ...title, checked: true })) })) };
+        const next = { ...plan, rows: plan.rows.map(row => ({ ...row, titles: row.titles.map(title => ({ ...title, minCharacters: minimumCharacters(title.kind), checked: true })) })) };
         activePlans.push(next);
         setBatches(current => [...current, next]);
         setCompletedIds(current => [...current, ...group.map(row => row.id)]);
@@ -199,7 +210,7 @@ export function SelectionTitleAi({ open, onClose, rows, fields, initialFieldKeys
         <Button onClick={onClose}>关闭</Button>
         {!!expiredBatches.length && <Button onClick={removeExpired}>移除过期候选</Button>}
         {!!completedIds.length && <Button onClick={clear}>清空候选</Button>}
-        <Button disabled={statusLoading || !status?.ready || !fieldKeys.length || !remaining.length} onClick={() => void generate()}>{completedIds.length ? "继续生成剩余款式" : "生成候选标题"}</Button>
+        <Button disabled={statusLoading || !status?.ready || !fieldKeys.length || invalidSelectedFields || !remaining.length} onClick={() => void generate()}>{completedIds.length ? "继续生成剩余款式" : "生成候选标题"}</Button>
         <Button type="primary" disabled={!checkedTitles.length || invalidChecked} onClick={() => void apply()}>确认填补 {checkedTitles.length} 个空白单元格</Button>
       </>}
     </Space>}>
@@ -208,11 +219,12 @@ export function SelectionTitleAi({ open, onClose, rows, fields, initialFieldKeys
     {status && !status.ready && <Alert className="selection-title-ai-alert" type="warning" showIcon title={status.message || "AI 服务尚未配置"} action={canConfigureAi && onConfigureAi ? <Button size="small" onClick={onConfigureAi}>配置 AI 服务</Button> : undefined} description="请联系有系统设置权限的管理员配置 AI 服务后重试。" />}
     {!status && !statusLoading && <Button size="small" onClick={() => void checkStatus()}>重新检查 AI 服务</Button>}
     <div className="selection-title-ai-options">
-      <Space wrap><strong>填补字段</strong>{fields.map(field => <Checkbox key={field.key} checked={fieldKeys.includes(field.key)} disabled={settingsLocked} onChange={event => setFieldKeys(current => event.target.checked ? [...current, field.key] : current.filter(key => key !== field.key))}>{field.label}{field.textConfig ? `（最多 ${field.textConfig.maxLength}${field.textConfig.countMode === "han" ? "汉字" : "字符"}）` : `（默认 ${field.label === "短标题" ? 30 : 60} 字符）`}</Checkbox>)}</Space>
+      <Space wrap><strong>填补字段</strong>{fields.map(field => <Checkbox key={field.key} checked={fieldKeys.includes(field.key)} disabled={settingsLocked || (!!fieldIssue(field) && !fieldKeys.includes(field.key))} onChange={event => setFieldKeys(current => event.target.checked ? [...current, field.key] : current.filter(key => key !== field.key))}>{field.label}{field.label === "长标题" ? `（至少 ${SELECTION_AI_LONG_TITLE_MIN_CHARACTERS} 字符；` : "（"}{field.textConfig ? `最多 ${field.textConfig.maxLength}${field.textConfig.countMode === "han" ? "汉字" : "字符"}）` : `默认最多 ${field.label === "短标题" ? 30 : 60} 字符）`}</Checkbox>)}</Space>
+      {!!incompatibleFields.length && <Alert className="selection-title-ai-alert" type="warning" showIcon title={incompatibleFields.map(fieldIssue).join("；")} description={invalidSelectedFields ? "当前不能生成长标题；也可取消勾选长标题，仅生成短标题。" : "长标题暂不可勾选；短标题可按原有上限独立生成。"} />}
       <Collapse ghost size="small" items={[{ key: "preferences", label: "标题偏好与规则", children: <>
         <Checkbox checked={usePoeticName} disabled={settingsLocked} onChange={event => setUsePoeticName(event.target.checked)}>结合款式尝试原创诗意款名</Checkbox>
         <Input.TextArea aria-label="标题偏好" value={instruction} disabled={settingsLocked} onChange={event => setInstruction(event.target.value)} maxLength={400} rows={2} placeholder="可填写语气、用词偏好；不会将偏好当作产品事实。" />
-        <p>参考本表已有标题格式；长标题使用【有依据的卖点】与产品描述，短标题精简。款名避开已知 IP、影视名，候选仍需人工核对。禁止杜撰非遗、材质比例、功效或夸大词。</p>
+        <p>参考本表已有标题格式；长标题至少 {SELECTION_AI_LONG_TITLE_MIN_CHARACTERS} 字符，使用【有依据的卖点】与产品描述。视觉识别后可补充符合实物的季节、风格和常用搜索词，不能为凑字数编造事实；短标题精简。款名避开已知 IP、影视名，候选仍需人工核对。禁止杜撰非遗、材质比例、功效或夸大词。</p>
       </> }]} />
     </div>
     {busy && <div role="status" className="selection-title-ai-progress"><span>{busy === "generate" ? "正在生成候选" : "正在填补空白标题"} · {progress.done} / {progress.total}{busy === "generate" ? " 款" : " 批"}</span><Progress percent={progress.total ? Math.round(progress.done / progress.total * 100) : 0} size="small" />{stopping && <span>当前请求完成后停止，已完成内容会保留。</span>}</div>}
@@ -228,7 +240,7 @@ export function SelectionTitleAi({ open, onClose, rows, fields, initialFieldKeys
         {row.titles.map(title => <div className="selection-title-ai-title" key={title.key}>
           <Checkbox checked={title.checked} disabled={!!busy || expired(batch)} onChange={event => changeTitle(batch.planToken, row.id, title.key, { checked: event.target.checked })}>{title.label}</Checkbox>
           <Input.TextArea aria-label={`${row.xutiStyleNo} ${title.label}候选`} autoSize={{ minRows: 1, maxRows: 3 }} disabled={!!busy || expired(batch)} status={cellIssue(title) ? "error" : undefined} value={title.value} onChange={event => changeTitle(batch.planToken, row.id, title.key, { value: event.target.value })} />
-          <span className={`selection-title-ai-count${cellIssue(title) ? " is-error" : ""}`}>{countTextCharacters(title.value, title.countMode)} / {title.maxLength} {title.countMode === "han" ? "汉字" : "字符"}{cellIssue(title) ? ` · ${cellIssue(title)}` : ""}</span>
+          <span className={`selection-title-ai-count${cellIssue(title) ? " is-error" : ""}`}>{title.kind === "long" && title.countMode === "han" ? `${countTextCharacters(title.value.trim(), "characters")} 字符（至少 ${SELECTION_AI_LONG_TITLE_MIN_CHARACTERS}） · ` : ""}{countTextCharacters(title.value.trim(), title.countMode)} / {title.maxLength} {title.countMode === "han" ? "汉字" : "字符"}{title.kind === "long" && title.countMode === "characters" ? `（至少 ${SELECTION_AI_LONG_TITLE_MIN_CHARACTERS}）` : ""}{cellIssue(title) ? ` · ${cellIssue(title)}` : ""}</span>
         </div>)}
         {!!row.warnings.length && <div className="selection-title-ai-row-warning" role="status">核对提示：{row.warnings.join("；")}</div>}
         {!!row.evidence.length && <Collapse ghost size="small" items={[{ key: "evidence", label: "查看生成依据", children: <ul>{row.evidence.map((item, index) => <li key={index}>{item}</li>)}</ul> }]} />}

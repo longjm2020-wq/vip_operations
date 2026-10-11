@@ -5,7 +5,7 @@ import type { Row, Tx } from "../../packages/database/src/index.js";
 import { selectionScope } from "../../packages/database/src/selection-scope.js";
 import { defaultProtection } from "../../packages/contracts/src/selection-protection.js";
 
-const fixture = vi.hoisted(() => ({ database: null as PGlite | null }));
+const fixture = vi.hoisted(() => ({ database: null as PGlite | null, imageData: null as string | null }));
 vi.mock("../../packages/database/src/index.js", async importOriginal => {
   const original = await importOriginal<typeof import("../../packages/database/src/index.js")>();
   const wrap = (database: Pick<PGlite, "query">) => ({
@@ -18,7 +18,7 @@ vi.mock("../../packages/database/src/index.js", async importOriginal => {
   } };
 });
 vi.mock("../../apps/api/src/modules/style-selections/archive.js", () => ({ isArchive: async () => false, mirrorArchiveRow: async () => undefined }));
-vi.mock("../../apps/api/src/modules/style-selections/title-ai-images.js", () => ({ titleImageData: async () => null }));
+vi.mock("../../apps/api/src/modules/style-selections/title-ai-images.js", () => ({ titleImageData: async () => fixture.imageData }));
 import { applyTitles, generateTitles, parseTitleAIResponse, readTitlePlan, titleAIStatus } from "../../apps/api/src/modules/style-selections/title-ai.js";
 import { encryptSecret } from "../../apps/api/src/modules/analytics/secrets.js";
 
@@ -60,8 +60,8 @@ beforeAll(async () => {
 }, 30000);
 beforeEach(async () => {
   vi.stubEnv("COMPASS_MAIL_KEY", "a".repeat(64));
-  providerCalls = 0; providerPayload = {};
-  providerHandler = products => ({ rows: products.map(product => ({ id: product.id, titles: product.targets.map((target: Row) => ({ key: target.key, value: target.kind === "long" ? "【水貂毛拼接100桑蚕丝】碧纨春女式皮衣" : "碧纨春女式皮衣" })), evidence: ["成分：主面料桑蚕丝，配料水貂毛皮"], warnings: ["款名需复核"] })) });
+  providerCalls = 0; providerPayload = {}; fixture.imageData = null;
+  providerHandler = products => ({ rows: products.map(product => ({ id: product.id, titles: product.targets.map((target: Row) => ({ key: target.key, value: target.kind === "long" ? "【水貂毛拼接100桑蚕丝】碧纨春女式皮衣皮草女士外套穿搭单品" : "碧纨春女式皮衣" })), evidence: ["成分：主面料桑蚕丝，配料水貂毛皮"], warnings: ["款名需复核"] })) });
   await fixture.database!.exec("TRUNCATE style_selections,selection_field_registry,style_selection_protection,idempotency_records,audit_logs,compass_ai_settings RESTART IDENTITY");
   await fixture.database!.query("INSERT INTO style_selection_protection(id,settings) VALUES(1,$1)", [JSON.stringify(defaultProtection)]);
   for (const [key, label, type, textConfig] of [[longKey, "长标题", "text", { countMode: "characters", maxLength: 60 }], [shortKey, "短标题", "text", { countMode: "han", maxLength: 20 }], [categoryKey, "三级类目", "single", undefined]] as const) {
@@ -92,6 +92,45 @@ describe("server-authoritative AI product titles", () => {
     expect((await generateTitles(actor(), input([String(row.id)]))).rows).toEqual([]);
     expect(providerCalls).toBe(0);
   });
+  it("sends the long-title character minimum to the model and returns it in each candidate", async () => {
+    const row = await style("TARGET"), preview = await generateTitles(actor(), input([String(row.id)]));
+    const request = JSON.parse(providerPayload.messages[1].content[0].text);
+    expect(request.products[0].targets).toMatchObject([{ kind: "long", minCharacters: 29 }, { kind: "short", minCharacters: 1 }]);
+    expect(preview.rows[0].titles).toMatchObject([{ kind: "long", minCharacters: 29 }, { kind: "short", minCharacters: 1 }]);
+  });
+  it("refuses incompatible blank long-title limits before a paid request while preserving filled long titles", async () => {
+    await fixture.database!.query("UPDATE selection_field_registry SET definition=jsonb_set(definition,'{textConfig,maxLength}','28'::jsonb) WHERE field_key=$1", [longKey]);
+    const blank = await style("BLANK");
+    await expect(generateTitles(actor(), input([String(blank.id)]))).rejects.toMatchObject({ status: 400, response: { error: { code: "AI_TITLE_LIMIT", message: expect.stringContaining("字段管理") } } });
+    expect(providerCalls).toBe(0);
+    expect((await generateTitles(actor(), input([String(blank.id)], [shortKey]))).rows[0].titles).toMatchObject([{ key: shortKey }]);
+    const filled = await style("FILLED", { [longKey]: "已有长标题" });
+    expect((await generateTitles(actor(), input([String(filled.id)]))).rows[0].titles).toMatchObject([{ key: shortKey }]);
+    expect((await read("SELECT extra_fields FROM style_selections WHERE id=$1", [filled.id]))[0].extra_fields[longKey]).toBe("已有长标题");
+  });
+  it("rejects short AI long titles during generation and edited application without writing cells", async () => {
+    const row = await style("TARGET"), ordinary = providerHandler;
+    providerHandler = products => ({ rows: products.map(product => ({ id: product.id, titles: [{ key: longKey, value: "【水貂毛拼接100桑蚕丝】碧纨春女式皮衣" }], evidence: ["本款成分及类目"], warnings: [] })) });
+    await expect(generateTitles(actor(), input([String(row.id)], [longKey]))).rejects.toMatchObject({ status: 502, response: { error: { message: expect.stringContaining("至少需要29个字符") } } });
+    providerHandler = ordinary;
+    const preview = await generateTitles(actor(), input([String(row.id)]));
+    await expect(applyTitles(actor(), { planToken: preview.planToken, rows: [{ id: String(row.id), titles: [{ key: longKey, value: "【水貂毛拼接100桑蚕丝】碧纨春女式皮衣" }] }] })).rejects.toMatchObject({ status: 400, response: { error: { message: expect.stringContaining("至少需要29个字符") } } });
+    const saved = (await read("SELECT extra_fields FROM style_selections WHERE id=$1", [row.id]))[0].extra_fields;
+    expect(saved[longKey]).toBeUndefined(); expect(saved[shortKey]).toBeUndefined();
+    expect(await read("SELECT * FROM audit_logs")).toHaveLength(0);
+  });
+  it("accepts visually grounded seasons without assuming material claims from the photograph", async () => {
+    fixture.imageData = "data:image/jpeg;base64,AA==";
+    const row = await style("VISUAL");
+    await fixture.database!.query("UPDATE style_selections SET images=$2 WHERE id=$1", [row.id, JSON.stringify([{ url: "https://a.vpimg2.com/upload/visual.jpg" }])]);
+    providerHandler = products => ({ rows: products.map(product => ({ id: product.id, titles: [{ key: longKey,
+      value: "【水貂毛拼接100桑蚕丝】碧纨春秋冬新中式圆领盘扣女式皮衣外搭" }], evidence: ["本款文字成分；图片可见圆领盘扣及秋冬外搭结构"], warnings: [] })) });
+    const preview = await generateTitles(actor(), input([String(row.id)], [longKey]));
+    expect(preview.rows[0].titles[0].value).toContain("秋冬");
+    expect(preview.rows[0].warnings).not.toContain("未使用商品图片，仅依据可查看的文字资料生成");
+    await expect(applyTitles(actor(), { planToken: preview.planToken, rows: [{ id: String(row.id), titles: [{ key: longKey,
+      value: "【非遗手工100桑蚕丝】碧纨春秋冬新中式圆领盘扣女式皮衣外搭" }] }] })).rejects.toMatchObject({ status: 400 });
+  });
   it("skips rows without visible product facts", async () => {
     const row = await style("EMPTY", { [categoryKey]: "" }, null);
     const preview = await generateTitles(actor(), input([String(row.id)]));
@@ -115,7 +154,7 @@ describe("server-authoritative AI product titles", () => {
     await fixture.database!.query("UPDATE selection_field_registry SET owner_id=8,visibility='PRIVATE' WHERE field_key=$1", [shortKey]);
     await style("EXAMPLE", { [shortKey]: "秘密标题不可发送" });
     const row = await style("TARGET", { [shortKey]: "本款秘密短标题" });
-    providerHandler = products => ({ rows: products.map(product => ({ id: product.id, titles: [{ key: longKey, value: "【女式皮衣】春影女式皮衣" }], evidence: ["三级类目"], warnings: ["成分不可查看，未使用材质卖点"] })) });
+    providerHandler = products => ({ rows: products.map(product => ({ id: product.id, titles: [{ key: longKey, value: "【女式皮衣】春影女式皮衣皮草女士外套上衣搭配穿搭单品服饰系列" }], evidence: ["三级类目"], warnings: ["成分不可查看，未使用材质卖点"] })) });
     await generateTitles(actor(), input([String(row.id)], [longKey]));
     const payload = JSON.stringify(providerPayload);
     expect(payload).not.toContain("秘密标题不可发送"); expect(payload).not.toContain("本款秘密短标题");
