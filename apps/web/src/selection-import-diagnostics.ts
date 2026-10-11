@@ -5,6 +5,7 @@ export type SelectionImportWorkbookSource = {
   xutiStyleNo: string;
   row: number;
   colorCell?: { cell: string; label: string };
+  standardColorCell?: { cell: string; label: string };
   images: ImageCellSource[];
 };
 
@@ -25,6 +26,7 @@ function imageColorDiagnostic(value: unknown): value is SelectionImportImageColo
       typeof detail.imageIndex === "number" && Number.isInteger(detail.imageIndex) && detail.imageIndex >= 0) &&
     ["import", "existing"].includes(detail.imageSource || "") &&
     ["import", "existing"].includes(detail.colorSource || "") &&
+    (detail.colorFieldLabel === undefined || detail.colorFieldLabel === "标准颜色") &&
     (detail.imageColor === undefined || typeof detail.imageColor === "string") &&
     (detail.allowedColors === undefined || (Array.isArray(detail.allowedColors) && detail.allowedColors.every(color => typeof color === "string")));
 }
@@ -48,16 +50,18 @@ export function formatSelectionImportError(error: unknown, records?: readonly Re
       ? `图片明细第 ${image!.row} 行（颜色单元格 ${image!.cell}）`
       : `选款资料第 ${image!.row} 行（图片单元格 ${image!.cell}，第 ${image!.line} 行内容）`;
   const imageColor = detail.imageColor === undefined ? "图片颜色" : `图片颜色「${detail.imageColor}」`;
+  const colorLabel = detail.colorFieldLabel || "供应商颜色";
+  const colorCell = detail.colorFieldLabel ? source.standardColorCell : source.colorCell;
   const colorLocation = detail.colorSource === "import"
-    ? source.colorCell
-      ? `对应选款资料第 ${source.row} 行（${source.colorCell.label}单元格 ${source.colorCell.cell}）`
-      : `对应选款资料第 ${source.row} 行，本次文件未提供供应商颜色列`
-    : `对应选款资料第 ${source.row} 行，本次沿用系统已有供应商颜色`;
+    ? colorCell
+      ? `对应选款资料第 ${source.row} 行（${colorCell.label}单元格 ${colorCell.cell}）`
+      : `对应选款资料第 ${source.row} 行，本次文件未提供${colorLabel}列`
+    : `对应选款资料第 ${source.row} 行，本次沿用系统已有${colorLabel}`;
   const allowed = detail.allowedColors === undefined ? "" : detail.allowedColors.length
     ? `；可用颜色：${detail.allowedColors.join("、")}`
-    : "；当前供应商颜色为空";
+    : `；当前${colorLabel}为空`;
   const remedy = detail.imageSource === "existing"
     ? "请保留已有图片对应的颜色，或同时导入颜色匹配的新图片后重新上传。"
-    : "请核对图片颜色和该款供应商颜色后重新上传。";
-  return `${imageLocation}，序缇款号「${detail.xutiStyleNo}」的${imageColor}不符合供应商颜色；${colorLocation}${allowed}。${remedy}`;
+    : `请核对图片颜色和该款${colorLabel}后重新上传。`;
+  return `${imageLocation}，序缇款号「${detail.xutiStyleNo}」的${imageColor}不符合${colorLabel}；${colorLocation}${allowed}。${remedy}`;
 }

@@ -9,4 +9,6 @@ export type SelectionImportImageColorDiagnostic = {
   colorSource: "import" | "existing";
   imageColor?: string;
   allowedColors?: string[];
+  /** Present only for standard-color-linked images; no private field key leaks. */
+  colorFieldLabel?: "标准颜色";
 };

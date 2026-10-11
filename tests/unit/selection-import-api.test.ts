@@ -34,7 +34,10 @@ vi.mock("../../apps/api/src/modules/style-selections/archive.js", () => ({
   mirrorArchiveRow: async (_tx: Tx, _c: Context, row: Row) => { fixture.mirrors.push(row); },
 }));
 
-import { previewImport, commitImport } from "../../apps/api/src/modules/style-selections/service.js";
+import { previewImport, commitImport, write, changePhoto } from "../../apps/api/src/modules/style-selections/service.js";
+import { detail as selectionDetail } from "../../apps/api/src/modules/style-selections/protection.js";
+import { create as createCollection, detail as collectionDetail, publicDetail as publicCollectionDetail, save as saveCollection, submit as submitCollection, review as reviewCollection } from "../../apps/api/src/modules/style-selections/collections.js";
+import { collectionInventory } from "../../packages/contracts/src/selection-collection.js";
 
 const actor = (key = "import"): Context => ({ actor: { id: "7", username: "editor", displayName: "Editor", permissions: ["selection.read", "selection.manage", "product.read", "product.update", "product.create"], roleCodes: [] }, requestId: "import-test", key });
 const input = (rows: Row[], existingStrategy: "OVERWRITE" | "SKIP" = "OVERWRITE") => ({ rows, existingStrategy });
@@ -55,8 +58,14 @@ const forbidden = { status: 403, response: { error: { code: "REGION_FORBIDDEN" }
 beforeAll(async () => {
   fixture.database = new PGlite();
   await fixture.database.exec(`
-    CREATE TABLE users(id bigint PRIMARY KEY,display_name text,username text);
+    CREATE TABLE users(id bigint PRIMARY KEY,display_name text,username text,status text DEFAULT 'ACTIVE');
     INSERT INTO users VALUES(7,'Editor','editor'),(8,'Other','other');
+    CREATE TABLE roles(id bigint PRIMARY KEY,code text);
+    CREATE TABLE permissions(id bigint PRIMARY KEY,code text);
+    CREATE TABLE user_roles(user_id bigint,role_id bigint);
+    CREATE TABLE role_permissions(role_id bigint,permission_id bigint);
+    INSERT INTO roles VALUES(1,'EDITOR'); INSERT INTO permissions VALUES(1,'selection.read'),(2,'selection.manage');
+    INSERT INTO user_roles VALUES(7,1),(8,1); INSERT INTO role_permissions VALUES(1,1),(1,2);
     CREATE TABLE project_tables(id bigint PRIMARY KEY,initial_layout text,system_key text);
     INSERT INTO project_tables VALUES(23,'empty','PRODUCT_ARCHIVE');
     CREATE TABLE products(id bigint PRIMARY KEY,style_no text,custom_fields jsonb DEFAULT '{}',tag_price numeric,main_image_url text,updated_at timestamptz DEFAULT now(),created_at timestamptz DEFAULT now());
@@ -77,22 +86,186 @@ beforeAll(async () => {
     CREATE TABLE selection_shared_fields(workspace_key text PRIMARY KEY,fields jsonb,revision integer DEFAULT 1);
     CREATE TABLE idempotency_records(id bigserial,actor_id bigint,operation text,idempotency_key text,request_hash text,response_status integer,response_body jsonb);
     CREATE TABLE audit_logs(id bigserial,actor_id bigint,actor_label text,action text,entity_type text,entity_id text,request_id text,before_data jsonb,after_data jsonb,reason text,selection_table_id bigint);
+    CREATE TABLE selection_collections(id bigserial PRIMARY KEY,title text,token_hash text,created_by bigint,expires_at timestamptz,closed boolean DEFAULT false,status text DEFAULT 'DRAFT',revision integer DEFAULT 1,feedback text DEFAULT '',created_at timestamptz DEFAULT now(),updated_at timestamptz DEFAULT now());
+    CREATE TABLE selection_collection_items(collection_id bigint,selection_id bigint,position integer,source_version integer,xuti_style_no text,original jsonb,draft jsonb,status text DEFAULT 'DRAFT',feedback text DEFAULT '');
+    CREATE TABLE selection_collection_events(collection_id bigint,actor_id bigint,action text);
+    CREATE TABLE selection_collection_requests(collection_id bigint,request_key text,fingerprint text,result jsonb);
     CREATE SCHEMA selection_table_23;
     CREATE TABLE selection_table_23.style_selections(LIKE public.style_selections INCLUDING ALL);
     CREATE TABLE selection_table_23.style_selection_protection(LIKE public.style_selection_protection INCLUDING ALL);
     CREATE FUNCTION public.sync_product_archive_record(p products,table_id bigint,actor_id bigint) RETURNS text LANGUAGE plpgsql AS $$
-    BEGIN INSERT INTO selection_table_23.style_selections(xuti_style_no,product_id,material,color,created_by) VALUES(p.style_no,p.id,coalesce(p.custom_fields->>'f0000000000000000000000000000000e','产品原成分'),p.custom_fields->>'f00000000000000000000000000000003',actor_id); RETURN 'ok'; END $$;
+    BEGIN INSERT INTO selection_table_23.style_selections(xuti_style_no,product_id,material,color,extra_fields,created_by) VALUES(p.style_no,p.id,coalesce(p.custom_fields->>'f0000000000000000000000000000000e','产品原成分'),p.custom_fields->>'f00000000000000000000000000000003',(SELECT coalesce(jsonb_object_agg('custom:product:'||key,value),'{}') FROM jsonb_each(p.custom_fields)),actor_id); RETURN 'ok'; END $$;
   `);
 }, 30000);
 beforeEach(async () => {
   fixture.archive = false; fixture.registryBigInt = false; fixture.mirrors = [];
-  await fixture.database!.exec(`TRUNCATE style_selections,selection_field_registry,selection_layout_preferences,selection_shared_layouts,selection_shared_fields,idempotency_records,audit_logs,products,product_fields,style_selection_protection,selection_table_23.style_selections,selection_table_23.style_selection_protection RESTART IDENTITY`);
+  await fixture.database!.exec(`TRUNCATE style_selections,selection_field_registry,selection_layout_preferences,selection_shared_layouts,selection_shared_fields,idempotency_records,audit_logs,products,product_fields,style_selection_protection,selection_table_23.style_selections,selection_table_23.style_selection_protection,selection_collections,selection_collection_items,selection_collection_events,selection_collection_requests RESTART IDENTITY`);
   await fixture.database!.query("INSERT INTO style_selection_protection(id,settings) VALUES(1,$1)", [JSON.stringify(defaultProtection)]);
   await fixture.database!.query("INSERT INTO selection_table_23.style_selection_protection(id,settings) VALUES(1,$1)", [JSON.stringify(defaultProtection)]);
 });
 afterAll(async () => { await fixture.database?.close(); });
 
 describe("atomic Excel style import", () => {
+  it("resolves standard-color links while leaving supplier colors intact, including ordinary edits and photo append", async () => {
+    const standard = field("标准颜色", "multiple", ["白色", "灰色"]);
+    await register(standard);
+    const before = await style("STANDARD", { color: "供应商黑", extraFields: { [standard.key]: "旧标准色" } });
+    const source = input([{ xutiStyleNo: "STANDARD", fieldValues: { 标准颜色: "白色/灰色" }, images: [
+      { id: "standard", color: "白色", colorFieldKey: "standard", url: "https://example.com/standard.jpg" },
+      { id: "legacy", color: "供应商黑", url: "https://example.com/legacy.jpg" },
+    ] }]);
+    const plan = await previewImport(actor(), source);
+    expect(source.rows[0].images[0].colorFieldKey).toBe("standard");
+    expect(plan.rows[0].values.images[0].colorFieldKey).toBe("standard");
+    expect(await commitImport(actor(), payload(plan))).toMatchObject({ updated: 1, fieldsCreated: 0 });
+    const saved = (await read("SELECT * FROM style_selections"))[0];
+    expect(saved.color).toBe("供应商黑");
+    expect(saved.extra_fields[standard.key]).toBe("白色/灰色");
+    expect(saved.images[0].colorFieldKey).toBe(standard.key);
+    await write(actor("edit-standard-image"), { images: saved.images.map((image: Row) => image.id === "standard" ? { ...image, color: "灰色" } : image) }, String(before.id));
+    await changePhoto(actor("append-standard-image"), String(before.id), { action: "add", image: { id: "standard2", color: "白色", colorFieldKey: standard.key, url: "https://example.com/standard2.jpg" } });
+    await changePhoto(actor("append-legacy-image"), String(before.id), { action: "add", image: { id: "legacy2", color: "供应商黑", url: "https://example.com/legacy2.jpg" } });
+    expect((await read("SELECT images,color FROM style_selections"))[0]).toMatchObject({ color: "供应商黑", images: [
+      { id: "standard", color: "灰色", colorFieldKey: standard.key }, { id: "legacy", color: "供应商黑" },
+      { id: "standard2", color: "白色", colorFieldKey: standard.key }, { id: "legacy2", color: "供应商黑" },
+    ] });
+  });
+  it("uses retained standard colors for image-only updates and skips blank supplied standard values", async () => {
+    const standard = field("标准颜色"); await register(standard);
+    await style("STANDARD-ONLY", { color: "供应商黑", extraFields: { [standard.key]: " 白色 / 灰色 " } });
+    const plan = await previewImport(actor(), input([{ xutiStyleNo: "STANDARD-ONLY", fieldValues: { 标准颜色: " " }, images: [
+      { id: "gray", color: "灰色", colorFieldKey: "standard", url: "https://example.com/gray.jpg" },
+    ] }]));
+    await commitImport(actor(), payload(plan));
+    expect((await read("SELECT color,extra_fields,images FROM style_selections"))[0]).toEqual({ color: "供应商黑", extra_fields: { [standard.key]: " 白色 / 灰色 " }, images: [{ id: "gray", color: "灰色", colorFieldKey: standard.key, url: "https://example.com/gray.jpg" }] });
+    const supplierOnly = await previewImport(actor("supplier-only"), input([{ xutiStyleNo: "STANDARD-ONLY", color: "新供应商色" }]));
+    await commitImport(actor("supplier-only"), payload(supplierOnly));
+    expect((await read("SELECT color,images FROM style_selections"))[0]).toMatchObject({ color: "新供应商色", images: [{ color: "灰色", colorFieldKey: standard.key }] });
+  });
+  it("reports imported or retained standard-image mismatches against the exact standard field", async () => {
+    const standard = field("标准颜色"); await register(standard);
+    await style("STANDARD-ERROR", { color: "供应商黑", extraFields: { [standard.key]: "白色" }, images: [{ id: "white", color: "白色", colorFieldKey: standard.key, url: "https://example.com/white.jpg" }] });
+    await expect(previewImport(actor(), input([{ xutiStyleNo: "STANDARD-ERROR", images: [{ id: "wrong", color: "供应商黑", colorFieldKey: "standard", url: "https://example.com/wrong.jpg" }] }]))).rejects.toMatchObject({ status: 400, response: { error: {
+      message: expect.stringContaining("系统标准颜色「白色」"), details: { kind: "SELECTION_IMPORT_IMAGE_COLOR", rowIndex: 0, xutiStyleNo: "STANDARD-ERROR", imageIndex: 0, imageSource: "import", colorSource: "existing", colorFieldLabel: "标准颜色", imageColor: "供应商黑", allowedColors: ["白色"] },
+    } } });
+    await expect(previewImport(actor("update-standard-only"), input([{ xutiStyleNo: "STANDARD-ERROR", fieldValues: { 标准颜色: "灰色" } }]))).rejects.toMatchObject({ status: 400, response: { error: { details: { imageSource: "existing", colorSource: "import", colorFieldLabel: "标准颜色", imageColor: "白色", allowedColors: ["灰色"] } } } });
+    const saved = (await read("SELECT * FROM style_selections"))[0];
+    await expect(write(actor("clear-standard-only"), { extraFields: { [standard.key]: "" } }, String(saved.id))).rejects.toMatchObject({ status: 400, response: { error: { message: "图片颜色必须来自关联的标准颜色字段" } } });
+    expect(await read("SELECT * FROM audit_logs")).toEqual([]);
+  });
+  it.each(["ambiguous", "deleted", "unsupported"])("rejects %s standard field linkage without preview writes", async mode => {
+    const standard = field("标准颜色", mode === "unsupported" ? "image" : "text");
+    await register({ ...standard, ...(mode === "deleted" ? { deleted: true } : {}) });
+    if (mode === "ambiguous") await register({ ...standard, key: "custom:second-standard" });
+    await style("INVALID-STANDARD", { color: "厂家黑", extraFields: { [standard.key]: "白色" } });
+    await expect(previewImport(actor(), input([{ xutiStyleNo: "INVALID-STANDARD", images: [{ id: "white", color: "白色", colorFieldKey: "standard", url: "https://example.com/white.jpg" }] }]))).rejects.toMatchObject({ status: mode === "deleted" ? 403 : 400 });
+    expect((await read("SELECT images FROM style_selections"))[0].images).toEqual([]);
+    expect(await read("SELECT * FROM audit_logs")).toEqual([]);
+  });
+  it("creates only the supplied standard field on valid new rows and retains complete slash choice labels", async () => {
+    const plan = await previewImport(actor(), input([{ xutiStyleNo: "NEW-STANDARD", color: "厂家色", fieldValues: { 标准颜色: "白色/灰色" }, images: [{ id: "white", color: "白色", colorFieldKey: "standard", url: "https://example.com/white.jpg" }] }]));
+    const binding = plan.fields.find(binding => binding.header === "标准颜色")!;
+    expect(binding).toMatchObject({ isNew: true, type: "text" });
+    expect(await read("SELECT * FROM selection_field_registry")).toEqual([]);
+    await commitImport(actor(), payload(plan));
+    expect((await read("SELECT color,extra_fields,images FROM style_selections"))[0]).toMatchObject({ color: "厂家色", extra_fields: { [binding.key]: "白色/灰色" }, images: [{ colorFieldKey: binding.key }] });
+    const standard = { ...field("标准颜色", "multiple", ["米色/金色", "黑色"]), key: binding.key };
+    await fixture.database!.query("UPDATE selection_field_registry SET definition=$1 WHERE field_key=$2", [JSON.stringify(standard), binding.key]);
+    const choices = await previewImport(actor("slash-standard"), input([{ xutiStyleNo: "NEW-STANDARD", fieldValues: { 标准颜色: '["米色/金色","黑色"]' }, images: [{ id: "mixed", color: "米色/金色", colorFieldKey: "standard", url: "https://example.com/mixed.jpg" }] }]));
+    await commitImport(actor("slash-standard"), payload(choices));
+    expect((await read("SELECT images FROM style_selections"))[0].images[0]).toMatchObject({ color: "米色/金色", colorFieldKey: binding.key });
+  });
+  it("rejects inaccessible or arbitrary color-link fields before leaking their retained values", async () => {
+    const standard = field("标准颜色"); await register(standard);
+    await style("STANDARD-PRIVATE", { color: "供应商黑", extraFields: { [standard.key]: "秘密标准色" }, images: [{ id: "existing", color: "秘密标准色", colorFieldKey: standard.key, url: "https://example.com/existing.jpg" }] });
+    await settings({ enabled: true, regions: [{ id: "123e4567-e89b-42d3-a456-426614174000", name: "Standard denied", scope: "columns", rowIds: [], columnKeys: [standard.key], users: {}, others: "deny" }] });
+    const image = { id: "guess", color: "猜测色", colorFieldKey: "standard", url: "https://example.com/guess.jpg" };
+    await expect(previewImport(actor(), input([{ xutiStyleNo: "STANDARD-PRIVATE", images: [image] }]))).rejects.toMatchObject(forbidden);
+    const before = (await read("SELECT * FROM style_selections"))[0];
+    await write(actor("unrelated-private-basis"), { material: "普通修改" }, String(before.id));
+    await expect(changePhoto(actor("guess-private-basis"), String(before.id), { action: "add", image: { ...image, colorFieldKey: standard.key } })).rejects.toMatchObject(forbidden);
+    expect((await read("SELECT images FROM style_selections"))[0].images).toEqual(before.images);
+    await settings({ enabled: false, regions: [] });
+    const unrelated = field("其他字段"); await register(unrelated);
+    await expect(previewImport(actor("arbitrary-link"), input([{ xutiStyleNo: "STANDARD-PRIVATE", images: [{ ...image, colorFieldKey: unrelated.key }] }]))).rejects.toMatchObject({ status: 400, response: { error: { message: expect.stringContaining("标准颜色字段") } } });
+  });
+  it("redacts unreadable retained standard-image details and preserves renamed existing field linkage", async () => {
+    const standard = field("标准颜色"); await register(standard);
+    const before = await style("STANDARD-RETAINED", { color: "厂家色", extraFields: { [standard.key]: "秘密标准色" }, images: [{ id: "old", color: "秘密标准色", colorFieldKey: standard.key, url: "https://example.com/secret.jpg" }] });
+    await settings({ enabled: true, regions: [{ id: "123e4567-e89b-42d3-a456-426614174000", name: "Images private", scope: "columns", rowIds: [], columnKeys: ["images"], users: {}, others: "deny" }] });
+    let failure: unknown;
+    try { await previewImport(actor(), input([{ xutiStyleNo: "STANDARD-RETAINED", fieldValues: { 标准颜色: "白色" } }])); } catch (error) { failure = error; }
+    expect(failure).toMatchObject({ status: 400, response: { error: { details: { colorFieldLabel: "标准颜色", imageSource: "existing", colorSource: "import", allowedColors: ["白色"] } } } });
+    const details = (failure as { response: { error: { details: Row } } }).response.error.details;
+    expect(details).not.toHaveProperty("imageIndex"); expect(details).not.toHaveProperty("imageColor");
+    expect(JSON.stringify((failure as { response: unknown }).response)).not.toContain("秘密标准色");
+    await settings({ enabled: false, regions: [] });
+    await fixture.database!.query("UPDATE selection_field_registry SET definition=$1 WHERE field_key=$2", [JSON.stringify({ ...standard, label: "颜色标准" }), standard.key]);
+    await changePhoto(actor("renamed-standard-link"), String(before.id), { action: "add", image: { id: "new", color: "秘密标准色", colorFieldKey: standard.key, url: "https://example.com/new.jpg" } });
+    expect((await read("SELECT images FROM style_selections"))[0].images[1].colorFieldKey).toBe(standard.key);
+  });
+  it.each(["private", "denied", "autoHide", "deleted"])("round-trips opaque %s image links without disclosing field identifiers or enabling edits", async mode => {
+    const standard = field("标准颜色");
+    await register({ ...standard, ...(mode === "deleted" ? { deleted: true } : {}) }, "7", mode === "private" ? "PRIVATE" : "PUBLIC");
+    const before = await style("OPAQUE", { color: "厂家黑", extraFields: { [standard.key]: "白色" }, images: [
+      { id: "std", color: "白色", colorFieldKey: standard.key, url: "https://example.com/white.jpg" },
+      { id: "supplier", color: "厂家黑", url: "https://example.com/black.jpg" },
+    ] });
+    if (mode === "denied") await settings({ enabled: true, regions: [{ id: "123e4567-e89b-42d3-a456-426614174000", name: "Standard denied", scope: "columns", rowIds: [], columnKeys: [standard.key], users: {}, others: "deny" }] });
+    if (mode === "autoHide") await settings({ autoHide: true, autoHideRegions: [{ id: "123e4567-e89b-42d3-a456-426614174000", name: "Standard hidden", scope: "columns", rowIds: [], columnKeys: [standard.key] }] });
+    const other = { ...actor(), actor: { ...actor().actor, id: "8", username: "other" } };
+    const projected = await selectionDetail(other, String(before.id));
+    expect(projected.images[0].colorFieldKey).toBe("protected");
+    expect(JSON.stringify(projected.images)).not.toContain(standard.key);
+    if (mode === "private") expect(JSON.stringify(projected)).not.toContain(standard.key);
+    await write({ ...other, key: "preserve-opaque" }, { material: "正常更新", images: projected.images }, String(before.id));
+    await write({ ...other, key: "remove-other-image" }, { images: [projected.images[0]] }, String(before.id));
+    expect((await read("SELECT images FROM style_selections"))[0].images).toEqual([before.images[0]]);
+    for (const [name, image] of [
+      ["color", { ...projected.images[0], color: "黑色" }],
+      ["url", { ...projected.images[0], url: "https://example.com/changed.jpg" }],
+      ["id", { ...projected.images[0], id: "new-id" }],
+      ["raw-key", { ...projected.images[0], color: "黑色", colorFieldKey: standard.key }],
+      ["raw-key-unchanged", { ...projected.images[0], colorFieldKey: standard.key }],
+      ["removed-marker", { ...projected.images[0], color: "厂家黑", colorFieldKey: undefined }],
+    ] as const) {
+      let failure: unknown;
+      try { await write({ ...other, key: `reject-opaque-${name}` }, { images: [image] }, String(before.id)); } catch (error) { failure = error; }
+      expect(failure).toMatchObject({ status: 403 });
+      expect(JSON.stringify((failure as { response: unknown }).response)).not.toContain(standard.key);
+      expect((await read("SELECT images FROM style_selections"))[0].images).toEqual([before.images[0]]);
+    }
+  });
+  it("keeps standard-linked pictures through public collection save, submit and internal approval without exposing links", async () => {
+    const standard = field("标准颜色"); await register(standard);
+    const before = await style("COLLECTION-STANDARD", { color: "厂家黑", extraFields: { [standard.key]: "白色" }, images: [{ id: "std", color: "白色", colorFieldKey: standard.key, url: "https://example.com/white.jpg" }] });
+    const created = await createCollection(actor("collection-create"), { title: "测试收集", ids: [String(before.id)], days: 7 });
+    const publicView = await publicCollectionDetail(created.token);
+    expect(JSON.stringify(publicView)).not.toContain(standard.key);
+    const other = { ...actor(), actor: { ...actor().actor, id: "8", username: "other" } };
+    const internalView = await collectionDetail(other, String(created.id));
+    expect(JSON.stringify(internalView)).not.toContain(standard.key);
+    const info = { supplierStyleNo: "SUP", color: "新厂家色", sizeRange: "F", material: "更新成分", supplyPriceExclTax: "0", sellingPoints: "柔软", reorderDays: 0, inventory: collectionInventory("新厂家色", "F", []) };
+    const saved = await saveCollection(created.token, "public-save", String(before.id), { revision: publicView.revision, info });
+    const submitted = await submitCollection(created.token, "public-submit", { revision: saved.revision, itemId: String(before.id) });
+    await reviewCollection(actor("collection-approve"), String(created.id), { revision: submitted.revision, itemId: String(before.id), action: "approve" });
+    expect((await read("SELECT color,material,images,extra_fields FROM style_selections"))[0]).toEqual({ color: "新厂家色", material: "更新成分", images: before.images, extra_fields: before.extra_fields });
+    expect((await read("SELECT draft FROM selection_collection_items"))[0].draft.images).toEqual(before.images);
+  });
+  it("prefers canonical archive standard color, previews without writes, then mirrors linked images without supplier changes", async () => {
+    fixture.archive = true;
+    await fixture.database!.query("INSERT INTO product_fields(id,name,type,options) VALUES($1,'标准颜色','text','[]')", [archiveFieldIds.standardColor]);
+    await fixture.database!.query("INSERT INTO products(id,style_no,custom_fields) VALUES(1,'ARCHIVE-STANDARD',$1)", [JSON.stringify({ [archiveFieldIds.customColor]: "厂家黑", [archiveFieldIds.standardColor]: "白色/灰色" })]);
+    await selectionScope.run("23", async () => {
+      const plan = await previewImport(actor(), input([{ xutiStyleNo: "ARCHIVE-STANDARD", images: [{ id: "white", color: "白色", colorFieldKey: "standard", url: "https://example.com/white.jpg" }] }]));
+      expect(plan.fields.find(binding => binding.header === "标准颜色")?.key).toBe("custom:product:" + archiveFieldIds.standardColor);
+      expect(await read("SELECT * FROM selection_table_23.style_selections")).toEqual([]);
+      expect(await read("SELECT * FROM selection_field_registry")).toEqual([]);
+      await commitImport(actor(), payload(plan));
+      expect((await read("SELECT color,extra_fields,images FROM selection_table_23.style_selections"))[0]).toMatchObject({ color: "厂家黑", extra_fields: { ["custom:product:" + archiveFieldIds.standardColor]: "白色/灰色" }, images: [{ colorFieldKey: "custom:product:" + archiveFieldIds.standardColor, color: "白色" }] });
+      expect((await read("SELECT visibility FROM selection_field_registry WHERE field_key=$1", ["custom:product:" + archiveFieldIds.standardColor]))[0].visibility).toBe("PUBLIC");
+    });
+  });
   it("identifies the exact first incompatible imported image after normalization without writing any part of the batch", async () => {
     const rows = [
       { xutiStyleNo: "FIRST", color: "白色", fieldValues: { 新字段: "一" }, images: [{ id: "one", color: "白色", url: "https://example.com/one.jpg" }] },

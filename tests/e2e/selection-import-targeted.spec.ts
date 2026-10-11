@@ -12,6 +12,37 @@ async function workbook(image = false) {
   return { name: "针对性更新.xlsx", mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", buffer: Buffer.from(await book.xlsx.writeBuffer()) };
 }
 
+test("标准颜色明细发送独立关联并准确定位标准颜色错误，预览不写入数据", async ({ page }) => {
+  const state = await fixture(page), dialog = await openImport(page);
+  const requests: Values[] = [];
+  await page.route("**/api/v1/style-selections/import/preview", async route => {
+    const body = route.request().postDataJSON(); requests.push(body);
+    await route.fulfill({ status: 400, json: { error: {
+      message: "标准颜色不匹配", details: { kind: "SELECTION_IMPORT_IMAGE_COLOR", rowIndex: 0, xutiStyleNo: "IMPORT-001", imageIndex: 0,
+        imageSource: "import", colorSource: "import", colorFieldLabel: "标准颜色", imageColor: "粉色", allowedColors: ["白色"] },
+    } } });
+  });
+  await dialog.getByRole("radio", { name: "覆盖，仅更新本次填写的字段" }).check();
+  const book = new ExcelJS.Workbook(), sheet = book.addWorksheet("选款资料");
+  sheet.addRow(["标准颜色", "序缇款号", "供应商颜色"]);
+  sheet.getRow(17).values = ["白色", "IMPORT-001", "供应商粉"];
+  const pictures = book.addWorksheet("图片明细");
+  pictures.addRow(["序缇款号", "标准颜色", "图片URL"]);
+  pictures.getRow(778).values = ["IMPORT-001", "粉色", "https://example.test/pink.jpg"];
+  await dialog.locator('input[type="file"]').setInputFiles({ name: "标准颜色.xlsx", mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", buffer: Buffer.from(await book.xlsx.writeBuffer()) });
+  await expect(dialog.getByRole("alert")).toContainText("图片明细第 778 行（颜色单元格 B778）");
+  await expect(dialog.getByRole("alert")).toContainText("标准颜色单元格 A17");
+  await expect(dialog.getByRole("alert")).toContainText("不符合标准颜色");
+  await expect(dialog.getByRole("alert")).not.toContainText("供应商粉");
+  expect(requests).toHaveLength(1);
+  expect(requests[0].rows[0]).toMatchObject({ fieldValues: { 标准颜色: "白色" }, color: "供应商粉", images: [{ color: "粉色", colorFieldKey: "standard" }] });
+  await dialog.getByRole("button", { name: "重新预览" }).click();
+  await expect.poll(() => requests.length).toBe(2);
+  expect(requests[1]).toEqual(requests[0]);
+  expect(state.commits).toHaveLength(0);
+  expect(state.layoutWrites).toHaveLength(0);
+});
+
 async function fixture(page: Page, failFirstPreview = false, legacyFirstPreview = false, titleLimit?: number) {
   let preferences = selectionLayoutSchema.parse({ columns: [
     { key: "registrationBatch", label: "创建时间", type: "createdTime" },

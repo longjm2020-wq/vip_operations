@@ -6,8 +6,8 @@ describe("selection edge scrolling", () => {
     expect(selectionScrollSpeed(100, 100, 500)).toBe(-900);
     expect(selectionScrollSpeed(500, 100, 500)).toBe(900);
     expect(selectionScrollSpeed(300, 100, 500)).toBe(0);
-    expect(selectionScrollSpeed(124, 100, 500)).toBe(-450);
-    expect(selectionScrollSpeed(476, 100, 500)).toBe(450);
+    expect(selectionScrollSpeed(124, 100, 500)).toBe(-225);
+    expect(selectionScrollSpeed(476, 100, 500)).toBe(225);
   });
   it("caps speed outside the sheet and handles a clipped viewport", () => {
     expect(selectionScrollSpeed(-1000, 100, 500)).toBe(-900);

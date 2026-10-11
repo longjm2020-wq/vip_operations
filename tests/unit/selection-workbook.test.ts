@@ -11,6 +11,21 @@ async function partialWorkbook(headers: string[], records: unknown[][]) {
   return book;
 }
 describe("selection workbook", () => {
+  it("uses standard color in new templates and preserves explicit supplier header compatibility", async () => {
+    const template = await createSelectionWorkbook([], true);
+    expect(template.getWorksheet("图片明细")!.getCell("B1").text).toBe("标准颜色");
+    for (const header of ["标准颜色", "颜色", "供应商颜色"]) {
+      const book = await partialWorkbook(["序缇款号", "标准颜色", "供应商颜色"], [["STD-001", "粉色", "供应商自定义粉"]]);
+      const pictures = book.addWorksheet("图片明细");
+      pictures.addRow(["序缇款号", header, "图片URL"]);
+      pictures.addRow(["STD-001", "粉色", "https://example.test/pink.jpg"]);
+      const rows = await parseSelectionWorkbook(await bytes(book));
+      expect(rows[0]).toMatchObject({ xutiStyleNo: "STD-001", color: "供应商自定义粉", fieldValues: { "标准颜色": "粉色" } });
+      expect(rows[0].images[0]).toMatchObject({ color: "粉色", url: "https://example.test/pink.jpg" });
+      if (header === "标准颜色") expect(rows[0].images[0].colorFieldKey).toBe("standard");
+      else expect(rows[0].images[0]).not.toHaveProperty("colorFieldKey");
+    }
+  });
   it("round-trips styles, multiple images, legacy payloads, zero-prefixed codes and zero prices", async () => {
     const rows = [{ xutiStyleNo: "0001", supplierCode: "0010", registrationBatch: "2026-09-28", color: "黑/白", vipPrice: "0.00", images: [{ url: "https://example.test/a.png", color: "黑" }, { url: "data:image/png;base64," + "A".repeat(60000), color: "白" }], labelImages: [{ url: "https://example.test/wash-label.png", color: "" }, { url: "https://example.test/hang-tag.png", color: "" }] }];
     const book = await createSelectionWorkbook(rows);

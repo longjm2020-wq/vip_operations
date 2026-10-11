@@ -13,6 +13,7 @@ import {
   selectionFieldSchema,
   applySelectionSharedLayout,
   mergeSelectionSharedLayoutDraft,
+  projectSelectionSharedLayout,
   selectionSharedLayoutDelta,
   selectionSharedLayoutKeys,
   type SelectionField,
@@ -75,6 +76,7 @@ export function useSelectionLayoutPreferences(
     initialRef = useRef(initial);
   const committed = useRef<SelectionLayoutSnapshot | null>(null),
     inFlight = useRef<Promise<void> | null>(null);
+  const visibilityRefreshPending = useRef(false);
   apiRef.current = api;
   initialRef.current = initial;
   const publish = useCallback(
@@ -227,6 +229,7 @@ export function useSelectionLayoutPreferences(
       if (
         !pending.preferences ||
         !pending.dirty ||
+        visibilityRefreshPending.current ||
         pending.saving ||
         pending.conflict ||
         pending.error
@@ -237,16 +240,22 @@ export function useSelectionLayoutPreferences(
         const preferences = pending.preferences!;
         publish({ saving: true });
         try {
-          const firstTextColumns = pending.canEditShared && !pending.sharedPreferences
-            ? initialTextLimitColumns(preferences, committed.current?.preferences || null)
-            : undefined;
+          const firstTextColumns =
+            pending.canEditShared && !pending.sharedPreferences
+              ? initialTextLimitColumns(
+                  preferences,
+                  committed.current?.preferences || null,
+                )
+              : undefined;
           const sharedChanges =
             pending.canEditShared && pending.sharedPreferences
               ? selectionSharedLayoutDelta(
                   preferences,
                   pending.sharedPreferences,
                 )
-              : firstTextColumns ? { columns: firstTextColumns } : undefined;
+              : firstTextColumns
+                ? { columns: firstTextColumns }
+                : undefined;
           const body = {
             preferences,
             revision: pending.revision,
@@ -404,16 +413,51 @@ export function useSelectionLayoutPreferences(
         ).data,
       );
       const preferences = current.current.preferences;
-      if (preferences)
-        publish({
-          preferences: selectionLayoutDraftMetadata(preferences, {
+      const nextPreferences = preferences
+        ? selectionLayoutDraftMetadata(preferences, {
             ...preferences,
             columns: preferences.columns.map((column) =>
               column.key === savedField.key ? savedField : column,
             ),
-          }),
-        });
-      await load();
+          })
+        : null;
+      const sharedPreferences = current.current.sharedPreferences;
+      const promotesGroups = !!(
+        isPublic &&
+        nextPreferences &&
+        current.current.canEditShared &&
+        sharedPreferences &&
+        selectionSharedLayoutDelta(nextPreferences, sharedPreferences)
+          .columnGroups
+      );
+      // Publishing the last private member makes its group a shared draft.
+      // Refresh the field's new shared revision before autosaving that draft.
+      visibilityRefreshPending.current = promotesGroups;
+      try {
+        if (nextPreferences)
+          publish({
+            preferences: nextPreferences,
+            ...(promotesGroups && sharedPreferences
+              ? {
+                  dirty: true,
+                  sharedPreferences: {
+                    ...sharedPreferences,
+                    // The visibility request changes shared column membership.
+                    // Accept its canonical column order while retaining the group draft.
+                    columns:
+                      projectSelectionSharedLayout(nextPreferences).columns,
+                  },
+                }
+              : {}),
+          });
+        await load();
+      } finally {
+        visibilityRefreshPending.current = false;
+      }
+      if (promotesGroups && !(await ensureSaved()))
+        throw new Error(
+          "字段已公开，但关联分组尚未同步，请处理表格设置提示后重试保存",
+        );
     },
     [ensureSaved, load, publish],
   );

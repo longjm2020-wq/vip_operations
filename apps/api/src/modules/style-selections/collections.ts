@@ -4,6 +4,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { insertImage, readStoredImage } from "./image-storage.js";
 import { z } from "zod";
 import * as protection from "./protection.js";
+import { validateSelectionImageColors } from "./image-colors.js";
 import { db, rows, one, json, type Tx, type Row } from "../../../../../packages/database/src/index.js";
 import { parse, id, fail, command, hash, canonical, audit, type Context } from "../../core.js";
 import { collectionInfoSchema, collectionSubmissionSchema, collectionDraftSchema, collectionInventory, collectionTags } from "../../../../../packages/contracts/src/selection-collection.js";
@@ -14,6 +15,7 @@ const snapshot = (row: Row) => ({
   sellingPoints: row.selling_points || "", reorderDays: row.reorder_days ?? null,
   inventory: collectionInventory(row.color || "", row.size_range || "", row.collection_inventory || []), images: row.images || []
 });
+const presentationDraft = (draft: Row) => ({ ...draft, images: (draft.images || []).map(({ colorFieldKey: _link, ...image }: Row) => image) });
 const collectionFields = ["supplierStyleNo", "color", "sizeRange", "material", "supplyPriceExclTax", "sellingPoints", "reorderDays", "inventory", "images"] as const;
 const collectionFieldNames: Record<(typeof collectionFields)[number], string> = {
   supplierStyleNo: "供应商款号", color: "颜色", sizeRange: "尺码范围", material: "材质成分",
@@ -112,7 +114,7 @@ export async function detail(c:Context,value: string) {
   const byId=new Map(sources.map(source=>[String(source.id),source]));
   return {...share,items:items.map(item=>{
     const source=byId.get(String(item.id));
-    return {...item,current:source?snapshot(source):null,
+    return {...item,original:presentationDraft(item.original),draft:presentationDraft(item.draft),current:source?presentationDraft(snapshot(source)):null,
       overwrittenFields:source?reconcile(item,source).overwritten.map(field=>collectionFieldNames[field]):[]};
   })};
 }
@@ -191,7 +193,7 @@ export async function save(token: string, key: string, value: string, input: unk
     if (!item) fail("NOT_FOUND","本款已被内部撤回或替换，请刷新收集表核对",404);
     editable(item);
     const colors = collectionTags(body.info.color);
-    if (item.draft.images.some((image:Row)=>image.color && !colors.includes(image.color))) fail("VALIDATION_ERROR","请保留已有图片的颜色，或先移除相关图片",400);
+    if (item.draft.images.some((image:Row)=>!image.colorFieldKey && image.color && !colors.includes(image.color))) fail("VALIDATION_ERROR","请保留已有图片的颜色，或先移除相关图片",400);
     await rows(tx,"UPDATE selection_collection_items SET draft=$3::jsonb WHERE collection_id=$1::bigint AND selection_id=$2::bigint",share.id,value,JSON.stringify({...body.info,images:item.draft.images}));
     return bump(tx,share,"SAVE");
   });
@@ -288,6 +290,7 @@ export async function review(c:Context,value:string,input:unknown) {
           const {images,...info}=merged;parse(collectionInfoSchema,info);
           const patch={supplierStyleNo:info.supplierStyleNo || null,color:info.color || null,sizeRange:info.sizeRange || null,material:info.material || null,supplyPriceExclTax:info.supplyPriceExclTax,sellingPoints:info.sellingPoints,reorderDays:info.reorderDays,collectionInventory:info.inventory,images};
           const security=await protection.assertWrite(tx,c,source!,patch,policy);
+          await validateSelectionImageColors(tx,c,source!,patch,policy);
           await rows(tx,"UPDATE style_selections SET cell_owners=$2::jsonb,claimed_by=coalesce($3::bigint,claimed_by),updated_by=$4::bigint WHERE id=$1::bigint",item.selection_id,security.cellOwners,security.claimedBy || null,c.actor.id);
           const after=await one(tx,"UPDATE style_selections SET supplier_style_no=$2,color=$3,size_range=$4,material=$5,supply_price_excl_tax=$6::numeric,selling_points=$7,reorder_days=$8,collection_inventory=$9::jsonb,images=$10::jsonb,version=version+1,updated_at=now() WHERE id=$1::bigint RETURNING *",item.selection_id,info.supplierStyleNo || null,info.color || null,info.sizeRange || null,info.material || null,info.supplyPriceExclTax,info.sellingPoints,info.reorderDays,JSON.stringify(info.inventory),JSON.stringify(images));
           await mirrorArchiveRow(tx,c,after!);

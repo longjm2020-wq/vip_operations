@@ -45,7 +45,8 @@ export async function createSelectionWorkbook(records: Row[] = [], template = fa
     sheet.getCell("C1").note = "必填。按序缇款号匹配已有款；可仅保留序缇款号及需要更新的字段列。";
   }
   const pictures = book.addWorksheet("图片明细");
-  pictures.columns = [{ key: "style", header: "序缇款号", width: 24 }, { key: "color", header: "颜色", width: 18 }, { key: "url", header: "图片URL", width: 70 }].map(c => ({ ...c, style: { numFmt: "@" } }));
+  const standardPictures = template;
+  pictures.columns = [{ key: "style", header: "序缇款号", width: 24 }, { key: "color", header: standardPictures ? "标准颜色" : "颜色", width: 18 }, { key: "url", header: "图片URL", width: 70 }].map(c => ({ ...c, style: { numFmt: "@" } }));
   const labels = book.addWorksheet("洗唛吊牌图明细");
   labels.columns = [{ key: "style", header: "序缇款号", width: 24 }, { key: "url", header: "图片URL", width: 70 }].map(c => ({ ...c, style: { numFmt: "@" } }));
   let dataSheet: ExcelJS.Worksheet | undefined;
@@ -90,7 +91,7 @@ export async function createSelectionWorkbook(records: Row[] = [], template = fa
     ["可仅保留「序缇款号」加任意一列或多列进行针对性更新。序缇款号必填，文件内同款重复会阻止导入。"],
     [`可添加自定义表头（1至40个字符，文件最多${selectionImportLimits.maxColumns}列），新自定义字段默认排在模板默认字段之后；已有同名可见字段按其设置校验，重名或无权限请先核对。`],
     ["供应商颜色、尺码用 / 分隔；金额为非负数字，整数最多10位、最多两位小数，数值0会正常导入。数值型金额的极小存储误差会纠正（例如228.00000000000003按228处理）；超过两位小数的金额仍需修正。金额错误显示行号、单元格位置和原值。"],
-    ["多图在「图片明细」中逐图填写序缇款号、颜色、图片URL；图片颜色必须在该款颜色字段中。"],
+    ["新模板「图片明细」表头依次为序缇款号、标准颜色、图片URL；图片按该款标准颜色匹配，多个标准颜色用 / 分隔，已有款未填写标准颜色时沿用系统值，不使用供应商颜色替代。旧文件的「颜色」表头仍按供应商颜色匹配。"],
     ["图片颜色不匹配时，导入提示指出款号、具体颜色及图片所在工作表/行号/单元格；系统原图冲突会注明系统已有图片，修正后重新上传。"],
     ["也可在主表图片列逐行填写「颜色 | https://图片地址」；不填颜色时可仅填网址。"],
     ["图片明细与主表图片不能同时填写同款；填写图片将替换该款原图片，留空则保留。"],
@@ -176,22 +177,24 @@ export async function parseSelectionWorkbook(buffer: ArrayBuffer) {
     if (chunks.has(offset)) throw Error("内嵌图片内容重复");
     chunks.set(offset, chunk); data.set(key, chunks);
   });
-  const imageValue = (color: string, url: string) => {
+  const imageValue = (color: string, url: string, standardColor = false) => {
     if (url.startsWith("内嵌图片:")) {
       const chunks = data.get(url); if (!chunks || [...chunks.keys()].some((_, i) => !chunks.has(i))) throw Error("内嵌图片内容缺失");
       url = [...chunks.entries()].sort(([a], [b]) => a - b).map(([, text]) => text).join("");
     }
     if (!/^https?:\/\//i.test(url) && !/^\/api\/v1\/style-selections\/images\/[0-9a-f-]{36}(?:\?tableId=[1-9]\d*)?$/i.test(url) && !/^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/]+={0,2}$/.test(url)) throw Error("图片URL须为 http(s) 网址或本系统导出的图片地址");
     if (url.length > 1500000) throw Error("单张内嵌图片过大");
-    return { id: crypto.randomUUID(), color: color.trim(), url };
+    return { id: crypto.randomUUID(), color: color.trim(), url, ...(standardColor ? { colorFieldKey: "standard" } : {}) };
   };
   // Sparse iteration skips format-only rows without allocating every row up to an inflated XLSX dimension.
   sheet.eachRow((row, r) => {
     if (r === 1) return;
     const record: Row = {};
     const colorHeader = headers.get("builtin:color");
+    const standardColorHeader = headers.get("label:标准颜色");
     const source: SelectionImportWorkbookSource = { xutiStyleNo: "", row: r, images: [],
-      ...(colorHeader ? { colorCell: { cell: row.getCell(colorHeader.index).address, label: colorHeader.sourceLabel } } : {}) };
+      ...(colorHeader ? { colorCell: { cell: row.getCell(colorHeader.index).address, label: colorHeader.sourceLabel } } : {}),
+      ...(standardColorHeader ? { standardColorCell: { cell: row.getCell(standardColorHeader.index).address, label: standardColorHeader.sourceLabel } } : {}) };
     const fieldValues: [string, string][] = [];
     let hasFilledCell = false;
     for (const { index, label, key, readonly } of headers.values()) {
@@ -231,7 +234,8 @@ export async function parseSelectionWorkbook(buffer: ArrayBuffer) {
   };
   const pictures = book.getWorksheet("图片明细");
   if (pictures) {
-    if (["序缇款号", "颜色", "图片URL"].some((label, i) => cellText(pictures.getRow(1).getCell(i + 1)) !== label) || pictures.columnCount > 3) throw Error("图片明细表头应依次为：序缇款号、颜色、图片URL");
+    const colorHeader = cellText(pictures.getRow(1).getCell(2));
+    if (cellText(pictures.getRow(1).getCell(1)) !== "序缇款号" || !["标准颜色", "颜色", "供应商颜色"].includes(colorHeader) || cellText(pictures.getRow(1).getCell(3)) !== "图片URL" || pictures.columnCount > 3) throw Error("图片明细表头应依次为：序缇款号、标准颜色、图片URL（旧文件的颜色或供应商颜色表头仍兼容）");
     if (pictures.getImages().length) throw Error("请在图片明细填写图片地址，不支持 Excel 浮动图片");
     const seen = new Set<string>();
     pictures.eachRow((row, r) => {
@@ -240,7 +244,7 @@ export async function parseSelectionWorkbook(buffer: ArrayBuffer) {
       if (!style && !color && !url) return;
       const record = imageDetailRecord("图片明细", r, style, url);
       if (!seen.has(style)) { if (record.images) throw Error(`「${style}」的图片请只填写在主表或图片明细其中一处`); record.images = []; seen.add(style); }
-      record.images.push(imageValue(color, url));
+      record.images.push(imageValue(color, url, colorHeader === "标准颜色"));
       // The registration stays on the same record used for retries; detail
       // coordinates remain valid after embedded image URLs are uploaded.
       const source = workbookSources.get(record)!;

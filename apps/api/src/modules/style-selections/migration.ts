@@ -36,6 +36,8 @@ import {
 } from "../../../../../packages/contracts/src/product-archive-table.js";
 import { fieldValueError, supportsSlashChoices } from "../../../../../packages/contracts/src/selection-field-validation.js";
 import { migrateChoiceValue } from "./migration-choice-values.js";
+import { imageColorField, linkedColorChanged, unchangedColorImage } from "./image-colors.js";
+import { selectionImageColorValues } from "../../../../../packages/contracts/src/selection-image-colors.js";
 import {
   audit,
   canonical,
@@ -479,11 +481,26 @@ async function buildPlan(tx: Tx, c: Context, body: Input, lock = false) {
             fail("VALIDATION_ERROR", `图片字段「${from.label}」内容无效`, 400);
           }
         }
-        if (!to.custom && ["images", "labelImages"].includes(to.key)) {
-          value = (value || []).map((photo: Row) => ({
-            ...photo,
-            color: to.key === "labelImages" ? "" : photo.color || "",
-          }));
+        if (fromImage) {
+          if (!Array.isArray(value || [])) fail("VALIDATION_ERROR", `图片字段「${from.label}」内容无效`, 400);
+          value = (value || []).map((photo: Row) => {
+            const { colorFieldKey: link, ...image } = photo;
+            if (link) {
+              if (sourceLayout.preferences.hiddenColumns.includes(link) || !protection.fieldVisible(sourcePolicy, source.context.actor, link) || protection.access(sourcePolicy, source.context.actor, raw, link) === "deny")
+                fail("REGION_FORBIDDEN", "图片关联的标准颜色字段不可访问，请核对字段权限和显示设置", 403);
+              if (!imageColorField(sourceLayout.preferences.columns, raw, link))
+                fail("VALIDATION_ERROR", "原图片关联的标准颜色字段不存在、已删除或类型不支持，请核对后重新预览", 400);
+              if (!to.custom && to.key === "images") {
+                const basisMapping = mappings.find(mapping => mapping.source === link);
+                if (!basisMapping || !targetFields.get(basisMapping.target)?.custom)
+                  fail("VALIDATION_ERROR", `图片字段「${to.label}」关联标准颜色，请同时配置标准颜色的目标字段后重新预览`, 400);
+                return { ...image, color: photo.color || "", colorFieldKey: basisMapping.target };
+              }
+            }
+            // Label images have no colors; custom image labels have no linked
+            // standard-color basis and must not retain another workspace's key.
+            return { ...image, color: !to.custom && to.key === "labelImages" ? "" : photo.color || "" };
+          });
         }
         let issue = fieldValueError(
           to,
@@ -557,6 +574,18 @@ async function buildPlan(tx: Tx, c: Context, body: Input, lock = false) {
         targetPolicy,
         false,
       );
+      for (const image of (patch.images ?? before?.images ?? []) as Row[]) {
+        const key = image.colorFieldKey;
+        if (!key || unchangedColorImage(before || null, image) && !linkedColorChanged(before || null, patch, key)) continue;
+        const targetRow = before || { created_by: c.actor.id };
+        if (targetLayout.preferences.hiddenColumns.includes(key) || !protection.fieldVisible(targetPolicy, target.context.actor, key) || protection.access(targetPolicy, target.context.actor, targetRow, key) === "deny")
+          fail("REGION_FORBIDDEN", "目标图片关联的标准颜色字段不可访问，请核对字段权限和显示设置", 403);
+        const basis = imageColorField(columns, before || null, key);
+        if (!basis) fail("VALIDATION_ERROR", "目标图片需要关联可用的标准颜色字段，请核对对应关系后重新预览", 400);
+        const colorValue = Object.hasOwn(patch.extraFields || {}, key) ? patch.extraFields[key] : before?.extra_fields?.[key];
+        if (image.color && !selectionImageColorValues(basis, colorValue).includes(image.color))
+          fail("VALIDATION_ERROR", "目标图片颜色必须来自对应的标准颜色字段，请核对资料及对应关系后重新预览", 400);
+      }
       if (target.archive)
         requirePermission(
           c.actor,

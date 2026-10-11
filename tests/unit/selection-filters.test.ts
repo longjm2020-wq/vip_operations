@@ -38,6 +38,28 @@ it("clears selected values without losing formatting or leaving invalid image co
   expect(row.color).toBe("red");
 });
 
+it("clearing supplier colors preserves standard and protected image color links", () => {
+  const images = [
+    { id: "supplier", color: "red" },
+    { id: "standard", color: "black", colorFieldKey: "custom:standard-color" },
+    { id: "protected", color: "white", colorFieldKey: "protected" },
+  ];
+  const row = {
+    _key: "1",
+    color: "red",
+    images,
+    extraFields: { "custom:standard-color": "black" },
+    cellAccess: { color: "edit", images: "edit" },
+  };
+  const [cleared] = clearSelectionCells([row], new Set(["1::color"]));
+  expect(cleared.color).toBeNull();
+  expect(cleared.images).toEqual([{ id: "supplier", color: "" }, images[1], images[2]]);
+  expect(cleared.images[1]).toBe(images[1]);
+  expect(cleared.images[2]).toBe(images[2]);
+  expect(cleared.extraFields).toEqual(row.extraFields);
+  expect(images[0].color).toBe("red");
+});
+
 it("combines checked options, colors and conditions including empty selections", () => {
   const row = { vipPrice: "12.00", cellColors: { vipPrice: "YELLOW" } };
   expect(matchesSelectionFilters(row, { vipPrice: { mode: "gte", value: "10", values: ["12"], colorType: "fill", colors: ["YELLOW"] } })).toBe(true);

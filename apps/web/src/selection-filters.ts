@@ -83,8 +83,8 @@ export function clearSelectionCells(rows: Row[], selected: Set<string>): Row[] {
       if (key.startsWith("custom:")) next.extraFields = { ...(next.extraFields || {}), [key]: "" };
       else next[key] = key === "images" || key === "labelImages" ? [] : null;
     }
-    // Removing color labels must not leave orphan image-color references.
-    if (keys.includes("color") && !keys.includes("images") && (!row.cellAccess || row.cellAccess.images==="edit")) next.images = (row.images || []).map((image: Row) => ({ ...image, color: "" }));
+    // Removing supplier colors clears only images that use that color field.
+    if (keys.includes("color") && !keys.includes("images") && (!row.cellAccess || row.cellAccess.images==="edit")) next.images = (row.images || []).map((image: Row) => image.colorFieldKey ? image : { ...image, color: "" });
     return next;
   });
 }

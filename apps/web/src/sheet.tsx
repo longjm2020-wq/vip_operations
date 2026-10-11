@@ -53,6 +53,10 @@ export function Sheet({
   const [issues, setIssues] = useState<Record<string, string>>({});
   const [activeCell, setActiveCell] = useState<string | null>(null), [findTarget, setFindTarget] = useState<TableFindCell | null>(null);
   const [findHighlight, setFindHighlight] = useState<string | null>(null);
+  const [findSelection, setFindSelection] = useState<ReadonlySet<string>>(new Set());
+  const [selectedFindColumns, setSelectedFindColumns] = useState<string[]>([]);
+  const findSelectionAnchor = useRef<{ rowKey: string; columnKey: string } | null>(null);
+  const findColumnAnchor = useRef<string | null>(null);
   const commit = (next: SheetRow[]) => {
     history.current = [...history.current.slice(-29), value];
     future.current = [];
@@ -133,7 +137,39 @@ export function Sheet({
     id: `${findRowKeys[ri]}::${col.key}`, rowKey: findRowKeys[ri], columnKey: col.key, rowLabel: `第 ${ri + 1} 行`, columnLabel: col.label,
     text: displayCell(row[col.key], col), replaceable: !disabled && !row._uncertain && !(typeof col.readonly === "function" ? col.readonly(row) : col.readonly),
   })));
-  const selectedFindIds = useMemo(() => new Set(selected.length ? selected.flatMap(ri => findRowKeys[ri] ? columns.map(col => `${findRowKeys[ri]}::${col.key}`) : []) : activeCell ? [activeCell] : []), [selected, columns, activeCell, findRowKeys]);
+  const selectedFindIds = useMemo(() => selectedFindColumns.length
+    ? new Set(findRowKeys.flatMap(rowKey => columns.filter(col => selectedFindColumns.includes(col.key)).map(col => `${rowKey}::${col.key}`)))
+    : findSelection.size ? findSelection
+      : new Set(selected.length ? selected.flatMap(ri => findRowKeys[ri] ? columns.map(col => `${findRowKeys[ri]}::${col.key}`) : []) : activeCell ? [activeCell] : []), [selectedFindColumns, findSelection, selected, columns, activeCell, findRowKeys]);
+  const activeFindId = activeCell && findRowKeys.some(rowKey => columns.some(col => `${rowKey}::${col.key}` === activeCell)) ? activeCell : null;
+  const selectFindColumn = (key: string, extend: boolean) => {
+    const currentIndex = columns.findIndex(col => col.key === key), anchorIndex = columns.findIndex(col => col.key === findColumnAnchor.current);
+    if (currentIndex < 0) return;
+    const from = extend && anchorIndex >= 0 ? anchorIndex : currentIndex;
+    setSelectedFindColumns(columns.slice(Math.min(from, currentIndex), Math.max(from, currentIndex) + 1).map(col => col.key));
+    setFindSelection(new Set()); setSelected([]);
+    if (!extend || anchorIndex < 0) findColumnAnchor.current = key;
+    if (findRowKeys[0]) setActiveCell(`${findRowKeys[0]}::${key}`);
+  };
+  const selectFindCell = (event: React.MouseEvent<HTMLElement>, rowKey: string, columnKey: string) => {
+    if (event.button !== 0) return;
+    const anchor = findSelectionAnchor.current;
+    if (event.shiftKey && anchor) {
+      const firstRow = findRowKeys.indexOf(anchor.rowKey), lastRow = findRowKeys.indexOf(rowKey);
+      const firstColumn = columns.findIndex(col => col.key === anchor.columnKey), lastColumn = columns.findIndex(col => col.key === columnKey);
+      if (firstRow >= 0 && lastRow >= 0 && firstColumn >= 0 && lastColumn >= 0) {
+        event.preventDefault();
+        setFindSelection(new Set(findRowKeys.slice(Math.min(firstRow, lastRow), Math.max(firstRow, lastRow) + 1)
+          .flatMap(key => columns.slice(Math.min(firstColumn, lastColumn), Math.max(firstColumn, lastColumn) + 1).map(col => `${key}::${col.key}`))));
+        setSelectedFindColumns([]); setSelected([]);
+        setActiveCell(`${anchor.rowKey}::${anchor.columnKey}`);
+        return;
+      }
+    }
+    // An ordinary click keeps native text highlighting and editor behavior.
+    setFindSelection(new Set()); setSelectedFindColumns([]); findColumnAnchor.current = null;
+    findSelectionAnchor.current = { rowKey, columnKey }; setActiveCell(`${rowKey}::${columnKey}`);
+  };
   useEffect(() => {
     if (!findTarget) return;
     const cell = root.current?.querySelector<HTMLElement>(`td[data-sheet-find-row="${CSS.escape(findTarget.rowKey)}"][data-sheet-column="${CSS.escape(findTarget.columnKey)}"]`);
@@ -167,10 +203,16 @@ export function Sheet({
     return changes.length;
   };
   return (
-    <div className="sheet-workspace" data-table-find-context ref={root} onFocusCapture={event => { const cell = event.target instanceof Element ? event.target.closest<HTMLElement>("td[data-sheet-find-row][data-sheet-column]") : null; if (cell) setActiveCell(`${cell.dataset.sheetFindRow}::${cell.dataset.sheetColumn}`); }}>
+    <div className="sheet-workspace" data-table-find-context ref={root} onFocusCapture={event => {
+      const cell = event.target instanceof Element ? event.target.closest<HTMLElement>("td[data-sheet-find-row][data-sheet-column]") : null;
+      if (cell?.dataset.sheetFindRow && cell.dataset.sheetColumn) {
+        setActiveCell(`${cell.dataset.sheetFindRow}::${cell.dataset.sheetColumn}`);
+        if (!findSelection.size && !selectedFindColumns.length) findSelectionAnchor.current = { rowKey: cell.dataset.sheetFindRow, columnKey: cell.dataset.sheetColumn };
+      }
+    }}>
       <div className="sheet-toolbar">
         <Space wrap>
-          <TableFindReplace rootRef={root} cells={findCells} selectedIds={selectedFindIds} saveHint="修改后请统一保存；可用撤销恢复本次替换。" onNavigate={cell => { setFindHighlight(cell.id); setFindTarget(cell); }} onReplace={replaceFind}/>
+          <TableFindReplace rootRef={root} cells={findCells} selectedIds={selectedFindIds} activeId={activeFindId} saveHint="修改后请统一保存；可用撤销恢复本次替换。" onNavigate={cell => { setFindHighlight(cell.id); setFindTarget(cell); }} onReplace={replaceFind}/>
           {!fixed && !disabled && (
             <Button
               onClick={() => {
@@ -308,7 +350,7 @@ export function Sheet({
           <span className="secondary">{value.length} 行 / {columns.length} 列</span>
           <TableOperationHints>
             <p>点击单元格编辑；Tab / Enter 连续录入；可从 Excel、WPS、飞书粘贴多行多列。</p>
-            <p>Ctrl+H 打开查找/替换；选区为勾选行或当前单元格。</p>
+            <p>Ctrl+F 查找，Ctrl+H 替换；点击表头选择整列，Shift 点选表头选择多列，Shift 点选单元格选择区域，也可使用勾选行。</p>
             <p>修改后统一保存。</p>
             <p>{fixed ? "按首列对应原单明细。" : "导入追加为新行，移出行不会删除已保存资料。"}</p>
           </TableOperationHints>
@@ -327,7 +369,10 @@ export function Sheet({
             <tr>
               <th className="sheet-row-number">行</th>
               {columns.map((c, i) => (
-                <th key={c.key}>
+                <th key={c.key} tabIndex={0} aria-label={`选择整列：${c.label}`} aria-selected={selectedFindColumns.includes(c.key)}
+                  style={selectedFindColumns.includes(c.key) ? { boxShadow: "inset 0 -2px 0 #1677ff" } : undefined}
+                  onClick={event => selectFindColumn(c.key, event.shiftKey)}
+                  onKeyDown={event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); selectFindColumn(c.key, event.shiftKey); } }}>
                   <span className="sheet-letter">{sheetColumnLabel(i)}</span>
                   {c.label}
                   {c.required && <span className="required"> *</span>}
@@ -348,13 +393,14 @@ export function Sheet({
                         type="checkbox"
                         aria-label={`选择第${ri + 1}行`}
                         checked={selected.includes(ri)}
-                        onChange={(e) =>
+                        onChange={(e) => {
+                          setFindSelection(new Set()); setSelectedFindColumns([]);
                           setSelected(
                             e.target.checked
                               ? [...selected, ri]
                               : selected.filter((i) => i !== ri),
-                          )
-                        }
+                          );
+                        }}
                       />
                     )}
                     {ri + 1}
@@ -373,10 +419,13 @@ export function Sheet({
                       data-sheet-row={ri}
                       data-sheet-find-row={findRowKeys[ri]}
                       data-sheet-column={col.key}
+                      data-table-find-cell={`${findRowKeys[ri]}::${col.key}`}
                       data-find-current={findHighlight === `${findRowKeys[ri]}::${col.key}` || undefined}
-                      style={findHighlight === `${findRowKeys[ri]}::${col.key}` ? { outline: "2px solid #faad14", outlineOffset: -2 } : undefined}
+                      style={findHighlight === `${findRowKeys[ri]}::${col.key}` ? { outline: "2px solid #faad14", outlineOffset: -2 }
+                        : selectedFindColumns.includes(col.key) || findSelection.has(`${findRowKeys[ri]}::${col.key}`) ? { outline: "2px solid #1677ff", outlineOffset: -2 } : undefined}
                       className={`${locked ? "sheet-locked" : ""} ${error ? "sheet-error" : ""}`}
                       title={error}
+                      onMouseDown={event => selectFindCell(event, findRowKeys[ri], col.key)}
                       onPaste={(e) => {
                         if (!col.editor || locked) return;
                         const text = e.clipboardData.getData("text/plain");

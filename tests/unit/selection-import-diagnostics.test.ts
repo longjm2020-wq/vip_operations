@@ -18,6 +18,21 @@ function error(overrides: Partial<SelectionImportImageColorDiagnostic> = {}) {
 }
 
 describe("selection import color diagnostics", () => {
+  it("locates the standard color cell independently of supplier colors and retains protected-value redaction", async () => {
+    const { book, sheet } = bookWithHeaders(["标准颜色", "序缇款号", "供应商颜色"]);
+    sheet.getRow(17).values = ["白色", "STYLE-001", "供应商粉"];
+    const pictures = book.addWorksheet("图片明细");
+    pictures.addRow(["序缇款号", "标准颜色", "图片URL"]);
+    pictures.getRow(778).values = ["STYLE-001", "粉色", "https://example.test/pink.jpg"];
+    const records = await parse(book);
+    const failure = error({ colorFieldLabel: "标准颜色", imageColor: "粉色", allowedColors: ["白色"] });
+    expect(formatSelectionImportError(failure, records)).toBe("图片明细第 778 行（颜色单元格 B778），序缇款号「STYLE-001」的图片颜色「粉色」不符合标准颜色；对应选款资料第 17 行（标准颜色单元格 A17）；可用颜色：白色。请核对图片颜色和该款标准颜色后重新上传。");
+    expect(formatSelectionImportError(error({ colorFieldLabel: "标准颜色", colorSource: "existing" }), records)).toContain("本次沿用系统已有标准颜色");
+    const redacted = formatSelectionImportError(error({ colorFieldLabel: "标准颜色", imageColor: undefined, allowedColors: undefined }), records);
+    expect(redacted).not.toContain("白色");
+    expect(redacted).not.toContain("供应商粉");
+    expect(redacted).not.toContain("可用颜色");
+  });
   it("reports sparse worksheet coordinates for the correct style and image, not import array ordinals", async () => {
     const { book, sheet } = bookWithHeaders(["序缇款号", "图片", "自定义", "供应商颜色"]);
     sheet.getRow(3).values = ["OTHER-STYLE", "", "", "黑"];

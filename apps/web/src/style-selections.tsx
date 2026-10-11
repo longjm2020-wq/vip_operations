@@ -14,6 +14,7 @@ import { SelectionColumnWidthModal } from "./selection-column-width";
 import { SelectionTextDetail } from "./selection-text-detail";
 import { SelectionTextLengthStatus } from "./selection-text-length";
 import { fieldTextLengthError } from "../../../packages/contracts/src/selection-field-validation";
+import { selectionImageColorValues } from "../../../packages/contracts/src/selection-image-colors";
 import { useSelectionDrag } from "./selection-drag";
 import { reorderSelectionItems } from "./selection-reorder";
 import { parseSelectionSearch,matchesSelectionSearch } from "./selection-style-search";
@@ -73,7 +74,7 @@ const textColorOptions = [
   { value: "#0958d9", label: "蓝色" }, { value: "#531dab", label: "紫色" },
   { value: "#c41d7f", label: "粉色" }, { value: "#595959", label: "灰色" },
 ];
-type SelectionImage = { id: string; url: string; color: string };
+type SelectionImage = { id: string; url: string; color: string; colorFieldKey?: string };
 type Column = SelectionField;
 const baseColumns: Column[] = [
   { key: "registrationBatch", label: "创建时间", width: selectionInitialColumnWidth, type: "createdTime", timeDisplay: "datetime" }, { key: "images", label: "图片", width: selectionInitialColumnWidth },
@@ -159,7 +160,7 @@ function SizeEditor({ value, disabled, onChange }: { value: string; disabled: bo
   }} />{customOpen && <Space.Compact><Input autoFocus aria-label="补充尺码" value={customValue} disabled={disabled} placeholder="输入尺码，按回车添加" onChange={event => setCustomValue(event.target.value)} onPressEnter={addCustom} /><Button disabled={disabled || !customValue.trim()} onClick={addCustom}>添加</Button><Button onClick={() => { setCustomOpen(false); setCustomValue(""); }}>取消</Button></Space.Compact>}</div>;
 }
 
-function ImageCell({ images, colors, disabled, onChange, mobileId, labelImages = false,field, previewing, onPreview }: {field?:Column; mobileId?: string; images: SelectionImage[]; colors: string[]; disabled: boolean; onChange: (images: SelectionImage[]) => void; labelImages?: boolean; previewing: boolean; onPreview: (index: number) => void }) {
+function ImageCell({ images, colors, linkedColors, disabled, onChange, mobileId, labelImages = false,field, previewing, onPreview }: {field?:Column; mobileId?: string; images: SelectionImage[]; colors: string[]; linkedColors?: Record<string, string[]>; disabled: boolean; onChange: (images: SelectionImage[]) => void; labelImages?: boolean; previewing: boolean; onPreview: (index: number) => void }) {
   const { api } = useSelectionWorkspace();
 
   const { message } = App.useApp();
@@ -225,7 +226,7 @@ function ImageCell({ images, colors, disabled, onChange, mobileId, labelImages =
       <Image loading="lazy" src={image.url} fallback={invalidSelectionImage} onError={() => imageError(image.url)} alt={failedImages.has(image.url) ? "无效图片，链接无法加载" : labelImages ? "洗唛/吊牌图" : image.color || "款式图片"} width="100%" height="100%" preview={false} onClick={event => { event.stopPropagation(); if (!failedImages.has(image.url)) { setAllOpen(false); onPreview(index); } }} />
       {image.color && <span className="selection-image-color">{image.color}</span>}
       {!disabled && <Button className="selection-image-remove" type="text" size="small" aria-label="移除图片" icon={<DeleteOutlined />} onClick={() => onChange(images.filter((item) => item.id !== image.id))} />}
-      {config.colors && <Select className="selection-image-color-select" size="small" disabled={disabled} allowClear value={image.color || undefined} placeholder="命名颜色" options={colors.map((color) => ({ value: color, label: color }))} onChange={(color) => onChange(images.map((item) => item.id === image.id ? { ...item, color: color || "" } : item))} />}
+      {config.colors && <Select className="selection-image-color-select" size="small" aria-label={image.colorFieldKey ? "图片标准颜色" : "图片供应商颜色"} disabled={disabled || !!image.colorFieldKey && !linkedColors?.[image.colorFieldKey]} allowClear value={image.color || undefined} placeholder={image.colorFieldKey ? "标准颜色" : "命名颜色"} options={(image.colorFieldKey ? linkedColors?.[image.colorFieldKey] || [] : colors).map((color) => ({ value: color, label: color }))} onChange={(color) => onChange(images.map((item) => item.id === image.id ? { ...item, color: color || "" } : item))} />}
     </div>)}</div>
     {!disabled && <div className="selection-image-adders">
       {config.mobile && <SelectionPhotoQr rowId={mobileId} disabled={!mobileId} labelImages={labelImages} field={field?.custom?field:undefined} />}
@@ -253,7 +254,7 @@ function ImageCell({ images, colors, disabled, onChange, mobileId, labelImages =
 
 // These callbacks bind a row/field identity and use state updaters. Selection changes
 // do not change their behavior or require rebuilding image controls in every cell.
-const MemoImageCell = memo(ImageCell, (before, after) => before.field === after.field && before.mobileId === after.mobileId && before.disabled === after.disabled && before.labelImages === after.labelImages && before.previewing === after.previewing && comparable(before.images) === comparable(after.images) && comparable(before.colors) === comparable(after.colors));
+const MemoImageCell = memo(ImageCell, (before, after) => before.field === after.field && before.mobileId === after.mobileId && before.disabled === after.disabled && before.labelImages === after.labelImages && before.previewing === after.previewing && comparable(before.images) === comparable(after.images) && comparable(before.colors) === comparable(after.colors) && comparable(before.linkedColors) === comparable(after.linkedColors));
 const ReadOnlyStockCell = memo(({ inventory }: { inventory: CollectionStock[] }) => <CollectionStockEditor readOnly inventory={inventory} onChange={()=>{}}/>, (before, after) => comparable(before.inventory) === comparable(after.inventory));
 // Cache row output by its data and local visual state. Event handlers read the
 // live interaction ref below so skipped rows still act on the current selection.
@@ -339,6 +340,14 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
   const findRoot = useRef<HTMLDivElement>(null);
   const [findTarget, setFindTarget] = useState<TableFindCell | null>(null);
   const dragCellAnchor = useRef<{ rowKey: string; columnKey: string } | null>(null);
+  const rectangleFrame = useRef(0);
+  const pendingRectangle = useRef<{ from: { rowKey: string; columnKey: string }; to: { rowKey: string; columnKey: string } } | null>(null);
+  const rectangleBounds = useRef<{ lookup: unknown; signature: string } | null>(null);
+  const nativeTextDragCleanup = useRef<(() => void) | null>(null);
+  useEffect(() => () => {
+    nativeTextDragCleanup.current?.();
+    cancelAnimationFrame(rectangleFrame.current); pendingRectangle.current = null;
+  }, []);
   const shiftDrag=useRef<{type:"row"|"column";key:string;keys:string[];clickFrom?:string;startX:number;startY:number;moved:boolean}|null>(null);
   const axisActions = useRef<(type: "row" | "column", from: string, to: string) => void>(() => {});
   const [shiftTarget,setShiftTarget]=useState<string|null>(null);
@@ -616,6 +625,18 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
     if (!findReadable(row, column.key) || imageKeys.has(column.key) || (column.type || column.fallbackType) === "image") return [];
     return [{ id: cellId(row._key, column.key), rowKey: row._key, columnKey: column.key, rowLabel: `第 ${index + 1} 行`, columnLabel: column.label, text: findText(row, column), replaceable: findReplaceable(row, column) }];
   }));
+  // A column search covers the complete filtered result, including other pages.
+  // Keep the table's page-local selection for copying and formatting unchanged.
+  const selectedFindIds = useMemo(() => selectedColumnKeys.length
+    ? new Set(allDisplayedRows.flatMap(row => activeColumns.filter(column => selectedColumnKeys.includes(column.key)).map(column => cellId(row._key, column.key))))
+    : selectedRows.length
+      ? new Set(allDisplayedRows.filter(row => selectedRowKeys.has(row._key)).flatMap(row => activeColumns.map(column => cellId(row._key, column.key))))
+      : selectedCells, [selectedColumnKeys, allDisplayedRows, activeColumns, selectedRows, selectedRowKeys, selectedCells]);
+  const activeFindPoint = focusedCell ? { rowKey: focusedCell.split("::")[0], columnKey: focusedCell.split("::")[1] } : cellAnchor;
+  const activeFindRow = activeFindPoint ? allDisplayedRows.find(row => row._key === activeFindPoint.rowKey) : undefined;
+  const activeFindColumn = activeFindPoint ? activeColumns.find(column => column.key === activeFindPoint.columnKey) : undefined;
+  const activeFindId = activeFindRow && activeFindColumn && findReadable(activeFindRow, activeFindColumn.key) && !imageKeys.has(activeFindColumn.key) && (activeFindColumn.type || activeFindColumn.fallbackType) !== "image"
+    ? cellId(activeFindRow._key, activeFindColumn.key) : null;
   const navigateFind = (cell: TableFindCell) => {
     const index = allDisplayedRows.findIndex(row => row._key === cell.rowKey);
     if (index < 0) return;
@@ -662,12 +683,21 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
       if (column!.key === "color") {
         if (!findReadable(row!, "images")) errorAt(change, "关联图片不可查看，请在颜色编辑器中核对后修改");
         const colors = new Set(splitTags(nextValue));
-        if (rowImages(row!).some(image => image.color && !colors.has(image.color))) errorAt(change, "替换后会使图片颜色关联失效，请通过颜色标签编辑器同步改名");
+        if (rowImages(row!).some(image => !image.colorFieldKey && image.color && !colors.has(image.color))) errorAt(change, "替换后会使图片颜色关联失效，请通过颜色标签编辑器同步改名");
       }
       if (column!.key === "xutiStyleNo") styleRows.add(row!._key);
       byKey.set(row!._key, withValue(row!, column!, nextValue)); touched.add(row!._key);
     }
     const next = rows.map(row => byKey.get(row._key)!);
+    for (const change of changes) {
+      const row = byKey.get(change.rowKey)!;
+      const linked = rowImages(row).filter(image => image.colorFieldKey === change.columnKey && image.color);
+      if (!linked.length) continue;
+      if (!findReadable(row, "images")) errorAt(change, "关联图片不可查看，请先核对图片后修改标准颜色");
+      const field = columns.find(column => column.key === change.columnKey);
+      const colors = selectionImageColorValues(field, row.extraFields?.[change.columnKey]);
+      if (linked.some(image => !colors.includes(image.color))) errorAt(change, "替换后会使图片标准颜色关联失效，请先处理对应图片");
+    }
     const duplicates = duplicateStyleCounts(next, styleCounts.data?.data, original.current);
     for (const key of styleRows) if (duplicates.has(selectionStyleKey(byKey.get(key)?.xutiStyleNo))) throw Error("替换后的序缇款号与其他记录重复；本次替换未应用");
     setRows(next); setCopiedCells(new Set());
@@ -688,10 +718,10 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
   };
   const updateTags = (row: Row, column: Column, value: string, rename?: { from: string; to: string }) => {
     if (column.key !== "color" || !rename || rename.from === rename.to) { update(row._key, column, value); return; }
-    const linked = rowImages(row).some(image => image.color === rename.from);
+    const linked = rowImages(row).some(image => !image.colorFieldKey && image.color === rename.from);
     if (!readableSelectionCell(row, "images") || linked && !editableSelectionCell(row, "images")) return "关联图片受保护，请先取得图片编辑权限再修改颜色";
     setCopiedCells(new Set());
-    setRows(current => current.map(item => item._key === row._key && editableSelectionCell(item, column.key) && (!linked || editableSelectionCell(item, "images")) ? { ...withValue(item, column, value), ...(linked ? { images: rowImages(item).map(image => image.color === rename.from ? { ...image, color: rename.to } : image) } : {}) } : item));
+    setRows(current => current.map(item => item._key === row._key && editableSelectionCell(item, column.key) && (!linked || editableSelectionCell(item, "images")) ? { ...withValue(item, column, value), ...(linked ? { images: rowImages(item).map(image => !image.colorFieldKey && image.color === rename.from ? { ...image, color: rename.to } : image) } : {}) } : item));
     setErrors(current => { const next = { ...current }; delete next[`${row._key}:${column.key}`]; return next; });
   };
   const add = (count = 1) => {
@@ -765,13 +795,25 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
     window.addEventListener("mousemove",move);window.addEventListener("mouseup",drop);window.addEventListener("blur",cancel);window.addEventListener("keydown",escape);
     return()=>{window.removeEventListener("mousemove",move);window.removeEventListener("mouseup",drop);window.removeEventListener("blur",cancel);window.removeEventListener("keydown",escape);};
   },[]);
-  const selectRectangle = (from: { rowKey: string; columnKey: string }, to: { rowKey: string; columnKey: string }) => {
-    const r1 = displayedRows.findIndex((row) => row._key === from.rowKey), r2 = displayedRows.findIndex((row) => row._key === to.rowKey);
-    const c1 = activeColumns.findIndex((column) => column.key === from.columnKey), c2 = activeColumns.findIndex((column) => column.key === to.columnKey);
+  const rectangleLookup = useMemo(() => ({ rows: new Map(displayedRows.map((row, index) => [row._key, index])), columns: new Map(activeColumns.map((column, index) => [column.key, index])) }), [displayedRows, activeColumns]);
+  const flushRectangle = () => {
+    cancelAnimationFrame(rectangleFrame.current); rectangleFrame.current = 0;
+    const pending = pendingRectangle.current; pendingRectangle.current = null;
+    if (!pending) return;
+    const r1 = rectangleLookup.rows.get(pending.from.rowKey) ?? -1, r2 = rectangleLookup.rows.get(pending.to.rowKey) ?? -1;
+    const c1 = rectangleLookup.columns.get(pending.from.columnKey) ?? -1, c2 = rectangleLookup.columns.get(pending.to.columnKey) ?? -1;
     if (r1 < 0 || r2 < 0 || c1 < 0 || c2 < 0) return;
+    const signature = [Math.min(r1, r2), Math.max(r1, r2), Math.min(c1, c2), Math.max(c1, c2)].join(":");
+    if (rectangleBounds.current?.lookup === rectangleLookup && rectangleBounds.current.signature === signature) return;
+    rectangleBounds.current = { lookup: rectangleLookup, signature };
     const next = new Set<string>();
     for (let row = Math.min(r1, r2); row <= Math.max(r1, r2); row++) for (let column = Math.min(c1, c2); column <= Math.max(c1, c2); column++) next.add(cellId(displayedRows[row]._key, activeColumns[column].key));
-    setSelectedCells(current => current.size === next.size && [...next].every(id => current.has(id)) ? current : next);
+    setSelectedCells(next);
+  };
+  const flushRectangleRef = useRef(flushRectangle); flushRectangleRef.current = flushRectangle;
+  const selectRectangle = (from: { rowKey: string; columnKey: string }, to: { rowKey: string; columnKey: string }) => {
+    pendingRectangle.current = { from, to };
+    if (!rectangleFrame.current) rectangleFrame.current = requestAnimationFrame(() => flushRectangleRef.current());
   };
   const selectAxis = (type: "row" | "column", from: string, to: string) => {
     const keys = type === "row" ? displayedRows.map(row => row._key) : activeColumns.map(column => column.key);
@@ -803,13 +845,14 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
     } else if (dragCellAnchor.current && element.dataset.selectionRow && element.dataset.selectionColumn) {
       selectRectangle(dragCellAnchor.current, { rowKey: element.dataset.selectionRow, columnKey: element.dataset.selectionColumn });
     }
-  }, () => { setSelectingCells(false); axisSelection.current = null; dragCellAnchor.current = null; });
+  }, () => { flushRectangleRef.current(); setSelectingCells(false); axisSelection.current = null; dragCellAnchor.current = null; });
   const changeColumnGroup = (key: string) => {
     selectionDrag.stop(); setColumnGroupId(key); setColumnTabVisit(current => current + 1); setCopiedCells(new Set()); setSelectedCells(new Set());
     setCellAnchor(null); setFocusedCell(null); setCellTextEditing(false); setFilterColumn(null); setContextCell(null);
     setSelectedColumnKeys([]); columnSelectionAnchor.current = null;
   };
   const axisMouseDown = (event: React.MouseEvent<HTMLElement>, type: "row" | "column", key: string) => {
+    nativeTextDragCleanup.current?.(); rectangleBounds.current = null;
     if (event.button === 2 && type === "column") {
       event.preventDefault();
       if (!selectedFields.includes(key)) { columnSelectionAnchor.current = key; selectAxis(type, key, key); }
@@ -837,13 +880,42 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
     const anchor = axisSelection.current;
     if (anchor?.type === type) selectAxis(type, anchor.key, key);
   };
+  const nativeTextDrag = (event: React.MouseEvent<HTMLElement>, rowKey: string, columnKey: string, input: HTMLInputElement | HTMLTextAreaElement) => {
+    nativeTextDragCleanup.current?.();
+    const origin = event.currentTarget, startX = event.clientX, startY = event.clientY;
+    const cancel = () => {
+      nativeTextDragCleanup.current = null;
+      window.removeEventListener("mousemove", move, true); window.removeEventListener("mouseup", cancel);
+      window.removeEventListener("blur", cancel); window.removeEventListener("keydown", escape);
+    };
+    const move = (moveEvent: MouseEvent) => {
+      if (!(moveEvent.buttons & 1)) { cancel(); return; }
+      const bounds = origin.getBoundingClientRect();
+      if (Math.hypot(moveEvent.clientX - startX, moveEvent.clientY - startY) < 6 ||
+        moveEvent.clientX >= bounds.left - 4 && moveEvent.clientX <= bounds.right + 4 && moveEvent.clientY >= bounds.top - 4 && moveEvent.clientY <= bounds.bottom + 4) return;
+      moveEvent.preventDefault(); cancel();
+      if (input.selectionEnd !== null) { try { input.setSelectionRange(input.selectionEnd, input.selectionEnd); } catch {} }
+      const point = { rowKey, columnKey };
+      rectangleBounds.current = null;
+      selectionDrag.start(moveEvent, "both", true);
+      dragCellAnchor.current = point; axisSelection.current = null;
+      setSelectedRows([]); setSelectedColumnKeys([]); columnSelectionAnchor.current = null;
+      setCellTextEditing(false); setCellAnchor(point); setSelectingCells(true); setSelectedCells(new Set([cellId(rowKey, columnKey)]));
+    };
+    const escape = (keyEvent: KeyboardEvent) => { if (keyEvent.key === "Escape") cancel(); };
+    nativeTextDragCleanup.current = cancel;
+    window.addEventListener("mousemove", move, true); window.addEventListener("mouseup", cancel);
+    window.addEventListener("blur", cancel); window.addEventListener("keydown", escape);
+  };
   const cellMouseDown = (event: React.MouseEvent<HTMLElement>, rowKey: string, columnKey: string) => {
+    nativeTextDragCleanup.current?.(); rectangleBounds.current = null;
     const target = event.target instanceof HTMLElement ? event.target : null;
     const textInput = target?.closest<HTMLInputElement | HTMLTextAreaElement>("input:not([type=checkbox]):not([type=date]), textarea");
-    if (cellTextEditing && cellAnchor?.rowKey === rowKey && cellAnchor.columnKey === columnKey && textInput) return;
+    if (cellTextEditing && cellAnchor?.rowKey === rowKey && cellAnchor.columnKey === columnKey && textInput) { nativeTextDrag(event, rowKey, columnKey, textInput); return; }
     if (textInput && selectedCells.size === 1 && selectedCells.has(cellId(rowKey, columnKey)) && !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey) {
       selectionDrag.stop(); dragCellAnchor.current = null; axisSelection.current = null;
       setSelectingCells(false); setCellTextEditing(true);
+      nativeTextDrag(event, rowKey, columnKey, textInput);
       return; // Let the browser place the caret and drag-select text normally.
     }
     const control = target?.closest("button, a, .ant-select, input[type=checkbox], input[type=date]");
@@ -978,8 +1050,18 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
           const creationIssue = selectionCreationTimeError(attempt.sent);
           if (creationIssue) throw Object.assign(new Error(creationIssue), { status: 400, details: { fieldErrors: { registrationBatch: [creationIssue] } } });
           for(const column of columns.filter(column=>!column.deleted && (column.type || column.fallbackType || column.textConfig) && !collectionKeys.has(column.key) && (column.custom?column.key in (attempt.body.extraFields || {}):column.key in attempt.body))){const issue=fieldValueError({...column,type:column.type || column.fallbackType},column.custom?attempt.body.extraFields?.[column.key]:imageKeys.has(column.key)?JSON.stringify(attempt.body[column.key] || []):attempt.body[column.key]);if(issue)throw Object.assign(new Error(column.label+"："+issue),{status:400});}
-          const colors = new Set(splitTags(attempt.sent.color));
-          if ((attempt.body.images || []).some((image: SelectionImage) => image.color && !colors.has(image.color)) && readableSelectionCell(attempt.sent,"color")) throw Object.assign(new Error("图片颜色必须来自颜色字段"), { status: 400 });
+          for (const image of rowImages(attempt.sent)) {
+            const key = image.colorFieldKey || "color";
+            if (key === "protected") continue;
+            const prior = rowImages(original.current.get(row._key) || {}).find(value => value.id === image.id);
+            const unchanged = prior && prior.url === image.url && prior.color === image.color && prior.colorFieldKey === image.colorFieldKey;
+            const basisChanged = image.colorFieldKey ? Object.hasOwn(attempt.body.extraFields || {}, key) : Object.hasOwn(attempt.body, "color");
+            if (unchanged && !basisChanged) continue;
+            if (!image.color || !readableSelectionCell(attempt.sent, key)) continue;
+            const field = columns.find(column => column.key === key);
+            const colors = key === "color" ? splitTags(attempt.sent.color) : selectionImageColorValues(field, attempt.sent.extraFields?.[key]);
+            if (!colors.includes(image.color)) throw Object.assign(new Error(`图片颜色必须来自${image.colorFieldKey ? "标准颜色" : "供应商颜色"}字段`), { status: 400 });
+          }
           for (const key of moneyKeys) if (attempt.body[key] && !/^\d+(\.\d{1,2})?$/.test(String(attempt.body[key]))) throw Object.assign(new Error("金额最多两位小数且不能为负数"), { status: 400 });
           const result = await api(attempt.sent.id ? `/style-selections/${attempt.sent.id}` : "/style-selections", attempt.sent.id ? "PATCH" : "POST", attempt.body, attempt.key);
           const saved: Row = { ...attempt.sent, ...normalizeSelection(result.data), _key: row._key };
@@ -1041,7 +1123,7 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
     focus: (rowKey: string, columnKey: string) => { setCellAnchor({ rowKey, columnKey }); if (!selectedCells.has(cellId(rowKey, columnKey))) { setSelectedColumnKeys([]); columnSelectionAnchor.current = null; setSelectedCells(new Set([cellId(rowKey, columnKey)])); } },
     mouseEnter: cellMouseEnter,
     paste: pasteCells,
-    dragStart: (event: React.DragEvent) => { if (selectingCells) event.preventDefault(); },
+    dragStart: (event: React.DragEvent) => { if (selectingCells || nativeTextDragCleanup.current) event.preventDefault(); },
     doubleClick: () => { selectionDrag.stop(); setCellTextEditing(true); },
     axisMouseDown, axisMouseEnter,
     update, updateTags,
@@ -1083,7 +1165,7 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
     const observerNames = observers.map(person => person.displayName || "协作者").join("、");
     const disabled = !canEdit || !editableSelectionCell(row,column.key) || readonlySystemField(column) || collectionKeys.has(column.key), error = readableSelectionCell(row,column.key) && (editableCreationTime(column) ? selectionCreationTimeError(row) : fieldTextLengthError(column,valueAt(row,column))) || errors[`${row._key}:${column.key}`] || errors[`${row._key}:save`], selected = selectedCells.has(cellId(row._key, column.key));
     const duplicateCount = column.key === "xutiStyleNo" ? repeatedStyles.get(selectionStyleKey(row.xutiStyleNo)) || 0 : 0;
-    const common = { "data-selection-row": row._key, "data-selection-column": column.key, "data-selection-edges": cellEdges(selectedCells,row._key,column.key), "data-copy-edges": cellEdges(copiedCells,row._key,column.key), "data-duplicate-count": duplicateCount || undefined, tabIndex: 0, onDoubleClick: () => liveInteractions.current.doubleClick(), onFocusCapture: () => liveInteractions.current.focus(row._key, column.key), className: `${error ? "selection-cell-error " : ""}${duplicateCount ? "selection-cell-duplicate " : ""}${selected ? "selection-cell-active" : ""}${copiedCells.has(cellId(row._key, column.key)) ? " selection-cell-copied" : ""}`, title: error || (duplicateCount ? `序缇款号重复，共 ${duplicateCount} 行` : undefined), onMouseDown: (event: React.MouseEvent<HTMLElement>) => liveInteractions.current.mouseDown(event, row._key, column.key), onDragStart: (event: React.DragEvent) => liveInteractions.current.dragStart(event), onMouseEnter: () => liveInteractions.current.mouseEnter(row._key, column.key), onPaste: (event: ClipboardEvent<HTMLTableCellElement>) => liveInteractions.current.paste(event, row._key, column.key) };
+    const common = { "data-selection-row": row._key, "data-selection-column": column.key, "data-table-find-cell": cellId(row._key, column.key), "data-selection-edges": cellEdges(selectedCells,row._key,column.key), "data-copy-edges": cellEdges(copiedCells,row._key,column.key), "data-duplicate-count": duplicateCount || undefined, tabIndex: 0, onDoubleClick: () => liveInteractions.current.doubleClick(), onFocusCapture: () => liveInteractions.current.focus(row._key, column.key), className: `${error ? "selection-cell-error " : ""}${duplicateCount ? "selection-cell-duplicate " : ""}${selected ? "selection-cell-active" : ""}${copiedCells.has(cellId(row._key, column.key)) ? " selection-cell-copied" : ""}`, title: error || (duplicateCount ? `序缇款号重复，共 ${duplicateCount} 行` : undefined), onMouseDown: (event: React.MouseEvent<HTMLElement>) => liveInteractions.current.mouseDown(event, row._key, column.key), onDragStart: (event: React.DragEvent) => liveInteractions.current.dragStart(event), onMouseEnter: () => liveInteractions.current.mouseEnter(row._key, column.key), onPaste: (event: ClipboardEvent<HTMLTableCellElement>) => liveInteractions.current.paste(event, row._key, column.key) };
     const imagePreviewProps = { previewing: imagePreview?.rowKey === row._key && imagePreview?.columnKey === column.key, onPreview: (index: number) => setImagePreview({ rowKey: row._key, columnKey: column.key, index }) };
     const cell = (content: React.ReactNode) => <td key={column.key} {...common} onContextMenu={event => {
       event.preventDefault();
@@ -1099,7 +1181,7 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
     if(column.type==="single" || column.type==="multiple")return cell(<SelectionChoiceCell field={column} value={String(valueAt(row,column) ?? "")} disabled={disabled} active={selected && selectedCells.size===1} alignment={row.cellAlignments?.[column.key]} verticalAlignment={row.cellVerticalAlignments?.[column.key]} onChange={value=>liveInteractions.current.update(row._key,column,value)}/>);
     if(column.type==="tags")return cell(<SelectionInlineTags field={column} value={String(valueAt(row,column) ?? "")} disabled={disabled} active={selected && selectedCells.size===1} onChange={(value,rename)=>liveInteractions.current.updateTags(row,column,value,rename)}/>);
     if(column.type && !imageKeys.has(column.key) && !collectionKeys.has(column.key))return cell(<SelectionFieldInput field={column} value={String(valueAt(row,column) ?? "")} disabled={disabled} onChange={value=>liveInteractions.current.update(row._key,column,value)}/>);
-    if (column.key === "images") return cell(<MemoImageCell {...imagePreviewProps} field={column} mobileId={row.id && !dirtyRows.has(row._key) ? String(row.id) : undefined} images={rowImages(row)} colors={splitTags(row.color)} disabled={disabled} onChange={(value) => liveInteractions.current.update(row._key, column, value)} />);
+    if (column.key === "images") return cell(<MemoImageCell {...imagePreviewProps} field={column} mobileId={row.id && !dirtyRows.has(row._key) ? String(row.id) : undefined} images={rowImages(row)} colors={splitTags(row.color)} linkedColors={Object.fromEntries([...new Set(rowImages(row).flatMap(image => image.colorFieldKey ? [image.colorFieldKey] : []))].filter(key => readableSelectionCell(row, key) && columns.some(field => field.key === key && !field.deleted)).map(key => [key, selectionImageColorValues(columns.find(field => field.key === key), row.extraFields?.[key])]))} disabled={disabled} onChange={(value) => liveInteractions.current.update(row._key, column, value)} />);
     if (column.key === "labelImages") return cell(<MemoImageCell {...imagePreviewProps} field={column} labelImages mobileId={row.id && !dirtyRows.has(row._key) ? String(row.id) : undefined} images={rowLabelImages(row)} colors={[]} disabled={disabled} onChange={(value) => liveInteractions.current.update(row._key, column, value)} />);
     if (column.key === "color" || column.key === "sizeRange") return cell(<SelectionInlineTags field={column} value={String(valueAt(row,column) ?? "")} disabled={disabled} active={selected && selectedCells.size===1} onChange={(value,rename)=>liveInteractions.current.updateTags(row,column,value,rename)}/>);
     const numberFormat = row.cellNumberFormats?.[column.key];
@@ -1166,7 +1248,7 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
   const previewImages = previewRow && previewColumn && readableSelectionCell(previewRow, previewColumn.key) ? previewColumn.key === "images" ? rowImages(previewRow) : previewColumn.key === "labelImages" ? rowLabelImages(previewRow) : fieldImages(valueAt(previewRow, previewColumn)) : [];
   useEffect(() => { if (imagePreview && !previewImages.length) setImagePreview(null); }, [imagePreview, previewImages.length]);
   const statisticsValues=displayedRows.flatMap(row=>activeColumns.filter(column=>selectedCells.has(cellId(row._key,column.key))).map(column=>imageKeys.has(column.key)?((column.key==="images"?rowImages(row):rowLabelImages(row)).length?"图片":null):column.key==="collectionInventory"?(row.collectionInventory || []).reduce((sum:number,item:Row)=>sum+item.available+item.production,0):column.custom && column.type==="image"?(fieldImages(row.extraFields?.[column.key]).length?"图片":null):column.custom?row.extraFields?.[column.key]:valueAt(row,column)));
-  const editor = <div className="selection-editor-bar" role="group" aria-label="单元格编辑栏">
+  const editor = <div className="selection-editor-bar" data-table-find-editor={editorRow && editorColumn && findReadable(editorRow, editorColumn.key) ? cellId(editorRow._key, editorColumn.key) : undefined} role="group" aria-label="单元格编辑栏">
     <span className="selection-editor-label" title={editorColumn?.label}>{editorLabel}</span>
     {!!editorDuplicateCount && <span className="selection-duplicate-note" role="status">重复 {editorDuplicateCount} 行</span>}
     <div className="selection-editor-control">{archive && editorColumn && (archiveReferences?.[archiveReferenceKey(editorColumn.key)] || archiveReferenceKey(editorColumn.key)==="status") ? <ArchiveReferenceCell columnKey={editorColumn.key} label={editorColumn.label} value={editorValue} disabled={!editorCanEdit} onChange={editCurrent}/> : editorColumn && editableCreationTime(editorColumn) && editorRow ? <input aria-label={`编辑${editorColumn.label}`} value={selectionCreationTimeValue(editorRow, editorColumn.timeDisplay)} disabled={!editorCanEdit} placeholder="YYYY-MM-DD HH:mm:ss" onChange={event => editCurrent(event.target.value)} /> : editorColumn?.type && editorColumn.type!=="image" && !collectionKeys.has(editorColumn.key) ? <SelectionFieldInput field={editorColumn} compact value={editorValue} disabled={!editorCanEdit} onChange={editCurrent}/> : editorColumn?.custom && editorColumn.type==="image" ? <span>点击图片单元格管理图片</span> : editorColumn?.key === "registrationBatch" && editorRow ? <input aria-label="编辑登记批次" type="date" value={editorValue.slice(0, 10)} disabled={!editorCanEdit} onChange={(event) => editCurrent(event.target.value)} /> :
@@ -1206,7 +1288,7 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
   return <>{columnWidthTarget && <SelectionColumnWidthModal columns={columnWidthTarget} onCancel={() => setColumnWidthTarget(null)} onApply={width => { const keys = new Set(columnWidthTarget.map(column => column.key)); setColumns(current => current.map(column => keys.has(column.key) ? { ...column, width } : column)); setColumnWidthTarget(null); }}/>} {imagePreview && previewImages.length > 0 && <SelectionImagePreview key={cellId(imagePreview.rowKey, imagePreview.columnKey)} images={previewImages} index={Math.min(imagePreview.index, previewImages.length - 1)} name={previewColumn!.label} alongsideDetails={detailVisible} onTextCopied={text => { copiedSingleValue.current = text; setCopiedCells(new Set()); }} onIndexChange={index => setImagePreview(current => current ? { ...current, index } : null)} onClose={() => setImagePreview(null)} />}{formatTarget && <SelectionFormatModal count={formatTarget.ids.size} sample={formatTarget.sample} initial={formatTarget.initial} onCancel={() => setFormatTarget(null)} onApply={applyFormat} />}<PageSearch><PageSearchInput multiline aria-label="搜索选款" placeholder="搜索款号、供应商、颜色、材质…" allowClear value={searchText} onChange={event=>{setImageSearchRowId(null);setSearchText(event.target.value);}} suffix={<SelectionImageSearch disabled={!!dirtyCount || saving || deleting || transferring} onSelect={row=>{setImageSearchRowId(String(row.id));setPage(1);setCellAnchor(null);setFocusedCell(null);setCellTextEditing(false);setSelectedRows([]);setSelectedCells(new Set());}}/>} /></PageSearch>
     <Dropdown trigger={["contextMenu"]} open={!!contextRow && !!contextColumn} onOpenChange={open => { if (!open) setContextCell(null); }} overlayStyle={{ zIndex: 1201 }} menu={cellContextMenu}><span aria-hidden="true" style={{ position: "fixed", left: contextCell?.x || 0, top: contextCell?.y || 0, width: 1, height: 1, pointerEvents: "none" }}/></Dropdown>
     <Card ref={findRoot} data-table-find-context className="selection-card"><div className="selection-toolbar" aria-label={`${title || "选款登记"}表格工具栏`}><Space className="selection-toolbar-controls" wrap size={4}>
-      <TableFindReplace rootRef={findRoot} cells={findCells} selectedIds={selectedCells} blocked={saving || deleting || transferring || !!releasing} saveHint="修改将逐行自动保存，保存失败请修正后重试。" onNavigate={navigateFind} onReplace={replaceFind}/>
+      <TableFindReplace rootRef={findRoot} cells={findCells} selectedIds={selectedFindIds} activeId={activeFindId} blocked={saving || deleting || transferring || !!releasing} saveHint="修改将逐行自动保存，保存失败请修正后重试。" onNavigate={navigateFind} onReplace={replaceFind}/>
       {canEdit && <SelectionCollections selectedRows={filteredRows.filter(row => selectedRowKeys.has(row._key))} blocked={!!dirtyCount || saving || deleting}/>}
       {canEdit && <SelectionPhotoQr />}
       <Button type="link" icon={<PlusOutlined />} disabled={!canAdd} onClick={() => add()}>添加一行</Button><Button type="link" danger icon={<DeleteOutlined />} disabled={!canEdit || !selectedRows.length || saving} loading={deleting} onClick={deleteRows}>删除行</Button>

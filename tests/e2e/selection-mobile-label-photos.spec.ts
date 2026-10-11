@@ -207,6 +207,55 @@ test("手机颜色标签改名保留图片，并拒绝覆盖其他人新上传�
   ).toBe(true);
 });
 
+test("手机供应商颜色改名仅更新旧图片，保留标准颜色与受保护关联", async ({ page }) => {
+  await page.setViewportSize({ width: 393, height: 852 });
+  const images = [
+    { id: "legacy", color: "粉色", url: "https://example.test/legacy.png" },
+    { id: "standard", color: "粉色", url: "https://example.test/standard.png", colorFieldKey: "custom:standard" },
+    { id: "private", color: "粉色", url: "https://example.test/private.png", colorFieldKey: "protected" },
+  ];
+  const row = {
+    id: "123", xutiStyleNo: "LINKED-COLOR-TEST", color: "粉色/黑色", images,
+    labelImages: [], extraFields: { "custom:standard": "粉色" },
+    updatedAt: "2026-10-11T00:00:00.000Z", defaultCellAccess: "edit",
+  };
+  const patches: Record<string, any>[] = [];
+  await page.route("https://example.test/**", route => route.fulfill({
+    contentType: "image/png",
+    body: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jz1sAAAAASUVORK5CYII=", "base64"),
+  }));
+  await page.route("**/api/v1/**", async route => {
+    const request = route.request(), path = new URL(request.url()).pathname;
+    let data: unknown = [];
+    if (path.endsWith("/auth/me")) data = {
+      id: "7", displayName: "图片关联测试", roleCodes: [], csrfToken: "fixture",
+      permissions: ["selection.read", "selection.manage"],
+    };
+    if (path.endsWith("/style-selections/123")) {
+      if (request.method() === "PATCH") {
+        const body = request.postDataJSON();
+        patches.push(body);
+        Object.assign(row, body, { updatedAt: "2026-10-11T00:00:01.000Z" });
+      }
+      data = row;
+    }
+    await route.fulfill({ json: { data } });
+  });
+  await page.goto("/mobile/style-photos?id=123");
+  await page.getByRole("button", { name: "修改颜色 粉色", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "修改颜色标签" });
+  await dialog.getByLabel("颜色名称", { exact: true }).fill("藕粉");
+  await dialog.getByRole("button", { name: "保存颜色", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  expect(patches).toHaveLength(1);
+  expect(patches[0].color).toBe("藕粉/黑色");
+  expect(patches[0].images).toEqual([
+    { ...images[0], color: "藕粉" }, images[1], images[2],
+  ]);
+  expect(patches[0]).not.toHaveProperty("extraFields");
+  await expect(page.locator(".mobile-photo-colors").getByRole("button", { name: "藕粉 · 1 张", exact: true })).toHaveAttribute("aria-pressed", "true");
+});
+
 for (const mode of ["readonly", "protected"] as const) {
   test(`手机颜色标签 ${mode} 权限不显示改名按钮`, async ({ page }) => {
     await page.route("**/api/v1/**", (route) => {

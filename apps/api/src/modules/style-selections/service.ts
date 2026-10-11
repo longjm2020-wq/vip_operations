@@ -11,6 +11,7 @@ import { isArchive, mirrorArchiveRow } from "./archive.js";
 import { selectionCreatedAtSql, selectionCreatedTimeRevision } from "./creation-time.js";
 import { selectionCreatedTimeInputSchema } from "../../../../../packages/contracts/src/selection-created-time.js";
 import { insertImage, readStoredImage } from "./image-storage.js";
+import { restoreProtectedImageColorLinks, validateSelectionImageColors } from "./image-colors.js";
 import { db, insert, one, rows, update, camel, type Row, type Tx } from "../../../../../packages/database/src/index.js";
 import { setImmediate as yieldToRequests } from "node:timers/promises";
 import {
@@ -42,9 +43,10 @@ const image = z
     id: z.string().min(1).max(100),
     url: imageUrl,
     color: z.string().trim().max(100).default(""),
+    colorFieldKey: z.string().regex(/^(?:standard|protected|custom:[a-zA-Z0-9:-]+)$/).max(100).optional(),
   })
   .strict();
-const labelImage = image.extend({ color: z.literal("").default("") });
+const labelImage = image.extend({ color: z.literal("").default(""), colorFieldKey: z.undefined().optional() });
 const cellColors = z.record(z.string(), z.enum(rowColors).nullable());
 const extraFields = z.record(z.string().regex(/^custom:[a-zA-Z0-9:-]+$/).max(100), z.string().max(100000).superRefine((value,ctx)=>{
   if(value.length<=2000)return;
@@ -283,13 +285,6 @@ export async function heartbeat(c: Context, input: unknown) {
   return { ok: true };
 }
 
-function validateImageColors(images: unknown, colors: unknown) {
-  const allowed = new Set(tagValues(colors));
-  for (const item of Array.isArray(images) ? images : [])
-    if (item?.color && !allowed.has(item.color))
-      fail("VALIDATION_ERROR", "图片颜色必须来自颜色字段", 400);
-}
-
 export async function remove(c: Context, value: string) {
   const existing=await one(db,"SELECT * FROM style_selections WHERE id=$1::bigint",value);
   protection.assertFields(await protection.policy(db),c,existing || {id:value},protection.rowFields(existing || {}));
@@ -348,13 +343,13 @@ export async function persist(tx: Tx, c: Context, body: Row, value?: string) {
       new Date(before.updated_at).toISOString() !== body.expectedUpdatedAt
     )
       fail("EDIT_CONFLICT", "记录已被其他人修改，请刷新后核对", 409);
-    const changes = { ...body };
+    const changes = { ...restoreProtectedImageColorLinks(before, body) };
     delete changes.expectedUpdatedAt;
     for(const key of ["extraFields","cellColors","cellAlignments","cellVerticalAlignments","cellTextColors","cellNumberFormats"])if(key in changes){const stored=camel(before || {})[key] || {};const merged={...stored,...changes[key]};for(const field of Object.keys(merged))if(merged[field]===null)delete merged[field];changes[key]=merged;}
     if ("color" in changes) changes.color = normalizedTags(changes.color);
     if ("sizeRange" in changes) changes.sizeRange = sortSelectionSizes(changes.sizeRange) || null;
     const security=await protection.assertWrite(tx,c,before,changes,policy);
-    validateImageColors(changes.images ?? before?.images ?? [], changes.color ?? before?.color);
+    await validateSelectionImageColors(tx, c, before, changes, policy);
     for (const key of ["images", "labelImages", "cellColors", "cellAlignments", "cellVerticalAlignments", "cellTextColors", "cellNumberFormats", "extraFields"])
       if (key in changes) changes[key] = JSON.stringify(changes[key]);
     if (!before && changes.sortOrder === undefined) {
@@ -463,7 +458,12 @@ export async function changePhoto(c: Context, value: string, input: unknown) {
     z.object({ action: z.literal("add"), field: z.union([z.enum(["images", "labelImages"]),z.string().regex(/^custom:[a-zA-Z0-9:-]+$/).max(100)]).default("images"), image }).strict(),
     z.object({ action: z.literal("remove"), field: z.union([z.enum(["images", "labelImages"]),z.string().regex(/^custom:[a-zA-Z0-9:-]+$/).max(100)]).default("images"), imageId: z.string().min(1).max(100) }).strict(),
   ]), input);
-  protection.assertFields(await protection.policy(db),c,await entity(db,"style_selections",value),[body.field]);
+  const photoPolicy = await protection.policy(db), photoRow = await entity(db, "style_selections", value);
+  protection.assertFields(photoPolicy,c,photoRow,[body.field]);
+  if (body.action === "add" && body.field === "images" && body.image.colorFieldKey && body.image.colorFieldKey !== "protected") {
+    if (!protection.fieldVisible(photoPolicy, c.actor, body.image.colorFieldKey) || photoPolicy.deletedFieldKeys?.includes(body.image.colorFieldKey) || protection.access(photoPolicy, c.actor, photoRow, body.image.colorFieldKey) === "deny")
+      fail("REGION_FORBIDDEN", "图片关联的标准颜色字段不可访问，请核对字段权限和显示设置", 403);
+  }
   const result=await command(c, "selection.photo/"+value, body, async tx => {
     if(await isArchive(tx))await rows(tx,"SELECT pg_advisory_xact_lock(91002)::text");
     await protection.writeLocks(tx,c);
@@ -474,11 +474,12 @@ export async function changePhoto(c: Context, value: string, input: unknown) {
     let images = Array.isArray(before[storedField]) ? before[storedField] : [];
     if(custom){try{images=parse(z.array(image).max(30),JSON.parse(before.extra_fields?.[field] || "[]"));}catch{fail("INVALID_FIELD","该字段包含非图片内容，不能覆盖",400);}}
     if (body.action === "add") {
-      if (field === "images") { parse(image.extend({ color: z.string().trim().min(1).max(100) }), body.image); validateImageColors([body.image], before.color); }
+      const added = field === "images" ? restoreProtectedImageColorLinks(before, { images: [body.image] }).images[0] : body.image;
+      if (field === "images") parse(image.extend({ color: z.string().trim().min(1).max(100) }), added);
       else if(!custom)parse(labelImage, body.image);
-      const existing = images.find((item: Row) => item.id === body.image.id);
-      if (existing && (existing.url !== body.image.url || existing.color !== body.image.color)) fail("EDIT_CONFLICT", "图片标识已被使用，请重新上传", 409);
-      if (!existing) images = [...images, body.image];
+      const existing = images.find((item: Row) => item.id === added.id);
+      if (existing && (existing.url !== added.url || existing.color !== added.color || existing.colorFieldKey !== added.colorFieldKey)) fail("EDIT_CONFLICT", "图片标识已被使用，请重新上传", 409);
+      if (!existing) images = [...images, added];
     } else images = images.filter((item: Row) => item.id !== body.imageId);
     if(custom){parse(z.array(image).max(30),images);return persist(tx,c,{extraFields:{...(before.extra_fields || {}),[field]:JSON.stringify(images)}},value);}
     return persist(tx, c, { [field]: images }, value);

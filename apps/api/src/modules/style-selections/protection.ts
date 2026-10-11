@@ -1,6 +1,7 @@
 import { selectionScope, selectionUrl } from "../../../../../packages/database/src/selection-scope.js";
 import { archiveSelectionPermissions, tableSelectionPermissions } from "../../../../../packages/contracts/src/table-permissions.js";
 import { isArchive } from "./archive.js";
+import { restoreProtectedImageColorLinks } from "./image-colors.js";
 import { tableAccess } from "../projects/library.js";
 import { assertTextPatch, lockTextDefinitions, textLimitDefinitions } from "./text-limits.js";
 import { readableSelectionCreatedAt, selectionCreatedAtSql, selectionCreatedAtText } from "./creation-time.js";
@@ -42,6 +43,7 @@ export type Policy = {
   privateFieldOwners?: Record<string, string>;
   fieldRevision?: string;
   textFields?: SelectionField[];
+  deletedFieldKeys?: string[];
 };
 export const activePolicy = (policy: Policy) =>
   policy.settings.enabled ||
@@ -71,6 +73,7 @@ export async function policy(tx: Tx, lock = false): Promise<Policy> {
     ),
     fieldRevision: digest(camel(fields)),
     textFields: textLimitDefinitions(fields),
+    deletedFieldKeys: fields.filter(field => field.definition?.deleted).map(field => field.field_key),
   };
 }
 const formats = [
@@ -164,6 +167,11 @@ export function project(policy: Policy, actor: Actor, raw: Row): Row {
     }
   }
   delete row.cellOwners;
+  // A readable image must not reveal another user's private field identifier.
+  // Its opaque link can be round-tripped by image id, without exposing that key.
+  if (Array.isArray(row.images)) row.images = row.images.map((image: Row) => image.colorFieldKey &&
+    (!fieldVisible(policy, actor, image.colorFieldKey) || policy.deletedFieldKeys?.includes(image.colorFieldKey) || access(policy, actor, raw, image.colorFieldKey) === "deny")
+    ? { ...image, colorFieldKey: "protected" } : image);
   // The entire row colour is shared formatting, never a source of protected data.
   return {
     ...row,
@@ -348,6 +356,10 @@ export async function preflight(
         )
       : null;
   if (value && !before) fail("NOT_FOUND", "款式不存在", 404);
+  if (patch.images?.some((image: Row) => image.colorFieldKey && image.colorFieldKey !== "protected" &&
+    (!fieldVisible(p, c.actor, image.colorFieldKey) || p.deletedFieldKeys?.includes(image.colorFieldKey) || access(p, c.actor, before || { created_by: c.actor.id }, image.colorFieldKey) === "deny")))
+    fail("REGION_FORBIDDEN", "图片关联的标准颜色字段不可访问，请核对字段权限和显示设置", 403);
+  patch = restoreProtectedImageColorLinks(before || null, patch);
   const requested = Object.keys(patch)
     .filter((key) => key !== "expectedUpdatedAt")
     .flatMap((key) =>

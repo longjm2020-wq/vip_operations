@@ -53,6 +53,13 @@ async function open(page: Page, shortcut = false) {
   return dialog;
 }
 
+async function confirmWholeTable(page: Page) {
+  const confirmation = page.getByRole("dialog", { name: "确认替换整表范围的内容？", exact: true });
+  await expect(confirmation).toBeVisible();
+  await confirmation.getByRole("button", { name: "确认全部替换", exact: true }).click();
+  await expect(confirmation).not.toBeVisible();
+}
+
 for (const [label, entry] of [["选款登记", "/style-selections"], ["商品档案", "/products"], ["协作表", "/project-tables/7"]]) {
   test(`${label} Ctrl+H 查找全部跨分页定位，并逐次和批量自动保存`, async ({ page }) => {
     const rows = Array.from({ length: 25 }, (_, index) => row(index + 1, { material: index === 24 ? "终页棉质" : "棉质" }));
@@ -69,6 +76,7 @@ for (const [label, entry] of [["选款登记", "/style-selections"], ["商品档
     expect(state.patches).toHaveLength(1);
     await expect(dialog.getByRole("button", { name: /全部替换$/ })).toBeEnabled();
     await dialog.getByRole("button", { name: /全部替换$/ }).click();
+    await confirmWholeTable(page);
     await expect.poll(() => state.rows.filter(row => row.material.includes("麻质")).length).toBe(25);
     expect(state.patches).toHaveLength(25);
     expect(state.patches.every(patch => Object.hasOwn(patch.body, "material") && !Object.hasOwn(patch.body, "xutiStyleNo"))).toBe(true);
@@ -89,6 +97,7 @@ test("只查找可见授权内容，只读匹配跳过；服务端权限变化�
   await expect(dialog.getByRole("group", { name: "查找结果" })).not.toContainText("无权查看");
   await dialog.getByLabel("替换为", { exact: true }).fill("麻质");
   await dialog.getByRole("button", { name: /全部替换$/ }).click();
+  await confirmWholeTable(page);
   await expect.poll(() => state.rows[0].material).toBe("麻质");
   expect(state.rows[1].material).toBe("棉质"); expect(state.patches).toHaveLength(1);
   await expect(dialog.getByRole("button", { name: /全部替换$/ })).toBeDisabled();
@@ -96,6 +105,7 @@ test("只查找可见授权内容，只读匹配跳过；服务端权限变化�
   await dialog.getByLabel("替换为", { exact: true }).fill("丝质");
   state.denyWrites();
   await dialog.getByRole("button", { name: /全部替换$/ }).click();
+  await confirmWholeTable(page);
   await expect(page.getByRole("button", { name: "未保存 · 重试", exact: true })).toBeVisible();
   expect(state.rows[0].material).toBe("麻质"); expect(state.patches).toHaveLength(2);
   await expect(cell(page, "1", "material").getByLabel("成分", { exact: true })).toHaveValue("丝质");
@@ -112,6 +122,7 @@ for (const [label, columns, rows, query, replacement, error] of [
     await dialog.getByLabel("查找内容", { exact: true }).fill(query);
     await dialog.getByLabel("替换为", { exact: true }).fill(replacement);
     await dialog.getByRole("button", { name: /全部替换$/ }).click();
+    await confirmWholeTable(page);
     await expect(page.locator(".ant-message")).toContainText(error);
     await expect(page.locator(".ant-message")).toContainText("本次替换未应用");
     expect(state.rows).toEqual(before); expect(state.patches).toHaveLength(0);
@@ -131,6 +142,7 @@ test("单选、多选含斜杠的完整标签正确替换和保存", async ({ pa
   await dialog.getByRole("button", { name: "查找全部", exact: true }).click();
   await expect(dialog.getByRole("status")).toContainText("找到 2 个匹配单元格，可替换 2 个");
   await dialog.getByRole("button", { name: /全部替换$/ }).click();
+  await confirmWholeTable(page);
   await expect.poll(() => state.rows[0].extraFields["custom:single"]).toBe(options[1]);
   expect(state.rows[0].extraFields["custom:multiple"]).toBe(joinChoiceValues([options[1], options[2]]));
   expect(state.patches).toHaveLength(1);
@@ -170,6 +182,7 @@ test("ERP表格 Drawer Ctrl+H 支持标题和保存入口，替换待保存、�
   await dialog.getByRole("button", { name: "查找全部", exact: true }).click();
   await expect(dialog.getByRole("status")).toContainText("找到 2 个匹配单元格，可替换 2 个");
   await dialog.getByRole("button", { name: /全部替换$/ }).click();
+  await confirmWholeTable(page);
   await expect(save).toBeEnabled();
   await expect(sheet.getByRole("textbox", { name: "第1行 仓库名称", exact: true })).toHaveValue("麻质一仓");
   await expect(sheet.getByRole("textbox", { name: "第2行 仓库名称", exact: true })).toHaveValue("麻质二仓");

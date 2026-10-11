@@ -57,7 +57,9 @@ export function PhotoColorEditor({
               .map((item) => (item === color ? nextColor : item))
               .join("/"),
             images: (row.images || []).map((image: Row) =>
-              image.color === color ? { ...image, color: nextColor } : image,
+              !image.colorFieldKey && image.color === color
+                ? { ...image, color: nextColor }
+                : image,
             ),
             expectedUpdatedAt: row.updatedAt,
           };
@@ -112,7 +114,7 @@ export function PhotoColorEditor({
           <Input autoFocus maxLength={100} disabled={busy} />
         </Form.Item>
         <p className="mobile-photo-hint">
-          该颜色下已有图片会保留，并同步修改图片颜色标签及电脑端颜色字段。
+          该供应商颜色关联的图片会同步改名；按标准颜色关联的图片保留原标签。
         </p>
         <Button
           block

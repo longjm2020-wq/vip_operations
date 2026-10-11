@@ -6,15 +6,17 @@ import { selectionLayoutSchema, selectionSharedLayoutSchema, applySelectionShare
 import { selectionBaseFields } from "../../../../../packages/contracts/src/selection-migration.js";
 import { selectionImportHeader, selectionImportTemplateFields, selectionImportLimits } from "../../../../../packages/contracts/src/selection-import-template.js";
 import type { SelectionImportImageColorDiagnostic } from "../../../../../packages/contracts/src/selection-import-diagnostics.js";
+import { selectionImageColorValues } from "../../../../../packages/contracts/src/selection-image-colors.js";
 import { archiveTableFields, archiveChoiceColumns } from "../../../../../packages/contracts/src/product-archive-table.js";
 import { fieldValueError, joinChoiceValues, splitChoiceValues } from "../../../../../packages/contracts/src/selection-field-validation.js";
 import { audit, canonical, command, fail, parse, requirePermission, type Context } from "../../core.js";
-import { readFieldRegistry, registeredField, canonicalizeLayout, reconcilePersonalFields } from "./field-registry.js";
+import { readFieldRegistry, registeredField, canonicalizeLayout, reconcilePersonalFields, registerArchiveFields } from "./field-registry.js";
 import { sharedFields } from "./shared-fields.js";
 import { isArchive } from "./archive.js";
 import { archiveProductSnapshot } from "./archive-product-snapshot.js";
 import * as protection from "./protection.js";
 import { persist, styleSelectionInput } from "./service.js";
+import { archiveStandardColorKey, imageColorField, linkedColorChanged, unchangedColorImage } from "./image-colors.js";
 
 const strategySchema = z.enum(["OVERWRITE", "SKIP"]).default("SKIP");
 const importTransactionTimeout = 600_000;
@@ -67,7 +69,7 @@ async function importLayout(tx: Tx, c: Context, archive: boolean) {
   if (archive) effective.columns = archiveChoiceColumns(effective.columns, canonicalFields);
   // Include invisible registered definitions when resolving names. A private or
   // hidden field cannot be bypassed by creating another field with its name.
-  const all = new Map<string, SelectionField>([...personal.columns, ...(template?.preferences.columns || []), ...registry.map(registeredField), ...effective.columns].map(field => [field.key, {
+  const all = new Map<string, SelectionField>([...canonicalFields.filter(field => field.key === archiveStandardColorKey), ...personal.columns, ...(template?.preferences.columns || []), ...registry.map(registeredField), ...effective.columns].map(field => [field.key, {
     ...field, type: field.type || field.fallbackType || selectionImportTemplateFields.find(item => item.builtinKey === field.key)?.type || "text",
   }]));
   const policy = await protection.policy(tx);
@@ -83,22 +85,52 @@ function retainedFieldReadable(snapshot: Snapshot, c: Context, before: Row | nul
     protection.fieldVisible(snapshot.policy, c.actor, key) && protection.access(snapshot.policy, c.actor, before, key) !== "deny";
 }
 
-function validateImportImageColors(snapshot: Snapshot, c: Context, before: Row | null, patch: Row, rowIndex: number, xutiStyleNo: string) {
-  const allowedColors = new Set(String(patch.color ?? before?.color ?? "").split("/").map(color => color.trim()).filter(Boolean));
+function resolveImportImageColorLinks(c: Context, snapshot: Snapshot, definitions: SelectionField[], before: Row | null, patch: Row) {
+  if (!patch.images?.some((image: Row) => image.colorFieldKey)) return;
+  const fields = [...snapshot.all, ...definitions];
+  const canonical = fields.find(field => field.key === archiveStandardColorKey && !field.deleted);
+  const standard = canonical ? [canonical] : fields.filter(field => field.label === "标准颜色" && !field.deleted);
+  const policy: protection.Policy = { ...snapshot.policy, registeredFieldKeys: [...snapshot.policy.registeredFieldKeys || [], ...definitions.map(field => field.key)] };
+  patch.images = patch.images.map((image: Row) => {
+    if (!image.colorFieldKey) return image;
+    if (image.colorFieldKey === "standard" && standard.length !== 1)
+      fail("VALIDATION_ERROR", standard.length ? "标准颜色对应多个字段，请先在字段管理中区分名称" : "未找到标准颜色字段，请先填写主表标准颜色或配置该字段后重新导入", 400);
+    const key = image.colorFieldKey === "standard" ? standard[0].key : image.colorFieldKey;
+    const field = imageColorField(fields, before, key);
+    if (!field) fail("VALIDATION_ERROR", "图片关联的标准颜色字段不存在、已删除或类型不支持，请核对后重新导入", 400);
+    const supplied = Object.hasOwn(patch.extraFields || {}, key);
+    if (!supplied && (!protection.fieldVisible(policy, c.actor, key) || snapshot.effective.hiddenColumns.includes(key) || protection.access(policy, c.actor, before || { created_by: c.actor.id }, key) === "deny"))
+      fail("REGION_FORBIDDEN", "图片关联的标准颜色字段不可访问，请核对字段权限和显示设置", 403);
+    return { ...image, colorFieldKey: key };
+  });
+}
+
+function validateImportImageColors(snapshot: Snapshot, c: Context, before: Row | null, patch: Row, rowIndex: number, xutiStyleNo: string, definitions: SelectionField[]) {
   const images: Row[] = patch.images ?? before?.images ?? [];
-  const imageIndex = images.findIndex(image => image.color && !allowedColors.has(image.color));
+  const fields = [...snapshot.all, ...definitions];
+  const imageIndex = images.findIndex(image => {
+    const key = image.colorFieldKey;
+    if (key && unchangedColorImage(before, image) && !linkedColorChanged(before, patch, key)) return false;
+    const field = key ? imageColorField(fields, before, key) : undefined;
+    const value = key ? patch.extraFields?.[key] ?? before?.extra_fields?.[key] : patch.color ?? before?.color;
+    return image.color && (!field && key || !selectionImageColorValues(field, value).includes(image.color));
+  });
   if (imageIndex < 0) return;
+  const key = images[imageIndex].colorFieldKey || "color";
+  const field = key === "color" ? undefined : imageColorField(fields, before, key);
+  const allowedColors = new Set(selectionImageColorValues(field, key === "color" ? patch.color ?? before?.color : patch.extraFields?.[key] ?? before?.extra_fields?.[key]));
   const imageSource = Object.hasOwn(patch, "images") ? "import" : "existing";
-  const colorSource = Object.hasOwn(patch, "color") || !before ? "import" : "existing";
+  const colorSource = (key === "color" ? Object.hasOwn(patch, "color") : Object.hasOwn(patch.extraFields || {}, key)) || !before ? "import" : "existing";
   const imageReadable = imageSource === "import" || retainedFieldReadable(snapshot, c, before, "images");
   const details: SelectionImportImageColorDiagnostic = {
     kind: "SELECTION_IMPORT_IMAGE_COLOR", rowIndex, xutiStyleNo, imageSource, colorSource,
+    ...(key !== "color" ? { colorFieldLabel: "标准颜色" as const } : {}),
     ...(imageReadable ? { imageIndex, imageColor: images[imageIndex].color } : {}),
-    ...(colorSource === "import" || retainedFieldReadable(snapshot, c, before, "color") ? { allowedColors: [...allowedColors] } : {}),
+    ...(colorSource === "import" || retainedFieldReadable(snapshot, c, before, key) ? { allowedColors: [...allowedColors] } : {}),
   };
   const imageText = (details.imageIndex === undefined ? "系统已有图片" : `${imageSource === "existing" ? "现有" : "本次导入的"}第 ${imageIndex + 1} 张图片`) +
     (details.imageColor !== undefined ? `颜色「${details.imageColor}」` : "颜色");
-  const colorText = `${colorSource === "existing" ? "系统" : "本次导入的"}供应商颜色` +
+  const colorText = `${colorSource === "existing" ? "系统" : "本次导入的"}${key === "color" ? "供应商颜色" : "标准颜色"}` +
     (details.allowedColors ? details.allowedColors.length ? `「${details.allowedColors.join("/")}」` : "（未填写）" : "");
   fail("VALIDATION_ERROR", `导入第 ${rowIndex + 1} 款「${xutiStyleNo}」：${imageText}与${colorText}不匹配，请核对后重新导入`, 400, details);
 }
@@ -108,7 +140,8 @@ function resolveBindings(c: Context, snapshot: Snapshot, values: Row[]): { bindi
     const field = selectionImportTemplateFields.find(field => field.builtinKey === key);
     return field ? [field.label] : [];
   }));
-  const headers = [...new Set([...flatHeaders, ...values.flatMap(value => Object.keys(value.fieldValues || {}))])];
+  const linkedStandard = values.some(value => value.images?.some((image: Row) => image.colorFieldKey === "standard"));
+  const headers = [...new Set([...flatHeaders, ...values.flatMap(value => Object.keys(value.fieldValues || {})), ...(linkedStandard ? ["标准颜色"] : [])])];
   if (headers.length > selectionImportLimits.maxColumns) fail("VALIDATION_ERROR", `每批最多${selectionImportLimits.maxColumns}列，请减少导入字段`, 400);
   const templateOrder = new Map(selectionImportTemplateFields.map((field, index) => [field.label, index]));
   headers.sort((a, b) => (templateOrder.get(a) ?? 999) - (templateOrder.get(b) ?? 999));
@@ -116,16 +149,22 @@ function resolveBindings(c: Context, snapshot: Snapshot, values: Row[]): { bindi
   const bindings = headers.map(header => {
     const known = selectionImportHeader(header);
     const label = known?.label || header;
-    const matches = known?.builtinKey
+    let matches = known?.builtinKey
       ? snapshot.all.filter(field => field.key === known.builtinKey)
       : snapshot.all.filter(field => (selectionImportHeader(field.label)?.label || field.label) === label);
+    if (label === "标准颜色") {
+      const canonical = snapshot.all.find(field => field.key === archiveStandardColorKey);
+      if (canonical) matches = [canonical];
+    }
     if (matches.length > 1) fail("VALIDATION_ERROR", `字段「${header}」匹配多个字段，请先在字段管理中区分名称`, 400);
     if (matches.length) {
       const field = matches[0];
-      if (!protection.fieldVisible(snapshot.policy, c.actor, field.key) || snapshot.effective.hiddenColumns.includes(field.key) || field.deleted)
+      const unregisteredArchive = field.key === archiveStandardColorKey && !snapshot.registry.some(row => row.field_key === field.key);
+      if (!unregisteredArchive && !protection.fieldVisible(snapshot.policy, c.actor, field.key) || snapshot.effective.hiddenColumns.includes(field.key) || field.deleted)
         fail("REGION_FORBIDDEN", "导入列包含不可访问的字段，请核对字段权限和显示设置", 403);
       if (readonlyTypes.has(field.type || field.fallbackType || "text")) fail("VALIDATION_ERROR", `字段「${header}」由系统生成，不能导入更新`, 400);
-      return { header, key: field.key, label: field.label, type: field.type || field.fallbackType || "text", isNew: false };
+      if (unregisteredArchive) definitions.push(field);
+      return { header, key: field.key, label: field.label, type: field.type || field.fallbackType || "text", isNew: unregisteredArchive };
     }
     if (known?.readonly) fail("VALIDATION_ERROR", `字段「${header}」由系统生成，不能导入更新`, 400);
     if (known?.builtinKey) {
@@ -246,7 +285,8 @@ async function makePlan(tx: Tx, c: Context, archive: boolean, snapshot: Snapshot
       protection.assertFields(virtual, c, before || { created_by: c.actor.id }, requested);
       await protection.assertWrite(tx, c, before || null, patch, virtual, false);
       if (archive) requirePermission(c.actor, exists ? "product.update" : "product.create");
-      validateImportImageColors(snapshot, c, before, patch, index, value.xutiStyleNo);
+      resolveImportImageColorLinks(c, snapshot, definitions, before, patch);
+      validateImportImageColors(snapshot, c, before, patch, index, value.xutiStyleNo, definitions);
       const merged = patch.extraFields ? { ...patch, extraFields: { ...before?.extra_fields, ...patch.extraFields } } : patch;
       changedFields = protection.changedFields(before || null, merged).affected.filter(key => key !== "xutiStyleNo").map(key => fieldsLabel(snapshot, bindings, key));
     }
@@ -297,6 +337,7 @@ export async function commitImport(c: Context, input: unknown) {
       plan.definitions.find(field => field.key === binding.key) || snapshot.all.find(field => field.key === binding.key) || {
         key: binding.key, label: binding.label, width: selectionInitialColumnWidth, type: binding.type as SelectionField["type"],
       });
+    if (archive) await registerArchiveFields(tx, c, plan.definitions.filter(field => field.key.startsWith("custom:product:")));
     if (missingColumns.length) {
       if (body.fieldRevision === undefined || body.layoutRevision === undefined || !body.fields) fail("EDIT_CONFLICT", "导入新增显示列前请重新预览", 409);
       const layout: SelectionLayout = { ...snapshot.personal, columns: [...snapshot.personal.columns, ...missingColumns] };
@@ -315,6 +356,8 @@ export async function commitImport(c: Context, input: unknown) {
         if (!id) fail("EDIT_CONFLICT", "商品档案尚未同步，请刷新后重新导入；整批未写入", 409);
       }
       const patch = writablePatch(snapshot, plan.fields, plan.definitions, row.values);
+      const existing = id ? await one(tx, "SELECT * FROM style_selections WHERE id=$1::bigint", id) : null;
+      resolveImportImageColorLinks(c, snapshot, plan.definitions, existing || null, patch);
       await persist(tx, c, patch, id || undefined);
     }
     return { created: plan.created, updated: plan.updated, skipped: plan.skipped, fieldsCreated: plan.definitions.length };
