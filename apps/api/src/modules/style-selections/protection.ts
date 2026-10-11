@@ -205,6 +205,13 @@ export function changedFields(before: Row | null, patch: Row) {
     affected = new Set<string>(),
     filled = new Set<string>();
   for (const [key, value] of Object.entries(patch)) {
+    // This metadata backs the built-in creation-time column. Always check that
+    // column, even if an archive snapshot has a different product timestamp.
+    if (key === "createdAt") {
+      affected.add("registrationBatch");
+      filled.add("registrationBatch");
+      continue;
+    }
     if (key === "expectedUpdatedAt" || same(row[key], value)) continue;
     if (key === "extraFields" || formats.includes(key)) {
       for (const column of new Set([
@@ -302,7 +309,9 @@ export async function assertWrite(
       ? !!affected.length
       : filled.some((key) =>
           nonempty(
-            key.startsWith("custom:") ? patch.extraFields?.[key] : patch[key],
+            key === "registrationBatch" && Object.hasOwn(patch, "createdAt")
+              ? patch.createdAt
+              : key.startsWith("custom:") ? patch.extraFields?.[key] : patch[key],
           ),
         ));
   if (shouldClaim) {
@@ -346,7 +355,7 @@ export async function preflight(
         ? Object.keys(patch[key] || {})
         : key === "rowColor" || key === "sortOrder"
           ? rowFields(before || {})
-          : [key],
+          : [key === "createdAt" ? "registrationBatch" : key],
     );
   assertFields(p, c, before || { created_by: c.actor.id }, requested);
   await assertWrite(db, c, before || null, patch, p, false);

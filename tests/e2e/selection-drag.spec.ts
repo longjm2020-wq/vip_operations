@@ -172,7 +172,7 @@ test("existing fields retain data and saved tag types when the type catalog repl
   await page.getByRole("button", { name: "字段管理", exact: true }).click();
   const manager = page.locator(".selection-field-manager");
   await expect(manager.getByText("内置", { exact: true })).toHaveCount(0);
-  await expect(manager.getByText("未设置", { exact: true })).toHaveCount(16);
+  await expect(manager.getByText("未设置", { exact: true })).toHaveCount(15);
   await page.getByRole("button", { name: "编辑字段颜色", exact: true }).click();
   const fieldType = page.getByRole("combobox", {
     name: "字段类型",
@@ -230,7 +230,7 @@ test("multiple search terms match partially and color grouping is absent", async
   ).toHaveCount(20);
   await page.locator(".selection-tool-select").first().click();
   await expect(page.getByText("按颜色分组", { exact: true })).toHaveCount(0);
-  await expect(page.getByText("按登记批次分组", { exact: true })).toBeVisible();
+  await expect(page.getByText("按创建时间分组", { exact: true })).toBeVisible();
   await expect(
     page.getByText("按供应商编码分组", { exact: true }),
   ).toBeVisible();
@@ -242,9 +242,9 @@ test("multiple search terms match partially and color grouping is absent", async
   await expect(options).toHaveText([
     "手动排序",
     "最近修改",
-    "最新登记",
-    "登记批次",
-    "配置排序字段",
+    "最新创建",
+    "创建时间",
+    /^\s*配置排序字段$/,
   ]);
 });
 

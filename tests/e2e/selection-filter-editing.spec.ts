@@ -319,21 +319,21 @@ test("空白筛选下拖行更新保留顺序、拖列不会触发重筛，均�
   await expect.poll(() => visibleRows(page)).toEqual(["editing-1", "editing-2"]);
 });
 
-test("基础排序在手动与最新登记之间反复切换时重筛并使用当前请求及缓存的正确顺序", async ({ page }) => {
+test("基础排序在手动与最新创建之间反复切换时重筛并使用当前请求及缓存的正确顺序", async ({ page }) => {
   const state = await fixture(page, { values: ["", "", "", "", "", "已有标准"] });
   await cellInput(page).dblclick();
   await cellInput(page).fill("手动排序中已补填");
   await expect.poll(state.savedValue).toBe("手动排序中已补填");
-  await changeSort(page, "最新登记");
+  await changeSort(page, "最新创建");
   await expect.poll(() => visibleRows(page)).toEqual(["editing-4", "editing-3", "editing-2", "editing-1"]);
   await changeSort(page, "手动排序");
   await expect.poll(() => visibleRows(page), "返回已缓存的手动排序也必须使用升序").toEqual(["editing-1", "editing-2", "editing-3", "editing-4"]);
-  await changeSort(page, "最新登记");
+  await changeSort(page, "最新创建");
   await expect.poll(() => visibleRows(page)).toEqual(["editing-4", "editing-3", "editing-2", "editing-1"]);
   const newestInput = page.locator(`td[data-selection-row="editing-4"][data-selection-column="${fieldKey}"]`).getByLabel("执行标准", { exact: true });
   await newestInput.dblclick();
-  await newestInput.fill("最新登记中已补填");
-  await expect.poll(() => state.rows[4].extraFields[fieldKey]).toBe("最新登记中已补填");
+  await newestInput.fill("最新创建中已补填");
+  await expect.poll(() => state.rows[4].extraFields[fieldKey]).toBe("最新创建中已补填");
   expect(await visibleRows(page)).toEqual(["editing-4", "editing-3", "editing-2", "editing-1"]);
   await changeSort(page, "手动排序");
   await expect.poll(() => visibleRows(page), "再次排序才移除新填好的行，剩余行仍按当前顺序排列").toEqual(["editing-1", "editing-2", "editing-3"]);

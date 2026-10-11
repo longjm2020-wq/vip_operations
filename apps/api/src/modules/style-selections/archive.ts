@@ -135,7 +135,7 @@ const coreFields = [
 ];
 const optionalId = z.string().regex(/^[1-9]\d{0,18}$/);
 // This bridge runs inside the sheet write transaction. Master IDs and SKU references never change.
-export async function mirrorArchiveRow(tx: Tx, c: Context, raw: Row) {
+export async function mirrorArchiveRow(tx: Tx, c: Context, raw: Row, createdAt?: string) {
   if (!(await isArchive(tx))) return;
   const row = camel(raw),
     styleNo = String(row.xutiStyleNo || "").trim();
@@ -154,6 +154,10 @@ export async function mirrorArchiveRow(tx: Tx, c: Context, raw: Row) {
       );
   requirePermission(c.actor, original ? "product.update" : "product.create");
   const values: Row = { styleNo, customFields: {} };
+  // A product created from an existing draft inherits its saved creation time.
+  // Ordinary edits and imports retain an existing product's own timestamp.
+  const productCreatedAt = createdAt ?? (!original ? row.createdAt : undefined);
+  if (productCreatedAt !== undefined) values.createdAt = productCreatedAt;
   const extras = row.extraFields || {};
   for (const key of coreFields)
     if (Object.hasOwn(extras, "custom:product:" + key))

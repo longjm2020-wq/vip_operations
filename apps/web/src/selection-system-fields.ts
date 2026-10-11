@@ -1,5 +1,6 @@
 import type { SelectionField } from "./selection-field-types.js";
 import { formatSelectionCreatedTime } from "../../../packages/contracts/src/selection-created-time.js";
+import { selectionCreationTimeValue } from "./selection-creation-time.js";
 export function selectionSystemValue(
   row: Record<string, any>,
   field: SelectionField,
@@ -19,6 +20,7 @@ export function selectionSystemValue(
     return name || username || String(row[prefix]);
   }
   if (type === "createdTime" || type === "modifiedTime") {
+    if (type === "createdTime" && field.key === "registrationBatch" && !field.custom) return selectionCreationTimeValue(row, field.timeDisplay);
     const value = row[type === "createdTime" ? "createdAt" : "updatedAt"];
     return formatSelectionCreatedTime(value, field.timeDisplay);
   }

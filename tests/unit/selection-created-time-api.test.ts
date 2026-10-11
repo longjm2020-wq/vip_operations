@@ -25,7 +25,7 @@ vi.mock("../../packages/database/src/index.js", async importOriginal => {
 });
 
 import { list, styleSelectionInput } from "../../apps/api/src/modules/style-selections/service.js";
-import { access, detail, filtered, project, type Policy } from "../../apps/api/src/modules/style-selections/protection.js";
+import { access, assertWrite, changedFields, detail, filtered, project, type Policy } from "../../apps/api/src/modules/style-selections/protection.js";
 import { selectionCreatedAtSql } from "../../apps/api/src/modules/style-selections/creation-time.js";
 
 const reader: Context = { actor: { id: "2", username: "reader", displayName: "Reader", permissions: ["selection.read"], roleCodes: [] }, requestId: "creation-time" };
@@ -56,9 +56,24 @@ describe("business creation-time API", () => {
     expect(() => selectionScope.run("84;DROP", selectionCreatedAtSql)).toThrow("Invalid selection table ID");
   });
 
-  it("keeps old template dates compatible but rejects manually supplied creation timestamps", () => {
+  it("accepts explicit timestamp edits while retaining old batch compatibility and other metadata protections", () => {
     expect(styleSelectionInput.safeParse({ registrationBatch: "2020-01-01" }).success).toBe(true);
-    expect(styleSelectionInput.safeParse({ createdAt: "2020-01-01T00:00:00Z" }).success).toBe(false);
+    expect(styleSelectionInput.parse({ createdAt: "2020-01-01T08:00:00+08:00" }).createdAt).toBe("2020-01-01T00:00:00.000Z");
+    for (const createdAt of [null, "", "2026-02-30T00:00:00Z", "2026-10-11T00:00:00"])
+      expect(styleSelectionInput.safeParse({ createdAt }).success).toBe(false);
+    for (const key of ["createdBy", "updatedBy", "updatedAt", "version"])
+      expect(styleSelectionInput.safeParse({ [key]: "1" }).success).toBe(false);
+  });
+
+  it("checks timestamp edits against the built-in column rather than an unprotected metadata key", async () => {
+    const editor = { ...reader, actor: { ...reader.actor, permissions: ["selection.read", "selection.manage"] } };
+    const patch = { createdAt: fixture.row.created_at };
+    expect(changedFields(fixture.row, patch)).toEqual({ affected: ["registrationBatch"], filled: ["registrationBatch"] });
+    fixture.settings = { ...defaultProtection, enabled: true, regions: [{ id: "123e4567-e89b-42d3-a456-426614174000", name: "Creation", scope: "columns", rowIds: [], columnKeys: ["registrationBatch"], users: {}, others: "read" }] };
+    await expect(assertWrite({} as any, editor, fixture.row, patch, policy(), false)).rejects.toMatchObject({ status: 403 });
+    await expect(assertWrite({} as any, { ...editor, actor: { ...editor.actor, roleCodes: ["SUPER_ADMIN"] } }, fixture.row, patch, policy(), false)).resolves.toEqual({});
+    await expect(assertWrite({} as any, reader, fixture.row, patch, { ...policy(), settings: defaultProtection }, false)).rejects.toMatchObject({ status: 403 });
+    await expect(assertWrite({} as any, editor, { ...fixture.row, migration_locked: true }, patch, { ...policy(), settings: defaultProtection }, false)).rejects.toMatchObject({ status: 409 });
   });
 
   it("sorts and searches the creation time instead of the retained old batch value", () => {

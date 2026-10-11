@@ -9,6 +9,7 @@ import { randomUUID } from "node:crypto";
 import * as protection from "./protection.js";
 import { isArchive, mirrorArchiveRow } from "./archive.js";
 import { selectionCreatedAtSql, selectionCreatedTimeRevision } from "./creation-time.js";
+import { selectionCreatedTimeInputSchema } from "../../../../../packages/contracts/src/selection-created-time.js";
 import { insertImage, readStoredImage } from "./image-storage.js";
 import { db, insert, one, rows, update, camel, type Row, type Tx } from "../../../../../packages/database/src/index.js";
 import { setImmediate as yieldToRequests } from "node:timers/promises";
@@ -55,6 +56,7 @@ const presenceInput = z.object({ editingId: z.string().regex(/^[1-9]\d{0,18}$/).
 export const styleSelectionInput = z
   .object({
     registrationBatch: date.nullable().optional(),
+    createdAt: selectionCreatedTimeInputSchema.optional(),
     images: z.array(image).default([]),
     labelImages: z.array(labelImage).default([]),
     cellColors: cellColors.default({}),
@@ -362,7 +364,7 @@ export async function persist(tx: Tx, c: Context, body: Row, value?: string) {
     const result = before
       ? await update(tx, "style_selections", value!, { ...changes, ...security, updatedBy:c.actor.id, version: before.version + 1 })
       : await insert(tx, "style_selections", { ...changes, ...security, updatedBy:c.actor.id, createdBy: c.actor.id });
-    await mirrorArchiveRow(tx,c,result);
+    await mirrorArchiveRow(tx,c,result,changes.createdAt);
     await audit(tx, c, before ? "UPDATE" : "CREATE", "style-selection", result.id, before, result);
     // Keep date-only fields identical to list responses (rather than ISO timestamps).
     return (await one(tx, `SELECT ${selectColumns()} ${source} WHERE s.id=$1::bigint`, result.id))!;

@@ -1,4 +1,5 @@
 import { sortSelectionSizes } from "../../../packages/contracts/src/selection-sizes.js";
+import { hasSelectionCreationTimeDraft, selectionCreationTimeComparable } from "./selection-creation-time.js";
 type Row = Record<string, any>;
 
 /** Each logical write gets its own key; uncertain retries reuse the exact request. */
@@ -42,8 +43,16 @@ export function normalizeSelection(row: Row): Row {
 /** Accept server metadata while retaining fields edited during the request. */
 export function mergeSelectionSave(current: Row, sent: Row, saved: Row): Row {
   const next: Row = { ...saved, _key: current._key };
+  delete next.creationTimeDraft;
+  // The timestamp and its raw input share the legacy column's permission key.
+  // A response must not replace text typed after this request was sent.
+  if (!saved.migrationLocked && (!saved.cellAccess || (saved.cellAccess.registrationBatch || saved.defaultCellAccess) === "edit") &&
+      (current.creationTimeDraft !== sent.creationTimeDraft || selectionCreationTimeComparable(current) !== selectionCreationTimeComparable(sent))) {
+    next.createdAt = current.createdAt;
+    if (hasSelectionCreationTimeDraft(current)) next.creationTimeDraft = current.creationTimeDraft;
+  }
   for (const key of Object.keys(current)) {
-    if (["id", "updatedAt", "createdAt", "version", "_key", "cellAccess", "hiddenCells", "defaultCellAccess", "policyRevision", "claimedBy", "migrationLocked", "migrationTargetWorkspace", "migrationTargetRowId", "migratedAt", "productId"].includes(key)) continue;
+    if (["id", "updatedAt", "createdAt", "creationTimeDraft", "version", "_key", "cellAccess", "hiddenCells", "defaultCellAccess", "policyRevision", "claimedBy", "migrationLocked", "migrationTargetWorkspace", "migrationTargetRowId", "migratedAt", "productId"].includes(key)) continue;
     if(saved.cellAccess?.[key] && saved.cellAccess[key]!=="edit")continue;
     if(["extraFields","cellColors","cellAlignments","cellVerticalAlignments","cellTextColors","cellNumberFormats"].includes(key)) {
       const values={...(saved[key] || {})};
@@ -64,7 +73,7 @@ export function mergeSelectionSave(current: Row, sent: Row, saved: Row): Row {
 export function mergeSelectionRemote(current: Row, before: Row, incoming: Row) {
   const next: Row = { ...incoming, _key: current._key };
   const conflicts: string[] = [];
-  const metadata = new Set(["id","updatedAt","createdAt","version","_key","createdBy","updatedBy","createdByName","createdByUsername","updatedByName","updatedByUsername","cellAccess","hiddenCells","defaultCellAccess","policyRevision","claimedBy","claimedAt","cellOwners","migrationLocked","migrationTargetWorkspace","migrationTargetRowId","migratedAt","productId","collectionInventory","reorderDays","sellingPoints"]);
+  const metadata = new Set(["id","updatedAt","createdAt","creationTimeDraft","version","_key","createdBy","updatedBy","createdByName","createdByUsername","updatedByName","updatedByUsername","cellAccess","hiddenCells","defaultCellAccess","policyRevision","claimedBy","claimedAt","cellOwners","migrationLocked","migrationTargetWorkspace","migrationTargetRowId","migratedAt","productId","collectionInventory","reorderDays","sellingPoints"]);
   const maps = new Set(["extraFields","cellColors","cellAlignments","cellVerticalAlignments","cellTextColors","cellNumberFormats"]);
   const equal = (a: unknown, b: unknown) => JSON.stringify(a === "" ? null : a ?? null) === JSON.stringify(b === "" ? null : b ?? null);
   const editable = (key: string) => !incoming.migrationLocked && (!incoming.cellAccess || (incoming.cellAccess[key] || incoming.defaultCellAccess) === "edit");
@@ -73,6 +82,13 @@ export function mergeSelectionRemote(current: Row, before: Row, incoming: Row) {
     if (!equal(remote, base) && !equal(remote, local)) conflicts.push(key);
     return local;
   };
+  delete next.creationTimeDraft;
+  const localTime = selectionCreationTimeComparable(current), baseTime = selectionCreationTimeComparable(before), remoteTime = selectionCreationTimeComparable(incoming);
+  if (editable("registrationBatch") && localTime !== baseTime) {
+    if (remoteTime !== baseTime && remoteTime !== localTime) conflicts.push("registrationBatch");
+    next.createdAt = current.createdAt;
+    if (hasSelectionCreationTimeDraft(current)) next.creationTimeDraft = current.creationTimeDraft;
+  }
   for (const key of new Set([...Object.keys(before), ...Object.keys(current)])) {
     if (metadata.has(key)) continue;
     if (maps.has(key)) {

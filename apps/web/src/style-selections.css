@@ -621,3 +621,6 @@
 .selection-row-tools { display:flex; justify-content:center; align-items:center; gap:2px; }
 .selection-row-tools .ant-btn { width:20px; min-width:20px; height:20px; padding:0; }
 .selection-product-detail { font-size:13px; }
+/* Keep the full page scroll geometry while mounting only nearby rows. */
+.selection-sheet[data-windowed] { overflow-anchor: none; }
+.selection-sheet .selection-viewport-spacer td { padding: 0 !important; border: 0 !important; background: transparent; }
