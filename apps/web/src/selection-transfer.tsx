@@ -3,6 +3,7 @@ import { Alert, App, Button, Dropdown, Modal, Radio, Space, Table, Tag, Tooltip,
 import { DownOutlined, DownloadOutlined, InboxOutlined, UploadOutlined } from "@ant-design/icons";
 import { useSelectionWorkspace } from "./selection-workspace";
 import { downloadSelectionWorkbook, parseSelectionWorkbook } from "./selection-workbook";
+import { formatSelectionImportError } from "./selection-import-diagnostics";
 import { downloadVisibleSelectionWorkbook, visibleSelectionWorkbookFields } from "./selection-visible-workbook";
 import { selectionLayoutSnapshotSchema, type SelectionField } from "../../../packages/contracts/src/selection-layout.js";
 import { selectionImportLimits } from "../../../packages/contracts/src/selection-import-template.js";
@@ -95,7 +96,9 @@ export function SelectionTransfer({ canEdit, blocked, selectedRows, filteredRows
         const file = await prepareUpload(new File([bytes], "import-image." + mime.split("/")[1], { type: mime }));
         image.url = (await api("/style-selections/images", "POST", { data: await readUpload(file) })).data.url;
     }
-    const response = (await api("/style-selections/import/preview", "POST", { rows: source, existingStrategy: strategy })).data;
+    let response: unknown;
+    try { response = (await api("/style-selections/import/preview", "POST", { rows: source, existingStrategy: strategy })).data; }
+    catch (error) { throw Error(formatSelectionImportError(error, source)); }
     if (!isImportPlan(response)) throw Error("导入服务正在更新，请刷新后重新预览");
     setPlan(response);
     key.current = crypto.randomUUID();
@@ -132,7 +135,7 @@ export function SelectionTransfer({ canEdit, blocked, selectedRows, filteredRows
       setPlan(null); setRecords(null); setFileName("");
       try { await onImported(); }
       catch { message.warning("资料已导入，表格刷新失败，请刷新页面查看最新字段和资料"); }
-    } catch (e) { setError((e as Error).message); }
+    } catch (e) { setError(formatSelectionImportError(e, records)); }
     finally { loadLock.current = false; setBusy(false); }
   };
   const closeImport = () => { if (busy || loadLock.current) return; setOpen(false); setPlan(null); setRecords(null); setFileName(""); setExistingStrategy(null); };

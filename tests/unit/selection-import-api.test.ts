@@ -45,7 +45,7 @@ async function register(definition: SelectionField, owner = "7", visibility = "P
   await fixture.database!.query(`INSERT INTO selection_field_registry(workspace_key,field_key,owner_id,visibility,definition) VALUES('default',$1,$2,$3,$4)`, [definition.key, owner, visibility, JSON.stringify(definition)]);
 }
 async function style(no = "EXIST", data: Row = {}) {
-  const saved = (await read("INSERT INTO style_selections(xuti_style_no,material,supplier_code,extra_fields,claimed_by,images) VALUES($1,$2,$3,$4,$5,$6) RETURNING *", [no, data.material || "原成分", data.supplierCode || "原编码", JSON.stringify(data.extraFields || {}), data.claimedBy || null, JSON.stringify(data.images || [])]))[0];
+  const saved = (await read("INSERT INTO style_selections(xuti_style_no,material,supplier_code,extra_fields,claimed_by,images,color) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *", [no, data.material || "原成分", data.supplierCode || "原编码", JSON.stringify(data.extraFields || {}), data.claimedBy || null, JSON.stringify(data.images || []), data.color || null]))[0];
   return saved;
 }
 async function settings(value: Row) { await fixture.database!.query("UPDATE style_selection_protection SET settings=$1,revision=revision+1", [JSON.stringify({ ...defaultProtection, ...value })]); }
@@ -93,6 +93,129 @@ beforeEach(async () => {
 afterAll(async () => { await fixture.database?.close(); });
 
 describe("atomic Excel style import", () => {
+  it("identifies the exact first incompatible imported image after normalization without writing any part of the batch", async () => {
+    const rows = [
+      { xutiStyleNo: "FIRST", color: "白色", fieldValues: { 新字段: "一" }, images: [{ id: "one", color: "白色", url: "https://example.com/one.jpg" }] },
+      { xutiStyleNo: "SECOND", color: " 白色 / 灰色 / 白色 ", fieldValues: { 新字段: "二" }, images: [
+        { id: "two", color: " 白色 ", url: "https://example.com/two.jpg" },
+        { id: "three", color: " 黑色 ", url: "https://example.com/three.jpg" },
+        { id: "four", color: "红色", url: "https://example.com/four.jpg" },
+      ] },
+    ];
+    const diagnostic = { kind: "SELECTION_IMPORT_IMAGE_COLOR", rowIndex: 1, xutiStyleNo: "SECOND", imageIndex: 1,
+      imageSource: "import", colorSource: "import", imageColor: "黑色", allowedColors: ["白色", "灰色"] };
+    await expect(previewImport(actor(), input(rows))).rejects.toMatchObject({ status: 400, response: { error: {
+      code: "VALIDATION_ERROR", message: expect.stringContaining("第 2 张图片颜色「黑色」"), details: diagnostic,
+    } } });
+    const validRows = rows.map(row => ({ ...row, images: row.images.map(image => ({ ...image, color: "白色" })) }));
+    const plan = await previewImport(actor(), input(validRows));
+    plan.rows[1].values.images[1].color = " 黑色 ";
+    await expect(commitImport(actor(), payload(plan))).rejects.toMatchObject({ status: 400, response: { error: { details: diagnostic } } });
+    for (const table of ["style_selections", "selection_field_registry", "selection_layout_preferences", "audit_logs", "idempotency_records"])
+      expect(await read(`SELECT * FROM ${table}`)).toEqual([]);
+  });
+  it("reports an incompatible retained image when importing only supplier colors", async () => {
+    const before = await style("COLOR-ONLY", { color: "白色/黑色", images: [
+      { id: "white", color: "白色", url: "https://example.com/white.jpg" },
+      { id: "black", color: "黑色", url: "https://example.com/black.jpg" },
+    ] });
+    await expect(previewImport(actor(), input([{ xutiStyleNo: "COLOR-ONLY", color: "白色" }]))).rejects.toMatchObject({ status: 400, response: { error: {
+      message: expect.stringContaining("现有第 2 张图片颜色「黑色」"), details: {
+        kind: "SELECTION_IMPORT_IMAGE_COLOR", rowIndex: 0, xutiStyleNo: "COLOR-ONLY", imageIndex: 1,
+        imageSource: "existing", colorSource: "import", imageColor: "黑色", allowedColors: ["白色"],
+      },
+    } } });
+    expect((await read("SELECT * FROM style_selections"))[0]).toEqual(before);
+  });
+  it("reports an omitted new-row supplier color as an empty imported color, not a retained system value", async () => {
+    await expect(previewImport(actor(), input([{ xutiStyleNo: "NEW-WITHOUT-COLOR", color: " ", images: [
+      { id: "red", color: "红色", url: "https://example.com/red.jpg" },
+    ] }]))).rejects.toMatchObject({ status: 400, response: { error: {
+      message: expect.stringContaining("本次导入的供应商颜色（未填写）"), details: {
+        kind: "SELECTION_IMPORT_IMAGE_COLOR", rowIndex: 0, xutiStyleNo: "NEW-WITHOUT-COLOR", imageIndex: 0,
+        imageSource: "import", colorSource: "import", imageColor: "红色", allowedColors: [],
+      },
+    } } });
+    expect(await read("SELECT * FROM style_selections")).toEqual([]);
+  });
+  it("uses existing readable supplier colors for image-only imports and keeps them on commit", async () => {
+    const before = await style("IMAGE-ONLY", { color: "红色/白色" });
+    const image = { id: "new", color: "黑色", url: "https://example.com/new.jpg" };
+    await expect(previewImport(actor(), input([{ xutiStyleNo: "IMAGE-ONLY", images: [image] }]))).rejects.toMatchObject({ status: 400, response: { error: {
+      message: expect.stringContaining("系统供应商颜色「红色/白色」"), details: {
+        kind: "SELECTION_IMPORT_IMAGE_COLOR", rowIndex: 0, xutiStyleNo: "IMAGE-ONLY", imageIndex: 0,
+        imageSource: "import", colorSource: "existing", imageColor: "黑色", allowedColors: ["红色", "白色"],
+      },
+    } } });
+    expect((await read("SELECT * FROM style_selections"))[0]).toEqual(before);
+    const plan = await previewImport(actor(), input([{ xutiStyleNo: "IMAGE-ONLY", images: [{ ...image, color: " 红色 " }] }]));
+    expect(await commitImport(actor(), payload(plan))).toMatchObject({ created: 0, updated: 1 });
+    expect((await read("SELECT color,images FROM style_selections"))[0]).toEqual({ color: "红色/白色", images: [{ ...image, color: "红色" }] });
+  });
+  it("checks requested write permissions before returning image-color diagnostics", async () => {
+    const before = await style("LOCKED", { color: "白色" });
+    await settings({ enabled: true, regions: [{ id: "123e4567-e89b-42d3-a456-426614174000", name: "Images readonly", scope: "columns", rowIds: [], columnKeys: ["images"], users: {}, others: "read" }] });
+    await expect(previewImport(actor(), input([{ xutiStyleNo: "LOCKED", images: [{ id: "one", color: "黑色", url: "https://example.com/one.jpg" }] }]))).rejects.toMatchObject(forbidden);
+    expect((await read("SELECT * FROM style_selections"))[0]).toEqual(before);
+    expect(await read("SELECT * FROM audit_logs")).toEqual([]);
+  });
+  it("omits unreadable retained supplier colors from both message and details", async () => {
+    const before = await style("PRIVATE-COLOR", { color: "秘密颜色" });
+    await settings({ enabled: true, regions: [{ id: "123e4567-e89b-42d3-a456-426614174000", name: "Colors private", scope: "columns", rowIds: [], columnKeys: ["color"], users: {}, others: "deny" }] });
+    let failure: unknown;
+    try { await previewImport(actor(), input([{ xutiStyleNo: "PRIVATE-COLOR", images: [{ id: "one", color: "黑色", url: "https://example.com/one.jpg" }] }])); }
+    catch (error) { failure = error; }
+    expect(failure).toMatchObject({ status: 400, response: { error: { details: {
+      kind: "SELECTION_IMPORT_IMAGE_COLOR", rowIndex: 0, xutiStyleNo: "PRIVATE-COLOR", imageIndex: 0,
+      imageSource: "import", colorSource: "existing", imageColor: "黑色",
+    } } } });
+    const body = (failure as { response: { error: { details: Row } } }).response;
+    expect(body.error.details).not.toHaveProperty("allowedColors");
+    expect(JSON.stringify(body)).not.toContain("秘密颜色");
+    expect(JSON.stringify(body)).not.toContain("https://");
+    expect((await read("SELECT * FROM style_selections"))[0]).toEqual(before);
+  });
+  it.each(["region", "hidden", "private", "autoHide"])("omits retained image colors protected by %s", async mode => {
+    await style("PRIVATE-IMAGE", { color: "黑色/秘密图片颜色", images: [
+      { id: "black", color: "黑色", url: "https://example.com/black.jpg" },
+      { id: "secret", color: "秘密图片颜色", url: "https://example.com/secret.jpg" },
+    ] });
+    if (mode === "region") await settings({ enabled: true, regions: [{ id: "123e4567-e89b-42d3-a456-426614174000", name: "Images private", scope: "columns", rowIds: [], columnKeys: ["images"], users: {}, others: "deny" }] });
+    if (mode === "hidden") await fixture.database!.query("INSERT INTO selection_layout_preferences(user_id,workspace_key,preferences) VALUES(7,'default',$1)", [JSON.stringify(selectionLayoutSchema.parse({ columns: selectionBaseFields, hiddenColumns: ["images"] }))]);
+    if (mode === "private") await register(selectionBaseFields.find(field => field.key === "images")!, "8");
+    if (mode === "autoHide") {
+      await fixture.database!.exec("UPDATE style_selections SET created_by=8");
+      await settings({ autoHide: true, autoHideRegions: [{ id: "123e4567-e89b-42d3-a456-426614174000", name: "Images hidden", scope: "columns", rowIds: [], columnKeys: ["images"] }] });
+    }
+    const before = (await read("SELECT * FROM style_selections"))[0];
+    let failure: unknown;
+    try { await previewImport(actor(), input([{ xutiStyleNo: "PRIVATE-IMAGE", color: "黑色" }])); }
+    catch (error) { failure = error; }
+    expect(failure).toMatchObject({ status: 400, response: { error: { details: {
+      kind: "SELECTION_IMPORT_IMAGE_COLOR", rowIndex: 0, xutiStyleNo: "PRIVATE-IMAGE",
+      imageSource: "existing", colorSource: "import", allowedColors: ["黑色"],
+    } } } });
+    const body = (failure as { response: { error: { details: Row } } }).response;
+    expect(body.error.details).not.toHaveProperty("imageColor");
+    expect(body.error.details).not.toHaveProperty("imageIndex");
+    expect(body).toMatchObject({ error: { message: expect.stringContaining("系统已有图片") } });
+    expect(JSON.stringify(body)).not.toContain("第 2 张");
+    expect(JSON.stringify(body)).not.toContain("秘密图片颜色");
+    expect(JSON.stringify(body)).not.toContain("secret.jpg");
+    expect((await read("SELECT * FROM style_selections"))[0]).toEqual(before);
+    expect(await read("SELECT * FROM audit_logs")).toEqual([]);
+  });
+  it("does not validate or alter colors on skipped existing rows but still validates new rows", async () => {
+    const before = await style("SKIPPED", { color: "白色" });
+    const plan = await previewImport(actor(), input([{ xutiStyleNo: "SKIPPED", color: "黑色", images: [{ id: "wrong", color: "红色", url: "https://example.com/red.jpg" }] }], "SKIP"));
+    expect(plan.rows[0].operation).toBe("SKIP");
+    expect(plan.fields).toEqual([]);
+    expect(await commitImport(actor(), payload(plan))).toMatchObject({ created: 0, updated: 0, skipped: 1 });
+    expect((await read("SELECT * FROM style_selections"))[0]).toEqual(before);
+    await expect(previewImport(actor("new-skipped"), input([{ xutiStyleNo: "NEW", color: "黑色", images: [{ id: "wrong", color: "红色", url: "https://example.com/red.jpg" }] }], "SKIP"))).rejects.toMatchObject({ status: 400, response: { error: { details: { xutiStyleNo: "NEW", imageColor: "红色" } } } });
+    expect(await read("SELECT * FROM audit_logs")).toEqual([]);
+    expect(await read("SELECT * FROM selection_field_registry")).toEqual([]);
+  });
   it("previews and commits registered fields with Prisma-style BigInt metadata", async () => {
     const title = field("长标题");
     await register(title);

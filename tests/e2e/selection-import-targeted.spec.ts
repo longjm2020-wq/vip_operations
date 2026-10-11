@@ -235,3 +235,55 @@ test("Excel第3行吊牌价仅规范浮点尾差，真实三位小数显示单�
   await expect(dialog.getByRole("button", { name: "确认导入" })).toHaveCount(0);
   expect(state.commits).toHaveLength(0);
 });
+
+test("图片颜色错误定位实际Excel行和单元格，重新预览及更换文件保留正确位置", async ({ page }) => {
+  const state = await fixture(page), dialog = await openImport(page);
+  const rejected: Values[] = [];
+  await page.route("**/api/v1/style-selections/import/preview", async route => {
+    const body = route.request().postDataJSON();
+    rejected.push(body);
+    await route.fulfill({ status: 400, json: { error: {
+      code: "VALIDATION_ERROR", message: "图片颜色必须来自颜色字段",
+      details: { kind: "SELECTION_IMPORT_IMAGE_COLOR", rowIndex: 0, xutiStyleNo: "IMPORT-001", imageIndex: 1,
+        imageSource: "import", colorSource: "import", imageColor: "红色", allowedColors: ["黑色", "白色"] },
+    } } });
+  });
+  await dialog.getByRole("radio", { name: "覆盖，仅更新本次填写的字段" }).check();
+  const file = async (inline: boolean) => {
+    const book = new ExcelJS.Workbook(), sheet = book.addWorksheet("选款资料");
+    sheet.addRow(["供应商颜色", "图片", "序缇款号"]);
+    const mainRow = inline ? 7 : 17;
+    sheet.getCell(`A${mainRow}`).value = "黑色/白色";
+    sheet.getCell(`C${mainRow}`).value = "IMPORT-001";
+    if (inline) sheet.getCell(`B${mainRow}`).value = "黑色 | https://example.test/black.png\n红色 | https://example.test/red.png";
+    else {
+      const pictures = book.addWorksheet("图片明细");
+      pictures.addRow(["序缇款号", "颜色", "图片URL"]);
+      pictures.getRow(3).values = ["IMPORT-001", "黑色", "https://example.test/black.png"];
+      pictures.getRow(29).values = ["IMPORT-001", "红色", "https://example.test/red.png"];
+    }
+    return { name: inline ? "主表图片颜色.xlsx" : "明细图片颜色.xlsx", mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", buffer: Buffer.from(await book.xlsx.writeBuffer()) };
+  };
+  await dialog.locator('input[type="file"]').setInputFiles(await file(false));
+  const error = dialog.getByRole("alert");
+  await expect(error).toContainText("图片明细第 29 行");
+  await expect(error).toContainText("B29");
+  await expect(error).toContainText("选款资料第 17 行");
+  await expect(error).toContainText("A17");
+  await expect(error).toContainText("IMPORT-001");
+  await expect(error).toContainText("红色");
+  await expect(error).toContainText("黑色、白色");
+  await dialog.getByRole("button", { name: "重新预览" }).click();
+  await expect.poll(() => rejected.length).toBe(2);
+  await expect(error).toContainText("图片明细第 29 行");
+  expect(rejected[0]).toEqual(rejected[1]);
+  expect(Object.keys(rejected[0].rows[0]).sort()).toEqual(["color", "images", "xutiStyleNo"]);
+  await dialog.locator('input[type="file"]').setInputFiles(await file(true));
+  await expect(error).toContainText("选款资料第 7 行");
+  await expect(error).toContainText("图片单元格 B7，第 2 行内容");
+  await expect(error).toContainText("A7");
+  await expect(error).not.toContainText("B29");
+  await expect(dialog.getByRole("button", { name: "确认导入" })).toHaveCount(0);
+  expect(state.commits).toHaveLength(0);
+  expect(state.layoutWrites).toHaveLength(0);
+});

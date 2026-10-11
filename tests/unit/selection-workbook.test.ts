@@ -93,6 +93,7 @@ describe("selection workbook", () => {
     expect(notes).toContain("新自定义字段默认排在模板默认字段之后");
     expect(notes).toContain("最多 5000 款、文件 200 MB");
     expect(notes).toContain("仅有格式的空白行不计入款数");
+    expect(notes).toContain("图片颜色不匹配时，导入提示指出款号、具体颜色及图片所在工作表/行号/单元格");
     const reloaded = new Excel.Workbook();
     await reloaded.xlsx.load(await bytes(book));
     expect(JSON.stringify(reloaded.getWorksheet("选款资料")!.getCell("A1").note)).toContain("系统只读字段");

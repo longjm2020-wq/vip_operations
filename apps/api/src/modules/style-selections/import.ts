@@ -5,6 +5,7 @@ import { selectionScope } from "../../../../../packages/database/src/selection-s
 import { selectionLayoutSchema, selectionSharedLayoutSchema, applySelectionSharedLayout, mergeSelectionFields, selectionInitialColumnWidth, type SelectionField, type SelectionLayout } from "../../../../../packages/contracts/src/selection-layout.js";
 import { selectionBaseFields } from "../../../../../packages/contracts/src/selection-migration.js";
 import { selectionImportHeader, selectionImportTemplateFields, selectionImportLimits } from "../../../../../packages/contracts/src/selection-import-template.js";
+import type { SelectionImportImageColorDiagnostic } from "../../../../../packages/contracts/src/selection-import-diagnostics.js";
 import { archiveTableFields, archiveChoiceColumns } from "../../../../../packages/contracts/src/product-archive-table.js";
 import { fieldValueError, joinChoiceValues, splitChoiceValues } from "../../../../../packages/contracts/src/selection-field-validation.js";
 import { audit, canonical, command, fail, parse, requirePermission, type Context } from "../../core.js";
@@ -75,6 +76,32 @@ async function importLayout(tx: Tx, c: Context, archive: boolean) {
   return { personal, effective, all: [...all.values()], registry, policy, revision, fieldRevision };
 }
 type Snapshot = Awaited<ReturnType<typeof importLayout>>;
+
+function retainedFieldReadable(snapshot: Snapshot, c: Context, before: Row | null, key: string) {
+  return !!before && !snapshot.effective.hiddenColumns.includes(key) &&
+    !snapshot.all.find(field => field.key === key)?.deleted &&
+    protection.fieldVisible(snapshot.policy, c.actor, key) && protection.access(snapshot.policy, c.actor, before, key) !== "deny";
+}
+
+function validateImportImageColors(snapshot: Snapshot, c: Context, before: Row | null, patch: Row, rowIndex: number, xutiStyleNo: string) {
+  const allowedColors = new Set(String(patch.color ?? before?.color ?? "").split("/").map(color => color.trim()).filter(Boolean));
+  const images: Row[] = patch.images ?? before?.images ?? [];
+  const imageIndex = images.findIndex(image => image.color && !allowedColors.has(image.color));
+  if (imageIndex < 0) return;
+  const imageSource = Object.hasOwn(patch, "images") ? "import" : "existing";
+  const colorSource = Object.hasOwn(patch, "color") || !before ? "import" : "existing";
+  const imageReadable = imageSource === "import" || retainedFieldReadable(snapshot, c, before, "images");
+  const details: SelectionImportImageColorDiagnostic = {
+    kind: "SELECTION_IMPORT_IMAGE_COLOR", rowIndex, xutiStyleNo, imageSource, colorSource,
+    ...(imageReadable ? { imageIndex, imageColor: images[imageIndex].color } : {}),
+    ...(colorSource === "import" || retainedFieldReadable(snapshot, c, before, "color") ? { allowedColors: [...allowedColors] } : {}),
+  };
+  const imageText = (details.imageIndex === undefined ? "系统已有图片" : `${imageSource === "existing" ? "现有" : "本次导入的"}第 ${imageIndex + 1} 张图片`) +
+    (details.imageColor !== undefined ? `颜色「${details.imageColor}」` : "颜色");
+  const colorText = `${colorSource === "existing" ? "系统" : "本次导入的"}供应商颜色` +
+    (details.allowedColors ? details.allowedColors.length ? `「${details.allowedColors.join("/")}」` : "（未填写）" : "");
+  fail("VALIDATION_ERROR", `导入第 ${rowIndex + 1} 款「${xutiStyleNo}」：${imageText}与${colorText}不匹配，请核对后重新导入`, 400, details);
+}
 
 function resolveBindings(c: Context, snapshot: Snapshot, values: Row[]): { bindings: Binding[]; definitions: SelectionField[] } {
   const flatHeaders = values.flatMap(value => Object.keys(value).filter(key => !["registrationBatch", "fieldValues"].includes(key)).flatMap(key => {
@@ -219,8 +246,7 @@ async function makePlan(tx: Tx, c: Context, archive: boolean, snapshot: Snapshot
       protection.assertFields(virtual, c, before || { created_by: c.actor.id }, requested);
       await protection.assertWrite(tx, c, before || null, patch, virtual, false);
       if (archive) requirePermission(c.actor, exists ? "product.update" : "product.create");
-      const allowedColors = new Set(String(patch.color ?? before?.color ?? "").split("/").map(color => color.trim()).filter(Boolean));
-      if ((patch.images ?? before?.images ?? []).some((image: Row) => image.color && !allowedColors.has(image.color))) fail("VALIDATION_ERROR", "图片颜色必须来自颜色字段", 400);
+      validateImportImageColors(snapshot, c, before, patch, index, value.xutiStyleNo);
       const merged = patch.extraFields ? { ...patch, extraFields: { ...before?.extra_fields, ...patch.extraFields } } : patch;
       changedFields = protection.changedFields(before || null, merged).affected.filter(key => key !== "xutiStyleNo").map(key => fieldsLabel(snapshot, bindings, key));
     }
