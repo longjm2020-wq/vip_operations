@@ -9,6 +9,7 @@ import {
 import { Alert, App, Button, Space, Spin } from "antd";
 import {
   selectionLayoutSchema,
+  selectionDefaultLayoutSort,
   selectionLayoutSnapshotSchema,
   selectionFieldSchema,
   applySelectionSharedLayout,
@@ -48,10 +49,16 @@ type State = {
   error: string;
   conflict: SelectionLayoutSnapshot | null;
 };
+function parseWorkspaceSnapshot(input: unknown, archive: boolean) {
+  if (input && typeof input === "object" && "preferences" in input && input.preferences && typeof input.preferences === "object" && !Array.isArray(input.preferences)) {
+    input = { ...input, preferences: { ...selectionDefaultLayoutSort(archive), ...input.preferences } };
+  }
+  return selectionLayoutSnapshotSchema.parse(input);
+}
 export function useSelectionLayoutPreferences(
   initial: (legacy: boolean) => SelectionLayout,
 ) {
-  const { api, storageKey } = useSelectionWorkspace(),
+  const { api, storageKey, archive = false } = useSelectionWorkspace(),
     user = useUser();
   const { message } = App.useApp();
   const isSuperAdmin = !!user.roleCodes?.includes("SUPER_ADMIN");
@@ -100,12 +107,13 @@ export function useSelectionLayoutPreferences(
     const request = ++sequence.current,
       wasReady = !!current.current.preferences;
     try {
-      const remote = selectionLayoutSnapshotSchema.parse(
+      const remote = parseWorkspaceSnapshot(
         (
           await apiRef.current(
             "/style-selections/layout-preferences?shared=true",
           )
         ).data,
+        archive,
       );
       if (!mounted.current || request !== sequence.current) return;
       const cache = wasReady
@@ -221,7 +229,7 @@ export function useSelectionLayoutPreferences(
             error instanceof Error ? error.message : "个人设置读取失败，请重试",
         });
     }
-  }, [cacheKey, ownerKey, publish, user.id, isSuperAdmin]);
+  }, [cacheKey, ownerKey, publish, user.id, isSuperAdmin, archive]);
   const flush = useCallback(
     async (keepalive = false): Promise<void> => {
       if (inFlight.current) return await inFlight.current;
@@ -269,7 +277,7 @@ export function useSelectionLayoutPreferences(
             new TextEncoder().encode(JSON.stringify(body)).length < 60000
               ? { keepalive: true }
               : undefined;
-          const saved = selectionLayoutSnapshotSchema.parse(
+          const saved = parseWorkspaceSnapshot(
             (
               await apiRef.current(
                 "/style-selections/layout-preferences?shared=true",
@@ -279,6 +287,7 @@ export function useSelectionLayoutPreferences(
                 options,
               )
             ).data,
+            archive,
           );
           const unchanged =
             JSON.stringify(current.current.preferences) ===
@@ -309,12 +318,13 @@ export function useSelectionLayoutPreferences(
         } catch (error) {
           if ((error as { status?: number }).status === 409) {
             try {
-              const remote = selectionLayoutSnapshotSchema.parse(
+              const remote = parseWorkspaceSnapshot(
                 (
                   await apiRef.current(
                     "/style-selections/layout-preferences?shared=true",
                   )
                 ).data,
+                archive,
               );
               // A response lost during navigation may already have saved this exact view.
               if (
@@ -373,7 +383,7 @@ export function useSelectionLayoutPreferences(
       )
         await flush(true);
     },
-    [publish, user.id, isSuperAdmin],
+    [publish, user.id, isSuperAdmin, archive],
   );
   const flushRef = useRef(flush);
   flushRef.current = flush;

@@ -254,6 +254,10 @@ export const selectionLayoutWriteSchema = z
   })
   .strict();
 export type SelectionLayout = z.infer<typeof selectionLayoutSchema>;
+/** Archive rows follow their saved fixed order; other workspaces start by creation time. */
+export function selectionDefaultLayoutSort(archive = false): Pick<SelectionLayout, "sort" | "direction"> {
+  return { sort: archive ? "sortOrder" : "registrationBatch", direction: "asc" };
+}
 export type SelectionLayoutSnapshot = z.infer<
   typeof selectionLayoutSnapshotSchema
 >;

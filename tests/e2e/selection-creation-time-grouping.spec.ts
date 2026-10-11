@@ -25,6 +25,7 @@ const calendarRows = [
 async function fixture(page: Page, entry: string, options: {
   preferences?: Record<string, unknown>;
   rows?: typeof calendarRows;
+  emptySnapshot?: boolean;
 } = {}) {
   await page.addInitScript(() => {
     // Keep navigation teardown/presence outside these assertions from reaching
@@ -41,6 +42,7 @@ async function fixture(page: Page, entry: string, options: {
   let preferences = { columns, rowHeight: "compact", pageSize: 20, ...options.preferences };
   let sharedPreferences = projectSelectionSharedLayout(selectionLayoutSchema.parse(preferences));
   let revision = 1;
+  let emptySnapshot = !!options.emptySnapshot;
   const rows = structuredClone(options.rows || calendarRows);
   const syncRequests: { sort: string; direction: string }[] = [];
   const writes: Record<string, unknown>[] = [];
@@ -74,10 +76,11 @@ async function fixture(page: Page, entry: string, options: {
         const body = request.postDataJSON();
         writes.push(body);
         preferences = body.preferences;
+        emptySnapshot = false;
         if (body.sharedChanges) sharedPreferences = { ...sharedPreferences, ...body.sharedChanges };
         revision++;
       }
-      data = { preferences, revision, sharedPreferences, sharedRevision: revision, canEditShared: true };
+      data = { preferences: emptySnapshot ? null : preferences, revision: emptySnapshot ? 0 : revision, sharedPreferences: emptySnapshot ? null : sharedPreferences, sharedRevision: emptySnapshot ? 0 : revision, canEditShared: true };
     }
     const row = rows.find(item => path.endsWith(`/style-selections/${item.id}`));
     if (row && request.method() === "PATCH") {
@@ -102,7 +105,7 @@ const groupHeaders = (page: Page) => page.locator(".selection-group-row td").eva
   label: element.childNodes[0]?.textContent || "", count: element.querySelector("span")?.textContent || "",
 })));
 
-for (const [label, entry] of [["选款登记", "/style-selections"], ["商品档案", "/products"], ["项目协作表格", "/project-tables/7"]]) {
+for (const [label, entry] of [["选款登记", "/style-selections"], ["项目协作表格", "/project-tables/7"]]) {
   test(`${label}：无旧排序设置时真实请求创建时间升序，忽略登记批次并可切换降序`, async ({ page }) => {
     const state = await fixture(page, entry);
     await expect(page.locator(".selection-tool-select").filter({ has: page.getByRole("combobox", { name: "排序方式", exact: true }) })).toContainText("创建时间 ↑");
@@ -118,9 +121,31 @@ for (const [label, entry] of [["选款登记", "/style-selections"], ["商品档
   });
 }
 
+for (const emptySnapshot of [false, true]) {
+  test(`商品档案：${emptySnapshot ? "全新布局" : "未设排序的旧布局"}默认固定顺序，日期修改不移动行且明确选择的排序刷新保留`, async ({ page }) => {
+    const state = await fixture(page, "/products", { emptySnapshot });
+    await expect(page.locator(".selection-tool-select").filter({ has: page.getByRole("combobox", { name: "排序方式", exact: true }) })).toContainText("手动排序");
+    await expect.poll(() => state.syncRequests[0]).toEqual({ sort: "sortOrder", direction: "asc" });
+    await expect.poll(() => rowIds(page)).toEqual(["1", "2", "3", "4", "5", "6"]);
+    await page.locator('td[data-selection-row="1"][data-selection-column="registrationBatch"]').locator("input,textarea").fill("2027-01-02");
+    await expect.poll(() => state.rows[0].createdAt).toBe("2027-01-01T16:00:00.000Z");
+    await expect.poll(() => rowIds(page)).toEqual(["1", "2", "3", "4", "5", "6"]);
+    await page.reload();
+    await expect.poll(() => state.syncRequests.at(-1)).toEqual({ sort: "sortOrder", direction: "asc" });
+    await expect.poll(() => rowIds(page)).toEqual(["1", "2", "3", "4", "5", "6"]);
+    await choose(page, "排序方式", "创建时间 ↓");
+    await expect.poll(() => rowIds(page)).toEqual(["1", "5", "4", "3", "2", "6"]);
+    await expect.poll(() => [state.saved().sort, state.saved().direction]).toEqual(["registrationBatch", "desc"]);
+    await page.reload();
+    await expect.poll(() => state.syncRequests.at(-1)).toEqual({ sort: "registrationBatch", direction: "desc" });
+    await expect.poll(() => rowIds(page)).toEqual(["1", "5", "4", "3", "2", "6"]);
+    expect(state.writes.some(write => Object.hasOwn((write.sharedChanges || {}) as object, "sort"))).toBe(false);
+  });
+}
+
 test("创建时间按北京时间年、自然季度、月、日聚合，同日不同秒合并且日期显示格式不改变分组", async ({ page }) => {
   const state = await fixture(page, "/products", {
-    preferences: { columns: columns.map(column => column.key === "registrationBatch" ? { ...column, timeDisplay: "date" } : column) },
+    preferences: { sort: "registrationBatch", direction: "asc", columns: columns.map(column => column.key === "registrationBatch" ? { ...column, timeDisplay: "date" } : column) },
   });
   for (const [option, expected] of [
     ["按创建时间（年）分组", [["2025年", "1 条"], ["2026年", "5 条"]]],

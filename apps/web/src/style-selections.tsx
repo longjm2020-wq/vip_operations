@@ -6,10 +6,12 @@ import { SelectionTitleAi, type SelectionTitleAiRow } from "./selection-title-ai
 import {SelectionFieldManager,SelectionFieldInput} from "./selection-field-manager";
 import { SelectionProtectionControl, editableSelectionCell, readableSelectionCell } from "./selection-protection";
 import { SelectionOrganization } from "./selection-organization";
+import { SelectionFixedOrder } from "./selection-fixed-order";
 import { SelectionColumnGroupManager, SelectionColumnGroupTabs, selectionColumnGroupsKey, storedSelectionColumnGroups } from "./selection-column-groups";
 import { restrictSelectionReadonlyLayout } from "./selection-layout-storage";
 import { SelectionLayoutLoading, SelectionLayoutStatus, useSelectionLayoutPreferences, type SelectionLayoutController } from "./selection-layout-preferences";
 import { migrateSelectionLayout } from "./selection-layout-storage";
+import { selectionDefaultLayoutSort } from "../../../packages/contracts/src/selection-layout";
 import { parseFieldTypeCatalog } from "./selection-type-catalog";
 import { SelectionColumnWidthModal } from "./selection-column-width";
 import { SelectionTextDetail } from "./selection-text-detail";
@@ -273,12 +275,13 @@ export function StyleSelectionsPage() {
 }
 
 function StyleSelectionsLayout() {
-  const { storageKey, blankLayout, emptyLayout, defaultColumns } = useSelectionWorkspace(), user = useUser();
+  const { storageKey, blankLayout, emptyLayout, defaultColumns, archive } = useSelectionWorkspace(), user = useUser();
   const layout = useSelectionLayoutPreferences(legacy => {
     const read = (key: string, fallback: unknown) => { try { return legacy ? JSON.parse(localStorage.getItem(storageKey(key)) || "null") ?? fallback : fallback; } catch { return fallback; } };
     const strings = (value: unknown) => Array.isArray(value) ? [...new Set(value.filter((key): key is string => typeof key === "string"))] : [];
     const pageSize = Number(read(pageSizeKey, 20));
     return migrateSelectionLayout(defaultColumns || initialColumns(storageKey,blankLayout,legacy,emptyLayout), {
+      ...selectionDefaultLayoutSort(archive),
       hiddenColumns: strings(read("selection-hidden-fields-v1", [])),
       fixedColumns: strings(read("selection-fixed-columns-v1", [])),
       columnGroups: legacy ? storedSelectionColumnGroups(storageKey(selectionColumnGroupsKey)) : [],
@@ -329,6 +332,7 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
   const [selectedCells, setSelectedCells] = useState<Set<string>>(new Set());
   const [selectedColumnKeys, setSelectedColumnKeys] = useState<string[]>([]);
   const [titleAi, setTitleAi] = useState<{ rows: SelectionTitleAiRow[]; keys: string[]; scope: string } | null>(null);
+  const [fixedOrderOpen, setFixedOrderOpen] = useState(false);
   const columnSelectionAnchor = useRef<string | null>(null);
   const [columnWidthTarget, setColumnWidthTarget] = useState<Column[] | null>(null);
   const [cellAnchor, setCellAnchor] = useState<{ rowKey: string; columnKey: string } | null>(null);
@@ -1336,7 +1340,7 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
       <SelectionFieldManager addFieldRef={addFieldRef} columns={columns} visible={visible} canEdit={canEdit} canAdd={canAddField} userId={String(user.id)} isSuperAdmin={user.roleCodes?.includes("SUPER_ADMIN")} onVisibilityChange={layout.setFieldVisibility} blocked={!!dirtyCount || saving || deleting} onDelete={key=>{setColumns(current=>current.map(column=>column.key===key?{...column,deleted:true}:column));setVisible(current=>current.filter(item=>item!==key));setColumnFilters(current=>Object.fromEntries(Object.entries(current).filter(([fieldKey])=>fieldKey!==key)));if(columnSort?.key===key)setColumnSort(null);if(groupBy===`field:${key}`)setGroupBy("none");setFilterColumn(null);setCellAnchor(null);setFocusedCell(null);setSelectedColumnKeys([]);columnSelectionAnchor.current=null;setSelectedCells(new Set());setCopiedCells(new Set());setCellTextEditing(false);setFormatTarget(null);}} catalog={layout.preferences!.typeCatalog} onCatalogChange={value => layout.update("typeCatalog", value)} onVisible={key=>setVisible(current=>current.includes(key)?current.filter(item=>item!==key):[...current,key])} onMove={moveColumn} onSave={field=>{const previous=columns.find(column=>column.key===field.key);if((previous?.type || previous?.fallbackType)==="multiple" && (field.type || field.fallbackType)!=="multiple" && rows.some(row=>isEncodedChoiceValue(valueAt(row,previous!)))){message.error("已有含 / 的多选内容，请先调整内容后再修改字段类型");return false;}if(imageKeys.has(field.key) && rows.some(row=>(row[field.key]?.length || 0)>(field.imageConfig?.max || 30))){message.error("已有图片超过新上限，请先移除部分图片");return false;}if((field.type || field.fallbackType || field.textConfig) && !systemField(field)){const issue=rows.map(row=>fieldValueError(field,imageKeys.has(field.key)?JSON.stringify(row[field.key] || []):valueAt(row,field))).find(Boolean);if(issue){message.error("现有内容与设置不兼容："+issue);return false;}}const exists=columns.some(column=>column.key===field.key);setColumns(current=>exists?current.map(column=>column.key===field.key?field:column):[...current,field]);if(!exists)setVisible(current=>[...current,field.key]);}}/>
       <SelectionColumnGroupManager columns={columns} visible={visible} groups={columnGroups} onSave={async groups => { if(layout.conflict)throw new Error("表格设置有并发冲突，请先核对云端设置；本次分组草稿已保留");if(!layout.canEditShared && restrictSelectionReadonlyLayout(layout.preferences!,{...layout.preferences!,columnGroups:groups},String(user.id),!!user.roleCodes?.includes("SUPER_ADMIN")).blocked)throw new Error("公开分组调序或修改需要表格编辑权限；本次分组草稿已保留");setColumnGroups(groups);if(layout.error)layout.retry();if(!(await layout.ensureSaved()))throw new Error("分组保存失败或存在设置冲突；本次草稿已保留，请重试或核对表格设置");changeColumnGroup(columnGroupId);return true; }}/>
       <SelectionProtectionControl rows={rows} columns={availableColumns} selectedCells={selectedCells} selectedRows={selectedRows} currentRow={editorRow} blocked={!!dirtyCount || saving || deleting} onRefresh={()=>{appliedSnapshot.current="";void data.refetch();}}/>
-      <SelectionOrganization columns={availableColumns} configured={layout.preferences!.organization} onConfigure={value => layout.update("organization", value)} group={groupBy} sort={columnSort?`field:${columnSort.key}:${columnSort.direction}`:`${sort}:${direction}`} onGroup={setGroupBy} onSort={value=>{setFollowShared(false);if(value.startsWith("field:")){setColumnSort({key:value.slice(6,value.lastIndexOf(":")),direction:value.endsWith(":asc")?"asc":"desc"});return;}setColumnSort(null);const [nextSort,nextDirection]=value.split(":");setSort(nextSort);setDirection(nextDirection as "asc"|"desc");}}/>
+      <SelectionOrganization columns={availableColumns} configured={layout.preferences!.organization} onConfigure={value => layout.update("organization", value)} group={groupBy} sort={columnSort?`field:${columnSort.key}:${columnSort.direction}`:`${sort}:${direction}`} onGroup={setGroupBy} onBuildFixedOrder={archive && canEdit ? ()=>{if(dirtyCount || saving || deleting){message.info("请先保存商品修改并处理错误，再建立固定排序");return;}setFixedOrderOpen(true);} : undefined} onSort={value=>{setFollowShared(false);if(value.startsWith("field:")){setColumnSort({key:value.slice(6,value.lastIndexOf(":")),direction:value.endsWith(":asc")?"asc":"desc"});return;}setColumnSort(null);const [nextSort,nextDirection]=value.split(":");setSort(nextSort);setDirection(nextDirection as "asc"|"desc");}}/>
       <Select className="selection-tool-select" popupMatchSelectWidth={false} value={rowHeight} suffixIcon={<UnorderedListOutlined />} options={[{ value: "compact", label: "紧凑行高" }, { value: "normal", label: "标准行高" }, { value: "loose", label: "宽松行高" }, { value: "extra", label: "超宽行高" }]} onChange={setRowHeight} />
 
     <Space.Compact>{([{ value: "left", label: "左对齐", icon: <AlignLeftOutlined /> }, { value: "center", label: "居中对齐", icon: <AlignCenterOutlined /> }, { value: "right", label: "右对齐", icon: <AlignRightOutlined /> }] as const).map(item => <Tooltip key={item.value} title={item.label}><Button aria-label={item.label} disabled={!canEdit || !selectedCells.size} icon={item.icon} onClick={() => applyAlignment(item.value)} /></Tooltip>)}</Space.Compact>
@@ -1355,6 +1359,13 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
     }} />
     </Space>{!!Object.keys(errors).length && <span className="selection-record-count"><Tooltip title="修改尚未保存；悬停红色单元格查看原因，修正后重试"><Button type="text" size="small" danger disabled={saving} onClick={() => { attempts.current.retry(); setRetryVersion((value) => value + 1); }}>未保存 · 重试</Button></Tooltip></span>}<SelectionCollaborators people={collaborators} rows={rows} columns={availableColumns} loading={!presence.data && presence.isFetching} failed={!!presence.error} onRetry={() => { void presence.refetch(); }}/></div>
     {imageSearchRowId !== null && <Alert className="selection-image-search-location" type="info" title="图片查找：当前显示所选款式，清除后恢复原搜索与列筛选。" action={<Button size="small" onClick={()=>{setImageSearchRowId(null);setPage(1);}}>清除图片查找</Button>}/>}
+    {archive && <SelectionFixedOrder open={fixedOrderOpen} onClose={()=>setFixedOrderOpen(false)} onApplied={async()=>{
+      setFollowShared(false);setColumnSort(null);setGroupBy("none");setSort("sortOrder");setDirection("asc");setPage(1);
+      setSelectedRows([]);setSelectedCells(new Set());setCellAnchor(null);setFocusedCell(null);
+      appliedSnapshot.current="";
+      await queryClient.invalidateQueries({queryKey:["style-selections"]});
+      if(!(await layout.ensureSaved()))throw Error("个人排序设置未保存，请刷新后选择手动排序");
+    }}/>}
       <SelectionColumnGroupTabs groups={columnGroups} visibleKeys={visibleColumns.map(column => column.key)} activeKey={selectedColumnGroup?.id || ""} onChange={changeColumnGroup}/>
     {editor}
       <QueryState error={data.error || presence.error || sharedView.error} reload={() => { data.refetch(); presence.refetch(); sharedView.refetch(); }} /><div ref={sheetRef} data-realtime-connected={connected ? "true" : "false"} data-windowed={rowWindow.enabled || undefined} className={`selection-sheet row-${rowHeight}${blankLayout?" selection-blank-sheet":""}`}><table aria-rowcount={displayedRows.length + 1} tabIndex={0} onCopy={event => { const point = cellAnchor || (displayedRows[0] && activeColumns[0] ? {rowKey:displayedRows[0]._key,columnKey:activeColumns[0].key} : null); if (point) copyCells(event,point.rowKey,point.columnKey); }} onKeyDown={event => {

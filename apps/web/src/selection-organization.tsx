@@ -19,6 +19,7 @@ export function SelectionOrganization({
   onSort,
   configured,
   onConfigure,
+  onBuildFixedOrder,
 }: {
   columns: Column[];
   group: string;
@@ -27,6 +28,7 @@ export function SelectionOrganization({
   onSort: (key: string) => void;
   configured: { groups: string[]; sorts: string[] };
   onConfigure: (value: { groups: string[]; sorts: string[] }) => void;
+  onBuildFixedOrder?: () => void;
 }) {
   const [draft, setDraft] = useState(configured),
     [open, setOpen] = useState(false),
@@ -111,6 +113,9 @@ export function SelectionOrganization({
         suffixIcon={<SortAscendingOutlined />}
         options={[
           ...sortOptions,
+          ...(onBuildFixedOrder
+            ? [{ value: "buildFixedOrder", label: "按创建时间建立固定排序…" }]
+            : []),
           {
             value: "configure",
             label: (
@@ -120,9 +125,11 @@ export function SelectionOrganization({
             ),
           },
         ]}
-        onChange={(key) =>
-          key === "configure" ? configure("sorts") : onSort(key)
-        }
+        onChange={(key) => {
+          if (key === "configure") configure("sorts");
+          else if (key === "buildFixedOrder") onBuildFixedOrder?.();
+          else onSort(key);
+        }}
       />
       <Modal
         title="配置分组与排序字段"

@@ -1,0 +1,97 @@
+import { z } from "zod";
+import { HttpException } from "@nestjs/common";
+import { db, one, rows, type Tx } from "../../../../../packages/database/src/index.js";
+import { selectionScope, selectionSchema } from "../../../../../packages/database/src/selection-scope.js";
+import { command, fail, id, parse, requirePermission, audit, type Context } from "../../core.js";
+import { tableAccess } from "../projects/library.js";
+import * as protection from "./protection.js";
+import {
+  previewProductArchiveOrderInTransaction,
+  applyProductArchiveOrderInTransaction,
+  type ArchiveOrderDatabase,
+  type ArchiveOrderPlan,
+} from "../../../../../scripts/rebuild-product-archive-order.js";
+
+const applyInput = z.object({ archiveId: id, digest: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
+
+function adapter(tx: Tx): ArchiveOrderDatabase {
+  return {
+    async query<T extends Record<string, any>>(sql: string, parameters: unknown[] = []) {
+      if (/^(SET LOCAL|LOCK TABLE)\b/.test(sql)) {
+        await tx.$executeRawUnsafe(sql, ...parameters);
+        return { rows: [] as T[] };
+      }
+      return { rows: await tx.$queryRawUnsafe<T[]>(sql, ...parameters) };
+    },
+  };
+}
+
+async function authorize(tx: Tx, c: Context, lock: boolean) {
+  requirePermission(c.actor, "product.update");
+  requirePermission(c.actor, "selection.manage");
+  const scope = selectionScope.getStore();
+  if (!scope) fail("INVALID_SCOPE", "固定排序仅适用于商品档案", 400);
+  const table = await tableAccess(tx, c.actor, scope);
+  if (table.system_key !== "PRODUCT_ARCHIVE") fail("INVALID_SCOPE", "固定排序仅适用于商品档案", 400);
+  if (!table.can_edit) fail("FORBIDDEN", "没有商品档案表格编辑权限", 403);
+  const schema = selectionSchema(scope);
+  if (lock) {
+    await rows(tx, "SELECT pg_advisory_xact_lock(91002)::text");
+    await tx.$executeRawUnsafe(`LOCK TABLE public.products,"${schema}".style_selections IN SHARE ROW EXCLUSIVE MODE`);
+  }
+  const policy = lock ? await protection.writeLocks(tx, c) : await protection.policy(tx);
+  // Reordering the full archive has the same field, claim and migration rules
+  // as changing every row's sortOrder through the normal editor.
+  const records = await rows(tx, `SELECT * FROM "${schema}".style_selections`);
+  for (const record of records) protection.assertFields(policy, c, record, protection.rowFields(record));
+  return scope;
+}
+
+function summary(plan: ArchiveOrderPlan) {
+  const { orderedRows: _records, ...result } = plan;
+  return result;
+}
+
+export async function previewFixedOrder(c: Context, input: unknown) {
+  parse(z.object({}).strict(), input);
+  return db.$transaction(async tx => {
+    const scope = await authorize(tx, c, false);
+    const plan = await previewProductArchiveOrderInTransaction(adapter(tx));
+    if (plan.archiveId !== scope) fail("INVALID_SCOPE", "商品档案已变更，请刷新后重试", 409);
+    return summary(plan);
+  }, { isolationLevel: "RepeatableRead", timeout: 30000, maxWait: 15000 });
+}
+
+export async function applyFixedOrder(c: Context, input: unknown) {
+  const body = parse(applyInput, input);
+  requirePermission(c.actor, "product.update");
+  requirePermission(c.actor, "selection.manage");
+  return command(c, "style-selections/fixed-order", body, async tx => {
+    const scope = await authorize(tx, c, true);
+    if (body.archiveId !== scope) fail("INVALID_SCOPE", "商品档案已变更，请重新预览", 409);
+    const database = adapter(tx);
+    const expected = await previewProductArchiveOrderInTransaction(database);
+    if (expected.archiveId !== scope || expected.digest !== body.digest)
+      fail("VERSION_CONFLICT", "预览后商品档案发生变化，请重新预览后建立固定排序", 409);
+    let backupId = "";
+    try {
+      const result = await applyProductArchiveOrderInTransaction(database, expected, async snapshot => {
+        // Immutable audit storage is the durable backup. The backup and reorder
+        // commit together; an audit/verification failure rolls back both.
+        await audit(tx, c, "BACKUP_FIXED_ORDER", "product-archive-table", scope, snapshot, null,
+          "建立固定排序前保存原行顺序、版本和创建时间快照，供管理员复核与恢复");
+        const backup = await one(tx, "SELECT id::text FROM public.audit_logs WHERE request_id=$1 AND actor_id=$2::bigint AND action='BACKUP_FIXED_ORDER' AND selection_table_id=$3::bigint ORDER BY id DESC LIMIT 1",
+          c.requestId, c.actor.id, scope);
+        if (!backup) throw Error("Fixed-order backup was not saved");
+        backupId = backup.id;
+      }, { actorId: c.actor.id, reason: "用户确认按实际创建时间升序建立商品档案固定排序，同时间保留原顺序，空白尾行置后" });
+      return { changedRows: result.changedRows, totalRows: result.after.totalRows,
+        cutoffBoundary: result.after.cutoffBoundary, backupId, auditId: result.auditId };
+    } catch (error) {
+      if (error instanceof HttpException) throw error;
+      if (String((error as Error).message).includes("changed since preview"))
+        fail("VERSION_CONFLICT", "预览后商品档案发生变化，请重新预览后建立固定排序", 409);
+      fail("FIXED_ORDER_FAILED", "固定排序未完成，已保留原顺序，请重新预览或联系管理员", 500);
+    }
+  }, { timeout: 90000, maxWait: 15000 });
+}

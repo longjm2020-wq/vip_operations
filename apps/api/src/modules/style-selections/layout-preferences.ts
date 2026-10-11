@@ -9,6 +9,7 @@ import {
 import { selectionScope } from "../../../../../packages/database/src/selection-scope.js";
 import {
   selectionLayoutSchema,
+  selectionDefaultLayoutSort,
   selectionInitialColumnWidth,
   selectionLayoutWriteSchema,
   selectionSharedLayoutSchema,
@@ -117,7 +118,10 @@ async function rawPersonal(tx: Tx, c: Context, workspace: string) {
             ]
           : [];
   const preferences = selectionLayoutSchema.parse(
-    stored?.preferences || { columns: defaults },
+    {
+      ...selectionDefaultLayoutSort(table?.system_key === "PRODUCT_ARCHIVE"),
+      ...(stored?.preferences || { columns: defaults }),
+    },
   );
   preferences.columns = mergeSelectionFields(
     preferences.columns,
@@ -179,7 +183,7 @@ async function snapshot(tx: Tx, c: Context, sharedMode: boolean) {
       : await canonicalizeLayout(tx, c, personal.preferences);
   if (sharedPreferences)
     preferences = applySelectionSharedLayout(
-      preferences || selectionLayoutSchema.parse({ columns: [] }),
+      preferences || personal.preferences,
       sharedPreferences,
     );
   if (preferences && personal.canonical.length)

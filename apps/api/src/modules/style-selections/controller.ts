@@ -15,6 +15,7 @@ import { SelectionRealtime } from "./realtime.js";
 import { searchSelectionImages } from "./image-search.js";
 import { submitSelectionImageFeedback } from "./image-search-feedback.js";
 import { applyTitles, generateTitles, titleAIStatus } from "./title-ai.js";
+import { applyFixedOrder, previewFixedOrder } from "./fixed-order.js";
 
 const paramId = (value: string) => parse(id, value);
 const transferContext = (request:AuthRequest) => ({...context(request),actor:request.originalActor || request.actor});
@@ -28,6 +29,8 @@ class ProductArchiveTableController {
 @UseInterceptors(SelectionWorkspaceInterceptor)
 class StyleSelectionsController {
   constructor(@Inject(SelectionRealtime) private realtime: SelectionRealtime) {}
+  @Permission("selection.manage") @Post("fixed-order/preview") fixedOrderPreview(@Req() request:AuthRequest,@Body() body:unknown) { return previewFixedOrder(context(request),body); }
+  @Permission("selection.manage") @Post("fixed-order/apply") fixedOrderApply(@Req() request:AuthRequest,@Body() body:unknown) { return applyFixedOrder(context(request),body); }
   @Permission("selection.manage") @Get("ai-titles/status") titleAIStatus(@Req() request:AuthRequest) { return titleAIStatus(context(request)); }
   @Permission("selection.manage") @Post("ai-titles/generate") generateTitles(@Req() request:AuthRequest,@Body() body:unknown) { return generateTitles(context(request),body); }
   @Permission("selection.manage") @Post("ai-titles/apply") applyTitles(@Req() request:AuthRequest,@Body() body:unknown) { return applyTitles(context(request),body); }
