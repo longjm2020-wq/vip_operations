@@ -1,21 +1,38 @@
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
+import { z } from "zod";
 import { vipOnlyState, type CloudBrowserState } from "./competitor-cloud-state.js";
 import { isCompassBrowserOrigin } from "../../../packages/contracts/src/compass-update.js";
 
 const aad = Buffer.from("compass-browser-session-v1");
+export const compassSessionStorageLimits = { origins: 4, entries: 256, nameLength: 512, valueLength: 64 * 1024 } as const;
+const maxSnapshotBytes = 512 * 1024;
+const sessionStorageSchema = z.array(z.object({
+  origin: z.string().max(256),
+  entries: z.array(z.object({
+    name: z.string().max(compassSessionStorageLimits.nameLength),
+    value: z.string().max(compassSessionStorageLimits.valueLength),
+  }).strict()).max(compassSessionStorageLimits.entries),
+}).strict()).max(compassSessionStorageLimits.origins);
+export type CompassSessionStorage = z.infer<typeof sessionStorageSchema>;
+export type CompassBrowserState = CloudBrowserState & { sessionStorage?: CompassSessionStorage };
 function draftAad(actorId: string) {
   if (!/^[1-9]\d{0,18}$/.test(actorId)) throw Error("登录草稿所属用户无效");
   return Buffer.from(`compass-login-draft-v1|${actorId}`);
 }
-export function compassOnlyState(input: unknown): CloudBrowserState {
+export function compassOnlyState(input: unknown): CompassBrowserState {
   const state = vipOnlyState(input);
-  return {
+  const extra = z.object({ sessionStorage: sessionStorageSchema.optional() }).parse(input);
+  const sessionStorage = extra.sessionStorage?.filter(value => isCompassBrowserOrigin(value.origin) && new URL(value.origin).origin === value.origin);
+  const filtered: CompassBrowserState = {
     cookies: state.cookies.filter(cookie => {
       const host = cookie.domain.replace(/^\./, "");
       return host === "vip.com" || isCompassBrowserOrigin(`https://${host}`);
     }),
     origins: state.origins.filter(origin => isCompassBrowserOrigin(origin.origin)),
+    ...(sessionStorage?.length ? { sessionStorage } : {}),
   };
+  if (Buffer.byteLength(JSON.stringify(filtered), "utf8") > maxSnapshotBytes) throw Error("罗盘会话超过存储限制");
+  return filtered;
 }
 export function compassEncryptionReady() {
   return /^[a-f0-9]{64}$/i.test(process.env.COMPASS_BROWSER_KEY || "");
@@ -31,13 +48,13 @@ function encryptState(input: unknown, authentication: Buffer) {
   const state = compassOnlyState(input), iv = randomBytes(12), cipher = createCipheriv("aes-256-gcm", key(), iv);
   cipher.setAAD(authentication);
   const data = Buffer.concat([cipher.update(JSON.stringify(state), "utf8"), cipher.final()]);
-  if (data.length > 512 * 1024) throw Error("罗盘会话超过存储限制");
+  if (data.length > maxSnapshotBytes) throw Error("罗盘会话超过存储限制");
   return [iv, cipher.getAuthTag(), data].map(part => part.toString("base64")).join(".");
 }
-export function decryptCompassState(value: string): CloudBrowserState {
+export function decryptCompassState(value: string): CompassBrowserState {
   return decryptState(value, aad);
 }
-function decryptState(value: string, authentication: Buffer): CloudBrowserState {
+function decryptState(value: string, authentication: Buffer): CompassBrowserState {
   try {
     const parts = value.split(".");
     if (parts.length !== 3 || value.length > 720000) throw Error("Invalid state");

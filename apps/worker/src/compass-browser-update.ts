@@ -7,8 +7,9 @@ import { expireCompassTasks, finishCompassUpdate, verifyCompassUpdateSources } f
 import { beginImport, appendImport, finishImport } from "../../api/src/modules/analytics/service.js";
 import type { Context } from "../../api/src/core.js";
 import { compassEncryptionReady, decryptCompassState, encryptCompassState, encryptCompassLoginDraft, decryptCompassLoginDraft } from "./compass-browser-state.js";
+import { collectCompassBrowserState, restoreCompassBrowserState, compassPlaywrightState } from "./compass-browser-session.js";
 import { readCompassDownload, StaleCompassReportError } from "./compass-report-import.js";
-import { checkCompassLogin, openCompassReports, downloadCompassReports, cleanupCompassDownloads, CompassBrowserError, compassSourceUrl } from "./compass-report-browser.js";
+import { checkCompassLogin, openCompassReports, downloadCompassReports, cleanupCompassDownloads, CompassBrowserError, compassSourceUrl, compassPageDiagnostics } from "./compass-report-browser.js";
 
 const activeLogin = "('QUEUED','RUNNING','WAITING','CHECKING')";
 const pause = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
@@ -41,7 +42,7 @@ export function scopedCompassLoginDraft(saved: Record<string, any> | undefined, 
     ? { encrypted: String(saved.draft_encrypted_state), expiresAtMs: expiry } : null;
 }
 export async function checkpointCompassLoginDraft(context: BrowserContext, job: { id: unknown; actor_id: unknown }, token: string, expiresAtMs?: number) {
-  const encrypted = encryptCompassLoginDraft(await context.storageState({ indexedDB: true }), String(job.actor_id));
+  const encrypted = encryptCompassLoginDraft(await collectCompassBrowserState(context), String(job.actor_id));
   return db.$transaction(async tx => {
     await rows(tx, "SELECT pg_advisory_xact_lock(2026101140)::text");
     const active = await one(tx, `SELECT id,actor_id FROM compass_logins WHERE id=$1::uuid AND actor_id=$3::bigint AND claim_token=$2::uuid AND status IN ${activeLogin} AND expires_at>now() FOR UPDATE`, job.id, token, job.actor_id);
@@ -127,8 +128,9 @@ export async function processCompassLogin(browserLaunch: () => Promise<Browser> 
       else if (saved?.enabled && saved.encrypted_state) state = decryptCompassState(saved.encrypted_state);
     } catch { /* A new sign-in repairs unreadable saved state. */ }
     browser = await browserLaunch();
-    const context = await browser.newContext({ locale: "zh-CN", timezoneId: "Asia/Shanghai", viewport: compassBrowserViewport, acceptDownloads: false, ...(state ? { storageState: state } : {}) });
+    const context = await browser.newContext({ locale: "zh-CN", timezoneId: "Asia/Shanghai", viewport: compassBrowserViewport, acceptDownloads: false, ...(state ? { storageState: compassPlaywrightState(state) } : {}) });
     loginContext = context;
+    if (state) await restoreCompassBrowserState(context, state);
     let page = await context.newPage();
     diagnosticPage = page;
     await configureCompassPage(page);
@@ -195,14 +197,17 @@ export async function processCompassLogin(browserLaunch: () => Promise<Browser> 
           stage = "VERIFY_LOGIN";
           await update("正在核验罗盘报表访问及会话复用", "CHECKING");
           const result = await checkCompassLogin(page, { load: false });
+          console.warn(JSON.stringify({ event: "compass_login_check", reason: result.reason, pages: await compassPageDiagnostics(page) }));
           if (!result.verified) { await update(result.note); continue; }
           // Verify the exact normalized snapshot that will be persisted. A raw
           // context can include storage discarded by the Compass domain filter.
-          const encrypted = encryptCompassState(await context.storageState({ indexedDB: true }));
+          const encrypted = encryptCompassState(await collectCompassBrowserState(context));
           stage = "VERIFY_REUSE";
-          const probe = await browser.newContext({ locale: "zh-CN", timezoneId: "Asia/Shanghai", viewport: compassBrowserViewport, acceptDownloads: false, storageState: decryptCompassState(encrypted) });
+          const reusableState = decryptCompassState(encrypted);
+          const probe = await browser.newContext({ locale: "zh-CN", timezoneId: "Asia/Shanghai", viewport: compassBrowserViewport, acceptDownloads: false, storageState: compassPlaywrightState(reusableState) });
           let verified = false;
           try {
+            await restoreCompassBrowserState(probe, reusableState);
             const probePage = await probe.newPage();
             await configureCompassPage(probePage);
             const reusable = await checkCompassLogin(probePage);
@@ -210,7 +215,7 @@ export async function processCompassLogin(browserLaunch: () => Promise<Browser> 
             let hostname = "unknown";
             try { hostname = new URL(probePage.url()).hostname; } catch { /* Safe metadata only. */ }
             const officialHosts = [...new Set(probe.pages().filter(candidate => !candidate.isClosed() && isCompassBrowserOrigin(candidate.url())).map(candidate => new URL(candidate.url()).hostname))].slice(0, 5);
-            console.warn(JSON.stringify({ event: "compass_reuse_check", reason: reusable.reason, hostname: /^[a-z0-9.-]{1,253}$/i.test(hostname) ? hostname : "unknown", officialHosts }));
+            console.warn(JSON.stringify({ event: "compass_reuse_check", reason: reusable.reason, hostname: /^[a-z0-9.-]{1,253}$/i.test(hostname) ? hostname : "unknown", officialHosts, pages: await compassPageDiagnostics(probePage) }));
           } finally { await probe.close(); }
           if (!verified) { await update("登录尚不能在后台浏览器中复用，请确认已进入自助报表后再次核验"); continue; }
           stage = "SAVE_SESSION";
@@ -318,7 +323,8 @@ export async function processCompassUpdate(browserLaunch: () => Promise<Browser>
     try { storageState = decryptCompassState(saved.encrypted_state); }
     catch { throw new CompassBrowserError("LOGIN_REQUIRED", "已保存的罗盘会话无法读取，请重新扫码"); }
     browser = await browserLaunch();
-    const context = await browser.newContext({ locale: "zh-CN", timezoneId: "Asia/Shanghai", viewport: compassBrowserViewport, acceptDownloads: true, storageState });
+    const context = await browser.newContext({ locale: "zh-CN", timezoneId: "Asia/Shanghai", viewport: compassBrowserViewport, acceptDownloads: true, storageState: compassPlaywrightState(storageState) });
+    await restoreCompassBrowserState(context, storageState);
     const entry = await context.newPage(); await configureCompassPage(entry);
     const page = await openCompassReports(entry, signal);
     const missing = compassDimensions.filter(dimension => !existing.completedDimensions.includes(dimension));
@@ -356,7 +362,7 @@ export async function processCompassUpdate(browserLaunch: () => Promise<Browser>
       await cleanupCompassDownloads(downloaded);
     }
     await guard();
-    await db.$executeRawUnsafe("UPDATE compass_session SET encrypted_state=$1,checked_at=now(),note='' WHERE id=1 AND enabled AND status='READY' AND state_version=$2", encryptCompassState(await context.storageState({ indexedDB: true })), saved.state_version);
+    await db.$executeRawUnsafe("UPDATE compass_session SET encrypted_state=$1,checked_at=now(),note='' WHERE id=1 AND enabled AND status='READY' AND state_version=$2", encryptCompassState(await collectCompassBrowserState(context)), saved.state_version);
     await finishCompassUpdate(String(job.id), token);
   } catch (error) {
     const code = error instanceof CompassBrowserError ? error.code : "FAILED";

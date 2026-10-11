@@ -9,6 +9,7 @@ import {
   cleanupCompassDownloads,
   compassReportTitles,
   compassSourceUrl,
+  compassPageDiagnostics,
   compassVisibleRange,
   downloadCompassReports,
 } from "../../apps/worker/src/compass-report-browser.js";
@@ -91,6 +92,18 @@ async function fixture(html: string, download = originalCsv) {
 }
 
 describe("Compass official browser reports", () => {
+  it("reports only official frame counts and catalogue booleans without session names, values or URL queries", async () => {
+    const page = await fixture(`${reportPage()}<iframe src="https://passport.vip.com/login/bLogin?token=SECRET"></iframe><iframe src="https://other.example/?password=SECRET"></iframe>`);
+    await page.evaluate(() => { sessionStorage.setItem("SECRET-key", "SECRET-value"); window.name = "SECRET"; });
+    const unknown = await page.context().newPage();
+    await unknown.goto("https://other.example/?token=SECRET");
+    const diagnostics = await compassPageDiagnostics(page);
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics?.[0]).toMatchObject({ hostname: "vis.vip.com", menuPresent: true, reportMenuPresent: true, reports: { style: true, article: true, barcode: true } });
+    expect(diagnostics?.[0].frames).toEqual(expect.arrayContaining([expect.objectContaining({ hostname: "vis.vip.com", readyState: "complete", sessionStorageEntries: 1, windowNameLength: 6 })]));
+    expect([...new Set(diagnostics?.[0].frames.map(frame => frame.hostname))]).toEqual(["vis.vip.com", "passport.vip.com"]);
+    expect(JSON.stringify(diagnostics)).not.toMatch(/SECRET|other.example|https:|login\/bLogin/);
+  }, 10000);
   it("enters through the observed supplier homepage and follows its visible Compass link to a real catalogue", async () => {
     const page = await fixture('<h1>供应商平台</h1><a target="_blank" href="https://compass.vip.com/fixture-reports">魔方罗盘</a>');
     await page.context().route("https://compass.vip.com/fixture-reports", route => route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", body: reportPage() }));

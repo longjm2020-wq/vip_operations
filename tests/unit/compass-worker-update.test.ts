@@ -6,7 +6,7 @@ const database = vi.hoisted(() => ({ db: { $transaction: vi.fn(), $executeRawUns
 const helpers = vi.hoisted(() => ({
   ready: true,
   verify: vi.fn(), finish: vi.fn(), expire: vi.fn(), decrypt: vi.fn(), encrypt: vi.fn(), draftDecrypt: vi.fn(), draftEncrypt: vi.fn(),
-  read: vi.fn(), begin: vi.fn(), append: vi.fn(), importFinish: vi.fn(), check: vi.fn(), open: vi.fn(), download: vi.fn(), cleanup: vi.fn(),
+  read: vi.fn(), begin: vi.fn(), append: vi.fn(), importFinish: vi.fn(), check: vi.fn(), open: vi.fn(), download: vi.fn(), cleanup: vi.fn(), diagnostics: vi.fn(), collect: vi.fn(), restore: vi.fn(), playwrightState: vi.fn(),
   BrowserError: class extends Error { constructor(public code: string, message: string) { super(message); } },
   StaleReportError: class extends Error {
     constructor(public actualStartDate: string, public actualEndDate: string, public expectedStartDate: string, public expectedEndDate: string) { super("报表日期不匹配"); }
@@ -18,9 +18,11 @@ vi.mock("../../apps/api/src/modules/analytics/browser-update.js", () => ({
 }));
 vi.mock("../../apps/api/src/modules/analytics/service.js", () => ({ beginImport: helpers.begin, appendImport: helpers.append, finishImport: helpers.importFinish }));
 vi.mock("../../apps/worker/src/compass-browser-state.js", () => ({ compassEncryptionReady: () => helpers.ready, decryptCompassState: helpers.decrypt, encryptCompassState: helpers.encrypt, decryptCompassLoginDraft: helpers.draftDecrypt, encryptCompassLoginDraft: helpers.draftEncrypt }));
+vi.mock("../../apps/worker/src/compass-browser-session.js", () => ({ collectCompassBrowserState: helpers.collect, restoreCompassBrowserState: helpers.restore, compassPlaywrightState: helpers.playwrightState }));
 vi.mock("../../apps/worker/src/compass-report-import.js", () => ({ readCompassDownload: helpers.read, StaleCompassReportError: helpers.StaleReportError }));
 vi.mock("../../apps/worker/src/compass-report-browser.js", () => ({
   compassSourceUrl: "https://vis.vip.com/index.php#/homepage",
+  compassPageDiagnostics: helpers.diagnostics,
   checkCompassLogin: helpers.check, openCompassReports: helpers.open, downloadCompassReports: helpers.download,
   cleanupCompassDownloads: helpers.cleanup, CompassBrowserError: helpers.BrowserError,
 }));
@@ -125,7 +127,11 @@ beforeEach(() => {
   helpers.encrypt.mockReturnValue("new-fixture-cipher");
   helpers.draftEncrypt.mockReturnValue("new-fixture-draft");
   helpers.draftDecrypt.mockReturnValue(state);
+  helpers.collect.mockImplementation(async context => context.storageState({ indexedDB: true }));
+  helpers.restore.mockResolvedValue(undefined);
+  helpers.playwrightState.mockImplementation(snapshot => ({ cookies: snapshot.cookies, origins: snapshot.origins }));
   helpers.check.mockResolvedValue({ verified: true, reason: "READY", note: "fixture" });
+  helpers.diagnostics.mockResolvedValue([{ hostname: "vis.vip.com", frames: [{ hostname: "vis.vip.com", readyState: "complete", sessionStorageEntries: 0, windowNameLength: 0 }], menuPresent: false, reportMenuPresent: false, reports: { style: false, article: false, barcode: false } }]);
   helpers.open.mockImplementation(async page => page);
   helpers.download.mockImplementation(async (_page, missing: CompassDimension[]) => missing.map(dimension => ({ dimension, fileName: dimension + ".xlsx", path: "/fixture/" + dimension + ".xlsx", tempDirectory: "/fixture" })));
   helpers.cleanup.mockResolvedValue(undefined);
@@ -255,6 +261,18 @@ describe("background update orchestration", () => {
     expect(helpers.draftDecrypt).not.toHaveBeenCalled();
     expect(helpers.draftEncrypt).not.toHaveBeenCalled();
     expect(helpers.decrypt).toHaveBeenCalledWith("fixture-cipher");
+  });
+
+  it("restores verified session storage before opening a background report page and captures refreshed state", async () => {
+    const snapshot = { ...state, sessionStorage: [{ origin: "https://vis.vip.com", entries: [{ name: "fixture", value: "synthetic-session" }] }] };
+    helpers.decrypt.mockReturnValue(snapshot);
+    helpers.collect.mockResolvedValue(snapshot);
+    const browser = createBrowser();
+    await processCompassUpdate(browser.launch);
+    expect(browser.browser.newContext.mock.calls[0][0].storageState).toEqual(state);
+    expect(helpers.restore).toHaveBeenCalledWith(browser.contexts[0], snapshot);
+    expect(helpers.restore.mock.invocationCallOrder[0]).toBeLessThan(browser.contexts[0].newPage.mock.invocationCallOrder[0]);
+    expect(helpers.encrypt).toHaveBeenCalledWith(snapshot);
   });
 
   it("stops before another chunk if import permissions are revoked", async () => {
@@ -433,6 +451,33 @@ describe("interactive login completion", () => {
     expect(draftState).toBeUndefined();
     const saved = database.db.$executeRawUnsafe.mock.calls.find(([sql]) => String(sql).startsWith("UPDATE compass_session SET enabled=true"));
     expect(saved?.[0]).toContain("draft_encrypted_state=NULL,draft_actor_id=NULL,draft_login_id=NULL,draft_expires_at=NULL");
+  });
+
+  it("collects encrypted session storage for the independent probe and restores it before page creation", async () => {
+    loginQueued = true; hasQueued = false;
+    const snapshot = { ...state, sessionStorage: [{ origin: "https://vis.vip.com", entries: [{ name: "fixture", value: "synthetic-session" }] }] };
+    helpers.decrypt.mockReturnValue(snapshot);
+    helpers.collect.mockResolvedValue(snapshot);
+    const browser = createBrowser();
+    await processCompassLogin(browser.launch);
+    expect(helpers.draftEncrypt).toHaveBeenCalledWith(snapshot, "17");
+    expect(helpers.encrypt).toHaveBeenCalledWith(snapshot);
+    for (const index of [0, 1]) {
+      expect(browser.browser.newContext.mock.calls[index][0].storageState).toEqual(state);
+      expect(helpers.restore.mock.calls[index]).toEqual([browser.contexts[index], snapshot]);
+      expect(helpers.restore.mock.invocationCallOrder[index]).toBeLessThan(browser.contexts[index].newPage.mock.invocationCallOrder[0]);
+    }
+    expect(helpers.check).toHaveBeenCalledTimes(2);
+    expect(database.db.$executeRawUnsafe.mock.calls.some(([sql]) => String(sql).includes("status='SAVED'"))).toBe(true);
+  });
+
+  it("logs a failed interactive check as safe counts and booleans without notes or storage payloads", async () => {
+    loginQueued = true; hasQueued = false;
+    helpers.check.mockImplementationOnce(async () => { loginAlive = false; return { verified: false, reason: "UNKNOWN_PAGE", note: "SECRET query and session value" }; });
+    await processCompassLogin(createBrowser().launch);
+    expect(console.warn).toHaveBeenCalledWith(JSON.stringify({ event: "compass_login_check", reason: "UNKNOWN_PAGE", pages: await helpers.diagnostics.mock.results[0].value }));
+    expect(JSON.stringify(vi.mocked(console.warn).mock.calls)).not.toContain("SECRET");
+    expect(helpers.encrypt).not.toHaveBeenCalled();
   });
 
   it.each(["actor", "login", "expired"])("does not resume an invalid %s draft", async reason => {

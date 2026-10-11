@@ -132,6 +132,43 @@ async function reportCatalog(page: Page) {
     if (!(await visibleText(page, reportName(dimension)))) return false;
   return true;
 }
+/** Safe observability only: no URLs, storage keys/values, body text or names. */
+export async function compassPageDiagnostics(page: Page) {
+  const observe = async () => {
+    const pages = [];
+    for (const candidate of page.context().pages().filter(item => !item.isClosed() && isCompassBrowserOrigin(item.url())).slice(-5)) {
+      const hostname = new URL(candidate.url()).hostname;
+      const frames = [];
+      for (const frame of candidate.frames().filter(item => isCompassBrowserOrigin(item.url())).slice(0, 10)) {
+        const origin = new URL(frame.url()).origin;
+        const counts = await frame.evaluate(expected => {
+          if (location.origin !== expected) return null;
+          let sessionStorageEntries: number | null = null;
+          try { sessionStorageEntries = sessionStorage.length; } catch { /* Inaccessible storage remains unknown. */ }
+          const readyState = document.readyState;
+          return { readyState: readyState === "loading" || readyState === "interactive" || readyState === "complete" ? readyState : null, sessionStorageEntries, windowNameLength: window.name.length };
+        }, origin).catch(() => null);
+        frames.push({ hostname: new URL(origin).hostname, readyState: counts?.readyState ?? null, sessionStorageEntries: counts?.sessionStorageEntries ?? null, windowNameLength: counts?.windowNameLength ?? null });
+      }
+      let menuPresent: boolean | null = null, reportMenuPresent: boolean | null = null;
+      const reports: Record<CompassDimension, boolean | null> = { style: null, article: null, barcode: null };
+      try {
+        menuPresent = Boolean(await visibleText(candidate, /^(?:魔方罗盘|罗盘|自助工具|自助报表|下载中心)$/));
+        reportMenuPresent = Boolean(await visibleText(candidate, /^(?:自助报表|下载中心)$/));
+        for (const dimension of compassDimensions) reports[dimension] = Boolean(await visibleText(candidate, reportName(dimension)));
+      } catch { /* A detached frame produces unknown booleans, never raw errors. */ }
+      pages.push({ hostname, frames, menuPresent, reportMenuPresent, reports });
+    }
+    return pages;
+  };
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      observe().catch(() => null),
+      new Promise<null>(resolveWait => { timer = setTimeout(() => resolveWait(null), 1500); }),
+    ]);
+  } finally { if (timer) clearTimeout(timer); }
+}
 async function currentState(page: Page): Promise<CompassLoginCheck> {
   if (!isCompassBrowserOrigin(page.url()))
     return {
