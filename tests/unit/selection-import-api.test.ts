@@ -9,15 +9,19 @@ import { selectionLayoutSchema, type SelectionField } from "../../packages/contr
 import { archiveFieldIds } from "../../packages/contracts/src/product-archive.js";
 import { selectionImportLimits } from "../../packages/contracts/src/selection-import-template.js";
 
-const fixture = vi.hoisted(() => ({ database: null as PGlite | null, archive: false, mirrors: [] as Row[] }));
+const fixture = vi.hoisted(() => ({ database: null as PGlite | null, archive: false, registryBigInt: false, mirrors: [] as Row[] }));
 vi.mock("../../packages/database/src/index.js", async importOriginal => {
   const original = await importOriginal<typeof import("../../packages/database/src/index.js")>();
+  const driverRows = (sql: string, values: Row[]) => fixture.registryBigInt && /selection_field_registry/.test(sql)
+    ? values.map(value => Object.fromEntries(Object.entries(value).map(([key, item]) => [key,
+      ["table_id", "owner_id"].includes(key) && item !== null ? BigInt(item as number) : item,
+    ]))) : values;
   const wrap = (database: Pick<PGlite, "query">) => ({
-    $queryRawUnsafe: async (sql: string, ...parameters: unknown[]) => (await database.query(sql, parameters)).rows,
+    $queryRawUnsafe: async (sql: string, ...parameters: unknown[]) => driverRows(sql, (await database.query<Row>(sql, parameters)).rows),
     $executeRawUnsafe: async (sql: string, ...parameters: unknown[]) => (await database.query(sql, parameters)).affectedRows || 0,
   }) as unknown as Tx;
   const database = {
-    $queryRawUnsafe: async (sql: string, ...parameters: unknown[]) => (await fixture.database!.query(sql, parameters)).rows,
+    $queryRawUnsafe: async (sql: string, ...parameters: unknown[]) => driverRows(sql, (await fixture.database!.query<Row>(sql, parameters)).rows),
     $transaction: async (work: (tx: Tx) => Promise<unknown>) => fixture.database!.transaction(async transaction => {
       if (selectionScope.getStore()) await transaction.query(`SET LOCAL search_path TO "selection_table_${selectionScope.getStore()}", public`);
       return work(wrap(transaction));
@@ -81,7 +85,7 @@ beforeAll(async () => {
   `);
 }, 30000);
 beforeEach(async () => {
-  fixture.archive = false; fixture.mirrors = [];
+  fixture.archive = false; fixture.registryBigInt = false; fixture.mirrors = [];
   await fixture.database!.exec(`TRUNCATE style_selections,selection_field_registry,selection_layout_preferences,selection_shared_layouts,selection_shared_fields,idempotency_records,audit_logs,products,product_fields,style_selection_protection,selection_table_23.style_selections,selection_table_23.style_selection_protection RESTART IDENTITY`);
   await fixture.database!.query("INSERT INTO style_selection_protection(id,settings) VALUES(1,$1)", [JSON.stringify(defaultProtection)]);
   await fixture.database!.query("INSERT INTO selection_table_23.style_selection_protection(id,settings) VALUES(1,$1)", [JSON.stringify(defaultProtection)]);
@@ -89,6 +93,36 @@ beforeEach(async () => {
 afterAll(async () => { await fixture.database?.close(); });
 
 describe("atomic Excel style import", () => {
+  it("previews and commits registered fields with Prisma-style BigInt metadata", async () => {
+    const title = field("长标题");
+    await register(title);
+    fixture.registryBigInt = true;
+    const plan = await previewImport(actor("bigint-registry"), input([
+      { xutiStyleNo: "PRICE-CHECK-NORMAL", tagPrice: "50", fieldValues: { 长标题: "测试文件：普通金额" } },
+      { xutiStyleNo: "PRICE-CHECK-FLOAT", tagPrice: "228", fieldValues: { 长标题: "测试文件：第3行金额" } },
+    ]));
+    expect(plan.created).toBe(2);
+    expect(plan.fieldRevision).toMatch(/^[a-f0-9]{32}$/);
+    expect(plan.fields.find(binding => binding.header === "长标题")).toMatchObject({ key: title.key, isNew: false });
+    expect(await commitImport(actor("bigint-registry"), payload(plan))).toMatchObject({ created: 2, fieldsCreated: 0 });
+    expect((await read("SELECT tag_price,extra_fields FROM style_selections ORDER BY id")).map(value => ({ price: value.tag_price, title: value.extra_fields[title.key] })))
+      .toEqual([{ price: "50", title: "测试文件：普通金额" }, { price: "228", title: "测试文件：第3行金额" }]);
+  });
+  it("keeps archive public-field revisions stable with a BigInt table ID and no owner", async () => {
+    const title = field("长标题");
+    await fixture.database!.query(`INSERT INTO selection_field_registry(workspace_key,table_id,field_key,owner_id,visibility,definition)
+      VALUES('23',23,$1,NULL,'PUBLIC',$2)`, [title.key, JSON.stringify(title)]);
+    fixture.archive = true; fixture.registryBigInt = true;
+    await selectionScope.run("23", async () => {
+      const plan = await previewImport(actor("bigint-archive"), input([{ xutiStyleNo: "PRICE-CHECK-ARCHIVE", tagPrice: "228", fieldValues: { 长标题: "公共标题" } }]));
+      const repeated = await previewImport(actor("bigint-archive"), input([{ xutiStyleNo: "PRICE-CHECK-ARCHIVE", tagPrice: "228", fieldValues: { 长标题: "公共标题" } }]));
+      expect(plan.fieldRevision).toBe(repeated.fieldRevision);
+      expect(plan.fields.find(binding => binding.header === "长标题")).toMatchObject({ key: title.key, isNew: false });
+      expect(await commitImport(actor("bigint-archive"), payload(plan))).toMatchObject({ created: 1, fieldsCreated: 0 });
+    });
+    expect((await read("SELECT tag_price,extra_fields FROM selection_table_23.style_selections"))[0])
+      .toMatchObject({ tag_price: "228", extra_fields: { [title.key]: "公共标题" } });
+  });
   it("previews and atomically commits 5000 styles, rejecting 5001 before any writes", async () => {
     const inputRows = Array.from({ length: selectionImportLimits.maxRows }, (_, index) => ({ xutiStyleNo: `LIMIT-${index}`, material: "棉" }));
     const previewStart = performance.now();

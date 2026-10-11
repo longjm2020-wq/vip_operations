@@ -71,7 +71,7 @@ async function importLayout(tx: Tx, c: Context, archive: boolean) {
   }]));
   const policy = await protection.policy(tx);
   const revision = stored?.revision || 0;
-  const fieldRevision = protection.digest([registry, policy.revision, shared.revision, template?.revision || 0, productFields]);
+  const fieldRevision = protection.digest(camel([registry, policy.revision, shared.revision, template?.revision || 0, productFields]));
   return { personal, effective, all: [...all.values()], registry, policy, revision, fieldRevision };
 }
 type Snapshot = Awaited<ReturnType<typeof importLayout>>;
