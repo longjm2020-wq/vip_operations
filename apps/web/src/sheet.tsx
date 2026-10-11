@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, App, Button, Modal, Select, Space, Table, Upload } from "antd";
 import {
   SheetColumn,
@@ -9,9 +9,12 @@ import {
   displayCell,
   parseDelimited,
   validateSheet,
+  resolveCell,
 } from "./sheet-data";
 import { downloadWorkbook, readWorkbook } from "./sheet-excel";
 import { TableOperationHints } from "./table-operation-hints";
+import { TableFindReplace, type TableFindCell, type TableFindChange } from "./table-find-replace";
+import { SheetRowIdentities } from "./sheet-row-identities.js";
 
 export function Sheet({
   columns,
@@ -36,6 +39,10 @@ export function Sheet({
 }) {
   const { message } = App.useApp();
   const root = useRef<HTMLDivElement>(null);
+  const rowIdentities = useRef(new SheetRowIdentities());
+  const findRowKeys = useMemo(() => rowIdentities.current.keys(value), [value]);
+  const cloneRow = (row: SheetRow) => rowIdentities.current.inherit(row, { ...row });
+  const pastedDefaults = (row: SheetRow, index: number) => value[index] ? rowIdentities.current.inherit(value[index], { ...defaults, ...row }) : { ...defaults, ...row };
   const history = useRef<SheetRow[][]>([]),
     future = useRef<SheetRow[][]>([]);
   const [selected, setSelected] = useState<number[]>([]);
@@ -44,6 +51,8 @@ export function Sheet({
     [mapping, setMapping] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [issues, setIssues] = useState<Record<string, string>>({});
+  const [activeCell, setActiveCell] = useState<string | null>(null), [findTarget, setFindTarget] = useState<TableFindCell | null>(null);
+  const [findHighlight, setFindHighlight] = useState<string | null>(null);
   const commit = (next: SheetRow[]) => {
     history.current = [...history.current.slice(-29), value];
     future.current = [];
@@ -81,7 +90,7 @@ export function Sheet({
         const identity = columns[0];
         if (!keys.includes(identity.key))
           throw Error(`请匹配「${identity.label}」以对应已有明细`);
-        const next = value.map((r) => ({ ...r }));
+        const next = value.map(cloneRow);
         const seen = new Set<number>();
         imported.forEach((row) => {
           const candidates = value
@@ -120,10 +129,48 @@ export function Sheet({
     }
   };
   const allErrors = { ...issues, ...errors };
+  const findCells = (): TableFindCell[] => value.flatMap((row, ri) => columns.map(col => ({
+    id: `${findRowKeys[ri]}::${col.key}`, rowKey: findRowKeys[ri], columnKey: col.key, rowLabel: `第 ${ri + 1} 行`, columnLabel: col.label,
+    text: displayCell(row[col.key], col), replaceable: !disabled && !row._uncertain && !(typeof col.readonly === "function" ? col.readonly(row) : col.readonly),
+  })));
+  const selectedFindIds = useMemo(() => new Set(selected.length ? selected.flatMap(ri => findRowKeys[ri] ? columns.map(col => `${findRowKeys[ri]}::${col.key}`) : []) : activeCell ? [activeCell] : []), [selected, columns, activeCell, findRowKeys]);
+  useEffect(() => {
+    if (!findTarget) return;
+    const cell = root.current?.querySelector<HTMLElement>(`td[data-sheet-find-row="${CSS.escape(findTarget.rowKey)}"][data-sheet-column="${CSS.escape(findTarget.columnKey)}"]`);
+    cell?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    setFindTarget(null);
+  }, [findTarget, value, columns]);
+  const replaceFind = (changes: TableFindChange[]) => {
+    if (disabled) throw Error("当前表格只读，不能替换");
+    const next = value.map(cloneRow), changedCells = new Set<string>(), changedColumns = new Set<string>();
+    for (const change of changes) {
+      const ri = findRowKeys.indexOf(change.rowKey), row = next[ri], col = columns.find(col => col.key === change.columnKey);
+      if (!row || !col || row._uncertain || (typeof col.readonly === "function" ? col.readonly(row) : col.readonly)) throw Error(`${change.rowLabel} · ${change.columnLabel}：编辑权限或保存状态已变化；本次替换未应用`);
+      if (displayCell(row[col.key], col) !== change.text) throw Error(`${change.rowLabel} · ${change.columnLabel}：内容已变化，请重新查找；本次替换未应用`);
+      try {
+        const resolved = resolveCell(change.after, col);
+        if (col.required && resolved == null) throw Error("必填项不能为空");
+        row[col.key] = resolved;
+      } catch (error) { throw Error(`${change.rowLabel} · ${change.columnLabel}：${(error as Error).message}；本次替换未应用`); }
+      changedCells.add(`${ri}:${col.key}`); changedColumns.add(col.key);
+    }
+    const check = validateSheet(next, columns), before = validateSheet(value, columns);
+    const conflict = Object.entries(check.errors).find(([key, issue]) => changedCells.has(key) && issue !== "该选项只能选择一次");
+    if (conflict) throw Error(`${conflict[1]}；本次替换未应用`);
+    for (const col of columns.filter(col => col.unique && changedColumns.has(col.key))) {
+      for (const change of changes.filter(change => change.columnKey === col.key)) {
+        const ri = findRowKeys.indexOf(change.rowKey), chosen = check.values[ri][col.key];
+        if (chosen !== null && chosen !== undefined && chosen !== "" && chosen !== before.values[ri][col.key] && check.values.filter(row => row[col.key] === chosen).length > 1) throw Error(`${col.label}：该选项只能选择一次；本次替换未应用`);
+      }
+    }
+    commit(next);
+    return changes.length;
+  };
   return (
-    <div className="sheet-workspace" ref={root}>
+    <div className="sheet-workspace" data-table-find-context ref={root} onFocusCapture={event => { const cell = event.target instanceof Element ? event.target.closest<HTMLElement>("td[data-sheet-find-row][data-sheet-column]") : null; if (cell) setActiveCell(`${cell.dataset.sheetFindRow}::${cell.dataset.sheetColumn}`); }}>
       <div className="sheet-toolbar">
         <Space wrap>
+          <TableFindReplace rootRef={root} cells={findCells} selectedIds={selectedFindIds} saveHint="修改后请统一保存；可用撤销恢复本次替换。" onNavigate={cell => { setFindHighlight(cell.id); setFindTarget(cell); }} onReplace={replaceFind}/>
           {!fixed && !disabled && (
             <Button
               onClick={() => {
@@ -261,6 +308,7 @@ export function Sheet({
           <span className="secondary">{value.length} 行 / {columns.length} 列</span>
           <TableOperationHints>
             <p>点击单元格编辑；Tab / Enter 连续录入；可从 Excel、WPS、飞书粘贴多行多列。</p>
+            <p>Ctrl+H 打开查找/替换；选区为勾选行或当前单元格。</p>
             <p>修改后统一保存。</p>
             <p>{fixed ? "按首列对应原单明细。" : "导入追加为新行，移出行不会删除已保存资料。"}</p>
           </TableOperationHints>
@@ -322,6 +370,11 @@ export function Sheet({
                   return (
                     <td
                       key={col.key}
+                      data-sheet-row={ri}
+                      data-sheet-find-row={findRowKeys[ri]}
+                      data-sheet-column={col.key}
+                      data-find-current={findHighlight === `${findRowKeys[ri]}::${col.key}` || undefined}
+                      style={findHighlight === `${findRowKeys[ri]}::${col.key}` ? { outline: "2px solid #faad14", outlineOffset: -2 } : undefined}
                       className={`${locked ? "sheet-locked" : ""} ${error ? "sheet-error" : ""}`}
                       title={error}
                       onPaste={(e) => {
@@ -343,7 +396,7 @@ export function Sheet({
                               ri,
                               ci,
                               fixed,
-                            ).map((r) => ({ ...defaults, ...r })),
+                            ).map(pastedDefaults),
                           );
                         } catch (err) {
                           message.error((err as Error).message);
@@ -366,7 +419,7 @@ export function Sheet({
                           }}
                           value={displayCell(row[col.key], col)}
                           onChange={(e) => {
-                            const next = value.map((r) => ({ ...r }));
+                            const next = value.map(cloneRow);
                             next[ri][col.key] = e.target.value;
                             commit(next);
                           }}
@@ -398,7 +451,7 @@ export function Sheet({
                               ),
                           }))}
                           onChange={(v) => {
-                            const next = value.map((r) => ({ ...r }));
+                            const next = value.map(cloneRow);
                             next[ri][col.key] = col.multiple
                               ? (v || []).join(";")
                               : v || "";
@@ -419,7 +472,7 @@ export function Sheet({
                           }
                           value={displayCell(row[col.key], col)}
                           onChange={(e) => {
-                            const next = value.map((r) => ({ ...r }));
+                            const next = value.map(cloneRow);
                             next[ri][col.key] = e.target.value;
                             commit(next);
                           }}
@@ -437,7 +490,7 @@ export function Sheet({
                                   ri,
                                   ci,
                                   fixed,
-                                ).map((r) => ({ ...defaults, ...r })),
+                                ).map(pastedDefaults),
                               );
                             } catch (err) {
                               message.error((err as Error).message);

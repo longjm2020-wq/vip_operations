@@ -21,6 +21,9 @@ import {resetFieldTypes,fieldValueError,fieldImages,defaultImageConfig,systemFie
 import { selectionSystemValue } from "./selection-system-fields";
 import { SelectionStatistics } from "./selection-statistics";
 import { SelectionOperationHints } from "./table-operation-hints";
+import { TableFindReplace, type TableFindCell, type TableFindChange, type TableFindOptions } from "./table-find-replace";
+import { selectionReplacementError, selectionReplacementValue } from "./selection-find-replace";
+import { queryClient as rootQueryClient } from "./api";
 import { SelectionCollaborators, collaboratorColor } from "./selection-collaborators";
 import { SelectionCollections } from "./selection-collections";
 import { CollectionStockEditor } from "./selection-collection-stock";
@@ -326,6 +329,8 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
   const [selectingCells, setSelectingCells] = useState(false);
   const axisSelection = useRef<{ type: "row" | "column"; key: string } | null>(null);
   const sheetRef = useRef<HTMLDivElement>(null);
+  const findRoot = useRef<HTMLDivElement>(null);
+  const [findTarget, setFindTarget] = useState<TableFindCell | null>(null);
   const dragCellAnchor = useRef<{ rowKey: string; columnKey: string } | null>(null);
   const shiftDrag=useRef<{type:"row"|"column";key:string;keys:string[];clickFrom?:string;startX:number;startY:number;moved:boolean}|null>(null);
   const axisActions = useRef<(type: "row" | "column", from: string, to: string) => void>(() => {});
@@ -590,6 +595,76 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
   }, [filteredRows, pageRowKeys, visible]);
   const dirtyRows = useMemo(() => new Set(rows.filter((row) => !row.id || !sameRow(row, original.current.get(row._key) || {})).map(row => row._key)), [rows, saving]);
   const dirtyCount = dirtyRows.size;
+
+  const findReadable = (row: Row, key: string) => readableSelectionCell(row, key) && !(row.hiddenCells || []).includes(key) && (row.cellAccess?.[key] || row.defaultCellAccess) !== "deny";
+  const findText = (row: Row, column: Column) => {
+    const raw = String(valueAt(row, column) ?? ""), reference = archiveReferenceKey(column.key);
+    if (archive && reference === "status") return ({ ACTIVE: "在用", STOPPED: "停用", ARCHIVED: "归档" } as Record<string, string>)[raw] || raw;
+    if (archive && archiveReferences?.[reference]) return archiveReferences[reference].find(option => String(option.id) === raw)?.name || raw;
+    return choiceDisplayText(column, valueAt(row, column));
+  };
+  const findReplaceable = (row: Row, column: Column) => canEdit && findReadable(row, column.key) && editableSelectionCell(row, column.key) && column.key !== "registrationBatch" && !systemField(column) && !imageKeys.has(column.key) && (column.type || column.fallbackType) !== "image" && !collectionKeys.has(column.key);
+  const findCells = (): TableFindCell[] => allDisplayedRows.flatMap((row, index) => activeColumns.flatMap(column => {
+    if (!findReadable(row, column.key) || imageKeys.has(column.key) || (column.type || column.fallbackType) === "image") return [];
+    return [{ id: cellId(row._key, column.key), rowKey: row._key, columnKey: column.key, rowLabel: `第 ${index + 1} 行`, columnLabel: column.label, text: findText(row, column), replaceable: findReplaceable(row, column) }];
+  }));
+  const navigateFind = (cell: TableFindCell) => {
+    const index = allDisplayedRows.findIndex(row => row._key === cell.rowKey);
+    if (index < 0) return;
+    setFindTarget(cell); setPage(Math.floor(index / pageSize) + 1);
+  };
+  useEffect(() => {
+    if (!findTarget) return;
+    const row = allDisplayedRows.find(row => row._key === findTarget.rowKey), column = activeColumns.find(column => column.key === findTarget.columnKey);
+    if (!row || !column || !findReadable(row, column.key)) { setFindTarget(null); return; }
+    if (!pageRowKeys.has(row._key)) return;
+    const point = { rowKey: row._key, columnKey: column.key };
+    setCellAnchor(point); setFocusedCell(null); setCellTextEditing(false); setSelectedCells(new Set([cellId(row._key, column.key)]));
+    const target = sheetRef.current?.querySelector<HTMLElement>(`td[data-selection-row="${CSS.escape(row._key)}"][data-selection-column="${CSS.escape(column.key)}"]`);
+    target?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    if (target && sheetRef.current && !fixedOffsets.has(column.key)) {
+      const covered = sheetRef.current.getBoundingClientRect().left + 96 + pinnedColumns.reduce((total, field) => total + field.width, 0) - target.getBoundingClientRect().left;
+      if (covered > 0) sheetRef.current.scrollLeft -= covered;
+    }
+    setFindTarget(null);
+  }, [findTarget, currentPage, pageSize, displayedRows, activeColumns]);
+  const replaceFind = (changes: TableFindChange[], options: TableFindOptions) => {
+    if (!canEdit || saving || deleting || transferring || releasing) throw Error("表格正在保存或操作中，请稍后重试");
+    const byKey = new Map(rows.map(row => [row._key, row])), touched = new Set<string>(), styleRows = new Set<string>();
+    const errorAt = (change: TableFindChange, issue: string): never => { throw Error(`${change.rowLabel} · ${change.columnLabel}：${issue}；本次替换未应用`); };
+    for (const change of changes) {
+      const row = byKey.get(change.rowKey), column = activeColumns.find(column => column.key === change.columnKey);
+      if (!row || !column || !findReplaceable(row, column)) errorAt(change, "内容已删除或编辑权限已变化");
+      if (findText(row!, column!) !== change.text) errorAt(change, "内容已更新，请重新查找");
+      let nextValue = change.after;
+      const reference = archiveReferenceKey(column!.key);
+      if (archive && (archiveReferences?.[reference] || reference === "status")) {
+        const candidates = reference === "status" ? [{ id: "ACTIVE", name: "在用", status: "ACTIVE" }, { id: "STOPPED", name: "停用", status: "ACTIVE" }, { id: "ARCHIVED", name: "归档", status: "ACTIVE" }] : archiveReferences![reference];
+        const found = candidates.filter(option => (option.name === nextValue || String(option.id) === nextValue) && option.status === "ACTIVE" && !("hasChildren" in option && option.hasChildren));
+        if (!nextValue && !["categoryId", "status"].includes(reference)) nextValue = "";
+        else if (found.length !== 1) errorAt(change, "替换结果须对应唯一可用的关联选项");
+        else nextValue = String(found[0].id);
+      } else {
+        try { nextValue = selectionReplacementValue(column!, valueAt(row!, column!), options); }
+        catch (error) { errorAt(change, (error as Error).message); }
+      }
+      const issue = selectionReplacementError(column!, nextValue, !!archive);
+      if (issue) errorAt(change, issue);
+      if (column!.key === "color") {
+        if (!findReadable(row!, "images")) errorAt(change, "关联图片不可查看，请在颜色编辑器中核对后修改");
+        const colors = new Set(splitTags(nextValue));
+        if (rowImages(row!).some(image => image.color && !colors.has(image.color))) errorAt(change, "替换后会使图片颜色关联失效，请通过颜色标签编辑器同步改名");
+      }
+      if (column!.key === "xutiStyleNo") styleRows.add(row!._key);
+      byKey.set(row!._key, withValue(row!, column!, nextValue)); touched.add(row!._key);
+    }
+    const next = rows.map(row => byKey.get(row._key)!);
+    const duplicates = duplicateStyleCounts(next, styleCounts.data?.data, original.current);
+    for (const key of styleRows) if (duplicates.has(selectionStyleKey(byKey.get(key)?.xutiStyleNo))) throw Error("替换后的序缇款号与其他记录重复；本次替换未应用");
+    setRows(next); setCopiedCells(new Set());
+    setErrors(current => Object.fromEntries(Object.entries(current).filter(([key]) => !touched.has(key.slice(0, key.indexOf(":"))))));
+    return changes.length;
+  };
 
   const update = (key: string, column: Column, value: unknown) => {
     const row=rows.find(row=>row._key===key);
@@ -938,7 +1013,7 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
   }, [errors]);
   const rowRenderDependencies = (row: Row) => {
     const index = rowPositions.get(row._key)!, previous = displayedRows[index - 1]?._key, next = displayedRows[index + 1]?._key;
-    return [row, activeColumns, fixedOffsets, rowGroups, rowNumberByKey.get(row._key), selectedRows.includes(row._key), selectedByRow.get(row._key), previous && selectedByRow.get(previous), next && selectedByRow.get(next), copiedByRow.get(row._key), previous && copiedByRow.get(previous), next && copiedByRow.get(next), selectedCells.size === 1 && selectedByRow.has(row._key), focusedCell?.startsWith(`${row._key}::`) ? focusedCell : null, errorSignatures.get(row._key), observerSignatures.get(String(row.id)), repeatedStyles.get(selectionStyleKey(row.xutiStyleNo)), imagePreview && imagePreview.rowKey === row._key ? imagePreview.columnKey : null, dirtyRows.has(row._key), shiftTarget === `row:${row._key}`, canEdit, blankLayout, releasing, transferring, dirtyCount, saving, archive, archiveReferences];
+    return [row, activeColumns, fixedOffsets, rowGroups, rowNumberByKey.get(row._key), selectedRows.includes(row._key), selectedByRow.get(row._key), previous && selectedByRow.get(previous), next && selectedByRow.get(next), copiedByRow.get(row._key), previous && copiedByRow.get(previous), next && copiedByRow.get(next), selectedCells.size === 1 && selectedByRow.has(row._key), focusedCell?.startsWith(`${row._key}::`) ? focusedCell : null, errorSignatures.get(row._key), observerSignatures.get(String(row.id)), repeatedStyles.get(selectionStyleKey(row.xutiStyleNo)), imagePreview && imagePreview.rowKey === row._key ? imagePreview.columnKey : null, findTarget && findTarget.rowKey === row._key ? findTarget.columnKey : null, dirtyRows.has(row._key), shiftTarget === `row:${row._key}`, canEdit, blankLayout, releasing, transferring, dirtyCount, saving, archive, archiveReferences];
   };
   const interactions = {
     mouseDown: (event: React.MouseEvent<HTMLElement>, rowKey: string, columnKey: string) => {
@@ -1109,7 +1184,8 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
   if(accessLost)return <Alert type="error" showIcon message="表格访问权限已失效，请重新登录或联系管理员" />;
   return <>{columnWidthTarget && <SelectionColumnWidthModal columns={columnWidthTarget} onCancel={() => setColumnWidthTarget(null)} onApply={width => { const keys = new Set(columnWidthTarget.map(column => column.key)); setColumns(current => current.map(column => keys.has(column.key) ? { ...column, width } : column)); setColumnWidthTarget(null); }}/>} {imagePreview && previewImages.length > 0 && <SelectionImagePreview key={cellId(imagePreview.rowKey, imagePreview.columnKey)} images={previewImages} index={Math.min(imagePreview.index, previewImages.length - 1)} name={previewColumn!.label} alongsideDetails={detailVisible} onTextCopied={text => { copiedSingleValue.current = text; setCopiedCells(new Set()); }} onIndexChange={index => setImagePreview(current => current ? { ...current, index } : null)} onClose={() => setImagePreview(null)} />}{formatTarget && <SelectionFormatModal count={formatTarget.ids.size} sample={formatTarget.sample} initial={formatTarget.initial} onCancel={() => setFormatTarget(null)} onApply={applyFormat} />}<PageSearch><PageSearchInput multiline aria-label="搜索选款" placeholder="搜索款号、供应商、颜色、材质…" allowClear value={searchText} onChange={event=>{setImageSearchRowId(null);setSearchText(event.target.value);}} suffix={<SelectionImageSearch disabled={!!dirtyCount || saving || deleting || transferring} onSelect={row=>{setImageSearchRowId(String(row.id));setPage(1);setCellAnchor(null);setFocusedCell(null);setCellTextEditing(false);setSelectedRows([]);setSelectedCells(new Set());}}/>} /></PageSearch>
     <Dropdown trigger={["contextMenu"]} open={!!contextRow && !!contextColumn} onOpenChange={open => { if (!open) setContextCell(null); }} overlayStyle={{ zIndex: 1201 }} menu={cellContextMenu}><span aria-hidden="true" style={{ position: "fixed", left: contextCell?.x || 0, top: contextCell?.y || 0, width: 1, height: 1, pointerEvents: "none" }}/></Dropdown>
-    <Card className="selection-card"><div className="selection-toolbar" aria-label={`${title || "选款登记"}表格工具栏`}><Space className="selection-toolbar-controls" wrap size={4}>
+    <Card ref={findRoot} data-table-find-context className="selection-card"><div className="selection-toolbar" aria-label={`${title || "选款登记"}表格工具栏`}><Space className="selection-toolbar-controls" wrap size={4}>
+      <TableFindReplace rootRef={findRoot} cells={findCells} selectedIds={selectedCells} blocked={saving || deleting || transferring || !!releasing} saveHint="修改将逐行自动保存，保存失败请修正后重试。" onNavigate={navigateFind} onReplace={replaceFind}/>
       {canEdit && <SelectionCollections selectedRows={filteredRows.filter(row => selectedRows.includes(row._key))} blocked={!!dirtyCount || saving || deleting}/>}
       {canEdit && <SelectionPhotoQr />}
       <Button type="link" icon={<PlusOutlined />} disabled={!canAdd} onClick={() => add()}>添加一行</Button><Button type="link" danger icon={<DeleteOutlined />} disabled={!canEdit || !selectedRows.length || saving} loading={deleting} onClick={deleteRows}>删除行</Button>
@@ -1125,7 +1201,15 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
       <Popover trigger="click" content={<div className="selection-color-menu">{colorOptions.map((option) => <Button key={option.value} type="text" onClick={() => applyColor(option.value)}><span className="selection-color-dot" style={{ background: option.color }} />{option.label}</Button>)}</div>}><Button aria-label="填色" title="填色" disabled={!canEdit || !selectedCells.size} icon={<BgColorsOutlined />} /></Popover>
     <Dropdown trigger={["click"]} menu={{ selectable: true, selectedKeys: editorRow && editorColumn ? [editorRow.cellTextColors?.[editorColumn.key] || "default"] : [], items: textColorOptions.map(option => ({ key: option.value || "default", label: option.label, icon: <span className="selection-color-dot" style={{ background: option.value || "#46352a" }} /> })), onClick: ({ key }) => applyTextColor(key === "default" ? "" : key) }}><Button aria-label="字体颜色" title="字体颜色" disabled={!canEdit || !selectedCells.size} icon={<FontColorsOutlined />} /></Dropdown>
     <SelectionLayoutStatus layout={layout} />
-    <SelectionTransfer columns={activeColumns} ensureLayoutSaved={layout.ensureSaved} filteredRows={imageSearchRowId !== null || searchTerms.length || Object.keys(columnFilters).length || columnSort ? filteredRows : undefined} canEdit={canEdit} blocked={!!dirtyCount || saving || deleting} selectedRows={filteredRows.filter(row => selectedRows.includes(row._key))} query={search} onImported={() => { appliedSnapshot.current = ""; void queryClient.invalidateQueries({ queryKey: ["style-selections"] }); void queryClient.invalidateQueries({ queryKey: ["style-selection-style-counts"] }); }} />
+    <SelectionTransfer columns={activeColumns} ensureLayoutSaved={layout.ensureSaved} filteredRows={imageSearchRowId !== null || searchTerms.length || Object.keys(columnFilters).length || columnSort ? filteredRows : undefined} canEdit={canEdit} blocked={!!dirtyCount || saving || deleting} selectedRows={filteredRows.filter(row => selectedRows.includes(row._key))} query={search} onImported={async () => {
+      appliedSnapshot.current = "";
+      await Promise.all([
+        layout.refresh(),
+        queryClient.invalidateQueries({ queryKey: ["style-selections"] }),
+        queryClient.invalidateQueries({ queryKey: ["style-selection-style-counts"] }),
+        ...(archive ? [rootQueryClient.invalidateQueries({ queryKey: ["product-archive-table"] })] : []),
+      ]);
+    }} />
     </Space>{!!Object.keys(errors).length && <span className="selection-record-count"><Tooltip title="修改尚未保存；悬停红色单元格查看原因，修正后重试"><Button type="text" size="small" danger disabled={saving} onClick={() => { attempts.current.retry(); setRetryVersion((value) => value + 1); }}>未保存 · 重试</Button></Tooltip></span>}<SelectionCollaborators people={collaborators} rows={rows} columns={availableColumns} loading={!presence.data && presence.isFetching} failed={!!presence.error} onRetry={() => { void presence.refetch(); }}/></div>
     {imageSearchRowId !== null && <Alert className="selection-image-search-location" type="info" title="图片查找：当前显示所选款式，清除后恢复原搜索与列筛选。" action={<Button size="small" onClick={()=>{setImageSearchRowId(null);setPage(1);}}>清除图片查找</Button>}/>}
       <SelectionColumnGroupTabs groups={columnGroups} visibleKeys={visibleColumns.map(column => column.key)} activeKey={selectedColumnGroup?.id || ""} onChange={changeColumnGroup}/>

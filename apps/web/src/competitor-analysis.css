@@ -222,6 +222,13 @@
   object-fit: contain;
   background: #f8f3ef;
 }
+.competitor-product-preview .competitor-product-preview-card {
+  border: 0;
+}
+.competitor-product-preview .competitor-product-preview-image {
+  height: auto;
+  max-height: none;
+}
 .competitor-product-preview-details {
   padding: 14px;
   color: #49382e;

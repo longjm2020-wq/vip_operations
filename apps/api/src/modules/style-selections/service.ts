@@ -368,63 +368,7 @@ export async function persist(tx: Tx, c: Context, body: Row, value?: string) {
     return (await one(tx, `SELECT ${selectColumns()} ${source} WHERE s.id=$1::bigint`, result.id))!;
 }
 
-const importValues = styleSelectionInput.pick({ registrationBatch: true, images: true, labelImages: true, xutiStyleNo: true,
-  supplierStyleNo: true, supplierCode: true, color: true, sizeRange: true, material: true,
-  supplyPriceExclTax: true, vipPrice: true, livePrice: true, tagPrice: true }).partial()
-  .extend({ xutiStyleNo: z.string().trim().min(1).max(64) }).strict();
-const importPlan = z.object({ values: importValues, id: z.string().regex(/^[1-9]\d*$/).nullable(), expectedUpdatedAt: z.iso.datetime().nullable() }).strict();
-function importPatch(input: Row): Row {
-  const parsed = parse<Row>(importValues, input);
-  // Zod defaults must not clear omitted fields in a partial workbook update.
-  return Object.fromEntries(Object.entries(parsed).filter(([key, value]) => key in input && value !== null && value !== "" && value !== undefined && !(Array.isArray(value) && !value.length)));
-}
-function distinctStyles(values: Row[]) {
-  const seen = new Set<string>();
-  for (const value of values) {
-    if (seen.has(value.xutiStyleNo)) fail("VALIDATION_ERROR", `款号「${value.xutiStyleNo}」在文件中重复`, 400);
-    seen.add(value.xutiStyleNo);
-    if (value.registrationBatch && (!Number.isFinite(Date.parse(value.registrationBatch)) || new Date(value.registrationBatch).toISOString().slice(0, 10) !== value.registrationBatch)) fail("VALIDATION_ERROR", "登记批次日期无效", 400);
-  }
-}
-async function findImportMatch(tx: Tx, values: Row) {
-  const matches = await rows(tx, "SELECT * FROM style_selections WHERE btrim(xuti_style_no)=$1", values.xutiStyleNo);
-  if (matches.length > 1) fail("VALIDATION_ERROR", `系统中款号「${values.xutiStyleNo}」有多条记录，请先核对`, 400);
-  const before = matches[0];
-  validateImageColors(values.images ?? before?.images ?? [], values.color ?? before?.color);
-  return before;
-}
-export async function previewImport(c: Context, input: unknown) {
-  const body = parse(z.object({ rows: z.array(z.record(z.string(), z.unknown())).min(1).max(500) }).strict(), input);
-  const values = body.rows.map(importPatch); distinctStyles(values);
-  const plan = [];
-  for (const value of values) {
-    const before = await findImportMatch(db, value);
-    if(before)protection.assertFields(await protection.policy(db),c,before,["xutiStyleNo"],false);
-    await protection.preflight(c,before?String(before.id):undefined,value);
-    plan.push({ values: value, id: before ? String(before.id) : null, expectedUpdatedAt: before ? new Date(before.updated_at).toISOString() : null });
-  }
-  return { rows: plan, created: plan.filter(row => !row.id).length, updated: plan.filter(row => row.id).length };
-}
-export async function commitImport(c: Context, input: unknown) {
-  const body = parse(z.object({ rows: z.array(importPlan).min(1).max(500) }).strict(), input);
-  const patches = body.rows.map(row => importPatch(row.values)); distinctStyles(patches);
-  for(const [index,patch] of patches.entries())await protection.preflight(c,body.rows[index].id || undefined,patch);
-  return command(c, "style-selections/import", body, async tx => {
-    if(await isArchive(tx))await rows(tx,"SELECT pg_advisory_xact_lock(91002)::text");
-    await protection.writeLocks(tx,c);
-    // Matching and writes must be atomic, including concurrently created styles.
-    await tx.$executeRawUnsafe("LOCK TABLE style_selections IN SHARE ROW EXCLUSIVE MODE");
-    let created = 0, updated = 0;
-    for (const [index, values] of patches.entries()) {
-      const planned = body.rows[index], before = await findImportMatch(tx, values);
-      if ((before ? String(before.id) : null) !== planned.id || (before ? new Date(before.updated_at).toISOString() : null) !== planned.expectedUpdatedAt)
-        fail("EDIT_CONFLICT", `款号「${values.xutiStyleNo}」在预览后已变更，请重新导入核对；整批未写入`, 409);
-      await persist(tx, c, values, before ? String(before.id) : undefined);
-      if (before) updated++; else created++;
-    }
-    return { created, updated };
-  });
-}
+export { previewImport, commitImport } from "./import.js";
 
 export async function sharedView(c: Context) {
   return db.$transaction(async tx => {

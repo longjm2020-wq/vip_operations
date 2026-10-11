@@ -1,5 +1,6 @@
 import type ExcelJS from "exceljs";
 import { selectionRowHasContent } from "../../../packages/contracts/src/selection-trailing-row.js";
+import { selectionImportHeader, selectionImportTemplateFields } from "../../../packages/contracts/src/selection-import-template.js";
 
 type Row = Record<string, any>;
 export const selectionSheetColumns = [
@@ -34,7 +35,14 @@ export async function createSelectionWorkbook(records: Row[] = [], template = fa
   const { Workbook } = (await import("exceljs")).default;
   const book = new Workbook();
   const sheet = book.addWorksheet("选款资料");
-  sheet.columns = selectionSheetColumns.filter(([key]) => !template || key !== "registrationBatch").map(([key, header]) => ({ key, header, width: key === "material" ? 32 : 20, style: { numFmt: "@" } }));
+  const columns = template
+    ? selectionImportTemplateFields.map(field => ({ key: field.builtinKey || `field:${field.label}`, header: field.label }))
+    : selectionSheetColumns.map(([key, header]) => ({ key, header }));
+  sheet.columns = columns.map(({ key, header }) => ({ key, header, width: key === "material" ? 32 : 20, style: { numFmt: "@" } }));
+  if (template) {
+    sheet.getCell("A1").note = "系统只读字段。新款由服务器记录创建时间，填写此列不会修改已有款创建时间。";
+    sheet.getCell("C1").note = "必填。按序缇款号匹配已有款；可仅保留序缇款号及需要更新的字段列。";
+  }
   const pictures = book.addWorksheet("图片明细");
   pictures.columns = [{ key: "style", header: "序缇款号", width: 24 }, { key: "color", header: "颜色", width: 18 }, { key: "url", header: "图片URL", width: 70 }].map(c => ({ ...c, style: { numFmt: "@" } }));
   const labels = book.addWorksheet("洗唛吊牌图明细");
@@ -46,7 +54,7 @@ export async function createSelectionWorkbook(records: Row[] = [], template = fa
     const style = String(record.xutiStyleNo ?? "").trim();
     if (codes.has(style)) throw Error(`序缇款号「${style}」存在多条记录，请勾选唯一款式后导出`);
     codes.add(style);
-    const values = Object.fromEntries(selectionSheetColumns.map(([key]) => [key, key === "images" ? (record.images?.length ? "见图片明细" : "") : key === "labelImages" ? (record.labelImages?.length ? "见洗唛吊牌图明细" : "") : key === "registrationBatch" ? String(record[key] || "").slice(0, 10) : String(record[key] ?? "")]));
+    const values = Object.fromEntries(columns.map(({ key, header }) => [key, key === "images" ? (record.images?.length ? "见图片明细" : "") : key === "labelImages" ? (record.labelImages?.length ? "见洗唛吊牌图明细" : "") : key === "registrationBatch" ? (template ? "" : String(record[key] || "").slice(0, 10)) : String(key.startsWith("field:") ? record.fieldValues?.[header] ?? "" : record[key] ?? "")]));
     values.xutiStyleNo = style;
     sheet.addRow(values);
     for (const image of record.images || []) {
@@ -76,9 +84,11 @@ export async function createSelectionWorkbook(records: Row[] = [], template = fa
   notes.getColumn(1).width = 110;
   notes.addRows([
     ["一行一款，以序缇款号匹配；款号必填，保留文本格式（包括前导零）。"],
-    ["已有款更新、新款新增。空白字段保留原值，不用于清空；表内或系统中同款重复时请先核对。"],
-    ["创建时间由服务器自动记录，不可填写或通过导入修改；旧模板中的登记批次仍可兼容导入，但不改变创建时间。"],
-    ["颜色、尺码用 / 分隔；金额为非负数字，最多两位小数。"],
+    ["已有款由用户选择覆盖更新或跳过不覆盖，新款新增。覆盖仅更新文件中已填写的字段；空白和未提供的字段保留原值，不用于清空。"],
+    ["创建时间为系统只读字段，由服务器自动记录；填写此列不会修改创建时间。旧模板中的登记批次仍可兼容导入，但不改变创建时间。"],
+    ["可仅保留「序缇款号」加任意一列或多列进行针对性更新。序缇款号必填，文件内同款重复会阻止导入。"],
+    ["可添加自定义表头（1至40个字符，文件最多500列），新自定义字段默认排在模板默认字段之后；已有同名可见字段按其设置校验，重名或无权限请先核对。"],
+    ["供应商颜色、尺码用 / 分隔；金额为非负数字，最多两位小数，数值0会正常导入。"],
     ["多图在「图片明细」中逐图填写序缇款号、颜色、图片URL；图片颜色必须在该款颜色字段中。"],
     ["也可在主表图片列逐行填写「颜色 | https://图片地址」；不填颜色时可仅填网址。"],
     ["图片明细与主表图片不能同时填写同款；填写图片将替换该款原图片，留空则保留。"],
@@ -86,7 +96,7 @@ export async function createSelectionWorkbook(records: Row[] = [], template = fa
     ["系统内图片地址须登录同一系统查看。旧版内嵌图片自动保存在隐藏工作表中，请保留该表。"],
     ["仅支持本模板的数据与图片地址，不解析 Excel 浮动图片。公式请先粘贴为值。"],
     ["每次导入最多 500 款、文件 20 MB；导入预览确认后整批写入，冲突则整批不写入。"],
-    ["自定义列、单元格填色和列布局不包含在此模板中；更新时保留系统现有设置。"],
+    ["单元格填色和列布局不从文件导入，更新时保留系统现有设置；仅填写创建时间却未填款号也会提示缺少序缇款号，完全空白行会自动忽略。"],
   ]);
   return book;
 }
@@ -109,12 +119,22 @@ export async function parseSelectionWorkbook(buffer: ArrayBuffer) {
   const book = new Workbook(); await book.xlsx.load(buffer);
   const sheet = book.getWorksheet("选款资料");
   if (!sheet) throw Error("缺少「选款资料」工作表，请使用下载的模板");
-  if (sheet.rowCount > 501 || sheet.columnCount > 30) throw Error("每次导入最多 500 款，请拆分文件并清除多余格式");
+  if (sheet.rowCount > 501) throw Error("每次导入最多 500 款，请拆分文件并清除多余格式");
+  if (sheet.columnCount > 500) throw Error("每次导入最多 500 列，请减少字段并清除多余格式");
   if (sheet.getImages().length) throw Error("请在图片明细填写图片地址，不支持 Excel 浮动图片");
-  const headers = new Map<string, number>();
-  sheet.getRow(1).eachCell((cell, index) => { const name = cellText(cell); if (headers.has(name)) throw Error(`表头「${name}」重复`); headers.set(name, index); });
-  if (!headers.has("序缇款号")) throw Error("缺少序缇款号列");
-  for (const header of headers.keys()) if (!selectionSheetColumns.some(([, label]) => label === header)) throw Error(`无法识别表头「${header}」，请使用下载的模板`);
+  const headers = new Map<string, { index: number; label: string; key?: string; readonly?: true }>();
+  for (let index = 1; index <= sheet.columnCount; index++) {
+    const name = cellText(sheet.getRow(1).getCell(index));
+    if (!name) {
+      if (Array.from({ length: Math.max(0, sheet.rowCount - 1) }, (_, offset) => sheet.getRow(offset + 2).getCell(index)).some(cell => cell.value != null && cellText(cell))) throw Error(`第 ${index} 列缺少表头`);
+      continue;
+    }
+    if (name.length > 40) throw Error(`表头「${name}」最多40个字符`);
+    const definition = selectionImportHeader(name), identity = definition?.builtinKey ? `builtin:${definition.builtinKey}` : `label:${definition?.label || name}`;
+    if (headers.has(identity)) throw Error(`表头「${name}」重复或与「${headers.get(identity)!.label}」表示同一字段`);
+    headers.set(identity, { index, label: definition?.label || name, key: definition?.builtinKey, readonly: definition?.readonly });
+  }
+  if (!headers.has("builtin:xutiStyleNo")) throw Error("缺少序缇款号列");
   const result: Row[] = [];
   const byStyle = new Map<string, Row>();
   const data = new Map<string, Map<number, string>>();
@@ -136,15 +156,21 @@ export async function parseSelectionWorkbook(buffer: ArrayBuffer) {
   };
   for (let r = 2; r <= sheet.rowCount; r++) {
     const record: Row = {};
-    for (const [key, label] of selectionSheetColumns) {
-      const index = headers.get(label); if (!index) continue;
-      let text = cellText(sheet.getRow(r).getCell(index)); if (!text || (key === "images" && text === "见图片明细") || (key === "labelImages" && text === "见洗唛吊牌图明细")) continue;
+    const fieldValues: [string, string][] = [];
+    let hasFilledCell = false;
+    for (const { index, label, key, readonly } of headers.values()) {
+      let text = cellText(sheet.getRow(r).getCell(index));
+      if (!text) continue;
+      hasFilledCell = true;
+      if (readonly || (key === "images" && text === "见图片明细") || (key === "labelImages" && text === "见洗唛吊牌图明细")) continue;
+      if (!key) { fieldValues.push([label, text]); continue; }
       if (priceKeys.has(key)) { text = text.replace(/[￥¥,，\s]/g, ""); if (!/^\d{1,10}(\.\d{1,2})?$/.test(text)) throw Error(`第 ${r} 行${label}应为非负金额，最多两位小数`); }
       if (key === "registrationBatch" && (!/^\d{4}-\d{2}-\d{2}$/.test(text) || !Number.isFinite(Date.parse(text)) || new Date(text).toISOString().slice(0, 10) !== text)) throw Error(`第 ${r} 行日期应为有效的 YYYY-MM-DD`);
       if (key === "color" || key === "sizeRange") text = [...new Set(text.split("/").map(v => v.trim()).filter(Boolean))].join("/");
       record[key] = key === "images" ? text.split(/\r?\n/).filter(Boolean).map(line => { const i = line.indexOf(" | "); return imageValue(i < 0 ? "" : line.slice(0, i), i < 0 ? line.trim() : line.slice(i + 3).trim()); }) : key === "labelImages" ? text.split(/\r?\n/).filter(Boolean).map(line => imageValue("", line.trim())) : text;
     }
-    if (!Object.keys(record).length) continue;
+    if (!hasFilledCell) continue;
+    if (fieldValues.length) record.fieldValues = Object.fromEntries(fieldValues);
     if (!record.xutiStyleNo) throw Error(`第 ${r} 行缺少序缇款号`);
     if (byStyle.has(record.xutiStyleNo)) throw Error(`序缇款号「${record.xutiStyleNo}」在文件中重复`);
     result.push(record); byStyle.set(record.xutiStyleNo, record);

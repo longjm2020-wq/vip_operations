@@ -1,0 +1,225 @@
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { PGlite } from "@electric-sql/pglite";
+import type { Context } from "../../apps/api/src/core.js";
+import type { Row, Tx } from "../../packages/database/src/index.js";
+import { selectionScope } from "../../packages/database/src/selection-scope.js";
+import { defaultProtection } from "../../packages/contracts/src/selection-protection.js";
+import { selectionBaseFields } from "../../packages/contracts/src/selection-migration.js";
+import { selectionLayoutSchema, type SelectionField } from "../../packages/contracts/src/selection-layout.js";
+import { archiveFieldIds } from "../../packages/contracts/src/product-archive.js";
+
+const fixture = vi.hoisted(() => ({ database: null as PGlite | null, archive: false, mirrors: [] as Row[] }));
+vi.mock("../../packages/database/src/index.js", async importOriginal => {
+  const original = await importOriginal<typeof import("../../packages/database/src/index.js")>();
+  const wrap = (database: Pick<PGlite, "query">) => ({
+    $queryRawUnsafe: async (sql: string, ...parameters: unknown[]) => (await database.query(sql, parameters)).rows,
+    $executeRawUnsafe: async (sql: string, ...parameters: unknown[]) => (await database.query(sql, parameters)).affectedRows || 0,
+  }) as unknown as Tx;
+  const database = {
+    $queryRawUnsafe: async (sql: string, ...parameters: unknown[]) => (await fixture.database!.query(sql, parameters)).rows,
+    $transaction: async (work: (tx: Tx) => Promise<unknown>) => fixture.database!.transaction(async transaction => {
+      if (selectionScope.getStore()) await transaction.query(`SET LOCAL search_path TO "selection_table_${selectionScope.getStore()}", public`);
+      return work(wrap(transaction));
+    }),
+  };
+  return { ...original, db: database };
+});
+vi.mock("../../apps/api/src/modules/style-selections/archive.js", () => ({
+  isArchive: async () => fixture.archive,
+  mirrorArchiveRow: async (_tx: Tx, _c: Context, row: Row) => { fixture.mirrors.push(row); },
+}));
+
+import { previewImport, commitImport } from "../../apps/api/src/modules/style-selections/service.js";
+
+const actor = (key = "import"): Context => ({ actor: { id: "7", username: "editor", displayName: "Editor", permissions: ["selection.read", "selection.manage", "product.read", "product.update", "product.create"], roleCodes: [] }, requestId: "import-test", key });
+const input = (rows: Row[], existingStrategy: "OVERWRITE" | "SKIP" = "OVERWRITE") => ({ rows, existingStrategy });
+const payload = (plan: Awaited<ReturnType<typeof previewImport>>) => ({ rows: plan.rows, fields: plan.fields, fieldRevision: plan.fieldRevision, layoutRevision: plan.layoutRevision, existingStrategy: plan.existingStrategy });
+const read = async (sql: string, parameters: unknown[] = []) => (await fixture.database!.query<Row>(sql, parameters)).rows;
+const field = (label: string, type: SelectionField["type"] = "text", options?: string[]): SelectionField => ({ key: "custom:" + label.charCodeAt(0), label, custom: true, width: 100, type, ...(options ? { options } : {}) });
+async function register(definition: SelectionField, owner = "7", visibility = "PRIVATE") {
+  await fixture.database!.query(`INSERT INTO selection_field_registry(workspace_key,field_key,owner_id,visibility,definition) VALUES('default',$1,$2,$3,$4)`, [definition.key, owner, visibility, JSON.stringify(definition)]);
+}
+async function style(no = "EXIST", data: Row = {}) {
+  const saved = (await read("INSERT INTO style_selections(xuti_style_no,material,supplier_code,extra_fields,claimed_by,images) VALUES($1,$2,$3,$4,$5,$6) RETURNING *", [no, data.material || "原成分", data.supplierCode || "原编码", JSON.stringify(data.extraFields || {}), data.claimedBy || null, JSON.stringify(data.images || [])]))[0];
+  return saved;
+}
+async function settings(value: Row) { await fixture.database!.query("UPDATE style_selection_protection SET settings=$1,revision=revision+1", [JSON.stringify({ ...defaultProtection, ...value })]); }
+const conflict = { status: 409, response: { error: { code: "EDIT_CONFLICT" } } };
+const forbidden = { status: 403, response: { error: { code: "REGION_FORBIDDEN" } } };
+
+beforeAll(async () => {
+  fixture.database = new PGlite();
+  await fixture.database.exec(`
+    CREATE TABLE users(id bigint PRIMARY KEY,display_name text,username text);
+    INSERT INTO users VALUES(7,'Editor','editor'),(8,'Other','other');
+    CREATE TABLE project_tables(id bigint PRIMARY KEY,initial_layout text,system_key text);
+    INSERT INTO project_tables VALUES(23,'empty','PRODUCT_ARCHIVE');
+    CREATE TABLE products(id bigint PRIMARY KEY,style_no text,custom_fields jsonb DEFAULT '{}',tag_price numeric,main_image_url text,updated_at timestamptz DEFAULT now(),created_at timestamptz DEFAULT now());
+    CREATE TABLE product_fields(id text,name text,type text,options jsonb DEFAULT '[]',active boolean DEFAULT true,created_at timestamptz DEFAULT now());
+    CREATE TABLE style_selection_protection(id integer PRIMARY KEY,settings jsonb,revision integer DEFAULT 1);
+    CREATE TABLE style_selections(
+      id bigserial PRIMARY KEY,registration_batch date,images jsonb DEFAULT '[]',label_images jsonb DEFAULT '[]',
+      cell_colors jsonb DEFAULT '{}',cell_alignments jsonb DEFAULT '{}',cell_vertical_alignments jsonb DEFAULT '{}',cell_text_colors jsonb DEFAULT '{}',cell_number_formats jsonb DEFAULT '{}',extra_fields jsonb DEFAULT '{}',
+      xuti_style_no text,supplier_style_no text,supplier_code text,color text,size_range text,material text,
+      supply_price_excl_tax numeric,vip_price numeric,live_price numeric,tag_price numeric,selling_points text,reorder_days integer,collection_inventory jsonb DEFAULT '[]',
+      sort_order integer DEFAULT 0,row_color text DEFAULT 'NONE',created_by bigint DEFAULT 7,updated_by bigint DEFAULT 7,version integer DEFAULT 1,
+      created_at timestamptz DEFAULT now(),updated_at timestamptz DEFAULT now(),cell_owners jsonb DEFAULT '{}',claimed_by bigint,
+      migration_locked boolean DEFAULT false,migration_target_workspace text,migration_target_row_id bigint,migrated_at timestamptz,product_id bigint
+    );
+    CREATE TABLE selection_field_registry(workspace_key text,table_id bigint,field_key text,owner_id bigint,visibility text,definition jsonb,revision integer DEFAULT 1,updated_at timestamptz DEFAULT now(),PRIMARY KEY(workspace_key,field_key));
+    CREATE TABLE selection_layout_preferences(user_id bigint,workspace_key text,table_id bigint,preferences jsonb,revision integer DEFAULT 1,updated_at timestamptz DEFAULT now(),PRIMARY KEY(user_id,workspace_key));
+    CREATE TABLE selection_shared_layouts(workspace_key text PRIMARY KEY,preferences jsonb,revision integer DEFAULT 1);
+    CREATE TABLE selection_shared_fields(workspace_key text PRIMARY KEY,fields jsonb,revision integer DEFAULT 1);
+    CREATE TABLE idempotency_records(id bigserial,actor_id bigint,operation text,idempotency_key text,request_hash text,response_status integer,response_body jsonb);
+    CREATE TABLE audit_logs(id bigserial,actor_id bigint,actor_label text,action text,entity_type text,entity_id text,request_id text,before_data jsonb,after_data jsonb,reason text,selection_table_id bigint);
+    CREATE SCHEMA selection_table_23;
+    CREATE TABLE selection_table_23.style_selections(LIKE public.style_selections INCLUDING ALL);
+    CREATE TABLE selection_table_23.style_selection_protection(LIKE public.style_selection_protection INCLUDING ALL);
+    CREATE FUNCTION public.sync_product_archive_record(p products,table_id bigint,actor_id bigint) RETURNS text LANGUAGE plpgsql AS $$
+    BEGIN INSERT INTO selection_table_23.style_selections(xuti_style_no,product_id,material,color,created_by) VALUES(p.style_no,p.id,coalesce(p.custom_fields->>'f0000000000000000000000000000000e','产品原成分'),p.custom_fields->>'f00000000000000000000000000000003',actor_id); RETURN 'ok'; END $$;
+  `);
+}, 30000);
+beforeEach(async () => {
+  fixture.archive = false; fixture.mirrors = [];
+  await fixture.database!.exec(`TRUNCATE style_selections,selection_field_registry,selection_layout_preferences,selection_shared_layouts,selection_shared_fields,idempotency_records,audit_logs,products,product_fields,style_selection_protection,selection_table_23.style_selections,selection_table_23.style_selection_protection RESTART IDENTITY`);
+  await fixture.database!.query("INSERT INTO style_selection_protection(id,settings) VALUES(1,$1)", [JSON.stringify(defaultProtection)]);
+  await fixture.database!.query("INSERT INTO selection_table_23.style_selection_protection(id,settings) VALUES(1,$1)", [JSON.stringify(defaultProtection)]);
+});
+afterAll(async () => { await fixture.database?.close(); });
+
+describe("atomic Excel style import", () => {
+  it("updates only provided nonblank columns, including zero, while retaining extras and creation time", async () => {
+    const existing = field("短标题"), untouched = field("备注");
+    await register(existing); await register(untouched);
+    const before = await style("EXIST", { extraFields: { [existing.key]: "原标题", [untouched.key]: "保留备注" } });
+    const plan = await previewImport(actor(), input([{ xutiStyleNo: "EXIST", vipPrice: "0", supplierCode: "", material: null, fieldValues: { 短标题: "新标题", 创建时间: "1900-01-01" } }]));
+    expect(plan.rows[0].changedFields).toEqual(expect.arrayContaining(["唯品价", "短标题"]));
+    expect(plan.rows[0].values).not.toHaveProperty("fieldValues.创建时间");
+    expect(await commitImport(actor(), payload(plan))).toMatchObject({ created: 0, updated: 1, skipped: 0, fieldsCreated: 0 });
+    const after = (await read("SELECT * FROM style_selections"))[0];
+    expect(after.vip_price).toBe("0"); expect(after.material).toBe("原成分"); expect(after.supplier_code).toBe("原编码");
+    expect(after.extra_fields).toEqual({ [existing.key]: "新标题", [untouched.key]: "保留备注" });
+    expect(after.created_at).toEqual(before.created_at);
+  });
+  it("SKIP preserves matched records and never registers or publishes fields from skipped rows", async () => {
+    const before = await style();
+    const plan = await previewImport(actor(), input([{ xutiStyleNo: "EXIST", material: "替换", fieldValues: { 新字段: "不会写" } }], "SKIP"));
+    expect(plan.fields).toEqual([]); expect(plan.rows[0].operation).toBe("SKIP");
+    expect(await commitImport(actor(), payload(plan))).toMatchObject({ created: 0, updated: 0, skipped: 1, fieldsCreated: 0 });
+    expect((await read("SELECT * FROM style_selections"))[0]).toEqual(before);
+    expect(await read("SELECT * FROM selection_field_registry")).toEqual([]);
+    expect(await read("SELECT * FROM selection_layout_preferences")).toEqual([]);
+    expect(await read("SELECT * FROM audit_logs")).toEqual([]);
+  });
+  it("creates private fields atomically in template order, appending them without moving existing columns", async () => {
+    const initial = selectionLayoutSchema.parse({ columns: [selectionBaseFields[3], selectionBaseFields[0]] });
+    await fixture.database!.query("INSERT INTO selection_layout_preferences(user_id,workspace_key,preferences,revision) VALUES(7,'default',$1,4)", [JSON.stringify(initial)]);
+    const plan = await previewImport(actor(), input([{ xutiStyleNo: "NEW", fieldValues: { 用户备注: "甲", 短标题: "短", 安全类别: "B类", 长标题: "长" } }]));
+    expect(plan.fields.map(item => item.label)).toEqual(["序缇款号", "安全类别", "长标题", "短标题", "用户备注"]);
+    expect(await read("SELECT * FROM selection_field_registry")).toEqual([]);
+    expect(await commitImport(actor(), payload(plan))).toMatchObject({ created: 1, updated: 0, fieldsCreated: 4 });
+    const registry = await read("SELECT * FROM selection_field_registry");
+    expect(registry.every(item => item.visibility === "PRIVATE" && item.owner_id === 7)).toBe(true);
+    const saved = (await read("SELECT * FROM selection_layout_preferences"))[0];
+    expect(saved.revision).toBe(5);
+    expect(saved.preferences.columns.map((item: SelectionField) => item.label)).toEqual(["序缇款号", "创建时间", "安全类别", "长标题", "短标题", "用户备注"]);
+    expect(await read("SELECT * FROM selection_shared_layouts")).toEqual([]);
+    expect(await read("SELECT * FROM selection_shared_fields")).toEqual([]);
+    expect(await commitImport(actor(), payload(plan))).toMatchObject({ created: 1, fieldsCreated: 4 });
+    expect(await read("SELECT * FROM style_selections")).toHaveLength(1);
+  });
+  it("rolls back rows, new fields, layout and audits if a later row violates row claims", async () => {
+    await settings({ claimsEnabled: true });
+    const plan = await previewImport(actor(), input([{ xutiStyleNo: "A", fieldValues: { 新字段: "一" } }, { xutiStyleNo: "B", fieldValues: { 新字段: "二" } }]));
+    await expect(commitImport(actor(), payload(plan))).rejects.toMatchObject({ status: 409, response: { error: { code: "ROW_CLAIMED" } } });
+    for (const table of ["style_selections", "selection_field_registry", "selection_layout_preferences", "audit_logs", "idempotency_records"]) expect(await read(`SELECT * FROM ${table}`)).toEqual([]);
+  });
+  it("adds imported built-in columns to an empty project layout, preserving template order before custom fields", async () => {
+    await selectionScope.run("23", async () => {
+      await expect(previewImport(actor("too-many-images"), input([{ xutiStyleNo: "INVALID-IMAGES", images: Array.from({ length: 31 }, (_, index) => ({ id: String(index), url: `https://example.com/${index}.jpg` })) }]))).rejects.toMatchObject({ status: 400 });
+      const plan = await previewImport(actor(), input([{ xutiStyleNo: "EMPTY-PROJECT", material: "棉", vipPrice: "0", fieldValues: { 用户备注: "新列" } }]));
+      expect(plan.fields.filter(field => !field.isNew).map(field => field.label)).toEqual(["序缇款号", "成分", "唯品价"]);
+      expect(await commitImport(actor(), payload(plan))).toMatchObject({ created: 1, fieldsCreated: 1 });
+      const layout = (await read("SELECT preferences FROM selection_layout_preferences WHERE workspace_key='23'"))[0].preferences;
+      expect(layout.columns.map((column: SelectionField) => column.label)).toEqual(["序缇款号", "成分", "唯品价", "用户备注"]);
+      expect((await read("SELECT * FROM selection_table_23.style_selections"))[0]).toMatchObject({ xuti_style_no: "EMPTY-PROJECT", material: "棉", vip_price: "0" });
+    });
+    expect(await read("SELECT * FROM public.style_selections")).toEqual([]);
+  });
+  it("rejects stale row, layout and field snapshots before changing any records", async () => {
+    await style();
+    const plan = await previewImport(actor(), input([{ xutiStyleNo: "EXIST", fieldValues: { 新字段: "一" } }]));
+    await fixture.database!.query("UPDATE style_selections SET updated_at=updated_at+interval '1 second',version=version+1");
+    await expect(commitImport(actor(), payload(plan))).rejects.toMatchObject(conflict);
+    expect(await read("SELECT * FROM selection_field_registry")).toEqual([]);
+    const second = await previewImport(actor("second"), input([{ xutiStyleNo: "EXIST", fieldValues: { 新字段: "二" } }]));
+    await settings({ enabled: true });
+    await expect(commitImport(actor("second"), payload(second))).rejects.toMatchObject(conflict);
+    const third = await previewImport(actor("third"), input([{ xutiStyleNo: "EXIST", fieldValues: { 新字段: "三" } }]));
+    await fixture.database!.query("INSERT INTO selection_layout_preferences(user_id,workspace_key,preferences) VALUES(7,'default',$1)", [JSON.stringify(selectionLayoutSchema.parse({ columns: selectionBaseFields }))]);
+    await expect(commitImport(actor("third"), payload(third))).rejects.toMatchObject(conflict);
+    expect(await read("SELECT * FROM selection_field_registry")).toEqual([]);
+  });
+  it("does not bypass foreign private, hidden, protected or claimed cells by creating same-name fields", async () => {
+    const privateField = field("长标题"); await register(privateField, "8"); await style();
+    await expect(previewImport(actor(), input([{ xutiStyleNo: "EXIST", fieldValues: { 长标题: "秘密" } }]))).rejects.toMatchObject(forbidden);
+    await fixture.database!.exec("DELETE FROM selection_field_registry");
+    await register(privateField, "7", "PUBLIC");
+    const initial = selectionLayoutSchema.parse({ columns: [...selectionBaseFields, privateField], hiddenColumns: [privateField.key] });
+    await fixture.database!.query("INSERT INTO selection_layout_preferences(user_id,workspace_key,preferences) VALUES(7,'default',$1)", [JSON.stringify(initial)]);
+    await expect(previewImport(actor(), input([{ xutiStyleNo: "EXIST", fieldValues: { 长标题: "隐藏" } }]))).rejects.toMatchObject(forbidden);
+    await fixture.database!.exec("DELETE FROM selection_layout_preferences");
+    await settings({ enabled: true, regions: [{ id: "123e4567-e89b-42d3-a456-426614174000", name: "Locked", scope: "columns", rowIds: [], columnKeys: [privateField.key], users: {}, others: "read" }] });
+    await expect(previewImport(actor(), input([{ xutiStyleNo: "EXIST", fieldValues: { 长标题: "受保护" } }]))).rejects.toMatchObject(forbidden);
+    await settings({ claimsEnabled: true });
+    await fixture.database!.exec("UPDATE style_selections SET claimed_by=8");
+    await expect(previewImport(actor(), input([{ xutiStyleNo: "EXIST", material: "他人认领" }]))).rejects.toMatchObject(forbidden);
+    expect(await read("SELECT * FROM selection_field_registry")).toHaveLength(1);
+    expect(await read("SELECT * FROM audit_logs")).toEqual([]);
+  });
+  it("uses existing choices, image limits and text caps without splitting literal slashes", async () => {
+    const single = field("三级类目", "single", ["女士皮衣/皮草", "女式外套"]);
+    const multiple = field("整改", "multiple", ["换洗唛/吊牌", "缝领标"]);
+    const text = { ...field("短标题"), textConfig: { countMode: "han" as const, maxLength: 2 } };
+    const image = { ...field("证据图", "image"), imageConfig: { colors: false, links: true, upload: true, mobile: true, max: 1 } };
+    for (const definition of [single, multiple, text, image]) await register(definition);
+    const plan = await previewImport(actor(), input([{ xutiStyleNo: "NEW", fieldValues: { 三级类目: "女士皮衣/皮草", 整改: '["换洗唛/吊牌","缝领标"]', 短标题: "好看", 证据图: "https://example.com/one.jpg" } }]));
+    await commitImport(actor(), payload(plan));
+    const stored = (await read("SELECT extra_fields FROM style_selections"))[0].extra_fields;
+    expect(stored[single.key]).toBe("女士皮衣/皮草");
+    expect(stored[multiple.key]).toBe('@choices//v1:["换洗唛/吊牌","缝领标"]');
+    expect(JSON.parse(stored[image.key])).toHaveLength(1);
+    await expect(previewImport(actor("invalid"), input([{ xutiStyleNo: "NEW", fieldValues: { 短标题: "三个字" } }]))).rejects.toMatchObject({ status: 400 });
+    await expect(previewImport(actor("invalid"), input([{ xutiStyleNo: "NEW", fieldValues: { 三级类目: "不存在" } }]))).rejects.toMatchObject({ status: 400 });
+    await expect(previewImport(actor("invalid"), input([{ xutiStyleNo: "NEW", fieldValues: { 证据图: "https://example.com/1.jpg\nhttps://example.com/2.jpg" } }]))).rejects.toMatchObject({ status: 400 });
+  });
+  it("recognizes actual archive products even before their sheet row is synchronized", async () => {
+    fixture.archive = true;
+    await fixture.database!.query("INSERT INTO products(id,style_no) VALUES(99,'MASTER')");
+    await selectionScope.run("23", async () => {
+      const skip = await previewImport(actor(), input([{ xutiStyleNo: "MASTER", fieldValues: { 长标题: "未写入" } }], "SKIP"));
+      expect(skip.rows[0]).toMatchObject({ productId: "99", operation: "SKIP" });
+      await commitImport(actor(), payload(skip));
+      expect(await read("SELECT * FROM selection_table_23.style_selections")).toEqual([]);
+      const plan = await previewImport(actor("update"), input([{ xutiStyleNo: "MASTER", supplierCode: "新编码" }]));
+      expect(plan.updated).toBe(1);
+      await commitImport(actor("update"), payload(plan));
+      const saved = (await read("SELECT * FROM selection_table_23.style_selections"))[0];
+      expect(saved.product_id).toBe(99); expect(saved.supplier_code).toBe("新编码"); expect(saved.material).toBe("产品原成分");
+    });
+    expect(await read("SELECT * FROM public.style_selections")).toEqual([]);
+  });
+  it("checks an unsynchronized existing product as an update and preserves its color for an image-only patch", async () => {
+    fixture.archive = true;
+    await fixture.database!.query("INSERT INTO products(id,style_no,custom_fields) VALUES(99,'MASTER',$1)", [JSON.stringify({ [archiveFieldIds.composition]: "产品成分", [archiveFieldIds.customColor]: "红色" })]);
+    const policy = { ...defaultProtection, enabled: true, regions: [{ id: "123e4567-e89b-42d3-a456-426614174000", name: "Material readonly", scope: "columns", rowIds: [], columnKeys: ["material"], users: {}, others: "read" }] };
+    await fixture.database!.query("UPDATE selection_table_23.style_selection_protection SET settings=$1,revision=revision+1", [JSON.stringify(policy)]);
+    await selectionScope.run("23", async () => {
+      const plan = await previewImport(actor(), input([{ xutiStyleNo: "MASTER", images: [{ id: "red", url: "https://example.com/red.jpg", color: "红色" }] }]));
+      expect(plan.rows[0]).toMatchObject({ id: null, operation: "UPDATE", changedFields: ["图片"] });
+      expect(await commitImport(actor(), payload(plan))).toMatchObject({ created: 0, updated: 1 });
+      const saved = (await read("SELECT * FROM selection_table_23.style_selections"))[0];
+      expect(saved).toMatchObject({ material: "产品成分", color: "红色", images: [{ id: "red", url: "https://example.com/red.jpg", color: "红色" }] });
+    });
+  });
+});

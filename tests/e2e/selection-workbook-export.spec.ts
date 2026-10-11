@@ -1,7 +1,7 @@
 import { expect, test, type Download, type Page } from "@playwright/test";
 import Excel from "exceljs";
 import { selectionLayoutSchema, type SelectionLayout } from "../../packages/contracts/src/selection-layout.js";
-import { selectionSheetColumns } from "../../apps/web/src/selection-workbook.js";
+import { selectionImportTemplateFields } from "../../packages/contracts/src/selection-import-template.js";
 
 const rowValues = (row: Excel.Row) => Array.isArray(row.values) ? row.values.slice(1) : [];
 type ExportRow = Record<string, unknown> & { id: string };
@@ -70,7 +70,7 @@ async function fixture(page: Page, initialRows: ExportRow[], initialPreferences?
     await route.fulfill({ json: { data } });
   });
   await page.goto("/products");
-  await expect(page.getByRole("heading", { name: "商品档案", exact: true })).toBeVisible();
+  await expect(page.locator(".selection-card")).toBeVisible();
   await expect(page.locator("tr[data-selection-row]")).toHaveCount(initialRows.length);
   await expect(page.getByRole("button", { name: "导出", exact: true })).toBeEnabled();
   return {
@@ -223,7 +223,8 @@ test("导入下载模板保持标准固定字段，不受当前表格自定义�
   await book.xlsx.readFile((await download.path())!);
   expect(download.suggestedFilename()).toBe("选款登记导入模板.xlsx");
   expect(book.getWorksheet("选款资料")!.rowCount).toBe(1);
-  expect(rowValues(book.getWorksheet("选款资料")!.getRow(1))).toEqual(selectionSheetColumns.map(([, label]) => label));
+  expect(rowValues(book.getWorksheet("选款资料")!.getRow(1))).toEqual(selectionImportTemplateFields.map(({ label }) => label));
+  expect(JSON.stringify(book.getWorksheet("选款资料")!.getCell("A1").note)).toContain("系统只读字段");
   expect(book.getWorksheet("表格资料")).toBeUndefined();
   expect(state.syncRequests.length).toBe(syncCount);
   expect(state.writes).toEqual([]);

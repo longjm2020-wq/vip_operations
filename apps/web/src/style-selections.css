@@ -605,6 +605,10 @@
 .selection-import-guide { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; padding: 14px 16px; margin: 16px 0; background: #fff5eb; border-radius: 6px; }
 .selection-import-guide > span { flex: 1; min-width: 200px; color: #78604d; }
 .selection-import-upload .ant-upload-drag-container { padding: 22px 12px; }
+.selection-import-strategy { display: flex; flex-direction: column; gap: 10px; margin-bottom: 16px; }
+.selection-import-strategy .ant-radio-group { display: flex; flex-wrap: wrap; gap: 8px 16px; }
+.selection-import-strategy p { margin: 0; color: #78604d; }
+.selection-import-file { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin: 12px 0; color: #78604d; }
 .selection-workspace-content .selection-card .ant-card-body { display: flex; flex-direction: column; height: 100%; min-height: 0; }
 .selection-workspace-content .selection-card .selection-sheet { order: 1; flex: 1; min-height: 0; max-height: none; }
 .selection-workspace-content .selection-card .selection-bulk-add { order: 2; flex: none; background: #fffaf5; }
