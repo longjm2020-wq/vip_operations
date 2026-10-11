@@ -12,6 +12,7 @@ import {
   type Tx,
 } from "../../../../../packages/database/src/index.js";
 import { selectionScope } from "../../../../../packages/database/src/selection-scope.js";
+import { assertArchiveProductTextLimits } from "../style-selections/text-limits.js";
 import {
   type Context,
   parse,
@@ -413,6 +414,8 @@ export async function importInventoryBatch(c: Context, input: unknown) {
             )
           )[0];
         if (!existingCategory) log("IMPORT_CREATE", "categories", category);
+        for (const product of newProducts.values())
+          await assertArchiveProductTextLimits(tx, { ...product, category_id: String(category.id), status: "ACTIVE" });
         const created = await insertMany(
           tx,
           "products",

@@ -39,11 +39,17 @@ import {
   canonicalizeLayout,
   registerArchiveFields,
   validateSharedFieldChanges,
+  reconcileBuiltinTextFields,
 } from "./field-registry.js";
 
 const workspaceKey = () => selectionScope.getStore() || "default";
 const tableIdOf = (workspace: string) =>
   workspace === "default" ? null : workspace;
+
+async function archiveDefinitionLock(tx: Tx, workspace: string) {
+  if (workspace !== "default" && (await one(tx, "SELECT system_key FROM public.project_tables WHERE id=$1::bigint", workspace))?.system_key === "PRODUCT_ARCHIVE")
+    await rows(tx, "SELECT pg_advisory_xact_lock(91002)::text");
+}
 
 async function workspaceLock(tx: Tx, workspace: string) {
   await rows(
@@ -305,6 +311,7 @@ export async function saveLayoutPreferences(
       fail("VALIDATION_ERROR", "发布共享设置需要当前版本，请重新读取表格", 400);
   }
   await command(c, "selection.layout-preferences", body, async (tx) => {
+    await archiveDefinitionLock(tx, workspace);
     await workspaceLock(tx, workspace);
     await personalLock(tx, c, workspace);
     const before = await one(
@@ -375,11 +382,13 @@ export async function initializeSharedLayout(c: Context) {
   requirePermission(c.actor, "selection.manage");
   const workspace = workspaceKey();
   await command(c, "selection.layout-initialize", {}, async (tx) => {
+    await archiveDefinitionLock(tx, workspace);
     await workspaceLock(tx, workspace);
     await personalLock(tx, c, workspace);
     const existing = await rawShared(tx, workspace, true);
     if (existing) return { revision: existing.revision };
     const source = await rawPersonal(tx, c, workspace);
+    await reconcileBuiltinTextFields(tx, source.preferences.columns);
     await registerReferencedArchiveFields(
       tx,
       c,

@@ -254,7 +254,6 @@ async function buildPlan(tx: Tx, c: Context, body: Input, lock = false) {
   const sourceLayout = await layout(tx,c,sourceKey,source.archive);
   const sourceDefinitions = new Map(sourceLayout.preferences.columns.map(field=>[field.key,field]));
   const fields = body.fields.map(field=> {
-    if (!field.key.startsWith("custom:")) return { ...field, visibility: "PUBLIC" as const };
     const saved = sourceDefinitions.get(field.key);
     if (!saved) fail("FORBIDDEN","原表字段不可查看或尚未保存",403);
     return saved;

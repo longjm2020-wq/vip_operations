@@ -2,18 +2,23 @@ import { useEffect, useRef, useState, type PointerEvent } from "react";
 import { createPortal } from "react-dom";
 import { Button } from "antd";
 import { CompressOutlined } from "@ant-design/icons";
+import type { SelectionField } from "./selection-field-types";
+import { SelectionTextLengthStatus } from "./selection-text-length";
+import { fieldTextLengthError } from "../../../packages/contracts/src/selection-field-validation";
 
 /** Modeless details follow the active cell without blocking the sheet. */
 export function SelectionTextDetail({
   title,
   value,
   editable,
+  field,
   onChange,
   onClose,
 }: {
   title: string;
   value: string;
   editable: boolean;
+  field?: SelectionField;
   onChange: (value: string) => void;
   onClose: () => void;
 }) {
@@ -130,6 +135,7 @@ export function SelectionTextDetail({
       </header>
       <textarea
         aria-label="单元格详情内容"
+        aria-invalid={!!field && !!fieldTextLengthError(field, value)}
         value={value}
         readOnly={!editable}
         onChange={(event) => {
@@ -137,6 +143,7 @@ export function SelectionTextDetail({
         }}
       />
       <footer>
+        {field && <SelectionTextLengthStatus field={field} value={value} />}
         {editable ? "修改后自动保存" : "仅查看"} · 拖动标题栏移动 · Esc 收起
       </footer>
     </section>,

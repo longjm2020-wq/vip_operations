@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { assertArchiveProductTextLimits } from "../style-selections/text-limits.js";
 import {
   customValues,
   validateCustom,
@@ -460,6 +461,8 @@ export async function persistMaster(tx: Tx, c: Context, name: Resource, b: Row, 
           ? ["ACTIVE", "STOPPED", "ARCHIVED"]
           : ["ACTIVE", "INACTIVE"],
       );
+    if (name === "products")
+      await assertArchiveProductTextLimits(tx, { ...before, ...Object.fromEntries(Object.entries(changes).map(([key, value]) => [key, key === "customFields" && typeof value === "string" ? JSON.parse(value) : value])) });
     const result = value
       ? await update(tx, r.table, value, changes)
       : await insert(tx, r.table, changes);

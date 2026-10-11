@@ -337,9 +337,9 @@ describe("shared selection layouts", () => {
       sorts: ["custom:quality", "custom:notes"],
     });
     expect(merged.columnGroups.map((group) => group.id)).toEqual([
-      "public",
       "mine",
       "mixed",
+      "public",
     ]);
     expect(merged.columnGroupId).toBe("mixed");
     expect(merged.typeCatalog).toEqual(personal.typeCatalog);
@@ -385,6 +385,46 @@ describe("shared selection layouts", () => {
       merged.columnGroups,
     );
     expect(projectSelectionSharedLayout(merged)).toEqual(shared);
+  });
+
+  it("retains private group positions when moving across public TABs and replaying saved shared definitions", () => {
+    const personal = layout({
+      columns: [...layout().columns, { key: "custom:private", label: "个人核对", width: 100, custom: true, type: "text", ownerId: "12", visibility: "PRIVATE" }],
+      columnGroups: [
+        { id: "supplier", name: "供应商信息", columnKeys: ["material"] },
+        { id: "quality", name: "质检", columnKeys: ["custom:private", "material"] },
+        { id: "other", name: "其他", columnKeys: ["custom:quality"] },
+      ], columnGroupId: "quality",
+    });
+    const shared = projectSelectionSharedLayout(personal);
+    const moved = { ...personal, columnGroups: [personal.columnGroups[1], personal.columnGroups[0], personal.columnGroups[2]] };
+    // Public relative order is unchanged: the private slot alone has moved.
+    expect(selectionSharedLayoutDelta(moved, shared)).toEqual({});
+    const saved = applySelectionSharedLayout(moved, shared);
+    expect(saved.columnGroups.map(group => group.id)).toEqual(["quality", "supplier", "other"]);
+    expect(saved.columnGroupId).toBe("quality");
+    expect(projectSelectionSharedLayout(saved)).toEqual(shared);
+    expect(applySelectionSharedLayout(saved, shared).columnGroups).toEqual(saved.columnGroups);
+  });
+
+  it("accepts new public groups while preserving private slots and omitting removed groups", () => {
+    const personal = layout({
+      columns: [...layout().columns, { key: "custom:private", label: "私有", width: 100, custom: true, type: "text", ownerId: "12", visibility: "PRIVATE" }],
+      columnGroups: [
+        { id: "old", name: "旧分组", columnKeys: ["material"] },
+        { id: "private", name: "个人分组", columnKeys: ["custom:private"] },
+      ],
+    });
+    const shared = projectSelectionSharedLayout(layout({ columnGroups: [
+      { id: "new", name: "新分组", columnKeys: ["material"] },
+      { id: "second", name: "第二分组", columnKeys: ["custom:quality"] },
+    ] }));
+    const saved = applySelectionSharedLayout(personal, shared);
+    expect(saved.columnGroups.map(group => group.id)).toEqual(["new", "private", "second"]);
+    expect(new Set(saved.columnGroups.map(group => group.id)).size).toBe(saved.columnGroups.length);
+    expect(projectSelectionSharedLayout(saved)).toEqual(shared);
+    const removedPrivate = applySelectionSharedLayout({ ...saved, columnGroups: saved.columnGroups.filter(group => group.id !== "private") }, shared);
+    expect(removedPrivate.columnGroups.map(group => group.id)).toEqual(["new", "second"]);
   });
 
   it("replaces a former private definition after the owner publishes the same field key", () => {

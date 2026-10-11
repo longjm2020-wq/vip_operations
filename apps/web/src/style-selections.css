@@ -407,6 +407,11 @@
 .selection-editor-control textarea.ant-input { height: 34px !important; min-height: 34px !important; max-height: 34px !important; overflow-y: auto !important; resize: none; }
 .selection-editor-control > input:not([type="checkbox"]) { height: 34px; box-sizing: border-box; padding: 4px 8px; font: inherit; }
 .selection-editor-control .ant-select { flex: 1; min-width: 0; }
+.selection-text-length { color: #947a68; font-size: 11px; white-space: nowrap; }
+.selection-text-length.is-error { color: #cf1322; }
+.selection-text-detail footer .selection-text-length { display: block; margin-bottom: 4px; }
+.selection-text-settings { margin: 16px 0; padding: 12px; border: 1px solid #eaded3; border-radius: 6px; }
+.selection-text-settings .ant-input-number { width: 100%; }
 .selection-editor-error { max-width: 240px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12px; color: #b42318; }
 .selection-editor-expand.ant-btn { flex: 0 0 30px; width: 30px; height: 30px; padding: 0; color: #8a6044; }
 .selection-editor-expand.ant-btn:not(:disabled):hover { color: #cf5100; background: #fff1e7; }

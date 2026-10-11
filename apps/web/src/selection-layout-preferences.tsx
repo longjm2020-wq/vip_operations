@@ -22,6 +22,7 @@ import {
 } from "../../../packages/contracts/src/selection-layout.js";
 import { useSelectionWorkspace } from "./selection-workspace";
 import { useUser } from "./shared";
+import { initialTextLimitColumns } from "./selection-text-layout";
 import {
   browserLayoutStorage,
   claimLegacyLayout,
@@ -236,13 +237,16 @@ export function useSelectionLayoutPreferences(
         const preferences = pending.preferences!;
         publish({ saving: true });
         try {
+          const firstTextColumns = pending.canEditShared && !pending.sharedPreferences
+            ? initialTextLimitColumns(preferences, committed.current?.preferences || null)
+            : undefined;
           const sharedChanges =
             pending.canEditShared && pending.sharedPreferences
               ? selectionSharedLayoutDelta(
                   preferences,
                   pending.sharedPreferences,
                 )
-              : undefined;
+              : firstTextColumns ? { columns: firstTextColumns } : undefined;
           const body = {
             preferences,
             revision: pending.revision,

@@ -1,4 +1,47 @@
 import type { SelectionField } from "./selection-layout.js";
+import { sortSelectionSizes } from "./selection-sizes.js";
+
+/** Count Unicode code points; combining marks, spaces and newlines are characters. */
+export function countTextCharacters(
+  raw: unknown,
+  countMode: "characters" | "han",
+): number {
+  const value = String(raw ?? "");
+  return countMode === "han"
+    ? (value.match(/\p{Script=Han}/gu) || []).length
+    : Array.from(value).length;
+}
+
+// These text values are trimmed by the existing API schemas / archive bridge.
+// Ordinary custom extraFields are saved verbatim and must include whitespace.
+const trimmedTextFields = new Set([
+  "xutiStyleNo", "supplierStyleNo", "supplierCode", "color", "sizeRange",
+  "material", "custom:product:name",
+]);
+export function fieldTextCount(field: SelectionField, raw: unknown): number {
+  const value = String(raw ?? "");
+  const money = /^(\d+)(?:\.(\d{1,2}))?$/.exec(value.trim());
+  const dateValue = raw instanceof Date ? raw.toISOString().slice(0, 10)
+    : /^\d{4}-\d{2}-\d{2}(?:T|$)/.test(value) ? value.slice(0, 10) : value;
+  const stored = ["supplyPriceExclTax", "vipPrice", "livePrice", "tagPrice"].includes(field.key) && money
+    ? `${money[1].replace(/^0+(?=\d)/, "")}.${(money[2] || "").padEnd(2, "0")}`
+    : field.key === "registrationBatch" ? dateValue
+    : field.key === "color" ? splitFieldTags(value).join("/")
+    : field.key === "sizeRange" ? sortSelectionSizes(value)
+    : trimmedTextFields.has(field.key) ? value.trim() : value;
+  return countTextCharacters(
+    stored,
+    field.textConfig?.countMode || "characters",
+  );
+}
+export function fieldTextLengthError(field: SelectionField, raw: unknown): string | null {
+  if ((field.type || field.fallbackType || "text") !== "text" || !field.textConfig)
+    return null;
+  const count = fieldTextCount(field, raw), { countMode, maxLength } = field.textConfig;
+  return count > maxLength
+    ? `最多${maxLength}${countMode === "han" ? "个汉字" : "个字符"}，当前${count}`
+    : null;
+}
 
 export const defaultTagConfig = {
   allowCustom: true,
@@ -66,9 +109,13 @@ export function fieldValueError(
   field: SelectionField,
   raw: unknown,
 ): string | null {
+  const lengthError = fieldTextLengthError(field, raw);
+  if (lengthError) return lengthError;
   const value = String(raw ?? "").trim();
-  if (!value) return null;
   const type = field.type || field.fallbackType || "text";
+  if (type === "text" && field.key.startsWith("custom:") && String(raw ?? "").length > 2000)
+    return "内容最多2000字";
+  if (!value) return null;
   if (type === "image") {
     try {
       const images = JSON.parse(value);

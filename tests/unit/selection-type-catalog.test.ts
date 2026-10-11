@@ -43,3 +43,15 @@ it("invalid local catalog data and duplicate names cannot break opening or creat
   expect(parsed.disabled).toEqual(["text"]);
   expect(parsed.custom).toEqual(catalog.custom);
 });
+
+it("text limits remain attached across type changes but apply only when the effective type returns to text", () => {
+  const types: FieldTypeCatalog = { disabled: [], custom: [] };
+  const limited: SelectionField = { ...field, type: "text", textConfig: { countMode: "characters", maxLength: 2 } };
+  const number = applyFieldType(limited, "number", types);
+  expect(number.textConfig).toEqual(limited.textConfig);
+  expect(fieldValueError(number, "123")).toBeNull();
+  const restored = applyFieldType(number, "text", types);
+  expect(restored.textConfig).toEqual(limited.textConfig);
+  expect(fieldValueError(restored, "123")).toBe("最多2个字符，当前3");
+  expect(limited.type).toBe("text");
+});

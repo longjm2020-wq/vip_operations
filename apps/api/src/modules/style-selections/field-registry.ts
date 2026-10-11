@@ -3,6 +3,8 @@ import { rows, one, type Tx, type Row } from "../../../../../packages/database/s
 import { selectionScope } from "../../../../../packages/database/src/selection-scope.js";
 import { selectionFieldSchema, selectionLayoutSchema, projectSelectionSharedLayout, type SelectionField, type SelectionLayout } from "../../../../../packages/contracts/src/selection-layout.js";
 import { audit, command, fail, parse, canonical, type Context } from "../../core.js";
+import { assertPersistedTextLimit } from "./text-limits.js";
+import { selectionFields } from "../../../../../packages/contracts/src/selection-protection.js";
 
 const workspaceKey = () => selectionScope.getStore() || "default";
 const superAdmin = (c: Context) => !!c.actor.roleCodes?.includes("SUPER_ADMIN");
@@ -36,13 +38,17 @@ export async function registerArchiveFields(tx: Tx, _c: Context, fields: Selecti
 export async function canonicalizeLayout(tx: Tx, c: Context, preferences: SelectionLayout, workspace = workspaceKey()): Promise<SelectionLayout> {
   const registry = await readFieldRegistry(tx, workspace), byKey = new Map(registry.map(row => [row.field_key, row]));
   const visible = (row: Row) => superAdmin(c) || row.visibility === "PUBLIC" || String(row.owner_id) === c.actor.id;
-  const columns = preferences.columns.flatMap(field => {
-    if (!field.key.startsWith("custom:")) return [{ ...definition(field), visibility: "PUBLIC" as const }];
+  const columns = preferences.columns.flatMap<SelectionField>(field => {
+    if (!field.key.startsWith("custom:")) {
+      const { textConfig: _clientLimit, ...value } = definition(field);
+      const savedLimit = byKey.get(field.key)?.definition?.textConfig;
+      return [{ ...value, ...(savedLimit ? { textConfig: savedLimit } : {}), visibility: "PUBLIC" as const }];
+    }
     const row = byKey.get(field.key);
     return row && visible(row) ? [{ ...registeredField(row), width: field.width }] : [];
   });
   const present = new Set(columns.map(field => field.key));
-  for (const row of registry) if (visible(row) && !present.has(row.field_key)) columns.push(registeredField(row));
+  for (const row of registry) if (row.field_key.startsWith("custom:") && visible(row) && !present.has(row.field_key)) columns.push(registeredField(row));
   const keys = new Set(columns.map(field => field.key)), permitted = (key: string) => !key.startsWith("custom:") || keys.has(key);
   const columnGroups = preferences.columnGroups.filter(group => group.columnKeys.every(permitted));
   return selectionLayoutSchema.parse({ ...preferences, columns,
@@ -59,6 +65,7 @@ export async function canonicalizeLayout(tx: Tx, c: Context, preferences: Select
   });
 }
 async function storeDefinition(tx: Tx, workspace: string, row: Row, field: SelectionField) {
+  await assertPersistedTextLimit(tx, field, registeredField(row));
   await rows(tx, `UPDATE public.selection_field_registry SET definition=$3::jsonb,revision=revision+1,updated_at=now()
     WHERE workspace_key=$1 AND field_key=$2`, workspace, row.field_key, JSON.stringify(definition(field)));
   if (row.visibility === "PUBLIC") await updatePublishedField(tx, workspace, { ...field, ownerId: row.owner_id ? String(row.owner_id) : undefined, visibility: "PUBLIC", fieldRevision: row.revision + 1 });
@@ -84,6 +91,7 @@ export async function reconcilePersonalFields(tx: Tx, c: Context, preferences: S
   return canonicalizeLayout(tx, c, preferences, workspace);
 }
 export async function validateSharedFieldChanges(tx: Tx, c: Context, fields: SelectionField[]) {
+  await reconcileBuiltinTextFields(tx, fields);
   const workspace = workspaceKey(), registry = new Map((await readFieldRegistry(tx, workspace)).map(row => [row.field_key, row]));
   for (const field of fields.filter(field => field.key.startsWith("custom:"))) {
     const row = registry.get(field.key);
@@ -93,6 +101,27 @@ export async function validateSharedFieldChanges(tx: Tx, c: Context, fields: Sel
     if (!row.owner_id && !c.actor.permissions.includes("selection.manage")) fail("FORBIDDEN", "没有修改公共字段的权限", 403);
     if (field.fieldRevision !== row.revision) fail("CONFLICT", "字段已被更新，请重新读取后编辑", 409);
     await storeDefinition(tx, workspace, row, field);
+  }
+}
+/** Built-in limits are shared rules; no personal layout or forged owner can change them. */
+export async function reconcileBuiltinTextFields(tx: Tx, fields: SelectionField[], workspace = workspaceKey(), onlyNew = false) {
+  const registry = new Map((await readFieldRegistry(tx, workspace)).map(row => [row.field_key, row]));
+  for (const field of fields.filter(field => !field.key.startsWith("custom:"))) {
+    const row = registry.get(field.key);
+    if (onlyNew && row) continue;
+    if (!field.textConfig && !row) continue;
+    if (!selectionFields.includes(field.key)) fail("VALIDATION_ERROR", "文本限制字段无效，请重新读取表格", 400);
+    const previous = row ? registeredField(row) : undefined;
+    await assertPersistedTextLimit(tx, field, previous);
+    // The whole snapshot records effective type for validation while its label,
+    // width and other display settings keep using the existing shared layout.
+    if (row) {
+      if (semantic(field) !== semantic(previous!))
+        await rows(tx, "UPDATE public.selection_field_registry SET definition=$3::jsonb,revision=revision+1,updated_at=now() WHERE workspace_key=$1 AND field_key=$2", workspace, field.key, JSON.stringify(definition(field)));
+    } else {
+      await rows(tx, `INSERT INTO public.selection_field_registry(workspace_key,table_id,field_key,visibility,definition)
+        VALUES($1,$2::bigint,$3,'PUBLIC',$4::jsonb)`, workspace, workspace === "default" ? null : workspace, field.key, JSON.stringify(definition(field)));
+    }
   }
 }
 async function updatePublishedField(tx: Tx, workspace: string, field: SelectionField) {
@@ -133,6 +162,7 @@ export async function setFieldVisibility(c: Context, key: string, input: unknown
 /** Called only for a validated transfer, in the destination transaction before row writes. */
 export async function registerTransferredFields(tx: Tx, c: Context, workspace: string, fields: SelectionField[]) {
   await rows(tx, "SELECT pg_advisory_xact_lock(hashtextextended($1,0))::text", `selection-layout-shared:${workspace}`);
+  await reconcileBuiltinTextFields(tx, fields, workspace, true);
   for (const field of fields.filter(field => field.key.startsWith("custom:"))) {
     const row = await one(tx, "SELECT * FROM public.selection_field_registry WHERE workspace_key=$1 AND field_key=$2 FOR UPDATE", workspace, field.key);
     if (!row) {

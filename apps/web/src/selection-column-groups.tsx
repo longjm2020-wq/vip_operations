@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { App, Button, Empty, Input, Modal, Select, Tabs } from "antd";
+import { useEffect, useRef, useState, type PointerEvent } from "react";
+import { Alert, App, Button, Empty, Input, Modal, Select, Tabs } from "antd";
 import {
   ArrowDownOutlined,
   ArrowUpOutlined,
@@ -64,14 +64,18 @@ export function SelectionColumnGroupManager({
   columns: SelectionField[];
   visible: string[];
   groups: SelectionColumnGroup[];
-  onSave: (groups: SelectionColumnGroup[]) => void;
+  onSave: (groups: SelectionColumnGroup[]) => Promise<boolean | void> | boolean | void;
 }) {
   const { message } = App.useApp();
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<SelectionColumnGroup[]>([]);
   const [draggedId, setDraggedId] = useState<string | null>(null);
+  const pointerDrag = useRef<{ id: number; source: string; x: number; y: number; moved: boolean; target: string | null } | null>(null);
   const [dropId, setDropId] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState("");
   const clearDrag = () => {
+    pointerDrag.current = null;
     setDraggedId(null);
     setDropId(null);
   };
@@ -85,13 +89,36 @@ export function SelectionColumnGroupManager({
       next.splice(to, 0, group);
       return next;
     });
+  useEffect(() => {
+    window.addEventListener("blur", clearDrag);
+    return () => window.removeEventListener("blur", clearDrag);
+  }, []);
+  const dragMove = (event: PointerEvent<HTMLButtonElement>) => {
+    const current = pointerDrag.current;
+    if (!current || current.id !== event.pointerId || saving) return;
+    if (!current.moved && Math.hypot(event.clientX - current.x, event.clientY - current.y) < 6) return;
+    current.moved = true;
+    setDraggedId(current.source);
+    const target = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>("[data-column-group]");
+    const ownList = event.currentTarget.closest(".selection-column-group-list");
+    current.target = target && target.closest(".selection-column-group-list") === ownList ? target.dataset.columnGroup || null : null;
+    setDropId(current.target === current.source ? null : current.target);
+  };
+  const dragEnd = (event: PointerEvent<HTMLButtonElement>) => {
+    const current = pointerDrag.current;
+    if (!current || current.id !== event.pointerId) return;
+    if (!saving && current.moved && current.target) move(current.source, draft.findIndex(group => group.id === current.target));
+    clearDrag();
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+  };
   const update = (id: string, patch: Partial<SelectionColumnGroup>) =>
     setDraft((current) =>
       current.map((group) =>
         group.id === id ? { ...group, ...patch } : group,
       ),
     );
-  const save = () => {
+  const save = async () => {
+    if (saving) return;
     const next = draft.map((group) => ({
       ...group,
       name: group.name.trim(),
@@ -112,8 +139,18 @@ export function SelectionColumnGroupManager({
       message.warning("请为每个分组选择至少一个字段");
       return;
     }
-    onSave(next);
-    setOpen(false);
+    setSaving(true);
+    setSaveError("");
+    clearDrag();
+    try {
+      const saved = await onSave(next);
+      if (saved === false) throw new Error("分组尚未保存，请处理表格设置提示后重试");
+      setOpen(false);
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : "分组保存失败，请重试");
+    } finally {
+      setSaving(false);
+    }
   };
   return (
     <>
@@ -122,6 +159,7 @@ export function SelectionColumnGroupManager({
         icon={<FolderOutlined />}
         onClick={() => {
           clearDrag();
+          setSaveError("");
           setDraft(
             groups.map((group) => ({
               ...group,
@@ -138,11 +176,19 @@ export function SelectionColumnGroupManager({
         open={open}
         width={640}
         okText="保存分组"
+        cancelText={saveError ? "关闭窗口" : "取消"}
+        confirmLoading={saving}
+        okButtonProps={{ "aria-label": "保存分组" }}
+        maskClosable={!saving}
+        keyboard={!saving}
+        closable={!saving}
+        cancelButtonProps={{ disabled: saving }}
         onCancel={() => {
+          if (saving) return;
           clearDrag();
           setOpen(false);
         }}
-        onOk={save}
+        onOk={() => void save()}
       >
         <p className="selection-column-group-help">
           将相关字段整理为快捷
@@ -176,24 +222,6 @@ export function SelectionColumnGroupManager({
                     : "before"
                   : undefined
               }
-              onDragOver={(event) => {
-                if (!draggedId || draggedId === group.id) return;
-                event.preventDefault();
-                event.dataTransfer.dropEffect = "move";
-                setDropId(group.id);
-              }}
-              onDrop={(event) => {
-                if (
-                  !draggedId ||
-                  event.dataTransfer.getData(
-                    "application/x-xuti-column-group",
-                  ) !== draggedId
-                )
-                  return;
-                event.preventDefault();
-                move(draggedId, index);
-                clearDrag();
-              }}
             >
               <div className="selection-column-group-name">
                 <Button
@@ -202,17 +230,26 @@ export function SelectionColumnGroupManager({
                   icon={<HolderOutlined />}
                   aria-label={`拖动分组${group.name || index + 1}`}
                   title="拖动调整分组顺序，或按↑、↓"
-                  draggable
-                  onDragStart={(event) => {
-                    setDraggedId(group.id);
-                    event.dataTransfer.effectAllowed = "move";
-                    event.dataTransfer.setData(
-                      "application/x-xuti-column-group",
-                      group.id,
-                    );
+                  disabled={saving}
+                  style={{ touchAction: "none" }}
+                  onPointerDown={event => {
+                    if (saving || event.button !== 0) return;
+                    event.preventDefault();
+                    event.currentTarget.focus();
+                    pointerDrag.current = { id: event.pointerId, source: group.id, x: event.clientX, y: event.clientY, moved: false, target: null };
+                    event.currentTarget.setPointerCapture(event.pointerId);
                   }}
-                  onDragEnd={clearDrag}
+                  onPointerMove={dragMove}
+                  onPointerUp={dragEnd}
+                  onPointerCancel={clearDrag}
+                  onLostPointerCapture={clearDrag}
                   onKeyDown={(event) => {
+                    if (event.key === "Escape" && pointerDrag.current) {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      clearDrag();
+                      return;
+                    }
                     if (event.key === "ArrowUp" || event.key === "ArrowDown") {
                       event.preventDefault();
                       move(
@@ -226,6 +263,7 @@ export function SelectionColumnGroupManager({
                   aria-label={`分组名称${index + 1}`}
                   maxLength={40}
                   value={group.name}
+                  disabled={saving}
                   placeholder="分组名称，例如：质检"
                   onChange={(event) =>
                     update(group.id, { name: event.target.value })
@@ -236,7 +274,7 @@ export function SelectionColumnGroupManager({
                   icon={<ArrowUpOutlined />}
                   aria-label={`上移分组${group.name || index + 1}`}
                   title="上移分组"
-                  disabled={index === 0}
+                  disabled={saving || index === 0}
                   onClick={() => move(group.id, index - 1)}
                 />
                 <Button
@@ -244,12 +282,13 @@ export function SelectionColumnGroupManager({
                   icon={<ArrowDownOutlined />}
                   aria-label={`下移分组${group.name || index + 1}`}
                   title="下移分组"
-                  disabled={index === draft.length - 1}
+                  disabled={saving || index === draft.length - 1}
                   onClick={() => move(group.id, index + 1)}
                 />
                 <Button
                   type="text"
                   danger
+                  disabled={saving}
                   icon={<DeleteOutlined />}
                   aria-label={`删除分组${index + 1}`}
                   onClick={() =>
@@ -262,6 +301,7 @@ export function SelectionColumnGroupManager({
               <Select
                 aria-label={`分组字段${index + 1}`}
                 mode="multiple"
+                disabled={saving}
                 value={group.columnKeys}
                 placeholder="选择本组字段，可包含图片"
                 optionFilterProp="label"
@@ -277,6 +317,7 @@ export function SelectionColumnGroupManager({
         </div>
         <Button
           aria-label="添加分组"
+          disabled={saving}
           icon={<PlusOutlined />}
           onClick={() =>
             setDraft((current) => [
@@ -287,6 +328,7 @@ export function SelectionColumnGroupManager({
         >
           添加分组
         </Button>
+        {saveError && <Alert type="error" showIcon title={saveError} />}
         <p className="selection-column-group-help">
           可为同一字段配置多个分组。隐藏或删除的字段暂不显示，恢复后沿用分组设置。只含公开字段的分组随本表共享，修改需要表格编辑权限；包含私有字段的分组仅本人保存，只读用户也可配置。当前
           TAB 选择按账号及表格保存，换设备可恢复。

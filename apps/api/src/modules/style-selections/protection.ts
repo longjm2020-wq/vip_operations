@@ -2,6 +2,8 @@ import { selectionScope, selectionUrl } from "../../../../../packages/database/s
 import { archiveSelectionPermissions, tableSelectionPermissions } from "../../../../../packages/contracts/src/table-permissions.js";
 import { isArchive } from "./archive.js";
 import { tableAccess } from "../projects/library.js";
+import { assertTextPatch, lockTextDefinitions, textLimitDefinitions } from "./text-limits.js";
+import type { SelectionField } from "../../../../../packages/contracts/src/selection-layout.js";
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import {
@@ -38,6 +40,7 @@ export type Policy = {
   registeredFieldKeys?: string[];
   privateFieldOwners?: Record<string, string>;
   fieldRevision?: string;
+  textFields?: SelectionField[];
 };
 export const activePolicy = (policy: Policy) =>
   policy.settings.enabled ||
@@ -52,7 +55,7 @@ export async function policy(tx: Tx, lock = false): Promise<Policy> {
   );
   const fields = await rows(
     tx,
-    "SELECT field_key,owner_id,visibility,revision,updated_at FROM public.selection_field_registry WHERE workspace_key=$1 ORDER BY field_key" +
+    "SELECT field_key,owner_id,visibility,revision,updated_at,definition FROM public.selection_field_registry WHERE workspace_key=$1 ORDER BY field_key" +
       (lock ? " FOR SHARE" : ""),
     selectionScope.getStore() || "default",
   );
@@ -66,6 +69,7 @@ export async function policy(tx: Tx, lock = false): Promise<Policy> {
         .map((field) => [field.field_key, String(field.owner_id)]),
     ),
     fieldRevision: digest(camel(fields)),
+    textFields: textLimitDefinitions(fields),
   };
 }
 const formats = [
@@ -243,6 +247,7 @@ export function assertFields(
     );
 }
 export async function writeLocks(tx: Tx, c: Context) {
+  await lockTextDefinitions(tx);
   const p = await policy(tx, true);
   if (p.settings.claimsEnabled && !protectionAdmin(c.actor))
     await rows(
@@ -288,6 +293,7 @@ export async function assertWrite(
     row,
     !before ? [...new Set([...affected, ...selectionFields])] : affected,
   );
+  assertTextPatch(p.textFields || [], patch);
   const shouldClaim =
     p.settings.claimsEnabled &&
     !protectionAdmin(c.actor) &&

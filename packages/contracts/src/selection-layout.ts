@@ -50,6 +50,13 @@ export const selectionFieldSchema = z
     type: selectionFieldTypeSchema.optional(),
     typePreset: key.optional(),
     fallbackType: selectionFieldTypeSchema.optional(),
+    textConfig: z
+      .object({
+        countMode: z.enum(["characters", "han"]),
+        maxLength: z.number().int().min(1).max(2000),
+      })
+      .strict()
+      .optional(),
     options: options.optional(),
     optionColors: z.record(z.string().max(80), z.string().max(30)).optional(),
     personDisplay: z.enum(["name", "username", "both"]).optional(),
@@ -323,12 +330,12 @@ export function applySelectionSharedLayout(
   columns.push(...canonical.columns.slice(publicIndex));
   const privateReferences = (values: string[]) =>
     values.filter((name) => privateKeys.has(name));
-  const columnGroups = [...canonical.columnGroups],
-    groupIds = new Set(columnGroups.map((group) => group.id)),
-    groupNames = new Set(columnGroups.map((group) => group.name)),
+  const groupIds = new Set(canonical.columnGroups.map((group) => group.id)),
+    groupNames = new Set(canonical.columnGroups.map((group) => group.name)),
+    privateGroups = new Map<number, SelectionLayout["columnGroups"][number]>(),
     privateGroupIds = new Map<string, string>();
-  for (const group of personal.columnGroups) {
-    if (!group.columnKeys.some((name) => privateKeys.has(name))) continue;
+  personal.columnGroups.forEach((group, index) => {
+    if (!group.columnKeys.some((name) => privateKeys.has(name))) return;
     let id = group.id,
       name = group.name,
       suffix = 1;
@@ -341,7 +348,7 @@ export function applySelectionSharedLayout(
       const ending = suffix++ === 1 ? "（私有）" : `（私有${suffix - 1}）`;
       name = group.name.slice(0, 40 - ending.length) + ending;
     }
-    columnGroups.push({
+    privateGroups.set(index, {
       ...group,
       id,
       name,
@@ -352,7 +359,18 @@ export function applySelectionSharedLayout(
     groupIds.add(id);
     groupNames.add(name);
     privateGroupIds.set(group.id, id);
+  });
+  // Private groups belong to the account, including their slots among public
+  // TABs. Replace only public slots with the canonical public relative order.
+  const columnGroups: SelectionLayout["columnGroups"] = [];
+  let publicGroupIndex = 0;
+  for (let index = 0; index < personal.columnGroups.length; index++) {
+    const privateGroup = privateGroups.get(index);
+    if (privateGroup) columnGroups.push(privateGroup);
+    else if (publicGroupIndex < canonical.columnGroups.length)
+      columnGroups.push(canonical.columnGroups[publicGroupIndex++]);
   }
+  columnGroups.push(...canonical.columnGroups.slice(publicGroupIndex));
   const selectedGroup =
     privateGroupIds.get(personal.columnGroupId) || personal.columnGroupId;
   const columnGroupId = columnGroups.some((group) => group.id === selectedGroup)

@@ -53,6 +53,7 @@ export function SelectionTransfer({ canEdit, blocked, selectedRows, filteredRows
     loadLock.current = true;
     setOpen(true); setBusy(true); setError(""); setResult(""); setPlan(null);
     try {
+      if (!(await ensureLayoutSaved())) throw Error("请先处理未保存或冲突的字段设置，再导入");
       if (!/\.xlsx$/i.test(file.name) || file.size > 20 * 1024 * 1024) throw Error("请选择不超过 20 MB 的 .xlsx 文件");
       const records = await parseSelectionWorkbook(await file.arrayBuffer());
       for (const row of records) for (const image of [...(row.images || []), ...(row.labelImages || [])]) {
@@ -71,6 +72,7 @@ export function SelectionTransfer({ canEdit, blocked, selectedRows, filteredRows
     if (!plan || !canEdit || blocked || busy) return;
     setBusy(true); setError("");
     try {
+      if (!(await ensureLayoutSaved())) throw Error("请先处理未保存或冲突的字段设置，再导入");
       const response = await api("/style-selections/import", "POST", { rows: plan.rows }, key.current);
       setResult(`导入完成：新增 ${response.data.created} 款，更新 ${response.data.updated} 款`);
       setPlan(null); onImported();
