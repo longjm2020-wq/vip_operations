@@ -2,6 +2,7 @@ import { SelectionMigration } from "./selection-migration";
 import { ArchiveReferenceCell, archiveReferenceKey } from "./selection-archive-fields";
 import { PageSearch, PageSearchInput } from "./page-search";
 import { SelectionImageSearch } from "./selection-image-search";
+import { SelectionTitleAi, type SelectionTitleAiRow } from "./selection-title-ai";
 import {SelectionFieldManager,SelectionFieldInput} from "./selection-field-manager";
 import { SelectionProtectionControl, editableSelectionCell, readableSelectionCell } from "./selection-protection";
 import { SelectionOrganization } from "./selection-organization";
@@ -48,7 +49,7 @@ import { formatSelectionValue } from "../../../packages/contracts/src/selection-
 import { memo, useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Alert, App, Button, Card, Checkbox, Empty, Image, Input, Modal, Pagination, Popover, Dropdown, Select, Space, Tooltip } from "antd";
-import { ExpandAltOutlined, CompressOutlined, EditOutlined, BgColorsOutlined, FontColorsOutlined, VerticalAlignTopOutlined, VerticalAlignMiddleOutlined, VerticalAlignBottomOutlined, AlignLeftOutlined, AlignCenterOutlined, AlignRightOutlined, DeleteOutlined, FilterOutlined, LinkOutlined, PlusOutlined, PushpinOutlined, SettingOutlined, UnorderedListOutlined, UploadOutlined } from "@ant-design/icons";
+import { BulbOutlined, ExpandAltOutlined, CompressOutlined, EditOutlined, BgColorsOutlined, FontColorsOutlined, VerticalAlignTopOutlined, VerticalAlignMiddleOutlined, VerticalAlignBottomOutlined, AlignLeftOutlined, AlignCenterOutlined, AlignRightOutlined, DeleteOutlined, FilterOutlined, LinkOutlined, PlusOutlined, PushpinOutlined, SettingOutlined, UnorderedListOutlined, UploadOutlined } from "@ant-design/icons";
 import { useSelectionWorkspace } from "./selection-workspace";
 import { prepareUpload, readUpload } from "./upload-file";
 import { QueryState, Row, useCan, useUser } from "./shared";
@@ -299,6 +300,7 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
   const [accessLost,setAccessLost] = useState(false);
   const canEdit = useCan("selection.manage") && !accessLost;
   const user = useUser();
+  const canConfigureAi = useCan("analytics.manage") && !!user.roleCodes?.includes("SUPER_ADMIN");
   const canAddField = useCan("selection.read") && !accessLost;
   const { message } = App.useApp();
   const addFieldRef=useRef<{add:()=>void}>(null);
@@ -325,6 +327,7 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
   const [cellTextEditing, setCellTextEditing] = useState(false);
   const [selectedCells, setSelectedCells] = useState<Set<string>>(new Set());
   const [selectedColumnKeys, setSelectedColumnKeys] = useState<string[]>([]);
+  const [titleAi, setTitleAi] = useState<{ rows: SelectionTitleAiRow[]; keys: string[]; scope: string } | null>(null);
   const columnSelectionAnchor = useRef<string | null>(null);
   const [columnWidthTarget, setColumnWidthTarget] = useState<Column[] | null>(null);
   const [cellAnchor, setCellAnchor] = useState<{ rowKey: string; columnKey: string } | null>(null);
@@ -500,10 +503,12 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
       ...(fixedColumns.length ? [{ key: "unfix-all", label: "取消所有固定列" }] : []),
       { type: "divider" as const },
       { key: "column-width", label: "设置列宽" },
+      ...(canEdit && ["长标题", "短标题"].includes(column.label) && (column.type || column.fallbackType || "text") === "text" ? [{ key: "ai-title", label: "AI 填补空白标题", icon: <BulbOutlined /> }] : []),
     ];
   };
   const handleColumnAction = (columnKey: string, action: string) => {
     const keys = columnActionKeys(columnKey);
+    if (action === "ai-title") { void openTitleAi(keys, contextCell?.rowKey); return; }
     selectionDrag.stop(); setCopiedCells(new Set()); setContextCell(null);
     if (action === "column-width") { setColumnWidthTarget(activeColumns.filter(column => keys.includes(column.key))); return; }
     setSelectedColumnKeys([]); columnSelectionAnchor.current = null;
@@ -612,6 +617,32 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
   }, [filteredRows, pageRowKeys, visible]);
   const dirtyRows = useMemo(() => new Set(rows.filter((row) => !row.id || !sameRow(row, original.current.get(row._key) || {})).map(row => row._key)), [rows, saving]);
   const dirtyCount = dirtyRows.size;
+
+  const titleFields = columns.filter(column => visible.includes(column.key) && !column.deleted && !systemField(column) && ["长标题", "短标题"].includes(column.label) && (column.type || column.fallbackType || "text") === "text");
+  const openTitleAi = async (requestedKeys?: string[], contextRowKey?: string) => {
+    if (!canEdit || dirtyCount || saving || deleting || transferring || releasing) { message.warning("请先完成表格保存，再生成标题"); return; }
+    if (!(await layout.ensureSaved())) { message.error("请先保存字段设置，再生成标题"); return; }
+    const selectedKeys = (requestedKeys || selectedFields).filter(key => titleFields.some(field => field.key === key));
+    const keys = selectedKeys.length ? selectedKeys : titleFields.map(field => field.key);
+    if (!keys.length) { message.warning("请先显示文本类型的长标题或短标题字段"); return; }
+    const regionRows = new Set([...selectedCells].map(id => id.slice(0, id.indexOf("::"))));
+    const titleCellSelected = [...selectedCells].some(id => keys.includes(id.slice(id.indexOf("::") + 2)));
+    const chosenRows = selectedRows.length ? selectedRowKeys : !selectedColumnKeys.length && (selectedCells.size > 1 || titleCellSelected) ? regionRows : contextRowKey ? new Set([contextRowKey]) : null;
+    const eligible = filteredRows.filter(row => row.id && String(row.xutiStyleNo || "").trim() && !row.migrationLocked && (!chosenRows || chosenRows.has(row._key)) && keys.some(key => {
+      const field = titleFields.find(column => column.key === key)!;
+      return readableSelectionCell(row, key) && !(row.hiddenCells || []).includes(key) && editableSelectionCell(row, key) && !String(valueAt(row, field) ?? "").trim();
+    }));
+    if (!eligible.length) { message.info("此范围没有可填补的空白标题；仅处理已保存、有款号且可编辑的空白单元格"); return; }
+    selectionDrag.stop(); setContextCell(null); setCellTextEditing(false); setFocusedCell(null);
+    setTitleAi({ rows: eligible.map(row => ({ id: String(row.id), rowKey: row._key, xutiStyleNo: String(row.xutiStyleNo) })), keys, scope: `${chosenRows ? "选中范围" : "当前筛选结果（含其他页）"} · ${eligible.length} 款有空白标题` });
+  };
+  const refreshTitles = async () => {
+    appliedSnapshot.current = "";
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["style-selections"] }),
+      ...(archive ? [rootQueryClient.invalidateQueries({ queryKey: ["product-archive-table"] })] : []),
+    ]);
+  };
 
   const findReadable = (row: Row, key: string) => readableSelectionCell(row, key) && !(row.hiddenCells || []).includes(key) && (row.cellAccess?.[key] || row.defaultCellAccess) !== "deny";
   const findText = (row: Row, column: Column) => {
@@ -1152,7 +1183,7 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
     ] : []), ...columnMenuItems(contextColumn), { type: "divider" as const }, { key: "format", label: "设置单元格格式", icon: <SettingOutlined />, disabled: !canEdit || !editableSelectionCell(contextRow, contextColumn.key) || systemField(contextColumn) || collectionKeys.has(contextColumn.key) }] : [], onClick: ({ key }: { key: string }) => {
       if (!contextRow || !contextColumn) return;
       setContextCell(null);
-      if (["fix-column", "fix-selected", "unfix-selected", "unfix-all", "column-width"].includes(key)) { handleColumnAction(contextColumn.key, key); return; }
+      if (["fix-column", "fix-selected", "unfix-selected", "unfix-all", "column-width", "ai-title"].includes(key)) { handleColumnAction(contextColumn.key, key); return; }
       if (key === "format") { openCellFormat(contextRow, contextColumn); return; }
       const image = contextImage.current;
       if (!image) return message.error("未找到当前图片，请重新右键单元格");
@@ -1285,10 +1316,11 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
     setFormatTarget(null);
   };
   if(accessLost)return <Alert type="error" showIcon message="表格访问权限已失效，请重新登录或联系管理员" />;
-  return <>{columnWidthTarget && <SelectionColumnWidthModal columns={columnWidthTarget} onCancel={() => setColumnWidthTarget(null)} onApply={width => { const keys = new Set(columnWidthTarget.map(column => column.key)); setColumns(current => current.map(column => keys.has(column.key) ? { ...column, width } : column)); setColumnWidthTarget(null); }}/>} {imagePreview && previewImages.length > 0 && <SelectionImagePreview key={cellId(imagePreview.rowKey, imagePreview.columnKey)} images={previewImages} index={Math.min(imagePreview.index, previewImages.length - 1)} name={previewColumn!.label} alongsideDetails={detailVisible} onTextCopied={text => { copiedSingleValue.current = text; setCopiedCells(new Set()); }} onIndexChange={index => setImagePreview(current => current ? { ...current, index } : null)} onClose={() => setImagePreview(null)} />}{formatTarget && <SelectionFormatModal count={formatTarget.ids.size} sample={formatTarget.sample} initial={formatTarget.initial} onCancel={() => setFormatTarget(null)} onApply={applyFormat} />}<PageSearch><PageSearchInput multiline aria-label="搜索选款" placeholder="搜索款号、供应商、颜色、材质…" allowClear value={searchText} onChange={event=>{setImageSearchRowId(null);setSearchText(event.target.value);}} suffix={<SelectionImageSearch disabled={!!dirtyCount || saving || deleting || transferring} onSelect={row=>{setImageSearchRowId(String(row.id));setPage(1);setCellAnchor(null);setFocusedCell(null);setCellTextEditing(false);setSelectedRows([]);setSelectedCells(new Set());}}/>} /></PageSearch>
+  return <>{titleAi && <SelectionTitleAi open onClose={() => setTitleAi(null)} rows={titleAi.rows} fields={titleFields} initialFieldKeys={titleAi.keys} scopeLabel={titleAi.scope} apiRequest={api} onApplied={refreshTitles} canConfigureAi={canConfigureAi} onConfigureAi={() => { window.location.assign("/settings/ai"); }} />}{columnWidthTarget && <SelectionColumnWidthModal columns={columnWidthTarget} onCancel={() => setColumnWidthTarget(null)} onApply={width => { const keys = new Set(columnWidthTarget.map(column => column.key)); setColumns(current => current.map(column => keys.has(column.key) ? { ...column, width } : column)); setColumnWidthTarget(null); }}/>} {imagePreview && previewImages.length > 0 && <SelectionImagePreview key={cellId(imagePreview.rowKey, imagePreview.columnKey)} images={previewImages} index={Math.min(imagePreview.index, previewImages.length - 1)} name={previewColumn!.label} alongsideDetails={detailVisible} onTextCopied={text => { copiedSingleValue.current = text; setCopiedCells(new Set()); }} onIndexChange={index => setImagePreview(current => current ? { ...current, index } : null)} onClose={() => setImagePreview(null)} />}{formatTarget && <SelectionFormatModal count={formatTarget.ids.size} sample={formatTarget.sample} initial={formatTarget.initial} onCancel={() => setFormatTarget(null)} onApply={applyFormat} />}<PageSearch><PageSearchInput multiline aria-label="搜索选款" placeholder="搜索款号、供应商、颜色、材质…" allowClear value={searchText} onChange={event=>{setImageSearchRowId(null);setSearchText(event.target.value);}} suffix={<SelectionImageSearch disabled={!!dirtyCount || saving || deleting || transferring} onSelect={row=>{setImageSearchRowId(String(row.id));setPage(1);setCellAnchor(null);setFocusedCell(null);setCellTextEditing(false);setSelectedRows([]);setSelectedCells(new Set());}}/>} /></PageSearch>
     <Dropdown trigger={["contextMenu"]} open={!!contextRow && !!contextColumn} onOpenChange={open => { if (!open) setContextCell(null); }} overlayStyle={{ zIndex: 1201 }} menu={cellContextMenu}><span aria-hidden="true" style={{ position: "fixed", left: contextCell?.x || 0, top: contextCell?.y || 0, width: 1, height: 1, pointerEvents: "none" }}/></Dropdown>
     <Card ref={findRoot} data-table-find-context className="selection-card"><div className="selection-toolbar" aria-label={`${title || "选款登记"}表格工具栏`}><Space className="selection-toolbar-controls" wrap size={4}>
       <TableFindReplace rootRef={findRoot} cells={findCells} selectedIds={selectedFindIds} activeId={activeFindId} blocked={saving || deleting || transferring || !!releasing} saveHint="修改将逐行自动保存，保存失败请修正后重试。" onNavigate={navigateFind} onReplace={replaceFind}/>
+      {canEdit && titleFields.length > 0 && <Button aria-label="AI 商品标题" icon={<BulbOutlined aria-hidden="true" />} disabled={!!dirtyCount || saving || deleting || transferring || !!releasing} onClick={() => void openTitleAi()}>AI 商品标题</Button>}
       {canEdit && <SelectionCollections selectedRows={filteredRows.filter(row => selectedRowKeys.has(row._key))} blocked={!!dirtyCount || saving || deleting}/>}
       {canEdit && <SelectionPhotoQr />}
       <Button type="link" icon={<PlusOutlined />} disabled={!canAdd} onClick={() => add()}>添加一行</Button><Button type="link" danger icon={<DeleteOutlined />} disabled={!canEdit || !selectedRows.length || saving} loading={deleting} onClick={deleteRows}>删除行</Button>

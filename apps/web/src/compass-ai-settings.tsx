@@ -57,7 +57,7 @@ function SettingsForm() {
   const clear = () =>
     modal.confirm({
       title: "清除 OpenRouter API Key？",
-      content: "将关闭 AI 分析，日报继续提供报表汇总。",
+      content: "将关闭 AI 经营分析与商品标题生成，日报继续提供报表汇总。",
       okText: "清除",
       cancelText: "取消",
       onOk: async () => {
@@ -72,7 +72,7 @@ function SettingsForm() {
   return (
     <Card className="compass-ai-settings">
       <QueryState error={q.error} reload={() => q.refetch()} />
-      <p>使用 OpenRouter 的指定模型生成每日经营摘要、观察、建议与风险分析。</p>
+      <p>使用 OpenRouter 的指定模型生成每日经营分析与商品标题候选。</p>
       <Form
         form={form}
         layout="vertical"
@@ -81,7 +81,7 @@ function SettingsForm() {
         disabled={busy || q.isFetching || !settings}
       >
         <Form.Item label="模型">
-          <Input value={model} readOnly aria-label="AI 分析模型" />
+          <Input value={model} readOnly aria-label="AI 模型" />
         </Form.Item>
         <Form.Item
           name="apiKey"
@@ -103,18 +103,18 @@ function SettingsForm() {
         </Form.Item>
         <Form.Item
           name="enabled"
-          label="开启 AI 经营分析"
+          label="开启 AI 功能"
           valuePropName="checked"
         >
           <Switch />
         </Form.Item>
         <Alert
           type="info"
-          title="开启后，将销售、退货、库存汇总、每日趋势及三个维度 TOP 10 商品编码发送至 OpenRouter 和模型供应商生成分析。不会上传原始 Excel、邮箱或 ERP 凭据。"
+          title="经营分析发送销售、退货、库存汇总、每日趋势及三个维度 TOP 10 商品编码；商品标题生成发送本范围有权查看的成分、类目、商品图片与少量已有标题示例。数据发送至 OpenRouter 和模型供应商，不上传原始 Excel、邮箱或 ERP 凭据。"
         />
         <p className="secondary">
-          验证会调用少量测试内容；生成分析按 OpenRouter
-          实际用量计费。每份分析最多 4096 个输出
+          验证会调用少量测试内容；经营分析与标题生成按 OpenRouter
+          实际用量计费。每份经营分析最多 4096 个输出
           token，同一批数据生成后复用给多个收件人。
           <a
             href="https://openrouter.ai/openai/gpt-6.1-sol#providers"
@@ -160,7 +160,7 @@ export function CompassAISettingsPage() {
     return <Alert type="warning" title="仅超级管理员可以配置 AI 模型" />;
   return (
     <>
-      <Header title="AI 模型设置" subtitle="配置每日经营分析使用的模型与连接" />
+      <Header title="AI 模型设置" subtitle="配置经营分析与商品标题生成使用的模型连接" />
       <SettingsForm />
     </>
   );

@@ -1,0 +1,23 @@
+.selection-title-ai-modal .ant-modal-body{max-height:calc(100vh - 230px);overflow:auto}
+.selection-title-ai-scope{margin-bottom:10px;color:#7c6253;font-size:12px}
+.selection-title-ai-options{margin:12px 0 6px}
+.selection-title-ai-options .ant-collapse-content-box{display:grid;gap:8px}
+.selection-title-ai-options p,.selection-title-ai-footnote{font-size:12px;color:#8b776a;line-height:1.6}
+.selection-title-ai-options p{margin:0}
+.selection-title-ai-alert{margin-top:10px}
+.selection-title-ai-progress{margin:12px 0;font-size:12px}
+.selection-title-ai-review-heading{display:flex;justify-content:space-between;gap:12px;align-items:center;margin:14px 0 8px}
+.selection-title-ai-review-heading span{font-size:12px;color:#8b776a}
+.selection-title-ai-candidates{display:grid;gap:10px;margin-bottom:12px}
+.selection-title-ai-candidate{padding:10px 12px;border:1px solid #eadbd1;border-radius:8px;background:#fffaf5}
+.selection-title-ai-candidate-heading{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px}
+.selection-title-ai-candidate-heading .ant-tag{margin-inline-end:0;font-size:11px;max-width:60%;overflow:hidden;text-overflow:ellipsis}
+.selection-title-ai-title{display:grid;grid-template-columns:72px minmax(0,1fr);gap:4px 8px;margin-top:8px;align-items:start}
+.selection-title-ai-title .ant-checkbox-wrapper{padding-top:5px}
+.selection-title-ai-count{grid-column:2;font-size:11px;color:#8b776a;justify-self:end}
+.selection-title-ai-count.is-error,.selection-title-ai-row-warning{color:#b24d12}
+.selection-title-ai-row-warning{font-size:12px;line-height:1.5;margin-top:7px}
+.selection-title-ai-candidate .ant-collapse-content-box{font-size:12px;color:#7c6253}
+.selection-title-ai-candidate ul{padding-left:20px;margin:0}
+.selection-title-ai-footnote{display:block;margin-top:10px}
+@media(max-width:600px){.selection-title-ai-modal .ant-modal-body{max-height:calc(100vh - 220px)}.selection-title-ai-review-heading{display:block}.selection-title-ai-review-heading span{display:block;margin-top:4px}.selection-title-ai-title{grid-template-columns:1fr}.selection-title-ai-count{grid-column:1}.selection-title-ai-candidate{padding:10px}}

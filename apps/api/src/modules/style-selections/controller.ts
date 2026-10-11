@@ -14,6 +14,7 @@ import { fail } from "../../core.js";
 import { SelectionRealtime } from "./realtime.js";
 import { searchSelectionImages } from "./image-search.js";
 import { submitSelectionImageFeedback } from "./image-search-feedback.js";
+import { applyTitles, generateTitles, titleAIStatus } from "./title-ai.js";
 
 const paramId = (value: string) => parse(id, value);
 const transferContext = (request:AuthRequest) => ({...context(request),actor:request.originalActor || request.actor});
@@ -27,6 +28,9 @@ class ProductArchiveTableController {
 @UseInterceptors(SelectionWorkspaceInterceptor)
 class StyleSelectionsController {
   constructor(@Inject(SelectionRealtime) private realtime: SelectionRealtime) {}
+  @Permission("selection.manage") @Get("ai-titles/status") titleAIStatus(@Req() request:AuthRequest) { return titleAIStatus(context(request)); }
+  @Permission("selection.manage") @Post("ai-titles/generate") generateTitles(@Req() request:AuthRequest,@Body() body:unknown) { return generateTitles(context(request),body); }
+  @Permission("selection.manage") @Post("ai-titles/apply") applyTitles(@Req() request:AuthRequest,@Body() body:unknown) { return applyTitles(context(request),body); }
   @Permission("selection.read") @Get("events") events(@Req() request:AuthRequest,@Res() response:Response) { return this.realtime.open(request,response); }
   @Permission("selection.manage") @Get("migration/targets") migrationTargets(@Req() request:AuthRequest) { return migration.targets(transferContext(request)); }
   @Permission("selection.manage") @Post("migration/preview") migrationPreview(@Req() request:AuthRequest,@Body() body:unknown) { return migration.preview(transferContext(request),body); }

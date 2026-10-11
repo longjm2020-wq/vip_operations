@@ -19,7 +19,7 @@ export function withSelectionCreationTime(row: Row, input: unknown): Row {
 export function selectionCreationTimeError(row: Row): string | undefined {
   if (!hasSelectionCreationTimeDraft(row)) return;
   if (!row.creationTimeDraft.trim()) return "创建时间不能为空，请输入日期或日期时间";
-  if (!parseSelectionCreatedTime(row.creationTimeDraft)) return "请输入有效的北京时间 YYYY-MM-DD 或 YYYY-MM-DD HH:mm[:ss]";
+  if (!parseSelectionCreatedTime(row.creationTimeDraft)) return "请输入有效的北京时间 YYYY-MM-DD、YYYY-MM-DD HH:mm[:ss]，也支持 Excel 的 YYYY/M/D H:mm[:ss]";
 }
 
 export function selectionCreationTimeForSave(row: Row): string | undefined {

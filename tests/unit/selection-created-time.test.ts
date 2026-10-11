@@ -37,10 +37,11 @@ describe("built-in creation time", () => {
   it("normalizes edited Beijing dates and rejects empty or invalid calendar values", () => {
     expect(parseSelectionCreatedTime("2026-10-11")).toBe("2026-10-10T16:00:00.000Z");
     expect(parseSelectionCreatedTime("2026-10-11 02:01")).toBe("2026-10-10T18:01:00.000Z");
+    expect(parseSelectionCreatedTime("2026-10-11 2:01")).toBe("2026-10-10T18:01:00.000Z");
     expect(parseSelectionCreatedTime("2026-10-11 02:01:02")).toBe("2026-10-10T18:01:02.000Z");
     expect(parseSelectionCreatedTime("2026-10-11T02:01:02+08:00")).toBe("2026-10-10T18:01:02.000Z");
     expect(parseSelectionCreatedTime("2024-02-29 12:30:45")).toBe("2024-02-29T04:30:45.000Z");
-    for (const value of ["", null, "2026-02-29", "2026-02-30", "2026-13-01", "2026-10-11 24:01:02", "2026-10-11T02:01:02", "2026-10-11 2:01", "invalid"])
+    for (const value of ["", null, "2026-02-29", "2026-02-30", "2026-13-01", "2026-10-11 24:01:02", "2026-10-11T02:01:02", "invalid"])
       expect(parseSelectionCreatedTime(value)).toBeNull();
   });
   it("omits the editable batch from the new template and retains legacy import compatibility", async () => {

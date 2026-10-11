@@ -6,16 +6,20 @@ export const selectionCreatedTimeInputSchema = z.string().trim()
   .refine(value => Number.isFinite(new Date(value).getTime()) && new Date(value).getUTCFullYear() >= 1, "请输入有效的创建时间")
   .transform(value => new Date(value).toISOString());
 
-/** Human-entered dates use Beijing time; ISO input must carry its own timezone. */
+/** Human-entered / Excel dates use Beijing time; ISO input must carry its own timezone. */
 export function parseSelectionCreatedTime(input: unknown): string | null {
   if (typeof input !== "string") return null;
   const value = input.trim();
-  const local = /^(\d{4}-\d{2}-\d{2})(?: (\d{2}:\d{2})(?::(\d{2}))?)?$/.exec(value);
+  // Excel copies its displayed spelling (for example 2025/4/22 0:42), not
+  // an ISO timestamp. Normalize the parts explicitly so host timezone and
+  // permissive Date parsing cannot shift, swap or roll over the copied date.
+  const local = /^(\d{4})([-/])(\d{1,2})\2(\d{1,2})(?:[ \u00a0\u202f]+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/.exec(value);
   if (!local) {
     const parsed = selectionCreatedTimeInputSchema.safeParse(value);
     return parsed.success ? parsed.data : null;
   }
-  const normalized = `${local[1]} ${local[2] || "00:00"}:${local[3] || "00"}`;
+  const padded = (part: string | undefined) => (part || "0").padStart(2, "0");
+  const normalized = `${local[1]}-${padded(local[3])}-${padded(local[4])} ${padded(local[5])}:${padded(local[6])}:${padded(local[7])}`;
   const parsed = selectionCreatedTimeInputSchema.safeParse(`${normalized.replace(" ", "T")}+08:00`);
   return parsed.success && formatSelectionCreatedTime(parsed.data) === normalized ? parsed.data : null;
 }

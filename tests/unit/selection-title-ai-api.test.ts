@@ -1,0 +1,197 @@
+import { afterAll, beforeAll, beforeEach, afterEach, describe, expect, it, vi } from "vitest";
+import { PGlite } from "@electric-sql/pglite";
+import type { Context } from "../../apps/api/src/core.js";
+import type { Row, Tx } from "../../packages/database/src/index.js";
+import { selectionScope } from "../../packages/database/src/selection-scope.js";
+import { defaultProtection } from "../../packages/contracts/src/selection-protection.js";
+
+const fixture = vi.hoisted(() => ({ database: null as PGlite | null }));
+vi.mock("../../packages/database/src/index.js", async importOriginal => {
+  const original = await importOriginal<typeof import("../../packages/database/src/index.js")>();
+  const wrap = (database: Pick<PGlite, "query">) => ({
+    $queryRawUnsafe: async (sql: string, ...parameters: unknown[]) => (await database.query<Row>(sql, parameters)).rows,
+    $executeRawUnsafe: async (sql: string, ...parameters: unknown[]) => (await database.query(sql, parameters)).affectedRows || 0,
+  }) as unknown as Tx;
+  return { ...original, db: {
+    $queryRawUnsafe: async (sql: string, ...parameters: unknown[]) => (await fixture.database!.query<Row>(sql, parameters)).rows,
+    $transaction: async (work: (tx: Tx) => Promise<unknown>) => fixture.database!.transaction(transaction => work(wrap(transaction))),
+  } };
+});
+vi.mock("../../apps/api/src/modules/style-selections/archive.js", () => ({ isArchive: async () => false, mirrorArchiveRow: async () => undefined }));
+vi.mock("../../apps/api/src/modules/style-selections/title-ai-images.js", () => ({ titleImageData: async () => null }));
+import { applyTitles, generateTitles, parseTitleAIResponse, readTitlePlan, titleAIStatus } from "../../apps/api/src/modules/style-selections/title-ai.js";
+import { encryptSecret } from "../../apps/api/src/modules/analytics/secrets.js";
+
+const longKey = "custom:long", shortKey = "custom:short", categoryKey = "custom:category";
+const actor = (key = "titles"): Context => ({ actor: { id: "7", username: "editor", displayName: "Editor", permissions: ["selection.read", "selection.manage"], roleCodes: [] }, requestId: "titles-test", key });
+const read = async (sql: string, parameters: unknown[] = []) => (await fixture.database!.query<Row>(sql, parameters)).rows;
+const input = (rowIds: string[], targetKeys = [longKey, shortKey]) => ({ rowIds, targetKeys });
+async function style(no: string, extraFields: Row = {}, material: string | null = "面料：100%桑蚕丝\n里料：95%聚酯纤维5%氨纶\n配料：水貂毛皮") {
+  return (await read("INSERT INTO style_selections(xuti_style_no,material,extra_fields) VALUES($1,$2,$3) RETURNING *", [no, material, JSON.stringify({ [categoryKey]: "女士皮衣/皮草", ...extraFields })]))[0];
+}
+let providerPayload: Row, providerCalls: number;
+let providerHandler: (products: Row[]) => unknown;
+function installProvider() {
+  vi.stubGlobal("fetch", vi.fn(async (_url: string, init: RequestInit) => {
+    providerCalls++; providerPayload = JSON.parse(init.body as string);
+    const data = JSON.parse(providerPayload.messages[1].content[0].text), result = providerHandler(data.products);
+    return new Response(JSON.stringify({ id: "test-response", model: "openai/gpt-6.1-sol", choices: [{ finish_reason: "stop", message: { content: JSON.stringify(result) } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+  }));
+}
+beforeAll(async () => {
+  fixture.database = new PGlite();
+  await fixture.database.exec(`
+    CREATE TABLE users(id bigint PRIMARY KEY,display_name text,username text); INSERT INTO users VALUES(7,'Editor','editor'),(8,'Other','other');
+    CREATE TABLE style_selection_protection(id int PRIMARY KEY,settings jsonb,revision int DEFAULT 1);
+    CREATE TABLE selection_field_registry(workspace_key text,field_key text,owner_id bigint,visibility text,definition jsonb,revision int DEFAULT 1,updated_at timestamptz DEFAULT now(),PRIMARY KEY(workspace_key,field_key));
+    CREATE TABLE style_selections(
+      id bigserial PRIMARY KEY,registration_batch date,images jsonb DEFAULT '[]',label_images jsonb DEFAULT '[]',
+      cell_colors jsonb DEFAULT '{}',cell_alignments jsonb DEFAULT '{}',cell_vertical_alignments jsonb DEFAULT '{}',cell_text_colors jsonb DEFAULT '{}',cell_number_formats jsonb DEFAULT '{}',extra_fields jsonb DEFAULT '{}',
+      xuti_style_no text,supplier_style_no text,supplier_code text,color text,size_range text,material text,
+      supply_price_excl_tax numeric,vip_price numeric,live_price numeric,tag_price numeric,selling_points text,reorder_days int,collection_inventory jsonb DEFAULT '[]',
+      sort_order int DEFAULT 0,row_color text DEFAULT 'NONE',created_by bigint DEFAULT 7,updated_by bigint DEFAULT 7,version int DEFAULT 1,
+      created_at timestamptz DEFAULT now(),updated_at timestamptz DEFAULT now(),cell_owners jsonb DEFAULT '{}',claimed_by bigint,
+      migration_locked boolean DEFAULT false,migration_target_workspace text,migration_target_row_id bigint,migrated_at timestamptz,product_id bigint
+    );
+    CREATE TABLE idempotency_records(id bigserial,actor_id bigint,operation text,idempotency_key text,request_hash text,response_status int,response_body jsonb);
+    CREATE TABLE audit_logs(id bigserial,actor_id bigint,actor_label text,action text,entity_type text,entity_id text,request_id text,before_data jsonb,after_data jsonb,reason text,selection_table_id bigint);
+    CREATE TABLE compass_ai_settings(id int PRIMARY KEY,enabled boolean,api_key_encrypted text,verified_at timestamptz);
+  `);
+}, 30000);
+beforeEach(async () => {
+  vi.stubEnv("COMPASS_MAIL_KEY", "a".repeat(64));
+  providerCalls = 0; providerPayload = {};
+  providerHandler = products => ({ rows: products.map(product => ({ id: product.id, titles: product.targets.map((target: Row) => ({ key: target.key, value: target.kind === "long" ? "【水貂毛拼接100桑蚕丝】碧纨春女式皮衣" : "碧纨春女式皮衣" })), evidence: ["成分：主面料桑蚕丝，配料水貂毛皮"], warnings: ["款名需复核"] })) });
+  await fixture.database!.exec("TRUNCATE style_selections,selection_field_registry,style_selection_protection,idempotency_records,audit_logs,compass_ai_settings RESTART IDENTITY");
+  await fixture.database!.query("INSERT INTO style_selection_protection(id,settings) VALUES(1,$1)", [JSON.stringify(defaultProtection)]);
+  for (const [key, label, type, textConfig] of [[longKey, "长标题", "text", { countMode: "characters", maxLength: 60 }], [shortKey, "短标题", "text", { countMode: "han", maxLength: 20 }], [categoryKey, "三级类目", "single", undefined]] as const) {
+    await fixture.database!.query("INSERT INTO selection_field_registry(workspace_key,field_key,owner_id,visibility,definition) VALUES('default',$1,7,'PUBLIC',$2)", [key, JSON.stringify({ key, label, custom: true, width: 100, type, textConfig, options: label === "三级类目" ? ["女士皮衣/皮草"] : undefined })]);
+  }
+  await fixture.database!.query("INSERT INTO compass_ai_settings VALUES(1,true,$1,now())", [encryptSecret("mock-provider-key-never-real")]);
+  installProvider();
+});
+afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
+afterAll(async () => { await fixture.database?.close(); });
+
+describe("server-authoritative AI product titles", () => {
+  it("learns only permitted examples, preserves slash labels, and fills only existing blank targets", async () => {
+    await style("EXAMPLE", { [longKey]: "【桑蚕丝】旧款标题", [shortKey]: "旧款名马夹" });
+    const current = await style("TARGET", { [longKey]: "已有长标题" });
+    const preview = await generateTitles(actor(), input([String(current.id)]));
+    expect(preview.rows[0].titles).toMatchObject([{ key: shortKey, maxLength: 20, countMode: "han" }]);
+    expect(providerPayload.messages[1].content[0].text).toContain("女士皮衣/皮草");
+    expect(providerPayload.messages[1].content[0].text).toContain("旧款名马夹");
+    expect(providerPayload.messages[1].content[0].text).not.toContain("mock-provider-key");
+    const result = await applyTitles(actor(), { planToken: preview.planToken, rows: preview.rows.map(row => ({ id: row.id, titles: row.titles.map(({ key, value }) => ({ key, value })) })) });
+    expect(result.updatedCount).toBe(1);
+    const saved = (await read("SELECT extra_fields FROM style_selections WHERE id=$1", [current.id]))[0].extra_fields;
+    expect(saved[longKey]).toBe("已有长标题"); expect(saved[shortKey]).toBe("碧纨春女式皮衣");
+  });
+  it("makes no paid model call if every target is already filled", async () => {
+    const row = await style("FILLED", { [longKey]: "已有长标题", [shortKey]: "已有短标题" });
+    expect((await generateTitles(actor(), input([String(row.id)]))).rows).toEqual([]);
+    expect(providerCalls).toBe(0);
+  });
+  it("skips rows without visible product facts", async () => {
+    const row = await style("EMPTY", { [categoryKey]: "" }, null);
+    const preview = await generateTitles(actor(), input([String(row.id)]));
+    expect(preview.rows).toEqual([]); expect(providerCalls).toBe(0);
+  });
+  it("never sends private category values or private example titles to the provider", async () => {
+    await fixture.database!.query("UPDATE selection_field_registry SET owner_id=8,visibility='PRIVATE' WHERE field_key=$1", [categoryKey]);
+    await style("EXAMPLE", { [categoryKey]: "隐私类目", [longKey]: "【桑蚕丝】可见标题" });
+    const row = await style("TARGET", { [categoryKey]: "秘密类别" });
+    await generateTitles(actor(), input([String(row.id)]));
+    const payload = JSON.stringify(providerPayload); expect(payload).not.toContain("隐私类目"); expect(payload).not.toContain("秘密类别"); expect(payload).not.toContain("custom:category");
+  });
+  it("rejects private or nontext targets before calling the model", async () => {
+    const row = await style("TARGET");
+    await fixture.database!.query("UPDATE selection_field_registry SET owner_id=8,visibility='PRIVATE' WHERE field_key=$1", [longKey]);
+    await expect(generateTitles(actor(), input([String(row.id)], [longKey]))).rejects.toMatchObject({ status: 403 });
+    expect(providerCalls).toBe(0);
+  });
+  it("omits protected composition and private title examples from the paid request", async () => {
+    await fixture.database!.query("UPDATE style_selection_protection SET settings=$1,revision=revision+1", [JSON.stringify({ ...defaultProtection, enabled: true, regions: [{ id: "123e4567-e89b-42d3-a456-426614174000", name: "成分保护", scope: "columns", rowIds: [], columnKeys: ["material"], users: {}, others: "deny" }] })]);
+    await fixture.database!.query("UPDATE selection_field_registry SET owner_id=8,visibility='PRIVATE' WHERE field_key=$1", [shortKey]);
+    await style("EXAMPLE", { [shortKey]: "秘密标题不可发送" });
+    const row = await style("TARGET", { [shortKey]: "本款秘密短标题" });
+    providerHandler = products => ({ rows: products.map(product => ({ id: product.id, titles: [{ key: longKey, value: "【女式皮衣】春影女式皮衣" }], evidence: ["三级类目"], warnings: ["成分不可查看，未使用材质卖点"] })) });
+    await generateTitles(actor(), input([String(row.id)], [longKey]));
+    const payload = JSON.stringify(providerPayload);
+    expect(payload).not.toContain("秘密标题不可发送"); expect(payload).not.toContain("本款秘密短标题");
+    expect(payload).not.toContain("95%聚酯纤维"); expect(payload).not.toContain("配料：水貂毛皮");
+  });
+  it("does not ask the model to fill read-only or migration-locked target rows", async () => {
+    const row = await style("TARGET");
+    await fixture.database!.query("UPDATE style_selections SET migration_locked=true WHERE id=$1", [row.id]);
+    expect((await generateTitles(actor(), input([String(row.id)]))).rows).toEqual([]);
+    expect(providerCalls).toBe(0);
+  });
+  it("does not generate a saved row without a readable style number", async () => {
+    const row = await style("");
+    expect((await generateTitles(actor(), input([String(row.id)]))).rows).toEqual([]);
+    expect(providerCalls).toBe(0);
+  });
+  it("rolls back the entire fill when another user fills one target after preview", async () => {
+    const first = await style("A"), second = await style("B");
+    const preview = await generateTitles(actor(), input([String(first.id), String(second.id)]));
+    await fixture.database!.query("UPDATE style_selections SET extra_fields=extra_fields || $2::jsonb,updated_at=now() WHERE id=$1", [second.id, JSON.stringify({ [shortKey]: "他人已写入" })]);
+    await expect(applyTitles(actor(), { planToken: preview.planToken, rows: preview.rows.map(row => ({ id: row.id, titles: row.titles.map(({ key, value }) => ({ key, value })) })) })).rejects.toMatchObject({ status: 409 });
+    const untouched = (await read("SELECT extra_fields FROM style_selections WHERE id=$1", [first.id]))[0].extra_fields;
+    expect(untouched[longKey]).toBeUndefined(); expect(untouched[shortKey]).toBeUndefined();
+    expect(await read("SELECT * FROM audit_logs")).toHaveLength(0);
+  });
+  it("rejects revoked field permissions without writing any title", async () => {
+    const row = await style("TARGET"), preview = await generateTitles(actor(), input([String(row.id)]));
+    await fixture.database!.query("UPDATE selection_field_registry SET owner_id=8,visibility='PRIVATE',revision=revision+1 WHERE field_key=$1", [longKey]);
+    await expect(applyTitles(actor(), { planToken: preview.planToken, rows: preview.rows.map(row => ({ id: row.id, titles: row.titles.map(({ key, value }) => ({ key, value })) })) })).rejects.toMatchObject({ status: 403 });
+    expect((await read("SELECT extra_fields FROM style_selections WHERE id=$1", [row.id]))[0].extra_fields[shortKey]).toBeUndefined();
+  });
+  it("rejects signed preview replay by another actor, table or forged signature", async () => {
+    const row = await style("TARGET"), preview = await generateTitles(actor(), input([String(row.id)]));
+    expect(() => readTitlePlan(preview.planToken, { ...actor(), actor: { ...actor().actor, id: "8" } })).toThrow();
+    expect(() => selectionScope.run("23", () => readTitlePlan(preview.planToken, actor()))).toThrow();
+    expect(() => readTitlePlan(preview.planToken.slice(0, -4) + "xxxx", actor())).toThrow();
+  });
+  it("rejects unsupported edited claims and respects the field limit on apply", async () => {
+    const row = await style("TARGET"), preview = await generateTitles(actor(), input([String(row.id)]));
+    await expect(applyTitles(actor(), { planToken: preview.planToken, rows: [{ id: String(row.id), titles: [{ key: longKey, value: "【非遗手工桑蚕丝】碧纨春马甲" }] }] })).rejects.toMatchObject({ status: 400 });
+    await expect(applyTitles(actor(), { planToken: preview.planToken, rows: [{ id: String(row.id), titles: [{ key: shortKey, value: "马".repeat(21) }] }] })).rejects.toMatchObject({ status: 400 });
+  });
+  it("rejects visually unverified design claims from a text-only AI result", async () => {
+    const row = await style("TARGET");
+    providerHandler = products => ({ rows: products.map(product => ({ id: product.id, titles: [{ key: longKey, value: "【水貂毛拼接100桑蚕丝】碧纨春圆领盘扣马甲" }], evidence: ["主面料及配料"], warnings: [] })) });
+    await expect(generateTitles(actor(), input([String(row.id)], [longKey]))).rejects.toMatchObject({ status: 502 });
+    expect((await read("SELECT extra_fields FROM style_selections WHERE id=$1", [row.id]))[0].extra_fields[longKey]).toBeUndefined();
+  });
+  it("replays an applied idempotency key as safe identifiers without rerevealing revoked title fields", async () => {
+    const row = await style("TARGET"), preview = await generateTitles(actor(), input([String(row.id)]));
+    const body = { planToken: preview.planToken, rows: preview.rows.map(row => ({ id: row.id, titles: row.titles.map(({ key, value }) => ({ key, value })) })) };
+    const first = await applyTitles(actor("safe-replay"), body);
+    await fixture.database!.query("UPDATE selection_field_registry SET owner_id=8,visibility='PRIVATE',revision=revision+1 WHERE field_key=$1", [longKey]);
+    expect(await applyTitles(actor("safe-replay"), body)).toEqual(first);
+    expect(first).toEqual({ updatedCount: 1, ids: [String(row.id)] });
+    expect(await read("SELECT * FROM audit_logs")).toHaveLength(1);
+  });
+  it("rejects changed source facts during model generation", async () => {
+    const row = await style("TARGET");
+    const ordinary = providerHandler;
+    vi.stubGlobal("fetch", vi.fn(async (_url: string, init: RequestInit) => {
+      const data = JSON.parse(JSON.parse(init.body as string).messages[1].content[0].text);
+      await fixture.database!.query("UPDATE style_selections SET material='面料：100%棉',updated_at=now() WHERE id=$1", [row.id]);
+      return new Response(JSON.stringify({ id: "test", model: "openai/gpt-6.1-sol", choices: [{ finish_reason: "stop", message: { content: JSON.stringify(ordinary(data.products)) } }] }));
+    }));
+    await expect(generateTitles(actor(), input([String(row.id)]))).rejects.toMatchObject({ status: 409 });
+  });
+  it("returns only coarse readiness and does not reveal configuration secrets", async () => {
+    expect(await titleAIStatus(actor())).toEqual({ ready: true, message: "AI 商品标题已就绪" });
+    await fixture.database!.query("UPDATE compass_ai_settings SET verified_at=NULL");
+    expect(await titleAIStatus(actor())).toEqual({ ready: false, message: expect.any(String) });
+  });
+  it("rejects missing, duplicate or unrequested model outputs", () => {
+    const expected = [{ id: "1", keys: [longKey] }], valid = { id: "1", titles: [{ key: longKey, value: "【盘扣】马甲" }], evidence: [], warnings: [] };
+    expect(() => parseTitleAIResponse({ rows: [] }, expected)).toThrow();
+    expect(() => parseTitleAIResponse({ rows: [valid, valid] }, expected)).toThrow();
+    expect(() => parseTitleAIResponse({ rows: [{ ...valid, titles: [{ key: shortKey, value: "马甲" }] }] }, expected)).toThrow();
+  });
+});

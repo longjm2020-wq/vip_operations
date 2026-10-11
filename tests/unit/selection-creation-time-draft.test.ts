@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { selectionCreationTimeComparable, selectionCreationTimeError, selectionCreationTimeForSave, selectionCreationTimeValue, withSelectionCreationTime } from "../../apps/web/src/selection-creation-time.js";
 import { selectionSystemValue } from "../../apps/web/src/selection-system-fields.js";
 import { mergeSelectionRemote, mergeSelectionSave } from "../../apps/web/src/selection-autosave.js";
+import { parseSelectionCreatedTime, selectionCreatedTimeInputSchema } from "../../packages/contracts/src/selection-created-time.js";
+import { parseSelectionClipboard } from "../../apps/web/src/selection-clipboard.js";
 
 const before = { _key: "row", id: "1", createdAt: "2026-10-01T00:01:02Z", updatedAt: "old", version: 1, material: "棉", registrationBatch: "2026-09-28" };
 
@@ -20,6 +22,13 @@ describe("editable built-in creation time", () => {
     ["2026-10-02", "2026-10-01T16:00:00.000Z"],
     ["2026-10-02 10:30", "2026-10-02T02:30:00.000Z"],
     ["2026-10-02 10:30:45", "2026-10-02T02:30:45.000Z"],
+    ["2025/4/22 0:00", "2025-04-21T16:00:00.000Z"],
+    ["2025/4/22 0:42", "2025-04-21T16:42:00.000Z"],
+    ["2025/4/22 1:24", "2025-04-21T17:24:00.000Z"],
+    ["2025/4/22 2:07", "2025-04-21T18:07:00.000Z"],
+    ["2025/4/22", "2025-04-21T16:00:00.000Z"],
+    ["2025-4-2 1:02:03", "2025-04-01T17:02:03.000Z"],
+    [" 2024/2/29\u00a00:42 ", "2024-02-28T16:42:00.000Z"],
   ])("saves %s as its exact Beijing instant", (input, expected) => {
     const draft = withSelectionCreationTime(before, input);
     expect(selectionCreationTimeError(draft)).toBeUndefined();
@@ -28,7 +37,11 @@ describe("editable built-in creation time", () => {
     expect(selectionCreationTimeValue(draft, "date")).toBe(input);
   });
 
-  it.each(["", " ", "2026-02-29", "2026-10-11 24:00", "2026-10-11 13:61"])("retains invalid input %j and prevents clearing or rollover", input => {
+  it.each(["", " ", "2026-02-29", "2026-10-11 24:00", "2026-10-11 13:61",
+    "2025/2/29 0:42", "2025/4/31 0:42", "2025/4/22 24:00", "2025/4/22 0:60",
+    "2025/4/22 0:42:60", "2025/13/2", "2025/0/2", "2025/4/0", "2025/4/22 1:2",
+    "2025/4-22 0:42", "4/22/2025 0:42", "2025/4/22\n0:42", "2025-04-22T00:42:00",
+  ])("retains invalid input %j and prevents clearing or rollover", input => {
     const draft = withSelectionCreationTime(before, input);
     expect(selectionCreationTimeValue(draft)).toBe(input);
     expect(selectionCreationTimeError(draft)).toBeTruthy();
@@ -44,6 +57,24 @@ describe("editable built-in creation time", () => {
 
   it("treats equivalent ISO and displayed timestamp spellings as the same saved value", () => {
     expect(selectionCreationTimeComparable(withSelectionCreationTime(before, "2026-10-01 08:01:02"))).toBe(selectionCreationTimeComparable(before));
+  });
+
+  it("normalizes each copied Excel row to a server-valid exact Beijing instant without changing the clipboard text", () => {
+    const values = parseSelectionClipboard("2025/4/22 0:00\r\n2025/4/22 0:42\r\n2025/4/22 1:24\r\n2025/4/22 2:07\r\n");
+    expect(values).toHaveLength(4);
+    const drafts = values.map(([value], index) => withSelectionCreationTime({ ...before, id: String(index + 1) }, value));
+    expect(drafts.map(row => selectionCreationTimeError(row))).toEqual([undefined, undefined, undefined, undefined]);
+    expect(drafts.map(row => selectionCreationTimeForSave(row))).toEqual([
+      "2025-04-21T16:00:00.000Z", "2025-04-21T16:42:00.000Z", "2025-04-21T17:24:00.000Z", "2025-04-21T18:07:00.000Z",
+    ]);
+    expect(drafts.every(row => selectionCreatedTimeInputSchema.safeParse(selectionCreationTimeForSave(row)).success)).toBe(true);
+    expect(drafts.map(row => selectionCreationTimeValue(row))).toEqual(values.map(([value]) => value));
+  });
+
+  it("preserves explicit ISO timezones and never guesses Excel date serials", () => {
+    expect(parseSelectionCreatedTime("2025-04-22T00:42:00+02:00")).toBe("2025-04-21T22:42:00.000Z");
+    expect(parseSelectionCreatedTime(45769)).toBeNull();
+    expect(parseSelectionCreatedTime("45769.03")).toBeNull();
   });
 
   it.each(["2026-10-02 10:30:45", "2026-10-0", ""])("retains newer input %j during a previous save", input => {

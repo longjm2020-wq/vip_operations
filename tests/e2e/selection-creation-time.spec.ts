@@ -207,3 +207,19 @@ test("1000行创建时间整列复制和多行粘贴包括未挂载行，保存�
   await expect(createdInput(page, 1)).toHaveValue(values[0]);
   expect((await copyTimeColumn(page)).split("\n")).toEqual(values);
 });
+
+test("Excel未补零斜杠日期多行粘贴在选款登记和商品档案规范保存", async ({ page }) => {
+  const pasted = ["2025/4/22 0:00", "2025/4/22 0:42", "2025/4/22 1:24", "2025/4/22 2:07"];
+  const expected = ["2025-04-22 00:00:00", "2025-04-22 00:42:00", "2025-04-22 01:24:00", "2025-04-22 02:07:00"];
+  for (const entry of ["/style-selections", "/products"]) {
+    const state = await fixture(page, entry, { count: 4 });
+    await createdCell(page, 1).click();
+    await pasteTime(page, pasted.join("\n"));
+    await expect.poll(() => state.writes.length).toBe(4);
+    expect(state.rows.map(row => formatSelectionCreatedTime(row.createdAt))).toEqual(expected);
+    await expect(page.getByRole("button", { name: "未保存 · 重试", exact: true })).toHaveCount(0);
+    await page.reload();
+    await expect(createdInput(page, 1)).toHaveValue(expected[0]);
+    expect((await copyTimeColumn(page)).split("\n")).toEqual(expected);
+  }
+});
