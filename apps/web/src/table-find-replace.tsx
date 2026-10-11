@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState, type RefObject } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type PointerEvent, type RefObject } from "react";
 import { App, Button, Checkbox, Input, Modal, Pagination, Select, Space } from "antd";
 import { SearchOutlined } from "@ant-design/icons";
 import { tableFindMatches, tableReplaceText, type TableFindCell, type TableFindChange, type TableFindOptions } from "./table-find-replace-data.js";
@@ -22,6 +22,45 @@ export function TableFindReplace({ rootRef, cells, selectedIds, blocked = false,
   const [currentId, setCurrentId] = useState<string | null>(null), [searched, setSearched] = useState(false), [busy, setBusy] = useState(false);
   const [resultPage, setResultPage] = useState(1);
   const input = useRef<import("antd").InputRef>(null);
+  const title = useRef<HTMLDivElement>(null);
+  // Leave Ant Design's initial position intact until the user moves the dialog.
+  // Keep the chosen viewport coordinates while this table remains mounted.
+  const [position, setPosition] = useState<{ left: number; top: number } | null>(null);
+  const [dragging, setDragging] = useState(false);
+  const drag = useRef<{ id: number; x: number; y: number; left: number; top: number } | null>(null);
+  const sizeObserver = useRef<ResizeObserver | null>(null);
+  const constrain = (left: number, top: number) => {
+    const bounds = title.current?.closest(".ant-modal")?.getBoundingClientRect();
+    return {
+      left: Math.max(8, Math.min(left, window.innerWidth - (bounds?.width || 480) - 8)),
+      top: Math.max(8, Math.min(top, window.innerHeight - (bounds?.height || 0) - 8)),
+    };
+  };
+  const keepInView = () => setPosition(current => {
+    if (!current) return current;
+    const next = constrain(current.left, current.top);
+    return next.left === current.left && next.top === current.top ? current : next;
+  });
+  const stopDrag = () => { drag.current = null; setDragging(false); };
+  const startDrag = (event: PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0 || !event.isPrimary || (event.target as Element).closest("button, input, textarea, select, a")) return;
+    const bounds = event.currentTarget.closest(".ant-modal")?.getBoundingClientRect();
+    if (!bounds) return;
+    event.preventDefault(); event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    drag.current = { id: event.pointerId, x: event.clientX, y: event.clientY, left: bounds.left, top: bounds.top };
+    setDragging(true);
+  };
+  const moveDrag = (event: PointerEvent<HTMLDivElement>) => {
+    const current = drag.current;
+    if (current?.id !== event.pointerId) return;
+    setPosition(constrain(current.left + event.clientX - current.x, current.top + event.clientY - current.y));
+  };
+  useEffect(() => {
+    window.addEventListener("resize", keepInView);
+    window.addEventListener("blur", stopDrag);
+    return () => { window.removeEventListener("resize", keepInView); window.removeEventListener("blur", stopDrag); sizeObserver.current?.disconnect(); };
+  }, []);
   const options: TableFindOptions = { query, replacement, matchCase, wholeCell };
   const searchCells = useMemo(() => open ? typeof cells === "function" ? cells() : cells : [], [open, cells]);
   const matches = useMemo(() => searchCells.filter(cell => (scope === "visible" || selection.has(cell.id)) && tableFindMatches(cell.text, { query, matchCase, wholeCell })), [searchCells, scope, selection, query, matchCase, wholeCell]);
@@ -78,8 +117,15 @@ export function TableFindReplace({ rootRef, cells, selectedIds, blocked = false,
   const editableCount = matches.filter(cell => cell.replaceable).length;
   return <>
     <Button icon={<SearchOutlined />} title="Ctrl+H 查找/替换" onClick={show}>查找/替换</Button>
-    <Modal className={`table-find-replace-modal ${dialogClass}`} title="查找/替换" open={open} mask={false} scrollLock={false} styles={{ wrapper: { pointerEvents: "none" }, container: { pointerEvents: "auto" } }} footer={null} width={560} onCancel={() => setOpen(false)} afterOpenChange={visible => { if (visible) input.current?.focus(); }} focusTriggerAfterClose={false}>
-      <div style={{ display: "grid", gap: 14 }}>
+    <Modal className={`table-find-replace-modal ${dialogClass}`} title={<div ref={title} className="table-find-replace-title" style={{ cursor: dragging ? "grabbing" : "grab", touchAction: "none", userSelect: "none" }} title="拖动标题栏移动查找/替换窗口" onPointerDown={startDrag} onPointerMove={moveDrag} onPointerUp={stopDrag} onPointerCancel={stopDrag} onLostPointerCapture={stopDrag}>查找/替换</div>} open={open} mask={false} scrollLock={false} style={position ? { position: "fixed", ...position, margin: 0, paddingBottom: 0 } : undefined} styles={{ wrapper: { pointerEvents: "none" }, container: { pointerEvents: "auto", padding: 16 }, body: { maxHeight: "calc(100dvh - 96px)", overflowY: "auto" } }} footer={null} width={480} onCancel={() => { stopDrag(); setOpen(false); }} afterOpenChange={visible => {
+      sizeObserver.current?.disconnect();
+      if (visible) {
+        const modal = title.current?.closest(".ant-modal");
+        if (modal) { sizeObserver.current = new ResizeObserver(keepInView); sizeObserver.current.observe(modal); }
+        keepInView(); input.current?.focus();
+      }
+    }} focusTriggerAfterClose={false}>
+      <div style={{ display: "grid", gap: 10 }}>
         <label>查找内容<Input ref={input} aria-label="查找内容" maxLength={2000} value={query} onChange={event => { setQuery(event.target.value); reset(); }} onPressEnter={event => navigate(event.shiftKey ? -1 : 1)} /></label>
         <label>替换为<Input aria-label="替换为" maxLength={2000} value={replacement} onChange={event => setReplacement(event.target.value)} onPressEnter={() => { void replace(false); }} /></label>
         <Space wrap>
