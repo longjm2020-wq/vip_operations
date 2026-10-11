@@ -11,6 +11,7 @@ import {
   validateSheet,
 } from "./sheet-data";
 import { downloadWorkbook, readWorkbook } from "./sheet-excel";
+import { TableOperationHints } from "./table-operation-hints";
 
 export function Sheet({
   columns,
@@ -256,17 +257,15 @@ export function Sheet({
             </>
           )}
         </Space>
-        <span className="secondary">
-          {value.length} 行 / {columns.length} 列
-        </span>
+        <Space size={8}>
+          <span className="secondary">{value.length} 行 / {columns.length} 列</span>
+          <TableOperationHints>
+            <p>点击单元格编辑；Tab / Enter 连续录入；可从 Excel、WPS、飞书粘贴多行多列。</p>
+            <p>修改后统一保存。</p>
+            <p>{fixed ? "按首列对应原单明细。" : "导入追加为新行，移出行不会删除已保存资料。"}</p>
+          </TableOperationHints>
+        </Space>
       </div>
-      <p className="sheet-help">
-        点击单元格编辑 · Tab / Enter 连续录入 · 可从
-        Excel、WPS、飞书粘贴多行多列 · 修改后统一保存
-        {fixed
-          ? " · 按首列对应原单明细"
-          : " · 导入追加为新行，移出行不会删除已保存资料"}
-      </p>
       {!!Object.keys(allErrors).length && (
         <Alert
           type="error"

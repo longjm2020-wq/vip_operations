@@ -399,6 +399,7 @@ function Workspace({ user }: { user: Row }) {
   const activeKey = parent || selected;
   const activeWorkspace = visibleItems.find((i) => i.key === activeKey);
   const tableDetail = location.pathname.startsWith("/project-tables/");
+  const collaborationTable = location.pathname.startsWith("/style-selections") || location.pathname === "/products" || tableDetail;
   const operationTool = location.pathname.startsWith("/analytics/compass")
     ? "经营分析"
     : location.pathname.startsWith("/analytics/competitors")
@@ -533,7 +534,7 @@ function Workspace({ user }: { user: Row }) {
               />
             </Space>
           </Layout.Header>
-          <Layout.Content className={`content${location.pathname.startsWith("/style-selections") || tableDetail ? " selection-workspace-content" : ""}`}>
+          <Layout.Content className={`content${collaborationTable ? " selection-workspace-content" : ""}`}>
             <Routes>
               <Route path="/my-workspace" element={<PersonalWorkspacePage key={user.id} />} />
               <Route path="/settings/ai" element={<CompassAISettingsPage />} />
@@ -629,9 +630,9 @@ function Workspace({ user }: { user: Row }) {
                 }
               />
             </Routes>
-            <footer className="page-footer">
+            {!collaborationTable && <footer className="page-footer">
               XUTI <span>{coreFeatureSummary}</span>
-            </footer>
+            </footer>}
           </Layout.Content>
         </Layout>
       </Layout>
