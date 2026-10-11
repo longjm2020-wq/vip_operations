@@ -46,6 +46,10 @@
 .selection-column-group-config { padding: 12px; border: 1px solid #eaded3; border-radius: 6px; background: #fffaf5; }
 .selection-column-group-name { display: flex; gap: 8px; margin-bottom: 8px; }
 .selection-column-group-config .ant-select { width: 100%; }
+.selection-column-group-handle { cursor: grab; flex: none; }
+.selection-column-group-handle:active { cursor: grabbing; }
+.selection-column-group-config[data-group-drop="before"] { box-shadow: inset 0 3px 0 #d3540b; }
+.selection-column-group-config[data-group-drop="after"] { box-shadow: inset 0 -3px 0 #d3540b; }
 .selection-column-group-help { color: #8c7564; font-size: 12px; }
 .selection-card:has(.selection-column-group-tabs) .selection-sheet { max-height: calc(100vh - 305px); }
 .selection-tool-select .ant-select-selector {
@@ -259,7 +263,7 @@
 }
 
 .selection-sheet.row-loose tbody td {
-  height: 64px;
+  height: 100px;
 }
 
 @media (max-width: 900px) {
@@ -325,7 +329,7 @@
 
 .selection-sheet { --selection-cell-height: 50px; }
 .selection-sheet.row-compact { --selection-cell-height: 40px; }
-.selection-sheet.row-loose { --selection-cell-height: 64px; }
+.selection-sheet.row-loose { --selection-cell-height: 100px; }
 .selection-cell-content { height: calc(var(--selection-cell-height) - 1px); overflow: hidden; min-width: 0; overflow-wrap: anywhere; }
 .selection-sheet td { position: relative; }
 .selection-remote-cell { position: absolute; inset: 3px; border: 2px solid; pointer-events: none; z-index: 5; }

@@ -2,6 +2,8 @@ import { z } from "zod";
 import { selectionViewSchema } from "./selection-view.js";
 import { migrationConfigSchema } from "./selection-migration-config.js";
 
+export const selectionInitialColumnWidth = 100;
+
 export const selectionFieldTypeSchema = z.enum([
   "text",
   "number",
@@ -30,7 +32,7 @@ export const selectionFieldSchema = z
   .object({
     key,
     label: z.string().trim().min(1).max(40),
-    width: z.number().min(80).max(1000000),
+    width: z.number().min(80).max(1000000).default(selectionInitialColumnWidth),
     custom: z.boolean().optional(),
     deleted: z.boolean().optional(),
     ownerId: z

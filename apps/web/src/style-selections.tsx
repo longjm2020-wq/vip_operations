@@ -48,6 +48,7 @@ import { matchesSelectionFilters, sortSelectionRows, selectionAllCells, clearSel
 import { retainSelectionResults, type RetainedSelectionResults } from "./selection-retained-results";
 import { selectionSizes as sizes, sortSelectionSizes } from "../../../packages/contracts/src/selection-sizes";
 import { selectionLastRow } from "../../../packages/contracts/src/selection-trailing-row";
+import { selectionInitialColumnWidth } from "../../../packages/contracts/src/selection-layout";
 import "./style-selections.css";
 
 const colorOptions = [
@@ -65,17 +66,17 @@ const textColorOptions = [
 type SelectionImage = { id: string; url: string; color: string };
 type Column = SelectionField;
 const baseColumns: Column[] = [
-  { key: "registrationBatch", label: "登记批次", width: 120 }, { key: "images", label: "图片", width: 120 },
-  { key: "labelImages", label: "洗唛/吊牌图", width: 120 },
-  { key: "xutiStyleNo", label: "序缇款号", width: 120 }, { key: "supplierStyleNo", label: "供应商款号", width: 120 },
-  { key: "supplierCode", label: "供应商编码", width: 120 }, { key: "color", label: "颜色", width: 120 },
-  { key: "sizeRange", label: "尺码范围", width: 120 }, { key: "material", label: "材质", width: 120 },
-  { key: "supplyPriceExclTax", label: "供货价（不含税）", width: 120 }, { key: "vipPrice", label: "唯品价", width: 120 },
-  { key: "livePrice", label: "直播价", width: 120 }, { key: "tagPrice", label: "吊牌价", width: 120 },
+  { key: "registrationBatch", label: "登记批次", width: selectionInitialColumnWidth }, { key: "images", label: "图片", width: selectionInitialColumnWidth },
+  { key: "labelImages", label: "洗唛/吊牌图", width: selectionInitialColumnWidth },
+  { key: "xutiStyleNo", label: "序缇款号", width: selectionInitialColumnWidth }, { key: "supplierStyleNo", label: "供应商款号", width: selectionInitialColumnWidth },
+  { key: "supplierCode", label: "供应商编码", width: selectionInitialColumnWidth }, { key: "color", label: "颜色", width: selectionInitialColumnWidth },
+  { key: "sizeRange", label: "尺码范围", width: selectionInitialColumnWidth }, { key: "material", label: "材质", width: selectionInitialColumnWidth },
+  { key: "supplyPriceExclTax", label: "供货价（不含税）", width: selectionInitialColumnWidth }, { key: "vipPrice", label: "唯品价", width: selectionInitialColumnWidth },
+  { key: "livePrice", label: "直播价", width: selectionInitialColumnWidth }, { key: "tagPrice", label: "吊牌价", width: selectionInitialColumnWidth },
 ];
 const baseKeys = baseColumns.map((column) => column.key);
 const imageKeys = new Set(["images", "labelImages"]);
-const collectionColumns: Column[] = [{key:"sellingPoints",label:"产品卖点/简介",width:120},{key:"reorderDays",label:"翻单周期（天）",width:120},{key:"collectionInventory",label:"库存数",width:120}];
+const collectionColumns: Column[] = [{key:"sellingPoints",label:"产品卖点/简介",width:selectionInitialColumnWidth},{key:"reorderDays",label:"翻单周期（天）",width:selectionInitialColumnWidth},{key:"collectionInventory",label:"库存数",width:selectionInitialColumnWidth}];
 const collectionKeys = new Set(collectionColumns.map(column => column.key));
 const moneyKeys = new Set(["supplyPriceExclTax", "vipPrice", "livePrice", "tagPrice"]);
 const clean = (value: unknown) => (value === "" || value === undefined ? null : value);
@@ -104,7 +105,7 @@ const storedColumns = (storageKey: (key:string)=>string) => {
 };
 const columnLabelsKey = "style-selection-column-labels-v1";
 const initialColumns = (storageKey: (key:string)=>string,blankLayout=false,legacy=true,emptyLayout=false): Column[] => {
-  if (!legacy) return emptyLayout ? [] : blankLayout ? [{key:"custom:text",label:"文本",width:120,custom:true,type:"text"}] : resetFieldTypes([...baseColumns,...collectionColumns]);
+  if (!legacy) return emptyLayout ? [] : blankLayout ? [{key:"custom:text",label:"文本",width:selectionInitialColumnWidth,custom:true,type:"text"}] : resetFieldTypes([...baseColumns,...collectionColumns]);
   let config:Record<string,Partial<Column>>={};
   try{const value=JSON.parse(localStorage.getItem(storageKey("selection-field-config-v1")) || "{}");if(value && typeof value==="object" && !Array.isArray(value))config=value;}catch{}
   let labels: Record<string, string> = {};
@@ -112,7 +113,7 @@ const initialColumns = (storageKey: (key:string)=>string,blankLayout=false,legac
   const custom=storedColumns(storageKey);
   let initialized: string | null = null;
   try { initialized=localStorage.getItem(storageKey("selection-field-types-initialized-v2")); } catch {}
-  const defaults:Column[]=emptyLayout ? custom : blankLayout ? (initialized ? custom : [{key:"custom:text",label:"文本",width:120,custom:true,type:"text"}]) : [...baseColumns,...collectionColumns,...custom];
+  const defaults:Column[]=emptyLayout ? custom : blankLayout ? (initialized ? custom : [{key:"custom:text",label:"文本",width:selectionInitialColumnWidth,custom:true,type:"text"}]) : [...baseColumns,...collectionColumns,...custom];
   const fields = defaults.map(column => ({ ...column, ...config[column.key],key:column.key,custom:column.custom,label: typeof labels[column.key] === "string" && labels[column.key].trim() ? labels[column.key].trim().slice(0, 40) : column.label })).sort((a,b)=>{const keys=Object.keys(config);const rank=(key:string)=>keys.includes(key)?keys.indexOf(key):keys.length;return rank(a.key)-rank(b.key);});
   if(blankLayout)return fields;
   return initialized ? fields : resetFieldTypes(fields);

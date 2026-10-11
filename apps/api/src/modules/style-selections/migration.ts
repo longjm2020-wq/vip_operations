@@ -22,6 +22,7 @@ import {
 } from "../../../../../packages/contracts/src/selection-migration.js";
 import {
   selectionLayoutSchema,
+  selectionInitialColumnWidth,
   type SelectionField,
   mergeSelectionFields,
   applySelectionSharedLayout,
@@ -155,7 +156,7 @@ async function layout(tx: Tx, c: Context, key: string, archive: boolean) {
         {
           key: "custom:text",
           label: "文本",
-          width: 120,
+          width: selectionInitialColumnWidth,
           custom: true,
           type: "text",
         },
@@ -338,6 +339,7 @@ async function buildPlan(tx: Tx, c: Context, body: Input, lock = false) {
           );
         const copied = {
           ...field,
+          width: selectionInitialColumnWidth,
           key: copiedKey,
           custom: copiedKey.startsWith("custom:") || undefined,
         };

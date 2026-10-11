@@ -25,6 +25,7 @@ import {
   App,
   Alert,
   Button,
+  Checkbox,
   ConfigProvider,
   Form,
   Input,
@@ -81,7 +82,7 @@ const SupplyProducts = React.lazy(() => import("./supply").then(module => ({ def
 const SupplyReview = React.lazy(() => import("./supply").then(module => ({ default: module.SupplyReview })));
 const SupplyOrders = React.lazy(() => import("./supply-orders").then(module => ({ default: module.SupplyOrders })));
 const SupplyStatements = React.lazy(() => import("./supply-statements").then(module => ({ default: module.SupplyStatements })));
-const coreFeatureSummary = "经营与竞品分析 · 采购库存 · 协作表格 · 供应链订单对账";
+const coreFeatureSummary = "经营与竞品分析 · 报表自动更新 · 采购库存 · 协作表格 · 订单对账";
 const useUi = create<{ collapsed: boolean; toggle: () => void }>((set) => ({
   collapsed: false,
   toggle: () => set((s) => ({ collapsed: !s.collapsed })),
@@ -131,6 +132,7 @@ function Login() {
           {error && <Alert type="error" title={error} className="notice" />}
           <Form
             layout="vertical"
+            initialValues={{ rememberMe: false }}
             onFinish={async (b) => {
               setBusy(true);
               setError("");
@@ -158,6 +160,9 @@ function Login() {
               rules={[{ required: true }]}
             >
               <Input.Password autoComplete="current-password" size="large" />
+            </Form.Item>
+            <Form.Item name="rememberMe" valuePropName="checked">
+              <Checkbox>保持登录 30 天</Checkbox>
             </Form.Item>
             <Button
               type="primary"

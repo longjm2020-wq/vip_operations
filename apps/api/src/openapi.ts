@@ -11,6 +11,7 @@ import { id, qty, positive, money, text } from "./core.js";
 import { beginSchema, chunkSchema } from "./modules/analytics/service.js";
 import { settingsSchema } from "./modules/analytics/mail.js";
 import { aiSettingsSchema } from "./modules/analytics/ai.js";
+import { loginSchema } from "./modules/auth/service.js";
 import { compassProbeRequestSchema } from "./integrations/vip/compass.js";
 import {
   listingRequestSchema,
@@ -138,7 +139,7 @@ export function enrichOpenApi(doc: OpenAPIObject) {
   set(
     "/api/v1/auth/login",
     "post",
-    z.object({ username: text, password: z.string().min(1).max(256) }).strict(),
+    loginSchema,
   );
   set("/api/v1/purchase-orders", "post", poInput);
   set(

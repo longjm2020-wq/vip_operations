@@ -1,0 +1,59 @@
+.compass-update-session {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin: 16px 0 8px;
+}
+.compass-update-session .ant-tag {
+  margin: 0;
+}
+.compass-update-dimensions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin: 12px 0;
+}
+.compass-update-dimensions > div {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  background: #fff7ef;
+  border-radius: 8px;
+}
+.compass-update-dimensions .ant-tag {
+  width: fit-content;
+  margin: 0;
+}
+.compass-update-schedule {
+  margin: 16px 0;
+  padding: 12px;
+  background: #faf7f3;
+  border-radius: 8px;
+}
+.compass-browser-frame {
+  display: block;
+  width: 100%;
+  height: auto;
+  background: #fff;
+  cursor: pointer;
+  user-select: none;
+}
+.compass-browser-loading {
+  min-height: 160px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+}
+@media (max-width: 600px) {
+  .compass-update-dimensions {
+    grid-template-columns: 1fr;
+  }
+  .compass-update-dimensions > div {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+  }
+}

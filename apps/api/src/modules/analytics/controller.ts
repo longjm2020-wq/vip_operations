@@ -14,8 +14,43 @@ import { AuthRequest, context, Permission } from "../../http.js";
 import * as service from "./service.js";
 import * as mail from "./mail.js";
 import * as ai from "./ai.js";
+import * as browser from "./browser-update.js";
 @Controller("api/v1/analytics/compass")
 export class CompassAnalyticsController {
+  @Get("auto-update-settings") @Permission("analytics.manage") autoUpdateSettings(@Req() r: AuthRequest, @Res({ passthrough: true }) res: Response) {
+    res.setHeader("Cache-Control", "private, no-store");
+    return browser.compassAutoUpdateSettings(context(r));
+  }
+  @Post("auto-update-settings") @Permission("analytics.manage") saveAutoUpdate(@Req() r: AuthRequest, @Body() b: unknown) {
+    return browser.saveCompassAutoUpdate(context(r), b);
+  }
+  @Get("updates") @Permission("analytics.read") updateStatus(@Res({ passthrough: true }) res: Response) {
+    res.setHeader("Cache-Control", "private, no-store");
+    return browser.compassUpdateStatus();
+  }
+  @Post("updates") @Permission("analytics.manage") update(@Req() r: AuthRequest, @Body() b: unknown) {
+    return browser.requestCompassUpdate(context(r), b);
+  }
+  @Get("browser-session") @Permission("analytics.read") browserSession(@Res({ passthrough: true }) res: Response) {
+    res.setHeader("Cache-Control", "private, no-store");
+    return browser.compassBrowserSession();
+  }
+  @Post("browser-login") @Permission("analytics.manage") browserOpen(@Req() r: AuthRequest) {
+    return browser.openCompassLogin(context(r));
+  }
+  @Get("browser-login/:id") @Permission("analytics.manage") browserView(@Req() r: AuthRequest, @Param("id") id: string, @Res({ passthrough: true }) res: Response) {
+    res.setHeader("Cache-Control", "private, no-store");
+    return browser.compassLoginView(context(r), id);
+  }
+  @Post("browser-login/:id/actions") @Permission("analytics.manage") browserAction(@Req() r: AuthRequest, @Param("id") id: string, @Body() b: unknown) {
+    return browser.compassLoginAction(context(r), id, b);
+  }
+  @Post("browser-login/:id/cancel") @Permission("analytics.manage") browserCancel(@Req() r: AuthRequest, @Param("id") id: string) {
+    return browser.cancelCompassLogin(context(r), id);
+  }
+  @Post("browser-session/disconnect") @Permission("analytics.manage") browserDisconnect(@Req() r: AuthRequest) {
+    return browser.disconnectCompassSession(context(r));
+  }
   @Get("entity-trend") @Permission("analytics.read") trend(@Query() q: unknown, @Res({ passthrough: true }) res: Response) {
     res.setHeader("Cache-Control", "private, no-store");
     return service.entityTrend(q);

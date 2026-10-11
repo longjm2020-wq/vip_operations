@@ -21,6 +21,7 @@ import {
   entity,
 } from "../../core.js";
 import { z } from "zod";
+import { sessionMaxAge } from "./session-policy.js";
 export async function actorFor(token?: string): Promise<Actor> {
   if (!token) fail("UNAUTHENTICATED", "请先登录", 401);
   const u = await one(
@@ -60,11 +61,15 @@ export async function actorFor(token?: string): Promise<Actor> {
 }
 const attempts = new Map<string, { count: number; until: number }>();
 const dummy = passwordHash(randomBytes(32).toString("hex"));
+export const loginSchema = z
+  .object({
+    username: text,
+    password: z.string().min(1).max(256),
+    rememberMe: z.boolean().default(false),
+  })
+  .strict();
 export async function login(input: unknown, ip: string) {
-  const b = parse(
-    z.object({ username: text, password: z.string().min(1).max(256) }).strict(),
-    input,
-  );
+  const b = parse(loginSchema, input);
   const key = ip + "|" + b.username.toLowerCase();
   const a = attempts.get(key);
   if (a && a.until > Date.now() && a.count >= 10)
@@ -84,15 +89,17 @@ export async function login(input: unknown, ip: string) {
   }
   attempts.delete(key);
   const token = randomBytes(32).toString("hex");
+  const expiresAt = new Date(Date.now() + sessionMaxAge(b.rememberMe));
   await insert(db, "sessions", {
     userId: u.id,
     tokenHash: hash(token),
     csrfToken: randomBytes(24).toString("hex"),
-    expiresAt: new Date(
-      Date.now() + Number(process.env.SESSION_TTL || 28800) * 1000,
-    ),
+    expiresAt,
   });
-  return { token, actor: await actorFor(token) };
+  const actor = await actorFor(token);
+  // Account/permission loading can take time. The cookie must retain the same
+  // deadline as the stored session rather than starting another full duration.
+  return { token, actor, maxAge: Math.max(0, expiresAt.getTime() - Date.now()) };
 }
 export async function logout(token: string) {
   await rows(

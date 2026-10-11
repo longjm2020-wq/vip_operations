@@ -31,6 +31,7 @@ import { CompassAIReport } from "./compass-ai";
 import { CompassTrend } from "./compass-charts";
 import { CompassDetailTable } from "./compass-detail-table";
 import { CompassDateFilter } from "./compass-date-filter";
+import { CompassUpdateData } from "./compass-update-data";
 import {
   CompassProductImage,
   CompassImagePreview,
@@ -531,6 +532,7 @@ export function CompassAnalyticsPage() {
         subtitle="唯品会 · 魔方罗盘"
         extra={
           <>
+            <CompassUpdateData manage={manage} />
             <Button
               icon={<ReloadOutlined aria-hidden="true" />}
               onClick={() => {

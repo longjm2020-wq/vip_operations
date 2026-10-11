@@ -9,6 +9,7 @@ import {
 import { selectionScope } from "../../../../../packages/database/src/selection-scope.js";
 import {
   selectionLayoutSchema,
+  selectionInitialColumnWidth,
   selectionLayoutWriteSchema,
   selectionSharedLayoutSchema,
   mergeSelectionFields,
@@ -103,7 +104,7 @@ async function rawPersonal(tx: Tx, c: Context, workspace: string) {
               {
                 key: "custom:text",
                 label: "文本",
-                width: 120,
+                width: selectionInitialColumnWidth,
                 custom: true,
                 type: "text",
               },

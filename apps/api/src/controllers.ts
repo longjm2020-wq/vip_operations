@@ -60,7 +60,7 @@ class AuthController {
       secure: new URL(process.env.APP_ORIGIN!).protocol === "https:",
       sameSite: "lax",
       path: "/",
-      maxAge: Number(process.env.SESSION_TTL || 28800) * 1000,
+      maxAge: result.maxAge,
     });
     return result.actor;
   }

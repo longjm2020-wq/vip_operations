@@ -1,4 +1,4 @@
-import type { SelectionField } from "./selection-layout.js";
+import { selectionInitialColumnWidth, type SelectionField } from "./selection-layout.js";
 import { selectionBaseFields } from "./selection-migration.js";
 import { archiveFieldIds as ids } from "./product-archive.js";
 
@@ -71,7 +71,7 @@ export function archiveTableFields(
         key: "custom:product:" + key,
         label,
         type,
-        width: 140,
+        width: selectionInitialColumnWidth,
         custom: true,
       }) as SelectionField,
   );
@@ -84,7 +84,7 @@ export function archiveTableFields(
           key: "custom:product:" + field.id,
           label: field.name,
           custom: true,
-          width: 140,
+          width: selectionInitialColumnWidth,
           type:
             field.type === "select"
               ? "single"

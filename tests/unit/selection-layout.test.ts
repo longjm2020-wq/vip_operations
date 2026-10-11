@@ -29,6 +29,17 @@ function storage() {
   };
 }
 describe("personal selection layouts", () => {
+  it("defaults an unset width to 100 without discarding a field or resetting saved widths", () => {
+    const next = migrateSelectionLayout([
+      { key: "custom:unset", label: "未设置列宽", custom: true, type: "text" },
+      { ...columns[0], width: 224 },
+    ], { rowHeight: "loose" });
+    expect(next.columns.map(field => [field.key, field.width])).toEqual([
+      ["custom:unset", 100],
+      ["custom:material", 224],
+    ]);
+    expect(next.rowHeight).toBe("loose");
+  });
   it("preserves valid legacy fields, their order and configurations despite a damaged unrelated setting", () => {
     const next = migrateSelectionLayout(
       [
