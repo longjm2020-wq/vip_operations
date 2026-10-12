@@ -174,6 +174,7 @@ export const selectionLayoutSchema = z
         z.literal(200),
         z.literal(500),
         z.literal(1000),
+        z.literal(5000),
       ])
       .default(20),
     page: z.number().int().min(1).max(1000000).default(1),

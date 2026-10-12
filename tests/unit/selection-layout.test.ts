@@ -29,6 +29,14 @@ function storage() {
   };
 }
 describe("personal selection layouts", () => {
+  it("persists a 5000-row page size in the account layout without changing the default", () => {
+    const store = storage(), preferences = selectionLayoutSchema.parse({ columns, pageSize: 5000, page: 2 });
+    writeLayoutCache(store, "table:large:alice", { preferences, revision: 1, dirty: false });
+    expect(readLayoutCache(store, "table:large:alice")?.preferences.pageSize).toBe(5000);
+    expect(readLayoutCache(store, "table:large:alice")?.preferences.page).toBe(2);
+    expect(selectionLayoutSchema.parse({ columns }).pageSize).toBe(20);
+    expect(selectionLayoutSchema.safeParse({ columns, pageSize: 10000 }).success).toBe(false);
+  });
   it("defaults an unset width to 100 without discarding a field or resetting saved widths", () => {
     const next = migrateSelectionLayout([
       { key: "custom:unset", label: "未设置列宽", custom: true, type: "text" },

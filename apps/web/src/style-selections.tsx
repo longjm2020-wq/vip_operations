@@ -99,7 +99,7 @@ const splitTags = (value: unknown) => [...new Set(String(value ?? "").split("/")
 const joinTags = (value: string[]) => [...new Set(value.map((item) => item.trim()).filter(Boolean))].join("/");
 const comparable = (value: unknown) => value && typeof value === "object" ? JSON.stringify(value) : String(clean(value) ?? "");
 const cellId = (rowKey: string, columnKey: string) => `${rowKey}::${columnKey}`;
-const pageSizes = [20, 50, 100, 200, 500, 1000];
+const pageSizes = [20, 50, 100, 200, 500, 1000, 5000];
 const pageSizeKey = "style-selection-page-size-v1";
 const imageVisibilityCallbacks = new WeakMap<Element, (visible: boolean) => void>();
 let imageVisibilityObserver: IntersectionObserver | null = null;

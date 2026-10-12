@@ -34,7 +34,10 @@ export function SelectionImagePreview({ images, index, name, onIndexChange, onCl
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
   const [viewport, setViewport] = useState({ width: window.innerWidth, height: window.innerHeight });
-  const [naturalSize, setNaturalSize] = useState({ width: 640, height: 480 });
+  const knownSizes = useRef(new Map<string, { width: number; height: number }>());
+  const preparedImages = useRef(new Set<string>());
+  const [loadedSize, setLoadedSize] = useState({ url: image.url, width: 640, height: 480 });
+  const naturalSize = knownSizes.current.get(image.url) || (loadedSize.url === image.url ? loadedSize : { width: 640, height: 480 });
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const [scale, setScale] = useState(1);
   const [rotate, setRotate] = useState(0);
@@ -51,6 +54,27 @@ export function SelectionImagePreview({ images, index, name, onIndexChange, onCl
   const [cropMode, setCropMode] = useState(false);
   const cropDrag = useRef<{ id: number; x: number; y: number; bounds: DOMRect } | null>(null);
   const [cropRect, setCropRect] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
+  const positionFrame = useRef<number | null>(null);
+  const pendingOffset = useRef<typeof offset | null>(null);
+  const pendingCrop = useRef<typeof cropRect>(null);
+  const rememberSize = (url: string, element: HTMLImageElement) => {
+    if (!element.naturalWidth || !element.naturalHeight) return;
+    knownSizes.current.set(url, { width: element.naturalWidth, height: element.naturalHeight });
+    // Retain only this viewer's recent dimensions, not image bytes or table data.
+    if (knownSizes.current.size > 8) knownSizes.current.delete(knownSizes.current.keys().next().value!);
+  };
+  const applyPosition = () => {
+    positionFrame.current = null;
+    if (pendingOffset.current) { setOffset(pendingOffset.current); pendingOffset.current = null; }
+    if (pendingCrop.current) { setCropRect(pendingCrop.current); pendingCrop.current = null; }
+  };
+  const queuePosition = () => { positionFrame.current ??= requestAnimationFrame(applyPosition); };
+  const clearPosition = () => {
+    if (positionFrame.current !== null) cancelAnimationFrame(positionFrame.current);
+    positionFrame.current = null; pendingOffset.current = null; pendingCrop.current = null;
+  };
+  const previousUrl = index > 0 ? images[index - 1]?.url : undefined;
+  const nextUrl = images[index + 1]?.url;
   const availableWidth = alongsideDetails && viewport.width >= 1000 ? viewport.width - 528 : viewport.width;
   const fit = Math.min(1, Math.max(1, availableWidth - 32) / naturalSize.width, Math.max(1, viewport.height - 112) / naturalSize.height);
   const width = naturalSize.width * fit, height = naturalSize.height * fit;
@@ -62,9 +86,39 @@ export function SelectionImagePreview({ images, index, name, onIndexChange, onCl
     return () => { window.removeEventListener("resize", resize); window.removeEventListener("keydown", escape); };
   }, []);
   useEffect(() => {
+    // Prepare only the adjacent pictures in the opened cell. The table remains
+    // lazy, and a closed/hidden viewer must not start more image requests.
+    const connection = (navigator as Navigator & { connection?: { saveData?: boolean } }).connection;
+    if (connection?.saveData || document.hidden) return;
+    const urls = [...new Set([nextUrl, previousUrl].filter((url): url is string => !!url && url !== image.url && !preparedImages.current.has(url)))];
+    if (!urls.length) return;
+    const pending: HTMLImageElement[] = [];
+    const prepare = () => {
+      if (document.hidden) return;
+      urls.forEach(url => {
+        const picture = new window.Image();
+        picture.decoding = "async"; picture.fetchPriority = "low";
+        picture.onload = () => {
+          rememberSize(url, picture);
+          preparedImages.current.add(url);
+          void picture.decode().catch(() => {});
+        };
+        pending.push(picture); picture.src = url;
+      });
+    };
+    const idle = typeof window.requestIdleCallback === "function" ? window.requestIdleCallback(prepare, { timeout: 300 }) : undefined;
+    const timer = idle === undefined ? window.setTimeout(prepare, 100) : undefined;
+    return () => {
+      if (idle !== undefined) window.cancelIdleCallback(idle);
+      if (timer !== undefined) window.clearTimeout(timer);
+      pending.forEach(picture => { picture.onload = null; picture.removeAttribute("src"); });
+    };
+  }, [image.url, previousUrl, nextUrl]);
+  useEffect(() => {
     setScale(1); setRotate(0); setFlipX(false); setFlipY(false);
     setTextResult(null); setCropMode(false); setCropRect(null); cropDrag.current = null;
-    return () => { textJob.current?.abort(); };
+    drag.current = null; setDragging(false);
+    return () => { textJob.current?.abort(); clearPosition(); };
   }, [image.id, image.url]);
   useEffect(() => {
     const element = imageRef.current;
@@ -147,6 +201,7 @@ export function SelectionImagePreview({ images, index, name, onIndexChange, onCl
   const startDrag = (event: PointerEvent<HTMLImageElement>) => {
     if (event.button !== 0) return;
     event.preventDefault(); event.stopPropagation();
+    clearPosition();
     event.currentTarget.setPointerCapture(event.pointerId);
     if (cropMode) {
       cropDrag.current = { id: event.pointerId, x: event.clientX, y: event.clientY, bounds: event.currentTarget.getBoundingClientRect() };
@@ -158,18 +213,24 @@ export function SelectionImagePreview({ images, index, name, onIndexChange, onCl
   };
   const moveDrag = (event: PointerEvent<HTMLImageElement>) => {
     const selection = cropDrag.current;
-    if (selection?.id === event.pointerId) { setCropRect(selectionRect(event, selection)); return; }
+    if (selection?.id === event.pointerId) { pendingCrop.current = selectionRect(event, selection); queuePosition(); return; }
     const current = drag.current;
     if (!current || current.id !== event.pointerId) return;
     const halfWidth = (rotate % 180 ? height : width) * scale / 2, halfHeight = (rotate % 180 ? width : height) * scale / 2;
-    setOffset({
+    pendingOffset.current = {
       x: clamp(current.originX + event.clientX - current.x, -availableWidth / 2 - halfWidth + 32, viewport.width - availableWidth / 2 + halfWidth - 32),
       y: clamp(current.originY + event.clientY - current.y, -viewport.height / 2 - halfHeight + 32, viewport.height / 2 + halfHeight - 32),
-    });
+    };
+    queuePosition();
   };
-  const stopDrag = () => { drag.current = null; setDragging(false); };
+  const stopDrag = () => {
+    if (positionFrame.current !== null) cancelAnimationFrame(positionFrame.current);
+    applyPosition(); drag.current = null; setDragging(false);
+  };
   const finishDrag = (event: PointerEvent<HTMLImageElement>) => {
     const selection = cropDrag.current;
+    if (!selection) moveDrag(event);
+    pendingCrop.current = null;
     cropDrag.current = null; setCropRect(null); stopDrag();
     if (!selection || selection.id !== event.pointerId) return;
     const rect = selectionRect(event, selection);
@@ -177,7 +238,7 @@ export function SelectionImagePreview({ images, index, name, onIndexChange, onCl
     setCropMode(false);
     void recognize({ left: (rect.left - selection.bounds.left) / selection.bounds.width, top: (rect.top - selection.bounds.top) / selection.bounds.height, width: rect.width / selection.bounds.width, height: rect.height / selection.bounds.height }).catch(() => {});
   };
-  const cancelDrag = () => { cropDrag.current = null; setCropRect(null); stopDrag(); };
+  const cancelDrag = () => { cropDrag.current = null; pendingCrop.current = null; setCropRect(null); stopDrag(); };
   const reset = () => { setOffset({ x: 0, y: 0 }); setScale(1); setRotate(0); setFlipX(false); setFlipY(false); };
   return createPortal(<section className="selection-image-preview-layer" role="dialog" aria-modal={false} aria-label={`${name}图片预览`} onKeyDown={event => {
     if (event.target instanceof HTMLElement && event.target.closest("input,textarea,[contenteditable=true]")) return;
@@ -193,7 +254,7 @@ export function SelectionImagePreview({ images, index, name, onIndexChange, onCl
       if (key === "recognize-text") { setCropMode(false); void recognize().catch(() => {}); }
       if (key === "crop-text") beginCrop();
       if (key === "copy-text") { setCropMode(false); void copyText(); }
-    } }}><img ref={imageRef} className={`selection-preview-image${dragging ? " is-dragging" : ""}${cropMode ? " is-cropping" : ""}`} src={image.url} alt={`${name} ${image.color || ""} ${index + 1}/${images.length}`} draggable={false} style={{ width, height, left: availableWidth / 2, transform: `translate(calc(-50% + ${offset.x}px), calc(-50% + ${offset.y}px)) rotate(${rotate}deg) scale(${flipX ? -scale : scale}, ${flipY ? -scale : scale})` }} onLoad={event => { const img = event.currentTarget; setNaturalSize({ width: img.naturalWidth || 1, height: img.naturalHeight || 1 }); }} onError={event => { if (event.currentTarget.src !== invalidSelectionImage) event.currentTarget.src = invalidSelectionImage; }} onPointerDown={startDrag} onPointerMove={moveDrag} onPointerUp={finishDrag} onPointerCancel={cancelDrag} onLostPointerCapture={cancelDrag} onDoubleClick={() => { if (!cropMode) setScale(current => current === 1 ? 2 : 1); }} /></Dropdown>
+    } }}><img ref={imageRef} className={`selection-preview-image${dragging ? " is-dragging" : ""}${cropMode ? " is-cropping" : ""}`} src={image.url} decoding="async" fetchPriority="high" alt={`${name} ${image.color || ""} ${index + 1}/${images.length}`} draggable={false} style={{ width, height, left: availableWidth / 2, transform: `translate(calc(-50% + ${offset.x}px), calc(-50% + ${offset.y}px)) rotate(${rotate}deg) scale(${flipX ? -scale : scale}, ${flipY ? -scale : scale})` }} onLoad={event => { const img = event.currentTarget; if (img.src === new URL(image.url, window.location.href).href) { rememberSize(image.url, img); preparedImages.current.add(image.url); } setLoadedSize({ url: image.url, width: img.naturalWidth || 1, height: img.naturalHeight || 1 }); }} onError={event => { if (event.currentTarget.src !== invalidSelectionImage) event.currentTarget.src = invalidSelectionImage; }} onPointerDown={startDrag} onPointerMove={moveDrag} onPointerUp={finishDrag} onPointerCancel={cancelDrag} onLostPointerCapture={cancelDrag} onDoubleClick={() => { if (!cropMode) setScale(current => current === 1 ? 2 : 1); }} /></Dropdown>
     {cropRect && <div className="selection-preview-text-crop" style={cropRect} />}
     {cropMode && <div className="selection-preview-crop-hint">拖动框选图片上的文字区域<Button type="text" size="small" onClick={() => { setCropMode(false); cancelDrag(); }}>取消</Button></div>}
     <button ref={closeRef} type="button" className="selection-preview-close" aria-label="关闭图片预览" title="关闭图片预览" onClick={onClose}><CloseOutlined /></button>

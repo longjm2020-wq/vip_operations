@@ -24,22 +24,43 @@ export function selectionWindowEntries<T extends RowKey>(groups: Group<T>[], row
 }
 
 /** Render a bounded viewport, retaining editors and open row controls in place. */
-export function sliceSelectionWindow<T>(entries: SelectionWindowEntry<T>[], start: number, end: number, pinned: ReadonlySet<string>): SelectionWindowEntry<T>[] {
+export function sliceSelectionWindow<T>(entries: SelectionWindowEntry<T>[], start: number, end: number, pinned: ReadonlySet<string>, positions?: ReadonlyMap<string, number>): SelectionWindowEntry<T>[] {
   const output: SelectionWindowEntry<T>[] = [];
-  let skippedTop = 0, skippedHeight = 0;
-  const flush = () => {
-    if (skippedHeight) output.push({ kind: "spacer", key: `spacer:${skippedTop}`, top: skippedTop, height: skippedHeight });
-    skippedHeight = 0;
-  };
-  for (const entry of entries) {
-    if ((entry.top + entry.height > start && entry.top < end) || (entry.kind === "row" && pinned.has(entry.key))) {
-      flush(); output.push(entry);
-    } else {
-      if (!skippedHeight) skippedTop = entry.top;
-      skippedHeight += entry.height;
+  if (!entries.length) return output;
+  // Locate the viewport in the sorted geometry instead of walking every row on scroll.
+  const lowerBound = (before: (entry: SelectionWindowEntry<T>) => boolean) => {
+    let low = 0, high = entries.length;
+    while (low < high) {
+      const middle = Math.floor((low + high) / 2);
+      if (before(entries[middle])) low = middle + 1;
+      else high = middle;
     }
+    return low;
+  };
+  const first = lowerBound(entry => entry.top + entry.height <= start);
+  const last = lowerBound(entry => entry.top < end);
+  const indices = new Set<number>();
+  for (let index = first; index < last; index++) indices.add(index);
+  if (positions) {
+    for (const key of pinned) {
+      const index = positions.get(key);
+      if (index !== undefined && entries[index]?.kind === "row") indices.add(index);
+    }
+  } else if (pinned.size) {
+    entries.forEach((entry, index) => { if (entry.kind === "row" && pinned.has(entry.key)) indices.add(index); });
   }
-  flush();
+  let top = 0;
+  const spacer = (height: number) => {
+    if (height > 0) output.push({ kind: "spacer", key: `spacer:${top}`, top, height });
+  };
+  for (const index of [...indices].sort((a, b) => a - b)) {
+    const entry = entries[index];
+    spacer(entry.top - top);
+    output.push(entry);
+    top = entry.top + entry.height;
+  }
+  const final = entries[entries.length - 1];
+  spacer(final.top + final.height - top);
   return output;
 }
 
@@ -51,14 +72,15 @@ export function useSelectionRowWindow<T extends RowKey>(sheet: RefObject<HTMLDiv
   const sizes = measured.mode === rowHeight ? measured : { ...measured, mode: rowHeight, row: heights[rowHeight] || 50 };
   const entries = useMemo(() => selectionWindowEntries(groups, sizes.row, sizes.group), [groups, sizes.row, sizes.group]);
   const byKey = useMemo(() => new Map(entries.filter(entry => entry.kind === "row").map(entry => [entry.key, entry])), [entries]);
+  const positions = useMemo(() => new Map(entries.map((entry, index) => [entry.key, index])), [entries]);
   const latest = useRef({ sizes, byKey }); latest.current = { sizes, byKey };
   const pinnedSignature = pinnedKeys.filter(Boolean).join("\0");
   const pinned = useMemo(() => new Set(pinnedSignature.split("\0")), [pinnedSignature]);
   // A few rows on both sides keep edge dragging and fast wheel movement populated.
   const overscan = Math.max(400, sizes.row * 6);
   const visibleEntries = useMemo(() => enabled
-    ? sliceSelectionWindow(entries, Math.max(0, viewport.top - sizes.header - overscan), viewport.top + viewport.height + overscan, pinned)
-    : entries, [enabled, entries, viewport, sizes.header, overscan, pinned]);
+    ? sliceSelectionWindow(entries, Math.max(0, viewport.top - sizes.header - overscan), viewport.top + viewport.height + overscan, pinned, positions)
+    : entries, [enabled, entries, viewport, sizes.header, overscan, pinned, positions]);
 
   useLayoutEffect(() => {
     const element = sheet.current;

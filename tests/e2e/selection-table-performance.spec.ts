@@ -10,7 +10,7 @@ const rowId = (index: number) => String(index + 10000);
 const styleNo = (index: number) => `PERF-${String(index).padStart(4, "0")}`;
 type RowHeight = "compact" | "normal" | "loose" | "extra";
 
-async function fixture(page: Page, options: { rowHeight?: RowHeight; grouped?: boolean } = {}) {
+async function fixture(page: Page, options: { rowHeight?: RowHeight; grouped?: boolean; totalRows?: number } = {}) {
   let revision = 0;
   let layout: SelectionLayoutSnapshot = {
     preferences: selectionLayoutSchema.parse({
@@ -36,7 +36,7 @@ async function fixture(page: Page, options: { rowHeight?: RowHeight; grouped?: b
     sharedRevision: 0,
     canEditShared: true,
   };
-  const rows = Array.from({ length: totalRows }, (_, index) => ({
+  const rows = Array.from({ length: options.totalRows ?? totalRows }, (_, index) => ({
     id: rowId(index),
     version: 1,
     sortOrder: index + 1,
@@ -110,7 +110,7 @@ async function fixture(page: Page, options: { rowHeight?: RowHeight; grouped?: b
   await page.goto(`/project-tables/${tableId}`);
   await expect(cell(page, 0, "xutiStyleNo")).toHaveText(styleNo(0));
   await expect(page.locator(".selection-sheet table")).toHaveAttribute("aria-rowcount", "1001");
-  return { rows, writes, requests };
+  return { rows, writes, requests, layout: () => layout };
 }
 
 const mountedRows = (page: Page) => page.locator(".selection-sheet tbody tr[data-selection-row]");
@@ -158,6 +158,37 @@ test("whole column selection and copy include 1000 page records outside the moun
   await page.locator(".selection-sheet").evaluate((element) => { element.scrollTop = element.scrollHeight; });
   await expect(cell(page, 999, "xutiStyleNo")).toHaveClass(/selection-cell-active/);
   await expectBoundedRows(page);
+  expect(state.writes).toEqual([]);
+});
+
+test("5000 row option persists, keeps rendering and images bounded, and includes every offscreen row in copy", async ({ page }) => {
+  const state = await fixture(page, { totalRows: 5105 });
+  await page.locator(".selection-pagination .ant-select").click();
+  await page.locator(".ant-select-dropdown:visible").getByText("5000 条/页", { exact: true }).click();
+  await expect(page.locator(".selection-sheet table")).toHaveAttribute("aria-rowcount", "5001");
+  await expectBoundedRows(page);
+  await expect.poll(() => state.layout().preferences!.pageSize).toBe(5000);
+  const imagesRequested = () => new Set(state.requests.filter(request => request.path.includes("/style-selections/images/")).map(request => request.path)).size;
+  expect(imagesRequested()).toBeLessThan(40);
+  await page.getByRole("columnheader", { name: "选择整列：序缇款号", exact: true }).click();
+  await expect(page.getByLabel("选区统计", { exact: true })).toContainText("计数=5000");
+  const copied = (await copySelection(page)).split("\n");
+  expect(copied).toHaveLength(5000);
+  expect(copied[0]).toBe(styleNo(0));
+  expect(copied.at(-1)).toBe(styleNo(4999));
+  expect(copied).not.toContain(styleNo(5000));
+  await page.locator(".selection-sheet").evaluate(element => { element.scrollTop = element.scrollHeight; });
+  await expect(cell(page, 4999, "xutiStyleNo")).toHaveText(styleNo(4999));
+  await expect(cell(page, 4999, "xutiStyleNo")).toBeInViewport();
+  await expectBoundedRows(page);
+  expect(imagesRequested()).toBeLessThan(50);
+  await page.locator(".selection-pagination .ant-pagination-item-2").click();
+  await expect(page.locator(".selection-sheet table")).toHaveAttribute("aria-rowcount", "106");
+  await expect(cell(page, 5104, "xutiStyleNo")).toHaveText(styleNo(5104));
+  await expect.poll(() => state.layout().preferences!.page).toBe(2);
+  await page.reload();
+  await expect(page.locator(".selection-sheet table")).toHaveAttribute("aria-rowcount", "106");
+  await expect(page.locator(".selection-pagination")).toContainText("5000 条/页");
   expect(state.writes).toEqual([]);
 });
 

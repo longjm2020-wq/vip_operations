@@ -83,4 +83,15 @@ describe("selection row viewport geometry", () => {
     const last = output.find((entry) => entry.key === "row-999")!;
     expect(last.top + last.height).toBe(totalHeight);
   });
+
+  it.each([40, 50, 100, 120])("indexes a 5000-record page and retains distant controls at row height %i", height => {
+    const entries = selectionWindowEntries([{ label: "供应商", rows: rows(5000) }], height);
+    const positions = new Map(entries.map((entry, index) => [entry.key, index]));
+    const output = sliceSelectionWindow(entries, 34 + 2500 * height, 34 + 2500 * height + 720, new Set(["row-0", "row-4999", "removed"]), positions);
+    expect(rowKeys(output)).toEqual(["row-0", ...Array.from({ length: Math.ceil(720 / height) }, (_, i) => `row-${2500 + i}`), "row-4999"]);
+    expectContinuousGeometry(output, 34 + 5000 * height);
+    const tail = sliceSelectionWindow(entries, 34 + 4999 * height, 34 + 5000 * height, new Set(), positions);
+    expect(rowKeys(tail)).toEqual(["row-4999"]);
+    expectContinuousGeometry(tail, 34 + 5000 * height);
+  });
 });
