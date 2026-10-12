@@ -30,6 +30,7 @@ import {
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { api, queryClient } from "./api";
 import { CompetitorLocalUpdate } from "./competitor-local";
+import { CompetitorBrandPicker } from "./competitor-brand-picker";
 import { Header, useCan, when } from "./shared";
 import {
   analyzeCompetitor,
@@ -466,6 +467,8 @@ export function CompetitorAnalysisPage() {
     [capture, setCapture] = useState(false),
     [crawlSettings, setCrawlSettings] = useState(false),
     [localUpdate, setLocalUpdate] = useState(false),
+    [cloudUpdate, setCloudUpdate] = useState(false),
+    [captureBrandIds, setCaptureBrandIds] = useState<string[] | null>(null),
     [updateMode, setUpdateMode] = useState(() =>
       localStorage.getItem("competitor-update-mode") === "CLOUD"
         ? "CLOUD"
@@ -542,6 +545,16 @@ export function CompetitorAnalysisPage() {
     competitors = brands.filter((b) => !b.isOwn),
     results = data?.results || [];
   const current = results.find((r) => r.brand.id === active) || results[0];
+  const captureIds = (captureBrandIds || []).filter((id) =>
+    brands.some((b) => b.id === id),
+  );
+  function openUpdate(brandId?: string) {
+    setCaptureBrandIds((ids) =>
+      brandId ? [brandId] : (ids ?? (current ? [current.brand.id] : [])),
+    );
+    if (updateMode === "LOCAL") setLocalUpdate(true);
+    else setCloudUpdate(true);
+  }
   useLayoutEffect(() => {
     const anchor = sortAnchor.current;
     if (!anchor?.pending) return;
@@ -581,9 +594,8 @@ export function CompetitorAnalysisPage() {
   }, []);
   const refresh = () =>
     void queryClient.invalidateQueries({ queryKey: ["competitor-dashboard"] });
-  async function crawl(brandIds?: string[], recover = true) {
+  async function crawl(ids: string[], recover = true) {
     setQueuing(true);
-    const ids = brandIds || results.map((r) => r.brand.id);
     try {
       if (!ids.length) return;
       const requested = await api("/analytics/competitors/crawl", "POST", {
@@ -595,7 +607,7 @@ export function CompetitorAnalysisPage() {
           ["QUEUED", "RUNNING"].includes(job.status),
         )
       )
-        message.success("后台采集已排队，可继续使用页面");
+        message.success(`已为选中的 ${ids.length} 个品牌提交后台采集`);
       else message.info("5分钟内已有采集记录，可查看采集状态后再更新");
     } catch (e) {
       const problem = e as Error & { details?: { recovery?: string } };
@@ -744,10 +756,8 @@ export function CompetitorAnalysisPage() {
                   type="primary"
                   icon={<ReloadOutlined aria-hidden="true" />}
                   loading={queuing}
-                  disabled={!results.length}
-                  onClick={() =>
-                    updateMode === "LOCAL" ? setLocalUpdate(true) : void crawl()
-                  }
+                  disabled={!brands.length}
+                  onClick={() => openUpdate()}
                 >
                   更新竞品数据
                 </Button>
@@ -804,10 +814,37 @@ export function CompetitorAnalysisPage() {
       {manage && (
         <CompetitorLocalUpdate
           open={localUpdate}
-          brands={results.map((r) => r.brand)}
+          brands={brands}
+          selectedBrandIds={captureIds}
+          onBrandChange={setCaptureBrandIds}
           onClose={() => setLocalUpdate(false)}
           onSaved={refresh}
         />
+      )}
+      {manage && (
+        <Modal
+          title="云端更新竞品数据"
+          open={cloudUpdate}
+          width={620}
+          onCancel={() => setCloudUpdate(false)}
+          okText={`开始采集（${captureIds.length} 个品牌）`}
+          okButtonProps={{ disabled: !captureIds.length }}
+          onOk={() => {
+            if (!captureIds.length) return;
+            setCloudUpdate(false);
+            void crawl([...captureIds]);
+          }}
+        >
+          <p>仅将勾选的品牌加入本次云端采集队列，可单选或多选。</p>
+          <CompetitorBrandPicker
+            brands={brands}
+            value={captureIds}
+            onChange={setCaptureBrandIds}
+          />
+          <p className="competitor-muted">
+            需要云端登录或验证时，完成核验后继续本次所选品牌。
+          </p>
+        </Modal>
       )}
       <Card size="small" className="competitor-filters">
         <div className="competitor-brand-line">
@@ -1153,11 +1190,7 @@ export function CompetitorAnalysisPage() {
                     <Button
                       type="primary"
                       loading={queuing}
-                      onClick={() =>
-                        updateMode === "LOCAL"
-                          ? setLocalUpdate(true)
-                          : void crawl()
-                      }
+                      onClick={() => openUpdate(current?.brand.id)}
                       style={{ marginLeft: 12 }}
                     >
                       开始采集

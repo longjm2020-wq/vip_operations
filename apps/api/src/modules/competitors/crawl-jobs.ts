@@ -38,7 +38,7 @@ export async function crawlConnectionIssue(tx: Tx = db) {
 export async function crawlStatus() {
   const settings = await one(
     db,
-    "SELECT enabled,daily_hour,version FROM competitor_crawl_settings WHERE id=1",
+    "SELECT enabled,daily_hour,brand_ids,version FROM competitor_crawl_settings WHERE id=1",
   );
   const jobs = await rows(
     db,
@@ -87,7 +87,7 @@ export async function requestCrawl(c: Context, input: unknown) {
       const recent = await one(
         tx,
         `SELECT j.id::text,j.status FROM competitor_crawl_jobs j WHERE j.brand_id=$1::bigint
-        AND j.requested_at>now()-interval '5 minutes'
+        AND j.requested_at>now()-interval '5 minutes' AND j.status<>'CANCELLED'
         AND NOT (j.status IN ('LOGIN_REQUIRED','VERIFICATION_REQUIRED') AND EXISTS (
           SELECT 1 FROM competitor_cloud_session s WHERE s.id=1 AND s.status='READY' AND s.saved_at>j.completed_at
         )) ORDER BY j.id DESC LIMIT 1`,
@@ -125,21 +125,49 @@ export async function saveCrawlSettings(c: Context, input: unknown) {
       .object({
         enabled: z.boolean(),
         dailyHour: z.number().int().min(0).max(23),
+        brandIds: z
+          .array(z.string().regex(/^[1-9]\d{0,18}$/))
+          .max(40)
+          .optional(),
         version: z.number().int().min(1),
       })
       .strict(),
     input,
   );
   return command(c, "competitor.crawl.settings", b, async (tx) => {
+    await rows(tx, "SELECT pg_advisory_xact_lock(2026100340)::text");
+    await rows(tx, "SELECT pg_advisory_xact_lock(2026100341)::text");
+    const previous = await one(
+      tx,
+      "SELECT brand_ids FROM competitor_crawl_settings WHERE id=1",
+    );
+    // Older clients may save the time or pause switch without changing the selected brands.
+    const brandIds: string[] = [
+      ...new Set<string>(b.brandIds ?? previous?.brand_ids ?? []),
+    ];
+    if (b.enabled && !brandIds.length)
+      fail("BRAND_REQUIRED", "请至少选择一个自动采集品牌", 400);
+    const brands = await rows(
+      tx,
+      "SELECT id::text FROM competitor_brands WHERE id=ANY($1::bigint[])",
+      brandIds,
+    );
+    if (brands.length !== brandIds.length)
+      fail("UNKNOWN_BRAND", "品牌不存在，请刷新后重新选择", 400);
     const saved = await one(
       tx,
-      "UPDATE competitor_crawl_settings SET enabled=$1,daily_hour=$2,updated_by=$3::bigint,version=version+1,updated_at=now() WHERE id=1 AND version=$4 RETURNING enabled,daily_hour,version",
+      "UPDATE competitor_crawl_settings SET enabled=$1,daily_hour=$2,updated_by=$3::bigint,brand_ids=$5::jsonb,version=version+1,updated_at=now() WHERE id=1 AND version=$4 RETURNING enabled,daily_hour,brand_ids,version",
       b.enabled,
       b.dailyHour,
       c.actor.id,
       b.version,
+      JSON.stringify(brandIds),
     );
     if (!saved) fail("STALE_SETTINGS", "采集设置已更新，请刷新后重试", 409);
+    await tx.$executeRawUnsafe(
+      "UPDATE competitor_crawl_jobs SET status='CANCELLED',note='该品牌已移出自动采集范围，已取消尚未开始的定时任务',completed_at=now() WHERE status='QUEUED' AND trigger='SCHEDULED' AND NOT (brand_id=ANY($1::bigint[]))",
+      brandIds,
+    );
     await audit(
       tx,
       c,
@@ -147,7 +175,7 @@ export async function saveCrawlSettings(c: Context, input: unknown) {
       "competitor_crawl_settings",
       "1",
       null,
-      { enabled: b.enabled, dailyHour: b.dailyHour },
+      { enabled: b.enabled, dailyHour: b.dailyHour, brandIds },
     );
     return saved;
   });
@@ -169,8 +197,9 @@ export async function scheduleCrawls(now = new Date()) {
     if (await crawlConnectionIssue(tx)) return;
     const list = await rows(
       tx,
-      "SELECT b.id::text,(SELECT count(*)::int FROM competitor_snapshots s WHERE s.brand_id=b.id AND source='PUBLIC_RANK') AS snapshots FROM competitor_brands b WHERE NOT EXISTS(SELECT 1 FROM competitor_crawl_jobs j WHERE j.brand_id=b.id AND (j.status IN('QUEUED','RUNNING') OR (j.requested_at AT TIME ZONE 'Asia/Shanghai')::date=$1::date))",
+      "SELECT b.id::text,(SELECT count(*)::int FROM competitor_snapshots s WHERE s.brand_id=b.id AND source='PUBLIC_RANK') AS snapshots FROM competitor_brands b WHERE b.id=ANY($2::bigint[]) AND NOT EXISTS(SELECT 1 FROM competitor_crawl_jobs j WHERE j.brand_id=b.id AND (j.status IN('QUEUED','RUNNING') OR (j.status<>'CANCELLED' AND (j.requested_at AT TIME ZONE 'Asia/Shanghai')::date=$1::date)))",
       today,
+      settings.brand_ids,
     );
     for (const brand of list)
       if (brand.snapshots === 0 || hour >= settings.daily_hour)

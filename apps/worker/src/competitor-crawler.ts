@@ -282,7 +282,7 @@ export async function processCrawlJob(
       return null;
     const next = await one(
       tx,
-      "SELECT j.* FROM competitor_crawl_jobs j CROSS JOIN competitor_crawl_settings s WHERE j.status='QUEUED' AND (j.trigger='MANUAL' OR s.enabled) ORDER BY j.id LIMIT 1 FOR UPDATE OF j SKIP LOCKED",
+      "SELECT j.* FROM competitor_crawl_jobs j CROSS JOIN competitor_crawl_settings s WHERE j.status='QUEUED' AND (j.trigger='MANUAL' OR (s.enabled AND s.brand_ids ? j.brand_id::text)) ORDER BY j.id LIMIT 1 FOR UPDATE OF j SKIP LOCKED",
     );
     if (!next) return null;
     return one(

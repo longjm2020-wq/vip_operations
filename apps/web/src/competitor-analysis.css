@@ -424,3 +424,19 @@
   min-height: 160px;
   color: #a17d66;
 }
+.competitor-brand-picker {
+  margin: 16px 0;
+  padding: 12px;
+  border: 1px solid #eaded4;
+  border-radius: 8px;
+}
+.competitor-brand-picker-heading {
+  margin-bottom: 12px;
+}
+.competitor-brand-picker-options {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(125px, 1fr));
+  gap: 10px;
+  width: 100%;
+  margin-bottom: 8px;
+}

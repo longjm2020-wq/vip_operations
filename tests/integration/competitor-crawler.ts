@@ -234,6 +234,7 @@ export async function testCompetitorCrawler(h: Record<string, any>) {
   await ok(endpoint + "/crawl-settings", "POST", {
     enabled: true,
     dailyHour: 0,
+    brandIds: initial.brands.map((b: any) => b.id),
     version: settings.version,
   });
   const afterMidnight = new Date(shanghaiDate() + "T00:30:00+08:00");
@@ -248,7 +249,7 @@ export async function testCompetitorCrawler(h: Record<string, any>) {
   assert.equal(
     total,
     initial.brands.length,
-    "one daily attempt per brand including new brands",
+    "one daily attempt per selected brand including selected new brands",
   );
   await db.$executeRawUnsafe(
     "UPDATE competitor_cloud_session SET saved_at=now() WHERE id=1",
@@ -269,6 +270,148 @@ export async function testCompetitorCrawler(h: Record<string, any>) {
   );
   await db.$executeRawUnsafe(
     "UPDATE competitor_crawl_jobs SET status='FAILED',completed_at=now() WHERE status='QUEUED'",
+  );
+  const a = await ok(endpoint + "/brands", "POST", {
+    name: "定时范围甲",
+    brandSn: "10101",
+  });
+  const b = await ok(endpoint + "/brands", "POST", {
+    name: "定时范围乙",
+    brandSn: "10102",
+  });
+  let configured = (await ok(endpoint)).crawl.settings;
+  assert.equal(
+    (
+      await request(endpoint + "/crawl-settings", "POST", {
+        enabled: true,
+        dailyHour: 0,
+        brandIds: [],
+        version: configured.version,
+      })
+    ).status,
+    400,
+  );
+  assert.equal(
+    (
+      await request(endpoint + "/crawl-settings", "POST", {
+        enabled: true,
+        dailyHour: 0,
+        brandIds: ["999999999"],
+        version: configured.version,
+      })
+    ).status,
+    400,
+  );
+  configured = await ok(endpoint + "/crawl-settings", "POST", {
+    enabled: true,
+    dailyHour: 0,
+    brandIds: [a.id],
+    version: configured.version,
+  });
+  assert.deepEqual(configured.brandIds, [a.id]);
+  await scheduleCrawls();
+  await scheduleCrawls();
+  assert.equal(
+    (
+      await one(
+        db,
+        "SELECT count(*)::int AS n FROM competitor_crawl_jobs WHERE brand_id=$1::bigint AND status='QUEUED'",
+        a.id,
+      )
+    ).n,
+    1,
+  );
+  assert.equal(
+    (
+      await one(
+        db,
+        "SELECT count(*)::int AS n FROM competitor_crawl_jobs WHERE brand_id=$1::bigint",
+        b.id,
+      )
+    ).n,
+    0,
+  );
+  configured = await ok(endpoint + "/crawl-settings", "POST", {
+    enabled: true,
+    dailyHour: 0,
+    brandIds: [b.id],
+    version: configured.version,
+  });
+  assert.equal(
+    (
+      await one(
+        db,
+        "SELECT status FROM competitor_crawl_jobs WHERE brand_id=$1::bigint ORDER BY id DESC LIMIT 1",
+        a.id,
+      )
+    ).status,
+    "CANCELLED",
+  );
+  // Even a queued scheduled job left by an older worker must not claim an excluded brand.
+  await db.$executeRawUnsafe(
+    "INSERT INTO competitor_crawl_jobs(brand_id,trigger) VALUES($1::bigint,'SCHEDULED')",
+    a.id,
+  );
+  let excludedLaunched = false;
+  await processCrawlJob(async () => {
+    excludedLaunched = true;
+    throw Error("unexpected excluded brand");
+  });
+  assert.equal(excludedLaunched, false);
+  configured = await ok(endpoint + "/crawl-settings", "POST", {
+    enabled: true,
+    dailyHour: 0,
+    brandIds: [b.id],
+    version: configured.version,
+  });
+  const manualOutsideScope = await ok(endpoint + "/crawl", "POST", {
+    brandIds: [a.id],
+  });
+  assert.equal(manualOutsideScope.jobs[0].status, "QUEUED");
+  await scheduleCrawls();
+  assert.equal(
+    (
+      await one(
+        db,
+        "SELECT count(*)::int AS n FROM competitor_crawl_jobs WHERE brand_id=$1::bigint AND status='QUEUED'",
+        b.id,
+      )
+    ).n,
+    1,
+  );
+  // Clearing an inactive schedule cancels pending scheduled jobs, never explicit manual requests.
+  configured = await ok(endpoint + "/crawl-settings", "POST", {
+    enabled: false,
+    dailyHour: 0,
+    brandIds: [],
+    version: configured.version,
+  });
+  assert.deepEqual((await ok(endpoint)).crawl.settings.brandIds, []);
+  assert.equal(
+    (
+      await one(
+        db,
+        "SELECT status FROM competitor_crawl_jobs WHERE id=$1::bigint",
+        manualOutsideScope.jobs[0].id,
+      )
+    ).status,
+    "QUEUED",
+  );
+  assert.equal(
+    (
+      await one(
+        db,
+        "SELECT status FROM competitor_crawl_jobs WHERE brand_id=$1::bigint ORDER BY id DESC LIMIT 1",
+        b.id,
+      )
+    ).status,
+    "CANCELLED",
+  );
+  await db.$executeRawUnsafe(
+    "UPDATE competitor_crawl_jobs SET status='FAILED',completed_at=now() WHERE status='QUEUED'",
+  );
+  check(
+    "Competitor single/multiple schedule scope, unknown/empty validation, exclusion on claim, cancellation and independent manual requests",
   );
   await db.$executeRawUnsafe(
     "UPDATE competitor_crawl_settings SET enabled=false WHERE id=1",

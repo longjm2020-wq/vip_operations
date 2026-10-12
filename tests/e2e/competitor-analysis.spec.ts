@@ -348,8 +348,11 @@ test("竞品单品牌TOP20、详细材质、商品预览及后台队列设置", 
     await route.fulfill({ response, json: body });
   });
   await page.getByRole("button", { name: "更新竞品数据", exact: true }).click();
+  await page
+    .getByRole("button", { name: "开始采集（1 个品牌）", exact: true })
+    .click();
   await expect(
-    page.getByText("后台采集已排队，可继续使用页面", { exact: true }),
+    page.getByText("已为选中的 1 个品牌提交后台采集", { exact: true }),
   ).toBeVisible();
   await page.locator(".competitor-crawl-status summary").click();
   await expect(page.locator(".competitor-crawl-jobs")).toContainText("待采集");

@@ -16,9 +16,15 @@ import { when } from "./shared";
 import type { CompetitorBrand } from "../../../packages/contracts/src/competitor-analysis";
 import { competitorCrawlProgress } from "../../../packages/contracts/src/competitor-crawl-progress";
 import { CompetitorBrowserLogin } from "./competitor-browser-login";
+import { CompetitorBrandPicker } from "./competitor-brand-picker";
 
 export type CompetitorCrawlStatus = {
-  settings: { enabled: boolean; dailyHour: number; version: number };
+  settings: {
+    enabled: boolean;
+    dailyHour: number;
+    brandIds?: string[];
+    version: number;
+  };
   jobs: {
     id: string;
     brandId: string;
@@ -39,6 +45,7 @@ const labels: Record<string, [string, string]> = {
   FAILED: ["未完成", "error"],
   VERIFICATION_REQUIRED: ["需要验证", "warning"],
   LOGIN_REQUIRED: ["需要登录", "warning"],
+  CANCELLED: ["已取消", "default"],
 };
 export function CompetitorCrawlPanel({
   data,
@@ -60,6 +67,7 @@ export function CompetitorCrawlPanel({
   localLoginSource?: string;
 }) {
   const [enabled, setEnabled] = useState(true),
+    [brandIds, setBrandIds] = useState<string[]>([]),
     [hour, setHour] = useState(8),
     [version, setVersion] = useState(1),
     [saving, setSaving] = useState(false),
@@ -69,17 +77,23 @@ export function CompetitorCrawlPanel({
     if (open && data) {
       setEnabled(data.settings.enabled);
       setHour(data.settings.dailyHour);
+      setBrandIds(data.settings.brandIds ?? brands.map((b) => b.id));
       setVersion(data.settings.version);
       setError("");
     }
   }, [open]);
   async function save() {
+    if (enabled && !brandIds.length) {
+      setError("请至少选择一个自动采集品牌");
+      return;
+    }
     setSaving(true);
     setError("");
     try {
       await api("/analytics/competitors/crawl-settings", "POST", {
         enabled,
         dailyHour: hour,
+        brandIds,
         version,
       });
       message.success("采集设置已保存");
@@ -106,7 +120,7 @@ export function CompetitorCrawlPanel({
         <span>
           <i className={data.settings.enabled ? "enabled" : ""} />
           {data.settings.enabled
-            ? `云端自动采集 · 每天 ${String(data.settings.dailyHour).padStart(2, "0")}:00`
+            ? `云端自动采集 · 每天 ${String(data.settings.dailyHour).padStart(2, "0")}:00 · ${data.settings.brandIds?.length ?? brands.length} 个品牌`
             : "云端自动采集已暂停"}
         </span>
         {!!active && <Tag color="processing">{active} 个品牌待更新</Tag>}
@@ -173,10 +187,11 @@ export function CompetitorCrawlPanel({
         onOk={() => void save()}
         confirmLoading={saving}
         okText="保存设置"
+        okButtonProps={{ disabled: !manage || (enabled && !brandIds.length) }}
         destroyOnHidden
       >
         <p>
-          在后台更新所有已添加品牌的公开销量排名、特卖价及规格参数，完成后自动更新对比数据。
+          在后台更新勾选品牌的公开销量排名、特卖价及规格参数，完成后自动更新对比数据。
         </p>
         <Form layout="vertical">
           <Form.Item label="自动采集">
@@ -199,12 +214,19 @@ export function CompetitorCrawlPanel({
               }))}
             />
           </Form.Item>
+          <CompetitorBrandPicker
+            label="自动采集品牌"
+            brands={brands}
+            value={brandIds}
+            onChange={setBrandIds}
+            disabled={!manage || saving}
+          />
         </Form>
         <Alert
           type="info"
           showIcon
           title="采集失败保留已有数据"
-          description="云端扫码并核验后，后台复用加密保存的会话，无需保持电脑或 Codex 在线。新品牌会进入首次采集；已有品牌每天更新一次。暂停后，正在执行的任务会继续完成。平台要求登录或验证时，请打开云端登录处理后核验。"
+          description="云端扫码并核验后，后台更新勾选品牌，无需保持电脑在线。新增品牌需手动勾选。移出范围会取消该品牌尚未开始的定时任务；正在执行的任务会继续完成。手动更新的品牌以当次选择为准。"
         />
         <Space style={{ marginTop: 16 }}>
           <Button

@@ -10,15 +10,20 @@ import {
   localCollectorRequest,
 } from "./competitor-local-run";
 import { api } from "./api";
+import { CompetitorBrandPicker } from "./competitor-brand-picker";
 
 export function CompetitorLocalUpdate({
   open,
   brands,
+  selectedBrandIds,
+  onBrandChange,
   onClose,
   onSaved,
 }: {
   open: boolean;
   brands: CompetitorBrand[];
+  selectedBrandIds: string[];
+  onBrandChange: (ids: string[]) => void;
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -31,6 +36,8 @@ export function CompetitorLocalUpdate({
     savedRef = useRef(onSaved);
   savedRef.current = onSaved;
   const run = runRef.current;
+  const selectionLocked = !!run && !run.done && !run.stopped;
+  const selectedBrands = brands.filter((b) => selectedBrandIds.includes(b.id));
   async function detect() {
     setChecking(true);
     setError("");
@@ -65,7 +72,9 @@ export function CompetitorLocalUpdate({
     };
   }, []);
   async function start() {
-    const next = new LocalCompetitorRun(brands, {
+    if (selectionLocked || !selectedBrands.length || invalid.length) return;
+    setError("");
+    const next = new LocalCompetitorRun(selectedBrands, {
       request: localCollectorRequest,
       save: (path, body, key) => api(path, "POST", body, key),
       changed: () => {
@@ -76,7 +85,7 @@ export function CompetitorLocalUpdate({
     runRef.current = next;
     await next.start();
   }
-  const invalid = brands.filter(
+  const invalid = selectedBrands.filter(
     (b) => !b.brandSn || !localCollectorUrl(b.searchUrl),
   );
   return (
@@ -119,7 +128,9 @@ export function CompetitorLocalUpdate({
           ) : (
             <Button
               type="primary"
-              disabled={!connected || !!invalid.length || !brands.length}
+              disabled={
+                !connected || !!invalid.length || !selectedBrands.length
+              }
               onClick={() => void start()}
             >
               {run?.done ? "重新更新" : "开始本机更新"}
@@ -134,6 +145,19 @@ export function CompetitorLocalUpdate({
         title="更新期间保持浏览器和本页打开"
         description="每个品牌采集公开销量榜前50款，再逐款核对规格参数并自动保存。登录和验证在本机唯品会页面完成；切走或刷新本页会中断任务，已保存的数据保留。"
       />
+      <CompetitorBrandPicker
+        brands={brands}
+        value={
+          selectionLocked ? run.rows.map((r) => r.brand.id) : selectedBrandIds
+        }
+        onChange={onBrandChange}
+        disabled={selectionLocked}
+      />
+      <p className="competitor-muted">
+        {selectionLocked
+          ? "本次采集品牌已锁定；如需更换，请先停止本次更新。"
+          : "仅更新勾选品牌，可单选或多选。"}
+      </p>
       <div style={{ margin: "14px 0" }}>
         <Space wrap>
           <Tag color={connected ? "success" : "warning"}>
@@ -168,7 +192,7 @@ export function CompetitorLocalUpdate({
           </p>
         </div>
       )}
-      {!!invalid.length && (
+      {!selectionLocked && !!invalid.length && (
         <Alert
           type="warning"
           title={`这些品牌尚未绑定品牌ID：${invalid.map((b) => b.name).join("、")}`}
@@ -179,7 +203,7 @@ export function CompetitorLocalUpdate({
         本次品牌：
         {(run && !run.done && !run.stopped
           ? run.rows.map((r) => r.brand)
-          : brands
+          : selectedBrands
         )
           .map((b) => b.name)
           .join("、")}

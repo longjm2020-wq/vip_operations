@@ -15,6 +15,22 @@ const brand = {
   searchUrl: vipSearchUrl("序缇", "10204477"),
 };
 const href = (id: string) => `https://detail.vip.com/detail-1-${id}.html`;
+const rival = {
+  ...brand,
+  id: "2",
+  name: "帕罗",
+  isOwn: false,
+  brandSn: "10012281",
+  searchUrl: vipSearchUrl("帕罗", "10012281"),
+};
+const unbound = {
+  ...brand,
+  id: "3",
+  name: "新品牌",
+  isOwn: false,
+  brandSn: null,
+  searchUrl: vipSearchUrl("新品牌"),
+};
 
 test("installed MV3 helper returns public DOM, pauses on verification, resumes and saves exact snapshot details", async () => {
   test.setTimeout(60000);
@@ -71,7 +87,7 @@ test("installed MV3 helper returns public DOM, pauses on verification, resumes a
         contentType: "text/html; charset=utf-8",
         body: verify
           ? '<p>请完成安全验证</p><input placeholder="验证码">'
-          : '<p class="J_brandName">序缇/XUTI</p><p class="pib-title-detail">桑蚕丝衬衫</p><p id="J_detail_barCode">商品编码：LOCAL-TEST</p><table><tr><th class="dc-table-tit">详细材质信息：</th><td>桑蚕丝95% 聚酯薄膜纤维5%</td></tr></table>',
+          : '<p class="J_brandName">帕罗/PALUO</p><p class="pib-title-detail">桑蚕丝衬衫</p><p id="J_detail_barCode">商品编码：LOCAL-TEST</p><table><tr><th class="dc-table-tit">详细材质信息：</th><td>桑蚕丝95% 聚酯薄膜纤维5%</td></tr></table>',
       }),
     );
     await context.route("**/api/v1/**", async (route) => {
@@ -93,7 +109,7 @@ test("installed MV3 helper returns public DOM, pauses on verification, resumes a
                 settings: { enabled: false, dailyHour: 8, version: 1 },
                 jobs: [],
               },
-              brands: [brand],
+              brands: [brand, rival, unbound],
               alignedPeriod: true,
               options: { categories: [], materials: [], seasons: [] },
               results: [analyzeCompetitor(brand, undefined, {})],
@@ -114,6 +130,12 @@ test("installed MV3 helper returns public DOM, pauses on verification, resumes a
     await expect(
       modal.getByText("本机采集助手已连接", { exact: true }),
     ).toBeVisible();
+    await modal.getByRole("button", { name: "清空", exact: true }).click();
+    await expect(
+      modal.getByRole("button", { name: "开始本机更新", exact: true }),
+    ).toBeDisabled();
+    await modal.getByRole("checkbox", { name: "帕罗", exact: true }).check();
+    await expect(modal.getByText(/这些品牌尚未绑定品牌ID/)).toHaveCount(0);
     await modal
       .getByRole("button", { name: "开始本机更新", exact: true })
       .click();
@@ -121,6 +143,10 @@ test("installed MV3 helper returns public DOM, pauses on verification, resumes a
       timeout: 22000,
     });
     expect(saved).toHaveLength(1);
+    expect(saved[0].data.brandId).toBe(rival.id);
+    await expect(
+      modal.getByRole("checkbox", { name: "序缇", exact: true }),
+    ).toBeDisabled();
     expect(saved[0].data.products.map((p: any) => p.productId)).toEqual([
       "11",
       "12",
@@ -138,7 +164,7 @@ test("installed MV3 helper returns public DOM, pauses on verification, resumes a
       saved
         .slice(1)
         .every(
-          (x) => x.data.snapshotId === "991" && x.data.brandName === "序缇",
+          (x) => x.data.snapshotId === "991" && x.data.brandName === "帕罗",
         ),
     ).toBe(true);
     expect(saved.slice(1).map((x) => x.data.products[0].productId)).toEqual([
@@ -148,6 +174,10 @@ test("installed MV3 helper returns public DOM, pauses on verification, resumes a
     expect(saved[1].data.products[0].materialInfo).toBe(
       "桑蚕丝95% 聚酯薄膜纤维5%",
     );
+    await expect(
+      modal.getByRole("checkbox", { name: "序缇", exact: true }),
+    ).toBeEnabled();
+    expect(saved.every((x) => x.data.brandId === rival.id)).toBe(true);
     await page.screenshot({ path: join(dir, "completed.png") });
   } finally {
     await context.close();

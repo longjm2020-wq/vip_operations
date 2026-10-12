@@ -337,6 +337,13 @@ test("需要登录时核验后只继续原品牌更新一次，短屏保留操�
   await page.setViewportSize({ width: 1000, height: 620 });
   await page.goto("/analytics/competitors");
   await page.getByRole("button", { name: "更新竞品数据", exact: true }).click();
+  const picker = page.getByRole("dialog", { name: "云端更新竞品数据" });
+  await picker.getByRole("button", { name: "清空", exact: true }).click();
+  await picker.getByRole("checkbox", { name: "帕罗", exact: true }).check();
+  await picker.getByRole("checkbox", { name: "米皇", exact: true }).check();
+  await picker
+    .getByRole("button", { name: "开始采集（2 个品牌）", exact: true })
+    .click();
   const verify = page.getByRole("button", {
     name: "核验并继续更新",
     exact: true,
@@ -351,7 +358,7 @@ test("需要登录时核验后只继续原品牌更新一次，短屏保留操�
   ).toHaveCount(0);
   await expect.poll(() => attempts.length).toBe(2);
   expect(attempts[1]).toEqual(attempts[0]);
-  expect(attempts[1]).toHaveLength(7);
+  expect(attempts[1]).toEqual(["2", "3"]);
   await expect(page.getByText("云端已连接", { exact: true })).toBeVisible();
 });
 
@@ -359,6 +366,9 @@ test("取消待继续更新后，单独保存登录不会启动已取消的更�
   const attempts = await recoveryFixture(page);
   await page.goto("/analytics/competitors");
   await page.getByRole("button", { name: "更新竞品数据", exact: true }).click();
+  await page
+    .getByRole("button", { name: "开始采集（1 个品牌）", exact: true })
+    .click();
   await expect(
     page.getByRole("button", { name: "核验并继续更新", exact: true }),
   ).toBeEnabled();
@@ -370,4 +380,73 @@ test("取消待继续更新后，单独保存登录不会启动已取消的更�
     page.getByRole("button", { name: "返回竞品分析", exact: true }),
   ).toBeVisible();
   expect(attempts).toHaveLength(1);
+});
+
+test("采集选择独立于对比品牌，单选多选按实际勾选提交，清空不能开始", async ({
+  page,
+}) => {
+  await fixture(page);
+  const attempts: string[][] = [];
+  await page.route("**/api/v1/analytics/competitors/crawl", (route) => {
+    attempts.push(route.request().postDataJSON().brandIds);
+    return route.fulfill({
+      json: { data: { jobs: [{ id: "test", status: "QUEUED" }] } },
+    });
+  });
+  await page.goto("/analytics/competitors");
+  await page.getByRole("button", { name: "更新竞品数据", exact: true }).click();
+  const modal = page.getByRole("dialog", { name: "云端更新竞品数据" });
+  await expect(
+    modal.getByRole("checkbox", { name: "序缇", exact: true }),
+  ).toBeChecked();
+  expect(attempts).toEqual([]);
+  await modal.getByRole("button", { name: "清空", exact: true }).click();
+  await expect(
+    modal.getByRole("button", { name: "开始采集（0 个品牌）", exact: true }),
+  ).toBeDisabled();
+  await modal.getByRole("checkbox", { name: "帕罗", exact: true }).check();
+  await modal
+    .getByRole("button", { name: "开始采集（1 个品牌）", exact: true })
+    .click();
+  await expect.poll(() => attempts.length).toBe(1);
+  expect(attempts[0]).toEqual(["2"]);
+  await page.getByRole("button", { name: "更新竞品数据", exact: true }).click();
+  await expect(
+    modal.getByRole("checkbox", { name: "帕罗", exact: true }),
+  ).toBeChecked();
+  await modal.getByRole("checkbox", { name: "米皇", exact: true }).check();
+  await modal
+    .getByRole("button", { name: "开始采集（2 个品牌）", exact: true })
+    .click();
+  await expect.poll(() => attempts.length).toBe(2);
+  expect(attempts[1]).toEqual(["2", "3"]);
+  await page.getByRole("button", { name: "更新竞品数据", exact: true }).click();
+  await modal.getByRole("button", { name: "全选", exact: true }).click();
+  await expect(
+    modal.getByText("已选 7 / 7 个品牌", { exact: true }),
+  ).toBeVisible();
+  expect(attempts).toHaveLength(2);
+});
+
+test("自动采集可保存单个品牌，开启时不允许空范围", async ({ page }) => {
+  await fixture(page);
+  const saved: any[] = [];
+  await page.route(
+    "**/api/v1/analytics/competitors/crawl-settings",
+    (route) => {
+      saved.push(route.request().postDataJSON());
+      return route.fulfill({ json: { data: { ...saved.at(-1), version: 2 } } });
+    },
+  );
+  await page.goto("/analytics/competitors");
+  await page.getByRole("button", { name: "采集设置", exact: true }).click();
+  const modal = page.getByRole("dialog", { name: "后台采集设置", exact: true });
+  await modal.getByRole("button", { name: "清空", exact: true }).click();
+  await expect(
+    modal.getByRole("button", { name: "保存设置", exact: true }),
+  ).toBeDisabled();
+  await modal.getByRole("checkbox", { name: "南宋丝府", exact: true }).check();
+  await modal.getByRole("button", { name: "保存设置", exact: true }).click();
+  await expect.poll(() => saved.length).toBe(1);
+  expect(saved[0].brandIds).toEqual(["7"]);
 });
