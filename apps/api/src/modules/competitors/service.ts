@@ -17,6 +17,7 @@ import {
   CompetitorDataset,
   materialTags,
   titleCategory,
+  vipBrandBinding,
   vipSearchUrl,
 } from "../../../../../packages/contracts/src/competitor-analysis.js";
 import { crawlStatus } from "./crawl-jobs.js";
@@ -80,6 +81,88 @@ export async function addBrand(c: Context, input: unknown) {
     );
     return saved;
   });
+}
+export async function bindBrand(c: Context, id: string, input: unknown) {
+  requirePermission(c.actor, "analytics.manage");
+  const brandId = parse(z.string().regex(/^\d{1,18}$/), id);
+  const b = parse(
+    z
+      .object({
+        sourceUrl: z
+          .string()
+          .trim()
+          .max(2000)
+          .refine(
+            (value) => !!vipBrandBinding(value),
+            "请粘贴已选中单个准确品牌的唯品会官方搜索链接，需包含 keyword 和 brand_sn",
+          ),
+      })
+      .strict(),
+    input,
+  );
+  const binding = vipBrandBinding(b.sourceUrl)!;
+  return command(
+    c,
+    "competitor.brand.bind",
+    { brandId, ...binding },
+    async (tx) => {
+      await rows(tx, "SELECT pg_advisory_xact_lock(2026100337)::text");
+      const brand = await one(
+        tx,
+        "SELECT id::text,name,is_own,brand_sn FROM competitor_brands WHERE id=$1::bigint FOR UPDATE",
+        brandId,
+      );
+      if (!brand) fail("UNKNOWN_BRAND", "品牌不存在", 404);
+      if (binding.name !== brand.name)
+        fail(
+          "BRAND_MISMATCH",
+          `链接中的搜索品牌须为「${brand.name}」，请打开该品牌搜索页并点击准确品牌`,
+          400,
+        );
+      if (brand.brand_sn && brand.brand_sn !== binding.brandSn)
+        fail(
+          "BRAND_ALREADY_BOUND",
+          "该品牌已绑定其他品牌ID，请刷新后核对，不能覆盖已有绑定",
+          409,
+        );
+      const result = {
+        id: brand.id,
+        name: brand.name,
+        isOwn: brand.is_own,
+        brandSn: binding.brandSn,
+        searchUrl: vipSearchUrl(brand.name, binding.brandSn),
+      };
+      if (brand.brand_sn === binding.brandSn) return result;
+      if (
+        await one(
+          tx,
+          "SELECT id FROM competitor_brands WHERE brand_sn=$1 AND id<>$2::bigint",
+          binding.brandSn,
+          brandId,
+        )
+      )
+        fail(
+          "DUPLICATE_BRAND_ID",
+          "此品牌ID已绑定其他品牌，请核对官方品牌筛选链接",
+          409,
+        );
+      await tx.$executeRawUnsafe(
+        "UPDATE competitor_brands SET brand_sn=$2 WHERE id=$1::bigint",
+        brandId,
+        binding.brandSn,
+      );
+      await audit(
+        tx,
+        c,
+        "competitor.brand.bind",
+        "competitor_brand",
+        brandId,
+        { brandSn: brand.brand_sn },
+        { brandSn: binding.brandSn, sourceUrl: result.searchUrl },
+      );
+      return result;
+    },
+  );
 }
 function snapshot(row: any): CompetitorDataset {
   return {
@@ -190,7 +273,7 @@ export async function importSnapshot(c: Context, input: unknown) {
     );
     const brand = await one(
       tx,
-      "SELECT * FROM competitor_brands WHERE id=$1::bigint",
+      "SELECT * FROM competitor_brands WHERE id=$1::bigint FOR UPDATE",
       b.brandId,
     );
     if (!brand || brand.name !== b.brandName)

@@ -85,6 +85,13 @@ export class CompetitorAnalysisController {
   ) {
     return service.importSnapshot(context(r), b);
   }
+  @Post("brands/:id/binding") @Permission("analytics.manage") bind(
+    @Req() r: AuthRequest,
+    @Param("id") id: string,
+    @Body() b: unknown,
+  ) {
+    return service.bindBrand(context(r), id, b);
+  }
   @Post("details") @Permission("analytics.manage") details(
     @Req() r: AuthRequest,
     @Body() b: unknown,

@@ -1020,6 +1020,8 @@ try {
   await testCompetitorAnalysis({ok,request,db,one,check,buyer});
   const {testCompetitorCrawler}=await import("./competitor-crawler.js");
   await testCompetitorCrawler({ok,request,db,one,check,buyer});
+  const {testCompetitorBrandBinding}=await import("./competitor-brand-binding.js");
+  await testCompetitorBrandBinding({ok,request,db,one,check,buyer});
   const {testCompetitorCloud}=await import("./competitor-cloud.js");
   await testCompetitorCloud({ok,request,db,one,check,buyer});
   const {testPersonalWorkspace}=await import("./personal-workspace.js");

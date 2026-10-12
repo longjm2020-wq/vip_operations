@@ -4,6 +4,7 @@ import { resolve, join } from "node:path";
 import { localExtensionFiles } from "../../packages/contracts/src/competitor-local-extension.js";
 import {
   analyzeCompetitor,
+  type CompetitorBrand,
   vipSearchUrl,
 } from "../../packages/contracts/src/competitor-analysis.js";
 
@@ -70,6 +71,8 @@ test("installed MV3 helper returns public DOM, pauses on verification, resumes a
     await context.route("https://**/*", (route) => route.abort());
     const page = context.pages()[0];
     let verify = true;
+    let extraBrand: CompetitorBrand = unbound;
+    const bindings: unknown[] = [];
     const saved: { path: string; data: any }[] = [];
     await context.route("https://category.vip.com/**", (route) =>
       route.fulfill({
@@ -92,6 +95,16 @@ test("installed MV3 helper returns public DOM, pauses on verification, resumes a
     );
     await context.route("**/api/v1/**", async (route) => {
       const path = new URL(route.request().url()).pathname;
+      if (path.endsWith(`/brands/${unbound.id}/binding`)) {
+        bindings.push(route.request().postDataJSON());
+        extraBrand = {
+          ...unbound,
+          brandSn: "12345678",
+          searchUrl: vipSearchUrl(unbound.name, "12345678"),
+        };
+        await route.fulfill({ json: { data: extraBrand } });
+        return;
+      }
       if (path.endsWith("/imports") || path.endsWith("/details"))
         saved.push({ path, data: route.request().postDataJSON() });
       const data = path.endsWith("/auth/me")
@@ -109,7 +122,7 @@ test("installed MV3 helper returns public DOM, pauses on verification, resumes a
                 settings: { enabled: false, dailyHour: 8, version: 1 },
                 jobs: [],
               },
-              brands: [brand, rival, unbound],
+              brands: [brand, rival, extraBrand],
               alignedPeriod: true,
               options: { categories: [], materials: [], seasons: [] },
               results: [analyzeCompetitor(brand, undefined, {})],
@@ -134,6 +147,41 @@ test("installed MV3 helper returns public DOM, pauses on verification, resumes a
     await expect(
       modal.getByRole("button", { name: "开始本机更新", exact: true }),
     ).toBeDisabled();
+    await modal.getByRole("checkbox", { name: "新品牌", exact: true }).check();
+    await expect(
+      modal.getByRole("button", { name: "开始本机更新", exact: true }),
+    ).toBeDisabled();
+    await modal
+      .getByRole("button", { name: "绑定「新品牌」", exact: true })
+      .click();
+    const binding = page.getByRole("dialog", {
+      name: "绑定唯品会品牌：新品牌",
+      exact: true,
+    });
+    await expect(
+      binding.getByRole("link", { name: "打开唯品会品牌搜索" }),
+    ).toHaveAttribute("href", unbound.searchUrl);
+    await binding
+      .getByRole("textbox", { name: "唯品会品牌筛选链接" })
+      .fill(rival.searchUrl);
+    await expect(
+      binding.getByRole("button", { name: "保存绑定" }),
+    ).toBeDisabled();
+    const sourceUrl = `https://category.vip.com/suggest.php?keyword=${encodeURIComponent(unbound.name)}&brand_sn=12345678`;
+    await binding
+      .getByRole("textbox", { name: "唯品会品牌筛选链接" })
+      .fill(sourceUrl);
+    await binding.getByRole("button", { name: "保存绑定" }).click();
+    await expect(binding).toBeHidden();
+    await expect(modal.getByText(/这些品牌尚未绑定品牌ID/)).toHaveCount(0);
+    await expect(
+      modal.getByRole("button", { name: "开始本机更新", exact: true }),
+    ).toBeEnabled();
+    expect(bindings).toEqual([{ sourceUrl }]);
+    expect(saved).toHaveLength(0);
+    await modal
+      .getByRole("checkbox", { name: "新品牌", exact: true })
+      .uncheck();
     await modal.getByRole("checkbox", { name: "帕罗", exact: true }).check();
     await expect(modal.getByText(/这些品牌尚未绑定品牌ID/)).toHaveCount(0);
     await modal

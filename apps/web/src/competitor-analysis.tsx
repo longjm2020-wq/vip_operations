@@ -1236,6 +1236,7 @@ export function CompetitorAnalysisPage() {
           <Form.Item
             name="brandSn"
             label="唯品会品牌ID（选填）"
+            extra="暂不填写时，可在本机更新面板点击「绑定品牌」，粘贴官方品牌筛选链接后开始采集。"
             rules={[{ pattern: /^\d{1,20}$/, message: "品牌ID须为数字" }]}
           >
             <Input placeholder="品牌筛选链接中的 brand_sn" />

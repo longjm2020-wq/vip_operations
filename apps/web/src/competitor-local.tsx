@@ -11,6 +11,7 @@ import {
 } from "./competitor-local-run";
 import { api } from "./api";
 import { CompetitorBrandPicker } from "./competitor-brand-picker";
+import { CompetitorBrandBinding } from "./competitor-brand-binding";
 
 export function CompetitorLocalUpdate({
   open,
@@ -192,12 +193,8 @@ export function CompetitorLocalUpdate({
           </p>
         </div>
       )}
-      {!selectionLocked && !!invalid.length && (
-        <Alert
-          type="warning"
-          title={`这些品牌尚未绑定品牌ID：${invalid.map((b) => b.name).join("、")}`}
-          description="请先通过「浏览器补充数据」导入已选择准确品牌的销量榜单，再开始本机更新。"
-        />
+      {open && !selectionLocked && !!invalid.length && (
+        <CompetitorBrandBinding brands={invalid} onSaved={onSaved} />
       )}
       <p>
         本次品牌：

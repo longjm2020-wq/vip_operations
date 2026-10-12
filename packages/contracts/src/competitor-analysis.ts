@@ -57,6 +57,22 @@ export function vipListUrl(value: string) {
     return null;
   }
 }
+export function vipBrandBinding(value: string) {
+  const valid = vipListUrl(value.trim());
+  if (!valid) return null;
+  const params = new URL(valid).searchParams;
+  const brandSn = params.get("brand_sn") || "";
+  const name = (params.get("keyword") || "").trim();
+  if (
+    params.getAll("brand_sn").length !== 1 ||
+    params.getAll("keyword").length !== 1 ||
+    !/^\d{1,20}$/.test(brandSn) ||
+    !name ||
+    name.length > 40
+  )
+    return null;
+  return { name, brandSn };
+}
 export function vipImageUrl(value: string) {
   try {
     const u = new URL(value, "https://a.vpimg4.com");
