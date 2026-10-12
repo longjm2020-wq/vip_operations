@@ -5,12 +5,8 @@ import {
   SortAscendingOutlined,
   TeamOutlined,
 } from "@ant-design/icons";
-type Column = {
-  key: string;
-  label: string;
-  type?: string;
-  fallbackType?: string;
-};
+import { isSelectionCreationTimeColumn, selectionOrganizationSortConfiguration, selectionOrganizationSortOptions, type SelectionOrganizationColumn } from "./selection-organization-sort";
+type Column = SelectionOrganizationColumn;
 export function SelectionOrganization({
   columns,
   group,
@@ -50,29 +46,7 @@ export function SelectionOrganization({
       available.some((column) => column.key === key) &&
       !["registrationBatch", "supplierCode"].includes(key),
   );
-  const sorts = configured.sorts.filter(
-    (key) =>
-      available.some((column) => column.key === key) &&
-      key !== "registrationBatch",
-  );
-  const sortOptions = [
-    { value: "sortOrder:asc", label: "手动排序" },
-    { value: "updatedAt:desc", label: "最近修改" },
-    { value: "createdAt:desc", label: "最新创建" },
-    { value: "registrationBatch:asc", label: "创建时间 ↑" },
-    { value: "registrationBatch:desc", label: "创建时间 ↓" },
-    ...sorts.flatMap((key) => [
-      { value: `field:${key}:asc`, label: `${label(key)} ↑` },
-      { value: `field:${key}:desc`, label: `${label(key)} ↓` },
-    ]),
-  ];
-  if (!sortOptions.some((option) => option.value === sort))
-    sortOptions.push({
-      value: sort,
-      label: sort.startsWith("field:")
-        ? `${label(sort.slice(6, sort.lastIndexOf(":")))} ${sort.endsWith(":asc") ? "↑" : "↓"}`
-        : "当前列排序",
-    });
+  const sortOptions = selectionOrganizationSortOptions(columns, configured.sorts, sort);
   return (
     <>
       <Select
@@ -151,7 +125,7 @@ export function SelectionOrganization({
         }}
       >
         <Typography.Paragraph>
-          固定选项始终保留。选择其他字段加入自己的下拉菜单，图片字段不参与分组和排序。
+          固定选项始终保留。选择其他字段加入自己的下拉菜单，图片字段不参与分组和排序。系统创建时间排序合并为固定的升序和降序选项。
         </Typography.Paragraph>
         <Tabs
           activeKey={tab}
@@ -166,11 +140,12 @@ export function SelectionOrganization({
                     key === "groups" ? "可配置分组字段" : "可配置排序字段"
                   }
                   value={draft[key]}
-                  onChange={(values) => setDraft({ ...draft, [key]: values })}
+                  onChange={(values) => setDraft({ ...draft, [key]: key === "sorts" ? selectionOrganizationSortConfiguration(columns, values, draft.sorts) : values })}
                   options={available
                     .filter(
                       (column) =>
                         column.key !== "registrationBatch" &&
+                        (key !== "sorts" || !isSelectionCreationTimeColumn(column)) &&
                         (key !== "groups" || column.key !== "supplierCode"),
                     )
                     .map((column) => ({

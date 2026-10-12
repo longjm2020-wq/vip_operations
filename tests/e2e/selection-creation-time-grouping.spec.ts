@@ -105,6 +105,40 @@ const groupHeaders = (page: Page) => page.locator(".selection-group-row td").eva
   label: element.childNodes[0]?.textContent || "", count: element.querySelector("span")?.textContent || "",
 })));
 
+test("系统创建时间排序合并菜单，保留已有字段排序与配置并支持切换降序", async ({ page }) => {
+  const key = "custom:creation";
+  const state = await fixture(page, "/products", {
+    preferences: {
+      columns: [...columns,
+        { key, label: "创建时间", width: 180, type: "createdTime", custom: true, visibility: "PUBLIC" },
+        { key: "custom:purchase", label: "采购日期", width: 150, type: "date", custom: true, visibility: "PUBLIC" },
+      ],
+      organization: { groups: [], sorts: [key] },
+      columnSort: { key, direction: "asc" },
+      followShared: false,
+      sort: "sortOrder", direction: "asc",
+    },
+  });
+  await expect.poll(() => rowIds(page)).toEqual(["6", "2", "3", "4", "1", "5"]);
+  await page.getByRole("combobox", { name: "排序方式", exact: true }).click();
+  const menu = page.locator(".ant-select-dropdown:visible");
+  await expect(menu.getByText("创建时间 ↑", { exact: true })).toHaveCount(1);
+  await expect(menu.getByText("创建时间 ↓", { exact: true })).toHaveCount(1);
+  await menu.getByText("配置排序字段", { exact: true }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByRole("checkbox", { name: "创建时间", exact: true })).toHaveCount(0);
+  await dialog.getByRole("checkbox", { name: "采购日期", exact: true }).check();
+  await dialog.getByRole("button", { name: "确定", exact: true }).click();
+  await expect.poll(() => state.saved().organization.sorts).toEqual(["custom:purchase", key]);
+  expect(state.saved().columnSort).toEqual({ key, direction: "asc" });
+  await choose(page, "排序方式", "创建时间 ↓");
+  await expect.poll(() => rowIds(page)).toEqual(["5", "1", "4", "3", "2", "6"]);
+  await expect.poll(() => state.saved().columnSort).toEqual({ key, direction: "desc" });
+  await page.reload();
+  await expect.poll(() => rowIds(page)).toEqual(["5", "1", "4", "3", "2", "6"]);
+  expect(state.saved().organization.sorts).toEqual(["custom:purchase", key]);
+});
+
 for (const [label, entry] of [["选款登记", "/style-selections"], ["项目协作表格", "/project-tables/7"]]) {
   test(`${label}：无旧排序设置时真实请求创建时间升序，忽略登记批次并可切换降序`, async ({ page }) => {
     const state = await fixture(page, entry);
