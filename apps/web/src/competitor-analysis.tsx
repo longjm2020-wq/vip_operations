@@ -465,6 +465,8 @@ export function CompetitorAnalysisPage() {
     [capture, setCapture] = useState(false),
     [crawlSettings, setCrawlSettings] = useState(false),
     [queuing, setQueuing] = useState(false),
+    [loginRequest, setLoginRequest] = useState(0),
+    [pendingUpdate, setPendingUpdate] = useState<string[] | null>(null),
     [importOpen, setImportOpen] = useState(false),
     [addOpen, setAddOpen] = useState(false),
     [adding, setAdding] = useState(false),
@@ -572,10 +574,10 @@ export function CompetitorAnalysisPage() {
   }, []);
   const refresh = () =>
     void queryClient.invalidateQueries({ queryKey: ["competitor-dashboard"] });
-  async function crawl() {
+  async function crawl(brandIds?: string[], recover = true) {
     setQueuing(true);
+    const ids = brandIds || results.map((r) => r.brand.id);
     try {
-      const ids = results.map((r) => r.brand.id);
       if (!ids.length) return;
       const requested = await api("/analytics/competitors/crawl", "POST", {
         brandIds: ids,
@@ -589,7 +591,12 @@ export function CompetitorAnalysisPage() {
         message.success("后台采集已排队，可继续使用页面");
       else message.info("5分钟内已有采集记录，可查看采集状态后再更新");
     } catch (e) {
-      message.error((e as Error).message);
+      const problem = e as Error & { details?: { recovery?: string } };
+      if (recover && problem.details?.recovery === "CLOUD_LOGIN") {
+        setPendingUpdate(ids);
+        setLoginRequest((value) => value + 1);
+        message.info("请先完成云端访问核验，成功后继续更新本次选中的品牌");
+      } else message.error(problem.message);
     } finally {
       setQueuing(false);
     }
@@ -699,7 +706,21 @@ export function CompetitorAnalysisPage() {
         title="竞品分析"
         subtitle="唯品会 · 我的品牌与竞品对比"
         subtitleExtra={
-          <CompetitorCloudLogin manage={manage} onConnected={refresh} />
+          <CompetitorCloudLogin
+            manage={manage}
+            openRequest={loginRequest}
+            resumeUpdate={!!pendingUpdate}
+            onCancelUpdate={() => setPendingUpdate(null)}
+            onDisconnected={refresh}
+            onConnected={() => {
+              refresh();
+              if (pendingUpdate) {
+                const ids = pendingUpdate;
+                setPendingUpdate(null);
+                void crawl(ids, false);
+              }
+            }}
+          />
         }
         extra={
           <>

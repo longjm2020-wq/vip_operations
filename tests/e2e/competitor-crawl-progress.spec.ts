@@ -261,3 +261,110 @@ test("云端扫码只在窗口内轮询画面，核验成功后清除画面并�
   await page.getByRole("button", { name: "返回竞品分析", exact: true }).click();
   await expect(page.getByRole("dialog")).toHaveCount(0);
 });
+
+async function recoveryFixture(page: Page) {
+  await fixture(page);
+  let connected = false;
+  let loginSequence = 0;
+  const attempts: string[][] = [];
+  await page.route("**/api/v1/analytics/competitors/crawl", async (route) => {
+    attempts.push(route.request().postDataJSON().brandIds);
+    await route.fulfill(
+      connected
+        ? {
+            json: {
+              data: {
+                jobs: attempts.at(-1)!.map((id) => ({ id, status: "QUEUED" })),
+              },
+            },
+          }
+        : {
+            status: 409,
+            json: {
+              error: {
+                code: "CLOUD_NOT_READY",
+                message: "云端需登录",
+                details: { recovery: "CLOUD_LOGIN" },
+              },
+            },
+          },
+    );
+  });
+  await page.route("**/api/v1/analytics/competitors/cloud**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    let data: unknown;
+    if (path.endsWith("/cloud-session"))
+      data = {
+        enabled: true,
+        status: connected ? "READY" : "LOGIN_REQUIRED",
+        encryptionReady: true,
+        workerOnline: true,
+        note: "",
+        savedAt: "2026-10-12T01:00:00Z",
+      };
+    else if (path.endsWith("/cloud-login"))
+      data = { id: "recovery-" + ++loginSequence };
+    else if (path.endsWith("/actions")) {
+      connected = route.request().postDataJSON().kind === "CHECK";
+      data = { queued: true };
+    } else if (path.endsWith("/cancel")) data = { cancelled: true };
+    else
+      data = {
+        id: "recovery-" + loginSequence,
+        status: connected ? "SAVED" : "WAITING",
+        note: connected ? "已保存" : "请扫码后核验",
+        frameId: "test-frame",
+        expiresAt: new Date(Date.now() + 600_000).toISOString(),
+        frame: connected
+          ? null
+          : "data:image/svg+xml;base64," +
+            Buffer.from(
+              '<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="760"><rect width="1080" height="760" fill="#fff7ef"/></svg>',
+            ).toString("base64"),
+      };
+    await route.fulfill({ json: { data } });
+  });
+  return attempts;
+}
+
+test("需要登录时核验后只继续原品牌更新一次，短屏保留操作按钮", async ({
+  page,
+}) => {
+  const attempts = await recoveryFixture(page);
+  await page.setViewportSize({ width: 1000, height: 620 });
+  await page.goto("/analytics/competitors");
+  await page.getByRole("button", { name: "更新竞品数据", exact: true }).click();
+  const verify = page.getByRole("button", {
+    name: "核验并继续更新",
+    exact: true,
+  });
+  await expect(verify).toBeEnabled();
+  await expect(verify).toBeInViewport();
+  await page.setViewportSize({ width: 390, height: 650 });
+  await expect(verify).toBeInViewport();
+  await verify.click();
+  await expect(
+    page.getByRole("dialog", { name: "唯品会云端登录" }),
+  ).toHaveCount(0);
+  await expect.poll(() => attempts.length).toBe(2);
+  expect(attempts[1]).toEqual(attempts[0]);
+  expect(attempts[1]).toHaveLength(7);
+  await expect(page.getByText("云端已连接", { exact: true })).toBeVisible();
+});
+
+test("取消待继续更新后，单独保存登录不会启动已取消的更新", async ({ page }) => {
+  const attempts = await recoveryFixture(page);
+  await page.goto("/analytics/competitors");
+  await page.getByRole("button", { name: "更新竞品数据", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "核验并继续更新", exact: true }),
+  ).toBeEnabled();
+  await page.getByRole("button", { name: "关闭窗口", exact: true }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await page.getByRole("button", { name: "云端登录", exact: true }).click();
+  await page.getByRole("button", { name: "核验并保存", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "返回竞品分析", exact: true }),
+  ).toBeVisible();
+  expect(attempts).toHaveLength(1);
+});

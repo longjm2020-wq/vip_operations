@@ -31,6 +31,7 @@ export async function testCompetitorCloud(h: Record<string, any>) {
   let currentSession = "synthetic-session";
   let sessionRevision = 0;
   let blockCatalog = false;
+  let failNextProbe = false;
   try {
     assert.equal(
       (await request(base + "/cloud-login", "POST", {})).status,
@@ -92,7 +93,16 @@ export async function testCompetitorCloud(h: Record<string, any>) {
       "UPDATE competitor_crawl_jobs SET requested_at=now()-interval '6 minutes' WHERE brand_id=$1::bigint",
       initial.id,
     );
-    await ok(base + "/crawl", "POST", { brandIds: [initial.id] });
+    assert.equal(
+      (await request(base + "/crawl", "POST", { brandIds: [initial.id] }))
+        .status,
+      409,
+    );
+    // A job queued before login was lost must wait while the login window owns the browser.
+    await db.$executeRawUnsafe(
+      "INSERT INTO competitor_crawl_jobs(brand_id) VALUES($1::bigint)",
+      initial.id,
+    );
     await processCrawlJob(async () => {
       launched = true;
       throw Error("must not launch during login");
@@ -111,6 +121,10 @@ export async function testCompetitorCloud(h: Record<string, any>) {
       created.push(browser);
       const original = browser.newContext.bind(browser);
       browser.newContext = async (options) => {
+        if (failNextProbe) {
+          failNextProbe = false;
+          throw new Error("Synthetic temporary context failure");
+        }
         const context = await original(options);
         await context.route("https://**.vip.com/**", async (route) => {
           const hostname = new URL(route.request().url()).hostname;
@@ -186,6 +200,24 @@ export async function testCompetitorCloud(h: Record<string, any>) {
     await until(
       async () =>
         (await ok(base + "/cloud-login/" + login.id)).frameId !== frame.frameId,
+    );
+    failNextProbe = true;
+    await ok(base + "/cloud-login/" + login.id + "/actions", "POST", {
+      kind: "CHECK",
+    });
+    await until(async () =>
+      (await ok(base + "/cloud-login/" + login.id)).note.includes(
+        "本次核验暂未完成",
+      ),
+    );
+    assert.equal(
+      (await ok(base + "/cloud-login/" + login.id)).status,
+      "WAITING",
+    );
+    assert.equal(
+      created.length,
+      1,
+      "a failed reuse check retains the signed-in browser",
     );
     await ok(base + "/cloud-login/" + login.id + "/actions", "POST", {
       kind: "CHECK",
@@ -275,6 +307,12 @@ export async function testCompetitorCloud(h: Record<string, any>) {
     );
     assert.equal(queuedBlocked.status, "VERIFICATION_REQUIRED");
     assert.match(queuedBlocked.note, /HTTP 920/);
+    assert.equal(
+      (await request(base + "/crawl", "POST", { brandIds: [initial.id] }))
+        .status,
+      409,
+      "restricted updates do not report a misleading queued success",
+    );
     const recheck = await ok(base + "/cloud-login", "POST", {});
     running = processCloudLogin(launch);
     await until(

@@ -1,5 +1,10 @@
 import { z } from "zod";
-import { db, one, rows } from "../../../../../packages/database/src/index.js";
+import {
+  db,
+  one,
+  rows,
+  type Tx,
+} from "../../../../../packages/database/src/index.js";
 import {
   audit,
   command,
@@ -9,6 +14,26 @@ import {
   requirePermission,
 } from "../../core.js";
 import { shanghaiDate } from "../../../../../packages/contracts/src/compass-analytics.js";
+import {
+  competitorCloudReadiness,
+  type CompetitorCloudStatus,
+} from "../../../../../packages/contracts/src/competitor-cloud.js";
+
+export async function crawlConnectionIssue(tx: Tx = db) {
+  const row = await one(
+    tx,
+    `SELECT enabled,status,note,encryption_ready,
+    coalesce(worker_heartbeat_at>now()-interval '1 minute',false) AS worker_online
+    FROM competitor_cloud_session WHERE id=1`,
+  );
+  return competitorCloudReadiness({
+    enabled: !!row?.enabled,
+    status: (row?.status || "DISCONNECTED") as CompetitorCloudStatus["status"],
+    note: row?.note || "",
+    encryptionReady: !!row?.encryption_ready,
+    workerOnline: !!row?.worker_online,
+  });
+}
 
 export async function crawlStatus() {
   const settings = await one(
@@ -43,6 +68,11 @@ export async function requestCrawl(c: Context, input: unknown) {
     );
     if (brands.length !== new Set(b.brandIds).size)
       fail("UNKNOWN_BRAND", "品牌不存在", 400);
+    const connection = await crawlConnectionIssue(tx);
+    if (connection)
+      fail("CLOUD_NOT_READY", connection.note, 409, {
+        recovery: connection.action,
+      });
     const jobs = [];
     for (const brand of brands) {
       const active = await one(
@@ -56,7 +86,11 @@ export async function requestCrawl(c: Context, input: unknown) {
       }
       const recent = await one(
         tx,
-        "SELECT j.id::text,j.status FROM competitor_crawl_jobs j WHERE j.brand_id=$1::bigint AND j.requested_at>now()-interval '5 minutes' ORDER BY j.id DESC LIMIT 1",
+        `SELECT j.id::text,j.status FROM competitor_crawl_jobs j WHERE j.brand_id=$1::bigint
+        AND j.requested_at>now()-interval '5 minutes'
+        AND NOT (j.status IN ('LOGIN_REQUIRED','VERIFICATION_REQUIRED') AND EXISTS (
+          SELECT 1 FROM competitor_cloud_session s WHERE s.id=1 AND s.status='READY' AND s.saved_at>j.completed_at
+        )) ORDER BY j.id DESC LIMIT 1`,
         brand.id,
       );
       if (recent) {
@@ -132,6 +166,7 @@ export async function scheduleCrawls(now = new Date()) {
       "SELECT * FROM competitor_crawl_settings WHERE id=1",
     );
     if (!settings?.enabled) return;
+    if (await crawlConnectionIssue(tx)) return;
     const list = await rows(
       tx,
       "SELECT b.id::text,(SELECT count(*)::int FROM competitor_snapshots s WHERE s.brand_id=b.id AND source='PUBLIC_RANK') AS snapshots FROM competitor_brands b WHERE NOT EXISTS(SELECT 1 FROM competitor_crawl_jobs j WHERE j.brand_id=b.id AND (j.status IN('QUEUED','RUNNING') OR (j.requested_at AT TIME ZONE 'Asia/Shanghai')::date=$1::date))",

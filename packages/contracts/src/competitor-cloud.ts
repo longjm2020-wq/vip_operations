@@ -41,6 +41,30 @@ export type CloudLoginView = {
   note: string;
 };
 
+export function competitorCloudReadiness(
+  data: Pick<
+    CompetitorCloudStatus,
+    "enabled" | "status" | "encryptionReady" | "workerOnline" | "note"
+  >,
+) {
+  if (!data.encryptionReady)
+    return {
+      action: "SETUP",
+      note: "云端采集尚未配置会话加密密钥，请联系管理员",
+    } as const;
+  if (!data.workerOnline)
+    return {
+      action: "WAIT",
+      note: "云端采集程序离线，暂不能更新；请等待恢复后重试",
+    } as const;
+  if (!data.enabled || data.status !== "READY")
+    return {
+      action: "CLOUD_LOGIN",
+      note: data.note || "云端会话未就绪，请先完成登录或访问核验，再继续更新",
+    } as const;
+  return null;
+}
+
 // Only official VIP browser state is retained. No third-party origins or a
 // caller-provided URL can enter the authenticated collector.
 export function isVipOrigin(value: string) {

@@ -11,11 +11,11 @@ import {
   refreshCloudState,
 } from "./competitor-cloud-state.js";
 import {
-  catalogRestricted,
   catalogRestrictionNote,
   catalogTrace,
   waitForCatalogItem,
   watchCatalogPage,
+  vipPageGate,
 } from "./competitor-page-state.js";
 import { configureVipContext } from "./competitor-cloud-login.js";
 import { competitorCloudViewport } from "../../../packages/contracts/src/competitor-cloud.js";
@@ -47,33 +47,16 @@ export class CrawlIssue extends Error {
   }
 }
 async function guard(page: Page) {
-  if (catalogRestricted(page))
+  const gate = await vipPageGate(page);
+  if (gate === "ACCESS_RESTRICTED")
     throw new CrawlIssue(true, catalogRestrictionNote);
-  const url = new URL(page.url());
-  if (
-    url.hostname === "passport.vip.com" ||
-    (await page
-      .getByText("扫码登录", { exact: true })
-      .filter({ visible: true })
-      .count()) ||
-    (await page
-      .getByText("账户登录", { exact: true })
-      .filter({ visible: true })
-      .count())
-  )
+  if (gate === "LOGIN_REQUIRED")
     throw new CrawlIssue(
       false,
       "唯品会要求登录，后台采集已停止；保留上次有效数据。请打开「云端登录」重新扫码并核验，再更新竞品数据",
       true,
     );
-  if (
-    (await page.locator('input[placeholder*="验证码"]:visible').count()) ||
-    /验证|captcha/i.test(new URL(page.url()).pathname) ||
-    (await page
-      .getByText(/请输入图中的.*字符|请完成.*验证|拖动.*滑块/)
-      .filter({ visible: true })
-      .count())
-  )
+  if (gate === "VERIFICATION_REQUIRED")
     throw new CrawlIssue(
       true,
       "唯品会要求验证，后台采集已暂停；保留上次有效数据，请打开「云端登录」处理验证并重新核验",
@@ -399,6 +382,8 @@ export async function processCrawlJob(
       );
     try {
       cloud = await loadCloudState();
+      if (!cloud)
+        throw new CloudSessionUnavailable("DISCONNECTED", "云端未登录");
     } catch (error) {
       if (
         error instanceof CloudSessionUnavailable &&
@@ -474,7 +459,7 @@ export async function processCrawlJob(
     const login = error instanceof CrawlIssue && error.login;
     if (cloud && (login || verification))
       await db.$executeRawUnsafe(
-        "UPDATE competitor_cloud_session SET status=$1,note=$2 WHERE id=1 AND state_version=$3",
+        "UPDATE competitor_cloud_session SET status=$1,note=$2 WHERE id=1 AND enabled AND state_version=$3",
         login ? "LOGIN_REQUIRED" : "VERIFICATION_REQUIRED",
         login ? "唯品会要求重新登录，请在云端扫码核验" : error.message,
         cloud.version,
@@ -510,6 +495,15 @@ export async function processCrawlJob(
             : "FAILED",
       note,
     );
+    if (login || verification)
+      await db.$executeRawUnsafe(
+        `UPDATE competitor_crawl_jobs SET status=$1,note=$2,completed_at=now()
+        WHERE status='QUEUED' AND EXISTS (
+          SELECT 1 FROM competitor_cloud_session s WHERE s.id=1 AND s.status<>'READY'
+        )`,
+        login ? "LOGIN_REQUIRED" : "VERIFICATION_REQUIRED",
+        note,
+      );
   } finally {
     clearInterval(heartbeat);
     clearTimeout(deadline);

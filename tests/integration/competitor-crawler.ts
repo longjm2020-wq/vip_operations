@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { randomUUID, randomBytes } from "node:crypto";
+import { encryptCloudState } from "../../apps/worker/src/competitor-cloud-state.js";
 import { scheduleCrawls } from "../../apps/api/src/modules/competitors/crawl-jobs.js";
 import {
   CrawlIssue,
@@ -12,6 +13,13 @@ export async function testCompetitorCrawler(h: Record<string, any>) {
     endpoint = "/analytics/competitors";
   const initial = await ok(endpoint),
     brand = initial.brands[0];
+  const previousKey = process.env.COMPETITOR_SESSION_KEY;
+  process.env.COMPETITOR_SESSION_KEY = randomBytes(32).toString("hex");
+  await db.$executeRawUnsafe(
+    `UPDATE competitor_cloud_session SET enabled=true,status='READY',
+    encrypted_state=$1,encryption_ready=true,worker_heartbeat_at=now(),saved_at=now()-interval '1 hour' WHERE id=1`,
+    encryptCloudState({ cookies: [], origins: [] }),
+  );
   assert.equal(
     (
       await request(
@@ -97,11 +105,13 @@ export async function testCompetitorCrawler(h: Record<string, any>) {
     ).n,
     snapshotCount,
   );
-  assert.equal(
-    (await ok(endpoint + "/crawl", "POST", { brandIds: [brand.id] })).jobs[0]
-      .id,
-    queued.jobs[0].id,
-    "cooldown avoids repeated verification requests",
+  const blocked = await request(endpoint + "/crawl", "POST", {
+    brandIds: [brand.id],
+  });
+  assert.equal(blocked.status, 409);
+  assert.equal(blocked.body.error.details.recovery, "CLOUD_LOGIN");
+  await db.$executeRawUnsafe(
+    "UPDATE competitor_cloud_session SET status='READY',note='' WHERE id=1",
   );
   await ok(endpoint + "/crawl-settings", "POST", {
     enabled: false,
@@ -197,6 +207,7 @@ export async function testCompetitorCrawler(h: Record<string, any>) {
           newPage: async () => ({
             setDefaultTimeout() {},
             on() {},
+            context: () => ({ route: async () => {} }),
             goto: async () => {},
             url: () => "https://passport.vip.com/login?src=public-product-list",
           }),
@@ -226,6 +237,9 @@ export async function testCompetitorCrawler(h: Record<string, any>) {
     version: settings.version,
   });
   const afterMidnight = new Date(shanghaiDate() + "T00:30:00+08:00");
+  await db.$executeRawUnsafe(
+    "UPDATE competitor_cloud_session SET status='READY',worker_heartbeat_at=now() WHERE id=1",
+  );
   await scheduleCrawls(afterMidnight);
   await scheduleCrawls(afterMidnight);
   const total = (
@@ -237,9 +251,34 @@ export async function testCompetitorCrawler(h: Record<string, any>) {
     "one daily attempt per brand including new brands",
   );
   await db.$executeRawUnsafe(
+    "UPDATE competitor_cloud_session SET saved_at=now() WHERE id=1",
+  );
+  const recovered = await ok(endpoint + "/crawl", "POST", {
+    brandIds: [brand.id],
+  });
+  assert.notEqual(
+    recovered.jobs[0].id,
+    queued.jobs[0].id,
+    "fresh verification releases a recent blocked task",
+  );
+  assert.equal(
+    (await ok(endpoint + "/crawl", "POST", { brandIds: [brand.id] })).jobs[0]
+      .id,
+    recovered.jobs[0].id,
+    "active recovered task is not duplicated",
+  );
+  await db.$executeRawUnsafe(
+    "UPDATE competitor_crawl_jobs SET status='FAILED',completed_at=now() WHERE status='QUEUED'",
+  );
+  await db.$executeRawUnsafe(
     "UPDATE competitor_crawl_settings SET enabled=false WHERE id=1",
   );
   check(
     "Competitor silent queue permissions, idempotency, cooldown, pause, one browser lease, recovery and preserved snapshots",
   );
+  await db.$executeRawUnsafe(
+    "UPDATE competitor_cloud_session SET enabled=false,status='DISCONNECTED',encrypted_state=NULL,encryption_ready=false WHERE id=1",
+  );
+  if (previousKey === undefined) delete process.env.COMPETITOR_SESSION_KEY;
+  else process.env.COMPETITOR_SESSION_KEY = previousKey;
 }

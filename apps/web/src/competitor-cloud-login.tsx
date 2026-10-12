@@ -21,9 +21,17 @@ const labels: Record<string, [string, string]> = {
 export function CompetitorCloudLogin({
   manage,
   onConnected,
+  openRequest = 0,
+  resumeUpdate = false,
+  onCancelUpdate,
+  onDisconnected,
 }: {
   manage: boolean;
   onConnected: () => void;
+  openRequest?: number;
+  resumeUpdate?: boolean;
+  onCancelUpdate?: () => void;
+  onDisconnected?: () => void;
 }) {
   const { message } = App.useApp();
   const [open, setOpen] = useState(false),
@@ -31,6 +39,7 @@ export function CompetitorCloudLogin({
     [busy, setBusy] = useState(false),
     [error, setError] = useState("");
   const saved = useRef("");
+  const requested = useRef(0);
   const points = useRef<{ x: number; y: number }[]>([]);
   const session = useQuery<CompetitorCloudStatus>({
     queryKey: ["competitor-cloud-session"],
@@ -51,10 +60,17 @@ export function CompetitorCloudLogin({
     if (view?.status === "SAVED" && saved.current !== view.id) {
       saved.current = view.id;
       void session.refetch();
+      if (resumeUpdate) setOpen(false);
       onConnected();
       message.success("云端登录已保存，后续后台采集会复用此会话");
     }
   }, [view?.status, view?.id]);
+  useEffect(() => {
+    if (openRequest && openRequest !== requested.current) {
+      requested.current = openRequest;
+      void start();
+    }
+  }, [openRequest]);
   async function start() {
     setOpen(true);
     setBusy(true);
@@ -94,6 +110,7 @@ export function CompetitorCloudLogin({
         await api(endpoint + "/cloud-login/" + loginId + "/cancel", "POST", {});
       setOpen(false);
       setLoginId("");
+      onCancelUpdate?.();
       void session.refetch();
     } catch (e) {
       setError((e as Error).message);
@@ -105,7 +122,8 @@ export function CompetitorCloudLogin({
     try {
       await api(endpoint + "/cloud-session/disconnect", "POST", {});
       await session.refetch();
-      onConnected();
+      onCancelUpdate?.();
+      onDisconnected?.();
       message.success("云端会话已断开，自动采集需重新登录");
     } catch (e) {
       message.error((e as Error).message);
@@ -143,6 +161,11 @@ export function CompetitorCloudLogin({
         open={open}
         onCancel={() => void close()}
         width={900}
+        className="competitor-cloud-modal"
+        style={{ top: 24 }}
+        styles={{
+          body: { maxHeight: "calc(100dvh - 180px)", overflowY: "auto" },
+        }}
         destroyOnHidden
         footer={
           <Space wrap>
@@ -159,7 +182,7 @@ export function CompetitorCloudLogin({
                   disabled={!ready || busy}
                   onClick={() => void action({ kind: "CHECK" })}
                 >
-                  核验并保存
+                  {resumeUpdate ? "核验并继续更新" : "核验并保存"}
                 </Button>
               </>
             )}
@@ -190,14 +213,14 @@ export function CompetitorCloudLogin({
         }
       >
         <p>
-          使用唯品会 App
-          扫描下方云端浏览器中的二维码，再点击「核验并保存」。可以直接点击画面或拖动处理平台验证。
+          先查看当前云端页面；出现二维码时再用唯品会 App 扫码。完成后点击「
+          {resumeUpdate ? "核验并继续更新" : "核验并保存"}」。
         </p>
         <Alert
           type="info"
           showIcon
           title="保存后无需保持电脑或 Codex 在线"
-          description="这是服务器的独立登录。本次保存的会话供网站竞品后台采集使用，并在服务器加密保存；本窗口只支持扫码和鼠标操作，密码输入区域已隐藏。登录过期时需重新扫码。"
+          description="服务器独立保存加密会话。可点击或拖动画面完成平台操作，密码输入区域隐藏。"
         />
         {(error || login.error || session.error) && (
           <Alert
@@ -208,6 +231,14 @@ export function CompetitorCloudLogin({
           />
         )}
         {view?.note && <p role="status">{view.note}</p>}
+        {view?.note.includes("HTTP 920") && (
+          <Alert
+            type="warning"
+            showIcon
+            title="登录成功不代表商品接口已恢复"
+            description="当前云端商品访问被唯品会限制。请按官方页面提示处理；仍受限时需联系平台确认该云端访问。核验通过前不会继续提交采集任务。"
+          />
+        )}
         {view?.frame && active ? (
           <img
             className="competitor-cloud-frame"

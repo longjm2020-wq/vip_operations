@@ -80,6 +80,30 @@ export function catalogTrace(page: Page) {
   // Log only bounded public status metadata, never request URLs or bodies.
   return trace && { responses: trace.responses, failures: trace.failures };
 }
+export async function vipPageGate(page: Page) {
+  const url = new URL(page.url());
+  // A redirect can happen after DOMContentLoaded, while the catalogue wait is
+  // pending. Check the current page again before reporting an empty catalogue.
+  if (
+    url.hostname === "passport.vip.com" ||
+    (await page
+      .getByText(/^(扫码登录|账户登录)$/)
+      .filter({ visible: true })
+      .count())
+  )
+    return "LOGIN_REQUIRED" as const;
+  if (
+    (await page.locator('input[placeholder*="验证码"]:visible').count()) ||
+    /验证|captcha/i.test(url.pathname) ||
+    (await page
+      .getByText(/请输入图中的.*字符|请完成.*验证|拖动.*滑块/)
+      .filter({ visible: true })
+      .count())
+  )
+    return "VERIFICATION_REQUIRED" as const;
+  if (catalogRestricted(page)) return "ACCESS_RESTRICTED" as const;
+  return null;
+}
 export async function waitForCatalogItem(page: Page, selector: string) {
   const trace = traces.get(page);
   if (trace?.restricted) throw new CatalogAccessRestricted();

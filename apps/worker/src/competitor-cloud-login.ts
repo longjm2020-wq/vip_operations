@@ -19,6 +19,7 @@ import {
   catalogRestrictionNote,
   waitForCatalogItem,
   watchCatalogPage,
+  vipPageGate,
 } from "./competitor-page-state.js";
 
 const active = "('QUEUED','RUNNING','WAITING','CHECKING')";
@@ -52,17 +53,67 @@ export async function configureVipContext(page: Page) {
   });
   page.on("popup", (popup) => void popup.close());
 }
-export async function checkCloudLogin(page: Page, sourceUrl: string) {
+export type CloudLoginCheck = {
+  verified: boolean;
+  note: string;
+  loginRequired?: boolean;
+  verificationRequired?: boolean;
+  restricted?: boolean;
+};
+export async function checkCloudLogin(
+  page: Page,
+  sourceUrl: string,
+): Promise<CloudLoginCheck> {
   watchCatalogPage(page, true);
-  await page.goto(sourceUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
+  const gateResult = async () => {
+    const gate = await vipPageGate(page);
+    if (gate === "LOGIN_REQUIRED")
+      return {
+        verified: false,
+        loginRequired: true,
+        note: "唯品会会话已失效或尚未登录，请在当前云端画面扫码，再核验并保存",
+      };
+    if (gate === "VERIFICATION_REQUIRED")
+      return {
+        verified: false,
+        verificationRequired: true,
+        note: "唯品会要求安全验证，请在当前云端画面完成平台验证，再核验并保存",
+      };
+    if (gate === "ACCESS_RESTRICTED")
+      return {
+        verified: false,
+        restricted: true,
+        note: catalogRestrictionNote,
+      };
+    return null;
+  };
+  try {
+    await page.goto(sourceUrl, {
+      waitUntil: "domcontentloaded",
+      timeout: 30000,
+    });
+  } catch {
+    return (
+      (await gateResult()) || {
+        verified: false,
+        note: "品牌页面加载超时；云端窗口已保留，可查看当前画面后重新核验",
+      }
+    );
+  }
   if (
     !isVipOrigin(page.url()) ||
     new URL(page.url()).hostname === "passport.vip.com"
   )
-    return { verified: false, note: "尚未完成云端登录，请扫码后再次核验" };
+    return {
+      verified: false,
+      loginRequired: true,
+      note: "尚未完成云端登录，请扫码后再次核验",
+    };
   try {
     await waitForCatalogItem(page, ".c-goods-item__name");
   } catch (error) {
+    const gate = await gateResult();
+    if (gate) return gate;
     if (error instanceof CatalogAccessRestricted)
       return {
         verified: false,
@@ -93,6 +144,8 @@ export async function checkCloudLogin(page: Page, sourceUrl: string) {
       };
     return { verified: true, note: "云端登录已核验并保存" };
   } catch {
+    const gate = await gateResult();
+    if (gate) return gate;
     if (catalogRestricted(page))
       return {
         verified: false,
@@ -142,6 +195,7 @@ export async function processCloudLogin(
   });
   if (!job) return;
   let browser: Browser | undefined;
+  let stage = "START";
   const close = () => void browser?.close().catch(() => {});
   const deadline = setTimeout(
     close,
@@ -203,6 +257,7 @@ export async function processCloudLogin(
           saved.state_version,
         );
     };
+    stage = "LAUNCH";
     browser = await launch();
     const context = await browser.newContext({
       locale: "zh-CN",
@@ -213,12 +268,19 @@ export async function processCloudLogin(
     const page = await context.newPage();
     page.setDefaultTimeout(15000);
     await configureVipContext(page);
-    await page.goto("https://passport.vip.com/login", {
-      waitUntil: "domcontentloaded",
-      timeout: 30000,
-    });
+    stage = "OPEN_PAGE";
+    await page
+      .goto(storageState ? sourceUrl : "https://passport.vip.com/login", {
+        waitUntil: "domcontentloaded",
+        timeout: 30000,
+      })
+      .catch((error) => {
+        if (!isVipOrigin(page.url())) throw error;
+      });
     await update(
-      "请使用唯品会 App 扫描云端画面中的二维码，再点击「核验并保存」",
+      storageState
+        ? "已恢复保存的云端会话，请查看品牌页面并点击「核验并保存」；只有出现登录页时才需重新扫码"
+        : "请使用唯品会 App 扫描云端画面中的二维码，再点击「核验并保存」",
     );
     let frameId = randomUUID(),
       lastUrl = page.url(),
@@ -255,82 +317,116 @@ export async function processCloudLogin(
         ) {
           await update("云端画面已变化，请等待刷新后重新操作");
         } else if (b.kind === "CHECK") {
-          await update("正在核验云端登录与品牌商品访问", "CHECKING");
-          const result = await checkCloudLogin(page, sourceUrl);
-          if (result.verified) {
-            const state = await context.storageState({ indexedDB: true });
-            const probe = await browser.newContext({
-              locale: "zh-CN",
-              viewport: competitorCloudViewport,
-              acceptDownloads: false,
-              storageState: state,
-            });
-            let reusable = false;
-            let probeResult:
-              Awaited<ReturnType<typeof checkCloudLogin>> | undefined;
-            let verifiedState = state;
-            try {
-              const probePage = await probe.newPage();
-              await configureVipContext(probePage);
-              probeResult = await checkCloudLogin(probePage, sourceUrl);
-              reusable = probeResult.verified;
-              // Verification can refresh server-issued cookies. Persist the
-              // verified context's latest state, not its pre-navigation copy.
-              if (reusable)
-                verifiedState = await probe.storageState({ indexedDB: true });
-            } finally {
-              await probe.close();
-            }
-            if (!reusable) {
-              if (probeResult?.restricted) {
-                await markRestricted(probeResult.note);
-                await update(probeResult.note);
+          try {
+            stage = "CHECK_PAGE";
+            await update("正在核验云端登录与品牌商品访问", "CHECKING");
+            const result = await checkCloudLogin(page, sourceUrl);
+            if (result.verified) {
+              stage = "CHECK_REUSE";
+              const state = await context.storageState({ indexedDB: true });
+              const probe = await browser.newContext({
+                locale: "zh-CN",
+                viewport: competitorCloudViewport,
+                acceptDownloads: false,
+                storageState: state,
+              });
+              let reusable = false;
+              let probeResult:
+                Awaited<ReturnType<typeof checkCloudLogin>> | undefined;
+              let verifiedState = state;
+              try {
+                const probePage = await probe.newPage();
+                await configureVipContext(probePage);
+                probeResult = await checkCloudLogin(probePage, sourceUrl);
+                reusable = probeResult.verified;
+                // Verification can refresh server-issued cookies. Persist the
+                // verified context's latest state, not its pre-navigation copy.
+                if (reusable)
+                  verifiedState = await probe.storageState({ indexedDB: true });
+              } finally {
+                await probe.close().catch(() => {});
+              }
+              if (!reusable) {
+                if (probeResult?.restricted) {
+                  await markRestricted(probeResult.note);
+                  await update(probeResult.note);
+                  continue;
+                }
+                await update(
+                  probeResult?.note ||
+                    "当前登录尚不能在新的云端浏览器中复用，原窗口已保留，可再次核验",
+                );
                 continue;
               }
-              await update(
-                "当前登录尚不能在新的云端浏览器中复用，请刷新二维码重新扫码",
-              );
-              continue;
-            }
-            const encrypted = encryptCloudState(verifiedState);
-            const stored = await db.$transaction(async (tx) => {
-              await rows(tx, "SELECT pg_advisory_xact_lock(2026100341)::text");
-              const valid = await one(
-                tx,
-                `SELECT id FROM competitor_cloud_logins WHERE id=$1::uuid AND claim_token=$2::uuid AND status IN ${active} AND expires_at>now() FOR UPDATE`,
-                job.id,
-                token,
-              );
-              if (!valid) return false;
-              // Recheck permissions immediately before replacing the shared account.
-              if (
-                !(await one(
+              stage = "SAVE";
+              const encrypted = encryptCloudState(verifiedState);
+              const stored = await db.$transaction(async (tx) => {
+                await rows(
                   tx,
-                  `SELECT u.id FROM users u JOIN user_roles ur ON ur.user_id=u.id JOIN role_permissions rp ON rp.role_id=ur.role_id JOIN permissions p ON p.id=rp.permission_id WHERE u.id=$1::bigint AND u.status='ACTIVE' AND p.code='analytics.manage' LIMIT 1`,
+                  "SELECT pg_advisory_xact_lock(2026100341)::text",
+                );
+                const valid = await one(
+                  tx,
+                  `SELECT id FROM competitor_cloud_logins WHERE id=$1::uuid AND claim_token=$2::uuid AND status IN ${active} AND expires_at>now() FOR UPDATE`,
+                  job.id,
+                  token,
+                );
+                if (!valid) return false;
+                // Recheck permissions immediately before replacing the shared account.
+                if (
+                  !(await one(
+                    tx,
+                    `SELECT u.id FROM users u JOIN user_roles ur ON ur.user_id=u.id JOIN role_permissions rp ON rp.role_id=ur.role_id JOIN permissions p ON p.id=rp.permission_id WHERE u.id=$1::bigint AND u.status='ACTIVE' AND p.code='analytics.manage' LIMIT 1`,
+                    job.actor_id,
+                  ))
+                )
+                  return false;
+                await tx.$executeRawUnsafe(
+                  "UPDATE competitor_cloud_session SET enabled=true,status='READY',encrypted_state=$1,state_version=state_version+1,saved_at=now(),checked_at=now(),updated_by=$2::bigint,note='' WHERE id=1",
+                  encrypted,
                   job.actor_id,
-                ))
-              )
-                return false;
-              await tx.$executeRawUnsafe(
-                "UPDATE competitor_cloud_session SET enabled=true,status='READY',encrypted_state=$1,state_version=state_version+1,saved_at=now(),checked_at=now(),updated_by=$2::bigint,note='' WHERE id=1",
-                encrypted,
-                job.actor_id,
+                );
+                await tx.$executeRawUnsafe(
+                  "UPDATE competitor_cloud_logins SET status='SAVED',frame_jpeg=NULL,frame_id=NULL,completed_at=now(),note='云端登录已核验并保存，可以开始采集' WHERE id=$1::uuid",
+                  job.id,
+                );
+                await tx.$executeRawUnsafe(
+                  "DELETE FROM competitor_cloud_actions WHERE login_id=$1::uuid",
+                  job.id,
+                );
+                return true;
+              });
+              if (stored) return;
+              break;
+            }
+            if (result.restricted) await markRestricted(result.note);
+            else if (result.loginRequired || result.verificationRequired)
+              await db.$executeRawUnsafe(
+                "UPDATE competitor_cloud_session SET status=$1,note=$2 WHERE id=1 AND enabled AND state_version=$3",
+                result.loginRequired
+                  ? "LOGIN_REQUIRED"
+                  : "VERIFICATION_REQUIRED",
+                result.note,
+                saved?.state_version,
               );
-              await tx.$executeRawUnsafe(
-                "UPDATE competitor_cloud_logins SET status='SAVED',frame_jpeg=NULL,frame_id=NULL,completed_at=now(),note='云端登录已核验并保存，可以开始采集' WHERE id=$1::uuid",
-                job.id,
-              );
-              await tx.$executeRawUnsafe(
-                "DELETE FROM competitor_cloud_actions WHERE login_id=$1::uuid",
-                job.id,
-              );
-              return true;
-            });
-            if (stored) return;
-            break;
+            await update(result.note);
+          } catch (error) {
+            if (page.isClosed() || !browser.isConnected()) throw error;
+            console.warn(
+              JSON.stringify({
+                event: "competitor-cloud-check-retry",
+                stage,
+                reason: error instanceof Error ? error.name : "UnknownError",
+                networkCode:
+                  error instanceof Error
+                    ? error.message.match(/net::ERR_[A-Z_]+/)?.[0]
+                    : undefined,
+              }),
+            );
+            await update(
+              "本次核验暂未完成，当前云端窗口已保留；请查看画面后再次核验",
+            );
           }
-          if (result.restricted) await markRestricted(result.note);
-          await update(result.note);
         } else if (b.kind === "REFRESH") {
           await page.goto("https://passport.vip.com/login", {
             waitUntil: "domcontentloaded",
@@ -369,6 +465,7 @@ export async function processCloudLogin(
         frameId = randomUUID();
       }
       if (Date.now() - lastFrame >= 3000) {
+        stage = "FRAME";
         // Password/text inputs are never exposed in the remote image. Screens
         // exist only for the owner during this ten-minute interactive window.
         const frame = await page.screenshot({
@@ -396,12 +493,31 @@ export async function processCloudLogin(
       job.id,
       token,
     );
-  } catch {
+  } catch (error) {
+    // Bounded diagnostics only: never log URLs, page contents or browser state.
+    const reason = error instanceof Error ? error.name : "UnknownError";
+    const networkCode =
+      error instanceof Error
+        ? error.message.match(/net::ERR_[A-Z_]+/)?.[0]
+        : undefined;
+    console.warn(
+      JSON.stringify({
+        event: "competitor-cloud-login-failed",
+        stage,
+        reason,
+        networkCode,
+      }),
+    );
     await db.$executeRawUnsafe(
-      `UPDATE competitor_cloud_logins SET status='FAILED',frame_jpeg=NULL,frame_id=NULL,completed_at=now(),note='云端登录页面未能打开或读取，请稍后重新打开'
+      `UPDATE competitor_cloud_logins SET status=CASE WHEN expires_at<=now() THEN 'EXPIRED' ELSE 'FAILED' END,
+      frame_jpeg=NULL,frame_id=NULL,completed_at=now(),note=CASE WHEN expires_at<=now()
+      THEN '云端窗口已超过10分钟，请重新打开' ELSE $3 END
       WHERE id=$1::uuid AND claim_token=$2::uuid AND status IN ${active}`,
       job.id,
       token,
+      stage === "SAVE"
+        ? "云端核验通过，但保存未完成，请重新打开核验"
+        : "云端浏览器中断，请重新打开；已有商品数据保留",
     );
   } finally {
     clearTimeout(deadline);
