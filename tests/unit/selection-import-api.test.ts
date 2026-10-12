@@ -561,18 +561,20 @@ describe("atomic Excel style import", () => {
     expect((await read("SELECT count(*)::int AS count FROM style_selections"))[0].count).toBe(5000);
     process.stdout.write(`Synthetic PGlite 5000 styles: preview ${previewMs}ms, commit ${Math.round(performance.now() - commitStart)}ms, preview JSON ${Buffer.byteLength(JSON.stringify(plan))} bytes\n`);
   }, 180000);
-  it("updates only provided nonblank columns, including zero, while retaining extras and creation time", async () => {
+  it("updates supplied creation time and only provided nonblank columns, including zero, while retaining unrelated extras", async () => {
     const existing = field("短标题"), untouched = field("备注");
     await register(existing); await register(untouched);
     const before = await style("EXIST", { extraFields: { [existing.key]: "原标题", [untouched.key]: "保留备注" } });
-    const plan = await previewImport(actor(), input([{ xutiStyleNo: "EXIST", vipPrice: "0", supplierCode: "", material: null, fieldValues: { 短标题: "新标题", 创建时间: "1900-01-01" } }]));
-    expect(plan.rows[0].changedFields).toEqual(expect.arrayContaining(["唯品价", "短标题"]));
+    const plan = await previewImport(actor(), input([{ xutiStyleNo: "EXIST", vipPrice: "0", supplierCode: "", material: null, fieldValues: { 短标题: "新标题", 创建时间: "2025-04-22" } }]));
+    expect(plan.rows[0].changedFields).toEqual(expect.arrayContaining(["唯品价", "短标题", "创建时间"]));
     expect(plan.rows[0].values).not.toHaveProperty("fieldValues.创建时间");
+    expect(plan.rows[0].values.createdAt).toBe("2025-04-21T16:00:00.000Z");
     expect(await commitImport(actor(), payload(plan))).toMatchObject({ created: 0, updated: 1, skipped: 0, fieldsCreated: 0 });
     const after = (await read("SELECT * FROM style_selections"))[0];
     expect(after.vip_price).toBe("0"); expect(after.material).toBe("原成分"); expect(after.supplier_code).toBe("原编码");
     expect(after.extra_fields).toEqual({ [existing.key]: "新标题", [untouched.key]: "保留备注" });
-    expect(after.created_at).toEqual(before.created_at);
+    expect(after.created_at).toEqual(new Date("2025-04-21T16:00:00.000Z"));
+    expect(after.created_at).not.toEqual(before.created_at);
   });
   it("SKIP preserves matched records and never registers or publishes fields from skipped rows", async () => {
     const before = await style();

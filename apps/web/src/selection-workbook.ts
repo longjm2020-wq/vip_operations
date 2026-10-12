@@ -2,6 +2,7 @@ import type ExcelJS from "exceljs";
 import { selectionRowHasContent } from "../../../packages/contracts/src/selection-trailing-row.js";
 import { selectionImportHeader, selectionImportLimits, selectionImportTemplateFields } from "../../../packages/contracts/src/selection-import-template.js";
 import { registerSelectionImportSource, type SelectionImportWorkbookSource } from "./selection-import-diagnostics.js";
+import { parseSelectionCreatedTime } from "../../../packages/contracts/src/selection-created-time.js";
 
 type Row = Record<string, any>;
 export const selectionSheetColumns = [
@@ -41,7 +42,7 @@ export async function createSelectionWorkbook(records: Row[] = [], template = fa
     : selectionSheetColumns.map(([key, header]) => ({ key, header }));
   sheet.columns = columns.map(({ key, header }) => ({ key, header, width: key === "material" ? 32 : 20, style: { numFmt: "@" } }));
   if (template) {
-    sheet.getCell("A1").note = "系统只读字段。新款由服务器记录创建时间，填写此列不会修改已有款创建时间。";
+    sheet.getCell("A1").note = "可填写北京时间日期或日期时间，也支持 Excel 日期单元格。选择覆盖时更新已有款创建时间，留空保留原值；新款留空由服务器生成时间。";
     sheet.getCell("C1").note = "必填。按序缇款号匹配已有款；可仅保留序缇款号及需要更新的字段列。";
   }
   const pictures = book.addWorksheet("图片明细");
@@ -87,7 +88,7 @@ export async function createSelectionWorkbook(records: Row[] = [], template = fa
   notes.addRows([
     ["一行一款，以序缇款号匹配；款号必填，保留文本格式（包括前导零）。"],
     ["已有款由用户选择覆盖更新或跳过不覆盖，新款新增。覆盖仅更新文件中已填写的字段；空白和未提供的字段保留原值，不用于清空。"],
-    ["创建时间为系统只读字段，由服务器自动记录；填写此列不会修改创建时间。旧模板中的登记批次仍可兼容导入，但不改变创建时间。"],
+    ["创建时间可填写北京时间 YYYY-MM-DD、YYYY-MM-DD HH:mm[:ss]、YYYY/M/D H:mm[:ss]，也支持 Excel 日期单元格。覆盖时更新本次非空填写的创建时间，并保留时分秒；留空保留原值，新款留空由服务器生成。旧登记批次单独保存，不代替创建时间。"],
     ["可仅保留「序缇款号」加任意一列或多列进行针对性更新。序缇款号必填，文件内同款重复会阻止导入。"],
     [`可添加自定义表头（1至40个字符，文件最多${selectionImportLimits.maxColumns}列），新自定义字段默认排在模板默认字段之后；已有同名可见字段按其设置校验，重名或无权限请先核对。`],
     ["供应商颜色、尺码用 / 分隔；金额为非负数字，整数最多10位、最多两位小数，数值0会正常导入。数值型金额的极小存储误差会纠正（例如228.00000000000003按228处理）；超过两位小数的金额仍需修正。金额错误显示行号、单元格位置和原值。"],
@@ -113,9 +114,28 @@ export async function downloadSelectionWorkbook(records: Row[] = [], template = 
 function cellText(cell: ExcelJS.Cell): string {
   const value = cell.value;
   if (value && typeof value === "object" && ("formula" in value || "sharedFormula" in value)) throw Error(`${cell.address} 含公式，请先粘贴为值`);
-  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  if (value instanceof Date) return Number.isFinite(value.getTime()) ? value.toISOString().slice(0, 10) : "无效日期";
   if (typeof value === "number" && /^0+$/.test(cell.numFmt || "")) return String(value).padStart(cell.numFmt.length, "0");
   return cell.text.trim();
+}
+function creationTimeText(cell: ExcelJS.Cell, row: number, date1904: boolean): string {
+  const value = cell.value;
+  let text = cell.text.trim();
+  let date: Date | undefined;
+  if (value instanceof Date) date = value;
+  else if (typeof value === "number") {
+    // Excel dates have no timezone. Its 1900 leap-day placeholder is not a real date.
+    if (!Number.isFinite(value) || value < 0 || (!date1904 && Math.floor(value) === 60)) text = "";
+    else date = new Date(Math.round((value - (date1904 ? 24107 : value < 60 ? 25568 : 25569)) * 86400000));
+  }
+  if (date) {
+    // ExcelJS uses UTC components for the workbook's wall-clock value. Interpret
+    // those components as Beijing time, independent of the computer's timezone.
+    text = Number.isFinite(date.getTime()) ? date.toISOString().replace(/Z$/, "+08:00") : "";
+  }
+  const parsed = parseSelectionCreatedTime(text);
+  if (!parsed) throw Error(`第 ${row} 行创建时间应为有效的北京时间日期或日期时间（单元格 ${cell.address}），支持 YYYY-MM-DD、YYYY-MM-DD HH:mm[:ss] 或 Excel 日期单元格`);
+  return parsed;
 }
 const pricePrecision = new DataView(new ArrayBuffer(8));
 function priceText(cell: ExcelJS.Cell, row: number, label: string, text: string): string {
@@ -203,6 +223,7 @@ export async function parseSelectionWorkbook(buffer: ArrayBuffer) {
       hasFilledCell = true;
       if (readonly || (key === "images" && text === "见图片明细") || (key === "labelImages" && text === "见洗唛吊牌图明细")) continue;
       if (!key) { fieldValues.push([label, text]); continue; }
+      if (key === "createdAt") text = creationTimeText(row.getCell(index), r, !!book.properties.date1904);
       if (priceKeys.has(key)) text = priceText(row.getCell(index), r, label, text);
       if (key === "registrationBatch" && (!/^\d{4}-\d{2}-\d{2}$/.test(text) || !Number.isFinite(Date.parse(text)) || new Date(text).toISOString().slice(0, 10) !== text)) throw Error(`第 ${r} 行日期应为有效的 YYYY-MM-DD`);
       if (key === "color" || key === "sizeRange") text = [...new Set(text.split("/").map(v => v.trim()).filter(Boolean))].join("/");

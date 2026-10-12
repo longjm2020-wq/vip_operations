@@ -54,6 +54,7 @@ async function fixture(page: Page, failFirstPreview = false, legacyFirstPreview 
   const previews: Values[] = [], commits: Values[] = [], layoutWrites: Values[] = [], uploads: Values[] = [];
   let releasePreview: (() => void) | undefined;
   const fields = [
+    { header: "创建时间", key: "registrationBatch", label: "创建时间", type: "createdTime", isNew: false },
     { header: "长标题", key: "custom:title", label: "长标题", type: "text", isNew: false },
     { header: "活动卖点", key: "custom:campaign", label: "活动卖点", type: "text", isNew: true },
   ];
@@ -81,7 +82,7 @@ async function fixture(page: Page, failFirstPreview = false, legacyFirstPreview 
       const planned = body.rows.map((values: Values) => {
         const old = rows.find(row => row.xutiStyleNo === values.xutiStyleNo);
         const operation = !old ? "CREATE" : body.existingStrategy === "OVERWRITE" ? "UPDATE" : "SKIP";
-        return { values, id: old?.id, expectedUpdatedAt: old?.updatedAt, operation, changedFields: operation === "SKIP" ? [] : [...Object.keys(values.fieldValues || {}), ...(values.images ? ["图片"] : [])] };
+        return { values, id: old?.id, expectedUpdatedAt: old?.updatedAt, operation, changedFields: operation === "SKIP" ? [] : [...(values.createdAt ? ["创建时间"] : []), ...Object.keys(values.fieldValues || {}), ...(values.images ? ["图片"] : [])] };
       });
       const counts = { created: planned.filter((row: Values) => row.operation === "CREATE").length, updated: planned.filter((row: Values) => row.operation === "UPDATE").length };
       data = legacyFirstPreview && previews.length === 1 ? { rows: planned, ...counts } : { rows: planned, fields, fieldRevision: "11111111111111111111111111111111", layoutRevision: revision, ...counts, skipped: planned.filter((row: Values) => row.operation === "SKIP").length };
@@ -95,6 +96,7 @@ async function fixture(page: Page, failFirstPreview = false, legacyFirstPreview 
         const next = old || { id: String(rows.length + 1), xutiStyleNo: values.xutiStyleNo, images: [], labelImages: [], extraFields: {}, createdAt: "2026-10-11T00:00:00Z" };
         for (const [header, value] of Object.entries(values.fieldValues || {})) next.extraFields[fields.find(field => field.header === header)!.key] = value;
         if (values.images) next.images = values.images;
+        if (values.createdAt) next.createdAt = values.createdAt;
         next.updatedAt = "2026-10-11T01:00:00Z";
         if (!old) { rows.push(next); created++; } else updated++;
       }
@@ -130,7 +132,7 @@ test("同款选择不覆盖或针对性覆盖，自定义字段只在确认后�
   await expect(dialog.getByRole("row").filter({ hasText: "IMPORT-001" })).toContainText("长标题、活动卖点");
   await expect(dialog.getByText("排在模板默认字段之后，初始仅本人可见：", { exact: true })).toBeVisible();
   expect(state.previews.map(body => body.existingStrategy)).toEqual(["SKIP", "OVERWRITE"]);
-  expect(state.previews[1].rows[0]).toEqual({ xutiStyleNo: "IMPORT-001", fieldValues: { "长标题": "本次更新标题", "活动卖点": "新品上市" } });
+  expect(state.previews[1].rows[0]).toEqual({ createdAt: "1998-12-31T16:00:00.000Z", xutiStyleNo: "IMPORT-001", fieldValues: { "长标题": "本次更新标题", "活动卖点": "新品上市" } });
   expect(state.layoutWrites).toHaveLength(0);
   await dialog.locator(".ant-modal-footer").getByRole("button", { name: "关闭", exact: true }).click();
   expect(state.commits).toHaveLength(0);
@@ -144,7 +146,7 @@ test("同款选择不覆盖或针对性覆盖，自定义字段只在确认后�
   await expect(dialog.getByText("导入完成：新增 1 款，覆盖更新 1 款，不覆盖 0 款", { exact: true })).toBeVisible();
   expect(state.commits).toHaveLength(1);
   expect(state.commits[0]).toMatchObject({ existingStrategy: "OVERWRITE", fieldRevision: "11111111111111111111111111111111", layoutRevision: 1, fields: expect.arrayContaining([expect.objectContaining({ header: "活动卖点", isNew: true })]) });
-  expect(state.rows[0]).toMatchObject({ color: "黑色", vipPrice: "580.00", createdAt: "2026-10-05T00:00:00Z", extraFields: { "custom:title": "本次更新标题", "custom:campaign": "新品上市" } });
+  expect(state.rows[0]).toMatchObject({ color: "黑色", vipPrice: "580.00", createdAt: "1998-12-31T16:00:00.000Z", extraFields: { "custom:title": "本次更新标题", "custom:campaign": "新品上市" } });
   await dialog.locator(".ant-modal-footer").getByRole("button", { name: "关闭", exact: true }).click();
   await expect(page.locator('th[data-selection-column="custom:campaign"]')).toBeVisible();
 });

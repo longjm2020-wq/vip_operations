@@ -7,6 +7,7 @@ import { selectionBaseFields } from "../../../../../packages/contracts/src/selec
 import { selectionImportHeader, selectionImportTemplateFields, selectionImportLimits } from "../../../../../packages/contracts/src/selection-import-template.js";
 import type { SelectionImportImageColorDiagnostic } from "../../../../../packages/contracts/src/selection-import-diagnostics.js";
 import { selectionImageColorValues } from "../../../../../packages/contracts/src/selection-image-colors.js";
+import { parseSelectionCreatedTime } from "../../../../../packages/contracts/src/selection-created-time.js";
 import { archiveTableFields, archiveChoiceColumns } from "../../../../../packages/contracts/src/product-archive-table.js";
 import { fieldValueError, joinChoiceValues, splitChoiceValues } from "../../../../../packages/contracts/src/selection-field-validation.js";
 import { audit, canonical, command, fail, parse, requirePermission, type Context } from "../../core.js";
@@ -26,17 +27,38 @@ type Binding = z.infer<typeof bindingSchema>;
 const nonempty = (value: unknown) => value !== null && value !== undefined && value !== "" && (!Array.isArray(value) || value.length > 0);
 const workspace = () => selectionScope.getStore() || "default";
 const iso = (value: unknown) => value ? new Date(String(value)).toISOString() : null;
+// The editable business column retains its historical layout/protection key;
+// imported timestamps must write metadata instead of the old batch-date column.
+const importFieldKey = (key: string) => key === "createdAt" ? "registrationBatch" : key;
 
 // Construct at call time: the shared service exports the persisted row schema.
 function importValuesSchema() {
-  return styleSelectionInput.pick({ registrationBatch: true, images: true, labelImages: true, xutiStyleNo: true,
+  return styleSelectionInput.pick({ registrationBatch: true, createdAt: true, images: true, labelImages: true, xutiStyleNo: true,
     supplierStyleNo: true, supplierCode: true, color: true, sizeRange: true, material: true,
     supplyPriceExclTax: true, vipPrice: true, livePrice: true, tagPrice: true }).partial()
     .extend({ xutiStyleNo: z.string().trim().min(1).max(64), fieldValues: z.record(z.string().trim().min(1).max(40), z.string().max(100000)).refine(value => Object.keys(value).length <= selectionImportLimits.maxColumns).optional() }).strict();
 }
 function importPatch(input: Row): Row {
-  const parsed = parse<Row>(importValuesSchema(), input);
-  const value = Object.fromEntries(Object.entries(parsed).filter(([key, value]) => Object.hasOwn(input, key) && nonempty(value)));
+  const normalized = { ...input };
+  // Blank workbook cells are omitted by the client; equivalent API blanks also
+  // preserve existing creation metadata rather than clearing it.
+  if (normalized.createdAt === null || normalized.createdAt === undefined || typeof normalized.createdAt === "string" && !normalized.createdAt.trim()) delete normalized.createdAt;
+  if (normalized.fieldValues && typeof normalized.fieldValues === "object" && !Array.isArray(normalized.fieldValues)) {
+    normalized.fieldValues = { ...normalized.fieldValues };
+    for (const [header, raw] of Object.entries(normalized.fieldValues)) {
+      if (selectionImportHeader(header)?.builtinKey !== "createdAt") continue;
+      if (typeof raw !== "string") fail("VALIDATION_ERROR", "创建时间应为有效日期或日期时间", 400);
+      if ((raw as string).trim()) {
+        if (Object.hasOwn(normalized, "createdAt")) fail("VALIDATION_ERROR", "创建时间重复，请保留一列", 400);
+        const timestamp = parseSelectionCreatedTime(raw);
+        if (!timestamp) fail("VALIDATION_ERROR", "创建时间应为有效日期或日期时间", 400);
+        normalized.createdAt = timestamp;
+      }
+      delete normalized.fieldValues[header];
+    }
+  }
+  const parsed = parse<Row>(importValuesSchema(), normalized);
+  const value = Object.fromEntries(Object.entries(parsed).filter(([key, value]) => Object.hasOwn(normalized, key) && nonempty(value)));
   if (value.fieldValues) {
     value.fieldValues = Object.fromEntries(Object.entries(value.fieldValues).filter(([header, raw]) => !selectionImportHeader(header)?.readonly && String(raw).trim() !== ""));
     if (!Object.keys(value.fieldValues).length) delete value.fieldValues;
@@ -159,7 +181,7 @@ function resolveBindings(c: Context, snapshot: Snapshot, values: Row[]): { bindi
     const known = selectionImportHeader(header);
     const label = known?.label || header;
     let matches = known?.builtinKey
-      ? snapshot.all.filter(field => field.key === known.builtinKey)
+      ? snapshot.all.filter(field => field.key === importFieldKey(known.builtinKey!))
       : snapshot.all.filter(field => (selectionImportHeader(field.label)?.label || field.label) === label);
     if (label === "标准颜色") {
       const canonical = snapshot.all.find(field => field.key === archiveStandardColorKey);
@@ -171,13 +193,13 @@ function resolveBindings(c: Context, snapshot: Snapshot, values: Row[]): { bindi
       const unregisteredArchive = field.key === archiveStandardColorKey && !snapshot.registry.some(row => row.field_key === field.key);
       if (!unregisteredArchive && !protection.fieldVisible(snapshot.policy, c.actor, field.key) || snapshot.effective.hiddenColumns.includes(field.key) || field.deleted)
         fail("REGION_FORBIDDEN", "导入列包含不可访问的字段，请核对字段权限和显示设置", 403);
-      if (readonlyTypes.has(field.type || field.fallbackType || "text")) fail("VALIDATION_ERROR", `字段「${header}」由系统生成，不能导入更新`, 400);
+      if (readonlyTypes.has(field.type || field.fallbackType || "text") && !(known?.builtinKey === "createdAt" && field.key === "registrationBatch")) fail("VALIDATION_ERROR", `字段「${header}」由系统生成，不能导入更新`, 400);
       if (unregisteredArchive) definitions.push(field);
       return { header, key: field.key, label: field.label, type: field.type || field.fallbackType || "text", isNew: unregisteredArchive };
     }
     if (known?.readonly) fail("VALIDATION_ERROR", `字段「${header}」由系统生成，不能导入更新`, 400);
     if (known?.builtinKey) {
-      const base = selectionBaseFields.find(field => field.key === known.builtinKey)!;
+      const base = selectionBaseFields.find(field => field.key === importFieldKey(known.builtinKey!))!;
       return { header, key: base.key, label, type: known.type || "text", isNew: false };
     }
     // Keys are generated by the server. No caller-supplied private key, owner or
@@ -238,8 +260,11 @@ function writablePatch(snapshot: Snapshot, bindings: Binding[], definitions: Sel
   // around a user's text, tag, image or numeric field configuration.
   for (const [key, value] of Object.entries(patch)) {
     if (key === "extraFields" || key === "registrationBatch") continue;
-    const field = fields.get(key);
+    const field = fields.get(importFieldKey(key));
     if (!field) continue;
+    // importPatch already validates this timestamp through the same schema as
+    // explicit cell edits. Only the built-in business timestamp is writable.
+    if (key === "createdAt" && field.key === "registrationBatch") continue;
     if (readonlyTypes.has(field.type || field.fallbackType || "text")) fail("VALIDATION_ERROR", `字段「${field.label}」由系统生成，不能导入更新`, 400);
     if (field.type === "image") {
       const parsed = parse(styleSelectionInput.shape.images, Array.isArray(value) ? value : JSON.parse(String(value)));
@@ -290,7 +315,7 @@ async function makePlan(tx: Tx, c: Context, archive: boolean, snapshot: Snapshot
     let changedFields: string[] = [];
     if (operation !== "SKIP") {
       const patch = writablePatch(snapshot, bindings, definitions, value);
-      const requested = Object.keys(patch).flatMap(key => key === "extraFields" ? Object.keys(patch.extraFields) : key === "xutiStyleNo" && exists ? [] : [key]);
+      const requested = Object.keys(patch).flatMap(key => key === "extraFields" ? Object.keys(patch.extraFields) : key === "xutiStyleNo" && exists ? [] : [importFieldKey(key)]);
       protection.assertFields(virtual, c, before || { created_by: c.actor.id }, requested);
       await protection.assertWrite(tx, c, before || null, patch, virtual, false);
       if (archive) requirePermission(c.actor, exists ? "product.update" : "product.create");

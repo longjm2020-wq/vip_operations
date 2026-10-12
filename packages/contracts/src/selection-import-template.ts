@@ -17,7 +17,7 @@ export type SelectionImportTemplateField = {
 };
 
 export const selectionImportTemplateFields: readonly SelectionImportTemplateField[] = [
-  { label: "创建时间", type: "createdTime", builtinKey: "registrationBatch", readonly: true },
+  { label: "创建时间", type: "createdTime", builtinKey: "createdAt" },
   { label: "图片", type: "image", builtinKey: "images" },
   { label: "序缇款号", type: "text", builtinKey: "xutiStyleNo" },
   { label: "三级类目", type: "text" },
@@ -52,7 +52,7 @@ const aliases = new Map([
 ]);
 const legacyBatch: SelectionImportTemplateField = { label: "登记批次", type: "date", builtinKey: "registrationBatch" };
 
-/** The legacy writable batch remains import-compatible; 创建时间 is always read-only. */
+/** Legacy batch dates stay separate from explicitly imported creation timestamps. */
 export function selectionImportHeader(header: string): SelectionImportTemplateField | undefined {
   const label = header.trim();
   return label === legacyBatch.label ? legacyBatch : templateByLabel.get(aliases.get(label) || label);

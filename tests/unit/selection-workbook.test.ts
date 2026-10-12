@@ -93,13 +93,13 @@ describe("selection workbook", () => {
     book.getWorksheet("选款资料")!.getCell("D3").value = { formula: '"Y"', result: "Y" };
     await expect(parseSelectionWorkbook(await bytes(book))).rejects.toThrow("公式");
   });
-  it("downloads the 24 standard template fields in order with read-only creation time and required style instructions", async () => {
+  it("downloads the 24 standard template fields in order with editable creation time and required style instructions", async () => {
     const book = await createSelectionWorkbook([], true), sheet = book.getWorksheet("选款资料")!;
     const labels = ["创建时间", "图片", "序缇款号", "三级类目", "供应商款号", "供应商编码", "供应商颜色", "标准颜色", "尺码范围", "成分", "洗唛/吊牌图", "安全类别", "执行标准", "洗涤标志核对", "面料材质核对", "是否豁免二次车缝", "衣服整改措施", "供货价（不含税）", "唯品价", "直播价", "吊牌价", "长标题", "短标题", "尺码表"];
     expect(sheet.columns.map(column => column.header)).toEqual(labels);
     expect(selectionImportTemplateFields.map(field => field.label)).toEqual(labels);
     expect(sheet.rowCount).toBe(1);
-    expect(sheet.getCell("A1").note).toContain("系统只读字段");
+    expect(sheet.getCell("A1").note).toContain("选择覆盖时更新已有款创建时间");
     expect(sheet.getCell("C1").note).toContain("必填");
     const notes = book.getWorksheet("填写说明")!.getColumn(1).values.join("\n");
     expect(notes).toContain("覆盖更新或跳过不覆盖");
@@ -110,17 +110,17 @@ describe("selection workbook", () => {
     expect(notes).toContain("图片颜色不匹配时，导入提示指出款号、具体颜色及图片所在工作表/行号/单元格");
     const reloaded = new Excel.Workbook();
     await reloaded.xlsx.load(await bytes(book));
-    expect(JSON.stringify(reloaded.getWorksheet("选款资料")!.getCell("A1").note)).toContain("系统只读字段");
+    expect(JSON.stringify(reloaded.getWorksheet("选款资料")!.getCell("A1").note)).toContain("选择覆盖时更新已有款创建时间");
   });
-  it("parses the new template plus custom columns without changing system creation time or splitting literal choice labels", async () => {
+  it("parses the new template plus creation time and custom columns without splitting literal choice labels", async () => {
     const book = await createSelectionWorkbook([], true), sheet = book.getWorksheet("选款资料")!;
-    sheet.addRow({ registrationBatch: "2020-01-01", xutiStyleNo: "0001", color: " 黑 / 白 / 黑 ", material: "羊毛100%", vipPrice: 0, "field:三级类目": "女士皮衣/皮草", "field:标准颜色": "米白", "field:长标题": "服装长标题", "field:尺码表": "S:90/M:94" });
+    sheet.addRow({ createdAt: "2020-01-01", xutiStyleNo: "0001", color: " 黑 / 白 / 黑 ", material: "羊毛100%", vipPrice: 0, "field:三级类目": "女士皮衣/皮草", "field:标准颜色": "米白", "field:长标题": "服装长标题", "field:尺码表": "S:90/M:94" });
     sheet.getCell("Y1").value = "自定义/备注";
     sheet.getCell("Y2").value = "甲/乙";
     sheet.getCell("Z1").value = "自定义数字";
     sheet.getCell("Z2").value = 0;
     const parsed = await parseSelectionWorkbook(await bytes(book));
-    expect(parsed).toEqual([{ xutiStyleNo: "0001", color: "黑/白", material: "羊毛100%", vipPrice: "0", fieldValues: { "三级类目": "女士皮衣/皮草", "标准颜色": "米白", "长标题": "服装长标题", "尺码表": "S:90/M:94", "自定义/备注": "甲/乙", "自定义数字": "0" } }]);
+    expect(parsed).toEqual([{ createdAt: "2019-12-31T16:00:00.000Z", xutiStyleNo: "0001", color: "黑/白", material: "羊毛100%", vipPrice: "0", fieldValues: { "三级类目": "女士皮衣/皮草", "标准颜色": "米白", "长标题": "服装长标题", "尺码表": "S:90/M:94", "自定义/备注": "甲/乙", "自定义数字": "0" } }]);
     expect(parsed[0]).not.toHaveProperty("registrationBatch");
     expect(parsed[0]).not.toHaveProperty("extraFields");
   });
@@ -209,7 +209,7 @@ describe("selection workbook", () => {
       expect(load).toHaveBeenCalledTimes(2);
     } finally { xlsx.mockRestore(); }
   });
-  it("requires a style even when only creation time, a custom value or zero was filled and rejects formulas in ignored time cells", async () => {
+  it("requires a style even when only creation time, a custom value or zero was filled and rejects time formulas", async () => {
     for (const [header, value] of [["创建时间", "2026-10-11"], ["自定义字段", "内容"], ["直播价", 0]] as const) {
       const book = await partialWorkbook(["序缇款号", header], [["", value]]);
       await expect(parseSelectionWorkbook(await bytes(book))).rejects.toThrow("第 2 行缺少序缇款号");
@@ -220,7 +220,7 @@ describe("selection workbook", () => {
     await expect(parseSelectionWorkbook(await bytes(noStyle))).rejects.toThrow("缺少序缇款号列");
   });
   it("rejects duplicate equivalent headers and protects headerless or overly long custom columns", async () => {
-    for (const aliases of [["颜色", "供应商颜色"], ["材质", "成分"], ["材质成分", "材质"], ["登记批次", "创建时间"], ["供货价(不含税)", "供货价（不含税）"], ["自定义", " 自定义 "]]) {
+    for (const aliases of [["颜色", "供应商颜色"], ["材质", "成分"], ["材质成分", "材质"], ["创建时间", "创建时间"], ["供货价(不含税)", "供货价（不含税）"], ["自定义", " 自定义 "]]) {
       const book = await partialWorkbook(["序缇款号", ...aliases], []);
       await expect(parseSelectionWorkbook(await bytes(book))).rejects.toThrow("表示同一字段");
     }
@@ -229,8 +229,37 @@ describe("selection workbook", () => {
     const invalidHeader = await partialWorkbook(["序缇款号", "长".repeat(41)], [["001", "内容"]]);
     await expect(parseSelectionWorkbook(await bytes(invalidHeader))).rejects.toThrow("最多40个字符");
     expect(selectionImportHeader("颜色")?.builtinKey).toBe("color");
-    expect(selectionImportHeader("创建时间")?.readonly).toBe(true);
+    expect(selectionImportHeader("创建时间")?.builtinKey).toBe("createdAt");
+    expect(selectionImportHeader("创建时间")?.readonly).toBeUndefined();
     expect(selectionImportHeader("登记批次")?.readonly).toBeUndefined();
+  });
+  it("imports Excel numeric dates and text in Beijing time, retaining seconds and supporting both date systems", async () => {
+    const book = await partialWorkbook(["序缇款号", "创建时间", "登记批次"], [
+      ["EXCEL-NUMBER", 46285.6086921296, "2026-09-18"],
+      ["EXCEL-DATE", new Date("2026-09-20T14:36:31Z"), ""],
+      ["TEXT", "2026/9/20 14:36:31", ""],
+      ["DATE-ONLY", "2026-09-20", ""],
+      ["ISO", "2026-09-20T14:36:31+08:00", ""],
+      ["BLANK", "", ""],
+    ]);
+    book.getWorksheet("选款资料")!.getCell("B3").numFmt = "yyyy/m/d h:mm:ss";
+    const parsed = await parseSelectionWorkbook(await bytes(book));
+    expect(parsed[0]).toMatchObject({ createdAt: "2026-09-20T06:36:31.000Z", registrationBatch: "2026-09-18" });
+    expect(parsed.slice(0, 3).map(row => row.createdAt)).toEqual(Array(3).fill("2026-09-20T06:36:31.000Z"));
+    expect(parsed[3].createdAt).toBe("2026-09-19T16:00:00.000Z");
+    expect(parsed[4].createdAt).toBe(parsed[0].createdAt);
+    expect(parsed[5]).not.toHaveProperty("createdAt");
+    const old = await partialWorkbook(["序缇款号", "创建时间"], [["1904", 44823.6086921296]]);
+    old.properties.date1904 = true;
+    expect((await parseSelectionWorkbook(await bytes(old)))[0].createdAt).toBe(parsed[0].createdAt);
+    old.getWorksheet("选款资料")!.getCell("B2").numFmt = "yyyy/m/d h:mm:ss";
+    expect((await parseSelectionWorkbook(await bytes(old)))[0].createdAt).toBe(parsed[0].createdAt);
+  });
+  it("rejects invalid creation times with their Excel location instead of silently keeping old dates", async () => {
+    for (const value of ["2026-02-30", "2026/9/20 24:00", -1, 60, true, "not a date"]) {
+      const book = await partialWorkbook(["序缇款号", "创建时间"], [["INVALID-TIME", value]]);
+      await expect(parseSelectionWorkbook(await bytes(book))).rejects.toThrow(/第 2 行创建时间.*单元格 B2/);
+    }
   });
   it("supports more than 30 custom columns up to the 500 field limit and preserves special object property labels safely", async () => {
     const headers = ["序缇款号", "__proto__", "constructor", "xutiStyleNo", ...Array.from({ length: 496 }, (_, index) => `自定义${index}`)];

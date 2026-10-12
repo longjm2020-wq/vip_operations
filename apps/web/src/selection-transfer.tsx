@@ -145,7 +145,7 @@ export function SelectionTransfer({ canEdit, blocked, selectedRows, filteredRows
     <Tooltip title={blocked ? "请先处理未保存的修改" : selectedRows.length ? `导出勾选的 ${selectedRows.length} 款` : "导出当前筛选下的全部款式"}><Dropdown trigger={["click"]} disabled={busy || blocked} menu={{ items: [{ key: "excel", label: "导出 Excel" }], onClick: () => { void download(false); } }}><Button aria-label="导出" disabled={busy || blocked} icon={<UploadOutlined />}>导出 <DownOutlined /></Button></Dropdown></Tooltip>
   </Space>
     <Modal title="从 Excel 导入商品" width={960} open={open} maskClosable={!busy} closable={!busy} keyboard={!busy} onCancel={closeImport} footer={<Space><Button disabled={busy} onClick={closeImport}>关闭</Button>{plan && <Button type="primary" loading={busy} disabled={!canEdit || blocked} onClick={() => void commit()}>确认导入</Button>}</Space>}>
-      <div className="selection-import-guide"><span>模板包含24个默认字段，创建时间只读。序缇款号必填，可只导入款号和任意单列或多列资料；未提供的字段、空白值及已有创建时间均保留。</span><Button icon={<DownloadOutlined />} disabled={busy} onClick={() => void download(true)}>下载模板</Button></div>
+      <div className="selection-import-guide"><span>模板包含24个默认字段。序缇款号必填，可只导入款号和任意单列或多列资料；创建时间支持日期及日期时间，覆盖时更新本次填写的值。未提供的字段和空白值保留原值。</span><Button icon={<DownloadOutlined />} disabled={busy} onClick={() => void download(true)}>下载模板</Button></div>
       <div className="selection-import-strategy">
         <strong>相同序缇款号的处理方式</strong>
         <Radio.Group value={existingStrategy} disabled={!canEdit || blocked || busy} onChange={event => void refreshPreview(event.target.value as ExistingStrategy)}>
