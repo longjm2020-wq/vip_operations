@@ -20,7 +20,6 @@ import {
   Tag,
 } from "antd";
 import {
-  DownloadOutlined,
   PlusOutlined,
   ReloadOutlined,
   LinkOutlined,
@@ -49,7 +48,7 @@ import { competitorMaterialDisplay } from "./competitor-material-display";
 import { captureBookmarkUrl } from "./competitor-capture";
 import { readCompetitorFile } from "./competitor-import";
 import { CompetitorCloudLogin } from "./competitor-cloud-login";
-import { downloadSheet } from "./download-sheet";
+import { CompetitorExport } from "./competitor-export";
 import {
   CompetitorCrawlPanel,
   type CompetitorCrawlStatus,
@@ -1102,30 +1101,7 @@ export function CompetitorAnalysisPage() {
                     ]}
                   />
                 </span>
-                <Button
-                  icon={<DownloadOutlined aria-hidden="true" />}
-                  disabled={q.isFetching || !current?.top20.length}
-                  onClick={() =>
-                    current &&
-                    void downloadSheet(
-                      `${current.brand.name}-竞品TOP20`,
-                      current.top20.map((p) => ({
-                        品牌: current.brand.name,
-                        公开排名: p.publicRank,
-                        商品名称: p.title,
-                        款号: p.styleCode,
-                        特卖价: p.salePrice,
-                        品类: p.category,
-                        详细材质信息: competitorMaterialDisplay(p.materialInfo),
-                        季节: p.seasons.join("、"),
-                        预览图链接: p.imageUrl,
-                        商品详情链接: p.productUrl,
-                      })),
-                    )
-                  }
-                >
-                  导出TOP20
-                </Button>
+                <CompetitorExport result={current} loading={q.isFetching} />
               </Space>
             }
           >

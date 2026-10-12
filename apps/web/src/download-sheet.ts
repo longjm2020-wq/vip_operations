@@ -1,5 +1,9 @@
 import type { Row } from "./shared";
-export async function downloadSheet(name: string, records: Row[]) {
+export type SheetDownload = { url: string; fileName: string };
+export async function prepareSheetDownload(
+  name: string,
+  records: Row[],
+): Promise<SheetDownload> {
   const Excel = (await import("exceljs")).default;
   const book = new Excel.Workbook();
   const sheet = book.addWorksheet("数据");
@@ -12,9 +16,29 @@ export async function downloadSheet(name: string, records: Row[]) {
       type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     }),
   );
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = name + ".xlsx";
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  return { url, fileName: name + ".xlsx" };
+}
+export function triggerSheetDownload(file: SheetDownload) {
+  const link = document.createElement("a");
+  link.href = file.url;
+  link.download = file.fileName;
+  link.hidden = true;
+  document.body.appendChild(link);
+  try {
+    link.click();
+  } finally {
+    link.remove();
+  }
+}
+export function releaseSheetDownload(file: SheetDownload) {
+  // Allow the browser to finish opening a download before releasing its source.
+  setTimeout(() => URL.revokeObjectURL(file.url), 60_000);
+}
+export async function downloadSheet(name: string, records: Row[]) {
+  const file = await prepareSheetDownload(name, records);
+  try {
+    triggerSheetDownload(file);
+  } finally {
+    releaseSheetDownload(file);
+  }
 }
