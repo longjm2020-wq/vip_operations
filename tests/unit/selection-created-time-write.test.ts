@@ -4,7 +4,7 @@ import type { Context } from "../../apps/api/src/core.js";
 import type { Row, Tx } from "../../packages/database/src/index.js";
 import { selectionScope } from "../../packages/database/src/selection-scope.js";
 import { defaultProtection } from "../../packages/contracts/src/selection-protection.js";
-import { selectionLayoutSchema } from "../../packages/contracts/src/selection-layout.js";
+import { selectionLayoutSchema, selectionSharedLayoutSchema } from "../../packages/contracts/src/selection-layout.js";
 
 const fixture = vi.hoisted(() => ({ database: null as PGlite | null }));
 // Keep persistence, transactions, product mirroring, permissions and audit real.
@@ -264,19 +264,61 @@ describe("atomic creation-time Excel imports", () => {
     expect((await read("SELECT registration_batch,created_at FROM style_selections"))[0]).toEqual({ registrationBatch: "2018-02-01T00:00:00.000Z", createdAt: editedTime });
   });
 
-  it("enforces built-in protection, hidden columns and archive product permissions before any import writes", async () => {
+  it.each(["hidden", "deleted", "missing"])("imports native creation metadata without changing a %s built-in display column or private system mirror", async mode => {
+    const product = (await read("INSERT INTO products(style_no,name,category_id,created_at) VALUES('VIRTUAL-TIME','Product',1,$1) RETURNING *", [originalTime]))[0];
+    const row = await savedRow("selection_table_23", String(product.id), "VIRTUAL-TIME");
+    const mirror = { key: "custom:creation-mirror", label: "创建时间", type: "createdTime", width: 168, custom: true, ownerId: "7", visibility: "PRIVATE" };
+    const style = { key: "xutiStyleNo", label: "序缇款号", type: "text", width: 142 };
+    const builtIn = { key: "registrationBatch", label: "创建时间", type: "createdTime", width: 191, ...(mode === "deleted" ? { deleted: true } : {}) };
+    const columns = mode === "missing" ? [style] : [style, builtIn];
+    const hiddenColumns = mode === "hidden" ? ["registrationBatch"] : [];
+    const personal = selectionLayoutSchema.parse({ columns: [...columns, mirror], hiddenColumns, fixedColumns: ["xutiStyleNo"], rowHeight: "loose" });
+    const shared = selectionSharedLayoutSchema.parse({ columns, hiddenColumns, fixedColumns: ["xutiStyleNo"], rowHeight: "loose" });
+    await fixture.database!.query("INSERT INTO selection_field_registry(workspace_key,field_key,owner_id,visibility,definition) VALUES('23',$1,7,'PRIVATE',$2)", [mirror.key, JSON.stringify(mirror)]);
+    await fixture.database!.query("INSERT INTO selection_layout_preferences(user_id,workspace_key,table_id,preferences,revision) VALUES(7,'23',23,$1,4)", [JSON.stringify(personal)]);
+    await fixture.database!.query("INSERT INTO selection_shared_layouts(workspace_key,preferences,revision) VALUES('23',$1,9)", [JSON.stringify(shared)]);
+    await fixture.database!.query("UPDATE selection_table_23.style_selections SET extra_fields=$1 WHERE id=$2", [JSON.stringify({ [mirror.key]: "Original private value" }), row.id]);
+    const beforePersonal = await read("SELECT * FROM selection_layout_preferences"), beforeShared = await read("SELECT * FROM selection_shared_layouts"), beforeRegistry = await read("SELECT * FROM selection_field_registry");
+    await selectionScope.run("23", async () => {
+      const c = actor(`virtual-time-${mode}`), plan = await previewImport(c, importInput([{ xutiStyleNo: "VIRTUAL-TIME", createdAt: editedTime }]));
+      expect(plan).toMatchObject({ updated: 1, created: 0 });
+      expect(plan.fields.find(field => field.header === "创建时间")).toMatchObject({ key: "registrationBatch", type: "createdTime", isNew: false });
+      expect(await commitImport(c, importPayload(plan))).toMatchObject({ updated: 1, fieldsCreated: 0 });
+    });
+    expect((await read("SELECT created_at FROM products WHERE id=$1", [product.id]))[0].createdAt).toBe(editedTime);
+    expect((await read("SELECT created_at,extra_fields FROM selection_table_23.style_selections WHERE id=$1", [row.id]))[0]).toEqual({ createdAt: editedTime, extraFields: expect.objectContaining({ [mirror.key]: "Original private value" }) });
+    expect(await read("SELECT * FROM selection_layout_preferences")).toEqual(beforePersonal);
+    expect(await read("SELECT * FROM selection_shared_layouts")).toEqual(beforeShared);
+    expect(await read("SELECT * FROM selection_field_registry")).toEqual(beforeRegistry);
+    expect(await read("SELECT * FROM audit_logs WHERE action='IMPORT_FIELDS'")).toHaveLength(0);
+  });
+
+  it("enforces built-in protection despite a hidden column and archive product permissions before any import writes", async () => {
     const row = await savedRow();
     const region = { id: "123e4567-e89b-42d3-a456-426614174000", name: "Creation", scope: "columns", rowIds: [], columnKeys: ["registrationBatch"], users: {}, others: "read" };
     await fixture.database!.query("UPDATE style_selection_protection SET settings=$1", [JSON.stringify({ ...defaultProtection, enabled: true, regions: [region] })]);
     await expect(previewImport(actor("protected-import"), importInput([{ xutiStyleNo: "TIME-1", createdAt: originalTime }]))).rejects.toMatchObject({ status: 403 });
-    await fixture.database!.query("UPDATE style_selection_protection SET settings=$1", [JSON.stringify(defaultProtection)]);
     await fixture.database!.query("INSERT INTO selection_layout_preferences(user_id,workspace_key,preferences) VALUES(7,'default',$1)", [JSON.stringify(selectionLayoutSchema.parse({ columns: [{ key: "registrationBatch", label: "创建时间", type: "createdTime", width: 120 }], hiddenColumns: ["registrationBatch"] }))]);
     await expect(previewImport(actor("hidden-import"), importInput([{ xutiStyleNo: "TIME-1", createdAt: editedTime }]))).rejects.toMatchObject({ status: 403 });
+    await fixture.database!.query("UPDATE style_selection_protection SET settings=$1", [JSON.stringify(defaultProtection)]);
     const product = (await read("INSERT INTO products(style_no,name,category_id,created_at) VALUES('PRODUCT-DENIED','Product',1,$1) RETURNING *", [originalTime]))[0];
     await savedRow("selection_table_23", String(product.id), "PRODUCT-DENIED");
     await expect(selectionScope.run("23", () => previewImport(actor("product-denied-import", ["selection.read", "selection.manage"]), importInput([{ xutiStyleNo: "PRODUCT-DENIED", createdAt: editedTime }])))).rejects.toMatchObject({ status: 403 });
     expect((await read("SELECT created_at,version FROM style_selections WHERE id=$1", [row.id]))[0]).toMatchObject({ createdAt: originalTime, version: 1 });
     expect((await read("SELECT created_at FROM products"))[0].createdAt).toBe(originalTime);
+    expect(await read("SELECT * FROM audit_logs")).toHaveLength(0);
+  });
+
+  it.each(["private", "claimed", "locked"])("does not bypass %s access through the native timestamp binding", async mode => {
+    const row = await savedRow();
+    if (mode === "private") await fixture.database!.query("INSERT INTO selection_field_registry(workspace_key,field_key,owner_id,visibility,definition) VALUES('default','registrationBatch',8,'PRIVATE',$1)", [JSON.stringify({ key: "registrationBatch", label: "创建时间", type: "createdTime", width: 120, deleted: true })]);
+    if (mode === "claimed") {
+      await fixture.database!.query("UPDATE style_selection_protection SET settings=$1", [JSON.stringify({ ...defaultProtection, claimsEnabled: true })]);
+      await fixture.database!.query("UPDATE style_selections SET claimed_by=8 WHERE id=$1", [row.id]);
+    }
+    if (mode === "locked") await fixture.database!.query("UPDATE style_selections SET migration_locked=true WHERE id=$1", [row.id]);
+    await expect(previewImport(actor(`virtual-denied-${mode}`), importInput([{ xutiStyleNo: "TIME-1", createdAt: editedTime }]))).rejects.toMatchObject({ status: mode === "locked" ? 409 : 403 });
+    expect((await read("SELECT created_at,version FROM style_selections WHERE id=$1", [row.id]))[0]).toMatchObject({ createdAt: originalTime, version: 1 });
     expect(await read("SELECT * FROM audit_logs")).toHaveLength(0);
   });
 

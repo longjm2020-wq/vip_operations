@@ -24,6 +24,7 @@ const importTransactionTimeout = 600_000;
 const readonlyTypes = new Set(["creator", "modifier", "createdTime", "modifiedTime", "autonumber"]);
 const bindingSchema = z.object({ header: z.string().min(1).max(40), key: z.string().min(1).max(100), label: z.string().min(1).max(40), type: z.string().max(30), isNew: z.boolean() }).strict();
 type Binding = z.infer<typeof bindingSchema>;
+const isCreationTimeBinding = (binding: Binding) => binding.key === "registrationBatch" && selectionImportHeader(binding.header)?.builtinKey === "createdAt";
 const nonempty = (value: unknown) => value !== null && value !== undefined && value !== "" && (!Array.isArray(value) || value.length > 0);
 const workspace = () => selectionScope.getStore() || "default";
 const iso = (value: unknown) => value ? new Date(String(value)).toISOString() : null;
@@ -183,6 +184,15 @@ function resolveBindings(c: Context, snapshot: Snapshot, values: Row[]): { bindi
     let matches = known?.builtinKey
       ? snapshot.all.filter(field => field.key === importFieldKey(known.builtinKey!))
       : snapshot.all.filter(field => (selectionImportHeader(field.label)?.label || field.label) === label);
+    // Creation time is native row/product metadata. A legacy layout can hide or
+    // delete its built-in display column while showing a custom system mirror.
+    // Import the instant without changing either column or bypassing the
+    // business column's privacy, protected region or product write permissions.
+    if (known?.builtinKey === "createdAt") {
+      if (!protection.fieldVisible(snapshot.policy, c.actor, "registrationBatch"))
+        fail("REGION_FORBIDDEN", "导入创建时间没有字段访问权限，请核对字段权限", 403);
+      return { header, key: "registrationBatch", label, type: "createdTime", isNew: false };
+    }
     if (label === "标准颜色") {
       const canonical = snapshot.all.find(field => field.key === archiveStandardColorKey);
       if (canonical) matches = [canonical];
@@ -193,7 +203,7 @@ function resolveBindings(c: Context, snapshot: Snapshot, values: Row[]): { bindi
       const unregisteredArchive = field.key === archiveStandardColorKey && !snapshot.registry.some(row => row.field_key === field.key);
       if (!unregisteredArchive && !protection.fieldVisible(snapshot.policy, c.actor, field.key) || snapshot.effective.hiddenColumns.includes(field.key) || field.deleted)
         fail("REGION_FORBIDDEN", "导入列包含不可访问的字段，请核对字段权限和显示设置", 403);
-      if (readonlyTypes.has(field.type || field.fallbackType || "text") && !(known?.builtinKey === "createdAt" && field.key === "registrationBatch")) fail("VALIDATION_ERROR", `字段「${header}」由系统生成，不能导入更新`, 400);
+      if (readonlyTypes.has(field.type || field.fallbackType || "text")) fail("VALIDATION_ERROR", `字段「${header}」由系统生成，不能导入更新`, 400);
       if (unregisteredArchive) definitions.push(field);
       return { header, key: field.key, label: field.label, type: field.type || field.fallbackType || "text", isNew: unregisteredArchive };
     }
@@ -212,7 +222,7 @@ function resolveBindings(c: Context, snapshot: Snapshot, values: Row[]): { bindi
     return { header, key, label, type: "text", isNew: true };
   });
   if (new Set(bindings.map(field => field.key)).size !== bindings.length) fail("VALIDATION_ERROR", "导入列重复指向同一个字段，请保留一列", 400);
-  const missing = bindings.filter(field => !snapshot.personal.columns.some(column => column.key === field.key));
+  const missing = bindings.filter(field => !isCreationTimeBinding(field) && !snapshot.personal.columns.some(column => column.key === field.key));
   if (snapshot.personal.columns.length + missing.length > 500) fail("VALIDATION_ERROR", "导入后字段数超过500个，请减少自定义列", 400);
   return { bindings, definitions };
 }
@@ -367,7 +377,7 @@ export async function commitImport(c: Context, input: unknown) {
         previous.productId !== undefined && current.productId !== previous.productId || previous.expectedProductUpdatedAt !== undefined && current.expectedProductUpdatedAt !== previous.expectedProductUpdatedAt)
         fail("EDIT_CONFLICT", `款号「${current.values.xutiStyleNo}」在预览后已变更，请重新导入核对；整批未写入`, 409);
     }
-    const missingColumns = plan.fields.filter(field => !snapshot.personal.columns.some(column => column.key === field.key)).map(binding =>
+    const missingColumns = plan.fields.filter(field => !isCreationTimeBinding(field) && !snapshot.personal.columns.some(column => column.key === field.key)).map(binding =>
       plan.definitions.find(field => field.key === binding.key) || snapshot.all.find(field => field.key === binding.key) || {
         key: binding.key, label: binding.label, width: selectionInitialColumnWidth, type: binding.type as SelectionField["type"],
       });
