@@ -11,12 +11,78 @@ const issue = (title: string, composition = material, field = long, facts = "三
   titleValueIssue(field, title, composition, facts, image);
 
 describe("AI product title validation", () => {
+  const downComposition = "面料：100%粘胶纤维\n里料：100%聚酯纤维\n胆料：100%锦纶\n毛领：水貂毛皮\n填充物：白鹅绒（绒子含量90%）\n小部分填充物：100%聚酯纤维\n充绒量：S80gM83gL87gXL91g\n（饰品辅料除外）";
+  const downLong = { ...long, textConfig: { maxLength: 30, countMode: "characters" as const } };
+  const downShort = { ...short, textConfig: { maxLength: 15, countMode: "characters" as const } };
+  const downFacts = "三级类目：女式羽绒服\n季节：秋冬";
+  const downIssue = (title: string, composition = downComposition, field = downLong) => issue(title, composition, field, downFacts);
+
+  it("accepts documented mink collars and mixed down filling through a natural down-garment category", () => {
+    const title = "【水貂毛领含鹅绒】秋冬季新中式花卉翻领长袖女士短款羽绒外套";
+    expect(countTextCharacters(title, "characters")).toBe(29);
+    expect(downIssue(title)).toBeNull();
+    expect(downIssue("花卉水貂毛领含鹅绒羽绒外套", downComposition, downShort)).toBeNull();
+    expect(downIssue(title.replace("鹅绒", "白鹅绒"))).toBeNull();
+  });
+
+  it("keeps the shell, liner, collar and minor filling distinct rather than inheriting the preceding role", () => {
+    expect(downIssue("【水貂毛领含鹅绒】秋冬季新中式花卉翻领长袖女士短款羽绒外套")).toBeNull();
+    expect(downIssue("【水貂毛领含鹅绒】秋冬季新中式花卉翻领长袖女士短款羽绒外套",
+      downComposition.replace("毛领：", "衣领成分：").replace("小部分填充物：", "部分填充料："))).toBeNull();
+    expect(issue("【100桑蚕丝】庭春漾秋冬新中式提花盘扣圆领背心马甲女士外搭单品款",
+      "面料：100%聚酯纤维\n胆料：100%桑蚕丝")).toContain("对应部位");
+    expect(issue("【100桑蚕丝】庭春漾秋冬新中式提花盘扣圆领背心马甲女士外搭单品款",
+      "面料：100%聚酯纤维\n口袋：100%桑蚕丝")).toContain("对应部位");
+  });
+
+  it.each(["水貂毛", "水貂毛袖口", "水貂毛帽沿", "水貂毛领袖口"])("does not promote the documented collar into %s", sellingPoint => {
+    expect(downIssue(`【${sellingPoint}】秋冬季新中式花卉翻领长袖女士短款羽绒外套`)).toContain("对应部位");
+  });
+
+  it("allows both named trims only when this product documents both material placements", () => {
+    expect(downIssue("【水貂毛领及袖口】秋冬季新中式花卉翻领长袖女士短款羽绒外套",
+      downComposition + "\n袖口：水貂毛皮")).toBeNull();
+  });
+
+  it("requires exact named down evidence while permitting the verified general species", () => {
+    const title = "【水貂毛领含白鹅绒】秋冬季新中式花卉翻领长袖女士短款羽绒外套";
+    expect(downIssue(title, downComposition.replace("白鹅绒", "鹅绒"))).toContain("成分依据");
+    expect(downIssue(title, downComposition.replace("白鹅绒", "灰鹅绒"))).toContain("成分依据");
+    expect(downIssue(title, downComposition.replace("白鹅绒", "白鸭绒"))).toContain("成分依据");
+    expect(downIssue(title.replace("白鹅绒", "鸭绒"), downComposition.replace("白鹅绒", "灰鸭绒"))).toBeNull();
+    expect(selectionTitleWordingIssue("白鹅绒羽绒外套")).toBeNull();
+    expect(selectionTitleWordingIssue("灰鸭绒羽绒外套")).toBeNull();
+    expect(selectionTitleWordingIssue("白鹅绒粉色羽绒外套")).toContain("颜色");
+    expect(selectionTitleWordingIssue("灰鸭绒灰色羽绒外套")).toContain("颜色");
+  });
+
+  it("does not treat down-cluster content or fill weight as a fiber purity or proportion", () => {
+    expect(downIssue("【纯鹅绒】秋冬季新中式花卉翻领长袖女士短款羽绒外套")).toContain("100%");
+    expect(downIssue("【100鹅绒】秋冬季新中式花卉翻领长袖女士短款羽绒外套")).toContain("比例");
+    expect(downIssue("【90%鹅绒】秋冬季新中式花卉翻领长袖女士短款羽绒外套")).toContain("不写具体含量比例");
+  });
+
+  it("does not turn one pure down compartment plus ordinary minor filling into pure or 100% down", () => {
+    const composition = "面料：100%粘胶纤维\n填充物：100%白鹅绒\n小部分填充物：100%聚酯纤维";
+    expect(downIssue("【纯鹅绒】秋冬季新中式花卉翻领长袖女士短款羽绒外套", composition)).toContain("100%");
+    expect(downIssue("【100鹅绒】秋冬季新中式花卉翻领长袖女士短款羽绒外套", composition)).toContain("其他填充");
+    const pureComposition = "面料：100%粘胶纤维\n填充物：100%白鹅绒";
+    expect(downIssue("【纯鹅绒】秋冬季新中式花卉翻领长袖女士短款通勤穿搭羽绒外套", pureComposition)).toBeNull();
+    expect(downIssue("【100鹅绒】秋冬季新中式花卉翻领长袖女士短款通勤羽绒外套", pureComposition)).toBeNull();
+  });
+
+  it("does not use documented down filling as a collar, woven material or ordinary knitwear selling point", () => {
+    expect(downIssue("【含鹅绒】秋冬季新中式花卉翻领长袖女士短款针织外套")).toContain("对应部位");
+    expect(downIssue("【鹅绒毛领】秋冬季新中式花卉翻领长袖女士短款羽绒外套")).toContain("对应部位");
+    expect(downIssue("【鹅绒拼接】秋冬季新中式花卉翻领长袖女士短款羽绒外套")).toContain("对应部位");
+  });
+
   it("asks for naturally described grounded selling points without asking for forbidden composition tags", () => {
     expect(productTitleSystemPrompt).toContain("有依据的拼接/毛领/镶边设计");
     expect(productTitleSystemPrompt).not.toContain("方括号优先贵重主面料");
     expect(productTitleSystemPrompt).not.toContain("注明部位的配料");
   });
-  it.each(["面料", "主面料", "里料", "内里", "衬里", "填充物", "配料", "辅料"])("omits the composition-role tag %s from both long and short titles", tag => {
+  it.each(["面料", "主面料", "里料", "内里", "衬里", "胆料", "胆布", "填充物", "配料", "辅料"])("omits the composition-role tag %s from both long and short titles", tag => {
     expect(issue(`【100桑蚕丝${tag}】庭春漾秋冬新中式提花盘扣圆领背心马甲女士外搭单品款`)).toContain("部位标签");
     expect(issue(`庭春漾${tag}马甲`, material, short)).toContain("部位标签");
   });
@@ -138,6 +204,10 @@ describe("AI product title validation", () => {
   it("preserves legacy unlabelled main compositions", () => {
     expect(issue("【100桑蚕丝】庭春漾秋冬新中式提花盘扣圆领背心马甲女士外搭单品款", "100%桑蚕丝（饰品辅料除外）")).toBeNull();
     expect(issue("【纯棉】庭春漾秋冬新中式提花盘扣圆领背心马甲女士外搭单品款", "100%棉")).toBeNull();
+    for (const label of ["成分", "材质", "材料"]) {
+      expect(issue("【100桑蚕丝】庭春漾秋冬新中式提花盘扣圆领背心马甲女士外搭单品款", `${label}：100%桑蚕丝`)).toBeNull();
+      expect(downIssue("【水貂毛领含鹅绒】秋冬季新中式花卉翻领长袖女士短款羽绒外套", `${label}：${downComposition}`)).toBeNull();
+    }
   });
 
   it.each(["【100桑蚕丝】最佳圆领马甲", "【100桑蚕丝】冰雪奇缘圆领马甲", "【100桑蚕丝】治疗圆领马甲"])("rejects prohibited claims or known IP in %s", title => {
