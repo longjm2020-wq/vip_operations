@@ -83,7 +83,7 @@ const SupplyProducts = React.lazy(() => import("./supply").then(module => ({ def
 const SupplyReview = React.lazy(() => import("./supply").then(module => ({ default: module.SupplyReview })));
 const SupplyOrders = React.lazy(() => import("./supply-orders").then(module => ({ default: module.SupplyOrders })));
 const SupplyStatements = React.lazy(() => import("./supply-statements").then(module => ({ default: module.SupplyStatements })));
-const coreFeatureSummary = "经营与竞品分析 · 报表自动更新 · 采购库存 · 协作表格与 AI 标题 · 订单对账";
+const coreFeatureSummary = "经营分析与竞品采集 · 报表自动更新 · 采购库存 · 协作表格与 AI 标题 · 订单对账";
 const useUi = create<{ collapsed: boolean; toggle: () => void }>((set) => ({
   collapsed: false,
   toggle: () => set((s) => ({ collapsed: !s.collapsed })),

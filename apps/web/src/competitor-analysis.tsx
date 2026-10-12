@@ -29,6 +29,7 @@ import {
 } from "@ant-design/icons";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { api, queryClient } from "./api";
+import { CompetitorLocalUpdate } from "./competitor-local";
 import { Header, useCan, when } from "./shared";
 import {
   analyzeCompetitor,
@@ -464,6 +465,12 @@ export function CompetitorAnalysisPage() {
     [active, setActive] = useState<string>(),
     [capture, setCapture] = useState(false),
     [crawlSettings, setCrawlSettings] = useState(false),
+    [localUpdate, setLocalUpdate] = useState(false),
+    [updateMode, setUpdateMode] = useState(() =>
+      localStorage.getItem("competitor-update-mode") === "CLOUD"
+        ? "CLOUD"
+        : "LOCAL",
+    ),
     [queuing, setQueuing] = useState(false),
     [loginRequest, setLoginRequest] = useState(0),
     [pendingUpdate, setPendingUpdate] = useState<string[] | null>(null),
@@ -738,10 +745,25 @@ export function CompetitorAnalysisPage() {
                   icon={<ReloadOutlined aria-hidden="true" />}
                   loading={queuing}
                   disabled={!results.length}
-                  onClick={() => void crawl()}
+                  onClick={() =>
+                    updateMode === "LOCAL" ? setLocalUpdate(true) : void crawl()
+                  }
                 >
                   更新竞品数据
                 </Button>
+                <Select
+                  aria-label="竞品更新方式"
+                  value={updateMode}
+                  style={{ width: 128 }}
+                  options={[
+                    { value: "LOCAL", label: "本机浏览器" },
+                    { value: "CLOUD", label: "云端浏览器" },
+                  ]}
+                  onChange={(value) => {
+                    setUpdateMode(value);
+                    localStorage.setItem("competitor-update-mode", value);
+                  }}
+                />
                 <Button
                   icon={<SettingOutlined aria-hidden="true" />}
                   disabled={!data}
@@ -779,6 +801,14 @@ export function CompetitorAnalysisPage() {
         onCapture={() => setCapture(true)}
         localLoginSource={own?.searchUrl || brands[0]?.searchUrl}
       />
+      {manage && (
+        <CompetitorLocalUpdate
+          open={localUpdate}
+          brands={results.map((r) => r.brand)}
+          onClose={() => setLocalUpdate(false)}
+          onSaved={refresh}
+        />
+      )}
       <Card size="small" className="competitor-filters">
         <div className="competitor-brand-line">
           <Tag color="orange">我的品牌 · {own?.name || "序缇"}</Tag>
@@ -1123,10 +1153,14 @@ export function CompetitorAnalysisPage() {
                     <Button
                       type="primary"
                       loading={queuing}
-                      onClick={() => void crawl()}
+                      onClick={() =>
+                        updateMode === "LOCAL"
+                          ? setLocalUpdate(true)
+                          : void crawl()
+                      }
                       style={{ marginLeft: 12 }}
                     >
-                      后台采集
+                      开始采集
                     </Button>
                   )}
                 </Empty>

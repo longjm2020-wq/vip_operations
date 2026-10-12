@@ -14,9 +14,21 @@ import { AuthRequest, context, Permission } from "../../http.js";
 import * as service from "./service.js";
 import * as crawl from "./crawl-jobs.js";
 import * as cloud from "./cloud-session.js";
+import { localExtensionZip } from "./local-extension.js";
 
 @Controller("api/v1/analytics/competitors")
 export class CompetitorAnalysisController {
+  @Get("local-extension") @Permission("analytics.manage") localExtension(
+    @Res() res: Response,
+  ) {
+    res.setHeader("Cache-Control", "private, no-store");
+    res.setHeader("Content-Type", "application/zip");
+    res.setHeader(
+      "Content-Disposition",
+      'attachment; filename="xuti-vip-local-collector.zip"',
+    );
+    res.send(localExtensionZip(process.env.APP_ORIGIN!));
+  }
   @Get("cloud-session") @Permission("analytics.read") cloudStatus(
     @Res({ passthrough: true }) res: Response,
   ) {

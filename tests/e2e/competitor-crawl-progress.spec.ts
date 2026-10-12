@@ -5,6 +5,9 @@ import {
 } from "../../packages/contracts/src/competitor-analysis.js";
 
 async function fixture(page: Page, restricted = false) {
+  await page.addInitScript(() =>
+    localStorage.setItem("competitor-update-mode", "CLOUD"),
+  );
   const brands = [
     "序缇",
     "帕罗",
@@ -79,7 +82,7 @@ test("every brand card shows real collection progress including failures and uns
 }) => {
   await fixture(page);
   await page.goto("/analytics/competitors");
-  await page.getByText("采集状态", { exact: true }).click();
+  await page.getByText("云端采集状态", { exact: true }).click();
   await expect(page.getByRole("progressbar")).toHaveCount(7);
   await expect(
     page.getByRole("progressbar", { name: "序缇采集进度" }),
@@ -127,7 +130,7 @@ test("HTTP 920 shows access restriction while ordinary challenges keep their ver
   );
   await page.goto("/analytics/competitors");
   await expect(page.getByText("云端访问受限", { exact: true })).toBeVisible();
-  await page.getByText("采集状态", { exact: true }).click();
+  await page.getByText("云端采集状态", { exact: true }).click();
   const blocked = page
     .locator(".competitor-crawl-job")
     .filter({ hasText: "生活在左" });
@@ -136,7 +139,7 @@ test("HTTP 920 shows access restriction while ordinary challenges keep their ver
   await expect(blocked).toContainText("详情 15 / 50 款");
   await fixture(page);
   await page.reload();
-  await page.getByText("采集状态", { exact: true }).click();
+  await page.getByText("云端采集状态", { exact: true }).click();
   await expect(
     page.locator(".competitor-crawl-job").filter({ hasText: "生活在左" }),
   ).toContainText("需要验证");

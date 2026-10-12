@@ -106,12 +106,12 @@ export function CompetitorCrawlPanel({
         <span>
           <i className={data.settings.enabled ? "enabled" : ""} />
           {data.settings.enabled
-            ? `后台自动采集 · 每天 ${String(data.settings.dailyHour).padStart(2, "0")}:00`
-            : "后台自动采集已暂停"}
+            ? `云端自动采集 · 每天 ${String(data.settings.dailyHour).padStart(2, "0")}:00`
+            : "云端自动采集已暂停"}
         </span>
         {!!active && <Tag color="processing">{active} 个品牌待更新</Tag>}
         <details className="competitor-crawl-status">
-          <summary>采集状态</summary>
+          <summary>云端采集状态</summary>
           <div className="competitor-crawl-jobs">
             {rows.map(({ brand, job }) => {
               const restricted =

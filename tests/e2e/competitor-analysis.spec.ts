@@ -6,6 +6,9 @@ test("竞品单品牌TOP20、详细材质、商品预览及后台队列设置", 
   page,
   context,
 }) => {
+  await page.addInitScript(() =>
+    localStorage.setItem("competitor-update-mode", "CLOUD"),
+  );
   await context.route("https://detail.vip.com/**", (route) =>
     route.fulfill({
       contentType: "text/html",
@@ -32,7 +35,12 @@ test("竞品单品牌TOP20、详细材质、商品预览及后台队列设置", 
     .locator(".operations-workspace")
     .getByRole("tab", { name: "唯品会", exact: true })
     .click();
+  const entryOpened = page.waitForEvent("popup");
   await page.getByRole("link", { name: "竞品分析", exact: true }).click();
+  const entryPage = await entryOpened;
+  await expect(entryPage).toHaveURL(/\/analytics\/competitors$/);
+  await entryPage.close();
+  await page.goto("/analytics/competitors");
   await expect(
     page.getByRole("heading", { name: "竞品分析", exact: true }),
   ).toBeVisible();
@@ -312,6 +320,33 @@ test("竞品单品牌TOP20、详细材质、商品预览及后台队列设置", 
     .filter({ hasText: "单品牌对比" })
     .click();
   await expect(page.locator(".competitor-page .ant-tabs-tab")).toHaveCount(2);
+  // Cloud readiness/queue recovery has dedicated coverage; provide a live worker fixture here.
+  let queued = false;
+  await page.route("**/api/v1/analytics/competitors/crawl", (route) => {
+    queued = true;
+    return route.fulfill({
+      json: { data: { jobs: [{ id: "999", status: "QUEUED" }] } },
+    });
+  });
+  await page.route("**/api/v1/analytics/competitors?**", async (route) => {
+    const response = await route.fetch();
+    const body = await response.json();
+    if (queued)
+      body.data.crawl.jobs = [
+        {
+          id: "999",
+          brandId: own.id,
+          status: "QUEUED",
+          capturedCount: 0,
+          detailCount: 0,
+          note: "",
+          requestedAt: new Date().toISOString(),
+          startedAt: null,
+          completedAt: null,
+        },
+      ];
+    await route.fulfill({ response, json: body });
+  });
   await page.getByRole("button", { name: "更新竞品数据", exact: true }).click();
   await expect(
     page.getByText("后台采集已排队，可继续使用页面", { exact: true }),
@@ -328,10 +363,10 @@ test("竞品单品牌TOP20、详细材质、商品预览及后台队列设置", 
     .uncheck();
   await settings.getByRole("button", { name: "保存设置", exact: true }).click();
   await expect(
-    page.getByText("后台自动采集已暂停", { exact: true }),
+    page.getByText("云端自动采集已暂停", { exact: true }),
   ).toBeVisible();
   await page.reload();
   await expect(
-    page.getByText("后台自动采集已暂停", { exact: true }),
+    page.getByText("云端自动采集已暂停", { exact: true }),
   ).toBeVisible();
 });
