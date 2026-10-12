@@ -1,0 +1,23 @@
+.public-competitor-analysis main {
+  max-width: 1440px;
+}
+.public-competitor-analysis .competitor-shared-scope {
+  overflow-wrap: anywhere;
+}
+.public-competitor-analysis .competitor-shared-scope p {
+  margin: 8px 0 0;
+}
+.public-competitor-analysis .ant-card,
+.public-competitor-analysis .page-header {
+  min-width: 0;
+}
+@media (max-width: 600px) {
+  .public-competitor-analysis .competitor-top20 .ant-card-head-wrapper {
+    flex-wrap: wrap;
+    gap: 6px;
+    padding-block: 10px;
+  }
+  .public-competitor-analysis .competitor-top20 .ant-card-extra {
+    margin-inline-start: 0;
+  }
+}

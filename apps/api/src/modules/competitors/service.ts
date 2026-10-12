@@ -179,6 +179,10 @@ function snapshot(row: any): CompetitorDataset {
   };
 }
 export async function dashboard(input: unknown) {
+  return { ...await analysisData(input), crawl: await crawlStatus() };
+}
+// Reused by public shares without reading collection jobs or cloud session state.
+export async function analysisData(input: unknown) {
   const q = parse(
     z
       .object({
@@ -239,7 +243,6 @@ export async function dashboard(input: unknown) {
   ];
   return {
     source: q.source,
-    crawl: await crawlStatus(),
     brands: allBrands,
     options,
     alignedPeriod: periods.length <= 1,

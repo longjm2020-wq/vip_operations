@@ -9,6 +9,7 @@ const PersonalWorkspacePage = React.lazy(() => import("./personal-workspace").th
 const CompassAISettingsPage = React.lazy(() => import("./compass-ai-settings").then(module => ({ default: module.CompassAISettingsPage })));
 const PublicSelectionCollection = React.lazy(() => import("./selection-collections").then(module => ({ default: module.PublicSelectionCollection })));
 const PublicCompassReport = React.lazy(() => import("./public-compass-report").then(module => ({ default: module.PublicCompassReport })));
+const PublicCompetitorAnalysis = React.lazy(() => import("./public-competitor-analysis").then(module => ({ default: module.PublicCompetitorAnalysis })));
 const SelectionMobilePhotos = React.lazy(() => import("./selection-mobile-photos").then(module => ({ default: module.SelectionMobilePhotos })));
 import { createRoot } from "react-dom/client";
 import { QueryClientProvider, useQuery } from "@tanstack/react-query";
@@ -83,7 +84,7 @@ const SupplyProducts = React.lazy(() => import("./supply").then(module => ({ def
 const SupplyReview = React.lazy(() => import("./supply").then(module => ({ default: module.SupplyReview })));
 const SupplyOrders = React.lazy(() => import("./supply-orders").then(module => ({ default: module.SupplyOrders })));
 const SupplyStatements = React.lazy(() => import("./supply-statements").then(module => ({ default: module.SupplyStatements })));
-const coreFeatureSummary = "经营分析与竞品采集 · 报表自动更新 · 采购库存 · 协作表格与 AI 标题 · 订单对账";
+const coreFeatureSummary = "经营分析与竞品采集分享 · 报表自动更新 · 采购库存 · 协作表格与 AI 标题 · 订单对账";
 const useUi = create<{ collapsed: boolean; toggle: () => void }>((set) => ({
   collapsed: false,
   toggle: () => set((s) => ({ collapsed: !s.collapsed })),
@@ -644,9 +645,10 @@ function Root() {
   const location = useLocation();
   const publicCollection = location.pathname === "/collect/products";
   const publicReport = location.pathname.startsWith("/share/compass/");
+  const publicCompetitors = location.pathname.startsWith("/share/competitors/");
   const me = useQuery({
     queryKey: ["me"],
-    enabled: !publicCollection && !publicReport,
+    enabled: !publicCollection && !publicReport && !publicCompetitors,
     queryFn: async () => {
       try {
         const r = await api("/auth/me");
@@ -660,6 +662,7 @@ function Root() {
   });
   if (publicCollection) return <PublicSelectionCollection />;
   if (publicReport) return <PublicCompassReport />;
+  if (publicCompetitors) return <PublicCompetitorAnalysis />;
   if (me.isLoading)
     return (
       <div className="loading">

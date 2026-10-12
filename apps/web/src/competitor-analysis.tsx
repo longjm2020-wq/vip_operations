@@ -25,6 +25,7 @@ import {
   LinkOutlined,
   UploadOutlined,
   SettingOutlined,
+  ShareAltOutlined,
 } from "@ant-design/icons";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { api, queryClient } from "./api";
@@ -49,6 +50,11 @@ import { captureBookmarkUrl } from "./competitor-capture";
 import { readCompetitorFile } from "./competitor-import";
 import { CompetitorCloudLogin } from "./competitor-cloud-login";
 import { CompetitorExport } from "./competitor-export";
+import { CompetitorSharePanel } from "./competitor-share";
+import {
+  competitorShareScopeLabel,
+  type CompetitorShareFilters,
+} from "../../../packages/contracts/src/competitor-sharing";
 import {
   CompetitorCrawlPanel,
   type CompetitorCrawlStatus,
@@ -57,12 +63,17 @@ import "./competitor-analysis.css";
 
 type Result = ReturnType<typeof analyzeCompetitor>;
 type Dashboard = {
-  crawl: CompetitorCrawlStatus;
+  crawl?: CompetitorCrawlStatus;
   source: CompetitorSource;
   brands: CompetitorBrand[];
   alignedPeriod: boolean;
-  options: { categories: string[]; materials: string[]; seasons: string[] };
+  options?: { categories: string[]; materials: string[]; seasons: string[] };
   results: Result[];
+  share?: {
+    filters: CompetitorShareFilters;
+    expiresAt: string;
+    createdAt: string;
+  };
 };
 const number = (v: number | null | undefined) =>
   v == null ? "—" : v.toLocaleString("zh-CN", { maximumFractionDigits: 2 });
@@ -453,9 +464,14 @@ function ImportPanel({
     </Modal>
   );
 }
-export function CompetitorAnalysisPage() {
-  const canRead = useCan("analytics.read"),
-    manage = useCan("analytics.manage"),
+export function CompetitorAnalysisPage({
+  shareToken,
+}: { shareToken?: string } = {}) {
+  const internalRead = useCan("analytics.read"),
+    internalManage = useCan("analytics.manage");
+  const publicView = shareToken !== undefined;
+  const canRead = publicView || internalRead,
+    manage = !publicView && internalManage,
     { message } = App.useApp();
   const [mode, setMode] = useState("multi"),
     [selected, setSelected] = useState<string[]>([]),
@@ -480,6 +496,7 @@ export function CompetitorAnalysisPage() {
     [addOpen, setAddOpen] = useState(false),
     [adding, setAdding] = useState(false),
     [addError, setAddError] = useState("");
+  const [shareOpen, setShareOpen] = useState(false);
   const [preview, setPreview] = useState<CompetitorProductPreview | null>(null);
   const [distributionPreview, setDistributionPreview] = useState<string | null>(
     null,
@@ -515,18 +532,60 @@ export function CompetitorAnalysisPage() {
     return () => clearTimeout(t);
   }, [keyword]);
   const q = useQuery<Dashboard>({
-    queryKey: ["competitor-dashboard", selected, filters, search],
+    queryKey: publicView
+      ? ["public-competitor-share", shareToken]
+      : ["competitor-dashboard", selected, filters, search],
     enabled: canRead,
     // Keep the panels mounted so a new filter cannot collapse the page scroll range.
-    placeholderData: keepPreviousData,
+    placeholderData: publicView ? undefined : keepPreviousData,
+    ...(publicView
+      ? {
+          staleTime: 0,
+          gcTime: 0,
+          retry: false,
+          refetchOnMount: "always" as const,
+        }
+      : {}),
     refetchInterval: (query) =>
-      query.state.data?.crawl.jobs.some((j) =>
-        ["QUEUED", "RUNNING"].includes(j.status),
-      )
-        ? 5000
-        : 60000,
-    queryFn: async () =>
-      (
+      publicView
+        ? query.state.error
+          ? false
+          : Math.min(
+              30000,
+              Math.max(
+                1000,
+                new Date(
+                  query.state.data?.share?.expiresAt || Date.now() + 30000,
+                ).getTime() - Date.now(),
+              ),
+            )
+        : query.state.data?.crawl?.jobs.some((j) =>
+              ["QUEUED", "RUNNING"].includes(j.status),
+            )
+          ? 5000
+          : 60000,
+    queryFn: async ({ signal }) => {
+      if (publicView) {
+        if (!/^[a-f0-9]{64}$/.test(shareToken))
+          throw new Error("分享链接不存在、已过期或已关闭");
+        const response = await fetch(
+          `/api/v1/public/competitor-shares/${shareToken}`,
+          {
+            signal,
+            credentials: "omit",
+            cache: "no-store",
+            referrerPolicy: "no-referrer",
+          },
+        );
+        if (!response.ok)
+          throw new Error(
+            response.status === 404
+              ? "分享链接不存在、已过期或已关闭"
+              : "分享数据暂时无法读取，请稍后刷新重试",
+          );
+        return (await response.json()).data;
+      }
+      return (
         await api(
           "/analytics/competitors?" +
             new URLSearchParams({
@@ -536,13 +595,26 @@ export function CompetitorAnalysisPage() {
               ...(search ? { keyword: search } : {}),
             }),
         )
-      ).data,
+      ).data;
+    },
   });
-  const data = q.data,
+  // An expired/revoked share must not retain its last successful cached display.
+  const data = publicView && q.error ? undefined : q.data,
     brands = data?.brands || [],
     own = brands.find((b) => b.isOwn),
     competitors = brands.filter((b) => !b.isOwn),
     results = data?.results || [];
+  const visiblePreview =
+    publicView && preview
+      ? results
+          .flatMap((r) => [
+            ...r.top20,
+            ...[r.categories, r.materials, r.seasons, r.prices].flatMap(
+              (groups) => groups.flatMap((group) => group.top10),
+            ),
+          ])
+          .find((p) => p.productId === preview.productId) || null
+      : preview;
   const current = results.find((r) => r.brand.id === active) || results[0];
   const captureIds = (captureBrandIds || []).filter((id) =>
     brands.some((b) => b.id === id),
@@ -722,23 +794,29 @@ export function CompetitorAnalysisPage() {
     <div className="competitor-page">
       <Header
         title="竞品分析"
-        subtitle="唯品会 · 我的品牌与竞品对比"
+        subtitle={
+          publicView
+            ? "唯品会 · 分享数据随最新采集结果同步"
+            : "唯品会 · 我的品牌与竞品对比"
+        }
         subtitleExtra={
-          <CompetitorCloudLogin
-            manage={manage}
-            openRequest={loginRequest}
-            resumeUpdate={!!pendingUpdate}
-            onCancelUpdate={() => setPendingUpdate(null)}
-            onDisconnected={refresh}
-            onConnected={() => {
-              refresh();
-              if (pendingUpdate) {
-                const ids = pendingUpdate;
-                setPendingUpdate(null);
-                void crawl(ids, false);
-              }
-            }}
-          />
+          !publicView && (
+            <CompetitorCloudLogin
+              manage={manage}
+              openRequest={loginRequest}
+              resumeUpdate={!!pendingUpdate}
+              onCancelUpdate={() => setPendingUpdate(null)}
+              onDisconnected={refresh}
+              onConnected={() => {
+                refresh();
+                if (pendingUpdate) {
+                  const ids = pendingUpdate;
+                  setPendingUpdate(null);
+                  void crawl(ids, false);
+                }
+              }}
+            />
+          )
         }
         extra={
           <>
@@ -751,6 +829,12 @@ export function CompetitorAnalysisPage() {
             </Button>
             {manage && (
               <>
+                <Button
+                  icon={<ShareAltOutlined aria-hidden="true" />}
+                  onClick={() => setShareOpen(true)}
+                >
+                  分享
+                </Button>
                 <Button
                   type="primary"
                   icon={<ReloadOutlined aria-hidden="true" />}
@@ -800,16 +884,18 @@ export function CompetitorAnalysisPage() {
           </>
         }
       />
-      <CompetitorCrawlPanel
-        data={data?.crawl}
-        brands={brands}
-        manage={manage}
-        open={crawlSettings}
-        onClose={() => setCrawlSettings(false)}
-        onRefresh={refresh}
-        onCapture={() => setCapture(true)}
-        localLoginSource={own?.searchUrl || brands[0]?.searchUrl}
-      />
+      {!publicView && (
+        <CompetitorCrawlPanel
+          data={data?.crawl}
+          brands={brands}
+          manage={manage}
+          open={crawlSettings}
+          onClose={() => setCrawlSettings(false)}
+          onRefresh={refresh}
+          onCapture={() => setCapture(true)}
+          localLoginSource={own?.searchUrl || brands[0]?.searchUrl}
+        />
+      )}
       {manage && (
         <CompetitorLocalUpdate
           open={localUpdate}
@@ -845,107 +931,127 @@ export function CompetitorAnalysisPage() {
           </p>
         </Modal>
       )}
-      <Card size="small" className="competitor-filters">
-        <div className="competitor-brand-line">
-          <Tag color="orange">我的品牌 · {own?.name || "序缇"}</Tag>
-          <Segmented
-            aria-label="品牌对比模式"
-            value={mode}
-            options={[
-              { label: "单品牌对比", value: "single" },
-              { label: "多品牌对比", value: "multi" },
-            ]}
-            onChange={(v) => {
-              setMode(v);
-              if (own) {
-                const ids = selected.filter((x) => x !== own.id);
-                setSelected([
-                  own.id,
-                  ...(v === "single"
-                    ? ids.slice(0, 1).length
-                      ? ids.slice(0, 1)
-                      : competitors.slice(0, 1).map((x) => x.id)
-                    : ids),
-                ]);
-              }
-            }}
-          />
-          <Select
-            aria-label="选择竞品品牌"
-            mode={mode === "multi" ? "multiple" : undefined}
-            value={
-              mode === "multi"
-                ? selected.length
-                  ? selected.filter((x) => x !== own?.id)
-                  : competitors.slice(0, 6).map((x) => x.id)
-                : selected.find((x) => x !== own?.id) || competitors[0]?.id
-            }
-            onChange={(v) =>
-              own &&
-              setSelected([own.id, ...(Array.isArray(v) ? v : v ? [v] : [])])
-            }
-            options={competitors.map((b) => ({ value: b.id, label: b.name }))}
-            maxTagCount="responsive"
-            maxCount={11}
-            className="competitor-brand-select"
-            placeholder="选择竞品，最多11个"
-          />
-        </div>
-        <div className="competitor-facet-line">
-          {(
-            [
-              ["category", "品类", data?.options.categories],
-              ["material", "材质", data?.options.materials],
-              ["season", "季节", data?.options.seasons],
-            ] as const
-          ).map(([key, label, options]) => (
+      {!publicView && (
+        <Card size="small" className="competitor-filters">
+          <div className="competitor-brand-line">
+            <Tag color="orange">我的品牌 · {own?.name || "序缇"}</Tag>
+            <Segmented
+              aria-label="品牌对比模式"
+              value={mode}
+              options={[
+                { label: "单品牌对比", value: "single" },
+                { label: "多品牌对比", value: "multi" },
+              ]}
+              onChange={(v) => {
+                setMode(v);
+                if (own) {
+                  const ids = selected.filter((x) => x !== own.id);
+                  setSelected([
+                    own.id,
+                    ...(v === "single"
+                      ? ids.slice(0, 1).length
+                        ? ids.slice(0, 1)
+                        : competitors.slice(0, 1).map((x) => x.id)
+                      : ids),
+                  ]);
+                }
+              }}
+            />
             <Select
-              key={key}
-              aria-label={`筛选${label}`}
-              placeholder={`全部${label}`}
-              value={filters[key]}
-              onChange={(v) => setFilter(key, v)}
-              allowClear
-              options={(options || []).map((x) => ({ value: x, label: x }))}
+              aria-label="选择竞品品牌"
+              mode={mode === "multi" ? "multiple" : undefined}
+              value={
+                mode === "multi"
+                  ? selected.length
+                    ? selected.filter((x) => x !== own?.id)
+                    : competitors.slice(0, 6).map((x) => x.id)
+                  : selected.find((x) => x !== own?.id) || competitors[0]?.id
+              }
+              onChange={(v) =>
+                own &&
+                setSelected([own.id, ...(Array.isArray(v) ? v : v ? [v] : [])])
+              }
+              options={competitors.map((b) => ({ value: b.id, label: b.name }))}
+              maxTagCount="responsive"
+              maxCount={11}
+              className="competitor-brand-select"
+              placeholder="选择竞品，最多11个"
             />
-          ))}
-          <Select
-            aria-label="筛选价格区间"
-            placeholder="全部价格区间"
-            value={filters.priceBand}
-            onChange={(v) => setFilter("priceBand", v)}
-            allowClear
-            options={competitorPriceBands.map((b) => ({
-              value: b.key,
-              label: b.label,
-            }))}
-          />
-          <PageSearch>
-            <PageSearchInput
-              aria-label="搜索竞品商品"
-              placeholder="搜索商品 / 款号"
+          </div>
+          <div className="competitor-facet-line">
+            {(
+              [
+                ["category", "品类", data?.options?.categories],
+                ["material", "材质", data?.options?.materials],
+                ["season", "季节", data?.options?.seasons],
+              ] as const
+            ).map(([key, label, options]) => (
+              <Select
+                key={key}
+                aria-label={`筛选${label}`}
+                placeholder={`全部${label}`}
+                value={filters[key]}
+                onChange={(v) => setFilter(key, v)}
+                allowClear
+                options={(options || []).map((x) => ({ value: x, label: x }))}
+              />
+            ))}
+            <Select
+              aria-label="筛选价格区间"
+              placeholder="全部价格区间"
+              value={filters.priceBand}
+              onChange={(v) => setFilter("priceBand", v)}
               allowClear
-              value={keyword}
-              onChange={(e) => setKeyword(e.target.value)}
+              options={competitorPriceBands.map((b) => ({
+                value: b.key,
+                label: b.label,
+              }))}
             />
-          </PageSearch>
-          <Button
-            type="text"
-            onClick={() => {
-              setFilters({});
-              setKeyword("");
-            }}
-          >
-            重置筛选
-          </Button>
-        </div>
-      </Card>
+            <PageSearch>
+              <PageSearchInput
+                aria-label="搜索竞品商品"
+                placeholder="搜索商品 / 款号"
+                allowClear
+                value={keyword}
+                onChange={(e) => setKeyword(e.target.value)}
+              />
+            </PageSearch>
+            <Button
+              type="text"
+              onClick={() => {
+                setFilters({});
+                setKeyword("");
+              }}
+            >
+              重置筛选
+            </Button>
+          </div>
+        </Card>
+      )}
+      {publicView && data?.share && (
+        <Card size="small" className="competitor-shared-scope">
+          <strong>分享品牌：{brands.map((b) => b.name).join("、")}</strong>
+          <p>{competitorShareScopeLabel(data.share.filters)}</p>
+          <p className="competitor-scope-note">
+            每30秒同步最新采集数据 · 有效至 {when(data.share.expiresAt)}
+          </p>
+        </Card>
+      )}
       <p className="competitor-scope-note">
         公开排名按品牌分别统计，未公开实际销售件数。分析范围为已采集商品，详细材质以规格参数为准；未补齐详情时，品类和材质标签仅按标题识别。
       </p>
       {q.isLoading && <Spin />}
       {q.error && (
-        <Alert type="error" showIcon title={(q.error as Error).message} />
+        <Alert
+          type="error"
+          showIcon
+          title={(q.error as Error).message}
+          description={
+            publicView
+              ? "请刷新重试；链接失效时请联系分享者获取新链接。"
+              : undefined
+          }
+        />
       )}{" "}
       {data && !data.alignedPeriod && (
         <Alert
@@ -1079,7 +1185,11 @@ export function CompetitorAnalysisPage() {
                 >
                   <Select
                     aria-label="TOP20排序指标"
-                    value={filters.sort || "rank"}
+                    value={
+                      (publicView ? data.share?.filters.sort : filters.sort) ||
+                      "rank"
+                    }
+                    disabled={publicView}
                     onOpenChange={(open) => {
                       sortOpen.current = open;
                       if (open && !sortAnchor.current) captureSortAnchor();
@@ -1101,7 +1211,9 @@ export function CompetitorAnalysisPage() {
                     ]}
                   />
                 </span>
-                <CompetitorExport result={current} loading={q.isFetching} />
+                {!publicView && (
+                  <CompetitorExport result={current} loading={q.isFetching} />
+                )}
               </Space>
             }
           >
@@ -1178,48 +1290,72 @@ export function CompetitorAnalysisPage() {
           </Card>
         </>
       )}
-      <CaptureGuide
-        open={capture}
-        onClose={() => setCapture(false)}
-        brands={brands}
-      />
+      {manage && (
+        <CaptureGuide
+          open={capture}
+          onClose={() => setCapture(false)}
+          brands={brands}
+        />
+      )}
       <CompetitorProductPreviewDialog
-        product={preview}
+        product={data ? visiblePreview : null}
         onClose={() => setPreview(null)}
       />
-      <ImportPanel
-        open={importOpen}
-        onClose={() => setImportOpen(false)}
-        brands={brands}
-        onImported={refresh}
-      />
-      <Modal
-        title="新增竞品品牌"
-        open={addOpen}
-        onCancel={() => !adding && setAddOpen(false)}
-        onOk={() => void add()}
-        confirmLoading={adding}
-        destroyOnHidden
-      >
-        <Form form={form} layout="vertical">
-          <Form.Item
-            name="name"
-            label="品牌名称"
-            rules={[{ required: true, message: "请填写品牌名称" }, { max: 40 }]}
-          >
-            <Input aria-label="新增竞品品牌名称" placeholder="例如：兔皇" />
-          </Form.Item>
-          <Form.Item
-            name="brandSn"
-            label="唯品会品牌ID（选填）"
-            extra="暂不填写时，可在本机更新面板点击「绑定品牌」，粘贴官方品牌筛选链接后开始采集。"
-            rules={[{ pattern: /^\d{1,20}$/, message: "品牌ID须为数字" }]}
-          >
-            <Input placeholder="品牌筛选链接中的 brand_sn" />
-          </Form.Item>
-        </Form>
-        {addError && <Alert type="error" title={addError} />}
-      </Modal>
+      {manage && (
+        <ImportPanel
+          open={importOpen}
+          onClose={() => setImportOpen(false)}
+          brands={brands}
+          onImported={refresh}
+        />
+      )}
+      {manage && (
+        <CompetitorSharePanel
+          open={shareOpen}
+          onClose={() => setShareOpen(false)}
+          brands={results.map((r) => r.brand)}
+          filters={{ ...filters, ...(search ? { keyword: search } : {}) }}
+          ready={
+            !!data &&
+            !q.isFetching &&
+            !q.isPlaceholderData &&
+            !q.error &&
+            keyword.trim() === search
+          }
+        />
+      )}
+      {manage && (
+        <Modal
+          title="新增竞品品牌"
+          open={addOpen}
+          onCancel={() => !adding && setAddOpen(false)}
+          onOk={() => void add()}
+          confirmLoading={adding}
+          destroyOnHidden
+        >
+          <Form form={form} layout="vertical">
+            <Form.Item
+              name="name"
+              label="品牌名称"
+              rules={[
+                { required: true, message: "请填写品牌名称" },
+                { max: 40 },
+              ]}
+            >
+              <Input aria-label="新增竞品品牌名称" placeholder="例如：兔皇" />
+            </Form.Item>
+            <Form.Item
+              name="brandSn"
+              label="唯品会品牌ID（选填）"
+              extra="暂不填写时，可在本机更新面板点击「绑定品牌」，粘贴官方品牌筛选链接后开始采集。"
+              rules={[{ pattern: /^\d{1,20}$/, message: "品牌ID须为数字" }]}
+            >
+              <Input placeholder="品牌筛选链接中的 brand_sn" />
+            </Form.Item>
+          </Form>
+          {addError && <Alert type="error" title={addError} />}
+        </Modal>
+      )}
     </div>
   );
 }

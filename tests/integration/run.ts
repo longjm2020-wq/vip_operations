@@ -1024,6 +1024,8 @@ try {
   await testCompetitorBrandBinding({ok,request,db,one,check,buyer});
   const {testCompetitorCloud}=await import("./competitor-cloud.js");
   await testCompetitorCloud({ok,request,db,one,check,buyer});
+  const {testCompetitorShares}=await import("./competitor-shares.js");
+  await testCompetitorShares({ok,request,db,one,check,buyer});
   const {testPersonalWorkspace}=await import("./personal-workspace.js");
   await testPersonalWorkspace({ok,request,db,one,check,buyer});
   await writeFile(

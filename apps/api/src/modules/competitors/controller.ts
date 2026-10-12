@@ -15,6 +15,10 @@ import * as service from "./service.js";
 import * as crawl from "./crawl-jobs.js";
 import * as cloud from "./cloud-session.js";
 import { localExtensionZip } from "./local-extension.js";
+import {
+  CompetitorShareController,
+  PublicCompetitorShareController,
+} from "./share-controller.js";
 
 @Controller("api/v1/analytics/competitors")
 export class CompetitorAnalysisController {
@@ -111,5 +115,11 @@ export class CompetitorAnalysisController {
     return crawl.saveCrawlSettings(context(r), b);
   }
 }
-@Module({ controllers: [CompetitorAnalysisController] })
+@Module({
+  controllers: [
+    CompetitorAnalysisController,
+    CompetitorShareController,
+    PublicCompetitorShareController,
+  ],
+})
 export class CompetitorAnalysisModule {}
