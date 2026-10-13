@@ -39,6 +39,8 @@ import type { SelectionView } from "../../../packages/contracts/src/selection-vi
 import type { CollectionStock } from "../../../packages/contracts/src/selection-collection";
 import { selectionImageLinks, invalidSelectionImage } from "./selection-image-links";
 import { copySelectionImage, copySelectionImageAddress, downloadSelectionImage } from "./selection-image-actions";
+import { copySelectionRangeImage } from "./selection-range-image";
+import { buildSelectionRangeImageTable, selectionRangeHeaderText } from "./selection-range-image-model";
 import { SelectionImagePreview, selectionImageContextItems as imageContextItems } from "./selection-image-preview";
 import { choiceDisplayText, choiceClipboardText } from "./selection-choice-display";
 import { joinChoiceValues, splitChoiceValues, isEncodedChoiceValue } from "./selection-field-types";
@@ -331,6 +333,8 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
   const [cellTextEditing, setCellTextEditing] = useState(false);
   const [selectedCells, setSelectedCells] = useState<Set<string>>(new Set());
   const [selectedColumnKeys, setSelectedColumnKeys] = useState<string[]>([]);
+  const [rangeCopyBusy, setRangeCopyBusy] = useState(false);
+  const rangeCopyLock = useRef(false);
   const [titleAi, setTitleAi] = useState<{ rows: SelectionTitleAiRow[]; keys: string[]; scope: string } | null>(null);
   const [fixedOrderOpen, setFixedOrderOpen] = useState(false);
   const columnSelectionAnchor = useRef<string | null>(null);
@@ -498,9 +502,55 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
     return activeColumns.filter(column => keys.has(column.key)).map(column => column.key);
   }, [selectedColumnKeys, selectedCells, activeColumns]);
   const columnActionKeys = (key: string) => selectedFields.includes(key) ? selectedFields : [key];
+  const copyRangeImage = (columnKey: string, rowKey?: string) => {
+    if (rangeCopyLock.current) return;
+    const keys = columnActionKeys(columnKey);
+    const chosen = !rowKey && !selectedFields.includes(columnKey)
+      ? selectionAllCells(displayedRows, activeColumns.filter(column => keys.includes(column.key)))
+      : selectedCells;
+    const shownImages = new Map<string, { url: string; index?: number }>();
+    sheetRef.current?.querySelectorAll<HTMLElement>("[data-selection-image-url]").forEach(summary => {
+      const cell = summary.closest<HTMLElement>("td[data-selection-row][data-selection-column]");
+      if (cell?.dataset.selectionRow && cell.dataset.selectionColumn && summary.dataset.selectionImageUrl)
+        shownImages.set(cellId(cell.dataset.selectionRow, cell.dataset.selectionColumn), {
+          url: summary.dataset.selectionImageUrl,
+          index: Number(summary.dataset.selectionImageIndex),
+        });
+    });
+    const renderedHeight = rowWindow.entries.find(entry => entry.kind === "row")?.height;
+    const cssHeight = sheetRef.current
+      ? Number.parseFloat(getComputedStyle(sheetRef.current).getPropertyValue("--selection-cell-height")) : 50;
+    const table = buildSelectionRangeImageTable({
+      rows: displayedRows, columns: activeColumns, selectedCells: chosen,
+      headerKeys: keys, fallbackCell: rowKey ? { rowKey, columnKey } : undefined,
+      rowHeight: renderedHeight || cssHeight || 50, archiveReferences, shownImages,
+    });
+    if (!table.columns.length) { message.warning("请先选择需要复制的单元格或表头"); return; }
+    rangeCopyLock.current = true; setRangeCopyBusy(true);
+    const progressKey = "selection-range-image-copy";
+    message.loading({ key: progressKey, content: "正在生成选区图片…", duration: 0 });
+    void copySelectionRangeImage(table).then(({ missingImages }) => {
+      if (missingImages) message.warning({ key: progressKey, content: `图片已复制，${missingImages}张图片无法加载，已显示占位图`, duration: 5 });
+      else message.success({ key: progressKey, content: "选区图片已复制" });
+    }).catch(error => message.error({ key: progressKey, content: (error as Error).message || "选区图片复制失败，请重试" }))
+      .finally(() => { rangeCopyLock.current = false; setRangeCopyBusy(false); });
+  };
+  const copyHeaders = (columnKey: string) => {
+    if (rangeCopyLock.current) return;
+    const text = selectionRangeHeaderText(activeColumns, columnActionKeys(columnKey));
+    if (!text) return;
+    if (!navigator.clipboard?.writeText) { message.error("当前浏览器不支持复制表头"); return; }
+    rangeCopyLock.current = true; setRangeCopyBusy(true);
+    void navigator.clipboard.writeText(text).then(() => message.success("表头已复制"))
+      .catch(() => message.error("无法写入剪贴板，请允许浏览器访问剪贴板后重试"))
+      .finally(() => { rangeCopyLock.current = false; setRangeCopyBusy(false); });
+  };
   const columnMenuItems = (column: Column) => {
     const keys = columnActionKeys(column.key);
     return [
+      { key: "copy-range-image", label: "复制选区为图片", disabled: rangeCopyBusy },
+      { key: "copy-headers", label: "复制表头", disabled: rangeCopyBusy },
+      { type: "divider" as const },
       ...(keys.length > 1 ? [
         ...(keys.some(key => !fixedOffsets.has(key)) ? [{ key: "fix-selected", label: `固定所选 ${keys.length} 列`, icon: <PushpinOutlined /> }] : []),
         ...(keys.some(key => fixedOffsets.has(key)) ? [{ key: "unfix-selected", label: `取消固定所选 ${keys.length} 列` }] : []),
@@ -513,6 +563,8 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
   };
   const handleColumnAction = (columnKey: string, action: string) => {
     const keys = columnActionKeys(columnKey);
+    if (action === "copy-range-image") { copyRangeImage(columnKey); return; }
+    if (action === "copy-headers") { copyHeaders(columnKey); return; }
     if (action === "ai-title") { void openTitleAi(keys, contextCell?.rowKey); return; }
     selectionDrag.stop(); setCopiedCells(new Set()); setContextCell(null);
     if (action === "column-width") { setColumnWidthTarget(activeColumns.filter(column => keys.includes(column.key))); return; }
@@ -1009,7 +1061,11 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
     if (!event.currentTarget.contains(event.target as Node) || (cellTextEditing && selectedCells.size <= 1)) return;
     const selected = selectedCells.size ? selectedCells : new Set([cellId(rowKey, columnKey)]);
     const positions = [...selected].map((value) => { const [r, c] = value.split("::"); return { r: rowPositions.get(r) ?? -1, c: columnPositions.get(c) ?? -1 }; }).filter((item) => item.r >= 0 && item.c >= 0);
-    if (!positions.length) return;
+    if (!positions.length) {
+      const text = selectionRangeHeaderText(activeColumns, selectedColumnKeys);
+      if (text) { event.preventDefault(); event.clipboardData.setData("text/plain", text); }
+      return;
+    }
     const minRow = Math.min(...positions.map((item) => item.r)), maxRow = Math.max(...positions.map((item) => item.r)), minCol = Math.min(...positions.map((item) => item.c)), maxCol = Math.max(...positions.map((item) => item.c));
     const text = positions.length === 1
       ? copyValue(displayedRows[minRow], activeColumns[minCol])
@@ -1195,6 +1251,8 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
     ] : []), ...columnMenuItems(contextColumn), { type: "divider" as const }, { key: "format", label: "设置单元格格式", icon: <SettingOutlined />, disabled: !canEdit || !editableSelectionCell(contextRow, contextColumn.key) || systemField(contextColumn) || collectionKeys.has(contextColumn.key) }] : [], onClick: ({ key }: { key: string }) => {
       if (!contextRow || !contextColumn) return;
       setContextCell(null);
+      if (key === "copy-range-image") { copyRangeImage(contextColumn.key, contextRow._key); return; }
+      if (key === "copy-headers") { copyHeaders(contextColumn.key); return; }
       if (["fix-column", "fix-selected", "unfix-selected", "unfix-all", "column-width", "ai-title"].includes(key)) { handleColumnAction(contextColumn.key, key); return; }
       if (key === "format") { openCellFormat(contextRow, contextColumn); return; }
       const image = contextImage.current;
@@ -1368,7 +1426,15 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
     }}/>}
       <SelectionColumnGroupTabs groups={columnGroups} visibleKeys={visibleColumns.map(column => column.key)} activeKey={selectedColumnGroup?.id || ""} onChange={changeColumnGroup}/>
     {editor}
-      <QueryState error={data.error || presence.error || sharedView.error} reload={() => { data.refetch(); presence.refetch(); sharedView.refetch(); }} /><div ref={sheetRef} data-realtime-connected={connected ? "true" : "false"} data-windowed={rowWindow.enabled || undefined} className={`selection-sheet row-${rowHeight}${blankLayout?" selection-blank-sheet":""}`}><table aria-rowcount={displayedRows.length + 1} tabIndex={0} onCopy={event => { const point = cellAnchor || (displayedRows[0] && activeColumns[0] ? {rowKey:displayedRows[0]._key,columnKey:activeColumns[0].key} : null); if (point) copyCells(event,point.rowKey,point.columnKey); }} onKeyDown={event => {
+      <QueryState error={data.error || presence.error || sharedView.error} reload={() => { data.refetch(); presence.refetch(); sharedView.refetch(); }} /><div ref={sheetRef} data-realtime-connected={connected ? "true" : "false"} data-windowed={rowWindow.enabled || undefined} className={`selection-sheet row-${rowHeight}${blankLayout?" selection-blank-sheet":""}`}><table aria-rowcount={displayedRows.length + 1} tabIndex={0} onCopy={event => {
+        if (!displayedRows.length && selectedColumnKeys.length) {
+          const text = selectionRangeHeaderText(activeColumns, selectedColumnKeys);
+          if (text) { event.preventDefault(); event.clipboardData.setData("text/plain", text); }
+          return;
+        }
+        const point = cellAnchor || (displayedRows[0] && activeColumns[0] ? {rowKey:displayedRows[0]._key,columnKey:activeColumns[0].key} : null);
+        if (point) copyCells(event,point.rowKey,point.columnKey);
+      }} onKeyDown={event => {
         if (!event.currentTarget.contains(event.target as Node) || event.nativeEvent.isComposing) return;
         if (event.key === "Escape") { setCopiedCells(new Set()); setCellTextEditing(false); return; }
         if (cellTextEditing && event.target instanceof HTMLElement && event.target.closest("input:not([type=checkbox]),textarea")) return;
