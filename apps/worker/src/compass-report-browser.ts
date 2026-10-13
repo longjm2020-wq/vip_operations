@@ -314,11 +314,29 @@ async function clickNavigation(
         "页面导航链接不是唯品会官方站点",
       );
   }
-  const popupPromise = page
-    .waitForEvent("popup", { timeout: 1200 })
-    .catch(() => null);
-  await control.click({ timeout: 10000 });
-  const popup = await popupPromise;
+  const click = async () => {
+    const popupPromise = page.waitForEvent("popup", { timeout: 1200 }).catch(() => null);
+    await control.click({ timeout: 10000 });
+    return popupPromise;
+  };
+  let popup: Page | null;
+  try { popup = await click(); }
+  catch (error) {
+    if (!(error instanceof Error) || !/intercepts pointer events/.test(error.message)) throw error;
+    // The portal may render its announcement after the menu was observed.
+    // Retry only after a recognized ordinary notice was handled, never by
+    // forcing a click through an unknown overlay or a verification dialog.
+    const notice = await importantNotice(page, signal);
+    if (notice === "REQUIRES_USER") throw new CompassBrowserError("HUMAN_VERIFICATION", "平台提示需本人确认，请在服务器登录画面处理后重新更新");
+    if (notice === "WAITING") {
+      throwState(await settledState(page, signal));
+      const remaining = await importantNotice(page, signal);
+      if (remaining === "REQUIRES_USER") throw new CompassBrowserError("HUMAN_VERIFICATION", "平台提示需本人确认，请在服务器登录画面处理后重新更新");
+      if (remaining === "WAITING") throw error;
+    } else if (notice !== "DISMISSED") throw error;
+    cancelled(signal);
+    popup = await click();
+  }
   const target = popup ?? page;
   await target
     .waitForLoadState("domcontentloaded", { timeout: navTimeout })

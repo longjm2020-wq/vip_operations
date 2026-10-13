@@ -92,6 +92,11 @@ async function fixture(html: string, download = originalCsv) {
 }
 
 describe("Compass official browser reports", () => {
+  it("recovers when an ordinary announcement appears after the menu was observed and intercepts navigation", async () => {
+    const page = await fixture('<div class="vis-notice-force-read-dialog" style="position:fixed;inset:0;z-index:99;background:white"><div class="el-dialog" role="dialog" style="display:none"><h2>本页面有1条关联的公告</h2><p>普通仓储服务公告</p><button onclick="document.querySelector(\'.vis-notice-force-read-dialog\').remove()">关闭</button></div></div><a href="https://compass.vip.com/fixture-reports">魔方罗盘</a><script>setTimeout(()=>document.querySelector(\'.el-dialog\').style.display=\'block\',600)</script>');
+    await page.context().route("https://compass.vip.com/fixture-reports", route => route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", body: reportPage() }));
+    expect(await checkCompassLogin(page, { load: false })).toMatchObject({ verified: true, reason: "READY" });
+  }, 25000);
   it("waits for asynchronously loaded download-centre rows instead of trying to generate an already prepared report", async () => {
     const page = await fixture(reportPage().replace('<button>下载中心</button>', '<a href="https://compass.vip.com/fixture-download-center"><i>\ue602</i>下载中心</a>'));
     const href = await page.getByRole("link", { name: "下载", exact: true }).first().getAttribute("href");
