@@ -92,6 +92,19 @@ async function fixture(html: string, download = originalCsv) {
 }
 
 describe("Compass official browser reports", () => {
+  it("waits for asynchronously loaded download-centre rows instead of trying to generate an already prepared report", async () => {
+    const page = await fixture(reportPage().replace('<button>下载中心</button>', '<a href="https://compass.vip.com/fixture-download-center">下载中心</a>'));
+    const href = await page.getByRole("link", { name: "下载", exact: true }).first().getAttribute("href");
+    const row = `<tr><td>${compassReportTitles.style}</td><td>${targetStart} — ${targetEnd}</td><td><a download href="${href}">下载</a></td></tr>`;
+    await page.context().route("https://compass.vip.com/fixture-download-center", route => route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", body: `<button>自助报表</button><button>下载中心</button><table id="pending-rows"></table><script>setTimeout(()=>document.querySelector('table').innerHTML=${JSON.stringify(row)},850)</script>` }));
+    const files = await downloadCompassReports(page, ["style"], targetStart, targetEnd, () => {}, undefined, { maxWaitMs: 5000 });
+    expect(files).toHaveLength(1);
+    expect(await readFile(files[0].path, "utf8")).toBe(originalCsv);
+    await cleanupCompassDownloads(files);
+  }, 15000);
+  it("recognizes the compact date range in the platform's original Excel filename", () => {
+    expect(compassVisibleRange("我的报表_按款号（近30天）_20260913-20261012_202610130800.xlsx")).toEqual({ start: "2026-09-13", end: "2026-10-12" });
+  });
   it("waits for the supplier reading countdown before closing its ordinary announcement", async () => {
     const page = await fixture('<div class="vis-notice-force-read-dialog"><div class="el-dialog" role="dialog"><h2>本页面有1条关联的公告</h2><p>阅读倒计时1秒</p><button disabled onclick="document.querySelector(\'.vis-notice-force-read-dialog\').remove()">关闭</button></div></div><a href="https://compass.vip.com/fixture-reports">魔方罗盘</a><script>setTimeout(()=>document.querySelector(\'button\').disabled=false,800)</script>');
     await page.context().route("https://compass.vip.com/fixture-reports", route => route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", body: reportPage() }));

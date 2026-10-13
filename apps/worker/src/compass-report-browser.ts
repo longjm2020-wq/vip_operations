@@ -409,7 +409,7 @@ export function compassVisibleRange(
   text: string,
 ): { start: string; end: string } | null {
   const match = text.match(
-    /(\d{4}[-/]\d{1,2}[-/]\d{1,2}|\d{8})\s*(?:至|到|~|～|—|–|\s-\s)\s*(\d{4}[-/]\d{1,2}[-/]\d{1,2}|\d{8})/,
+    /(\d{4}[-/]\d{1,2}[-/]\d{1,2}|\d{8})\s*(?:至|到|~|～|—|–|-)\s*(\d{4}[-/]\d{1,2}[-/]\d{1,2}|\d{8})/,
   );
   if (!match) return null;
   const date = (value: string) =>
@@ -486,6 +486,17 @@ async function usableControl(
   }
   return null;
 }
+/** A SPA menu changes before its asynchronously fetched rows are rendered. */
+async function loadedReportRows(page: Page, dimension: CompassDimension, signal?: AbortSignal, waitMs = 10000): Promise<Locator[]> {
+  const deadline = Date.now() + Math.max(0, Math.min(waitMs, 10000));
+  while (true) {
+    cancelled(signal);
+    const found = await reportRows(page, dimension);
+    if (found.length || Date.now() >= deadline) return found;
+    throwState(await currentState(page));
+    await pause(Math.min(250, deadline - Date.now()), signal);
+  }
+}
 async function menu(page: Page, label: string, signal?: AbortSignal) {
   const control = await visibleText(page, label, true);
   return control ? clickNavigation(page, control, signal) : page;
@@ -496,7 +507,7 @@ async function generateReport(
   signal?: AbortSignal,
 ): Promise<Page> {
   let target = await menu(page, "自助报表", signal);
-  let rows = await reportRows(target, dimension);
+  let rows = await loadedReportRows(target, dimension, signal);
   let control: Locator | null = null;
   for (const row of rows) {
     control = await usableControl(row, generateAction);
@@ -712,7 +723,7 @@ export async function downloadCompassReports(
       while (Date.now() < deadline) {
         cancelled(signal);
         throwState(await currentState(target));
-        const rows = await reportRows(target, dimension);
+        const rows = await loadedReportRows(target, dimension, signal, deadline - Date.now());
         let pending = false;
         for (const row of rows) {
           const text = await row.innerText();
