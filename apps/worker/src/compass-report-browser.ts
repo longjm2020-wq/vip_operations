@@ -649,9 +649,12 @@ async function saveReport(
   dimension: CompassDimension,
   directory: string,
   signal?: AbortSignal,
+  visibleFileName?: string,
 ) {
   cancelled(signal);
-  const fileName = basename(download.suggestedFilename()).slice(0, 255);
+  const transportName = basename(download.suggestedFilename()).slice(0, 255);
+  const transportExtension = extname(transportName).toLowerCase();
+  const fileName = [".xlsx", ".csv"].includes(transportExtension) ? transportName : visibleFileName ?? transportName;
   const extension = extname(fileName).toLowerCase();
   if (![".xlsx", ".csv"].includes(extension)) {
     await download.cancel();
@@ -686,6 +689,7 @@ async function saveReport(
         .toString("utf8")
         .replace(/^\uFEFF/, "")
         .trimStart();
+      console.warn(JSON.stringify({ event: "compass_download_format", dimension, browserFormat: [".xlsx", ".csv", ".xls", ".zip", ".json", ".html", ".htm", ".bin", ".txt"].includes(transportExtension) ? transportExtension : transportExtension ? "OTHER" : "NONE", usedVisibleName: fileName !== transportName, content: buffer[0] === 0x50 && buffer[1] === 0x4b ? "ZIP" : /^(?:<!doctype\s+html|<html|<head|<script)/i.test(text) ? "HTML" : /^[{[]/.test(text) ? "JSON" : "TEXT" }));
       if (
         extension === ".xlsx"
           ? buffer[0] !== 0x50 || buffer[1] !== 0x4b
@@ -704,6 +708,13 @@ async function saveReport(
   } finally {
     signal?.removeEventListener("abort", abort);
   }
+}
+
+async function originalReportFileName(row: Locator, dimension: CompassDimension): Promise<string | undefined> {
+  const candidates = (await row.innerText()).split(/[\r\n\t]+/).map(value => value.trim());
+  for (const node of await row.locator("[title]").filter({ visible: true }).all()) candidates.push((await node.getAttribute("title") ?? "").trim());
+  const candidate = candidates.find(value => reportName(dimension).test(value) && /\.(?:xlsx|csv)$/i.test(value));
+  return candidate ? basename(candidate).slice(0, 255) : undefined;
 }
 
 /** Original downloads only. The caller must still validate every sheet/date/row. */
@@ -790,6 +801,7 @@ export async function downloadCompassReports(
             dimension,
             directory,
             signal,
+            await originalReportFileName(row, dimension),
           );
           const fileRange = compassVisibleRange(file.fileName);
           if (

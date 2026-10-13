@@ -45,13 +45,13 @@ function reportPage(
   <table>${compassDimensions.map((dimension) => `<tr id="${dimension}"><td>${compassReportTitles[dimension]}</td><td class="range">${options.range ?? `${targetStart} — ${targetEnd}`}</td><td class="state">${options.pending ? "生成中" : "已完成"}</td><td>${options.pending ? "" : `<a download href="/${dimension}.csv">下载</a>`}${options.generate ? `<button onclick="document.querySelector('#${dimension} .range').textContent='${targetStart} — ${targetEnd}'">生成报表</button>` : ""}</td></tr>`).join("")}</table>
   </body></html>`;
 }
-async function fixture(html: string, download = originalCsv) {
+async function fixture(html: string, download = originalCsv, transportFileName?: string) {
   // Chromium downloads can bypass Playwright routing. These fixtures serve
   // synthetic file bytes locally and never contact a real report endpoint.
   const server = createServer((request, response) => {
     response.writeHead(200, {
-      "content-type": "text/csv; charset=utf-8",
-      "content-disposition": `attachment; filename="${request.url?.slice(1)}"`,
+      "content-type": transportFileName ? "application/octet-stream" : "text/csv; charset=utf-8",
+      "content-disposition": `attachment; filename="${transportFileName ?? request.url?.slice(1)}"`,
     });
     response.end(download);
   });
@@ -71,8 +71,8 @@ async function fixture(html: string, download = originalCsv) {
       await route.fulfill({
         status: 200,
         headers: {
-          "content-type": "text/csv; charset=utf-8",
-          "content-disposition": `attachment; filename="${url.pathname.slice(1)}"`,
+          "content-type": transportFileName ? "application/octet-stream" : "text/csv; charset=utf-8",
+          "content-disposition": `attachment; filename="${transportFileName ?? url.pathname.slice(1)}"`,
         },
         body: download,
       });
@@ -92,6 +92,14 @@ async function fixture(html: string, download = originalCsv) {
 }
 
 describe("Compass official browser reports", () => {
+  it("uses the visible original filename when the download transport supplies a generic filename", async () => {
+    const fileName = "我的报表_按款号（近30天）_20260911-20261010.csv";
+    const page = await fixture(reportPage().replace(compassReportTitles.style, fileName), originalCsv, "transport.data");
+    const files = await downloadCompassReports(page, ["style"], targetStart, targetEnd, () => {}, undefined, { maxWaitMs: 5000 });
+    expect(files[0].fileName).toBe(fileName);
+    expect(await readFile(files[0].path, "utf8")).toBe(originalCsv);
+    await cleanupCompassDownloads(files);
+  }, 15000);
   it("recovers when an ordinary announcement appears after the menu was observed and intercepts navigation", async () => {
     const page = await fixture('<div class="vis-notice-force-read-dialog" style="position:fixed;inset:0;z-index:99;background:white"><div class="el-dialog" role="dialog" style="display:none"><h2>本页面有1条关联的公告</h2><p>普通仓储服务公告</p><button onclick="document.querySelector(\'.vis-notice-force-read-dialog\').remove()">关闭</button></div></div><a href="https://compass.vip.com/fixture-reports">魔方罗盘</a><script>setTimeout(()=>document.querySelector(\'.el-dialog\').style.display=\'block\',600)</script>');
     await page.context().route("https://compass.vip.com/fixture-reports", route => route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", body: reportPage() }));
