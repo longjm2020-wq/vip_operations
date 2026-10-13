@@ -284,6 +284,22 @@ test("扫码窗口忽略遮罩和Esc，未保存时只有明确确认才取消�
   await expect(panel).toBeVisible();
 });
 
+test("空白登录画面可确认重新获取二维码，取消不重开", async ({ page }) => {
+  const state = await fixture(page, { loggedIn: false });
+  await page.getByRole("button", { name: "更新数据", exact: true }).click();
+  await page.getByRole("button", { name: "扫码登录罗盘", exact: true }).click();
+  const login = page.getByRole("dialog", { name: "魔方罗盘服务器登录", exact: true });
+  await login.getByRole("button", { name: "重新获取二维码", exact: true }).click();
+  await page.getByRole("button", { name: "继续当前登录", exact: true }).click();
+  expect(state.actions).toEqual([]);
+  await login.getByRole("button", { name: "重新获取二维码", exact: true }).click();
+  await page.getByRole("button", { name: "重新获取", exact: true }).click();
+  await expect.poll(() => state.actions.length).toBe(1);
+  expect(state.actions[0]).toEqual({ kind: "RESTART" });
+  expect(state.cancels).toBe(0);
+  await expect(login).toBeVisible();
+});
+
 test("窄短视口扫码画面滚动，核验保存按钮始终在视口内", async ({ page }) => {
   await page.setViewportSize({ width: 828, height: 892 });
   await fixture(page, { loggedIn: false });

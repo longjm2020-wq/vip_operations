@@ -162,6 +162,16 @@ export function CompassBrowserLogin({
                 >
                   刷新登录画面
                 </Button>
+                <Popconfirm
+                  title="重新获取登录二维码？"
+                  description="本次未保存的扫码进度将重新开始，已核验保存的正式罗盘会话保留。"
+                  okText="重新获取"
+                  cancelText="继续当前登录"
+                  disabled={!ready || busy}
+                  onConfirm={() => void action({ kind: "RESTART" })}
+                >
+                  <Button disabled={!ready || busy}>重新获取二维码</Button>
+                </Popconfirm>
                 <Button
                   disabled={!ready || busy || !view.frameId}
                   onClick={() =>
@@ -235,6 +245,7 @@ export function CompassBrowserLogin({
         <p>
           扫码后请点击「核验并保存」，看到「罗盘登录已保存」后再返回更新面板。
         </p>
+        <p>画面持续空白或只有水印时，可点击「重新获取二维码」重新开始本次扫码。</p>
         {(error || login.error) && (
           <Alert type="error" showIcon title={error || login.error?.message} />
         )}

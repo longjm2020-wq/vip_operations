@@ -11,6 +11,7 @@ export const compassBrowserActionSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("CLICK"), frameId: z.uuid(), point }).strict(),
   z.object({ kind: z.literal("SCROLL"), frameId: z.uuid(), deltaY: z.number().int().min(-1200).max(1200).refine(value => value !== 0) }).strict(),
   z.object({ kind: z.literal("REFRESH") }).strict(),
+  z.object({ kind: z.literal("RESTART") }).strict(),
   z.object({ kind: z.literal("CHECK") }).strict(),
 ]);
 export type CompassBrowserAction = z.infer<typeof compassBrowserActionSchema>;

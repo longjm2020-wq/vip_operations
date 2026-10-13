@@ -8,6 +8,7 @@ import { beginImport, appendImport, finishImport } from "../../api/src/modules/a
 import type { Context } from "../../api/src/core.js";
 import { compassEncryptionReady, decryptCompassState, encryptCompassState, encryptCompassLoginDraft, decryptCompassLoginDraft } from "./compass-browser-state.js";
 import { collectCompassBrowserState, restoreCompassBrowserState, compassPlaywrightState } from "./compass-browser-session.js";
+import { openFreshCompassLogin } from "./compass-login-entry.js";
 import { readCompassDownload, StaleCompassReportError } from "./compass-report-import.js";
 import { checkCompassLogin, openCompassReports, downloadCompassReports, cleanupCompassDownloads, CompassBrowserError, compassSourceUrl, compassPageDiagnostics } from "./compass-report-browser.js";
 
@@ -128,7 +129,7 @@ export async function processCompassLogin(browserLaunch: () => Promise<Browser> 
       else if (saved?.enabled && saved.encrypted_state) state = decryptCompassState(saved.encrypted_state);
     } catch { /* A new sign-in repairs unreadable saved state. */ }
     browser = await browserLaunch();
-    const context = await browser.newContext({ locale: "zh-CN", timezoneId: "Asia/Shanghai", viewport: compassBrowserViewport, acceptDownloads: false, ...(state ? { storageState: compassPlaywrightState(state) } : {}) });
+    let context = await browser.newContext({ locale: "zh-CN", timezoneId: "Asia/Shanghai", viewport: compassBrowserViewport, acceptDownloads: false, ...(state ? { storageState: compassPlaywrightState(state) } : {}) });
     loginContext = context;
     if (state) await restoreCompassBrowserState(context, state);
     let page = await context.newPage();
@@ -231,6 +232,15 @@ export async function processCompassLogin(browserLaunch: () => Promise<Browser> 
           });
           if (stored) return;
           break;
+        } else if (input.kind === "RESTART") {
+          await update("正在重新获取官方扫码入口", "RUNNING");
+          const fresh = await openFreshCompassLogin(browser, configureCompassPage);
+          const previous = context;
+          context = fresh.context; loginContext = context;
+          page = fresh.page; diagnosticPage = page; lastUrl = page.url();
+          navigationRetries = 0;
+          await previous.close().catch(() => {});
+          await update("已重新准备扫码入口，请完成本人扫码后核验；原有已保存会话保持");
         } else if (input.kind === "REFRESH") { await page.goto(compassSourceUrl, { waitUntil: "domcontentloaded", timeout: 30000 }); await update("已重新打开官方供应商入口，可继续登录后核验"); }
         else if (input.kind === "CLICK") await page.mouse.click(input.point.x * compassBrowserViewport.width, input.point.y * compassBrowserViewport.height);
         else if (input.kind === "SCROLL") await page.mouse.wheel(0, input.deltaY);
