@@ -232,7 +232,7 @@ async function importantNotice(page: Page, signal?: AbortSignal) {
     for (let index = 0; index < Math.min(await dialogs.count(), 20); index++) {
       const dialog = dialogs.nth(index);
       if (!(await dialog.getByText("重要提醒", { exact: true }).filter({ visible: true }).count())) continue;
-      const ack = dialog.getByText(/^(?:已知晓|已知悉)$/).filter({ visible: true }).first();
+      const ack = dialog.getByRole("button", { name: /^(?:已知晓|已知悉)$/ }).filter({ visible: true }).first();
       if (!(await ack.count())) continue;
       const text = (await dialog.innerText()).replace(/\s+/g, "");
       const restockMetrics = text.includes("用户授权抢货/订阅提醒待补货提醒") && text.includes("断货商品数") && text.includes("授权待补货商品数") && text.includes("订阅待补货商品数");

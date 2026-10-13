@@ -98,7 +98,7 @@ describe("Compass official browser reports", () => {
     expect(await checkCompassLogin(page, { load: false })).toMatchObject({ verified: true, reason: "READY" });
   }, 15000);
   it("dismisses the read-only restock metrics reminder with its normal acknowledgement, without granting authorization", async () => {
-    const page = await fixture(`${reportPage()}<div class="el-dialog" role="dialog"><h2>重要提醒</h2><input readonly value="synthetic brand"><p>用户授权抢货/订阅提醒待补货提醒（补货可挽回业绩）</p><p>断货商品数 69 授权待补货商品数 4 订阅待补货商品数 17</p><button onclick="this.closest('.el-dialog').remove()">已知悉</button></div>`);
+    const page = await fixture(`${reportPage()}<div class="el-dialog" role="dialog"><h2>重要提醒</h2><input readonly value="synthetic brand"><p>用户授权抢货/订阅提醒待补货提醒（补货可挽回业绩）</p><p>断货商品数 69 授权待补货商品数 4 订阅待补货商品数 17</p><button onclick="this.closest('.el-dialog').remove()"><span>已知悉</span></button></div>`);
     expect(await checkCompassLogin(page, { load: false })).toMatchObject({ verified: true, reason: "READY" });
     expect(await page.getByRole("button", { name: "已知悉", exact: true }).count()).toBe(0);
   }, 10000);
