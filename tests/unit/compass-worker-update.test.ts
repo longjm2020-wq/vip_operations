@@ -21,7 +21,7 @@ vi.mock("../../apps/worker/src/compass-browser-state.js", () => ({ compassEncryp
 vi.mock("../../apps/worker/src/compass-browser-session.js", () => ({ collectCompassBrowserState: helpers.collect, restoreCompassBrowserState: helpers.restore, compassPlaywrightState: helpers.playwrightState }));
 vi.mock("../../apps/worker/src/compass-report-import.js", () => ({ readCompassDownload: helpers.read, StaleCompassReportError: helpers.StaleReportError }));
 vi.mock("../../apps/worker/src/compass-report-browser.js", () => ({
-  compassSourceUrl: "https://vis.vip.com/index.php#/homepage",
+  compassSourceUrl: "https://vis.vip.com/index.php",
   compassPageDiagnostics: helpers.diagnostics,
   checkCompassLogin: helpers.check, openCompassReports: helpers.open, downloadCompassReports: helpers.download,
   cleanupCompassDownloads: helpers.cleanup, CompassBrowserError: helpers.BrowserError,
@@ -44,7 +44,7 @@ function createBrowser(configure?: (page: Record<string, any>, context: Record<s
     close: vi.fn().mockResolvedValue(undefined),
     newContext: vi.fn().mockImplementation(async () => {
       const context: Record<string, any> = { route: vi.fn().mockResolvedValue(undefined), on: vi.fn(), close: vi.fn().mockResolvedValue(undefined), storageState: vi.fn().mockResolvedValue(state) };
-      const page = { context: () => context, goto: vi.fn().mockResolvedValue(undefined), url: () => "https://vis.vip.com/index.php#/homepage", isClosed: () => false,
+      const page = { context: () => context, on: vi.fn(), goto: vi.fn().mockResolvedValue(undefined), reload: vi.fn().mockResolvedValue(undefined), url: () => "https://vis.vip.com/index.php", isClosed: () => false,
         mouse: { click: vi.fn(), wheel: vi.fn() }, locator: vi.fn(), screenshot: vi.fn().mockResolvedValue(Buffer.from("fixture-frame")), frames: () => frames };
       context.fixturePage = page;
       context.newPage = vi.fn().mockResolvedValue(page);
@@ -431,7 +431,7 @@ describe("interactive login completion", () => {
     const browser = createBrowser();
     await processCompassLogin(browser.launch);
     expect(browser.browser.newContext).toHaveBeenCalledTimes(2);
-    expect(browser.contexts[0].fixturePage.goto).toHaveBeenCalledWith("https://vis.vip.com/index.php#/homepage", expect.any(Object));
+    expect(browser.contexts[0].fixturePage.goto).toHaveBeenCalledWith("https://vis.vip.com/index.php", expect.any(Object));
     expect(helpers.check).toHaveBeenCalledTimes(2);
     expect(helpers.encrypt).toHaveBeenCalledWith(state);
     expect(database.db.$executeRawUnsafe.mock.calls.some(([sql]) => String(sql).includes("status='SAVED'"))).toBe(true);
@@ -475,7 +475,7 @@ describe("interactive login completion", () => {
     loginQueued = true; hasQueued = false;
     helpers.check.mockImplementationOnce(async () => { loginAlive = false; return { verified: false, reason: "UNKNOWN_PAGE", note: "SECRET query and session value" }; });
     await processCompassLogin(createBrowser().launch);
-    expect(console.warn).toHaveBeenCalledWith(JSON.stringify({ event: "compass_login_check", reason: "UNKNOWN_PAGE", pages: await helpers.diagnostics.mock.results[0].value }));
+    expect(console.warn).toHaveBeenCalledWith(JSON.stringify({ event: "compass_login_check", reason: "UNKNOWN_PAGE", pages: await helpers.diagnostics.mock.results[0].value, loads: { failures: [], scriptErrors: 0 } }));
     expect(JSON.stringify(vi.mocked(console.warn).mock.calls)).not.toContain("SECRET");
     expect(helpers.encrypt).not.toHaveBeenCalled();
   });
@@ -544,7 +544,7 @@ describe("interactive login completion", () => {
   it("rechecks permission inside the save transaction after the reusable login probe", async () => {
     loginQueued = true; hasQueued = false; revokeOnSave = true;
     await processCompassLogin(createBrowser().launch);
-    expect(transactionCount).toBe(5);
+    expect(helpers.check).toHaveBeenCalledTimes(2);
     expect(database.db.$executeRawUnsafe.mock.calls.some(([sql]) => String(sql).includes("status='SAVED'"))).toBe(false);
     expect(database.db.$executeRawUnsafe.mock.calls.some(([sql]) => String(sql).includes("status='FAILED'"))).toBe(true);
   });
@@ -627,20 +627,20 @@ describe("interactive login completion", () => {
     loginFrameId = frameId;
     loginAction = kind === "CLICK" ? { kind, frameId, point: { x: 0.5, y: 0.5 } } : kind === "SCROLL" ? { kind, frameId, deltaY: 200 } : { kind };
     const browser = createBrowser(page => {
-      if (kind === "REFRESH") page.goto.mockResolvedValueOnce(undefined).mockRejectedValueOnce(Error("net::ERR_ABORTED during navigation"));
+      if (kind === "REFRESH") page.reload.mockRejectedValueOnce(Error("net::ERR_ABORTED during navigation"));
       else page.mouse[kind === "CLICK" ? "click" : "wheel"].mockRejectedValueOnce(Error("Execution context was destroyed by navigation"));
     });
     const run = processCompassLogin(browser.launch);
     await vi.advanceTimersByTimeAsync(1);
     const page = browser.contexts[0].fixturePage;
-    const control = kind === "REFRESH" ? page.goto : page.mouse[kind === "CLICK" ? "click" : "wheel"];
-    if (kind === "REFRESH") expect(page.goto.mock.calls.map(([url]: [string]) => url)).toEqual(["https://vis.vip.com/index.php#/homepage", "https://vis.vip.com/index.php#/homepage"]);
+    const control = kind === "REFRESH" ? page.reload : page.mouse[kind === "CLICK" ? "click" : "wheel"];
+    if (kind === "REFRESH") expect(page.goto.mock.calls.map(([url]: [string]) => url)).toEqual(["https://vis.vip.com/index.php"]);
     const firstDraftWrite = database.db.$executeRawUnsafe.mock.calls.findIndex(([sql]) => String(sql).startsWith("UPDATE compass_session SET draft_encrypted_state=$1"));
-    const controlOrder = control.mock.invocationCallOrder[kind === "REFRESH" ? 1 : 0];
+    const controlOrder = control.mock.invocationCallOrder[0];
     expect(database.db.$executeRawUnsafe.mock.invocationCallOrder[firstDraftWrite]).toBeLessThan(controlOrder);
     expect(browser.browser.close).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(500);
-    expect(control).toHaveBeenCalledTimes(kind === "REFRESH" ? 2 : 1);
+    expect(control).toHaveBeenCalledTimes(1);
     expect(page.screenshot).toHaveBeenCalledWith(expect.objectContaining({ mask: browser.frameLocators }));
     expect(database.db.$executeRawUnsafe.mock.calls.some(([sql]) => String(sql).includes("status='FAILED'"))).toBe(false);
     loginAlive = false; await vi.advanceTimersByTimeAsync(500); await run;

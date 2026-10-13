@@ -13,7 +13,7 @@ import {
 } from "../../../packages/contracts/src/compass-analytics.js";
 import { isCompassBrowserOrigin } from "../../../packages/contracts/src/compass-update.js";
 
-export const compassSourceUrl = "https://vis.vip.com/index.php#/homepage";
+export const compassSourceUrl = "https://vis.vip.com/index.php";
 export const compassReportTitles: Record<CompassDimension, string> = {
   style: "按款号（近30天）",
   article: "按货号（近30天）",
@@ -139,7 +139,7 @@ export async function compassPageDiagnostics(page: Page) {
     for (const candidate of page.context().pages().filter(item => !item.isClosed() && isCompassBrowserOrigin(item.url())).slice(-5)) {
       const hostname = new URL(candidate.url()).hostname;
       const currentUrl = new URL(candidate.url());
-      const surface = hostname === "vis.vip.com" && currentUrl.pathname === "/index.php" ? (currentUrl.hash === "#/homepage" ? "SUPPLIER_HOME" : "SUPPLIER_INDEX") : hostname === "vis.vip.com" && /\/(?:login|newlogin)\.php$/.test(currentUrl.pathname) ? "SUPPLIER_LOGIN" : hostname === "passport.vip.com" ? "PASSPORT" : hostname === "compass.vip.com" ? "COMPASS" : "OTHER_OFFICIAL";
+      const surface = hostname === "vis.vip.com" && currentUrl.pathname === "/index.php" ? (currentUrl.hash === "#/homepage" ? "SUPPLIER_LEGACY" : !currentUrl.hash || currentUrl.hash === "#/" ? "SUPPLIER_ENTRY" : "SUPPLIER_APP") : hostname === "vis.vip.com" && /\/(?:login|newlogin)\.php$/.test(currentUrl.pathname) ? "SUPPLIER_LOGIN" : hostname === "passport.vip.com" ? "PASSPORT" : hostname === "compass.vip.com" ? "COMPASS" : "OTHER_OFFICIAL";
       const frames = [];
       for (const frame of candidate.frames().filter(item => isCompassBrowserOrigin(item.url())).slice(0, 10)) {
         const origin = new URL(frame.url()).origin;

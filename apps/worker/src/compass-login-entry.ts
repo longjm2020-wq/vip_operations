@@ -6,9 +6,9 @@ import { compassSourceUrl } from "./compass-report-browser.js";
 export async function refreshCompassLogin(page: Page): Promise<void> {
   if (!isCompassBrowserOrigin(page.url())) throw Error("刷新入口离开了官方站点");
   const current = new URL(page.url());
-  // Supplier SSO may return to the index without the application's route.
-  // A hash-only goto does not reload interrupted application scripts.
-  if (current.hostname === "vis.vip.com" && current.pathname === "/index.php" && current.hash !== "#/homepage")
+  // The supplier portal selects its authorized homepage from the root route.
+  // The old fixed /homepage route leaves the current portal at its watermark.
+  if (current.hostname === "vis.vip.com" && current.pathname === "/index.php" && current.hash === "#/homepage")
     await page.goto(compassSourceUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
   await page.reload({ waitUntil: "domcontentloaded", timeout: 30000 });
   if (!isCompassBrowserOrigin(page.url())) throw Error("刷新画面离开了官方站点");
