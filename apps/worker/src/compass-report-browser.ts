@@ -138,6 +138,8 @@ export async function compassPageDiagnostics(page: Page) {
     const pages = [];
     for (const candidate of page.context().pages().filter(item => !item.isClosed() && isCompassBrowserOrigin(item.url())).slice(-5)) {
       const hostname = new URL(candidate.url()).hostname;
+      const currentUrl = new URL(candidate.url());
+      const surface = hostname === "vis.vip.com" && currentUrl.pathname === "/index.php" ? (currentUrl.hash === "#/homepage" ? "SUPPLIER_HOME" : "SUPPLIER_INDEX") : hostname === "vis.vip.com" && /\/(?:login|newlogin)\.php$/.test(currentUrl.pathname) ? "SUPPLIER_LOGIN" : hostname === "passport.vip.com" ? "PASSPORT" : hostname === "compass.vip.com" ? "COMPASS" : "OTHER_OFFICIAL";
       const frames = [];
       for (const frame of candidate.frames().filter(item => isCompassBrowserOrigin(item.url())).slice(0, 10)) {
         const origin = new URL(frame.url()).origin;
@@ -146,9 +148,9 @@ export async function compassPageDiagnostics(page: Page) {
           let sessionStorageEntries: number | null = null;
           try { sessionStorageEntries = sessionStorage.length; } catch { /* Inaccessible storage remains unknown. */ }
           const readyState = document.readyState;
-          return { readyState: readyState === "loading" || readyState === "interactive" || readyState === "complete" ? readyState : null, sessionStorageEntries, windowNameLength: window.name.length };
+          return { readyState: readyState === "loading" || readyState === "interactive" || readyState === "complete" ? readyState : null, sessionStorageEntries, windowNameLength: window.name.length, scriptSources: document.querySelectorAll("script[src]").length, bodyElements: document.body?.querySelectorAll("*").length ?? 0 };
         }, origin).catch(() => null);
-        frames.push({ hostname: new URL(origin).hostname, readyState: counts?.readyState ?? null, sessionStorageEntries: counts?.sessionStorageEntries ?? null, windowNameLength: counts?.windowNameLength ?? null });
+        frames.push({ hostname: new URL(origin).hostname, readyState: counts?.readyState ?? null, sessionStorageEntries: counts?.sessionStorageEntries ?? null, windowNameLength: counts?.windowNameLength ?? null, scriptSources: counts?.scriptSources ?? null, bodyElements: counts?.bodyElements ?? null });
       }
       let menuPresent: boolean | null = null, reportMenuPresent: boolean | null = null;
       const reports: Record<CompassDimension, boolean | null> = { style: null, article: null, barcode: null };
@@ -157,7 +159,7 @@ export async function compassPageDiagnostics(page: Page) {
         reportMenuPresent = Boolean(await visibleText(candidate, /^(?:自助报表|下载中心)$/));
         for (const dimension of compassDimensions) reports[dimension] = Boolean(await visibleText(candidate, reportName(dimension)));
       } catch { /* A detached frame produces unknown booleans, never raw errors. */ }
-      pages.push({ hostname, frames, menuPresent, reportMenuPresent, reports });
+      pages.push({ hostname, surface, frames, menuPresent, reportMenuPresent, reports });
     }
     return pages;
   };

@@ -2,6 +2,18 @@ import type { Browser, BrowserContext, Page } from "@playwright/test";
 import { compassBrowserViewport, isCompassBrowserOrigin } from "../../../packages/contracts/src/compass-update.js";
 import { compassSourceUrl } from "./compass-report-browser.js";
 
+/** Refresh the current official document without discarding the completed sign-in. */
+export async function refreshCompassLogin(page: Page): Promise<void> {
+  if (!isCompassBrowserOrigin(page.url())) throw Error("刷新入口离开了官方站点");
+  const current = new URL(page.url());
+  // Supplier SSO may return to the index without the application's route.
+  // A hash-only goto does not reload interrupted application scripts.
+  if (current.hostname === "vis.vip.com" && current.pathname === "/index.php" && current.hash !== "#/homepage")
+    await page.goto(compassSourceUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
+  await page.reload({ waitUntil: "domcontentloaded", timeout: 30000 });
+  if (!isCompassBrowserOrigin(page.url())) throw Error("刷新画面离开了官方站点");
+}
+
 /** Restart only the temporary login browser; verified persisted sessions are untouched. */
 export async function openFreshCompassLogin(browser: Browser, configure: (page: Page) => Promise<void>): Promise<{ context: BrowserContext; page: Page }> {
   const context = await browser.newContext({ locale: "zh-CN", timezoneId: "Asia/Shanghai", viewport: compassBrowserViewport, acceptDownloads: false });

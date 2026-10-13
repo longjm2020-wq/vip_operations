@@ -8,7 +8,7 @@ import { beginImport, appendImport, finishImport } from "../../api/src/modules/a
 import type { Context } from "../../api/src/core.js";
 import { compassEncryptionReady, decryptCompassState, encryptCompassState, encryptCompassLoginDraft, decryptCompassLoginDraft } from "./compass-browser-state.js";
 import { collectCompassBrowserState, restoreCompassBrowserState, compassPlaywrightState } from "./compass-browser-session.js";
-import { openFreshCompassLogin } from "./compass-login-entry.js";
+import { openFreshCompassLogin, refreshCompassLogin } from "./compass-login-entry.js";
 import { compassLoginCheckpoint } from "./compass-login-checkpoint.js";
 import { observeCompassLoads, compassLoadDiagnostics } from "./compass-load-diagnostics.js";
 import { readCompassDownload, StaleCompassReportError } from "./compass-report-import.js";
@@ -247,7 +247,7 @@ export async function processCompassLogin(browserLaunch: () => Promise<Browser> 
           await update("已重新准备扫码入口，请完成本人扫码后核验；原有已保存会话保持");
           lastCheckpoint = 0;
           console.warn(JSON.stringify({ event: "compass_login_restart", pages: await compassPageDiagnostics(page) }));
-        } else if (input.kind === "REFRESH") { await page.goto(compassSourceUrl, { waitUntil: "domcontentloaded", timeout: 30000 }); await update("已重新打开官方供应商入口，可继续登录后核验"); }
+        } else if (input.kind === "REFRESH") { await refreshCompassLogin(page); await update("已保留当前会话重新加载官方页面，可继续登录后核验"); }
         else if (input.kind === "CLICK") await page.mouse.click(input.point.x * compassBrowserViewport.width, input.point.y * compassBrowserViewport.height);
         else if (input.kind === "SCROLL") await page.mouse.wheel(0, input.deltaY);
         } catch (error) { await recover(error); continue; }
