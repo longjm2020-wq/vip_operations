@@ -10,6 +10,7 @@ import { compassEncryptionReady, decryptCompassState, encryptCompassState, encry
 import { collectCompassBrowserState, restoreCompassBrowserState, compassPlaywrightState } from "./compass-browser-session.js";
 import { openFreshCompassLogin } from "./compass-login-entry.js";
 import { compassLoginCheckpoint } from "./compass-login-checkpoint.js";
+import { observeCompassLoads, compassLoadDiagnostics } from "./compass-load-diagnostics.js";
 import { readCompassDownload, StaleCompassReportError } from "./compass-report-import.js";
 import { checkCompassLogin, openCompassReports, downloadCompassReports, cleanupCompassDownloads, CompassBrowserError, compassSourceUrl, compassPageDiagnostics } from "./compass-report-browser.js";
 
@@ -72,6 +73,7 @@ export async function compassWorkerActor(actorId: unknown, tx: Tx = db) {
 }
 
 export async function configureCompassPage(page: Page) {
+  observeCompassLoads(page.context());
   await page.context().route("**/*", async route => {
     const request = route.request();
     if (request.isNavigationRequest() && !isCompassBrowserOrigin(request.url())) {
@@ -199,7 +201,7 @@ export async function processCompassLogin(browserLaunch: () => Promise<Browser> 
           stage = "VERIFY_LOGIN";
           await update("正在核验罗盘报表访问及会话复用", "CHECKING");
           const result = await checkCompassLogin(page, { load: false });
-          console.warn(JSON.stringify({ event: "compass_login_check", reason: result.reason, pages: await compassPageDiagnostics(page) }));
+          console.warn(JSON.stringify({ event: "compass_login_check", reason: result.reason, pages: await compassPageDiagnostics(page), loads: compassLoadDiagnostics(context), rejectedHost: rejectedCompassHosts.get(context) }));
           if (!result.verified) { await update(result.note); continue; }
           // Verify the exact normalized snapshot that will be persisted. A raw
           // context can include storage discarded by the Compass domain filter.
