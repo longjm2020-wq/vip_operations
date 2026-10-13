@@ -9,6 +9,7 @@ import type { Context } from "../../api/src/core.js";
 import { compassEncryptionReady, decryptCompassState, encryptCompassState, encryptCompassLoginDraft, decryptCompassLoginDraft } from "./compass-browser-state.js";
 import { collectCompassBrowserState, restoreCompassBrowserState, compassPlaywrightState } from "./compass-browser-session.js";
 import { openFreshCompassLogin } from "./compass-login-entry.js";
+import { compassLoginCheckpoint } from "./compass-login-checkpoint.js";
 import { readCompassDownload, StaleCompassReportError } from "./compass-report-import.js";
 import { checkCompassLogin, openCompassReports, downloadCompassReports, cleanupCompassDownloads, CompassBrowserError, compassSourceUrl, compassPageDiagnostics } from "./compass-report-browser.js";
 
@@ -42,8 +43,9 @@ export function scopedCompassLoginDraft(saved: Record<string, any> | undefined, 
   return saved?.draft_encrypted_state && String(saved.draft_actor_id) === String(actorId) && String(saved.draft_login_id) === String(loginId) && Number.isFinite(expiry) && expiry > now
     ? { encrypted: String(saved.draft_encrypted_state), expiresAtMs: expiry } : null;
 }
-export async function checkpointCompassLoginDraft(context: BrowserContext, job: { id: unknown; actor_id: unknown }, token: string, expiresAtMs?: number) {
+export async function checkpointCompassLoginDraft(context: BrowserContext, job: { id: unknown; actor_id: unknown }, token: string, expiresAtMs?: number, signal?: AbortSignal) {
   const encrypted = encryptCompassLoginDraft(await collectCompassBrowserState(context), String(job.actor_id));
+  if (signal?.aborted) return { active: true, expiresAtMs: expiresAtMs ?? null };
   return db.$transaction(async tx => {
     await rows(tx, "SELECT pg_advisory_xact_lock(2026101140)::text");
     const active = await one(tx, `SELECT id,actor_id FROM compass_logins WHERE id=$1::uuid AND actor_id=$3::bigint AND claim_token=$2::uuid AND status IN ${activeLogin} AND expires_at>now() FOR UPDATE`, job.id, token, job.actor_id);
@@ -55,6 +57,7 @@ export async function checkpointCompassLoginDraft(context: BrowserContext, job: 
       ? Number(saved?.draft_expires_ms ?? (saved?.draft_expires_at ? new Date(saved.draft_expires_at).getTime() : NaN)) : undefined;
     const deadline = Math.min(Date.now() + 30 * 60000, expiresAtMs ?? Infinity, scoped?.expiresAtMs ?? retainedExpiry ?? Infinity);
     if (!Number.isFinite(deadline) || deadline <= Date.now()) return { active: true, expiresAtMs: expiresAtMs ?? retainedExpiry ?? null };
+    if (signal?.aborted) return { active: true, expiresAtMs: expiresAtMs ?? null };
     await tx.$executeRawUnsafe("UPDATE compass_session SET draft_encrypted_state=$1,draft_actor_id=$2::bigint,draft_login_id=$3::uuid,draft_expires_at=$4::timestamptz WHERE id=1", encrypted, job.actor_id, job.id, new Date(deadline).toISOString());
     return { active: true, expiresAtMs: deadline };
   });
@@ -150,11 +153,12 @@ export async function processCompassLogin(browserLaunch: () => Promise<Browser> 
     }
     await update("请在云端画面扫码登录，通过可见的「魔方罗盘」进入自助报表，再点击「核验并保存」");
     let frameId = randomUUID(), lastUrl = page.url(), lastFrame = 0, lastCheckpoint = 0, navigationRetries = 0;
+    const backups = compassLoginCheckpoint(abort => checkpointCompassLoginDraft(context, { id: job.id, actor_id: job.actor_id }, token, draftExpiry, abort));
     const checkpoint = async () => {
-      const result = await checkpointCompassLoginDraft(context, { id: job.id, actor_id: job.actor_id }, token, draftExpiry);
-      if (result.expiresAtMs !== null) draftExpiry = result.expiresAtMs;
+      const result = await backups.run();
+      if (result && result.expiresAtMs !== null) draftExpiry = result.expiresAtMs;
       lastCheckpoint = Date.now();
-      return result.active;
+      return result?.active ?? true;
     };
     const recover = async (error: unknown) => {
       if (!compassNavigationRace(error) || ++navigationRetries > 8) throw error;
@@ -180,18 +184,15 @@ export async function processCompassLogin(browserLaunch: () => Promise<Browser> 
         continue;
       }
       if (!isCompassBrowserOrigin(page.url())) throw Error("罗盘登录页面离开官方域名");
-      if (Date.now() - lastCheckpoint >= 5000) {
-        try { if (!(await checkpoint())) break; }
-        catch (error) { await recover(error); continue; }
-      }
       const action = await one(db, "SELECT id,payload FROM compass_login_actions WHERE login_id=$1::uuid AND completed_at IS NULL ORDER BY id LIMIT 1", job.id);
       if (action) {
         stage = "APPLY_ACTION";
-        try { if (!(await checkpoint())) break; }
+        try { if (action.payload.kind !== "RESTART" && !(await checkpoint())) break; }
         catch (error) { await recover(error); continue; }
         await db.$executeRawUnsafe("UPDATE compass_login_actions SET completed_at=now() WHERE id=$1::bigint", action.id);
         await db.$executeRawUnsafe(`UPDATE compass_logins SET frame_jpeg=NULL,frame_id=NULL WHERE id=$1::uuid AND claim_token=$2::uuid AND status IN ${activeLogin}`, job.id, token);
         const input = compassBrowserActionSchema.parse(action.payload);
+        console.warn(JSON.stringify({ event: "compass_login_action", kind: input.kind }));
         try {
         if ((input.kind === "CLICK" || input.kind === "SCROLL") && input.frameId !== current.frame_id) await update("云端画面已变化，请等待刷新后重新操作");
         else if (input.kind === "CHECK") {
@@ -233,6 +234,7 @@ export async function processCompassLogin(browserLaunch: () => Promise<Browser> 
           if (stored) return;
           break;
         } else if (input.kind === "RESTART") {
+          backups.cancel();
           await update("正在重新获取官方扫码入口", "RUNNING");
           const fresh = await openFreshCompassLogin(browser, configureCompassPage);
           const previous = context;
@@ -241,6 +243,8 @@ export async function processCompassLogin(browserLaunch: () => Promise<Browser> 
           navigationRetries = 0;
           await previous.close().catch(() => {});
           await update("已重新准备扫码入口，请完成本人扫码后核验；原有已保存会话保持");
+          lastCheckpoint = 0;
+          console.warn(JSON.stringify({ event: "compass_login_restart", pages: await compassPageDiagnostics(page) }));
         } else if (input.kind === "REFRESH") { await page.goto(compassSourceUrl, { waitUntil: "domcontentloaded", timeout: 30000 }); await update("已重新打开官方供应商入口，可继续登录后核验"); }
         else if (input.kind === "CLICK") await page.mouse.click(input.point.x * compassBrowserViewport.width, input.point.y * compassBrowserViewport.height);
         else if (input.kind === "SCROLL") await page.mouse.wheel(0, input.deltaY);
@@ -265,6 +269,10 @@ export async function processCompassLogin(browserLaunch: () => Promise<Browser> 
         navigationRetries = 0;
         await db.$executeRawUnsafe(`UPDATE compass_logins SET frame_jpeg=$3,frame_id=$4::uuid,heartbeat_at=now() WHERE id=$1::uuid AND claim_token=$2::uuid AND status IN ${activeLogin} AND expires_at>now()`, job.id, token, frame.toString("base64"), frameId);
         lastFrame = Date.now();
+      }
+      if (Date.now() - lastCheckpoint >= 5000) {
+        try { if (!(await checkpoint())) break; }
+        catch (error) { await recover(error); continue; }
       }
       await pause(500);
     }
