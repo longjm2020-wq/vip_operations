@@ -222,7 +222,9 @@ async function importantNotice(page: Page, signal?: AbortSignal) {
       const close = announcement.getByRole("button", { name: "关闭", exact: true }).filter({ visible: true }).first();
       if (!(await close.count()) || !(await close.isEnabled())) continue;
       cancelled(signal);
-      await close.click({ timeout: 2000 });
+      // A separate floating announcement can overlap the footer. Use the
+      // enabled button's ordinary keyboard activation instead of coordinates.
+      await close.press("Enter", { timeout: 2000 });
       await pause(150, signal);
       return "DISMISSED";
     }
