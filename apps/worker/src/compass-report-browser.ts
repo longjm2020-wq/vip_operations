@@ -210,6 +210,22 @@ async function currentState(page: Page): Promise<CompassLoginCheck> {
 }
 async function importantNotice(page: Page, signal?: AbortSignal) {
   for (const frame of await visibleFrames(page)) {
+    // Supplier portal announcements have an explicit close action after their
+    // reading countdown. Dismiss only that visible action, never the detail or
+    // acknowledgement button, and leave agreement/verification notices alone.
+    const announcements = frame.locator('.vis-notice-force-read-dialog .el-dialog').filter({ visible: true });
+    for (let index = 0; index < Math.min(await announcements.count(), 5); index++) {
+      const announcement = announcements.nth(index);
+      if (!(await announcement.getByText(/^本页面有\s*\d+\s*条关联的公告$/).filter({ visible: true }).count())) continue;
+      const text = (await announcement.innerText()).replace(/\s+/g, "");
+      if (/协议|条款|隐私|授权|同意|承诺|签约|签署|签订|接受|免责声明|验证码|安全验证|人机验证|支付|付款|订购|购买|收费|开通/.test(text) || await announcement.locator('input,textarea,select,[contenteditable="true"]').count()) return "REQUIRES_USER";
+      const close = announcement.getByRole("button", { name: "关闭", exact: true }).filter({ visible: true }).first();
+      if (!(await close.count()) || !(await close.isEnabled())) continue;
+      cancelled(signal);
+      await close.click({ timeout: 2000 });
+      await pause(150, signal);
+      return "DISMISSED";
+    }
     const dialogs = frame.locator('[role="dialog"],[role="alertdialog"],.ant-modal,.el-dialog,.modal-dialog,[class*="modal"],[class*="Modal"],[class*="dialog"],[class*="Dialog"]').filter({ visible: true });
     for (let index = 0; index < Math.min(await dialogs.count(), 20); index++) {
       const dialog = dialogs.nth(index);

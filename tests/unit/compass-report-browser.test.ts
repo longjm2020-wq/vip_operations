@@ -92,6 +92,16 @@ async function fixture(html: string, download = originalCsv) {
 }
 
 describe("Compass official browser reports", () => {
+  it("closes an ordinary supplier announcement using its visible close button before following the report link", async () => {
+    const page = await fixture('<div class="vis-notice-force-read-dialog"><div class="el-dialog" role="dialog"><h2>本页面有7条关联的公告</h2><p>全国物流仓储及云仓服务助力品牌发展</p><button onclick="document.querySelector(\'.vis-notice-force-read-dialog\').remove()">关闭</button><button onclick="throw Error(\'must not acknowledge\')">查看详情即不再弹窗提醒</button></div></div><a href="https://compass.vip.com/fixture-reports">魔方罗盘</a>');
+    await page.context().route("https://compass.vip.com/fixture-reports", route => route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", body: reportPage() }));
+    expect(await checkCompassLogin(page, { load: false })).toMatchObject({ verified: true, reason: "READY" });
+  }, 15000);
+  it("leaves supplier agreement announcements for the user without clicking close or acknowledgement", async () => {
+    const page = await fixture('<div class="vis-notice-force-read-dialog"><div class="el-dialog" role="dialog"><h2>本页面有1条关联的公告</h2><p>请确认服务协议</p><button onclick="document.body.textContent=\'must not close\'">关闭</button></div></div><button>魔方罗盘</button>');
+    expect(await checkCompassLogin(page, { load: false })).toMatchObject({ verified: false, reason: "HUMAN_VERIFICATION" });
+    expect(await page.getByRole("button", { name: "关闭", exact: true }).count()).toBe(1);
+  }, 10000);
   it("reports only official frame counts and catalogue booleans without session names, values or URL queries", async () => {
     const page = await fixture(`${reportPage()}<iframe src="https://passport.vip.com/login/bLogin?token=SECRET"></iframe><iframe src="https://other.example/?password=SECRET"></iframe>`);
     await page.evaluate(() => { sessionStorage.setItem("SECRET-key", "SECRET-value"); window.name = "SECRET"; });
