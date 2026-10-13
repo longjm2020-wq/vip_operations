@@ -92,6 +92,16 @@ async function fixture(html: string, download = originalCsv) {
 }
 
 describe("Compass official browser reports", () => {
+  it("waits for the supplier reading countdown before closing its ordinary announcement", async () => {
+    const page = await fixture('<div class="vis-notice-force-read-dialog"><div class="el-dialog" role="dialog"><h2>本页面有1条关联的公告</h2><p>阅读倒计时1秒</p><button disabled onclick="document.querySelector(\'.vis-notice-force-read-dialog\').remove()">关闭</button></div></div><a href="https://compass.vip.com/fixture-reports">魔方罗盘</a><script>setTimeout(()=>document.querySelector(\'button\').disabled=false,800)</script>');
+    await page.context().route("https://compass.vip.com/fixture-reports", route => route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", body: reportPage() }));
+    expect(await checkCompassLogin(page, { load: false })).toMatchObject({ verified: true, reason: "READY" });
+  }, 15000);
+  it("dismisses the read-only restock metrics reminder with its normal acknowledgement, without granting authorization", async () => {
+    const page = await fixture(`${reportPage()}<div class="el-dialog" role="dialog"><h2>重要提醒</h2><input readonly value="synthetic brand"><p>用户授权抢货/订阅提醒待补货提醒（补货可挽回业绩）</p><p>断货商品数 69 授权待补货商品数 4 订阅待补货商品数 17</p><button onclick="this.closest('.el-dialog').remove()">已知悉</button></div>`);
+    expect(await checkCompassLogin(page, { load: false })).toMatchObject({ verified: true, reason: "READY" });
+    expect(await page.getByRole("button", { name: "已知悉", exact: true }).count()).toBe(0);
+  }, 10000);
   it("closes an ordinary supplier announcement using its visible close button before following the report link", async () => {
     const page = await fixture('<div class="vis-notice-force-read-dialog"><div class="el-dialog" role="dialog"><h2>本页面有7条关联的公告</h2><p>全国物流仓储及云仓服务助力品牌发展</p><button onclick="document.querySelector(\'.vis-notice-force-read-dialog\').remove()">关闭</button><button onclick="throw Error(\'must not acknowledge\')">查看详情即不再弹窗提醒</button></div><div style="position:fixed;inset:0;z-index:99" aria-label="floating ordinary announcement"></div></div><a href="https://compass.vip.com/fixture-reports">魔方罗盘</a>');
     await page.context().route("https://compass.vip.com/fixture-reports", route => route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", body: reportPage() }));

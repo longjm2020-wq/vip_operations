@@ -220,7 +220,7 @@ async function importantNotice(page: Page, signal?: AbortSignal) {
       const text = (await announcement.innerText()).replace(/\s+/g, "");
       if (/协议|条款|隐私|授权|同意|承诺|签约|签署|签订|接受|免责声明|验证码|安全验证|人机验证|支付|付款|订购|购买|收费|开通/.test(text) || await announcement.locator('input,textarea,select,[contenteditable="true"]').count()) return "REQUIRES_USER";
       const close = announcement.getByRole("button", { name: "关闭", exact: true }).filter({ visible: true }).first();
-      if (!(await close.count()) || !(await close.isEnabled())) continue;
+      if (!(await close.count()) || !(await close.isEnabled())) return "WAITING";
       cancelled(signal);
       // A separate floating announcement can overlap the footer. Use the
       // enabled button's ordinary keyboard activation instead of coordinates.
@@ -232,12 +232,15 @@ async function importantNotice(page: Page, signal?: AbortSignal) {
     for (let index = 0; index < Math.min(await dialogs.count(), 20); index++) {
       const dialog = dialogs.nth(index);
       if (!(await dialog.getByText("重要提醒", { exact: true }).filter({ visible: true }).count())) continue;
-      const ack = dialog.getByText("已知晓", { exact: true }).filter({ visible: true }).first();
+      const ack = dialog.getByText(/^(?:已知晓|已知悉)$/).filter({ visible: true }).first();
       if (!(await ack.count())) continue;
       const text = (await dialog.innerText()).replace(/\s+/g, "");
-      if (text.length > 4000 || /协议|条款|隐私|授权|同意|承诺|签约|签署|签订|接受|免责声明|责任|验证码|安全验证|人机验证|支付|付款|订购|购买|费用|收费|开通/.test(text) || await dialog.locator('input,textarea,select,[contenteditable="true"]').count()) return "REQUIRES_USER";
+      const restockMetrics = text.includes("用户授权抢货/订阅提醒待补货提醒") && text.includes("断货商品数") && text.includes("授权待补货商品数") && text.includes("订阅待补货商品数");
+      const checkedText = restockMetrics ? text.replaceAll("用户授权抢货/订阅提醒待补货提醒", "").replaceAll("授权待补货商品数", "") : text;
+      const editable = restockMetrics ? 'input:not([readonly]):not([disabled]),textarea:not([readonly]):not([disabled]),select:not([disabled]),[contenteditable="true"]' : 'input,textarea,select,[contenteditable="true"]';
+      if (text.length > 4000 || /协议|条款|隐私|授权|同意|承诺|签约|签署|签订|接受|免责声明|责任|验证码|安全验证|人机验证|支付|付款|订购|购买|费用|收费|开通/.test(checkedText) || await dialog.locator(editable).count()) return "REQUIRES_USER";
       cancelled(signal);
-      await ack.click({ timeout: 2000 });
+      await ack.press("Enter", { timeout: 2000 });
       await pause(150, signal);
       return "DISMISSED";
     }
@@ -246,6 +249,7 @@ async function importantNotice(page: Page, signal?: AbortSignal) {
 }
 async function settledState(page: Page, signal?: AbortSignal): Promise<CompassLoginCheck> {
   const deadline = Date.now() + ssoSettleMs;
+  let announcementDeadline: number | undefined;
   let last: CompassLoginCheck;
   while (true) {
     cancelled(signal);
@@ -254,6 +258,12 @@ async function settledState(page: Page, signal?: AbortSignal): Promise<CompassLo
       if (last.reason === "HUMAN_VERIFICATION") return last;
       const notice = await importantNotice(page, signal);
       if (notice === "REQUIRES_USER") return { verified: false, reason: "HUMAN_VERIFICATION", note: "罗盘的重要提醒需本人确认，请在服务器画面处理后重新核验" };
+      if (notice === "WAITING") {
+        announcementDeadline ??= Date.now() + 60000;
+        if (Date.now() >= announcementDeadline) return { verified: false, reason: "UNKNOWN_PAGE", note: "供应商公告仍不可关闭，请等待平台倒计时完成后重新核验" };
+        await pause(500, signal);
+        continue;
+      }
       if (notice === "DISMISSED") last = await currentState(page);
       // A visible passport iframe can be a transient SSO handoff. Its
       // disappearance never proves login; only the actual catalogue can.
