@@ -2,7 +2,7 @@ import { selectionScope, selectionUrl } from "../../../../../packages/database/s
 import { archiveSelectionPermissions, tableSelectionPermissions } from "../../../../../packages/contracts/src/table-permissions.js";
 import { isArchive } from "./archive.js";
 import { restoreProtectedImageColorLinks } from "./image-colors.js";
-import { tableAccess } from "../projects/library.js";
+import { canManageContent, effectiveContentAccess, tableAccess } from "../projects/library.js";
 import { assertTextPatch, lockTextDefinitions, textLimitDefinitions } from "./text-limits.js";
 import { readableSelectionCreatedAt, selectionCreatedAtSql, selectionCreatedAtText } from "./creation-time.js";
 import type { SelectionField } from "../../../../../packages/contracts/src/selection-layout.js";
@@ -456,11 +456,43 @@ export async function readSettings(c: Context) {
 export async function users(c: Context) {
   if (!protectionAdmin(c.actor))
     fail("FORBIDDEN", "只有管理员可设置用户区域权限", 403);
-  return rows(
-    db,
-    "SELECT DISTINCT u.id,u.username,u.display_name FROM users u JOIN user_roles ur ON ur.user_id=u.id JOIN role_permissions rp ON rp.role_id=ur.role_id JOIN permissions p ON p.id=rp.permission_id WHERE u.status='ACTIVE' AND p.code=$1 ORDER BY u.id",
-    await isArchive(db) ? "product.read" : selectionScope.getStore() ? "project.read" : "selection.read",
-  );
+  return db.$transaction(async tx => {
+    const tableId = selectionScope.getStore();
+    const table = tableId ? await tableAccess(tx, undefined, tableId) : undefined;
+    const archive = await isArchive(tx);
+    const readPermission = archive ? "product.read" : tableId ? "project.read" : "selection.read";
+    const candidates = await rows(tx, `SELECT u.id,u.username,u.display_name,
+      ARRAY(SELECT DISTINCT p.code FROM public.user_roles ur JOIN public.role_permissions rp ON rp.role_id=ur.role_id JOIN public.permissions p ON p.id=rp.permission_id WHERE ur.user_id=u.id) AS permissions,
+      ARRAY(SELECT r.code FROM public.user_roles ur JOIN public.roles r ON r.id=ur.role_id WHERE ur.user_id=u.id) AS role_codes,
+      (EXISTS(SELECT 1 FROM public.project_library_acl a WHERE a.user_id=u.id AND a.access IN ('READ','EDIT')) OR
+       EXISTS(SELECT 1 FROM public.project_tables t WHERE t.created_by=u.id AND t.system_key IS NULL) OR
+       EXISTS(SELECT 1 FROM public.project_sops s WHERE s.owner_id=u.id) OR
+       EXISTS(SELECT 1 FROM public.projects p WHERE p.owner_id=u.id)) AS inherited_project_read
+      FROM public.users u WHERE u.status='ACTIVE' ORDER BY u.id`);
+    const result: Row[] = [];
+    for (const person of candidates) {
+      const superAdmin = person.role_codes.includes("SUPER_ADMIN");
+      const permissions: string[] = [...person.permissions];
+      if (person.inherited_project_read && !permissions.includes("project.read")) permissions.push("project.read");
+      if (!superAdmin && !permissions.includes(readPermission)) continue;
+      const actor: Actor = {
+        id: String(person.id), username: person.username, displayName: person.display_name,
+        permissions, roleCodes: person.role_codes,
+      };
+      const contentAccess = table ? await effectiveContentAccess(tx, actor, "table", table) : "EDIT";
+      const moduleEdit = superAdmin || (archive ? permissions.includes("product.update") : tableId ? true : permissions.includes("selection.manage"));
+      const canEdit = moduleEdit && contentAccess === "EDIT";
+      result.push({
+        id: person.id, username: person.username, display_name: person.display_name,
+        can_edit: canEdit,
+        can_manage: table ? canManageContent(actor, "table", table) : protectionAdmin(actor),
+        edit_block_reason: canEdit ? null : !moduleEdit
+          ? archive ? "账号没有商品档案编辑权限" : "账号没有选款登记编辑权限"
+          : contentAccess === "DENY" ? "账号没有本表查看权限" : "账号只有本表查看权限",
+      });
+    }
+    return result;
+  }, { isolationLevel: "RepeatableRead" });
 }
 export async function saveSettings(c: Context, input: unknown) {
   if (!protectionAdmin(c.actor))

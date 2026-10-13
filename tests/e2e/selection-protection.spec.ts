@@ -336,6 +336,62 @@ test("administrator configures a selected region, named-user access and independ
   await page.getByLabel("开启区域权限", { exact: true }).click();
   expect((await enable).postDataJSON().settings.enabled).toBe(true);
 });
+
+for (const scenario of [
+  { name: "whole sheet default read permits a named local edit grant", others: "read", warning: null },
+  { name: "explicit whole sheet read is explained as an overlapping edit blocker", others: "read", explicitRead: true, warning: "与“整表保护”重叠的部分仍不能编辑" },
+  { name: "whole sheet deny is explained as an overlapping edit blocker", others: "deny", warning: "与“整表保护”重叠的部分仍不能编辑" },
+  { name: "module edit cap is explained without discarding a configured grant", others: "read", moduleReadOnly: true, warning: "没有选款登记编辑权限" },
+] as const) {
+  test(scenario.name, async ({ page }) => {
+    await page.route("**/api/v1/style-selections/protection/users", (route) =>
+      route.fulfill({ json: { data: [
+        { id: "1", displayName: "管理员", username: "admin", canEdit: true, canManage: true, editBlockReason: null },
+        { id: "2", displayName: "采购", username: "buyer", canEdit: !("moduleReadOnly" in scenario), canManage: false,
+          editBlockReason: "moduleReadOnly" in scenario ? "没有选款登记编辑权限" : null },
+      ] } }),
+    );
+    const local = {
+      id: "123e4567-e89b-42d3-a456-426614174000",
+      name: "局部指定编辑",
+      scope: "cells" as const,
+      rowIds: ["1"],
+      columnKeys: ["material"],
+      users: { "1": "edit" as const, "2": "edit" as const },
+      others: "read" as const,
+    };
+    await mockProtection(page, {
+      ...defaultProtection, enabled: true,
+      regions: [
+        { ...local, id: "123e4567-e89b-42d3-a456-426614174001", name: "整表保护", scope: "sheet", rowIds: [], columnKeys: [],
+          users: { "1": "edit", ...("explicitRead" in scenario ? { "2": "read" as const } : {}) }, others: scenario.others },
+        local,
+      ],
+    });
+    await page.reload();
+    await page.getByRole("button", { name: "保护区域", exact: true }).click();
+    await page.getByRole("menuitem", { name: "区域权限", exact: true }).click();
+    await expect(page.getByText("采购（buyer）：", { exact: false }).first()).toBeVisible();
+    if (scenario.warning) {
+      await expect(page.getByText(new RegExp(scenario.warning))).toBeVisible();
+    } else {
+      await expect(page.getByText("指定编辑仍受限制", { exact: true })).toHaveCount(0);
+    }
+    await page.getByRole("button", { name: "编辑局部指定编辑", exact: true }).click();
+    const dialog = page.getByRole("dialog", { name: "设置保护区域", exact: true });
+    await expect(dialog).toContainText("局部指定编辑可覆盖整表的“其他人仅查看”");
+    await expect(dialog.getByRole("button", { name: "确定", exact: true })).toBeEnabled();
+    if (scenario.warning) {
+      await expect(dialog).toContainText(scenario.warning);
+    } else {
+      await expect(dialog.getByText("指定编辑仍受限制", { exact: true })).toHaveCount(0);
+    }
+    const saving = protectionSave(page);
+    await dialog.getByRole("button", { name: "确定", exact: true }).click();
+    expect((await saving).postDataJSON().settings.regions.find((region: { id: string }) => region.id === local.id).users["2"]).toBe("edit");
+  });
+}
+
 test("scoped content hiding preserves access regions and disables after deleting its last area", async ({
   page,
 }) => {

@@ -149,15 +149,30 @@ export function selectionCellAccess(
   if (!actor.permissions.includes("selection.read")) return "deny";
   let level = actor.permissions.includes("selection.manage") ? 2 : 1;
   if (protectionAdmin(actor)) return level === 2 ? "edit" : "read";
-  if (settings.enabled)
-    for (const region of settings.regions)
-      if (regionMatches(region, String(row.id || ""), key))
-        level = Math.min(
-          level,
-          { edit: 2, read: 1, deny: 0 }[
-            region.users[actor.id] || region.others
-          ],
-        );
+  if (settings.enabled) {
+    const matched = settings.regions.filter((region) =>
+      regionMatches(region, String(row.id || ""), key),
+    );
+    const hasLocalEditGrant = matched.some((region) =>
+      region.scope !== "sheet" && region.users[actor.id] === "edit",
+    );
+    for (const region of matched) {
+      // A named local editor is an exception to a sheet's default read access.
+      // Explicit sheet grants and every other overlapping restriction still apply.
+      if (
+        hasLocalEditGrant &&
+        region.scope === "sheet" &&
+        !Object.hasOwn(region.users, actor.id) &&
+        region.others === "read"
+      ) continue;
+      level = Math.min(
+        level,
+        { edit: 2, read: 1, deny: 0 }[
+          region.users[actor.id] || region.others
+        ],
+      );
+    }
+  }
   if (
     settings.autoHide &&
     settings.autoHideRegions.some((region) => regionMatches(region, String(row.id || ""), key)) &&

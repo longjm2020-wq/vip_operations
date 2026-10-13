@@ -56,6 +56,10 @@ export function useSelectionRealtime(
                     { queryKey: ["selection-protection"] },
                     { cancelRefetch: false },
                   ),
+                  client.invalidateQueries(
+                    { queryKey: ["selection-protection-users"] },
+                    { cancelRefetch: false },
+                  ),
                   rootQueryClient.invalidateQueries(
                     { queryKey: ["me"] },
                     { cancelRefetch: false },

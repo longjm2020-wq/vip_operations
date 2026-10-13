@@ -61,6 +61,15 @@ async function user(username: string) {
   );
   return makeContext(String(value!.id), ["BUYER"]);
 }
+async function capabilityUser(username: string, permissions: string[]) {
+  const context = await user(username);
+  const roleCode = "PROTECTION_TEST_" + context.actor.id;
+  const role = await one(db, "INSERT INTO roles(code,name) VALUES($1,$1) RETURNING id", roleCode);
+  await rows(db, "DELETE FROM user_roles WHERE user_id=$1::bigint", context.actor.id);
+  await rows(db, "INSERT INTO user_roles(user_id,role_id) VALUES($1::bigint,$2::bigint)", context.actor.id, role!.id);
+  await rows(db, "INSERT INTO role_permissions(role_id,permission_id) SELECT $1::bigint,id FROM permissions WHERE code=ANY($2::text[])", role!.id, permissions);
+  return { ...context, actor: { ...context.actor, permissions, roleCodes: [roleCode] } };
+}
 const a = await user("protection-a"),
   b = await user("protection-b");
 const fresh = (c: Context) => ({ ...c, key: randomUUID() });
@@ -102,6 +111,46 @@ try {
   });
   await settings(defaultProtection);
   check("legacy enabled / disabled policies migrate in every workspace and future tables start with no auto-hide area");
+  const moduleReader = await capabilityUser("protection-module-reader", ["selection.read"]);
+  const moduleEditor = await capabilityUser("protection-module-editor", ["selection.read", "selection.manage"]);
+  const defaultUsers = await p.users(admin);
+  assert.equal(defaultUsers.find(person => String(person.id) === moduleReader.actor.id)!.can_edit, false);
+  assert.equal(defaultUsers.find(person => String(person.id) === moduleReader.actor.id)!.edit_block_reason, "账号没有选款登记编辑权限");
+  assert.equal(defaultUsers.find(person => String(person.id) === moduleEditor.actor.id)!.can_edit, true);
+  assert.equal(defaultUsers.find(person => String(person.id) === moduleEditor.actor.id)!.edit_block_reason, null);
+  await forbidden(() => p.users(moduleEditor));
+  check("protection user options distinguish actual default-module read and edit rights");
+  const projectReader = await capabilityUser("protection-project-reader", ["project.read"]);
+  const projectEditor = await capabilityUser("protection-project-editor", ["project.read"]);
+  const projectDenied = await capabilityUser("protection-project-denied", ["project.read"]);
+  const inheritedEditor = await capabilityUser("protection-project-inherited", []);
+  for (const [person, access] of [[projectReader, "READ"], [projectEditor, "EDIT"], [projectDenied, "DENY"], [inheritedEditor, "EDIT"]] as const)
+    await rows(db, "INSERT INTO public.project_library_acl(kind,resource_id,user_id,access,created_by) VALUES('table',$1::bigint,$2::bigint,$3,$4::bigint)", futureTable!.id, person.actor.id, access, admin.actor.id);
+  await selectionScope.run(String(futureTable!.id), async () => {
+    const options = await p.users(admin);
+    const option = (context: Context) => options.find(person => String(person.id) === context.actor.id)!;
+    assert.equal(option(projectReader).can_edit, false);
+    assert.equal(option(projectReader).edit_block_reason, "账号只有本表查看权限");
+    assert.equal(option(projectEditor).can_edit, true);
+    assert.equal(option(projectEditor).can_manage, false);
+    assert.equal(option(projectDenied).can_edit, false);
+    assert.equal(option(projectDenied).edit_block_reason, "账号没有本表查看权限");
+    assert.equal(option(inheritedEditor).can_edit, true);
+  });
+  check("protection user options honor project-table READ / EDIT / DENY and inherited table grants");
+  const archiveReader = await capabilityUser("protection-archive-reader", ["product.read"]);
+  const archiveEditor = await capabilityUser("protection-archive-editor", ["product.read", "product.update"]);
+  const archiveTable = await one(db, "INSERT INTO project_tables(name,created_by,system_key) VALUES('protection-archive',$1::bigint,'PRODUCT_ARCHIVE') RETURNING id", admin.actor.id);
+  await rows(db, "SELECT create_project_table_workspace($1::bigint)::text", archiveTable!.id);
+  // An explicit table EDIT grant must not create the missing product.update permission.
+  await rows(db, "INSERT INTO public.project_library_acl(kind,resource_id,user_id,access,created_by) VALUES('table',$1::bigint,$2::bigint,'EDIT',$3::bigint)", archiveTable!.id, archiveReader.actor.id, admin.actor.id);
+  await selectionScope.run(String(archiveTable!.id), async () => {
+    const options = await p.users(admin);
+    assert.equal(options.find(person => String(person.id) === archiveReader.actor.id)!.can_edit, false);
+    assert.equal(options.find(person => String(person.id) === archiveReader.actor.id)!.edit_block_reason, "账号没有商品档案编辑权限");
+    assert.equal(options.find(person => String(person.id) === archiveEditor.actor.id)!.can_edit, true);
+  });
+  check("protection user options cap archive table grants by product.update");
   for (const key of ["custom:secret","custom:public"])
     await rows(db,"INSERT INTO public.selection_field_registry(workspace_key,field_key,visibility,definition) VALUES('default',$1,'PUBLIC',$2::jsonb)",key,JSON.stringify({key,label:key,width:120,custom:true,type:"text"}));
   const image = (
@@ -125,6 +174,41 @@ try {
   const second = camel(
     await s.write(fresh(admin), { xutiStyleNo: "PROTECTED-2", color: "白" }),
   );
+  const privateKey = "custom:local-private";
+  await rows(db, "INSERT INTO public.selection_field_registry(workspace_key,field_key,owner_id,visibility,definition) VALUES('default',$1,$2::bigint,'PRIVATE',$3::jsonb)", privateKey, a.actor.id, JSON.stringify({ key: privateKey, label: "Private local", width: 120, custom: true, type: "text" }));
+  const localRow = await s.write(fresh(a), {
+    xutiStyleNo: "LOCAL-EDIT-EXCEPTION", color: "白", material: "outside-local",
+    images: [{ id: "local-photo", url: image, color: "白" }],
+    extraFields: { "custom:public": "local-before", [privateKey]: "private-before" },
+  });
+  const sheetDefaultRead = { id: randomUUID(), name: "Whole sheet default read", scope: "sheet", rowIds: [], columnKeys: [], users: { [admin.actor.id]: "edit" }, others: "read" };
+  const localEdit = { id: randomUUID(), name: "Named local editor", scope: "cells", rowIds: [localRow.id], columnKeys: ["images", "custom:public", privateKey], users: { [b.actor.id]: "edit" }, others: "read" };
+  await settings({ ...defaultProtection, enabled: true, regions: [sheetDefaultRead, localEdit] });
+  const localProjection = await s.photoDetail(b, localRow.id);
+  assert.equal(localProjection.cellAccess.images, "edit");
+  assert.equal(localProjection.cellAccess["custom:public"], "edit");
+  assert.equal(localProjection.cellAccess.material, "read");
+  assert.ok(!Object.hasOwn(localProjection.extraFields, privateKey));
+  assert.ok(!Object.hasOwn(localProjection.cellAccess, privateKey));
+  await s.write(fresh(b), { extraFields: { "custom:public": "local-after" } }, localRow.id);
+  await s.changePhoto(fresh(b), localRow.id, { action: "remove", imageId: "local-photo" });
+  assert.deepEqual((await s.photoDetail(b, localRow.id)).images, []);
+  await s.changePhoto(fresh(b), localRow.id, { action: "add", image: { id: "local-photo-added", url: image, color: "白" } });
+  assert.equal((await s.photoDetail(b, localRow.id)).images[0].id, "local-photo-added");
+  assert.equal((await s.photoDetail(b, localRow.id)).extraFields["custom:public"], "local-after");
+  await forbidden(() => s.write(fresh(b), { material: "outside-bypass" }, localRow.id));
+  await forbidden(() => s.write(fresh(b), { extraFields: { "custom:public": "other-row-bypass" } }, first.id));
+  await forbidden(() => s.write(fresh(a), { extraFields: { "custom:public": "not-designated" } }, localRow.id));
+  await forbidden(() => s.write(fresh(b), { extraFields: { [privateKey]: "private-bypass" } }, localRow.id));
+  await settings({ ...defaultProtection, enabled: true, regions: [sheetDefaultRead, localEdit,
+    { ...localEdit, id: randomUUID(), columnKeys: ["images"], users: {}, others: "deny" },
+  ] });
+  assert.equal((await s.photoDetail(b, localRow.id)).cellAccess.images, "deny");
+  assert.deepEqual((await s.photoDetail(b, localRow.id)).images, []);
+  await forbidden(() => s.changePhoto(fresh(b), localRow.id, { action: "remove", imageId: "local-photo-added" }));
+  await settings(defaultProtection);
+  await s.remove(fresh(admin), localRow.id);
+  check("named local edit overrides only whole-sheet default read for real image and custom-field writes; outside / unnamed / DENY / private-field restrictions remain");
   const cachedContext = fresh(b),
     cacheBody = { supplierCode: "before-protection" };
   await s.write(cachedContext, cacheBody, first.id);
@@ -186,6 +270,7 @@ try {
   await forbidden(() =>
     s.previewImport(b, {
       rows: [{ xutiStyleNo: "PROTECTED-1", material: "bypass" }],
+      existingStrategy: "OVERWRITE",
     }),
   );
   await s.write(

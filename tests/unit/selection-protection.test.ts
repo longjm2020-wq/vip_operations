@@ -5,6 +5,7 @@ import {
   selectionProtectionSchema,
   normalizeSelectionProtection,
   legacyAutoHideRegion,
+  type ProtectionRegion,
   type SelectionProtection,
 } from "../../packages/contracts/src/selection-protection.js";
 import {
@@ -26,6 +27,16 @@ const rule = {
   columnKeys: ["supplyPriceExclTax"],
   users: { "2": "edit" as const },
   others: "deny" as const,
+};
+const sheetReadRule: ProtectionRegion = {
+  ...rule,
+  id: "123e4567-e89b-42d3-a456-426614174002",
+  name: "整表默认只读",
+  scope: "sheet",
+  rowIds: [],
+  columnKeys: [],
+  users: { "1": "edit" },
+  others: "read",
 };
 describe("selection protection policy", () => {
   it("limits grants to module rights and uses the strongest overlapping region", () => {
@@ -70,6 +81,65 @@ describe("selection protection policy", () => {
         "supplyPriceExclTax",
       ),
     ).toBe("edit");
+  });
+  it.each(["cells", "rows", "columns"] as const)(
+    "allows a named %s editor within default-read sheets regardless of region order",
+    (scope) => {
+      const local: ProtectionRegion = { ...rule, scope };
+      const sheets: ProtectionRegion[] = [
+        sheetReadRule,
+        { ...sheetReadRule, id: "123e4567-e89b-42d3-a456-426614174003" },
+      ];
+      for (const regions of [[...sheets, local], [local, ...sheets]]) {
+        const settings: SelectionProtection = { ...defaultProtection, enabled: true, regions };
+        expect(selectionCellAccess(settings, actor, row, "supplyPriceExclTax")).toBe("edit");
+        const outsideRow = scope === "columns" ? row : { ...row, id: "11" };
+        const outsideKey = scope === "columns" ? "material" : "supplyPriceExclTax";
+        expect(selectionCellAccess(settings, actor, outsideRow, outsideKey)).toBe("read");
+        if (scope === "cells")
+          expect(selectionCellAccess(settings, actor, row, "material")).toBe("read");
+        expect(selectionCellAccess(settings, { ...actor, id: "3" }, row, "supplyPriceExclTax")).toBe("deny");
+      }
+    },
+  );
+  it("keeps sheet restrictions explicitly set for the user and every deny restriction", () => {
+    const settings: SelectionProtection = { ...defaultProtection, enabled: true, regions: [sheetReadRule, rule] };
+    for (const access of ["read", "deny"] as const) {
+      expect(selectionCellAccess({ ...settings, regions: [
+        { ...sheetReadRule, users: { "2": access } }, rule,
+      ] }, actor, row, "supplyPriceExclTax")).toBe(access);
+    }
+    expect(selectionCellAccess({ ...settings, regions: [
+      { ...sheetReadRule, others: "deny" }, rule,
+    ] }, actor, row, "supplyPriceExclTax")).toBe("deny");
+    expect(selectionCellAccess({ ...settings, regions: [
+      sheetReadRule, rule,
+      { ...rule, id: "123e4567-e89b-42d3-a456-426614174004", scope: "rows", users: {}, others: "deny" },
+    ] }, actor, row, "supplyPriceExclTax")).toBe("deny");
+  });
+  it("keeps local overlapping read restrictions and requires a named local edit grant", () => {
+    const settings: SelectionProtection = { ...defaultProtection, enabled: true, regions: [sheetReadRule, rule] };
+    const userRestrictions: ProtectionRegion["users"][] = [{ "2": "read" }, {}];
+    for (const users of userRestrictions) {
+      expect(selectionCellAccess({ ...settings, regions: [
+        sheetReadRule, rule,
+        { ...rule, id: "123e4567-e89b-42d3-a456-426614174004", scope: "columns", users, others: "read" },
+      ] }, actor, row, "supplyPriceExclTax")).toBe("read");
+    }
+    expect(selectionCellAccess({ ...settings, regions: [
+      sheetReadRule, { ...rule, users: {}, others: "edit" },
+    ] }, actor, row, "supplyPriceExclTax")).toBe("read");
+  });
+  it("caps local exceptions by module rights, automatic hiding and another user's claim", () => {
+    const settings: SelectionProtection = { ...defaultProtection, enabled: true, regions: [sheetReadRule, rule] };
+    expect(selectionCellAccess(settings, { ...actor, permissions: ["selection.read"] }, row, "supplyPriceExclTax")).toBe("read");
+    expect(selectionCellAccess(settings, { ...actor, permissions: ["selection.manage"] }, row, "supplyPriceExclTax")).toBe("deny");
+    expect(selectionCellAccess({ ...settings, claimsEnabled: true }, actor, { ...row, claimedBy: "3" }, "supplyPriceExclTax")).toBe("read");
+    expect(selectionCellAccess({ ...settings, claimsEnabled: true }, actor, { ...row, claimedBy: "2" }, "supplyPriceExclTax")).toBe("edit");
+    const hiddenSettings = { ...settings, autoHide: true, autoHideRegions: [legacyAutoHideRegion] };
+    expect(selectionCellAccess(hiddenSettings, actor, row, "supplyPriceExclTax")).toBe("deny");
+    expect(selectionCellAccess(hiddenSettings, actor, row, "supplyPriceExclTax", false)).toBe("edit");
+    expect(selectionCellAccess({ ...hiddenSettings, hiddenReaders: [actor.id] }, actor, row, "supplyPriceExclTax")).toBe("edit");
   });
   it("follows stable IDs, including future rows under column and sheet rules", () => {
     const settings = {

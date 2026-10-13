@@ -33,6 +33,10 @@ import {
   type SelectionProtection,
   type SelectionAccess,
 } from "../../../packages/contracts/src/selection-protection";
+import {
+  protectionEditWarnings,
+  type ProtectionUserCapability,
+} from "./selection-protection-warnings";
 
 const accessOptions = [
   { value: "edit", label: "可编辑" },
@@ -103,6 +107,37 @@ export function SelectionProtectionControl({
       `${person.displayName}（${person.username}）`,
     ]),
   );
+  const editWarnings = (item: ProtectionRegion) => {
+    const warnings = protectionEditWarnings(
+      item,
+      draft,
+      (users.data?.data || []) as ProtectionUserCapability[],
+    );
+    if (!warnings.length) return null;
+    return (
+      <Alert
+        type="warning"
+        showIcon
+        title={draft.enabled ? "指定编辑仍受限制" : "开启区域权限后，指定编辑仍受限制"}
+        description={
+          <ul style={{ margin: "8px 0 0", paddingLeft: 18 }}>
+            {warnings.map((warning) => (
+              <li key={warning.userId}>
+                {names.get(warning.userId) || `用户 ${warning.userId}`}：
+                {[
+                  warning.moduleReason,
+                  warning.overlappingRegions.length
+                    ? `与“${warning.overlappingRegions.join("”、“")}”重叠的部分仍不能编辑`
+                    : undefined,
+                ].filter(Boolean).join("；")}。
+              </li>
+            ))}
+          </ul>
+        }
+        style={{ marginTop: 12 }}
+      />
+    );
+  };
   const show = (key: string) => {
     setTab(key);
     setOpen(true);
@@ -291,7 +326,7 @@ export function SelectionProtectionControl({
                     />
                   </Space>
                   <Typography.Text type="secondary">
-                    可以保护选中单元格、整行、整列或当前工作表。重叠区域采用更严格的权限。
+                    可以保护选中单元格、整行、整列或当前工作表。局部区域的指定人可编辑可覆盖整表的“其他人仅查看”；整表指定权限、禁止查看及其他重叠限制仍生效。
                   </Typography.Text>
                   {admin &&
                     draft.regions.map((item) => (
@@ -347,6 +382,7 @@ export function SelectionProtectionControl({
                             }
                           </div>
                         ))}
+                        {editWarnings(item)}
                       </Card>
                     ))}
                   {admin && (
@@ -777,8 +813,12 @@ export function SelectionProtectionControl({
             </Space>
             <Alert
               type="info"
-              title="区域权限开启后生效。管理员始终可查看、编辑和管理；区域授权不能超过用户本身的模块权限。"
+              title="保存并开启区域权限后生效。局部指定编辑可覆盖整表的“其他人仅查看”，其余重叠限制仍采用更严格的权限。"
+              description="本表保护管理者不受区域规则限制；内容编辑仍须具有本表编辑权限。私有字段、内容自动隐藏、他人认领和迁移锁定仍各自校验。"
             />
+            {editWarnings(onlyMe
+              ? { ...region, users: { [String(user.id)]: "edit" } }
+              : region)}
           </Space>
         )}
       </Modal>
