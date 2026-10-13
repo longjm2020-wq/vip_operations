@@ -318,6 +318,8 @@ export async function processCompassUpdate(browserLaunch: () => Promise<Browser>
   if (!job) return;
   let browser: Browser | undefined;
   const files: Awaited<ReturnType<typeof downloadCompassReports>> = [];
+  let diagnosticContext: BrowserContext | undefined, diagnosticPage: Page | undefined;
+  let updateStage = "OPEN_REPORTS";
   let sessionVersion: number | undefined;
   const close = () => void browser?.close().catch(() => {});
   const timer = setTimeout(close, Math.max(1, Number(job.deadline_ms) - Date.now()));
@@ -344,16 +346,21 @@ export async function processCompassUpdate(browserLaunch: () => Promise<Browser>
     catch { throw new CompassBrowserError("LOGIN_REQUIRED", "已保存的罗盘会话无法读取，请重新扫码"); }
     browser = await browserLaunch();
     const context = await browser.newContext({ locale: "zh-CN", timezoneId: "Asia/Shanghai", viewport: compassBrowserViewport, acceptDownloads: true, storageState: compassPlaywrightState(storageState) });
+    diagnosticContext = context;
     await restoreCompassBrowserState(context, storageState);
     const entry = await context.newPage(); await configureCompassPage(entry);
+    diagnosticPage = entry;
     const page = await openCompassReports(entry, signal);
+    diagnosticPage = page;
     const missing = compassDimensions.filter(dimension => !existing.completedDimensions.includes(dimension));
     for (const dimension of missing) {
+      updateStage = "DOWNLOAD";
       let downloaded = await downloadCompassReports(page, [dimension], start, end, progress, signal);
       files.push(...downloaded);
       let file = downloaded[0];
       if (downloaded.length !== 1 || file?.dimension !== dimension) throw Error("未取得任务对应的单维度原始报表");
       await progress(`正在校验${compassLabels[dimension]}原始报表`);
+      updateStage = "PARSE";
       let parsed: Awaited<ReturnType<typeof readCompassDownload>>;
       try { parsed = await readCompassDownload(file, start, end); }
       catch (error) {
@@ -368,6 +375,7 @@ export async function processCompassUpdate(browserLaunch: () => Promise<Browser>
         parsed = await readCompassDownload(file, start, end);
       }
       const { report, fileHash } = parsed;
+      updateStage = "IMPORT";
       const contextFor = async (key: string): Promise<Context> => ({ actor: await guard(), requestId: `compass-update-${job.id}`, key });
       const task = await beginImport(await contextFor(`cu-${job.id}-${file.dimension}-${fileHash}`), { dimension: report.dimension, fileName: file.fileName, fileHash, startDate: report.startDate, endDate: report.endDate, expectedRows: report.records.length, normalizationVersion: compassNormalizationVersion });
       if (task.status !== "COMPLETE") {
@@ -382,9 +390,14 @@ export async function processCompassUpdate(browserLaunch: () => Promise<Browser>
       await cleanupCompassDownloads(downloaded);
     }
     await guard();
+    updateStage = "FINALIZE";
     await db.$executeRawUnsafe("UPDATE compass_session SET encrypted_state=$1,checked_at=now(),note='' WHERE id=1 AND enabled AND status='READY' AND state_version=$2", encryptCompassState(await collectCompassBrowserState(context)), saved.state_version);
     await finishCompassUpdate(String(job.id), token);
   } catch (error) {
+    const message = error instanceof Error ? error.message : "";
+    const diagnostic = compassLoginDiagnostic(error, "VERIFY_LOGIN", diagnosticPage?.url() ?? "", diagnosticContext ? rejectedCompassHosts.get(diagnosticContext) : undefined);
+    const operation = /locator\.click/.test(message) ? "CLICK" : /locator\.innerText/.test(message) ? "VISIBLE_TEXT" : /getByRole/.test(message) ? "ROLE" : /download\.saveAs/.test(message) ? "SAVE_FILE" : /page\.(?:goto|reload)/.test(message) ? "NAVIGATE" : "OTHER";
+    console.warn(JSON.stringify({ event: "compass_update_failed", stage: updateStage, category: diagnostic.category, hostname: diagnostic.hostname, operation, intercepted: /intercepts pointer events/.test(message), ambiguous: /strict mode violation/.test(message), errorType: error instanceof Error && ["Error", "TypeError", "RangeError", "TimeoutError"].includes(error.name) ? error.name : "OTHER", pages: diagnosticPage ? await compassPageDiagnostics(diagnosticPage) : null, loads: diagnosticContext ? compassLoadDiagnostics(diagnosticContext) : null }));
     const code = error instanceof CompassBrowserError ? error.code : "FAILED";
     const needsLogin = code === "LOGIN_REQUIRED" || code === "HUMAN_VERIFICATION";
     const state = code === "HUMAN_VERIFICATION" ? "VERIFICATION_REQUIRED" : needsLogin ? "LOGIN_REQUIRED" : "FAILED";
