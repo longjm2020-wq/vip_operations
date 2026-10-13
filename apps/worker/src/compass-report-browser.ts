@@ -54,9 +54,9 @@ const reportName = (dimension: CompassDimension) =>
   new RegExp(
     `按${{ style: "款号", article: "货号", barcode: "条码" }[dimension]}\\s*[（(]?\\s*近\\s*30\\s*天\\s*[）)]?`,
   );
-const downloadAction = /^(?:立即)?下载(?:报表|文件|Excel|EXCEL)?$/;
+const downloadAction = /^\s*(?:立即)?下载(?:报表|文件|Excel|EXCEL)?\s*$/;
 const generateAction =
-  /^(?:生成(?:报表)?|申请(?:报表|下载)|导出(?:报表|Excel|EXCEL)?)$/;
+  /^\s*(?:生成(?:报表)?|申请(?:报表|下载)|导出(?:报表|Excel|EXCEL)?)\s*$/;
 const pendingReport = /正在生成|生成中|导出中|处理中|排队中|等待生成|准备中/;
 const failedReport = /生成失败|导出失败|下载失败|任务失败/;
 const humanChallenge =
