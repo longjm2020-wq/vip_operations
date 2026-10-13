@@ -137,7 +137,7 @@ async function visibleNavigation(page: Page, label: string): Promise<Locator | u
   const plain = await visibleText(page, label, true);
   if (plain) return plain;
   for (const frame of await visibleFrames(page)) {
-    for (const role of ["menuitem", "link", "button"]) {
+    for (const role of ["menuitem", "link", "button"] as const) {
       const controls = frame.getByRole(role).filter({ visible: true });
       for (let index = 0; index < Math.min(await controls.count(), 100); index++) {
         const control = controls.nth(index);
