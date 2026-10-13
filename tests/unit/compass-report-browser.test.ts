@@ -93,9 +93,9 @@ async function fixture(html: string, download = originalCsv) {
 
 describe("Compass official browser reports", () => {
   it("waits for asynchronously loaded download-centre rows instead of trying to generate an already prepared report", async () => {
-    const page = await fixture(reportPage().replace('<button>下载中心</button>', '<a href="https://compass.vip.com/fixture-download-center">下载中心</a>'));
+    const page = await fixture(reportPage().replace('<button>下载中心</button>', '<a href="https://compass.vip.com/fixture-download-center"><i>\ue602</i>下载中心</a>'));
     const href = await page.getByRole("link", { name: "下载", exact: true }).first().getAttribute("href");
-    const row = `<tr><td>${compassReportTitles.style}</td><td>${targetStart} — ${targetEnd}</td><td><a download href="${href}">下载</a></td></tr>`;
+    const row = `<tr><td><span title="我的报表_${compassReportTitles.style}_20260911-20261010.xlsx">我的报表_按款...</span></td><td>${targetStart} — ${targetEnd}</td><td><a download href="${href}">下载</a></td></tr>`;
     await page.context().route("https://compass.vip.com/fixture-download-center", route => route.fulfill({ status: 200, contentType: "text/html; charset=utf-8", body: `<button>自助报表</button><button>下载中心</button><table id="pending-rows"></table><script>setTimeout(()=>document.querySelector('table').innerHTML=${JSON.stringify(row)},850)</script>` }));
     const files = await downloadCompassReports(page, ["style"], targetStart, targetEnd, () => {}, undefined, { maxWaitMs: 5000 });
     expect(files).toHaveLength(1);

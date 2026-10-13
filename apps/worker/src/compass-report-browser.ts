@@ -132,6 +132,22 @@ async function reportCatalog(page: Page) {
     if (!(await visibleText(page, reportName(dimension)))) return false;
   return true;
 }
+/** Platform navigation includes icon-font glyphs alongside its visible caption. */
+async function visibleNavigation(page: Page, label: string): Promise<Locator | undefined> {
+  const plain = await visibleText(page, label, true);
+  if (plain) return plain;
+  for (const frame of await visibleFrames(page)) {
+    for (const role of ["menuitem", "link", "button"]) {
+      const controls = frame.getByRole(role).filter({ visible: true });
+      for (let index = 0; index < Math.min(await controls.count(), 100); index++) {
+        const control = controls.nth(index);
+        const caption = (await control.innerText()).replace(/[\uE000-\uF8FF\s]/g, "");
+        if (caption === label.replace(/\s/g, "")) return control;
+      }
+    }
+  }
+  return undefined;
+}
 /** Safe observability only: no URLs, storage keys/values, body text or names. */
 export async function compassPageDiagnostics(page: Page) {
   const observe = async () => {
@@ -389,7 +405,7 @@ export async function openCompassReports(
     ]) {
       const key = `${target.url()}|${label}`;
       if (clicked.has(key)) continue;
-      const control = await visibleText(target, label, true);
+      const control = await visibleNavigation(target, label);
       if (!control) continue;
       clicked.add(key);
       target = await clickNavigation(target, control, signal);
@@ -426,11 +442,20 @@ async function reportRows(
 ): Promise<Locator[]> {
   const result: Locator[] = [];
   for (const frame of await visibleFrames(page)) {
-    const names = frame
+    const textNames = frame
       .getByText(reportName(dimension))
       .filter({ visible: true });
-    for (let index = 0; index < Math.min(await names.count(), 30); index++) {
-      const name = names.nth(index);
+    const names = (await textNames.all()).slice(0, 30);
+    if (!names.length) {
+      // Download-centre cells can render an abbreviated filename while their
+      // visible hover tooltip still identifies the full original filename.
+      const titled = frame.locator("[title]").filter({ visible: true });
+      for (let index = 0; index < Math.min(await titled.count(), 200) && names.length < 30; index++) {
+        const node = titled.nth(index);
+        if (reportName(dimension).test(await node.getAttribute("title") ?? "")) names.push(node);
+      }
+    }
+    for (const name of names) {
       for (let depth = 1; depth <= 6; depth++) {
         const ancestor = name.locator(
           `xpath=${"../".repeat(depth).slice(0, -1)}`,
@@ -498,7 +523,7 @@ async function loadedReportRows(page: Page, dimension: CompassDimension, signal?
   }
 }
 async function menu(page: Page, label: string, signal?: AbortSignal) {
-  const control = await visibleText(page, label, true);
+  const control = await visibleNavigation(page, label);
   return control ? clickNavigation(page, control, signal) : page;
 }
 async function generateReport(
