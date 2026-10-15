@@ -189,7 +189,9 @@ test("filled-axis shortcuts include internal gaps and zero but stop before trail
   await fixture(page);
   await cell(page, 2, "xutiStyleNo").click();
   await page.keyboard.press("Control+Shift+ArrowDown");
-  await expect(page.locator('td[data-selection-column="xutiStyleNo"].selection-cell-active')).toHaveCount(15);
+  await expect(page.locator('td[data-selection-column="xutiStyleNo"].selection-cell-active')).toHaveCount(13);
+  await expect(cell(page, 0, "xutiStyleNo")).not.toHaveClass(/selection-cell-active/);
+  await expect(cell(page, 1, "xutiStyleNo")).not.toHaveClass(/selection-cell-active/);
   await expect(cell(page, 5, "xutiStyleNo")).toHaveClass(/selection-cell-active/);
   await expect(cell(page, 15, "xutiStyleNo")).not.toHaveClass(/selection-cell-active/);
   const copied = await page.locator(".selection-sheet table").evaluate(element => {
@@ -197,14 +199,24 @@ test("filled-axis shortcuts include internal gaps and zero but stop before trail
     element.dispatchEvent(new ClipboardEvent("copy", { bubbles: true, cancelable: true, clipboardData }));
     return clipboardData.getData("text/plain");
   });
-  expect(copied.split("\n")).toHaveLength(15);
-  expect(copied.split("\n")[5]).toBe("");
+  expect(copied.split("\n")).toHaveLength(13);
+  expect(copied.split("\n")[0]).toBe("SHORTCUT-2");
+  expect(copied.split("\n")[3]).toBe("");
   expect(copied.split("\n").at(-1)).toBe("SHORTCUT-14");
+  await page.keyboard.press("Control+Shift+ArrowUp");
+  await expect(page.locator('td[data-selection-column="xutiStyleNo"].selection-cell-active')).toHaveCount(3);
+  await expect(cell(page, 3, "xutiStyleNo")).not.toHaveClass(/selection-cell-active/);
   await cell(page, 0, "vipPrice").click();
   await page.keyboard.press("Control+Shift+ArrowUp");
+  await expect(page.locator('td[data-selection-column="vipPrice"].selection-cell-active')).toHaveCount(1);
+  await page.keyboard.press("Control+Shift+ArrowDown");
   await expect(page.locator('td[data-selection-column="vipPrice"].selection-cell-active')).toHaveCount(18);
   await expect(cell(page, 17, "vipPrice")).toHaveClass(/selection-cell-active/);
   await expect(cell(page, 18, "vipPrice")).not.toHaveClass(/selection-cell-active/);
+  await cell(page, 19, "vipPrice").click();
+  await page.keyboard.press("Control+Shift+ArrowUp");
+  await expect(page.locator('td[data-selection-column="vipPrice"].selection-cell-active')).toHaveCount(3);
+  await expect(cell(page, 16, "vipPrice")).not.toHaveClass(/selection-cell-active/);
   await cell(page, 0, "images").click({ position: { x: 2, y: 2 } });
   await page.keyboard.press("Control+Shift+ArrowDown");
   await expect(page.locator('td[data-selection-column="images"].selection-cell-active')).toHaveCount(4);
@@ -212,19 +224,47 @@ test("filled-axis shortcuts include internal gaps and zero but stop before trail
   await expect(page.locator('td[data-selection-column="xutiStyleNo"]')).toHaveCount(6);
   await cell(page, 21, "xutiStyleNo").click();
   await page.keyboard.press("Control+Shift+ArrowDown");
-  await expect(page.locator('td[data-selection-column="xutiStyleNo"].selection-cell-active')).toHaveCount(6);
+  await expect(page.locator('td[data-selection-column="xutiStyleNo"].selection-cell-active')).toHaveCount(5);
+  await expect(cell(page, 20, "xutiStyleNo")).not.toHaveClass(/selection-cell-active/);
+});
+
+test("filled-axis selection from a middle virtual row copies only its forward range for readonly users", async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem("style-selection-page-size-v1", "5000"));
+  await fixture(page, true, false, 260);
+  const sheet = page.locator(".selection-sheet");
+  await expect(sheet).toHaveAttribute("data-windowed", "true");
+  await sheet.evaluate(element => { element.scrollTop = 87 * 120; });
+  await cell(page, 87, "xutiStyleNo").click();
+  await page.keyboard.press("Control+Shift+ArrowDown");
+  const copied = await page.locator(".selection-sheet table").evaluate(element => {
+    const clipboardData = new DataTransfer();
+    element.dispatchEvent(new ClipboardEvent("copy", { bubbles: true, cancelable: true, clipboardData }));
+    return clipboardData.getData("text/plain");
+  });
+  expect(copied.split("\n")).toHaveLength(173);
+  expect(copied.split("\n")[0]).toBe("SHORTCUT-87");
+  expect(copied.split("\n").at(-1)).toBe("SHORTCUT-259");
+  expect(copied).not.toContain("SHORTCUT-86");
 });
 
 test("row shortcuts use visible fields, empty axes retain selection and text editing keeps native word selection", async ({ page }) => {
   await fixture(page);
   await cell(page, 3, "material").click();
   await page.keyboard.press("Control+Shift+ArrowRight");
-  await expect(page.locator("td.selection-cell-active")).toHaveCount(9);
-  await expect(cell(page, 3, "registrationBatch")).toHaveClass(/selection-cell-active/);
+  await expect(page.locator("td.selection-cell-active")).toHaveCount(1);
+  await expect(cell(page, 3, "registrationBatch")).not.toHaveClass(/selection-cell-active/);
   await expect(cell(page, 3, "material")).toHaveClass(/selection-cell-active/);
   await expect(cell(page, 3, "supplyPriceExclTax")).not.toHaveClass(/selection-cell-active/);
   await page.keyboard.press("Control+Shift+ArrowLeft");
-  await expect(page.locator("td.selection-cell-active")).toHaveCount(9);
+  await expect(page.locator("td.selection-cell-active")).toHaveCount(8);
+  await expect(cell(page, 3, "registrationBatch")).not.toHaveClass(/selection-cell-active/);
+  await cell(page, 3, "supplierStyleNo").click({ position: { x: 2, y: 2 } });
+  await page.keyboard.press("Control+Shift+ArrowRight");
+  await expect(page.locator("td.selection-cell-active")).toHaveCount(5);
+  await expect(cell(page, 3, "xutiStyleNo")).not.toHaveClass(/selection-cell-active/);
+  await page.keyboard.press("Control+Shift+ArrowLeft");
+  await expect(page.locator("td.selection-cell-active")).toHaveCount(4);
+  await expect(cell(page, 3, "material")).not.toHaveClass(/selection-cell-active/);
   await cell(page, 0, "custom:photos").click({ position: { x: 2, y: 2 } });
   await page.keyboard.press("Control+Shift+ArrowDown");
   await expect(page.locator("td.selection-cell-active")).toHaveCount(1);
@@ -305,7 +345,7 @@ test("readonly users can fix multiple columns from headers or cells, retain alig
     element.dispatchEvent(new ClipboardEvent("copy", { bubbles: true, cancelable: true, clipboardData }));
     return clipboardData.getData("text/plain");
   });
-  expect(copied.split("\t")[0]).toBe("Supplier words");
+  expect(copied).toBe("Cotton");
   await page.reload();
   await expect(page.locator('td[data-selection-column="xutiStyleNo"]')).toHaveCount(20);
   await expect(header("supplierStyleNo")).toHaveAttribute("data-fixed-column", "true");
@@ -607,7 +647,7 @@ test("field group tabs locate columns without pins and move groups after pins wh
     element.dispatchEvent(new ClipboardEvent("copy", { bubbles: true, cancelable: true, clipboardData }));
     return clipboardData.getData("text/plain");
   });
-  expect(copied.split("\t").slice(0, 5)).toEqual(["", "SHORTCUT-2", "", "", "换洗唛/缝领标"]);
+  expect(copied).toBe("换洗唛/缝领标");
   await page.screenshot({ path: ".local/selection-column-groups.png" });
   await expect.poll(() => layouts.get("interaction-tester")?.preferences?.columnGroupId).toBeTruthy();
   await expect(page.getByLabel("个人设置同步")).toHaveCount(0);
@@ -830,7 +870,7 @@ test("clicking selected text places the caret, mouse dragging selects text and n
   await expect(cell(page, 3, "material").locator("textarea")).toHaveValue("Cotton");
   await page.keyboard.press("Escape");
   await page.keyboard.press("Control+Shift+ArrowRight");
-  await expect(page.locator("td.selection-cell-active")).toHaveCount(9);
+  await expect(page.locator("td.selection-cell-active")).toHaveCount(5);
 });
 
 test("formatted empty prices accept typing from the cell, save decimals and remain blank after clearing", async ({ page }) => {

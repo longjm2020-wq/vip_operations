@@ -1027,7 +1027,6 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
     const row = displayedRows.find(row => row._key === cellAnchor?.rowKey);
     const column = activeColumns.find(column => column.key === cellAnchor?.columnKey);
     if (!row || !column) return;
-    setSelectedColumnKeys([]); columnSelectionAnchor.current = null;
     const hasContent = (row: Row, column: Column) => {
       if (!readableSelectionCell(row, column.key)) return false;
       if (column.key === "images") return rowImages(row).length > 0;
@@ -1036,18 +1035,23 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
       if (column.key === "collectionInventory") return (row.collectionInventory || []).length > 0;
       return String(valueAt(row, column) ?? "").trim() !== "";
     };
-    const last = vertical
-      ? displayedRows.reduce((last, candidate, index) => hasContent(candidate, column) ? index : last, -1)
-      : activeColumns.reduce((last, candidate, index) => hasContent(row, candidate) ? index : last, -1);
-    if (last < 0) return;
-    const chosenRows = vertical ? displayedRows.slice(0, last + 1) : [row];
-    const chosenColumns = vertical ? [column] : activeColumns.slice(0, last + 1);
-    const first = { rowKey: chosenRows[0]._key, columnKey: chosenColumns[0].key };
-    const end = towardEnd ? { rowKey: chosenRows.at(-1)!._key, columnKey: chosenColumns.at(-1)!.key } : first;
-    const elementAt = (point: typeof first) => sheetRef.current?.querySelector<HTMLElement>(`td[data-selection-row="${CSS.escape(point.rowKey)}"][data-selection-column="${CSS.escape(point.columnKey)}"]`);
+    const start = vertical ? displayedRows.indexOf(row) : activeColumns.indexOf(column);
+    const length = vertical ? displayedRows.length : activeColumns.length;
+    let boundary = -1;
+    for (let index = towardEnd ? length - 1 : 0; towardEnd ? index >= start : index <= start; index += towardEnd ? -1 : 1) {
+      if (vertical ? hasContent(displayedRows[index], column) : hasContent(row, activeColumns[index])) { boundary = index; break; }
+    }
+    if (boundary < 0) return;
+    const from = Math.min(start, boundary), to = Math.max(start, boundary) + 1;
+    const chosenRows = vertical ? displayedRows.slice(from, to) : [row];
+    const chosenColumns = vertical ? [column] : activeColumns.slice(from, to);
+    const origin = { rowKey: row._key, columnKey: column.key };
+    const end = { rowKey: vertical ? displayedRows[boundary]._key : row._key, columnKey: vertical ? column.key : activeColumns[boundary].key };
+    const elementAt = (point: typeof origin) => sheetRef.current?.querySelector<HTMLElement>(`td[data-selection-row="${CSS.escape(point.rowKey)}"][data-selection-column="${CSS.escape(point.columnKey)}"]`);
     selectionDrag.stop();
-    (elementAt(first) || sheetRef.current?.querySelector<HTMLElement>("table"))?.focus({ preventScroll: true });
-    setCellAnchor(first); setFocusedCell(null); setCellTextEditing(false); setSelectingCells(false);
+    (elementAt(origin) || sheetRef.current?.querySelector<HTMLElement>("table"))?.focus({ preventScroll: true });
+    setSelectedColumnKeys([]); columnSelectionAnchor.current = null;
+    setCellAnchor(origin); setFocusedCell(null); setCellTextEditing(false); setSelectingCells(false);
     setSelectedRows([]); setCopiedCells(new Set()); setSelectedCells(selectionAllCells(chosenRows, chosenColumns));
     rowWindow.revealRow(end.rowKey);
     elementAt(end)?.scrollIntoView({ block: "nearest", inline: "nearest" });
