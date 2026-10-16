@@ -341,7 +341,12 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
     api, normalize: normalizeSelection,
     flush: async () => { await save(); return tableHistory.getRows().every(row => row.id && sameRow(row, original.current.get(row._key) || {})); },
     baseline: (row, key) => { if (row) original.current.set(key, row); else original.current.delete(key); },
-    changed: () => { appliedSnapshot.current = ""; void queryClient.invalidateQueries({ queryKey: ["style-selections"] }); void styleCounts.refetch(); },
+    changed: () => {
+      // Keep the accepted structural result until a fresh read arrives. Replaying
+      // the old cached list here would drop restored client keys before refetch.
+      appliedSnapshot.current = snapshot;
+      void queryClient.invalidateQueries({ queryKey: ["style-selections"] }); void styleCounts.refetch();
+    },
     onApplied: () => { setCopiedCells(new Set()); setCellTextEditing(false); setFocusedCell(null); setEditSession(null); setSelectedRows([]); setSelectedCells(new Set()); setErrors({}); },
     notify: (text, error) => { if (error) message.error(text); else message.info(text); },
   });

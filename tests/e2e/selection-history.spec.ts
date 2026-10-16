@@ -11,8 +11,8 @@ const columns: SelectionField[] = [
   { key: noteKey, label: "历史备注", type: "text", width: 180, custom: true, ownerId: "101", visibility: "PUBLIC", fieldRevision: 1 },
 ];
 
-async function fixture(page: Page, count = 3, path = "/style-selections") {
-  let dataRevision = 1, layoutRevision = 1, nextId = 100;
+async function fixture(page: Page, count = 3, path = "/style-selections", options: { syncDelayMs?: number } = {}) {
+  let dataRevision = 1, layoutRevision = 1, nextId = 100, syncRequests = 0, syncResponses = 0;
   let preferences = selectionLayoutSchema.parse({ columns, rowHeight: "compact", pageSize: 200, sort: "sortOrder", direction: "asc" });
   const records: Row[] = Array.from({ length: count + 1 }, (_, index) => ({
     id: String(index + 1), sortOrder: index + 1,
@@ -36,7 +36,15 @@ async function fixture(page: Page, count = 3, path = "/style-selections") {
     if (apiPath.endsWith("/product-archive-table")) data = { id: "3", initialLayout: "selection", fields: [], references: {}, canEdit: true, canManage: true };
     if (apiPath.endsWith("/project-tables/7")) data = { id: "7", name: "历史协作表", initialLayout: "selection", canEdit: true, canManage: true };
     if (apiPath.endsWith("/revision")) data = { revision: `history-${dataRevision}` };
-    if (apiPath.endsWith("/sync")) data = { revision: `history-${dataRevision}`, index: records.map(row => ({ id: row.id, token: row.updatedAt })), data: records };
+    if (apiPath.endsWith("/sync")) {
+      // Capture the authorized response at request time. Later mutations must
+      // not change the delayed snapshot already being returned by the server.
+      data = structuredClone({ revision: `history-${dataRevision}`, index: records.map(row => ({ id: row.id, token: row.updatedAt })), data: records });
+      if (syncRequests++ > 0 && options.syncDelayMs)
+        await new Promise(resolve => setTimeout(resolve, options.syncDelayMs));
+      await route.fulfill({ json: { data } }); syncResponses++;
+      return;
+    }
     if (apiPath.endsWith("/shared-view")) data = { revision: 0, view: { filters: {}, sort: null } };
     if (apiPath.endsWith("/protection")) data = { settings: defaultProtection, revision: 0, canManage: false };
     if (apiPath.endsWith("/layout-preferences")) {
@@ -99,7 +107,7 @@ async function fixture(page: Page, count = 3, path = "/style-selections") {
   });
   await page.goto(path);
   await expect(page.locator("tr[data-selection-row]")).toHaveCount(count + 1);
-  return { records, calls, current, preferences: () => preferences,
+  return { records, calls, current, preferences: () => preferences, syncResponses: () => syncResponses,
     remoteEdit(id: string, values: Row) { Object.assign(current(id), values, { updatedAt: stamp() }); },
     remoteLayout(update: (value: typeof preferences) => typeof preferences) { preferences = update(preferences); layoutRevision++; },
   };
@@ -210,6 +218,36 @@ test("新增和删除行可撤销重做，使用删除凭据恢复完整已保�
   expect(restores.every(call => call.body?.deletions.every((deletion: Row) => Object.keys(deletion).sort().join(",") === "rowId,token"))).toBe(true);
   await redo(page).click();
   await expect.poll(() => state.records.some(row => row.id === "2")).toBe(false);
+});
+
+test("延迟同步时恢复新增行保留原本地标识，再次撤销仍能删除正确行", async ({ page }) => {
+  const state = await fixture(page, 3, "/style-selections", { syncDelayMs: 350 });
+  await page.getByRole("button", { name: /添加一行$/u }).first().click();
+  await expect.poll(() => state.records.some(row => row.id === "100")).toBe(true);
+  const originalKey = await page.locator("tr[data-selection-row]").last().getAttribute("data-selection-row");
+  expect(originalKey).toBeTruthy(); expect(originalKey).not.toBe("100");
+  await expect(undo(page)).toBeEnabled();
+  const beforeDeleteSync = state.syncResponses();
+  await undo(page).click();
+  await expect.poll(() => state.records.some(row => row.id === "100")).toBe(false);
+  await expect(page.locator("tr[data-selection-row]")).toHaveCount(4);
+  await expect.poll(() => state.syncResponses()).toBeGreaterThan(beforeDeleteSync);
+  await expect(redo(page)).toBeEnabled();
+  const beforeRestoreSync = state.syncResponses();
+  await redo(page).click();
+  await expect.poll(() => state.records.some(row => row.id === "100")).toBe(true);
+  await expect.poll(() => state.syncResponses()).toBeGreaterThan(beforeRestoreSync);
+  // Let React consume the delayed response before checking retained identity.
+  await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+  await expect(page.locator(`tr[data-selection-row="${originalKey}"]`)).toHaveCount(1);
+  await expect(page.locator('tr[data-selection-row="100"]')).toHaveCount(0);
+  await expect(undo(page)).toBeEnabled();
+  await undo(page).click();
+  await expect.poll(() => state.records.some(row => row.id === "100")).toBe(false);
+  await expect(page.locator("tr[data-selection-row]")).toHaveCount(4);
+  const deletes = state.calls.filter(call => call.path.endsWith("/history/delete-rows"));
+  expect(deletes).toHaveLength(2);
+  expect(deletes.every(call => call.body?.rows.length === 1 && call.body.rows[0].id === "100")).toBe(true);
 });
 
 test("字段新增删除与列宽调整共用操作顺序并保留原字段内容", async ({ page }) => {
