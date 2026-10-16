@@ -2,13 +2,14 @@ import { readFile } from "node:fs/promises";
 import type { PGlite } from "@electric-sql/pglite";
 
 /** Install the actual production migration over isolated test fixture tables. */
-export async function installSelectionContentCreatedTimeSchema(database: PGlite) {
+export async function installSelectionContentCreatedTimeSchema(database: PGlite, options: { legacyGuard?: boolean } = {}) {
   await database.exec(`
     CREATE TABLE IF NOT EXISTS public.project_tables(id bigint PRIMARY KEY,initial_layout text DEFAULT 'selection',system_key text,created_by bigint);
     ALTER TABLE public.project_tables ADD COLUMN IF NOT EXISTS initial_layout text DEFAULT 'selection';
     ALTER TABLE public.project_tables ADD COLUMN IF NOT EXISTS created_by bigint;
     CREATE TABLE IF NOT EXISTS public.products(id bigint PRIMARY KEY,created_at timestamptz DEFAULT now());
     ALTER TABLE public.audit_logs ADD COLUMN IF NOT EXISTS occurred_at timestamptz DEFAULT now();
+    ALTER TABLE public.audit_logs ALTER COLUMN entity_id TYPE bigint USING entity_id::bigint;
     CREATE FUNCTION public.create_project_table_workspace(workspace bigint) RETURNS void LANGUAGE plpgsql AS $$
     BEGIN
       EXECUTE format('CREATE SCHEMA selection_table_%s',workspace);
@@ -16,4 +17,6 @@ export async function installSelectionContentCreatedTimeSchema(database: PGlite)
     END $$;
   `);
   await database.exec(await readFile(new URL("../../packages/database/migrations/064_selection_content_created_time.sql", import.meta.url), "utf8"));
+  if (options.legacyGuard !== false)
+    await database.exec(await readFile(new URL("../../packages/database/migrations/065_selection_preserve_legacy_created_time.sql", import.meta.url), "utf8"));
 }

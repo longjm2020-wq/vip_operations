@@ -3,7 +3,7 @@ import { one, type Row, type Tx } from "../../../../../packages/database/src/ind
 import { formatSelectionCreatedTime } from "../../../../../packages/contracts/src/selection-created-time.js";
 import { fail } from "../../core.js";
 
-export const selectionCreatedTimeRevision = "content-created-time-v2";
+export const selectionCreatedTimeRevision = "content-created-time-v3";
 
 /** Physical row creation remains audit metadata; the business date can be pending. */
 export function selectionCreatedAtSql() {
