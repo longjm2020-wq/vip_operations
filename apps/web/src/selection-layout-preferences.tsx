@@ -36,6 +36,15 @@ import {
   selectionLayoutVisibilityDraft,
   restrictSelectionReadonlyLayout,
 } from "./selection-layout-storage";
+import {
+  applySelectionLayoutHistoryChange,
+  createSelectionLayoutHistoryChange,
+  selectionLayoutHistoryGroupKey,
+  selectionLayoutHistorySecurityChanged,
+  type SelectionLayoutHistoryApplyResult,
+  type SelectionLayoutHistoryChange,
+  type SelectionLayoutHistoryEvent,
+} from "./selection-layout-history";
 
 type State = {
   preferences: SelectionLayout | null;
@@ -83,13 +92,21 @@ export function useSelectionLayoutPreferences(
     initialRef = useRef(initial);
   const committed = useRef<SelectionLayoutSnapshot | null>(null),
     inFlight = useRef<Promise<void> | null>(null);
+  const historyListeners = useRef(new Set<(event: SelectionLayoutHistoryEvent) => void>()),
+    applyingHistory = useRef(false);
   const visibilityRefreshPending = useRef(false);
   apiRef.current = api;
   initialRef.current = initial;
   const publish = useCallback(
     (patch: Partial<State>) => {
+      const before = current.current;
       current.current = { ...current.current, ...patch };
       const next = current.current;
+      if (
+        (before.preferences && next.preferences && selectionLayoutHistorySecurityChanged(before.preferences, next.preferences)) ||
+        (before.canEditShared && !next.canEditShared) ||
+        (!before.conflict && next.conflict)
+      ) historyListeners.current.forEach(listener => listener({ type: "reset", reason: "字段可见范围、管理权限或设置冲突已变化" }));
       if (next.preferences)
         writeLayoutCache(browserLayoutStorage(), cacheKey, {
           preferences: next.preferences,
@@ -537,6 +554,7 @@ export function useSelectionLayoutPreferences(
       key: K,
       value: SetStateAction<SelectionLayout[K]>,
     ) => {
+      if (applyingHistory.current) return;
       const before = current.current.preferences;
       if (!before) return;
       const next =
@@ -586,6 +604,9 @@ export function useSelectionLayoutPreferences(
         dirty: true,
         error: "",
       });
+      const change = ["columns", "hiddenColumns", "fixedColumns", "columnGroups", "rowHeight", "organization", "typeCatalog"].includes(key) && !selectionLayoutHistorySecurityChanged(before, preferences)
+        ? createSelectionLayoutHistoryChange(before, preferences) : null;
+      if (change) historyListeners.current.forEach(listener => listener({ type: "change", change, key, groupKey: selectionLayoutHistoryGroupKey(change) }));
     },
     [publish, message, user.id, isSuperAdmin],
   );
@@ -642,6 +663,25 @@ export function useSelectionLayoutPreferences(
     }),
     [update],
   );
+  const subscribeHistory = useCallback((listener: (event: SelectionLayoutHistoryEvent) => void) => {
+    historyListeners.current.add(listener);
+    return () => { historyListeners.current.delete(listener); };
+  }, []);
+  const applyHistory = useCallback(async (change: SelectionLayoutHistoryChange, direction: "undo" | "redo"): Promise<SelectionLayoutHistoryApplyResult> => {
+    if (applyingHistory.current) return { ok: false, reason: "unavailable", message: "正在恢复另一项表格设置，请稍候" };
+    applyingHistory.current = true;
+    try {
+      if (!(await ensureSaved()) || !current.current.preferences) return { ok: false, reason: "unavailable", message: "请先处理未保存或冲突的表格设置" };
+      const result = applySelectionLayoutHistoryChange(current.current.preferences, change, direction, {
+        userId: String(user.id), isSuperAdmin, canEditShared: current.current.canEditShared, hasSharedLayout: !!current.current.sharedPreferences,
+      });
+      if (!result.ok) return result;
+      // publish() accepts the entire delta atomically; update() is not invoked, so
+      // replay does not create another local history operation.
+      publish({ preferences: result.preferences, dirty: true, error: "" });
+      return { ok: true, saved: await ensureSaved() };
+    } finally { applyingHistory.current = false; }
+  }, [ensureSaved, publish, user.id, isSuperAdmin]);
   const retry = () => {
     publish({ error: "" });
     if (!current.current.preferences) void load();
@@ -650,6 +690,7 @@ export function useSelectionLayoutPreferences(
   const resolve = (cloud: boolean) => {
     const remote = current.current.conflict;
     if (!remote) return;
+    historyListeners.current.forEach(listener => listener({ type: "reset", reason: "已手动解决表格设置冲突" }));
     committed.current = remote;
     publish({
       ...(cloud
@@ -689,6 +730,8 @@ export function useSelectionLayoutPreferences(
     ensureSaved,
     setFieldVisibility,
     initializeShared,
+    subscribeHistory,
+    applyHistory,
   };
 }
 export type SelectionLayoutController = ReturnType<

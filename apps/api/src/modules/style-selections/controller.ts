@@ -16,6 +16,7 @@ import { searchSelectionImages } from "./image-search.js";
 import { submitSelectionImageFeedback } from "./image-search-feedback.js";
 import { applyTitles, generateTitles, titleAIStatus } from "./title-ai.js";
 import { applyFixedOrder, previewFixedOrder } from "./fixed-order.js";
+import { deleteHistoryRows, restoreHistoryRows } from "./history-rows.js";
 
 const paramId = (value: string) => parse(id, value);
 const transferContext = (request:AuthRequest) => ({...context(request),actor:request.originalActor || request.actor});
@@ -29,6 +30,8 @@ class ProductArchiveTableController {
 @UseInterceptors(SelectionWorkspaceInterceptor)
 class StyleSelectionsController {
   constructor(@Inject(SelectionRealtime) private realtime: SelectionRealtime) {}
+  @Permission("selection.manage") @Post("history/delete-rows") deleteHistoryRows(@Req() request:AuthRequest,@Body() body:unknown) { return deleteHistoryRows(context(request),body); }
+  @Permission("selection.manage") @Post("history/restore-rows") restoreHistoryRows(@Req() request:AuthRequest,@Body() body:unknown) { return restoreHistoryRows(context(request),body); }
   @Permission("selection.manage") @Post("fixed-order/preview") fixedOrderPreview(@Req() request:AuthRequest,@Body() body:unknown) { return previewFixedOrder(context(request),body); }
   @Permission("selection.manage") @Post("fixed-order/apply") fixedOrderApply(@Req() request:AuthRequest,@Body() body:unknown) { return applyFixedOrder(context(request),body); }
   @Permission("selection.manage") @Get("ai-titles/status") titleAIStatus(@Req() request:AuthRequest) { return titleAIStatus(context(request)); }

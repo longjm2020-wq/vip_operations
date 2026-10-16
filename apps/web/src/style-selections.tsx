@@ -26,6 +26,7 @@ import { selectionSystemValue } from "./selection-system-fields";
 import { hasSelectionCreationTimeDraft, selectionCreationTimeComparable, selectionCreationTimeError, selectionCreationTimeForSave, selectionCreationTimeValue, withSelectionCreationTime } from "./selection-creation-time";
 import { useSelectionRowWindow } from "./selection-row-window";
 import { SelectionStatistics } from "./selection-statistics";
+import { useSelectionTableHistory } from "./selection-table-history";
 import { SelectionOperationHints } from "./table-operation-hints";
 import { TableFindReplace, type TableFindCell, type TableFindChange, type TableFindOptions } from "./table-find-replace";
 import { selectionReplacementError, selectionReplacementValue } from "./selection-find-replace";
@@ -53,7 +54,7 @@ import { formatSelectionValue } from "../../../packages/contracts/src/selection-
 import { memo, useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Alert, App, Button, Card, Checkbox, Empty, Image, Input, Modal, Pagination, Popover, Dropdown, Select, Space, Tooltip } from "antd";
-import { BulbOutlined, ExpandAltOutlined, CompressOutlined, EditOutlined, BgColorsOutlined, FontColorsOutlined, VerticalAlignTopOutlined, VerticalAlignMiddleOutlined, VerticalAlignBottomOutlined, AlignLeftOutlined, AlignCenterOutlined, AlignRightOutlined, DeleteOutlined, FilterOutlined, LinkOutlined, PlusOutlined, PushpinOutlined, SettingOutlined, UnorderedListOutlined, UploadOutlined } from "@ant-design/icons";
+import { UndoOutlined, RedoOutlined, BulbOutlined, ExpandAltOutlined, CompressOutlined, EditOutlined, BgColorsOutlined, FontColorsOutlined, VerticalAlignTopOutlined, VerticalAlignMiddleOutlined, VerticalAlignBottomOutlined, AlignLeftOutlined, AlignCenterOutlined, AlignRightOutlined, DeleteOutlined, FilterOutlined, LinkOutlined, PlusOutlined, PushpinOutlined, SettingOutlined, UnorderedListOutlined, UploadOutlined } from "@ant-design/icons";
 import { useSelectionWorkspace } from "./selection-workspace";
 import { prepareUpload, readUpload } from "./upload-file";
 import { QueryState, Row, useCan, useUser } from "./shared";
@@ -323,7 +324,28 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
   const [filterRevision, setFilterRevision] = useState(0);
   const [filterRefresh, setFilterRefresh] = useState(0);
   const [retainedFilterRows, setRetainedFilterRows] = useState<RetainedSelectionResults | null>(null);
-  const [rows, setRows] = useState<Row[]>([]);
+  const tableHistory = useSelectionTableHistory({
+    scope: `${tableId}:${user.id}:${accessLost}:${canEdit}:${canAdd}`,
+    layout, fields: [...baseKeys, ...columns.filter(column => !column.deleted).map(column => column.key), "sortOrder", "rowColor"],
+    permission: (row, key, kind) => {
+      if (!canEdit || !editableSelectionCell(row, key) || !readableSelectionCell(row, key)) return false;
+      if (key === "sortOrder" || key === "rowColor") return columns.filter(column => !column.deleted).every(column => editableSelectionCell(row, column.key) && readableSelectionCell(row, column.key));
+      const column = columns.find(column => column.key === key && !column.deleted);
+      return !!column && !collectionKeys.has(key) && (kind === "format" || !readonlySystemField(column));
+    },
+    valueEqual: (key, a, b) => moneyKeys.has(key) && a !== "" && b !== "" && a != null && b != null && Number.isFinite(Number(a)) && Number(a) === Number(b)
+      || ["xutiStyleNo", "supplierStyleNo", "supplierCode"].includes(key) && String(a ?? "").trim() === String(b ?? "").trim(),
+    blocked: () => saveLock.current || deleting || transferring || !!releasing || accessLost,
+    canDelete: row => canEdit && !row.migrationLocked && columns.filter(column => !column.deleted).every(column => editableSelectionCell(row, column.key) && readableSelectionCell(row, column.key)),
+    canAdd: () => canAdd && !accessLost,
+    api, normalize: normalizeSelection,
+    flush: async () => { await save(); return tableHistory.getRows().every(row => row.id && sameRow(row, original.current.get(row._key) || {})); },
+    baseline: (row, key) => { if (row) original.current.set(key, row); else original.current.delete(key); },
+    changed: () => { appliedSnapshot.current = ""; void queryClient.invalidateQueries({ queryKey: ["style-selections"] }); void styleCounts.refetch(); },
+    onApplied: () => { setCopiedCells(new Set()); setCellTextEditing(false); setFocusedCell(null); setEditSession(null); setSelectedRows([]); setSelectedCells(new Set()); setErrors({}); },
+    notify: (text, error) => { if (error) message.error(text); else message.info(text); },
+  });
+  const { rows, setRows, setServerRows } = tableHistory;
   const [addCount, setAddCount] = useState(10);
   const [selectedRows, setSelectedRows] = useState<string[]>([]);
   const selectedRowKeys = useMemo(() => new Set(selectedRows), [selectedRows]);
@@ -370,7 +392,7 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
   const editingColumn = editingId ? cellAnchor?.columnKey || null : null;
   const presenceWrites = useRef<Promise<unknown>>(Promise.resolve());
   const [saving, setSaving] = useState(false);
-  const [deleting, setDeleting] = useState(false);
+  const deleting: boolean = tableHistory.busy;
   const [errors, setErrors] = useState<Record<string, string>>({});
   const attempts = useRef(new SelectionSaveAttempts());
   const saveLock = useRef(false);
@@ -411,7 +433,7 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
     if (!accessLost) return;
     void queryClient.cancelQueries({ queryKey:["style-selections"] });
     queryClient.removeQueries({ queryKey:["style-selections"] });
-    setRows([]); original.current.clear(); setFocusedCell(null); setCellTextEditing(false);
+    tableHistory.clear(); setServerRows([]); original.current.clear(); setFocusedCell(null); setCellTextEditing(false);
   }, [accessLost,queryClient]);
   useEffect(() => {
     const stop = () => { setSelectingCells(false); axisSelection.current = null; dragCellAnchor.current = null; };
@@ -441,7 +463,7 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
     presenceWrites.current = presenceWrites.current.then(() => api("/style-selections/presence", "POST", { editingId: null, editingColumn: null })).catch(() => undefined);
   }, []);
   useEffect(() => {
-    if (accessLost || !data.data || saving) return;
+    if (accessLost || !data.data || saving || tableHistory.busy) return;
     const sortChanged=loadedSortScope.current !== queryString;
     // A cached ordering can contain values from before recent edits. Wait for its
     // fresh response before making that ordering the new retained filter scope.
@@ -451,8 +473,8 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
       setFilterRefresh(value=>value+1);
     }
     const byId=new Map(rows.filter(row=>row.id).map(row=>[String(row.id),row]));
-    const rightsChanged=(data.data.data || []).some((incoming:Row)=>{const existing=byId.get(String(incoming.id));return existing && (existing.migrationLocked!==incoming.migrationLocked || existing.policyRevision!==incoming.policyRevision || JSON.stringify(existing.cellAccess)!==JSON.stringify(incoming.cellAccess));});
-    if(rightsChanged){setFocusedCell(null);setCellTextEditing(false);}
+    const rightsChanged=(data.data.data || []).some((incoming:Row)=>{const existing=byId.get(String(incoming.id));return existing && (existing.migrationLocked!==incoming.migrationLocked || existing.policyRevision!==incoming.policyRevision || existing.defaultCellAccess!==incoming.defaultCellAccess || existing.claimedBy!==incoming.claimedBy || comparable(existing.hiddenCells)!==comparable(incoming.hiddenCells) || JSON.stringify(existing.cellAccess)!==JSON.stringify(incoming.cellAccess));});
+    if(rightsChanged){tableHistory.clear();setFocusedCell(null);setCellTextEditing(false);}
     const baselines = new Map<string,Row>();
     const conflicts:Record<string,string> = {};
     const next = (data.data.data || []).map((raw:Row) => {
@@ -467,9 +489,9 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
       return merged.row;
     });
     for(const row of rows.filter(row=>!row.id))next.push(row);
-    setRows(next); setErrors(current=>({...Object.fromEntries(Object.entries(current).filter(([key])=>next.some(row=>key.startsWith(`${row._key}:`)))),...conflicts}));
+    setServerRows(next); setErrors(current=>({...Object.fromEntries(Object.entries(current).filter(([key])=>next.some(row=>key.startsWith(`${row._key}:`)))),...conflicts}));
     original.current = baselines; appliedSnapshot.current = snapshot;
-  }, [data.data, data.isFetching, saving, snapshot, rows, accessLost, queryString]);
+  }, [data.data, data.isFetching, saving, snapshot, rows, accessLost, queryString, tableHistory.busy]);
 
   const availableColumns=useMemo(() => columns.filter(column=>!column.deleted), [columns]);
   const visibleColumns = useMemo(() => availableColumns.filter((column) => visible.includes(column.key)).map(column=>({...column,type:column.type || column.fallbackType})), [availableColumns, visible]);
@@ -702,6 +724,7 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
     setTitleAi({ rows: eligible.map(row => ({ id: String(row.id), rowKey: row._key, xutiStyleNo: String(row.xutiStyleNo) })), keys, scope: `${chosenRows ? "选中范围" : "当前筛选结果（含其他页）"} · ${eligible.length} 款有空白标题` });
   };
   const refreshTitles = async () => {
+    tableHistory.clear();
     appliedSnapshot.current = "";
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ["style-selections"] }),
@@ -828,14 +851,11 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
   };
   const deleteRows = async () => {
     if (!canEdit || !selectedRows.length || deleting) return message.warning("请先勾选需要删除的行");
-    setDeleting(true);
     try {
-      const current = rows.filter((row) => selectedRowKeys.has(row._key));
-      if(current.some(row=>columns.some(column=>!editableSelectionCell(row,column.key))))throw Error("选中行包含没有编辑权限的区域，不能删除");
-      for (const row of current.filter((row) => row.id)) await api(`/style-selections/${row.id}`, "DELETE", undefined, row._key);
-      setRows((items) => items.filter((row) => !selectedRowKeys.has(row._key))); setSelectedRows([]); setSelectedCells(new Set()); appliedSnapshot.current = "";
-      await Promise.all([queryClient.invalidateQueries({ queryKey: ["style-selections"] }), queryClient.invalidateQueries({ queryKey: ["style-selection-style-counts"] })]); message.success(`已删除 ${current.length} 行`);
-    } catch (error) { message.error((error as Error).message); } finally { setDeleting(false); }
+      const count = selectedRows.length;
+      await tableHistory.deleteRows(selectedRowKeys);
+      await Promise.all([queryClient.invalidateQueries({ queryKey: ["style-selections"] }), queryClient.invalidateQueries({ queryKey: ["style-selection-style-counts"] })]); message.success(`已删除 ${count} 行`);
+    } catch (error) { message.error((error as Error).message); }
   };
   const applyColor = (color: string) => {
     if (!canEdit || !selectedCells.size) return message.warning("请单击或拖动选择需要填色的单元格");
@@ -1128,7 +1148,7 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
   };
   const save = async () => {
     if (!canEdit || saveLock.current) return;
-    const changed = rows.filter((row) => attempts.current.eligible(row) && (!row.id || !sameRow(row, original.current.get(row._key) || {})));
+    const changed = tableHistory.getRows().filter((row) => attempts.current.eligible(row) && (!row.id || !sameRow(row, original.current.get(row._key) || {})));
     if (!changed.length) return;
     const lastRow = canAdd ? selectionLastRow(rows) : undefined;
     saveLock.current = true;
@@ -1189,7 +1209,7 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
         return next;
       });
       if (Object.keys(savedRows).length) {
-        setRows((current) => current.map((row) => savedRows[row._key] ? mergeSelectionSave(row, savedRows[row._key].sent, savedRows[row._key].saved) : row));
+        setServerRows((current) => current.map((row) => savedRows[row._key] ? mergeSelectionSave(row, savedRows[row._key].sent, savedRows[row._key].saved) : row));
         // Ignore the old cached list until a new read completes.
         appliedSnapshot.current = snapshot;
         await Promise.all([queryClient.invalidateQueries({ queryKey: ["style-selections"] }), queryClient.invalidateQueries({ queryKey: ["style-selection-style-counts"] })]);
@@ -1197,10 +1217,10 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
     } finally { saveLock.current = false; setSaving(false); }
   };
   useEffect(() => {
-    if (!canEdit || !dirtyCount || saving || deleting) return;
+    if (!canEdit || !dirtyCount || saving || deleting || tableHistory.busy) return;
     const timer = window.setTimeout(() => { void save(); }, 900);
     return () => window.clearTimeout(timer);
-  }, [canEdit, dirtyCount, saving, deleting, rows, retryVersion]);
+  }, [canEdit, dirtyCount, saving, deleting, rows, retryVersion, tableHistory.busy]);
   const rowPositions = useMemo(() => new Map(displayedRows.map((row, index) => [row._key, index])), [displayedRows]);
   const columnPositions = useMemo(() => new Map(activeColumns.map((column, index) => [column.key, index])), [activeColumns]);
   const rowGroups = useMemo(() => new Map(grouped.flatMap((group, index) => group.rows.map(row => [row._key, index] as const))), [grouped]);
@@ -1370,7 +1390,7 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
 
   const releaseRow = async (row:Row) => {
     setReleasing(row._key);
-    try {const saved=normalizeSelection((await api(`/style-selections/${row.id}/release-migration`,"POST",{expectedUpdatedAt:row.updatedAt})).data);const next={...saved,_key:row._key};original.current.set(row._key,next);setRows(current=>current.map(item=>item._key===row._key?next:item));appliedSnapshot.current="";void data.refetch();message.success("原行已恢复编辑，目标表记录仍保留");}
+    try {const saved=normalizeSelection((await api(`/style-selections/${row.id}/release-migration`,"POST",{expectedUpdatedAt:row.updatedAt})).data);const next={...saved,_key:row._key};original.current.set(row._key,next);tableHistory.clear();setServerRows(current=>current.map(item=>item._key===row._key?next:item));appliedSnapshot.current="";void data.refetch();message.success("原行已恢复编辑，目标表记录仍保留");}
     catch(error){message.error((error as Error).message);void data.refetch();}finally{setReleasing(null);}
   };
   const applyFormat = (patch: FormatPatch) => {
@@ -1393,13 +1413,23 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
   if(accessLost)return <Alert type="error" showIcon message="表格访问权限已失效，请重新登录或联系管理员" />;
   return <>{titleAi && <SelectionTitleAi open onClose={() => setTitleAi(null)} rows={titleAi.rows} fields={titleFields} initialFieldKeys={titleAi.keys} scopeLabel={titleAi.scope} apiRequest={api} onApplied={refreshTitles} canConfigureAi={canConfigureAi} onConfigureAi={() => { window.location.assign("/settings/ai"); }} />}{columnWidthTarget && <SelectionColumnWidthModal columns={columnWidthTarget} onCancel={() => setColumnWidthTarget(null)} onApply={width => { const keys = new Set(columnWidthTarget.map(column => column.key)); setColumns(current => current.map(column => keys.has(column.key) ? { ...column, width } : column)); setColumnWidthTarget(null); }}/>} {imagePreview && previewImages.length > 0 && <SelectionImagePreview key={cellId(imagePreview.rowKey, imagePreview.columnKey)} images={previewImages} index={Math.min(imagePreview.index, previewImages.length - 1)} name={previewColumn!.label} alongsideDetails={detailVisible} onTextCopied={text => { copiedSingleValue.current = text; setCopiedCells(new Set()); }} onIndexChange={index => setImagePreview(current => current ? { ...current, index } : null)} onClose={() => setImagePreview(null)} />}{formatTarget && <SelectionFormatModal count={formatTarget.ids.size} sample={formatTarget.sample} initial={formatTarget.initial} onCancel={() => setFormatTarget(null)} onApply={applyFormat} />}<PageSearch><PageSearchInput multiline aria-label="搜索选款" placeholder="搜索款号、供应商、颜色、材质…" allowClear value={searchText} onChange={event=>{setImageSearchRowId(null);setSearchText(event.target.value);}} suffix={<SelectionImageSearch disabled={!!dirtyCount || saving || deleting || transferring} onSelect={row=>{setImageSearchRowId(String(row.id));setPage(1);setCellAnchor(null);setFocusedCell(null);setCellTextEditing(false);setSelectedRows([]);setSelectedCells(new Set());}}/>} /></PageSearch>
     <Dropdown trigger={["contextMenu"]} open={!!contextRow && !!contextColumn} onOpenChange={open => { if (!open) setContextCell(null); }} overlayStyle={{ zIndex: 1201 }} menu={cellContextMenu}><span aria-hidden="true" style={{ position: "fixed", left: contextCell?.x || 0, top: contextCell?.y || 0, width: 1, height: 1, pointerEvents: "none" }}/></Dropdown>
-    <Card ref={findRoot} data-table-find-context className="selection-card"><div className="selection-toolbar" aria-label={`${title || "选款登记"}表格工具栏`}><Space className="selection-toolbar-controls" wrap size={4}>
+    <Card ref={findRoot} data-table-find-context className="selection-card" aria-busy={tableHistory.busy} onPointerDownCapture={event => { if (tableHistory.busy) { event.preventDefault(); event.stopPropagation(); } }} onKeyDownCapture={event => {
+      if (tableHistory.busy) { event.preventDefault(); event.stopPropagation(); return; }
+      const target = event.target as HTMLElement;
+      if (!(event.ctrlKey || event.metaKey) || event.altKey || target.closest("input:not([type=checkbox]),textarea,[contenteditable=true],.ant-select")) return;
+      const key = event.key.toLowerCase();
+      if (key === "z" || key === "y") { event.preventDefault(); event.stopPropagation(); void tableHistory.replay(key === "y" || event.shiftKey ? "redo" : "undo"); }
+    }}><div className="selection-toolbar" aria-label={`${title || "选款登记"}表格工具栏`}><Space className="selection-toolbar-controls" wrap size={4}>
+      <Space.Compact>
+        <Tooltip title={`撤销，最多 10 步 · 当前 ${tableHistory.undoCount} 步（Ctrl+Z）`}><Button aria-label="撤销" disabled={!tableHistory.undoCount || saving || deleting || transferring || !!releasing || tableHistory.busy} icon={<UndoOutlined/>} onClick={() => void tableHistory.replay("undo")}/></Tooltip>
+        <Tooltip title={`重做 · 当前 ${tableHistory.redoCount} 步（Ctrl+Y / Ctrl+Shift+Z）`}><Button aria-label="重做" disabled={!tableHistory.redoCount || saving || deleting || transferring || !!releasing || tableHistory.busy} icon={<RedoOutlined/>} onClick={() => void tableHistory.replay("redo")}/></Tooltip>
+      </Space.Compact>
       {canEdit && titleFields.length > 0 && <Button aria-label="AI 商品标题" icon={<BulbOutlined aria-hidden="true" />} disabled={!!dirtyCount || saving || deleting || transferring || !!releasing} onClick={() => void openTitleAi()}>AI 商品标题</Button>}
       {canEdit && <SelectionCollections selectedRows={filteredRows.filter(row => selectedRowKeys.has(row._key))} blocked={!!dirtyCount || saving || deleting}/>}
       {canEdit && <SelectionPhotoQr />}
       <TableFindReplace rootRef={findRoot} cells={findCells} selectedIds={selectedFindIds} activeId={activeFindId} blocked={saving || deleting || transferring || !!releasing} saveHint="修改将逐行自动保存，保存失败请修正后重试。" onNavigate={navigateFind} onReplace={replaceFind}/>
       <Button type="link" icon={<PlusOutlined />} disabled={!canAdd} onClick={() => add()}>添加一行</Button><Button type="link" danger icon={<DeleteOutlined />} disabled={!canEdit || !selectedRows.length || saving} loading={deleting} onClick={deleteRows}>删除行</Button>
-      {canEdit && <SelectionMigration rows={filteredRows.filter(row=>selectedRowKeys.has(row._key))} fields={availableColumns} blocked={!!dirtyCount || saving || deleting || transferring || !!releasing} layout={layout} onBusy={setTransferring} onComplete={()=>{setSelectedRows([]);appliedSnapshot.current="";void data.refetch();void styleCounts.refetch();}}/>}
+      {canEdit && <SelectionMigration rows={filteredRows.filter(row=>selectedRowKeys.has(row._key))} fields={availableColumns} blocked={!!dirtyCount || saving || deleting || transferring || !!releasing} layout={layout} onBusy={setTransferring} onComplete={()=>{tableHistory.clear();setSelectedRows([]);appliedSnapshot.current="";void data.refetch();void styleCounts.refetch();}}/>}
       <SelectionFieldManager addFieldRef={addFieldRef} columns={columns} visible={visible} canEdit={canEdit} canAdd={canAddField} userId={String(user.id)} isSuperAdmin={user.roleCodes?.includes("SUPER_ADMIN")} onVisibilityChange={layout.setFieldVisibility} blocked={!!dirtyCount || saving || deleting} onDelete={key=>{setColumns(current=>current.map(column=>column.key===key?{...column,deleted:true}:column));setVisible(current=>current.filter(item=>item!==key));setColumnFilters(current=>Object.fromEntries(Object.entries(current).filter(([fieldKey])=>fieldKey!==key)));if(columnSort?.key===key)setColumnSort(null);if(groupBy===`field:${key}`)setGroupBy("none");setFilterColumn(null);setCellAnchor(null);setFocusedCell(null);setSelectedColumnKeys([]);columnSelectionAnchor.current=null;setSelectedCells(new Set());setCopiedCells(new Set());setCellTextEditing(false);setFormatTarget(null);}} catalog={layout.preferences!.typeCatalog} onCatalogChange={value => layout.update("typeCatalog", value)} onVisible={key=>setVisible(current=>current.includes(key)?current.filter(item=>item!==key):[...current,key])} onMove={moveColumn} onSave={field=>{const previous=columns.find(column=>column.key===field.key);if((previous?.type || previous?.fallbackType)==="multiple" && (field.type || field.fallbackType)!=="multiple" && rows.some(row=>isEncodedChoiceValue(valueAt(row,previous!)))){message.error("已有含 / 的多选内容，请先调整内容后再修改字段类型");return false;}if(imageKeys.has(field.key) && rows.some(row=>(row[field.key]?.length || 0)>(field.imageConfig?.max || 30))){message.error("已有图片超过新上限，请先移除部分图片");return false;}if((field.type || field.fallbackType || field.textConfig) && !systemField(field)){const issue=rows.map(row=>fieldValueError(field,imageKeys.has(field.key)?JSON.stringify(row[field.key] || []):valueAt(row,field))).find(Boolean);if(issue){message.error("现有内容与设置不兼容："+issue);return false;}}const exists=columns.some(column=>column.key===field.key);setColumns(current=>exists?current.map(column=>column.key===field.key?field:column):[...current,field]);if(!exists)setVisible(current=>[...current,field.key]);}}/>
       <SelectionColumnGroupManager columns={columns} visible={visible} groups={columnGroups} onSave={async groups => { if(layout.conflict)throw new Error("表格设置有并发冲突，请先核对云端设置；本次分组草稿已保留");if(!layout.canEditShared && restrictSelectionReadonlyLayout(layout.preferences!,{...layout.preferences!,columnGroups:groups},String(user.id),!!user.roleCodes?.includes("SUPER_ADMIN")).blocked)throw new Error("公开分组调序或修改需要表格编辑权限；本次分组草稿已保留");setColumnGroups(groups);if(layout.error)layout.retry();if(!(await layout.ensureSaved()))throw new Error("分组保存失败或存在设置冲突；本次草稿已保留，请重试或核对表格设置");changeColumnGroup(columnGroupId);return true; }}/>
       <SelectionProtectionControl rows={rows} columns={availableColumns} selectedCells={selectedCells} selectedRows={selectedRows} currentRow={editorRow} blocked={!!dirtyCount || saving || deleting} onRefresh={()=>{appliedSnapshot.current="";void data.refetch();}}/>
@@ -1412,6 +1442,7 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
     <Dropdown trigger={["click"]} menu={{ selectable: true, selectedKeys: editorRow && editorColumn ? [editorRow.cellTextColors?.[editorColumn.key] || "default"] : [], items: textColorOptions.map(option => ({ key: option.value || "default", label: option.label, icon: <span className="selection-color-dot" style={{ background: option.value || "#46352a" }} /> })), onClick: ({ key }) => applyTextColor(key === "default" ? "" : key) }}><Button aria-label="字体颜色" title="字体颜色" disabled={!canEdit || !selectedCells.size} icon={<FontColorsOutlined />} /></Dropdown>
     <SelectionLayoutStatus layout={layout} />
     <SelectionTransfer columns={activeColumns} ensureLayoutSaved={layout.ensureSaved} filteredRows={imageSearchRowId !== null || searchTerms.length || Object.keys(columnFilters).length || columnSort ? filteredRows : undefined} canEdit={canEdit} blocked={!!dirtyCount || saving || deleting} selectedRows={filteredRows.filter(row => selectedRowKeys.has(row._key))} query={search} onImported={async () => {
+      tableHistory.clear();
       appliedSnapshot.current = "";
       await Promise.all([
         layout.refresh(),
@@ -1423,6 +1454,7 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
     </Space>{!!Object.keys(errors).length && <span className="selection-record-count"><Tooltip title="修改尚未保存；悬停红色单元格查看原因，修正后重试"><Button type="text" size="small" danger disabled={saving} onClick={() => { attempts.current.retry(); setRetryVersion((value) => value + 1); }}>未保存 · 重试</Button></Tooltip></span>}<SelectionCollaborators people={collaborators} rows={rows} columns={availableColumns} loading={!presence.data && presence.isFetching} failed={!!presence.error} onRetry={() => { void presence.refetch(); }}/></div>
     {imageSearchRowId !== null && <Alert className="selection-image-search-location" type="info" title="图片查找：当前显示所选款式，清除后恢复原搜索与列筛选。" action={<Button size="small" onClick={()=>{setImageSearchRowId(null);setPage(1);}}>清除图片查找</Button>}/>}
     {archive && <SelectionFixedOrder open={fixedOrderOpen} onClose={()=>setFixedOrderOpen(false)} onApplied={async()=>{
+      tableHistory.clear();
       setFollowShared(false);setColumnSort(null);setGroupBy("none");setSort("sortOrder");setDirection("asc");setPage(1);
       setSelectedRows([]);setSelectedCells(new Set());setCellAnchor(null);setFocusedCell(null);
       appliedSnapshot.current="";

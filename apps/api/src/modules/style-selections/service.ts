@@ -12,6 +12,7 @@ import { selectionCreatedAtSql, selectionCreatedTimeRevision } from "./creation-
 import { selectionCreatedTimeInputSchema } from "../../../../../packages/contracts/src/selection-created-time.js";
 import { insertImage, readStoredImage } from "./image-storage.js";
 import { restoreProtectedImageColorLinks, validateSelectionImageColors } from "./image-colors.js";
+import { deleteSingleRow } from "./history-rows.js";
 import { db, insert, one, rows, update, camel, type Row, type Tx } from "../../../../../packages/database/src/index.js";
 import { setImmediate as yieldToRequests } from "node:timers/promises";
 import {
@@ -286,17 +287,7 @@ export async function heartbeat(c: Context, input: unknown) {
 }
 
 export async function remove(c: Context, value: string) {
-  const existing=await one(db,"SELECT * FROM style_selections WHERE id=$1::bigint",value);
-  protection.assertFields(await protection.policy(db),c,existing || {id:value},protection.rowFields(existing || {}));
-  return command(c, "style-selections/delete/" + value, {}, async (tx) => {
-    const p=await protection.writeLocks(tx,c);
-    const before = await entity(tx, "style_selections", value, true);
-    protection.assertFields(p,c,before,protection.rowFields(before));
-    if(before.product_id && await isArchive(tx)) fail("PRODUCT_IN_USE","商品档案保留商品与库存、采购的关联；请修改商品状态为停用或归档。仅空白草稿行可删除。",409);
-    await rows(tx, "DELETE FROM style_selections WHERE id=$1::bigint", value);
-    await audit(tx, c, "DELETE", "style-selection", value, before, null);
-    return { id: value };
-  });
+  return deleteSingleRow(c, value);
 }
 
 export async function write(c: Context, input: unknown, value?: string) {

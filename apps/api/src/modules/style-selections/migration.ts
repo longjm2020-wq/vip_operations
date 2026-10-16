@@ -232,6 +232,18 @@ export async function targets(c: Context) {
   );
 }
 type Input = z.infer<typeof migrationPreviewSchema>;
+function sourceTransferPermissionFields(policy: protection.Policy, c: Context, row: Row) {
+  const fields = protection.rowFields(row);
+  if (!c.actor.roleCodes?.includes("SUPER_ADMIN")) return fields;
+  const registered = new Set(policy.registeredFieldKeys || []);
+  const referenced = new Set([...policy.settings.regions, ...policy.settings.autoHideRegions].flatMap(region => region.columnKeys));
+  // Old imports/layout resets may leave values or formatting for fields whose
+  // registry no longer exists. These bytes remain inaccessible and are never
+  // candidates for transfer. They must not block the administrator's row lock;
+  // registered fields and every explicit protection reference still undergo
+  // the ordinary checks, including the row's migration lock.
+  return fields.filter(key => !key.startsWith("custom:") || registered.has(key) || referenced.has(key));
+}
 async function buildPlan(tx: Tx, c: Context, body: Input, lock = false) {
   const sourceKey = keyOfScope();
   if (sourceKey === body.target)
@@ -252,7 +264,7 @@ async function buildPlan(tx: Tx, c: Context, body: Input, lock = false) {
       sourcePolicy,
       source.context,
       row,
-      protection.rowFields(row),
+      sourceTransferPermissionFields(sourcePolicy, source.context, row),
     );
   const sourceLayout = await layout(tx,c,sourceKey,source.archive);
   const sourceDefinitions = new Map(sourceLayout.preferences.columns.map(field=>[field.key,field]));

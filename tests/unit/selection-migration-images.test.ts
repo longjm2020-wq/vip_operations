@@ -93,6 +93,60 @@ beforeEach(async () => {
 afterAll(async () => { await fixture.database?.close(); });
 
 describe("cross-table linked image colors", () => {
+  it("lets SUPER_ADMIN transfer mapped fields while preserving unregistered legacy values and formats only in the source", async () => {
+    const orphan = "custom:historical-removed", formatOrphan = "custom:historical-format-only";
+    await fixture.database!.query("UPDATE style_selections SET extra_fields=extra_fields || $1,cell_colors=$2,cell_alignments=$3", [JSON.stringify({ [orphan]: "Unmapped historical content" }), JSON.stringify({ [orphan]: "BLUE", [formatOrphan]: "ORANGE" }), JSON.stringify({ [formatOrphan]: "right" })]);
+    const c = actor(); c.actor.roleCodes = ["SUPER_ADMIN"];
+    const input = body(), plan = await preview(c, input);
+    expect(JSON.stringify(plan)).not.toContain(orphan);
+    expect(JSON.stringify(plan)).not.toContain(formatOrphan);
+    await commit({ ...c, key: "transfer-legacy-super-admin" }, { ...input, token: plan.token });
+    const source = (await read("SELECT * FROM style_selections WHERE id=1"))[0];
+    expect(source.extra_fields[orphan]).toBe("Unmapped historical content");
+    expect(source.cell_colors).toEqual({ [orphan]: "BLUE", [formatOrphan]: "ORANGE" });
+    expect(source.cell_alignments).toEqual({ [formatOrphan]: "right" });
+    expect(source.migration_locked).toBe(true);
+    const destination = (await read("SELECT * FROM selection_table_24.style_selections"))[0];
+    expect(JSON.stringify(destination)).not.toContain(orphan);
+    expect(JSON.stringify(destination)).not.toContain(formatOrphan);
+    expect(await read("SELECT * FROM selection_field_registry WHERE field_key=ANY($1)", [[orphan, formatOrphan]])).toHaveLength(0);
+  });
+  it("retains ordinary editor checks for unmapped unregistered historical content", async () => {
+    await fixture.database!.query("UPDATE style_selections SET extra_fields=extra_fields || $1", [JSON.stringify({ "custom:historical-removed": "Unmapped historical content" })]);
+    await expect(preview(actor(), body())).rejects.toMatchObject({ status: 403, response: { error: { code: "REGION_FORBIDDEN" } } });
+    await noWrites();
+  });
+  it.each(["region", "autoHide"])("does not ignore an unregistered legacy key explicitly referenced by %s protection", async kind => {
+    const orphan = "custom:historical-removed";
+    await fixture.database!.query("UPDATE style_selections SET extra_fields=extra_fields || $1", [JSON.stringify({ [orphan]: "Unmapped historical content" })]);
+    const region = { id: "123e4567-e89b-42d3-a456-426614174000", name: "Historical rule", scope: "columns", rowIds: [], columnKeys: [orphan] };
+    await fixture.database!.query("UPDATE style_selection_protection SET settings=$1", [JSON.stringify(kind === "region" ? { ...defaultProtection, enabled: true, regions: [{ ...region, users: {}, others: "deny" }] } : { ...defaultProtection, autoHide: true, autoHideRegions: [region] })]);
+    const c = actor(); c.actor.roleCodes = ["SUPER_ADMIN"];
+    await expect(preview(c, body())).rejects.toMatchObject({ status: 403, response: { error: { code: "REGION_FORBIDDEN" } } });
+    await noWrites();
+  });
+  it("rejects an explicitly requested unknown field rather than registering or copying its historical data", async () => {
+    const orphan: SelectionField = { key: "custom:historical-removed", label: "Unknown historical field", custom: true, type: "text", width: 100 };
+    await fixture.database!.query("UPDATE style_selections SET extra_fields=extra_fields || $1", [JSON.stringify({ [orphan.key]: "Unmapped historical content" })]);
+    const c = actor(); c.actor.roleCodes = ["SUPER_ADMIN"];
+    const input = body(); input.fields.push(orphan); input.mappings.push({ source: orphan.key, target: "material" });
+    await expect(preview(c, input)).rejects.toMatchObject({ status: 403, response: { error: { message: "原表字段不可查看或尚未保存" } } });
+    expect(await read("SELECT * FROM selection_field_registry WHERE field_key=$1", [orphan.key])).toHaveLength(0);
+    await noWrites();
+  });
+  it("keeps registered private fields private and preserves migration locks for SUPER_ADMIN", async () => {
+    const secret: SelectionField = { key: "custom:secret", label: "Private source", custom: true, type: "text", width: 100 };
+    await register("default", secret, "8", "PRIVATE");
+    await layout("default", [sourceColor, secret]);
+    await fixture.database!.query("UPDATE style_selections SET extra_fields=extra_fields || $1", [JSON.stringify({ [secret.key]: "Registered secret", "custom:historical-removed": "Unmapped historical content" })]);
+    const c = actor(); c.actor.roleCodes = ["SUPER_ADMIN"];
+    const input = body(); input.fields.push(secret); input.mappings.push({ source: secret.key, target: "material" });
+    await expect(preview(c, input)).rejects.toMatchObject({ status: 400, response: { error: { message: expect.stringContaining("私有字段") } } });
+    await fixture.database!.query("UPDATE style_selections SET migration_locked=true");
+    await expect(preview(c, body())).rejects.toMatchObject({ status: 409, response: { error: { code: "MIGRATION_LOCKED" } } });
+    expect(await read("SELECT * FROM selection_table_24.style_selections")).toHaveLength(0);
+    expect(await read("SELECT * FROM audit_logs")).toHaveLength(0);
+  });
   it("does not reintroduce private source keys from dormant configs in a saved shared target layout", async () => {
     const secret: SelectionField = { key: "custom:secret-category", label: "三级类目", custom: true, width: 100, type: "text" };
     const dormant: SelectionField = { key: "custom:dormant-limit", label: "普通价格", custom: true, width: 100, type: "text", vipTagPriceLimitConfig: defaultVipTagPriceLimitConfig(secret.key) };
