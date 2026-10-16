@@ -29,7 +29,7 @@ export function prepareVisibleSelectionWorkbookRecords(records: Row[], columns: 
 }
 
 function valueAt(row: Row, field: SelectionField, options: Options): string {
-  if (systemField(field)) return selectionSystemValue(row, field);
+  if (systemField(field)) return selectionSystemValue(row, field, options.archiveReferences);
   if (field.key === "collectionInventory") return String((row.collectionInventory || []).reduce((total: number, item: Row) => total + Number(item.available || 0) + Number(item.production || 0), 0));
   const value = custom(field) ? row.extraFields?.[field.key] : row[field.key];
   const reference = field.key.startsWith("custom:product:") ? field.key.slice("custom:product:".length) : "";

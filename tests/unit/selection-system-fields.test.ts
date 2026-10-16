@@ -1,7 +1,18 @@
 import { expect, it } from "vitest";
 import { selectionSystemValue } from "../../apps/web/src/selection-system-fields.js";
 import { allowedFieldTypes } from "../../apps/web/src/selection-field-types.js";
+import { defaultVipTagPriceLimitConfig } from "../../packages/contracts/src/selection-vip-tag-price-limit.js";
 const field = { key: "custom:system", label: "系统", width: 150, custom: true };
+it("resolves actual archive category names for derived price while preserving missing/denied blanks", () => {
+  const computed = { ...field, type: "vipTagPriceLimit" as const, vipTagPriceLimitConfig: defaultVipTagPriceLimitConfig("custom:product:categoryId") };
+  const row = { extraFields: { "custom:product:categoryId": "42", [field.key]: "8888" }, cellAccess: { "custom:product:categoryId": "read" } };
+  const references = { categoryId: [{ id: "42", name: "半截裙" }] };
+  expect(selectionSystemValue(row, computed, references)).toBe("899");
+  expect(selectionSystemValue(row, computed)).toBe("");
+  expect(selectionSystemValue({ ...row, cellAccess: { "custom:product:categoryId": "deny" } }, computed, references)).toBe("");
+  expect(allowedFieldTypes(field)).toContain("vipTagPriceLimit");
+  expect(allowedFieldTypes({ ...field, custom: false, key: "supplierStyleNo" })).not.toContain("vipTagPriceLimit");
+});
 it("uses recorded creator / modifier identities and does not invent missing historical modifiers", () => {
   const row = {
     createdBy: "1",

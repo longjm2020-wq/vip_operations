@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { selectionViewSchema } from "./selection-view.js";
 import { migrationConfigSchema } from "./selection-migration-config.js";
+import { selectionVipTagPriceLimitConfigSchema } from "./selection-vip-tag-price-limit.js";
 
 export const selectionInitialColumnWidth = 100;
 
@@ -21,6 +22,7 @@ export const selectionFieldTypeSchema = z.enum([
   "createdTime",
   "modifiedTime",
   "autonumber",
+  "vipTagPriceLimit",
 ]);
 const key = z.string().min(1).max(100);
 const keys = z
@@ -50,6 +52,7 @@ export const selectionFieldSchema = z
     type: selectionFieldTypeSchema.optional(),
     typePreset: key.optional(),
     fallbackType: selectionFieldTypeSchema.optional(),
+    vipTagPriceLimitConfig: selectionVipTagPriceLimitConfigSchema.optional(),
     textConfig: z
       .object({
         countMode: z.enum(["characters", "han"]),
@@ -92,6 +95,15 @@ export const selectionFieldSchema = z
       .optional(),
   })
   .strict()
+  .superRefine((field, context) => {
+    if ((field.type || field.fallbackType) !== "vipTagPriceLimit") return;
+    if (!field.vipTagPriceLimitConfig) context.addIssue({
+      code: "custom", path: ["vipTagPriceLimitConfig"], message: "请选择三级类目来源并配置吊牌限价",
+    });
+    else if (field.vipTagPriceLimitConfig.sourceKey === field.key) context.addIssue({
+      code: "custom", path: ["vipTagPriceLimitConfig", "sourceKey"], message: "吊牌限价不能引用自身",
+    });
+  })
   .transform((field) => {
     if (field.key !== "registrationBatch") return field;
     const upgraded = (field.type || field.fallbackType) !== "createdTime";

@@ -4,6 +4,7 @@ import {
   selectionRangeHeaderText,
 } from "../../apps/web/src/selection-range-image-model.js";
 import type { SelectionField } from "../../packages/contracts/src/selection-layout.js";
+import { defaultVipTagPriceLimitConfig } from "../../packages/contracts/src/selection-vip-tag-price-limit.js";
 
 const columns: SelectionField[] = [
   { key: "xutiStyleNo", label: "序缇款号", width: 110 },
@@ -59,6 +60,25 @@ describe("selection range image content", () => {
       cellAlignments: { xutiStyleNo: "left" }, cellVerticalAlignments: { xutiStyleNo: "bottom" },
     }], ["a::xutiStyleNo"]);
     expect(table.rows[0].cells[0]).toMatchObject({ text: "0", background: "#eef9e8", color: "#cf1322", align: "left", verticalAlign: "bottom" });
+  });
+
+  it("copies computed limits from current categories and archive labels while keeping denied sources blank", () => {
+    const limitColumns: SelectionField[] = [
+      { key: "custom:limit", label: "唯品吊牌限价", width: 120, custom: true, type: "vipTagPriceLimit", vipTagPriceLimitConfig: defaultVipTagPriceLimitConfig("custom:category") },
+      { key: "custom:archive-limit", label: "商品分类吊牌限价", width: 120, custom: true, type: "vipTagPriceLimit", vipTagPriceLimitConfig: defaultVipTagPriceLimitConfig("custom:product:categoryId") },
+    ];
+    const extraFields = { "custom:category": "半截裙", "custom:product:categoryId": "42", "custom:limit": "STALE_SAVED_LIMIT", "custom:archive-limit": "STALE_ARCHIVE_LIMIT" };
+    const cellAccess = { "custom:limit": "read", "custom:archive-limit": "read", "custom:category": "read", "custom:product:categoryId": "read" };
+    const rows = [
+      { _key: "a", extraFields: { ...extraFields }, cellAccess: { ...cellAccess } },
+      { _key: "b", extraFields: { ...extraFields }, cellAccess: { ...cellAccess, "custom:category": "deny", "custom:product:categoryId": "deny" } },
+      { _key: "c", extraFields: { ...extraFields, "custom:category": "尚未配置类目", "custom:product:categoryId": "99" }, cellAccess: { ...cellAccess } },
+    ];
+    const table = model(rows, rows.flatMap(row => limitColumns.map(column => `${row._key}::${column.key}`)), {
+      columns: limitColumns, archiveReferences: { categoryId: [{ id: "42", name: "女式马夹" }] },
+    });
+    expect(table.rows.map(row => row.cells.map(cell => cell.text))).toEqual([["899", "1299"], ["", ""], ["", ""]]);
+    expect(JSON.stringify(table)).not.toContain("STALE_");
   });
 
   it("copies header labels in display order and supports an empty table", () => {

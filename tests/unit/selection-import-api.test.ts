@@ -9,6 +9,7 @@ import { selectionBaseFields } from "../../packages/contracts/src/selection-migr
 import { selectionLayoutSchema, type SelectionField } from "../../packages/contracts/src/selection-layout.js";
 import { archiveFieldIds } from "../../packages/contracts/src/product-archive.js";
 import { selectionImportLimits } from "../../packages/contracts/src/selection-import-template.js";
+import { defaultVipTagPriceLimitConfig } from "../../packages/contracts/src/selection-vip-tag-price-limit.js";
 
 const fixture = vi.hoisted(() => ({ database: null as PGlite | null, archive: false, registryBigInt: false, mirrors: [] as Row[] }));
 vi.mock("../../packages/database/src/index.js", async importOriginal => {
@@ -122,6 +123,18 @@ beforeEach(async () => {
 afterAll(async () => { await fixture.database?.close(); });
 
 describe("atomic Excel style import", () => {
+  it("rejects importing or directly forging computed price limits without modifying stored legacy values", async () => {
+    const category = field("三级类目", "single", ["半截裙", "连衣裙"]);
+    const computed = { ...field("吊牌限价", "vipTagPriceLimit"), vipTagPriceLimitConfig: defaultVipTagPriceLimitConfig(category.key) };
+    await register(category, "7", "PUBLIC"); await register(computed, "7", "PUBLIC");
+    const before = await style("COMPUTED-LIMIT", { extraFields: { [category.key]: "半截裙", [computed.key]: "原人工值" } });
+    await expect(previewImport(actor(), input([{ xutiStyleNo: "COMPUTED-LIMIT", fieldValues: { 吊牌限价: "899" } }]))).rejects.toMatchObject({ status: 400, response: { error: { message: expect.stringContaining("由系统生成") } } });
+    await expect(write(actor("forge-limit"), { extraFields: { [computed.key]: "899" } }, String(before.id))).rejects.toMatchObject({ status: 400, response: { error: { message: expect.stringContaining("不能直接填写") } } });
+    expect((await read("SELECT extra_fields FROM style_selections WHERE id=$1", [before.id]))[0].extra_fields).toEqual(before.extra_fields);
+    expect(await read("SELECT * FROM audit_logs")).toEqual([]);
+    await write(actor("preserve-limit"), { material: "正常更新", extraFields: before.extra_fields }, String(before.id));
+    expect((await read("SELECT extra_fields FROM style_selections WHERE id=$1", [before.id]))[0].extra_fields).toEqual(before.extra_fields);
+  });
   it.each(["", "供应商自定义粉"])("previews parsed legacy 颜色 detail against supplied archive standard 粉色 when supplier color is %j", async supplierColor => {
     const standard = await registerArchiveStandardTags();
     const parsed = await parsedLegacyImageWorkbook(["序缇款号", "标准颜色", "供应商颜色"], ["H49X2060", "粉色", supplierColor]);

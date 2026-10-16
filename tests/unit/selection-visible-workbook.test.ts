@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import Excel from "exceljs";
 import { selectionLayoutSchema, type SelectionField } from "../../packages/contracts/src/selection-layout.js";
+import { defaultVipTagPriceLimitConfig } from "../../packages/contracts/src/selection-vip-tag-price-limit.js";
 import {
   createVisibleSelectionWorkbook,
   prepareVisibleSelectionWorkbookRecords,
@@ -74,6 +75,28 @@ describe("visible selection workbook", () => {
     });
     expect(visibleSelectionWorkbookFields(active, fresh).map(column => [column.key, column.label])).toEqual([["supplierCode", "供应商编码"], ["material", "成分"]]);
     expect(visibleSelectionWorkbookFields(active, null).map(column => column.key)).toEqual(["supplierCode", "images", "material"]);
+  });
+
+  it("exports current derived price limits from category labels and archive references without stale or denied source values", async () => {
+    const columns = [
+      field("custom:limit", "唯品吊牌限价", { custom: true, type: "vipTagPriceLimit", vipTagPriceLimitConfig: defaultVipTagPriceLimitConfig("custom:category") }),
+      field("custom:archive-limit", "商品分类吊牌限价", { custom: true, type: "vipTagPriceLimit", vipTagPriceLimitConfig: defaultVipTagPriceLimitConfig("custom:product:categoryId") }),
+    ];
+    const extraFields = { "custom:category": "半截裙", "custom:product:categoryId": "42", "custom:limit": "STALE_SAVED_LIMIT", "custom:archive-limit": "STALE_ARCHIVE_LIMIT" };
+    const cellAccess = { "custom:limit": "read", "custom:archive-limit": "read", "custom:category": "read", "custom:product:categoryId": "read" };
+    const records = [
+      { id: "1", extraFields: { ...extraFields }, cellAccess: { ...cellAccess } },
+      { id: "2", extraFields: { ...extraFields }, cellAccess: { ...cellAccess, "custom:category": "deny", "custom:product:categoryId": "deny" } },
+      { id: "3", extraFields: { ...extraFields, "custom:category": "尚未配置类目", "custom:product:categoryId": "99" }, cellAccess: { ...cellAccess } },
+    ];
+    const original = structuredClone(records);
+    const book = await reload(await createVisibleSelectionWorkbook(records, columns, { archiveReferences: { categoryId: [{ id: "42", name: "女式马夹" }] } }));
+    const sheet = book.getWorksheet("表格资料")!;
+    expect(rowValues(sheet.getRow(2))).toEqual(["899", "1299"]);
+    expect(rowValues(sheet.getRow(3))).toEqual(["", ""]);
+    expect(rowValues(sheet.getRow(4))).toEqual(["", ""]);
+    expect(sheetText(book)).not.toContain("STALE_");
+    expect(records).toEqual(original);
   });
 
   it("masks forbidden cells and omits undeclared fields and pictures from every serialized worksheet", async () => {

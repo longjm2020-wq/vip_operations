@@ -5,7 +5,8 @@ import { restoreProtectedImageColorLinks } from "./image-colors.js";
 import { canManageContent, effectiveContentAccess, tableAccess } from "../projects/library.js";
 import { assertTextPatch, lockTextDefinitions, textLimitDefinitions } from "./text-limits.js";
 import { readableSelectionCreatedAt, selectionCreatedAtSql, selectionCreatedAtText } from "./creation-time.js";
-import type { SelectionField } from "../../../../../packages/contracts/src/selection-layout.js";
+import { selectionFieldSchema, type SelectionField } from "../../../../../packages/contracts/src/selection-layout.js";
+import { isSelectionComputedField, resolveVipTagPriceLimit } from "../../../../../packages/contracts/src/selection-vip-tag-price-limit.js";
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import {
@@ -44,6 +45,10 @@ export type Policy = {
   fieldRevision?: string;
   textFields?: SelectionField[];
   deletedFieldKeys?: string[];
+  computedFieldKeys?: string[];
+  computedFields?: Record<string, SelectionField>;
+  computedSourceKeys?: string[];
+  computedCategoryNames?: Record<string, string>;
 };
 export const activePolicy = (policy: Policy) =>
   policy.settings.enabled ||
@@ -62,8 +67,19 @@ export async function policy(tx: Tx, lock = false): Promise<Policy> {
       (lock ? " FOR SHARE" : ""),
     selectionScope.getStore() || "default",
   );
+  const settings = normalizeSelectionProtection(value?.settings);
+  const definitions = fields.flatMap(field => {
+    const parsed = selectionFieldSchema.safeParse(field.definition);
+    return parsed.success ? [parsed.data] : [];
+  });
+  const computed = definitions.filter(field => !field.deleted && isSelectionComputedField(field));
+  const needsCategoryNames = settings.autoHide && computed.some(field => field.vipTagPriceLimitConfig?.sourceKey === "custom:product:categoryId" &&
+    settings.autoHideRegions.some(region => ["sheet", "rows"].includes(region.scope) || region.columnKeys.includes(field.key)));
+  // Category names are used only to decide whether a computed cell is nonempty
+  // for automatic hiding. Neither the lookup nor derived prices are projected.
+  const computedCategoryNames = needsCategoryNames ? Object.fromEntries((await rows(tx, "SELECT id::text AS id,name FROM public.categories")).map(category => [String(category.id), String(category.name)])) : undefined;
   return {
-    settings: normalizeSelectionProtection(value?.settings),
+    settings,
     revision: value?.revision || 0,
     registeredFieldKeys: fields.map((field) => field.field_key),
     privateFieldOwners: Object.fromEntries(
@@ -71,9 +87,13 @@ export async function policy(tx: Tx, lock = false): Promise<Policy> {
         .filter((field) => field.visibility === "PRIVATE")
         .map((field) => [field.field_key, String(field.owner_id)]),
     ),
-    fieldRevision: digest(camel(fields)),
+    fieldRevision: digest(camel(computedCategoryNames ? [fields, computedCategoryNames] : fields)),
     textFields: textLimitDefinitions(fields),
     deletedFieldKeys: fields.filter(field => field.definition?.deleted).map(field => field.field_key),
+    computedFieldKeys: fields.filter(field => (field.definition?.type || field.definition?.fallbackType) === "vipTagPriceLimit").map(field => field.field_key),
+    computedFields: Object.fromEntries(computed.map(field => [field.key, field])),
+    computedSourceKeys: definitions.filter(field => !field.deleted && ["text", "single"].includes(field.type || field.fallbackType || "text")).map(field => field.key),
+    computedCategoryNames,
   };
 }
 const formats = [
@@ -112,7 +132,17 @@ export function access(policy: Policy, actor: Actor, raw: Row, key: string) {
   if (!fieldVisible(policy, actor, key)) return "deny";
   const row = camel(raw),
     value = key === "registrationBatch" ? row.createdAt : key.startsWith("custom:") ? row.extraFields?.[key] : row[key];
-  const level = selectionCellAccess(policy.settings, actor, row, key, nonempty(value));
+  let hasContent = nonempty(value);
+  if (policy.settings.autoHide && policy.computedFieldKeys?.includes(key)) {
+    const field = policy.computedFields?.[key], sourceKey = field?.vipTagPriceLimitConfig?.sourceKey;
+    const defaultTextSource = sourceKey && !sourceKey.startsWith("custom:") &&
+      ["xutiStyleNo", "supplierStyleNo", "supplierCode", "color", "sizeRange", "material", "sellingPoints"].includes(sourceKey);
+    const validSource = sourceKey && sourceKey !== key && !policy.computedFieldKeys.includes(sourceKey) &&
+      !policy.deletedFieldKeys?.includes(sourceKey) && (defaultTextSource && !policy.registeredFieldKeys?.includes(sourceKey) || policy.computedSourceKeys?.includes(sourceKey));
+    const sourceAccess = validSource ? access(policy, actor, raw, sourceKey) : "deny";
+    hasContent = !!field && sourceAccess !== "deny" && resolveVipTagPriceLimit(field, { ...row, cellAccess: { [sourceKey!]: sourceAccess } }, { categoryNames: policy.computedCategoryNames }) !== null;
+  }
+  const level = selectionCellAccess(policy.settings, actor, row, key, hasContent);
   return row.migrationLocked && level === "edit" ? "read" : level;
 }
 export function project(policy: Policy, actor: Actor, raw: Row): Row {
@@ -152,7 +182,7 @@ export function project(policy: Policy, actor: Actor, raw: Row): Row {
       // disclose another user's private field identifier.
       continue;
     }
-    cellAccess[key] = access(policy, actor, row, key);
+    cellAccess[key] = access(policy, actor, raw, key);
     if (cellAccess[key] !== "deny") continue;
     hiddenCells.push(key);
     if (key.startsWith("custom:")) {
@@ -309,6 +339,8 @@ export async function assertWrite(
     row,
     !before ? [...new Set([...affected, ...selectionFields])] : affected,
   );
+  if (filled.some(key => p.computedFieldKeys?.includes(key)))
+    fail("VALIDATION_ERROR", "唯品吊牌限价由三级类目自动匹配，不能直接填写或清空；请修改来源类目或字段匹配规则", 400);
   assertTextPatch(p.textFields || [], patch);
   const shouldClaim =
     p.settings.claimsEnabled &&

@@ -1,0 +1,15 @@
+.selection-vip-tag-price-limit-settings { margin: 0; padding: 12px; border: 1px solid #eaded3; border-radius: 6px; min-width: 0; }
+.selection-vip-tag-price-limit-settings p { margin: 8px 0; color: #78604d; font-size: 12px; line-height: 1.6; }
+.selection-vip-tag-price-limit-rules { max-height: 280px; overflow: auto; margin: 12px 0; border: 1px solid #eaded3; border-radius: 4px; }
+.selection-vip-tag-price-limit-rules table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.selection-vip-tag-price-limit-rules th { position: sticky; top: 0; z-index: 1; background: #fff8f1; text-align: left; color: #6e5443; font-weight: 500; }
+.selection-vip-tag-price-limit-rules th, .selection-vip-tag-price-limit-rules td { padding: 6px; }
+.selection-vip-tag-price-limit-rules th:nth-child(2) { width: 130px; }
+.selection-vip-tag-price-limit-rules th:last-child { width: 40px; }
+.selection-vip-tag-price-limit-rules .ant-input-number { width: 100%; }
+.selection-vip-tag-price-limit-rules .selection-vip-tag-price-limit-empty { padding: 6px 10px; }
+.selection-vip-tag-price-limit-action-label { font-size: 12px; }
+@media (max-width: 480px) {
+  .selection-vip-tag-price-limit-rules th:nth-child(2) { width: 110px; }
+  .selection-vip-tag-price-limit-rules th, .selection-vip-tag-price-limit-rules td { padding: 4px; }
+}

@@ -22,6 +22,37 @@ function semantic(field: SelectionField) {
   const { width: _width, ...value } = definition(field);
   return canonical(value);
 }
+const priceLimitField = (field: SelectionField) => (field.type || field.fallbackType) === "vipTagPriceLimit";
+/** Resolve references against owned changes and canonical definitions, never forged snapshots. */
+function validatePriceLimitSources(c: Context, fields: SelectionField[], registry: Row[], allowUnownedChanges = false) {
+  const definitions = new Map(registry.map(row => [row.field_key, registeredField(row)]));
+  for (const field of fields) {
+    const saved = definitions.get(field.key);
+    if (!saved || !field.key.startsWith("custom:") || superAdmin(c) || saved.ownerId === c.actor.id ||
+      allowUnownedChanges && !saved.ownerId && c.actor.permissions.includes("selection.manage")) {
+      definitions.set(field.key, { ...field, ownerId: saved?.ownerId || c.actor.id, visibility: saved?.visibility || "PRIVATE" });
+    }
+  }
+  for (const field of definitions.values()) {
+    if (!priceLimitField(field) || field.deleted) continue;
+    if (!field.key.startsWith("custom:") || field.key.startsWith("custom:product:"))
+      fail("VALIDATION_ERROR", "唯品吊牌限价须使用新建自定义字段，不能替换商品固定字段", 400);
+    const sourceKey = field.vipTagPriceLimitConfig?.sourceKey;
+    const source = sourceKey ? definitions.get(sourceKey) : undefined;
+    // Built-in fields do not necessarily have a registry row. Their default
+    // business type is text; customized definitions above retain their type.
+    const builtin = !!sourceKey && ["xutiStyleNo", "supplierStyleNo", "supplierCode", "color", "sizeRange", "material", "sellingPoints"].includes(sourceKey);
+    if (!sourceKey || sourceKey === field.key || !source && !builtin || source?.deleted ||
+      source && !["text", "single"].includes(source.type || source.fallbackType || "text"))
+      fail("VALIDATION_ERROR", "吊牌限价的三级类目来源不存在、已删除或类型不支持；请先调整关联字段", 400);
+    if (source?.visibility === "PRIVATE" && !superAdmin(c) && source.ownerId !== c.actor.id && field.ownerId === c.actor.id)
+      fail("FORBIDDEN", "吊牌限价的三级类目来源不可访问，请重新选择来源字段", 403);
+    if (field.visibility === "PUBLIC" && source?.visibility === "PRIVATE")
+      fail("VALIDATION_ERROR", "公开的吊牌限价字段不能关联私有来源，请先公开三级类目来源字段", 400);
+    if (source?.visibility === "PRIVATE" && field.ownerId !== source.ownerId && !superAdmin(c))
+      fail("VALIDATION_ERROR", "三级类目来源仍被自动限价字段引用，当前修改会使其不可访问；请先调整关联字段", 400);
+  }
+}
 async function assertUnusedFieldKey(tx:Tx,key:string) {
   const orphan = await one(tx,`SELECT 1 FROM style_selections WHERE extra_fields ? $1 OR
     cell_colors ? $1 OR cell_alignments ? $1 OR cell_vertical_alignments ? $1 OR
@@ -38,7 +69,7 @@ export async function registerArchiveFields(tx: Tx, _c: Context, fields: Selecti
 export async function canonicalizeLayout(tx: Tx, c: Context, preferences: SelectionLayout, workspace = workspaceKey()): Promise<SelectionLayout> {
   const registry = await readFieldRegistry(tx, workspace), byKey = new Map(registry.map(row => [row.field_key, row]));
   const visible = (row: Row) => superAdmin(c) || row.visibility === "PUBLIC" || String(row.owner_id) === c.actor.id;
-  const columns = preferences.columns.flatMap<SelectionField>(field => {
+  let columns = preferences.columns.flatMap<SelectionField>(field => {
     if (!field.key.startsWith("custom:")) {
       const { textConfig: _clientLimit, ...value } = definition(field);
       const savedLimit = byKey.get(field.key)?.definition?.textConfig;
@@ -49,6 +80,15 @@ export async function canonicalizeLayout(tx: Tx, c: Context, preferences: Select
   });
   const present = new Set(columns.map(field => field.key));
   for (const row of registry) if (row.field_key.startsWith("custom:") && visible(row) && !present.has(row.field_key)) columns.push(registeredField(row));
+  // Historical invalid references must never disclose another user's private
+  // field key through an otherwise public computed definition.
+  columns = columns.flatMap(field => {
+    const sourceKey = field.vipTagPriceLimitConfig?.sourceKey;
+    if (!sourceKey?.startsWith("custom:") || !!byKey.get(sourceKey) && visible(byKey.get(sourceKey)!)) return [field];
+    // A dormant config may be kept for switching types back. Its previous
+    // source identifier is still private even while the field is ordinary.
+    return priceLimitField(field) ? [] : [{ ...field, vipTagPriceLimitConfig: undefined }];
+  });
   const keys = new Set(columns.map(field => field.key)), permitted = (key: string) => !key.startsWith("custom:") || keys.has(key);
   const columnGroups = preferences.columnGroups.filter(group => group.columnKeys.every(permitted));
   return selectionLayoutSchema.parse({ ...preferences, columns,
@@ -72,7 +112,8 @@ async function storeDefinition(tx: Tx, workspace: string, row: Row, field: Selec
 }
 /** Register new fields as private regardless of client-supplied ownership or scope. */
 export async function reconcilePersonalFields(tx: Tx, c: Context, preferences: SelectionLayout): Promise<SelectionLayout> {
-  const workspace = workspaceKey(), registry = new Map((await readFieldRegistry(tx, workspace)).map(row => [row.field_key, row]));
+  const workspace = workspaceKey(), rowsBefore = await readFieldRegistry(tx, workspace), registry = new Map(rowsBefore.map(row => [row.field_key, row]));
+  validatePriceLimitSources(c, preferences.columns, rowsBefore);
   for (const field of preferences.columns.filter(field => field.key.startsWith("custom:"))) {
     const row = registry.get(field.key);
     if (!row) {
@@ -93,6 +134,7 @@ export async function reconcilePersonalFields(tx: Tx, c: Context, preferences: S
 export async function validateSharedFieldChanges(tx: Tx, c: Context, fields: SelectionField[]) {
   await reconcileBuiltinTextFields(tx, fields);
   const workspace = workspaceKey(), registry = new Map((await readFieldRegistry(tx, workspace)).map(row => [row.field_key, row]));
+  validatePriceLimitSources(c, fields, [...registry.values()], true);
   for (const field of fields.filter(field => field.key.startsWith("custom:"))) {
     const row = registry.get(field.key);
     if (!row || row.visibility !== "PUBLIC") fail("FORBIDDEN", "私有字段不能写入公开布局", 403);
@@ -152,6 +194,12 @@ export async function setFieldVisibility(c: Context, key: string, input: unknown
     if (row.revision !== body.revision) fail("CONFLICT", "字段已被更新，请重新读取", 409);
     const visibility = body.public ? "PUBLIC" : "PRIVATE";
     if (row.visibility === visibility) return registeredField(row);
+    const registry = await readFieldRegistry(tx, workspace);
+    if (visibility === "PRIVATE" && registry.some(item => !item.definition?.deleted && priceLimitField(item.definition) &&
+      item.definition?.vipTagPriceLimitConfig?.sourceKey === key && (item.visibility === "PUBLIC" || String(item.owner_id) !== String(row.owner_id))))
+      fail("VALIDATION_ERROR", "此字段仍被吊牌限价字段引用，设为私有会使来源不可访问；请先调整关联限价字段的范围、删除或更换来源", 400);
+    if (visibility === "PUBLIC")
+      validatePriceLimitSources(c, [{ ...registeredField(row), visibility }], registry.map(item => item.field_key === key ? { ...item, visibility } : item));
     const after = await one(tx, "UPDATE public.selection_field_registry SET visibility=$3,revision=revision+1,updated_at=now() WHERE workspace_key=$1 AND field_key=$2 RETURNING *", workspace, key, visibility);
     const field = registeredField(after!);
     await updatePublishedField(tx, workspace, field);
@@ -163,6 +211,7 @@ export async function setFieldVisibility(c: Context, key: string, input: unknown
 export async function registerTransferredFields(tx: Tx, c: Context, workspace: string, fields: SelectionField[]) {
   await rows(tx, "SELECT pg_advisory_xact_lock(hashtextextended($1,0))::text", `selection-layout-shared:${workspace}`);
   await reconcileBuiltinTextFields(tx, fields, workspace, true);
+  validatePriceLimitSources(c, fields, await readFieldRegistry(tx, workspace), true);
   for (const field of fields.filter(field => field.key.startsWith("custom:"))) {
     const row = await one(tx, "SELECT * FROM public.selection_field_registry WHERE workspace_key=$1 AND field_key=$2 FOR UPDATE", workspace, field.key);
     if (!row) {

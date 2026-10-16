@@ -1,5 +1,5 @@
-export const fieldTypes = {text:"文本",number:"数字",date:"日期",single:"单选",multiple:"多选",checkbox:"复选框",currency:"货币",percent:"百分比",link:"超链接",image:"图片",tags:"自定义标签",creator:"创建人",modifier:"最后修改人",createdTime:"创建时间",modifiedTime:"最后修改时间",autonumber:"编号"} as const;
-export const systemFieldTypes=new Set<string>(["creator","modifier","createdTime","modifiedTime","autonumber"]);
+export const fieldTypes = {text:"文本",number:"数字",date:"日期",single:"单选",multiple:"多选",checkbox:"复选框",currency:"货币",percent:"百分比",link:"超链接",image:"图片",tags:"自定义标签",vipTagPriceLimit:"唯品吊牌限价",creator:"创建人",modifier:"最后修改人",createdTime:"创建时间",modifiedTime:"最后修改时间",autonumber:"编号"} as const;
+export const systemFieldTypes=new Set<string>(["creator","modifier","createdTime","modifiedTime","autonumber","vipTagPriceLimit"]);
 export const systemField=(field:SelectionField)=>systemFieldTypes.has(field.type || field.fallbackType || "");
 export type FieldType = keyof typeof fieldTypes;
 import type { SelectionField } from "../../../packages/contracts/src/selection-layout.js";
@@ -25,7 +25,7 @@ export function resetFieldTypes(fields:SelectionField[]):SelectionField[]{
   return fields.map(field=>({...field,fallbackType:field.type || field.fallbackType,type:undefined}));
 }
 export function allowedFieldTypes(field:SelectionField):FieldType[]{
-  if(field.custom)return Object.keys(fieldTypes) as FieldType[];
+  if(field.custom)return (Object.keys(fieldTypes) as FieldType[]).filter(type=>type!=="vipTagPriceLimit" || !field.key.startsWith("custom:product:"));
   if(["images","labelImages"].includes(field.key))return ["image"];
   if(field.key==="registrationBatch")return ["createdTime"];
   if(["supplyPriceExclTax","vipPrice","livePrice","tagPrice"].includes(field.key))return ["number","currency","percent","text"];

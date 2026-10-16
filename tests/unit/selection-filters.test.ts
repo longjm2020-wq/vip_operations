@@ -3,6 +3,12 @@ import { applySelectionOptionSearch, matchesSelectionFilters, searchSelectionFil
 import type { SelectionFilter } from "../../packages/contracts/src/selection-view.js";
 
 describe("selection column filters and selection", () => {
+  it("sorts computed decimal limits numerically including fallback types and leaves blanks last", () => {
+    const key = "custom:limit", rows = ["899.5", "899.49", "", "0"].map(value => ({ extraFields: { [key]: value } }));
+    for (const column of [{ key, type: "vipTagPriceLimit" }, { key, fallbackType: "vipTagPriceLimit" }]) {
+      expect(sortSelectionRows(rows, { key, direction: "asc" }, [column]).map(row => row.extraFields[key])).toEqual(["0", "899.49", "899.5", ""]);
+    }
+  });
   const row = { _key: "1", material: "Cotton", vipPrice: "12.00", extraFields: { "custom:a": "夏季" }, images: [{ color: "红", url: "https://example.com/image" }] };
   it("combines built-in and custom filters without case sensitivity", () => {
     expect(matchesSelectionFilters(row, { material: { mode: "contains", value: "cot" }, "custom:a": { mode: "equals", value: "夏季" } })).toBe(true);

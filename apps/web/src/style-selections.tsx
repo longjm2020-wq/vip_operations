@@ -136,7 +136,7 @@ const initialColumns = (storageKey: (key:string)=>string,blankLayout=false,legac
 };
 const rowImages = (row: Row): SelectionImage[] => Array.isArray(row.images) ? row.images : [];
 const rowLabelImages = (row: Row): SelectionImage[] => Array.isArray(row.labelImages) ? row.labelImages : [];
-const valueAt = (row: Row, column: Column) => systemField(column)?selectionSystemValue(row,column):column.key === "collectionInventory" ? (row.collectionInventory || []).reduce((sum:number,item:Row)=>sum+Number(item.available || 0)+Number(item.production || 0),0) : column.custom ? row.extraFields?.[column.key] ?? "" : row[column.key];
+const selectionValueAt = (row: Row, column: Column, references?: Record<string, Row[]>) => systemField(column)?selectionSystemValue(row,column,references):column.key === "collectionInventory" ? (row.collectionInventory || []).reduce((sum:number,item:Row)=>sum+Number(item.available || 0)+Number(item.production || 0),0) : column.custom ? row.extraFields?.[column.key] ?? "" : row[column.key];
 const editableCreationTime = (column: Column) => column.key === "registrationBatch" && !column.custom;
 const readonlySystemField = (column: Column) => systemField(column) && !editableCreationTime(column);
 const withValue = (row: Row, column: Column, value: unknown) => {
@@ -298,6 +298,7 @@ function StyleSelectionsLayout() {
 
 function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController }) {
   const { api, queryClient, title, blankLayout, archive, archiveReferences, tableId } = useSelectionWorkspace();
+  const valueAt = (row: Row, column: Column) => selectionValueAt(row, column, archiveReferences);
   const canCreateProduct = useCan("product.create");
   const canAdd = useCan("selection.manage") && (!archive || canCreateProduct);
   const [transferring,setTransferring] = useState(false);
@@ -575,11 +576,11 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
   const repeatedStyles = useMemo(() => duplicateStyleCounts(rows, styleCounts.data?.data, original.current), [rows, styleCounts.data]);
   const colorSuggestions = useMemo(() => [...new Set(rows.flatMap((row) => splitTags(row.color)))], [rows]);
   const fieldViewRows=useMemo<Row[]>(()=>rows.map(row=>{
-    const systemValues=Object.fromEntries(columns.filter(systemField).map(column=>[column.key,readableSelectionCell(row,column.key)?selectionSystemValue(row,column):""]));
+    const systemValues=Object.fromEntries(columns.filter(systemField).map(column=>[column.key,readableSelectionCell(row,column.key)?selectionSystemValue(row,column,archiveReferences):""]));
     // Query a derived view, keeping the saved legacy batch untouched in rows.
     // Built-in system columns are read from the top level by search/filter code.
     return {...row,...Object.fromEntries(columns.filter(column=>systemField(column) && !column.custom).map(column=>[column.key,systemValues[column.key]])),selectionChoiceTexts:Object.fromEntries(columns.filter(column=>(column.type || column.fallbackType)==="multiple").map(column=>[column.key,readableSelectionCell(row,column.key)?choiceDisplayText(column,valueAt(row,column)):""])),extraFields:{...(row.extraFields || {}),...systemValues}};
-  }),[rows,columns]);
+  }),[rows,columns,archiveReferences]);
   const editView = JSON.stringify([searchText,imageSearchRowId,columnFilters,columnSort,groupBy,sort,direction,page,pageSize,columnViewSignature,activeColumns.map(column=>[column.key,column.type,column.fallbackType])]);
   const editingRow = editSession ? rows.find(row=>row._key===editSession.rowKey) : undefined;
   const heldEdit = editSession && editSession.view===editView && canEdit && editingRow &&
@@ -1281,7 +1282,7 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
     if(!readableSelectionCell(row,column.key))return cell(<span className="selection-hidden-value" aria-label="受保护内容">••••</span>);
     if(archive && (archiveReferences?.[archiveReferenceKey(column.key)] || archiveReferenceKey(column.key)==="status"))return cell(<ArchiveReferenceCell columnKey={column.key} label={column.label} value={String(valueAt(row,column) || "")} disabled={disabled} onChange={value=>liveInteractions.current.update(row._key,column,value)}/>);
     if(editableCreationTime(column))return cell(<input className="selection-date-input" aria-label={column.label} title="北京时间，输入 YYYY-MM-DD 或 YYYY-MM-DD HH:mm:ss；支持多行粘贴" placeholder="YYYY-MM-DD HH:mm:ss" readOnly={disabled} value={selectionCreationTimeValue(row, column.timeDisplay)} onChange={event => liveInteractions.current.update(row._key, column, event.target.value)} />);
-    if(systemField(column))return cell(<span aria-label={column.label} title="系统自动生成，不可手动编辑">{selectionSystemValue(row,column) || (row.id?"未记录":"保存后生成")}</span>);
+    if(systemField(column))return cell(<span aria-label={column.label} title={(column.type || column.fallbackType)==="vipTagPriceLimit"?"按三级类目匹配限价；空白或未匹配时留空，不可手动编辑":"系统自动生成，不可手动编辑"}>{selectionSystemValue(row,column,archiveReferences) || ((column.type || column.fallbackType)==="vipTagPriceLimit"?"":row.id?"未记录":"保存后生成")}</span>);
     if(column.custom && column.type==="image")return cell(<MemoImageCell {...imagePreviewProps} field={column} mobileId={row.id && !dirtyRows.has(row._key)?String(row.id):undefined} images={fieldImages(valueAt(row,column))} colors={splitTags(row.color)} disabled={disabled} onChange={images=>liveInteractions.current.update(row._key,column,JSON.stringify(images))}/>);
     if(column.type==="single" || column.type==="multiple")return cell(<SelectionChoiceCell field={column} value={String(valueAt(row,column) ?? "")} disabled={disabled} active={selected && selectedCells.size===1} alignment={row.cellAlignments?.[column.key]} verticalAlignment={row.cellVerticalAlignments?.[column.key]} onChange={value=>liveInteractions.current.update(row._key,column,value)}/>);
     if(column.type==="tags")return cell(<SelectionInlineTags field={column} value={String(valueAt(row,column) ?? "")} disabled={disabled} active={selected && selectedCells.size===1} onChange={(value,rename)=>liveInteractions.current.updateTags(row,column,value,rename)}/>);
@@ -1352,7 +1353,7 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
   const previewColumn = activeColumns.find(column => column.key === imagePreview?.columnKey);
   const previewImages = previewRow && previewColumn && readableSelectionCell(previewRow, previewColumn.key) ? previewColumn.key === "images" ? rowImages(previewRow) : previewColumn.key === "labelImages" ? rowLabelImages(previewRow) : fieldImages(valueAt(previewRow, previewColumn)) : [];
   useEffect(() => { if (imagePreview && !previewImages.length) setImagePreview(null); }, [imagePreview, previewImages.length]);
-  const statisticsValues=displayedRows.flatMap(row=>activeColumns.filter(column=>selectedCells.has(cellId(row._key,column.key))).map(column=>imageKeys.has(column.key)?((column.key==="images"?rowImages(row):rowLabelImages(row)).length?"图片":null):column.key==="collectionInventory"?(row.collectionInventory || []).reduce((sum:number,item:Row)=>sum+item.available+item.production,0):column.custom && column.type==="image"?(fieldImages(row.extraFields?.[column.key]).length?"图片":null):column.custom?row.extraFields?.[column.key]:valueAt(row,column)));
+  const statisticsValues=displayedRows.flatMap(row=>activeColumns.filter(column=>selectedCells.has(cellId(row._key,column.key))).map(column=>imageKeys.has(column.key)?((column.key==="images"?rowImages(row):rowLabelImages(row)).length?"图片":null):column.custom && column.type==="image"?(fieldImages(row.extraFields?.[column.key]).length?"图片":null):valueAt(row,column)));
   const editor = <div className="selection-editor-bar" data-table-find-editor={editorRow && editorColumn && findReadable(editorRow, editorColumn.key) ? cellId(editorRow._key, editorColumn.key) : undefined} role="group" aria-label="单元格编辑栏">
     <span className="selection-editor-label" title={editorColumn?.label}>{editorLabel}</span>
     {!!editorDuplicateCount && <span className="selection-duplicate-note" role="status">重复 {editorDuplicateCount} 行</span>}

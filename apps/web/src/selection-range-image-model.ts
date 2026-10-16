@@ -66,7 +66,7 @@ function modelCell(row: Row, column: SelectionField, shown?: { url: string; inde
     return cell;
   }
   if (systemField(column)) {
-    cell.text = selectionSystemValue(row, column);
+    cell.text = selectionSystemValue(row, column, references);
     return cell;
   }
   const value = column.custom ? row.extraFields?.[column.key] : row[column.key];

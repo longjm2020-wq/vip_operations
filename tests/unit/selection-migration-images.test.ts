@@ -1,11 +1,12 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { PGlite } from "@electric-sql/pglite";
+import { defaultVipTagPriceLimitConfig } from "../../packages/contracts/src/selection-vip-tag-price-limit.js";
 import type { Context } from "../../apps/api/src/core.js";
 import type { Row, Tx } from "../../packages/database/src/index.js";
 import { selectionScope } from "../../packages/database/src/selection-scope.js";
 import { defaultProtection } from "../../packages/contracts/src/selection-protection.js";
 import { selectionBaseFields } from "../../packages/contracts/src/selection-migration.js";
-import { selectionLayoutSchema, type SelectionField } from "../../packages/contracts/src/selection-layout.js";
+import { projectSelectionSharedLayout, selectionLayoutSchema, type SelectionField } from "../../packages/contracts/src/selection-layout.js";
 import { archiveFieldIds } from "../../packages/contracts/src/product-archive.js";
 
 const fixture = vi.hoisted(() => ({ database: null as PGlite | null, mirrors: [] as Row[] }));
@@ -32,7 +33,7 @@ vi.mock("../../apps/api/src/modules/style-selections/archive.js", () => ({
   mirrorArchiveRow: async (_tx: Tx, _c: Context, row: Row) => { fixture.mirrors.push(row); },
 }));
 
-import { preview, commit } from "../../apps/api/src/modules/style-selections/migration.js";
+import { preview, commit, targets } from "../../apps/api/src/modules/style-selections/migration.js";
 
 const sourceColor: SelectionField = { key: "custom:source-standard", label: "标准颜色", type: "text", custom: true, width: 100 };
 const targetColor: SelectionField = { key: "custom:target-standard", label: "标准颜色", type: "text", custom: true, width: 100 };
@@ -92,6 +93,30 @@ beforeEach(async () => {
 afterAll(async () => { await fixture.database?.close(); });
 
 describe("cross-table linked image colors", () => {
+  it("does not reintroduce private source keys from dormant configs in a saved shared target layout", async () => {
+    const secret: SelectionField = { key: "custom:secret-category", label: "三级类目", custom: true, width: 100, type: "text" };
+    const dormant: SelectionField = { key: "custom:dormant-limit", label: "普通价格", custom: true, width: 100, type: "text", vipTagPriceLimitConfig: defaultVipTagPriceLimitConfig(secret.key) };
+    await register("default", secret, "8", "PRIVATE"); await register("default", dormant);
+    await fixture.database!.query("INSERT INTO selection_shared_layouts(workspace_key,preferences) VALUES('default',$1)", [JSON.stringify(projectSelectionSharedLayout(selectionLayoutSchema.parse({ columns: [dormant] })))]);
+    const context = actor(); context.actor.permissions = ["selection.read", "selection.manage", "product.update"];
+    const available = await selectionScope.run("23", () => targets(context));
+    const fields = available.find(target => target.key === "default")!.fields;
+    expect(fields.find((field: SelectionField) => field.key === dormant.key)).toMatchObject({ type: "text" });
+    expect(fields.find((field: SelectionField) => field.key === dormant.key).vipTagPriceLimitConfig).toBeUndefined();
+    expect(JSON.stringify(available)).not.toContain(secret.key);
+  });
+  it("excludes computed price-limit sources and rejects a computed target before writing", async () => {
+    const computed: SelectionField = { key: "custom:price-limit", label: "吊牌限价", custom: true, width: 100, type: "vipTagPriceLimit", vipTagPriceLimitConfig: defaultVipTagPriceLimitConfig("material") };
+    await register("default", computed); await register("24", computed);
+    await layout("default", [sourceColor, computed]); await layout("24", [targetColor, computed]);
+    await fixture.database!.query("UPDATE style_selections SET extra_fields=extra_fields || $1", [JSON.stringify({ [computed.key]: "legacy-limit" })]);
+    const input = body(); input.fields.push(computed);
+    const plan = await preview(actor(), input);
+    expect(JSON.stringify(plan)).not.toContain("legacy-limit");
+    input.mappings[0].target = computed.key;
+    await expect(preview(actor(), input)).rejects.toMatchObject({ status: 400, response: { error: { message: "字段对应关系已失效，请重新配置" } } });
+    await noWrites();
+  });
   it("remaps a different target field key through actual preview and commit", async () => {
     const input = body(), plan = await preview(actor(), input);
     expect(plan).toMatchObject({ created: 1, updated: 0 });

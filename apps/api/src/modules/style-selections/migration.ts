@@ -63,6 +63,7 @@ const readonlyTypes = new Set([
   "createdTime",
   "modifiedTime",
   "autonumber",
+  "vipTagPriceLimit",
 ]);
 const choiceTypes = new Set(["single", "multiple", "tags"]);
 const isChoice = (field: SelectionField) =>
@@ -175,7 +176,7 @@ async function layout(tx: Tx, c: Context, key: string, archive: boolean) {
   if (archive) await registerArchiveFields(tx,c,canonical.filter(field=>preferences.columns.some(item=>item.key===field.key)),key);
   const template = await one(tx,"SELECT preferences,revision FROM public.selection_shared_layouts WHERE workspace_key=$1",key);
   const normalized = await canonicalizeLayout(tx,c,preferences,key);
-  const projected = template ? applySelectionSharedLayout(normalized,selectionSharedLayoutSchema.parse(template.preferences)) : normalized;
+  const projected = template ? await canonicalizeLayout(tx,c,applySelectionSharedLayout(normalized,selectionSharedLayoutSchema.parse(template.preferences)),key) : normalized;
   return {
     preferences: archive
       ? {

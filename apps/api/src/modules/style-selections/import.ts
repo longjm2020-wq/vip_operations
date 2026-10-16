@@ -21,7 +21,7 @@ import { archiveStandardColorKey, imageColorField, linkedColorChanged, unchanged
 
 const strategySchema = z.enum(["OVERWRITE", "SKIP"]).default("SKIP");
 const importTransactionTimeout = 600_000;
-const readonlyTypes = new Set(["creator", "modifier", "createdTime", "modifiedTime", "autonumber"]);
+const readonlyTypes = new Set(["creator", "modifier", "createdTime", "modifiedTime", "autonumber", "vipTagPriceLimit"]);
 const bindingSchema = z.object({ header: z.string().min(1).max(40), key: z.string().min(1).max(100), label: z.string().min(1).max(40), type: z.string().max(30), isNew: z.boolean() }).strict();
 type Binding = z.infer<typeof bindingSchema>;
 const isCreationTimeBinding = (binding: Binding) => binding.key === "registrationBatch" && selectionImportHeader(binding.header)?.builtinKey === "createdAt";
@@ -88,7 +88,7 @@ async function importLayout(tx: Tx, c: Context, archive: boolean) {
   const template = await one(tx, "SELECT preferences,revision FROM public.selection_shared_layouts WHERE workspace_key=$1", key);
   const registry = await readFieldRegistry(tx, key);
   const normalized = await canonicalizeLayout(tx, c, personal, key);
-  const effective = template ? applySelectionSharedLayout(normalized, selectionSharedLayoutSchema.parse(template.preferences)) : normalized;
+  const effective = template ? await canonicalizeLayout(tx, c, applySelectionSharedLayout(normalized, selectionSharedLayoutSchema.parse(template.preferences)), key) : normalized;
   if (archive) effective.columns = archiveChoiceColumns(effective.columns, canonicalFields);
   // Include invisible registered definitions when resolving names. A private or
   // hidden field cannot be bypassed by creating another field with its name.

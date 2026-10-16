@@ -39,9 +39,10 @@ export function matchesSelectionFilters(row: Row, filters: SelectionFilters) {
     return text.includes(query);
   });
 }
-export function sortSelectionRows(rows: Row[], sort: SelectionView["sort"], columns?: readonly { key: string; type?: string }[]): Row[] {
+export function sortSelectionRows(rows: Row[], sort: SelectionView["sort"], columns?: readonly { key: string; type?: string; fallbackType?: string }[]): Row[] {
   if (!sort) return rows;
-  const numericColumn = moneyKeys.has(sort.key) || columns?.find(column => column.key === sort.key)?.type === "number";
+  const column = columns?.find(column => column.key === sort.key);
+  const numericColumn = moneyKeys.has(sort.key) || ["number", "vipTagPriceLimit"].includes(column?.type || column?.fallbackType || "");
   return [...rows].sort((a, b) => {
     const left = selectionFilterText(a, sort.key), right = selectionFilterText(b, sort.key);
     if (!left || !right) return left === right ? 0 : left ? -1 : 1;
