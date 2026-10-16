@@ -19,3 +19,49 @@
   margin-bottom: 10px;
   font-size: 12px;
 }
+
+.inventory-column-pinning-menu {
+  width: min(340px, calc(100vw - 24px));
+  max-height: calc(100dvh - 24px);
+  display: flex;
+  flex-direction: column;
+  padding: 12px;
+  background: #fff;
+  border: 1px solid #ecd3b9;
+  border-radius: 8px;
+  box-shadow: 0 6px 24px #362a2226;
+}
+
+.inventory-column-pinning-title {
+  font-weight: 600;
+}
+
+.inventory-column-pinning-hint {
+  margin: 6px 0 10px;
+  color: #8b7868;
+  font-size: 12px;
+}
+
+.inventory-column-pinning-options {
+  min-height: 0;
+  max-height: min(360px, calc(100dvh - 154px));
+  overflow: auto;
+  overscroll-behavior: contain;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 4px 4px;
+}
+
+.inventory-column-pinning-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  padding-top: 12px;
+  margin-top: 8px;
+  border-top: 1px solid #f0e5db;
+}
+
+.inventory-column-pinning-actions > :first-child {
+  margin-right: auto;
+}

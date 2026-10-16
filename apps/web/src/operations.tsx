@@ -2,6 +2,7 @@ import { PageSearch, PageSearchInput } from "./page-search";
 import { Table, exportTableData } from "./data-table";
 import { InventoryImport } from "./inventory-import";
 import { InventoryReferenceValue } from "./inventory-reference-value";
+import { InventoryColumnPinning } from "./inventory-column-pinning";
 import {
   CompassProductImage,
   CompassImagePreview,
@@ -252,17 +253,21 @@ function InventoryBalances() {
     if (!skuView && skuOnly.has(key)) return false;
     return dimension !== "style" || !["articleNo", "colorName"].includes(key);
   });
-  const stockStart = columns.findIndex(
-    (column) => "dataIndex" in column && column.dataIndex === "physicalQty",
-  );
   const count = (value: unknown) => Number(value).toLocaleString("zh-CN");
   const totalValue = (column: (typeof columns)[number], totals: Row) => {
-    return "dataIndex" in column &&
+    const key =
+      "dataIndex" in column ? String(column.dataIndex) : String(column.key);
+    if (key === "mainImageUrl")
+      return <span title="当前筛选范围内全部库存，包含所有分页">总计</span>;
+    if (
       inventoryStockFields.includes(
-        column.dataIndex as (typeof inventoryStockFields)[number],
+        key as (typeof inventoryStockFields)[number],
       )
-      ? count(totals[String(column.dataIndex)])
-      : "—";
+    )
+      return count(totals[key]);
+    return skuOnly.has(key) && key !== "skuCode" && key !== "sizeName"
+      ? "—"
+      : null;
   };
   return (
     <>
@@ -386,50 +391,49 @@ function InventoryBalances() {
           </div>
         )}
         <QueryState error={q.error} reload={() => q.refetch()} />
-        <Table<Row>
-          className="inventory-summary-table"
-          showExport={false}
-          rowKey="id"
-          loading={q.isLoading}
-          locale={empty}
-          dataSource={q.items}
-          scroll={{
-            x: skuView ? 2200 : dimension === "article" ? 1250 : 1050,
-            y: "max(220px, calc(100dvh - 285px))",
-          }}
-          columns={columns}
-          summary={() =>
-            q.data?.totals ? (
-              <AntTable.Summary fixed="top">
-                <AntTable.Summary.Row
-                  className="inventory-total-row"
-                  aria-label="当前筛选库存总计"
-                >
-                  <AntTable.Summary.Cell index={0} colSpan={stockStart}>
-                    <span title="当前筛选范围内全部库存，包含所有分页">
-                      总计
-                    </span>
-                  </AntTable.Summary.Cell>
-                  {columns.slice(stockStart).map((column, offset) => (
-                    <AntTable.Summary.Cell
-                      key={offset}
-                      index={stockStart + offset}
+        <InventoryColumnPinning dimension={dimension} columns={columns}>
+          {(displayedColumns) => (
+            <Table<Row>
+              className="inventory-summary-table"
+              showExport={false}
+              rowKey="id"
+              loading={q.isLoading}
+              locale={empty}
+              dataSource={q.items}
+              scroll={{
+                x: displayedColumns.reduce(
+                  (width, column) => width + Number(column.width),
+                  0,
+                ),
+                y: "max(220px, calc(100dvh - 285px))",
+              }}
+              columns={displayedColumns}
+              summary={() =>
+                q.data?.totals ? (
+                  <AntTable.Summary fixed="top">
+                    <AntTable.Summary.Row
+                      className="inventory-total-row"
+                      aria-label="当前筛选库存总计"
                     >
-                      {totalValue(column, q.data!.totals)}
-                    </AntTable.Summary.Cell>
-                  ))}
-                </AntTable.Summary.Row>
-              </AntTable.Summary>
-            ) : null
-          }
-          pagination={{
-            current: q.page,
-            total: q.total,
-            pageSize: 20,
-            onChange: q.setPage,
-            showSizeChanger: false,
-          }}
-        />
+                      {displayedColumns.map((column, index) => (
+                        <AntTable.Summary.Cell key={column.key} index={index}>
+                          {totalValue(column, q.data!.totals)}
+                        </AntTable.Summary.Cell>
+                      ))}
+                    </AntTable.Summary.Row>
+                  </AntTable.Summary>
+                ) : null
+              }
+              pagination={{
+                current: q.page,
+                total: q.total,
+                pageSize: 20,
+                onChange: q.setPage,
+                showSizeChanger: false,
+              }}
+            />
+          )}
+        </InventoryColumnPinning>
       </Card>
       <CompassImagePreview
         target={imagePreview}
