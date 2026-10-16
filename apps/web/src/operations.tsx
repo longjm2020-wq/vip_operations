@@ -1,7 +1,7 @@
 import { PageSearch, PageSearchInput } from "./page-search";
 import { Table, exportTableData } from "./data-table";
 import { InventoryImport } from "./inventory-import";
-import { InventoryReferenceValue } from "./inventory-reference-value";
+import { InventoryEstimateValue, InventoryReferenceValue, inventoryHasZeroMedianSales } from "./inventory-reference-value";
 import { InventoryColumnPinning } from "./inventory-column-pinning";
 import {
   CompassProductImage,
@@ -202,6 +202,7 @@ function InventoryBalances() {
       "inTransitQty",
       "transferTransitQty",
       "incomingQty",
+      "periodSalesQty",
       "estimatedReturns",
       "dailySales",
     ].map((k, i) => ({
@@ -210,12 +211,13 @@ function InventoryBalances() {
         "采购在途数",
         "调拨在途数",
         "进货仓库存",
+        "期间销量",
         "预估销退数",
         "渠道日销参考",
       ][i],
       dataIndex: k,
       render: (v: number, r: Row) =>
-        k === "dailySales" || k === "estimatedReturns" ? (
+        k === "dailySales" || k === "estimatedReturns" || k === "periodSalesQty" ? (
           <InventoryReferenceValue row={r} field={k} />
         ) : (
           (v ?? "暂无数据")
@@ -229,22 +231,18 @@ function InventoryBalances() {
     {
       title: "可售天数",
       dataIndex: "coverageDays",
-      render: (v, r) =>
-        v == null
-          ? r.dailySales != null && Number(r.dailySales) === 0
-            ? "无日销"
-            : "暂无数据"
-          : v + "天",
+      render: (_, row) => <InventoryEstimateValue row={row} field="coverageDays" />,
     },
     {
       title: "补货建议",
       dataIndex: "replenishmentQty",
-      render: (v) => (v == null ? "暂无数据" : v + "件"),
+      render: (_, row) => <InventoryEstimateValue row={row} field="replenishmentQty" />,
     },
   ];
   const skuOnly = new Set([
     "skuCode",
     "sizeName",
+    "periodSalesQty",
     "estimatedReturns",
     "dailySales",
     "returnRate",
@@ -284,7 +282,9 @@ function InventoryBalances() {
     referenceCoveredDays: referenceWindow?.coveredDays ?? 0,
     referenceExpectedDays: referenceWindow?.days ?? null,
     referenceCalculation: row
-      ? (
+      ? [
+          `期间销量：${row.channelReference?.salesQty != null ? "所选期间已记录销量合计" : "暂无数据"}`,
+          ...(
           [
             ["dailySales", "日销"],
             ["returnRate", "退货率"],
@@ -293,9 +293,10 @@ function InventoryBalances() {
         )
           .map(
             ([key, label]) =>
-              `${label}：${row.channelReference?.[key]?.value != null ? (key === "estimatedReturns" ? "期间销量×退货率中位数" : "罗盘中位数") : row[key] != null ? "人工参考" : "暂无数据"}`,
-          )
-          .join("；")
+              `${label}：${row.channelReference?.[key]?.value != null ? (key === "estimatedReturns" ? "期间销量×退货率中位数" : row.channelReference[key].method === "median" ? "罗盘中位数" : "罗盘参考值") : row[key] != null ? "人工参考" : "暂无数据"}`,
+          ),
+          ...(inventoryHasZeroMedianSales(row) ? ["期间有销量，日销中位数为0；可售天数暂不估算，补货数量为当前中位数公式结果"] : []),
+        ].join("；")
       : "库存总计；经营参考不汇总",
   });
   return (
@@ -421,7 +422,9 @@ function InventoryBalances() {
                     ...Object.fromEntries(
                       keys.map((key) => [
                         key,
-                        key === "articleNo" &&
+                        key === "periodSalesQty"
+                          ? total ? "—" : (row.channelReference?.salesQty ?? null)
+                          : key === "articleNo" &&
                         dimension === "article" &&
                         !row[key] &&
                         row.skuCode

@@ -70,7 +70,7 @@ type Period = (typeof periods)[number];
 const endDate = "2026-10-15";
 const inventoryUrl = "/operations/vip/inventory";
 
-async function fixture(page: Page) {
+async function fixture(page: Page, splitSkuSales = false) {
   const requests: URL[] = [],
     writes: string[] = [];
   await page.route("**/api/v1/**", async (route) => {
@@ -130,6 +130,8 @@ async function fixture(page: Page) {
       window,
       barcode: "0001234567890",
       reason: complete ? undefined : "INCOMPLETE_PERIOD",
+      salesQty: complete ? item.sales : null,
+      recordedDays: complete ? item.days : 0,
       ...(complete
         ? {
             dailySales: median(
@@ -149,30 +151,64 @@ async function fixture(page: Page) {
           }
         : {}),
     };
+    const defaultRow = {
+      id: "101",
+      styleNo: "REF-STYLE-001",
+      articleNo: "REF-ARTICLE-001",
+      skuCode: "REF-SKU-001",
+      barcode: "0001234567890",
+      colorName: "米白色",
+      sizeName: "M",
+      physicalQty: 29,
+      inTransitQty: 10,
+      transferTransitQty: 5,
+      incomingQty: 2,
+      dailySales: item.daily,
+      returnRate: item.rate,
+      estimatedReturns: complete ? item.sales * item.rate : 12,
+      coverageDays: 10,
+      replenishmentQty: 2,
+      channelReference: reference,
+    };
+    const responseRows = splitSkuSales
+      ? [
+          { id: "101", size: "M", salesQty: 15, daily: 0 },
+          { id: "102", size: "L", salesQty: 24, daily: 1 },
+          { id: "103", size: "XL", salesQty: 3, daily: 0 },
+          { id: "104", size: "缺失", salesQty: null, daily: 0 },
+        ].map((sku) => ({
+          ...defaultRow,
+          id: sku.id,
+          styleNo: "XFA16X31196L",
+          skuCode: `PERIOD-SALES-${sku.id}`,
+          colorName: "粉色",
+          sizeName: sku.size,
+          dailySales: sku.daily,
+          estimatedReturns:
+            sku.salesQty === null ? null : sku.salesQty * item.rate,
+          coverageDays: sku.daily > 0 ? 29 : null,
+          channelReference: {
+            ...reference,
+            salesQty: sku.salesQty,
+            recordedDays: item.days,
+            dailySales: {
+              ...median(sku.daily),
+              samples: sku.salesQty === null ? item.days - 1 : item.days,
+            },
+            returnRate: median(item.rate),
+            estimatedReturns: {
+              value: sku.salesQty === null ? null : sku.salesQty * item.rate,
+              salesQty: sku.salesQty,
+              returnRate: item.rate,
+              samples: sku.salesQty === null ? item.days - 1 : item.days,
+            },
+          },
+        }))
+      : [defaultRow];
     await route.fulfill({
       json: {
-        data: [
-          {
-            id: "101",
-            styleNo: "REF-STYLE-001",
-            articleNo: "REF-ARTICLE-001",
-            skuCode: "REF-SKU-001",
-            barcode: "0001234567890",
-            colorName: "米白色",
-            sizeName: "M",
-            physicalQty: 29,
-            inTransitQty: 10,
-            transferTransitQty: 5,
-            incomingQty: 2,
-            dailySales: item.daily,
-            returnRate: item.rate,
-            estimatedReturns: complete ? item.sales * item.rate : 12,
-            coverageDays: 10,
-            replenishmentQty: 2,
-            channelReference: reference,
-          },
-        ],
-        total: 42,
+        data: responseRows,
+        total: splitSkuSales ? responseRows.length : 42,
         page: Number(url.searchParams.get("page") ?? 1),
         pageSize: 20,
         dimension: url.searchParams.get("dimension") ?? "sku",
@@ -201,17 +237,18 @@ async function fixture(page: Page) {
 }
 
 const table = (page: Page) => page.locator(".inventory-summary-table");
-const row = (page: Page) => table(page).locator('tr[data-row-key="101"]');
+const row = (page: Page, id = "101") =>
+  table(page).locator(`tr[data-row-key="${id}"]`);
 const selector = (page: Page) =>
   page.getByRole("combobox", { name: "经营参考周期", exact: true });
 const coverage = (page: Page) => page.locator(".inventory-report-coverage");
-async function cell(page: Page, name: string) {
+async function cell(page: Page, name: string, id = "101") {
   const labels = (
     await table(page).getByRole("columnheader").allTextContents()
   ).map((text) => text.trim());
   const index = labels.indexOf(name);
   expect(index).toBeGreaterThanOrEqual(0);
-  return row(page).locator("td").nth(index);
+  return row(page, id).locator("td").nth(index);
 }
 async function choose(page: Page, item: Period) {
   await selector(page).click();
@@ -258,6 +295,16 @@ test("经营参考提供七个周期，切换重取第一页且跨汇总维度�
       .toBe(true);
     await expect(page.locator(".ant-pagination-item-active")).toHaveText("1");
     await expect(coverage(page)).toContainText("中位数");
+    await expect(await cell(page, "期间销量")).toHaveText(
+      ["6m", "1y"].includes(item.period) ? "历史覆盖不足" : String(item.sales),
+    );
+    await expect(await cell(page, "渠道日销参考")).toHaveText(
+      String(item.daily),
+    );
+    const periodTip = await tooltip(page, "渠道日销参考");
+    await expect(periodTip).toContainText(item.startDate);
+    await expect(periodTip).toContainText(endDate);
+    await page.getByRole("heading", { name: "库存明细", exact: true }).click();
   }
   await page.getByRole("tab", { name: "货号", exact: true }).click();
   await expect(selector(page)).toHaveCount(0);
@@ -347,5 +394,74 @@ test("半年和一年历史不足时明确提示覆盖缺口，保留人工参�
   expect(String(sheet.getRow(3).getCell(methodIndex).value)).toContain(
     "人工参考",
   );
+  expect(state.writes).toEqual([]);
+});
+
+test("期间销量按SKU显示42件的拆分，零中位数不误称无日销且缺失不补零", async ({
+  page,
+}) => {
+  const state = await fixture(page, true);
+  const expected = [
+    { id: "101", sales: 15, daily: 0 },
+    { id: "102", sales: 24, daily: 1 },
+    { id: "103", sales: 3, daily: 0 },
+  ];
+  let displayedSales = 0;
+  for (const sku of expected) {
+    const salesCell = await cell(page, "期间销量", sku.id);
+    await expect(salesCell).toHaveText(String(sku.sales));
+    displayedSales += Number(await salesCell.textContent());
+    await expect(await cell(page, "渠道日销参考", sku.id)).toContainText(
+      String(sku.daily),
+    );
+    await expect(row(page, sku.id)).not.toContainText("无日销");
+    if (sku.daily === 0) {
+      await expect(await cell(page, "渠道日销参考", sku.id)).toContainText(
+        "期间有销量",
+      );
+      await expect(await cell(page, "可售天数", sku.id)).toHaveText(
+        "中位数为0",
+      );
+    }
+  }
+  expect(displayedSales).toBe(42);
+  await expect(await cell(page, "期间销量", "104")).toHaveText("销量数据不足");
+  const labels = (
+    await table(page).getByRole("columnheader").allTextContents()
+  ).map((text) => text.trim());
+  const totalSales = page
+    .getByRole("row", { name: "当前筛选库存总计", exact: true })
+    .locator("td")
+    .nth(labels.indexOf("期间销量"));
+  await expect(totalSales).toHaveText("—");
+  const zeroMedianTip = await tooltip(page, "渠道日销参考");
+  await expect(zeroMedianTip).toContainText("中位数");
+  await expect(zeroMedianTip).toContainText("15");
+  await page.getByRole("heading", { name: "库存明细", exact: true }).click();
+
+  const downloadPromise = page.waitForEvent("download");
+  await page.getByRole("button", { name: "导出", exact: true }).click();
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.readFile((await (await downloadPromise).path())!);
+  const sheet = workbook.worksheets[0],
+    exportLabels = sheet.getRow(1).values as string[];
+  const salesIndex = exportLabels.indexOf("期间销量");
+  expect(salesIndex).toBeGreaterThan(0);
+  expect(sheet.getRow(2).getCell(salesIndex).value).toBe("—");
+  expect(
+    [3, 4, 5].map((index) =>
+      Number(sheet.getRow(index).getCell(salesIndex).value),
+    ),
+  ).toEqual([15, 24, 3]);
+  expect([null, "", "—"]).toContain(sheet.getRow(6).getCell(salesIndex).value);
+
+  await page.getByRole("tab", { name: "货号", exact: true }).click();
+  await expect(
+    table(page).getByRole("columnheader", { name: "期间销量", exact: true }),
+  ).toHaveCount(0);
+  await page.getByRole("tab", { name: "款号", exact: true }).click();
+  await expect(
+    table(page).getByRole("columnheader", { name: "期间销量", exact: true }),
+  ).toHaveCount(0);
   expect(state.writes).toEqual([]);
 });
