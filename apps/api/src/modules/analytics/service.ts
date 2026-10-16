@@ -192,7 +192,13 @@ export async function finishImport(c: Context, value: string) {
       "SELECT i.* FROM compass_active_imports a JOIN compass_imports i ON i.id=a.import_id WHERE a.dimension=$1",
       task.dimension,
     );
-    if (active && active.end_date > task.end_date)
+    const higherNormalization = await one(tx,
+      `SELECT 1 FROM compass_imports WHERE dimension=$1 AND file_hash=$2 AND status='COMPLETE' AND normalization_version>$3
+       UNION ALL SELECT 1 FROM compass_barcode_history_files WHERE $1='barcode' AND file_hash=$2 AND normalization_version>$3 LIMIT 1`,
+      task.dimension, task.file_hash, task.normalization_version);
+    if (higherNormalization)
+      fail("OLD_NORMALIZATION", "此报表已补充新字段，请刷新页面后重新导入", 400);
+    if (active && active.end_date > task.end_date && task.dimension !== "barcode")
       fail("OLD_REPORT", "已有更新日期的报表，不能用旧报表覆盖", 400);
     if (active && active.file_hash === task.file_hash && active.normalization_version > task.normalization_version)
       fail("OLD_NORMALIZATION", "此报表已补充新字段，请刷新页面后重新导入", 400);
@@ -201,11 +207,17 @@ export async function finishImport(c: Context, value: string) {
       "UPDATE compass_imports SET status='COMPLETE',completed_at=now() WHERE id=$1::bigint RETURNING *",
       importId,
     );
-    await tx.$executeRawUnsafe(
-      "INSERT INTO compass_active_imports(dimension,import_id) VALUES($1,$2::bigint) ON CONFLICT(dimension) DO UPDATE SET import_id=excluded.import_id",
-      task.dimension,
-      importId,
-    );
+    // Historical barcode segments enrich inventory references without rolling
+    // the current analytics panel back to an older reporting date.
+    const useForPanel = !active || task.dimension !== "barcode" || task.end_date > active.end_date ||
+      (task.end_date >= active.end_date && task.start_date <= active.start_date);
+    if (useForPanel) {
+      await tx.$executeRawUnsafe(
+        "INSERT INTO compass_active_imports(dimension,import_id) VALUES($1,$2::bigint) ON CONFLICT(dimension) DO UPDATE SET import_id=excluded.import_id",
+        task.dimension,
+        importId,
+      );
+    }
     await audit(tx, c, "COMPASS_IMPORT", "compass_import", importId, null, {
       dimension: task.dimension,
       fileName: task.file_name,

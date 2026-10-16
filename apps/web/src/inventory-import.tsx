@@ -17,6 +17,7 @@ import {
 } from "../../../packages/contracts/src/inventory-import";
 import { api, queryClient } from "./api";
 import { downloadWorkbook, readWorkbook } from "./sheet-excel";
+import { isExcelModuleLoadError } from "./exceljs-loader";
 import { options, useCan, useOptions } from "./shared";
 import {
   parseInventoryRows,
@@ -49,6 +50,8 @@ export function InventoryImport({
     [templateBusy, setTemplateBusy] = useState(false),
     [report, setReport] = useState("");
   const [progress, setProgress] = useState<ImportProgress>();
+  const selectedFile = useRef<File | null>(null);
+  const [canRetryRead, setCanRetryRead] = useState(false);
   const locked = useRef(false),
     attempted = useRef(false);
   const prepare = (data: Workbook, index: number, target?: string) => {
@@ -69,10 +72,15 @@ export function InventoryImport({
     if (locked.current) return;
     locked.current = true;
     setReading(true);
+    selectedFile.current = file;
+    setCanRetryRead(false);
     setError("");
     setReport("");
     setEntries([]);
     setWorkbook([]);
+    setFields([]);
+    setIgnored([]);
+    setProgress(undefined);
     setFilename(file.name);
     attempted.current = false;
     try {
@@ -87,7 +95,11 @@ export function InventoryImport({
       setSheet(0);
       prepare(data, 0, warehouse);
     } catch (e) {
-      setError((e as Error).message);
+      const retryable = isExcelModuleLoadError(e);
+      setError(retryable
+        ? `${e.message}。已保留所选文件，可点击「重新读取文件」，尚未保存任何数据。`
+        : (e as Error).message);
+      setCanRetryRead(retryable);
     } finally {
       locked.current = false;
       setReading(false);
@@ -316,7 +328,11 @@ export function InventoryImport({
           已有资料保留原值（新款可用于建档）：{ignored.join("、")}
         </Typography.Paragraph>
       )}
-      {error && <Alert type="error" title={error} showIcon />}
+      {error && <Alert type="error" title={error} showIcon action={canRetryRead ? (
+        <Button size="small" disabled={busy || reading} onClick={() => {
+          if (selectedFile.current) void read(selectedFile.current);
+        }}>重新读取文件</Button>
+      ) : undefined} />}
       {report && (
         <Alert
           type={hasPending ? "warning" : "success"}

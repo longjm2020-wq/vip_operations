@@ -63,7 +63,9 @@ import {
 import {
   inventoryDimensions,
   inventoryStockFields,
+  inventoryReferencePeriods,
   type InventoryDimension,
+  type InventoryReferencePeriod,
   type InventoryReportMatch,
 } from "../../../packages/contracts/src/inventory-summary";
 import "./inventory-summary.css";
@@ -127,6 +129,8 @@ function InventoryBalances() {
   const [dimension, setDimension] = useState<InventoryDimension>("sku");
   const skuView = dimension === "sku";
   const [reportMatch, setReportMatch] = useState<InventoryReportMatch>("all");
+  const [referencePeriod, setReferencePeriod] =
+    useState<InventoryReferencePeriod>("30d");
   const [imagePreview, setImagePreview] = useState<CompassImageTarget | null>(
     null,
   );
@@ -137,7 +141,7 @@ function InventoryBalances() {
     [warehouse, setWarehouse] = useState<string>();
   const q = useList("/inventory/summary", {
       dimension,
-      ...(skuView ? { reportMatch } : {}),
+      ...(skuView ? { reportMatch, referencePeriod } : {}),
       ...(search ? { q: search } : {}),
       ...(warehouse ? { warehouseId: warehouse } : {}),
     }),
@@ -269,6 +273,31 @@ function InventoryBalances() {
       ? "—"
       : null;
   };
+  const referenceWindow = q.data?.reportCoverage?.window;
+  const periodLabel = inventoryReferencePeriods.find(
+    (item) => item.value === referencePeriod,
+  )!.label;
+  const exportReference = (row?: Row) => ({
+    referencePeriodLabel: periodLabel,
+    referenceStartDate: referenceWindow?.startDate ?? null,
+    referenceEndDate: referenceWindow?.endDate ?? null,
+    referenceCoveredDays: referenceWindow?.coveredDays ?? 0,
+    referenceExpectedDays: referenceWindow?.days ?? null,
+    referenceCalculation: row
+      ? (
+          [
+            ["dailySales", "日销"],
+            ["returnRate", "退货率"],
+            ["estimatedReturns", "预估销退"],
+          ] as const
+        )
+          .map(
+            ([key, label]) =>
+              `${label}：${row.channelReference?.[key]?.value != null ? (key === "estimatedReturns" ? "期间销量×退货率中位数" : "罗盘中位数") : row[key] != null ? "人工参考" : "暂无数据"}`,
+          )
+          .join("；")
+      : "库存总计；经营参考不汇总",
+  });
   return (
     <>
       <Tabs
@@ -283,13 +312,15 @@ function InventoryBalances() {
       <Card>
         <div className="table-toolbar">
           <Space wrap>
-            <PageSearch><PageSearchInput
-              placeholder="商品编码 / 货号 / 款号 / 条码"
-              onSearch={(v) => {
-                setSearch(v);
-                q.setPage(1);
-              }}
-            /></PageSearch>
+            <PageSearch>
+              <PageSearchInput
+                placeholder="商品编码 / 货号 / 款号 / 条码"
+                onSearch={(v) => {
+                  setSearch(v);
+                  q.setPage(1);
+                }}
+              />
+            </PageSearch>
             <Select
               aria-label="筛选库存仓库"
               style={{ width: 180 }}
@@ -301,6 +332,18 @@ function InventoryBalances() {
                 q.setPage(1);
               }}
             />
+            {skuView && (
+              <Select<InventoryReferencePeriod>
+                aria-label="经营参考周期"
+                style={{ width: 140 }}
+                value={referencePeriod}
+                options={[...inventoryReferencePeriods]}
+                onChange={(value) => {
+                  setReferencePeriod(value);
+                  q.setPage(1);
+                }}
+              />
+            )}
             {skuView && (
               <Select<InventoryReportMatch>
                 aria-label="筛选罗盘匹配情况"
@@ -347,8 +390,35 @@ function InventoryBalances() {
                       ? [c.dataIndex]
                       : [],
                   );
-                  const exportRow = (row: Row) =>
-                    Object.fromEntries(
+                  if (skuView)
+                    exportColumns.push(
+                      {
+                        title: "经营参考周期",
+                        dataIndex: "referencePeriodLabel",
+                      },
+                      {
+                        title: "经营参考起始日期",
+                        dataIndex: "referenceStartDate",
+                      },
+                      {
+                        title: "经营参考截止日期",
+                        dataIndex: "referenceEndDate",
+                      },
+                      {
+                        title: "报表覆盖天数",
+                        dataIndex: "referenceCoveredDays",
+                      },
+                      {
+                        title: "应覆盖天数",
+                        dataIndex: "referenceExpectedDays",
+                      },
+                      {
+                        title: "参考数据口径",
+                        dataIndex: "referenceCalculation",
+                      },
+                    );
+                  const exportRow = (row: Row, total = false) => ({
+                    ...Object.fromEntries(
                       keys.map((key) => [
                         key,
                         key === "articleNo" &&
@@ -360,14 +430,21 @@ function InventoryBalances() {
                             ? Number((Number(row[key]) * 100).toFixed(4))
                             : (row[key] ?? null),
                       ]),
-                    );
+                    ),
+                    ...(skuView
+                      ? exportReference(total ? undefined : row)
+                      : {}),
+                  });
                   await exportTableData({
                     dataSource: [
-                      exportRow({
-                        styleNo: "总计（全部筛选结果）",
-                        ...q.data!.totals,
-                      }),
-                      ...q.items.map(exportRow),
+                      exportRow(
+                        {
+                          styleNo: "总计（全部筛选结果）",
+                          ...q.data!.totals,
+                        },
+                        true,
+                      ),
+                      ...q.items.map((row: Row) => exportRow(row)),
                     ],
                     columns: exportColumns,
                   });
@@ -385,9 +462,31 @@ function InventoryBalances() {
         </div>
         {skuView && q.data?.reportCoverage && (
           <div className="inventory-report-coverage secondary" role="status">
-            {q.data.reportCoverage.source
-              ? `罗盘匹配 ${count(q.data.reportCoverage.matched)} / ${count(q.data.reportCoverage.total)} · ${q.data.reportCoverage.source.startDate} — ${q.data.reportCoverage.source.endDate}`
-              : "尚未导入完整的条码近30天报表"}
+            {referenceWindow?.endDate ? (
+              <>
+                罗盘匹配 {count(q.data.reportCoverage.matched)} /{" "}
+                {count(q.data.reportCoverage.total)} · {periodLabel} ·{" "}
+                {referenceWindow.startDate ?? "—"} —{" "}
+                {referenceWindow.endDate ?? "—"} · 报表覆盖{" "}
+                {referenceWindow.coveredDays} / {referenceWindow.days} 天 ·
+                中位数
+                {!referenceWindow.complete && (
+                  <span className="inventory-reference-incomplete">
+                    {" "}
+                    · 历史覆盖不足，缺{" "}
+                    {Math.max(
+                      0,
+                      referenceWindow.days - referenceWindow.coveredDays,
+                    )}{" "}
+                    天
+                  </span>
+                )}
+              </>
+            ) : q.data.reportCoverage.source ? (
+              `罗盘匹配 ${count(q.data.reportCoverage.matched)} / ${count(q.data.reportCoverage.total)} · ${q.data.reportCoverage.source.startDate} — ${q.data.reportCoverage.source.endDate}`
+            ) : (
+              "尚未导入完整的条码报表"
+            )}
           </div>
         )}
         <QueryState error={q.error} reload={() => q.refetch()} />
@@ -1399,7 +1498,11 @@ export function ProductDetail() {
               key: "skus",
               label: "SKU",
               children: (
-                <MasterPage resource="skus" filter={{ productId: id }} searchActive={activeTab === "skus"}/>
+                <MasterPage
+                  resource="skus"
+                  filter={{ productId: id }}
+                  searchActive={activeTab === "skus"}
+                />
               ),
             },
             {

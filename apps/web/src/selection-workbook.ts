@@ -1,4 +1,5 @@
 import type ExcelJS from "exceljs";
+import { loadExcelJS } from "./exceljs-loader.js";
 import { selectionRowHasContent } from "../../../packages/contracts/src/selection-trailing-row.js";
 import { selectionImportHeader, selectionImportLimits, selectionImportTemplateFields } from "../../../packages/contracts/src/selection-import-template.js";
 import { registerSelectionImportSource, type SelectionImportWorkbookSource } from "./selection-import-diagnostics.js";
@@ -34,7 +35,7 @@ function styleSheet(sheet: ExcelJS.Worksheet) {
   sheet.eachRow(row => { row.alignment = { vertical: "top", wrapText: true }; });
 }
 export async function createSelectionWorkbook(records: Row[] = [], template = false) {
-  const { Workbook } = (await import("exceljs")).default;
+  const { Workbook } = await loadExcelJS();
   const book = new Workbook();
   const sheet = book.addWorksheet("选款资料");
   const columns = template
@@ -162,7 +163,7 @@ function priceText(cell: ExcelJS.Cell, row: number, label: string, text: string)
 }
 export async function parseSelectionWorkbook(buffer: ArrayBuffer) {
   if (buffer.byteLength > selectionImportLimits.maxFileBytes) throw Error(`文件不能超过 ${selectionImportLimits.maxFileBytes / 1024 / 1024} MB`);
-  const { Workbook } = (await import("exceljs")).default;
+  const { Workbook } = await loadExcelJS();
   const book = new Workbook(); await book.xlsx.load(buffer);
   const sheet = book.getWorksheet("选款资料");
   if (!sheet) throw Error("缺少「选款资料」工作表，请使用下载的模板");

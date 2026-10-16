@@ -1,4 +1,5 @@
 import type ExcelJS from "exceljs";
+import { loadExcelJS } from "./exceljs-loader.js";
 import type { SelectionField, SelectionLayout } from "../../../packages/contracts/src/selection-layout.js";
 import { selectionRowHasContent } from "../../../packages/contracts/src/selection-trailing-row.js";
 import { fieldImages, orderedFieldTags, systemField } from "./selection-field-types.js";
@@ -56,7 +57,7 @@ export async function createVisibleSelectionWorkbook(records: Row[], columns: Se
   if (!fields.length) throw Error("没有可导出的可见字段");
   const populated = prepareVisibleSelectionWorkbookRecords(records, fields);
   if (!populated.length) throw Error("没有可导出的资料");
-  const { Workbook } = (await import("exceljs")).default;
+  const { Workbook } = await loadExcelJS();
   const book = new Workbook();
   const sheet = book.addWorksheet("表格资料");
   sheet.columns = fields.map(field => ({ header: field.label, width: Math.min(60, Math.max(12, field.width / 7)), style: { numFmt: "@" } }));

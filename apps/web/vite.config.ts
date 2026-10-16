@@ -1,9 +1,10 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { fileURLToPath } from "node:url";
+import { excelJsVendorPlugin } from "./exceljs-vendor";
 export default defineConfig({
   root: fileURLToPath(new URL(".", import.meta.url)),
-  plugins: [react()],
+  plugins: [react(), excelJsVendorPlugin()],
   worker: { format: "es" },
   server: {
     host: "127.0.0.1",

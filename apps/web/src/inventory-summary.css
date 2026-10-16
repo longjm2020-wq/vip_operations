@@ -20,6 +20,10 @@
   font-size: 12px;
 }
 
+.inventory-reference-incomplete {
+  color: #ad4e00;
+}
+
 .inventory-column-pinning-menu {
   width: min(340px, calc(100vw - 24px));
   max-height: calc(100dvh - 24px);

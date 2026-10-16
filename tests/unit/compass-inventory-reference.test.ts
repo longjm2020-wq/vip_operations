@@ -3,8 +3,38 @@ import {
   compassInventoryReference,
   modeReference,
   estimatedReturns,
+  medianReference,
+  inventoryReferenceWindow,
 } from "../../packages/contracts/src/compass-inventory-reference.js";
 import { normalizeCompassWorkbook } from "../../packages/contracts/src/compass-analytics.js";
+
+describe("inventory median references and rolling calendar windows", () => {
+  it("uses a true median instead of the most frequent value and preserves central observations", () => {
+    expect(medianReference([0, 0, 2, 100])).toEqual({ value: 1, values: [0, 2], samples: 4, method: "median" });
+    expect(medianReference([9, 1, 3])).toEqual({ value: 3, values: [3], samples: 3, method: "median" });
+    expect(medianReference([0.1, 0.2]).value).toBe(0.15);
+  });
+  it("includes explicit zeroes and rates above 100% but excludes invalid or missing observations", () => {
+    expect(medianReference([0, 0, 1.5, 2, null, undefined, -1, NaN, Infinity])).toEqual({ value: 0.75, values: [0, 1.5], samples: 4, method: "median" });
+    expect(medianReference([null, -1, NaN])).toEqual({ value: null, values: [], samples: 0, method: "median" });
+  });
+  it.each([
+    ["3d", "2026-10-15", "2026-10-13", 3],
+    ["7d", "2026-10-15", "2026-10-09", 7],
+    ["15d", "2026-10-15", "2026-10-01", 15],
+    ["30d", "2026-10-15", "2026-09-16", 30],
+    ["3m", "2026-05-31", "2026-03-01", 92],
+    ["3m", "2024-05-31", "2024-03-01", 92],
+    ["6m", "2026-10-15", "2026-04-16", 183],
+    ["1y", "2024-02-29", "2023-03-01", 366],
+  ] as const)("anchors %s at %s with calendar boundaries", (period, end, start, days) => {
+    expect(inventoryReferenceWindow(period, end, days)).toEqual({ period, start_date: start, end_date: end, days, covered_days: days, complete: true, method: "median" });
+    expect(inventoryReferenceWindow(period, end, days - 1).complete).toBe(false);
+  });
+  it("does not invent an anchor date before a complete source exists", () => {
+    expect(inventoryReferenceWindow("30d", null)).toMatchObject({ start_date: null, end_date: null, days: 0, complete: false });
+  });
+});
 
 describe("Compass inventory modal references", () => {
   it("uses the most frequent sales quantity rather than an arithmetic daily average", () => {

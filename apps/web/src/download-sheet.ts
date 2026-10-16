@@ -1,10 +1,11 @@
 import type { Row } from "./shared";
+import { loadExcelJS } from "./exceljs-loader";
 export type SheetDownload = { url: string; fileName: string };
 export async function prepareSheetDownload(
   name: string,
   records: Row[],
 ): Promise<SheetDownload> {
-  const Excel = (await import("exceljs")).default;
+  const Excel = await loadExcelJS();
   const book = new Excel.Workbook();
   const sheet = book.addWorksheet("数据");
   const keys = Object.keys(records[0] || {});

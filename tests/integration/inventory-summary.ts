@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
 import { HttpException } from "@nestjs/common";
+import type { Tx } from "../../packages/database/src/index.js";
 import pg from "pg";
 import { migrate } from "../../scripts/migrate.js";
 import {
@@ -455,34 +456,39 @@ try {
     );
     return source.id;
   };
-  const activateReport = async (source: string) =>
-    sql(
+  const activateReport = async (source: string) => {
+    // Each compatibility scenario below models one independent report; the
+    // dedicated history SQL tests exercise accumulating/replacing snapshots.
+    await sql("TRUNCATE compass_barcode_history_records,compass_barcode_history_days");
+    await sql("SELECT publish_compass_barcode_history($1::bigint)", [source]);
+    return sql(
       "INSERT INTO compass_active_imports(dimension,import_id) VALUES('barcode',$1) ON CONFLICT(dimension) DO UPDATE SET import_id=excluded.import_id",
       [source],
     );
+  };
   const completeSource = await referenceReport();
   await activateReport(completeSource);
   await check(
-    "Barcode report modes, tied percentages and estimated returns use the full 30 days",
+    "Barcode report medians and estimated returns use the full 30 days",
     async () => {
       const row = (await summary({ skuId: skus[0] })).data[0];
-      assert.equal(row.dailySales, 3);
-      assert.equal(row.returnRate, 0.3);
-      assert.equal(row.estimatedReturns, 134.1);
+      assert.equal(row.dailySales, 15.5);
+      assert.equal(row.returnRate, 0.655);
+      assert.equal(row.estimatedReturns, 292.785);
       assert.deepEqual(row.channelReference.dailySales, {
-        value: 3,
-        values: [1, 3, 5],
-        frequency: 3,
+        value: 15.5,
+        values: [15, 16],
+        method: "median",
         samples: 30,
       });
-      assert.deepEqual(row.channelReference.returnRate.values, [0.1, 0.3, 0.5]);
+      assert.deepEqual(row.channelReference.returnRate.values, [0.65, 0.66]);
       assert.equal(row.channelReference.salesQty, 447);
       assert.equal(row.channelReference.source.id, completeSource);
       assert.equal(row.channelReference.source.startDate, reportStart);
       assert.equal(row.channelReference.source.endDate, reportEnd);
       assert.equal(row.channelReference.barcode, "0012345678901234567890");
-      assert.equal(row.coverageDays, 3.7);
-      assert.equal(row.replenishmentQty, 12);
+      assert.equal(row.coverageDays, 0.7);
+      assert.equal(row.replenishmentQty, 187);
       assert.deepEqual(
         (await summary({ dimension: "style" })).totals,
         expected,
@@ -508,7 +514,7 @@ try {
       assert.equal(result.total, 2);
       assert.ok(
         result.data.every(
-          (r: any) => r.dailySales === 3 && r.estimatedReturns === 134.1,
+          (r: any) => r.dailySales === 15.5 && r.estimatedReturns === 292.785,
         ),
       );
     },
@@ -517,7 +523,7 @@ try {
     "Staging imports and unrelated style dimensions never change references",
     async () => {
       await referenceReport({ status: "STAGING", zero: true });
-      assert.equal((await summary({ skuId: skus[0] })).data[0].dailySales, 3);
+      assert.equal((await summary({ skuId: skus[0] })).data[0].dailySales, 15.5);
       const style = (
         await summary({ dimension: "style", productId: products[0] })
       ).data[0];
@@ -542,7 +548,7 @@ try {
     async () => {
       await activateReport(await referenceReport({ version: 2 }));
       const row = (await summary({ skuId: skus[0] })).data[0];
-      assert.equal(row.dailySales, 3);
+      assert.equal(row.dailySales, 15.5);
       assert.equal(row.returnRate, "0.100000");
       assert.equal(row.estimatedReturns, 2);
       assert.equal(row.channelReference.needsReturnRateImport, true);
@@ -560,7 +566,7 @@ try {
         assert.equal(row.channelReference.dailySales.samples, 29);
         if ("omitDate" in config) {
           assert.equal(row.channelReference.salesQty, 446);
-          assert.equal(row.estimatedReturns, 178.4);
+          assert.equal(row.estimatedReturns, 294.36);
           assert.equal(row.channelReference.estimatedReturns.samples, 29);
         } else {
           assert.equal(row.channelReference.estimatedReturns.value, null);
@@ -581,7 +587,7 @@ try {
       );
       assert.equal(
         (await summary({ skuId: skus[0] })).data[0].channelReference.reason,
-        "NO_COMPLETE_REPORT",
+        "INCOMPLETE_PERIOD",
       );
       await activateReport(completeSource);
       const unmatched = (await summary({ skuId: skus[2] })).data[0];
@@ -596,9 +602,9 @@ try {
         await referenceReport({ start: shiftCompassDate(reportStart, -30) }),
       );
       const row = (await summary({ skuId: skus[0] })).data[0];
-      assert.equal(row.dailySales, 3);
-      assert.equal(row.returnRate, 0.3);
-      assert.equal(row.estimatedReturns, 134.1);
+      assert.equal(row.dailySales, 15.5);
+      assert.equal(row.returnRate, 0.655);
+      assert.equal(row.estimatedReturns, 292.785);
       assert.equal(row.channelReference.dailySales.samples, 30);
     },
   );
@@ -609,7 +615,7 @@ try {
         "UPDATE skus SET barcode=NULL,sku_code='0012345678901234567890' WHERE id=$1",
         [skus[0]],
       );
-      assert.equal((await summary({ skuId: skus[0] })).data[0].dailySales, 3);
+      assert.equal((await summary({ skuId: skus[0] })).data[0].dailySales, 15.5);
       await sql("UPDATE skus SET barcode='DIFFERENT-BARCODE' WHERE id=$1", [
         skus[0],
       ]);
@@ -636,6 +642,8 @@ try {
           JSON.stringify({ metrics: { salesQty: 0 }, reportedReturnRate: 0 }),
         ],
       );
+      await sql("UPDATE compass_imports SET expected_rows=expected_rows+1 WHERE id=$1", [completeSource]);
+      await activateReport(completeSource);
       const all = await summary();
       assert.equal(all.reportCoverage.total, 32);
       assert.equal(all.reportCoverage.matched, 3);
@@ -916,6 +924,41 @@ try {
         (await summary({ skuId: skus[1] })).data[0].channelReference.source.id,
         task.id,
       );
+    },
+  );
+  await check(
+    "Concurrent complete report replacement cannot mix page coverage with new reference values",
+    async () => {
+      const before = await summary({ skuId: skus[0] });
+      const correction = await referenceReport({ status: "STAGING", zero: true });
+      const { finishImport } = await import("../../apps/api/src/modules/analytics/service.js");
+      let published = false;
+      const during = await db.$transaction(async (snapshot) => {
+        await snapshot.$executeRawUnsafe("SET TRANSACTION READ ONLY");
+        const read = snapshot.$queryRawUnsafe.bind(snapshot);
+        const wrapped = {
+          $queryRawUnsafe: async (statement: string, ...values: unknown[]) => {
+            const result = await read(statement, ...values);
+            if (!published && statement.includes("WITH compass_source AS")) {
+              published = true;
+              await finishImport({
+                actor: { id: user.id, username: "summary-test", displayName: "库存测试", permissions: ["analytics.manage"] },
+                requestId: randomUUID(), key: randomUUID(),
+              }, correction);
+            }
+            return result;
+          },
+        } as unknown as Tx;
+        return camel(await inventorySummary({ skuId: skus[0] }, wrapped));
+      }, { isolationLevel: "RepeatableRead", timeout: 15000 });
+      assert.equal(published, true);
+      assert.deepEqual(during.reportCoverage, before.reportCoverage);
+      assert.deepEqual(during.data[0].channelReference, before.data[0].channelReference);
+      assert.equal(during.data[0].dailySales, 3);
+      const after = await summary({ skuId: skus[0] });
+      assert.equal(after.reportCoverage.source.id, correction);
+      assert.equal(after.data[0].dailySales, 0);
+      assert.equal(after.data[0].estimatedReturns, 0);
     },
   );
   console.log(`Inventory summary: ${passed} database scenarios passed`);

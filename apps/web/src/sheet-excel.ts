@@ -5,6 +5,7 @@ import {
   displayCell,
   parseDelimited,
 } from "./sheet-data.js";
+import { loadExcelJS } from "./exceljs-loader.js";
 export async function readWorkbook(
   file: File,
   options: {
@@ -27,7 +28,7 @@ export async function readWorkbook(
     ];
   if (!/\.xlsx$/i.test(file.name))
     throw Error("支持 .xlsx 和 UTF-8 CSV；旧版 .xls 请另存为 .xlsx");
-  const { Workbook } = (await import("exceljs")).default;
+  const { Workbook } = await loadExcelJS();
   const book = new Workbook();
   await book.xlsx.load(await file.arrayBuffer());
   return book.worksheets
@@ -76,7 +77,7 @@ export async function downloadWorkbook(
   rows: SheetRow[] = [],
   instructions?: string[],
 ) {
-  const { Workbook } = (await import("exceljs")).default;
+  const { Workbook } = await loadExcelJS();
   const book = new Workbook(),
     sheet = book.addWorksheet("数据");
   sheet.columns = columns.map((c) => ({

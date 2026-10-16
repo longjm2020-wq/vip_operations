@@ -11,14 +11,29 @@ import { calculateReference } from "../../../../../packages/contracts/src/invent
 import {
   inventoryDimensionSchema,
   inventoryReportMatchSchema,
+  inventoryReferencePeriodSchema,
   inventoryStockFields,
 } from "../../../../../packages/contracts/src/inventory-summary.js";
 import { applyCompassReferences } from "./compass-reference.js";
 import { applyCompassImages } from "./compass-images.js";
 
 export async function inventorySummary(q: Row, tx: Tx = db) {
+  // A report import can replace whole history days while a page is loading.
+  // Match coverage, pagination, reference values and images must share a snapshot.
+  if (tx === db) return db.$transaction(async (snapshot) => {
+    await snapshot.$executeRawUnsafe("SET TRANSACTION READ ONLY");
+    return inventorySummarySnapshot(q, snapshot);
+  }, { isolationLevel: "RepeatableRead", timeout: 15000 });
+  return inventorySummarySnapshot(q, tx);
+}
+
+async function inventorySummarySnapshot(q: Row, tx: Tx) {
   const dimension = parse(inventoryDimensionSchema, q.dimension ?? "sku");
   const reportMatch = parse(inventoryReportMatchSchema, q.reportMatch ?? "all");
+  const referencePeriod = parse(inventoryReferencePeriodSchema, q.referencePeriod ?? "30d");
+  const referenceStart = referencePeriod.endsWith("d")
+    ? `i.end_date-${Number(referencePeriod.slice(0, -1)) - 1}`
+    : `(i.end_date-interval '${referencePeriod === "1y" ? 12 : Number(referencePeriod.slice(0, -1))} months'+interval '1 day')::date`;
   const p = pagination(q),
     { vals, conditions } = balanceFilters(q);
   const skuView = dimension === "sku";
@@ -40,13 +55,14 @@ export async function inventorySummary(q: Row, tx: Tx = db) {
   const result = await rows(
     tx,
     `WITH compass_source AS (
-      SELECT i.id,i.file_name,(i.end_date-29)::text AS start_date,i.end_date::text AS end_date,i.normalization_version
+      SELECT i.id,i.file_name,i.start_date,i.end_date,i.normalization_version
       FROM compass_active_imports a JOIN compass_imports i ON i.id=a.import_id
       WHERE a.dimension='barcode' AND i.dimension='barcode' AND i.status='COMPLETE'
-        AND i.start_date<=i.end_date-29
-    ), report_codes AS (
-      SELECT DISTINCT r.barcode FROM compass_source i JOIN compass_records r ON r.import_id=i.id
-      WHERE r.business_date BETWEEN i.start_date::date AND i.end_date::date
+    ), reference_window AS (
+      SELECT ${referenceStart} AS start_date,i.end_date FROM compass_source i
+    ), history_coverage AS (
+      SELECT count(d.business_date)::int AS covered_days
+      FROM reference_window i JOIN compass_barcode_history_days d ON d.business_date BETWEEN i.start_date AND i.end_date
     ), shipment_stock AS (
       SELECT i.sku_id,sh.warehouse_id,
         COALESCE(sum(i.quantity) FILTER (WHERE sh.purchase_order_id IS NOT NULL AND sh.status IN ('SHIPPED','DELIVERED')),0) AS in_transit_qty,
@@ -56,7 +72,9 @@ export async function inventorySummary(q: Row, tx: Tx = db) {
       GROUP BY i.sku_id,sh.warehouse_id
     ), stock AS (
       SELECT ${groupKey} AS group_key,s.id AS sku_id,s.product_id,s.sku_code,s.barcode,s.color_name,s.size_name,
-        rc.barcode IS NOT NULL AS compass_matched,
+        EXISTS(SELECT 1 FROM reference_window i JOIN compass_barcode_history_records r
+          ON r.barcode=COALESCE(NULLIF(trim(s.barcode),''),trim(s.sku_code))
+          AND r.business_date BETWEEN i.start_date AND i.end_date) AS compass_matched,
         pr.style_no,pr.name AS product_name,pr.main_image_url,
         pr.custom_fields->>'f00000000000000000000000000000001' AS supplier_style_code,
         w.id AS warehouse_id,w.name AS warehouse_name,
@@ -71,7 +89,6 @@ export async function inventorySummary(q: Row, tx: Tx = db) {
       LEFT JOIN inventory_balances b ON b.sku_id=s.id AND b.warehouse_id=w.id
       LEFT JOIN inventory_sku_references ref ON ref.sku_id=s.id
       LEFT JOIN shipment_stock sh ON sh.sku_id=s.id AND sh.warehouse_id=w.id
-      LEFT JOIN report_codes rc ON rc.barcode=COALESCE(NULLIF(trim(s.barcode),''),trim(s.sku_code))
       WHERE ${conditions.join(" AND ")}
     ), grouped AS (
       SELECT group_key AS id,min(sku_id) AS sort_id,min(product_id) AS product_id,
@@ -109,8 +126,10 @@ export async function inventorySummary(q: Row, tx: Tx = db) {
       FROM filtered
     )
     SELECT totals.*,coverage.*,i.id::text AS source_id,i.file_name AS source_file_name,
-      i.start_date AS source_start_date,i.end_date AS source_end_date,i.normalization_version AS source_version,page.*
-    FROM totals CROSS JOIN coverage LEFT JOIN compass_source i ON true LEFT JOIN LATERAL (
+      i.start_date::text AS source_start_date,i.end_date::text AS source_end_date,i.normalization_version AS source_version,
+      rw.start_date::text AS window_start_date,rw.end_date::text AS window_end_date,hc.covered_days AS window_covered_days,page.*
+    FROM totals CROSS JOIN coverage CROSS JOIN history_coverage hc LEFT JOIN compass_source i ON true
+    LEFT JOIN reference_window rw ON true LEFT JOIN LATERAL (
       SELECT * FROM filtered ORDER BY ${skuView ? "compass_matched DESC," : ""}sort_id,id LIMIT ${p.pageSize} OFFSET ${(p.page - 1) * p.pageSize}
     ) page ON true`,
     ...vals,
@@ -131,6 +150,18 @@ export async function inventorySummary(q: Row, tx: Tx = db) {
         normalization_version: first.source_version,
       }
     : null;
+  const window = {
+    period: referencePeriod,
+    start_date: first.window_start_date || null,
+    end_date: first.window_end_date || null,
+    days: first.window_start_date
+      ? Math.round((Date.parse(first.window_end_date) - Date.parse(first.window_start_date)) / 86400000) + 1
+      : 0,
+    covered_days: first.window_covered_days,
+    complete: false,
+    method: "median" as const,
+  };
+  window.complete = !!source && window.days > 0 && window.covered_days === window.days;
   const totals = Object.fromEntries(
     stockFields.map((k) => [k, quantity(first["total_" + k])]),
   );
@@ -143,6 +174,7 @@ export async function inventorySummary(q: Row, tx: Tx = db) {
             !k.startsWith("total_") &&
             !k.startsWith("source_") &&
             !k.startsWith("coverage_") &&
+            !k.startsWith("window_") &&
             !["group_count", "sort_id"].includes(k),
         ),
       );
@@ -150,7 +182,7 @@ export async function inventorySummary(q: Row, tx: Tx = db) {
       return record;
     });
   const references = skuView
-    ? (await applyCompassReferences(data, tx, source)).map(calculateReference)
+    ? (await applyCompassReferences(data, tx, source, window)).map(calculateReference)
     : data;
   return {
     data:
@@ -168,6 +200,7 @@ export async function inventorySummary(q: Row, tx: Tx = db) {
             matched: first.coverage_matched,
             unmatched: first.coverage_total - first.coverage_matched,
             source,
+            window,
           },
         }
       : {}),

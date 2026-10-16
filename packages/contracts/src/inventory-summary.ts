@@ -8,6 +8,19 @@ export const inventoryReportMatchSchema = z.enum([
   "unmatched",
 ]);
 export type InventoryReportMatch = z.infer<typeof inventoryReportMatchSchema>;
+export const inventoryReferencePeriodSchema = z.enum([
+  "3d", "7d", "15d", "30d", "3m", "6m", "1y",
+]);
+export type InventoryReferencePeriod = z.infer<typeof inventoryReferencePeriodSchema>;
+export const inventoryReferencePeriods = [
+  { value: "3d", label: "近3天" },
+  { value: "7d", label: "近7天" },
+  { value: "15d", label: "近15天" },
+  { value: "30d", label: "近30天" },
+  { value: "3m", label: "近3个月" },
+  { value: "6m", label: "近半年" },
+  { value: "1y", label: "近1年" },
+] as const satisfies readonly { value: InventoryReferencePeriod; label: string }[];
 export const inventoryDimensions = [
   { key: "sku", label: "条码（商品编码）" },
   { key: "article", label: "货号" },
