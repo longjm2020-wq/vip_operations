@@ -210,13 +210,19 @@ describe("authorized product-archive fixed-order API", () => {
     if (!apply) expect(mutations()).toEqual([]);
   });
 
-  it.each(["region", "auto-hide"].flatMap(rule => [false, true].flatMap(apply => [false, true].map(superAdmin => [rule, apply, superAdmin] as const))))("rejects an unknown key referenced by %s without exposing it (apply=%s, superAdmin=%s)", async (rule, apply, superAdmin) => {
+  it.each(["region", "auto-hide"].flatMap(rule => [false, true].flatMap(apply => [false, true].map(superAdmin => [rule, apply, superAdmin] as const))))("checks an unknown key referenced by %s without exposing it (apply=%s, superAdmin=%s)", async (rule, apply, superAdmin) => {
     fixture.records[0].extra_fields = { "custom:historical-secret-key": "historical-secret-value" };
     const region = { id: "123e4567-e89b-42d3-a456-426614174000", name: "historical-secret-rule", scope: "columns", rowIds: [], columnKeys: ["custom:historical-secret-key"] };
     // Even inactive rule references must remain in the authorization set.
     if (rule === "region") fixture.settings.regions = [{ ...region, users: {}, others: "edit" }];
     else fixture.settings.autoHideRegions = [region];
     const c = actor(); if (superAdmin) c.actor.roleCodes = ["SUPER_ADMIN"];
+    if (superAdmin) {
+      const result = await method(apply, c);
+      expect(JSON.stringify(result)).not.toContain("historical-secret");
+      expect(fixture.previewCalls).toBe(1); expect(fixture.applyCalls).toBe(apply ? 1 : 0);
+      return;
+    }
     const failure = await method(apply, c).catch(error => error);
     expect(failure).toMatchObject({ ...error(403, "REGION_FORBIDDEN"), response: { error: { code: "REGION_FORBIDDEN", message: expect.stringContaining("未登记的历史字段") } } });
     expect(failure.response.error.message).toContain("OCT05");
@@ -253,8 +259,7 @@ describe("authorized product-archive fixed-order API", () => {
     { cellVerticalAlignments: { "custom:historical-secret-key": "bottom" } },
     { cellTextColors: { "custom:historical-secret-key": "#262626" } },
     { cellNumberFormats: { "custom:historical-secret-key": { type: "currency", decimals: 2, pattern: "0.00" } } },
-    { sortOrder: 2 },
-  ])("leaves ordinary PATCH denial of unknown business/format keys and row ordering unchanged (%j)", async patch => {
+  ])("rejects explicit unknown business/format PATCH keys even for SUPER_ADMIN (%j)", async patch => {
     fixture.records[0].extra_fields = { "custom:historical-secret-key": "historical-secret-value" };
     const c = actor(); c.actor.roleCodes = ["SUPER_ADMIN"];
     await expect(inArchive(() => write(c, patch, "1"))).rejects.toMatchObject(error(403, "REGION_FORBIDDEN"));

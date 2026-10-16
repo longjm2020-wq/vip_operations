@@ -1,8 +1,18 @@
 import { expect, it } from "vitest";
-import { selectionSystemValue } from "../../apps/web/src/selection-system-fields.js";
+import { selectionSystemPlaceholder, selectionSystemValue } from "../../apps/web/src/selection-system-fields.js";
 import { allowedFieldTypes } from "../../apps/web/src/selection-field-types.js";
 import { defaultVipTagPriceLimitConfig } from "../../packages/contracts/src/selection-vip-tag-price-limit.js";
 const field = { key: "custom:system", label: "系统", width: 150, custom: true };
+it("leaves pending creation fields blank without a save-generated placeholder", () => {
+  const created = { ...field, type: "createdTime" as const };
+  const pending = { id: "7", createdAt: null, creationTimePending: true };
+  expect(selectionSystemValue(pending, created)).toBe("");
+  expect(selectionSystemPlaceholder(pending, created)).toBe("");
+  expect(selectionSystemPlaceholder({}, created)).toBe("");
+  expect(selectionSystemValue({ ...pending, createdAt: "2026-10-16T04:00:00.000Z", creationTimeDraft: "2026-10-16 12:00" }, created)).toBe("");
+  expect(selectionSystemValue({ ...pending, createdAt: "2026-10-16T04:00:00.000Z", creationTimePending: false }, created)).toBe("2026-10-16 12:00:00");
+  expect(selectionSystemPlaceholder(pending, { ...field, type: "modifier" })).toBe("未记录");
+});
 it("resolves actual archive category names for derived price while preserving missing/denied blanks", () => {
   const computed = { ...field, type: "vipTagPriceLimit" as const, vipTagPriceLimitConfig: defaultVipTagPriceLimitConfig("custom:product:categoryId") };
   const row = { extraFields: { "custom:product:categoryId": "42", [field.key]: "8888" }, cellAccess: { "custom:product:categoryId": "read" } };

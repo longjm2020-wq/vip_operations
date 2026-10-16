@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   Alert,
@@ -25,6 +25,7 @@ import {
 } from "@ant-design/icons";
 import { useSelectionWorkspace } from "./selection-workspace";
 import { useUser, type Row } from "./shared";
+import { selectionRowNumbers } from "./selection-row-number";
 import {
   defaultProtection,
   normalizeSelectionProtection,
@@ -70,6 +71,7 @@ export function SelectionProtectionControl({
   const { api, queryClient } = useSelectionWorkspace();
   const { message } = App.useApp(),
     user = useUser();
+  const rowNumbers = useMemo(() => selectionRowNumbers(rows), [rows]);
   const [open, setOpen] = useState(false),
     [tab, setTab] = useState("regions"),
     [busy, setBusy] = useState(false);
@@ -437,7 +439,7 @@ export function SelectionProtectionControl({
                           <span>
                             {row.xutiStyleNo ||
                               row.supplierStyleNo ||
-                              `行 ${row.id}`}{" "}
+                              `行 ${rowNumbers.get(String(row._key ?? row.id))}`}{" "}
                             · {names.get(String(row.claimedBy)) || "我"}
                           </span>
                           <Button
@@ -635,9 +637,9 @@ export function SelectionProtectionControl({
                 value={hideRegion.rowIds}
                 options={rows
                   .filter((row) => row.id)
-                  .map((row, index) => ({
+                  .map(row => ({
                     value: String(row.id),
-                    label: `${index + 1} · ${row.xutiStyleNo || row.supplierStyleNo || "未填款号"}`,
+                    label: `${rowNumbers.get(String(row._key ?? row.id))} · ${row.xutiStyleNo || row.supplierStyleNo || "未填款号"}`,
                   }))}
                 onChange={(rowIds) => setHideRegion({ ...hideRegion, rowIds })}
               />
@@ -724,9 +726,9 @@ export function SelectionProtectionControl({
                 value={region.rowIds}
                 options={rows
                   .filter((row) => row.id)
-                  .map((row, index) => ({
+                  .map(row => ({
                     value: String(row.id),
-                    label: `${index + 1} · ${row.xutiStyleNo || row.supplierStyleNo || "未填款号"}`,
+                    label: `${rowNumbers.get(String(row._key ?? row.id))} · ${row.xutiStyleNo || row.supplierStyleNo || "未填款号"}`,
                   }))}
                 onChange={(rowIds) => setRegion({ ...region, rowIds })}
               />

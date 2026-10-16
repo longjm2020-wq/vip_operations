@@ -1,7 +1,42 @@
 import { describe, expect, it } from "vitest";
 import { mergeSelectionRemote, mergeSelectionSave, normalizeSelection, selectionDelta, SelectionSaveAttempts } from "../../apps/web/src/selection-autosave.js";
+import { withSelectionCreationTime } from "../../apps/web/src/selection-creation-time.js";
 
 describe("selection autosave", () => {
+  it("normalizes the server's pending creation state without inventing a timestamp", () => {
+    expect(normalizeSelection({ id: "1", createdAt: null })).toMatchObject({ createdAt: null, creationTimePending: true });
+    expect(normalizeSelection({ createdAt: "2026-10-16T04:00:00.000Z" }).creationTimePending).toBe(false);
+    expect(normalizeSelection({ createdAt: null, creationTimePending: false }).creationTimePending).toBe(false);
+    expect(selectionDelta({ creationTimePending: false, createdAt: null, material: "棉" }, { creationTimePending: true, createdAt: "2026-10-16T04:00:00.000Z", material: "羊毛" })).toEqual({ material: "棉" });
+  });
+
+  it("adopts the first recorded timestamp even when its qualifying content is undone during save", () => {
+    const blank = { _key: "one", id: "1", createdAt: null, creationTimePending: true, xutiStyleNo: "" };
+    const sent = { ...blank, xutiStyleNo: "STYLE" }, current = { ...blank };
+    const saved = { ...sent, createdAt: "2026-10-16T04:00:00.000Z", creationTimePending: false, version: 2 };
+    expect(mergeSelectionSave(current, sent, saved)).toMatchObject({ xutiStyleNo: "", createdAt: saved.createdAt, creationTimePending: false, version: 2 });
+    expect(mergeSelectionRemote(current, sent, saved)).toMatchObject({ row: { xutiStyleNo: "", createdAt: saved.createdAt, creationTimePending: false, version: 2 }, conflicts: [] });
+  });
+
+  it("does not replace the first saved timestamp with a cleared pending date draft", () => {
+    const blank = { _key: "one", id: "1", createdAt: null, creationTimePending: true, xutiStyleNo: "STYLE" };
+    const sent = withSelectionCreationTime(blank, "2025/4/22 0:42");
+    const current = withSelectionCreationTime(sent, "");
+    const saved: Record<string, any> = { ...sent, creationTimePending: false, version: 2 };
+    delete saved.creationTimeDraft;
+    const merged = mergeSelectionSave(current, sent, saved);
+    expect(merged).toMatchObject({ createdAt: "2025-04-21T16:42:00.000Z", creationTimePending: false });
+    expect(merged).not.toHaveProperty("creationTimeDraft");
+    expect(mergeSelectionRemote(current, sent, saved)).toMatchObject({ row: { createdAt: "2025-04-21T16:42:00.000Z", creationTimePending: false }, conflicts: [] });
+  });
+
+  it("retains newer partial date typing without discarding a first established server timestamp", () => {
+    const sent = { _key: "one", id: "1", createdAt: null, creationTimePending: true, xutiStyleNo: "STYLE" };
+    const current = withSelectionCreationTime(sent, "2026-10-");
+    const saved = { ...sent, createdAt: "2026-10-16T04:00:00.000Z", creationTimePending: false, version: 2 };
+    expect(mergeSelectionSave(current, sent, saved)).toMatchObject({ creationTimeDraft: "2026-10-", createdAt: saved.createdAt, creationTimePending: false });
+  });
+
   it("uses distinct keys for successive edits to the same row", () => {
     const attempts = new SelectionSaveAttempts();
     const row = { _key: "row", id: "1", material: "棉" };

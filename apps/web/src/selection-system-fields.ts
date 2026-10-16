@@ -1,6 +1,6 @@
 import type { SelectionField } from "./selection-field-types.js";
 import { formatSelectionCreatedTime } from "../../../packages/contracts/src/selection-created-time.js";
-import { selectionCreationTimeValue } from "./selection-creation-time.js";
+import { selectionCreationTimePending, selectionCreationTimeValue } from "./selection-creation-time.js";
 import { resolveVipTagPriceLimit } from "../../../packages/contracts/src/selection-vip-tag-price-limit.js";
 
 type References = Record<string, Record<string, any>[]>;
@@ -15,6 +15,12 @@ function categoryNames(references?: References) {
   }
   return names;
 }
+
+export function selectionSystemPlaceholder(row: Record<string, any>, field: SelectionField): string {
+  const type = field.type || field.fallbackType;
+  return type === "createdTime" || type === "vipTagPriceLimit" ? "" : row.id ? "未记录" : "保存后生成";
+}
+
 export function selectionSystemValue(
   row: Record<string, any>,
   field: SelectionField,
@@ -40,6 +46,7 @@ export function selectionSystemValue(
   }
   if (type === "createdTime" || type === "modifiedTime") {
     if (type === "createdTime" && field.key === "registrationBatch" && !field.custom) return selectionCreationTimeValue(row, field.timeDisplay);
+    if (type === "createdTime" && selectionCreationTimePending(row)) return "";
     const value = row[type === "createdTime" ? "createdAt" : "updatedAt"];
     return formatSelectionCreatedTime(value, field.timeDisplay);
   }

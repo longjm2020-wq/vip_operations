@@ -168,6 +168,30 @@ describe("table session history", () => {
     expect(applied(applySelectionHistoryChange([before], change([before], [partial], ["registrationBatch"]), "redo"))[0].creationTimeDraft).toBe("2026-10-");
   });
 
+  it("keeps a first recorded time when undo clears the first product content", () => {
+    const before = { _key: "one", id: "1", createdAt: null, creationTimePending: true, xutiStyleNo: "" };
+    const after = { ...before, xutiStyleNo: "STYLE" };
+    const stored = change([before], [after], ["xutiStyleNo", "registrationBatch", "creationTimePending"]);
+    expect(stored.cells.map(cell => cell.field)).toEqual(["xutiStyleNo"]);
+    const saved = { ...after, createdAt: "2026-10-16T04:00:00.000Z", creationTimePending: false };
+    const undone = applied(applySelectionHistoryChange([saved], stored, "undo"));
+    expect(undone[0]).toMatchObject({ xutiStyleNo: "", createdAt: saved.createdAt, creationTimePending: false });
+    expect(applied(applySelectionHistoryChange(undone, stored, "redo"))[0]).toMatchObject(saved);
+  });
+
+  it("cannot erase an established first timestamp when undo targets a pre-entry date", () => {
+    const before = { _key: "one", id: "1", createdAt: null, creationTimePending: true, xutiStyleNo: "" };
+    const after = withSelectionCreationTime({ ...before, xutiStyleNo: "STYLE" }, "2025/4/22 0:42");
+    const stored = change([before], [after], ["xutiStyleNo", "registrationBatch", "creationTimePending"]);
+    const saved: Row = { ...after, creationTimePending: false };
+    delete saved.creationTimeDraft;
+    const undone = applied(applySelectionHistoryChange([saved], stored, "undo"));
+    expect(undone[0]).toMatchObject({ xutiStyleNo: "", createdAt: "2025-04-21T16:42:00.000Z", creationTimePending: false });
+    expect(undone[0]).not.toHaveProperty("creationTimeDraft");
+    expect(applied(applySelectionHistoryChange(undone, stored, "redo"))[0]).toMatchObject({ xutiStyleNo: "STYLE", createdAt: "2025-04-21T16:42:00.000Z", creationTimePending: false });
+    expect(applySelectionHistoryChange([{ ...undone[0], createdAt: "2026-10-16T04:00:00.000Z" }], stored, "redo")).toMatchObject({ ok: false, reason: "conflict" });
+  });
+
   it("keeps unchanged rows by reference in a five-thousand-row table", () => {
     const before = Array.from({ length: 5000 }, (_, index) => ({ _key: String(index), material: `row${index}`, extraFields: { "custom:untouched": "large unrelated content" } }));
     const after = [...before];

@@ -56,7 +56,7 @@ beforeAll(async () => {
       cell_alignments jsonb DEFAULT '{}',cell_vertical_alignments jsonb DEFAULT '{}',
       cell_text_colors jsonb DEFAULT '{}',cell_number_formats jsonb DEFAULT '{}',
       sort_order integer NOT NULL DEFAULT 0,version integer NOT NULL DEFAULT 1,updated_by bigint DEFAULT 7,
-      created_at timestamptz,updated_at timestamptz DEFAULT '2026-10-11T00:00:00Z'
+      created_at timestamptz,content_created_at timestamptz,updated_at timestamptz DEFAULT '2026-10-11T00:00:00Z'
     );
     CREATE TABLE public.style_selections(id bigint PRIMARY KEY,sort_order integer);
     INSERT INTO public.style_selections VALUES(1,555);
@@ -66,6 +66,10 @@ beforeAll(async () => {
     CREATE TABLE audit_logs(id bigserial PRIMARY KEY,actor_id bigint,actor_label text,action text,entity_type text,
       entity_id bigint,selection_table_id bigint,request_id text,before_data jsonb,after_data jsonb,reason text);
     CREATE TABLE fixture_order_backups(id bigserial PRIMARY KEY,snapshot jsonb);
+    CREATE FUNCTION seed_archive_business_date() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+      NEW.content_created_at := coalesce(NEW.content_created_at,(SELECT created_at FROM products WHERE id=NEW.product_id),NEW.created_at);
+      RETURN NEW; END $$;
+    CREATE TRIGGER seed_archive_business_date BEFORE INSERT ON selection_table_23.style_selections FOR EACH ROW EXECUTE FUNCTION seed_archive_business_date();
   `);
 }, 30000);
 beforeEach(async () => {
@@ -93,6 +97,12 @@ afterAll(async () => {
 });
 
 describe("explicit product-archive creation-order maintenance", () => {
+  it("orders by the business first-entry date while retaining physical and master dates as separate audit evidence", async () => {
+    await database.query("UPDATE selection_table_23.style_selections SET content_created_at='2024-01-01T00:00:00Z' WHERE id=1");
+    const result = await previewProductArchiveOrder(client);
+    expect(result.minCreatedAt).toBe("2024-01-01T00:00:00.000000Z");
+    expect(result.orderedRows[0]).toMatchObject({ id: "1", effectiveCreatedAt: "2024-01-01T00:00:00.000000Z", sheetCreatedAt: "2026-10-04T16:00:00.000000Z", productCreatedAt: "2026-10-04T16:00:00.000000Z" });
+  });
   it("previews actual product creation times and the Beijing Sep20/Oct05 boundary without any writes", async () => {
     const before = await rowState();
     const result = await previewProductArchiveOrder(client);

@@ -29,6 +29,7 @@ import { persistMaster } from "../master/service.js";
 import { customValues } from "../master/product-fields.js";
 import { z } from "zod";
 import { tableAccess } from "../projects/library.js";
+import { selectionBusinessCreatedAt } from "./creation-time.js";
 
 export async function isArchive(tx: Tx) {
   const scope = selectionScope.getStore();
@@ -156,7 +157,7 @@ export async function mirrorArchiveRow(tx: Tx, c: Context, raw: Row, createdAt?:
   const values: Row = { styleNo, customFields: {} };
   // A product created from an existing draft inherits its saved creation time.
   // Ordinary edits and imports retain an existing product's own timestamp.
-  const productCreatedAt = createdAt ?? (!original ? row.createdAt : undefined);
+  const productCreatedAt = createdAt ?? (!original ? selectionBusinessCreatedAt(row) : undefined);
   if (productCreatedAt !== undefined) values.createdAt = productCreatedAt;
   const extras = row.extraFields || {};
   for (const key of coreFields)

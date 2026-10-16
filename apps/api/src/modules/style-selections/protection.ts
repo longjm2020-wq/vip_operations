@@ -4,7 +4,8 @@ import { isArchive } from "./archive.js";
 import { restoreProtectedImageColorLinks } from "./image-colors.js";
 import { canManageContent, effectiveContentAccess, tableAccess } from "../projects/library.js";
 import { assertTextPatch, lockTextDefinitions, textLimitDefinitions } from "./text-limits.js";
-import { readableSelectionCreatedAt, selectionCreatedAtSql, selectionCreatedAtText } from "./creation-time.js";
+import { readableSelectionCreatedAt, selectionBusinessCreatedAt, selectionCreatedAtSql, selectionCreatedAtText } from "./creation-time.js";
+import { selectionRowNumberColumn, selectionRowNumberSource } from "./row-number.js";
 import { selectionFieldSchema, type SelectionField } from "../../../../../packages/contracts/src/selection-layout.js";
 import { isSelectionComputedField, resolveVipTagPriceLimit } from "../../../../../packages/contracts/src/selection-vip-tag-price-limit.js";
 import { createHash } from "node:crypto";
@@ -31,6 +32,7 @@ import {
   selectionProtectionDraftSchema,
   selectionProtectionSchema,
   selectionCellAccess,
+  selectionSuperAdmin,
   selectionFields,
   protectionAdmin,
   type SelectionProtection,
@@ -127,11 +129,15 @@ export function fieldVisible(policy: Policy, actor: Actor, key: string) {
   );
 }
 export function access(policy: Policy, actor: Actor, raw: Row, key: string) {
+  // Legacy values/formatting can outlive their field registry. They must not
+  // block the super-administrator's row operations. Projection and explicit
+  // field writes still require a registered definition below.
+  if (selectionSuperAdmin(actor)) return camel(raw).migrationLocked ? "read" : "edit";
   // Only the designated super-administrator may override field privacy.
   // Unregistered custom keys must not bypass the field-management API.
   if (!fieldVisible(policy, actor, key)) return "deny";
   const row = camel(raw),
-    value = key === "registrationBatch" ? row.createdAt : key.startsWith("custom:") ? row.extraFields?.[key] : row[key];
+    value = key === "registrationBatch" ? selectionBusinessCreatedAt(row) : key.startsWith("custom:") ? row.extraFields?.[key] : row[key];
   let hasContent = nonempty(value);
   if (policy.settings.autoHide && policy.computedFieldKeys?.includes(key)) {
     const field = policy.computedFields?.[key], sourceKey = field?.vipTagPriceLimitConfig?.sourceKey;
@@ -149,6 +155,10 @@ export function project(policy: Policy, actor: Actor, raw: Row): Row {
   const row = camel(raw),
     cellAccess: Row = {},
     hiddenCells: string[] = [];
+  row.createdAt = camel(selectionBusinessCreatedAt(raw));
+  row.creationTimePending = row.createdAt === null;
+  delete row.contentCreatedAt;
+  delete row.createdTimeSource;
   const originalFields = rowFields(row);
   const unknownExtras = new Set(
     Object.keys(row.extraFields || {}).filter(
@@ -202,6 +212,7 @@ export function project(policy: Policy, actor: Actor, raw: Row): Row {
   if (Array.isArray(row.images)) row.images = row.images.map((image: Row) => image.colorFieldKey &&
     (!fieldVisible(policy, actor, image.colorFieldKey) || policy.deletedFieldKeys?.includes(image.colorFieldKey) || access(policy, actor, raw, image.colorFieldKey) === "deny")
     ? { ...image, colorFieldKey: "protected" } : image);
+  if (access(policy, actor, raw, "registrationBatch") === "deny") row.createdAt = null;
   // The entire row colour is shared formatting, never a source of protected data.
   return {
     ...row,
@@ -218,10 +229,10 @@ export async function detail(c: Context, value: string) {
       const p = await policy(tx),
         row = await one(
           tx,
-          `SELECT s.*, ${selectionCreatedAtSql()} AS created_at, (SELECT display_name FROM users WHERE id=s.created_by) AS created_by_name,
+          `SELECT s.*, ${selectionRowNumberColumn}, ${selectionCreatedAtSql()} AS created_at, (SELECT display_name FROM users WHERE id=s.created_by) AS created_by_name,
       (SELECT username FROM users WHERE id=s.created_by) AS created_by_username,
       (SELECT display_name FROM users WHERE id=s.updated_by) AS updated_by_name,
-      (SELECT username FROM users WHERE id=s.updated_by) AS updated_by_username FROM style_selections s WHERE id=$1::bigint`,
+      (SELECT username FROM users WHERE id=s.updated_by) AS updated_by_username ${selectionRowNumberSource} WHERE s.id=$1::bigint`,
           value,
         );
       if (!row) fail("NOT_FOUND", "款式不存在", 404);
@@ -277,6 +288,7 @@ export function assertFields(
   edit = true,
 ) {
   if(edit && camel(row).migrationLocked) fail("MIGRATION_LOCKED","此行已跨表传送，点击 # 列的小铅笔释放后再编辑",409);
+  if (selectionSuperAdmin(c.actor)) return;
   if (
     keys.some((key) =>
       edit
@@ -323,6 +335,9 @@ export async function assertWrite(
     )
   )
     fail("REGION_FORBIDDEN", "字段尚未配置或没有编辑权限，请先通过字段管理新增字段", 403);
+  if (formats.some(container => Object.entries(patch[container] || {}).some(([key, value]) =>
+    !selectionFields.includes(key) && !p!.registeredFieldKeys?.includes(key) && !same(original[container]?.[key], value))))
+    fail("REGION_FORBIDDEN", "格式字段尚未配置，请先通过字段管理新增字段", 403);
   for (const key of ["extraFields", ...formats])
     if (key in patch) {
       const merged = { ...(original[key] || {}), ...patch[key] };
@@ -843,7 +858,7 @@ export async function delegatedShare(tx: Tx, share: Row, p?: Policy) {
       ],
     };
   }
-  if (!actor.permissions.includes("selection.manage"))
+  if (!actor.permissions.includes("selection.manage") && !selectionSuperAdmin(actor))
     fail("FORBIDDEN", "分享权限已变更，请联系分享人", 403);
   await shareRights(
     tx,

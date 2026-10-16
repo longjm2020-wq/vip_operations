@@ -8,11 +8,12 @@ import { z } from "zod";
 import { randomUUID } from "node:crypto";
 import * as protection from "./protection.js";
 import { isArchive, mirrorArchiveRow } from "./archive.js";
-import { selectionCreatedAtSql, selectionCreatedTimeRevision } from "./creation-time.js";
+import { hasSelectionCreationContent, selectionBusinessCreatedAt, selectionCreatedAtSql, selectionCreatedTimeRevision, validateSelectionCreatedTimeWrite } from "./creation-time.js";
 import { selectionCreatedTimeInputSchema } from "../../../../../packages/contracts/src/selection-created-time.js";
 import { insertImage, readStoredImage } from "./image-storage.js";
 import { restoreProtectedImageColorLinks, validateSelectionImageColors } from "./image-colors.js";
 import { deleteSingleRow } from "./history-rows.js";
+import { selectionRowNumberColumn, selectionRowNumberRevision, selectionRowNumberSource } from "./row-number.js";
 import { db, insert, one, rows, update, camel, type Row, type Tx } from "../../../../../packages/database/src/index.js";
 import { setImmediate as yieldToRequests } from "node:timers/promises";
 import {
@@ -89,16 +90,16 @@ const updateInput = writeInput
   .extend({ expectedUpdatedAt: z.iso.datetime().optional() })
   .strict();
 
-const selectColumns = () => `
-  s.id,s.registration_batch::text,s.images,s.label_images,s.cell_colors,s.cell_alignments,s.cell_vertical_alignments,s.cell_text_colors,s.cell_number_formats,s.extra_fields,s.xuti_style_no,s.supplier_style_no,
+const selectColumns = (numbered = true) => `
+  s.id,${numbered ? selectionRowNumberColumn + "," : ""}s.registration_batch::text,s.images,s.label_images,s.cell_colors,s.cell_alignments,s.cell_vertical_alignments,s.cell_text_colors,s.cell_number_formats,s.extra_fields,s.xuti_style_no,s.supplier_style_no,
   s.supplier_code,s.color,s.size_range,s.material,s.supply_price_excl_tax,
   s.selling_points,s.reorder_days,s.collection_inventory,s.vip_price,s.live_price,s.tag_price,s.row_color,s.sort_order,s.created_by,s.version,
-  ${selectionCreatedAtSql()} AS created_at,s.updated_at,s.cell_owners,s.claimed_by,s.updated_by,s.migration_locked,s.migration_target_workspace,s.migration_target_row_id,s.migrated_at,s.product_id,
+  ${selectionCreatedAtSql()} AS created_at,(s.content_created_at IS NULL) AS creation_time_pending,s.updated_at,s.cell_owners,s.claimed_by,s.updated_by,s.migration_locked,s.migration_target_workspace,s.migration_target_row_id,s.migrated_at,s.product_id,
   (SELECT display_name FROM users WHERE id=s.created_by) AS created_by_name,
   (SELECT username FROM users WHERE id=s.created_by) AS created_by_username,
   (SELECT display_name FROM users WHERE id=s.updated_by) AS updated_by_name,
   (SELECT username FROM users WHERE id=s.updated_by) AS updated_by_username`;
-const source = " FROM style_selections s";
+const source = selectionRowNumberSource;
 
 export async function uploadImage(c: Context, input: unknown) {
   const body = parse(z.object({ data: z.string().max(1_500_000) }).strict(), input);
@@ -138,8 +139,8 @@ function normalizedTags(value: unknown) {
   return tagValues(value).join("/") || null;
 }
 
-const revisionSql = "SELECT md5(coalesce(string_agg(id::text || ':' || version::text || ':' || updated_at::text, ',' ORDER BY id), '')) AS revision FROM style_selections";
-export async function revision(c: Context) { const p = await protection.policy(db); const value = await one(db, revisionSql); return { revision: protection.digest([selectionScope.getStore(),value!.revision,p.revision,p.fieldRevision,c.actor.id,c.actor.permissions,c.actor.roleCodes,selectionCreatedTimeRevision]) }; }
+const revisionSql = "SELECT md5(coalesce(string_agg(id::text || ':' || version::text || ':' || updated_at::text || ':' || sort_order::text, ',' ORDER BY id), '')) AS revision FROM style_selections";
+export async function revision(c: Context) { const p = await protection.policy(db); const value = await one(db, revisionSql); return { revision: protection.digest([selectionScope.getStore(),value!.revision,p.revision,p.fieldRevision,c.actor.id,c.actor.permissions,c.actor.roleCodes,selectionCreatedTimeRevision,selectionRowNumberRevision]) }; }
 
 function listSpec(query: Record<string, unknown>) {
   const values: unknown[] = [];
@@ -184,16 +185,16 @@ export async function sync(c: Context, input: unknown) {
   const request = db.$transaction(async tx => {
     const p = await protection.policy(tx);
     const rawRevision=(await one(tx,revisionSql))!.revision;
-    const scopedRevision=protection.digest([selectionScope.getStore(),rawRevision,p.revision,p.fieldRevision,c.actor.id,c.actor.permissions,c.actor.roleCodes,selectionCreatedTimeRevision]);
+    const scopedRevision=protection.digest([selectionScope.getStore(),rawRevision,p.revision,p.fieldRevision,c.actor.id,c.actor.permissions,c.actor.roleCodes,selectionCreatedTimeRevision,selectionRowNumberRevision]);
     if (protection.activePolicy(p)) {
       const sourceRows = await rows(tx, `SELECT ${selectColumns()} ${source}`);
       const projected = protection.filtered(sourceRows.map(row => protection.project(p,c.actor,row)), body);
-      const index = projected.map(row => ({id:String(row.id),token:protection.digest([row,p.fieldRevision,c.actor.id,c.actor.permissions,c.actor.roleCodes,selectionCreatedTimeRevision])}));
+      const index = projected.map(row => ({id:String(row.id),token:protection.digest([row,p.fieldRevision,c.actor.id,c.actor.permissions,c.actor.roleCodes,selectionCreatedTimeRevision,selectionRowNumberRevision])}));
       const tokens=new Map(index.map(item=>[item.id,item.token]));
       return {revision:scopedRevision,index,data:projected.filter(row=>body.known[String(row.id)]!==tokens.get(String(row.id)))};
     }
     const revision = scopedRevision;
-    const index = await rows(tx, `SELECT s.id::text AS id,md5(s.version::text || ':' || s.updated_at::text || ':' || $${values.length+1}) AS token ${source}${clause} ORDER BY ${order}`, ...values,protection.digest([p.revision,p.fieldRevision,c.actor.id,c.actor.permissions,c.actor.roleCodes,selectionCreatedTimeRevision]));
+    const index = await rows(tx, `SELECT s.id::text AS id,md5(s.version::text || ':' || s.updated_at::text || ':' || row_positions.row_number::text || ':' || $${values.length+1}) AS token ${source}${clause} ORDER BY ${order}`, ...values,protection.digest([p.revision,p.fieldRevision,c.actor.id,c.actor.permissions,c.actor.roleCodes,selectionCreatedTimeRevision,selectionRowNumberRevision]));
     const changed = index.filter(row => body.known[row.id] !== row.token).map(row => row.id);
     const data = changed.length ? await rows(tx, `SELECT ${selectColumns()} ${source} WHERE s.id=ANY($1::bigint[])`, changed) : [];
     return { revision, index, data:data.map(row=>protection.project(p,c.actor,row)) };
@@ -339,8 +340,17 @@ export async function persist(tx: Tx, c: Context, body: Row, value?: string) {
     for(const key of ["extraFields","cellColors","cellAlignments","cellVerticalAlignments","cellTextColors","cellNumberFormats"])if(key in changes){const stored=camel(before || {})[key] || {};const merged={...stored,...changes[key]};for(const field of Object.keys(merged))if(merged[field]===null)delete merged[field];changes[key]=merged;}
     if ("color" in changes) changes.color = normalizedTags(changes.color);
     if ("sizeRange" in changes) changes.sizeRange = sortSelectionSizes(changes.sizeRange) || null;
+    await validateSelectionCreatedTimeWrite(tx, before, changes);
     const security=await protection.assertWrite(tx,c,before,changes,policy);
     await validateSelectionImageColors(tx, c, before, changes, policy);
+    const explicitCreatedAt = changes.createdAt;
+    if (Object.hasOwn(changes, "createdAt")) {
+      changes.contentCreatedAt = changes.createdAt;
+      changes.createdTimeSource = "EXPLICIT";
+      delete changes.createdAt;
+    }
+    if (selectionBusinessCreatedAt(before) === null && hasSelectionCreationContent({ ...camel(before || {}), ...changes }))
+      security.cellOwners = JSON.stringify({ ...JSON.parse(security.cellOwners || "{}"), registrationBatch: c.actor.id });
     for (const key of ["images", "labelImages", "cellColors", "cellAlignments", "cellVerticalAlignments", "cellTextColors", "cellNumberFormats", "extraFields"])
       if (key in changes) changes[key] = JSON.stringify(changes[key]);
     if (!before && changes.sortOrder === undefined) {
@@ -350,10 +360,12 @@ export async function persist(tx: Tx, c: Context, body: Row, value?: string) {
     const result = before
       ? await update(tx, "style_selections", value!, { ...changes, ...security, updatedBy:c.actor.id, version: before.version + 1 })
       : await insert(tx, "style_selections", { ...changes, ...security, updatedBy:c.actor.id, createdBy: c.actor.id });
-    await mirrorArchiveRow(tx,c,result,changes.createdAt);
+    await mirrorArchiveRow(tx,c,result,explicitCreatedAt);
     await audit(tx, c, before ? "UPDATE" : "CREATE", "style-selection", result.id, before, result);
     // Keep date-only fields identical to list responses (rather than ISO timestamps).
-    return (await one(tx, `SELECT ${selectColumns()} ${source} WHERE s.id=$1::bigint`, result.id))!;
+    // Imports/migrations can call persist thousands of times. Their internal
+    // result needs no global rank; public write/photo responses call detail().
+    return (await one(tx, `SELECT ${selectColumns(false)} FROM style_selections s WHERE s.id=$1::bigint`, result.id))!;
 }
 
 export { previewImport, commitImport } from "./import.js";

@@ -53,7 +53,7 @@ export function SelectionFieldInput({field,value,disabled,onChange,compact=false
  const {message}=App.useApp();
  const type=field.type || field.fallbackType || "text";
  if(type==="vipTagPriceLimit")return <Input aria-label={field.label} readOnly value={value} prefix={value?"¥":undefined} placeholder="按三级类目自动匹配"/>;
- if(systemField(field))return <Input aria-label={field.label} readOnly value={value} placeholder="保存后由系统生成"/>;
+ if(systemField(field))return <Input aria-label={field.label} readOnly value={value} placeholder={type==="createdTime"?"":"保存后由系统生成"}/>;
  if(type==="tags"){
   const config={...defaultTagConfig,...field.tagConfig};
   return <Select aria-label={field.label} style={{width:"100%"}} disabled={disabled} allowClear mode={config.allowCustom?"tags":"multiple"} maxTagCount={compact ? "responsive" : undefined} tokenSeparators={config.allowCustom?["/"]:undefined} value={orderedFieldTags(field,value)} placeholder="输入或选择标签" options={(field.options || []).map(tag=>({value:tag,label:tag}))} onChange={values=>{const next=orderedFieldTags(field,values.join("/")).join("/");const error=fieldValueError(field,next);if(error){message.warning(error);return;}onChange(next);}}/>;

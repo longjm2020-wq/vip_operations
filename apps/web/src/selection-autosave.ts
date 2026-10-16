@@ -1,5 +1,6 @@
 import { sortSelectionSizes } from "../../../packages/contracts/src/selection-sizes.js";
-import { hasSelectionCreationTimeDraft, selectionCreationTimeComparable } from "./selection-creation-time.js";
+import { hasSelectionCreationTimeDraft, selectionCreationTimeComparable, selectionCreationTimePending } from "./selection-creation-time.js";
+import { parseSelectionCreatedTime } from "../../../packages/contracts/src/selection-created-time.js";
 type Row = Record<string, any>;
 
 /** Each logical write gets its own key; uncertain retries reuse the exact request. */
@@ -36,23 +37,24 @@ export class SelectionSaveAttempts {
 }
 
 export function normalizeSelection(row: Row): Row {
-  return { ...row, sizeRange: sortSelectionSizes(row.sizeRange) || null, registrationBatch: row.registrationBatch ? String(row.registrationBatch).slice(0, 10) : null,
+  return { ...row, creationTimePending: selectionCreationTimePending(row), sizeRange: sortSelectionSizes(row.sizeRange) || null, registrationBatch: row.registrationBatch ? String(row.registrationBatch).slice(0, 10) : null,
     images: row.images || [], labelImages: row.labelImages || [], cellColors: row.cellColors || {}, cellAlignments: row.cellAlignments || {}, cellVerticalAlignments: row.cellVerticalAlignments || {}, cellTextColors: row.cellTextColors || {}, cellNumberFormats: row.cellNumberFormats || {}, extraFields: row.extraFields || {} };
 }
 
 /** Accept server metadata while retaining fields edited during the request. */
 export function mergeSelectionSave(current: Row, sent: Row, saved: Row): Row {
   const next: Row = { ...saved, _key: current._key };
+  if (saved.rowNumber === undefined && current.rowNumber !== undefined) next.rowNumber = current.rowNumber;
   delete next.creationTimeDraft;
   // The timestamp and its raw input share the legacy column's permission key.
   // A response must not replace text typed after this request was sent.
-  if (!saved.migrationLocked && (!saved.cellAccess || (saved.cellAccess.registrationBatch || saved.defaultCellAccess) === "edit") &&
+  if (retainCreationTimeDraft(current, saved) && !saved.migrationLocked && (!saved.cellAccess || (saved.cellAccess.registrationBatch || saved.defaultCellAccess) === "edit") &&
       (current.creationTimeDraft !== sent.creationTimeDraft || selectionCreationTimeComparable(current) !== selectionCreationTimeComparable(sent))) {
-    next.createdAt = current.createdAt;
+    next.createdAt = retainedCreationTimestamp(current, saved);
     if (hasSelectionCreationTimeDraft(current)) next.creationTimeDraft = current.creationTimeDraft;
   }
   for (const key of Object.keys(current)) {
-    if (["id", "updatedAt", "createdAt", "creationTimeDraft", "version", "_key", "cellAccess", "hiddenCells", "defaultCellAccess", "policyRevision", "claimedBy", "migrationLocked", "migrationTargetWorkspace", "migrationTargetRowId", "migratedAt", "productId"].includes(key)) continue;
+    if (["id", "rowNumber", "updatedAt", "createdAt", "creationTimeDraft", "creationTimePending", "version", "_key", "cellAccess", "hiddenCells", "defaultCellAccess", "policyRevision", "claimedBy", "migrationLocked", "migrationTargetWorkspace", "migrationTargetRowId", "migratedAt", "productId"].includes(key)) continue;
     if(saved.cellAccess?.[key] && saved.cellAccess[key]!=="edit")continue;
     if(["extraFields","cellColors","cellAlignments","cellVerticalAlignments","cellTextColors","cellNumberFormats"].includes(key)) {
       const values={...(saved[key] || {})};
@@ -70,10 +72,15 @@ export function mergeSelectionSave(current: Row, sent: Row, saved: Row): Row {
 }
 
 /** Merge disjoint remote edits and retain colliding drafts for manual resolution. */
+const retainCreationTimeDraft = (current: Row, incoming: Row) => selectionCreationTimePending(incoming) || !selectionCreationTimePending(current) || (hasSelectionCreationTimeDraft(current) && !!current.creationTimeDraft.trim());
+const retainedCreationTimestamp = (current: Row, incoming: Row) => !selectionCreationTimePending(incoming) && selectionCreationTimePending(current)
+  ? parseSelectionCreatedTime(current.creationTimeDraft) || incoming.createdAt : current.createdAt;
+
 export function mergeSelectionRemote(current: Row, before: Row, incoming: Row) {
   const next: Row = { ...incoming, _key: current._key };
+  if (incoming.rowNumber === undefined && current.rowNumber !== undefined) next.rowNumber = current.rowNumber;
   const conflicts: string[] = [];
-  const metadata = new Set(["id","updatedAt","createdAt","creationTimeDraft","version","_key","createdBy","updatedBy","createdByName","createdByUsername","updatedByName","updatedByUsername","cellAccess","hiddenCells","defaultCellAccess","policyRevision","claimedBy","claimedAt","cellOwners","migrationLocked","migrationTargetWorkspace","migrationTargetRowId","migratedAt","productId","collectionInventory","reorderDays","sellingPoints"]);
+  const metadata = new Set(["id","rowNumber","updatedAt","createdAt","creationTimeDraft","creationTimePending","version","_key","createdBy","updatedBy","createdByName","createdByUsername","updatedByName","updatedByUsername","cellAccess","hiddenCells","defaultCellAccess","policyRevision","claimedBy","claimedAt","cellOwners","migrationLocked","migrationTargetWorkspace","migrationTargetRowId","migratedAt","productId","collectionInventory","reorderDays","sellingPoints"]);
   const maps = new Set(["extraFields","cellColors","cellAlignments","cellVerticalAlignments","cellTextColors","cellNumberFormats"]);
   const equal = (a: unknown, b: unknown) => JSON.stringify(a === "" ? null : a ?? null) === JSON.stringify(b === "" ? null : b ?? null);
   const editable = (key: string) => !incoming.migrationLocked && (!incoming.cellAccess || (incoming.cellAccess[key] || incoming.defaultCellAccess) === "edit");
@@ -84,9 +91,9 @@ export function mergeSelectionRemote(current: Row, before: Row, incoming: Row) {
   };
   delete next.creationTimeDraft;
   const localTime = selectionCreationTimeComparable(current), baseTime = selectionCreationTimeComparable(before), remoteTime = selectionCreationTimeComparable(incoming);
-  if (editable("registrationBatch") && localTime !== baseTime) {
+  if (retainCreationTimeDraft(current, incoming) && editable("registrationBatch") && localTime !== baseTime) {
     if (remoteTime !== baseTime && remoteTime !== localTime) conflicts.push("registrationBatch");
-    next.createdAt = current.createdAt;
+    next.createdAt = retainedCreationTimestamp(current, incoming);
     if (hasSelectionCreationTimeDraft(current)) next.creationTimeDraft = current.creationTimeDraft;
   }
   for (const key of new Set([...Object.keys(before), ...Object.keys(current)])) {
@@ -110,6 +117,7 @@ export function mergeSelectionRemote(current: Row, before: Row, incoming: Row) {
 export function selectionDelta(body: Row, before: Row): Row {
   const delta: Row = {};
   for(const [key,value] of Object.entries(body)) {
+    if (key === "rowNumber" || key === "creationTimePending" || (key === "createdAt" && value == null)) continue;
     if(key==="expectedUpdatedAt"){delta[key]=value;continue;}
     if(["extraFields","cellColors","cellAlignments","cellVerticalAlignments","cellTextColors","cellNumberFormats"].includes(key)) {
       const changes:Row={};

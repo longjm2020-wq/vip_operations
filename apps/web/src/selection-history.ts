@@ -1,4 +1,5 @@
-import { selectionCreationTimeComparable, selectionCreationTimeValue } from "./selection-creation-time.js";
+import { selectionCreationTimeComparable, selectionCreationTimePending, selectionCreationTimeValue } from "./selection-creation-time.js";
+import { parseSelectionCreatedTime } from "../../../packages/contracts/src/selection-created-time.js";
 
 type Row = Record<string, any>;
 type Slot = { present: boolean; value?: unknown };
@@ -22,7 +23,7 @@ export type SelectionHistoryPermission = (row: Row, field: string, kind: Selecti
 export type SelectionHistoryValueEqual = (field: string, left: unknown, right: unknown) => boolean;
 
 const metadata = new Set([
-  "_key", "id", "updatedAt", "version", "createdBy", "updatedBy", "createdByName", "createdByUsername", "updatedByName", "updatedByUsername",
+  "_key", "id", "rowNumber", "updatedAt", "creationTimePending", "version", "createdBy", "updatedBy", "createdByName", "createdByUsername", "updatedByName", "updatedByUsername",
   "cellAccess", "hiddenCells", "defaultCellAccess", "policyRevision", "claimedBy", "claimedAt", "cellOwners", "migrationLocked",
   "migrationTargetWorkspace", "migrationTargetRowId", "migratedAt", "productId", "collectionInventory", "reorderDays", "sellingPoints",
   "extraFields", ...formatContainers,
@@ -81,7 +82,11 @@ export function applySelectionHistoryChange<T extends Row>(rows: readonly T[], c
     if (!row) return { ok: false, reason: "conflict", rowKey: cell.rowKey, field: cell.field };
     if (canApply && !canApply(row, cell.field, cell.kind)) return { ok: false, reason: "permission", rowKey: cell.rowKey, field: cell.field };
     const actual = read(row, cell), expected = direction === "undo" ? cell.after : cell.before;
-    const matches = sameSlot(actual, expected, cell.kind) || (cell.kind === "value" && valueEqual?.(cell.field, actual.value, expected.value));
+    // Recording the first real entry is irreversible metadata, even when the
+    // original input operation predates the server assigning its timestamp.
+    const establishedFromThisOperation = cell.kind === "creationTime" && !selectionCreationTimePending(row) && !!parseSelectionCreatedTime(row.createdAt) &&
+      !selectionCreationTimeComparable(creationRow(expected)) && sameSlot(actual, direction === "undo" ? cell.before : cell.after, "creationTime");
+    const matches = sameSlot(actual, expected, cell.kind) || establishedFromThisOperation || (cell.kind === "value" && valueEqual?.(cell.field, actual.value, expected.value));
     if (!matches) return { ok: false, reason: "conflict", rowKey: cell.rowKey, field: cell.field };
   }
   const edited = new Map<string, Row>();
@@ -91,9 +96,17 @@ export function applySelectionHistoryChange<T extends Row>(rows: readonly T[], c
     if (!row) { row = { ...current.get(cell.rowKey)! }; edited.set(cell.rowKey, row); }
     const value = direction === "undo" ? cell.before : cell.after;
     if (cell.kind === "creationTime") {
-      for (const [key, entry] of Object.entries(value.value as Record<string, Slot>)) write(row, key, entry);
-      // The save layer submits a changed timestamp only when this editable draft exists.
-      if (typeof row.creationTimeDraft !== "string") row.creationTimeDraft = selectionCreationTimeValue(row);
+      const restored = creationRow(value);
+      if (!selectionCreationTimePending(row) && parseSelectionCreatedTime(row.createdAt) && !parseSelectionCreatedTime(restored.createdAt)) {
+        // Undo can clear the first product content, but cannot erase the fact
+        // that the row has already been used. Retain a nonblank raw input only.
+        if (typeof restored.creationTimeDraft === "string" && restored.creationTimeDraft.trim()) row.creationTimeDraft = restored.creationTimeDraft;
+        else delete row.creationTimeDraft;
+      } else {
+        for (const [key, entry] of Object.entries(value.value as Record<string, Slot>)) write(row, key, entry);
+        // Only valid timestamp reversals need a draft for the existing save path.
+        if (typeof row.creationTimeDraft !== "string" && parseSelectionCreatedTime(row.createdAt)) row.creationTimeDraft = selectionCreationTimeValue(row);
+      }
     } else if (cell.container) {
       row[cell.container] = { ...(row[cell.container] || {}) };
       write(row[cell.container], cell.field, value);

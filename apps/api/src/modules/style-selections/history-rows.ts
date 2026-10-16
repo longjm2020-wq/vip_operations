@@ -6,6 +6,7 @@ import { command, fail, id, parse, requirePermission, type Context } from "../..
 import { isArchive } from "./archive.js";
 import * as protection from "./protection.js";
 import { assertTextPatch } from "./text-limits.js";
+import { selectionRowNumberColumn, selectionRowNumberSource } from "./row-number.js";
 
 const deleteInput = z.object({ rows: z.array(z.object({ id, expectedUpdatedAt: z.iso.datetime() }).strict()).min(1).max(5000) }).strict();
 const restoreInput = z.object({ deletions: z.array(z.object({ rowId: id, token: z.string().uuid() }).strict()).min(1).max(5000) }).strict();
@@ -107,6 +108,7 @@ export async function restoreHistoryRows(c: Context, input: unknown) {
     // Identity, creation time, original creator, image references, ownership and
     // migration metadata come exclusively from the immutable DELETE snapshot.
     // The modification stamp advances so old collaborator writes cannot replay.
+    await rows(tx, "SELECT set_config('erp.selection_history_restore','1',true)");
     const restored = await rows(tx, `INSERT INTO style_selections OVERRIDING SYSTEM VALUE
       SELECT restored.* FROM jsonb_array_elements($1::jsonb) AS snapshot,
       LATERAL jsonb_populate_record(NULL::style_selections,snapshot || jsonb_build_object(
@@ -119,7 +121,7 @@ export async function restoreHistoryRows(c: Context, input: unknown) {
   // or table permissions may have changed when the same request is retried.
   return db.$transaction(async tx => {
     const policy = await protection.policy(tx);
-    const restored = await rows(tx, "SELECT * FROM style_selections WHERE id=ANY($1::bigint[]) ORDER BY id", result.ids);
+    const restored = await rows(tx, `SELECT s.*,${selectionRowNumberColumn} ${selectionRowNumberSource} WHERE s.id=ANY($1::bigint[]) ORDER BY s.id`, result.ids);
     return { rows: restored.map(row => protection.project(policy, c.actor, row)) };
   }, { isolationLevel: "RepeatableRead" });
 }

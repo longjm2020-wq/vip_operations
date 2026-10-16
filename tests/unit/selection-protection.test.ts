@@ -39,6 +39,16 @@ const sheetReadRule: ProtectionRegion = {
   others: "read",
 };
 describe("selection protection policy", () => {
+  it("gives SUPER_ADMIN all cell rights across regions, hidden content and another claimant", () => {
+    const settings: SelectionProtection = { ...defaultProtection, enabled: true, claimsEnabled: true, autoHide: true, autoHideRegions: [legacyAutoHideRegion], regions: [{ ...sheetReadRule, users: {}, others: "deny" }] };
+    const superAdmin = { id: "9", permissions: [], roleCodes: ["SUPER_ADMIN"], selectionWorkspaceScoped: true };
+    const claimed = { ...row, claimedBy: "3" };
+    for (const key of ["material", "custom:private", "custom:deleted-legacy"]) expect(selectionCellAccess(settings, superAdmin, claimed, key)).toBe("edit");
+    expect(selectionCellAccess(settings, superAdmin, { ...claimed, migrationLocked: true }, "material")).toBe("read");
+    expect(selectionCellAccess(settings, actor, claimed, "material")).toBe("deny");
+    expect(selectionCellAccess(defaultProtection, actor, { ...row, migrationLocked: true }, "material")).toBe("read");
+  });
+
   it("limits grants to module rights and uses the strongest overlapping region", () => {
     const settings: SelectionProtection = {
       ...defaultProtection,

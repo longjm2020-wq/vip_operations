@@ -117,6 +117,7 @@ export type ProtectionActor = {
   roleCodes?: string[];
   selectionWorkspaceScoped?: boolean;
 };
+export const selectionSuperAdmin = (actor: Pick<ProtectionActor, "roleCodes">) => !!actor.roleCodes?.includes("SUPER_ADMIN");
 export const protectionAdmin = (actor: ProtectionActor) =>
   actor.permissions.includes("selection.protect") ||
   !!actor.roleCodes?.some((code) => code === "SUPER_ADMIN" || (!actor.selectionWorkspaceScoped && code === "ADMIN"));
@@ -141,14 +142,18 @@ export function selectionCellAccess(
     id?: unknown;
     createdBy?: unknown;
     claimedBy?: unknown;
+    migrationLocked?: unknown;
     cellOwners?: Record<string, unknown>;
   },
   key: string,
   hasContent = true,
 ): SelectionAccess {
+  // The designated super-administrator owns all table permissions. A transfer
+  // lock is a workflow state and still requires an explicit release.
+  if (selectionSuperAdmin(actor)) return row.migrationLocked ? "read" : "edit";
   if (!actor.permissions.includes("selection.read")) return "deny";
   let level = actor.permissions.includes("selection.manage") ? 2 : 1;
-  if (protectionAdmin(actor)) return level === 2 ? "edit" : "read";
+  if (protectionAdmin(actor)) return level === 2 && !row.migrationLocked ? "edit" : "read";
   if (settings.enabled) {
     const matched = settings.regions.filter((region) =>
       regionMatches(region, String(row.id || ""), key),
@@ -188,5 +193,5 @@ export function selectionCellAccess(
     String(row.claimedBy) !== actor.id
   )
     level = Math.min(level, 1);
-  return (["deny", "read", "edit"] as const)[level];
+  return row.migrationLocked && level === 2 ? "read" : (["deny", "read", "edit"] as const)[level];
 }

@@ -8,6 +8,7 @@ import { defaultProtection } from "../../packages/contracts/src/selection-protec
 import { selectionBaseFields } from "../../packages/contracts/src/selection-migration.js";
 import { projectSelectionSharedLayout, selectionLayoutSchema, type SelectionField } from "../../packages/contracts/src/selection-layout.js";
 import { archiveFieldIds } from "../../packages/contracts/src/product-archive.js";
+import { installSelectionContentCreatedTimeSchema } from "../fixtures/selection-content-created-time-schema.js";
 
 const fixture = vi.hoisted(() => ({ database: null as PGlite | null, mirrors: [] as Row[] }));
 vi.mock("../../packages/database/src/index.js", async importOriginal => {
@@ -81,6 +82,7 @@ beforeAll(async () => {
     CREATE SCHEMA selection_table_23; CREATE TABLE selection_table_23.style_selections(LIKE public.style_selections INCLUDING ALL); CREATE TABLE selection_table_23.style_selection_protection(LIKE public.style_selection_protection INCLUDING ALL);
     CREATE SCHEMA selection_table_24; CREATE TABLE selection_table_24.style_selections(LIKE public.style_selections INCLUDING ALL); CREATE TABLE selection_table_24.style_selection_protection(LIKE public.style_selection_protection INCLUDING ALL);
   `);
+  await installSelectionContentCreatedTimeSchema(fixture.database);
 }, 30000);
 beforeEach(async () => {
   fixture.mirrors = []; process.env.APP_ORIGIN = "https://app.example.com";
@@ -116,13 +118,15 @@ describe("cross-table linked image colors", () => {
     await expect(preview(actor(), body())).rejects.toMatchObject({ status: 403, response: { error: { code: "REGION_FORBIDDEN" } } });
     await noWrites();
   });
-  it.each(["region", "autoHide"])("does not ignore an unregistered legacy key explicitly referenced by %s protection", async kind => {
+  it.each(["region", "autoHide"])("lets SUPER_ADMIN transfer a row with an unregistered legacy key referenced by %s protection", async kind => {
     const orphan = "custom:historical-removed";
     await fixture.database!.query("UPDATE style_selections SET extra_fields=extra_fields || $1", [JSON.stringify({ [orphan]: "Unmapped historical content" })]);
     const region = { id: "123e4567-e89b-42d3-a456-426614174000", name: "Historical rule", scope: "columns", rowIds: [], columnKeys: [orphan] };
     await fixture.database!.query("UPDATE style_selection_protection SET settings=$1", [JSON.stringify(kind === "region" ? { ...defaultProtection, enabled: true, regions: [{ ...region, users: {}, others: "deny" }] } : { ...defaultProtection, autoHide: true, autoHideRegions: [region] })]);
     const c = actor(); c.actor.roleCodes = ["SUPER_ADMIN"];
-    await expect(preview(c, body())).rejects.toMatchObject({ status: 403, response: { error: { code: "REGION_FORBIDDEN" } } });
+    const plan = await preview(c, body());
+    expect(plan).toMatchObject({ created: 1, updated: 0 });
+    expect(JSON.stringify(plan)).not.toContain(orphan);
     await noWrites();
   });
   it("rejects an explicitly requested unknown field rather than registering or copying its historical data", async () => {

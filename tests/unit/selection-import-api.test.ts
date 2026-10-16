@@ -10,6 +10,7 @@ import { selectionLayoutSchema, type SelectionField } from "../../packages/contr
 import { archiveFieldIds } from "../../packages/contracts/src/product-archive.js";
 import { selectionImportLimits } from "../../packages/contracts/src/selection-import-template.js";
 import { defaultVipTagPriceLimitConfig } from "../../packages/contracts/src/selection-vip-tag-price-limit.js";
+import { installSelectionContentCreatedTimeSchema } from "../fixtures/selection-content-created-time-schema.js";
 
 const fixture = vi.hoisted(() => ({ database: null as PGlite | null, archive: false, registryBigInt: false, mirrors: [] as Row[] }));
 vi.mock("../../packages/database/src/index.js", async importOriginal => {
@@ -113,6 +114,7 @@ beforeAll(async () => {
     CREATE FUNCTION public.sync_product_archive_record(p products,table_id bigint,actor_id bigint) RETURNS text LANGUAGE plpgsql AS $$
     BEGIN INSERT INTO selection_table_23.style_selections(xuti_style_no,product_id,material,color,extra_fields,created_by) VALUES(p.style_no,p.id,coalesce(p.custom_fields->>'f0000000000000000000000000000000e','产品原成分'),p.custom_fields->>'f00000000000000000000000000000003',(SELECT coalesce(jsonb_object_agg('custom:product:'||key,value),'{}') FROM jsonb_each(p.custom_fields)),actor_id); RETURN 'ok'; END $$;
   `);
+  await installSelectionContentCreatedTimeSchema(fixture.database);
 }, 30000);
 beforeEach(async () => {
   fixture.archive = false; fixture.registryBigInt = false; fixture.mirrors = [];
@@ -586,8 +588,9 @@ describe("atomic Excel style import", () => {
     const after = (await read("SELECT * FROM style_selections"))[0];
     expect(after.vip_price).toBe("0"); expect(after.material).toBe("原成分"); expect(after.supplier_code).toBe("原编码");
     expect(after.extra_fields).toEqual({ [existing.key]: "新标题", [untouched.key]: "保留备注" });
-    expect(after.created_at).toEqual(new Date("2025-04-21T16:00:00.000Z"));
-    expect(after.created_at).not.toEqual(before.created_at);
+    expect(after.content_created_at).toEqual(new Date("2025-04-21T16:00:00.000Z"));
+    expect(after.created_time_source).toBe("EXPLICIT");
+    expect(after.created_at).toEqual(before.created_at);
   });
   it("SKIP preserves matched records and never registers or publishes fields from skipped rows", async () => {
     const before = await style();

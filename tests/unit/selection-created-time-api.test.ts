@@ -37,13 +37,10 @@ beforeEach(() => {
 });
 
 describe("business creation-time API", () => {
-  it("uses the archived product timestamp without modifying the original sheet timestamp", async () => {
+  it("uses the independent business timestamp in every workspace without rewriting physical creation metadata", async () => {
     await selectionScope.run("84", async () => {
       const expression = selectionCreatedAtSql();
-      expect(expression).toContain("product.created_at");
-      expect(expression).toContain("workspace.id=84::bigint");
-      expect(expression).toContain("workspace.system_key='PRODUCT_ARCHIVE'");
-      expect(expression).toContain("WHERE product.id=s.product_id");
+      expect(expression).toBe("s.content_created_at");
       const result = await list(reader, { sort: "registrationBatch", direction: "desc" });
       expect(result.data[0].registrationBatch).toBe("2020-01-01");
       expect(fixture.queries.find(query => query.includes("FROM style_selections s") && query.includes(" ORDER BY "))).toContain(`ORDER BY ${expression} DESC`);
@@ -52,7 +49,7 @@ describe("business creation-time API", () => {
       await detail(reader, "10");
       expect(fixture.queries.find(query => query.includes("SELECT s.*"))).toContain(`${expression} AS created_at`);
     });
-    expect(selectionCreatedAtSql()).toBe("s.created_at");
+    expect(selectionCreatedAtSql()).toBe("s.content_created_at");
     expect(() => selectionScope.run("84;DROP", selectionCreatedAtSql)).toThrow("Invalid selection table ID");
   });
 
@@ -61,7 +58,7 @@ describe("business creation-time API", () => {
     expect(styleSelectionInput.parse({ createdAt: "2020-01-01T08:00:00+08:00" }).createdAt).toBe("2020-01-01T00:00:00.000Z");
     for (const createdAt of [null, "", "2026-02-30T00:00:00Z", "2026-10-11T00:00:00"])
       expect(styleSelectionInput.safeParse({ createdAt }).success).toBe(false);
-    for (const key of ["createdBy", "updatedBy", "updatedAt", "version"])
+    for (const key of ["createdBy", "updatedBy", "updatedAt", "version", "contentCreatedAt", "createdTimeSource", "creationTimePending"])
       expect(styleSelectionInput.safeParse({ [key]: "1" }).success).toBe(false);
   });
 
@@ -85,12 +82,15 @@ describe("business creation-time API", () => {
 
   it("hides a filled creation timestamp even when the retained batch date is empty", () => {
     fixture.settings = { ...defaultProtection, autoHide: true, autoHideRegions: [{ id: "123e4567-e89b-42d3-a456-426614174000", name: "Creation", scope: "columns", rowIds: [], columnKeys: ["registrationBatch"] }] };
-    const raw: Record<string, any> = { ...fixture.row, registration_batch: null };
+    const raw: Record<string, any> = { ...fixture.row, registration_batch: null, content_created_at: fixture.row.created_at, created_time_source: "AUTO" };
     expect(access(policy(), reader.actor, raw, "registrationBatch")).toBe("deny");
     const projected = project(policy(), reader.actor, raw);
     expect(projected.hiddenCells).toContain("registrationBatch");
     expect(filtered([projected], { q: "2026-10-11 02:01:02" })).toEqual([]);
-    expect(projected.createdAt).toBe(raw.created_at);
+    expect(projected.createdAt).toBeNull();
+    expect(projected.creationTimePending).toBe(false);
+    expect(projected).not.toHaveProperty("contentCreatedAt");
+    expect(projected).not.toHaveProperty("createdTimeSource");
     expect(access(policy(), { ...reader.actor, id: "1" }, raw, "registrationBatch")).toBe("read");
   });
 

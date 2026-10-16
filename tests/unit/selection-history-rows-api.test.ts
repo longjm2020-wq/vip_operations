@@ -5,6 +5,7 @@ import type { Context } from "../../apps/api/src/core.js";
 import type { Row, Tx } from "../../packages/database/src/index.js";
 import { selectionScope } from "../../packages/database/src/selection-scope.js";
 import { defaultProtection } from "../../packages/contracts/src/selection-protection.js";
+import { installSelectionContentCreatedTimeSchema } from "../fixtures/selection-content-created-time-schema.js";
 
 const fixture = vi.hoisted(() => ({ database: null as PGlite | null }));
 // Exercise real SQL, transaction rollback, receipts, permissions and projection.
@@ -42,12 +43,12 @@ beforeAll(async () => {
     CREATE TABLE project_tables(id bigint PRIMARY KEY,system_key text);
     INSERT INTO project_tables VALUES(42,NULL),(84,'PRODUCT_ARCHIVE');
     CREATE TABLE style_selections(
-      id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,xuti_style_no text UNIQUE,material text DEFAULT 'Original material',
+      id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,xuti_style_no text UNIQUE,supplier_style_no text,material text DEFAULT 'Original material',
       images jsonb DEFAULT '[]',label_images jsonb DEFAULT '[]',extra_fields jsonb DEFAULT '{}',
       cell_colors jsonb DEFAULT '{}',cell_alignments jsonb DEFAULT '{}',cell_vertical_alignments jsonb DEFAULT '{}',cell_text_colors jsonb DEFAULT '{}',cell_number_formats jsonb DEFAULT '{}',
       cell_owners jsonb DEFAULT '{}',claimed_by bigint UNIQUE,created_by bigint NOT NULL DEFAULT 8 REFERENCES users(id),updated_by bigint DEFAULT 8,
       created_at timestamptz NOT NULL DEFAULT now(),updated_at timestamptz NOT NULL DEFAULT now(),version integer DEFAULT 4,
-      product_id bigint,migration_locked boolean DEFAULT false,migration_target_workspace text,migration_target_row_id bigint,migrated_at timestamptz
+      product_id bigint,migration_locked boolean DEFAULT false,migration_target_workspace text,migration_target_row_id bigint,migrated_at timestamptz,sort_order integer DEFAULT 0
     );
     CREATE TABLE style_selection_protection(id integer PRIMARY KEY,settings jsonb,revision integer DEFAULT 1);
     CREATE TABLE selection_field_registry(workspace_key text,field_key text,owner_id bigint,visibility text,definition jsonb,revision integer DEFAULT 1,updated_at timestamptz DEFAULT now());
@@ -60,6 +61,7 @@ beforeAll(async () => {
     CREATE TABLE selection_table_84.style_selections(LIKE public.style_selections INCLUDING ALL);
     CREATE TABLE selection_table_84.style_selection_protection(LIKE public.style_selection_protection INCLUDING ALL);
   `);
+  await installSelectionContentCreatedTimeSchema(fixture.database);
 }, 30000);
 beforeEach(async () => {
   await fixture.database!.exec("TRUNCATE style_selections,style_selection_protection,selection_field_registry,idempotency_records,audit_logs,selection_table_42.style_selections,selection_table_42.style_selection_protection,selection_table_84.style_selections,selection_table_84.style_selection_protection RESTART IDENTITY");
@@ -69,6 +71,20 @@ beforeEach(async () => {
 afterAll(async () => { await fixture.database?.close(); });
 
 describe("trusted table row undo", () => {
+  it("lets SUPER_ADMIN delete protected claimed rows with private and unregistered historical keys", async () => {
+    const key = "custom:private", orphan = "custom:removed";
+    await query("INSERT INTO selection_field_registry(workspace_key,field_key,owner_id,visibility,definition) VALUES('default',$1,8,'PRIVATE',$2)", [key, JSON.stringify({ key, label: "Private", width: 100, type: "text", custom: true, deleted: true })]);
+    const row = await style("SUPER-58", "public", { claimedBy: "8", extraFields: { [key]: "Private content", [orphan]: "Old content" } });
+    await query("UPDATE style_selections SET cell_colors=$1", [JSON.stringify({ "custom:format-only": "RED" })]);
+    await settings({ enabled: true, claimsEnabled: true, autoHide: true, autoHideRegions: [{ id: randomUUID(), name: "Hidden", scope: "sheet", rowIds: [], columnKeys: [] }], regions: [{ id: randomUUID(), name: "Deny", scope: "sheet", rowIds: [], columnKeys: [], users: {}, others: "deny" }] });
+    await expect(deleteHistoryRows(actor(), { rows: [rowRequest(row)] })).rejects.toMatchObject(forbidden);
+    const superContext = actor(); superContext.actor.roleCodes = ["SUPER_ADMIN"];
+    const result = await deleteHistoryRows(superContext, { rows: [rowRequest(row)] });
+    expect(result.deletions).toHaveLength(1);
+    expect(await query("SELECT * FROM style_selections")).toHaveLength(0);
+    expect(await query("SELECT * FROM audit_logs WHERE action='DELETE'")).toHaveLength(1);
+  });
+
   it("atomically deletes and restores original IDs, creation metadata, images and ownership; responses contain no snapshot", async () => {
     const image = { id: "photo", url: "https://example.test/photo.jpg", color: "" };
     const first = await style("UNDO-1", "public", { claimedBy: "8", images: [image] }), second = await style("UNDO-2");
@@ -176,6 +192,17 @@ describe("trusted table row undo", () => {
     await expect(restoreHistoryRows(actor(), input)).rejects.toMatchObject(expired);
     await query("UPDATE audit_logs SET occurred_at=now()-interval '25 hours' WHERE action='DELETE'");
     await expect(restoreHistoryRows(actor(), { deletions: [{ rowId: second.id, token: second.token }] })).rejects.toMatchObject(expired);
+  });
+
+  it("preserves an established timestamp when restoring a row whose three identifying values were subsequently cleared", async () => {
+    const row = await style("ESTABLISHED");
+    await query("UPDATE style_selections SET xuti_style_no=NULL,supplier_style_no=NULL,images='[]' WHERE id=$1", [row.id]);
+    const cleared = (await query("SELECT * FROM style_selections WHERE id=$1", [row.id]))[0];
+    expect(cleared.content_created_at.toISOString()).toBe(originalTime);
+    const receipt = await deleteHistoryRows(actor(), { rows: [rowRequest(cleared)] });
+    const restored = await restoreHistoryRows(actor(), receipt);
+    expect(restored.rows[0]).toMatchObject({ createdAt: originalTime, creationTimePending: false, xutiStyleNo: null });
+    expect((await query("SELECT * FROM style_selections"))[0].content_created_at.toISOString()).toBe(originalTime);
   });
 
   it("retains archive product and migration restrictions and requires current edit permission", async () => {

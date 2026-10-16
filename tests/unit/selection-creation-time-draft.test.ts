@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { selectionCreationTimeComparable, selectionCreationTimeError, selectionCreationTimeForSave, selectionCreationTimeValue, withSelectionCreationTime } from "../../apps/web/src/selection-creation-time.js";
+import { selectionCreationTimeComparable, selectionCreationTimeError, selectionCreationTimeForSave, selectionCreationTimePending, selectionCreationTimeValue, selectionHasCreationContent, withSelectionCreationTime } from "../../apps/web/src/selection-creation-time.js";
 import { selectionSystemValue } from "../../apps/web/src/selection-system-fields.js";
 import { mergeSelectionRemote, mergeSelectionSave } from "../../apps/web/src/selection-autosave.js";
 import { parseSelectionCreatedTime, selectionCreatedTimeInputSchema } from "../../packages/contracts/src/selection-created-time.js";
@@ -8,6 +8,40 @@ import { parseSelectionClipboard } from "../../apps/web/src/selection-clipboard.
 const before = { _key: "row", id: "1", createdAt: "2026-10-01T00:01:02Z", updatedAt: "old", version: 1, material: "棉", registrationBatch: "2026-09-28" };
 
 describe("editable built-in creation time", () => {
+  it("keeps unused saved rows blank and requires product content before an explicit first timestamp", () => {
+    const unused = { id: "2", createdAt: null, creationTimePending: true, images: [], xutiStyleNo: " ", supplierStyleNo: "", labelImages: [{ url: "tag.png" }], material: "棉", color: "白" };
+    expect(selectionHasCreationContent(unused)).toBe(false);
+    expect(selectionCreationTimeValue(unused)).toBe("");
+    const dated = withSelectionCreationTime(unused, "2026-10-16 12:00");
+    expect(dated.createdAt).toBe("2026-10-16T04:00:00.000Z");
+    expect(selectionCreationTimePending(dated)).toBe(true);
+    expect(selectionCreationTimeError(dated)).toContain("请先录入商品图片、序缇款号或供应商款号");
+    expect(selectionCreationTimeForSave(dated)).toBeUndefined();
+    const cleared = withSelectionCreationTime(dated, "");
+    expect(cleared.createdAt).toBeNull();
+    expect(selectionCreationTimeError(cleared)).toBeUndefined();
+    expect(selectionCreationTimeComparable(cleared)).toBe(selectionCreationTimeComparable(unused));
+    expect(selectionCreationTimeForSave(cleared)).toBeUndefined();
+  });
+
+  it.each([{ images: [{ url: "product.png" }] }, { xutiStyleNo: " STYLE " }, { supplierStyleNo: " SUPPLIER " }])("accepts a first explicit historical date after valid content %j", content => {
+    const pending = { createdAt: null, creationTimePending: true, ...content };
+    expect(selectionHasCreationContent(pending)).toBe(true);
+    const draft = withSelectionCreationTime(pending, "2025/4/22 0:42");
+    expect(selectionCreationTimeError(draft)).toBeUndefined();
+    expect(selectionCreationTimeForSave(draft)).toBe("2025-04-21T16:42:00.000Z");
+    expect(selectionCreationTimePending(draft)).toBe(true);
+  });
+
+  it("permits later date edits after all qualifying content is cleared, retaining established state", () => {
+    const recorded = { ...before, creationTimePending: false, images: [], xutiStyleNo: "", supplierStyleNo: "" };
+    expect(selectionHasCreationContent(recorded)).toBe(false);
+    const edited = withSelectionCreationTime(recorded, "2025/4/22 0:42");
+    expect(selectionCreationTimeError(edited)).toBeUndefined();
+    expect(selectionCreationTimeForSave(edited)).toBe("2025-04-21T16:42:00.000Z");
+    expect(selectionCreationTimeError(withSelectionCreationTime(recorded, ""))).toContain("不能为空");
+  });
+
   it("keeps partial input instead of replacing it with a formatted date", () => {
     const draft = withSelectionCreationTime(before, "2026-10-0");
     expect(draft.createdAt).toBe(before.createdAt);

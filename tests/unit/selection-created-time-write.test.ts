@@ -5,6 +5,7 @@ import type { Row, Tx } from "../../packages/database/src/index.js";
 import { selectionScope } from "../../packages/database/src/selection-scope.js";
 import { defaultProtection } from "../../packages/contracts/src/selection-protection.js";
 import { selectionLayoutSchema, selectionSharedLayoutSchema } from "../../packages/contracts/src/selection-layout.js";
+import { installSelectionContentCreatedTimeSchema } from "../fixtures/selection-content-created-time-schema.js";
 
 const fixture = vi.hoisted(() => ({ database: null as PGlite | null }));
 // Keep persistence, transactions, product mirroring, permissions and audit real.
@@ -67,6 +68,7 @@ beforeAll(async () => {
     CREATE TABLE selection_table_24.style_selections(LIKE public.style_selections INCLUDING ALL);
     CREATE TABLE selection_table_24.style_selection_protection(LIKE public.style_selection_protection INCLUDING ALL);
   `);
+  await installSelectionContentCreatedTimeSchema(fixture.database);
 }, 30000);
 beforeEach(async () => {
   await fixture.database!.exec("TRUNCATE style_selections,products,product_fields,selection_field_registry,selection_layout_preferences,selection_shared_layouts,selection_shared_fields,idempotency_records,audit_logs,style_selection_protection,selection_table_23.style_selections,selection_table_23.style_selection_protection,selection_table_24.style_selections,selection_table_24.style_selection_protection RESTART IDENTITY");
@@ -80,13 +82,69 @@ async function savedRow(scope = "public", productId: string | null = null, style
 }
 
 describe("explicit built-in creation-time writes", () => {
-  it("claims a new row filled only with creation time and enforces the one-active-row rule", async () => {
+  it("keeps saved blank identities pending when only unrelated data, label images, custom images or formatting changes", async () => {
+    const first = await write(actor("save-blank"), {});
+    expect(first).toMatchObject({ createdAt: null, creationTimePending: true, createdBy: 7 });
+    expect(first.id).toBeTruthy();
+    const custom = { key: "custom:photo", label: "自定义图片", type: "image", width: 100, custom: true };
+    await fixture.database!.query("INSERT INTO selection_field_registry(workspace_key,field_key,owner_id,visibility,definition) VALUES('default',$1,7,'PRIVATE',$2)", [custom.key, JSON.stringify(custom)]);
+    const label = { id: "label", url: "https://example.test/label.jpg", color: "" };
+    const saved = await write(actor("other-data"), { material: "Only material", supplierCode: "Only code", xutiStyleNo: " ", supplierStyleNo: " ", labelImages: [label], extraFields: { [custom.key]: JSON.stringify([label]) }, cellColors: { material: "BLUE" }, vipPrice: "10", expectedUpdatedAt: first.updatedAt }, String(first.id));
+    expect(saved).toMatchObject({ createdAt: null, creationTimePending: true, createdBy: 7 });
+    const raw = (await read("SELECT created_at,content_created_at,created_time_source FROM style_selections"))[0];
+    expect(raw.createdAt).toBeTruthy();
+    expect(raw).toMatchObject({ contentCreatedAt: null, createdTimeSource: "PENDING" });
+  });
+
+  it.each([undefined, "23", "24"])("stamps the first supplier style in a saved blank row once and preserves it after clearing (%s)", async scope => {
+    const row = await savedRow(scope ? `selection_table_${scope}` : "public", null, "");
+    const run = async () => {
+      const saved = await write(actor(`supplier-first-${scope}`), { supplierStyleNo: " SUPPLIER-FIRST ", expectedUpdatedAt: row.updatedAt }, String(row.id));
+      expect(saved).toMatchObject({ creationTimePending: false, createdBy: 8, supplierStyleNo: "SUPPLIER-FIRST" });
+      expect(new Date(saved.createdAt).getTime()).toBeGreaterThan(new Date(originalTime).getTime());
+      const cleared = await write(actor(`clear-first-${scope}`), { supplierStyleNo: null, images: [], expectedUpdatedAt: saved.updatedAt }, String(row.id));
+      expect(cleared).toMatchObject({ createdAt: saved.createdAt, creationTimePending: false, createdBy: 8 });
+      const renamed = await write(actor(`refill-first-${scope}`), { supplierStyleNo: "SECOND", expectedUpdatedAt: cleared.updatedAt }, String(row.id));
+      expect(renamed.createdAt).toBe(saved.createdAt);
+      const edited = await write(actor(`explicit-cleared-${scope}`), { supplierStyleNo: null, createdAt: editedTime, expectedUpdatedAt: renamed.updatedAt }, String(row.id));
+      expect(edited.createdAt).toBe(editedTime);
+    };
+    await (scope ? selectionScope.run(scope, run) : run());
+    expect((await read(`SELECT created_at,content_created_at,created_time_source,created_by FROM ${scope ? `selection_table_${scope}.` : ""}style_selections`))[0]).toMatchObject({ createdAt: originalTime, contentCreatedAt: editedTime, createdTimeSource: "EXPLICIT", createdBy: 8 });
+  });
+
+  it("stamps an authorized first product image independently of a read-only date column and survives idempotent retry", async () => {
+    const row = await savedRow("public", null, "");
+    await fixture.database!.query("UPDATE style_selection_protection SET settings=$1", [JSON.stringify({ ...defaultProtection, enabled: true, autoHide: true,
+      regions: [{ id: "123e4567-e89b-42d3-a456-426614174000", name: "Date readonly", scope: "columns", rowIds: [], columnKeys: ["registrationBatch"], users: {}, others: "read" }],
+      autoHideRegions: [{ id: "123e4567-e89b-42d3-a456-426614174001", name: "Own date", scope: "columns", rowIds: [], columnKeys: ["registrationBatch"] }] })]);
+    const c = actor("first-image"), image = { id: "product", url: "https://example.test/product.jpg", color: "" }, patch = { images: [image], expectedUpdatedAt: row.updatedAt };
+    const saved = await write(c, patch, String(row.id)), retried = await write(c, patch, String(row.id));
+    expect(saved).toMatchObject({ creationTimePending: false, createdBy: 8, version: 2 });
+    expect(saved.createdAt).toBeTruthy();
+    expect(retried.createdAt).toBe(saved.createdAt);
+    expect((await read("SELECT cell_owners FROM style_selections"))[0].cellOwners).toMatchObject({ images: "7", registrationBatch: "7" });
+    expect(await read("SELECT * FROM audit_logs")).toHaveLength(1);
+  });
+
+  it.each(["blank", "empty"])("preserves physical creation dates in new generic %s project workspaces", async initial => {
+    await fixture.database!.query("INSERT INTO project_tables(id,initial_layout) VALUES(25,$1)", [initial]);
+    await fixture.database!.query("SELECT public.create_project_table_workspace(25)");
+    const saved = await selectionScope.run("25", () => write(actor(`generic-${initial}`), {}));
+    expect(saved).toMatchObject({ creationTimePending: false, createdBy: 7 });
+    expect(saved.createdAt).toBeTruthy();
+    const raw = (await read("SELECT created_at,content_created_at FROM selection_table_25.style_selections"))[0];
+    expect(raw.contentCreatedAt).toBe(raw.createdAt);
+    await fixture.database!.exec("DROP SCHEMA selection_table_25 CASCADE; DELETE FROM project_tables WHERE id=25");
+  });
+  it("requires meaningful content before a date can claim a new row and enforces the one-active-row rule", async () => {
     await fixture.database!.query("UPDATE style_selection_protection SET settings=$1 WHERE id=1", [JSON.stringify({ ...defaultProtection, claimsEnabled: true })]);
-    const saved = await write(actor("claim-time-only"), { createdAt: editedTime });
+    await expect(write(actor("reject-time-only"), { createdAt: editedTime })).rejects.toMatchObject({ status: 400, response: { error: { code: "CREATION_TIME_PENDING" } } });
+    const saved = await write(actor("claim-time-only"), { xutiStyleNo: "FIRST", createdAt: editedTime });
     expect(saved).toMatchObject({ createdAt: editedTime, createdBy: 7, claimedBy: 7 });
     const stored = (await read("SELECT * FROM style_selections WHERE id=$1", [saved.id]))[0];
     expect(stored.cellOwners.registrationBatch).toBe("7");
-    await expect(write(actor("second-time-only"), { createdAt: originalTime })).rejects.toMatchObject({ status: 409, response: { error: { code: "ROW_CLAIMED" } } });
+    await expect(write(actor("second-time-only"), { xutiStyleNo: "SECOND", createdAt: originalTime })).rejects.toMatchObject({ status: 409, response: { error: { code: "ROW_CLAIMED" } } });
     expect(await read("SELECT * FROM style_selections")).toHaveLength(1);
     expect(await read("SELECT * FROM audit_logs")).toHaveLength(1);
   });
@@ -99,7 +157,7 @@ describe("explicit built-in creation-time writes", () => {
     expect(saved).toMatchObject({ createdAt: editedTime, createdBy: 8, updatedBy: 7, version: 2, registrationBatch: "2019-01-01" });
     const audits = await read("SELECT * FROM audit_logs");
     expect(audits).toHaveLength(1);
-    expect(audits[0]).toMatchObject({ entityType: "style-selection", beforeData: { createdAt: originalTime }, afterData: { createdAt: editedTime } });
+    expect(audits[0]).toMatchObject({ entityType: "style-selection", beforeData: { createdAt: originalTime }, afterData: { createdAt: originalTime, contentCreatedAt: editedTime, createdTimeSource: "EXPLICIT" } });
     const stale = () => write(actor(`stale-${scope}`), { createdAt: originalTime, expectedUpdatedAt: row.updatedAt }, String(row.id));
     await expect(scope ? selectionScope.run(scope, stale) : stale()).rejects.toMatchObject(conflict);
     expect(await read("SELECT * FROM audit_logs")).toHaveLength(1);
@@ -111,7 +169,7 @@ describe("explicit built-in creation-time writes", () => {
     const saved = await selectionScope.run("23", () => write(actor("archive-edit"), { createdAt: editedTime, expectedUpdatedAt: row.updatedAt }, String(row.id)));
     expect(saved.createdAt).toBe(editedTime);
     expect((await read("SELECT created_at FROM products WHERE id=$1", [product.id]))[0].createdAt).toBe(editedTime);
-    expect((await read("SELECT created_at FROM selection_table_23.style_selections WHERE id=$1", [row.id]))[0].createdAt).toBe(editedTime);
+    expect((await read("SELECT created_at,content_created_at FROM selection_table_23.style_selections WHERE id=$1", [row.id]))[0]).toMatchObject({ createdAt: originalTime, contentCreatedAt: editedTime });
     const audits = await read("SELECT * FROM audit_logs ORDER BY id");
     expect(audits.map((item: Row) => item.entityType)).toEqual(["products", "style-selection"]);
     expect(audits[0].beforeData.createdAt).toBe("2010-01-01T00:00:00.000Z");
@@ -122,34 +180,40 @@ describe("explicit built-in creation-time writes", () => {
 
   it("retains a content-free unlinked archive row and enforces product permission before committing a linked edit", async () => {
     const empty = await savedRow("selection_table_23", null, "");
-    const saved = await selectionScope.run("23", () => write(actor("unlinked"), { createdAt: editedTime }, String(empty.id)));
-    expect(saved).toMatchObject({ createdAt: editedTime, productId: null });
+    await expect(selectionScope.run("23", () => write(actor("unlinked"), { createdAt: editedTime }, String(empty.id)))).rejects.toMatchObject({ status: 400, response: { error: { code: "CREATION_TIME_PENDING" } } });
+    expect(empty).toMatchObject({ contentCreatedAt: null, productId: null });
     expect(await read("SELECT * FROM products")).toHaveLength(0);
     const product = (await read("INSERT INTO products(style_no,name,category_id,created_at) VALUES('DENIED','Product',1,$1) RETURNING *", [originalTime]))[0];
     const row = await savedRow("selection_table_23", String(product.id), "DENIED");
     await expect(selectionScope.run("23", () => write(actor("denied-product", ["selection.read", "selection.manage"]), { createdAt: editedTime }, String(row.id)))).rejects.toMatchObject({ status: 403 });
     expect((await read("SELECT created_at,version FROM selection_table_23.style_selections WHERE id=$1", [row.id]))[0]).toMatchObject({ createdAt: originalTime, version: 1 });
     expect((await read("SELECT created_at FROM products WHERE id=$1", [product.id]))[0].createdAt).toBe(originalTime);
-    expect(await read("SELECT * FROM audit_logs")).toHaveLength(1);
+    expect(await read("SELECT * FROM audit_logs")).toHaveLength(0);
   });
 
   it("preserves a draft's edited creation time when the product is created in a later save", async () => {
     const empty = await savedRow("selection_table_23", null, "");
-    const draft = await selectionScope.run("23", () => write(actor("draft-time"), { createdAt: editedTime, expectedUpdatedAt: empty.updatedAt }, String(empty.id)));
+    const draft = await selectionScope.run("23", () => write(actor("draft-time"), { supplierStyleNo: "SUPPLIER-DRAFT", createdAt: editedTime, expectedUpdatedAt: empty.updatedAt }, String(empty.id)));
     const saved = await selectionScope.run("23", () => write(actor("draft-product"), { xutiStyleNo: "DRAFT-PRODUCT", expectedUpdatedAt: draft.updatedAt }, String(empty.id)));
     expect(saved).toMatchObject({ createdAt: editedTime, createdBy: 8 });
     expect(saved.productId).toBeTruthy();
     expect((await read("SELECT created_at FROM products WHERE id=$1", [saved.productId]))[0].createdAt).toBe(editedTime);
-    expect((await read("SELECT created_at FROM selection_table_23.style_selections WHERE id=$1", [empty.id]))[0].createdAt).toBe(editedTime);
+    expect((await read("SELECT created_at,content_created_at FROM selection_table_23.style_selections WHERE id=$1", [empty.id]))[0]).toMatchObject({ createdAt: originalTime, contentCreatedAt: editedTime });
   });
 
   it("records ownership on the same protected column used by multi-row paste and rejects invalid timestamps before saving", async () => {
     const first = await savedRow(), second = await savedRow("public", null, "TIME-2");
     for (const row of [first, second]) await write(actor(`paste-${row.id}`), { createdAt: editedTime, expectedUpdatedAt: row.updatedAt }, String(row.id));
-    expect((await read("SELECT created_at,cell_owners,version FROM style_selections ORDER BY id")).map((row: Row) => [row.createdAt, row.cellOwners.registrationBatch, row.version])).toEqual([[editedTime, "7", 2], [editedTime, "7", 2]]);
+    expect((await read("SELECT content_created_at AS created_at,cell_owners,version FROM style_selections ORDER BY id")).map((row: Row) => [row.createdAt, row.cellOwners.registrationBatch, row.version])).toEqual([[editedTime, "7", 2], [editedTime, "7", 2]]);
     for (const createdAt of [null, "", "2026-02-30T00:00:00Z", "2026-10-11 00:00:00"])
       await expect(write(actor(`invalid-${createdAt}`), { createdAt }, String(first.id))).rejects.toMatchObject({ status: 400 });
     expect(await read("SELECT * FROM audit_logs")).toHaveLength(2);
+  });
+  it("marks an explicitly supplied date as authoritative even when its value matches the current automatic timestamp", async () => {
+    const row = await savedRow();
+    const saved = await write(actor("same-date-explicit"), { createdAt: originalTime, expectedUpdatedAt: row.updatedAt }, String(row.id));
+    expect(saved.createdAt).toBe(originalTime);
+    expect((await read("SELECT created_at,content_created_at,created_time_source FROM style_selections"))[0]).toEqual({ createdAt: originalTime, contentCreatedAt: originalTime, createdTimeSource: "EXPLICIT" });
   });
 });
 
@@ -173,7 +237,7 @@ describe("atomic creation-time Excel imports", () => {
         await commitImport(c, importPayload(plan));
       };
       await (scope ? selectionScope.run(scope, run) : run());
-      expect((await read(`SELECT created_at,registration_batch,material,created_by,version,cell_owners FROM ${table}`))[0]).toMatchObject({
+      expect((await read(`SELECT content_created_at AS created_at,registration_batch,material,created_by,version,cell_owners FROM ${table}`))[0]).toMatchObject({
         createdAt: editedTime, registrationBatch: "2019-01-01T00:00:00.000Z", material: "Original material", createdBy: 8, version: 2, cellOwners: { registrationBatch: "7" },
       });
     }
@@ -186,7 +250,7 @@ describe("atomic creation-time Excel imports", () => {
     ], "SKIP"));
     expect(plan).toMatchObject({ updated: 0, created: 1, skipped: 1 });
     await commitImport(c, importPayload(plan));
-    const rows = await read("SELECT xuti_style_no,created_at,created_by,version FROM style_selections ORDER BY id");
+    const rows = await read("SELECT xuti_style_no,content_created_at AS created_at,created_by,version FROM style_selections ORDER BY id");
     expect(rows).toEqual([
       { xutiStyleNo: "TIME-1", createdAt: originalTime, createdBy: 8, version: 1 },
       { xutiStyleNo: "TIME-NEW", createdAt: "2025-04-21T16:42:00.000Z", createdBy: 7, version: 1 },
@@ -211,14 +275,14 @@ describe("atomic creation-time Excel imports", () => {
     const c = actor("field-value-time"), plan = await previewImport(c, importInput([{ xutiStyleNo: "TIME-1", fieldValues: { 创建时间: "2025/4/22 0:42" } }]));
     expect(plan.rows[0].values).toEqual({ xutiStyleNo: "TIME-1", createdAt: "2025-04-21T16:42:00.000Z" });
     await commitImport(c, importPayload(plan));
-    expect((await read("SELECT created_at FROM style_selections"))[0].createdAt).toBe("2025-04-21T16:42:00.000Z");
+    expect((await read("SELECT content_created_at AS created_at FROM style_selections"))[0].createdAt).toBe("2025-04-21T16:42:00.000Z");
     for (const value of [
       { createdAt: editedTime, fieldValues: { 创建时间: "2025-04-22" } },
       { fieldValues: { 创建时间: "2025-02-30" } },
       { createdAt: "2025-04-22 00:42:00" },
       { createdAt: "2025-02-30T00:42:00+08:00" },
     ]) await expect(previewImport(actor("invalid-import"), importInput([{ xutiStyleNo: "TIME-1", ...value }]))).rejects.toMatchObject({ status: 400 });
-    expect((await read("SELECT created_at FROM style_selections"))[0].createdAt).toBe("2025-04-21T16:42:00.000Z");
+    expect((await read("SELECT content_created_at AS created_at FROM style_selections"))[0].createdAt).toBe("2025-04-21T16:42:00.000Z");
   });
 
   it("updates linked products and newly created products using the supplied instant", async () => {
@@ -235,7 +299,7 @@ describe("atomic creation-time Excel imports", () => {
       { styleNo: "TIME-PRODUCT", name: "Original name", createdAt: editedTime },
       { styleNo: "NEW-PRODUCT", name: "NEW-PRODUCT", createdAt: "2025-04-21T16:42:00.000Z" },
     ]);
-    expect((await read("SELECT created_at FROM selection_table_23.style_selections ORDER BY id")).map((row: Row) => row.createdAt)).toEqual([editedTime, "2025-04-21T16:42:00.000Z"]);
+    expect((await read("SELECT content_created_at AS created_at FROM selection_table_23.style_selections ORDER BY id")).map((row: Row) => row.createdAt)).toEqual([editedTime, "2025-04-21T16:42:00.000Z"]);
     const audits = await read("SELECT entity_type,before_data,after_data FROM audit_logs WHERE entity_type='products' ORDER BY id");
     expect(audits[0]).toMatchObject({ beforeData: { createdAt: "2010-01-01T00:00:00.000Z" }, afterData: { createdAt: editedTime } });
   });
@@ -253,7 +317,7 @@ describe("atomic creation-time Excel imports", () => {
       await expect(previewImport(actor("other-system"), importInput([{ xutiStyleNo: "TIME-1", fieldValues: { 自动建档: "2020-01-01" } }]))).rejects.toMatchObject({ status: 400 });
     };
     await (scope ? selectionScope.run(scope, run) : run());
-    expect((await read(`SELECT created_at,extra_fields FROM ${table}`))[0]).toMatchObject({ createdAt: editedTime });
+    expect((await read(`SELECT content_created_at AS created_at,extra_fields FROM ${table}`))[0]).toMatchObject({ createdAt: editedTime });
     expect((await read(`SELECT extra_fields FROM ${table}`))[0].extraFields).not.toHaveProperty(custom.key);
   });
 
@@ -261,7 +325,7 @@ describe("atomic creation-time Excel imports", () => {
     await savedRow();
     const c = actor("legacy-and-time"), plan = await previewImport(c, importInput([{ xutiStyleNo: "TIME-1", registrationBatch: "2018-02-01", createdAt: editedTime }]));
     await commitImport(c, importPayload(plan));
-    expect((await read("SELECT registration_batch,created_at FROM style_selections"))[0]).toEqual({ registrationBatch: "2018-02-01T00:00:00.000Z", createdAt: editedTime });
+    expect((await read("SELECT registration_batch,content_created_at AS created_at FROM style_selections"))[0]).toEqual({ registrationBatch: "2018-02-01T00:00:00.000Z", createdAt: editedTime });
   });
 
   it.each(["hidden", "deleted", "missing"])("imports native creation metadata without changing a %s built-in display column or private system mirror", async mode => {
@@ -286,7 +350,7 @@ describe("atomic creation-time Excel imports", () => {
       expect(await commitImport(c, importPayload(plan))).toMatchObject({ updated: 1, fieldsCreated: 0 });
     });
     expect((await read("SELECT created_at FROM products WHERE id=$1", [product.id]))[0].createdAt).toBe(editedTime);
-    expect((await read("SELECT created_at,extra_fields FROM selection_table_23.style_selections WHERE id=$1", [row.id]))[0]).toEqual({ createdAt: editedTime, extraFields: expect.objectContaining({ [mirror.key]: "Original private value" }) });
+    expect((await read("SELECT content_created_at AS created_at,extra_fields FROM selection_table_23.style_selections WHERE id=$1", [row.id]))[0]).toEqual({ createdAt: editedTime, extraFields: expect.objectContaining({ [mirror.key]: "Original private value" }) });
     expect(await read("SELECT * FROM selection_layout_preferences")).toEqual(beforePersonal);
     expect(await read("SELECT * FROM selection_shared_layouts")).toEqual(beforeShared);
     expect(await read("SELECT * FROM selection_field_registry")).toEqual(beforeRegistry);

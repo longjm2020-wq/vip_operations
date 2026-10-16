@@ -20,5 +20,5 @@ export function archiveProductSnapshot(raw: Row, actorId: string): Row {
     tag_price: item.tagPrice ?? null,
     images: item.mainImageUrl ? [{ id: `product-${item.id}`, url: item.mainImageUrl, color: "" }] : [],
     extra_fields: extras, created_by: actorId, updated_by: actorId,
-    created_at: item.createdAt, updated_at: item.updatedAt };
+    created_at: item.createdAt, content_created_at: item.createdAt, created_time_source: "LEGACY", updated_at: item.updatedAt };
 }

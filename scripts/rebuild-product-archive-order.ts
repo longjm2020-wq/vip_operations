@@ -93,7 +93,7 @@ async function snapshot(
   archiveId: string,
 ): Promise<ArchiveOrderSnapshot> {
   const table = `${identifier("selection_table_" + archiveId)}.style_selections`;
-  const effective = "COALESCE(p.created_at,s.created_at)";
+  const effective = "s.content_created_at";
   const result = await client.query<{
     id: string;
     product_id: string | null;
