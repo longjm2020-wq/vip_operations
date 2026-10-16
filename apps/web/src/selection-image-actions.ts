@@ -3,7 +3,7 @@ export function absoluteSelectionImageUrl(url: string): string {
 }
 
 async function imageBlob(url: string): Promise<Blob> {
-  const response = await fetch(absoluteSelectionImageUrl(url), { credentials: "same-origin" });
+  const response = await fetch(absoluteSelectionImageUrl(url), { credentials: "same-origin", referrerPolicy: "no-referrer" });
   if (!response.ok) throw new Error(`图片下载失败（HTTP ${response.status}）`);
   const blob = await response.blob();
   if (!blob.type.startsWith("image/")) throw new Error("图片地址没有返回可用的图片文件");

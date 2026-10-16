@@ -49,7 +49,7 @@ export async function recognizeSelectionImageText(url: string, view: ImageTextVi
   if (signal.aborted) stop.abort();
   try {
     progress({ label: "正在读取图片…" });
-    const response = await fetch(absoluteSelectionImageUrl(url), { credentials: "same-origin", signal: stop.signal });
+    const response = await fetch(absoluteSelectionImageUrl(url), { credentials: "same-origin", referrerPolicy: "no-referrer", signal: stop.signal });
     if (!response.ok) throw Error(`图片读取失败（HTTP ${response.status}）`);
     const file = await response.blob();
     if (!file.type.startsWith("image/")) throw Error("图片地址没有返回可用的图片文件");

@@ -221,7 +221,7 @@ async function loadRangeImages(placements: Map<string, ImagePlacement[]>): Promi
       const deadline = Date.now() + 10_000;
       const timeout = setTimeout(() => controller.abort(), 10_000);
       try {
-        const response = await fetch(url, { credentials: "same-origin", mode: "cors", signal: controller.signal });
+        const response = await fetch(url, { credentials: "same-origin", mode: "cors", referrerPolicy: "no-referrer", signal: controller.signal });
         const blob = await boundedImageBlob(response);
         const original = await timedBitmap(blob, deadline - Date.now());
         let retained = false;

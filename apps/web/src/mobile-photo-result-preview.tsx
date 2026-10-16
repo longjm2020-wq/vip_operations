@@ -26,6 +26,7 @@ function useAdjacentImages(images: Row[], current: number, open: boolean) {
     for (const url of urls) {
       if (cache.current.has(url)) continue;
       const image = new window.Image();
+      image.referrerPolicy = "no-referrer";
       image.decoding = "async";
       image.fetchPriority = url === images[current]?.url ? "auto" : "low";
       image.onload = () => {
@@ -127,7 +128,7 @@ export function MobilePhotoResultPreview({ row }: { row: Row }) {
   const current = Math.min(index, Math.max(0, images.length - 1));
   const previewOpen = open && canPreview && images.length > 0;
   const items = useMemo(() => images.map((image, imageIndex) => ({
-    src: image.url, decoding: "async" as const,
+    src: image.url, decoding: "async" as const, referrerPolicy: "no-referrer" as const,
     alt: `${name} 商品图片 ${imageIndex + 1}/${images.length}${image.color ? ` · ${image.color}` : ""}`,
   })), [images, name]);
   useAdjacentImages(images, current, previewOpen);
@@ -155,7 +156,7 @@ export function MobilePhotoResultPreview({ row }: { row: Row }) {
       setIndex(0);
       setOpen(true);
     }}>
-      <Image src={images[0].url} alt="" loading="lazy" decoding="async" fallback={invalidSelectionImage} preview={false} width={64} height={64} />
+      <Image src={images[0].url} referrerPolicy="no-referrer" alt="" loading="lazy" decoding="async" fallback={invalidSelectionImage} preview={false} width={64} height={64} />
       {images.length > 1 && <span className="mobile-photo-result-image-total" aria-hidden="true">{images.length} 张</span>}
     </button>
     {previewOpen && <Image.PreviewGroup
