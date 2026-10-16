@@ -6,11 +6,26 @@ import {
   parseDelimited,
 } from "./sheet-data.js";
 import { loadExcelJS } from "./exceljs-loader.js";
+const normalizeHeader = (value: string) => value.trim().replace(/\s+/g, "")
+  .replaceAll("（", "(").replaceAll("）", ")").toUpperCase();
+function cachedImageLink(result: unknown): string | null {
+  if (typeof result !== "string") return null;
+  const link = result.trim();
+  if (link.length > 2048 || !/^https?:\/\//i.test(link)) return null;
+  try {
+    const url = new URL(link);
+    return ["http:", "https:"].includes(url.protocol) && !!url.hostname ? link : null;
+  } catch {
+    return null;
+  }
+}
 export async function readWorkbook(
   file: File,
   options: {
     formattedCells?: boolean;
     dateTimeColumns?: string[];
+    /** Read only saved HTTP(S) image links; never evaluate workbook formulas. */
+    cachedImageFormulaColumns?: readonly string[];
     maxFileSizeMB?: number;
     maxRows?: number;
   } = {},
@@ -31,12 +46,15 @@ export async function readWorkbook(
   const { Workbook } = await loadExcelJS();
   const book = new Workbook();
   await book.xlsx.load(await file.arrayBuffer());
+  const allowedImageHeaders = new Set(options.cachedImageFormulaColumns?.map(normalizeHeader));
   return book.worksheets
     .map((sheet) => {
       // ExcelJS derives columnCount by scanning rows; compute it once for large sheets.
       const columnCount = sheet.columnCount;
       if (sheet.rowCount > maxRows + 1 || columnCount > 100)
         throw Error(`表格超过 ${maxRows} 行或 100 列，请拆分并清除多余格式`);
+      const imageFormulaColumns = new Set(Array.from({ length: columnCount }, (_, index) => index + 1)
+        .filter((column) => allowedImageHeaders.has(normalizeHeader(sheet.getRow(1).getCell(column).text))));
       const rows: string[][] = [];
       sheet.eachRow({ includeEmpty: true }, (row) => {
         const values: string[] = [];
@@ -47,10 +65,21 @@ export async function readWorkbook(
             value &&
             typeof value === "object" &&
             ("formula" in value || "sharedFormula" in value)
-          )
+          ) {
+            if (imageFormulaColumns.has(c)) {
+              // ExcelJS exposes the stored result without calculating or opening
+              // external workbooks. Do not coerce errors, numbers or empty caches.
+              const link = cachedImageLink(value.result);
+              if (link !== null) {
+                values.push(link);
+                continue;
+              }
+              throw Error(`工作表「${sheet.name}」${cell.address} 的图片公式没有有效的 http/https 链接缓存，请将图片列粘贴为值或直接填写图片链接后导入`);
+            }
             throw Error(
               `工作表「${sheet.name}」${cell.address} 含公式，请粘贴为值后导入`,
             );
+          }
           // Excel may store codes as numbers with a zero-padding display format.
           values.push(
             options.formattedCells && value instanceof Date

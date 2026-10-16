@@ -87,6 +87,9 @@ export function InventoryImport({
       const data = (
         await readWorkbook(file, {
           formattedCells: true,
+          cachedImageFormulaColumns: inventoryImportFields
+            .filter((field) => field.key === "mainImageUrl")
+            .flatMap((field) => [field.label, ...field.aliases]),
           ...inventoryImportLimits,
         })
       ).filter((s) => s.name !== "填写说明");
@@ -241,7 +244,8 @@ export function InventoryImport({
                 [
                   "商品编码使用内部 SKU 编码；未建档商品首次导入需填写款号、颜色和尺码，需要商品新建权限。新款默认归入导入待分类，可在商品档案完善品类。",
                   "首行保留列名，可删除不需要修改的列；空白单元格保留原值。",
-                  "上传后点击确认导入才保存；编码、条码请使用文本格式，公式请粘贴为值。",
+                  "上传后点击确认导入才保存；编码、条码请使用文本格式。图片公式仅读取文件已保存的 http/https 链接结果，其余公式请粘贴为值。",
+                  "图片公式不会重新计算或访问外部文件；请先在 Excel 中核对并保存结果。无有效链接结果时，请替换为图片链接后重新上传。",
                   "在仓库存数为调整后的绝对数量，变化数量为增减数量，两者每行只能填一项；修改库存必须填写仓库或选择导入仓库。",
                   "颜色、尺码和货号按 SKU 更新；此处填写的日销、退货率和预估销退为人工备用参考。库存查询优先使用罗盘条码报表计算结果。退货率填写百分数，如 1.5 或 1.5%。",
                   "新参考记录默认来源为 Excel 导入（人工维护）及导入当天日期；现有记录未提供的参考字段保持原值。",
@@ -260,6 +264,7 @@ export function InventoryImport({
       </div>
       <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
         已有商品按编码更新，空白单元格保留原值。首次导入需款号、颜色、尺码及商品新建权限，新款归入「导入待分类」。图片（链接）、款号、商品名称、供应商款式编码仅用于新款建档。修改资料需商品编辑权限，修改库存或参考值需库存调整权限。
+        图片公式仅读取文件中已保存的 http/https 链接结果，不会重新计算；请先在 Excel 中核对并保存结果，其余公式请粘贴为值。
       </Typography.Paragraph>
       {canStock && (
         <Space style={{ marginBottom: 12 }}>

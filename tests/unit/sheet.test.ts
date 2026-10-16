@@ -102,4 +102,55 @@ describe("spreadsheet input", () => {
     );
     expect(result[0].rows[1]).toEqual(["00001", "1.5%", "2026-10-01"]);
   });
+
+  it("only reads saved VLOOKUP image URLs when the image column is explicitly enabled", async () => {
+    const book = new Workbook(), sheet = book.addWorksheet("数据");
+    sheet.addRow([" 图 \n片 ", "商品编码"]);
+    sheet.addRow([{ formula: "VLOOKUP(B2,[1]Sheet1!$B:$C,2,FALSE)", result: " https://example.com/product.jpg " }, "SKU-001"]);
+    const file = new File([(await book.xlsx.writeBuffer()) as BlobPart], "cached-images.xlsx");
+    await expect(readWorkbook(file)).rejects.toThrow("A2 含公式");
+    await expect(readWorkbook(file, { cachedImageFormulaColumns: ["图片链接"] })).rejects.toThrow("A2 含公式");
+    const result = await readWorkbook(file, { cachedImageFormulaColumns: ["图片"] });
+    expect(result[0].rows[1]).toEqual(["https://example.com/product.jpg", "SKU-001"]);
+  });
+
+  it.each([
+    ["missing", undefined],
+    ["error", { error: "#N/A" }],
+    ["empty", ""],
+    ["non-URL", "picture.jpg"],
+    ["incomplete URL", "https://"],
+    ["non-HTTP scheme", "javascript:alert(1)"],
+    ["number", 12],
+    ["too long URL", "https://example.com/" + "a".repeat(2048)],
+  ])("rejects an image formula with a %s cache and explains how to supply an image link", async (_, result) => {
+    const book = new Workbook(), sheet = book.addWorksheet("数据");
+    sheet.addRow(["图片", "商品编码"]);
+    sheet.addRow([{ formula: "VLOOKUP(B2,[1]Sheet1!$B:$C,2,FALSE)", result } as ExcelJS.CellFormulaValue, "SKU-001"]);
+    const file = new File([(await book.xlsx.writeBuffer()) as BlobPart], "invalid-image-cache.xlsx");
+    await expect(readWorkbook(file, { cachedImageFormulaColumns: ["图片"] }))
+      .rejects.toThrow("A2 的图片公式没有有效的 http/https 链接缓存");
+  });
+
+  it("does not enable cached numeric formulas in other columns", async () => {
+    const book = new Workbook(), sheet = book.addWorksheet("数据");
+    sheet.addRow(["图片", "在仓库存数"]);
+    sheet.addRow([{ formula: "VLOOKUP(C2,[1]Sheet1!$B:$C,2,FALSE)", result: "http://example.com/product.jpg" }, { formula: "1+2", result: 3 }]);
+    const file = new File([(await book.xlsx.writeBuffer()) as BlobPart], "stock-formula.xlsx");
+    await expect(readWorkbook(file, { cachedImageFormulaColumns: ["图片"] }))
+      .rejects.toThrow("B2 含公式");
+  });
+
+  it("reads a valid saved URL from a shared image formula without evaluating the shared formula", async () => {
+    const book = new Workbook(), sheet = book.addWorksheet("数据");
+    sheet.addRow(["图片链接", "商品编码"]);
+    sheet.addRow([{ formula: "VLOOKUP(B2,[1]Sheet1!$B:$C,2,FALSE)", shareType: "shared", ref: "A2:A3", result: "http://example.com/one.jpg" }, "SKU-001"]);
+    sheet.addRow([{ sharedFormula: "A2", result: "https://example.com/two.jpg" }, "SKU-002"]);
+    const file = new File([(await book.xlsx.writeBuffer()) as BlobPart], "shared-image-cache.xlsx");
+    const result = await readWorkbook(file, { cachedImageFormulaColumns: [" 图片 链接 "] });
+    expect(result[0].rows.slice(1)).toEqual([
+      ["http://example.com/one.jpg", "SKU-001"],
+      ["https://example.com/two.jpg", "SKU-002"],
+    ]);
+  });
 });
