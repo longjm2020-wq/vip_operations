@@ -19,7 +19,8 @@ import {
 } from "./integrations/vip/listing.js";
 export function enrichOpenApi(doc: OpenAPIObject) {
   const schema = (s: z.ZodType) =>
-    z.toJSONSchema(s, { target: "openapi-3.0", io: "input" });
+    // Documentation only: fields that must stay absent (z.undefined) have no JSON Schema form.
+    z.toJSONSchema(s, { target: "openapi-3.0", io: "input", unrepresentable: "any" });
   const set = (
     path: string,
     method: string,
