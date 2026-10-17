@@ -126,6 +126,10 @@ async function userWith(username: string, permissions: string[]) {
 }
 const scoped = (table: { id: string }, endpoint = "") =>
   `/style-selections${endpoint}${endpoint.includes("?") ? "&" : "?"}tableId=${table.id}`;
+// The read-only creation time (registrationBatch) is not a transferable field.
+const sameKeyMappings = selectionBaseFields
+  .filter((field) => field.key !== "registrationBatch")
+  .map((field) => ({ source: field.key, target: field.key }));
 const custom = {
   key: "custom:note",
   label: "核对备注",
@@ -197,6 +201,20 @@ try {
     "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p1cAAAAASUVORK5CYII=";
   const upload = await ok("/style-selections/images", "POST", { data: png });
   const photo = { id: "photo-1", url: upload.url, color: "米白色" };
+  const transferBaseFields = selectionBaseFields.map((field) =>
+    field.key === "registrationBatch" ? { ...field, type: "date" as const } : field,
+  );
+  // Custom values require a registered field unless the actor is the designated
+  // super-administrator; register the private source fields first (personal layout save).
+  const sourceLayout = await ok("/style-selections/layout-preferences");
+  await ok("/style-selections/layout-preferences", "POST", {
+    revision: sourceLayout.revision,
+    preferences: {
+      ...(sourceLayout.preferences || {}),
+      // A first save starts from the standard columns so the source fields stay visible.
+      columns: [...(sourceLayout.preferences?.columns || transferBaseFields), custom, imageField],
+    },
+  });
   const source = await ok("/style-selections", "POST", {
     xutiStyleNo: "TRANSMIT-01",
     registrationBatch: "2026-09-28",
@@ -212,22 +230,15 @@ try {
   });
   const body = {
     rowIds: [source.id],
-    fields: [
-      ...selectionBaseFields.map((field) =>
-        field.key === "registrationBatch"
-          ? { ...field, type: "date" as const }
-          : field,
-      ),
-      custom,
-      imageField,
-    ],
+    fields: [...transferBaseFields, custom, imageField],
     target: target.id,
     mappings: [],
     copyMissingFields: true,
   };
   const preview = await ok("/style-selections/migration/preview", "POST", body);
   assert.equal(preview.created, 1);
-  assert.equal(preview.addedFields, 15);
+  // registrationBatch is the read-only system creation time and is not copied as a field.
+  assert.equal(preview.addedFields, 14);
   const key = randomUUID(),
     sent = await ok(
       "/style-selections/migration",
@@ -247,7 +258,8 @@ try {
   assert.equal(locked.migrationLocked, true);
   assert.equal(locked.migrationTargetWorkspace, target.id);
   assert.equal(locked.migrationTargetRowId, copied.id);
-  assert.equal(copied.registrationBatch, "2026-09-28");
+  // Cross-table transfer never carries the creation time (manual 27/28).
+  assert.equal(copied.registrationBatch, null);
   assert.equal(copied.extraFields[custom.key], "同格\n多行备注");
   assert.equal(copied.images[0].url, upload.url + "?tableId=" + target.id);
   assert.equal(
@@ -259,7 +271,7 @@ try {
     200,
   );
   const destinationPrefs = await ok(scoped(target, "/layout-preferences"));
-  assert.equal(destinationPrefs.preferences.columns.length, 15);
+  assert.equal(destinationPrefs.preferences.columns.length, preview.addedFields);
   assert.equal(
     (
       await request("/style-selections/" + source.id, "PATCH", {
@@ -347,10 +359,7 @@ try {
     rowIds: [rowA.id, rowB.id],
     fields: selectionBaseFields,
     target: target.id,
-    mappings: selectionBaseFields.map((field) => ({
-      source: field.key,
-      target: field.key,
-    })),
+    mappings: sameKeyMappings,
     copyMissingFields: false,
   };
   const batchPreview = await ok(
@@ -416,10 +425,7 @@ try {
     rowIds: [toArchive.id],
     fields: selectionBaseFields,
     target: archive.id,
-    mappings: selectionBaseFields.map((field) => ({
-      source: field.key,
-      target: field.key,
-    })),
+    mappings: sameKeyMappings,
     copyMissingFields: true,
   };
   const archivePreview = await ok(
@@ -473,10 +479,12 @@ try {
   assert.equal(mirrored.extraFields["custom:product:name"], "详情修改后");
   assert.equal(mirrored.labelImages.length, 1);
   assert.equal(mirrored.images[0].url, archiveRow.images[0].url);
-  assert.equal(
-    (await request(scoped(archive, "/" + archiveRow.id), "DELETE")).status,
-    409,
-  );
+  // Rows linked to a real product cannot be deleted. For a non-super-admin the
+  // row-wide protection check (mirrored product values) may refuse first (403)
+  // before the product-link rule (409); either way nothing is deleted.
+  const linkedDelete = await request(scoped(archive, "/" + archiveRow.id), "DELETE");
+  assert.ok([403, 409].includes(linkedDelete.status), JSON.stringify(linkedDelete.result));
+  assert.ok((await ok(scoped(archive))).some((row: any) => row.id === archiveRow.id));
   const draft = await ok(scoped(archive), "POST", {});
   assert.equal(draft.productId, null);
   await ok(scoped(archive, "/" + draft.id), "DELETE");
@@ -616,6 +624,23 @@ try {
       ],
     }),
   });
+  // Register the source table's private choice fields before writing their values.
+  const choiceSourceLayout = await ok("/style-selections/layout-preferences");
+  await ok("/style-selections/layout-preferences", "POST", {
+    revision: choiceSourceLayout.revision,
+    preferences: {
+      ...choiceSourceLayout.preferences,
+      columns: [...choiceSourceLayout.preferences.columns, washing, actions, tags],
+    },
+  });
+  // Publish them so public product fields are valid targets; the option checks
+  // below are then what accept or reject each transfer.
+  for (const field of (await ok("/style-selections/layout-preferences")).preferences.columns)
+    if ([washing.key, actions.key, tags.key].includes(field.key))
+      await ok(`/style-selections/fields/${encodeURIComponent(field.key)}/visibility`, "POST", {
+        public: true,
+        revision: field.fieldRevision,
+      });
   const choiceBefore = await ok(scoped(archive), "POST", {
       xutiStyleNo: "TRANSFER-CHOICES",
       material: "保留原内容",
@@ -827,9 +852,16 @@ try {
     await ok(scoped(archive, "/layout-preferences")),
     limitedLayout,
   );
+  // Restore the options on top of the latest definitions (each field carries its own revision).
+  const previousWashing = choiceLayout.preferences.columns.find((field: SelectionField) => field.key === washing.key);
   choiceLayout = await ok(scoped(archive, "/layout-preferences"), "POST", {
     revision: limitedLayout.revision,
-    preferences: choiceLayout.preferences,
+    preferences: {
+      ...limitedLayout.preferences,
+      columns: limitedLayout.preferences.columns.map((field: SelectionField) =>
+        field.key === washing.key ? { ...field, options: previousWashing.options, optionColors: previousWashing.optionColors } : field,
+      ),
+    },
   });
   const productChoice = await ok("/product-fields", "POST", {
     name: "商品专用质检",
@@ -999,6 +1031,17 @@ try {
   console.log(
     "PASS the built-in product washing field appends explicitly previewed shared choices and writes real product values, with catalog conflict checks and idempotency",
   );
+  // Transfers use the saved source definition, so declare the new source option first.
+  const rollbackSourceLayout = await ok("/style-selections/layout-preferences");
+  await ok("/style-selections/layout-preferences", "POST", {
+    revision: rollbackSourceLayout.revision,
+    preferences: {
+      ...rollbackSourceLayout.preferences,
+      columns: rollbackSourceLayout.preferences.columns.map((field: SelectionField) =>
+        field.key === washing.key ? { ...field, options: [...(field.options || []), "传送新选项"] } : field,
+      ),
+    },
+  });
   const rollbackSharedFirst = await ok("/style-selections", "POST", {
       xutiStyleNo: "GLOBAL-ROLLBACK-1",
       supplierCode: "2026",
@@ -1126,7 +1169,7 @@ try {
     },
   );
   assert.equal(sharedMultiple.status, 400);
-  assert.match(JSON.stringify(sharedMultiple.result), /请选择已配置的选项/);
+  assert.match(JSON.stringify(sharedMultiple.result), /多个已选选项不能传入单选字段/);
   assert.deepEqual(
     (await one(
       db,
@@ -1177,11 +1220,10 @@ try {
     readerFreshLayout.preferences.columns[0].options,
     sharedOptions,
   );
-  assert.equal(readerFreshLayout.preferences.columns[0].label, "个人质检名称");
+  // Field definitions come from the field registry; a personal layout keeps only its width.
+  assert.equal(readerFreshLayout.preferences.columns[0].label, washing.label);
   assert.equal(readerFreshLayout.preferences.columns[0].width, 222);
-  assert.deepEqual(readerFreshLayout.preferences.columns[0].optionColors, {
-    规范: "orange",
-  });
+  assert.deepEqual(readerFreshLayout.preferences.columns[0].optionColors, washing.optionColors);
   assert.equal(
     (
       await request(
@@ -1239,11 +1281,18 @@ try {
     "project.read",
     "project.create",
   ]);
+  // Without product access the archive table is not visible at all (hidden as 404).
   assert.equal(
     (await request(scoped(archive), "GET", undefined, undefined, projectEditor))
       .status,
-    403,
+    404,
   );
+  // Table editing is granted per table: approve the project editor as an EDIT collaborator.
+  const projectEditorUser = await one(db, "SELECT id::text FROM users WHERE username='project-only-editor'");
+  await ok(`/project-library/table/${target.id}/collaborators`, "POST", {
+    version: (await ok(`/project-tables/${target.id}`)).version,
+    members: [{ userId: projectEditorUser!.id, access: "EDIT" }],
+  });
   const available = await ok("/style-selections/migration/targets");
   assert(available.some((item: any) => item.key === archive.id));
   assert(available.some((item: any) => item.key === target.id));
@@ -1274,12 +1323,13 @@ try {
     ignoredSources: ["images"],
     copyMissingFields: false,
   };
+  const savedLayout = await ok("/style-selections/layout-preferences");
   const preferences = selectionLayoutSchema.parse({
-    columns: selectionBaseFields,
+    ...savedLayout.preferences,
     migrationConfig: config,
   });
   await ok("/style-selections/layout-preferences", "POST", {
-    revision: 0,
+    revision: savedLayout.revision,
     preferences,
   });
   const secondSession = await login("admin", process.env.ADMIN_PASSWORD!);

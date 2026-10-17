@@ -148,6 +148,12 @@ try {
     } catch {}
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
+  // Managing other creators' content (visibility, protection, trash) is reserved for the
+  // super-administrator role; the bootstrap admin plays that role in this scenario.
+  await rows(
+    db,
+    "INSERT INTO user_roles(user_id,role_id) SELECT u.id,r.id FROM users u CROSS JOIN roles r WHERE u.username='admin' AND r.code='SUPER_ADMIN' AND NOT EXISTS(SELECT 1 FROM user_roles ur WHERE ur.user_id=u.id AND ur.role_id=r.id) RETURNING user_id",
+  );
   const admin = await login("admin");
   const role = await one(
     db,
