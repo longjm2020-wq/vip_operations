@@ -110,7 +110,7 @@ async function fixture(page: Page, splitSkuSales = false) {
       days: item.days,
       coveredDays: complete ? item.days : 30,
       complete,
-      method: "median",
+      method: "frequent",
     };
     const source = {
       id: "source-1",
@@ -119,11 +119,12 @@ async function fixture(page: Page, splitSkuSales = false) {
       endDate,
       normalizationVersion: 3,
     };
-    const median = (value: number, values = [value]) => ({
+    const frequent = (value: number, values = value ? [value] : []) => ({
       value,
       values,
+      frequencies: values.map((_, index) => (index ? 8 : 9)),
       samples: item.days,
-      method: "median",
+      method: "frequent",
     });
     const reference = {
       source,
@@ -134,11 +135,11 @@ async function fixture(page: Page, splitSkuSales = false) {
       recordedDays: complete ? item.days : 0,
       ...(complete
         ? {
-            dailySales: median(
+            dailySales: frequent(
               item.daily,
               item.period === "30d" ? [5, 7] : [item.daily],
             ),
-            returnRate: median(
+            returnRate: frequent(
               item.rate,
               item.period === "30d" ? [0.1, 0.3] : [item.rate],
             ),
@@ -192,10 +193,10 @@ async function fixture(page: Page, splitSkuSales = false) {
             salesQty: sku.salesQty,
             recordedDays: item.days,
             dailySales: {
-              ...median(sku.daily),
+              ...frequent(sku.daily),
               samples: sku.salesQty === null ? item.days - 1 : item.days,
             },
-            returnRate: median(item.rate),
+            returnRate: frequent(item.rate),
             estimatedReturns: {
               value: sku.salesQty === null ? null : sku.salesQty * item.rate,
               salesQty: sku.salesQty,
@@ -294,7 +295,7 @@ test("经营参考提供七个周期，切换重取第一页且跨汇总维度�
       )
       .toBe(true);
     await expect(page.locator(".ant-pagination-item-active")).toHaveText("1");
-    await expect(coverage(page)).toContainText("中位数");
+    await expect(coverage(page)).toContainText("高频均值");
     await expect(await cell(page, "期间销量")).toHaveText(
       ["6m", "1y"].includes(item.period) ? "历史覆盖不足" : String(item.sales),
     );
@@ -318,7 +319,7 @@ test("经营参考提供七个周期，切换重取第一页且跨汇总维度�
   expect(state.writes).toEqual([]);
 });
 
-test("中位数提示展示中间两值与预估公式，导出沿用当前周期及来源日期", async ({
+test("高频均值提示展示R1/R2频次与预估公式，导出沿用当前周期及来源日期", async ({
   page,
 }) => {
   const state = await fixture(page);
@@ -326,15 +327,19 @@ test("中位数提示展示中间两值与预估公式，导出沿用当前周�
   await expect(await cell(page, "退货率")).toHaveText("20%");
   await expect(await cell(page, "预估销退数")).toHaveText("48");
   const dailyTip = await tooltip(page, "渠道日销参考");
-  await expect(dailyTip).toContainText("中位数");
-  await expect(dailyTip).toContainText("5");
-  await expect(dailyTip).toContainText("7");
-  await expect(dailyTip).not.toContainText("最高频次");
-  await expect(dailyTip).not.toContainText("众数");
+  await expect(dailyTip).toContainText("高频均值");
+  await expect(dailyTip).toContainText("R1 = 5（9 天）");
+  await expect(dailyTip).toContainText("R2 = 7（8 天）");
+  await expect(dailyTip).toContainText("(5 + 7) ÷ 2 = 6");
+  await expect(dailyTip).not.toContainText("中位数");
   await page.getByRole("heading", { name: "库存明细", exact: true }).click();
   const estimatedTip = await tooltip(page, "预估销退数");
-  await expect(estimatedTip).toContainText("中位数");
+  await expect(estimatedTip).toContainText("退货率高频均值");
   await expect(estimatedTip).toContainText("240 × 20% = 48");
+  await page.getByRole("heading", { name: "库存明细", exact: true }).click();
+  const rateTip = await tooltip(page, "退货率");
+  await expect(rateTip).toContainText("整数百分比");
+  await expect(rateTip).toContainText("(10% + 30%) ÷ 2 = 20%");
   await page.getByRole("heading", { name: "库存明细", exact: true }).click();
 
   await choose(page, periods[1]);
@@ -397,7 +402,7 @@ test("半年和一年历史不足时明确提示覆盖缺口，保留人工参�
   expect(state.writes).toEqual([]);
 });
 
-test("期间销量按SKU显示42件的拆分，零中位数不误称无日销且缺失不补零", async ({
+test("期间销量按SKU显示42件的拆分，零高频均值不误称无日销且缺失不补零", async ({
   page,
 }) => {
   const state = await fixture(page, true);
@@ -420,7 +425,7 @@ test("期间销量按SKU显示42件的拆分，零中位数不误称无日销且
         "期间有销量",
       );
       await expect(await cell(page, "可售天数", sku.id)).toHaveText(
-        "中位数为0",
+        "高频均值为0",
       );
     }
   }
@@ -435,7 +440,7 @@ test("期间销量按SKU显示42件的拆分，零中位数不误称无日销且
     .nth(labels.indexOf("期间销量"));
   await expect(totalSales).toHaveText("—");
   const zeroMedianTip = await tooltip(page, "渠道日销参考");
-  await expect(zeroMedianTip).toContainText("中位数");
+  await expect(zeroMedianTip).toContainText("高频均值");
   await expect(zeroMedianTip).toContainText("15");
   await page.getByRole("heading", { name: "库存明细", exact: true }).click();
 

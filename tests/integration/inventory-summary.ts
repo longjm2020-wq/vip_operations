@@ -469,26 +469,29 @@ try {
   const completeSource = await referenceReport();
   await activateReport(completeSource);
   await check(
-    "Barcode report medians and estimated returns use the full 30 days",
+    "Barcode report frequent-value averages and estimated returns use the full 30 days",
     async () => {
       const row = (await summary({ skuId: skus[0] })).data[0];
-      assert.equal(row.dailySales, 15.5);
-      assert.equal(row.returnRate, 0.655);
-      assert.equal(row.estimatedReturns, 292.785);
+      // 1, 3 and 5 each occur on 3 days; the latest two (5, 3) are averaged.
+      assert.equal(row.dailySales, 4);
+      assert.equal(row.returnRate, 0.4);
+      assert.equal(row.estimatedReturns, 178.8);
       assert.deepEqual(row.channelReference.dailySales, {
-        value: 15.5,
-        values: [15, 16],
-        method: "median",
+        value: 4,
+        values: [5, 3],
+        frequencies: [3, 3],
+        method: "frequent",
         samples: 30,
+        nonZeroSamples: 30,
       });
-      assert.deepEqual(row.channelReference.returnRate.values, [0.65, 0.66]);
+      assert.deepEqual(row.channelReference.returnRate.values, [0.5, 0.3]);
       assert.equal(row.channelReference.salesQty, 447);
       assert.equal(row.channelReference.source.id, completeSource);
       assert.equal(row.channelReference.source.startDate, reportStart);
       assert.equal(row.channelReference.source.endDate, reportEnd);
       assert.equal(row.channelReference.barcode, "0012345678901234567890");
-      assert.equal(row.coverageDays, 0.7);
-      assert.equal(row.replenishmentQty, 187);
+      assert.equal(row.coverageDays, 2.8);
+      assert.equal(row.replenishmentQty, 26);
       assert.deepEqual(
         (await summary({ dimension: "style" })).totals,
         expected,
@@ -514,7 +517,7 @@ try {
       assert.equal(result.total, 2);
       assert.ok(
         result.data.every(
-          (r: any) => r.dailySales === 15.5 && r.estimatedReturns === 292.785,
+          (r: any) => r.dailySales === 4 && r.estimatedReturns === 178.8,
         ),
       );
     },
@@ -523,7 +526,7 @@ try {
     "Staging imports and unrelated style dimensions never change references",
     async () => {
       await referenceReport({ status: "STAGING", zero: true });
-      assert.equal((await summary({ skuId: skus[0] })).data[0].dailySales, 15.5);
+      assert.equal((await summary({ skuId: skus[0] })).data[0].dailySales, 4);
       const style = (
         await summary({ dimension: "style", productId: products[0] })
       ).data[0];
@@ -548,7 +551,7 @@ try {
     async () => {
       await activateReport(await referenceReport({ version: 2 }));
       const row = (await summary({ skuId: skus[0] })).data[0];
-      assert.equal(row.dailySales, 15.5);
+      assert.equal(row.dailySales, 4);
       assert.equal(row.returnRate, "0.100000");
       assert.equal(row.estimatedReturns, 2);
       assert.equal(row.channelReference.needsReturnRateImport, true);
@@ -566,7 +569,7 @@ try {
         assert.equal(row.channelReference.dailySales.samples, 29);
         if ("omitDate" in config) {
           assert.equal(row.channelReference.salesQty, 446);
-          assert.equal(row.estimatedReturns, 294.36);
+          assert.equal(row.estimatedReturns, 178.4);
           assert.equal(row.channelReference.estimatedReturns.samples, 29);
         } else {
           assert.equal(row.channelReference.estimatedReturns.value, null);
@@ -602,9 +605,9 @@ try {
         await referenceReport({ start: shiftCompassDate(reportStart, -30) }),
       );
       const row = (await summary({ skuId: skus[0] })).data[0];
-      assert.equal(row.dailySales, 15.5);
-      assert.equal(row.returnRate, 0.655);
-      assert.equal(row.estimatedReturns, 292.785);
+      assert.equal(row.dailySales, 4);
+      assert.equal(row.returnRate, 0.4);
+      assert.equal(row.estimatedReturns, 178.8);
       assert.equal(row.channelReference.dailySales.samples, 30);
     },
   );
@@ -615,7 +618,7 @@ try {
         "UPDATE skus SET barcode=NULL,sku_code='0012345678901234567890' WHERE id=$1",
         [skus[0]],
       );
-      assert.equal((await summary({ skuId: skus[0] })).data[0].dailySales, 15.5);
+      assert.equal((await summary({ skuId: skus[0] })).data[0].dailySales, 4);
       await sql("UPDATE skus SET barcode='DIFFERENT-BARCODE' WHERE id=$1", [
         skus[0],
       ]);

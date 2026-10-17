@@ -163,7 +163,7 @@ export function enrichOpenApi(doc: OpenAPIObject) {
   doc.paths["/api/v1/inventory/summary"].get!.parameters!.push(
     { name: "dimension", in: "query", schema: { type: "string", enum: ["sku", "article", "style"], default: "sku" } },
     { name: "reportMatch", in: "query", schema: { type: "string", enum: ["all", "matched", "unmatched"], default: "all" }, description: "条码维度按所选经营参考周期的报表匹配情况筛选" },
-    { name: "referencePeriod", in: "query", schema: { type: "string", enum: ["3d", "7d", "15d", "30d", "3m", "6m", "1y"], default: "30d" }, description: "库存经营参考周期；以最新完整条码报表截止日为终点，月年按日历滚动。日销和每日退货率取中位数；历史日期覆盖不完整时保留人工参考" },
+    { name: "referencePeriod", in: "query", schema: { type: "string", enum: ["3d", "7d", "15d", "30d", "3m", "6m", "1y"], default: "30d" }, description: "库存经营参考周期；以最新完整条码报表截止日为终点，月年按日历滚动。日销和每日退货率取高频均值：忽略0值，按出现天数取最高频R1与次高频R2，(R1+R2)/2，退货率先按整数百分比取整；历史日期覆盖不完整时保留人工参考" },
     { name: "q", in: "query", schema: { type: "string", maxLength: 100 }, description: "商品编码、货号、款号、名称或条码关键词" },
     ...["warehouseId", "skuId", "productId", "supplierId", "categoryId"].map((name) => ({ name, in: "query" as const, schema: { type: "string" as const, pattern: "^[1-9][0-9]*$" } })),
   );

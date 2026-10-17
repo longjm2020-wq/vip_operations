@@ -9,9 +9,10 @@ const format = (value: unknown, rate = false) =>
     { maximumFractionDigits: 4 },
   ) + (rate ? "%" : "");
 
-export function inventoryHasZeroMedianSales(row: Row): boolean {
+/** Report daily-sales reference is 0 although the period still has recorded sales. */
+export function inventoryHasZeroReferenceSales(row: Row): boolean {
   const daily = row.channelReference?.dailySales;
-  return daily?.method === "median" && daily.value != null &&
+  return daily?.method === "frequent" && daily.value != null &&
     Number(daily.value) === 0 && Number(row.channelReference?.salesQty) > 0;
 }
 
@@ -19,19 +20,19 @@ export function InventoryEstimateValue({ row, field }: {
   row: Row;
   field: "coverageDays" | "replenishmentQty";
 }) {
-  const value = row[field], zeroMedianSales = inventoryHasZeroMedianSales(row);
+  const value = row[field], zeroMedianSales = inventoryHasZeroReferenceSales(row);
   const text = value == null
     ? field === "coverageDays" && row.dailySales != null && Number(row.dailySales) === 0
-      ? zeroMedianSales ? "中位数为0" : "日销参考为0"
+      ? zeroMedianSales ? "高频均值为0" : "日销参考为0"
       : "暂无数据"
     : format(value) + (field === "coverageDays" ? "天" : "件");
   if (!zeroMedianSales || (field === "coverageDays" ? value != null : value == null || Number(value) !== 0)) return <>{text}</>;
   return <Tooltip trigger={["hover", "focus"]} title={<div>
     <div>期间销量合计：{format(row.channelReference.salesQty)} 件</div>
-    <div>日销中位数为0，期间仍有销量。</div>
+    <div>日销高频均值为0，期间仍有销量。</div>
     {field === "coverageDays"
       ? <div>可售数量不能除以0，因此暂不估算可售天数。</div>
-      : <div>补货按日销中位数 × 目标天数扣除可售与在途等数量计算；0件是当前公式结果，请结合期间销量核对备货需求。</div>}
+      : <div>补货按日销高频均值 × 目标天数扣除可售与在途等数量计算；0件是当前公式结果，请结合期间销量核对备货需求。</div>}
   </div>}><span tabIndex={0}>{text}</span></Tooltip>;
 }
 
@@ -49,7 +50,7 @@ export function InventoryReferenceValue({
   const value = isPeriodSales ? periodSales : row[field];
   const fromReport = isPeriodSales ? periodSales != null : result?.value != null;
   const needsReturnRate = field === "returnRate" || field === "estimatedReturns";
-  const zeroMedianSales = field === "dailySales" && inventoryHasZeroMedianSales(row);
+  const zeroMedianSales = field === "dailySales" && inventoryHasZeroReferenceSales(row);
   const window = reference?.window;
   const period = inventoryReferencePeriods.find(
     (item) => item.value === window?.period,
@@ -107,7 +108,7 @@ export function InventoryReferenceValue({
         <div>按本行条码计算，不跨 SKU 汇总。</div>
       </> : field === "estimatedReturns" ? (
         <>
-          <div>所选期间销量合计 × 每日退货率中位数</div>
+          <div>所选期间销量合计 × 退货率高频均值</div>
           <div>已提供销量记录 {result.samples} 天；缺失日期不补0。</div>
           <div>
             {format(result.salesQty)} × {format(result.returnRate, true)} ={" "}
@@ -119,20 +120,15 @@ export function InventoryReferenceValue({
         <>
           <div>
             有效记录 {result.samples} 天；
-            {result.method === "median" ? "中位数" : result.method === "average" || result.method === "mean" ? "平均值" : "参考值"}
+            {result.method === "frequent" ? "高频均值" : result.method === "average" || result.method === "mean" ? "平均值" : "参考值"}
           </div>
-          {result.method === "median" && <div>
-            {result.values.length > 1 ? "中间两值取均值" : "中间值"}：
-            {result.values
-              .map((value: number) => format(value, field === "returnRate"))
-              .join("、")}
-          </div>}
+          {result.method === "frequent" && <FrequentDetail result={result} rate={field === "returnRate"} />}
           {field === "dailySales" && <>
             <div>期间销量合计：{periodSales == null ? "销量数据不足" : `${format(periodSales)} 件`}</div>
             <div>已记录 {reference.recordedDays} 天；有效销量样本 {result.samples} 天。</div>
-            {zeroMedianSales && <div>期间有销量；每日销量的中位数为0，不表示期间没有成交。</div>}
+            {zeroMedianSales && <div>期间有销量；日销高频均值为0，不表示期间没有成交。</div>}
           </>}
-          <div>缺失日期和空单元格不补0；明确记录的0参与计算。</div>
+          <div>缺失日期和空单元格不补0；0值不参与高频排名。</div>
         </>
       )}
     </div>
@@ -155,4 +151,25 @@ export function InventoryReferenceValue({
       </span>
     </Tooltip>
   );
+}
+
+/** R1/R2 with their day counts and the (R1+R2)/2 result. */
+function FrequentDetail({ result, rate }: { result: Row; rate: boolean }) {
+  const values: number[] = result.values || [], frequencies: number[] = result.frequencies || [];
+  const show = (value: unknown) => format(value, rate);
+  if (!values.length)
+    return <div>所选期间没有非0的每日{rate ? "退货率" : "销量"}，参考为0{rate ? "%" : ""}。</div>;
+  return <>
+    {rate && <div>每日退货率先四舍五入为整数百分比再统计频次。</div>}
+    <div>
+      {values.map((value, index) => `R${index + 1} = ${show(value)}（${frequencies[index]} 天）`).join("；")}
+    </div>
+    <div>
+      {values.length > 1
+        ? `(${show(values[0])} + ${show(values[1])}) ÷ 2 = ${show(result.value)}`
+        : `只有一个非0值，直接采用 ${show(result.value)}`}
+      {rate && values.length > 1 ? "（四舍五入为整数百分比）" : ""}
+    </div>
+    <div>频次相同时取最近日期出现的值。</div>
+  </>;
 }

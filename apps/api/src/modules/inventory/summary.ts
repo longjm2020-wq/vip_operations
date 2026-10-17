@@ -159,7 +159,7 @@ async function inventorySummarySnapshot(q: Row, tx: Tx) {
       : 0,
     covered_days: first.window_covered_days,
     complete: false,
-    method: "median" as const,
+    method: "frequent" as const,
   };
   window.complete = !!source && window.days > 0 && window.covered_days === window.days;
   const totals = Object.fromEntries(

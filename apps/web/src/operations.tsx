@@ -1,7 +1,7 @@
 import { PageSearch, PageSearchInput } from "./page-search";
 import { Table, exportTableData } from "./data-table";
 import { InventoryImport } from "./inventory-import";
-import { InventoryEstimateValue, InventoryReferenceValue, inventoryHasZeroMedianSales } from "./inventory-reference-value";
+import { InventoryEstimateValue, InventoryReferenceValue, inventoryHasZeroReferenceSales } from "./inventory-reference-value";
 import { InventoryColumnPinning } from "./inventory-column-pinning";
 import {
   CompassProductImage,
@@ -293,9 +293,9 @@ function InventoryBalances() {
         )
           .map(
             ([key, label]) =>
-              `${label}：${row.channelReference?.[key]?.value != null ? (key === "estimatedReturns" ? "期间销量×退货率中位数" : row.channelReference[key].method === "median" ? "罗盘中位数" : "罗盘参考值") : row[key] != null ? "人工参考" : "暂无数据"}`,
+              `${label}：${row.channelReference?.[key]?.value != null ? (key === "estimatedReturns" ? "期间销量×退货率高频均值" : row.channelReference[key].method === "frequent" ? "罗盘高频均值" : "罗盘参考值") : row[key] != null ? "人工参考" : "暂无数据"}`,
           ),
-          ...(inventoryHasZeroMedianSales(row) ? ["期间有销量，日销中位数为0；可售天数暂不估算，补货数量为当前中位数公式结果"] : []),
+          ...(inventoryHasZeroReferenceSales(row) ? ["期间有销量，日销高频均值为0；可售天数暂不估算，补货数量为当前高频均值公式结果"] : []),
         ].join("；")
       : "库存总计；经营参考不汇总",
   });
@@ -471,8 +471,10 @@ function InventoryBalances() {
                 {count(q.data.reportCoverage.total)} · {periodLabel} ·{" "}
                 {referenceWindow.startDate ?? "—"} —{" "}
                 {referenceWindow.endDate ?? "—"} · 报表覆盖{" "}
-                {referenceWindow.coveredDays} / {referenceWindow.days} 天 ·
-                中位数
+                {referenceWindow.coveredDays} / {referenceWindow.days} 天 ·{" "}
+                <span title="渠道日销与退货率：忽略0值，取出现天数最多的前两个值求平均 (R1+R2)÷2；退货率按整数百分比统计">
+                  高频均值
+                </span>
                 {!referenceWindow.complete && (
                   <span className="inventory-reference-incomplete">
                     {" "}
