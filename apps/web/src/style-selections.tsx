@@ -38,6 +38,7 @@ import { SelectionCollections } from "./selection-collections";
 import { CollectionStockEditor } from "./selection-collection-stock";
 import { SelectionPhotoQr } from "./selection-photo-qr";
 import { SelectionFilterPanel } from "./selection-filter-panel";
+import { shouldAdoptSharedView } from "./selection-shared-view";
 import type { SelectionView } from "../../../packages/contracts/src/selection-view";
 import type { CollectionStock } from "../../../packages/contracts/src/selection-collection";
 import { selectionImageLinks, invalidSelectionImage } from "./selection-image-links";
@@ -328,7 +329,7 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
   const canAddField = useCan("selection.read") && !accessLost;
   const { message } = App.useApp();
   const addFieldRef=useRef<{add:()=>void}>(null);
-  const { columns, fixedColumns, columnGroups, columnGroupId, searchText, columnFilters, columnSort, followShared, groupBy, sort, direction, rowHeight, pageSize, page } = layout.preferences!;
+  const { columns, fixedColumns, columnGroups, columnGroupId, searchText, columnFilters, columnSort, followShared, sharedFilterOptOutRevision, groupBy, sort, direction, rowHeight, pageSize, page } = layout.preferences!;
   const { setColumns, setVisible, setFixedColumns, setColumnGroups, setColumnGroupId, setSearchText, setColumnFilters, setColumnSort, setFollowShared, setGroupBy, setSort, setDirection, setRowHeight, setPageSize, setPage } = layout;
   const visible = useMemo(() => columns.filter(column => !column.deleted && !layout.preferences!.hiddenColumns.includes(column.key)).map(column => column.key), [columns, layout.preferences!.hiddenColumns]);
   const [columnTabVisit, setColumnTabVisit] = useState(0);
@@ -442,12 +443,20 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
   }
   const sharedView = useQuery({ queryKey: ["selection-shared-view"], queryFn: () => api("/style-selections/shared-view"), refetchInterval: 10000 });
   const sharedSnapshot = JSON.stringify(sharedView.data?.data);
+  // A newly published shared view reaches everyone, including users who earlier switched to personal filters.
   useEffect(() => {
-    if (!followShared || filterColumn || !sharedView.data?.data) return;
+    const shared = sharedView.data?.data;
+    if (filterColumn || !shared || !shouldAdoptSharedView(shared.revision || 0, followShared, sharedFilterOptOutRevision)) return;
+    if (!followShared) setFollowShared(true);
     const removed=new Set(columns.filter(column=>column.deleted).map(column=>column.key));
-    setColumnFilters(Object.fromEntries(Object.entries(sharedView.data.data.view.filters as SelectionFilters).filter(([key])=>!removed.has(key))));
-    const nextSort=sharedView.data.data.view.sort;setColumnSort(nextSort && removed.has(nextSort.key)?null:nextSort);
-  }, [sharedSnapshot, followShared, filterColumn, columns]);
+    setColumnFilters(Object.fromEntries(Object.entries(shared.view.filters as SelectionFilters).filter(([key])=>!removed.has(key))));
+    const nextSort=shared.view.sort;setColumnSort(nextSort && removed.has(nextSort.key)?null:nextSort);
+  }, [sharedSnapshot, followShared, sharedFilterOptOutRevision, filterColumn, columns]);
+  /** Switch to personal filters until a newer shared view is published. */
+  const leaveSharedView = (revision = 0) => {
+    layout.update("sharedFilterOptOutRevision", Math.max(revision, sharedView.data?.data?.revision || 0));
+    setFollowShared(false);
+  };
   const snapshot = useMemo(() => JSON.stringify(data.data?.data || []), [data.data]);
   useEffect(() => {
     if ([401,403,404,410].includes((data.error as { status?:number } | null)?.status || 0)) setAccessLost(true);
@@ -1391,10 +1400,11 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
         queryClient.setQueryData(["selection-shared-view"], result);
       } catch (error) { void queryClient.invalidateQueries({ queryKey: ["selection-shared-view"] }); throw error; }
     }
-    setFollowShared(shared); setColumnFilters(view.filters); setColumnSort(view.sort); setFilterColumn(null);
+    if (shared) setFollowShared(true); else leaveSharedView(revision);
+    setColumnFilters(view.filters); setColumnSort(view.sort); setFilterColumn(null);
     setEditSession(null); setFilterRefresh(value=>value+1);
   };
-  const columnFilterEditor = (column: Column) => <SelectionFilterPanel key={`${column.key}:${filterSession}`} column={column} columns={columns} rows={fieldViewRows} view={{ filters: columnFilters, sort: columnSort }} shared={followShared && (sharedView.data?.data?.revision || 0) > 0} canShare={canEdit && !!sharedView.data?.data} onCancel={() => setFilterColumn(null)} onApply={applyView} />;
+  const columnFilterEditor = (column: Column) => <SelectionFilterPanel key={`${column.key}:${filterSession}`} column={column} columns={columns} rows={fieldViewRows} view={{ filters: columnFilters, sort: columnSort }} shared={followShared && (sharedView.data?.data?.revision || 0) > 0} canShare={canEdit && !!sharedView.data?.data && !sharedView.data.data.restricted} shareRestricted={!!sharedView.data?.data?.restricted} onCancel={() => setFilterColumn(null)} onApply={applyView} />;
   const editorRow = filteredRows.find((row) => row._key === cellAnchor?.rowKey);
   const editorColumn = activeColumns.find((column) => column.key === cellAnchor?.columnKey);
   const editorEnabled = !!editorRow && !!editorColumn && !imageKeys.has(editorColumn.key) && editorColumn.type!=="image";
@@ -1501,7 +1511,7 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
     {imageSearchRowId !== null && <Alert className="selection-image-search-location" type="info" title="图片查找：当前显示所选款式，清除后恢复原搜索与列筛选。" action={<Button size="small" onClick={()=>{setImageSearchRowId(null);setPage(1);}}>清除图片查找</Button>}/>}
     {archive && <SelectionFixedOrder open={fixedOrderOpen} onClose={()=>setFixedOrderOpen(false)} onApplied={async()=>{
       tableHistory.clear();
-      setFollowShared(false);setColumnSort(null);setGroupBy("none");setSort("sortOrder");setDirection("asc");setPage(1);
+      leaveSharedView();setColumnSort(null);setGroupBy("none");setSort("sortOrder");setDirection("asc");setPage(1);
       setSelectedRows([]);setSelectedCells(new Set());setCellAnchor(null);setFocusedCell(null);
       appliedSnapshot.current="";
       await queryClient.invalidateQueries({queryKey:["style-selections"]});

@@ -245,6 +245,10 @@ try {
 
   await setProtection({ ...defaultProtection, enabled: true, regions: [{ id: randomUUID(), name: "unchanged deny", scope: "columns", rowIds: [], columnKeys: [publicText], users: { [owner.actor.id]: "edit" }, others: "deny" }] });
   assert.equal((await service.photoDetail(other, row.id)).extraFields[publicText], "");
+  // Non-admins are told shared filters are reserved so the UI can disable the sharing switch.
+  const reserved = await service.sharedView(other) as Row;
+  assert.equal(reserved.revision, 0);
+  assert.equal(reserved.restricted, true);
   await rejected(() => service.write(fresh(other), { extraFields: { [publicText]: "no bypass" } }, row.id));
   await setProtection({ ...defaultProtection, autoHide: true, autoHideRegions: [{ id: randomUUID(), name: "public field hiding", scope: "columns", rowIds: [], columnKeys: [publicText] }] });
   assert.equal((await service.photoDetail(other, row.id)).extraFields[publicText], "");
