@@ -1531,7 +1531,8 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
         if (!event.currentTarget.contains(event.target as Node) || event.nativeEvent.isComposing) return;
         if (event.key === "Escape") {
           setCopiedCells(new Set()); setCellTextEditing(false);
-          if (selectedColumnKeys.length) { setSelectedColumnKeys([]); columnSelectionAnchor.current = null; setSelectedCells(new Set()); }
+          // Escape during a column/row reorder drag only cancels the drag and keeps the selection.
+          if (selectedColumnKeys.length && !shiftDrag.current) { setSelectedColumnKeys([]); columnSelectionAnchor.current = null; setSelectedCells(new Set()); }
           return;
         }
         if (cellTextEditing && event.target instanceof HTMLElement && event.target.closest("input:not([type=checkbox]),textarea")) return;
