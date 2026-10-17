@@ -1,7 +1,7 @@
 import { PageSearch, PageSearchInput } from "./page-search";
 import { Table, exportTableData } from "./data-table";
 import { InventoryImport } from "./inventory-import";
-import { InventoryEstimateValue, InventoryReferenceValue, inventoryHasZeroMedianSales } from "./inventory-reference-value";
+import { InventoryEstimateValue, InventoryReferenceValue, inventoryEffectiveDailySales, inventoryHasZeroReferenceSales } from "./inventory-reference-value";
 import { InventoryColumnPinning } from "./inventory-column-pinning";
 import {
   CompassProductImage,
@@ -275,7 +275,20 @@ function InventoryBalances() {
   const periodLabel = inventoryReferencePeriods.find(
     (item) => item.value === referencePeriod,
   )!.label;
+  const referenceMethodText = (row: Row, key: "dailySales" | "returnRate" | "estimatedReturns") => {
+    const reference = row.channelReference, daily = reference.dailySales, rate = reference.returnRate;
+    if (key === "estimatedReturns") return rate?.fallback ? "期间销量×期间退货率（退货率样本不足）" : "期间销量×退货率高频均值";
+    if (reference[key].method !== "frequent") return "罗盘参考值";
+    if (key === "returnRate")
+      return rate.fallback ? `样本不足（非0退货率${rate.nonZeroSamples}天<${rate.minSampleDays}天），期间退货件数÷期间销量` : rate.sampleInsufficient ? "罗盘高频均值（样本不足，缺少完整每日数据）" : "罗盘高频均值";
+    return daily.sampleInsufficient
+      ? `罗盘高频均值；样本不足（有销量${daily.nonZeroSamples}天<${daily.minSampleDays}天），可售天数和补货按期间平均日销`
+      : `罗盘高频均值；可售天数和补货按高频均值×动销占比`;
+  };
+  const percent = (value: unknown) => value == null ? null : Number((Number(value) * 100).toFixed(4));
   const exportReference = (row?: Row) => ({
+    effectiveDailySalesExport: row ? (inventoryEffectiveDailySales(row) ?? null) : "—",
+    sellThroughRatioExport: row ? percent(row.channelReference?.dailySales?.sellThroughRatio) : "—",
     referencePeriodLabel: periodLabel,
     referenceStartDate: referenceWindow?.startDate ?? null,
     referenceEndDate: referenceWindow?.endDate ?? null,
@@ -293,9 +306,9 @@ function InventoryBalances() {
         )
           .map(
             ([key, label]) =>
-              `${label}：${row.channelReference?.[key]?.value != null ? (key === "estimatedReturns" ? "期间销量×退货率中位数" : row.channelReference[key].method === "median" ? "罗盘中位数" : "罗盘参考值") : row[key] != null ? "人工参考" : "暂无数据"}`,
+              `${label}：${row.channelReference?.[key]?.value != null ? referenceMethodText(row, key) : row[key] != null ? "人工参考" : "暂无数据"}`,
           ),
-          ...(inventoryHasZeroMedianSales(row) ? ["期间有销量，日销中位数为0；可售天数暂不估算，补货数量为当前中位数公式结果"] : []),
+          ...(inventoryHasZeroReferenceSales(row) ? ["期间有销量，日销高频均值为0；可售天数暂不估算，补货数量为当前高频均值公式结果"] : []),
         ].join("；")
       : "库存总计；经营参考不汇总",
   });
@@ -414,6 +427,14 @@ function InventoryBalances() {
                         dataIndex: "referenceExpectedDays",
                       },
                       {
+                        title: "库存计算日销（可售天数/补货）",
+                        dataIndex: "effectiveDailySalesExport",
+                      },
+                      {
+                        title: "动销天数占比(%)",
+                        dataIndex: "sellThroughRatioExport",
+                      },
+                      {
                         title: "参考数据口径",
                         dataIndex: "referenceCalculation",
                       },
@@ -471,8 +492,10 @@ function InventoryBalances() {
                 {count(q.data.reportCoverage.total)} · {periodLabel} ·{" "}
                 {referenceWindow.startDate ?? "—"} —{" "}
                 {referenceWindow.endDate ?? "—"} · 报表覆盖{" "}
-                {referenceWindow.coveredDays} / {referenceWindow.days} 天 ·
-                中位数
+                {referenceWindow.coveredDays} / {referenceWindow.days} 天 ·{" "}
+                <span title="渠道日销与退货率：忽略0值，取出现天数最多的前两个值求平均 (R1+R2)÷2；退货率按整数百分比统计。可售天数和补货按 高频均值 × 动销天数占比 计算；有销量少于5天时按期间平均日销">
+                  高频均值
+                </span>
                 {!referenceWindow.complete && (
                   <span className="inventory-reference-incomplete">
                     {" "}
