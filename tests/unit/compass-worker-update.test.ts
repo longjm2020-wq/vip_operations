@@ -31,7 +31,7 @@ import { processCompassLogin, processCompassUpdate, scheduleCompassUpdate, check
 const state = { cookies: [], origins: [{ origin: "https://vis.vip.com", localStorage: [] }] };
 let authorized: boolean, jobStatus: string, claim: string, dimensions: CompassDimension[], version: number, enabled: boolean;
 let sessionStatus: string, lastScheduled: Date | null, hour: number, today: string, scheduledEnabled: boolean;
-let hasQueued: boolean, loginQueued: boolean, loginAlive: boolean, actionPending: boolean, transactionCount: number, revokeOnSave: boolean;
+let hasQueued: boolean, loginQueued: boolean, loginAlive: boolean, actionPending: boolean, revokeOnSave: boolean;
 let tasks: Map<string, CompassDimension>;
 let draftState: Record<string, any> | undefined;
 let loginFrameId: string | null, loginAction: Record<string, any>;
@@ -65,12 +65,11 @@ beforeEach(() => {
   helpers.ready = true;
   authorized = true; jobStatus = "QUEUED"; claim = ""; dimensions = []; version = 7; enabled = true; sessionStatus = "READY";
   lastScheduled = null; hour = 8; today = "2026-10-11"; scheduledEnabled = true;
-  hasQueued = true; loginQueued = false; loginAlive = true; actionPending = true; transactionCount = 0; revokeOnSave = false;
+  hasQueued = true; loginQueued = false; loginAlive = true; actionPending = true; revokeOnSave = false;
   tasks = new Map();
   draftState = undefined;
   loginFrameId = null; loginAction = { kind: "CHECK" };
   database.db.$transaction.mockImplementation(async fn => {
-    transactionCount++;
     return fn(database.db);
   });
   database.rows.mockResolvedValue([]);

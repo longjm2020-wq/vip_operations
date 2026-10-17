@@ -124,8 +124,12 @@ const dataRows = (page: Page) =>
 const headers = (page: Page) => table(page).getByRole("columnheader");
 const header = (page: Page, name: string) =>
   table(page).getByRole("columnheader", { name, exact: true });
-const dialog = (page: Page) =>
-  page.getByRole("dialog", { name: "固定多列", exact: true });
+const menu = (page: Page) =>
+  page.locator(".inventory-column-pinning-menu").getByRole("menu");
+const menuItem = (page: Page, name: string) =>
+  menu(page)
+    .getByRole("menuitem")
+    .filter({ hasText: new RegExp(`^${name}$`) });
 const summary = (page: Page) =>
   page.getByRole("row", { name: "当前筛选库存总计", exact: true });
 
@@ -153,22 +157,25 @@ async function x(locator: Locator) {
   return box!.x;
 }
 
-async function open(page: Page, name = "款号") {
-  await header(page, name).click({ button: "right" });
-  await expect(dialog(page)).toBeVisible();
+async function selectedNames(page: Page) {
+  return headers(page).evaluateAll((elements) =>
+    elements
+      .filter((element) => element.getAttribute("aria-selected") === "true")
+      .map((element) => element.textContent?.trim() ?? ""),
+  );
 }
 
+/** Click the first column, Ctrl/Cmd+click the rest, then pin them from the header context menu. */
 async function selectPins(page: Page, names: string[]) {
-  await open(page);
-  const panel = dialog(page);
-  for (const checkbox of await panel.getByRole("checkbox").all()) {
-    const label = await checkbox.getAttribute("aria-label");
-    await checkbox.setChecked(
-      names.includes(label?.replace(/^固定/, "") ?? ""),
-    );
-  }
-  await panel.getByRole("button", { name: "应用固定", exact: true }).click();
-  await expect(panel).toHaveCount(0);
+  await header(page, names[0]).click();
+  for (const name of names.slice(1))
+    await header(page, name).click({ modifiers: ["ControlOrMeta"] });
+  await header(page, names[0]).click({ button: "right" });
+  await menuItem(
+    page,
+    names.length > 1 ? `固定所选 ${names.length} 列` : "固定此列",
+  ).click();
+  await expect(menu(page)).toBeHidden();
 }
 
 async function fixedNames(page: Page) {
@@ -179,7 +186,7 @@ async function fixedNames(page: Page) {
   );
 }
 
-test("只读账号可通过右键固定非连续多列，横滚时表头、数据和总计保持对齐", async ({
+test("Ctrl/⌘ 跳选非连续多列后右键固定，横滚时表头、数据和总计保持对齐", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
@@ -191,12 +198,25 @@ test("只读账号可通过右键固定非连续多列，横滚时表头、数�
     page.getByRole("button", { name: "导入", exact: true }),
   ).toHaveCount(0);
 
-  // Body cells and headers provide the same exclusive context-menu entry.
+  // Right-clicking an unselected body cell acts on that single column.
   const stock = await cells(page, "在仓库存数");
   await stock.body.click({ button: "right" });
-  await expect(dialog(page)).toBeVisible();
-  await dialog(page).getByRole("button", { name: "取消", exact: true }).click();
-  await selectPins(page, ["在仓库存数", "款号"]);
+  await expect(menuItem(page, "固定此列")).toBeVisible();
+  await expect(page.getByRole("checkbox")).toHaveCount(0);
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  expect(await selectedNames(page)).toEqual(["在仓库存数"]);
+  await page.keyboard.press("Escape");
+  await expect(menu(page)).toBeHidden();
+
+  await header(page, "在仓库存数").click();
+  await header(page, "款号").click({ modifiers: ["ControlOrMeta"] });
+  expect(await selectedNames(page)).toEqual(["款号", "在仓库存数"]);
+  await header(page, "在仓库存数").click({ button: "right" });
+  await expect(menuItem(page, "固定所选 2 列")).toBeVisible();
+  await expect(menuItem(page, "取消所有固定列")).toHaveCount(0);
+  await menuItem(page, "固定所选 2 列").click();
+  await expect(menu(page)).toBeHidden();
+  expect(await selectedNames(page)).toEqual([]);
   expect(await fixedNames(page)).toEqual(["款号", "在仓库存数"]);
   expect(
     (await headers(page).allTextContents())
@@ -235,39 +255,64 @@ test("只读账号可通过右键固定非连续多列，横滚时表头、数�
   expect(state.writes).toEqual([]);
 });
 
-test("右键草稿取消不改变列，清空固定后恢复原列顺序", async ({ page }) => {
+test("Shift 连续选列后右键固定，可单列取消或取消所有固定列，Esc 与空白点击清除选择", async ({
+  page,
+}) => {
   const state = await fixture(page);
-  await selectPins(page, ["款号", "在仓库存数"]);
-  await open(page);
-  await dialog(page)
-    .getByRole("checkbox", { name: "固定颜色", exact: true })
-    .check();
-  await dialog(page)
-    .getByRole("checkbox", { name: "固定款号", exact: true })
-    .uncheck();
-  await dialog(page).getByRole("button", { name: "取消", exact: true }).click();
-  expect(await fixedNames(page)).toEqual(["款号", "在仓库存数"]);
-  await open(page);
-  await expect(
-    dialog(page).getByRole("checkbox", { name: "固定款号", exact: true }),
-  ).toBeChecked();
-  await expect(
-    dialog(page).getByRole("checkbox", { name: "固定颜色", exact: true }),
-  ).not.toBeChecked();
-  await dialog(page)
-    .getByRole("checkbox", { name: "固定款号", exact: true })
-    .focus();
-  await page.keyboard.press("Tab");
-  await expect(dialog(page)).toBeVisible();
+  await header(page, "颜色").click();
+  await header(page, "在仓库存数").click({ modifiers: ["Shift"] });
+  expect(await selectedNames(page)).toEqual(["颜色", "尺码", "在仓库存数"]);
+  await page.keyboard.press("Escape");
+  expect(await selectedNames(page)).toEqual([]);
+
+  await header(page, "颜色").click();
+  await header(page, "在仓库存数").click({ modifiers: ["Shift"] });
+  await dataRows(page).first().locator("td").first().click();
+  expect(await selectedNames(page)).toEqual([]);
+
+  await header(page, "在仓库存数").click();
+  await header(page, "颜色").click({ modifiers: ["Shift"] });
+  await header(page, "尺码").click({ button: "right" });
+  await expect(menuItem(page, "固定所选 3 列")).toBeVisible();
   await page.screenshot({
-    path: ".local/inventory-column-pinning-preview-20261016.png",
+    path: ".local/inventory-column-pinning-preview-20261017.png",
     animations: "disabled",
     caret: "hide",
   });
-  await dialog(page)
-    .getByRole("button", { name: "取消所有固定列", exact: true })
-    .click();
-  await expect(dialog(page)).toHaveCount(0);
+  await menuItem(page, "固定所选 3 列").click();
+  expect(await fixedNames(page)).toEqual(["颜色", "尺码", "在仓库存数"]);
+
+  // Right-clicking an unselected header acts only on that column.
+  await header(page, "款号").click();
+  await header(page, "货号").click({ modifiers: ["ControlOrMeta"] });
+  await header(page, "商品编码").click({ button: "right" });
+  expect(await selectedNames(page)).toEqual(["商品编码"]);
+  await menuItem(page, "固定此列").click();
+  expect(await fixedNames(page)).toEqual([
+    "商品编码",
+    "颜色",
+    "尺码",
+    "在仓库存数",
+  ]);
+
+  await header(page, "尺码").click({ button: "right" });
+  await expect(menuItem(page, "固定此列")).toHaveCount(0);
+  await menuItem(page, "取消固定此列").click();
+  expect(await fixedNames(page)).toEqual(["商品编码", "颜色", "在仓库存数"]);
+
+  await header(page, "颜色").click();
+  await header(page, "采购在途数").click({ modifiers: ["ControlOrMeta"] });
+  await header(page, "颜色").click({ button: "right" });
+  await expect(menuItem(page, "固定所选 2 列")).toBeVisible();
+  await expect(menuItem(page, "取消固定所选 2 列")).toBeVisible();
+  await menuItem(page, "取消固定所选 2 列").click();
+  expect(await fixedNames(page)).toEqual(["商品编码", "在仓库存数"]);
+
+  await page.reload();
+  await expect(dataRows(page)).toHaveCount(2);
+  expect(await fixedNames(page)).toEqual(["商品编码", "在仓库存数"]);
+  await (await cells(page, "颜色")).body.click({ button: "right" });
+  await menuItem(page, "取消所有固定列").click();
   expect(await fixedNames(page)).toEqual([]);
   expect(
     (await headers(page).allTextContents()).map((text) => text.trim()),
@@ -312,24 +357,23 @@ test("三个汇总维度分别记住固定列，刷新恢复且切换账号隔�
   expect(state.writes).toEqual([]);
 });
 
-test("固定总宽超出窗口时阻止应用，已保存固定在窄窗口暂时停用并可恢复", async ({
+test("固定总宽超出窗口时阻止固定，已保存固定在窄窗口暂时停用并可恢复", async ({
   page,
 }) => {
   const state = await fixture(page);
-  await open(page);
-  for (const checkbox of await dialog(page).getByRole("checkbox").all())
-    await checkbox.check();
-  await dialog(page)
-    .getByRole("button", { name: "应用固定", exact: true })
-    .click();
+  await header(page, "图片").click();
+  await header(page, "补货建议").click({ modifiers: ["Shift"] });
+  expect(await selectedNames(page)).toEqual(allHeaders);
+  await header(page, "款号").click({ button: "right" });
+  await menuItem(page, `固定所选 ${allHeaders.length} 列`).click();
   await expect(
-    page.getByText("固定列总宽超过当前可视区域，请减少勾选列后再应用", {
+    page.getByText("固定列总宽超过当前可视区域，请减少选中列后再固定", {
       exact: true,
     }),
   ).toBeVisible();
-  await expect(dialog(page)).toBeVisible();
   expect(await fixedNames(page)).toEqual([]);
-  await dialog(page).getByRole("button", { name: "取消", exact: true }).click();
+  expect(await selectedNames(page)).toEqual(allHeaders);
+  await page.keyboard.press("Escape");
   await selectPins(page, [
     "款号",
     "货号",
@@ -357,17 +401,11 @@ test("固定总宽超出窗口时阻止应用，已保存固定在窄窗口暂�
   await scrollBody.evaluate((element) => {
     element.scrollLeft = 0;
   });
-  await open(page);
-  await expect(
-    dialog(page).getByText("窗口较窄，固定暂时停用；放大窗口或减少固定列", {
-      exact: true,
-    }),
-  ).toBeVisible();
-  await expect(
-    dialog(page).getByRole("checkbox", { name: "固定颜色", exact: true }),
-  ).toBeChecked();
+  await header(page, "颜色").click({ button: "right" });
+  await expect(menuItem(page, "窗口较窄，固定暂时停用")).toBeVisible();
+  await expect(menuItem(page, "取消固定此列")).toBeVisible();
   await page.keyboard.press("Escape");
-  await expect(dialog(page)).toHaveCount(0);
+  await expect(menu(page)).toBeHidden();
   await page.setViewportSize({ width: 1440, height: 1000 });
   await expect
     .poll(() => fixedNames(page))

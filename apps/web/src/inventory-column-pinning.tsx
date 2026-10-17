@@ -1,8 +1,20 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
-import { App, Button, Checkbox, Dropdown, type TableProps } from "antd";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type MouseEvent,
+  type ReactNode,
+} from "react";
+import { App, Dropdown, type MenuProps, type TableProps } from "antd";
 import { PushpinOutlined } from "@ant-design/icons";
 import type { InventoryDimension } from "../../../packages/contracts/src/inventory-summary";
 import { useUser, type Row } from "./shared";
+import {
+  columnMenuTargets,
+  nextColumnSelection,
+  nextPinnedColumns,
+  type ColumnSelection,
+} from "./inventory-column-selection";
 
 type Columns = NonNullable<TableProps<Row>["columns"]>;
 type Props = {
@@ -10,6 +22,9 @@ type Props = {
   columns: Columns;
   children: (columns: Columns) => ReactNode;
 };
+
+const headerHint =
+  "单击选中列；Shift+单击连续选择，Ctrl（Mac 为 ⌘）+单击跳选；右键固定或取消固定";
 
 function columnKey(column: Columns[number]) {
   return "dataIndex" in column ? String(column.dataIndex) : String(column.key);
@@ -48,8 +63,13 @@ function InventoryColumnPinningState({
   const [pinned, setPinned] = useState(() =>
     readPinnedColumns(storageKey, columns),
   );
-  const [draft, setDraft] = useState(pinned);
-  const [open, setOpen] = useState(false);
+  const [selection, setSelection] = useState<ColumnSelection>({
+    selected: [],
+    anchor: null,
+  });
+  // Columns the open context menu acts on; null keeps the menu closed.
+  const [menuTargets, setMenuTargets] = useState<string[] | null>(null);
+  const pendingTargets = useRef<string[] | null>(null);
   const surface = useRef<HTMLDivElement>(null);
   const [viewWidth, setViewWidth] = useState(0);
   useEffect(() => {
@@ -60,6 +80,30 @@ function InventoryColumnPinningState({
     observer.observe(surface.current);
     return () => observer.disconnect();
   }, []);
+  // A plain click outside the column headers or pressing Esc clears the selection.
+  useEffect(() => {
+    const clear = () => setSelection({ selected: [], anchor: null });
+    const onMouseDown = (event: globalThis.MouseEvent) => {
+      if (event.button !== 0) return;
+      const target = event.target as Element | null;
+      if (
+        target?.closest?.(".inventory-column-pinning-menu") ||
+        (surface.current?.contains(target) && target?.closest?.("thead th"))
+      )
+        return;
+      clear();
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") clear();
+    };
+    document.addEventListener("mousedown", onMouseDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onMouseDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, []);
+  const tableOrder = columns.map(columnKey);
   const fixedWidth = columns.reduce(
     (width, column) =>
       width +
@@ -70,21 +114,54 @@ function InventoryColumnPinningState({
   const tooNarrow =
     viewWidth > 0 &&
     fixedWidth > viewWidth - (pinned.length < columns.length ? 140 : 0);
-  const arranged = [
+  const ordered = [
     ...columns.filter((column) => pinned.includes(columnKey(column))),
     ...columns.filter((column) => !pinned.includes(columnKey(column))),
-  ].map((column) => ({
-    ...column,
-    key: columnKey(column),
-    // Fixed columns need explicit widths so headers, rows and totals share offsets.
-    width: column.width ?? 140,
-    fixed:
-      !tooNarrow && pinned.includes(columnKey(column))
-        ? ("left" as const)
-        : undefined,
-  }));
-  const apply = (keys: string[]) => {
-    const next = columns.map(columnKey).filter((key) => keys.includes(key));
+  ];
+  const displayOrder = ordered.map(columnKey);
+  const selected = selection.selected.filter((key) =>
+    displayOrder.includes(key),
+  );
+  const openMenuFor = (key: string) => {
+    const targets = columnMenuTargets(displayOrder, selected, key);
+    // Right-clicking an unselected column makes it the visible single selection.
+    if (!selected.includes(key)) setSelection({ selected: [key], anchor: key });
+    pendingTargets.current = targets;
+  };
+  const arranged = ordered.map((column) => {
+    const key = columnKey(column),
+      isSelected = selected.includes(key);
+    return {
+      ...column,
+      key,
+      // Fixed columns need explicit widths so headers, rows and totals share offsets.
+      width: column.width ?? 140,
+      fixed: !tooNarrow && pinned.includes(key) ? ("left" as const) : undefined,
+      onHeaderCell: () => ({
+        className: isSelected ? "inventory-column-selected" : undefined,
+        "aria-selected": isSelected,
+        title: headerHint,
+        onMouseDown: (event: MouseEvent) => {
+          // Shift+click would otherwise select header text instead of columns.
+          if (event.shiftKey || event.ctrlKey || event.metaKey)
+            event.preventDefault();
+        },
+        onClick: (event: MouseEvent) =>
+          setSelection((current) =>
+            nextColumnSelection(displayOrder, current, key, {
+              shift: event.shiftKey,
+              toggle: event.ctrlKey || event.metaKey,
+            }),
+          ),
+        onContextMenu: () => openMenuFor(key),
+      }),
+      onCell: () => ({
+        className: isSelected ? "inventory-column-selected" : undefined,
+        onContextMenu: () => openMenuFor(key),
+      }),
+    };
+  });
+  const save = (next: string[]) => {
     const fixedWidth = columns.reduce(
       (width, column) =>
         width +
@@ -94,90 +171,71 @@ function InventoryColumnPinningState({
     const viewWidth = surface.current?.clientWidth || 0;
     const remainingWidth = next.length < columns.length ? 140 : 0;
     if (next.length && viewWidth && fixedWidth > viewWidth - remainingWidth) {
-      message.warning("固定列总宽超过当前可视区域，请减少勾选列后再应用");
+      message.warning("固定列总宽超过当前可视区域，请减少选中列后再固定");
       return;
     }
     setPinned(next);
-    setDraft(next);
-    setOpen(false);
+    setSelection({ selected: [], anchor: null });
     try {
       localStorage.setItem(storageKey, JSON.stringify(next));
     } catch {
       message.warning("固定列已应用；浏览器无法保存设置，刷新后需重新选择");
     }
   };
+  const targets = menuTargets ?? [];
+  const many = targets.length > 1;
+  const items: MenuProps["items"] = [
+    ...(tooNarrow
+      ? [
+          {
+            key: "narrow",
+            label: "窗口较窄，固定暂时停用",
+            disabled: true,
+          },
+        ]
+      : []),
+    ...(targets.some((key) => !pinned.includes(key))
+      ? [
+          {
+            key: "pin",
+            icon: <PushpinOutlined />,
+            label: many ? `固定所选 ${targets.length} 列` : "固定此列",
+          },
+        ]
+      : []),
+    ...(targets.some((key) => pinned.includes(key))
+      ? [
+          {
+            key: "unpin",
+            label: many ? `取消固定所选 ${targets.length} 列` : "取消固定此列",
+          },
+        ]
+      : []),
+    ...(pinned.length
+      ? [{ key: "unpin-all", label: "取消所有固定列" }]
+      : []),
+  ];
   return (
     <Dropdown
       trigger={["contextMenu"]}
-      autoFocus
-      open={open}
+      open={!!menuTargets}
       destroyOnHidden
+      rootClassName="inventory-column-pinning-menu"
       onOpenChange={(next) => {
-        if (next) setDraft(pinned);
-        setOpen(next);
+        if (next && pendingTargets.current)
+          setMenuTargets(pendingTargets.current);
+        else if (!next) setMenuTargets(null);
+        pendingTargets.current = null;
       }}
-      popupRender={() => (
-        <div
-          className="inventory-column-pinning-menu"
-          role="dialog"
-          aria-label="固定多列"
-          tabIndex={-1}
-          onKeyDown={(event) => {
-            // Dropdown's menu shortcut would otherwise close this checkbox form on Tab.
-            if (event.key === "Tab") event.stopPropagation();
-            if (event.key === "Escape") {
-              event.stopPropagation();
-              setOpen(false);
-            }
-          }}
-        >
-          <div className="inventory-column-pinning-title">
-            <PushpinOutlined /> 固定多列
-          </div>
-          <div className="inventory-column-pinning-hint">
-            {tooNarrow
-              ? "窗口较窄，固定暂时停用；放大窗口或减少固定列"
-              : "勾选需要固定在左侧的列"}
-          </div>
-          <div className="inventory-column-pinning-options">
-            {columns.map((column) => {
-              const key = columnKey(column),
-                label = String(column.title);
-              return (
-                <Checkbox
-                  key={key}
-                  aria-label={`固定${label}`}
-                  checked={draft.includes(key)}
-                  onChange={(event) =>
-                    setDraft((current) =>
-                      event.target.checked
-                        ? [...current, key]
-                        : current.filter((item) => item !== key),
-                    )
-                  }
-                >
-                  {label}
-                </Checkbox>
-              );
-            })}
-          </div>
-          <div className="inventory-column-pinning-actions">
-            <Button
-              size="small"
-              disabled={!pinned.length}
-              onClick={() => apply([])}
-            >
-              取消所有固定列
-            </Button>
-            <Button size="small" onClick={() => setOpen(false)}>
-              取消
-            </Button>
-            <Button size="small" type="primary" onClick={() => apply(draft)}>
-              应用固定
-            </Button>
-          </div>
-        </div>
-      )}
+      menu={{
+        "aria-label": "固定列",
+        items,
+        onClick: ({ key }) => {
+          setMenuTargets(null);
+          if (key === "pin" || key === "unpin" || key === "unpin-all")
+            save(nextPinnedColumns(tableOrder, pinned, key, targets));
+        },
+      }}
     >
       <div ref={surface} className="inventory-column-pinning-surface">
         {children(arranged)}
