@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  columnClickModifiers,
   columnMenuTargets,
+  columnPinMenuEntries,
+  columnRange,
+  dragColumnSelection,
   nextColumnSelection,
   nextPinnedColumns,
-} from "../../apps/web/src/inventory-column-selection.js";
+} from "../../apps/web/src/table-column-selection.js";
 
 const order = ["image", "style", "article", "sku", "color", "size", "stock"];
 const none = { selected: [], anchor: null };
@@ -11,7 +15,7 @@ const plain = { shift: false, toggle: false },
   shift = { shift: true, toggle: false },
   toggle = { shift: false, toggle: true };
 
-describe("inventory column header selection", () => {
+describe("table column header selection", () => {
   it("selects a single column with a plain click and clears it on a second click", () => {
     const first = nextColumnSelection(order, none, "style", plain);
     expect(first).toEqual({ selected: ["style"], anchor: "style" });
@@ -70,7 +74,41 @@ describe("inventory column header selection", () => {
   });
 });
 
-describe("inventory column context menu targets and pinning", () => {
+describe("table column drag selection", () => {
+  it("selects the contiguous range between the pressed and hovered headers", () => {
+    expect(dragColumnSelection(order, ["image"], "sku", "style", false)).toEqual([
+      "style",
+      "article",
+      "sku",
+    ]);
+    expect(dragColumnSelection(order, [], "sku", "size", false)).toEqual([
+      "sku",
+      "color",
+      "size",
+    ]);
+  });
+
+  it("adds the dragged range to the earlier selection with Ctrl/Cmd", () => {
+    expect(dragColumnSelection(order, ["stock", "image"], "article", "sku", true)).toEqual([
+      "image",
+      "article",
+      "sku",
+      "stock",
+    ]);
+    expect(dragColumnSelection(order, ["stock"], "gone", "sku", true)).toEqual(["stock"]);
+  });
+
+  it("computes ranges and modifiers", () => {
+    expect(columnRange(order, "size", "sku")).toEqual(["sku", "color", "size"]);
+    expect(columnRange(order, "size", "gone")).toEqual([]);
+    expect(columnClickModifiers({ shiftKey: false, ctrlKey: false, metaKey: true })).toEqual({
+      shift: false,
+      toggle: true,
+    });
+  });
+});
+
+describe("table column context menu targets and pinning", () => {
   it("acts on the whole selection only when right-clicking a selected column", () => {
     expect(columnMenuTargets(order, ["stock", "style"], "stock")).toEqual([
       "style",
@@ -82,13 +120,46 @@ describe("inventory column context menu targets and pinning", () => {
   });
 
   it("keeps pinned columns in table order and supports unpinning", () => {
-    const pinned = nextPinnedColumns(order, ["stock"], "pin", ["color", "style"]);
-    expect(pinned).toEqual(["style", "color", "stock"]);
-    expect(nextPinnedColumns(order, pinned, "pin", ["style"])).toEqual(pinned);
-    expect(nextPinnedColumns(order, pinned, "unpin", ["color", "sku"])).toEqual([
+    const pinned = nextPinnedColumns(order, ["stock"], "fix-selected", [
+      "color",
       "style",
+    ]);
+    expect(pinned).toEqual(["style", "color", "stock"]);
+    expect(nextPinnedColumns(order, pinned, "fix-selected", ["style"])).toEqual(
+      pinned,
+    );
+    expect(
+      nextPinnedColumns(order, pinned, "unfix-selected", ["color", "sku"]),
+    ).toEqual(["style", "stock"]);
+    expect(nextPinnedColumns(order, pinned, "unfix-all", [])).toEqual([]);
+  });
+
+  it("toggles a single column with the fix-column entry", () => {
+    expect(nextPinnedColumns(order, ["stock"], "fix-column", ["image"])).toEqual([
+      "image",
       "stock",
     ]);
-    expect(nextPinnedColumns(order, pinned, "unpin-all", [])).toEqual([]);
+    expect(nextPinnedColumns(order, ["image", "stock"], "fix-column", ["stock"])).toEqual([
+      "image",
+    ]);
+  });
+
+  it("builds the shared pin menu entries", () => {
+    expect(columnPinMenuEntries(["style"], [])).toEqual([
+      { key: "fix-column", label: "固定此列" },
+    ]);
+    expect(columnPinMenuEntries(["style"], ["style"])).toEqual([
+      { key: "fix-column", label: "取消固定此列" },
+      { key: "unfix-all", label: "取消所有固定列" },
+    ]);
+    expect(columnPinMenuEntries(["style", "stock"], ["stock"]).map((entry) => entry.label)).toEqual([
+      "固定所选 2 列",
+      "取消固定所选 2 列",
+      "取消所有固定列",
+    ]);
+    expect(columnPinMenuEntries(["style", "stock"], ["style", "stock"]).map((entry) => entry.key)).toEqual([
+      "unfix-selected",
+      "unfix-all",
+    ]);
   });
 });

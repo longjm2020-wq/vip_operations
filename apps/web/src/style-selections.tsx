@@ -20,6 +20,7 @@ import { fieldTextLengthError } from "../../../packages/contracts/src/selection-
 import { selectionImageColorValues } from "../../../packages/contracts/src/selection-image-colors";
 import { useSelectionDrag } from "./selection-drag";
 import { reorderSelectionItems } from "./selection-reorder";
+import { columnPinMenuEntries, dragColumnSelection, nextColumnSelection } from "./table-column-selection";
 import { parseSelectionSearch,matchesSelectionSearch } from "./selection-style-search";
 import {resetFieldTypes,fieldValueError,fieldImages,defaultImageConfig,systemField,type SelectionField} from "./selection-field-types";
 import { selectionSystemPlaceholder, selectionSystemValue } from "./selection-system-fields";
@@ -390,7 +391,8 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
   const contextImage = useRef<{ url: string; name: string } | null>(null);
   const [contextCell, setContextCell] = useState<{ rowKey: string; columnKey: string; x: number; y: number } | null>(null);
   const [selectingCells, setSelectingCells] = useState(false);
-  const axisSelection = useRef<{ type: "row" | "column"; key: string } | null>(null);
+  // `base`/`toggled` mark a Ctrl/⌘ header drag that adds its range to the earlier column selection.
+  const axisSelection = useRef<{ type: "row" | "column"; key: string; base?: string[]; toggled?: string[] } | null>(null);
   const sheetRef = useRef<HTMLDivElement>(null);
   const imagePasteHandlers = useRef(new Map<string, ImagePasteHandler>());
   const findRoot = useRef<HTMLDivElement>(null);
@@ -595,10 +597,8 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
       { key: "copy-range-image", label: "复制选区为图片", disabled: rangeCopyBusy },
       { key: "copy-headers", label: "复制表头", disabled: rangeCopyBusy },
       { type: "divider" as const },
-      ...(keys.length > 1 ? [
-        ...(keys.some(key => !fixedOffsets.has(key)) ? [{ key: "fix-selected", label: `固定所选 ${keys.length} 列`, icon: <PushpinOutlined /> }] : []),
-        ...(keys.some(key => fixedOffsets.has(key)) ? [{ key: "unfix-selected", label: `取消固定所选 ${keys.length} 列` }] : []),
-      ] : [{ key: "fix-column", label: fixedOffsets.has(column.key) ? "取消固定此列" : "固定此列", icon: <PushpinOutlined /> }]),
+      ...columnPinMenuEntries(keys, [...fixedOffsets.keys()]).filter(entry => entry.key !== "unfix-all")
+        .map(entry => ({ ...entry, icon: entry.key === "unfix-selected" ? undefined : <PushpinOutlined /> })),
       ...(fixedColumns.length ? [{ key: "unfix-all", label: "取消所有固定列" }] : []),
       { type: "divider" as const },
       { key: "column-width", label: "设置列宽" },
@@ -968,6 +968,19 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
     if (chosenRows.length && chosenColumns.length) setCellAnchor({ rowKey: chosenRows[0]._key, columnKey: chosenColumns[0].key });
   };
   axisActions.current = selectAxis;
+  const selectColumns = (keys: readonly string[]) => {
+    const chosenColumns = activeColumns.filter(column => keys.includes(column.key));
+    const next = selectionAllCells(displayedRows, chosenColumns);
+    setSelectedCells(current => current.size === next.size && [...next].every(id => current.has(id)) ? current : next);
+    const columnKeys = chosenColumns.map(column => column.key);
+    setSelectedColumnKeys(current => current.length === columnKeys.length && current.every((key, index) => key === columnKeys[index]) ? current : columnKeys);
+    setSelectedRows([]);
+    setCellAnchor(displayedRows.length && chosenColumns.length ? { rowKey: displayedRows[0]._key, columnKey: chosenColumns[0].key } : null);
+  };
+  const dragAxis = (axis: { type: "row" | "column"; key: string; base?: string[]; toggled?: string[] }, key: string) => {
+    if (axis.type === "column" && axis.base) selectColumns(key === axis.key ? axis.toggled || [] : dragColumnSelection(activeColumns.map(column => column.key), axis.base, axis.key, key, true));
+    else selectAxis(axis.type, axis.key, key);
+  };
   const selectionDrag = useSelectionDrag(sheetRef, element => {
     const reorder = shiftDrag.current;
     if (reorder) {
@@ -978,7 +991,7 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
     const axis = axisSelection.current;
     if (axis) {
       const key = axis.type === "row" ? element.closest<HTMLElement>("tr[data-selection-row]")?.dataset.selectionRow : element.dataset.selectionColumn;
-      if (key) selectAxis(axis.type, axis.key, key);
+      if (key) dragAxis(axis, key);
     } else if (dragCellAnchor.current && element.dataset.selectionRow && element.dataset.selectionColumn) {
       selectRectangle(dragCellAnchor.current, { rowKey: element.dataset.selectionRow, columnKey: element.dataset.selectionColumn });
     }
@@ -998,6 +1011,16 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
     if (event.button !== 0) return;
     event.preventDefault(); event.currentTarget.focus({ preventScroll: true }); selectionDrag.stop();
     setCellTextEditing(false); setSelectingCells(false); setCellAnchor(null);
+    if (type === "column" && (event.ctrlKey || event.metaKey)) {
+      // Ctrl/⌘+click toggles one column, Ctrl/⌘+Shift adds a range, Ctrl/⌘+drag adds the dragged range.
+      shiftDrag.current = null;
+      const next = nextColumnSelection(activeColumns.map(column => column.key), { selected: selectedColumnKeys, anchor: columnSelectionAnchor.current }, key, { shift: event.shiftKey, toggle: true });
+      columnSelectionAnchor.current = next.anchor; selectColumns(next.selected);
+      if (event.shiftKey) { axisSelection.current = null; return; }
+      axisSelection.current = { type, key, base: selectedColumnKeys, toggled: next.selected };
+      selectionDrag.start(event, type);
+      return;
+    }
     const selected = type === "column" ? selectedColumnKeys : selectedRows;
     const groupDrag = selected.length > 1 && selected.includes(key);
     if(event.shiftKey || groupDrag){
@@ -1015,7 +1038,7 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
   const axisMouseEnter = (type: "row" | "column", key: string) => {
     if(shiftDrag.current)return;
     const anchor = axisSelection.current;
-    if (anchor?.type === type) selectAxis(type, anchor.key, key);
+    if (anchor?.type === type) dragAxis(anchor, key);
   };
   const nativeTextDrag = (event: React.MouseEvent<HTMLElement>, rowKey: string, columnKey: string, input: HTMLInputElement | HTMLTextAreaElement) => {
     nativeTextDragCleanup.current?.();
@@ -1113,10 +1136,15 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
       return;
     }
     const minRow = Math.min(...positions.map((item) => item.r)), maxRow = Math.max(...positions.map((item) => item.r)), minCol = Math.min(...positions.map((item) => item.c)), maxCol = Math.max(...positions.map((item) => item.c));
+    // Ctrl/⌘ column selections are not contiguous: copy just the chosen columns side by side.
+    const chosenRows = [...new Set(positions.map((item) => item.r))].sort((a, b) => a - b), chosenCols = [...new Set(positions.map((item) => item.c))].sort((a, b) => a - b);
+    const product = chosenRows.length * chosenCols.length === positions.length;
+    const rowIndexes = product ? chosenRows : Array.from({ length: maxRow - minRow + 1 }, (_, r) => minRow + r);
+    const colIndexes = product ? chosenCols : Array.from({ length: maxCol - minCol + 1 }, (_, c) => minCol + c);
     const text = positions.length === 1
       ? copyValue(displayedRows[minRow], activeColumns[minCol])
-      : Array.from({ length: maxRow - minRow + 1 }, (_, r) => Array.from({ length: maxCol - minCol + 1 }, (_, c) => {
-        const value = copyValue(displayedRows[minRow + r], activeColumns[minCol + c]);
+      : rowIndexes.map((r) => colIndexes.map((c) => {
+        const value = copyValue(displayedRows[r], activeColumns[c]);
         return /[\t\n\r"]/.test(value) ? '"' + value.replace(/"/g, '""') + '"' : value;
       }).join("\t")).join("\n");
     copiedSingleValue.current = positions.length === 1 ? text : null;
@@ -1491,7 +1519,11 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
         if (point) copyCells(event,point.rowKey,point.columnKey);
       }} onKeyDown={event => {
         if (!event.currentTarget.contains(event.target as Node) || event.nativeEvent.isComposing) return;
-        if (event.key === "Escape") { setCopiedCells(new Set()); setCellTextEditing(false); return; }
+        if (event.key === "Escape") {
+          setCopiedCells(new Set()); setCellTextEditing(false);
+          if (selectedColumnKeys.length) { setSelectedColumnKeys([]); columnSelectionAnchor.current = null; setSelectedCells(new Set()); }
+          return;
+        }
         if (cellTextEditing && event.target instanceof HTMLElement && event.target.closest("input:not([type=checkbox]),textarea")) return;
         if ((event.ctrlKey || event.metaKey) && event.shiftKey && !event.altKey && !cellTextEditing && ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.key) && !(event.target as HTMLElement).closest("button, a, .ant-select, input[type=checkbox]")) {
           event.preventDefault(); event.stopPropagation();
@@ -1510,7 +1542,7 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
           setSelectedCells(selectionAllCells(displayedRows, activeColumns)); setCellTextEditing(false); setSelectedColumnKeys([]); columnSelectionAnchor.current = null;
           setSelectingCells(false);
         }
-      }} aria-label={`${title || "选款登记"}在线智能表格`} style={{ width: activeColumns.reduce((width, column) => width + column.width, blankLayout?148:96) }}><colgroup><col style={{ width: 48 }} /><col style={{ width: 48 }} />{activeColumns.map((column) => <col key={column.key} style={{ width: column.width }} />)}{blankLayout && <col style={{width:52}}/>}</colgroup><thead><tr><th className="selection-check"><Checkbox aria-label="选择全部可见行" checked={!!displayedRows.length && displayedRows.every(row => selectedRowKeys.has(row._key))} indeterminate={displayedRows.some(row => selectedRowKeys.has(row._key)) && !displayedRows.every(row => selectedRowKeys.has(row._key))} onChange={(event) => setSelectedRows(current => event.target.checked ? [...new Set([...current, ...displayedRows.map(row => row._key)])] : current.filter(key => !pageRowKeys.has(key)))} /></th><th className="selection-index">#</th>{activeColumns.map((column) => <Dropdown key={column.key} trigger={["contextMenu"]} overlayStyle={{ zIndex: 1201 }} menu={{ "aria-label": `列操作：${column.label}`, items: columnMenuItems(column), onClick: ({ key }) => handleColumnAction(column.key, key) }}><th data-selection-column={column.key} data-column-group-active={selectedColumnGroup?.columnKeys.includes(column.key) || undefined} data-reorder-axis="column" data-reorder-key={column.key} data-reorder-target={shiftTarget==="column:"+column.key || undefined} data-column-selected={selectedColumnKeys.includes(column.key) || undefined} aria-selected={selectedColumnKeys.includes(column.key)} title="拖动或 Shift 点选多列；拖动已选多列可整组调序，Shift 拖动也可调序" tabIndex={0} aria-label={`选择整列：${column.label}`} onMouseDown={event => axisMouseDown(event, "column", column.key)} onMouseEnter={() => axisMouseEnter("column", column.key)} data-fixed-column={fixedOffsets.has(column.key) || undefined} data-fixed-last={lastFixedColumn === column.key || undefined} style={{ width: column.width, minWidth: column.width, left: fixedOffsets.get(column.key) }}><span>{blankLayout && column.type==="text" && <i className="selection-field-kind" aria-hidden="true">A</i>}{fixedOffsets.has(column.key) && <PushpinOutlined className="selection-column-pin" />}{column.label}{columnSort?.key === column.key ? columnSort.direction === "asc" ? " ↑" : " ↓" : ""}</span><Popover destroyOnHidden trigger="click" open={filterColumn === column.key} onOpenChange={open => { setFilterColumn(open ? column.key : null); if (open) { setFilterRevision(sharedView.data?.data?.revision || 0); setFilterSession(value => value + 1); } }} content={columnFilterEditor(column)}><Button className="selection-column-filter-button" type="text" size="small" aria-label={`筛选${column.label}`} title={`筛选${column.label}`} icon={<FilterOutlined />} style={{ color: columnFilters[column.key] ? "#d3540b" : undefined }} onMouseDown={event => event.stopPropagation()} /></Popover><i className="selection-column-resize" aria-label={`调整 ${column.label} 列宽`} onMouseDown={(event) => { event.preventDefault(); event.stopPropagation(); setResizingColumn({ key: column.key, startX: event.clientX, startWidth: column.width }); }} /></th></Dropdown>)}{blankLayout && <th className="selection-add-field"><Button type="text" aria-label="添加字段" icon={<PlusOutlined/>} disabled={!canAddField} onClick={()=>addFieldRef.current?.add()}/></th>}</tr></thead><tbody>
+      }} aria-label={`${title || "选款登记"}在线智能表格`} style={{ width: activeColumns.reduce((width, column) => width + column.width, blankLayout?148:96) }}><colgroup><col style={{ width: 48 }} /><col style={{ width: 48 }} />{activeColumns.map((column) => <col key={column.key} style={{ width: column.width }} />)}{blankLayout && <col style={{width:52}}/>}</colgroup><thead><tr><th className="selection-check"><Checkbox aria-label="选择全部可见行" checked={!!displayedRows.length && displayedRows.every(row => selectedRowKeys.has(row._key))} indeterminate={displayedRows.some(row => selectedRowKeys.has(row._key)) && !displayedRows.every(row => selectedRowKeys.has(row._key))} onChange={(event) => setSelectedRows(current => event.target.checked ? [...new Set([...current, ...displayedRows.map(row => row._key)])] : current.filter(key => !pageRowKeys.has(key)))} /></th><th className="selection-index">#</th>{activeColumns.map((column) => <Dropdown key={column.key} trigger={["contextMenu"]} overlayStyle={{ zIndex: 1201 }} menu={{ "aria-label": `列操作：${column.label}`, items: columnMenuItems(column), onClick: ({ key }) => handleColumnAction(column.key, key) }}><th data-selection-column={column.key} data-column-group-active={selectedColumnGroup?.columnKeys.includes(column.key) || undefined} data-reorder-axis="column" data-reorder-key={column.key} data-reorder-target={shiftTarget==="column:"+column.key || undefined} data-column-selected={selectedColumnKeys.includes(column.key) || undefined} aria-selected={selectedColumnKeys.includes(column.key)} title="单击或拖动选列，Shift 点选连续列，Ctrl（Mac 为 ⌘）点选跳选；拖动已选多列可整组调序，Shift 拖动也可调序" tabIndex={0} aria-label={`选择整列：${column.label}`} onMouseDown={event => axisMouseDown(event, "column", column.key)} onMouseEnter={() => axisMouseEnter("column", column.key)} data-fixed-column={fixedOffsets.has(column.key) || undefined} data-fixed-last={lastFixedColumn === column.key || undefined} style={{ width: column.width, minWidth: column.width, left: fixedOffsets.get(column.key) }}><span>{blankLayout && column.type==="text" && <i className="selection-field-kind" aria-hidden="true">A</i>}{fixedOffsets.has(column.key) && <PushpinOutlined className="selection-column-pin" />}{column.label}{columnSort?.key === column.key ? columnSort.direction === "asc" ? " ↑" : " ↓" : ""}</span><Popover destroyOnHidden trigger="click" open={filterColumn === column.key} onOpenChange={open => { setFilterColumn(open ? column.key : null); if (open) { setFilterRevision(sharedView.data?.data?.revision || 0); setFilterSession(value => value + 1); } }} content={columnFilterEditor(column)}><Button className="selection-column-filter-button" type="text" size="small" aria-label={`筛选${column.label}`} title={`筛选${column.label}`} icon={<FilterOutlined />} style={{ color: columnFilters[column.key] ? "#d3540b" : undefined }} onMouseDown={event => event.stopPropagation()} /></Popover><i className="selection-column-resize" aria-label={`调整 ${column.label} 列宽`} onMouseDown={(event) => { event.preventDefault(); event.stopPropagation(); setResizingColumn({ key: column.key, startX: event.clientX, startWidth: column.width }); }} /></th></Dropdown>)}{blankLayout && <th className="selection-add-field"><Button type="text" aria-label="添加字段" icon={<PlusOutlined/>} disabled={!canAddField} onClick={()=>addFieldRef.current?.add()}/></th>}</tr></thead><tbody>
         {data.isLoading && <tr><td colSpan={activeColumns.length + (blankLayout ? 3 : 2)} className="selection-placeholder">正在读取选款登记…</td></tr>}{!data.isLoading && !filteredRows.length && <tr><td colSpan={activeColumns.length + (blankLayout ? 3 : 2)} className="selection-placeholder"><Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={imageSearchRowId !== null ? "图片查找的款式已删除或查看权限已变化，请重新查找" : title ? "暂无数据，点击添加一行开始录入" : "暂无选款登记，点击添加一行开始录入"} /></td></tr>}
         {rowWindow.entries.map(entry => {
           if (entry.kind === "spacer") return <tr key={entry.key} className="selection-viewport-spacer" aria-hidden="true" role="presentation" style={{ height: entry.height }}><td colSpan={activeColumns.length + (blankLayout ? 3 : 2)} style={{ height: entry.height }}/></tr>;

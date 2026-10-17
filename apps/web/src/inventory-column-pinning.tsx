@@ -10,11 +10,15 @@ import { PushpinOutlined } from "@ant-design/icons";
 import type { InventoryDimension } from "../../../packages/contracts/src/inventory-summary";
 import { useUser, type Row } from "./shared";
 import {
+  columnClickModifiers,
   columnMenuTargets,
+  columnPinMenuEntries,
+  dragColumnSelection,
   nextColumnSelection,
   nextPinnedColumns,
+  type ColumnPinAction,
   type ColumnSelection,
-} from "./inventory-column-selection";
+} from "./table-column-selection";
 
 type Columns = NonNullable<TableProps<Row>["columns"]>;
 type Props = {
@@ -24,7 +28,7 @@ type Props = {
 };
 
 const headerHint =
-  "单击选中列；Shift+单击连续选择，Ctrl（Mac 为 ⌘）+单击跳选；右键固定或取消固定";
+  "单击或按住拖动选列；Shift+单击连续选择，Ctrl（Mac 为 ⌘）+单击跳选；右键固定或取消固定";
 
 function columnKey(column: Columns[number]) {
   return "dataIndex" in column ? String(column.dataIndex) : String(column.key);
@@ -70,6 +74,14 @@ function InventoryColumnPinningState({
   // Columns the open context menu acts on; null keeps the menu closed.
   const [menuTargets, setMenuTargets] = useState<string[] | null>(null);
   const pendingTargets = useRef<string[] | null>(null);
+  // Header press-and-drag selection; `base` is what Ctrl/⌘+drag adds to.
+  const drag = useRef<{
+    anchor: string;
+    base: string[];
+    additive: boolean;
+    moved: boolean;
+  } | null>(null);
+  const suppressClick = useRef(false);
   const surface = useRef<HTMLDivElement>(null);
   const [viewWidth, setViewWidth] = useState(0);
   useEffect(() => {
@@ -96,11 +108,21 @@ function InventoryColumnPinningState({
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") clear();
     };
+    const onMouseUp = () => {
+      // A drag that ended on another header must not be followed by click handling.
+      if (drag.current?.moved) suppressClick.current = true;
+      drag.current = null;
+      setTimeout(() => (suppressClick.current = false));
+    };
     document.addEventListener("mousedown", onMouseDown);
     document.addEventListener("keydown", onKeyDown);
+    document.addEventListener("mouseup", onMouseUp);
+    window.addEventListener("blur", onMouseUp);
     return () => {
       document.removeEventListener("mousedown", onMouseDown);
       document.removeEventListener("keydown", onKeyDown);
+      document.removeEventListener("mouseup", onMouseUp);
+      window.removeEventListener("blur", onMouseUp);
     };
   }, []);
   const tableOrder = columns.map(columnKey);
@@ -142,17 +164,41 @@ function InventoryColumnPinningState({
         "aria-selected": isSelected,
         title: headerHint,
         onMouseDown: (event: MouseEvent) => {
-          // Shift+click would otherwise select header text instead of columns.
-          if (event.shiftKey || event.ctrlKey || event.metaKey)
-            event.preventDefault();
+          if (event.button !== 0) return;
+          // Keep the browser from selecting header text while clicking or dragging.
+          event.preventDefault();
+          const { shift, toggle } = columnClickModifiers(event);
+          drag.current = shift
+            ? null
+            : { anchor: key, base: selected, additive: toggle, moved: false };
         },
-        onClick: (event: MouseEvent) =>
+        onMouseEnter: (event: MouseEvent) => {
+          const current = drag.current;
+          if (!current || !(event.buttons & 1)) return;
+          if (key === current.anchor && !current.moved) return;
+          current.moved = true;
+          setSelection({
+            selected: dragColumnSelection(
+              displayOrder,
+              current.base,
+              current.anchor,
+              key,
+              current.additive,
+            ),
+            anchor: current.anchor,
+          });
+        },
+        onClick: (event: MouseEvent) => {
+          if (suppressClick.current) return;
           setSelection((current) =>
-            nextColumnSelection(displayOrder, current, key, {
-              shift: event.shiftKey,
-              toggle: event.ctrlKey || event.metaKey,
-            }),
-          ),
+            nextColumnSelection(
+              displayOrder,
+              current,
+              key,
+              columnClickModifiers(event),
+            ),
+          );
+        },
         onContextMenu: () => openMenuFor(key),
       }),
       onCell: () => ({
@@ -183,7 +229,6 @@ function InventoryColumnPinningState({
     }
   };
   const targets = menuTargets ?? [];
-  const many = targets.length > 1;
   const items: MenuProps["items"] = [
     ...(tooNarrow
       ? [
@@ -194,26 +239,14 @@ function InventoryColumnPinningState({
           },
         ]
       : []),
-    ...(targets.some((key) => !pinned.includes(key))
-      ? [
-          {
-            key: "pin",
-            icon: <PushpinOutlined />,
-            label: many ? `固定所选 ${targets.length} 列` : "固定此列",
-          },
-        ]
-      : []),
-    ...(targets.some((key) => pinned.includes(key))
-      ? [
-          {
-            key: "unpin",
-            label: many ? `取消固定所选 ${targets.length} 列` : "取消固定此列",
-          },
-        ]
-      : []),
-    ...(pinned.length
-      ? [{ key: "unpin-all", label: "取消所有固定列" }]
-      : []),
+    ...columnPinMenuEntries(targets, pinned).map((entry) => ({
+      ...entry,
+      icon:
+        entry.key === "fix-selected" ||
+        (entry.key === "fix-column" && entry.label === "固定此列") ? (
+          <PushpinOutlined />
+        ) : undefined,
+    })),
   ];
   return (
     <Dropdown
@@ -232,8 +265,15 @@ function InventoryColumnPinningState({
         items,
         onClick: ({ key }) => {
           setMenuTargets(null);
-          if (key === "pin" || key === "unpin" || key === "unpin-all")
-            save(nextPinnedColumns(tableOrder, pinned, key, targets));
+          if (key !== "narrow")
+            save(
+              nextPinnedColumns(
+                tableOrder,
+                pinned,
+                key as ColumnPinAction,
+                targets,
+              ),
+            );
         },
       }}
     >

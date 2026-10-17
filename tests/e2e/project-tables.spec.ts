@@ -396,3 +396,57 @@ test("mobile QR links and changing rows retain the originating table", async ({
   expect(new URL(page.url()).searchParams.get("section")).toBe("labels");
   await expect(page.locator(".mobile-photo-style")).toContainText("MOBILE-B");
 });
+
+test("project tables share header click, Ctrl/Cmd jump selection, drag selection and right-click pinning", async ({
+  page,
+}) => {
+  await fixture(page);
+  await page.goto("/project-tables/1");
+  const headers = page.locator("thead th[data-selection-column]");
+  await expect(headers.first()).toBeVisible();
+  const order = (await headers.evaluateAll((elements) =>
+    elements.map((element) => (element as HTMLElement).dataset.selectionColumn!),
+  )) as string[];
+  const header = (key: string) =>
+    page.locator(`thead th[data-selection-column="${key}"]`);
+  const selected = () =>
+    page
+      .locator("thead th[data-column-selected]")
+      .evaluateAll((elements) =>
+        elements.map((element) => (element as HTMLElement).dataset.selectionColumn),
+      );
+  await header(order[1]).click();
+  await header(order[4]).click({ modifiers: ["ControlOrMeta"] });
+  expect(await selected()).toEqual([order[1], order[4]]);
+  const start = (await header(order[6]).boundingBox())!,
+    end = (await header(order[7]).boundingBox())!;
+  await page.keyboard.down("ControlOrMeta");
+  await page.mouse.move(start.x + 18, start.y + 14);
+  await page.mouse.down();
+  await page.mouse.move(end.x + 18, end.y + 14, { steps: 6 });
+  await page.mouse.up();
+  await page.keyboard.up("ControlOrMeta");
+  expect(await selected()).toEqual([order[1], order[4], order[6], order[7]]);
+  await header(order[4]).click({ button: "right" });
+  const label = (await header(order[4]).getAttribute("aria-label"))!.replace(
+    "选择整列：",
+    "",
+  );
+  const menu = page.getByRole("menu", { name: `列操作：${label}`, exact: true });
+  await menu.getByRole("menuitem", { name: /固定所选 4 列$/ }).click();
+  await expect(page.locator("thead th[data-fixed-column]")).toHaveCount(4);
+  const pinnedOrder = await headers.evaluateAll((elements) =>
+    elements.map((element) => (element as HTMLElement).dataset.selectionColumn),
+  );
+  expect(pinnedOrder.slice(0, 4)).toEqual([order[1], order[4], order[6], order[7]]);
+  // Plain drag replaces the selection; Escape clears it.
+  const from = (await header(order[9]).boundingBox())!,
+    to = (await header(order[11]).boundingBox())!;
+  await page.mouse.move(from.x + 18, from.y + 14);
+  await page.mouse.down();
+  await page.mouse.move(to.x + 18, to.y + 14, { steps: 6 });
+  await page.mouse.up();
+  expect(await selected()).toEqual([order[9], order[10], order[11]]);
+  await page.keyboard.press("Escape");
+  expect(await selected()).toEqual([]);
+});
