@@ -49,6 +49,7 @@ import { joinChoiceValues, splitChoiceValues, isEncodedChoiceValue } from "./sel
 import { SelectionChoiceCell } from "./selection-choice-tags";
 import { SelectionInlineTags } from "./selection-inline-tags";
 import { parseSelectionClipboard } from "./selection-clipboard";
+import { selectionClipboardImages, selectionTextPasteTarget } from "./selection-image-clipboard";
 import { duplicateStyleCounts, selectionStyleKey } from "./selection-duplicates";
 import { SelectionFormatModal, type FormatPatch } from "./selection-format-modal";
 import { formatSelectionValue } from "../../../packages/contracts/src/selection-format";
@@ -83,6 +84,8 @@ const textColorOptions = [
   { value: "#c41d7f", label: "粉色" }, { value: "#595959", label: "灰色" },
 ];
 type SelectionImage = { id: string; url: string; color: string; colorFieldKey?: string };
+type ImagePasteHandler = (event: ClipboardEvent<HTMLElement>) => void;
+type ImagePasteHandlers = { current: Map<string, ImagePasteHandler> };
 type Column = SelectionField;
 const baseColumns: Column[] = [
   { key: "registrationBatch", label: "创建时间", width: selectionInitialColumnWidth, type: "createdTime", timeDisplay: "datetime" }, { key: "images", label: "图片", width: selectionInitialColumnWidth },
@@ -168,7 +171,7 @@ function SizeEditor({ value, disabled, onChange }: { value: string; disabled: bo
   }} />{customOpen && <Space.Compact><Input autoFocus aria-label="补充尺码" value={customValue} disabled={disabled} placeholder="输入尺码，按回车添加" onChange={event => setCustomValue(event.target.value)} onPressEnter={addCustom} /><Button disabled={disabled || !customValue.trim()} onClick={addCustom}>添加</Button><Button onClick={() => { setCustomOpen(false); setCustomValue(""); }}>取消</Button></Space.Compact>}</div>;
 }
 
-function ImageCell({ images, colors, linkedColors, disabled, onChange, mobileId, labelImages = false,field, previewing, onPreview }: {field?:Column; mobileId?: string; images: SelectionImage[]; colors: string[]; linkedColors?: Record<string, string[]>; disabled: boolean; onChange: (images: SelectionImage[]) => void; labelImages?: boolean; previewing: boolean; onPreview: (index: number) => void }) {
+function ImageCell({ images, colors, linkedColors, disabled, onChange, mobileId, labelImages = false,field, previewing, onPreview, pasteKey, pasteHandlers }: {field?:Column; mobileId?: string; images: SelectionImage[]; colors: string[]; linkedColors?: Record<string, string[]>; disabled: boolean; onChange: (images: SelectionImage[]) => void; labelImages?: boolean; previewing: boolean; onPreview: (index: number) => void; pasteKey: string; pasteHandlers: ImagePasteHandlers }) {
   const { api } = useSelectionWorkspace();
 
   const { message } = App.useApp();
@@ -177,6 +180,7 @@ function ImageCell({ images, colors, linkedColors, disabled, onChange, mobileId,
   const [failedImages, setFailedImages] = useState<Set<string>>(new Set());
   const imageError = (url: string) => setFailedImages(current => new Set([...current, url]));
   const [busy, setBusy] = useState(false);
+  const busyRef = useRef(false);
   const [linkOpen, setLinkOpen] = useState(false);
   const [allOpen, setAllOpen] = useState(false);
   const [imageIndex, setImageIndex] = useState(0);
@@ -207,17 +211,18 @@ function ImageCell({ images, colors, linkedColors, disabled, onChange, mobileId,
     add([{ id: crypto.randomUUID(), url: value, color: !config.colors ? "" : colors[0] || "" }]); setUrl(""); setLinkOpen(false);
   };
   const addFiles = async (files: File[]) => {
-    if (disabled || !config.upload || !files.length || busy) return;
-    if(images.length+files.length>config.max)return void message.error(`最多 ${config.max} 张图片`);
+    if (disabled || !config.upload || !files.length || busyRef.current) return;
+    if(latestImages.current.length+files.length>config.max)return void message.error(`最多 ${config.max} 张图片`);
+    busyRef.current = true;
     setBusy(true);
     const next: SelectionImage[] = [];
     try {
       for (let file of files) { file = await prepareUpload(file); const uploaded = await api("/style-selections/images", "POST", { data: await readUpload(file) }); next.push({ id: crypto.randomUUID(), url: uploaded.data.url, color: !config.colors ? "" : colors[0] || "" }); }
-    } catch (error) { message.error((error as Error).message); } finally { if (next.length) add(next); setBusy(false); }
+    } catch (error) { message.error((error as Error).message); } finally { if (next.length) add(next); busyRef.current = false; setBusy(false); }
   };
-  const paste = (event: ClipboardEvent<HTMLDivElement>) => {
-    const files = Array.from(event.clipboardData.items).filter((item) => item.type.startsWith("image/")).map((item) => item.getAsFile()).filter((file): file is File => !!file);
-    if (disabled || event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return;
+  const paste = (event: ClipboardEvent<HTMLElement>) => {
+    if (event.defaultPrevented || disabled || selectionTextPasteTarget(event.target)) return;
+    const files = selectionClipboardImages(event.clipboardData);
     if (files.length) { event.preventDefault(); event.stopPropagation(); void addFiles(files); return; }
     const text = event.clipboardData.getData("text/plain");
     if (!text.trim()) return;
@@ -228,6 +233,15 @@ function ImageCell({ images, colors, linkedColors, disabled, onChange, mobileId,
     add(links.map(url => ({ id: crypto.randomUUID(), url, color: !config.colors ? "" : colors[0] || "" })));
 
   };
+  const latestPaste = useRef(paste);
+  latestPaste.current = paste;
+  useEffect(() => {
+    const handler: ImagePasteHandler = event => latestPaste.current(event);
+    pasteHandlers.current.set(pasteKey, handler);
+    return () => {
+      if (pasteHandlers.current.get(pasteKey) === handler) pasteHandlers.current.delete(pasteKey);
+    };
+  }, [pasteHandlers, pasteKey]);
   const editor = <div className="selection-images selection-image-editor" tabIndex={disabled ? -1 : 0} aria-label="图片，支持粘贴" onPaste={paste}>
     <div className="selection-image-list">{images.map((image, index) => <div className="selection-image-item" key={image.id}>
       <i className="selection-image-badge">{index + 1}/{images.length}</i>
@@ -262,7 +276,7 @@ function ImageCell({ images, colors, linkedColors, disabled, onChange, mobileId,
 
 // These callbacks bind a row/field identity and use state updaters. Selection changes
 // do not change their behavior or require rebuilding image controls in every cell.
-const MemoImageCell = memo(ImageCell, (before, after) => before.field === after.field && before.mobileId === after.mobileId && before.disabled === after.disabled && before.labelImages === after.labelImages && before.previewing === after.previewing && comparable(before.images) === comparable(after.images) && comparable(before.colors) === comparable(after.colors) && comparable(before.linkedColors) === comparable(after.linkedColors));
+const MemoImageCell = memo(ImageCell, (before, after) => before.field === after.field && before.mobileId === after.mobileId && before.disabled === after.disabled && before.labelImages === after.labelImages && before.previewing === after.previewing && before.pasteKey === after.pasteKey && before.pasteHandlers === after.pasteHandlers && comparable(before.images) === comparable(after.images) && comparable(before.colors) === comparable(after.colors) && comparable(before.linkedColors) === comparable(after.linkedColors));
 const ReadOnlyStockCell = memo(({ inventory }: { inventory: CollectionStock[] }) => <CollectionStockEditor readOnly inventory={inventory} onChange={()=>{}}/>, (before, after) => comparable(before.inventory) === comparable(after.inventory));
 // Cache row output by its data and local visual state. Event handlers read the
 // live interaction ref below so skipped rows still act on the current selection.
@@ -378,6 +392,7 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
   const [selectingCells, setSelectingCells] = useState(false);
   const axisSelection = useRef<{ type: "row" | "column"; key: string } | null>(null);
   const sheetRef = useRef<HTMLDivElement>(null);
+  const imagePasteHandlers = useRef(new Map<string, ImagePasteHandler>());
   const findRoot = useRef<HTMLDivElement>(null);
   const [findTarget, setFindTarget] = useState<TableFindCell | null>(null);
   const dragCellAnchor = useRef<{ rowKey: string; columnKey: string } | null>(null);
@@ -1109,6 +1124,11 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
   };
   const pasteCells = (event: ClipboardEvent<HTMLTableCellElement>, rowKey: string, columnKey: string) => {
     if (!canEdit || event.defaultPrevented) return;
+    const imageColumn = activeColumns.find(column => column.key === columnKey);
+    if (imageKeys.has(columnKey) || imageColumn?.custom && imageColumn.type === "image") {
+      if (!selectionTextPasteTarget(event.target)) imagePasteHandlers.current.get(cellId(rowKey, columnKey))?.(event);
+      return;
+    }
     const editingText = event.target instanceof HTMLTextAreaElement || event.target instanceof HTMLInputElement;
     const text = event.clipboardData.getData("text/plain"); if (!text && copiedSingleValue.current !== "") return;
     const copiedSingle = copiedSingleValue.current !== null && copiedSingleValue.current.replace(/\r/g, "") === text.replace(/\r/g, "");
@@ -1126,14 +1146,6 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
       }));
       return;
     }
-    if (imageKeys.has(columnKey)) {
-      event.preventDefault(); setCopiedCells(new Set()); copiedSingleValue.current = null;
-      const links = selectionImageLinks(text);
-      if (!links.length) { message.warning("请粘贴完整的 http(s) 图片链接，多张图片每行一个链接"); return; }
-      setRows(current => current.map(row => row._key === rowKey && editableSelectionCell(row,columnKey) ? { ...row, [columnKey]: [...(columnKey === "images" ? rowImages(row) : rowLabelImages(row)), ...links.map(url => ({ id: crypto.randomUUID(), url, color: columnKey === "images" ? splitTags(row.color)[0] || "" : "" }))] } : row));
-      return;
-    }
-
     const rowStart = allDisplayedRows.findIndex((row) => row._key === rowKey), columnStart = activeColumns.findIndex((column) => column.key === columnKey); if (rowStart < 0 || columnStart < 0) return;
     if (!activeColumns.slice(columnStart, columnStart + Math.max(...matrix.map(row => row.length))).some(column => !imageKeys.has(column.key) && !collectionKeys.has(column.key))) return;
     event.preventDefault(); setCopiedCells(new Set()); copiedSingleValue.current = null;
@@ -1298,7 +1310,7 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
     const disabled = !canEdit || !editableSelectionCell(row,column.key) || readonlySystemField(column) || collectionKeys.has(column.key), error = readableSelectionCell(row,column.key) && (editableCreationTime(column) ? selectionCreationTimeError(row) : fieldTextLengthError(column,valueAt(row,column))) || errors[`${row._key}:${column.key}`] || errors[`${row._key}:save`], selected = selectedCells.has(cellId(row._key, column.key));
     const duplicateCount = column.key === "xutiStyleNo" ? repeatedStyles.get(selectionStyleKey(row.xutiStyleNo)) || 0 : 0;
     const common = { "data-selection-row": row._key, "data-selection-column": column.key, "data-table-find-cell": cellId(row._key, column.key), "data-selection-edges": cellEdges(selectedCells,row._key,column.key), "data-copy-edges": cellEdges(copiedCells,row._key,column.key), "data-duplicate-count": duplicateCount || undefined, tabIndex: 0, onDoubleClick: () => liveInteractions.current.doubleClick(), onFocusCapture: () => liveInteractions.current.focus(row._key, column.key), className: `${error ? "selection-cell-error " : ""}${duplicateCount ? "selection-cell-duplicate " : ""}${selected ? "selection-cell-active" : ""}${copiedCells.has(cellId(row._key, column.key)) ? " selection-cell-copied" : ""}`, title: error || (duplicateCount ? `序缇款号重复，共 ${duplicateCount} 行` : undefined), onMouseDown: (event: React.MouseEvent<HTMLElement>) => liveInteractions.current.mouseDown(event, row._key, column.key), onDragStart: (event: React.DragEvent) => liveInteractions.current.dragStart(event), onMouseEnter: () => liveInteractions.current.mouseEnter(row._key, column.key), onPaste: (event: ClipboardEvent<HTMLTableCellElement>) => liveInteractions.current.paste(event, row._key, column.key) };
-    const imagePreviewProps = { previewing: imagePreview?.rowKey === row._key && imagePreview?.columnKey === column.key, onPreview: (index: number) => setImagePreview({ rowKey: row._key, columnKey: column.key, index }) };
+    const imagePreviewProps = { previewing: imagePreview?.rowKey === row._key && imagePreview?.columnKey === column.key, onPreview: (index: number) => setImagePreview({ rowKey: row._key, columnKey: column.key, index }), pasteKey: cellId(row._key, column.key), pasteHandlers: imagePasteHandlers };
     const cell = (content: React.ReactNode) => <td key={column.key} {...common} onContextMenu={event => {
       event.preventDefault();
       const summary = event.currentTarget.querySelector<HTMLElement>("[data-selection-image-url]");
