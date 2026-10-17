@@ -38,3 +38,15 @@
   box-shadow: inset 0 -2px 0 #d4610f;
   color: #7c3c13;
 }
+
+/*
+ * Darker divider after the last pinned column, matching the 选款登记 / project
+ * tables ([data-fixed-last] in style-selections.css). Ant Design marks the last
+ * fixed-start cell of the header, the 总计 row and every body row, so the line
+ * spans the whole table and stays while scrolling horizontally.
+ */
+.inventory-summary-table .ant-table-thead > tr > th.ant-table-cell-fix-start-shadow,
+.inventory-summary-table .ant-table-summary td.ant-table-cell-fix-start-shadow,
+.inventory-summary-table .ant-table-tbody > tr > td.ant-table-cell-fix-start-shadow {
+  border-inline-end: 1px solid #bda58f;
+}

@@ -396,6 +396,54 @@ test("header drag and mixed selections batch pin and unpin columns without distu
   expect((await columnOrder(page)).slice(0, 3)).toEqual(["registrationBatch", "supplierStyleNo", "supplierCode"]);
 });
 
+test("Ctrl/Cmd header clicks and Ctrl drag select non-contiguous columns, copy only those columns and pin them from the menu", async ({ page }) => {
+  await fixture(page, true);
+  const order = (await columnOrder(page)) as string[];
+  const selected = () => page.locator("thead th[data-column-selected]").evaluateAll(elements => elements.map(element => (element as HTMLElement).dataset.selectionColumn));
+  await columnHeader(page, order[1]).click();
+  await columnHeader(page, order[3]).click({ modifiers: ["ControlOrMeta"] });
+  await columnHeader(page, order[5]).click({ modifiers: ["ControlOrMeta"] });
+  expect(await selected()).toEqual([order[1], order[3], order[5]]);
+  await expect(page.locator("td.selection-cell-active")).toHaveCount(60);
+  await columnHeader(page, order[3]).click({ modifiers: ["ControlOrMeta"] });
+  expect(await selected()).toEqual([order[1], order[5]]);
+  // Ctrl/Cmd + drag adds the dragged range to the earlier selection.
+  const start = (await columnHeader(page, order[7]).boundingBox())!, end = (await columnHeader(page, order[9]).boundingBox())!;
+  await page.keyboard.down("ControlOrMeta");
+  await page.mouse.move(start.x + 18, start.y + 14);
+  await page.mouse.down();
+  await page.mouse.move(end.x + 18, end.y + 14, { steps: 8 });
+  await expect.poll(selected).toEqual([order[1], order[5], order[7], order[8], order[9]]);
+  await page.mouse.up();
+  await page.keyboard.up("ControlOrMeta");
+  expect(await selected()).toEqual([order[1], order[5], order[7], order[8], order[9]]);
+  expect(await columnOrder(page)).toEqual(order);
+  const copied = await page.locator(".selection-sheet table").evaluate(element => {
+    const clipboardData = new DataTransfer();
+    element.dispatchEvent(new ClipboardEvent("copy", { bubbles: true, cancelable: true, clipboardData }));
+    return clipboardData.getData("text/plain");
+  });
+  expect(copied.split("\n")[0].split("\t")).toHaveLength(5);
+  await page.keyboard.press("Escape");
+  expect(await selected()).toEqual([]);
+
+  await columnHeader(page, order[2]).click();
+  await columnHeader(page, order[6]).click({ modifiers: ["ControlOrMeta"] });
+  await columnHeader(page, order[4]).click({ modifiers: ["ControlOrMeta"] });
+  await columnHeader(page, order[6]).click({ button: "right" });
+  const label = (await columnHeader(page, order[6]).getAttribute("aria-label"))!.replace("选择整列：", "");
+  await page.screenshot({ path: ".local/selection-ctrl-pin-menu-20261017.png", animations: "disabled", caret: "hide" });
+  await clickColumnAction(page, label, "固定所选 3 列");
+  await expect(page.locator("thead th[data-fixed-column]")).toHaveCount(3);
+  expect((await columnOrder(page)).slice(0, 3)).toEqual([order[2], order[4], order[6]]);
+  await columnHeader(page, order[2]).click();
+  await columnHeader(page, order[6]).click({ modifiers: ["ControlOrMeta"] });
+  await columnHeader(page, order[2]).click({ button: "right" });
+  await clickColumnAction(page, (await columnHeader(page, order[2]).getAttribute("aria-label"))!.replace("选择整列：", ""), "取消固定所选 2 列");
+  await expect(page.locator("thead th[data-fixed-column]")).toHaveCount(1);
+  await expect(columnHeader(page, order[4])).toHaveAttribute("data-fixed-column", "true");
+});
+
 test("Shift header clicks extend and shrink the range while Shift drag still reorders and Escape cancels", async ({ page }) => {
   await fixture(page, true);
   const originalOrder = await columnOrder(page);

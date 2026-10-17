@@ -26,6 +26,13 @@ describe("selection range image content", () => {
     expect(JSON.stringify(table)).not.toContain("UNSELECTED-SECRET");
   });
 
+  it("skips unselected columns between whole non-contiguous column selections", () => {
+    const table = model([{ _key: "a", xutiStyleNo: "STYLE-A", createdAt: "2026-10-05T00:00:00Z" }, { _key: "b", xutiStyleNo: "STYLE-B", createdAt: "2026-10-06T00:00:00Z" }],
+      ["a::xutiStyleNo", "b::xutiStyleNo", "a::registrationBatch", "b::registrationBatch"]);
+    expect(table.columns.map(column => column.label)).toEqual(["序缇款号", "创建时间"]);
+    expect(table.rows.map(row => row.cells.map(cell => cell.text))).toEqual([["STYLE-A", "2026-10-05"], ["STYLE-B", "2026-10-06"]]);
+  });
+
   it("masks stale denied values, hidden cells and unavailable private fields before resolving images or system values", () => {
     const privateField: SelectionField = { key: "custom:secret", label: "私有资料", width: 100, custom: true, type: "text" };
     const table = model([{ _key: "a", xutiStyleNo: "STALE-SECRET", images: [{ url: "https://example.com/SECRET.png" }],

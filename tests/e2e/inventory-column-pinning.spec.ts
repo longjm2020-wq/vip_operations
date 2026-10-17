@@ -178,6 +178,12 @@ async function selectPins(page: Page, names: string[]) {
   await expect(menu(page)).toBeHidden();
 }
 
+/** The last pinned column carries the same darker divider as 选款登记 (#bda58f). */
+async function expectDivider(group: Record<string, Locator>) {
+  for (const cell of Object.values(group))
+    await expect(cell).toHaveCSS("border-right", "1px solid rgb(189, 165, 143)");
+}
+
 async function fixedNames(page: Page) {
   return headers(page).evaluateAll((elements) =>
     elements
@@ -230,6 +236,7 @@ test("Ctrl/⌘ 跳选非连续多列后右键固定，横滚时表头、数据�
   await expect(stockCells.body).toHaveText("17");
   await expect(stockCells.summary).toHaveText("29");
   await expect(summary(page)).toContainText("总计");
+  await expectDivider(stockCells);
   const styleX = await x(styleCells.header),
     stockX = await x(stockCells.header);
   const moving = header(page, "商品编码"),
@@ -252,6 +259,11 @@ test("Ctrl/⌘ 跳选非连续多列后右键固定，横滚时表头、数据�
     expect(Math.abs((await x(group.summary)) - originalX)).toBeLessThan(2);
   }
   await expect(stockCells.summary).toHaveText("29");
+  await expectDivider(stockCells);
+  const styleBorder = await styleCells.body.evaluate(
+    (element) => getComputedStyle(element).borderRightWidth,
+  );
+  expect(styleBorder).toBe("0px");
   expect(state.writes).toEqual([]);
 });
 
@@ -410,5 +422,82 @@ test("固定总宽超出窗口时阻止固定，已保存固定在窄窗口暂�
   await expect
     .poll(() => fixedNames(page))
     .toEqual(["款号", "货号", "供应商款式编码", "颜色", "在仓库存数"]);
+  expect(state.writes).toEqual([]);
+});
+
+async function dragHeaders(page: Page, from: string, to: string, ctrl = false) {
+  const start = (await header(page, from).boundingBox())!,
+    end = (await header(page, to).boundingBox())!;
+  if (ctrl) await page.keyboard.down("ControlOrMeta");
+  await page.mouse.move(start.x + 12, start.y + start.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(end.x + 12, end.y + end.height / 2, { steps: 8 });
+}
+
+async function releaseDrag(page: Page, ctrl = false) {
+  await page.mouse.up();
+  if (ctrl) await page.keyboard.up("ControlOrMeta");
+}
+
+test("按住鼠标拖过表头连续选列，Ctrl/⌘ 拖动追加范围，右键固定所选列", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  const state = await fixture(page);
+  await dragHeaders(page, "颜色", "货号");
+  // Live highlight while the mouse button is still held.
+  await expect.poll(() => selectedNames(page)).toEqual([
+    "货号",
+    "商品编码",
+    "供应商款式编码",
+    "颜色",
+  ]);
+  await releaseDrag(page);
+  expect(await selectedNames(page)).toEqual([
+    "货号",
+    "商品编码",
+    "供应商款式编码",
+    "颜色",
+  ]);
+  expect(
+    await page.evaluate(() => window.getSelection()?.toString() ?? ""),
+  ).toBe("");
+
+  // A plain drag replaces the selection; Ctrl/⌘ + drag adds its range.
+  await dragHeaders(page, "尺码", "在仓库存数");
+  await releaseDrag(page);
+  expect(await selectedNames(page)).toEqual(["尺码", "在仓库存数"]);
+  await header(page, "款号").click({ modifiers: ["ControlOrMeta"] });
+  await dragHeaders(page, "商品编码", "货号", true);
+  await expect
+    .poll(() => selectedNames(page))
+    .toEqual(["款号", "货号", "商品编码", "尺码", "在仓库存数"]);
+  await page.screenshot({
+    path: ".local/inventory-column-drag-select-20261017.png",
+    animations: "disabled",
+    caret: "hide",
+  });
+  await releaseDrag(page, true);
+  await header(page, "尺码").click({ button: "right" });
+  await menuItem(page, "固定所选 5 列").click();
+  expect(await fixedNames(page)).toEqual([
+    "款号",
+    "货号",
+    "商品编码",
+    "尺码",
+    "在仓库存数",
+  ]);
+  expect(await selectedNames(page)).toEqual([]);
+
+  // Dragging back onto the starting header keeps a single-column selection.
+  await dragHeaders(page, "颜色", "供应商款式编码");
+  const color = (await header(page, "颜色").boundingBox())!;
+  await page.mouse.move(color.x + 12, color.y + color.height / 2, {
+    steps: 4,
+  });
+  await releaseDrag(page);
+  expect(await selectedNames(page)).toEqual(["颜色"]);
+  await page.keyboard.press("Escape");
+  expect(await selectedNames(page)).toEqual([]);
   expect(state.writes).toEqual([]);
 });

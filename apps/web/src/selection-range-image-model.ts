@@ -138,18 +138,24 @@ export function buildSelectionRangeImageTable(options: SelectionRangeImageModelO
     selected = new Set([cellId(options.fallbackCell.rowKey, options.fallbackCell.columnKey)]);
   }
   let minRow = rows.length, maxRow = -1, minColumn = columns.length, maxColumn = -1;
+  const usedColumns = new Set<number>(), usedRows = new Set<number>();
+  let usedCells = 0;
   for (const id of selected) {
     const divider = id.indexOf("::");
     const r = positions.get(id.slice(0, divider)), c = columnPositions.get(id.slice(divider + 2));
     if (r === undefined || c === undefined) continue;
     minRow = Math.min(minRow, r); maxRow = Math.max(maxRow, r);
     minColumn = Math.min(minColumn, c); maxColumn = Math.max(maxColumn, c);
+    usedColumns.add(c); usedRows.add(r); usedCells++;
   }
   if (maxRow < 0) {
     const keys = new Set(options.headerKeys || []);
     return { columns: columns.filter(column => keys.has(column.key)).map(({ key, label, width }) => ({ key, label, width })), rows: [], rowHeight };
   }
-  const chosenColumns = columns.slice(minColumn, maxColumn + 1);
+  // Whole non-contiguous Ctrl/⌘ column selections skip the unselected columns in between;
+  // irregular cell selections keep their holes blank.
+  const wholeColumns = usedColumns.size * usedRows.size === usedCells;
+  const chosenColumns = columns.slice(minColumn, maxColumn + 1).filter((_, index) => !wholeColumns || usedColumns.has(minColumn + index));
   return {
     columns: chosenColumns.map(({ key, label, width }) => ({ key, label, width })),
     rows: rows.slice(minRow, maxRow + 1).map(row => ({
