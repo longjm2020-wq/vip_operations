@@ -373,7 +373,7 @@ export { previewImport, commitImport } from "./import.js";
 export async function sharedView(c: Context) {
   return db.$transaction(async tx => {
     const policy = await protection.policy(tx);
-    if((policy.settings.enabled || policy.settings.claimsEnabled || policy.settings.autoHide) && !protection.protectionAdmin(c.actor))return {view:{filters:{},sort:null},revision:0};
+    if((policy.settings.enabled || policy.settings.claimsEnabled || policy.settings.autoHide) && !protection.protectionAdmin(c.actor))return {view:{filters:{},sort:null},revision:0,restricted:true};
     const stored = await one(tx, "SELECT view,revision FROM style_selection_shared_view WHERE id=1");
     if (!stored) return stored;
     return {

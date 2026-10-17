@@ -174,6 +174,8 @@ export const selectionLayoutSchema = z
     columnFilters: selectionViewSchema.shape.filters.default({}),
     columnSort: selectionViewSchema.shape.sort.default(null),
     followShared: z.boolean().default(true),
+    /** Shared-view revision current when this user switched to personal filters; any later publish is adopted again. */
+    sharedFilterOptOutRevision: z.number().int().min(0).default(0),
     groupBy: z.string().max(120).default("none").transform(value => value === "batch" ? "createdTime:day" : value),
     sort: z.string().max(120).default("registrationBatch"),
     direction: z.enum(["asc", "desc"]).default("asc"),
