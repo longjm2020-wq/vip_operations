@@ -904,8 +904,9 @@ try {
       await finishImport(context(), task.id);
       const row = (await summary({ skuId: skus[1] })).data[0];
       assert.equal(row.dailySales, 3);
-      assert.equal(row.returnRate, 0.333);
-      assert.equal(row.estimatedReturns, 29.97);
+      // Daily 33.3% is rounded to a whole 33%; 90 sold × 33% = 29.7.
+      assert.equal(row.returnRate, 0.33);
+      assert.equal(row.estimatedReturns, 29.7);
       assert.equal(row.channelReference.source.id, task.id);
       assert.equal((await beginImport(context(), input))!.id, task.id);
       await appendImport(context(), task.id, { records: report.records });
