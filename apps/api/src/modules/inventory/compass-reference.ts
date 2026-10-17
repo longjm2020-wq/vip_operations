@@ -57,6 +57,11 @@ export async function applyCompassReferences(
     return {
       ...row,
       daily_sales: reference.dailySales.value ?? row.daily_sales,
+      // Coverage and replenishment use 高频均值 × 动销占比 (or the small-sample period average).
+      // Manual references have no daily history, so they are used unchanged.
+      effective_daily_sales: reference.dailySales.value != null
+        ? reference.dailySales.effectiveValue
+        : row.daily_sales,
       return_rate: reference.returnRate.value ?? row.return_rate,
       estimated_returns: estimate ?? row.estimated_returns,
       channel_reference: {

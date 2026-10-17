@@ -4,6 +4,9 @@ import {
   modeReference,
   estimatedReturns,
   frequentReference,
+  dailySalesReference,
+  returnRateReference,
+  MIN_FREQUENT_SAMPLE_DAYS,
   roundToWholePercent,
   inventoryReferenceWindow,
 } from "../../packages/contracts/src/compass-inventory-reference.js";
@@ -165,5 +168,56 @@ describe("original daily return rate normalization", () => {
       expect(() =>
         normalizeCompassWorkbook([headers, [...row, value]], "invalid.xlsx"),
       ).toThrow("退货率");
+  });
+});
+
+describe("sell-through correction (动销天数占比) and small-sample protection (样本不足)", () => {
+  const days = (values: (number | null)[]) =>
+    values.map((value, index) => ({ date: `2026-09-${String(index + 1).padStart(2, "0")}`, value }));
+  it("keeps (R1+R2)/2 for display and scales it by the selling-day share for inventory maths", () => {
+    // 30 valid days, 15 with sales: 4 on 8 days, 3 on 4 days, 5 on 3 days → (4 + 3) / 2 = 3.5; 3.5 × 50% = 1.75.
+    const sales = [...Array(8).fill(4), ...Array(4).fill(3), ...Array(3).fill(5), ...Array(15).fill(0)];
+    const result = dailySalesReference(days(sales));
+    expect(result).toMatchObject({
+      value: 3.5, values: [4, 3], frequencies: [8, 4], samples: 30, nonZeroSamples: 15,
+      sellThroughRatio: 0.5, effectiveValue: 1.75, effectiveMethod: "frequent_x_ratio", sampleInsufficient: false,
+    });
+    // The task example: 高频均值 4 with 15 / 30 selling days → 2.
+    const example = dailySalesReference(days([...Array(10).fill(4), 4, 4, 4, 4, 4, ...Array(15).fill(0)]));
+    expect(example).toMatchObject({ value: 4, sellThroughRatio: 0.5, effectiveValue: 2 });
+  });
+  it("falls back to the period average when fewer than 5 days had sales", () => {
+    expect(MIN_FREQUENT_SAMPLE_DAYS).toBe(5);
+    // 2, 2, 5 on 3 of 30 days: display (2 + 5) / 2 = 3.5, inventory uses 9 / 30 = 0.3.
+    const result = dailySalesReference(days([2, 2, 5, ...Array(27).fill(0)]));
+    expect(result).toMatchObject({
+      value: 3.5, nonZeroSamples: 3, sellThroughRatio: 0.1, sampleInsufficient: true,
+      effectiveMethod: "period_average", effectiveValue: 0.3, validTotal: 9,
+    });
+    // Exactly 5 selling days is enough.
+    expect(dailySalesReference(days([1, 1, 1, 2, 2, 0, 0, 0, 0, 0])).sampleInsufficient).toBe(false);
+    // Missing cells are excluded from both total and days.
+    expect(dailySalesReference(days([6, null, 0, 0])).effectiveValue).toBe(2);
+  });
+  it("handles all-zero and empty periods", () => {
+    expect(dailySalesReference(days([0, 0, 0]))).toMatchObject({ value: 0, sellThroughRatio: 0, effectiveValue: 0, sampleInsufficient: true });
+    expect(dailySalesReference(days([null]))).toMatchObject({ value: null, sellThroughRatio: null, effectiveValue: null, sampleInsufficient: false });
+  });
+  it("keeps the rounded frequent return rate with enough samples and never applies the sell-through ratio", () => {
+    const rows = [0.2, 0.2, 0.2, 0.3, 0.3, 0, 0, 0].map((rate, index) => ({ date: `2026-09-0${index + 1}`, salesQty: rate ? 10 : 0, rate }));
+    expect(returnRateReference(rows)).toMatchObject({ value: 0.25, frequentValue: 0.25, sampleInsufficient: false, fallback: null });
+  });
+  it("uses period returns / period sales for return rates with fewer than 5 non-zero days", () => {
+    // Day returns: 10 × 50% = 5, 30 × 10% = 3 → 8 / 40 = 20%; the frequent value would be 30%.
+    const rows = [
+      { date: "2026-09-01", salesQty: 10, rate: 0.5 }, { date: "2026-09-02", salesQty: 30, rate: 0.1 },
+      { date: "2026-09-03", salesQty: 0, rate: 0 },
+    ];
+    expect(returnRateReference(rows)).toMatchObject({ value: 0.2, frequentValue: 0.3, nonZeroSamples: 2, sampleInsufficient: true, fallback: "sales_weighted" });
+    // A selling day without a rate (or a missing sales cell) keeps the frequent value with the hint.
+    expect(returnRateReference([...rows, { date: "2026-09-04", salesQty: 5, rate: null }])).toMatchObject({ value: 0.3, sampleInsufficient: true, fallback: null });
+    expect(returnRateReference([...rows, { date: "2026-09-04", salesQty: null, rate: 0.2 }])).toMatchObject({ value: 0.15, fallback: null }); // 20% (latest) and 10% tie-break
+    // No sales at all: nothing to weight by.
+    expect(returnRateReference([{ date: "2026-09-01", salesQty: 0, rate: 0.4 }])).toMatchObject({ value: 0.4, fallback: null, sampleInsufficient: true });
   });
 });

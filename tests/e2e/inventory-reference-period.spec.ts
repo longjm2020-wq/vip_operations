@@ -126,6 +126,14 @@ async function fixture(page: Page, splitSkuSales = false) {
       samples: item.days,
       method: "frequent",
     });
+    // 30d: 15 of 30 days sold → 6 × 50% = 3. 7d: only 3 selling days → 样本不足, 40 ÷ 7.
+    const smallSample = item.period === "7d";
+    const sellThrough = smallSample
+      ? { nonZeroSamples: 3, sellThroughRatio: 3 / 7, effectiveValue: 40 / 7, effectiveMethod: "period_average", sampleInsufficient: true, validTotal: 40, minSampleDays: 5 }
+      : { nonZeroSamples: item.days / 2, sellThroughRatio: 0.5, effectiveValue: item.daily / 2, effectiveMethod: "frequent_x_ratio", sampleInsufficient: false, validTotal: item.sales, minSampleDays: 5 };
+    const rateSample = smallSample
+      ? { nonZeroSamples: 3, frequentValue: 0.3, sampleInsufficient: true, fallback: "sales_weighted", minSampleDays: 5 }
+      : { nonZeroSamples: item.days, frequentValue: item.rate, sampleInsufficient: false, fallback: null, minSampleDays: 5 };
     const reference = {
       source,
       window,
@@ -135,14 +143,14 @@ async function fixture(page: Page, splitSkuSales = false) {
       recordedDays: complete ? item.days : 0,
       ...(complete
         ? {
-            dailySales: frequent(
-              item.daily,
-              item.period === "30d" ? [5, 7] : [item.daily],
-            ),
-            returnRate: frequent(
-              item.rate,
-              item.period === "30d" ? [0.1, 0.3] : [item.rate],
-            ),
+            dailySales: {
+              ...frequent(item.daily, item.period === "30d" ? [5, 7] : [item.daily]),
+              ...sellThrough,
+            },
+            returnRate: {
+              ...frequent(item.rate, item.period === "30d" ? [0.1, 0.3] : smallSample ? [0.3] : [item.rate]),
+              ...rateSample,
+            },
             estimatedReturns: {
               value: item.sales * item.rate,
               salesQty: item.sales,
@@ -165,6 +173,7 @@ async function fixture(page: Page, splitSkuSales = false) {
       transferTransitQty: 5,
       incomingQty: 2,
       dailySales: item.daily,
+      effectiveDailySales: complete ? sellThrough.effectiveValue : item.daily,
       returnRate: item.rate,
       estimatedReturns: complete ? item.sales * item.rate : 12,
       coverageDays: 10,
@@ -185,6 +194,7 @@ async function fixture(page: Page, splitSkuSales = false) {
           colorName: "粉色",
           sizeName: sku.size,
           dailySales: sku.daily,
+          effectiveDailySales: sku.daily,
           estimatedReturns:
             sku.salesQty === null ? null : sku.salesQty * item.rate,
           coverageDays: sku.daily > 0 ? 29 : null,
@@ -300,7 +310,7 @@ test("经营参考提供七个周期，切换重取第一页且跨汇总维度�
       ["6m", "1y"].includes(item.period) ? "历史覆盖不足" : String(item.sales),
     );
     await expect(await cell(page, "渠道日销参考")).toHaveText(
-      String(item.daily),
+      new RegExp(`^${item.daily}(样本不足)?$`),
     );
     const periodTip = await tooltip(page, "渠道日销参考");
     await expect(periodTip).toContainText(item.startDate);
@@ -332,6 +342,8 @@ test("高频均值提示展示R1/R2频次与预估公式，导出沿用当前周
   await expect(dailyTip).toContainText("R2 = 7（8 天）");
   await expect(dailyTip).toContainText("(5 + 7) ÷ 2 = 6");
   await expect(dailyTip).not.toContainText("中位数");
+  await expect(dailyTip).toContainText("动销占比：15 / 30 天 = 50%");
+  await expect(dailyTip).toContainText("可售天数、补货按 6 × 50% = 3 计算");
   await page.getByRole("heading", { name: "库存明细", exact: true }).click();
   const estimatedTip = await tooltip(page, "预估销退数");
   await expect(estimatedTip).toContainText("退货率高频均值");
@@ -343,6 +355,16 @@ test("高频均值提示展示R1/R2频次与预估公式，导出沿用当前周
   await page.getByRole("heading", { name: "库存明细", exact: true }).click();
 
   await choose(page, periods[1]);
+  await expect(await cell(page, "渠道日销参考")).toHaveText("3样本不足");
+  const smallTip = await tooltip(page, "渠道日销参考");
+  await expect(smallTip).toContainText("动销占比：3 / 7 天 = 42.8571%");
+  await expect(smallTip).toContainText("样本不足：有销量的天数 3 天，少于 5 天；可售天数、补货改用期间平均日销 40 ÷ 7 = 5.7143");
+  await page.getByRole("heading", { name: "库存明细", exact: true }).click();
+  await expect(await cell(page, "退货率")).toHaveText("25%样本不足");
+  const smallRateTip = await tooltip(page, "退货率");
+  await expect(smallRateTip).toContainText("改用期间退货件数 ÷ 期间销量 = 25%");
+  await expect(smallRateTip).toContainText("只有一个非0值，直接采用 30%");
+  await page.getByRole("heading", { name: "库存明细", exact: true }).click();
   const downloadPromise = page.waitForEvent("download");
   await page.getByRole("button", { name: "导出", exact: true }).click();
   const download = await downloadPromise;
@@ -362,6 +384,10 @@ test("高频均值提示展示R1/R2频次与预估公式，导出沿用当前周
   expect(Number(exportedRow.getCell(column("退货率")).value)).toBe(25);
   expect(Number(exportedRow.getCell(column("预估销退数")).value)).toBe(10);
   expect(exportedRow.getCell(column("经营参考周期")).value).toBe("近7天");
+  expect(Number(exportedRow.getCell(column("库存计算日销（可售天数/补货）")).value)).toBeCloseTo(40 / 7, 6);
+  expect(Number(exportedRow.getCell(column("动销天数占比(%)")).value)).toBe(42.8571);
+  expect(String(exportedRow.getCell(column("参考数据口径")).value)).toContain("样本不足（有销量3天<5天），可售天数和补货按期间平均日销");
+  expect(String(exportedRow.getCell(column("参考数据口径")).value)).toContain("期间退货件数÷期间销量");
   expect(exportedRow.getCell(column("经营参考起始日期")).value).toBe(
     "2026-10-09",
   );

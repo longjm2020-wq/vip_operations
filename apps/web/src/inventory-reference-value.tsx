@@ -11,9 +11,27 @@ const format = (value: unknown, rate = false) =>
 
 /** Report daily-sales reference is 0 although the period still has recorded sales. */
 export function inventoryHasZeroReferenceSales(row: Row): boolean {
-  const daily = row.channelReference?.dailySales;
-  return daily?.method === "frequent" && daily.value != null &&
-    Number(daily.value) === 0 && Number(row.channelReference?.salesQty) > 0;
+  const daily = row.channelReference?.dailySales, effective = inventoryEffectiveDailySales(row);
+  return daily?.method === "frequent" && daily.value != null && effective != null &&
+    Number(effective) === 0 && Number(row.channelReference?.salesQty) > 0;
+}
+
+/** Daily sales used for 可售天数 / 补货建议: 高频均值 × 动销占比 for reports, the manual value otherwise. */
+export function inventoryEffectiveDailySales(row: Row): unknown {
+  return row.effectiveDailySales === undefined ? row.dailySales : row.effectiveDailySales;
+}
+
+const hint = (text: string) => <span style={{ marginLeft: 6, fontSize: 12, color: "#ad6800" }}>{text}</span>;
+
+/** 动销占比 and the daily sales actually used downstream, or the small-sample fallback. */
+function EffectiveDailySalesDetail({ result }: { result: Row }) {
+  if (result.sellThroughRatio == null) return null;
+  return <>
+    <div>动销占比：{result.nonZeroSamples} / {result.samples} 天 = {format(result.sellThroughRatio, true)}</div>
+    {result.sampleInsufficient
+      ? <div>样本不足：有销量的天数 {result.nonZeroSamples} 天，少于 {result.minSampleDays} 天；可售天数、补货改用期间平均日销 {format(result.validTotal)} ÷ {result.samples} = {format(result.effectiveValue)}</div>
+      : <div>可售天数、补货按 {format(result.value)} × {format(result.sellThroughRatio, true)} = {format(result.effectiveValue)} 计算</div>}
+  </>;
 }
 
 export function InventoryEstimateValue({ row, field }: {
@@ -22,7 +40,7 @@ export function InventoryEstimateValue({ row, field }: {
 }) {
   const value = row[field], zeroMedianSales = inventoryHasZeroReferenceSales(row);
   const text = value == null
-    ? field === "coverageDays" && row.dailySales != null && Number(row.dailySales) === 0
+    ? field === "coverageDays" && inventoryEffectiveDailySales(row) != null && Number(inventoryEffectiveDailySales(row)) === 0
       ? zeroMedianSales ? "高频均值为0" : "日销参考为0"
       : "暂无数据"
     : format(value) + (field === "coverageDays" ? "天" : "件");
@@ -32,7 +50,7 @@ export function InventoryEstimateValue({ row, field }: {
     <div>日销高频均值为0，期间仍有销量。</div>
     {field === "coverageDays"
       ? <div>可售数量不能除以0，因此暂不估算可售天数。</div>
-      : <div>补货按日销高频均值 × 目标天数扣除可售与在途等数量计算；0件是当前公式结果，请结合期间销量核对备货需求。</div>}
+      : <div>补货按库存计算日销 × 目标天数扣除可售与在途等数量计算；0件是当前公式结果，请结合期间销量核对备货需求。</div>}
   </div>}><span tabIndex={0}>{text}</span></Tooltip>;
 }
 
@@ -108,7 +126,7 @@ export function InventoryReferenceValue({
         <div>按本行条码计算，不跨 SKU 汇总。</div>
       </> : field === "estimatedReturns" ? (
         <>
-          <div>所选期间销量合计 × 退货率高频均值</div>
+          <div>所选期间销量合计 × {reference.returnRate?.fallback ? "期间退货率（样本不足）" : "退货率高频均值"}</div>
           <div>已提供销量记录 {result.samples} 天；缺失日期不补0。</div>
           <div>
             {format(result.salesQty)} × {format(result.returnRate, true)} ={" "}
@@ -123,6 +141,10 @@ export function InventoryReferenceValue({
             {result.method === "frequent" ? "高频均值" : result.method === "average" || result.method === "mean" ? "平均值" : "参考值"}
           </div>
           {result.method === "frequent" && <FrequentDetail result={result} rate={field === "returnRate"} />}
+          {field === "dailySales" && <EffectiveDailySalesDetail result={result} />}
+          {field === "returnRate" && result.sampleInsufficient && (result.fallback
+            ? <div>样本不足：非0退货率 {result.nonZeroSamples} 天，少于 {result.minSampleDays} 天；改用期间退货件数 ÷ 期间销量 = {format(result.value, true)}（按每日销量 × 当日退货率折算，四舍五入为整数百分比）</div>
+            : <div>样本不足：非0退货率 {result.nonZeroSamples} 天，少于 {result.minSampleDays} 天；缺少完整的每日销量与退货率，仍采用高频均值</div>)}
           {field === "dailySales" && <>
             <div>期间销量合计：{periodSales == null ? "销量数据不足" : `${format(periodSales)} 件`}</div>
             <div>已记录 {reference.recordedDays} 天；有效销量样本 {result.samples} 天。</div>
@@ -147,7 +169,8 @@ export function InventoryReferenceValue({
         {value == null
           ? missingLabel
           : format(value, field === "returnRate")}
-        {zeroMedianSales && <span style={{ marginLeft: 6, fontSize: 12, color: "#ad6800" }}>期间有销量</span>}
+        {zeroMedianSales && hint("期间有销量")}
+        {fromReport && (field === "dailySales" || field === "returnRate") && result?.sampleInsufficient && hint("样本不足")}
       </span>
     </Tooltip>
   );
@@ -166,8 +189,8 @@ function FrequentDetail({ result, rate }: { result: Row; rate: boolean }) {
     </div>
     <div>
       {values.length > 1
-        ? `(${show(values[0])} + ${show(values[1])}) ÷ 2 = ${show(result.value)}`
-        : `只有一个非0值，直接采用 ${show(result.value)}`}
+        ? `(${show(values[0])} + ${show(values[1])}) ÷ 2 = ${show(result.frequentValue ?? result.value)}`
+        : `只有一个非0值，直接采用 ${show(result.frequentValue ?? result.value)}`}
       {rate && values.length > 1 ? "（四舍五入为整数百分比）" : ""}
     </div>
     <div>频次相同时取最近日期出现的值。</div>

@@ -72,6 +72,87 @@ export function frequentReference(
   };
 }
 
+/** Fewer non-zero days than this make the frequent value unreliable (样本不足). */
+export const MIN_FREQUENT_SAMPLE_DAYS = 5;
+
+export type DailySalesReference = FrequentReference & {
+  /** 动销天数占比 = non-zero valid days / valid days (null without valid days). */
+  sellThroughRatio: number | null;
+  /** Daily sales used for coverage days and replenishment. */
+  effectiveValue: number | null;
+  sampleInsufficient: boolean;
+  /** How effectiveValue was derived. */
+  effectiveMethod: "frequent_x_ratio" | "period_average" | null;
+  /** Sum of valid daily sales (missing cells excluded), the numerator of the period average. */
+  validTotal: number;
+  minSampleDays: number;
+};
+
+export type ReturnRateReference = FrequentReference & {
+  /** (R1 + R2) / 2 before any small-sample fallback. */
+  frequentValue: number | null;
+  sampleInsufficient: boolean;
+  /** "sales_weighted": Σ(daily sales × daily rate) / Σ daily sales, i.e. period returns / period sales. */
+  fallback: "sales_weighted" | null;
+  minSampleDays: number;
+};
+
+/**
+ * Sell-through correction for downstream inventory maths. The displayed 高频均值 only describes
+ * selling days, so it is scaled by the share of valid days that had sales. With fewer than
+ * MIN_FREQUENT_SAMPLE_DAYS selling days the plain period average (total ÷ valid days) is used.
+ */
+export function dailySalesReference(observations: FrequentObservation[]): DailySalesReference {
+  const frequent = frequentReference(observations);
+  const valid = observations
+    .map(item => item.value)
+    .filter((value): value is number => value != null && Number.isFinite(value) && value >= 0);
+  const ratio = frequent.samples ? new Decimal(frequent.nonZeroSamples).div(frequent.samples) : null;
+  const sampleInsufficient = frequent.samples > 0 && frequent.nonZeroSamples < MIN_FREQUENT_SAMPLE_DAYS;
+  const validTotal = valid.reduce((sum, value) => sum.plus(value), new Decimal(0));
+  let effectiveValue: number | null = null;
+  let effectiveMethod: DailySalesReference["effectiveMethod"] = null;
+  if (frequent.samples && sampleInsufficient) {
+    effectiveValue = validTotal.div(frequent.samples).toDecimalPlaces(8).toNumber();
+    effectiveMethod = "period_average";
+  } else if (frequent.value != null && ratio) {
+    effectiveValue = new Decimal(frequent.value).mul(ratio).toDecimalPlaces(8).toNumber();
+    effectiveMethod = "frequent_x_ratio";
+  }
+  return {
+    ...frequent,
+    sellThroughRatio: ratio ? ratio.toDecimalPlaces(8).toNumber() : null,
+    effectiveValue,
+    sampleInsufficient,
+    effectiveMethod,
+    validTotal: validTotal.toNumber(),
+    minSampleDays: MIN_FREQUENT_SAMPLE_DAYS,
+  };
+}
+
+/**
+ * Return rate stays the rounded (R1 + R2) / 2. It is a per-sold-unit ratio, so no sell-through
+ * scaling applies. With fewer than MIN_FREQUENT_SAMPLE_DAYS non-zero rate days the period rate
+ * Σ(sales × rate) / Σ sales is used: each daily rate is returns ÷ sales of that day, so this equals
+ * period returns ÷ period sales. It needs every selling day's rate; otherwise the frequent value stays.
+ */
+export function returnRateReference(days: { date?: string; salesQty: number | null; rate: number | null | undefined }[]): ReturnRateReference {
+  const frequent = frequentReference(days.map(day => ({ date: day.date, value: day.rate })), { wholePercent: true });
+  const sampleInsufficient = frequent.samples > 0 && frequent.nonZeroSamples < MIN_FREQUENT_SAMPLE_DAYS;
+  let value = frequent.value, fallback: ReturnRateReference["fallback"] = null;
+  if (sampleInsufficient) {
+    const validRate = (rate: unknown): rate is number => typeof rate === "number" && Number.isFinite(rate) && rate >= 0;
+    const complete = days.every(day => day.salesQty != null && (day.salesQty === 0 || validRate(day.rate)));
+    const sales = days.reduce((sum, day) => sum.plus(day.salesQty || 0), new Decimal(0));
+    if (complete && sales.gt(0)) {
+      const returns = days.reduce((sum, day) => day.salesQty ? sum.plus(new Decimal(day.salesQty).mul(day.rate!)) : sum, new Decimal(0));
+      value = roundToWholePercent(returns.div(sales).toNumber());
+      fallback = "sales_weighted";
+    }
+  }
+  return { ...frequent, value, frequentValue: frequent.value, sampleInsufficient, fallback, minSampleDays: MIN_FREQUENT_SAMPLE_DAYS };
+}
+
 export type InventoryReferenceWindow = {
   period: InventoryReferencePeriod;
   start_date: string | null;
@@ -163,12 +244,11 @@ export function compassInventoryReference(days: CompassReferenceDay[]) {
   );
   return {
     ambiguous,
-    dailySales: frequentReference(
+    dailySales: dailySalesReference(
       ambiguous ? [] : days.map((day, index) => ({ date: day.date, value: sales[index] })),
     ),
-    returnRate: frequentReference(
-      ambiguous ? [] : days.map((day) => ({ date: day.date, value: day.reportedReturnRate })),
-      { wholePercent: true },
+    returnRate: returnRateReference(
+      ambiguous ? [] : days.map((day, index) => ({ date: day.date, salesQty: sales[index], rate: day.reportedReturnRate })),
     ),
     // A missing sales cell must not silently become zero in the total.
     salesQty:

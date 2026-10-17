@@ -483,7 +483,16 @@ try {
         method: "frequent",
         samples: 30,
         nonZeroSamples: 30,
+        // Every day sold, so 动销占比 = 30/30 and inventory maths use 4 × 100%.
+        sellThroughRatio: 1,
+        effectiveValue: 4,
+        effectiveMethod: "frequent_x_ratio",
+        sampleInsufficient: false,
+        validTotal: 447,
+        minSampleDays: 5,
       });
+      assert.equal(row.effectiveDailySales, 4);
+      assert.equal(row.channelReference.returnRate.fallback, null);
       assert.deepEqual(row.channelReference.returnRate.values, [0.5, 0.3]);
       assert.equal(row.channelReference.salesQty, 447);
       assert.equal(row.channelReference.source.id, completeSource);
@@ -540,6 +549,10 @@ try {
       await activateReport(await referenceReport({ zero: true }));
       const row = (await summary({ skuId: skus[0] })).data[0];
       assert.equal(row.dailySales, 0);
+      // No selling day: 样本不足, period average 0 / 30 = 0; no sales to weight the return rate.
+      assert.equal(row.effectiveDailySales, 0);
+      assert.equal(row.channelReference.dailySales.sampleInsufficient, true);
+      assert.equal(row.channelReference.returnRate.fallback, null);
       assert.equal(row.returnRate, 0);
       assert.equal(row.estimatedReturns, 0);
       assert.equal(row.coverageDays, null);
@@ -584,6 +597,7 @@ try {
       await activateReport(await referenceReport({ duplicate: true }));
       const ambiguous = (await summary({ skuId: skus[0] })).data[0];
       assert.equal(ambiguous.dailySales, "2.5000");
+      assert.equal(ambiguous.effectiveDailySales, "2.5000");
       assert.equal(ambiguous.channelReference.reason, "AMBIGUOUS_BARCODE");
       await activateReport(
         await referenceReport({ start: shiftCompassDate(reportStart, 1) }),

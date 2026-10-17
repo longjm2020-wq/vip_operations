@@ -115,7 +115,11 @@ describe("complete barcode daily history and inventory frequent-value windows", 
     await finish(id);
     const result = await summary(), row = result.data[0];
     expect(row.dailySales).toBe(3); expect(row.returnRate).toBe(0.25); expect(row.estimatedReturns).toBe(22.5);
-    expect(row.channelReference.dailySales).toEqual({ value: 3, values: [3], frequencies: [30], samples: 30, nonZeroSamples: 30, method: "frequent" });
+    expect(row.channelReference.dailySales).toEqual({
+      value: 3, values: [3], frequencies: [30], samples: 30, nonZeroSamples: 30, method: "frequent",
+      sellThroughRatio: 1, effectiveValue: 3, effectiveMethod: "frequent_x_ratio", sampleInsufficient: false, validTotal: 90, minSampleDays: 5,
+    });
+    expect(row.effectiveDailySales).toBe(3);
     expect(row.channelReference.window).toEqual(result.reportCoverage.window);
     expect(result.reportCoverage.window).toMatchObject({ period: "30d", days: 30, coveredDays: 30, complete: true, method: "frequent" });
     expect(fixture.transactions.at(-1)).toMatchObject({ isolationLevel: "RepeatableRead" });
