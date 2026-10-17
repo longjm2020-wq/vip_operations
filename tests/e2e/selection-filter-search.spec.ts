@@ -11,6 +11,8 @@ async function fixture(page: Page, options: {
   materials?: string[];
   numberValues?: (number | string)[];
   rowFormatting?: { rowColor?: string; cellColors?: Record<string, string>; cellTextColors?: Record<string, string> }[];
+  preferences?: Record<string, unknown>;
+  shared?: { revision: number; view: SelectionView; restricted?: boolean };
 } = {}) {
   const values = options.materials || materials;
   let layout: SelectionLayoutSnapshot = {
@@ -20,11 +22,11 @@ async function fixture(page: Page, options: {
         { key: "material", label: "材质", width: 260 },
         ...(options.numberValues ? [{ key: numericField, label: "数值", width: 120, custom: true, type: "number" }] : []),
       ],
-      rowHeight: "compact", pageSize: 500,
+      rowHeight: "compact", pageSize: 500, ...options.preferences,
     }),
     revision: 1, sharedPreferences: null, sharedRevision: 0, canEditShared: !options.readonly,
   };
-  let shared: { revision: number; view: SelectionView } = { revision: 0, view: { filters: {}, sort: null } };
+  let shared: { revision: number; view: SelectionView; restricted?: boolean } = options.shared || { revision: 0, view: { filters: {}, sort: null } };
   const rows = values.map((material, index) => ({
     id: `filter-${index}`, xutiStyleNo: `FILTER-${index}`, material,
     sortOrder: index + 1, images: [], labelImages: [],
@@ -67,12 +69,16 @@ async function fixture(page: Page, options: {
     await route.fulfill({ json: { data } });
   });
   await page.goto("/style-selections");
-  await expect(page.locator("tr[data-selection-row]")).toHaveCount(values.length);
+  if (options.shared?.revision) await expect(page.locator("tr[data-selection-row]").first()).toBeVisible();
+  else await expect(page.locator("tr[data-selection-row]")).toHaveCount(values.length);
   return {
     sharedWrites, rowWrites,
     savedFilter: () => layout.preferences!.columnFilters.material,
     savedView: (): SelectionView => ({ filters: layout.preferences!.columnFilters, sort: layout.preferences!.columnSort }),
     rejectNextSharedWrite: () => { rejectSharedWrite = true; },
+    followShared: () => layout.preferences!.followShared,
+    /** Simulates another editor publishing a shared view from a different browser. */
+    publishElsewhere: (view: SelectionView) => { shared = { revision: shared.revision + 1, view }; },
   };
 }
 
@@ -536,4 +542,52 @@ test("自定义数字列按负数和小数数值升降排序，从文本列导�
   expect(await visibleRows(page)).toEqual(descending);
   expect(state.sharedWrites).toHaveLength(0);
   expect(state.rowWrites).toHaveLength(0);
+});
+
+const sharedMaterial = (...values: string[]): SelectionView => ({ filters: { material: { mode: "contains", value: "", values } }, sort: null });
+
+test("a published shared filter reaches a colleague who earlier switched to personal filters", async ({ page }) => {
+  // Before the fix, followShared=false (left over from any personal filter) ignored every later publish.
+  const state = await fixture(page, {
+    preferences: { followShared: false, columnFilters: {} },
+    shared: { revision: 2, view: sharedMaterial(materials[3]) },
+  });
+  await expect.poll(() => visibleRows(page)).toEqual(["filter-3"]);
+  await expect.poll(() => state.followShared()).toBe(true);
+  const panel = await openFilter(page);
+  await expect(panel.getByRole("switch", { name: "筛选对所有人可见", exact: true })).toBeChecked();
+  expect(state.sharedWrites).toHaveLength(0);
+});
+
+test("a personal filter is kept on refresh until someone publishes a newer shared filter", async ({ page }) => {
+  test.setTimeout(60000);
+  const state = await fixture(page, { shared: { revision: 1, view: sharedMaterial(materials[3]) } });
+  await expect.poll(() => visibleRows(page)).toEqual(["filter-3"]);
+  const panel = await openFilter(page);
+  const share = panel.getByRole("switch", { name: "筛选对所有人可见", exact: true });
+  await expect(share).toBeChecked();
+  await share.click();
+  await optionCheckbox(panel, materials[4]).check();
+  await confirm(panel);
+  await expect.poll(() => visibleRows(page)).toEqual(["filter-3", "filter-4"]);
+  await expect.poll(() => state.followShared()).toBe(false);
+  expect(state.sharedWrites).toHaveLength(0);
+  // Periodic refetches of the same shared revision do not override the personal filter.
+  await page.reload();
+  await expect.poll(() => visibleRows(page)).toEqual(["filter-3", "filter-4"]);
+  // Another editor publishes: the new shared filter is adopted within the refresh interval.
+  state.publishElsewhere(sharedMaterial(materials[5]));
+  await expect.poll(() => visibleRows(page), { timeout: 20000 }).toEqual(["filter-5"]);
+  await expect.poll(() => state.followShared()).toBe(true);
+});
+
+test("editors cannot switch on sharing while table protection reserves shared filters for admins", async ({ page }) => {
+  const state = await fixture(page, { shared: { revision: 0, view: { filters: {}, sort: null }, restricted: true } });
+  const panel = await openFilter(page);
+  await expect(panel.getByRole("switch", { name: "筛选对所有人可见", exact: true })).toBeDisabled();
+  await expect(panel.getByText("筛选对所有人可见", { exact: true })).toHaveAttribute("title", /表格保护开启中/);
+  await queryInput(panel).fill("桑蚕丝");
+  await confirm(panel);
+  await expect.poll(() => visibleRows(page)).toEqual(["filter-0", "filter-1", "filter-2"]);
+  expect(state.sharedWrites).toHaveLength(0);
 });
