@@ -121,8 +121,10 @@ export async function testInternalCollaborationPermissions(h: Record<string, any
     assert.equal((await request(endpoint, "GET", undefined, undefined, internal)).status, 403);
   assert.equal((await request("/style-selections", "POST", {}, undefined, internal)).status, 403);
   for (const endpoint of ["/projects/sops", "/projects", "/project-tables", path]) {
-    assert.equal((await request(endpoint, "GET", undefined, undefined, supplierSession)).status, 403);
-    assert.equal((await request(endpoint, "POST", {}, undefined, supplierSession)).status, 403);
+    // Scoped private tables conceal their existence from unrelated accounts.
+    const deniedStatus = endpoint === path ? 404 : 403;
+    assert.equal((await request(endpoint, "GET", undefined, undefined, supplierSession)).status, deniedStatus, endpoint);
+    assert.equal((await request(endpoint, "POST", {}, undefined, supplierSession)).status, deniedStatus, endpoint);
   }
   assert.equal((await request(`/project-tables/${table.id}`, "GET", undefined, undefined, outsider)).status, 404);
   assert.equal((await request(path, "GET", undefined, undefined, outsider)).status, 404);
@@ -135,7 +137,9 @@ export async function testInternalCollaborationPermissions(h: Record<string, any
   assert.equal((await request(`/project-library/table/${table.id}`, "DELETE", {}, undefined, outsider)).status, 403);
   await rows(db, "DELETE FROM role_permissions rp USING permissions p WHERE rp.permission_id=p.id AND rp.role_id=$1::bigint AND p.code='project.create' RETURNING rp.role_id", customer.id);
   assert.equal((await request(path, "GET", undefined, undefined, internal)).status, 200);
-  assert.equal((await request(`/style-selections/${row.id}?tableId=${table.id}`, "PATCH", {supplierStyleNo:"DENIED"}, undefined, internal)).status, 403);
+  assert.equal((await request("/project-tables", "POST", {name:"DENIED"}, undefined, internal)).status, 403);
+  assert.equal((await request(`/style-selections/${row.id}?tableId=${table.id}`, "PATCH", {supplierStyleNo:"OWNER-EDIT"}, undefined, internal)).status, 200, "existing table owners retain content editing rights");
+  assert.equal((await request(`/style-selections/${row.id}?tableId=${table.id}`, "PATCH", {supplierStyleNo:"DENIED"}, undefined, outsider)).status, 403, "public readers cannot edit content");
   await db.$executeRawUnsafe(sql);
   check("all internal roles can create private SOPs, projects and isolated tables; suppliers, unrelated selections and private outsiders remain restricted");
 }

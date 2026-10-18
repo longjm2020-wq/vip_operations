@@ -270,12 +270,13 @@ try {
       assert.equal(row.dailySales, "2.5000");
       assert.equal(row.estimatedReturns, 2);
       assert.equal(row.coverageDays, 4.4);
-      assert.equal(row.replenishmentQty, 5);
+      assert.equal(row.replenishmentQty, 42); // 2.5 * (20 + 1) - 11, without untimed inbound credit
+      assert.equal(row.replenishmentPlan.demand.source, "manual");
       const alpha = (
         await summary({ skuId: skus[0], warehouseId: warehouses[0].id })
       ).data[0];
       assert.equal(alpha.coverageDays, 2.8);
-      assert.equal(alpha.replenishmentQty, 16);
+      assert.equal(alpha.replenishmentQty, 46);
       assert.equal(alpha.warehouseName, "测试甲仓");
       assert.equal(row.warehouseName, "全部仓库");
     },
@@ -483,7 +484,7 @@ try {
         method: "frequent",
         samples: 30,
         nonZeroSamples: 30,
-        // Every day sold, so 动销占比 = 30/30 and inventory maths use 4 × 100%.
+        // Every day sold, so 动销占比 = 30/30 (display only; planning uses the period demand).
         sellThroughRatio: 1,
         effectiveValue: 4,
         effectiveMethod: "frequent_x_ratio",
@@ -491,7 +492,6 @@ try {
         validTotal: 447,
         minSampleDays: 5,
       });
-      assert.equal(row.effectiveDailySales, 4);
       assert.equal(row.channelReference.returnRate.fallback, null);
       assert.deepEqual(row.channelReference.returnRate.values, [0.5, 0.3]);
       assert.equal(row.channelReference.salesQty, 447);
@@ -499,8 +499,12 @@ try {
       assert.equal(row.channelReference.source.startDate, reportStart);
       assert.equal(row.channelReference.source.endDate, reportEnd);
       assert.equal(row.channelReference.barcode, "0012345678901234567890");
-      assert.equal(row.coverageDays, 2.8);
-      assert.equal(row.replenishmentQty, 26);
+      // Two internal SKUs share this barcode: never allocate the entire channel
+      // demand twice. Preserve each SKU's explicitly maintained manual fallback.
+      assert.equal(row.coverageDays, 4.4);
+      assert.equal(row.planningDailySales, 2.5);
+      assert.equal(row.replenishmentPlan.demand.source, "manual");
+      assert.equal(row.replenishmentQty, 42);
       assert.deepEqual(
         (await summary({ dimension: "style" })).totals,
         expected,
@@ -549,14 +553,14 @@ try {
       await activateReport(await referenceReport({ zero: true }));
       const row = (await summary({ skuId: skus[0] })).data[0];
       assert.equal(row.dailySales, 0);
-      // No selling day: 样本不足, period average 0 / 30 = 0; no sales to weight the return rate.
-      assert.equal(row.effectiveDailySales, 0);
+      // No selling day: 样本不足 (period average 0 / 30 = 0); no sales to weight the return rate.
+      assert.equal(row.channelReference.dailySales.effectiveValue, 0);
       assert.equal(row.channelReference.dailySales.sampleInsufficient, true);
       assert.equal(row.channelReference.returnRate.fallback, null);
       assert.equal(row.returnRate, 0);
       assert.equal(row.estimatedReturns, 0);
-      assert.equal(row.coverageDays, null);
-      assert.equal(row.replenishmentQty, 0);
+      assert.equal(row.coverageDays, 4.4); // duplicate internal barcode still requires a SKU-specific reference
+      assert.equal(row.replenishmentQty, 42);
     },
   );
   await check(
@@ -597,7 +601,6 @@ try {
       await activateReport(await referenceReport({ duplicate: true }));
       const ambiguous = (await summary({ skuId: skus[0] })).data[0];
       assert.equal(ambiguous.dailySales, "2.5000");
-      assert.equal(ambiguous.effectiveDailySales, "2.5000");
       assert.equal(ambiguous.channelReference.reason, "AMBIGUOUS_BARCODE");
       await activateReport(
         await referenceReport({ start: shiftCompassDate(reportStart, 1) }),

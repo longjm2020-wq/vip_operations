@@ -9,6 +9,9 @@ import {
   MIN_FREQUENT_SAMPLE_DAYS,
   roundToWholePercent,
   inventoryReferenceWindow,
+  medianReference,
+  statisticalReference,
+  inventoryReferenceMethodLabels,
 } from "../../packages/contracts/src/compass-inventory-reference.js";
 import { normalizeCompassWorkbook } from "../../packages/contracts/src/compass-analytics.js";
 
@@ -219,5 +222,29 @@ describe("sell-through correction (动销天数占比) and small-sample protecti
     expect(returnRateReference([...rows, { date: "2026-09-04", salesQty: null, rate: 0.2 }])).toMatchObject({ value: 0.15, fallback: null }); // 20% (latest) and 10% tie-break
     // No sales at all: nothing to weight by.
     expect(returnRateReference([{ date: "2026-09-01", salesQty: 0, rate: 0.4 }])).toMatchObject({ value: 0.4, fallback: null, sampleInsufficient: true });
+  });
+});
+
+describe("account-configurable reference methods (merged with calculation panel)", () => {
+  it("defaults to 高频均值 and keeps median, mode and mean selectable", () => {
+    expect(Object.keys(inventoryReferenceMethodLabels)).toEqual(["frequent", "median", "mode", "mean"]);
+    const days = [
+      { date: "2026-10-01", salesQty: 1, reportedReturnRate: 0.1 },
+      { date: "2026-10-02", salesQty: 1, reportedReturnRate: 0.1 },
+      { date: "2026-10-03", salesQty: 4, reportedReturnRate: 0.4 },
+    ];
+    expect(compassInventoryReference(days).dailySales).toMatchObject({ method: "frequent", value: 2.5, values: [1, 4] });
+    const reference = compassInventoryReference(days, { dailySales: "mean", returnRate: "mode" });
+    expect(reference.dailySales).toEqual({ method: "mean", value: 2, values: [], samples: 3 });
+    expect(reference.returnRate).toEqual({ method: "mode", value: 0.1, values: [0.1], samples: 3, frequency: 2 });
+    expect(statisticalReference([0, 0.1, 0.2, null, -1, NaN], "mean").value).toBe(0.1);
+    expect(statisticalReference([1, 1, 3, 3, 5, 5], "mode").value).toBe(3);
+    expect(statisticalReference([0, 3, 3, 5], "frequent")).toMatchObject({ method: "frequent", value: 4 });
+  });
+  it("median still includes explicit zeroes and excludes invalid observations", () => {
+    expect(medianReference([0, 0, 2, 100])).toEqual({ value: 1, values: [0, 2], samples: 4, method: "median" });
+    expect(medianReference([9, 1, 3])).toEqual({ value: 3, values: [3], samples: 3, method: "median" });
+    expect(medianReference([0, 0, 1.5, 2, null, undefined, -1, NaN, Infinity])).toEqual({ value: 0.75, values: [0, 1.5], samples: 4, method: "median" });
+    expect(medianReference([null, -1, NaN])).toEqual({ value: null, values: [], samples: 0, method: "median" });
   });
 });

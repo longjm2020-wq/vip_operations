@@ -145,7 +145,7 @@ test("a failed lazy export download shows a recoverable error instead of failing
   await expect(
     dialog.getByText("导出失败，请重试", { exact: true }),
   ).toBeVisible();
-  await expect(dialog).toContainText("导出组件加载失败，请刷新页面后重新导出");
+  await expect(dialog).toContainText("Excel 处理组件加载失败，请检查网络后重试");
   await expect(dialog.getByRole("button", { name: "重新生成" })).toBeEnabled();
   await expect(dialog.getByRole("link", { name: "下载 Excel" })).toHaveCount(0);
   await page.unroute(/exceljs.*\.js/);

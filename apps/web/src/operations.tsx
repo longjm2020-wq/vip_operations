@@ -1,7 +1,9 @@
 import { PageSearch, PageSearchInput } from "./page-search";
 import { Table, exportTableData } from "./data-table";
 import { InventoryImport } from "./inventory-import";
-import { InventoryEstimateValue, InventoryReferenceValue, inventoryEffectiveDailySales, inventoryHasZeroReferenceSales } from "./inventory-reference-value";
+import { InventoryEstimateValue, InventoryReferenceValue, inventoryHasZeroReferenceSales } from "./inventory-reference-value";
+import { InventoryCalculationPanel, ReplenishmentValue, replenishmentExportNote } from "./inventory-replenishment";
+import { inventoryReferenceMethodLabels, type InventoryReferenceMethod } from "../../../packages/contracts/src/compass-inventory-reference";
 import { InventoryColumnPinning } from "./inventory-column-pinning";
 import {
   CompassProductImage,
@@ -130,7 +132,7 @@ function InventoryBalances() {
   const skuView = dimension === "sku";
   const [reportMatch, setReportMatch] = useState<InventoryReportMatch>("all");
   const [referencePeriod, setReferencePeriod] =
-    useState<InventoryReferencePeriod>("30d");
+    useState<InventoryReferencePeriod>();
   const [imagePreview, setImagePreview] = useState<CompassImageTarget | null>(
     null,
   );
@@ -141,7 +143,7 @@ function InventoryBalances() {
     [warehouse, setWarehouse] = useState<string>();
   const q = useList("/inventory/summary", {
       dimension,
-      ...(skuView ? { reportMatch, referencePeriod } : {}),
+      ...(skuView ? { reportMatch, ...(referencePeriod ? { referencePeriod } : {}) } : {}),
       ...(search ? { q: search } : {}),
       ...(warehouse ? { warehouseId: warehouse } : {}),
     }),
@@ -229,6 +231,11 @@ function InventoryBalances() {
       render: (_, r) => <InventoryReferenceValue row={r} field="returnRate" />,
     },
     {
+      title: "补货日均",
+      dataIndex: "planningDailySales",
+      render: (_, row) => <ReplenishmentValue row={row} field="planningDailySales" />,
+    },
+    {
       title: "可售天数",
       dataIndex: "coverageDays",
       render: (_, row) => <InventoryEstimateValue row={row} field="coverageDays" />,
@@ -248,6 +255,7 @@ function InventoryBalances() {
     "returnRate",
     "coverageDays",
     "replenishmentQty",
+    "planningDailySales",
   ]);
   const columns = allColumns.filter((column) => {
     const key =
@@ -272,22 +280,23 @@ function InventoryBalances() {
       : null;
   };
   const referenceWindow = q.data?.reportCoverage?.window;
+  const effectivePeriod: InventoryReferencePeriod = referencePeriod ?? referenceWindow?.period ?? "30d";
+  const methodLabel = (method?: InventoryReferenceMethod) => inventoryReferenceMethodLabels[method ?? "frequent"];
   const periodLabel = inventoryReferencePeriods.find(
-    (item) => item.value === referencePeriod,
+    (item) => item.value === effectivePeriod,
   )!.label;
   const referenceMethodText = (row: Row, key: "dailySales" | "returnRate" | "estimatedReturns") => {
     const reference = row.channelReference, daily = reference.dailySales, rate = reference.returnRate;
-    if (key === "estimatedReturns") return rate?.fallback ? "期间销量×期间退货率（退货率样本不足）" : "期间销量×退货率高频均值";
-    if (reference[key].method !== "frequent") return "罗盘参考值";
+    if (key === "estimatedReturns") return rate?.fallback ? "期间销量×期间退货率（退货率样本不足）" : `期间销量×退货率${methodLabel(rate?.method)}`;
+    if (reference[key].method !== "frequent") return `罗盘${methodLabel(reference[key].method)}`;
     if (key === "returnRate")
       return rate.fallback ? `样本不足（非0退货率${rate.nonZeroSamples}天<${rate.minSampleDays}天），期间退货件数÷期间销量` : rate.sampleInsufficient ? "罗盘高频均值（样本不足，缺少完整每日数据）" : "罗盘高频均值";
     return daily.sampleInsufficient
-      ? `罗盘高频均值；样本不足（有销量${daily.nonZeroSamples}天<${daily.minSampleDays}天），可售天数和补货按期间平均日销`
-      : `罗盘高频均值；可售天数和补货按高频均值×动销占比`;
+      ? `罗盘高频均值；样本不足（有销量${daily.nonZeroSamples}天<${daily.minSampleDays}天），仅供参考`
+      : "罗盘高频均值";
   };
   const percent = (value: unknown) => value == null ? null : Number((Number(value) * 100).toFixed(4));
   const exportReference = (row?: Row) => ({
-    effectiveDailySalesExport: row ? (inventoryEffectiveDailySales(row) ?? null) : "—",
     sellThroughRatioExport: row ? percent(row.channelReference?.dailySales?.sellThroughRatio) : "—",
     referencePeriodLabel: periodLabel,
     referenceStartDate: referenceWindow?.startDate ?? null,
@@ -308,7 +317,7 @@ function InventoryBalances() {
             ([key, label]) =>
               `${label}：${row.channelReference?.[key]?.value != null ? referenceMethodText(row, key) : row[key] != null ? "人工参考" : "暂无数据"}`,
           ),
-          ...(inventoryHasZeroReferenceSales(row) ? ["期间有销量，日销高频均值为0；可售天数暂不估算，补货数量为当前高频均值公式结果"] : []),
+          ...(row.replenishmentPlan ? [replenishmentExportNote(row)] : inventoryHasZeroReferenceSales(row) ? [`期间有销量，日销${methodLabel(row.channelReference?.dailySales?.method)}为0；可售天数暂不估算，补货数量为当前公式结果`] : []),
         ].join("；")
       : "库存总计；经营参考不汇总",
   });
@@ -317,6 +326,9 @@ function InventoryBalances() {
       <Tabs
         aria-label="库存汇总维度"
         activeKey={dimension}
+        tabBarExtraContent={skuView ? <InventoryCalculationPanel referencePeriod={effectivePeriod} onSaved={(period) => {
+          setReferencePeriod(period); q.setPage(1);
+        }} /> : undefined}
         items={inventoryDimensions.map((item) => ({ ...item }))}
         onChange={(key) => {
           setDimension(key as InventoryDimension);
@@ -350,7 +362,7 @@ function InventoryBalances() {
               <Select<InventoryReferencePeriod>
                 aria-label="经营参考周期"
                 style={{ width: 140 }}
-                value={referencePeriod}
+                value={effectivePeriod}
                 options={[...inventoryReferencePeriods]}
                 onChange={(value) => {
                   setReferencePeriod(value);
@@ -427,10 +439,6 @@ function InventoryBalances() {
                         dataIndex: "referenceExpectedDays",
                       },
                       {
-                        title: "库存计算日销（可售天数/补货）",
-                        dataIndex: "effectiveDailySalesExport",
-                      },
-                      {
                         title: "动销天数占比(%)",
                         dataIndex: "sellThroughRatioExport",
                       },
@@ -493,8 +501,9 @@ function InventoryBalances() {
                 {referenceWindow.startDate ?? "—"} —{" "}
                 {referenceWindow.endDate ?? "—"} · 报表覆盖{" "}
                 {referenceWindow.coveredDays} / {referenceWindow.days} 天 ·{" "}
-                <span title="渠道日销与退货率：忽略0值，取出现天数最多的前两个值求平均 (R1+R2)÷2；退货率按整数百分比统计。可售天数和补货按 高频均值 × 动销天数占比 计算；有销量少于5天时按期间平均日销">
-                  高频均值
+                <span title="高频均值：忽略0值，取出现天数最多的前两个值求平均 (R1+R2)÷2；退货率按整数百分比统计，非0天数少于5天时改用期间退货数÷期间销量。可售天数和补货按计算配置中的期间需求计算">
+                  日销{methodLabel(q.data.replenishmentPolicy?.policy.dailySalesMethod ?? referenceWindow.method)} ·
+                  退货率{methodLabel(q.data.replenishmentPolicy?.policy.returnRateMethod)}
                 </span>
                 {!referenceWindow.complete && (
                   <span className="inventory-reference-incomplete">
@@ -516,6 +525,12 @@ function InventoryBalances() {
           </div>
         )}
         <QueryState error={q.error} reload={() => q.refetch()} />
+        {skuView && q.data?.replenishmentPolicy && <div className="inventory-report-coverage secondary">
+          补货按完整逐日日均估算 · 采购交期 {q.data.replenishmentPolicy.policy.purchaseLeadDays} 天 ·
+          发货至可再售 {q.data.replenishmentPolicy.policy.returnDaysMin}–{q.data.replenishmentPolicy.policy.returnDaysMax} 天 ·
+          可再售比例 {Number((q.data.replenishmentPolicy.policy.resalableRate * 100).toFixed(2))}% ·
+          {q.data.replenishmentPolicy.policy.confirmedReturnRate == null ? " 退货率未核验，主建议未抵扣退货" : " 已按人工核验退货率试算"}
+        </div>}
         <InventoryColumnPinning dimension={dimension} columns={columns}>
           {(displayedColumns) => (
             <Table<Row>

@@ -140,6 +140,27 @@ const imageField = {
   width: 120,
   type: "image" as const,
 };
+async function registerSourceFields(fields: SelectionField[]) {
+  const current = await ok("/style-selections/layout-preferences");
+  const preferences = selectionLayoutSchema.parse(
+    current.preferences || { columns: selectionBaseFields },
+  );
+  await ok("/style-selections/layout-preferences", "POST", {
+    revision: current.revision,
+    preferences: {
+      ...preferences,
+      columns: [
+        ...preferences.columns.filter(
+          (field) => !fields.some((added) => added.key === field.key),
+        ),
+        ...fields.map((field) => ({
+          ...preferences.columns.find((current) => current.key === field.key),
+          ...field,
+        })),
+      ],
+    },
+  });
+}
 try {
   for (let i = 0; i < 100; i++) {
     try {
@@ -169,6 +190,11 @@ try {
     "UPDATE project_tables SET initial_layout='selection' WHERE id=$1::bigint",
     archive.id,
   );
+  const legacyArchive = await ok("/product-archive-table");
+  await ok(scoped(archive, "/layout-preferences"), "POST", {
+    revision: 0,
+    preferences: selectionLayoutSchema.parse({ columns: legacyArchive.fields }),
+  });
   const old = (await ok(scoped(archive))).find(
     (row: any) => row.xutiStyleNo === "EXISTING",
   );
@@ -197,6 +223,7 @@ try {
     "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p1cAAAAASUVORK5CYII=";
   const upload = await ok("/style-selections/images", "POST", { data: png });
   const photo = { id: "photo-1", url: upload.url, color: "米白色" };
+  await registerSourceFields([custom, imageField]);
   const source = await ok("/style-selections", "POST", {
     xutiStyleNo: "TRANSMIT-01",
     registrationBatch: "2026-09-28",
@@ -212,22 +239,18 @@ try {
   });
   const body = {
     rowIds: [source.id],
-    fields: [
-      ...selectionBaseFields.map((field) =>
-        field.key === "registrationBatch"
-          ? { ...field, type: "date" as const }
-          : field,
-      ),
-      custom,
-      imageField,
-    ],
+    fields: [...selectionBaseFields, custom, imageField],
     target: target.id,
     mappings: [],
     copyMissingFields: true,
   };
   const preview = await ok("/style-selections/migration/preview", "POST", body);
   assert.equal(preview.created, 1);
-  assert.equal(preview.addedFields, 15);
+  assert.equal(
+    preview.addedFields,
+    14,
+    "computed creation time is not transferred as an editable field",
+  );
   const key = randomUUID(),
     sent = await ok(
       "/style-selections/migration",
@@ -247,7 +270,8 @@ try {
   assert.equal(locked.migrationLocked, true);
   assert.equal(locked.migrationTargetWorkspace, target.id);
   assert.equal(locked.migrationTargetRowId, copied.id);
-  assert.equal(copied.registrationBatch, "2026-09-28");
+  assert.equal(copied.registrationBatch, null);
+  assert.ok(copied.createdAt, "the destination receives its own creation time");
   assert.equal(copied.extraFields[custom.key], "同格\n多行备注");
   assert.equal(copied.images[0].url, upload.url + "?tableId=" + target.id);
   assert.equal(
@@ -259,7 +283,7 @@ try {
     200,
   );
   const destinationPrefs = await ok(scoped(target, "/layout-preferences"));
-  assert.equal(destinationPrefs.preferences.columns.length, 15);
+  assert.equal(destinationPrefs.preferences.columns.length, 14);
   assert.equal(
     (
       await request("/style-selections/" + source.id, "PATCH", {
@@ -347,10 +371,12 @@ try {
     rowIds: [rowA.id, rowB.id],
     fields: selectionBaseFields,
     target: target.id,
-    mappings: selectionBaseFields.map((field) => ({
-      source: field.key,
-      target: field.key,
-    })),
+    mappings: selectionBaseFields
+      .filter((field) => field.type !== "createdTime")
+      .map((field) => ({
+        source: field.key,
+        target: field.key,
+      })),
     copyMissingFields: false,
   };
   const batchPreview = await ok(
@@ -416,10 +442,12 @@ try {
     rowIds: [toArchive.id],
     fields: selectionBaseFields,
     target: archive.id,
-    mappings: selectionBaseFields.map((field) => ({
-      source: field.key,
-      target: field.key,
-    })),
+    mappings: selectionBaseFields
+      .filter((field) => field.type !== "createdTime")
+      .map((field) => ({
+        source: field.key,
+        target: field.key,
+      })),
     copyMissingFields: true,
   };
   const archivePreview = await ok(
@@ -473,10 +501,29 @@ try {
   assert.equal(mirrored.extraFields["custom:product:name"], "详情修改后");
   assert.equal(mirrored.labelImages.length, 1);
   assert.equal(mirrored.images[0].url, archiveRow.images[0].url);
-  assert.equal(
-    (await request(scoped(archive, "/" + archiveRow.id), "DELETE")).status,
-    409,
+  // Use an explicit super-administrator to reach the product linkage guard,
+  // since normal administrators cannot delete rows containing legacy hidden fields.
+  const archiveGuard = await userWith("archive-deletion-guard", [
+    "product.read",
+    "product.update",
+  ]);
+  await rows(
+    db,
+    "INSERT INTO user_roles(user_id,role_id) SELECT u.id,r.id FROM users u CROSS JOIN roles r WHERE u.username='archive-deletion-guard' AND r.code='SUPER_ADMIN'",
   );
+  const archiveDeletion = await request(
+    scoped(archive, "/" + archiveRow.id),
+    "DELETE",
+    undefined,
+    undefined,
+    archiveGuard,
+  );
+  assert.equal(
+    archiveDeletion.status,
+    409,
+    JSON.stringify(archiveDeletion.result),
+  );
+  assert.equal(archiveDeletion.result.error.code, "PRODUCT_IN_USE");
   const draft = await ok(scoped(archive), "POST", {});
   assert.equal(draft.productId, null);
   await ok(scoped(archive, "/" + draft.id), "DELETE");
@@ -594,6 +641,7 @@ try {
         color: "orange",
       },
     };
+  await registerSourceFields([washing, actions, tags]);
   let choiceLayout = await ok(scoped(archive, "/layout-preferences"));
   const originalColumns = choiceLayout.preferences.columns;
   choiceLayout = await ok(scoped(archive, "/layout-preferences"), "POST", {
@@ -829,13 +877,38 @@ try {
   );
   choiceLayout = await ok(scoped(archive, "/layout-preferences"), "POST", {
     revision: limitedLayout.revision,
-    preferences: choiceLayout.preferences,
+    preferences: {
+      ...choiceLayout.preferences,
+      columns: choiceLayout.preferences.columns.map(
+        (field: SelectionField) => ({
+          ...field,
+          fieldRevision: limitedLayout.preferences.columns.find(
+            (current: SelectionField) => current.key === field.key,
+          )?.fieldRevision,
+        }),
+      ),
+    },
   });
   const productChoice = await ok("/product-fields", "POST", {
     name: "商品专用质检",
     type: "select",
     options: ["商品已配置"],
   });
+  // Product fields are public; explicitly publish source fields before mapping to them.
+  const publicSource = await ok("/style-selections/layout-preferences");
+  for (const field of [washing, actions]) {
+    const registered = publicSource.preferences.columns.find(
+      (item: SelectionField) => item.key === field.key,
+    );
+    await ok(
+      `/style-selections/fields/${encodeURIComponent(field.key)}/visibility`,
+      "POST",
+      {
+        public: true,
+        revision: registered.fieldRevision,
+      },
+    );
+  }
   const productChoiceKey = "custom:product:" + productChoice.id;
   choiceLayout = await ok(scoped(archive, "/layout-preferences"), "POST", {
     revision: choiceLayout.revision,
@@ -999,6 +1072,9 @@ try {
   console.log(
     "PASS the built-in product washing field appends explicitly previewed shared choices and writes real product values, with catalog conflict checks and idempotency",
   );
+  await registerSourceFields([
+    { ...washing, options: [...washing.options!, "传送新选项"] },
+  ]);
   const rollbackSharedFirst = await ok("/style-selections", "POST", {
       xutiStyleNo: "GLOBAL-ROLLBACK-1",
       supplierCode: "2026",
@@ -1126,7 +1202,10 @@ try {
     },
   );
   assert.equal(sharedMultiple.status, 400);
-  assert.match(JSON.stringify(sharedMultiple.result), /请选择已配置的选项/);
+  assert.match(
+    JSON.stringify(sharedMultiple.result),
+    /多个已选选项不能传入单选字段/,
+  );
   assert.deepEqual(
     (await one(
       db,
@@ -1177,11 +1256,18 @@ try {
     readerFreshLayout.preferences.columns[0].options,
     sharedOptions,
   );
-  assert.equal(readerFreshLayout.preferences.columns[0].label, "个人质检名称");
+  const authoritativeWashing = choiceLayout.preferences.columns.find(
+    (field: SelectionField) => field.key === sharedWashingKey,
+  );
+  assert.equal(
+    readerFreshLayout.preferences.columns[0].label,
+    authoritativeWashing.label,
+  );
   assert.equal(readerFreshLayout.preferences.columns[0].width, 222);
-  assert.deepEqual(readerFreshLayout.preferences.columns[0].optionColors, {
-    规范: "orange",
-  });
+  assert.deepEqual(
+    readerFreshLayout.preferences.columns[0].optionColors,
+    authoritativeWashing.optionColors,
+  );
   assert.equal(
     (
       await request(
@@ -1242,13 +1328,20 @@ try {
   assert.equal(
     (await request(scoped(archive), "GET", undefined, undefined, projectEditor))
       .status,
-    403,
+    404,
   );
   const available = await ok("/style-selections/migration/targets");
   assert(available.some((item: any) => item.key === archive.id));
   assert(available.some((item: any) => item.key === target.id));
+  const editorTable = await ok(
+    "/project-tables",
+    "POST",
+    { name: "项目账号自己的表格" },
+    undefined,
+    projectEditor,
+  );
   const projectTargets = await ok(
-    scoped(target, "/migration/targets"),
+    scoped(editorTable, "/migration/targets"),
     "GET",
     undefined,
     undefined,
@@ -1274,12 +1367,13 @@ try {
     ignoredSources: ["images"],
     copyMissingFields: false,
   };
+  const sourceLayout = await ok("/style-selections/layout-preferences");
   const preferences = selectionLayoutSchema.parse({
-    columns: selectionBaseFields,
+    ...sourceLayout.preferences,
     migrationConfig: config,
   });
   await ok("/style-selections/layout-preferences", "POST", {
-    revision: 0,
+    revision: sourceLayout.revision,
     preferences,
   });
   const secondSession = await login("admin", process.env.ADMIN_PASSWORD!);

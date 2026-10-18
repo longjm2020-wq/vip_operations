@@ -34,6 +34,7 @@ import {
 } from "./modules/master/product-fields.js";
 import * as inventory from "./modules/inventory/service.js";
 import { inventorySummary } from "./modules/inventory/summary.js";
+import { replenishmentPolicy, saveReplenishmentPolicy } from "./modules/inventory/replenishment-policy.js";
 import { InventoryFulfilmentController } from "./modules/inventory/controller.js";
 import * as purchase from "./modules/purchases/service.js";
 import * as suggestion from "./modules/suggestions/service.js";
@@ -141,8 +142,14 @@ class InventoryController {
   @Permission("inventory.read") @Get() list(@Query() q: any) {
     return inventory.balances(q);
   }
-  @Permission("inventory.read") @Get("summary") summary(@Query() q: any) {
-    return inventorySummary(q);
+  @Permission("inventory.read") @Get("summary") summary(@Req() r: AuthRequest, @Query() q: any) {
+    return inventorySummary(q, db, r.actor.id);
+  }
+  @Permission("inventory.read") @Get("replenishment-policy") policy(@Req() r: AuthRequest) {
+    return replenishmentPolicy(r.actor.id);
+  }
+  @Permission("inventory.read") @Post("replenishment-policy") savePolicy(@Req() r: AuthRequest, @Body() b: unknown) {
+    return saveReplenishmentPolicy(context(r), b);
   }
   @Permission("inventory.read") @Get("transactions") transactions(
     @Query() q: any,

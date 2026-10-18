@@ -2,6 +2,40 @@ import { Decimal } from "decimal.js";
 import type { InventoryReferencePeriod } from "./inventory-summary.js";
 import { shiftCompassDate } from "./compass-analytics.js";
 
+export type InventoryReferenceMethod = "frequent" | "median" | "mode" | "mean";
+/** 高频均值 is the default: ignore zero days and average the two most frequent values. */
+export const inventoryReferenceMethodLabels = { frequent: "高频均值", median: "中位数", mode: "众数（并列取均值）", mean: "平均值" } as const;
+export type StatisticalReference = {
+  value: number | null; values: number[]; samples: number;
+  method: InventoryReferenceMethod; frequency?: number;
+};
+
+export type MedianReference = {
+  value: number | null;
+  values: number[];
+  samples: number;
+  method: "median";
+};
+
+export function medianReference(values: (number | null | undefined)[]): MedianReference {
+  const sorted = values.filter((value): value is number =>
+    value != null && Number.isFinite(value) && value >= 0,
+  ).sort((a, b) => a - b);
+  const middle = Math.floor(sorted.length / 2);
+  const central = sorted.length
+    ? sorted.length % 2 ? [sorted[middle]] : [sorted[middle - 1], sorted[middle]]
+    : [];
+  return {
+    value: central.length
+      ? central.reduce((total, value) => total.plus(value), new Decimal(0))
+          .div(central.length).toDecimalPlaces(8).toNumber()
+      : null,
+    values: central,
+    samples: sorted.length,
+    method: "median",
+  };
+}
+
 export type FrequentReference = {
   value: number | null;
   /** R1 and R2 (or R1 alone) in rank order, after any per-day rounding. */
@@ -160,7 +194,7 @@ export type InventoryReferenceWindow = {
   days: number;
   covered_days: number;
   complete: boolean;
-  method: "frequent";
+  method: InventoryReferenceMethod;
 };
 
 export function inventoryReferenceWindow(
@@ -232,7 +266,19 @@ export type CompassReferenceDay = {
   reportedReturnRate?: number | null;
 };
 
-export function compassInventoryReference(days: CompassReferenceDay[]) {
+export function statisticalReference(values: (number | null | undefined)[], method: InventoryReferenceMethod): StatisticalReference {
+  if (method === "frequent") return frequentReference(values.map((value) => ({ value })));
+  if (method === "median") return medianReference(values);
+  if (method === "mode") return { ...modeReference(values), method: "mode" };
+  const valid = values.filter((value): value is number => value != null && Number.isFinite(value) && value >= 0);
+  return { method: "mean", values: [], samples: valid.length,
+    value: valid.length ? valid.reduce((sum, value) => sum.plus(value), new Decimal(0)).div(valid.length).toDecimalPlaces(8).toNumber() : null };
+}
+
+export type InventoryReferenceMethods = { dailySales: InventoryReferenceMethod; returnRate: InventoryReferenceMethod };
+export const defaultInventoryReferenceMethods: InventoryReferenceMethods = { dailySales: "frequent", returnRate: "frequent" };
+
+export function compassInventoryReference(days: CompassReferenceDay[], methods: InventoryReferenceMethods = defaultInventoryReferenceMethods) {
   const uniqueDates = new Set(days.map((day) => day.date));
   const ambiguous = uniqueDates.size !== days.length;
   const sales = days.map((day) =>
@@ -242,14 +288,17 @@ export function compassInventoryReference(days: CompassReferenceDay[]) {
       ? day.salesQty
       : null,
   );
+  // 高频均值 keeps its 动销占比 / 样本不足 details; other methods use the plain statistic.
+  const dailySales: StatisticalReference | DailySalesReference = methods.dailySales === "frequent"
+    ? dailySalesReference(ambiguous ? [] : days.map((day, index) => ({ date: day.date, value: sales[index] })))
+    : statisticalReference(ambiguous ? [] : sales, methods.dailySales);
+  const returnRate: StatisticalReference | ReturnRateReference = methods.returnRate === "frequent"
+    ? returnRateReference(ambiguous ? [] : days.map((day, index) => ({ date: day.date, salesQty: sales[index], rate: day.reportedReturnRate })))
+    : statisticalReference(ambiguous ? [] : days.map((day) => day.reportedReturnRate), methods.returnRate);
   return {
     ambiguous,
-    dailySales: dailySalesReference(
-      ambiguous ? [] : days.map((day, index) => ({ date: day.date, value: sales[index] })),
-    ),
-    returnRate: returnRateReference(
-      ambiguous ? [] : days.map((day, index) => ({ date: day.date, salesQty: sales[index], rate: day.reportedReturnRate })),
-    ),
+    dailySales,
+    returnRate,
     // A missing sales cell must not silently become zero in the total.
     salesQty:
       !ambiguous && sales.length > 0 && sales.every((value) => value !== null)
