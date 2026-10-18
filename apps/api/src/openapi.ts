@@ -13,6 +13,7 @@ import { settingsSchema } from "./modules/analytics/mail.js";
 import { aiSettingsSchema } from "./modules/analytics/ai.js";
 import { loginSchema } from "./modules/auth/service.js";
 import { compassProbeRequestSchema } from "./integrations/vip/compass.js";
+import { replenishmentPolicyWriteSchema } from "../../../packages/contracts/src/inventory-replenishment.js";
 import {
   listingRequestSchema,
   listingStates,
@@ -163,10 +164,13 @@ export function enrichOpenApi(doc: OpenAPIObject) {
   doc.paths["/api/v1/inventory/summary"].get!.parameters!.push(
     { name: "dimension", in: "query", schema: { type: "string", enum: ["sku", "article", "style"], default: "sku" } },
     { name: "reportMatch", in: "query", schema: { type: "string", enum: ["all", "matched", "unmatched"], default: "all" }, description: "条码维度按所选经营参考周期的报表匹配情况筛选" },
-    { name: "referencePeriod", in: "query", schema: { type: "string", enum: ["3d", "7d", "15d", "30d", "3m", "6m", "1y"], default: "30d" }, description: "库存经营参考周期；以最新完整条码报表截止日为终点，月年按日历滚动。日销和每日退货率取中位数；历史日期覆盖不完整时保留人工参考" },
+    { name: "referencePeriod", in: "query", schema: { type: "string", enum: ["3d", "7d", "15d", "30d", "3m", "6m", "1y"] }, description: "库存经营参考周期；省略时使用当前账号保存的默认周期，首次为近30天。以最新完整条码报表截止日为终点，月年按日历滚动；日销及退货率按账号配置独立取中位数、众数或平均值。历史日期覆盖不完整时保留人工参考" },
     { name: "q", in: "query", schema: { type: "string", maxLength: 100 }, description: "商品编码、货号、款号、名称或条码关键词" },
     ...["warehouseId", "skuId", "productId", "supplierId", "categoryId"].map((name) => ({ name, in: "query" as const, schema: { type: "string" as const, pattern: "^[1-9][0-9]*$" } })),
   );
+  set("/api/v1/inventory/replenishment-policy", "get", undefined, "读取当前账号的计算配置及版本号");
+  doc.paths["/api/v1/inventory/replenishment-policy"].get!.parameters = [];
+  set("/api/v1/inventory/replenishment-policy", "post", replenishmentPolicyWriteSchema, "保存当前账号的计算配置；版本冲突返回409，不修改库存或创建采购单");
   set(
     "/api/v1/inventory/adjustments",
     "post",

@@ -48,7 +48,7 @@ const image = z
     colorFieldKey: z.string().regex(/^(?:standard|protected|custom:[a-zA-Z0-9:-]+)$/).max(100).optional(),
   })
   .strict();
-const labelImage = image.extend({ color: z.literal("").default(""), colorFieldKey: z.undefined().optional() });
+const labelImage = image.extend({ color: z.literal("").default(""), colorFieldKey: z.never().optional() });
 const cellColors = z.record(z.string(), z.enum(rowColors).nullable());
 const extraFields = z.record(z.string().regex(/^custom:[a-zA-Z0-9:-]+$/).max(100), z.string().max(100000).superRefine((value,ctx)=>{
   if(value.length<=2000)return;
