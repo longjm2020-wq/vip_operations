@@ -277,7 +277,7 @@ test("经营参考提供七个周期，切换重取第一页且跨汇总维度�
   await expect(selector(page)).toBeVisible();
   await expect(selector(page).locator("..")).toContainText("近30天");
   expect(state.requests.at(-1)!.searchParams.get("referencePeriod")).toBe(
-    "30d",
+    null,
   );
   await page.locator(".ant-pagination-item-2").click();
   await expect(page.locator(".ant-pagination-item-active")).toHaveText("2");

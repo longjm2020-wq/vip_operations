@@ -7,7 +7,8 @@ import {
 } from "../../../../../packages/database/src/index.js";
 import { fail, pagination, parse } from "../../core.js";
 import { balanceFilters } from "./service.js";
-import { calculateReference } from "../../../../../packages/contracts/src/inventory-reference.js";
+import { calculateReplenishmentPlan } from "../../../../../packages/contracts/src/inventory-replenishment.js";
+import { replenishmentPolicy } from "./replenishment-policy.js";
 import {
   inventoryDimensionSchema,
   inventoryReportMatchSchema,
@@ -17,26 +18,27 @@ import {
 import { applyCompassReferences } from "./compass-reference.js";
 import { applyCompassImages } from "./compass-images.js";
 
-export async function inventorySummary(q: Row, tx: Tx = db) {
+export async function inventorySummary(q: Row, tx: Tx = db, userId?: string) {
   // A report import can replace whole history days while a page is loading.
   // Match coverage, pagination, reference values and images must share a snapshot.
   if (tx === db) return db.$transaction(async (snapshot) => {
     await snapshot.$executeRawUnsafe("SET TRANSACTION READ ONLY");
-    return inventorySummarySnapshot(q, snapshot);
+    return inventorySummarySnapshot(q, snapshot, userId);
   }, { isolationLevel: "RepeatableRead", timeout: 15000 });
-  return inventorySummarySnapshot(q, tx);
+  return inventorySummarySnapshot(q, tx, userId);
 }
 
-async function inventorySummarySnapshot(q: Row, tx: Tx) {
+async function inventorySummarySnapshot(q: Row, tx: Tx, userId?: string) {
   const dimension = parse(inventoryDimensionSchema, q.dimension ?? "sku");
+  const skuView = dimension === "sku";
+  const policy = skuView ? await replenishmentPolicy(userId, tx) : null;
   const reportMatch = parse(inventoryReportMatchSchema, q.reportMatch ?? "all");
-  const referencePeriod = parse(inventoryReferencePeriodSchema, q.referencePeriod ?? "30d");
+  const referencePeriod = parse(inventoryReferencePeriodSchema, q.referencePeriod ?? policy?.policy.referencePeriod ?? "30d");
   const referenceStart = referencePeriod.endsWith("d")
     ? `i.end_date-${Number(referencePeriod.slice(0, -1)) - 1}`
     : `(i.end_date-interval '${referencePeriod === "1y" ? 12 : Number(referencePeriod.slice(0, -1))} months'+interval '1 day')::date`;
   const p = pagination(q),
     { vals, conditions } = balanceFilters(q);
-  const skuView = dimension === "sku";
   const groupKey = skuView
     ? "'sku:'||s.id::text"
     : dimension === "style"
@@ -159,7 +161,7 @@ async function inventorySummarySnapshot(q: Row, tx: Tx) {
       : 0,
     covered_days: first.window_covered_days,
     complete: false,
-    method: "median" as const,
+    method: policy?.policy.dailySalesMethod ?? "median",
   };
   window.complete = !!source && window.days > 0 && window.covered_days === window.days;
   const totals = Object.fromEntries(
@@ -182,7 +184,17 @@ async function inventorySummarySnapshot(q: Row, tx: Tx) {
       return record;
     });
   const references = skuView
-    ? (await applyCompassReferences(data, tx, source, window)).map(calculateReference)
+    ? (await applyCompassReferences(data, tx, source, window, {
+      dailySales: policy!.policy.dailySalesMethod, returnRate: policy!.policy.returnRateMethod,
+    })).map((row: Row) => {
+      const plan = calculateReplenishmentPlan({ demand: row.planning_demand,
+        availableQty: row.available_qty,
+        unconfirmedInboundQty: row.in_transit_qty + row.transfer_transit_qty + row.incoming_qty,
+        referenceReturnRate: row.return_rate == null ? null : Number(row.return_rate),
+      }, policy!.policy);
+      return { ...row, planning_daily_sales: plan.demand.dailySales,
+        replenishment_qty: plan.quantity, coverage_days: plan.coverageDays, replenishment_plan: plan };
+    })
     : data;
   return {
     data:
@@ -195,6 +207,7 @@ async function inventorySummarySnapshot(q: Row, tx: Tx) {
     dimension,
     ...(skuView
       ? {
+          replenishment_policy: policy,
           report_coverage: {
             total: first.coverage_total,
             matched: first.coverage_matched,

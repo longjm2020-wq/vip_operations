@@ -28,8 +28,10 @@ vi.mock("../../packages/database/src/index.js", async importOriginal => {
 });
 
 import { inventorySummary } from "../../apps/api/src/modules/inventory/summary.js";
+import { replenishmentPolicy, saveReplenishmentPolicy } from "../../apps/api/src/modules/inventory/replenishment-policy.js";
+import { defaultReplenishmentPolicy } from "../../packages/contracts/src/inventory-replenishment.js";
 import { beginImport, finishImport } from "../../apps/api/src/modules/analytics/service.js";
-import { camel } from "../../packages/database/src/index.js";
+import { camel, db } from "../../packages/database/src/index.js";
 
 const query = async (text: string, values: unknown[] = []) =>
   (await fixture.database!.query<Row>(text, values)).rows;
@@ -60,12 +62,13 @@ async function report(start: string, end: string, options: {
   return String(source.id);
 }
 const finish = async (id: string) => finishImport(context(), id);
-const summary = async (extra: Row = {}) => camel(await inventorySummary({ skuId: "1", ...extra }));
+const summary = async (extra: Row = {}, userId?: string) => camel(await inventorySummary({ skuId: "1", ...extra }, db, userId));
 const day = "2026-10-15";
 
 beforeAll(async () => {
   fixture.database = new PGlite();
   await fixture.database.exec(`
+    CREATE TABLE users(id bigint PRIMARY KEY); INSERT INTO users VALUES(1),(2);
     CREATE TABLE compass_imports(id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,dimension text,file_name text,file_hash text,start_date date,end_date date,
       expected_rows int,status text DEFAULT 'STAGING',imported_by bigint,normalization_version int,completed_at timestamptz,created_at timestamptz DEFAULT now());
     CREATE TABLE compass_records(import_id bigint REFERENCES compass_imports(id) ON DELETE CASCADE,business_date date,entity_key text,style_no text,article_no text,barcode text,payload jsonb,PRIMARY KEY(import_id,business_date,entity_key));
@@ -84,6 +87,7 @@ beforeAll(async () => {
     CREATE TABLE inventory_shipments(id bigint,warehouse_id bigint,purchase_order_id bigint,transfer_id bigint,status text);
     CREATE TABLE inventory_shipment_items(shipment_id bigint,sku_id bigint,quantity int,qualified_qty int,putaway_qty int);
   `);
+  await fixture.database.exec(await readFile(new URL("../../packages/database/migrations/067_inventory_replenishment_policies.sql", import.meta.url), "utf8"));
   // Seed retained complete files before migration to test backfill independently
   // of the new finish hook. Distinct report days are verified before archiving.
   const old = await report("2026-01-01", "2026-01-02", { sales: 1 });
@@ -103,12 +107,102 @@ beforeAll(async () => {
   ]);
 }, 30000);
 beforeEach(async () => {
-  await fixture.database!.exec("TRUNCATE compass_active_imports,compass_records,compass_imports,compass_barcode_history_records,compass_barcode_history_days,compass_barcode_history_files,idempotency_records,audit_logs RESTART IDENTITY");
+  await fixture.database!.exec("TRUNCATE compass_active_imports,compass_records,compass_imports,compass_barcode_history_records,compass_barcode_history_days,compass_barcode_history_files,idempotency_records,audit_logs,inventory_replenishment_policies RESTART IDENTITY");
   fixture.transactions = []; fixture.queries = [];
 });
 afterAll(async () => fixture.database?.close());
 
 describe("complete barcode daily history and inventory median windows", () => {
+  it("keeps the median reference and calculates replenishment from complete daily demand", async () => {
+    await finish(await report(shiftCompassDate(day, -29), day, { sales: 0 }));
+    await finish(await report(day, day, { sales: 30 }));
+    const row = (await summary()).data[0];
+    expect(row.dailySales).toBe(0);
+    expect(row.planningDailySales).toBe(1);
+    expect(row.coverageDays).toBe(14);
+    expect(row.replenishmentQty).toBe(7);
+    expect(row.replenishmentPlan).toMatchObject({ demand: { source: "report_mean", salesQty: 30, days: 30 },
+      availableQty: 14, grossQuantity: 7, quantity: 7 });
+    expect((await query("SELECT daily_sales FROM inventory_sku_references WHERE sku_id=1"))[0].daily_sales).toBe("8");
+  });
+
+  it("does not use a partially recorded SKU average as a complete planning window", async () => {
+    await finish(await report(shiftCompassDate(day, -29), day));
+    await finish(await report(day, day, { omitBarcode: true }));
+    const row = (await summary()).data[0];
+    expect(row.channelReference.recordedDays).toBe(29);
+    expect(row.dailySales).toBe(3);
+    expect(row.planningDailySales).toBe(8);
+    expect(row.replenishmentPlan.demand.source).toBe("manual");
+  });
+
+  it("does not allocate a shared barcode's channel demand twice, even when filtering one SKU", async () => {
+    await finish(await report(shiftCompassDate(day, -29), day));
+    await query("UPDATE skus SET barcode='001234' WHERE id=2");
+    try {
+      const first = (await summary()).data[0];
+      expect(first.dailySales).toBe(3);
+      expect(first.planningDailySales).toBe(8);
+      expect(first.replenishmentPlan.demand.reason).toContain("多个内部SKU");
+      const other = (await summary({ skuId: "2" })).data[0];
+      expect(other.dailySales).toBe(3);
+      expect(other.replenishmentQty).toBeNull();
+      expect(other.replenishmentPlan.demand.reason).toContain("不重复分配");
+    } finally { await query("UPDATE skus SET barcode='UNMATCHED' WHERE id=2"); }
+  });
+
+  it("persists policies by authenticated account and queries the saved policy in the inventory snapshot", async () => {
+    const c = context(); c.actor.permissions.push("inventory.read");
+    const body = { revision: 0, policy: { ...defaultReplenishmentPolicy, purchaseLeadDays: 3 } };
+    const saved = await saveReplenishmentPolicy(c, body);
+    expect(saved.revision).toBe(1);
+    expect(await saveReplenishmentPolicy(c, body)).toEqual(saved);
+    const restored = await db.$transaction(tx => replenishmentPolicy("1", tx));
+    expect(restored).toEqual(saved);
+    const other = await db.$transaction(tx => replenishmentPolicy("2", tx));
+    expect(other).toEqual({ revision: 0, policy: defaultReplenishmentPolicy });
+    await finish(await report(shiftCompassDate(day, -29), day));
+    const result = await summary({}, "1");
+    expect(result.replenishmentPolicy).toEqual(saved);
+    expect(result.data[0].replenishmentPlan.horizonDays).toBe(4);
+    expect(result.data[0].replenishmentQty).toBe(0);
+    expect((await summary({}, "2")).data[0].replenishmentQty).toBe(49);
+    expect((await query("SELECT count(*)::int AS n FROM audit_logs WHERE action='inventory.replenishment-policy'"))[0].n).toBe(1);
+  });
+
+  it("rejects stale policy writes, unauthorized writes and identity injection", async () => {
+    const c = context(); c.actor.permissions.push("inventory.read");
+    const body = { revision: 0, policy: { ...defaultReplenishmentPolicy, confirmedReturnRate: 0.3 } };
+    await saveReplenishmentPolicy(c, body);
+    await expect(saveReplenishmentPolicy({ ...c, key: randomUUID() }, { ...body,
+      policy: { ...body.policy, purchaseLeadDays: 3 } }))
+      .rejects.toMatchObject({ response: { error: { code: "POLICY_CONFLICT" } } });
+    await expect(saveReplenishmentPolicy(context(), body))
+      .rejects.toMatchObject({ response: { error: { code: "FORBIDDEN" } } });
+    await expect(saveReplenishmentPolicy(c, { ...body, userId: "2" }))
+      .rejects.toMatchObject({ response: { error: { code: "VALIDATION_ERROR" } } });
+    expect((await query("SELECT revision,policy FROM inventory_replenishment_policies"))[0])
+      .toMatchObject({ revision: 1, policy: body.policy });
+  });
+
+  it("restores the account period and independently saved daily sales / return methods", async () => {
+    await finish(await report(shiftCompassDate(day, -29), day));
+    await finish(await report(day, day, { sales: 9, rate: 0.5 }));
+    const c = context(); c.actor.permissions.push("inventory.read");
+    await saveReplenishmentPolicy(c, { revision: 0, policy: { ...defaultReplenishmentPolicy,
+      referencePeriod: "3d", dailySalesMethod: "mean", returnRateMethod: "mode" } });
+    const result = await summary({}, "1"), row = result.data[0];
+    expect(result.reportCoverage.window).toMatchObject({ period: "3d", days: 3, method: "mean" });
+    expect(row.dailySales).toBe(5);
+    expect(row.returnRate).toBe(0.25);
+    expect(row.estimatedReturns).toBe(3.75);
+    expect(row.channelReference.returnRate).toMatchObject({ method: "mode", frequency: 2 });
+    expect(row.planningDailySales).toBe(5);
+    const temporary = await summary({ referencePeriod: "30d" }, "1");
+    expect(temporary.reportCoverage.window.period).toBe("30d");
+    expect(temporary.replenishmentPolicy.policy.referencePeriod).toBe("3d");
+  });
+
   it("publishes complete imports only and calculates all fields from one read-only snapshot", async () => {
     const id = await report(shiftCompassDate(day, -29), day);
     expect((await summary()).reportCoverage.window.complete).toBe(false);

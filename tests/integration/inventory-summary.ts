@@ -270,12 +270,13 @@ try {
       assert.equal(row.dailySales, "2.5000");
       assert.equal(row.estimatedReturns, 2);
       assert.equal(row.coverageDays, 4.4);
-      assert.equal(row.replenishmentQty, 5);
+      assert.equal(row.replenishmentQty, 42); // 2.5 * (20 + 1) - 11, without untimed inbound credit
+      assert.equal(row.replenishmentPlan.demand.source, "manual");
       const alpha = (
         await summary({ skuId: skus[0], warehouseId: warehouses[0].id })
       ).data[0];
       assert.equal(alpha.coverageDays, 2.8);
-      assert.equal(alpha.replenishmentQty, 16);
+      assert.equal(alpha.replenishmentQty, 46);
       assert.equal(alpha.warehouseName, "测试甲仓");
       assert.equal(row.warehouseName, "全部仓库");
     },
@@ -487,8 +488,12 @@ try {
       assert.equal(row.channelReference.source.startDate, reportStart);
       assert.equal(row.channelReference.source.endDate, reportEnd);
       assert.equal(row.channelReference.barcode, "0012345678901234567890");
-      assert.equal(row.coverageDays, 0.7);
-      assert.equal(row.replenishmentQty, 187);
+      // Two internal SKUs share this barcode: never allocate the entire channel
+      // demand twice. Preserve each SKU's explicitly maintained manual fallback.
+      assert.equal(row.coverageDays, 4.4);
+      assert.equal(row.planningDailySales, 2.5);
+      assert.equal(row.replenishmentPlan.demand.source, "manual");
+      assert.equal(row.replenishmentQty, 42);
       assert.deepEqual(
         (await summary({ dimension: "style" })).totals,
         expected,
@@ -539,8 +544,8 @@ try {
       assert.equal(row.dailySales, 0);
       assert.equal(row.returnRate, 0);
       assert.equal(row.estimatedReturns, 0);
-      assert.equal(row.coverageDays, null);
-      assert.equal(row.replenishmentQty, 0);
+      assert.equal(row.coverageDays, 4.4); // duplicate internal barcode still requires a SKU-specific reference
+      assert.equal(row.replenishmentQty, 42);
     },
   );
   await check(

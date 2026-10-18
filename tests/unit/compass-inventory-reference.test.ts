@@ -5,10 +5,22 @@ import {
   estimatedReturns,
   medianReference,
   inventoryReferenceWindow,
+  statisticalReference,
 } from "../../packages/contracts/src/compass-inventory-reference.js";
 import { normalizeCompassWorkbook } from "../../packages/contracts/src/compass-analytics.js";
 
 describe("inventory median references and rolling calendar windows", () => {
+  it("supports independently configured daily sales and return statistics", () => {
+    const reference = compassInventoryReference([
+      { date: "2026-10-01", salesQty: 1, reportedReturnRate: 0.1 },
+      { date: "2026-10-02", salesQty: 1, reportedReturnRate: 0.1 },
+      { date: "2026-10-03", salesQty: 4, reportedReturnRate: 0.4 },
+    ], { dailySales: "mean", returnRate: "mode" });
+    expect(reference.dailySales).toEqual({ method: "mean", value: 2, values: [], samples: 3 });
+    expect(reference.returnRate).toEqual({ method: "mode", value: 0.1, values: [0.1], samples: 3, frequency: 2 });
+    expect(statisticalReference([0, 0.1, 0.2, null, -1, NaN], "mean").value).toBe(0.1);
+    expect(statisticalReference([1, 1, 3, 3, 5, 5], "mode").value).toBe(3);
+  });
   it("uses a true median instead of the most frequent value and preserves central observations", () => {
     expect(medianReference([0, 0, 2, 100])).toEqual({ value: 1, values: [0, 2], samples: 4, method: "median" });
     expect(medianReference([9, 1, 3])).toEqual({ value: 3, values: [3], samples: 3, method: "median" });
