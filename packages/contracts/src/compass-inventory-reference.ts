@@ -2,6 +2,13 @@ import { Decimal } from "decimal.js";
 import type { InventoryReferencePeriod } from "./inventory-summary.js";
 import { shiftCompassDate } from "./compass-analytics.js";
 
+export type InventoryReferenceMethod = "median" | "mode" | "mean";
+export const inventoryReferenceMethodLabels = { median: "中位数", mode: "众数（并列取均值）", mean: "平均值" } as const;
+export type StatisticalReference = {
+  value: number | null; values: number[]; samples: number;
+  method: InventoryReferenceMethod; frequency?: number;
+};
+
 export type MedianReference = {
   value: number | null;
   values: number[];
@@ -35,7 +42,7 @@ export type InventoryReferenceWindow = {
   days: number;
   covered_days: number;
   complete: boolean;
-  method: "median";
+  method: InventoryReferenceMethod;
 };
 
 export function inventoryReferenceWindow(
@@ -107,7 +114,17 @@ export type CompassReferenceDay = {
   reportedReturnRate?: number | null;
 };
 
-export function compassInventoryReference(days: CompassReferenceDay[]) {
+export function statisticalReference(values: (number | null | undefined)[], method: InventoryReferenceMethod): StatisticalReference {
+  if (method === "median") return medianReference(values);
+  if (method === "mode") return { ...modeReference(values), method: "mode" };
+  const valid = values.filter((value): value is number => value != null && Number.isFinite(value) && value >= 0);
+  return { method: "mean", values: [], samples: valid.length,
+    value: valid.length ? valid.reduce((sum, value) => sum.plus(value), new Decimal(0)).div(valid.length).toDecimalPlaces(8).toNumber() : null };
+}
+
+export function compassInventoryReference(days: CompassReferenceDay[], methods: {
+  dailySales: InventoryReferenceMethod; returnRate: InventoryReferenceMethod;
+} = { dailySales: "median", returnRate: "median" }) {
   const uniqueDates = new Set(days.map((day) => day.date));
   const ambiguous = uniqueDates.size !== days.length;
   const sales = days.map((day) =>
@@ -119,9 +136,10 @@ export function compassInventoryReference(days: CompassReferenceDay[]) {
   );
   return {
     ambiguous,
-    dailySales: medianReference(ambiguous ? [] : sales),
-    returnRate: medianReference(
+    dailySales: statisticalReference(ambiguous ? [] : sales, methods.dailySales),
+    returnRate: statisticalReference(
       ambiguous ? [] : days.map((day) => day.reportedReturnRate),
+      methods.returnRate,
     ),
     // A missing sales cell must not silently become zero in the total.
     salesQty:

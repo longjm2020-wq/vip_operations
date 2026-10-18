@@ -86,9 +86,14 @@ test("罗盘导入、日期区间、五种明细视图、维度下钻与邮件�
   await expect(
     sidebar.getByRole("link", { name: "选款登记", exact: true }),
   ).toHaveCount(0);
+  const entryOpened = page.waitForEvent("popup");
   await operationPage
     .getByRole("link", { name: "经营分析", exact: true })
     .click();
+  const entryPage = await entryOpened;
+  await expect(entryPage).toHaveURL(/\/analytics\/compass$/);
+  await entryPage.close();
+  await page.goto("/analytics/compass");
   await expect(
     page.getByRole("heading", { name: "经营分析", exact: true }),
   ).toBeVisible();

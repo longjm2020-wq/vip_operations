@@ -2,6 +2,8 @@ import { PageSearch, PageSearchInput } from "./page-search";
 import { Table, exportTableData } from "./data-table";
 import { InventoryImport } from "./inventory-import";
 import { InventoryEstimateValue, InventoryReferenceValue, inventoryHasZeroMedianSales } from "./inventory-reference-value";
+import { InventoryCalculationPanel, ReplenishmentValue, replenishmentExportNote } from "./inventory-replenishment";
+import { inventoryReferenceMethodLabels, type InventoryReferenceMethod } from "../../../packages/contracts/src/compass-inventory-reference";
 import { InventoryColumnPinning } from "./inventory-column-pinning";
 import {
   CompassProductImage,
@@ -130,7 +132,7 @@ function InventoryBalances() {
   const skuView = dimension === "sku";
   const [reportMatch, setReportMatch] = useState<InventoryReportMatch>("all");
   const [referencePeriod, setReferencePeriod] =
-    useState<InventoryReferencePeriod>("30d");
+    useState<InventoryReferencePeriod>();
   const [imagePreview, setImagePreview] = useState<CompassImageTarget | null>(
     null,
   );
@@ -141,7 +143,7 @@ function InventoryBalances() {
     [warehouse, setWarehouse] = useState<string>();
   const q = useList("/inventory/summary", {
       dimension,
-      ...(skuView ? { reportMatch, referencePeriod } : {}),
+      ...(skuView ? { reportMatch, ...(referencePeriod ? { referencePeriod } : {}) } : {}),
       ...(search ? { q: search } : {}),
       ...(warehouse ? { warehouseId: warehouse } : {}),
     }),
@@ -229,6 +231,11 @@ function InventoryBalances() {
       render: (_, r) => <InventoryReferenceValue row={r} field="returnRate" />,
     },
     {
+      title: "补货日均",
+      dataIndex: "planningDailySales",
+      render: (_, row) => <ReplenishmentValue row={row} field="planningDailySales" />,
+    },
+    {
       title: "可售天数",
       dataIndex: "coverageDays",
       render: (_, row) => <InventoryEstimateValue row={row} field="coverageDays" />,
@@ -248,6 +255,7 @@ function InventoryBalances() {
     "returnRate",
     "coverageDays",
     "replenishmentQty",
+    "planningDailySales",
   ]);
   const columns = allColumns.filter((column) => {
     const key =
@@ -272,8 +280,10 @@ function InventoryBalances() {
       : null;
   };
   const referenceWindow = q.data?.reportCoverage?.window;
+  const effectivePeriod: InventoryReferencePeriod = referencePeriod ?? referenceWindow?.period ?? "30d";
+  const methodLabel = (method?: InventoryReferenceMethod) => inventoryReferenceMethodLabels[method ?? "median"];
   const periodLabel = inventoryReferencePeriods.find(
-    (item) => item.value === referencePeriod,
+    (item) => item.value === effectivePeriod,
   )!.label;
   const exportReference = (row?: Row) => ({
     referencePeriodLabel: periodLabel,
@@ -293,9 +303,9 @@ function InventoryBalances() {
         )
           .map(
             ([key, label]) =>
-              `${label}：${row.channelReference?.[key]?.value != null ? (key === "estimatedReturns" ? "期间销量×退货率中位数" : row.channelReference[key].method === "median" ? "罗盘中位数" : "罗盘参考值") : row[key] != null ? "人工参考" : "暂无数据"}`,
+              `${label}：${row.channelReference?.[key]?.value != null ? (key === "estimatedReturns" ? `期间销量×退货率${methodLabel(row.channelReference.returnRate?.method)}` : `罗盘${methodLabel(row.channelReference[key].method)}`) : row[key] != null ? "人工参考" : "暂无数据"}`,
           ),
-          ...(inventoryHasZeroMedianSales(row) ? ["期间有销量，日销中位数为0；可售天数暂不估算，补货数量为当前中位数公式结果"] : []),
+          ...(row.replenishmentPlan ? [replenishmentExportNote(row)] : inventoryHasZeroMedianSales(row) ? ["期间有销量，日销中位数为0；可售天数暂不估算，补货数量为当前中位数公式结果"] : []),
         ].join("；")
       : "库存总计；经营参考不汇总",
   });
@@ -304,6 +314,9 @@ function InventoryBalances() {
       <Tabs
         aria-label="库存汇总维度"
         activeKey={dimension}
+        tabBarExtraContent={skuView ? <InventoryCalculationPanel referencePeriod={effectivePeriod} onSaved={(period) => {
+          setReferencePeriod(period); q.setPage(1);
+        }} /> : undefined}
         items={inventoryDimensions.map((item) => ({ ...item }))}
         onChange={(key) => {
           setDimension(key as InventoryDimension);
@@ -337,7 +350,7 @@ function InventoryBalances() {
               <Select<InventoryReferencePeriod>
                 aria-label="经营参考周期"
                 style={{ width: 140 }}
-                value={referencePeriod}
+                value={effectivePeriod}
                 options={[...inventoryReferencePeriods]}
                 onChange={(value) => {
                   setReferencePeriod(value);
@@ -472,7 +485,8 @@ function InventoryBalances() {
                 {referenceWindow.startDate ?? "—"} —{" "}
                 {referenceWindow.endDate ?? "—"} · 报表覆盖{" "}
                 {referenceWindow.coveredDays} / {referenceWindow.days} 天 ·
-                中位数
+                日销{methodLabel(q.data.replenishmentPolicy?.policy.dailySalesMethod ?? referenceWindow.method)} ·
+                退货率{methodLabel(q.data.replenishmentPolicy?.policy.returnRateMethod)}
                 {!referenceWindow.complete && (
                   <span className="inventory-reference-incomplete">
                     {" "}
@@ -493,6 +507,12 @@ function InventoryBalances() {
           </div>
         )}
         <QueryState error={q.error} reload={() => q.refetch()} />
+        {skuView && q.data?.replenishmentPolicy && <div className="inventory-report-coverage secondary">
+          补货按完整逐日日均估算 · 采购交期 {q.data.replenishmentPolicy.policy.purchaseLeadDays} 天 ·
+          发货至可再售 {q.data.replenishmentPolicy.policy.returnDaysMin}–{q.data.replenishmentPolicy.policy.returnDaysMax} 天 ·
+          可再售比例 {Number((q.data.replenishmentPolicy.policy.resalableRate * 100).toFixed(2))}% ·
+          {q.data.replenishmentPolicy.policy.confirmedReturnRate == null ? " 退货率未核验，主建议未抵扣退货" : " 已按人工核验退货率试算"}
+        </div>}
         <InventoryColumnPinning dimension={dimension} columns={columns}>
           {(displayedColumns) => (
             <Table<Row>

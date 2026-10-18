@@ -7,6 +7,8 @@ import { mkdir, writeFile } from "node:fs/promises";
 import pg from "pg";
 import { migrate } from "../../scripts/migrate.js";
 import { imageStore } from "./image-store.js";
+import { selectionBaseFields } from "../../packages/contracts/src/selection-migration.js";
+import { selectionLayoutSchema } from "../../packages/contracts/src/selection-layout.js";
 const baseUrl = new URL(process.env.DATABASE_URL!);
 const database = "vip_erp_test_" + Date.now();
 const admin = new pg.Client({ connectionString: baseUrl.toString() });
@@ -512,14 +514,16 @@ try {
     403,
   );
   check("RBAC buyer cannot confirm via direct HTTP");
-  // Custom values require a registered field (field management) unless the actor is the
-  // designated super-administrator; register the test's private field first.
+  // Custom fields must be registered through the same layout API as the UI.
   const selectionLayout = await ok("/style-selections/layout-preferences");
+  const selectionPreferences = selectionLayoutSchema.parse(selectionLayout.preferences || { columns: selectionBaseFields });
   await ok("/style-selections/layout-preferences", "POST", {
     revision: selectionLayout.revision,
     preferences: {
-      ...(selectionLayout.preferences || {}),
-      columns: [...(selectionLayout.preferences?.columns || []), { key: "custom:test", label: "样衣确认", custom: true, type: "text", width: 120 }],
+      ...selectionPreferences,
+      columns: [...selectionPreferences.columns, {
+        key: "custom:test", label: "样衣确认", custom: true, type: "text", width: 160,
+      }],
     },
   });
   const selection = await ok("/style-selections", "POST", {
@@ -838,17 +842,18 @@ try {
   assert.equal((await request(`/selection-collections/${correction.id}/items/${collectSource.id}/withdraw`,"POST",{revision:7})).status,409);
   check("external collections isolate fields and images, save drafts, reject/resubmit, approve atomically, revoke and expire");
 
-  const preview = await ok("/style-selections/import/preview", "POST", { rows: [
+  const skippedPreview = await ok("/style-selections/import/preview", "POST", { rows: [{ xutiStyleNo: selection.xutiStyleNo, material: "应跳过" }] });
+  assert.equal(skippedPreview.skipped, 1);
+  assert.equal(skippedPreview.updated, 0);
+  const preview = await ok("/style-selections/import/preview", "POST", { existingStrategy: "OVERWRITE", rows: [
     { xutiStyleNo: "IMPORT-001", color: "黑/白", vipPrice: "99.00", images: [{ id: "first", url: uploadedImage.url, color: "黑" }] },
     { xutiStyleNo: selection.xutiStyleNo, material: "导入更新" }
-  ], existingStrategy: "OVERWRITE" }); // Imports skip existing rows unless overwriting is chosen.
-assert.equal(preview.created, 1); assert.equal(preview.updated, 1);
-  // Commit exactly what was previewed, as the import dialog does (strategy, field bindings and revisions).
-  const planned = (plan: any) => ({ rows: plan.rows, existingStrategy: plan.existingStrategy, fields: plan.fields, fieldRevision: plan.fieldRevision, layoutRevision: plan.layoutRevision });
+  ] });
+  assert.equal(preview.created, 1); assert.equal(preview.updated, 1);
   const importKey = randomUUID();
-  const imported = await ok("/style-selections/import", "POST", planned(preview), importKey);
-  assert.equal(imported.created, 1); assert.equal(imported.updated, 1); assert.equal(imported.skipped, 0);
-  assert.deepEqual(await ok("/style-selections/import", "POST", planned(preview), importKey), imported);
+  const imported = await ok("/style-selections/import", "POST", { rows: preview.rows, existingStrategy: "OVERWRITE" }, importKey);
+  assert.deepEqual(imported, { created: 1, updated: 1, skipped: 0, fieldsCreated: 0 });
+  assert.deepEqual(await ok("/style-selections/import", "POST", { rows: preview.rows, existingStrategy: "OVERWRITE" }, importKey), imported);
   const kept = (await ok("/style-selections?q=" + selection.xutiStyleNo))[0];
   assert.equal(kept.images.length, manyImages.length);
   assert.deepEqual(kept.cellColors, manySaved.cellColors);
@@ -856,18 +861,19 @@ assert.equal(preview.created, 1); assert.equal(preview.updated, 1);
   assert.equal(kept.material, "导入更新");
   assert.equal((await request("/style-selections/import/preview", "POST", { rows: [{ xutiStyleNo: "DUP" }, { xutiStyleNo: " DUP " }] })).status, 400);
   assert.equal((await request("/style-selections/import/preview", "POST", { rows: [{ xutiStyleNo: "BAD-COLOR", color: "黑", images: [{ id: "x", url: uploadedImage.url, color: "白" }] }] })).status, 400);
-  const stalePlan = await ok("/style-selections/import/preview", "POST", { rows: [{ xutiStyleNo: "ROLLBACK-NEW" }, { xutiStyleNo: "IMPORT-001", material: "旧预览" }], existingStrategy: "OVERWRITE" });
+  // Ensure this stale-preview case uses distinct millisecond timestamps even on fast CI hosts.
+  await rows(db, "UPDATE style_selections SET updated_at=updated_at-interval '1 second' WHERE xuti_style_no='IMPORT-001' RETURNING id");
+  const stalePlan = await ok("/style-selections/import/preview", "POST", { existingStrategy: "OVERWRITE", rows: [{ xutiStyleNo: "ROLLBACK-NEW" }, { xutiStyleNo: "IMPORT-001", material: "旧预览" }] });
   const existingImport = (await ok("/style-selections?q=IMPORT-001"))[0];
   await ok("/style-selections/" + existingImport.id, "PATCH", { material: "并发修改", expectedUpdatedAt: existingImport.updatedAt });
-  assert.equal((await request("/style-selections/import", "POST", planned(stalePlan))).status, 409);
+  assert.equal((await request("/style-selections/import", "POST", { rows: stalePlan.rows, existingStrategy: "OVERWRITE" })).status, 409);
   assert.equal((await ok("/style-selections?q=ROLLBACK-NEW")).length, 0);
   assert.equal((await request("/style-selections", "POST", { xutiStyleNo: "IMPORT-001" })).status, 400);
   assert.equal((await request("/style-selections/" + selection.id, "PATCH", { xutiStyleNo: "IMPORT-001" })).status, 400);
   const fillOnly = await ok("/style-selections", "POST", { cellColors: { supplierCode: "PINK" } });
   assert.equal((await ok("/style-selections?pageSize=100")).find((row: any) => row.id === fillOnly.id).cellColors.supplierCode, "PINK");
   const bulkPlan = await ok("/style-selections/import/preview", "POST", { rows: Array.from({ length: 500 }, (_, index) => ({ xutiStyleNo: `BULK-QA-${index}`, registrationBatch: "2026-09-28" })) });
-  const bulkImported = await ok("/style-selections/import", "POST", planned(bulkPlan));
-  assert.equal(bulkImported.created, 500); assert.equal(bulkImported.updated, 0);
+  assert.deepEqual(await ok("/style-selections/import", "POST", { rows: bulkPlan.rows }), { created: 500, updated: 0, skipped: 0, fieldsCreated: 0 });
   assert.equal((await request("/style-selections?q=BULK-QA&pageSize=100&page=5")).body.total, 500);
   check("style workbook import matches, preserves blank fields, rejects duplicates, rolls back conflicts and retries idempotently");
   const syncA = await ok("/style-selections", "POST", { xutiStyleNo: "SYNC-A" });

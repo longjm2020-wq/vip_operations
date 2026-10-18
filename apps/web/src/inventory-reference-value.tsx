@@ -1,6 +1,9 @@
 import { Tooltip } from "antd";
 import { inventoryReferencePeriods } from "../../../packages/contracts/src/inventory-summary";
 import type { Row } from "./shared";
+import { ReplenishmentValue } from "./inventory-replenishment";
+import { inventoryReferenceMethodLabels, type InventoryReferenceMethod } from "../../../packages/contracts/src/compass-inventory-reference";
+const referenceLabel = (method?: InventoryReferenceMethod) => inventoryReferenceMethodLabels[method ?? "median"];
 
 type ReferenceField = "dailySales" | "returnRate" | "estimatedReturns" | "periodSalesQty";
 const format = (value: unknown, rate = false) =>
@@ -11,7 +14,7 @@ const format = (value: unknown, rate = false) =>
 
 export function inventoryHasZeroMedianSales(row: Row): boolean {
   const daily = row.channelReference?.dailySales;
-  return daily?.method === "median" && daily.value != null &&
+  return ["median", "mode"].includes(daily?.method) && daily.value != null &&
     Number(daily.value) === 0 && Number(row.channelReference?.salesQty) > 0;
 }
 
@@ -19,6 +22,7 @@ export function InventoryEstimateValue({ row, field }: {
   row: Row;
   field: "coverageDays" | "replenishmentQty";
 }) {
+  if (row.replenishmentPlan) return <ReplenishmentValue row={row} field={field} />;
   const value = row[field], zeroMedianSales = inventoryHasZeroMedianSales(row);
   const text = value == null
     ? field === "coverageDays" && row.dailySales != null && Number(row.dailySales) === 0
@@ -107,7 +111,7 @@ export function InventoryReferenceValue({
         <div>按本行条码计算，不跨 SKU 汇总。</div>
       </> : field === "estimatedReturns" ? (
         <>
-          <div>所选期间销量合计 × 每日退货率中位数</div>
+          <div>所选期间销量合计 × 每日退货率{referenceLabel(reference?.returnRate?.method)}</div>
           <div>已提供销量记录 {result.samples} 天；缺失日期不补0。</div>
           <div>
             {format(result.salesQty)} × {format(result.returnRate, true)} ={" "}
@@ -119,7 +123,7 @@ export function InventoryReferenceValue({
         <>
           <div>
             有效记录 {result.samples} 天；
-            {result.method === "median" ? "中位数" : result.method === "average" || result.method === "mean" ? "平均值" : "参考值"}
+            {referenceLabel(result.method)}
           </div>
           {result.method === "median" && <div>
             {result.values.length > 1 ? "中间两值取均值" : "中间值"}：
@@ -127,10 +131,13 @@ export function InventoryReferenceValue({
               .map((value: number) => format(value, field === "returnRate"))
               .join("、")}
           </div>}
+          {result.method === "mode" && <div>
+            最高频次 {result.frequency} 次；并列取均值：{result.values.map((value: number) => format(value, field === "returnRate")).join("、")}
+          </div>}
           {field === "dailySales" && <>
             <div>期间销量合计：{periodSales == null ? "销量数据不足" : `${format(periodSales)} 件`}</div>
             <div>已记录 {reference.recordedDays} 天；有效销量样本 {result.samples} 天。</div>
-            {zeroMedianSales && <div>期间有销量；每日销量的中位数为0，不表示期间没有成交。</div>}
+            {zeroMedianSales && <div>期间有销量；每日销量的{referenceLabel(result.method)}为0，不表示期间没有成交。</div>}
           </>}
           <div>缺失日期和空单元格不补0；明确记录的0参与计算。</div>
         </>
