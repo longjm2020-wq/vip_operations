@@ -148,6 +148,11 @@ try {
     } catch {}
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
+  // Cross-owner management is reserved for SUPER_ADMIN, not the ordinary ADMIN role.
+  await rows(
+    db,
+    "INSERT INTO user_roles(user_id,role_id) SELECT u.id,r.id FROM users u CROSS JOIN roles r WHERE u.username='admin' AND r.code='SUPER_ADMIN' ON CONFLICT DO NOTHING",
+  );
   const admin = await login("admin");
   const role = await one(
     db,
@@ -312,7 +317,7 @@ try {
     version: table.version,
   });
   pass(
-    "公开内容可按模块权限查看；管理仅限创建者/管理员，公开项目旁观者不能参与协作，旧版本冲突拒绝",
+    "公开内容可按模块权限查看；管理仅限创建者/超级管理员，公开项目旁观者不能参与协作，旧版本冲突拒绝",
   );
   const { defaultProtection } =
     await import("../../packages/contracts/src/selection-protection.js");
