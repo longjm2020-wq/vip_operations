@@ -107,7 +107,9 @@ const formats = [
   "cellNumberFormats",
 ];
 export function rowFields(value: Row) {
-  const row = camel(value);
+  return normalizedRowFields(camel(value));
+}
+function normalizedRowFields(row: Row) {
   return [
     ...new Set([
       ...selectionFields,
@@ -130,15 +132,20 @@ export function fieldVisible(policy: Policy, actor: Actor, key: string) {
   );
 }
 export function access(policy: Policy, actor: Actor, raw: Row, key: string) {
+  return normalizedAccess(policy, actor, camel(raw), key);
+}
+/** Callers inside a projection share one unmodified, normalized source row.
+ * Re-converting its pictures and custom values for every cell is quadratic in
+ * the width of the table. Never reuse this source across requests or actors. */
+function normalizedAccess(policy: Policy, actor: Actor, row: Row, key: string) {
   // Legacy values/formatting can outlive their field registry. They must not
   // block the super-administrator's row operations. Projection and explicit
   // field writes still require a registered definition below.
-  if (selectionSuperAdmin(actor)) return camel(raw).migrationLocked ? "read" : "edit";
+  if (selectionSuperAdmin(actor)) return row.migrationLocked ? "read" : "edit";
   // Only the designated super-administrator may override field privacy.
   // Unregistered custom keys must not bypass the field-management API.
   if (!fieldVisible(policy, actor, key)) return "deny";
-  const row = camel(raw),
-    value = key === "registrationBatch" ? selectionBusinessCreatedAt(row) : key.startsWith("custom:") ? row.extraFields?.[key] : row[key];
+  const value = key === "registrationBatch" ? selectionBusinessCreatedAt(row) : key.startsWith("custom:") ? row.extraFields?.[key] : row[key];
   let hasContent = nonempty(value);
   if (policy.settings.autoHide && policy.computedFieldKeys?.includes(key)) {
     const field = policy.computedFields?.[key], sourceKey = field?.vipTagPriceLimitConfig?.sourceKey;
@@ -146,21 +153,22 @@ export function access(policy: Policy, actor: Actor, raw: Row, key: string) {
       ["xutiStyleNo", "supplierStyleNo", "supplierCode", "color", "sizeRange", "material", "sellingPoints"].includes(sourceKey);
     const validSource = sourceKey && sourceKey !== key && !policy.computedFieldKeys.includes(sourceKey) &&
       !policy.deletedFieldKeys?.includes(sourceKey) && (defaultTextSource && !policy.registeredFieldKeys?.includes(sourceKey) || policy.computedSourceKeys?.includes(sourceKey));
-    const sourceAccess = validSource ? access(policy, actor, raw, sourceKey) : "deny";
+    const sourceAccess = validSource ? normalizedAccess(policy, actor, row, sourceKey) : "deny";
     hasContent = !!field && sourceAccess !== "deny" && resolveVipTagPriceLimit(field, { ...row, cellAccess: { [sourceKey!]: sourceAccess } }, { categoryNames: policy.computedCategoryNames }) !== null;
   }
   const level = selectionCellAccess(policy.settings, actor, row, key, hasContent);
   return row.migrationLocked && level === "edit" ? "read" : level;
 }
 export function project(policy: Policy, actor: Actor, raw: Row): Row {
-  const row = camel(raw),
+  const sourceRow = camel(raw),
+    row = { ...sourceRow },
     cellAccess: Row = {},
     hiddenCells: string[] = [];
-  row.createdAt = camel(selectionBusinessCreatedAt(raw));
+  row.createdAt = selectionBusinessCreatedAt(sourceRow);
   row.creationTimePending = row.createdAt === null;
   delete row.contentCreatedAt;
   delete row.createdTimeSource;
-  const originalFields = rowFields(row);
+  const originalFields = normalizedRowFields(row);
   const unknownExtras = new Set(
     Object.keys(row.extraFields || {}).filter(
       (key) => !policy.registeredFieldKeys?.includes(key),
@@ -193,7 +201,7 @@ export function project(policy: Policy, actor: Actor, raw: Row): Row {
       // disclose another user's private field identifier.
       continue;
     }
-    cellAccess[key] = access(policy, actor, raw, key);
+    cellAccess[key] = normalizedAccess(policy, actor, sourceRow, key);
     if (cellAccess[key] !== "deny") continue;
     hiddenCells.push(key);
     if (key.startsWith("custom:")) {
@@ -211,15 +219,15 @@ export function project(policy: Policy, actor: Actor, raw: Row): Row {
   // A readable image must not reveal another user's private field identifier.
   // Its opaque link can be round-tripped by image id, without exposing that key.
   if (Array.isArray(row.images)) row.images = row.images.map((image: Row) => image.colorFieldKey &&
-    (!fieldVisible(policy, actor, image.colorFieldKey) || policy.deletedFieldKeys?.includes(image.colorFieldKey) || access(policy, actor, raw, image.colorFieldKey) === "deny")
+    (!fieldVisible(policy, actor, image.colorFieldKey) || policy.deletedFieldKeys?.includes(image.colorFieldKey) || normalizedAccess(policy, actor, sourceRow, image.colorFieldKey) === "deny")
     ? { ...image, colorFieldKey: "protected" } : image);
-  if (access(policy, actor, raw, "registrationBatch") === "deny") row.createdAt = null;
+  if (normalizedAccess(policy, actor, sourceRow, "registrationBatch") === "deny") row.createdAt = null;
   // The entire row colour is shared formatting, never a source of protected data.
   return {
     ...row,
     cellAccess,
     hiddenCells,
-    defaultCellAccess: access(policy,actor,row,"custom:unconfigured"),
+    defaultCellAccess: normalizedAccess(policy,actor,row,"custom:unconfigured"),
     policyRevision: policy.revision,
     fieldRevision: policy.fieldRevision,
   };

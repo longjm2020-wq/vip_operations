@@ -2,11 +2,13 @@ import { api } from "./api.js";
 type Row = Record<string, any>;
 
 export async function fetchSelectionRows(query: string, sort = "createdAt", direction = "asc", previous?: { data: Row[]; total: number; revision?: string; tokens?: Record<string, string> }, request: typeof api = api, signal?: AbortSignal) {
+  // Only a loaded snapshot can benefit from a revision check. The first sync
+  // already returns its atomic revision, so do not delay it by another round trip.
   // During a rolling deployment the older API may not expose revision yet.
-  const revision = await request("/style-selections/revision", "GET", undefined, undefined, { signal }).then(result => result.data.revision as string).catch(error => {
+  const revision = previous?.revision ? await request("/style-selections/revision", "GET", undefined, undefined, { signal }).then(result => result.data.revision as string).catch(error => {
     if (signal?.aborted || [401,403,410].includes(error.status)) throw error;
     return undefined;
-  });
+  }) : undefined;
   if (revision && previous?.revision === revision) return previous;
   try {
     const response = await request("/style-selections/sync", "POST", { q: query.slice(0, 100), sort, direction, known: previous?.tokens || {} }, undefined, { signal });

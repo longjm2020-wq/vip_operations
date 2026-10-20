@@ -624,3 +624,4 @@
 /* Keep the full page scroll geometry while mounting only nearby rows. */
 .selection-sheet[data-windowed] { overflow-anchor: none; }
 .selection-sheet .selection-viewport-spacer td { padding: 0 !important; border: 0 !important; background: transparent; }
+.selection-loading-status { display: flex; align-items: center; gap: 10px; padding: 12px 16px; color: #8b6b55; background: #fff8f0; flex: none; }

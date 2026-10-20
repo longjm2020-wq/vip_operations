@@ -10,8 +10,12 @@ const rowId = (index: number) => String(index + 10000);
 const styleNo = (index: number) => `PERF-${String(index).padStart(4, "0")}`;
 type RowHeight = "compact" | "normal" | "loose" | "extra";
 
-async function fixture(page: Page, options: { rowHeight?: RowHeight; grouped?: boolean; totalRows?: number } = {}) {
+async function fixture(page: Page, options: {
+  rowHeight?: RowHeight; grouped?: boolean; totalRows?: number; pageSize?: number;
+  archive?: boolean; firstSync?: Promise<void>; failFirstSync?: boolean; waitForReady?: boolean;
+} = {}) {
   let revision = 0;
+  let rejectSync = !!options.failFirstSync;
   let layout: SelectionLayoutSnapshot = {
     preferences: selectionLayoutSchema.parse({
       columns: [
@@ -26,7 +30,7 @@ async function fixture(page: Page, options: { rowHeight?: RowHeight; grouped?: b
         { key: "labelImages", label: "洗唛/吊牌图", width: 120, type: "image" },
         { key: "registrationBatch", label: "创建时间", width: 160, type: "createdTime" },
       ],
-      pageSize,
+      pageSize: options.pageSize || pageSize,
       rowHeight: options.rowHeight || "compact",
       groupBy: options.grouped ? "supplier" : "none",
       statistics: { visible: ["count"], format: "plain" },
@@ -71,13 +75,23 @@ async function fixture(page: Page, options: { rowHeight?: RowHeight; grouped?: b
     let data: unknown = [];
     if (path.endsWith("/auth/me")) data = {
       id: "101", displayName: "表格性能测试", roleCodes: [], csrfToken: "fixture",
-      permissions: ["project.read", "selection.read", "selection.manage"],
+      permissions: ["project.read", "selection.read", "selection.manage", "product.read", "product.update"],
     };
     if (path.endsWith(`/project-tables/${tableId}`)) data = {
       id: tableId, name: "共享性能测试", initialLayout: "selection", visibility: "PUBLIC", canEdit: true, canManage: true,
     };
+    if (path.endsWith("/product-archive-table")) data = {
+      id: tableId, initialLayout: "selection", canEdit: true, canManage: true, fields: layout.preferences!.columns, references: {},
+    };
     if (path.endsWith("/revision")) data = { revision: `perf-${revision}` };
     if (path.endsWith("/sync")) {
+      // Development StrictMode may abort and restart the initial request.
+      // Hold every attempt until the test releases the same network gate.
+      await options.firstSync;
+      if (rejectSync) {
+        await route.fulfill({ status: 503, json: { error: { code: "UNAVAILABLE", message: "读取暂时失败" } } });
+        return;
+      }
       const known = (request.postDataJSON().known || {}) as Record<string, string>;
       data = {
         revision: `perf-${revision}`,
@@ -107,10 +121,12 @@ async function fixture(page: Page, options: { rowHeight?: RowHeight; grouped?: b
     }
     await route.fulfill({ json: { data } });
   });
-  await page.goto(`/project-tables/${tableId}`);
-  await expect(cell(page, 0, "xutiStyleNo")).toHaveText(styleNo(0));
-  await expect(page.locator(".selection-sheet table")).toHaveAttribute("aria-rowcount", "1001");
-  return { rows, writes, requests, layout: () => layout };
+  await page.goto(options.archive ? "/products" : `/project-tables/${tableId}`);
+  if (options.waitForReady !== false) {
+    await expect(cell(page, 0, "xutiStyleNo")).toHaveText(styleNo(0));
+    await expect(page.locator(".selection-sheet table")).toHaveAttribute("aria-rowcount", String(Math.min(rows.length, options.pageSize || pageSize) + 1));
+  }
+  return { rows, writes, requests, layout: () => layout, recover: () => { rejectSync = false; } };
 }
 
 const mountedRows = (page: Page) => page.locator(".selection-sheet tbody tr[data-selection-row]");
@@ -126,6 +142,46 @@ async function copySelection(page: Page) {
     return clipboardData.getData("text/plain").replace(/\r\n?/g, "\n");
   });
 }
+
+test("archive first open shows loading for a saved 5000-row page without redundant revision or count reads", async ({ page }) => {
+  let finish!: () => void;
+  const firstSync = new Promise<void>(resolve => { finish = resolve; });
+  const state = await fixture(page, { archive: true, totalRows: 5105, pageSize: 5000, firstSync, waitForReady: false });
+  try {
+    await expect(page.getByRole("status").filter({ hasText: "正在加载表格资料" })).toBeVisible();
+    await expect(page.locator(".selection-sheet")).toHaveAttribute("aria-busy", "true");
+    await expect(page.locator(".selection-pagination")).toContainText("加载中");
+    await expect(page.locator(".selection-pagination")).not.toContainText("共 0 条");
+    await expect(page.getByText(/暂无数据，点击添加一行/u)).toHaveCount(0);
+    await expect(page.getByText("正在读取选款登记…", { exact: true })).toHaveCount(0);
+    expect(state.requests.some(request => request.path.endsWith("/sync"))).toBe(true);
+    expect(state.requests.filter(request => /\/(revision|style-counts)$/.test(request.path))).toEqual([]);
+    await page.screenshot({ path: ".local/selection-open-loading-20261020.png" });
+  } finally { finish(); }
+  await expect(cell(page, 0, "xutiStyleNo")).toHaveText(styleNo(0));
+  await expect(page.locator(".selection-sheet table")).toHaveAttribute("aria-rowcount", "5001");
+  await expect(page.locator(".selection-pagination")).toContainText("共 5105 条");
+  await expect(page.getByRole("status").filter({ hasText: "正在加载表格资料" })).toHaveCount(0);
+  await expectBoundedRows(page);
+  await page.locator(".selection-sheet").evaluate(element => { element.scrollTop = element.scrollHeight; });
+  await expect(cell(page, 4999, "xutiStyleNo")).toBeInViewport();
+  expect(state.writes).toEqual([]);
+  expect(state.requests.filter(request => request.path.endsWith("/style-counts"))).toEqual([]);
+});
+
+test("first-load failure is not presented as an empty table and can be retried", async ({ page }) => {
+  const state = await fixture(page, { archive: true, failFirstSync: true, waitForReady: false });
+  await expect(page.getByRole("status").filter({ hasText: "加载失败" })).toBeVisible();
+  await expect(page.locator(".selection-pagination")).toContainText("尚未加载");
+  await expect(page.locator(".selection-pagination")).not.toContainText("共 0 条");
+  await expect(page.getByText(/暂无数据，点击添加一行/u)).toHaveCount(0);
+  state.recover();
+  await page.getByRole("button", { name: "重试", exact: true }).click();
+  await expect(cell(page, 0, "xutiStyleNo")).toHaveText(styleNo(0));
+  await expect(page.locator(".selection-pagination")).toContainText("共 1391 条");
+  await expect(page.getByRole("status").filter({ hasText: "加载失败" })).toHaveCount(0);
+  expect(state.writes).toEqual([]);
+});
 
 for (const rowHeight of ["compact", "normal", "loose", "extra"] as const) {
   test(`1000 row page mounts a bounded viewport and keeps correct scroll positions (${rowHeight})`, async ({ page }) => {

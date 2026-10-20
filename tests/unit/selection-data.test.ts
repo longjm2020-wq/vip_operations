@@ -3,6 +3,15 @@ import { api } from "../../apps/web/src/api.js";
 import { fetchSelectionRows } from "../../apps/web/src/selection-data.js";
 vi.mock("../../apps/web/src/api.js", () => ({ api: vi.fn() }));
 beforeEach(() => vi.mocked(api).mockReset());
+it("loads the first atomic snapshot directly without a serial revision request", async () => {
+  const controller = new AbortController();
+  vi.mocked(api).mockResolvedValueOnce({ data: { revision: "first", index: [{ id: "1", token: "a" }], data: [{ id: "1", material: "棉" }] } });
+  expect(await fetchSelectionRows("", "createdAt", "asc", undefined, api, controller.signal)).toEqual({
+    data: [{ id: "1", material: "棉" }], total: 1, revision: "first", tokens: { "1": "a" },
+  });
+  expect(api).toHaveBeenCalledExactlyOnceWith("/style-selections/sync", "POST",
+    { q: "", sort: "createdAt", direction: "asc", known: {} }, undefined, { signal: controller.signal });
+});
 it("skips record downloads when the revision is unchanged", async () => {
   const previous = { data: [{ id: "1" }], total: 1, revision: "same" };
   vi.mocked(api).mockResolvedValue({ data: { revision: "same" } });
@@ -23,11 +32,11 @@ it("merges changed records, removes deleted rows and follows server ordering", a
   expect(result.tokens).toEqual({ "1": "a", "2": "b" });
 });
 it("falls back only for an unsupported endpoint, not a server failure", async () => {
-  vi.mocked(api).mockResolvedValueOnce({ data: { revision: "v" } }).mockRejectedValueOnce({ status: 404 }).mockResolvedValueOnce({ data: [], total: 0 });
+  vi.mocked(api).mockRejectedValueOnce({ status: 404 }).mockResolvedValueOnce({ data: [], total: 0 });
   expect((await fetchSelectionRows("")).total).toBe(0);
-  vi.mocked(api).mockReset().mockResolvedValueOnce({ data: { revision: "v" } }).mockRejectedValueOnce({ status: 503 });
+  vi.mocked(api).mockReset().mockRejectedValueOnce({ status: 503 });
   await expect(fetchSelectionRows("")).rejects.toEqual({ status: 503 });
-  expect(api).toHaveBeenCalledTimes(2);
+  expect(api).toHaveBeenCalledTimes(1);
 });
 
 it("does not swallow a revoked permission or continue downloading with an aborted request", async () => {
