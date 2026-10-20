@@ -213,13 +213,15 @@ describe("Compass official browser reports", () => {
   it("downloads three original files unchanged and cleans only its own temporary directory", async () => {
     const page = await fixture(reportPage());
     const notes: string[] = [];
+    const stages: string[] = [];
     const files = await downloadCompassReports(
       page,
       compassDimensions,
       targetStart,
       targetEnd,
-      (note) => {
+      (note, dimension, stage) => {
         notes.push(note);
+        stages.push(`${dimension}:${stage}`);
       },
     );
     try {
@@ -229,6 +231,11 @@ describe("Compass official browser reports", () => {
         expect(file.fileName).toBe(`${file.dimension}.csv`);
       }
       expect(notes.filter((note) => note.includes("已下载"))).toHaveLength(3);
+      for (const dimension of compassDimensions) {
+        expect(stages.filter(stage => stage.startsWith(dimension + ":"))).toEqual([
+          `${dimension}:FINDING`, `${dimension}:DOWNLOADING`, `${dimension}:DOWNLOADING`,
+        ]);
+      }
       await cleanupCompassDownloads([{ ...files[0], tempDirectory: tmpdir() }]);
       expect(existsSync(files[0].path)).toBe(true);
     } finally {
@@ -263,17 +270,20 @@ describe("Compass official browser reports", () => {
       name.startsWith("compass-reports-"),
     );
     const page = await fixture(reportPage({ pending: true }));
+    const stages: string[] = [];
     await expect(
       downloadCompassReports(
         page,
         ["style"],
         targetStart,
         targetEnd,
-        () => {},
+        (_note, _dimension, stage) => { if (stage) stages.push(stage); },
         undefined,
         { maxWaitMs: 1000 },
       ),
     ).rejects.toMatchObject({ code: "REPORT_NOT_READY" });
+    expect(stages).toContain("PREPARING");
+    expect(stages).not.toContain("DOWNLOADING");
     expect(
       (await readdir(tmpdir()))
         .filter((name) => name.startsWith("compass-reports-"))
