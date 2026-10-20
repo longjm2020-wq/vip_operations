@@ -1,13 +1,34 @@
 .selection-toolbox .ant-drawer-body { padding: 20px 24px; }
-.selection-toolbox-heading { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
-.selection-toolbox-heading strong { font-size: 16px; }
-.selection-toolbox-heading span { color: #8d7a6d; font-size: 12px; }
+.selection-toolbox-menu { display: grid; gap: 12px; }
+.selection-toolbox-menu button { display: flex; align-items: center; gap: 14px; width: 100%; padding: 20px 16px; color: #46352a; background: #fffaf5; border: 1px solid #eadace; border-radius: 8px; text-align: left; cursor: pointer; }
+.selection-toolbox-menu button:hover { border-color: #d94f00; background: #fff2e5; }
+.selection-toolbox-menu button:focus-visible { outline: 2px solid #d94f00; outline-offset: 2px; }
+.selection-toolbox-menu button > .anticon:first-child { font-size: 24px; color: #d94f00; }
+.selection-toolbox-menu button > span:not(.anticon) { flex: 1; display: flex; flex-direction: column; gap: 5px; }
+.selection-toolbox-menu strong { font-size: 15px; }
+.selection-toolbox-menu small { color: #8d7a6d; line-height: 1.5; }
 .selection-toolbox-loading { display: flex; align-items: center; justify-content: center; gap: 12px; min-height: 180px; }
 .selection-toolbox .page-heading { align-items: flex-start; flex-wrap: wrap; gap: 12px; }
 .selection-toolbox .page-heading h2 { font-size: 18px; }
 .selection-toolbox .page-heading-subtitle { white-space: normal; }
 .selection-toolbox .page-heading-actions { flex-wrap: wrap; }
 .selection-toolbox .table-toolbar { flex-wrap: wrap; }
+.jushuitan-tool { display: flex; flex-direction: column; gap: 16px; }
+.jushuitan-intro, .jushuitan-note { margin: 0; line-height: 1.7; }
+.jushuitan-note { font-size: 12px; color: #8d7a6d; }
+.jushuitan-status { color: #a24916; }
+.jushuitan-options { max-height: 340px; overflow: auto; }
+.jushuitan-style { padding: 14px 0; border-bottom: 1px solid #f0e6df; }
+.jushuitan-style:last-child { border-bottom: 0; }
+.jushuitan-style-title { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+.jushuitan-style-title > span { color: #8d7a6d; }
+.jushuitan-style-title .ant-select { width: 190px; margin-left: auto; }
+.jushuitan-colors { display: flex; flex-wrap: wrap; gap: 12px 24px; margin-top: 12px; }
+.jushuitan-colors label { display: flex; align-items: center; gap: 8px; }
+.jushuitan-colors .ant-select { width: 160px; }
+.jushuitan-issues { max-height: 200px; overflow: auto; margin: 0; padding-left: 20px; line-height: 1.8; }
+.jushuitan-value { white-space: pre-wrap; overflow-wrap: anywhere; }
+.jushuitan-result { color: #a24916; }
 @media (max-width: 600px) {
   .selection-toolbox .ant-drawer-body { padding: 16px; }
 }

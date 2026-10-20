@@ -739,6 +739,17 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
   }, [filteredRows, pageRowKeys, visible]);
   const dirtyRows = useMemo(() => new Set(rows.filter((row) => !row.id || !sameRow(row, original.current.get(row._key) || {})).map(row => row._key)), [rows, saving]);
   const dirtyCount = dirtyRows.size;
+  const jushuitanSelectedIds = async () => {
+    const chosen = selectedRows.length ? selectedRowKeys
+      : selectedColumnKeys.length ? new Set<string>()
+      : new Set([...selectedCells].map(id => id.slice(0, id.indexOf("::"))));
+    const records = filteredRows.filter(row => chosen.has(row._key));
+    if (!records.length) throw Error("请关闭工具箱，勾选款式行或选中款号单元格后再打开");
+    if (accessLost || saving || deleting || transferring || releasing || records.some(row => !row.id || dirtyRows.has(row._key)))
+      throw Error("请先完成所选款式的保存，再生成建档资料");
+    if (!(await layout.ensureSaved())) throw Error("请先处理未保存的字段设置，再生成建档资料");
+    return records.map(row => String(row.id));
+  };
 
   const titleFields = columns.filter(column => visible.includes(column.key) && !column.deleted && !systemField(column) && ["长标题", "短标题"].includes(column.label) && (column.type || column.fallbackType || "text") === "text");
   const openTitleAi = async (requestedKeys?: string[], contextRowKey?: string) => {
@@ -1491,7 +1502,7 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
       {canEdit && titleFields.length > 0 && <Button aria-label="AI 商品标题" icon={<BulbOutlined aria-hidden="true" />} disabled={!!dirtyCount || saving || deleting || transferring || !!releasing} onClick={() => void openTitleAi()}>AI 商品标题</Button>}
       {canEdit && <SelectionCollections selectedRows={filteredRows.filter(row => selectedRowKeys.has(row._key))} blocked={!!dirtyCount || saving || deleting}/>}
       {canEdit && <SelectionPhotoQr />}
-      <SelectionToolbox />
+      <SelectionToolbox getSelectedIds={jushuitanSelectedIds} />
       <TableFindReplace rootRef={findRoot} cells={findCells} selectedIds={selectedFindIds} activeId={activeFindId} blocked={saving || deleting || transferring || !!releasing} saveHint="修改将逐行自动保存，保存失败请修正后重试。" onNavigate={navigateFind} onReplace={replaceFind}/>
       <Button type="link" icon={<PlusOutlined />} disabled={!canAdd} onClick={() => add()}>添加一行</Button><Button type="link" danger icon={<DeleteOutlined />} disabled={!canEdit || !selectedRows.length || saving} loading={deleting} onClick={deleteRows}>删除行</Button>
       {canEdit && <SelectionMigration rows={filteredRows.filter(row=>selectedRowKeys.has(row._key))} fields={availableColumns} blocked={!!dirtyCount || saving || deleting || transferring || !!releasing} layout={layout} onBusy={setTransferring} onComplete={()=>{tableHistory.clear();setSelectedRows([]);appliedSnapshot.current=undefined;void data.refetch();}}/>}

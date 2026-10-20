@@ -40,6 +40,7 @@ export const manualPermissions: Record<string, string | null> = {
   "31-ai-settings": "analytics.manage",
   "32-personal-workspace": null,
   "33-competitor-analysis": "analytics.read",
+  "34-jushuitan-products": "product.read",
 };
 export function canReadManual(
   actor: Actor,
