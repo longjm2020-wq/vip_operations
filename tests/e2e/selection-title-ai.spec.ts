@@ -2,7 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { projectSelectionSharedLayout, selectionLayoutSchema } from "../../packages/contracts/src/selection-layout.js";
 
 type Values = Record<string, any>;
-type FixtureOptions = { count?: number; configured?: boolean; pauseFirst?: boolean; failApplyBatch?: number; shortHanLimit?: number; longCharacterLimit?: number; longHanLimit?: number; firstTtlMs?: number; material?: string; longTitle?: string };
+type FixtureOptions = { count?: number; configured?: boolean; pauseFirst?: boolean; failApplyBatch?: number; shortHanLimit?: number; longCharacterLimit?: number; longHanLimit?: number; firstTtlMs?: number; material?: string; longTitle?: string; path?: string; firstOriginal?: string };
 const generatedLongTitle = "【100桑蚕丝】锦纨春秋冬新中式国风提花盘扣圆领背心女马甲";
 const editedLongTitle = "【100桑蚕丝】庭春漾秋冬新中式国风提花盘扣圆领背心女马甲";
 async function fixture(page: Page, options: FixtureOptions = {}) {
@@ -25,7 +25,7 @@ async function fixture(page: Page, options: FixtureOptions = {}) {
   const rows: Values[] = Array.from({ length: options.count ?? 3 }, (_, index) => ({
     id: String(index + 1), xutiStyleNo: `AI-${String(index + 1).padStart(3, "0")}`, category: "女式马夹", material: options.material || "面料：100%桑蚕丝",
     registrationBatch: "2026-10-11T00:00:00Z", createdAt: "2026-10-11T00:00:00Z", updatedAt: "2026-10-11T00:00:00Z", images: [], labelImages: [],
-    extraFields: { "custom:long-title": index === 0 && options.count !== 12 ? "已填写长标题" : "", "custom:short-title": "" },
+    extraFields: { "custom:long-title": index === 0 && options.count !== 12 ? options.firstOriginal ?? "已填写长标题" : "", "custom:short-title": "" },
   }));
   if (options.count !== 12) rows[2].extraFields = { "custom:long-title": "原有长标题", "custom:short-title": "原有短标题" };
   let revision = 1;
@@ -35,6 +35,8 @@ async function fixture(page: Page, options: FixtureOptions = {}) {
     const request = route.request(), path = new URL(request.url()).pathname;
     let data: unknown = [];
     if (path.endsWith("/auth/me")) data = { id: "101", displayName: "标题测试", csrfToken: "fixture", roleCodes: ["SUPER_ADMIN"], permissions: ["selection.read", "selection.manage", "selection.protect", "product.read", "product.manage", "project.read", "project.create", "setting.manage"] };
+    if (path.endsWith("/product-archive-table")) data = { id: "3", initialLayout: "selection", fields: [], references: {}, canEdit: true, canManage: true };
+    if (path.endsWith("/project-tables/7")) data = { id: "7", name: "标题测试协作表", initialLayout: "selection", canEdit: true, canManage: true };
     if (path.endsWith("/revision")) data = { revision: String(revision) };
     if (path.endsWith("/sync")) data = { revision: String(revision), index: rows.map(row => ({ id: row.id, token: row.updatedAt })), data: rows };
     if (path.endsWith("/shared-view")) data = { revision: 0, view: { filters: {}, sort: null } };
@@ -47,8 +49,9 @@ async function fixture(page: Page, options: FixtureOptions = {}) {
         rows: body.rowIds.map((id: string) => {
           const row = rows.find(row => row.id === id)!;
           return { id, xutiStyleNo: row.xutiStyleNo, expectedUpdatedAt: row.updatedAt, evidence: [`成分：${row.material}`, "三级类目：女式马夹"], warnings: ["款名请人工核对"],
-            titles: body.targetKeys.filter((key: string) => !row.extraFields[key]?.trim()).map((key: string) => ({ key, label: key === "custom:long-title" ? "长标题" : "短标题", kind: key === "custom:long-title" ? "long" : "short",
-              value: key === "custom:long-title" ? options.longTitle || generatedLongTitle : "锦纨春马甲", minCharacters: key === "custom:long-title" ? 29 : 1, maxLength: key === "custom:long-title" ? longLimit : options.shortHanLimit || 30, countMode: key === "custom:long-title" ? longCountMode : key === "custom:short-title" && options.shortHanLimit ? "han" : "characters" })),
+            titles: body.targetKeys.filter((key: string) => body.mode === "complete" ? key === "custom:long-title" && Array.from(String(row.extraFields[key] || "").trim()).length < 30 : body.mode === "improve" ? !!row.extraFields[key]?.trim() : !row.extraFields[key]?.trim()).map((key: string) => ({ key, label: key === "custom:long-title" ? "长标题" : "短标题", kind: key === "custom:long-title" ? "long" : "short",
+              previousValue: row.extraFields[key] || "", ...(body.mode === "complete" ? { maxCharacters: 30 } : {}),
+              value: key === "custom:long-title" ? options.longTitle || (body.mode === "complete" ? generatedLongTitle + "款" : generatedLongTitle) : "锦纨春马甲", minCharacters: key === "custom:long-title" ? body.mode === "complete" ? 30 : 29 : 1, maxLength: key === "custom:long-title" ? longLimit : options.shortHanLimit || 30, countMode: key === "custom:long-title" ? longCountMode : key === "custom:short-title" && options.shortHanLimit ? "han" : "characters" })),
           };
         }).filter((row: Values) => row.titles.length),
       };
@@ -67,7 +70,7 @@ async function fixture(page: Page, options: FixtureOptions = {}) {
     if (/\/style-selections(?:\/\d+|\/bulk)$/.test(path) && request.method() !== "GET") gridWrites.push(request.postDataJSON());
     await route.fulfill({ json: { data } });
   });
-  await page.goto("/style-selections");
+  await page.goto(options.path || "/style-selections");
   await expect(page.locator("tr[data-selection-row]")).toHaveCount(rows.length);
   return { rows, generations, applies, gridWrites, applyKeys, releaseFirst: () => releaseFirst?.() };
 }
@@ -75,6 +78,93 @@ async function openPanel(page: Page) {
   await page.getByRole("button", { name: /AI 商品标题$/ }).click();
   return page.getByRole("dialog", { name: "AI 商品标题生成", exact: true });
 }
+
+async function chooseMode(page: Page, label: string) {
+  await page.getByRole("combobox", { name: "标题处理方式" }).click();
+  await page.locator(".ant-select-dropdown:visible").getByText(label, { exact: true }).click();
+}
+
+for (const [module, path] of [["商品档案", "/products"], ["选款登记", "/style-selections"], ["项目协作表格", "/project-tables/7"]]) {
+  test(`${module}选中已有长标题自动补全至30字符，先对照原文再确认`, async ({ page }) => {
+    const original = "【含绵羊毛】秋冬简约百搭中长款休闲半身裙裙子女";
+    const state = await fixture(page, { path, firstOriginal: original });
+    await page.locator('td[data-selection-row="1"][data-selection-column="custom:long-title"]').click();
+    const panel = await openPanel(page);
+    await expect(panel.getByText("补全不足 30 字符的长标题", { exact: true })).toBeVisible();
+    await panel.getByRole("button", { name: "生成候选标题", exact: true }).click();
+    expect(state.generations[0]).toMatchObject({ mode: "complete", rowIds: ["1"], targetKeys: ["custom:long-title"] });
+    await expect(panel.getByLabel("AI-001 长标题原文")).toContainText(original);
+    if (module === "商品档案") await panel.screenshot({ path: test.info().outputPath("title-completion.png") });
+    expect(state.rows[0].extraFields["custom:long-title"]).toBe(original);
+    expect(state.applies).toHaveLength(0);
+    const candidate = panel.getByLabel("AI-001 长标题候选");
+    const apply = panel.getByRole("button", { name: "确认更新 1 个标题单元格", exact: true });
+    await candidate.fill(generatedLongTitle);
+    await expect(apply).toBeDisabled();
+    await expect(panel).toContainText("长标题至少30个字符");
+    await candidate.fill(generatedLongTitle + "衣款");
+    await expect(apply).toBeDisabled();
+    await candidate.fill(generatedLongTitle + "款");
+    await apply.click();
+    await expect(panel).toContainText("已更新 1 款的标题");
+    expect(state.rows[0].extraFields).toMatchObject({ "custom:long-title": generatedLongTitle + "款", "custom:short-title": "" });
+    expect(state.rows[1].extraFields["custom:long-title"]).toBe("");
+    expect(state.gridWrites).toHaveLength(0);
+  });
+}
+
+test("完善已有长短标题，跳过空白并保留取消勾选的原文", async ({ page }) => {
+  const state = await fixture(page), panel = await openPanel(page);
+  await chooseMode(page, "基于现有描述完善标题");
+  await expect(panel).toContainText("2 款符合处理条件");
+  await panel.getByRole("button", { name: "生成候选标题", exact: true }).click();
+  expect(state.generations[0]).toMatchObject({ mode: "improve", rowIds: ["1", "3"] });
+  await expect(panel.getByLabel("AI-001 长标题原文")).toContainText("已填写长标题");
+  await expect(panel.getByLabel("AI-003 短标题原文")).toContainText("原有短标题");
+  await expect(panel.getByLabel("AI-002 长标题候选")).toHaveCount(0);
+  await panel.locator(".selection-title-ai-candidate").filter({ hasText: "AI-003" }).getByRole("checkbox", { name: "短标题", exact: true }).uncheck();
+  await panel.getByRole("button", { name: "确认更新 2 个标题单元格", exact: true }).click();
+  await expect(panel).toContainText("已更新 2 款的标题");
+  expect(state.rows[2].extraFields).toMatchObject({ "custom:long-title": generatedLongTitle, "custom:short-title": "原有短标题" });
+  expect(state.rows[1].extraFields).toMatchObject({ "custom:long-title": "", "custom:short-title": "" });
+  expect(state.gridWrites).toHaveLength(0);
+});
+
+test("已有30字符长标题可完善，切换补全后无符合记录不会调用模型", async ({ page }) => {
+  const state = await fixture(page, { firstOriginal: generatedLongTitle + "款" });
+  const cell = page.locator('td[data-selection-row="1"][data-selection-column="custom:long-title"]');
+  await cell.click();
+  await cell.click({ button: "right" });
+  await page.getByRole("menuitem", { name: /AI 商品标题/ }).click();
+  const panel = page.getByRole("dialog", { name: "AI 商品标题生成", exact: true });
+  await expect(panel.getByText("基于现有描述完善标题", { exact: true })).toBeVisible();
+  await chooseMode(page, "补全不足 30 字符的长标题");
+  await expect(panel).toContainText("0 款符合处理条件");
+  await expect(panel.getByRole("button", { name: "生成候选标题", exact: true })).toBeDisabled();
+  expect(state.generations).toHaveLength(0);
+});
+
+test("补全需要字段允许30字符，明确提示且不调用模型", async ({ page }) => {
+  const state = await fixture(page, { longCharacterLimit: 29 });
+  await page.locator('td[data-selection-row="1"][data-selection-column="custom:long-title"]').click();
+  const panel = await openPanel(page);
+  await expect(panel).toContainText("长标题字段最多 29 字符，小于 AI 长标题至少 30 字符的要求");
+  await expect(panel.getByRole("button", { name: "生成候选标题", exact: true })).toBeDisabled();
+  expect(state.generations).toHaveLength(0);
+});
+
+test("完善保存遇到并发冲突保留原文和候选，关闭未确认候选不写入", async ({ page }) => {
+  const state = await fixture(page, { failApplyBatch: 1 }), panel = await openPanel(page);
+  await chooseMode(page, "基于现有描述完善标题");
+  await panel.getByRole("button", { name: "生成候选标题", exact: true }).click();
+  await panel.getByRole("button", { name: "确认更新 3 个标题单元格", exact: true }).click();
+  await expect(panel).toContainText("商品资料已变化，请重新生成候选");
+  await expect(panel.getByLabel("AI-001 长标题候选")).toHaveValue(generatedLongTitle);
+  expect(state.rows[0].extraFields["custom:long-title"]).toBe("已填写长标题");
+  await panel.getByRole("button", { name: "关闭", exact: true }).filter({ hasText: "关闭" }).click();
+  expect(state.applies).toHaveLength(1);
+  expect(state.gridWrites).toHaveLength(0);
+});
 
 test("候选先核对再填补，已有标题保留，可编辑和取消单元格，避免网格自动保存", async ({ page }) => {
   const state = await fixture(page), panel = await openPanel(page);
@@ -217,7 +307,7 @@ test("右键只生成长标题且字段上限不足29时保留目标并提示调
   const titleCell = page.locator('td[data-selection-row="2"][data-selection-column="custom:long-title"]');
   await titleCell.click();
   await titleCell.click({ button: "right" });
-  await page.getByRole("menuitem", { name: /AI 填补空白标题/ }).click();
+  await page.getByRole("menuitem", { name: /AI 商品标题/ }).click();
   const panel = page.getByRole("dialog", { name: "AI 商品标题生成", exact: true });
   await expect(panel.getByRole("checkbox", { name: /长标题（至少/ })).toBeChecked();
   await expect(panel.getByRole("checkbox", { name: /短标题（/ })).not.toBeChecked();
@@ -280,7 +370,7 @@ test("勾选行限定生成范围，右键标题单元格只生成该行该字�
   const titleCell = page.locator('td[data-selection-row="2"][data-selection-column="custom:long-title"]');
   await titleCell.click();
   await titleCell.click({ button: "right" });
-  await page.getByRole("menuitem", { name: /AI 填补空白标题/ }).click();
+  await page.getByRole("menuitem", { name: /AI 商品标题/ }).click();
   panel = page.getByRole("dialog", { name: "AI 商品标题生成", exact: true });
   await expect(panel).toContainText("选中范围 · 1 款有空白标题");
   await panel.getByRole("button", { name: "生成候选标题", exact: true }).click();
@@ -305,7 +395,7 @@ test("候选临近过期时暂停后续批次，先保存有效候选后可继�
 test("过期候选明确标注并禁止保存，移除后只重新生成这些行", async ({ page }) => {
   const state = await fixture(page, { count: 12, firstTtlMs: -1 }), panel = await openPanel(page);
   await panel.getByRole("button", { name: "生成候选标题", exact: true }).click();
-  await expect(panel).toContainText("部分候选已过期，不能填补");
+  await expect(panel).toContainText("部分候选已过期，不能保存");
   await expect(panel.getByRole("button", { name: /确认填补/ })).toBeDisabled();
   await expect(panel.getByLabel("AI-001 长标题候选")).toBeDisabled();
   expect(state.generations).toHaveLength(1);
@@ -321,7 +411,7 @@ test("右键标题整列处理全部筛选款式，自动分批且不误认为�
   const header = page.getByRole("columnheader", { name: "选择整列：短标题", exact: true });
   await header.click();
   await header.click({ button: "right" });
-  await page.getByRole("menuitem", { name: /AI 填补空白标题/ }).click();
+  await page.getByRole("menuitem", { name: /AI 商品标题/ }).click();
   const panel = page.getByRole("dialog", { name: "AI 商品标题生成", exact: true });
   await expect(panel).toContainText("当前筛选结果（含其他页） · 12 款有空白标题");
   await panel.getByRole("button", { name: "生成候选标题", exact: true }).click();

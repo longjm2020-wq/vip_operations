@@ -4,7 +4,7 @@ import { db, one, rows, type Row, type Tx } from "../../../../../packages/databa
 import { selectionScope } from "../../../../../packages/database/src/selection-scope.js";
 import { selectionFieldSchema, type SelectionField } from "../../../../../packages/contracts/src/selection-layout.js";
 import { splitChoiceValues } from "../../../../../packages/contracts/src/selection-field-validation.js";
-import { selectionTitleAIApplySchema, selectionTitleAIGenerateSchema, selectionTitleWordingIssue, type SelectionTitleAIPreview, type SelectionTitleAIStatus, type SelectionTitleAIRow } from "../../../../../packages/contracts/src/selection-title-ai.js";
+import { selectionTitleAIApplySchema, selectionTitleAIGenerateSchema, selectionTitleAIModeSchema, selectionTitleTargetEligible, selectionTitleWordingIssue, type SelectionTitleAIPreview, type SelectionTitleAIStatus, type SelectionTitleAIRow } from "../../../../../packages/contracts/src/selection-title-ai.js";
 import { command, fail, parse, requirePermission, type Context } from "../../core.js";
 import { COMPASS_AI_ENDPOINT, COMPASS_AI_MODEL } from "../analytics/ai.js";
 import { decryptSecret, encryptionReady } from "../analytics/secrets.js";
@@ -26,7 +26,7 @@ export async function titleAIStatus(c: Context): Promise<SelectionTitleAIStatus>
   return verifiedSettings(settings) ? { ready: true, message: "AI 商品标题已就绪" } : { ready: false, message: "请超级管理员在系统设置 → AI 模型设置中启用 AI 并保存并验证模型后使用" };
 }
 type SignedRow = { id: string; expectedUpdatedAt: string; keys: string[]; fingerprint: string; visual: boolean };
-const planSchema = z.object({ actor: z.string(), scope: z.string(), expires: z.number(), nonce: z.string().uuid(), policy: z.string(), rows: z.array(z.object({ id: z.string(), expectedUpdatedAt: z.string(), keys: z.array(z.string()).max(2), fingerprint: z.string(), visual: z.boolean() }).strict()).max(10) }).strict();
+const planSchema = z.object({ actor: z.string(), scope: z.string(), mode: selectionTitleAIModeSchema.optional(), expires: z.number(), nonce: z.string().uuid(), policy: z.string(), rows: z.array(z.object({ id: z.string(), expectedUpdatedAt: z.string(), keys: z.array(z.string()).max(2), fingerprint: z.string(), visual: z.boolean() }).strict()).max(10) }).strict();
 type Plan = z.infer<typeof planSchema>;
 function signingKey() {
   if (!encryptionReady()) fail("AI_NOT_READY", "AI 凭据加密尚未配置，请联系管理员", 503);
@@ -159,15 +159,15 @@ export async function generateTitles(c: Context, input: unknown): Promise<Select
     for (const row of initial.projected) {
       const raw = initial.raw.find(value => String(value.id) === String(row.id))!;
       if (blank(row.xutiStyleNo)) { skipped.push(String(row.id)); continue; }
-      const targets = initial.targets.filter(field => blank(cell(row, field.key)) && protection.access(initial.policy, c.actor, raw, field.key) === "edit");
+      const targets = initial.targets.filter(field => selectionTitleTargetEligible(body.mode, titleKind(field)!, cell(row, field.key)) && protection.access(initial.policy, c.actor, raw, field.key) === "edit");
       if (!targets.length) { skipped.push(String(row.id)); continue; }
       for (const field of targets) {
-        const issue = titleFieldLimitIssue(field);
+        const issue = titleFieldLimitIssue(field, body.mode);
         if (issue) fail("AI_TITLE_LIMIT", `字段「${field.label}」：${issue}`, 400);
       }
       const source = sourceFacts(row, initial.fields), pictures: string[] = [];
-      products.push({ id: String(row.id), xutiStyleNo: String(row.xutiStyleNo || ""), facts: source.details, pictures,
-        targets: targets.map(field => ({ key: field.key, label: field.label, kind: titleKind(field), ...titleLimit(field) })),
+      products.push({ id: String(row.id), xutiStyleNo: String(row.xutiStyleNo || ""), mode: body.mode, facts: source.details, pictures,
+        targets: targets.map(field => ({ key: field.key, label: field.label, kind: titleKind(field), currentValue: String(cell(row, field.key) ?? ""), ...titleLimit(field, body.mode) })),
         inputWarnings: [],
       });
       signedRows.push({ id: String(row.id), expectedUpdatedAt: String(row.updatedAt), keys: targets.map(field => field.key), fingerprint: sourceFingerprint(row, initial.fields), visual: false });
@@ -225,9 +225,9 @@ export async function generateTitles(c: Context, input: unknown): Promise<Select
     const examples = (prepared[0] as PromiseFulfilledResult<Row[]>).value;
     for (let index = products.length - 1; index >= 0; index--) {
       const product = products[index], source = initial.projected.find(row => String(row.id) === product.id)!;
-      if (!sourceFacts(source, initial.fields).facts && !product.pictures.length) { skipped.push(product.id); products.splice(index, 1); signedRows.splice(index, 1); }
+      if (!sourceFacts(source, initial.fields).facts && !product.pictures.length && !(body.mode !== "blank" && product.targets.some((target: Row) => !blank(target.currentValue)))) { skipped.push(product.id); products.splice(index, 1); signedRows.splice(index, 1); }
     }
-    const warnings = ["候选标题和款名需人工核对；系统未执行实时趋势、商标或侵权检索。", ...(skipped.length ? [`跳过 ${skipped.length} 行：标题已有内容、没有可编辑空白标题，或缺少产品资料。`] : [])];
+    const warnings = ["候选标题和款名需人工核对；系统未执行实时趋势、商标或侵权检索。", ...(skipped.length ? [`跳过 ${skipped.length} 行：没有符合本次处理方式的可编辑标题、缺少款号或产品资料。`] : [])];
     let result: SelectionTitleAIRow[] = [];
     if (products.length) {
       const beforeProvider = await snapshot(c, body.rowIds, body.targetKeys);
@@ -243,9 +243,10 @@ export async function generateTitles(c: Context, input: unknown): Promise<Select
         return { id: candidate.id, xutiStyleNo: product.xutiStyleNo, expectedUpdatedAt: String(source.updatedAt),
           titles: candidate.titles.map(title => {
             const field = initial.targets.find(field => field.key === title.key)!;
-            const issue = titleValueIssue(field, title.value, facts.material, facts.facts, !!product.pictures.length);
+            const previousValue = String(cell(source, title.key) ?? "");
+            const issue = titleValueIssue(field, title.value, facts.material, facts.facts, !!product.pictures.length, { mode: body.mode, existingDescription: previousValue });
             if (issue || examples.some(example => example.value === title.value)) fail("AI_TITLE_INVALID", `${field.label}候选未通过校验：${issue || "与现有标题完全重复"}；本次未采用结果`, 502);
-            return { key: title.key, label: field.label, kind: titleKind(field)!, value: title.value, ...titleLimit(field) };
+            return { key: title.key, label: field.label, kind: titleKind(field)!, value: title.value, previousValue, ...titleLimit(field, body.mode) };
           }), evidence: candidate.evidence, warnings: [...product.inputWarnings, ...candidate.warnings],
         };
       });
@@ -257,13 +258,14 @@ export async function generateTitles(c: Context, input: unknown): Promise<Select
     }
     const expires = Date.now() + 30 * 60_000;
     const accepted = signedRows.filter(row => result.some(candidate => candidate.id === row.id && candidate.titles.length));
-    return { planToken: signTitlePlan({ actor: c.actor.id, scope: scopeKey(), expires, nonce: randomUUID(), policy: initial.digest, rows: accepted }), expiresAt: new Date(expires).toISOString(), model: COMPASS_AI_MODEL, rows: result, warnings };
+    return { planToken: signTitlePlan({ actor: c.actor.id, scope: scopeKey(), mode: body.mode, expires, nonce: randomUUID(), policy: initial.digest, rows: accepted }), expiresAt: new Date(expires).toISOString(), model: COMPASS_AI_MODEL, rows: result, warnings };
   } finally { active.delete(caller); activeRequests--; }
 }
 
 export async function applyTitles(c: Context, input: unknown) {
   requirePermission(c.actor, "selection.manage");
   const body = parse(selectionTitleAIApplySchema, input), plan = readTitlePlan(body.planToken, c);
+  const mode = plan.mode || "blank";
   for (const row of body.rows) {
     const signed = plan.rows.find(value => value.id === row.id);
     if (!signed || row.titles.some(title => !signed.keys.includes(title.key))) fail("AI_PLAN_INVALID", "提交了预览之外的行或标题字段，请重新生成", 403);
@@ -282,10 +284,10 @@ export async function applyTitles(c: Context, input: unknown) {
       protection.assertFields(current.policy, c, raw, change.titles.map(title => title.key));
       const facts = sourceFacts(source, current.fields), extraFields: Row = {};
       for (const title of change.titles) {
-        if (!blank(cell(source, title.key))) fail("AI_TITLE_FILLED", "目标标题已有内容，请重新生成；本次没有覆盖任何标题", 409);
         const field = current.targets.find(field => field.key === title.key)!;
+        if (!selectionTitleTargetEligible(mode, titleKind(field)!, cell(source, title.key))) fail("AI_SOURCE_CHANGED", "目标标题已不符合本次处理方式，请重新生成；本次没有写入任何标题", 409);
         // Product images are authorized inputs to the signed preview. Do not fetch again while holding row locks.
-        const issue = titleValueIssue(field, title.value, facts.material, facts.facts, signed.visual);
+        const issue = titleValueIssue(field, title.value, facts.material, facts.facts, signed.visual, { mode, existingDescription: String(cell(source, title.key) ?? "") });
         if (issue) fail("VALIDATION_ERROR", `字段「${field.label}」：${issue}`, 400);
         extraFields[title.key] = title.value;
       }

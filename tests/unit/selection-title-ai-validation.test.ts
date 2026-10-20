@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { SelectionField } from "../../packages/contracts/src/selection-layout.js";
 import { productTitleSystemPrompt, titleLimit, titleValueIssue } from "../../apps/api/src/modules/style-selections/title-ai-validation.js";
-import { SELECTION_AI_LONG_TITLE_MIN_CHARACTERS, selectionTitleWordingIssue } from "../../packages/contracts/src/selection-title-ai.js";
+import { SELECTION_AI_LONG_TITLE_MIN_CHARACTERS, selectionTitleTargetEligible, selectionTitleWordingIssue } from "../../packages/contracts/src/selection-title-ai.js";
 import { countTextCharacters } from "../../packages/contracts/src/selection-field-validation.js";
 
 const long: SelectionField = { key: "custom:long-title", label: "长标题", type: "text", custom: true, width: 100 };
@@ -11,6 +11,32 @@ const issue = (title: string, composition = material, field = long, facts = "三
   titleValueIssue(field, title, composition, facts, image);
 
 describe("AI product title validation", () => {
+  it("selects completion by Unicode characters, keeps full titles, and limits this mode to long titles", () => {
+    expect(selectionTitleTargetEligible("complete", "long", "字".repeat(28) + "🌼")).toBe(true);
+    expect(selectionTitleTargetEligible("complete", "long", "字".repeat(29) + "🌼")).toBe(false);
+    expect(selectionTitleTargetEligible("complete", "long", "")).toBe(true);
+    expect(selectionTitleTargetEligible("complete", "short", "短标题")).toBe(false);
+    expect(selectionTitleTargetEligible("improve", "long", "  ")).toBe(false);
+    expect(selectionTitleTargetEligible("improve", "short", "已有描述")).toBe(true);
+  });
+  it("counts a completion's exact 30 characters independently of a larger field or Han-character limit", () => {
+    const title = "【水貂毛拼接100桑蚕丝】锦纨春女式皮衣皮草女士外套穿搭单品";
+    for (const field of [long, { ...long, textConfig: { countMode: "han" as const, maxLength: 40 } }]) {
+      expect(titleValueIssue(field, title, material, "三级类目：女士皮衣", false, { mode: "complete" })).toBeNull();
+      expect(titleValueIssue(field, title.slice(0, -1), material, "三级类目：女士皮衣", false, { mode: "complete" })).toContain("至少需要30");
+      expect(titleValueIssue(field, title + "款", material, "三级类目：女士皮衣", false, { mode: "complete" })).toContain("须为30");
+    }
+  });
+  it("uses this cell's description for design, while composition, functions and explicit seasons remain authoritative", () => {
+    const title = "【盘扣设计】秋冬新中式国风圆领女士背心马甲日常通勤外搭服饰";
+    const options = { mode: "improve" as const, existingDescription: "秋冬新中式圆领盘扣马甲，100%桑蚕丝，非遗手工，防晒" };
+    expect(titleValueIssue(long, title, "", "", false, options)).toBeNull();
+    expect(titleValueIssue(long, title.replace("盘扣设计", "100桑蚕丝"), "", "", false, options)).toContain("成分依据");
+    expect(titleValueIssue(long, title.replace("盘扣设计", "非遗手工"), "", "", false, options)).toContain("文字资料依据");
+    expect(titleValueIssue(long, title.replace("盘扣设计", "防晒设计"), "", "", false, options)).toContain("文字资料依据");
+    expect(titleValueIssue(long, title, "", "季节：夏季", false, options)).toContain("与本款季节文字资料不一致");
+    expect(titleValueIssue(long, title, "", "", false, { ...options, mode: "blank" })).toContain("没有足够");
+  });
   const downComposition = "面料：100%粘胶纤维\n里料：100%聚酯纤维\n胆料：100%锦纶\n毛领：水貂毛皮\n填充物：白鹅绒（绒子含量90%）\n小部分填充物：100%聚酯纤维\n充绒量：S80gM83gL87gXL91g\n（饰品辅料除外）";
   const downLong = { ...long, textConfig: { maxLength: 30, countMode: "characters" as const } };
   const downShort = { ...short, textConfig: { maxLength: 15, countMode: "characters" as const } };

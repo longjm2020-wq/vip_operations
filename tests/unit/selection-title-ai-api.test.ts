@@ -83,6 +83,87 @@ afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
 afterAll(async () => { await fixture.database?.close(); });
 
 describe("server-authoritative AI product titles", () => {
+  it("completes only long titles below 30 characters, preserves other cells and signs the operation", async () => {
+    const completedTitle = "【水貂毛拼接100桑蚕丝】锦纨春女式皮衣皮草女士外套穿搭单品";
+    const partial = await style("PARTIAL", { [longKey]: "【100桑蚕丝】女式皮衣", [shortKey]: "原有短标题" });
+    const full = await style("FULL", { [longKey]: completedTitle });
+    const longer = await style("LONGER", { [longKey]: completedTitle + "款" });
+    const empty = await style("EMPTY");
+    const preview = await generateTitles(actor(), { ...input([partial, full, longer, empty].map(row => String(row.id))), mode: "complete" });
+    const products = JSON.parse(providerPayload.messages[1].content[0].text).products;
+    expect(products.map((product: Row) => product.id)).toEqual([String(partial.id), String(empty.id)]);
+    expect(products[0]).toMatchObject({ mode: "complete", targets: [{ key: longKey, currentValue: "【100桑蚕丝】女式皮衣", minCharacters: 30, maxCharacters: 30 }] });
+    expect(readTitlePlan(preview.planToken, actor()).mode).toBe("complete");
+    expect(preview.rows[0].titles).toMatchObject([{ previousValue: "【100桑蚕丝】女式皮衣", minCharacters: 30, maxCharacters: 30 }]);
+    expect((await read("SELECT extra_fields FROM style_selections WHERE id=$1", [partial.id]))[0].extra_fields[longKey]).toBe("【100桑蚕丝】女式皮衣");
+    const body = { planToken: preview.planToken, rows: preview.rows.map(row => ({ id: row.id, titles: row.titles.map(({ key, value }) => ({ key, value })) })) };
+    expect(await applyTitles(actor("complete"), body)).toMatchObject({ updatedCount: 2 });
+    expect((await read("SELECT extra_fields FROM style_selections WHERE id=$1", [partial.id]))[0].extra_fields).toMatchObject({ [longKey]: completedTitle, [shortKey]: "原有短标题" });
+    expect((await read("SELECT extra_fields FROM style_selections WHERE id=$1", [longer.id]))[0].extra_fields[longKey]).toBe(completedTitle + "款");
+    expect(await applyTitles(actor("complete"), body)).toMatchObject({ updatedCount: 2 });
+    expect(await read("SELECT * FROM audit_logs")).toHaveLength(2);
+  });
+  it("improves a cell from its existing description without requiring another description field", async () => {
+    const original = "秋冬新中式圆领盘扣女士背心马甲";
+    const row = await style("DESCRIPTION", { [categoryKey]: "", [longKey]: original }, null);
+    const empty = await style("EMPTY", { [categoryKey]: "" }, null);
+    const improved = "【盘扣设计】秋冬新中式国风圆领女士背心马甲日常通勤外搭服饰";
+    providerHandler = products => ({ rows: products.map(product => ({ id: product.id, titles: [{ key: longKey, value: improved }], evidence: ["本格原文的季节与设计描述"], warnings: [] })) });
+    const preview = await generateTitles(actor(), { ...input([String(row.id), String(empty.id)], [longKey]), mode: "improve" });
+    expect(preview.rows).toHaveLength(1);
+    expect(preview.rows[0].titles[0]).toMatchObject({ previousValue: original, value: improved });
+    expect(JSON.parse(providerPayload.messages[1].content[0].text).products[0].targets[0].currentValue).toBe(original);
+    expect((await read("SELECT extra_fields FROM style_selections WHERE id=$1", [row.id]))[0].extra_fields[longKey]).toBe(original);
+    await applyTitles(actor(), { planToken: preview.planToken, rows: [{ id: String(row.id), titles: [{ key: longKey, value: improved }] }] });
+    expect((await read("SELECT extra_fields FROM style_selections WHERE id=$1", [row.id]))[0].extra_fields[longKey]).toBe(improved);
+  });
+  it.each(["complete", "improve"] as const)("rejects concurrent edits in %s mode even when the timestamp is unchanged, without partial writes", async mode => {
+    const first = await style("FIRST", { [longKey]: "原文甲" }), second = await style("SECOND", { [longKey]: "原文乙" });
+    const preview = await generateTitles(actor(), { ...input([String(first.id), String(second.id)], [longKey]), mode });
+    await fixture.database!.query("UPDATE style_selections SET extra_fields=extra_fields || $2::jsonb WHERE id=$1", [second.id, JSON.stringify({ [longKey]: "同事已修改原文" })]);
+    await expect(applyTitles(actor(), { planToken: preview.planToken, rows: preview.rows.map(row => ({ id: row.id, titles: row.titles.map(({ key, value }) => ({ key, value })) })) })).rejects.toMatchObject({ status: 409 });
+    expect((await read("SELECT extra_fields FROM style_selections WHERE id=$1", [first.id]))[0].extra_fields[longKey]).toBe("原文甲");
+    expect((await read("SELECT extra_fields FROM style_selections WHERE id=$1", [second.id]))[0].extra_fields[longKey]).toBe("同事已修改原文");
+    expect(await read("SELECT * FROM audit_logs")).toHaveLength(0);
+  });
+  it.each(["complete", "improve"] as const)("keeps field visibility and edit protection authoritative in %s mode", async mode => {
+    const row = await style("TARGET", { [longKey]: "已有描述" });
+    await fixture.database!.query("UPDATE style_selections SET migration_locked=true WHERE id=$1", [row.id]);
+    expect((await generateTitles(actor(), { ...input([String(row.id)], [longKey]), mode })).rows).toEqual([]);
+    expect(providerCalls).toBe(0);
+    await fixture.database!.query("UPDATE style_selections SET migration_locked=false WHERE id=$1", [row.id]);
+    const preview = await generateTitles(actor(), { ...input([String(row.id)], [longKey]), mode });
+    await fixture.database!.query("UPDATE selection_field_registry SET owner_id=8,visibility='PRIVATE',revision=revision+1 WHERE field_key=$1", [longKey]);
+    await expect(applyTitles(actor(), { planToken: preview.planToken, rows: [{ id: String(row.id), titles: [{ key: longKey, value: preview.rows[0].titles[0].value }] }] })).rejects.toMatchObject({ status: 403 });
+    await expect(generateTitles(actor(), { ...input([String(row.id)], [longKey]), mode })).rejects.toMatchObject({ status: 403 });
+    expect(providerCalls).toBe(1);
+    expect((await read("SELECT extra_fields FROM style_selections WHERE id=$1", [row.id]))[0].extra_fields[longKey]).toBe("已有描述");
+  });
+  it("enforces exactly 30 characters in completion previews and edited results without expanding field limits", async () => {
+    const row = await style("TARGET", { [longKey]: "已有长标题" });
+    const preview = await generateTitles(actor(), { ...input([String(row.id)], [longKey]), mode: "complete" });
+    const valid = preview.rows[0].titles[0].value;
+    for (const value of [valid.slice(0, -1), valid + "款"]) {
+      await expect(applyTitles(actor(), { planToken: preview.planToken, rows: [{ id: String(row.id), titles: [{ key: longKey, value }] }] })).rejects.toMatchObject({ status: 400 });
+    }
+    providerHandler = products => ({ rows: products.map(product => ({ id: product.id, titles: [{ key: longKey, value: valid.slice(0, -1) }], evidence: [], warnings: [] })) });
+    await expect(generateTitles(actor(), { ...input([String(row.id)], [longKey]), mode: "complete" })).rejects.toMatchObject({ status: 502 });
+    await fixture.database!.query("UPDATE selection_field_registry SET definition=jsonb_set(definition,'{textConfig,maxLength}','29') WHERE field_key=$1", [longKey]);
+    const calls = providerCalls;
+    await expect(generateTitles(actor(), { ...input([String(row.id)], [longKey]), mode: "complete" })).rejects.toMatchObject({ status: 400, response: { error: { code: "AI_TITLE_LIMIT" } } });
+    expect(providerCalls).toBe(calls);
+    expect((await read("SELECT extra_fields FROM style_selections WHERE id=$1", [row.id]))[0].extra_fields[longKey]).toBe("已有长标题");
+    expect(await read("SELECT * FROM audit_logs")).toHaveLength(0);
+  });
+  it("cannot upgrade a blank-only signed preview or inject an unpreviewed existing field", async () => {
+    const row = await style("TARGET", { [longKey]: "已有长标题" });
+    const preview = await generateTitles(actor(), input([String(row.id)]));
+    await expect(applyTitles(actor(), { planToken: preview.planToken, rows: [{ id: String(row.id), titles: [{ key: longKey, value: "应拒绝" }] }] })).rejects.toMatchObject({ status: 403 });
+    const [encoded, signature] = preview.planToken.split(".");
+    const forged = Buffer.from(JSON.stringify({ ...JSON.parse(Buffer.from(encoded, "base64url").toString()), mode: "improve" })).toString("base64url") + "." + signature;
+    expect(() => readTitlePlan(forged, actor())).toThrow();
+    expect((await read("SELECT extra_fields FROM style_selections WHERE id=$1", [row.id]))[0].extra_fields[longKey]).toBe("已有长标题");
+  });
   it("omits color, composition tags, ordinary synthetics and partial ratios on generation and edited application", async () => {
     const row = await style("RULES", {}, "面料：96.8%山羊绒3.2%桑蚕丝\n里料：100%聚酯纤维");
     const ordinary = providerHandler;

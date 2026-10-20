@@ -3,6 +3,7 @@ import { ArchiveReferenceCell, archiveReferenceKey } from "./selection-archive-f
 import { PageSearch, PageSearchInput } from "./page-search";
 import { SelectionImageSearch } from "./selection-image-search";
 import { SelectionTitleAi, type SelectionTitleAiRow } from "./selection-title-ai";
+import { selectionTitleTargetEligible, type SelectionTitleAIMode } from "../../../packages/contracts/src/selection-title-ai.js";
 import {SelectionFieldManager,SelectionFieldInput} from "./selection-field-manager";
 import { SelectionProtectionControl, editableSelectionCell, readableSelectionCell } from "./selection-protection";
 import { SelectionOrganization } from "./selection-organization";
@@ -380,7 +381,7 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
   const [selectedColumnKeys, setSelectedColumnKeys] = useState<string[]>([]);
   const [rangeCopyBusy, setRangeCopyBusy] = useState(false);
   const rangeCopyLock = useRef(false);
-  const [titleAi, setTitleAi] = useState<{ rows: SelectionTitleAiRow[]; keys: string[]; scope: string } | null>(null);
+  const [titleAi, setTitleAi] = useState<{ rows: SelectionTitleAiRow[]; keys: string[]; scope: string; mode: SelectionTitleAIMode } | null>(null);
   const [fixedOrderOpen, setFixedOrderOpen] = useState(false);
   const columnSelectionAnchor = useRef<string | null>(null);
   const [columnWidthTarget, setColumnWidthTarget] = useState<Column[] | null>(null);
@@ -612,7 +613,7 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
       ...(fixedColumns.length ? [{ key: "unfix-all", label: "取消所有固定列" }] : []),
       { type: "divider" as const },
       { key: "column-width", label: "设置列宽" },
-      ...(canEdit && ["长标题", "短标题"].includes(column.label) && (column.type || column.fallbackType || "text") === "text" ? [{ key: "ai-title", label: "AI 填补空白标题", icon: <BulbOutlined /> }] : []),
+      ...(canEdit && ["长标题", "短标题"].includes(column.label) && (column.type || column.fallbackType || "text") === "text" ? [{ key: "ai-title", label: "AI 商品标题", icon: <BulbOutlined /> }] : []),
     ];
   };
   const handleColumnAction = (columnKey: string, action: string) => {
@@ -748,13 +749,15 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
     const regionRows = new Set([...selectedCells].map(id => id.slice(0, id.indexOf("::"))));
     const titleCellSelected = [...selectedCells].some(id => keys.includes(id.slice(id.indexOf("::") + 2)));
     const chosenRows = selectedRows.length ? selectedRowKeys : !selectedColumnKeys.length && (selectedCells.size > 1 || titleCellSelected) ? regionRows : contextRowKey ? new Set([contextRowKey]) : null;
-    const eligible = filteredRows.filter(row => row.id && String(row.xutiStyleNo || "").trim() && !row.migrationLocked && (!chosenRows || chosenRows.has(row._key)) && keys.some(key => {
-      const field = titleFields.find(column => column.key === key)!;
-      return readableSelectionCell(row, key) && !(row.hiddenCells || []).includes(key) && editableSelectionCell(row, key) && !String(valueAt(row, field) ?? "").trim();
-    }));
-    if (!eligible.length) { message.info("此范围没有可填补的空白标题；仅处理已保存、有款号且可编辑的空白单元格"); return; }
+    const readableEditable = (row: Row, key: string) => readableSelectionCell(row, key) && !(row.hiddenCells || []).includes(key) && editableSelectionCell(row, key);
+    const eligible = filteredRows.filter(row => row.id && String(row.xutiStyleNo || "").trim() && !row.migrationLocked && (!chosenRows || chosenRows.has(row._key)) && titleFields.some(field => readableEditable(row, field.key)));
+    if (!eligible.length) { message.info("此范围没有可处理的标题；仅处理已保存、有款号且可编辑的标题单元格"); return; }
+    const aiRows = eligible.map(row => ({ id: String(row.id), rowKey: row._key, xutiStyleNo: String(row.xutiStyleNo),
+      values: Object.fromEntries(titleFields.filter(field => readableEditable(row, field.key)).map(field => [field.key, String(valueAt(row, field) ?? "")])) }));
+    const hasTargets = (mode: SelectionTitleAIMode) => aiRows.some(row => titleFields.some(field => keys.includes(field.key) && Object.hasOwn(row.values, field.key) && selectionTitleTargetEligible(mode, field.label === "长标题" ? "long" : "short", row.values[field.key])));
+    const mode: SelectionTitleAIMode = hasTargets("blank") ? "blank" : hasTargets("complete") ? "complete" : "improve";
     selectionDrag.stop(); setContextCell(null); setCellTextEditing(false); setFocusedCell(null);
-    setTitleAi({ rows: eligible.map(row => ({ id: String(row.id), rowKey: row._key, xutiStyleNo: String(row.xutiStyleNo) })), keys, scope: `${chosenRows ? "选中范围" : "当前筛选结果（含其他页）"} · ${eligible.length} 款有空白标题` });
+    setTitleAi({ rows: aiRows, keys, mode, scope: chosenRows ? "选中范围" : "当前筛选结果（含其他页）" });
   };
   const refreshTitles = async () => {
     tableHistory.clear();
@@ -1470,7 +1473,7 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
     setFormatTarget(null);
   };
   if(accessLost)return <Alert type="error" showIcon message="表格访问权限已失效，请重新登录或联系管理员" />;
-  return <>{titleAi && <SelectionTitleAi open onClose={() => setTitleAi(null)} rows={titleAi.rows} fields={titleFields} initialFieldKeys={titleAi.keys} scopeLabel={titleAi.scope} apiRequest={api} onApplied={refreshTitles} canConfigureAi={canConfigureAi} onConfigureAi={() => { window.location.assign("/settings/ai"); }} />}{columnWidthTarget && <SelectionColumnWidthModal columns={columnWidthTarget} onCancel={() => setColumnWidthTarget(null)} onApply={width => { const keys = new Set(columnWidthTarget.map(column => column.key)); setColumns(current => current.map(column => keys.has(column.key) ? { ...column, width } : column)); setColumnWidthTarget(null); }}/>} {imagePreview && previewImages.length > 0 && <SelectionImagePreview key={cellId(imagePreview.rowKey, imagePreview.columnKey)} images={previewImages} index={Math.min(imagePreview.index, previewImages.length - 1)} name={previewColumn!.label} alongsideDetails={detailVisible} onTextCopied={text => { copiedSingleValue.current = text; setCopiedCells(new Set()); }} onIndexChange={index => setImagePreview(current => current ? { ...current, index } : null)} onClose={() => setImagePreview(null)} />}{formatTarget && <SelectionFormatModal count={formatTarget.ids.size} sample={formatTarget.sample} initial={formatTarget.initial} onCancel={() => setFormatTarget(null)} onApply={applyFormat} />}<PageSearch><PageSearchInput multiline aria-label="搜索选款" placeholder="搜索款号、供应商、颜色、材质…" allowClear value={searchText} onChange={event=>{setImageSearchRowId(null);setSearchText(event.target.value);}} suffix={<SelectionImageSearch disabled={!!dirtyCount || saving || deleting || transferring} onSelect={row=>{setImageSearchRowId(String(row.id));setPage(1);setCellAnchor(null);setFocusedCell(null);setCellTextEditing(false);setSelectedRows([]);setSelectedCells(new Set());}}/>} /></PageSearch>
+  return <>{titleAi && <SelectionTitleAi open onClose={() => setTitleAi(null)} rows={titleAi.rows} fields={titleFields} initialFieldKeys={titleAi.keys} initialMode={titleAi.mode} scopeLabel={titleAi.scope} apiRequest={api} onApplied={refreshTitles} canConfigureAi={canConfigureAi} onConfigureAi={() => { window.location.assign("/settings/ai"); }} />}{columnWidthTarget && <SelectionColumnWidthModal columns={columnWidthTarget} onCancel={() => setColumnWidthTarget(null)} onApply={width => { const keys = new Set(columnWidthTarget.map(column => column.key)); setColumns(current => current.map(column => keys.has(column.key) ? { ...column, width } : column)); setColumnWidthTarget(null); }}/>} {imagePreview && previewImages.length > 0 && <SelectionImagePreview key={cellId(imagePreview.rowKey, imagePreview.columnKey)} images={previewImages} index={Math.min(imagePreview.index, previewImages.length - 1)} name={previewColumn!.label} alongsideDetails={detailVisible} onTextCopied={text => { copiedSingleValue.current = text; setCopiedCells(new Set()); }} onIndexChange={index => setImagePreview(current => current ? { ...current, index } : null)} onClose={() => setImagePreview(null)} />}{formatTarget && <SelectionFormatModal count={formatTarget.ids.size} sample={formatTarget.sample} initial={formatTarget.initial} onCancel={() => setFormatTarget(null)} onApply={applyFormat} />}<PageSearch><PageSearchInput multiline aria-label="搜索选款" placeholder="搜索款号、供应商、颜色、材质…" allowClear value={searchText} onChange={event=>{setImageSearchRowId(null);setSearchText(event.target.value);}} suffix={<SelectionImageSearch disabled={!!dirtyCount || saving || deleting || transferring} onSelect={row=>{setImageSearchRowId(String(row.id));setPage(1);setCellAnchor(null);setFocusedCell(null);setCellTextEditing(false);setSelectedRows([]);setSelectedCells(new Set());}}/>} /></PageSearch>
     <Dropdown trigger={["contextMenu"]} open={!!contextRow && !!contextColumn} onOpenChange={open => { if (!open) setContextCell(null); }} overlayStyle={{ zIndex: 1201 }} menu={cellContextMenu}><span aria-hidden="true" style={{ position: "fixed", left: contextCell?.x || 0, top: contextCell?.y || 0, width: 1, height: 1, pointerEvents: "none" }}/></Dropdown>
     <Card ref={findRoot} data-table-find-context className="selection-card" aria-busy={tableHistory.busy} onPointerDownCapture={event => { if (tableHistory.busy) { event.preventDefault(); event.stopPropagation(); } }} onKeyDownCapture={event => {
       if (tableHistory.busy) { event.preventDefault(); event.stopPropagation(); return; }

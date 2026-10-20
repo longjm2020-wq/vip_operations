@@ -2,6 +2,16 @@ import { z } from "zod";
 
 /** The AI long-title minimum always counts original Unicode code points. */
 export const SELECTION_AI_LONG_TITLE_MIN_CHARACTERS = 29;
+export const SELECTION_AI_TITLE_COMPLETION_CHARACTERS = 30;
+export const selectionTitleAIModeSchema = z.enum(["blank", "complete", "improve"]);
+export type SelectionTitleAIMode = z.infer<typeof selectionTitleAIModeSchema>;
+export function selectionTitleTargetEligible(mode: SelectionTitleAIMode, kind: "long" | "short", value: unknown) {
+  const text = String(value ?? "").trim();
+  return mode === "blank" ? !text : mode === "complete"
+    ? kind === "long" && Array.from(text).length < SELECTION_AI_TITLE_COMPLETION_CHARACTERS : !!text;
+}
+export const selectionTitleMinimumCharacters = (kind: "long" | "short", mode: SelectionTitleAIMode = "blank") =>
+  kind === "long" ? mode === "complete" ? SELECTION_AI_TITLE_COMPLETION_CHARACTERS : SELECTION_AI_LONG_TITLE_MIN_CHARACTERS : 1;
 
 const titleMaterialNames = "桑蚕丝|柞蚕丝|蚕丝|真丝|水貂毛皮|水貂毛|水貂|山羊绒|绵羊绒|羊绒|绵羊毛|山羊毛|美利奴羊毛|羊毛|牦牛绒|牦牛毛|骆驼绒|骆驼毛|羊驼绒|羊驼毛|兔绒|兔毛|白鹅绒|灰鹅绒|白鸭绒|灰鸭绒|鹅绒|鸭绒|棉|亚麻|苎麻|聚酯纤维|氨纶|莱赛尔纤维|莫代尔纤维|粘胶纤维|锦纶|天丝";
 
@@ -32,6 +42,7 @@ export function selectionTitleWordingIssue(value: string): string | null {
 const rowId = z.string().regex(/^[1-9]\d{0,18}$/);
 const fieldKey = z.string().regex(/^custom:[a-zA-Z0-9:-]+$/).max(100);
 export const selectionTitleAIGenerateSchema = z.object({
+  mode: selectionTitleAIModeSchema.default("blank"),
   rowIds: z.array(rowId).min(1).max(10).refine(values => new Set(values).size === values.length, "行不能重复"),
   targetKeys: z.array(fieldKey).min(1).max(2).refine(values => new Set(values).size === values.length, "字段不能重复"),
   preferences: z.object({ usePoeticName: z.boolean().default(true), instruction: z.string().trim().max(400).default("") }).strict().optional(),
@@ -48,6 +59,8 @@ export type SelectionTitleAIStatus = { ready: boolean; message: string };
 export type SelectionTitleAICandidate = {
   key: string; label: string; kind: "long" | "short"; value: string;
   minCharacters: number; maxLength: number; countMode: "characters" | "han";
+  maxCharacters?: number;
+  previousValue?: string;
 };
 export type SelectionTitleAIRow = {
   id: string; xutiStyleNo: string; expectedUpdatedAt: string;
