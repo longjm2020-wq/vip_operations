@@ -35,7 +35,6 @@ import {
   Menu,
   Space,
   Spin,
-  Tabs,
 } from "antd";
 import zhCN from "antd/locale/zh_CN";
 import {
@@ -57,6 +56,7 @@ import { PageSearchContext } from "./page-search";
 import { AccountMenu } from "./account-menu";
 import { WorkspaceMenuIcon } from "./workspace-menu-icon";
 const MasterPage = React.lazy(() => import("./master").then(module => ({ default: module.MasterPage })));
+const ColorSizeMappings = React.lazy(() => import("./color-size-mappings").then(module => ({ default: module.ColorSizeMappings })));
 const ProductArchive = React.lazy(() => import("./product-archive").then(module => ({ default: module.ProductArchive })));
 const InventoryPage = React.lazy(() => import("./operations").then(module => ({ default: module.InventoryPage })));
 const InventoryDetailsPage = React.lazy(() => import("./operations").then(module => ({ default: module.InventoryDetailsPage })));
@@ -185,19 +185,7 @@ function Login() {
 function ColorSizeMappingsPage() {
   const [params, setParams] = useSearchParams();
   const tab = params.get("tab") === "size" ? "size" : "color";
-  return (
-    <>
-      <Tabs
-        activeKey={tab}
-        onChange={(key) => setParams({ tab: key })}
-        items={[
-          { key: "color", label: "颜色映射" },
-          { key: "size", label: "尺码映射" },
-        ]}
-      />
-      <MasterPage key={tab} resource={`${tab}-mappings`} />
-    </>
-  );
+  return <ColorSizeMappings tab={tab} onTabChange={tab => setParams({ tab })} />;
 }
 function Workspace({ user }: { user: Row }) {
   const location = useLocation(),
@@ -280,11 +268,6 @@ function Workspace({ user }: { user: Row }) {
       children: [
         { key: "/warehouses", label: "仓库", permission: "warehouse.read" },
         { key: "/categories", label: "品类", permission: "product.read" },
-        {
-          key: "/color-size-mappings",
-          label: "颜色尺码映射",
-          permission: "product.read",
-        },
         { key: "/brands", label: "品牌", permission: "product.read" },
         { key: "/users", label: "用户", permission: "user.read" },
         { key: "/roles", label: "角色权限", permission: "role.read" },

@@ -1,0 +1,13 @@
+.selection-toolbox .ant-drawer-body { padding: 20px 24px; }
+.selection-toolbox-heading { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
+.selection-toolbox-heading strong { font-size: 16px; }
+.selection-toolbox-heading span { color: #8d7a6d; font-size: 12px; }
+.selection-toolbox-loading { display: flex; align-items: center; justify-content: center; gap: 12px; min-height: 180px; }
+.selection-toolbox .page-heading { align-items: flex-start; flex-wrap: wrap; gap: 12px; }
+.selection-toolbox .page-heading h2 { font-size: 18px; }
+.selection-toolbox .page-heading-subtitle { white-space: normal; }
+.selection-toolbox .page-heading-actions { flex-wrap: wrap; }
+.selection-toolbox .table-toolbar { flex-wrap: wrap; }
+@media (max-width: 600px) {
+  .selection-toolbox .ant-drawer-body { padding: 16px; }
+}
