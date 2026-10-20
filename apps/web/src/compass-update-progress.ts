@@ -1,13 +1,13 @@
 import {
   compassDimensions,
   type CompassDimension,
-} from "../../../packages/contracts/src/compass-analytics";
+} from "../../../packages/contracts/src/compass-analytics.js";
 import {
   compassUpdateActive,
   type CompassUpdateDimensionProgress,
   type CompassUpdateJob,
   type CompassUpdateStatusView,
-} from "../../../packages/contracts/src/compass-update";
+} from "../../../packages/contracts/src/compass-update.js";
 
 export const compassProgressSteps = ["准备", "下载", "解析", "导入", "校验"];
 const stages = {
