@@ -627,7 +627,13 @@ try {
   const oversizedImage = Buffer.alloc(1024 * 1024);
   Buffer.from("89504e470d0a1a0a", "hex").copy(oversizedImage);
   assert.equal((await request("/style-selections/images", "POST", { data: `data:image/png;base64,${oversizedImage.toString("base64")}` })).status, 400);
-  const manyImages = Array.from({ length: 12 }, () => ({ id: randomUUID(), url: uploadedImage.url, color: "奶油白" }));
+  // Identical files are collapsed by content checksum, so tests that need
+  // several separate images upload distinct bytes for each one.
+  const pngBytes = Buffer.from(imageData.split(",")[1], "base64");
+  const uploadDistinctImage = async (tag: string) =>
+    (await ok("/style-selections/images", "POST", { data: `data:image/png;base64,${Buffer.concat([pngBytes, Buffer.from(`distinct-${tag}`)]).toString("base64")}` }, randomUUID())).url as string;
+  const manyImages = [];
+  for (let index = 0; index < 12; index += 1) manyImages.push({ id: randomUUID(), url: await uploadDistinctImage(String(index)), color: "奶油白" });
   const manySaved = await ok("/style-selections/" + selection.id, "PATCH", { images: manyImages, expectedUpdatedAt: savedAgain.updatedAt });
   assert.equal(manySaved.images.length, 12);
   check("selection images upload independently, enforce size and access, and allow more than five images");
@@ -695,7 +701,7 @@ try {
   assert.equal(photoRead.images.length,2);
   assert.equal(photoRead.material,"PHOTO-SEARCH-EXCLUDED");
   const labelPhotoA = {action:"add",field:"labelImages",image:{id:randomUUID(),url:uploadedImage.url,color:""}};
-  const labelPhotoB = {action:"add",field:"labelImages",image:{id:randomUUID(),url:uploadedImage.url,color:""}};
+  const labelPhotoB = {action:"add",field:"labelImages",image:{id:randomUUID(),url:await uploadDistinctImage("label-b"),color:""}};
   const labelPhotoKey = randomUUID();
   await Promise.all([ok(`/style-selections/${photoStyle.id}/photos`,"POST",labelPhotoA,labelPhotoKey),ok(`/style-selections/${photoStyle.id}/photos`,"POST",labelPhotoB)]);
   await ok(`/style-selections/${photoStyle.id}/photos`,"POST",labelPhotoA,labelPhotoKey);
