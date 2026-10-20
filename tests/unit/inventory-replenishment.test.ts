@@ -30,7 +30,7 @@ const policy = (overrides: Partial<ReplenishmentPolicy> = {}) => ({
 describe("lead time and delayed reusable return planning", () => {
   it("defaults to 20-day purchases, 15–20-day returns, 95% resale, daily review and no safety buffer", () => {
     expect(defaults).toEqual({
-      referencePeriod: "30d", dailySalesMethod: "median", returnRateMethod: "median",
+      referencePeriod: "30d", dailySalesMethod: "frequent", returnRateMethod: "frequent",
       purchaseLeadDays: 20,
       returnDaysMin: 15,
       returnDaysMax: 20,

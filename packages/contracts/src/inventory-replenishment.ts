@@ -5,8 +5,8 @@ import { inventoryReferencePeriodSchema } from "./inventory-summary.js";
 export const replenishmentPolicySchema = z
   .object({
     referencePeriod: inventoryReferencePeriodSchema.default("30d"),
-    dailySalesMethod: z.enum(["median", "mode", "mean"]).default("median"),
-    returnRateMethod: z.enum(["median", "mode", "mean"]).default("median"),
+    dailySalesMethod: z.enum(["frequent", "median", "mode", "mean"]).default("frequent"),
+    returnRateMethod: z.enum(["frequent", "median", "mode", "mean"]).default("frequent"),
     purchaseLeadDays: z.number().int().min(1).max(365).default(20),
     reviewDays: z.number().int().min(1).max(90).default(1),
     safetyDays: z.number().int().min(0).max(90).default(0),

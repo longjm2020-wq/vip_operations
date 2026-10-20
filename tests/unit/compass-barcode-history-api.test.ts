@@ -112,12 +112,14 @@ beforeEach(async () => {
 });
 afterAll(async () => fixture.database?.close());
 
-describe("complete barcode daily history and inventory median windows", () => {
-  it("keeps the median reference and calculates replenishment from complete daily demand", async () => {
+describe("complete barcode daily history and inventory frequent-value windows", () => {
+  it("keeps the 高频均值 display reference but calculates replenishment from complete daily demand", async () => {
     await finish(await report(shiftCompassDate(day, -29), day, { sales: 0 }));
     await finish(await report(day, day, { sales: 30 }));
     const row = (await summary()).data[0];
-    expect(row.dailySales).toBe(0);
+    // Zero days are ignored by 高频均值 (only one selling day → 样本不足), planning still uses 30 ÷ 30.
+    expect(row.dailySales).toBe(30);
+    expect(row.channelReference.dailySales).toMatchObject({ method: "frequent", sampleInsufficient: true, nonZeroSamples: 1, samples: 30 });
     expect(row.planningDailySales).toBe(1);
     expect(row.coverageDays).toBe(14);
     expect(row.replenishmentQty).toBe(7);
@@ -209,9 +211,13 @@ describe("complete barcode daily history and inventory median windows", () => {
     await finish(id);
     const result = await summary(), row = result.data[0];
     expect(row.dailySales).toBe(3); expect(row.returnRate).toBe(0.25); expect(row.estimatedReturns).toBe(22.5);
-    expect(row.channelReference.dailySales).toEqual({ value: 3, values: [3, 3], samples: 30, method: "median" });
+    expect(row.channelReference.dailySales).toEqual({
+      value: 3, values: [3], frequencies: [30], samples: 30, nonZeroSamples: 30, method: "frequent",
+      sellThroughRatio: 1, effectiveValue: 3, effectiveMethod: "frequent_x_ratio", sampleInsufficient: false, validTotal: 90, minSampleDays: 5,
+    });
+    expect(row.planningDailySales).toBe(3);
     expect(row.channelReference.window).toEqual(result.reportCoverage.window);
-    expect(result.reportCoverage.window).toMatchObject({ period: "30d", days: 30, coveredDays: 30, complete: true, method: "median" });
+    expect(result.reportCoverage.window).toMatchObject({ period: "30d", days: 30, coveredDays: 30, complete: true, method: "frequent" });
     expect(fixture.transactions.at(-1)).toMatchObject({ isolationLevel: "RepeatableRead" });
     expect(fixture.queries).toContain("SET TRANSACTION READ ONLY");
     expect((await query("SELECT payload FROM compass_barcode_history_records WHERE barcode='001234' LIMIT 1"))[0].payload)
@@ -237,7 +243,9 @@ describe("complete barcode daily history and inventory median windows", () => {
       await finish(await report(start, end, { sales: 1, rate: 0.5 }));
     const result = await summary({ referencePeriod: "1y" });
     expect(result.reportCoverage.window).toMatchObject({ startDate: "2025-10-16", endDate: day, days: 365, coveredDays: 365, complete: true });
-    expect(result.data[0].dailySales).toBe(1); expect(result.data[0].estimatedReturns).toBe(212.5);
+    // R1 = 1 (335 days), R2 = 3 (30 days) → 2; rates 50%/25% → 37.5% → 38%; 425 × 38%.
+    expect(result.data[0].dailySales).toBe(2); expect(result.data[0].returnRate).toBe(0.38);
+    expect(result.data[0].estimatedReturns).toBe(161.5);
     expect(String((await query("SELECT import_id FROM compass_active_imports WHERE dimension='barcode'"))[0].import_id)).toBe(current);
     expect(String(result.reportCoverage.source.id)).toBe(current);
   }, 20000);
@@ -268,8 +276,9 @@ describe("complete barcode daily history and inventory median windows", () => {
     expect(String(result.reportCoverage.source.id)).toBe(original);
     expect(result.reportCoverage.source.startDate).toBe(shiftCompassDate(day, -29));
     expect(result.reportCoverage.window).toMatchObject({ days: 30, coveredDays: 30, complete: true });
-    expect(result.data[0].dailySales).toBe(3);
-    expect(result.data[0].estimatedReturns).toBe(24);
+    // 3 on 27 days and corrected 5 on 3 days → (3 + 5) / 2; rates (25% + 50%) / 2 → 38%.
+    expect(result.data[0].dailySales).toBe(4);
+    expect(result.data[0].estimatedReturns).toBe(36.48);
     expect(String((await query("SELECT import_id FROM compass_active_imports WHERE dimension='barcode'"))[0].import_id)).toBe(original);
   });
 

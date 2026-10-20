@@ -164,7 +164,7 @@ export function enrichOpenApi(doc: OpenAPIObject) {
   doc.paths["/api/v1/inventory/summary"].get!.parameters!.push(
     { name: "dimension", in: "query", schema: { type: "string", enum: ["sku", "article", "style"], default: "sku" } },
     { name: "reportMatch", in: "query", schema: { type: "string", enum: ["all", "matched", "unmatched"], default: "all" }, description: "条码维度按所选经营参考周期的报表匹配情况筛选" },
-    { name: "referencePeriod", in: "query", schema: { type: "string", enum: ["3d", "7d", "15d", "30d", "3m", "6m", "1y"] }, description: "库存经营参考周期；省略时使用当前账号保存的默认周期，首次为近30天。以最新完整条码报表截止日为终点，月年按日历滚动；日销及退货率按账号配置独立取中位数、众数或平均值。历史日期覆盖不完整时保留人工参考" },
+    { name: "referencePeriod", in: "query", schema: { type: "string", enum: ["3d", "7d", "15d", "30d", "3m", "6m", "1y"] }, description: "库存经营参考周期；省略时使用当前账号保存的默认周期，首次为近30天。以最新完整条码报表截止日为终点，月年按日历滚动；日销及退货率按账号配置独立取高频均值（默认：忽略0值，按出现天数取最高频R1与次高频R2，(R1+R2)/2，退货率先按整数百分比取整；不为0的天数少于5天时日销标样本不足、退货率改用期间退货数÷期间销量）、中位数、众数或平均值。历史日期覆盖不完整时保留人工参考" },
     { name: "q", in: "query", schema: { type: "string", maxLength: 100 }, description: "商品编码、货号、款号、名称或条码关键词" },
     ...["warehouseId", "skuId", "productId", "supplierId", "categoryId"].map((name) => ({ name, in: "query" as const, schema: { type: "string" as const, pattern: "^[1-9][0-9]*$" } })),
   );

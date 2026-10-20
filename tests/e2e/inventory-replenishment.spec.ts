@@ -165,7 +165,9 @@ test("补货用完整日均并展示延迟回仓、交期内缺口和未核对�
   page,
 }) => {
   await boot(page, new Map());
-  await expect(await cell(page, "渠道日销参考")).toContainText("0");
+  // Default 高频均值 ignores the 29 zero days (样本不足); 补货日均 still uses 15 ÷ 30.
+  await expect(await cell(page, "渠道日销参考")).toContainText("15");
+  await expect(await cell(page, "渠道日销参考")).toContainText("样本不足");
   await expect(await cell(page, "补货日均")).toHaveText("0.5");
   await expect(await cell(page, "补货建议")).toHaveText("11件需核对");
   const focus = (await cell(page, "补货建议")).locator("span[tabindex]");

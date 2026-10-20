@@ -161,7 +161,7 @@ async function inventorySummarySnapshot(q: Row, tx: Tx, userId?: string) {
       : 0,
     covered_days: first.window_covered_days,
     complete: false,
-    method: policy?.policy.dailySalesMethod ?? "median",
+    method: policy?.policy.dailySalesMethod ?? "frequent",
   };
   window.complete = !!source && window.days > 0 && window.covered_days === window.days;
   const totals = Object.fromEntries(

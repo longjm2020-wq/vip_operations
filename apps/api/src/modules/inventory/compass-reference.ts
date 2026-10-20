@@ -9,6 +9,7 @@ import {
   type CompassReferenceDay,
   type InventoryReferenceWindow,
   type InventoryReferenceMethod,
+  defaultInventoryReferenceMethods,
 } from "../../../../../packages/contracts/src/compass-inventory-reference.js";
 import { planningDemand } from "../../../../../packages/contracts/src/inventory-replenishment.js";
 
@@ -17,7 +18,7 @@ export async function applyCompassReferences(
   tx: Tx,
   source: Row | null,
   window: InventoryReferenceWindow,
-  methods: { dailySales: InventoryReferenceMethod; returnRate: InventoryReferenceMethod } = { dailySales: "median", returnRate: "median" },
+  methods: { dailySales: InventoryReferenceMethod; returnRate: InventoryReferenceMethod } = defaultInventoryReferenceMethods,
 ) {
   const code = (row: Row) =>
     String(row.barcode || "").trim() || String(row.sku_code || "").trim();
