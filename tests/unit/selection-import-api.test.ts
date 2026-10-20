@@ -37,7 +37,7 @@ vi.mock("../../apps/api/src/modules/style-selections/archive.js", () => ({
   mirrorArchiveRow: async (_tx: Tx, _c: Context, row: Row) => { fixture.mirrors.push(row); },
 }));
 
-import { previewImport, commitImport, write, changePhoto } from "../../apps/api/src/modules/style-selections/service.js";
+import { previewImport, commitImport, write, changePhoto, list } from "../../apps/api/src/modules/style-selections/service.js";
 import { detail as selectionDetail } from "../../apps/api/src/modules/style-selections/protection.js";
 import { create as createCollection, detail as collectionDetail, publicDetail as publicCollectionDetail, save as saveCollection, submit as submitCollection, review as reviewCollection } from "../../apps/api/src/modules/style-selections/collections.js";
 import { collectionInventory } from "../../packages/contracts/src/selection-collection.js";
@@ -89,6 +89,7 @@ beforeAll(async () => {
     CREATE TABLE products(id bigint PRIMARY KEY,style_no text,custom_fields jsonb DEFAULT '{}',tag_price numeric,main_image_url text,updated_at timestamptz DEFAULT now(),created_at timestamptz DEFAULT now());
     CREATE TABLE product_fields(id text,name text,type text,options jsonb DEFAULT '[]',active boolean DEFAULT true,created_at timestamptz DEFAULT now());
     CREATE TABLE style_selection_protection(id integer PRIMARY KEY,settings jsonb,revision integer DEFAULT 1);
+    CREATE TABLE style_selection_images(id uuid PRIMARY KEY,content bytea,sha256 text);
     CREATE TABLE style_selections(
       id bigserial PRIMARY KEY,registration_batch date,images jsonb DEFAULT '[]',label_images jsonb DEFAULT '[]',
       cell_colors jsonb DEFAULT '{}',cell_alignments jsonb DEFAULT '{}',cell_vertical_alignments jsonb DEFAULT '{}',cell_text_colors jsonb DEFAULT '{}',cell_number_formats jsonb DEFAULT '{}',extra_fields jsonb DEFAULT '{}',
@@ -118,13 +119,52 @@ beforeAll(async () => {
 }, 30000);
 beforeEach(async () => {
   fixture.archive = false; fixture.registryBigInt = false; fixture.mirrors = [];
-  await fixture.database!.exec(`TRUNCATE style_selections,selection_field_registry,selection_layout_preferences,selection_shared_layouts,selection_shared_fields,idempotency_records,audit_logs,products,product_fields,style_selection_protection,selection_table_23.style_selections,selection_table_23.style_selection_protection,selection_collections,selection_collection_items,selection_collection_events,selection_collection_requests RESTART IDENTITY`);
+  await fixture.database!.exec(`TRUNCATE style_selection_images,style_selections,selection_field_registry,selection_layout_preferences,selection_shared_layouts,selection_shared_fields,idempotency_records,audit_logs,products,product_fields,style_selection_protection,selection_table_23.style_selections,selection_table_23.style_selection_protection,selection_collections,selection_collection_items,selection_collection_events,selection_collection_requests RESTART IDENTITY`);
   await fixture.database!.query("INSERT INTO style_selection_protection(id,settings) VALUES(1,$1)", [JSON.stringify(defaultProtection)]);
   await fixture.database!.query("INSERT INTO selection_table_23.style_selection_protection(id,settings) VALUES(1,$1)", [JSON.stringify(defaultProtection)]);
 });
 afterAll(async () => { await fixture.database?.close(); });
 
 describe("atomic Excel style import", () => {
+  it("imports repeated uploaded content once per colour and source field, including legacy files without stored checksums", async () => {
+    const ids = ["11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222", "33333333-3333-4333-8333-333333333333"];
+    for (const id of ids) await fixture.database!.query("INSERT INTO style_selection_images(id,content) VALUES($1,$2)", [id, Buffer.from("same exact photograph")]);
+    // Repeated entries must not consume the actual per-cell 30-picture limit.
+    const images = Array.from({ length: 36 }, (_, index) => ({ id: `entry-${index}`, url: `/api/v1/style-selections/images/${ids[index % 3]}`, color: ["咖色", "燕麦色", "深灰色"][index % 3] }));
+    const values = [{ xutiStyleNo: "IMAGE-CONTENT", color: "咖色/燕麦色/深灰色", images, labelImages: images.map(image => ({ ...image, color: "" })) }];
+    const plan = await previewImport(actor("dedup-preview"), input(values));
+    expect(plan.rows[0].values.images).toEqual(images.slice(0, 3));
+    expect(plan.rows[0].values.labelImages).toEqual([{ ...images[0], color: "" }]);
+    await commitImport(actor("dedup-commit"), payload(plan));
+    const saved = (await read("SELECT * FROM style_selections"))[0];
+    expect(saved.images).toEqual(images.slice(0, 3));
+    expect(saved.label_images).toHaveLength(1);
+    // A later import with new upload IDs still replaces the group with 3 images.
+    const nextIds = ["44444444-4444-4444-8444-444444444444", "55555555-5555-4555-8555-555555555555", "66666666-6666-4666-8666-666666666666"];
+    for (const id of nextIds) await fixture.database!.query("INSERT INTO style_selection_images(id,content) VALUES($1,$2)", [id, Buffer.from("same exact photograph")]);
+    const nextImages = images.map((image, index) => ({ ...image, id: `new-entry-${index}`, url: `/api/v1/style-selections/images/${nextIds[index % 3]}` }));
+    const repeat = await previewImport(actor("dedup-repeat-preview"), input([{ ...values[0], images: nextImages }]));
+    await commitImport(actor("dedup-repeat-commit"), payload(repeat));
+    expect((await read("SELECT images FROM style_selections"))[0].images).toHaveLength(3);
+  });
+  it.each(["first", "duplicate"])("shows historical duplicates without rewriting storage and explicitly deletes their group using current or cached ID %s", async imageId => {
+    const ids = ["11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222"];
+    for (const id of ids) await fixture.database!.query("INSERT INTO style_selection_images(id,content) VALUES($1,$2)", [id, Buffer.from("old repeated photo")]);
+    const images = [
+      { id: "first", url: `/api/v1/style-selections/images/${ids[0]}`, color: "咖色" },
+      { id: "duplicate", url: `/api/v1/style-selections/images/${ids[1]}`, color: "咖色" },
+      { id: "another-colour", url: `/api/v1/style-selections/images/${ids[1]}`, color: "深灰色" },
+    ];
+    const before = await style("OLD-DUPLICATES", { color: "咖色/深灰色", images });
+    expect((await selectionDetail(actor(), String(before.id))).images).toEqual([images[0], images[2]]);
+    expect((await list(actor(), {})).data[0].images).toEqual([images[0], images[2]]);
+    expect((await read("SELECT images FROM style_selections WHERE id=$1", [before.id]))[0].images).toEqual(images);
+    expect(await read("SELECT * FROM audit_logs")).toEqual([]);
+    await changePhoto(actor("remove-visible-image"), String(before.id), { action: "remove", field: "images", imageId });
+    expect((await read("SELECT images FROM style_selections WHERE id=$1", [before.id]))[0].images).toEqual([images[2]]);
+    expect((await read("SELECT before_data FROM audit_logs WHERE action='UPDATE'"))[0].before_data.images).toEqual(images);
+    expect(await read("SELECT * FROM style_selection_images")).toHaveLength(2);
+  });
   it("rejects importing or directly forging computed price limits without modifying stored legacy values", async () => {
     const category = field("三级类目", "single", ["半截裙", "连衣裙"]);
     const computed = { ...field("吊牌限价", "vipTagPriceLimit"), vipTagPriceLimitConfig: defaultVipTagPriceLimitConfig(category.key) };

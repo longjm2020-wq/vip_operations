@@ -9,7 +9,7 @@ vi.mock("../../packages/database/src/index.js", () => ({
   json: (value: unknown) => JSON.parse(JSON.stringify(value)),
 }));
 import * as service from "../../apps/api/src/modules/analytics/browser-update.js";
-import { compassBrowserActionSchema, isCompassBrowserOrigin } from "../../packages/contracts/src/compass-update.js";
+import { compassBrowserActionSchema, initialCompassUpdateProgress, isCompassBrowserOrigin } from "../../packages/contracts/src/compass-update.js";
 import type { Context } from "../../apps/api/src/core.js";
 
 const context: Context = { actor: { id: "17", username: "fixture", displayName: "Fixture", permissions: ["analytics.read", "analytics.manage"] }, key: "fixture-key", requestId: "fixture-request" };
@@ -19,12 +19,9 @@ let session: Record<string, unknown>;
 let activeJob: Record<string, unknown> | undefined;
 let login: Record<string, unknown>;
 let sourceDimensions: string[];
-let verifiedBefore: boolean;
 let pendingActions: number;
 let activeClaim: boolean;
 let loginBusy: boolean;
-let autoEnabled: boolean;
-let lastScheduledDay: string | null;
 
 function job(status: string, extras: Record<string, unknown> = {}) {
   return { id: "41", status, target_start_date: "2026-09-11", target_end_date: "2026-10-10",
@@ -40,12 +37,9 @@ beforeEach(() => {
     encryption_ready: true, worker_online: true, note: "", encrypted_state: "private-fixture-state" };
   activeJob = undefined;
   sourceDimensions = [];
-  verifiedBefore = false;
   pendingActions = 0;
   activeClaim = true;
   loginBusy = false;
-  autoEnabled = false;
-  lastScheduledDay = null;
   login = { id: loginId, actor_id: "17", status: "WAITING", frame_id: frameId, frame_jpeg: "fixture-image",
     expires_ms: Date.now() + 600000, note: "fixture", encrypted_state: "must-never-return" };
   database.db.$transaction.mockImplementation(fn => fn(database.db));
@@ -53,11 +47,6 @@ beforeEach(() => {
     session.draft_encrypted_state = null; session.draft_actor_id = null; session.draft_login_id = null; session.draft_expires_at = null;
   };
   database.db.$executeRawUnsafe.mockImplementation(async (sql: string, ...values: unknown[]) => {
-    const enabled = Boolean(values[0]);
-    if (sql.startsWith("UPDATE compass_session SET auto_update_enabled")) {
-      if (enabled && !autoEnabled && (new Date().getUTCHours() + 8) % 24 >= 8) lastScheduledDay = "2026-10-11";
-      autoEnabled = enabled;
-    }
     if (sql.startsWith("UPDATE compass_session SET draft_login_id=")) {
       if (session.draft_actor_id === values[1] && session.draft_encrypted_state && (session.draft_expires_at as Date)?.getTime() > Date.now()) session.draft_login_id = values[0];
     }
@@ -80,13 +69,11 @@ beforeEach(() => {
   });
   database.one.mockImplementation(async (_tx, sql: string, ...values: unknown[]) => {
     if (sql.includes("idempotency_records")) return undefined;
-    if (sql.includes("EXISTS(SELECT 1 FROM compass_update_jobs"))
-      return { auto_update_enabled: autoEnabled, daily_hour: 8, last_scheduled_day: lastScheduledDay, verified_before: verifiedBefore };
     if (sql.includes("FROM compass_session")) return session;
-    if (sql.includes("SELECT target_start_date")) return activeClaim ? { target_start_date: "2026-09-11", target_end_date: "2026-10-10" } : undefined;
+    if (sql.includes("SELECT target_start_date")) return activeClaim ? { target_start_date: "2026-09-11", target_end_date: "2026-10-10", progress: activeJob?.progress } : undefined;
     if (sql.startsWith("UPDATE compass_update_jobs")) {
       if (sql.includes("status='QUEUED'")) return job("QUEUED", { note: "restored" });
-      return job(String(values[2]), { completed_dimensions: JSON.parse(String(values[3])), source_ids: JSON.parse(String(values[4])), note: values[5] });
+      return job(String(values[2]), { completed_dimensions: JSON.parse(String(values[3])), source_ids: JSON.parse(String(values[4])), note: values[5], progress: JSON.parse(String(values[6])) });
     }
     if (sql.startsWith("INSERT INTO compass_update_jobs")) return job(sql.includes("'COMPLETE'") ? "COMPLETE" : "QUEUED");
     if (sql.includes("FROM compass_update_jobs")) return sql.includes("status='COMPLETE'") ? undefined : activeJob;
@@ -134,7 +121,8 @@ describe("real source gates and update lifecycle", () => {
     const result = await service.requestCompassUpdate(context, {});
     expect(result.job).toMatchObject({ id: "41", status: "QUEUED" });
     const resumed = database.one.mock.calls.find(([, sql]) => String(sql).startsWith("UPDATE compass_update_jobs"));
-    expect(resumed?.slice(2)).toEqual(["41", "17"]);
+    expect(resumed?.slice(2, 4)).toEqual(["41", "17"]);
+    expect(JSON.parse(String(resumed?.[4]))).toMatchObject({ phase: "QUEUED", dimensions: { style: { stage: "QUEUED", processedRows: 0 } } });
     expect(String(resumed?.[1])).toContain("deadline_at=now()+interval '1 hour'");
   });
 
@@ -157,6 +145,23 @@ describe("real source gates and update lifecycle", () => {
     const [, sql] = database.one.mock.calls.find(([, value]) => String(value).startsWith("INSERT INTO compass_update_jobs"))!;
     expect(sql).toContain("无需重复下载");
     expect(result.session.workerOnline).toBe(false);
+  });
+
+  it("returns today's target separately from a previous successful job, including the Shanghai date boundary", async () => {
+    vi.setSystemTime(new Date("2026-10-19T16:01:00Z"));
+    activeJob = job("COMPLETE", { completed_dimensions: ["style", "article", "barcode"] });
+    const status = await service.compassUpdateStatus();
+    expect(status.target).toEqual({ startDate: "2026-09-20", endDate: "2026-10-19" });
+    expect(status.job).toMatchObject({ status: "COMPLETE", targetEndDate: "2026-10-10", progress: null });
+  });
+
+  it("exposes only the validated progress contract and drops malformed legacy progress", async () => {
+    activeJob = job("RUNNING", { progress: { ...initialCompassUpdateProgress(), privateClaim: "SECRET" } });
+    const result = await service.compassUpdateStatus();
+    expect(result.job?.progress?.dimensions.style?.stage).toBe("QUEUED");
+    expect(JSON.stringify(result)).not.toContain("SECRET");
+    activeJob.progress = { version: 1, phase: "UNSUPPORTED", encrypted_state: "SECRET" };
+    expect((await service.compassUpdateStatus()).job?.progress).toBeNull();
   });
 
   it.each([
@@ -326,34 +331,6 @@ describe("short-lived private login drafts", () => {
     expect(JSON.stringify(status)).not.toContain("private-fixture");
     expect(JSON.stringify(view)).not.toContain("draft");
     await expect(service.requestCompassUpdate(context, {})).rejects.toMatchObject({ response: { error: { code: "COMPASS_LOGIN_REQUIRED" } } });
-    expect(database.one.mock.calls.some(([, sql]) => String(sql).startsWith("INSERT INTO compass_update_jobs"))).toBe(false);
-  });
-});
-
-describe("opt-in daily server updates", () => {
-  it("requires the independent login and a verified three-dimension manual update to enable", async () => {
-    await expect(service.saveCompassAutoUpdate(context, { enabled: true })).rejects.toMatchObject({ response: { error: { code: "COMPASS_AUTO_UPDATE_NOT_READY" } } });
-    verifiedBefore = true;
-    await expect(service.saveCompassAutoUpdate(context, { enabled: true })).resolves.toMatchObject({ enabled: true, eligible: true, dailyHour: 8 });
-    session.status = "LOGIN_REQUIRED";
-    await expect(service.saveCompassAutoUpdate(context, { enabled: true })).rejects.toMatchObject({ status: 409 });
-  });
-
-  it("allows pausing the daily task when its browser login or worker is unavailable", async () => {
-    session.status = "LOGIN_REQUIRED";
-    session.worker_online = false;
-    await expect(service.saveCompassAutoUpdate(context, { enabled: false })).resolves.toMatchObject({ enabled: false, eligible: false });
-    const saved = database.db.$executeRawUnsafe.mock.calls.find(([sql]) => String(sql).startsWith("UPDATE compass_session SET auto_update_enabled"));
-    expect(saved?.slice(1)).toEqual([false, "17"]);
-  });
-
-  it("starts at the next 08:00 after enabling later in the day, without running immediately", async () => {
-    verifiedBefore = true;
-    vi.setSystemTime(new Date("2026-10-11T03:00:00Z"));
-    await expect(service.saveCompassAutoUpdate(context, { enabled: true })).resolves.toMatchObject({ enabled: true, lastScheduledDay: "2026-10-11" });
-    const saved = database.db.$executeRawUnsafe.mock.calls.find(([sql]) => String(sql).startsWith("UPDATE compass_session SET auto_update_enabled"));
-    expect(saved?.[0]).toContain("NOT auto_update_enabled");
-    expect(saved?.[0]).toContain("AT TIME ZONE 'Asia/Shanghai'");
     expect(database.one.mock.calls.some(([, sql]) => String(sql).startsWith("INSERT INTO compass_update_jobs"))).toBe(false);
   });
 });

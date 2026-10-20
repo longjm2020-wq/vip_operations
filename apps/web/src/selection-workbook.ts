@@ -4,6 +4,7 @@ import { selectionRowHasContent } from "../../../packages/contracts/src/selectio
 import { selectionImportHeader, selectionImportLimits, selectionImportTemplateFields } from "../../../packages/contracts/src/selection-import-template.js";
 import { registerSelectionImportSource, type SelectionImportWorkbookSource } from "./selection-import-diagnostics.js";
 import { parseSelectionCreatedTime } from "../../../packages/contracts/src/selection-created-time.js";
+import { uniqueSelectionImages } from "../../../packages/contracts/src/selection-image-dedup.js";
 
 type Row = Record<string, any>;
 export const selectionSheetColumns = [
@@ -97,6 +98,7 @@ export async function createSelectionWorkbook(records: Row[] = [], template = fa
     ["图片颜色不匹配时，导入提示指出款号、具体颜色及图片所在工作表/行号/单元格；系统原图冲突会注明系统已有图片，修正后重新上传。"],
     ["也可在主表图片列逐行填写「供应商颜色 | https://图片地址」，此处匹配本行供应商颜色；不填颜色时可仅填网址。"],
     ["图片明细与主表图片不能同时填写同款；填写图片将替换该款原图片，留空则保留。"],
+    ["同一图片、颜色及颜色来源重复时保留首次一项；同图的不同颜色、不同来源或不同照片分别保留。系统内不同上传地址按原文件内容校验；外链仅比较完整网址，不按视觉相似度合并。"],
     ["洗唛/吊牌图可在「洗唛吊牌图明细」逐图填写款号和图片URL；填写后替换该款原洗唛/吊牌图，留空保留。"],
     ["系统内图片地址须登录同一系统查看。旧版内嵌图片自动保存在隐藏工作表中，请保留该表。"],
     ["仅支持本模板的数据与图片地址，不解析 Excel 浮动图片。公式请先粘贴为值。"],
@@ -286,6 +288,16 @@ export async function parseSelectionWorkbook(buffer: ArrayBuffer) {
       if (!seen.has(style)) { if (record.labelImages) throw Error(`「${style}」的洗唛/吊牌图请只填写在主表或图片明细其中一处`); record.labelImages = []; seen.add(style); }
       record.labelImages.push(imageValue("", url));
     });
+  }
+  for (const record of result) {
+    if (record.images) {
+      const unique = uniqueSelectionImages(record.images);
+      const retained = new Set(unique);
+      const source = workbookSources.get(record)!;
+      source.images = source.images.filter((_, index) => retained.has(record.images[index]));
+      record.images = unique;
+    }
+    if (record.labelImages) record.labelImages = uniqueSelectionImages(record.labelImages);
   }
   return result;
 }

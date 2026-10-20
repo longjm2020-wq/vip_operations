@@ -26,11 +26,11 @@ vi.mock("../../apps/worker/src/compass-report-browser.js", () => ({
   checkCompassLogin: helpers.check, openCompassReports: helpers.open, downloadCompassReports: helpers.download,
   cleanupCompassDownloads: helpers.cleanup, CompassBrowserError: helpers.BrowserError,
 }));
-import { processCompassLogin, processCompassUpdate, scheduleCompassUpdate, checkpointCompassLoginDraft, scopedCompassLoginDraft, compassLoginDiagnostic } from "../../apps/worker/src/compass-browser-update.js";
+import { processCompassLogin, processCompassUpdate, checkpointCompassLoginDraft, scopedCompassLoginDraft, compassLoginDiagnostic } from "../../apps/worker/src/compass-browser-update.js";
 
 const state = { cookies: [], origins: [{ origin: "https://vis.vip.com", localStorage: [] }] };
 let authorized: boolean, jobStatus: string, claim: string, dimensions: CompassDimension[], version: number, enabled: boolean;
-let sessionStatus: string, lastScheduled: Date | null, hour: number, today: string, scheduledEnabled: boolean;
+let sessionStatus: string;
 let hasQueued: boolean, loginQueued: boolean, loginAlive: boolean, actionPending: boolean, revokeOnSave: boolean;
 let tasks: Map<string, CompassDimension>;
 let draftState: Record<string, any> | undefined;
@@ -64,7 +64,6 @@ beforeEach(() => {
   vi.setSystemTime(new Date("2026-10-11T00:00:00Z"));
   helpers.ready = true;
   authorized = true; jobStatus = "QUEUED"; claim = ""; dimensions = []; version = 7; enabled = true; sessionStatus = "READY";
-  lastScheduled = null; hour = 8; today = "2026-10-11"; scheduledEnabled = true;
   hasQueued = true; loginQueued = false; loginAlive = true; actionPending = true; revokeOnSave = false;
   tasks = new Map();
   draftState = undefined;
@@ -85,8 +84,6 @@ beforeEach(() => {
     if (sql.startsWith("UPDATE compass_logins")) return { id: values[0], actor_id: "17", expires_ms: Date.now() + 600000 };
     if (sql.includes("FROM compass_login_actions")) return actionPending ? { id: "51", payload: loginAction } : undefined;
     if (sql.includes("FROM compass_session")) {
-      if (sql.startsWith("SELECT *")) return { auto_update_enabled: scheduledEnabled, auto_update_by: "17", daily_hour: 8, last_scheduled_day: lastScheduled,
-        today, hour, enabled, status: sessionStatus, encrypted_state: "fixture-cipher" };
       return { enabled, status: sessionStatus, encrypted_state: "fixture-cipher", state_version: version, ...draftState };
     }
     if (sql.includes("FROM compass_update_jobs")) {
@@ -114,8 +111,6 @@ beforeEach(() => {
       if (enabled && sessionStatus === "READY" && version === values[1]) return 1;
       return 0;
     }
-    if (sql.startsWith("UPDATE compass_session SET last_scheduled_day=")) lastScheduled = new Date(String(values[0]) + "T00:00:00Z");
-    if (sql.includes("auto_update_enabled=false")) scheduledEnabled = false;
     if (sql.startsWith("INSERT INTO compass_update_jobs")) jobStatus = String(values[3]);
     return 1;
   });
@@ -200,6 +195,70 @@ describe("private login draft checkpoints", () => {
 });
 
 describe("background update orchestration", () => {
+  const progressSnapshots = () => database.db.$executeRawUnsafe.mock.calls
+    .filter(([sql]) => String(sql).startsWith("UPDATE compass_update_jobs SET note=$3,progress="))
+    .map(call => JSON.parse(String(call[4])));
+
+  it("persists real download stages and counts an import batch only after append succeeds", async () => {
+    const download = helpers.download.getMockImplementation()!;
+    helpers.download.mockImplementation(async (...args) => {
+      const dimension = args[1][0];
+      for (const stage of ["FINDING", "PREPARING", "DOWNLOADING"]) await args[4](stage, dimension, stage);
+      return download(...args);
+    });
+    let appends = 0;
+    helpers.append.mockImplementation(async () => {
+      const latest = progressSnapshots().at(-1);
+      if (appends < 2) expect(latest.dimensions.style.processedRows).toBe(appends === 0 ? 0 : 1000);
+      appends++;
+      return { received_rows: appends === 1 ? 1000 : 1001 };
+    });
+    await processCompassUpdate(createBrowser().launch);
+    const snapshots = progressSnapshots();
+    expect(snapshots[0]).toMatchObject({ phase: "CHECKING_SOURCES", activeDimension: null });
+    const styles = snapshots.filter(value => value.activeDimension === "style");
+    expect(styles.map(value => value.dimensions.style.stage)).toEqual(expect.arrayContaining(["FINDING", "PREPARING", "DOWNLOADING", "PARSING", "IMPORTING", "VERIFYING", "COMPLETE"]));
+    expect(styles.find(value => value.dimensions.style.stage === "PARSING").dimensions.style).toMatchObject({ parsedRows: null, totalRows: null, processedRows: 0 });
+    expect(styles.filter(value => value.dimensions.style.stage === "IMPORTING").map(value => value.dimensions.style.processedRows)).toEqual([0, 1000, 1001]);
+    expect(styles.at(-1).dimensions.style).toMatchObject({ parsedRows: 1001, totalRows: 1001, processedRows: 1001, batch: 2, totalBatches: 2 });
+    expect(styles[0].dimensions.article.stage).toBe("QUEUED");
+    expect(snapshots.at(-1)).toMatchObject({ phase: "VERIFYING_SOURCES", activeDimension: null });
+    expect(helpers.finish).toHaveBeenCalledOnce();
+    expect(jobStatus).toBe("COMPLETE");
+  });
+
+  it("leaves the failed batch uncounted and freezes measured progress without claiming completion", async () => {
+    helpers.append.mockResolvedValueOnce({ received_rows: 1000 }).mockRejectedValueOnce(Error("导入数据行失败"));
+    await processCompassUpdate(createBrowser().launch);
+    expect(progressSnapshots().at(-1)).toMatchObject({
+      activeDimension: "style", dimensions: { style: { stage: "IMPORTING", processedRows: 1000, totalRows: 1001, batch: 1, totalBatches: 2 }, article: { stage: "QUEUED" } },
+    });
+    expect(jobStatus).toBe("FAILED");
+    expect(helpers.importFinish).not.toHaveBeenCalled();
+    expect(helpers.finish).not.toHaveBeenCalled();
+  });
+
+  it("stops when ownership is cancelled between guard and the conditional progress write", async () => {
+    database.db.$executeRawUnsafe.mockImplementationOnce(async () => { claim = "replacement-worker-claim"; return 0; });
+    const browser = createBrowser();
+    await processCompassUpdate(browser.launch);
+    expect(browser.launch).not.toHaveBeenCalled();
+    expect(helpers.download).not.toHaveBeenCalled();
+    expect(helpers.begin).not.toHaveBeenCalled();
+    expect(helpers.finish).not.toHaveBeenCalled();
+    expect(database.db.$executeRawUnsafe.mock.calls).toHaveLength(1);
+    expect(database.db.$executeRawUnsafe.mock.calls[0][0]).toContain("claim_token=$2::uuid AND status='RUNNING'");
+  });
+
+  it("does not mark a dimension complete when its imported source fails the final period gate", async () => {
+    helpers.importFinish.mockResolvedValue({ status: "COMPLETE" });
+    await processCompassUpdate(createBrowser().launch);
+    expect(progressSnapshots().at(-1).dimensions.style).toMatchObject({ stage: "VERIFYING", processedRows: 1001 });
+    expect(progressSnapshots().some(value => value.dimensions.style.stage === "COMPLETE")).toBe(false);
+    expect(helpers.finish).not.toHaveBeenCalled();
+    expect(jobStatus).toBe("FAILED");
+  });
+
   it("does not claim or open a browser without its separate encryption configuration", async () => {
     helpers.ready = false;
     const browser = createBrowser();
@@ -717,43 +776,5 @@ describe("interactive login completion", () => {
     expect(console.warn).toHaveBeenCalledWith(JSON.stringify({ event: "compass_login_stopped", stage: "WAITING_ACTION", category: "PLATFORM_ERROR", hostname: "err.vip.com" }));
     const failed = database.db.$executeRawUnsafe.mock.calls.find(([sql]) => String(sql).includes("status='FAILED'"));
     expect(failed?.[3]).toContain("平台入口返回错误页");
-  });
-});
-
-describe("daily schedule and database timezone", () => {
-  it("waits until Shanghai 08:00 and enqueues only once per local day", async () => {
-    hasQueued = false; jobStatus = "COMPLETE"; hour = 7;
-    await scheduleCompassUpdate();
-    expect(database.db.$executeRawUnsafe).not.toHaveBeenCalled();
-    hour = 8;
-    await scheduleCompassUpdate();
-    jobStatus = "COMPLETE";
-    await scheduleCompassUpdate();
-    const inserts = database.db.$executeRawUnsafe.mock.calls.filter(([sql]) => String(sql).startsWith("INSERT INTO compass_update_jobs"));
-    expect(inserts).toHaveLength(1);
-    expect(inserts[0].slice(1, 4)).toEqual(["17", "2026-09-11", "2026-10-10"]);
-    const [, clockQuery] = database.one.mock.calls.find(([, sql]) => String(sql).startsWith("SELECT *"))!;
-    expect(clockQuery).toContain("AT TIME ZONE 'Asia/Shanghai'");
-    expect(lastScheduled?.toISOString().slice(0, 10)).toBe("2026-10-11");
-  });
-
-  it("does not overlap pending work and disables scheduling after permission revocation", async () => {
-    jobStatus = "RUNNING";
-    await scheduleCompassUpdate();
-    expect(database.db.$executeRawUnsafe).not.toHaveBeenCalled();
-    jobStatus = "COMPLETE"; authorized = false;
-    await scheduleCompassUpdate();
-    expect(scheduledEnabled).toBe(false);
-    expect(database.db.$executeRawUnsafe.mock.calls.some(([sql]) => String(sql).startsWith("INSERT INTO compass_update_jobs"))).toBe(false);
-  });
-
-  it("waits for an active login window before scheduling instead of expiring its queued job", async () => {
-    jobStatus = "COMPLETE"; loginQueued = true;
-    await scheduleCompassUpdate();
-    expect(database.db.$executeRawUnsafe).not.toHaveBeenCalled();
-    expect(lastScheduled).toBeNull();
-    loginQueued = false;
-    await scheduleCompassUpdate();
-    expect(database.db.$executeRawUnsafe.mock.calls.some(([sql]) => String(sql).startsWith("INSERT INTO compass_update_jobs"))).toBe(true);
   });
 });
