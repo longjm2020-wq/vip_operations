@@ -726,6 +726,7 @@ export async function downloadCompassReports(
   onProgress: (
     note: string,
     dimension?: CompassDimension,
+    stage?: "FINDING" | "PREPARING" | "DOWNLOADING",
   ) => void | Promise<void>,
   signal?: AbortSignal,
   options: { maxWaitMs?: number; forceGenerate?: boolean } = {},
@@ -754,6 +755,7 @@ export async function downloadCompassReports(
       await onProgress(
         `正在取得「${compassReportTitles[dimension]}」原始报表`,
         dimension,
+        "FINDING",
       );
       target = await menu(target, "下载中心", signal);
       let generated = false;
@@ -765,6 +767,7 @@ export async function downloadCompassReports(
         }
       };
       if (options.forceGenerate) {
+        await onProgress(`正在重新生成「${compassReportTitles[dimension]}」，等待平台准备文件`, dimension, "PREPARING");
         await rememberReadyRows();
         target = await generateReport(target, dimension, signal);
         generated = true;
@@ -796,6 +799,7 @@ export async function downloadCompassReports(
           }
           const control = await usableControl(row, downloadAction);
           if (!control) continue;
+          await onProgress(`正在下载「${compassReportTitles[dimension]}」原始文件`, dimension, "DOWNLOADING");
           file = await saveReport(
             await downloadFrom(target, control, signal),
             dimension,
@@ -819,11 +823,13 @@ export async function downloadCompassReports(
           await onProgress(
             `正在生成「${compassReportTitles[dimension]}」，等待平台准备文件`,
             dimension,
+            "PREPARING",
           );
           await rememberReadyRows();
           target = await generateReport(target, dimension, signal);
           generated = true;
         } else {
+          if (pending) await onProgress(`「${compassReportTitles[dimension]}」正在由平台生成，等待文件就绪`, dimension, "PREPARING");
           if (Date.now() - lastRefresh >= 10000) {
             const refresh = await visibleText(target, /^(?:刷新|刷新列表)$/);
             if (refresh) await refresh.click({ timeout: 10000 });
@@ -849,6 +855,7 @@ export async function downloadCompassReports(
       await onProgress(
         `「${compassReportTitles[dimension]}」原始文件已下载，等待校验导入`,
         dimension,
+        "DOWNLOADING",
       );
     }
     return files;

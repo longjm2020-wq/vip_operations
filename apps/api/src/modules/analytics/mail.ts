@@ -40,7 +40,7 @@ const publicSettings = (r: any) => ({
   verifiedAt: r.verified_at,
   updatedAt: r.updated_at,
   schedule: "每天 08:00（北京时间）",
-  collector: "本机 Chrome / Codex 定时采集，电脑及应用需要在线",
+  collector: "通过更新数据手动发起服务器下载与导入，邮件检查不会启动报表更新",
 });
 export async function getMailSettings() {
   return publicSettings(

@@ -17,13 +17,6 @@ import * as ai from "./ai.js";
 import * as browser from "./browser-update.js";
 @Controller("api/v1/analytics/compass")
 export class CompassAnalyticsController {
-  @Get("auto-update-settings") @Permission("analytics.manage") autoUpdateSettings(@Req() r: AuthRequest, @Res({ passthrough: true }) res: Response) {
-    res.setHeader("Cache-Control", "private, no-store");
-    return browser.compassAutoUpdateSettings(context(r));
-  }
-  @Post("auto-update-settings") @Permission("analytics.manage") saveAutoUpdate(@Req() r: AuthRequest, @Body() b: unknown) {
-    return browser.saveCompassAutoUpdate(context(r), b);
-  }
   @Get("updates") @Permission("analytics.read") updateStatus(@Res({ passthrough: true }) res: Response) {
     res.setHeader("Cache-Control", "private, no-store");
     return browser.compassUpdateStatus();

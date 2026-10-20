@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { chromium, type Browser, type BrowserContext, type Page } from "@playwright/test";
 import { db, one, rows, type Tx } from "../../../packages/database/src/index.js";
-import { compassDimensions, compassLabels, compassNormalizationVersion, shanghaiDate, shiftCompassDate, type CompassDimension } from "../../../packages/contracts/src/compass-analytics.js";
-import { compassBrowserActionSchema, compassBrowserViewport, isCompassBrowserOrigin } from "../../../packages/contracts/src/compass-update.js";
+import { compassDimensions, compassLabels, compassNormalizationVersion, type CompassDimension } from "../../../packages/contracts/src/compass-analytics.js";
+import { compassBrowserActionSchema, compassBrowserViewport, initialCompassUpdateProgress, isCompassBrowserOrigin, type CompassUpdateDimensionProgress, type CompassUpdateProgress } from "../../../packages/contracts/src/compass-update.js";
 import { expireCompassTasks, finishCompassUpdate, verifyCompassUpdateSources } from "../../api/src/modules/analytics/browser-update.js";
 import { beginImport, appendImport, finishImport } from "../../api/src/modules/analytics/service.js";
 import type { Context } from "../../api/src/core.js";
@@ -332,11 +332,26 @@ export async function processCompassUpdate(browserLaunch: () => Promise<Browser>
     if (!owned) throw Error("任务已停止或由其他进程处理");
     return compassWorkerActor(job.requested_by);
   };
-  const progress = async (note: string) => { await guard(); await db.$executeRawUnsafe("UPDATE compass_update_jobs SET note=$3,heartbeat_at=now() WHERE id=$1::bigint AND claim_token=$2::uuid AND status='RUNNING'", job.id, token, note); };
+  let measured = initialCompassUpdateProgress();
+  let lastProgressKey = "";
+  const progress = async (note: string, dimension?: CompassDimension, patch: Partial<CompassUpdateDimensionProgress> = {}, phase: CompassUpdateProgress["phase"] = "PROCESSING_REPORTS") => {
+    await guard();
+    const key = JSON.stringify({ note, dimension, patch, phase });
+    if (key === lastProgressKey) return;
+    const updatedAt = new Date().toISOString();
+    measured.phase = phase; measured.updatedAt = updatedAt;
+    measured.activeDimension = dimension ?? null;
+    if (dimension) Object.assign(measured.dimensions[dimension]!, patch, { note, updatedAt });
+    const updated = await db.$executeRawUnsafe("UPDATE compass_update_jobs SET note=$3,progress=$4::jsonb,heartbeat_at=now() WHERE id=$1::bigint AND claim_token=$2::uuid AND status='RUNNING'", job.id, token, note, JSON.stringify(measured));
+    if (updated !== 1) throw Error("任务已停止或由其他进程处理");
+    lastProgressKey = key;
+  };
+  const downloadProgress = (note: string, dimension?: CompassDimension, stage: "FINDING" | "PREPARING" | "DOWNLOADING" = "FINDING") => progress(note, dimension, { stage });
   const start = job.target_start_date.toISOString().slice(0, 10), end = job.target_end_date.toISOString().slice(0, 10);
   try {
-    await guard();
+    await progress("正在核对本次目标区间的完整报表来源", undefined, {}, "CHECKING_SOURCES");
     const existing = await verifyCompassUpdateSources(start, end);
+    measured = initialCompassUpdateProgress(existing.completedDimensions);
     if (existing.complete) { await finishCompassUpdate(String(job.id), token); return; }
     const saved = await one(db, "SELECT enabled,status,encrypted_state,state_version FROM compass_session WHERE id=1");
     sessionVersion = saved?.state_version;
@@ -344,6 +359,7 @@ export async function processCompassUpdate(browserLaunch: () => Promise<Browser>
     let storageState;
     try { storageState = decryptCompassState(saved.encrypted_state); }
     catch { throw new CompassBrowserError("LOGIN_REQUIRED", "已保存的罗盘会话无法读取，请重新扫码"); }
+    await progress("正在恢复服务器罗盘会话并打开报表页面", undefined, {}, "OPENING_REPORTS");
     browser = await browserLaunch();
     const context = await browser.newContext({ locale: "zh-CN", timezoneId: "Asia/Shanghai", viewport: compassBrowserViewport, acceptDownloads: true, storageState: compassPlaywrightState(storageState) });
     diagnosticContext = context;
@@ -355,42 +371,53 @@ export async function processCompassUpdate(browserLaunch: () => Promise<Browser>
     const missing = compassDimensions.filter(dimension => !existing.completedDimensions.includes(dimension));
     for (const dimension of missing) {
       updateStage = "DOWNLOAD";
-      let downloaded = await downloadCompassReports(page, [dimension], start, end, progress, signal);
+      await progress(`正在查找${compassLabels[dimension]}目标区间报表`, dimension, { stage: "FINDING" });
+      let downloaded = await downloadCompassReports(page, [dimension], start, end, downloadProgress, signal);
       files.push(...downloaded);
       let file = downloaded[0];
       if (downloaded.length !== 1 || file?.dimension !== dimension) throw Error("未取得任务对应的单维度原始报表");
-      await progress(`正在校验${compassLabels[dimension]}原始报表`);
+      await progress(`正在解析并核对${compassLabels[dimension]}原始报表的日期、列及数据行`, dimension, { stage: "PARSING", parsedRows: null, totalRows: null, processedRows: 0, batch: 0, totalBatches: null });
       updateStage = "PARSE";
       let parsed: Awaited<ReturnType<typeof readCompassDownload>>;
       try { parsed = await readCompassDownload(file, start, end); }
       catch (error) {
         if (!(error instanceof StaleCompassReportError)) throw error;
-        await progress(`${compassLabels[dimension]}原文件为 ${error.actualStartDate} 至 ${error.actualEndDate}，正在重新生成本次区间报表（仅重试一次）`);
+        await progress(`${compassLabels[dimension]}原文件为 ${error.actualStartDate} 至 ${error.actualEndDate}，正在重新生成本次区间报表（仅重试一次）`, dimension, { stage: "PREPARING" });
         await cleanupCompassDownloads(downloaded);
-        downloaded = await downloadCompassReports(page, [dimension], start, end, progress, signal, { forceGenerate: true });
+        downloaded = await downloadCompassReports(page, [dimension], start, end, downloadProgress, signal, { forceGenerate: true });
         files.push(...downloaded);
         file = downloaded[0];
         if (downloaded.length !== 1 || file?.dimension !== dimension) throw Error("重新生成后未取得任务对应的原始报表");
         // A second stale report, or any malformed content, stops this dimension.
+        await progress(`正在解析重新生成的${compassLabels[dimension]}原始报表`, dimension, { stage: "PARSING" });
         parsed = await readCompassDownload(file, start, end);
       }
       const { report, fileHash } = parsed;
       updateStage = "IMPORT";
+      const totalRows = report.records.length, totalBatches = Math.ceil(totalRows / 1000);
+      await progress(`${compassLabels[dimension]}已解析 ${totalRows} 行，等待分批导入`, dimension, { stage: "IMPORTING", parsedRows: totalRows, totalRows, processedRows: 0, batch: 0, totalBatches });
       const contextFor = async (key: string): Promise<Context> => ({ actor: await guard(), requestId: `compass-update-${job.id}`, key });
       const task = await beginImport(await contextFor(`cu-${job.id}-${file.dimension}-${fileHash}`), { dimension: report.dimension, fileName: file.fileName, fileHash, startDate: report.startDate, endDate: report.endDate, expectedRows: report.records.length, normalizationVersion: compassNormalizationVersion });
       if (task.status !== "COMPLETE") {
         for (let offset = 0; offset < report.records.length; offset += 1000) {
-          await progress(`正在导入${compassLabels[file.dimension]}：${Math.min(offset + 1000, report.records.length)} / ${report.records.length} 行`);
           await appendImport(await contextFor(`cu-${job.id}-${file.dimension}-${fileHash}-${offset}`), String(task.id), { records: report.records.slice(offset, offset + 1000) });
+          const processedRows = Math.min(offset + 1000, totalRows), batch = Math.ceil(processedRows / 1000);
+          await progress(`${compassLabels[file.dimension]}已导入 ${processedRows} / ${totalRows} 行（${batch} / ${totalBatches} 批）`, dimension, { stage: "IMPORTING", processedRows, batch });
         }
+        await progress(`正在校验${compassLabels[dimension]}导入完整性与连续30天覆盖`, dimension, { stage: "VERIFYING" });
         await finishImport(await contextFor(`cu-${job.id}-${file.dimension}-${fileHash}-finish`), String(task.id));
+      } else {
+        await progress(`${compassLabels[dimension]}同一原文件已导入，正在核验目标区间来源`, dimension, { stage: "VERIFYING", processedRows: totalRows, batch: totalBatches });
       }
       const sources = await verifyCompassUpdateSources(start, end);
+      if (!sources.completedDimensions.includes(dimension)) throw Error(`${compassLabels[dimension]}导入后目标区间来源核验未通过，保留已有来源`);
+      await progress(`${compassLabels[dimension]}已完整导入并核验`, dimension, { stage: "COMPLETE" });
       await db.$executeRawUnsafe("UPDATE compass_update_jobs SET completed_dimensions=$3::jsonb,source_ids=$4::jsonb,heartbeat_at=now() WHERE id=$1::bigint AND claim_token=$2::uuid AND status='RUNNING'", job.id, token, JSON.stringify(sources.completedDimensions), JSON.stringify(sources.sourceIds));
       await cleanupCompassDownloads(downloaded);
     }
     await guard();
     updateStage = "FINALIZE";
+    await progress("三张报表已处理，正在进行本次目标区间的最终来源核验", undefined, {}, "VERIFYING_SOURCES");
     await db.$executeRawUnsafe("UPDATE compass_session SET encrypted_state=$1,checked_at=now(),note='' WHERE id=1 AND enabled AND status='READY' AND state_version=$2", encryptCompassState(await collectCompassBrowserState(context)), saved.state_version);
     await finishCompassUpdate(String(job.id), token);
   } catch (error) {
@@ -413,29 +440,6 @@ export async function processCompassUpdate(browserLaunch: () => Promise<Browser>
   } finally { clearTimeout(timer); clearInterval(heartbeat); signal?.removeEventListener("abort", close); await browser?.close().catch(() => {}); await cleanupCompassDownloads(files); }
 }
 
-export async function scheduleCompassUpdate() {
-  if (!compassEncryptionReady()) return;
-  await db.$transaction(async tx => {
-    await rows(tx, "SELECT pg_advisory_xact_lock(2026101140)::text");
-    const session = await one(tx, `SELECT *, (now() AT TIME ZONE 'Asia/Shanghai')::date::text AS today,
-      extract(hour FROM now() AT TIME ZONE 'Asia/Shanghai')::int AS hour FROM compass_session WHERE id=1 FOR UPDATE`);
-    if (!session?.auto_update_enabled || !session.auto_update_by || session.hour < session.daily_hour || session.last_scheduled_day?.toISOString().slice(0, 10) === session.today) return;
-    if (await one(tx, "SELECT 1 FROM compass_update_jobs WHERE status IN ('QUEUED','RUNNING','LOGIN_REQUIRED','VERIFICATION_REQUIRED')")) return;
-    if (await one(tx, `SELECT 1 FROM compass_logins WHERE status IN ${activeLogin}`)) return;
-    const today = session.today || shanghaiDate(), end = shiftCompassDate(today, -1), start = shiftCompassDate(end, -29);
-    const authorized = await one(tx, `SELECT u.id FROM users u WHERE u.id=$1::bigint AND u.status='ACTIVE' AND (
-      EXISTS(SELECT 1 FROM user_roles ur JOIN roles r ON r.id=ur.role_id WHERE ur.user_id=u.id AND r.code='SUPER_ADMIN') OR
-      EXISTS(SELECT 1 FROM user_roles ur JOIN role_permissions rp ON rp.role_id=ur.role_id JOIN permissions p ON p.id=rp.permission_id WHERE ur.user_id=u.id AND p.code='analytics.manage'))`, session.auto_update_by);
-    if (!authorized) {
-      await tx.$executeRawUnsafe("UPDATE compass_session SET auto_update_enabled=false,note='自动更新已关闭：设置者已停用或不再拥有导入权限' WHERE id=1");
-      return;
-    }
-    const status = session.enabled && session.status === "READY" && session.encrypted_state ? "QUEUED" : session.status === "VERIFICATION_REQUIRED" ? "VERIFICATION_REQUIRED" : "LOGIN_REQUIRED";
-    await tx.$executeRawUnsafe("INSERT INTO compass_update_jobs(requested_by,target_start_date,target_end_date,trigger,status,note) VALUES($1::bigint,$2::date,$3::date,'SCHEDULED',$4,$5)", session.auto_update_by, start, end, status, status === "QUEUED" ? "每日08:00后台更新已启动" : "每日更新需要重新扫码核验罗盘登录，现有数据保留");
-    await tx.$executeRawUnsafe("UPDATE compass_session SET last_scheduled_day=$1::date WHERE id=1", today);
-  });
-}
-
 export function startCompassBrowserUpdate() {
   let stopped = false, busy = false, current: Promise<void> | undefined;
   const controller = new AbortController();
@@ -443,7 +447,7 @@ export function startCompassBrowserUpdate() {
   const tick = () => {
     if (busy || stopped) return;
     busy = true;
-    current = (async () => { await scheduleCompassUpdate(); await processCompassLogin(undefined, controller.signal); if (!stopped) await processCompassUpdate(undefined, controller.signal); })()
+    current = (async () => { await processCompassLogin(undefined, controller.signal); if (!stopped) await processCompassUpdate(undefined, controller.signal); })()
       .catch(() => console.warn("Compass browser task unavailable")).finally(() => { busy = false; });
   };
   beat(); tick();

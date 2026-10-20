@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import Excel from "exceljs";
 import { createSelectionWorkbook, parseSelectionWorkbook, prepareSelectionWorkbookRecords } from "../../apps/web/src/selection-workbook.js";
 import { selectionImportHeader, selectionImportLimits, selectionImportTemplateFields } from "../../packages/contracts/src/selection-import-template.js";
+import { formatSelectionImportError } from "../../apps/web/src/selection-import-diagnostics.js";
 const bytes = async (book: Awaited<ReturnType<typeof createSelectionWorkbook>>) => await book.xlsx.writeBuffer() as unknown as ArrayBuffer;
 async function partialWorkbook(headers: string[], records: unknown[][]) {
   const book = new Excel.Workbook();
@@ -11,6 +12,25 @@ async function partialWorkbook(headers: string[], records: unknown[][]) {
   return book;
 }
 describe("selection workbook", () => {
+  it("deduplicates repeated detail rows but retains distinct colours, photographs and diagnostic coordinates", async () => {
+    const book = await partialWorkbook(["序缇款号", "标准颜色"], [["DUP-IMAGE", "咖色/燕麦色/深灰色"]]);
+    const pictures = book.addWorksheet("图片明细");
+    pictures.addRows([["序缇款号", "标准颜色", "图片URL"],
+      ["DUP-IMAGE", "咖色", "https://example.test/trousers.jpg"],
+      ["DUP-IMAGE", "咖色", "https://example.test/trousers.jpg"],
+      ["DUP-IMAGE", "燕麦色", "https://example.test/trousers.jpg"],
+      ["DUP-IMAGE", "深灰色", "https://example.test/trousers.jpg"],
+      ["DUP-IMAGE", "深灰色", "https://example.test/detail.jpg"]]);
+    const labels = book.addWorksheet("洗唛吊牌图明细");
+    labels.addRows([["序缇款号", "图片URL"], ["DUP-IMAGE", "https://example.test/label.jpg"], ["DUP-IMAGE", "https://example.test/label.jpg"]]);
+    const records = await parseSelectionWorkbook(await bytes(book));
+    expect(records[0].images.map((image: any) => [image.color, image.url])).toEqual([
+      ["咖色", "https://example.test/trousers.jpg"], ["燕麦色", "https://example.test/trousers.jpg"],
+      ["深灰色", "https://example.test/trousers.jpg"], ["深灰色", "https://example.test/detail.jpg"]]);
+    expect(records[0].labelImages).toHaveLength(1);
+    const detail = { kind: "SELECTION_IMPORT_IMAGE_COLOR", rowIndex: 0, xutiStyleNo: "DUP-IMAGE", imageSource: "import", colorSource: "import", imageIndex: 1, imageColor: "燕麦色", allowedColors: ["咖色"], colorFieldLabel: "标准颜色" };
+    expect(formatSelectionImportError({ message: "颜色错误", details: detail }, records)).toContain("图片明细第 4 行（颜色单元格 B4）");
+  });
   it("matches picture details to standard color for new and legacy headers without changing supplier data", async () => {
     const template = await createSelectionWorkbook([], true);
     expect(template.getWorksheet("图片明细")!.getCell("B1").text).toBe("标准颜色");

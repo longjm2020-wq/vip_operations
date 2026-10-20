@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Alert, App, Button, Modal, Progress, Space, Switch, Tag } from "antd";
+import { Alert, App, Button, Modal, Progress, Space, Tag } from "antd";
 import { CloudDownloadOutlined } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
 import { api, queryClient } from "./api";
@@ -8,12 +8,20 @@ import { when } from "./shared";
 import {
   compassDimensions,
   compassLabels,
+  type CompassDimension,
 } from "../../../packages/contracts/src/compass-analytics";
 import {
   compassUpdateActive,
   type CompassUpdateStatusView,
   type CompassUpdateJob,
 } from "../../../packages/contracts/src/compass-update";
+import {
+  compassDimensionProgress,
+  compassOverallProgress,
+  compassProgressPhase,
+  compassProgressSteps,
+  isHistoricalCompassUpdate,
+} from "./compass-update-progress";
 import "./compass-update-data.css";
 
 const endpoint = "/analytics/compass/updates";
@@ -34,11 +42,124 @@ const sessionLabels: Record<string, string> = {
   ERROR: "罗盘会话异常",
 };
 
+function ReportProgress({
+  job,
+  dimension,
+}: {
+  job: CompassUpdateJob;
+  dimension: CompassDimension;
+}) {
+  const { label, stage, stageIndex, percent, verified, detail } =
+    compassDimensionProgress(job, dimension);
+  const active =
+    job.status === "RUNNING" && job.progress?.activeDimension === dimension;
+  const stopped = [
+    "FAILED",
+    "PARTIAL",
+    "LOGIN_REQUIRED",
+    "VERIFICATION_REQUIRED",
+  ].includes(job.status);
+  const number = (value: number) => value.toLocaleString("zh-CN");
+  return (
+    <section
+      className="compass-update-report"
+      aria-label={`${compassLabels[dimension]}报表更新进度`}
+    >
+      <div className="compass-update-report-heading">
+        <strong>按{compassLabels[dimension]}报表</strong>
+        <Tag
+          color={
+            verified
+              ? "success"
+              : active
+                ? "processing"
+                : stopped && stage !== "QUEUED"
+                  ? "warning"
+                  : "default"
+          }
+        >
+          {!detail && !verified ? "阶段明细未记录" : label}
+        </Tag>
+      </div>
+      <Progress
+        aria-label={`${compassLabels[dimension]}报表阶段完成度`}
+        percent={percent}
+        size="small"
+        status={verified ? "success" : active && !stopped ? "active" : "normal"}
+      />
+      {detail && (!verified || detail.parsedRows != null) && (
+        <ol
+          className="compass-update-steps"
+          aria-label={`${compassLabels[dimension]}报表处理阶段`}
+        >
+          {compassProgressSteps.map((step, index) => (
+            <li
+              key={step}
+              className={
+                index < stageIndex
+                  ? "is-complete"
+                  : index === stageIndex && stage !== "QUEUED"
+                    ? "is-current"
+                    : ""
+              }
+              aria-current={
+                index === stageIndex && stage !== "QUEUED" ? "step" : undefined
+              }
+            >
+              <span aria-hidden="true">
+                {index < stageIndex ? "✓" : index + 1}
+              </span>
+              {step}
+            </li>
+          ))}
+        </ol>
+      )}
+      <div className="compass-update-report-counts">
+        {detail?.parsedRows != null && (
+          <div>已解析 {number(detail.parsedRows)} 行</div>
+        )}
+        {detail &&
+          ["IMPORTING", "VERIFYING", "COMPLETE"].includes(stage) &&
+          detail.totalRows != null && (
+            <>
+              <div>
+                已导入 {number(detail.processedRows)} /{" "}
+                {number(detail.totalRows)} 行
+              </div>
+              {detail.totalBatches != null && (
+                <div>
+                  已提交批次 {detail.batch} / {detail.totalBatches}
+                </div>
+              )}
+            </>
+          )}
+        {stage === "DOWNLOADING" && <div>等待原始文件下载完成</div>}
+        {stage === "PARSING" && detail?.parsedRows == null && (
+          <div>正在读取文件，行数待解析确认</div>
+        )}
+        {stage === "IMPORTING" && detail?.totalRows == null && (
+          <div>
+            已导入 {number(detail?.processedRows ?? 0)} 行，总行数待确认
+          </div>
+        )}
+        {stage === "QUEUED" && (
+          <div>{detail ? "等待前序步骤完成" : "等待服务器返回阶段明细"}</div>
+        )}
+        {verified && detail?.totalRows == null && (
+          <div>目标区间来源已核验，未记录导入行数</div>
+        )}
+      </div>
+      {detail?.note && (
+        <p className="compass-update-report-note secondary">{detail.note}</p>
+      )}
+    </section>
+  );
+}
+
 export function CompassUpdateData({ manage }: { manage: boolean }) {
   const { message } = App.useApp();
   const [open, setOpen] = useState(false),
     [busy, setBusy] = useState(false),
-    [savingSchedule, setSavingSchedule] = useState(false),
     [error, setError] = useState("");
   const completed = useRef(""),
     watched = useRef(""),
@@ -61,17 +182,8 @@ export function CompassUpdateData({ manage }: { manage: boolean }) {
       job?.status || "",
     ),
     unavailable = !session?.encryptionReady || !session.workerOnline;
-  const schedule = useQuery<{
-    enabled: boolean;
-    dailyHour: number;
-    lastScheduledDay: string | null;
-    eligible: boolean;
-  }>({
-    queryKey: ["compass-auto-update-settings"],
-    enabled: open && manage,
-    queryFn: async () =>
-      (await api("/analytics/compass/auto-update-settings")).data,
-  });
+  const historical =
+    !!job && isHistoricalCompassUpdate(job, status.data?.target);
   useEffect(() => {
     if (job && compassUpdateActive.includes(job.status))
       watched.current = job.id;
@@ -88,9 +200,6 @@ export function CompassUpdateData({ manage }: { manage: boolean }) {
     requested.current = false;
     void queryClient.invalidateQueries({ queryKey: ["compass-dashboard"] });
     void queryClient.invalidateQueries({ queryKey: ["compass-ai-report"] });
-    void queryClient.invalidateQueries({
-      queryKey: ["compass-auto-update-settings"],
-    });
     if (watched.current === job.id)
       message.success("罗盘三张报表已核验，经营分析已刷新");
   }, [
@@ -113,7 +222,10 @@ export function CompassUpdateData({ manage }: { manage: boolean }) {
       watched.current = next.id;
       queryClient.setQueryData<CompassUpdateStatusView>(
         ["compass-update-status"],
-        (old) => (old ? { ...old, job: next } : old),
+        (old) =>
+          old
+            ? { ...old, job: next, target: result.data.target ?? old.target }
+            : old,
       );
       await status.refetch();
     } catch (e) {
@@ -125,7 +237,6 @@ export function CompassUpdateData({ manage }: { manage: boolean }) {
   }
   async function connected() {
     const refreshed = await status.refetch();
-    void schedule.refetch();
     if (
       requested.current ||
       ["LOGIN_REQUIRED", "VERIFICATION_REQUIRED"].includes(
@@ -133,29 +244,6 @@ export function CompassUpdateData({ manage }: { manage: boolean }) {
       )
     )
       await start();
-  }
-  async function saveSchedule(enabled: boolean) {
-    if (savingSchedule) return;
-    setSavingSchedule(true);
-    setError("");
-    try {
-      const result = await api(
-        "/analytics/compass/auto-update-settings",
-        "POST",
-        { enabled },
-      );
-      queryClient.setQueryData(["compass-auto-update-settings"], result.data);
-      message.success(
-        enabled
-          ? "已开启每天08:00服务器更新，保存不会立即执行"
-          : "已关闭每日服务器更新",
-      );
-    } catch (e) {
-      setError((e as Error).message);
-      void schedule.refetch();
-    } finally {
-      setSavingSchedule(false);
-    }
   }
   const [label, color] = updateLabels[job?.status || ""] || [
     "尚未开始更新",
@@ -182,7 +270,11 @@ export function CompassUpdateData({ manage }: { manage: boolean }) {
         title="更新罗盘数据"
         open={open}
         onCancel={() => setOpen(false)}
-        width={720}
+        width={880}
+        className="compass-update-modal"
+        styles={{
+          body: { maxHeight: "calc(100dvh - 240px)", overflowY: "auto" },
+        }}
         footer={
           <Space wrap>
             {manage && (
@@ -210,8 +302,14 @@ export function CompassUpdateData({ manage }: { manage: boolean }) {
         <p>
           服务器复用已保存的魔方罗盘会话，下载并导入截至昨日的近30天款号、货号、条码报表。关闭此窗口不影响已启动的后台任务，电脑可以关机。
         </p>
-        {(error || status.error) && (
-          <Alert type="error" showIcon title={error || status.error?.message} />
+        {error && <Alert type="error" showIcon title={error} />}
+        {status.error && (
+          <Alert
+            type="warning"
+            showIcon
+            title="暂时无法获取最新进度"
+            description={`${status.error.message}；保留最后确认结果，连接恢复后继续刷新。`}
+          />
         )}
         {session && connectionNote && (
           <Alert type="warning" showIcon title={connectionNote} />
@@ -225,47 +323,83 @@ export function CompassUpdateData({ manage }: { manage: boolean }) {
           </p>
         )}
         {session?.note && <p className="secondary">{session.note}</p>}
+        {status.data?.target && (
+          <p className="compass-update-target">
+            <strong>本次目标</strong> {status.data.target.startDate} —{" "}
+            {status.data.target.endDate}
+          </p>
+        )}
+        {busy && !running && (
+          <Alert type="info" showIcon title="正在发起本次更新" />
+        )}
         {job ? (
-          <div className="compass-update-job" aria-live="polite">
+          <div className="compass-update-job">
+            {historical && (
+              <Alert
+                type="info"
+                showIcon
+                title="上次更新结果"
+                description="以下为历史任务的实际结果，本次目标尚未更新。点击「开始更新」处理最新目标区间。"
+              />
+            )}
             <p>
               <Tag color={color}>{label}</Tag> {job.targetStartDate} —{" "}
               {job.targetEndDate}
             </p>
-            <Progress
-              percent={Math.round((job.completedDimensions.length / 3) * 100)}
-              status={
-                job.status === "FAILED"
-                  ? "exception"
-                  : running
-                    ? "active"
-                    : job.status === "COMPLETE"
-                      ? "success"
-                      : "normal"
-              }
-            />
+            {!historical && (
+              <>
+                <div className="compass-update-overall-heading">
+                  <strong>整体阶段完成度</strong>
+                  <span>
+                    已核验 {job.completedDimensions.length} / 3 张报表
+                  </span>
+                </div>
+                <Progress
+                  aria-label="整体阶段完成度"
+                  percent={compassOverallProgress(job)}
+                  status={
+                    job.status === "FAILED"
+                      ? "exception"
+                      : running
+                        ? "active"
+                        : job.status === "COMPLETE"
+                          ? "success"
+                          : "normal"
+                  }
+                />
+                <p className="compass-update-phase" role="status">
+                  {compassProgressPhase(job)}
+                </p>
+                <p className="secondary compass-update-progress-explanation">
+                  进度按准备、下载、解析、导入、校验五个阶段计算；导入阶段按实际成功写入行数推进，不代表预计耗时。
+                </p>
+              </>
+            )}
             <div className="compass-update-dimensions">
               {compassDimensions.map((dimension) => (
-                <div key={dimension}>
-                  <strong>按{compassLabels[dimension]}报表</strong>
-                  <Tag
-                    color={
-                      job.completedDimensions.includes(dimension)
-                        ? "success"
-                        : "default"
-                    }
-                  >
-                    {job.completedDimensions.includes(dimension)
-                      ? "已导入并核验"
-                      : "待完成"}
-                  </Tag>
-                </div>
+                <ReportProgress
+                  key={dimension}
+                  job={job}
+                  dimension={dimension}
+                />
               ))}
             </div>
+            {!job.progress && (
+              <p className="secondary">
+                此任务没有保存阶段明细，仅显示已核验维度；新发起的任务提供详细进度。
+              </p>
+            )}
             {job.note && <p role="status">{job.note}</p>}
             <p className="secondary">
               发起于 {when(job.requestedAt)}
+              {job.startedAt ? ` · 开始于 ${when(job.startedAt)}` : ""}
               {job.completedAt ? ` · 结束于 ${when(job.completedAt)}` : ""}
             </p>
+            {job.progress?.updatedAt && (
+              <p className="secondary">
+                最近进展 {when(job.progress.updatedAt)}
+              </p>
+            )}
           </div>
         ) : (
           <p>尚无服务器更新记录。</p>
@@ -285,38 +419,6 @@ export function CompassUpdateData({ manage }: { manage: boolean }) {
             title="当前账号可查看更新状态"
             description="启动更新、扫码及管理服务器会话需要经营分析导入与邮件配置权限。"
           />
-        )}
-        {manage && (
-          <div className="compass-update-schedule">
-            <Space wrap>
-              <strong>每日08:00自动更新</strong>
-              <Switch
-                aria-label="每日08:00自动更新"
-                checked={!!schedule.data?.enabled}
-                loading={savingSchedule || schedule.isLoading}
-                disabled={
-                  savingSchedule ||
-                  !schedule.data ||
-                  (!schedule.data.enabled && !schedule.data.eligible)
-                }
-                onChange={(enabled) => void saveSchedule(enabled)}
-              />
-              <span className="secondary">北京时间</span>
-            </Space>
-            {schedule.error && (
-              <Alert type="error" title={schedule.error.message} />
-            )}
-            <p className="secondary">
-              默认关闭。先保存罗盘登录并完成一次三张报表更新，再开启；保存设置不会立即下载。服务器准备好后，请暂停旧的
-              Dot 同类定时任务，避免重复执行。
-            </p>
-            {schedule.data?.lastScheduledDay && (
-              <p className="secondary">
-                最近定时发起日期：{schedule.data.lastScheduledDay}
-                ，实际结果以更新记录为准。
-              </p>
-            )}
-          </div>
         )}
         <p className="secondary">
           下载或导入失败时保留已有报表；只有完整导入并核验的维度才替换来源。重复点击会复用正在执行的任务，当天三张报表已齐备时直接显示核验结果。

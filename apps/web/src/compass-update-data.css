@@ -14,23 +14,95 @@
   gap: 10px;
   margin: 12px 0;
 }
-.compass-update-dimensions > div {
+.compass-update-report {
   display: flex;
   flex-direction: column;
   gap: 8px;
   padding: 12px;
   background: #fff7ef;
   border-radius: 8px;
+  min-width: 0;
 }
 .compass-update-dimensions .ant-tag {
   width: fit-content;
   margin: 0;
 }
-.compass-update-schedule {
-  margin: 16px 0;
-  padding: 12px;
+.compass-update-target {
+  padding: 10px 12px;
   background: #faf7f3;
-  border-radius: 8px;
+  border-radius: 6px;
+}
+.compass-update-target strong {
+  margin-right: 8px;
+}
+.compass-update-overall-heading,
+.compass-update-report-heading {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+.compass-update-modal .ant-alert {
+  margin: 10px 0;
+}
+.compass-update-phase {
+  margin: 4px 0;
+}
+.compass-update-progress-explanation {
+  font-size: 12px;
+  margin: 4px 0 12px;
+}
+.compass-update-steps {
+  display: flex;
+  justify-content: space-between;
+  gap: 4px;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+  font-size: 12px;
+  color: #8a8079;
+}
+.compass-update-steps li {
+  display: flex;
+  align-items: center;
+  flex-direction: column;
+  gap: 4px;
+}
+.compass-update-steps li > span {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  background: #fff;
+  border: 1px solid #e7dacf;
+  border-radius: 50%;
+}
+.compass-update-steps .is-complete {
+  color: #387b20;
+}
+.compass-update-steps .is-complete > span {
+  border-color: #aad799;
+  background: #f1faec;
+}
+.compass-update-steps .is-current {
+  color: #cc5000;
+  font-weight: 600;
+}
+.compass-update-steps .is-current > span {
+  border-color: currentColor;
+}
+.compass-update-report-counts {
+  font-size: 12px;
+  line-height: 1.8;
+}
+.compass-update-report-note {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  margin: 0;
+}
+.compass-update-job > .secondary {
+  font-size: 12px;
 }
 .compass-browser-frame {
   display: block;
@@ -51,9 +123,8 @@
   .compass-update-dimensions {
     grid-template-columns: 1fr;
   }
-  .compass-update-dimensions > div {
-    flex-direction: row;
-    align-items: center;
-    justify-content: space-between;
+  .compass-update-overall-heading {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }

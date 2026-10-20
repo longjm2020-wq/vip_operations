@@ -2,6 +2,7 @@ import { selectionScope, selectionUrl } from "../../../../../packages/database/s
 import { archiveSelectionPermissions, tableSelectionPermissions } from "../../../../../packages/contracts/src/table-permissions.js";
 import { isArchive } from "./archive.js";
 import { restoreProtectedImageColorLinks } from "./image-colors.js";
+import { deduplicateSelectionImageFields } from "./image-dedup.js";
 import { canManageContent, effectiveContentAccess, tableAccess } from "../projects/library.js";
 import { assertTextPatch, lockTextDefinitions, textLimitDefinitions } from "./text-limits.js";
 import { readableSelectionCreatedAt, selectionBusinessCreatedAt, selectionCreatedAtSql, selectionCreatedAtText } from "./creation-time.js";
@@ -236,7 +237,7 @@ export async function detail(c: Context, value: string) {
           value,
         );
       if (!row) fail("NOT_FOUND", "款式不存在", 404);
-      return project(p, c.actor, row);
+      return (await deduplicateSelectionImageFields(tx, [project(p, c.actor, row)]))[0];
     },
     { isolationLevel: "RepeatableRead" },
   );

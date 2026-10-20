@@ -12,6 +12,7 @@ import { hasSelectionCreationContent, selectionBusinessCreatedAt, selectionCreat
 import { selectionCreatedTimeInputSchema } from "../../../../../packages/contracts/src/selection-created-time.js";
 import { insertImage, readStoredImage } from "./image-storage.js";
 import { restoreProtectedImageColorLinks, validateSelectionImageColors } from "./image-colors.js";
+import { deduplicateSelectionImageFields, selectionImageDeduplicator } from "./image-dedup.js";
 import { deleteSingleRow } from "./history-rows.js";
 import { selectionRowNumberColumn, selectionRowNumberRevision, selectionRowNumberSource } from "./row-number.js";
 import { db, insert, one, rows, update, camel, type Row, type Tx } from "../../../../../packages/database/src/index.js";
@@ -227,7 +228,7 @@ export async function list(c: Context, query: Record<string, unknown>): Promise<
     // Hidden values cannot make a row appear filled or disclose a missing style.
     const missing = photoSearch || missingOnly ? projected.filter(selectionRowMissingStyleNo) : [];
     const matching = missingOnly ? missing : projected;
-    return {data:matching.slice((p.page-1)*p.pageSize,p.page*p.pageSize),total:matching.length,...p,...(photoSearch || missingOnly ? {missingStyleNoCount:missing.length} : {})};
+    return {data:await deduplicateSelectionImageFields(tx,matching.slice((p.page-1)*p.pageSize,p.page*p.pageSize)),total:matching.length,...p,...(photoSearch || missingOnly ? {missingStyleNoCount:missing.length} : {})};
   }
   const { values, clause, order } = listSpec(query);
   const total = await one(tx, `SELECT count(*)::int AS n ${source}${clause}`, ...values);
@@ -236,7 +237,7 @@ export async function list(c: Context, query: Record<string, unknown>): Promise<
     `SELECT ${selectColumns()} ${source}${clause} ORDER BY ${order} LIMIT ${p.pageSize} OFFSET ${(p.page - 1) * p.pageSize}`,
     ...values,
   );
-  return { data:data.map(row=>protection.project(policy,c.actor,row)), total: total!.n, ...p };
+  return { data:await deduplicateSelectionImageFields(tx,data.map(row=>protection.project(policy,c.actor,row))), total: total!.n, ...p };
   },{isolationLevel:"RepeatableRead",timeout:15000});
 }
 
@@ -335,7 +336,7 @@ export async function persist(tx: Tx, c: Context, body: Row, value?: string) {
       new Date(before.updated_at).toISOString() !== body.expectedUpdatedAt
     )
       fail("EDIT_CONFLICT", "记录已被其他人修改，请刷新后核对", 409);
-    const changes = { ...restoreProtectedImageColorLinks(before, body) };
+    let changes = { ...restoreProtectedImageColorLinks(before, body) };
     delete changes.expectedUpdatedAt;
     for(const key of ["extraFields","cellColors","cellAlignments","cellVerticalAlignments","cellTextColors","cellNumberFormats"])if(key in changes){const stored=camel(before || {})[key] || {};const merged={...stored,...changes[key]};for(const field of Object.keys(merged))if(merged[field]===null)delete merged[field];changes[key]=merged;}
     if ("color" in changes) changes.color = normalizedTags(changes.color);
@@ -343,6 +344,7 @@ export async function persist(tx: Tx, c: Context, body: Row, value?: string) {
     await validateSelectionCreatedTimeWrite(tx, before, changes);
     const security=await protection.assertWrite(tx,c,before,changes,policy);
     await validateSelectionImageColors(tx, c, before, changes, policy);
+    [changes] = await deduplicateSelectionImageFields(tx, [changes]);
     const explicitCreatedAt = changes.createdAt;
     if (Object.hasOwn(changes, "createdAt")) {
       changes.contentCreatedAt = changes.createdAt;
@@ -445,14 +447,15 @@ export async function nextPhotoStyle(c:Context,value: string, query: unknown) {
     // The current style may have just been completed and left this filter.
     // Locate the next row using its stable manual-order anchor regardless.
     const anchor=camel(current);
-    return data.find(row=>Number(row.sortOrder)>Number(anchor.sortOrder) || Number(row.sortOrder)===Number(anchor.sortOrder) && BigInt(row.id)<BigInt(value)) || null;
+    const next = data.find(row=>Number(row.sortOrder)>Number(anchor.sortOrder) || Number(row.sortOrder)===Number(anchor.sortOrder) && BigInt(row.id)<BigInt(value));
+    return next ? (await deduplicateSelectionImageFields(tx,[next]))[0] : null;
   }
   const q = String(options.q || "").trim().slice(0, 100);
   const result=await one(tx, `SELECT ${selectColumns()} ${source}
     WHERE (s.sort_order>$1 OR (s.sort_order=$1 AND s.id<$2::bigint))
     AND ($3='' OR concat_ws(' ',s.xuti_style_no,s.supplier_style_no,s.supplier_code) ILIKE $4)
     ORDER BY s.sort_order ASC,s.id DESC LIMIT 1`, current.sort_order, value, q, "%"+q+"%");
-  return result?protection.project(policy,c.actor,result):null;
+  return result?(await deduplicateSelectionImageFields(tx,[protection.project(policy,c.actor,result)]))[0]:null;
   },{isolationLevel:"RepeatableRead",timeout:15000});
 }
 /** Granular image operations merge under the row lock instead of replacing a stale array. */
@@ -483,7 +486,14 @@ export async function changePhoto(c: Context, value: string, input: unknown) {
       const existing = images.find((item: Row) => item.id === added.id);
       if (existing && (existing.url !== added.url || existing.color !== added.color || existing.colorFieldKey !== added.colorFieldKey)) fail("EDIT_CONFLICT", "图片标识已被使用，请重新上传", 409);
       if (!existing) images = [...images, added];
-    } else images = images.filter((item: Row) => item.id !== body.imageId);
+    } else {
+      // A displayed image may represent several identical historical entries.
+      // Removing it must remove that whole displayed group, while preserving
+      // copies with different colour annotations and all other photographs.
+      const target = images.find((item: Row) => item.id === body.imageId);
+      if (!custom && target) images = (await selectionImageDeduplicator(tx, images))([target, ...images]);
+      images = images.filter((item: Row) => item.id !== body.imageId);
+    }
     if(custom){parse(z.array(image).max(30),images);return persist(tx,c,{extraFields:{...(before.extra_fields || {}),[field]:JSON.stringify(images)}},value);}
     return persist(tx, c, { [field]: images }, value);
   });

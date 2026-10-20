@@ -89,12 +89,17 @@ export function SelectionTransfer({ canEdit, blocked, selectedRows, filteredRows
     if (!(await ensureLayoutSaved())) throw Error("请先处理未保存或冲突的字段设置，再导入");
     // Keep the parsed rows for policy changes and retries. Uploaded images are
     // replaced in this cache, so changing the policy does not upload them again.
+    const uploaded = new Map<string, string>();
     for (const row of source) for (const image of [...(row.images || []), ...(row.labelImages || [])]) {
         if (!image.url.startsWith("data:image/")) continue;
+        const original = image.url;
+        const cached = uploaded.get(original);
+        if (cached) { image.url = cached; continue; }
         const [header, base64] = image.url.split(","), mime = header.slice(5, header.indexOf(";"));
         const bytes = Uint8Array.from(atob(base64), char => char.charCodeAt(0));
         const file = await prepareUpload(new File([bytes], "import-image." + mime.split("/")[1], { type: mime }));
         image.url = (await api("/style-selections/images", "POST", { data: await readUpload(file) })).data.url;
+        uploaded.set(original, image.url);
     }
     let response: unknown;
     try { response = (await api("/style-selections/import/preview", "POST", { rows: source, existingStrategy: strategy })).data; }

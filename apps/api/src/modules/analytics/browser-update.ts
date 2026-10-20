@@ -3,18 +3,20 @@ import { z } from "zod";
 import { db, one, rows, type Row, type Tx } from "../../../../../packages/database/src/index.js";
 import { audit, command, type Context, fail, id, parse, requirePermission } from "../../core.js";
 import { compassDimensions, shanghaiDate, shiftCompassDate, type CompassDimension } from "../../../../../packages/contracts/src/compass-analytics.js";
-import { compassAutoUpdateSchema, compassBrowserActionSchema, type CompassAutoUpdateSettings, type CompassBrowserLoginView, type CompassBrowserSession, type CompassUpdateJob, type CompassUpdateStatusView } from "../../../../../packages/contracts/src/compass-update.js";
+import { compassBrowserActionSchema, compassUpdateProgressSchema, initialCompassUpdateProgress, verifiedCompassUpdateProgress, type CompassBrowserLoginView, type CompassBrowserSession, type CompassUpdateJob, type CompassUpdateStatusView } from "../../../../../packages/contracts/src/compass-update.js";
 
 const activeLogins = "('QUEUED','RUNNING','WAITING','CHECKING')";
 const activeJobs = "('QUEUED','RUNNING','LOGIN_REQUIRED','VERIFICATION_REQUIRED')";
-const jobColumns = "id::text,status,target_start_date::text,target_end_date::text,requested_at::text,started_at::text,completed_at::text,completed_dimensions,source_ids,note";
+const jobColumns = "id::text,status,target_start_date::text,target_end_date::text,requested_at::text,started_at::text,completed_at::text,completed_dimensions,source_ids,note,progress";
 export const compassBrowserLock = 2026101140;
 
 function jobView(row?: Row): CompassUpdateJob | null {
+  const progress = compassUpdateProgressSchema.safeParse(row?.progress);
   return row ? {
     id: row.id, status: row.status, targetStartDate: row.target_start_date, targetEndDate: row.target_end_date,
     requestedAt: row.requested_at, startedAt: row.started_at, completedAt: row.completed_at,
     completedDimensions: row.completed_dimensions, sourceIds: row.source_ids, note: row.note,
+    progress: progress.success ? progress.data : null,
   } : null;
 }
 
@@ -46,36 +48,9 @@ export async function compassBrowserSession(tx: Tx = db): Promise<CompassBrowser
 
 export async function compassUpdateStatus(): Promise<CompassUpdateStatusView> {
   await expireCompassTasks();
+  const endDate = shiftCompassDate(shanghaiDate(), -1), startDate = shiftCompassDate(endDate, -29);
   return { session: await compassBrowserSession(), job: jobView(await one(db,
-    `SELECT ${jobColumns} FROM compass_update_jobs ORDER BY id DESC LIMIT 1`)) };
-}
-
-export async function compassAutoUpdateSettings(c: Context, tx: Tx = db): Promise<CompassAutoUpdateSettings> {
-  requirePermission(c.actor, "analytics.manage");
-  const session = await compassBrowserSession(tx);
-  const config = await one(tx, `SELECT auto_update_enabled,daily_hour,last_scheduled_day::text,
-    EXISTS(SELECT 1 FROM compass_update_jobs WHERE trigger='MANUAL' AND status='COMPLETE'
-      AND completed_dimensions @> '["style","article","barcode"]'::jsonb
-      AND source_ids ?& ARRAY['style','article','barcode']) AS verified_before FROM compass_session WHERE id=1`);
-  return { enabled: config!.auto_update_enabled, dailyHour: config!.daily_hour, lastScheduledDay: config!.last_scheduled_day,
-    eligible: Boolean(config!.verified_before && session.enabled && session.status === "READY" && session.encryptionReady && session.workerOnline) };
-}
-
-export async function saveCompassAutoUpdate(c: Context, input: unknown): Promise<CompassAutoUpdateSettings> {
-  requirePermission(c.actor, "analytics.manage");
-  const b = parse(compassAutoUpdateSchema, input);
-  return command(c, "compass.auto-update.settings", b, async tx => {
-    await rows(tx, "SELECT pg_advisory_xact_lock($1)::text", compassBrowserLock);
-    const config = await compassAutoUpdateSettings(c, tx);
-    if (b.enabled && !config.eligible)
-      fail("COMPASS_AUTO_UPDATE_NOT_READY", "请先保存后台罗盘登录并完成一次三维报表更新核验，再开启每日更新", 409);
-    await tx.$executeRawUnsafe(`UPDATE compass_session SET auto_update_enabled=$1,auto_update_by=$2::bigint,daily_hour=8,
-      last_scheduled_day=CASE WHEN $1 AND NOT auto_update_enabled
-        AND extract(hour FROM now() AT TIME ZONE 'Asia/Shanghai')>=8
-        THEN (now() AT TIME ZONE 'Asia/Shanghai')::date ELSE last_scheduled_day END WHERE id=1`, b.enabled, c.actor.id);
-    await audit(tx, c, "COMPASS_AUTO_UPDATE_SETTINGS", "compass_session", "1", null, { enabled: b.enabled, dailyHour: 8 });
-    return compassAutoUpdateSettings(c, tx);
-  });
+    `SELECT ${jobColumns} FROM compass_update_jobs ORDER BY id DESC LIMIT 1`)), target: { startDate, endDate } };
 }
 
 /** Only complete active sources with all thirty actual dates qualify. */
@@ -109,10 +84,10 @@ export async function requestCompassUpdate(c: Context, input: unknown): Promise<
       const previous = await one(tx, `SELECT ${jobColumns} FROM compass_update_jobs
         WHERE target_start_date=$1::date AND target_end_date=$2::date AND status='COMPLETE' ORDER BY id DESC LIMIT 1`, startDate, endDate);
       const job = previous || await one(tx, `INSERT INTO compass_update_jobs(requested_by,target_start_date,target_end_date,status,
-        completed_at,completed_dimensions,source_ids,note) VALUES($1::bigint,$2::date,$3::date,'COMPLETE',now(),$4::jsonb,$5::jsonb,
-        '三个维度已覆盖截至昨日的连续近30天，无需重复下载') RETURNING ${jobColumns}`,
-      c.actor.id, startDate, endDate, JSON.stringify(verified.completedDimensions), JSON.stringify(verified.sourceIds));
-      return { session, job: jobView(job) };
+        completed_at,completed_dimensions,source_ids,note,progress) VALUES($1::bigint,$2::date,$3::date,'COMPLETE',now(),$4::jsonb,$5::jsonb,
+        '三个维度已覆盖截至昨日的连续近30天，无需重复下载',$6::jsonb) RETURNING ${jobColumns}`,
+      c.actor.id, startDate, endDate, JSON.stringify(verified.completedDimensions), JSON.stringify(verified.sourceIds), JSON.stringify(initialCompassUpdateProgress(verified.completedDimensions)));
+      return { session, job: jobView(job), target: { startDate, endDate } };
     }
     if (!session.encryptionReady) fail("COMPASS_BROWSER_KEY_MISSING", "服务器尚未配置罗盘会话加密，请联系管理员", 503);
     if (!session.workerOnline) fail("COMPASS_WORKER_OFFLINE", "罗盘后台程序未在线，未提交更新，请稍后重试", 503);
@@ -128,15 +103,15 @@ export async function requestCompassUpdate(c: Context, input: unknown): Promise<
     if (active && ["LOGIN_REQUIRED", "VERIFICATION_REQUIRED"].includes(active.status)) {
       job = await one(tx, `UPDATE compass_update_jobs SET status='QUEUED',requested_by=$2::bigint,claim_token=NULL,
         requested_at=now(),started_at=NULL,heartbeat_at=NULL,completed_at=NULL,deadline_at=now()+interval '1 hour',
-        note='后台登录已恢复，等待继续下载与导入缺失维度' WHERE id=$1::bigint RETURNING ${jobColumns}`, active.id, c.actor.id);
+        note='后台登录已恢复，等待继续下载与导入缺失维度',progress=$3::jsonb WHERE id=$1::bigint RETURNING ${jobColumns}`, active.id, c.actor.id, JSON.stringify(initialCompassUpdateProgress(verified.completedDimensions)));
     } else if (!active) {
       job = await one(tx, `INSERT INTO compass_update_jobs(requested_by,target_start_date,target_end_date,
-        completed_dimensions,source_ids,note) VALUES($1::bigint,$2::date,$3::date,$4::jsonb,$5::jsonb,
-        '等待后台核验罗盘登录并下载报表') RETURNING ${jobColumns}`,
-      c.actor.id, startDate, endDate, JSON.stringify(verified.completedDimensions), JSON.stringify(verified.sourceIds));
+        completed_dimensions,source_ids,note,progress) VALUES($1::bigint,$2::date,$3::date,$4::jsonb,$5::jsonb,
+        '等待后台核验罗盘登录并下载报表',$6::jsonb) RETURNING ${jobColumns}`,
+      c.actor.id, startDate, endDate, JSON.stringify(verified.completedDimensions), JSON.stringify(verified.sourceIds), JSON.stringify(initialCompassUpdateProgress(verified.completedDimensions)));
     }
     await audit(tx, c, "COMPASS_UPDATE_REQUEST", "compass_update", job?.id, null, { startDate, endDate, status: job?.status });
-    return { session, job: jobView(job) };
+    return { session, job: jobView(job), target: { startDate, endDate } };
   });
 }
 
@@ -145,15 +120,15 @@ export async function finishCompassUpdate(jobId: string, claimToken: string): Pr
   parse(id, jobId);
   parse(z.uuid(), claimToken);
   return db.$transaction(async tx => {
-    const job = await one(tx, `SELECT target_start_date::text,target_end_date::text FROM compass_update_jobs
+    const job = await one(tx, `SELECT target_start_date::text,target_end_date::text,progress FROM compass_update_jobs
       WHERE id=$1::bigint AND claim_token=$2::uuid AND status='RUNNING' AND deadline_at>now() FOR UPDATE`, jobId, claimToken);
     if (!job) return null;
     const verified = await verifyCompassUpdateSources(job.target_start_date, job.target_end_date, tx);
     const status = verified.complete ? "COMPLETE" : verified.completedDimensions.length ? "PARTIAL" : "FAILED";
     return jobView(await one(tx, `UPDATE compass_update_jobs SET status=$3,completed_dimensions=$4::jsonb,source_ids=$5::jsonb,
-      completed_at=now(),heartbeat_at=now(),claim_token=NULL,note=$6 WHERE id=$1::bigint AND claim_token=$2::uuid RETURNING ${jobColumns}`,
+      completed_at=now(),heartbeat_at=now(),claim_token=NULL,note=$6,progress=$7::jsonb WHERE id=$1::bigint AND claim_token=$2::uuid RETURNING ${jobColumns}`,
     jobId, claimToken, status, JSON.stringify(verified.completedDimensions), JSON.stringify(verified.sourceIds), verified.complete ?
-      "款号、货号和条码报表均已完整导入并核验截至昨日的连续近30天" : "来源核验未全部通过，保留已完成维度，可重新更新"));
+      "款号、货号和条码报表均已完整导入并核验截至昨日的连续近30天" : "来源核验未全部通过，保留已完成维度，可重新更新", JSON.stringify(verifiedCompassUpdateProgress(job.progress, verified.completedDimensions))));
   });
 }
 

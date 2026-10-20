@@ -7,6 +7,7 @@ import { selectionBaseFields } from "../../../../../packages/contracts/src/selec
 import { selectionImportHeader, selectionImportTemplateFields, selectionImportLimits } from "../../../../../packages/contracts/src/selection-import-template.js";
 import type { SelectionImportImageColorDiagnostic } from "../../../../../packages/contracts/src/selection-import-diagnostics.js";
 import { selectionImageColorValues } from "../../../../../packages/contracts/src/selection-image-colors.js";
+import type { SelectionImageIdentity } from "../../../../../packages/contracts/src/selection-image-dedup.js";
 import { parseSelectionCreatedTime } from "../../../../../packages/contracts/src/selection-created-time.js";
 import { archiveTableFields, archiveChoiceColumns } from "../../../../../packages/contracts/src/product-archive-table.js";
 import { fieldValueError, joinChoiceValues, splitChoiceValues } from "../../../../../packages/contracts/src/selection-field-validation.js";
@@ -18,6 +19,7 @@ import { archiveProductSnapshot } from "./archive-product-snapshot.js";
 import * as protection from "./protection.js";
 import { persist, styleSelectionInput } from "./service.js";
 import { archiveStandardColorKey, imageColorField, linkedColorChanged, unchangedColorImage } from "./image-colors.js";
+import { selectionImageDeduplicator } from "./image-dedup.js";
 
 const strategySchema = z.enum(["OVERWRITE", "SKIP"]).default("SKIP");
 const importTransactionTimeout = 600_000;
@@ -249,7 +251,7 @@ function normalizedValue(field: SelectionField, raw: string): string {
   if (issue) fail("VALIDATION_ERROR", `字段「${field.label}」：${issue}`, 400);
   return value;
 }
-function writablePatch(snapshot: Snapshot, bindings: Binding[], definitions: SelectionField[], input: Row): Row {
+function writablePatch(snapshot: Snapshot, bindings: Binding[], definitions: SelectionField[], input: Row, imageCount: (images: SelectionImageIdentity[]) => number = images => images.length): Row {
   const { fieldValues, ...patch } = input;
   const fields = new Map<string, SelectionField>([
     ...bindings.map(binding => ({ key: binding.key, label: binding.label, type: binding.type as SelectionField["type"], width: selectionInitialColumnWidth })),
@@ -278,7 +280,8 @@ function writablePatch(snapshot: Snapshot, bindings: Binding[], definitions: Sel
     if (readonlyTypes.has(field.type || field.fallbackType || "text")) fail("VALIDATION_ERROR", `字段「${field.label}」由系统生成，不能导入更新`, 400);
     if (field.type === "image") {
       const parsed = parse(styleSelectionInput.shape.images, Array.isArray(value) ? value : JSON.parse(String(value)));
-      if (parsed.length > (field.imageConfig?.max || 30)) fail("VALIDATION_ERROR", `字段「${field.label}」：图片超过数量上限`, 400);
+      const count = ["images", "labelImages"].includes(key) ? imageCount(parsed) : parsed.length;
+      if (count > (field.imageConfig?.max || 30)) fail("VALIDATION_ERROR", `字段「${field.label}」：图片超过数量上限`, 400);
       continue;
     }
     const raw = Array.isArray(value) ? JSON.stringify(value) : String(value);
@@ -312,6 +315,7 @@ async function makePlan(tx: Tx, c: Context, archive: boolean, snapshot: Snapshot
   const matched = await matchAll(tx, archive, values);
   const actionable = values.filter((value, index) => !matched[index].before && !matched[index].product || strategy === "OVERWRITE" && Object.keys(value).some(key => key !== "xutiStyleNo"));
   const { bindings, definitions } = resolveBindings(c, snapshot, actionable);
+  const deduplicateImages = await selectionImageDeduplicator(tx, actionable.flatMap(value => [...value.images || [], ...value.labelImages || []]));
   const virtual: protection.Policy = { ...snapshot.policy,
     registeredFieldKeys: [...snapshot.policy.registeredFieldKeys || [], ...definitions.map(field => field.key)],
     privateFieldOwners: { ...snapshot.policy.privateFieldOwners, ...Object.fromEntries(definitions.map(field => [field.key, c.actor.id])) } };
@@ -324,13 +328,20 @@ async function makePlan(tx: Tx, c: Context, archive: boolean, snapshot: Snapshot
     const operation = exists && (strategy === "SKIP" || Object.keys(value).every(key => key === "xutiStyleNo")) ? "SKIP" : exists ? "UPDATE" : "CREATE";
     let changedFields: string[] = [];
     if (operation !== "SKIP") {
-      const patch = writablePatch(snapshot, bindings, definitions, value);
+      const patch = writablePatch(snapshot, bindings, definitions, value, images => deduplicateImages(images).length);
       const requested = Object.keys(patch).flatMap(key => key === "extraFields" ? Object.keys(patch.extraFields) : key === "xutiStyleNo" && exists ? [] : [importFieldKey(key)]);
       protection.assertFields(virtual, c, before || { created_by: c.actor.id }, requested);
       await protection.assertWrite(tx, c, before || null, patch, virtual, false);
       if (archive) requirePermission(c.actor, exists ? "product.update" : "product.create");
       resolveImportImageColorLinks(c, snapshot, definitions, before, patch);
       validateImportImageColors(snapshot, c, before, patch, index, value.xutiStyleNo, definitions);
+      // Validate the original positions first so an error still points at the
+      // actual spreadsheet cell. Successful previews show what will be stored.
+      for (const key of ["images", "labelImages"]) if (Array.isArray(patch[key])) {
+        const original = patch[key], unique = deduplicateImages(original), retained = new Set(unique);
+        patch[key] = unique;
+        if (Object.hasOwn(value, key)) value[key] = value[key].filter((_: unknown, imageIndex: number) => retained.has(original[imageIndex]));
+      }
       const merged = patch.extraFields ? { ...patch, extraFields: { ...before?.extra_fields, ...patch.extraFields } } : patch;
       changedFields = protection.changedFields(before || null, merged).affected.filter(key => key !== "xutiStyleNo").map(key => fieldsLabel(snapshot, bindings, key));
     }
