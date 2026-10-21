@@ -1,5 +1,6 @@
+import { Table } from "./code-table";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Alert, App, Button, Modal, Select, Space, Table, Upload } from "antd";
+import { Alert, App, Button, Modal, Select, Space, Upload } from "antd";
 import {
   SheetColumn,
   sheetColumnLabel,

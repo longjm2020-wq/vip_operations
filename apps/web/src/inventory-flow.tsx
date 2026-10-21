@@ -1,3 +1,5 @@
+import { CopyableCode } from "./copyable-code";
+import { Table } from "./code-table";
 import { useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -13,7 +15,6 @@ import {
   Modal,
   Select,
   Space,
-  Table,
   Tag,
   Timeline,
   Typography,
@@ -48,6 +49,7 @@ const issues = [
   { value: "QUALITY", label: "品质问题" },
 ];
 const skuLabel = (r: Row) => `${r.skuCode} · ${r.colorName} / ${r.sizeName}`;
+const skuText = (r: Row) => <><CopyableCode value={r.skuCode} label="商品编码" /> · {r.colorName} / {r.sizeName}</>;
 function ShipmentFields({ courierOnly = false }: { courierOnly?: boolean }) {
   const method = Form.useWatch(["shipment", "method"]);
   return (
@@ -320,7 +322,7 @@ export function InventoryDialog({
             {order.items.map((i: Row, index: number) => (
               <Space key={i.id} style={{ display: "flex", marginTop: 12 }}>
                 <span>
-                  {skuLabel(i)} · 可发{" "}
+                  {skuText(i)} · 可发{" "}
                   {Math.max(
                     0,
                     i.orderedQty -
@@ -383,7 +385,7 @@ export function InventoryDialog({
             {record.items.map((i: Row, index: number) => (
               <Card
                 key={i.id}
-                title={`${skuLabel(i)} · 本次发货 ${i.quantity} 件`}
+                title={<>{skuText(i)} · 本次发货 {i.quantity} 件</>}
                 size="small"
                 style={{ marginTop: 12 }}
               >
@@ -445,7 +447,7 @@ export function InventoryDialog({
         {mode === "putaway" && (
           <>
             <Typography.Paragraph>
-              {skuLabel(record)} · 合格待入库{" "}
+              {skuText(record)} · 合格待入库{" "}
               {record.qualifiedQty - record.putawayQty} 件
             </Typography.Paragraph>
             <Form.Item
@@ -471,7 +473,7 @@ export function InventoryDialog({
         {mode === "reference" && (
           <>
             <Typography.Paragraph>
-              {skuLabel(record)}。以下数值为人工维护的 SKU
+              {skuText(record)}。以下数值为人工维护的 SKU
               参考值，请填写来源与日期。预估销退不计入可售库存，也不抵扣补货。
             </Typography.Paragraph>
             <Form.Item name="articleNo" label="货号">
@@ -730,7 +732,7 @@ export function PackageCard({ record }: { record: Row }) {
         dataSource={record.items}
         pagination={false}
         columns={[
-          { title: "SKU / 颜色 / 尺码", render: (_, r) => skuLabel(r) },
+          { title: "SKU / 颜色 / 尺码", render: (_, r) => skuText(r) },
           { title: "发货数", dataIndex: "quantity" },
           {
             title: "合格数",
@@ -815,7 +817,7 @@ export function ProcurementPanel({ id }: { id: string }) {
             dataSource={o.items}
             pagination={false}
             columns={[
-              { title: "SKU", render: (_, r) => skuLabel(r) },
+              { title: "SKU", render: (_, r) => skuText(r) },
               { title: "采购数", dataIndex: "orderedQty" },
               { title: "已入库", dataIndex: "receivedQty" },
               { title: "在途 / 暂存", dataIndex: "committedQty" },
@@ -930,7 +932,7 @@ export function StagingPanel() {
         columns={[
           { title: "包裹", dataIndex: "shipmentNo" },
           { title: "采购 / 调拨单", render: (_, r) => r.poNo || r.transferNo },
-          { title: "SKU", render: (_, r) => skuLabel(r) },
+          { title: "SKU", render: (_, r) => skuText(r) },
           {
             title: "合格待入库",
             render: (_, r) => r.qualifiedQty - r.putawayQty,
@@ -987,7 +989,7 @@ function TransferPanel({ id }: { id: string }) {
             dataSource={o.items}
             pagination={false}
             columns={[
-              { title: "SKU", render: (_, r) => skuLabel(r) },
+              { title: "SKU", render: (_, r) => skuText(r) },
               { title: "调拨数量", dataIndex: "quantity" },
               { title: "目标仓已入库", dataIndex: "receivedQty" },
             ]}

@@ -1,3 +1,4 @@
+import { CopyableCode } from "./copyable-code";
 import { useEffect, useId, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Card, Empty, Modal, Select, Spin, Tabs, Tooltip } from "antd";
@@ -363,7 +364,7 @@ export function CompassEntityTrend({
   return (
     <Modal
       open
-      title={`${compassLabels[dimension]} ${row.code} · 每日数据趋势`}
+      title={<>{compassLabels[dimension]} <CopyableCode value={row.code} label={compassLabels[dimension]} /> · 每日数据趋势</>}
       className="compass-entity-trend-modal"
       width={1100}
       footer={null}

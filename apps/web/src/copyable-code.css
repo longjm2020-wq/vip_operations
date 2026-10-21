@@ -1,0 +1,6 @@
+.copyable-code { display: inline-flex; align-items: center; max-width: 100%; gap: 3px; vertical-align: middle; }
+.copyable-code-value { min-width: 0; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
+.code-copy-button { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 22px; width: 22px; height: 24px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: #947e70; cursor: pointer; font-size: 12px; vertical-align: middle; user-select: none; }
+.code-copy-button:hover { color: #d65300; background: #fff0e1; }
+.code-copy-button:focus-visible { outline: 2px solid #d65300; outline-offset: 1px; }
+@media (pointer: coarse) { .code-copy-button { flex-basis: 28px; width: 28px; height: 30px; } }

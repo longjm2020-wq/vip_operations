@@ -1,3 +1,4 @@
+import { CopyableCode, CopyCodeButton } from "./copyable-code";
 import { Fragment } from "react";
 import { Popover } from "antd";
 import type { CompassImageTarget } from "./compass-product-image";
@@ -8,17 +9,18 @@ export function CompassProductText({
   text,
   targets,
   onPreview,
+  codeLabel,
 }: {
   text: string;
+  codeLabel?: string;
   targets: CompassImageTarget[];
   onPreview: (target: CompassImageTarget) => void;
 }) {
-  return (
+  const content = (
     <>
       {splitProductReferences(text, targets).map((part, i) =>
         part.target ? (
-          <Popover
-            key={i}
+          <span key={i} className="copyable-code"><Popover
             trigger={["hover", "focus"]}
             placement="top"
             mouseEnterDelay={0.15}
@@ -40,11 +42,12 @@ export function CompassProductText({
             >
               {part.text}
             </button>
-          </Popover>
+          </Popover>{!codeLabel && <CopyCodeButton value={part.text} />}</span>
         ) : (
           <Fragment key={i}>{part.text}</Fragment>
         ),
       )}
     </>
   );
+  return codeLabel ? <CopyableCode value={text} label={codeLabel}>{content}</CopyableCode> : content;
 }

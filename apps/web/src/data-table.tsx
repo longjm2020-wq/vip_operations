@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { App, Button, Table as AntTable, TableProps } from "antd";
+import { App, Button, TableProps } from "antd";
+import { Table as AntTable } from "./code-table";
 import { downloadWorkbook } from "./sheet-excel";
 const exportLabels: Record<string, string> = {
   code: "编码",

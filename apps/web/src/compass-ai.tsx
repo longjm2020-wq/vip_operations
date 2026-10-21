@@ -223,6 +223,7 @@ function VisualReport({
                 <strong>
                   <CompassProductText
                     text={row.code}
+                    codeLabel={compassLabels[dimension]}
                     targets={productReferenceTargets(visuals)}
                     onPreview={onPreview}
                   />

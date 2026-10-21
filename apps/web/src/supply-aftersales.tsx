@@ -1,3 +1,4 @@
+import { Table } from "./code-table";
 import { useRef, useState } from "react";
 import {
   Alert,
@@ -11,7 +12,6 @@ import {
   Modal,
   Select,
   Space,
-  Table,
   Tag,
   Typography,
 } from "antd";

@@ -1,3 +1,4 @@
+import { CopyableCode } from "./copyable-code";
 import { PageSearch, PageSearchInput } from "./page-search";
 import { Table } from "./data-table";
 import { useState } from "react";
@@ -377,7 +378,7 @@ export function MasterPage({
       k === "status" ? (
         <Status value={v} />
       ) : k === "styleNo" ? (
-        <Link to={"/products/" + row.id}>{v}</Link>
+        <CopyableCode value={v} label="款号"><Link to={"/products/" + row.id}>{v}</Link></CopyableCode>
       ) : ["costPrice", "tagPrice"].includes(k) ? (
         amount(v)
       ) : (

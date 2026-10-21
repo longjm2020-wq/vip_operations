@@ -1,5 +1,6 @@
 import { PageSearch, PageSearchInput } from "./page-search";
 import { useEffect, useRef, useState } from "react";
+import { CopyableCode } from "./copyable-code";
 import {
   Alert,
   App,
@@ -617,7 +618,7 @@ export function CompassAnalyticsPage() {
                 setPage(1);
               }}
             >
-              款号 {styleNo}
+              款号 <CopyableCode value={styleNo} label="款号" />
             </Tag>
           )}
           {articleNo && (
@@ -628,7 +629,7 @@ export function CompassAnalyticsPage() {
                 setPage(1);
               }}
             >
-              货号 {articleNo}
+              货号 <CopyableCode value={articleNo} label="货号" />
             </Tag>
           )}
           <Button
@@ -728,14 +729,17 @@ export function CompassAnalyticsPage() {
                           code={r.code}
                           onPreview={setProductPreview}
                         />
+                        <span className="compass-rank-identity"><CopyableCode value={r.code} label={compassLabels[dimension]}>
+                          <button type="button" className="compass-rank-code" onClick={() => drill(r)} title={`查看 ${r.code}`}>{r.code}</button>
+                        </CopyableCode></span>
                         <button
                           className="compass-rank-link"
                           type="button"
                           key={r.code}
                           onClick={() => drill(r)}
                           title={`查看 ${r.code}`}
+                          aria-label={`查看 ${r.code} 销售明细`}
                         >
-                          <span className="compass-rank-code">{r.code}</span>
                           <span className="compass-rank-bar">
                             <i
                               style={{

@@ -1,3 +1,4 @@
+import { Table } from "./code-table";
 import { useEffect, useRef, useState } from "react";
 import {
   Alert,
@@ -8,7 +9,6 @@ import {
   Modal,
   Select,
   Space,
-  Table,
   Tooltip,
 } from "antd";
 import { SendOutlined } from "@ant-design/icons";

@@ -1,3 +1,4 @@
+import { CopyableCode } from "./copyable-code";
 import { useRef, useState } from "react";
 import {
   Alert,
@@ -365,7 +366,7 @@ export function InventoryImport({
         <div style={{ maxHeight: 140, overflow: "auto", marginTop: 8 }}>
           {failures.slice(0, 100).map((e) => (
             <div key={e.key}>
-              第 {e.line} 行 · {e.input.skuCode}：{e.error}
+              第 {e.line} 行 · <CopyableCode value={e.input.skuCode} label="商品编码" />：{e.error}
             </div>
           ))}
           {failures.length > 100 && (

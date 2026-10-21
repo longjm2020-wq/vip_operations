@@ -1,3 +1,4 @@
+import { CopyableCode } from "./copyable-code";
 import { useState } from "react";
 import {
   App,
@@ -133,7 +134,7 @@ export function DocumentEditor({
                     <div key={f.key} className="editor-line">
                       {receipt ? (
                         <>
-                          <strong>{record.items[index].skuCode}</strong>
+                          <strong><CopyableCode value={record.items[index].skuCode} label="商品编码" /></strong>
                           <Form.Item
                             name={[f.name, "purchaseOrderItemId"]}
                             hidden

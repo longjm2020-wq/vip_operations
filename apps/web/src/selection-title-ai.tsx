@@ -1,3 +1,4 @@
+import { CopyableCode } from "./copyable-code";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, App, Button, Checkbox, Collapse, Empty, Input, Modal, Pagination, Progress, Select, Space, Tag, Typography } from "antd";
 import { BulbOutlined } from "@ant-design/icons";
@@ -254,7 +255,7 @@ export function SelectionTitleAi({ open, onClose, rows, fields, initialFieldKeys
     {!!candidates.length && <>
       <div className="selection-title-ai-review-heading"><strong>候选标题 · {candidates.length} 款</strong><span>可修改标题、取消勾选。确认后按批保存；原内容及权限发生变化时须重新生成。</span></div>
       <div className="selection-title-ai-candidates">{candidates.slice((resultPage - 1) * pageSize, resultPage * pageSize).map(({ batch, row }) => <section className="selection-title-ai-candidate" key={`${batch.planToken}:${row.id}`}>
-        <div className="selection-title-ai-candidate-heading"><strong>{row.xutiStyleNo}</strong>{expired(batch) ? <Tag color="red">候选已过期</Tag> : <Tag>{batch.model}</Tag>}</div>
+        <div className="selection-title-ai-candidate-heading"><strong><CopyableCode value={row.xutiStyleNo} label="款号" /></strong>{expired(batch) ? <Tag color="red">候选已过期</Tag> : <Tag>{batch.model}</Tag>}</div>
         {row.titles.map(title => <div className="selection-title-ai-title" key={title.key}>
           <Checkbox checked={title.checked} disabled={!!busy || expired(batch)} onChange={event => changeTitle(batch.planToken, row.id, title.key, { checked: event.target.checked })}>{title.label}</Checkbox>
           {mode !== "blank" && <div className="selection-title-ai-original" aria-label={`${row.xutiStyleNo} ${title.label}原文`}><strong>原文</strong><span>{title.previousValue?.trim() ? title.previousValue : "（空白）"}</span></div>}

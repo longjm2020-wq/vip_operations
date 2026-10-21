@@ -1,4 +1,5 @@
 import { PageSearch, PageSearchInput } from "./page-search";
+import { CopyableCode, CopyCodeButton } from "./copyable-code";
 import { Table, exportTableData } from "./data-table";
 import { InventoryImport } from "./inventory-import";
 import { InventoryEstimateValue, InventoryReferenceValue, inventoryHasZeroMedianSales } from "./inventory-reference-value";
@@ -176,7 +177,7 @@ function InventoryBalances() {
         v ||
         (dimension === "article" ? (
           <>
-            未维护货号<div className="secondary">{r.skuCode}</div>
+            未维护货号<div className="secondary"><CopyableCode value={r.skuCode} label="商品编码" /></div>
           </>
         ) : (
           "—"
@@ -187,8 +188,8 @@ function InventoryBalances() {
       dataIndex: "skuCode",
       render: (_, r) => (
         <>
-          {r.skuCode}
-          {r.barcode && <div className="secondary">{r.barcode}</div>}
+          <CopyableCode value={r.skuCode} label="商品编码" />
+          {r.barcode && <div className="secondary"><CopyableCode value={r.barcode} label="条码" /></div>}
         </>
       ),
     },
@@ -329,8 +330,10 @@ function InventoryBalances() {
             <PageSearch>
               <PageSearchInput
                 placeholder="商品编码 / 货号 / 款号 / 条码"
+                autoSearchDelay={500}
+                allowClear
                 onSearch={(v) => {
-                  setSearch(v);
+                  setSearch(v.trim());
                   q.setPage(1);
                 }}
               />
@@ -1492,7 +1495,7 @@ export function ProductDetail() {
   const p = q.data.data;
   return (
     <>
-      <Header title={p.name} subtitle={"款号 " + p.styleNo} />
+      <Header title={p.name} subtitle={"款号 " + p.styleNo} subtitleExtra={<CopyCodeButton value={p.styleNo} label="款号" />} />
       <Card>
         <Tabs
           activeKey={activeTab}
@@ -1504,7 +1507,7 @@ export function ProductDetail() {
               children: (
                 <Descriptions
                   items={[
-                    { label: "款号", children: p.styleNo },
+                    { label: "款号", children: <CopyableCode value={p.styleNo} label="款号" /> },
                     { label: "状态", children: <Status value={p.status} /> },
                     { label: "吊牌价", children: amount(p.tagPrice) },
                     {

@@ -1,3 +1,4 @@
+import { Table } from "./code-table";
 import { PageSearch, PageSearchInput } from "./page-search";
 import { useRef, useState } from "react";
 import { Decimal } from "decimal.js";
@@ -24,7 +25,6 @@ import {
   Modal,
   Select,
   Space,
-  Table,
   Tag,
   Timeline,
   Typography,

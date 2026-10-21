@@ -1,5 +1,6 @@
+import { Table } from "./code-table";
 import { useRef, useState } from "react";
-import { Alert, App, Button, Dropdown, Modal, Radio, Space, Table, Tag, Tooltip, Upload } from "antd";
+import { Alert, App, Button, Dropdown, Modal, Radio, Space, Tag, Tooltip, Upload } from "antd";
 import { DownOutlined, DownloadOutlined, InboxOutlined, UploadOutlined } from "@ant-design/icons";
 import { useSelectionWorkspace } from "./selection-workspace";
 import { downloadSelectionWorkbook, parseSelectionWorkbook } from "./selection-workbook";

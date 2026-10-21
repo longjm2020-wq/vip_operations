@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { CopyableCode } from "./copyable-code";
 import {
   App,
   Button,
@@ -211,12 +212,12 @@ function DetailTable({
             />
           )}
           <div>
-            <Button type="link" onClick={() => onDrill(row)}>
+            <CopyableCode value={value} label={compassLabels[dimension]}><Button type="link" onClick={() => onDrill(row)}>
               {value}
-            </Button>
+            </Button></CopyableCode>
             {dimension !== "style" && (
               <small>
-                {row.styleNo}
+                <CopyableCode value={row.styleNo} label="款号" fallback={null} />
                 {row.sizes ? ` · ${row.sizes}` : ""}
               </small>
             )}

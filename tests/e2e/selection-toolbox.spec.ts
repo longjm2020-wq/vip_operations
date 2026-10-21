@@ -5,6 +5,44 @@ import { read as readXls, utils as xlsUtils } from "xlsx";
 import { selectionLayoutSchema, projectSelectionSharedLayout } from "../../packages/contracts/src/selection-layout.js";
 
 type Row = Record<string, any>;
+test("表格复制编号保留选区和只读规则，禁止查看内容不能复制", async ({ page }) => {
+  await page.addInitScript(() => {
+    (window as any).copiedCodes = [];
+    Object.defineProperty(navigator, "clipboard", { value: { writeText: async (text: string) => { (window as any).copiedCodes.push(text); } } });
+  });
+  const state = await fixture(page, "/products", ["product.read"]);
+  const material = page.locator('td[data-selection-column="material"][data-selection-row="1"]');
+  const style = page.locator('td[data-selection-column="xutiStyleNo"][data-selection-row="1"]');
+  await material.click();
+  await style.hover();
+  await style.getByRole("button", { name: "复制序缇款号 TOOL-001", exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).copiedCodes)).toEqual(["TOOL-001"]);
+  await expect(material).toHaveClass(/selection-cell-active/);
+  await expect(style).not.toHaveClass(/selection-cell-active/);
+  expect(state.gridWrites).toEqual([]);
+  state.rows[0].cellAccess = { xutiStyleNo: "deny" };
+  await page.reload();
+  await expect(style.getByLabel("受保护内容")).toBeVisible();
+  await expect(style.getByRole("button", { name: /复制/ })).toHaveCount(0);
+});
+
+test("建档预览复制完整条形码，不触发原表键盘编辑", async ({ page }) => {
+  await page.addInitScript(() => {
+    (window as any).copiedCodes = [];
+    Object.defineProperty(navigator, "clipboard", { value: { writeText: async (text: string) => { (window as any).copiedCodes.push(text); } } });
+  });
+  const state = await fixture(page, "/products", ["product.read"], true);
+  await page.locator('td[data-selection-row="1"][data-selection-column="xutiStyleNo"]').click();
+  const tool = await openTool(page, "唯品会商品建档");
+  await tool.getByRole("button", { name: "生成建档资料", exact: true }).click();
+  const copy = tool.getByRole("button", { name: "复制条形码 TOOL-001019002", exact: true });
+  await copy.focus();
+  await copy.press("Enter");
+  await expect.poll(() => page.evaluate(() => (window as any).copiedCodes)).toEqual(["TOOL-001019002"]);
+  await expect(tool.getByRole("status")).toContainText("已生成 1 款、6 条商品资料");
+  expect(state.gridWrites).toEqual([]);
+});
+
 async function fixture(page: Page, path = "/products", permissions = ["product.read", "product.update"], jushuitan = false) {
   await page.addInitScript(() => {
     const request = window.fetch.bind(window);
@@ -187,7 +225,7 @@ test("聚水潭建档只展开选中款式，预览并下载真实模板格式�
   await expect(tool.getByText("已选 1 款", { exact: true })).toBeVisible();
   await tool.getByRole("button", { name: "生成建档资料", exact: true }).click();
   await expect(tool.getByText("已生成 1 款、6 条商品资料", { exact: true })).toBeVisible();
-  await expect(tool.getByRole("cell", { name: "TOOL-001019002", exact: true })).toBeVisible();
+  await expect(tool.locator(".copyable-code-value").filter({ hasText: /^TOOL-001019002$/ })).toBeVisible();
   await tool.screenshot({ path: test.info().outputPath("jushuitan-preview.png") });
   const downloadPromise = page.waitForEvent("download");
   await tool.getByRole("button", { name: "下载 Excel", exact: true }).click();
@@ -263,7 +301,7 @@ test("唯品会建档只展开选中款式并下载真实29列XLS", async ({ pag
   await expect(tool.getByText("已选 1 款", { exact: true })).toBeVisible();
   await tool.getByRole("button", { name: "生成建档资料", exact: true }).click();
   await expect(tool.getByText("已生成 1 款、6 条商品资料", { exact: true })).toBeVisible();
-  await expect(tool.getByRole("cell", { name: "TOOL-001019002", exact: true })).toBeVisible();
+  await expect(tool.locator(".copyable-code-value").filter({ hasText: /^TOOL-001019002$/ })).toBeVisible();
   await tool.screenshot({ path: test.info().outputPath("vip-registration-preview.png") });
   const downloadPromise = page.waitForEvent("download");
   await tool.getByRole("button", { name: "下载 Excel", exact: true }).click();

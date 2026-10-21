@@ -1,3 +1,4 @@
+import { Table } from "./code-table";
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -5,14 +6,15 @@ import {
   App,
   Button,
   Card,
+  Drawer,
   Image,
   Select,
   Space,
-  Table,
   Tag,
   Tooltip,
   Typography,
 } from "antd";
+import { ApiOutlined, HistoryOutlined, RightOutlined } from "@ant-design/icons";
 import { api, queryClient } from "./api";
 import { Header, useCan, when, type Row } from "./shared";
 
@@ -95,6 +97,8 @@ export function VipPage() {
   const can = useCan("vip.settings");
   const { message } = App.useApp();
   const [page, setPage] = useState(1),
+    [panel, setPanel] = useState<"compass" | "runs">("compass"),
+    [panelOpen, setPanelOpen] = useState(false),
     [busy, setBusy] = useState(false),
     [probing, setProbing] = useState<string | null>(null),
     [listingFilter, setListingFilter] = useState<string | undefined>(),
@@ -117,6 +121,10 @@ export function VipPage() {
   });
   if (!can) return <Alert type="error" title="需要唯品会接入管理权限" />;
   const data = overview.data?.data;
+  function openPanel(next: "compass" | "runs") {
+    setPanel(next);
+    setPanelOpen(true);
+  }
   async function request() {
     setBusy(true);
     try {
@@ -217,102 +225,25 @@ export function VipPage() {
             )}
           </Card>
         ))}
-        <Card title="罗盘官方取数接入">
-          <Typography.Paragraph type="secondary">
-            首次接入需由唯品会对接商务开通罗盘取数，登记 RSA 公钥并取得指标 API
-            code 与查询参数说明。管理员将对应私钥及参数配置到 Worker
-            后，可验证一次只读取数。
-          </Typography.Paragraph>
-          <Typography.Paragraph>
-            <a
-              href={
-                data?.compass?.documentation ||
-                "https://vop.vip.com/home#/api/method/detail/com.vip.data.compass.service.vop.CompassDataOspService-1.0.0"
-              }
-              target="_blank"
-              rel="noreferrer"
-            >
-              查看官方接口
-            </a>
-            {" · "}
-            <a href="/analytics/compass">查看经营分析</a>
-          </Typography.Paragraph>
-          {!data?.compass?.probes?.length && (
-            <Alert type="info" title="等待 Worker 检查罗盘取数配置" />
-          )}
-          {data?.compass?.probes?.map((p: Row) => (
-            <div key={p.namespace} style={{ marginTop: 16 }}>
-              <Space wrap>
-                {status(p.status, compassLabels)}
-                <Button
-                  onClick={() => requestCompass(p.namespace)}
-                  loading={probing === p.namespace}
-                  disabled={
-                    !p.readyForProbe ||
-                    ["PENDING", "RUNNING"].includes(p.status) ||
-                    Boolean(
-                      p.lastProbeAt &&
-                      Date.now() - new Date(p.lastProbeAt).getTime() < 60000,
-                    ) ||
-                    Boolean(
-                      !p.heartbeatAt ||
-                      Date.now() - new Date(p.heartbeatAt).getTime() > 120000,
-                    )
-                  }
-                >
-                  验证官方取数
-                </Button>
-                <span>最近验证：{when(p.lastProbeAt)}</span>
-              </Space>
-              <Space wrap style={{ marginTop: 12, display: "flex" }}>
-                {[
-                  ["罗盘账号", "account"],
-                  ["RSA 私钥", "privateKeyFile"],
-                  ["指标 API code", "apiCode"],
-                  ["查询参数", "parameters"],
-                ].map(([label, key]) => (
-                  <span key={key}>
-                    {label}：
-                    <Tag color={p.configured?.[key] ? "green" : "default"}>
-                      {p.configured?.[key] ? "已配置" : "待配置"}
-                    </Tag>
-                  </span>
-                ))}
-              </Space>
-              {p.lastError && (
-                <Alert
-                  style={{ marginTop: 12 }}
-                  type="warning"
-                  title={
-                    compassErrors[p.lastError] ||
-                    "只读取数验证未通过，请管理员核对平台配置。"
-                  }
-                />
-              )}
-              {p.status === "RESPONSE_RECEIVED" && (
-                <>
-                  <Typography.Paragraph style={{ marginTop: 12 }}>
-                    业务状态码：{p.businessCode} · 本页 {p.rowCount ?? 0} 行 ·
-                    {p.hasNextCursor
-                      ? "平台返回了下一页游标"
-                      : "平台未返回下一页游标"}
-                    {p.sourceUpdateTime &&
-                      ` · 平台更新时间：${p.sourceUpdateTime}`}
-                  </Typography.Paragraph>
-                  <Typography.Paragraph type="secondary">
-                    字段：{p.fieldNames?.join("、") || "本页无字段"}
-                  </Typography.Paragraph>
-                </>
-              )}
-            </div>
-          ))}
-          <Typography.Paragraph
-            type="secondary"
-            style={{ marginTop: 16, marginBottom: 0 }}
+
+        <Space wrap size="middle" aria-label="接入管理工具">
+          <Button
+            icon={<ApiOutlined aria-hidden />}
+            aria-haspopup="dialog"
+            aria-expanded={panelOpen && panel === "compass"}
+            onClick={() => openPanel("compass")}
           >
-            当前经营分析使用已导入报表。取数验证只核对一页响应，指标口径及完整分页尚待确认；收到响应不代表完整同步，也不自动替换报表或启用每日邮件。
-          </Typography.Paragraph>
-        </Card>
+            罗盘官方取数接入 <RightOutlined aria-hidden />
+          </Button>
+          <Button
+            icon={<HistoryOutlined aria-hidden />}
+            aria-haspopup="dialog"
+            aria-expanded={panelOpen && panel === "runs"}
+            onClick={() => openPanel("runs")}
+          >
+            最近同步记录 <RightOutlined aria-hidden />
+          </Button>
+        </Space>
         <Card
           title="平台商品库"
           extra={
@@ -509,27 +440,149 @@ export function VipPage() {
             />
           </div>
         </Card>
-        <Card title="最近同步记录">
-          <Typography.Paragraph type="secondary">
-            断点按页保存；重复记录不会重复入库。异常记录会隔离保存，修复解析规则后自动重试。
-          </Typography.Paragraph>
-          <Table<Row>
-            rowKey="id"
-            dataSource={data?.runs || []}
-            pagination={{ pageSize: 10 }}
-            scroll={{ x: 900 }}
-            columns={[
-              { title: "开始时间", dataIndex: "startedAt", render: when },
-              { title: "状态", dataIndex: "status", render: (v) => status(v) },
-              { title: "页数", dataIndex: "pages" },
-              { title: "接收", dataIndex: "received" },
-              { title: "新增 / 更新", dataIndex: "changed" },
-              { title: "异常尝试", dataIndex: "rejected" },
-              { title: "错误代码", dataIndex: "errorCode" },
-            ]}
-          />
-        </Card>
       </Space>
+      <Drawer
+        title={panel === "runs" ? "最近同步记录" : "罗盘官方取数接入"}
+        open={panelOpen}
+        onClose={() => setPanelOpen(false)}
+        size={panel === "runs" ? 1040 : 760}
+        styles={{ wrapper: { maxWidth: "100%" } }}
+        destroyOnHidden
+      >
+        {overview.error && (
+          <Alert
+            type="error"
+            showIcon
+            style={{ marginBottom: 16 }}
+            title="读取同步状态失败"
+            description={overview.error.message}
+          />
+        )}
+        {panel === "compass" && (
+          <>
+            <Typography.Paragraph type="secondary">
+              首次接入需由唯品会对接商务开通罗盘取数，登记 RSA 公钥并取得指标
+              API code 与查询参数说明。管理员将对应私钥及参数配置到 Worker
+              后，可验证一次只读取数。
+            </Typography.Paragraph>
+            <Typography.Paragraph>
+              <a
+                href={
+                  data?.compass?.documentation ||
+                  "https://vop.vip.com/home#/api/method/detail/com.vip.data.compass.service.vop.CompassDataOspService-1.0.0"
+                }
+                target="_blank"
+                rel="noreferrer"
+              >
+                查看官方接口
+              </a>
+              {" · "}
+              <a href="/analytics/compass">查看经营分析</a>
+            </Typography.Paragraph>
+            {!data?.compass?.probes?.length && (
+              <Alert type="info" title="等待 Worker 检查罗盘取数配置" />
+            )}
+            {data?.compass?.probes?.map((p: Row) => (
+              <div key={p.namespace} style={{ marginTop: 16 }}>
+                <Space wrap>
+                  {status(p.status, compassLabels)}
+                  <Button
+                    onClick={() => requestCompass(p.namespace)}
+                    loading={probing === p.namespace}
+                    disabled={
+                      !p.readyForProbe ||
+                      ["PENDING", "RUNNING"].includes(p.status) ||
+                      Boolean(
+                        p.lastProbeAt &&
+                        Date.now() - new Date(p.lastProbeAt).getTime() < 60000,
+                      ) ||
+                      Boolean(
+                        !p.heartbeatAt ||
+                        Date.now() - new Date(p.heartbeatAt).getTime() > 120000,
+                      )
+                    }
+                  >
+                    验证官方取数
+                  </Button>
+                  <span>最近验证：{when(p.lastProbeAt)}</span>
+                </Space>
+                <Space wrap style={{ marginTop: 12, display: "flex" }}>
+                  {[
+                    ["罗盘账号", "account"],
+                    ["RSA 私钥", "privateKeyFile"],
+                    ["指标 API code", "apiCode"],
+                    ["查询参数", "parameters"],
+                  ].map(([label, key]) => (
+                    <span key={key}>
+                      {label}：
+                      <Tag color={p.configured?.[key] ? "green" : "default"}>
+                        {p.configured?.[key] ? "已配置" : "待配置"}
+                      </Tag>
+                    </span>
+                  ))}
+                </Space>
+                {p.lastError && (
+                  <Alert
+                    style={{ marginTop: 12 }}
+                    type="warning"
+                    title={
+                      compassErrors[p.lastError] ||
+                      "只读取数验证未通过，请管理员核对平台配置。"
+                    }
+                  />
+                )}
+                {p.status === "RESPONSE_RECEIVED" && (
+                  <>
+                    <Typography.Paragraph style={{ marginTop: 12 }}>
+                      业务状态码：{p.businessCode} · 本页 {p.rowCount ?? 0} 行 ·
+                      {p.hasNextCursor
+                        ? "平台返回了下一页游标"
+                        : "平台未返回下一页游标"}
+                      {p.sourceUpdateTime &&
+                        ` · 平台更新时间：${p.sourceUpdateTime}`}
+                    </Typography.Paragraph>
+                    <Typography.Paragraph type="secondary">
+                      字段：{p.fieldNames?.join("、") || "本页无字段"}
+                    </Typography.Paragraph>
+                  </>
+                )}
+              </div>
+            ))}
+            <Typography.Paragraph
+              type="secondary"
+              style={{ marginTop: 16, marginBottom: 0 }}
+            >
+              当前经营分析使用已导入报表。取数验证只核对一页响应，指标口径及完整分页尚待确认；收到响应不代表完整同步，也不自动替换报表或启用每日邮件。
+            </Typography.Paragraph>
+          </>
+        )}
+        {panel === "runs" && (
+          <>
+            <Typography.Paragraph type="secondary">
+              断点按页保存；重复记录不会重复入库。异常记录会隔离保存，修复解析规则后自动重试。
+            </Typography.Paragraph>
+            <Table<Row>
+              rowKey="id"
+              dataSource={data?.runs || []}
+              pagination={{ pageSize: 10 }}
+              scroll={{ x: 900 }}
+              columns={[
+                { title: "开始时间", dataIndex: "startedAt", render: when },
+                {
+                  title: "状态",
+                  dataIndex: "status",
+                  render: (v) => status(v),
+                },
+                { title: "页数", dataIndex: "pages" },
+                { title: "接收", dataIndex: "received" },
+                { title: "新增 / 更新", dataIndex: "changed" },
+                { title: "异常尝试", dataIndex: "rejected" },
+                { title: "错误代码", dataIndex: "errorCode" },
+              ]}
+            />
+          </>
+        )}
+      </Drawer>
     </>
   );
 }

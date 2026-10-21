@@ -230,11 +230,21 @@
   width: 18px;
 }
 .compass-rank-code {
-  width: 125px;
+  max-width: 125px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+  display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.compass-rank-identity { flex: 0 0 150px; min-width: 0; font-size: 12px; }
+.compass-rank-code:hover { color: #d65300; }
 .compass-rank-bar {
   flex: 1;
   background: #fff0e1;

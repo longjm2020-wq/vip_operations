@@ -1,3 +1,5 @@
+import { CopyableCode } from "./copyable-code";
+import { Table } from "./code-table";
 import { PageSearch, PageSearchInput } from "./page-search";
 import { PurchaseDrawer } from "./supply-orders";
 import { downloadSheet } from "./download-sheet";
@@ -25,7 +27,6 @@ import {
   Modal,
   Select,
   Space,
-  Table,
   Tabs,
   Tag,
   Typography,
@@ -1600,7 +1601,7 @@ export function SupplyProducts({ internal = false }: { internal?: boolean }) {
               dataIndex: "xutiStyle",
               render: (v, r) => (
                 <>
-                  {v || "待补充"}
+                  <CopyableCode value={v} label="序缇款号" fallback="待补充" />
                   {internal && (
                     <Button
                       type="link"
@@ -1774,7 +1775,7 @@ export function SupplyProducts({ internal = false }: { internal?: boolean }) {
                 {
                   key: "style",
                   label: "序缇款号",
-                  children: detail.xutiStyle || "待补充",
+                  children: <CopyableCode value={detail.xutiStyle} label="序缇款号" fallback="待补充" />,
                 },
                 {
                   key: "name",

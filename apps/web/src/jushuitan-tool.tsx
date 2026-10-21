@@ -1,3 +1,4 @@
+import { CopyableCode, productCodeLabel } from "./copyable-code";
 import { useEffect, useRef, useState } from "react";
 import { Alert, App, Button, Collapse, Select, Space, Table, Tag } from "antd";
 import { DownloadOutlined, ReloadOutlined } from "@ant-design/icons";
@@ -124,7 +125,7 @@ export function JushuitanTool({ getSelectedIds }: { getSelectedIds: () => Promis
         columns={jushuitanHeaders.map((header, index) => ({
           title: header, key: String(index), width: [2, 35].includes(index) ? 300 : index === 1 ? 260 : 170,
           fixed: index < 2 ? "left" as const : undefined,
-          render: (_: unknown, row: { values: (string | number)[] }) => <span className="jushuitan-value">{row.values[index] === "" ? "—" : row.values[index]}</span>,
+          render: (_: unknown, row: { values: (string | number)[] }) => <span className="jushuitan-value">{productCodeLabel(header) ? <CopyableCode value={row.values[index]} label={header} /> : row.values[index] === "" ? "—" : row.values[index]}</span>,
         }))}
         scroll={{ x: 7040, y: 420 }} pagination={{ pageSize: 20, showSizeChanger: false, showTotal: total => `共 ${total} 条` }}
       />

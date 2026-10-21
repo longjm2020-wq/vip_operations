@@ -1,3 +1,4 @@
+import { CopyCodeButton } from "./copyable-code";
 import { useEffect, useRef, useState } from "react";
 import { Alert, App, Button, Empty, Image, Modal, Spin } from "antd";
 import { CameraOutlined, UploadOutlined } from "@ant-design/icons";
@@ -134,6 +135,7 @@ export function SelectionImageSearch({ disabled = false, onSelect }: { disabled?
             const label = candidate.xutiStyleNo || candidate.supplierStyleNo || "未填写序缇款号", voted = feedback[String(candidate.id)];
             return <div className="selection-image-search-card" key={candidate.id}>
               <button type="button" className="selection-image-search-result" disabled={disabled || !!selecting} aria-label={`选择图片候选 ${label}`} onClick={() => void select(candidate)}><Image src={candidate.matchedImage?.url} referrerPolicy="no-referrer" fallback={invalidSelectionImage} preview={false} alt={`候选款图片 ${label}`} /><span><strong>{label}</strong><small>供应商款号：{candidate.supplierStyleNo || "—"}</small><small>供应商编码：{candidate.supplierCode || "—"}</small>{selecting === String(candidate.id) && <Spin size="small" />}</span></button>
+              <div><CopyCodeButton value={candidate.xutiStyleNo} label="序缇款号" /><CopyCodeButton value={candidate.supplierStyleNo} label="供应商款号" /></div>
               {result.feedbackToken && <div className="selection-image-search-feedback"><Button type="primary" size="small" disabled={disabled || !!selecting} aria-label={`确认同款 ${label}`} onClick={() => void select(candidate, "same")}>是同款并选择</Button><Button size="small" disabled={disabled || !!selecting || voted === "different"} aria-label={`反馈不是同款 ${label}`} onClick={() => void select(candidate, "different")}>{voted === "different" ? "已反馈不是同款" : "不是同款"}</Button></div>}
             </div>;
           })}</div></> : <Empty description={result.scannedImages ? "未找到相似度大于 60% 的同款候选，可换一张图片重试" : "未能读取可比较的款式图片，可上传款式图片后重试"} />}

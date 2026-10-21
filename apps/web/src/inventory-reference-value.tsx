@@ -1,3 +1,4 @@
+import { CopyableCode } from "./copyable-code";
 import { Tooltip } from "antd";
 import { inventoryReferencePeriods } from "../../../packages/contracts/src/inventory-summary";
 import type { Row } from "./shared";
@@ -99,7 +100,7 @@ export function InventoryReferenceValue({
         {window?.endDate ?? reference?.source?.endDate ?? "—"}
       </div>
       {coverage}
-      {reference?.barcode && <div>条码：{reference.barcode}</div>}
+      {reference?.barcode && <div>条码：<CopyableCode value={reference.barcode} label="条码" /></div>}
     </>
   );
   const title = fromReport ? (
