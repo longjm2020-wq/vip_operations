@@ -177,7 +177,7 @@ test("补货用完整日均并展示延迟回仓、交期内缺口和未核对�
   await expect(tip).toContainText("主建议未抵扣");
   await expect(tip).toContainText("到货前预计缺口 10 件");
   await expect(tip).toContainText("进货仓 2 件");
-  await page.getByRole("heading", { name: "库存明细", exact: true }).click();
+  await page.getByRole("region", { name: "库存明细", exact: true }).click({ position: { x: 2, y: 2 } });
   const downloading = page.waitForEvent("download");
   await page.getByRole("button", { name: "导出", exact: true }).click();
   const workbook = new ExcelJS.Workbook();
@@ -268,17 +268,17 @@ test("校验回仓范围，保存冲突时保留输入且不宣称成功", async
   expect(saved.size).toBe(0);
 });
 
-test("页签右侧计算图标提供日销、退货率和周期配置，保存后恢复并按新口径导出", async ({
+test("工具栏计算图标提供日销、退货率和周期配置，保存后恢复并按新口径导出", async ({
   page,
 }, testInfo) => {
   const saved = new Map<string, Saved>();
   await boot(page, saved);
   const trigger = page
-    .locator(".ant-tabs-extra-content")
+    .locator(".table-toolbar")
     .getByRole("button", { name: "计算配置", exact: true });
   await expect(trigger).toBeVisible();
   await expect(
-    page.locator(".table-toolbar").getByRole("button", { name: "计算配置" }),
+    page.locator(".ant-tabs-extra-content").getByRole("button", { name: "计算配置" }),
   ).toHaveCount(0);
   await trigger.click();
   const panel = page.getByRole("dialog", { name: "计算面板", exact: true });
@@ -308,15 +308,16 @@ test("页签右侧计算图标提供日销、退货率和周期配置，保存�
   await page.reload();
   await expect(table(page).locator('tr[data-row-key="101"]')).toBeVisible();
   await expect(await cell(page, "渠道日销参考")).toHaveText("2.1429");
+  await page.getByRole("button", { name: "统计与补货说明", exact: true }).hover();
   await expect(
-    page.locator(".inventory-report-coverage").first(),
+    page.locator(".inventory-report-coverage").filter({ hasText: /罗盘匹配/ }),
   ).toContainText("近7天");
   const focus = (await cell(page, "退货率")).locator("span[tabindex]");
   await focus.focus();
   await expect(
     page.getByRole("tooltip").filter({ hasText: "最高频次" }),
   ).toContainText("7 次");
-  await page.getByRole("heading", { name: "库存明细", exact: true }).click();
+  await page.getByRole("region", { name: "库存明细", exact: true }).click({ position: { x: 2, y: 2 } });
   const download = page.waitForEvent("download");
   await page.getByRole("button", { name: "导出", exact: true }).click();
   const workbook = new ExcelJS.Workbook();

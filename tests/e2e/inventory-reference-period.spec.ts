@@ -230,7 +230,7 @@ async function fixture(page: Page, splitSkuSales = false) {
   });
   await page.goto(inventoryUrl);
   await expect(
-    page.getByRole("heading", { name: "库存明细", exact: true }),
+    page.getByRole("region", { name: "库存明细", exact: true }),
   ).toBeVisible();
   await expect(row(page)).toBeVisible();
   return { requests, writes };
@@ -241,7 +241,11 @@ const row = (page: Page, id = "101") =>
   table(page).locator(`tr[data-row-key="${id}"]`);
 const selector = (page: Page) =>
   page.getByRole("combobox", { name: "经营参考周期", exact: true });
-const coverage = (page: Page) => page.locator(".inventory-report-coverage");
+const coverage = (page: Page) => page.locator(".inventory-summary-info .inventory-report-coverage").filter({ hasText: /罗盘匹配|尚未导入/ });
+async function showInfo(page: Page) {
+  await page.getByRole("button", { name: "统计与补货说明", exact: true }).hover();
+  await expect(coverage(page)).toBeVisible();
+}
 async function cell(page: Page, name: string, id = "101") {
   const labels = (
     await table(page).getByRole("columnheader").allTextContents()
@@ -256,10 +260,12 @@ async function choose(page: Page, item: Period) {
     .locator(".ant-select-dropdown .ant-select-item-option")
     .filter({ hasText: new RegExp(`^${item.label}$`) })
     .click();
+  await showInfo(page);
   await expect(coverage(page)).toContainText(item.startDate);
   await expect(coverage(page)).toContainText(endDate);
 }
 async function tooltip(page: Page, name: string) {
+  await page.mouse.move(0, 0);
   const target = (await cell(page, name)).locator("span[tabindex]").first();
   await target.focus();
   await expect(target).toHaveAttribute("aria-describedby", /.+/);
@@ -304,16 +310,18 @@ test("经营参考提供七个周期，切换重取第一页且跨汇总维度�
     const periodTip = await tooltip(page, "渠道日销参考");
     await expect(periodTip).toContainText(item.startDate);
     await expect(periodTip).toContainText(endDate);
-    await page.getByRole("heading", { name: "库存明细", exact: true }).click();
+    await page.getByRole("region", { name: "库存明细", exact: true }).click({ position: { x: 2, y: 2 } });
   }
-  await page.getByRole("tab", { name: "货号", exact: true }).click();
+  await page.getByRole("combobox", { name: "库存汇总维度", exact: true }).click();
+  await page.locator(".ant-select-dropdown:visible .ant-select-item-option").filter({ hasText: /^货号$/ }).click();
   await expect(selector(page)).toHaveCount(0);
-  await page.getByRole("tab", { name: "款号", exact: true }).click();
+  await page.getByRole("combobox", { name: "库存汇总维度", exact: true }).click();
+  await page.locator(".ant-select-dropdown:visible .ant-select-item-option").filter({ hasText: /^款号$/ }).click();
   await expect(selector(page)).toHaveCount(0);
-  await page
-    .getByRole("tab", { name: "条码（商品编码）", exact: true })
-    .click();
+  await page.getByRole("combobox", { name: "库存汇总维度", exact: true }).click();
+  await page.locator(".ant-select-dropdown:visible .ant-select-item-option").filter({ hasText: /^条码（商品编码）$/ }).click();
   await expect(selector(page).locator("..")).toContainText("近1年");
+  await showInfo(page);
   await expect(coverage(page)).toContainText("2025-10-16");
   expect(state.writes).toEqual([]);
 });
@@ -331,11 +339,11 @@ test("中位数提示展示中间两值与预估公式，导出沿用当前周�
   await expect(dailyTip).toContainText("7");
   await expect(dailyTip).not.toContainText("最高频次");
   await expect(dailyTip).not.toContainText("众数");
-  await page.getByRole("heading", { name: "库存明细", exact: true }).click();
+  await page.getByRole("region", { name: "库存明细", exact: true }).click({ position: { x: 2, y: 2 } });
   const estimatedTip = await tooltip(page, "预估销退数");
   await expect(estimatedTip).toContainText("中位数");
   await expect(estimatedTip).toContainText("240 × 20% = 48");
-  await page.getByRole("heading", { name: "库存明细", exact: true }).click();
+  await page.getByRole("region", { name: "库存明细", exact: true }).click({ position: { x: 2, y: 2 } });
 
   await choose(page, periods[1]);
   const downloadPromise = page.waitForEvent("download");
@@ -381,7 +389,7 @@ test("半年和一年历史不足时明确提示覆盖缺口，保留人工参�
     await expect(manualTip).toContainText("人工");
     await expect(manualTip).toContainText("历史覆盖不足");
     await expect(manualTip).toContainText(item.startDate);
-    await page.getByRole("heading", { name: "库存明细", exact: true }).click();
+    await page.getByRole("region", { name: "库存明细", exact: true }).click({ position: { x: 2, y: 2 } });
   }
   const downloadPromise = page.waitForEvent("download");
   await page.getByRole("button", { name: "导出", exact: true }).click();
@@ -437,7 +445,7 @@ test("期间销量按SKU显示42件的拆分，零中位数不误称无日销且
   const zeroMedianTip = await tooltip(page, "渠道日销参考");
   await expect(zeroMedianTip).toContainText("中位数");
   await expect(zeroMedianTip).toContainText("15");
-  await page.getByRole("heading", { name: "库存明细", exact: true }).click();
+  await page.getByRole("region", { name: "库存明细", exact: true }).click({ position: { x: 2, y: 2 } });
 
   const downloadPromise = page.waitForEvent("download");
   await page.getByRole("button", { name: "导出", exact: true }).click();
@@ -455,11 +463,13 @@ test("期间销量按SKU显示42件的拆分，零中位数不误称无日销且
   ).toEqual([15, 24, 3]);
   expect([null, "", "—"]).toContain(sheet.getRow(6).getCell(salesIndex).value);
 
-  await page.getByRole("tab", { name: "货号", exact: true }).click();
+  await page.getByRole("combobox", { name: "库存汇总维度", exact: true }).click();
+  await page.locator(".ant-select-dropdown:visible .ant-select-item-option").filter({ hasText: /^货号$/ }).click();
   await expect(
     table(page).getByRole("columnheader", { name: "期间销量", exact: true }),
   ).toHaveCount(0);
-  await page.getByRole("tab", { name: "款号", exact: true }).click();
+  await page.getByRole("combobox", { name: "库存汇总维度", exact: true }).click();
+  await page.locator(".ant-select-dropdown:visible .ant-select-item-option").filter({ hasText: /^款号$/ }).click();
   await expect(
     table(page).getByRole("columnheader", { name: "期间销量", exact: true }),
   ).toHaveCount(0);

@@ -26,7 +26,7 @@ async function fixture(page: Page, path = "/operations/vip/inventory") {
     return route.fulfill({ json: { data: [], total: 0 } });
   });
   await page.goto(path);
-  await expect(page.getByRole("heading", { name: path.includes("compass") ? "经营分析" : "库存明细", exact: true })).toBeVisible();
+  await expect(page.getByRole(path.includes("compass") ? "heading" : "region", { name: path.includes("compass") ? "经营分析" : "库存明细", exact: true })).toBeVisible();
   return { reads, writes };
 }
 
@@ -101,7 +101,8 @@ test("库存输入与粘贴自动查询，连续输入只提交最终值，回�
 test("中文组字不提前查询，完成后再计时；新查询回到首页且保留维度", async ({ page }) => {
   const state = await fixture(page), input = search(page);
   await expect(page.getByRole("button", { name: "复制款号 STYLE-001", exact: true })).toBeVisible();
-  await page.getByRole("tab", { name: "货号", exact: true }).click();
+  await page.getByRole("combobox", { name: "库存汇总维度", exact: true }).click();
+  await page.locator(".ant-select-dropdown:visible .ant-select-item-option").filter({ hasText: /^货号$/ }).click();
   await expect.poll(() => state.reads.at(-1)?.searchParams.get("dimension")).toBe("article");
   await page.locator(".ant-pagination-item-2").click();
   await expect.poll(() => state.reads.at(-1)?.searchParams.get("page")).toBe("2");

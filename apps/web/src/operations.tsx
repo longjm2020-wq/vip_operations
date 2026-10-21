@@ -7,6 +7,8 @@ import { InventoryCalculationPanel, ReplenishmentValue, replenishmentExportNote 
 import { inventoryReferenceMethodLabels, type InventoryReferenceMethod } from "../../../packages/contracts/src/compass-inventory-reference";
 import { InventoryColumnPinning } from "./inventory-column-pinning";
 import { InventoryColumnGroups } from "./inventory-column-groups";
+import { inventoryTableComponents } from "./inventory-table-layout";
+import { InventorySummaryInfo } from "./inventory-summary-info";
 import { InventoryListingStatus, InventoryListingTime, inventoryListingLabel, inventoryListingChange, inventoryListingOperation } from "./inventory-listing";
 import {
   CompassProductImage,
@@ -120,14 +122,13 @@ export function InventoryPage() {
 export function InventoryDetailsPage() {
   const canRead = useCan("inventory.read");
   return (
-    <>
-      <Header title="库存明细" subtitle="查询分仓库存与在途数量" />
+    <section aria-label="库存明细">
       {canRead ? (
         <InventoryBalances />
       ) : (
         <Alert type="warning" showIcon title="当前账号没有库存查看权限" />
       )}
-    </>
+    </section>
   );
 }
 function InventoryBalances() {
@@ -142,22 +143,18 @@ function InventoryBalances() {
   const [batch, setBatch] = useState(false);
   const { message } = App.useApp();
   const [exporting, setExporting] = useState(false);
-  const [search, setSearch] = useState(""),
-    [warehouse, setWarehouse] = useState<string>();
+  const [search, setSearch] = useState("");
   const q = useList("/inventory/summary", {
-      dimension,
-      ...(skuView ? { reportMatch, ...(referencePeriod ? { referencePeriod } : {}) } : {}),
-      ...(search ? { q: search } : {}),
-      ...(warehouse ? { warehouseId: warehouse } : {}),
-    }),
-    wh = useOptions("/warehouses");
+    dimension,
+    ...(skuView ? { reportMatch, ...(referencePeriod ? { referencePeriod } : {}) } : {}),
+    ...(search ? { q: search } : {}),
+  });
   const can = useCan("inventory.adjust"),
     canMetadata = useCan("product.update");
   const allColumns: NonNullable<TableProps<Row>["columns"]> = [
     {
       title: "图片",
       dataIndex: "mainImageUrl",
-      width: 84,
       render: (v, r) =>
         v ? (
           <CompassProductImage
@@ -171,7 +168,7 @@ function InventoryBalances() {
           "—"
         ),
     },
-    { title: "款号", dataIndex: "styleNo", width: 140 },
+    { title: "款号", dataIndex: "styleNo" },
     {
       title: "货号",
       dataIndex: "articleNo",
@@ -248,11 +245,11 @@ function InventoryBalances() {
       dataIndex: "replenishmentQty",
       render: (_, row) => <InventoryEstimateValue row={row} field="replenishmentQty" />,
     },
-    { title: "条码状态", dataIndex: "barcodeListingState", width: 140, render: (_, row) => <InventoryListingStatus row={row} /> },
-    { title: "款号状态", dataIndex: "styleListingState", width: 140, render: (_, row) => <InventoryListingStatus row={row} style /> },
-    { title: "状态核验时间", dataIndex: "listingCheckedAt", width: 190, render: (_, row) => <InventoryListingTime row={row} checked /> },
-    { title: "最后上下架时间", dataIndex: "lastListingChangeAt", width: 190, render: (_, row) => <InventoryListingTime row={row} /> },
-    { title: "最后上下架操作", dataIndex: "lastListingChangeType", width: 140, render: (_, row) => inventoryListingOperation(row) },
+    { title: "条码状态", dataIndex: "barcodeListingState", render: (_, row) => <InventoryListingStatus row={row} /> },
+    { title: "款号状态", dataIndex: "styleListingState", render: (_, row) => <InventoryListingStatus row={row} style /> },
+    { title: "状态核验时间", dataIndex: "listingCheckedAt", render: (_, row) => <InventoryListingTime row={row} checked /> },
+    { title: "最后上下架时间", dataIndex: "lastListingChangeAt", render: (_, row) => <InventoryListingTime row={row} /> },
+    { title: "最后上下架操作", dataIndex: "lastListingChangeType", render: (_, row) => inventoryListingOperation(row) },
   ];
   const skuOnly = new Set([
     "skuCode",
@@ -318,20 +315,65 @@ function InventoryBalances() {
         ].join("；")
       : "库存总计；经营参考不汇总",
   });
+  const summaryInfo = (
+    <>
+      <div className="inventory-report-coverage secondary">
+        库存与在途数量按全部仓库汇总。
+      </div>
+      {skuView && q.data?.reportCoverage && (
+        <div className="inventory-report-coverage secondary" role="status">
+          {referenceWindow?.endDate ? (
+            <>
+              罗盘匹配 {count(q.data.reportCoverage.matched)} /{" "}
+              {count(q.data.reportCoverage.total)} · {periodLabel} ·{" "}
+              {referenceWindow.startDate ?? "—"} —{" "}
+              {referenceWindow.endDate ?? "—"} · 报表覆盖{" "}
+              {referenceWindow.coveredDays} / {referenceWindow.days} 天 · 日销
+              {methodLabel(
+                q.data.replenishmentPolicy?.policy.dailySalesMethod ??
+                  referenceWindow.method,
+              )}{" "}
+              · 退货率
+              {methodLabel(q.data.replenishmentPolicy?.policy.returnRateMethod)}
+              {!referenceWindow.complete && (
+                <span className="inventory-reference-incomplete">
+                  {" "}
+                  · 历史覆盖不足，缺{" "}
+                  {Math.max(
+                    0,
+                    referenceWindow.days - referenceWindow.coveredDays,
+                  )}{" "}
+                  天
+                </span>
+              )}
+            </>
+          ) : q.data.reportCoverage.source ? (
+            `罗盘匹配 ${count(q.data.reportCoverage.matched)} / ${count(q.data.reportCoverage.total)} · ${q.data.reportCoverage.source.startDate} — ${q.data.reportCoverage.source.endDate}`
+          ) : (
+            "尚未导入完整的条码报表"
+          )}
+        </div>
+      )}
+
+      {skuView && q.data?.replenishmentPolicy && (
+        <div className="inventory-report-coverage secondary">
+          补货按完整逐日日均估算 · 采购交期{" "}
+          {q.data.replenishmentPolicy.policy.purchaseLeadDays} 天 · 发货至可再售{" "}
+          {q.data.replenishmentPolicy.policy.returnDaysMin}–
+          {q.data.replenishmentPolicy.policy.returnDaysMax} 天 · 可再售比例{" "}
+          {Number(
+            (q.data.replenishmentPolicy.policy.resalableRate * 100).toFixed(2),
+          )}
+          % ·
+          {q.data.replenishmentPolicy.policy.confirmedReturnRate == null
+            ? " 退货率未核验，主建议未抵扣退货"
+            : " 已按人工核验退货率试算"}
+        </div>
+      )}
+    </>
+  );
   return (
     <>
-      <Tabs
-        aria-label="库存汇总维度"
-        activeKey={dimension}
-        tabBarExtraContent={skuView ? <InventoryCalculationPanel referencePeriod={effectivePeriod} onSaved={(period) => {
-          setReferencePeriod(period); q.setPage(1);
-        }} /> : undefined}
-        items={inventoryDimensions.map((item) => ({ ...item }))}
-        onChange={(key) => {
-          setDimension(key as InventoryDimension);
-          q.setPage(1);
-        }}
-      />
       <InventoryColumnGroups dimension={dimension} columns={columns}>
       {({ manager, tabs, groupKeys, visit }) => <Card>
         <div className="table-toolbar">
@@ -347,14 +389,13 @@ function InventoryBalances() {
                 }}
               />
             </PageSearch>
-            <Select
-              aria-label="筛选库存仓库"
+            <Select<InventoryDimension>
+              aria-label="库存汇总维度"
               style={{ width: 180 }}
-              placeholder="全部仓库"
-              allowClear
-              options={options(wh.data)}
-              onChange={(v) => {
-                setWarehouse(v);
+              value={dimension}
+              options={inventoryDimensions.map(({ key, label }) => ({ value: key, label }))}
+              onChange={(value) => {
+                setDimension(value);
                 q.setPage(1);
               }}
             />
@@ -386,8 +427,12 @@ function InventoryBalances() {
                 }}
               />
             )}
+            <InventorySummaryInfo key={dimension}>{summaryInfo}</InventorySummaryInfo>
           </Space>
           <Space>
+            {skuView && <InventoryCalculationPanel referencePeriod={effectivePeriod} onSaved={(period) => {
+              setReferencePeriod(period); q.setPage(1);
+            }} />}
             {manager}
             {(can || canMetadata) && (
               <Button
@@ -498,48 +543,14 @@ function InventoryBalances() {
             <Refresh onClick={() => q.refetch()} />
           </Space>
         </div>
-        {skuView && q.data?.reportCoverage && (
-          <div className="inventory-report-coverage secondary" role="status">
-            {referenceWindow?.endDate ? (
-              <>
-                罗盘匹配 {count(q.data.reportCoverage.matched)} /{" "}
-                {count(q.data.reportCoverage.total)} · {periodLabel} ·{" "}
-                {referenceWindow.startDate ?? "—"} —{" "}
-                {referenceWindow.endDate ?? "—"} · 报表覆盖{" "}
-                {referenceWindow.coveredDays} / {referenceWindow.days} 天 ·
-                日销{methodLabel(q.data.replenishmentPolicy?.policy.dailySalesMethod ?? referenceWindow.method)} ·
-                退货率{methodLabel(q.data.replenishmentPolicy?.policy.returnRateMethod)}
-                {!referenceWindow.complete && (
-                  <span className="inventory-reference-incomplete">
-                    {" "}
-                    · 历史覆盖不足，缺{" "}
-                    {Math.max(
-                      0,
-                      referenceWindow.days - referenceWindow.coveredDays,
-                    )}{" "}
-                    天
-                  </span>
-                )}
-              </>
-            ) : q.data.reportCoverage.source ? (
-              `罗盘匹配 ${count(q.data.reportCoverage.matched)} / ${count(q.data.reportCoverage.total)} · ${q.data.reportCoverage.source.startDate} — ${q.data.reportCoverage.source.endDate}`
-            ) : (
-              "尚未导入完整的条码报表"
-            )}
-          </div>
-        )}
         <QueryState error={q.error} reload={() => q.refetch()} />
-        {skuView && q.data?.replenishmentPolicy && <div className="inventory-report-coverage secondary">
-          补货按完整逐日日均估算 · 采购交期 {q.data.replenishmentPolicy.policy.purchaseLeadDays} 天 ·
-          发货至可再售 {q.data.replenishmentPolicy.policy.returnDaysMin}–{q.data.replenishmentPolicy.policy.returnDaysMax} 天 ·
-          可再售比例 {Number((q.data.replenishmentPolicy.policy.resalableRate * 100).toFixed(2))}% ·
-          {q.data.replenishmentPolicy.policy.confirmedReturnRate == null ? " 退货率未核验，主建议未抵扣退货" : " 已按人工核验退货率试算"}
-        </div>}
         {tabs}
         <InventoryColumnPinning dimension={dimension} columns={columns} groupKeys={groupKeys} groupVisit={visit}>
           {(displayedColumns) => (
             <Table<Row>
               className="inventory-summary-table"
+              components={inventoryTableComponents}
+              tableLayout="fixed"
               showExport={false}
               rowKey="id"
               loading={q.isLoading}
@@ -550,7 +561,7 @@ function InventoryBalances() {
                   (width, column) => width + Number(column.width),
                   0,
                 ),
-                y: "max(220px, calc(100dvh - 325px))",
+                y: "max(220px, calc(100dvh - 300px))",
               }}
               columns={displayedColumns}
               summary={() =>
@@ -585,12 +596,7 @@ function InventoryBalances() {
         target={imagePreview}
         onClose={() => setImagePreview(null)}
       />
-      {batch && (
-        <InventoryImport
-          warehouseId={warehouse}
-          onClose={() => setBatch(false)}
-        />
-      )}
+      {batch && <InventoryImport onClose={() => setBatch(false)} />}
     </>
   );
 }

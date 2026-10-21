@@ -9,6 +9,7 @@ import { App, Dropdown, type MenuProps, type TableProps } from "antd";
 import { PushpinOutlined } from "@ant-design/icons";
 import type { InventoryDimension } from "../../../packages/contracts/src/inventory-summary";
 import { useUser, type Row } from "./shared";
+import { InventoryColumnResizeHandle, inventoryColumnWidth, useInventoryColumnWidths } from "./inventory-table-layout";
 import {
   columnClickModifiers,
   columnMenuTargets,
@@ -30,7 +31,7 @@ type Props = {
 };
 
 const headerHint =
-  "单击或按住拖动选列；Shift+单击连续选择，Ctrl（Mac 为 ⌘）+单击跳选；右键固定或取消固定";
+  "拖动右侧边缘调整列宽；单击或按住表头拖动选列，Shift连续选择，Ctrl（Mac 为 ⌘）跳选；右键固定或取消固定";
 
 function columnKey(column: Columns[number]) {
   return "dataIndex" in column ? String(column.dataIndex) : String(column.key);
@@ -56,18 +57,21 @@ export function InventoryColumnPinning(props: Props) {
       key={storageKey}
       {...props}
       storageKey={storageKey}
+      widthStorageKey={`inventory-column-widths-v1:${user.id}:${props.dimension}`}
     />
   );
 }
 
 function InventoryColumnPinningState({
-  columns,
+  columns: sourceColumns,
   children,
   storageKey,
+  widthStorageKey,
   groupKeys = [],
   groupVisit = 0,
-}: Props & { storageKey: string }) {
+}: Props & { storageKey: string; widthStorageKey: string }) {
   const { message } = App.useApp();
+  const { columns, resizeColumn } = useInventoryColumnWidths(widthStorageKey, sourceColumns);
   const [pinned, setPinned] = useState(() =>
     readPinnedColumns(storageKey, columns),
   );
@@ -133,13 +137,13 @@ function InventoryColumnPinningState({
   const fixedWidth = columns.reduce(
     (width, column) =>
       width +
-      (pinned.includes(columnKey(column)) ? Number(column.width ?? 140) : 0),
+      (pinned.includes(columnKey(column)) ? Number(column.width) : 0),
     0,
   );
   // Preserve saved choices on small windows while letting every column scroll into view.
   const tooNarrow =
     viewWidth > 0 &&
-    fixedWidth > viewWidth - (pinned.length < columns.length ? 140 : 0);
+    fixedWidth > viewWidth - (pinned.length < columns.length ? inventoryColumnWidth : 0);
   const fixed = columns.filter((column) => pinned.includes(columnKey(column)));
   const movable = columns.filter(
     (column) => !pinned.includes(columnKey(column)),
@@ -203,9 +207,11 @@ function InventoryColumnPinningState({
       ...column,
       key,
       // Fixed columns need explicit widths so headers, rows and totals share offsets.
-      width: column.width ?? 140,
+      width: column.width,
       fixed: !tooNarrow && pinned.includes(key) ? ("left" as const) : undefined,
       onHeaderCell: () => ({
+        inventoryResizeHandle: <InventoryColumnResizeHandle label={String(column.title)} width={column.width} onChange={(width, persist) => resizeColumn(key, width, persist)} />,
+        "aria-label": String(column.title),
         "data-inventory-column": key,
         "data-inventory-group": groupKeys.includes(key) || undefined,
         className: isSelected ? "inventory-column-selected" : undefined,
@@ -250,6 +256,7 @@ function InventoryColumnPinningState({
         onContextMenu: () => openMenuFor(key),
       }),
       onCell: () => ({
+        "data-inventory-cell": true,
         className: isSelected ? "inventory-column-selected" : undefined,
         onContextMenu: () => openMenuFor(key),
       }),
@@ -259,11 +266,11 @@ function InventoryColumnPinningState({
     const fixedWidth = columns.reduce(
       (width, column) =>
         width +
-        (next.includes(columnKey(column)) ? Number(column.width ?? 140) : 0),
+        (next.includes(columnKey(column)) ? Number(column.width) : 0),
       0,
     );
     const viewWidth = surface.current?.clientWidth || 0;
-    const remainingWidth = next.length < columns.length ? 140 : 0;
+    const remainingWidth = next.length < columns.length ? inventoryColumnWidth : 0;
     if (next.length && viewWidth && fixedWidth > viewWidth - remainingWidth) {
       message.warning("固定列总宽超过当前可视区域，请减少选中列后再固定");
       return;

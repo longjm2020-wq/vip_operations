@@ -20,6 +20,83 @@
   font-size: 12px;
 }
 
+.inventory-summary-info {
+  width: 500px;
+  max-width: calc(100vw - 64px);
+  overflow-wrap: anywhere;
+}
+
+.inventory-summary-info > :last-child {
+  margin-bottom: 0;
+}
+
+/* Honor explicit widths even when the remaining fields fit a wide viewport. */
+.inventory-summary-table .ant-table-container table {
+  min-width: 0 !important;
+  table-layout: fixed;
+}
+
+.inventory-summary-table .ant-table-tbody > tr[data-row-key] > td {
+  height: 84px;
+  padding: 8px 10px;
+  overflow: hidden;
+}
+
+.inventory-cell-viewport {
+  height: 66px;
+  min-width: 0;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+}
+
+.inventory-cell-content {
+  width: 100%;
+  min-width: 0;
+  max-height: 66px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.inventory-cell-content .ant-tag {
+  max-width: 100%;
+  white-space: normal;
+}
+
+.inventory-column-heading {
+  max-height: 44px;
+  overflow: hidden;
+  padding-right: 4px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.inventory-column-resize-handle {
+  position: absolute;
+  z-index: 2;
+  inset-block: 0;
+  right: 0;
+  width: 8px;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.inventory-column-resize-handle:hover,
+.inventory-column-resize-handle:focus-visible {
+  border-right: 2px solid #d4610f;
+  background: rgb(212 97 15 / 12%);
+  outline: none;
+}
+
+.inventory-column-resizing,
+.inventory-column-resizing * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+
 .inventory-summary-table th[data-inventory-group="true"] {
   border-top: 2px solid #d4610f;
 }

@@ -27,7 +27,7 @@ const allHeaders = [
   "最后上下架操作",
 ];
 
-async function fixture(page: Page) {
+async function fixture(page: Page, longContent = false, extraRows = 0) {
   let userId = "inventory-reader-101";
   const writes: string[] = [];
   const rows = [
@@ -35,9 +35,9 @@ async function fixture(page: Page) {
       id: "101",
       styleNo: "PIN-STYLE-001",
       articleNo: "PIN-ARTICLE-001",
-      skuCode: "PIN-SKU-001",
+      skuCode: longContent ? "0012345678901234567890".repeat(10) : "PIN-SKU-001",
       supplierStyleCode: "SUPPLIER-001",
-      colorName: "米白色",
+      colorName: longContent ? "米白色与浅粉色的超长颜色说明".repeat(20) : "米白色",
       sizeName: "M",
       mainImageUrl: null,
       physicalQty: 17,
@@ -70,6 +70,7 @@ async function fixture(page: Page) {
       replenishmentQty: 5,
     },
   ];
+  for (let index = 0; index < extraRows; index++) rows.push({ ...rows[1], id: String(103 + index) });
   await page.route("**/api/v1/**", async (route) => {
     const request = route.request(),
       url = new URL(request.url());
@@ -113,9 +114,9 @@ async function fixture(page: Page) {
   });
   await page.goto(inventoryUrl);
   await expect(
-    page.getByRole("heading", { name: "库存明细", exact: true }),
+    page.getByRole("region", { name: "库存明细", exact: true }),
   ).toBeVisible();
-  await expect(dataRows(page)).toHaveCount(2);
+  await expect(dataRows(page)).toHaveCount(rows.length);
   return {
     writes,
     setUser(id: string) {
@@ -346,10 +347,12 @@ test("Shift 连续选列后右键固定，可单列取消或取消所有固定�
 test("三个汇总维度分别记住固定列，刷新恢复且切换账号隔离", async ({ page }) => {
   const state = await fixture(page);
   await selectPins(page, ["款号", "在仓库存数"]);
-  await page.getByRole("tab", { name: "货号", exact: true }).click();
+  await page.getByRole("combobox", { name: "库存汇总维度", exact: true }).click();
+  await page.locator(".ant-select-dropdown:visible .ant-select-item-option").filter({ hasText: /^货号$/ }).click();
   expect(await fixedNames(page)).toEqual([]);
   await selectPins(page, ["供应商款式编码", "采购在途数"]);
-  await page.getByRole("tab", { name: "款号", exact: true }).click();
+  await page.getByRole("combobox", { name: "库存汇总维度", exact: true }).click();
+  await page.locator(".ant-select-dropdown:visible .ant-select-item-option").filter({ hasText: /^款号$/ }).click();
   expect(await fixedNames(page)).toEqual([]);
   await selectPins(page, ["调拨在途数"]);
   expect(await fixedNames(page)).toEqual(["调拨在途数"]);
@@ -357,9 +360,11 @@ test("三个汇总维度分别记住固定列，刷新恢复且切换账号隔�
   await page.reload();
   await expect(dataRows(page)).toHaveCount(2);
   expect(await fixedNames(page)).toEqual(["款号", "在仓库存数"]);
-  await page.getByRole("tab", { name: "货号", exact: true }).click();
+  await page.getByRole("combobox", { name: "库存汇总维度", exact: true }).click();
+  await page.locator(".ant-select-dropdown:visible .ant-select-item-option").filter({ hasText: /^货号$/ }).click();
   expect(await fixedNames(page)).toEqual(["供应商款式编码", "采购在途数"]);
-  await page.getByRole("tab", { name: "款号", exact: true }).click();
+  await page.getByRole("combobox", { name: "库存汇总维度", exact: true }).click();
+  await page.locator(".ant-select-dropdown:visible .ant-select-item-option").filter({ hasText: /^款号$/ }).click();
   expect(await fixedNames(page)).toEqual(["调拨在途数"]);
 
   state.setUser("inventory-reader-202");
@@ -506,4 +511,106 @@ test("按住鼠标拖过表头连续选列，Ctrl/⌘ 拖动追加范围，右�
   await page.keyboard.press("Escape");
   expect(await selectedNames(page)).toEqual([]);
   expect(state.writes).toEqual([]);
+});
+
+
+async function resize(page: Page, name: string, delta: number, cancel = false) {
+  const handle = header(page, name).getByRole("separator", { name: name + "列宽", exact: true });
+  await handle.scrollIntoViewIfNeeded();
+  const box = (await handle.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2 + delta, box.y + box.height / 2, { steps: 8 });
+  if (cancel) await page.keyboard.press("Escape");
+  await page.mouse.up();
+}
+
+async function expectWidth(page: Page, name: string, width: number) {
+  await expect(header(page, name)).toBeVisible();
+  await expect(dataRows(page).first()).toBeVisible();
+  const group = await cells(page, name);
+  for (const cell of Object.values(group))
+    await expect.poll(async () => Math.round((await cell.boundingBox())!.width)).toBe(width);
+}
+
+test("库存列初始120px，长内容自动换行且不撑开宽度与84px行高", async ({ page }) => {
+  await fixture(page, true);
+  await expect(page.getByRole("heading", { name: "库存明细", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("combobox", { name: "库存汇总维度", exact: true })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "条码（商品编码）", exact: true })).toHaveCount(0);
+  for (const viewport of [{ width: 1280, height: 900 }, { width: 2200, height: 1000 }]) {
+    await page.setViewportSize(viewport);
+    await expect.poll(() => headers(page).evaluateAll(elements => elements.map(element => Math.round(element.getBoundingClientRect().width)))).toEqual(allHeaders.map(() => 120));
+    await expect.poll(() => dataRows(page).evaluateAll(elements => elements.map(element => Math.round(element.getBoundingClientRect().height)))).toEqual([84, 84]);
+  }
+  for (const name of ["商品编码", "颜色"]) {
+    const content = (await cells(page, name)).body.locator(".inventory-cell-content");
+    const sizes = await content.evaluate(element => ({ width: element.clientWidth, scrollWidth: element.scrollWidth, height: element.clientHeight, scrollHeight: element.scrollHeight, wrap: getComputedStyle(element).overflowWrap }));
+    expect(sizes.scrollWidth).toBeLessThanOrEqual(sizes.width);
+    expect(sizes.scrollHeight).toBeGreaterThan(sizes.height);
+    expect(sizes.height).toBeLessThanOrEqual(66);
+    expect(sizes.wrap).toBe("anywhere");
+  }
+  await resize(page, "颜色", -48);
+  await expectWidth(page, "颜色", 72);
+  await expect.poll(() => dataRows(page).evaluateAll(elements => elements.map(element => Math.round(element.getBoundingClientRect().height)))).toEqual([84, 84]);
+  await page.getByRole("combobox", { name: "库存汇总维度", exact: true }).click();
+  await page.locator(".ant-select-dropdown:visible .ant-select-item-option").filter({ hasText: /^款号$/ }).click();
+  await expectWidth(page, "款号", 120);
+  await expectWidth(page, "状态核验时间", 120);
+});
+
+test("拖动固定列同步表头、明细和总计，保留横滚位置并按账号和维度记忆列宽", async ({ page }) => {
+  const state = await fixture(page, false, 18);
+  await selectPins(page, ["款号", "商品编码"]);
+  const body = table(page).locator(".ant-table-body");
+  await body.evaluate(element => { element.scrollLeft = 400; });
+  await resize(page, "款号", 80);
+  await expectWidth(page, "款号", 200);
+  await expectWidth(page, "商品编码", 120);
+  expect(await selectedNames(page)).toEqual([]);
+  expect(await body.evaluate(element => element.scrollLeft)).toBe(400);
+  const group = await cells(page, "商品编码");
+  expect(await x(group.body)).toBeCloseTo(await x(group.header), 0);
+  expect(await x(group.summary)).toBeCloseTo(await x(group.header), 0);
+  await expect(table(page).locator(".ant-pagination")).toBeInViewport({ ratio: 1 });
+  await page.screenshot({ path: ".local/inventory-resize-local.png", animations: "disabled", caret: "hide" });
+  await page.reload();
+  await expectWidth(page, "款号", 200);
+  await page.getByRole("combobox", { name: "库存汇总维度", exact: true }).click();
+  await page.locator(".ant-select-dropdown:visible .ant-select-item-option").filter({ hasText: /^款号$/ }).click();
+  await expectWidth(page, "款号", 120);
+  await resize(page, "款号", 40);
+  await expectWidth(page, "款号", 160);
+  await page.getByRole("combobox", { name: "库存汇总维度", exact: true }).click();
+  await page.locator(".ant-select-dropdown:visible .ant-select-item-option").filter({ hasText: /^条码（商品编码）$/ }).click();
+  await expectWidth(page, "款号", 200);
+  state.setUser("inventory-reader-102");
+  await page.reload();
+  await expectWidth(page, "款号", 120);
+  expect(state.writes).toEqual([]);
+});
+
+test("取消拖动恢复原宽度，双击恢复120px，键盘调整有上下限", async ({ page }) => {
+  await fixture(page);
+  await resize(page, "款号", 60);
+  await expectWidth(page, "款号", 180);
+  await resize(page, "款号", 90, true);
+  await expectWidth(page, "款号", 180);
+  await expect(page.locator("body")).not.toHaveClass(/inventory-column-resizing/);
+  await page.reload();
+  await expectWidth(page, "款号", 180);
+  const handle = header(page, "款号").getByRole("separator");
+  await handle.dblclick();
+  await expectWidth(page, "款号", 120);
+  await handle.focus();
+  await page.keyboard.press("ArrowRight");
+  await expectWidth(page, "款号", 130);
+  await page.keyboard.press("Home");
+  await expectWidth(page, "款号", 120);
+  await resize(page, "款号", -110);
+  await expectWidth(page, "款号", 72);
+  await resize(page, "款号", 650);
+  await expectWidth(page, "款号", 600);
+  expect(await selectedNames(page)).toEqual([]);
 });

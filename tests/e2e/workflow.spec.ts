@@ -180,8 +180,9 @@ test("真实前后端：建档、采购确认、两次入库、流水追溯", as
   await page.goto(poUrl);
   await expect(page.getByText("已完成", { exact: true }).first()).toBeVisible();
   await page.goto("/operations/vip/inventory");
-  await page.getByRole("combobox", { name: "筛选库存仓库" }).click();
-  await page.getByText("验收仓", { exact: true }).last().click();
+  const inventorySearch = page.getByRole("textbox", { name: "商品编码 / 货号 / 款号 / 条码", exact: true });
+  await inventorySearch.fill("E2E-BK-L");
+  await inventorySearch.press("Enter");
   await expect(
     page.getByRole("row").filter({ hasText: "E2E-BK-L" }),
   ).toContainText("100");
@@ -373,8 +374,9 @@ test("小卡片 Excel 库存导入，网络重试不重复增加库存", async (
     .getByRole("button", { name: "关闭", exact: true })
     .click();
   await expect(importDialog).not.toBeVisible();
-  await page.getByRole("combobox", { name: "筛选库存仓库" }).click();
-  await page.getByText("验收仓", { exact: true }).last().click();
+  const inventorySearch = page.getByRole("textbox", { name: "商品编码 / 货号 / 款号 / 条码", exact: true });
+  await inventorySearch.fill("E2E-BK-L");
+  await inventorySearch.press("Enter");
   await expect(
     page.getByRole("row").filter({ hasText: "E2E-BK-L" }),
   ).toContainText("115");

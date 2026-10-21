@@ -110,10 +110,11 @@ test("库存管理：发货核销、SKU 差异质检、进货仓入库与人工�
     .click();
   await page.getByRole("link", { name: "库存明细", exact: true }).click();
   await expect(
-    page.getByRole("heading", { name: "库存明细", exact: true }),
+    page.getByRole("region", { name: "库存明细", exact: true }),
   ).toBeVisible();
-  await page.getByRole("combobox", { name: "筛选库存仓库" }).click();
-  await page.getByText(warehouse.name, { exact: true }).last().click();
+  const inventorySearch = page.getByRole("textbox", { name: "商品编码 / 货号 / 款号 / 条码", exact: true });
+  await inventorySearch.fill(sku.skuCode);
+  await inventorySearch.press("Enter");
   const stockRow = page.getByRole("row").filter({ hasText: sku.skuCode });
   // The row action column was removed; existing SKU reference records still apply.
   await post("/inventory/fulfilment/references/" + sku.id, {
@@ -135,17 +136,18 @@ test("库存管理：发货核销、SKU 差异质检、进货仓入库与人工�
   await expect(
     page.getByRole("row", { name: "当前筛选库存总计" }),
   ).toBeVisible();
-  await page.getByRole("tab", { name: "货号", exact: true }).click();
+  await page.getByRole("combobox", { name: "库存汇总维度", exact: true }).click();
+  await page.locator(".ant-select-dropdown:visible .ant-select-item-option").filter({ hasText: /^货号$/ }).click();
   await expect(
     page.getByRole("columnheader", { name: "尺码", exact: true }),
   ).toHaveCount(0);
-  await page.getByRole("tab", { name: "款号", exact: true }).click();
+  await page.getByRole("combobox", { name: "库存汇总维度", exact: true }).click();
+  await page.locator(".ant-select-dropdown:visible .ant-select-item-option").filter({ hasText: /^款号$/ }).click();
   await expect(
     page.getByRole("columnheader", { name: "货号", exact: true }),
   ).toHaveCount(0);
-  await page
-    .getByRole("tab", { name: "条码（商品编码）", exact: true })
-    .click();
+  await page.getByRole("combobox", { name: "库存汇总维度", exact: true }).click();
+  await page.locator(".ant-select-dropdown:visible .ant-select-item-option").filter({ hasText: /^条码（商品编码）$/ }).click();
   const balance = await (
     await page.request.get("/api/v1/inventory?skuId=" + sku.id)
   ).json();

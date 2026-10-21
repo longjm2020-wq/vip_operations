@@ -178,12 +178,12 @@ test("自定义分组保存、取消、调序和删除，按账号及维度独�
   await expect(header(page, "状态核验时间")).toBeInViewport();
   await page.reload();
   await expect(tabs).toHaveAttribute("aria-selected", "true");
-  await page.getByRole("tab", { name: "货号", exact: true }).click();
+  await page.getByRole("combobox", { name: "库存汇总维度", exact: true }).click();
+  await page.locator(".ant-select-dropdown:visible .ant-select-item-option").filter({ hasText: /^货号$/ }).click();
   await expect(tabs).toHaveCount(0);
   await expect(header(page, "条码状态")).toHaveCount(0);
-  await page
-    .getByRole("tab", { name: "条码（商品编码）", exact: true })
-    .click();
+  await page.getByRole("combobox", { name: "库存汇总维度", exact: true }).click();
+  await page.locator(".ant-select-dropdown:visible .ant-select-item-option").filter({ hasText: /^条码（商品编码）$/ }).click();
   await expect(tabs).toHaveAttribute("aria-selected", "true");
   state.setUser("other-reader");
   await page.reload();
