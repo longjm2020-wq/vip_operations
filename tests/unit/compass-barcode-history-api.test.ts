@@ -67,6 +67,8 @@ const day = "2026-10-15";
 
 beforeAll(async () => {
   fixture.database = new PGlite();
+  for (const name of ["003_vop_sync.sql", "004_vop_details.sql", "042_vop_listing_status.sql"])
+    await fixture.database.exec(await readFile(new URL(`../../packages/database/migrations/${name}`, import.meta.url), "utf8"));
   await fixture.database.exec(`
     CREATE TABLE users(id bigint PRIMARY KEY); INSERT INTO users VALUES(1),(2);
     CREATE TABLE compass_imports(id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,dimension text,file_name text,file_hash text,start_date date,end_date date,
@@ -108,11 +110,32 @@ beforeAll(async () => {
 }, 30000);
 beforeEach(async () => {
   await fixture.database!.exec("TRUNCATE compass_active_imports,compass_records,compass_imports,compass_barcode_history_records,compass_barcode_history_days,compass_barcode_history_files,idempotency_records,audit_logs,inventory_replenishment_policies RESTART IDENTITY");
+  await fixture.database!.exec("TRUNCATE vop_catalog,vop_listing_states,vop_product_details");
   fixture.transactions = []; fixture.queries = [];
 });
 afterAll(async () => fixture.database?.close());
 
 describe("complete barcode daily history and inventory median windows", () => {
+  it("attaches platform images and full-style status without multiplying inventory totals across warehouses", async () => {
+    await query("INSERT INTO vop_connections(namespace,vendor_id,token_cipher,token_expires_at) VALUES('inventory-test',1,'test',now()) ON CONFLICT DO NOTHING");
+    await query(`INSERT INTO vop_catalog(namespace,external_key,barcode,style_no,product_name,cooperation_no,warehouse,source_updated_at,payload_hash)
+      VALUES('inventory-test','one','001234','STYLE','fixture',1,'one',1,'x'),('inventory-test','duplicate','001234','STYLE','fixture',1,'two',1,'x'),('inventory-test','two','UNMATCHED','STYLE','fixture',1,'one',1,'x')`);
+    await query(`INSERT INTO vop_listing_states(namespace,barcode_key,state,checked_at) VALUES('inventory-test','001234','LISTED',now()),('inventory-test','unmatched','UNLISTED',now())`);
+    const image = "https://a.vpimg4.com/sku.jpg";
+    await query("INSERT INTO vop_product_details(namespace,barcode,detail) VALUES('inventory-test','001234',$1::jsonb)", [JSON.stringify({ images: [image] })]);
+    for (const dimension of ["sku", "article", "style"]) {
+      const result = await summary({ dimension });
+      expect(result.total).toBe(1);
+      expect(result.totals.physicalQty).toBe(15);
+      expect(result.data[0]).toMatchObject({ physicalQty: 15, styleListingState: "PARTIAL", styleBarcodeCount: 2, mainImageUrl: image, inventoryImage: { source: "vip" } });
+      expect(result.data[0]).not.toHaveProperty("inventoryBarcodeKeys");
+    }
+    const warehouse = await summary({ warehouseId: "1" });
+    expect(warehouse.totals.physicalQty).toBe(10);
+    expect(warehouse.data[0].styleListingState).toBe("PARTIAL");
+    expect((await query("SELECT main_image_url FROM products WHERE id=1"))[0].main_image_url).toBe("https://example.com/catalog.jpg");
+  });
+
   it("keeps the median reference and calculates replenishment from complete daily demand", async () => {
     await finish(await report(shiftCompassDate(day, -29), day, { sales: 0 }));
     await finish(await report(day, day, { sales: 30 }));

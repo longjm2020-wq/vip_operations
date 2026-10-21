@@ -20,6 +20,11 @@ const allHeaders = [
   "补货日均",
   "可售天数",
   "补货建议",
+  "条码状态",
+  "款号状态",
+  "状态核验时间",
+  "最后上下架时间",
+  "最后上下架操作",
 ];
 
 async function fixture(page: Page) {
@@ -375,7 +380,7 @@ test("固定总宽超出窗口时阻止固定，已保存固定在窄窗口暂�
 }) => {
   const state = await fixture(page);
   await header(page, "图片").click();
-  await header(page, "补货建议").click({ modifiers: ["Shift"] });
+  await header(page, "最后上下架操作").click({ modifiers: ["Shift"] });
   expect(await selectedNames(page)).toEqual(allHeaders);
   await header(page, "款号").click({ button: "right" });
   await menuItem(page, `固定所选 ${allHeaders.length} 列`).click();
@@ -410,7 +415,7 @@ test("固定总宽超出窗口时阻止固定，已保存固定在窄窗口暂�
   await expect
     .poll(() => scrollBody.evaluate((element) => element.scrollLeft))
     .toBeGreaterThan(0);
-  await expect(header(page, "补货建议")).toBeInViewport();
+  await expect(header(page, "最后上下架操作")).toBeInViewport();
   await scrollBody.evaluate((element) => {
     element.scrollLeft = 0;
   });

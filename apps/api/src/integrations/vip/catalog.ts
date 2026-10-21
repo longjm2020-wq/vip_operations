@@ -3,7 +3,7 @@ import { pagination, parse } from "../../core.js";
 import { listingCatalogQuerySchema } from "./listing.js";
 
 export const listingCatalogCte = `WITH observations AS (
-  SELECT c.*,l.state AS last_known_listing_state,l.result_code,l.last_changed_at,l.time_warning,
+  SELECT c.*,l.state AS last_known_listing_state,l.result_code,l.last_changed_at,l.last_change_type,l.time_warning,
     l.checked_at,l.last_error AS listing_error,
     CASE WHEN c.style_no='' THEN 'barcode:'||lower(c.barcode) ELSE 'style:'||c.style_no END AS style_key,
     CASE WHEN l.last_error IS NOT NULL THEN 'ERROR' WHEN l.checked_at IS NULL THEN 'UNKNOWN'

@@ -8,7 +8,7 @@ import {
   HolderOutlined,
   PlusOutlined,
 } from "@ant-design/icons";
-import type { SelectionField } from "./selection-field-types";
+import "./selection-column-groups.css";
 
 export type SelectionColumnGroup = {
   id: string;
@@ -60,11 +60,13 @@ export function SelectionColumnGroupManager({
   visible,
   groups,
   onSave,
+  persistenceHint,
 }: {
-  columns: SelectionField[];
+  columns: { key: string; label: string; deleted?: boolean }[];
   visible: string[];
   groups: SelectionColumnGroup[];
   onSave: (groups: SelectionColumnGroup[]) => Promise<boolean | void> | boolean | void;
+  persistenceHint?: string;
 }) {
   const { message } = App.useApp();
   const [open, setOpen] = useState(false);
@@ -330,8 +332,7 @@ export function SelectionColumnGroupManager({
         </Button>
         {saveError && <Alert type="error" showIcon title={saveError} />}
         <p className="selection-column-group-help">
-          可为同一字段配置多个分组。隐藏或删除的字段暂不显示，恢复后沿用分组设置。只含公开字段的分组随本表共享，修改需要表格编辑权限；包含私有字段的分组仅本人保存，只读用户也可配置。当前
-          TAB 选择按账号及表格保存，换设备可恢复。
+          {persistenceHint ?? "可为同一字段配置多个分组。隐藏或删除的字段暂不显示，恢复后沿用分组设置。只含公开字段的分组随本表共享，修改需要表格编辑权限；包含私有字段的分组仅本人保存，只读用户也可配置。当前 TAB 选择按账号及表格保存，换设备可恢复。"}
         </p>
       </Modal>
     </>

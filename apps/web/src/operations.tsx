@@ -6,6 +6,8 @@ import { InventoryEstimateValue, InventoryReferenceValue, inventoryHasZeroMedian
 import { InventoryCalculationPanel, ReplenishmentValue, replenishmentExportNote } from "./inventory-replenishment";
 import { inventoryReferenceMethodLabels, type InventoryReferenceMethod } from "../../../packages/contracts/src/compass-inventory-reference";
 import { InventoryColumnPinning } from "./inventory-column-pinning";
+import { InventoryColumnGroups } from "./inventory-column-groups";
+import { InventoryListingStatus, InventoryListingTime, inventoryListingLabel, inventoryListingChange, inventoryListingOperation } from "./inventory-listing";
 import {
   CompassProductImage,
   CompassImagePreview,
@@ -246,6 +248,11 @@ function InventoryBalances() {
       dataIndex: "replenishmentQty",
       render: (_, row) => <InventoryEstimateValue row={row} field="replenishmentQty" />,
     },
+    { title: "条码状态", dataIndex: "barcodeListingState", width: 140, render: (_, row) => <InventoryListingStatus row={row} /> },
+    { title: "款号状态", dataIndex: "styleListingState", width: 140, render: (_, row) => <InventoryListingStatus row={row} style /> },
+    { title: "状态核验时间", dataIndex: "listingCheckedAt", width: 190, render: (_, row) => <InventoryListingTime row={row} checked /> },
+    { title: "最后上下架时间", dataIndex: "lastListingChangeAt", width: 190, render: (_, row) => <InventoryListingTime row={row} /> },
+    { title: "最后上下架操作", dataIndex: "lastListingChangeType", width: 140, render: (_, row) => inventoryListingOperation(row) },
   ];
   const skuOnly = new Set([
     "skuCode",
@@ -257,6 +264,7 @@ function InventoryBalances() {
     "coverageDays",
     "replenishmentQty",
     "planningDailySales",
+    "barcodeListingState",
   ]);
   const columns = allColumns.filter((column) => {
     const key =
@@ -276,7 +284,7 @@ function InventoryBalances() {
       )
     )
       return count(totals[key]);
-    return skuOnly.has(key) && key !== "skuCode" && key !== "sizeName"
+    return (skuOnly.has(key) && key !== "skuCode" && key !== "sizeName") || ["styleListingState", "listingCheckedAt", "lastListingChangeAt", "lastListingChangeType"].includes(key)
       ? "—"
       : null;
   };
@@ -324,7 +332,8 @@ function InventoryBalances() {
           q.setPage(1);
         }}
       />
-      <Card>
+      <InventoryColumnGroups dimension={dimension} columns={columns}>
+      {({ manager, tabs, groupKeys, visit }) => <Card>
         <div className="table-toolbar">
           <Space wrap>
             <PageSearch>
@@ -379,6 +388,7 @@ function InventoryBalances() {
             )}
           </Space>
           <Space>
+            {manager}
             {(can || canMetadata) && (
               <Button
                 aria-label="导入"
@@ -438,7 +448,12 @@ function InventoryBalances() {
                     ...Object.fromEntries(
                       keys.map((key) => [
                         key,
-                        key === "periodSalesQty"
+                        ["barcodeListingState", "styleListingState"].includes(key)
+                          ? total ? "—" : inventoryListingLabel(row[key])
+                          : key === "listingCheckedAt" ? when(row[key])
+                          : key === "lastListingChangeAt" ? inventoryListingChange(row)
+                          : key === "lastListingChangeType" ? inventoryListingOperation(row)
+                          : key === "periodSalesQty"
                           ? total ? "—" : (row.channelReference?.salesQty ?? null)
                           : key === "articleNo" &&
                         dimension === "article" &&
@@ -453,7 +468,11 @@ function InventoryBalances() {
                     ...(skuView
                       ? exportReference(total ? undefined : row)
                       : {}),
+                    listingScopeNote: total ? "平台状态不汇总" : skuView
+                      ? "条码状态与时间按款号及完整条码匹配；款号状态汇总平台全部已采集条码"
+                      : "款号状态汇总平台全部已采集条码；核验时间取最早，最后上下架时间取最近已知值",
                   });
+                  exportColumns.push({ title: "平台状态口径", dataIndex: "listingScopeNote" });
                   await exportTableData({
                     dataSource: [
                       exportRow(
@@ -516,7 +535,8 @@ function InventoryBalances() {
           可再售比例 {Number((q.data.replenishmentPolicy.policy.resalableRate * 100).toFixed(2))}% ·
           {q.data.replenishmentPolicy.policy.confirmedReturnRate == null ? " 退货率未核验，主建议未抵扣退货" : " 已按人工核验退货率试算"}
         </div>}
-        <InventoryColumnPinning dimension={dimension} columns={columns}>
+        {tabs}
+        <InventoryColumnPinning dimension={dimension} columns={columns} groupKeys={groupKeys} groupVisit={visit}>
           {(displayedColumns) => (
             <Table<Row>
               className="inventory-summary-table"
@@ -530,7 +550,7 @@ function InventoryBalances() {
                   (width, column) => width + Number(column.width),
                   0,
                 ),
-                y: "max(220px, calc(100dvh - 285px))",
+                y: "max(220px, calc(100dvh - 325px))",
               }}
               columns={displayedColumns}
               summary={() =>
@@ -559,7 +579,8 @@ function InventoryBalances() {
             />
           )}
         </InventoryColumnPinning>
-      </Card>
+      </Card>}
+      </InventoryColumnGroups>
       <CompassImagePreview
         target={imagePreview}
         onClose={() => setImagePreview(null)}

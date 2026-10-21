@@ -160,7 +160,7 @@ export function enrichOpenApi(doc: OpenAPIObject) {
   );
   for (const action of ["mark-received", "post", "cancel"])
     set("/api/v1/receipts/{id}/" + action, "post", cmdInput);
-  set("/api/v1/inventory/summary", "get", undefined, "按条码（商品编码）、货号或款号汇总库存；totals覆盖全部筛选结果");
+  set("/api/v1/inventory/summary", "get", undefined, "按条码（商品编码）、货号或款号汇总库存；totals覆盖全部筛选结果。附带只读唯品会条码/款号状态、核验和最后上下架时间；未匹配或歧义不推断状态，款号状态汇总平台全部已采集条码。图片优先使用匹配的平台主图，缺失时保留罗盘或内部档案来源，不改写库存或档案。");
   doc.paths["/api/v1/inventory/summary"].get!.parameters!.push(
     { name: "dimension", in: "query", schema: { type: "string", enum: ["sku", "article", "style"], default: "sku" } },
     { name: "reportMatch", in: "query", schema: { type: "string", enum: ["all", "matched", "unmatched"], default: "all" }, description: "条码维度按所选经营参考周期的报表匹配情况筛选" },

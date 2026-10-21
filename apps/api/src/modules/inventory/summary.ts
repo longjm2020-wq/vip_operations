@@ -17,6 +17,7 @@ import {
 } from "../../../../../packages/contracts/src/inventory-summary.js";
 import { applyCompassReferences } from "./compass-reference.js";
 import { applyCompassImages } from "./compass-images.js";
+import { applyVipInventoryCatalog } from "./vip-catalog.js";
 
 export async function inventorySummary(q: Row, tx: Tx = db, userId?: string) {
   // A report import can replace whole history days while a page is loading.
@@ -98,6 +99,7 @@ async function inventorySummarySnapshot(q: Row, tx: Tx, userId?: string) {
         ${skuView ? "min(sku_id)" : "NULL::bigint"} AS sku_id,
         ${skuView ? "min(sku_code)" : "CASE WHEN count(DISTINCT sku_id)=1 THEN min(sku_code) END"} AS sku_code,
         ${skuView ? "min(barcode)" : "NULL::text"} AS barcode,
+        ${skuView ? "NULL::text[]" : "array_agg(DISTINCT lower(COALESCE(NULLIF(trim(barcode),''),trim(sku_code))))"} AS inventory_barcode_keys,
         min(style_no) AS style_no,min(product_name) AS product_name,min(main_image_url) AS main_image_url,
         min(supplier_style_code) AS supplier_style_code,
         ${dimension === "style" ? "NULL::text" : "min(article_no)"} AS article_no,
@@ -196,11 +198,9 @@ async function inventorySummarySnapshot(q: Row, tx: Tx, userId?: string) {
         replenishment_qty: plan.quantity, coverage_days: plan.coverageDays, replenishment_plan: plan };
     })
     : data;
+  const images = dimension === "style" ? references : await applyCompassImages(references, tx, source);
   return {
-    data:
-      dimension === "style"
-        ? references
-        : await applyCompassImages(references, tx, source),
+    data: await applyVipInventoryCatalog(images, dimension, tx),
     ...p,
     total: first.group_count,
     totals,

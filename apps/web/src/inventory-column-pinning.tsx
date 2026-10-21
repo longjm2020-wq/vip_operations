@@ -24,6 +24,8 @@ type Columns = NonNullable<TableProps<Row>["columns"]>;
 type Props = {
   dimension: InventoryDimension;
   columns: Columns;
+  groupKeys?: string[];
+  groupVisit?: number;
   children: (columns: Columns) => ReactNode;
 };
 
@@ -62,6 +64,8 @@ function InventoryColumnPinningState({
   columns,
   children,
   storageKey,
+  groupKeys = [],
+  groupVisit = 0,
 }: Props & { storageKey: string }) {
   const { message } = App.useApp();
   const [pinned, setPinned] = useState(() =>
@@ -136,11 +140,53 @@ function InventoryColumnPinningState({
   const tooNarrow =
     viewWidth > 0 &&
     fixedWidth > viewWidth - (pinned.length < columns.length ? 140 : 0);
+  const fixed = columns.filter((column) => pinned.includes(columnKey(column)));
+  const movable = columns.filter(
+    (column) => !pinned.includes(columnKey(column)),
+  );
   const ordered = [
-    ...columns.filter((column) => pinned.includes(columnKey(column))),
-    ...columns.filter((column) => !pinned.includes(columnKey(column))),
+    ...fixed,
+    ...(fixed.length && groupKeys.length
+      ? [
+          ...movable.filter((column) => groupKeys.includes(columnKey(column))),
+          ...movable.filter((column) => !groupKeys.includes(columnKey(column))),
+        ]
+      : movable),
   ];
   const displayOrder = ordered.map(columnKey);
+  const viewSignature = JSON.stringify([
+    displayOrder,
+    fixed.length,
+    groupKeys,
+    groupVisit,
+  ]);
+  useEffect(() => {
+    const body = surface.current?.querySelector<HTMLElement>(".ant-table-body");
+    if (!body) return;
+    const first =
+      !fixed.length && groupKeys.length
+        ? ordered.find((column) => groupKeys.includes(columnKey(column)))
+        : undefined;
+    const target = first
+      ? surface.current?.querySelector<HTMLElement>(
+          `th[data-inventory-column="${CSS.escape(columnKey(first))}"]`,
+        )
+      : undefined;
+    body.scrollTo({
+      left: target
+        ? Math.max(
+            0,
+            body.scrollLeft +
+              target.getBoundingClientRect().left -
+              body.getBoundingClientRect().left,
+          )
+        : 0,
+      behavior: "instant",
+    });
+    setSelection({ selected: [], anchor: null });
+    setMenuTargets(null);
+    drag.current = null;
+  }, [viewSignature]);
   const selected = selection.selected.filter((key) =>
     displayOrder.includes(key),
   );
@@ -160,6 +206,8 @@ function InventoryColumnPinningState({
       width: column.width ?? 140,
       fixed: !tooNarrow && pinned.includes(key) ? ("left" as const) : undefined,
       onHeaderCell: () => ({
+        "data-inventory-column": key,
+        "data-inventory-group": groupKeys.includes(key) || undefined,
         className: isSelected ? "inventory-column-selected" : undefined,
         "aria-selected": isSelected,
         title: headerHint,

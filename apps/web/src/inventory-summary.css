@@ -20,6 +20,10 @@
   font-size: 12px;
 }
 
+.inventory-summary-table th[data-inventory-group="true"] {
+  border-top: 2px solid #d4610f;
+}
+
 .inventory-reference-incomplete {
   color: #ad4e00;
 }

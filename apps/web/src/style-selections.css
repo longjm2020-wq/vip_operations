@@ -39,19 +39,6 @@
   flex: none;
   padding-inline: 8px;
 }
-.selection-column-group-tabs { padding: 0 14px; background: #fffaf5; }
-.selection-column-group-tabs .ant-tabs-nav { margin: 0; }
-.selection-column-group-tabs .ant-tabs-tab { padding: 8px 0; }
-.selection-column-group-tabs .ant-tabs-content-holder { display: none; }
-.selection-column-group-list { display: grid; gap: 12px; max-height: 420px; overflow: auto; margin-bottom: 12px; }
-.selection-column-group-config { padding: 12px; border: 1px solid #eaded3; border-radius: 6px; background: #fffaf5; }
-.selection-column-group-name { display: flex; gap: 8px; margin-bottom: 8px; }
-.selection-column-group-config .ant-select { width: 100%; }
-.selection-column-group-handle { cursor: grab; flex: none; }
-.selection-column-group-handle:active { cursor: grabbing; }
-.selection-column-group-config[data-group-drop="before"] { box-shadow: inset 0 3px 0 #d3540b; }
-.selection-column-group-config[data-group-drop="after"] { box-shadow: inset 0 -3px 0 #d3540b; }
-.selection-column-group-help { color: #8c7564; font-size: 12px; }
 .selection-card:has(.selection-column-group-tabs) .selection-sheet { max-height: calc(100vh - 305px); }
 .selection-tool-select .ant-select-selector {
   border: 0 !important;
