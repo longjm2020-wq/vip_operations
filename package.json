@@ -58,6 +58,7 @@
     "sharp": "0.35.5",
     "tesseract.js": "7.0.0",
     "tesseract.js-core": "7.0.0",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
     "zod": "^4.3.0",
     "zustand": "^5.0.0"
   },

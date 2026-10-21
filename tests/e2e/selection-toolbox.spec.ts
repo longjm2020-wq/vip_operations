@@ -1,5 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import Excel from "exceljs";
+import { readFile } from "node:fs/promises";
+import { read as readXls, utils as xlsUtils } from "xlsx";
 import { selectionLayoutSchema, projectSelectionSharedLayout } from "../../packages/contracts/src/selection-layout.js";
 
 type Row = Record<string, any>;
@@ -138,6 +140,7 @@ for (const [label, path] of [["商品档案", "/products"], ["选款登记", "/s
     await expect(toolbox).not.toBeVisible();
     const menu = page.getByRole("dialog", { name: "工具箱", exact: true });
     await expect(menu.getByRole("button", { name: /^聚水潭商品建档/ })).toBeVisible();
+    await expect(menu.getByRole("button", { name: /^唯品会商品建档/ })).toBeVisible();
     await menu.getByRole("button", { name: "关闭", exact: true }).click();
     await expect(search).toHaveValue("TOOL-001");
     await expect(cell).toHaveAttribute("class", selectedClass!);
@@ -251,4 +254,85 @@ test("预览后权限变化阻止下载旧资料并重新生成留空字段", as
   const book = new Excel.Workbook();
   await book.xlsx.readFile((await (await downloadPromise).path())!);
   expect(book.getWorksheet("商品资料")!.getCell("AJ2").text).toBe("");
+});
+
+test("唯品会建档只展开选中款式并下载真实29列XLS", async ({ page }) => {
+  const state = await fixture(page, "/products", ["product.read"], true);
+  await page.locator('td[data-selection-row="1"][data-selection-column="xutiStyleNo"]').click();
+  const tool = await openTool(page, "唯品会商品建档");
+  await expect(tool.getByText("已选 1 款", { exact: true })).toBeVisible();
+  await tool.getByRole("button", { name: "生成建档资料", exact: true }).click();
+  await expect(tool.getByText("已生成 1 款、6 条商品资料", { exact: true })).toBeVisible();
+  await expect(tool.getByRole("cell", { name: "TOOL-001019002", exact: true })).toBeVisible();
+  await tool.screenshot({ path: test.info().outputPath("vip-registration-preview.png") });
+  const downloadPromise = page.waitForEvent("download");
+  await tool.getByRole("button", { name: "下载 Excel", exact: true }).click();
+  const download = await downloadPromise;
+  expect(download.suggestedFilename()).toMatch(/^唯品会商品建档_.*\.xls$/);
+  const path = test.info().outputPath("vip-registration.xls");
+  await download.saveAs(path);
+  const bytes = await readFile(path);
+  expect(bytes.subarray(0, 8).toString("hex")).toBe("d0cf11e0a1b11ae1");
+  const book = readXls(bytes, { type: "buffer" });
+  expect(book.SheetNames).toEqual(["商品资料"]);
+  const sheet = book.Sheets["商品资料"];
+  expect(sheet["!ref"]).toBe("A1:AC7");
+  expect(sheet.A2.v).toBe("序缇");
+  expect(sheet.C2.v).toBe("TOOL-001019");
+  expect(sheet.D2.v).toBe("TOOL-001019002");
+  expect(sheet.D7.v).toBe("TOOL-001009004");
+  expect(sheet.K5.v).toBe("咖粉");
+  expect(sheet.L2.v).toBe(4410);
+  expect(sheet.M2.v).toBe("普通商品");
+  const data = xlsUtils.sheet_to_json<(string | number)[]>(sheet, { header: 1, defval: "" });
+  expect(data[1].slice(5, 11)).toEqual(["", "半截裙", "", "S", "", "蓝紫"]);
+  expect(JSON.stringify(data)).not.toContain("UNSELECTED");
+  expect(state.detailRequests.every(id => id === "1")).toBe(true);
+  expect(state.gridWrites).toEqual([]);
+});
+
+test("唯品会没有选中款式时不读取或生成全表", async ({ page }) => {
+  const state = await fixture(page, "/style-selections", ["product.read"], true);
+  const tool = await openTool(page, "唯品会商品建档");
+  await expect(tool.getByRole("alert")).toContainText("勾选款式行");
+  await expect(tool.getByRole("button", { name: "生成建档资料", exact: true })).toBeDisabled();
+  await expect(tool.getByRole("button", { name: "下载 Excel", exact: true })).toBeDisabled();
+  expect(state.detailRequests).toEqual([]);
+});
+
+test("唯品会缺少映射会阻止导出，补齐后重新生成", async ({ page }) => {
+  const state = await fixture(page, "/project-tables/7", ["product.read"], true);
+  state.mappings["color-mappings"][0].status = "INACTIVE";
+  await page.locator('td[data-selection-row="1"][data-selection-column="xutiStyleNo"]').click();
+  const tool = await openTool(page, "唯品会商品建档");
+  await expect(tool.getByText("已选 1 款", { exact: true })).toBeVisible();
+  await tool.getByRole("button", { name: "生成建档资料", exact: true }).click();
+  await expect(tool.getByRole("alert")).toContainText("唯一启用的三位色码");
+  await expect(tool.getByRole("button", { name: "下载 Excel", exact: true })).toBeDisabled();
+  state.mappings["color-mappings"][0].status = "ACTIVE";
+  await tool.getByRole("button", { name: "生成建档资料", exact: true }).click();
+  await expect(tool.getByText("已生成 1 款、6 条商品资料", { exact: true })).toBeVisible();
+});
+
+test("唯品会下载前核验权限变化，隐藏标题不会导出旧值", async ({ page }) => {
+  const state = await fixture(page, "/products", ["product.read"], true);
+  await page.locator('td[data-selection-row="1"][data-selection-column="xutiStyleNo"]').click();
+  const tool = await openTool(page, "唯品会商品建档");
+  await expect(tool.getByText("已选 1 款", { exact: true })).toBeVisible();
+  await tool.getByRole("button", { name: "生成建档资料", exact: true }).click();
+  await expect(tool.getByText("已生成 1 款、6 条商品资料", { exact: true })).toBeVisible();
+  let downloads = 0;
+  page.on("download", () => downloads++);
+  state.rows[0].hiddenCells = ["custom:long"];
+  await tool.getByRole("button", { name: "下载 Excel", exact: true }).click();
+  await expect(tool.getByRole("alert")).toContainText("查看权限或颜色尺码映射已变化");
+  await expect(tool.getByRole("button", { name: "下载 Excel", exact: true })).toBeDisabled();
+  expect(downloads).toBe(0);
+  await tool.getByRole("button", { name: "生成建档资料", exact: true }).click();
+  await expect(tool.getByText("已生成 1 款、6 条商品资料", { exact: true })).toBeVisible();
+  const downloadPromise = page.waitForEvent("download");
+  await tool.getByRole("button", { name: "下载 Excel", exact: true }).click();
+  const book = readXls(await readFile((await (await downloadPromise).path())!), { type: "buffer" });
+  expect(book.Sheets["商品资料"].E2?.v || "").toBe("");
+  expect(JSON.stringify(book.Sheets["商品资料"])).not.toContain("建档长标题");
 });

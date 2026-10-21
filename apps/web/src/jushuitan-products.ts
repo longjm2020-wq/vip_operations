@@ -1,7 +1,16 @@
 import { Decimal } from "decimal.js";
 import type { SelectionField } from "../../../packages/contracts/src/selection-layout.js";
-import { selectionImageColorValues } from "../../../packages/contracts/src/selection-image-colors.js";
-import { choiceDisplayText } from "./selection-choice-display.js";
+import {
+  registrationDefinitions as definitions, registrationLimits as jushuitanLimits,
+  readRegistrationSources, normalizedRegistrationSize as normalizedJushuitanSize,
+  defaultRegistrationSupplierColor as defaultJushuitanSupplierColor, registrationMappingFor as mappingFor,
+  normalizeRegistrationValue as normalize, type RegistrationKey as SourceKey,
+  type RegistrationSource as JushuitanSource, type RegistrationMapping as JushuitanMapping,
+  type RegistrationMappings as JushuitanMappings, type RegistrationIssue as JushuitanIssue,
+  type RegistrationResult as JushuitanResult,
+} from "./product-registration-sources.js";
+export { jushuitanLimits, normalizedJushuitanSize, defaultJushuitanSupplierColor };
+export type { JushuitanSource, JushuitanMapping, JushuitanMappings, JushuitanIssue, JushuitanResult };
 
 // Positional columns are intentional: the supplied template repeats 供应商名称.
 export const jushuitanHeaders = [
@@ -11,81 +20,13 @@ export const jushuitanHeaders = [
   "基本售价", "成本价", "其它价格1", "其它价格2", "其它价格3", "其它价格4", "其它价格5",
   "其它属性1", "其它属性2", "成分", "安全类别", "执行标准",
 ] as const;
-export const jushuitanLimits = { styles: 500, skus: 50000 };
 export type JushuitanKind = "upper" | "lower";
-export type JushuitanMapping = { code: string; name: string; status: string };
-export type JushuitanMappings = { colors: JushuitanMapping[]; sizes: JushuitanMapping[] };
-export type JushuitanIssue = { rowId: string; style: string; severity: "error" | "warning"; message: string };
-type RawRow = Record<string, any>;
-const definitions = {
-  style: { labels: ["序缇款号"], keys: ["xutiStyleNo"] },
-  colors: { labels: ["标准颜色"], keys: [] },
-  sizes: { labels: ["尺码范围"], keys: ["sizeRange"] },
-  supplierColors: { labels: ["供应商颜色"], keys: ["color"] },
-  category: { labels: ["三级类目", "三级品类", "三级分类"], keys: ["custom:product:categoryId"] },
-  longTitle: { labels: ["长标题"], keys: [] },
-  shortTitle: { labels: ["短标题"], keys: [] },
-  supplierStyle: { labels: ["供应商款号"], keys: ["supplierStyleNo"] },
-  supplierName: { labels: ["供应商名称"], keys: ["custom:product:defaultSupplierId", "supplierCode"] },
-  tagPrice: { labels: ["吊牌价"], keys: ["tagPrice"] },
-  vipPrice: { labels: ["唯品价"], keys: ["vipPrice"] },
-  cost: { labels: ["供货价（不含税）", "供货价(不含税)"], keys: ["supplyPriceExclTax"] },
-  material: { labels: ["成分", "材质成分", "材质"], keys: ["material"] },
-  safety: { labels: ["安全类别"], keys: [] },
-  standard: { labels: ["执行标准"], keys: [] },
-} satisfies Record<string, { labels: string[]; keys: string[] }>;
-type SourceKey = keyof typeof definitions;
-export type JushuitanSource = {
-  id: string;
-  values: Record<SourceKey, string>;
-  colors: string[];
-  sizes: string[];
-  supplierColors: string[];
-  issues: JushuitanIssue[];
-};
 export type JushuitanOverride = { kind?: JushuitanKind; supplierColors?: Record<string, string> };
 export type JushuitanOverrides = Record<string, JushuitanOverride>;
-export type JushuitanResult = { rows: (string | number)[][]; issues: JushuitanIssue[]; styleCount: number };
-const normalize = (text: string) => text.normalize("NFKC").trim().toUpperCase();
-const requiredKeys = new Set<SourceKey>(["style", "colors", "sizes", "category"]);
-
-/** Only registered, currently readable fields may contribute to a generated file. */
 export function readJushuitanSources(
-  rows: RawRow[], fields: SelectionField[], references: Record<string, { id: string; name: string }[]> = {},
+  rows: Record<string, any>[], fields: SelectionField[], references: Record<string, { id: string; name: string }[]> = {},
 ): JushuitanSource[] {
-  return rows.map(row => {
-    const values = {} as Record<SourceKey, string>;
-    const lists: Partial<Record<SourceKey, string[]>> = {};
-    const issues: JushuitanIssue[] = [];
-    for (const [key, definition] of Object.entries(definitions) as [SourceKey, { labels: string[]; keys: string[] }][]) {
-      const registered = fields.filter(field => !field.deleted);
-      const named = registered.filter(field => definition.labels.includes(field.label.trim()));
-      const candidates = named.length ? named : definition.keys.flatMap(alias => registered.filter(field => field.key === alias)).slice(0, 1);
-      const field = candidates.length === 1 ? candidates[0] : undefined;
-      let reason = !candidates.length ? "未找到字段" : candidates.length > 1 ? "存在同名字段，请调整字段名称" : "";
-      if (field && (row.hiddenCells?.includes(field.key) ||
-        (row.cellAccess && (row.cellAccess[field.key] || row.defaultCellAccess) === "deny") ||
-        (row.cellAccess && field.custom && !Object.hasOwn(row.cellAccess, field.key)))) reason = "无查看权限";
-      if (reason || !field) {
-        values[key] = "";
-        issues.push({ rowId: String(row.id), style: "", severity: requiredKeys.has(key) ? "error" : "warning", message: `${definition.labels[0]}：${reason}，未读取该字段` });
-        continue;
-      }
-      const raw = field.custom ? row.extraFields?.[field.key] : row[field.key];
-      const referenceKey = field.key.startsWith("custom:product:") ? field.key.slice("custom:product:".length) : "";
-      const reference = references[referenceKey];
-      values[key] = reference
-        ? reference.find(item => String(item.id) === String(raw))?.name || ""
-        : choiceDisplayText(field, raw).trim();
-      if (["colors", "sizes", "supplierColors"].includes(key)) lists[key] = selectionImageColorValues(field, raw);
-      if (!values[key]) issues.push({
-        rowId: String(row.id), style: "", severity: requiredKeys.has(key) ? "error" : "warning",
-        message: `${definition.labels[0]}为空${requiredKeys.has(key) ? "，请先补齐" : "，导出留空"}`,
-      });
-    }
-    return { id: String(row.id), values, colors: lists.colors || [], sizes: lists.sizes || [], supplierColors: lists.supplierColors || [],
-      issues: issues.map(issue => ({ ...issue, style: values.style || `所选记录 ${row.id}` })) };
-  });
+  return readRegistrationSources(rows, fields, Object.keys(definitions) as SourceKey[], references);
 }
 
 export function jushuitanGarmentKind(category: string): JushuitanKind | undefined {
@@ -95,33 +36,12 @@ export function jushuitanGarmentKind(category: string): JushuitanKind | undefine
   return undefined;
 }
 
-export function normalizedJushuitanSize(size: string): string {
-  const value = normalize(size).replace(/\s/g, "");
-  if (["F", "均码", "均码/F", "F/均码", "FREE", "ONESIZE"].includes(value)) return "F";
-  if (/^X{2,8}L$/.test(value)) return `${value.length - 1}XL`;
-  if (/^X{2,5}S$/.test(value)) return `${value.length - 1}XS`;
-  return value;
-}
-
 export function jushuitanSizeLabel(size: string, kind: JushuitanKind): string | undefined {
   const value = normalizedJushuitanSize(size);
   let step = ({ S: -1, M: 0, L: 1, XL: 2, XS: -2, F: 0 } as Record<string, number>)[value];
   if (step === undefined && /^[2-8]XL$/.test(value)) step = Number(value[0]) + 1;
   if (step === undefined && /^[2-5]XS$/.test(value)) step = -Number(value[0]) - 1;
   return step === undefined ? undefined : `${160 + step * 5}/${(kind === "lower" ? 68 : 84) + step * 4}A(${value})`;
-}
-
-export function defaultJushuitanSupplierColor(source: JushuitanSource, color: string): string {
-  // The supplied example pairs the two lists in order. Unequal lists need confirmation.
-  return source.colors.length === source.supplierColors.length
-    ? source.supplierColors[source.colors.indexOf(color)] || "" : "";
-}
-
-function mappingFor(value: string, entries: JushuitanMapping[], size: boolean): JushuitanMapping | undefined {
-  const key = size ? normalizedJushuitanSize : normalize;
-  const matches = entries.filter(entry => entry.status === "ACTIVE" && /^\d{3}$/.test(entry.code) &&
-    (size || entry.code !== "044") && (key(entry.name) === key(value) || entry.code === value.trim()));
-  return matches.length === 1 ? matches[0] : undefined;
 }
 
 export function buildJushuitanProducts(
