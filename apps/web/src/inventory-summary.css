@@ -30,6 +30,79 @@
   margin-bottom: 0;
 }
 
+.inventory-status-cards {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.inventory-status-card {
+  border: 1px solid #efdfd2;
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: #fffdfb;
+  min-width: 0;
+}
+
+.inventory-status-card-heading {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 6px;
+  font-size: 12px;
+}
+
+.inventory-status-card-heading .anticon {
+  color: #9a8475;
+}
+
+.inventory-status-card-options {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.inventory-status-choice {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 30px;
+  padding: 3px 12px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: #76685e;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+}
+
+.inventory-status-choice strong {
+  font-size: 17px;
+  font-variant-numeric: tabular-nums;
+  line-height: 22px;
+}
+
+.inventory-status-listed { color: #3b7853; }
+.inventory-status-partial { color: #b75b0b; }
+.inventory-status-choice:hover:not(:disabled) { background: #fff2e8; }
+.inventory-status-choice[aria-pressed="true"] {
+  border-color: #d85d0a;
+  background: #fff1e6;
+  color: #b34d08;
+}
+.inventory-status-choice:focus-visible,
+.inventory-status-card-heading .anticon:focus-visible {
+  outline: 2px solid #d85d0a;
+  outline-offset: 2px;
+}
+.inventory-status-choice:disabled { cursor: default; opacity: 0.55; }
+
+@media (max-width: 900px) {
+  .inventory-status-cards { grid-template-columns: minmax(0, 1fr); }
+}
+
 /* Honor explicit widths even when the remaining fields fit a wide viewport. */
 .inventory-summary-table .ant-table-container table {
   min-width: 0 !important;

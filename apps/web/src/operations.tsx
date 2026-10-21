@@ -9,6 +9,7 @@ import { InventoryColumnPinning } from "./inventory-column-pinning";
 import { InventoryColumnGroups } from "./inventory-column-groups";
 import { inventoryTableComponents } from "./inventory-table-layout";
 import { InventorySummaryInfo } from "./inventory-summary-info";
+import { InventoryStatusCards } from "./inventory-status-cards";
 import { InventoryListingStatus, InventoryListingTime, inventoryListingLabel, inventoryListingChange, inventoryListingOperation } from "./inventory-listing";
 import {
   CompassProductImage,
@@ -74,6 +75,8 @@ import {
   type InventoryDimension,
   type InventoryReferencePeriod,
   type InventoryReportMatch,
+  type InventoryBarcodeState,
+  type InventoryStyleState,
 } from "../../../packages/contracts/src/inventory-summary";
 import "./inventory-summary.css";
 function useAction() {
@@ -135,6 +138,8 @@ function InventoryBalances() {
   const [dimension, setDimension] = useState<InventoryDimension>("sku");
   const skuView = dimension === "sku";
   const [reportMatch, setReportMatch] = useState<InventoryReportMatch>("all");
+  const [barcodeState, setBarcodeState] = useState<InventoryBarcodeState>();
+  const [styleState, setStyleState] = useState<InventoryStyleState>();
   const [referencePeriod, setReferencePeriod] =
     useState<InventoryReferencePeriod>();
   const [imagePreview, setImagePreview] = useState<CompassImageTarget | null>(
@@ -146,6 +151,8 @@ function InventoryBalances() {
   const [search, setSearch] = useState("");
   const q = useList("/inventory/summary", {
     dimension,
+    ...(barcodeState ? { barcodeState } : {}),
+    ...(styleState ? { styleState } : {}),
     ...(skuView ? { reportMatch, ...(referencePeriod ? { referencePeriod } : {}) } : {}),
     ...(search ? { q: search } : {}),
   });
@@ -446,7 +453,7 @@ function InventoryBalances() {
             <Button
               aria-label="导出"
               icon={<ExportOutlined />}
-              disabled={!q.items.length}
+              disabled={!q.items.length || q.isFetching || !!q.error}
               loading={exporting}
               onClick={async () => {
                 setExporting(true);
@@ -513,9 +520,12 @@ function InventoryBalances() {
                     ...(skuView
                       ? exportReference(total ? undefined : row)
                       : {}),
-                    listingScopeNote: total ? "平台状态不汇总" : skuView
+                    listingScopeNote: [total ? "平台状态不汇总" : skuView
                       ? "条码状态与时间按款号及完整条码匹配；款号状态汇总平台全部已采集条码"
                       : "款号状态汇总平台全部已采集条码；核验时间取最早，最后上下架时间取最近已知值",
+                      ...(barcodeState ? [`条码状态筛选：${inventoryListingLabel(barcodeState)}；库存只汇总符合条件的条码`] : []),
+                      ...(styleState ? [`款号状态筛选：${inventoryListingLabel(styleState)}`] : []),
+                    ].join("；"),
                   });
                   exportColumns.push({ title: "平台状态口径", dataIndex: "listingScopeNote" });
                   await exportTableData({
@@ -544,6 +554,14 @@ function InventoryBalances() {
           </Space>
         </div>
         <QueryState error={q.error} reload={() => q.refetch()} />
+        <InventoryStatusCards
+          counts={q.error ? undefined : q.data?.listingCounts}
+          barcodeState={barcodeState}
+          styleState={styleState}
+          loading={q.isFetching}
+          onBarcodeChange={(value) => { setBarcodeState(value); q.setPage(1); }}
+          onStyleChange={(value) => { setStyleState(value); q.setPage(1); }}
+        />
         {tabs}
         <InventoryColumnPinning dimension={dimension} columns={columns} groupKeys={groupKeys} groupVisit={visit}>
           {(displayedColumns) => (
@@ -561,7 +579,7 @@ function InventoryBalances() {
                   (width, column) => width + Number(column.width),
                   0,
                 ),
-                y: "max(220px, calc(100dvh - 300px))",
+                y: "max(220px, calc(100dvh - 390px))",
               }}
               columns={displayedColumns}
               summary={() =>

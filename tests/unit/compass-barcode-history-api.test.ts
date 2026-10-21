@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { readFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { PGlite } from "@electric-sql/pglite";
@@ -335,6 +335,85 @@ describe("complete barcode daily history and inventory median windows", () => {
     await finish(await report("2026-10-13", day, { dimension: "style" }));
     await expect(finish(await report("2026-09-01", "2026-09-03", { dimension: "style" }))).rejects.toMatchObject({ response: { error: { code: "OLD_REPORT" } } });
     await expect(summary({ referencePeriod: "365d" })).rejects.toThrow();
+  });
+
+  describe("inventory listing cards and filters", () => {
+    const cards = (extra: Row = {}) => summary({ skuId: undefined, q: "CARDS", ...extra });
+    const counts = {
+      barcode: { total: 10, LISTED: 2, UNLISTED: 2, UNPUBLISHED: 1, other: 5 },
+      style: { total: 9, LISTED: 1, UNLISTED: 1, PARTIAL: 1, UNPUBLISHED: 1, other: 5 },
+    };
+    beforeEach(async () => {
+      await query("INSERT INTO vop_connections(namespace,vendor_id,token_cipher,token_expires_at) VALUES('cards-a',1,'test',now()),('cards-b',2,'test',now()) ON CONFLICT DO NOTHING");
+      const styles = ["ON", "OFF", "MIXED", "UNPUBLISHED", "STALE", "ERROR", "AMBIGUOUS", "CONFLICT", "UNMATCHED"];
+      for (let i = 0; i < styles.length; i++)
+        await query("INSERT INTO products(id,style_no,name,custom_fields) VALUES($1,$2,'CARDS','{}')", [100 + i, styles[i]]);
+      const codes = [
+        [100, 100, "0001", 2], [101, 100, "0001", 7], [110, 101, "0002", 4],
+        [120, 102, "0003", 5], [121, 102, "0004", 6], [130, 103, "0005", 7],
+        [140, 104, "0006", 8], [150, 105, "0007", 9], [160, 106, "0008", 10],
+        [170, 107, "0009", 11], [180, 108, "0010", 12],
+      ];
+      for (const [id, product, barcode, qty] of codes) {
+        await query("INSERT INTO skus VALUES($1,$2,$3,$4,'black','M')", [id, product, `CODE-${id}`, barcode]);
+        await query("INSERT INTO inventory_balances VALUES($1,1,$2,0,0)", [id, qty]);
+        await query("INSERT INTO inventory_sku_references(sku_id,article_no) VALUES($1,'ARTICLE')", [id]);
+      }
+      await query("INSERT INTO inventory_balances VALUES(100,2,3,0,0)");
+      const states = ["LISTED", "UNLISTED", "LISTED", "UNLISTED", "UNPUBLISHED", "LISTED", "UNLISTED", "LISTED", "LISTED"];
+      for (let i = 0; i < states.length; i++) {
+        const barcode = `000${i + 1}`;
+        const style = i === 8 ? "OTHER-PLATFORM-STYLE" : styles[[0, 1, 2, 2, 3, 4, 5, 6][i]];
+        await query(`INSERT INTO vop_catalog(namespace,external_key,barcode,style_no,product_name,cooperation_no,warehouse,source_updated_at,payload_hash)
+          VALUES('cards-a',$1,$1,$2,'test',1,'one',1,'x')`, [barcode, style]);
+        await query(`INSERT INTO vop_listing_states(namespace,barcode_key,state,checked_at,last_error)
+          VALUES('cards-a',$1,$2,now()-($3::int * interval '1 hour'),$4)`, [barcode, states[i], i === 5 ? 3 : 0, i === 6 ? "NETWORK_FAILED" : null]);
+      }
+      await query(`INSERT INTO vop_catalog(namespace,external_key,barcode,style_no,product_name,cooperation_no,warehouse,source_updated_at,payload_hash)
+        VALUES('cards-a','repeat','0001','ON','test',1,'two',1,'x'),('cards-b','0008','0008','AMBIGUOUS','test',1,'one',1,'x')`);
+      await query("INSERT INTO vop_listing_states(namespace,barcode_key,state,checked_at) VALUES('cards-b','0008','UNLISTED',now())");
+    });
+    afterEach(async () => {
+      await fixture.database!.exec("DELETE FROM inventory_balances WHERE sku_id>=100; DELETE FROM inventory_sku_references WHERE sku_id>=100; DELETE FROM skus WHERE id>=100; DELETE FROM products WHERE id>=100");
+    });
+
+    it("counts the full scope once per barcode/style, independently of pages, duplicate SKUs, warehouses and platform records", async () => {
+      const first = await cards({ pageSize: 1 });
+      expect(first).toMatchObject({ total: 11, totals: { physicalQty: 84 }, listingCounts: counts });
+      expect(first.data).toHaveLength(1);
+      expect(first.data[0]).not.toHaveProperty("listingCounts");
+      expect((await cards({ page: 99, pageSize: 1 }))).toMatchObject({ data: [], total: 11, listingCounts: counts });
+      expect((await cards({ warehouseId: "1" }))).toMatchObject({ totals: { physicalQty: 81 }, listingCounts: counts });
+      const rows = (await cards()).data;
+      expect(rows.filter((row: Row) => row.barcodeListingState === "LISTED")).toHaveLength(3);
+      expect(new Set(rows.filter((row: Row) => row.styleListingState === "PARTIAL").map((row: Row) => row.styleNo)).size).toBe(1);
+    });
+
+    it("combines states before grouping and totals without changing full-platform style classification or card counts", async () => {
+      for (const dimension of ["sku", "article", "style"]) {
+        const filtered = await cards({ dimension, barcodeState: "LISTED", styleState: "PARTIAL" });
+        expect(filtered).toMatchObject({ total: 1, totals: { physicalQty: 5 }, listingCounts: counts });
+        expect(filtered.data[0]).toMatchObject({ styleNo: "MIXED", styleListingState: "PARTIAL", physicalQty: 5 });
+      }
+      expect(await cards({ barcodeState: "LISTED", pageSize: 1 })).toMatchObject({ total: 3, totals: { physicalQty: 17 }, listingCounts: counts });
+      expect(await cards({ styleState: "PARTIAL" })).toMatchObject({ total: 2, totals: { physicalQty: 11 }, listingCounts: counts });
+      expect(await cards({ barcodeState: "UNPUBLISHED", styleState: "UNLISTED" })).toMatchObject({ data: [], total: 0, totals: { physicalQty: 0 }, listingCounts: counts });
+      expect(await cards({ q: "nothing-matches" })).toMatchObject({ data: [], listingCounts: { barcode: { total: 0, other: 0, LISTED: 0 }, style: { total: 0, PARTIAL: 0 } } });
+    });
+
+    it("uses search/report scope for counts while retaining all platform members in the style state", async () => {
+      expect(await cards({ q: "0003" })).toMatchObject({ total: 1, listingCounts: { barcode: { total: 1, LISTED: 1 }, style: { total: 1, PARTIAL: 1 } } });
+      await finish(await report(day, day));
+      await query("UPDATE compass_barcode_history_records SET barcode='0001' WHERE barcode='001234'");
+      expect(await cards({ reportMatch: "matched" })).toMatchObject({ total: 2, listingCounts: { barcode: { total: 1, LISTED: 1 }, style: { total: 1, LISTED: 1 } } });
+      expect(await cards({ reportMatch: "unmatched" })).toMatchObject({ total: 9, listingCounts: { barcode: { total: 9, LISTED: 1 }, style: { total: 8, LISTED: 0 } } });
+      expect((await cards({ dimension: "style", reportMatch: "matched" })).listingCounts).toEqual(counts);
+    });
+
+    it("rejects unsupported states instead of silently returning all inventory", async () => {
+      await expect(cards({ barcodeState: "PARTIAL" })).rejects.toThrow();
+      await expect(cards({ styleState: "LISTED' OR true" })).rejects.toThrow();
+    });
   });
 
   it("keeps the original 90-day per-file gate while allowing historical barcode segments", async () => {

@@ -14,10 +14,12 @@ import {
   inventoryReportMatchSchema,
   inventoryReferencePeriodSchema,
   inventoryStockFields,
+  inventoryBarcodeStateSchema,
+  inventoryStyleStateSchema,
 } from "../../../../../packages/contracts/src/inventory-summary.js";
 import { applyCompassReferences } from "./compass-reference.js";
 import { applyCompassImages } from "./compass-images.js";
-import { applyVipInventoryCatalog } from "./vip-catalog.js";
+import { applyVipInventoryCatalog, inventoryListingCte } from "./vip-catalog.js";
 
 export async function inventorySummary(q: Row, tx: Tx = db, userId?: string) {
   // A report import can replace whole history days while a page is loading.
@@ -34,6 +36,8 @@ async function inventorySummarySnapshot(q: Row, tx: Tx, userId?: string) {
   const skuView = dimension === "sku";
   const policy = skuView ? await replenishmentPolicy(userId, tx) : null;
   const reportMatch = parse(inventoryReportMatchSchema, q.reportMatch ?? "all");
+  const barcodeState = parse(inventoryBarcodeStateSchema.optional(), q.barcodeState);
+  const styleState = parse(inventoryStyleStateSchema.optional(), q.styleState);
   const referencePeriod = parse(inventoryReferencePeriodSchema, q.referencePeriod ?? policy?.policy.referencePeriod ?? "30d");
   const referenceStart = referencePeriod.endsWith("d")
     ? `i.end_date-${Number(referencePeriod.slice(0, -1)) - 1}`
@@ -52,12 +56,27 @@ async function inventorySummarySnapshot(q: Row, tx: Tx, userId?: string) {
       : reportMatch === "matched"
         ? "compass_matched"
         : "NOT compass_matched";
+  const statusConditions = [reportCondition];
+  if (barcodeState) {
+    vals.push(barcodeState);
+    statusConditions.push(`barcode_listing_state=$${vals.length}`);
+  }
+  if (styleState) {
+    vals.push(styleState);
+    statusConditions.push(`style_listing_state=$${vals.length}`);
+  }
+  const countStates = (field: "barcode" | "style", states: readonly string[]) => {
+    const key = field === "barcode" ? "(style_no,barcode_key)" : "style_no";
+    return `jsonb_build_object('total',count(DISTINCT ${key}),
+      'other',count(DISTINCT ${key}) FILTER(WHERE ${field}_listing_state NOT IN (${states.map(state => `'${state}'`).join(",")})),
+      ${states.map(state => `'${state}',count(DISTINCT ${key}) FILTER(WHERE ${field}_listing_state='${state}')`).join(",")})`;
+  };
   // One statement keeps the page and full filtered totals on the same snapshot.
   // Shipment quantities are aggregated before the stock join to avoid multiplying
   // a balance when a SKU has several purchase and transfer packages.
   const result = await rows(
     tx,
-    `WITH compass_source AS (
+    `${inventoryListingCte}, compass_source AS (
       SELECT i.id,i.file_name,i.start_date,i.end_date,i.normalization_version
       FROM compass_active_imports a JOIN compass_imports i ON i.id=a.import_id
       WHERE a.dimension='barcode' AND i.dimension='barcode' AND i.status='COMPLETE'
@@ -75,6 +94,10 @@ async function inventorySummarySnapshot(q: Row, tx: Tx, userId?: string) {
       GROUP BY i.sku_id,sh.warehouse_id
     ), stock AS (
       SELECT ${groupKey} AS group_key,s.id AS sku_id,s.product_id,s.sku_code,s.barcode,s.color_name,s.size_name,
+        lower(COALESCE(NULLIF(trim(s.barcode),''),trim(s.sku_code))) AS barcode_key,
+        CASE WHEN bs.matches>1 THEN 'AMBIGUOUS' WHEN bs.style_no=trim(pr.style_no) THEN bs.barcode_listing_state
+          WHEN bs.matches=1 THEN 'CONFLICT' ELSE 'UNMATCHED' END AS barcode_listing_state,
+        COALESCE(ss.style_listing_state,'UNMATCHED') AS style_listing_state,
         EXISTS(SELECT 1 FROM reference_window i JOIN compass_barcode_history_records r
           ON r.barcode=COALESCE(NULLIF(trim(s.barcode),''),trim(s.sku_code))
           AND r.business_date BETWEEN i.start_date AND i.end_date) AS compass_matched,
@@ -92,7 +115,19 @@ async function inventorySummarySnapshot(q: Row, tx: Tx, userId?: string) {
       LEFT JOIN inventory_balances b ON b.sku_id=s.id AND b.warehouse_id=w.id
       LEFT JOIN inventory_sku_references ref ON ref.sku_id=s.id
       LEFT JOIN shipment_stock sh ON sh.sku_id=s.id AND sh.warehouse_id=w.id
+      LEFT JOIN inventory_barcode_status bs ON bs.barcode_key=lower(COALESCE(NULLIF(trim(s.barcode),''),trim(s.sku_code)))
+      LEFT JOIN inventory_style_status ss ON ss.style_no=trim(pr.style_no)
       WHERE ${conditions.join(" AND ")}
+    ), coverage AS (
+      SELECT count(DISTINCT group_key)::int AS coverage_total,
+        count(DISTINCT group_key) FILTER(WHERE compass_matched)::int AS coverage_matched FROM stock
+    ), listing_counts AS (
+      SELECT jsonb_build_object(
+        'barcode',${countStates("barcode", inventoryBarcodeStateSchema.options)},
+        'style',${countStates("style", inventoryStyleStateSchema.options)}) AS listing_counts
+      FROM stock WHERE ${reportCondition}
+    ), filtered_stock AS (
+      SELECT * FROM stock WHERE ${statusConditions.join(" AND ")}
     ), grouped AS (
       SELECT group_key AS id,min(sku_id) AS sort_id,min(product_id) AS product_id,
         bool_or(compass_matched) AS compass_matched,
@@ -118,23 +153,18 @@ async function inventorySummarySnapshot(q: Row, tx: Tx, userId?: string) {
         ]
           .map((k) => `${skuView ? `max(${k})` : "NULL"} AS ${k}`)
           .join(",")}
-      FROM stock GROUP BY group_key
-    ), coverage AS (
-      SELECT count(*)::int AS coverage_total,count(*) FILTER(WHERE compass_matched)::int AS coverage_matched
-      FROM grouped
-    ), filtered AS (
-      SELECT * FROM grouped WHERE ${reportCondition}
+      FROM filtered_stock GROUP BY group_key
     ), totals AS (
       SELECT count(*)::int AS group_count,
         ${stockFields.map((k) => `COALESCE(sum(${k}),0) AS total_${k}`).join(",")}
-      FROM filtered
+      FROM grouped
     )
-    SELECT totals.*,coverage.*,i.id::text AS source_id,i.file_name AS source_file_name,
+    SELECT totals.*,coverage.*,lc.listing_counts,i.id::text AS source_id,i.file_name AS source_file_name,
       i.start_date::text AS source_start_date,i.end_date::text AS source_end_date,i.normalization_version AS source_version,
       rw.start_date::text AS window_start_date,rw.end_date::text AS window_end_date,hc.covered_days AS window_covered_days,page.*
-    FROM totals CROSS JOIN coverage CROSS JOIN history_coverage hc LEFT JOIN compass_source i ON true
+    FROM totals CROSS JOIN coverage CROSS JOIN listing_counts lc CROSS JOIN history_coverage hc LEFT JOIN compass_source i ON true
     LEFT JOIN reference_window rw ON true LEFT JOIN LATERAL (
-      SELECT * FROM filtered ORDER BY ${skuView ? "compass_matched DESC," : ""}sort_id,id LIMIT ${p.pageSize} OFFSET ${(p.page - 1) * p.pageSize}
+      SELECT * FROM grouped ORDER BY ${skuView ? "compass_matched DESC," : ""}sort_id,id LIMIT ${p.pageSize} OFFSET ${(p.page - 1) * p.pageSize}
     ) page ON true`,
     ...vals,
   );
@@ -179,7 +209,7 @@ async function inventorySummarySnapshot(q: Row, tx: Tx, userId?: string) {
             !k.startsWith("source_") &&
             !k.startsWith("coverage_") &&
             !k.startsWith("window_") &&
-            !["group_count", "sort_id"].includes(k),
+            !["group_count", "sort_id", "listing_counts"].includes(k),
         ),
       );
       for (const k of stockFields) record[k] = quantity(record[k]);
@@ -205,6 +235,7 @@ async function inventorySummarySnapshot(q: Row, tx: Tx, userId?: string) {
     total: first.group_count,
     totals,
     dimension,
+    listing_counts: first.listing_counts,
     ...(skuView
       ? {
           replenishment_policy: policy,

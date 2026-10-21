@@ -17,6 +17,22 @@ const emptyTimes = {
   time_warning: null,
 };
 
+/** One row per matching key, so status filters cannot multiply stock balances.
+ * Keep the same namespace/style ambiguity rules as the page projection below.
+ * Style state always covers the full platform style, before inventory filters.
+ */
+export const inventoryListingCte = `${listingCatalogCte}, inventory_catalog_keys AS (
+  SELECT DISTINCT namespace,style_no,lower(barcode) AS barcode_key,barcode_listing_state,style_listing_state
+  FROM catalog
+), inventory_barcode_status AS (
+  SELECT barcode_key,count(*) AS matches,min(style_no) AS style_no,
+    min(barcode_listing_state) AS barcode_listing_state
+  FROM inventory_catalog_keys GROUP BY barcode_key
+), inventory_style_status AS (
+  SELECT style_no,CASE WHEN count(DISTINCT namespace)=1 THEN min(style_listing_state) ELSE 'AMBIGUOUS' END AS style_listing_state
+  FROM inventory_catalog_keys GROUP BY style_no
+)`;
+
 /** Read existing observations once per page, in the inventory query's snapshot.
  * Never join catalog rows into inventory sums or select an arbitrary vendor.
  */
