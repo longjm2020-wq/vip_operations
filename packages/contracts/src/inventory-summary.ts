@@ -1,5 +1,11 @@
 import { z } from "zod";
 
+export const inventoryPageSizes = [20, 50, 100, 200, 500, 1000, 5000];
+export const inventoryPaginationSchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce.number().int().min(1).max(5000).default(20),
+});
+
 export const inventoryDimensionSchema = z.enum(["sku", "article", "style"]);
 export type InventoryDimension = z.infer<typeof inventoryDimensionSchema>;
 export const inventoryReportMatchSchema = z.enum([

@@ -5,12 +5,13 @@ import {
   type Row,
   type Tx,
 } from "../../../../../packages/database/src/index.js";
-import { fail, pagination, parse } from "../../core.js";
+import { fail, parse } from "../../core.js";
 import { balanceFilters } from "./service.js";
 import { calculateReplenishmentPlan } from "../../../../../packages/contracts/src/inventory-replenishment.js";
 import { replenishmentPolicy } from "./replenishment-policy.js";
 import {
   inventoryDimensionSchema,
+  inventoryPaginationSchema,
   inventoryReportMatchSchema,
   inventoryReferencePeriodSchema,
   inventoryStockFields,
@@ -42,7 +43,7 @@ async function inventorySummarySnapshot(q: Row, tx: Tx, userId?: string) {
   const referenceStart = referencePeriod.endsWith("d")
     ? `i.end_date-${Number(referencePeriod.slice(0, -1)) - 1}`
     : `(i.end_date-interval '${referencePeriod === "1y" ? 12 : Number(referencePeriod.slice(0, -1))} months'+interval '1 day')::date`;
-  const p = pagination(q),
+  const p = parse(inventoryPaginationSchema, q),
     { vals, conditions } = balanceFilters(q);
   const groupKey = skuView
     ? "'sku:'||s.id::text"

@@ -944,7 +944,7 @@ try {
         const wrapped = {
           $queryRawUnsafe: async (statement: string, ...values: unknown[]) => {
             const result = await read(statement, ...values);
-            if (!published && statement.includes("WITH compass_source AS")) {
+            if (!published && statement.includes("compass_source AS (")) {
               published = true;
               await finishImport({
                 actor: { id: user.id, username: "summary-test", displayName: "库存测试", permissions: ["analytics.manage"] },
@@ -966,6 +966,33 @@ try {
       assert.equal(after.data[0].estimatedReturns, 0);
     },
   );
+  await check("Inventory page sizes exceed 100 without truncation and preserve offsets and full totals", async () => {
+    const [product] = await sql(
+      "INSERT INTO products(style_no,name,category_id,default_supplier_id) VALUES('SUM-PAGING','分页验证',$1,$2) RETURNING id",
+      [category.id, supplier.id],
+    );
+    await sql(`INSERT INTO skus(product_id,sku_code,color_code,color_name,size_code,size_name)
+      SELECT $1,'SUM-PAGING-'||lpad(i::text,3,'0'),'01','黑色',i::text,i::text FROM generate_series(1,125) i`, [product.id]);
+    const query = { productId: product.id };
+    const first = await summary({ ...query, pageSize: 50 });
+    const last = await summary({ ...query, page: 3, pageSize: 50 });
+    assert.equal(first.data.length, 50);
+    assert.equal(last.data.length, 25);
+    assert.equal(last.data[0].skuCode, "SUM-PAGING-101");
+    for (const pageSize of [200, 5000]) {
+      const large = await summary({ ...query, pageSize });
+      assert.equal(large.total, 125);
+      assert.equal(large.pageSize, pageSize);
+      assert.equal(large.data.length, 125);
+      assert.deepEqual(large.totals, first.totals);
+      assert.deepEqual(last.totals, first.totals);
+      assert.equal((await summary({ ...query, page: 2, pageSize })).data.length, 0);
+    }
+    for (const invalid of [{ pageSize: 0 }, { pageSize: 5001 }, { pageSize: 1.5 }, { page: 0 }]) {
+      await assert.rejects(() => summary({ ...query, ...invalid }), (error: unknown) =>
+        error instanceof HttpException && error.getStatus() === 400);
+    }
+  });
   console.log(`Inventory summary: ${passed} database scenarios passed`);
   if (process.argv.includes("--serve")) {
     const server = createServer(async (req, res) => {

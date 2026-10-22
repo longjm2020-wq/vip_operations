@@ -94,10 +94,10 @@ export function Header({
     </div>
   );
 }
-export function useList(path: string, filters: Row = {}) {
+export function useList(path: string, filters: Row = {}, pageSize = 20) {
   const [page, setPage] = useState(1);
   const query = useQuery({
-    queryKey: [path, page, filters],
+    queryKey: [path, page, filters, pageSize],
     queryFn: () =>
       api(
         path +
@@ -105,7 +105,7 @@ export function useList(path: string, filters: Row = {}) {
           new URLSearchParams({
             ...filters,
             page: String(page),
-            pageSize: "20",
+            pageSize: String(pageSize),
           }),
       ),
   });

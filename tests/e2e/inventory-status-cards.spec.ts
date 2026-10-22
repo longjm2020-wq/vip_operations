@@ -108,12 +108,13 @@ async function fixture(page: Page) {
         ).values(),
       ];
     const current = Number(params.get("page") || 1);
+    const pageSize = Number(params.get("pageSize") || 20);
     return route.fulfill({
       json: {
-        data: filtered.slice((current - 1) * 20, current * 20),
+        data: filtered.slice((current - 1) * pageSize, current * pageSize),
         total: filtered.length,
         page: current,
-        pageSize: 20,
+        pageSize,
         listingCounts,
         totals: {
           physicalQty: stock,
@@ -128,6 +129,33 @@ async function fixture(page: Page) {
   await expect(choice(page, "条码状态", "上线")).toBeEnabled();
   return { requests, writes };
 }
+
+test("库存分页显示总条数并使用所选页大小，末页、切换大小、筛选和空结果均正确", async ({ page }) => {
+  const state = await fixture(page);
+  const pagination = table(page).locator(".inventory-pagination");
+  await expect(pagination).toContainText("共 60 条");
+  await pagination.getByRole("combobox", { name: "每页条数" }).click();
+  await page.locator(".ant-select-dropdown:visible .ant-select-item-option").filter({ hasText: /^50 条\/页$/ }).click();
+  await expect.poll(() => Object.fromEntries(state.requests.at(-1)!)).toMatchObject({ page: "1", pageSize: "50" });
+  await expect(table(page).locator("tr[data-row-key]")).toHaveCount(50);
+  await pagination.locator('.ant-pagination-item[title="2"]').click();
+  await expect(table(page).locator("tr[data-row-key]")).toHaveCount(10);
+  await expect(table(page).getByRole("row", { name: "当前筛选库存总计" })).toContainText("60");
+  await pagination.getByRole("combobox", { name: "每页条数" }).click();
+  await page.locator(".ant-select-dropdown:visible .ant-select-item-option").filter({ hasText: /^5000 条\/页$/ }).click();
+  await expect.poll(() => Object.fromEntries(state.requests.at(-1)!)).toMatchObject({ page: "1", pageSize: "5000" });
+  await expect(table(page).locator("tr[data-row-key]")).toHaveCount(60);
+  await choice(page, "款号状态", "上线").click();
+  await expect(pagination).toContainText("共 20 条");
+  await expect(table(page).locator("tr[data-row-key]")).toHaveCount(20);
+  await choice(page, "条码状态", "未发布").click();
+  await expect(pagination).toContainText("共 0 条");
+  await expect(table(page).locator("tr[data-row-key]")).toHaveCount(0);
+  await expect(pagination.getByRole("combobox", { name: "每页条数" })).toBeVisible();
+  await expect(pagination.locator(".ant-pagination-next")).toHaveAttribute("aria-disabled", "true");
+  expect(state.requests.at(-1)?.get("pageSize")).toBe("5000");
+  expect(state.writes).toEqual([]);
+});
 
 test("状态卡片显示全量数量，组合筛选重置分页，导出与筛选总计一致，点击与键盘可取消", async ({
   page,

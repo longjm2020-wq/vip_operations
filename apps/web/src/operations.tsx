@@ -29,6 +29,7 @@ import {
   Input,
   InputNumber,
   Modal,
+  Pagination,
   Select,
   Space,
   Tabs,
@@ -70,6 +71,7 @@ import {
 } from "./inventory-flow";
 import {
   inventoryDimensions,
+  inventoryPageSizes,
   inventoryStockFields,
   inventoryReferencePeriods,
   type InventoryDimension,
@@ -136,6 +138,7 @@ export function InventoryDetailsPage() {
 }
 function InventoryBalances() {
   const [dimension, setDimension] = useState<InventoryDimension>("sku");
+  const [pageSize, setPageSize] = useState(20);
   const skuView = dimension === "sku";
   const [reportMatch, setReportMatch] = useState<InventoryReportMatch>("all");
   const [barcodeState, setBarcodeState] = useState<InventoryBarcodeState>();
@@ -155,7 +158,7 @@ function InventoryBalances() {
     ...(styleState ? { styleState } : {}),
     ...(skuView ? { reportMatch, ...(referencePeriod ? { referencePeriod } : {}) } : {}),
     ...(search ? { q: search } : {}),
-  });
+  }, pageSize);
   const can = useCan("inventory.adjust"),
     canMetadata = useCan("product.update");
   const allColumns: NonNullable<TableProps<Row>["columns"]> = [
@@ -566,8 +569,8 @@ function InventoryBalances() {
         {tabs}
         <InventoryColumnPinning dimension={dimension} columns={columns} groupKeys={groupKeys} groupVisit={visit}>
           {(displayedColumns) => (
+            <div className="inventory-summary-table">
             <Table<Row>
-              className="inventory-summary-table"
               components={inventoryTableComponents}
               tableLayout="fixed"
               showExport={false}
@@ -599,14 +602,24 @@ function InventoryBalances() {
                   </AntTable.Summary>
                 ) : null
               }
-              pagination={{
-                current: q.page,
-                total: q.total,
-                pageSize: 20,
-                onChange: q.setPage,
-                showSizeChanger: false,
+              pagination={false}
+            />
+            <Pagination
+              className="inventory-pagination"
+              current={q.page}
+              total={q.total}
+              pageSize={pageSize}
+              pageSizeOptions={inventoryPageSizes}
+              showSizeChanger={{ "aria-label": "每页条数" }}
+              showTotal={(total) => !q.data ? q.isFetching ? "加载中…" : "尚未加载" : `共 ${total} 条`}
+              onChange={(nextPage, nextPageSize) => {
+                if (nextPageSize !== pageSize) {
+                  setPageSize(nextPageSize);
+                  q.setPage(1);
+                } else q.setPage(nextPage);
               }}
             />
+            </div>
           )}
         </InventoryColumnPinning>
       </Card>}

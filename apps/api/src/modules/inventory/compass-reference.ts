@@ -33,7 +33,9 @@ export async function applyCompassReferences(
       FROM skus WHERE COALESCE(NULLIF(trim(barcode),''),trim(sku_code))=ANY($1::text[])
       GROUP BY COALESCE(NULLIF(trim(barcode),''),trim(sku_code))
     )
-    SELECT r.barcode,r.business_date::text AS business_date,r.payload,d.normalization_version,m.sku_count
+    SELECT r.barcode,r.business_date::text AS business_date,
+      r.payload->'metrics'->'salesQty' AS sales_qty,r.payload->'reportedReturnRate' AS reported_return_rate,
+      d.normalization_version,m.sku_count
     FROM compass_barcode_history_records r JOIN compass_barcode_history_days d USING(business_date)
     LEFT JOIN sku_matches m ON m.barcode=r.barcode
     WHERE r.barcode=ANY($1::text[])
@@ -51,8 +53,8 @@ export async function applyCompassReferences(
     const days = byBarcode.get(record.barcode) || [];
     days.push({
       date: record.business_date,
-      salesQty: record.payload.metrics.salesQty,
-      reportedReturnRate: record.payload.reportedReturnRate,
+      salesQty: record.sales_qty,
+      reportedReturnRate: record.reported_return_rate,
     });
     byBarcode.set(record.barcode, days);
     if (record.normalization_version < 3) legacyBarcodes.add(record.barcode);
