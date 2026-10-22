@@ -2,7 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { readFile } from "node:fs/promises";
 import { PGlite } from "@electric-sql/pglite";
 import { applyVipInventoryCatalog as applyVipListingStatuses } from "../../apps/api/src/modules/inventory/vip-catalog.js";
-import type { Row, Tx } from "../../packages/database/src/index.js";
+import type { Tx } from "../../packages/database/src/index.js";
 
 let database: PGlite;
 let queryCount = 0;
