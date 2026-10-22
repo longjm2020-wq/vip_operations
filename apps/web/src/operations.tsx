@@ -162,6 +162,7 @@ function InventoryBalances() {
     {
       title: "图片",
       dataIndex: "mainImageUrl",
+      className: "inventory-image-cell",
       render: (v, r) =>
         v ? (
           <CompassProductImage

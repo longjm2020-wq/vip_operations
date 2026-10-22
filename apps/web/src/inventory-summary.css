@@ -139,6 +139,17 @@
   white-space: normal;
 }
 
+.inventory-image-cell .inventory-cell-content {
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+}
+
+.inventory-image-cell .compass-image-button,
+.inventory-image-cell .compass-product-image-thumb {
+  max-width: 100%;
+}
+
 .inventory-column-heading {
   max-height: 44px;
   overflow: hidden;
