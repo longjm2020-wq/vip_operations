@@ -1,0 +1,12 @@
+.selection-standards-ai .ant-modal-body { max-height: 70vh; overflow-y: auto; padding-right: 8px; }
+.selection-standards-ai .ant-alert { margin: 12px 0; }
+.selection-standards-ai .standards-options { margin: 14px 0; }
+.standards-candidate { border: 1px solid #eadbce; border-radius: 8px; background: #fffaf5; padding: 14px; margin: 14px 0; }
+.standards-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.standards-cell { padding: 12px 0; border-top: 1px solid #eadbce; }
+.standards-comparison { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 10px 0; }
+.standards-comparison > div { min-width: 0; overflow-wrap: anywhere; }
+.standards-comparison small { display: block; color: #8f7968; margin-bottom: 4px; }
+.standards-pending { color: #a54d16; }
+.standards-candidate li { white-space: pre-wrap; overflow-wrap: anywhere; margin: 6px 0; }
+.standards-footnote, .standards-candidate > small { color: #8f7968; font-size: 12px; }

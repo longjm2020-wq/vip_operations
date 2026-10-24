@@ -4,6 +4,8 @@ import { ArchiveReferenceCell, archiveReferenceKey } from "./selection-archive-f
 import { PageSearch, PageSearchInput } from "./page-search";
 import { SelectionImageSearch } from "./selection-image-search";
 import { SelectionTitleAi, type SelectionTitleAiRow } from "./selection-title-ai";
+import { SelectionStandardsAi } from "./selection-standards-ai";
+import { standardsFieldKind } from "../../../packages/contracts/src/selection-standards-ai.js";
 import { selectionTitleTargetEligible, type SelectionTitleAIMode } from "../../../packages/contracts/src/selection-title-ai.js";
 import {SelectionFieldManager,SelectionFieldInput} from "./selection-field-manager";
 import { SelectionProtectionControl, editableSelectionCell, readableSelectionCell } from "./selection-protection";
@@ -388,6 +390,7 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
   const [rangeCopyBusy, setRangeCopyBusy] = useState(false);
   const rangeCopyLock = useRef(false);
   const [titleAi, setTitleAi] = useState<{ rows: SelectionTitleAiRow[]; keys: string[]; scope: string; mode: SelectionTitleAIMode } | null>(null);
+  const [standardsAi, setStandardsAi] = useState<{ rows: SelectionTitleAiRow[]; scope: string } | null>(null);
   const [fixedOrderOpen, setFixedOrderOpen] = useState(false);
   const columnSelectionAnchor = useRef<string | null>(null);
   const [columnWidthTarget, setColumnWidthTarget] = useState<Column[] | null>(null);
@@ -757,6 +760,18 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
   };
 
   const titleFields = columns.filter(column => visible.includes(column.key) && !column.deleted && !systemField(column) && ["长标题", "短标题"].includes(column.label) && (column.type || column.fallbackType || "text") === "text");
+  const standardsFields = columns.filter(column => !column.deleted && !systemField(column) && standardsFieldKind(column.label) && (column.type || column.fallbackType || "text") === "text");
+  const openStandardsAi = async () => {
+    if (!archive || !canEdit || dirtyCount || saving || deleting || transferring || releasing) { message.warning("请先完成表格保存，再适配标准"); return; }
+    if (!(await layout.ensureSaved())) { message.error("请先保存字段设置，再适配标准"); return; }
+    if (!standardsFields.length) { message.info("请先添加安全类别、执行标准文本字段"); return; }
+    const chosen = selectedRows.length ? selectedRowKeys : !selectedColumnKeys.length && selectedCells.size ? new Set([...selectedCells].map(id => id.slice(0, id.indexOf("::")))) : null;
+    const editable = (row: Row, key: string) => readableSelectionCell(row, key) && !(row.hiddenCells || []).includes(key) && editableSelectionCell(row, key);
+    const selected = filteredRows.filter(row => row.id && String(row.xutiStyleNo || "").trim() && !row.migrationLocked && (!chosen || chosen.has(row._key)) && standardsFields.some(field => editable(row, field.key)));
+    if (!selected.length) { message.info("此范围没有可编辑的安全类别或执行标准；请核对款号与权限"); return; }
+    selectionDrag.stop(); setContextCell(null); setCellTextEditing(false); setFocusedCell(null);
+    setStandardsAi({ rows: selected.map(row => ({ id: String(row.id), rowKey: row._key, xutiStyleNo: String(row.xutiStyleNo), values: Object.fromEntries(standardsFields.filter(field => editable(row, field.key)).map(field => [field.key, String(valueAt(row, field) ?? "")])) })), scope: chosen ? "选中款式" : "当前筛选结果（含其他页）" });
+  };
   const openTitleAi = async (requestedKeys?: string[], contextRowKey?: string) => {
     if (!canEdit || dirtyCount || saving || deleting || transferring || releasing) { message.warning("请先完成表格保存，再生成标题"); return; }
     if (!(await layout.ensureSaved())) { message.error("请先保存字段设置，再生成标题"); return; }
@@ -1495,7 +1510,7 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
     setFormatTarget(null);
   };
   if(accessLost)return <Alert type="error" showIcon message="表格访问权限已失效，请重新登录或联系管理员" />;
-  return <>{titleAi && <SelectionTitleAi open onClose={() => setTitleAi(null)} rows={titleAi.rows} fields={titleFields} initialFieldKeys={titleAi.keys} initialMode={titleAi.mode} scopeLabel={titleAi.scope} apiRequest={api} onApplied={refreshTitles} canConfigureAi={canConfigureAi} onConfigureAi={() => { window.location.assign("/settings/ai"); }} />}{columnWidthTarget && <SelectionColumnWidthModal columns={columnWidthTarget} onCancel={() => setColumnWidthTarget(null)} onApply={width => { const keys = new Set(columnWidthTarget.map(column => column.key)); setColumns(current => current.map(column => keys.has(column.key) ? { ...column, width } : column)); setColumnWidthTarget(null); }}/>} {imagePreview && previewImages.length > 0 && <SelectionImagePreview key={cellId(imagePreview.rowKey, imagePreview.columnKey)} images={previewImages} index={Math.min(imagePreview.index, previewImages.length - 1)} name={previewColumn!.label} alongsideDetails={detailVisible} onTextCopied={text => { copiedSingleValue.current = text; setCopiedCells(new Set()); }} onIndexChange={index => setImagePreview(current => current ? { ...current, index } : null)} onClose={() => setImagePreview(null)} />}{formatTarget && <SelectionFormatModal count={formatTarget.ids.size} sample={formatTarget.sample} initial={formatTarget.initial} onCancel={() => setFormatTarget(null)} onApply={applyFormat} />}<PageSearch><PageSearchInput multiline aria-label="搜索选款" placeholder="搜索款号、供应商、颜色、材质…" allowClear value={searchText} onChange={event=>{setImageSearchRowId(null);setSearchText(event.target.value);}} suffix={<SelectionImageSearch disabled={!!dirtyCount || saving || deleting || transferring} onSelect={row=>{setImageSearchRowId(String(row.id));setPage(1);setCellAnchor(null);setFocusedCell(null);setCellTextEditing(false);setSelectedRows([]);setSelectedCells(new Set());}}/>} /></PageSearch>
+  return <>{standardsAi && <SelectionStandardsAi rows={standardsAi.rows} fields={standardsFields} scope={standardsAi.scope} apiRequest={api} onClose={() => setStandardsAi(null)} onApplied={refreshTitles} />}{titleAi && <SelectionTitleAi open onClose={() => setTitleAi(null)} rows={titleAi.rows} fields={titleFields} initialFieldKeys={titleAi.keys} initialMode={titleAi.mode} scopeLabel={titleAi.scope} apiRequest={api} onApplied={refreshTitles} canConfigureAi={canConfigureAi} onConfigureAi={() => { window.location.assign("/settings/ai"); }} />}{columnWidthTarget && <SelectionColumnWidthModal columns={columnWidthTarget} onCancel={() => setColumnWidthTarget(null)} onApply={width => { const keys = new Set(columnWidthTarget.map(column => column.key)); setColumns(current => current.map(column => keys.has(column.key) ? { ...column, width } : column)); setColumnWidthTarget(null); }}/>} {imagePreview && previewImages.length > 0 && <SelectionImagePreview key={cellId(imagePreview.rowKey, imagePreview.columnKey)} images={previewImages} index={Math.min(imagePreview.index, previewImages.length - 1)} name={previewColumn!.label} alongsideDetails={detailVisible} onTextCopied={text => { copiedSingleValue.current = text; setCopiedCells(new Set()); }} onIndexChange={index => setImagePreview(current => current ? { ...current, index } : null)} onClose={() => setImagePreview(null)} />}{formatTarget && <SelectionFormatModal count={formatTarget.ids.size} sample={formatTarget.sample} initial={formatTarget.initial} onCancel={() => setFormatTarget(null)} onApply={applyFormat} />}<PageSearch><PageSearchInput multiline aria-label="搜索选款" placeholder="搜索款号、供应商、颜色、材质…" allowClear value={searchText} onChange={event=>{setImageSearchRowId(null);setSearchText(event.target.value);}} suffix={<SelectionImageSearch disabled={!!dirtyCount || saving || deleting || transferring} onSelect={row=>{setImageSearchRowId(String(row.id));setPage(1);setCellAnchor(null);setFocusedCell(null);setCellTextEditing(false);setSelectedRows([]);setSelectedCells(new Set());}}/>} /></PageSearch>
     <Dropdown trigger={["contextMenu"]} open={!!contextRow && !!contextColumn} onOpenChange={open => { if (!open) setContextCell(null); }} overlayStyle={{ zIndex: 1201 }} menu={cellContextMenu}><span aria-hidden="true" style={{ position: "fixed", left: contextCell?.x || 0, top: contextCell?.y || 0, width: 1, height: 1, pointerEvents: "none" }}/></Dropdown>
     <Card ref={findRoot} data-table-find-context className="selection-card" aria-busy={tableHistory.busy} onPointerDownCapture={event => { if (event.currentTarget.contains(event.target as Node) && tableHistory.busy) { event.preventDefault(); event.stopPropagation(); } }} onKeyDownCapture={event => {
       if (!event.currentTarget.contains(event.target as Node)) return;
@@ -1513,7 +1528,7 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
       {canEdit && titleFields.length > 0 && <Button aria-label="AI 商品标题" icon={<BulbOutlined aria-hidden="true" />} disabled={!!dirtyCount || saving || deleting || transferring || !!releasing} onClick={() => void openTitleAi()}>AI 商品标题</Button>}
       {canEdit && <SelectionCollections selectedRows={filteredRows.filter(row => selectedRowKeys.has(row._key))} blocked={!!dirtyCount || saving || deleting}/>}
       {canEdit && <SelectionPhotoQr />}
-      <SelectionToolbox getSelectedIds={registrationSelectedIds} />
+      <SelectionToolbox getSelectedIds={registrationSelectedIds} onStandardsAi={archive && canEdit ? () => void openStandardsAi() : undefined} />
       <TableFindReplace rootRef={findRoot} cells={findCells} selectedIds={selectedFindIds} activeId={activeFindId} blocked={saving || deleting || transferring || !!releasing} saveHint="修改将逐行自动保存，保存失败请修正后重试。" onNavigate={navigateFind} onReplace={replaceFind}/>
       <Button type="link" icon={<PlusOutlined />} disabled={!canAdd} onClick={() => add()}>添加一行</Button><Button type="link" danger icon={<DeleteOutlined />} disabled={!canEdit || !selectedRows.length || saving} loading={deleting} onClick={deleteRows}>删除行</Button>
       {canEdit && <SelectionMigration rows={filteredRows.filter(row=>selectedRowKeys.has(row._key))} fields={availableColumns} blocked={!!dirtyCount || saving || deleting || transferring || !!releasing} layout={layout} onBusy={setTransferring} onComplete={()=>{tableHistory.clear();setSelectedRows([]);appliedSnapshot.current=undefined;void data.refetch();}}/>}

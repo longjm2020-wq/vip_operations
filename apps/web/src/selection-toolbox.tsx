@@ -1,6 +1,6 @@
 import { lazy, Suspense, useState } from "react";
 import { Button, Drawer, Spin } from "antd";
-import { FileExcelOutlined, RightOutlined, TagsOutlined, ToolOutlined } from "@ant-design/icons";
+import { FileExcelOutlined, RightOutlined, SafetyCertificateOutlined, TagsOutlined, ToolOutlined } from "@ant-design/icons";
 import { useCan } from "./shared";
 import type { MappingTab } from "./color-size-mappings";
 import "./selection-toolbox.css";
@@ -9,12 +9,12 @@ const ColorSizeMappings = lazy(() => import("./color-size-mappings").then(module
 const JushuitanTool = lazy(() => import("./jushuitan-tool").then(module => ({ default: module.JushuitanTool })));
 const VipRegistrationTool = lazy(() => import("./vip-registration-tool").then(module => ({ default: module.VipRegistrationTool })));
 
-export function SelectionToolbox({ getSelectedIds }: { getSelectedIds: () => Promise<string[]> }) {
+export function SelectionToolbox({ getSelectedIds, onStandardsAi }: { getSelectedIds: () => Promise<string[]>; onStandardsAi?: () => void }) {
   const canReadMappings = useCan("product.read");
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<MappingTab>("color");
   const [tool, setTool] = useState<"mappings" | "jushuitan" | "vip" | null>(null);
-  if (!canReadMappings) return null;
+  if (!canReadMappings && !onStandardsAi) return null;
   return <>
     <Button aria-label="工具箱" icon={<ToolOutlined aria-hidden />} onClick={() => { setTool(null); setOpen(true); }}>工具箱</Button>
     <Drawer
@@ -26,6 +26,10 @@ export function SelectionToolbox({ getSelectedIds }: { getSelectedIds: () => Pro
       destroyOnHidden
     >
       <nav aria-label="工具箱功能" className="selection-toolbox-menu">
+        {onStandardsAi && <button type="button" onClick={() => { setOpen(false); onStandardsAi(); }}>
+          <SafetyCertificateOutlined aria-hidden /><span><strong>AI 安全类别与执行标准</strong><small>结合图片、成分、三级类目和长标题批量适配</small></span><RightOutlined aria-hidden />
+        </button>}
+        {canReadMappings && <>
         <button type="button" onClick={() => setTool("mappings")}>
           <TagsOutlined aria-hidden /><span><strong>颜色尺码映射</strong><small>维护商品共用的颜色与尺码代码</small></span><RightOutlined aria-hidden />
         </button>
@@ -35,6 +39,7 @@ export function SelectionToolbox({ getSelectedIds }: { getSelectedIds: () => Pro
         <button type="button" onClick={() => setTool("vip")}>
           <FileExcelOutlined aria-hidden /><span><strong>唯品会商品建档</strong><small>选中款号生成货号与条形码，导出唯品会模板资料</small></span><RightOutlined aria-hidden />
         </button>
+        </>}
       </nav>
       <Drawer
         title={tool === "vip" ? "唯品会商品建档" : tool === "jushuitan" ? "聚水潭商品建档" : "颜色尺码映射"}
