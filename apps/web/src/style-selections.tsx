@@ -20,6 +20,8 @@ import { SelectionTextDetail } from "./selection-text-detail";
 import { SelectionTextLengthStatus } from "./selection-text-length";
 import { fieldTextLengthError } from "../../../packages/contracts/src/selection-field-validation";
 import { selectionImageColorValues } from "../../../packages/contracts/src/selection-image-colors";
+import { standardImageColors, type StandardImageColors } from "./selection-image-color-cleanup-plan";
+import { SelectionImageColorCleanup } from "./selection-image-color-cleanup";
 import { useSelectionDrag } from "./selection-drag";
 import { reorderSelectionItems } from "./selection-reorder";
 import { columnPinMenuEntries, dragColumnSelection, nextColumnSelection } from "./table-column-selection";
@@ -176,7 +178,7 @@ function SizeEditor({ value, disabled, onChange }: { value: string; disabled: bo
   }} />{customOpen && <Space.Compact><Input autoFocus aria-label="补充尺码" value={customValue} disabled={disabled} placeholder="输入尺码，按回车添加" onChange={event => setCustomValue(event.target.value)} onPressEnter={addCustom} /><Button disabled={disabled || !customValue.trim()} onClick={addCustom}>添加</Button><Button onClick={() => { setCustomOpen(false); setCustomValue(""); }}>取消</Button></Space.Compact>}</div>;
 }
 
-function ImageCell({ images, colors, linkedColors, disabled, onChange, mobileId, labelImages = false,field, previewing, onPreview, pasteKey, pasteHandlers }: {field?:Column; mobileId?: string; images: SelectionImage[]; colors: string[]; linkedColors?: Record<string, string[]>; disabled: boolean; onChange: (images: SelectionImage[]) => void; labelImages?: boolean; previewing: boolean; onPreview: (index: number) => void; pasteKey: string; pasteHandlers: ImagePasteHandlers }) {
+function ImageCell({ images, colors, linkedColors, standardColors, disabled, onChange, mobileId, labelImages = false,field, previewing, onPreview, pasteKey, pasteHandlers }: {field?:Column; mobileId?: string; images: SelectionImage[]; colors: string[]; linkedColors?: Record<string, string[]>; standardColors?: StandardImageColors; disabled: boolean; onChange: (images: SelectionImage[]) => void; labelImages?: boolean; previewing: boolean; onPreview: (index: number) => void; pasteKey: string; pasteHandlers: ImagePasteHandlers }) {
   const { api } = useSelectionWorkspace();
 
   const { message } = App.useApp();
@@ -266,7 +268,9 @@ function ImageCell({ images, colors, linkedColors, disabled, onChange, mobileId,
       <input ref={uploadInput} hidden type="file" multiple accept="image/jpeg,image/png,image/webp" onChange={(event) => { const files = Array.from(event.target.files || []); event.currentTarget.value = ""; void addFiles(files); }} />
     </div>}
   </div>;
-  const gallery = allOpen && <Modal title={`${labelImages ? "洗唛/吊牌图" : "全部图片"} · ${images.length} 张`} open={allOpen} onCancel={() => setAllOpen(false)} footer={null} width={560}><div className="selection-image-gallery">{editor}{!images.length && <Empty description="暂无图片，可添加链接、上传或粘贴图片" />}</div></Modal>;
+  const gallery = allOpen && <Modal title={`${labelImages ? "洗唛/吊牌图" : "全部图片"} · ${images.length} 张`} open={allOpen} onCancel={() => setAllOpen(false)} footer={null} width={560}>
+    {field?.key === "images" && <SelectionImageColorCleanup images={images} basis={standardColors} disabled={disabled || busy} onChange={onChange} />}
+    <div className="selection-image-gallery">{editor}{!images.length && <Empty description="暂无图片，可添加链接、上传或粘贴图片" />}</div></Modal>;
   const all = <><Button className="selection-mini-tag" size="small" onClick={() => setAllOpen(true)}>全部</Button>{gallery}</>;
   if (!images.length) return <div className="selection-image-empty" tabIndex={0} aria-label={`${labelImages ? "洗唛/吊牌图" : "图片"}，支持粘贴链接或图片`} onPaste={paste}><button className="selection-image-placeholder" type="button" disabled={disabled} onClick={() => setAllOpen(true)}>+ 图片</button>{gallery}</div>;
   return <div ref={summaryRef} className="selection-image-summary" data-selection-image-url={images[currentImageIndex].url} data-selection-image-index={currentImageIndex + 1} tabIndex={0} aria-label="图片轮播，点击图片放大" onMouseEnter={() => setCarouselPaused(true)} onMouseLeave={() => setCarouselPaused(false)} onFocus={() => setCarouselPaused(true)} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) setCarouselPaused(false); }} onPaste={paste} onKeyDown={event => { if (event.target === event.currentTarget && ["Enter", " "].includes(event.key) && !failedImages.has(images[currentImageIndex].url)) { event.preventDefault(); event.stopPropagation(); onPreview(currentImageIndex); } }}>
@@ -281,7 +285,7 @@ function ImageCell({ images, colors, linkedColors, disabled, onChange, mobileId,
 
 // These callbacks bind a row/field identity and use state updaters. Selection changes
 // do not change their behavior or require rebuilding image controls in every cell.
-const MemoImageCell = memo(ImageCell, (before, after) => before.field === after.field && before.mobileId === after.mobileId && before.disabled === after.disabled && before.labelImages === after.labelImages && before.previewing === after.previewing && before.pasteKey === after.pasteKey && before.pasteHandlers === after.pasteHandlers && comparable(before.images) === comparable(after.images) && comparable(before.colors) === comparable(after.colors) && comparable(before.linkedColors) === comparable(after.linkedColors));
+const MemoImageCell = memo(ImageCell, (before, after) => before.field === after.field && before.mobileId === after.mobileId && before.disabled === after.disabled && before.labelImages === after.labelImages && before.previewing === after.previewing && before.pasteKey === after.pasteKey && before.pasteHandlers === after.pasteHandlers && comparable(before.images) === comparable(after.images) && comparable(before.colors) === comparable(after.colors) && comparable(before.linkedColors) === comparable(after.linkedColors) && comparable(before.standardColors) === comparable(after.standardColors));
 const ReadOnlyStockCell = memo(({ inventory }: { inventory: CollectionStock[] }) => <CollectionStockEditor readOnly inventory={inventory} onChange={()=>{}}/>, (before, after) => comparable(before.inventory) === comparable(after.inventory));
 // Cache row output by its data and local visual state. Event handlers read the
 // live interaction ref below so skipped rows still act on the current selection.
@@ -1381,7 +1385,12 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
     if(column.type==="single" || column.type==="multiple")return cell(<SelectionChoiceCell field={column} value={String(valueAt(row,column) ?? "")} disabled={disabled} active={selected && selectedCells.size===1} alignment={row.cellAlignments?.[column.key]} verticalAlignment={row.cellVerticalAlignments?.[column.key]} onChange={value=>liveInteractions.current.update(row._key,column,value)}/>);
     if(column.type==="tags")return cell(<SelectionInlineTags field={column} value={String(valueAt(row,column) ?? "")} disabled={disabled} active={selected && selectedCells.size===1} onChange={(value,rename)=>liveInteractions.current.updateTags(row,column,value,rename)}/>);
     if(column.type && !imageKeys.has(column.key) && !collectionKeys.has(column.key))return cell(<SelectionFieldInput field={column} value={String(valueAt(row,column) ?? "")} disabled={disabled} onChange={value=>liveInteractions.current.update(row._key,column,value)}/>);
-    if (column.key === "images") return cell(<MemoImageCell {...imagePreviewProps} field={column} mobileId={row.id && !dirtyRows.has(row._key) ? String(row.id) : undefined} images={rowImages(row)} colors={splitTags(row.color)} linkedColors={Object.fromEntries([...new Set(rowImages(row).flatMap(image => image.colorFieldKey ? [image.colorFieldKey] : []))].filter(key => readableSelectionCell(row, key) && columns.some(field => field.key === key && !field.deleted)).map(key => [key, selectionImageColorValues(columns.find(field => field.key === key), row.extraFields?.[key])]))} disabled={disabled} onChange={(value) => liveInteractions.current.update(row._key, column, value)} />);
+    if (column.key === "images") return cell(<MemoImageCell {...imagePreviewProps} field={column}
+      mobileId={row.id && !dirtyRows.has(row._key) ? String(row.id) : undefined} images={rowImages(row)} colors={splitTags(row.color)}
+      standardColors={standardImageColors(columns, key => !row.hiddenCells?.includes(key) && (!row.cellAccess ||
+        (row.cellAccess[key] || row.defaultCellAccess) !== "deny" && (!key.startsWith("custom:") || Object.hasOwn(row.cellAccess, key))), field => valueAt(row, field))}
+      linkedColors={Object.fromEntries([...new Set(rowImages(row).flatMap(image => image.colorFieldKey ? [image.colorFieldKey] : []))].filter(key => readableSelectionCell(row, key) && columns.some(field => field.key === key && !field.deleted)).map(key => [key, selectionImageColorValues(columns.find(field => field.key === key), row.extraFields?.[key])]))}
+      disabled={disabled} onChange={(value) => liveInteractions.current.update(row._key, column, value)} />);
     if (column.key === "labelImages") return cell(<MemoImageCell {...imagePreviewProps} field={column} labelImages mobileId={row.id && !dirtyRows.has(row._key) ? String(row.id) : undefined} images={rowLabelImages(row)} colors={[]} disabled={disabled} onChange={(value) => liveInteractions.current.update(row._key, column, value)} />);
     if (column.key === "color" || column.key === "sizeRange") return cell(<SelectionInlineTags field={column} value={String(valueAt(row,column) ?? "")} disabled={disabled} active={selected && selectedCells.size===1} onChange={(value,rename)=>liveInteractions.current.updateTags(row,column,value,rename)}/>);
     const numberFormat = row.cellNumberFormats?.[column.key];

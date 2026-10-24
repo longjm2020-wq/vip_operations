@@ -7,7 +7,7 @@ import { selectionScope } from "../../packages/database/src/selection-scope.js";
 import { defaultProtection } from "../../packages/contracts/src/selection-protection.js";
 
 const fixture = vi.hoisted(() => ({ database: null as PGlite | null, imageData: null as string | null,
-  imageCalls: [] as string[], imageBlock: null as Promise<void> | null, exampleReads: 0 }));
+  imageCalls: [] as string[], imageResults: new Map<string, string | null | Error>(), imageBlock: null as Promise<void> | null, exampleReads: 0 }));
 vi.mock("../../packages/database/src/index.js", async importOriginal => {
   const original = await importOriginal<typeof import("../../packages/database/src/index.js")>();
   const wrap = (database: Pick<PGlite, "query">) => ({
@@ -24,7 +24,10 @@ vi.mock("../../packages/database/src/index.js", async importOriginal => {
 });
 vi.mock("../../apps/api/src/modules/style-selections/archive.js", () => ({ isArchive: async () => false, mirrorArchiveRow: async () => undefined }));
 vi.mock("../../apps/api/src/modules/style-selections/title-ai-images.js", () => ({ titleImageData: async (_context: unknown, url: string) => {
-  fixture.imageCalls.push(url); await fixture.imageBlock; return fixture.imageData;
+  fixture.imageCalls.push(url); await fixture.imageBlock;
+  const result = fixture.imageResults.has(url) ? fixture.imageResults.get(url)! : fixture.imageData;
+  if (result instanceof Error) throw result;
+  return result;
 } }));
 import { applyTitles, generateTitles, parseTitleAIResponse, readTitlePlan, titleAIStatus } from "../../apps/api/src/modules/style-selections/title-ai.js";
 import { encryptSecret } from "../../apps/api/src/modules/analytics/secrets.js";
@@ -69,7 +72,7 @@ beforeAll(async () => {
 beforeEach(async () => {
   vi.stubEnv("COMPASS_MAIL_KEY", "a".repeat(64));
   providerCalls = 0; providerPayload = {}; fixture.imageData = null;
-  fixture.imageCalls = []; fixture.imageBlock = null; fixture.exampleReads = 0;
+  fixture.imageCalls = []; fixture.imageResults.clear(); fixture.imageBlock = null; fixture.exampleReads = 0;
   providerHandler = products => ({ rows: products.map(product => ({ id: product.id, titles: product.targets.map((target: Row) => ({ key: target.key, value: target.kind === "long" ? "【水貂毛拼接100桑蚕丝】锦纨春女式皮衣皮草女士外套穿搭单品" : "锦纨春女式皮衣" })), evidence: ["成分：主面料桑蚕丝，配料水貂毛皮"], warnings: ["款名需复核"] })) });
   await fixture.database!.exec("TRUNCATE style_selections,selection_field_registry,style_selection_protection,idempotency_records,audit_logs,compass_ai_settings RESTART IDENTITY");
   await fixture.database!.query("INSERT INTO style_selection_protection(id,settings) VALUES(1,$1)", [JSON.stringify(defaultProtection)]);
@@ -206,6 +209,41 @@ describe("server-authoritative AI product titles", () => {
     expect(providerPayload.messages[1].content.filter((value: Row) => value.type === "image_url")).toHaveLength(4);
     expect(providerPayload.messages[1].content[0].text).toContain("旧款名马夹");
     expect(providerPayload.messages[1].content[0].text).not.toContain("暖橙面料旧标题");
+  });
+
+  it("tries later photographs after failed links and sends only two successful image inputs", async () => {
+    const row = await style("IMPORTED");
+    const urls = Array.from({ length: 5 }, (_, i) => `https://images-erp.sursung.com/prod/erp/ItemSku/123/${i}.png`);
+    fixture.imageResults.set(urls[0], Error("download failed")); fixture.imageResults.set(urls[1], null);
+    fixture.imageResults.set(urls[2], "data:image/jpeg;base64,AQ=="); fixture.imageResults.set(urls[3], "data:image/jpeg;base64,Ag==");
+    await fixture.database!.query("UPDATE style_selections SET images=$2 WHERE id=$1", [row.id, JSON.stringify(urls.map(url => ({ url })))]);
+    const preview = await generateTitles(actor(), input([String(row.id)]));
+    expect(fixture.imageCalls).toEqual(urls.slice(0, 4));
+    expect(providerPayload.messages[1].content.filter((value: Row) => value.type === "image_url").map((value: Row) => value.image_url.url))
+      .toEqual(["data:image/jpeg;base64,AQ==", "data:image/jpeg;base64,Ag=="]);
+    expect(preview.rows[0].evidence).toContain("已读取 2 张商品图片作为生成依据");
+    expect(preview.rows[0].warnings.some(value => value.includes("未能读取"))).toBe(false);
+    expect(readTitlePlan(preview.planToken, actor()).rows[0].visual).toBe(true);
+  });
+  it("distinguishes failed existing photographs from empty image cells and bounds retries", async () => {
+    const failed = await style("HAS-PHOTOS"), empty = await style("NO-PHOTOS");
+    const urls = Array.from({ length: 9 }, (_, i) => `https://images.sursung.com/prod/item/123/${i}.png`);
+    await fixture.database!.query("UPDATE style_selections SET images=$2 WHERE id=$1", [failed.id, JSON.stringify(urls.map(url => ({ url })))]);
+    const preview = await generateTitles(actor(), input([String(failed.id), String(empty.id)]));
+    expect(fixture.imageCalls).toEqual(urls.slice(0, 6));
+    expect(preview.rows.find(row => row.id === String(failed.id))!.warnings).toContain("商品已有图片，但本次未能读取；仅依据可查看的文字资料生成，请检查图片链接或稍后重试");
+    expect(preview.rows.find(row => row.id === String(empty.id))!.warnings).toContain("没有可读取的商品图片，仅依据可查看的文字资料生成");
+    expect(providerPayload.messages[1].content.filter((value: Row) => value.type === "image_url")).toEqual([]);
+    expect(readTitlePlan(preview.planToken, actor()).rows.every(row => !row.visual)).toBe(true);
+  });
+  it("never loads protected photographs or reveals their existence through the warning", async () => {
+    const row = await style("PROTECTED-IMAGES"); fixture.imageData = "data:image/jpeg;base64,AQ==";
+    await fixture.database!.query("UPDATE style_selections SET images=$2 WHERE id=$1", [row.id, JSON.stringify([{ url: "https://images.sursung.com/prod/item/123/private.png" }])]);
+    await fixture.database!.query("UPDATE style_selection_protection SET settings=$1,revision=revision+1", [JSON.stringify({ ...defaultProtection, enabled: true, regions: [{ id: "123e4567-e89b-42d3-a456-426614174000", name: "图片保护", scope: "columns", rowIds: [], columnKeys: ["images"], users: {}, others: "deny" }] })]);
+    const preview = await generateTitles(actor(), input([String(row.id)]));
+    expect(fixture.imageCalls).toEqual([]); expect(JSON.stringify(providerPayload)).not.toContain("private.png");
+    expect(preview.rows[0].warnings).toContain("没有可读取的商品图片，仅依据可查看的文字资料生成");
+    expect(preview.rows[0].evidence.some(value => value.includes("已读取"))).toBe(false);
   });
 
   it("reserves the existing per-user slot before settings await so simultaneous requests cannot double-call the model", async () => {

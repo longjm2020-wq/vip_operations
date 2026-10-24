@@ -188,12 +188,16 @@ export async function generateTitles(c: Context, input: unknown): Promise<Select
     const readPictures = async () => {
       while (imageCursor < products.length) {
         const product = products[imageCursor++], row = initial.projected.find(row => String(row.id) === product.id)!;
-        const urls = [...new Set<string>((Array.isArray(row.images) ? row.images : []).map((image: Row) => String(image.url)))].slice(0, 2);
-        for (const url of urls) {
-          if (Date.now() >= imageDeadline) break;
+        const urls = [...new Set<string>((Array.isArray(row.images) ? row.images : []).map((image: Row) => String(image.url || "")).filter(Boolean))];
+        // A broken first link must not hide later usable product photographs.
+        // Keep preparation bounded and send at most two successfully read images.
+        for (const url of urls.slice(0, 6)) {
+          if (Date.now() >= imageDeadline || product.pictures.length >= 2) break;
           const data = await pictureData(url); if (data) product.pictures.push(data);
         }
-        product.inputWarnings = product.pictures.length ? [] : ["未使用商品图片，仅依据可查看的文字资料生成"];
+        product.inputWarnings = product.pictures.length ? [] : [urls.length
+          ? "商品已有图片，但本次未能读取；仅依据可查看的文字资料生成，请检查图片链接或稍后重试"
+          : "没有可读取的商品图片，仅依据可查看的文字资料生成"];
         signedRows.find(value => value.id === product.id)!.visual = !!product.pictures.length;
       }
     };
@@ -247,7 +251,7 @@ export async function generateTitles(c: Context, input: unknown): Promise<Select
             const issue = titleValueIssue(field, title.value, facts.material, facts.facts, !!product.pictures.length, { mode: body.mode, existingDescription: previousValue });
             if (issue || examples.some(example => example.value === title.value)) fail("AI_TITLE_INVALID", `${field.label}候选未通过校验：${issue || "与现有标题完全重复"}；本次未采用结果`, 502);
             return { key: title.key, label: field.label, kind: titleKind(field)!, value: title.value, previousValue, ...titleLimit(field, body.mode) };
-          }), evidence: candidate.evidence, warnings: [...product.inputWarnings, ...candidate.warnings],
+          }), evidence: [...(product.pictures.length ? [`已读取 ${product.pictures.length} 张商品图片作为生成依据`] : []), ...candidate.evidence], warnings: [...product.inputWarnings, ...candidate.warnings],
         };
       });
       const latest = await snapshot(c, body.rowIds, body.targetKeys);

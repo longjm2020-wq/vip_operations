@@ -4,18 +4,25 @@ import { readStoredImage } from "./image-storage.js";
 import { imageAccess } from "./protection.js";
 import type { Context } from "../../core.js";
 
+// Imported Jushuitan originals can exceed 2 MB. Bound the input before decoding,
+// then send only the existing 1000px / 500 KB JPEG derivative to the model.
+const maxImageBytes = 8 * 1024 * 1024;
+
 export function allowedTitleImageUrl(value: string): string | null {
   try {
     const url = new URL(value);
-    if (!["https:", "http:"].includes(url.protocol) || url.username || url.password || url.port || url.hash || url.search ||
-      !/^[ab]\.vpimg[1-5]\.com$/u.test(url.hostname) || !url.pathname.startsWith("/upload/")) return null;
+    if (!["https:", "http:"].includes(url.protocol) || url.username || url.password || url.port || url.hash || url.search) return null;
+    const vip = /^[ab]\.vpimg[1-5]\.com$/u.test(url.hostname) && url.pathname.startsWith("/upload/");
+    const jushuitan = (url.hostname === "images.sursung.com" && url.pathname.startsWith("/prod/item/")) ||
+      (url.hostname === "images-erp.sursung.com" && url.pathname.startsWith("/prod/erp/ItemSku/"));
+    if (!vip && !jushuitan) return null;
     url.protocol = "https:";
     return url.toString();
   } catch { return null; }
 }
 async function cappedRemoteImage(url: string) {
   const response = await fetch(url, { redirect: "error", signal: AbortSignal.timeout(8000), headers: { Accept: "image/jpeg,image/png,image/webp" } });
-  if (!response.ok || !/^image\/(?:jpeg|png|webp)(?:;|$)/iu.test(response.headers.get("content-type") || "") || Number(response.headers.get("content-length")) > 2 * 1024 * 1024) {
+  if (!response.ok || !/^image\/(?:jpeg|png|webp)(?:;|$)/iu.test(response.headers.get("content-type") || "") || Number(response.headers.get("content-length")) > maxImageBytes) {
     await response.body?.cancel(); throw Error("Unsupported remote image");
   }
   const reader = response.body?.getReader();
@@ -25,7 +32,7 @@ async function cappedRemoteImage(url: string) {
     for (;;) {
       const result = await reader.read(); if (result.done) break;
       size += result.value.length;
-      if (size > 2 * 1024 * 1024) throw Error("Image too large");
+      if (size > maxImageBytes) throw Error("Image too large");
       pieces.push(result.value);
     }
   } finally { await reader.cancel(); }
@@ -47,7 +54,7 @@ export async function titleImageData(c: Context, url: string) {
     const allowed = allowedTitleImageUrl(url); if (!allowed) return null;
     bytes = await cappedRemoteImage(allowed);
   }
-  if (!bytes.length || bytes.length > 2 * 1024 * 1024) return null;
+  if (!bytes.length || bytes.length > maxImageBytes) return null;
   const image = sharp(bytes, { limitInputPixels: 20_000_000, animated: false, failOn: "error" });
   const metadata = await image.metadata();
   if (!["jpeg", "png", "webp"].includes(metadata.format || "")) return null;
