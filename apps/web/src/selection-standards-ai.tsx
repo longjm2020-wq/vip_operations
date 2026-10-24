@@ -114,7 +114,7 @@ export function SelectionStandardsAi({ rows, fields, scope, apiRequest: request,
       <Button type="primary" disabled={!checkedCount} onClick={() => void apply()}>确认填入 {checkedCount} 个单元格</Button>
     </>}</Space>}>
     <p>范围：{scope} · {eligible.length} 款 · 每批 5 款，自动分批处理</p>
-    <Alert type="info" showIcon title="结合图片、成分、三级类目和长标题适配，核对后填入" description="会将有权查看的本款资料和可读取的商品图、洗唛/吊牌图发送至 OpenRouter 及模型供应商，产生 API 费用。结果是适配建议，不代表检测合格；资料不足的字段保留原值。" />
+    <Alert type="info" showIcon title="结合商品图片、成分、三级类目和长标题适配，核对后填入" description="会将有权查看的本款商品字段和可读取的商品图发送至 OpenRouter 及模型供应商，产生 API 费用。洗唛/吊牌图不参与适配。结果是适配建议，不代表检测合格；资料不足的字段保留原值。" />
     <Space wrap className="standards-options"><strong>处理方式</strong><Select aria-label="标准适配处理方式" value={mode} disabled={!!busy || !!completed.length} style={{ width: 220 }} onChange={setMode}
       options={[{ value: "blank", label: "仅填补空白" }, { value: "replace", label: "重新适配（含已有内容）" }]} /></Space>
     <div className="standards-options"><strong>处理字段　</strong>{fields.map(field => <Checkbox key={field.key} disabled={!!busy || !!completed.length} checked={keys.includes(field.key)} onChange={event => setKeys(current => event.target.checked ? [...current, field.key] : current.filter(key => key !== field.key))}>{field.label}</Checkbox>)}</div>
@@ -135,7 +135,7 @@ export function SelectionStandardsAi({ rows, fields, scope, apiRequest: request,
       </div>)}
       {!!row.warnings.length && <p className="standards-pending">{row.warnings.join("；")}</p>}
       <Collapse ghost size="small" items={[{ key: "evidence", label: "查看适配依据", children: <ul>{row.evidence.map((item, index) => <li key={index}>{item}</li>)}</ul> }]} />
-      <small>目录核对：{batch.catalogCheckedAt} · 确认前请核对实物、标签和适用范围</small>
+      <small>目录核对：{batch.catalogCheckedAt} · 确认前请核对实物、商品资料和适用范围</small>
     </section>)}
     {candidates.length > 4 && <Pagination size="small" current={activePage} pageSize={4} total={candidates.length} showSizeChanger={false} onChange={setPage} />}
     {!eligible.length && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前方式没有可处理的单元格，可切换为重新适配或调整范围" />}

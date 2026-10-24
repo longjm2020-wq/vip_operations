@@ -38,7 +38,7 @@ async function fixture(page: Page, options: { count?: number; readonly?: boolean
       data = { planToken: `standards-fixture-token-${generations.length}-abcdefghijklmnop`, expiresAt: new Date(Date.now() + 30 * 60000).toISOString(), model: "fixture-model", catalogCheckedAt: "2026-10-24", warnings: [],
         rows: body.rowIds.map((id: string) => {
           const row = rows.find(row => row.id === id)!;
-          return { id, xutiStyleNo: row.xutiStyleNo, evidence: ["实际读取：商品图片 1 张，洗唛/吊牌图 1 张", "成分：棉100%，梭织", "三级类目：女式外套"], warnings: [],
+          return { id, xutiStyleNo: row.xutiStyleNo, evidence: ["实际读取：商品图片 1 张", "成分：棉100%，梭织", "三级类目：女式外套"], warnings: [],
             values: body.targetKeys.filter((key: string) => body.mode === "replace" || !row.extraFields[key]).map((key: string) => ({ key, label: key === "custom:safety" ? "安全类别" : "执行标准", previousValue: row.extraFields[key] || "",
               value: id === "3" && key === "custom:standard" ? "" : key === "custom:safety" ? "GB 18401-2010 C类" : "FZ/T 81007-2022", reason: id === "3" && key === "custom:standard" ? "织造结构无法确定" : "成人非贴身梭织夹克，无填充",
               source: id === "3" && key === "custom:standard" ? null : { name: "单、夹服装", url: "https://std.samr.gov.cn/hb/search/stdHBDetailed?id=F9A74BF1D2B7EC70E05397BE0A0A8DAE" },
@@ -75,13 +75,15 @@ test("商品档案选中款式适配：只填空白、先核对、取消勾选�
   await page.locator('td[data-selection-row="1"][data-selection-column="xutiStyleNo"]').click();
   const panel = await openPanel(page);
   await expect(panel).toContainText("选中款式 · 1 款");
+  await expect(panel).toContainText("洗唛/吊牌图不参与适配");
   await panel.getByRole("button", { name: "一键适配", exact: true }).click();
   await expect(panel).toContainText("FZ/T 81007-2022");
   expect(state.generations[0]).toMatchObject({ rowIds: ["1"], mode: "blank" });
   expect(state.applies).toHaveLength(0);
   expect(state.rows[0].extraFields["custom:standard"]).toBe("");
   await panel.getByText("查看适配依据", { exact: true }).click();
-  await expect(panel).toContainText("实际读取：商品图片 1 张，洗唛/吊牌图 1 张");
+  await expect(panel).toContainText("实际读取：商品图片 1 张");
+  await expect(panel).not.toContainText("洗唛/吊牌图 1 张");
   await panel.locator(".standards-cell").getByRole("checkbox", { name: "执行标准", exact: true }).uncheck();
   await expect(panel.getByRole("button", { name: /确认填入/ })).toBeDisabled();
   await panel.locator(".standards-cell").getByRole("checkbox", { name: "执行标准", exact: true }).check();

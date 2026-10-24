@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createHmac } from "node:crypto";
 import { PGlite } from "@electric-sql/pglite";
 import { installSelectionContentCreatedTimeSchema } from "../fixtures/selection-content-created-time-schema.js";
 import type { Context } from "../../apps/api/src/core.js";
@@ -22,7 +23,7 @@ vi.mock("../../apps/api/src/modules/style-selections/archive.js", () => ({ isArc
 vi.mock("../../apps/api/src/modules/style-selections/title-ai-images.js", () => ({ titleImageData: async (_context: unknown, url: string) => {
   fixture.images.push(url); return url.includes("broken") ? null : "data:image/jpeg;base64,cHJvdGVjdGVk";
 } }));
-import { applyStandards, generateStandards, readStandardsPlan, standardsAIStatus } from "../../apps/api/src/modules/style-selections/standards-ai.js";
+import { applyStandards, generateStandards, readStandardsPlan, standardsAIStatus, standardsSource } from "../../apps/api/src/modules/style-selections/standards-ai.js";
 import { standardSource } from "../../apps/api/src/modules/style-selections/standards-ai-catalog.js";
 import { encryptSecret } from "../../apps/api/src/modules/analytics/secrets.js";
 const safety = "custom:safety", standard = "custom:standard", title = "custom:title", category = "custom:product:categoryId";
@@ -75,22 +76,39 @@ afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
 afterAll(async () => { await fixture.database?.close(); });
 
 describe("AI standard adaptation", () => {
-  it("uses actual product/label pixels, composition, category names and title, then saves only blank fields with audit and idempotency", async () => {
+  it("uses actual product pixels, composition, category names and title, excludes labels, then saves only blank fields with audit and idempotency", async () => {
     const row = await style("STYLE", { [safety]: "人工确认安全类别" });
     await read("UPDATE style_selections SET images=$2,label_images=$3 WHERE id=$1", [row.id, JSON.stringify([{ url: "broken-product" }, { url: "product" }]), JSON.stringify([{ url: "label" }])]);
+    for (const [key, label] of [["labelImages", "商品图片"], ["custom:wash", "洗唛/吊牌图"], ["custom:hangtag", "吊牌图"]]) {
+      await read("INSERT INTO selection_field_registry(workspace_key,field_key,owner_id,visibility,definition) VALUES('default',$1,7,'PUBLIC',$2)", [key, JSON.stringify({ key, label, width: 120, type: "image" })]);
+      if (key.startsWith("custom:")) await read("UPDATE style_selections SET extra_fields=extra_fields || $2::jsonb WHERE id=$1", [row.id, JSON.stringify({ [key]: [{ url: key + "-excluded" }] })]);
+    }
     const preview = await generateStandards(actor(), input([String(row.id)]));
     const products = JSON.parse(payload.messages[1].content[0].text).products;
     expect(products[0].facts).toEqual(expect.arrayContaining([{ key: category, label: "三级类目", value: "女式外套" }, expect.objectContaining({ key: title }), expect.objectContaining({ key: "material" })]));
-    expect(products[0].imageInputs).toEqual(["product:1", "label:1"]);
+    expect(products[0].imageInputs).toEqual(["product:1"]);
     expect(products[0]).not.toHaveProperty("pictures");
-    expect(payload.messages[1].content.filter((item: Row) => item.type === "image_url")).toHaveLength(2);
+    expect(payload.messages[1].content.filter((item: Row) => item.type === "image_url")).toHaveLength(1);
+    expect(fixture.images).toEqual(["broken-product", "product"]);
+    expect(JSON.stringify(payload.messages[1].content)).not.toContain("label:1");
+    expect(payload.messages[0].content).toContain("禁止作为适配依据");
+    expect(payload.messages[0].content).toContain("必须忽略这些文字");
     expect(preview.rows[0].values.map(value => value.key)).toEqual([standard]);
-    expect(preview.rows[0].evidence[0]).toContain("商品图片 1 张，洗唛/吊牌图 1 张");
+    expect(preview.rows[0].evidence[0]).toBe("实际读取：商品图片 1 张");
     expect((await read("SELECT extra_fields FROM style_selections"))[0].extra_fields[standard]).toBeUndefined();
     expect(await applyStandards(actor(), applyInput(preview))).toMatchObject({ updatedCount: 1 });
     expect(await applyStandards(actor(), applyInput(preview))).toMatchObject({ updatedCount: 1 });
     expect((await read("SELECT extra_fields FROM style_selections"))[0].extra_fields).toMatchObject({ [standard]: "FZ/T 81007-2022", [safety]: "人工确认安全类别" });
     expect(await read("SELECT * FROM audit_logs")).toHaveLength(1);
+  });
+  it("never uses label-only rows or label cells renamed as descriptors as model evidence", async () => {
+    expect(standardsSource({ labelImages: [{ url: "label-only" }] }, [{ key: "labelImages", label: "成分", type: "text", width: 120 }])).toEqual({ facts: [], pictures: [] });
+    const row = await style("LABEL-ONLY");
+    await read("UPDATE style_selections SET material='',extra_fields='{}',label_images='[{\"url\":\"label-only\"}]' WHERE id=$1", [row.id]);
+    const preview = await generateStandards(actor(), input([String(row.id)]));
+    expect(fixture.images).toEqual([]); expect(calls).toBe(0);
+    expect(preview.rows[0].values.every(value => !value.value)).toBe(true);
+    expect(readStandardsPlan(preview.planToken, actor()).rows).toEqual([]);
   });
   it("can reassess existing values and bind each exact candidate to its signed row and field", async () => {
     const row = await style("OLD", { [safety]: "旧值", [standard]: "旧标准" });
@@ -102,11 +120,11 @@ describe("AI standard adaptation", () => {
     await applyStandards(actor(), applyInput(preview));
     expect((await read("SELECT extra_fields FROM style_selections"))[0].extra_fields[standard]).toBe("FZ/T 81007-2022");
   });
-  it.each(["material", "label_images", "extra_fields"])("rejects concurrent %s changes atomically, even without a timestamp update", async column => {
+  it.each(["material", "images", "extra_fields"])("rejects concurrent %s changes atomically, even without a timestamp update", async column => {
     const first = await style("ONE"), second = await style("TWO");
     const preview = await generateStandards(actor(), input([String(first.id), String(second.id)]));
     if (column === "material") await read("UPDATE style_selections SET material='新成分' WHERE id=$1", [second.id]);
-    if (column === "label_images") await read("UPDATE style_selections SET label_images='[{\"url\":\"new-label\"}]' WHERE id=$1", [second.id]);
+    if (column === "images") await read("UPDATE style_selections SET images='[{\"url\":\"new-product\"}]' WHERE id=$1", [second.id]);
     if (column === "extra_fields") await read("UPDATE style_selections SET extra_fields=extra_fields || $2::jsonb WHERE id=$1", [second.id, JSON.stringify({ [title]: "改为针织服装" })]);
     await expect(applyStandards(actor(), applyInput(preview))).rejects.toMatchObject({ status: 409 });
     expect((await read("SELECT extra_fields FROM style_selections WHERE id=$1", [first.id]))[0].extra_fields[standard]).toBeUndefined();
@@ -125,7 +143,7 @@ describe("AI standard adaptation", () => {
   });
   it("keeps insufficient, invented, obsolete, future or falsely referenced suggestions pending without writing them", async () => {
     const row = await style("PENDING");
-    for (const [code, evidence] of [["GB/T 99999-2099", ["material"]], ["GB/T 18132-2026", ["material"]], ["GB/T 18132-2008", ["material"]], ["FZ/T 81007-2022", ["product:1"]]] as [string, string[]][]) {
+    for (const [code, evidence] of [["GB/T 99999-2099", ["material"]], ["GB/T 18132-2026", ["material"]], ["GB/T 18132-2008", ["material"]], ["FZ/T 81007-2022", ["product:1"]], ["FZ/T 81007-2022", ["label:1"]]] as [string, string[]][]) {
       handler = products => ({ rows: products.map(product => ({ id: product.id, values: product.targets.map((target: Row) => ({ key: target.key, value: target.key === safety ? "GB 18401-2010 C类" : code, reason: "候选依据", evidence: target.key === safety ? [category] : evidence })), warnings: [] })) });
       const preview = await generateStandards(actor(), input([String(row.id)]));
       expect(preview.rows[0].values.find(value => value.key === standard)?.value).toBe("");
@@ -153,6 +171,13 @@ describe("AI standard adaptation", () => {
     expect(() => readStandardsPlan(preview.planToken.replace(/^./, "x"), actor())).toThrow();
     vi.spyOn(Date, "now").mockReturnValue(Date.now() + 31 * 60000);
     expect(() => readStandardsPlan(preview.planToken, actor())).toThrow(); vi.restoreAllMocks();
+  });
+  it("rejects previously signed previews generated under the label-reference policy", async () => {
+    const row = await style("OLD-POLICY"), preview = await generateStandards(actor(), input([String(row.id)]));
+    const encoded = preview.planToken.split(".")[0];
+    const oldSignature = createHmac("sha256", Buffer.from(process.env.COMPASS_MAIL_KEY!, "hex")).update("selection-standards-v1:" + encoded).digest("base64url");
+    await expect(applyStandards(actor(), { ...applyInput(preview), planToken: encoded + "." + oldSignature })).rejects.toMatchObject({ status: 400 });
+    expect(await read("SELECT * FROM audit_logs")).toHaveLength(0);
   });
   it("blocks saving after target permissions change and respects the target length limit", async () => {
     const row = await style("GUARD"), preview = await generateStandards(actor(), input([String(row.id)]));
