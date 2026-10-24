@@ -10,3 +10,5 @@
 .standards-pending { color: #a54d16; }
 .standards-candidate li { white-space: pre-wrap; overflow-wrap: anywhere; margin: 6px 0; }
 .standards-footnote, .standards-candidate > small { color: #8f7968; font-size: 12px; }
+.selection-standards-ai .standards-checks { margin: 8px 0; padding: 8px 12px; background: #fff7e6; border-left: 3px solid #faad14; color: #874d00; }
+.selection-standards-ai .standards-checks ul { margin: 4px 0 0; padding-left: 18px; }

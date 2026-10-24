@@ -60,7 +60,7 @@ beforeAll(async () => {
 beforeEach(async () => {
   vi.stubEnv("COMPASS_MAIL_KEY", "a".repeat(64)); fixture.archive = true; fixture.images = []; calls = 0; payload = {};
   handler = products => ({ rows: products.map(product => ({ id: product.id, values: product.targets.map((target: Row) => ({ key: target.key,
-    value: target.key === safety ? "GB 18401-2010 C类" : "FZ/T 81007-2022", reason: "本款成人非贴身梭织夹克，无填充", evidence: ["material", category, title] })), warnings: [] })) });
+    value: target.key === safety ? "GB 18401-2010 C类" : "FZ/T 81007-2022", reason: "本款成人非贴身梭织夹克，无填充", checks: [], evidence: ["material", category, title] })), warnings: [] })) });
   await fixture.database!.exec("TRUNCATE style_selections,selection_field_registry,style_selection_protection,idempotency_records,audit_logs,compass_ai_settings RESTART IDENTITY");
   await fixture.database!.query("INSERT INTO style_selection_protection(id,settings) VALUES(1,$1)", [JSON.stringify(defaultProtection)]);
   for (const [key, label] of [[safety, "安全类别"], [standard, "执行标准"], [category, "三级类目"], [title, "长标题"]])
@@ -120,6 +120,34 @@ describe("AI standard adaptation", () => {
     await applyStandards(actor(), applyInput(preview));
     expect((await read("SELECT extra_fields FROM style_selections"))[0].extra_fields[standard]).toBe("FZ/T 81007-2022");
   });
+  it("preserves actionable conditional silk recommendations and review checks without writing inferred product facts", async () => {
+    const row = await style("SILK", { [title]: "立领盘扣丝绸外套" });
+    const material = "面料：70.2%桑蚕丝29.8%锦纶；里料：100%聚酯纤维";
+    const checks = ["核对主面料为机织丝织物", "核对有无保暖填充及其对应适用范围"];
+    await read("UPDATE style_selections SET material=$2,images='[{\"url\":\"product\"}]' WHERE id=$1", [row.id, material]);
+    handler = products => ({ rows: products.map(product => ({ id: product.id, warnings: [], values: product.targets.map((target: Row) => ({
+      key: target.key, value: "GB/T 18132-2016", reason: "主面料含蚕丝，类目和盘扣款式支持丝绸服装方向，建议核对条件后采用", checks,
+      evidence: ["material", category, title, "product:1"],
+    })) })) });
+    const preview = await generateStandards(actor(), { rowIds: [String(row.id)], targetKeys: [standard], mode: "blank" });
+    expect(preview.rows[0].values[0]).toMatchObject({ value: "GB/T 18132-2016", checks });
+    const product = JSON.parse(payload.messages[1].content[0].text).products[0];
+    expect(product.facts.find((fact: Row) => fact.key === "material").value).toBe(material);
+    expect(product.facts.some((fact: Row) => fact.label === "织造方式")).toBe(false);
+    const before = (await read("SELECT extra_fields FROM style_selections WHERE id=$1", [row.id]))[0].extra_fields;
+    await applyStandards(actor(), applyInput(preview));
+    const saved = (await read("SELECT material,extra_fields FROM style_selections WHERE id=$1", [row.id]))[0];
+    expect(saved.material).toBe(material);
+    expect(saved.extra_fields).toEqual({ ...before, [standard]: "GB/T 18132-2016" });
+  });
+  it("rejects model responses that omit required review checks rather than silently hiding uncertainty", async () => {
+    const row = await style("MISSING-CHECKS");
+    handler = products => ({ rows: products.map(product => ({ id: product.id, warnings: [], values: product.targets.map((target: Row) => ({
+      key: target.key, value: target.key === safety ? "GB 18401-2010 C类" : "FZ/T 81007-2022", reason: "建议核对织造方式", evidence: ["material"],
+    })) })) });
+    await expect(generateStandards(actor(), input([String(row.id)]))).rejects.toMatchObject({ status: 502 });
+    expect(await read("SELECT * FROM audit_logs")).toHaveLength(0);
+  });
   it.each(["material", "images", "extra_fields"])("rejects concurrent %s changes atomically, even without a timestamp update", async column => {
     const first = await style("ONE"), second = await style("TWO");
     const preview = await generateStandards(actor(), input([String(first.id), String(second.id)]));
@@ -134,7 +162,7 @@ describe("AI standard adaptation", () => {
     const row = await style("PRIVATE");
     for (const [key, label] of [["material", "成分"], ["images", "图片"], ["labelImages", "洗唛/吊牌图"]]) await read("INSERT INTO selection_field_registry(workspace_key,field_key,owner_id,visibility,definition) VALUES('default',$1,8,'PRIVATE',$2)", [key, JSON.stringify({ key, label, width: 120, type: key === "material" ? "text" : "image" })]);
     await read("UPDATE style_selections SET images='[{\"url\":\"secret-image\"}]',label_images='[{\"url\":\"secret-label\"}]'");
-    handler = products => ({ rows: products.map(product => ({ id: product.id, values: product.targets.map((target: Row) => ({ key: target.key, value: "", reason: "缺少成分与图片", evidence: [category, title] })), warnings: [] })) });
+    handler = products => ({ rows: products.map(product => ({ id: product.id, values: product.targets.map((target: Row) => ({ key: target.key, value: "", reason: "缺少成分与图片", checks: [], evidence: [category, title] })), warnings: [] })) });
     const preview = await generateStandards(actor(), input([String(row.id)]));
     expect(JSON.stringify(payload)).not.toContain("secret-image"); expect(JSON.stringify(payload)).not.toContain("棉100"); expect(fixture.images).toEqual([]);
     expect(preview.rows[0].values.every(value => !value.value)).toBe(true);
@@ -144,7 +172,7 @@ describe("AI standard adaptation", () => {
   it("keeps insufficient, invented, obsolete, future or falsely referenced suggestions pending without writing them", async () => {
     const row = await style("PENDING");
     for (const [code, evidence] of [["GB/T 99999-2099", ["material"]], ["GB/T 18132-2026", ["material"]], ["GB/T 18132-2008", ["material"]], ["FZ/T 81007-2022", ["product:1"]], ["FZ/T 81007-2022", ["label:1"]]] as [string, string[]][]) {
-      handler = products => ({ rows: products.map(product => ({ id: product.id, values: product.targets.map((target: Row) => ({ key: target.key, value: target.key === safety ? "GB 18401-2010 C类" : code, reason: "候选依据", evidence: target.key === safety ? [category] : evidence })), warnings: [] })) });
+      handler = products => ({ rows: products.map(product => ({ id: product.id, values: product.targets.map((target: Row) => ({ key: target.key, value: target.key === safety ? "GB 18401-2010 C类" : code, reason: "候选依据", checks: [], evidence: target.key === safety ? [category] : evidence })), warnings: [] })) });
       const preview = await generateStandards(actor(), input([String(row.id)]));
       expect(preview.rows[0].values.find(value => value.key === standard)?.value).toBe("");
       expect(readStandardsPlan(preview.planToken, actor()).rows[0].values).toEqual([{ key: safety, value: "GB 18401-2010 C类" }]);

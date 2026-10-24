@@ -104,7 +104,7 @@ export function readStandardsPlan(token: string, c: Context) {
   return result.data;
 }
 const responseSchema = z.object({ rows: z.array(z.object({
-  id: z.string(), values: z.array(z.object({ key: z.string(), value: z.string().trim().max(100), reason: z.string().trim().min(1).max(600), evidence: z.array(z.string().max(100)).max(10) }).strict()).max(2),
+  id: z.string(), values: z.array(z.object({ key: z.string(), value: z.string().trim().max(100), reason: z.string().trim().min(1).max(600), checks: z.array(z.string().trim().min(1).max(300)).max(6), evidence: z.array(z.string().max(100)).max(10) }).strict()).max(2),
   warnings: z.array(z.string().max(600)).max(6),
 }).strict()).max(5) }).strict();
 async function callModel(settings: Row, products: Row[]) {
@@ -120,8 +120,8 @@ async function callModel(settings: Row, products: Row[]) {
         type: "object", additionalProperties: false, required: ["rows"], properties: { rows: { type: "array", items: {
           type: "object", additionalProperties: false, required: ["id", "values", "warnings"], properties: {
             id: { type: "string" }, warnings: { type: "array", items: { type: "string" } }, values: { type: "array", items: {
-              type: "object", additionalProperties: false, required: ["key", "value", "reason", "evidence"], properties: {
-                key: { type: "string" }, value: { type: "string" }, reason: { type: "string" }, evidence: { type: "array", items: { type: "string" } },
+              type: "object", additionalProperties: false, required: ["key", "value", "reason", "checks", "evidence"], properties: {
+                key: { type: "string" }, value: { type: "string" }, reason: { type: "string" }, checks: { type: "array", items: { type: "string" } }, evidence: { type: "array", items: { type: "string" } },
               },
             } },
           },
@@ -205,7 +205,8 @@ export async function generateStandards(c: Context, input: unknown): Promise<Sel
         const issue = value && fieldTextLengthError(field, value);
         if (issue) { value = ""; source = undefined; reason = `字段字数上限不足：${issue}。请调整字段后重试`; }
         for (const key of proposed?.evidence || []) if (evidence.has(key)) used.add(key);
-        return { key: target.key as string, label: field.label, previousValue: target.previousValue as string, value, reason, source: source ? { name: source.name, url: source.url } : null };
+        return { key: target.key as string, label: field.label, previousValue: target.previousValue as string, value, reason,
+          checks: [...new Set(proposed?.checks || [])], source: source ? { name: source.name, url: source.url } : null };
       });
       return { id: product.id, xutiStyleNo: product.xutiStyleNo, values, evidence: [
         `实际读取：商品图片 ${product.pictures.length} 张`,

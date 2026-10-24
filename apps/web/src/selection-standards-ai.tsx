@@ -37,6 +37,8 @@ export function SelectionStandardsAi({ rows, fields, scope, apiRequest: request,
   const expired = (batch: Batch) => Date.parse(batch.expiresAt) <= now;
   const expiredBatches = batches.filter(batch => expired(batch));
   const checkedCount = candidates.filter(({ batch }) => !expired(batch)).reduce((sum, { row }) => sum + row.values.filter(value => value.checked && value.value).length, 0);
+  const proposedCount = candidates.reduce((sum, { row }) => sum + row.values.filter(value => value.value).length, 0);
+  const pendingCount = candidates.reduce((sum, { row }) => sum + row.values.filter(value => !value.value).length, 0);
   const warnings = [...new Set(batches.flatMap(batch => batch.warnings))];
   const checkStatus = async () => {
     setStatusLoading(true);
@@ -114,7 +116,7 @@ export function SelectionStandardsAi({ rows, fields, scope, apiRequest: request,
       <Button type="primary" disabled={!checkedCount} onClick={() => void apply()}>确认填入 {checkedCount} 个单元格</Button>
     </>}</Space>}>
     <p>范围：{scope} · {eligible.length} 款 · 每批 5 款，自动分批处理</p>
-    <Alert type="info" showIcon title="结合商品图片、成分、三级类目和长标题适配，核对后填入" description="会将有权查看的本款商品字段和可读取的商品图发送至 OpenRouter 及模型供应商，产生 API 费用。洗唛/吊牌图不参与适配。结果是适配建议，不代表检测合格；资料不足的字段保留原值。" />
+    <Alert type="info" showIcon title="结合商品图片、成分、三级类目和长标题适配，核对后填入" description="会将有权查看的本款商品字段和可读取的商品图发送至 OpenRouter 及模型供应商，产生 API 费用。洗唛/吊牌图不参与适配。请核对建议及其适用条件后确认填入；无法推荐的字段保留原值，建议不代表检测合格。" />
     <Space wrap className="standards-options"><strong>处理方式</strong><Select aria-label="标准适配处理方式" value={mode} disabled={!!busy || !!completed.length} style={{ width: 220 }} onChange={setMode}
       options={[{ value: "blank", label: "仅填补空白" }, { value: "replace", label: "重新适配（含已有内容）" }]} /></Space>
     <div className="standards-options"><strong>处理字段　</strong>{fields.map(field => <Checkbox key={field.key} disabled={!!busy || !!completed.length} checked={keys.includes(field.key)} onChange={event => setKeys(current => event.target.checked ? [...current, field.key] : current.filter(key => key !== field.key))}>{field.label}</Checkbox>)}</div>
@@ -125,12 +127,14 @@ export function SelectionStandardsAi({ rows, fields, scope, apiRequest: request,
     {error && <Alert type="error" showIcon title={error} />}{result && <Alert type="success" showIcon title={result} />}
     {!!warnings.length && <Alert type="warning" showIcon title={warnings.join("；")} />}
     {!!expiredBatches.length && <Alert type="warning" title="部分候选已过期，请移除后重新适配" />}
+    {!!candidates.length && <p role="status">已处理 {completed.length} / {eligible.length} 款 · 建议 {proposedCount} 个单元格 · 待补充资料 {pendingCount} 个单元格</p>}
     {candidates.slice((activePage - 1) * 4, activePage * 4).map(({ batch, row }) => <section className="standards-candidate" key={`${batch.planToken}:${row.id}`}>
       <div className="standards-heading"><strong><CopyableCode value={row.xutiStyleNo} label="款号" /></strong><Tag color={expired(batch) ? "red" : undefined}>{expired(batch) ? "已过期" : "待核对"}</Tag></div>
       {row.values.map(value => <div className="standards-cell" key={value.key}>
         <Checkbox checked={value.checked} disabled={!!busy || expired(batch) || !value.value || value.value === value.previousValue} onChange={event => toggle(batch.planToken, row.id, value.key, event.target.checked)}>{value.label}</Checkbox>
         <div className="standards-comparison"><div><small>原值</small><span>{value.previousValue || "（空白）"}</span></div><div><small>建议值</small><strong>{value.value || "待补充资料"}</strong></div></div>
         <p className={!value.value ? "standards-pending" : ""}>{value.reason}</p>
+        {!!value.checks.length && <div className="standards-checks"><strong>适用条件待核对</strong><ul>{value.checks.map((check, index) => <li key={index}>{check}</li>)}</ul></div>}
         {value.source && <a href={value.source.url} target="_blank" rel="noreferrer">查看标准来源 · {value.source.name}</a>}
       </div>)}
       {!!row.warnings.length && <p className="standards-pending">{row.warnings.join("；")}</p>}

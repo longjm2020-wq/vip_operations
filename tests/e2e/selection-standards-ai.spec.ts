@@ -2,7 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { projectSelectionSharedLayout, selectionLayoutSchema } from "../../packages/contracts/src/selection-layout.js";
 
 type Values = Record<string, any>;
-async function fixture(page: Page, options: { count?: number; readonly?: boolean; configured?: boolean; failSecondSave?: boolean; pauseFirst?: boolean } = {}) {
+async function fixture(page: Page, options: { count?: number; readonly?: boolean; configured?: boolean; failSecondSave?: boolean; pauseFirst?: boolean; conditional?: boolean } = {}) {
   await page.addInitScript(() => {
     const request = window.fetch.bind(window);
     window.fetch = (input, init) => init?.keepalive && String(input).includes("/api/v1/") ? Promise.resolve(new Response('{"data":null}', { headers: { "Content-Type": "application/json" } })) : request(input, init);
@@ -40,7 +40,8 @@ async function fixture(page: Page, options: { count?: number; readonly?: boolean
           const row = rows.find(row => row.id === id)!;
           return { id, xutiStyleNo: row.xutiStyleNo, evidence: ["实际读取：商品图片 1 张", "成分：棉100%，梭织", "三级类目：女式外套"], warnings: [],
             values: body.targetKeys.filter((key: string) => body.mode === "replace" || !row.extraFields[key]).map((key: string) => ({ key, label: key === "custom:safety" ? "安全类别" : "执行标准", previousValue: row.extraFields[key] || "",
-              value: id === "3" && key === "custom:standard" ? "" : key === "custom:safety" ? "GB 18401-2010 C类" : "FZ/T 81007-2022", reason: id === "3" && key === "custom:standard" ? "织造结构无法确定" : "成人非贴身梭织夹克，无填充",
+              value: id === "3" && key === "custom:standard" ? "" : key === "custom:safety" ? "GB 18401-2010 C类" : "FZ/T 81007-2022", reason: id === "3" && key === "custom:standard" ? "关键商品资料互相矛盾，无法确定优先标准" : options.conditional ? "根据类目与款式优先建议，需核对具体适用条件" : "成人非贴身梭织夹克，无填充",
+              checks: options.conditional ? ["核对主面料为机织结构", "核对是否有保暖填充"] : [],
               source: id === "3" && key === "custom:standard" ? null : { name: "单、夹服装", url: "https://std.samr.gov.cn/hb/search/stdHBDetailed?id=F9A74BF1D2B7EC70E05397BE0A0A8DAE" },
             })),
           };
@@ -105,6 +106,7 @@ test("重新适配自动分批：资料不足不写入，后批失败保留成�
   await panel.getByRole("button", { name: "一键适配", exact: true }).click();
   await expect.poll(() => state.generations.length).toBe(2);
   await expect(panel.getByRole("button", { name: "确认填入 11 个单元格" })).toBeEnabled();
+  await expect(panel).toContainText("已处理 6 / 6 款 · 建议 11 个单元格 · 待补充资料 1 个单元格");
   expect(state.generations.map(batch => batch.rowIds.length)).toEqual([5, 1]);
   await expect(panel).toContainText("已有安全类别");
   const pending = panel.locator(".standards-candidate").filter({ hasText: "ST-3" });
@@ -120,6 +122,21 @@ test("重新适配自动分批：资料不足不写入，后批失败保留成�
   expect(state.idempotencyKeys[2]).toBe(state.idempotencyKeys[1]);
   expect(state.rows[5].extraFields["custom:standard"]).toBe("FZ/T 81007-2022");
   expect(state.applies[2].rows.map((row: Values) => row.id)).toEqual(["6"]);
+});
+
+test("有条件的建议展示具体核对项，确认后只填入标准编号", async ({ page }) => {
+  const state = await fixture(page, { count: 1, conditional: true });
+  const panel = await openPanel(page);
+  await panel.getByRole("button", { name: "一键适配", exact: true }).click();
+  await expect(panel).toContainText("适用条件待核对");
+  await expect(panel).toContainText("核对主面料为机织结构");
+  await expect(panel).toContainText("核对是否有保暖填充");
+  await expect(panel).toContainText("建议 1 个单元格 · 待补充资料 0 个单元格");
+  expect(state.applies).toHaveLength(0);
+  await panel.getByRole("button", { name: "确认填入 1 个单元格", exact: true }).click();
+  await expect(panel).toContainText("已保存 1 款");
+  expect(state.applies[0].rows[0].values).toEqual([{ key: "custom:standard", value: "FZ/T 81007-2022" }]);
+  expect(state.rows[0].extraFields["custom:standard"]).toBe("FZ/T 81007-2022");
 });
 
 test("停止后续批次保留当前候选，关闭预览不会保存", async ({ page }) => {
