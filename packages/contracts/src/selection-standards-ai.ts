@@ -27,6 +27,8 @@ export const selectionStandardsAIPreviewSchema = z.object({
     id, xutiStyleNo: z.string(), evidence: z.array(z.string()), warnings: z.array(z.string()),
     values: z.array(z.object({
       key, label: z.string(), previousValue: z.string(), value: z.string(), reason: z.string(), checks: z.array(z.string().max(300)).max(6).default([]),
+      candidateValue: z.string().max(100).optional(),
+      verification: z.object({ status: z.enum(["verified", "invalid", "not_found", "inactive", "unavailable"]), message: z.string(), checkedAt: z.string().datetime() }).optional(),
       source: z.object({ name: z.string(), url: z.string().url() }).nullable(),
     })),
   })),

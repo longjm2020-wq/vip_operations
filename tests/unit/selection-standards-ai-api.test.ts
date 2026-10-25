@@ -7,7 +7,17 @@ import type { Row, Tx } from "../../packages/database/src/index.js";
 import { selectionScope } from "../../packages/database/src/selection-scope.js";
 import { defaultProtection } from "../../packages/contracts/src/selection-protection.js";
 
-const fixture = vi.hoisted(() => ({ database: null as PGlite | null, archive: true, images: [] as string[] }));
+const fixture = vi.hoisted(() => ({ database: null as PGlite | null, archive: true, images: [] as string[], verificationUnavailable: false }));
+vi.mock("../../apps/api/src/modules/style-selections/standards-verification.js", async importOriginal => {
+  const original = await importOriginal<typeof import("../../apps/api/src/modules/style-selections/standards-verification.js")>();
+  return { ...original, verifyStandard: vi.fn(async (value: string, kind: "safety" | "standard") => {
+    const code = original.standardCode(value, kind), checkedAt = new Date().toISOString();
+    if (fixture.verificationUnavailable) return { status: "unavailable", checkedAt, message: "官方标准核验服务暂不可用，无需补填商品资料" };
+    const names: Record<string, string> = { "GB 18401-2010": "国家纺织产品基本安全技术规范", "GB 20400-2006": "皮革和毛皮 有害物质限量", "QB/T 1615-2018": "皮革服装", "FZ/T 81006-2017": "牛仔服装", "FZ/T 81007-2022": "单、夹服装", "GB/T 18132-2016": "丝绸服装" };
+    return code && names[code] ? { status: "verified", checkedAt, message: "官方现行状态已核验", source: { name: names[code], url: "https://std.samr.gov.cn/" } }
+      : { status: "not_found", checkedAt, message: "未核验到现行标准" };
+  }) };
+});
 vi.mock("../../packages/database/src/index.js", async importOriginal => {
   const original = await importOriginal<typeof import("../../packages/database/src/index.js")>();
   const wrap = (database: Pick<PGlite, "query">) => ({
@@ -24,7 +34,7 @@ vi.mock("../../apps/api/src/modules/style-selections/title-ai-images.js", () => 
   fixture.images.push(url); return url.includes("broken") ? null : "data:image/jpeg;base64,cHJvdGVjdGVk";
 } }));
 import { applyStandards, generateStandards, readStandardsPlan, standardsAIStatus, standardsSource } from "../../apps/api/src/modules/style-selections/standards-ai.js";
-import { standardSource } from "../../apps/api/src/modules/style-selections/standards-ai-catalog.js";
+import { verifyStandard } from "../../apps/api/src/modules/style-selections/standards-verification.js";
 import { encryptSecret } from "../../apps/api/src/modules/analytics/secrets.js";
 const safety = "custom:safety", standard = "custom:standard", title = "custom:title", category = "custom:product:categoryId";
 const actor = (key = "standards"): Context => ({ actor: { id: "7", username: "editor", displayName: "Editor", permissions: ["selection.read", "selection.manage"], roleCodes: [] }, requestId: "standards-test", key });
@@ -58,7 +68,7 @@ beforeAll(async () => {
   await installSelectionContentCreatedTimeSchema(fixture.database);
 }, 30000);
 beforeEach(async () => {
-  vi.stubEnv("COMPASS_MAIL_KEY", "a".repeat(64)); fixture.archive = true; fixture.images = []; calls = 0; payload = {};
+  vi.stubEnv("COMPASS_MAIL_KEY", "a".repeat(64)); fixture.archive = true; fixture.images = []; fixture.verificationUnavailable = false; calls = 0; payload = {}; vi.mocked(verifyStandard).mockClear();
   handler = products => ({ rows: products.map(product => ({ id: product.id, values: product.targets.map((target: Row) => ({ key: target.key,
     value: target.key === safety ? "GB 18401-2010 C类" : "FZ/T 81007-2022", reason: "本款成人非贴身梭织夹克，无填充", checks: [], evidence: ["material", category, title] })), warnings: [] })) });
   await fixture.database!.exec("TRUNCATE style_selections,selection_field_registry,style_selection_protection,idempotency_records,audit_logs,compass_ai_settings RESTART IDENTITY");
@@ -225,9 +235,39 @@ describe("AI standard adaptation", () => {
       expect(readStandardsPlan(preview.planToken, actor()).rows).toEqual([]);
     } finally { await read("UPDATE categories SET name='女式外套' WHERE id=1"); }
   });
-  it("honors upcoming replacement dates for new recommendations", () => {
-    expect(standardSource("standard", "GB/T 18132-2016", Date.parse("2026-10-24"))).toBeDefined();
-    expect(standardSource("standard", "GB/T 18132-2016", Date.parse("2027-08-01"))).toBeUndefined();
-    expect(standardSource("standard", "GB/T 2665-2017", Date.parse("2027-08-01"))).toBeUndefined();
+  it("accepts leather analysis and safety standards without a textile-only category block", async () => {
+    const row = await style("H270X19152", { [title]: "成人女士长款羊皮革半身裙，非贴身穿着" });
+    await read("UPDATE categories SET name='女士皮衣/皮草' WHERE id=1");
+    await read("UPDATE style_selections SET material='面料：100%羊皮革；里料：100%聚酯纤维' WHERE id=$1", [row.id]);
+    handler = products => ({ rows: products.map(product => ({ id: product.id, warnings: [], values: product.targets.map((target: Row) => ({ key: target.key,
+      value: target.key === safety ? "GB 20400-2006 C类" : "QB/T 1615-2018", reason: "羊皮革为主体的成人半身裙，聚酯里料不改变主体分类", checks: ["核对与皮肤的接触方式"], evidence: ["material", category, title] })) })) });
+    try {
+      const preview = await generateStandards(actor(), input([String(row.id)]));
+      expect(preview.rows[0].values.map(value => value.value)).toEqual(["GB 20400-2006 C类", "QB/T 1615-2018"]);
+      expect(JSON.parse(payload.messages[1].content[0].text)).not.toHaveProperty("catalog");
+      await applyStandards(actor(), applyInput(preview));
+      expect((await read("SELECT extra_fields FROM style_selections"))[0].extra_fields[standard]).toBe("QB/T 1615-2018");
+      expect(verifyStandard).toHaveBeenCalledWith("QB/T 1615-2018", "standard", { fresh: true });
+    } finally { await read("UPDATE categories SET name='女式外套' WHERE id=1"); }
+  });
+  it("accepts an officially verified standard outside the former ten examples", async () => {
+    const row = await style("DENIM");
+    handler = products => ({ rows: products.map(product => ({ id: product.id, warnings: [], values: [{ key: standard, value: "FZ/T 81006-2017", reason: "牛仔服装候选", checks: ["核对牛仔面料结构"], evidence: ["material"] }] })) });
+    const preview = await generateStandards(actor(), { rowIds: [String(row.id)], targetKeys: [standard], mode: "blank" });
+    expect(preview.rows[0].values[0]).toMatchObject({ value: "FZ/T 81006-2017", verification: { status: "verified" } });
+    await applyStandards(actor(), applyInput(preview));
+    expect((await read("SELECT extra_fields FROM style_selections"))[0].extra_fields[standard]).toBe("FZ/T 81006-2017");
+  });
+  it("preserves AI analysis during official lookup outages but never signs or saves unchecked candidates", async () => {
+    const row = await style("OUTAGE");
+    fixture.verificationUnavailable = true;
+    const pending = await generateStandards(actor(), input([String(row.id)]));
+    expect(pending.rows[0].values[1]).toMatchObject({ value: "", candidateValue: "FZ/T 81007-2022", reason: "本款成人非贴身梭织夹克，无填充", verification: { status: "unavailable" } });
+    expect(readStandardsPlan(pending.planToken, actor()).rows).toEqual([]);
+    fixture.verificationUnavailable = false;
+    const ready = await generateStandards(actor(), input([String(row.id)]));
+    fixture.verificationUnavailable = true;
+    await expect(applyStandards(actor(), applyInput(ready))).rejects.toMatchObject({ status: 409 });
+    expect(await read("SELECT * FROM audit_logs")).toHaveLength(0);
   });
 });

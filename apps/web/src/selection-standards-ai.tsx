@@ -127,22 +127,23 @@ export function SelectionStandardsAi({ rows, fields, scope, apiRequest: request,
     {error && <Alert type="error" showIcon title={error} />}{result && <Alert type="success" showIcon title={result} />}
     {!!warnings.length && <Alert type="warning" showIcon title={warnings.join("；")} />}
     {!!expiredBatches.length && <Alert type="warning" title="部分候选已过期，请移除后重新适配" />}
-    {!!candidates.length && <p role="status">已处理 {completed.length} / {eligible.length} 款 · 建议 {proposedCount} 个单元格 · 待补充资料 {pendingCount} 个单元格</p>}
+    {!!candidates.length && <p role="status">已处理 {completed.length} / {eligible.length} 款 · 建议 {proposedCount} 个单元格 · 待核对 {pendingCount} 个单元格</p>}
     {candidates.slice((activePage - 1) * 4, activePage * 4).map(({ batch, row }) => <section className="standards-candidate" key={`${batch.planToken}:${row.id}`}>
       <div className="standards-heading"><strong><CopyableCode value={row.xutiStyleNo} label="款号" /></strong><Tag color={expired(batch) ? "red" : undefined}>{expired(batch) ? "已过期" : "待核对"}</Tag></div>
       {row.values.map(value => <div className="standards-cell" key={value.key}>
         <Checkbox checked={value.checked} disabled={!!busy || expired(batch) || !value.value || value.value === value.previousValue} onChange={event => toggle(batch.planToken, row.id, value.key, event.target.checked)}>{value.label}</Checkbox>
-        <div className="standards-comparison"><div><small>原值</small><span>{value.previousValue || "（空白）"}</span></div><div><small>建议值</small><strong>{value.value || "待补充资料"}</strong></div></div>
+        <div className="standards-comparison"><div><small>原值</small><span>{value.previousValue || "（空白）"}</span></div><div><small>{!value.value && value.candidateValue ? "AI 候选（暂不可填入）" : "建议值"}</small><strong>{value.value || value.candidateValue || "待补充资料"}</strong></div></div>
         <p className={!value.value ? "standards-pending" : ""}>{value.reason}</p>
+        {value.verification && <p className={value.verification.status === "verified" ? "" : "standards-pending"}>{value.verification.message} · 核验时间 {new Date(value.verification.checkedAt).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" })}</p>}
         {!!value.checks.length && <div className="standards-checks"><strong>适用条件待核对</strong><ul>{value.checks.map((check, index) => <li key={index}>{check}</li>)}</ul></div>}
         {value.source && <a href={value.source.url} target="_blank" rel="noreferrer">查看标准来源 · {value.source.name}</a>}
       </div>)}
       {!!row.warnings.length && <p className="standards-pending">{row.warnings.join("；")}</p>}
       <Collapse ghost size="small" items={[{ key: "evidence", label: "查看适配依据", children: <ul>{row.evidence.map((item, index) => <li key={index}>{item}</li>)}</ul> }]} />
-      <small>目录核对：{batch.catalogCheckedAt} · 确认前请核对实物、商品资料和适用范围</small>
+      <small>适配规则：{batch.catalogCheckedAt} · 确认前请核对实物、商品资料和适用范围</small>
     </section>)}
     {candidates.length > 4 && <Pagination size="small" current={activePage} pageSize={4} total={candidates.length} showSizeChanger={false} onChange={setPage} />}
     {!eligible.length && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前方式没有可处理的单元格，可切换为重新适配或调整范围" />}
-    <p className="standards-footnote">当前目录覆盖常见成人纺织服装，未覆盖或无法确定的款式留待人工核对。候选 30 分钟有效；保存时重新检查资料和权限，已保存批次不受后续失败影响。</p>
+    <p className="standards-footnote">AI 先分析成人服装的款式、成分和用途，再核验候选标准的官方条目，支持纺织、皮革和毛皮服装，不限预设标准。编号现行不代表本款已检测合格。候选 30 分钟有效；保存前重新核验标准，并检查资料和权限。</p>
   </Modal>;
 }
