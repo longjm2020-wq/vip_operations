@@ -26,7 +26,7 @@ test("唯品会 API 图标与平台标签同排，侧栏和页脚移除 ERP 及�
   await expect(integration).toHaveAttribute("href", "/operations/vip/integration");
   await expect(integration).toHaveText("");
   await expect(integration.locator("svg")).toBeVisible();
-  await expect(page.locator(".sidebar-footer")).toHaveText("内部管理系统");
+  await expect(page.locator(".sidebar-caption")).toHaveText("内部管理系统");
   await expect(page.locator(".sidebar").getByText("工作区", { exact: true })).toHaveCount(0);
   await expect(page.locator(".page-footer")).toHaveText("XUTI");
   await expect(workspace.getByRole("link", { name: "库存明细", exact: true })).toHaveAttribute("href", "/operations/vip/inventory");

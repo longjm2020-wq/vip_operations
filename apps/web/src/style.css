@@ -83,12 +83,11 @@ a {
 .ant-menu-item {
   margin-block: 2px !important;
 }
-.sidebar-footer {
-  padding: 12px 20px;
+.sidebar-caption {
+  padding: 4px 20px 12px;
   font-size: 12px;
+  line-height: 20px;
   color: #dec4ae;
-  border-top: 1px solid #50362a;
-  margin-top: 12px;
 }
 .status-dot {
   display: inline-block;
@@ -668,23 +667,12 @@ pre {
   animation: brand-gradient-flow 6s ease-in-out infinite;
 }
 .sidebar .brand {
-  position: relative;
   padding: 0 22px;
   height: 88px;
-  margin-bottom: 12px;
-}
-.sidebar .brand::after {
-  content: "";
-  position: absolute;
-  left: 20px;
-  right: 20px;
-  bottom: 0;
-  height: 1px;
-  background: #50362a;
-  pointer-events: none;
 }
 .sidebar.ant-layout-sider-collapsed .brand {
   padding: 0;
+  margin-bottom: 12px;
   justify-content: center;
 }
 .sidebar.ant-layout-sider-collapsed .brand-wordmark {

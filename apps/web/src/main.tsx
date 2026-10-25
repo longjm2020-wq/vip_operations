@@ -384,6 +384,14 @@ function Workspace({ user }: { user: Row }) {
           >
             <BrandMark collapsed={ui.collapsed} />
           </Link>
+          {!ui.collapsed && (
+            <div className="sidebar-caption">
+              <span className="status-dot" />{" "}
+              {user.roleCodes?.includes("SUPPLIER")
+                ? "序缇供应链后台"
+                : "内部管理系统"}
+            </div>
+          )}
           <Menu
             mode="inline"
             theme="dark"
@@ -393,14 +401,6 @@ function Workspace({ user }: { user: Row }) {
             onOpenChange={setOpenMenuKeys}
             items={menu}
           />
-          {!ui.collapsed && (
-            <div className="sidebar-footer">
-              <span className="status-dot" />{" "}
-              {user.roleCodes?.includes("SUPPLIER")
-                ? "序缇供应链后台"
-                : "内部管理系统"}
-            </div>
-          )}
         </Layout.Sider>
         <Layout>
           <Layout.Header className="topbar">
