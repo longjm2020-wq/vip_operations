@@ -386,7 +386,6 @@ function Workspace({ user }: { user: Row }) {
           </Link>
           {!ui.collapsed && (
             <div className="sidebar-caption">
-              <span className="status-dot" />{" "}
               {user.roleCodes?.includes("SUPPLIER")
                 ? "序缇供应链后台"
                 : "内部管理系统"}

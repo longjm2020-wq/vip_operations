@@ -89,14 +89,6 @@ a {
   line-height: 20px;
   color: #dec4ae;
 }
-.status-dot {
-  display: inline-block;
-  width: 6px;
-  height: 6px;
-  background: #f58220;
-  border-radius: 50%;
-  margin-right: 6px;
-}
 .topbar {
   position: sticky;
   top: 0;
