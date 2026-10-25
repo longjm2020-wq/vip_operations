@@ -13,6 +13,9 @@ export function WorkspaceMenuIcon({
 }) {
   let shape;
   switch (workspace) {
+    case "/aigc":
+      shape = <path d="m13.5 2-9 12h6L9.5 22l10-13h-6l0-7Z" />;
+      break;
     case "/operations":
       shape = selected ? (
         <path

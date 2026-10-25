@@ -8,6 +8,7 @@ import { api } from "./api";
 import { Alert, Spin } from "antd";
 
 const moduleChapters: Record<string, string> = {
+  aigc: "36-aigc",
   "my-workspace": "32-personal-workspace",
   analytics: "30-compass-analytics",
   products: "02-products",

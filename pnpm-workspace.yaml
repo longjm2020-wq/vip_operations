@@ -6,7 +6,9 @@ allowBuilds:
   esbuild: true
   prisma: true
   tesseract.js: false
+  ffmpeg-static: true
 onlyBuiltDependencies:
   - '@prisma/engines'
   - prisma
   - esbuild
+  - ffmpeg-static

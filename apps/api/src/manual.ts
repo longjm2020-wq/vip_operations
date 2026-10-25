@@ -6,6 +6,7 @@ import { AuthRequest } from "./http.js";
 import type { Actor } from "./core.js";
 
 export const manualPermissions: Record<string, string | null> = {
+  "36-aigc": "aigc.use",
   "00-start": null,
   "01-sheet": null,
   "02-products": "product.read",

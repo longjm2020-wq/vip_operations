@@ -6,6 +6,7 @@ export default tseslint.config(
       "node_modules/**",
       "**/generated/**",
       "apps/web/public/ocr/**",
+      "packages/aigc-engine/**",
     ],
   },
   ...tseslint.configs.recommended,

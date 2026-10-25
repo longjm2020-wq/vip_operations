@@ -1,0 +1,84 @@
+{
+  "1": {
+    "class_type": "VHS_LoadVideo",
+    "inputs": {
+      "video": "UPLOAD_SOURCE_VIDEO.mp4",
+      "force_rate": 0,
+      "custom_width": 0,
+      "custom_height": 0,
+      "frame_load_cap": 0,
+      "skip_first_frames": 0,
+      "select_every_nth": 1,
+      "format": "None"
+    },
+    "_meta": {
+      "title": "01 输入视频（先上传，建议单镜头 2–15 秒）"
+    }
+  },
+  "2": {
+    "class_type": "LoadVideoDepthAnythingModel",
+    "inputs": {
+      "model": "video_depth_anything_vits.pth"
+    },
+    "_meta": {
+      "title": "02 Video Depth Anything Small"
+    }
+  },
+  "3": {
+    "class_type": "VideoDepthAnythingProcess",
+    "inputs": {
+      "vda_model": [
+        "2",
+        0
+      ],
+      "images": [
+        "1",
+        0
+      ],
+      "input_size": 518,
+      "max_res": 768,
+      "precision": "fp16",
+      "colormap": "gray"
+    },
+    "_meta": {
+      "title": "03 时序深度推理 + 全片灰度归一化（兼容版）"
+    }
+  },
+  "5": {
+    "class_type": "VHS_VideoInfoLoaded",
+    "inputs": {
+      "video_info": [
+        "1",
+        3
+      ]
+    },
+    "_meta": {
+      "title": "05 读取已加载视频帧率"
+    }
+  },
+  "6": {
+    "class_type": "VHS_VideoCombine",
+    "inputs": {
+      "images": [
+        "3",
+        0
+      ],
+      "frame_rate": [
+        "5",
+        0
+      ],
+      "loop_count": 0,
+      "filename_prefix": "XUTI_VDA_Small_Depth",
+      "format": "video/h264-mp4",
+      "pix_fmt": "yuv420p",
+      "crf": 19,
+      "save_metadata": false,
+      "trim_to_audio": false,
+      "pingpong": false,
+      "save_output": true
+    },
+    "_meta": {
+      "title": "06 深度 MP4（不接音频）"
+    }
+  }
+}

@@ -30,6 +30,7 @@ import { PersonalWorkspaceModule } from "./modules/workspace/controller.js";
 import { CompetitorAnalysisModule } from "./modules/competitors/controller.js";
 import { CompassSharesModule } from "./modules/analytics/share-controller.js";
 import { selectionImportBodyParser } from "./selection-import-body.js";
+import { createAigcService } from "./modules/aigc/service.js";
 @Module({
   controllers: [ManualController],
   imports: [
@@ -61,6 +62,8 @@ export async function start() {
   });
   app.use(helmet());
   app.use(cookieParser());
+  const aigc = createAigcService();
+  app.use(aigc.middleware);
   app.use("/api/v1/public/selection-collection", (_req: Request, res: Response, next: NextFunction) => { res.setHeader("Cache-Control", "private, no-store"); res.setHeader("Referrer-Policy", "no-referrer"); next(); });
   app.use(
     "/api/v1/projects/uploads",
@@ -120,6 +123,7 @@ export async function start() {
   startImageMigration();
   const stopRecycle = startRecycleCleanup();
   for (const signal of ["SIGINT","SIGTERM"] as const) process.once(signal,() => void stopRecycle());
+  for (const signal of ["SIGINT","SIGTERM"] as const) process.once(signal,() => void aigc.close());
   return app;
 }
 await start();

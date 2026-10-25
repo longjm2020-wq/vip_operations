@@ -6,6 +6,7 @@ const CompassAnalyticsPage = React.lazy(() => import("./compass-analytics").then
 const CompetitorAnalysisPage = React.lazy(() => import("./competitor-analysis").then(module => ({ default: module.CompetitorAnalysisPage })));
 const OperationsWorkspacePage = React.lazy(() => import("./operations-workspace").then(module => ({ default: module.OperationsWorkspacePage })));
 const PersonalWorkspacePage = React.lazy(() => import("./personal-workspace").then(module => ({ default: module.PersonalWorkspacePage })));
+const AigcPage = React.lazy(() => import("./aigc").then(module => ({ default: module.AigcPage })));
 const CompassAISettingsPage = React.lazy(() => import("./compass-ai-settings").then(module => ({ default: module.CompassAISettingsPage })));
 const PublicSelectionCollection = React.lazy(() => import("./selection-collections").then(module => ({ default: module.PublicSelectionCollection })));
 const PublicCompassReport = React.lazy(() => import("./public-compass-report").then(module => ({ default: module.PublicCompassReport })));
@@ -49,6 +50,7 @@ import {
   ArrowLeftOutlined,
   HomeOutlined,
   ReadOutlined,
+  ThunderboltOutlined,
 } from "@ant-design/icons";
 import { api, queryClient, setCsrf } from "./api";
 import { UserContext, Row } from "./shared";
@@ -243,6 +245,7 @@ function Workspace({ user }: { user: Row }) {
   const settings = originalItems.find((i) => i.key === "/settings")!;
   const operationKeys = ["/analytics/compass", "/analytics/competitors", "/style-selections", "/products", "/operations/vip/inventory", "/operations/vip/integration"];
   const items = [
+    { key: "/aigc", label: "AIGC", icon: <ThunderboltOutlined />, permission: "aigc.use", children: undefined },
     ...(operationKeys.some((key) =>
       user.permissions.includes(originalItems.find((i) => i.key === key)!.permission!),
     )
@@ -483,6 +486,7 @@ function Workspace({ user }: { user: Row }) {
           <Layout.Content className={`content${collaborationTable ? " selection-workspace-content" : ""}`}>
             <Routes>
               <Route path="/my-workspace" element={<PersonalWorkspacePage key={user.id} />} />
+              <Route path="/aigc" element={<AigcPage key={user.id} />} />
               <Route path="/settings/ai" element={<CompassAISettingsPage />} />
               <Route path="/supply/profile" element={<SupplyProfile />} />
               <Route path="/supply/products" element={<SupplyProducts />} />

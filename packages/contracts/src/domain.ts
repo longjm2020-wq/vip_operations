@@ -1,5 +1,7 @@
 import { Decimal } from "decimal.js";
 export const permissions = [
+  "aigc.use",
+  "aigc.manage",
   "user.read",
   "user.manage",
   "role.read",
@@ -60,7 +62,7 @@ export const roleSeeds: Record<
   SUPER_ADMIN: { name: "超级管理员", permissions },
   ADMIN: {
     name: "管理员",
-    permissions: permissions.filter((p) => p !== "supply.portal"),
+    permissions: permissions.filter((p) => p !== "supply.portal" && !p.startsWith("aigc.")),
   },
   OPERATOR: {
     name: "商品运营",

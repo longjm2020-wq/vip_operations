@@ -12,6 +12,7 @@ const modules: Record<string, string> = {
   audit: "操作日志",
   vip: "唯品会接入",
   analytics: "经营分析",
+  aigc: "AIGC 创作",
   project: "项目管理",
   sop: "操作流程 SOP",
 };
@@ -49,6 +50,8 @@ export const permissionLabels: Record<string, string> = {
   "vip.settings": "管理唯品会接入与同步",
   "analytics.read": "查看经营分析",
   "analytics.manage": "导入分析报表与配置每日邮件",
+  "aigc.use": "使用 AIGC 创作",
+  "aigc.manage": "管理 AIGC 服务与站长精选",
   "project.read": "查看 SOP、项目与协作表格",
   "project.create": "创建与管理本人项目、协作表格",
   "sop.manage": "管理流程模板",
