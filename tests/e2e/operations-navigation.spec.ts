@@ -21,7 +21,7 @@ test("唯品会 API 图标与平台标签同排，侧栏和页脚移除 ERP 及�
   await fixture(page);
   await page.goto("/operations?platform=vip");
   const workspace = page.locator(".operations-workspace");
-  await expect(page.locator(".sidebar .ant-menu-root > .ant-menu-item, .sidebar .ant-menu-root > .ant-menu-submenu > .ant-menu-submenu-title")).toHaveText(["运营中心", "项目协作", "供应链端", "系统设置"]);
+  await expect(page.locator(".sidebar .ant-menu-root > .ant-menu-item, .sidebar .ant-menu-root > .ant-menu-submenu > .ant-menu-submenu-title")).toHaveText(["我的工作台", "运营中心", "项目协作", "供应链端", "系统设置"]);
   const integration = workspace.getByRole("link", { name: "唯品会接入", exact: true });
   await expect(integration).toHaveAttribute("href", "/operations/vip/integration");
   await expect(integration).toHaveText("");

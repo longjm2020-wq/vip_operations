@@ -47,6 +47,7 @@ import {
   MenuUnfoldOutlined,
   ArrowLeftOutlined,
   HomeOutlined,
+  ReadOutlined,
 } from "@ant-design/icons";
 import { api, queryClient, setCsrf } from "./api";
 import { UserContext, Row } from "./shared";
@@ -407,8 +408,28 @@ function Workspace({ user }: { user: Row }) {
             selectedKeys={personalWorkspace ? ["/my-workspace"] : selected ? [selected] : []}
             openKeys={openMenuKeys}
             onOpenChange={setOpenMenuKeys}
-            items={personalWorkspace ? [{key: "/my-workspace", icon: <HomeOutlined />, label: <Link to="/my-workspace" aria-current="page" onClick={() => setWorkspaceNavOpen(false)}>我的工作台</Link>}, ...menu] : menu}
+            items={[
+              {
+                key: "/my-workspace",
+                icon: <HomeOutlined />,
+                label: <Link to="/my-workspace" aria-current={personalWorkspace ? "page" : undefined} onClick={() => setWorkspaceNavOpen(false)}>我的工作台</Link>,
+              },
+              ...menu,
+            ]}
           />
+          <div className="sidebar-footer">
+            <Link
+              to={manualHref(location.pathname)}
+              className="sidebar-help"
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label="使用手册"
+              title="打开当前模块使用手册，保留当前页面"
+            >
+              <ReadOutlined aria-hidden="true" />
+              <span className="sidebar-help-label">使用手册</span>
+            </Link>
+          </div>
         </Layout.Sider>
         <Layout>
           <Layout.Header className="topbar">
@@ -442,15 +463,6 @@ function Workspace({ user }: { user: Row }) {
             <div ref={setSearchHost} className="topbar-search-host" role="search" aria-label="当前页面搜索"/>
             <Space className="topbar-actions" size={10}>
               <ThemeToggle />
-              <Link to="/my-workspace" className="personal-workspace-entry" aria-current={location.pathname === "/my-workspace" ? "page" : undefined}><HomeOutlined aria-hidden="true" /> 我的工作台</Link>
-              <Link
-                to={manualHref(location.pathname)}
-                target="_blank"
-                rel="noopener noreferrer"
-                title="打开当前模块使用手册，保留当前页面"
-              >
-                使用手册
-              </Link>
               <ProjectNotifications />
               <AccountMenu
                 user={user}

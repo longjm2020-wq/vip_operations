@@ -27,10 +27,10 @@ test("罗盘导入、日期区间、五种明细视图、维度下钻与邮件�
     sidebar.locator(
       ".ant-menu-root > .ant-menu-item, .ant-menu-root > .ant-menu-submenu > .ant-menu-submenu-title",
     ),
-  ).toHaveText(["运营中心", "项目协作", "供应链端", "系统设置"]);
+  ).toHaveText(["我的工作台", "运营中心", "项目协作", "供应链端", "系统设置"]);
   await expect(
     page
-      .locator(".topbar")
+      .locator(".sidebar")
       .getByRole("link", { name: "我的工作台", exact: true }),
   ).toHaveAttribute("aria-current", "page");
   await expect(page.locator(".topbar").getByRole("tab")).toHaveCount(0);

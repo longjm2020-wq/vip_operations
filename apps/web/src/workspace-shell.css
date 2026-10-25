@@ -56,9 +56,6 @@
   color: var(--app-secondary);
   font-size: 12px;
 }
-.workspace-future .topbar-actions .personal-workspace-entry {
-  display: none;
-}
 .workspace-future .account-menu-trigger .ant-avatar {
   background: var(--app-surface);
   color: var(--app-text);
@@ -111,7 +108,7 @@ body:has(.workspace-future) .account-dropdown-profile small {
     position: fixed !important;
     left: 0;
     z-index: 210;
-    overflow: hidden auto;
+    overflow: hidden;
     width: 216px !important;
     min-width: 216px !important;
     max-width: 216px !important;
