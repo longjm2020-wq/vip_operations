@@ -29,7 +29,7 @@ test("shared search stays compact across page controls when a query exceeds the 
     const after = (await page.locator(".topbar").boundingBox())!;
     expect(after.height, path).toBe(before.height);
     await expect(control).toHaveCSS("border-radius", "18px");
-    await expect(control).toHaveCSS("background-color", "rgb(34, 33, 31)");
+    await expect(control).toHaveCSS("background-color", "rgb(33, 35, 41)");
   }
 });
 

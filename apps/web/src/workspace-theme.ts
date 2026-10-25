@@ -4,8 +4,8 @@ import type { ThemeMode } from "../../../packages/contracts/src/appearance";
 export const appThemes: Record<ThemeMode, ThemeConfig> = Object.fromEntries(
   (["dark", "light"] as const).map((mode) => {
     const dark = mode === "dark";
-    const accent = dark ? "#e8bf3c" : "#846200";
-    const accentHover = dark ? "#f4d76b" : "#694d00";
+    const accent = dark ? "#8fa4ff" : "#435ee5";
+    const accentHover = dark ? "#b4c2ff" : "#344bca";
     return [
       mode,
       {
@@ -13,33 +13,33 @@ export const appThemes: Record<ThemeMode, ThemeConfig> = Object.fromEntries(
         token: {
           colorPrimary: accent,
           colorPrimaryHover: accentHover,
-          colorPrimaryActive: dark ? "#d6ad2e" : "#5c4400",
+          colorPrimaryActive: dark ? "#738cff" : "#2f46bd",
           colorInfo: accent,
           colorLink: accent,
           colorLinkHover: accentHover,
-          colorLinkActive: dark ? "#d6ad2e" : "#5c4400",
-          colorInfoBg: dark ? "#302a18" : "#faf3d8",
-          colorInfoBorder: dark ? "#6d5a26" : "#dccc91",
-          colorBgLayout: dark ? "#111111" : "#f8f5f0",
+          colorLinkActive: dark ? "#738cff" : "#2f46bd",
+          colorInfoBg: dark ? "#222a48" : "#eff2ff",
+          colorInfoBorder: dark ? "#46558d" : "#c4cef9",
+          colorBgLayout: dark ? "#111111" : "#f7f8fc",
           colorBgContainer: dark ? "#1b1b1b" : "#ffffff",
-          colorBgElevated: dark ? "#242321" : "#ffffff",
-          colorText: dark ? "#f1ede7" : "#342f29",
-          colorTextSecondary: dark ? "#b9b7b0" : "#6b6960",
-          colorTextPlaceholder: dark ? "#8f8b81" : "#918b7d",
-          colorBorder: dark ? "#3e3b32" : "#dedacf",
-          colorBorderSecondary: dark ? "#302e27" : "#eae6dc",
-          colorPrimaryBg: dark ? "#302a18" : "#faf3d8",
-          colorPrimaryBgHover: dark ? "#3d341c" : "#f4e9bc",
-          colorPrimaryBorder: dark ? "#6d5a26" : "#dccc91",
-          colorTextLightSolid: dark ? "#19140d" : "#ffffff",
+          colorBgElevated: dark ? "#24262d" : "#ffffff",
+          colorText: dark ? "#eef0f6" : "#272c3d",
+          colorTextSecondary: dark ? "#b1b6c6" : "#626b80",
+          colorTextPlaceholder: dark ? "#9199ad" : "#788297",
+          colorBorder: dark ? "#3b4050" : "#dde1ec",
+          colorBorderSecondary: dark ? "#2e323f" : "#e9ecf5",
+          colorPrimaryBg: dark ? "#222a48" : "#eff2ff",
+          colorPrimaryBgHover: dark ? "#2c3559" : "#e2e8ff",
+          colorPrimaryBorder: dark ? "#46558d" : "#c4cef9",
+          colorTextLightSolid: dark ? "#111828" : "#ffffff",
           borderRadius: 6,
           controlHeight: 30,
           fontFamily: 'Inter, "Microsoft YaHei", sans-serif',
         },
         components: {
           Table: {
-            headerBg: dark ? "#27261f" : "#f6f4eb",
-            headerColor: dark ? "#d8d5c8" : "#625d4d",
+            headerBg: dark ? "#252936" : "#f0f3fb",
+            headerColor: dark ? "#d4daf0" : "#52607c",
             cellPaddingBlock: 6,
             cellPaddingBlockMD: 6,
             cellPaddingBlockSM: 5,
@@ -49,7 +49,7 @@ export const appThemes: Record<ThemeMode, ThemeConfig> = Object.fromEntries(
           Button: {
             controlHeight: 30,
             primaryShadow: "none",
-            primaryColor: "#211c0e",
+            primaryColor: "#ffffff",
           },
           Card: { bodyPadding: 14, headerPadding: 14, headerHeight: 40 },
           Form: { itemMarginBottom: 12, verticalLabelPadding: "0 0 4px" },
@@ -59,11 +59,11 @@ export const appThemes: Record<ThemeMode, ThemeConfig> = Object.fromEntries(
             darkItemBg: "transparent",
             darkSubMenuItemBg: "transparent",
             itemSelectedColor: accent,
-            itemSelectedBg: dark ? "#302a18" : "#faf3d8",
-            darkItemColor: dark ? "#b9b7b0" : "#6b6960",
+            itemSelectedBg: dark ? "#222a48" : "#eff2ff",
+            darkItemColor: dark ? "#b1b6c6" : "#626b80",
             darkItemSelectedColor: accent,
-            darkItemSelectedBg: dark ? "#302a18" : "#faf3d8",
-            darkItemHoverColor: dark ? "#f1ede7" : "#342f29",
+            darkItemSelectedBg: dark ? "#222a48" : "#eff2ff",
+            darkItemHoverColor: dark ? "#eef0f6" : "#272c3d",
           },
           Tooltip: { colorTextLightSolid: "#ffffff" },
         },

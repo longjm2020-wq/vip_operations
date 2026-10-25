@@ -148,7 +148,7 @@ const toggle = (page: Page, next: "light" | "dark") =>
     })
     .click();
 
-test("金黄工作台移除工具摘要，切换不丢草稿且只保存主题", async ({
+test("蓝色工作台移除工具摘要，切换不丢草稿且只保存主题", async ({
   page,
   context,
 }) => {
@@ -166,7 +166,7 @@ test("金黄工作台移除工具摘要，切换不丢草稿且只保存主题",
   await page.evaluate(() => window.scrollTo(0, 0));
   await page.screenshot({
     animations: "disabled",
-    path: test.info().outputPath("charcoal-gold-desktop.png"),
+    path: test.info().outputPath("charcoal-blue-desktop.png"),
   });
   await toggle(page, "light");
   await mode(page, "light");
@@ -178,7 +178,7 @@ test("金黄工作台移除工具摘要，切换不丢草稿且只保存主题",
   await page.evaluate(() => window.scrollTo(0, 0));
   await page.screenshot({
     animations: "disabled",
-    path: test.info().outputPath("warm-light-desktop.png"),
+    path: test.info().outputPath("blue-light-desktop.png"),
   });
   await page.reload();
   await mode(page, "light");
@@ -223,13 +223,13 @@ test("业务库存和弹出菜单跟随主题，页面切换保持主题", async
   ).toHaveCount(1);
   await expect(page.locator(".ant-table-thead th").first()).toHaveCSS(
     "background-color",
-    "rgb(39, 38, 31)",
+    "rgb(37, 41, 54)",
   );
   await toggle(page, "light");
   await mode(page, "light");
   await expect(page.locator(".ant-table-thead th").first()).toHaveCSS(
     "background-color",
-    "rgb(246, 244, 235)",
+    "rgb(240, 243, 251)",
   );
   await page.getByRole("link", { name: "我的工作台", exact: true }).click();
   await mode(page, "light");
@@ -244,7 +244,7 @@ test("业务库存和弹出菜单跟随主题，页面切换保持主题", async
   await page.getByRole("button", { name: "新增日程", exact: true }).click();
   await expect(dialog.locator(".ant-modal-container")).toHaveCSS(
     "background-color",
-    "rgb(36, 35, 33)",
+    "rgb(36, 38, 45)",
   );
 });
 test("保存失败不假称同步，恢复最新设置后可重试；并发冲突不覆盖", async ({

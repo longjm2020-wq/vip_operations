@@ -4,22 +4,22 @@
   color-scheme: dark;
   --app-bg: #111111;
   --app-surface: #1b1b1b;
-  --app-elevated: #242321;
-  --app-muted: #22211f;
-  --app-hover: #302a1d;
-  --app-text: #f1ede7;
-  --app-secondary: #b9b7b0;
-  --app-subtle: #969183;
-  --app-border: #38362e;
-  --app-border-strong: #685e3e;
-  --app-accent: #e8bf3c;
-  --app-accent-hover: #f4d76b;
-  --app-accent-soft: #302a18;
-  --app-accent-border: #6d5a26;
-  --app-accent-fill: #e8bf3c;
-  --app-accent-fill-hover: #f3d36a;
-  --app-accent-fill-active: #d6ad2e;
-  --app-on-accent: #211c0e;
+  --app-elevated: #24262d;
+  --app-muted: #212329;
+  --app-hover: #222a48;
+  --app-text: #eef0f6;
+  --app-secondary: #b1b6c6;
+  --app-subtle: #9199ad;
+  --app-border: #323642;
+  --app-border-strong: #455274;
+  --app-accent: #8fa4ff;
+  --app-accent-hover: #b4c2ff;
+  --app-accent-soft: #222a48;
+  --app-accent-border: #46558d;
+  --app-accent-fill: #435ee5;
+  --app-accent-fill-hover: #3853d5;
+  --app-accent-fill-active: #2f46bd;
+  --app-on-accent: #ffffff;
   --app-success: #8dc8a1;
   --app-success-bg: #1d3025;
   --app-danger: #f59b91;
@@ -30,36 +30,35 @@
   --app-warning-bg: #352b1b;
   --app-shadow: #00000026;
   --app-header: #171717ed;
-  --app-glow: #e8bf3c20;
-  --app-hero-start: #272418;
-  --app-hero-end: #191918;
-  --app-gold: #f4d76b;
-  --app-gold-deep: #d8af31;
-  --app-orb-core: #302916;
-  --app-logo-base: #b58e24;
-  --app-logo-mid: #e8bf3c;
-  --app-logo-highlight: #fae79f;
-  --app-logo-shadow: #e8bf3c30;
-  --app-logo-glow: #e8bf3c60;
+  --app-glow: #435ee51c;
+  --app-hero-start: #1b2033;
+  --app-hero-end: #181a20;
+  --app-effect-light: #b4c2ff;
+  --app-effect-deep: #738cff;
+  --app-logo-base: #435ee5;
+  --app-logo-mid: #8fa4ff;
+  --app-logo-highlight: #ced7ff;
+  --app-logo-shadow: #435ee530;
+  --app-logo-glow: #8fa4ff50;
   --app-lock: #302e2b;
   --app-chart-secondary: #90aaad;
 }
 :root[data-theme="light"] {
   color-scheme: light;
-  --app-bg: #f8f5f0;
+  --app-bg: #f7f8fc;
   --app-surface: #ffffff;
   --app-elevated: #ffffff;
-  --app-muted: #faf7f2;
-  --app-hover: #fbf5df;
-  --app-text: #342f29;
-  --app-secondary: #6b6960;
-  --app-subtle: #827b6b;
-  --app-border: #dedacf;
-  --app-border-strong: #c5b987;
-  --app-accent: #846200;
-  --app-accent-hover: #694d00;
-  --app-accent-soft: #faf3d8;
-  --app-accent-border: #dccc91;
+  --app-muted: #f5f6fb;
+  --app-hover: #eff2ff;
+  --app-text: #272c3d;
+  --app-secondary: #626b80;
+  --app-subtle: #788297;
+  --app-border: #dde1ec;
+  --app-border-strong: #b5c1e3;
+  --app-accent: #435ee5;
+  --app-accent-hover: #344bca;
+  --app-accent-soft: #eff2ff;
+  --app-accent-border: #c4cef9;
   --app-success: #347449;
   --app-success-bg: #eff8ef;
   --app-danger: #bc3930;
@@ -68,19 +67,18 @@
   --app-info-bg: #edf4fe;
   --app-warning: #906417;
   --app-warning-bg: #fff8df;
-  --app-shadow: #5c41110c;
+  --app-shadow: #1524530c;
   --app-header: #ffffffef;
-  --app-glow: #e8bf3c1c;
-  --app-hero-start: #fcf6df;
-  --app-hero-end: #fffdf6;
-  --app-gold: #96731c;
-  --app-gold-deep: #735400;
-  --app-orb-core: #d1ba73;
-  --app-logo-base: #72550c;
-  --app-logo-mid: #846200;
-  --app-logo-highlight: #a47b1a;
-  --app-logo-shadow: #84620010;
-  --app-logo-glow: #b9942820;
+  --app-glow: #435ee514;
+  --app-hero-start: #f2f5ff;
+  --app-hero-end: #ffffff;
+  --app-effect-light: #435ee5;
+  --app-effect-deep: #304bc3;
+  --app-logo-base: #2f46bd;
+  --app-logo-mid: #435ee5;
+  --app-logo-highlight: #667ded;
+  --app-logo-shadow: #435ee510;
+  --app-logo-glow: #435ee520;
   --app-lock: #e9e6e1;
   --app-chart-secondary: #46777d;
 }
@@ -135,24 +133,31 @@ body {
 .theme-error .ant-btn {
   margin-top: 6px;
 }
-/* Solid actions share a yellow fill; text/outlined actions use the readable accent. */
-.ant-btn.ant-btn-color-primary.ant-btn-variant-solid:not(:disabled):not(.ant-btn-disabled) {
+/* Solid actions share the brand blue; text/outlined actions use a readable accent. */
+.ant-btn.ant-btn-color-primary.ant-btn-variant-solid:not(:disabled):not(
+    .ant-btn-disabled
+  ) {
   background: var(--app-accent-fill);
   color: var(--app-on-accent);
 }
-.ant-btn.ant-btn-color-primary.ant-btn-variant-solid:not(:disabled):not(.ant-btn-disabled):hover {
+.ant-btn.ant-btn-color-primary.ant-btn-variant-solid:not(:disabled):not(
+    .ant-btn-disabled
+  ):hover {
   background: var(--app-accent-fill-hover);
 }
-.ant-btn.ant-btn-color-primary.ant-btn-variant-solid:not(:disabled):not(.ant-btn-disabled):active {
+.ant-btn.ant-btn-color-primary.ant-btn-variant-solid:not(:disabled):not(
+    .ant-btn-disabled
+  ):active {
   background: var(--app-accent-fill-active);
 }
-/* The login video remains dark in either mode, so its wordmark uses bright gold. */
-.login-story, .supplier-registration-brand {
-  --app-logo-base: #b58e24;
-  --app-logo-mid: #e8bf3c;
-  --app-logo-highlight: #fae79f;
-  --app-logo-shadow: #e8bf3c30;
-  --app-logo-glow: #e8bf3c60;
+/* The login video remains dark in either mode, so its wordmark uses brighter blue. */
+.login-story,
+.supplier-registration-brand {
+  --app-logo-base: #435ee5;
+  --app-logo-mid: #8fa4ff;
+  --app-logo-highlight: #ced7ff;
+  --app-logo-shadow: #435ee530;
+  --app-logo-glow: #8fa4ff50;
 }
 .sidebar .ant-menu-dark .ant-menu-item-selected {
   background: var(--app-accent-soft) !important;
