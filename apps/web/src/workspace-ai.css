@@ -89,6 +89,7 @@
     var(--app-accent-fill)
   );
   opacity: var(--cell-level);
+  transform: scale(var(--cell-scale));
   animation: workspace-matrix-wave 6s ease-in-out var(--cell-delay) infinite;
 }
 .workspace-matrix-bits {
