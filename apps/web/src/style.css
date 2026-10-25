@@ -668,8 +668,20 @@ pre {
   animation: brand-gradient-flow 6s ease-in-out infinite;
 }
 .sidebar .brand {
+  position: relative;
   padding: 0 22px;
-  height: 64px;
+  height: 88px;
+  margin-bottom: 12px;
+}
+.sidebar .brand::after {
+  content: "";
+  position: absolute;
+  left: 20px;
+  right: 20px;
+  bottom: 0;
+  height: 1px;
+  background: #50362a;
+  pointer-events: none;
 }
 .sidebar.ant-layout-sider-collapsed .brand {
   padding: 0;
