@@ -27,6 +27,7 @@ import { Header, QueryState, Row, useUser } from "./shared";
 import type { WorkspaceConfig } from "../../../packages/contracts/src/personal-workspace";
 import "./personal-workspace.css";
 import { PersonalWorkspaceContent } from "./personal-workspace-content";
+import { WorkspaceAI } from "./workspace-ai";
 
 export function PersonalWorkspacePage() {
   const user = useUser(),
@@ -113,7 +114,7 @@ export function PersonalWorkspacePage() {
     <div className="personal-workspace">
       <Header
         title="我的工作台"
-        subtitle="仅自己可见 · 常用工具、个人待办与备忘"
+        subtitle="AI 助手、常用工具与个人事项"
         extra={
           <Space>
             <span className="secondary" role="status">
@@ -141,7 +142,7 @@ export function PersonalWorkspacePage() {
           <section className="personal-welcome">
             <div>
               <Tag icon={<LockOutlined />}>个人空间</Tag>
-              <h2>{user.displayName}，欢迎回来</h2>
+              <h2>{user.displayName}，开始今天的工作</h2>
               <p>
                 {workspace.defaults.name} · {workspace.defaults.description}
               </p>
@@ -161,157 +162,166 @@ export function PersonalWorkspacePage() {
               </div>
             </div>
           </section>
-          <Card
-            title="常用工具"
-            extra={
-              <Button
-                icon={<SettingOutlined />}
-                disabled={busy}
-                onClick={() => {
-                  setTools([...draft.shortcuts]);
-                  setConfigure(true);
-                }}
-              >
-                自定义工具
-              </Button>
-            }
-          >
-            <div className="personal-tools">
-              {draft.shortcuts.map((id) => {
-                const tool = available.find((t) => t.id === id);
-                return (
-                  tool && (
-                    <Link key={id} to={tool.path} className="personal-tool">
-                      <span className="personal-tool-group">{tool.group}</span>
-                      <div>
-                        <strong>{tool.title}</strong>
-                        <p>{tool.description}</p>
-                      </div>
-                      <ArrowRightOutlined aria-hidden="true" />
-                    </Link>
-                  )
-                );
-              })}
-            </div>
-            {!draft.shortcuts.length && (
-              <Empty
-                image={Empty.PRESENTED_IMAGE_SIMPLE}
-                description="添加常用工具，快速进入已有功能"
-              />
-            )}
-          </Card>
-          <PersonalWorkspaceContent />
-          <div className="personal-lower">
-            <Card
-              title="个人待办"
-              extra={
-                <span className="secondary">
-                  {draft.todos.filter((t) => t.done).length} /{" "}
-                  {draft.todos.length} 已完成
-                </span>
-              }
-            >
-              <div className="personal-todo-add">
-                <Input
-                  value={title}
-                  aria-label="待办事项"
-                  placeholder="添加自己的待办事项"
-                  maxLength={160}
-                  disabled={busy || draft.todos.length >= 200}
-                  onChange={(e) => setTitle(e.target.value)}
-                  onPressEnter={addTodo}
-                />
-                <Input
-                  type="date"
-                  value={dueDate}
-                  aria-label="待办截止日期"
-                  disabled={busy}
-                  onChange={(e) => setDueDate(e.target.value)}
-                />
-                <Button
-                  icon={<PlusOutlined />}
-                  onClick={addTodo}
-                  disabled={busy || !title.trim() || draft.todos.length >= 200}
-                >
-                  添加
-                </Button>
-              </div>
-              <div className="personal-todos">
-                {draft.todos.map((todo) => (
-                  <div
-                    className={"personal-todo" + (todo.done ? " done" : "")}
-                    key={todo.id}
+          <WorkspaceAI />
+          <div className="personal-workspace-body">
+            <div className="personal-workspace-main">
+              <Card
+                title="常用工具"
+                extra={
+                  <Button
+                    icon={<SettingOutlined />}
+                    disabled={busy}
+                    onClick={() => {
+                      setTools([...draft.shortcuts]);
+                      setConfigure(true);
+                    }}
                   >
-                    <Checkbox
-                      checked={todo.done}
-                      disabled={busy}
-                      onChange={(e) =>
-                        change({
-                          ...draft,
-                          todos: draft.todos.map((t) =>
-                            t.id === todo.id
-                              ? { ...t, done: e.target.checked }
-                              : t,
-                          ),
-                        })
-                      }
+                    自定义工具
+                  </Button>
+                }
+              >
+                <div className="personal-tools">
+                  {draft.shortcuts.map((id) => {
+                    const tool = available.find((t) => t.id === id);
+                    return (
+                      tool && (
+                        <Link key={id} to={tool.path} className="personal-tool">
+                          <span className="personal-tool-group">
+                            {tool.group}
+                          </span>
+                          <div>
+                            <strong>{tool.title}</strong>
+                            <p>{tool.description}</p>
+                          </div>
+                          <ArrowRightOutlined aria-hidden="true" />
+                        </Link>
+                      )
+                    );
+                  })}
+                </div>
+                {!draft.shortcuts.length && (
+                  <Empty
+                    image={Empty.PRESENTED_IMAGE_SIMPLE}
+                    description="添加常用工具，快速进入已有功能"
+                  />
+                )}
+              </Card>
+              <PersonalWorkspaceContent />
+            </div>
+            <div className="personal-lower">
+              <Card
+                title="个人待办"
+                extra={
+                  <span className="secondary">
+                    {draft.todos.filter((t) => t.done).length} /{" "}
+                    {draft.todos.length} 已完成
+                  </span>
+                }
+              >
+                <div className="personal-todo-add">
+                  <Input
+                    value={title}
+                    aria-label="待办事项"
+                    placeholder="添加自己的待办事项"
+                    maxLength={160}
+                    disabled={busy || draft.todos.length >= 200}
+                    onChange={(e) => setTitle(e.target.value)}
+                    onPressEnter={addTodo}
+                  />
+                  <Input
+                    type="date"
+                    value={dueDate}
+                    aria-label="待办截止日期"
+                    disabled={busy}
+                    onChange={(e) => setDueDate(e.target.value)}
+                  />
+                  <Button
+                    icon={<PlusOutlined />}
+                    onClick={addTodo}
+                    disabled={
+                      busy || !title.trim() || draft.todos.length >= 200
+                    }
+                  >
+                    添加
+                  </Button>
+                </div>
+                <div className="personal-todos">
+                  {draft.todos.map((todo) => (
+                    <div
+                      className={"personal-todo" + (todo.done ? " done" : "")}
+                      key={todo.id}
                     >
-                      {todo.title}
-                    </Checkbox>
-                    {todo.dueDate && (
-                      <Tag
-                        color={
-                          !todo.done && todo.dueDate < today
-                            ? "volcano"
-                            : undefined
+                      <Checkbox
+                        checked={todo.done}
+                        disabled={busy}
+                        onChange={(e) =>
+                          change({
+                            ...draft,
+                            todos: draft.todos.map((t) =>
+                              t.id === todo.id
+                                ? { ...t, done: e.target.checked }
+                                : t,
+                            ),
+                          })
                         }
                       >
-                        {todo.dueDate}
-                      </Tag>
-                    )}
-                    <Button
-                      type="text"
-                      icon={<DeleteOutlined />}
-                      aria-label={`删除待办 ${todo.title}`}
-                      disabled={busy}
-                      onClick={() =>
-                        change({
-                          ...draft,
-                          todos: draft.todos.filter((t) => t.id !== todo.id),
-                        })
-                      }
-                    />
-                  </div>
-                ))}
-              </div>
-              {!draft.todos.length && (
-                <Empty
-                  image={Empty.PRESENTED_IMAGE_SIMPLE}
-                  description="暂无个人待办"
+                        {todo.title}
+                      </Checkbox>
+                      {todo.dueDate && (
+                        <Tag
+                          color={
+                            !todo.done && todo.dueDate < today
+                              ? "volcano"
+                              : undefined
+                          }
+                        >
+                          {todo.dueDate}
+                        </Tag>
+                      )}
+                      <Button
+                        type="text"
+                        icon={<DeleteOutlined />}
+                        aria-label={`删除待办 ${todo.title}`}
+                        disabled={busy}
+                        onClick={() =>
+                          change({
+                            ...draft,
+                            todos: draft.todos.filter((t) => t.id !== todo.id),
+                          })
+                        }
+                      />
+                    </div>
+                  ))}
+                </div>
+                {!draft.todos.length && (
+                  <Empty
+                    image={Empty.PRESENTED_IMAGE_SIMPLE}
+                    description="暂无个人待办"
+                  />
+                )}
+                <small className="secondary">
+                  个人待办仅自己可见。项目任务请在项目协作中查看。
+                </small>
+              </Card>
+              <Card
+                title="私有备忘"
+                extra={<LockOutlined aria-label="仅自己可见" />}
+              >
+                <Input.TextArea
+                  aria-label="私有备忘"
+                  value={draft.note}
+                  onChange={(e) => change({ ...draft, note: e.target.value })}
+                  placeholder="记录工作思路、提醒或备忘…"
+                  maxLength={4000}
+                  showCount
+                  rows={9}
+                  disabled={busy}
                 />
-              )}
-              <small className="secondary">
-                个人待办仅自己可见。项目任务请在项目协作中查看。
-              </small>
-            </Card>
-            <Card
-              title="私有备忘"
-              extra={<LockOutlined aria-label="仅自己可见" />}
-            >
-              <Input.TextArea
-                aria-label="私有备忘"
-                value={draft.note}
-                onChange={(e) => change({ ...draft, note: e.target.value })}
-                placeholder="记录工作思路、提醒或备忘…"
-                maxLength={4000}
-                showCount
-                rows={9}
-                disabled={busy}
-              />
-              <p className="secondary">
-                保存后随账号同步，其他用户及管理员的工作台不会显示这份内容。
-              </p>
-            </Card>
+                <p className="secondary">
+                  保存后随账号同步，其他用户及管理员的工作台不会显示这份内容。
+                </p>
+              </Card>
+            </div>
           </div>
         </>
       )}

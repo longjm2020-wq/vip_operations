@@ -258,8 +258,7 @@ test("商品MINI图打开真实日期范围并按TAB分类，关闭保留滚动�
     .getByRole("button", { name: "查看STYLE-005每日趋势", exact: true })
     .click();
   const modal = page.getByRole("dialog", {
-    name: "款号 STYLE-005 · 每日数据趋势",
-    exact: true,
+    name: /^款号 STYLE-005 .*每日数据趋势$/,
   });
   await expect(modal.locator(".compass-entity-period")).toContainText(
     "2026-09-25 — 2026-10-01",

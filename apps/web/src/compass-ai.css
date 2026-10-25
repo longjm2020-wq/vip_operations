@@ -26,9 +26,36 @@
   padding: 16px 20px;
   margin-bottom: 18px;
 }
-.ai-summary > span {
+.ai-summary .ant-bubble-header {
   font-size: 12px;
   color: #bd5c21;
+}
+.ai-summary .ant-bubble {
+  width: 100%;
+}
+.ai-summary .ant-bubble-content {
+  padding: 0;
+}
+.ai-execution {
+  margin: 0 0 18px;
+  padding: 14px 18px;
+  border: 1px solid #e8dfed;
+  border-radius: 12px;
+  background: #fdfbff;
+}
+.ai-execution > summary {
+  cursor: pointer;
+  color: #796783;
+  font-size: 12px;
+}
+.ai-execution .ant-thought-chain {
+  margin-top: 16px;
+}
+.ai-execution > small {
+  display: block;
+  margin-top: 12px;
+  color: #99899e;
+  overflow-wrap: anywhere;
 }
 .ai-summary p {
   margin: 8px 0;

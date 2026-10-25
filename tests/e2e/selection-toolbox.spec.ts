@@ -5,6 +5,17 @@ import { read as readXls, utils as xlsUtils } from "xlsx";
 import { selectionLayoutSchema, projectSelectionSharedLayout } from "../../packages/contracts/src/selection-layout.js";
 
 type Row = Record<string, any>;
+test("工作台链接打开指定工具箱入口，保留表格且不会自动修改商品", async ({ page }) => {
+  const state = await fixture(page, "/products?toolbox=ai-title", ["product.read", "product.update"], true);
+  const toolbox = page.getByRole("dialog", { name: "工具箱", exact: true });
+  await expect(toolbox).toBeVisible();
+  await expect(toolbox.getByRole("button", { name: "AI 商品标题", exact: true })).toHaveClass(/suggested/);
+  await expect(toolbox).toContainText("当前尚未发起生成");
+  await expect(page).toHaveURL(/\/products$/);
+  await toolbox.getByRole("button", { name: "关闭", exact: true }).click();
+  await expect(page.locator("tr[data-selection-row]")).toHaveCount(2);
+  expect(state.gridWrites).toEqual([]);
+});
 test("表格复制编号保留选区和只读规则，禁止查看内容不能复制", async ({ page }) => {
   await page.addInitScript(() => {
     (window as any).copiedCodes = [];

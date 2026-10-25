@@ -1,4 +1,9 @@
 import { useEffect, useRef, useState } from "react";
+import { Bubble, ThoughtChain } from "@ant-design/x";
+import {
+  compassAIStates as states,
+  compassExecutionSteps,
+} from "./compass-ai-state";
 import {
   CompassProductText,
   productReferenceTargets,
@@ -23,7 +28,7 @@ import {
 import { CompassSharePanel } from "./compass-share";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "./api";
-import { QueryState } from "./shared";
+import { QueryState, useUser } from "./shared";
 import { CompassTrend } from "./compass-charts";
 import {
   CompassProductImage,
@@ -44,16 +49,6 @@ import {
 import "./compass-ai.css";
 import "./compass-share.css";
 
-const states: Record<string, string> = {
-  READY: "已生成",
-  PENDING: "生成中",
-  FAILED: "生成失败",
-  DISABLED: "未开启",
-  WAITING_KEY: "待配置密钥",
-  WAITING_VERIFICATION: "待验证",
-  WAITING_DATA: "等待完整报表",
-  NOT_GENERATED: "待生成",
-};
 const number = (value: unknown) => {
   const v = metricNumber(value);
   return v == null
@@ -300,23 +295,28 @@ export function CompassReportView({
           })}
         </div>
         <section className="ai-summary">
-          <span>经营摘要</span>
-          <p>{linkedText(content.summary)}</p>
-          <a
-            href="#ai-complete-report"
-            onClick={(event) => {
-              event.preventDefault();
-              if (completeRef.current) {
-                completeRef.current.open = true;
-                completeRef.current.scrollIntoView({
-                  behavior: "smooth",
-                  block: "start",
-                });
-              }
-            }}
-          >
-            查看完整解读 ↓
-          </a>
+          <Bubble
+            variant="borderless"
+            header={<span>经营摘要</span>}
+            content={<p>{linkedText(content.summary)}</p>}
+            footer={
+              <a
+                href="#ai-complete-report"
+                onClick={(event) => {
+                  event.preventDefault();
+                  if (completeRef.current) {
+                    completeRef.current.open = true;
+                    completeRef.current.scrollIntoView({
+                      behavior: "smooth",
+                      block: "start",
+                    });
+                  }
+                }}
+              >
+                查看完整解读 ↓
+              </a>
+            }
+          />
         </section>
         {report.visuals ? (
           <VisualReport visuals={report.visuals} onPreview={setPreview} />
@@ -378,11 +378,12 @@ export function CompassAIReport({
   open: boolean;
   onClose: () => void;
 }) {
+  const user = useUser();
   const { message } = App.useApp(),
     [busy, setBusy] = useState(false),
     [sharing, setSharing] = useState(false);
   const q = useQuery({
-    queryKey: ["compass-ai-report", sourceKey],
+    queryKey: ["compass-ai-report", user.id, sourceKey],
     queryFn: () => api("/analytics/compass/ai-report"),
     enabled: open,
     refetchInterval: (query) =>
@@ -451,6 +452,15 @@ export function CompassAIReport({
     >
       <QueryState error={q.error} reload={() => q.refetch()} />
       {q.isLoading && <Spin />}
+      {!q.isLoading && !q.error && (
+        <details className="ai-execution" open={!content} key={report?.state}>
+          <summary>生成状态{content ? " · 已完成" : ""}</summary>
+          <ThoughtChain items={compassExecutionSteps(report, busy)} />
+          {report?.responseModel && (
+            <small>实际返回模型：{report.responseModel}</small>
+          )}
+        </details>
+      )}
       {content ? (
         <CompassReportView report={report} />
       ) : (

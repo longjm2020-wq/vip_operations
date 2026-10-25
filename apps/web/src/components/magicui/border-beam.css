@@ -1,0 +1,41 @@
+.magic-border-beam {
+  position: absolute;
+  inset: 0;
+  border: 1px solid transparent;
+  border-radius: inherit;
+  pointer-events: none;
+  mask: linear-gradient(#000, #000), linear-gradient(#000, #000);
+  mask-composite: exclude;
+  mask-clip: padding-box, border-box;
+  opacity: 0;
+}
+.magic-border-beam.is-active {
+  opacity: 0.7;
+}
+.magic-border-beam > div {
+  position: absolute;
+  width: 120px;
+  aspect-ratio: 1;
+  background: linear-gradient(to left, #eca86b, #a996d9, transparent);
+  offset-path: rect(0 auto auto 0 round 20px);
+  animation: magic-border-travel var(--beam-duration, 14s) linear infinite;
+}
+.magic-border-beam:not(.is-active) > div {
+  animation-play-state: paused;
+}
+@keyframes magic-border-travel {
+  from {
+    offset-distance: 0%;
+  }
+  to {
+    offset-distance: 100%;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .magic-border-beam {
+    display: none;
+  }
+  .magic-border-beam > div {
+    animation: none;
+  }
+}

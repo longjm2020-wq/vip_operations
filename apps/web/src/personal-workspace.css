@@ -7,11 +7,8 @@
   justify-content: space-between;
   align-items: center;
   gap: 24px;
-  padding: 26px;
-  margin: 16px 0;
-  border: 1px solid #ead8c9;
-  border-radius: 12px;
-  background: linear-gradient(120deg, #fff0df, #fffdfb);
+  padding: 12px 2px 22px;
+  margin: 16px 0 0;
 }
 .personal-welcome h2 {
   margin: 12px 0 8px;
@@ -24,7 +21,7 @@
 }
 .personal-counts {
   display: flex;
-  gap: 36px;
+  gap: 28px;
   text-align: center;
 }
 .personal-counts strong {
@@ -35,23 +32,59 @@
   font-size: 12px;
   color: #947c6d;
 }
+.personal-workspace-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1.8fr) minmax(300px, 1fr);
+  gap: 22px;
+  align-items: start;
+}
+.personal-workspace-main {
+  min-width: 0;
+}
+.personal-workspace-body .ant-card {
+  border-color: #ece4dc;
+  border-radius: 14px;
+  box-shadow: 0 3px 15px #35251f03;
+}
+.personal-workspace-body .ant-card-head {
+  min-height: 54px;
+  border-bottom-color: #f2ece6;
+}
+.personal-workspace-body .ant-card-head-title {
+  font-size: 15px;
+}
+.personal-workspace-body .ant-card-body {
+  padding: 20px;
+}
 .personal-tools {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
 }
 .personal-tool {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 18px;
-  border: 1px solid #eee0d4;
-  border-radius: 9px;
+  padding: 16px;
+  border: 1px solid #f0e9e1;
+  border-radius: 10px;
   color: #35251f;
-  transition: background 0.15s;
+  transition:
+    background 0.15s,
+    border-color 0.15s;
+  min-width: 0;
 }
 .personal-tool:hover {
   background: #fff8ef;
+  border-color: #e8c7a7;
+}
+.personal-tool:focus-visible {
+  outline: 2px solid #cd6a24;
+  outline-offset: 3px;
+}
+.personal-tool > div {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .personal-tool-group {
   color: #d3540b;
@@ -73,9 +106,10 @@
 }
 .personal-lower {
   display: grid;
-  grid-template-columns: 1.4fr 1fr;
+  grid-template-columns: 1fr;
   gap: 16px;
-  margin-top: 16px;
+  margin-top: 0;
+  min-width: 0;
   align-items: start;
 }
 .personal-content {
@@ -83,7 +117,7 @@
 }
 .personal-content-cards {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
 }
 .personal-content-item {
@@ -128,6 +162,10 @@
 .personal-todo-add {
   display: flex;
   gap: 8px;
+  flex-wrap: wrap;
+}
+.personal-todo-add > .ant-input:first-child {
+  flex-basis: 100%;
 }
 .personal-todo-add input[type="date"] {
   max-width: 150px;
@@ -170,26 +208,48 @@
   border-bottom: 1px solid #f0e8e1;
 }
 @media (max-width: 1150px) {
+  .personal-workspace-body {
+    grid-template-columns: 1fr;
+  }
   .personal-tools {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .personal-lower {
-    grid-template-columns: 1fr;
+    grid-template-columns: 1fr 1fr;
   }
 }
 @media (max-width: 700px) {
+  .personal-lower {
+    grid-template-columns: 1fr;
+  }
+  .personal-content-cards {
+    grid-template-columns: 1fr;
+  }
   .personal-tools {
     grid-template-columns: 1fr;
   }
   .personal-welcome {
     flex-direction: column;
     align-items: start;
-    padding: 18px;
+    padding: 8px 0 20px;
+  }
+  .personal-counts {
+    width: 100%;
+    justify-content: space-around;
+    gap: 16px;
+  }
+  .personal-workspace-body .ant-card-body {
+    padding: 16px;
   }
   .personal-todo-add {
     flex-wrap: wrap;
   }
   .personal-todo-add > .ant-input:first-child {
     width: 100%;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .personal-tool {
+    transition: none;
   }
 }
