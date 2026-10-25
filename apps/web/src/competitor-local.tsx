@@ -216,7 +216,7 @@ export function CompetitorLocalUpdate({
       {run?.rows.map((row) => (
         <div
           key={row.brand.id}
-          style={{ padding: "12px 0", borderBottom: "1px solid #eee" }}
+          style={{ padding: "12px 0", borderBottom: "1px solid var(--app-border)" }}
         >
           <Space>
             <strong>{row.brand.name}</strong>

@@ -26,7 +26,7 @@
 }
 .library-card-grid footer {
   margin-top: 18px;
-  color: #907d6b;
+  color: var(--app-secondary);
   font-size: 12px;
 }
 .library-trash-notice {

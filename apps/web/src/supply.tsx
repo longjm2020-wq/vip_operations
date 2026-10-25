@@ -467,7 +467,7 @@ export function QualificationFields({
             label={label}
             extra={
               ocr.warning(k) ? (
-                <span style={{ color: "#cf1322" }}>{ocr.warning(k)}</span>
+                <span style={{ color: "var(--app-danger)" }}>{ocr.warning(k)}</span>
               ) : undefined
             }
             rules={fieldRules(k)}
@@ -520,7 +520,7 @@ export function QualificationFields({
             company &&
             String(payee).replace(/\s/g, "") !==
               String(company).replace(/\s/g, "") ? (
-              <span style={{ color: "#cf1322" }}>
+              <span style={{ color: "var(--app-danger)" }}>
                 对公收款户名与入驻公司名称不同，请核对。此提示不代表银行账号归属核验结果。
               </span>
             ) : undefined

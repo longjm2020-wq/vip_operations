@@ -387,7 +387,7 @@ export function ReplenishmentValue({
         {field === "replenishmentQty" &&
           (plan.unconfirmedInboundQty > 0 ||
             plan.shortageBeforeArrival > 0) && (
-            <span style={{ marginLeft: 6, color: "#ad6800", fontSize: 12 }}>
+            <span style={{ marginLeft: 6, color: "var(--app-warning)", fontSize: 12 }}>
               需核对
             </span>
           )}

@@ -158,14 +158,14 @@ function MetricChart({
                     x2={width - right}
                     y1={y(value)}
                     y2={y(value)}
-                    stroke="#eee5df"
+                    stroke="var(--app-border)"
                   />
                   <text
                     x={left - 8}
                     y={y(value) + 3}
                     textAnchor="end"
                     fontSize="10"
-                    fill="#9a8477"
+                    fill="var(--app-secondary)"
                   >
                     {axisValue(value, field)}
                   </text>
@@ -175,7 +175,7 @@ function MetricChart({
             <path
               d={trendPath(points, x, y)}
               fill="none"
-              stroke="#d95200"
+              stroke="var(--app-accent)"
               strokeWidth="2"
             />
             {points.map((point, index) => (
@@ -222,7 +222,7 @@ function MetricChart({
                             ? 1.3
                             : 2.5
                       }
-                      fill="#d95200"
+                      fill="var(--app-accent)"
                     />
                   </g>
                 )}
@@ -234,7 +234,7 @@ function MetricChart({
                     y={height - 8}
                     textAnchor="middle"
                     fontSize="11"
-                    fill="#9a8477"
+                    fill="var(--app-secondary)"
                   >
                     {point.date.slice(5)}
                   </text>

@@ -329,7 +329,7 @@ export function SupplyStatements({ internal = false }: { internal?: boolean }) {
                   render: (_, r) => (
                     <strong
                       style={{
-                        color: r.kind === "REFUND" ? "#d4380d" : undefined,
+                        color: r.kind === "REFUND" ? "var(--app-danger)" : undefined,
                       }}
                     >
                       {money(r.amount)}

@@ -21,10 +21,20 @@ import { libraryKindSchema } from "../../../../../packages/contracts/src/project
 import { libraryConfig, contentSummary } from "../projects/library.js";
 import { AuthRequest, context } from "../../http.js";
 import { clearAssistant, readAssistant, sendAssistant } from "./assistant.js";
+import { readAppearance, saveAppearance } from "./appearance.js";
 
 // The owner always comes from the authenticated session; there is no user-id route.
 @Controller("api/v1/my-workspace")
 export class PersonalWorkspaceController {
+  @Get("appearance")
+  async appearance(@Req() request: AuthRequest, @Res({ passthrough: true }) response: Response) {
+    response.setHeader("Cache-Control", "private, no-store");
+    return readAppearance(context(request));
+  }
+  @Post("appearance")
+  async appearanceSave(@Req() request: AuthRequest, @Body() input: unknown) {
+    return saveAppearance(context(request), input);
+  }
   @Get("assistant")
   async assistant(
     @Req() request: AuthRequest,

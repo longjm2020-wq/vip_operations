@@ -24,11 +24,11 @@
   width: var(--compass-tooltip-width);
   box-sizing: border-box;
   padding: 12px 14px;
-  border: 1px solid #efdfd1;
+  border: 1px solid var(--app-border);
   border-radius: 10px;
-  background: #fffcf8;
-  color: #59453a;
-  box-shadow: 0 4px 16px #49302114;
+  background: var(--app-muted);
+  color: var(--app-text);
+  box-shadow: 0 4px 16px var(--app-shadow);
   font-size: 12px;
   line-height: 1.6;
   pointer-events: none;
@@ -36,7 +36,7 @@
 .compass-trend-tooltip-date {
   display: block;
   margin-bottom: 6px;
-  color: #49372c;
+  color: var(--app-text);
   font-weight: 600;
 }
 .compass-trend-tooltip-metric {
@@ -48,7 +48,7 @@
 }
 .compass-trend-tooltip-metric span {
   white-space: nowrap;
-  color: #947c6c;
+  color: var(--app-secondary);
 }
 .compass-trend-tooltip-metric i {
   display: inline-block;
@@ -58,10 +58,10 @@
   margin-right: 6px;
 }
 .compass-trend-sales-dot {
-  background: #d95200;
+  background: var(--app-accent);
 }
 .compass-trend-returns-dot {
-  background: #8972c7;
+  background: var(--app-info-bg);
 }
 .compass-trend-tooltip-metric b {
   font-weight: 500;
@@ -71,7 +71,7 @@
 .compass-chart-caption {
   display: flex;
   justify-content: space-between;
-  color: #927c70;
+  color: var(--app-secondary);
   font-size: 12px;
   gap: 10px;
   flex-wrap: wrap;

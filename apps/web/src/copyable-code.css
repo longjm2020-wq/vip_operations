@@ -1,12 +1,12 @@
 .copyable-code { display: inline-flex; align-items: center; max-width: 100%; gap: 3px; vertical-align: middle; }
 .copyable-code-value { min-width: 0; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
-.code-copy-button { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 22px; width: 22px; height: 24px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: #947e70; cursor: pointer; font-size: 12px; vertical-align: middle; user-select: none; opacity: 0; }
+.code-copy-button { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 22px; width: 22px; height: 24px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--app-secondary); cursor: pointer; font-size: 12px; vertical-align: middle; user-select: none; opacity: 0; }
 .copyable-code:is(:hover, :has(:focus-visible)) > .code-copy-button,
 .page-heading-copy:is(:hover, :has(:focus-visible)) > .code-copy-button,
 .selection-image-search-card:is(:hover, :has(:focus-visible)) > div > .code-copy-button,
 .mobile-photo-result:is(:hover, :has(:focus-visible)) > span > .code-copy-button,
 .code-copy-button:is(:hover, :focus-visible) { opacity: 1; }
-.code-copy-button:hover { color: #d65300; background: #fff0e1; }
-.code-copy-button:focus-visible { outline: 2px solid #d65300; outline-offset: 1px; }
+.code-copy-button:hover { color: var(--app-accent); background: var(--app-muted); }
+.code-copy-button:focus-visible { outline: 2px solid var(--app-accent-border); outline-offset: 1px; }
 @media (hover: none), (pointer: coarse) { .code-copy-button { opacity: 1; } }
 @media (pointer: coarse) { .code-copy-button { flex-basis: 28px; width: 28px; height: 30px; } }

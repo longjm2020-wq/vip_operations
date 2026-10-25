@@ -1,10 +1,10 @@
 .personal-workspace {
   max-width: 1640px;
   margin: auto;
-  color: #e8ecfa;
+  color: var(--app-text);
 }
 .personal-workspace .secondary {
-  color: #9ca5bd;
+  color: var(--app-secondary);
 }
 .personal-welcome {
   display: flex;
@@ -16,10 +16,10 @@
 .personal-eyebrow {
   font-size: 10px;
   letter-spacing: 2px;
-  color: #a4a9c0;
+  color: var(--app-secondary);
 }
 .personal-eyebrow > span {
-  color: #515970;
+  color: var(--app-secondary);
   margin: 0 12px;
 }
 .personal-welcome h1 {
@@ -30,12 +30,12 @@
   margin: 13px 0 9px;
 }
 .welcome-star {
-  color: #baa4ff;
+  color: var(--app-accent);
   margin-left: 13px;
   font-size: 24px;
 }
 .personal-welcome p {
-  color: #9a9fb6;
+  color: var(--app-secondary);
   margin: 0;
   font-size: 12px;
 }
@@ -47,27 +47,27 @@
   flex-shrink: 0;
 }
 .workspace-date {
-  color: #9fa8c0;
+  color: var(--app-secondary);
   font-size: 11px;
 }
 .workspace-date .anticon {
   margin-right: 6px;
 }
 .personal-unsaved {
-  color: #dfba81;
+  color: var(--app-accent);
   font-size: 11px;
 }
 .personal-welcome-actions .ant-btn-primary {
-  background: #24213b;
-  border-color: #574577;
-  color: #ded3ff;
+  background: var(--app-surface);
+  border-color: var(--app-accent-border);
+  color: var(--app-text);
   font-size: 12px;
   box-shadow: none;
 }
 .personal-welcome-actions .ant-btn-primary:disabled {
-  background: #191c28;
-  border-color: #303448;
-  color: #727b94;
+  background: var(--app-surface);
+  border-color: var(--app-border);
+  color: var(--app-secondary);
 }
 .personal-workspace-body {
   display: grid;
@@ -86,14 +86,14 @@
 }
 .workspace-future .personal-workspace .ant-card,
 .workspace-panel {
-  border: 1px solid #2a2e3e;
-  border-color: #2a2e3e !important;
+  border: 1px solid var(--app-border);
+  border-color: var(--app-border) !important;
   border-radius: 16px;
-  background: #141722;
-  box-shadow: 0 8px 30px #00000012;
+  background: var(--app-surface);
+  box-shadow: 0 8px 30px var(--app-shadow);
 }
 .personal-workspace .ant-card-head {
-  border-bottom-color: #272c3d;
+  border-bottom-color: var(--app-border);
   min-height: 60px;
   padding-inline: 22px;
 }
@@ -102,11 +102,11 @@
   font-weight: 550;
 }
 .personal-workspace .ant-card-head-title .anticon {
-  color: #a998f6;
+  color: var(--app-accent);
   margin-right: 6px;
 }
 .personal-workspace .ant-card-head-title small {
-  color: #979fb7;
+  color: var(--app-secondary);
   margin-left: 8px;
   font-size: 11px;
   font-weight: 400;
@@ -119,7 +119,7 @@
 }
 .personal-tools-panel .ant-card-extra .ant-btn {
   font-size: 11px;
-  color: #a8b0c7;
+  color: var(--app-secondary);
 }
 .personal-tools {
   display: grid;
@@ -134,23 +134,23 @@
   gap: 16px;
   min-width: 0;
   padding: 18px 16px;
-  border: 1px solid #2c3042;
+  border: 1px solid var(--app-border);
   border-radius: 12px;
-  color: #e2e7f5;
-  background: #1a1d2a;
+  color: var(--app-text);
+  background: var(--app-muted);
   transition:
     background 0.18s,
     border-color 0.18s,
     transform 0.18s;
 }
 .personal-tool:hover {
-  background: #242237;
-  border-color: #655484;
-  color: #fff;
+  background: var(--app-surface);
+  border-color: var(--app-accent-border);
+  color: var(--app-text);
   transform: translateY(-3px);
 }
 .personal-tool:focus-visible {
-  outline: 2px solid #baa6ff;
+  outline: 2px solid var(--app-accent-border);
   outline-offset: 3px;
 }
 .personal-tool-icon {
@@ -158,23 +158,23 @@
   height: 35px;
   display: grid;
   place-items: center;
-  background: #35304d;
-  border: 1px solid #5c4b7338;
+  background: var(--app-surface);
+  border: 1px solid color-mix(in srgb, var(--app-border) 22%, transparent);
   border-radius: 10px;
-  color: #c0a9ff;
+  color: var(--app-accent);
   font-size: 17px;
 }
 .personal-tool-icon-协作 {
-  color: #8dabf1;
-  background: #243148;
+  color: var(--app-accent);
+  background: var(--app-surface);
 }
 .personal-tool-icon-仓储 {
-  color: #7fcdbd;
-  background: #203535;
+  color: var(--app-accent);
+  background: var(--app-surface);
 }
 .personal-tool-icon-商品 {
-  color: #dfb388;
-  background: #3d302d;
+  color: var(--app-accent);
+  background: var(--app-surface);
 }
 .personal-tool > div {
   min-width: 0;
@@ -184,7 +184,7 @@
   font-weight: 550;
 }
 .personal-tool p {
-  color: #9ba2bb;
+  color: var(--app-secondary);
   font-size: 11px;
   line-height: 1.7;
   margin: 6px 0 0;
@@ -193,7 +193,7 @@
   position: absolute;
   top: 22px;
   right: 15px;
-  color: #717b98;
+  color: var(--app-secondary);
   transform: rotate(-35deg);
   font-size: 12px;
 }
@@ -210,14 +210,14 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  border: 1px solid #303449;
+  border: 1px solid var(--app-border);
   border-radius: 10px;
   padding: 16px;
-  background: #1a1d2a;
+  background: var(--app-surface);
 }
 .personal-content-item p {
   font-size: 11px;
-  color: #9da6c1;
+  color: var(--app-secondary);
   margin: 8px 0 0;
 }
 .personal-content-item a {
@@ -238,7 +238,7 @@
   margin-top: 16px;
 }
 .personal-content-footer small {
-  color: #939cb5;
+  color: var(--app-secondary);
   font-size: 11px;
 }
 .personal-content .ant-tabs {
@@ -248,11 +248,11 @@
   font-size: 11px;
 }
 .personal-todo-count {
-  color: #9da5bd;
+  color: var(--app-secondary);
   font-size: 10px;
 }
 .personal-todo-count em {
-  color: #e4ad9c;
+  color: var(--app-accent);
   font-style: normal;
 }
 .personal-todo-add {
@@ -276,7 +276,7 @@
   align-items: center;
   gap: 6px;
   padding: 10px 0;
-  border-bottom: 1px solid #2a2e40;
+  border-bottom: 1px solid var(--app-border);
 }
 .personal-todo .ant-checkbox-wrapper {
   flex: 1;
@@ -285,7 +285,7 @@
 }
 .personal-todo.done .ant-checkbox-label {
   text-decoration: line-through;
-  color: #8590ad;
+  color: var(--app-secondary);
 }
 .personal-todo .ant-tag {
   font-size: 10px;
@@ -298,7 +298,7 @@
 }
 .personal-lower small.secondary,
 .personal-lower p.secondary {
-  color: #949eb8;
+  color: var(--app-secondary);
   font-size: 10px;
   line-height: 1.8;
 }
@@ -320,7 +320,7 @@
   align-items: center;
   justify-content: space-between;
   padding: 8px;
-  border-bottom: 1px solid #3b3d51;
+  border-bottom: 1px solid var(--app-border);
 }
 @media (min-width: 1700px) {
   .personal-workspace-body {

@@ -10,7 +10,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  color: #907a6e;
+  color: var(--app-secondary);
 }
 .compass-recent-buttons {
   display: flex;
@@ -21,25 +21,25 @@
   height: 30px;
   padding-inline: 10px;
   border: 1px solid transparent;
-  color: #786356;
+  color: var(--app-secondary);
   border-radius: 6px;
 }
 .compass-recent-buttons .ant-btn[aria-pressed="true"] {
-  color: #c44f0a;
-  background: #fff0df;
-  border-color: #ebc5a6;
+  color: var(--app-accent);
+  background: var(--app-accent-soft);
+  border-color: var(--app-border);
   font-weight: 500;
 }
 .compass-recent-buttons .ant-btn:hover {
-  color: #c44f0a !important;
-  background: #fff2e4 !important;
+  color: var(--app-accent) !important;
+  background: var(--app-muted) !important;
 }
 .compass-date input {
-  border: 1px solid #ead9cd;
+  border: 1px solid var(--app-border);
   border-radius: 6px;
-  background: #fff;
+  background: var(--app-surface);
   padding: 5px 8px;
-  color: #49392f;
+  color: var(--app-text);
 }
 .compass-period-controls {
   display: flex;
@@ -57,27 +57,27 @@
   font-variant-numeric: tabular-nums;
 }
 .compass-period-range-separator {
-  color: #b8afa8;
+  color: var(--app-subtle);
   padding-inline: 10px;
 }
 .compass-period-range .anticon {
-  color: #b8afa8;
+  color: var(--app-subtle);
 }
 .compass-period-popup .ant-popover-container {
   padding: 0;
-  border: 1px solid #ead9cd;
+  border: 1px solid var(--app-border);
 }
 .compass-period-panel {
   width: min(340px, calc(100vw - 32px));
   padding: 14px;
-  color: #59453a;
+  color: var(--app-text);
 }
 .compass-period-panel-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding-bottom: 12px;
-  border-bottom: 1px solid #eee1d6;
+  border-bottom: 1px solid var(--app-border);
 }
 .compass-period-panel-header strong {
   font-size: 14px;
@@ -104,7 +104,7 @@
   border: 0;
   border-radius: 8px;
   font: inherit;
-  color: #59453a;
+  color: var(--app-text);
   cursor: pointer;
 }
 .compass-period-panel-quarter .compass-period-option {
@@ -112,27 +112,27 @@
 }
 .compass-period-option small {
   font-size: 11px;
-  color: #aa9281;
+  color: var(--app-subtle);
 }
 .compass-period-option:hover:not(:disabled) {
-  background: #fff3eb;
-  color: #c94f10;
+  background: var(--app-muted);
+  color: var(--app-accent);
 }
 .compass-period-option[aria-pressed="true"] {
-  background: #fff0e8;
-  color: #c94f10;
+  background: var(--app-muted);
+  color: var(--app-accent);
   font-weight: 600;
 }
 .compass-period-option[aria-pressed="true"] small {
-  color: #c94f10;
+  color: var(--app-accent);
 }
 .compass-period-option:disabled {
-  background: #f6f3f0;
-  color: #c0b5ad;
+  background: var(--app-muted);
+  color: var(--app-subtle);
   cursor: not-allowed;
 }
 .compass-period-option:focus-visible {
-  outline: 2px solid #e88950;
+  outline: 2px solid var(--app-accent-border);
   outline-offset: 2px;
 }
 .compass-period-panel-footer {
@@ -141,9 +141,9 @@
   justify-content: space-between;
   gap: 8px;
   padding-top: 10px;
-  border-top: 1px solid #eee1d6;
+  border-top: 1px solid var(--app-border);
   font-size: 11px;
-  color: #a48b7b;
+  color: var(--app-secondary);
 }
 .compass-sr-only {
   position: absolute;
@@ -157,7 +157,7 @@
   border: 0;
 }
 .compass-period {
-  color: #917b6e;
+  color: var(--app-secondary);
   display: flex;
   gap: 10px;
   align-items: center;
@@ -177,12 +177,12 @@
   font-size: 26px;
   line-height: 1.5;
   margin: 8px 0;
-  color: #37261e;
+  color: var(--app-text);
   font-variant-numeric: tabular-nums;
   overflow-wrap: anywhere;
 }
 .compass-kpis small {
-  color: #9b867a;
+  color: var(--app-secondary);
 }
 .compass-charts {
   display: grid;
@@ -197,7 +197,7 @@
   max-height: 360px;
   overflow-y: auto;
   scrollbar-width: thin;
-  scrollbar-color: #bca897 #f4eee8;
+  scrollbar-color: var(--app-border-strong) var(--app-muted);
   overscroll-behavior-y: contain;
   padding-right: 6px;
 }
@@ -218,15 +218,15 @@
   text-align: left;
   padding: 6px 0;
   cursor: pointer;
-  color: #5d483b;
+  color: var(--app-text);
   font-size: 12px;
 }
 .compass-rank-link:hover,
 .compass-rank-link:focus-visible {
-  background: #fff5eb;
+  background: var(--app-muted);
 }
 .compass-rank-number {
-  color: #b29b8c;
+  color: var(--app-subtle);
   width: 18px;
 }
 .compass-rank-code {
@@ -244,10 +244,10 @@
   white-space: nowrap;
 }
 .compass-rank-identity { flex: 0 0 150px; min-width: 0; font-size: 12px; }
-.compass-rank-code:hover { color: #d65300; }
+.compass-rank-code:hover { color: var(--app-accent); }
 .compass-rank-bar {
   flex: 1;
-  background: #fff0e1;
+  background: var(--app-muted);
   height: 7px;
   border-radius: 4px;
   overflow: hidden;
@@ -255,7 +255,7 @@
 .compass-rank-bar i {
   display: block;
   height: 100%;
-  background: #dc762e;
+  background: var(--app-accent);
   border-radius: 4px;
 }
 .compass-ranks b {
@@ -269,14 +269,14 @@
   flex-wrap: wrap;
   padding: 14px 18px;
   margin-bottom: 20px;
-  background: #fff;
-  border: 1px solid #ecdccf;
+  background: var(--app-surface);
+  border: 1px solid var(--app-border);
   border-radius: 8px;
-  color: #958174;
+  color: var(--app-secondary);
   font-size: 13px;
 }
 .compass-traffic b {
-  color: #594235;
+  color: var(--app-text);
   margin-left: 6px;
   font-variant-numeric: tabular-nums;
 }
@@ -299,7 +299,7 @@
 }
 .compass-product small {
   display: block;
-  color: #a48b7b;
+  color: var(--app-secondary);
 }
 .compass-detail-card .ant-card-head {
   gap: 12px;
@@ -322,44 +322,44 @@
 }
 .compass-view-note {
   margin: 12px 0;
-  color: #927c70;
+  color: var(--app-secondary);
   font-size: 12px;
 }
 .compass-detail-table .ant-table-body {
   overscroll-behavior-y: contain;
   scrollbar-width: thin;
-  scrollbar-color: #bca897 #f4eee8;
+  scrollbar-color: var(--app-border-strong) var(--app-muted);
 }
 .compass-detail-table .ant-table-body::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
 .compass-detail-table .ant-table-body::-webkit-scrollbar-thumb {
-  background: #bca897;
-  border: 2px solid #f4eee8;
+  background: var(--app-accent-soft);
+  border: 2px solid var(--app-border);
   border-radius: 8px;
 }
 .compass-detail-table .ant-table-body::-webkit-scrollbar-track {
-  background: #f4eee8;
+  background: var(--app-muted);
 }
 .compass-detail-table .ant-table-pagination {
   margin-bottom: 0;
   padding-top: 12px;
-  border-top: 1px solid #eee5df;
+  border-top: 1px solid var(--app-border);
 }
 .compass-detail-table .ant-table-thead > tr > th.ant-table-column-sort,
 .compass-detail-table
   .ant-table-thead
   > tr
   > th.ant-table-column-has-sorters:hover {
-  background: #fff2e4 !important;
+  background: var(--app-muted) !important;
 }
 .compass-detail-table .ant-table-tbody > tr > td.ant-table-column-sort {
   background: transparent !important;
   font-weight: 600;
 }
 .compass-detail-table .ant-table-tbody > tr:hover > td.ant-table-column-sort {
-  background: #fafafa !important;
+  background: var(--app-muted) !important;
 }
 .compass-field-settings {
   width: min(360px, calc(100vw - 48px));
@@ -382,7 +382,7 @@
 .compass-field-groups h4 {
   grid-column: 1 / -1;
   margin: 14px 0 0;
-  color: #745847;
+  color: var(--app-secondary);
 }
 .compass-field-groups .ant-checkbox-wrapper {
   margin-inline-start: 0;
@@ -392,11 +392,11 @@
   justify-content: space-between;
   gap: 8px;
   padding-top: 12px;
-  border-top: 1px solid #eee5df;
+  border-top: 1px solid var(--app-border);
 }
 .compass-notes {
   margin-top: 16px;
-  color: #a28a7c;
+  color: var(--app-secondary);
   font-size: 12px;
   line-height: 1.8;
 }
@@ -411,14 +411,14 @@
 }
 .compass-upload {
   text-align: center;
-  border: 1px dashed #e3c8b3;
+  border: 1px dashed var(--app-border);
   border-radius: 8px;
   padding: 24px;
-  background: #fffaf5;
+  background: var(--app-muted);
 }
 .compass-upload .anticon {
   font-size: 28px;
-  color: #d95200;
+  color: var(--app-accent);
 }
 .compass-upload input {
   max-width: 100%;

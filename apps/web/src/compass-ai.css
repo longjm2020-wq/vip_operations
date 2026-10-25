@@ -2,11 +2,11 @@
   max-width: 850px;
 }
 .compass-ai-drawer .ant-drawer-body {
-  background: #fff8f1;
+  background: var(--app-muted);
   padding: 20px 24px;
 }
 .ai-report-meta {
-  color: #998072;
+  color: var(--app-secondary);
   font-size: 12px;
   margin-bottom: 14px;
 }
@@ -20,15 +20,15 @@
   overflow-wrap: anywhere;
 }
 .ai-summary {
-  background: #fff0df;
-  border: 1px solid #f3ddc6;
+  background: var(--app-accent-soft);
+  border: 1px solid var(--app-border);
   border-radius: 10px;
   padding: 16px 20px;
   margin-bottom: 18px;
 }
 .ai-summary .ant-bubble-header {
   font-size: 12px;
-  color: #bd5c21;
+  color: var(--app-accent);
 }
 .ai-summary .ant-bubble {
   width: 100%;
@@ -39,13 +39,13 @@
 .ai-execution {
   margin: 0 0 18px;
   padding: 14px 18px;
-  border: 1px solid #e8dfed;
+  border: 1px solid var(--app-border);
   border-radius: 12px;
-  background: #fdfbff;
+  background: var(--app-muted);
 }
 .ai-execution > summary {
   cursor: pointer;
-  color: #796783;
+  color: var(--app-secondary);
   font-size: 12px;
 }
 .ai-execution .ant-thought-chain {
@@ -54,7 +54,7 @@
 .ai-execution > small {
   display: block;
   margin-top: 12px;
-  color: #99899e;
+  color: var(--app-secondary);
   overflow-wrap: anywhere;
 }
 .ai-summary p {
@@ -80,14 +80,14 @@
 .ai-metric-grid .ant-card-body > span:first-child {
   display: block;
   font-size: 12px;
-  color: #947c6c;
+  color: var(--app-secondary);
 }
 .ai-metric-grid strong {
   display: block;
   font-size: 26px;
   letter-spacing: -0.4px;
   margin: 8px 0;
-  color: #35251f;
+  color: var(--app-text);
 }
 .ai-metric-grid small,
 .ai-metric-grid .ai-change-up,
@@ -96,10 +96,10 @@
   font-size: 11px;
 }
 .ai-change-up {
-  color: #a44416;
+  color: var(--app-accent);
 }
 .ai-change-down {
-  color: #8066bf;
+  color: var(--app-info);
 }
 .ai-chart-grid {
   display: grid;
@@ -119,7 +119,7 @@
   flex-wrap: wrap;
   gap: 4px;
   font-size: 11px;
-  color: #947c6c;
+  color: var(--app-secondary);
 }
 .ai-chart-grid .compass-chart-caption i {
   display: inline-block;
@@ -147,20 +147,20 @@
   height: 12px;
   border-radius: 4px;
   overflow: hidden;
-  background: #fff1e3;
+  background: var(--app-muted);
 }
 .ai-average-track i {
   display: block;
   height: 100%;
-  background: #dda978;
+  background: var(--app-danger-bg);
   border-radius: 4px;
 }
 .ai-average-active .ai-average-track i {
-  background: #d3540b;
+  background: var(--app-accent);
 }
 .ai-chart-note {
   display: block;
-  color: #998072;
+  color: var(--app-secondary);
   font-size: 11px;
   line-height: 1.7;
   margin-top: 10px;
@@ -178,7 +178,7 @@
   gap: 10px;
   min-width: 650px;
   padding: 12px 10px;
-  border-bottom: 1px solid #f1e6dd;
+  border-bottom: 1px solid var(--app-border);
   font-size: 12px;
 }
 .ai-attention-table strong {
@@ -186,8 +186,8 @@
   overflow-wrap: anywhere;
 }
 .ai-attention-head {
-  background: #fff3e6;
-  color: #987057;
+  background: var(--app-muted);
+  color: var(--app-secondary);
 }
 .ai-action-section h3 {
   font-size: 16px;
@@ -209,8 +209,8 @@
   border-radius: 50%;
   width: 23px;
   height: 23px;
-  background: #fff0df;
-  color: #c95611;
+  background: var(--app-accent-soft);
+  color: var(--app-accent);
   flex-shrink: 0;
 }
 .ai-action-grid p {
@@ -224,14 +224,14 @@
 }
 .ai-complete {
   margin-top: 20px;
-  background: #fff;
-  border: 1px solid #eee0d4;
+  background: var(--app-surface);
+  border: 1px solid var(--app-border);
   padding: 16px 20px;
   border-radius: 9px;
 }
 .ai-complete summary {
   cursor: pointer;
-  color: #b65d26;
+  color: var(--app-accent);
 }
 .ai-complete p,
 .ai-complete li {
@@ -242,7 +242,7 @@
   margin: 18px 0 8px;
 }
 .ai-report-footnote {
-  color: #a28a7c;
+  color: var(--app-secondary);
   font-size: 11px;
   line-height: 1.8;
 }
@@ -323,7 +323,7 @@
   .ai-attention-table [data-label]::before {
     content: attr(data-label);
     display: block;
-    color: #998072;
+    color: var(--app-secondary);
     font-size: 11px;
     margin-bottom: 4px;
   }

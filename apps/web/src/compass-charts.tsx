@@ -57,9 +57,9 @@ export function CompassTrend({ data }: { data: Row[] }) {
                 x2={width - pad}
                 y1={y(t * max)}
                 y2={y(t * max)}
-                stroke="#eee5df"
+                stroke="var(--app-border)"
               />
-              <text x={pad - 6} y={y(t * max) - 5} fontSize="10" fill="#9a8477">
+              <text x={pad - 6} y={y(t * max) - 5} fontSize="10" fill="var(--app-secondary)">
                 {number(t * max)}
               </text>
             </g>
@@ -67,13 +67,13 @@ export function CompassTrend({ data }: { data: Row[] }) {
           <polyline
             points={line("salesAmount")}
             fill="none"
-            stroke="#d95200"
+            stroke="var(--app-accent)"
             strokeWidth="3"
           />
           <polyline
             points={line("returnsAmount")}
             fill="none"
-            stroke="#8972c7"
+            stroke="var(--app-chart-secondary)"
             strokeWidth="2"
           />
           {data.map((v, i) => (
@@ -110,14 +110,14 @@ export function CompassTrend({ data }: { data: Row[] }) {
                 cy={y(v.salesAmount)}
                 r="9"
                 fill="none"
-                stroke="#d95200"
+                stroke="var(--app-accent)"
                 strokeWidth="2"
               />
               <circle
                 cx={x(i)}
                 cy={y(v.salesAmount)}
                 r={active === v.date ? 5 : 3}
-                fill="#d95200"
+                fill="var(--app-accent)"
               />
               {(i === 0 ||
                 i === data.length - 1 ||
@@ -126,7 +126,7 @@ export function CompassTrend({ data }: { data: Row[] }) {
                   x={x(i)}
                   y={height - 8}
                   textAnchor="middle"
-                  fill="#9a8477"
+                  fill="var(--app-secondary)"
                   fontSize="12"
                 >
                   {v.date.slice(5)}
@@ -166,8 +166,8 @@ export function CompassTrend({ data }: { data: Row[] }) {
       </div>
       <div className="compass-chart-caption">
         <span>
-          <i style={{ background: "#d95200" }} />
-          销售额 <i style={{ background: "#8972c7" }} />
+          <i style={{ background: "var(--app-accent)" }} />
+          销售额 <i style={{ background: "var(--app-chart-secondary)" }} />
           退货金额
         </span>
         <span>悬停、点击或聚焦查看每日数值</span>

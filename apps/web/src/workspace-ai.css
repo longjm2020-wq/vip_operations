@@ -2,15 +2,13 @@
   position: relative;
   isolation: isolate;
   overflow: hidden;
-  border: 1px solid #51416b;
+  border: 1px solid var(--app-accent-border);
   border-radius: 20px;
   padding: 30px;
   background:
-    radial-gradient(ellipse at 100% 0%, #3b286657, transparent 65%),
-    linear-gradient(130deg, #1c1a2d, #181c30 65%, #151a2b);
+    radial-gradient(ellipse at 100% 0%, var(--app-glow), transparent 65%), linear-gradient(130deg, var(--app-hero-start), var(--app-hero-end) 75%);
   box-shadow:
-    0 16px 50px #0002,
-    inset 0 1px 0 #a896cf12;
+    0 16px 50px var(--app-shadow), inset 0 1px 0 color-mix(in srgb, var(--app-gold) 8%, transparent);
 }
 .workspace-ai-start {
   position: relative;
@@ -22,7 +20,7 @@
   align-items: center;
   gap: 8px;
   font-size: 10px;
-  color: #b7a4e5;
+  color: var(--app-accent);
   letter-spacing: 2px;
   font-weight: 500;
 }
@@ -35,15 +33,15 @@
   line-height: 1.4;
   font-weight: 550;
   letter-spacing: -1px;
-  color: #f3f1ff;
+  color: var(--app-text);
 }
 .workspace-ai h2 > span {
-  background: linear-gradient(90deg, #d5c8ff 0%, #afa7ff 55%, #91b9ff);
+  background: linear-gradient(90deg, var(--app-gold), var(--app-orange));
   background-clip: text;
   color: transparent;
 }
 .workspace-ai-start > p {
-  color: #a7abc4;
+  color: var(--app-secondary);
   margin: 0;
   font-size: 12px;
   max-width: 76%;
@@ -66,7 +64,7 @@
   width: 180px;
   height: 180px;
   border-radius: 50%;
-  background: #7f59d9;
+  background: var(--app-orange);
   filter: blur(50px);
   opacity: 0.22;
 }
@@ -77,30 +75,22 @@
   border-radius: 50%;
   display: grid;
   place-items: center;
-  background: radial-gradient(
-    circle at 35% 25%,
-    #d3bbff77,
-    #5c438362 25%,
-    #191d3d 60%,
-    #7374bd
-  );
+  background: radial-gradient(circle at 35% 25%, color-mix(in srgb, var(--app-gold) 70%, transparent), var(--app-orb-core) 60%, var(--app-orange));
   box-shadow:
-    inset 6px 8px 15px #d7d4ff33,
-    inset -10px -10px 20px #9eafff38,
-    0 0 40px #9c7ff02e;
+    inset 6px 8px 15px #ffe8ba33, inset -10px -10px 20px #e69b3238, 0 0 40px var(--app-glow);
 }
 .workspace-orbit-sphere span {
-  color: #e4d7ff;
+  color: var(--app-gold);
   font-size: 35px;
-  text-shadow: 0 0 20px #b89cff;
+  text-shadow: 0 0 20px var(--app-orange);
   transform: rotate(23deg);
 }
 .workspace-orbit > i {
   position: absolute;
   width: 210px;
   height: 100px;
-  border: 1px solid #bba4fa5c;
-  border-top-color: #9c99d519;
+  border: 1px solid color-mix(in srgb, var(--app-gold) 40%, transparent);
+  border-top-color: color-mix(in srgb, var(--app-gold) 10%, transparent);
   border-radius: 50%;
   transform: rotate(0deg);
 }
@@ -108,164 +98,18 @@
   transform: rotate(65deg);
   width: 195px;
   height: 130px;
-  border-color: #a3c3f333;
+  border-color: color-mix(in srgb, var(--app-orange) 25%, transparent);
 }
 .workspace-orbit > i:last-child {
   transform: rotate(-50deg);
   width: 190px;
   height: 190px;
-  border-color: #b6a0ed12;
-  border-top-color: #d7cbff54;
+  border-color: color-mix(in srgb, var(--app-gold) 8%, transparent);
+  border-top-color: color-mix(in srgb, var(--app-gold) 40%, transparent);
   animation: workspace-orbit-spin 28s linear infinite;
 }
 .workspace-ai .magic-border-beam > div {
-  background: linear-gradient(to left, #83b5ff, #b48dff, transparent);
-}
-.workspace-ai-tools-label {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin: 26px 0 12px;
-  color: #d2d5e9;
-  font-size: 11px;
-}
-.workspace-ai-tools-label > span {
-  color: #9199b4;
-  font-size: 10px;
-}
-.workspace-ai-prompts .ant-prompts-list {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-  gap: 10px;
-}
-.workspace-ai-prompts .ant-prompts-item {
-  position: relative;
-  min-width: 0;
-  border: 1px solid #45405b;
-  border-radius: 12px;
-  padding: 14px 12px;
-  background: #14162470;
-  transition:
-    border-color 0.18s,
-    background 0.18s,
-    transform 0.18s;
-}
-.workspace-ai-prompts .ant-prompts-item:hover {
-  background: #342d4b;
-  border-color: #9b7cce;
-  transform: translateY(-2px);
-}
-.workspace-ai-prompt-button {
-  border: 0;
-  padding: 0;
-  background: none;
-  color: #e1ddf4;
-  font: inherit;
-  font-size: 12px;
-  text-align: left;
-  cursor: pointer;
-}
-.workspace-ai-prompt-button::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: 11px;
-}
-.workspace-ai-prompt-button:focus-visible {
-  outline: none;
-}
-.workspace-ai-prompt-button:focus-visible::after {
-  outline: 2px solid #bfadff;
-  outline-offset: -2px;
-}
-.workspace-ai-prompts .ant-prompts-icon {
-  color: #b6a3f1;
-  font-size: 15px;
-}
-.workspace-ai-prompts .ant-prompts-desc {
-  font-size: 10px;
-  color: #a0a4be;
-  line-height: 1.6;
-}
-.workspace-ai-note {
-  display: block;
-  margin-top: 12px;
-  color: #9a9fb8;
-  font-size: 10px;
-  line-height: 1.7;
-}
-.workspace-ai-latest {
-  position: relative;
-  z-index: 1;
-  margin-top: 22px;
-  padding-top: 18px;
-  border-top: 1px solid #a795d326;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  column-gap: 24px;
-  row-gap: 10px;
-}
-.workspace-ai-latest-title {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-.workspace-ai-latest-title strong {
-  font-size: 12px;
-  font-weight: 500;
-  color: #c5cce4;
-}
-.workspace-ai-latest-title .ant-tag {
-  font-size: 10px;
-}
-.workspace-ai-summary {
-  margin: 0;
-  width: 100%;
-  grid-column: 1;
-}
-.workspace-ai-summary .ant-bubble-content {
-  padding: 0;
-  line-height: 1.8;
-  font-size: 12px;
-  color: #aab1cd;
-  overflow-wrap: anywhere;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-.workspace-ai-summary .ant-bubble-header {
-  color: #959fbd;
-  font-size: 10px;
-  margin-bottom: 6px;
-}
-.workspace-ai-latest-actions {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 10px;
-  grid-column: 2;
-  grid-row: 1 / span 2;
-  flex-direction: column;
-  justify-content: center;
-}
-.workspace-ai-latest-actions .ant-btn-primary {
-  background: #ab94f0;
-  color: #151025;
-  font-size: 12px;
-  border: 0;
-}
-.workspace-ai-latest-actions > a {
-  color: #a9afc9;
-  font-size: 11px;
-}
-.workspace-ai-latest > small {
-  display: block;
-  margin-top: 0;
-  grid-column: 1 / -1;
-  color: #929bb8;
-  font-size: 10px;
+  background: linear-gradient(to left, var(--app-gold), var(--app-orange), transparent);
 }
 @keyframes workspace-orbit-spin {
   from {
@@ -286,29 +130,8 @@
   .workspace-ai h2 {
     font-size: 34px;
   }
-  .workspace-ai-prompts .ant-prompts-list {
-    grid-template-columns: 1fr;
-  }
-  .workspace-ai-prompts .ant-prompts-item {
-    padding: 10px 12px;
-  }
-}
-@media (min-width: 768px) and (max-width: 1050px) {
-  .workspace-ai-prompts .ant-prompts-list {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
 }
 @media (max-width: 767px) {
-  .workspace-ai-latest {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-  }
-  .workspace-ai-latest-actions {
-    flex-direction: row;
-    justify-content: flex-start;
-    gap: 16px;
-  }
   .workspace-ai {
     padding: 24px 20px;
     border-radius: 16px;
@@ -326,21 +149,9 @@
   .workspace-ai-start > p {
     max-width: 95%;
   }
-  .workspace-ai-prompts .ant-prompts-list {
-    grid-template-columns: 1fr;
-  }
-  .workspace-ai-prompts .ant-prompts-item {
-    padding: 12px;
-  }
 }
 @media (prefers-reduced-motion: reduce) {
   .workspace-orbit > i:last-child {
     animation: none;
-  }
-  .workspace-ai-prompts .ant-prompts-item {
-    transition: none;
-  }
-  .workspace-ai-prompts .ant-prompts-item:hover {
-    transform: none;
   }
 }

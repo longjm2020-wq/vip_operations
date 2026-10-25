@@ -6,33 +6,33 @@
 }
 .entry-sheet .task-sheet-done input,
 .entry-sheet .task-sheet-done textarea {
-  color: #929b98;
+  color: var(--app-secondary);
   text-decoration: line-through;
 }
 .entry-sheet .task-sheet-disputed td {
-  background: #fff1f0;
-  border-color: #efb3ae;
+  background: var(--app-muted);
+  border-color: var(--app-border);
 }
 .entry-sheet .task-sheet-disputed input,
 .entry-sheet .task-sheet-disputed textarea {
-  color: #c43131;
+  color: var(--app-danger);
 }
 .project-card {
-  border-top: 3px solid #e66b18;
+  border-top: 3px solid var(--app-accent-border);
 }
 .project-card h2 {
   font-size: 21px;
   margin: 18px 0 12px;
 }
 .project-card p {
-  color: #837365;
+  color: var(--app-secondary);
 }
 .project-card footer {
-  border-top: 1px solid #f1e7dd;
+  border-top: 1px solid var(--app-border);
   padding-top: 15px;
   margin-top: 22px;
   font-size: 12px;
-  color: #907d6b;
+  color: var(--app-secondary);
 }
 .project-filters {
   margin: 18px 0 24px;
@@ -43,7 +43,7 @@
   gap: 0 22px;
 }
 .project-rich {
-  border: 1px solid #e7d7c7;
+  border: 1px solid var(--app-border);
   border-radius: 8px;
   padding: 10px;
 }
@@ -68,12 +68,12 @@
   position: relative;
   overflow: hidden;
   height: 430px;
-  background-color: #fdf9f2;
-  background-image: radial-gradient(#dfcdbb 1px, transparent 1px);
+  background-color: var(--app-muted);
+  background-image: radial-gradient(var(--app-accent-soft) 1px, transparent 1px);
   background-size: 20px 20px;
   touch-action: none;
   cursor: grab;
-  border: 1px solid #eadecf;
+  border: 1px solid var(--app-border);
   border-radius: 12px;
 }
 .flow-infinite {
@@ -93,14 +93,14 @@
   max-width: calc(100% - 24px);
   padding: 8px;
   border-radius: 8px;
-  background: #ffffffed;
-  box-shadow: 0 2px 10px #6a341a16;
+  background: color-mix(in srgb, var(--app-surface) 93%, transparent);
+  box-shadow: 0 2px 10px color-mix(in srgb, var(--app-accent-border) 9%, transparent);
 }
 .flow-fullscreen {
   position: fixed;
   inset: 0;
   z-index: 1200;
-  background: #fff;
+  background: var(--app-surface);
   padding: 20px;
   overflow: auto;
 }
@@ -125,13 +125,13 @@
   height: 20px;
   padding: 0;
   border-radius: 50%;
-  border: 3px solid #e66b18;
-  background: white;
+  border: 3px solid var(--app-accent-border);
+  background: var(--app-surface);
   cursor: crosshair;
   touch-action: none;
 }
 .flow-port:hover {
-  background: #ffd09d;
+  background: var(--app-accent-soft);
 }
 .flow-port.input {
   left: -11px;
@@ -140,8 +140,8 @@
   right: -11px;
 }
 .project-flow-node.flow-node-selected {
-  border: 2px solid #e89b36;
-  box-shadow: 0 0 0 4px #e89b3626;
+  border: 2px solid var(--app-accent-border);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--app-accent-border) 15%, transparent);
 }
 .flow-node-actions {
   position: absolute;
@@ -156,44 +156,44 @@
   display: block;
   width: 270px;
   min-height: 210px;
-  background: white;
-  border: 1px solid #e7d7c7;
+  background: var(--app-surface);
+  border: 1px solid var(--app-border);
   border-radius: 12px;
-  box-shadow: 0 5px 20px #6a341a0c;
+  box-shadow: 0 5px 20px color-mix(in srgb, var(--app-accent-border) 5%, transparent);
   text-align: left;
   padding: 22px;
   cursor: pointer;
-  color: #4d3222;
+  color: var(--app-text);
   font: inherit;
 }
 .project-flow-node p {
   font-size: 13px;
   line-height: 1.7;
-  color: #907d6b;
+  color: var(--app-secondary);
   white-space: pre-wrap;
 }
 .project-flow-node.done {
-  border-color: #40936d;
-  background: #f1faf5;
+  border-color: var(--app-success);
+  background: var(--app-muted);
 }
 .project-flow-node.disputed {
-  border-color: #d97575;
-  background: #fff6f4;
+  border-color: var(--app-danger);
+  background: var(--app-muted);
 }
 .project-gantt {
   overflow: auto;
-  border: 1px solid #eee2d7;
+  border: 1px solid var(--app-border);
   border-radius: 8px;
   margin: 15px 0 25px;
 }
 .gantt-head,
 .gantt-row {
   display: flex;
-  border-bottom: 1px solid #f1e7dd;
+  border-bottom: 1px solid var(--app-border);
   min-height: 54px;
 }
 .gantt-head {
-  background: #fff2e4;
+  background: var(--app-muted);
   padding-top: 14px;
 }
 .gantt-label {
@@ -207,28 +207,28 @@
 }
 .gantt-label small {
   display: block;
-  color: #978370;
+  color: var(--app-secondary);
 }
 .gantt-bar {
   position: absolute;
   top: 13px;
   height: 26px;
-  background: #ed9a55;
+  background: var(--app-accent);
   border-radius: 5px;
-  color: white;
+  color: var(--app-text);
   font-size: 12px;
   padding-left: 4px;
   overflow: hidden;
   white-space: nowrap;
 }
 .gantt-bar.done {
-  background: #377e58;
+  background: var(--app-success);
 }
 .gantt-bar.disputed {
-  background: #c76660;
+  background: var(--app-danger);
 }
 .gantt-bar.submitted {
-  background: #c69949;
+  background: var(--app-accent);
 }
 .project-example-grid {
   display: grid;
@@ -254,16 +254,16 @@
   gap: 10px;
 }
 .project-task-done td {
-  color: #84928c !important;
+  color: var(--app-secondary) !important;
 }
 .project-task-done td:nth-child(3) > div {
   text-decoration: line-through;
 }
 .project-task-disputed td {
-  background: #fff5f3 !important;
+  background: var(--app-muted) !important;
 }
 .project-chat-messages small {
-  color: #978370;
+  color: var(--app-secondary);
 }
 @media (max-width: 800px) {
   .project-form-grid {

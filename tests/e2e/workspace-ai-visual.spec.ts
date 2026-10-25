@@ -62,6 +62,7 @@ async function fixture(
         ],
         csrfToken: "fixture",
       };
+    if (path === "/my-workspace/appearance") data = { mode: "dark", version: 0 };
     if (path === "/my-workspace") {
       if (route.request().method() === "POST")
         Object.assign(workspace, route.request().postDataJSON(), {
@@ -580,7 +581,7 @@ test("超级管理员从系统设置访问模型，侧栏收起图标及悬浮�
     ".sidebar .ant-menu-item-selected .ant-menu-item-icon",
   );
   await expect(icon).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
-  await expect(icon).toHaveCSS("color", "rgb(240, 120, 53)");
+  await expect(icon).toHaveCSS("color", "rgb(230, 173, 85)");
   await expect(icon.locator("svg")).toHaveAttribute("fill", "currentColor");
   await expect(page.locator(".sidebar .ant-menu-item-selected")).toHaveCSS(
     "background-color",
@@ -615,11 +616,11 @@ test("超级管理员从系统设置访问模型，侧栏收起图标及悬浮�
   );
   await expect(popup.locator(".ant-menu")).toHaveCSS(
     "background-color",
-    "rgb(255, 252, 248)",
+    "rgb(34, 33, 31)",
   );
   await expect(
     popup.getByRole("link", { name: "新建SOP", exact: true }),
-  ).toHaveCSS("color", "rgb(89, 69, 58)");
+  ).toHaveCSS("color", "rgb(241, 237, 231)");
   await page.mouse.move(1000, 500);
   await page
     .locator(".sidebar .ant-menu-submenu-title")
@@ -757,7 +758,7 @@ test("明细内部滚动表头固定，分页条数与查询同步且切换后�
   await sortedHeader.click();
   await expect(sortedHeader).toHaveCSS(
     "background-color",
-    "rgb(255, 242, 228)",
+    "rgb(34, 33, 31)",
   );
   await page.mouse.move(0, 0);
   await expect(rows.first().locator(".ant-table-column-sort")).toHaveCSS(

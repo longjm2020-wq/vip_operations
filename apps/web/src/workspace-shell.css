@@ -1,15 +1,15 @@
 .workspace.workspace-future {
-  background: #0c0e16;
-  color: #eceef8;
-  color-scheme: dark;
+  background: var(--app-bg);
+  color: var(--app-text);
+  color-scheme: inherit;
 }
 .workspace-future > .ant-layout {
   min-width: 0;
-  background: #0c0e16;
+  background: var(--app-bg);
 }
 .workspace-future .sidebar {
-  background: #10121c !important;
-  border-right: 1px solid #232636;
+  background: var(--app-bg) !important;
+  border-right: 1px solid var(--app-border);
 }
 .workspace-future .brand {
   height: 100px;
@@ -20,7 +20,7 @@
 }
 .workspace-future .sidebar-caption {
   padding: 0 28px 24px;
-  color: #8c92a8;
+  color: var(--app-secondary);
   font-size: 11px;
   letter-spacing: 2px;
 }
@@ -35,8 +35,8 @@
   margin-block: 6px !important;
 }
 .workspace-future .ant-menu-dark .ant-menu-item-selected {
-  background: linear-gradient(100deg, #32294f, #202438) !important;
-  box-shadow: inset 0 0 0 1px #6954a638;
+  background: var(--app-accent-soft) !important;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--app-accent-border) 22%, transparent);
 }
 .workspace-future .sidebar.ant-layout-sider-collapsed .ant-menu {
   padding: 0;
@@ -46,33 +46,33 @@
   min-height: 68px;
   flex-wrap: nowrap;
   padding: 0 32px;
-  background: #0c0e16ed;
-  border-color: #222635;
+  background: var(--app-header);
+  border-color: var(--app-border);
   backdrop-filter: blur(16px);
 }
 .workspace-future .workspace-title {
-  color: #d0d4e7;
+  color: var(--app-text);
   font-size: 13px;
   font-weight: 500;
 }
 .workspace-future .topbar-actions > .ant-space-item > a {
-  color: #9da4bc;
+  color: var(--app-secondary);
   font-size: 12px;
 }
 .workspace-future .topbar-actions .personal-workspace-entry {
   display: none;
 }
 .workspace-future .account-menu-trigger .ant-avatar {
-  background: #37304f;
-  color: #ddd4ff;
+  background: var(--app-surface);
+  color: var(--app-text);
 }
 .workspace-future .account-menu-chevron {
-  color: #9da4bc;
+  color: var(--app-secondary);
 }
 .workspace-future .content {
   padding: 30px 36px 40px;
   background:
-    radial-gradient(ellipse at 80% 0%, #3630601c, transparent 42%), #0c0e16;
+    radial-gradient(ellipse at 80% 0%, var(--app-glow), transparent 42%), var(--app-bg);
 }
 .workspace-future .workspace-subnav {
   display: none;
@@ -83,23 +83,23 @@
 body:has(.workspace-future) .account-dropdown,
 body:has(.workspace-future) .workspace-menu-popup .ant-menu,
 body:has(.workspace-future) .workspace-menu-popup .ant-menu-item-group-title {
-  background: #1c2030 !important;
-  border-color: #35394e;
-  color: #d4dbef;
+  background: var(--app-surface) !important;
+  border-color: var(--app-border);
+  color: var(--app-text);
 }
 body:has(.workspace-future) .workspace-menu-popup .ant-menu-item a,
 body:has(.workspace-future) .workspace-menu-popup-heading {
-  color: #c9d2ef !important;
+  color: var(--app-text) !important;
 }
 body:has(.workspace-future) .workspace-menu-popup .ant-menu-item:hover,
 body:has(.workspace-future) .workspace-menu-popup .ant-menu-item-selected {
-  background: #36304f !important;
+  background: var(--app-surface) !important;
 }
 body:has(.workspace-future) .account-dropdown-profile {
-  border-color: #35394e;
+  border-color: var(--app-border);
 }
 body:has(.workspace-future) .account-dropdown-profile small {
-  color: #9da7c4;
+  color: var(--app-secondary);
 }
 @media (max-width: 1250px) {
   .workspace-future .content {
@@ -132,7 +132,7 @@ body:has(.workspace-future) .account-dropdown-profile small {
     inset: 0;
     left: 216px;
     z-index: 205;
-    background: #0009;
+    background: color-mix(in srgb, var(--app-bg) 60%, transparent);
     border: 0;
   }
   .workspace-future .topbar {

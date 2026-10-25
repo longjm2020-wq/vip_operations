@@ -1,0 +1,168 @@
+/* Shared by native elements, Ant Design, SVG charts and body-mounted portals. */
+:root,
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --app-bg: #111111;
+  --app-surface: #1b1b1b;
+  --app-elevated: #242321;
+  --app-muted: #22211f;
+  --app-hover: #30271e;
+  --app-text: #f1ede7;
+  --app-secondary: #b7ad9f;
+  --app-subtle: #978c7e;
+  --app-border: #38342e;
+  --app-border-strong: #68563d;
+  --app-accent: #e6ad55;
+  --app-accent-hover: #f5c982;
+  --app-accent-soft: #30271a;
+  --app-accent-border: #69502e;
+  --app-on-accent: #19140d;
+  --app-success: #8dc8a1;
+  --app-success-bg: #1d3025;
+  --app-danger: #f59b91;
+  --app-danger-bg: #3c2421;
+  --app-info: #94b8e5;
+  --app-info-bg: #202d3a;
+  --app-warning: #e6bd72;
+  --app-warning-bg: #352b1b;
+  --app-shadow: #00000026;
+  --app-header: #171717ed;
+  --app-glow: #d18b2c20;
+  --app-hero-start: #272219;
+  --app-hero-end: #191918;
+  --app-gold: #f0c57c;
+  --app-orange: #ef9145;
+  --app-orb-core: #302315;
+  --app-lock: #302e2b;
+  --app-chart-secondary: #90aaad;
+}
+:root[data-theme="light"] {
+  color-scheme: light;
+  --app-bg: #f8f5f0;
+  --app-surface: #ffffff;
+  --app-elevated: #ffffff;
+  --app-muted: #faf7f2;
+  --app-hover: #fff3e5;
+  --app-text: #342f29;
+  --app-secondary: #75695d;
+  --app-subtle: #8b7b69;
+  --app-border: #e2d8cb;
+  --app-border-strong: #c7b39a;
+  --app-accent: #b45a16;
+  --app-accent-hover: #94400c;
+  --app-accent-soft: #fff1df;
+  --app-accent-border: #e9ceac;
+  --app-on-accent: #ffffff;
+  --app-success: #347449;
+  --app-success-bg: #eff8ef;
+  --app-danger: #bc3930;
+  --app-danger-bg: #fff0ed;
+  --app-info: #376aab;
+  --app-info-bg: #edf4fe;
+  --app-warning: #906417;
+  --app-warning-bg: #fff8df;
+  --app-shadow: #5c41110c;
+  --app-header: #ffffffef;
+  --app-glow: #e5a4441c;
+  --app-hero-start: #fff4e4;
+  --app-hero-end: #fffcf7;
+  --app-gold: #986318;
+  --app-orange: #bd560e;
+  --app-orb-core: #d5ad72;
+  --app-lock: #e9e6e1;
+  --app-chart-secondary: #46777d;
+}
+html,
+body {
+  background: var(--app-bg);
+  color: var(--app-text);
+}
+::selection {
+  background: var(--app-accent-soft);
+  color: var(--app-accent);
+}
+* {
+  scrollbar-color: var(--app-border-strong) var(--app-muted);
+}
+.theme-control {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+.theme-toggle.ant-btn {
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  padding: 0;
+  border-radius: 50%;
+  color: var(--app-accent);
+  background: var(--app-surface);
+  border-color: var(--app-border);
+}
+.theme-control-standalone {
+  position: fixed;
+  top: 14px;
+  right: 18px;
+  z-index: 101;
+}
+.theme-error {
+  position: absolute;
+  top: 42px;
+  right: 0;
+  width: min(300px, 80vw);
+  padding: 12px;
+  z-index: 1100;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--app-danger);
+  background: var(--app-elevated);
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+  box-shadow: 0 6px 24px var(--app-shadow);
+}
+.theme-error .ant-btn {
+  margin-top: 6px;
+}
+:root[data-theme="light"] .sidebar .brand-wordmark {
+  filter: brightness(0.35) sepia(0.25);
+}
+:root[data-theme="dark"] .sidebar .brand-wordmark {
+  filter: none;
+}
+.sidebar .ant-menu-dark .ant-menu-item-selected {
+  background: var(--app-accent-soft) !important;
+  color: var(--app-accent);
+}
+.sidebar .ant-menu-dark .ant-menu-item-selected a {
+  color: var(--app-accent);
+}
+.workspace .sidebar {
+  background: var(--app-surface) !important;
+  border-right: 1px solid var(--app-border);
+}
+.workspace .sidebar-caption {
+  color: var(--app-secondary);
+}
+.workspace .ant-layout {
+  min-width: 0;
+}
+.login-story,
+.login-video-copy {
+  color: white;
+}
+/* Exact colors chosen by a user are data. Keep a legible canvas for those cells. */
+.selection-sheet td[data-custom-fill="true"] {
+  color: #342f29;
+}
+.selection-sheet td[data-custom-fill="true"] a,
+.selection-sheet td[data-text-color] a {
+  color: inherit;
+}
+@media (max-width: 767px) {
+  .workspace-future .topbar {
+    gap: 6px;
+  }
+  .workspace-future .topbar-actions {
+    gap: 7px !important;
+  }
+}

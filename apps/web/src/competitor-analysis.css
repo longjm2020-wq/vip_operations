@@ -1,5 +1,5 @@
 .competitor-page {
-  color: #49382e;
+  color: var(--app-text);
   overflow-anchor: none;
 }
 .competitor-page > .ant-card {
@@ -18,14 +18,14 @@
 }
 .competitor-facet-line {
   margin-top: 14px;
-  border-top: 1px solid #f0e5dc;
+  border-top: 1px solid var(--app-border);
   padding-top: 14px;
 }
 .competitor-facet-line > .ant-select {
   width: 140px;
 }
 .competitor-scope-note {
-  color: #967f70;
+  color: var(--app-secondary);
   font-size: 12px;
   line-height: 1.8;
   margin: 12px 0;
@@ -38,7 +38,7 @@
 .competitor-metrics span,
 .competitor-metrics small {
   display: block;
-  color: #967f70;
+  color: var(--app-secondary);
   font-size: 12px;
 }
 .competitor-metrics strong {
@@ -82,14 +82,14 @@
   cursor: default;
 }
 .competitor-bar-row:focus-visible {
-  outline: 2px solid #e98b4d;
+  outline: 2px solid var(--app-accent-border);
   outline-offset: 2px;
   border-radius: 4px;
 }
 .competitor-bar-row > span:first-child {
   width: 65px;
   flex-shrink: 0;
-  color: #937d70;
+  color: var(--app-secondary);
 }
 .competitor-bar-row > b {
   width: 24px;
@@ -100,7 +100,7 @@
   flex: 1;
   border-radius: 3px;
   height: 7px;
-  background: #fcf3ec;
+  background: var(--app-muted);
   overflow: hidden;
 }
 .competitor-bar-track i {
@@ -119,7 +119,7 @@
 }
 .competitor-page td small {
   display: block;
-  color: #a38c7e;
+  color: var(--app-secondary);
   font-size: 11px;
   line-height: 1.6;
   margin-top: 5px;
@@ -131,10 +131,10 @@
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  background: #f4efeb;
+  background: var(--app-muted);
   border-radius: 5px;
   position: relative;
-  color: #b2a093;
+  color: var(--app-subtle);
 }
 .competitor-photo .compass-product-image-thumb,
 .competitor-photo .compass-product-image-placeholder {
@@ -159,7 +159,7 @@
   gap: 4px;
   min-width: 0;
   font-size: 11px;
-  color: #725749;
+  color: var(--app-secondary);
 }
 .competitor-bar-products a {
   width: 100%;
@@ -170,7 +170,7 @@
   height: 70px;
   object-fit: contain;
   border-radius: 4px;
-  background: #f6f0eb;
+  background: var(--app-muted);
 }
 .competitor-bar-code {
   width: 100%;
@@ -185,7 +185,7 @@
 }
 .competitor-product-preview-card {
   position: relative;
-  border: 1px solid #efe5dd;
+  border: 1px solid var(--app-border);
   border-radius: 6px;
   overflow: hidden;
 }
@@ -211,7 +211,7 @@
   cursor: zoom-in;
 }
 .competitor-product-preview-enlarge:focus-visible {
-  outline: 2px solid #d95200;
+  outline: 2px solid var(--app-accent-border);
   outline-offset: -3px;
 }
 .competitor-product-preview-image {
@@ -220,7 +220,7 @@
   height: 320px;
   max-height: 45dvh;
   object-fit: contain;
-  background: #f8f3ef;
+  background: var(--app-muted);
 }
 .competitor-product-preview .competitor-product-preview-card {
   border: 0;
@@ -231,7 +231,7 @@
 }
 .competitor-product-preview-details {
   padding: 14px;
-  color: #49382e;
+  color: var(--app-text);
   overflow-wrap: anywhere;
 }
 .competitor-product-preview-price {
@@ -243,8 +243,8 @@
 .competitor-product-preview-price > span {
   border-radius: 12px;
   padding: 2px 8px;
-  background: #e97c3c;
-  color: white;
+  background: var(--app-accent);
+  color: var(--app-text);
   font-size: 12px;
 }
 .competitor-product-preview-price > strong {
@@ -254,7 +254,7 @@
 .competitor-product-preview-code {
   margin-top: 8px;
   font-size: 13px;
-  color: #937d70;
+  color: var(--app-secondary);
 }
 .competitor-product-preview-details h4 {
   margin: 16px 0 6px;
@@ -267,10 +267,10 @@
   font-size: 14px;
 }
 .competitor-bar-products a:hover {
-  color: #d95200;
+  color: var(--app-accent);
 }
 .competitor-bar-products a:focus-visible {
-  outline: 2px solid #e98b4d;
+  outline: 2px solid var(--app-accent-border);
   outline-offset: 2px;
   border-radius: 4px;
 }
@@ -291,7 +291,7 @@
   min-height: 560px;
 }
 .competitor-muted {
-  color: #af9c8f;
+  color: var(--app-subtle);
 }
 .competitor-bookmark,
 .competitor-file-button {
@@ -299,11 +299,11 @@
   gap: 6px;
   align-items: center;
   padding: 8px 16px;
-  border: 1px solid #e9cdb5;
+  border: 1px solid var(--app-border);
   border-radius: 6px;
   cursor: pointer;
-  background: #fff4e9;
-  color: #bc5b20;
+  background: var(--app-muted);
+  color: var(--app-accent);
 }
 .competitor-bookmark {
   margin-block: 8px 18px;
@@ -319,7 +319,7 @@
   margin-top: 20px;
 }
 .competitor-source-links a {
-  border: 1px solid #ecddcf;
+  border: 1px solid var(--app-border);
   padding: 8px 14px;
   border-radius: 6px;
   display: flex;
@@ -350,7 +350,7 @@
   align-items: center;
   gap: 12px;
   flex-wrap: wrap;
-  color: #9a8477;
+  color: var(--app-secondary);
   font-size: 13px;
   margin: 0 0 16px;
 }
@@ -359,11 +359,11 @@
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: #b8aaa2;
+  background: var(--app-muted);
   margin-right: 7px;
 }
 .competitor-crawl-line > span > i.enabled {
-  background: #79916e;
+  background: var(--app-success);
 }
 .competitor-crawl-status {
   flex-basis: 100%;
@@ -371,7 +371,7 @@
 .competitor-crawl-status summary {
   cursor: pointer;
   width: fit-content;
-  color: #8a6955;
+  color: var(--app-secondary);
 }
 .competitor-crawl-jobs {
   display: grid;
@@ -380,17 +380,17 @@
   margin-top: 10px;
 }
 .competitor-crawl-job {
-  background: #fff;
-  border: 1px solid #efdfd3;
+  background: var(--app-surface);
+  border: 1px solid var(--app-border);
   border-radius: 9px;
   padding: 12px;
 }
 .competitor-crawl-job strong {
-  color: #44342b;
+  color: var(--app-text);
   margin-right: 10px;
 }
 .competitor-crawl-progress { margin-top: 10px; }
-.competitor-crawl-counts { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; color: #927b6e; }
+.competitor-crawl-counts { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; color: var(--app-secondary); }
 .competitor-crawl-counts b { font-weight: 500; }
 .competitor-browser-login { display: inline-flex; align-items: center; gap: 2px; margin-left: 10px; flex-wrap: wrap; }
 .competitor-browser-login .ant-tag { margin: 0; }
@@ -410,7 +410,7 @@
   width: 100%;
   height: auto;
   margin-top: 12px;
-  border: 1px solid #eaded4;
+  border: 1px solid var(--app-border);
   border-radius: 8px;
   cursor: pointer;
   user-select: none;
@@ -422,12 +422,12 @@
   justify-content: center;
   gap: 12px;
   min-height: 160px;
-  color: #a17d66;
+  color: var(--app-secondary);
 }
 .competitor-brand-picker {
   margin: 16px 0;
   padding: 12px;
-  border: 1px solid #eaded4;
+  border: 1px solid var(--app-border);
   border-radius: 8px;
 }
 .competitor-brand-picker-heading {

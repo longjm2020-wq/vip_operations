@@ -13,7 +13,7 @@
   font-weight: 600;
 }
 .workspace-panel-heading h2 .anticon {
-  color: #a998f6;
+  color: var(--app-accent);
   margin-right: 6px;
 }
 .schedule-month {
@@ -34,7 +34,7 @@
   gap: 4px;
 }
 .schedule-weekdays {
-  color: #8f96ae;
+  color: var(--app-secondary);
   font-size: 11px;
   margin-bottom: 10px;
 }
@@ -47,31 +47,31 @@
   border: 1px solid transparent;
   border-radius: 8px;
   background: transparent;
-  color: #cdd2e7;
+  color: var(--app-text);
   font: inherit;
   font-size: 12px;
   cursor: pointer;
 }
 .schedule-days button.outside {
-  color: #656d85;
+  color: var(--app-secondary);
 }
 .schedule-days button.today {
-  border-color: #51456f;
-  color: #cbbaff;
+  border-color: var(--app-border);
+  color: var(--app-accent);
 }
 .schedule-days button:hover {
-  background: #29283e;
+  background: var(--app-surface);
 }
 .schedule-days button.selected {
-  background: #9b86f6;
-  color: #100e20;
+  background: var(--app-accent);
+  color: var(--app-on-accent);
   font-weight: 700;
-  border-color: #ae9afa;
-  box-shadow: 0 4px 16px #9c85fa21;
+  border-color: var(--app-accent-border);
+  box-shadow: 0 4px 16px color-mix(in srgb, var(--app-accent-border) 13%, transparent);
 }
 .schedule-days button:focus-visible,
 .schedule-event:focus-visible {
-  outline: 2px solid #b9abff;
+  outline: 2px solid var(--app-accent-border);
   outline-offset: 2px;
 }
 .schedule-days i {
@@ -88,12 +88,12 @@
   align-items: center;
   padding-top: 18px;
   margin-top: 18px;
-  border-top: 1px solid #2a2e40;
+  border-top: 1px solid var(--app-border);
   font-size: 12px;
 }
 .schedule-day-heading small {
   margin-left: 6px;
-  color: #929bb5;
+  color: var(--app-secondary);
 }
 .schedule-agenda {
   max-height: 220px;
@@ -106,8 +106,8 @@
   gap: 14px;
   width: 100%;
   border: 0;
-  background: #1c1d2d;
-  color: #dde0f0;
+  background: var(--app-surface);
+  color: var(--app-text);
   text-align: left;
   padding: 13px 12px;
   border-radius: 9px;
@@ -116,16 +116,16 @@
   font: inherit;
 }
 .schedule-event:hover {
-  background: #242439;
+  background: var(--app-surface);
 }
 .schedule-event-time {
-  color: #b7a5fc;
+  color: var(--app-accent);
   font-variant-numeric: tabular-nums;
   font-size: 12px;
   flex: 0 0 36px;
 }
 .schedule-event > span:last-child {
-  border-left: 2px solid #9d86ef;
+  border-left: 2px solid var(--app-accent-border);
   padding-left: 12px;
   min-width: 0;
 }
@@ -137,7 +137,7 @@
 }
 .schedule-event small {
   display: block;
-  color: #9ba2ba;
+  color: var(--app-secondary);
   font-size: 11px;
   margin-top: 5px;
   white-space: nowrap;
@@ -147,7 +147,7 @@
 .schedule-empty {
   padding: 12px 0;
   font-size: 12px;
-  color: #959db4;
+  color: var(--app-secondary);
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -159,7 +159,7 @@
 }
 .schedule-timezone {
   font-size: 10px;
-  color: #8b93ab;
+  color: var(--app-secondary);
   letter-spacing: 0.4px;
   margin-top: 14px;
 }
@@ -167,7 +167,7 @@
   margin-top: 20px;
 }
 .workspace-schedule-modal {
-  color-scheme: dark;
+  color-scheme: inherit;
 }
 .schedule-times {
   display: grid;
@@ -175,11 +175,11 @@
   gap: 16px;
 }
 .schedule-save-note {
-  color: #a3aac0;
+  color: var(--app-secondary);
   font-size: 12px;
 }
 .schedule-error {
-  color: #ff919e;
+  color: var(--app-accent);
 }
 @media (max-width: 767px) {
   .personal-schedule {

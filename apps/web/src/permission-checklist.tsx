@@ -90,7 +90,7 @@ export function PermissionChecklist({
           <div
             key={prefix}
             style={{
-              border: "1px solid #eaded3",
+              border: "1px solid var(--app-border)",
               borderRadius: 6,
               padding: 10,
               width: "100%",

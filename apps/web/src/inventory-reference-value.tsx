@@ -159,7 +159,7 @@ export function InventoryReferenceValue({
         {value == null
           ? missingLabel
           : format(value, field === "returnRate")}
-        {zeroMedianSales && <span style={{ marginLeft: 6, fontSize: 12, color: "#ad6800" }}>期间有销量</span>}
+        {zeroMedianSales && <span style={{ marginLeft: 6, fontSize: 12, color: "var(--app-warning)" }}>期间有销量</span>}
       </span>
     </Tooltip>
   );

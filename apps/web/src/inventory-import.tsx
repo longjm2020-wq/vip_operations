@@ -202,7 +202,7 @@ export function InventoryImport({
           gap: 16,
           marginBottom: 16,
           padding: 12,
-          background: "#fff5eb",
+          background: "var(--app-accent-soft)",
           borderRadius: 6,
         }}
       >

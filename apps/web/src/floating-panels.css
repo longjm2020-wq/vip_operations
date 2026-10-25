@@ -23,13 +23,13 @@
   height: 28px;
   border: 1px solid rgba(120, 96, 77, .2);
   border-radius: 6px;
-  background: rgba(255, 255, 255, .92);
-  color: #78604d;
+  background: var(--app-elevated);
+  color: var(--app-secondary);
   font-size: 21px;
   line-height: 24px;
   padding: 0;
 }
 .floating-panel-grip:focus-visible {
-  outline: 2px solid #d3540b;
+  outline: 2px solid var(--app-accent-border);
   outline-offset: 2px;
 }

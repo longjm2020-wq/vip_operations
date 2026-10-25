@@ -93,6 +93,8 @@ async function workspaceFixture(
         permissions,
         csrfToken: "fixture",
       };
+    if (path === "/my-workspace/appearance")
+      data = { mode: "dark", version: 0 };
     if (path === "/my-workspace") {
       if (request.method() === "POST")
         Object.assign(workspace, request.postDataJSON(), {
@@ -167,36 +169,19 @@ async function workspaceFixture(
   };
 }
 
-test("工作台复用分析缓存，键盘打开同一报告且不自动生成或读取密钥设置", async ({
+test("工作台只保留个人助理，不再读取经营报告或显示专属工具", async ({
   page,
 }) => {
   const fixture = await workspaceFixture(page);
   await page.goto("/my-workspace");
   await expect(
-    page.getByRole("button", { name: "完善商品标题", exact: true }),
-  ).toBeVisible({ timeout: 20000 });
-  await expect(
-    page.getByRole("button", { name: "适配安全类别与标准", exact: true }),
+    page.getByRole("button", { name: "打开个人助理", exact: true }),
   ).toBeVisible();
-  await expect(page.getByLabel("经营分析任务")).toContainText(
-    "数据截至 2026-10-24",
-  );
-  await page.getByRole("button", { name: "读懂经营数据", exact: true }).focus();
-  await page.keyboard.press("Enter");
-  const dialog = page.getByRole("dialog", { name: /AI 经营分析/ });
-  await expect(dialog.locator(".ai-summary")).toContainText("近7天销售增长");
-  await dialog.locator(".ai-execution > summary").click();
-  await expect(dialog).toContainText("实际返回模型：openai/gpt-6.1-sol");
+  await expect(page.getByText("专属 AI 工具")).toHaveCount(0);
+  await expect(page.getByLabel("经营分析任务")).toHaveCount(0);
+  expect(fixture.reads()).toBe(0);
   expect(fixture.generates()).toBe(0);
   expect(fixture.settingsReads()).toBe(0);
-  await dialog.getByRole("button", { name: "关闭", exact: true }).click();
-  await expect(page.getByLabel("私有备忘", { exact: true })).toHaveValue(
-    "仅自己的备忘，不发送给模型",
-  );
-  await page.screenshot({
-    path: test.info().outputPath("ai-workspace-desktop.png"),
-    fullPage: true,
-  });
 });
 
 test("日程可添加编辑删除，保存后跨页面恢复，拒绝无效时间", async ({ page }) => {
@@ -275,49 +260,6 @@ test("个人助理仅发送后调用模型，日程须确认且可随账号保�
   expect(fixture.assistantCalls()).toBe(1);
 });
 
-test("数据不足和只读权限不会出现生成操作", async ({ page }) => {
-  const fixture = await workspaceFixture(page, {
-    state: "WAITING_DATA",
-    permissions: ["analytics.read", "product.read"],
-  });
-  await page.goto("/my-workspace");
-  await expect(
-    page.getByRole("button", { name: "完善商品标题", exact: true }),
-  ).toHaveCount(0);
-  await expect(
-    page.getByRole("button", { name: "适配安全类别与标准", exact: true }),
-  ).toHaveCount(0);
-  await page.getByRole("button", { name: "打开分析面板", exact: true }).click();
-  await expect(page.getByRole("dialog")).toContainText(
-    "等待同一截止日期的三张完整近30天报表",
-  );
-  await expect(
-    page.getByRole("button", { name: "生成分析", exact: true }),
-  ).toHaveCount(0);
-  expect(fixture.generates()).toBe(0);
-});
-
-test("生成失败保留原因且仅手动重试，成功后工作台使用新结果", async ({
-  page,
-}) => {
-  const fixture = await workspaceFixture(page, { state: "NOT_GENERATED" });
-  await page.goto("/my-workspace");
-  await page.getByRole("button", { name: "打开分析面板", exact: true }).click();
-  const dialog = page.getByRole("dialog", { name: /AI 经营分析/ });
-  await dialog.getByRole("button", { name: "生成分析", exact: true }).click();
-  await expect(dialog).toContainText("模型服务暂时不可用，请稍后重试");
-  await dialog.getByRole("button", { name: "关闭", exact: true }).click();
-  await page.getByRole("button", { name: "打开分析面板", exact: true }).click();
-  await expect(dialog).toContainText("模型服务暂时不可用，请稍后重试");
-  expect(fixture.generates()).toBe(1);
-  await dialog.getByRole("button", { name: "生成分析", exact: true }).click();
-  await expect(dialog.locator(".ai-summary")).toContainText("重试已完成");
-  await dialog.getByRole("button", { name: "关闭", exact: true }).click();
-  await expect(page.getByLabel("经营分析任务")).toContainText("重试已完成");
-  expect(fixture.generates()).toBe(2);
-  expect(fixture.submitted).toEqual([{}, {}]);
-});
-
 test("没有分析权限不请求分析接口，也不显示商品 AI 工具", async ({ page }) => {
   const fixture = await workspaceFixture(page, {
     permissions: ["supply.portal"],
@@ -334,7 +276,7 @@ test("手机工作台不横向溢出，减少动态效果时关闭流光", async
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/my-workspace");
   await expect(
-    page.getByRole("button", { name: "读懂经营数据", exact: true }),
+    page.getByRole("button", { name: "打开个人助理", exact: true }),
   ).toBeVisible();
   await expect(page.locator(".magic-border-beam")).toHaveCSS(
     "overflow",
@@ -347,13 +289,15 @@ test("手机工作台不横向溢出，减少动态效果时关闭流光", async
   expect(size.content).toBeLessThanOrEqual(size.viewport + 1);
   await page.emulateMedia({ reducedMotion: "reduce" });
   await expect(page.locator(".magic-border-beam")).toHaveCSS("display", "none");
-  await page.getByRole("button", { name: "查看分析", exact: true }).click();
+  await page.getByRole("button", { name: "打开个人助理", exact: true }).click();
   const dialog = page.getByRole("dialog");
-  await expect(dialog.locator(".ai-summary")).toContainText("近7天销售增长");
+  await expect(
+    dialog.getByRole("button", { name: "发送给个人助理" }),
+  ).toBeVisible();
   expect((await dialog.boundingBox())!.width).toBeLessThanOrEqual(390.05);
 });
 
-test("手机导航可开关，助理和日程弹窗完整显示且工作台深色不影响业务页面", async ({
+test("手机导航可开关，助理和日程弹窗完整显示且业务页面沿用全站主题", async ({
   page,
 }) => {
   await workspaceFixture(page);

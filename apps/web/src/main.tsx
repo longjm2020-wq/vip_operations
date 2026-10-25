@@ -28,7 +28,6 @@ import {
   Alert,
   Button,
   Checkbox,
-  ConfigProvider,
   Form,
   Grid,
   Input,
@@ -37,7 +36,7 @@ import {
   Space,
   Spin,
 } from "antd";
-import zhCN from "antd/locale/zh_CN";
+
 import {
   AppstoreOutlined,
   InboxOutlined,
@@ -71,7 +70,7 @@ const ProjectDetailPage = React.lazy(() => import("./projects").then(module => (
 const ProjectNotifications = React.lazy(() => import("./projects").then(module => ({ default: module.ProjectNotifications })));
 import "./style.css";
 import "./workspace-shell.css";
-import { workspaceTheme } from "./workspace-theme";
+import { AppearanceProvider, ThemeToggle } from "./appearance";
 const SupplierRegister = React.lazy(() => import("./supply").then(module => ({ default: module.SupplierRegister })));
 const SupplyProfile = React.lazy(() => import("./supply").then(module => ({ default: module.SupplyProfile })));
 const SupplyProducts = React.lazy(() => import("./supply").then(module => ({ default: module.SupplyProducts })));
@@ -383,7 +382,6 @@ function Workspace({ user }: { user: Row }) {
       : undefined;
   return (
     <PageSearchContext.Provider value={searchHost}><UserContext.Provider value={user}>
-      <ConfigProvider theme={personalWorkspace ? workspaceTheme : undefined}>
       <Layout className={`workspace${personalWorkspace ? " workspace-future" : ""}`}>
         {mobileWorkspace && workspaceNavOpen && <button type="button" className="workspace-nav-scrim" aria-label="关闭工作区导航" onClick={() => setWorkspaceNavOpen(false)} />}
         <Layout.Sider width={personalWorkspace ? 216 : 200} collapsed={navCollapsed} collapsedWidth={mobileWorkspace ? 0 : 80} className="sidebar">
@@ -443,6 +441,7 @@ function Workspace({ user }: { user: Row }) {
             </nav>
             <div ref={setSearchHost} className="topbar-search-host" role="search" aria-label="当前页面搜索"/>
             <Space className="topbar-actions" size={10}>
+              <ThemeToggle />
               <Link to="/my-workspace" className="personal-workspace-entry" aria-current={location.pathname === "/my-workspace" ? "page" : undefined}><HomeOutlined aria-hidden="true" /> 我的工作台</Link>
               <Link
                 to={manualHref(location.pathname)}
@@ -539,7 +538,6 @@ function Workspace({ user }: { user: Row }) {
           </Layout.Content>
         </Layout>
       </Layout>
-      </ConfigProvider>
     </UserContext.Provider></PageSearchContext.Provider>
   );
 }
@@ -562,6 +560,7 @@ function Root() {
     },
     retry: false,
   });
+  const renderContent = () => {
   if (publicCollection) return <PublicSelectionCollection />;
   if (publicReport) return <PublicCompassReport />;
   if (publicCompetitors) return <PublicCompetitorAnalysis />;
@@ -586,49 +585,17 @@ function Root() {
   ) : (
     <Login />
   );
+  };
+  const publicPage = publicCollection || publicReport || publicCompetitors;
+  const accountId = !publicPage && me.data ? String(me.data.id) : null;
+  return <AppearanceProvider key={accountId || "guest"} accountId={accountId}><App><FloatingPanels />{(publicPage || (!me.isLoading && !me.data) || location.pathname === "/mobile/style-photos") && <ThemeToggle standalone />}{renderContent()}</App></AppearanceProvider>;
 }
 createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <ConfigProvider
-      button={{ autoInsertSpace: false }}
-      locale={zhCN}
-      theme={{
-        token: {
-          colorPrimary: "#d3540b",
-          colorInfo: "#d3540b",
-          colorInfoBg: "#fff4e7",
-          colorInfoBorder: "#ecd3b9",
-          borderRadius: 6,
-          controlHeight: 30,
-          fontFamily: 'Inter, "Microsoft YaHei", sans-serif',
-          colorBgLayout: "#fff8f1",
-          colorText: "#362a22",
-        },
-        components: {
-          Table: {
-            headerBg: "#fff2e4",
-            headerColor: "#78604d",
-            cellPaddingBlock: 6,
-            cellPaddingBlockMD: 6,
-            cellPaddingBlockSM: 5,
-            cellPaddingInline: 10,
-            cellFontSize: 13,
-          },
-          Button: { controlHeight: 30 },
-          Card: { bodyPadding: 14, headerPadding: 14, headerHeight: 40 },
-          Form: { itemMarginBottom: 12, verticalLabelPadding: "0 0 4px" },
-          Menu: { itemHeight: 34, itemMarginBlock: 2 },
-        },
-      }}
-    >
-      <App>
-        <FloatingPanels />
-        <QueryClientProvider client={queryClient}>
-          <BrowserRouter>
-            <React.Suspense fallback={<div className="loading"><Spin size="large" /></div>}><Root /></React.Suspense>
-          </BrowserRouter>
-        </QueryClientProvider>
-      </App>
-    </ConfigProvider>
+    <QueryClientProvider client={queryClient}>
+      <BrowserRouter>
+        <React.Suspense fallback={<div className="loading"><Spin size="large" /></div>}><Root /></React.Suspense>
+      </BrowserRouter>
+    </QueryClientProvider>
   </React.StrictMode>,
 );

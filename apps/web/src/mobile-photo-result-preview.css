@@ -6,9 +6,9 @@
   width: 64px;
   height: 64px;
   overflow: hidden;
-  border: 1px solid #e8ded6;
+  border: 1px solid var(--app-border);
   border-radius: 9px;
-  background: #f7f3ef;
+  background: var(--app-muted);
 }
 .mobile-photo-result-preview {
   padding: 0;
@@ -16,7 +16,7 @@
   line-height: 0;
 }
 .mobile-photo-result-preview:focus-visible {
-  outline: 2px solid #d95200;
+  outline: 2px solid var(--app-accent-border);
   outline-offset: 3px;
 }
 .mobile-photo-result-preview .ant-image,
@@ -33,7 +33,7 @@
   padding: 2px 4px;
   border-radius: 4px;
   background: rgb(0 0 0 / 58%);
-  color: white;
+  color: var(--app-text);
   font-size: 10px;
   line-height: 1.2;
 }
@@ -42,7 +42,7 @@
   align-items: center;
   justify-content: center;
   gap: 4px;
-  color: #a69a91;
+  color: var(--app-secondary);
   font-size: 20px;
 }
 .mobile-photo-result-placeholder small {
@@ -82,7 +82,7 @@
   border: 1px solid rgb(255 255 255 / 32%);
   border-radius: 8px;
   background: rgb(0 0 0 / 24%);
-  color: #fff;
+  color: var(--app-text);
   font: inherit;
   cursor: pointer;
 }
@@ -91,7 +91,7 @@
   cursor: default;
 }
 .mobile-photo-result-preview-actions button:focus-visible {
-  outline: 2px solid #fff;
+  outline: 2px solid var(--app-border);
   outline-offset: 2px;
 }
 .mobile-photo-result-preview-actions span {

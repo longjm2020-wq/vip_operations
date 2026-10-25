@@ -1541,7 +1541,7 @@ export function ProjectDetailPage() {
                 {t.reason && (
                   <p
                     style={{
-                      color: t.status === "DISPUTED" ? "#be3838" : undefined,
+                      color: t.status === "DISPUTED" ? "var(--app-danger)" : undefined,
                     }}
                   >
                     反馈：{t.reason}

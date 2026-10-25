@@ -4,16 +4,16 @@
   margin-top: 24px;
 }
 .assistant-compose .ant-sender {
-  background: #0f111bd9;
-  border-color: #51416e;
+  background: color-mix(in srgb, var(--app-bg) 85%, transparent);
+  border-color: var(--app-border);
   box-shadow:
-    0 0 0 4px #ac8bff07,
-    0 10px 30px #0002;
+    0 0 0 4px color-mix(in srgb, var(--app-accent-border) 3%, transparent),
+    0 10px 30px var(--app-shadow);
   border-radius: 14px;
 }
 .assistant-compose .ant-sender:focus-within {
-  border-color: #ac96ff;
-  box-shadow: 0 0 0 3px #a88bff1a;
+  border-color: var(--app-accent-border);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--app-accent-border) 10%, transparent);
 }
 .assistant-compose .ant-sender-input {
   font-size: 13px;
@@ -29,21 +29,21 @@
 .assistant-compose-meta .ant-checkbox-wrapper,
 .assistant-compose-meta .ant-btn {
   font-size: 11px;
-  color: #a1a6bc;
+  color: var(--app-secondary);
 }
 .assistant-compose-meta .ant-checkbox-inner {
   width: 13px;
   height: 13px;
 }
 .personal-assistant-drawer .ant-drawer-body {
-  background: #11141f;
+  background: var(--app-bg);
   padding: 22px;
 }
 .personal-assistant-drawer .ant-drawer-content {
-  background: #161925;
+  background: var(--app-bg);
 }
 .personal-assistant-drawer .ant-drawer-title {
-  color: #e7eafa;
+  color: var(--app-text);
 }
 .personal-assistant-drawer .ant-drawer-footer {
   padding: 10px 22px 16px;
@@ -56,7 +56,7 @@
   align-items: center;
   gap: 6px;
   margin-bottom: 24px;
-  color: #a5aecb;
+  color: var(--app-secondary);
   font-size: 11px;
 }
 .assistant-status > .ant-btn {
@@ -64,7 +64,7 @@
 }
 .assistant-privacy {
   font-size: 10px;
-  color: #939bb4;
+  color: var(--app-secondary);
   line-height: 1.7;
   margin: 10px 0 0;
 }
@@ -74,8 +74,8 @@
 }
 .assistant-spark {
   font-size: 52px;
-  color: #b29bff;
-  text-shadow: 0 0 35px #8568e6;
+  color: var(--app-accent);
+  text-shadow: 0 0 35px var(--app-accent-border);
 }
 .assistant-empty h3 {
   font-size: 21px;
@@ -83,7 +83,7 @@
   font-weight: 500;
 }
 .assistant-empty p {
-  color: #9da5bf;
+  color: var(--app-secondary);
   font-size: 12px;
   margin-bottom: 28px;
 }
@@ -92,10 +92,10 @@
   display: flex;
   justify-content: space-between;
   gap: 14px;
-  background: #1b1f2d;
-  border: 1px solid #2e3247;
+  background: var(--app-surface);
+  border: 1px solid var(--app-border);
   border-radius: 10px;
-  color: #c9cfe4;
+  color: var(--app-text);
   padding: 14px;
   margin-top: 10px;
   cursor: pointer;
@@ -104,7 +104,7 @@
   font-size: 12px;
 }
 .assistant-empty > button:hover {
-  border-color: #a08bff;
+  border-color: var(--app-accent-border);
 }
 .assistant-messages {
   display: flex;
@@ -122,10 +122,10 @@
 }
 .assistant-message .ant-bubble-header {
   font-size: 11px;
-  color: #a6afca;
+  color: var(--app-secondary);
 }
 .assistant-message-user .ant-bubble-content {
-  background: #2a2543;
+  background: var(--app-surface);
 }
 .assistant-schedule-proposals {
   display: grid;
@@ -133,14 +133,14 @@
   margin-top: 12px;
 }
 .assistant-schedule-proposal {
-  border: 1px solid #514474;
-  background: #211d33;
+  border: 1px solid var(--app-accent-border);
+  background: var(--app-surface);
   padding: 16px;
   border-radius: 12px;
 }
 .assistant-schedule-proposal > span {
   display: block;
-  color: #b7a6ee;
+  color: var(--app-accent);
   font-size: 10px;
   margin-bottom: 12px;
 }
@@ -148,13 +148,13 @@
   font-size: 14px;
 }
 .assistant-schedule-proposal p {
-  color: #b4bdd6;
+  color: var(--app-text);
   font-size: 12px;
   overflow-wrap: anywhere;
 }
 .assistant-response-model {
   display: block;
-  color: #838ca8;
+  color: var(--app-secondary);
   font-size: 10px;
   margin-top: 10px;
 }
@@ -165,10 +165,10 @@
   margin-top: 12px;
 }
 .assistant-tool-links a {
-  color: #c6b6ff;
+  color: var(--app-accent);
   padding: 6px 10px;
   border-radius: 8px;
-  background: #252039;
+  background: var(--app-surface);
   font-size: 12px;
 }
 .assistant-tool-links .anticon {

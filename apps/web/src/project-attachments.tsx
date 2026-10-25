@@ -90,7 +90,7 @@ export function ProjectAttachments({
         <Space
           key={file.id}
           wrap
-          style={{ border: "1px solid #e1e9e7", padding: 10, width: "100%" }}
+          style={{ border: "1px solid var(--app-border)", padding: 10, width: "100%" }}
         >
           {file.type.startsWith("image/") && (
             <Image

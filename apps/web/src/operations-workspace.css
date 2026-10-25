@@ -8,19 +8,19 @@
   width: 32px;
   height: 32px;
   margin-left: 12px;
-  border: 1px solid #ecdccf;
+  border: 1px solid var(--app-border);
   border-radius: 6px;
-  background: #fff;
-  color: #927c70;
+  background: var(--app-surface);
+  color: var(--app-secondary);
   font-size: 18px;
 }
 .operations-integration-link:hover {
-  color: #d3540b;
-  background: #fff1e3;
-  border-color: #d3540b;
+  color: var(--app-accent);
+  background: var(--app-muted);
+  border-color: var(--app-accent-border);
 }
 .operations-integration-link:focus-visible {
-  outline: 2px solid #d3540b;
+  outline: 2px solid var(--app-accent-border);
   outline-offset: 3px;
 }
 .operations-entry-grid {
@@ -34,7 +34,7 @@
   border-radius: 8px;
 }
 .operations-entry-link:focus-visible {
-  outline: 2px solid #d3540b;
+  outline: 2px solid var(--app-accent-border);
   outline-offset: 3px;
 }
 .operations-entry-link .ant-card-body {
@@ -51,8 +51,8 @@
   height: 42px;
   flex-shrink: 0;
   border-radius: 10px;
-  background: #fff1e3;
-  color: #d3540b;
+  background: var(--app-muted);
+  color: var(--app-accent);
   font-size: 22px;
 }
 .operations-entry-link h3 {
@@ -63,17 +63,17 @@
   font-size: 12px;
   line-height: 1.7;
   margin: 0;
-  color: #927c70;
+  color: var(--app-secondary);
 }
 .operations-entry-arrow {
   margin-left: auto;
-  color: #ae9686;
+  color: var(--app-subtle);
 }
 .operations-platform-empty {
   margin: 28px 0;
   padding: 36px;
-  background: #fff;
-  border: 1px solid #ecdccf;
+  background: var(--app-surface);
+  border: 1px solid var(--app-border);
   border-radius: 8px;
 }
 @media (max-width: 400px) {

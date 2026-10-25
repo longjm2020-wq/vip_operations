@@ -16,6 +16,7 @@ import { compassProbeRequestSchema } from "./integrations/vip/compass.js";
 import { replenishmentPolicyWriteSchema } from "../../../packages/contracts/src/inventory-replenishment.js";
 import { assistantSendSchema } from "../../../packages/contracts/src/personal-assistant.js";
 import { workspaceSaveSchema } from "../../../packages/contracts/src/personal-workspace.js";
+import { appearanceSchema } from "../../../packages/contracts/src/appearance.js";
 import {
   listingRequestSchema,
   listingStates,
@@ -281,6 +282,8 @@ export function enrichOpenApi(doc: OpenAPIObject) {
     "发送完整且最新的每日报告，同日收件人防重复",
   );
   set("/api/v1/my-workspace", "post", workspaceSaveSchema, "保存本人工作台、日程与待办，按版本检测冲突");
+  set("/api/v1/my-workspace/appearance", "get", undefined, "读取本人全站主题偏好");
+  set("/api/v1/my-workspace/appearance", "post", appearanceSchema, "按账号保存暗色或亮色主题，检测并发版本冲突");
   set("/api/v1/my-workspace/assistant", "post", assistantSendSchema, "向个人助理发送消息，按账号保留对话并仅返回待确认日程");
   set("/api/v1/my-workspace/assistant/clear", "post", z.object({ version: z.number().int().min(0) }).strict(), "清空本人助理对话，不修改工作台记录");
   void money;

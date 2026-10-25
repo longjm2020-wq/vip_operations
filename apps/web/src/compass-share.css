@@ -1,6 +1,6 @@
 .public-compass-report {
   min-height: 100vh;
-  background: #fff8f1;
+  background: var(--app-muted);
 }
 .public-compass-report > header {
   display: flex;
@@ -8,8 +8,8 @@
   align-items: center;
   gap: 12px;
   padding: 18px max(24px, calc((100vw - 1180px) / 2));
-  background: #fff;
-  border-bottom: 1px solid #eee0d4;
+  background: var(--app-surface);
+  border-bottom: 1px solid var(--app-border);
 }
 .public-compass-report > header > div {
   display: flex;
@@ -17,7 +17,7 @@
   gap: 20px;
 }
 .public-compass-brand {
-  color: #826657;
+  color: var(--app-secondary);
   font-size: 21px;
   letter-spacing: 3px;
 }
@@ -31,10 +31,10 @@
   padding: 24px;
 }
 .public-compass-report footer {
-  border-top: 1px solid #eee0d4;
+  border-top: 1px solid var(--app-border);
   margin-top: 20px;
   padding-top: 16px;
-  color: #998072;
+  color: var(--app-secondary);
   font-size: 12px;
 }
 .public-compass-loading {
@@ -52,9 +52,9 @@
   align-items: center;
   gap: 16px;
   padding: 16px;
-  border: 1px solid #f3ddc6;
+  border: 1px solid var(--app-border);
   border-radius: 10px;
-  background: #fffaf4;
+  background: var(--app-muted);
 }
 .compass-share-result > div {
   min-width: 0;
@@ -65,7 +65,7 @@
 .compass-share-result small,
 .compass-share-history small {
   display: block;
-  color: #998072;
+  color: var(--app-secondary);
   font-size: 11px;
   line-height: 1.8;
 }
@@ -79,7 +79,7 @@
   justify-content: space-between;
   gap: 10px;
   padding: 10px 0;
-  border-bottom: 1px solid #f1e6dd;
+  border-bottom: 1px solid var(--app-border);
 }
 @media (max-width: 600px) {
   .public-compass-report > header {
