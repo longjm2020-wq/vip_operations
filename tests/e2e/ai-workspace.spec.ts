@@ -189,17 +189,18 @@ test("没有分析权限不请求分析接口，也不显示商品 AI 工具", a
 test("手机工作台不横向溢出，减少动态效果时关闭流光", async ({ page }) => {
   await workspaceFixture(page);
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.emulateMedia({ reducedMotion: "reduce" });
   await page.goto("/my-workspace");
   await expect(
     page.getByRole("button", { name: "读懂经营数据", exact: true }),
   ).toBeVisible();
-  await expect(page.locator(".magic-border-beam")).toHaveCSS("display", "none");
+  await expect(page.locator(".magic-border-beam")).toHaveCSS("overflow", "hidden");
   const size = await page.evaluate(() => ({
     content: document.documentElement.scrollWidth,
     viewport: window.innerWidth,
   }));
   expect(size.content).toBeLessThanOrEqual(size.viewport + 1);
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await expect(page.locator(".magic-border-beam")).toHaveCSS("display", "none");
   await page.getByRole("button", { name: "查看分析", exact: true }).click();
   const dialog = page.getByRole("dialog");
   await expect(dialog.locator(".ai-summary")).toContainText("近7天销售增长");
