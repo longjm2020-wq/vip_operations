@@ -75,6 +75,7 @@ async function fixture(page: Page, options: FixtureOptions = {}) {
   return { rows, generations, applies, gridWrites, applyKeys, releaseFirst: () => releaseFirst?.() };
 }
 async function openPanel(page: Page) {
+  await page.getByRole("button", { name: "工具箱", exact: true }).click();
   await page.getByRole("button", { name: /AI 商品标题$/ }).click();
   return page.getByRole("dialog", { name: "AI 商品标题生成", exact: true });
 }

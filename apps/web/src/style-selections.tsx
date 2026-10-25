@@ -391,6 +391,7 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
   const rangeCopyLock = useRef(false);
   const [titleAi, setTitleAi] = useState<{ rows: SelectionTitleAiRow[]; keys: string[]; scope: string; mode: SelectionTitleAIMode } | null>(null);
   const [standardsAi, setStandardsAi] = useState<{ rows: SelectionTitleAiRow[]; scope: string } | null>(null);
+  const [collectionsOpen, setCollectionsOpen] = useState(false);
   const [fixedOrderOpen, setFixedOrderOpen] = useState(false);
   const columnSelectionAnchor = useRef<string | null>(null);
   const [columnWidthTarget, setColumnWidthTarget] = useState<Column[] | null>(null);
@@ -1525,10 +1526,11 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
         <Tooltip title={`撤销，最多 10 步 · 当前 ${tableHistory.undoCount} 步（Ctrl+Z）`}><Button aria-label="撤销" disabled={!tableHistory.undoCount || saving || deleting || transferring || !!releasing || tableHistory.busy} icon={<UndoOutlined/>} onClick={() => void tableHistory.replay("undo")}/></Tooltip>
         <Tooltip title={`重做 · 当前 ${tableHistory.redoCount} 步（Ctrl+Y / Ctrl+Shift+Z）`}><Button aria-label="重做" disabled={!tableHistory.redoCount || saving || deleting || transferring || !!releasing || tableHistory.busy} icon={<RedoOutlined/>} onClick={() => void tableHistory.replay("redo")}/></Tooltip>
       </Space.Compact>
-      {canEdit && titleFields.length > 0 && <Button aria-label="AI 商品标题" icon={<BulbOutlined aria-hidden="true" />} disabled={!!dirtyCount || saving || deleting || transferring || !!releasing} onClick={() => void openTitleAi()}>AI 商品标题</Button>}
-      {canEdit && <SelectionCollections selectedRows={filteredRows.filter(row => selectedRowKeys.has(row._key))} blocked={!!dirtyCount || saving || deleting}/>}
+      {canEdit && <SelectionCollections open={collectionsOpen} onClose={() => setCollectionsOpen(false)} selectedRows={filteredRows.filter(row => selectedRowKeys.has(row._key))} blocked={!!dirtyCount || saving || deleting}/>}
       {canEdit && <SelectionPhotoQr />}
-      <SelectionToolbox getSelectedIds={registrationSelectedIds} onStandardsAi={archive && canEdit ? () => void openStandardsAi() : undefined} />
+      <SelectionToolbox getSelectedIds={registrationSelectedIds} onStandardsAi={archive && canEdit ? () => void openStandardsAi() : undefined}
+        onTitleAi={canEdit && titleFields.length > 0 ? () => void openTitleAi() : undefined} titleAiDisabled={!!dirtyCount || saving || deleting || transferring || !!releasing}
+        onCollections={canEdit ? () => setCollectionsOpen(true) : undefined} />
       <TableFindReplace rootRef={findRoot} cells={findCells} selectedIds={selectedFindIds} activeId={activeFindId} blocked={saving || deleting || transferring || !!releasing} saveHint="修改将逐行自动保存，保存失败请修正后重试。" onNavigate={navigateFind} onReplace={replaceFind}/>
       <Button type="link" icon={<PlusOutlined />} disabled={!canAdd} onClick={() => add()}>添加一行</Button><Button type="link" danger icon={<DeleteOutlined />} disabled={!canEdit || !selectedRows.length || saving} loading={deleting} onClick={deleteRows}>删除行</Button>
       {canEdit && <SelectionMigration rows={filteredRows.filter(row=>selectedRowKeys.has(row._key))} fields={availableColumns} blocked={!!dirtyCount || saving || deleting || transferring || !!releasing} layout={layout} onBusy={setTransferring} onComplete={()=>{tableHistory.clear();setSelectedRows([]);appliedSnapshot.current=undefined;void data.refetch();}}/>}

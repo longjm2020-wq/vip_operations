@@ -199,7 +199,7 @@ test("new tables start with no fields or records, share table functions and save
   const selects = toolbar.locator(".selection-tool-select");
   await expect(selects).toHaveCount(3);
   for (const select of await selects.all()) await expect(select).toHaveCSS("width", "135px");
-  await expect(toolbar.getByRole("button", { name: /产品信息收集表/ })).toHaveAttribute("data-selection-control-width", "auto");
+  await expect(toolbar.getByRole("button", { name: /产品信息收集表|AI 商品标题/ })).toHaveCount(0);
   await expect(toolbar.getByRole("button", { name: "左对齐", exact: true })).not.toHaveCSS("width", "135px");
   await page.screenshot({ path: ".local/project-table-blank.png" });
   await page.getByRole("button", { name:"添加字段", exact:true }).click();

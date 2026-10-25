@@ -1,7 +1,8 @@
 .selection-toolbox .ant-drawer-body { padding: 20px 24px; }
 .selection-toolbox-menu { display: grid; gap: 12px; }
 .selection-toolbox-menu button { display: flex; align-items: center; gap: 14px; width: 100%; padding: 20px 16px; color: #46352a; background: #fffaf5; border: 1px solid #eadace; border-radius: 8px; text-align: left; cursor: pointer; }
-.selection-toolbox-menu button:hover { border-color: #d94f00; background: #fff2e5; }
+.selection-toolbox-menu button:hover:not(:disabled) { border-color: #d94f00; background: #fff2e5; }
+.selection-toolbox-menu button:disabled { opacity: 0.45; cursor: not-allowed; }
 .selection-toolbox-menu button:focus-visible { outline: 2px solid #d94f00; outline-offset: 2px; }
 .selection-toolbox-menu button > .anticon:first-child { font-size: 24px; color: #d94f00; }
 .selection-toolbox-menu button > span:not(.anticon) { flex: 1; display: flex; flex-direction: column; gap: 5px; }

@@ -105,6 +105,7 @@ test("Excel 弹窗拖至窗口边界仍可选择覆盖和上传，Escape 关闭"
 
 test("AI 弹窗拖动后候选展开和浏览器缩小时保持可见，候选输入不触发移动", async ({ page }) => {
   const state = await fixture(page);
+  await page.getByRole("button", { name: "工具箱", exact: true }).click();
   await page.getByRole("button", { name: /AI 商品标题$/ }).click();
   const dialog = page.getByRole("dialog", { name: "AI 商品标题生成", exact: true });
   await stableBox(dialog);

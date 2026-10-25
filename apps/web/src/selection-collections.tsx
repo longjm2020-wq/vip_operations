@@ -1,7 +1,7 @@
 import { CopyableCode } from "./copyable-code";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, App, Button, Card, Checkbox, Collapse, Descriptions, Drawer, Empty, Form, Image, Input, InputNumber, Modal, Popconfirm, QRCode, Select, Space, Spin, Table, Tabs, Tag, Typography } from "antd";
-import { AppstoreOutlined, EditOutlined, CheckCircleOutlined, CameraOutlined, ShareAltOutlined } from "@ant-design/icons";
+import { AppstoreOutlined, EditOutlined, CheckCircleOutlined, CameraOutlined } from "@ant-design/icons";
 import { useSelectionWorkspace } from "./selection-workspace";
 import { prepareUpload, readUpload } from "./upload-file";
 import { CollectionStockEditor } from "./selection-collection-stock";
@@ -44,16 +44,17 @@ function SourceOverwrite({item}:{item:Row}) {
   return <Alert type="warning" showIcon title={`确认时外部稿将覆盖内部修改的${item.overwrittenFields.join("、")}`}
     description={<><p>外部没有修改的收集字段仍保留内部最新值。可展开查看当前选款登记资料，核对外部稿。</p><Collapse items={[{key:"current",label:"查看当前选款登记资料",children:<Summary info={item.current}/>}]} /></>} />;
 }
-export function SelectionCollections({selectedRows,blocked}:{selectedRows:Row[];blocked:boolean}) {
+export function SelectionCollections({selectedRows,blocked,open,onClose}:{selectedRows:Row[];blocked:boolean;open:boolean;onClose:()=>void}) {
   const { api, queryClient } = useSelectionWorkspace();
 
   const {message}=App.useApp();
-  const [open,setOpen]=useState(false),[title,setTitle]=useState("产品信息收集表"),[busy,setBusy]=useState(false);
+  const [title,setTitle]=useState("产品信息收集表"),[busy,setBusy]=useState(false);
   const [list,setList]=useState<Row[]>([]),[detail,setDetail]=useState<Row|null>(null),[link,setLink]=useState(""),[reason,setReason]=useState("");
   const [codeEdits,setCodeEdits]=useState<Record<string,string>>({}),[replacementIds,setReplacementIds]=useState<Record<string,string>>({}),[candidateRows,setCandidateRows]=useState<Row[]>([]);
   const attempt=useRef<{body:string;key:string}|null>(null);
   const candidateRequest=useRef(0);
-  const reload=async()=>{try{setList((await api("/selection-collections")).data);}catch(error){message.error((error as Error).message);}};
+  const reload=useCallback(async()=>{try{setList((await api("/selection-collections")).data);}catch(error){message.error((error as Error).message);}},[api,message]);
+  useEffect(()=>{if(open)void reload();},[open,reload]);
   const run=async(action:()=>Promise<void>)=>{if(busy)return;setBusy(true);try{await action();}catch(error){message.error((error as Error).message);}finally{setBusy(false);}};
   const review=async(action:string,itemId?:string)=>{
     if(!detail)return;
@@ -84,8 +85,7 @@ export function SelectionCollections({selectedRows,blocked}:{selectedRows:Row[];
     await Promise.all([queryClient.invalidateQueries({queryKey:["style-selections"]}),queryClient.invalidateQueries({queryKey:["style-selection-style-counts"]})]);
     message.success("收集表已更新，外部打开原链接即可看到最新款式");
   };
-  return <><Button icon={<ShareAltOutlined/>} onClick={()=>{setOpen(true);void reload();}}>产品信息收集表</Button>
-    <Modal open={open} title="产品信息收集表" width={960} footer={null} onCancel={()=>setOpen(false)}>
+  return <><Modal open={open} title="产品信息收集表" width={960} footer={null} onCancel={onClose}>
       <Space wrap><Input aria-label="收集表名称" value={title} maxLength={100} onChange={event=>setTitle(event.target.value)}/><Button type="primary" loading={busy} disabled={blocked || !selectedRows.length || selectedRows.some(row=>!row.id)} onClick={()=>void run(async()=>{
         const body={title,ids:selectedRows.map(row=>String(row.id)),days:7},encoded=JSON.stringify(body);
         if(attempt.current?.body!==encoded)attempt.current={body:encoded,key:crypto.randomUUID()};

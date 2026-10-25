@@ -199,9 +199,20 @@ test("表格编辑者仅有商品查看权限时可查看映射但不能维护",
   expect(state.mappingRequests.every(request => request.method === "GET")).toBe(true);
 });
 
-test("无商品查看权限不显示入口，旧网址也不读取映射", async ({ page }) => {
+test("无商品查看权限仍可打开收集表，工具箱和旧网址均不读取映射", async ({ page }) => {
   const state = await fixture(page, "/style-selections", []);
-  await expect(page.getByRole("button", { name: "工具箱", exact: true })).toHaveCount(0);
+  await expect(page.locator(".selection-toolbar").getByRole("button", { name: "产品信息收集表", exact: true })).toHaveCount(0);
+  await page.getByRole("checkbox", { name: "选择 TOOL-001", exact: true }).check();
+  await page.getByRole("button", { name: "工具箱", exact: true }).click();
+  const menu = page.getByRole("dialog", { name: "工具箱", exact: true });
+  await expect(menu.getByRole("button", { name: /^颜色尺码映射|^聚水潭商品建档|^唯品会商品建档/ })).toHaveCount(0);
+  await menu.getByRole("button", { name: "产品信息收集表", exact: true }).click();
+  await expect(menu).not.toBeVisible();
+  const collection = page.getByRole("dialog", { name: "产品信息收集表", exact: true });
+  await expect(collection.getByRole("button", { name: "将已选 1 款生成收集表", exact: true })).toBeEnabled();
+  await collection.getByRole("button", { name: "关闭", exact: true }).click();
+  await expect(page.getByRole("checkbox", { name: "选择 TOOL-001", exact: true })).toBeChecked();
+  expect(state.gridWrites).toEqual([]);
   expect(state.mappingRequests).toEqual([]);
   await page.goto("/color-size-mappings");
   await expect(page.getByRole("alert")).toContainText("需要商品查看权限");
