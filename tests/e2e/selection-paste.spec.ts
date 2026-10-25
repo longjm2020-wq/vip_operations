@@ -10,7 +10,7 @@ test("external multiline paste fills successive style rows", async ({
     .getByLabel("密码", { exact: true })
     .fill(process.env.E2E_PASSWORD!);
   await page.getByRole("button", { name: "进入工作台" }).click();
-  await expect(page.getByRole("heading", { name: "我的工作台" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /欢迎回来/ })).toBeVisible();
   await page.goto("/style-selections");
   await page.getByText("添加一行", { exact: true }).click();
 

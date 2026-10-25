@@ -5,7 +5,7 @@ async function login(page: Page) {
   await page.getByLabel("用户名", { exact: true }).fill("admin");
   await page.getByLabel("密码", { exact: true }).fill(process.env.E2E_PASSWORD!);
   await page.getByRole("button", { name: "进入工作台" }).click();
-  await expect(page.getByRole("heading", { name: "我的工作台" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /欢迎回来/ })).toBeVisible();
 }
 
 const searchHost = (page: Page) => page.getByRole("search", { name: "当前页面搜索", exact: true });

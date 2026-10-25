@@ -10,7 +10,7 @@ test("mobile capture saves wash label photos independently without a color", asy
     .getByLabel("密码", { exact: true })
     .fill(process.env.E2E_PASSWORD!);
   await page.getByRole("button", { name: "进入工作台" }).click();
-  await expect(page.getByRole("heading", { name: "我的工作台" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /欢迎回来/ })).toBeVisible();
 
   await page.goto("/mobile/style-photos");
   await page.getByRole("button", { name: "新增款式" }).click();
@@ -68,7 +68,7 @@ test("手机颜色标签改名保留图片，并拒绝覆盖其他人新上传�
     .getByLabel("密码", { exact: true })
     .fill(process.env.E2E_PASSWORD!);
   await page.getByRole("button", { name: "进入工作台" }).click();
-  await expect(page.getByRole("heading", { name: "我的工作台" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /欢迎回来/ })).toBeVisible();
   const me = (await (await page.request.get("/api/v1/auth/me")).json()).data;
   const headers = {
     "X-CSRF-Token": me.csrfToken,

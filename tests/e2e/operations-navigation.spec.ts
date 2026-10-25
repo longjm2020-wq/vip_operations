@@ -71,7 +71,7 @@ test("旧 ERP 网址均退出业务页面且不发起旧模块请求", async ({ 
   for (const path of ["/erp", "/inventory", "/inventory/transactions?skuId=1", "/purchase-suggestions", "/purchase-orders", "/purchase-orders/new", "/purchase-orders/1", "/receipts", "/receipts/1", "/suppliers", "/warehouses", "/categories", "/brands", "/skus"]) {
     await page.goto(path);
     await expect(page).toHaveURL(/\/my-workspace$/);
-    await expect(page.getByRole("heading", { name: "我的工作台", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: /欢迎回来/ })).toBeVisible();
   }
   expect(requests.filter(path => /^\/(inventory|purchase-orders|purchase-suggestions|receipts|suppliers|warehouses|categories|brands|skus)(\/|$)/.test(path))).toEqual([]);
 });
