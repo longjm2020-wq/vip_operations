@@ -76,7 +76,7 @@
   grid-template-columns: repeat(14, minmax(0, 1fr));
   grid-template-rows: repeat(12, minmax(0, 1fr));
   gap: 4px;
-  overflow: hidden;
+  overflow: visible;
 }
 .workspace-matrix-cell {
   position: relative;
@@ -89,7 +89,7 @@
     var(--app-accent-fill)
   );
   opacity: var(--cell-level);
-  transform: scale(var(--cell-scale));
+  filter: blur(var(--cell-softness));
   animation: workspace-matrix-wave 6s ease-in-out var(--cell-delay) infinite;
 }
 .workspace-matrix-bits {

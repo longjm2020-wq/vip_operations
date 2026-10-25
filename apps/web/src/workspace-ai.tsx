@@ -11,15 +11,18 @@ const matrixCells = Array.from({ length: 14 * 12 }, (_, index) => {
   const row = Math.floor(index / 14);
   const column = index % 14;
   const texture = ((row * 17 + column * 11) % 19) / 19;
-  // Dissolve individual edge cells into the surface without dimming the core.
-  const distance = Math.hypot((column - 6.5) / 7.2, (row - 5.5) / 6.2);
-  const edge = Math.max(0, Math.min(1, (1.02 - distance) / 0.52));
-  const softness = edge * edge * (3 - 2 * edge);
-  const presence = softness < 0.12 && texture < 0.42 ? 0 : softness;
+  // Feather each side separately so the complete rectangular grid stays visible.
+  const edgeFade = (inset: number) => {
+    const progress = Math.min(1, (inset + 0.6) / 2.2);
+    return progress * progress * (3 - 2 * progress);
+  };
+  const presence =
+    edgeFade(Math.min(column, 13 - column)) *
+    edgeFade(Math.min(row, 11 - row));
   return {
     style: {
-      "--cell-level": Number(((0.2 + texture * 0.65) * presence).toFixed(4)),
-      "--cell-scale": Number((0.72 + presence * 0.28).toFixed(4)),
+      "--cell-level": Number(((0.4 + texture * 0.5) * presence).toFixed(4)),
+      "--cell-softness": `${((1 - presence) * 1.1).toFixed(2)}px`,
       "--cell-tint": `${Math.round(10 + texture * 55)}%`,
       "--cell-delay": `${-(row * 0.23 + column * 0.19)}s`,
     } as CSSProperties,
