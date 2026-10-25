@@ -189,7 +189,7 @@ test("工作台只保留个人助理，不再读取经营报告或显示专属�
   expect(fixture.settingsReads()).toBe(0);
 });
 
-test("小序在工作台与侧栏间切换，拖动后记住位置，跨页面确认日程不自动保存", async ({
+test("小序全站自由悬浮，拖动后记住位置，跨页面确认日程不自动保存", async ({
   page,
 }) => {
   const fixture = await workspaceFixture(page);
@@ -203,29 +203,43 @@ test("小序在工作台与侧栏间切换，拖动后记住位置，跨页面�
     path: test.info().outputPath("companion-workspace-dark.png"),
     fullPage: false,
   });
-  const handle = page.getByRole("button", { name: "拖动小序", exact: true });
+  const handle = companion.getByRole("button", {
+    name: "打开 AI 个人助理",
+    exact: true,
+  });
   const before = (await handle.boundingBox())!;
-  await page.mouse.move(before.x + 12, before.y + 10);
+  await page.mouse.move(before.x + 65, before.y + 60);
   await page.mouse.down();
-  await page.mouse.move(before.x - 150, before.y + 100, { steps: 8 });
+  await page.mouse.move(100, 630, { steps: 12 });
   await page.mouse.up();
-  await expect(companion).toHaveClass(/is-detached/);
+  await expect(page.getByRole("dialog", { name: /AI 个人助理/ })).toHaveCount(
+    0,
+  );
   const moved = (await companion.boundingBox())!;
-  expect(moved.x).toBeLessThan(before.x - 100);
+  expect(moved.x).toBeLessThan(200);
+  expect(moved.y).toBeGreaterThan(400);
   await page.reload();
-  await expect(companion).toHaveClass(/is-detached/);
+  await expect(companion).toBeVisible();
   expect(Math.abs((await companion.boundingBox())!.x - moved.x)).toBeLessThan(
     2,
   );
+  await companion.getByRole("button", { name: "展开小序状态与动态" }).click();
   await page.getByRole("button", { name: "复位助理位置" }).click();
-  await expect(companion).not.toHaveClass(/is-detached/);
+  await expect(companion).toBeVisible();
+  await expect(companion).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+  await expect(
+    companion.locator(
+      ".companion-grid, .companion-shadow, .companion-placement",
+    ),
+  ).toHaveCount(0);
   await page
     .locator(".sidebar")
     .getByRole("link", { name: "运营中心", exact: true })
     .click();
-  const sidebar = page.locator(".sidebar .sidebar-assistant");
+  const sidebar = page.locator(".workspace-companion .sidebar-assistant");
   await expect(sidebar).toBeVisible();
-  await expect(page.locator(".workspace-companion")).toHaveCount(0);
+  await expect(page.locator(".workspace-companion")).toHaveCount(1);
+  await expect(page.locator(".sidebar .sidebar-assistant")).toHaveCount(0);
   await sidebar
     .getByRole("button", { name: "打开 AI 个人助理", exact: true })
     .click();
@@ -286,6 +300,7 @@ test("动态面板显示真实任务进度、筛选和已读，浏览与招呼�
   await page.goto("/operations");
   const mascot = page.locator(".sidebar-assistant");
   await expect(mascot).toHaveAttribute("data-state", "working");
+  await mascot.getByRole("button", { name: "展开小序状态与动态" }).click();
   await page.getByRole("button", { name: "查看助理动态反馈" }).click();
   const dialog = page.getByRole("dialog", { name: /AI 个人助理/ });
   await expect(
@@ -307,6 +322,7 @@ test("动态面板显示真实任务进度、筛选和已读，浏览与招呼�
   await dialog.getByRole("button", { name: "这些动态我已看过" }).click();
   await expect(mascot).toHaveAttribute("data-state", "idle");
   await dialog.getByRole("button", { name: "关闭", exact: true }).click();
+  await mascot.getByRole("button", { name: "展开小序状态与动态" }).click();
   await page.getByRole("button", { name: "和小序打个招呼" }).click();
   await expect(mascot).toHaveAttribute("data-state", "happy");
   expect(fixture.assistantCalls()).toBe(0);
@@ -471,4 +487,112 @@ test("手机导航可开关，助理和日程弹窗完整显示且业务页面�
     .click();
   await expect(page).toHaveURL(/\/operations$/);
   await expect(page.locator(".workspace-future")).toHaveCount(0);
+});
+test("小序空闲游动，输入与减少动态效果暂停，角标点击展开反馈", async ({
+  page,
+}) => {
+  const fixture = await workspaceFixture(page);
+  await page.clock.install({ time: new Date("2026-10-26T02:00:00Z") });
+  fixture.activities.push({
+    id: "project:new",
+    kind: "project",
+    title: "新品进度更新",
+    detail: "已验收 2 / 4 项",
+    href: "/projects/1",
+    at: "2026-10-26T02:00:00Z",
+    status: "info",
+  });
+  await page.goto("/my-workspace");
+  const companion = page.locator(".workspace-companion");
+  await expect(companion).toBeVisible();
+  const badge = companion.getByRole("button", { name: "展开小序状态与动态" });
+  await expect(badge).toHaveText("1");
+  await expect(
+    page.getByRole("button", { name: "查看助理动态反馈" }),
+  ).toHaveCount(0);
+  const before = (await companion.boundingBox())!;
+  await page.mouse.move(5, 5);
+  await page.clock.runFor(42000);
+  const after = (await companion.boundingBox())!;
+  expect(Math.hypot(after.x - before.x, after.y - before.y)).toBeGreaterThan(
+    15,
+  );
+  const input = page.getByPlaceholder(/告诉我你想完成什么/);
+  await input.fill("正在输入");
+  const paused = await companion.boundingBox();
+  await page.clock.runFor(35000);
+  expect(await companion.boundingBox()).toEqual(paused);
+  await page.getByRole("heading", { level: 1 }).click();
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  const reduced = await companion.boundingBox();
+  await page.clock.runFor(35000);
+  expect(await companion.boundingBox()).toEqual(reduced);
+  await badge.click();
+  await expect(badge).toHaveAttribute("aria-expanded", "true");
+  await expect(
+    page.getByRole("button", { name: "查看助理动态反馈" }),
+  ).toBeVisible();
+  await page.getByRole("heading", { level: 1 }).click();
+  await expect(badge).toHaveAttribute("aria-expanded", "false");
+  expect(fixture.assistantCalls()).toBe(0);
+});
+
+test("格子与代码没有遮罩或助理压暗，手机完整显示", async ({ page }) => {
+  await workspaceFixture(page);
+  await page.goto("/my-workspace");
+  const matrix = page.locator(".workspace-matrix");
+  await expect(matrix).toHaveCSS("mask-image", "none");
+  await expect(matrix).toHaveCSS("opacity", "1");
+  await expect(matrix.locator(".workspace-matrix-cell")).toHaveCount(168);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(matrix).toHaveCSS("mask-image", "none");
+  await expect(matrix).toHaveCSS("opacity", "1");
+  const rect = (await matrix.boundingBox())!;
+  expect(rect.x).toBeGreaterThan(0);
+  expect(rect.x + rect.width).toBeLessThan(390);
+  expect(rect.y + rect.height).toBeLessThan(
+    (await page.locator(".workspace-ai-intro").boundingBox())!.y,
+  );
+});
+
+test("新提醒短文字输出后收起，历史记录不反复播报", async ({ page }) => {
+  const fixture = await workspaceFixture(page);
+  await page.clock.install({ time: new Date("2026-10-26T02:00:00Z") });
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  fixture.activities.push({
+    id: "task:old",
+    kind: "task",
+    title: "昨天的报表更新",
+    detail: "已完成",
+    href: "/analytics/compass",
+    at: "2026-10-25T02:00:00Z",
+    status: "completed",
+  });
+  await page.goto("/operations");
+  const companion = page.locator(".workspace-companion");
+  await expect(
+    companion.getByRole("button", { name: "展开小序状态与动态" }),
+  ).toHaveText("1");
+  await expect(companion.locator(".companion-reminder")).toHaveCount(0);
+  fixture.activities.push({
+    id: "schedule:due",
+    kind: "schedule",
+    title: "选款会即将开始",
+    detail: "10:30 开始，请准备样衣和款式资料",
+    href: "/my-workspace",
+    at: "2026-10-26T02:30:00Z",
+    status: "attention",
+  });
+  await page.clock.runFor(31000);
+  const reminder = companion.locator(".companion-reminder");
+  await expect(reminder).toContainText("选款会即将开始");
+  expect((await reminder.textContent())!.length).toBeLessThanOrEqual(32);
+  await expect(
+    page.getByRole("button", { name: "查看助理动态反馈" }),
+  ).toHaveCount(0);
+  await page.clock.runFor(8500);
+  await expect(reminder).toHaveCount(0);
+  await page.clock.runFor(31000);
+  await expect(reminder).toHaveCount(0);
+  expect(fixture.assistantCalls()).toBe(0);
 });

@@ -16,6 +16,7 @@
   cursor: pointer;
   font: inherit;
 }
+.companion-count:focus-visible,
 .companion-launch:focus-visible,
 .companion-feedback:focus-visible,
 .companion-interactions button:focus-visible {
@@ -160,8 +161,12 @@
   right: 9px;
   background: var(--app-accent-fill);
   color: #fff;
-  min-width: 20px;
-  border-radius: 8px;
+  min-width: 24px;
+  min-height: 24px;
+  border: 0;
+  cursor: pointer;
+  pointer-events: auto;
+  border-radius: 9px;
   padding: 2px 5px;
   font-size: 10px;
   font-weight: 600;
@@ -222,7 +227,9 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.companion-feedback > .anticon { flex: 0 0 auto; }
+.companion-feedback > .anticon {
+  flex: 0 0 auto;
+}
 .companion-feedback small {
   display: block;
   margin-top: 4px;
@@ -423,103 +430,120 @@
     transition: none !important;
   }
 }
+/* The companion lives outside the card layout; only the character and actions accept clicks. */
 .workspace-companion {
-  position: absolute;
-  right: 26px;
-  top: 16px;
-  width: 172px;
-  z-index: 4;
+  position: fixed;
+  left: 0;
+  top: 0;
+  width: 132px;
+  z-index: 120;
+  pointer-events: none;
+  background: transparent;
+  color: var(--app-text);
 }
-.workspace-ai-start > .workspace-companion:not(.is-detached) {
-  position: relative;
-  grid-column: 2;
-  grid-row: 1;
-  align-self: start;
-  right: auto;
-  top: auto;
-  width: 100%;
+.workspace-companion.is-roaming .companion-launch,
+.workspace-companion.is-roaming .companion-count {
+  pointer-events: none;
 }
-.workspace-ai:has(.is-detached) {
-  isolation: auto;
-  overflow: visible;
+.workspace-companion[data-passing="true"] {
+  visibility: hidden !important;
 }
-.workspace-assistant-only {
-  min-height: 270px;
-  position: relative;
+.workspace-companion.is-compact {
+  width: 64px;
 }
-.workspace-companion.is-detached {
-  z-index: 150;
-  padding: 6px;
-  border: 1px solid var(--app-border);
-  border-radius: 18px;
-  background: var(--app-surface);
-  box-shadow: 0 14px 40px var(--app-shadow);
+.workspace-companion.is-compact .companion-stage {
+  width: 64px;
+  height: 58px;
+}
+.workspace-companion.is-compact .companion-count {
+  top: 0;
+  right: -4px;
+  min-width: 20px;
+  min-height: 20px;
+  padding: 1px 3px;
 }
 .workspace-companion .sidebar-assistant {
   margin: 0;
 }
+.workspace-companion .companion-launch {
+  pointer-events: auto;
+  touch-action: none;
+  user-select: none;
+  cursor: grab;
+}
+.workspace-companion.is-dragging .companion-launch {
+  cursor: grabbing;
+}
 .workspace-companion .companion-stage {
-  height: 123px;
-  width: 150px;
+  width: 132px;
+  height: 118px;
+  background: none;
 }
-.workspace-companion .companion-feedback {
-  padding: 7px;
+.workspace-companion .companion-count {
+  top: 10px;
+  right: 3px;
 }
-.workspace-companion .companion-interactions {
-  margin: 3px 0 6px;
+.companion-details {
+  width: 220px;
+  max-width: calc(100vw - 48px);
 }
-.companion-placement {
+.companion-details-heading {
   display: flex;
+  align-items: center;
   justify-content: space-between;
   gap: 8px;
 }
-.companion-placement button {
-  border: 0;
+.companion-details .companion-state {
+  margin: 0;
+}
+.companion-details .companion-interactions {
+  display: flex;
+  justify-content: flex-start;
+  margin: 12px 0;
+}
+.companion-details .companion-interactions button {
+  font: inherit;
+  font-size: 12px;
+  padding: 6px 8px;
   border-radius: 6px;
-  background: transparent;
-  color: var(--app-subtle);
-  padding: 4px;
-  cursor: pointer;
-  font-size: 10px;
+  background: var(--app-muted);
+  color: var(--app-accent);
 }
-.companion-placement button:first-child {
-  cursor: grab;
-  touch-action: none;
-  user-select: none;
+.companion-details .companion-feedback {
+  display: flex;
 }
-.companion-placement button:first-child:active {
-  cursor: grabbing;
+.workspace-companion.is-roaming .companion-body {
+  animation: companion-travel 0.7s ease-in-out infinite;
 }
-.companion-placement span {
-  margin-left: 3px;
+.workspace-companion.is-dragging .companion-body {
+  animation: none;
+  transform: rotate(-8deg);
 }
-.workspace-ai:has(.workspace-companion) .workspace-matrix {
-  opacity: 0.2;
+.workspace-assistant-only {
+  min-height: 0;
 }
-@media (max-width: 1100px) and (min-width: 768px) {
-  .workspace-ai-start {
-    grid-template-columns: minmax(0, 1fr) 138px;
+@keyframes companion-travel {
+  0%,
+  100% {
+    transform: translateY(0) rotate(-4deg);
   }
-  .workspace-companion {
-    width: 138px;
-    right: 18px;
-  }
-  .workspace-companion .companion-stage {
-    width: 120px;
-    height: 100px;
+  50% {
+    transform: translateY(-4px) rotate(4deg);
   }
 }
-@media (max-width: 767px) {
-  .workspace-companion:not(.is-detached) {
-    position: relative;
-    top: auto;
-    right: auto;
-    margin: 0 auto 20px;
+@media (prefers-reduced-motion: reduce) {
+  .workspace-companion .companion-body {
+    animation: none;
   }
-  .workspace-ai-start > .workspace-companion:not(.is-detached) {
-    grid-column: 1;
-    grid-row: 2;
-    width: 172px;
-    margin-bottom: 0;
-  }
+}
+
+.companion-reminder {
+  padding: 5px 3px;
+  color: var(--app-accent);
+  font-size: 11px;
+  line-height: 1.6;
+  text-align: center;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+  text-shadow: 0 1px 4px var(--app-bg);
 }

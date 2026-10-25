@@ -67,7 +67,7 @@ const ProjectTablePage = React.lazy(()=>import("./project-tables").then(module=>
 const StyleSelectionsPage = React.lazy(() => import("./style-selections").then(module => ({ default: module.StyleSelectionsPage })));
 import { ManualPage, manualHref } from "./manual";
 import { PersonalAssistantProvider } from "./personal-assistant-provider";
-import { SidebarAssistant } from "./sidebar-assistant";
+import { WorkspaceCompanion } from "./workspace-companion";
 const SopPage = React.lazy(() => import("./projects").then(module => ({ default: module.SopPage })));
 const ProjectsPage = React.lazy(() => import("./projects").then(module => ({ default: module.ProjectsPage })));
 const ProjectDetailPage = React.lazy(() => import("./projects").then(module => ({ default: module.ProjectDetailPage })));
@@ -420,7 +420,6 @@ function Workspace({ user }: { user: Row }) {
               ...menu,
             ]}
           />
-          {!personalWorkspace && <SidebarAssistant />}
           <div className="sidebar-footer">
             <Link
               to={manualHref(location.pathname)}
@@ -554,6 +553,7 @@ function Workspace({ user }: { user: Row }) {
           </Layout.Content>
         </Layout>
       </Layout>
+      <WorkspaceCompanion />
     </PersonalAssistantProvider></UserContext.Provider></PageSearchContext.Provider>
   );
 }

@@ -1,10 +1,22 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowRightOutlined, SmileOutlined } from "@ant-design/icons";
+import {
+  ArrowRightOutlined,
+  MoreOutlined,
+  SmileOutlined,
+  UndoOutlined,
+} from "@ant-design/icons";
+import { Popover } from "antd";
 import { useAssistantHub } from "./assistant-hub-context";
 import { activityFingerprint } from "../../../packages/contracts/src/assistant-activity";
 import "./sidebar-assistant.css";
 
-export function SidebarAssistant() {
+export function SidebarAssistant({
+  floating = false,
+  onReset,
+}: {
+  floating?: boolean;
+  onReset?: () => void;
+}) {
   const hub = useAssistantHub();
   const lastActive = useRef(Date.now());
   const [idle, setIdle] = useState(false),
@@ -64,6 +76,40 @@ export function SidebarAssistant() {
     attention ||
     unread.find((item) => item.status !== "upcoming") ||
     items.find((item) => item.kind === "schedule");
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const announced = useRef<Set<string> | null>(null);
+  const [reminder, setReminder] = useState("");
+  useEffect(() => {
+    if (!hub.feed?.items) return;
+    const fresh = hub.feed.items.filter(
+      (item) =>
+        !hub.seen.includes(activityFingerprint(item)) &&
+        !announced.current?.has(activityFingerprint(item)),
+    );
+    // Existing history stays in the badge; only urgent items announce on first load.
+    const next =
+      fresh.find((item) => item.status === "attention") ||
+      (announced.current ? fresh[0] : undefined);
+    announced.current = new Set(
+      [
+        ...(announced.current || []),
+        ...hub.feed.items.map(activityFingerprint),
+      ].slice(-300),
+    );
+    if (next) {
+      const text = next.title + "：" + next.detail;
+      setReminder(text.length > 32 ? text.slice(0, 31) + "…" : text);
+    }
+  }, [hub.feed, hub.seen]);
+  useEffect(() => {
+    if (!reminder) return;
+    const timer = setTimeout(() => setReminder(""), 8000);
+    return () => clearTimeout(timer);
+  }, [reminder]);
+  const openPanel = (tab: "chat" | "activity") => {
+    setDetailsOpen(false);
+    hub.openPanel(tab);
+  };
   return (
     <section
       className="sidebar-assistant"
@@ -74,18 +120,25 @@ export function SidebarAssistant() {
         className="companion-launch"
         type="button"
         aria-label="打开 AI 个人助理"
-        onClick={() => hub.openPanel("chat")}
+        title={
+          floating
+            ? "点击对话 · 拖动形象自由放置 · 方向键移动 · Home 寻找空位"
+            : undefined
+        }
+        onClick={() => openPanel("chat")}
       >
         <div className="companion-stage" aria-hidden="true">
-          <div className="companion-grid" />
+          {!floating && <div className="companion-grid" />}
           <svg className="companion-robot" viewBox="0 0 180 160" fill="none">
-            <ellipse
-              className="companion-shadow"
-              cx="90"
-              cy="145"
-              rx="39"
-              ry="6"
-            />
+            {!floating && (
+              <ellipse
+                className="companion-shadow"
+                cx="90"
+                cy="145"
+                rx="39"
+                ry="6"
+              />
+            )}
             <g className="companion-body">
               <path
                 className="companion-antenna"
@@ -199,44 +252,104 @@ export function SidebarAssistant() {
               </g>
             </g>
           </svg>
-          {unread.length > 0 && (
-            <span className="companion-count">
-              {unread.length > 99 ? "99+" : unread.length}
-            </span>
-          )}
         </div>
-        <span className="companion-name">
-          小序 <small>AI 助理</small>
-        </span>
-        <span className="companion-state">{labels[state]}</span>
       </button>
-      <div className="companion-interactions">
-        <span>点击与我聊聊</span>
-        <button
-          type="button"
-          aria-label="和小序打个招呼"
-          title="打个招呼"
-          onClick={() => setGreeting(true)}
-        >
-          <SmileOutlined />
-        </button>
-      </div>
-      <button
-        className="companion-feedback"
-        type="button"
-        aria-label="查看助理动态反馈"
-        onClick={() => hub.openPanel("activity")}
+      <Popover
+        trigger="click"
+        open={detailsOpen}
+        onOpenChange={setDetailsOpen}
+        destroyOnHidden
+        placement={floating ? "topRight" : "right"}
+        classNames={{ root: "companion-details-popover" }}
+        content={
+          <div
+            className="companion-details"
+            onKeyDown={(event) => {
+              if (event.key === "Escape") setDetailsOpen(false);
+            }}
+          >
+            <div className="companion-details-heading">
+              <span className="companion-name">
+                小序 <small>AI 助理</small>
+              </span>
+              <span className="companion-state">{labels[state]}</span>
+            </div>
+            <div className="companion-interactions">
+              <button type="button" onClick={() => openPanel("chat")}>
+                和我聊聊
+              </button>
+              <button
+                type="button"
+                aria-label="和小序打个招呼"
+                title="打个招呼"
+                onClick={() => setGreeting(true)}
+              >
+                <SmileOutlined />
+              </button>
+              {floating && (
+                <button
+                  type="button"
+                  aria-label="复位助理位置"
+                  title="重新寻找空位"
+                  onClick={() => {
+                    onReset?.();
+                    setDetailsOpen(false);
+                  }}
+                >
+                  <UndoOutlined />
+                </button>
+              )}
+            </div>
+            <button
+              className="companion-feedback"
+              type="button"
+              aria-label="查看助理动态反馈"
+              onClick={() => openPanel("activity")}
+            >
+              <span>
+                {hub.feedError
+                  ? "动态连接中断，点击重试"
+                  : hub.feedLoading
+                    ? "正在读取动态…"
+                    : preview?.title || "日程 · 项目 · 定时任务"}
+                <small>{preview?.detail || "在这里查看工作反馈"}</small>
+              </span>
+              <ArrowRightOutlined />
+            </button>
+          </div>
+        }
       >
-        <span>
-          {hub.feedError
-            ? "动态连接中断，点击重试"
-            : hub.feedLoading
-              ? "正在读取动态…"
-              : preview?.title || "日程 · 项目 · 定时任务"}
-          <small>{preview?.detail || "在这里查看工作反馈"}</small>
-        </span>
-        <ArrowRightOutlined />
-      </button>
+        <button
+          className="companion-count"
+          type="button"
+          aria-label="展开小序状态与动态"
+          aria-expanded={detailsOpen}
+          title={
+            labels[state] +
+            (unread.length
+              ? " · " + unread.length + " 条新动态"
+              : " · 点击展开")
+          }
+          onKeyDown={(event) => {
+            if (event.key === "Escape") setDetailsOpen(false);
+          }}
+        >
+          {unread.length > 0 ? (
+            unread.length > 99 ? (
+              "99+"
+            ) : (
+              unread.length
+            )
+          ) : (
+            <MoreOutlined />
+          )}
+        </button>
+      </Popover>
+      {reminder && (
+        <div className="companion-reminder" role="status" aria-live="polite">
+          {reminder}
+        </div>
+      )}
     </section>
   );
 }

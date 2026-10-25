@@ -5,7 +5,6 @@ import { useUser, type Row } from "./shared";
 import { canUsePersonalAssistant } from "../../../packages/contracts/src/personal-assistant";
 import type { WorkspaceSchedule } from "../../../packages/contracts/src/personal-workspace";
 import "./workspace-ai.css";
-import { WorkspaceCompanion } from "./workspace-companion";
 
 // Stable decorative cells: CSS moves the light and bits without timers or renders.
 const matrixCells = Array.from({ length: 14 * 12 }, (_, index) => {
@@ -32,12 +31,7 @@ export function WorkspaceAI({
   onSchedule: (event: WorkspaceSchedule) => void;
 }) {
   const user = useUser();
-  if (!canUsePersonalAssistant({ permissions: user.permissions }))
-    return (
-      <section className="workspace-assistant-only">
-        <WorkspaceCompanion />
-      </section>
-    );
+  if (!canUsePersonalAssistant({ permissions: user.permissions })) return null;
   return (
     <section className="workspace-ai" aria-labelledby="workspace-ai-title">
       <BorderBeam active />
@@ -65,7 +59,6 @@ export function WorkspaceAI({
           </h2>
           <p>你的 AI 个人助理，让日程、灵感与工作有序展开。</p>
         </div>
-        <WorkspaceCompanion />
         <PersonalAssistant
           available={available}
           schedule={schedule}
