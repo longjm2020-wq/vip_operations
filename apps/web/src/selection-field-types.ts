@@ -7,15 +7,18 @@ export type { SelectionField };
 import {splitFieldTags} from "../../../packages/contracts/src/selection-field-validation.js";
 export {defaultTagConfig,splitFieldTags,fieldValueError,splitChoiceValues,joinChoiceValues,supportsSlashChoices,isEncodedChoiceValue} from "../../../packages/contracts/src/selection-field-validation.js";
 export const selectionOptionPalette = [
-  { key: "orange", label: "暖橙", background: "#ad4c0c" },
-  { key: "green", label: "松绿", background: "#527761" },
-  { key: "blue", label: "雾蓝", background: "#557399" },
-  { key: "teal", label: "青色", background: "#427b80" },
-  { key: "purple", label: "灰紫", background: "#80658b" },
-  { key: "brown", label: "棕色", background: "#886447" },
-  { key: "red", label: "陶红", background: "#aa5b4c" },
-  { key: "gray", label: "暖灰", background: "#77736f" },
+  { key: "blue", label: "靛蓝", background: "#e8edff", color: "#354cb5", darkBackground: "#26335c", darkColor: "#bac8ff" },
+  { key: "teal", label: "青蓝", background: "#e5f3f5", color: "#23616c", darkBackground: "#203d46", darkColor: "#9ed9e3" },
+  { key: "purple", label: "雾紫", background: "#f0ebfa", color: "#654a98", darkBackground: "#383047", darkColor: "#d0bcef" },
+  { key: "green", label: "薄荷", background: "#e8f2ef", color: "#386553", darkBackground: "#253d35", darkColor: "#b0d6c2" },
+  { key: "orange", label: "琥珀", background: "#fff2dd", color: "#865820", darkBackground: "#443520", darkColor: "#e9c994" },
+  { key: "red", label: "玫瑰", background: "#faeaef", color: "#944c65", darkBackground: "#472d38", darkColor: "#e8b0c2" },
+  { key: "brown", label: "岩褐", background: "#f0ece8", color: "#6d5f55", darkBackground: "#39322f", darkColor: "#d3c2b6" },
+  { key: "gray", label: "银灰", background: "#edeff4", color: "#586174", darkBackground: "#303540", darkColor: "#bac2d2" },
 ];
+export function selectionOptionStyle(color: (typeof selectionOptionPalette)[number]) {
+  return { "--choice-light-bg": color.background, "--choice-light-text": color.color, "--choice-dark-bg": color.darkBackground, "--choice-dark-text": color.darkColor };
+}
 export function selectionOptionColor(field: SelectionField, value: string) {
   const configured = selectionOptionPalette.find(color => color.key === field.optionColors?.[value]);
   const index = Math.max(0, field.options?.indexOf(value) ?? 0);

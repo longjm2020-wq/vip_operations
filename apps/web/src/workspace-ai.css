@@ -16,6 +16,17 @@
   position: relative;
   z-index: 1;
   min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 172px;
+  gap: 20px;
+}
+.workspace-ai-intro {
+  min-width: 0;
+  grid-column: 1;
+  grid-row: 1;
+}
+.workspace-ai-start > .assistant-compose {
+  grid-column: 1 / -1;
 }
 .workspace-ai-eyebrow {
   display: flex;
@@ -46,11 +57,11 @@
   background-clip: text;
   color: transparent;
 }
-.workspace-ai-start > p {
+.workspace-ai-intro > p {
   color: var(--app-secondary);
   margin: 0;
   font-size: 12px;
-  max-width: 76%;
+  max-width: 100%;
   line-height: 1.8;
 }
 .workspace-matrix {
@@ -157,8 +168,11 @@
     gap: 3px;
     opacity: 0.28;
   }
-  .workspace-ai-start > p {
+  .workspace-ai-intro > p {
     max-width: 95%;
+  }
+  .workspace-ai-start {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 @media (prefers-reduced-motion: reduce) {

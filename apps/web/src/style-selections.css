@@ -562,7 +562,8 @@
 
 .selection-custom-tags{display:flex;flex-wrap:wrap;justify-content:inherit;gap:4px;max-width:100%;}
 .selection-custom-tags .ant-tag{margin:0;white-space:normal;overflow-wrap:anywhere;}
-.selection-choice-pill { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; min-height: 20px; padding: 1px 9px; border-radius: 12px; color: #fff; font-size: 12px; line-height: 18px; vertical-align: middle; }
+.selection-choice-pill { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; min-height: 20px; padding: 1px 9px; border-radius: 6px; color: var(--choice-light-text); background: var(--choice-light-bg); font-size: 12px; line-height: 18px; vertical-align: middle; }
+:root[data-theme="dark"] .selection-choice-pill { color: var(--choice-dark-text); background: var(--choice-dark-bg); }
 .selection-choice-pill > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .selection-choice-pill > .selection-choice-remove { display: inline-flex; align-items: center; justify-content: center; width: 13px; height: 16px; padding: 0; border: 0; color: inherit; background: transparent; cursor: pointer; font-size: 9px; }
 .selection-inline-tag-label, .selection-choice-text { padding: 0; margin: 0; border: 0; color: inherit; background: transparent; font: inherit; line-height: inherit; cursor: text; }

@@ -30,7 +30,7 @@ import {
 } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { api } from "./api";
+import { api, queryClient } from "./api";
 import { QueryState, Row, useUser } from "./shared";
 import type { WorkspaceConfig } from "../../../packages/contracts/src/personal-workspace";
 import "./personal-workspace.css";
@@ -88,6 +88,7 @@ export function PersonalWorkspacePage() {
       });
       setDirty(false);
       await q.refetch();
+      void queryClient.invalidateQueries({ queryKey: ["assistant-activity", user.id] });
       message.success("个人工作台已保存");
     } catch (e) {
       message.error((e as Error).message);

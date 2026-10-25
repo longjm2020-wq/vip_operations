@@ -5,6 +5,7 @@ import { useUser, type Row } from "./shared";
 import { canUsePersonalAssistant } from "../../../packages/contracts/src/personal-assistant";
 import type { WorkspaceSchedule } from "../../../packages/contracts/src/personal-workspace";
 import "./workspace-ai.css";
+import { WorkspaceCompanion } from "./workspace-companion";
 
 // Stable decorative cells: CSS moves the light and bits without timers or renders.
 const matrixCells = Array.from({ length: 14 * 12 }, (_, index) => {
@@ -31,7 +32,12 @@ export function WorkspaceAI({
   onSchedule: (event: WorkspaceSchedule) => void;
 }) {
   const user = useUser();
-  if (!canUsePersonalAssistant({ permissions: user.permissions })) return null;
+  if (!canUsePersonalAssistant({ permissions: user.permissions }))
+    return (
+      <section className="workspace-assistant-only">
+        <WorkspaceCompanion />
+      </section>
+    );
   return (
     <section className="workspace-ai" aria-labelledby="workspace-ai-title">
       <BorderBeam active />
@@ -48,15 +54,18 @@ export function WorkspaceAI({
         ))}
       </div>
       <div className="workspace-ai-start">
-        <div className="workspace-ai-eyebrow">
-          <span aria-hidden>✦</span> XUTI INTELLIGENCE
+        <div className="workspace-ai-intro">
+          <div className="workspace-ai-eyebrow">
+            <span aria-hidden>✦</span> XUTI INTELLIGENCE
+          </div>
+          <h2 id="workspace-ai-title">
+            从想法，
+            <br />
+            <span>到下一步行动。</span>
+          </h2>
+          <p>你的 AI 个人助理，让日程、灵感与工作有序展开。</p>
         </div>
-        <h2 id="workspace-ai-title">
-          从想法，
-          <br />
-          <span>到下一步行动。</span>
-        </h2>
-        <p>你的 AI 个人助理，让日程、灵感与工作有序展开。</p>
+        <WorkspaceCompanion />
         <PersonalAssistant
           available={available}
           schedule={schedule}

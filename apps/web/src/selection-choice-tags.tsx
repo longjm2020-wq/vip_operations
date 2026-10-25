@@ -1,11 +1,11 @@
 import { memo, useEffect, useRef, useState, type CSSProperties } from "react";
 import { Select, type RefSelectProps } from "antd";
 import { CloseOutlined, DownOutlined } from "@ant-design/icons";
-import { selectionOptionColor, splitChoiceValues, joinChoiceValues, type SelectionField } from "./selection-field-types";
+import { selectionOptionColor, selectionOptionStyle, splitChoiceValues, joinChoiceValues, type SelectionField } from "./selection-field-types";
 
 export function SelectionChoicePill({ field, value, onRemove, onEdit }: { field: SelectionField; value: string; onRemove?: () => void; onEdit?: () => void }) {
   const color = selectionOptionColor(field, value);
-  return <span className="selection-choice-pill" style={{ backgroundColor: color.background }} title={value}>
+  return <span className="selection-choice-pill" style={selectionOptionStyle(color) as CSSProperties} title={value}>
     {onEdit ? <button type="button" className="selection-choice-text" aria-label={`编辑${field.label}标签：${value}`} onClick={event => { event.stopPropagation(); onEdit(); }}>{value}</button> : <span>{value}</span>}
     {onRemove && <button type="button" className="selection-choice-remove" aria-label={`移除${value}`} onMouseDown={event => { event.preventDefault(); event.stopPropagation(); }} onClick={event => { event.stopPropagation(); onRemove(); }}><CloseOutlined /></button>}
   </span>;

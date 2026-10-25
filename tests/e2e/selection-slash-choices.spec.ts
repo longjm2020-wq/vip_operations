@@ -30,10 +30,15 @@ async function fixture(page: Page, initial?: { field: SelectionField; firstValue
     defaultCellAccess: "edit", cellAccess: {},
   }));
   let revision = 0;
+  let appearance = { mode: "light", version: 0 };
   const patches: Record<string, any>[] = [];
   await page.route("**/api/v1/**", async route => {
     const path = new URL(route.request().url()).pathname;
     let data: unknown = [];
+    if (path.endsWith("/my-workspace/appearance")) {
+      if (route.request().method() === "POST") appearance = { mode: route.request().postDataJSON().mode, version: appearance.version + 1 };
+      data = appearance;
+    }
     if (path.endsWith("/auth/me")) data = {
       id: "10", displayName: "斜杠选项测试", roleCodes: [], csrfToken: "fixture",
       permissions: ["selection.read", "selection.manage"],
@@ -89,8 +94,8 @@ test("create slash-bearing category choices, autosave two complete colored label
   await dialog.getByLabel("字段选项", { exact: true }).fill(categories.join("\n"));
   await expect(dialog.getByText(/^有效选项：21 \/ 100/)).toBeVisible();
   await expect(dialog.locator(".selection-option-color-settings label > .selection-choice-pill")).toHaveCount(21);
-  await setColor(page, dialog, slashCategories[0], "陶红");
-  await setColor(page, dialog, slashCategories[1], "雾蓝");
+  await setColor(page, dialog, slashCategories[0], "玫瑰");
+  await setColor(page, dialog, slashCategories[1], "靛蓝");
   await dialog.getByRole("button", { name: "保存", exact: true }).click();
   await expect(dialog).toHaveCount(0);
   await expect.poll(() => state.savedField()?.options).toEqual(categories);
@@ -109,17 +114,23 @@ test("create slash-bearing category choices, autosave two complete colored label
   await expect.poll(() => state.rows[0].extraFields[field.key]).toContain(slashCategories[0]);
   await expect.poll(() => state.rows[0].extraFields[field.key]).toContain(slashCategories[1]);
   await expect(target.locator(".selection-choice-pill")).toHaveCount(2);
-  for (const [index, color] of ["rgb(170, 91, 76)", "rgb(85, 115, 153)"].entries()) {
+  for (const [index, color] of ["rgb(250, 234, 239)", "rgb(232, 237, 255)"].entries()) {
     await expect(target.locator(".selection-choice-pill").nth(index)).toHaveText(slashCategories[index]);
     await expect(target.locator(".selection-choice-pill").nth(index)).toHaveCSS("background-color", color);
   }
   expect(state.patches.length).toBeGreaterThan(0);
+  await page.getByRole("button", { name: "切换为暗色主题", exact: true }).click();
+  await expect(target.locator(".selection-choice-pill").nth(0)).toHaveCSS("background-color", "rgb(71, 45, 56)");
+  await expect(target.locator(".selection-choice-pill").nth(0)).toHaveCSS("color", "rgb(232, 176, 194)");
+  await expect(target.locator(".selection-choice-pill").nth(1)).toHaveCSS("background-color", "rgb(38, 51, 92)");
+  await page.getByRole("button", { name: "切换为亮色主题", exact: true }).click();
+  await expect(target.locator(".selection-choice-pill").nth(0)).toHaveCSS("color", "rgb(148, 76, 101)");
   await page.reload();
   await expect(target.locator(".selection-choice-pill")).toHaveCount(2);
   await expect(target.locator(".selection-choice-pill").nth(0)).toHaveText(slashCategories[0]);
-  await expect(target.locator(".selection-choice-pill").nth(0)).toHaveCSS("background-color", "rgb(170, 91, 76)");
+  await expect(target.locator(".selection-choice-pill").nth(0)).toHaveCSS("background-color", "rgb(250, 234, 239)");
   await expect(target.locator(".selection-choice-pill").nth(1)).toHaveText(slashCategories[1]);
-  await expect(target.locator(".selection-choice-pill").nth(1)).toHaveCSS("background-color", "rgb(85, 115, 153)");
+  await expect(target.locator(".selection-choice-pill").nth(1)).toHaveCSS("background-color", "rgb(232, 237, 255)");
 
   await target.click({ position: { x: 2, y: 2 } });
   await page.getByRole("button", { name: "展开单元格详情", exact: true }).click();
@@ -146,7 +157,7 @@ test("create slash-bearing category choices, autosave two complete colored label
   await expect.poll(() => state.rows[0].extraFields[field.key]).not.toContain(slashCategories[0]);
   await page.reload();
   await expect(target.locator(".selection-choice-pill")).toHaveText(slashCategories[1]);
-  await expect(target.locator(".selection-choice-pill")).toHaveCSS("background-color", "rgb(85, 115, 153)");
+  await expect(target.locator(".selection-choice-pill")).toHaveCSS("background-color", "rgb(232, 237, 255)");
 });
 
 test("copy readable slash choices and paste them after a fresh page load without exposing the transport marker", async ({ page }) => {
@@ -177,8 +188,8 @@ test("copy readable slash choices and paste them after a fresh page load without
   await expect(target.locator(".selection-choice-pill").nth(1)).toHaveText(slashCategories[1]);
   await page.reload();
   await expect(target.locator(".selection-choice-pill")).toHaveCount(2);
-  await expect(target.locator(".selection-choice-pill").nth(0)).toHaveCSS("background-color", "rgb(170, 91, 76)");
-  await expect(target.locator(".selection-choice-pill").nth(1)).toHaveCSS("background-color", "rgb(85, 115, 153)");
+  await expect(target.locator(".selection-choice-pill").nth(0)).toHaveCSS("background-color", "rgb(250, 234, 239)");
+  await expect(target.locator(".selection-choice-pill").nth(1)).toHaveCSS("background-color", "rgb(232, 237, 255)");
 });
 
 test("changing a populated slash multiple-choice field to text is rejected and preserves its labels", async ({ page }) => {

@@ -98,7 +98,7 @@ function modelCell(row: Row, column: SelectionField, shown?: { url: string; inde
   if (type === "single" || type === "multiple") {
     const text = String(value ?? "");
     const values = type === "multiple" ? splitChoiceValues(column, value) : text ? [text] : [];
-    cell.tags = values.map(label => ({ label, color: "#ffffff", background: selectionOptionColor(column, label).background }));
+    cell.tags = values.map(label => ({ label, color: selectionOptionColor(column, label).color, background: selectionOptionColor(column, label).background }));
     return cell;
   }
   if (type === "tags" || column.key === "color" || column.key === "sizeRange") {

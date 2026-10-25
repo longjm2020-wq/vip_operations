@@ -41,7 +41,8 @@ import {
   AppstoreOutlined,
   InboxOutlined,
   DatabaseOutlined,
-  TeamOutlined,
+  ApartmentOutlined,
+  TruckOutlined,
   SettingOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
@@ -65,6 +66,8 @@ const ProjectTablesPage = React.lazy(()=>import("./project-tables").then(module=
 const ProjectTablePage = React.lazy(()=>import("./project-tables").then(module=>({default:module.ProjectTablePage})));
 const StyleSelectionsPage = React.lazy(() => import("./style-selections").then(module => ({ default: module.StyleSelectionsPage })));
 import { ManualPage, manualHref } from "./manual";
+import { PersonalAssistantProvider } from "./personal-assistant-provider";
+import { SidebarAssistant } from "./sidebar-assistant";
 const SopPage = React.lazy(() => import("./projects").then(module => ({ default: module.SopPage })));
 const ProjectsPage = React.lazy(() => import("./projects").then(module => ({ default: module.ProjectsPage })));
 const ProjectDetailPage = React.lazy(() => import("./projects").then(module => ({ default: module.ProjectDetailPage })));
@@ -217,7 +220,7 @@ function Workspace({ user }: { user: Row }) {
     {
       key: "/project-management",
       label: "项目协作",
-      icon: <TeamOutlined />,
+      icon: <ApartmentOutlined />,
       children: [
         { key: "/sops", label: "新建SOP", permission: "project.read" },
         { key: "/projects", label: "新建项目", permission: "project.read" },
@@ -255,7 +258,7 @@ function Workspace({ user }: { user: Row }) {
     {
       key: "/supply",
       label: "供应链端",
-      icon: <TeamOutlined />,
+      icon: <TruckOutlined />,
       children: [
         ...(user.roleCodes?.includes("SUPPLIER")
           ? [
@@ -382,7 +385,7 @@ function Workspace({ user }: { user: Row }) {
       ? {href:selected,label:`返回${activeWorkspace.children.find(child=>child.key===selected)!.label}`}
       : undefined;
   return (
-    <PageSearchContext.Provider value={searchHost}><UserContext.Provider value={user}>
+    <PageSearchContext.Provider value={searchHost}><UserContext.Provider value={user}><PersonalAssistantProvider key={user.id}>
       <Layout className={`workspace${personalWorkspace ? " workspace-future" : ""}`}>
         {mobileWorkspace && workspaceNavOpen && <button type="button" className="workspace-nav-scrim" aria-label="关闭工作区导航" onClick={() => setWorkspaceNavOpen(false)} />}
         <Layout.Sider width={personalWorkspace ? 216 : 200} collapsed={navCollapsed} collapsedWidth={mobileWorkspace ? 0 : 80} className="sidebar">
@@ -417,6 +420,7 @@ function Workspace({ user }: { user: Row }) {
               ...menu,
             ]}
           />
+          {!personalWorkspace && <SidebarAssistant />}
           <div className="sidebar-footer">
             <Link
               to={manualHref(location.pathname)}
@@ -550,7 +554,7 @@ function Workspace({ user }: { user: Row }) {
           </Layout.Content>
         </Layout>
       </Layout>
-    </UserContext.Provider></PageSearchContext.Provider>
+    </PersonalAssistantProvider></UserContext.Provider></PageSearchContext.Provider>
   );
 }
 function Root() {

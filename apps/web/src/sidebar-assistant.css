@@ -1,0 +1,525 @@
+.sidebar-assistant {
+  flex: 0 0 auto;
+  margin: 12px 16px 0;
+  color: var(--app-text);
+  position: relative;
+}
+.companion-launch {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+}
+.companion-launch:focus-visible,
+.companion-feedback:focus-visible,
+.companion-interactions button:focus-visible {
+  outline: 2px solid var(--app-accent);
+  outline-offset: 3px;
+  border-radius: 10px;
+}
+.companion-stage {
+  width: 160px;
+  height: 145px;
+  position: relative;
+  background: radial-gradient(
+    ellipse,
+    color-mix(in srgb, var(--app-accent-fill) 16%, transparent),
+    transparent 69%
+  );
+}
+.companion-grid {
+  position: absolute;
+  inset: 28% 5% 4%;
+  background-image:
+    linear-gradient(var(--app-border) 1px, transparent 1px),
+    linear-gradient(90deg, var(--app-border) 1px, transparent 1px);
+  background-size: 16px 16px;
+  transform: perspective(160px) rotateX(58deg);
+  opacity: 0.45;
+  mask-image: radial-gradient(ellipse, black, transparent 70%);
+}
+.companion-robot {
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+.companion-body {
+  animation: companion-float 4s ease-in-out infinite;
+  transform-origin: 90px 80px;
+}
+.companion-shadow {
+  fill: var(--app-accent-fill);
+  opacity: 0.2;
+}
+.companion-helmet {
+  fill: var(--app-accent-soft);
+  stroke: var(--app-accent);
+  stroke-width: 1.5;
+}
+.companion-face {
+  fill: #131d39;
+  stroke: #5069b6;
+  stroke-width: 1;
+}
+.companion-highlight {
+  stroke: var(--app-accent);
+  opacity: 0.7;
+}
+.companion-eyes {
+  fill: #bdceff;
+  transform-origin: 90px 68px;
+  animation: companion-blink 6s infinite;
+}
+.companion-mouth,
+.companion-sleep-eyes {
+  stroke: #a8c1ff;
+}
+.companion-ear,
+.companion-chassis {
+  fill: var(--app-accent-soft);
+  stroke: var(--app-accent);
+  stroke-width: 1.3;
+}
+.companion-antenna,
+.companion-arm {
+  stroke: var(--app-accent);
+}
+.companion-beacon {
+  fill: var(--app-accent);
+}
+.companion-core {
+  stroke: var(--app-accent);
+}
+.companion-arm-right {
+  transform-origin: 116px 113px;
+}
+.companion-launch:hover .companion-arm-right,
+[data-state="happy"] .companion-arm-right {
+  animation: companion-wave 0.6s ease-in-out 3;
+}
+.companion-launch:hover .companion-eyes {
+  transform: translateY(-2px);
+}
+.companion-laptop {
+  display: none;
+  fill: #243763;
+  stroke: #98b3ff;
+}
+.companion-sleep,
+.companion-sleep-eyes,
+.companion-notice {
+  display: none;
+}
+.companion-sleep {
+  fill: var(--app-accent);
+  font-family: monospace;
+  font-size: 17px;
+}
+.companion-notice circle {
+  fill: var(--app-accent-fill);
+}
+.companion-notice path {
+  stroke: #fff;
+}
+[data-state="working"] .companion-laptop {
+  display: block;
+}
+[data-state="working"] .companion-core {
+  opacity: 0;
+}
+[data-state="working"] .companion-beacon {
+  animation: companion-pulse 1s ease-in-out infinite;
+}
+[data-state="slacking"] .companion-eyes {
+  display: none;
+}
+[data-state="slacking"] .companion-sleep,
+[data-state="slacking"] .companion-sleep-eyes {
+  display: block;
+}
+[data-state="slacking"] .companion-body {
+  transform: rotate(-7deg);
+  animation: companion-doze 5s ease-in-out infinite;
+}
+[data-state="notice"] .companion-notice,
+[data-state="error"] .companion-notice {
+  display: block;
+}
+[data-state="happy"] .companion-eyes {
+  transform: scaleY(0.55);
+}
+.companion-count {
+  position: absolute;
+  top: 13px;
+  right: 9px;
+  background: var(--app-accent-fill);
+  color: #fff;
+  min-width: 20px;
+  border-radius: 8px;
+  padding: 2px 5px;
+  font-size: 10px;
+  font-weight: 600;
+}
+.companion-name {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 1px;
+}
+.companion-name small {
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--app-secondary);
+  letter-spacing: 0;
+  margin-left: 4px;
+}
+.companion-state {
+  color: var(--app-accent);
+  font-size: 11px;
+  margin-top: 5px;
+}
+.companion-interactions {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 10px;
+  color: var(--app-subtle);
+  font-size: 10px;
+  margin: 6px 0 10px;
+}
+.companion-interactions button {
+  color: var(--app-secondary);
+  background: transparent;
+  border: 0;
+  padding: 4px;
+  line-height: 1;
+  cursor: pointer;
+}
+.companion-feedback {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px;
+  border-radius: 10px;
+  border: 1px solid var(--app-border);
+  background: var(--app-bg);
+  color: var(--app-secondary);
+  font: inherit;
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+.companion-feedback > span:first-child {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.companion-feedback > .anticon { flex: 0 0 auto; }
+.companion-feedback small {
+  display: block;
+  margin-top: 4px;
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--app-subtle);
+}
+.sidebar.ant-layout-sider-collapsed .sidebar-assistant {
+  margin: 8px 10px 0;
+}
+.sidebar.ant-layout-sider-collapsed .companion-stage {
+  width: 60px;
+  height: 60px;
+}
+.sidebar.ant-layout-sider-collapsed .companion-name,
+.sidebar.ant-layout-sider-collapsed .companion-state,
+.sidebar.ant-layout-sider-collapsed .companion-interactions,
+.sidebar.ant-layout-sider-collapsed .companion-feedback,
+.sidebar.ant-layout-sider-collapsed .companion-grid {
+  display: none;
+}
+.sidebar.ant-layout-sider-collapsed .companion-count {
+  top: 0;
+  right: -3px;
+}
+.assistant-activity-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+.assistant-activity-caption {
+  color: var(--app-secondary);
+  font-size: 11px;
+  line-height: 1.8;
+}
+.assistant-event {
+  display: flex;
+  gap: 12px;
+  padding: 15px;
+  border: 1px solid var(--app-border);
+  border-radius: 12px;
+  background: var(--app-surface);
+  margin: 12px 0;
+}
+.assistant-event.is-new {
+  border-color: color-mix(in srgb, var(--app-accent) 42%, var(--app-border));
+}
+.assistant-event-icon {
+  color: var(--app-accent);
+  font-size: 18px;
+  padding-top: 2px;
+}
+.assistant-event-content {
+  flex: 1;
+  min-width: 0;
+}
+.assistant-event-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 13px;
+}
+.assistant-event-heading strong {
+  overflow-wrap: anywhere;
+}
+.assistant-event-heading > span {
+  font-size: 10px;
+  color: var(--app-accent);
+  background: var(--app-accent-soft);
+  border-radius: 5px;
+  padding: 2px 6px;
+}
+.assistant-event-heading > [data-status="attention"] {
+  color: var(--app-warning);
+  background: color-mix(in srgb, var(--app-warning) 12%, transparent);
+}
+.assistant-event-content p {
+  margin: 9px 0;
+  font-size: 12px;
+  color: var(--app-secondary);
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+.assistant-event-actions {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+  font-size: 10px;
+  color: var(--app-subtle);
+}
+.assistant-event-progress {
+  height: 4px;
+  border-radius: 4px;
+  background: var(--app-muted);
+  overflow: hidden;
+}
+.assistant-event-progress i {
+  display: block;
+  height: 100%;
+  background: var(--app-accent);
+  border-radius: inherit;
+}
+@keyframes companion-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-5px);
+  }
+}
+@keyframes companion-blink {
+  0%,
+  44%,
+  48%,
+  100% {
+    transform: scaleY(1);
+  }
+  46% {
+    transform: scaleY(0.15);
+  }
+}
+@keyframes companion-wave {
+  0%,
+  100% {
+    transform: rotate(0);
+  }
+  50% {
+    transform: rotate(-20deg);
+  }
+}
+@keyframes companion-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+@keyframes companion-doze {
+  0%,
+  100% {
+    transform: rotate(-7deg) translateY(0);
+  }
+  50% {
+    transform: rotate(-7deg) translateY(3px);
+  }
+}
+@media (max-height: 760px) {
+  .companion-stage {
+    height: 105px;
+    width: 130px;
+  }
+  .companion-feedback {
+    padding: 7px;
+  }
+  .companion-interactions {
+    margin-bottom: 6px;
+  }
+}
+@media (max-height: 620px) {
+  .companion-feedback,
+  .companion-interactions {
+    display: none;
+  }
+  .companion-stage {
+    width: 90px;
+    height: 75px;
+  }
+  .sidebar-assistant {
+    margin-top: 6px;
+  }
+}
+@media (max-width: 767px) {
+  .workspace:not(.workspace-future) .sidebar-assistant {
+    margin-inline: 10px;
+  }
+  .workspace:not(.workspace-future) .companion-stage {
+    width: 60px;
+    height: 60px;
+  }
+  .workspace:not(.workspace-future) .companion-name,
+  .workspace:not(.workspace-future) .companion-state,
+  .workspace:not(.workspace-future) .companion-interactions,
+  .workspace:not(.workspace-future) .companion-feedback {
+    display: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-assistant *,
+  .sidebar-assistant *::before,
+  .sidebar-assistant *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+.workspace-companion {
+  position: absolute;
+  right: 26px;
+  top: 16px;
+  width: 172px;
+  z-index: 4;
+}
+.workspace-ai-start > .workspace-companion:not(.is-detached) {
+  position: relative;
+  grid-column: 2;
+  grid-row: 1;
+  align-self: start;
+  right: auto;
+  top: auto;
+  width: 100%;
+}
+.workspace-ai:has(.is-detached) {
+  isolation: auto;
+  overflow: visible;
+}
+.workspace-assistant-only {
+  min-height: 270px;
+  position: relative;
+}
+.workspace-companion.is-detached {
+  z-index: 150;
+  padding: 6px;
+  border: 1px solid var(--app-border);
+  border-radius: 18px;
+  background: var(--app-surface);
+  box-shadow: 0 14px 40px var(--app-shadow);
+}
+.workspace-companion .sidebar-assistant {
+  margin: 0;
+}
+.workspace-companion .companion-stage {
+  height: 123px;
+  width: 150px;
+}
+.workspace-companion .companion-feedback {
+  padding: 7px;
+}
+.workspace-companion .companion-interactions {
+  margin: 3px 0 6px;
+}
+.companion-placement {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+.companion-placement button {
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--app-subtle);
+  padding: 4px;
+  cursor: pointer;
+  font-size: 10px;
+}
+.companion-placement button:first-child {
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+.companion-placement button:first-child:active {
+  cursor: grabbing;
+}
+.companion-placement span {
+  margin-left: 3px;
+}
+.workspace-ai:has(.workspace-companion) .workspace-matrix {
+  opacity: 0.2;
+}
+@media (max-width: 1100px) and (min-width: 768px) {
+  .workspace-ai-start {
+    grid-template-columns: minmax(0, 1fr) 138px;
+  }
+  .workspace-companion {
+    width: 138px;
+    right: 18px;
+  }
+  .workspace-companion .companion-stage {
+    width: 120px;
+    height: 100px;
+  }
+}
+@media (max-width: 767px) {
+  .workspace-companion:not(.is-detached) {
+    position: relative;
+    top: auto;
+    right: auto;
+    margin: 0 auto 20px;
+  }
+  .workspace-ai-start > .workspace-companion:not(.is-detached) {
+    grid-column: 1;
+    grid-row: 2;
+    width: 172px;
+    margin-bottom: 0;
+  }
+}

@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import type { AssistantActivity } from "../../packages/contracts/src/assistant-activity.js";
 
 async function workspaceFixture(
   page: Page,
@@ -71,6 +72,7 @@ async function workspaceFixture(
     defaults: { name: "个人工作台", description: "处理今天的工作", tools: [] },
   };
   let assistantCalls = 0;
+  const activities: AssistantActivity[] = [];
   const assistant: Record<string, any> = {
     ready: true,
     availabilityMessage: "个人助理已就绪",
@@ -131,6 +133,8 @@ async function workspaceFixture(
       }
       data = assistant;
     }
+    if (path === "/my-workspace/activity")
+      data = { items: activities, serverTime: "2026-10-26T02:00:00Z" };
     if (path === "/analytics/compass/ai-settings") settingsReads++;
     if (path === "/analytics/compass/ai-report") {
       reads++;
@@ -165,6 +169,7 @@ async function workspaceFixture(
     settingsReads: () => settingsReads,
     submitted,
     workspace,
+    activities,
     assistantCalls: () => assistantCalls,
   };
 }
@@ -182,6 +187,133 @@ test("工作台只保留个人助理，不再读取经营报告或显示专属�
   expect(fixture.reads()).toBe(0);
   expect(fixture.generates()).toBe(0);
   expect(fixture.settingsReads()).toBe(0);
+});
+
+test("小序在工作台与侧栏间切换，拖动后记住位置，跨页面确认日程不自动保存", async ({
+  page,
+}) => {
+  const fixture = await workspaceFixture(page);
+  await page.goto("/my-workspace");
+  const companion = page.locator(".workspace-companion");
+  await expect(
+    companion.getByRole("button", { name: "打开 AI 个人助理", exact: true }),
+  ).toBeVisible();
+  await expect(page.locator(".sidebar .sidebar-assistant")).toHaveCount(0);
+  await page.screenshot({
+    path: test.info().outputPath("companion-workspace-dark.png"),
+    fullPage: false,
+  });
+  const handle = page.getByRole("button", { name: "拖动小序", exact: true });
+  const before = (await handle.boundingBox())!;
+  await page.mouse.move(before.x + 12, before.y + 10);
+  await page.mouse.down();
+  await page.mouse.move(before.x - 150, before.y + 100, { steps: 8 });
+  await page.mouse.up();
+  await expect(companion).toHaveClass(/is-detached/);
+  const moved = (await companion.boundingBox())!;
+  expect(moved.x).toBeLessThan(before.x - 100);
+  await page.reload();
+  await expect(companion).toHaveClass(/is-detached/);
+  expect(Math.abs((await companion.boundingBox())!.x - moved.x)).toBeLessThan(
+    2,
+  );
+  await page.getByRole("button", { name: "复位助理位置" }).click();
+  await expect(companion).not.toHaveClass(/is-detached/);
+  await page
+    .locator(".sidebar")
+    .getByRole("link", { name: "运营中心", exact: true })
+    .click();
+  const sidebar = page.locator(".sidebar .sidebar-assistant");
+  await expect(sidebar).toBeVisible();
+  await expect(page.locator(".workspace-companion")).toHaveCount(0);
+  await sidebar
+    .getByRole("button", { name: "打开 AI 个人助理", exact: true })
+    .click();
+  const dialog = page.getByRole("dialog", { name: /AI 个人助理/ });
+  await dialog
+    .getByPlaceholder(/告诉我你想完成什么/)
+    .fill("安排明天下午3点选款会");
+  await dialog.getByPlaceholder(/告诉我你想完成什么/).press("Enter");
+  await dialog
+    .getByRole("button", { name: "加入日程草稿", exact: true })
+    .click();
+  await expect(page).toHaveURL(/\/my-workspace$/);
+  await expect(
+    dialog.getByRole("button", { name: "已加入日程草稿", exact: true }),
+  ).toBeDisabled();
+  expect(fixture.workspace.schedule).toHaveLength(0);
+  await dialog.getByRole("button", { name: "关闭", exact: true }).click();
+  await page.getByRole("button", { name: "保存工作台", exact: true }).click();
+  await expect.poll(() => fixture.workspace.schedule.length).toBe(1);
+  expect(fixture.assistantCalls()).toBe(1);
+});
+
+test("动态面板显示真实任务进度、筛选和已读，浏览与招呼不调用模型", async ({
+  page,
+}) => {
+  const fixture = await workspaceFixture(page);
+  fixture.activities.push(
+    {
+      id: "schedule:1",
+      kind: "schedule",
+      title: "今日选款会",
+      detail: "10:20–11:00",
+      href: "/my-workspace",
+      at: "2026-10-26T02:20:00Z",
+      status: "attention",
+    },
+    {
+      id: "compass:1",
+      kind: "task",
+      title: "罗盘报表更新",
+      detail: "采集中",
+      href: "/analytics/compass",
+      at: "2026-10-26T01:59:00Z",
+      status: "running",
+      progress: { done: 1, total: 3 },
+    },
+    {
+      id: "project:1",
+      kind: "project",
+      title: "新品项目",
+      detail: "已验收 2 / 4 项任务",
+      href: "/projects/1",
+      at: "2026-10-26T01:00:00Z",
+      status: "info",
+      progress: { done: 2, total: 4 },
+    },
+  );
+  await page.goto("/operations");
+  const mascot = page.locator(".sidebar-assistant");
+  await expect(mascot).toHaveAttribute("data-state", "working");
+  await page.getByRole("button", { name: "查看助理动态反馈" }).click();
+  const dialog = page.getByRole("dialog", { name: /AI 个人助理/ });
+  await expect(
+    dialog.getByRole("progressbar", { name: "罗盘报表更新进度" }),
+  ).toHaveAttribute("aria-valuenow", "1");
+  await dialog.getByText("项目", { exact: true }).click();
+  await expect(
+    dialog.getByRole("radio", { name: "项目", exact: true }),
+  ).toBeChecked();
+  await expect(dialog.getByText("新品项目", { exact: true })).toBeVisible();
+  await expect(dialog.getByText("罗盘报表更新", { exact: true })).toHaveCount(
+    0,
+  );
+  await dialog.getByRole("button", { name: "这些动态我已看过" }).click();
+  fixture.activities[1].status = "completed";
+  fixture.activities[1].progress = { done: 3, total: 3 };
+  await dialog.getByRole("button", { name: "刷新助理动态" }).click();
+  await expect(mascot).toHaveAttribute("data-state", "notice");
+  await dialog.getByRole("button", { name: "这些动态我已看过" }).click();
+  await expect(mascot).toHaveAttribute("data-state", "idle");
+  await dialog.getByRole("button", { name: "关闭", exact: true }).click();
+  await page.getByRole("button", { name: "和小序打个招呼" }).click();
+  await expect(mascot).toHaveAttribute("data-state", "happy");
+  expect(fixture.assistantCalls()).toBe(0);
+  await page.screenshot({
+    path: test.info().outputPath("companion-sidebar-dark.png"),
+    fullPage: false,
+  });
 });
 
 test("日程可添加编辑删除，保存后跨页面恢复，拒绝无效时间", async ({ page }) => {

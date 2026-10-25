@@ -22,10 +22,16 @@ import { libraryConfig, contentSummary } from "../projects/library.js";
 import { AuthRequest, context } from "../../http.js";
 import { clearAssistant, readAssistant, sendAssistant } from "./assistant.js";
 import { readAppearance, saveAppearance } from "./appearance.js";
+import { assistantActivity } from "./activity.js";
 
 // The owner always comes from the authenticated session; there is no user-id route.
 @Controller("api/v1/my-workspace")
 export class PersonalWorkspaceController {
+  @Get("activity")
+  async activity(@Req() request: AuthRequest, @Res({ passthrough: true }) response: Response) {
+    response.setHeader("Cache-Control", "private, no-store");
+    return assistantActivity(context(request));
+  }
   @Get("appearance")
   async appearance(@Req() request: AuthRequest, @Res({ passthrough: true }) response: Response) {
     response.setHeader("Cache-Control", "private, no-store");
