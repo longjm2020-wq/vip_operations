@@ -148,7 +148,7 @@ const toggle = (page: Page, next: "light" | "dark") =>
     })
     .click();
 
-test("金橘工作台移除工具摘要，切换不丢草稿且只保存主题", async ({
+test("金黄工作台移除工具摘要，切换不丢草稿且只保存主题", async ({
   page,
   context,
 }) => {
@@ -165,6 +165,7 @@ test("金橘工作台移除工具摘要，切换不丢草稿且只保存主题",
   await page.getByRole("heading", { level: 1 }).scrollIntoViewIfNeeded();
   await page.evaluate(() => window.scrollTo(0, 0));
   await page.screenshot({
+    animations: "disabled",
     path: test.info().outputPath("charcoal-gold-desktop.png"),
   });
   await toggle(page, "light");
@@ -176,6 +177,7 @@ test("金橘工作台移除工具摘要，切换不丢草稿且只保存主题",
   expect(state.writes).toEqual(["/my-workspace/appearance"]);
   await page.evaluate(() => window.scrollTo(0, 0));
   await page.screenshot({
+    animations: "disabled",
     path: test.info().outputPath("warm-light-desktop.png"),
   });
   await page.reload();
@@ -221,13 +223,13 @@ test("业务库存和弹出菜单跟随主题，页面切换保持主题", async
   ).toHaveCount(1);
   await expect(page.locator(".ant-table-thead th").first()).toHaveCSS(
     "background-color",
-    "rgb(39, 35, 29)",
+    "rgb(39, 38, 31)",
   );
   await toggle(page, "light");
   await mode(page, "light");
   await expect(page.locator(".ant-table-thead th").first()).toHaveCSS(
     "background-color",
-    "rgb(255, 242, 228)",
+    "rgb(246, 244, 235)",
   );
   await page.getByRole("link", { name: "我的工作台", exact: true }).click();
   await mode(page, "light");

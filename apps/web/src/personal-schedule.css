@@ -63,7 +63,7 @@
   background: var(--app-surface);
 }
 .schedule-days button.selected {
-  background: var(--app-accent);
+  background: var(--app-accent-fill);
   color: var(--app-on-accent);
   font-weight: 700;
   border-color: var(--app-accent-border);

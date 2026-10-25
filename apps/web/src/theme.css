@@ -6,17 +6,20 @@
   --app-surface: #1b1b1b;
   --app-elevated: #242321;
   --app-muted: #22211f;
-  --app-hover: #30271e;
+  --app-hover: #302a1d;
   --app-text: #f1ede7;
-  --app-secondary: #b7ad9f;
-  --app-subtle: #978c7e;
-  --app-border: #38342e;
-  --app-border-strong: #68563d;
-  --app-accent: #e6ad55;
-  --app-accent-hover: #f5c982;
-  --app-accent-soft: #30271a;
-  --app-accent-border: #69502e;
-  --app-on-accent: #19140d;
+  --app-secondary: #b9b7b0;
+  --app-subtle: #969183;
+  --app-border: #38362e;
+  --app-border-strong: #685e3e;
+  --app-accent: #e8bf3c;
+  --app-accent-hover: #f4d76b;
+  --app-accent-soft: #302a18;
+  --app-accent-border: #6d5a26;
+  --app-accent-fill: #e8bf3c;
+  --app-accent-fill-hover: #f3d36a;
+  --app-accent-fill-active: #d6ad2e;
+  --app-on-accent: #211c0e;
   --app-success: #8dc8a1;
   --app-success-bg: #1d3025;
   --app-danger: #f59b91;
@@ -27,12 +30,17 @@
   --app-warning-bg: #352b1b;
   --app-shadow: #00000026;
   --app-header: #171717ed;
-  --app-glow: #d18b2c20;
-  --app-hero-start: #272219;
+  --app-glow: #e8bf3c20;
+  --app-hero-start: #272418;
   --app-hero-end: #191918;
-  --app-gold: #f0c57c;
-  --app-orange: #ef9145;
-  --app-orb-core: #302315;
+  --app-gold: #f4d76b;
+  --app-gold-deep: #d8af31;
+  --app-orb-core: #302916;
+  --app-logo-base: #b58e24;
+  --app-logo-mid: #e8bf3c;
+  --app-logo-highlight: #fae79f;
+  --app-logo-shadow: #e8bf3c30;
+  --app-logo-glow: #e8bf3c60;
   --app-lock: #302e2b;
   --app-chart-secondary: #90aaad;
 }
@@ -42,17 +50,16 @@
   --app-surface: #ffffff;
   --app-elevated: #ffffff;
   --app-muted: #faf7f2;
-  --app-hover: #fff3e5;
+  --app-hover: #fbf5df;
   --app-text: #342f29;
-  --app-secondary: #75695d;
-  --app-subtle: #8b7b69;
-  --app-border: #e2d8cb;
-  --app-border-strong: #c7b39a;
-  --app-accent: #b45a16;
-  --app-accent-hover: #94400c;
-  --app-accent-soft: #fff1df;
-  --app-accent-border: #e9ceac;
-  --app-on-accent: #ffffff;
+  --app-secondary: #6b6960;
+  --app-subtle: #827b6b;
+  --app-border: #dedacf;
+  --app-border-strong: #c5b987;
+  --app-accent: #846200;
+  --app-accent-hover: #694d00;
+  --app-accent-soft: #faf3d8;
+  --app-accent-border: #dccc91;
   --app-success: #347449;
   --app-success-bg: #eff8ef;
   --app-danger: #bc3930;
@@ -63,12 +70,17 @@
   --app-warning-bg: #fff8df;
   --app-shadow: #5c41110c;
   --app-header: #ffffffef;
-  --app-glow: #e5a4441c;
-  --app-hero-start: #fff4e4;
-  --app-hero-end: #fffcf7;
-  --app-gold: #986318;
-  --app-orange: #bd560e;
-  --app-orb-core: #d5ad72;
+  --app-glow: #e8bf3c1c;
+  --app-hero-start: #fcf6df;
+  --app-hero-end: #fffdf6;
+  --app-gold: #96731c;
+  --app-gold-deep: #735400;
+  --app-orb-core: #d1ba73;
+  --app-logo-base: #72550c;
+  --app-logo-mid: #846200;
+  --app-logo-highlight: #a47b1a;
+  --app-logo-shadow: #84620010;
+  --app-logo-glow: #b9942820;
   --app-lock: #e9e6e1;
   --app-chart-secondary: #46777d;
 }
@@ -123,11 +135,24 @@ body {
 .theme-error .ant-btn {
   margin-top: 6px;
 }
-:root[data-theme="light"] .sidebar .brand-wordmark {
-  filter: brightness(0.35) sepia(0.25);
+/* Solid actions share a yellow fill; text/outlined actions use the readable accent. */
+.ant-btn.ant-btn-color-primary.ant-btn-variant-solid:not(:disabled):not(.ant-btn-disabled) {
+  background: var(--app-accent-fill);
+  color: var(--app-on-accent);
 }
-:root[data-theme="dark"] .sidebar .brand-wordmark {
-  filter: none;
+.ant-btn.ant-btn-color-primary.ant-btn-variant-solid:not(:disabled):not(.ant-btn-disabled):hover {
+  background: var(--app-accent-fill-hover);
+}
+.ant-btn.ant-btn-color-primary.ant-btn-variant-solid:not(:disabled):not(.ant-btn-disabled):active {
+  background: var(--app-accent-fill-active);
+}
+/* The login video remains dark in either mode, so its wordmark uses bright gold. */
+.login-story, .supplier-registration-brand {
+  --app-logo-base: #b58e24;
+  --app-logo-mid: #e8bf3c;
+  --app-logo-highlight: #fae79f;
+  --app-logo-shadow: #e8bf3c30;
+  --app-logo-glow: #e8bf3c60;
 }
 .sidebar .ant-menu-dark .ant-menu-item-selected {
   background: var(--app-accent-soft) !important;

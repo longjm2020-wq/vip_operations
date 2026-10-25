@@ -581,7 +581,7 @@ test("超级管理员从系统设置访问模型，侧栏收起图标及悬浮�
     ".sidebar .ant-menu-item-selected .ant-menu-item-icon",
   );
   await expect(icon).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
-  await expect(icon).toHaveCSS("color", "rgb(230, 173, 85)");
+  await expect(icon).toHaveCSS("color", "rgb(232, 191, 60)");
   await expect(icon.locator("svg")).toHaveAttribute("fill", "currentColor");
   await expect(page.locator(".sidebar .ant-menu-item-selected")).toHaveCSS(
     "background-color",

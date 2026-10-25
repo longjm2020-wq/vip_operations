@@ -580,7 +580,7 @@
 .selection-choice-select .ant-select-content, .selection-choice-select .ant-select-selection-overflow { display: flex; flex-direction: column; align-items: var(--choice-horizontal, center); justify-content: var(--choice-vertical, center); gap: 4px; padding: 4px 6px; min-height: 0; }
 .selection-choice-select .ant-select-selection-item { display: flex; justify-content: var(--choice-horizontal, center); }
 .selection-choice-select .ant-select-input { text-align: inherit; }
-.selection-choice-toggle { position: absolute; z-index: 2; right: 3px; bottom: 3px; width: 18px; height: 18px; margin: 0; padding: 0; border: 0; border-radius: 3px; color: var(--app-on-accent); background: var(--app-accent); display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: 11px; }
+.selection-choice-toggle { position: absolute; z-index: 2; right: 3px; bottom: 3px; width: 18px; height: 18px; margin: 0; padding: 0; border: 0; border-radius: 3px; color: var(--app-on-accent); background: var(--app-accent-fill); display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: 11px; }
 .selection-choice-toggle:focus-visible { outline: 2px solid var(--app-accent-border); outline-offset: 2px; }
 .selection-choice-select .ant-select-clear { right: 4px; }
 .selection-choice-editor .ant-select-content { gap: 4px; }

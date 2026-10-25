@@ -36,7 +36,7 @@
   color: var(--app-text);
 }
 .workspace-ai h2 > span {
-  background: linear-gradient(90deg, var(--app-gold), var(--app-orange));
+  background: linear-gradient(90deg, var(--app-gold), var(--app-gold-deep));
   background-clip: text;
   color: transparent;
 }
@@ -64,7 +64,7 @@
   width: 180px;
   height: 180px;
   border-radius: 50%;
-  background: var(--app-orange);
+  background: var(--app-accent-fill);
   filter: blur(50px);
   opacity: 0.22;
 }
@@ -75,14 +75,14 @@
   border-radius: 50%;
   display: grid;
   place-items: center;
-  background: radial-gradient(circle at 35% 25%, color-mix(in srgb, var(--app-gold) 70%, transparent), var(--app-orb-core) 60%, var(--app-orange));
+  background: radial-gradient(circle at 35% 25%, color-mix(in srgb, var(--app-accent-fill-hover) 70%, transparent), var(--app-orb-core) 60%, var(--app-accent-fill));
   box-shadow:
-    inset 6px 8px 15px #ffe8ba33, inset -10px -10px 20px #e69b3238, 0 0 40px var(--app-glow);
+    inset 6px 8px 15px #fae79f33, inset -10px -10px 20px #d6ad2e38, 0 0 40px var(--app-glow);
 }
 .workspace-orbit-sphere span {
   color: var(--app-gold);
   font-size: 35px;
-  text-shadow: 0 0 20px var(--app-orange);
+  text-shadow: 0 0 20px var(--app-accent-fill);
   transform: rotate(23deg);
 }
 .workspace-orbit > i {
@@ -98,7 +98,7 @@
   transform: rotate(65deg);
   width: 195px;
   height: 130px;
-  border-color: color-mix(in srgb, var(--app-orange) 25%, transparent);
+  border-color: color-mix(in srgb, var(--app-gold-deep) 25%, transparent);
 }
 .workspace-orbit > i:last-child {
   transform: rotate(-50deg);
@@ -109,7 +109,7 @@
   animation: workspace-orbit-spin 28s linear infinite;
 }
 .workspace-ai .magic-border-beam > div {
-  background: linear-gradient(to left, var(--app-gold), var(--app-orange), transparent);
+  background: linear-gradient(to left, var(--app-gold), var(--app-gold-deep), transparent);
 }
 @keyframes workspace-orbit-spin {
   from {

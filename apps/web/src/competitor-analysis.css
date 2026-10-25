@@ -243,8 +243,8 @@
 .competitor-product-preview-price > span {
   border-radius: 12px;
   padding: 2px 8px;
-  background: var(--app-accent);
-  color: var(--app-text);
+  background: var(--app-accent-fill);
+  color: var(--app-on-accent);
   font-size: 12px;
 }
 .competitor-product-preview-price > strong {

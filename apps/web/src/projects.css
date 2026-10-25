@@ -213,9 +213,9 @@
   position: absolute;
   top: 13px;
   height: 26px;
-  background: var(--app-accent);
+  background: var(--app-accent-fill);
   border-radius: 5px;
-  color: var(--app-text);
+  color: var(--app-on-accent);
   font-size: 12px;
   padding-left: 4px;
   overflow: hidden;
@@ -223,12 +223,14 @@
 }
 .gantt-bar.done {
   background: var(--app-success);
+  color: var(--app-surface);
 }
 .gantt-bar.disputed {
   background: var(--app-danger);
+  color: var(--app-surface);
 }
 .gantt-bar.submitted {
-  background: var(--app-accent);
+  background: var(--app-accent-fill);
 }
 .project-example-grid {
   display: grid;

@@ -19,11 +19,11 @@
 .mobile-photos h1 { font-size: 22px; margin: 0; overflow-wrap: anywhere; }.mobile-photos h2 { font-size: 16px; }.mobile-photos h2 small { font-size: 12px; color: var(--app-secondary); }
 .mobile-photo-colors { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0; }.mobile-photo-colors .ant-btn { min-height: 40px; }
 .mobile-photo-color { display: inline-flex; max-width: 100%; align-items: stretch; overflow: hidden; border: 1px solid var(--app-border); border-radius: 8px; background: var(--app-surface); }
-.mobile-photo-color.is-selected { border-color: var(--app-accent-border); background: var(--app-accent); }
+.mobile-photo-color.is-selected { border-color: var(--app-accent-border); background: var(--app-accent-fill); }
 .mobile-photo-color .ant-btn { border: 0; border-radius: 0; box-shadow: none; background: transparent; }
 .mobile-photo-color .mobile-photo-color-select { flex: 1; min-width: 0; height: auto; padding: 8px 12px; white-space: normal; overflow-wrap: anywhere; }
 .mobile-photo-color .mobile-photo-color-edit { flex: 0 0 36px; width: 36px; height: auto; border-left: 1px solid var(--app-border); }
-.mobile-photo-color.is-selected .ant-btn:not(:disabled) { color: var(--app-text); }
+.mobile-photo-color.is-selected .ant-btn:not(:disabled) { color: var(--app-on-accent); }
 .mobile-photo-color.is-selected .mobile-photo-color-edit { border-left-color: color-mix(in srgb, var(--app-border) 25%, transparent); }
 .mobile-photo-color.is-selected .ant-btn:not(:disabled):hover { background: color-mix(in srgb, var(--app-surface) 13%, transparent); }
 .mobile-photo-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; }.mobile-photo-item { position: relative; overflow: hidden; background: var(--app-surface); border-radius: 8px; }.mobile-photo-item .ant-image { width: 100%; }.mobile-photo-item .ant-image-img { width: 100%; aspect-ratio: 1; object-fit: contain; }.mobile-photo-item > span { display: block; padding: 6px 10px; }.mobile-photo-item > button { position: absolute; right: 6px; top: 6px; background: var(--app-surface); }

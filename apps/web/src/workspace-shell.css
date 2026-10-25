@@ -15,9 +15,6 @@
   height: 100px;
   padding-inline: 28px;
 }
-.workspace-future .brand-wordmark {
-  filter: grayscale(1) brightness(1.5);
-}
 .workspace-future .sidebar-caption {
   padding: 0 28px 24px;
   color: var(--app-secondary);

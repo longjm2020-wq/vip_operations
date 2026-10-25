@@ -17,7 +17,7 @@
   position: absolute;
   width: 120px;
   aspect-ratio: 1;
-  background: linear-gradient(to left, var(--app-gold), var(--app-orange), transparent);
+  background: linear-gradient(to left, var(--app-gold), var(--app-gold-deep), transparent);
   offset-path: rect(0 auto auto 0 round 20px);
   animation: magic-border-travel var(--beam-duration, 14s) linear infinite;
 }
