@@ -2,7 +2,14 @@ import { z } from "zod";
 
 export type WorkspaceActor = { permissions: string[]; roleCodes?: string[] };
 export const workspaceTools = [
-  { id: "competitors", title: "竞品分析", description: "对比唯品会品牌、价格材质与商品 TOP20", path: "/analytics/competitors", permission: "analytics.read", group: "运营" },
+  {
+    id: "competitors",
+    title: "竞品分析",
+    description: "对比唯品会品牌、价格材质与商品 TOP20",
+    path: "/analytics/competitors",
+    permission: "analytics.read",
+    group: "运营",
+  },
   {
     id: "analytics",
     title: "经营分析",
@@ -189,13 +196,7 @@ const profiles = [
     role: "ADMIN",
     name: "管理工作台",
     description: "查看经营与库存，协调团队工作",
-    tools: [
-      "analytics",
-      "projects",
-      "inventory",
-      "users",
-      "audit",
-    ],
+    tools: ["analytics", "projects", "inventory", "users", "audit"],
   },
   {
     role: "SUPPLY_MANAGER",
@@ -268,6 +269,30 @@ export function workspaceDefaults(actor: WorkspaceActor) {
     tools,
   };
 }
+const scheduleTime = z.union([
+  z.literal(""),
+  z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "请输入有效时间"),
+]);
+export const workspaceScheduleSchema = z
+  .object({
+    id: z.string().uuid(),
+    title: z.string().trim().min(1, "请填写日程名称").max(160),
+    date: z.iso.date({ error: "请选择有效日期" }),
+    startTime: scheduleTime,
+    endTime: scheduleTime,
+    note: z.string().max(1000),
+  })
+  .strict()
+  .refine(
+    (event) =>
+      !event.endTime || (!!event.startTime && event.endTime > event.startTime),
+    {
+      message: "结束时间须晚于开始时间；跨天安排请分日添加",
+      path: ["endTime"],
+    },
+  );
+export type WorkspaceSchedule = z.infer<typeof workspaceScheduleSchema>;
+
 export const workspaceConfigSchema = z
   .object({
     shortcuts: z
@@ -275,6 +300,15 @@ export const workspaceConfigSchema = z
       .max(workspaceTools.length)
       .refine((ids) => new Set(ids).size === ids.length, "工具不能重复"),
     note: z.string().max(4000),
+    schedule: z
+      .array(workspaceScheduleSchema)
+      .max(500)
+      .refine(
+        (events) =>
+          new Set(events.map((event) => event.id)).size === events.length,
+        "日程不能重复",
+      )
+      .optional(),
     todos: z
       .array(
         z

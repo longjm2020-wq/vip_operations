@@ -30,6 +30,7 @@ import {
   Checkbox,
   ConfigProvider,
   Form,
+  Grid,
   Input,
   Layout,
   Menu,
@@ -69,6 +70,8 @@ const ProjectsPage = React.lazy(() => import("./projects").then(module => ({ def
 const ProjectDetailPage = React.lazy(() => import("./projects").then(module => ({ default: module.ProjectDetailPage })));
 const ProjectNotifications = React.lazy(() => import("./projects").then(module => ({ default: module.ProjectNotifications })));
 import "./style.css";
+import "./workspace-shell.css";
+import { workspaceTheme } from "./workspace-theme";
 const SupplierRegister = React.lazy(() => import("./supply").then(module => ({ default: module.SupplierRegister })));
 const SupplyProfile = React.lazy(() => import("./supply").then(module => ({ default: module.SupplyProfile })));
 const SupplyProducts = React.lazy(() => import("./supply").then(module => ({ default: module.SupplyProducts })));
@@ -180,6 +183,12 @@ function ColorSizeMappingsPage() {
 function Workspace({ user }: { user: Row }) {
   const location = useLocation(),
     ui = useUi();
+  const personalWorkspace = location.pathname === "/my-workspace";
+  const screens = Grid.useBreakpoint();
+  const mobileWorkspace = personalWorkspace && screens.md === false;
+  const [workspaceNavOpen, setWorkspaceNavOpen] = useState(false);
+  const navCollapsed = mobileWorkspace ? !workspaceNavOpen : ui.collapsed;
+  React.useEffect(() => setWorkspaceNavOpen(false), [location.pathname]);
   const [searchHost, setSearchHost] = useState<HTMLDivElement | null>(null);
   React.useEffect(() => {
     const header = searchHost?.closest<HTMLElement>(".topbar");
@@ -347,7 +356,7 @@ function Workspace({ user }: { user: Row }) {
     }));
     return {
       key: item.key,
-      icon: ui.collapsed ? (
+      icon: navCollapsed ? (
         <WorkspaceMenuIcon workspace={item.key} selected={item.key === activeKey} />
       ) : item.icon,
       popupClassName: item.children ? "workspace-menu-popup" : undefined,
@@ -359,7 +368,7 @@ function Workspace({ user }: { user: Row }) {
           {item.label}
         </Link>
       ),
-      children: ui.collapsed && children ? [{
+      children: navCollapsed && children ? [{
         key: `${item.key}-heading`,
         type: "group" as const,
         label: <span className="workspace-menu-popup-heading">{item.label}</span>,
@@ -374,17 +383,19 @@ function Workspace({ user }: { user: Row }) {
       : undefined;
   return (
     <PageSearchContext.Provider value={searchHost}><UserContext.Provider value={user}>
-      <Layout className="workspace">
-        <Layout.Sider width={200} collapsed={ui.collapsed} className="sidebar">
+      <ConfigProvider theme={personalWorkspace ? workspaceTheme : undefined}>
+      <Layout className={`workspace${personalWorkspace ? " workspace-future" : ""}`}>
+        {mobileWorkspace && workspaceNavOpen && <button type="button" className="workspace-nav-scrim" aria-label="关闭工作区导航" onClick={() => setWorkspaceNavOpen(false)} />}
+        <Layout.Sider width={personalWorkspace ? 216 : 200} collapsed={navCollapsed} collapsedWidth={mobileWorkspace ? 0 : 80} className="sidebar">
           <Link
             to={
               "/my-workspace"
             }
             className="brand"
           >
-            <BrandMark collapsed={ui.collapsed} />
+            <BrandMark collapsed={navCollapsed} />
           </Link>
-          {!ui.collapsed && (
+          {!navCollapsed && (
             <div className="sidebar-caption">
               {user.roleCodes?.includes("SUPPLIER")
                 ? "序缇供应链后台"
@@ -395,10 +406,10 @@ function Workspace({ user }: { user: Row }) {
             mode="inline"
             theme="dark"
             aria-label="工作区导航"
-            selectedKeys={selected ? [selected] : []}
+            selectedKeys={personalWorkspace ? ["/my-workspace"] : selected ? [selected] : []}
             openKeys={openMenuKeys}
             onOpenChange={setOpenMenuKeys}
-            items={menu}
+            items={personalWorkspace ? [{key: "/my-workspace", icon: <HomeOutlined />, label: <Link to="/my-workspace" aria-current="page" onClick={() => setWorkspaceNavOpen(false)}>我的工作台</Link>}, ...menu] : menu}
           />
         </Layout.Sider>
         <Layout>
@@ -406,10 +417,10 @@ function Workspace({ user }: { user: Row }) {
             <div className="topbar-main">
               <Button
                 type="text"
-                aria-label={ui.collapsed ? "展开工作区导航" : "收起工作区导航"}
-                onClick={ui.toggle}
+                aria-label={navCollapsed ? "展开工作区导航" : "收起工作区导航"}
+                onClick={() => mobileWorkspace ? setWorkspaceNavOpen(!workspaceNavOpen) : ui.toggle()}
                 icon={
-                  ui.collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />
+                  navCollapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />
                 }
               />
               <span className="workspace-title">
@@ -522,12 +533,13 @@ function Workspace({ user }: { user: Row }) {
                 }
               />
             </Routes>
-            {!collaborationTable && <footer className="page-footer">
+            {!collaborationTable && !personalWorkspace && <footer className="page-footer">
               XUTI
             </footer>}
           </Layout.Content>
         </Layout>
       </Layout>
+      </ConfigProvider>
     </UserContext.Provider></PageSearchContext.Provider>
   );
 }

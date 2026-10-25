@@ -1,0 +1,184 @@
+.assistant-compose {
+  position: relative;
+  z-index: 1;
+  margin-top: 24px;
+}
+.assistant-compose .ant-sender {
+  background: #0f111bd9;
+  border-color: #51416e;
+  box-shadow:
+    0 0 0 4px #ac8bff07,
+    0 10px 30px #0002;
+  border-radius: 14px;
+}
+.assistant-compose .ant-sender:focus-within {
+  border-color: #ac96ff;
+  box-shadow: 0 0 0 3px #a88bff1a;
+}
+.assistant-compose .ant-sender-input {
+  font-size: 13px;
+}
+.assistant-compose-meta {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-top: 9px;
+}
+.assistant-compose-meta .ant-checkbox-wrapper,
+.assistant-compose-meta .ant-btn {
+  font-size: 11px;
+  color: #a1a6bc;
+}
+.assistant-compose-meta .ant-checkbox-inner {
+  width: 13px;
+  height: 13px;
+}
+.personal-assistant-drawer .ant-drawer-body {
+  background: #11141f;
+  padding: 22px;
+}
+.personal-assistant-drawer .ant-drawer-content {
+  background: #161925;
+}
+.personal-assistant-drawer .ant-drawer-title {
+  color: #e7eafa;
+}
+.personal-assistant-drawer .ant-drawer-footer {
+  padding: 10px 22px 16px;
+}
+.personal-assistant-drawer .assistant-compose {
+  margin-top: 0;
+}
+.assistant-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 24px;
+  color: #a5aecb;
+  font-size: 11px;
+}
+.assistant-status > .ant-btn {
+  margin-left: auto;
+}
+.assistant-privacy {
+  font-size: 10px;
+  color: #939bb4;
+  line-height: 1.7;
+  margin: 10px 0 0;
+}
+.assistant-empty {
+  text-align: center;
+  padding: 30px 12px;
+}
+.assistant-spark {
+  font-size: 52px;
+  color: #b29bff;
+  text-shadow: 0 0 35px #8568e6;
+}
+.assistant-empty h3 {
+  font-size: 21px;
+  margin: 18px 0 10px;
+  font-weight: 500;
+}
+.assistant-empty p {
+  color: #9da5bf;
+  font-size: 12px;
+  margin-bottom: 28px;
+}
+.assistant-empty > button {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  background: #1b1f2d;
+  border: 1px solid #2e3247;
+  border-radius: 10px;
+  color: #c9cfe4;
+  padding: 14px;
+  margin-top: 10px;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  font-size: 12px;
+}
+.assistant-empty > button:hover {
+  border-color: #a08bff;
+}
+.assistant-messages {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+.assistant-message-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.85;
+  font-size: 13px;
+}
+.assistant-message .ant-bubble {
+  width: 100%;
+}
+.assistant-message .ant-bubble-header {
+  font-size: 11px;
+  color: #a6afca;
+}
+.assistant-message-user .ant-bubble-content {
+  background: #2a2543;
+}
+.assistant-schedule-proposals {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+.assistant-schedule-proposal {
+  border: 1px solid #514474;
+  background: #211d33;
+  padding: 16px;
+  border-radius: 12px;
+}
+.assistant-schedule-proposal > span {
+  display: block;
+  color: #b7a6ee;
+  font-size: 10px;
+  margin-bottom: 12px;
+}
+.assistant-schedule-proposal strong {
+  font-size: 14px;
+}
+.assistant-schedule-proposal p {
+  color: #b4bdd6;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.assistant-response-model {
+  display: block;
+  color: #838ca8;
+  font-size: 10px;
+  margin-top: 10px;
+}
+.assistant-tool-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+.assistant-tool-links a {
+  color: #c6b6ff;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: #252039;
+  font-size: 12px;
+}
+.assistant-tool-links .anticon {
+  margin-left: 10px;
+}
+@media (max-width: 600px) {
+  .personal-assistant-drawer .ant-drawer-body {
+    padding: 16px;
+  }
+  .assistant-compose-meta {
+    gap: 2px;
+  }
+}

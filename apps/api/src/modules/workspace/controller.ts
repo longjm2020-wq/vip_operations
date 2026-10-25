@@ -20,10 +20,27 @@ import { command, fail, parse, requirePermission } from "../../core.js";
 import { libraryKindSchema } from "../../../../../packages/contracts/src/project-library.js";
 import { libraryConfig, contentSummary } from "../projects/library.js";
 import { AuthRequest, context } from "../../http.js";
+import { clearAssistant, readAssistant, sendAssistant } from "./assistant.js";
 
 // The owner always comes from the authenticated session; there is no user-id route.
 @Controller("api/v1/my-workspace")
 export class PersonalWorkspaceController {
+  @Get("assistant")
+  async assistant(
+    @Req() request: AuthRequest,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    response.setHeader("Cache-Control", "private, no-store");
+    return readAssistant(context(request));
+  }
+  @Post("assistant")
+  async assistantSend(@Req() request: AuthRequest, @Body() input: unknown) {
+    return sendAssistant(context(request), input);
+  }
+  @Post("assistant/clear")
+  async assistantClear(@Req() request: AuthRequest, @Body() input: unknown) {
+    return clearAssistant(context(request), input);
+  }
   @Get("content")
   async content(
     @Req() request: AuthRequest,
@@ -49,14 +66,12 @@ export class PersonalWorkspaceController {
       (page - 1) * 20,
     );
     return {
-      items: data
-        .slice(0, 20)
-        .map((row) =>
-          contentSummary(request.actor, kind, {
-            ...row,
-            [config.owner]: request.actor.id,
-          }),
-        ),
+      items: data.slice(0, 20).map((row) =>
+        contentSummary(request.actor, kind, {
+          ...row,
+          [config.owner]: request.actor.id,
+        }),
+      ),
       hasMore: data.length > 20,
     };
   }
@@ -81,6 +96,7 @@ export class PersonalWorkspaceController {
     };
     return {
       ...config,
+      schedule: config.schedule || [],
       shortcuts: config.shortcuts.filter((id: string) =>
         available.some((t) => t.id === id),
       ),
@@ -98,7 +114,7 @@ export class PersonalWorkspaceController {
     if (body.shortcuts.some((id) => !available.some((t) => t.id === id)))
       fail("FORBIDDEN", "常用工具不存在或当前账号无权访问", 403);
     const { version, ...config } = body;
-    // Private notes/todos are deliberately excluded from shared audit logs.
+    // Private notes, todos and schedules are excluded from shared audit logs.
     return command(context(request), "workspace.save", body, async (tx) => {
       await tx.$executeRawUnsafe(
         "SELECT pg_advisory_xact_lock(hashtextextended($1,0))",
@@ -106,7 +122,7 @@ export class PersonalWorkspaceController {
       );
       const old = await one(
         tx,
-        "SELECT version FROM personal_workspaces WHERE user_id=$1::bigint",
+        "SELECT version,config FROM personal_workspaces WHERE user_id=$1::bigint",
         actor.id,
       );
       if ((old?.version || 0) !== version)
@@ -119,7 +135,11 @@ export class PersonalWorkspaceController {
         tx,
         "INSERT INTO personal_workspaces(user_id,config) VALUES($1::bigint,$2::jsonb) ON CONFLICT(user_id) DO UPDATE SET config=excluded.config,version=personal_workspaces.version+1,updated_at=now() RETURNING version,updated_at",
         actor.id,
-        JSON.stringify(config),
+        // Older tabs do not send schedule. Preserve it instead of erasing it.
+        JSON.stringify({
+          ...config,
+          schedule: config.schedule ?? old?.config?.schedule ?? [],
+        }),
       );
       return { version: saved!.version, updatedAt: saved!.updated_at };
     });

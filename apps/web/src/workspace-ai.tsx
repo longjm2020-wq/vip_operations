@@ -1,21 +1,23 @@
 import { lazy, Suspense, useState } from "react";
 import { Bubble, Prompts } from "@ant-design/x";
-import { Button, Space, Spin, Tag } from "antd";
+import { Button, ConfigProvider, Space, Spin, Tag } from "antd";
 import {
   ArrowRightOutlined,
   BarChartOutlined,
   BulbOutlined,
   ReloadOutlined,
-  RobotOutlined,
   SafetyCertificateOutlined,
 } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router-dom";
 import { api } from "./api";
-import { QueryState, useUser } from "./shared";
+import { QueryState, useUser, type Row } from "./shared";
 import { compassAIStates, type CompassAIState } from "./compass-ai-state";
 import { BorderBeam } from "./components/magicui/border-beam";
 import "./workspace-ai.css";
+import { PersonalAssistant } from "./personal-assistant";
+import { workspaceReportTheme } from "./workspace-theme";
+import type { WorkspaceSchedule } from "../../../packages/contracts/src/personal-workspace";
 
 const CompassAIReport = lazy(() =>
   import("./compass-ai").then((module) => ({
@@ -23,7 +25,15 @@ const CompassAIReport = lazy(() =>
   })),
 );
 
-export function WorkspaceAI() {
+export function WorkspaceAI({
+  available,
+  schedule,
+  onSchedule,
+}: {
+  available: Row[];
+  schedule: WorkspaceSchedule[];
+  onSchedule: (event: WorkspaceSchedule) => void;
+}) {
   const user = useUser(),
     navigate = useNavigate();
   const [open, setOpen] = useState(false);
@@ -80,12 +90,33 @@ export function WorkspaceAI() {
   return (
     <section className="workspace-ai" aria-labelledby="workspace-ai-title">
       <BorderBeam active={report?.state !== "FAILED"} />
+      <div className="workspace-orbit" aria-hidden="true">
+        <div className="workspace-orbit-glow" />
+        <div className="workspace-orbit-sphere">
+          <span>✦</span>
+        </div>
+        <i />
+        <i />
+        <i />
+      </div>
       <div className="workspace-ai-start">
         <div className="workspace-ai-eyebrow">
-          <RobotOutlined aria-hidden /> AI 工作区
+          <span aria-hidden>✦</span> XUTI INTELLIGENCE
         </div>
-        <h2 id="workspace-ai-title">让 AI 协助，专注你的判断。</h2>
-        <p>从一项工作开始，把分析与资料整理交给助手。</p>
+        <h2 id="workspace-ai-title">
+          从想法，
+          <br />
+          <span>到下一步行动。</span>
+        </h2>
+        <p>你的 AI 个人助理，让日程、灵感与工作有序展开。</p>
+        <PersonalAssistant
+          available={available}
+          schedule={schedule}
+          onSchedule={onSchedule}
+        />
+        <div className="workspace-ai-tools-label">
+          专属 AI 工具 <span>选择一项工作，直接开始</span>
+        </div>
         <Prompts
           items={items.map((item) => ({
             ...item,
@@ -106,7 +137,7 @@ export function WorkspaceAI() {
           }}
         />
         <span className="workspace-ai-note">
-          商品工具在表格中选款后使用，生成结果经核对后填入。
+          发送内容交给已配置的 AI 服务。日程草稿与商品建议均经你确认后保存。
         </span>
       </div>
       {read && (
@@ -167,14 +198,16 @@ export function WorkspaceAI() {
         </div>
       )}
       {open && (
-        <Suspense fallback={<Spin size="small" />}>
-          <CompassAIReport
-            open
-            manage={manage}
-            sourceKey="workspace"
-            onClose={() => setOpen(false)}
-          />
-        </Suspense>
+        <ConfigProvider theme={workspaceReportTheme}>
+          <Suspense fallback={<Spin size="small" />}>
+            <CompassAIReport
+              open
+              manage={manage}
+              sourceKey="workspace"
+              onClose={() => setOpen(false)}
+            />
+          </Suspense>
+        </ConfigProvider>
       )}
     </section>
   );

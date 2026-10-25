@@ -19,15 +19,24 @@ import {
   LockOutlined,
   PlusOutlined,
   SettingOutlined,
+  AppstoreOutlined,
+  BarChartOutlined,
+  CalendarOutlined,
+  CheckOutlined,
+  FileTextOutlined,
+  InboxOutlined,
+  SaveOutlined,
+  TeamOutlined,
 } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { api } from "./api";
-import { Header, QueryState, Row, useUser } from "./shared";
+import { QueryState, Row, useUser } from "./shared";
 import type { WorkspaceConfig } from "../../../packages/contracts/src/personal-workspace";
 import "./personal-workspace.css";
 import { PersonalWorkspaceContent } from "./personal-workspace-content";
 import { WorkspaceAI } from "./workspace-ai";
+import { PersonalSchedule } from "./personal-schedule";
 
 export function PersonalWorkspacePage() {
   const user = useUser(),
@@ -52,6 +61,7 @@ export function PersonalWorkspacePage() {
         shortcuts: workspace.shortcuts,
         note: workspace.note,
         todos: workspace.todos,
+        schedule: workspace.schedule || [],
       });
   }, [workspace]);
   useEffect(() => {
@@ -110,22 +120,49 @@ export function PersonalWorkspacePage() {
   }).format(new Date());
   const incomplete = draft?.todos.filter((t) => !t.done) || [],
     overdue = incomplete.filter((t) => t.dueDate && t.dueDate < today);
+  const toolIcons: Record<string, React.ReactNode> = {
+    analytics: <BarChartOutlined />,
+    competitors: <BarChartOutlined />,
+    products: <AppstoreOutlined />,
+    selection: <FileTextOutlined />,
+    inventory: <InboxOutlined />,
+    projects: <TeamOutlined />,
+    tables: <AppstoreOutlined />,
+  };
   return (
     <div className="personal-workspace">
-      <Header
-        title="我的工作台"
-        subtitle="AI 助手、常用工具与个人事项"
-        extra={
-          <Space>
-            <span className="secondary" role="status">
-              {dirty
-                ? "有未保存的更改"
-                : workspace?.updatedAt
-                  ? "已保存"
-                  : "角色默认工作台"}
+      <header className="personal-welcome">
+        <div>
+          <div className="personal-eyebrow">
+            YOUR WORKSPACE <span>/</span> 我的工作台
+          </div>
+          <h1>
+            {user.displayName}，欢迎回来
+            <span className="welcome-star" aria-hidden>
+              ✦
             </span>
+          </h1>
+          <p>聚焦今天的重要事项，余下的交给你的助理。</p>
+        </div>
+        <div className="personal-welcome-actions">
+          <span className="workspace-date">
+            <CalendarOutlined aria-hidden />{" "}
+            {new Intl.DateTimeFormat("zh-CN", {
+              timeZone: "Asia/Shanghai",
+              month: "long",
+              day: "numeric",
+              weekday: "long",
+            }).format(new Date())}
+          </span>
+          <Space wrap>
+            {dirty && (
+              <span className="personal-unsaved" role="status">
+                有未保存的更改
+              </span>
+            )}
             <Button
               type="primary"
+              icon={<SaveOutlined aria-hidden />}
               onClick={save}
               loading={busy}
               disabled={!draft || !dirty}
@@ -133,42 +170,42 @@ export function PersonalWorkspacePage() {
               保存工作台
             </Button>
           </Space>
-        }
-      />
+        </div>
+      </header>
       <QueryState error={q.error} reload={() => q.refetch()} />
       {q.isLoading && <Spin />}
       {draft && workspace && (
         <>
-          <section className="personal-welcome">
-            <div>
-              <Tag icon={<LockOutlined />}>个人空间</Tag>
-              <h2>{user.displayName}，开始今天的工作</h2>
-              <p>
-                {workspace.defaults.name} · {workspace.defaults.description}
-              </p>
-            </div>
-            <div className="personal-counts">
-              <div>
-                <strong>{incomplete.length}</strong>
-                <span>待完成</span>
-              </div>
-              <div>
-                <strong>{overdue.length}</strong>
-                <span>已逾期</span>
-              </div>
-              <div>
-                <strong>{draft.shortcuts.length}</strong>
-                <span>常用工具</span>
-              </div>
-            </div>
-          </section>
-          <WorkspaceAI />
           <div className="personal-workspace-body">
             <div className="personal-workspace-main">
+              <WorkspaceAI
+                available={available}
+                schedule={draft.schedule || []}
+                onSchedule={(event) => {
+                  if (
+                    (draft.schedule || []).some(
+                      (existing) => existing.id === event.id,
+                    )
+                  )
+                    return;
+                  change({
+                    ...draft,
+                    schedule: [...(draft.schedule || []), event],
+                  });
+                }}
+              />
               <Card
-                title="常用工具"
+                className="personal-tools-panel"
+                title={
+                  <span>
+                    <AppstoreOutlined aria-hidden /> 常用工具{" "}
+                    <small>{draft.shortcuts.length}</small>
+                  </span>
+                }
                 extra={
                   <Button
+                    type="text"
+                    size="small"
                     icon={<SettingOutlined />}
                     disabled={busy}
                     onClick={() => {
@@ -186,14 +223,19 @@ export function PersonalWorkspacePage() {
                     return (
                       tool && (
                         <Link key={id} to={tool.path} className="personal-tool">
-                          <span className="personal-tool-group">
-                            {tool.group}
+                          <span
+                            className={`personal-tool-icon personal-tool-icon-${tool.group}`}
+                          >
+                            {toolIcons[id] || <AppstoreOutlined />}
                           </span>
                           <div>
                             <strong>{tool.title}</strong>
                             <p>{tool.description}</p>
                           </div>
-                          <ArrowRightOutlined aria-hidden="true" />
+                          <ArrowRightOutlined
+                            aria-hidden="true"
+                            className="personal-tool-arrow"
+                          />
                         </Link>
                       )
                     );
@@ -209,12 +251,22 @@ export function PersonalWorkspacePage() {
               <PersonalWorkspaceContent />
             </div>
             <div className="personal-lower">
+              <PersonalSchedule
+                events={draft.schedule || []}
+                today={today}
+                busy={busy}
+                onChange={(schedule) => change({ ...draft, schedule })}
+              />
               <Card
-                title="个人待办"
+                title={
+                  <span>
+                    <CheckOutlined aria-hidden /> 个人待办
+                  </span>
+                }
                 extra={
-                  <span className="secondary">
-                    {draft.todos.filter((t) => t.done).length} /{" "}
-                    {draft.todos.length} 已完成
+                  <span className="personal-todo-count">
+                    {incomplete.length} 待完成
+                    {overdue.length > 0 && <em> · {overdue.length} 逾期</em>}
                   </span>
                 }
               >
@@ -314,7 +366,7 @@ export function PersonalWorkspacePage() {
                   placeholder="记录工作思路、提醒或备忘…"
                   maxLength={4000}
                   showCount
-                  rows={9}
+                  rows={4}
                   disabled={busy}
                 />
                 <p className="secondary">
