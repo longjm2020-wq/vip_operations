@@ -152,17 +152,17 @@ test("单选、多选含斜杠的完整标签正确替换和保存", async ({ pa
   await expect(cell(page, "1", "custom:multiple").locator(".selection-choice-pill")).toHaveText([options[1], options[2]]);
 });
 
-test("ERP表格 Drawer Ctrl+H 支持标题和保存入口，替换待保存、撤销及移出前行", async ({ page }) => {
+test("颜色映射表格 Drawer Ctrl+H 支持标题和保存入口，替换待保存、撤销及移出前行", async ({ page }) => {
   const writes: string[] = [];
   await page.route("**/api/v1/**", async route => {
     const request = route.request(), path = new URL(request.url()).pathname;
     if (request.method() !== "GET") writes.push(path);
     let data: unknown = [];
-    if (path.endsWith("/auth/me")) data = { id: "101", displayName: "替换测试", csrfToken: "fixture", roleCodes: [], permissions: ["warehouse.read", "warehouse.manage"] };
-    if (path.endsWith("/warehouses")) data = [{ id: "1", code: "WARE-1", name: "棉质一仓", address: "", status: "ACTIVE" }, { id: "2", code: "WARE-2", name: "棉质二仓", address: "", status: "ACTIVE" }];
+    if (path.endsWith("/auth/me")) data = { id: "101", displayName: "替换测试", csrfToken: "fixture", roleCodes: [], permissions: ["product.read", "product.update"] };
+    if (path.endsWith("/color-mappings")) data = [{ id: "1", code: "001", name: "棉质一仓", address: "", status: "ACTIVE" }, { id: "2", code: "002", name: "棉质二仓", address: "", status: "ACTIVE" }];
     await route.fulfill({ json: { data, total: Array.isArray(data) ? data.length : undefined } });
   });
-  await page.goto("/warehouses");
+  await page.goto("/color-mappings");
   await page.getByRole("button", { name: "表格编辑 / Excel 导入", exact: true }).click();
   const sheet = page.locator(".sheet-workspace"), save = page.getByRole("button", { name: "保存表格", exact: true });
   await expect(save).toBeDisabled();
@@ -174,7 +174,7 @@ test("ERP表格 Drawer Ctrl+H 支持标题和保存入口，替换待保存、�
   await page.keyboard.press("Control+h");
   await expect(dialog).toBeVisible();
   await dialog.getByRole("button", { name: "关闭", exact: true }).click();
-  await sheet.getByRole("textbox", { name: "第1行 仓库名称", exact: true }).focus();
+  await sheet.getByRole("textbox", { name: "第1行 参考颜色名称", exact: true }).focus();
   await page.keyboard.press("Control+h");
   await expect(dialog).toBeVisible();
   await dialog.getByLabel("查找内容", { exact: true }).fill("棉质");
@@ -184,8 +184,8 @@ test("ERP表格 Drawer Ctrl+H 支持标题和保存入口，替换待保存、�
   await dialog.getByRole("button", { name: /全部替换$/ }).click();
   await confirmWholeTable(page);
   await expect(save).toBeEnabled();
-  await expect(sheet.getByRole("textbox", { name: "第1行 仓库名称", exact: true })).toHaveValue("麻质一仓");
-  await expect(sheet.getByRole("textbox", { name: "第2行 仓库名称", exact: true })).toHaveValue("麻质二仓");
+  await expect(sheet.getByRole("textbox", { name: "第1行 参考颜色名称", exact: true })).toHaveValue("麻质一仓");
+  await expect(sheet.getByRole("textbox", { name: "第2行 参考颜色名称", exact: true })).toHaveValue("麻质二仓");
   expect(writes).toEqual([]);
   await dialog.getByRole("button", { name: "关闭", exact: true }).click();
   await save.focus();
@@ -193,11 +193,11 @@ test("ERP表格 Drawer Ctrl+H 支持标题和保存入口，替换待保存、�
   await expect(dialog).toBeVisible();
   await dialog.getByRole("button", { name: "关闭", exact: true }).click();
   await sheet.getByRole("button", { name: "撤销", exact: true }).click();
-  await expect(sheet.getByRole("textbox", { name: "第1行 仓库名称", exact: true })).toHaveValue("棉质一仓");
-  await expect(sheet.getByRole("textbox", { name: "第2行 仓库名称", exact: true })).toHaveValue("棉质二仓");
+  await expect(sheet.getByRole("textbox", { name: "第1行 参考颜色名称", exact: true })).toHaveValue("棉质一仓");
+  await expect(sheet.getByRole("textbox", { name: "第2行 参考颜色名称", exact: true })).toHaveValue("棉质二仓");
   expect(writes).toEqual([]);
 
-  await sheet.getByRole("textbox", { name: "第2行 仓库名称", exact: true }).focus();
+  await sheet.getByRole("textbox", { name: "第2行 参考颜色名称", exact: true }).focus();
   await page.keyboard.press("Control+h");
   await dialog.getByLabel("查找内容", { exact: true }).fill("棉质");
   await dialog.getByLabel("替换为", { exact: true }).fill("丝质");
@@ -207,13 +207,13 @@ test("ERP表格 Drawer Ctrl+H 支持标题和保存入口，替换待保存、�
   await expect(dialog.getByRole("status")).toContainText("找到 1 个匹配单元格");
   await sheet.getByRole("checkbox", { name: "选择第1行", exact: true }).check();
   await sheet.getByRole("button", { name: "移出选中行", exact: true }).click();
-  await expect(sheet.getByRole("textbox", { name: "第1行 仓库名称", exact: true })).toHaveValue("棉质二仓");
-  await sheet.getByRole("textbox", { name: "第1行 仓库名称", exact: true }).focus();
+  await expect(sheet.getByRole("textbox", { name: "第1行 参考颜色名称", exact: true })).toHaveValue("棉质二仓");
+  await sheet.getByRole("textbox", { name: "第1行 参考颜色名称", exact: true }).focus();
   await page.keyboard.press("Control+h");
   await expect(dialog.getByText("打开时的选区", { exact: true })).toBeVisible();
   await expect(dialog.getByRole("status")).toContainText("找到 1 个匹配单元格");
   await dialog.getByRole("button", { name: /全部替换$/ }).click();
-  await expect(sheet.getByRole("textbox", { name: "第1行 仓库名称", exact: true })).toHaveValue("丝质二仓");
+  await expect(sheet.getByRole("textbox", { name: "第1行 参考颜色名称", exact: true })).toHaveValue("丝质二仓");
   expect(writes).toEqual([]);
 });
 

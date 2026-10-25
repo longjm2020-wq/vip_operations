@@ -42,300 +42,14 @@ async function create(
   await expect(page.getByText("已保存", { exact: true })).toBeVisible();
   await expect(page.getByRole("dialog")).toHaveCount(0);
 }
-async function select(page: Page, label: string, value: string) {
-  await page.getByLabel(label, { exact: true }).click();
-  if (["颜色代码", "尺码代码"].includes(label))
-    await page.getByLabel(label, { exact: true }).fill(value);
-  await page.getByTitle(value, { exact: true }).last().click();
-}
-test("真实前后端：建档、采购确认、两次入库、流水追溯", async ({ page }) => {
-  test.setTimeout(120_000);
-  await login(page);
-  await create(page, "/suppliers", {
-    供应商编码: "E2E-SUP",
-    供应商名称: "验收服饰供应商",
-  });
-  await create(page, "/warehouses", { 仓库编码: "E2E-WH", 仓库名称: "验收仓" });
-  await create(page, "/categories", { 品类编码: "E2E-CAT", 名称: "针织衫" });
-  await page.goto("/products");
-  await expect(
-    page.getByRole("table", { name: "商品档案在线智能表格" }),
-  ).toBeVisible();
-  await page.getByRole("button", { name: /添加一行$/ }).click();
-  const archiveRow = page.locator("tr[data-selection-row]").last();
-  const saved = (key: string, value?: string) =>
-    page.waitForResponse((response) => {
-      const request = response.request();
-      if (
-        !/^\/api\/v1\/style-selections(?:\/\d+)?$/.test(
-          new URL(response.url()).pathname,
-        ) ||
-        !["POST", "PATCH"].includes(request.method()) ||
-        !response.ok()
-      )
-        return false;
-      const body = request.postDataJSON();
-      const written = key.startsWith("custom:")
-        ? body.extraFields?.[key]
-        : body[key];
-      return value === undefined ? !!written : written === value;
-    });
-  for (const [key, label, value] of [
-    ["xutiStyleNo", "款号", "E2E-STYLE"],
-    ["custom:product:name", "商品名称", "秋季针织开衫"],
-  ]) {
-    const pendingSave = saved(key, value);
-    await archiveRow
-      .getByRole("textbox", { name: label, exact: true })
-      .fill(value);
-    await pendingSave;
-  }
-  for (const [key, label, value] of [
-    ["custom:product:categoryId", "三级分类", "针织衫"],
-    ["custom:product:defaultSupplierId", "默认供应商", "验收服饰供应商"],
-  ]) {
-    const pendingSave = saved(key);
-    await archiveRow
-      .getByRole("combobox", { name: label, exact: true })
-      .click();
-    await page
-      .locator(".ant-select-dropdown:visible")
-      .getByText(value, { exact: true })
-      .click();
-    await pendingSave;
-  }
-  await page.reload();
-  const restoredProduct = page
-    .getByRole("row")
-    .filter({
-      has: page.getByRole("checkbox", { name: "选择 E2E-STYLE", exact: true }),
-    });
-  await expect(
-    restoredProduct.getByRole("textbox", { name: "商品名称", exact: true }),
-  ).toHaveValue("秋季针织开衫");
-  await expect(
-    restoredProduct.getByRole("link", { name: "↗", exact: true }),
-  ).toHaveAttribute("href", /^\/products\/\d+$/);
-  await page.goto("/skus");
-  await page.getByRole("button", { name: "新建资料" }).click();
-  await select(page, "所属商品", "秋季针织开衫");
-  await select(page, "颜色代码", "001 · 黑色");
-  await select(page, "尺码代码", "004 · L");
-  for (const [label, value] of Object.entries({
-    "SKU 编码": "E2E-BK-L",
-    颜色名称: "黑色",
-    尺码名称: "L",
-  }))
-    await page.getByLabel(label, { exact: true }).fill(value);
-  await page.getByRole("button", { name: "保存", exact: true }).click();
-  await expect(
-    page.getByRole("cell", { name: "E2E-BK-L", exact: true }),
-  ).toBeVisible();
-  await page.goto("/purchase-orders/new");
-  await select(page, "供应商", "验收服饰供应商");
-  await select(page, "目标仓库", "验收仓");
-  await select(page, "SKU", "E2E-BK-L");
-  await page.getByLabel("采购数量", { exact: true }).fill("99");
-  await page.getByLabel("单价", { exact: true }).fill("78");
-  await page.getByRole("button", { name: "保存草稿", exact: true }).click();
-  await expect(page.getByRole("button", { name: "提交采购" })).toBeVisible();
-  await page.getByRole("button", { name: "编辑单据", exact: true }).click();
-  await page
-    .getByRole("dialog")
-    .getByLabel("采购数量", { exact: true })
-    .fill("100");
-  await page.getByRole("button", { name: "保存修改", exact: true }).click();
-  await expect(page.getByRole("dialog")).toHaveCount(0);
-  await expect(
-    page.getByRole("cell", { name: "100", exact: true }).first(),
-  ).toBeVisible();
-  await page.getByRole("button", { name: "提交采购" }).click();
-  await page.getByRole("button", { name: "确定", exact: true }).click();
-  await expect(
-    page.getByRole("button", { name: "确认采购", exact: true }),
-  ).toBeVisible();
-  await page.getByRole("button", { name: "确认采购", exact: true }).click();
-  await page.getByRole("button", { name: "确定", exact: true }).click();
-  await expect(page.getByRole("button", { name: "创建入库单" })).toBeVisible();
-  const poUrl = page.url();
-  for (const quantity of [40, 60]) {
-    await page.goto(poUrl);
-    await page.getByRole("button", { name: "创建入库单" }).click();
-    await page
-      .getByRole("dialog")
-      .getByRole("spinbutton")
-      .fill(String(quantity));
-    await page.getByRole("button", { name: "保存入库草稿" }).click();
-    await page.getByRole("button", { name: "确认到货", exact: true }).click();
-    await page.getByRole("button", { name: "确定", exact: true }).click();
-    await expect(
-      page.getByRole("button", { name: "核对并过账" }),
-    ).toBeVisible();
-    await page.getByRole("button", { name: "核对并过账" }).click();
-    await page.getByRole("button", { name: "确定", exact: true }).click();
-    await expect(
-      page.getByRole("link", { name: "查看库存流水" }),
-    ).toBeVisible();
-  }
-  await page.goto(poUrl);
-  await expect(page.getByText("已完成", { exact: true }).first()).toBeVisible();
-  await page.goto("/operations/vip/inventory");
-  const inventorySearch = page.getByRole("textbox", { name: "商品编码 / 货号 / 款号 / 条码", exact: true });
-  await inventorySearch.fill("E2E-BK-L");
-  await inventorySearch.press("Enter");
-  await expect(
-    page.getByRole("row").filter({ hasText: "E2E-BK-L" }),
-  ).toContainText("100");
-  await page.screenshot({
-    path: ".local/inventory-preview.png",
-    fullPage: true,
-    animations: "disabled",
-  });
-  await page.goto("/inventory/transactions");
-  await expect(page.getByRole("cell", { name: "原到货入库" })).toHaveCount(2);
-  await page.goto("/audit-logs");
-  await expect(
-    page.getByRole("cell", { name: "RECEIPT_POST" }).first(),
-  ).toBeVisible();
-});
-test("未知销量明确跳过建议，并可退出登录", async ({ page }) => {
-  await login(page);
-  await page.goto("/purchase-suggestions");
-  await page.getByRole("button", { name: "生成建议", exact: true }).click();
-  await select(page, "SKU", "E2E-BK-L");
-  await page.getByLabel("目标库存天数（需明确填写）").fill("21");
-  await page.getByRole("button", { name: "确定", exact: true }).click();
-  await expect(page.getByText(/SKU \d+：暂无完整销售数据/)).toBeVisible();
-  await page.getByRole("button", { name: "取消", exact: true }).click();
-  await page.getByRole("button", { name: /账号菜单/ }).click();
-  await page.getByRole("menuitem", { name: "退出登录" }).click();
-  await expect(page.getByRole("button", { name: "进入工作台" })).toBeVisible();
-});
-
-test("Excel建档、在线编辑、多行粘贴与失败行重试", async ({ page }) => {
-  await login(page);
-  await page.goto("/brands");
-  await page
-    .getByRole("button", { name: "表格编辑 / Excel 导入", exact: true })
-    .click();
-  const book = new Workbook(),
-    sheet = book.addWorksheet("品牌");
-  sheet.addRow(["品牌编码", "名称"]);
-  sheet.addRow(["0001", "表格测试品牌"]);
-  await page.locator('input[type="file"]').setInputFiles({
-    name: "brands.xlsx",
-    mimeType:
-      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    buffer: Buffer.from(await book.xlsx.writeBuffer()),
-  });
-  await page
-    .getByRole("button", { name: "载入待保存表格", exact: true })
-    .click();
-  await expect(page.getByLabel("第1行 品牌编码", { exact: true })).toHaveValue(
-    "0001",
-  );
-  await page.getByLabel("第1行 名称", { exact: true }).fill("导入后在线修改");
-  await page.getByRole("button", { name: "保存表格", exact: true }).click();
-  await expect(page.getByText(/保存成功 1 行，失败 0 行/)).toBeVisible();
-  await page.keyboard.press("Escape");
-  await expect(
-    page.getByRole("cell", { name: "导入后在线修改", exact: true }),
-  ).toBeVisible();
-  await page
-    .getByRole("button", { name: "表格编辑 / Excel 导入", exact: true })
-    .click();
-  await page.getByLabel("第1行 名称", { exact: true }).fill("批量修改已存品牌");
-  await page.getByRole("button", { name: "添加行", exact: true }).click();
-  await page.getByLabel("第2行 品牌编码", { exact: true }).evaluate((el) => {
-    const clipboardData = new DataTransfer();
-    clipboardData.setData("text/plain", "0002\t粘贴品牌\n0001\t重复编码");
-    el.dispatchEvent(
-      new ClipboardEvent("paste", {
-        bubbles: true,
-        cancelable: true,
-        clipboardData,
-      }),
-    );
-  });
-  await page.getByRole("button", { name: "保存表格", exact: true }).click();
-  await expect(page.getByText(/保存成功 2 行，失败 1 行/)).toBeVisible();
-  await expect(page.getByLabel("第1行 品牌编码", { exact: true })).toHaveValue(
-    "0001",
-  );
-  await page.getByLabel("第1行 品牌编码", { exact: true }).fill("0003");
-  await page.getByRole("button", { name: "保存表格", exact: true }).click();
-  await expect(page.getByText(/保存成功 1 行，失败 0 行/)).toBeVisible();
-  await page.keyboard.press("Escape");
-  await expect(
-    page.getByRole("cell", { name: "0002", exact: true }),
-  ).toHaveCount(1);
-  await expect(
-    page.getByRole("cell", { name: "0003", exact: true }),
-  ).toHaveCount(1);
-  await page.screenshot({
-    path: ".local/spreadsheet-brands.png",
-    fullPage: true,
-  });
-});
-
-test("采购明细可切换表格并保存真实草稿", async ({ page }) => {
-  await login(page);
-  await page.goto("/purchase-orders/new");
-  await select(page, "供应商", "验收服饰供应商");
-  await select(page, "目标仓库", "验收仓");
-  await page
-    .getByRole("button", { name: "表格录入 / Excel 导入", exact: true })
-    .click();
-  await page.getByLabel("第1行 SKU", { exact: true }).fill("E2E-BK-L");
-  await page.getByLabel("第1行 采购数量", { exact: true }).fill("12");
-  await page.getByLabel("第1行 单价", { exact: true }).fill("9.80");
-  await page.getByRole("button", { name: "保存草稿", exact: true }).click();
-  await expect(
-    page.getByRole("button", { name: "提交采购", exact: true }),
-  ).toBeVisible();
-  await expect(
-    page.getByRole("cell", { name: "12", exact: true }).first(),
-  ).toBeVisible();
-  await page.getByRole("button", { name: "编辑单据", exact: true }).click();
-  await page
-    .getByRole("button", { name: "表格录入 / Excel 导入", exact: true })
-    .click();
-  await page.getByLabel("第1行 采购数量", { exact: true }).fill("13");
-  await page.getByRole("button", { name: "切换逐条填写", exact: true }).click();
-  await expect(page.getByLabel("采购数量", { exact: true })).toHaveValue("13");
-  await page.getByRole("button", { name: "保存修改", exact: true }).click();
-  await expect(page.getByRole("dialog")).toHaveCount(0);
-  for (const name of ["提交采购", "确认采购"]) {
-    await page.getByRole("button", { name, exact: true }).click();
-    await page.getByRole("button", { name: "确定", exact: true }).click();
-  }
-  await page.getByRole("button", { name: "创建入库单", exact: true }).click();
-  await page
-    .getByRole("button", { name: "表格录入 / Excel 导入", exact: true })
-    .click();
-  await expect(page.getByLabel("第1行 SKU", { exact: true })).toHaveAttribute(
-    "readonly",
-    "",
-  );
-  await page.getByLabel("第1行 本次合格到货", { exact: true }).fill("13");
-  await page.getByRole("button", { name: "保存入库草稿", exact: true }).click();
-  await page.getByRole("button", { name: "编辑单据", exact: true }).click();
-  await page
-    .getByRole("button", { name: "表格录入 / Excel 导入", exact: true })
-    .click();
-  await page.getByLabel("第1行 本次到货", { exact: true }).fill("12");
-  await page.getByLabel("第1行 合格", { exact: true }).fill("12");
-  await page.getByRole("button", { name: "保存修改", exact: true }).click();
-  await expect(page.getByRole("dialog")).toHaveCount(0);
-  await page.getByRole("button", { name: "确认到货", exact: true }).click();
-  await page.getByRole("button", { name: "确定", exact: true }).click();
-  await page.getByRole("button", { name: "核对并过账", exact: true }).click();
-  await page.getByRole("button", { name: "确定", exact: true }).click();
-  await expect(page.getByRole("link", { name: "查看库存流水" })).toBeVisible();
-});
-
 test("小卡片 Excel 库存导入，网络重试不重复增加库存", async ({ page }) => {
   await login(page);
+  const me = (await (await page.request.get("/api/v1/auth/me")).json()).data;
+  const warehouse = await page.request.post("/api/v1/warehouses", {
+    headers: { "X-CSRF-Token": me.csrfToken, "Idempotency-Key": crypto.randomUUID(), Origin: new URL(page.url()).origin },
+    data: { code: "RETRY-E2E", name: "导入重试验收仓" },
+  });
+  expect(warehouse.ok()).toBeTruthy();
   let loseResponse = true;
   await page.route(
     "**/api/v1/inventory/fulfilment/import-batch",
@@ -352,8 +66,8 @@ test("小卡片 Excel 库存导入，网络重试不重复增加库存", async (
   await page.getByRole("button", { name: "导入", exact: true }).click();
   const book = new Workbook(),
     sheet = book.addWorksheet("数据");
-  sheet.addRow(["商品编码", "仓库", "变化数量", "原因", "说明"]);
-  sheet.addRow(["E2E-BK-L", "E2E-WH", 3, "人工调整", "导入盘点验收"]);
+  sheet.addRow(["商品编码", "款号", "颜色", "尺码", "仓库", "变化数量", "原因", "说明"]);
+  sheet.addRow(["RETRY-E2E-SKU", "RETRY-E2E-STYLE", "黑色", "L", "RETRY-E2E", 3, "人工调整", "导入盘点验收"]);
   await page.locator('.ant-modal input[type="file"]').setInputFiles({
     name: "库存调整.xlsx",
     mimeType:
@@ -375,13 +89,12 @@ test("小卡片 Excel 库存导入，网络重试不重复增加库存", async (
     .click();
   await expect(importDialog).not.toBeVisible();
   const inventorySearch = page.getByRole("textbox", { name: "商品编码 / 货号 / 款号 / 条码", exact: true });
-  await inventorySearch.fill("E2E-BK-L");
+  await inventorySearch.fill("RETRY-E2E-SKU");
   await inventorySearch.press("Enter");
   await expect(
-    page.getByRole("row").filter({ hasText: "E2E-BK-L" }),
-  ).toContainText("115");
-  await page.goto("/inventory/transactions");
-  await expect(
-    page.getByRole("cell", { name: "库存调整", exact: true }),
-  ).toBeVisible();
+    page.getByRole("row").filter({ hasText: "RETRY-E2E-SKU" }),
+  ).toContainText("3");
+  const balances = (await (await page.request.get("/api/v1/inventory?q=RETRY-E2E-SKU")).json()).data;
+  expect(balances).toHaveLength(1);
+  expect(Number(balances[0].physicalQty)).toBe(3);
 });

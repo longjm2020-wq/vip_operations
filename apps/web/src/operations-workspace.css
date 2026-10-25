@@ -1,6 +1,28 @@
 .operations-workspace .ant-tabs {
   margin-top: 18px;
 }
+.operations-integration-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  margin-left: 12px;
+  border: 1px solid #ecdccf;
+  border-radius: 6px;
+  background: #fff;
+  color: #927c70;
+  font-size: 18px;
+}
+.operations-integration-link:hover {
+  color: #d3540b;
+  background: #fff1e3;
+  border-color: #d3540b;
+}
+.operations-integration-link:focus-visible {
+  outline: 2px solid #d3540b;
+  outline-offset: 3px;
+}
 .operations-entry-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(260px, 340px));

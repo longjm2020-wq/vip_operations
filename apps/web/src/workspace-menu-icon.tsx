@@ -26,16 +26,6 @@ export function WorkspaceMenuIcon({
         </>
       );
       break;
-    case "/erp":
-      shape = (
-        <>
-          <rect x="3" y="3" width="7" height="7" rx="1" />
-          <rect x="14" y="3" width="7" height="7" rx="1" />
-          <rect x="3" y="14" width="7" height="7" rx="1" />
-          <rect x="14" y="14" width="7" height="7" rx="1" />
-        </>
-      );
-      break;
     case "/settings":
       shape = selected ? (
         <path

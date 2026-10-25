@@ -230,20 +230,22 @@ test("页面搜索与无关字段编辑弹窗中的 Ctrl+F/H 不被表格拦截"
   expect(await page.evaluate(() => (window as any).__findShortcutEvents)).toEqual([false, false, false, false]);
 });
 
-test("ERP 列选择与 Shift 点选区域替换保持待保存，Ctrl+F 可预填原生选中的文字", async ({ page }) => {
+test("SKU 列选择与 Shift 点选区域替换保持待保存，Ctrl+F 可预填原生选中的文字", async ({ page }) => {
   const writes: string[] = [];
   await page.route("**/api/v1/**", async route => {
     const request = route.request(), path = new URL(request.url()).pathname;
     if (request.method() !== "GET") writes.push(path);
     let data: unknown = [];
-    if (path.endsWith("/auth/me")) data = { id: "101", displayName: "ERP 查找测试", csrfToken: "fixture", roleCodes: [], permissions: ["warehouse.read", "warehouse.manage"] };
-    if (path.endsWith("/warehouses")) data = [1, 2, 3].map(id => ({ id: String(id), code: `WARE-${id}`, name: `棉质${id}仓`, address: `棉质${id}地址`, status: "ACTIVE" }));
+    if (path.endsWith("/auth/me")) data = { id: "101", displayName: "SKU 查找测试", csrfToken: "fixture", roleCodes: [], permissions: ["product.read", "product.update"] };
+    if (path.endsWith("/products/1")) data = { id: "1", name: "SKU 测试商品", styleNo: "STYLE-001", status: "ACTIVE" };
+    if (path.endsWith("/skus")) data = [1, 2, 3].map(id => ({ id: String(id), productId: "1", skuCode: `SKU-${id}`, colorCode: "001", sizeCode: "001", colorName: `棉质${id}仓`, sizeName: `棉质${id}地址`, status: "ACTIVE" }));
     await route.fulfill({ json: { data, total: Array.isArray(data) ? data.length : undefined } });
   });
-  await page.goto("/warehouses");
+  await page.goto("/products/1");
+  await page.getByRole("tab", { name: "SKU", exact: true }).click();
   await page.getByRole("button", { name: "表格编辑 / Excel 导入", exact: true }).click();
   const sheet = page.locator(".sheet-workspace"), dialog = findDialog(page);
-  const firstName = sheet.getByRole("textbox", { name: "第1行 仓库名称", exact: true });
+  const firstName = sheet.getByRole("textbox", { name: "第1行 颜色名称", exact: true });
   await firstName.focus();
   await firstName.press("Home");
   await firstName.press("Shift+ArrowRight");
@@ -252,7 +254,7 @@ test("ERP 列选择与 Shift 点选区域替换保持待保存，Ctrl+F 可预�
   await expect(dialog.getByRole("tab", { name: /查找/ })).toHaveAttribute("aria-selected", "true");
   await expect(dialog.getByLabel("查找内容", { exact: true })).toHaveValue("棉质");
   await dialog.getByRole("button", { name: "关闭", exact: true }).click();
-  await sheet.getByRole("columnheader", { name: "选择整列：仓库名称", exact: true }).click();
+  await sheet.getByRole("columnheader", { name: "选择整列：颜色名称", exact: true }).click();
   await page.keyboard.press("Control+h");
   await expect(dialog.getByText("打开时的选区", { exact: true })).toBeVisible();
   await dialog.getByLabel("查找内容", { exact: true }).fill("棉质");
@@ -261,13 +263,13 @@ test("ERP 列选择与 Shift 点选区域替换保持待保存，Ctrl+F 可预�
   await expect(dialog.getByRole("status")).toContainText("找到 3 个匹配单元格");
   await dialog.getByRole("button", { name: /全部替换$/ }).click();
   await expect(firstName).toHaveValue("麻质1仓");
-  await expect(sheet.getByRole("textbox", { name: "第3行 仓库名称", exact: true })).toHaveValue("麻质3仓");
-  await expect(sheet.getByRole("textbox", { name: "第1行 地址", exact: true })).toHaveValue("棉质1地址");
+  await expect(sheet.getByRole("textbox", { name: "第3行 颜色名称", exact: true })).toHaveValue("麻质3仓");
+  await expect(sheet.getByRole("textbox", { name: "第1行 尺码名称", exact: true })).toHaveValue("棉质1地址");
   await expect(page.getByRole("button", { name: "保存表格", exact: true })).toBeEnabled();
   await expect(confirmation(page)).toHaveCount(0);
   await dialog.getByRole("button", { name: "关闭", exact: true }).click();
   await firstName.click();
-  await sheet.getByRole("textbox", { name: "第2行 地址", exact: true }).click({ modifiers: ["Shift"] });
+  await sheet.getByRole("textbox", { name: "第2行 尺码名称", exact: true }).click({ modifiers: ["Shift"] });
   await page.keyboard.press("Control+h");
   await expect(dialog.getByText("打开时的选区", { exact: true })).toBeVisible();
   await dialog.getByLabel("查找内容", { exact: true }).fill("棉质");
@@ -275,8 +277,8 @@ test("ERP 列选择与 Shift 点选区域替换保持待保存，Ctrl+F 可预�
   await dialog.getByRole("button", { name: "查找全部", exact: true }).click();
   await expect(dialog.getByRole("status")).toContainText("找到 2 个匹配单元格");
   await dialog.getByRole("button", { name: /全部替换$/ }).click();
-  await expect(sheet.getByRole("textbox", { name: "第1行 地址", exact: true })).toHaveValue("丝质1地址");
-  await expect(sheet.getByRole("textbox", { name: "第2行 地址", exact: true })).toHaveValue("丝质2地址");
-  await expect(sheet.getByRole("textbox", { name: "第3行 地址", exact: true })).toHaveValue("棉质3地址");
+  await expect(sheet.getByRole("textbox", { name: "第1行 尺码名称", exact: true })).toHaveValue("丝质1地址");
+  await expect(sheet.getByRole("textbox", { name: "第2行 尺码名称", exact: true })).toHaveValue("丝质2地址");
+  await expect(sheet.getByRole("textbox", { name: "第3行 尺码名称", exact: true })).toHaveValue("棉质3地址");
   expect(writes).toEqual([]);
 });

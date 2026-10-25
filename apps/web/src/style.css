@@ -73,12 +73,6 @@ a {
   letter-spacing: 3px;
   margin-top: 2px;
 }
-.sidebar-label {
-  font-size: 10px;
-  letter-spacing: 2px;
-  color: #c2a38e;
-  margin: 8px 20px 6px;
-}
 .ant-menu-dark,
 .ant-menu-dark .ant-menu-sub {
   background: transparent !important;
@@ -95,11 +89,6 @@ a {
   color: #dec4ae;
   border-top: 1px solid #50362a;
   margin-top: 12px;
-}
-.sidebar-footer small {
-  display: block;
-  color: #bba18f;
-  margin-top: 8px;
 }
 .status-dot {
   display: inline-block;
@@ -347,9 +336,6 @@ a {
   font-size: 11px;
   padding: 8px 2px;
   letter-spacing: 1px;
-}
-.page-footer span {
-  letter-spacing: 3px;
 }
 
 .content:has(.selection-card, .sheet-workspace, .ant-table-wrapper) > .page-footer { display: none; }

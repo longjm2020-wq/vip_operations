@@ -15,7 +15,7 @@ test("shared search stays compact across page controls when a query exceeds the 
   await login(page);
   const longQuery = "QUERY-".repeat(20);
   for (const path of [
-    "/products", "/suppliers", "/analytics/compass", "/analytics/competitors",
+    "/products", "/analytics/compass", "/analytics/competitors",
     "/operations/vip/inventory", "/supply/catalog", "/supply/procurement", "/help", "/style-selections",
   ]) {
     await page.goto(path);
@@ -75,21 +75,21 @@ test("compact batch search preserves every line and scrolls inside the unchanged
 
 test("explicit search keeps Enter, search icon and clear behavior after editing the visible query", async ({ page }) => {
   await login(page);
-  await page.route("**/api/v1/suppliers?*", route => {
+  await page.route("**/api/v1/color-mappings?*", route => {
     const query = new URL(route.request().url()).searchParams.get("q");
-    return route.fulfill({ json: { data: [{ id: "search-result", code: "SEARCH-RESULT", name: query ? `Search matches: ${query}` : "All suppliers", status: "ACTIVE" }], total: 1 } });
+    return route.fulfill({ json: { data: [{ id: "search-result", code: "001", name: query ? `Search matches: ${query}` : "All colors", status: "ACTIVE" }], total: 1 } });
   });
-  await page.goto("/suppliers");
+  await page.goto("/color-mappings");
   const host = searchHost(page), input = host.getByRole("textbox");
   await expect(input).toBeVisible();
   const result = (name: string) => page.getByRole("cell", { name, exact: true });
-  await expect(result("All suppliers")).toBeVisible();
+  await expect(result("All colors")).toBeVisible();
   const requestedQuery = (query: string) => page.waitForRequest(request => {
     const url = new URL(request.url());
-    return url.pathname === "/api/v1/suppliers" && (url.searchParams.get("q") || "") === query;
+    return url.pathname === "/api/v1/color-mappings" && (url.searchParams.get("q") || "") === query;
   });
   await input.fill("SEARCH-A");
-  await expect(result("All suppliers")).toBeVisible();
+  await expect(result("All colors")).toBeVisible();
   const enter = requestedQuery("SEARCH-A");
   await input.press("Enter");
   await enter;
@@ -103,5 +103,5 @@ test("explicit search keeps Enter, search icon and clear behavior after editing 
   await host.locator(".ant-input-clear-icon").click();
   await expect(input).toHaveValue("");
   // Clearing may immediately restore the fresh cached unfiltered response.
-  await expect(result("All suppliers")).toBeVisible();
+  await expect(result("All colors")).toBeVisible();
 });

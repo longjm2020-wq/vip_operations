@@ -1,4 +1,4 @@
-import { Card, Empty, Tabs } from "antd";
+import { Card, Empty, Tabs, Tooltip } from "antd";
 import {
   BarChartOutlined,
   DatabaseOutlined,
@@ -6,6 +6,7 @@ import {
   ArrowRightOutlined,
   FundProjectionScreenOutlined,
   InboxOutlined,
+  ApiOutlined,
 } from "@ant-design/icons";
 import { Link, useSearchParams } from "react-router-dom";
 import { Header, useCan } from "./shared";
@@ -26,7 +27,8 @@ export function OperationsWorkspacePage() {
     analytics = useCan("analytics.read"),
     selection = useCan("selection.read"),
     products = useCan("product.read"),
-    inventory = useCan("inventory.read");
+    inventory = useCan("inventory.read"),
+    vipSettings = useCan("vip.settings");
   const platform = platforms.some((p) => p.key === params.get("platform"))
     ? params.get("platform")!
     : "vip";
@@ -75,6 +77,17 @@ export function OperationsWorkspacePage() {
         activeKey={platform}
         onChange={(key) => setParams({ platform: key })}
         items={platforms}
+        tabBarExtraContent={platform === "vip" && vipSettings ? (
+          <Tooltip title="唯品会接入">
+            <Link
+              to="/operations/vip/integration"
+              aria-label="唯品会接入"
+              className="operations-integration-link"
+            >
+              <ApiOutlined aria-hidden="true" />
+            </Link>
+          </Tooltip>
+        ) : undefined}
       />
       {platform === "vip" && entries.length ? (
         <div className="operations-entry-grid">
@@ -107,7 +120,7 @@ export function OperationsWorkspacePage() {
             image={Empty.PRESENTED_IMAGE_SIMPLE}
             description={
               platform === "vip"
-                ? "暂无可访问的功能，请联系管理员配置权限"
+                ? vipSettings ? "通过右上角 API 图标管理唯品会接入" : "暂无可访问的功能，请联系管理员配置权限"
                 : "暂无已配置功能入口"
             }
           />

@@ -27,7 +27,7 @@ test("罗盘导入、日期区间、五种明细视图、维度下钻与邮件�
     sidebar.locator(
       ".ant-menu-root > .ant-menu-item, .ant-menu-root > .ant-menu-submenu > .ant-menu-submenu-title",
     ),
-  ).toHaveText(["运营中心", "项目协作", "ERP系统", "供应链端", "系统设置"]);
+  ).toHaveText(["运营中心", "项目协作", "供应链端", "系统设置"]);
   await expect(
     page
       .locator(".topbar")

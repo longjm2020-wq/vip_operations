@@ -40,11 +40,9 @@ import zhCN from "antd/locale/zh_CN";
 import {
   AppstoreOutlined,
   InboxOutlined,
-  ShoppingCartOutlined,
   DatabaseOutlined,
   TeamOutlined,
   SettingOutlined,
-  AuditOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
   ArrowLeftOutlined,
@@ -55,16 +53,9 @@ import { UserContext, Row } from "./shared";
 import { PageSearchContext } from "./page-search";
 import { AccountMenu } from "./account-menu";
 import { WorkspaceMenuIcon } from "./workspace-menu-icon";
-const MasterPage = React.lazy(() => import("./master").then(module => ({ default: module.MasterPage })));
 const ColorSizeMappings = React.lazy(() => import("./color-size-mappings").then(module => ({ default: module.ColorSizeMappings })));
 const ProductArchive = React.lazy(() => import("./product-archive").then(module => ({ default: module.ProductArchive })));
-const InventoryPage = React.lazy(() => import("./operations").then(module => ({ default: module.InventoryPage })));
 const InventoryDetailsPage = React.lazy(() => import("./operations").then(module => ({ default: module.InventoryDetailsPage })));
-const TransactionsPage = React.lazy(() => import("./operations").then(module => ({ default: module.TransactionsPage })));
-const PurchaseList = React.lazy(() => import("./operations").then(module => ({ default: module.PurchaseList })));
-const PurchaseNew = React.lazy(() => import("./operations").then(module => ({ default: module.PurchaseNew })));
-const DocumentDetail = React.lazy(() => import("./operations").then(module => ({ default: module.DocumentDetail })));
-const SuggestionsPage = React.lazy(() => import("./operations").then(module => ({ default: module.SuggestionsPage })));
 const ProductDetail = React.lazy(() => import("./operations").then(module => ({ default: module.ProductDetail })));
 const AccessPage = React.lazy(() => import("./system").then(module => ({ default: module.AccessPage })));
 const AuditPage = React.lazy(() => import("./system").then(module => ({ default: module.AuditPage })));
@@ -84,7 +75,6 @@ const SupplyProducts = React.lazy(() => import("./supply").then(module => ({ def
 const SupplyReview = React.lazy(() => import("./supply").then(module => ({ default: module.SupplyReview })));
 const SupplyOrders = React.lazy(() => import("./supply-orders").then(module => ({ default: module.SupplyOrders })));
 const SupplyStatements = React.lazy(() => import("./supply-statements").then(module => ({ default: module.SupplyStatements })));
-const coreFeatureSummary = "经营分析与竞品采集分享 · 服务器报表更新 · 采购库存 · 协作表格与 AI 商品资料 · 唯品会/聚水潭建档导出 · 订单对账";
 const useUi = create<{ collapsed: boolean; toggle: () => void }>((set) => ({
   collapsed: false,
   toggle: () => set((s) => ({ collapsed: !s.collapsed })),
@@ -210,46 +200,10 @@ function Workspace({ user }: { user: Row }) {
       permission: "product.read",
     },
     {
-      key: "/inventory",
-      label: "库存管理",
-      icon: <InboxOutlined />,
-      permission: "inventory.read",
-    },
-    {
-      key: "/inventory/transactions",
-      label: "库存流水",
-      icon: <AuditOutlined />,
-      permission: "inventory.read",
-    },
-    {
-      key: "/purchase-suggestions",
-      label: "采购建议",
-      icon: <ShoppingCartOutlined />,
-      permission: "purchase.read",
-    },
-    {
       key: "/style-selections",
       label: "选款登记",
       icon: <DatabaseOutlined />,
       permission: "selection.read",
-    },
-    {
-      key: "/purchase-orders",
-      label: "采购订单",
-      icon: <ShoppingCartOutlined />,
-      permission: "purchase.read",
-    },
-    {
-      key: "/receipts",
-      label: "到货入库",
-      icon: <InboxOutlined />,
-      permission: "receipt.read",
-    },
-    {
-      key: "/suppliers",
-      label: "供应商",
-      icon: <TeamOutlined />,
-      permission: "supplier.read",
     },
     {
       key: "/project-management",
@@ -266,20 +220,16 @@ function Workspace({ user }: { user: Row }) {
       label: "系统设置",
       icon: <SettingOutlined />,
       children: [
-        { key: "/warehouses", label: "仓库", permission: "warehouse.read" },
-        { key: "/categories", label: "品类", permission: "product.read" },
-        { key: "/brands", label: "品牌", permission: "product.read" },
         { key: "/users", label: "用户", permission: "user.read" },
         { key: "/roles", label: "角色权限", permission: "role.read" },
         { key: "/audit-logs", label: "操作日志", permission: "audit.read" },
         ...(user.roleCodes?.includes("SUPER_ADMIN") ? [{ key: "/settings/ai", label: "AI 模型设置", permission: "analytics.manage" }] : []),
-        { key: "/vip", label: "唯品会接入", permission: "vip.settings" },
       ],
     },
   ];
+  originalItems.push({ key: "/operations/vip/integration", label: "唯品会接入", icon: <SettingOutlined />, permission: "vip.settings" });
   const settings = originalItems.find((i) => i.key === "/settings")!;
-  const adminKeys = ["/users", "/roles", "/audit-logs", "/settings/ai"];
-  const operationKeys = ["/analytics/compass", "/analytics/competitors", "/style-selections", "/products", "/operations/vip/inventory"];
+  const operationKeys = ["/analytics/compass", "/analytics/competitors", "/style-selections", "/products", "/operations/vip/inventory", "/operations/vip/integration"];
   const items = [
     ...(operationKeys.some((key) =>
       user.permissions.includes(originalItems.find((i) => i.key === key)!.permission!),
@@ -293,15 +243,6 @@ function Workspace({ user }: { user: Row }) {
         }]
       : []),
     originalItems.find((i) => i.key === "/project-management")!,
-    {
-      key: "/erp",
-      label: "ERP系统",
-      icon: <AppstoreOutlined />,
-      children: [
-        ...originalItems.filter((i) => !i.children && !operationKeys.includes(i.key)),
-        ...settings.children!.filter((i) => !adminKeys.includes(i.key)),
-      ],
-    },
     {
       key: "/supply",
       label: "供应链端",
@@ -353,10 +294,7 @@ function Workspace({ user }: { user: Row }) {
         },
       ],
     },
-    {
-      ...settings,
-      children: settings.children!.filter((i) => adminKeys.includes(i.key)),
-    },
+    settings,
   ];
   const visibleItems = items
     .filter((i) => !i.permission || user.permissions.includes(i.permission))
@@ -395,6 +333,8 @@ function Workspace({ user }: { user: Row }) {
       ? "商品档案"
     : location.pathname.startsWith("/operations/vip/inventory")
       ? "库存明细"
+    : location.pathname.startsWith("/operations/vip/integration")
+      ? "唯品会接入"
       : undefined;
   const menu = visibleItems.map((item) => {
     const children = item.children?.map((child) => ({
@@ -444,7 +384,6 @@ function Workspace({ user }: { user: Row }) {
           >
             <BrandMark collapsed={ui.collapsed} />
           </Link>
-          {!ui.collapsed && <div className="sidebar-label">工作区</div>}
           <Menu
             mode="inline"
             theme="dark"
@@ -460,8 +399,6 @@ function Workspace({ user }: { user: Row }) {
               {user.roleCodes?.includes("SUPPLIER")
                 ? "序缇供应链后台"
                 : "内部管理系统"}
-              <br />
-              <small>{coreFeatureSummary}</small>
             </div>
           )}
         </Layout.Sider>
@@ -544,26 +481,7 @@ function Workspace({ user }: { user: Row }) {
               <Route path="/operations" element={<OperationsWorkspacePage />} />
               <Route path="/operations/vip/inventory" element={<InventoryDetailsPage />} />
               <Route path="/products/:id" element={<ProductDetail />} />
-              <Route path="/purchase-orders/new" element={<PurchaseNew />} />
-              <Route path="/purchase-orders/:id" element={<DocumentDetail />} />
-              <Route
-                path="/receipts/:id"
-                element={<DocumentDetail receipt />}
-              />
-              {[
-                "products",
-                "skus",
-                "suppliers",
-                "warehouses",
-                "categories",
-                "brands",
-              ].map((r) => (
-                <Route
-                  key={r}
-                  path={"/" + r}
-                  element={r === "products" ? <ProductArchive key={user.id}/> : <MasterPage resource={r} />}
-                />
-              ))}
+              <Route path="/products" element={<ProductArchive key={user.id}/>} />
               <Route
                 path="/color-size-mappings"
                 element={<ColorSizeMappingsPage />}
@@ -580,26 +498,16 @@ function Workspace({ user }: { user: Row }) {
                   <Navigate to="/color-size-mappings?tab=size" replace />
                 }
               />
-              <Route path="/inventory" element={<InventoryPage />} />
               <Route path="/analytics/compass" element={<CompassAnalyticsPage />} />
               <Route path="/analytics/competitors" element={<CompetitorAnalysisPage />} />
-              <Route
-                path="/inventory/transactions"
-                element={<TransactionsPage />}
-              />
-              <Route path="/purchase-orders" element={<PurchaseList />} />
-              <Route path="/receipts" element={<PurchaseList receipt />} />
-              <Route
-                path="/purchase-suggestions"
-                element={<SuggestionsPage />}
-              />
               <Route path="/style-selections" element={<StyleSelectionsPage />} />
               <Route path="/project-tables" element={<ProjectTablesPage/>}/>
               <Route path="/project-tables/:id" element={<ProjectTablePage/>}/>
               <Route path="/users" element={<AccessPage />} />
               <Route path="/roles" element={<AccessPage roles />} />
               <Route path="/audit-logs" element={<AuditPage />} />
-              <Route path="/vip" element={<VipPage />} />
+              <Route path="/operations/vip/integration" element={<VipPage />} />
+              <Route path="/vip" element={<Navigate to="/operations/vip/integration" replace />} />
               <Route path="/sops" element={<SopPage />} />
               <Route path="/projects" element={<ProjectsPage />} />
               <Route path="/projects/:id" element={<ProjectDetailPage />} />
@@ -616,7 +524,7 @@ function Workspace({ user }: { user: Row }) {
               />
             </Routes>
             {!collaborationTable && <footer className="page-footer">
-              XUTI <span>{coreFeatureSummary}</span>
+              XUTI
             </footer>}
           </Layout.Content>
         </Layout>

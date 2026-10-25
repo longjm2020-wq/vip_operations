@@ -605,21 +605,21 @@ test("超级管理员从系统设置访问模型，侧栏收起图标及悬浮�
     expect(Math.abs(center - sidebar!.x - sidebar!.width / 2)).toBeLessThan(1);
   await page
     .locator(".sidebar .ant-menu-submenu-title")
-    .filter({ hasText: "ERP系统" })
+    .filter({ hasText: "项目协作" })
     .hover();
   const popup = page.locator(".workspace-menu-popup:visible");
   await expect(
-    popup.getByRole("link", { name: "库存管理", exact: true }),
+    popup.getByRole("link", { name: "新建SOP", exact: true }),
   ).toBeVisible();
   await expect(popup.locator(".workspace-menu-popup-heading")).toHaveText(
-    "ERP系统",
+    "项目协作",
   );
   await expect(popup.locator(".ant-menu")).toHaveCSS(
     "background-color",
     "rgb(255, 252, 248)",
   );
   await expect(
-    popup.getByRole("link", { name: "库存管理", exact: true }),
+    popup.getByRole("link", { name: "新建SOP", exact: true }),
   ).toHaveCSS("color", "rgb(89, 69, 58)");
   await page.mouse.move(1000, 500);
   await page
@@ -648,10 +648,10 @@ test("超级管理员从系统设置访问模型，侧栏收起图标及悬浮�
   await expect(page).toHaveURL(/\/operations$/);
   await page
     .locator(".sidebar .ant-menu-submenu-title")
-    .filter({ hasText: "ERP系统" })
+    .filter({ hasText: "项目协作" })
     .hover();
   await expect(
-    popup.getByRole("link", { name: "库存管理", exact: true }),
+    popup.getByRole("link", { name: "新建SOP", exact: true }),
   ).toBeVisible();
 });
 test("个人工作台保存待办备忘，自己的表格可公开且显示创建者", async ({

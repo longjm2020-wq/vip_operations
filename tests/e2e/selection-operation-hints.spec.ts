@@ -79,17 +79,17 @@ test("窄屏：点击提示图标即可查看说明，底栏持续可见", async
   }).toBe(true);
 });
 
-test("仓库 ERP 列表与批量表格：简洁提示保持显式保存流程", async ({ page }) => {
+test("颜色映射列表与批量表格：简洁提示保持显式保存流程", async ({ page }) => {
   const writes: string[] = [];
   await page.route("**/api/v1/**", async route => {
     const request = route.request(), path = new URL(request.url()).pathname;
     if (request.method() !== "GET") writes.push(path);
     let data: unknown = [];
-    if (path.endsWith("/auth/me")) data = { id: "101", displayName: "提示测试", csrfToken: "fixture", roleCodes: ["SUPER_ADMIN"], permissions: ["warehouse.read", "warehouse.manage"] };
-    if (path.endsWith("/warehouses")) data = [{ id: "1", code: "HINT-WAREHOUSE", name: "提示仓库", address: "", status: "ACTIVE" }];
+    if (path.endsWith("/auth/me")) data = { id: "101", displayName: "提示测试", csrfToken: "fixture", roleCodes: ["SUPER_ADMIN"], permissions: ["product.read", "product.update"] };
+    if (path.endsWith("/color-mappings")) data = [{ id: "1", code: "001", name: "提示仓库", address: "", status: "ACTIVE" }];
     await route.fulfill({ json: { data, total: Array.isArray(data) ? data.length : undefined } });
   });
-  await page.goto("/warehouses");
+  await page.goto("/color-mappings");
   await expect(page.getByRole("cell", { name: "提示仓库", exact: true })).toBeVisible();
   await expect(page.locator(".content > .page-footer")).toBeHidden();
   await page.getByRole("button", { name: "表格编辑 / Excel 导入", exact: true }).click();
@@ -107,7 +107,7 @@ test("仓库 ERP 列表与批量表格：简洁提示保持显式保存流程", 
   await expect(panel).toHaveCount(0);
   await trigger.click();
   await expect(panel).toContainText("修改后统一保存");
-  await page.getByRole("textbox", { name: "第1行 仓库名称", exact: true }).fill("修改待保存");
+  await page.getByRole("textbox", { name: "第1行 参考颜色名称", exact: true }).fill("修改待保存");
   await expect(save).toBeVisible();
   await expect(save).toBeEnabled();
   expect(writes).toEqual([]);

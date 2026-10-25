@@ -11,28 +11,20 @@ const moduleChapters: Record<string, string> = {
   "my-workspace": "32-personal-workspace",
   analytics: "30-compass-analytics",
   products: "02-products",
-  skus: "03-skus",
-  inventory: "04-inventory",
-  "purchase-suggestions": "06-suggestions",
   "style-selections": "27-style-selections",
-  "purchase-orders": "07-purchases",
-  receipts: "08-receipts",
-  suppliers: "09-suppliers",
   sops: "10-sop",
   projects: "11-projects",
   "project-tables": "28-project-tables",
-  warehouses: "12-warehouses",
-  categories: "13-categories",
   "color-size-mappings": "14-mappings",
   "color-mappings": "14-mappings",
   "size-mappings": "14-mappings",
-  brands: "15-brands",
   users: "16-users",
   roles: "17-roles",
   "audit-logs": "18-audit",
   vip: "19-vip",
 };
 export function manualHref(path: string) {
+  if (path.startsWith("/operations/vip/integration")) return "/help?chapter=19-vip.md";
   if (path.startsWith("/operations/vip/inventory")) return "/help?chapter=04-inventory.md";
   if(path.startsWith("/analytics/competitors")) return "/help?chapter=33-competitor-analysis.md";
   if(path.startsWith("/settings/ai")) return "/help?chapter=31-ai-settings.md";
@@ -54,9 +46,7 @@ export function manualHref(path: string) {
           : "20-supply-portal") +
       ".md"
     );
-  const chapter = path.startsWith("/inventory/transactions")
-    ? "05-transactions"
-    : moduleChapters[path.split("/")[1]];
+  const chapter = moduleChapters[path.split("/")[1]];
   return chapter ? `/help?chapter=${chapter}.md` : "/help";
 }
 
