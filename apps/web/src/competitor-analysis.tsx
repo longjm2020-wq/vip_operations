@@ -79,16 +79,7 @@ const number = (v: number | null | undefined) =>
   v == null ? "—" : v.toLocaleString("zh-CN", { maximumFractionDigits: 2 });
 const money = (v: number | null | undefined) =>
   v == null ? "—" : "¥ " + number(v);
-const colors = [
-  "#e97c3c",
-  "#8b9d7e",
-  "#798eaa",
-  "#b99478",
-  "#a794b0",
-  "#c5a04a",
-  "#7ea6a0",
-  "#ae7c7c",
-];
+const colors = Array.from({ length: 8 }, (_, index) => `var(--app-chart-${index + 1})`);
 function ProductPhoto({
   product,
   onPreview,
@@ -934,7 +925,7 @@ export function CompetitorAnalysisPage({
       {!publicView && (
         <Card size="small" className="competitor-filters">
           <div className="competitor-brand-line">
-            <Tag color="orange">我的品牌 · {own?.name || "序缇"}</Tag>
+            <Tag color="blue">我的品牌 · {own?.name || "序缇"}</Tag>
             <Segmented
               aria-label="品牌对比模式"
               value={mode}
@@ -1103,7 +1094,7 @@ export function CompetitorAnalysisPage({
                   render: (_v, r) => (
                     <Space>
                       {r.brand.name}
-                      {r.brand.isOwn && <Tag color="orange">我的品牌</Tag>}
+                      {r.brand.isOwn && <Tag color="blue">我的品牌</Tag>}
                     </Space>
                   ),
                 },

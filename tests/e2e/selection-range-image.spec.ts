@@ -66,6 +66,8 @@ async function fixture(page: Page, options: FixtureOptions = {}) {
       id: "11", displayName: "图片复制测试", roleCodes: [], csrfToken: "fixture",
       permissions: readonly ? ["selection.read"] : ["selection.read", "selection.manage"],
     };
+    if (path.endsWith("/my-workspace/appearance")) data = { mode: "dark", version: 0 };
+    if (path.endsWith("/my-workspace/activity")) data = { items: [] };
     if (path.endsWith("/layout-preferences")) {
       if (request.method() === "POST") preferences = request.postDataJSON().preferences;
       data = { preferences, revision: 0, sharedPreferences: null, sharedRevision: 0, canEditShared: !readonly };
@@ -94,6 +96,11 @@ const header = (page: Page, key: string) =>
   page.locator(`thead th[data-selection-column="${key}"]`);
 
 async function selectRectangle(page: Page, from: Locator, to: Locator) {
+  // Wait until the loaded table has an unobstructed drag start.
+  await expect.poll(() => from.evaluate(element => {
+    const rect = element.getBoundingClientRect();
+    return element.contains(document.elementFromPoint(rect.x + 2, rect.y + 2));
+  })).toBe(true);
   const start = (await from.boundingBox())!, end = (await to.boundingBox())!;
   await page.mouse.move(start.x + 2, start.y + 2);
   await page.mouse.down();
@@ -134,8 +141,8 @@ async function pngClipboard(page: Page) {
         colors.blue++;
         if (Math.floor(offset / 4 / canvas.width) > canvas.height - 100) colors.bottomBlue++;
       }
-      if (r === 85 && g === 115 && b === 153) colors.chipBlue++;
-      if (r < 100 && g < 100 && b < 100) colors.dark++;
+      if (r === 232 && g === 237 && b === 255) colors.chipBlue++;
+      if (0.2126 * r + 0.7152 * g + 0.0722 * b < 110) colors.dark++;
       if (r === 0 && g === 0 && b === 0) colors.black++;
     }
     bitmap.close();

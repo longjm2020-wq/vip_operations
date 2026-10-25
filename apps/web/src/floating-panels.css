@@ -21,7 +21,7 @@
   z-index: 2;
   width: 28px;
   height: 28px;
-  border: 1px solid rgba(120, 96, 77, .2);
+  border: 1px solid var(--app-border);
   border-radius: 6px;
   background: var(--app-elevated);
   color: var(--app-secondary);

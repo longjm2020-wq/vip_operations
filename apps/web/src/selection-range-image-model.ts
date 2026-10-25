@@ -4,6 +4,7 @@ import {
   fieldImages,
   orderedFieldTags,
   selectionOptionColor,
+  selectionOptionPalette,
   splitChoiceValues,
   splitFieldTags,
   systemField,
@@ -32,14 +33,10 @@ const backgrounds: Record<string, string> = {
   NONE: "#ffffff", ORANGE: "#fff1e7", GREEN: "#eef9e8", BLUE: "#edf5ff",
   YELLOW: "#fff8cf", PINK: "#fff0f3",
 };
-const tagColors: Record<string, { color: string; background: string }> = {
-  orange: { color: "#d46b08", background: "#fff7e6" },
-  blue: { color: "#0958d9", background: "#e6f4ff" },
-  green: { color: "#389e0d", background: "#f6ffed" },
-  purple: { color: "#531dab", background: "#f9f0ff" },
-  red: { color: "#cf1322", background: "#fff1f0" },
-  default: { color: "#595959", background: "#fafafa" },
-};
+const tagColors: Record<string, { color: string; background: string }> = Object.fromEntries(
+  selectionOptionPalette.map(({ key, color, background }) => [key, { color, background }]),
+);
+tagColors.default = tagColors.gray;
 const moneyKeys = new Set(["supplyPriceExclTax", "vipPrice", "livePrice", "tagPrice"]);
 
 /** Mask before reading content: local drafts may still contain a revoked value. */
@@ -58,7 +55,7 @@ function modelCell(row: Row, column: SelectionField, shown?: { url: string; inde
   const cell: RangeImageCell = {
     text: "", align, verticalAlign,
     background: backgrounds[row.cellColors?.[column.key] || row.rowColor] || "#ffffff",
-    color: row.cellTextColors?.[column.key] || "#46352a",
+    color: row.cellTextColors?.[column.key] || "#272c3d",
   };
   const type = column.type || column.fallbackType;
   if (column.key === "registrationBatch" && !column.custom) {
@@ -104,7 +101,7 @@ function modelCell(row: Row, column: SelectionField, shown?: { url: string; inde
   if (type === "tags" || column.key === "color" || column.key === "sizeRange") {
     const values = type === "tags" ? orderedFieldTags(column, value) : splitFieldTags(value);
     const palette = type === "tags" ? tagColors[column.tagConfig?.color || defaultTagConfig.color] || tagColors.default
-      : { color: "#76543f", background: "#fff1e5" };
+      : { color: "#435ee5", background: "#eff2ff" };
     cell.tags = values.map(label => ({ ...palette, label, color: row.cellTextColors?.[column.key] || palette.color }));
     return cell;
   }

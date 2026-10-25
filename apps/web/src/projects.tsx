@@ -65,7 +65,7 @@ const taskColor = (s: string) =>
     : s === "DISPUTED"
       ? "red"
       : s === "SUBMITTED"
-        ? "gold"
+        ? "processing"
         : "default";
 const days = (a: string, b: string) =>
   a && b ? Math.round((Date.parse(b) - Date.parse(a)) / 86400000) + 1 : 0;
@@ -583,7 +583,7 @@ export function SopPage() {
               hoverable
               onClick={() => setView(s)}
             >
-              <div className="library-card-heading"><Space wrap><Tag color="green">{s.department}</Tag><VisibilityTag value={s.visibility}/></Space><LibraryActions kind="sop" row={s}/></div>
+              <div className="library-card-heading"><Space wrap><Tag color="blue">{s.department}</Tag><VisibilityTag value={s.visibility}/></Space><LibraryActions kind="sop" row={s}/></div>
               <h2>{s.name}</h2>
               <p>{s.description}</p>
               <footer>

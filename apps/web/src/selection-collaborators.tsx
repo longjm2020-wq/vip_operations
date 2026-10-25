@@ -4,7 +4,7 @@ import { TeamOutlined } from "@ant-design/icons";
 import type { SelectionField } from "../../../packages/contracts/src/selection-layout";
 import type { Row } from "./shared";
 
-export const collaboratorColor = (id: string) => ["#722ed1", "#08979c", "#c41d7f", "#389e0d", "#d46b08", "#1d39c4"][Array.from(id).reduce((hash, char) => (hash * 31 + char.charCodeAt(0)) >>> 0, 0) % 6];
+export const collaboratorColor = (id: string) => Array.from({ length: 6 }, (_, index) => `var(--app-person-${index + 1})`)[Array.from(id).reduce((hash, char) => (hash * 31 + char.charCodeAt(0)) >>> 0, 0) % 6];
 
 const readable = (row: Row, key: string) => row.cellAccess?.[key] !== "deny" && !row.hiddenCells?.includes(key);
 function selectedLocation(person: Row, rows: Row[], columns: SelectionField[]) {

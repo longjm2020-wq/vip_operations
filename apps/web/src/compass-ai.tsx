@@ -240,7 +240,7 @@ function VisualReport({
                       <Tag color="orange">售罄关注</Tag>
                     )}
                   {(metricNumber(row.returnsQty) || 0) > 0 && (
-                    <Tag color="purple">核查退货</Tag>
+                    <Tag color="warning">核查退货</Tag>
                   )}
                 </Space>
               </span>

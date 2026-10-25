@@ -7,7 +7,7 @@ import { downloadSheet } from "./download-sheet";
 type Row = Record<string, any>;
 const modes = [["contains", "包含"], ["notContains", "不包含"], ["equals", "等于"], ["notEquals", "不等于"], ["starts", "开头是"], ["ends", "结尾是"], ["gt", "大于 / 晚于"], ["gte", "大于等于"], ["lt", "小于 / 早于"], ["lte", "小于等于"], ["between", "介于"], ["empty", "为空"], ["filled", "不为空"]];
 const colorNames: Record<string, string> = { NONE: "无填色", ORANGE: "橙色", YELLOW: "黄色", GREEN: "绿色", BLUE: "蓝色", PINK: "粉色", default: "默认字体", "#262626": "黑色", "#cf1322": "红色", "#d46b08": "橙色", "#ad8b00": "金色", "#389e0d": "绿色", "#0958d9": "蓝色", "#531dab": "紫色", "#c41d7f": "粉色", "#595959": "灰色" };
-const fillHex: Record<string, string> = { NONE: "#fff", ORANGE: "#fff1e7", YELLOW: "#fff8cf", GREEN: "#eef9e8", BLUE: "#edf5ff", PINK: "#fff0f3", default: "#46352a" };
+const fillHex: Record<string, string> = { NONE: "#fff", ORANGE: "#fff1e7", YELLOW: "#fff8cf", GREEN: "#eef9e8", BLUE: "#edf5ff", PINK: "#fff0f3", default: "var(--app-text)" };
 export function SelectionFilterPanel({ column, columns = [column], rows, view, shared, canShare, shareRestricted = false, onCancel, onApply }: { column: { key: string; label: string; type?: string }; columns?: readonly { key: string; type?: string }[]; rows: Row[]; view: SelectionView; shared: boolean; canShare: boolean; shareRestricted?: boolean; onCancel: () => void; onApply: (view: SelectionView, shared: boolean) => Promise<void> }) {
   const { message } = App.useApp();
   const [draft, setDraft] = useState<SelectionFilter>(view.filters[column.key] || { mode: "contains", value: "" });

@@ -371,7 +371,7 @@ export function Sheet({
               <th className="sheet-row-number">行</th>
               {columns.map((c, i) => (
                 <th key={c.key} tabIndex={0} aria-label={`选择整列：${c.label}`} aria-selected={selectedFindColumns.includes(c.key)}
-                  style={selectedFindColumns.includes(c.key) ? { boxShadow: "inset 0 -2px 0 #1677ff" } : undefined}
+                  style={selectedFindColumns.includes(c.key) ? { boxShadow: "inset 0 -2px 0 var(--app-accent)" } : undefined}
                   onClick={event => selectFindColumn(c.key, event.shiftKey)}
                   onKeyDown={event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); selectFindColumn(c.key, event.shiftKey); } }}>
                   <span className="sheet-letter">{sheetColumnLabel(i)}</span>
@@ -422,8 +422,8 @@ export function Sheet({
                       data-sheet-column={col.key}
                       data-table-find-cell={`${findRowKeys[ri]}::${col.key}`}
                       data-find-current={findHighlight === `${findRowKeys[ri]}::${col.key}` || undefined}
-                      style={findHighlight === `${findRowKeys[ri]}::${col.key}` ? { outline: "2px solid #faad14", outlineOffset: -2 }
-                        : selectedFindColumns.includes(col.key) || findSelection.has(`${findRowKeys[ri]}::${col.key}`) ? { outline: "2px solid #1677ff", outlineOffset: -2 } : undefined}
+                      style={findHighlight === `${findRowKeys[ri]}::${col.key}` ? { outline: "2px solid var(--app-accent)", outlineOffset: -2 }
+                        : selectedFindColumns.includes(col.key) || findSelection.has(`${findRowKeys[ri]}::${col.key}`) ? { outline: "2px solid var(--app-border-strong)", outlineOffset: -2 } : undefined}
                       className={`${locked ? "sheet-locked" : ""} ${error ? "sheet-error" : ""}`}
                       title={error}
                       onMouseDown={event => selectFindCell(event, findRowKeys[ri], col.key)}

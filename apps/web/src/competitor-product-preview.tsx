@@ -95,7 +95,7 @@ export function CompetitorProductPreviewDialog({
           top: 8,
           right: 8,
           borderRadius: "50%",
-          background: "rgba(255, 255, 255, 0.92)",
+          background: "var(--app-elevated)",
         },
       }}
     >

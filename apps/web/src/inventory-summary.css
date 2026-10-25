@@ -179,7 +179,7 @@
 .inventory-column-resize-handle:hover,
 .inventory-column-resize-handle:focus-visible {
   border-right: 2px solid var(--app-accent-border);
-  background: rgb(212 97 15 / 12%);
+  background: var(--app-accent-soft);
   outline: none;
 }
 

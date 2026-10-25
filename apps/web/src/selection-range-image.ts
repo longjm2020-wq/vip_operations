@@ -20,7 +20,7 @@ const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 const PADDING = 8;
 const LINE_HEIGHT = 20;
 const FONT = '14px "Microsoft YaHei", "PingFang SC", Arial, sans-serif';
-const GRID_COLOR = "#e9ded7";
+const GRID_COLOR = "#dde1ec";
 type MeasureText = (text: string, bold?: boolean) => number;
 type TagLayout = {
   lines: string[];
@@ -257,7 +257,7 @@ function drawLines(ctx: CanvasRenderingContext2D, lines: string[], x: number, y:
 }
 function drawPhoto(ctx: CanvasRenderingContext2D, bitmap: ImageBitmap | null, layout: CellLayout, x: number, y: number, width: number, measure: MeasureText) {
   const height = layout.imageHeight;
-  color(ctx, undefined, "#f7f5f3");
+  color(ctx, undefined, "#f5f6fb");
   ctx.fillRect(x, y, width, height);
   const badgeHeight = layout.imageBadgeLines.length ? layout.imageBadgeLines.length * LINE_HEIGHT + 4 : 0;
   const labelHeight = layout.imageLabelLines.length ? layout.imageLabelLines.length * LINE_HEIGHT + 4 : 0;
@@ -267,7 +267,7 @@ function drawPhoto(ctx: CanvasRenderingContext2D, bitmap: ImageBitmap | null, la
     const photoWidth = bitmap.width * ratio, drawHeight = bitmap.height * ratio;
     ctx.drawImage(bitmap, x + (width - photoWidth) / 2, photoY + (photoHeight - drawHeight) / 2, photoWidth, drawHeight);
   } else {
-    color(ctx, undefined, "#8b7f76");
+    color(ctx, undefined, "#788297");
     const lines = wrapRangeImageText("图片无法读取", width - 8, measure);
     drawLines(ctx, lines, x + 4, photoY + (photoHeight - lines.length * LINE_HEIGHT) / 2, width - 8, "center");
   }
@@ -278,7 +278,7 @@ function drawPhoto(ctx: CanvasRenderingContext2D, bitmap: ImageBitmap | null, la
     if (!lines.length) continue;
     const boxWidth = Math.max(...lines.map(line => measure(line))) + 8;
     const boxX = align === "right" ? x + width - boxWidth : x;
-    color(ctx, undefined, "#5e5046");
+    color(ctx, undefined, "#52607c");
     roundedBox(ctx, boxX, top, boxWidth, lines.length * LINE_HEIGHT + 4);
     color(ctx, undefined, "#ffffff");
     drawLines(ctx, [...lines], boxX + 4, top + 2, boxWidth - 8, align);
@@ -324,9 +324,9 @@ export async function renderSelectionRangeImage(table: RangeImageTable): Promise
     ctx.fillRect(0, 0, layout.width, layout.height);
     let x = 0;
     table.columns.forEach((column, index) => {
-      color(ctx, undefined, "#fff5ea");
+      color(ctx, undefined, "#f0f3fb");
       ctx.fillRect(x, 0, column.width, layout.headerHeight);
-      color(ctx, undefined, "#5c4435");
+      color(ctx, undefined, "#52607c");
       ctx.font = "bold " + FONT;
       drawLines(ctx, layout.headerLines[index], x + PADDING, (layout.headerHeight - layout.headerLines[index].length * LINE_HEIGHT) / 2, column.width - 2 * PADDING, "center");
       x += column.width;
@@ -352,7 +352,7 @@ export async function renderSelectionRangeImage(table: RangeImageTable): Promise
           contentY += cellLayout.imageHeight + 4;
         }
         if (cellLayout.lines.length) {
-          color(ctx, cell.color, "#3b2d24");
+          color(ctx, cell.color, "#272c3d");
           drawLines(ctx, cellLayout.lines, x + PADDING, contentY, innerWidth, cell.align);
           contentY += cellLayout.lines.length * LINE_HEIGHT + 4;
         }
@@ -360,9 +360,9 @@ export async function renderSelectionRangeImage(table: RangeImageTable): Promise
           const style = cell.tags![tagIndex];
           const shift = cell.align === "center" ? (innerWidth - tag.lineWidth) / 2 : cell.align === "right" ? innerWidth - tag.lineWidth : 0;
           const tagX = x + PADDING + tag.x + shift, tagY = contentY + tag.y;
-          color(ctx, style.background, "#fff2e8");
+          color(ctx, style.background, "#eff2ff");
           roundedBox(ctx, tagX, tagY, tag.width, tag.height);
-          color(ctx, style.color, "#874b28");
+          color(ctx, style.color, "#435ee5");
           drawLines(ctx, tag.lines, tagX + 6, tagY + 3, tag.width - 12, "center");
         });
         x += width;

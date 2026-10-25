@@ -200,7 +200,7 @@
   top: 8px;
   right: 8px;
   z-index: 1;
-  background: rgba(255, 255, 255, 0.92);
+  background: var(--app-elevated);
 }
 .competitor-product-preview-enlarge {
   display: block;

@@ -40,8 +40,33 @@
   --app-logo-highlight: #ced7ff;
   --app-logo-shadow: #435ee530;
   --app-logo-glow: #8fa4ff50;
-  --app-lock: #302e2b;
-  --app-chart-secondary: #90aaad;
+  --app-lock: #2b303c;
+  --app-chart-secondary: #91aacd;
+  --app-chart-1: var(--app-accent);
+  --app-chart-2: #71bfd0;
+  --app-chart-3: #b0a9df;
+  --app-chart-4: #7ca8df;
+  --app-chart-5: #83b9ab;
+  --app-chart-6: #abbbd6;
+  --app-chart-7: #c2a6bf;
+  --app-chart-8: #8297b9;
+  --app-violet: #c2bae6;
+  --app-violet-bg: #302e46;
+  --app-rose: #e1b0c1;
+  --app-rose-bg: #402c38;
+  --app-person-1: #435ee5;
+  --app-person-2: #327b91;
+  --app-person-3: #6b62a6;
+  --app-person-4: #496b9e;
+  --app-person-5: #91617f;
+  --app-person-6: #4c7f77;
+  --app-media-overlay: #141a2bcc;
+  --app-brand-bg: #11192e;
+  --app-brand-glow: #435ee54d;
+  --app-brand-text: #eef0f6;
+  --app-brand-muted: #bdc7de;
+  --app-brand-accent: #8fa4ff;
+  --app-brand-border: #46558d;
 }
 :root[data-theme="light"] {
   color-scheme: light;
@@ -79,8 +104,19 @@
   --app-logo-highlight: #667ded;
   --app-logo-shadow: #435ee510;
   --app-logo-glow: #435ee520;
-  --app-lock: #e9e6e1;
-  --app-chart-secondary: #46777d;
+  --app-lock: #e5e9f1;
+  --app-chart-secondary: #5279a8;
+  --app-chart-2: #32859c;
+  --app-chart-3: #7e70b3;
+  --app-chart-4: #5387c2;
+  --app-chart-5: #4c8a79;
+  --app-chart-6: #7088ad;
+  --app-chart-7: #a16e95;
+  --app-chart-8: #536984;
+  --app-violet: #66558f;
+  --app-violet-bg: #f1edf8;
+  --app-rose: #944c65;
+  --app-rose-bg: #faeaef;
 }
 html,
 body {
@@ -150,6 +186,55 @@ body {
   ):active {
   background: var(--app-accent-fill-active);
 }
+/* Preset labels share the brand palette; explicit custom hex colors stay intact. */
+.ant-tag:is(.ant-tag-blue, .ant-tag-geekblue, .ant-tag-processing) {
+  --tag-tone: var(--app-accent);
+  --tag-surface: var(--app-accent-soft);
+}
+.ant-tag.ant-tag-cyan {
+  --tag-tone: var(--app-info);
+  --tag-surface: var(--app-info-bg);
+}
+.ant-tag:is(.ant-tag-green, .ant-tag-success) {
+  --tag-tone: var(--app-success);
+  --tag-surface: var(--app-success-bg);
+}
+.ant-tag:is(.ant-tag-orange, .ant-tag-gold, .ant-tag-warning) {
+  --tag-tone: var(--app-warning);
+  --tag-surface: var(--app-warning-bg);
+}
+.ant-tag:is(.ant-tag-red, .ant-tag-volcano, .ant-tag-error) {
+  --tag-tone: var(--app-danger);
+  --tag-surface: var(--app-danger-bg);
+}
+.ant-tag.ant-tag-purple {
+  --tag-tone: var(--app-violet);
+  --tag-surface: var(--app-violet-bg);
+}
+.ant-tag.ant-tag-magenta {
+  --tag-tone: var(--app-rose);
+  --tag-surface: var(--app-rose-bg);
+}
+.ant-tag:is(
+  .ant-tag-blue,
+  .ant-tag-geekblue,
+  .ant-tag-processing,
+  .ant-tag-cyan,
+  .ant-tag-green,
+  .ant-tag-success,
+  .ant-tag-orange,
+  .ant-tag-gold,
+  .ant-tag-warning,
+  .ant-tag-red,
+  .ant-tag-volcano,
+  .ant-tag-error,
+  .ant-tag-purple,
+  .ant-tag-magenta
+) {
+  color: var(--tag-tone);
+  background: var(--tag-surface);
+  border-color: color-mix(in srgb, var(--tag-tone) 28%, var(--tag-surface));
+}
 /* The login video remains dark in either mode, so its wordmark uses brighter blue. */
 .login-story,
 .supplier-registration-brand {
@@ -182,7 +267,7 @@ body {
 }
 /* Exact colors chosen by a user are data. Keep a legible canvas for those cells. */
 .selection-sheet td[data-custom-fill="true"] {
-  color: #342f29;
+  color: #272c3d;
 }
 .selection-sheet td[data-custom-fill="true"] a,
 .selection-sheet td[data-text-color] a {

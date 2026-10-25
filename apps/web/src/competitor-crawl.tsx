@@ -137,10 +137,10 @@ export function CompetitorCrawlPanel({
               const progress = competitorCrawlProgress(job);
               const strokeColor =
                 job?.status === "FAILED"
-                  ? "#ff4d4f"
+                  ? "var(--app-danger)"
                   : job?.status === "READY"
-                    ? "#527761"
-                    : "#f47b38";
+                    ? "var(--app-success)"
+                    : "var(--app-accent)";
               return (
                 <div className="competitor-crawl-job" key={brand.id}>
                   <strong>{brand.name}</strong>

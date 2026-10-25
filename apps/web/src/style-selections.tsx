@@ -87,7 +87,7 @@ const colorOptions = [
 ];
 const textColorOptions = [
   { value: "", label: "默认颜色" }, { value: "#262626", label: "黑色" },
-  { value: "var(--app-danger)", label: "红色" }, { value: "#d46b08", label: "橙色" },
+  { value: "#cf1322", label: "红色" }, { value: "#d46b08", label: "橙色" },
   { value: "#ad8b00", label: "金色" }, { value: "#389e0d", label: "绿色" },
   { value: "#0958d9", label: "蓝色" }, { value: "#531dab", label: "紫色" },
   { value: "#c41d7f", label: "粉色" }, { value: "#595959", label: "灰色" },
@@ -1389,7 +1389,7 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
     const fill = colorOptions.find(option => option.value !== "NONE" && option.value === (row.cellColors?.[column.key] || row.rowColor))?.color;
     const textColor = row.cellTextColors?.[column.key];
     const textRgb = /^#[0-9a-f]{6}$/i.test(textColor || "") ? [1,3,5].map(index => parseInt(textColor.slice(index,index+2),16)) : null;
-    const textCanvas = textRgb ? (textRgb[0]*.299 + textRgb[1]*.587 + textRgb[2]*.114 > 160 ? "#242321" : "#ffffff") : undefined;
+    const textCanvas = textRgb ? (textRgb[0]*.299 + textRgb[1]*.587 + textRgb[2]*.114 > 160 ? "#24262d" : "#ffffff") : undefined;
     const imagePreviewProps = { previewing: imagePreview?.rowKey === row._key && imagePreview?.columnKey === column.key, onPreview: (index: number) => setImagePreview({ rowKey: row._key, columnKey: column.key, index }), pasteKey: cellId(row._key, column.key), pasteHandlers: imagePasteHandlers };
     const cell = (content: React.ReactNode) => <td key={column.key} {...common} onContextMenu={event => {
       event.preventDefault();
@@ -1547,7 +1547,7 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
     <Space.Compact>{([{ value: "left", label: "左对齐", icon: <AlignLeftOutlined /> }, { value: "center", label: "居中对齐", icon: <AlignCenterOutlined /> }, { value: "right", label: "右对齐", icon: <AlignRightOutlined /> }] as const).map(item => <Tooltip key={item.value} title={item.label}><Button aria-label={item.label} disabled={!canEdit || !selectedCells.size} icon={item.icon} onClick={() => applyAlignment(item.value)} /></Tooltip>)}</Space.Compact>
     <Dropdown trigger={["click"]} menu={{ selectable: true, selectedKeys: editorRow && editorColumn ? [editorRow.cellVerticalAlignments?.[editorColumn.key] || "middle"] : [], items: [{ key: "top", label: "顶端对齐", icon: <VerticalAlignTopOutlined /> }, { key: "middle", label: "垂直居中", icon: <VerticalAlignMiddleOutlined /> }, { key: "bottom", label: "底端对齐", icon: <VerticalAlignBottomOutlined /> }], onClick: ({ key }) => applyAlignment(key as "top" | "middle" | "bottom", true) }}><Button aria-label="垂直对齐" title="垂直对齐" disabled={!canEdit || !selectedCells.size} icon={<VerticalAlignMiddleOutlined />} /></Dropdown>
       <Popover trigger="click" content={<div className="selection-color-menu">{colorOptions.map((option) => <Button key={option.value} type="text" onClick={() => applyColor(option.value)}><span className="selection-color-dot" style={{ background: option.color }} />{option.label}</Button>)}</div>}><Button aria-label="填色" title="填色" disabled={!canEdit || !selectedCells.size} icon={<BgColorsOutlined />} /></Popover>
-    <Dropdown trigger={["click"]} menu={{ selectable: true, selectedKeys: editorRow && editorColumn ? [editorRow.cellTextColors?.[editorColumn.key] || "default"] : [], items: textColorOptions.map(option => ({ key: option.value || "default", label: option.label, icon: <span className="selection-color-dot" style={{ background: option.value || "#46352a" }} /> })), onClick: ({ key }) => applyTextColor(key === "default" ? "" : key) }}><Button aria-label="字体颜色" title="字体颜色" disabled={!canEdit || !selectedCells.size} icon={<FontColorsOutlined />} /></Dropdown>
+    <Dropdown trigger={["click"]} menu={{ selectable: true, selectedKeys: editorRow && editorColumn ? [editorRow.cellTextColors?.[editorColumn.key] || "default"] : [], items: textColorOptions.map(option => ({ key: option.value || "default", label: option.label, icon: <span className="selection-color-dot" style={{ background: option.value || "var(--app-text)" }} /> })), onClick: ({ key }) => applyTextColor(key === "default" ? "" : key) }}><Button aria-label="字体颜色" title="字体颜色" disabled={!canEdit || !selectedCells.size} icon={<FontColorsOutlined />} /></Dropdown>
     <SelectionLayoutStatus layout={layout} />
     <SelectionTransfer columns={activeColumns} ensureLayoutSaved={layout.ensureSaved} filteredRows={imageSearchRowId !== null || searchTerms.length || Object.keys(columnFilters).length || columnSort ? filteredRows : undefined} canEdit={canEdit} blocked={!!dirtyCount || saving || deleting} selectedRows={filteredRows.filter(row => selectedRowKeys.has(row._key))} query={search} onImported={async () => {
       tableHistory.clear();

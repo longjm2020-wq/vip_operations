@@ -48,7 +48,7 @@ export const defaultTagConfig = {
   multiple: true,
   max: 30,
   order: "selection" as const,
-  color: "orange",
+  color: "blue",
 };
 export function splitFieldTags(value: unknown): string[] {
   return [

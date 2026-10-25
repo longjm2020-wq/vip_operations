@@ -482,7 +482,7 @@ export function SupplyOrders({ internal = false }: { internal?: boolean }) {
                     {r.orderNo}
                   </Button>
                   {!(internal ? r.buyerReadAt : r.supplierReadAt) && (
-                    <Tag color="orange">新消息</Tag>
+                    <Tag color="blue">新消息</Tag>
                   )}
                 </Space>
               ),

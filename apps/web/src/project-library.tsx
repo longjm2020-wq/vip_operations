@@ -111,7 +111,7 @@ export function VisibilityTag({ value }: { value?: string }) {
   return (
     <Tag
       icon={value === "PUBLIC" ? <GlobalOutlined /> : <LockOutlined />}
-      color={value === "PUBLIC" ? "orange" : undefined}
+      color={value === "PUBLIC" ? "blue" : undefined}
     >
       {value === "PUBLIC" ? "公开" : "不公开"}
     </Tag>
@@ -456,7 +456,7 @@ function LibraryCollaboratorsDialog({
             width: 150,
             render: (_: unknown, member: LibraryMember) =>
               fixed(member.userId) ? (
-                <Tag color="orange">固定可管理</Tag>
+                <Tag color="blue">固定可管理</Tag>
               ) : (
                 <Select
                   aria-label={`成员权限：${userById.get(member.userId)?.displayName || userById.get(member.userId)?.username || member.userId}`}

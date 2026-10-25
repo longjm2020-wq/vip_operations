@@ -367,7 +367,7 @@ export function FlowCanvas({
                 refY="3"
                 orient="auto"
               >
-                <path d="M0,0 L0,6 L8,3 z" fill="#e66b18" />
+                <path d="M0,0 L0,6 L8,3 z" fill="var(--app-accent)" />
               </marker>
             </defs>
             {nodes.flatMap((n) =>
@@ -401,8 +401,8 @@ export function FlowCanvas({
                       fill="none"
                       stroke={
                         edge?.from === from && edge.to === n.id
-                          ? "#e89b36"
-                          : "#e66b18"
+                          ? "var(--app-accent-hover)"
+                          : "var(--app-accent)"
                       }
                       strokeWidth={3}
                       markerEnd={`url(#${marker})`}
@@ -422,7 +422,7 @@ export function FlowCanvas({
                   cursor,
                 )}
                 fill="none"
-                stroke="#e66b18"
+                stroke="var(--app-accent)"
                 strokeWidth={2}
                 strokeDasharray="6 4"
                 style={{ pointerEvents: "none" }}

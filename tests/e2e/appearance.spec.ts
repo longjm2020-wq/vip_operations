@@ -313,9 +313,9 @@ test("表格用户填色和文字保留，无填色单元格随全站主题切�
       "background-color",
       "rgb(255, 241, 231)",
     );
-    await expect(cells.nth(0)).toHaveCSS("color", "rgb(52, 47, 41)");
+    await expect(cells.nth(0)).toHaveCSS("color", "rgb(39, 44, 61)");
     await expect(cells.nth(2)).toHaveCSS("color", "rgb(255, 255, 255)");
-    await expect(cells.nth(2)).toHaveCSS("background-color", "rgb(36, 35, 33)");
+    await expect(cells.nth(2)).toHaveCSS("background-color", "rgb(36, 38, 45)");
     await expect(cells.nth(1)).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
     await expect(page.locator(".selection-sheet")).toHaveCSS(
       "background-color",

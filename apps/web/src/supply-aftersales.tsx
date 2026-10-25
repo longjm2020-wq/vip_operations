@@ -100,7 +100,7 @@ export function AftersalesPanel({
               title={
                 <Space wrap>
                   <span>{a.caseNo}</span>
-                  <Tag color={a.kind === "REFUND" ? "orange" : "blue"}>
+                  <Tag color={a.kind === "REFUND" ? "blue" : "cyan"}>
                     {aftersaleKinds[a.kind]}
                   </Tag>
                   <Tag color={a.status === "DONE" ? "green" : undefined}>
