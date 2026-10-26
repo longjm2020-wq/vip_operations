@@ -45,12 +45,15 @@ export function assignImageGroups(rootName: string, files: (BatchImageMetadata &
   const hasRootImages = files.some(file => !file.sourcePath.includes("/"));
   const rootIsStyle = /^[a-z][a-z\d_-]*\d[a-z\d_-]*$/i.test(rootName);
   const batch = layout === "batch" || (layout === "auto" && !hasRootImages && !rootIsStyle);
-  return [...files].sort((a, b) => naturalCompare(a.sourcePath, b.sourcePath)).map((file, index) => {
+  const items = [...files].sort((a, b) => naturalCompare(a.sourcePath, b.sourcePath)).map((file, index) => {
     const parts = file.sourcePath.split("/");
     const style = batch && parts.length > 1 ? parts.shift()! : rootName;
     const group = parts.slice(0, -1).find(part => !roleDirectory.test(part)) || filenameColor(file.sourcePath);
     return { ...file, id: file.sourcePath, style, group, order: index + 1, kind: file.error ? "unknown" : detectImageKind(file.sourcePath, file) };
   });
+  const details = items.filter(item => item.kind === "detail").sort((a, b) => naturalCompare(a.sourcePath.split("/").at(-1)!, b.sourcePath.split("/").at(-1)!) || naturalCompare(a.sourcePath, b.sourcePath));
+  details.forEach((item, index) => { item.order = index + 1; });
+  return items;
 }
 export function buildImageBatchPlan(items: BatchImageItem[], folderMode: ColorFolderMode = "source"): BatchPlan {
   const entries: BatchPlanEntry[] = [], issues: Record<string, string[]> = {};

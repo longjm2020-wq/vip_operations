@@ -106,4 +106,9 @@ describe("local delivery image naming", () => {
     expect(single.entries.map(entry => entry.target)).toEqual(["XFW19X31755L/30.png"]);
     expect(single.review.map(entry => entry.item.id)).toEqual(["30.jpg"]);
   });
+  test("detail tail page at style root follows numbered detail images in a subdirectory", () => {
+    const files = [image("STYLE1/699.jpg", { width: 900, height: 2600 }), image("STYLE1/详情/2.jpg", { width: 900, height: 1230 }), image("STYLE1/详情/1.jpg", { width: 900, height: 1230 })];
+    const plan = buildImageBatchPlan(assignImageGroups("批量目录", files, "auto"));
+    expect(plan.entries.map(entry => [entry.item.sourcePath, entry.target])).toEqual([["STYLE1/详情/1.jpg", "STYLE1/601.jpg"], ["STYLE1/详情/2.jpg", "STYLE1/602.jpg"], ["STYLE1/699.jpg", "STYLE1/603.jpg"]]);
+  });
 });
