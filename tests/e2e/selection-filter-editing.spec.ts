@@ -10,6 +10,7 @@ async function fixture(page: Page, options: {
   type?: "text" | "single" | "multiple";
   values?: string[];
   pageSize?: number;
+  archive?: boolean;
 } = {}) {
   let revision = 0;
   let rejectSharedWrite = false;
@@ -39,7 +40,7 @@ async function fixture(page: Page, options: {
     createdAt: new Date(Date.UTC(2026, 9, 9) + index * 1000).toISOString(),
     updatedAt: "2026-10-10T00:00:00.000Z",
     defaultCellAccess: "edit",
-    cellAccess: (options.permission === "read" || options.permission === "deny" ? { [fieldKey]: options.permission } : {}) as Record<string, string>,
+    cellAccess: (index === 0 && (options.permission === "read" || options.permission === "deny") ? { [fieldKey]: options.permission } : {}) as Record<string, string>,
   }));
   const writes: { id: string; body: Record<string, unknown> }[] = [];
   await page.addInitScript(() => localStorage.setItem("selection-field-types-initialized-v2", "1"));
@@ -49,8 +50,9 @@ async function fixture(page: Page, options: {
     let data: unknown = [];
     if (path.endsWith("/auth/me")) data = {
       id: "101", displayName: "筛选编辑测试", roleCodes: [], csrfToken: "fixture",
-      permissions: options.permission === "readonly" ? ["selection.read"] : ["selection.read", "selection.manage"],
+      permissions: options.permission === "readonly" ? ["selection.read", "product.read"] : ["selection.read", "selection.manage", "product.read", "product.manage"],
     };
+    if (path.endsWith("/product-archive-table")) data = { id: "3", initialLayout: "selection", fields: [], references: {}, canEdit: options.permission !== "readonly", canManage: false };
     if (path.endsWith("/revision")) data = { revision: `filter-editing-${revision}` };
     if (path.endsWith("/sync")) {
       const { sort = "sortOrder", direction = "asc" } = request.postDataJSON() as { sort?: "sortOrder" | "createdAt" | "updatedAt"; direction?: string };
@@ -87,7 +89,7 @@ async function fixture(page: Page, options: {
     }
     await route.fulfill({ json: { data } });
   });
-  await page.goto("/style-selections");
+  await page.goto(options.archive ? "/products" : "/style-selections");
   await expect(page.locator("tr[data-selection-row]")).toHaveCount(Math.min(rows.length, options.pageSize || 500));
   if (options.filtered !== false) {
     await page.getByRole("button", { name: "筛选执行标准", exact: true }).click();
@@ -99,7 +101,7 @@ async function fixture(page: Page, options: {
   }
   const touch = () => new Date(Date.UTC(2026, 9, 10) + ++revision).toISOString();
   return {
-    writes, rows, savedValue: () => rows[0].extraFields[fieldKey],
+    writes, rows, savedValue: () => rows[0].extraFields[fieldKey], savedPreferences: () => layout.preferences!,
     setAccess: (access: "read" | "deny") => { rows[0].cellAccess = { [fieldKey]: access }; rows[0].updatedAt = touch(); },
     removeRow: (id: string) => { const index = rows.findIndex(item => item.id === id); rows.splice(index, 1); touch(); },
     addBlankRow: () => { const id = `editing-new-${rows.length}`; rows.push({ ...rows[0], id, xutiStyleNo: id, sortOrder: 100, extraFields: { [fieldKey]: "" }, cellAccess: {}, updatedAt: touch() }); return id; },
@@ -400,6 +402,66 @@ test("仅全局搜索没有列筛选时沿用编辑暂留，离开单元格后�
   await expect(row(page)).toBeVisible();
   await page.getByRole("button", { name: "筛选序缇款号", exact: true }).focus();
   await expect(row(page), "手动重筛语义仅针对列筛选，不改变搜索编辑暂留").toHaveCount(0);
+});
+
+for (const archive of [true, false]) {
+  test(`${archive ? "商品档案" : "选款登记"}搜索优先于已有列筛选，清空与重新打开后保留原筛选`, async ({ page }) => {
+    const state = await fixture(page, { archive });
+    const search = page.getByRole("textbox", { name: "搜索选款", exact: true });
+    await expect.poll(() => state.savedPreferences().columnFilters[fieldKey]?.values).toEqual([""]);
+    const filters = structuredClone(state.savedPreferences().columnFilters);
+    await search.fill("editing-2");
+    await expect.poll(() => visibleRows(page)).toEqual(["editing-2"]);
+    await expect.poll(() => state.savedPreferences().searchText).toBe("editing-2");
+    expect(state.savedPreferences().columnFilters).toEqual(filters);
+    await page.reload();
+    await expect(search).toHaveValue("editing-2");
+    await expect.poll(() => visibleRows(page)).toEqual(["editing-2"]);
+    await search.fill("EDITING-1，editing-2");
+    await expect.poll(() => visibleRows(page)).toEqual(["editing-1", "editing-2"]);
+    await search.fill("NOT-A-STYLE");
+    await expect(page.locator("tr[data-selection-row]")).toHaveCount(0);
+    await search.fill(" ,，\n ");
+    await expect.poll(() => visibleRows(page)).toEqual([rowId, "editing-1"]);
+    await search.fill("");
+    await expect.poll(() => visibleRows(page)).toEqual([rowId, "editing-1"]);
+    expect(state.savedPreferences().columnFilters).toEqual(filters);
+    expect(state.writes).toEqual([]);
+  });
+}
+
+test("保留列筛选时按搜索编辑的行只在输入期间暂留，离开后重新匹配", async ({ page }) => {
+  const state = await fixture(page, { archive: true });
+  const search = page.getByRole("textbox", { name: "搜索选款", exact: true });
+  await search.fill("已有标准");
+  const matching = page.locator('tr[data-selection-row="editing-2"]');
+  await expect(matching).toBeVisible();
+  const input = matching.getByRole("textbox", { name: "执行标准", exact: true });
+  await input.dblclick();
+  await input.fill("修改后不匹配搜索");
+  await expect.poll(() => state.rows[2].extraFields[fieldKey]).toBe("修改后不匹配搜索");
+  await expect(matching).toBeVisible();
+  await page.getByRole("button", { name: "筛选序缇款号", exact: true }).focus();
+  await expect(matching).toHaveCount(0);
+  await search.fill("");
+  await expect.poll(() => visibleRows(page)).toEqual([rowId, "editing-1"]);
+});
+
+test("搜索优先仍忽略禁止查看字段，只用可见资料匹配", async ({ page }) => {
+  const state = await fixture(page, { archive: true, permission: "deny", filtered: false });
+  await page.getByRole("button", { name: "筛选执行标准", exact: true }).click();
+  const panel = page.locator(".selection-filter-panel:visible");
+  await panel.getByRole("textbox", { name: "搜索筛选选项", exact: true }).fill("已有标准");
+  await panel.getByRole("button", { name: "确认", exact: true }).click();
+  await expect.poll(() => visibleRows(page)).toEqual(["editing-2"]);
+  const search = page.getByRole("textbox", { name: "搜索选款", exact: true });
+  await search.fill("受保护原始标准");
+  await expect(page.locator("tr[data-selection-row]")).toHaveCount(0);
+  await search.fill("EDITING-0");
+  await expect(row(page)).toBeVisible();
+  await expect(cell(page).getByLabel("受保护内容", { exact: true })).toBeVisible();
+  expect(await row(page).innerHTML()).not.toContain("受保护原始标准");
+  expect(state.writes).toEqual([]);
 });
 
 for (const permission of ["readonly", "read", "deny"] as const) {

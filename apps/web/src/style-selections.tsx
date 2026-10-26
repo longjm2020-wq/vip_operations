@@ -690,15 +690,19 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
   },[editSession]);
   const matchingRows = useMemo(() => {
     const originalRows=new Map(rows.map(row=>[row._key,row]));
-    return sortSelectionRows(fieldViewRows.filter(row => imageSearchRowId !== null
-      ? String(row.id) === imageSearchRowId && readableSelectionCell(row,"images")
-      : Object.keys(columnFilters).every(key=>readableSelectionCell(row,key)) && matchesSelectionSearch({...row,extraFields:{...(row.extraFields || {}),...row.selectionChoiceTexts}},searchTerms,visibleColumns.filter(column=>column.custom && column.type!=="image").map(column=>column.key)) && matchesSelectionFilters(row, columnFilters)), columnSort, columns).map(row=>originalRows.get(row._key)!);
+    const searchableKeys=visibleColumns.filter(column=>column.custom && column.type!=="image").map(column=>column.key);
+    return sortSelectionRows(fieldViewRows.filter(row => {
+      if (imageSearchRowId !== null) return String(row.id) === imageSearchRowId && readableSelectionCell(row,"images");
+      // Search the complete permission-projected table without changing saved column filters.
+      if (searchTerms.length) return matchesSelectionSearch({...row,extraFields:{...(row.extraFields || {}),...row.selectionChoiceTexts}},searchTerms,searchableKeys);
+      return Object.keys(columnFilters).every(key=>readableSelectionCell(row,key)) && matchesSelectionFilters(row, columnFilters);
+    }), columnSort, columns).map(row=>originalRows.get(row._key)!);
   }, [rows, fieldViewRows, columnFilters, columnSort, searchTerms, imageSearchRowId, columns, visibleColumns]);
   const creationGroupUnit = groupBy === "batch" ? "day" : groupBy.startsWith("createdTime:") ? groupBy.slice(12) as SelectionCreatedTimeGroupUnit : null;
   const groupKey=creationGroupUnit?"registrationBatch":groupBy==="supplier"?"supplierCode":groupBy.slice(6);
   const groupColumn=columns.find(column=>column.key===groupKey);
   const groupLabel=(row:Row)=>!readableSelectionCell(row,groupKey)?"受保护内容":creationGroupUnit ? selectionCreatedTimeGroupLabel(row.createdAt,creationGroupUnit) || "未填写创建时间" : String(groupColumn?choiceDisplayText(groupColumn,valueAt(row,groupColumn)):row[groupKey] || "") || `未填写${groupColumn?.label || "字段"}`;
-  const filterScope=imageSearchRowId===null && Object.keys(columnFilters).length ? JSON.stringify([
+  const filterScope=imageSearchRowId===null && !searchTerms.length && Object.keys(columnFilters).length ? JSON.stringify([
     filterRefresh,searchText,columnFilters,columnSort,groupBy,sort,direction,
     followShared?sharedView.data?.data?.revision:0,
     [...availableColumns].sort((left,right)=>left.key.localeCompare(right.key)).map(column=>[column.key,column.type,column.fallbackType]),
