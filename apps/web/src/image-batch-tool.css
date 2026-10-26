@@ -2,7 +2,7 @@
 .image-batch-intro, .image-batch-note { margin: 0; line-height: 1.75; }
 .image-batch-note, .image-batch-path small { color: var(--app-secondary); font-size: 12px; }
 .image-batch-controls { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 16px; }
-.image-batch-controls label { display: flex; flex-direction: column; gap: 6px; }
+.image-batch-controls > label:not(.ant-checkbox-wrapper) { display: flex; flex-direction: column; gap: 6px; }
 .image-batch-controls .ant-select { min-width: 220px; }
 .image-batch-rules { margin: 0; padding-left: 20px; line-height: 1.85; }
 .image-batch-summary { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px; padding: 14px 16px; background: var(--app-muted); border-radius: 8px; }
