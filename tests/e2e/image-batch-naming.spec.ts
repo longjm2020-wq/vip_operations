@@ -101,13 +101,10 @@ test("工具箱批量生成单色与多色成品，保留原图并跳过旧结�
   await installDirectory(page, files);
   const { tool, writes } = await fixture(page);
   await tool.getByRole("button", { name: "选择本地目录", exact: true }).click();
-  await expect(tool).toContainText("2 款 · 15 张图片 · 待确认 0 张");
+  await expect(tool).toContainText("2 款 · 15 张图片 · 可自动命名 15 张 · 原图待确认 0 张");
   expect(await page.evaluate(() => (window as any).batchReadCount)).toBe(15);
-  expect(await page.evaluate(() => Object.keys((window as any).batchWrites))).toEqual([]);
-  await expect(tool.getByRole("cell", { name: "SINGLE123/15.jpg", exact: true })).toBeVisible();
+  await expect(tool).toContainText("处理完成：成功 15 张，原图另存待确认 0 张，失败 0 张");
   await tool.screenshot({ path: test.info().outputPath("image-batch-preview.png") });
-  await tool.getByRole("button", { name: "开始处理 15 张", exact: true }).click();
-  await expect(tool).toContainText("处理完成：成功 15 张，失败 0 张");
   const output = await outputData(page);
   const prefix = Object.keys(output)[0].split("/")[0];
   expect(Object.keys(output).map(key => key.slice(prefix.length + 1))).toEqual(expect.arrayContaining(["SINGLE123/1.jpg", "SINGLE123/15.jpg", "SINGLE123/30.png", "SINGLE123/50.jpg", "SINGLE123/601.jpg", "SINGLE123/826.jpg", "MULTI456/MULTI456001/1.jpg", "MULTI456/MULTI456001/30.png", "MULTI456/MULTI456002/1.jpg", "MULTI456/MULTI456002/50.jpg", "MULTI456/601.jpg", "MULTI456/826.jpg", "处理清单.json"]));
@@ -115,7 +112,7 @@ test("工具箱批量生成单色与多色成品，保留原图并跳过旧结�
   expect(createHash("sha256").update(Buffer.from(output[`${prefix}/SINGLE123/1.jpg`].base64, "base64")).digest("hex")).toBe(createHash("sha256").update(Buffer.from(original.base64, "base64")).digest("hex"));
   expect(await page.evaluate(() => (window as any).batchSourceWrites)).toEqual([]);
   expect(writes).toEqual([]);
-  await tool.getByRole("button", { name: "开始处理 15 张", exact: true }).click();
+  await tool.getByRole("button", { name: "处理整个目录 15 张", exact: true }).click();
   await expect.poll(() => page.evaluate(() => new Set(Object.keys((window as any).batchWrites).map(key => key.split("/")[0])).size)).toBe(2);
 });
 test("超限 JPEG 与透明 PNG 真正压缩至限额，输出编码和透明度正确", async ({ page }) => {
@@ -128,8 +125,7 @@ test("超限 JPEG 与透明 PNG 真正压缩至限额，输出编码和透明度
   await installDirectory(page, [{ path: "STYLE123/主图.jpg", type: "image/jpeg", base64: jpeg.toString("base64") }, { path: "STYLE123/30.png", type: "image/png", base64: png.toString("base64") }]);
   const { tool } = await fixture(page);
   await tool.getByRole("button", { name: "选择本地目录", exact: true }).click();
-  await tool.getByRole("button", { name: "开始处理 2 张", exact: true }).click();
-  await expect(tool).toContainText("处理完成：成功 2 张，失败 0 张", { timeout: 30000 });
+  await expect(tool).toContainText("处理完成：成功 2 张，原图另存待确认 0 张，失败 0 张", { timeout: 30000 });
   const output = await outputData(page);
   const jpegOut = Buffer.from(Object.entries(output).find(([path]) => path.endsWith("/1.jpg"))![1].base64, "base64");
   const pngOut = Buffer.from(Object.entries(output).find(([path]) => path.endsWith("/30.png"))![1].base64, "base64");
@@ -139,17 +135,19 @@ test("超限 JPEG 与透明 PNG 真正压缩至限额，输出编码和透明度
   expect(p.format).toBe("png"); expect(p.hasAlpha).toBe(true); expect(p.width).toBe(p.height);
   const stats = await sharp(pngOut).stats(); expect(stats.channels[3].min).toBeLessThan(255);
 });
-test("重名与缺失颜色须修正后才能处理，批量分组支持编号目录", async ({ page }) => {
+test("可关闭自动处理先调整颜色，批量分组支持编号目录", async ({ page }) => {
   await installDirectory(page, [await flat("STYLE123/平铺1.png"), await flat("STYLE123/平铺2.png")]);
   const { tool } = await fixture(page, "/style-selections");
+  await tool.getByRole("checkbox", { name: "识别后自动处理整个目录", exact: true }).uncheck();
   await tool.getByRole("button", { name: "选择本地目录", exact: true }).click();
-  await expect(tool.getByRole("button", { name: /^开始处理/ })).toBeDisabled();
+  await expect(tool.getByRole("button", { name: "处理整个目录 2 张", exact: true })).toBeEnabled();
+  expect(await page.evaluate(() => Object.keys((window as any).batchWrites))).toEqual([]);
   await tool.getByRole("textbox", { name: "颜色组 STYLE123/平铺1.png", exact: true }).fill("黑色");
   await tool.getByRole("textbox", { name: "颜色组 STYLE123/平铺2.png", exact: true }).fill("白色");
   await tool.getByRole("combobox", { name: "多色目录命名", exact: true }).click();
   await page.getByText("颜色分组文件夹（1）（2）…", { exact: true }).click();
-  await tool.getByRole("button", { name: "开始处理 2 张", exact: true }).click();
-  await expect(tool).toContainText("处理完成：成功 2 张，失败 0 张");
+  await tool.getByRole("button", { name: "处理整个目录 2 张", exact: true }).click();
+  await expect(tool).toContainText("处理完成：成功 2 张，原图另存待确认 0 张，失败 0 张");
   const paths = await page.evaluate(() => Object.keys((window as any).batchWrites));
   expect(paths.some(path => path.endsWith("/颜色分组文件夹（1）/30.png"))).toBe(true);
   expect(paths.some(path => path.endsWith("/颜色分组文件夹（2）/30.png"))).toBe(true);
@@ -158,7 +156,6 @@ test("拒绝写权限时不生成文件，目录可重新选择", async ({ page 
   await installDirectory(page, [await jpg("STYLE123/1.jpg")], { deny: true });
   const { tool } = await fixture(page, "/project-tables/7");
   await tool.getByRole("button", { name: "选择本地目录", exact: true }).click();
-  await tool.getByRole("button", { name: "开始处理 1 张", exact: true }).click();
   await expect(tool).toContainText("未获准写入目录");
   expect(await page.evaluate(() => Object.keys((window as any).batchWrites))).toEqual([]);
   await expect(tool.getByRole("button", { name: "选择本地目录", exact: true })).toBeEnabled();
@@ -167,8 +164,7 @@ test("单文件写入失败有准确清单并继续处理后续图片", async ({
   await installDirectory(page, [await jpg("STYLE123/1.jpg"), await jpg("STYLE123/2.jpg")], { writeFailure: "/1.jpg" });
   const { tool } = await fixture(page);
   await tool.getByRole("button", { name: "选择本地目录", exact: true }).click();
-  await tool.getByRole("button", { name: "开始处理 2 张", exact: true }).click();
-  await expect(tool).toContainText("处理完成：成功 1 张，失败 1 张");
+  await expect(tool).toContainText("处理完成：成功 1 张，原图另存待确认 0 张，失败 1 张");
   const output = await outputData(page);
   const report = JSON.parse(Buffer.from(Object.entries(output).find(([path]) => path.endsWith("处理清单.json"))![1].base64, "base64").toString());
   expect(report.files.map((file: any) => file.status)).toEqual(["failed", "success"]);
@@ -186,4 +182,61 @@ test("停止后保留已完成文件并记录未完成数量", async ({ page }) 
   });
   expect(result.cancelled).toBe(true); expect(result.files).toHaveLength(1); expect(result.total).toBe(2);
   expect(await page.evaluate(() => (window as any).batchSourceWrites)).toEqual([]);
+});
+
+test("选择目录后自动处理跨分页全部图片，异常原图另存且不阻断", async ({ page }) => {
+  const files: InputImage[] = [];
+  for (let style = 1; style <= 5; style++) for (let number = 1; number <= 9; number++) files.push(await jpg(`STYLE${style}/主图/${number}.jpg`, 240, 240));
+  files.push(await jpg("STYLE1/30.jpg", 240, 240), await jpg("STYLE2/横图.jpg", 300, 100));
+  await installDirectory(page, files);
+  const { tool } = await fixture(page);
+  await tool.getByRole("button", { name: "选择本地目录", exact: true }).click();
+  await expect(tool).toContainText("处理完成：成功 45 张，原图另存待确认 2 张，失败 0 张");
+  const output = await outputData(page);
+  expect(Object.keys(output)).toHaveLength(48);
+  const report = JSON.parse(Buffer.from(Object.entries(output).find(([path]) => path.endsWith("处理清单.json"))![1].base64, "base64").toString());
+  expect(report.total).toBe(47);
+  expect(report.files.filter((file: any) => file.status === "review")).toHaveLength(2);
+  expect(new Set(report.files.map((file: any) => file.source)).size).toBe(47);
+  for (const original of files.slice(-2)) {
+    const saved = Object.entries(output).find(([path]) => path.endsWith(`/_待确认/${original.path}`))!;
+    expect(saved[1].base64).toBe(original.base64);
+  }
+  expect(await page.evaluate(() => (window as any).batchSourceWrites)).toEqual([]);
+  await tool.screenshot({ path: test.info().outputPath("image-batch-all-results.png") });
+});
+
+test("混放图片根据画面颜色匹配到颜色组，全流程无需逐张设置", async ({ page }) => {
+  const files: InputImage[] = [];
+  for (const [index, color] of ["#b5132b", "#1937ce"].entries()) {
+    const jpeg = (width: number, height: number) => sharp({ create: { width, height, channels: 3, background: color } }).jpeg().toBuffer();
+    files.push({ path: `STYLE1/${index + 1}.jpg`, type: "image/jpeg", base64: (await jpeg(240, 240)).toString("base64") });
+    files.push({ path: `STYLE1/${50 + index}.jpg`, type: "image/jpeg", base64: (await jpeg(950, 1200)).toString("base64") });
+    files.push({ path: `STYLE1/${30 + index}.png`, type: "image/png", base64: (await sharp({ create: { width: 240, height: 240, channels: 4, background: color } }).composite([{ input: Buffer.from('<svg width="240" height="240"><rect width="240" height="240" opacity="0.7" fill="white"/></svg>'), blend: "dest-in" }]).png().toBuffer()).toString("base64") });
+  }
+  await installDirectory(page, files);
+  const { tool } = await fixture(page);
+  await tool.getByRole("button", { name: "选择本地目录", exact: true }).click();
+  await expect(tool).toContainText("处理完成：成功 6 张，原图另存待确认 0 张，失败 0 张");
+  const output = await outputData(page);
+  const report = JSON.parse(Buffer.from(Object.entries(output).find(([path]) => path.endsWith("处理清单.json"))![1].base64, "base64").toString());
+  for (const number of [1, 2]) {
+    const targets = report.files.filter((file: any) => [`STYLE1/${number}.jpg`, `STYLE1/${49 + number}.jpg`, `STYLE1/${29 + number}.png`].includes(file.source)).map((file: any) => file.target.split("/").slice(0, -1).join("/"));
+    expect(new Set(targets).size).toBe(1);
+    expect(targets[0]).toContain(`颜色分组文件夹（${number}）`);
+  }
+});
+
+test("勾选当前分页与仅看待确认不会缩小处理范围", async ({ page }) => {
+  const files = [...await Promise.all(Array.from({ length: 25 }, (_, i) => jpg(`STYLE${Math.floor(i / 5)}/主图${i}.jpg`, 240, 240))), await jpg("STYLE1/30.jpg", 240, 240)];
+  await installDirectory(page, files);
+  const { tool } = await fixture(page);
+  await tool.getByRole("checkbox", { name: "识别后自动处理整个目录", exact: true }).uncheck();
+  await tool.getByRole("button", { name: "选择本地目录", exact: true }).click();
+  await expect(tool).toContainText("26 张图片");
+  await tool.locator("thead").getByRole("checkbox").check();
+  await tool.getByRole("checkbox", { name: "仅看待确认", exact: true }).check();
+  await tool.getByRole("button", { name: "处理整个目录 26 张", exact: true }).click();
+  await expect(tool).toContainText("处理完成：成功 25 张，原图另存待确认 1 张，失败 0 张");
+  expect(await page.evaluate(() => Object.keys((window as any).batchWrites).length)).toBe(27);
 });

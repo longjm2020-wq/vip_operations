@@ -1,4 +1,5 @@
 import { assignImageGroups, naturalCompare, outputPrefix, validFolderName, type BatchImageMetadata, type BatchPlan, type BatchPlanEntry, type DirectoryLayout } from "./image-batch-plan";
+import { imagePalette, inferImageColorGroups } from "./image-batch-recognition";
 
 interface LocalWritable { write(data: Blob | string): Promise<void>; close(): Promise<void>; abort(): Promise<void> }
 export interface LocalImageFileHandle { kind: "file"; name: string; getFile(): Promise<File>; createWritable(): Promise<LocalWritable> }
@@ -51,7 +52,14 @@ export async function readLocalImageMetadata(file: File): Promise<BatchImageMeta
         for (let index = 3; index < pixels.length; index += 4) if (pixels[index] < 255) { transparent = true; break; }
       } finally { canvas.width = canvas.height = 1; }
     }
-    return { width, height, format, transparent };
+    const preview = document.createElement("canvas"); preview.width = preview.height = 96;
+    try {
+      const context = preview.getContext("2d", { willReadFrequently: true });
+      if (!context) throw Error("浏览器不能读取图片颜色");
+      context.drawImage(bitmap, 0, 0, 96, 96);
+      const palette = imagePalette(context.getImageData(0, 0, 96, 96).data, 96, 96);
+      return { width, height, format, transparent, palette };
+    } finally { preview.width = preview.height = 1; }
   } finally { bitmap.close(); }
 }
 export async function scanImageDirectory(root: LocalImageDirectory, signal: AbortSignal, onProgress: (progress: BatchProgress) => void): Promise<ImageScan> {
@@ -91,7 +99,7 @@ export async function scanImageDirectory(root: LocalImageDirectory, signal: Abor
   onProgress({ phase: "预览已就绪", completed: files.length, total: files.length, file: "" });
   return { files, ignored };
 }
-export function scanToItems(rootName: string, scan: ImageScan, layout: DirectoryLayout) { return assignImageGroups(rootName, scan.files, layout); }
+export function scanToItems(rootName: string, scan: ImageScan, layout: DirectoryLayout) { return inferImageColorGroups(assignImageGroups(rootName, scan.files, layout)); }
 function canvasBlob(canvas: HTMLCanvasElement, type: string, quality?: number): Promise<Blob> {
   return new Promise((resolve, reject) => canvas.toBlob(blob => blob?.type === type ? resolve(blob) : reject(Error("浏览器无法生成指定图片格式")), type, quality));
 }
@@ -142,28 +150,33 @@ async function writeNewFile(root: LocalImageDirectory, path: string, blob: Blob 
   try { await stream.write(blob); await stream.close(); }
   catch (error) { await stream.abort().catch(() => {}); throw error; }
 }
-export interface BatchFileResult { source: string; target: string; status: "success" | "failed"; beforeBytes: number; afterBytes?: number; width?: number; height?: number; changed?: boolean; error?: string }
+export interface BatchFileResult { source: string; target: string; status: "success" | "review" | "failed"; beforeBytes: number; afterBytes?: number; width?: number; height?: number; changed?: boolean; error?: string; reasons?: string[]; groupNote?: string }
 export interface BatchRunResult { directoryName: string; files: BatchFileResult[]; cancelled: boolean; skipped: number; total: number; reportError?: string }
 export async function runImageBatch(root: LocalImageDirectory, plan: BatchPlan, files: Map<string, File>, signal: AbortSignal, onProgress: (progress: BatchProgress) => void): Promise<BatchRunResult> {
-  // Check again before any writes; callers cannot bypass the preview's validation.
-  if (Object.keys(plan.issues).length || !plan.entries.length || plan.entries.some(entry => !files.has(entry.item.sourcePath))) throw Error("请先处理预览中的待确认项目");
+  // Invalid images are copied verbatim to review, never released as compliant delivery images.
+  const tasks = [...plan.entries.map(entry => ({ ...entry, review: false, reasons: [] as string[] })), ...plan.review.map(entry => ({ ...entry, limit: undefined, review: true }))];
+  if (!tasks.length || plan.entries.some(entry => plan.issues[entry.item.id]) || tasks.some(entry => !files.has(entry.item.sourcePath))) throw Error("图片处理计划不完整，请重新选择目录");
+  const targetPaths = tasks.map(task => task.target.toLocaleLowerCase());
+  if (new Set(targetPaths).size !== targetPaths.length) throw Error("输出路径重复，请调整后重试");
   checkAbort(signal);
   const { name, directory } = await freshOutputDirectory(root);
-  const result: BatchRunResult = { directoryName: name, files: [], cancelled: false, skipped: plan.skipped, total: plan.entries.length };
-  for (const entry of plan.entries) {
+  const result: BatchRunResult = { directoryName: name, files: [], cancelled: false, skipped: plan.skipped, total: tasks.length };
+  for (const entry of tasks) {
     if (signal.aborted) { result.cancelled = true; break; }
-    onProgress({ phase: "压缩并命名", completed: result.files.length, total: plan.entries.length, file: entry.item.sourcePath });
+    onProgress({ phase: entry.review ? "保存待确认原图" : "压缩并命名", completed: result.files.length, total: tasks.length, file: entry.item.sourcePath });
     try {
-      const prepared = await prepareBatchImage(files.get(entry.item.sourcePath)!, entry, signal);
+      const source = files.get(entry.item.sourcePath)!;
+      if (!source.size) throw Error(entry.item.error || "未能读取原图");
+      const prepared = entry.review ? { blob: source, width: entry.item.width, height: entry.item.height, changed: false } : await prepareBatchImage(source, entry, signal);
       checkAbort(signal);
       if (entry.limit && prepared.blob.size > entry.limit) throw Error("生成文件超过体积上限");
       await writeNewFile(directory, entry.target, prepared.blob);
-      result.files.push({ source: entry.item.sourcePath, target: entry.target, status: "success", beforeBytes: entry.item.size, afterBytes: prepared.blob.size, width: prepared.width, height: prepared.height, changed: prepared.changed });
+      result.files.push({ source: entry.item.sourcePath, target: entry.target, status: entry.review ? "review" : "success", beforeBytes: entry.item.size, afterBytes: prepared.blob.size, width: prepared.width, height: prepared.height, changed: prepared.changed, ...(entry.review ? { reasons: entry.reasons } : {}), ...(entry.item.groupNote ? { groupNote: entry.item.groupNote } : {}) });
     } catch (error) {
       if (signal.aborted) { result.cancelled = true; break; }
       result.files.push({ source: entry.item.sourcePath, target: entry.target, status: "failed", beforeBytes: entry.item.size, error: errorText(error) });
     }
-    onProgress({ phase: "压缩并命名", completed: result.files.length, total: plan.entries.length, file: entry.item.sourcePath });
+    onProgress({ phase: "压缩并命名", completed: result.files.length, total: tasks.length, file: entry.item.sourcePath });
   }
   result.cancelled ||= signal.aborted;
   try { await writeNewFile(directory, "处理清单.json", JSON.stringify({ ...result, createdAt: new Date().toISOString() }, null, 2)); }

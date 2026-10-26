@@ -6,14 +6,16 @@ export const imageKindLabels = {
 export type ImageKind = keyof typeof imageKindLabels;
 export type DirectoryLayout = "auto" | "single" | "batch";
 export type ColorFolderMode = "source" | "numbered";
-export interface BatchImageMetadata { width: number; height: number; format: string; transparent: boolean }
+import type { ImagePalette } from "./image-batch-recognition.js";
+export interface BatchImageMetadata { width: number; height: number; format: string; transparent: boolean; palette?: ImagePalette }
 export interface BatchImageItem extends BatchImageMetadata {
-  id: string; sourcePath: string; style: string; group: string; kind: ImageKind; order: number; size: number; error?: string;
+  id: string; sourcePath: string; style: string; group: string; kind: ImageKind; order: number; size: number; error?: string; groupNote?: string; groupUncertain?: boolean;
 }
 export interface BatchPlanEntry { item: BatchImageItem; target: string; limit?: number }
-export interface BatchPlan { entries: BatchPlanEntry[]; issues: Record<string, string[]>; styles: number; groups: number; skipped: number }
+export interface BatchReviewEntry { item: BatchImageItem; target: string; reasons: string[] }
+export interface BatchPlan { entries: BatchPlanEntry[]; review: BatchReviewEntry[]; issues: Record<string, string[]>; styles: number; groups: number; skipped: number }
 export const naturalCompare = (a: string, b: string) => a.localeCompare(b, "zh-CN", { numeric: true, sensitivity: "base" });
-const roleDirectory = /^(?:主图|轮播图?|方图|详情(?:页|图)?|平铺图?|透明图?|列表图?|吊牌|合格证|images?|detail|carousel|flat|listing)$/i;
+const roleDirectory = /^(?:主图|轮播图?|方图|详情(?:页|图)?|平铺图?|透明图?|列表图?|封面(?:_导出)?|吊牌|合格证|images?|detail|carousel|flat|listing)$/i;
 export const outputPrefix = "图片命名结果-";
 export function validFolderName(value: string) {
   return !!value.trim() && value === value.trim() && value.length <= 100 && !/[\\/:*?"<>|\u0000-\u001f]/.test(value)
@@ -59,6 +61,7 @@ export function buildImageBatchPlan(items: BatchImageItem[], folderMode: ColorFo
     if (item.error) addIssue(item, item.error);
     if (!validFolderName(item.style)) addIssue(item, "款号目录名称无效，请去掉路径符号或末尾空格");
     if (item.kind === "unknown") addIssue(item, "请选择图片用途，或选择跳过");
+    if (item.groupUncertain && !item.group && ["carousel", "flat", "listing"].includes(item.kind)) addIssue(item, "颜色无法可靠匹配，原图另存待确认；可手动指定颜色组");
     if (item.group && !validFolderName(item.group)) addIssue(item, "颜色组名称无效，请仅填写一个文件夹名称");
     if (!Number.isFinite(item.order) || item.order < 1) addIssue(item, "顺序必须是大于 0 的数字");
     if (item.kind === "carousel" || item.kind === "flat") {
@@ -81,6 +84,7 @@ export function buildImageBatchPlan(items: BatchImageItem[], folderMode: ColorFo
       if (item.kind === "unknown") continue;
       const colorAsset = ["carousel", "flat", "listing"].includes(item.kind);
       if (multiple && colorAsset && !item.group) addIssue(item, "多色款的轮播、30、50 号图必须指定颜色组");
+      if (issues[item.id]) continue;
       const group = colorAsset ? item.group || colors[0] || "" : "";
       const folder = multiple && colorAsset ? (folderMode === "source" ? group : `颜色分组文件夹（${colors.indexOf(group) + 1}）`) : "";
       const directory = [styleItems[0].style, folder].filter(Boolean).join("/");
@@ -91,7 +95,7 @@ export function buildImageBatchPlan(items: BatchImageItem[], folderMode: ColorFo
       bucket.sort((a, b) => a.order - b.order || naturalCompare(a.sourcePath, b.sourcePath));
       const kind = bucket[0].kind;
       const maximum = kind === "carousel" ? carouselNumbers.length : kind === "detail" ? 50 : 1;
-      if (bucket.length > maximum) for (const item of bucket) addIssue(item, `${imageKindLabels[kind]}共 ${bucket.length} 张，当前范围最多 ${maximum} 张；请调整颜色组、用途或跳过多余图片`);
+      if (bucket.length > maximum) for (const item of bucket.slice(maximum)) addIssue(item, `${imageKindLabels[kind]}共 ${bucket.length} 张，超出当前范围 ${maximum} 张的编号上限；多余原图另存待确认`);
       bucket.forEach((item, index) => {
         const colorAsset = ["carousel", "flat", "listing"].includes(kind);
         const group = colorAsset ? item.group || colors[0] || "" : "";
@@ -108,5 +112,6 @@ export function buildImageBatchPlan(items: BatchImageItem[], folderMode: ColorFo
     if (destinations.has(key)) { addIssue(item, "输出文件名重复"); addIssue(destinations.get(key)!, "输出文件名重复"); }
     destinations.set(key, item);
   }
-  return { entries, issues, styles: styles.size, groups: groupCount, skipped: items.length - active.length };
+  const review = active.filter(item => issues[item.id]).map(item => ({ item, target: `_待确认/${item.sourcePath}`, reasons: issues[item.id] }));
+  return { entries: entries.filter(entry => !issues[entry.item.id]), review, issues, styles: styles.size, groups: groupCount, skipped: items.length - active.length };
 }
