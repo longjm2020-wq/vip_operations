@@ -77,6 +77,7 @@ const ProjectNotifications = React.lazy(() => import("./projects").then(module =
 import "./style.css";
 import "./workspace-shell.css";
 import { AppearanceProvider, ThemeToggle } from "./appearance";
+const coreFeatureSummary = "经营分析 · 商品库存 · 协作表格 · 图片批量命名 · AIGC";
 const SupplierRegister = React.lazy(() => import("./supply").then(module => ({ default: module.SupplierRegister })));
 const SupplyProfile = React.lazy(() => import("./supply").then(module => ({ default: module.SupplyProfile })));
 const SupplyProducts = React.lazy(() => import("./supply").then(module => ({ default: module.SupplyProducts })));
@@ -401,7 +402,7 @@ function Workspace({ user }: { user: Row }) {
             <BrandMark collapsed={navCollapsed} />
           </Link>
           {!navCollapsed && (
-            <div className="sidebar-caption">
+            <div className="sidebar-caption" title={coreFeatureSummary}>
               {user.roleCodes?.includes("SUPPLIER")
                 ? "序缇供应链后台"
                 : "内部管理系统"}
@@ -551,7 +552,7 @@ function Workspace({ user }: { user: Row }) {
                 }
               />
             </Routes>
-            {!collaborationTable && !personalWorkspace && <footer className="page-footer">
+            {!collaborationTable && !personalWorkspace && <footer className="page-footer" title={coreFeatureSummary}>
               XUTI
             </footer>}
           </Layout.Content>

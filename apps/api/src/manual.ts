@@ -34,6 +34,7 @@ export const manualPermissions: Record<string, string | null> = {
   "33-competitor-analysis": "analytics.read",
   "34-jushuitan-products": "product.read",
   "35-vip-product-registration": "product.read",
+  "37-image-batch-naming": null,
 };
 export function canReadManual(
   actor: Actor,
@@ -42,6 +43,7 @@ export function canReadManual(
 ) {
   return (
     (!permission || actor.permissions.includes(permission)) &&
+    (id !== "37-image-batch-naming" || ["product.read", "selection.read", "project.read"].some(value => actor.permissions.includes(value))) &&
     (id !== "31-ai-settings" || !!actor.roleCodes?.includes("SUPER_ADMIN"))
   );
 }

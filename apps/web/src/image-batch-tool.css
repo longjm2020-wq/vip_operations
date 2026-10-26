@@ -1,0 +1,18 @@
+.image-batch-tool { display: flex; flex-direction: column; gap: 16px; color: var(--app-text); }
+.image-batch-intro, .image-batch-note { margin: 0; line-height: 1.75; }
+.image-batch-note, .image-batch-path small { color: var(--app-secondary); font-size: 12px; }
+.image-batch-controls { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 16px; }
+.image-batch-controls label { display: flex; flex-direction: column; gap: 6px; }
+.image-batch-controls .ant-select { min-width: 220px; }
+.image-batch-rules { margin: 0; padding-left: 20px; line-height: 1.85; }
+.image-batch-summary { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px; padding: 14px 16px; background: var(--app-muted); border-radius: 8px; }
+.image-batch-path { display: flex; flex-direction: column; gap: 6px; overflow-wrap: anywhere; white-space: normal; }
+.image-batch-path strong { font-weight: 500; }
+.image-batch-path small.image-batch-error { color: var(--app-danger, #c33c32); }
+.image-batch-thumb { width: 58px; height: 68px; object-fit: contain; background: repeating-conic-gradient(#eee 0% 25%, white 0% 50%) 50% / 12px 12px; border: 1px solid var(--app-border); border-radius: 4px; }
+.image-batch-bulk .ant-input, .image-batch-bulk .ant-select { width: 190px; }
+.image-batch-table .ant-select { width: 100%; }
+.image-batch-table .ant-input-number { width: 66px; }
+.image-batch-progress { padding: 12px 16px; background: var(--app-muted); border-radius: 8px; overflow-wrap: anywhere; }
+.image-batch-actions { position: sticky; bottom: -20px; z-index: 2; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; padding: 14px 0; background: var(--app-surface, #fff); border-top: 1px solid var(--app-border); }
+.image-batch-actions > span { color: var(--app-secondary); font-size: 12px; }
