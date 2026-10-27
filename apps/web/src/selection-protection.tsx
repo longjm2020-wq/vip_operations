@@ -29,6 +29,8 @@ import { selectionRowNumbers } from "./selection-row-number";
 import {
   defaultProtection,
   normalizeSelectionProtection,
+  protectionRegionSchema,
+  autoHideRegionSchema,
   type AutoHideRegion,
   type ProtectionRegion,
   type SelectionProtection,
@@ -38,6 +40,26 @@ import {
   protectionEditWarnings,
   type ProtectionUserCapability,
 } from "./selection-protection-warnings";
+import { normalizeProtectionArea, selectionProtectionArea } from "./selection-protection-area";
+
+const scopeOptions = [
+  { value: "cells", label: "选中单元格" },
+  { value: "rows", label: "选中整行（含新增字段）" },
+  { value: "columns", label: "整列（含新增行）" },
+  { value: "sheet", label: "当前工作表（含新增行、字段）" },
+];
+const scopeHints = {
+  cells: "仅作用于指定行与字段的交叉单元格；新增行、字段不自动加入。",
+  rows: "指定行的全部字段均沿用此权限，包括后续新增字段。",
+  columns: "指定字段的全部行均沿用此权限，包括未显示的行和后续新增行。",
+  sheet: "当前工作表的全部单元格均沿用此权限，包括后续新增行和字段。",
+};
+const nextRegionName = (prefix: string, items: { name: string }[]) => {
+  const names = new Set(items.map(item => item.name.trim()));
+  let number = items.length + 1;
+  while (names.has(`${prefix} ${number}`)) number++;
+  return `${prefix} ${number}`;
+};
 
 const accessOptions = [
   { value: "edit", label: "可编辑" },
@@ -56,6 +78,7 @@ export function SelectionProtectionControl({
   columns,
   selectedCells,
   selectedRows,
+  selectedColumnKeys,
   blocked,
   currentRow,
   onRefresh,
@@ -64,6 +87,7 @@ export function SelectionProtectionControl({
   columns: { key: string; label: string }[];
   selectedCells: Set<string>;
   selectedRows: string[];
+  selectedColumnKeys: string[];
   blocked: boolean;
   currentRow?: Row;
   onRefresh: () => void;
@@ -169,52 +193,35 @@ export function SelectionProtectionControl({
       setBusy(false);
     }
   };
-  const selectedArea = () => {
-    const chosenRows = [
-      ...new Set(
-        [...selectedCells].map((id) => id.split("::")[0]).concat(selectedRows),
-      ),
-    ];
-    const rowIds = chosenRows
-      .map((key) => rows.find((row) => row._key === key)?.id)
-      .filter(Boolean)
-      .map(String);
-    if (chosenRows.length !== rowIds.length) {
-      message.warning("请先保存选中行，再设置区域");
+  const selectedArea = (emptyScope: "cells" | "sheet") => {
+    try {
+      return selectionProtectionArea({
+        rows: rows.map(row => ({ _key: String(row._key), id: row.id })),
+        columns, selectedCells, selectedRows, selectedColumnKeys, emptyScope,
+      });
+    } catch (error) {
+      message.warning((error as Error).message);
       return null;
     }
-    const columnKeys = [
-      ...new Set([...selectedCells].map((id) => id.split("::")[1])),
-    ].filter((key) => columns.some((column) => column.key === key));
-    return { rowIds, columnKeys };
   };
   const add = () => {
-    const area = selectedArea();
+    const area = selectedArea("sheet");
     if (!area) return;
-    const { rowIds, columnKeys } = area;
     setOnlyMe(false);
     setRegion({
       id: crypto.randomUUID(),
-      name: `保护区域 ${draft.regions.length + 1}`,
-      scope:
-        rowIds.length && columnKeys.length
-          ? "cells"
-          : rowIds.length
-            ? "rows"
-            : "sheet",
-      rowIds,
-      columnKeys,
+      name: nextRegionName("保护区域", draft.regions),
+      ...area,
       users: { [String(user.id)]: "edit" },
       others: "read",
     });
   };
   const addHideRegion = () => {
-    const area = selectedArea();
+    const area = selectedArea("cells");
     if (!area) return;
     setHideRegion({
       id: crypto.randomUUID(),
-      name: `隐藏区域 ${draft.autoHideRegions.length + 1}`,
-      scope: area.rowIds.length && !area.columnKeys.length ? "rows" : "cells",
+      name: nextRegionName("隐藏区域", draft.autoHideRegions),
       ...area,
     });
   };
@@ -237,7 +244,7 @@ export function SelectionProtectionControl({
   ) =>
     item.scope === "sheet"
       ? "当前工作表（含新增行、字段）"
-      : `${item.scope !== "columns" ? `${item.rowIds.length} 行` : "所有行"} · ${item.scope !== "rows" ? item.columnKeys.map((key) => columns.find((column) => column.key === key)?.label || key).join("、") : "所有字段"}`;
+      : `${item.scope !== "columns" ? `${item.rowIds.length} 行` : "所有行（含新增行）"} · ${item.scope !== "rows" ? item.columnKeys.map((key) => columns.find((column) => column.key === key)?.label || key).join("、") : "所有字段（含新增字段）"}${item.scope === "cells" ? "（指定单元格）" : ""}`;
   return (
     <>
       <Dropdown
@@ -572,27 +579,15 @@ export function SelectionProtectionControl({
         okButtonProps={{
           disabled:
             blocked ||
-            !hideRegion?.name.trim() ||
-            ((hideRegion.scope === "cells" || hideRegion.scope === "rows") &&
-              !hideRegion.rowIds.length) ||
-            ((hideRegion.scope === "cells" || hideRegion.scope === "columns") &&
-              !hideRegion.columnKeys.length),
+            !autoHideRegionSchema.safeParse(hideRegion && normalizeProtectionArea(hideRegion)).success,
         }}
         onCancel={() => setHideRegion(null)}
         onOk={() => {
-          if (!hideRegion) return;
-          const item = {
+          if (!hideRegion || !autoHideRegionSchema.safeParse(normalizeProtectionArea(hideRegion)).success) return;
+          const item = normalizeProtectionArea({
             ...hideRegion,
             name: hideRegion.name.trim(),
-            rowIds:
-              hideRegion.scope === "columns" || hideRegion.scope === "sheet"
-                ? []
-                : hideRegion.rowIds,
-            columnKeys:
-              hideRegion.scope === "rows" || hideRegion.scope === "sheet"
-                ? []
-                : hideRegion.columnKeys,
-          };
+          });
           void save({
             ...draft,
             autoHideRegions: [
@@ -618,12 +613,7 @@ export function SelectionProtectionControl({
               aria-label="隐藏范围"
               style={{ width: "100%" }}
               value={hideRegion.scope}
-              options={[
-                { value: "cells", label: "选中单元格" },
-                { value: "rows", label: "选中整行" },
-                { value: "columns", label: "整列（所有行）" },
-                { value: "sheet", label: "当前工作表" },
-              ]}
+              options={scopeOptions}
               onChange={(scope) => setHideRegion({ ...hideRegion, scope })}
             />
             {(hideRegion.scope === "cells" || hideRegion.scope === "rows") && (
@@ -675,13 +665,15 @@ export function SelectionProtectionControl({
         open={!!region}
         width={620}
         confirmLoading={busy}
-        okButtonProps={{ disabled: blocked }}
+        okButtonProps={{ disabled: blocked || !protectionRegionSchema.safeParse(region && normalizeProtectionArea(region)).success }}
         onCancel={() => setRegion(null)}
         onOk={() => {
-          if (!region) return;
-          const item = onlyMe
-            ? { ...region, users: { [String(user.id)]: "edit" as const } }
-            : region;
+          if (!region || !protectionRegionSchema.safeParse(normalizeProtectionArea(region)).success) return;
+          const item = normalizeProtectionArea({
+            ...region,
+            name: region.name.trim(),
+            users: onlyMe ? { [String(user.id)]: "edit" as const } : region.users,
+          });
           void save({
             ...draft,
             regions: [
@@ -707,14 +699,10 @@ export function SelectionProtectionControl({
               aria-label="保护范围"
               style={{ width: "100%" }}
               value={region.scope}
-              options={[
-                { value: "cells", label: "选中单元格" },
-                { value: "rows", label: "选中整行" },
-                { value: "columns", label: "整列（所有行）" },
-                { value: "sheet", label: "当前工作表" },
-              ]}
+              options={scopeOptions}
               onChange={(scope) => setRegion({ ...region, scope })}
             />
+            <Typography.Text type="secondary">{scopeHints[region.scope]}</Typography.Text>
             {(region.scope === "cells" || region.scope === "rows") && (
               <Select
                 getPopupContainer={(trigger) => trigger.parentElement!}

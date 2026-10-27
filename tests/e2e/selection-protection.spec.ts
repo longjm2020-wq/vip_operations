@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { selectionLayoutSchema } from "../../packages/contracts/src/selection-layout.js";
 import {
   defaultProtection,
   selectionFields,
@@ -78,6 +79,7 @@ test.beforeEach(async ({ page }) => {
   await page.route("**/api/v1/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
     let data: any = [];
+    if (path.endsWith("/appearance")) data = { mode: "light", version: 0 };
     if (path.endsWith("/layout-preferences")) {
       if (route.request().method() === "POST")
         personalLayout = {
@@ -337,6 +339,104 @@ test("administrator configures a selected region, named-user access and independ
   expect((await enable).postDataJSON().settings.enabled).toBe(true);
 });
 
+async function addProtectionArea(page: Page) {
+  await page.getByRole("button", { name: "保护区域", exact: true }).click();
+  await page.getByRole("menuitem", { name: "区域权限", exact: true }).click();
+  await page.getByRole("button", { name: "添加保护区域" }).click();
+  return page.getByRole("dialog", { name: "设置保护区域", exact: true });
+}
+
+test("header-selected columns retain future rows even with filtered results", async ({ page }) => {
+  await page.getByRole("textbox", { name: "搜索选款", exact: true }).fill("STYLE-1");
+  await expect(page.locator('td[data-selection-column="xutiStyleNo"]')).toHaveCount(1);
+  await page.getByRole("columnheader", { name: "选择整列：材质", exact: true }).click();
+  const dialog = await addProtectionArea(page);
+  await expect(dialog.getByText("整列（含新增行）", { exact: true })).toBeVisible();
+  await expect(dialog.getByLabel("保护行", { exact: true })).toHaveCount(0);
+  const saving = protectionSave(page);
+  await dialog.getByRole("button", { name: "确定", exact: true }).click();
+  expect((await saving).postDataJSON().settings.regions[0]).toMatchObject({ scope: "columns", rowIds: [], columnKeys: ["material"] });
+  await expect(page.getByText("所有行（含新增行） · 材质", { exact: true })).toBeVisible();
+});
+
+for (const source of ["row number", "checkbox", "check all"] as const) {
+  test(`${source} selects a whole-row protection area after selecting a column`, async ({ page }) => {
+    await page.getByRole("columnheader", { name: "选择整列：材质", exact: true }).click();
+    if (source === "row number") await page.getByLabel("选择第2行", { exact: true }).click();
+    else if (source === "checkbox") await page.getByRole("checkbox", { name: "选择 STYLE-2", exact: true }).check();
+    else await page.getByRole("checkbox", { name: "选择全部可见行", exact: true }).check();
+    const dialog = await addProtectionArea(page);
+    await expect(dialog.getByText("选中整行（含新增字段）", { exact: true })).toBeVisible();
+    await expect(dialog.getByLabel("保护字段", { exact: true })).toHaveCount(0);
+    const saving = protectionSave(page);
+    await dialog.getByRole("button", { name: "确定", exact: true }).click();
+    const region = (await saving).postDataJSON().settings.regions[0];
+    expect(region).toMatchObject({ scope: "rows", rowIds: source === "check all" ? ["1", "2", "3"] : ["2"], columnKeys: [] });
+    await expect(page.getByText(`${region.rowIds.length} 行 · 所有字段（含新增字段）`, { exact: true })).toBeVisible();
+  });
+}
+
+test("selecting filled cells down an entire visible column stays bounded to those cells", async ({ page }) => {
+  await page.locator('td[data-selection-row="1"][data-selection-column="material"]').click();
+  await page.keyboard.press("Control+Shift+ArrowDown");
+  const dialog = await addProtectionArea(page);
+  await expect(dialog.getByText("选中单元格", { exact: true })).toBeVisible();
+  const saving = protectionSave(page);
+  await dialog.getByRole("button", { name: "确定", exact: true }).click();
+  expect((await saving).postDataJSON().settings.regions[0]).toMatchObject({ scope: "cells", rowIds: ["1", "2", "3"], columnKeys: ["material"] });
+});
+
+test("existing cell regions keep their range and scope changes validate and remove unused coordinates", async ({ page }) => {
+  const original = {
+    id: "123e4567-e89b-42d3-a456-426614174000", name: "保护区域 2", scope: "cells" as const,
+    rowIds: ["1", "2", "3"], columnKeys: ["material"], users: { "1": "edit" as const, "2": "read" as const }, others: "deny" as const,
+  };
+  await mockProtection(page, { ...defaultProtection, enabled: true, regions: [original] });
+  await page.reload();
+  const dialog = await addProtectionArea(page);
+  await expect(dialog.getByLabel("保护区域名称")).toHaveValue("保护区域 3");
+  await dialog.getByRole("button", { name: "取消", exact: true }).click();
+  await page.getByRole("button", { name: "编辑保护区域 2", exact: true }).click();
+  await expect(dialog.getByText("选中单元格", { exact: true })).toBeVisible();
+  const unchanged = protectionSave(page);
+  await dialog.getByRole("button", { name: "确定", exact: true }).click();
+  expect((await unchanged).postDataJSON().settings.regions).toEqual([original]);
+  await expect(dialog).not.toBeVisible();
+  await page.getByRole("button", { name: "编辑保护区域 2", exact: true }).click();
+  await dialog.getByLabel("保护区域名称").fill("  ");
+  await expect(dialog.getByRole("button", { name: "确定", exact: true })).toBeDisabled();
+  await dialog.getByLabel("保护区域名称").fill(" 整列材质 ");
+  await dialog.getByLabel("保护范围", { exact: true }).click();
+  await page.locator(".ant-select-dropdown:visible").getByText("整列（含新增行）", { exact: true }).click();
+  const saving = protectionSave(page);
+  await dialog.getByRole("button", { name: "确定", exact: true }).click();
+  expect((await saving).postDataJSON().settings.regions).toEqual([{ ...original, name: "整列材质", scope: "columns", rowIds: [] }]);
+  await expect(dialog).not.toBeVisible();
+  await page.getByRole("button", { name: "编辑整列材质", exact: true }).click();
+  await dialog.getByLabel("保护范围", { exact: true }).click();
+  await page.locator(".ant-select-dropdown:visible").getByText("选中整行（含新增字段）", { exact: true }).click();
+  await expect(dialog.getByRole("button", { name: "确定", exact: true })).toBeDisabled();
+});
+
+for (const scope of ["columns", "rows"] as const) {
+  test(`auto-hide preserves ${scope} selection intent and its future coverage`, async ({ page }) => {
+    if (scope === "columns") {
+      await page.getByRole("columnheader", { name: "选择整列：材质", exact: true }).click();
+      await page.getByRole("columnheader", { name: "选择整列：序缇款号", exact: true }).click({ modifiers: ["Control"] });
+    } else await page.getByLabel("选择第2行", { exact: true }).click();
+    await openAutoHide(page);
+    await page.getByRole("button", { name: /添加隐藏区域$/ }).click();
+    const dialog = page.getByRole("dialog", { name: "设置隐藏区域", exact: true });
+    await expect(dialog.getByText(scope === "columns" ? "整列（含新增行）" : "选中整行（含新增字段）", { exact: true })).toBeVisible();
+    const saving = protectionSave(page);
+    await dialog.getByRole("button", { name: "确定", exact: true }).click();
+    const area = (await saving).postDataJSON().settings.autoHideRegions[0];
+    expect(area.scope).toBe(scope);
+    expect(area.rowIds).toEqual(scope === "columns" ? [] : ["2"]);
+    expect(area.columnKeys.sort()).toEqual(scope === "columns" ? ["material", "xutiStyleNo"] : []);
+  });
+}
+
 for (const scenario of [
   { name: "whole sheet default read permits a named local edit grant", others: "read", warning: null },
   { name: "explicit whole sheet read is explained as an overlapping edit blocker", others: "read", explicitRead: true, warning: "与“整表保护”重叠的部分仍不能编辑" },
@@ -481,7 +581,7 @@ test("scoped content hiding applies entire columns to all rows without saving st
   await dialog.getByLabel("隐藏范围", { exact: true }).click();
   await page
     .locator(".ant-select-dropdown:visible")
-    .getByText("整列（所有行）", { exact: true })
+    .getByText("整列（含新增行）", { exact: true })
     .click();
   await expect(dialog.getByLabel("隐藏行", { exact: true })).toHaveCount(0);
   const saving = protectionSave(page);
@@ -503,7 +603,7 @@ test("scoped content hiding applies entire columns to all rows without saving st
     .getByRole("button", { name: "编辑隐藏区域整列材质", exact: true })
     .click();
   await expect(
-    dialog.locator('.ant-select-content[title="整列（所有行）"]'),
+    dialog.locator('.ant-select-content[title="整列（含新增行）"]'),
   ).toBeVisible();
   await expect(dialog.getByLabel("隐藏行", { exact: true })).toHaveCount(0);
 });
@@ -587,17 +687,12 @@ test("read-only users cannot manage scoped content hiding", async ({
 test("date cells keep plain table styling, manual editing and read-only values", async ({
   page,
 }) => {
-  await page.addInitScript(() => {
-    localStorage.setItem("selection-field-types-initialized-v2", "true");
-    localStorage.setItem(
-      "selection-field-config-v1",
-      JSON.stringify({ registrationBatch: { type: "date" } }),
-    );
-    localStorage.removeItem("selection-layout-v2:1");
-  });
   let dateLayout: { preferences: unknown; revision: number } = {
-    preferences: null,
-    revision: 0,
+    preferences: selectionLayoutSchema.parse({ columns: [
+      { key: "xutiStyleNo", label: "序缇款号", width: 150 },
+      { key: "custom:plannedDate", label: "计划日期", width: 150, custom: true, type: "date" },
+    ] }),
+    revision: 1,
   };
   await page.route(
     "**/api/v1/style-selections/layout-preferences*",
@@ -613,12 +708,11 @@ test("date cells keep plain table styling, manual editing and read-only values",
   const rows = Array.from({ length: 3 }, (_, index) => ({
     id: String(index + 1),
     xutiStyleNo: `STYLE-${index + 1}`,
-    registrationBatch: "2026-10-01",
     images: [],
     labelImages: [],
     color: "白",
     material: "棉",
-    extraFields: {},
+    extraFields: { "custom:plannedDate": "2026-10-01" },
     sortOrder: index,
     migrationLocked: index === 1,
     cellAccess: Object.fromEntries(selectionFields.map((key) => [key, "edit"])),
@@ -638,9 +732,9 @@ test("date cells keep plain table styling, manual editing and read-only values",
   );
   await page.reload();
   const editableCell = page.locator(
-    'td[data-selection-row="1"][data-selection-column="registrationBatch"]',
+    'td[data-selection-row="1"][data-selection-column="custom:plannedDate"]',
   );
-  const editableDate = editableCell.getByLabel("登记批次", { exact: true });
+  const editableDate = editableCell.getByLabel("计划日期", { exact: true });
   await expect(editableDate).toHaveValue("2026-10-01");
   await expect(editableDate).toHaveClass("selection-date-input");
   expect(
@@ -659,19 +753,19 @@ test("date cells keep plain table styling, manual editing and read-only values",
   await editableDate.fill("2026-10-10");
   await expect(editableDate).toHaveValue("2026-10-10");
   await expect(
-    page.locator('.selection-editor-control input[aria-label="登记批次"]'),
+    page.locator('.selection-editor-control input[aria-label="计划日期"]'),
   ).toHaveAttribute("type", "date");
   const lockedDate = page
     .locator(
-      'td[data-selection-row="2"][data-selection-column="registrationBatch"]',
+      'td[data-selection-row="2"][data-selection-column="custom:plannedDate"]',
     )
-    .getByLabel("登记批次", { exact: true });
+    .getByLabel("计划日期", { exact: true });
   await expect(lockedDate).toHaveValue("2026-10-01");
   await expect(lockedDate).toHaveJSProperty("readOnly", true);
   await expect(lockedDate).toBeEnabled();
   await lockedDate.click();
   await expect(
-    page.locator('.selection-editor-control input[aria-label="登记批次"]'),
+    page.locator('.selection-editor-control input[aria-label="计划日期"]'),
   ).toBeDisabled();
   await page.screenshot({ path: ".local/date-cell-ui.png" });
 });
@@ -686,9 +780,12 @@ test("keeps fixed grouping / sorting choices and lets users opt into other field
     ),
   ).toHaveText([
     "不分组",
-    "按登记批次分组",
+    "按创建时间（年）分组",
+    "按创建时间（季度）分组",
+    "按创建时间（月）分组",
+    "按创建时间（日）分组",
     "按供应商编码分组",
-    "配置分组字段",
+    /配置分组字段/,
   ]);
   await page.getByText("配置分组字段", { exact: true }).click();
   const modal = page.getByRole("dialog");
