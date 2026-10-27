@@ -17,6 +17,7 @@ export interface BatchPlan { entries: BatchPlanEntry[]; review: BatchReviewEntry
 export const naturalCompare = (a: string, b: string) => a.localeCompare(b, "zh-CN", { numeric: true, sensitivity: "base" });
 const roleDirectory = /^(?:主图|轮播图?|方图|详情(?:页|图)?|平铺图?|透明图?|列表图?|封面(?:_导出)?|吊牌|合格证|images?|detail|carousel|flat|listing)$/i;
 export const outputPrefix = "图片命名结果-";
+const outputStyleDirectory = (style: string) => style.replace(/-/g, "X");
 export function validFolderName(value: string) {
   return !!value.trim() && value === value.trim() && value.length <= 100 && !/[\\/:*?"<>|\u0000-\u001f]/.test(value)
     && !/[. ]$/.test(value) && !/^(?:\.{1,2}|CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\..*)?$/i.test(value);
@@ -77,8 +78,18 @@ export function buildImageBatchPlan(items: BatchImageItem[], folderMode: ColorFo
     const key = item.style.toLocaleLowerCase();
     const list = styles.get(key) || []; list.push(item); styles.set(key, list);
   }
+  // Distinct source styles must not be merged when their output names normalize to the same directory.
+  const outputStyles = new Map<string, BatchImageItem[][]>();
+  for (const styleItems of styles.values()) {
+    const key = outputStyleDirectory(styleItems[0].style).toLocaleLowerCase();
+    const list = outputStyles.get(key) || []; list.push(styleItems); outputStyles.set(key, list);
+  }
+  for (const matchingStyles of outputStyles.values()) {
+    if (matchingStyles.length > 1) for (const item of matchingStyles.flat()) addIssue(item, "款号替换后目录重名，请调整款号目录后再处理");
+  }
   let groupCount = 0;
   for (const styleItems of styles.values()) {
+    const styleDirectory = outputStyleDirectory(styleItems[0].style);
     const colors = [...new Set(styleItems.filter(item => ["carousel", "flat", "listing"].includes(item.kind)).map(item => item.group).filter(Boolean))].sort(naturalCompare);
     groupCount += colors.length || 1;
     const multiple = colors.length > 1;
@@ -90,7 +101,7 @@ export function buildImageBatchPlan(items: BatchImageItem[], folderMode: ColorFo
       if (issues[item.id]) continue;
       const group = colorAsset ? item.group || colors[0] || "" : "";
       const folder = multiple && colorAsset ? (folderMode === "source" ? group : `颜色分组文件夹（${colors.indexOf(group) + 1}）`) : "";
-      const directory = [styleItems[0].style, folder].filter(Boolean).join("/");
+      const directory = [styleDirectory, folder].filter(Boolean).join("/");
       const key = `${directory.toLocaleLowerCase()}\0${item.kind}`;
       const bucket = buckets.get(key) || []; bucket.push(item); buckets.set(key, bucket);
     }
@@ -105,7 +116,7 @@ export function buildImageBatchPlan(items: BatchImageItem[], folderMode: ColorFo
         const folder = multiple && colorAsset ? (folderMode === "source" ? group : `颜色分组文件夹（${colors.indexOf(group) + 1}）`) : "";
         const number = kind === "carousel" ? carouselNumbers[index] : kind === "detail" ? 601 + index : kind === "flat" ? 30 : kind === "listing" ? 50 : 826;
         if (index >= maximum) return;
-        entries.push({ item, target: [styleItems[0].style, folder, `${number}.${kind === "flat" ? "png" : "jpg"}`].filter(Boolean).join("/"), limit: kind === "detail" ? undefined : (kind === "flat" ? 600 : 1024) * 1024 });
+        entries.push({ item, target: [styleDirectory, folder, `${number}.${kind === "flat" ? "png" : "jpg"}`].filter(Boolean).join("/"), limit: kind === "detail" ? undefined : (kind === "flat" ? 600 : 1024) * 1024 });
       });
     }
   }

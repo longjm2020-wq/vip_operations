@@ -88,7 +88,7 @@ export function ImageBatchTool({ onBusyChange }: { onBusyChange: (busy: boolean)
       <Button icon={<FolderOpenOutlined aria-hidden />} disabled={busy || !supported} onClick={() => void choose()}>选择本地目录</Button>
       <Checkbox checked={autoProcess} disabled={busy} onChange={event => setAutoProcess(event.target.checked)}>识别后自动处理整个目录</Checkbox>
     </div>
-    <p className="image-batch-note">在系统选择窗口中粘贴目录路径即可定位。详情与 826 号图放在款号目录；单色款所有图片直接放在款号目录。多色款的轮播、30、50 号图分颜色保存。</p>
+    <p className="image-batch-note">在系统选择窗口中粘贴目录路径即可定位。输出款号目录中的“-”自动替换为“X”，如 XFW19-31757L → XFW19X31757L。详情与 826 号图放在款号目录；单色款所有图片直接放在款号目录。多色款的轮播、30、50 号图分颜色保存。</p>
     <Collapse size="small" items={[{ key: "rules", label: "命名、分组与压缩规则", children: <ul className="image-batch-rules">
       <li>方形轮播：1、2、3、4、15～22.jpg，每色最多 12 张，每张 ≤ 1024 KB。</li>
       <li>详情图：按详情自身张数从 601.jpg 到 650.jpg，每款最多 50 张；保留长详情原尺寸。</li>

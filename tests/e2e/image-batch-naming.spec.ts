@@ -10,7 +10,7 @@ async function jpg(path: string, width = 1200, height = 1200): Promise<InputImag
 async function flat(path: string): Promise<InputImage> {
   return { path, type: "image/png", base64: (await sharp({ create: { width: 800, height: 800, channels: 4, background: { r: 155, g: 55, b: 50, alpha: 0.6 } } }).png().toBuffer()).toString("base64") };
 }
-async function installDirectory(page: Page, files: InputImage[], options: { deny?: boolean; writeFailure?: string; abortOnWrite?: boolean } = {}) {
+async function installDirectory(page: Page, files: InputImage[], options: { deny?: boolean; writeFailure?: string; abortOnWrite?: boolean; rootName?: string } = {}) {
   await page.addInitScript(({ files, options }) => {
     const win = window as any;
     win.batchWrites = {}; win.batchSourceWrites = []; win.batchReadCount = 0;
@@ -45,7 +45,7 @@ async function installDirectory(page: Page, files: InputImage[], options: { deny
         },
       };
     }
-    const root = directory("原图目录");
+    const root = directory(options.rootName || "原图目录");
     for (const input of files) {
       const parts = input.path.split("/"); let parent = root;
       for (const name of parts.slice(0, -1)) {
@@ -95,6 +95,35 @@ async function outputData(page: Page) {
     return result;
   });
 }
+test("单款自动处理将款号连字符替换为 X，保存路径及清单一致", async ({ page }) => {
+  const files = [await jpg("主图.jpg"), await jpg("详情.jpg", 900, 1210)];
+  await installDirectory(page, files, { rootName: "XFW19-31757L" });
+  const { tool, writes } = await fixture(page);
+  await tool.getByRole("button", { name: "选择本地目录", exact: true }).click();
+  await expect(tool).toContainText("处理完成：成功 2 张，原图另存待确认 0 张，失败 0 张");
+  const output = await outputData(page), prefix = Object.keys(output)[0].split("/")[0];
+  expect(Object.keys(output).map(path => path.slice(prefix.length + 1)).sort()).toEqual(["XFW19X31757L/1.jpg", "XFW19X31757L/601.jpg", "处理清单.json"].sort());
+  const report = JSON.parse(Buffer.from(output[`${prefix}/处理清单.json`].base64, "base64").toString("utf8"));
+  expect(report.files.map((file: any) => [file.source, file.target, file.status]).sort()).toEqual([["主图.jpg", "XFW19X31757L/1.jpg", "success"], ["详情.jpg", "XFW19X31757L/601.jpg", "success"]].sort());
+  expect(output[`${prefix}/XFW19X31757L/1.jpg`].base64).toBe(files[0].base64);
+  expect(await page.evaluate(() => (window as any).batchSourceWrites)).toEqual([]);
+  expect(writes).toEqual([]);
+});
+
+test("多款预览与实际输出使用替换后的款号目录并保留颜色分组", async ({ page }) => {
+  await installDirectory(page, [await jpg("XFW19-31757L/黑色/1.jpg"), await jpg("XFW19-31757L/白色/1.jpg"), await jpg("XFW19-31757L/详情.jpg", 900, 1210), await jpg("XFW21-31966L/1.jpg")]);
+  const { tool } = await fixture(page);
+  await tool.getByRole("checkbox", { name: "识别后自动处理整个目录" }).uncheck();
+  await tool.getByRole("button", { name: "选择本地目录", exact: true }).click();
+  for (const target of ["XFW19X31757L/黑色/1.jpg", "XFW19X31757L/白色/1.jpg", "XFW19X31757L/601.jpg", "XFW21X31966L/1.jpg"]) await expect(tool.getByText(target, { exact: true })).toBeVisible();
+  await tool.screenshot({ path: test.info().outputPath("style-directory-normalization.png") });
+  await tool.getByRole("button", { name: "处理整个目录 4 张", exact: true }).click();
+  await expect(tool).toContainText("处理完成：成功 4 张，原图另存待确认 0 张，失败 0 张");
+  const output = await outputData(page), prefix = Object.keys(output)[0].split("/")[0];
+  expect(Object.keys(output).map(path => path.slice(prefix.length + 1)).sort()).toEqual(["XFW19X31757L/黑色/1.jpg", "XFW19X31757L/白色/1.jpg", "XFW19X31757L/601.jpg", "XFW21X31966L/1.jpg", "处理清单.json"].sort());
+  expect(await page.evaluate(() => (window as any).batchSourceWrites)).toEqual([]);
+});
+
 test("工具箱批量生成单色与多色成品，保留原图并跳过旧结果目录", async ({ page }) => {
   const files = [await jpg("SINGLE123/主图1.jpg"), await jpg("SINGLE123/主图2.jpg"), await jpg("SINGLE123/主图3.jpg"), await jpg("SINGLE123/主图4.jpg"), await jpg("SINGLE123/主图5.jpg"), await flat("SINGLE123/透明平铺.png"), await jpg("SINGLE123/列表.jpg", 950, 1200), await jpg("SINGLE123/吊牌.jpg", 640, 840), await jpg("SINGLE123/详情.jpg", 900, 2600),
     await jpg("MULTI456/MULTI456001/原图1.jpg"), await flat("MULTI456/MULTI456001/透明平铺.png"), await jpg("MULTI456/MULTI456002/原图1.jpg"), await jpg("MULTI456/MULTI456002/列表.jpg", 950, 1200), await jpg("MULTI456/详情.jpg", 900, 1230), await jpg("MULTI456/吊牌.jpg", 640, 840), await jpg("图片命名结果-旧/NEVER/1.jpg")];

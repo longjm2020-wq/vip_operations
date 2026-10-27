@@ -4,6 +4,33 @@ import { canReadManual } from "../../apps/api/src/manual.js";
 import { imagePalette, inferImageColorGroups } from "../../apps/web/src/image-batch-recognition.js";
 const image = (sourcePath: string, patch: Partial<BatchImageItem> = {}): BatchImageItem => ({ id: sourcePath, sourcePath, style: "XFW19X31755L", group: "", kind: "carousel", order: 1, size: 1000, width: 1200, height: 1200, format: "jpeg", transparent: false, ...patch });
 describe("local delivery image naming", () => {
+  test.each(["auto", "single"] as const)("%s layout normalizes output style folders while keeping source paths", layout => {
+    const items = assignImageGroups("XFW19-31757L", [image("主图1.jpg"), image("详情.jpg", { width: 900, height: 1230 }), image("30.png", { transparent: true, format: "png" }), image("50.jpg", { width: 950, height: 1200 }), image("826.jpg", { width: 640, height: 840 })], layout);
+    const original = structuredClone(items);
+    const plan = buildImageBatchPlan(items);
+    expect(plan.issues).toEqual({});
+    expect(plan.entries.map(entry => entry.target).sort()).toEqual(["1.jpg", "601.jpg", "30.png", "50.jpg", "826.jpg"].map(name => `XFW19X31757L/${name}`).sort());
+    expect(items).toEqual(original);
+    expect(buildImageBatchPlan(items.map(item => ({ ...item, style: "XFW21-31966L" }))).entries.every(entry => entry.target.startsWith("XFW21X31966L/"))).toBe(true);
+  });
+  test("batch output normalizes style names without changing color folders or existing X style names", () => {
+    const items = assignImageGroups("整批图片", [image("XFW19-31757L/黑-色/1.jpg"), image("XFW19-31757L/白色/1.jpg"), image("XFW19-31757L/详情.jpg", { width: 900, height: 1230 }), image("XFW21X31966L/1.jpg")], "batch");
+    const plan = buildImageBatchPlan(items);
+    expect(plan.issues).toEqual({});
+    expect(plan.entries.map(entry => entry.target).sort()).toEqual(["XFW19X31757L/黑-色/1.jpg", "XFW19X31757L/白色/1.jpg", "XFW19X31757L/601.jpg", "XFW21X31966L/1.jpg"].sort());
+    const numbered = buildImageBatchPlan(items, "numbered");
+    expect(numbered.entries.map(entry => entry.target).sort()).toEqual(["XFW19X31757L/颜色分组文件夹（1）/1.jpg", "XFW19X31757L/颜色分组文件夹（2）/1.jpg", "XFW19X31757L/601.jpg", "XFW21X31966L/1.jpg"].sort());
+  });
+  test("normalized style collisions preserve both sources in review even when output filenames differ", () => {
+    const items = assignImageGroups("整批图片", [image("XFW19-31757L/1.jpg"), image("xfw19x31757l/详情.jpg", { width: 900, height: 1230 }), image("XFW21-31966L/1.jpg")], "auto");
+    const plan = buildImageBatchPlan(items);
+    expect(plan.entries.map(entry => entry.target)).toEqual(["XFW21X31966L/1.jpg"]);
+    expect(plan.review.map(entry => entry.target).sort()).toEqual(["_待确认/XFW19-31757L/1.jpg", "_待确认/xfw19x31757l/详情.jpg"].sort());
+    expect(plan.review.every(entry => entry.reasons.includes("款号替换后目录重名，请调整款号目录后再处理"))).toBe(true);
+    const resolved = buildImageBatchPlan(items.map(item => item.style === "xfw19x31757l" ? { ...item, kind: "skip" } : item));
+    expect(resolved.review).toEqual([]);
+    expect(resolved.entries).toHaveLength(2);
+  });
   test("single color uses exact carousel sequence and independent detail numbering", () => {
     const items = [...Array.from({ length: 12 }, (_, i) => image(`主图${i + 1}.jpg`, { order: i + 1 })),
       ...Array.from({ length: 50 }, (_, i) => image(`详情${i + 1}.jpg`, { kind: "detail", width: 900, height: 1230, order: i + 1 })),
