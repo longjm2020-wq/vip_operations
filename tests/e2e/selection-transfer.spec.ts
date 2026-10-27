@@ -316,8 +316,11 @@ test("bulk cross-table sending previews destinations, remembers mappings, locks 
   ).not.toBeEditable();
   await expect(source.locator("td").first()).toHaveCSS(
     "background-image",
-    /rgba\(0, 0, 0, 0.12\)/,
+    (await page.locator("html").getAttribute("data-theme")) === "light"
+      ? /rgba\(0, 0, 0, 0.12\)/
+      : /rgba\(255, 255, 255, 0.16\)/,
   );
+  await expect(source.getByRole("img", { name: "已跨表传送，原行已锁定", exact: true })).toBeVisible();
   await page.reload();
   await expect(
     page.getByRole("button", { name: "恢复编辑 TRANSFER-1" }),
@@ -326,6 +329,7 @@ test("bulk cross-table sending previews destinations, remembers mappings, locks 
   await expect(page.locator('tr[data-selection-row="101"]')).not.toHaveClass(
     /selection-transfer-locked/,
   );
+  await expect(source.getByRole("img", { name: "已跨表传送，原行已锁定", exact: true })).toHaveCount(0);
   expect(state.records["2"]).toHaveLength(2);
   await page
     .getByRole("checkbox", { name: "选择 TRANSFER-1", exact: true })

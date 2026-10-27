@@ -606,7 +606,10 @@
 .selection-layout-status { font-size: 12px; color: var(--app-secondary); }
 .selection-sheet td[data-cell-access="deny"] { background-image: repeating-linear-gradient(135deg, transparent, transparent 7px, rgba(140,140,140,.06) 7px, rgba(140,140,140,.06) 8px); }
 
-.selection-sheet tbody tr.selection-transfer-locked > td { background-image: linear-gradient(rgba(0,0,0,.12),rgba(0,0,0,.12)) !important; }
+.selection-transfer-locked { --selection-transfer-shade: rgba(255,255,255,.16); }
+:root[data-theme="light"] .selection-transfer-locked { --selection-transfer-shade: rgba(0,0,0,.12); }
+.selection-sheet tbody tr.selection-transfer-locked > td { background-image: linear-gradient(var(--selection-transfer-shade),var(--selection-transfer-shade)) !important; }
+.selection-transfer-indicator { margin-left: 3px; color: var(--app-secondary); font-size: 11px; }
 .selection-row-tools { display:flex; justify-content:center; align-items:center; gap:2px; }
 .selection-row-tools .ant-btn { width:20px; min-width:20px; height:20px; padding:0; }
 .selection-product-detail { font-size:13px; }
