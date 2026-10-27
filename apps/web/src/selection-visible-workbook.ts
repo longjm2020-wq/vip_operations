@@ -7,7 +7,7 @@ import { selectionSystemValue } from "./selection-system-fields.js";
 import { choiceDisplayText } from "./selection-choice-display.js";
 
 type Row = Record<string, any>;
-type Options = { archiveReferences?: Record<string, Row[]> };
+type Options = { archiveReferences?: Record<string, Row[]>; imageOrigin?: string };
 const custom = (field: SelectionField) => !!field.custom || field.key.startsWith("custom:");
 const imageField = (field: SelectionField) => ["images", "labelImages"].includes(field.key) || (field.type || field.fallbackType) === "image";
 const denied = (row: Row, field: SelectionField) => row.hiddenCells?.includes(field.key) || row.cellAccess?.[field.key] === "deny" ||
@@ -55,6 +55,8 @@ function styleSheet(sheet: ExcelJS.Worksheet) {
 export async function createVisibleSelectionWorkbook(records: Row[], columns: SelectionField[], options: Options = {}) {
   const fields = columns.filter(field => !field.deleted);
   if (!fields.length) throw Error("没有可导出的可见字段");
+  const styleField = fields.find(field => field.key === "xutiStyleNo");
+  const imageOrigin = options.imageOrigin ?? (typeof window === "undefined" ? undefined : window.location.origin);
   const populated = prepareVisibleSelectionWorkbookRecords(records, fields);
   if (!populated.length) throw Error("没有可导出的资料");
   const { Workbook } = await loadExcelJS();
@@ -65,6 +67,7 @@ export async function createVisibleSelectionWorkbook(records: Row[], columns: Se
   let imageNumber = 0;
   for (const record of populated) {
     const rowNumber = sheet.rowCount + 1;
+    const styleNumber = styleField ? denied(record, styleField) ? "••••" : valueAt(record, styleField, options) : "";
     const values = fields.map((field, index) => {
       if (denied(record, field)) return "••••";
       if (!imageField(field)) return valueAt(record, field, options);
@@ -72,7 +75,7 @@ export async function createVisibleSelectionWorkbook(records: Row[], columns: Se
       for (const image of images) {
         if (!pictures) {
           pictures = book.addWorksheet("图片明细");
-          pictures.columns = ["资料行", "字段位置", "字段", "颜色", "图片URL"].map(header => ({ header, width: header === "图片URL" ? 70 : 20, style: { numFmt: "@" } }));
+          pictures.columns = ["资料行", "字段位置", "字段", "序缇款号", "颜色", "图片URL"].map(header => ({ header, width: header === "图片URL" ? 85 : 20, style: { numFmt: "@" } }));
         }
         let url = String(image.url || "");
         if (url.startsWith("data:image/")) {
@@ -80,8 +83,11 @@ export async function createVisibleSelectionWorkbook(records: Row[], columns: Se
           const reference = `内嵌图片:${++imageNumber}`;
           for (let offset = 0; offset < url.length; offset += 30000) imageData.addRow([reference, offset / 30000, url.slice(offset, offset + 30000)]);
           url = reference;
+        } else if (url) {
+          try { url = new URL(url, imageOrigin).href; }
+          catch { throw Error("无法生成完整图片地址，请刷新页面后重试"); }
         }
-        pictures.addRow([String(rowNumber), String(index + 1), field.label, String(image.color || ""), url]);
+        pictures.addRow([String(rowNumber), String(index + 1), field.label, styleNumber, String(image.color || ""), url]);
       }
       return images.length ? "见图片明细" : "";
     });
@@ -96,7 +102,7 @@ export async function createVisibleSelectionWorkbook(records: Row[], columns: Se
     ["未显示、已删除或无字段查看权限的列不导出；禁止查看的单元格仅输出 ••••，不包含真实内容或图片。"],
     ["可识别的空白草稿自动忽略；系统生成信息和格式不单独计为填写内容。无法确认是否为空的受保护记录保留遮罩，缺款号和同款号多行仍逐行保留。"],
     ["数字和标识保留文本原值；系统字段按人员、北京时间和编号显示设置生成，商品关联字段显示名称，无法读取名称时保留原标识。"],
-    ["图片明细按表格资料的 Excel 行号、字段位置和字段名称对应。系统图片地址须登录并具有当前图片查看权限。"],
+    ["图片明细按表格资料的 Excel 行号、字段位置和字段名称对应，并附当前可见的序缇款号；款号未显示时留空，禁止查看时仅输出 ••••。图片网址使用完整地址，系统内图片保留表格参数，须登录并具有当前图片查看权限。"],
     ["旧版内嵌图片分段保存在隐藏的图片内容工作表中；仅保存本次可见且获准查看的图片，不嵌入浮动图片。"],
     ["本文件不包含表格填色、对齐等样式，不能直接作为标准导入文件；导入请从「导入 → 下载模板」填写固定格式。"],
   ]);

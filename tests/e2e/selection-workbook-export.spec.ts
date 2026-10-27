@@ -134,9 +134,27 @@ test("可见字段资料快照逐行保留缺款号、自定义内容、零金�
   expect(sheet.getCell("F5").text).toBe("见图片明细");
   expect(sheet.getCell("B6").text).toBe("SUPPLIER-6");
   expect(sheet.getCell("C6").text).toBe("CODE-6");
-  expect(rowValues(book.getWorksheet("图片明细")!.getRow(2))).toEqual(["5", "6", "图片", "", pictureUrl]);
+  expect(rowValues(book.getWorksheet("图片明细")!.getRow(2))).toEqual(["5", "6", "图片", "", "", pictureUrl]);
   await expect(page.getByRole("button", { name: "导出", exact: true })).toBeEnabled();
   expect(state.downloads).toHaveLength(1);
+  expect(state.writes).toEqual([]);
+});
+
+test("图片明细包含最新序缇款号和当前系统的完整图片地址，受保护款号不泄漏", async ({ page }) => {
+  const internalPath = "/api/v1/style-selections/images/f5d50408-cc47-46d5-97bc-6e3d54f9fcf8?tableId=777";
+  const state = await fixture(page, [row(101, { xutiStyleNo: "OLD-STYLE", images: [{ id: "photo", url: internalPath, color: "红" }] }), row(102, { xutiStyleNo: "PRIVATE-STYLE", images: [{ id: "photo2", url: pictureUrl }] })]);
+  state.refreshWith([row(101, { xutiStyleNo: "0007", images: [{ id: "photo", url: internalPath, color: "红" }] }), row(102, { xutiStyleNo: "PRIVATE-STYLE", images: [{ id: "photo2", url: pictureUrl }], hiddenCells: ["xutiStyleNo"] })]);
+  const ready = page.waitForEvent("download");
+  await exportAllVisibleRows(page);
+  const download = await ready;
+  const book = new Excel.Workbook();
+  await book.xlsx.readFile((await download.path())!);
+  const pictures = book.getWorksheet("图片明细")!;
+  expect(rowValues(pictures.getRow(1))).toEqual(["资料行", "字段位置", "字段", "序缇款号", "颜色", "图片URL"]);
+  expect(rowValues(pictures.getRow(2))).toEqual(["2", "6", "图片", "0007", "红", new URL(internalPath, page.url()).href]);
+  expect(rowValues(pictures.getRow(3))).toEqual(["3", "6", "图片", "••••", "", pictureUrl]);
+  expect(JSON.stringify(book.model)).not.toContain("PRIVATE-STYLE");
+  expect(JSON.stringify(book.model)).not.toContain("OLD-STYLE");
   expect(state.writes).toEqual([]);
 });
 
@@ -229,7 +247,7 @@ test("导入下载模板保持标准固定字段，不受当前表格自定义�
   expect(download.suggestedFilename()).toBe("选款登记导入模板.xlsx");
   expect(book.getWorksheet("选款资料")!.rowCount).toBe(1);
   expect(rowValues(book.getWorksheet("选款资料")!.getRow(1))).toEqual(selectionImportTemplateFields.map(({ label }) => label));
-  expect(JSON.stringify(book.getWorksheet("选款资料")!.getCell("A1").note)).toContain("系统只读字段");
+  expect(JSON.stringify(book.getWorksheet("选款资料")!.getCell("A1").note)).toContain("可填写北京时间日期或日期时间");
   expect(book.getWorksheet("表格资料")).toBeUndefined();
   expect(state.syncRequests.length).toBe(syncCount);
   expect(state.writes).toEqual([]);

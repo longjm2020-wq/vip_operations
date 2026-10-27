@@ -58,13 +58,50 @@ describe("visible selection workbook", () => {
     expect(sheet.getCell("B2").numFmt).toBe("@");
     const pictures = book.getWorksheet("图片明细")!;
     expect(pictures.rowCount).toBe(3);
-    expect(rowValues(pictures.getRow(1))).toEqual(["资料行", "字段位置", "字段", "颜色", "图片URL"]);
-    expect(rowValues(pictures.getRow(2))).toEqual(["2", "12", "款图", "红", "https://example.test/style.png"]);
-    expect(rowValues(pictures.getRow(3))).toEqual(["2", "13", "证据图片", "", "内嵌图片:1"]);
+    expect(rowValues(pictures.getRow(1))).toEqual(["资料行", "字段位置", "字段", "序缇款号", "颜色", "图片URL"]);
+    expect(rowValues(pictures.getRow(2))).toEqual(["2", "12", "款图", "0001", "红", "https://example.test/style.png"]);
+    expect(rowValues(pictures.getRow(3))).toEqual(["2", "13", "证据图片", "0001", "", "内嵌图片:1"]);
     const content = book.getWorksheet("图片内容")!;
     expect(content.state).toBe("hidden");
     expect(Array.from({ length: content.rowCount }, (_, index) => content.getRow(index + 1).getCell(3).text).join("")).toBe(legacyImage);
     expect(records).toEqual(original);
+  });
+
+  it("exports complete URLs for every image field and associates each image with its own row's style", async () => {
+    const columns = [field("xutiStyleNo", "改名后的款号"), field("images", "图片", { type: "image" }), field("labelImages", "洗唛/吊牌图", { type: "image" }), field("custom:photos", "尺码图", { custom: true, type: "image" })];
+    const path = "/api/v1/style-selections/images/f5d50408-cc47-46d5-97bc-6e3d54f9fcf8?tableId=3";
+    const records = [{ id: "1", xutiStyleNo: "0007", images: [{ url: path, color: "红" }], labelImages: [{ url: path }], extraFields: { "custom:photos": JSON.stringify([{ id: "size-image", url: "//cdn.example.test/size.jpg?size=1%2F2", color: "" }]) } },
+      { id: "2", xutiStyleNo: "0007", images: [{ url: "https://elsewhere.test/other.jpg?a=1%2F2" }] },
+      { id: "3", images: [{ url: path }] }];
+    const original = structuredClone(records);
+    const book = await reload(await createVisibleSelectionWorkbook(records, columns, { imageOrigin: "https://current.example.test:8443" }));
+    const pictures = book.getWorksheet("图片明细")!;
+    expect(Array.from({ length: 5 }, (_, index) => rowValues(pictures.getRow(index + 2)))).toEqual([
+      ["2", "2", "图片", "0007", "红", `https://current.example.test:8443${path}`],
+      ["2", "3", "洗唛/吊牌图", "0007", "", `https://current.example.test:8443${path}`],
+      ["2", "4", "尺码图", "0007", "", "https://cdn.example.test/size.jpg?size=1%2F2"],
+      ["3", "2", "图片", "0007", "", "https://elsewhere.test/other.jpg?a=1%2F2"],
+      ["4", "2", "图片", "", "", `https://current.example.test:8443${path}`],
+    ]);
+    expect(pictures.getCell("D2").numFmt).toBe("@");
+    expect(records).toEqual(original);
+  });
+
+  it("never discloses a denied, hidden or omitted style number through image details", async () => {
+    const columns = [field("xutiStyleNo", "序缇款号"), field("images", "图片", { type: "image" })];
+    const records = [
+      { id: "1", xutiStyleNo: "DENIED_STYLE", cellAccess: { xutiStyleNo: "deny" } },
+      { id: "2", xutiStyleNo: "HIDDEN_STYLE", hiddenCells: ["xutiStyleNo"] },
+      { id: "3", xutiStyleNo: "DEFAULT_DENIED_STYLE", defaultCellAccess: "deny", cellAccess: { images: "read" } },
+    ].map(record => ({ ...record, images: [{ url: "https://example.test/allowed.jpg" }] }));
+    const book = await reload(await createVisibleSelectionWorkbook(records, columns));
+    expect(book.getWorksheet("图片明细")!.getColumn(4).values.slice(2)).toEqual(["••••", "••••", "••••"]);
+    for (const record of records) expect(sheetText(book)).not.toContain(record.xutiStyleNo);
+    for (const styleColumns of [[], [{ ...columns[0], deleted: true }]]) {
+      const omitted = await reload(await createVisibleSelectionWorkbook([{ id: "4", xutiStyleNo: "OMITTED_STYLE", images: [{ url: "https://example.test/allowed.jpg" }] }], [...styleColumns, columns[1]]));
+      expect(omitted.getWorksheet("图片明细")!.getCell("D2").text).toBe("");
+      expect(sheetText(omitted)).not.toContain("OMITTED_STYLE");
+    }
   });
 
   it("intersects active columns with fresh field definitions without restoring hidden, deleted or revoked fields", () => {
