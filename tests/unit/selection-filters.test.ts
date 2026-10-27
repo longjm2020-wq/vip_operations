@@ -1,6 +1,48 @@
 import { describe, expect, it } from "vitest";
-import { applySelectionOptionSearch, matchesSelectionFilters, searchSelectionFilterOptions, selectionAllCells, clearSelectionCells, selectionFilterOptions, sortSelectionRows } from "../../apps/web/src/selection-filters.js";
+import { activeSelectionFilterKeys, applySelectionOptionSearch, matchesSelectionFilters, normalizeSelectionFilter, searchSelectionFilterOptions, selectionAllCells, clearSelectionCells, selectionFilterOptions, sortSelectionRows } from "../../apps/web/src/selection-filters.js";
 import type { SelectionFilter } from "../../packages/contracts/src/selection-view.js";
+
+describe("effective filter indicators and all-selection normalization", () => {
+  const empty: SelectionFilter = { mode: "contains", value: "" };
+  const candidates = { values: ["女式外套", "女式羽绒服", ""], colors: ["NONE", "YELLOW"] };
+
+  it("ignores empty legacy settings and removes complete value/color lists without mutating them", () => {
+    expect(normalizeSelectionFilter({ ...empty, value: "  " })).toBeUndefined();
+    const filter = { ...empty, values: [...candidates.values], colors: [...candidates.colors] };
+    expect(normalizeSelectionFilter(filter, candidates)).toBeUndefined();
+    expect(filter.values).toEqual(candidates.values);
+    expect(filter.colors).toEqual(candidates.colors);
+    expect(normalizeSelectionFilter(filter)).toEqual(filter);
+  });
+
+  it("preserves missing blank values, zero-result selections and explicit conditions", () => {
+    for (const filter of [
+      { ...empty, values: ["女式外套", "女式羽绒服"] },
+      { ...empty, values: [] },
+      { ...empty, colors: [] },
+      { ...empty, colors: ["YELLOW"] },
+      { ...empty, mode: "empty" as const },
+      { ...empty, mode: "filled" as const },
+      { ...empty, value: "外套" },
+    ]) expect(normalizeSelectionFilter(filter, candidates)).toEqual(filter);
+    expect(normalizeSelectionFilter({ ...empty, value: "外套", values: candidates.values }, candidates)).toEqual({ ...empty, value: "外套" });
+  });
+
+  it("does not assume full selection without a nonempty candidate scope", () => {
+    const filter = { ...empty, values: ["女式外套"], colors: ["NONE"] };
+    expect(normalizeSelectionFilter(filter, { values: [], colors: [] })).toEqual(filter);
+  });
+
+  it("compares selections with the panel scope before this column's filter and retains stored restrictions", () => {
+    const rows = [{ xutiStyleNo: "A", material: "女式外套" }, { xutiStyleNo: "B", material: "女式羽绒服" }];
+    const filters = { material: { ...empty, values: ["女式外套"], colors: ["NONE"] }, xutiStyleNo: { ...empty, value: "A" } };
+    expect([...activeSelectionFilterKeys(rows, filters)]).toEqual(["xutiStyleNo"]);
+    expect([...activeSelectionFilterKeys(rows, { material: filters.material })]).toEqual(["material"]);
+    expect(filters.material.values).toEqual(["女式外套"]);
+    expect([...activeSelectionFilterKeys(rows, { material: { ...empty, values: [] } })]).toEqual(["material"]);
+    expect([...activeSelectionFilterKeys(rows, { material: { ...empty, colors: [] } })]).toEqual(["material"]);
+  });
+});
 
 describe("selection column filters and selection", () => {
   it("sorts computed decimal limits numerically including fallback types and leaves blanks last", () => {

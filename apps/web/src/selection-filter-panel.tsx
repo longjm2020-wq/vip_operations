@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { App, Button, Checkbox, Dropdown, Input, Select, Space, Switch, Tabs } from "antd";
 import { ArrowUpOutlined, ArrowDownOutlined, DownloadOutlined } from "@ant-design/icons";
 import type { SelectionFilter, SelectionView } from "../../../packages/contracts/src/selection-view";
-import { applySelectionOptionSearch, matchesSelectionFilters, searchSelectionFilterOptions, selectionCellColor, selectionFilterOptions, selectionFilterText, sortSelectionRows } from "./selection-filters";
+import { applySelectionOptionSearch, matchesSelectionFilters, normalizeSelectionFilter, searchSelectionFilterOptions, selectionCellColor, selectionFilterOptions, selectionFilterText, sortSelectionRows } from "./selection-filters";
 import { downloadSheet } from "./download-sheet";
 type Row = Record<string, any>;
 const modes = [["contains", "包含"], ["notContains", "不包含"], ["equals", "等于"], ["notEquals", "不等于"], ["starts", "开头是"], ["ends", "结尾是"], ["gt", "大于 / 晚于"], ["gte", "大于等于"], ["lt", "小于 / 早于"], ["lte", "小于等于"], ["between", "介于"], ["empty", "为空"], ["filled", "不为空"]];
@@ -31,9 +31,10 @@ export function SelectionFilterPanel({ column, columns = [column], rows, view, s
   const colorOptions = [...new Set(candidates.map(row => selectionCellColor(row, column.key, colorType)))];
   const nextView = (): SelectionView => {
     const filters = { ...view.filters };
-    const committed = applySelectionOptionSearch(draft, allOptions, query);
-    const active = committed.values !== undefined || committed.colors !== undefined || ["empty", "filled"].includes(committed.mode) || !!committed.value.trim();
-    if (active) filters[column.key] = committed; else delete filters[column.key];
+    const committed = normalizeSelectionFilter(applySelectionOptionSearch(draft, allOptions, query), query.trim() ? undefined : {
+      values: allOptions.map(option => option.value), colors: colorOptions,
+    });
+    if (committed) filters[column.key] = committed; else delete filters[column.key];
     return { filters, sort };
   };
   const submit = async (next: SelectionView) => {

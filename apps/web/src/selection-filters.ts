@@ -3,6 +3,33 @@ type Row = Record<string, any>;
 export type SelectionFilters = Record<string, SelectionFilter>;
 const optionSets = new WeakMap<SelectionFilter, Set<string>>();
 const moneyKeys = new Set(["supplyPriceExclTax", "vipPrice", "livePrice", "tagPrice"]);
+/** All checked candidates mean no restriction. Empty selections still match no rows. */
+export function normalizeSelectionFilter(filter: SelectionFilter | undefined, candidates?: { values: string[]; colors: string[] }): SelectionFilter | undefined {
+  if (!filter) return undefined;
+  const next = { ...filter };
+  for (const key of ["values", "colors"] as const) {
+    const selected = filter[key];
+    const available = candidates?.[key];
+    if (selected?.length && available?.length) {
+      const checked = new Set(selected);
+      if (available.every(value => checked.has(value))) delete next[key];
+    }
+  }
+  return next.values !== undefined || next.colors !== undefined || ["empty", "filled"].includes(next.mode) || next.value.trim() ? next : undefined;
+}
+
+/** Match the same candidate scope shown in the panel, before this column's filter. */
+export function activeSelectionFilterKeys(rows: Row[], filters: SelectionFilters): Set<string> {
+  return new Set(Object.entries(filters).filter(([key, filter]) => {
+    if (filter.values === undefined && filter.colors === undefined || ["empty", "filled"].includes(filter.mode) || filter.value.trim()) return !!normalizeSelectionFilter(filter);
+    const others = Object.fromEntries(Object.entries(filters).filter(([otherKey]) => otherKey !== key));
+    const candidates = rows.filter(row => matchesSelectionFilters(row, others));
+    return normalizeSelectionFilter(filter, {
+      values: candidates.map(row => selectionFilterValue(row, key)),
+      colors: candidates.map(row => selectionCellColor(row, key, filter.colorType || "fill")),
+    });
+  }).map(([key]) => key));
+}
 export function selectionFilterValue(row: Row, key: string): string {
   if (key === "collectionInventory") return String((row.collectionInventory || []).reduce((sum: number, item: Row) => sum + item.available + item.production, 0));
   const value = key === "images" ? (row.images || []).map((image: Row) => `${image.color || ""} ${image.url || ""}`.trim()).join("\n") : key === "labelImages" ? (row.labelImages || []).map((image: Row) => image.url || "").join("\n") : key.startsWith("custom:") ? row.extraFields?.[key] : row[key];

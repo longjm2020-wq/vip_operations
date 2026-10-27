@@ -12,6 +12,7 @@ async function fixture(page: Page, options: {
   numberValues?: (number | string)[];
   rowFormatting?: { rowColor?: string; cellColors?: Record<string, string>; cellTextColors?: Record<string, string> }[];
   preferences?: Record<string, unknown>;
+  expectedRows?: number;
   shared?: { revision: number; view: SelectionView; restricted?: boolean };
 } = {}) {
   const values = options.materials || materials;
@@ -70,7 +71,8 @@ async function fixture(page: Page, options: {
   });
   await page.goto("/style-selections");
   if (options.shared?.revision) await expect(page.locator("tr[data-selection-row]").first()).toBeVisible();
-  else await expect(page.locator("tr[data-selection-row]")).toHaveCount(values.length);
+  else if ((options.expectedRows ?? values.length) > 60) await expect(page.getByRole("table", { name: "选款登记在线智能表格", exact: true })).toHaveAttribute("aria-rowcount", String((options.expectedRows ?? values.length) + 1));
+  else await expect(page.locator("tr[data-selection-row]")).toHaveCount(options.expectedRows ?? values.length);
   return {
     sharedWrites, rowWrites,
     savedFilter: () => layout.preferences!.columnFilters.material,
@@ -111,6 +113,98 @@ async function selectPanelOption(page: Page, panel: Locator, label: string, valu
 
 const optionOrder = (panel: Locator) => panel.locator(".selection-filter-values span[title]")
   .evaluateAll(elements => elements.map(element => element.getAttribute("title")));
+
+test("筛选图标在恢复全选后取消高亮，刷新和仅排序不会恢复空筛选", async ({ page }) => {
+  const state = await fixture(page);
+  const icon = page.getByRole("button", { name: "筛选材质", exact: true });
+  await expect(icon).toHaveAttribute("data-filter-active", "false");
+  let panel = await openFilter(page);
+  await optionCheckbox(panel, materials[0]).uncheck();
+  await confirm(panel);
+  await expect(icon).toHaveAttribute("data-filter-active", "true");
+  await expect(page.locator("tr[data-selection-row]")).toHaveCount(5);
+  panel = await openFilter(page);
+  await panel.getByRole("checkbox", { name: "全选(6)", exact: true }).check();
+  await confirm(panel);
+  await expect(icon).toHaveAttribute("data-filter-active", "false");
+  await expect.poll(state.savedFilter).toBeUndefined();
+  await page.reload();
+  await expect(page.locator("tr[data-selection-row]")).toHaveCount(6);
+  panel = await openFilter(page);
+  await panel.getByRole("button", { name: /升序$/ }).click();
+  await confirm(panel);
+  await expect(icon).toHaveAttribute("data-filter-active", "false");
+  expect(state.rowWrites).toHaveLength(0);
+});
+
+for (const source of ["personal", "shared"] as const) {
+  test(`筛选图标不将历史全选及空条件误判为筛选（${source}）`, async ({ page }) => {
+    const filters = {
+      material: { mode: "contains" as const, value: "", values: materials, colors: ["NONE"] },
+      xutiStyleNo: { mode: "contains" as const, value: "  " },
+    };
+    const state = await fixture(page, source === "shared" ? { shared: { revision: 1, view: { filters, sort: null } } } : { preferences: { followShared: false, columnFilters: filters } });
+    for (const label of ["材质", "序缇款号"]) await expect(page.getByRole("button", { name: `筛选${label}`, exact: true })).toHaveAttribute("data-filter-active", "false");
+    const panel = await openFilter(page);
+    await expect(panel.getByRole("checkbox", { name: "全选(6)", exact: true })).toBeChecked();
+    await panel.getByRole("button", { name: "取消", exact: true }).click();
+    expect(state.sharedWrites).toHaveLength(0);
+    expect(state.rowWrites).toHaveLength(0);
+    expect(state.savedFilter()?.values).toEqual(materials);
+  });
+}
+
+test("筛选图标按其他列限定后的候选范围判断，同时保留真实的旧条件", async ({ page }) => {
+  const state = await fixture(page, {
+    expectedRows: 1,
+    preferences: { followShared: false, columnFilters: {
+      material: { mode: "contains", value: "", values: [materials[0]] },
+      xutiStyleNo: { mode: "equals", value: "FILTER-0" },
+    } },
+  });
+  const icon = page.getByRole("button", { name: "筛选材质", exact: true });
+  await expect(icon).toHaveAttribute("data-filter-active", "false");
+  let panel = await openFilter(page);
+  await expect(panel.getByRole("checkbox", { name: "全选(1)", exact: true })).toBeChecked();
+  await panel.getByRole("button", { name: "取消", exact: true }).click();
+  panel = await openFilter(page, "序缇款号");
+  await panel.getByRole("button", { name: "清除筛选", exact: true }).click();
+  await expect(icon).toHaveAttribute("data-filter-active", "true");
+  await expect(page.locator("tr[data-selection-row]")).toHaveCount(1);
+  expect(state.savedFilter()?.values).toEqual([materials[0]]);
+});
+
+test("筛选图标保留零结果筛选，恢复全选颜色后清除颜色限制", async ({ page }) => {
+  const state = await fixture(page);
+  const icon = page.getByRole("button", { name: "筛选材质", exact: true });
+  let panel = await openFilter(page);
+  await panel.getByRole("tab", { name: "按颜色", exact: true }).click();
+  await panel.getByRole("checkbox", { name: "无填色 (6)", exact: true }).uncheck();
+  await confirm(panel);
+  await expect(icon).toHaveAttribute("data-filter-active", "true");
+  await expect(page.locator("tr[data-selection-row]")).toHaveCount(0);
+  panel = await openFilter(page);
+  await panel.getByRole("tab", { name: "按颜色", exact: true }).click();
+  await panel.getByRole("checkbox", { name: "无填色 (6)", exact: true }).check();
+  await confirm(panel);
+  await expect(icon).toHaveAttribute("data-filter-active", "false");
+  await expect.poll(state.savedFilter).toBeUndefined();
+  await expect(page.locator("tr[data-selection-row]")).toHaveCount(6);
+});
+
+test("筛选图标在顶部搜索暂不应用筛选时取消高亮，清空搜索后恢复", async ({ page }) => {
+  await fixture(page, { expectedRows: 1, preferences: { followShared: false, columnFilters: { material: { mode: "contains", value: "羊毛" } } } });
+  const icon = page.getByRole("button", { name: "筛选材质", exact: true });
+  await expect(icon).toHaveAttribute("data-filter-active", "true");
+  const search = page.getByRole("textbox", { name: "搜索选款", exact: true });
+  await search.fill("FILTER-0");
+  await expect.poll(() => visibleRows(page)).toEqual(["filter-0"]);
+  await expect(icon).toHaveAttribute("data-filter-active", "false");
+  await expect(icon).toHaveAttribute("title", "筛选材质（已保存，搜索期间暂不应用）");
+  await search.fill("");
+  await expect.poll(() => visibleRows(page)).toEqual(["filter-3"]);
+  await expect(icon).toHaveAttribute("data-filter-active", "true");
+});
 
 test("searching for silk applies the visible matching options and exports the same draft result", async ({ page }) => {
   const state = await fixture(page);
@@ -208,7 +302,8 @@ test("search confirmation includes matching options beyond the first 200 rendere
   await queryInput(panel).fill("桑蚕丝");
   await expect(panel.locator(".selection-filter-values").getByRole("checkbox")).toHaveCount(200);
   await confirm(panel);
-  await expect(page.locator("tr[data-selection-row]")).toHaveCount(205);
+  await expect(page.getByRole("table", { name: "选款登记在线智能表格", exact: true })).toHaveAttribute("aria-rowcount", "206");
+  await page.locator(".selection-sheet").evaluate(element => { element.scrollTop = element.scrollHeight; });
   await expect(page.locator('tr[data-selection-row="filter-204"]')).toHaveCount(1);
   await expect(page.locator('tr[data-selection-row="filter-205"]')).toHaveCount(0);
   await expect.poll(() => state.savedFilter()?.values?.length).toBe(205);
