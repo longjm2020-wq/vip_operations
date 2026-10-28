@@ -1,5 +1,13 @@
 .ant-modal.floating-panel-movable {
   translate: var(--floating-panel-x, 0px) var(--floating-panel-y, 0px);
+  will-change: translate;
+}
+.table-find-replace-modal {
+  padding-bottom: 0;
+}
+/* This two-tab strip never overflows. Keep it in the dialog's moving layer. */
+.table-find-replace-modal .ant-tabs-nav-wrap {
+  transform: none;
 }
 .floating-panel-movable [data-floating-panel-handle] {
   cursor: grab;

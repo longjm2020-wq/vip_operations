@@ -24,6 +24,7 @@ async function fixture(page: Page, entry = "/style-selections", count = 3) {
     const request = route.request(), path = new URL(request.url()).pathname;
     let data: unknown = [];
     if (path.endsWith("/auth/me")) data = { id: "101", displayName: "分页查找测试", csrfToken: "fixture", roleCodes: [], permissions: ["selection.read", "selection.manage", "product.read", "product.update", "product.create", "project.read", "project.create"] };
+    if (path.endsWith("/my-workspace/appearance")) data = { mode: "dark", version: 0 };
     if (path.endsWith("/product-archive-table")) data = { id: "3", initialLayout: "selection", fields: [], references: {}, canEdit: true, canManage: true };
     if (path.endsWith("/project-tables/7")) data = { id: "7", name: "查找协作表", initialLayout: "selection", canEdit: true, canManage: true };
     if (path.endsWith("/revision")) data = { revision: String(revision) };

@@ -4,7 +4,9 @@
   color-scheme: dark;
   --app-bg: #111111;
   --app-surface: #1b1b1b;
-  --app-elevated: #24262d;
+  --app-elevated: #30343e;
+  --app-overlay-border: #596176;
+  --app-overlay-shadow: 0 20px 56px #00000080, 0 4px 14px #00000050;
   --app-muted: #212329;
   --app-hover: #222a48;
   --app-text: #eef0f6;
@@ -73,6 +75,8 @@
   --app-bg: #f7f8fc;
   --app-surface: #ffffff;
   --app-elevated: #ffffff;
+  --app-overlay-border: #dde1ec;
+  --app-overlay-shadow: 0 8px 28px #15245318;
   --app-muted: #f5f6fb;
   --app-hover: #eff2ff;
   --app-text: #272c3d;
@@ -129,6 +133,27 @@ body {
 }
 * {
   scrollbar-color: var(--app-border-strong) var(--app-muted);
+}
+/* Floating surfaces need an edge as well as a shadow on a dark canvas. */
+:root[data-theme="dark"] :is(
+  .ant-modal-container,
+  .ant-popover-container,
+  .ant-drawer-section,
+  .ant-select-dropdown,
+  .ant-dropdown-menu,
+  .ant-picker-panel-container
+) {
+  box-shadow: inset 0 0 0 1px var(--app-overlay-border), var(--app-overlay-shadow);
+}
+:root[data-theme="dark"] .selection-text-detail,
+:root[data-theme="dark"] .selection-preview-text-panel {
+  background: var(--app-elevated);
+  border-color: var(--app-overlay-border);
+  box-shadow: var(--app-overlay-shadow);
+}
+:root[data-theme="dark"] .selection-text-detail header {
+  background: transparent;
+  border-color: var(--app-overlay-border);
 }
 .theme-control {
   position: relative;

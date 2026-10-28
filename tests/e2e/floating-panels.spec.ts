@@ -21,6 +21,7 @@ async function fixture(page: Page) {
     const request = route.request(), path = new URL(request.url()).pathname;
     let data: unknown = [];
     if (path.endsWith("/auth/me")) data = { id: "101", displayName: "拖动测试", csrfToken: "fixture", roleCodes: ["SUPER_ADMIN"], permissions: ["selection.read", "selection.manage", "selection.protect", "product.read", "product.manage", "project.read", "project.create"] };
+    if (path.endsWith("/my-workspace/appearance")) data = { mode: "dark", version: 0 };
     if (path.endsWith("/revision")) data = { revision: "1" };
     if (path.endsWith("/sync")) data = { revision: "1", index: rows.map(row => ({ id: row.id, token: row.updatedAt })), data: rows };
     if (path.endsWith("/shared-view")) data = { revision: 0, view: { filters: {}, sort: null } };
@@ -99,6 +100,7 @@ test("Excel 弹窗拖至窗口边界仍可选择覆盖和上传，Escape 关闭"
   sheet.addRow(["序缇款号", "成分"]); sheet.addRow(["NEW-001", "面料：100%棉"]);
   await dialog.locator('input[type="file"]').setInputFiles({ name: "拖动后上传.xlsx", mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", buffer: Buffer.from(await book.xlsx.writeBuffer()) });
   await expect(dialog).toContainText("已读取：拖动后上传.xlsx · 1 款");
+  await dialog.focus();
   await page.keyboard.press("Escape");
   await expect(dialog).not.toBeVisible();
 });
@@ -130,7 +132,7 @@ test("现有查找窗口不重复拖动，整表确认弹窗可移动且取消�
   const state = await fixture(page);
   await page.getByRole("button", { name: /查找\/替换$/ }).click();
   const find = page.getByRole("dialog", { name: "查找/替换", exact: true }), before = await stableBox(find);
-  await expect(find).not.toHaveClass(/floating-panel-movable/);
+  await expect(find).toHaveClass(/floating-panel-movable/);
   await drag(page, find.locator(".table-find-replace-title"), 110, 75);
   const moved = (await find.boundingBox())!;
   expect(Math.round(moved.x - before.x)).toBe(110); expect(Math.round(moved.y - before.y)).toBe(75);

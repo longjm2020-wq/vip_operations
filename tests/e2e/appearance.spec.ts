@@ -244,7 +244,7 @@ test("业务库存和弹出菜单跟随主题，页面切换保持主题", async
   await page.getByRole("button", { name: "新增日程", exact: true }).click();
   await expect(dialog.locator(".ant-modal-container")).toHaveCSS(
     "background-color",
-    "rgb(36, 38, 45)",
+    "rgb(48, 52, 62)",
   );
 });
 test("保存失败不假称同步，恢复最新设置后可重试；并发冲突不覆盖", async ({

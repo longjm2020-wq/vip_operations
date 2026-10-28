@@ -16,6 +16,7 @@ async function fixture(page: Page) {
     const request = route.request(), path = new URL(request.url()).pathname;
     let data: unknown = [];
     if (path.endsWith("/auth/me")) data = { id: "101", displayName: "拖动测试", csrfToken: "fixture", roleCodes: [], permissions: ["selection.read", "selection.manage"] };
+    if (path.endsWith("/my-workspace/appearance")) data = { mode: "dark", version: 0 };
     if (path.endsWith("/revision")) data = { revision: String(revision) };
     if (path.endsWith("/sync")) data = { revision: String(revision), index: rows.map(row => ({ id: row.id, token: row.updatedAt })), data: rows };
     if (path.endsWith("/style-counts")) data = rows.map(row => ({ xutiStyleNo: row.xutiStyleNo, count: 1 }));
@@ -55,6 +56,11 @@ test("紧凑查找面板拖动后可输入、查找和关闭；后方表格编�
   const moved = (await dialog.boundingBox())!;
   expect(moved.x).toBeCloseTo(initial.x + 320, 0);
   expect(moved.y).toBeCloseTo(initial.y + 100, 0);
+  await expect(dialog.getByRole("tab")).toHaveCount(2);
+  await expect(dialog.locator(".ant-tabs-nav")).toHaveCount(1);
+  await dialog.getByRole("tab", { name: "查找", exact: true }).click();
+  await expect(dialog.getByLabel("替换为", { exact: true })).toHaveCount(0);
+  await dialog.getByRole("tab", { name: "替换", exact: true }).click();
   await dialog.getByLabel("查找内容", { exact: true }).fill("棉质");
   await dialog.getByRole("button", { name: "查找全部", exact: true }).click();
   await expect(dialog.getByRole("status")).toContainText("找到 60 个匹配单元格");
@@ -85,6 +91,44 @@ test("紧凑查找面板拖动后可输入、查找和关闭；后方表格编�
   await expect(dialog.getByLabel("查找内容", { exact: true })).toBeFocused();
   expect((await dialog.boundingBox())!.x).toBeCloseTo(moved.x, 0);
   expect((await dialog.boundingBox())!.y).toBeCloseTo(moved.y, 0);
+});
+
+test("连续拖动只移动浮层，不重排输入控件或丢失内容，窗口失焦后可继续拖动", async ({ page }) => {
+  const { dialog } = await fixture(page);
+  await dialog.getByLabel("查找内容", { exact: true }).fill("保留查找");
+  await dialog.getByLabel("替换为", { exact: true }).fill("保留替换");
+  await dialog.evaluate(element => {
+    const original = Element.prototype.getBoundingClientRect;
+    const state = { geometryReads: 0, contentMutations: 0 };
+    (window as any).__findDragMetrics = state;
+    Element.prototype.getBoundingClientRect = function () {
+      if (this === element) state.geometryReads++;
+      return original.call(this);
+    };
+    new MutationObserver(records => { state.contentMutations += records.length; }).observe(element.querySelector(".ant-modal-body")!, { childList: true, subtree: true });
+  });
+  const title = (await dialog.locator(".table-find-replace-title").boundingBox())!;
+  await page.mouse.move(title.x + 40, title.y + 10);
+  await page.mouse.down();
+  await page.mouse.move(title.x + 260, title.y + 140, { steps: 50 });
+  await page.mouse.up();
+  const metrics = await page.evaluate(() => (window as any).__findDragMetrics);
+  expect(metrics.geometryReads).toBeLessThan(12);
+  expect(metrics.contentMutations).toBe(0);
+  await expect(dialog.getByRole("tab")).toHaveCount(2);
+  await expect(dialog.getByLabel("查找内容", { exact: true })).toHaveValue("保留查找");
+  await expect(dialog.getByLabel("替换为", { exact: true })).toHaveValue("保留替换");
+  const handle = (await dialog.locator(".table-find-replace-title").boundingBox())!;
+  await page.mouse.move(handle.x + 40, handle.y + 10);
+  await page.mouse.down();
+  await page.mouse.move(handle.x + 90, handle.y + 40);
+  await page.evaluate(() => window.dispatchEvent(new Event("blur")));
+  await expect(dialog).not.toHaveClass(/floating-panel-dragging/);
+  await page.mouse.up();
+  const before = (await dialog.boundingBox())!;
+  await move(page, dialog, -30, -20);
+  expect((await dialog.boundingBox())!.x).toBeCloseTo(before.x - 30, 0);
+  expect((await dialog.boundingBox())!.y).toBeCloseTo(before.y - 20, 0);
 });
 
 test("拖动边界与缩小视口保持标题和关闭按钮可见，放大后保留位置", async ({ page }) => {

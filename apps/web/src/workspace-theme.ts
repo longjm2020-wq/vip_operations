@@ -31,7 +31,7 @@ export const appThemes: Record<ThemeMode, ThemeConfig> = Object.fromEntries(
           colorErrorBorder: dark ? "#75463e" : "#edc2ba",
           colorBgLayout: dark ? "#111111" : "#f7f8fc",
           colorBgContainer: dark ? "#1b1b1b" : "#ffffff",
-          colorBgElevated: dark ? "#24262d" : "#ffffff",
+          colorBgElevated: dark ? "#30343e" : "#ffffff",
           colorText: dark ? "#eef0f6" : "#272c3d",
           colorTextSecondary: dark ? "#b1b6c6" : "#626b80",
           colorTextPlaceholder: dark ? "#9199ad" : "#788297",

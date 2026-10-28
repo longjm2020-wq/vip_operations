@@ -2,7 +2,7 @@ import { useEffect } from "react";
 import "./floating-panels.css";
 
 const panelSelector = ".ant-modal";
-const ownedSelector = ".table-find-replace-modal, [data-floating-panel-fixed], [data-floating-panel-owned]";
+const ownedSelector = "[data-floating-panel-fixed], [data-floating-panel-owned]";
 const interactiveSelector = "button, input, textarea, select, a, label, [contenteditable], [role='button'], [role='textbox'], [role='combobox'], [role='checkbox'], [role='switch']";
 const margin = 8;
 type PanelState = {
@@ -11,13 +11,15 @@ type PanelState = {
   handle: HTMLElement | null;
   fallback: HTMLButtonElement | null;
   active: boolean;
-  moved: boolean;
   x: number;
   y: number;
+  position: { left: number; top: number } | null;
+  rememberPosition: boolean;
   sizeObserver: ResizeObserver;
   visibilityObserver: MutationObserver;
 };
-type Drag = { state: PanelState; handle: HTMLElement; pointerId: number; startX: number; startY: number; offsetX: number; offsetY: number; clientX: number; clientY: number };
+type Geometry = { left: number; top: number; minX: number; maxX: number; minY: number; maxY: number };
+type Drag = { state: PanelState; handle: HTMLElement; pointerId: number; startX: number; startY: number; offsetX: number; offsetY: number; clientX: number; clientY: number; geometry: Geometry };
 
 /** Adapt portal dialogs, including imperative confirmations, without replacing business Modal APIs. */
 export function FloatingPanels() {
@@ -36,18 +38,28 @@ export function FloatingPanels() {
       state.panel.style.setProperty("--floating-panel-x", `${x}px`);
       state.panel.style.setProperty("--floating-panel-y", `${y}px`);
     };
-    const constrain = (state: PanelState, x: number, y: number) => {
+    const measure = (state: PanelState): Geometry => {
       const rect = state.panel.getBoundingClientRect(), view = viewport();
-      const left = rect.left + x - state.x, top = rect.top + y - state.y;
+      const left = rect.left - state.x, top = rect.top - state.y;
       const maxLeft = view.left + Math.max(margin, view.width - rect.width - margin);
       // Tall dialogs remain scrollable; retain the title/handle above their content.
       const maxTop = view.top + Math.max(margin, view.height - Math.min(rect.height, view.height - margin * 2) - margin);
-      writeOffset(state,
-        x + Math.max(view.left + margin, Math.min(left, maxLeft)) - left,
-        y + Math.max(view.top + margin, Math.min(top, maxTop)) - top);
+      return { left, top, minX: view.left + margin - left, maxX: maxLeft - left, minY: view.top + margin - top, maxY: maxTop - top };
+    };
+    const constrain = (state: PanelState, x: number, y: number, geometry = measure(state)) => {
+      const nextX = Math.max(geometry.minX, Math.min(x, geometry.maxX));
+      const nextY = Math.max(geometry.minY, Math.min(y, geometry.maxY));
+      writeOffset(state, nextX, nextY);
+      state.position = { left: geometry.left + nextX, top: geometry.top + nextY };
+    };
+    const paintDrag = () => {
+      if (!drag) return;
+      // Geometry is read once on pointer-down (and on real layout changes),
+      // not after every transform write. Pointer events coalesce into one frame.
+      constrain(drag.state, drag.offsetX + drag.clientX - drag.startX, drag.offsetY + drag.clientY - drag.startY, drag.geometry);
     };
     const finishDrag = () => {
-      if (dragFrame) cancelAnimationFrame(dragFrame);
+      if (dragFrame) { cancelAnimationFrame(dragFrame); paintDrag(); }
       dragFrame = 0;
       const current = drag; drag = null;
       if (!current) return;
@@ -59,9 +71,10 @@ export function FloatingPanels() {
       state.fallback?.remove();
       state.handle = null; state.fallback = null;
     };
-    const reset = (state: PanelState) => {
+    const reset = (state: PanelState, preservePosition = false) => {
       if (drag?.state === state) finishDrag();
-      state.moved = false; state.x = 0; state.y = 0;
+      if (!preservePosition) state.position = null;
+      state.x = 0; state.y = 0;
       state.panel.style.removeProperty("--floating-panel-x");
       state.panel.style.removeProperty("--floating-panel-y");
       state.panel.classList.remove("floating-panel-movable", "floating-panel-dragging");
@@ -70,7 +83,7 @@ export function FloatingPanels() {
     const refresh = (state: PanelState) => {
       if (!state.panel.isConnected) return;
       const active = !state.panel.matches(ownedSelector) && !state.panel.closest("[data-floating-panel-fixed]") && getComputedStyle(state.wrapper).display !== "none" && state.wrapper.getAttribute("aria-hidden") !== "true";
-      if (!active) { if (state.active) reset(state); state.active = false; return; }
+      if (!active) { if (state.active) reset(state, state.rememberPosition); state.active = false; return; }
       state.active = true;
       const header = state.panel.querySelector<HTMLElement>(".ant-modal-header");
       const confirmTitle = state.panel.querySelector<HTMLElement>(".ant-modal-confirm-title");
@@ -92,7 +105,15 @@ export function FloatingPanels() {
         state.handle = grip; state.fallback = grip;
       }
       if (!state.panel.classList.contains("floating-panel-movable")) state.panel.classList.add("floating-panel-movable");
-      if (state.moved) constrain(state, state.x, state.y);
+      if (state.position) {
+        const geometry = measure(state);
+        if (drag?.state === state) {
+          drag.offsetX += drag.geometry.left - geometry.left;
+          drag.offsetY += drag.geometry.top - geometry.top;
+          drag.geometry = geometry;
+        }
+        constrain(state, state.position.left - geometry.left, state.position.top - geometry.top, geometry);
+      }
     };
     const scheduleLayout = (state: PanelState) => {
       pending.add(state);
@@ -110,7 +131,7 @@ export function FloatingPanels() {
       if (states.has(panel) || panel.matches(ownedSelector)) return;
       const wrapper = panel.closest<HTMLElement>(".ant-modal-wrap");
       if (!wrapper) return;
-      const state: PanelState = { panel, wrapper, active: false, moved: false, x: 0, y: 0, handle: null, fallback: null,
+      const state: PanelState = { panel, wrapper, active: false, x: 0, y: 0, position: null, rememberPosition: panel.classList.contains("floating-panel-remember-position"), handle: null, fallback: null,
         sizeObserver: new ResizeObserver(() => scheduleLayout(state)),
         visibilityObserver: new MutationObserver(() => scheduleLayout(state)) };
       states.set(panel, state);
@@ -147,7 +168,7 @@ export function FloatingPanels() {
       drag.clientX = event.clientX; drag.clientY = event.clientY;
       if (!dragFrame) dragFrame = requestAnimationFrame(() => {
         dragFrame = 0;
-        if (drag) constrain(drag.state, drag.offsetX + drag.clientX - drag.startX, drag.offsetY + drag.clientY - drag.startY);
+        paintDrag();
       });
     };
     const start = (event: PointerEvent) => {
@@ -158,22 +179,24 @@ export function FloatingPanels() {
       finishDrag();
       event.preventDefault(); event.stopPropagation();
       handle.setPointerCapture(event.pointerId);
-      state.moved = true;
       state.panel.classList.add("floating-panel-dragging");
       drag = { state, handle, pointerId: event.pointerId, startX: event.clientX, startY: event.clientY,
-        offsetX: state.x, offsetY: state.y, clientX: event.clientX, clientY: event.clientY };
+        offsetX: state.x, offsetY: state.y, clientX: event.clientX, clientY: event.clientY, geometry: measure(state) };
     };
-    const end = (event: PointerEvent) => { if (drag?.pointerId === event.pointerId) { if (dragFrame) { cancelAnimationFrame(dragFrame); dragFrame = 0; constrain(drag.state, drag.offsetX + drag.clientX - drag.startX, drag.offsetY + drag.clientY - drag.startY); } finishDrag(); } };
+    const end = (event: PointerEvent) => {
+      if (drag?.pointerId !== event.pointerId) return;
+      if (event.type === "pointerup") { drag.clientX = event.clientX; drag.clientY = event.clientY; paintDrag(); }
+      finishDrag();
+    };
     const key = (event: KeyboardEvent) => {
       if (!(event.target instanceof HTMLButtonElement) || !event.target.matches(".floating-panel-grip") || !["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
       const panel = event.target.closest<HTMLElement>(panelSelector), state = panel && states.get(panel);
       if (!state?.active) return;
       event.preventDefault(); event.stopPropagation();
       const step = event.shiftKey ? 40 : 16;
-      state.moved = true;
       constrain(state, state.x + (event.key === "ArrowLeft" ? -step : event.key === "ArrowRight" ? step : 0), state.y + (event.key === "ArrowUp" ? -step : event.key === "ArrowDown" ? step : 0));
     };
-    const resize = () => { for (const state of states.values()) if (state.active && state.moved) scheduleLayout(state); };
+    const resize = () => { for (const state of states.values()) if (state.active && state.position) scheduleLayout(state); };
     document.addEventListener("pointerdown", start);
     document.addEventListener("pointermove", move, { passive: false });
     document.addEventListener("pointerup", end);
