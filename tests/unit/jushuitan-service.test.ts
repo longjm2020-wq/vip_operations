@@ -4,13 +4,8 @@ import { readFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import type { Tx } from "../../packages/database/src/index.js";
 import type { Context } from "../../apps/api/src/core.js";
-
-const fixture = vi.hoisted(() => ({
-  db: null as PGlite | null,
-  tokens: vi.fn(),
-  warehouses: vi.fn(),
-  stock: vi.fn(),
-}));
+import * as XLSX from "xlsx";
+const fixture = vi.hoisted(() => ({ db: null as PGlite | null }));
 vi.mock("../../packages/database/src/index.js", async (original) => {
   const exports =
     await original<typeof import("../../packages/database/src/index.js")>();
@@ -25,36 +20,34 @@ vi.mock("../../packages/database/src/index.js", async (original) => {
     db: {
       $queryRawUnsafe: async (sql: string, ...args: unknown[]) =>
         (await fixture.db!.query(sql, args)).rows,
+      $executeRawUnsafe: async (sql: string, ...args: unknown[]) =>
+        (await fixture.db!.query(sql, args)).affectedRows || 0,
       $transaction: (fn: (tx: Tx) => Promise<unknown>) =>
         fixture.db!.transaction((tx) => fn(wrap(tx) as unknown as Tx)),
     },
   };
 });
-vi.mock(
-  "../../apps/api/src/integrations/jushuitan/client.js",
-  async (original) => ({
-    ...(await original<
-      typeof import("../../apps/api/src/integrations/jushuitan/client.js")
-    >()),
-    jushuitanTokens: fixture.tokens,
-    queryJushuitanWarehouses: fixture.warehouses,
-    queryJushuitanStock: fixture.stock,
-  }),
-);
 import {
   jushuitanStatus,
   saveJushuitan,
-  verifyJushuitan,
   queueJushuitan,
-  runJushuitanTick,
+  publishJstExport,
+  openJushuitanLogin,
+  jushuitanLoginAction,
+  jushuitanLoginView,
+  disconnectJushuitan,
+  expireJstTasks,
+  jushuitanMatches,
 } from "../../apps/api/src/modules/inventory/jushuitan.js";
+import { db } from "../../packages/database/src/index.js";
 import {
-  JushuitanError,
-  normalizeJushuitanStock,
-} from "../../apps/api/src/integrations/jushuitan/client.js";
-const context = (): Context => ({
+  parseJushuitanExport,
+  mergeJstExports,
+  type JstTarget,
+} from "../../apps/api/src/integrations/jushuitan/export-file.js";
+const context = (id = "7"): Context => ({
   actor: {
-    id: "7",
+    id,
     username: "test",
     displayName: "test",
     permissions: ["inventory.adjust"],
@@ -63,313 +56,245 @@ const context = (): Context => ({
   requestId: randomUUID(),
   key: randomUUID(),
 });
-const input = {
-  version: 1,
-  enabled: false,
-  intervalMinutes: 15,
-  warehouseId: null,
-  availableRule: null,
-};
 const query = async (sql: string, ...args: unknown[]) =>
   (await fixture.db!.query(sql, args)).rows as Record<string, any>[];
+const target: JstTarget = {
+  sku_code: "0000123",
+  barcode: null,
+  color_name: "粉色",
+  size_name: "L",
+};
+const targets = [target, { ...target, sku_code: "MISSING" }];
+function report() {
+  const b = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(
+    b,
+    XLSX.utils.aoa_to_sheet([
+      [
+        "商品编码",
+        "其它属性5",
+        "颜色及规格",
+        "实际库存数",
+        "订单占有数",
+        "销退仓库存",
+        "进货仓库存",
+        "采购在途数",
+        "调拨在途数",
+        "可用数",
+        "虚拟库存数",
+      ],
+      ["0000123", "", "粉色;L", 5, 0, 0, 0, 0, 0, 5, 12],
+      ["alias-粉色-L", "0000123", "粉色;L", 10, 0, 0, 0, 25, 0, 10, 0],
+    ]),
+    "库存",
+  );
+  const bytes = XLSX.write(b, { type: "buffer", bookType: "xlsx" }) as Buffer;
+  return {
+    matched: mergeJstExports([parseJushuitanExport(bytes, 2)], targets),
+    files: [{ bytes, fileName: "库存.xlsx" }],
+  };
+}
 beforeAll(async () => {
   vi.stubEnv("COMPASS_MAIL_KEY", "12".repeat(32));
   fixture.db = new PGlite();
   await fixture.db
-    .exec(`CREATE TABLE users(id bigint PRIMARY KEY); INSERT INTO users VALUES(7);
-    CREATE TABLE skus(id bigint PRIMARY KEY,sku_code text UNIQUE); INSERT INTO skus VALUES(1,'0000123'),(2,'MISSING');
+    .exec(`CREATE TABLE users(id bigint PRIMARY KEY,status text DEFAULT 'ACTIVE');INSERT INTO users(id) VALUES(7),(8);
+    CREATE TABLE roles(id bigint PRIMARY KEY,code text);INSERT INTO roles VALUES(1,'SUPER_ADMIN');CREATE TABLE user_roles(user_id bigint,role_id bigint);INSERT INTO user_roles VALUES(7,1),(8,1);
+    CREATE TABLE skus(id bigint PRIMARY KEY,sku_code text UNIQUE,barcode text,color_name text,size_name text);INSERT INTO skus VALUES(1,'0000123',NULL,'粉色','L'),(2,'MISSING',NULL,'粉色','L');
     CREATE TABLE idempotency_records(actor_id bigint,operation text,idempotency_key text,request_hash text,response_status int,response_body jsonb);
     CREATE TABLE audit_logs(actor_id bigint,actor_label text,action text,entity_type text,entity_id bigint,request_id text,before_data jsonb,after_data jsonb,reason text);`);
-  await fixture.db.exec(
-    await readFile(
-      "packages/database/migrations/072_jushuitan_inventory.sql",
-      "utf8",
-    ),
-  );
+  for (const f of [
+    "072_jushuitan_inventory.sql",
+    "073_jushuitan_browser_inventory.sql",
+  ])
+    await fixture.db.exec(
+      await readFile("packages/database/migrations/" + f, "utf8"),
+    );
 }, 30000);
 beforeEach(async () => {
   await fixture.db!
-    .exec(`DELETE FROM jushuitan_inventory_settings; TRUNCATE jushuitan_inventory_snapshots,jushuitan_inventory_runs CASCADE;
-    INSERT INTO jushuitan_inventory_settings(id) VALUES(1); TRUNCATE idempotency_records,audit_logs; DELETE FROM skus WHERE id>2;`);
-  fixture.tokens.mockReset().mockResolvedValue({
-    access_token: "private-access",
-    refresh_token: "private-refresh",
-    expires_in: 2592000,
-  });
-  fixture.warehouses
-    .mockReset()
-    .mockResolvedValue([
-      { name: "杭州总仓", co_id: "123", wms_co_id: "456", is_main: true },
-    ]);
-  fixture.stock
-    .mockReset()
-    .mockResolvedValue([
-      normalizeJushuitanStock(
-        { sku_id: "0000123", qty: 5, order_lock: 0 },
-        null,
-      ),
-    ]);
+    .exec(`DELETE FROM jushuitan_inventory_settings;TRUNCATE jushuitan_inventory_runs,jushuitan_browser_logins CASCADE;
+    INSERT INTO jushuitan_inventory_settings(id,worker_heartbeat_at,browser_encryption_ready) VALUES(1,now(),true);
+    TRUNCATE idempotency_records,audit_logs;UPDATE users SET status='ACTIVE';UPDATE skus SET color_name='粉色';`);
 });
 afterAll(async () => {
   await fixture.db?.close();
   vi.unstubAllEnvs();
 });
-const ready = async () => {
-  await saveJushuitan(context(), {
-    ...input,
-    appKey: "private-key",
-    appSecret: "private-secret",
-  });
-  await verifyJushuitan(context());
-  await saveJushuitan(context(), { ...input, version: 2, warehouseId: "456" });
-};
-it("encrypts credentials, redacts API/audit/idempotency results and verifies before choosing a warehouse", async () => {
-  await ready();
-  const s = await jushuitanStatus();
-  expect(s.warehouse_name).toBe("杭州总仓");
-  expect(s.company_id).toBe("123");
-  const persisted = JSON.stringify(
-    await query("SELECT * FROM jushuitan_inventory_settings"),
+async function ready() {
+  await query(
+    "UPDATE jushuitan_inventory_settings SET encrypted_session='encrypted-fixture',session_status='READY',session_actor_id=7,session_saved_at=now() WHERE id=1",
   );
-  const logged = JSON.stringify([
-    ...(await query("SELECT * FROM audit_logs")),
-    ...(await query("SELECT * FROM idempotency_records")),
-    s,
-  ]);
-  for (const text of [persisted, logged])
-    expect(text).not.toMatch(/private-(key|secret|access|refresh)/);
-});
-it("requires admin scope and refuses unverified or all-warehouse configuration", async () => {
-  const c = context();
-  c.actor.roleCodes = [];
-  await expect(saveJushuitan(c, input)).rejects.toMatchObject({ status: 403 });
-  await expect(
-    saveJushuitan(context(), { ...input, warehouseId: "456" }),
-  ).rejects.toMatchObject({ status: 400 });
-  await expect(
-    saveJushuitan(context(), { ...input, warehouseId: "0" }),
-  ).rejects.toMatchObject({ status: 400 });
+}
+async function claim() {
+  const queued = await queueJushuitan(context()),
+    token = randomUUID();
+  await query(
+    "UPDATE jushuitan_inventory_runs SET status='RUNNING',claim_token=$2::uuid,heartbeat_at=now(),started_at=now() WHERE id=$1::uuid",
+    queued.id,
+    token,
+  );
+  return {
+    job: (
+      await query(
+        "SELECT * FROM jushuitan_inventory_runs WHERE id=$1::uuid",
+        queued.id,
+      )
+    )[0],
+    token,
+  };
+}
+async function publish(job: Record<string, any>, token: string) {
+  const r = report();
+  return publishJstExport(
+    job,
+    token,
+    r.matched,
+    r.files,
+    "fresh-encrypted-fixture",
+  );
+}
+it("requires verified browser login, worker and administrator scope; rejects legacy API fields", async () => {
   await expect(queueJushuitan(context())).rejects.toMatchObject({
     status: 422,
   });
+  const c = context();
+  c.actor.roleCodes = [];
+  await expect(openJushuitanLogin(c)).rejects.toMatchObject({ status: 403 });
+  await expect(
+    saveJushuitan(context(), {
+      version: 1,
+      enabled: false,
+      intervalMinutes: 15,
+      appKey: "no",
+    }),
+  ).rejects.toMatchObject({ status: 400 });
+  await query(
+    "UPDATE jushuitan_inventory_settings SET worker_heartbeat_at=now()-interval '2 minutes'",
+  );
+  await expect(openJushuitanLogin(context())).rejects.toMatchObject({
+    status: 503,
+  });
 });
-it("coalesces repeated requests into one job and publishes only returned SKU data", async () => {
+it("encrypts transient login input and isolates the login owner and frame token", async () => {
+  const l = await openJushuitanLogin(context()),
+    frame = randomUUID();
+  await query(
+    "UPDATE jushuitan_browser_logins SET status='WAITING',heartbeat_at=now(),frame_id=$2::uuid,frame_jpeg='image' WHERE id=$1::uuid",
+    l.id,
+    frame,
+  );
+  await expect(jushuitanLoginView(context("8"), l.id)).rejects.toMatchObject({
+    status: 403,
+  });
+  await expect(
+    jushuitanLoginAction(context(), l.id, {
+      type: "TEXT",
+      frameId: randomUUID(),
+      value: "private-password",
+    }),
+  ).rejects.toMatchObject({ status: 409 });
+  await jushuitanLoginAction(context(), l.id, {
+    type: "TEXT",
+    frameId: frame,
+    value: "private-password",
+  });
+  expect(
+    JSON.stringify(await query("SELECT * FROM jushuitan_browser_actions")),
+  ).not.toContain("private-password");
+  expect(
+    JSON.stringify([
+      await query("SELECT * FROM idempotency_records"),
+      await query("SELECT * FROM audit_logs"),
+      await jushuitanStatus(),
+    ]),
+  ).not.toMatch(/private-password|encrypted-fixture|frame_jpeg/);
+  await query(
+    "UPDATE jushuitan_browser_logins SET expires_at=now()-interval '1 minute'",
+  );
+  await expireJstTasks(db);
+  expect(await query("SELECT * FROM jushuitan_browser_actions")).toHaveLength(
+    0,
+  );
+  expect((await jushuitanLoginView(context(), l.id)).frame).toBeNull();
+});
+it("coalesces syncs and publishes all mapped sources and original bytes atomically", async () => {
   await ready();
   const first = await queueJushuitan(context()),
     second = await queueJushuitan(context());
   expect(first.id).toBe(second.id);
-  await runJushuitanTick();
-  const status = await jushuitanStatus();
-  expect(status.active_run_id).toBe(first.id);
-  expect(status.runs[0]).toMatchObject({
+  const { job, token } = await claim();
+  await publish(job, token);
+  const s = await jushuitanStatus();
+  expect(s.active_run_id).toBe(job.id);
+  expect(s.runs[0]).toMatchObject({
     status: "COMPLETE",
-    requested_count: 2,
+    exported_count: 2,
     received_count: 1,
-    processed_count: 2,
+    requested_count: 2,
     missing_codes: ["MISSING"],
   });
-  const snapshots = await query(
-    "SELECT sku_code,physical_qty,available_qty FROM jushuitan_inventory_snapshots",
+  const snapshot = (
+    await query("SELECT * FROM jushuitan_inventory_snapshots")
+  )[0];
+  expect(Number(snapshot.physical_qty)).toBe(15);
+  expect(Number(snapshot.available_qty)).toBe(15);
+  expect((await jushuitanMatches({ skuCode: "0000123" })).data).toHaveLength(2);
+  const stored = (
+    await query(
+      "SELECT encode(original_bytes,'base64') AS bytes FROM jushuitan_inventory_files",
+    )
+  )[0];
+  expect(Buffer.from(stored.bytes, "base64").subarray(0, 2).toString()).toBe(
+    "PK",
   );
-  expect(snapshots).toHaveLength(1);
-  expect(String(snapshots[0].physical_qty)).toBe("5");
-  expect(snapshots[0].available_qty).toBeNull();
-  expect(fixture.stock.mock.calls[0][1]).toBe("456");
-  expect(fixture.stock.mock.calls[0][2]).toEqual(["0000123", "MISSING"]);
 });
-it("keeps the last complete snapshot after upstream failure or a wholly unmatched response", async () => {
+it("never lets a stale claim or changed configuration overwrite the last complete snapshot", async () => {
   await ready();
-  const first = await queueJushuitan(context());
-  await runJushuitanTick();
-  fixture.stock.mockRejectedValueOnce(new JushuitanError("接口权限不足"));
-  await queueJushuitan(context());
-  await runJushuitanTick();
-  expect((await jushuitanStatus()).active_run_id).toBe(first.id);
-  fixture.stock.mockResolvedValueOnce([]);
-  await queueJushuitan(context());
-  await runJushuitanTick();
-  expect((await jushuitanStatus()).active_run_id).toBe(first.id);
-  expect(
-    (
-      await query(
-        "SELECT status FROM jushuitan_inventory_runs WHERE status='FAILED'",
-      )
-    ).length,
-  ).toBe(2);
-});
-it("rejects a changed authorization company before reading inventory", async () => {
-  await ready();
-  await queueJushuitan(context());
-  fixture.warehouses.mockResolvedValueOnce([
-    { name: "杭州总仓", co_id: "999", wms_co_id: "456", is_main: true },
-  ]);
-  await runJushuitanTick();
-  expect(fixture.stock).not.toHaveBeenCalled();
-  expect((await jushuitanStatus()).active_run_id).toBeNull();
-});
-it("stops scheduled retries after an authorization rejection until reverified", async () => {
-  await ready();
+  const first = await claim();
+  await publish(first.job, first.token);
+  const second = await claim();
+  await expect(publish(second.job, randomUUID())).rejects.toThrow("已改变");
   await saveJushuitan(context(), {
-    ...input,
-    version: 3,
-    warehouseId: "456",
-    enabled: true,
+    version: 1,
+    enabled: false,
+    intervalMinutes: 30,
   });
-  fixture.stock.mockRejectedValueOnce(new JushuitanError("授权已失效", true));
-  await runJushuitanTick();
-  const status = await jushuitanStatus();
-  expect(status.enabled).toBe(false);
-  expect(status.verified_at).toBeNull();
-  expect(status.error_note).toContain("定时同步已关闭");
-  await runJushuitanTick();
-  expect(fixture.stock).toHaveBeenCalledTimes(1);
-});
-it("an expired worker cannot overwrite the status of a newer attempt", async () => {
-  await ready();
-  const job = await queueJushuitan(context());
-  fixture.stock.mockImplementationOnce(async () => {
+  await expect(publish(second.job, second.token)).rejects.toThrow("已改变");
+  expect((await jushuitanStatus()).active_run_id).toBe(first.job.id);
+  expect(
     await query(
-      "UPDATE jushuitan_inventory_runs SET status='FAILED' WHERE id=$1::uuid",
-      job.id,
-    );
-    await query(
-      "UPDATE jushuitan_inventory_settings SET error_note='newer status' WHERE id=1",
-    );
-    return [normalizeJushuitanStock({ sku_id: "0000123", qty: 5 }, null)];
-  });
-  await runJushuitanTick();
-  const status = await jushuitanStatus();
-  expect(status.active_run_id).toBeNull();
-  expect(status.error_note).toBe("newer status");
+      "SELECT * FROM jushuitan_inventory_snapshots WHERE run_id=$1::uuid",
+      second.job.id,
+    ),
+  ).toHaveLength(0);
 });
-it("withdraws the old snapshot when a reverified warehouse belongs to another company", async () => {
+it("rejects catalog changes and revoked actors before publishing", async () => {
   await ready();
-  await queueJushuitan(context());
-  await runJushuitanTick();
-  fixture.warehouses.mockResolvedValueOnce([
-    { name: "杭州总仓", co_id: "999", wms_co_id: "456", is_main: true },
-  ]);
-  await verifyJushuitan(context());
-  await saveJushuitan(context(), { ...input, version: 3, warehouseId: "456" });
-  const status = await jushuitanStatus();
-  expect(status.company_id).toBe("999");
-  expect(status.active_run_id).toBeNull();
-});
-it("does not publish when the last response arrives after the run deadline", async () => {
-  await ready();
-  await queueJushuitan(context());
-  let clock: ReturnType<typeof vi.spyOn> | undefined;
-  fixture.stock.mockImplementationOnce(async () => {
-    const late = Date.now() + 11 * 60000;
-    clock = vi.spyOn(Date, "now").mockReturnValue(late);
-    return [normalizeJushuitanStock({ sku_id: "0000123", qty: 5 }, null)];
-  });
-  try {
-    await runJushuitanTick();
-  } finally {
-    clock?.mockRestore();
-  }
-  const status = await jushuitanStatus();
-  expect(status.active_run_id).toBeNull();
-  expect(status.runs[0].error_note).toContain("十分钟");
-});
-it("never publishes a successful first batch when a later batch fails", async () => {
-  await ready();
-  await query(
-    "INSERT INTO skus SELECT i,'EXTRA-'||i FROM generate_series(3,101) i",
+  const { job, token } = await claim();
+  await query("UPDATE skus SET color_name='白色' WHERE id=1");
+  await expect(publish(job, token)).rejects.toThrow("网站商品");
+  await fixture.db!.exec(
+    "UPDATE skus SET color_name='粉色';UPDATE users SET status='DISABLED' WHERE id=7",
   );
-  fixture.stock
-    .mockResolvedValueOnce([
-      normalizeJushuitanStock({ sku_id: "0000123", qty: 5 }, null),
-    ])
-    .mockRejectedValueOnce(new JushuitanError("第二批失败"));
-  await queueJushuitan(context());
-  await runJushuitanTick();
-  expect(fixture.stock).toHaveBeenCalledTimes(2);
-  expect((await jushuitanStatus()).active_run_id).toBeNull();
+  await expect(publish(job, token)).rejects.toThrow("发起者");
   expect(
     await query("SELECT * FROM jushuitan_inventory_snapshots"),
   ).toHaveLength(0);
 });
-it("prevents a running old configuration from publishing and preserves existing data on interval-only edits", async () => {
+it("disconnect cancels queued/running work and removes saved authentication while preserving the snapshot", async () => {
   await ready();
-  const first = await queueJushuitan(context());
-  await runJushuitanTick();
-  await saveJushuitan(context(), {
-    ...input,
-    version: 3,
-    warehouseId: "456",
-    intervalMinutes: 30,
-  });
-  expect((await jushuitanStatus()).active_run_id).toBe(first.id);
+  const a = await claim();
+  await publish(a.job, a.token);
   await queueJushuitan(context());
-  fixture.stock.mockImplementationOnce(async () => {
-    await saveJushuitan(context(), {
-      ...input,
-      version: 4,
-      warehouseId: "456",
-      intervalMinutes: 60,
-    });
-    return [normalizeJushuitanStock({ sku_id: "0000123", qty: 999 }, null)];
-  });
-  await runJushuitanTick();
-  expect((await jushuitanStatus()).active_run_id).toBe(first.id);
-});
-it("clears active data when changing the application and cannot restore it from a queued job", async () => {
-  await ready();
-  await queueJushuitan(context());
-  await runJushuitanTick();
-  await queueJushuitan(context());
-  await saveJushuitan(context(), {
-    ...input,
-    version: 3,
-    appKey: "new-key",
-    appSecret: "new-secret",
-  });
+  await disconnectJushuitan(context());
   const s = await jushuitanStatus();
-  expect(s.active_run_id).toBeNull();
-  expect(s.verified_at).toBeNull();
-  expect(s.warehouse_id).toBeNull();
+  expect(s.configured).toBe(false);
+  expect(s.enabled).toBe(false);
+  expect(s.active_run_id).toBe(a.job.id);
   expect(
-    (
-      await query(
-        "SELECT id FROM jushuitan_inventory_runs WHERE status='QUEUED'",
-      )
-    ).length,
-  ).toBe(0);
-});
-it("runs scheduled sync only when enabled and due", async () => {
-  await ready();
-  await runJushuitanTick();
-  expect(fixture.stock).not.toHaveBeenCalled();
-  await saveJushuitan(context(), {
-    ...input,
-    version: 3,
-    warehouseId: "456",
-    enabled: true,
-  });
-  await runJushuitanTick();
-  await runJushuitanTick();
-  expect(fixture.stock).toHaveBeenCalledTimes(1);
-  expect((await jushuitanStatus()).runs[0].trigger_type).toBe("SCHEDULED");
-});
-it("compares confirmed availability rules semantically across JSONB key order", async () => {
-  await ready();
-  const availableRule = { purchase: true, incoming: false, returns: true };
-  await saveJushuitan(context(), {
-    ...input,
-    version: 3,
-    warehouseId: "456",
-    availableRule,
-  });
-  const first = await queueJushuitan(context());
-  await runJushuitanTick();
-  await saveJushuitan(context(), {
-    ...input,
-    version: 4,
-    warehouseId: "456",
-    availableRule,
-    intervalMinutes: 30,
-  });
-  expect((await jushuitanStatus()).active_run_id).toBe(first.id);
+    await query(
+      "SELECT id FROM jushuitan_inventory_runs WHERE status IN ('QUEUED','RUNNING')",
+    ),
+  ).toHaveLength(0);
 });

@@ -153,7 +153,7 @@ async function inventorySummarySnapshot(q: Row, tx: Tx, userId?: string) {
         CASE WHEN count(DISTINCT color_name)=1 THEN min(color_name) ELSE '多颜色' END AS color_name,
         ${skuView ? "min(size_name)" : "NULL::text"} AS size_name,
         CASE WHEN count(DISTINCT warehouse_id)=1 THEN min(warehouse_id) END AS warehouse_id,
-        CASE WHEN count(DISTINCT warehouse_id)=1 THEN min(warehouse_name) ELSE '全部仓库' END AS warehouse_name,
+        ${external ? "min(warehouse_name)" : "CASE WHEN count(DISTINCT warehouse_id)=1 THEN min(warehouse_name) ELSE '全部仓库' END"} AS warehouse_name,
         ${stockFields.map((k) => `${sumStock(k)} AS ${k}`).join(",")},
         ${[
           "daily_sales",

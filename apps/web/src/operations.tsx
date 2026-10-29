@@ -183,7 +183,7 @@ function InventoryBalances() {
       { title: "订单占有数", dataIndex: "reservedQty", render: (v: number|null) => v ?? "暂无数据" },
       { title: "销退仓库存", dataIndex: "returnQty", render: (v: number|null) => v ?? "暂无数据" },
       { title: "虚拟库存", dataIndex: "virtualQty", render: (v: number|null) => v ?? "暂无数据" },
-      { title: "可用数（按配置计算）", dataIndex: "availableQty", render: (v: number|null) => v ?? (q.data?.stockSourceInfo?.availableRule ? "暂无数据" : "待核对口径") },
+      { title: "可用数", dataIndex: "availableQty", render: (v: number|null) => v ?? "暂无数据" },
     ] : []),
     {
       title: "退货率",
@@ -276,7 +276,7 @@ function InventoryBalances() {
   const summaryInfo = (
     <>
       <div className="inventory-report-coverage secondary">
-        {externalStock ? `库存来源：聚水潭 · ${q.data?.stockSourceInfo?.warehouseName ?? "待选择仓库"}。未返回的编码或字段显示暂无数据，汇总含缺失值时显示不完整。可用数按已核对的聚水潭业务设置计算。` : "库存与在途数量按全部内部仓库汇总。"}
+        {externalStock ? `库存来源：聚水潭 · ${q.data?.stockSourceInfo?.warehouseName ?? "杭州总仓"}。未匹配编码或字段显示暂无数据，汇总含缺失值时显示不完整。可用数采用聚水潭导出表原值。` : "库存与在途数量按全部内部仓库汇总。"}
       </div>
       {skuView && q.data?.reportCoverage && (
         <div className="inventory-report-coverage secondary" role="status">
@@ -451,7 +451,7 @@ function InventoryBalances() {
                       },
                     );
                   const exportRow = (row: Row, total = false) => ({
-                    stockSourceNote: externalStock ? `聚水潭 · ${q.data?.stockSourceInfo?.warehouseName} · 同步 ${when(q.data?.stockSourceInfo?.finishedAt)}；空白库存表示未返回；可用数按配置计算；补货暂不估算` : "网站库存 · 全部内部仓库汇总",
+                    stockSourceNote: externalStock ? `聚水潭 · ${q.data?.stockSourceInfo?.warehouseName} · 同步 ${when(q.data?.stockSourceInfo?.finishedAt)}；空白库存表示未匹配；可用数为导出原值；补货暂不估算` : "网站库存 · 全部内部仓库汇总",
                     ...Object.fromEntries(
                       keys.map((key) => [
                         key,
@@ -513,7 +513,7 @@ function InventoryBalances() {
         {externalStock && q.data?.stockSourceInfo && <Alert style={{marginBottom:12}} showIcon
           type={q.data.stockSourceInfo.errorNote || Date.now()-new Date(q.data.stockSourceInfo.finishedAt).getTime()>q.data.stockSourceInfo.intervalMinutes*120000 ? "warning" : "info"}
           title={`聚水潭 · ${q.data.stockSourceInfo.warehouseName} · 完整同步 ${when(q.data.stockSourceInfo.finishedAt)} · 匹配 ${q.data.stockSourceInfo.receivedCount} / ${q.data.stockSourceInfo.requestedCount}`}
-          description={[q.data.stockSourceInfo.errorNote, "采购在途按聚水潭已生效采购单口径；可用数可能包含虚拟或在途库存，本来源暂不估算补货及可售天数。"].filter(Boolean).join("；")} />}
+          description={[q.data.stockSourceInfo.errorNote, "库存数量采用聚水潭导出表原值；可用数不重新计算。本来源暂不估算补货及可售天数。"].filter(Boolean).join("；")} />}
         <InventoryStatusCards
           counts={q.error ? undefined : q.data?.listingCounts}
           barcodeState={barcodeState}

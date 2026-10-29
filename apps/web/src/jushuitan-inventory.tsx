@@ -1,114 +1,419 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   Alert,
   App,
   Button,
-  Checkbox,
   Descriptions,
   Divider,
   Drawer,
-  Form,
+  Empty,
   Input,
+  Modal,
+  Popconfirm,
   Select,
   Space,
+  Spin,
   Switch,
   Table,
   Tag,
   Typography,
 } from "antd";
-import { CloudSyncOutlined } from "@ant-design/icons";
+import { CloudSyncOutlined, LoginOutlined } from "@ant-design/icons";
 import { api, queryClient } from "./api";
-import { QueryState, useUser, when, type Row } from "./shared";
+import { useUser, when, type Row } from "./shared";
+import {
+  jushuitanLoginActive,
+  jushuitanScope,
+} from "../../../packages/contracts/src/jushuitan-inventory";
 
-const states: Record<string, string> = {
+const names: Record<string, string> = {
   QUEUED: "等待同步",
   RUNNING: "同步中",
   COMPLETE: "已完成",
   FAILED: "未完成",
 };
+const sessionNames: Record<string, string> = {
+  DISCONNECTED: "未登录",
+  READY: "会话已保存",
+  LOGIN_REQUIRED: "需重新登录",
+  ERROR: "需检查登录",
+};
+function JushuitanMatches({ onClose }: { onClose: () => void }) {
+  const [code, setCode] = useState(""),
+    [page, setPage] = useState(1);
+  const q = useQuery({
+    queryKey: ["jushuitan-matches", code, page],
+    queryFn: () =>
+      api(
+        `/inventory/jushuitan/matches?skuCode=${encodeURIComponent(code)}&page=${page}`,
+      ),
+  });
+  return (
+    <Modal
+      open
+      title="聚水潭库存合并明细"
+      width={1050}
+      onCancel={onClose}
+      footer={<Button onClick={onClose}>关闭</Button>}
+    >
+      <Space orientation="vertical" style={{ width: "100%" }} size={16}>
+        <Alert
+          type="info"
+          title="按明确条码映射汇总，不按款号格式猜测"
+          description="商品编码或其它属性5精确对应网站条码；颜色、尺码一致后汇总。每个聚水潭原始商品只计一次。以下数量为各原始商品的贡献值。"
+        />
+        <Input.Search
+          aria-label="查询合并条码"
+          placeholder="输入完整网站编码或聚水潭商品编码"
+          allowClear
+          onSearch={(value) => {
+            setCode(value.trim());
+            setPage(1);
+          }}
+        />
+        {q.error && <Alert type="error" title={(q.error as Error).message} />}
+        <Table
+          size="small"
+          rowKey="sourceSku"
+          loading={q.isFetching}
+          dataSource={q.data?.data ?? []}
+          scroll={{ x: 900 }}
+          pagination={{
+            current: page,
+            pageSize: 50,
+            total: q.data?.total ?? 0,
+            onChange: setPage,
+            showSizeChanger: false,
+          }}
+          columns={[
+            { title: "网站商品编码", dataIndex: "targetCode", width: 190 },
+            { title: "聚水潭原始编码", dataIndex: "sourceSku", width: 220 },
+            { title: "其它属性5", dataIndex: "mappedCode", width: 190 },
+            { title: "颜色及尺码", dataIndex: "colorSize" },
+            {
+              title: "实际库存",
+              render: (_: unknown, r: Row) => r.quantities.physicalQty,
+            },
+            {
+              title: "可用数",
+              render: (_: unknown, r: Row) => r.quantities.availableQty,
+            },
+          ]}
+        />
+      </Space>
+    </Modal>
+  );
+}
+function JushuitanLogin({
+  id,
+  onClose,
+  onSaved,
+}: {
+  id: string;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const { message } = App.useApp(),
+    [busy, setBusy] = useState(false),
+    [text, setText] = useState("");
+  const down = useRef<{ x: number; y: number; frameId: string } | null>(null),
+    saved = useRef(false);
+  const q = useQuery({
+    queryKey: ["jushuitan-login", id],
+    queryFn: async () => (await api(`/inventory/jushuitan/login/${id}`)).data,
+    refetchInterval: (query) =>
+      jushuitanLoginActive.includes(query.state.data?.status ?? "QUEUED")
+        ? 1500
+        : false,
+    staleTime: 0,
+    gcTime: 0,
+  });
+  const l = q.data,
+    ready = l?.status === "WAITING" && !!l?.frameId && !busy;
+  useEffect(() => {
+    if (l?.status === "SAVED" && !saved.current) {
+      saved.current = true;
+      onSaved();
+    }
+  }, [l?.status, onSaved]);
+  const action = async (payload: Row) => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await api(`/inventory/jushuitan/login/${id}/action`, "POST", payload);
+      await q.refetch();
+    } catch (e) {
+      message.error((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const close = async () => {
+    if (jushuitanLoginActive.includes(l?.status ?? "QUEUED")) {
+      try {
+        await api(`/inventory/jushuitan/login/${id}/cancel`, "POST", {});
+      } catch (e) {
+        message.error((e as Error).message);
+        return;
+      }
+    }
+    setText("");
+    queryClient.removeQueries({ queryKey: ["jushuitan-login", id] });
+    onClose();
+  };
+  return (
+    <Modal
+      open
+      title="登录聚水潭并保存会话"
+      width={1160}
+      onCancel={() => void close()}
+      destroyOnHidden
+      footer={
+        <Space wrap>
+          <Button onClick={() => void close()}>
+            {l?.status === "SAVED" ? "完成" : "关闭登录窗口"}
+          </Button>
+          <Button
+            type="primary"
+            disabled={!ready}
+            loading={l?.status === "CHECKING"}
+            onClick={() => void action({ type: "CHECK" })}
+          >
+            核验杭州总仓并保存会话
+          </Button>
+        </Space>
+      }
+    >
+      <Space orientation="vertical" size={12} style={{ width: "100%" }}>
+        <Alert
+          type="info"
+          showIcon
+          title="首次在下方云端浏览器登录，后续同步无需本机浏览器在线"
+          description={`登录后打开「商品 → 商品库存」，核对${jushuitanScope.company}、${jushuitanScope.warehouse}。保存后的登录会话加密保留；平台要求验证或登录过期时需重新登录。`}
+        />
+        {q.error && <Alert type="error" title={(q.error as Error).message} />}
+        {l?.note && (
+          <Alert
+            type={
+              l.status === "SAVED"
+                ? "success"
+                : ["FAILED", "EXPIRED"].includes(l.status)
+                  ? "error"
+                  : "info"
+            }
+            title={l.note}
+          />
+        )}
+        {l?.frame ? (
+          <div
+            style={{
+              position: "relative",
+              border: "1px solid var(--ant-color-border)",
+              borderRadius: 8,
+              overflow: "hidden",
+            }}
+          >
+            <img
+              src={l.frame}
+              alt="聚水潭云端登录画面，点击操作，可拖动完成手动验证"
+              draggable={false}
+              style={{
+                display: "block",
+                width: "100%",
+                touchAction: "none",
+                cursor: ready ? "pointer" : "wait",
+              }}
+              onPointerDown={(e) => {
+                if (!ready) return;
+                const rect = e.currentTarget.getBoundingClientRect();
+                down.current = {
+                  x: (e.clientX - rect.left) / rect.width,
+                  y: (e.clientY - rect.top) / rect.height,
+                  frameId: l.frameId,
+                };
+                e.currentTarget.setPointerCapture(e.pointerId);
+              }}
+              onPointerCancel={() => {
+                down.current = null;
+              }}
+              onPointerUp={(e) => {
+                const start = down.current;
+                down.current = null;
+                if (!start || !ready) return;
+                const rect = e.currentTarget.getBoundingClientRect(),
+                  end = {
+                    x: Math.max(
+                      0,
+                      Math.min(1, (e.clientX - rect.left) / rect.width),
+                    ),
+                    y: Math.max(
+                      0,
+                      Math.min(1, (e.clientY - rect.top) / rect.height),
+                    ),
+                  };
+                const { frameId, x, y } = start;
+                void action(
+                  Math.hypot(x - end.x, y - end.y) > 0.015
+                    ? { type: "DRAG", frameId, from: { x, y }, to: end }
+                    : { type: "CLICK", frameId, point: end },
+                );
+              }}
+            />
+          </div>
+        ) : l?.status === "SAVED" ? (
+          <Empty
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+            description="会话已保存，可以关闭窗口并立即同步"
+          />
+        ) : (
+          <div style={{ padding: 30, textAlign: "center" }}>
+            <Spin
+              spinning={jushuitanLoginActive.includes(l?.status ?? "QUEUED")}
+              tip="正在打开聚水潭"
+            >
+              <div style={{ height: 80 }} />
+            </Spin>
+          </div>
+        )}
+        {l?.status !== "SAVED" && (
+          <>
+            <Typography.Text type="secondary">
+              先点击画面中的输入框，再在此输入并发送。画面会遮盖输入内容；密码和验证码仅临时加密传递，发送后清空。
+            </Typography.Text>
+            <Space.Compact style={{ width: "100%" }}>
+              <Input.Password
+                aria-label="向聚水潭输入账号、密码或验证码"
+                autoComplete="off"
+                value={text}
+                onChange={(e) => setText(e.target.value)}
+                disabled={!ready}
+                maxLength={512}
+                placeholder="输入当前选中字段的内容"
+              />
+              <Button
+                disabled={!ready || !text}
+                onClick={() => {
+                  const value = text;
+                  setText("");
+                  void action({ type: "TEXT", frameId: l.frameId, value });
+                }}
+              >
+                发送输入
+              </Button>
+            </Space.Compact>
+            <Space wrap>
+              <Button
+                disabled={!ready}
+                onClick={() =>
+                  void action({ type: "KEY", frameId: l.frameId, key: "Tab" })
+                }
+              >
+                下一输入框
+              </Button>
+              <Button
+                disabled={!ready}
+                onClick={() =>
+                  void action({ type: "KEY", frameId: l.frameId, key: "Enter" })
+                }
+              >
+                回车
+              </Button>
+              <Button
+                disabled={!ready}
+                onClick={() =>
+                  void action({
+                    type: "SCROLL",
+                    frameId: l.frameId,
+                    deltaY: -500,
+                  })
+                }
+              >
+                向上滚动
+              </Button>
+              <Button
+                disabled={!ready}
+                onClick={() =>
+                  void action({
+                    type: "SCROLL",
+                    frameId: l.frameId,
+                    deltaY: 500,
+                  })
+                }
+              >
+                向下滚动
+              </Button>
+              <Button
+                disabled={!ready}
+                onClick={() => void action({ type: "REFRESH" })}
+              >
+                刷新画面页面
+              </Button>
+            </Space>
+          </>
+        )}
+      </Space>
+    </Modal>
+  );
+}
 export function JushuitanInventory({ onView }: { onView: () => void }) {
   const [open, setOpen] = useState(false),
     [busy, setBusy] = useState(""),
+    [loginId, setLoginId] = useState<string | null>(null),
+    [matches, setMatches] = useState(false);
+  const [enabled, setEnabled] = useState(false),
+    [interval, setIntervalValue] = useState(30),
     [dirty, setDirty] = useState(false);
-  const [form] = Form.useForm(),
-    { message } = App.useApp(),
-    user = useUser();
-  const manager =
-    user.permissions.includes("inventory.adjust") &&
-    user.roleCodes?.includes("SUPER_ADMIN");
-  const status = useQuery({
+  const { message } = App.useApp(),
+    user = useUser(),
+    manager =
+      user.permissions.includes("inventory.adjust") &&
+      user.roleCodes?.includes("SUPER_ADMIN");
+  const q = useQuery({
     queryKey: ["jushuitan-inventory"],
     queryFn: async () => (await api("/inventory/jushuitan")).data,
     enabled: open,
-    refetchInterval: open ? 5000 : false,
+    refetchInterval: open ? 3000 : false,
   });
-  const s = status.data;
+  const s = q.data,
+    active = s?.runs?.some((r: Row) =>
+      ["QUEUED", "RUNNING"].includes(r.status),
+    );
   useEffect(() => {
-    if (!open || !s) return;
-    form.setFieldsValue({
-      version: s.version,
-      appKey: "",
-      appSecret: "",
-      clearCredentials: false,
-      warehouseId: s.warehouseId,
-      enabled: s.enabled,
-      intervalMinutes: s.intervalMinutes,
-      ruleConfirmed: !!s.availableRule,
-      purchase: s.availableRule?.purchase ?? false,
-      incoming: s.availableRule?.incoming ?? false,
-      returns: s.availableRule?.returns ?? false,
-    });
-    setDirty(false);
-  }, [open, s?.version, form]);
-  useEffect(() => {
-    if (open && s && !dirty) form.setFieldValue("enabled", s.enabled);
-  }, [open, s?.enabled, dirty, form]);
-  const confirmed = Form.useWatch("ruleConfirmed", form);
+    if (s && !dirty) {
+      setEnabled(s.enabled);
+      setIntervalValue(s.intervalMinutes);
+    }
+  }, [s, dirty]);
+  const refresh = async () => {
+    await q.refetch();
+    await queryClient.invalidateQueries({ queryKey: ["/inventory/summary"] });
+  };
   const run = async (action: string) => {
     setBusy(action);
     try {
-      if (action === "settings") {
-        const b = await form.validateFields();
-        await api("/inventory/jushuitan/settings", "POST", {
-          version: s.version,
-          appKey: b.appKey,
-          appSecret: b.appSecret,
-          clearCredentials: !!b.clearCredentials,
-          warehouseId: b.warehouseId ?? null,
-          enabled: !!b.enabled,
-          intervalMinutes: b.intervalMinutes,
-          availableRule: b.ruleConfirmed
-            ? {
-                purchase: !!b.purchase,
-                incoming: !!b.incoming,
-                returns: !!b.returns,
-              }
-            : null,
-        });
-        form.setFieldsValue({ appKey: "", appSecret: "" });
-        setDirty(false);
-        message.success("聚水潭接入设置已保存");
-      } else {
-        await api(`/inventory/jushuitan/${action}`, "POST", {});
+      const b =
+        action === "settings"
+          ? { version: s.version, enabled, intervalMinutes: interval }
+          : {};
+      const result = await api(`/inventory/jushuitan/${action}`, "POST", b);
+      if (action === "login") setLoginId(result.data.id);
+      else
         message.success(
-          action === "verify"
-            ? "授权和仓库查询已验证，请选择杭州总仓；库存权限将在同步时核验"
-            : "同步任务已提交，可在下方查看进度",
+          action === "sync"
+            ? "已开始后台导出同步，可在下方查看进度"
+            : action === "disconnect"
+              ? "会话已移除，定时同步已关闭"
+              : "同步设置已保存",
         );
-      }
-      await status.refetch();
-      await queryClient.invalidateQueries({ queryKey: ["/inventory/summary"] });
-    } catch (error) {
-      if (error instanceof Error) message.error(error.message);
-      await status.refetch();
+      setDirty(false);
+      await refresh();
+    } catch (e) {
+      message.error((e as Error).message);
     } finally {
       setBusy("");
     }
   };
-  const active = s?.runs?.some((r: Row) =>
-    ["QUEUED", "RUNNING"].includes(r.status),
-  );
   return (
     <>
       <Button
@@ -119,286 +424,268 @@ export function JushuitanInventory({ onView }: { onView: () => void }) {
         聚水潭同步
       </Button>
       <Drawer
-        title="聚水潭库存接入"
+        title="聚水潭表格同步"
+        size={660}
         open={open}
-        size={620}
+        onClose={() => setOpen(false)}
         destroyOnHidden
-        onClose={() => {
-          setOpen(false);
-          form.resetFields();
-        }}
-        footer={
-          <Space wrap>
-            {manager && (
-              <Button
-                type="primary"
-                disabled={!s}
-                loading={busy === "settings"}
-                onClick={() => void run("settings")}
-              >
-                保存设置
-              </Button>
-            )}
-            <Button onClick={() => setOpen(false)}>关闭</Button>
-          </Space>
-        }
       >
-        <QueryState error={status.error} reload={() => void status.refetch()} />
-        <Alert
-          type="info"
-          showIcon
-          title="杭州总仓 → 网站库存明细"
-          description="按完整商品编码同步库存快照。查询聚水潭库存，不产生盘点单，也不修改聚水潭或网站的库存台账。"
-        />
-        <Typography.Paragraph style={{ marginTop: 16 }}>
-          在{" "}
-          <a
-            href="https://openweb.jushuitan.com/management/apps"
-            target="_blank"
-            rel="noreferrer"
-          >
-            聚水潭开放平台
-          </a>{" "}
-          查看自研应用是否已审核通过，并确认「商品库存查询」和「仓库查询」权限。
-          <a
-            href="/help?chapter=38-jushuitan-inventory.md"
-            target="_blank"
-            rel="noreferrer"
-          >
-            接入说明
-          </a>
-        </Typography.Paragraph>
-        {s && (
-          <>
-            {s.errorNote && (
-              <Alert showIcon type="warning" title={s.errorNote} />
-            )}
-            {!s.encryptionReady && (
-              <Alert
-                type="error"
-                title="服务器凭据加密尚未配置，请联系管理员"
+        <Space orientation="vertical" size={18} style={{ width: "100%" }}>
+          <Alert
+            type="info"
+            showIcon
+            title="登录一次，点击同步自动导出并匹配"
+            description="仅查询网站已有商品编码/条码，通过聚水潭网页分批导出。商品编码或其它属性5精确匹配后，按相同颜色尺码汇总。无需开放平台应用或API密钥。"
+          />
+          {q.error && <Alert type="error" title={(q.error as Error).message} />}
+          {!s ? (
+            <Spin />
+          ) : (
+            <>
+              <Descriptions
+                column={1}
+                size="small"
+                items={[
+                  { key: "company", label: "公司", children: s.companyName },
+                  {
+                    key: "warehouse",
+                    label: "同步仓库",
+                    children: s.warehouseName,
+                  },
+                  {
+                    key: "session",
+                    label: "登录状态",
+                    children: (
+                      <Tag
+                        color={
+                          s.sessionStatus === "READY" ? "success" : "default"
+                        }
+                      >
+                        {sessionNames[s.sessionStatus] ?? "未登录"}
+                      </Tag>
+                    ),
+                  },
+                  {
+                    key: "saved",
+                    label: "会话保存",
+                    children: s.sessionSavedAt
+                      ? when(s.sessionSavedAt)
+                      : "尚未保存",
+                  },
+                  {
+                    key: "check",
+                    label: "最近核验",
+                    children: s.sessionCheckedAt
+                      ? when(s.sessionCheckedAt)
+                      : "尚未核验",
+                  },
+                ]}
               />
-            )}
-            <Descriptions
-              column={1}
-              size="small"
-              style={{ marginTop: 16 }}
-              items={[
-                {
-                  key: "auth",
-                  label: "应用凭据",
-                  children: s.configured ? "已加密保存（不回显）" : "未配置",
-                },
-                {
-                  key: "verified",
-                  label: "仓库查询验证",
-                  children: when(s.verifiedAt),
-                },
-                {
-                  key: "expire",
-                  label: "授权有效期至",
-                  children: when(s.tokenExpiresAt),
-                },
-                {
-                  key: "warehouse",
-                  label: "同步仓库",
-                  children: s.warehouseName
-                    ? `${s.warehouseName} · 编号 ${s.warehouseId} · 公司 ${s.companyId}`
-                    : "待核验选择（不使用全部仓库合计）",
-                },
-              ]}
-            />
-            {manager ? (
-              <Form
-                form={form}
-                layout="vertical"
-                onValuesChange={() => setDirty(true)}
-                style={{ marginTop: 24 }}
-                disabled={!!busy}
-              >
-                <Form.Item
-                  label="App Key"
-                  name="appKey"
-                  extra="更换应用时与 App Secret 一起填写；留空保留已存凭据。"
-                >
-                  <Input.Password
-                    autoComplete="new-password"
-                    visibilityToggle={false}
-                    placeholder={
-                      s.configured
-                        ? "已保存，留空不更换"
-                        : "填写自研应用 App Key"
-                    }
-                  />
-                </Form.Item>
-                <Form.Item label="App Secret" name="appSecret">
-                  <Input.Password
-                    autoComplete="new-password"
-                    visibilityToggle={false}
-                    placeholder="仅在此处填写，不要发到聊天"
-                  />
-                </Form.Item>
-                {s.configured && (
-                  <Form.Item name="clearCredentials" valuePropName="checked">
-                    <Checkbox>清除已保存凭据与当前快照入口</Checkbox>
-                  </Form.Item>
-                )}
-                <Button
-                  loading={busy === "verify"}
-                  disabled={dirty || !s.configured || !!busy}
-                  onClick={() => void run("verify")}
-                >
-                  验证授权并读取仓库
-                </Button>
-                <Typography.Paragraph type="secondary" style={{ marginTop: 8 }}>
-                  先保存凭据再验证。使用已批准的自研应用获取授权，并在到期前自动续期；不支持服务商应用。
-                  {dirty && " 设置有修改，请先保存。"}
-                </Typography.Paragraph>
-                <Form.Item
-                  label="同步仓库"
-                  name="warehouseId"
-                  extra="选择截图中的杭州总仓，并核对公司编号。编号为 0 代表全部仓库，不能代替杭州总仓。"
-                >
-                  <Select
-                    allowClear
-                    placeholder="验证后选择杭州总仓"
-                    options={(s.warehouses ?? [])
-                      .filter((w: Row) => Number(w.wmsCoId) > 0)
-                      .map((w: Row) => ({
-                        value: w.wmsCoId,
-                        label: `${w.name} · ${w.wmsCoId}（公司 ${w.coId}）`,
-                      }))}
-                  />
-                </Form.Item>
-                <Form.Item
-                  name="enabled"
-                  label="定时同步"
-                  valuePropName="checked"
-                >
-                  <Switch />
-                </Form.Item>
-                <Form.Item name="intervalMinutes" label="同步间隔">
-                  <Select
-                    options={[15, 30, 60].map((n) => ({
-                      value: n,
-                      label: `每 ${n} 分钟`,
-                    }))}
-                  />
-                </Form.Item>
-                <Divider />
-                <Form.Item name="ruleConfirmed" valuePropName="checked">
-                  <Checkbox>已核对聚水潭的可用数业务设置</Checkbox>
-                </Form.Item>
-                <Typography.Paragraph type="secondary">
-                  可用数按「实际库存 − 订单占有 +
-                  虚拟库存」加上下方选中项计算。未核对时显示“待核对口径”，原始库存仍正常同步。
-                </Typography.Paragraph>
-                <Space wrap>
-                  <Form.Item name="purchase" valuePropName="checked">
-                    <Checkbox disabled={!confirmed}>计入采购在途</Checkbox>
-                  </Form.Item>
-                  <Form.Item name="incoming" valuePropName="checked">
-                    <Checkbox disabled={!confirmed}>计入进货仓</Checkbox>
-                  </Form.Item>
-                  <Form.Item name="returns" valuePropName="checked">
-                    <Checkbox disabled={!confirmed}>计入销退仓</Checkbox>
-                  </Form.Item>
-                </Space>
-              </Form>
-            ) : (
-              <Typography.Paragraph type="secondary">
-                请由超级管理员配置或发起同步。
-              </Typography.Paragraph>
-            )}
-            <Divider />
-            <Space wrap style={{ marginBottom: 16 }}>
-              {manager && (
-                <Button
-                  type="primary"
-                  aria-label="立即同步"
-                  icon={<CloudSyncOutlined />}
-                  loading={busy === "sync" || active}
-                  disabled={dirty || !s.verifiedAt || !s.warehouseId || !!busy}
-                  onClick={() => void run("sync")}
-                >
-                  立即同步
-                </Button>
+              {!s.workerOnline && (
+                <Alert
+                  type="warning"
+                  title="云端同步进程离线，请稍后刷新状态"
+                />
               )}
-              <Button
-                disabled={!s.activeRunId}
-                onClick={() => {
-                  onView();
-                  setOpen(false);
-                  void queryClient.invalidateQueries({
-                    queryKey: ["/inventory/summary"],
-                  });
-                }}
-              >
-                查看聚水潭库存
-              </Button>
-              <Button onClick={() => void status.refetch()}>刷新状态</Button>
-            </Space>
-            <Table<Row>
-              size="small"
-              rowKey="id"
-              pagination={false}
-              dataSource={s.runs ?? []}
-              scroll={{ x: 530 }}
-              columns={[
-                {
-                  title: "时间",
-                  dataIndex: "createdAt",
-                  render: when,
-                  width: 150,
-                },
-                {
-                  title: "状态",
-                  dataIndex: "status",
-                  render: (v: string) => (
-                    <Tag
-                      color={
-                        v === "FAILED"
-                          ? "error"
-                          : v === "COMPLETE"
-                            ? "success"
-                            : "processing"
+              {s.errorNote && <Alert type="warning" title={s.errorNote} />}
+              {manager ? (
+                <>
+                  <Space wrap>
+                    <Button
+                      icon={<LoginOutlined />}
+                      aria-label={
+                        s.configured ? "重新登录聚水潭" : "登录聚水潭"
                       }
+                      disabled={
+                        !!busy ||
+                        active ||
+                        !s.encryptionReady ||
+                        !s.workerOnline
+                      }
+                      loading={busy === "login"}
+                      onClick={() => void run("login")}
                     >
-                      {states[v]}
-                    </Tag>
+                      {s.configured ? "重新登录聚水潭" : "登录聚水潭"}
+                    </Button>
+                    <Button
+                      type="primary"
+                      icon={<CloudSyncOutlined />}
+                      aria-label="立即同步"
+                      loading={busy === "sync" || active}
+                      disabled={
+                        !!busy ||
+                        active ||
+                        s.sessionStatus !== "READY" ||
+                        !s.workerOnline ||
+                        dirty
+                      }
+                      onClick={() => void run("sync")}
+                    >
+                      立即同步
+                    </Button>
+                    {s.configured && (
+                      <Popconfirm
+                        title="移除已保存的登录会话？"
+                        description="将停止定时同步，保留上一次完整库存供参考。"
+                        onConfirm={() => run("disconnect")}
+                      >
+                        <Button danger disabled={!!busy}>
+                          移除会话
+                        </Button>
+                      </Popconfirm>
+                    )}
+                  </Space>
+                  {!s.encryptionReady && (
+                    <Alert
+                      type="warning"
+                      title="服务器会话加密未就绪，请管理员检查同步进程配置"
+                    />
+                  )}
+                  <Divider style={{ margin: "4px 0" }} />
+                  <Space wrap>
+                    <Switch
+                      aria-label="定时同步"
+                      checked={enabled}
+                      disabled={!s.configured || s.sessionStatus !== "READY"}
+                      onChange={(v) => {
+                        setEnabled(v);
+                        setDirty(true);
+                      }}
+                    />
+                    <span>定时同步</span>
+                    <Select
+                      aria-label="同步间隔"
+                      value={interval}
+                      options={[15, 30, 60].map((value) => ({
+                        value,
+                        label: `每${value}分钟`,
+                      }))}
+                      onChange={(v) => {
+                        setIntervalValue(v);
+                        setDirty(true);
+                      }}
+                    />
+                    <Button
+                      disabled={!dirty || !!busy || active}
+                      loading={busy === "settings"}
+                      onClick={() => void run("settings")}
+                    >
+                      保存设置
+                    </Button>
+                  </Space>
+                  <Typography.Text type="secondary">
+                    会话失效时会停止定时同步并提示重新登录。同步只读取杭州总仓，不修改聚水潭或网站内部库存台账。
+                  </Typography.Text>
+                </>
+              ) : (
+                <Alert type="info" title="请由超级管理员登录或发起同步。" />
+              )}
+              <Space wrap>
+                <Button onClick={() => void refresh()}>刷新状态</Button>
+                <Button
+                  disabled={!s.activeRunId}
+                  onClick={() => {
+                    onView();
+                    setOpen(false);
+                  }}
+                >
+                  查看聚水潭库存
+                </Button>
+                <Button
+                  disabled={!s.activeRunId}
+                  onClick={() => setMatches(true)}
+                >
+                  查看合并明细
+                </Button>
+                <Typography.Link href="/help?chapter=38-jushuitan-inventory.md">
+                  同步说明
+                </Typography.Link>
+              </Space>
+              <Typography.Title level={5} style={{ margin: 0 }}>
+                同步记录
+              </Typography.Title>
+              <Table
+                size="small"
+                rowKey="id"
+                pagination={false}
+                dataSource={s.runs}
+                scroll={{ x: 560 }}
+                columns={[
+                  {
+                    title: "发起时间",
+                    dataIndex: "createdAt",
+                    render: when,
+                    width: 155,
+                  },
+                  {
+                    title: "进度",
+                    dataIndex: "status",
+                    render: (v: string, r: Row) => (
+                      <Space orientation="vertical" size={2}>
+                        <Tag
+                          color={
+                            v === "COMPLETE"
+                              ? "success"
+                              : v === "FAILED"
+                                ? "error"
+                                : "processing"
+                          }
+                        >
+                          {names[v]}
+                        </Tag>
+                        <Typography.Text type="secondary">
+                          {r.stage}
+                        </Typography.Text>
+                      </Space>
+                    ),
+                  },
+                  {
+                    title: "导出 / 匹配 / 网站商品",
+                    render: (_: unknown, r: Row) =>
+                      `${r.exportedCount} / ${r.receivedCount} / ${r.requestedCount}`,
+                  },
+                ]}
+                expandable={{
+                  expandedRowRender: (r: Row) => (
+                    <Space orientation="vertical" style={{ width: "100%" }}>
+                      {r.errorNote && (
+                        <Alert type="error" title={r.errorNote} />
+                      )}
+                      <span>
+                        仓库：{r.warehouseName} ·{" "}
+                        {r.triggerType === "SCHEDULED" ? "定时" : "手动"} ·{" "}
+                        {r.finishedAt ? when(r.finishedAt) : "尚未完成"}
+                      </span>
+                      {r.sourceFileName && (
+                        <span>原始文件：{r.sourceFileName}</span>
+                      )}
+                      {!!r.missingCodes?.length && (
+                        <span style={{ overflowWrap: "anywhere" }}>
+                          网站未匹配编码（最多50个）：
+                          {r.missingCodes.join("、")}
+                        </span>
+                      )}
+                    </Space>
                   ),
-                  width: 100,
-                },
-                {
-                  title: "匹配 / 已查 / 总数",
-                  render: (_, r) =>
-                    `${r.receivedCount} / ${r.processedCount} / ${r.requestedCount}`,
-                },
-              ]}
-              expandable={{
-                expandedRowRender: (r) => (
-                  <div>
-                    <p>
-                      {r.warehouseName} ·{" "}
-                      {r.triggerType === "MANUAL" ? "手动同步" : "定时同步"}
-                    </p>
-                    {r.errorNote && (
-                      <Alert type="warning" title={r.errorNote} />
-                    )}
-                    {!!r.missingCodes?.length && (
-                      <p>
-                        未匹配编码（最多列出 50 个）：
-                        {r.missingCodes.join("、")}
-                      </p>
-                    )}
-                    <p>完成时间：{when(r.finishedAt)}</p>
-                  </div>
-                ),
-              }}
-            />
-          </>
-        )}
+                }}
+              />
+              <Typography.Text type="secondary">
+                数量直接取自导出表；可用数不重新计算。未匹配商品显示暂无数据，校验失败保留上次完整结果。
+              </Typography.Text>
+            </>
+          )}
+        </Space>
       </Drawer>
+      {loginId && (
+        <JushuitanLogin
+          id={loginId}
+          onClose={() => setLoginId(null)}
+          onSaved={() => {
+            void refresh();
+          }}
+        />
+      )}
+      {matches && <JushuitanMatches onClose={() => setMatches(false)} />}
     </>
   );
 }

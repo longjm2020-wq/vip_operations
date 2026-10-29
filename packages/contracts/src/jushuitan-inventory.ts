@@ -11,16 +11,70 @@ export type JushuitanAvailableRule = z.infer<typeof jushuitanAvailableRule>;
 export const jushuitanSettingsSchema = z
   .object({
     version: z.number().int().positive(),
-    appKey: z.string().trim().max(256).optional(),
-    appSecret: z.string().trim().max(256).optional(),
-    clearCredentials: z.boolean().default(false),
-    warehouseId: z
-      .string()
-      .regex(/^[1-9]\d{0,14}$/)
-      .nullable(),
     enabled: z.boolean(),
     intervalMinutes: z.union([z.literal(15), z.literal(30), z.literal(60)]),
-    availableRule: jushuitanAvailableRule.nullable(),
   })
   .strict();
 export const jushuitanExtraFields = ["returnQty", "virtualQty"] as const;
+
+export const jushuitanScope = {
+  company: "杭州序缇文化传媒有限公司",
+  warehouse: "序缇杭州总仓",
+  home: "https://www.erp321.com/epaas",
+} as const;
+export const jushuitanViewport = { width: 1440, height: 900 };
+export const jushuitanLoginActive = [
+  "QUEUED",
+  "RUNNING",
+  "WAITING",
+  "CHECKING",
+];
+export function isJushuitanOrigin(value: string) {
+  try {
+    const url = new URL(value);
+    return (
+      url.protocol === "https:" &&
+      !url.username &&
+      !url.password &&
+      (!url.port || url.port === "443") &&
+      ["erp321.com", "jushuitan.com"].some(
+        (host) => url.hostname === host || url.hostname.endsWith("." + host),
+      )
+    );
+  } catch {
+    return false;
+  }
+}
+const point = z
+  .object({ x: z.number().min(0).max(1), y: z.number().min(0).max(1) })
+  .strict();
+const frame = { frameId: z.uuid() };
+export const jushuitanLoginActionSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("CLICK"), ...frame, point }).strict(),
+  z
+    .object({ type: z.literal("DRAG"), ...frame, from: point, to: point })
+    .strict(),
+  z
+    .object({
+      type: z.literal("SCROLL"),
+      ...frame,
+      deltaY: z.number().int().min(-900).max(900),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("TEXT"),
+      ...frame,
+      value: z.string().min(1).max(512),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("KEY"),
+      ...frame,
+      key: z.enum(["Tab", "Enter", "Backspace", "ControlOrMeta+A"]),
+    })
+    .strict(),
+  z.object({ type: z.enum(["REFRESH", "CHECK"]) }).strict(),
+]);
+export type JushuitanLoginAction = z.infer<typeof jushuitanLoginActionSchema>;

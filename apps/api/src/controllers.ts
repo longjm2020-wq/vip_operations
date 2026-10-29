@@ -14,7 +14,7 @@ import {
 } from "@nestjs/common";
 import { ApiTags, ApiOperation } from "@nestjs/swagger";
 import { Response } from "express";
-import { db, rows, one } from "../../../packages/database/src/index.js";
+import { db, rows, one, type Row } from "../../../packages/database/src/index.js";
 import { context, AuthRequest, Permission, Public } from "./http.js";
 import {
   parse,
@@ -34,7 +34,17 @@ import {
 } from "./modules/master/product-fields.js";
 import * as inventory from "./modules/inventory/service.js";
 import { inventorySummary } from "./modules/inventory/summary.js";
-import { jushuitanStatus, saveJushuitan, verifyJushuitan, queueJushuitan } from "./modules/inventory/jushuitan.js";
+import {
+  jushuitanStatus,
+  saveJushuitan,
+  queueJushuitan,
+  openJushuitanLogin,
+  jushuitanLoginView,
+  jushuitanLoginAction,
+  cancelJushuitanLogin,
+  disconnectJushuitan,
+  jushuitanMatches,
+} from "./modules/inventory/jushuitan.js";
 import { replenishmentPolicy, saveReplenishmentPolicy } from "./modules/inventory/replenishment-policy.js";
 import { InventoryFulfilmentController } from "./modules/inventory/controller.js";
 import * as purchase from "./modules/purchases/service.js";
@@ -140,10 +150,55 @@ class AuthController {
 @ApiTags("库存")
 @Controller("api/v1/inventory")
 class InventoryController {
-  @Permission("inventory.read") @Get("jushuitan") jushuitan() { return jushuitanStatus(); }
-  @Permission("inventory.adjust") @Post("jushuitan/settings") jushuitanSave(@Req() r: AuthRequest,@Body() b: unknown) { return saveJushuitan(context(r),b); }
-  @Permission("inventory.adjust") @Post("jushuitan/verify") jushuitanVerify(@Req() r: AuthRequest) { return verifyJushuitan(context(r)); }
-  @Permission("inventory.adjust") @Post("jushuitan/sync") jushuitanSync(@Req() r: AuthRequest) { return queueJushuitan(context(r)); }
+  @Permission("inventory.read") @Get("jushuitan") jushuitan() {
+    return jushuitanStatus();
+  }
+  @Permission("inventory.read") @Get("jushuitan/matches") jushuitanMatches(
+    @Query() q: Row,
+  ) {
+    return jushuitanMatches(q);
+  }
+  @Permission("inventory.adjust") @Post("jushuitan/settings") jushuitanSave(
+    @Req() r: AuthRequest,
+    @Body() b: unknown,
+  ) {
+    return saveJushuitan(context(r), b);
+  }
+  @Permission("inventory.adjust") @Post("jushuitan/login") jushuitanLogin(
+    @Req() r: AuthRequest,
+  ) {
+    return openJushuitanLogin(context(r));
+  }
+  @Permission("inventory.adjust")
+  @Get("jushuitan/login/:id")
+  jushuitanLoginView(@Req() r: AuthRequest, @Param("id") id: string, @Res({ passthrough: true }) res: Response) {
+    res.setHeader("Cache-Control", "no-store");
+    return jushuitanLoginView(context(r), id);
+  }
+  @Permission("inventory.adjust")
+  @Post("jushuitan/login/:id/action")
+  jushuitanLoginAction(
+    @Req() r: AuthRequest,
+    @Param("id") id: string,
+    @Body() b: unknown,
+  ) {
+    return jushuitanLoginAction(context(r), id, b);
+  }
+  @Permission("inventory.adjust")
+  @Post("jushuitan/login/:id/cancel")
+  jushuitanLoginCancel(@Req() r: AuthRequest, @Param("id") id: string) {
+    return cancelJushuitanLogin(context(r), id);
+  }
+  @Permission("inventory.adjust")
+  @Post("jushuitan/disconnect")
+  jushuitanDisconnect(@Req() r: AuthRequest) {
+    return disconnectJushuitan(context(r));
+  }
+  @Permission("inventory.adjust") @Post("jushuitan/sync") jushuitanSync(
+    @Req() r: AuthRequest,
+  ) {
+    return queueJushuitan(context(r));
+  }
   @Permission("inventory.read") @Get() list(@Query() q: any) {
     return inventory.balances(q);
   }
