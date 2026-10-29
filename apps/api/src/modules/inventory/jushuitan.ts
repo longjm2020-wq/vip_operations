@@ -199,6 +199,10 @@ export async function jushuitanLoginView(c: Context, id: string) {
       expires_at: l.expires_at,
       note: l.note,
       frame_id: valid ? l.frame_id : null,
+      frame_input: valid ? l.frame_input : null,
+      last_action_id:
+        valid && l.last_action_id ? String(l.last_action_id) : null,
+      last_action_error: valid ? l.last_action_error : null,
       frame:
         valid && l.frame_jpeg ? `data:image/jpeg;base64,${l.frame_jpeg}` : null,
     };
@@ -220,7 +224,14 @@ export async function jushuitanLoginAction(
       new Date(l.expires_at).getTime() <= Date.now()
     )
       fail("JST_LOGIN_STATE", "登录窗口尚未就绪或已关闭", 409);
-    if ("frameId" in b && b.frameId !== l.frame_id)
+    if (b.type === "TEXT" && b.targetId && b.targetId !== l.frame_input?.id)
+      fail("JST_INPUT_CHANGED", "选中的输入框已改变，请重新点击后填写", 409);
+    // A live input token remains valid while unrelated parts of the image change.
+    if (
+      "frameId" in b &&
+      !(b.type === "TEXT" && b.targetId) &&
+      b.frameId !== l.frame_id
+    )
       fail("JST_STALE_FRAME", "画面已变化，请根据新画面重新操作", 409);
     if (
       await one(
@@ -230,8 +241,9 @@ export async function jushuitanLoginAction(
       )
     )
       fail("JST_LOGIN_BUSY", "正在执行上一步，请稍候", 409);
-    await tx.$executeRawUnsafe(
-      "INSERT INTO jushuitan_browser_actions(login_id,encrypted_payload) VALUES($1::uuid,$2)",
+    const queued = await one(
+      tx,
+      "INSERT INTO jushuitan_browser_actions(login_id,encrypted_payload) VALUES($1::uuid,$2) RETURNING id",
       id,
       encryptSecret(
         JSON.stringify({
@@ -246,7 +258,7 @@ export async function jushuitanLoginAction(
       "UPDATE jushuitan_browser_logins SET frame_id=NULL,status='RUNNING' WHERE id=$1::uuid",
       id,
     );
-    return { accepted: true };
+    return { accepted: true, action_id: String(queued!.id) };
   });
 }
 export async function cancelJushuitanLogin(c: Context, id: string) {

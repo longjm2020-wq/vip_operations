@@ -18,6 +18,7 @@ import {
   Table,
   Tag,
   Typography,
+  type InputRef,
 } from "antd";
 import { CloudSyncOutlined, LoginOutlined } from "@ant-design/icons";
 import { api, queryClient } from "./api";
@@ -25,6 +26,7 @@ import { useUser, when, type Row } from "./shared";
 import {
   jushuitanLoginActive,
   jushuitanScope,
+  type JushuitanLoginInput,
 } from "../../../packages/contracts/src/jushuitan-inventory";
 
 const names: Record<string, string> = {
@@ -118,6 +120,14 @@ function JushuitanLogin({
     [busy, setBusy] = useState(false),
     [text, setText] = useState("");
   const [zoom, setZoom] = useState(false);
+  const [pendingInput, setPendingInput] = useState<{
+    id: string;
+    revision: number;
+  } | null>(null);
+  const [inputFeedback, setInputFeedback] = useState("");
+  const inlineInput = useRef<InputRef>(null),
+    draftRevision = useRef(0),
+    actionBusy = useRef(false);
   const down = useRef<{ x: number; y: number; frameId: string } | null>(null),
     saved = useRef(false);
   const q = useQuery({
@@ -132,6 +142,27 @@ function JushuitanLogin({
   });
   const l = q.data,
     ready = l?.status === "WAITING" && !!l?.frameId && !busy;
+  const input = l?.frameInput as JushuitanLoginInput | null | undefined;
+  useEffect(() => {
+    setText("");
+    draftRevision.current++;
+    setInputFeedback("");
+    if (input?.id) {
+      const raf = requestAnimationFrame(() =>
+        inlineInput.current?.focus({ preventScroll: true }),
+      );
+      return () => cancelAnimationFrame(raf);
+    }
+  }, [input?.id]);
+  useEffect(() => {
+    if (!pendingInput || String(l?.lastActionId) !== pendingInput.id) return;
+    if (l.lastActionError) setInputFeedback(l.lastActionError);
+    else {
+      if (draftRevision.current === pendingInput.revision) setText("");
+      setInputFeedback("已填入聚水潭，可选择下一项或点击画面中的登录按钮");
+    }
+    setPendingInput(null);
+  }, [l?.lastActionId, l?.lastActionError, pendingInput]);
   useEffect(() => {
     if (l?.status === "SAVED" && !saved.current) {
       saved.current = true;
@@ -139,16 +170,40 @@ function JushuitanLogin({
     }
   }, [l?.status, onSaved]);
   const action = async (payload: Row) => {
-    if (busy) return;
+    if (actionBusy.current) return null;
+    actionBusy.current = true;
     setBusy(true);
     try {
-      await api(`/inventory/jushuitan/login/${id}/action`, "POST", payload);
+      const result = await api(
+        `/inventory/jushuitan/login/${id}/action`,
+        "POST",
+        payload,
+      );
       await q.refetch();
+      return result.data;
     } catch (e) {
       message.error((e as Error).message);
+      return null;
     } finally {
+      actionBusy.current = false;
       setBusy(false);
     }
+  };
+  const changeText = (value: string) => {
+    draftRevision.current++;
+    setText(value);
+    setInputFeedback("");
+  };
+  const sendInput = async () => {
+    if (!ready || !input || !text || pendingInput) return;
+    const revision = draftRevision.current;
+    const result = await action({
+      type: "TEXT",
+      frameId: l.frameId,
+      targetId: input.id,
+      value: text,
+    });
+    if (result?.actionId) setPendingInput({ id: result.actionId, revision });
   };
   const close = async () => {
     if (jushuitanLoginActive.includes(l?.status ?? "QUEUED")) {
@@ -170,32 +225,142 @@ function JushuitanLogin({
       width={1160}
       style={{ top: 16 }}
       styles={{
-        body: { maxHeight: "calc(100dvh - 180px)", overflowY: "auto" },
+        container: {
+          maxHeight: "calc(100dvh - 32px)",
+          display: "flex",
+          flexDirection: "column",
+        },
+        header: { flexShrink: 0 },
+        body: {
+          maxHeight: "calc(100dvh - 300px)",
+          minHeight: 0,
+          flex: "1 1 auto",
+          overflowY: "auto",
+        },
+        footer: { flexShrink: 0 },
       }}
       onCancel={() => void close()}
       destroyOnHidden
       footer={
-        <Space wrap>
-          <Button onClick={() => void close()}>
-            {l?.status === "SAVED" ? "完成" : "关闭登录窗口"}
-          </Button>
-          <Button
-            type="primary"
-            disabled={!ready}
-            loading={l?.status === "CHECKING"}
-            onClick={() => void action({ type: "CHECK" })}
-          >
-            核验杭州总仓并保存会话
-          </Button>
-        </Space>
+        <div style={{ display: "grid", gap: 10, textAlign: "left" }}>
+          {jushuitanLoginActive.includes(l?.status ?? "QUEUED") && (
+            <>
+              <Typography.Text type="secondary" aria-live="polite">
+                {input
+                  ? `${input.label}${input.filled ? " · 已填写，重新输入可替换" : " · 可直接在画面框内或此处输入"}`
+                  : "点击画面中的账号、密码或验证码框，即可输入"}
+                {inputFeedback && ` · ${inputFeedback}`}
+              </Typography.Text>
+              <Space.Compact style={{ width: "100%" }}>
+                <Input.Password
+                  aria-label="向聚水潭输入账号、密码或验证码"
+                  autoComplete="off"
+                  value={text}
+                  onChange={(e) => changeText(e.target.value)}
+                  disabled={!input}
+                  maxLength={512}
+                  placeholder={
+                    input
+                      ? `输入${input.label}，按回车填写`
+                      : "请先点击画面中的输入框"
+                  }
+                  onPressEnter={(e) => {
+                    if (!e.nativeEvent.isComposing) {
+                      e.preventDefault();
+                      void sendInput();
+                    }
+                  }}
+                />
+                <Button
+                  type="primary"
+                  loading={!!pendingInput}
+                  disabled={!ready || !input || !text || !!pendingInput}
+                  onClick={() => void sendInput()}
+                >
+                  发送输入
+                </Button>
+              </Space.Compact>
+              <Space wrap size="small">
+                <Button
+                  size="small"
+                  disabled={!ready || !!pendingInput}
+                  onClick={() =>
+                    void action({ type: "KEY", frameId: l.frameId, key: "Tab" })
+                  }
+                >
+                  下一输入框
+                </Button>
+                <Button
+                  size="small"
+                  disabled={!ready || !!pendingInput}
+                  onClick={() =>
+                    void action({
+                      type: "KEY",
+                      frameId: l.frameId,
+                      key: "Enter",
+                    })
+                  }
+                >
+                  回车
+                </Button>
+                <Button
+                  size="small"
+                  disabled={!ready}
+                  onClick={() =>
+                    void action({
+                      type: "SCROLL",
+                      frameId: l.frameId,
+                      deltaY: -500,
+                    })
+                  }
+                >
+                  向上滚动
+                </Button>
+                <Button
+                  size="small"
+                  disabled={!ready}
+                  onClick={() =>
+                    void action({
+                      type: "SCROLL",
+                      frameId: l.frameId,
+                      deltaY: 500,
+                    })
+                  }
+                >
+                  向下滚动
+                </Button>
+                <Button
+                  size="small"
+                  disabled={!ready}
+                  onClick={() => void action({ type: "REFRESH" })}
+                >
+                  刷新画面页面
+                </Button>
+              </Space>
+            </>
+          )}
+          <Space wrap style={{ justifyContent: "flex-end" }}>
+            <Button onClick={() => void close()}>
+              {l?.status === "SAVED" ? "完成" : "关闭登录窗口"}
+            </Button>
+            <Button
+              type="primary"
+              disabled={!ready || !!pendingInput || !!text}
+              loading={l?.status === "CHECKING"}
+              onClick={() => void action({ type: "CHECK" })}
+            >
+              核验杭州总仓并保存会话
+            </Button>
+          </Space>
+        </div>
       }
     >
       <Space orientation="vertical" size={12} style={{ width: "100%" }}>
         <Alert
           type="info"
           showIcon
-          title="首次在下方云端浏览器登录，后续同步无需本机浏览器在线"
-          description={`登录后打开「商品 → 商品库存」，核对${jushuitanScope.company}、${jushuitanScope.warehouse}。保存后的登录会话加密保留；平台要求验证或登录过期时需重新登录。`}
+          title="点击账号、密码框后直接输入，按回车填写"
+          description={`底部输入栏始终可用。输入内容不会回显在云端画面，填写后显示状态。登录后打开「商品 → 商品库存」，核对${jushuitanScope.company}、${jushuitanScope.warehouse}再保存会话。`}
         />
         {q.error && <Alert type="error" title={(q.error as Error).message} />}
         {l?.note && (
@@ -224,56 +389,101 @@ function JushuitanLogin({
               overflow: "hidden",
             }}
           >
-            <img
-              src={l.frame}
-              alt="聚水潭云端登录画面，点击操作，可拖动完成手动验证"
-              draggable={false}
+            <div
               style={{
-                display: "block",
-                width: zoom ? "100%" : "auto",
-                height: "auto",
+                position: "relative",
+                width: zoom ? "100%" : "fit-content",
                 maxWidth: "100%",
-                maxHeight: zoom ? undefined : "48vh",
                 margin: "0 auto",
-                touchAction: "none",
-                cursor: ready ? "pointer" : "wait",
               }}
-              onPointerDown={(e) => {
-                if (!ready) return;
-                const rect = e.currentTarget.getBoundingClientRect();
-                down.current = {
-                  x: (e.clientX - rect.left) / rect.width,
-                  y: (e.clientY - rect.top) / rect.height,
-                  frameId: l.frameId,
-                };
-                e.currentTarget.setPointerCapture(e.pointerId);
-              }}
-              onPointerCancel={() => {
-                down.current = null;
-              }}
-              onPointerUp={(e) => {
-                const start = down.current;
-                down.current = null;
-                if (!start || !ready) return;
-                const rect = e.currentTarget.getBoundingClientRect(),
-                  end = {
-                    x: Math.max(
-                      0,
-                      Math.min(1, (e.clientX - rect.left) / rect.width),
-                    ),
-                    y: Math.max(
-                      0,
-                      Math.min(1, (e.clientY - rect.top) / rect.height),
-                    ),
+            >
+              <img
+                src={l.frame}
+                alt="聚水潭云端登录画面，点击操作，可拖动完成手动验证"
+                draggable={false}
+                style={{
+                  display: "block",
+                  width: zoom ? "100%" : "auto",
+                  height: "auto",
+                  maxWidth: "100%",
+                  maxHeight: zoom ? undefined : "38vh",
+                  margin: "0 auto",
+                  touchAction: "none",
+                  cursor: ready ? "pointer" : "wait",
+                }}
+                onPointerDown={(e) => {
+                  if (!ready) return;
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  down.current = {
+                    x: (e.clientX - rect.left) / rect.width,
+                    y: (e.clientY - rect.top) / rect.height,
+                    frameId: l.frameId,
                   };
-                const { frameId, x, y } = start;
-                void action(
-                  Math.hypot(x - end.x, y - end.y) > 0.015
-                    ? { type: "DRAG", frameId, from: { x, y }, to: end }
-                    : { type: "CLICK", frameId, point: end },
-                );
-              }}
-            />
+                  e.currentTarget.setPointerCapture(e.pointerId);
+                }}
+                onPointerCancel={() => {
+                  down.current = null;
+                }}
+                onPointerUp={(e) => {
+                  const start = down.current;
+                  down.current = null;
+                  if (!start || !ready) return;
+                  const rect = e.currentTarget.getBoundingClientRect(),
+                    end = {
+                      x: Math.max(
+                        0,
+                        Math.min(1, (e.clientX - rect.left) / rect.width),
+                      ),
+                      y: Math.max(
+                        0,
+                        Math.min(1, (e.clientY - rect.top) / rect.height),
+                      ),
+                    };
+                  const { frameId, x, y } = start;
+                  void action(
+                    Math.hypot(x - end.x, y - end.y) > 0.015
+                      ? { type: "DRAG", frameId, from: { x, y }, to: end }
+                      : { type: "CLICK", frameId, point: end },
+                  );
+                }}
+              />
+              {input && (
+                <div
+                  style={{
+                    position: "absolute",
+                    left: `${input.rect.x * 100}%`,
+                    top: `${input.rect.y * 100}%`,
+                    width: `${input.rect.width * 100}%`,
+                    minHeight: 30,
+                    zIndex: 1,
+                  }}
+                >
+                  <Input.Password
+                    ref={inlineInput}
+                    aria-label={`在画面中填写${input.label}`}
+                    autoComplete="off"
+                    size="small"
+                    value={text}
+                    maxLength={512}
+                    placeholder={
+                      input.filled ? "已填写，可替换" : `输入${input.label}`
+                    }
+                    onChange={(e) => changeText(e.target.value)}
+                    onPressEnter={(e) => {
+                      if (!e.nativeEvent.isComposing) {
+                        e.preventDefault();
+                        void sendInput();
+                      }
+                    }}
+                    style={{
+                      minHeight: 30,
+                      outline: "2px solid var(--ant-color-primary)",
+                      background: "var(--ant-color-bg-container)",
+                    }}
+                  />
+                </div>
+              )}
+            </div>
           </div>
         ) : l?.status === "SAVED" ? (
           <Empty
@@ -289,82 +499,6 @@ function JushuitanLogin({
               <div style={{ height: 80 }} />
             </Spin>
           </div>
-        )}
-        {l?.status !== "SAVED" && (
-          <>
-            <Typography.Text type="secondary">
-              先点击画面中的输入框，再在此输入并发送。画面会遮盖输入内容；密码和验证码仅临时加密传递，发送后清空。
-            </Typography.Text>
-            <Space.Compact style={{ width: "100%" }}>
-              <Input.Password
-                aria-label="向聚水潭输入账号、密码或验证码"
-                autoComplete="off"
-                value={text}
-                onChange={(e) => setText(e.target.value)}
-                disabled={!ready}
-                maxLength={512}
-                placeholder="输入当前选中字段的内容"
-              />
-              <Button
-                disabled={!ready || !text}
-                onClick={() => {
-                  const value = text;
-                  setText("");
-                  void action({ type: "TEXT", frameId: l.frameId, value });
-                }}
-              >
-                发送输入
-              </Button>
-            </Space.Compact>
-            <Space wrap>
-              <Button
-                disabled={!ready}
-                onClick={() =>
-                  void action({ type: "KEY", frameId: l.frameId, key: "Tab" })
-                }
-              >
-                下一输入框
-              </Button>
-              <Button
-                disabled={!ready}
-                onClick={() =>
-                  void action({ type: "KEY", frameId: l.frameId, key: "Enter" })
-                }
-              >
-                回车
-              </Button>
-              <Button
-                disabled={!ready}
-                onClick={() =>
-                  void action({
-                    type: "SCROLL",
-                    frameId: l.frameId,
-                    deltaY: -500,
-                  })
-                }
-              >
-                向上滚动
-              </Button>
-              <Button
-                disabled={!ready}
-                onClick={() =>
-                  void action({
-                    type: "SCROLL",
-                    frameId: l.frameId,
-                    deltaY: 500,
-                  })
-                }
-              >
-                向下滚动
-              </Button>
-              <Button
-                disabled={!ready}
-                onClick={() => void action({ type: "REFRESH" })}
-              >
-                刷新画面页面
-              </Button>
-            </Space>
-          </>
         )}
       </Space>
     </Modal>

@@ -106,6 +106,7 @@ beforeAll(async () => {
   for (const f of [
     "072_jushuitan_inventory.sql",
     "073_jushuitan_browser_inventory.sql",
+    "074_jushuitan_login_input.sql",
   ])
     await fixture.db.exec(
       await readFile("packages/database/migrations/" + f, "utf8"),
@@ -248,6 +249,49 @@ it("coalesces syncs and publishes all mapped sources and original bytes atomical
   expect(Buffer.from(stored.bytes, "base64").subarray(0, 2).toString()).toBe(
     "PK",
   );
+});
+it("binds typing to the selected input even when unrelated screenshot content changes", async () => {
+  const l = await openJushuitanLogin(context()),
+    frame = randomUUID(),
+    targetId = randomUUID();
+  const selected = {
+    id: targetId,
+    label: "密码",
+    filled: false,
+    rect: { x: 0.5, y: 0.3, width: 0.2, height: 0.05 },
+  };
+  await query(
+    "UPDATE jushuitan_browser_logins SET status='WAITING',heartbeat_at=now(),frame_id=$2::uuid,frame_input=$3::jsonb WHERE id=$1::uuid",
+    l.id,
+    frame,
+    JSON.stringify(selected),
+  );
+  expect((await jushuitanLoginView(context(), l.id)).frame_input).toEqual(
+    selected,
+  );
+  await expect(
+    jushuitanLoginAction(context(), l.id, {
+      type: "TEXT",
+      frameId: frame,
+      targetId: randomUUID(),
+      value: "private-input",
+    }),
+  ).rejects.toMatchObject({ status: 409 });
+  const result = await jushuitanLoginAction(context(), l.id, {
+    type: "TEXT",
+    frameId: randomUUID(),
+    targetId,
+    value: "private-input",
+  });
+  expect(result.action_id).toMatch(/^\d+$/);
+  expect(
+    JSON.stringify(await jushuitanLoginView(context(), l.id)),
+  ).not.toContain("private-input");
+  await query(
+    "UPDATE jushuitan_browser_logins SET status='EXPIRED' WHERE id=$1::uuid",
+    l.id,
+  );
+  expect((await jushuitanLoginView(context(), l.id)).frame_input).toBeNull();
 });
 it("never lets a stale claim or changed configuration overwrite the last complete snapshot", async () => {
   await ready();

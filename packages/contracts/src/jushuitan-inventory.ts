@@ -71,6 +71,12 @@ const point = z
   .object({ x: z.number().min(0).max(1), y: z.number().min(0).max(1) })
   .strict();
 const frame = { frameId: z.uuid() };
+export type JushuitanLoginInput = {
+  id: string;
+  label: "账号" | "密码" | "验证码" | "当前输入框";
+  filled: boolean;
+  rect: { x: number; y: number; width: number; height: number };
+};
 export const jushuitanLoginActionSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("CLICK"), ...frame, point }).strict(),
   z
@@ -87,6 +93,7 @@ export const jushuitanLoginActionSchema = z.discriminatedUnion("type", [
     .object({
       type: z.literal("TEXT"),
       ...frame,
+      targetId: z.uuid().optional(),
       value: z.string().min(1).max(512),
     })
     .strict(),

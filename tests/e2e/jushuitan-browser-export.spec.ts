@@ -3,6 +3,56 @@ import * as XLSX from "xlsx";
 import { exportJstInventory } from "../../apps/worker/src/jushuitan-browser-export.js";
 import { jushuitanScope } from "../../packages/contracts/src/jushuitan-inventory.js";
 import type { JstTarget } from "../../apps/api/src/integrations/jushuitan/export-file.js";
+import {
+  JstLoginInputTracker,
+  jstLoginMasks,
+} from "../../apps/worker/src/jushuitan-login-input.js";
+
+test("登录输入只返回位置与填写状态，绑定目标且不遮盖协议复选框", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.route("https://www.erp321.com/fixture-login", (route) =>
+    route.fulfill({
+      contentType: "text/html; charset=utf-8",
+      body: '<input aria-label="登录账号"><input type="password" aria-label="登录密码"><input type="checkbox" aria-label="协议"><button>登录</button>',
+    }),
+  );
+  await page.goto("https://www.erp321.com/fixture-login");
+  const tracker = new JstLoginInputTracker();
+  expect(await tracker.current(page)).toBeNull();
+  await page.getByLabel("登录账号").click();
+  const account = (await tracker.current(page))!;
+  expect(account.label).toBe("账号");
+  expect(account.filled).toBe(false);
+  await tracker.fill(page, account.id, "fixture-account");
+  expect(await page.getByLabel("登录账号").inputValue()).toBe(
+    "fixture-account",
+  );
+  expect(await tracker.current(page)).toMatchObject({
+    id: account.id,
+    filled: true,
+  });
+  expect(JSON.stringify(await tracker.current(page))).not.toContain(
+    "fixture-account",
+  );
+  await page.getByLabel("登录密码").click();
+  const password = (await tracker.current(page))!;
+  expect(password.id).not.toBe(account.id);
+  expect(password.label).toBe("密码");
+  await expect(
+    tracker.fill(page, account.id, "wrong-destination"),
+  ).rejects.toThrow("输入框已改变");
+  await expect(page.getByLabel("登录密码")).toHaveValue("");
+  await tracker.fill(page, password.id, "fixture-password");
+  expect(JSON.stringify(await tracker.current(page))).not.toContain(
+    "fixture-password",
+  );
+  const masks = jstLoginMasks(page);
+  expect(await masks[0].count()).toBe(2);
+  await page.getByRole("checkbox").check();
+  expect(await tracker.current(page)).toBeNull();
+});
 
 const code = "0000123456789012345678";
 const target: JstTarget = {

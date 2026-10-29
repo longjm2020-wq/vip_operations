@@ -9,6 +9,7 @@ async function fixture(
   const now = new Date().toISOString(),
     actions: any[] = [],
     saved: any[] = [];
+  let inputFailure: "request" | "worker" | null = null;
   const settings: Record<string, any> = {
     version: 1,
     configured,
@@ -29,6 +30,7 @@ async function fixture(
     id: "login-1",
     status: "WAITING",
     frameId: "frame-1",
+    frameInput: null,
     note: "请完成登录，打开商品库存",
     frame:
       "data:image/svg+xml;base64," +
@@ -70,6 +72,29 @@ async function fixture(
     if (path === "/inventory/jushuitan/login/login-1/action") {
       const body = route.request().postDataJSON();
       actions.push(body);
+      if (body.type === "CLICK")
+        login.frameInput = {
+          id: "input-account",
+          label: "账号",
+          filled: false,
+          rect: { x: 0.42, y: 0.45, width: 0.25, height: 0.04 },
+        };
+      if (body.type === "TEXT" && inputFailure === "request") {
+        inputFailure = null;
+        return route.fulfill({
+          status: 409,
+          json: { error: { message: "测试：请重试" } },
+        });
+      }
+      login.lastActionId = String(actions.length);
+      login.lastActionError =
+        body.type === "TEXT" && inputFailure === "worker"
+          ? "输入框已改变，请重新选择"
+          : null;
+      if (body.type === "TEXT") {
+        login.frameInput.filled = !login.lastActionError;
+        inputFailure = null;
+      }
       if (body.type === "CHECK") {
         Object.assign(login, {
           status: "SAVED",
@@ -85,7 +110,7 @@ async function fixture(
           version: 2,
         });
       }
-      data = { accepted: true };
+      data = { accepted: true, actionId: String(actions.length) };
     }
     if (path === "/inventory/jushuitan/sync") {
       settings.runs = [
@@ -181,6 +206,9 @@ async function fixture(
   return {
     saved,
     actions,
+    failInput(kind: "request" | "worker") {
+      inputFailure = kind;
+    },
     complete() {
       settings.activeRunId = "run-1";
       Object.assign(settings.runs[0], {
@@ -221,16 +249,17 @@ test("管理员保存云端登录、等待完整同步，并查看同款合并�
   expect(f.actions[0]).toMatchObject({ type: "CLICK", frameId: "frame-1" });
   expect(f.actions[0].point.x).toBeCloseTo(0.5, 1);
   expect(f.actions[0].point.y).toBeCloseTo(0.5, 1);
-  await login
-    .getByLabel("向聚水潭输入账号、密码或验证码")
-    .fill("fixture-input");
-  await login.getByRole("button", { name: "发送输入" }).click();
+  const inline = login.getByLabel("在画面中填写账号");
+  await expect(inline).toBeFocused();
+  await inline.fill("fixture-input");
+  await inline.press("Enter");
   await expect(login.getByLabel("向聚水潭输入账号、密码或验证码")).toHaveValue(
     "",
   );
   expect(f.actions[1]).toMatchObject({
     type: "TEXT",
     frameId: "frame-1",
+    targetId: "input-account",
     value: "fixture-input",
   });
   await login.getByRole("button", { name: "核验杭州总仓并保存会话" }).click();
@@ -283,6 +312,48 @@ test("管理员保存云端登录、等待完整同步，并查看同款合并�
   await expect(page.locator(".inventory-total-row").first()).toContainText(
     "不完整",
   );
+});
+
+test("输入栏在放大和窄屏始终可见，输入失败保留内容供重试", async ({ page }) => {
+  await page.setViewportSize({ width: 1000, height: 720 });
+  const f = await fixture(page);
+  await page.goto("/operations/vip/inventory");
+  await page.getByRole("button", { name: "聚水潭同步", exact: true }).click();
+  await page.getByRole("button", { name: "登录聚水潭", exact: true }).click();
+  const login = page.getByRole("dialog", { name: "登录聚水潭并保存会话" });
+  const remote = login.getByRole("img", {
+    name: "聚水潭云端登录画面，点击操作，可拖动完成手动验证",
+  });
+  await remote.click();
+  const input = login.getByLabel("向聚水潭输入账号、密码或验证码");
+  await expect(input).toBeEnabled();
+  await login
+    .getByRole("button", { name: "放大登录画面", exact: true })
+    .click();
+  await expect(input).toBeInViewport();
+  await input.fill("typed-value");
+  f.failInput("request");
+  await login.getByRole("button", { name: "发送输入", exact: true }).click();
+  await expect(page.getByText("测试：请重试", { exact: true })).toBeVisible();
+  await expect(input).toHaveValue("typed-value");
+  f.failInput("worker");
+  await login.getByRole("button", { name: "发送输入", exact: true }).click();
+  await expect(login.getByText(/输入框已改变，请重新选择/)).toBeVisible();
+  await expect(input).toHaveValue("typed-value");
+  await input.press("Enter");
+  await expect(input).toHaveValue("");
+  await expect(login.getByText(/已填入聚水潭/)).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(input).toBeInViewport();
+  await expect(
+    login.getByRole("button", { name: "发送输入", exact: true }),
+  ).toBeInViewport();
+  await expect(
+    login.getByRole("button", { name: "核验杭州总仓并保存会话", exact: true }),
+  ).toBeInViewport();
+  await page.screenshot({
+    path: test.info().outputPath("jushuitan-login-visible-input.png"),
+  });
 });
 
 test("只读账号查看来源和记录，暗色与窄屏不提供登录配置操作", async ({

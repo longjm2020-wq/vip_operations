@@ -41,6 +41,10 @@ import {
   JstBrowserError,
   verifyJstScope,
 } from "./jushuitan-browser-export.js";
+import {
+  JstLoginInputTracker,
+  jstLoginMasks,
+} from "./jushuitan-login-input.js";
 
 const activeLogin = "('QUEUED','RUNNING','WAITING','CHECKING')";
 const safeError = (e: unknown) =>
@@ -93,6 +97,8 @@ async function runLogin(
   page: Page,
   browser: Awaited<ReturnType<typeof chromium.launch>>,
 ) {
+  const inputs = new JstLoginInputTracker();
+  let lastAction: { id: string; error: string | null } | null = null;
   let nextFrame = 0,
     note =
       "请完成登录，打开「商品 → 商品库存」，确认序缇杭州总仓后点击核验保存";
@@ -104,10 +110,11 @@ async function runLogin(
     page = official.at(-1) ?? page;
     const action = await one(
       db,
-      `DELETE FROM jushuitan_browser_actions WHERE id=(SELECT id FROM jushuitan_browser_actions WHERE login_id=$1::uuid ORDER BY id LIMIT 1) RETURNING encrypted_payload`,
+      `DELETE FROM jushuitan_browser_actions WHERE id=(SELECT id FROM jushuitan_browser_actions WHERE login_id=$1::uuid ORDER BY id LIMIT 1) RETURNING id,encrypted_payload`,
       job.id,
     );
     if (action) {
+      lastAction = { id: String(action.id), error: null };
       try {
         const envelope = JSON.parse(decryptSecret(action.encrypted_payload));
         if (
@@ -199,35 +206,19 @@ async function runLogin(
         if (a.type === "SCROLL") await page.mouse.wheel(0, a.deltaY);
         if (a.type === "KEY") await page.keyboard.press(a.key);
         if (a.type === "TEXT") {
-          let filled = false;
-          for (const frame of page.frames()) {
-            if (!isJushuitanOrigin(frame.url())) continue;
-            const input = frame.locator(
-              'input:focus:not([type="hidden"]),textarea:focus',
-            );
-            if ((await input.count()) === 1 && (await input.isEditable())) {
-              await input.fill(a.value);
-              filled = true;
-              break;
-            }
-          }
-          if (!filled)
-            throw new JstBrowserError(
-              "请先点击画面中的账号、密码或验证码输入框，再发送输入",
-            );
+          await inputs.fill(page, a.targetId, a.value);
         }
         note = "请完成登录，打开商品库存，确认序缇杭州总仓后核验保存";
       } catch (e) {
         note = safeError(e);
+        lastAction.error = note;
       }
       nextFrame = 0;
     }
     if (Date.now() >= nextFrame) {
       await assertJob(job, token, true);
-      const masks = page
-        .frames()
-        .filter((f) => !f.isDetached())
-        .map((f) => f.locator('input,textarea,[contenteditable="true"]'));
+      const frameInput = await inputs.current(page);
+      const masks = jstLoginMasks(page);
       const jpg = await page.screenshot({
         type: "jpeg",
         quality: 65,
@@ -247,13 +238,16 @@ async function runLogin(
         )
           return;
         await tx.$executeRawUnsafe(
-          `UPDATE jushuitan_browser_logins SET status='WAITING',frame_id=CASE WHEN frame_jpeg=$4 AND frame_id IS NOT NULL THEN frame_id ELSE $3::uuid END,frame_jpeg=$4,note=$5
+          `UPDATE jushuitan_browser_logins SET status='WAITING',frame_id=CASE WHEN frame_jpeg=$4 AND frame_input IS NOT DISTINCT FROM $6::jsonb AND frame_id IS NOT NULL THEN frame_id ELSE $3::uuid END,frame_jpeg=$4,note=$5,frame_input=$6::jsonb,last_action_id=$7::bigint,last_action_error=$8
           WHERE id=$1::uuid AND claim_token=$2::uuid AND status IN ${activeLogin} AND expires_at>now()`,
           job.id,
           token,
           randomUUID(),
           jpg.toString("base64"),
           note,
+          frameInput ? JSON.stringify(frameInput) : null,
+          lastAction?.id ?? null,
+          lastAction?.error ?? null,
         );
       });
       nextFrame = Date.now() + 2500;
