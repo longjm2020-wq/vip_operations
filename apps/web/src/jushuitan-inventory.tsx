@@ -117,6 +117,7 @@ function JushuitanLogin({
   const { message } = App.useApp(),
     [busy, setBusy] = useState(false),
     [text, setText] = useState("");
+  const [zoom, setZoom] = useState(false);
   const down = useRef<{ x: number; y: number; frameId: string } | null>(null),
     saved = useRef(false);
   const q = useQuery({
@@ -167,6 +168,10 @@ function JushuitanLogin({
       open
       title="登录聚水潭并保存会话"
       width={1160}
+      style={{ top: 16 }}
+      styles={{
+        body: { maxHeight: "calc(100dvh - 180px)", overflowY: "auto" },
+      }}
       onCancel={() => void close()}
       destroyOnHidden
       footer={
@@ -205,6 +210,11 @@ function JushuitanLogin({
             title={l.note}
           />
         )}
+        {l?.frame && (
+          <Button size="small" onClick={() => setZoom((v) => !v)}>
+            {zoom ? "适应窗口" : "放大登录画面"}
+          </Button>
+        )}
         {l?.frame ? (
           <div
             style={{
@@ -220,7 +230,11 @@ function JushuitanLogin({
               draggable={false}
               style={{
                 display: "block",
-                width: "100%",
+                width: zoom ? "100%" : "auto",
+                height: "auto",
+                maxWidth: "100%",
+                maxHeight: zoom ? undefined : "48vh",
+                margin: "0 auto",
                 touchAction: "none",
                 cursor: ready ? "pointer" : "wait",
               }}

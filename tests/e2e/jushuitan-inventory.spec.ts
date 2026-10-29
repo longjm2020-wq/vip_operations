@@ -209,6 +209,18 @@ test("管理员保存云端登录、等待完整同步，并查看同款合并�
   await expect(panel.getByLabel("App Secret", { exact: true })).toHaveCount(0);
   await panel.getByRole("button", { name: "登录聚水潭", exact: true }).click();
   const login = page.getByRole("dialog", { name: "登录聚水潭并保存会话" });
+  const remote = login.getByRole("img", {
+    name: "聚水潭云端登录画面，点击操作，可拖动完成手动验证",
+  });
+  await expect(remote).toBeVisible();
+  await login
+    .getByRole("button", { name: "放大登录画面", exact: true })
+    .click();
+  await login.getByRole("button", { name: "适应窗口", exact: true }).click();
+  await remote.click();
+  expect(f.actions[0]).toMatchObject({ type: "CLICK", frameId: "frame-1" });
+  expect(f.actions[0].point.x).toBeCloseTo(0.5, 1);
+  expect(f.actions[0].point.y).toBeCloseTo(0.5, 1);
   await login
     .getByLabel("向聚水潭输入账号、密码或验证码")
     .fill("fixture-input");
@@ -216,7 +228,7 @@ test("管理员保存云端登录、等待完整同步，并查看同款合并�
   await expect(login.getByLabel("向聚水潭输入账号、密码或验证码")).toHaveValue(
     "",
   );
-  expect(f.actions[0]).toMatchObject({
+  expect(f.actions[1]).toMatchObject({
     type: "TEXT",
     frameId: "frame-1",
     value: "fixture-input",
@@ -253,7 +265,10 @@ test("管理员保存云端登录、等待完整同步，并查看同款合并�
     animations: "disabled",
     path: test.info().outputPath("jushuitan-merged-sources.png"),
   });
-  await detail.locator(".ant-modal-footer").getByRole("button", { name: "关闭", exact: true }).click();
+  await detail
+    .locator(".ant-modal-footer")
+    .getByRole("button", { name: "关闭", exact: true })
+    .click();
   await page.screenshot({
     animations: "disabled",
     path: test.info().outputPath("jushuitan-settings-light.png"),

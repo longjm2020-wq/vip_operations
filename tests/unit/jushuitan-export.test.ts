@@ -11,7 +11,10 @@ import {
   encryptJstState,
   jstOnlyState,
 } from "../../apps/worker/src/jushuitan-browser-state.js";
-import { isJushuitanOrigin } from "../../packages/contracts/src/jushuitan-inventory.js";
+import {
+  isJushuitanOrigin,
+  isJushuitanLoginFrame,
+} from "../../packages/contracts/src/jushuitan-inventory.js";
 const headers = [
   "商品编码",
   "其它属性5",
@@ -86,6 +89,58 @@ function zip64Entries(bytes: Buffer, oversized = false) {
   return Buffer.concat([bytes.subarray(0, start), directory, footer]);
 }
 afterEach(() => vi.unstubAllEnvs());
+it("allows only embedded official QR login endpoints and never stores their sessions", () => {
+  const parent = "https://www.erp321.com/login.aspx";
+  expect(
+    isJushuitanLoginFrame(
+      "https://open.weixin.qq.com/connect/qrconnect",
+      parent,
+    ),
+  ).toBe(true);
+  expect(
+    isJushuitanLoginFrame("https://login.dingtalk.com/oauth2/auth", parent),
+  ).toBe(true);
+  expect(
+    isJushuitanLoginFrame(
+      "https://oapi.dingtalk.com/connect/oauth2/sns_authorize",
+      parent,
+    ),
+  ).toBe(true);
+  for (const url of [
+    "http://open.weixin.qq.com/connect/qrconnect",
+    "https://open.weixin.qq.com.attacker.test/connect/qrconnect",
+    "https://open.weixin.qq.com:444/connect/qrconnect",
+    "https://open.weixin.qq.com/unrelated",
+  ])
+    expect(isJushuitanLoginFrame(url, parent)).toBe(false);
+  expect(
+    isJushuitanLoginFrame("https://open.weixin.qq.com/connect/qrconnect", ""),
+  ).toBe(false);
+  expect(
+    isJushuitanLoginFrame(
+      "https://open.weixin.qq.com/connect/qrconnect",
+      "https://attacker.test",
+    ),
+  ).toBe(false);
+  expect(
+    jstOnlyState({
+      cookies: [
+        {
+          name: "qr",
+          value: "not-retained",
+          domain: "open.weixin.qq.com",
+          path: "/",
+          expires: -1,
+          httpOnly: true,
+          secure: true,
+          sameSite: "Lax",
+        },
+      ],
+      origins: [],
+      sessionStorage: [],
+    }).cookies,
+  ).toHaveLength(0);
+});
 it("keeps long identifiers and exported availability, including negative values", () => {
   const r = row();
   r[9] = -1;

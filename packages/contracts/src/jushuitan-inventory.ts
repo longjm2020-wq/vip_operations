@@ -45,6 +45,28 @@ export function isJushuitanOrigin(value: string) {
     return false;
   }
 }
+// These embedded identity pages may display QR codes. Their cookies are never
+// included in the saved ERP session, and they cannot become the main page.
+export function isJushuitanLoginFrame(value: string, parent: string) {
+  if (!isJushuitanOrigin(parent)) return false;
+  try {
+    const url = new URL(value);
+    return (
+      url.protocol === "https:" &&
+      !url.username &&
+      !url.password &&
+      (!url.port || url.port === "443") &&
+      ((url.hostname === "open.weixin.qq.com" &&
+        url.pathname.startsWith("/connect/")) ||
+        (url.hostname === "login.dingtalk.com" &&
+          url.pathname.startsWith("/oauth2/")) ||
+        (url.hostname === "oapi.dingtalk.com" &&
+          url.pathname.startsWith("/connect/")))
+    );
+  } catch {
+    return false;
+  }
+}
 const point = z
   .object({ x: z.number().min(0).max(1), y: z.number().min(0).max(1) })
   .strict();

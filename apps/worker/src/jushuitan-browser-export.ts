@@ -2,6 +2,7 @@ import type { BrowserContext, Page, Frame } from "@playwright/test";
 import { readFile, stat } from "node:fs/promises";
 import {
   isJushuitanOrigin,
+  isJushuitanLoginFrame,
   jushuitanScope,
 } from "../../../packages/contracts/src/jushuitan-inventory.js";
 import {
@@ -26,7 +27,11 @@ export async function guardJstContext(context: BrowserContext) {
   await context.route("**/*", async (route) => {
     if (
       route.request().isNavigationRequest() &&
-      !isJushuitanOrigin(route.request().url())
+      !isJushuitanOrigin(route.request().url()) &&
+      !isJushuitanLoginFrame(
+        route.request().url(),
+        route.request().frame().parentFrame()?.url() ?? "",
+      )
     )
       await route.abort();
     else await route.continue();
