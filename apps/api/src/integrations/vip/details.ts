@@ -41,10 +41,22 @@ export function adaptDetail(raw: unknown, vendorId: number) {
   if (!parsed.success || parsed.data.vendor_id !== vendorId)
     throw new VipError("DETAIL_CONTRACT_INVALID");
   const v = parsed.data;
-  const pictures = [
-    ...(v.spu_image_list || []).map((x) => x.image_url),
-    ...(v.product_image || "").split(";"),
-  ].filter(Boolean);
+  const normalizeImages = (values: string[]) =>
+    [
+      ...new Set(
+        values
+          .map((value) => value.trim())
+          .filter(Boolean)
+          .map(imageUrl)
+          .filter((value): value is string => !!value),
+      ),
+    ].slice(0, 30);
+  // SPU pictures can be shared by every color. Preserve their origin so a
+  // barcode-level view never mistakes the style gallery for a variant image.
+  const productImages = normalizeImages((v.product_image || "").split(";"));
+  const styleImages = normalizeImages(
+    (v.spu_image_list || []).map((x) => x.image_url),
+  );
   return {
     barcode: v.barcode,
     color: v.flat_sale_props?.["134"] || null,
@@ -55,9 +67,9 @@ export function adaptDetail(raw: unknown, vendorId: number) {
     sellPrice: v.sell_price ?? null,
     supplyPrice: v.supply_price ?? null,
     currency: v.currency || null,
-    images: [
-      ...new Set(pictures.map(imageUrl).filter((x): x is string => !!x)),
-    ].slice(0, 30),
+    productImages,
+    styleImages,
+    images: [...new Set([...productImages, ...styleImages])].slice(0, 30),
   };
 }
 export async function syncDetails(

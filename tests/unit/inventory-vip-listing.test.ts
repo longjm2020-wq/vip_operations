@@ -2,6 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { readFile } from "node:fs/promises";
 import { PGlite } from "@electric-sql/pglite";
 import { applyVipInventoryCatalog as applyVipListingStatuses } from "../../apps/api/src/modules/inventory/vip-catalog.js";
+import { adaptDetail } from "../../apps/api/src/integrations/vip/details.js";
 import type { Tx } from "../../packages/database/src/index.js";
 
 let database: PGlite;
@@ -238,6 +239,85 @@ describe("inventory platform status projection", () => {
     expect(queryCount).toBe(0);
   });
 
+  it("uses each barcode's product image when different colors share SPU images", async () => {
+    const shared = "https://a.vpimg4.com/style-main.jpg";
+    const variants = [
+      {
+        barcode: "XFA16X31196L029004",
+        color: "粉色",
+        image: "https://a.vpimg4.com/pink.jpg",
+      },
+      {
+        barcode: "XFA16X31196L034003",
+        color: "米白色",
+        image: "https://a.vpimg4.com/cream.jpg",
+      },
+    ];
+    for (const variant of variants) {
+      await catalog(variant.barcode, "XFA16X31196L");
+      const detail = adaptDetail(
+        {
+          vendor_id: 1,
+          barcode: variant.barcode,
+          flat_sale_props: { "134": variant.color },
+          spu_image_list: [{ image_url: shared }],
+          product_image: variant.image,
+        },
+        1,
+      );
+      await sql(
+        "INSERT INTO vop_product_details(namespace,barcode,detail) VALUES('a',$1,$2::jsonb)",
+        [variant.barcode, JSON.stringify(detail)],
+      );
+    }
+    const input = variants.map((variant) => ({
+      ...inventory(variant.barcode, "XFA16X31196L"),
+      color_name: variant.color,
+      main_image_url: shared,
+    }));
+    const result = await applyVipListingStatuses(input, "sku", tx);
+    expect(result.map((row) => row.main_image_url)).toEqual(
+      variants.map((variant) => variant.image),
+    );
+    const articles = await applyVipListingStatuses(
+      input.map((row) => ({
+        ...row,
+        inventory_barcode_keys: [row.barcode.toLowerCase()],
+      })),
+      "article",
+      tx,
+    );
+    expect(articles.map((row) => row.main_image_url)).toEqual(
+      variants.map((variant) => variant.image),
+    );
+    expect(result.map((row) => row.physical_qty)).toEqual([13, 13]);
+  });
+
+  it("does not replace an exact color report image with a legacy mixed platform gallery", async () => {
+    await catalog("PINK");
+    await sql(
+      "INSERT INTO vop_product_details(namespace,barcode,detail) VALUES('a','PINK',$1::jsonb)",
+      [
+        JSON.stringify({
+          color: "粉色",
+          images: [
+            "https://a.vpimg4.com/style-main.jpg",
+            "https://a.vpimg4.com/pink.jpg",
+          ],
+        }),
+      ],
+    );
+    const base = {
+      ...inventory("PINK"),
+      color_name: "粉色",
+      main_image_url: "https://example.com/report-pink.jpg",
+      inventory_image: { source_id: "report", article_no: "PINK" },
+    };
+    const [row] = await applyVipListingStatuses([base], "sku", tx);
+    expect(row.main_image_url).toBe(base.main_image_url);
+    expect(row.inventory_image).toEqual(base.inventory_image);
+  });
+
   it("prefers platform main images for exact SKU and article members without borrowing another color or style", async () => {
     const pink = "https://a.vpimg4.com/pink.jpg",
       white = "https://b.vpimg2.com/white.jpg";
@@ -252,6 +332,7 @@ describe("inventory platform status projection", () => {
         [
           barcode,
           JSON.stringify({
+            productImages: [image],
             images: [image, "https://a.vpimg4.com/secondary.jpg"],
           }),
         ],
@@ -284,7 +365,7 @@ describe("inventory platform status projection", () => {
     expect(result.map((row) => row.main_image_url)).toEqual([
       pink,
       base.main_image_url,
-      base.main_image_url,
+      null,
     ]);
     expect(result[0]).not.toHaveProperty("inventory_barcode_keys");
     expect(
@@ -301,19 +382,28 @@ describe("inventory platform status projection", () => {
     const base = {
       ...inventory(),
       main_image_url: "https://example.com/old.jpg",
+      inventory_image: { source_id: "report" },
     };
     expect(
       (await applyVipListingStatuses([base], "sku", tx))[0].main_image_url,
     ).toBe(base.main_image_url);
     await sql(
       "INSERT INTO vop_product_details(namespace,barcode,detail) VALUES('a','001ABC',$1::jsonb)",
-      [JSON.stringify({ images: ["https://unapproved.example/picture.jpg"] })],
+      [
+        JSON.stringify({
+          productImages: ["https://unapproved.example/picture.jpg"],
+          images: ["https://unapproved.example/picture.jpg"],
+        }),
+      ],
     );
     expect(
       (await applyVipListingStatuses([base], "sku", tx))[0].main_image_url,
     ).toBe(base.main_image_url);
     await sql("UPDATE vop_product_details SET detail=$1::jsonb", [
-      JSON.stringify({ images: ["https://a.vpimg4.com/picture.jpg"] }),
+      JSON.stringify({
+        productImages: ["https://a.vpimg4.com/picture.jpg"],
+        images: ["https://a.vpimg4.com/picture.jpg"],
+      }),
     ]);
     await catalog("001ABC", "STYLE", "b");
     expect(
@@ -322,5 +412,44 @@ describe("inventory platform status projection", () => {
     expect(
       (await applyVipListingStatuses([base], "style", tx))[0].main_image_url,
     ).toBe(base.main_image_url);
+  });
+
+  it("shows no variant image when only an unlabelled archive or style gallery is available", async () => {
+    await catalog("001ABC");
+    const shared = "https://a.vpimg4.com/style-main.jpg";
+    const base = {
+      ...inventory(),
+      color_name: "米白色",
+      main_image_url: shared,
+    };
+    for (const detail of [
+      { images: [shared] },
+      adaptDetail(
+        {
+          vendor_id: 1,
+          barcode: "001ABC",
+          spu_image_list: [{ image_url: shared }],
+        },
+        1,
+      ),
+    ]) {
+      await sql(
+        "INSERT INTO vop_product_details(namespace,barcode,detail) VALUES('a','001ABC',$1::jsonb) ON CONFLICT(namespace,barcode) DO UPDATE SET detail=EXCLUDED.detail",
+        [JSON.stringify(detail)],
+      );
+      for (const dimension of ["sku", "article"] as const) {
+        const [row] = await applyVipListingStatuses(
+          [{ ...base, inventory_barcode_keys: ["001abc"] }],
+          dimension,
+          tx,
+        );
+        expect(row.main_image_url).toBeNull();
+        expect(row.inventory_image).toBeUndefined();
+        expect(row.physical_qty).toBe(13);
+      }
+      expect(
+        (await applyVipListingStatuses([base], "style", tx))[0].main_image_url,
+      ).toBe(shared);
+    }
   });
 });

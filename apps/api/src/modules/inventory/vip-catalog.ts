@@ -64,6 +64,7 @@ export async function applyVipInventoryCatalog(
       to_char(c.last_changed_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS last_listing_change_at,
       c.last_change_type AS last_listing_change_type,c.time_warning,
       d.detail->'images'->>0 AS platform_image,
+      d.detail->'productImages'->>0 AS platform_variant_image,
       to_char(d.synced_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS image_synced_at
     FROM catalog c LEFT JOIN vop_product_details d ON d.namespace=c.namespace AND d.barcode=c.barcode
     WHERE c.style_no=ANY($1::text[]) OR lower(c.barcode)=ANY($2::text[])
@@ -90,6 +91,13 @@ export async function applyVipInventoryCatalog(
     const style = namespaces.size === 1 ? styleRows[0] : undefined;
     const result: Row = {
       ...inventory,
+      // Unlabelled archive main images and legacy mixed platform galleries
+      // are style representatives, not evidence of this row's color.
+      main_image_url:
+        dimension !== "style" &&
+        (!inventory.inventory_image || row.color_name === "多颜色")
+          ? null
+          : inventory.main_image_url,
       ...emptyTimes,
       listing_scope: dimension === "sku" ? "barcode" : "style",
       barcode_listing_state: "UNMATCHED",
@@ -107,14 +115,17 @@ export async function applyVipInventoryCatalog(
         ].map((key) => [key, style ? Number(style[key]) : null]),
       ),
     };
+    if (dimension !== "style" && row.color_name === "多颜色")
+      delete result.inventory_image;
     const useImage = (candidates: Row[]) => {
-      // Keep the platform's main-image order; do not substitute an arbitrary
-      // secondary image. Revalidate stored URLs using the platform allowlist.
+      // Only explicitly separated product pictures can override an exact
+      // Compass color match. Old mixed galleries remain usable for style view.
+      const imageField =
+        dimension === "style" ? "platform_image" : "platform_variant_image";
       const image = candidates
         .filter(
           (item) =>
-            typeof item.platform_image === "string" &&
-            imageUrl(item.platform_image),
+            typeof item[imageField] === "string" && imageUrl(item[imageField]),
         )
         .sort(
           (a, b) =>
@@ -122,7 +133,7 @@ export async function applyVipInventoryCatalog(
             a.barcode_key.localeCompare(b.barcode_key),
         )[0];
       if (image) {
-        result.main_image_url = imageUrl(image.platform_image);
+        result.main_image_url = imageUrl(image[imageField]);
         result.inventory_image = {
           source: "vip",
           matched_by: dimension,

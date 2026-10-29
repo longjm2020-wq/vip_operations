@@ -741,7 +741,7 @@ try {
         ["https://example.com/black.jpg", "https://example.com/white.jpg"],
       );
       const unknown = (await summary({ skuId: skus[4] })).data[0];
-      assert.equal(unknown.mainImageUrl, "https://example.com/catalog.jpg");
+      assert.equal(unknown.mainImageUrl, null);
       assert.equal(unknown.inventoryImage, undefined);
       const [catalog] = await sql(
         "SELECT main_image_url FROM products WHERE id=$1",
@@ -766,7 +766,7 @@ try {
       ]);
       assert.equal(
         (await summary({ skuId: skus[1] })).data[0].mainImageUrl,
-        "https://example.com/catalog.jpg",
+        null,
       );
       const [barcodeSource] = await sql(
         "SELECT import_id FROM compass_active_imports WHERE dimension='barcode'",
@@ -800,6 +800,7 @@ try {
         await summary({ dimension: "article", productId: products[0] })
       ).data.find((r: any) => r.articleNo === "ARTICLE-A-01");
       assert.equal(multi.colorName, "多颜色");
+      assert.equal(multi.mainImageUrl, null);
       assert.equal(multi.inventoryImage, undefined);
       await sql("UPDATE skus SET color_name='黑色' WHERE id=$1", [skus[1]]);
       await sql("UPDATE compass_imports SET status='COMPLETE' WHERE id=$1", [

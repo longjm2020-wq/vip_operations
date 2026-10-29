@@ -122,7 +122,7 @@ describe("complete barcode daily history and inventory median windows", () => {
       VALUES('inventory-test','one','001234','STYLE','fixture',1,'one',1,'x'),('inventory-test','duplicate','001234','STYLE','fixture',1,'two',1,'x'),('inventory-test','two','UNMATCHED','STYLE','fixture',1,'one',1,'x')`);
     await query(`INSERT INTO vop_listing_states(namespace,barcode_key,state,checked_at) VALUES('inventory-test','001234','LISTED',now()),('inventory-test','unmatched','UNLISTED',now())`);
     const image = "https://a.vpimg4.com/sku.jpg";
-    await query("INSERT INTO vop_product_details(namespace,barcode,detail) VALUES('inventory-test','001234',$1::jsonb)", [JSON.stringify({ images: [image] })]);
+    await query("INSERT INTO vop_product_details(namespace,barcode,detail) VALUES('inventory-test','001234',$1::jsonb)", [JSON.stringify({ productImages: [image], images: [image] })]);
     for (const dimension of ["sku", "article", "style"]) {
       const result = await summary({ dimension });
       expect(result.total).toBe(1);
@@ -133,6 +133,23 @@ describe("complete barcode daily history and inventory median windows", () => {
     const warehouse = await summary({ warehouseId: "1" });
     expect(warehouse.totals.physicalQty).toBe(10);
     expect(warehouse.data[0].styleListingState).toBe("PARTIAL");
+    expect((await query("SELECT main_image_url FROM products WHERE id=1"))[0].main_image_url).toBe("https://example.com/catalog.jpg");
+  });
+
+  it("retains exact report images through the summary pipeline while legacy platform galleries await resync", async () => {
+    await finish(await report(day, day));
+    await query("INSERT INTO vop_connections(namespace,vendor_id,token_cipher,token_expires_at) VALUES('inventory-test',1,'test',now()) ON CONFLICT DO NOTHING");
+    await query(`INSERT INTO vop_catalog(namespace,external_key,barcode,style_no,product_name,cooperation_no,warehouse,source_updated_at,payload_hash)
+      VALUES('inventory-test','one','001234','STYLE','fixture',1,'one',1,'x')`);
+    await query("INSERT INTO vop_product_details(namespace,barcode,detail) VALUES('inventory-test','001234',$1::jsonb)",
+      [JSON.stringify({ images: ["https://a.vpimg4.com/shared-style.jpg"] })]);
+    for (const dimension of ["sku", "article"]) {
+      const result = await summary({ dimension });
+      expect(result.data[0].mainImageUrl).toBe("https://example.com/current.jpg");
+      expect(result.data[0].inventoryImage.articleNo).toBe("ARTICLE");
+      expect(result.totals.physicalQty).toBe(15);
+    }
+    expect((await summary({ dimension: "style" })).data[0].mainImageUrl).toBe("https://a.vpimg4.com/shared-style.jpg");
     expect((await query("SELECT main_image_url FROM products WHERE id=1"))[0].main_image_url).toBe("https://example.com/catalog.jpg");
   });
 
