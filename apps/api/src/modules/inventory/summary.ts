@@ -21,6 +21,8 @@ import {
 import { applyCompassReferences } from "./compass-reference.js";
 import { applyCompassImages } from "./compass-images.js";
 import { applyVipInventoryCatalog, inventoryListingCte } from "./vip-catalog.js";
+import { jushuitanSource } from "./jushuitan.js";
+import { jushuitanExtraFields } from "../../../../../packages/contracts/src/jushuitan-inventory.js";
 
 export async function inventorySummary(q: Row, tx: Tx = db, userId?: string) {
   // A report import can replace whole history days while a page is loading.
@@ -33,6 +35,12 @@ export async function inventorySummary(q: Row, tx: Tx = db, userId?: string) {
 }
 
 async function inventorySummarySnapshot(q: Row, tx: Tx, userId?: string) {
+  const stockSource = q.stockSource ?? "internal";
+  if (!["internal", "jushuitan"].includes(stockSource)) fail("VALIDATION_ERROR", "库存来源无效", 400);
+  const external = stockSource === "jushuitan";
+  const externalSource = external ? await jushuitanSource(tx) : null;
+  if (external && !externalSource?.finished_at) fail("JST_NO_SNAPSHOT", "聚水潭尚无完整同步数据，请先配置杭州总仓并完成同步", 422);
+  if (external && q.warehouseId) fail("JST_WAREHOUSE_SCOPE", "聚水潭库存使用接入设置中已核验的仓库，请勿混用内部仓库编号", 400);
   const dimension = parse(inventoryDimensionSchema, q.dimension ?? "sku");
   const skuView = dimension === "sku";
   const policy = skuView ? await replenishmentPolicy(userId, tx) : null;
@@ -50,7 +58,8 @@ async function inventorySummarySnapshot(q: Row, tx: Tx, userId?: string) {
     : dimension === "style"
       ? "'style:'||pr.id::text"
       : "'article:'||pr.id::text||':'||CASE WHEN trim(COALESCE(ref.article_no,''))<>'' THEN 'code:'||trim(ref.article_no) ELSE 'sku:'||s.id::text END";
-  const stockFields = inventoryStockFields.map(snake);
+  const stockFields = [...inventoryStockFields, ...(external ? jushuitanExtraFields : [])].map(snake);
+  const sumStock = (key: string) => external ? `CASE WHEN count(${key})=count(*) THEN sum(${key}) END` : `sum(${key})`;
   const reportCondition =
     !skuView || reportMatch === "all"
       ? "true"
@@ -105,17 +114,19 @@ async function inventorySummarySnapshot(q: Row, tx: Tx, userId?: string) {
         pr.style_no,pr.name AS product_name,pr.main_image_url,
         pr.custom_fields->>'f00000000000000000000000000000001' AS supplier_style_code,
         w.id AS warehouse_id,w.name AS warehouse_name,
-        COALESCE(b.physical_qty,0) AS physical_qty,COALESCE(b.reserved_qty,0) AS reserved_qty,
+        ${external ? stockFields.map(k => `jst.${k} AS ${k}`).join(",") : `COALESCE(b.physical_qty,0) AS physical_qty,COALESCE(b.reserved_qty,0) AS reserved_qty,
         COALESCE(b.damaged_qty,0) AS damaged_qty,
         COALESCE(b.physical_qty-b.reserved_qty-b.damaged_qty,0) AS available_qty,
         COALESCE(sh.in_transit_qty,0) AS in_transit_qty,COALESCE(sh.transfer_transit_qty,0) AS transfer_transit_qty,
-        COALESCE(sh.incoming_qty,0) AS incoming_qty,
+        COALESCE(sh.incoming_qty,0) AS incoming_qty`},
         NULLIF(trim(ref.article_no),'') AS article_no,ref.daily_sales::text AS daily_sales,
         ref.return_rate::text AS return_rate,ref.estimated_returns,ref.target_days,ref.source_note,ref.reference_date
-      FROM skus s JOIN products pr ON pr.id=s.product_id CROSS JOIN warehouses w
-      LEFT JOIN inventory_balances b ON b.sku_id=s.id AND b.warehouse_id=w.id
+      FROM skus s JOIN products pr ON pr.id=s.product_id
+      ${external ? `CROSS JOIN (SELECT warehouse_id AS id,warehouse_name AS name,active_run_id FROM jushuitan_inventory_settings WHERE id=1) w
+        LEFT JOIN jushuitan_inventory_snapshots jst ON jst.run_id=w.active_run_id AND jst.sku_code=s.sku_code`
+        : `CROSS JOIN warehouses w LEFT JOIN inventory_balances b ON b.sku_id=s.id AND b.warehouse_id=w.id`}
       LEFT JOIN inventory_sku_references ref ON ref.sku_id=s.id
-      LEFT JOIN shipment_stock sh ON sh.sku_id=s.id AND sh.warehouse_id=w.id
+      ${external ? "" : "LEFT JOIN shipment_stock sh ON sh.sku_id=s.id AND sh.warehouse_id=w.id"}
       LEFT JOIN inventory_barcode_status bs ON bs.barcode_key=lower(COALESCE(NULLIF(trim(s.barcode),''),trim(s.sku_code)))
       LEFT JOIN inventory_style_status ss ON ss.style_no=trim(pr.style_no)
       WHERE ${conditions.join(" AND ")}
@@ -143,7 +154,7 @@ async function inventorySummarySnapshot(q: Row, tx: Tx, userId?: string) {
         ${skuView ? "min(size_name)" : "NULL::text"} AS size_name,
         CASE WHEN count(DISTINCT warehouse_id)=1 THEN min(warehouse_id) END AS warehouse_id,
         CASE WHEN count(DISTINCT warehouse_id)=1 THEN min(warehouse_name) ELSE '全部仓库' END AS warehouse_name,
-        ${stockFields.map((k) => `sum(${k}) AS ${k}`).join(",")},
+        ${stockFields.map((k) => `${sumStock(k)} AS ${k}`).join(",")},
         ${[
           "daily_sales",
           "return_rate",
@@ -157,7 +168,7 @@ async function inventorySummarySnapshot(q: Row, tx: Tx, userId?: string) {
       FROM filtered_stock GROUP BY group_key
     ), totals AS (
       SELECT count(*)::int AS group_count,
-        ${stockFields.map((k) => `COALESCE(sum(${k}),0) AS total_${k}`).join(",")}
+        ${stockFields.map((k) => `${external ? `CASE WHEN count(*)=0 THEN 0 ELSE ${sumStock(k)} END` : `COALESCE(sum(${k}),0)`} AS total_${k}`).join(",")}
       FROM grouped
     )
     SELECT totals.*,coverage.*,lc.listing_counts,i.id::text AS source_id,i.file_name AS source_file_name,
@@ -170,8 +181,9 @@ async function inventorySummarySnapshot(q: Row, tx: Tx, userId?: string) {
     ...vals,
   );
   const quantity = (value: unknown) => {
+    if (external && value == null) return null;
     const n = Number(String(value));
-    if (!Number.isSafeInteger(n) || n < 0)
+    if (!Number.isSafeInteger(n) || (!external && n < 0))
       fail("INVENTORY_SUMMARY_RANGE", "库存汇总数量超出可展示范围", 422);
     return n;
   };
@@ -220,6 +232,9 @@ async function inventorySummarySnapshot(q: Row, tx: Tx, userId?: string) {
     ? (await applyCompassReferences(data, tx, source, window, {
       dailySales: policy!.policy.dailySalesMethod, returnRate: policy!.policy.returnRateMethod,
     })).map((row: Row) => {
+      // JST available stock may include virtual/inbound stock. The internal
+      // replenishment formula would count it again, so don't produce advice.
+      if (external) return { ...row, replenishment_qty: null, coverage_days: null, replenishment_plan: null };
       const plan = calculateReplenishmentPlan({ demand: row.planning_demand,
         availableQty: row.available_qty,
         unconfirmedInboundQty: row.in_transit_qty + row.transfer_transit_qty + row.incoming_qty,
@@ -235,6 +250,8 @@ async function inventorySummarySnapshot(q: Row, tx: Tx, userId?: string) {
     ...p,
     total: first.group_count,
     totals,
+    stock_source: stockSource,
+    stock_source_info: externalSource,
     dimension,
     listing_counts: first.listing_counts,
     ...(skuView

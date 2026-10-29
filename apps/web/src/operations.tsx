@@ -2,6 +2,8 @@ import { PageSearch, PageSearchInput } from "./page-search";
 import { CopyableCode, CopyCodeButton } from "./copyable-code";
 import { Table, exportTableData } from "./data-table";
 import { InventoryImport } from "./inventory-import";
+import { JushuitanInventory } from "./jushuitan-inventory";
+import { jushuitanExtraFields } from "../../../packages/contracts/src/jushuitan-inventory";
 import { InventoryEstimateValue, InventoryReferenceValue, inventoryHasZeroMedianSales } from "./inventory-reference-value";
 import { InventoryCalculationPanel, ReplenishmentValue, replenishmentExportNote } from "./inventory-replenishment";
 import { inventoryReferenceMethodLabels, type InventoryReferenceMethod } from "../../../packages/contracts/src/compass-inventory-reference";
@@ -75,6 +77,8 @@ export function InventoryDetailsPage() {
   );
 }
 function InventoryBalances() {
+  const [stockSource, setStockSource] = useState<"internal" | "jushuitan">("internal");
+  const externalStock = stockSource === "jushuitan";
   const [dimension, setDimension] = useState<InventoryDimension>("sku");
   const [pageSize, setPageSize] = useState(20);
   const skuView = dimension === "sku";
@@ -91,6 +95,7 @@ function InventoryBalances() {
   const [exporting, setExporting] = useState(false);
   const [search, setSearch] = useState("");
   const q = useList("/inventory/summary", {
+    stockSource,
     dimension,
     ...(barcodeState ? { barcodeState } : {}),
     ...(styleState ? { styleState } : {}),
@@ -158,7 +163,7 @@ function InventoryBalances() {
       "dailySales",
     ].map((k, i) => ({
       title: [
-        "在仓库存数",
+        externalStock ? "实际库存数" : "在仓库存数",
         "采购在途数",
         "调拨在途数",
         "进货仓库存",
@@ -174,6 +179,12 @@ function InventoryBalances() {
           (v ?? "暂无数据")
         ),
     })),
+    ...(externalStock ? [
+      { title: "订单占有数", dataIndex: "reservedQty", render: (v: number|null) => v ?? "暂无数据" },
+      { title: "销退仓库存", dataIndex: "returnQty", render: (v: number|null) => v ?? "暂无数据" },
+      { title: "虚拟库存", dataIndex: "virtualQty", render: (v: number|null) => v ?? "暂无数据" },
+      { title: "可用数（按配置计算）", dataIndex: "availableQty", render: (v: number|null) => v ?? (q.data?.stockSourceInfo?.availableRule ? "暂无数据" : "待核对口径") },
+    ] : []),
     {
       title: "退货率",
       dataIndex: "returnRate",
@@ -187,12 +198,12 @@ function InventoryBalances() {
     {
       title: "可售天数",
       dataIndex: "coverageDays",
-      render: (_, row) => <InventoryEstimateValue row={row} field="coverageDays" />,
+      render: (_, row) => externalStock ? "暂不估算" : <InventoryEstimateValue row={row} field="coverageDays" />,
     },
     {
       title: "补货建议",
       dataIndex: "replenishmentQty",
-      render: (_, row) => <InventoryEstimateValue row={row} field="replenishmentQty" />,
+      render: (_, row) => externalStock ? "暂不估算" : <InventoryEstimateValue row={row} field="replenishmentQty" />,
     },
     { title: "条码状态", dataIndex: "barcodeListingState", render: (_, row) => <InventoryListingStatus row={row} /> },
     { title: "款号状态", dataIndex: "styleListingState", render: (_, row) => <InventoryListingStatus row={row} style /> },
@@ -225,11 +236,9 @@ function InventoryBalances() {
     if (key === "mainImageUrl")
       return <span title="当前筛选范围内全部库存，包含所有分页">总计</span>;
     if (
-      inventoryStockFields.includes(
-        key as (typeof inventoryStockFields)[number],
-      )
+      ([...inventoryStockFields, ...jushuitanExtraFields] as string[]).includes(key)
     )
-      return count(totals[key]);
+      return totals[key] == null ? "不完整" : count(totals[key]);
     return (skuOnly.has(key) && key !== "skuCode" && key !== "sizeName") || ["styleListingState", "listingCheckedAt", "lastListingChangeAt", "lastListingChangeType"].includes(key)
       ? "—"
       : null;
@@ -267,7 +276,7 @@ function InventoryBalances() {
   const summaryInfo = (
     <>
       <div className="inventory-report-coverage secondary">
-        库存与在途数量按全部仓库汇总。
+        {externalStock ? `库存来源：聚水潭 · ${q.data?.stockSourceInfo?.warehouseName ?? "待选择仓库"}。未返回的编码或字段显示暂无数据，汇总含缺失值时显示不完整。可用数按已核对的聚水潭业务设置计算。` : "库存与在途数量按全部内部仓库汇总。"}
       </div>
       {skuView && q.data?.reportCoverage && (
         <div className="inventory-report-coverage secondary" role="status">
@@ -304,7 +313,7 @@ function InventoryBalances() {
         </div>
       )}
 
-      {skuView && q.data?.replenishmentPolicy && (
+      {skuView && !externalStock && q.data?.replenishmentPolicy && (
         <div className="inventory-report-coverage secondary">
           补货按完整逐日日均估算 · 采购交期{" "}
           {q.data.replenishmentPolicy.policy.purchaseLeadDays} 天 · 发货至可再售{" "}
@@ -323,10 +332,12 @@ function InventoryBalances() {
   );
   return (
     <>
-      <InventoryColumnGroups dimension={dimension} columns={columns}>
+      <InventoryColumnGroups source={stockSource} dimension={dimension} columns={columns}>
       {({ manager, tabs, groupKeys, visit }) => <Card>
         <div className="table-toolbar">
           <Space wrap>
+            <Select aria-label="库存数据来源" style={{width:160}} value={stockSource} onChange={v=>{setStockSource(v);q.setPage(1);}}
+              options={[{value:"internal",label:"网站库存"},{value:"jushuitan",label:"聚水潭库存"}]} />
             <PageSearch>
               <PageSearchInput
                 placeholder="商品编码 / 货号 / 款号 / 条码"
@@ -379,17 +390,18 @@ function InventoryBalances() {
             <InventorySummaryInfo key={dimension}>{summaryInfo}</InventorySummaryInfo>
           </Space>
           <Space>
-            {skuView && <InventoryCalculationPanel referencePeriod={effectivePeriod} onSaved={(period) => {
+            <JushuitanInventory onView={()=>{setStockSource("jushuitan");q.setPage(1);}} />
+            {skuView && !externalStock && <InventoryCalculationPanel referencePeriod={effectivePeriod} onSaved={(period) => {
               setReferencePeriod(period); q.setPage(1);
             }} />}
             {manager}
             {(can || canMetadata) && (
               <Button
-                aria-label="导入"
+                aria-label={externalStock ? "导入网站库存" : "导入"}
                 icon={<ImportOutlined />}
                 onClick={() => setBatch(true)}
               >
-                导入
+                {externalStock ? "导入网站库存" : "导入"}
               </Button>
             )}
             <Button
@@ -439,6 +451,7 @@ function InventoryBalances() {
                       },
                     );
                   const exportRow = (row: Row, total = false) => ({
+                    stockSourceNote: externalStock ? `聚水潭 · ${q.data?.stockSourceInfo?.warehouseName} · 同步 ${when(q.data?.stockSourceInfo?.finishedAt)}；空白库存表示未返回；可用数按配置计算；补货暂不估算` : "网站库存 · 全部内部仓库汇总",
                     ...Object.fromEntries(
                       keys.map((key) => [
                         key,
@@ -470,6 +483,7 @@ function InventoryBalances() {
                     ].join("；"),
                   });
                   exportColumns.push({ title: "平台状态口径", dataIndex: "listingScopeNote" });
+                  exportColumns.push({ title: "库存来源", dataIndex: "stockSourceNote" });
                   await exportTableData({
                     dataSource: [
                       exportRow(
@@ -496,6 +510,10 @@ function InventoryBalances() {
           </Space>
         </div>
         <QueryState error={q.error} reload={() => q.refetch()} />
+        {externalStock && q.data?.stockSourceInfo && <Alert style={{marginBottom:12}} showIcon
+          type={q.data.stockSourceInfo.errorNote || Date.now()-new Date(q.data.stockSourceInfo.finishedAt).getTime()>q.data.stockSourceInfo.intervalMinutes*120000 ? "warning" : "info"}
+          title={`聚水潭 · ${q.data.stockSourceInfo.warehouseName} · 完整同步 ${when(q.data.stockSourceInfo.finishedAt)} · 匹配 ${q.data.stockSourceInfo.receivedCount} / ${q.data.stockSourceInfo.requestedCount}`}
+          description={[q.data.stockSourceInfo.errorNote, "采购在途按聚水潭已生效采购单口径；可用数可能包含虚拟或在途库存，本来源暂不估算补货及可售天数。"].filter(Boolean).join("；")} />}
         <InventoryStatusCards
           counts={q.error ? undefined : q.data?.listingCounts}
           barcodeState={barcodeState}

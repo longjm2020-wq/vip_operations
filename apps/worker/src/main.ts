@@ -4,6 +4,7 @@ import { validateIntegrationMode } from "../../api/src/integrations/vip/index.js
 import { startVopScheduler } from "./vop-scheduler.js";
 import { startSupplyLogistics } from "./supply-logistics.js";
 import { startInventoryLogistics } from "./inventory-logistics.js";
+import { startJushuitanInventory } from "./jushuitan-inventory.js";
 import { startCompassMail } from "./compass-mail.js";
 import { startCompetitorCrawler } from "./competitor-crawler.js";
 import { startCompetitorCloudLogin } from "./competitor-cloud-login.js";
@@ -15,6 +16,7 @@ const stopCompetitorCrawler = startCompetitorCrawler();
 const stopCompetitorCloudLogin = startCompetitorCloudLogin();
 const stopCompassBrowserUpdate = startCompassBrowserUpdate();
 const stopInventoryLogistics = startInventoryLogistics();
+const stopJushuitanInventory = startJushuitanInventory();
 const stopSupplyLogistics = startSupplyLogistics();
 validateIntegrationMode();
 const stopVop =
@@ -55,6 +57,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const)
       stopVop(),
       stopSupplyLogistics(),
       stopInventoryLogistics(),
+      stopJushuitanInventory(),
       stopCompassMail(),
       stopCompetitorCrawler(),
       stopCompetitorCloudLogin(),

@@ -994,6 +994,40 @@ try {
         error instanceof HttpException && error.getStatus() === 400);
     }
   });
+  await check("Jushuitan is explicitly unavailable before a complete snapshot", async()=>{
+    await assert.rejects(()=>summary({stockSource:"jushuitan"}), (e: unknown)=>e instanceof HttpException && e.getStatus()===422);
+    await assert.rejects(()=>summary({stockSource:"unknown"}), (e: unknown)=>e instanceof HttpException && e.getStatus()===400);
+  });
+  const jstRun=randomUUID();
+  await sql(`INSERT INTO jushuitan_inventory_runs(id,settings_version,warehouse_id,warehouse_name,trigger_type,status,requested_count,received_count,started_at,finished_at)
+    VALUES($1,1,456,'杭州总仓','MANUAL','COMPLETE',3,2,now(),now())`,[jstRun]);
+  await sql(`INSERT INTO jushuitan_inventory_snapshots(run_id,sku_code,physical_qty,reserved_qty,in_transit_qty,transfer_transit_qty,incoming_qty,return_qty,virtual_qty,available_qty)
+    VALUES($1,'0012345678901234567890',5,1,2,0,0,3,-1,3),($1,'SKU-A-BLACK-L',0,0,0,0,0,0,0,0)`,[jstRun]);
+  await sql("UPDATE jushuitan_inventory_settings SET active_run_id=$1,warehouse_id=456,warehouse_name='杭州总仓' WHERE id=1",[jstRun]);
+  await check("External inventory joins once per exact SKU and never multiplies by internal warehouses",async()=>{
+    const result=await summary({stockSource:"jushuitan",skuId:skus[0]});
+    assert.equal(result.data[0].physicalQty,5);
+    assert.equal(result.data[0].virtualQty,-1);
+    assert.equal(result.data[0].returnQty,3);
+    assert.equal(result.data[0].availableQty,3);
+    assert.equal(result.totals.physicalQty,5);
+    assert.equal(result.data[0].replenishmentQty,null);
+    assert.equal(result.stockSourceInfo.warehouseName,"杭州总仓");
+    assert.equal((await summary({skuId:skus[0]})).data[0].physicalQty,15);
+    await assert.rejects(()=>summary({stockSource:"jushuitan",warehouseId:warehouses[0].id}));
+  });
+  await check("Missing JST stock remains unknown in SKU, style and full totals",async()=>{
+    const result=await summary({stockSource:"jushuitan",productId:products[0]});
+    assert.equal(result.total,3);
+    assert.equal(result.data.find((r:any)=>r.skuCode==='SKU-A-WHITE-M').physicalQty,null);
+    assert.equal(result.totals.physicalQty,null);
+    const grouped=await summary({stockSource:"jushuitan",productId:products[0],dimension:"style"});
+    assert.equal(grouped.data[0].physicalQty,null);
+    const article=await summary({stockSource:"jushuitan",productId:products[0],dimension:"article"});
+    assert.equal(article.data.find((r:any)=>r.articleNo==='ARTICLE-A-01').physicalQty,5);
+    const noMatch=await summary({stockSource:"jushuitan",q:"no-such-code"});
+    assert.equal(noMatch.total,0);assert.equal(noMatch.totals.physicalQty,0);
+  });
   console.log(`Inventory summary: ${passed} database scenarios passed`);
   if (process.argv.includes("--serve")) {
     const server = createServer(async (req, res) => {

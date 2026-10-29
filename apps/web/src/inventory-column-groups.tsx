@@ -10,6 +10,7 @@ import {
 
 type Preferences = { groups: SelectionColumnGroup[]; activeKey: string };
 type Props = {
+  source?: "internal" | "jushuitan";
   dimension: InventoryDimension;
   columns: NonNullable<TableProps<Row>["columns"]>;
   children: (view: {
@@ -28,6 +29,10 @@ const defaults: SelectionColumnGroup[] = [
       "inTransitQty",
       "transferTransitQty",
       "incomingQty",
+      "reservedQty",
+      "returnQty",
+      "virtualQty",
+      "availableQty",
     ],
   },
   {
@@ -111,7 +116,7 @@ function read(key: string, keys: string[]): Preferences {
 
 export function InventoryColumnGroups(props: Props) {
   const user = useUser();
-  const storageKey = `inventory-column-groups-v1:${user.id}:${props.dimension}`;
+  const storageKey = `inventory-column-groups-v1:${user.id}:${props.dimension}${props.source === "jushuitan" ? ":jushuitan" : ""}`;
   return (
     <InventoryColumnGroupsState
       key={storageKey}

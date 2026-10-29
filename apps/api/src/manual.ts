@@ -35,6 +35,7 @@ export const manualPermissions: Record<string, string | null> = {
   "34-jushuitan-products": "product.read",
   "35-vip-product-registration": "product.read",
   "37-image-batch-naming": null,
+  "38-jushuitan-inventory": "inventory.read",
 };
 export function canReadManual(
   actor: Actor,

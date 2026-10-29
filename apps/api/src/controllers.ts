@@ -34,6 +34,7 @@ import {
 } from "./modules/master/product-fields.js";
 import * as inventory from "./modules/inventory/service.js";
 import { inventorySummary } from "./modules/inventory/summary.js";
+import { jushuitanStatus, saveJushuitan, verifyJushuitan, queueJushuitan } from "./modules/inventory/jushuitan.js";
 import { replenishmentPolicy, saveReplenishmentPolicy } from "./modules/inventory/replenishment-policy.js";
 import { InventoryFulfilmentController } from "./modules/inventory/controller.js";
 import * as purchase from "./modules/purchases/service.js";
@@ -139,6 +140,10 @@ class AuthController {
 @ApiTags("库存")
 @Controller("api/v1/inventory")
 class InventoryController {
+  @Permission("inventory.read") @Get("jushuitan") jushuitan() { return jushuitanStatus(); }
+  @Permission("inventory.adjust") @Post("jushuitan/settings") jushuitanSave(@Req() r: AuthRequest,@Body() b: unknown) { return saveJushuitan(context(r),b); }
+  @Permission("inventory.adjust") @Post("jushuitan/verify") jushuitanVerify(@Req() r: AuthRequest) { return verifyJushuitan(context(r)); }
+  @Permission("inventory.adjust") @Post("jushuitan/sync") jushuitanSync(@Req() r: AuthRequest) { return queueJushuitan(context(r)); }
   @Permission("inventory.read") @Get() list(@Query() q: any) {
     return inventory.balances(q);
   }
