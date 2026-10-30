@@ -40,7 +40,7 @@ async function cappedRemoteImage(url: string) {
 }
 
 /** The caller must pass only images already selected from its protected row projection. */
-export async function titleImageData(c: Context, url: string) {
+export async function readSelectionImageBytes(c: Context, url: string) {
   const scope = selectionScope.getStore() || "";
   const stored = /^\/api\/v1\/style-selections\/images\/([0-9a-f-]{36})(?:\?tableId=([1-9]\d*))?$/iu.exec(url);
   let bytes: Buffer;
@@ -55,6 +55,12 @@ export async function titleImageData(c: Context, url: string) {
     bytes = await cappedRemoteImage(allowed);
   }
   if (!bytes.length || bytes.length > maxImageBytes) return null;
+  return bytes;
+}
+
+export async function titleImageData(c: Context, url: string) {
+  const bytes = await readSelectionImageBytes(c, url);
+  if (!bytes) return null;
   const image = sharp(bytes, { limitInputPixels: 20_000_000, animated: false, failOn: "error" });
   const metadata = await image.metadata();
   if (!["jpeg", "png", "webp"].includes(metadata.format || "")) return null;

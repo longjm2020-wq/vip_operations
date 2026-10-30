@@ -18,6 +18,7 @@ import { applyTitles, generateTitles, titleAIStatus } from "./title-ai.js";
 import { applyStandards, generateStandards, standardsAIStatus } from "./standards-ai.js";
 import { applyFixedOrder, previewFixedOrder } from "./fixed-order.js";
 import { deleteHistoryRows, restoreHistoryRows } from "./history-rows.js";
+import { createClipboardImages, readClipboardImage } from "./clipboard.js";
 
 const paramId = (value: string) => parse(id, value);
 const transferContext = (request:AuthRequest) => ({...context(request),actor:request.originalActor || request.actor});
@@ -31,6 +32,9 @@ class ProductArchiveTableController {
 @UseInterceptors(SelectionWorkspaceInterceptor)
 class StyleSelectionsController {
   constructor(@Inject(SelectionRealtime) private realtime: SelectionRealtime) {}
+  @Permission("selection.read") @Post("clipboard-images") clipboardImages(@Req() request: AuthRequest, @Body() body: unknown) {
+    return createClipboardImages(context(request), request.cookies?.session, body);
+  }
   @Permission("selection.manage") @Post("history/delete-rows") deleteHistoryRows(@Req() request:AuthRequest,@Body() body:unknown) { return deleteHistoryRows(context(request),body); }
   @Permission("selection.manage") @Post("history/restore-rows") restoreHistoryRows(@Req() request:AuthRequest,@Body() body:unknown) { return restoreHistoryRows(context(request),body); }
   @Permission("selection.manage") @Post("fixed-order/preview") fixedOrderPreview(@Req() request:AuthRequest,@Body() body:unknown) { return previewFixedOrder(context(request),body); }
@@ -162,5 +166,15 @@ class PublicSelectionCollectionController {
   }
 }
 
-@Module({ providers: [SelectionWorkspaceInterceptor, SelectionRealtime], controllers: [ProjectTablesController, ProductArchiveTableController, StyleSelectionsController, SelectionCollectionsController, PublicSelectionCollectionController] })
+@Controller("api/v1/selection-clipboard")
+class SelectionClipboardController {
+  @Public() @Get(":token/:index.jpg") async image(@Param("token") token: string, @Param("index") index: string, @Req() request: AuthRequest, @Res() response: Response) {
+    response.setHeader("Cache-Control", "private, no-store");
+    response.setHeader("Referrer-Policy", "no-referrer");
+    const image = await readClipboardImage(token, index, request.requestId);
+    response.type("image/jpeg").send(image);
+  }
+}
+
+@Module({ providers: [SelectionWorkspaceInterceptor, SelectionRealtime], controllers: [ProjectTablesController, ProductArchiveTableController, StyleSelectionsController, SelectionCollectionsController, PublicSelectionCollectionController, SelectionClipboardController] })
 export class StyleSelectionsModule {}

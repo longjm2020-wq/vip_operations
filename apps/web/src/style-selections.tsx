@@ -58,6 +58,7 @@ import { joinChoiceValues, splitChoiceValues, isEncodedChoiceValue } from "./sel
 import { SelectionChoiceCell } from "./selection-choice-tags";
 import { SelectionInlineTags } from "./selection-inline-tags";
 import { parseSelectionClipboard } from "./selection-clipboard";
+import { copyOfficeClipboard, officeClipboardHtml, type OfficeClipboardCell } from "./selection-office-clipboard";
 import { selectionClipboardImages, selectionTextPasteTarget } from "./selection-image-clipboard";
 import { duplicateStyleCounts, selectionStyleKey } from "./selection-duplicates";
 import { SelectionFormatModal, type FormatPatch } from "./selection-format-modal";
@@ -1192,11 +1193,16 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
   };
   const copyValue = (row: Row, column: Column) => {
     if(!readableSelectionCell(row,column.key))return "••••";
-    const value = imageKeys.has(column.key) ? (column.key === "images" ? rowImages(row) : rowLabelImages(row)).map(image => image.url).join("; ") : column.key === "collectionInventory" ? (row.collectionInventory || []).reduce((sum:number,item:Row)=>sum+item.available+item.production,0) : valueAt(row,column);
+    const value = imageKeys.has(column.key) ? (column.key === "images" ? rowImages(row) : rowLabelImages(row)).map(image => image.url).join("; ") : column.custom && column.type === "image" ? fieldImages(valueAt(row,column)).map(image => image.url).join("; ") : column.key === "collectionInventory" ? (row.collectionInventory || []).reduce((sum:number,item:Row)=>sum+item.available+item.production,0) : valueAt(row,column);
     return choiceClipboardText(column,value);
   };
+  const officeCopyAbort = useRef<AbortController | null>(null);
+  useEffect(() => () => { officeCopyAbort.current?.abort(); officeCopyAbort.current = null; message.destroy("selection-office-copy"); }, [message]);
   const copyCells = (event: ClipboardEvent<HTMLElement>, rowKey: string, columnKey: string) => {
     if (!event.currentTarget.contains(event.target as Node) || (cellTextEditing && selectedCells.size <= 1)) return;
+    officeCopyAbort.current?.abort();
+    officeCopyAbort.current = null;
+    message.destroy("selection-office-copy");
     const selected = selectedCells.size ? selectedCells : new Set([cellId(rowKey, columnKey)]);
     const positions = [...selected].map((value) => { const [r, c] = value.split("::"); return { r: rowPositions.get(r) ?? -1, c: columnPositions.get(c) ?? -1 }; }).filter((item) => item.r >= 0 && item.c >= 0);
     if (!positions.length) {
@@ -1210,14 +1216,39 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
     const product = chosenRows.length * chosenCols.length === positions.length;
     const rowIndexes = product ? chosenRows : Array.from({ length: maxRow - minRow + 1 }, (_, r) => minRow + r);
     const colIndexes = product ? chosenCols : Array.from({ length: maxCol - minCol + 1 }, (_, c) => minCol + c);
-    const text = positions.length === 1
-      ? copyValue(displayedRows[minRow], activeColumns[minCol])
-      : rowIndexes.map((r) => colIndexes.map((c) => {
-        const value = copyValue(displayedRows[r], activeColumns[c]);
+    const cells: OfficeClipboardCell[][] = rowIndexes.map(r => colIndexes.map(c => {
+      const row = displayedRows[r], column = activeColumns[c];
+      if (!selected.has(cellId(row._key, column.key))) return { text: "" };
+      const text = copyValue(row, column);
+      if (!readableSelectionCell(row, column.key)) return { text };
+      const images = column.key === "images" ? rowImages(row) : column.key === "labelImages" ? rowLabelImages(row)
+        : column.custom && column.type === "image" ? fieldImages(valueAt(row, column)) : [];
+      const image = images[0];
+      return { text, ...(image ? { image: { rowId: String(row.id || ""), columnKey: column.key, imageId: image.id } } : {}) };
+    }));
+    const text = positions.length === 1 ? cells[0][0].text
+      : cells.map(row => row.map(({ text: value }) => {
         return /[\t\n\r"]/.test(value) ? '"' + value.replace(/"/g, '""') + '"' : value;
       }).join("\t")).join("\n");
     copiedSingleValue.current = positions.length === 1 ? text : null;
     event.preventDefault(); event.clipboardData.setData("text/plain", text); setCopiedCells(new Set(selected));
+    if (!cells.some(row => row.some(cell => cell.image))) {
+      event.clipboardData.setData("text/html", officeClipboardHtml(cells));
+      return;
+    }
+    const controller = new AbortController();
+    officeCopyAbort.current = controller;
+    const timeout = window.setTimeout(() => controller.abort(), 120_000);
+    const progressKey = "selection-office-copy";
+    message.loading({ key: progressKey, content: "正在准备图文复制，请稍候…", duration: 0 });
+    void copyOfficeClipboard(cells, text, async images => {
+      const result = await api("/style-selections/clipboard-images", "POST", { images }, undefined, { signal: controller.signal });
+      return result.data.images;
+    }, controller.signal).then(() => {
+      if (officeCopyAbort.current === controller) message.success({ key: progressKey, content: "图文已复制，可粘贴到 Excel / WPS（每格一张图片）" });
+    }).catch(error => {
+      if (officeCopyAbort.current === controller) message.error({ key: progressKey, content: controller.signal.aborted ? "图片复制已取消或超时，请分段重试" : `${(error as Error).message || "图片复制失败"}；本次仅复制了文字和图片地址`, duration: 6 });
+    }).finally(() => { window.clearTimeout(timeout); controller.abort(); });
   };
   const pasteCells = (event: ClipboardEvent<HTMLTableCellElement>, rowKey: string, columnKey: string) => {
     if (!canEdit || event.defaultPrevented) return;

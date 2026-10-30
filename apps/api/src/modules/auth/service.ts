@@ -24,10 +24,15 @@ import { z } from "zod";
 import { sessionMaxAge } from "./session-policy.js";
 export async function actorFor(token?: string): Promise<Actor> {
   if (!token) fail("UNAUTHENTICATED", "请先登录", 401);
+  return actorForSessionHash(hash(token!));
+}
+/** Internal capability readers still revalidate the issuing session and current permissions. */
+export async function actorForSessionHash(tokenHash: string): Promise<Actor> {
+  if (!/^[a-f0-9]{64}$/.test(tokenHash)) fail("UNAUTHENTICATED", "登录已失效", 401);
   const u = await one(
     db,
     "SELECT u.id,u.username,u.display_name,u.avatar->>'id' AS avatar_id,s.csrf_token FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=$1 AND s.revoked_at IS NULL AND s.expires_at>now() AND u.status='ACTIVE'",
-    hash(token),
+    tokenHash,
   );
   if (!u) fail("UNAUTHENTICATED", "登录已失效", 401);
   const p = await rows(
