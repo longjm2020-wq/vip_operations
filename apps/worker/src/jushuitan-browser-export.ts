@@ -472,15 +472,45 @@ async function collectJstInventory(
         );
         await frame.getByRole("button", { name: /^搜\s*索$/ }).click();
         await waitForInventoryQuery(frame);
-        const expected = await inventoryCount(frame);
+        let expected = await inventoryCount(frame);
+        for (
+          let retry = 1;
+          expected > batch.length * 20 && retry <= 2;
+          retry++
+        ) {
+          // An ERP reset/search may finish out of order. Re-issue the same
+          // scoped query after loading has stopped; never export the full list.
+          await guard();
+          const currentQuery =
+            kind === "sku_code"
+              ? await frame.locator("#sku_id").inputValue()
+              : await attribute
+                  .getByPlaceholder("请输入", { exact: true })
+                  .inputValue();
+          if (currentQuery !== query)
+            throw new JstBrowserError("聚水潭查询条件已改变，未导出");
+          await stage(
+            `查询范围复核（${kind === "sku_code" ? "商品编码" : "其它属性5"}第${Math.floor(part / batchSize) + 1}/${batches}批，重试${retry}/2）`,
+          );
+          await frame.getByRole("button", { name: /^搜\s*索$/ }).click();
+          await waitForInventoryQuery(frame);
+          expected = await inventoryCount(frame);
+        }
         if (expected === 0) {
           reports.push({ records: [], expectedCount: 0 });
           continue;
         }
-        if (expected > batch.length * 20)
+        if (expected > batch.length * 20) {
+          console.warn("jst_query_scope_failed", {
+            kind,
+            batch: Math.floor(part / batchSize) + 1,
+            requested: batch.length,
+            received: expected,
+          });
           throw new JstBrowserError(
             "查询返回条数异常，可能未应用条码筛选，未导出",
           );
+        }
         const checked = frame.locator('thead input[type="checkbox"]');
         if ((await checked.count()) === 1 && (await checked.isChecked()))
           await checked.uncheck();
@@ -488,7 +518,8 @@ async function collectJstInventory(
           throw new JstBrowserError("库存行仍有勾选，未导出部分库存");
         await guard();
         await verifyJstWarehouse(page, frame);
-        await stage(`导出聚水潭原始表格（${expected}条）`);
+        const batchLabel = `${kind === "sku_code" ? "商品编码" : "其它属性5"}第${Math.floor(part / batchSize) + 1}/${batches}批`;
+        await stage(`导出原始表格（${batchLabel}，${expected}条）`);
         await exportButton(frame).click();
         const downloadPromise = page.waitForEvent("download", {
           timeout: 180000,
@@ -513,7 +544,7 @@ async function collectJstInventory(
         await verifyJstScope(page);
         if ((await inventoryCount(frame)) !== expected)
           throw new JstBrowserError("导出期间库存商品条数发生变化，请重新同步");
-        await stage("校验表格并匹配完整商品编码");
+        await stage(`校验并匹配（${batchLabel}）`);
         const bytes = await readFile(path),
           report = parseJushuitanExport(bytes, expected);
         if (report.records.some((row) => !requested.has(row[kind])))
@@ -521,6 +552,9 @@ async function collectJstInventory(
             "导出文件包含本批网站条码范围外的商品，未发布库存",
           );
         reports.push(report);
+        // Reject an inconsistent mapping as soon as it is downloaded instead
+        // of discovering it after every remaining ERP query has completed.
+        mergeJstExports(reports, targets);
         files.push({ bytes, fileName: download.suggestedFilename() });
         await download.delete();
       }

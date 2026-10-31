@@ -451,7 +451,7 @@ function InventoryBalances() {
                       },
                     );
                   const exportRow = (row: Row, total = false) => ({
-                    stockSourceNote: externalStock ? `聚水潭 · ${q.data?.stockSourceInfo?.warehouseName} · 同步 ${when(q.data?.stockSourceInfo?.finishedAt)}；空白库存表示未匹配；可用数为导出原值；补货暂不估算` : "网站库存 · 全部内部仓库汇总",
+                    stockSourceNote: externalStock ? `聚水潭 · ${q.data?.stockSourceInfo?.warehouseName} · 同步 ${when(q.data?.stockSourceInfo?.finishedAt)}；空白库存表示未匹配或原表未提供数量；可用数为导出原值；补货暂不估算` : "网站库存 · 全部内部仓库汇总",
                     ...Object.fromEntries(
                       keys.map((key) => [
                         key,

@@ -335,7 +335,7 @@ export function mergeJstExports(
           parts[1].toUpperCase() !== target.size_name.trim().toUpperCase()
         )
           throw new JstExportError(
-            `映射商品${r.sku_code}的颜色或尺码与网站不一致，请核对其它属性5`,
+            `映射商品${r.sku_code}的颜色或尺码与网站不一致（聚水潭：${r.color_size}；网站：${target.color_name};${target.size_name}），请核对其它属性5`,
           );
       }
       sources.push({ ...r, target_code: target.sku_code });

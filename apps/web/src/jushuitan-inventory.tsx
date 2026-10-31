@@ -96,11 +96,13 @@ function JushuitanMatches({ onClose }: { onClose: () => void }) {
             { title: "颜色及尺码", dataIndex: "colorSize" },
             {
               title: "实际库存",
-              render: (_: unknown, r: Row) => r.quantities.physicalQty,
+              render: (_: unknown, r: Row) =>
+                r.quantities.physicalQty ?? "暂无数据",
             },
             {
               title: "可用数",
-              render: (_: unknown, r: Row) => r.quantities.availableQty,
+              render: (_: unknown, r: Row) =>
+                r.quantities.availableQty ?? "暂无数据",
             },
           ]}
         />

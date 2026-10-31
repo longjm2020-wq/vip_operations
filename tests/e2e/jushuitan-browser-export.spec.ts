@@ -116,7 +116,12 @@ function excel(rows: unknown[][]) {
 }
 async function erpFixture(
   page: Page,
-  mode: "valid" | "outside" | "unscoped" = "valid",
+  mode:
+    | "valid"
+    | "outside"
+    | "unscoped"
+    | "color_conflict"
+    | "stale_count" = "valid",
   options: {
     homeOnly?: boolean;
     hiddenDuplicate?: boolean;
@@ -136,7 +141,12 @@ async function erpFixture(
         mode === "outside"
           ? [["UNREQUESTED", "", "粉色;L", 8, 0, 0, 0, 0, 0, 8, 0]]
           : mapping
-            ? [native, alias]
+            ? [
+                native,
+                mode === "color_conflict"
+                  ? alias.map((v, i) => (i === 2 ? "黑色;L" : v))
+                  : alias,
+              ]
             : [native];
       return route.fulfill({
         contentType:
@@ -190,7 +200,7 @@ async function erpFixture(
         byId('search').onclick=()=>{
           kind=byId('sku_id').value?'sku_code':'mapped_code';query=byId(kind==='sku_code'?'sku_id':'mapped').value;
           observedQueries.push({kind,codes:query.split(',')});byId('query-records').textContent=JSON.stringify(observedQueries);
-          const count=${JSON.stringify(mode)}==='unscoped'?99999:!query.split(',').includes(${JSON.stringify(code)})?0:kind==='mapped_code'?2:1;
+          const count=${JSON.stringify(mode)}==='unscoped'||(${JSON.stringify(mode)}==='stale_count'&&observedQueries.length===1)?99999:!query.split(',').includes(${JSON.stringify(code)})?0:kind==='mapped_code'?2:1;
           load(count);
         };
         byId('export').onclick=()=>{byId('download').hidden=false;byId('download').href='/fixture-export.xlsx?kind='+kind+'&codes='+encodeURIComponent(query);};
@@ -259,6 +269,48 @@ test("属性5使用较小批次仍覆盖所有网站编码和最后一个余数�
       targets.map((row) => row.sku_code),
     );
   }
+});
+
+test("首批发现颜色映射冲突即停止，不继续查询剩余批次", async ({ page }) => {
+  await erpFixture(page, "color_conflict");
+  const targets = [
+    target,
+    ...Array.from({ length: 200 }, (_, index) => ({
+      ...target,
+      sku_code: `MISSING-${index}`,
+    })),
+  ];
+  await expect(
+    exportJstInventory(
+      page,
+      targets,
+      async () => {},
+      async () => {},
+    ),
+  ).rejects.toThrow("颜色或尺码");
+  const queries = JSON.parse(
+    await page.frameLocator("iframe").locator("#query-records").innerText(),
+  );
+  expect(queries).toHaveLength(2);
+});
+
+test("查询出现旧的全仓条数时重试相同条件，范围确认后才导出", async ({
+  page,
+}) => {
+  const downloads = await erpFixture(page, "stale_count");
+  const result = await exportJstInventory(
+    page,
+    [target],
+    async () => {},
+    async () => {},
+  );
+  const queries = JSON.parse(
+    await page.frameLocator("iframe").locator("#query-records").innerText(),
+  );
+  expect(queries).toHaveLength(3);
+  expect(queries[0]).toEqual(queries[1]);
+  expect(downloads).toHaveLength(2);
+  expect(result.report.records[0].physical_qty).toBe(15);
 });
 
 test("关闭已识别的新手引导后才能切换精确匹配并导出", async ({ page }) => {
