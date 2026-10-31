@@ -12,6 +12,8 @@ import {
   parseJushuitanExport,
   jstTargetIndex,
   mergeJstExports,
+  jstStyleQueryGroups,
+  assertJstStyleScope,
   type JstTarget,
   type JushuitanExport,
 } from "../../api/src/integrations/jushuitan/export-file.js";
@@ -374,6 +376,16 @@ async function collectJstInventory(
   const frame = await verifyJstScope(page, stage);
   const codes = [...jstTargetIndex(targets).keys()];
   if (!codes.length) throw new JstBrowserError("网站尚无可查询的商品编码");
+  const styleGroups = jstStyleQueryGroups(targets);
+  if (styleGroups)
+    return collectJstStyleInventory(
+      page,
+      frame,
+      targets,
+      styleGroups,
+      guard,
+      stage,
+    );
   // Expose the official optional filter, preserving every other user-selected field.
   if (
     !(await frame
@@ -398,6 +410,11 @@ async function collectJstInventory(
     );
   const reports: JushuitanExport[] = [],
     files: { bytes: Buffer; fileName: string }[] = [];
+  await stage("清理初始查询条件");
+  await frame.getByRole("button", { name: /^重\s*置$/ }).click();
+  // Reset reloads the entire warehouse. Do it once, then replace only the two
+  // integration-owned query fields, keeping every batch scoped to exact codes.
+  await waitForInventoryQuery(frame);
   for (let offset = 0; offset < codes.length; offset += 200)
     for (const kind of ["sku_code", "mapped_code"] as const) {
       // Smaller custom-attribute queries preserve complete coverage while
@@ -416,16 +433,22 @@ async function collectJstInventory(
         await stage(
           `查询${kind === "sku_code" ? "商品编码" : "其它属性5"}（第${Math.floor(part / batchSize) + 1}/${batches}批）`,
         );
-        await frame.getByRole("button", { name: /^重\s*置$/ }).click();
-        // Reset can itself load the full list. Finish that request before the scoped search.
-        await waitForInventoryQuery(frame);
+        await frame.locator("#sku_id").fill("");
+        await attribute.getByPlaceholder("请输入", { exact: true }).fill("");
         await verifyJstWarehouse(page, frame);
         const remaining = await frame
           .locator("#i_id,#sku_id,#supplier_sku_id,#supplier_i_id")
           .evaluateAll((inputs) =>
             inputs.some((e) => (e as HTMLInputElement).value.trim()),
           );
-        if (remaining)
+        if (
+          remaining ||
+          (
+            await attribute
+              .getByPlaceholder("请输入", { exact: true })
+              .inputValue()
+          ).trim()
+        )
           throw new JstBrowserError("聚水潭仍存在商品筛选条件，未导出部分库存");
         if (kind === "sku_code") {
           await stage(
@@ -561,4 +584,133 @@ async function collectJstInventory(
     }
   await guard();
   return { report: mergeJstExports(reports, targets), files };
+}
+
+/** Query both authorized style formats, then match the downloaded SKU identities. */
+async function collectJstStyleInventory(
+  page: Page,
+  frame: Frame,
+  targets: JstTarget[],
+  groups: { label: string; codes: string[] }[],
+  guard: () => Promise<void>,
+  stage: (text: string) => Promise<void>,
+) {
+  await stage("清理初始查询条件（按款号导出）");
+  await frame.getByRole("button", { name: /^重\s*置$/ }).click();
+  await waitForInventoryQuery(frame);
+  await verifyJstWarehouse(page, frame);
+  const input = frame.locator("#i_id"),
+    wrapper = frame.locator(".goods-input-affix-wrapper:has(#i_id)");
+  const mode = wrapper.getByRole("button", {
+    name: "匹配方式：模糊匹配，点击切换为精确匹配",
+    exact: true,
+  });
+  if (await mode.isVisible()) await mode.click();
+  const exact = wrapper.getByRole("button", {
+    name: "匹配方式：精确匹配，点击切换为模糊匹配",
+    exact: true,
+  });
+  await exact.waitFor({ state: "visible" });
+  const declaredLength = Number(await input.getAttribute("maxlength"));
+  const maxLength =
+    declaredLength > 0 ? Math.min(declaredLength, 60000) : 60000;
+  const hint = [
+    await input.getAttribute("title"),
+    await input.getAttribute("placeholder"),
+    await wrapper.innerText(),
+  ].join(" ");
+  const declaredCount = hint.match(/(?:最多|不超过|上限)\s*(\d+)\s*(?:个|条)/);
+  const maxCount = declaredCount
+    ? Math.max(1, Math.min(Number(declaredCount[1]), 2000))
+    : 2000;
+  const batches: { label: string; codes: string[] }[] = [];
+  for (const group of groups) {
+    let batch: string[] = [],
+      length = 0;
+    for (const code of group.codes) {
+      if (code.length > maxLength)
+        throw new JstBrowserError("聚水潭款号查询框容量不足，未执行截断查询");
+      if (
+        batch.length &&
+        (length + 1 + code.length > maxLength || batch.length >= maxCount)
+      ) {
+        batches.push({ label: group.label, codes: batch });
+        batch = [];
+        length = 0;
+      }
+      length += code.length + (batch.length ? 1 : 0);
+      batch.push(code);
+    }
+    if (batch.length) batches.push({ label: group.label, codes: batch });
+  }
+  const reports: JushuitanExport[] = [],
+    files: { bytes: Buffer; fileName: string }[] = [];
+  for (const [index, batch] of batches.entries()) {
+    await guard();
+    const label = `${batch.label}第${index + 1}/${batches.length}批`,
+      query = batch.codes.join(",");
+    await stage(`精确查询款号（${label}，${batch.codes.length}款）`);
+    await input.fill(query);
+    if ((await input.inputValue()) !== query)
+      throw new JstBrowserError("聚水潭款号输入被截断，未执行查询");
+    const residual = await frame
+      .locator(
+        '#sku_id,#supplier_sku_id,#supplier_i_id,.select-input-container input[placeholder="请输入"]',
+      )
+      .evaluateAll((inputs) =>
+        inputs.some((element) => (element as HTMLInputElement).value.trim()),
+      );
+    if (residual)
+      throw new JstBrowserError("聚水潭仍有其它商品筛选条件，未导出部分库存");
+    await exact.waitFor({ state: "visible" });
+    await verifyJstWarehouse(page, frame);
+    await frame.getByRole("button", { name: /^搜\s*索$/ }).click();
+    await waitForInventoryQuery(frame);
+    const expected = await inventoryCount(frame);
+    if (!expected) continue;
+    if (expected > 100000 || expected > batch.codes.length * 200)
+      throw new JstBrowserError(
+        "款号查询条数异常，未导出；请检查精确匹配是否生效",
+      );
+    const checked = frame.locator('thead input[type="checkbox"]');
+    if ((await checked.count()) === 1 && (await checked.isChecked()))
+      await checked.uncheck();
+    if (await frame.locator('tbody input[type="checkbox"]:checked').count())
+      throw new JstBrowserError("库存行仍有勾选，未导出部分库存");
+    await guard();
+    await stage(`导出原始表格（${label}，${expected}条）`);
+    await exportButton(frame).click();
+    const downloading = page.waitForEvent("download", { timeout: 180000 });
+    void downloading.catch(() => {});
+    await frame.getByText("导出库存", { exact: true }).click();
+    const download = await downloading.catch(() => {
+      throw new JstBrowserError(
+        "未收到聚水潭导出文件，请检查导出权限或下载中心；未发布库存",
+      );
+    });
+    if (await download.failure())
+      throw new JstBrowserError("聚水潭文件下载失败，未发布库存");
+    const path = await download.path();
+    if (!path || (await stat(path)).size > 20971520)
+      throw new JstExportError("导出文件缺失或超过20MB，未导入");
+    await guard();
+    await verifyJstScope(page);
+    if ((await inventoryCount(frame)) !== expected)
+      throw new JstBrowserError("导出期间库存商品条数发生变化，请重新同步");
+    await stage(`按商品编码及其它属性5匹配汇总（${label}）`);
+    const bytes = await readFile(path),
+      report = parseJushuitanExport(bytes, expected);
+    assertJstStyleScope(report, new Set(batch.codes));
+    reports.push(report);
+    // A style export may include colors/sizes absent from the website. Keep
+    // the originals, but only explicit known identifiers contribute stock.
+    mergeJstExports(reports, targets, { allowUnmatched: true });
+    files.push({ bytes, fileName: download.suggestedFilename() });
+    await download.delete();
+  }
+  await guard();
+  return {
+    report: mergeJstExports(reports, targets, { allowUnmatched: true }),
+    files,
+  };
 }

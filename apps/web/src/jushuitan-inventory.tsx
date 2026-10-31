@@ -599,7 +599,7 @@ export function JushuitanInventory({ onView }: { onView: () => void }) {
             type="info"
             showIcon
             title="登录一次，点击同步自动导出并匹配"
-            description="仅查询网站已有商品编码/条码，通过聚水潭网页分批导出。商品编码或其它属性5精确匹配后汇总，颜色名称差异不拦截。无需开放平台应用或API密钥。"
+            description="按网站款号的 X、连字符两种格式批量精确查询并导出，再按完整商品编码或其它属性5匹配汇总。颜色名称差异不拦截。无需开放平台应用或API密钥。"
           />
           {q.error && <Alert type="error" title={(q.error as Error).message} />}
           {!s ? (

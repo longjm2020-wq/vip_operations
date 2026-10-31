@@ -14,6 +14,7 @@ const fields = {
 } as const;
 export type JstStockRecord = {
   sku_code: string;
+  style_code: string;
   mapped_code: string;
   color_size: string;
 } & Record<Exclude<keyof typeof fields, "sku_code">, number | null>;
@@ -26,12 +27,45 @@ export type JstTarget = {
   barcode: string | null;
   color_name: string;
   size_name: string;
+  style_no?: string;
 };
 export type JstMatchedExport = {
   records: JstStockRecord[];
   sources: (JstStockRecord & { target_code: string })[];
   targets: JstTarget[];
+  exportedCount: number;
 };
+/** Query aliases only. Stock identity still requires an explicit SKU/barcode. */
+export function jstStyleQueryGroups(targets: JstTarget[]) {
+  if (!targets.length || targets.some((target) => !target.style_no))
+    return null;
+  const standard = new Set<string>(),
+    alternate = new Set<string>();
+  for (const target of targets) {
+    const style = target.style_no!.trim();
+    if (!style || style.length > 128 || /[,，\s\u0000-\u001f]/.test(style))
+      throw new JstExportError("网站款号无法用于聚水潭批量精确查询，请先核对");
+    standard.add(style.replaceAll("-", "X"));
+    // Preserve the prefix X in XFA/XFW; replace separators inside the code.
+    alternate.add(style[0] + style.slice(1).replaceAll("X", "-"));
+  }
+  for (const style of standard) alternate.delete(style);
+  return [
+    { label: "标准款号", codes: [...standard] },
+    { label: "连字符款号", codes: [...alternate] },
+  ].filter((group) => group.codes.length);
+}
+export function assertJstStyleScope(
+  report: JushuitanExport,
+  styles: Set<string>,
+) {
+  if (
+    report.records.some((row) => !row.style_code || !styles.has(row.style_code))
+  )
+    throw new JstExportError(
+      "导出表缺少款式编码或包含本批款号范围外的商品，未发布库存",
+    );
+}
 const clean = (v: unknown) => String(v ?? "").replace(/[\s\uFEFF]/g, "");
 function checkContainer(bytes: Buffer) {
   if (bytes.length < 8 || bytes.length > 20 * 1024 * 1024)
@@ -153,6 +187,7 @@ export function parseJushuitanExport(
         if (["其它属性5", "其他属性5"].includes(value))
           columns.mapped_code = col;
         if (value === "颜色及规格") columns.color_size = col;
+        if (value === "款式编码") columns.style_code = col;
       }
       if (Object.keys(fields).every((k) => k in columns))
         candidates.push({ sheet, header: r, columns, range });
@@ -215,8 +250,18 @@ export function parseJushuitanExport(
           !/^\d+$/.test(mapped.w ?? "")))
     )
       throw new JstExportError(`第${r + 1}行其它属性5条码可能丢失精度`);
+    const style = columns.style_code === undefined ? null : cell("style_code");
+    if (
+      style?.f ||
+      (style?.t === "n" &&
+        (!Number.isSafeInteger(style.v) ||
+          String(style.v).length > 15 ||
+          !/^\d+$/.test(style.w ?? "")))
+    )
+      throw new JstExportError(`第${r + 1}行款式编码是公式或可能丢失精度`);
     const record: Record<string, string | number | null> = {
       sku_code: code,
+      style_code: style?.t === "n" ? style.w! : String(style?.v ?? "").trim(),
       mapped_code:
         mapped?.t === "n"
           ? (mapped.w ?? String(mapped.v))
@@ -302,6 +347,7 @@ export function jstTargetIndex(targets: JstTarget[]) {
 export function mergeJstExports(
   reports: JushuitanExport[],
   targets: JstTarget[],
+  options: { allowUnmatched?: boolean } = {},
 ): JstMatchedExport {
   const index = jstTargetIndex(targets),
     seen = new Map<string, JstStockRecord>(),
@@ -325,6 +371,7 @@ export function mergeJstExports(
           "商品编码和其它属性5指向不同的网站商品，未合并",
         );
       const target = direct ?? mapped;
+      if (!target && options.allowUnmatched) continue;
       if (!target)
         throw new JstExportError("聚水潭返回了网站范围外的商品，未发布库存");
       // Explicit SKU/barcode mappings define identity. Supplier color/size
@@ -351,5 +398,10 @@ export function mergeJstExports(
             throw new JstExportError("汇总库存超出有效整数范围");
         }
     }
-  return { records: [...sums.values()], sources, targets };
+  return {
+    records: [...sums.values()],
+    sources,
+    targets,
+    exportedCount: seen.size,
+  };
 }

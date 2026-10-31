@@ -397,7 +397,7 @@ export async function runJushuitanTick() {
     else {
       const targets = (await rows(
         db,
-        "SELECT sku_code,barcode,color_name,size_name FROM skus ORDER BY sku_code",
+        "SELECT s.sku_code,s.barcode,s.color_name,s.size_name,p.style_no FROM skus s JOIN products p ON p.id=s.product_id ORDER BY s.sku_code",
       )) as JstTarget[];
       await db.$executeRawUnsafe(
         "UPDATE jushuitan_inventory_runs SET requested_count=$2 WHERE id=$1::uuid AND claim_token=$3::uuid",

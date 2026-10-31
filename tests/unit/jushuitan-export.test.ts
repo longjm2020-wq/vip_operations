@@ -4,6 +4,8 @@ import {
   parseJushuitanExport,
   mergeJstExports,
   jstTargetIndex,
+  jstStyleQueryGroups,
+  assertJstStyleScope,
   type JstTarget,
 } from "../../apps/api/src/integrations/jushuitan/export-file.js";
 import {
@@ -229,6 +231,54 @@ it("reads bounded ZIP64 exports and rejects excessive expanded size", () => {
   expect(() =>
     parseJushuitanExport(zip64Entries(file([row()]), true), 1),
   ).toThrow("超过100MB");
+});
+it("queries both style formats while preserving leading X and deduplicating styles", () => {
+  expect(
+    jstStyleQueryGroups([
+      { ...target, style_no: "XFA16X31196L" },
+      { ...target, style_no: "XFA16-31196L" },
+      { ...target, style_no: "H49XJMX16579" },
+      { ...target, style_no: "PLAIN" },
+    ])?.map((group) => group.codes),
+  ).toEqual([
+    ["XFA16X31196L", "H49XJMX16579", "PLAIN"],
+    ["XFA16-31196L", "H49-JM-16579"],
+  ]);
+  expect(jstStyleQueryGroups([target])).toBeNull();
+  expect(() => jstStyleQueryGroups([{ ...target, style_no: "A,B" }])).toThrow(
+    "款号",
+  );
+});
+it("requires exact exported style scope and excludes unknown SKUs only in a style export", () => {
+  const report = parseJushuitanExport(
+    file([row(), row("EXTRA")], (sheet) => {
+      XLSX.utils.sheet_add_aoa(
+        sheet,
+        [["款式编码"], ["XFA16X31196L"], ["XFA16X31196L"]],
+        { origin: "L1" },
+      );
+    }),
+    2,
+  );
+  expect(() =>
+    assertJstStyleScope(report, new Set(["XFA16X31196L"])),
+  ).not.toThrow();
+  expect(() => assertJstStyleScope(report, new Set(["XFA16-31196L"]))).toThrow(
+    "范围外",
+  );
+  expect(() =>
+    assertJstStyleScope(
+      parseJushuitanExport(file([row()]), 1),
+      new Set(["XFA16X31196L"]),
+    ),
+  ).toThrow("缺少款式编码");
+  expect(() => mergeJstExports([report], [target])).toThrow("范围外");
+  const merged = mergeJstExports([report, report], [target], {
+    allowUnmatched: true,
+  });
+  expect(merged.exportedCount).toBe(2);
+  expect(merged.sources).toHaveLength(1);
+  expect(merged.records[0].physical_qty).toBe(5);
 });
 it("sums explicit identifier mappings and counts a source only once across both queries", () => {
   const direct = parseJushuitanExport(file([row()]), 1),

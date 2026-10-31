@@ -470,7 +470,7 @@ export async function publishJstExport(
         token,
         stats.total,
         stats.matched,
-        report.sources.length,
+        report.exportedCount,
         JSON.stringify(missing),
         safeName,
         createHash("sha256")
@@ -513,7 +513,7 @@ export async function publishJstExport(
       return {
         matched: stats.matched,
         total: stats.total,
-        exported: report.sources.length,
+        exported: report.exportedCount,
       };
     },
     { timeout: 60000 },
