@@ -143,6 +143,15 @@ export async function captureJstLoginFrame(
     console.warn("jst_login_frame_retry", {
       phase,
       errorType: error instanceof Error ? error.name : "Unknown",
+      // Capture failures have no submitted text. Keep only a bounded first line,
+      // stripping URLs so no browser call log or query credentials are recorded.
+      screenshotError:
+        phase === "screenshot" && error instanceof Error
+          ? error.message
+              .split("\n")[0]
+              .replace(/https?:\/\/\S+/g, "[url]")
+              .slice(0, 240)
+          : undefined,
     });
     // No unmasked fallback: retain the session and retry with fresh frames.
     return null;

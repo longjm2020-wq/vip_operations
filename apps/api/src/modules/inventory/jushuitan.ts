@@ -16,6 +16,7 @@ import {
   type Context,
 } from "../../core.js";
 import {
+  jushuitanFrameRecoveringNote,
   jushuitanLoginActionSchema,
   jushuitanScope,
   jushuitanSettingsSchema,
@@ -219,8 +220,14 @@ export async function jushuitanLoginAction(
   return db.$transaction(async (tx) => {
     await jstLock(tx);
     const l = await ownedLogin(tx, c, id);
+    // These actions inspect/reload the current page, never stale screenshot coordinates.
+    const recoveryAction =
+      l.status === "RUNNING" &&
+      l.note === jushuitanFrameRecoveringNote &&
+      l.frame_id === null &&
+      (b.type === "CHECK" || b.type === "REFRESH");
     if (
-      l.status !== "WAITING" ||
+      (l.status !== "WAITING" && !recoveryAction) ||
       new Date(l.expires_at).getTime() <= Date.now()
     )
       fail("JST_LOGIN_STATE", "登录窗口尚未就绪或已关闭", 409);
@@ -255,7 +262,7 @@ export async function jushuitanLoginAction(
       ),
     );
     await tx.$executeRawUnsafe(
-      "UPDATE jushuitan_browser_logins SET frame_id=NULL,status='RUNNING' WHERE id=$1::uuid",
+      "UPDATE jushuitan_browser_logins SET frame_id=NULL,status='RUNNING',note='正在执行页面操作，请稍候' WHERE id=$1::uuid",
       id,
     );
     return { accepted: true, action_id: String(queued!.id) };

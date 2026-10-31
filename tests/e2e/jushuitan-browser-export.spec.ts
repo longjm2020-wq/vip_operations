@@ -71,6 +71,7 @@ test("会话收集跳过禁止存储的内嵌页，保留主站会话供新窗�
     }),
   );
   await page.goto("https://www.erp321.com/epaas");
+  await page.screenshot({ mask: jstLoginMasks(page), timeout: 5000 });
   const state = await collectJstState(page.context());
   expect(state.sessionStorage).toEqual([
     {
@@ -232,6 +233,7 @@ test("会话恢复后从首页打开库存并选择杭州总仓，忽略隐藏�
     hiddenDuplicate: true,
   });
   const frame = await verifyJstScope(page);
+  await page.screenshot({ mask: jstLoginMasks(page), timeout: 5000 });
   await expect(
     frame.getByRole("button", { name: "导 出", exact: true }),
   ).toBeVisible();
@@ -280,6 +282,7 @@ test("库存查询内容可见，账号密码验证码仍遮盖", async ({ page 
     (element as HTMLElement).hidden = false;
   });
   expect(await jstLoginMasks(page)[0].count()).toBe(6);
+  await page.screenshot({ mask: jstLoginMasks(page), timeout: 5000 });
 });
 test("导出出现范围外商品时拒绝发布", async ({ page }) => {
   await erpFixture(page, "outside");

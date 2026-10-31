@@ -8,6 +8,7 @@ import {
   type Row,
 } from "../../../packages/database/src/index.js";
 import {
+  jushuitanFrameRecoveringNote,
   jushuitanScope,
   jushuitanViewport,
   jushuitanLoginActionSchema,
@@ -267,9 +268,12 @@ async function runLogin(
         if (!context.pages().some((openPage) => !openPage.isClosed()))
           throw new JstBrowserError("云端登录页已关闭，请重新打开登录窗口");
         await db.$executeRawUnsafe(
-          `UPDATE jushuitan_browser_logins SET status='RUNNING',frame_id=NULL,frame_input=NULL,note='聚水潭页面正在切换或加载，正在自动恢复画面；无需重新登录' WHERE id=$1::uuid AND claim_token=$2::uuid AND status IN ${activeLogin}`,
+          `UPDATE jushuitan_browser_logins SET status='RUNNING',frame_id=NULL,frame_input=NULL,note=$3,last_action_id=$4::bigint,last_action_error=$5 WHERE id=$1::uuid AND claim_token=$2::uuid AND status IN ${activeLogin}`,
           job.id,
           token,
+          jushuitanFrameRecoveringNote,
+          lastAction?.id ?? null,
+          lastAction?.error ?? null,
         );
         nextFrame = Date.now() + 1500;
         await delay(650);

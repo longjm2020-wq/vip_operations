@@ -24,6 +24,7 @@ import { CloudSyncOutlined, LoginOutlined } from "@ant-design/icons";
 import { api, queryClient } from "./api";
 import { useUser, when, type Row } from "./shared";
 import {
+  jushuitanFrameRecoveringNote,
   jushuitanLoginActive,
   jushuitanScope,
   type JushuitanLoginInput,
@@ -141,7 +142,12 @@ function JushuitanLogin({
     gcTime: 0,
   });
   const l = q.data,
-    ready = l?.status === "WAITING" && !!l?.frameId && !busy;
+    ready = l?.status === "WAITING" && !!l?.frameId && !busy,
+    recovering =
+      l?.status === "RUNNING" &&
+      l?.note === jushuitanFrameRecoveringNote &&
+      !l?.frameId,
+    canInspect = !busy && (ready || recovering);
   const input = l?.frameInput as JushuitanLoginInput | null | undefined;
   useEffect(() => {
     setText("");
@@ -331,7 +337,7 @@ function JushuitanLogin({
                 </Button>
                 <Button
                   size="small"
-                  disabled={!ready}
+                  disabled={!canInspect || !!pendingInput}
                   onClick={() => void action({ type: "REFRESH" })}
                 >
                   刷新画面页面
@@ -345,7 +351,7 @@ function JushuitanLogin({
             </Button>
             <Button
               type="primary"
-              disabled={!ready || !!pendingInput || !!text}
+              disabled={!canInspect || !!pendingInput || !!text}
               loading={l?.status === "CHECKING"}
               onClick={() => void action({ type: "CHECK" })}
             >
@@ -373,7 +379,15 @@ function JushuitanLogin({
                   : "info"
             }
             title={l.note}
+            description={
+              recovering
+                ? "画面暂不可操作。已登录后可直接点击下方核验并保存；系统会读取当前页面，再验证新窗口能否恢复登录。也可尝试刷新画面页面。"
+                : undefined
+            }
           />
+        )}
+        {recovering && l?.lastActionError && (
+          <Alert type="error" title={l.lastActionError} />
         )}
         {l?.frame && (
           <Button size="small" onClick={() => setZoom((v) => !v)}>

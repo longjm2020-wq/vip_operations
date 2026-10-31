@@ -23,6 +23,8 @@ export const jushuitanScope = {
   home: "https://www.erp321.com/epaas",
 } as const;
 export const jushuitanViewport = { width: 1440, height: 900 };
+export const jushuitanFrameRecoveringNote =
+  "聚水潭页面正在切换或加载，正在自动恢复画面；无需重新登录";
 export const jushuitanLoginActive = [
   "QUEUED",
   "RUNNING",

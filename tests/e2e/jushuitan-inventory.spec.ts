@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { jushuitanFrameRecoveringNote } from "../../packages/contracts/src/jushuitan-inventory.js";
 
 async function fixture(
   page: Page,
@@ -206,6 +207,14 @@ async function fixture(
   return {
     saved,
     actions,
+    recoverFrame() {
+      Object.assign(login, {
+        status: "RUNNING",
+        frameId: null,
+        frameInput: null,
+        note: jushuitanFrameRecoveringNote,
+      });
+    },
     failInput(kind: "request" | "worker") {
       inputFailure = kind;
     },
@@ -223,6 +232,41 @@ async function fixture(
     },
   };
 }
+
+test("画面恢复期间可核验保存，旧画面点击和键盘输入仍停用", async ({ page }) => {
+  const f = await fixture(page);
+  f.recoverFrame();
+  await page.goto("/operations/vip/inventory");
+  await page.getByRole("button", { name: "聚水潭同步", exact: true }).click();
+  await page.getByRole("button", { name: "登录聚水潭", exact: true }).click();
+  const login = page.getByRole("dialog", { name: "登录聚水潭并保存会话" });
+  await expect(
+    login.getByText(jushuitanFrameRecoveringNote, { exact: true }),
+  ).toBeVisible();
+  await expect(
+    login.getByRole("button", { name: "回车", exact: true }),
+  ).toBeDisabled();
+  await expect(
+    login.getByRole("button", { name: "发送输入", exact: true }),
+  ).toBeDisabled();
+  await login
+    .getByRole("img", {
+      name: "聚水潭云端登录画面，点击操作，可拖动完成手动验证",
+    })
+    .click();
+  expect(f.actions).toHaveLength(0);
+  await login
+    .getByRole("button", { name: "刷新画面页面", exact: true })
+    .click();
+  expect(f.actions).toEqual([{ type: "REFRESH" }]);
+  await login
+    .getByRole("button", { name: "核验杭州总仓并保存会话", exact: true })
+    .click();
+  await expect(
+    login.getByText("已核验杭州总仓并加密保存登录会话", { exact: true }),
+  ).toBeVisible();
+  expect(f.actions).toEqual([{ type: "REFRESH" }, { type: "CHECK" }]);
+});
 
 test("管理员保存云端登录、等待完整同步，并查看同款合并来源", async ({
   page,

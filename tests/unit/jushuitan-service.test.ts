@@ -40,6 +40,7 @@ import {
   jushuitanMatches,
 } from "../../apps/api/src/modules/inventory/jushuitan.js";
 import { db } from "../../packages/database/src/index.js";
+import { jushuitanFrameRecoveringNote } from "../../packages/contracts/src/jushuitan-inventory.js";
 import {
   parseJushuitanExport,
   mergeJstExports,
@@ -219,6 +220,45 @@ it("encrypts transient login input and isolates the login owner and frame token"
   );
   expect((await jushuitanLoginView(context(), l.id)).frame).toBeNull();
 });
+it.each(["CHECK", "REFRESH"])(
+  "accepts %s during frame recovery without allowing stale input or concurrent actions",
+  async (type) => {
+    const l = await openJushuitanLogin(context());
+    await query(
+      "UPDATE jushuitan_browser_logins SET status='RUNNING',heartbeat_at=now(),frame_id=NULL,note=$2 WHERE id=$1::uuid",
+      l.id,
+      jushuitanFrameRecoveringNote,
+    );
+    await expect(
+      jushuitanLoginAction(context("8"), l.id, { type }),
+    ).rejects.toMatchObject({ status: 403 });
+    for (const input of [
+      { type: "CLICK", frameId: randomUUID(), point: { x: 0.5, y: 0.5 } },
+      { type: "TEXT", frameId: randomUUID(), value: "private-input" },
+      { type: "KEY", frameId: randomUUID(), key: "Enter" },
+    ])
+      await expect(
+        jushuitanLoginAction(context(), l.id, input),
+      ).rejects.toMatchObject({ status: 409 });
+    expect(await jushuitanLoginAction(context(), l.id, { type })).toMatchObject(
+      { accepted: true },
+    );
+    // Worker removes a queued action before executing it. Its RUNNING state must
+    // still block a second submission until it publishes a new outcome.
+    await query("DELETE FROM jushuitan_browser_actions");
+    await expect(
+      jushuitanLoginAction(context(), l.id, { type }),
+    ).rejects.toMatchObject({ status: 409 });
+    await query(
+      "UPDATE jushuitan_browser_logins SET note=$2,expires_at=now()-interval '1 minute' WHERE id=$1::uuid",
+      l.id,
+      jushuitanFrameRecoveringNote,
+    );
+    await expect(
+      jushuitanLoginAction(context(), l.id, { type }),
+    ).rejects.toMatchObject({ status: 409 });
+  },
+);
 it("coalesces syncs and publishes all mapped sources and original bytes atomically", async () => {
   await ready();
   const first = await queueJushuitan(context()),
