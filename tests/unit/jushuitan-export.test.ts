@@ -230,7 +230,7 @@ it("reads bounded ZIP64 exports and rejects excessive expanded size", () => {
     parseJushuitanExport(zip64Entries(file([row()]), true), 1),
   ).toThrow("超过100MB");
 });
-it("sums explicit same-color/size mappings and counts a source only once across both queries", () => {
+it("sums explicit identifier mappings and counts a source only once across both queries", () => {
   const direct = parseJushuitanExport(file([row()]), 1),
     alias = parseJushuitanExport(
       file([row("XFA16-31196L-粉色-L", target.sku_code, 10)]),
@@ -244,15 +244,26 @@ it("sums explicit same-color/size mappings and counts a source only once across 
   });
   expect(result.sources).toHaveLength(2);
 });
-it("does not merge samples, guessed style aliases, different colors/sizes or conflicting identifiers", () => {
+it.each(["浅绿色;L", "绿色;大码", ""])(
+  "uses explicit identifiers even when supplier descriptions differ or are missing: %s",
+  (description) => {
+    const mapped = row("supplier-alias", target.sku_code, 10);
+    mapped[2] = description;
+    const result = mergeJstExports(
+      [parseJushuitanExport(file([row(), mapped]), 2)],
+      [target],
+    );
+    expect(result.records[0].physical_qty).toBe(15);
+    expect(result.sources[1]).toMatchObject({
+      target_code: target.sku_code,
+      color_size: description,
+    });
+  },
+);
+it("does not merge samples, guessed style aliases or conflicting identifiers", () => {
   expect(() =>
     mergeJstExports([parseJushuitanExport(file([row("sample")]), 1)], [target]),
   ).toThrow("范围外");
-  const mismatch = row("alias", target.sku_code, 10);
-  mismatch[2] = "米白色;L";
-  expect(() =>
-    mergeJstExports([parseJushuitanExport(file([mismatch]), 1)], [target]),
-  ).toThrow("颜色或尺码");
   expect(() =>
     mergeJstExports(
       [parseJushuitanExport(file([row(target.sku_code, "OTHER")]), 1)],

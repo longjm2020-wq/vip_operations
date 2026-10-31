@@ -123,7 +123,7 @@ beforeEach(async () => {
   await fixture.db!
     .exec(`DELETE FROM jushuitan_inventory_settings;TRUNCATE jushuitan_inventory_runs,jushuitan_browser_logins CASCADE;
     INSERT INTO jushuitan_inventory_settings(id,worker_heartbeat_at,browser_encryption_ready) VALUES(1,now(),true);
-    TRUNCATE idempotency_records,audit_logs;UPDATE users SET status='ACTIVE';UPDATE skus SET color_name='粉色';`);
+    TRUNCATE idempotency_records,audit_logs;UPDATE users SET status='ACTIVE';UPDATE skus SET color_name='粉色',barcode=NULL;`);
 });
 afterAll(async () => {
   await fixture.db?.close();
@@ -382,13 +382,24 @@ it("never lets a stale claim or changed configuration overwrite the last complet
     ),
   ).toHaveLength(0);
 });
-it("rejects catalog changes and revoked actors before publishing", async () => {
+it("allows renamed color descriptions when product identifiers are unchanged", async () => {
   await ready();
   const { job, token } = await claim();
-  await query("UPDATE skus SET color_name='白色' WHERE id=1");
+  await query("UPDATE skus SET color_name='浅粉色' WHERE id=1");
+  await publish(job, token);
+  expect((await jushuitanStatus()).active_run_id).toBe(job.id);
+  expect(
+    (await query("SELECT physical_qty FROM jushuitan_inventory_snapshots"))[0]
+      .physical_qty,
+  ).toBe(15);
+});
+it("rejects changed product identifiers and revoked actors before publishing", async () => {
+  await ready();
+  const { job, token } = await claim();
+  await query("UPDATE skus SET barcode='NEW-CODE' WHERE id=1");
   await expect(publish(job, token)).rejects.toThrow("网站商品");
   await fixture.db!.exec(
-    "UPDATE skus SET color_name='粉色';UPDATE users SET status='DISABLED' WHERE id=7",
+    "UPDATE skus SET barcode=NULL;UPDATE users SET status='DISABLED' WHERE id=7",
   );
   await expect(publish(job, token)).rejects.toThrow("发起者");
   expect(

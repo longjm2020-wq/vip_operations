@@ -552,7 +552,7 @@ async function collectJstInventory(
             "导出文件包含本批网站条码范围外的商品，未发布库存",
           );
         reports.push(report);
-        // Reject an inconsistent mapping as soon as it is downloaded instead
+        // Reject conflicting identifiers as soon as they are downloaded instead
         // of discovering it after every remaining ERP query has completed.
         mergeJstExports(reports, targets);
         files.push({ bytes, fileName: download.suggestedFilename() });

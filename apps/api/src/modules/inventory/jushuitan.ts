@@ -426,23 +426,18 @@ export async function publishJstExport(
         );
       const current = await rows(
         tx,
-        "SELECT sku_code,barcode,color_name,size_name FROM skus WHERE sku_code=ANY($1::text[]) ORDER BY sku_code",
+        "SELECT sku_code,barcode FROM skus WHERE sku_code=ANY($1::text[]) ORDER BY sku_code",
         report.targets.map((t) => t.sku_code),
       );
       const stable = (records: Row[]) =>
         JSON.stringify(
           [...records]
             .sort((a, b) => a.sku_code.localeCompare(b.sku_code))
-            .map((r) => [
-              r.sku_code,
-              r.barcode ?? null,
-              r.color_name,
-              r.size_name,
-            ]),
+            .map((r) => [r.sku_code, r.barcode ?? null]),
         );
       if (stable(current) !== stable(report.targets))
         throw new JstExportError(
-          "同步期间网站商品编码、颜色或尺码已变化，请重新同步",
+          "同步期间网站商品编码或条码已变化，请重新同步",
         );
       await tx.$executeRawUnsafe(
         `INSERT INTO jushuitan_inventory_snapshots(run_id,sku_code,physical_qty,reserved_qty,damaged_qty,in_transit_qty,transfer_transit_qty,incoming_qty,return_qty,virtual_qty,available_qty)

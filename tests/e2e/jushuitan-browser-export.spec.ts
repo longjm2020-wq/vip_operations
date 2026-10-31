@@ -120,7 +120,7 @@ async function erpFixture(
     | "valid"
     | "outside"
     | "unscoped"
-    | "color_conflict"
+    | "color_difference"
     | "stale_count" = "valid",
   options: {
     homeOnly?: boolean;
@@ -143,7 +143,7 @@ async function erpFixture(
           : mapping
             ? [
                 native,
-                mode === "color_conflict"
+                mode === "color_difference"
                   ? alias.map((v, i) => (i === 2 ? "黑色;L" : v))
                   : alias,
               ]
@@ -271,8 +271,8 @@ test("属性5使用较小批次仍覆盖所有网站编码和最后一个余数�
   }
 });
 
-test("首批发现颜色映射冲突即停止，不继续查询剩余批次", async ({ page }) => {
-  await erpFixture(page, "color_conflict");
+test("颜色描述不同仍按明确编码汇总，并继续完成全部批次", async ({ page }) => {
+  await erpFixture(page, "color_difference");
   const targets = [
     target,
     ...Array.from({ length: 200 }, (_, index) => ({
@@ -280,18 +280,19 @@ test("首批发现颜色映射冲突即停止，不继续查询剩余批次", as
       sku_code: `MISSING-${index}`,
     })),
   ];
-  await expect(
-    exportJstInventory(
-      page,
-      targets,
-      async () => {},
-      async () => {},
-    ),
-  ).rejects.toThrow("颜色或尺码");
+  const result = await exportJstInventory(
+    page,
+    targets,
+    async () => {},
+    async () => {},
+  );
   const queries = JSON.parse(
     await page.frameLocator("iframe").locator("#query-records").innerText(),
   );
-  expect(queries).toHaveLength(2);
+  expect(queries).toHaveLength(7);
+  expect(result.report.records[0].physical_qty).toBe(15);
+  expect(result.report.sources).toHaveLength(2);
+  expect(result.report.sources[1].color_size).toBe("黑色;L");
 });
 
 test("查询出现旧的全仓条数时重试相同条件，范围确认后才导出", async ({

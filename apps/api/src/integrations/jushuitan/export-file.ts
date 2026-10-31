@@ -327,17 +327,8 @@ export function mergeJstExports(
       const target = direct ?? mapped;
       if (!target)
         throw new JstExportError("聚水潭返回了网站范围外的商品，未发布库存");
-      if (!direct) {
-        const parts = r.color_size.split(/[;；]/).map((v) => v.trim());
-        if (
-          parts.length !== 2 ||
-          parts[0] !== target.color_name.trim() ||
-          parts[1].toUpperCase() !== target.size_name.trim().toUpperCase()
-        )
-          throw new JstExportError(
-            `映射商品${r.sku_code}的颜色或尺码与网站不一致（聚水潭：${r.color_size}；网站：${target.color_name};${target.size_name}），请核对其它属性5`,
-          );
-      }
+      // Explicit SKU/barcode mappings define identity. Supplier color/size
+      // descriptions are retained for reference, never used to reject a match.
       sources.push({ ...r, target_code: target.sku_code });
       let sum = sums.get(target.sku_code);
       if (!sum) {
