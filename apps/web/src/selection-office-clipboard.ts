@@ -1,5 +1,5 @@
 export type OfficeClipboardImage = { rowId: string; columnKey: string; imageId: string };
-export type OfficeClipboardCell = { text: string; image?: OfficeClipboardImage };
+export type OfficeClipboardCell = { text: string; image?: OfficeClipboardImage; imageLabel?: string };
 type ReadyImage = { url: string; width: number; height: number; jpeg?: Blob; png?: Blob };
 type ImageLink = { rowId: string; columnKey: string; url: string };
 export type OfficeClipboardPayload = { cells: OfficeClipboardCell[][]; text: string; html: string; images: ReadonlyMap<string, ReadyImage>; refreshAfter: number };
@@ -29,7 +29,9 @@ async function prepareOfficeImages(
   signal: AbortSignal,
   onProgress?: (completed: number, total: number) => void,
 ) {
-  const selected = cells.flatMap(row => row.flatMap(cell => cell.image ? [cell.image] : []));
+  const entries = cells.flatMap((row, rowIndex) => row.flatMap((cell, columnIndex) => cell.image
+    ? [{ image: cell.image, label: cell.imageLabel || `选区第 ${rowIndex + 1} 行，第 ${columnIndex + 1} 列` }] : []));
+  const selected = entries.map(entry => entry.image);
   if (selected.length > 500) throw Error("每次最多复制 500 个图片单元格，请分段复制");
   if (selected.some(image => !/^[1-9]\d*$/.test(image.rowId))) throw Error("请先保存图片所在行，再复制到 Excel / WPS");
   const links = await prepare(selected);
@@ -40,35 +42,41 @@ async function prepareOfficeImages(
   const singleImage = cells.length === 1 && cells[0].length === 1;
   await Promise.all(Array.from({ length: Math.min(4, selected.length) }, async () => {
     while (next < selected.length) {
-      const image = selected[next++];
+      const index = next++, { image, label } = entries[index];
       signal.throwIfAborted();
-      const link = byKey.get(imageKey(image));
-      if (!link) throw Error("图片复制资料不完整，请刷新后重新复制");
-      const url = new URL(link, window.location.origin);
-      if (url.origin !== window.location.origin || !url.pathname.startsWith("/api/v1/selection-clipboard/"))
-        throw Error("图片复制链接无效，请刷新后重新复制");
-      const response = await fetch(url, { signal, credentials: "same-origin", cache: "no-store", referrerPolicy: "no-referrer" });
-      if (!response.ok) {
-        const result = await response.json().catch(() => null);
-        throw Error(result?.error?.message || "部分图片无法读取或权限已变化，请刷新后重新复制");
-      }
-      const blob = await response.blob();
-      if (blob.type !== "image/jpeg" || blob.size > 1024 * 1024) throw Error("图片格式或大小异常，请重新上传该图片后复制");
-      const bitmap = await createImageBitmap(blob);
       try {
-        const scale = Math.min(1, 110 / bitmap.width, 94 / bitmap.height);
-        const ready: ReadyImage = { url: url.href, width: Math.max(1, Math.round(bitmap.width * scale)), height: Math.max(1, Math.round(bitmap.height * scale)), jpeg: blob };
-        if (singleImage) {
-          const canvas = document.createElement("canvas");
-          canvas.width = bitmap.width; canvas.height = bitmap.height;
-          const context = canvas.getContext("2d");
-          if (!context) throw Error("浏览器无法复制图片");
-          context.drawImage(bitmap, 0, 0);
-          ready.png = await new Promise<Blob>((resolve, reject) => canvas.toBlob(blob => blob ? resolve(blob) : reject(Error("图片复制失败")), "image/png"));
+        const link = byKey.get(imageKey(image));
+        if (!link) throw Error("图片复制资料不完整，请刷新后重新复制");
+        const url = new URL(link, window.location.origin);
+        if (url.origin !== window.location.origin || !url.pathname.startsWith("/api/v1/selection-clipboard/"))
+          throw Error("图片复制链接无效，请刷新后重新复制");
+        const response = await fetch(url, { signal, credentials: "same-origin", cache: "no-store", referrerPolicy: "no-referrer" });
+        if (!response.ok) {
+          const result = await response.json().catch(() => null);
+          throw Error(result?.error?.message || "部分图片无法读取或权限已变化，请刷新后重新复制");
         }
-        prepared.set(imageKey(image), ready);
-        onProgress?.(prepared.size, selected.length);
-      } finally { bitmap.close(); }
+        const blob = await response.blob();
+        if (blob.type !== "image/jpeg" || blob.size > 1024 * 1024) throw Error("图片格式或大小异常，请重新上传该图片后复制");
+        const bitmap = await createImageBitmap(blob);
+        try {
+          const scale = Math.min(1, 110 / bitmap.width, 94 / bitmap.height);
+          const ready: ReadyImage = { url: url.href, width: Math.max(1, Math.round(bitmap.width * scale)), height: Math.max(1, Math.round(bitmap.height * scale)), jpeg: blob };
+          if (singleImage) {
+            const canvas = document.createElement("canvas");
+            canvas.width = bitmap.width; canvas.height = bitmap.height;
+            const context = canvas.getContext("2d");
+            if (!context) throw Error("浏览器无法复制图片");
+            context.drawImage(bitmap, 0, 0);
+            ready.png = await new Promise<Blob>((resolve, reject) => canvas.toBlob(blob => blob ? resolve(blob) : reject(Error("图片复制失败")), "image/png"));
+          }
+          prepared.set(imageKey(image), ready);
+          onProgress?.(prepared.size, selected.length);
+        } finally { bitmap.close(); }
+      } catch (error) {
+        signal.throwIfAborted();
+        const reason = error instanceof TypeError ? "图片连接中断，请重试" : (error as Error).message || "图片读取失败，请重试";
+        throw Error(`${label}（第 ${index + 1}/${selected.length} 张图片）准备失败：${reason}`);
+      }
     }
   }));
   signal.throwIfAborted();

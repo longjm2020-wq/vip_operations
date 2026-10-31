@@ -6,7 +6,7 @@ import { selectionScope } from "../../packages/database/src/selection-scope.js";
 const state = vi.hoisted(() => ({ access: vi.fn(), read: vi.fn() }));
 vi.mock("../../apps/api/src/modules/style-selections/protection.js", () => ({ imageAccess: state.access }));
 vi.mock("../../apps/api/src/modules/style-selections/image-storage.js", () => ({ readStoredImage: state.read }));
-import { allowedTitleImageUrl, titleImageData } from "../../apps/api/src/modules/style-selections/title-ai-images.js";
+import { allowedTitleImageUrl, readSelectionImageBytes, titleImageData } from "../../apps/api/src/modules/style-selections/title-ai-images.js";
 const context: Context = { actor: { id: "7", username: "editor", displayName: "Editor", permissions: ["selection.read", "selection.manage"] }, requestId: "image-test" };
 const imageId = "123e4567-e89b-42d3-a456-426614174000";
 afterEach(() => { vi.clearAllMocks(); vi.unstubAllGlobals(); });
@@ -70,5 +70,15 @@ describe("authorized bounded product image evidence", () => {
     vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, headers: new Headers({ "content-type": "image/png" }), body: { getReader: () => ({ read, cancel }) } })));
     await expect(titleImageData(context, "https://images-erp.sursung.com/prod/erp/ItemSku/123/photo.png")).rejects.toThrow("Image too large");
     expect(cancel).toHaveBeenCalledOnce(); expect(read).toHaveBeenCalledOnce();
+  });
+  it.each(["declared", "streamed"])("enforces the clipboard's separate 32 MB limit for %s image sizes", async mode => {
+    const cancel = vi.fn(), read = vi.fn().mockResolvedValue({ done: false, value: new Uint8Array(33 * 1024 * 1024) });
+    const headers = new Headers({ "content-type": "image/png" });
+    if (mode === "declared") headers.set("content-length", String(33 * 1024 * 1024));
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, headers, body: { cancel, getReader: () => ({ read, cancel }) } })));
+    await expect(readSelectionImageBytes(context, "https://images.sursung.com/prod/item/123/photo.png", { maxBytes: 32 * 1024 * 1024, timeoutMs: 15000 }))
+      .rejects.toMatchObject({ code: "SELECTION_IMAGE_TOO_LARGE" });
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(read).toHaveBeenCalledTimes(mode === "declared" ? 0 : 1);
   });
 });

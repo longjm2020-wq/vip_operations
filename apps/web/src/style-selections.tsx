@@ -1236,7 +1236,8 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
       const images = column.key === "images" ? rowImages(row) : column.key === "labelImages" ? rowLabelImages(row)
         : column.custom && column.type === "image" ? fieldImages(valueAt(row, column)) : [];
       const image = images[0];
-      return { text, ...(image ? { image: { rowId: String(row.id || ""), columnKey: column.key, imageId: image.id } } : {}) };
+      return { text, ...(image ? { image: { rowId: String(row.id || ""), columnKey: column.key, imageId: image.id },
+        imageLabel: `${readableSelectionCell(row, "xutiStyleNo") && row.xutiStyleNo ? row.xutiStyleNo : `第 ${rowNumberByKey.get(row._key)} 行`} · ${column.label}` } : {}) };
     }));
     const text = positions.length === 1 ? cells[0][0].text
       : cells.map(row => row.map(({ text: value }) => {

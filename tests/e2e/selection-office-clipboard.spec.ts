@@ -4,13 +4,15 @@ import ExcelJS from "exceljs";
 import { selectionLayoutSchema } from "../../packages/contracts/src/selection-layout.js";
 
 const cell = (page: Page, id: number, key: string) => page.locator(`td[data-selection-row="${id}"][data-selection-column="${key}"]`);
-async function fixture(page: Page, options: { count?: number; hidden?: boolean; failed?: boolean; waitForPictures?: Promise<void> } = {}) {
+async function fixture(page: Page, options: { count?: number; hidden?: boolean; failed?: boolean; wide?: boolean; failedImage?: number; waitForPictures?: Promise<void> } = {}) {
   const fields = [
     { key: "images", label: "图片", type: "image", width: 120 },
     { key: "xutiStyleNo", label: "序缇款号", type: "text", width: 160 },
     { key: "custom:photos", label: "细节图片", type: "image", custom: true, width: 120 },
     { key: "material", label: "成分", type: "text", width: 160 },
   ];
+  if (options.wide) fields.push(...["supplierStyleNo", "supplierCode", "color"].map(key => ({ key, label: key, type: "text", width: 120 })));
+  let failedImage = options.failedImage;
   const records = Array.from({ length: options.count || 3 }, (_, index) => ({
     id: String(index + 1), sortOrder: index, xutiStyleNo: `000${index + 1}`, material: "第一行\n第二行",
     images: [{ id: `first-${index}`, url: `/test-images/${index}.jpg` }, { id: `second-${index}`, url: `/test-images/second-${index}.jpg` }],
@@ -57,6 +59,9 @@ async function fixture(page: Page, options: { count?: number; hidden?: boolean; 
     }
     if (path.includes("/selection-clipboard/")) {
       imageRequests.push(path);
+      if (Number(path.split("/").at(-1)?.split(".")[0]) === failedImage) {
+        await route.fulfill({ status: 400, json: { error: { code: "CLIPBOARD_IMAGE_TOO_LARGE", message: "原图超过 32 MB，请压缩或重新上传后复制" } } }); return;
+      }
       await options.waitForPictures;
       await route.fulfill({ contentType: "image/jpeg", body: jpeg }); return;
     }
@@ -64,7 +69,7 @@ async function fixture(page: Page, options: { count?: number; hidden?: boolean; 
   });
   await page.goto("/style-selections");
   await expect(cell(page, 1, "images")).toBeVisible();
-  return { minted, imageRequests };
+  return { minted, imageRequests, recoverPictures: () => { failedImage = undefined; } };
 }
 async function copy(page: Page) {
   return page.locator(".selection-sheet table").evaluate(element => {
@@ -74,6 +79,39 @@ async function copy(page: Page) {
   });
 }
 const copies = (page: Page) => page.evaluate(() => (window as any).officeCopies as Record<string, string>[]);
+
+test("62 rows and 124 pictures retain all seven columns in the clipboard and embedded workbook", async ({ page }) => {
+  const state = await fixture(page, { count: 62, wide: true });
+  for (const key of ["images", "xutiStyleNo", "custom:photos", "material", "supplierStyleNo", "supplierCode", "color"])
+    await page.locator(`th[data-selection-column="${key}"]`).click({ modifiers: key === "images" ? [] : ["Control"] });
+  await copy(page);
+  await expect(page.getByText("62 行 · 7 列 · 124 张图片（每个图片格第一张）")).toBeVisible();
+  await expect.poll(async () => (await copies(page)).length).toBe(1);
+  expect(state.minted[0]).toHaveLength(124);
+  expect((await copies(page))[0]["text/html"].match(/<img /g)).toHaveLength(124);
+  expect((await copies(page))[0]["text/html"].match(/<td /g)).toHaveLength(62 * 7);
+  const downloaded = page.waitForEvent("download");
+  await page.getByRole("button", { name: "下载带图表格" }).click();
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.readFile((await (await downloaded).path())!);
+  expect(workbook.worksheets[0].rowCount).toBe(62);
+  expect(workbook.worksheets[0].getImages()).toHaveLength(124);
+  expect(workbook.worksheets[0].getCell(23, 2).value).toBe("00023");
+});
+
+test("the 45th failing picture identifies its style and field and a fresh preparation can succeed", async ({ page }) => {
+  const state = await fixture(page, { count: 62, failedImage: 44 });
+  await page.locator('th[data-selection-column="images"]').click();
+  await page.locator('th[data-selection-column="custom:photos"]').click({ modifiers: ["Control"] });
+  await copy(page);
+  await expect(page.getByText("00023 · 图片（第 45/124 张图片）准备失败：原图超过 32 MB，请压缩或重新上传后复制")).toBeVisible();
+  await expect(page.getByRole("button", { name: "下载带图表格" })).toBeDisabled();
+  expect(await copies(page)).toHaveLength(0);
+  state.recoverPictures();
+  await page.getByRole("button", { name: "重新准备" }).click();
+  await expect.poll(async () => (await copies(page)).length).toBe(1);
+  expect((await copies(page))[0]["text/html"].match(/<img /g)).toHaveLength(124);
+});
 
 for (const selection of ["headers", "filled-axis shortcut"] as const) {
 test(`multiple rows selected with ${selection} paste as an editable HTML grid with one picture each and aligned style numbers`, async ({ page }) => {

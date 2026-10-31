@@ -7,6 +7,7 @@ import type { Context } from "../../core.js";
 // Imported Jushuitan originals can exceed 2 MB. Bound the input before decoding,
 // then send only the existing 1000px / 500 KB JPEG derivative to the model.
 const maxImageBytes = 8 * 1024 * 1024;
+const imageTooLarge = () => Object.assign(Error("Image too large"), { code: "SELECTION_IMAGE_TOO_LARGE" });
 
 export function allowedTitleImageUrl(value: string): string | null {
   try {
@@ -20,9 +21,12 @@ export function allowedTitleImageUrl(value: string): string | null {
     return url.toString();
   } catch { return null; }
 }
-async function cappedRemoteImage(url: string) {
-  const response = await fetch(url, { redirect: "error", signal: AbortSignal.timeout(8000), headers: { Accept: "image/jpeg,image/png,image/webp" } });
-  if (!response.ok || !/^image\/(?:jpeg|png|webp)(?:;|$)/iu.test(response.headers.get("content-type") || "") || Number(response.headers.get("content-length")) > maxImageBytes) {
+async function cappedRemoteImage(url: string, maxBytes: number, timeoutMs: number) {
+  const response = await fetch(url, { redirect: "error", signal: AbortSignal.timeout(timeoutMs), headers: { Accept: "image/jpeg,image/png,image/webp" } });
+  if (Number(response.headers.get("content-length")) > maxBytes) {
+    await response.body?.cancel(); throw imageTooLarge();
+  }
+  if (!response.ok || !/^image\/(?:jpeg|png|webp)(?:;|$)/iu.test(response.headers.get("content-type") || "")) {
     await response.body?.cancel(); throw Error("Unsupported remote image");
   }
   const reader = response.body?.getReader();
@@ -32,7 +36,7 @@ async function cappedRemoteImage(url: string) {
     for (;;) {
       const result = await reader.read(); if (result.done) break;
       size += result.value.length;
-      if (size > maxImageBytes) throw Error("Image too large");
+      if (size > maxBytes) throw imageTooLarge();
       pieces.push(result.value);
     }
   } finally { await reader.cancel(); }
@@ -40,7 +44,7 @@ async function cappedRemoteImage(url: string) {
 }
 
 /** The caller must pass only images already selected from its protected row projection. */
-export async function readSelectionImageBytes(c: Context, url: string) {
+export async function readSelectionImageBytes(c: Context, url: string, limits: { maxBytes: number; timeoutMs: number } = { maxBytes: maxImageBytes, timeoutMs: 8000 }) {
   const scope = selectionScope.getStore() || "";
   const stored = /^\/api\/v1\/style-selections\/images\/([0-9a-f-]{36})(?:\?tableId=([1-9]\d*))?$/iu.exec(url);
   let bytes: Buffer;
@@ -52,9 +56,10 @@ export async function readSelectionImageBytes(c: Context, url: string) {
     bytes = Buffer.from(url.slice(url.indexOf(",") + 1), "base64");
   } else {
     const allowed = allowedTitleImageUrl(url); if (!allowed) return null;
-    bytes = await cappedRemoteImage(allowed);
+    bytes = await cappedRemoteImage(allowed, limits.maxBytes, limits.timeoutMs);
   }
-  if (!bytes.length || bytes.length > maxImageBytes) return null;
+  if (bytes.length > limits.maxBytes) throw imageTooLarge();
+  if (!bytes.length) return null;
   return bytes;
 }
 

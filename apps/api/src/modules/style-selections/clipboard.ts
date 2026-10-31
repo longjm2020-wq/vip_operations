@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { HttpException } from "@nestjs/common";
 import sharp from "sharp";
 import { z } from "zod";
 import { db, one, rows, camel, type Row } from "../../../../../packages/database/src/index.js";
@@ -11,6 +12,9 @@ import * as protection from "./protection.js";
 import { readSelectionImageBytes } from "./title-ai-images.js";
 
 const lifetime = 15 * 60_000;
+// Public product originals can exceed the AI reader's 8 MB input budget.
+// Clipboard still returns only a 240px JPEG, with the same pixel/format checks.
+const clipboardImageLimits = { maxBytes: 32 * 1024 * 1024, timeoutMs: 15000 };
 const itemSchema = z.object({
   rowId: id,
   columnKey: z.string().regex(/^(?:images|labelImages|custom:[a-zA-Z0-9:-]+)$/).max(100),
@@ -81,10 +85,26 @@ export async function readClipboardImage(token: string, index: string, requestId
     ]);
     const image = selectedImage(row, item!, p, c);
     if (hash(image.url) !== item!.urlHash) fail("CONFLICT", "图片已变化，请重新复制", 409);
-    const bytes = await readSelectionImageBytes(c, image.url);
+    let bytes: Buffer | null;
+    try { bytes = await readSelectionImageBytes(c, image.url, clipboardImageLimits); }
+    catch (error) {
+      if (error instanceof HttpException) throw error;
+      if ((error as { code?: string }).code === "SELECTION_IMAGE_TOO_LARGE")
+        fail("CLIPBOARD_IMAGE_TOO_LARGE", "原图超过 32 MB，请压缩或重新上传后复制", 400);
+      console.warn(JSON.stringify({ event: "selection-clipboard-image-failed", requestId, rowId: item!.rowId,
+        columnKey: item!.columnKey, stage: "read", errorType: (error as Error).name }));
+      fail("CLIPBOARD_IMAGE_UNAVAILABLE", "来源图片暂时无法读取，请重试；仍失败时请重新上传该图片", 502);
+    }
     if (!bytes) fail("VALIDATION_ERROR", "图片无法读取，请先上传图片后重新复制", 400);
-    return sharp(bytes!, { limitInputPixels: 20_000_000, animated: false, failOn: "error" })
-      .rotate().resize({ width: 240, height: 240, fit: "inside", withoutEnlargement: true })
-      .flatten({ background: "#ffffff" }).jpeg({ quality: 85 }).toBuffer();
+    try {
+      return await sharp(bytes!, { limitInputPixels: 20_000_000, animated: false, failOn: "error" })
+        .rotate().resize({ width: 240, height: 240, fit: "inside", withoutEnlargement: true })
+        .flatten({ background: "#ffffff" }).jpeg({ quality: 85 }).toBuffer();
+    } catch (error) {
+      const tooLarge = /pixel limit/i.test(String(error));
+      console.warn(JSON.stringify({ event: "selection-clipboard-image-failed", requestId, rowId: item!.rowId,
+        columnKey: item!.columnKey, stage: "convert", reason: tooLarge ? "pixel-limit" : "decode" }));
+      fail("CLIPBOARD_IMAGE_INVALID", tooLarge ? "原图超过 2000 万像素，请缩小或重新上传后复制" : "图片内容无法转换，请重新上传完整的 JPG、PNG 或 WebP 图片", 400);
+    }
   });
 }
