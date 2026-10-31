@@ -73,10 +73,20 @@ async function copy(page: Page) {
 }
 const copies = (page: Page) => page.evaluate(() => (window as any).officeCopies as Record<string, string>[]);
 
-test("multiple rows paste as an editable HTML grid with one picture each and aligned style numbers", async ({ page }) => {
+for (const selection of ["headers", "filled-axis shortcut"] as const) {
+test(`multiple rows selected with ${selection} paste as an editable HTML grid with one picture each and aligned style numbers`, async ({ page }) => {
   const state = await fixture(page);
-  await page.locator('th[data-selection-column="images"]').click();
-  await page.locator('th[data-selection-column="xutiStyleNo"]').click({ modifiers: ["Control"] });
+  if (selection === "headers") {
+    await page.locator('th[data-selection-column="images"]').click();
+    await page.locator('th[data-selection-column="xutiStyleNo"]').click({ modifiers: ["Control"] });
+  } else {
+    const start = (await cell(page, 1, "images").boundingBox())!, end = (await cell(page, 1, "xutiStyleNo").boundingBox())!;
+    await page.mouse.move(start.x + 3, start.y + start.height / 2); await page.mouse.down();
+    await page.mouse.move(end.x + 3, end.y + end.height / 2, { steps: 6 }); await page.mouse.up();
+    await expect(page.locator("td.selection-cell-active")).toHaveCount(2);
+    await page.keyboard.press("Control+Shift+ArrowDown");
+    await expect(page.locator("td.selection-cell-active")).toHaveCount(6);
+  }
   const fallback = await copy(page);
   await expect.poll(async () => (await copies(page)).length).toBe(1);
   expect(state.minted[0].map(image => image.imageId)).toEqual(["first-0", "first-1", "first-2"]);
@@ -90,6 +100,7 @@ test("multiple rows paste as an editable HTML grid with one picture each and ali
   expect(fallback.text).toContain("\t0002");
   await expect(page.getByText("图文已复制，可粘贴到 Excel / WPS（每格一张图片）")).toBeVisible();
 });
+}
 
 test("a single custom picture cell also includes native PNG clipboard data", async ({ page }) => {
   const state = await fixture(page);

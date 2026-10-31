@@ -104,6 +104,14 @@ async function fixture(page: Page, readonly = false, choiceFields = false, rowCo
 const cell = (page: Page, row: number, column: string) => page.locator(`td[data-selection-row="shortcut-${row}"][data-selection-column="${column}"]`);
 const columnHeader = (page: Page, key: string) => page.locator(`thead th[data-selection-column="${key}"]`);
 const columnOrder = (page: Page) => page.locator("thead th[data-selection-column]").evaluateAll(elements => elements.map(element => (element as HTMLElement).dataset.selectionColumn));
+async function dragCells(page: Page, fromRow: number, fromColumn: string, toRow: number, toColumn: string) {
+  const start = (await cell(page, fromRow, fromColumn).boundingBox())!;
+  const end = (await cell(page, toRow, toColumn).boundingBox())!;
+  await page.mouse.move(start.x + 3, start.y + 3);
+  await page.mouse.down();
+  await page.mouse.move(end.x + 3, end.y + 3, { steps: 8 });
+  await page.mouse.up();
+}
 async function photoFixture(page: Page, readonly = false) {
   await fixture(page, readonly);
   const png = await page.evaluate(() => {
@@ -228,6 +236,48 @@ test("filled-axis shortcuts include internal gaps and zero but stop before trail
   await expect(cell(page, 20, "xutiStyleNo")).not.toHaveClass(/selection-cell-active/);
 });
 
+test("filled-axis shortcuts keep mouse-selected image and style columns when extending down and reversing up", async ({ page }) => {
+  await fixture(page);
+  await dragCells(page, 2, "images", 2, "xutiStyleNo");
+  await expect(page.locator("td.selection-cell-active")).toHaveCount(3);
+  await page.keyboard.press("Control+Shift+ArrowDown");
+  // The style column has data beyond the last picture; all selected columns use that boundary.
+  await expect(page.locator("td.selection-cell-active")).toHaveCount(39);
+  for (const key of ["images", "labelImages", "xutiStyleNo"]) {
+    await expect(cell(page, 2, key)).toHaveClass(/selection-cell-active/);
+    await expect(cell(page, 14, key)).toHaveClass(/selection-cell-active/);
+    await expect(cell(page, 1, key)).not.toHaveClass(/selection-cell-active/);
+    await expect(cell(page, 15, key)).not.toHaveClass(/selection-cell-active/);
+  }
+  await page.keyboard.press("Control+Shift+ArrowUp");
+  await expect(page.locator("td.selection-cell-active")).toHaveCount(9);
+  await expect(cell(page, 3, "images")).not.toHaveClass(/selection-cell-active/);
+  await page.keyboard.press("Meta+Shift+ArrowDown");
+  await expect(page.locator("td.selection-cell-active")).toHaveCount(39);
+  await page.keyboard.press("Control+Shift+ArrowDown");
+  await expect(page.locator("td.selection-cell-active")).toHaveCount(39);
+});
+
+test("filled-axis horizontal shortcuts keep all selected rows and use their farthest content", async ({ page }) => {
+  await fixture(page, true);
+  await dragCells(page, 2, "images", 3, "xutiStyleNo");
+  await expect(page.locator("td.selection-cell-active")).toHaveCount(6);
+  await page.keyboard.press("Control+Shift+ArrowRight");
+  const columns = await columnOrder(page);
+  const expectedColumns = columns.slice(columns.indexOf("images"), columns.indexOf("material") + 1);
+  await expect(page.locator("td.selection-cell-active")).toHaveCount(expectedColumns.length * 2);
+  await expect(cell(page, 2, "material")).toHaveClass(/selection-cell-active/);
+  await expect(cell(page, 3, "material")).toHaveClass(/selection-cell-active/);
+  await expect(cell(page, 1, "material")).not.toHaveClass(/selection-cell-active/);
+  await expect(cell(page, 4, "material")).not.toHaveClass(/selection-cell-active/);
+  await page.keyboard.press("Control+Shift+ArrowLeft");
+  await expect(page.locator("td.selection-cell-active")).toHaveCount(2);
+  await expect(cell(page, 2, "images")).toHaveClass(/selection-cell-active/);
+  await expect(cell(page, 3, "images")).toHaveClass(/selection-cell-active/);
+  await page.keyboard.press("Control+Shift+ArrowRight");
+  await expect(page.locator("td.selection-cell-active")).toHaveCount(expectedColumns.length * 2);
+});
+
 test("filled-axis selection from a middle virtual row copies only its forward range for readonly users", async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem("style-selection-page-size-v1", "5000"));
   await fixture(page, true, false, 260);
@@ -245,6 +295,19 @@ test("filled-axis selection from a middle virtual row copies only its forward ra
   expect(copied.split("\n")[0]).toBe("SHORTCUT-87");
   expect(copied.split("\n").at(-1)).toBe("SHORTCUT-259");
   expect(copied).not.toContain("SHORTCUT-86");
+  await sheet.evaluate(element => { element.scrollTop = 87 * 120; });
+  await expect(cell(page, 87, "images")).toBeVisible();
+  await dragCells(page, 87, "images", 87, "xutiStyleNo");
+  await page.keyboard.press("Control+Shift+ArrowDown");
+  const multiple = await page.locator(".selection-sheet table").evaluate(element => {
+    const clipboardData = new DataTransfer();
+    element.dispatchEvent(new ClipboardEvent("copy", { bubbles: true, cancelable: true, clipboardData }));
+    return clipboardData.getData("text/plain").split("\n").map(row => row.split("\t"));
+  });
+  expect(multiple).toHaveLength(173);
+  expect(multiple.every(row => row.length === 3)).toBe(true);
+  expect(multiple[0]).toEqual(["", "", "SHORTCUT-87"]);
+  expect(multiple.at(-1)).toEqual(["", "", "SHORTCUT-259"]);
 });
 
 test("row shortcuts use visible fields, empty axes retain selection and text editing keeps native word selection", async ({ page }) => {

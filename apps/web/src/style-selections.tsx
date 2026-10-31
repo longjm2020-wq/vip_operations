@@ -1162,6 +1162,16 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
     const row = displayedRows.find(row => row._key === cellAnchor?.rowKey);
     const column = activeColumns.find(column => column.key === cellAnchor?.columnKey);
     if (!row || !column) return;
+    // Extend the whole selected band, keeping the original anchor on the moving axis.
+    const bandRowKeys = new Set([row._key]), bandColumnKeys = new Set([column.key]);
+    for (const id of selectedCells) {
+      const [rowKey, columnKey] = id.split("::");
+      if (rectangleLookup.rows.has(rowKey) && rectangleLookup.columns.has(columnKey)) {
+        bandRowKeys.add(rowKey); bandColumnKeys.add(columnKey);
+      }
+    }
+    const bandRows = displayedRows.filter(row => bandRowKeys.has(row._key));
+    const bandColumns = activeColumns.filter(column => bandColumnKeys.has(column.key));
     const hasContent = (row: Row, column: Column) => {
       if (!readableSelectionCell(row, column.key)) return false;
       if (column.key === "images") return rowImages(row).length > 0;
@@ -1174,12 +1184,13 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
     const length = vertical ? displayedRows.length : activeColumns.length;
     let boundary = -1;
     for (let index = towardEnd ? length - 1 : 0; towardEnd ? index >= start : index <= start; index += towardEnd ? -1 : 1) {
-      if (vertical ? hasContent(displayedRows[index], column) : hasContent(row, activeColumns[index])) { boundary = index; break; }
+      if (vertical ? bandColumns.some(column => hasContent(displayedRows[index], column))
+        : bandRows.some(row => hasContent(row, activeColumns[index]))) { boundary = index; break; }
     }
     if (boundary < 0) return;
     const from = Math.min(start, boundary), to = Math.max(start, boundary) + 1;
-    const chosenRows = vertical ? displayedRows.slice(from, to) : [row];
-    const chosenColumns = vertical ? [column] : activeColumns.slice(from, to);
+    const chosenRows = vertical ? displayedRows.slice(from, to) : bandRows;
+    const chosenColumns = vertical ? bandColumns : activeColumns.slice(from, to);
     const origin = { rowKey: row._key, columnKey: column.key };
     const end = { rowKey: vertical ? displayedRows[boundary]._key : row._key, columnKey: vertical ? column.key : activeColumns[boundary].key };
     const elementAt = (point: typeof origin) => sheetRef.current?.querySelector<HTMLElement>(`td[data-selection-row="${CSS.escape(point.rowKey)}"][data-selection-column="${CSS.escape(point.columnKey)}"]`);
