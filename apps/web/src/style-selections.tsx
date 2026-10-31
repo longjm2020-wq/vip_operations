@@ -58,7 +58,8 @@ import { joinChoiceValues, splitChoiceValues, isEncodedChoiceValue } from "./sel
 import { SelectionChoiceCell } from "./selection-choice-tags";
 import { SelectionInlineTags } from "./selection-inline-tags";
 import { parseSelectionClipboard } from "./selection-clipboard";
-import { copyOfficeClipboard, officeClipboardHtml, type OfficeClipboardCell } from "./selection-office-clipboard";
+import { officeClipboardHtml, type OfficeClipboardCell } from "./selection-office-clipboard";
+import { SelectionOfficeCopy, type OfficeCopyRequest } from "./selection-office-copy";
 import { selectionClipboardImages, selectionTextPasteTarget } from "./selection-image-clipboard";
 import { duplicateStyleCounts, selectionStyleKey } from "./selection-duplicates";
 import { SelectionFormatModal, type FormatPatch } from "./selection-format-modal";
@@ -1207,13 +1208,9 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
     const value = imageKeys.has(column.key) ? (column.key === "images" ? rowImages(row) : rowLabelImages(row)).map(image => image.url).join("; ") : column.custom && column.type === "image" ? fieldImages(valueAt(row,column)).map(image => image.url).join("; ") : column.key === "collectionInventory" ? (row.collectionInventory || []).reduce((sum:number,item:Row)=>sum+item.available+item.production,0) : valueAt(row,column);
     return choiceClipboardText(column,value);
   };
-  const officeCopyAbort = useRef<AbortController | null>(null);
-  useEffect(() => () => { officeCopyAbort.current?.abort(); officeCopyAbort.current = null; message.destroy("selection-office-copy"); }, [message]);
+  const [officeCopyRequest, setOfficeCopyRequest] = useState<OfficeCopyRequest | null>(null);
   const copyCells = (event: ClipboardEvent<HTMLElement>, rowKey: string, columnKey: string) => {
     if (!event.currentTarget.contains(event.target as Node) || (cellTextEditing && selectedCells.size <= 1)) return;
-    officeCopyAbort.current?.abort();
-    officeCopyAbort.current = null;
-    message.destroy("selection-office-copy");
     const selected = selectedCells.size ? selectedCells : new Set([cellId(rowKey, columnKey)]);
     const positions = [...selected].map((value) => { const [r, c] = value.split("::"); return { r: rowPositions.get(r) ?? -1, c: columnPositions.get(c) ?? -1 }; }).filter((item) => item.r >= 0 && item.c >= 0);
     if (!positions.length) {
@@ -1241,25 +1238,16 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
       : cells.map(row => row.map(({ text: value }) => {
         return /[\t\n\r"]/.test(value) ? '"' + value.replace(/"/g, '""') + '"' : value;
       }).join("\t")).join("\n");
-    copiedSingleValue.current = positions.length === 1 ? text : null;
-    event.preventDefault(); event.clipboardData.setData("text/plain", text); setCopiedCells(new Set(selected));
+    event.preventDefault(); event.clipboardData.clearData();
     if (!cells.some(row => row.some(cell => cell.image))) {
+      copiedSingleValue.current = positions.length === 1 ? text : null;
+      event.clipboardData.setData("text/plain", text); setCopiedCells(new Set(selected));
       event.clipboardData.setData("text/html", officeClipboardHtml(cells));
       return;
     }
-    const controller = new AbortController();
-    officeCopyAbort.current = controller;
-    const timeout = window.setTimeout(() => controller.abort(), 120_000);
-    const progressKey = "selection-office-copy";
-    message.loading({ key: progressKey, content: "正在准备图文复制，请稍候…", duration: 0 });
-    void copyOfficeClipboard(cells, text, async images => {
-      const result = await api("/style-selections/clipboard-images", "POST", { images }, undefined, { signal: controller.signal });
-      return result.data.images;
-    }, controller.signal).then(() => {
-      if (officeCopyAbort.current === controller) message.success({ key: progressKey, content: "图文已复制，可粘贴到 Excel / WPS（每格一张图片）" });
-    }).catch(error => {
-      if (officeCopyAbort.current === controller) message.error({ key: progressKey, content: controller.signal.aborted ? "图片复制已取消或超时，请分段重试" : `${(error as Error).message || "图片复制失败"}；本次仅复制了文字和图片地址`, duration: 6 });
-    }).finally(() => { window.clearTimeout(timeout); controller.abort(); });
+    // Never leave URL-only text available while pictures are still loading.
+    event.clipboardData.setData("text/plain", ""); copiedSingleValue.current = null; setCopiedCells(new Set());
+    setOfficeCopyRequest({ cells, text, selected: new Set(selected) });
   };
   const pasteCells = (event: ClipboardEvent<HTMLTableCellElement>, rowKey: string, columnKey: string) => {
     if (!canEdit || event.defaultPrevented) return;
@@ -1593,6 +1581,12 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
         <Tooltip title={`撤销，最多 10 步 · 当前 ${tableHistory.undoCount} 步（Ctrl+Z）`}><Button aria-label="撤销" disabled={!tableHistory.undoCount || saving || deleting || transferring || !!releasing || tableHistory.busy} icon={<UndoOutlined/>} onClick={() => void tableHistory.replay("undo")}/></Tooltip>
         <Tooltip title={`重做 · 当前 ${tableHistory.redoCount} 步（Ctrl+Y / Ctrl+Shift+Z）`}><Button aria-label="重做" disabled={!tableHistory.redoCount || saving || deleting || transferring || !!releasing || tableHistory.busy} icon={<RedoOutlined/>} onClick={() => void tableHistory.replay("redo")}/></Tooltip>
       </Space.Compact>
+      <SelectionOfficeCopy request={officeCopyRequest} onClose={() => setOfficeCopyRequest(null)}
+        onCopied={request => { setCopiedCells(request.selected); copiedSingleValue.current = request.selected.size === 1 ? request.text : null; }}
+        prepare={async (images, signal) => {
+          const result = await api("/style-selections/clipboard-images", "POST", { images }, undefined, { signal });
+          return result.data.images;
+        }} />
       {canEdit && <SelectionCollections open={collectionsOpen} onClose={() => setCollectionsOpen(false)} selectedRows={filteredRows.filter(row => selectedRowKeys.has(row._key))} blocked={!!dirtyCount || saving || deleting}/>}
       {canEdit && <SelectionPhotoQr />}
       <SelectionToolbox getSelectedIds={registrationSelectedIds} onStandardsAi={archive && canEdit ? () => void openStandardsAi() : undefined}

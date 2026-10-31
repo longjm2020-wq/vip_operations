@@ -1,9 +1,10 @@
 import { expect, test, type Page } from "@playwright/test";
 import sharp from "sharp";
+import ExcelJS from "exceljs";
 import { selectionLayoutSchema } from "../../packages/contracts/src/selection-layout.js";
 
 const cell = (page: Page, id: number, key: string) => page.locator(`td[data-selection-row="${id}"][data-selection-column="${key}"]`);
-async function fixture(page: Page, options: { count?: number; hidden?: boolean; failed?: boolean } = {}) {
+async function fixture(page: Page, options: { count?: number; hidden?: boolean; failed?: boolean; waitForPictures?: Promise<void> } = {}) {
   const fields = [
     { key: "images", label: "图片", type: "image", width: 120 },
     { key: "xutiStyleNo", label: "序缇款号", type: "text", width: 160 },
@@ -56,6 +57,7 @@ async function fixture(page: Page, options: { count?: number; hidden?: boolean; 
     }
     if (path.includes("/selection-clipboard/")) {
       imageRequests.push(path);
+      await options.waitForPictures;
       await route.fulfill({ contentType: "image/jpeg", body: jpeg }); return;
     }
     await route.fulfill({ json: { data } });
@@ -97,8 +99,9 @@ test(`multiple rows selected with ${selection} paste as an editable HTML grid wi
   expect(html).toContain("0001</td>");
   expect(html).not.toContain("/test-images/");
   expect((await copies(page))[0]["image/png"]).toBeUndefined();
-  expect(fallback.text).toContain("\t0002");
-  await expect(page.getByText("图文已复制，可粘贴到 Excel / WPS（每格一张图片）")).toBeVisible();
+  expect(fallback).toEqual({ text: "", html: "" });
+  expect((await copies(page))[0]["text/plain"]).toContain("\t0002");
+  await expect(page.getByText("图文已复制，可切换到 Excel / WPS 粘贴")).toBeVisible();
 });
 }
 
@@ -133,12 +136,102 @@ test("whole image column includes virtual rows beyond the mounted viewport", asy
   expect((await copies(page))[0]["text/html"].match(/<img /g)).toHaveLength(205);
 });
 
-test("a revoked picture reports failure and preserves the plain-text fallback", async ({ page }) => {
+test("a revoked picture reports failure without publishing URL-only clipboard data", async ({ page }) => {
   const state = await fixture(page, { failed: true });
   await cell(page, 1, "images").click({ position: { x: 2, y: 2 } });
   const result = await copy(page);
-  await expect(page.getByText(/图片查看权限已变更；本次仅复制/)).toBeVisible();
-  expect(result.text).toContain("/test-images/0.jpg");
+  await expect(page.getByText("图片查看权限已变更")).toBeVisible();
+  await expect(page.getByText("本次图文未复制")).toBeVisible();
+  expect(result).toEqual({ text: "", html: "" });
+  await expect(page.getByRole("button", { name: "下载带图表格" })).toBeDisabled();
   expect(await copies(page)).toHaveLength(0);
   expect(state.imageRequests).toHaveLength(0);
+});
+
+test("switching apps during preparation keeps the prepared selection for a fresh copy gesture", async ({ page }) => {
+  let release!: () => void;
+  await fixture(page, { waitForPictures: new Promise<void>(resolve => { release = resolve; }) });
+  await page.locator('th[data-selection-column="images"]').click();
+  await page.locator('th[data-selection-column="xutiStyleNo"]').click({ modifiers: ["Control"] });
+  const initial = await copy(page);
+  expect(initial).toEqual({ text: "", html: "" });
+  await expect(page.getByText("正在准备图片，尚未完成复制")).toBeVisible();
+  await expect(page.getByRole("button", { name: "复制图文", exact: true })).toBeDisabled();
+  await page.evaluate(() => Object.defineProperty(document, "hasFocus", { configurable: true, value: () => false }));
+  release();
+  await expect(page.getByText("图片已准备，请点击「复制图文」", { exact: true })).toBeVisible();
+  expect(await copies(page)).toHaveLength(0);
+  await page.getByRole("button", { name: "复制图文", exact: true }).click();
+  await expect.poll(async () => (await copies(page)).length).toBe(1);
+  expect((await copies(page))[0]["text/html"].match(/<img /g)).toHaveLength(3);
+  expect((await copies(page))[0]["text/html"]).toContain("0003</td>");
+});
+
+test("denied async clipboard write can be retried with native copy from the prepared dialog", async ({ page }) => {
+  await fixture(page);
+  await page.evaluate(() => { navigator.clipboard.write = async () => { throw new DOMException("Denied", "NotAllowedError"); }; });
+  await cell(page, 1, "images").click({ position: { x: 2, y: 2 } });
+  await copy(page);
+  await expect(page.getByText("复制提示", { exact: true })).toBeVisible();
+  const result = await page.getByRole("dialog").evaluate(element => {
+    const data = new DataTransfer();
+    element.dispatchEvent(new ClipboardEvent("copy", { bubbles: true, cancelable: true, clipboardData: data }));
+    return data.getData("text/html");
+  });
+  expect(result.match(/<img /g)).toHaveLength(1);
+  expect(result).not.toContain("/test-images/");
+  await expect(page.getByText("图文已复制，可切换到 Excel / WPS 粘贴")).toBeVisible();
+});
+
+test("closing while preparing cancels the job without late clipboard writes", async ({ page }) => {
+  let release!: () => void;
+  const state = await fixture(page, { waitForPictures: new Promise<void>(resolve => { release = resolve; }) });
+  await cell(page, 1, "images").click({ position: { x: 2, y: 2 } });
+  await copy(page);
+  await expect.poll(() => state.imageRequests.length).toBe(1);
+  await page.getByRole("dialog").getByRole("button", { name: "关闭复制窗口", exact: true }).click();
+  release();
+  await expect(page.getByRole("dialog")).not.toBeVisible();
+  expect(await copies(page)).toHaveLength(0);
+});
+
+test("copying after a long pause refreshes expiring image links before writing", async ({ page }) => {
+  const state = await fixture(page);
+  await cell(page, 1, "images").click({ position: { x: 2, y: 2 } });
+  await copy(page);
+  await expect.poll(async () => (await copies(page)).length).toBe(1);
+  await page.evaluate(() => { const now = Date.now(); Date.now = () => now + 15 * 60_000; });
+  await page.getByRole("button", { name: "再次复制", exact: true }).click();
+  await expect.poll(async () => (await copies(page)).length).toBe(2);
+  expect(state.minted).toHaveLength(2);
+  expect(state.imageRequests).toHaveLength(2);
+});
+
+test("download embeds the first picture in each row with editable aligned style and composition cells", async ({ page }) => {
+  await fixture(page);
+  for (const key of ["images", "xutiStyleNo", "material"]) {
+    await page.locator(`th[data-selection-column="${key}"]`).click({ modifiers: key === "images" ? [] : ["Control"] });
+  }
+  await copy(page);
+  await expect(page.getByRole("button", { name: "下载带图表格" })).toBeEnabled();
+  const downloadReady = page.waitForEvent("download");
+  await page.getByRole("button", { name: "下载带图表格" }).click();
+  const download = await downloadReady;
+  expect(download.suggestedFilename()).toBe("表格选区_带图.xlsx");
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.readFile((await download.path())!);
+  const sheet = workbook.worksheets[0];
+  expect(sheet.rowCount).toBe(3);
+  expect(sheet.getImages()).toHaveLength(3);
+  for (let index = 0; index < 3; index++) {
+    expect(sheet.getCell(index + 1, 1).value).toBe("");
+    expect(sheet.getCell(index + 1, 2).value).toBe(`000${index + 1}`);
+    expect(sheet.getCell(index + 1, 3).value).toBe("第一行\n第二行");
+    const image = sheet.getImages()[index];
+    expect(image.range.tl.nativeRow).toBe(index);
+    expect(image.range.tl.nativeCol).toBe(0);
+    const media = workbook.getImage(Number(image.imageId));
+    expect(media.extension).toBe("jpeg");
+    expect(media.buffer?.byteLength).toBeGreaterThan(0);
+  }
 });

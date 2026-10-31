@@ -1,7 +1,8 @@
 export type OfficeClipboardImage = { rowId: string; columnKey: string; imageId: string };
 export type OfficeClipboardCell = { text: string; image?: OfficeClipboardImage };
-type ReadyImage = { url: string; width: number; height: number; png?: Blob };
+type ReadyImage = { url: string; width: number; height: number; jpeg?: Blob; png?: Blob };
 type ImageLink = { rowId: string; columnKey: string; url: string };
+export type OfficeClipboardPayload = { cells: OfficeClipboardCell[][]; text: string; html: string; images: ReadonlyMap<string, ReadyImage>; refreshAfter: number };
 const imageKey = (image: Pick<OfficeClipboardImage, "rowId" | "columnKey">) => `${image.rowId}::${image.columnKey}`;
 const escapeHtml = (value: string) => value.replace(/[&<>"']/g, character => ({
   "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
@@ -26,6 +27,7 @@ async function prepareOfficeImages(
   cells: OfficeClipboardCell[][],
   prepare: (images: OfficeClipboardImage[]) => Promise<ImageLink[]>,
   signal: AbortSignal,
+  onProgress?: (completed: number, total: number) => void,
 ) {
   const selected = cells.flatMap(row => row.flatMap(cell => cell.image ? [cell.image] : []));
   if (selected.length > 500) throw Error("每次最多复制 500 个图片单元格，请分段复制");
@@ -33,6 +35,7 @@ async function prepareOfficeImages(
   const links = await prepare(selected);
   const byKey = new Map(links.map(link => [imageKey(link), link.url]));
   const prepared = new Map<string, ReadyImage>();
+  onProgress?.(0, selected.length);
   let next = 0;
   const singleImage = cells.length === 1 && cells[0].length === 1;
   await Promise.all(Array.from({ length: Math.min(4, selected.length) }, async () => {
@@ -54,7 +57,7 @@ async function prepareOfficeImages(
       const bitmap = await createImageBitmap(blob);
       try {
         const scale = Math.min(1, 110 / bitmap.width, 94 / bitmap.height);
-        const ready: ReadyImage = { url: url.href, width: Math.max(1, Math.round(bitmap.width * scale)), height: Math.max(1, Math.round(bitmap.height * scale)) };
+        const ready: ReadyImage = { url: url.href, width: Math.max(1, Math.round(bitmap.width * scale)), height: Math.max(1, Math.round(bitmap.height * scale)), jpeg: blob };
         if (singleImage) {
           const canvas = document.createElement("canvas");
           canvas.width = bitmap.width; canvas.height = bitmap.height;
@@ -64,6 +67,7 @@ async function prepareOfficeImages(
           ready.png = await new Promise<Blob>((resolve, reject) => canvas.toBlob(blob => blob ? resolve(blob) : reject(Error("图片复制失败")), "image/png"));
         }
         prepared.set(imageKey(image), ready);
+        onProgress?.(prepared.size, selected.length);
       } finally { bitmap.close(); }
     }
   }));
@@ -71,29 +75,29 @@ async function prepareOfficeImages(
   return prepared;
 }
 
-export async function copyOfficeClipboard(
+export async function prepareOfficeClipboard(
   cells: OfficeClipboardCell[][],
   text: string,
   prepare: (images: OfficeClipboardImage[]) => Promise<ImageLink[]>,
   signal: AbortSignal,
+  onProgress?: (completed: number, total: number) => void,
 ) {
+  // Refresh before the server's 15-minute capability expires, including preparation time.
+  const refreshAfter = Date.now() + 13 * 60_000;
+  const images = await prepareOfficeImages(cells, prepare, signal, onProgress);
+  return { cells, text, html: officeClipboardHtml(cells, images), images, refreshAfter };
+}
+
+/** All bytes must be ready before touching the clipboard or switching apps. */
+export async function writeOfficeClipboard(payload: OfficeClipboardPayload) {
   if (!navigator.clipboard?.write || typeof ClipboardItem === "undefined")
-    throw Error("浏览器不支持图文复制，请使用新版 Chrome 或 Edge 并允许剪贴板访问");
-  const ready = prepareOfficeImages(cells, prepare, signal);
-  const html = ready.then(images => new Blob([officeClipboardHtml(cells, images)], { type: "text/html" }));
-  const representations: Record<string, Blob | Promise<Blob>> = {
-    "text/html": html, "text/plain": new Blob([text], { type: "text/plain" }),
+    throw Error("浏览器无法写入图文剪贴板，可在此窗口按 Ctrl+C，或下载带图表格");
+  const representations: Record<string, Blob> = {
+    "text/html": new Blob([payload.html], { type: "text/html" }),
+    "text/plain": new Blob([payload.text], { type: "text/plain" }),
   };
-  if (cells.length === 1 && cells[0].length === 1)
-    representations["image/png"] = ready.then(images => images.values().next().value!.png!);
-  // Invoke write synchronously inside Ctrl+C's gesture. Resolving data later
-  // keeps browser activation intact while permissions and pictures are checked.
-  const promises = Object.values(representations).filter((value): value is Promise<Blob> => value instanceof Promise);
-  promises.forEach(promise => { void promise.catch(() => undefined); });
-  try { await navigator.clipboard.write([new ClipboardItem(representations)]); }
-  catch (error) {
-    // Surface preparation errors instead of the browser's generic DataError.
-    await ready;
-    throw error;
-  }
+  const png = payload.images.size === 1 && payload.cells.length === 1 && payload.cells[0].length === 1
+    ? payload.images.values().next().value?.png : undefined;
+  if (png) representations["image/png"] = png;
+  await navigator.clipboard.write([new ClipboardItem(representations)]);
 }
