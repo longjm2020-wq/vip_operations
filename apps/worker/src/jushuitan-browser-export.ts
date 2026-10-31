@@ -272,6 +272,36 @@ export async function exportJstInventory(
   guard: () => Promise<void>,
   stage: (text: string) => Promise<void>,
 ) {
+  let currentStep = "恢复库存页面";
+  try {
+    return await collectJstInventory(page, targets, guard, async (text) => {
+      currentStep = text;
+      await stage(text);
+    });
+  } catch (error) {
+    if (error instanceof JstBrowserError || error instanceof JstExportError)
+      throw error;
+    const details = error instanceof Error ? error.message.split("\n") : [];
+    // Selectors are fixed in this integration. Do not log fill values, page
+    // contents or complete Playwright call logs.
+    const locator = details.find((line) => /^\s*- waiting for /.test(line));
+    console.warn("jst_export_step_failed", {
+      step: currentStep,
+      errorType: error instanceof Error ? error.name : "Unknown",
+      operation: details[0]?.replace(/https?:\/\/\S+/g, "[url]").slice(0, 200),
+      locator: locator?.replace(/https?:\/\/\S+/g, "[url]").slice(0, 350),
+    });
+    throw new JstBrowserError(
+      `${currentStep}未完成，请重试或联系管理员检查页面控件；登录会话仍保留，未发布库存`,
+    );
+  }
+}
+async function collectJstInventory(
+  page: Page,
+  targets: JstTarget[],
+  guard: () => Promise<void>,
+  stage: (text: string) => Promise<void>,
+) {
   await guard();
   await stage("核验公司与杭州总仓");
   const frame = await verifyJstScope(page, stage);
@@ -323,6 +353,9 @@ export async function exportJstInventory(
       if (remaining)
         throw new JstBrowserError("聚水潭仍存在商品筛选条件，未导出部分库存");
       if (kind === "sku_code") {
+        await stage(
+          `设置商品编码精确匹配（第${Math.floor(offset / 200) + 1}/${batches}批）`,
+        );
         const mode = frame
           .locator(".goods-input-affix-wrapper:has(#sku_id)")
           .getByRole("button", {
@@ -341,6 +374,9 @@ export async function exportJstInventory(
           })
           .waitFor({ state: "visible" });
       } else {
+        await stage(
+          `设置其它属性5查询（第${Math.floor(offset / 200) + 1}/${batches}批）`,
+        );
         await attribute.getByRole("combobox").click();
         await frame
           .locator(".goods-select-item-option-content")
@@ -354,6 +390,9 @@ export async function exportJstInventory(
         )
           throw new JstBrowserError("聚水潭映射条码输入被截断，未执行查询");
       }
+      await stage(
+        `执行${kind === "sku_code" ? "商品编码" : "其它属性5"}搜索（第${Math.floor(offset / 200) + 1}/${batches}批）`,
+      );
       await frame.getByRole("button", { name: /^搜\s*索$/ }).click();
       await waitForInventoryQuery(frame);
       const expected = await inventoryCount(frame);
