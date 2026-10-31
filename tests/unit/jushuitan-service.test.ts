@@ -261,9 +261,13 @@ it.each(["CHECK", "REFRESH"])(
 );
 it("coalesces syncs and publishes all mapped sources and original bytes atomically", async () => {
   await ready();
+  await query(
+    "UPDATE jushuitan_inventory_settings SET error_note='previous failure'",
+  );
   const first = await queueJushuitan(context()),
     second = await queueJushuitan(context());
   expect(first.id).toBe(second.id);
+  expect((await jushuitanStatus()).error_note).toBe("");
   const { job, token } = await claim();
   await publish(job, token);
   const s = await jushuitanStatus();

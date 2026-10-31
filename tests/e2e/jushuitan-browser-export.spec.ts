@@ -179,8 +179,9 @@ async function erpFixture(
       <div id="options" hidden class="goods-select-item-option-content"><span>其它属性5</span></div>
       <button id="reset">重 置</button><button id="search">搜 索</button><button id="export">导 出</button>
       <a hidden id="download">导出库存</a><p id="count">共99999条</p><div id="loading" hidden class="goods-spin-spinning">加载中</div>
+      <output hidden id="query-records"></output>
       <script>
-        const byId=id=>document.getElementById(id);let kind='sku_code',query='';
+        const byId=id=>document.getElementById(id);let kind='sku_code',query='';const observedQueries=[];
         byId('match').onclick=()=>{byId('match').setAttribute('aria-label','匹配方式：精确匹配，点击切换为模糊匹配');};
         byId('attribute').onclick=()=>byId('options').hidden=false;
         byId('options').onclick=()=>byId('options').hidden=true;
@@ -188,6 +189,7 @@ async function erpFixture(
         byId('reset').onclick=()=>{document.querySelectorAll('input').forEach(i=>i.value='');${options.resetWarehouse ? "parent.postMessage('reset-warehouse','*');" : ""}load(99999);};
         byId('search').onclick=()=>{
           kind=byId('sku_id').value?'sku_code':'mapped_code';query=byId(kind==='sku_code'?'sku_id':'mapped').value;
+          observedQueries.push({kind,codes:query.split(',')});byId('query-records').textContent=JSON.stringify(observedQueries);
           const count=${JSON.stringify(mode)}==='unscoped'?99999:!query.split(',').includes(${JSON.stringify(code)})?0:kind==='mapped_code'?2:1;
           load(count);
         };
@@ -225,6 +227,38 @@ test("云端流程仅查询网站编码和属性5，等待重置完成，并按�
   });
   expect(result.files).toHaveLength(2);
   expect(stages).toContain("查询其它属性5（第1/1批）");
+});
+
+test("属性5使用较小批次仍覆盖所有网站编码和最后一个余数批次", async ({
+  page,
+}) => {
+  await erpFixture(page);
+  const targets = [
+    target,
+    ...Array.from({ length: 200 }, (_, index) => ({
+      ...target,
+      sku_code: `MISSING-${index}`,
+    })),
+  ];
+  await exportJstInventory(
+    page,
+    targets,
+    async () => {},
+    async () => {},
+  );
+  const queries = JSON.parse(
+    await page.frameLocator("iframe").locator("#query-records").innerText(),
+  ) as { kind: string; codes: string[] }[];
+  for (const [kind, sizes] of [
+    ["sku_code", [200, 1]],
+    ["mapped_code", [50, 50, 50, 50, 1]],
+  ] as const) {
+    const matching = queries.filter((query) => query.kind === kind);
+    expect(matching.map((query) => query.codes.length)).toEqual(sizes);
+    expect(matching.flatMap((query) => query.codes)).toEqual(
+      targets.map((row) => row.sku_code),
+    );
+  }
 });
 
 test("关闭已识别的新手引导后才能切换精确匹配并导出", async ({ page }) => {

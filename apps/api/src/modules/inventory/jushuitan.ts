@@ -339,7 +339,7 @@ export async function enqueueJst(
     actorId,
   );
   await tx.$executeRawUnsafe(
-    "UPDATE jushuitan_inventory_settings SET next_sync_at=now()+interval '1 minute'*interval_minutes WHERE id=1",
+    "UPDATE jushuitan_inventory_settings SET next_sync_at=now()+interval '1 minute'*interval_minutes,error_note='' WHERE id=1",
   );
   return { id, status: "QUEUED" };
 }

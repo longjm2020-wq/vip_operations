@@ -289,7 +289,24 @@ async function waitForInventoryQuery(frame: Frame) {
     .first()
     .waitFor({ state: "visible", timeout: 2000 })
     .catch(() => {});
-  await loading.first().waitFor({ state: "hidden", timeout: 45000 });
+  try {
+    await loading.first().waitFor({ state: "hidden", timeout: 90000 });
+  } catch (error) {
+    console.warn("jst_query_loading_timeout", {
+      indicators: await loading
+        .evaluateAll((elements) =>
+          elements.slice(0, 5).map((element) => ({
+            tag: element.tagName,
+            className: element.className,
+            parentClass: element.parentElement?.className,
+            width: Math.round(element.getBoundingClientRect().width),
+            height: Math.round(element.getBoundingClientRect().height),
+          })),
+        )
+        .catch(() => []),
+    });
+    throw error;
+  }
 }
 /** This flow only clicks the ERP's own read/search/export controls, never its private APIs. */
 export async function exportJstInventory(
@@ -381,121 +398,132 @@ async function collectJstInventory(
     );
   const reports: JushuitanExport[] = [],
     files: { bytes: Buffer; fileName: string }[] = [];
-  const batches = Math.ceil(codes.length / 200);
   for (let offset = 0; offset < codes.length; offset += 200)
     for (const kind of ["sku_code", "mapped_code"] as const) {
-      const batch = codes.slice(offset, offset + 200),
-        query = batch.join(","),
-        requested = new Set(batch);
-      await guard();
-      await stage(
-        `查询${kind === "sku_code" ? "商品编码" : "其它属性5"}（第${Math.floor(offset / 200) + 1}/${batches}批）`,
-      );
-      await frame.getByRole("button", { name: /^重\s*置$/ }).click();
-      // Reset can itself load the full list. Finish that request before the scoped search.
-      await waitForInventoryQuery(frame);
-      await verifyJstWarehouse(page, frame);
-      const remaining = await frame
-        .locator("#i_id,#sku_id,#supplier_sku_id,#supplier_i_id")
-        .evaluateAll((inputs) =>
-          inputs.some((e) => (e as HTMLInputElement).value.trim()),
-        );
-      if (remaining)
-        throw new JstBrowserError("聚水潭仍存在商品筛选条件，未导出部分库存");
-      if (kind === "sku_code") {
+      // Smaller custom-attribute queries preserve complete coverage while
+      // reducing the number of conditions handled by each ERP request.
+      const batchSize = kind === "sku_code" ? 200 : 50;
+      const batches = Math.ceil(codes.length / batchSize);
+      for (
+        let part = offset;
+        part < Math.min(offset + 200, codes.length);
+        part += batchSize
+      ) {
+        const batch = codes.slice(part, part + batchSize),
+          query = batch.join(","),
+          requested = new Set(batch);
+        await guard();
         await stage(
-          `设置商品编码精确匹配（第${Math.floor(offset / 200) + 1}/${batches}批）`,
+          `查询${kind === "sku_code" ? "商品编码" : "其它属性5"}（第${Math.floor(part / batchSize) + 1}/${batches}批）`,
         );
-        const mode = frame
-          .locator(".goods-input-affix-wrapper:has(#sku_id)")
-          .getByRole("button", {
-            name: "匹配方式：模糊匹配，点击切换为精确匹配",
-            exact: true,
-          });
-        if (await mode.isVisible()) await mode.click();
-        await frame.locator("#sku_id").fill(query);
-        if ((await frame.locator("#sku_id").inputValue()) !== query)
-          throw new JstBrowserError("聚水潭商品编码输入被截断，未执行查询");
-        await frame
-          .locator(".goods-input-affix-wrapper:has(#sku_id)")
-          .getByRole("button", {
-            name: "匹配方式：精确匹配，点击切换为模糊匹配",
-            exact: true,
-          })
-          .waitFor({ state: "visible" });
-      } else {
-        await stage(
-          `设置其它属性5查询（第${Math.floor(offset / 200) + 1}/${batches}批）`,
-        );
-        await attribute.getByRole("combobox").click();
-        await frame
-          .locator(".goods-select-item-option-content")
-          .getByText("其它属性5", { exact: true })
-          .click();
-        await attribute.getByPlaceholder("请输入", { exact: true }).fill(query);
-        if (
-          (await attribute
+        await frame.getByRole("button", { name: /^重\s*置$/ }).click();
+        // Reset can itself load the full list. Finish that request before the scoped search.
+        await waitForInventoryQuery(frame);
+        await verifyJstWarehouse(page, frame);
+        const remaining = await frame
+          .locator("#i_id,#sku_id,#supplier_sku_id,#supplier_i_id")
+          .evaluateAll((inputs) =>
+            inputs.some((e) => (e as HTMLInputElement).value.trim()),
+          );
+        if (remaining)
+          throw new JstBrowserError("聚水潭仍存在商品筛选条件，未导出部分库存");
+        if (kind === "sku_code") {
+          await stage(
+            `设置商品编码精确匹配（第${Math.floor(part / batchSize) + 1}/${batches}批）`,
+          );
+          const mode = frame
+            .locator(".goods-input-affix-wrapper:has(#sku_id)")
+            .getByRole("button", {
+              name: "匹配方式：模糊匹配，点击切换为精确匹配",
+              exact: true,
+            });
+          if (await mode.isVisible()) await mode.click();
+          await frame.locator("#sku_id").fill(query);
+          if ((await frame.locator("#sku_id").inputValue()) !== query)
+            throw new JstBrowserError("聚水潭商品编码输入被截断，未执行查询");
+          await frame
+            .locator(".goods-input-affix-wrapper:has(#sku_id)")
+            .getByRole("button", {
+              name: "匹配方式：精确匹配，点击切换为模糊匹配",
+              exact: true,
+            })
+            .waitFor({ state: "visible" });
+        } else {
+          await stage(
+            `设置其它属性5查询（第${Math.floor(part / batchSize) + 1}/${batches}批）`,
+          );
+          await attribute.getByRole("combobox").click();
+          await frame
+            .locator(".goods-select-item-option-content")
+            .getByText("其它属性5", { exact: true })
+            .click();
+          await attribute
             .getByPlaceholder("请输入", { exact: true })
-            .inputValue()) !== query
-        )
-          throw new JstBrowserError("聚水潭映射条码输入被截断，未执行查询");
-      }
-      await stage(
-        `执行${kind === "sku_code" ? "商品编码" : "其它属性5"}搜索（第${Math.floor(offset / 200) + 1}/${batches}批）`,
-      );
-      await frame.getByRole("button", { name: /^搜\s*索$/ }).click();
-      await waitForInventoryQuery(frame);
-      const expected = await inventoryCount(frame);
-      if (expected === 0) {
-        reports.push({ records: [], expectedCount: 0 });
-        continue;
-      }
-      if (expected > batch.length * 20)
-        throw new JstBrowserError(
-          "查询返回条数异常，可能未应用条码筛选，未导出",
+            .fill(query);
+          if (
+            (await attribute
+              .getByPlaceholder("请输入", { exact: true })
+              .inputValue()) !== query
+          )
+            throw new JstBrowserError("聚水潭映射条码输入被截断，未执行查询");
+        }
+        await stage(
+          `执行${kind === "sku_code" ? "商品编码" : "其它属性5"}搜索（第${Math.floor(part / batchSize) + 1}/${batches}批）`,
         );
-      const checked = frame.locator('thead input[type="checkbox"]');
-      if ((await checked.count()) === 1 && (await checked.isChecked()))
-        await checked.uncheck();
-      if (await frame.locator('tbody input[type="checkbox"]:checked').count())
-        throw new JstBrowserError("库存行仍有勾选，未导出部分库存");
-      await guard();
-      await verifyJstWarehouse(page, frame);
-      await stage(`导出聚水潭原始表格（${expected}条）`);
-      await exportButton(frame).click();
-      const downloadPromise = page.waitForEvent("download", {
-        timeout: 180000,
-      });
-      // Attach the failure handler before clicking, so a missing menu never leaks a rejection.
-      void downloadPromise.catch(() => {});
-      await frame.getByText("导出库存", { exact: true }).click();
-      let download;
-      try {
-        download = await downloadPromise;
-      } catch {
-        throw new JstBrowserError(
-          "未收到聚水潭导出文件，请检查导出权限、弹窗或下载中心；未发布库存",
-        );
+        await frame.getByRole("button", { name: /^搜\s*索$/ }).click();
+        await waitForInventoryQuery(frame);
+        const expected = await inventoryCount(frame);
+        if (expected === 0) {
+          reports.push({ records: [], expectedCount: 0 });
+          continue;
+        }
+        if (expected > batch.length * 20)
+          throw new JstBrowserError(
+            "查询返回条数异常，可能未应用条码筛选，未导出",
+          );
+        const checked = frame.locator('thead input[type="checkbox"]');
+        if ((await checked.count()) === 1 && (await checked.isChecked()))
+          await checked.uncheck();
+        if (await frame.locator('tbody input[type="checkbox"]:checked').count())
+          throw new JstBrowserError("库存行仍有勾选，未导出部分库存");
+        await guard();
+        await verifyJstWarehouse(page, frame);
+        await stage(`导出聚水潭原始表格（${expected}条）`);
+        await exportButton(frame).click();
+        const downloadPromise = page.waitForEvent("download", {
+          timeout: 180000,
+        });
+        // Attach the failure handler before clicking, so a missing menu never leaks a rejection.
+        void downloadPromise.catch(() => {});
+        await frame.getByText("导出库存", { exact: true }).click();
+        let download;
+        try {
+          download = await downloadPromise;
+        } catch {
+          throw new JstBrowserError(
+            "未收到聚水潭导出文件，请检查导出权限、弹窗或下载中心；未发布库存",
+          );
+        }
+        if (await download.failure())
+          throw new JstBrowserError("聚水潭文件下载失败，未发布库存");
+        const path = await download.path();
+        if (!path || (await stat(path)).size > 20971520)
+          throw new JstExportError("导出文件缺失或超过20MB，未导入");
+        await guard();
+        await verifyJstScope(page);
+        if ((await inventoryCount(frame)) !== expected)
+          throw new JstBrowserError("导出期间库存商品条数发生变化，请重新同步");
+        await stage("校验表格并匹配完整商品编码");
+        const bytes = await readFile(path),
+          report = parseJushuitanExport(bytes, expected);
+        if (report.records.some((row) => !requested.has(row[kind])))
+          throw new JstExportError(
+            "导出文件包含本批网站条码范围外的商品，未发布库存",
+          );
+        reports.push(report);
+        files.push({ bytes, fileName: download.suggestedFilename() });
+        await download.delete();
       }
-      if (await download.failure())
-        throw new JstBrowserError("聚水潭文件下载失败，未发布库存");
-      const path = await download.path();
-      if (!path || (await stat(path)).size > 20971520)
-        throw new JstExportError("导出文件缺失或超过20MB，未导入");
-      await guard();
-      await verifyJstScope(page);
-      if ((await inventoryCount(frame)) !== expected)
-        throw new JstBrowserError("导出期间库存商品条数发生变化，请重新同步");
-      await stage("校验表格并匹配完整商品编码");
-      const bytes = await readFile(path),
-        report = parseJushuitanExport(bytes, expected);
-      if (report.records.some((row) => !requested.has(row[kind])))
-        throw new JstExportError(
-          "导出文件包含本批网站条码范围外的商品，未发布库存",
-        );
-      reports.push(report);
-      files.push({ bytes, fileName: download.suggestedFilename() });
-      await download.delete();
     }
   await guard();
   return { report: mergeJstExports(reports, targets), files };
