@@ -45,7 +45,10 @@ export class JstLoginInputTracker {
   async current(page: Page): Promise<JushuitanLoginInput | null> {
     for (const frame of page.frames()) {
       if (!isJushuitanOrigin(frame.url())) continue;
-      const locator = frame.locator(editable).filter({ visible: true });
+      const locator = frame
+        .locator(editable)
+        .and(frame.locator(":focus"))
+        .filter({ visible: true });
       const handles = await locator.elementHandles();
       let selected: ElementHandle | undefined;
       for (const handle of handles) {
@@ -116,5 +119,32 @@ export class JstLoginInputTracker {
         "选中的输入框已改变，请重新点击账号、密码或验证码框后填写",
       );
     await this.active!.handle.fill(value);
+  }
+}
+
+/** Snapshot failures during ERP navigation must not destroy the login session. */
+export async function captureJstLoginFrame(
+  page: Page,
+  inputs: JstLoginInputTracker,
+) {
+  let phase = "input";
+  try {
+    const frameInput = await inputs.current(page);
+    phase = "screenshot";
+    const jpg = await page.screenshot({
+      type: "jpeg",
+      quality: 65,
+      mask: jstLoginMasks(page),
+      maskColor: "#b9becd",
+      timeout: 10000,
+    });
+    return { frameInput, jpg };
+  } catch (error) {
+    console.warn("jst_login_frame_retry", {
+      phase,
+      errorType: error instanceof Error ? error.name : "Unknown",
+    });
+    // No unmasked fallback: retain the session and retry with fresh frames.
+    return null;
   }
 }

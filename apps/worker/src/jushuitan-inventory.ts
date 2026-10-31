@@ -43,7 +43,7 @@ import {
 } from "./jushuitan-browser-export.js";
 import {
   JstLoginInputTracker,
-  jstLoginMasks,
+  captureJstLoginFrame,
 } from "./jushuitan-login-input.js";
 
 const activeLogin = "('QUEUED','RUNNING','WAITING','CHECKING')";
@@ -244,13 +244,11 @@ async function runLogin(
             /^[A-Z0-9_]{1,20}$/.test(detail.code)
               ? detail.code
               : undefined,
-          validation: detail?.issues
-            ?.slice(0, 8)
-            .map((issue) => ({
-              code: issue.code,
-              path: issue.path,
-              maximum: issue.maximum,
-            })),
+          validation: detail?.issues?.slice(0, 8).map((issue) => ({
+            code: issue.code,
+            path: issue.path,
+            maximum: issue.maximum,
+          })),
         });
         note =
           e instanceof JstBrowserError || e instanceof JstExportError
@@ -262,15 +260,22 @@ async function runLogin(
     }
     if (Date.now() >= nextFrame) {
       await assertJob(job, token, true);
-      const frameInput = await inputs.current(page);
-      const masks = jstLoginMasks(page);
-      const jpg = await page.screenshot({
-        type: "jpeg",
-        quality: 65,
-        mask: masks,
-        maskColor: "#b9becd",
-        timeout: 15000,
-      });
+      const captured = await captureJstLoginFrame(page, inputs);
+      if (!captured) {
+        if (!browser.isConnected())
+          throw new JstBrowserError("云端浏览器已中断，请重新打开登录窗口");
+        if (!context.pages().some((openPage) => !openPage.isClosed()))
+          throw new JstBrowserError("云端登录页已关闭，请重新打开登录窗口");
+        await db.$executeRawUnsafe(
+          `UPDATE jushuitan_browser_logins SET status='RUNNING',frame_id=NULL,frame_input=NULL,note='聚水潭页面正在切换或加载，正在自动恢复画面；无需重新登录' WHERE id=$1::uuid AND claim_token=$2::uuid AND status IN ${activeLogin}`,
+          job.id,
+          token,
+        );
+        nextFrame = Date.now() + 1500;
+        await delay(650);
+        continue;
+      }
+      const { frameInput, jpg } = captured;
       await db.$transaction(async (tx) => {
         await jstLock(tx);
         // Do not mark a submitted but unconsumed input as ready or overwrite its frame token.
@@ -417,6 +422,10 @@ export async function runJushuitanTick() {
       await publishJstExport(job, token, result.report, result.files, state);
     }
   } catch (e) {
+    console.warn("jst_task_failed", {
+      kind: login ? "login" : "sync",
+      errorType: e instanceof Error ? e.name : "Unknown",
+    });
     const note = safeError(e);
     await db.$transaction(async (tx) => {
       await jstLock(tx);
