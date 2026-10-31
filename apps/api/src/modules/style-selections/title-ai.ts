@@ -13,6 +13,8 @@ import { persist } from "./service.js";
 import { isArchive } from "./archive.js";
 import { titleImageData } from "./title-ai-images.js";
 import { productTitleSystemPrompt, titleFieldLimitIssue, titleKind, titleLimit, titleValueIssue } from "./title-ai-validation.js";
+import { inferTitleName, normalizeTitleName, replaceTitleName, titleNameIssue, titleStartsWithName } from "../../../../../packages/contracts/src/selection-title-names.js";
+import { readTitleNames, titleNameConflict, titleNameOwner, titleSeries } from "./title-ai-names.js";
 
 const scopeKey = () => selectionScope.getStore() || "default";
 const blank = (value: unknown) => !String(value ?? "").trim();
@@ -25,8 +27,8 @@ export async function titleAIStatus(c: Context): Promise<SelectionTitleAIStatus>
   const settings = await one(db, "SELECT enabled,api_key_encrypted,verified_at FROM public.compass_ai_settings WHERE id=1");
   return verifiedSettings(settings) ? { ready: true, message: "AI 商品标题已就绪" } : { ready: false, message: "请超级管理员在系统设置 → AI 模型设置中启用 AI 并保存并验证模型后使用" };
 }
-type SignedRow = { id: string; expectedUpdatedAt: string; keys: string[]; fingerprint: string; visual: boolean };
-const planSchema = z.object({ actor: z.string(), scope: z.string(), mode: selectionTitleAIModeSchema.optional(), expires: z.number(), nonce: z.string().uuid(), policy: z.string(), rows: z.array(z.object({ id: z.string(), expectedUpdatedAt: z.string(), keys: z.array(z.string()).max(2), fingerprint: z.string(), visual: z.boolean() }).strict()).max(10) }).strict();
+type SignedRow = { id: string; expectedUpdatedAt: string; keys: string[]; fingerprint: string; visual: boolean; poeticName?: string };
+const planSchema = z.object({ actor: z.string(), scope: z.string(), mode: selectionTitleAIModeSchema.optional(), expires: z.number(), nonce: z.string().uuid(), policy: z.string(), rows: z.array(z.object({ id: z.string(), expectedUpdatedAt: z.string(), keys: z.array(z.string()).max(2), fingerprint: z.string(), visual: z.boolean(), poeticName: z.string().max(4).optional() }).strict()).max(10) }).strict();
 type Plan = z.infer<typeof planSchema>;
 function signingKey() {
   if (!encryptionReady()) fail("AI_NOT_READY", "AI 凭据加密尚未配置，请联系管理员", 503);
@@ -97,9 +99,10 @@ async function snapshot(c: Context, rowIds: string[], targetKeys: string[], tx?:
   };
   return tx ? read(tx) : db.$transaction(read, { isolationLevel: "RepeatableRead" });
 }
-const sourceFingerprint = (row: Row, fields: SelectionField[]) => protection.digest([String(row.updatedAt), sourceFacts(row, fields), row.images || []]);
+const sourceFingerprint = (row: Row, fields: SelectionField[]) => protection.digest([String(row.updatedAt), sourceFacts(row, fields), row.images || [], titleSeries(row, fields)]);
 const candidateSchema = z.object({ rows: z.array(z.object({
   id: z.string(), titles: z.array(z.object({ key: z.string(), value: z.string().trim().min(1).max(2000) }).strict()).max(2),
+  poeticName: z.string().trim().max(4).optional(), nameAlternatives: z.array(z.string().trim().max(4)).max(4).optional(),
   evidence: z.array(z.string().max(300)).max(6), warnings: z.array(z.string().max(300)).max(6),
 }).strict()).max(10) }).strict();
 export function parseTitleAIResponse(content: unknown, expected: { id: string; keys: string[] }[]) {
@@ -114,8 +117,8 @@ export function parseTitleAIResponse(content: unknown, expected: { id: string; k
   }
   return result.data.rows;
 }
-async function callTitleModel(settings: Row, products: Row[], examples: Row[], preferences: unknown) {
-  const content: Row[] = [{ type: "text", text: JSON.stringify({ products: products.map(({ pictures: _pictures, ...product }) => product), styleExamples: examples, preferences }) }];
+async function callTitleModel(settings: Row, products: Row[], examples: Row[], preferences: unknown, namingContext: unknown) {
+  const content: Row[] = [{ type: "text", text: JSON.stringify({ products: products.map(({ pictures: _pictures, ...product }) => product), styleExamples: examples, preferences, namingContext }) }];
   for (const product of products) for (const [index, image] of product.pictures.entries()) {
     content.push({ type: "text", text: `以下是商品 ID ${product.id} 的第 ${index + 1} 张图片；只分析这件产品的可见设计。` }, { type: "image_url", image_url: { url: image, detail: "low" } });
   }
@@ -126,7 +129,8 @@ async function callTitleModel(settings: Row, products: Row[], examples: Row[], p
       messages: [{ role: "system", content: productTitleSystemPrompt }, { role: "user", content }],
       response_format: { type: "json_schema", json_schema: { name: "selection_product_titles", strict: true, schema: {
         type: "object", additionalProperties: false, required: ["rows"], properties: { rows: { type: "array", items: {
-          type: "object", additionalProperties: false, required: ["id", "titles", "evidence", "warnings"], properties: {
+          type: "object", additionalProperties: false, required: ["id", "titles", "poeticName", "nameAlternatives", "evidence", "warnings"], properties: {
+            poeticName: { type: "string" }, nameAlternatives: { type: "array", items: { type: "string" } },
             id: { type: "string" }, titles: { type: "array", items: { type: "object", additionalProperties: false, required: ["key", "value"], properties: { key: { type: "string" }, value: { type: "string" } } } },
             evidence: { type: "array", items: { type: "string" } }, warnings: { type: "array", items: { type: "string" } },
           },
@@ -224,9 +228,17 @@ export async function generateTitles(c: Context, input: unknown): Promise<Select
     };
     // Permission-projected examples and authorized image loading are independent.
     // Await both and retain the existing latest-source check before any paid call.
-    const prepared = await Promise.allSettled([readExamples(), Promise.all([readPictures(), readPictures()])]);
+    const prepared = await Promise.allSettled([readExamples(), Promise.all([readPictures(), readPictures()]),
+      db.$transaction(tx => readTitleNames(tx, c, initial.fields, initial.policy, body.pendingNames), { isolationLevel: "RepeatableRead" })]);
     for (const outcome of prepared) if (outcome.status === "rejected") throw outcome.reason;
     const examples = (prepared[0] as PromiseFulfilledResult<Row[]>).value;
+    const naming = (prepared[2] as PromiseFulfilledResult<Awaited<ReturnType<typeof readTitleNames>>>).value;
+    for (const product of products) {
+      const source = initial.projected.find(row => String(row.id) === product.id)!;
+      const owner = titleNameOwner(source, initial.fields);
+      product.naming = { series: owner.series, existingNames: owner.names,
+        sameSeriesNames: owner.series ? [...new Set(naming.visible.filter(row => row.series === owner.series).flatMap(row => row.names))] : [] };
+    }
     for (let index = products.length - 1; index >= 0; index--) {
       const product = products[index], source = initial.projected.find(row => String(row.id) === product.id)!;
       if (!sourceFacts(source, initial.fields).facts && !product.pictures.length && !(body.mode !== "blank" && product.targets.some((target: Row) => !blank(target.currentValue)))) { skipped.push(product.id); products.splice(index, 1); signedRows.splice(index, 1); }
@@ -238,18 +250,39 @@ export async function generateTitles(c: Context, input: unknown): Promise<Select
       if (beforeProvider.digest !== initial.digest || signedRows.some(row => sourceFingerprint(beforeProvider.projected.find(value => String(value.id) === row.id)!, beforeProvider.fields) !== row.fingerprint))
         fail("AI_SOURCE_CHANGED", "生成前产品资料或权限已变化，请刷新后重新生成", 409);
       let response: unknown;
-      try { response = await callTitleModel(settings!, products, examples, body.preferences || { usePoeticName: true, instruction: "" }); }
+      try { response = await callTitleModel(settings!, products, examples, body.preferences || { usePoeticName: true, instruction: "" }, naming.context); }
       catch (error) { if ((error as { getStatus?: unknown }).getStatus) throw error; fail("AI_PROVIDER_ERROR", "AI 请求未完成，请检查网络或稍后重试；本次没有填入标题", 502); }
       const generated = parseTitleAIResponse(response, signedRows.map(row => ({ id: row.id, keys: row.keys })));
       result = generated.map(candidate => {
         const source = initial.projected.find(row => String(row.id) === candidate.id)!, product = products.find(row => row.id === candidate.id)!;
         const facts = sourceFacts(source, initial.fields);
+        const originalName = normalizeTitleName(candidate.poeticName || candidate.titles.map(title => inferTitleName(title.value)).find(Boolean) || "");
+        const owner = titleNameOwner(source, initial.fields);
+        let chosenName = originalName, chosenTitles = candidate.titles, namingIssue = "";
+        const alternatives = originalName ? [...new Set([originalName, ...(candidate.nameAlternatives || [])].map(normalizeTitleName).filter(Boolean))] : [""];
+        for (const name of alternatives) {
+          namingIssue = titleNameIssue(name) || (name ? titleNameConflict(name, owner, naming.records) : "");
+          if (namingIssue) continue;
+          const titles = candidate.titles.map(title => ({ ...title, value: name === originalName ? title.value : replaceTitleName(title.value, originalName, name) }));
+          if (name && titles.some(title => !titleStartsWithName(title.value, name))) { namingIssue = "长短标题须使用同一个款名，并放在卖点括号之后、描述之前"; continue; }
+          const issue = titles.map(title => titleValueIssue(initial.targets.find(field => field.key === title.key)!, title.value, facts.material, facts.facts, !!product.pictures.length,
+            { mode: body.mode, existingDescription: String(cell(source, title.key) ?? "") })).find(Boolean);
+          if (issue) { namingIssue = issue; continue; }
+          chosenName = name; chosenTitles = titles; break;
+        }
+        if (candidate.titles.length && namingIssue) fail("AI_TITLE_INVALID", `款名候选未通过校验：${namingIssue}；请重新生成`, 502);
+        if (candidate.titles.length && chosenName) {
+          signedRows.find(row => row.id === candidate.id)!.poeticName = chosenName;
+          naming.records.push({ ...owner, names: [chosenName], titles: chosenTitles.map(title => title.value) });
+        }
         return { id: candidate.id, xutiStyleNo: product.xutiStyleNo, expectedUpdatedAt: String(source.updatedAt),
-          titles: candidate.titles.map(title => {
+          ...(candidate.titles.length && chosenName ? { poeticName: chosenName, series: owner.series } : {}),
+          titles: chosenTitles.map(title => {
             const field = initial.targets.find(field => field.key === title.key)!;
             const previousValue = String(cell(source, title.key) ?? "");
             const issue = titleValueIssue(field, title.value, facts.material, facts.facts, !!product.pictures.length, { mode: body.mode, existingDescription: previousValue });
-            if (issue || examples.some(example => example.value === title.value)) fail("AI_TITLE_INVALID", `${field.label}候选未通过校验：${issue || "与现有标题完全重复"}；本次未采用结果`, 502);
+            const duplicated = naming.records.some(other => other.id !== owner.id && !(owner.style && other.style === owner.style) && !(owner.series && other.series === owner.series) && other.titles.includes(title.value));
+            if (issue || duplicated) fail("AI_TITLE_INVALID", `${field.label}候选未通过校验：${issue || "与现有标题完全重复"}；本次未采用结果`, 502);
             return { key: title.key, label: field.label, kind: titleKind(field)!, value: title.value, previousValue, ...titleLimit(field, body.mode) };
           }), evidence: [...(product.pictures.length ? [`已读取 ${product.pictures.length} 张商品图片作为生成依据`] : []), ...candidate.evidence], warnings: [...product.inputWarnings, ...candidate.warnings],
         };
@@ -276,9 +309,21 @@ export async function applyTitles(c: Context, input: unknown) {
   }
   const completed = await command(c, "style-selections/ai-titles/apply", body, async tx => {
     if (await isArchive(tx)) await rows(tx, "SELECT pg_advisory_xact_lock(91002)::text");
+    await rows(tx, "SELECT pg_advisory_xact_lock(hashtextextended($1,0))::text", "selection-title-names:" + scopeKey());
     const targetKeys = [...new Set(body.rows.flatMap(row => row.titles.map(title => title.key)))];
     const current = await snapshot(c, body.rows.map(row => row.id), targetKeys, tx, true);
     if (current.digest !== plan.policy) fail("AI_SOURCE_CHANGED", "字段设置或权限已变化，请重新生成标题", 409);
+    const naming = await readTitleNames(tx, c, current.fields, current.policy);
+    // Check the proposed final batch, so replacing both sides does not compare
+    // against names that this same atomic save is removing.
+    naming.records = naming.records.filter(owner => !body.rows.some(change => change.id === owner.id));
+    for (const change of body.rows) {
+      const raw = current.raw.find(row => String(row.id) === change.id)!;
+      const owner = titleNameOwner({ ...raw, extraFields: { ...(raw.extraFields ?? raw.extra_fields), ...Object.fromEntries(change.titles.map(title => [title.key, title.value])) } }, current.fields);
+      const name = normalizeTitleName(change.poeticName ?? plan.rows.find(row => row.id === change.id)?.poeticName);
+      if (name) owner.names = [...new Set([...owner.names, name])];
+      naming.records.push(owner);
+    }
     const patches: { id: string; extraFields: Row; expectedUpdatedAt: string }[] = [];
     for (const change of body.rows) {
       const source = current.projected.find(row => String(row.id) === change.id)!, raw = current.raw.find(row => String(row.id) === change.id)!;
@@ -287,6 +332,11 @@ export async function applyTitles(c: Context, input: unknown) {
         fail("AI_SOURCE_CHANGED", "产品资料已被修改，请重新生成；本次没有写入任何标题", 409);
       protection.assertFields(current.policy, c, raw, change.titles.map(title => title.key));
       const facts = sourceFacts(source, current.fields), extraFields: Row = {};
+      const name = normalizeTitleName(change.poeticName ?? signed.poeticName ?? change.titles.map(title => inferTitleName(title.value)).find(Boolean) ?? "");
+      const owner = titleNameOwner(source, current.fields);
+      const nameIssue = (signed.poeticName && !name ? "款名/别名须为 2–4 个汉字" : titleNameIssue(name)) || (name ? titleNameConflict(name, owner, naming.records) : "");
+      if (nameIssue) fail("AI_TITLE_NAME_CONFLICT", nameIssue, 409);
+      if (name && change.titles.some(title => !titleStartsWithName(title.value, name))) fail("VALIDATION_ERROR", "请通过款名输入框统一修改名字，长短标题须使用相同款名", 400);
       for (const title of change.titles) {
         const field = current.targets.find(field => field.key === title.key)!;
         if (!selectionTitleTargetEligible(mode, titleKind(field)!, cell(source, title.key))) fail("AI_SOURCE_CHANGED", "目标标题已不符合本次处理方式，请重新生成；本次没有写入任何标题", 409);

@@ -45,12 +45,14 @@ export const selectionTitleAIGenerateSchema = z.object({
   mode: selectionTitleAIModeSchema.default("blank"),
   rowIds: z.array(rowId).min(1).max(10).refine(values => new Set(values).size === values.length, "行不能重复"),
   targetKeys: z.array(fieldKey).min(1).max(2).refine(values => new Set(values).size === values.length, "字段不能重复"),
+  pendingNames: z.array(z.object({ rowId, name: z.string().regex(/^\p{Script=Han}{2,4}$/u) }).strict()).max(5000).optional(),
   preferences: z.object({ usePoeticName: z.boolean().default(true), instruction: z.string().trim().max(400).default("") }).strict().optional(),
 }).strict();
 export const selectionTitleAIApplySchema = z.object({
   planToken: z.string().min(20).max(40000),
   rows: z.array(z.object({
     id: rowId,
+    poeticName: z.string().trim().max(4).optional(),
     titles: z.array(z.object({ key: fieldKey, value: z.string().trim().min(1).max(2000) }).strict()).min(1).max(2)
       .refine(values => new Set(values.map(value => value.key)).size === values.length, "字段不能重复"),
   }).strict()).min(1).max(10).refine(values => new Set(values.map(value => value.id)).size === values.length, "行不能重复"),
@@ -64,6 +66,7 @@ export type SelectionTitleAICandidate = {
 };
 export type SelectionTitleAIRow = {
   id: string; xutiStyleNo: string; expectedUpdatedAt: string;
+  poeticName?: string; series?: string;
   titles: SelectionTitleAICandidate[]; evidence: string[]; warnings: string[];
 };
 export type SelectionTitleAIPreview = {

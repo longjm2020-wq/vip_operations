@@ -2,7 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { projectSelectionSharedLayout, selectionLayoutSchema } from "../../packages/contracts/src/selection-layout.js";
 
 type Values = Record<string, any>;
-type FixtureOptions = { count?: number; configured?: boolean; pauseFirst?: boolean; failApplyBatch?: number; shortHanLimit?: number; longCharacterLimit?: number; longHanLimit?: number; firstTtlMs?: number; material?: string; longTitle?: string; path?: string; firstOriginal?: string };
+type FixtureOptions = { count?: number; configured?: boolean; pauseFirst?: boolean; failApplyBatch?: number; shortHanLimit?: number; longCharacterLimit?: number; longHanLimit?: number; firstTtlMs?: number; material?: string; longTitle?: string; path?: string; firstOriginal?: string; names?: string[]; series?: string };
 const generatedLongTitle = "【100桑蚕丝】锦纨春秋冬新中式国风提花盘扣圆领背心女马甲";
 const editedLongTitle = "【100桑蚕丝】庭春漾秋冬新中式国风提花盘扣圆领背心女马甲";
 async function fixture(page: Page, options: FixtureOptions = {}) {
@@ -48,10 +48,12 @@ async function fixture(page: Page, options: FixtureOptions = {}) {
       data = { planToken: `title-ai-fixture-plan-${generations.length}-abcdefghijklmnop`, expiresAt: new Date(Date.now() + (generations.length === 1 ? options.firstTtlMs ?? 30 * 60 * 1000 : 30 * 60 * 1000)).toISOString(), model: "fixture-model", warnings: [],
         rows: body.rowIds.map((id: string) => {
           const row = rows.find(row => row.id === id)!;
+          const name = options.names?.[Number(id) - 1];
           return { id, xutiStyleNo: row.xutiStyleNo, expectedUpdatedAt: row.updatedAt, evidence: [`成分：${row.material}`, "三级类目：女式马夹"], warnings: ["款名请人工核对"],
+            ...(name ? { poeticName: name, series: options.series || "" } : {}),
             titles: body.targetKeys.filter((key: string) => body.mode === "complete" ? key === "custom:long-title" && Array.from(String(row.extraFields[key] || "").trim()).length < 30 : body.mode === "improve" ? !!row.extraFields[key]?.trim() : !row.extraFields[key]?.trim()).map((key: string) => ({ key, label: key === "custom:long-title" ? "长标题" : "短标题", kind: key === "custom:long-title" ? "long" : "short",
               previousValue: row.extraFields[key] || "", ...(body.mode === "complete" ? { maxCharacters: 30 } : {}),
-              value: key === "custom:long-title" ? options.longTitle || (body.mode === "complete" ? generatedLongTitle + "款" : generatedLongTitle) : "锦纨春马甲", minCharacters: key === "custom:long-title" ? body.mode === "complete" ? 30 : 29 : 1, maxLength: key === "custom:long-title" ? longLimit : options.shortHanLimit || 30, countMode: key === "custom:long-title" ? longCountMode : key === "custom:short-title" && options.shortHanLimit ? "han" : "characters" })),
+              value: (key === "custom:long-title" ? options.longTitle || (body.mode === "complete" ? generatedLongTitle + "款" : generatedLongTitle) : "锦纨春马甲").replace("锦纨春", name || "锦纨春"), minCharacters: key === "custom:long-title" ? body.mode === "complete" ? 30 : 29 : 1, maxLength: key === "custom:long-title" ? longLimit : options.shortHanLimit || 30, countMode: key === "custom:long-title" ? longCountMode : key === "custom:short-title" && options.shortHanLimit ? "han" : "characters" })),
           };
         }).filter((row: Values) => row.titles.length),
       };
@@ -84,6 +86,44 @@ async function chooseMode(page: Page, label: string) {
   await page.getByRole("combobox", { name: "标题处理方式" }).click();
   await page.locator(".ant-select-dropdown:visible").getByText(label, { exact: true }).click();
 }
+
+test("独立款式重名时禁止保存，改名联动标题且接受 2–4 字", async ({ page }) => {
+  const state = await fixture(page, { names: ["花间序", "花间序"] }), panel = await openPanel(page);
+  await panel.getByRole("checkbox", { name: /^长标题/ }).uncheck();
+  await panel.getByRole("button", { name: "生成候选标题", exact: true }).click();
+  const apply = panel.getByRole("button", { name: "确认填补 2 个空白单元格", exact: true });
+  await expect(apply).toBeDisabled();
+  await expect(panel.getByText(/款名与其他款式重名/).first()).toBeVisible();
+  const name = panel.getByLabel("AI-002 款名/别名");
+  await name.fill("云");
+  await expect(apply).toBeDisabled();
+  await name.fill("花序");
+  await expect(panel.getByLabel("AI-002 短标题候选")).toHaveValue("花序马甲");
+  await expect(apply).toBeEnabled();
+  await name.fill("山月听泉");
+  await expect(panel.getByLabel("AI-002 短标题候选")).toHaveValue("山月听泉马甲");
+  await apply.click();
+  expect(state.applies[0].rows[1]).toMatchObject({ poeticName: "山月听泉", titles: [{ value: "山月听泉马甲" }] });
+});
+
+test("同面料纹样配套系列可共用款名", async ({ page }) => {
+  await fixture(page, { names: ["花间序", "花间序"], series: "丝缎花枝配套" });
+  const panel = await openPanel(page);
+  await panel.getByRole("checkbox", { name: /^长标题/ }).uncheck();
+  await panel.getByRole("button", { name: "生成候选标题", exact: true }).click();
+  await expect(panel.getByText("所属系列：丝缎花枝配套").first()).toBeVisible();
+  await expect(panel.getByRole("button", { name: "确认填补 2 个空白单元格", exact: true })).toBeEnabled();
+});
+
+test("连续生成时将前批未保存款名传给后批避重", async ({ page }) => {
+  const names = ["花间序", "听风吟", "松间月", "山水歌", "溪上舟", "星河赋", "庭前雨", "流泉音", "云岫行", "远山曲", "春水谣", "池畔语"];
+  const state = await fixture(page, { count: 12, names }), panel = await openPanel(page);
+  await panel.getByRole("checkbox", { name: /^长标题/ }).uncheck();
+  await panel.getByRole("button", { name: "生成候选标题", exact: true }).click();
+  await expect.poll(() => state.generations.length).toBe(2);
+  expect(state.generations[1].pendingNames).toEqual(names.slice(0, 10).map((name, index) => ({ rowId: String(index + 1), name })));
+  await expect(panel.getByRole("button", { name: "确认填补 12 个空白单元格", exact: true })).toBeEnabled();
+});
 
 for (const [module, path] of [["商品档案", "/products"], ["选款登记", "/style-selections"], ["项目协作表格", "/project-tables/7"]]) {
   test(`${module}选中已有长标题自动补全至30字符，先对照原文再确认`, async ({ page }) => {

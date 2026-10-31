@@ -32,12 +32,13 @@ vi.mock("../../apps/api/src/modules/style-selections/title-ai-images.js", () => 
 import { applyTitles, generateTitles, parseTitleAIResponse, readTitlePlan, titleAIStatus } from "../../apps/api/src/modules/style-selections/title-ai.js";
 import { encryptSecret } from "../../apps/api/src/modules/analytics/secrets.js";
 
-const longKey = "custom:long", shortKey = "custom:short", categoryKey = "custom:category";
+const longKey = "custom:long", shortKey = "custom:short", categoryKey = "custom:category", seriesKey = "custom:series";
 const actor = (key = "titles"): Context => ({ actor: { id: "7", username: "editor", displayName: "Editor", permissions: ["selection.read", "selection.manage"], roleCodes: [] }, requestId: "titles-test", key });
 const read = async (sql: string, parameters: unknown[] = []) => (await fixture.database!.query<Row>(sql, parameters)).rows;
 const input = (rowIds: string[], targetKeys = [longKey, shortKey]) => ({ rowIds, targetKeys });
 async function style(no: string, extraFields: Row = {}, material: string | null = "面料：100%桑蚕丝\n里料：95%聚酯纤维5%氨纶\n配料：水貂毛皮") {
-  return (await read("INSERT INTO style_selections(xuti_style_no,material,extra_fields) VALUES($1,$2,$3) RETURNING *", [no, material, JSON.stringify({ [categoryKey]: "女士皮衣/皮草", ...extraFields })]))[0];
+  // Earlier title/material tests intentionally reuse one alias across a coordinated series.
+  return (await read("INSERT INTO style_selections(xuti_style_no,material,extra_fields) VALUES($1,$2,$3) RETURNING *", [no, material, JSON.stringify({ [categoryKey]: "女士皮衣/皮草", [seriesKey]: "同面料纹样测试套装", ...extraFields })]))[0];
 }
 let providerPayload: Row, providerCalls: number;
 let providerHandler: (products: Row[]) => unknown;
@@ -76,7 +77,7 @@ beforeEach(async () => {
   providerHandler = products => ({ rows: products.map(product => ({ id: product.id, titles: product.targets.map((target: Row) => ({ key: target.key, value: target.kind === "long" ? "【水貂毛拼接100桑蚕丝】锦纨春女式皮衣皮草女士外套穿搭单品" : "锦纨春女式皮衣" })), evidence: ["成分：主面料桑蚕丝，配料水貂毛皮"], warnings: ["款名需复核"] })) });
   await fixture.database!.exec("TRUNCATE style_selections,selection_field_registry,style_selection_protection,idempotency_records,audit_logs,compass_ai_settings RESTART IDENTITY");
   await fixture.database!.query("INSERT INTO style_selection_protection(id,settings) VALUES(1,$1)", [JSON.stringify(defaultProtection)]);
-  for (const [key, label, type, textConfig] of [[longKey, "长标题", "text", { countMode: "characters", maxLength: 60 }], [shortKey, "短标题", "text", { countMode: "han", maxLength: 20 }], [categoryKey, "三级类目", "single", undefined]] as const) {
+  for (const [key, label, type, textConfig] of [[longKey, "长标题", "text", { countMode: "characters", maxLength: 60 }], [shortKey, "短标题", "text", { countMode: "han", maxLength: 20 }], [categoryKey, "三级类目", "single", undefined], [seriesKey, "所属系列", "text", undefined]] as const) {
     await fixture.database!.query("INSERT INTO selection_field_registry(workspace_key,field_key,owner_id,visibility,definition) VALUES('default',$1,7,'PUBLIC',$2)", [key, JSON.stringify({ key, label, custom: true, width: 100, type, textConfig, options: label === "三级类目" ? ["女士皮衣/皮草"] : undefined })]);
   }
   await fixture.database!.query("INSERT INTO compass_ai_settings VALUES(1,true,$1,now())", [encryptSecret("mock-provider-key-never-real")]);
@@ -84,6 +85,89 @@ beforeEach(async () => {
 });
 afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
 afterAll(async () => { await fixture.database?.close(); });
+
+describe("AI alias uniqueness and explicit coordinated series", () => {
+  const distinct = (no: string, extra: Row = {}) => style(no, { [seriesKey]: "", ...extra });
+  const providerNames = (name: string, alternatives: string[] = []) => {
+    providerHandler = products => ({ rows: products.map(product => ({ id: product.id, poeticName: name, nameAlternatives: alternatives,
+      titles: product.targets.map((target: Row) => ({ key: target.key, value: `${name}女式皮衣` })), evidence: [], warnings: [] })) });
+  };
+  const applyPreview = (preview: Awaited<ReturnType<typeof generateTitles>>) => applyTitles(actor(), { planToken: preview.planToken,
+    rows: preview.rows.map(row => ({ id: row.id, poeticName: row.poeticName, titles: row.titles.map(({ key, value }) => ({ key, value })) })) });
+
+  it.each(["花序", "听风吟", "山月听泉"])("generates and saves a %s name of 2–4 Han characters", async name => {
+    const row = await distinct("ONE"); providerNames(name);
+    const preview = await generateTitles(actor(), input([String(row.id)], [shortKey]));
+    expect(preview.rows[0].poeticName).toBe(name);
+    expect(readTitlePlan(preview.planToken, actor()).rows[0].poeticName).toBe(name);
+    expect(await applyPreview(preview)).toMatchObject({ updatedCount: 1 });
+  });
+  it("checks all saved titles beyond the old 250-row sample and selects a distinct fallback without another paid call", async () => {
+    const old = await distinct("OLD", { [shortKey]: "锦纨春女式皮衣" });
+    await fixture.database!.query("UPDATE style_selections SET updated_at=now()-interval '10 days' WHERE id=$1", [old.id]);
+    await fixture.database!.query("INSERT INTO style_selections(xuti_style_no) SELECT 'FILLER-' || i FROM generate_series(1,260) i");
+    const row = await distinct("NEW"); providerNames("锦纨春", ["花序", "听风吟"]);
+    const preview = await generateTitles(actor(), input([String(row.id)], [shortKey]));
+    expect(preview.rows[0]).toMatchObject({ poeticName: "花序", titles: [{ value: "花序女式皮衣" }] });
+    expect(JSON.parse(providerPayload.messages[1].content[0].text).namingContext.usedNames).toContain("锦纨春");
+    expect(providerCalls).toBe(1);
+  });
+  it("reserves names within one batch and between uncommitted batches", async () => {
+    const first = await distinct("FIRST"), second = await distinct("SECOND"), third = await distinct("THIRD");
+    providerNames("锦纨春", ["花序", "听风吟"]);
+    const firstBatch = await generateTitles(actor(), input([String(first.id), String(second.id)], [shortKey]));
+    expect(firstBatch.rows.map(row => row.poeticName)).toEqual(["锦纨春", "花序"]);
+    const next = await generateTitles(actor(), { ...input([String(third.id)], [shortKey]), pendingNames: firstBatch.rows.map(row => ({ rowId: row.id, name: row.poeticName! })) });
+    expect(next.rows[0].poeticName).toBe("听风吟");
+    expect(await read("SELECT * FROM audit_logs")).toHaveLength(0);
+  });
+  it("allows coordinated tops and skirts with the same nonempty 所属系列", async () => {
+    const top = await distinct("TOP", { [seriesKey]: "丝缎花枝配套" }), skirt = await distinct("SKIRT", { [seriesKey]: "丝缎花枝配套" });
+    providerNames("花序");
+    const preview = await generateTitles(actor(), input([String(top.id), String(skirt.id)], [shortKey]));
+    expect(preview.rows.map(row => [row.poeticName, row.series])).toEqual([["花序", "丝缎花枝配套"], ["花序", "丝缎花枝配套"]]);
+    expect(await applyPreview(preview)).toMatchObject({ updatedCount: 2 });
+  });
+  it.each(["", "不同系列"])("does not infer shared series from identical material/category when series is %s", async series => {
+    await distinct("EXISTING", { [shortKey]: "花序女式皮衣", [seriesKey]: "丝缎花枝配套" });
+    const row = await distinct("NEW", { [seriesKey]: series }); providerNames("花序");
+    await expect(generateTitles(actor(), input([String(row.id)], [shortKey]))).rejects.toMatchObject({ status: 502 });
+    expect(await read("SELECT * FROM audit_logs")).toHaveLength(0);
+  });
+  it("rechecks a name saved by someone else after preview and prevents partial writes", async () => {
+    const first = await distinct("FIRST"), second = await distinct("SECOND"); providerNames("花序", ["听风吟"]);
+    const preview = await generateTitles(actor(), input([String(first.id), String(second.id)], [shortKey]));
+    await distinct("CONCURRENT", { [shortKey]: "听风吟女式皮衣" });
+    await expect(applyPreview(preview)).rejects.toMatchObject({ status: 409 });
+    expect(await read("SELECT * FROM audit_logs")).toHaveLength(0);
+    expect((await read("SELECT extra_fields FROM style_selections WHERE id=$1", [first.id]))[0].extra_fields[shortKey]).toBeUndefined();
+  });
+  it("validates edited names and does not allow the candidate input to bypass duplicates", async () => {
+    await distinct("EXISTING", { [shortKey]: "花序女式皮衣" });
+    const row = await distinct("NEW"); providerNames("听风吟");
+    const preview = await generateTitles(actor(), input([String(row.id)], [shortKey]));
+    for (const name of ["花序", "云", "云 叙"]) {
+      await expect(applyTitles(actor(), { planToken: preview.planToken, rows: [{ id: String(row.id), poeticName: name, titles: [{ key: shortKey, value: `${name}女式皮衣` }] }] })).rejects.toMatchObject({ status: 409 });
+    }
+    expect(await read("SELECT * FROM audit_logs")).toHaveLength(0);
+  });
+  it("does not send hidden names to AI or disclose the conflicting record", async () => {
+    const hiddenKey = "custom:hidden-title";
+    await fixture.database!.query("INSERT INTO selection_field_registry(workspace_key,field_key,owner_id,visibility,definition) VALUES('default',$1,8,'PRIVATE',$2)", [hiddenKey, JSON.stringify({ key: hiddenKey, label: "短标题", type: "text", custom: true, width: 120 })]);
+    await distinct("SECRET-STYLE", { [hiddenKey]: "溪月吟女式皮衣" });
+    const row = await distinct("NEW"); providerNames("溪月吟");
+    await expect(generateTitles(actor(), input([String(row.id)], [shortKey]))).rejects.toMatchObject({ status: 502 });
+    const source = JSON.parse(providerPayload.messages[1].content[0].text);
+    expect(JSON.stringify(source.namingContext)).not.toContain("溪月吟");
+    expect(JSON.stringify(source)).not.toContain("SECRET-STYLE");
+  });
+  it("invalidates series changes even when updated_at was not changed", async () => {
+    const row = await distinct("ONE", { [seriesKey]: "丝缎花枝配套" }); providerNames("花序");
+    const preview = await generateTitles(actor(), input([String(row.id)], [shortKey]));
+    await fixture.database!.query("UPDATE style_selections SET extra_fields=extra_fields || $2::jsonb WHERE id=$1", [row.id, JSON.stringify({ [seriesKey]: "另一系列" })]);
+    await expect(applyPreview(preview)).rejects.toMatchObject({ status: 409 });
+  });
+});
 
 describe("server-authoritative AI product titles", () => {
   it("completes only long titles below 30 characters, preserves other cells and signs the operation", async () => {

@@ -8,6 +8,7 @@ import type { SelectionField } from "../../../packages/contracts/src/selection-l
 import type { SelectionTitleAICandidate, SelectionTitleAIStatus, SelectionTitleAIRow, SelectionTitleAIPreview, SelectionTitleAIMode } from "../../../packages/contracts/src/selection-title-ai.js";
 import { SELECTION_AI_LONG_TITLE_MIN_CHARACTERS, SELECTION_AI_TITLE_COMPLETION_CHARACTERS, selectionTitleMinimumCharacters, selectionTitleTargetEligible, selectionTitleWordingIssue } from "../../../packages/contracts/src/selection-title-ai.js";
 import { countTextCharacters } from "../../../packages/contracts/src/selection-field-validation.js";
+import { inferTitleName, normalizeTitleName, replaceTitleName, titleNameConflict, titleNameIssue, titleStartsWithName } from "../../../packages/contracts/src/selection-title-names.js";
 import "./selection-title-ai.css";
 
 export type SelectionTitleAiRow = { id: string; rowKey: string; xutiStyleNo: string; values: Record<string, string> };
@@ -55,6 +56,7 @@ function validPreview(value: unknown, rowIds: ReadonlySet<string>, targetKeys: R
   const plan = value as Partial<SelectionTitleAIPreview>;
   return typeof plan.planToken === "string" && plan.planToken.length >= 20 && typeof plan.expiresAt === "string" && Number.isFinite(Date.parse(plan.expiresAt)) && typeof plan.model === "string" && stringList(plan.warnings) &&
     Array.isArray(plan.rows) && plan.rows.every(row => row && rowIds.has(row.id) && typeof row.xutiStyleNo === "string" && typeof row.expectedUpdatedAt === "string" && stringList(row.evidence) && stringList(row.warnings) &&
+      (row.poeticName === undefined || typeof row.poeticName === "string" && !titleNameIssue(row.poeticName)) && (row.series === undefined || typeof row.series === "string") &&
       Array.isArray(row.titles) && row.titles.length <= 2 && row.titles.every(title => title && targetKeys.has(title.key) && typeof title.label === "string" && ["long", "short"].includes(title.kind) && typeof title.value === "string" && Number.isInteger(title.maxLength) && title.maxLength > 0 && ["characters", "han"].includes(title.countMode) &&
         (title.minCharacters === selectionTitleMinimumCharacters(title.kind, mode) || (mode === "blank" && title.minCharacters === undefined)) &&
         (mode === "complete" ? title.kind === "long" && title.maxCharacters === SELECTION_AI_TITLE_COMPLETION_CHARACTERS : title.maxCharacters === undefined) &&
@@ -92,7 +94,18 @@ export function SelectionTitleAi({ open, onClose, rows, fields, initialFieldKeys
   const expiredBatches = batches.filter(batch => batch.rows.length && expired(batch));
   const expiringSoon = batches.some(batch => batch.rows.length && !expired(batch) && Date.parse(batch.expiresAt) - now <= 3 * 60 * 1000);
   const checkedTitles = candidates.filter(({ batch }) => !expired(batch)).flatMap(({ row }) => row.titles.filter(title => title.checked));
-  const invalidChecked = checkedTitles.some(title => !!cellIssue(title));
+  const nameOwners = candidates.filter(({ batch, row }) => !expired(batch) && row.titles.some(title => title.checked)).map(({ row }) => ({
+    id: row.id, style: normalizeTitleName(row.xutiStyleNo).toUpperCase(), series: row.series || "",
+    names: row.poeticName ? [normalizeTitleName(row.poeticName)] : [], titles: row.titles.filter(title => title.checked).map(title => title.value),
+  }));
+  const nameIssue = (row: CandidateRow) => {
+    if (row.poeticName === undefined) return "";
+    const name = normalizeTitleName(row.poeticName), owner = nameOwners.find(owner => owner.id === row.id);
+    return (!name ? "款名/别名须为 2–4 个汉字" : titleNameIssue(name)) ||
+      (row.titles.some(title => title.checked && !titleStartsWithName(title.value, name)) ? "长短标题须使用相同款名，请通过款名输入框统一修改" : "") ||
+      (owner ? titleNameConflict(name, owner, nameOwners) : "");
+  };
+  const invalidChecked = checkedTitles.some(title => !!cellIssue(title)) || candidates.some(({ batch, row }) => !expired(batch) && row.titles.some(title => title.checked) && !!nameIssue(row));
   const incompatibleFields = fields.filter(field => !!fieldIssue(field, mode));
   const invalidSelectedFields = incompatibleFields.some(field => fieldKeys.includes(field.key));
   const generated = new Set(completedIds);
@@ -163,6 +176,10 @@ export function SelectionTitleAi({ open, onClose, rows, fields, initialFieldKeys
         const group = queue.slice(offset, offset + batchSize);
         const response = await request("/style-selections/ai-titles/generate", "POST", {
           rowIds: group.map(row => row.id), targetKeys: fieldKeys, mode,
+          pendingNames: activePlans.flatMap(batch => batch.rows.flatMap(row => {
+            const name = normalizeTitleName(row.poeticName || row.titles.map(title => inferTitleName(title.value)).find(Boolean));
+            return name && !titleNameIssue(name) ? [{ rowId: row.id, name }] : [];
+          })),
           preferences: { usePoeticName, ...(instruction.trim() ? { instruction: instruction.trim() } : {}) },
         });
         if (currentRun !== runId.current) return;
@@ -185,11 +202,18 @@ export function SelectionTitleAi({ open, onClose, rows, fields, initialFieldKeys
       ...batch, rows: batch.rows.map(row => row.id !== id ? row : { ...row, titles: row.titles.map(title => title.key !== key ? title : { ...title, ...patch }) }),
     }));
   };
+  const changeName = (planToken: string, id: string, value: string) => {
+    if (running.current) return;
+    setBatches(current => current.map(batch => batch.planToken !== planToken ? batch : { ...batch,
+      rows: batch.rows.map(row => row.id !== id ? row : { ...row, poeticName: value,
+        titles: row.titles.map(title => ({ ...title, value: replaceTitleName(title.value, row.poeticName || "", value) })) }),
+    }));
+  };
   const apply = async () => {
     if (running.current || !checkedTitles.length || invalidChecked) return;
     const selected = batches.filter(batch => !expired(batch)).map(batch => ({
       batch,
-      rows: batch.rows.map(row => ({ id: row.id, titles: row.titles.filter(title => title.checked).map(({ key, value }) => ({ key, value })) })).filter(row => row.titles.length),
+      rows: batch.rows.map(row => ({ id: row.id, ...(row.poeticName !== undefined ? { poeticName: normalizeTitleName(row.poeticName) } : {}), titles: row.titles.filter(title => title.checked).map(({ key, value }) => ({ key, value })) })).filter(row => row.titles.length),
     })).filter(item => item.rows.length);
     if (selected.some(item => Date.parse(item.batch.expiresAt) <= Date.now())) { setError("候选标题已过期，请清空候选后重新生成。"); return; }
     running.current = true; stopAfterBatch.current = false;
@@ -232,7 +256,7 @@ export function SelectionTitleAi({ open, onClose, rows, fields, initialFieldKeys
       </>}
     </Space>}>
     <div className="selection-title-ai-scope">范围：{scopeLabel || "当前筛选结果"} · {eligibleRows.length} 款{mode === "blank" ? "有空白标题" : "符合处理条件"} · 每批最多 10 款，自动分批处理</div>
-    <Alert type="info" showIcon title="先生成候选，核对后保存" description={`生成会将本范围内有权查看的商品成分、类目、现有描述、图片及少量已有标题示例发送至 OpenRouter 和所选模型供应商，并产生 API 费用。${mode === "blank" ? "已有标题保留" : "确认后替换勾选单元格的原文"}；季节、材质、工艺等必须有资料依据。`} />
+    <Alert type="info" showIcon title="先生成候选，核对后保存" description={`生成会将有权查看的商品成分、类目、现有描述、图片、所属系列、已有款名及少量标题示例发送至 OpenRouter 和所选模型供应商，并产生 API 费用。${mode === "blank" ? "已有标题保留" : "确认后替换勾选单元格的原文"}；季节、材质、工艺等必须有资料依据。`} />
     {status && !status.ready && <Alert className="selection-title-ai-alert" type="warning" showIcon title={status.message || "AI 服务尚未配置"} action={canConfigureAi && onConfigureAi ? <Button size="small" onClick={onConfigureAi}>配置 AI 服务</Button> : undefined} description="请联系有系统设置权限的管理员配置 AI 服务后重试。" />}
     {!status && !statusLoading && <Button size="small" onClick={() => void checkStatus()}>重新检查 AI 服务</Button>}
     <div className="selection-title-ai-options">
@@ -241,7 +265,8 @@ export function SelectionTitleAi({ open, onClose, rows, fields, initialFieldKeys
       <Space wrap><strong>处理字段</strong>{fields.map(field => <Checkbox key={field.key} checked={fieldKeys.includes(field.key)} disabled={settingsLocked || (mode === "complete" && field.label !== "长标题") || (!!fieldIssue(field, mode) && !fieldKeys.includes(field.key))} onChange={event => setFieldKeys(current => event.target.checked ? [...current, field.key] : current.filter(key => key !== field.key))}>{field.label}{field.label === "长标题" ? mode === "complete" ? `（补全至 ${SELECTION_AI_TITLE_COMPLETION_CHARACTERS} 字符；` : `（至少 ${SELECTION_AI_LONG_TITLE_MIN_CHARACTERS} 字符；` : "（"}{field.textConfig ? `最多 ${field.textConfig.maxLength}${field.textConfig.countMode === "han" ? "汉字" : "字符"}）` : `默认最多 ${field.label === "短标题" ? 30 : 60} 字符）`}</Checkbox>)}</Space>
       {!!incompatibleFields.length && <Alert className="selection-title-ai-alert" type="warning" showIcon title={incompatibleFields.map(field => fieldIssue(field, mode)).join("；")} description={mode === "complete" ? "请先调整字段字符上限，或切换其他处理方式。" : invalidSelectedFields ? "当前不能生成长标题；也可取消勾选长标题，仅生成短标题。" : "长标题暂不可勾选；短标题可按原有上限独立生成。"} />}
       <Collapse ghost size="small" items={[{ key: "preferences", label: "标题偏好与规则", children: <>
-        <Checkbox checked={usePoeticName} disabled={settingsLocked} onChange={event => setUsePoeticName(event.target.checked)}>结合款式尝试原创诗意款名</Checkbox>
+        <Checkbox checked={usePoeticName} disabled={settingsLocked} onChange={event => setUsePoeticName(event.target.checked)}>结合款式尝试原创诗意款名（2–4 字）</Checkbox>
+        <p>不同款避免重名及雷同词组。同面料、同纹样设计的配套上装、下装、裙装，请在表格的「所属系列」文本或单选字段填写相同值；该字段非空且一致时允许共用款名，未填写则每款独立命名。</p>
         <Input.TextArea aria-label="标题偏好" value={instruction} disabled={settingsLocked} onChange={event => setInstruction(event.target.value)} maxLength={400} rows={2} placeholder="可填写语气、用词偏好；不会将偏好当作产品事实。" />
         <p>参考本表已有标题格式；长标题至少 {SELECTION_AI_LONG_TITLE_MIN_CHARACTERS} 字符，使用【有依据的卖点】与产品描述。视觉识别后可补充符合实物的季节、风格和常用搜索词，不能为凑字数编造事实；短标题精简。款名避开已知 IP、影视名，候选仍需人工核对。禁止杜撰非遗、材质比例、功效或夸大词。</p>
       </> }]} />
@@ -256,6 +281,12 @@ export function SelectionTitleAi({ open, onClose, rows, fields, initialFieldKeys
       <div className="selection-title-ai-review-heading"><strong>候选标题 · {candidates.length} 款</strong><span>可修改标题、取消勾选。确认后按批保存；原内容及权限发生变化时须重新生成。</span></div>
       <div className="selection-title-ai-candidates">{candidates.slice((resultPage - 1) * pageSize, resultPage * pageSize).map(({ batch, row }) => <section className="selection-title-ai-candidate" key={`${batch.planToken}:${row.id}`}>
         <div className="selection-title-ai-candidate-heading"><strong><CopyableCode value={row.xutiStyleNo} label="款号" /></strong>{expired(batch) ? <Tag color="red">候选已过期</Tag> : <Tag>{batch.model}</Tag>}</div>
+        {row.poeticName !== undefined && <div className="selection-title-ai-name">
+          <label htmlFor={`title-name-${row.id}`}>款名 / 别名（2–4 字）</label>
+          <Input id={`title-name-${row.id}`} aria-label={`${row.xutiStyleNo} 款名/别名`} value={row.poeticName} maxLength={4} disabled={!!busy || expired(batch)} status={nameIssue(row) ? "error" : undefined} onChange={event => changeName(batch.planToken, row.id, event.target.value)} />
+          <Typography.Text type="secondary">{row.series ? `所属系列：${row.series}` : "未填写所属系列，本款独立命名"}</Typography.Text>
+          {!!nameIssue(row) && <div className="selection-title-ai-row-warning" role="alert">{nameIssue(row)}</div>}
+        </div>}
         {row.titles.map(title => <div className="selection-title-ai-title" key={title.key}>
           <Checkbox checked={title.checked} disabled={!!busy || expired(batch)} onChange={event => changeTitle(batch.planToken, row.id, title.key, { checked: event.target.checked })}>{title.label}</Checkbox>
           {mode !== "blank" && <div className="selection-title-ai-original" aria-label={`${row.xutiStyleNo} ${title.label}原文`}><strong>原文</strong><span>{title.previousValue?.trim() ? title.previousValue : "（空白）"}</span></div>}
