@@ -100,8 +100,7 @@ async function runLogin(
   const inputs = new JstLoginInputTracker();
   let lastAction: { id: string; error: string | null } | null = null;
   let nextFrame = 0,
-    note =
-      "请完成登录，打开「商品 → 商品库存」，确认序缇杭州总仓后点击核验保存";
+    note = "请完成登录，点击核验将打开商品库存并确认序缇杭州总仓";
   while (Date.now() < new Date(job.expires_at).getTime()) {
     await assertJob(job, token, true);
     const official = context
@@ -130,18 +129,31 @@ async function runLogin(
             job.id,
             token,
           );
-          await verifyJstScope(page);
+          const checking = async (text: string) => {
+            await db.$executeRawUnsafe(
+              "UPDATE jushuitan_browser_logins SET note=$3 WHERE id=$1::uuid AND claim_token=$2::uuid AND status='CHECKING'",
+              job.id,
+              token,
+              text,
+            );
+          };
+          await verifyJstScope(page, checking);
           const state = await collectJstState(context);
           // A saved session must work in a fresh browser context, not only in the current login tab.
           const probe = await createContext(browser, state);
           let verifiedState;
           try {
+            await checking("正在新窗口恢复登录并核验杭州总仓");
             const restored = await openHome(probe);
-            await verifyJstScope(restored);
+            await verifyJstScope(restored, (text) =>
+              checking(`新窗口恢复：${text}`),
+            );
             verifiedState = await collectJstState(probe);
-          } catch {
+          } catch (error) {
             throw new JstBrowserError(
-              "当前登录不能在新窗口恢复，请在聚水潭登录时选择保持登录，打开商品库存后再次核验",
+              error instanceof JstBrowserError
+                ? `新窗口恢复核验未通过：${error.message}`
+                : "新窗口未能加载聚水潭，请稍后重试；当前登录尚未保存",
             );
           } finally {
             await probe.close();
@@ -208,7 +220,7 @@ async function runLogin(
         if (a.type === "TEXT") {
           await inputs.fill(page, a.targetId, a.value);
         }
-        note = "请完成登录，打开商品库存，确认序缇杭州总仓后核验保存";
+        note = "请完成登录，点击核验将打开商品库存并确认序缇杭州总仓";
       } catch (e) {
         note = safeError(e);
         lastAction.error = note;

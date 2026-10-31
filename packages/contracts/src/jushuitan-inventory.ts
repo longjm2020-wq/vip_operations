@@ -45,6 +45,14 @@ export function isJushuitanOrigin(value: string) {
     return false;
   }
 }
+export function isJushuitanInventoryUrl(value: string) {
+  return (
+    isJushuitanOrigin(value) &&
+    new URL(value).pathname
+      .replace(/\/$/, "")
+      .endsWith("/stockInventoryManagement")
+  );
+}
 // These embedded identity pages may display QR codes. Their cookies are never
 // included in the saved ERP session, and they cannot become the main page.
 export function isJushuitanLoginFrame(value: string, parent: string) {

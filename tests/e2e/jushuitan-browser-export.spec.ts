@@ -1,6 +1,9 @@
 import { expect, test, type Page } from "@playwright/test";
 import * as XLSX from "xlsx";
-import { exportJstInventory } from "../../apps/worker/src/jushuitan-browser-export.js";
+import {
+  exportJstInventory,
+  verifyJstScope,
+} from "../../apps/worker/src/jushuitan-browser-export.js";
 import { jushuitanScope } from "../../packages/contracts/src/jushuitan-inventory.js";
 import type { JstTarget } from "../../apps/api/src/integrations/jushuitan/export-file.js";
 import {
@@ -90,6 +93,13 @@ function excel(rows: unknown[][]) {
 async function erpFixture(
   page: Page,
   mode: "valid" | "outside" | "unscoped" = "valid",
+  options: {
+    homeOnly?: boolean;
+    hiddenDuplicate?: boolean;
+    companyScope?: boolean;
+    wrongWarehouse?: boolean;
+    resetWarehouse?: boolean;
+  } = {},
 ) {
   const downloads: string[] = [];
   await page.route("https://**/*", async (route) => {
@@ -115,18 +125,32 @@ async function erpFixture(
     if (url.pathname === "/epaas")
       return route.fulfill({
         contentType: "text/html; charset=utf-8",
-        body: `<p>${jushuitanScope.company}</p><button role="tab">商品库存</button><iframe style="width:1200px;height:800px" src="https://src.erp321.com/stockInventoryManagement"></iframe>`,
+        body: `<header>${jushuitanScope.company}</header>
+          <aside id="current-scope" style="position:absolute;left:10px;top:80px;writing-mode:vertical-rl;width:20px;height:240px">${options.companyScope ? jushuitanScope.company : options.wrongWarehouse ? "其它分仓" : jushuitanScope.warehouse}</aside>
+          <div role="dialog" id="warehouse-picker" hidden><span>${jushuitanScope.warehouse}</span><span>所有仓储</span></div>
+          <button ${options.homeOnly ? "" : 'role="tab"'} id="inventory-entry">商品库存</button>
+          ${options.hiddenDuplicate ? '<iframe hidden src="https://src.erp321.com/stockInventoryManagement?old=1"></iframe>' : ""}
+          <div id="inventory" style="margin-left:50px">${options.homeOnly ? "" : '<iframe style="width:1200px;height:800px" src="https://src.erp321.com/stockInventoryManagement"></iframe>'}</div>
+          <script>
+            const scope=document.getElementById('current-scope'),picker=document.getElementById('warehouse-picker');
+            scope.onclick=()=>picker.hidden=false;
+            picker.querySelector('span').onclick=()=>{scope.textContent=${JSON.stringify(jushuitanScope.warehouse)};picker.hidden=true;};
+            document.getElementById('inventory-entry').onclick=()=>{
+              if(!document.getElementById('inventory').children.length)document.getElementById('inventory').innerHTML='<iframe style="width:1200px;height:800px" src="https://src.erp321.com/stockInventoryManagement"></iframe>';
+            };
+            window.addEventListener('message',event=>{if(event.data==='reset-warehouse')scope.textContent='其它分仓';});
+          </script>`,
       });
     if (url.pathname !== "/stockInventoryManagement") return route.abort();
     return route.fulfill({
       contentType: "text/html; charset=utf-8",
       body: `
-      <p>${jushuitanScope.warehouse}</p><p>实际库存数 商品编码</p>
+      <p>实际库存数 商品编码</p>
       <input id="i_id"><input id="supplier_sku_id"><input id="supplier_i_id">
       <span class="goods-input-affix-wrapper"><button id="match" aria-label="匹配方式：模糊匹配，点击切换为精确匹配">模</button><input id="sku_id"></span>
       <div class="select-input-container"><button role="combobox" id="attribute">选择其它属性</button><input placeholder="请输入" id="mapped"></div>
       <div id="options" hidden class="goods-select-item-option-content"><span>其它属性5</span></div>
-      <button id="reset">重 置</button><button id="search">搜 索</button><button id="export">导出</button>
+      <button id="reset">重 置</button><button id="search">搜 索</button><button id="export">导 出</button>
       <a hidden id="download">导出库存</a><p id="count">共99999条</p><div id="loading" hidden class="goods-spin-spinning">加载中</div>
       <script>
         const byId=id=>document.getElementById(id);let kind='sku_code',query='';
@@ -134,7 +158,7 @@ async function erpFixture(
         byId('attribute').onclick=()=>byId('options').hidden=false;
         byId('options').onclick=()=>byId('options').hidden=true;
         const load=(count)=>{byId('loading').hidden=false;byId('export').disabled=true;setTimeout(()=>{byId('count').textContent='共'+count+'条';byId('loading').hidden=true;byId('export').disabled=false;},100);};
-        byId('reset').onclick=()=>{document.querySelectorAll('input').forEach(i=>i.value='');load(99999);};
+        byId('reset').onclick=()=>{document.querySelectorAll('input').forEach(i=>i.value='');${options.resetWarehouse ? "parent.postMessage('reset-warehouse','*');" : ""}load(99999);};
         byId('search').onclick=()=>{
           kind=byId('sku_id').value?'sku_code':'mapped_code';query=byId(kind==='sku_code'?'sku_id':'mapped').value;
           const count=${JSON.stringify(mode)}==='unscoped'?99999:!query.split(',').includes(${JSON.stringify(code)})?0:kind==='mapped_code'?2:1;
@@ -174,6 +198,65 @@ test("云端流程仅查询网站编码和属性5，等待重置完成，并按�
   });
   expect(result.files).toHaveLength(2);
   expect(stages).toContain("查询其它属性5（第1/1批）");
+});
+
+test("会话恢复后从首页打开库存并选择杭州总仓，忽略隐藏的旧库存页", async ({
+  page,
+}) => {
+  await erpFixture(page, "valid", {
+    homeOnly: true,
+    companyScope: true,
+    hiddenDuplicate: true,
+  });
+  const frame = await verifyJstScope(page);
+  await expect(
+    frame.getByRole("button", { name: "导 出", exact: true }),
+  ).toBeVisible();
+  await expect(page.locator("#current-scope")).toHaveText(
+    jushuitanScope.warehouse,
+  );
+  await expect(page.getByRole("dialog")).toBeHidden();
+});
+
+test("仓库仅出现在候选列表时不通过，查询重置改变仓库时不导出", async ({
+  page,
+}) => {
+  await erpFixture(page, "valid", { wrongWarehouse: true });
+  await page.locator("#current-scope").click();
+  await expect(page.getByRole("dialog")).toBeVisible();
+  await expect(verifyJstScope(page)).rejects.toThrow("当前仓库无法确认");
+  await page.unrouteAll();
+  const downloads = await erpFixture(page, "valid", { resetWarehouse: true });
+  await expect(
+    exportJstInventory(
+      page,
+      [target],
+      async () => {},
+      async () => {},
+    ),
+  ).rejects.toThrow("当前仓库无法确认");
+  expect(downloads).toHaveLength(0);
+});
+
+test("库存查询内容可见，账号密码验证码仍遮盖", async ({ page }) => {
+  await page.route("https://src.erp321.com/stockInventoryManagement", (route) =>
+    route.fulfill({
+      contentType: "text/html; charset=utf-8",
+      body: '<input id="sku_id" value="000123"><input placeholder="请输入" value="杭州总仓"><input type="password" hidden><input autocomplete="username"><input autocomplete="one-time-code"><input placeholder="请输入账号">',
+    }),
+  );
+  await page.goto("https://src.erp321.com/stockInventoryManagement");
+  const masks = jstLoginMasks(page);
+  expect(await masks[0].count()).toBe(4);
+  expect(
+    await masks[0].evaluateAll((elements) =>
+      elements.some((e) => e.id === "sku_id"),
+    ),
+  ).toBe(false);
+  await page.locator('input[type="password"]').evaluate((element) => {
+    (element as HTMLElement).hidden = false;
+  });
+  expect(await jstLoginMasks(page)[0].count()).toBe(6);
 });
 test("导出出现范围外商品时拒绝发布", async ({ page }) => {
   await erpFixture(page, "outside");

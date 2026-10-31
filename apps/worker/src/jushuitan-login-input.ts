@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { ElementHandle, Page } from "@playwright/test";
 import {
   isJushuitanOrigin,
+  isJushuitanInventoryUrl,
   jushuitanViewport,
   type JushuitanLoginInput,
 } from "../../../packages/contracts/src/jushuitan-inventory.js";
@@ -9,11 +10,33 @@ import { JstBrowserError } from "./jushuitan-browser-export.js";
 
 const editable =
   'input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]):not([type="button"]):not([type="submit"]):not([type="reset"]):not([type="file"]):not([type="image"]):not([type="range"]):not([type="color"]),textarea';
+const credentials = [
+  'input[type="password"]',
+  ...["username", "current-password", "new-password", "one-time-code"].map(
+    (value) => `input[autocomplete="${value}"]`,
+  ),
+  ...["密码", "验证码", "账号", "帐号", "用户名", "手机", "邮箱"].flatMap(
+    (value) => [
+      `input[placeholder*="${value}"]`,
+      `input[aria-label*="${value}"]`,
+    ],
+  ),
+  'input[name*="password" i]',
+  ...editable
+    .split(",")
+    .map((selector) => `html:has(input[type="password"]:visible) ${selector}`),
+].join(",");
 export function jstLoginMasks(page: Page) {
   return page
     .frames()
     .filter((f) => !f.isDetached())
-    .map((f) => f.locator(`${editable},[contenteditable="true"]`));
+    .map((f) =>
+      f.locator(
+        isJushuitanInventoryUrl(f.url())
+          ? credentials
+          : `${editable},[contenteditable="true"]`,
+      ),
+    );
 }
 
 /** Exposes only geometry, a random focus token and whether a field is filled. */

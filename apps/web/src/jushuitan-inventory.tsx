@@ -360,7 +360,7 @@ function JushuitanLogin({
           type="info"
           showIcon
           title="点击账号、密码框后直接输入，按回车填写"
-          description={`底部输入栏始终可用。输入内容不会回显在云端画面，填写后显示状态。登录后打开「商品 → 商品库存」，核对${jushuitanScope.company}、${jushuitanScope.warehouse}再保存会话。`}
+          description={`底部输入栏始终可用，账号、密码及验证码内容隐藏。登录${jushuitanScope.company}后点击核验，系统会打开商品库存并核对${jushuitanScope.warehouse}。库存查询条件正常显示；如提示仓库不符，可点击画面左侧货主仓储入口切换。`}
         />
         {q.error && <Alert type="error" title={(q.error as Error).message} />}
         {l?.note && (
