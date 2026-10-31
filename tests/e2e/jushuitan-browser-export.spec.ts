@@ -133,11 +133,21 @@ async function erpFixture(
     tours?: boolean;
     styleQueries?: boolean;
     styleMaxLength?: number;
+    delayedQueryWithoutSpinner?: boolean;
   } = {},
 ) {
   const downloads: string[] = [];
   await page.route("https://**/*", async (route) => {
     const url = new URL(route.request().url());
+    if (url.pathname === "/fixture-count") {
+      await new Promise((resolve) =>
+        setTimeout(resolve, options.delayedQueryWithoutSpinner ? 2500 : 100),
+      );
+      return route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify({ count: Number(url.searchParams.get("count")) }),
+      });
+    }
     if (url.pathname === "/fixture-export.xlsx") {
       downloads.push(url.search);
       const mapping = url.searchParams.get("kind") === "mapped_code";
@@ -225,7 +235,7 @@ async function erpFixture(
         if(byId('style-match'))byId('style-match').onclick=()=>byId('style-match').setAttribute('aria-label','匹配方式：精确匹配，点击切换为模糊匹配');
         byId('attribute').onclick=()=>byId('options').hidden=false;
         byId('options').onclick=()=>byId('options').hidden=true;
-        const load=(count)=>{byId('loading').hidden=false;byId('export').disabled=true;setTimeout(()=>{byId('count').textContent='共'+count+'条';byId('loading').hidden=true;byId('export').disabled=false;},100);};
+        const load=(count)=>{byId('loading').hidden=${options.delayedQueryWithoutSpinner ? "true" : "false"};byId('export').disabled=true;fetch('/fixture-count?count='+count).then(response=>response.json()).then(data=>{byId('count').textContent='共'+data.count+'条';byId('loading').hidden=true;byId('export').disabled=false;});};
         byId('reset').onclick=()=>{byId('reset').dataset.count=String(Number(byId('reset').dataset.count||0)+1);document.querySelectorAll('input').forEach(i=>i.value='');${options.resetWarehouse ? "parent.postMessage('reset-warehouse','*');" : ""}load(99999);};
         byId('search').onclick=()=>{
           kind=byId('i_id').value?'style_code':byId('sku_id').value?'sku_code':'mapped_code';query=byId(kind==='style_code'?'i_id':kind==='sku_code'?'sku_id':'mapped').value;
@@ -262,6 +272,23 @@ test("两类款号各导出一份，按明确商品编码汇总且不纳入网�
     "data-count",
     "1",
   );
+});
+test("查询加载标志缺失或晚出现时，等待请求完成再读取条数和导出", async ({
+  page,
+}) => {
+  const downloads = await erpFixture(page, "valid", {
+    styleQueries: true,
+    delayedQueryWithoutSpinner: true,
+  });
+  const result = await exportJstInventory(
+    page,
+    [{ ...target, style_no: "XFA16X31196L" }],
+    async () => {},
+    async () => {},
+  );
+  expect(downloads).toHaveLength(2);
+  expect(result.report.exportedCount).toBe(3);
+  expect(result.report.records[0].physical_qty).toBe(15);
 });
 test("款号查询按输入框容量拆批，保留两类格式的完整查询范围", async ({
   page,

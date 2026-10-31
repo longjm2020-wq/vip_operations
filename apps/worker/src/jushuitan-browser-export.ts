@@ -1,4 +1,4 @@
-import type { BrowserContext, Page, Frame } from "@playwright/test";
+import type { BrowserContext, Page, Frame, Request } from "@playwright/test";
 import { readFile, stat } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import {
@@ -283,31 +283,63 @@ async function inventoryCount(frame: Frame) {
     throw new JstBrowserError("无法读取库存查询结果条数，未导出");
   return counts[0];
 }
-async function waitForInventoryQuery(frame: Frame) {
-  const loading = frame.locator(
-    ".goods-spin-spinning:visible,.ant-spin-spinning:visible",
-  );
-  await loading
-    .first()
-    .waitFor({ state: "visible", timeout: 2000 })
-    .catch(() => {});
+async function runInventoryQuery(frame: Frame, action: "reset" | "search") {
+  const page = frame.page(),
+    pending = new Set<Request>();
+  let observed = 0,
+    lastActivity = Date.now();
+  // Observe completion of the ERP's own UI requests. Never call a private API
+  // or read its request/response payload. The loading spinner alone can lag.
+  const started = (request: Request) => {
+    if (!["xhr", "fetch"].includes(request.resourceType())) return;
+    try {
+      if (request.frame() !== frame || !isJushuitanOrigin(request.url()))
+        return;
+    } catch {
+      return;
+    }
+    observed++;
+    pending.add(request);
+    lastActivity = Date.now();
+  };
+  const finished = (request: Request) => {
+    if (pending.delete(request)) lastActivity = Date.now();
+  };
+  page.on("request", started);
+  page.on("requestfinished", finished);
+  page.on("requestfailed", finished);
   try {
-    await loading.first().waitFor({ state: "hidden", timeout: 90000 });
-  } catch (error) {
+    await frame
+      .getByRole("button", {
+        name: action === "reset" ? /^重\s*置$/ : /^搜\s*索$/,
+      })
+      .click();
+    const deadline = Date.now() + 90000;
+    while (Date.now() < deadline) {
+      if (observed && !pending.size && Date.now() - lastActivity >= 750) {
+        await frame
+          .locator(".goods-spin-spinning:visible,.ant-spin-spinning:visible")
+          .first()
+          .waitFor({
+            state: "hidden",
+            timeout: Math.max(1, deadline - Date.now()),
+          });
+        return;
+      }
+      await delay(100);
+    }
     console.warn("jst_query_loading_timeout", {
-      indicators: await loading
-        .evaluateAll((elements) =>
-          elements.slice(0, 5).map((element) => ({
-            tag: element.tagName,
-            className: element.className,
-            parentClass: element.parentElement?.className,
-            width: Math.round(element.getBoundingClientRect().width),
-            height: Math.round(element.getBoundingClientRect().height),
-          })),
-        )
-        .catch(() => []),
+      action,
+      observedRequests: observed,
+      pendingRequests: pending.size,
     });
-    throw error;
+    throw new JstBrowserError(
+      "聚水潭库存查询超过90秒未确认完成，未导出；登录会话仍保留",
+    );
+  } finally {
+    page.off("request", started);
+    page.off("requestfinished", finished);
+    page.off("requestfailed", finished);
   }
 }
 /** This flow only clicks the ERP's own read/search/export controls, never its private APIs. */
@@ -411,10 +443,9 @@ async function collectJstInventory(
   const reports: JushuitanExport[] = [],
     files: { bytes: Buffer; fileName: string }[] = [];
   await stage("清理初始查询条件");
-  await frame.getByRole("button", { name: /^重\s*置$/ }).click();
   // Reset reloads the entire warehouse. Do it once, then replace only the two
   // integration-owned query fields, keeping every batch scoped to exact codes.
-  await waitForInventoryQuery(frame);
+  await runInventoryQuery(frame, "reset");
   for (let offset = 0; offset < codes.length; offset += 200)
     for (const kind of ["sku_code", "mapped_code"] as const) {
       // Smaller custom-attribute queries preserve complete coverage while
@@ -493,8 +524,7 @@ async function collectJstInventory(
         await stage(
           `执行${kind === "sku_code" ? "商品编码" : "其它属性5"}搜索（第${Math.floor(part / batchSize) + 1}/${batches}批）`,
         );
-        await frame.getByRole("button", { name: /^搜\s*索$/ }).click();
-        await waitForInventoryQuery(frame);
+        await runInventoryQuery(frame, "search");
         let expected = await inventoryCount(frame);
         for (
           let retry = 1;
@@ -515,8 +545,7 @@ async function collectJstInventory(
           await stage(
             `查询范围复核（${kind === "sku_code" ? "商品编码" : "其它属性5"}第${Math.floor(part / batchSize) + 1}/${batches}批，重试${retry}/2）`,
           );
-          await frame.getByRole("button", { name: /^搜\s*索$/ }).click();
-          await waitForInventoryQuery(frame);
+          await runInventoryQuery(frame, "search");
           expected = await inventoryCount(frame);
         }
         if (expected === 0) {
@@ -596,8 +625,7 @@ async function collectJstStyleInventory(
   stage: (text: string) => Promise<void>,
 ) {
   await stage("清理初始查询条件（按款号导出）");
-  await frame.getByRole("button", { name: /^重\s*置$/ }).click();
-  await waitForInventoryQuery(frame);
+  await runInventoryQuery(frame, "reset");
   await verifyJstWarehouse(page, frame);
   const input = frame.locator("#i_id"),
     wrapper = frame.locator(".goods-input-affix-wrapper:has(#i_id)");
@@ -664,8 +692,7 @@ async function collectJstStyleInventory(
       throw new JstBrowserError("聚水潭仍有其它商品筛选条件，未导出部分库存");
     await exact.waitFor({ state: "visible" });
     await verifyJstWarehouse(page, frame);
-    await frame.getByRole("button", { name: /^搜\s*索$/ }).click();
-    await waitForInventoryQuery(frame);
+    await runInventoryQuery(frame, "search");
     const expected = await inventoryCount(frame);
     if (!expected) continue;
     if (expected > 100000 || expected > batch.codes.length * 200)
