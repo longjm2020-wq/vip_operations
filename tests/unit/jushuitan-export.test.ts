@@ -141,6 +141,38 @@ it("allows only embedded official QR login endpoints and never stores their sess
     }).cookies,
   ).toHaveLength(0);
 });
+it("reads exact integer quantities from decimal text and grouped numbers without rounding", () => {
+  const r = row();
+  r[3] = "1,234.0000";
+  r[4] = "+10.00";
+  r[9] = "-1.000";
+  expect(parseJushuitanExport(file([r]), 1).records[0]).toMatchObject({
+    physical_qty: 1234,
+    reserved_qty: 10,
+    available_qty: -1,
+  });
+  for (const invalid of [
+    "1.5",
+    "1,23",
+    "",
+    "9007199254740992.0",
+    "1e2",
+    "--",
+  ]) {
+    const bad = row();
+    bad[3] = invalid;
+    expect(() => parseJushuitanExport(file([bad]), 1)).toThrow(/实际库存数/);
+  }
+  expect(() =>
+    parseJushuitanExport(
+      file([row()], (sheet) => {
+        sheet.D2 = { t: "e", v: 0 };
+      }),
+      1,
+    ),
+  ).toThrow(/错误单元格/);
+});
+
 it("keeps long identifiers and exported availability, including negative values", () => {
   const r = row();
   r[9] = -1;
@@ -220,7 +252,7 @@ it("rejects precision loss, formulas and missing stock columns", () => {
       }),
       1,
     ),
-  ).toThrow("有效整数");
+  ).toThrow("含公式");
   expect(() =>
     parseJushuitanExport(
       file([row()], (s) => {

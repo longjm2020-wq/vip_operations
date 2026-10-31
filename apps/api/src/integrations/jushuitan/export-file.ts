@@ -229,16 +229,29 @@ export function parseJushuitanExport(
     for (const key of Object.keys(fields).filter((k) => k !== "sku_code")) {
       const c = cell(key),
         text = String(c?.v ?? "").trim();
+      // ERP workbooks can store whole quantities as decimal text or with
+      // thousands separators. Accept exact integers, never round quantities.
+      const numeric = text.replaceAll(",", "");
       if (
         !c ||
         c.f ||
-        !/^-?\d+$/.test(text) ||
-        !Number.isSafeInteger(Number(text))
-      )
+        !["n", "s", "str"].includes(c.t) ||
+        !/^[+-]?(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.0+)?$/.test(text) ||
+        !Number.isSafeInteger(Number(numeric))
+      ) {
+        console.warn("jst_export_invalid_quantity", {
+          row: r + 1,
+          field: key,
+          cellType: c?.t ?? "missing",
+          formula: !!c?.f,
+          empty: !text,
+          numericText: /^[\d.,+\-\s]{1,60}$/.test(text) ? text : undefined,
+        });
         throw new JstExportError(
-          `第${r + 1}行${fields[key as keyof typeof fields][0]}不是有效整数，未导入`,
+          `第${r + 1}行${fields[key as keyof typeof fields][0]}${!text ? "为空白" : c?.f ? "含公式" : c?.t === "e" ? "为错误单元格" : "不是有效整数"}，未导入`,
         );
-      record[key] = Number(text);
+      }
+      record[key] = Number(numeric);
     }
     records.push(record as JstStockRecord);
   }
