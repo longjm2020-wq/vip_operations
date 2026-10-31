@@ -66,7 +66,7 @@ const target: JstTarget = {
   size_name: "L",
 };
 const targets = [target, { ...target, sku_code: "MISSING" }];
-function report() {
+function report(unknown = false) {
   const b = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(
     b,
@@ -84,7 +84,12 @@ function report() {
         "可用数",
         "虚拟库存数",
       ],
-      ["0000123", "", "粉色;L", 5, 0, 0, 0, 0, 0, 5, 12],
+      [
+        "0000123",
+        "",
+        "粉色;L",
+        ...(unknown ? Array(8).fill(null) : [5, 0, 0, 0, 0, 0, 5, 12]),
+      ],
       ["alias-粉色-L", "0000123", "粉色;L", 10, 0, 0, 0, 25, 0, 10, 0],
     ]),
     "库存",
@@ -108,6 +113,7 @@ beforeAll(async () => {
     "072_jushuitan_inventory.sql",
     "073_jushuitan_browser_inventory.sql",
     "074_jushuitan_login_input.sql",
+    "076_jushuitan_unknown_quantities.sql",
   ])
     await fixture.db.exec(
       await readFile("packages/database/migrations/" + f, "utf8"),
@@ -293,6 +299,25 @@ it("coalesces syncs and publishes all mapped sources and original bytes atomical
   expect(Buffer.from(stored.bytes, "base64").subarray(0, 2).toString()).toBe(
     "PK",
   );
+});
+it("publishes unknown export quantities without changing them into zero or partial sums", async () => {
+  await ready();
+  const { job, token } = await claim(),
+    r = report(true);
+  await publishJstExport(job, token, r.matched, r.files, "encrypted-fixture");
+  const snapshot = (
+    await query(
+      "SELECT physical_qty,available_qty FROM jushuitan_inventory_snapshots",
+    )
+  )[0];
+  expect(snapshot).toEqual({ physical_qty: null, available_qty: null });
+  const source = (
+    await query(
+      "SELECT quantities FROM jushuitan_inventory_sources WHERE source_sku='0000123'",
+    )
+  )[0];
+  expect(source.quantities.physical_qty).toBeNull();
+  expect((await jushuitanStatus()).runs[0].status).toBe("COMPLETE");
 });
 it("binds typing to the selected input even when unrelated screenshot content changes", async () => {
   const l = await openJushuitanLogin(context()),

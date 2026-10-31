@@ -16,7 +16,7 @@ export type JstStockRecord = {
   sku_code: string;
   mapped_code: string;
   color_size: string;
-} & Record<Exclude<keyof typeof fields, "sku_code">, number>;
+} & Record<Exclude<keyof typeof fields, "sku_code">, number | null>;
 export type JushuitanExport = {
   records: JstStockRecord[];
   expectedCount: number;
@@ -215,7 +215,7 @@ export function parseJushuitanExport(
           !/^\d+$/.test(mapped.w ?? "")))
     )
       throw new JstExportError(`第${r + 1}行其它属性5条码可能丢失精度`);
-    const record: Record<string, string | number> = {
+    const record: Record<string, string | number | null> = {
       sku_code: code,
       mapped_code:
         mapped?.t === "n"
@@ -226,7 +226,23 @@ export function parseJushuitanExport(
           ? ""
           : String(cell("color_size")?.v ?? "").trim(),
     };
-    for (const key of Object.keys(fields).filter((k) => k !== "sku_code")) {
+    const quantityKeys = Object.keys(fields).filter((k) => k !== "sku_code");
+    // The ERP exports products with no warehouse quantity record as an entirely
+    // blank quantity block. Preserve unknowns; explicit zero remains zero.
+    const noQuantities = quantityKeys.every((key) => {
+      const c = cell(key);
+      return (
+        !c ||
+        (!c.f &&
+          ["s", "str", "z"].includes(c.t) &&
+          String(c.v ?? "").trim() === "")
+      );
+    });
+    for (const key of quantityKeys) {
+      if (noQuantities) {
+        record[key] = null;
+        continue;
+      }
       const c = cell(key),
         text = String(c?.v ?? "").trim();
       // ERP workbooks can store whole quantities as decimal text or with
@@ -336,8 +352,11 @@ export function mergeJstExports(
         for (const key of Object.keys(fields).filter(
           (k) => k !== "sku_code",
         ) as Exclude<keyof typeof fields, "sku_code">[]) {
-          sum[key] += r[key];
-          if (!Number.isSafeInteger(sum[key]))
+          const previous = sum[key],
+            next = r[key];
+          sum[key] =
+            previous === null || next === null ? null : previous + next;
+          if (sum[key] !== null && !Number.isSafeInteger(sum[key]))
             throw new JstExportError("汇总库存超出有效整数范围");
         }
     }

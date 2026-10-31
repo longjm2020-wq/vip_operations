@@ -183,6 +183,44 @@ it("keeps long identifiers and exported availability, including negative values"
     available_qty: -1,
   });
 });
+it("preserves an entirely blank quantity block as unknown through matching and summation", () => {
+  const blank = row().map((value, index) => (index < 3 ? value : null));
+  const unknown = parseJushuitanExport(file([blank]), 1);
+  expect(unknown.records[0]).toMatchObject({
+    physical_qty: null,
+    available_qty: null,
+    virtual_qty: null,
+  });
+  const known = parseJushuitanExport(
+    file([row("alias", target.sku_code, 10)]),
+    1,
+  );
+  for (const reports of [
+    [unknown, known],
+    [known, unknown],
+  ]) {
+    const result = mergeJstExports(reports, [target]);
+    expect(result.records[0]).toMatchObject({
+      physical_qty: null,
+      available_qty: null,
+    });
+    expect(result.sources).toHaveLength(2);
+  }
+  expect(mergeJstExports([unknown, unknown], [target]).sources).toHaveLength(1);
+  const partial = [...blank];
+  partial[3] = 0;
+  expect(() => parseJushuitanExport(file([partial]), 1)).toThrow(
+    /订单占有数为空白/,
+  );
+  expect(() =>
+    parseJushuitanExport(
+      file([blank], (s) => {
+        s.D2 = { t: "n", f: "1-1", v: 0 };
+      }),
+      1,
+    ),
+  ).toThrow(/含公式/);
+});
 it("reads bounded ZIP64 exports and rejects excessive expanded size", () => {
   expect(
     parseJushuitanExport(zip64Entries(file([row()])), 1).records[0]
