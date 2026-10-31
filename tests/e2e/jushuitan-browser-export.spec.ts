@@ -123,6 +123,7 @@ async function erpFixture(
     companyScope?: boolean;
     wrongWarehouse?: boolean;
     resetWarehouse?: boolean;
+    tours?: boolean;
   } = {},
 ) {
   const downloads: string[] = [];
@@ -150,6 +151,7 @@ async function erpFixture(
       return route.fulfill({
         contentType: "text/html; charset=utf-8",
         body: `<header>${jushuitanScope.company}</header>
+          ${options.tours ? '<div id="logo-tour" style="position:fixed;inset:0;z-index:100;background:#0002">点击Logo图标，可快速搜索菜单！<button onclick="this.parentElement.remove()">知道了</button></div>' : ""}
           <aside id="current-scope" style="position:absolute;left:10px;top:80px;writing-mode:vertical-rl;width:20px;height:240px">${options.companyScope ? jushuitanScope.company : options.wrongWarehouse ? "其它分仓" : jushuitanScope.warehouse}</aside>
           <div role="dialog" id="warehouse-picker" hidden><span>${jushuitanScope.warehouse}</span><span>所有仓储</span></div>
           <button ${options.homeOnly ? "" : 'role="tab"'} id="inventory-entry">商品库存</button>
@@ -170,6 +172,7 @@ async function erpFixture(
       contentType: "text/html; charset=utf-8",
       body: `
       <p>实际库存数 商品编码</p>
+      ${options.tours ? '<div id="inventory-tour" style="position:fixed;inset:0;z-index:100;background:#0002">当前是库存视角，您可以点击切换视角或返回旧版库存<button onclick="this.parentElement.remove()">我知道了</button></div>' : ""}
       <input id="i_id"><input id="supplier_sku_id"><input id="supplier_i_id">
       <span class="goods-input-affix-wrapper"><button id="match" aria-label="匹配方式：模糊匹配，点击切换为精确匹配">模</button><input id="sku_id"></span>
       <div class="select-input-container"><button role="combobox" id="attribute">选择其它属性</button><input placeholder="请输入" id="mapped"></div>
@@ -222,6 +225,25 @@ test("云端流程仅查询网站编码和属性5，等待重置完成，并按�
   });
   expect(result.files).toHaveLength(2);
   expect(stages).toContain("查询其它属性5（第1/1批）");
+});
+
+test("关闭已识别的新手引导后才能切换精确匹配并导出", async ({ page }) => {
+  const downloads = await erpFixture(page, "valid", {
+    tours: true,
+    hiddenDuplicate: true,
+  });
+  const result = await exportJstInventory(
+    page,
+    [target],
+    async () => {},
+    async () => {},
+  );
+  expect(downloads).toHaveLength(2);
+  expect(result.report.records[0].physical_qty).toBe(15);
+  await expect(page.locator("#logo-tour")).toHaveCount(0);
+  await expect(
+    page.frameLocator("#inventory iframe").locator("#inventory-tour"),
+  ).toHaveCount(0);
 });
 
 test("会话恢复后从首页打开库存并选择杭州总仓，忽略隐藏的旧库存页", async ({

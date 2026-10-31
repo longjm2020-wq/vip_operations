@@ -55,20 +55,23 @@ const exportButton = (frame: Frame) =>
     .filter({ visible: true })
     .first();
 
+async function visibleFrame(frame: Frame) {
+  if (frame.isDetached()) return false;
+  for (let child = frame; child.parentFrame(); child = child.parentFrame()!) {
+    const element = await child.frameElement();
+    try {
+      if (!(await element.isVisible())) return false;
+    } finally {
+      await element.dispose();
+    }
+  }
+  return true;
+}
 async function visibleInventoryFrames(page: Page) {
   const frames: Frame[] = [];
   for (const frame of page.frames()) {
-    if (!isJushuitanInventoryUrl(frame.url()) || frame.isDetached()) continue;
-    let visible = true;
-    for (let child = frame; child.parentFrame(); child = child.parentFrame()!) {
-      const element = await child.frameElement();
-      try {
-        if (!(await element.isVisible())) visible = false;
-      } finally {
-        await element.dispose();
-      }
-    }
-    if (visible) frames.push(frame);
+    if (isJushuitanInventoryUrl(frame.url()) && (await visibleFrame(frame)))
+      frames.push(frame);
   }
   return frames;
 }
@@ -117,6 +120,27 @@ async function inventoryFrame(page: Page) {
 
 const scopeText = (frame: Frame, value: string) =>
   frame.getByText(value, { exact: true }).filter({ visible: true });
+
+async function dismissJstTours(page: Page) {
+  // Only known informational ERP tips, never agreements or arbitrary dialogs.
+  for (const frame of page.frames()) {
+    if (!isJushuitanOrigin(frame.url()) || !(await visibleFrame(frame)))
+      continue;
+    for (const [message, label] of [
+      ["点击Logo图标，可快速搜索菜单！", "知道了"],
+      ["当前是库存视角", "我知道了"],
+    ]) {
+      const tip = frame
+        .getByText(message, { exact: false })
+        .filter({ visible: true });
+      if (!(await tip.count())) continue;
+      const dismiss = frame
+        .getByText(label, { exact: true })
+        .filter({ visible: true });
+      if ((await dismiss.count()) === 1) await dismiss.click();
+    }
+  }
+}
 
 async function currentWarehouse(frame: Frame) {
   // Current scope can be a vertical sidebar in the outer ERP shell. A warehouse
@@ -213,7 +237,9 @@ async function checkJstScope(
       true,
     );
   await stage("打开并识别商品库存页面");
+  await dismissJstTours(page);
   const opened = await inventoryFrame(page);
+  await dismissJstTours(page);
   await stage("选择并核验杭州总仓");
   const frame = await restoreWarehouse(page, opened);
   await verifyJstWarehouse(page, frame);
@@ -290,6 +316,30 @@ export async function exportJstInventory(
       errorType: error instanceof Error ? error.name : "Unknown",
       operation: details[0]?.replace(/https?:\/\/\S+/g, "[url]").slice(0, 200),
       locator: locator?.replace(/https?:\/\/\S+/g, "[url]").slice(0, 350),
+      reasons: [
+        "intercepts pointer events",
+        "not visible",
+        "not stable",
+        "outside of the viewport",
+        "not enabled",
+        "detached",
+      ].filter((reason) => details.some((line) => line.includes(reason))),
+      blockers: [
+        ...new Set(
+          details
+            .filter((line) => line.includes("intercepts pointer events"))
+            .flatMap((line) =>
+              [
+                ...line.matchAll(
+                  /<([a-z][a-z0-9-]*)(?:\s[^>]*?class="([a-zA-Z0-9_ -]+)")?[^>]*>/g,
+                ),
+              ].map(
+                (match) =>
+                  `${match[1]}${match[2] ? "." + match[2].replaceAll(" ", ".") : ""}`,
+              ),
+            ),
+        ),
+      ].slice(0, 6),
     });
     throw new JstBrowserError(
       `${currentStep}未完成，请重试或联系管理员检查页面控件；登录会话仍保留，未发布库存`,
