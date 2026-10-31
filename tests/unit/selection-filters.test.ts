@@ -45,6 +45,12 @@ describe("effective filter indicators and all-selection normalization", () => {
 });
 
 describe("selection column filters and selection", () => {
+  it("does not count inaccessible cells as blank matches in any filter scope", () => {
+    const filters = { material: { mode: "empty" as const, value: "" } };
+    expect(matchesSelectionFilters({ material: "", cellAccess: { material: "deny" } }, filters)).toBe(false);
+    expect(matchesSelectionFilters({ material: "", cellAccess: { material: "read" } }, filters)).toBe(true);
+    expect(matchesSelectionFilters({ material: "", cellAccess: { material: "deny" } }, {})).toBe(true);
+  });
   it("sorts computed decimal limits numerically including fallback types and leaves blanks last", () => {
     const key = "custom:limit", rows = ["899.5", "899.49", "", "0"].map(value => ({ extraFields: { [key]: value } }));
     for (const column of [{ key, type: "vipTagPriceLimit" }, { key, fallbackType: "vipTagPriceLimit" }]) {

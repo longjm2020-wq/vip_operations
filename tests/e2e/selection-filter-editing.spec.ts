@@ -11,12 +11,14 @@ async function fixture(page: Page, options: {
   values?: string[];
   pageSize?: number;
   archive?: boolean;
+  createdDates?: string[];
 } = {}) {
   let revision = 0;
   let rejectSharedWrite = false;
   let layout: SelectionLayoutSnapshot = {
     preferences: selectionLayoutSchema.parse({
       columns: [
+        ...(options.createdDates ? [{ key: "registrationBatch", label: "创建时间", type: "createdTime", timeDisplay: "date", width: 160 }] : []),
         { key: "xutiStyleNo", label: "序缇款号", width: 160, type: "text" },
         { key: fieldKey, label: "执行标准", width: 240, custom: true, type: options.type || "text", options: options.type && options.type !== "text" ? ["女士皮衣/皮草", "女士睡衣/家居服", "已有标准"] : undefined },
       ],
@@ -37,7 +39,7 @@ async function fixture(page: Page, options: {
     images: [],
     labelImages: [],
     extraFields: { [fieldKey]: standard },
-    createdAt: new Date(Date.UTC(2026, 9, 9) + index * 1000).toISOString(),
+    createdAt: options.createdDates ? `${options.createdDates[index]}T00:00:00.000Z` : new Date(Date.UTC(2026, 9, 9) + index * 1000).toISOString(),
     updatedAt: "2026-10-10T00:00:00.000Z",
     defaultCellAccess: "edit",
     cellAccess: (index === 0 && (options.permission === "read" || options.permission === "deny") ? { [fieldKey]: options.permission } : {}) as Record<string, string>,
@@ -103,6 +105,7 @@ async function fixture(page: Page, options: {
   return {
     writes, rows, savedValue: () => rows[0].extraFields[fieldKey], savedPreferences: () => layout.preferences!,
     setAccess: (access: "read" | "deny") => { rows[0].cellAccess = { [fieldKey]: access }; rows[0].updatedAt = touch(); },
+    setCreatedDate: (index: number, date: string) => { rows[index].createdAt = `${date}T00:00:00.000Z`; rows[index].updatedAt = touch(); },
     removeRow: (id: string) => { const index = rows.findIndex(item => item.id === id); rows.splice(index, 1); touch(); },
     addBlankRow: () => { const id = `editing-new-${rows.length}`; rows.push({ ...rows[0], id, xutiStyleNo: id, sortOrder: 100, extraFields: { [fieldKey]: "" }, cellAccess: {}, updatedAt: touch() }); return id; },
     rejectNextSharedWrite: () => { rejectSharedWrite = true; },
@@ -150,8 +153,37 @@ test("空白列筛选下执行标准逐字输入期间保留当前行和焦点�
   await expect(row(page), "离开编辑位置后仍保留已筛出的行，方便逐行补填").toBeVisible();
   await expect.poll(state.savedValue).toBe("GB/T 15557-2025");
   expect(state.writes.at(-1)?.body.extraFields).toEqual({ [fieldKey]: "GB/T 15557-2025" });
+  await expect(page.locator(".selection-result-count")).toContainText("共 2 条");
+  await expect(page.locator(".selection-result-count")).toContainText("匹配 1 条，暂留 1 条");
   await reconfirm(page);
   await expect(row(page), "再次确认同一空白筛选条件后才移除已填写行").toHaveCount(0);
+});
+
+test("创建时间选项1加12与暂留总数14明确区分，重筛后统一为13", async ({ page }) => {
+  await page.clock.install();
+  const state = await fixture(page, { archive: true, filtered: false, pageSize: 20, values: Array(15).fill(""),
+    createdDates: ["2026-10-29", "2026-10-29", ...Array(12).fill("2026-10-30"), "2026-10-28"] });
+  await page.getByRole("button", { name: "筛选创建时间", exact: true }).click();
+  const panel = page.locator(".selection-filter-panel:visible");
+  await panel.locator(".selection-filter-values").getByRole("checkbox", { name: /^2026-10-28\s*\(1\)$/ }).uncheck();
+  await expect(panel.getByRole("status")).toContainText("确认后匹配 14 条");
+  await panel.getByRole("button", { name: "确认", exact: true }).click();
+  await expect(page.locator(".selection-result-count")).toHaveText("共 14 条");
+  state.setCreatedDate(1, "2026-10-28");
+  await page.clock.fastForward(31_000);
+  await expect(page.locator(".selection-result-count")).toContainText("匹配 13 条，暂留 1 条");
+  await page.getByRole("button", { name: "筛选创建时间", exact: true }).click();
+  await expect(panel.locator(".selection-filter-values").getByRole("checkbox", { name: /^2026-10-29\s*\(1\)$/ })).toBeChecked();
+  await expect(panel.locator(".selection-filter-values").getByRole("checkbox", { name: /^2026-10-30\s*\(12\)$/ })).toBeChecked();
+  await expect(panel.getByRole("status")).toContainText("确认后匹配 13 条");
+  await expect(panel.getByRole("status")).toContainText("暂留 1 条");
+  await panel.getByRole("button", { name: "取消", exact: true }).click();
+  await expect(page.locator(".selection-result-count")).toContainText("共 14 条");
+  await page.getByRole("button", { name: "重新筛选", exact: true }).click();
+  await expect(page.locator(".selection-result-count")).toHaveText("共 13 条");
+  await expect(page.locator('tr[data-selection-row="editing-1"]')).toHaveCount(0);
+  expect(state.writes).toHaveLength(0);
+  expect(state.savedPreferences().columnFilters.registrationBatch?.values).toEqual(["2026-10-29", "2026-10-30"]);
 });
 
 test("空白列筛选下执行标准中文组合输入不会中断或卸载输入框", async ({ page }) => {
@@ -293,6 +325,8 @@ test("分页前后保留空白筛选的成员与顺序，返回首页仍显示�
   await expect.poll(state.savedValue).toBe("首页已补填");
   await page.locator(".selection-pagination .ant-pagination-next button").click();
   await expect(page.locator("tr[data-selection-row]")).toHaveCount(2);
+  await expect(page.locator(".selection-result-count")).toContainText("共 22 条");
+  await expect(page.locator(".selection-result-count")).toContainText("匹配 21 条，暂留 1 条");
   expect(await visibleRows(page)).toEqual(["editing-20", "editing-21"]);
   await page.locator(".selection-pagination .ant-pagination-prev button").click();
   await expect(row(page)).toBeVisible();

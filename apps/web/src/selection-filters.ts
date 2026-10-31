@@ -40,6 +40,8 @@ export const selectionFilterText = (row: Row, key: string): string => row.select
 export const selectionCellColor = (row: Row, key: string, type: "fill" | "text") => type === "text" ? row.cellTextColors?.[key] || "default" : row.cellColors?.[key] || row.rowColor || "NONE";
 export function matchesSelectionFilters(row: Row, filters: SelectionFilters) {
   return Object.entries(filters).every(([key, filter]) => {
+    // Masked cells are not empty values and must not inflate candidate counts.
+    if (row.cellAccess?.[key] === "deny") return false;
     const raw = selectionFilterValue(row, key), text = selectionFilterText(row, key).toLocaleLowerCase(), query = filter.value.trim().toLocaleLowerCase();
     if (filter.values) { let selected = optionSets.get(filter); if (!selected) { selected = new Set(filter.values); optionSets.set(filter, selected); } if (!selected.has(raw)) return false; }
     if (filter.colors && !filter.colors.includes(selectionCellColor(row, key, filter.colorType || "fill"))) return false;

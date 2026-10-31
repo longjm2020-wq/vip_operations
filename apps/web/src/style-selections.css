@@ -537,6 +537,10 @@
 
 .selection-bulk-add{flex-wrap:wrap;}
 .selection-pagination{margin-left:auto;}
+.selection-result-count { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 4px; }
+.selection-result-count .ant-btn { padding-inline: 4px; }
+.selection-filter-counts { margin-top: 8px; padding: 8px; border-radius: 6px; background: var(--app-bg); color: var(--app-secondary); font-size: 12px; line-height: 1.5; }
+.selection-filter-counts strong { display: block; color: var(--app-text); }
 .selection-statistics{margin-left:auto;display:flex;align-items:center;gap:8px;color:var(--app-secondary);font-size:12px;}
 .selection-statistics>span{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:12px;}
 .selection-statistics-menu{width:230px;}

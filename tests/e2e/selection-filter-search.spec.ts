@@ -8,6 +8,7 @@ const numericField = "custom:amount";
 
 async function fixture(page: Page, options: {
   readonly?: boolean;
+  hiddenMaterialRows?: number[];
   materials?: string[];
   numberValues?: (number | string)[];
   rowFormatting?: { rowColor?: string; cellColors?: Record<string, string>; cellTextColors?: Record<string, string> }[];
@@ -32,7 +33,7 @@ async function fixture(page: Page, options: {
     id: `filter-${index}`, xutiStyleNo: `FILTER-${index}`, material,
     sortOrder: index + 1, images: [], labelImages: [],
     extraFields: options.numberValues ? { [numericField]: options.numberValues[index] } : {},
-    updatedAt: "2026-10-10T00:00:00.000Z", defaultCellAccess: "edit", cellAccess: {},
+    updatedAt: "2026-10-10T00:00:00.000Z", defaultCellAccess: "edit", cellAccess: options.hiddenMaterialRows?.includes(index) ? { material: "deny" } : {},
     ...options.rowFormatting?.[index],
   }));
   const sharedWrites: { revision: number; view: SelectionView }[] = [];
@@ -113,6 +114,23 @@ async function selectPanelOption(page: Page, panel: Locator, label: string, valu
 
 const optionOrder = (panel: Locator) => panel.locator(".selection-filter-values span[title]")
   .evaluateAll(elements => elements.map(element => element.getAttribute("title")));
+
+test("筛选计数排除不可查看内容，全选可见选项仍保留权限范围", async ({ page }) => {
+  const state = await fixture(page, { readonly: true, materials: ["A", "A", "B", ""], hiddenMaterialRows: [3] });
+  let panel = await openFilter(page);
+  await expect(optionCheckbox(panel, "(空白)")).toHaveCount(0);
+  await optionCheckbox(panel, "B").uncheck();
+  await expect(panel.getByRole("status")).toContainText("确认后匹配 2 条");
+  await confirm(panel);
+  await expect(page.locator(".selection-result-count")).toHaveText("共 2 条");
+  panel = await openFilter(page);
+  await optionCheckbox(panel, "B").check();
+  await expect(panel.getByRole("status")).toContainText("确认后匹配 3 条");
+  await confirm(panel);
+  await expect(page.locator(".selection-result-count")).toHaveText("共 3 条");
+  expect(state.savedFilter()?.values).toEqual(["A", "B"]);
+  expect(state.rowWrites).toEqual([]);
+});
 
 test("筛选图标在恢复全选后取消高亮，刷新和仅排序不会恢复空筛选", async ({ page }) => {
   const state = await fixture(page);
