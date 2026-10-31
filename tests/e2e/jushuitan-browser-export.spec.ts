@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import * as XLSX from "xlsx";
+import { collectJstState } from "../../apps/worker/src/jushuitan-browser-state.js";
 import {
   exportJstInventory,
   verifyJstScope,
@@ -55,6 +56,28 @@ test("登录输入只返回位置与填写状态，绑定目标且不遮盖协�
   expect(await masks[0].count()).toBe(2);
   await page.getByRole("checkbox").check();
   expect(await tracker.current(page)).toBeNull();
+});
+
+test("会话收集跳过禁止存储的内嵌页，保留主站会话供新窗口核验", async ({
+  page,
+}) => {
+  await page.route("https://www.erp321.com/**", (route) =>
+    route.fulfill({
+      contentType: "text/html; charset=utf-8",
+      body:
+        new URL(route.request().url()).pathname === "/epaas"
+          ? '<script>sessionStorage.setItem("fixture-session", "fixture-value")</script><iframe sandbox="allow-scripts" src="https://www.erp321.com/fixture-sandbox"></iframe>'
+          : "<p>Sandbox content</p>",
+    }),
+  );
+  await page.goto("https://www.erp321.com/epaas");
+  const state = await collectJstState(page.context());
+  expect(state.sessionStorage).toEqual([
+    {
+      origin: "https://www.erp321.com",
+      entries: [{ name: "fixture-session", value: "fixture-value" }],
+    },
+  ]);
 });
 
 const code = "0000123456789012345678";

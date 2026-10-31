@@ -73,13 +73,32 @@ export async function collectJstState(context: BrowserContext) {
     for (const frame of page.frames()) {
       if (frame.isDetached() || !isJushuitanOrigin(frame.url())) continue;
       const origin = new URL(frame.url()).origin;
-      const entries = await frame.evaluate((expected) => {
-        if (location.origin !== expected) return null;
-        return Object.keys(sessionStorage).map((name) => ({
-          name,
-          value: sessionStorage.getItem(name)!,
-        }));
-      }, origin);
+      const entries = await frame
+        .evaluate((expected) => {
+          if (location.origin !== expected) return null;
+          try {
+            return Object.keys(sessionStorage).map((name) => ({
+              name,
+              value: sessionStorage.getItem(name)!,
+            }));
+          } catch {
+            // Embedded sandbox pages can deny storage access. Their storage is
+            // unavailable for restoration too; the fresh-context probe still has
+            // to prove that the authenticated inventory session is complete.
+            return null;
+          }
+        }, origin)
+        .catch((error: unknown) => {
+          if (
+            frame.isDetached() ||
+            (error instanceof Error &&
+              /Execution context was destroyed|Frame was detached/.test(
+                error.message,
+              ))
+          )
+            return null;
+          throw error;
+        });
       if (entries) sessions.set(origin, { origin, entries });
     }
   return jstOnlyState({

@@ -114,6 +114,7 @@ async function runLogin(
     );
     if (action) {
       lastAction = { id: String(action.id), error: null };
+      let actionStep = "执行页面操作";
       try {
         const envelope = JSON.parse(decryptSecret(action.encrypted_payload));
         if (
@@ -124,12 +125,14 @@ async function runLogin(
           throw Error("Invalid action");
         const a = jushuitanLoginActionSchema.parse(envelope.action);
         if (a.type === "CHECK") {
+          actionStep = "启动登录核验";
           await db.$executeRawUnsafe(
             "UPDATE jushuitan_browser_logins SET status='CHECKING',frame_id=NULL,note='正在核验账号、仓库及会话恢复能力' WHERE id=$1::uuid AND claim_token=$2::uuid",
             job.id,
             token,
           );
           const checking = async (text: string) => {
+            actionStep = text;
             await db.$executeRawUnsafe(
               "UPDATE jushuitan_browser_logins SET note=$3 WHERE id=$1::uuid AND claim_token=$2::uuid AND status='CHECKING'",
               job.id,
@@ -138,8 +141,10 @@ async function runLogin(
             );
           };
           await verifyJstScope(page, checking);
+          await checking("读取当前登录会话");
           const state = await collectJstState(context);
           // A saved session must work in a fresh browser context, not only in the current login tab.
+          await checking("创建会话恢复窗口");
           const probe = await createContext(browser, state);
           let verifiedState;
           try {
@@ -158,10 +163,12 @@ async function runLogin(
           } finally {
             await probe.close();
           }
+          await checking("加密已核验的登录会话");
           const encrypted = encryptJstState(
             verifiedState,
             String(job.actor_id),
           );
+          await checking("保存已核验的登录会话");
           await db.$transaction(async (tx) => {
             await jstLock(tx);
             const s = (await jstSettings(tx, true))!;
@@ -222,7 +229,33 @@ async function runLogin(
         }
         note = "请完成登录，点击核验将打开商品库存并确认序缇杭州总仓";
       } catch (e) {
-        note = safeError(e);
+        // Log only error kinds and validation paths, never values, browser call
+        // logs, SQL arguments or the decrypted login payload.
+        const detail = e as {
+          name?: string;
+          code?: string;
+          issues?: { code: string; path: unknown[]; maximum?: number }[];
+        };
+        console.warn("jst_login_action_failed", {
+          step: actionStep,
+          errorType: detail?.name,
+          code:
+            typeof detail?.code === "string" &&
+            /^[A-Z0-9_]{1,20}$/.test(detail.code)
+              ? detail.code
+              : undefined,
+          validation: detail?.issues
+            ?.slice(0, 8)
+            .map((issue) => ({
+              code: issue.code,
+              path: issue.path,
+              maximum: issue.maximum,
+            })),
+        });
+        note =
+          e instanceof JstBrowserError || e instanceof JstExportError
+            ? e.message
+            : `${actionStep}未完成，请重试；当前会话尚未保存`;
         lastAction.error = note;
       }
       nextFrame = 0;
