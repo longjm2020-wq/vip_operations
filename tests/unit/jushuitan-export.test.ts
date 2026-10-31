@@ -274,3 +274,39 @@ it("filters foreign storage and binds encrypted sessions to purpose and owner", 
   expect(isJushuitanOrigin("http://www.erp321.com")).toBe(false);
   expect(isJushuitanOrigin("https://www.erp321.com:444")).toBe(false);
 });
+
+it("preserves large ERP state entries within a bounded encrypted session", () => {
+  vi.stubEnv("COMPASS_MAIL_KEY", "12".repeat(32));
+  const value = "配置".repeat(300_000);
+  const state = {
+    cookies: [],
+    origins: [
+      {
+        origin: "https://www.erp321.com",
+        localStorage: [{ name: "fixture-erp-state", value }],
+      },
+    ],
+    sessionStorage: [],
+  };
+  const encrypted = encryptJstState(state, "7");
+  expect(decryptJstState(encrypted, "7").origins[0].localStorage[0].value).toBe(
+    value,
+  );
+  expect(() =>
+    encryptJstState(
+      {
+        ...state,
+        origins: [
+          {
+            ...state.origins[0],
+            localStorage: Array.from({ length: 5 }, (_, index) => ({
+              name: `fixture-${index}`,
+              value,
+            })),
+          },
+        ],
+      },
+      "7",
+    ),
+  ).toThrow("超过8MB");
+});

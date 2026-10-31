@@ -1,13 +1,17 @@
 import type { BrowserContext } from "@playwright/test";
 import { z } from "zod";
+import { JstBrowserError } from "./jushuitan-browser-export.js";
 import { isJushuitanOrigin } from "../../../packages/contracts/src/jushuitan-inventory.js";
 import {
   decryptSecret,
   encryptSecret,
 } from "../../api/src/modules/analytics/secrets.js";
+export const maxJstSessionBytes = 8 * 1024 * 1024;
 const entry = z.object({
   name: z.string().max(512),
-  value: z.string().max(128 * 1024),
+  // The ERP stores large inventory UI state alongside authentication. Keep it
+  // intact and bound the whole saved session instead of rejecting a 128KB item.
+  value: z.string().max(maxJstSessionBytes),
 });
 const schema = z.object({
   cookies: z
@@ -36,13 +40,18 @@ const schema = z.object({
 });
 export function jstOnlyState(input: unknown) {
   const s = schema.parse(input);
-  return {
+  const state = {
     cookies: s.cookies.filter((c) =>
       isJushuitanOrigin("https://" + c.domain.replace(/^\./, "")),
     ),
     origins: s.origins.filter((o) => isJushuitanOrigin(o.origin)),
     sessionStorage: s.sessionStorage.filter((o) => isJushuitanOrigin(o.origin)),
   };
+  if (Buffer.byteLength(JSON.stringify(state)) > maxJstSessionBytes)
+    throw new JstBrowserError(
+      "聚水潭登录状态超过8MB，请在聚水潭清理不必要的页面缓存后重新核验",
+    );
+  return state;
 }
 export function encryptJstState(input: unknown, actorId: string) {
   const text = JSON.stringify({
@@ -50,8 +59,10 @@ export function encryptJstState(input: unknown, actorId: string) {
     actorId,
     state: jstOnlyState(input),
   });
-  if (Buffer.byteLength(text) > 1024 * 1024)
-    throw Error("聚水潭登录会话过大，请重新登录");
+  if (Buffer.byteLength(text) > maxJstSessionBytes)
+    throw new JstBrowserError(
+      "聚水潭登录状态超过8MB，请在聚水潭清理不必要的页面缓存后重新核验",
+    );
   return encryptSecret(text);
 }
 export function decryptJstState(value: string, actorId: string) {
