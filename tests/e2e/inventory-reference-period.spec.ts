@@ -228,6 +228,7 @@ async function fixture(page: Page, splitSkuSales = false) {
       },
     });
   });
+  await page.route("**/api/v1/my-workspace/appearance", route => route.fulfill({ json: { data: { mode: "light", version: 1 } } }));
   await page.goto(inventoryUrl);
   await expect(
     page.getByRole("region", { name: "库存明细", exact: true }),
@@ -428,7 +429,7 @@ test("期间销量按SKU显示42件的拆分，零中位数不误称无日销且
         "期间有销量",
       );
       await expect(await cell(page, "可售天数", sku.id)).toHaveText(
-        "中位数为0",
+        "暂不估算",
       );
     }
   }

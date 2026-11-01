@@ -5,7 +5,8 @@
   border-bottom: 1px solid var(--app-border);
 }
 
-.inventory-summary-table .ant-table-body {
+.inventory-summary-table .ant-table-body,
+.inventory-summary-table .ant-table-tbody-virtual-holder {
   overscroll-behavior: contain;
 }
 
@@ -117,7 +118,8 @@
   table-layout: fixed;
 }
 
-.inventory-summary-table .ant-table-tbody > tr[data-row-key] > td {
+.inventory-summary-table .ant-table-tbody > tr[data-row-key] > td,
+.inventory-summary-table .ant-table-tbody-virtual .ant-table-row > .ant-table-cell {
   height: 84px;
   padding: 8px 10px;
   overflow: hidden;
@@ -203,7 +205,8 @@
 }
 
 .inventory-summary-table .ant-table-thead > tr > th.inventory-column-selected,
-.inventory-summary-table .ant-table-tbody > tr > td.inventory-column-selected {
+.inventory-summary-table .ant-table-tbody > tr > td.inventory-column-selected,
+.inventory-summary-table .ant-table-tbody-virtual .inventory-column-selected {
   background: var(--app-accent-soft);
 }
 
@@ -220,6 +223,20 @@
  */
 .inventory-summary-table .ant-table-thead > tr > th.ant-table-cell-fix-start-shadow,
 .inventory-summary-table .ant-table-summary td.ant-table-cell-fix-start-shadow,
-.inventory-summary-table .ant-table-tbody > tr > td.ant-table-cell-fix-start-shadow {
+.inventory-summary-table .ant-table-tbody > tr > td.ant-table-cell-fix-start-shadow,
+.inventory-summary-table .ant-table-tbody-virtual .ant-table-cell-fix-start-shadow {
   border-inline-end: 1px solid var(--app-border);
 }
+
+.inventory-view-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin-bottom: 4px;
+}
+.inventory-view-toolbar .selection-column-group-tabs {
+  flex: 1;
+  min-width: 320px;
+}
+.inventory-platform-sync-job { margin-top: 16px; }

@@ -125,6 +125,7 @@ async function fixture(page: Page) {
       },
     });
   });
+  await page.route("**/api/v1/my-workspace/appearance", route => route.fulfill({ json: { data: { mode: "light", version: 1 } } }));
   await page.goto("/operations/vip/inventory");
   await expect(choice(page, "条码状态", "上线")).toBeEnabled();
   return { requests, writes };
@@ -144,13 +145,14 @@ test("库存分页显示总条数并使用所选页大小，末页、切换大�
   await pagination.getByRole("combobox", { name: "每页条数" }).click();
   await page.locator(".ant-select-dropdown:visible .ant-select-item-option").filter({ hasText: /^5000 条\/页$/ }).click();
   await expect.poll(() => Object.fromEntries(state.requests.at(-1)!)).toMatchObject({ page: "1", pageSize: "5000" });
-  await expect(table(page).locator("tr[data-row-key]")).toHaveCount(60);
+  await expect(table(page).locator(".ant-table-tbody-virtual-holder")).toBeVisible();
+  expect(await table(page).locator("[data-row-key]").count()).toBeLessThan(60);
   await choice(page, "款号状态", "上线").click();
   await expect(pagination).toContainText("共 20 条");
-  await expect(table(page).locator("tr[data-row-key]")).toHaveCount(20);
+  await expect.poll(() => table(page).locator("[data-row-key]").count()).toBeGreaterThan(0);
   await choice(page, "条码状态", "未发布").click();
   await expect(pagination).toContainText("共 0 条");
-  await expect(table(page).locator("tr[data-row-key]")).toHaveCount(0);
+  await expect(table(page).locator("[data-row-key]")).toHaveCount(0);
   await expect(pagination.getByRole("combobox", { name: "每页条数" })).toBeVisible();
   await expect(pagination.locator(".ant-pagination-next")).toHaveAttribute("aria-disabled", "true");
   expect(state.requests.at(-1)?.get("pageSize")).toBe("5000");
@@ -192,7 +194,7 @@ test("状态卡片显示全量数量，组合筛选重置分页，导出与筛�
     labels = sheet.getRow(1).values as string[];
   expect(sheet.rowCount).toBe(12);
   expect(
-    Number(sheet.getRow(2).getCell(labels.indexOf("在仓库存数")).value),
+    Number(sheet.getRow(2).getCell(labels.indexOf("实际库存数")).value),
   ).toBe(10);
   expect(
     sheet.getRow(3).getCell(labels.indexOf("平台状态口径")).value,
@@ -202,9 +204,8 @@ test("状态卡片显示全量数量，组合筛选重置分页，导出与筛�
     animations: "disabled",
   });
   await choice(page, "条码状态", "上线").click();
-  await expect
-    .poll(() => state.requests.at(-1)?.has("barcodeState"))
-    .toBe(false);
+  // Returning to a recent filter may reuse the query cache without another GET.
+  await expect(choice(page, "条码状态", "上线")).toHaveAttribute("aria-pressed", "false");
   await expect(table(page).locator("tr[data-row-key]")).toHaveCount(20);
   await choice(page, "款号状态", "部分上线").focus();
   await page.keyboard.press("Enter");

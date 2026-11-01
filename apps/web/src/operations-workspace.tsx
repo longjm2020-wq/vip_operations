@@ -65,7 +65,7 @@ export function OperationsWorkspacePage() {
       name: "库存明细",
       href: "/operations/vip/inventory",
       icon: <InboxOutlined />,
-      description: "全部仓库汇总库存、在途数量与经营参考",
+      description: "聚水潭杭州总仓库存、在途数量与经营参考",
       visible: inventory,
     },
   ].filter((e) => e.visible);

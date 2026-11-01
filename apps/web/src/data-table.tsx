@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useState, type Ref } from "react";
 import { App, Button, TableProps } from "antd";
+import type { TableRef } from "antd/es/table";
 import { Table as AntTable } from "./code-table";
 import { downloadWorkbook } from "./sheet-excel";
 const exportLabels: Record<string, string> = {
@@ -82,7 +83,7 @@ export async function exportTableData<T extends Record<string, any>>(
 export function Table<T extends Record<string, any>>({
   showExport = true,
   ...props
-}: TableProps<T> & { showExport?: boolean }) {
+}: TableProps<T> & { showExport?: boolean; tableRef?: Ref<TableRef> }) {
   const { message } = App.useApp();
   const [busy, setBusy] = useState(false);
   return (

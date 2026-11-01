@@ -98,7 +98,7 @@ export function useList(path: string, filters: Row = {}, pageSize = 20) {
   const [page, setPage] = useState(1);
   const query = useQuery({
     queryKey: [path, page, filters, pageSize],
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       api(
         path +
           "?" +
@@ -107,6 +107,7 @@ export function useList(path: string, filters: Row = {}, pageSize = 20) {
             page: String(page),
             pageSize: String(pageSize),
           }),
+        "GET", undefined, undefined, { signal },
       ),
   });
   return {

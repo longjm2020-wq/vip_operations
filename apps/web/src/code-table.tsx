@@ -1,5 +1,6 @@
-import { useMemo } from "react";
+import { useMemo, type Ref } from "react";
 import { Table as AntTable, type TableProps } from "antd";
+import type { TableRef } from "antd/es/table";
 import { CopyableCode, productCodeLabel } from "./copyable-code";
 
 function codeColumns<T extends object>(columns: TableProps<T>["columns"]): TableProps<T>["columns"] {
@@ -17,9 +18,9 @@ function codeColumns<T extends object>(columns: TableProps<T>["columns"]): Table
   });
 }
 
-function CodeTable<T extends object>(props: TableProps<T>) {
+function CodeTable<T extends object>({ tableRef, ...props }: TableProps<T> & { tableRef?: Ref<TableRef> }) {
   const columns = useMemo(() => codeColumns(props.columns), [props.columns]);
-  return <AntTable<T> {...props} columns={columns} />;
+  return <AntTable<T> {...props} ref={tableRef} columns={columns} />;
 }
 
 export const Table = Object.assign(CodeTable, { Summary: AntTable.Summary });

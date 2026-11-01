@@ -84,6 +84,7 @@ async function fixture(page: Page) {
       });
     return route.fulfill({ json: { data: [], total: 0 } });
   });
+  await page.route("**/api/v1/my-workspace/appearance", route => route.fulfill({ json: { data: { mode: "light", version: 1 } } }));
   await page.goto("/operations/vip/inventory");
   await expect(table(page).locator("tr[data-row-key]")).toHaveCount(1);
   return {
@@ -147,7 +148,7 @@ test("状态分组定位、固定列和总计保持一致，导出中文状态�
   expect(value("图片")).toBe("https://a.vpimg4.com/fixture.jpg");
   expect(value("商品编码")).toBe("000001");
   expect(value("条码状态", 2)).toBe("—");
-  expect(labels.indexOf("在仓库存数")).toBeLessThan(labels.indexOf("条码状态"));
+  expect(labels.indexOf("实际库存数")).toBeLessThan(labels.indexOf("条码状态"));
   expect(value("平台状态口径")).toContain("全部");
   expect(state.writes).toEqual([]);
 });

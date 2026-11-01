@@ -4,7 +4,9 @@ import {
   useState,
   type MouseEvent,
   type ReactNode,
+  type RefObject,
 } from "react";
+import type { TableRef } from "antd/es/table";
 import { App, Dropdown, type MenuProps, type TableProps } from "antd";
 import { PushpinOutlined } from "@ant-design/icons";
 import type { InventoryDimension } from "../../../packages/contracts/src/inventory-summary";
@@ -27,6 +29,7 @@ type Props = {
   columns: Columns;
   groupKeys?: string[];
   groupVisit?: number;
+  tableRef?: RefObject<TableRef | null>;
   children: (columns: Columns) => ReactNode;
 };
 
@@ -69,6 +72,7 @@ function InventoryColumnPinningState({
   widthStorageKey,
   groupKeys = [],
   groupVisit = 0,
+  tableRef,
 }: Props & { storageKey: string; widthStorageKey: string }) {
   const { message } = App.useApp();
   const { columns, resizeColumn } = useInventoryColumnWidths(widthStorageKey, sourceColumns);
@@ -165,7 +169,9 @@ function InventoryColumnPinningState({
     groupVisit,
   ]);
   useEffect(() => {
-    const body = surface.current?.querySelector<HTMLElement>(".ant-table-body");
+    const nativeBody = surface.current?.querySelector<HTMLElement>(".ant-table-body");
+    const body = nativeBody
+      ?? surface.current?.querySelector<HTMLElement>(".ant-table-header");
     if (!body) return;
     const first =
       !fixed.length && groupKeys.length
@@ -176,7 +182,7 @@ function InventoryColumnPinningState({
           `th[data-inventory-column="${CSS.escape(columnKey(first))}"]`,
         )
       : undefined;
-    body.scrollTo({
+    const position = {
       left: target
         ? Math.max(
             0,
@@ -185,8 +191,12 @@ function InventoryColumnPinningState({
               body.getBoundingClientRect().left,
           )
         : 0,
-      behavior: "instant",
-    });
+      top: undefined,
+    };
+    // rc-table's virtual ref forwards `left` to its virtual list. Changing the
+    // header DOM's scrollLeft alone would leave rows and totals at the old offset.
+    if (nativeBody) nativeBody.scrollTo({ ...position, behavior: "instant" });
+    else tableRef?.current?.scrollTo(position);
     setSelection({ selected: [], anchor: null });
     setMenuTargets(null);
     drag.current = null;

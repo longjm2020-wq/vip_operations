@@ -37,7 +37,7 @@ export const workspaceTools = [
   {
     id: "inventory",
     title: "库存明细",
-    description: "核对在库、在途及仓库库存",
+    description: "核对聚水潭杭州总仓库存与在途数量",
     path: "/operations/vip/inventory",
     permission: "inventory.read",
     group: "仓储",

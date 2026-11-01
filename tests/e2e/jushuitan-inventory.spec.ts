@@ -405,11 +405,6 @@ test("只读账号查看来源和记录，暗色与窄屏不提供登录配置�
 }) => {
   await fixture(page, false, true, "dark");
   await page.goto("/operations/vip/inventory");
-  await page.getByRole("combobox", { name: "库存数据来源" }).click();
-  await page
-    .locator(".ant-select-dropdown:not(.ant-select-dropdown-hidden)")
-    .getByText("聚水潭库存", { exact: true })
-    .click();
   await expect(
     page.getByText(/聚水潭 · 序缇杭州总仓 · 完整同步/),
   ).toBeVisible();
@@ -438,12 +433,8 @@ test("只读账号查看来源和记录，暗色与窄屏不提供登录配置�
 test("无快照时不把网站库存当作聚水潭结果", async ({ page }) => {
   await fixture(page);
   await page.goto("/operations/vip/inventory");
-  await expect(page.locator(".ant-table-body tr[data-row-key]")).toHaveCount(2);
-  await page.getByRole("combobox", { name: "库存数据来源" }).click();
-  await page
-    .locator(".ant-select-dropdown:not(.ant-select-dropdown-hidden)")
-    .getByText("聚水潭库存", { exact: true })
-    .click();
+  await expect(page.getByRole("combobox", { name: "库存数据来源" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "导入网站库存" })).toHaveCount(0);
   await expect(
     page.getByText("聚水潭尚无完整同步数据，请先配置杭州总仓并完成同步", {
       exact: true,

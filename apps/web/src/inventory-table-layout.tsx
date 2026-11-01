@@ -211,3 +211,36 @@ export const inventoryTableComponents = {
   header: { cell: InventoryHeaderCell },
   body: { cell: InventoryBodyCell },
 };
+
+function InventoryVirtualCell({ children, ...props }: ComponentPropsWithRef<"div">) {
+  return <div {...props} role="cell">
+    <div className="inventory-cell-viewport">
+      <div className="inventory-cell-content">{children}</div>
+    </div>
+  </div>;
+}
+
+function InventoryVirtualRow(props: ComponentPropsWithRef<"div">) {
+  return <div {...props} role="row" />;
+}
+
+// Virtual rows are flex containers: td/tr would produce invalid layout and lose fixed columns.
+export const inventoryVirtualTableComponents = {
+  header: { cell: InventoryHeaderCell },
+  body: { cell: InventoryVirtualCell, row: InventoryVirtualRow },
+};
+
+export function useInventoryTableHeight() {
+  const measure = () => Math.max(220, (window.visualViewport?.height ?? window.innerHeight) - 390);
+  const [height, setHeight] = useState(measure);
+  useEffect(() => {
+    const resize = () => setHeight(measure());
+    window.addEventListener("resize", resize);
+    window.visualViewport?.addEventListener("resize", resize);
+    return () => {
+      window.removeEventListener("resize", resize);
+      window.visualViewport?.removeEventListener("resize", resize);
+    };
+  }, []);
+  return height;
+}

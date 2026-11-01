@@ -1,15 +1,15 @@
 import { PageSearch, PageSearchInput } from "./page-search";
 import { CopyableCode, CopyCodeButton } from "./copyable-code";
 import { Table, exportTableData } from "./data-table";
-import { InventoryImport } from "./inventory-import";
 import { JushuitanInventory } from "./jushuitan-inventory";
 import { jushuitanExtraFields } from "../../../packages/contracts/src/jushuitan-inventory";
-import { InventoryEstimateValue, InventoryReferenceValue, inventoryHasZeroMedianSales } from "./inventory-reference-value";
-import { InventoryCalculationPanel, ReplenishmentValue, replenishmentExportNote } from "./inventory-replenishment";
+import { InventoryReferenceValue } from "./inventory-reference-value";
+import { ReplenishmentValue } from "./inventory-replenishment";
 import { inventoryReferenceMethodLabels, type InventoryReferenceMethod } from "../../../packages/contracts/src/compass-inventory-reference";
 import { InventoryColumnPinning } from "./inventory-column-pinning";
 import { InventoryColumnGroups } from "./inventory-column-groups";
-import { inventoryTableComponents } from "./inventory-table-layout";
+import { inventoryTableComponents, inventoryVirtualTableComponents, useInventoryTableHeight } from "./inventory-table-layout";
+import { InventoryPlatformSync } from "./inventory-platform-sync";
 import { InventorySummaryInfo } from "./inventory-summary-info";
 import { InventoryStatusCards } from "./inventory-status-cards";
 import { InventoryListingStatus, InventoryListingTime, inventoryListingLabel, inventoryListingChange, inventoryListingOperation } from "./inventory-listing";
@@ -18,7 +18,8 @@ import {
   CompassImagePreview,
   type CompassImageTarget,
 } from "./compass-product-image";
-import { useState } from "react";
+import { useRef, useState } from "react";
+import type { TableRef } from "antd/es/table";
 import { useQuery } from "@tanstack/react-query";
 import {
   App,
@@ -34,7 +35,6 @@ import {
   type TableProps,
 } from "antd";
 import {
-  ImportOutlined,
   ExportOutlined,
 } from "@ant-design/icons";
 import { Link, useParams } from "react-router-dom";
@@ -77,10 +77,11 @@ export function InventoryDetailsPage() {
   );
 }
 function InventoryBalances() {
-  const [stockSource, setStockSource] = useState<"internal" | "jushuitan">("internal");
-  const externalStock = stockSource === "jushuitan";
   const [dimension, setDimension] = useState<InventoryDimension>("sku");
   const [pageSize, setPageSize] = useState(20);
+  const tableHeight = useInventoryTableHeight();
+  const virtual = pageSize > 100;
+  const tableRef = useRef<TableRef>(null);
   const skuView = dimension === "sku";
   const [reportMatch, setReportMatch] = useState<InventoryReportMatch>("all");
   const [barcodeState, setBarcodeState] = useState<InventoryBarcodeState>();
@@ -90,20 +91,17 @@ function InventoryBalances() {
   const [imagePreview, setImagePreview] = useState<CompassImageTarget | null>(
     null,
   );
-  const [batch, setBatch] = useState(false);
   const { message } = App.useApp();
   const [exporting, setExporting] = useState(false);
   const [search, setSearch] = useState("");
   const q = useList("/inventory/summary", {
-    stockSource,
+    stockSource: "jushuitan",
     dimension,
     ...(barcodeState ? { barcodeState } : {}),
     ...(styleState ? { styleState } : {}),
     ...(skuView ? { reportMatch, ...(referencePeriod ? { referencePeriod } : {}) } : {}),
     ...(search ? { q: search } : {}),
   }, pageSize);
-  const can = useCan("inventory.adjust"),
-    canMetadata = useCan("product.update");
   const allColumns: NonNullable<TableProps<Row>["columns"]> = [
     {
       title: "图片",
@@ -163,7 +161,7 @@ function InventoryBalances() {
       "dailySales",
     ].map((k, i) => ({
       title: [
-        externalStock ? "实际库存数" : "在仓库存数",
+        "实际库存数",
         "采购在途数",
         "调拨在途数",
         "进货仓库存",
@@ -179,12 +177,10 @@ function InventoryBalances() {
           (v ?? "暂无数据")
         ),
     })),
-    ...(externalStock ? [
       { title: "订单占有数", dataIndex: "reservedQty", render: (v: number|null) => v ?? "暂无数据" },
       { title: "销退仓库存", dataIndex: "returnQty", render: (v: number|null) => v ?? "暂无数据" },
       { title: "虚拟库存", dataIndex: "virtualQty", render: (v: number|null) => v ?? "暂无数据" },
       { title: "可用数", dataIndex: "availableQty", render: (v: number|null) => v ?? "暂无数据" },
-    ] : []),
     {
       title: "退货率",
       dataIndex: "returnRate",
@@ -198,12 +194,12 @@ function InventoryBalances() {
     {
       title: "可售天数",
       dataIndex: "coverageDays",
-      render: (_, row) => externalStock ? "暂不估算" : <InventoryEstimateValue row={row} field="coverageDays" />,
+      render: () => "暂不估算",
     },
     {
       title: "补货建议",
       dataIndex: "replenishmentQty",
-      render: (_, row) => externalStock ? "暂不估算" : <InventoryEstimateValue row={row} field="replenishmentQty" />,
+      render: () => "暂不估算",
     },
     { title: "条码状态", dataIndex: "barcodeListingState", render: (_, row) => <InventoryListingStatus row={row} /> },
     { title: "款号状态", dataIndex: "styleListingState", render: (_, row) => <InventoryListingStatus row={row} style /> },
@@ -269,14 +265,14 @@ function InventoryBalances() {
             ([key, label]) =>
               `${label}：${row.channelReference?.[key]?.value != null ? (key === "estimatedReturns" ? `期间销量×退货率${methodLabel(row.channelReference.returnRate?.method)}` : `罗盘${methodLabel(row.channelReference[key].method)}`) : row[key] != null ? "人工参考" : "暂无数据"}`,
           ),
-          ...(row.replenishmentPlan ? [replenishmentExportNote(row)] : inventoryHasZeroMedianSales(row) ? ["期间有销量，日销中位数为0；可售天数暂不估算，补货数量为当前中位数公式结果"] : []),
+          "聚水潭库存暂不估算补货建议和可售天数",
         ].join("；")
       : "库存总计；经营参考不汇总",
   });
   const summaryInfo = (
     <>
       <div className="inventory-report-coverage secondary">
-        {externalStock ? `库存来源：聚水潭 · ${q.data?.stockSourceInfo?.warehouseName ?? "杭州总仓"}。未匹配编码或字段显示暂无数据，汇总含缺失值时显示不完整。可用数采用聚水潭导出表原值。` : "库存与在途数量按全部内部仓库汇总。"}
+        {`库存来源：聚水潭 · ${q.data?.stockSourceInfo?.warehouseName ?? "序缇杭州总仓"}。未匹配编码或字段显示暂无数据，汇总含缺失值时显示不完整。可用数采用聚水潭导出表原值，暂不估算补货建议和可售天数。`}
       </div>
       {skuView && q.data?.reportCoverage && (
         <div className="inventory-report-coverage secondary" role="status">
@@ -313,31 +309,14 @@ function InventoryBalances() {
         </div>
       )}
 
-      {skuView && !externalStock && q.data?.replenishmentPolicy && (
-        <div className="inventory-report-coverage secondary">
-          补货按完整逐日日均估算 · 采购交期{" "}
-          {q.data.replenishmentPolicy.policy.purchaseLeadDays} 天 · 发货至可再售{" "}
-          {q.data.replenishmentPolicy.policy.returnDaysMin}–
-          {q.data.replenishmentPolicy.policy.returnDaysMax} 天 · 可再售比例{" "}
-          {Number(
-            (q.data.replenishmentPolicy.policy.resalableRate * 100).toFixed(2),
-          )}
-          % ·
-          {q.data.replenishmentPolicy.policy.confirmedReturnRate == null
-            ? " 退货率未核验，主建议未抵扣退货"
-            : " 已按人工核验退货率试算"}
-        </div>
-      )}
     </>
   );
   return (
     <>
-      <InventoryColumnGroups source={stockSource} dimension={dimension} columns={columns}>
+      <InventoryColumnGroups source="jushuitan" dimension={dimension} columns={columns}>
       {({ manager, tabs, groupKeys, visit }) => <Card>
         <div className="table-toolbar">
           <Space wrap>
-            <Select aria-label="库存数据来源" style={{width:160}} value={stockSource} onChange={v=>{setStockSource(v);q.setPage(1);}}
-              options={[{value:"internal",label:"网站库存"},{value:"jushuitan",label:"聚水潭库存"}]} />
             <PageSearch>
               <PageSearchInput
                 placeholder="商品编码 / 货号 / 款号 / 条码"
@@ -390,20 +369,8 @@ function InventoryBalances() {
             <InventorySummaryInfo key={dimension}>{summaryInfo}</InventorySummaryInfo>
           </Space>
           <Space>
-            <JushuitanInventory onView={()=>{setStockSource("jushuitan");q.setPage(1);}} />
-            {skuView && !externalStock && <InventoryCalculationPanel referencePeriod={effectivePeriod} onSaved={(period) => {
-              setReferencePeriod(period); q.setPage(1);
-            }} />}
+            <JushuitanInventory onView={()=>{q.setPage(1);void q.refetch();}} />
             {manager}
-            {(can || canMetadata) && (
-              <Button
-                aria-label={externalStock ? "导入网站库存" : "导入"}
-                icon={<ImportOutlined />}
-                onClick={() => setBatch(true)}
-              >
-                {externalStock ? "导入网站库存" : "导入"}
-              </Button>
-            )}
             <Button
               aria-label="导出"
               icon={<ExportOutlined />}
@@ -451,7 +418,7 @@ function InventoryBalances() {
                       },
                     );
                   const exportRow = (row: Row, total = false) => ({
-                    stockSourceNote: externalStock ? `聚水潭 · ${q.data?.stockSourceInfo?.warehouseName} · 同步 ${when(q.data?.stockSourceInfo?.finishedAt)}；空白库存表示未匹配或原表未提供数量；可用数为导出原值；补货暂不估算` : "网站库存 · 全部内部仓库汇总",
+                    stockSourceNote: `聚水潭 · ${q.data?.stockSourceInfo?.warehouseName} · 同步 ${when(q.data?.stockSourceInfo?.finishedAt)}；空白库存表示未匹配或原表未提供数量；可用数为导出原值；补货暂不估算`,
                     ...Object.fromEntries(
                       keys.map((key) => [
                         key,
@@ -510,7 +477,7 @@ function InventoryBalances() {
           </Space>
         </div>
         <QueryState error={q.error} reload={() => q.refetch()} />
-        {externalStock && q.data?.stockSourceInfo && <Alert style={{marginBottom:12}} showIcon
+        {q.data?.stockSourceInfo && <Alert style={{marginBottom:12}} showIcon
           type={q.data.stockSourceInfo.errorNote || Date.now()-new Date(q.data.stockSourceInfo.finishedAt).getTime()>q.data.stockSourceInfo.intervalMinutes*120000 ? "warning" : "info"}
           title={`聚水潭 · ${q.data.stockSourceInfo.warehouseName} · 完整同步 ${when(q.data.stockSourceInfo.finishedAt)} · 匹配 ${q.data.stockSourceInfo.receivedCount} / ${q.data.stockSourceInfo.requestedCount}`}
           description={[q.data.stockSourceInfo.errorNote, "库存数量采用聚水潭导出表原值；可用数不重新计算。本来源暂不估算补货及可售天数。"].filter(Boolean).join("；")} />}
@@ -522,12 +489,20 @@ function InventoryBalances() {
           onBarcodeChange={(value) => { setBarcodeState(value); q.setPage(1); }}
           onStyleChange={(value) => { setStyleState(value); q.setPage(1); }}
         />
-        {tabs}
-        <InventoryColumnPinning dimension={dimension} columns={columns} groupKeys={groupKeys} groupVisit={visit}>
+        <div className="inventory-view-toolbar">
+          {tabs}
+          <InventoryPlatformSync />
+        </div>
+        <InventoryColumnPinning dimension={dimension} columns={columns} groupKeys={groupKeys} groupVisit={visit} tableRef={tableRef}>
           {(displayedColumns) => (
             <div className="inventory-summary-table">
+            {/* Match the virtual list's row estimate to the fixed CSS height so
+                dragging straight to the bottom reaches the last record. */}
             <Table<Row>
-              components={inventoryTableComponents}
+              tableRef={tableRef}
+              key={JSON.stringify([q.page, pageSize, dimension, search, reportMatch, referencePeriod, barcodeState, styleState])}
+              {...(virtual ? { virtual: true, listItemHeight: 84 } : {})}
+              components={virtual ? inventoryVirtualTableComponents : inventoryTableComponents}
               tableLayout="fixed"
               showExport={false}
               rowKey="id"
@@ -539,7 +514,7 @@ function InventoryBalances() {
                   (width, column) => width + Number(column.width),
                   0,
                 ),
-                y: "max(220px, calc(100dvh - 390px))",
+                y: tableHeight,
               }}
               columns={displayedColumns}
               summary={() =>
@@ -584,7 +559,6 @@ function InventoryBalances() {
         target={imagePreview}
         onClose={() => setImagePreview(null)}
       />
-      {batch && <InventoryImport onClose={() => setBatch(false)} />}
     </>
   );
 }

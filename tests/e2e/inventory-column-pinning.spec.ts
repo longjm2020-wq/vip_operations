@@ -9,13 +9,17 @@ const allHeaders = [
   "供应商款式编码",
   "颜色",
   "尺码",
-  "在仓库存数",
+  "实际库存数",
   "采购在途数",
   "调拨在途数",
   "进货仓库存",
   "期间销量",
   "预估销退数",
   "渠道日销参考",
+  "订单占有数",
+  "销退仓库存",
+  "虚拟库存",
+  "可用数",
   "退货率",
   "补货日均",
   "可售天数",
@@ -112,6 +116,7 @@ async function fixture(page: Page, longContent = false, extraRows = 0) {
       await route.fulfill({ json: { data: [], total: 0 } });
     }
   });
+  await page.route("**/api/v1/my-workspace/appearance", route => route.fulfill({ json: { data: { mode: "light", version: 1 } } }));
   await page.goto(inventoryUrl);
   await expect(
     page.getByRole("region", { name: "库存明细", exact: true }),
@@ -185,10 +190,14 @@ async function selectPins(page: Page, names: string[]) {
   await expect(menu(page)).toBeHidden();
 }
 
-/** The last pinned column carries the same darker divider as 选款登记 (#bda58f). */
+/** The last pinned column follows the current theme's border color. */
 async function expectDivider(group: Record<string, Locator>) {
-  for (const cell of Object.values(group))
-    await expect(cell).toHaveCSS("border-right", "1px solid rgb(189, 165, 143)");
+  for (const cell of Object.values(group)) {
+    await expect(cell).toHaveCSS("border-right-width", "1px");
+    await expect(cell).toHaveCSS("border-right-style", "solid");
+    const border = await cell.evaluate(el => getComputedStyle(el).borderRightColor);
+    expect(border).toBe(await group.header.evaluate(el => getComputedStyle(el).borderRightColor));
+  }
 }
 
 async function fixedNames(page: Page) {
@@ -212,33 +221,33 @@ test("Ctrl/⌘ 跳选非连续多列后右键固定，横滚时表头、数据�
   ).toHaveCount(0);
 
   // Right-clicking an unselected body cell acts on that single column.
-  const stock = await cells(page, "在仓库存数");
+  const stock = await cells(page, "实际库存数");
   await stock.body.click({ button: "right" });
   await expect(menuItem(page, "固定此列")).toBeVisible();
   await expect(page.getByRole("checkbox")).toHaveCount(0);
   await expect(page.getByRole("dialog")).toHaveCount(0);
-  expect(await selectedNames(page)).toEqual(["在仓库存数"]);
+  expect(await selectedNames(page)).toEqual(["实际库存数"]);
   await page.keyboard.press("Escape");
   await expect(menu(page)).toBeHidden();
 
-  await header(page, "在仓库存数").click();
+  await header(page, "实际库存数").click();
   await header(page, "款号").click({ modifiers: ["ControlOrMeta"] });
-  expect(await selectedNames(page)).toEqual(["款号", "在仓库存数"]);
-  await header(page, "在仓库存数").click({ button: "right" });
+  expect(await selectedNames(page)).toEqual(["款号", "实际库存数"]);
+  await header(page, "实际库存数").click({ button: "right" });
   await expect(menuItem(page, "固定所选 2 列")).toBeVisible();
   await expect(menuItem(page, "取消所有固定列")).toHaveCount(0);
   await menuItem(page, "固定所选 2 列").click();
   await expect(menu(page)).toBeHidden();
   expect(await selectedNames(page)).toEqual([]);
-  expect(await fixedNames(page)).toEqual(["款号", "在仓库存数"]);
+  expect(await fixedNames(page)).toEqual(["款号", "实际库存数"]);
   expect(
     (await headers(page).allTextContents())
       .map((text) => text.trim())
       .slice(0, 2),
-  ).toEqual(["款号", "在仓库存数"]);
+  ).toEqual(["款号", "实际库存数"]);
 
   const styleCells = await cells(page, "款号"),
-    stockCells = await cells(page, "在仓库存数");
+    stockCells = await cells(page, "实际库存数");
   await expect(styleCells.body).toHaveText("PIN-STYLE-001");
   await expect(stockCells.body).toHaveText("17");
   await expect(stockCells.summary).toHaveText("29");
@@ -279,17 +288,17 @@ test("Shift 连续选列后右键固定，可单列取消或取消所有固定�
 }) => {
   const state = await fixture(page);
   await header(page, "颜色").click();
-  await header(page, "在仓库存数").click({ modifiers: ["Shift"] });
-  expect(await selectedNames(page)).toEqual(["颜色", "尺码", "在仓库存数"]);
+  await header(page, "实际库存数").click({ modifiers: ["Shift"] });
+  expect(await selectedNames(page)).toEqual(["颜色", "尺码", "实际库存数"]);
   await page.keyboard.press("Escape");
   expect(await selectedNames(page)).toEqual([]);
 
   await header(page, "颜色").click();
-  await header(page, "在仓库存数").click({ modifiers: ["Shift"] });
+  await header(page, "实际库存数").click({ modifiers: ["Shift"] });
   await dataRows(page).first().locator("td").first().click();
   expect(await selectedNames(page)).toEqual([]);
 
-  await header(page, "在仓库存数").click();
+  await header(page, "实际库存数").click();
   await header(page, "颜色").click({ modifiers: ["Shift"] });
   await header(page, "尺码").click({ button: "right" });
   await expect(menuItem(page, "固定所选 3 列")).toBeVisible();
@@ -299,7 +308,7 @@ test("Shift 连续选列后右键固定，可单列取消或取消所有固定�
     caret: "hide",
   });
   await menuItem(page, "固定所选 3 列").click();
-  expect(await fixedNames(page)).toEqual(["颜色", "尺码", "在仓库存数"]);
+  expect(await fixedNames(page)).toEqual(["颜色", "尺码", "实际库存数"]);
 
   // Right-clicking an unselected header acts only on that column.
   await header(page, "款号").click();
@@ -311,13 +320,13 @@ test("Shift 连续选列后右键固定，可单列取消或取消所有固定�
     "商品编码",
     "颜色",
     "尺码",
-    "在仓库存数",
+    "实际库存数",
   ]);
 
   await header(page, "尺码").click({ button: "right" });
   await expect(menuItem(page, "固定此列")).toHaveCount(0);
   await menuItem(page, "取消固定此列").click();
-  expect(await fixedNames(page)).toEqual(["商品编码", "颜色", "在仓库存数"]);
+  expect(await fixedNames(page)).toEqual(["商品编码", "颜色", "实际库存数"]);
 
   await header(page, "颜色").click();
   await header(page, "采购在途数").click({ modifiers: ["ControlOrMeta"] });
@@ -325,18 +334,18 @@ test("Shift 连续选列后右键固定，可单列取消或取消所有固定�
   await expect(menuItem(page, "固定所选 2 列")).toBeVisible();
   await expect(menuItem(page, "取消固定所选 2 列")).toBeVisible();
   await menuItem(page, "取消固定所选 2 列").click();
-  expect(await fixedNames(page)).toEqual(["商品编码", "在仓库存数"]);
+  expect(await fixedNames(page)).toEqual(["商品编码", "实际库存数"]);
 
   await page.reload();
   await expect(dataRows(page)).toHaveCount(2);
-  expect(await fixedNames(page)).toEqual(["商品编码", "在仓库存数"]);
+  expect(await fixedNames(page)).toEqual(["商品编码", "实际库存数"]);
   await (await cells(page, "颜色")).body.click({ button: "right" });
   await menuItem(page, "取消所有固定列").click();
   expect(await fixedNames(page)).toEqual([]);
   expect(
     (await headers(page).allTextContents()).map((text) => text.trim()),
   ).toEqual(allHeaders);
-  const stockCells = await cells(page, "在仓库存数");
+  const stockCells = await cells(page, "实际库存数");
   await expect(stockCells.summary).toHaveText("29");
   await page.reload();
   await expect(dataRows(page)).toHaveCount(2);
@@ -346,7 +355,7 @@ test("Shift 连续选列后右键固定，可单列取消或取消所有固定�
 
 test("三个汇总维度分别记住固定列，刷新恢复且切换账号隔离", async ({ page }) => {
   const state = await fixture(page);
-  await selectPins(page, ["款号", "在仓库存数"]);
+  await selectPins(page, ["款号", "实际库存数"]);
   await page.getByRole("combobox", { name: "库存汇总维度", exact: true }).click();
   await page.locator(".ant-select-dropdown:visible .ant-select-item-option").filter({ hasText: /^货号$/ }).click();
   expect(await fixedNames(page)).toEqual([]);
@@ -359,7 +368,7 @@ test("三个汇总维度分别记住固定列，刷新恢复且切换账号隔�
 
   await page.reload();
   await expect(dataRows(page)).toHaveCount(2);
-  expect(await fixedNames(page)).toEqual(["款号", "在仓库存数"]);
+  expect(await fixedNames(page)).toEqual(["款号", "实际库存数"]);
   await page.getByRole("combobox", { name: "库存汇总维度", exact: true }).click();
   await page.locator(".ant-select-dropdown:visible .ant-select-item-option").filter({ hasText: /^货号$/ }).click();
   expect(await fixedNames(page)).toEqual(["供应商款式编码", "采购在途数"]);
@@ -376,7 +385,7 @@ test("三个汇总维度分别记住固定列，刷新恢复且切换账号隔�
   state.setUser("inventory-reader-101");
   await page.reload();
   await expect(dataRows(page)).toHaveCount(2);
-  expect(await fixedNames(page)).toEqual(["款号", "在仓库存数"]);
+  expect(await fixedNames(page)).toEqual(["款号", "实际库存数"]);
   expect(state.writes).toEqual([]);
 });
 
@@ -402,14 +411,14 @@ test("固定总宽超出窗口时阻止固定，已保存固定在窄窗口暂�
     "货号",
     "供应商款式编码",
     "颜色",
-    "在仓库存数",
+    "实际库存数",
   ]);
   expect(await fixedNames(page)).toEqual([
     "款号",
     "货号",
     "供应商款式编码",
     "颜色",
-    "在仓库存数",
+    "实际库存数",
   ]);
   await page.setViewportSize({ width: 760, height: 900 });
   await expect.poll(() => fixedNames(page)).toEqual([]);
@@ -432,7 +441,7 @@ test("固定总宽超出窗口时阻止固定，已保存固定在窄窗口暂�
   await page.setViewportSize({ width: 1440, height: 1000 });
   await expect
     .poll(() => fixedNames(page))
-    .toEqual(["款号", "货号", "供应商款式编码", "颜色", "在仓库存数"]);
+    .toEqual(["款号", "货号", "供应商款式编码", "颜色", "实际库存数"]);
   expect(state.writes).toEqual([]);
 });
 
@@ -475,14 +484,14 @@ test("按住鼠标拖过表头连续选列，Ctrl/⌘ 拖动追加范围，右�
   ).toBe("");
 
   // A plain drag replaces the selection; Ctrl/⌘ + drag adds its range.
-  await dragHeaders(page, "尺码", "在仓库存数");
+  await dragHeaders(page, "尺码", "实际库存数");
   await releaseDrag(page);
-  expect(await selectedNames(page)).toEqual(["尺码", "在仓库存数"]);
+  expect(await selectedNames(page)).toEqual(["尺码", "实际库存数"]);
   await header(page, "款号").click({ modifiers: ["ControlOrMeta"] });
   await dragHeaders(page, "商品编码", "货号", true);
   await expect
     .poll(() => selectedNames(page))
-    .toEqual(["款号", "货号", "商品编码", "尺码", "在仓库存数"]);
+    .toEqual(["款号", "货号", "商品编码", "尺码", "实际库存数"]);
   await page.screenshot({
     path: ".local/inventory-column-drag-select-20261017.png",
     animations: "disabled",
@@ -496,7 +505,7 @@ test("按住鼠标拖过表头连续选列，Ctrl/⌘ 拖动追加范围，右�
     "货号",
     "商品编码",
     "尺码",
-    "在仓库存数",
+    "实际库存数",
   ]);
   expect(await selectedNames(page)).toEqual([]);
 
