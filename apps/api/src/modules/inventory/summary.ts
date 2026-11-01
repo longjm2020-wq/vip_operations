@@ -25,6 +25,7 @@ import { jushuitanSource } from "./jushuitan.js";
 import { jushuitanStockFields } from "../../../../../packages/contracts/src/jushuitan-inventory.js";
 import { inventoryCalculationPolicy, inventoryFormulaSql } from "./calculation-policy.js";
 import { inventoryCalculationFields } from "./calculation-fields.js";
+import { inventorySearchCodesSchema } from "../../../../../packages/contracts/src/inventory-search.js";
 
 export async function inventorySummary(q: Row, tx: Tx = db, userId?: string) {
   // A report import can replace whole history days while a page is loading.
@@ -55,6 +56,14 @@ async function inventorySummarySnapshot(q: Row, tx: Tx, userId?: string) {
     : `(i.end_date-interval '${referencePeriod === "1y" ? 12 : Number(referencePeriod.slice(0, -1))} months'+interval '1 day')::date`;
   const p = parse(inventoryPaginationSchema, q),
     { vals, conditions } = balanceFilters(q);
+  if (q.codes !== undefined) {
+    const codes = parse(inventorySearchCodesSchema, q.codes).map(code => code.toLocaleLowerCase());
+    if (codes.length) {
+      vals.push(codes);
+      conditions.push(`(lower(s.sku_code)=ANY($${vals.length}::text[]) OR lower(s.barcode)=ANY($${vals.length}::text[])
+        OR lower(pr.style_no)=ANY($${vals.length}::text[]) OR lower(ref.article_no)=ANY($${vals.length}::text[]))`);
+    }
+  }
   const groupKey = skuView
     ? "'sku:'||s.id::text"
     : dimension === "style"

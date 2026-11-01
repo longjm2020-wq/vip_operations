@@ -34,6 +34,7 @@ import {
 } from "./modules/master/product-fields.js";
 import * as inventory from "./modules/inventory/service.js";
 import { inventorySummary } from "./modules/inventory/summary.js";
+import { inventoryTrend } from "./modules/inventory/trend.js";
 import {
   jushuitanStatus,
   saveJushuitan,
@@ -206,6 +207,13 @@ class InventoryController {
   }
   @Permission("inventory.read") @Get("summary") summary(@Req() r: AuthRequest, @Query() q: any) {
     return inventorySummary(q, db, r.actor.id);
+  }
+  @Permission("inventory.read") @Post("summary") searchSummary(@Req() r: AuthRequest, @Body() q: Record<string, unknown>) {
+    if (!q || typeof q !== "object" || Array.isArray(q)) fail("VALIDATION_ERROR", "请提供有效的库存查询条件", 400);
+    return inventorySummary(q, db, r.actor.id);
+  }
+  @Permission("inventory.read") @Get("trend") trend(@Req() r: AuthRequest, @Query() q: unknown) {
+    return inventoryTrend(r.actor, q);
   }
   @Permission("inventory.read") @Get("replenishment-policy") policy(@Req() r: AuthRequest) {
     return replenishmentPolicy(r.actor.id);

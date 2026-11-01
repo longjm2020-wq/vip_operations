@@ -1,0 +1,21 @@
+.inventory-period-sales { appearance: none; border: 0; padding: 2px 0; background: transparent; color: var(--app-accent); font: inherit; cursor: pointer; text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--app-accent) 30%, transparent); text-underline-offset: 4px; }
+.inventory-period-sales:hover { text-decoration-color: currentColor; }
+.inventory-period-sales:focus-visible { outline: 2px solid var(--app-accent); outline-offset: 3px; border-radius: 3px; }
+.inventory-trend-identity { display: flex; align-items: center; flex-wrap: wrap; gap: 18px; margin: 16px 0; }
+.inventory-trend-controls { margin-bottom: 18px; }
+.inventory-trend-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-bottom: 16px; }
+.inventory-trend-metrics > div { background: var(--app-bg); border: 1px solid var(--app-border); border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 7px; }
+.inventory-trend-metrics span, .inventory-trend-metrics small { color: var(--app-secondary); }
+.inventory-trend-metrics strong { font-size: 24px; }
+.inventory-trend-notice { margin-bottom: 16px; }
+.inventory-daily-chart { border: 1px solid var(--app-border); border-radius: 12px; padding: 16px 16px 8px; margin-bottom: 12px; }
+.inventory-daily-chart-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.inventory-daily-chart-heading span, .inventory-chart-reading { font-size: 12px; color: var(--app-secondary); }
+.inventory-daily-chart svg { display: block; width: 100%; margin-top: 8px; overflow: visible; }
+.inventory-daily-chart svg text { fill: var(--app-secondary); font-size: 12px; }
+.inventory-chart-grid { stroke: var(--app-border); stroke-dasharray: 3 4; }
+.inventory-daily-chart circle { cursor: pointer; }
+.inventory-daily-chart circle:focus { stroke: var(--app-text); stroke-width: 2; outline: none; }
+.inventory-chart-reading { min-height: 22px; }
+.inventory-trend-method { line-height: 1.8; font-size: 12px; margin: 16px 0; }
+@media (max-width: 640px) { .inventory-trend-metrics { grid-template-columns: 1fr; } .inventory-trend-metrics > div { padding: 12px; } .inventory-daily-chart-heading { align-items: start; flex-direction: column; gap: 4px; } }

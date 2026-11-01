@@ -94,12 +94,12 @@ export function Header({
     </div>
   );
 }
-export function useList(path: string, filters: Row = {}, pageSize = 20) {
+export function useList(path: string, filters: Row = {}, pageSize = 20, method: "GET" | "POST" = "GET") {
   const [page, setPage] = useState(1);
   const query = useQuery({
     queryKey: [path, page, filters, pageSize],
     queryFn: ({ signal }) =>
-      api(
+      method === "POST" ? api(path, "POST", { ...filters, page, pageSize }, undefined, { signal }) : api(
         path +
           "?" +
           new URLSearchParams({

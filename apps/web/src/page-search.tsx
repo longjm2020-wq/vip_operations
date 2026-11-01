@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useRef, useState, type ChangeEvent, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useRef, useState, type ChangeEvent, type ClipboardEventHandler, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Input } from "antd";
 import { SearchOutlined } from "@ant-design/icons";
@@ -24,6 +24,7 @@ type PageSearchInputProps = {
   multiline?: boolean;
   autoSearchDelay?: number;
   suffix?: ReactNode;
+  onPaste?: ClipboardEventHandler<HTMLInputElement | HTMLTextAreaElement>;
   onChange?: (event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => void;
   onSearch?: (value: string) => void;
 };

@@ -1,4 +1,5 @@
-import { PageSearch, PageSearchInput } from "./page-search";
+import { InventorySearch } from "./inventory-search";
+import { InventoryTrend, type InventoryTrendTarget } from "./inventory-trend";
 import { CopyableCode, CopyCodeButton } from "./copyable-code";
 import { Table, exportTableData } from "./data-table";
 import { JushuitanInventory } from "./jushuitan-inventory";
@@ -97,6 +98,8 @@ function InventoryBalances() {
   const { message } = App.useApp();
   const [exporting, setExporting] = useState(false);
   const [search, setSearch] = useState("");
+  const [searchCodes, setSearchCodes] = useState<string[]>([]);
+  const [trend, setTrend] = useState<InventoryTrendTarget | null>(null);
   const q = useList("/inventory/summary", {
     stockSource: "jushuitan",
     dimension,
@@ -104,7 +107,8 @@ function InventoryBalances() {
     ...(styleState ? { styleState } : {}),
     ...(skuView ? { reportMatch, ...(referencePeriod ? { referencePeriod } : {}) } : {}),
     ...(search ? { q: search } : {}),
-  }, pageSize);
+    ...(searchCodes.length ? { codes: searchCodes } : {}),
+  }, pageSize, searchCodes.length ? "POST" : "GET");
   const calculationFields: InventoryCalculationField[] = q.data?.calculationFields ?? [];
   const calculationLabel = (field: InventoryCalculationField) => calculationFields.filter(other => other.name === field.name).length > 1
     ? `${field.name}（${field.ownerName} · ${field.id}）` : field.name;
@@ -182,7 +186,7 @@ function InventoryBalances() {
       dataIndex: k,
       render: (v: number, r: Row) =>
         k === "dailySales" || k === "estimatedReturns" || k === "periodSalesQty" ? (
-          <InventoryReferenceValue row={r} field={k} />
+          <InventoryReferenceValue row={r} field={k} onTrend={k === "periodSalesQty" ? () => setTrend({ row: r, period: effectivePeriod, endDate: referenceWindow?.endDate ?? undefined }) : undefined} />
         ) : (
           (v ?? "暂无数据")
         ),
@@ -335,17 +339,7 @@ function InventoryBalances() {
           <Space wrap>
             <JushuitanInventory onView={()=>{q.setPage(1);void q.refetch();}} />
             <InventoryPlatformSync />
-            <PageSearch>
-              <PageSearchInput
-                placeholder="商品编码 / 货号 / 款号 / 条码"
-                autoSearchDelay={500}
-                allowClear
-                onSearch={(v) => {
-                  setSearch(v.trim());
-                  q.setPage(1);
-                }}
-              />
-            </PageSearch>
+            <InventorySearch codes={searchCodes} onSearch={(value, codes) => { setSearch(value); setSearchCodes(codes); q.setPage(1); }} />
             <Select<InventoryDimension>
               aria-label="库存汇总维度"
               style={{ width: 180 }}
@@ -567,6 +561,7 @@ function InventoryBalances() {
         target={imagePreview}
         onClose={() => setImagePreview(null)}
       />
+      {trend && <InventoryTrend target={trend} fields={calculationFields} onClose={() => setTrend(null)} />}
     </>
   );
 }

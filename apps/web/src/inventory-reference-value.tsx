@@ -43,9 +43,11 @@ export function InventoryEstimateValue({ row, field }: {
 export function InventoryReferenceValue({
   row,
   field,
+  onTrend,
 }: {
   row: Row;
   field: ReferenceField;
+  onTrend?: () => void;
 }) {
   const reference = row.channelReference;
   const result = reference?.[field];
@@ -155,12 +157,13 @@ export function InventoryReferenceValue({
   );
   return (
     <Tooltip title={title} trigger={["hover", "focus"]}>
-      <span tabIndex={0}>
+      {isPeriodSales && onTrend ? <button className="inventory-period-sales" type="button" onClick={onTrend}
+        aria-label={`查看${row.skuCode}每日销量与库存趋势`}>{value == null ? missingLabel : format(value)}</button> : <span tabIndex={0}>
         {value == null
           ? missingLabel
           : format(value, field === "returnRate")}
         {zeroMedianSales && <span style={{ marginLeft: 6, fontSize: 12, color: "var(--app-warning)" }}>期间有销量</span>}
-      </span>
+      </span>}
     </Tooltip>
   );
 }

@@ -2,6 +2,12 @@ import { expect, test, type Page } from "@playwright/test";
 
 async function fixture(page: Page, path = "/operations/vip/inventory") {
   const reads: URL[] = [], writes: string[] = [];
+  // React StrictMode may cancel its first request on mount. Count completed
+  // reads, not a cancelled probe, when checking debounce and copy behavior.
+  page.on("response", response => {
+    const url = new URL(response.url());
+    if (response.ok() && ["/api/v1/inventory/summary", "/api/v1/analytics/compass"].includes(url.pathname)) reads.push(url);
+  });
   await page.addInitScript(() => {
     (window as any).copiedCodes = [];
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: {
@@ -13,11 +19,9 @@ async function fixture(page: Page, path = "/operations/vip/inventory") {
     if (request.method() !== "GET") writes.push(`${request.method()} ${path}`);
     if (path.endsWith("/auth/me")) return route.fulfill({ json: { data: { id: "copy-reader", displayName: "编号复制验收", roleCodes: [], permissions: ["inventory.read", "analytics.read"], csrfToken: "fixture" } } });
     if (path.endsWith("/inventory/summary")) {
-      reads.push(url);
       return route.fulfill({ json: { data: [{ id: "1", styleNo: "STYLE-001", articleNo: "ARTICLE-001", skuCode: "000123456789012345", barcode: "000987654321098765", supplierStyleCode: "SUP-001", colorName: url.searchParams.get("q") || "米白", sizeName: "M", physicalQty: 8, inTransitQty: 0, transferTransitQty: 0, incomingQty: 0 }], total: 41, page: Number(url.searchParams.get("page")), pageSize: 20, dimension: url.searchParams.get("dimension"), totals: { physicalQty: 8, inTransitQty: 0, transferTransitQty: 0, incomingQty: 0 } } });
     }
     if (path.endsWith("/analytics/compass")) {
-      reads.push(url);
       const dimension = url.searchParams.get("dimension") || "style";
       const code = ({ style: "STYLE-001", article: "ARTICLE-001", barcode: "000123456789012345" } as Record<string, string>)[dimension];
       const row = { code, styleNo: "STYLE-001", sizes: "M", salesAmount: 123, salesQty: 1, saleableStock: 8, trend: [] };
