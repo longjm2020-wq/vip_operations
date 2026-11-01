@@ -21,13 +21,16 @@ export async function vipStatus() {
     freshnessSeconds: 7200,
     jobs: await rows(
       db,
-      `SELECT j.namespace,j.status,j.scanned,j.last_error,
+      `SELECT j.namespace,j.status,j.scanned,j.last_error,j.run_id,j.run_total,j.run_completed,j.run_failed,j.full_run,
+      to_char(j.run_started_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS run_started_at,
+      to_char(j.run_finished_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS run_finished_at,
       to_char(j.heartbeat_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS heartbeat_at,
       to_char(j.last_success_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS last_success_at,
-      (SELECT count(DISTINCT lower(c.barcode)) FROM vop_catalog c WHERE c.namespace=j.namespace) AS total,
+      (SELECT count(DISTINCT lower(c.barcode)) FROM vop_catalog c WHERE c.namespace=j.namespace AND c.barcode<>'') AS total,
       (SELECT count(*) FROM vop_listing_states s WHERE s.namespace=j.namespace AND s.checked_at>now()-interval '2 hours'
         AND s.last_error IS NULL AND EXISTS(SELECT 1 FROM vop_catalog c WHERE c.namespace=s.namespace AND lower(c.barcode)=s.barcode_key)) AS checked,
-      (SELECT count(*) FROM vop_listing_states s WHERE s.namespace=j.namespace AND s.last_error IS NOT NULL) AS unresolved
+      (SELECT count(*) FROM vop_listing_states s WHERE s.namespace=j.namespace AND s.last_error IS NOT NULL
+        AND EXISTS(SELECT 1 FROM vop_catalog c WHERE c.namespace=s.namespace AND lower(c.barcode)=s.barcode_key)) AS unresolved
       FROM vop_listing_jobs j ORDER BY j.namespace`,
     ),
   };

@@ -8,7 +8,9 @@ async function fixture(page: Page, manager = true) {
   let nextFieldId = 1;
   const source = { warehouseName: "序缇杭州总仓", finishedAt: new Date().toISOString(), receivedCount: 5000, requestedCount: 5000, intervalMinutes: 60, errorNote: "" };
   const job = { namespace: "vip-fixture", status: "SUCCESS", checked: 5000, total: 5000,
-    unresolved: 0, heartbeatAt: new Date().toISOString(), lastSuccessAt: "2026-10-31T07:00:00Z", lastError: "" };
+    unresolved: 0, heartbeatAt: new Date().toISOString(), lastSuccessAt: "2026-10-31T07:00:00Z", lastError: "",
+    runId: "previous-run", runTotal: 5000, runCompleted: 5000, runFailed: 0, fullRun: true,
+    runStartedAt: "2026-10-31T06:58:00Z", runFinishedAt: "2026-10-31T07:00:00Z" };
   await page.addInitScript(() => {
     localStorage.setItem("inventory-fixed-columns-v1:inventory-update:sku", JSON.stringify(["mainImageUrl", "colorName", "sizeName"]));
   });
@@ -27,7 +29,8 @@ async function fixture(page: Page, manager = true) {
     if (url.pathname.endsWith("/integrations/vip/listing/sync")) {
       expect(req.postDataJSON()).toEqual({ namespace: "vip-fixture" });
       job.status = "READY";
-      return route.fulfill({ json: { data: { requested: true } } });
+      Object.assign(job, { runId: "requested-run", runTotal: 0, runCompleted: 0, runFailed: 0, runStartedAt: "", runFinishedAt: "" });
+      return route.fulfill({ json: { data: { requested: true, runId: job.runId } } });
     }
     if (url.pathname.includes("/inventory/calculation-fields")) {
       if (req.method() === "POST") {
@@ -238,14 +241,21 @@ test("成功提示30秒后收起，同批刷新不反复弹出，新批次及错
 test("平台状态提交后台核验，完成后刷新；排队期间不能重复提交", async ({ page }) => {
   const f = await fixture(page);
   await page.goto("/operations/vip/inventory");
-  await page.getByRole("button", { name: "同步平台状态", exact: true }).click();
+  await page.getByRole("button", { name: "同步唯品会状态", exact: true }).click();
   const panel = page.getByRole("dialog", { name: "唯品会平台状态同步" });
   await panel.getByRole("button", { name: "立即同步", exact: true }).click();
   await expect(panel.getByText("等待同步", { exact: true })).toBeVisible();
   await expect(panel.getByRole("button", { name: "立即同步", exact: true })).toBeDisabled();
   expect(f.writes).toEqual(["/api/v1/integrations/vip/listing/sync"]);
   const before = f.summaryRequests.length;
+  f.job.status = "RUNNING";
+  f.job.runStartedAt = new Date(Date.now() - 10000).toISOString();
+  f.job.runTotal = 5000; f.job.runCompleted = 50;
+  await expect(panel.getByText(/本轮已处理 50 \/ 5,000 个条码/)).toBeVisible({ timeout: 10000 });
+  await expect(panel.getByText(/成功 50 · 异常 0 · 待处理 4,950/)).toBeVisible();
+  await expect(panel.getByText(/近两小时有效状态 5,000 \/ 5,000/)).toBeVisible();
   f.job.status = "SUCCESS";
+  f.job.runCompleted = 5000; f.job.runFinishedAt = new Date().toISOString();
   f.job.lastSuccessAt = new Date().toISOString();
   await expect.poll(() => f.summaryRequests.length, { timeout: 10000 }).toBeGreaterThan(before);
   await expect(panel.getByText("同步完成", { exact: true })).toBeVisible();
@@ -254,17 +264,37 @@ test("平台状态提交后台核验，完成后刷新；排队期间不能重�
 test("核验失败保留具体错误，离线及只读账号不能提交", async ({ page }) => {
   const f = await fixture(page);
   await page.goto("/operations/vip/inventory");
-  await page.getByRole("button", { name: "同步平台状态", exact: true }).click();
+  await page.getByRole("button", { name: "同步唯品会状态", exact: true }).click();
   const panel = page.getByRole("dialog", { name: "唯品会平台状态同步" });
   await panel.getByRole("button", { name: "立即同步", exact: true }).click();
   await expect(panel.getByText("等待同步", { exact: true })).toBeVisible();
   f.job.status = "BLOCKED"; f.job.lastError = "VOP_PERMISSION_DENIED";
+  f.job.runFinishedAt = new Date().toISOString();
   f.job.heartbeatAt = "2026-10-01T00:00:00Z";
   await expect(panel.getByText(/核验未完成：VOP_PERMISSION_DENIED/)).toBeVisible({ timeout: 10000 });
   await expect(panel.getByRole("button", { name: "立即同步", exact: true })).toBeDisabled();
   await page.unroute("**/api/v1/**");
   const reader = await fixture(page, false);
   await page.reload();
-  await expect(page.getByRole("button", { name: "同步平台状态", exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "同步唯品会状态", exact: true })).toBeDisabled();
   expect(reader.writes).toEqual([]);
+});
+
+test("旧的完成记录不冒充本轮成功，部分失败单独显示", async ({ page }) => {
+  const f = await fixture(page);
+  await page.goto("/operations/vip/inventory");
+  await page.getByRole("button", { name: "同步唯品会状态", exact: true }).click();
+  const panel = page.getByRole("dialog", { name: "唯品会平台状态同步" });
+  await panel.getByRole("button", { name: "立即同步", exact: true }).click();
+  await expect(panel.getByText("等待同步", { exact: true })).toBeVisible();
+  const before = f.summaryRequests.length;
+  Object.assign(f.job, { status: "SUCCESS", runId: "previous-run", runStartedAt: "2026-10-31T06:58:00Z", runFinishedAt: "2026-10-31T07:00:00Z" });
+  await expect(panel.getByText("等待本轮状态", { exact: true })).toBeVisible({ timeout: 10000 });
+  await expect(panel.getByRole("button", { name: "立即同步", exact: true })).toBeDisabled();
+  expect(f.summaryRequests.length).toBe(before);
+  Object.assign(f.job, { status: "PARTIAL", runId: "requested-run", runTotal: 5000, runCompleted: 5000, runFailed: 2,
+    runStartedAt: new Date(Date.now() - 10000).toISOString(), runFinishedAt: new Date().toISOString() });
+  await expect(panel.getByText(/成功 4,998 · 异常 2 · 待处理 0/)).toBeVisible({ timeout: 10000 });
+  await expect(panel.getByText("部分条码待处理", { exact: true })).toBeVisible();
+  await expect.poll(() => f.summaryRequests.length).toBeGreaterThan(before);
 });

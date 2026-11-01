@@ -407,8 +407,10 @@ class SystemController {
         tx,
         "UPDATE vop_detail_tasks SET next_run_at=now() RETURNING namespace",
       );
+      await rows(tx, `UPDATE vop_listing_jobs SET status='READY',next_run_at=now(),
+        run_id=gen_random_uuid(),run_started_at=NULL,run_finished_at=NULL,run_total=0,run_completed=0,run_failed=0
+        WHERE status NOT IN ('READY','RUNNING','CONTINUING') RETURNING namespace`);
       await rows(tx, "UPDATE vop_listing_states SET next_run_at=now() RETURNING namespace");
-      await rows(tx, "UPDATE vop_listing_jobs SET status='READY',next_run_at=now() RETURNING namespace");
       await audit(tx, context(r), "VIP_SYNC_REQUEST", "vip", null, null, {
         capability: "SCHEDULE_CATALOG",
       });
@@ -423,16 +425,19 @@ class SystemController {
   ) {
     const input = parse(listingRequestSchema, b);
     return command(context(r), "vip.listing.request", input, async (tx) => {
-      const connection = await one(tx, "SELECT namespace FROM vop_connections WHERE namespace=$1", input.namespace);
+      const connection = await one(tx, "SELECT namespace FROM vop_connections WHERE namespace=$1 FOR UPDATE", input.namespace);
       if (!connection) fail("NOT_CONFIGURED", "商品状态采集连接尚未配置", 409);
-      const job = await one(tx, "SELECT status,requested_at FROM vop_listing_jobs WHERE namespace=$1 FOR UPDATE", input.namespace);
-      if (job && ["READY","RUNNING","CONTINUING"].includes(job.status)) return { requested: true };
+      const job = await one(tx, "SELECT status,requested_at,run_id FROM vop_listing_jobs WHERE namespace=$1 FOR UPDATE", input.namespace);
+      if (job && ["READY","RUNNING","CONTINUING"].includes(job.status)) return { requested: true, runId: job.run_id, alreadyRunning: true };
       if (job?.requested_at && Date.now()-new Date(job.requested_at).getTime()<60000)
         fail("LISTING_REQUEST_RATE_LIMIT", "请等待一分钟再更新商品状态", 429);
-      await rows(tx, "INSERT INTO vop_listing_jobs(namespace,requested_at) VALUES($1,now()) ON CONFLICT(namespace) DO UPDATE SET status='READY',next_run_at=now(),requested_at=now(),last_error=NULL,updated_at=now() RETURNING namespace", input.namespace);
+      const scheduled = await one(tx, `INSERT INTO vop_listing_jobs(namespace,requested_at,run_id) VALUES($1,now(),gen_random_uuid())
+        ON CONFLICT(namespace) DO UPDATE SET status='READY',next_run_at=now(),requested_at=now(),last_error=NULL,
+        run_id=EXCLUDED.run_id,run_started_at=NULL,run_finished_at=NULL,run_total=0,run_completed=0,run_failed=0,full_run=false,updated_at=now()
+        RETURNING run_id`, input.namespace);
       await rows(tx, "UPDATE vop_listing_states SET next_run_at=now() WHERE namespace=$1 RETURNING barcode_key", input.namespace);
       await audit(tx, context(r), "VIP_LISTING_SYNC_REQUEST", "vip", null, null, { namespace: input.namespace, capability: "BARCODE_LISTING" });
-      return { requested: true };
+      return { requested: true, runId: scheduled!.run_id };
     });
   }
   @Permission("vip.settings") @Post("integrations/vip/compass/probe") async compassProbe(

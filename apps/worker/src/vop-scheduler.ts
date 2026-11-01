@@ -59,13 +59,6 @@ export function startVopScheduler() {
         console.log(
           JSON.stringify({ event: "vop-compass-probe", status: compass }),
         );
-      if (process.env.VOP_LISTING_SYNC_ENABLED !== "off") {
-        const listing = await syncListing(pool, client, config.namespace);
-        if (!["IDLE", "BUSY", "NOT_CONFIGURED"].includes(listing))
-          console.log(
-            JSON.stringify({ event: "vop-listing", status: listing }),
-          );
-      }
       const details = await syncDetails(pool, client, config.namespace);
       if (!["IDLE", "BUSY"].includes(details))
         console.log(JSON.stringify({ event: "vop-details", status: details }));
@@ -80,10 +73,30 @@ export function startVopScheduler() {
     if (!running && !stopped) active = tick();
   }, 15000);
   active = tick();
+  // A single independent loop preserves the API batch spacing, resumes promptly,
+  // and cannot overlap itself or wait behind catalog/detail collection.
+  let listingTimer: ReturnType<typeof setTimeout> | undefined;
+  let listingActive: Promise<void> | undefined;
+  const listingTick = async () => {
+    if (stopped) return;
+    let delay = 15000;
+    try {
+      const status = await syncListing(pool, client, config.namespace);
+      if (status === "CONTINUING") delay = 100;
+      if (!["IDLE", "BUSY", "NOT_CONFIGURED"].includes(status))
+        console.log(JSON.stringify({ event: "vop-listing", status }));
+    } catch {
+      console.error("VOP_LISTING_SERVICE_UNAVAILABLE");
+    } finally {
+      if (!stopped) listingTimer = setTimeout(() => { listingActive = listingTick(); }, delay);
+    }
+  };
+  if (process.env.VOP_LISTING_SYNC_ENABLED !== "off") listingActive = listingTick();
   return async () => {
     stopped = true;
     clearInterval(timer);
-    await active;
+    clearTimeout(listingTimer);
+    await Promise.all([active, listingActive]);
     await pool.end();
   };
 }

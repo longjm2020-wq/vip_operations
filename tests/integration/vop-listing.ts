@@ -78,6 +78,7 @@ try {
     "003_vop_sync.sql",
     "004_vop_details.sql",
     "042_vop_listing_status.sql",
+    "080_vop_listing_runs.sql",
   ])
     await pool.query(
       await readFile("packages/database/migrations/" + migration, "utf8"),
@@ -103,14 +104,20 @@ try {
   await pool.query(
     "CREATE TABLE stock_balances(id integer); CREATE TABLE compass_imports(id integer); CREATE TABLE compass_mail_settings(enabled boolean); INSERT INTO compass_mail_settings VALUES(false)",
   );
-  assert.equal(await syncListing(pool, client, namespace, 1, 0), "CONTINUING");
+  assert.equal(await syncListing(pool, client, namespace, 1, 0), "PARTIAL");
   assert.equal(calls, 1);
   assert.equal(
     (await pool.query("SELECT count(*) FROM vop_listing_states")).rows[0].count,
     "6",
   );
-  assert.equal(await syncListing(pool, client, namespace, 1, 0), "PARTIAL");
+  assert.equal(await syncListing(pool, client, namespace, 1, 0), "IDLE");
   assert.equal(calls, 1, "successful observations are not repeatedly fetched");
+  const firstRun = (await pool.query("SELECT * FROM vop_listing_jobs WHERE namespace=$1", [namespace])).rows[0];
+  assert.equal(Number(firstRun.run_total), 6);
+  assert.equal(Number(firstRun.run_completed), 6);
+  assert.equal(Number(firstRun.run_failed), 1);
+  assert.equal(firstRun.last_success_at, null);
+  assert.ok(firstRun.run_finished_at);
   pass(
     "batch persistence deduplicates catalog aliases and retains deferred missing results",
   );
@@ -138,15 +145,18 @@ try {
   );
   const lock = await pool.connect();
   await lock.query("SELECT pg_advisory_lock(hashtextextended($1,0))", [
-    "vop-sync:" + namespace,
+    "vop-listing:" + namespace,
   ]);
   assert.equal(await syncListing(pool, client, namespace, 1, 0), "BUSY");
   assert.equal(calls, 1);
   await lock.query("SELECT pg_advisory_unlock(hashtextextended($1,0))", [
-    "vop-sync:" + namespace,
+    "vop-listing:" + namespace,
   ]);
+  await lock.query("SELECT pg_advisory_lock(hashtextextended($1,0))", ["vop-sync:" + namespace]);
+  assert.equal(await syncListing(pool, client, namespace, 1, 0), "IDLE", "catalog lock does not block listing");
+  await lock.query("SELECT pg_advisory_unlock(hashtextextended($1,0))", ["vop-sync:" + namespace]);
   lock.release();
-  pass("the shared VOP lock prevents overlapping workers and catalog requests");
+  pass("listing lock prevents overlapping status workers without waiting behind catalog collection");
   await pool.query(
     "UPDATE vop_listing_jobs SET next_run_at=now() WHERE namespace=$1",
     [namespace],
@@ -185,7 +195,9 @@ try {
     listing_status: 0,
     last_status_change_time: String(now),
   };
-  assert.equal(await syncListing(pool, client, namespace, 1, 0), "CONTINUING");
+  assert.equal(await syncListing(pool, client, namespace, 1, 0), "SUCCESS");
+  assert.equal((await pool.query("SELECT last_success_at FROM vop_listing_jobs WHERE namespace=$1", [namespace])).rows[0].last_success_at, null,
+    "a successful partial retry does not claim the full catalog was rechecked");
   assert.equal((await platformCatalog({ state: "UNLISTED" })).total, 3);
   pass(
     "successful retry replaces the prior state and clears the failure marker",
@@ -206,6 +218,7 @@ try {
     [namespace],
   );
   ambiguous = true;
+  await pool.query("UPDATE vop_listing_jobs SET next_run_at=now() WHERE namespace=$1", [namespace]);
   assert.equal(await syncListing(pool, client, namespace, 1, 0), "BLOCKED");
   const count = calls;
   assert.equal(await syncListing(pool, client, namespace, 1, 0), "IDLE");
@@ -239,9 +252,13 @@ try {
     ).rows[0].count,
     "50",
   );
+  const midway = (await pool.query("SELECT * FROM vop_listing_jobs WHERE namespace=$1", [largeNamespace])).rows[0];
+  assert.equal(Number(midway.run_total), 63);
+  assert.equal(Number(midway.run_completed), 50);
+  assert.equal(midway.run_finished_at, null);
   assert.equal(
     await syncListing(pool, client, largeNamespace, 1, 0),
-    "CONTINUING",
+    "SUCCESS",
   );
   assert.equal(
     (
@@ -254,10 +271,20 @@ try {
   );
   assert.equal(
     await syncListing(pool, client, largeNamespace, 1, 0),
-    "SUCCESS",
+    "IDLE",
   );
   assert.equal(calls - start, 2);
   pass("bounded batches resume without skipping or refetching successful rows");
+  const completedRun = (await pool.query("SELECT * FROM vop_listing_jobs WHERE namespace=$1", [largeNamespace])).rows[0];
+  assert.equal(completedRun.run_id, midway.run_id);
+  assert.equal(Number(completedRun.run_completed), 63);
+  assert.ok(completedRun.last_success_at);
+  await pool.query("UPDATE vop_listing_jobs SET next_run_at=now() WHERE namespace=$1", [largeNamespace]);
+  assert.equal(await syncListing(pool, client, largeNamespace, 1, 0), "IDLE");
+  const idleRun = (await pool.query("SELECT * FROM vop_listing_jobs WHERE namespace=$1", [largeNamespace])).rows[0];
+  assert.equal(idleRun.last_success_at.toISOString(), completedRun.last_success_at.toISOString());
+  assert.equal(idleRun.run_finished_at.toISOString(), completedRun.run_finished_at.toISOString());
+  pass("idle polling never advances the full-success timestamp or run completion");
   expectedAuthorization = "test-only-access";
   const authorizedToken = {
     accessToken: expectedAuthorization,
@@ -287,6 +314,50 @@ try {
   pass(
     "valid existing connection authorization is reused internally without new grants or credential exposure",
   );
+  const requested = (await pool.query(`UPDATE vop_listing_jobs SET status='READY',next_run_at=now(),
+    run_id=gen_random_uuid(),run_started_at=NULL,run_finished_at=NULL,run_total=0,run_completed=0,run_failed=0
+    WHERE namespace=$1 RETURNING run_id`, [largeNamespace])).rows[0].run_id;
+  const beforeManual = calls;
+  assert.equal(await syncListing(pool, client, largeNamespace, 1, 0), "CONTINUING");
+  const manual = (await pool.query("SELECT * FROM vop_listing_jobs WHERE namespace=$1", [largeNamespace])).rows[0];
+  assert.equal(manual.run_id, requested);
+  assert.equal(Number(manual.run_total), 63);
+  assert.equal(Number(manual.run_completed), 50, "recently cached rows do not count as this run's work");
+  await pool.query(`INSERT INTO vop_catalog(namespace,external_key,barcode,style_no,product_name,cooperation_no,warehouse,source_updated_at,payload_hash)
+    VALUES($1,'added-during-run','added-during-run','LARGE','fixture',1,'WH',1,'fixture')`, [largeNamespace]);
+  values["added-during-run"] = { code: 200, listing_status: 1 };
+  assert.equal(await syncListing(pool, client, largeNamespace, 1, 0), "SUCCESS");
+  assert.equal(calls - beforeManual, 2);
+  const manualDone = (await pool.query("SELECT * FROM vop_listing_jobs WHERE namespace=$1", [largeNamespace])).rows[0];
+  assert.equal(Number(manualDone.run_total), 63, "the captured scope is stable while the catalog changes");
+  await pool.query("UPDATE vop_listing_jobs SET next_run_at=now() WHERE namespace=$1", [largeNamespace]);
+  assert.equal(await syncListing(pool, client, largeNamespace, 1, 0), "SUCCESS");
+  assert.equal(Number((await pool.query("SELECT run_total FROM vop_listing_jobs WHERE namespace=$1", [largeNamespace])).rows[0].run_total), 1);
+  pass("manual runs recheck every captured barcode; new catalog rows are collected in the next run");
+  await pool.query(`UPDATE vop_listing_jobs SET status='READY',next_run_at=now(),run_id=gen_random_uuid(),run_started_at=NULL,run_finished_at=NULL WHERE namespace=$1`, [largeNamespace]);
+  fail = new VipError("NETWORK_FAILED", true);
+  assert.equal(await syncListing(pool, client, largeNamespace, 1, 0), "FAILED");
+  const interrupted = (await pool.query("SELECT * FROM vop_listing_jobs WHERE namespace=$1", [largeNamespace])).rows[0];
+  assert.equal(Number(interrupted.run_total), 64);
+  assert.equal(Number(interrupted.run_completed), 50);
+  assert.equal(Number(interrupted.run_failed), 50);
+  assert.equal(interrupted.last_success_at.toISOString(), manualDone.last_success_at.toISOString());
+  fail = undefined;
+  await pool.query("UPDATE vop_listing_jobs SET next_run_at=now() WHERE namespace=$1", [largeNamespace]);
+  await pool.query("UPDATE vop_listing_states SET next_run_at=now() WHERE namespace=$1 AND last_error IS NOT NULL", [largeNamespace]);
+  assert.equal(await syncListing(pool, client, largeNamespace, 2, 0), "SUCCESS");
+  const recovered = (await pool.query("SELECT * FROM vop_listing_jobs WHERE namespace=$1", [largeNamespace])).rows[0];
+  assert.equal(Number(recovered.run_total), 64, "retry includes both failed and not-yet-attempted rows");
+  assert.equal(Number(recovered.run_completed), 64);
+  assert.equal(Number(recovered.run_failed), 0);
+  pass("an interrupted run keeps true failed/pending counts and retries all unfinished work");
+  await pool.query("INSERT INTO vop_connections(namespace,vendor_id,token_cipher,token_expires_at) VALUES('empty:123',123,'unused',now())");
+  assert.equal(await syncListing(pool, client, "empty:123", 1, 0), "BLOCKED");
+  const empty = (await pool.query("SELECT * FROM vop_listing_jobs WHERE namespace='empty:123'")).rows[0];
+  assert.equal(empty.last_error, "LISTING_NO_BARCODES");
+  assert.equal(empty.last_success_at, null);
+  assert.equal(Number(empty.run_total), 0);
+  pass("an empty catalog cannot report a successful full synchronization");
   assert.equal(
     (await pool.query("SELECT count(*) FROM stock_balances")).rows[0].count,
     "0",
