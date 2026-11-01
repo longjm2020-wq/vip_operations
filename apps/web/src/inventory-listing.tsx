@@ -54,9 +54,9 @@ export function InventoryListingStatus({
       <Tag
         color={
           state === "LISTED"
-            ? "green"
+            ? "blue"
             : state === "PARTIAL"
-              ? "orange"
+              ? "cyan"
               : state === "ERROR" || state === "CONFLICT"
                 ? "red"
                 : "default"

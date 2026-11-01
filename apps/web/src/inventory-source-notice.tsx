@@ -12,8 +12,8 @@ export function InventorySourceNotice({ source }: { source?: Row | null }) {
     return () => window.clearTimeout(timer);
   }, [version, error]);
   if (!source || (!error && dismissed === version)) return null;
+  const notice = `聚水潭 · ${source.warehouseName} · 完整同步 ${when(source.finishedAt)} · 匹配 ${source.receivedCount} / ${source.requestedCount}${error ? ` · ${error}` : ""}`;
   return <Alert className="inventory-source-notice" style={{ marginBottom: 12 }} showIcon
     type={error ? "warning" : "info"}
-    title={`聚水潭 · ${source.warehouseName} · 完整同步 ${when(source.finishedAt)} · 匹配 ${source.receivedCount} / ${source.requestedCount}`}
-    description={[error, "库存数量采用聚水潭导出表原值；在仓总库存按配置公式计算。暂不估算补货及可售天数。"].filter(Boolean).join("；")} />;
+    title={<span className="inventory-source-notice-line" title={notice}>{notice}</span>} />;
 }

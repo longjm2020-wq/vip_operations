@@ -7,14 +7,14 @@ export type { SelectionField };
 import {splitFieldTags} from "../../../packages/contracts/src/selection-field-validation.js";
 export {defaultTagConfig,splitFieldTags,fieldValueError,splitChoiceValues,joinChoiceValues,supportsSlashChoices,isEncodedChoiceValue} from "../../../packages/contracts/src/selection-field-validation.js";
 export const selectionOptionPalette = [
-  { key: "blue", label: "靛蓝", background: "#e8edff", color: "#354cb5", darkBackground: "#26335c", darkColor: "#bac8ff" },
+  { key: "blue", label: "靛蓝", background: "#eff2ff", color: "#435ee5", darkBackground: "#222a48", darkColor: "#8fa4ff" },
   { key: "teal", label: "青蓝", background: "#e5f3f5", color: "#23616c", darkBackground: "#203d46", darkColor: "#9ed9e3" },
-  { key: "purple", label: "雾紫", background: "#f0ebfa", color: "#654a98", darkBackground: "#383047", darkColor: "#d0bcef" },
-  { key: "green", label: "薄荷", background: "#e8f2ef", color: "#386553", darkBackground: "#253d35", darkColor: "#b0d6c2" },
-  { key: "orange", label: "琥珀", background: "#fff2dd", color: "#865820", darkBackground: "#443520", darkColor: "#e9c994" },
-  { key: "red", label: "玫瑰", background: "#faeaef", color: "#944c65", darkBackground: "#472d38", darkColor: "#e8b0c2" },
+  { key: "purple", label: "雾紫", background: "#f1edf8", color: "#66558f", darkBackground: "#302e46", darkColor: "#c2bae6" },
+  { key: "green", label: "薄荷", background: "#eff8ef", color: "#347449", darkBackground: "#1d3025", darkColor: "#8dc8a1" },
+  { key: "orange", label: "琥珀", background: "#fff8df", color: "#906417", darkBackground: "#352b1b", darkColor: "#e6bd72" },
+  { key: "red", label: "玫瑰", background: "#faeaef", color: "#944c65", darkBackground: "#402c38", darkColor: "#e1b0c1" },
   { key: "brown", label: "岩褐", background: "#f0ece8", color: "#6d5f55", darkBackground: "#39322f", darkColor: "#d3c2b6" },
-  { key: "gray", label: "银灰", background: "#edeff4", color: "#586174", darkBackground: "#303540", darkColor: "#bac2d2" },
+  { key: "gray", label: "银灰", background: "#f5f6fb", color: "#626b80", darkBackground: "#212329", darkColor: "#b1b6c6" },
 ];
 export function selectionOptionStyle(color: (typeof selectionOptionPalette)[number]) {
   return { "--choice-light-bg": color.background, "--choice-light-text": color.color, "--choice-dark-bg": color.darkBackground, "--choice-dark-text": color.darkColor };

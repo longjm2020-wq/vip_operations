@@ -17,6 +17,13 @@ export type InventoryFormulaNode =
   | { kind: "number"; value: string }
   | { kind: "binary"; op: "+" | "-" | "*" | "/"; left: InventoryFormulaNode; right: InventoryFormulaNode };
 export const inventoryFormulaExample = "[实际库存数] + [销退仓库存] + [进货仓库存]";
+export const inventoryAvailableFormulaExample = `${inventoryFormulaExample} - [订单占有数]`;
+export const inventoryCalculationFieldLimit = 20;
+export type InventoryCalculationField = {
+  id: string; key: string; name: string; formula: string; isPublic: boolean;
+  ownerId: string; ownerName: string; revision: number; hidden: boolean;
+  viewRevision: number; canManage: boolean;
+};
 
 /** A bounded arithmetic grammar, never JavaScript or arbitrary SQL. */
 export function parseInventoryFormula(input: string): InventoryFormulaNode {
@@ -83,4 +90,19 @@ export const inventoryFormulaSchema = z.string().trim().max(512).superRefine((va
 export const inventoryCalculationWriteSchema = z.object({
   revision: z.number().int().nonnegative(),
   formula: inventoryFormulaSchema.nullable(),
+}).strict();
+
+const calculationId = z.string().regex(/^[1-9]\d{0,18}$/);
+export const inventoryCalculationFieldWriteSchema = z.object({
+  id: calculationId.optional(),
+  revision: z.number().int().nonnegative(),
+  name: z.string().trim().min(1).max(40).refine(value => !/[\[\]\r\n\t]/.test(value), "字段名称不能包含方括号或换行"),
+  formula: inventoryFormulaSchema,
+  isPublic: z.boolean(),
+}).strict();
+export const inventoryCalculationFieldDeleteSchema = z.object({
+  id: calculationId, revision: z.number().int().positive(),
+}).strict();
+export const inventoryCalculationFieldViewSchema = z.object({
+  id: calculationId, revision: z.number().int().nonnegative(), hidden: z.boolean(),
 }).strict();

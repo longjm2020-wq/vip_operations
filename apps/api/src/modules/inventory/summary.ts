@@ -24,6 +24,7 @@ import { applyVipInventoryCatalog, inventoryListingCte } from "./vip-catalog.js"
 import { jushuitanSource } from "./jushuitan.js";
 import { jushuitanStockFields } from "../../../../../packages/contracts/src/jushuitan-inventory.js";
 import { inventoryCalculationPolicy, inventoryFormulaSql } from "./calculation-policy.js";
+import { inventoryCalculationFields } from "./calculation-fields.js";
 
 export async function inventorySummary(q: Row, tx: Tx = db, userId?: string) {
   // A report import can replace whole history days while a page is loading.
@@ -60,7 +61,9 @@ async function inventorySummarySnapshot(q: Row, tx: Tx, userId?: string) {
       ? "'style:'||pr.id::text"
       : "'article:'||pr.id::text||':'||CASE WHEN trim(COALESCE(ref.article_no,''))<>'' THEN 'code:'||trim(ref.article_no) ELSE 'sku:'||s.id::text END";
   const calculation = external ? await inventoryCalculationPolicy(userId, tx) : null;
-  const stockFields = (external ? ["warehouseTotalQty", ...jushuitanStockFields] : inventoryStockFields).map(snake);
+  const calculationFields = external ? (await inventoryCalculationFields(userId, tx)).filter(field => !field.hidden) : [];
+  const formulas = new Map(calculationFields.map(field => [snake(field.key), field.formula as string]));
+  const stockFields = (external ? ["warehouseTotalQty", ...calculationFields.map(field => field.key), ...jushuitanStockFields] : inventoryStockFields).map(snake);
   const sumStock = (key: string) => external ? `CASE WHEN count(${key})=count(*) THEN sum(${key}) END` : `sum(${key})`;
   const reportCondition =
     !skuView || reportMatch === "all"
@@ -116,7 +119,7 @@ async function inventorySummarySnapshot(q: Row, tx: Tx, userId?: string) {
         pr.style_no,pr.name AS product_name,pr.main_image_url,
         pr.custom_fields->>'f00000000000000000000000000000001' AS supplier_style_code,
         w.id AS warehouse_id,w.name AS warehouse_name,
-        ${external ? stockFields.map(k => `${k === "warehouse_total_qty" ? inventoryFormulaSql(calculation!.formula) : `jst.${k}`} AS ${k}`).join(",") : `COALESCE(b.physical_qty,0) AS physical_qty,COALESCE(b.reserved_qty,0) AS reserved_qty,
+        ${external ? stockFields.map(k => `${k === "warehouse_total_qty" ? inventoryFormulaSql(calculation!.formula) : formulas.has(k) ? inventoryFormulaSql(formulas.get(k)!) : `jst.${k}`} AS ${k}`).join(",") : `COALESCE(b.physical_qty,0) AS physical_qty,COALESCE(b.reserved_qty,0) AS reserved_qty,
         COALESCE(b.damaged_qty,0) AS damaged_qty,
         COALESCE(b.physical_qty-b.reserved_qty-b.damaged_qty,0) AS available_qty,
         COALESCE(sh.in_transit_qty,0) AS in_transit_qty,COALESCE(sh.transfer_transit_qty,0) AS transfer_transit_qty,
@@ -185,7 +188,8 @@ async function inventorySummarySnapshot(q: Row, tx: Tx, userId?: string) {
   const quantity = (value: unknown, key: string) => {
     if (external && value == null) return null;
     const n = Number(String(value));
-    if ((key === "warehouse_total_qty" ? !Number.isFinite(n) || Math.abs(n) > Number.MAX_SAFE_INTEGER : !Number.isSafeInteger(n)) || (!external && n < 0))
+    if (key === "warehouse_total_qty" || formulas.has(key)) return Number.isFinite(n) && Math.abs(n) <= Number.MAX_SAFE_INTEGER ? n : null;
+    if (!Number.isSafeInteger(n) || (!external && n < 0))
       fail("INVENTORY_SUMMARY_RANGE", "库存汇总数量超出可展示范围", 422);
     return n;
   };
@@ -254,7 +258,7 @@ async function inventorySummarySnapshot(q: Row, tx: Tx, userId?: string) {
     totals,
     stock_source: stockSource,
     stock_source_info: externalSource,
-    ...(external ? { calculation_policy: calculation } : {}),
+    ...(external ? { calculation_policy: calculation, calculation_fields: calculationFields } : {}),
     dimension,
     listing_counts: first.listing_counts,
     ...(skuView

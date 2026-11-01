@@ -44,7 +44,7 @@ function readPinnedColumns(storageKey: string, columns: Columns): string[] {
   try {
     const saved: unknown = JSON.parse(localStorage.getItem(storageKey) || "[]");
     if (Array.isArray(saved))
-      return columns.map(columnKey).filter((key) => saved.includes(key));
+      return saved.filter((key): key is string => typeof key === "string" && (columns.some(column => columnKey(column) === key) || /^calculated\d+$/.test(key)));
   } catch {
     // A blocked or outdated browser preference must not prevent viewing stock.
   }

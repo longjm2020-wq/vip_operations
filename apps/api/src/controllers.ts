@@ -47,6 +47,7 @@ import {
 } from "./modules/inventory/jushuitan.js";
 import { replenishmentPolicy, saveReplenishmentPolicy } from "./modules/inventory/replenishment-policy.js";
 import { inventoryCalculationPolicy, saveInventoryCalculation } from "./modules/inventory/calculation-policy.js";
+import { listInventoryCalculationFields, saveInventoryCalculationField, deleteInventoryCalculationField, setInventoryCalculationFieldView } from "./modules/inventory/calculation-fields.js";
 import { InventoryFulfilmentController } from "./modules/inventory/controller.js";
 import * as purchase from "./modules/purchases/service.js";
 import * as suggestion from "./modules/suggestions/service.js";
@@ -214,6 +215,18 @@ class InventoryController {
   }
   @Permission("inventory.read") @Post("calculation-policy") saveCalculation(@Req() r: AuthRequest, @Body() b: unknown) {
     return saveInventoryCalculation(context(r), b);
+  }
+  @Permission("inventory.read") @Get("calculation-fields") calculationFields(@Req() r: AuthRequest) {
+    return listInventoryCalculationFields(r.actor);
+  }
+  @Permission("inventory.read") @Post("calculation-fields") saveCalculationField(@Req() r: AuthRequest, @Body() b: unknown) {
+    return saveInventoryCalculationField(context(r), b);
+  }
+  @Permission("inventory.read") @Post("calculation-fields/delete") deleteCalculationField(@Req() r: AuthRequest, @Body() b: unknown) {
+    return deleteInventoryCalculationField(context(r), b);
+  }
+  @Permission("inventory.read") @Post("calculation-fields/view") calculationFieldView(@Req() r: AuthRequest, @Body() b: unknown) {
+    return setInventoryCalculationFieldView(context(r), b);
   }
   @Permission("inventory.read") @Post("replenishment-policy") savePolicy(@Req() r: AuthRequest, @Body() b: unknown) {
     return saveReplenishmentPolicy(context(r), b);

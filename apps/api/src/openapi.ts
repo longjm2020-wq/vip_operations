@@ -14,7 +14,7 @@ import { aiSettingsSchema } from "./modules/analytics/ai.js";
 import { loginSchema } from "./modules/auth/service.js";
 import { compassProbeRequestSchema } from "./integrations/vip/compass.js";
 import { replenishmentPolicyWriteSchema } from "../../../packages/contracts/src/inventory-replenishment.js";
-import { inventoryCalculationWriteSchema } from "../../../packages/contracts/src/inventory-formula.js";
+import { inventoryCalculationWriteSchema, inventoryCalculationFieldWriteSchema, inventoryCalculationFieldDeleteSchema, inventoryCalculationFieldViewSchema } from "../../../packages/contracts/src/inventory-formula.js";
 import { assistantSendSchema } from "../../../packages/contracts/src/personal-assistant.js";
 import { workspaceSaveSchema } from "../../../packages/contracts/src/personal-workspace.js";
 import { appearanceSchema } from "../../../packages/contracts/src/appearance.js";
@@ -180,6 +180,11 @@ export function enrichOpenApi(doc: OpenAPIObject) {
   set("/api/v1/inventory/calculation-policy", "get", undefined, "读取当前账号的在仓总库存公式及版本；未配置为null");
   doc.paths["/api/v1/inventory/calculation-policy"].get!.parameters = [];
   set("/api/v1/inventory/calculation-policy", "post", inventoryCalculationWriteSchema, "保存个人库存公式；支持六项聚水潭数量、数字和+-*/括号；版本冲突返回409，null停用。逐SKU计算后汇总，不修改原始库存");
+  set("/api/v1/inventory/calculation-fields", "get", undefined, "读取自己创建或已公开的库存计算字段（含个人隐藏项）；不返回其他账号私有字段");
+  doc.paths["/api/v1/inventory/calculation-fields"].get!.parameters = [];
+  set("/api/v1/inventory/calculation-fields", "post", inventoryCalculationFieldWriteSchema, "新增或编辑计算字段；创建revision=0，更新携带id和revision。创建者及超级管理员可管理公开字段，私有字段仅本人可见。每人20项、公开共40项；版本冲突409");
+  set("/api/v1/inventory/calculation-fields/delete", "post", inventoryCalculationFieldDeleteSchema, "删除可管理的计算字段；不删除原始库存；版本冲突409");
+  set("/api/v1/inventory/calculation-fields/view", "post", inventoryCalculationFieldViewSchema, "保存个人显示/隐藏设置；仅影响当前账号。revision为viewRevision；隐藏列不参与本账号页面及导出");
   set(
     "/api/v1/inventory/adjustments",
     "post",

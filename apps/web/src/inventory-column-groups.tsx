@@ -25,7 +25,6 @@ const defaults: SelectionColumnGroup[] = [
     id: "inventory",
     name: "库存",
     columnKeys: [
-      "warehouseTotalQty",
       "physicalQty",
       "inTransitQty",
       "transferTransitQty",
@@ -60,6 +59,11 @@ const defaults: SelectionColumnGroup[] = [
   },
 ];
 function read(key: string, keys: string[]): Preferences {
+  const addCalculations = (columnKeys: string[]) => {
+    const at = columnKeys.indexOf("physicalQty");
+    if (at >= 0) columnKeys.splice(at, 0, ...keys.filter(key => /^calculated\d+$/.test(key) && !columnKeys.includes(key)));
+    return columnKeys;
+  };
   try {
     const saved = JSON.parse(localStorage.getItem(key) ?? "null");
     if (
@@ -84,11 +88,9 @@ function read(key: string, keys: string[]): Preferences {
           )
             return [];
           const columnKeys = [
-            ...new Set(group.columnKeys.filter((key) => keys.includes(key))),
+            ...new Set(group.columnKeys.filter((key) => keys.includes(key) || /^calculated\d+$/.test(key))),
           ];
-          if (group.id === "inventory" && keys.includes("warehouseTotalQty") && columnKeys.includes("physicalQty") && !columnKeys.includes("warehouseTotalQty")) {
-            columnKeys.splice(columnKeys.indexOf("physicalQty"), 0, "warehouseTotalQty");
-          }
+          if (group.id === "inventory") addCalculations(columnKeys);
           if (!columnKeys.length) return [];
           ids.add(group.id);
           names.add(group.name.trim());
@@ -109,7 +111,7 @@ function read(key: string, keys: string[]): Preferences {
     groups: defaults
       .map((group) => ({
         ...group,
-        columnKeys: group.columnKeys.filter((key) => keys.includes(key)),
+        columnKeys: addCalculations(group.columnKeys.filter((key) => keys.includes(key))),
       }))
       .filter((group) => group.columnKeys.length),
     activeKey: "",
@@ -140,6 +142,14 @@ function InventoryColumnGroupsState({
   }));
   const keys = fields.map((field) => field.key);
   const [preferences, setPreferences] = useState(() => read(storageKey, keys));
+  // Metadata arrives with the query and changes after create/hide/delete. Reconcile
+  // live columns without remounting the toolbar or closing the field editor.
+  const groups = preferences.groups.map(group => {
+    const columnKeys = group.columnKeys.filter(key => keys.includes(key));
+    const at = columnKeys.indexOf("physicalQty");
+    if (group.id === "inventory" && at >= 0) columnKeys.splice(at, 0, ...keys.filter(key => /^calculated\d+$/.test(key) && !columnKeys.includes(key)));
+    return { ...group, columnKeys };
+  }).filter(group => group.columnKeys.length);
   const [visit, setVisit] = useState(0);
   const persist = (next: Preferences) => {
     // A failed save keeps the manager's draft open; never claim persistence.
@@ -152,7 +162,7 @@ function InventoryColumnGroupsState({
       <SelectionColumnGroupManager
         columns={fields}
         visible={keys}
-        groups={preferences.groups}
+        groups={groups}
         persistenceHint="可为同一字段配置多个分组。分组与当前 TAB 按账号和条码／货号／款号维度保存在当前浏览器，刷新后恢复；不影响其他用户、库存数量或导出列。"
         onSave={(groups) => {
           try {
@@ -174,7 +184,7 @@ function InventoryColumnGroupsState({
     ),
     tabs: (
       <SelectionColumnGroupTabs
-        groups={preferences.groups}
+        groups={groups}
         visibleKeys={keys}
         activeKey={preferences.activeKey}
         onChange={(activeKey) => {
@@ -190,7 +200,7 @@ function InventoryColumnGroupsState({
       />
     ),
     groupKeys:
-      preferences.groups.find((group) => group.id === preferences.activeKey)
+      groups.find((group) => group.id === preferences.activeKey)
         ?.columnKeys ?? [],
     visit,
   });

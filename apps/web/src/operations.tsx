@@ -4,6 +4,7 @@ import { Table, exportTableData } from "./data-table";
 import { JushuitanInventory } from "./jushuitan-inventory";
 import { jushuitanStockFields } from "../../../packages/contracts/src/jushuitan-inventory";
 import { InventoryFormulaPanel } from "./inventory-formula-panel";
+import type { InventoryCalculationField } from "../../../packages/contracts/src/inventory-formula";
 import { InventoryReferenceValue } from "./inventory-reference-value";
 import { ReplenishmentValue } from "./inventory-replenishment";
 import { inventoryReferenceMethodLabels, type InventoryReferenceMethod } from "../../../packages/contracts/src/compass-inventory-reference";
@@ -104,6 +105,9 @@ function InventoryBalances() {
     ...(skuView ? { reportMatch, ...(referencePeriod ? { referencePeriod } : {}) } : {}),
     ...(search ? { q: search } : {}),
   }, pageSize);
+  const calculationFields: InventoryCalculationField[] = q.data?.calculationFields ?? [];
+  const calculationLabel = (field: InventoryCalculationField) => calculationFields.filter(other => other.name === field.name).length > 1
+    ? `${field.name}（${field.ownerName} · ${field.id}）` : field.name;
   const allColumns: NonNullable<TableProps<Row>["columns"]> = [
     {
       title: "图片",
@@ -153,8 +157,11 @@ function InventoryBalances() {
     },
     { title: "颜色", dataIndex: "colorName" },
     { title: "尺码", dataIndex: "sizeName" },
+    ...calculationFields.map(field => ({
+      title: calculationLabel(field), dataIndex: field.key,
+      render: (value: number | null) => <Tooltip title={field.formula}><span>{value == null ? skuView ? "无法计算" : "不完整" : value.toLocaleString("zh-CN", { maximumFractionDigits: 4 })}</span></Tooltip>,
+    })),
     ...[
-      "warehouseTotalQty",
       "physicalQty",
       "inTransitQty",
       "transferTransitQty",
@@ -164,7 +171,6 @@ function InventoryBalances() {
       "dailySales",
     ].map((k, i) => ({
       title: [
-        "在仓总库存",
         "实际库存数",
         "采购在途数",
         "调拨在途数",
@@ -177,7 +183,7 @@ function InventoryBalances() {
       render: (v: number, r: Row) =>
         k === "dailySales" || k === "estimatedReturns" || k === "periodSalesQty" ? (
           <InventoryReferenceValue row={r} field={k} />
-        ) : k === "warehouseTotalQty" ? <Tooltip title={q.data?.calculationPolicy?.formula ?? "请打开计算字段配置并保存公式"}><span>{!q.data?.calculationPolicy?.formula ? "未配置公式" : v == null ? skuView ? "无法计算" : "不完整" : v.toLocaleString("zh-CN", { maximumFractionDigits: 4 })}</span></Tooltip> : (
+        ) : (
           (v ?? "暂无数据")
         ),
     })),
@@ -234,9 +240,9 @@ function InventoryBalances() {
     if (key === "mainImageUrl")
       return <span title="当前筛选范围内全部库存，包含所有分页">总计</span>;
     if (
-      (["warehouseTotalQty", ...jushuitanStockFields] as string[]).includes(key)
+      ([...calculationFields.map(field => field.key), ...jushuitanStockFields] as string[]).includes(key)
     )
-      return key === "warehouseTotalQty" && !q.data?.calculationPolicy?.formula ? "未配置公式" : totals[key] == null ? "不完整" : Number(totals[key]).toLocaleString("zh-CN", { maximumFractionDigits: 4 });
+      return totals[key] == null ? "不完整" : Number(totals[key]).toLocaleString("zh-CN", { maximumFractionDigits: 4 });
     return (skuOnly.has(key) && key !== "skuCode" && key !== "sizeName") || ["styleListingState", "listingCheckedAt", "lastListingChangeAt", "lastListingChangeType"].includes(key)
       ? "—"
       : null;
@@ -431,7 +437,7 @@ function InventoryBalances() {
                     );
                   const exportRow = (row: Row, total = false) => ({
                     stockSourceNote: `聚水潭 · ${q.data?.stockSourceInfo?.warehouseName} · 同步 ${when(q.data?.stockSourceInfo?.finishedAt)}；空白库存表示未匹配或原表未提供数量；补货暂不估算`,
-                    calculationNote: `在仓总库存：${q.data?.calculationPolicy?.formula ?? "未配置公式"}；逐商品计算并保留4位小数后汇总，缺失值和除零不补0`,
+                    calculationNote: calculationFields.length ? `${calculationFields.map(field => `${calculationLabel(field)}：${field.formula}`).join("；")}；逐商品计算并保留4位小数后汇总，缺失值和除零不补0` : "未显示计算字段",
                     ...Object.fromEntries(
                       keys.map((key) => [
                         key,
@@ -464,7 +470,7 @@ function InventoryBalances() {
                   });
                   exportColumns.push({ title: "平台状态口径", dataIndex: "listingScopeNote" });
                   exportColumns.push({ title: "库存来源", dataIndex: "stockSourceNote" });
-                  exportColumns.push({ title: "在仓总库存计算口径", dataIndex: "calculationNote" });
+                  if (calculationFields.length) exportColumns.push({ title: "计算字段口径", dataIndex: "calculationNote" });
                   await exportTableData({
                     dataSource: [
                       exportRow(

@@ -98,12 +98,12 @@
   line-height: 22px;
 }
 
-.inventory-status-listed { color: var(--app-success); }
+.inventory-status-listed { color: var(--app-accent); }
 .inventory-status-partial { color: var(--app-accent); }
-.inventory-status-choice:hover:not(:disabled) { background: var(--app-muted); }
+.inventory-status-choice:hover:not(:disabled) { background: var(--app-accent-soft); }
 .inventory-status-choice[aria-pressed="true"] {
   border-color: var(--app-accent-border);
-  background: var(--app-muted);
+  background: var(--app-accent-soft);
   color: var(--app-accent);
 }
 .inventory-status-choice:focus-visible,
@@ -245,3 +245,24 @@
   min-width: 320px;
 }
 .inventory-platform-sync-job { margin-top: 16px; }
+.inventory-formula-field {
+  padding: 16px;
+  border: 1px solid var(--app-border);
+  border-radius: 10px;
+  background: var(--app-muted);
+}
+.inventory-formula-field-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.inventory-formula-field-heading > div { min-width: 0; overflow-wrap: anywhere; }
+.inventory-formula-field-heading .ant-switch { flex-shrink: 0; }
+.inventory-formula-expression {
+  margin: 14px 0;
+  color: var(--app-secondary);
+  overflow-wrap: anywhere;
+}
+.inventory-source-notice .ant-alert-content { min-width: 0; }
+.inventory-source-notice-line { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

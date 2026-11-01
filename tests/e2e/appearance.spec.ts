@@ -1,4 +1,5 @@
 import { expect, test, type BrowserContext, type Page } from "@playwright/test";
+import { selectionLayoutSchema } from "../../packages/contracts/src/selection-layout.js";
 
 const store = () => ({
   accounts: new Map<string, { mode: string; version: number }>(),
@@ -94,6 +95,7 @@ async function fixture(context: BrowserContext, state: Store, user = "1") {
             id: "1",
             xutiStyleNo: "填色保留",
             cellColors: { xutiStyleNo: "ORANGE" },
+            extraFields: { "custom:brand": "供应商颜色", "custom:soft": "标准颜色", "custom:choice": "规范" },
           },
           {
             id: "2",
@@ -325,4 +327,29 @@ test("表格用户填色和文字保留，无填色单元格随全站主题切�
       path: test.info().outputPath(`${current}-sheet.png`),
     });
   }
+});
+
+test("原生表头与库存表头一致，Ant预设标签和选项标签实际采用共享亮暗配色", async ({ page, context }) => {
+  await fixture(context, store());
+  const preferences = selectionLayoutSchema.parse({ columns: [
+      { key: "xutiStyleNo", label: "款号", width: 120, type: "text" },
+      { key: "custom:brand", label: "品牌标签", width: 120, custom: true, type: "tags", tagConfig: { allowCustom: true, multiple: true, max: 30, order: "selection", color: "blue" } },
+      { key: "custom:soft", label: "配套标签", width: 120, custom: true, type: "tags", tagConfig: { allowCustom: true, multiple: true, max: 30, order: "selection", color: "green" } },
+      { key: "custom:choice", label: "核对", width: 120, custom: true, type: "single", options: ["规范", "不规范"] },
+    ] });
+  await page.route("**/api/v1/style-selections/layout-preferences**", route => route.fulfill({ json: { data: { preferences, revision: 1, canEditShared: false } } }));
+  await page.goto("/style-selections");
+  const blue = page.locator('td[data-selection-column="custom:brand"] .ant-tag').first();
+  const green = page.locator('td[data-selection-column="custom:soft"] .ant-tag').first();
+  for (const current of ["dark", "light"] as const) {
+    if (current === "light") await toggle(page, "light");
+    await expect(blue).toHaveCSS("color", current === "dark" ? "rgb(143, 164, 255)" : "rgb(67, 94, 229)");
+    await expect(blue).toHaveCSS("background-color", current === "dark" ? "rgb(34, 42, 72)" : "rgb(239, 242, 255)");
+    await expect(green).toHaveCSS("color", current === "dark" ? "rgb(141, 200, 161)" : "rgb(52, 116, 73)");
+    await expect(green).toHaveCSS("background-color", current === "dark" ? "rgb(29, 48, 37)" : "rgb(239, 248, 239)");
+    await expect(page.locator(".selection-sheet thead th").first()).toHaveCSS("background-color", current === "dark" ? "rgb(37, 41, 54)" : "rgb(240, 243, 251)");
+    await page.screenshot({ path: test.info().outputPath(`${current}-unified-tags.png`) });
+  }
+  await page.goto("/operations/vip/inventory");
+  await expect(page.locator('.inventory-summary-table .ant-tag-blue').first()).toHaveCSS("color", "rgb(67, 94, 229)");
 });

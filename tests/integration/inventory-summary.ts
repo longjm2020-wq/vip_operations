@@ -2,6 +2,7 @@ import "dotenv/config";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import { HttpException } from "@nestjs/common";
 import type { Tx } from "../../packages/database/src/index.js";
 import pg from "pg";
@@ -44,6 +45,17 @@ try {
   const [user] = await sql(
     "INSERT INTO users(username,display_name,password_hash) VALUES('summary-test','库存测试','test-only') RETURNING id",
   );
+  await check("Upgrade preserves existing formulas as private custom fields", async () => {
+    const [legacy] = await sql("INSERT INTO users(username,display_name,password_hash) VALUES('legacy-formula','旧配置','test-only') RETURNING id");
+    await sql("INSERT INTO inventory_calculation_policies(user_id,formula,revision) VALUES($1,'[实际库存数]-[订单占有数]',7)", [legacy.id]);
+    // Exercise the actual upgrade SQL against pre-upgrade data, only in this
+    // generated loopback database. No production connection is accepted above.
+    await sql("DROP TABLE inventory_calculation_field_views; DROP TABLE inventory_calculation_fields");
+    await sql(await readFile("packages/database/migrations/078_inventory_calculation_fields.sql", "utf8"));
+    const [field] = await sql("SELECT * FROM inventory_calculation_fields WHERE owner_id=$1", [legacy.id]);
+    assert.equal(field.name, "在仓总库存"); assert.equal(field.formula, "[实际库存数]-[订单占有数]");
+    assert.equal(field.is_public, false); assert.equal(field.revision, 7); assert.equal(field.legacy_user_id, legacy.id);
+  });
   const [supplier] = await sql(
     "INSERT INTO suppliers(supplier_code,name) VALUES('SUMMARY','测试供应商') RETURNING id",
   );
@@ -1079,6 +1091,85 @@ try {
     assert.equal((await formulaSummary({ skuId: skus[0] })).data[0].warehouseTotalQty, null);
     assert.equal((await formulaSummary({ skuId: skus[0] })).data[0].physicalQty, 5);
     assert.equal((await summary({ skuId: skus[0] })).data[0].physicalQty, 15);
+  });
+  const { listInventoryCalculationFields, saveInventoryCalculationField, deleteInventoryCalculationField, setInventoryCalculationFieldView } = await import("../../apps/api/src/modules/inventory/calculation-fields.js");
+  const [fieldReader] = await sql("INSERT INTO users(username,display_name,password_hash) VALUES('field-reader','查看者','test-only') RETURNING id");
+  const readerContext = () => ({ ...formulaContext(), actor: { ...formulaContext().actor, id: fieldReader.id } });
+  const readerFields = () => listInventoryCalculationFields(readerContext().actor).then(camel);
+  const readerSummary = () => inventorySummary({ stockSource: "jushuitan", skuId: skus[0] }, db, fieldReader.id).then(camel);
+  const fieldPayload = { revision: 0, name: "在仓可用库存", formula: "[实际库存数]+[销退仓库存]+[进货仓库存]-[订单占有数]", isPublic: false };
+  let customId = "", customKey = "";
+  await check("Custom fields are private by default, permission checked and idempotent", async () => {
+    const c = formulaContext();
+    const saved = camel(await saveInventoryCalculationField(c, fieldPayload));
+    assert.deepEqual(camel(await saveInventoryCalculationField(c, fieldPayload)), saved);
+    customId = saved.id; customKey = `calculated${saved.id}`;
+    const owner = camel(await listInventoryCalculationFields(c.actor));
+    assert.equal(owner.find((f: any) => f.id === customId).canManage, true);
+    assert.equal((await readerFields()).length, 0);
+    assert.equal((await listInventoryCalculationFields({ ...readerContext().actor, roleCodes: ["SUPER_ADMIN"] })).length, 0);
+    const read = await readerSummary();
+    assert.equal(read.data[0][customKey], undefined); assert.equal(read.totals[customKey], undefined);
+    assert.equal(read.calculationFields.length, 0);
+    const own = await formulaSummary({ skuId: skus[0] });
+    assert.equal(own.data[0][customKey], 7); assert.equal(own.totals[customKey], 7);
+    const denied = formulaContext(); denied.actor.permissions = [];
+    await assert.rejects(() => saveInventoryCalculationField(denied, fieldPayload), (e: any) => e.getStatus() === 403);
+    await assert.rejects(() => saveInventoryCalculationField(formulaContext(), fieldPayload), (e: any) => e.getStatus() === 409);
+    await assert.rejects(() => saveInventoryCalculationField(formulaContext(), { ...fieldPayload, name: "实际库存数" }), (e: any) => e.getStatus() === 400);
+    await assert.rejects(() => saveInventoryCalculationField(formulaContext(), { ...fieldPayload, name: "错误公式", formula: "[在仓可用库存] + 1" }), (e: any) => e.getStatus() === 400);
+  });
+  await check("Public fields are readable but not editable by other readers; hide is per account", async () => {
+    await saveInventoryCalculationField(formulaContext(), { ...fieldPayload, id: customId, revision: 1, isPublic: true });
+    const published = (await readerFields())[0];
+    assert.equal(published.id, customId); assert.equal(published.canManage, false);
+    assert.equal((await readerSummary()).data[0][customKey], 7);
+    await assert.rejects(() => saveInventoryCalculationField(readerContext(), { ...fieldPayload, id: customId, revision: 2 }), (e: any) => e.getStatus() === 403);
+    await assert.rejects(() => deleteInventoryCalculationField(readerContext(), { id: customId, revision: 2 }), (e: any) => e.getStatus() === 403);
+    await setInventoryCalculationFieldView(readerContext(), { id: customId, revision: 0, hidden: true });
+    assert.equal((await readerFields())[0].hidden, true);
+    assert.equal((await readerSummary()).data[0][customKey], undefined);
+    assert.equal((await readerSummary()).totals[customKey], undefined);
+    assert.equal((await formulaSummary({ skuId: skus[0] })).data[0][customKey], 7);
+    await assert.rejects(() => setInventoryCalculationFieldView(readerContext(), { id: customId, revision: 0, hidden: false }), (e: any) => e.getStatus() === 409);
+    await setInventoryCalculationFieldView(readerContext(), { id: customId, revision: 1, hidden: false });
+    assert.equal((await readerSummary()).data[0][customKey], 7);
+  });
+  await check("Unpublishing revokes both metadata and values; concurrent edits never overwrite", async () => {
+    await saveInventoryCalculationField(formulaContext(), { ...fieldPayload, id: customId, revision: 2, formula: "[实际库存数]/3" });
+    assert.equal((await readerFields()).length, 0); assert.equal((await readerSummary()).data[0][customKey], undefined);
+    await assert.rejects(() => setInventoryCalculationFieldView(readerContext(), { id: customId, revision: 2, hidden: true }), (e: any) => e.getStatus() === 404);
+    await assert.rejects(() => saveInventoryCalculationField(formulaContext(), { ...fieldPayload, id: customId, revision: 2 }), (e: any) => e.getStatus() === 409);
+    const result = await formulaSummary({ productId: products[0], dimension: "article" });
+    assert.equal(result.data.find((r: any) => r.articleNo === "ARTICLE-A-01")[customKey], 2.3334);
+    assert.equal((await formulaSummary({ productId: products[0], pageSize: 1 })).totals[customKey], 2.3334);
+    const zero = camel(await saveInventoryCalculationField(formulaContext(), { ...fieldPayload, name: "除零预览", formula: "[实际库存数]/[订单占有数]" }));
+    assert.equal((await formulaSummary({ skuId: skus[1] })).data[0][`calculated${zero.id}`], null);
+    assert.equal((await formulaSummary({ productId: products[0] })).totals[`calculated${zero.id}`], null);
+    const large = camel(await saveInventoryCalculationField(formulaContext(), { ...fieldPayload, name: "大数汇总", formula: "[实际库存数]*1000000*1000000*1500" }));
+    assert.equal((await formulaSummary({ skuId: skus[0] })).data[0][`calculated${large.id}`], 7_500_000_000_000_000);
+    const total = await formulaSummary({ productId: products[0], dimension: "style" });
+    assert.equal(total.data[0][`calculated${large.id}`], null); assert.equal(total.totals[`calculated${large.id}`], null);
+    assert.equal(total.totals.physicalQty, 7);
+  });
+  await check("Deleting a public field removes it for all accounts without changing stock", async () => {
+    await saveInventoryCalculationField(formulaContext(), { ...fieldPayload, id: customId, revision: 3, isPublic: true });
+    const admin = { ...readerContext(), actor: { ...readerContext().actor, roleCodes: ["SUPER_ADMIN"] } };
+    assert.equal(camel(await listInventoryCalculationFields(admin.actor))[0].canManage, true);
+    await deleteInventoryCalculationField(admin, { id: customId, revision: 4 });
+    assert.equal((await readerFields()).length, 0);
+    const own = await formulaSummary({ skuId: skus[0] });
+    assert.equal(own.data[0][customKey], undefined); assert.equal(own.totals[customKey], undefined); assert.equal(own.data[0].physicalQty, 5);
+    await assert.rejects(() => saveInventoryCalculationField(formulaContext(), { ...fieldPayload, id: customId, revision: 5 }), (e: any) => e.getStatus() === 404);
+  });
+  await check("Migrated fields stay synchronized with older cached clients", async () => {
+    await saveInventoryCalculation(formulaContext(), { revision: 5, formula: "[实际库存数]+[销退仓库存]" });
+    const legacy = camel(await listInventoryCalculationFields(formulaContext().actor)).find((f: any) => f.name === "在仓总库存");
+    await saveInventoryCalculationField(formulaContext(), { id: legacy.id, revision: legacy.revision, name: "总量参考", formula: "[实际库存数]-[订单占有数]", isPublic: false });
+    assert.equal((await inventoryCalculationPolicy(user.id)).formula, "[实际库存数]-[订单占有数]");
+    await assert.rejects(() => saveInventoryCalculation(formulaContext(), { revision: 6, formula: null }), (e: any) => e.getStatus() === 409);
+    await deleteInventoryCalculationField(formulaContext(), { id: legacy.id, revision: legacy.revision + 1 });
+    assert.equal((await inventoryCalculationPolicy(user.id)).formula, null);
   });
   console.log(`Inventory summary: ${passed} database scenarios passed`);
   if (process.argv.includes("--serve")) {
