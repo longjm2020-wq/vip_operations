@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   db,
   rows,
+  snake,
   type Row,
 } from "../../../../../packages/database/src/index.js";
 import {
@@ -158,24 +159,22 @@ export async function executeAssistantTool(
       const source = result.stock_source_info;
       const fields = result.calculation_fields || [];
       const labelFields = [
-        ...fields.map((field: Row) => [
-          field.key.replace(
-            /[A-Z]/g,
-            (letter: string) => "_" + letter.toLowerCase(),
-          ),
-          field.name,
-        ]),
+        ...fields
+          .slice(0, 4)
+          .map((field: Row) => [snake(field.key), field.name]),
         ["physical_qty", "实际库存"],
         ["return_qty", "销退仓"],
         ["incoming_qty", "进货仓"],
         ["reserved_qty", "订单占有"],
         ["in_transit_qty", "采购在途"],
         ["transfer_transit_qty", "调拨在途"],
-      ].slice(0, 10);
+      ];
       evidence.title = `库存查询 · ${query}`;
       evidence.href =
         "/operations/vip/inventory?q=" + encodeURIComponent(query);
       evidence.summary = `${source?.warehouse_name || "杭州总仓"} · 同步时间 ${source?.finished_at ? new Date(source.finished_at).toISOString() : "未知"} · 共匹配 ${result.total} 条，展示前 ${result.data.length} 条。匹配汇总：${labelFields.map(([key, label]) => `${label} ${quantity(result.totals[key])}`).join("；")}。数量不代表实时库存，缺失不视为0。`;
+      if (fields.length > 4)
+        evidence.summary += `本次显示前4个计算字段，其余${fields.length - 4}个请在库存明细查看。`;
       evidence.rows = result.data.map((row: Row) => ({
         label: `${row.style_no} · ${row.barcode || row.sku_code} · ${row.color_name || ""} ${row.size_name || ""}`,
         value: labelFields
@@ -219,13 +218,11 @@ export async function executeAssistantTool(
         DONE: "已完成",
         VOID: "已作废",
       };
-      evidence.rows = projects
-        .slice(0, 10)
-        .map((row) => ({
-          label: row.name,
-          value: `已验收 ${row.done} / ${row.total} 项 · ${statuses[row.status] || "状态待核对"}`,
-          href: `/projects/${row.id}`,
-        }));
+      evidence.rows = projects.slice(0, 10).map((row) => ({
+        label: row.name,
+        value: `已验收 ${row.done} / ${row.total} 项 · ${statuses[row.status] || "状态待核对"}`,
+        href: `/projects/${row.id}`,
+      }));
     } else if (name === "query_activity") {
       parse(z.object({}).strict(), input);
       const feed = await assistantActivity(c);

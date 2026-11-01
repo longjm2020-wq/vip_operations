@@ -257,7 +257,8 @@ describe("assistant business tools and private memory", () => {
         finished_at: "2026-11-01T08:00:00Z",
       },
       total: 1,
-      totals: { physical_qty: 15, return_qty: null },
+      calculation_fields: [{ key: "calculated12", name: "在仓可用库存" }],
+      totals: { physical_qty: 15, return_qty: null, calculated_12: 14.5 },
       data: [
         {
           barcode,
@@ -266,6 +267,7 @@ describe("assistant business tools and private memory", () => {
           size_name: "L",
           physical_qty: 15,
           return_qty: null,
+          calculated_12: 14.5,
         },
       ],
     });
@@ -301,6 +303,8 @@ describe("assistant business tools and private memory", () => {
     expect(evidence.summary).toContain("2026-11-01T08:00:00.000Z");
     expect(evidence.rows[0].label).toContain(barcode);
     expect(evidence.rows[0].value).toContain("销退仓 数据不完整");
+    expect(evidence.rows[0].value).toContain("在仓可用库存 14.5");
+    expect(evidence.summary).toContain("在仓可用库存 14.5");
     expect(
       calls[1].messages.find((m: Row) => m.role === "tool").content,
     ).toContain(barcode);
@@ -342,6 +346,30 @@ describe("assistant business tools and private memory", () => {
     );
     expect(fixture.inventory).not.toHaveBeenCalled();
     expect(session.evidence.every((item) => !item.ok)).toBe(true);
+  });
+  it("retains all source inventory metrics when calculated fields exceed the display limit", async () => {
+    const c = actor();
+    c.actor.permissions.push("inventory.read");
+    fixture.inventory.mockResolvedValue({
+      total: 1,
+      calculation_fields: Array.from({ length: 10 }, (_, i) => ({
+        key: `calculated${i + 1}`,
+        name: `计算字段${i + 1}`,
+      })),
+      totals: { physical_qty: 8, transfer_transit_qty: 9 },
+      data: [{ style_no: "S15", physical_qty: 8, transfer_transit_qty: 9 }],
+    });
+    const session = toolSession();
+    await executeAssistantTool(
+      c,
+      "query_inventory",
+      '{"query":"S15"}',
+      session,
+      false,
+    );
+    expect(session.evidence[0].summary).toContain("其余6个请在库存明细查看");
+    expect(session.evidence[0].rows?.[0].value).toContain("实际库存 8");
+    expect(session.evidence[0].rows?.[0].value).toContain("调拨在途 9");
   });
   it("honors project ACLs and never includes opted-out schedules in tool results", async () => {
     await fixture.database!
