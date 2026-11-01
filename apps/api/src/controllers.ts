@@ -46,6 +46,7 @@ import {
   jushuitanMatches,
 } from "./modules/inventory/jushuitan.js";
 import { replenishmentPolicy, saveReplenishmentPolicy } from "./modules/inventory/replenishment-policy.js";
+import { inventoryCalculationPolicy, saveInventoryCalculation } from "./modules/inventory/calculation-policy.js";
 import { InventoryFulfilmentController } from "./modules/inventory/controller.js";
 import * as purchase from "./modules/purchases/service.js";
 import * as suggestion from "./modules/suggestions/service.js";
@@ -207,6 +208,12 @@ class InventoryController {
   }
   @Permission("inventory.read") @Get("replenishment-policy") policy(@Req() r: AuthRequest) {
     return replenishmentPolicy(r.actor.id);
+  }
+  @Permission("inventory.read") @Get("calculation-policy") calculation(@Req() r: AuthRequest) {
+    return inventoryCalculationPolicy(r.actor.id);
+  }
+  @Permission("inventory.read") @Post("calculation-policy") saveCalculation(@Req() r: AuthRequest, @Body() b: unknown) {
+    return saveInventoryCalculation(context(r), b);
   }
   @Permission("inventory.read") @Post("replenishment-policy") savePolicy(@Req() r: AuthRequest, @Body() b: unknown) {
     return saveReplenishmentPolicy(context(r), b);

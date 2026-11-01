@@ -1,10 +1,13 @@
 import { test, expect } from "@playwright/test";
 import ExcelJS from "exceljs";
+import { createHash, randomUUID } from "node:crypto";
 import {
   shanghaiDate,
   shiftCompassDate,
+  normalizeCompassWorkbook,
+  compassNormalizationVersion,
 } from "../../packages/contracts/src/compass-analytics.js";
-test("罗盘导入、日期区间、五种明细视图、维度下钻与邮件配置", async ({
+test("罗盘数据、日期区间、五种明细视图、维度下钻与邮件配置", async ({
   page,
 }) => {
   test.setTimeout(90000);
@@ -97,9 +100,17 @@ test("罗盘导入、日期区间、五种明细视图、维度下钻与邮件�
   await expect(
     page.getByRole("heading", { name: "经营分析", exact: true }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "导入报表", exact: true }).click();
-  const end = shiftCompassDate(shanghaiDate(), -1),
-    files = [];
+  await expect(page.getByRole("button", { name: "导入报表", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /更新数据|查看更新进度/ })).toBeVisible();
+  const me = await (await page.request.get("/api/v1/auth/me")).json();
+  const postFixture = async (path: string, data: unknown) => {
+    const response = await page.request.post(`/api/v1${path}`, { data,
+      headers: { "Origin": new URL(page.url()).origin, "X-CSRF-Token": me.data.csrfToken, "Idempotency-Key": randomUUID() } });
+    const payload = await response.json();
+    expect(response.ok(), JSON.stringify(payload.error)).toBe(true);
+    return payload.data;
+  };
+  const end = shiftCompassDate(shanghaiDate(), -1);
   for (const dimension of ["款号", "货号", "条码"]) {
     const book = new ExcelJS.Workbook(),
       sheet = book.addWorksheet("name1");
@@ -156,22 +167,21 @@ test("罗盘导入、日期区间、五种明细视图、维度下钻与邮件�
         i === 29 ? 120 : 11,
         ...(dimension !== "条码" ? [39-i, "2026-02-10 11:56:42"] : []),
       ]);
-    files.push({
-      name: `按${dimension}.xlsx`,
-      mimeType:
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-      buffer: Buffer.from(await book.xlsx.writeBuffer()),
-    });
+    // Seed the same report pipeline used by the server. The removed manual-upload
+    // UI is not a prerequisite for dashboard, drill-down or email checks.
+    const raw: string[][] = [];
+    sheet.eachRow(row => raw.push((row.values as ExcelJS.CellValue[]).slice(1).map(value => String(value ?? ""))));
+    const report = normalizeCompassWorkbook(raw, `按${dimension}.xlsx`);
+    const task = await postFixture("/analytics/compass/imports", { dimension: report.dimension,
+      fileName: `按${dimension}.xlsx`, fileHash: createHash("sha256").update(Buffer.from(await book.xlsx.writeBuffer())).digest("hex"),
+      startDate: report.startDate, endDate: report.endDate, expectedRows: report.records.length,
+      normalizationVersion: compassNormalizationVersion });
+    if (task.status !== "COMPLETE") {
+      await postFixture(`/analytics/compass/imports/${task.id}/chunks`, { records: report.records });
+      await postFixture(`/analytics/compass/imports/${task.id}/finish`, {});
+    }
   }
-  await page.getByLabel("选择罗盘报表文件").setInputFiles(files);
-  await expect(page.getByText("报表导入完成，面板已更新")).toBeVisible({
-    timeout: 30000,
-  });
-  await page
-    .getByRole("dialog")
-    .locator(".ant-modal-footer")
-    .getByRole("button", { name: "关闭", exact: true })
-    .click();
+  await page.reload();
   await expect(
     page.locator(".compass-kpis").getByText("¥ 70", { exact: true }),
   ).toBeVisible();

@@ -14,6 +14,7 @@ import { aiSettingsSchema } from "./modules/analytics/ai.js";
 import { loginSchema } from "./modules/auth/service.js";
 import { compassProbeRequestSchema } from "./integrations/vip/compass.js";
 import { replenishmentPolicyWriteSchema } from "../../../packages/contracts/src/inventory-replenishment.js";
+import { inventoryCalculationWriteSchema } from "../../../packages/contracts/src/inventory-formula.js";
 import { assistantSendSchema } from "../../../packages/contracts/src/personal-assistant.js";
 import { workspaceSaveSchema } from "../../../packages/contracts/src/personal-workspace.js";
 import { appearanceSchema } from "../../../packages/contracts/src/appearance.js";
@@ -176,6 +177,9 @@ export function enrichOpenApi(doc: OpenAPIObject) {
   set("/api/v1/inventory/replenishment-policy", "get", undefined, "读取当前账号的计算配置及版本号");
   doc.paths["/api/v1/inventory/replenishment-policy"].get!.parameters = [];
   set("/api/v1/inventory/replenishment-policy", "post", replenishmentPolicyWriteSchema, "保存当前账号的计算配置；版本冲突返回409，不修改库存或创建采购单");
+  set("/api/v1/inventory/calculation-policy", "get", undefined, "读取当前账号的在仓总库存公式及版本；未配置为null");
+  doc.paths["/api/v1/inventory/calculation-policy"].get!.parameters = [];
+  set("/api/v1/inventory/calculation-policy", "post", inventoryCalculationWriteSchema, "保存个人库存公式；支持六项聚水潭数量、数字和+-*/括号；版本冲突返回409，null停用。逐SKU计算后汇总，不修改原始库存");
   set(
     "/api/v1/inventory/adjustments",
     "post",

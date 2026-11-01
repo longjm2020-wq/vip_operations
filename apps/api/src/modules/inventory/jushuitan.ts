@@ -383,7 +383,7 @@ export async function jushuitanMatches(query: Row) {
   if (!s?.active_run_id) return { data: [], total: 0 };
   const matches = await rows(
     db,
-    `SELECT source_sku,target_code,mapped_code,color_size,quantities,count(*) OVER()::int AS total
+    `SELECT source_sku,target_code,mapped_code,color_size,quantities-'virtual_qty'-'available_qty' AS quantities,count(*) OVER()::int AS total
     FROM jushuitan_inventory_sources WHERE run_id=$1::uuid AND ($2='' OR target_code=$2 OR source_sku=$2 OR mapped_code=$2)
     ORDER BY target_code,source_sku LIMIT 50 OFFSET $3`,
     s.active_run_id,
@@ -441,8 +441,8 @@ export async function publishJstExport(
         );
       await tx.$executeRawUnsafe(
         `INSERT INTO jushuitan_inventory_snapshots(run_id,sku_code,physical_qty,reserved_qty,damaged_qty,in_transit_qty,transfer_transit_qty,incoming_qty,return_qty,virtual_qty,available_qty)
-      SELECT $1::uuid,r.sku_code,r.physical_qty,r.reserved_qty,NULL,r.in_transit_qty,r.transfer_transit_qty,r.incoming_qty,r.return_qty,r.virtual_qty,r.available_qty
-      FROM jsonb_to_recordset($2::jsonb) r(sku_code text,physical_qty bigint,reserved_qty bigint,in_transit_qty bigint,transfer_transit_qty bigint,incoming_qty bigint,return_qty bigint,virtual_qty bigint,available_qty bigint)
+      SELECT $1::uuid,r.sku_code,r.physical_qty,r.reserved_qty,NULL,r.in_transit_qty,r.transfer_transit_qty,r.incoming_qty,r.return_qty,NULL,NULL
+      FROM jsonb_to_recordset($2::jsonb) r(sku_code text,physical_qty bigint,reserved_qty bigint,in_transit_qty bigint,transfer_transit_qty bigint,incoming_qty bigint,return_qty bigint)
       JOIN skus s ON s.sku_code=r.sku_code`,
         job.id,
         JSON.stringify(report.records),
@@ -493,7 +493,7 @@ export async function publishJstExport(
       await tx.$executeRawUnsafe(
         `INSERT INTO jushuitan_inventory_sources(run_id,source_sku,target_code,mapped_code,color_size,quantities)
       SELECT $1::uuid,r.sku_code,r.target_code,r.mapped_code,r.color_size,to_jsonb(r)-'sku_code'-'target_code'-'mapped_code'-'color_size'
-      FROM jsonb_to_recordset($2::jsonb) r(sku_code text,target_code text,mapped_code text,color_size text,physical_qty bigint,reserved_qty bigint,in_transit_qty bigint,transfer_transit_qty bigint,incoming_qty bigint,return_qty bigint,virtual_qty bigint,available_qty bigint)`,
+      FROM jsonb_to_recordset($2::jsonb) r(sku_code text,target_code text,mapped_code text,color_size text,physical_qty bigint,reserved_qty bigint,in_transit_qty bigint,transfer_transit_qty bigint,incoming_qty bigint,return_qty bigint)`,
         job.id,
         JSON.stringify(report.sources),
       );

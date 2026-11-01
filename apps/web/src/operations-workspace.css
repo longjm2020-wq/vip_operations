@@ -42,6 +42,12 @@
   align-items: center;
   gap: 14px;
   padding: 18px;
+  height: 88px;
+  box-sizing: border-box;
+}
+.operations-entry-copy {
+  flex: 1;
+  min-width: 0;
 }
 .operations-entry-icon {
   display: flex;
@@ -58,15 +64,22 @@
 .operations-entry-link h3 {
   font-size: 16px;
   margin: 0 0 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .operations-entry-link p {
   font-size: 12px;
   line-height: 1.7;
   margin: 0;
   color: var(--app-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .operations-entry-arrow {
   margin-left: auto;
+  flex-shrink: 0;
   color: var(--app-subtle);
 }
 .operations-platform-empty {

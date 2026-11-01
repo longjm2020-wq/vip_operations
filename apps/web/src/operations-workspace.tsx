@@ -102,9 +102,11 @@ export function OperationsWorkspacePage() {
             >
               <Card hoverable size="small">
                 <div className="operations-entry-icon">{entry.icon}</div>
-                <div>
+                <div className="operations-entry-copy">
                   <h3>{entry.name}</h3>
-                  <p>{entry.description}</p>
+                  <Tooltip title={entry.description}>
+                    <p tabIndex={0}>{entry.description}</p>
+                  </Tooltip>
                 </div>
                 <ArrowRightOutlined
                   className="operations-entry-arrow"

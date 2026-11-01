@@ -15,7 +15,9 @@ export const jushuitanSettingsSchema = z
     intervalMinutes: z.union([z.literal(15), z.literal(30), z.literal(60)]),
   })
   .strict();
-export const jushuitanExtraFields = ["returnQty", "virtualQty"] as const;
+export const jushuitanStockFields = [
+  "physicalQty", "inTransitQty", "transferTransitQty", "incomingQty", "reservedQty", "returnQty",
+] as const;
 
 export const jushuitanScope = {
   company: "杭州序缇文化传媒有限公司",

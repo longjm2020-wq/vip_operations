@@ -1,8 +1,11 @@
 import { expect, test, type Page } from "@playwright/test";
 import ExcelJS from "exceljs";
+import { evaluateInventoryFormula, parseInventoryFormula } from "../../packages/contracts/src/inventory-formula.js";
 
 async function fixture(page: Page, manager = true) {
   const summaryRequests: URLSearchParams[] = [], writes: string[] = [], images: string[] = [];
+  const policy: { revision: number; formula: string | null } = { revision: 0, formula: null };
+  const source = { warehouseName: "序缇杭州总仓", finishedAt: new Date().toISOString(), receivedCount: 5000, requestedCount: 5000, intervalMinutes: 60, errorNote: "" };
   const job = { namespace: "vip-fixture", status: "SUCCESS", checked: 5000, total: 5000,
     unresolved: 0, heartbeatAt: new Date().toISOString(), lastSuccessAt: "2026-10-31T07:00:00Z", lastError: "" };
   await page.addInitScript(() => {
@@ -17,7 +20,7 @@ async function fixture(page: Page, manager = true) {
     if (req.method() !== "GET") writes.push(url.pathname);
     if (url.pathname.endsWith("/auth/me")) return route.fulfill({ json: { data: {
       id: "inventory-update", username: "reader", displayName: "库存测试", csrfToken: "fixture", roleCodes: [],
-      permissions: ["inventory.read", ...(manager ? ["vip.settings"] : [])],
+      permissions: ["inventory.read", "analytics.read", "selection.read", "product.read", ...(manager ? ["vip.settings"] : [])],
     } } });
     if (url.pathname.endsWith("/integrations/vip/status")) return route.fulfill({ json: { data: { listing: { jobs: [job] } } } });
     if (url.pathname.endsWith("/integrations/vip/listing/sync")) {
@@ -25,27 +28,34 @@ async function fixture(page: Page, manager = true) {
       job.status = "READY";
       return route.fulfill({ json: { data: { requested: true } } });
     }
+    if (url.pathname.endsWith("/inventory/calculation-policy")) {
+      if (req.method() === "POST") { policy.formula = req.postDataJSON().formula; policy.revision++; }
+      return route.fulfill({ json: { data: policy } });
+    }
     if (url.pathname.endsWith("/inventory/summary")) {
       const params = url.searchParams;
       summaryRequests.push(params);
       const size = Number(params.get("pageSize")), current = Number(params.get("page"));
+      const warehouseTotalQty = policy.formula ? evaluateInventoryFormula(parseInventoryFormula(policy.formula),
+        { physicalQty: 1, returnQty: 0, incomingQty: 0, reservedQty: 0, inTransitQty: 0, transferTransitQty: 0 }) : null;
       return route.fulfill({ json: {
         data: Array.from({ length: Math.min(size, 5000 - (current - 1) * size) }, (_, i) => {
           const index = (current - 1) * size + i + 1;
           return { id: `sku:${index}`, styleNo: `STYLE${index}`, skuCode: `000${index}`, barcode: `000${index}`,
-            articleNo: `ARTICLE${index}`, colorName: "蓝色", sizeName: "M", physicalQty: 1,
+            articleNo: `ARTICLE${index}`, colorName: "蓝色", sizeName: "M", physicalQty: 1, warehouseTotalQty,
             inTransitQty: 0, transferTransitQty: 0, incomingQty: 0, reservedQty: 0, returnQty: 0, virtualQty: 0, availableQty: 1,
             mainImageUrl: `https://inventory-images.example/${index}.svg`,
             barcodeListingState: "LISTED", styleListingState: "LISTED", listingCheckedAt: job.lastSuccessAt };
         }),
-        total: 5000, totals: { physicalQty: 5000, inTransitQty: 0, transferTransitQty: 0, incomingQty: 0, availableQty: 5000 },
-        stockSourceInfo: { warehouseName: "序缇杭州总仓", finishedAt: new Date().toISOString(), receivedCount: 5000, requestedCount: 5000, intervalMinutes: 60 },
+        total: 5000, totals: { physicalQty: 5000, inTransitQty: 0, transferTransitQty: 0, incomingQty: 0, availableQty: 5000, warehouseTotalQty: warehouseTotalQty == null ? null : warehouseTotalQty * 5000 },
+        stockSourceInfo: source, calculationPolicy: policy,
+        listingCounts: { barcode: { total: 5000, other: 0, LISTED: 983, UNLISTED: 3885, UNPUBLISHED: 132 }, style: { total: 1255, other: 0, LISTED: 148, UNLISTED: 921, PARTIAL: 162, UNPUBLISHED: 24 } },
       } });
     }
     return route.fulfill({ json: { data: [], total: 0 } });
   });
   await page.route("**/api/v1/my-workspace/appearance", route => route.fulfill({ json: { data: { mode: "light", version: 1 } } }));
-  return { job, summaryRequests, writes, images };
+  return { job, summaryRequests, writes, images, policy, source };
 }
 
 async function pageSize(page: Page, size: number) {
@@ -88,6 +98,8 @@ test("5000条只渲染可见行，末尾可达，固定列、分组、总计和�
   const sheet = book.worksheets[0];
   expect(sheet.rowCount).toBe(5002);
   expect(sheet.getRow(5002).values).toContain("0005000");
+  expect(sheet.getRow(1).values).not.toContain("虚拟库存");
+  expect(sheet.getRow(1).values).not.toContain("可用数");
   await table.getByRole("columnheader", { name: "图片", exact: true }).click({ button: "right" });
   await page.locator(".inventory-column-pinning-menu").getByRole("menuitem").filter({ hasText: /^取消所有固定列$/ }).click();
   await page.getByRole("tab", { name: "全部字段", exact: true }).click();
@@ -107,6 +119,74 @@ test("5000条只渲染可见行，末尾可达，固定列、分组、总计和�
   await expectBottomFilled();
   await page.screenshot({ path: test.info().outputPath("inventory-bottom-filled.png") });
   expect(f.summaryRequests.every((p) => p.get("stockSource") === "jushuitan")).toBe(true);
+});
+
+test("公式配置可插入字段和运算符，保存后跨刷新恢复并用于当前页导出", async ({ page }) => {
+  const f = await fixture(page);
+  await page.goto("/operations/vip/inventory");
+  const table = page.locator(".inventory-summary-table");
+  await expect(table.getByRole("columnheader", { name: "实际库存数", exact: true })).toBeVisible();
+  const headers = await table.getByRole("columnheader").allTextContents();
+  expect(headers[headers.indexOf("实际库存数") - 1]).toBe("在仓总库存");
+  expect(headers).not.toContain("虚拟库存"); expect(headers).not.toContain("可用数");
+  await expect(table.locator('[data-row-key="sku:1"]')).toContainText("未配置公式");
+  await page.getByRole("button", { name: "计算字段配置", exact: true }).click();
+  const panel = page.getByRole("dialog", { name: "计算字段配置" }), input = panel.getByRole("textbox", { name: "在仓总库存计算公式" });
+  await panel.getByRole("button", { name: "实际库存数", exact: true }).click();
+  await panel.getByRole("button", { name: "插入 +", exact: true }).click();
+  await panel.getByRole("button", { name: "销退仓库存", exact: true }).click();
+  await expect(input).toHaveValue("[实际库存数] + [销退仓库存]");
+  await input.fill("([实际库存数]+[销退仓库存]");
+  await expect(panel.getByRole("button", { name: "保存并重算" })).toBeDisabled();
+  const formula = "([实际库存数]+[销退仓库存]+2)*3/2";
+  await input.fill(formula);
+  await expect(panel.locator(".ant-table-tbody tr").first()).toContainText("4.5");
+  await panel.getByRole("button", { name: "保存并重算" }).click();
+  await expect(panel).not.toBeVisible();
+  await expect(table.locator('[data-row-key="sku:1"]')).toContainText("4.5");
+  await expect(table.locator(".inventory-total-row")).toContainText("22,500");
+  expect(f.policy.formula).toBe(formula);
+  await page.reload();
+  await page.getByRole("button", { name: "计算字段配置", exact: true }).click();
+  await expect(input).toHaveValue(formula);
+  await panel.getByRole("button", { name: "取消", exact: true }).click();
+  const download = page.waitForEvent("download");
+  await page.getByRole("button", { name: "导出", exact: true }).click();
+  const file = await download, book = new ExcelJS.Workbook();
+  await book.xlsx.readFile((await file.path())!);
+  const sheet = book.worksheets[0];
+  const col = (sheet.getRow(1).values as unknown[]).indexOf("在仓总库存");
+  expect(sheet.getCell(2, col).value).toBe("22500");
+  expect(sheet.getCell(3, col).value).toBe("4.5");
+  expect(JSON.stringify(sheet.getRow(3).values)).toContain(formula);
+  await page.getByRole("button", { name: "计算字段配置", exact: true }).click();
+  await panel.getByRole("button", { name: "清空公式" }).click();
+  await panel.getByRole("button", { name: "保存并重算" }).click();
+  await expect(table.locator('[data-row-key="sku:1"]')).toContainText("未配置公式");
+  expect(f.writes).toEqual(["/api/v1/inventory/calculation-policy", "/api/v1/inventory/calculation-policy"]);
+});
+
+test("成功提示30秒后收起，同批刷新不反复弹出，新批次及错误仍显示", async ({ page }) => {
+  await page.clock.install();
+  const f = await fixture(page);
+  await page.goto("/operations/vip/inventory");
+  const notice = page.locator(".inventory-source-notice");
+  await expect(notice).toBeVisible();
+  await page.clock.fastForward(31_000);
+  await expect(notice).toHaveCount(0);
+  await page.getByRole("button", { name: /刷新$/ }).click();
+  await expect(page.locator('.inventory-summary-table [data-row-key="sku:1"]')).toBeVisible();
+  await expect(notice).toHaveCount(0);
+  f.source.finishedAt = "2026-11-01T12:00:00Z";
+  await page.getByRole("button", { name: /刷新$/ }).click();
+  await expect(notice).toBeVisible();
+  await page.clock.fastForward(31_000);
+  await expect(notice).toHaveCount(0);
+  f.source.errorNote = "最新同步未完成，请重新登录聚水潭";
+  await page.getByRole("button", { name: /刷新$/ }).click();
+  await expect(notice).toContainText(f.source.errorNote);
+  await page.clock.fastForward(60_000);
+  await expect(notice).toBeVisible();
 });
 
 test("平台状态提交后台核验，完成后刷新；排队期间不能重复提交", async ({ page }) => {

@@ -289,8 +289,12 @@ it("coalesces syncs and publishes all mapped sources and original bytes atomical
     await query("SELECT * FROM jushuitan_inventory_snapshots")
   )[0];
   expect(Number(snapshot.physical_qty)).toBe(15);
-  expect(Number(snapshot.available_qty)).toBe(15);
-  expect((await jushuitanMatches({ skuCode: "0000123" })).data).toHaveLength(2);
+  expect(snapshot.available_qty).toBeNull();
+  expect(snapshot.virtual_qty).toBeNull();
+  const matches = (await jushuitanMatches({ skuCode: "0000123" })).data;
+  expect(matches).toHaveLength(2);
+  expect(matches[0].quantities).not.toHaveProperty("available_qty");
+  expect(matches[0].quantities).not.toHaveProperty("virtual_qty");
   const stored = (
     await query(
       "SELECT encode(original_bytes,'base64') AS bytes FROM jushuitan_inventory_files",

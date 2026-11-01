@@ -9,8 +9,6 @@ const fields = {
   incoming_qty: ["进货仓库存"],
   in_transit_qty: ["采购在途数", "采购在途"],
   transfer_transit_qty: ["调拨在途数", "调拨在途"],
-  available_qty: ["可用数"],
-  virtual_qty: ["虚拟库存数", "虚拟库存"],
 } as const;
 export type JstStockRecord = {
   sku_code: string;
@@ -195,7 +193,7 @@ export function parseJushuitanExport(
   }
   if (candidates.length !== 1)
     throw new JstExportError(
-      "请导出商品库存表：需包含商品编码、实际库存、订单占有、销退仓、进货仓、采购在途、调拨在途、可用数和虚拟库存列",
+      "请导出商品库存表：需包含商品编码、实际库存、订单占有、销退仓、进货仓、采购在途和调拨在途列",
     );
   const { sheet, header, columns, range } = candidates[0],
     records: JstStockRecord[] = [],

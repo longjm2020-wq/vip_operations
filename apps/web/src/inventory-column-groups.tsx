@@ -25,14 +25,13 @@ const defaults: SelectionColumnGroup[] = [
     id: "inventory",
     name: "库存",
     columnKeys: [
+      "warehouseTotalQty",
       "physicalQty",
       "inTransitQty",
       "transferTransitQty",
       "incomingQty",
       "reservedQty",
       "returnQty",
-      "virtualQty",
-      "availableQty",
     ],
   },
   {
@@ -87,6 +86,9 @@ function read(key: string, keys: string[]): Preferences {
           const columnKeys = [
             ...new Set(group.columnKeys.filter((key) => keys.includes(key))),
           ];
+          if (group.id === "inventory" && keys.includes("warehouseTotalQty") && columnKeys.includes("physicalQty") && !columnKeys.includes("warehouseTotalQty")) {
+            columnKeys.splice(columnKeys.indexOf("physicalQty"), 0, "warehouseTotalQty");
+          }
           if (!columnKeys.length) return [];
           ids.add(group.id);
           names.add(group.name.trim());

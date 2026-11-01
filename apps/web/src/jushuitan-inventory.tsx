@@ -99,11 +99,6 @@ function JushuitanMatches({ onClose }: { onClose: () => void }) {
               render: (_: unknown, r: Row) =>
                 r.quantities.physicalQty ?? "暂无数据",
             },
-            {
-              title: "可用数",
-              render: (_: unknown, r: Row) =>
-                r.quantities.availableQty ?? "暂无数据",
-            },
           ]}
         />
       </Space>
@@ -834,7 +829,7 @@ export function JushuitanInventory({ onView }: { onView: () => void }) {
                 }}
               />
               <Typography.Text type="secondary">
-                数量直接取自导出表；可用数不重新计算。未匹配或原表库存整行空白显示暂无数据，不按
+                同步实际库存、订单占有、销退仓、进货仓、采购在途和调拨在途六项数量。未匹配或原表库存整行空白显示暂无数据，不按
                 0 处理。校验失败保留上次完整结果。
               </Typography.Text>
             </>

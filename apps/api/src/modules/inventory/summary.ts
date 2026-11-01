@@ -22,7 +22,8 @@ import { applyCompassReferences } from "./compass-reference.js";
 import { applyCompassImages } from "./compass-images.js";
 import { applyVipInventoryCatalog, inventoryListingCte } from "./vip-catalog.js";
 import { jushuitanSource } from "./jushuitan.js";
-import { jushuitanExtraFields } from "../../../../../packages/contracts/src/jushuitan-inventory.js";
+import { jushuitanStockFields } from "../../../../../packages/contracts/src/jushuitan-inventory.js";
+import { inventoryCalculationPolicy, inventoryFormulaSql } from "./calculation-policy.js";
 
 export async function inventorySummary(q: Row, tx: Tx = db, userId?: string) {
   // A report import can replace whole history days while a page is loading.
@@ -58,7 +59,8 @@ async function inventorySummarySnapshot(q: Row, tx: Tx, userId?: string) {
     : dimension === "style"
       ? "'style:'||pr.id::text"
       : "'article:'||pr.id::text||':'||CASE WHEN trim(COALESCE(ref.article_no,''))<>'' THEN 'code:'||trim(ref.article_no) ELSE 'sku:'||s.id::text END";
-  const stockFields = [...inventoryStockFields, ...(external ? jushuitanExtraFields : [])].map(snake);
+  const calculation = external ? await inventoryCalculationPolicy(userId, tx) : null;
+  const stockFields = (external ? ["warehouseTotalQty", ...jushuitanStockFields] : inventoryStockFields).map(snake);
   const sumStock = (key: string) => external ? `CASE WHEN count(${key})=count(*) THEN sum(${key}) END` : `sum(${key})`;
   const reportCondition =
     !skuView || reportMatch === "all"
@@ -114,7 +116,7 @@ async function inventorySummarySnapshot(q: Row, tx: Tx, userId?: string) {
         pr.style_no,pr.name AS product_name,pr.main_image_url,
         pr.custom_fields->>'f00000000000000000000000000000001' AS supplier_style_code,
         w.id AS warehouse_id,w.name AS warehouse_name,
-        ${external ? stockFields.map(k => `jst.${k} AS ${k}`).join(",") : `COALESCE(b.physical_qty,0) AS physical_qty,COALESCE(b.reserved_qty,0) AS reserved_qty,
+        ${external ? stockFields.map(k => `${k === "warehouse_total_qty" ? inventoryFormulaSql(calculation!.formula) : `jst.${k}`} AS ${k}`).join(",") : `COALESCE(b.physical_qty,0) AS physical_qty,COALESCE(b.reserved_qty,0) AS reserved_qty,
         COALESCE(b.damaged_qty,0) AS damaged_qty,
         COALESCE(b.physical_qty-b.reserved_qty-b.damaged_qty,0) AS available_qty,
         COALESCE(sh.in_transit_qty,0) AS in_transit_qty,COALESCE(sh.transfer_transit_qty,0) AS transfer_transit_qty,
@@ -180,10 +182,10 @@ async function inventorySummarySnapshot(q: Row, tx: Tx, userId?: string) {
     ) page ON true`,
     ...vals,
   );
-  const quantity = (value: unknown) => {
+  const quantity = (value: unknown, key: string) => {
     if (external && value == null) return null;
     const n = Number(String(value));
-    if (!Number.isSafeInteger(n) || (!external && n < 0))
+    if ((key === "warehouse_total_qty" ? !Number.isFinite(n) || Math.abs(n) > Number.MAX_SAFE_INTEGER : !Number.isSafeInteger(n)) || (!external && n < 0))
       fail("INVENTORY_SUMMARY_RANGE", "库存汇总数量超出可展示范围", 422);
     return n;
   };
@@ -210,7 +212,7 @@ async function inventorySummarySnapshot(q: Row, tx: Tx, userId?: string) {
   };
   window.complete = !!source && window.days > 0 && window.covered_days === window.days;
   const totals = Object.fromEntries(
-    stockFields.map((k) => [k, quantity(first["total_" + k])]),
+    stockFields.map((k) => [k, quantity(first["total_" + k], k)]),
   );
   const data = result
     .filter((r) => r.id != null)
@@ -225,15 +227,15 @@ async function inventorySummarySnapshot(q: Row, tx: Tx, userId?: string) {
             !["group_count", "sort_id", "listing_counts"].includes(k),
         ),
       );
-      for (const k of stockFields) record[k] = quantity(record[k]);
+      for (const k of stockFields) record[k] = quantity(record[k], k);
       return record;
     });
   const references = skuView
     ? (await applyCompassReferences(data, tx, source, window, {
       dailySales: policy!.policy.dailySalesMethod, returnRate: policy!.policy.returnRateMethod,
     })).map((row: Row) => {
-      // JST available stock may include virtual/inbound stock. The internal
-      // replenishment formula would count it again, so don't produce advice.
+      // A configurable warehouse total is not saleable stock. Keep the internal
+      // replenishment formula separate from the read-only JST snapshot.
       if (external) return { ...row, replenishment_qty: null, coverage_days: null, replenishment_plan: null };
       const plan = calculateReplenishmentPlan({ demand: row.planning_demand,
         availableQty: row.available_qty,
@@ -252,6 +254,7 @@ async function inventorySummarySnapshot(q: Row, tx: Tx, userId?: string) {
     totals,
     stock_source: stockSource,
     stock_source_info: externalSource,
+    ...(external ? { calculation_policy: calculation } : {}),
     dimension,
     listing_counts: first.listing_counts,
     ...(skuView

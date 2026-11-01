@@ -1,5 +1,5 @@
 import { PageSearch, PageSearchInput } from "./page-search";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { CopyableCode } from "./copyable-code";
 import {
   Alert,
@@ -10,7 +10,6 @@ import {
   Form,
   Input,
   Modal,
-  Progress,
   Select,
   Space,
   Spin,
@@ -23,7 +22,6 @@ import {
 import {
   MailOutlined,
   ReloadOutlined,
-  UploadOutlined,
   RobotOutlined,
 } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
@@ -43,11 +41,9 @@ import {
   compassDimensions,
   CompassDimension,
   compassLabels,
-  CompassRecord,
   CompassPeriod,
   CompassDateRange,
   parseCompassSearch,
-  compassNormalizationVersion,
 } from "../../../packages/contracts/src/compass-analytics";
 import "./compass-analytics.css";
 const number = (value: any) =>
@@ -64,170 +60,6 @@ const mailState: Record<string, string> = {
   SENDING: "发送中",
 };
 
-function ImportReports({
-  open,
-  onClose,
-  onImported,
-}: {
-  open: boolean;
-  onClose: () => void;
-  onImported: () => void;
-}) {
-  const [busy, setBusy] = useState(false),
-    [progress, setProgress] = useState(0),
-    [phase, setPhase] = useState(""),
-    [error, setError] = useState(""),
-    [results, setResults] = useState<string[]>([]);
-  const workerRef = useRef<Worker | null>(null);
-  useEffect(() => () => workerRef.current?.terminate(), []);
-  async function read(file: File): Promise<{
-    fileHash: string;
-    report: {
-      dimension: CompassDimension;
-      startDate: string;
-      endDate: string;
-      records: CompassRecord[];
-    };
-  }> {
-    const worker = new Worker(
-      new URL("./compass-import-worker.ts", import.meta.url),
-      { type: "module" },
-    );
-    workerRef.current = worker;
-    return new Promise((resolve, reject) => {
-      worker.onmessage = (e) => {
-        worker.terminate();
-        workerRef.current = null;
-        if (e.data.error) reject(Error(e.data.error));
-        else resolve(e.data);
-      };
-      worker.onerror = () => {
-        worker.terminate();
-        workerRef.current = null;
-        reject(Error("报表解析未完成，请重试或关闭其他占用内存的页面"));
-      };
-      worker.postMessage(file);
-    });
-  }
-  const importFiles = async (files: File[]) => {
-    if (busy || !files.length) return;
-    setBusy(true);
-    setError("");
-    setResults([]);
-    setProgress(0);
-    try {
-      for (let index = 0; index < files.length; index++) {
-        const file = files[index];
-        setPhase(`解析 ${index + 1}/${files.length}：${file.name}`);
-        const { report, fileHash } = await read(file),
-          rows = report.records;
-        const task = (
-          await api("/analytics/compass/imports", "POST", {
-            dimension: report.dimension,
-            fileName: file.name,
-            fileHash,
-            startDate: report.startDate,
-            endDate: report.endDate,
-            expectedRows: rows.length,
-            normalizationVersion: compassNormalizationVersion,
-          })
-        ).data;
-        if (task.status !== "COMPLETE") {
-          for (let start = 0; start < rows.length; start += 1000) {
-            await api(
-              `/analytics/compass/imports/${task.id}/chunks`,
-              "POST",
-              { records: rows.slice(start, start + 1000) },
-              `compass-v${compassNormalizationVersion}-${fileHash}-${start}`,
-            );
-            setProgress(
-              Math.round(
-                (100 *
-                  (index + Math.min(rows.length, start + 1000) / rows.length)) /
-                  files.length,
-              ),
-            );
-            setPhase(
-              `上传${compassLabels[report.dimension]}报表：${number(Math.min(rows.length, start + 1000))} / ${number(rows.length)} 行`,
-            );
-          }
-          await api(
-            `/analytics/compass/imports/${task.id}/finish`,
-            "POST",
-            {},
-            `compass-finish-v${compassNormalizationVersion}-${fileHash}`,
-          );
-        }
-        setResults((old) => [
-          ...old,
-          `${compassLabels[report.dimension]}：${number(rows.length)} 行 · ${report.startDate} 至 ${report.endDate}`,
-        ]);
-        onImported();
-      }
-      setProgress(100);
-      setPhase("报表导入完成，面板已更新");
-    } catch (e) {
-      setError((e as Error).message);
-      setPhase("导入未完成，已上传批次保留，可重选原始文件继续");
-    } finally {
-      setBusy(false);
-    }
-  };
-  return (
-    <Modal
-      title="导入魔方罗盘报表"
-      open={open}
-      onCancel={() => !busy && onClose()}
-      closable={!busy}
-      maskClosable={!busy}
-      footer={
-        <Button disabled={busy} onClick={onClose}>
-          关闭
-        </Button>
-      }
-      width={680}
-    >
-      <p>
-        选择下载中心的「按款号（近30天）」「按货号（近30天）」「按条码（近30天）」原始
-        Excel，可一次选择三张。
-      </p>
-      <div
-        className="compass-upload"
-        onDragOver={(e) => e.preventDefault()}
-        onDrop={(e) => {
-          e.preventDefault();
-          void importFiles(Array.from(e.dataTransfer.files));
-        }}
-      >
-        <UploadOutlined />
-        <p>选择或拖入报表</p>
-        <input
-          aria-label="选择罗盘报表文件"
-          type="file"
-          accept=".xlsx,.csv"
-          multiple
-          disabled={busy}
-          onChange={(e) => {
-            void importFiles(Array.from(e.target.files || []));
-            e.target.value = "";
-          }}
-        />
-        <p className="secondary">
-          每张最多 100MB / 200000 行；日期、编码和平台 ID 保留原始值。
-        </p>
-      </div>
-      {phase && <p aria-live="polite">{phase}</p>}
-      {busy && <Progress percent={progress} status="active" />}
-      {results.map((v) => (
-        <Alert key={v} type="success" title={v} style={{ marginTop: 8 }} />
-      ))}
-      {error && <Alert type="error" showIcon title={error} />}
-      <p className="secondary">
-        完整上传后才替换对应维度的报表。重复文件不会重复累计；未完成的上传不影响当前面板。平台数据不会修改内部库存。
-      </p>
-    </Modal>
-  );
-}
 function MailSettings({
   open,
   onClose,
@@ -448,7 +280,6 @@ export function CompassAnalyticsPage() {
     [pageSize, setPageSize] = useState(20),
     [sort, setSort] = useState("salesAmount"),
     [miniMetric,setMiniMetric] = useState("salesAmount"),
-    [importOpen, setImportOpen] = useState(false),
     [mailOpen, setMailOpen] = useState(false),
     [aiOpen, setAIOpen] = useState(false);
   const [productPreview, setProductPreview] =
@@ -546,16 +377,6 @@ export function CompassAnalyticsPage() {
             >
               刷新
             </Button>
-            {manage && (
-              <>
-                <Button
-                  icon={<UploadOutlined aria-hidden="true" />}
-                  onClick={() => setImportOpen(true)}
-                >
-                  导入报表
-                </Button>
-              </>
-            )}
             <Button
               icon={<RobotOutlined aria-hidden="true" />}
               onClick={() => setAIOpen(true)}
@@ -650,13 +471,7 @@ export function CompassAnalyticsPage() {
         <Spin />
       ) : data?.empty ? (
         <Card>
-          <Empty description={`尚未导入${compassLabels[dimension]}报表`}>
-            {manage && (
-              <Button type="primary" onClick={() => setImportOpen(true)}>
-                导入罗盘报表
-              </Button>
-            )}
-          </Empty>
+          <Empty description={`尚无${compassLabels[dimension]}报表，${manage ? "请通过右上角「更新数据」获取" : "请联系有管理权限的同事更新"}`} />
         </Card>
       ) : (
         data && (
@@ -828,11 +643,6 @@ export function CompassAnalyticsPage() {
       <CompassImagePreview
         target={productPreview}
         onClose={() => setProductPreview(null)}
-      />
-      <ImportReports
-        open={importOpen}
-        onClose={() => setImportOpen(false)}
-        onImported={() => void q.refetch()}
       />
       {manage && (
         <>

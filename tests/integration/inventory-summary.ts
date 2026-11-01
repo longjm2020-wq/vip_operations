@@ -1007,9 +1007,10 @@ try {
   await check("External inventory joins once per exact SKU and never multiplies by internal warehouses",async()=>{
     const result=await summary({stockSource:"jushuitan",skuId:skus[0]});
     assert.equal(result.data[0].physicalQty,5);
-    assert.equal(result.data[0].virtualQty,-1);
+    assert.equal(result.data[0].virtualQty,undefined);
     assert.equal(result.data[0].returnQty,3);
-    assert.equal(result.data[0].availableQty,3);
+    assert.equal(result.data[0].availableQty,undefined);
+    assert.equal(result.data[0].warehouseTotalQty,null);
     assert.equal(result.totals.physicalQty,5);
     assert.equal(result.data[0].replenishmentQty,null);
     assert.equal(result.stockSourceInfo.warehouseName,"杭州总仓");
@@ -1027,6 +1028,57 @@ try {
     assert.equal(article.data.find((r:any)=>r.articleNo==='ARTICLE-A-01').physicalQty,5);
     const noMatch=await summary({stockSource:"jushuitan",q:"no-such-code"});
     assert.equal(noMatch.total,0);assert.equal(noMatch.totals.physicalQty,0);
+  });
+  const { inventoryCalculationPolicy, saveInventoryCalculation } = await import("../../apps/api/src/modules/inventory/calculation-policy.js");
+  const formulaContext = () => ({ actor: { id: user.id, username: "summary-test", displayName: "库存测试", permissions: ["inventory.read"] }, requestId: randomUUID(), key: randomUUID() });
+  const formulaSummary = (query: Record<string, unknown>) => inventorySummary({ stockSource: "jushuitan", ...query }, db, user.id).then(camel);
+  await check("Personal formula persists with revision checks, idempotency and permissions", async () => {
+    assert.deepEqual(await inventoryCalculationPolicy(user.id), { formula: null, revision: 0 });
+    const request = formulaContext(), body = { revision: 0, formula: "[实际库存数] + [销退仓库存] + [进货仓库存]" };
+    const saved = await saveInventoryCalculation(request, body);
+    assert.equal(saved.revision, 1);
+    assert.deepEqual(await saveInventoryCalculation(request, body), saved);
+    await assert.rejects(() => saveInventoryCalculation(formulaContext(), body), (e: unknown) => e instanceof HttpException && e.getStatus() === 409);
+    const denied = formulaContext(); denied.actor.permissions = [];
+    await assert.rejects(() => saveInventoryCalculation(denied, { revision: 1, formula: null }), (e: unknown) => e instanceof HttpException && e.getStatus() === 403);
+    await assert.rejects(() => saveInventoryCalculation(formulaContext(), { revision: 1, formula: "[实际库存数]+[可用数]" }), (e: unknown) => e instanceof HttpException && e.getStatus() === 400);
+    const personal = await formulaSummary({ skuId: skus[0] });
+    assert.equal(personal.data[0].warehouseTotalQty, 8);
+    assert.equal(personal.totals.warehouseTotalQty, 8);
+    assert.equal(personal.calculationPolicy.formula, body.formula);
+    const [other] = await sql("INSERT INTO users(username,display_name,password_hash) VALUES('formula-other','其他账号','test-only') RETURNING id");
+    assert.deepEqual(await inventoryCalculationPolicy(other.id), { formula: null, revision: 0 });
+    assert.equal(camel(await inventorySummary({ stockSource: "jushuitan", skuId: skus[0] }, db, other.id)).data[0].warehouseTotalQty, null);
+  });
+  await check("Formula evaluates each SKU before article/style aggregation, never multiplying aggregated fields", async () => {
+    await sql("UPDATE jushuitan_inventory_snapshots SET physical_qty=2,return_qty=4 WHERE run_id=$1 AND sku_code='SKU-A-BLACK-L'", [jstRun]);
+    await saveInventoryCalculation(formulaContext(), { revision: 1, formula: "[实际库存数] * [销退仓库存]" });
+    const rows = await formulaSummary({ productId: products[0] });
+    assert.equal(rows.data.find((r: any) => r.skuCode === '0012345678901234567890').warehouseTotalQty, 15);
+    assert.equal(rows.data.find((r: any) => r.skuCode === 'SKU-A-BLACK-L').warehouseTotalQty, 8);
+    const grouped = await formulaSummary({ productId: products[0], dimension: "article" });
+    assert.equal(grouped.data.find((r: any) => r.articleNo === 'ARTICLE-A-01').warehouseTotalQty, 23);
+    assert.equal(rows.totals.warehouseTotalQty, null);
+    assert.equal((await formulaSummary({ productId: products[0], dimension: "style" })).data[0].warehouseTotalQty, null);
+    await sql(`INSERT INTO jushuitan_inventory_snapshots(run_id,sku_code,physical_qty,reserved_qty,in_transit_qty,transfer_transit_qty,incoming_qty,return_qty)
+      VALUES($1,'SKU-A-WHITE-M',0,0,0,0,0,0)`, [jstRun]);
+    const complete = await formulaSummary({ productId: products[0], dimension: "style" });
+    assert.equal(complete.data[0].warehouseTotalQty, 23);
+    assert.equal(complete.totals.warehouseTotalQty, 23);
+    assert.equal((await formulaSummary({ productId: products[0], pageSize: 1 })).totals.warehouseTotalQty, 23);
+    assert.equal((await formulaSummary({ q: 'no-such-code' })).totals.warehouseTotalQty, 0);
+  });
+  await check("Formula rounds per SKU, propagates division by zero and can be disabled without changing stock", async () => {
+    await saveInventoryCalculation(formulaContext(), { revision: 2, formula: "[实际库存数]/3" });
+    assert.equal((await formulaSummary({ skuId: skus[0] })).data[0].warehouseTotalQty, 1.6667);
+    assert.equal((await formulaSummary({ productId: products[0], dimension: "style" })).data[0].warehouseTotalQty, 2.3334);
+    await saveInventoryCalculation(formulaContext(), { revision: 3, formula: "[实际库存数]/[订单占有数]" });
+    assert.equal((await formulaSummary({ skuId: skus[1] })).data[0].warehouseTotalQty, null);
+    assert.equal((await formulaSummary({ productId: products[0] })).totals.warehouseTotalQty, null);
+    await saveInventoryCalculation(formulaContext(), { revision: 4, formula: null });
+    assert.equal((await formulaSummary({ skuId: skus[0] })).data[0].warehouseTotalQty, null);
+    assert.equal((await formulaSummary({ skuId: skus[0] })).data[0].physicalQty, 5);
+    assert.equal((await summary({ skuId: skus[0] })).data[0].physicalQty, 15);
   });
   console.log(`Inventory summary: ${passed} database scenarios passed`);
   if (process.argv.includes("--serve")) {

@@ -147,11 +147,11 @@ it("reads exact integer quantities from decimal text and grouped numbers without
   const r = row();
   r[3] = "1,234.0000";
   r[4] = "+10.00";
-  r[9] = "-1.000";
+  r[5] = "-1.000";
   expect(parseJushuitanExport(file([r]), 1).records[0]).toMatchObject({
     physical_qty: 1234,
     reserved_qty: 10,
-    available_qty: -1,
+    return_qty: -1,
   });
   for (const invalid of [
     "1.5",
@@ -175,23 +175,25 @@ it("reads exact integer quantities from decimal text and grouped numbers without
   ).toThrow(/错误单元格/);
 });
 
-it("keeps long identifiers and exported availability, including negative values", () => {
+it("keeps long identifiers but ignores removed availability and virtual stock columns", () => {
   const r = row();
   r[9] = -1;
-  expect(parseJushuitanExport(file([r]), 1).records[0]).toMatchObject({
+  const parsed = parseJushuitanExport(file([r]), 1).records[0];
+  expect(parsed).toMatchObject({
     sku_code: target.sku_code,
     physical_qty: 5,
-    virtual_qty: 12,
-    available_qty: -1,
   });
+  expect(parsed).not.toHaveProperty("available_qty");
+  expect(parsed).not.toHaveProperty("virtual_qty");
+  expect(parseJushuitanExport(file([r], sheet => { delete sheet.J1; delete sheet.K1; }), 1).records[0]).toEqual(parsed);
+  expect(parseJushuitanExport(file([r], sheet => { sheet.J2 = { t: "e", v: 0 }; sheet.K2.f = "1/0"; }), 1).records[0]).toEqual(parsed);
 });
 it("preserves an entirely blank quantity block as unknown through matching and summation", () => {
   const blank = row().map((value, index) => (index < 3 ? value : null));
   const unknown = parseJushuitanExport(file([blank]), 1);
   expect(unknown.records[0]).toMatchObject({
     physical_qty: null,
-    available_qty: null,
-    virtual_qty: null,
+    return_qty: null,
   });
   const known = parseJushuitanExport(
     file([row("alias", target.sku_code, 10)]),
@@ -204,7 +206,7 @@ it("preserves an entirely blank quantity block as unknown through matching and s
     const result = mergeJstExports(reports, [target]);
     expect(result.records[0]).toMatchObject({
       physical_qty: null,
-      available_qty: null,
+      return_qty: null,
     });
     expect(result.sources).toHaveLength(2);
   }
@@ -289,8 +291,7 @@ it("sums explicit identifier mappings and counts a source only once across both 
   const result = mergeJstExports([direct, alias, direct], [target]);
   expect(result.records[0]).toMatchObject({
     physical_qty: 15,
-    available_qty: 15,
-    virtual_qty: 24,
+    return_qty: 0,
   });
   expect(result.sources).toHaveLength(2);
 });
@@ -355,7 +356,7 @@ it("rejects precision loss, formulas and missing stock columns", () => {
   expect(() =>
     parseJushuitanExport(
       file([row()], (s) => {
-        s.K1.v = "无关列";
+        s.I1.v = "无关列";
       }),
       1,
     ),
