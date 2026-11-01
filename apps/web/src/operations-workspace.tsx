@@ -104,7 +104,7 @@ export function OperationsWorkspacePage() {
                 <div className="operations-entry-icon">{entry.icon}</div>
                 <div className="operations-entry-copy">
                   <h3>{entry.name}</h3>
-                  <Tooltip title={entry.description}>
+                  <Tooltip title={entry.description} trigger={["hover", "focus"]}>
                     <p tabIndex={0}>{entry.description}</p>
                   </Tooltip>
                 </div>
