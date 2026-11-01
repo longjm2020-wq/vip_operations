@@ -304,6 +304,15 @@ describe("assistant business tools and private memory", () => {
     expect(
       calls[1].messages.find((m: Row) => m.role === "tool").content,
     ).toContain(barcode);
+    for (const call of calls) {
+      // The fixed model's endpoint metadata does not advertise this optional
+      // parameter; require_parameters would exclude otherwise compatible routes.
+      expect(call).not.toHaveProperty("parallel_tool_calls");
+      expect(call.provider).toEqual({
+        require_parameters: true,
+        data_collection: "deny",
+      });
+    }
     expect(fixture.queueInventory).not.toHaveBeenCalled();
   });
   it("rejects unauthorized and wildcard queries even when a model requests them", async () => {
@@ -654,18 +663,26 @@ describe("private personal assistant", () => {
       result.messages.filter((item: Row) => item.role === "assistant"),
     ).toHaveLength(1);
   });
-  it("preserves provider failures without retry or leaking response data", async () => {
-    const fetcher = vi.fn(
-      async () => new Response("sensitive-provider-detail", { status: 402 }),
-    );
-    vi.stubGlobal("fetch", fetcher);
-    const result = await sendAssistant(actor(), input());
-    expect(result.state).toBe("FAILED");
-    expect(result.error).toContain("余额或额度不足");
-    expect(JSON.stringify(result)).not.toContain("sensitive-provider-detail");
-    await readAssistant(actor());
-    expect(fetcher).toHaveBeenCalledTimes(1);
-  });
+  it.each([
+    [402, "余额或额度不足"],
+    [404, "没有满足请求条件的服务端点"],
+    [503, "暂无可用服务端点"],
+  ])(
+    "preserves provider failure %s without retry or leaking response data",
+    async (status, message) => {
+      const fetcher = vi.fn(
+        async () => new Response("sensitive-provider-detail", { status }),
+      );
+      vi.stubGlobal("fetch", fetcher);
+      const result = await sendAssistant(actor(), input());
+      expect(result.state).toBe("FAILED");
+      expect(result.error).toContain(message);
+      expect(result.error).toContain(`HTTP ${status}`);
+      expect(JSON.stringify(result)).not.toContain("sensitive-provider-detail");
+      await readAssistant(actor());
+      expect(fetcher).toHaveBeenCalledTimes(1);
+    },
+  );
   it("prevents parallel requests and clearing an in-flight conversation", async () => {
     let release!: () => void;
     const blocked = new Promise<void>((resolve) => {

@@ -124,20 +124,27 @@ export async function askAssistantModel(
         response_format: responseFormat,
         tools,
         tool_choice: allowTools ? "auto" : "none",
-        parallel_tool_calls: true,
       }),
     });
     if (!response.ok) {
       await response.body?.cancel();
       fail(
         "AI_PROVIDER_ERROR",
-        (
+        ((
           {
+            400: "AI 请求参数被服务商拒绝，请联系管理员检查接口配置",
             401: "AI 密钥无效，请联系管理员",
             402: "AI 余额或额度不足，请联系管理员",
+            403: "AI 服务拒绝访问，请联系管理员检查模型权限",
+            404: "当前模型没有满足请求条件的服务端点，请联系管理员",
+            408: "AI 服务响应超时，请稍后重试",
+            422: "AI 请求参数不受支持，请联系管理员检查接口配置",
             429: "AI 请求频率或额度超限，请稍后重试",
+            502: "AI 模型服务暂不可用，请稍后重试",
+            503: "当前模型暂无可用服务端点，请稍后重试",
           } as Record<number, string>
-        )[response.status] || "AI 服务暂不可用，请稍后重试",
+        )[response.status] || "AI 服务暂不可用，请稍后重试") +
+          `（HTTP ${response.status}）`,
         502,
       );
     }
