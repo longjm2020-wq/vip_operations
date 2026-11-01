@@ -59,10 +59,17 @@ test("5000条只渲染可见行，末尾可达，固定列、分组、总计和�
   await page.goto("/operations/vip/inventory");
   await expect(page.getByRole("button", { name: "导入网站库存" })).toHaveCount(0);
   await expect(page.getByRole("combobox", { name: "库存数据来源" })).toHaveCount(0);
+  const expectBottomFilled = async () => {
+    await expect.poll(() => page.locator(".inventory-details-card").evaluate(element =>
+      Math.abs(element.getBoundingClientRect().bottom - window.innerHeight))).toBeLessThan(2);
+    await expect(page.getByRole("combobox", { name: "每页条数" })).toBeInViewport();
+  };
+  await expectBottomFilled();
   await pageSize(page, 5000);
   const table = page.locator(".inventory-summary-table"), rows = table.locator(".ant-table-row[data-row-key]");
   const holder = table.locator(".ant-table-tbody-virtual-holder");
   await expect(holder).toBeVisible();
+  await expectBottomFilled();
   await expect.poll(() => rows.count()).toBeGreaterThan(0);
   expect(await rows.count()).toBeLessThan(80);
   expect(f.images.length).toBeLessThan(100);
@@ -93,6 +100,12 @@ test("5000条只渲染可见行，末尾可达，固定列、分组、总计和�
   expect(Math.abs(headerBox!.x - cellBox!.x)).toBeLessThan(2);
   await pageSize(page, 20);
   await expect(table.locator(".ant-table-body tr[data-row-key]")).toHaveCount(20);
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await expectBottomFilled();
+  await page.getByRole("button", { name: "收起工作区导航", exact: true }).click();
+  await page.setViewportSize({ width: 1920, height: 922 });
+  await expectBottomFilled();
+  await page.screenshot({ path: test.info().outputPath("inventory-bottom-filled.png") });
   expect(f.summaryRequests.every((p) => p.get("stockSource") === "jushuitan")).toBe(true);
 });
 

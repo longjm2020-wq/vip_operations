@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type ComponentPropsWithRef,
@@ -231,16 +232,44 @@ export const inventoryVirtualTableComponents = {
 };
 
 export function useInventoryTableHeight() {
-  const measure = () => Math.max(220, (window.visualViewport?.height ?? window.innerHeight) - 390);
-  const [height, setHeight] = useState(measure);
-  useEffect(() => {
-    const resize = () => setHeight(measure());
+  const surface = useRef<HTMLDivElement>(null);
+  const [height, setHeight] = useState(220);
+  // Measure the real table position: alerts, toolbar wrapping, headers and
+  // pagination all change with the viewport and the selected inventory view.
+  useLayoutEffect(() => {
+    const element = surface.current;
+    const card = element?.closest<HTMLElement>(".inventory-details-card");
+    if (!element || !card) return;
+    const measure = () => {
+      const body = element.querySelector<HTMLElement>(".ant-table-body, .ant-table-tbody-virtual-holder");
+      if (!body) return;
+      const bounds = body.getBoundingClientRect();
+      const belowBody = card.getBoundingClientRect().bottom - bounds.bottom;
+      // Document coordinates keep a short window's outer scroll from growing
+      // the table again; a minimum readable body remains available there.
+      const available = (window.visualViewport?.height ?? window.innerHeight)
+        - bounds.top - window.scrollY - belowBody;
+      const next = Math.max(180, Math.floor(available));
+      setHeight((current) => current === next ? current : next);
+    };
+    let frame = 0;
+    const resize = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(measure);
+    };
+    const observer = new ResizeObserver(resize);
+    observer.observe(card);
+    const header = document.querySelector(".topbar");
+    if (header) observer.observe(header);
     window.addEventListener("resize", resize);
     window.visualViewport?.addEventListener("resize", resize);
+    measure();
     return () => {
+      cancelAnimationFrame(frame);
+      observer.disconnect();
       window.removeEventListener("resize", resize);
       window.visualViewport?.removeEventListener("resize", resize);
     };
-  }, []);
-  return height;
+  });
+  return { height, surface };
 }

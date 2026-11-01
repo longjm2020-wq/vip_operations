@@ -18,7 +18,7 @@ import {
   CompassImagePreview,
   type CompassImageTarget,
 } from "./compass-product-image";
-import { useRef, useState } from "react";
+import { useRef, useState, type CSSProperties } from "react";
 import type { TableRef } from "antd/es/table";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -79,7 +79,7 @@ export function InventoryDetailsPage() {
 function InventoryBalances() {
   const [dimension, setDimension] = useState<InventoryDimension>("sku");
   const [pageSize, setPageSize] = useState(20);
-  const tableHeight = useInventoryTableHeight();
+  const { height: tableHeight, surface: tableSurface } = useInventoryTableHeight();
   const virtual = pageSize > 100;
   const tableRef = useRef<TableRef>(null);
   const skuView = dimension === "sku";
@@ -314,7 +314,7 @@ function InventoryBalances() {
   return (
     <>
       <InventoryColumnGroups source="jushuitan" dimension={dimension} columns={columns}>
-      {({ manager, tabs, groupKeys, visit }) => <Card>
+      {({ manager, tabs, groupKeys, visit }) => <Card className="inventory-details-card">
         <div className="table-toolbar">
           <Space wrap>
             <PageSearch>
@@ -495,7 +495,7 @@ function InventoryBalances() {
         </div>
         <InventoryColumnPinning dimension={dimension} columns={columns} groupKeys={groupKeys} groupVisit={visit} tableRef={tableRef}>
           {(displayedColumns) => (
-            <div className="inventory-summary-table">
+            <div ref={tableSurface} className="inventory-summary-table" style={{ "--inventory-table-height": `${tableHeight}px` } as CSSProperties}>
             {/* Match the virtual list's row estimate to the fixed CSS height so
                 dragging straight to the bottom reaches the last record. */}
             <Table<Row>

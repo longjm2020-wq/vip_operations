@@ -1,3 +1,7 @@
+.inventory-details-card > .ant-card-body {
+  padding-bottom: 8px;
+}
+
 .inventory-summary-table .inventory-total-row > td {
   background: var(--app-muted);
   color: var(--app-secondary);
@@ -8,6 +12,7 @@
 .inventory-summary-table .ant-table-body,
 .inventory-summary-table .ant-table-tbody-virtual-holder {
   overscroll-behavior: contain;
+  height: var(--inventory-table-height);
 }
 
 .inventory-pagination {
