@@ -19,6 +19,7 @@ export const assistantSendSchema = z
     version: z.number().int().min(0),
     requestId: z.string().uuid(),
     includePersonalContext: z.boolean(),
+    includeMemory: z.boolean().default(false),
   })
   .strict();
 const scheduleDraft = z
@@ -53,7 +54,69 @@ export type AssistantMessage = {
   schedules?: WorkspaceSchedule[];
   tools?: string[];
   responseModel?: string;
+  evidence?: AssistantEvidence[];
+  actions?: AssistantAction[];
+  memorySuggestions?: { title: string; content: string }[];
 };
+export const assistantMemoryEntrySchema = z
+  .object({
+    id: z.string().uuid(),
+    title: z.string().trim().min(1).max(40),
+    content: z.string().trim().min(1).max(500),
+  })
+  .strict();
+export const assistantMemorySaveSchema = z
+  .object({
+    version: z.number().int().min(0),
+    entries: z.array(assistantMemoryEntrySchema).max(40),
+  })
+  .strict()
+  .refine(
+    (value) =>
+      new Set(value.entries.map((entry) => entry.id)).size ===
+      value.entries.length,
+    "记忆标识重复",
+  );
+export type AssistantMemoryEntry = z.infer<typeof assistantMemoryEntrySchema>;
+export type AssistantMemory = {
+  version: number;
+  entries: AssistantMemoryEntry[];
+};
+export const assistantSyncKinds = ["jushuitan", "compass"] as const;
+export type AssistantSyncKind = (typeof assistantSyncKinds)[number];
+export const assistantActionLabels: Record<AssistantSyncKind, string> = {
+  jushuitan: "同步聚水潭库存",
+  compass: "更新罗盘报表",
+};
+export type AssistantAction = {
+  id: string;
+  kind: AssistantSyncKind;
+  title: string;
+  status:
+    "PROPOSED" | "SUBMITTING" | "SUBMITTED" | "FAILED" | "EXPIRED" | "CANCELED";
+  note: string;
+  href: string;
+  jobId?: string;
+  canExecute?: boolean;
+};
+export type AssistantEvidence = {
+  id: string;
+  title: string;
+  summary: string;
+  ok: boolean;
+  at: string;
+  href?: string;
+  rows?: { label: string; value: string; href?: string }[];
+};
+export function canRunAssistantSync(
+  actor: WorkspaceActor,
+  kind: AssistantSyncKind,
+) {
+  return kind === "compass"
+    ? actor.permissions.includes("analytics.manage")
+    : actor.permissions.includes("inventory.adjust") &&
+        !!actor.roleCodes?.includes("SUPER_ADMIN");
+}
 export type AssistantConversation = {
   ready: boolean;
   availabilityMessage: string;

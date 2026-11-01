@@ -1,6 +1,304 @@
 import { expect, test, type Page } from "@playwright/test";
 import type { AssistantActivity } from "../../packages/contracts/src/assistant-activity.js";
 
+type VoiceFixture = {
+  starts: number;
+  aborts: number;
+  spoken: string[];
+  canceled: number;
+  recognizer?: {
+    onresult?: (event: unknown) => void;
+    onerror?: (event: unknown) => void;
+  };
+};
+declare global {
+  interface Window {
+    assistantVoiceTest: VoiceFixture;
+  }
+}
+async function mockBrowserVoice(page: Page, supported = true) {
+  await page.addInitScript(
+    ({ supported }) => {
+      const stats: VoiceFixture = {
+        starts: 0,
+        aborts: 0,
+        spoken: [],
+        canceled: 0,
+      };
+      window.assistantVoiceTest = stats;
+      class Recognizer {
+        onresult?: (event: unknown) => void;
+        onerror?: (event: unknown) => void;
+        start() {
+          stats.starts++;
+          stats.recognizer = this;
+        }
+        abort() {
+          stats.aborts++;
+        }
+      }
+      Object.defineProperty(window, "SpeechRecognition", {
+        configurable: true,
+        value: supported ? Recognizer : undefined,
+      });
+      Object.defineProperty(window, "webkitSpeechRecognition", {
+        configurable: true,
+        value: undefined,
+      });
+      Object.defineProperty(window, "speechSynthesis", {
+        configurable: true,
+        value: {
+          getVoices: () => [],
+          cancel: () => {
+            stats.canceled++;
+          },
+          speak: (utterance: SpeechSynthesisUtterance) => {
+            stats.spoken.push(utterance.text);
+            utterance.onstart?.call(utterance, {} as SpeechSynthesisEvent);
+          },
+        },
+      });
+    },
+    { supported },
+  );
+}
+
+test("语音须主动启动，转写可编辑，回复可打断，关闭停止麦克风", async ({
+  page,
+}) => {
+  await mockBrowserVoice(page);
+  const fixture = await workspaceFixture(page);
+  await page.goto("/my-workspace");
+  await page.getByRole("button", { name: "打开个人助理", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: /AI 个人助理/ });
+  expect(await page.evaluate(() => window.assistantVoiceTest.starts)).toBe(0);
+  await dialog.getByRole("button", { name: "语音输入", exact: true }).click();
+  await expect(page.locator(".sidebar-assistant")).toHaveAttribute(
+    "data-state",
+    "listening",
+  );
+  await page.evaluate(() =>
+    window.assistantVoiceTest.recognizer?.onresult?.({
+      results: [{ isFinal: true, 0: { transcript: "安排明天选款会" } }],
+    }),
+  );
+  const input = dialog.getByPlaceholder(/告诉我你想完成什么/);
+  await expect(input).toHaveValue("安排明天选款会");
+  expect(fixture.assistantCalls()).toBe(0);
+  await dialog.getByRole("button", { name: "停止语音输入" }).click();
+  await input.fill("安排明天下午3点选款会");
+  await input.press("Enter");
+  await expect.poll(() => fixture.assistantCalls()).toBe(1);
+  await expect(
+    dialog.getByText("已整理为日程草稿，请核对后加入日程。", { exact: true }),
+  ).toBeVisible();
+  expect(await page.evaluate(() => window.assistantVoiceTest.spoken)).toEqual(
+    [],
+  );
+  await dialog.getByRole("checkbox", { name: "语音回复", exact: true }).check();
+  await input.fill("帮我继续完善日程");
+  await input.press("Enter");
+  await expect
+    .poll(() => page.evaluate(() => window.assistantVoiceTest.spoken.length))
+    .toBe(1);
+  await expect(page.locator(".sidebar-assistant")).toHaveAttribute(
+    "data-state",
+    "speaking",
+  );
+  await dialog.getByRole("button", { name: "打断朗读" }).click();
+  await expect(page.locator(".sidebar-assistant")).not.toHaveAttribute(
+    "data-state",
+    "speaking",
+  );
+  await dialog.getByRole("button", { name: "语音输入", exact: true }).click();
+  await dialog.getByRole("button", { name: "关闭", exact: true }).click();
+  await expect
+    .poll(() => page.evaluate(() => window.assistantVoiceTest.aborts))
+    .toBe(2);
+  await expect(page.locator(".sidebar-assistant")).not.toHaveAttribute(
+    "data-state",
+    "listening",
+  );
+});
+
+test("语音不可用时保留文字输入；识别服务拒绝时显示原因", async ({ page }) => {
+  await mockBrowserVoice(page, false);
+  await workspaceFixture(page);
+  await page.goto("/my-workspace");
+  await expect(
+    page.getByRole("button", { name: "语音输入", exact: true }),
+  ).toBeDisabled();
+  await expect(page.getByPlaceholder(/告诉我你想完成什么/)).toBeEditable();
+});
+
+test("新提醒播报须开启，旧提醒不重播，识别权限错误可继续键入", async ({
+  page,
+}) => {
+  await mockBrowserVoice(page);
+  const fixture = await workspaceFixture(page);
+  fixture.activities.push({
+    id: "schedule:old",
+    kind: "schedule",
+    title: "原有日程",
+    detail: "即将开始",
+    status: "attention",
+    at: "2026-10-26T02:10:00Z",
+    href: "/my-workspace",
+  });
+  await page.goto("/my-workspace");
+  await page.getByRole("button", { name: "打开个人助理", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: /AI 个人助理/ });
+  await dialog.getByRole("checkbox", { name: "播报新提醒" }).check();
+  expect(
+    await page.evaluate(() => window.assistantVoiceTest.spoken.length),
+  ).toBe(0);
+  await dialog.getByRole("tab", { name: "动态反馈" }).click();
+  fixture.activities.push({
+    id: "schedule:new",
+    kind: "schedule",
+    title: "新的选款会",
+    detail: "10:20开始",
+    status: "attention",
+    at: "2026-10-26T02:20:00Z",
+    href: "/my-workspace",
+  });
+  await dialog.getByRole("button", { name: "刷新助理动态" }).click();
+  await expect
+    .poll(() => page.evaluate(() => window.assistantVoiceTest.spoken))
+    .toEqual(["新的选款会：10:20开始"]);
+  await dialog.getByRole("tab", { name: "互动对话" }).click();
+  await dialog.getByRole("button", { name: "语音输入", exact: true }).click();
+  await page.evaluate(() =>
+    window.assistantVoiceTest.recognizer?.onerror?.({ error: "not-allowed" }),
+  );
+  await expect(dialog.getByText(/麦克风权限未开启/)).toBeVisible();
+  await expect(dialog.getByPlaceholder(/告诉我你想完成什么/)).toBeEditable();
+});
+
+test("个人记忆独立保存编辑删除，发送时明确选择是否使用", async ({ page }) => {
+  const fixture = await workspaceFixture(page);
+  await page.goto("/my-workspace");
+  await page.getByRole("button", { name: "打开个人助理", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: /AI 个人助理/ });
+  await dialog.getByRole("tab", { name: "个人记忆" }).click();
+  await dialog.getByRole("button", { name: "新增记忆" }).click();
+  await dialog.getByLabel("记忆名称", { exact: true }).fill("汇报偏好");
+  await dialog
+    .getByLabel("记忆内容", { exact: true })
+    .fill("先说结论，金额保留两位小数");
+  await dialog.getByRole("button", { name: "保存记忆" }).click();
+  await expect(dialog.locator(".assistant-memory-entry")).toContainText(
+    "汇报偏好",
+  );
+  expect(fixture.assistantCalls()).toBe(0);
+  expect(fixture.memoryWrites).toHaveLength(1);
+  await dialog.getByRole("button", { name: "编辑记忆", exact: true }).click();
+  await dialog
+    .getByLabel("记忆内容", { exact: true })
+    .fill("先列风险，再列行动");
+  await dialog.getByRole("button", { name: "保存记忆" }).click();
+  await expect(dialog.locator(".assistant-memory-entry")).toContainText(
+    "先列风险",
+  );
+  await dialog.getByRole("tab", { name: "互动对话" }).click();
+  await expect(
+    dialog.getByRole("checkbox", { name: "使用个人记忆" }),
+  ).not.toBeChecked();
+  await dialog.getByRole("checkbox", { name: "使用个人记忆" }).check();
+  await dialog
+    .getByPlaceholder(/告诉我你想完成什么/)
+    .fill("帮我安排明天的会议");
+  await dialog.getByPlaceholder(/告诉我你想完成什么/).press("Enter");
+  await expect.poll(() => fixture.submitted.length).toBe(1);
+  expect(fixture.submitted[0]).toMatchObject({ includeMemory: true });
+  await dialog.getByRole("tab", { name: "个人记忆" }).click();
+  await dialog.getByRole("button", { name: "删除记忆", exact: true }).click();
+  await page.getByRole("button", { name: "删除", exact: true }).last().click();
+  await expect(
+    dialog.getByText("还没有个人记忆", { exact: true }),
+  ).toBeVisible();
+  expect(fixture.memory.entries).toHaveLength(0);
+});
+
+test("查询证据保留条码；操作卡点击后提交，完成以真实动态为准", async ({
+  page,
+}) => {
+  const fixture = await workspaceFixture(page);
+  fixture.assistant.messages.push({
+    id: "business-reply",
+    role: "assistant",
+    text: "已查到库存快照。需要更新时请点击下面的操作。",
+    responseModel: "openai/gpt-6.1-sol",
+    evidence: [
+      {
+        id: "evidence",
+        title: "库存查询 · XFA16X31196L",
+        ok: true,
+        at: "2026-11-01T08:00:00Z",
+        summary: "杭州总仓 · 来源时间 2026-11-01 · 实际库存15件",
+        rows: [
+          {
+            label: "粉色 L · 000123456789012345678901234",
+            value: "实际库存 15 · 销退仓 数据不完整",
+          },
+        ],
+      },
+    ],
+    actions: [
+      {
+        id: "action",
+        kind: "compass",
+        title: "更新罗盘报表",
+        status: "PROPOSED",
+        note: "尚未执行，点击后提交后台任务",
+        href: "/analytics/compass",
+        canExecute: true,
+      },
+    ],
+  });
+  await page.goto("/my-workspace");
+  await page.getByRole("button", { name: "打开个人助理", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: /AI 个人助理/ });
+  await dialog.locator(".assistant-evidence summary").click();
+  await expect(dialog.getByText(/000123456789012345678901234/)).toBeVisible();
+  const action = dialog.getByRole("article", { name: "更新罗盘报表操作" });
+  expect(fixture.actionWrites).toHaveLength(0);
+  await action.getByRole("button", { name: "开始执行" }).click();
+  await expect(action.getByText("已提交", { exact: true })).toBeVisible();
+  await expect(action.getByRole("button", { name: "开始执行" })).toHaveCount(0);
+  await expect(action.getByText("已完成", { exact: true })).toHaveCount(0);
+  expect(fixture.actionWrites).toHaveLength(1);
+  fixture.activities.push({
+    id: "compass:9",
+    kind: "task",
+    title: "罗盘报表更新",
+    detail: "三张报表已完整核验",
+    status: "completed",
+    href: "/analytics/compass",
+    at: "2026-11-01T08:00:00Z",
+  });
+  await dialog.getByRole("tab", { name: "动态反馈" }).click();
+  await dialog.getByRole("button", { name: "刷新助理动态" }).click();
+  await dialog.getByRole("tab", { name: "互动对话" }).click();
+  await expect(action.getByText("已完成", { exact: true })).toBeVisible();
+  await page.clock.runFor(4000);
+  await page.screenshot({
+    path: test.info().outputPath("assistant-business-dark.png"),
+  });
+  await dialog.getByRole("button", { name: "关闭", exact: true }).click();
+  await page.getByRole("button", { name: "切换为亮色主题" }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await page.getByRole("button", { name: "打开个人助理", exact: true }).click();
+  await expect(dialog.getByRole("tab", { name: "互动对话" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expect(dialog).toBeInViewport({ ratio: 0.99 });
+  await page.screenshot({
+    path: test.info().outputPath("assistant-business-light.png"),
+  });
+});
+
 async function workspaceFixture(
   page: Page,
   options: { state?: string; permissions?: string[] } = {},
@@ -73,6 +371,10 @@ async function workspaceFixture(
   };
   let assistantCalls = 0;
   const activities: AssistantActivity[] = [];
+  const memory: Record<string, any> = { version: 0, entries: [] };
+  const appearance = { mode: "dark", version: 0 };
+  const memoryWrites: unknown[] = [],
+    actionWrites: unknown[] = [];
   const assistant: Record<string, any> = {
     ready: true,
     availabilityMessage: "个人助理已就绪",
@@ -95,8 +397,14 @@ async function workspaceFixture(
         permissions,
         csrfToken: "fixture",
       };
-    if (path === "/my-workspace/appearance")
-      data = { mode: "dark", version: 0 };
+    if (path === "/my-workspace/appearance") {
+      if (request.method() === "POST")
+        Object.assign(appearance, {
+          mode: request.postDataJSON().mode,
+          version: appearance.version + 1,
+        });
+      data = appearance;
+    }
     if (path === "/my-workspace") {
       if (request.method() === "POST")
         Object.assign(workspace, request.postDataJSON(), {
@@ -109,9 +417,13 @@ async function workspaceFixture(
         assistantCalls++;
         const body = request.postDataJSON();
         assistant.messages.push(
-          { id: "question", role: "user", text: body.message },
           {
-            id: "reply",
+            id: "question-" + assistantCalls,
+            role: "user",
+            text: body.message,
+          },
+          {
+            id: "reply-" + assistantCalls,
             role: "assistant",
             text: "已整理为日程草稿，请核对后加入日程。",
             responseModel: "openai/gpt-6.1-sol",
@@ -132,6 +444,29 @@ async function workspaceFixture(
         submitted.push(body);
       }
       data = assistant;
+    }
+    if (path === "/my-workspace/assistant/memory") {
+      if (request.method() === "POST") {
+        const body = request.postDataJSON();
+        memoryWrites.push(body);
+        Object.assign(memory, {
+          version: memory.version + 1,
+          entries: body.entries,
+        });
+      }
+      data = memory;
+    }
+    if (path === "/my-workspace/assistant/actions") {
+      actionWrites.push(request.postDataJSON());
+      const action = assistant.messages
+        .flatMap((item: any) => item.actions || [])
+        .find((item: any) => item.id === request.postDataJSON().id);
+      Object.assign(action, {
+        status: "SUBMITTED",
+        jobId: "9",
+        note: "已提交后台任务，进度请查看动态反馈",
+      });
+      data = action;
     }
     if (path === "/my-workspace/activity")
       data = { items: activities, serverTime: "2026-10-26T02:00:00Z" };
@@ -170,6 +505,10 @@ async function workspaceFixture(
     submitted,
     workspace,
     activities,
+    assistant,
+    memory,
+    memoryWrites,
+    actionWrites,
     assistantCalls: () => assistantCalls,
   };
 }
@@ -208,7 +547,10 @@ test("小序全站自由悬浮，拖动后记住位置，跨页面确认日程�
     exact: true,
   });
   const before = (await handle.boundingBox())!;
-  await page.mouse.move(before.x + 65, before.y + 60);
+  await page.mouse.move(
+    before.x + before.width / 2,
+    before.y + before.height / 2,
+  );
   await page.mouse.down();
   await page.mouse.move(100, 630, { steps: 12 });
   await page.mouse.up();
@@ -217,7 +559,12 @@ test("小序全站自由悬浮，拖动后记住位置，跨页面确认日程�
   );
   const moved = (await companion.boundingBox())!;
   expect(moved.x).toBeLessThan(200);
-  expect(moved.y).toBeGreaterThan(400);
+  // The mascot may move away from the requested drop point to avoid controls.
+  expect(Math.hypot(moved.x - before.x, moved.y - before.y)).toBeGreaterThan(
+    80,
+  );
+  expect(moved.y).toBeGreaterThanOrEqual(8);
+  expect(moved.y + moved.height).toBeLessThanOrEqual(1000);
   await page.reload();
   await expect(companion).toBeVisible();
   expect(Math.abs((await companion.boundingBox())!.x - moved.x)).toBeLessThan(

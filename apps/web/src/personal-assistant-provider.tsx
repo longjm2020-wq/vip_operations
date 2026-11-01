@@ -1,4 +1,10 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { Bubble, Sender } from "@ant-design/x";
 import {
   App,
@@ -10,6 +16,7 @@ import {
   Spin,
   Tag,
   Tabs,
+  Tooltip,
 } from "antd";
 import {
   ArrowRightOutlined,
@@ -17,6 +24,9 @@ import {
   CommentOutlined,
   DeleteOutlined,
   ReloadOutlined,
+  AudioOutlined,
+  SoundOutlined,
+  StopOutlined,
 } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router-dom";
@@ -25,6 +35,9 @@ import { useUser } from "./shared";
 import {
   canUsePersonalAssistant,
   type AssistantConversation,
+  type AssistantAction,
+  type AssistantMemory,
+  type AssistantMemoryEntry,
 } from "../../../packages/contracts/src/personal-assistant";
 import { availableWorkspaceTools } from "../../../packages/contracts/src/personal-workspace";
 import { AssistantHubContext } from "./assistant-hub-context";
@@ -32,6 +45,9 @@ import { AssistantActivityPanel } from "./assistant-activity-panel";
 import type { AssistantActivityFeed } from "../../../packages/contracts/src/assistant-activity";
 import type { WorkspaceSchedule } from "../../../packages/contracts/src/personal-workspace";
 import "./personal-assistant.css";
+import { useAssistantVoice } from "./use-assistant-voice";
+import { AssistantMemoryPanel } from "./assistant-memory-panel";
+import { AssistantBusinessResults } from "./assistant-business-results";
 
 export function PersonalAssistantProvider({
   children,
@@ -45,7 +61,9 @@ export function PersonalAssistantProvider({
     permissions: user.permissions,
     roleCodes: user.roleCodes,
   });
-  const [section, setSection] = useState<"chat" | "activity">("chat");
+  const [section, setSection] = useState<"chat" | "activity" | "memory">(
+    "chat",
+  );
   const [pendingSchedules, setPendingSchedules] = useState<WorkspaceSchedule[]>(
     [],
   );
@@ -99,6 +117,31 @@ export function PersonalAssistantProvider({
   const [includeContext, setIncludeContext] = useState(false),
     [sending, setSending] = useState(false);
   const [error, setError] = useState("");
+  const [includeMemory, setIncludeMemory] = useState(false);
+  const [voiceReply, setVoiceReply] = useState(false),
+    [voiceReminders, setVoiceReminders] = useState(false);
+  const [executing, setExecuting] = useState<string | null>(null);
+  const [memorySuggestion, setMemorySuggestion] =
+    useState<AssistantMemoryEntry | null>(null);
+  const voice = useAssistantVoice(setText);
+  const playbackAllowed = useRef(false);
+  playbackAllowed.current = open && voiceReply;
+  const memory = useQuery({
+    queryKey: ["assistant-memory", user.id],
+    enabled: allowed && (section === "memory" || includeMemory),
+    queryFn: async () =>
+      (await api("/my-workspace/assistant/memory")).data as AssistantMemory,
+    staleTime: 15000,
+  });
+  const saveMemory = async (entries: AssistantMemoryEntry[]) => {
+    if (!memory.data) throw Error("请先刷新个人记忆");
+    await api("/my-workspace/assistant/memory", "POST", {
+      version: memory.data.version,
+      entries,
+    });
+    await memory.refetch();
+    message.success("个人记忆已保存");
+  };
   const bottom = useRef<HTMLDivElement>(null);
   const q = useQuery({
     queryKey: ["personal-assistant", user.id],
@@ -106,10 +149,24 @@ export function PersonalAssistantProvider({
     enabled: allowed,
     staleTime: 15000,
     refetchInterval: (query) =>
-      sending || query.state.data?.data?.state === "PENDING" ? 3000 : false,
+      sending ||
+      query.state.data?.data?.state === "PENDING" ||
+      query.state.data?.data?.messages?.some(
+        (item: { actions?: AssistantAction[] }) =>
+          item.actions?.some((action) => action.status === "SUBMITTING"),
+      )
+        ? 3000
+        : false,
   });
   const data = q.data?.data as AssistantConversation | undefined;
-  const busy = sending || data?.state === "PENDING";
+  const busy = sending || data?.state === "PENDING" || !!executing;
+  const announce = useCallback(
+    (value: string) => {
+      if (voiceReminders && !voice.listening && !voice.speaking && !busy)
+        voice.speak(value);
+    },
+    [voiceReminders, voice.listening, voice.speaking, busy, voice.speak],
+  );
   const messages = data?.messages || [];
   useEffect(() => {
     if (open) bottom.current?.scrollIntoView({ block: "end" });
@@ -120,19 +177,46 @@ export function PersonalAssistantProvider({
     setOpen(true);
     setSending(true);
     setError("");
+    voice.stop();
     try {
-      await api("/my-workspace/assistant", "POST", {
+      const response = await api("/my-workspace/assistant", "POST", {
         message: value.trim(),
         version: data.version,
         requestId: crypto.randomUUID(),
         includePersonalContext: includeContext,
+        includeMemory,
       });
       setText("");
+      const latest = (response.data as AssistantConversation).messages?.at(-1);
+      if (
+        playbackAllowed.current &&
+        latest?.role === "assistant" &&
+        response.data.state === "IDLE"
+      )
+        voice.speak(latest.text);
     } catch (e) {
       setError((e as Error).message);
     } finally {
       setSending(false);
       await q.refetch();
+    }
+  };
+  const execute = async (action: AssistantAction) => {
+    if (executing) return;
+    setExecuting(action.id);
+    setError("");
+    voice.stop();
+    try {
+      const result = (
+        await api("/my-workspace/assistant/actions", "POST", { id: action.id })
+      ).data as AssistantAction;
+      if (result.status === "FAILED") message.error(result.note);
+      else if (result.status === "SUBMITTED") message.success("任务状态已更新");
+      await Promise.all([q.refetch(), activity.refetch()]);
+    } catch (cause) {
+      setError((cause as Error).message);
+    } finally {
+      setExecuting(null);
     }
   };
   const openPanel = (tab: "chat" | "activity" = "chat") => {
@@ -146,16 +230,48 @@ export function PersonalAssistantProvider({
         onChange={(value) => setText(value.slice(0, 4000))}
         onSubmit={(value) => void send(value)}
         loading={busy}
-        readOnly={busy}
+        readOnly={busy || voice.listening}
         disabled={!data?.ready || busy}
         submitType="enter"
-        suffix={(_, { components }) =>
-          busy ? (
-            <Button loading disabled shape="circle" aria-label="助理正在回复" />
-          ) : (
-            <components.SendButton aria-label="发送给个人助理" />
-          )
-        }
+        suffix={(_, { components }) => (
+          <div className="assistant-send-actions">
+            <Tooltip
+              title={
+                voice.supported
+                  ? "点击说话，识别后核对发送。语音由浏览器识别，可能使用其在线服务。"
+                  : "此浏览器不支持语音识别，可继续键入。"
+              }
+            >
+              <Button
+                type={voice.listening ? "primary" : "text"}
+                shape="circle"
+                icon={voice.listening ? <StopOutlined /> : <AudioOutlined />}
+                aria-label={voice.listening ? "停止语音输入" : "语音输入"}
+                disabled={!voice.supported || busy || !data?.ready}
+                onClick={() => voice.start(text)}
+              />
+            </Tooltip>
+            {voice.speaking && (
+              <Button
+                type="text"
+                shape="circle"
+                icon={<StopOutlined />}
+                aria-label="停止朗读"
+                onClick={voice.stopSpeaking}
+              />
+            )}
+            {busy ? (
+              <Button
+                loading
+                disabled
+                shape="circle"
+                aria-label="助理正在回复"
+              />
+            ) : (
+              <components.SendButton aria-label="发送给个人助理" />
+            )}
+          </div>
+        )}
         placeholder={
           data?.ready
             ? "告诉我你想完成什么，例如：安排明天下午3点选款会…"
@@ -173,6 +289,13 @@ export function PersonalAssistantProvider({
         >
           附带已保存日程与待办
         </Checkbox>
+        <Checkbox
+          checked={includeMemory}
+          onChange={(e) => setIncludeMemory(e.target.checked)}
+          disabled={busy}
+        >
+          使用个人记忆
+        </Checkbox>
         {!inDrawer && (
           <Button
             type="text"
@@ -185,6 +308,19 @@ export function PersonalAssistantProvider({
           </Button>
         )}
       </div>
+      {voice.listening && (
+        <div className="assistant-voice-status" role="status">
+          <i />
+          <i />
+          <i />
+          正在聆听…识别结果可编辑后发送
+        </div>
+      )}
+      {voice.error && (
+        <div className="assistant-voice-error" role="status">
+          {voice.error}
+        </div>
+      )}
     </div>
   );
   return (
@@ -193,6 +329,12 @@ export function PersonalAssistantProvider({
         allowed,
         conversation: data,
         busy,
+        voiceState: voice.listening
+          ? "listening"
+          : voice.speaking
+            ? "speaking"
+            : undefined,
+        announce,
         compose: () => sender(),
         openPanel,
         feed: activity.data,
@@ -210,7 +352,10 @@ export function PersonalAssistantProvider({
       {children}
       <Drawer
         open={open}
-        onClose={() => setOpen(false)}
+        onClose={() => {
+          setOpen(false);
+          voice.stop();
+        }}
         title={
           <span>
             <CommentOutlined /> AI 个人助理
@@ -223,7 +368,7 @@ export function PersonalAssistantProvider({
           allowed && (
             <Popconfirm
               title="清空当前账号的助理对话？"
-              description="日程、待办和备忘不受影响。"
+              description="日程、待办、备忘和个人记忆不受影响，未执行的操作卡片将取消。"
               okText="清空"
               cancelText="取消"
               onConfirm={async () => {
@@ -253,8 +398,8 @@ export function PersonalAssistantProvider({
               {sender(true)}
               <p className="assistant-privacy">
                 发送内容及最近对话将交给已配置的 AI
-                服务。勾选后附带已保存日程与待办，私有备忘不发送。Enter 发送 ·
-                Shift+Enter 换行
+                服务。按提问查询有权查看的业务数据；勾选后附带日程或个人记忆，私有备忘不发送。Enter
+                发送 · Shift+Enter 换行
               </p>
             </>
           ) : null
@@ -262,12 +407,60 @@ export function PersonalAssistantProvider({
       >
         <Tabs
           activeKey={section}
-          onChange={(key) => setSection(key as "chat" | "activity")}
+          onChange={(key) => {
+            setSection(key as "chat" | "activity" | "memory");
+            voice.stop();
+          }}
           items={[
             ...(allowed ? [{ key: "chat", label: "互动对话" }] : []),
             { key: "activity", label: "动态反馈" },
+            ...(allowed ? [{ key: "memory", label: "个人记忆" }] : []),
           ]}
         />
+        {allowed && (
+          <div className="assistant-voice-options">
+            <Checkbox
+              checked={voiceReply}
+              disabled={!voice.canSpeak}
+              onChange={(e) => {
+                setVoiceReply(e.target.checked);
+                if (!e.target.checked) voice.stopSpeaking();
+              }}
+            >
+              语音回复
+            </Checkbox>
+            <Checkbox
+              checked={voiceReminders}
+              disabled={!voice.canSpeak}
+              onChange={(e) => {
+                setVoiceReminders(e.target.checked);
+                if (!e.target.checked) voice.stopSpeaking();
+              }}
+            >
+              播报新提醒
+            </Checkbox>
+            {voice.speaking && (
+              <Button
+                size="small"
+                icon={<StopOutlined />}
+                onClick={voice.stopSpeaking}
+              >
+                打断朗读
+              </Button>
+            )}
+          </div>
+        )}
+        {section === "memory" && allowed && (
+          <AssistantMemoryPanel
+            data={memory.data}
+            loading={memory.isFetching}
+            error={memory.error}
+            save={saveMemory}
+            refresh={() => void memory.refetch()}
+            suggestion={memorySuggestion}
+            clearSuggestion={() => setMemorySuggestion(null)}
+          />
+        )}
         {section === "activity" && (
           <AssistantActivityPanel
             feed={activity.data}
@@ -308,11 +501,11 @@ export function PersonalAssistantProvider({
                 ✦
               </span>
               <h3>你的工作，从一句话开始。</h3>
-              <p>安排日程、拆解任务、拟写文案，或找到需要的工具。</p>
+              <p>说出问题，查库存、跟项目、看任务，也能记住你的工作偏好。</p>
               {[
                 "帮我安排明天下午3点的选款会",
-                "帮我拆解新品上架前的准备工作",
-                "我应该在哪里核对库存？",
+                "查看我参与的项目进度",
+                "查看最近的同步任务结果",
               ].map((prompt) => (
                 <button
                   type="button"
@@ -339,6 +532,27 @@ export function PersonalAssistantProvider({
                   content={
                     <div className="assistant-message-text">{item.text}</div>
                   }
+                />
+                {item.role === "assistant" && voice.canSpeak && (
+                  <Button
+                    size="small"
+                    type="text"
+                    icon={<SoundOutlined />}
+                    aria-label="朗读这条回复"
+                    onClick={() => voice.speak(item.text)}
+                  >
+                    朗读
+                  </Button>
+                )}
+                <AssistantBusinessResults
+                  item={item}
+                  feed={activity.data}
+                  executing={executing}
+                  execute={(action) => void execute(action)}
+                  remember={(entry) => {
+                    setMemorySuggestion({ ...entry, id: crypto.randomUUID() });
+                    setSection("memory");
+                  }}
                 />
                 {!!item.schedules?.length && (
                   <div className="assistant-schedule-proposals">

@@ -547,3 +547,33 @@
   pointer-events: none;
   text-shadow: 0 1px 4px var(--app-bg);
 }
+.sidebar-assistant[data-state="listening"] .companion-beacon {
+  animation: assistant-listening-pulse 1s ease-in-out infinite alternate;
+}
+.sidebar-assistant[data-state="speaking"] .companion-mouth {
+  animation: assistant-speaking-pulse 0.4s ease-in-out infinite alternate;
+  transform-origin: center;
+}
+@keyframes assistant-listening-pulse {
+  from {
+    opacity: 0.4;
+  }
+  to {
+    opacity: 1;
+    filter: drop-shadow(0 0 5px var(--app-accent));
+  }
+}
+@keyframes assistant-speaking-pulse {
+  from {
+    opacity: 0.5;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-assistant[data-state="listening"] .companion-beacon,
+  .sidebar-assistant[data-state="speaking"] .companion-mouth {
+    animation: none;
+  }
+}

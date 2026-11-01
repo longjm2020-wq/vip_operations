@@ -46,11 +46,12 @@ beforeAll(async () => {
       completed_at timestamptz,heartbeat_at timestamptz,deadline_at timestamptz,completed_dimensions jsonb);
     CREATE TABLE compass_mail_runs(report_date date,status text,sent_at timestamptz,started_at timestamptz DEFAULT now(),
       recipient text);
+    CREATE TABLE jushuitan_inventory_runs(id uuid,status text,stage text,requested_count int,received_count int,error_note text,created_at timestamptz DEFAULT now(),started_at timestamptz,finished_at timestamptz,heartbeat_at timestamptz);
   `);
 });
 beforeEach(async () => {
   await fixture.database!.exec(
-    "TRUNCATE personal_workspaces,projects,project_members,project_library_acl,project_notifications,compass_update_jobs,compass_mail_runs",
+    "TRUNCATE personal_workspaces,projects,project_members,project_library_acl,project_notifications,compass_update_jobs,compass_mail_runs,jushuitan_inventory_runs",
   );
 });
 afterAll(async () => {
@@ -58,6 +59,27 @@ afterAll(async () => {
 });
 
 describe("personal assistant read-only activity feed", () => {
+  it("only exposes inventory feedback with read permission and never labels interrupted jobs as complete", async () => {
+    await fixture.database!
+      .exec(`INSERT INTO jushuitan_inventory_runs(id,status,stage,requested_count,received_count,started_at,heartbeat_at) VALUES
+      ('11111111-1111-4111-8111-111111111111','COMPLETE','已完成',100,99,'2026-10-26T01:59:00Z','2026-10-26T01:59:55Z'),
+      ('22222222-2222-4222-8222-222222222222','RUNNING','导出中',100,0,'2026-10-26T01:50:00Z','2026-10-26T01:50:00Z'),
+      ('33333333-3333-4333-8333-333333333333','RUNNING','匹配中',100,20,'2026-10-26T01:59:00Z','2026-10-26T01:59:55Z');`);
+    expect((await assistantActivity(context(), now)).items).toHaveLength(0);
+    const feed = await assistantActivity(context(["inventory.read"]), now);
+    expect(
+      feed.items.find((item) => item.id.endsWith("111111111111")),
+    ).toMatchObject({
+      status: "completed",
+      detail: "杭州总仓 · 完整同步 · 匹配 99 / 100",
+    });
+    expect(
+      feed.items.find((item) => item.id.endsWith("222222222222")),
+    ).toMatchObject({ status: "attention", detail: "进度中断，请查看任务" });
+    expect(
+      feed.items.find((item) => item.id.endsWith("333333333333")),
+    ).toMatchObject({ status: "running", progress: { done: 20, total: 100 } });
+  });
   it("keeps schedules private, uses Shanghai reminder times and ignores invalid or out-of-range entries", async () => {
     const event = (
       n: number,

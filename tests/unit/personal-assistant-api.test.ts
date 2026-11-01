@@ -18,6 +18,22 @@ import type { AuthRequest } from "../../apps/api/src/http.js";
 const fixture = vi.hoisted(() => ({
   database: null as PGlite | null,
   encrypted: true,
+  inventory: vi.fn(),
+  queueInventory: vi.fn(),
+  queueCompass: vi.fn(),
+  activity: vi.fn(),
+}));
+vi.mock("../../apps/api/src/modules/inventory/summary.js", () => ({
+  inventorySummary: fixture.inventory,
+}));
+vi.mock("../../apps/api/src/modules/inventory/jushuitan.js", () => ({
+  queueJushuitan: fixture.queueInventory,
+}));
+vi.mock("../../apps/api/src/modules/analytics/browser-update.js", () => ({
+  requestCompassUpdate: fixture.queueCompass,
+}));
+vi.mock("../../apps/api/src/modules/workspace/activity.js", () => ({
+  assistantActivity: fixture.activity,
 }));
 vi.mock("../../packages/database/src/index.js", async (original) => {
   const exports =
@@ -59,6 +75,15 @@ import {
 } from "../../apps/api/src/modules/workspace/assistant.js";
 import { PersonalWorkspaceController } from "../../apps/api/src/modules/workspace/controller.js";
 import { workspaceSaveSchema } from "../../packages/contracts/src/personal-workspace.js";
+import {
+  readAssistantMemory,
+  saveAssistantMemory,
+} from "../../apps/api/src/modules/workspace/assistant-memory.js";
+import { executeAssistantAction } from "../../apps/api/src/modules/workspace/assistant-actions.js";
+import {
+  executeAssistantTool,
+  type AssistantToolSession,
+} from "../../apps/api/src/modules/workspace/assistant-tools.js";
 
 const actor = (id = "7"): Context => ({
   actor: {
@@ -121,17 +146,27 @@ beforeAll(async () => {
   for (const name of [
     "036_personal_workspaces.sql",
     "069_personal_assistant.sql",
+    "079_assistant_tools_memory.sql",
   ])
     await fixture.database.exec(
       await readFile(`packages/database/migrations/${name}`, "utf8"),
     );
+  await fixture.database.exec(`
+    CREATE TABLE projects(id bigint PRIMARY KEY,name text,status text,owner_id bigint,visibility text,deleted_at timestamptz,document jsonb,updated_at timestamptz DEFAULT now());
+    CREATE TABLE project_members(project_id bigint,user_id bigint);
+    CREATE TABLE project_library_acl(kind text,resource_id bigint,user_id bigint,access text);
+  `);
 });
 beforeEach(async () => {
   fixture.encrypted = true;
   calls = [];
   await fixture.database!.exec(
-    "TRUNCATE personal_assistant_conversations,personal_workspaces,idempotency_records; UPDATE compass_ai_settings SET enabled=true,verified_at=now()",
+    "TRUNCATE personal_assistant_conversations,personal_workspaces,idempotency_records,personal_assistant_actions,personal_assistant_memories,projects,project_members,project_library_acl; UPDATE compass_ai_settings SET enabled=true,verified_at=now()",
   );
+  fixture.inventory.mockReset();
+  fixture.queueInventory.mockReset();
+  fixture.queueCompass.mockReset();
+  fixture.activity.mockReset();
   vi.stubGlobal(
     "fetch",
     vi.fn(async (_url, init) => {
@@ -139,6 +174,356 @@ beforeEach(async () => {
       return provider();
     }),
   );
+});
+
+const toolReply = (name: string, argumentsValue: object) =>
+  new Response(
+    JSON.stringify({
+      id: "tool-fixture",
+      model: "openai/gpt-6.1-sol",
+      choices: [
+        {
+          finish_reason: "tool_calls",
+          message: {
+            content: null,
+            tool_calls: [
+              {
+                type: "function",
+                id: randomUUID(),
+                function: { name, arguments: JSON.stringify(argumentsValue) },
+              },
+            ],
+          },
+        },
+      ],
+    }),
+  );
+const toolSession = (): AssistantToolSession => ({
+  evidence: [],
+  actions: [],
+  memorySuggestions: [],
+});
+describe("assistant business tools and private memory", () => {
+  it("saves memory only for its owner, detects edits from another tab and sends memory only by opt-in", async () => {
+    const mine = {
+      id: randomUUID(),
+      title: "工作偏好",
+      content: "prefer-a-short-checklist",
+    };
+    const theirs = {
+      id: randomUUID(),
+      title: "私有偏好",
+      content: "another-user-memory",
+    };
+    const body = { version: 0, entries: [mine] },
+      c = actor();
+    await saveAssistantMemory(c, body);
+    expect((await saveAssistantMemory(c, body)).version).toBe(1);
+    await saveAssistantMemory(actor("8"), { version: 0, entries: [theirs] });
+    await expect(saveAssistantMemory(actor(), body)).rejects.toMatchObject({
+      response: { error: { code: "VERSION_CONFLICT" } },
+    });
+    expect((await readAssistantMemory(actor())).entries).toEqual([mine]);
+    await sendAssistant(actor(), input());
+    expect(JSON.stringify(calls)).not.toContain(mine.content);
+    const current = await readAssistant(actor());
+    await sendAssistant(actor(), {
+      ...input(current.version),
+      includeMemory: true,
+    });
+    expect(JSON.stringify(calls[1])).toContain(mine.content);
+    expect(JSON.stringify(calls)).not.toContain(theirs.content);
+    await saveAssistantMemory(actor(), {
+      version: 1,
+      entries: [{ ...mine, content: "edited" }],
+    });
+    await saveAssistantMemory(actor(), { version: 2, entries: [] });
+    expect((await readAssistantMemory(actor())).entries).toEqual([]);
+    expect((await readAssistantMemory(actor("8"))).entries).toEqual([theirs]);
+    const denied = actor();
+    denied.actor.permissions = ["analytics.read"];
+    await expect(readAssistantMemory(denied)).rejects.toThrow();
+    await expect(
+      saveAssistantMemory(actor(), { version: 3, entries: [mine, mine] }),
+    ).rejects.toThrow();
+  });
+  it("queries the authorized JST snapshot with full string identifiers and attaches server evidence", async () => {
+    const c = actor();
+    c.actor.permissions.push("inventory.read");
+    const barcode = "000123456789012345678901234";
+    fixture.inventory.mockResolvedValue({
+      stock_source_info: {
+        warehouse_name: "杭州总仓",
+        finished_at: "2026-11-01T08:00:00Z",
+      },
+      total: 1,
+      totals: { physical_qty: 15, return_qty: null },
+      data: [
+        {
+          barcode,
+          style_no: "XFA16X31196L",
+          color_name: "粉色",
+          size_name: "L",
+          physical_qty: 15,
+          return_qty: null,
+        },
+      ],
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockImplementationOnce(async (_url, init) => {
+          calls.push(JSON.parse(init.body));
+          return toolReply("query_inventory", { query: "XFA16X31196L" });
+        })
+        .mockImplementationOnce(async (_url, init) => {
+          calls.push(JSON.parse(init.body));
+          return provider({
+            text: "实际库存15件，销退仓数据不完整。",
+            schedules: [],
+            tools: [],
+          });
+        }),
+    );
+    const result = await sendAssistant(c, {
+      ...input(),
+      message: "查一下XFA16X31196L库存",
+    });
+    expect(result.state).toBe("IDLE");
+    expect(fixture.inventory.mock.calls[0][0]).toMatchObject({
+      stockSource: "jushuitan",
+      q: "XFA16X31196L",
+      pageSize: 12,
+    });
+    expect(fixture.inventory.mock.calls[0][2]).toBe("7");
+    const evidence = result.messages.at(-1).evidence[0];
+    expect(evidence.summary).toContain("2026-11-01T08:00:00.000Z");
+    expect(evidence.rows[0].label).toContain(barcode);
+    expect(evidence.rows[0].value).toContain("销退仓 数据不完整");
+    expect(
+      calls[1].messages.find((m: Row) => m.role === "tool").content,
+    ).toContain(barcode);
+    expect(fixture.queueInventory).not.toHaveBeenCalled();
+  });
+  it("rejects unauthorized and wildcard queries even when a model requests them", async () => {
+    const session = toolSession();
+    await executeAssistantTool(
+      actor(),
+      "query_inventory",
+      '{"query":"S15"}',
+      session,
+      false,
+    );
+    const c = actor();
+    c.actor.permissions.push("inventory.read");
+    await executeAssistantTool(
+      c,
+      "query_inventory",
+      '{"query":"%"}',
+      session,
+      false,
+    );
+    await executeAssistantTool(
+      c,
+      "arbitrary_sql",
+      '{"query":"SELECT *"}',
+      session,
+      false,
+    );
+    expect(fixture.inventory).not.toHaveBeenCalled();
+    expect(session.evidence.every((item) => !item.ok)).toBe(true);
+  });
+  it("honors project ACLs and never includes opted-out schedules in tool results", async () => {
+    await fixture.database!
+      .exec(`INSERT INTO projects(id,name,status,owner_id,visibility,document) VALUES
+      (1,'我的项目','ACTIVE',7,'PRIVATE','{"tasks":[{"status":"DONE"},{"status":"ACTIVE"}]}'),
+      (2,'协作项目','ACTIVE',8,'PRIVATE','{"tasks":[]}'),(3,'拒绝项目','ACTIVE',8,'PUBLIC','{"tasks":[]}'),
+      (4,'私有项目','ACTIVE',8,'PRIVATE','{"tasks":[]}'),(5,'草稿项目','DRAFT',8,'PRIVATE','{"tasks":[]}'),
+      (6,'公共项目','ACTIVE',8,'PUBLIC','{"tasks":[]}');
+      INSERT INTO project_members VALUES(2,7),(3,7),(5,7);
+      INSERT INTO project_library_acl VALUES('project',3,7,'DENY');`);
+    const c = actor();
+    c.actor.permissions.push("project.read");
+    const session = toolSession();
+    await executeAssistantTool(
+      c,
+      "query_projects",
+      '{"query":""}',
+      session,
+      false,
+    );
+    expect(session.evidence[0].rows?.map((row) => row.label).sort()).toEqual([
+      "协作项目",
+      "我的项目",
+    ]);
+    expect(
+      session.evidence[0].rows?.find((row) => row.label === "我的项目")?.value,
+    ).toContain("已验收 1 / 2");
+    await executeAssistantTool(
+      c,
+      "query_projects",
+      '{"query":"项目"}',
+      session,
+      false,
+    );
+    expect(session.evidence[1].rows?.map((row) => row.label).sort()).toEqual([
+      "公共项目",
+      "协作项目",
+      "我的项目",
+    ]);
+    fixture.activity.mockResolvedValue({
+      items: [
+        {
+          kind: "schedule",
+          title: "private-day",
+          detail: "10:00",
+          href: "/my-workspace",
+        },
+        {
+          kind: "task",
+          title: "report",
+          detail: "执行中",
+          href: "/analytics/compass",
+        },
+      ],
+    });
+    await executeAssistantTool(c, "query_activity", "{}", session, false);
+    expect(JSON.stringify(session.evidence.at(-1))).not.toContain(
+      "private-day",
+    );
+    await executeAssistantTool(c, "query_activity", "{}", session, true);
+    expect(JSON.stringify(session.evidence.at(-1))).toContain("private-day");
+  });
+  it("only queues a proposed action after its owner clicks, checks current permissions and replays without duplication", async () => {
+    fixture.queueCompass.mockResolvedValue({
+      job: { id: "9007199254740993000", status: "QUEUED" },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(toolReply("prepare_sync", { kind: "compass" }))
+        .mockResolvedValueOnce(
+          provider({ text: "请点击操作卡片。", schedules: [], tools: [] }),
+        ),
+    );
+    const result = await sendAssistant(actor(), {
+      ...input(),
+      message: "更新罗盘报表",
+    });
+    const action = result.messages.at(-1).actions[0];
+    expect(action.status).toBe("PROPOSED");
+    expect(fixture.queueCompass).not.toHaveBeenCalled();
+    await expect(
+      executeAssistantAction(actor("8"), { id: action.id }),
+    ).rejects.toMatchObject({ response: { error: { code: "NOT_FOUND" } } });
+    const denied = actor();
+    denied.actor.permissions = ["product.read", "product.update"];
+    expect(
+      (await readAssistant(denied)).messages.at(-1).actions[0].canExecute,
+    ).toBe(false);
+    await expect(
+      executeAssistantAction(denied, { id: action.id }),
+    ).rejects.toThrow();
+    const submitted = await executeAssistantAction(actor(), { id: action.id });
+    expect(submitted).toMatchObject({
+      status: "SUBMITTED",
+      jobId: "9007199254740993000",
+    });
+    expect(submitted.note).not.toContain("已完成");
+    await executeAssistantAction(actor(), { id: action.id });
+    expect(fixture.queueCompass).toHaveBeenCalledTimes(1);
+    expect(fixture.queueCompass.mock.calls[0][0].key).toBe(
+      `assistant:${action.id}`,
+    );
+  });
+  it("enforces JST administrator permission, retries with a stable key, and expires or cancels unused actions", async () => {
+    const id = randomUUID();
+    await fixture.database!.query(
+      "INSERT INTO personal_assistant_actions(id,user_id,kind) VALUES($1,7,'jushuitan')",
+      [id],
+    );
+    const c = actor();
+    c.actor.permissions.push("inventory.adjust");
+    await expect(executeAssistantAction(c, { id })).rejects.toThrow();
+    c.actor.roleCodes = ["SUPER_ADMIN"];
+    fixture.queueInventory
+      .mockRejectedValueOnce(new Error("private connection information"))
+      .mockResolvedValue({ id: "run", status: "QUEUED" });
+    expect(await executeAssistantAction(c, { id })).toMatchObject({
+      status: "FAILED",
+      note: "服务暂不可用，请稍后重试",
+    });
+    expect(await executeAssistantAction(c, { id })).toMatchObject({
+      status: "SUBMITTED",
+    });
+    expect(
+      fixture.queueInventory.mock.calls.map((call) => call[0].key),
+    ).toEqual([`assistant:${id}`, `assistant:${id}`]);
+    const stale = randomUUID();
+    await fixture.database!.query(
+      "INSERT INTO personal_assistant_actions(id,user_id,kind,created_at) VALUES($1,7,'compass',now()-interval '2 days')",
+      [stale],
+    );
+    await expect(
+      executeAssistantAction(actor(), { id: stale }),
+    ).rejects.toMatchObject({
+      response: { error: { code: "ACTION_EXPIRED" } },
+    });
+    const proposed = randomUUID();
+    await fixture.database!.query(
+      "INSERT INTO personal_assistant_actions(id,user_id,kind) VALUES($1,7,'compass')",
+      [proposed],
+    );
+    const result = await sendAssistant(actor(), input());
+    await clearAssistant(actor(), { version: result.version });
+    expect(
+      (
+        await fixture.database!.query<Row>(
+          "SELECT status FROM personal_assistant_actions WHERE id=$1",
+          [proposed],
+        )
+      ).rows[0].status,
+    ).toBe("CANCELED");
+    expect(
+      (
+        await fixture.database!.query<Row>(
+          "SELECT status FROM personal_assistant_actions WHERE id=$1",
+          [id],
+        )
+      ).rows[0].status,
+    ).toBe("SUBMITTED");
+  });
+  it("does not save model-proposed memory or persist actions from an invalid final response, and bounds tool loops", async () => {
+    const session = toolSession();
+    await executeAssistantTool(
+      actor(),
+      "propose_memory",
+      '{"title":"偏好","content":"简洁回复"}',
+      session,
+      false,
+    );
+    expect(session.memorySuggestions).toHaveLength(1);
+    expect((await readAssistantMemory(actor())).entries).toEqual([]);
+    const fetcher = vi
+      .fn()
+      .mockImplementation(async () =>
+        toolReply("prepare_sync", { kind: "compass" }),
+      );
+    vi.stubGlobal("fetch", fetcher);
+    const result = await sendAssistant(actor(), input());
+    expect(result.state).toBe("FAILED");
+    expect(fetcher).toHaveBeenCalledTimes(3);
+    expect(
+      (
+        await fixture.database!.query(
+          "SELECT * FROM personal_assistant_actions",
+        )
+      ).rows,
+    ).toHaveLength(0);
+    expect(fixture.queueCompass).not.toHaveBeenCalled();
+  });
 });
 afterEach(() => vi.unstubAllGlobals());
 afterAll(async () => fixture.database?.close());

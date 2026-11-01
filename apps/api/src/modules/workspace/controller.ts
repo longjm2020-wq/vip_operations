@@ -23,17 +23,28 @@ import { AuthRequest, context } from "../../http.js";
 import { clearAssistant, readAssistant, sendAssistant } from "./assistant.js";
 import { readAppearance, saveAppearance } from "./appearance.js";
 import { assistantActivity } from "./activity.js";
+import {
+  readAssistantMemory,
+  saveAssistantMemory,
+} from "./assistant-memory.js";
+import { executeAssistantAction } from "./assistant-actions.js";
 
 // The owner always comes from the authenticated session; there is no user-id route.
 @Controller("api/v1/my-workspace")
 export class PersonalWorkspaceController {
   @Get("activity")
-  async activity(@Req() request: AuthRequest, @Res({ passthrough: true }) response: Response) {
+  async activity(
+    @Req() request: AuthRequest,
+    @Res({ passthrough: true }) response: Response,
+  ) {
     response.setHeader("Cache-Control", "private, no-store");
     return assistantActivity(context(request));
   }
   @Get("appearance")
-  async appearance(@Req() request: AuthRequest, @Res({ passthrough: true }) response: Response) {
+  async appearance(
+    @Req() request: AuthRequest,
+    @Res({ passthrough: true }) response: Response,
+  ) {
     response.setHeader("Cache-Control", "private, no-store");
     return readAppearance(context(request));
   }
@@ -56,6 +67,25 @@ export class PersonalWorkspaceController {
   @Post("assistant/clear")
   async assistantClear(@Req() request: AuthRequest, @Body() input: unknown) {
     return clearAssistant(context(request), input);
+  }
+  @Get("assistant/memory")
+  async assistantMemory(
+    @Req() request: AuthRequest,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    response.setHeader("Cache-Control", "private, no-store");
+    return readAssistantMemory(context(request));
+  }
+  @Post("assistant/memory")
+  async assistantMemorySave(
+    @Req() request: AuthRequest,
+    @Body() input: unknown,
+  ) {
+    return saveAssistantMemory(context(request), input);
+  }
+  @Post("assistant/actions")
+  async assistantAction(@Req() request: AuthRequest, @Body() input: unknown) {
+    return executeAssistantAction(context(request), input);
   }
   @Get("content")
   async content(

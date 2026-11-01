@@ -7,6 +7,8 @@ export type AssistantHubState = {
   allowed: boolean;
   conversation?: AssistantConversation;
   busy: boolean;
+  voiceState?: "listening" | "speaking";
+  announce?: (text: string) => void;
   compose: () => ReactNode;
   openPanel: (tab?: "chat" | "activity") => void;
   feed?: AssistantActivityFeed;

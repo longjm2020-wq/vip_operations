@@ -154,6 +154,50 @@ export async function assistantActivity(
       });
     }
   }
+  if (c.actor.permissions.includes("inventory.read")) {
+    const runs = await rows(
+      db,
+      `SELECT id::text,status,stage,requested_count,received_count,error_note,
+      created_at,started_at,finished_at,heartbeat_at FROM jushuitan_inventory_runs
+      WHERE created_at>now()-interval '7 days' ORDER BY created_at DESC LIMIT 5`,
+    );
+    for (const run of runs) {
+      const active = ["QUEUED", "RUNNING"].includes(run.status);
+      const stale =
+        active &&
+        (now.getTime() - new Date(run.created_at).getTime() > 30 * 60000 ||
+          (run.status === "RUNNING" &&
+            now.getTime() -
+              new Date(
+                run.heartbeat_at || run.started_at || run.created_at,
+              ).getTime() >
+              60000));
+      items.push({
+        id: `jushuitan:${run.id}`,
+        kind: "task",
+        title: "聚水潭库存同步",
+        detail: stale
+          ? "进度中断，请查看任务"
+          : run.status === "COMPLETE"
+            ? `杭州总仓 · 完整同步 · 匹配 ${run.received_count} / ${run.requested_count}`
+            : active
+              ? String(run.stage || "等待同步")
+              : String(run.error_note || "同步未完成"),
+        href: "/operations/vip/inventory",
+        at: new Date(run.finished_at || run.created_at).toISOString(),
+        status:
+          run.status === "COMPLETE"
+            ? "completed"
+            : active && !stale
+              ? "running"
+              : "attention",
+        progress: {
+          done: Number(run.received_count || 0),
+          total: Number(run.requested_count || 0),
+        },
+      });
+    }
+  }
   if (c.actor.permissions.includes("analytics.manage")) {
     const runs = await rows(
       db,

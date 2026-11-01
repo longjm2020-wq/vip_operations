@@ -15,7 +15,7 @@ import { loginSchema } from "./modules/auth/service.js";
 import { compassProbeRequestSchema } from "./integrations/vip/compass.js";
 import { replenishmentPolicyWriteSchema } from "../../../packages/contracts/src/inventory-replenishment.js";
 import { inventoryCalculationWriteSchema, inventoryCalculationFieldWriteSchema, inventoryCalculationFieldDeleteSchema, inventoryCalculationFieldViewSchema } from "../../../packages/contracts/src/inventory-formula.js";
-import { assistantSendSchema } from "../../../packages/contracts/src/personal-assistant.js";
+import { assistantSendSchema, assistantMemorySaveSchema } from "../../../packages/contracts/src/personal-assistant.js";
 import { workspaceSaveSchema } from "../../../packages/contracts/src/personal-workspace.js";
 import { appearanceSchema } from "../../../packages/contracts/src/appearance.js";
 import {
@@ -293,7 +293,10 @@ export function enrichOpenApi(doc: OpenAPIObject) {
   set("/api/v1/my-workspace", "post", workspaceSaveSchema, "保存本人工作台、日程与待办，按版本检测冲突");
   set("/api/v1/my-workspace/appearance", "get", undefined, "读取本人全站主题偏好");
   set("/api/v1/my-workspace/appearance", "post", appearanceSchema, "按账号保存暗色或亮色主题，检测并发版本冲突");
-  set("/api/v1/my-workspace/assistant", "post", assistantSendSchema, "向个人助理发送消息，按账号保留对话并仅返回待确认日程");
+  set("/api/v1/my-workspace/assistant", "post", assistantSendSchema, "发送消息，按权限查询业务数据并生成待确认日程、记忆或同步操作");
+  set("/api/v1/my-workspace/assistant/memory", "get", undefined, "读取本人个人记忆，不调用模型");
+  set("/api/v1/my-workspace/assistant/memory", "post", assistantMemorySaveSchema, "保存本人个人记忆，检查版本并发冲突");
+  set("/api/v1/my-workspace/assistant/actions", "post", z.object({ id: z.string().uuid() }).strict(), "执行本人待确认同步卡片，复核当前权限并防止重复提交");
   set("/api/v1/my-workspace/assistant/clear", "post", z.object({ version: z.number().int().min(0) }).strict(), "清空本人助理对话，不修改工作台记录");
   void money;
   set(

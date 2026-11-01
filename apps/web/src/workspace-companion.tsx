@@ -129,6 +129,7 @@ export function WorkspaceCompanion() {
   const [compact, setCompact] = useState(false);
   const working =
     hub.busy ||
+    !!hub.voiceState ||
     hub.feed?.items?.some(
       (item) => item.kind === "task" && item.status === "running",
     );

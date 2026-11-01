@@ -52,8 +52,9 @@ export function SidebarAssistant({
     (item) => item.kind === "task" && item.status === "running",
   );
   const attention = unread.find((item) => item.status === "attention");
-  const state =
-    hub.busy || running
+  const state = hub.voiceState
+    ? hub.voiceState
+    : hub.busy || running
       ? "working"
       : hub.feedError || hub.conversation?.state === "FAILED"
         ? "error"
@@ -65,6 +66,8 @@ export function SidebarAssistant({
               ? "slacking"
               : "idle";
   const labels = {
+    listening: "正在聆听",
+    speaking: "正在说话",
     working: "工作中",
     error: "需要关注",
     happy: "在呢，随时找我",
@@ -99,8 +102,9 @@ export function SidebarAssistant({
     if (next) {
       const text = next.title + "：" + next.detail;
       setReminder(text.length > 32 ? text.slice(0, 31) + "…" : text);
+      hub.announce?.(text.slice(0, 100));
     }
-  }, [hub.feed, hub.seen]);
+  }, [hub.feed, hub.seen, hub.announce]);
   useEffect(() => {
     if (!reminder) return;
     const timer = setTimeout(() => setReminder(""), 8000);
