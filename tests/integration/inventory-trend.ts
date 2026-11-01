@@ -122,7 +122,9 @@ try {
     assert.equal((await summary(["000123"])).total, 1);
     const grouped = await summary(["STYLE-A"], "style");
     assert.equal(grouped.total, 1); assert.equal(grouped.totals.physicalQty, 15);
-    await assert.rejects(() => summary(Array.from({ length: 201 }, (_, i) => String(i))));
+    const thousand = [sku.sku_code, ...Array.from({ length: 999 }, (_, i) => `UNMATCHED-${i}`)];
+    assert.equal((await summary(thousand)).total, 1);
+    await assert.rejects(() => summary([...thousand, "OVERFLOW"]));
   });
   await check("Upgrade backfill uses only retained latest daily snapshots", async () => {
     await sql("DROP TRIGGER jushuitan_capture_daily_history ON jushuitan_inventory_runs; DROP FUNCTION capture_jushuitan_inventory_history(); DROP FUNCTION publish_jushuitan_inventory_history(uuid); DROP TABLE jushuitan_inventory_history_records; DROP TABLE jushuitan_inventory_history_days");

@@ -7,7 +7,9 @@ describe("inventory batch codes", () => {
       .toEqual(["000000012345678901234", "XFA16-31196L", "xfa16x31196l", "0002", "0003", "0004"]);
   });
   it("bounds requests and validates each complete string", () => {
-    expect(inventorySearchCodesSchema.safeParse(Array.from({ length: 201 }, (_, i) => String(i))).success).toBe(false);
+    const codes = Array.from({ length: 1000 }, (_, i) => String(i).padStart(100, "0"));
+    expect(inventorySearchCodesSchema.parse(codes)).toEqual(codes);
+    expect(inventorySearchCodesSchema.safeParse([...codes, "overflow"]).success).toBe(false);
     expect(inventorySearchCodesSchema.safeParse([123]).success).toBe(false);
     expect(inventorySearchCodesSchema.safeParse(["x".repeat(101)]).success).toBe(false);
     expect(inventorySearchCodesSchema.parse([" 0001 ", "0001"])).toEqual(["0001"]);

@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Alert, App, Button, Input, Modal, Space, Typography } from "antd";
 import { CloseCircleOutlined, UnorderedListOutlined } from "@ant-design/icons";
 import { PageSearch, PageSearchInput } from "./page-search";
-import { inventorySearchCodesSchema, splitInventorySearchCodes } from "../../../packages/contracts/src/inventory-search";
+import { INVENTORY_SEARCH_CODES_LIMIT, inventorySearchCodesSchema, splitInventorySearchCodes } from "../../../packages/contracts/src/inventory-search";
 
 export function InventorySearch({ codes, onSearch }: { codes: string[]; onSearch: (value: string, codes: string[]) => void }) {
   const [value, setValue] = useState(""), [draft, setDraft] = useState(""), [open, setOpen] = useState(false);
@@ -10,7 +10,7 @@ export function InventorySearch({ codes, onSearch }: { codes: string[]; onSearch
   const parsed = splitInventorySearchCodes(draft);
   const apply = () => {
     const result = inventorySearchCodesSchema.safeParse(parsed);
-    if (!result.success) { void message.error("一次最多查询200个编码，每个编码最多100个字符"); return; }
+    if (!result.success) { void message.error(`一次最多查询${INVENTORY_SEARCH_CODES_LIMIT}个编码，每个编码最多100个字符`); return; }
     setValue(""); onSearch("", result.data); setOpen(false);
   };
   return <>
@@ -27,9 +27,9 @@ export function InventorySearch({ codes, onSearch }: { codes: string[]; onSearch
       </Space>} /></PageSearch>
     <Modal title="批量查询库存" open={open} onCancel={() => setOpen(false)} onOk={apply} okText="查询" cancelText="取消" width={580} destroyOnHidden>
       <Typography.Paragraph>粘贴款号、货号、商品编码或条码，每行一个，也支持空格、逗号及分号分隔。完整编码精确匹配，任一编码匹配即显示，保留当前周期和状态筛选。</Typography.Paragraph>
-      <Input.TextArea aria-label="批量查询编码" placeholder="每行粘贴一个编码，最多200个" rows={10} value={draft} maxLength={25000} onChange={event => setDraft(event.target.value)} />
+      <Input.TextArea aria-label="批量查询编码" placeholder={`每行粘贴一个编码，最多${INVENTORY_SEARCH_CODES_LIMIT}个`} rows={10} value={draft} maxLength={INVENTORY_SEARCH_CODES_LIMIT * 125} onChange={event => setDraft(event.target.value)} />
       <div style={{ margin: "12px 0" }}>去重后 {parsed.length} 个编码 <Button type="link" size="small" onClick={() => setDraft("")}>清空</Button></div>
-      {parsed.length > 200 && <Alert type="error" showIcon title="一次最多查询200个编码，请减少后重试" />}
+      {parsed.length > INVENTORY_SEARCH_CODES_LIMIT && <Alert type="error" showIcon title={`一次最多查询${INVENTORY_SEARCH_CODES_LIMIT}个编码，请减少后重试`} />}
       <Typography.Text type="secondary">前导零及长编码按原文保留；重复编码不会重复统计库存。清空后查询可恢复全部结果。</Typography.Text>
     </Modal>
   </>;

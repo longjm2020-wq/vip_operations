@@ -84,3 +84,24 @@ test("batch paste preserves identifiers and filters, deduplicates and clears wit
   await expect.poll(() => f.summaries.at(-1)?.q).toBe("next-search");
   expect(f.summaries.at(-1)?.codes).toBeUndefined();
 });
+
+test("batch query accepts 1000 complete long codes and rejects overflow", async ({ page }) => {
+  const f = await fixture(page);
+  await page.goto("/operations/vip/inventory");
+  await page.getByRole("button", { name: "批量查询", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "批量查询库存" });
+  const input = dialog.getByRole("textbox", { name: "批量查询编码" });
+  const codes = Array.from({ length: 1000 }, (_, i) => String(i).padStart(100, "0"));
+  await input.fill([...codes, "OVERFLOW"].join("\n"));
+  await expect(dialog.getByRole("alert")).toContainText("一次最多查询1000个编码");
+  await dialog.getByRole("button", { name: "查询", exact: true }).click();
+  await expect(dialog).toBeVisible();
+  expect(f.summaries.some(query => Array.isArray(query.codes))).toBe(false);
+  await input.fill(codes.join("\n"));
+  await expect(input).toHaveValue(codes.join("\n"));
+  await expect(dialog.getByText("去重后 1000 个编码", { exact: false })).toBeVisible();
+  await dialog.getByRole("button", { name: "查询", exact: true }).click();
+  await expect(dialog).not.toBeVisible();
+  await expect.poll(() => f.summaries.at(-1)?.codes).toEqual(codes);
+  await expect(page.getByRole("textbox", { name: "商品编码 / 货号 / 款号 / 条码" })).toHaveAttribute("placeholder", "已选择 1000 个编码");
+});
