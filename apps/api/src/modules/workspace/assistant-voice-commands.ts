@@ -24,6 +24,9 @@ export async function runAssistantVoiceCommand(
     evidence: [],
     actions: [],
     memorySuggestions: [],
+    responseModel: undefined,
+    jobIds: [],
+    citations: [],
   };
   if (command.kind === "navigate") {
     if (

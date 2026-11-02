@@ -1,3 +1,4 @@
+import { assistantPublicText } from "../../../packages/contracts/src/ai-presentation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { pcmBuffer, pcmBytes } from "./voice-pcm";
 import { requestVoiceStream } from "./voice-stream";
@@ -123,7 +124,9 @@ export function useGptSpeech() {
     } catch (cause) {
       if (!current()) return;
       stop();
-      setError((cause as Error).message || "语音播放失败，请重试");
+      setError(
+        assistantPublicText((cause as Error).message || "语音播放失败，请重试"),
+      );
     }
   };
   const play = () =>

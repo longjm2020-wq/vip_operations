@@ -1,4 +1,5 @@
 import { QueryClient } from "@tanstack/react-query";
+import { assistantPublicText } from "../../../packages/contracts/src/ai-presentation.js";
 export const queryClient = new QueryClient({
   defaultOptions: {
     queries: { retry: false, staleTime: 10000 },
@@ -37,7 +38,7 @@ export async function api(
   if (!response.ok) {
     if (response.status === 401 && path !== "/auth/login")
       queryClient.setQueryData(["me"], null);
-    throw Object.assign(new Error(result.error?.message || "请求失败"), {
+    throw Object.assign(new Error(assistantPublicText(result.error?.message || "请求失败")), {
       status: response.status,
       details: result.error?.details,
     });

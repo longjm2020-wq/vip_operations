@@ -1,0 +1,86 @@
+.agent-composer {
+  margin: 8px 0;
+  color: var(--app-secondary);
+}
+.agent-composer-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.agent-composer-tools .ant-select {
+  min-width: 150px;
+  max-width: 220px;
+}
+.agent-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 8px;
+}
+.agent-attachments .ant-tag {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.agent-settings {
+  max-width: 270px;
+  font-size: 12px;
+}
+.agent-settings p {
+  margin: 8px 0;
+}
+.agent-job {
+  padding: 12px;
+  margin: 12px 0;
+  border: 1px solid var(--app-border);
+  border-radius: 14px;
+  background: var(--app-surface);
+}
+.agent-job-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.agent-job-heading strong {
+  overflow-wrap: anywhere;
+}
+.agent-file-result {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 9px 0;
+  min-width: 0;
+}
+.agent-file-result a {
+  overflow-wrap: anywhere;
+}
+.agent-file-result small {
+  color: var(--app-secondary);
+}
+.agent-file-result video {
+  max-width: 100%;
+  max-height: 300px;
+  border-radius: 10px;
+  background: #111;
+}
+.agent-result-image {
+  max-height: 300px;
+  object-fit: contain;
+  border-radius: 10px;
+}
+.agent-citations {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin: 10px 0;
+  font-size: 12px;
+}
+.agent-library-file {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--app-border);
+}
+.agent-tasks h3 {
+  margin-top: 24px;
+}

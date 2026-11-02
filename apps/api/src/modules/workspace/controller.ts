@@ -3,6 +3,7 @@ import {
   Controller,
   Get,
   Module,
+  Param,
   Post,
   Query,
   Req,
@@ -21,6 +22,15 @@ import { libraryKindSchema } from "../../../../../packages/contracts/src/project
 import { libraryConfig, contentSummary } from "../projects/library.js";
 import { AuthRequest, context } from "../../http.js";
 import { clearAssistant, readAssistant, sendAssistant } from "./assistant.js";
+import { publicAgentCatalog } from "./agent-models.js";
+import { requireAssistant } from "./assistant-memory.js";
+import {
+  uploadAgentFile,
+  downloadAgentFile,
+  listAgentFiles,
+  deleteAgentFile,
+} from "./agent-files.js";
+import { listAgentJobs, cancelAgentJob } from "./agent-jobs.js";
 import { readAppearance, saveAppearance } from "./appearance.js";
 import { assistantActivity } from "./activity.js";
 import {
@@ -40,6 +50,51 @@ import {
 // The owner always comes from the authenticated session; there is no user-id route.
 @Controller("api/v1/my-workspace")
 export class PersonalWorkspaceController {
+  @Get("assistant/capabilities")
+  async agentCapabilities(
+    @Req() request: AuthRequest,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    requireAssistant(context(request));
+    response.setHeader("Cache-Control", "private, no-store");
+    return publicAgentCatalog();
+  }
+  @Get("assistant/files")
+  async agentFiles(
+    @Req() request: AuthRequest,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    response.setHeader("Cache-Control", "private, no-store");
+    return listAgentFiles(context(request));
+  }
+  @Post("assistant/files")
+  async agentUpload(@Req() request: AuthRequest) {
+    return uploadAgentFile(context(request), request);
+  }
+  @Post("assistant/files/:id/delete")
+  async agentDelete(@Req() request: AuthRequest, @Param("id") id: string) {
+    return deleteAgentFile(context(request), id);
+  }
+  @Get("assistant/files/:id/content")
+  async agentDownload(
+    @Req() request: AuthRequest,
+    @Param("id") id: string,
+    @Res() response: Response,
+  ) {
+    return downloadAgentFile(context(request), id, request, response);
+  }
+  @Get("assistant/jobs")
+  async agentJobs(
+    @Req() request: AuthRequest,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    response.setHeader("Cache-Control", "private, no-store");
+    return listAgentJobs(context(request));
+  }
+  @Post("assistant/jobs/:id/cancel")
+  async agentCancel(@Req() request: AuthRequest, @Param("id") id: string) {
+    return cancelAgentJob(context(request), id);
+  }
   @Get("assistant/voice")
   async voiceStatus(
     @Req() request: AuthRequest,

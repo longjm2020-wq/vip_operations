@@ -1,4 +1,5 @@
 import { csrf, queryClient } from "../api";
+import { assistantPublicText } from "../../../../packages/contracts/src/ai-presentation";
 export type Item = Record<string, any>;
 export const assetUrl = (id: string, download = false) =>
   `/api/v1/aigc/assets/${encodeURIComponent(id)}${download ? "?download=1" : ""}`;
@@ -16,11 +17,11 @@ export async function studioApi(path: string, method = "GET", body?: unknown) {
   const value = await response.json();
   if (!response.ok) {
     if (response.status === 401) queryClient.setQueryData(["me"], null);
-    throw new Error(
+    throw new Error(assistantPublicText(
       typeof value.error === "string"
         ? value.error
         : value.error?.message || "操作失败，请稍后重试",
-    );
+    ));
   }
   return value;
 }

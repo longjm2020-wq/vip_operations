@@ -2,6 +2,7 @@ import "dotenv/config";
 import { Worker } from "bullmq";
 import { validateIntegrationMode } from "../../api/src/integrations/vip/index.js";
 import { startVopScheduler } from "./vop-scheduler.js";
+import { startAssistantJobs } from "./assistant-jobs.js";
 import { startSupplyLogistics } from "./supply-logistics.js";
 import { startInventoryLogistics } from "./inventory-logistics.js";
 import { startJushuitanInventory } from "./jushuitan-inventory.js";
@@ -11,6 +12,7 @@ import { startCompetitorCloudLogin } from "./competitor-cloud-login.js";
 import { startCompassBrowserUpdate } from "./compass-browser-update.js";
 import { startRecycleCleanup } from "../../api/src/modules/projects/recycle.js";
 const stopRecycleCleanup = startRecycleCleanup();
+const stopAssistantJobs = startAssistantJobs();
 const stopCompassMail = startCompassMail();
 const stopCompetitorCrawler = startCompetitorCrawler();
 const stopCompetitorCloudLogin = startCompetitorCloudLogin();
@@ -54,6 +56,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const)
   process.on(signal, () => {
     void Promise.all([
       worker.close(),
+      stopAssistantJobs(),
       stopVop(),
       stopSupplyLogistics(),
       stopInventoryLogistics(),

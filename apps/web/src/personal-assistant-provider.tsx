@@ -30,7 +30,7 @@ import {
   CustomerServiceOutlined,
 } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useLocation } from "react-router-dom";
 import { api } from "./api";
 import { useUser } from "./shared";
 import {
@@ -48,6 +48,14 @@ import type { WorkspaceSchedule } from "../../../packages/contracts/src/personal
 import "./personal-assistant.css";
 import { useAssistantVoice } from "./use-assistant-voice";
 import { AssistantMemoryPanel } from "./assistant-memory-panel";
+import {
+  AgentComposer,
+  AgentMessageResults,
+  AgentTasksPanel,
+  type AgentOptions,
+} from "./assistant-agent-panel";
+import type { AgentJob } from "../../../packages/contracts/src/assistant-agent";
+import { assistantPublicText } from "../../../packages/contracts/src/ai-presentation";
 import { AssistantBusinessResults } from "./assistant-business-results";
 import { AssistantVoiceSettingsPanel } from "./assistant-realtime-panel";
 import { useGptVoice } from "./use-gpt-voice";
@@ -62,12 +70,13 @@ export function PersonalAssistantProvider({
   const user = useUser(),
     { message } = App.useApp();
   const navigate = useNavigate();
+  const location = useLocation();
   const available = availableWorkspaceTools({
     permissions: user.permissions,
     roleCodes: user.roleCodes,
   });
   const [section, setSection] = useState<
-    "chat" | "activity" | "memory" | "voice"
+    "chat" | "activity" | "memory" | "voice" | "tasks"
   >("chat");
   const [pendingSchedules, setPendingSchedules] = useState<WorkspaceSchedule[]>(
     [],
@@ -122,6 +131,33 @@ export function PersonalAssistantProvider({
   const [includeContext, setIncludeContext] = useState(false),
     [sending, setSending] = useState(false);
   const [error, setError] = useState("");
+  const [agent, setAgent] = useState<AgentOptions>({
+    webSearch: false,
+    attachments: [],
+  });
+  const [uploading, setUploading] = useState(false);
+  useEffect(() => {
+    if (
+      allowed &&
+      new URLSearchParams(location.search).get("assistant") === "tasks"
+    ) {
+      setSection("tasks");
+      setOpen(true);
+      navigate(location.pathname, { replace: true });
+    }
+  }, [allowed, location.search, location.pathname, navigate]);
+  const jobs = useQuery({
+    queryKey: ["assistant-jobs", user.id],
+    enabled: allowed,
+    queryFn: async () =>
+      (await api("/my-workspace/assistant/jobs")).data as AgentJob[],
+    refetchInterval: (query) =>
+      query.state.data?.some(
+        (j) => j.status === "QUEUED" || j.status === "RUNNING",
+      )
+        ? 3000
+        : 30000,
+  });
   const [includeMemory, setIncludeMemory] = useState(false);
   const [voiceReply, setVoiceReply] = useState(false),
     [voiceReminders, setVoiceReminders] = useState(false);
@@ -184,7 +220,11 @@ export function PersonalAssistantProvider({
     },
   );
   const busy =
-    sending || data?.state === "PENDING" || !!executing || gptVoice.active;
+    sending ||
+    uploading ||
+    data?.state === "PENDING" ||
+    !!executing ||
+    gptVoice.active;
   const announce = useCallback(
     (value: string) => {
       if (
@@ -228,8 +268,14 @@ export function PersonalAssistantProvider({
         requestId: crypto.randomUUID(),
         includePersonalContext: includeContext,
         includeMemory,
+        model: agent.model,
+        imageModel: agent.imageModel,
+        webSearch: agent.webSearch,
+        attachmentIds: agent.attachments.map((f) => f.id),
       });
       setText("");
+      setAgent((previous) => ({ ...previous, attachments: [] }));
+      void jobs.refetch();
       const latest = (response.data as AssistantConversation).messages?.at(-1);
       if (
         playbackAllowed.current &&
@@ -312,6 +358,12 @@ export function PersonalAssistantProvider({
   };
   const sender = (inDrawer = false) => (
     <div className="assistant-compose">
+      <AgentComposer
+        value={agent}
+        change={setAgent}
+        disabled={busy}
+        onUploading={setUploading}
+      />
       <Sender
         value={text}
         onChange={(value) => setText(value.slice(0, 4000))}
@@ -379,11 +431,11 @@ export function PersonalAssistantProvider({
           type="text"
           size="small"
           icon={<CustomerServiceOutlined />}
-          aria-label="GPT 语音"
+          aria-label="智能语音"
           disabled={sending || !!executing}
           onClick={() => openPanel("voice")}
         >
-          GPT 语音
+          智能语音
         </Button>
         <Checkbox
           checked={includeContext}
@@ -526,12 +578,15 @@ export function PersonalAssistantProvider({
           activeKey={section}
           onChange={(key) => {
             playbackAllowed.current = false;
-            setSection(key as "chat" | "activity" | "memory" | "voice");
+            setSection(
+              key as "chat" | "activity" | "memory" | "voice" | "tasks",
+            );
             voice.stop();
             speech.stop();
           }}
           items={[
             ...(allowed ? [{ key: "chat", label: "互动对话" }] : []),
+            ...(allowed ? [{ key: "tasks", label: "任务与文件" }] : []),
             ...(allowed
               ? [
                   {
@@ -586,7 +641,7 @@ export function PersonalAssistantProvider({
         {allowed && section === "chat" && (
           <div className="assistant-speech-status">
             <span>
-              小序 GPT 声音 · AI 生成
+              小序的声音 · AI 生成
               {voiceStatus.data?.ready
                 ? ` · ${voiceStatus.data.voice}`
                 : " · 尚未就绪"}
@@ -632,6 +687,26 @@ export function PersonalAssistantProvider({
             clearSuggestion={() => setMemorySuggestion(null)}
           />
         )}
+        {section === "tasks" && allowed && (
+          <AgentTasksPanel
+            jobs={jobs.data || []}
+            refresh={() => void jobs.refetch()}
+            onAttach={(file) => {
+              if (agent.attachments.length >= 6) {
+                message.warning("每次最多附加6个文件");
+                return;
+              }
+              setAgent((previous) => ({
+                ...previous,
+                attachments: [
+                  ...previous.attachments.filter((f) => f.id !== file.id),
+                  file,
+                ],
+              }));
+              setSection("chat");
+            }}
+          />
+        )}
         {section === "activity" && (
           <AssistantActivityPanel
             feed={activity.data}
@@ -646,7 +721,7 @@ export function PersonalAssistantProvider({
         <div hidden={section !== "chat" || !allowed}>
           <div className="assistant-status">
             <Tag>{data?.ready ? "已连接" : "未就绪"}</Tag>
-            <span>{data?.model || "读取模型状态"}</span>
+            <span>小序智能体</span>
             <Button
               type="text"
               size="small"
@@ -701,7 +776,11 @@ export function PersonalAssistantProvider({
                   variant={item.role === "user" ? "filled" : "borderless"}
                   header={item.role === "user" ? "你" : "AI 个人助理"}
                   content={
-                    <div className="assistant-message-text">{item.text}</div>
+                    <div className="assistant-message-text">
+                      {item.role === "assistant"
+                        ? assistantPublicText(item.text)
+                        : item.text}
+                    </div>
                   }
                 />
                 {item.role === "assistant" && (
@@ -745,36 +824,39 @@ export function PersonalAssistantProvider({
                   }}
                 />
                 {!!item.schedules?.length && (
-                  <div className="assistant-schedule-proposals">
-                    {item.schedules.map((event) => {
-                      const added = [...schedule, ...pendingSchedules].some(
-                        (existing) => existing.id === event.id,
-                      );
-                      return (
-                        <div
-                          key={event.id}
-                          className="assistant-schedule-proposal"
-                        >
-                          <span>
-                            <CalendarOutlined /> 待确认日程
-                          </span>
-                          <strong>{event.title}</strong>
-                          <p>
-                            {event.date} · {event.startTime || "全天"}
-                            {event.endTime ? `–${event.endTime}` : ""}
-                          </p>
-                          {event.note && <p>{event.note}</p>}
-                          <Button
-                            size="small"
-                            disabled={added || schedule.length >= 500}
-                            onClick={() => onSchedule(event)}
+                  <>
+                    <AgentMessageResults item={item} jobs={jobs.data || []} />
+                    <div className="assistant-schedule-proposals">
+                      {item.schedules.map((event) => {
+                        const added = [...schedule, ...pendingSchedules].some(
+                          (existing) => existing.id === event.id,
+                        );
+                        return (
+                          <div
+                            key={event.id}
+                            className="assistant-schedule-proposal"
                           >
-                            {added ? "已加入日程草稿" : "加入日程草稿"}
-                          </Button>
-                        </div>
-                      );
-                    })}
-                  </div>
+                            <span>
+                              <CalendarOutlined /> 待确认日程
+                            </span>
+                            <strong>{event.title}</strong>
+                            <p>
+                              {event.date} · {event.startTime || "全天"}
+                              {event.endTime ? `–${event.endTime}` : ""}
+                            </p>
+                            {event.note && <p>{event.note}</p>}
+                            <Button
+                              size="small"
+                              disabled={added || schedule.length >= 500}
+                              onClick={() => onSchedule(event)}
+                            >
+                              {added ? "已加入日程草稿" : "加入日程草稿"}
+                            </Button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </>
                 )}
                 {!!item.tools?.length && (
                   <div className="assistant-tool-links">
@@ -789,10 +871,8 @@ export function PersonalAssistantProvider({
                     })}
                   </div>
                 )}
-                {item.responseModel && (
-                  <small className="assistant-response-model">
-                    实际返回：{item.responseModel}
-                  </small>
+                {!item.schedules?.length && (
+                  <AgentMessageResults item={item} jobs={jobs.data || []} />
                 )}
               </div>
             ))}

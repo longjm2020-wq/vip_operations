@@ -1,3 +1,4 @@
+import { assistantPublicText } from "../../../packages/contracts/src/ai-presentation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { csrf, queryClient } from "./api";
 import { pcmBuffer, pcmBytes, wavFromFrames } from "./voice-pcm";
@@ -161,7 +162,8 @@ export function useGptVoice(
           for (const line of lines) {
             if (!line.trim()) continue;
             const event = JSON.parse(line) as VoiceEvent;
-            if (event.type === "error") throw Error(event.message);
+            if (event.type === "error")
+              throw Error(assistantPublicText(event.message));
             if (event.type === "retry-listening") {
               // Discard this segment; keep the device/session and await fresh speech.
               completed = true;
@@ -181,7 +183,7 @@ export function useGptVoice(
                   ? "正在识别语音…"
                   : event.stage === "thinking"
                     ? "小序正在处理…"
-                    : "正在生成 GPT 声音…",
+                    : "小序正在准备声音…",
               );
             if (event.type === "audio") {
               const fresh = pcmBytes(event.data),
@@ -221,7 +223,9 @@ export function useGptVoice(
     } catch (e) {
       if (!current()) return;
       stop("");
-      setError((e as Error).message || "语音连接失败，请重新开始");
+      setError(
+        assistantPublicText((e as Error).message || "语音连接失败，请重新开始"),
+      );
       callback.current();
     }
   };
@@ -336,7 +340,7 @@ export function useGptVoice(
             ? "未检测到麦克风，请连接后重试"
             : name === "NotReadableError"
               ? "麦克风被占用，请释放后重试"
-              : (e as Error).message,
+              : assistantPublicText((e as Error).message),
       );
     } finally {
       if (token === epoch.current) starting.current = false;

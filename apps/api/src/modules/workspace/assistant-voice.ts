@@ -21,6 +21,7 @@ import {
 } from "../analytics/secrets.js";
 import { requireAssistant } from "./assistant-memory.js";
 import { readAssistant, sendAssistant } from "./assistant.js";
+import { assistantPublicText } from "../../../../../packages/contracts/src/ai-presentation.js";
 
 const endpoint = "https://openrouter.ai/api/v1/chat/completions";
 const settings = () =>
@@ -48,13 +49,13 @@ function publicSettings(
       assistantReady,
     ),
     enabled: s.enabled,
-    model: s.model,
+    model: canManage(c) ? s.model : "小序语音",
     voice: s.voice,
     assistantReady,
     apiKeyConfigured: Boolean(s.api_key_encrypted),
     encryptionReady: encryptionReady(),
     verifiedAt: s.verified_at,
-    error: s.error_note,
+    error: assistantPublicText(s.error_note || ""),
     canManage: canManage(c),
     version: s.version,
     maxSeconds: 25,
@@ -93,7 +94,7 @@ export function voiceSafeError(e: unknown) {
       ? (result as { error?: { message?: unknown } }).error?.message
       : null;
   return typeof message === "string"
-    ? message
+    ? assistantPublicText(message)
     : "语音请求超时、被取消或连接失败；未自动重试";
 }
 export function voiceErrorEvent(e: unknown): VoiceEvent {
@@ -271,7 +272,7 @@ export async function streamVoiceSpeech(
           fail("VOICE_STREAM", "语音生成中断，请在互动对话查看文字回复", 502);
         if (part.model) {
           checkModel(part.model, s.model);
-          if (!modelSeen) emit({ type: "model", model: part.model });
+          if (!modelSeen) emit({ type: "model", model: "小序语音" });
           modelSeen = true;
         }
         const choice = part.choices?.[0],
@@ -376,6 +377,7 @@ async function finishVoiceRequest(id: string, state: "DONE" | "FAILED") {
   );
 }
 function spokenText(text: string) {
+  text = assistantPublicText(text);
   return text.length > 600
     ? text.slice(0, 600) + "。完整内容请查看互动对话。"
     : text;

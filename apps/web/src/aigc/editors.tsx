@@ -173,9 +173,9 @@ export function VideoEditor({
                     },
                   });
                 }}
-                options={videoProviders.map((p) => ({
+                options={videoProviders.map((p, i) => ({
                   value: p.id,
-                  label: `${p.label}${p.configured ? "" : " · 未配置"}`,
+                  label: `视频服务 ${i+1}${p.configured ? "" : " · 未配置"}`,
                 }))}
               />
             </Form.Item>
@@ -192,9 +192,9 @@ export function VideoEditor({
                     },
                   });
                 }}
-                options={models.map((m: Item) => ({
+                options={models.map((m: Item, i: number) => ({
                   value: m.id,
-                  label: m.label,
+                  label: `视频创作 ${i+1}`,
                 }))}
               />
             </Form.Item>
@@ -365,7 +365,7 @@ export function VideoEditor({
           {!status.compile && (
             <Alert
               type="info"
-              title="拆解服务未就绪：请在系统设置中启用并验证 OpenRouter 模型。素材与草稿可以先保存。"
+              title="拆解服务未就绪：请在系统设置中启用并验证智能服务。素材与草稿可以先保存。"
             />
           )}
           {!model?.configured && (
@@ -508,9 +508,9 @@ export function DetailEditor({
                 onChange={(imageModelId) => patch({ imageModelId })}
                 options={
                   Array.isArray(imageModels)
-                    ? imageModels.map((m: Item) => ({
+                    ? imageModels.map((m: Item, i: number) => ({
                         value: m.id,
-                        label: `${m.label}${m.configured ? "" : " · 未配置"}`,
+                        label: `图像创作 ${i+1}${m.configured ? "" : " · 未配置"}`,
                       }))
                     : []
                 }

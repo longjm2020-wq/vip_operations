@@ -186,5 +186,20 @@ describe("Compass email safety", () => {
     expect(email.html).not.toContain("<img src=x");
     expect(email.html).toContain("不代表同批订单");
     expect(email.subject).toContain("2026-10-01");
+    const withAI = buildCompassEmail("2026-10-01", [report], [], {
+      state: "READY",
+      model: "openai/gpt-6.1-sol",
+      responseModel: "openai/gpt-6.1-sol",
+      provider: "OpenRouter",
+      reportDate: "2026-10-01",
+      content: {
+        summary: "GPT 建议重点查看退货。",
+        observations: ["OpenAI 生成的销售观察"],
+        actions: ["核对来源数据"],
+        risks: ["数据不足"],
+      },
+    });
+    expect(withAI.text + withAI.html).not.toMatch(/GPT|OpenAI|OpenRouter/i);
+    expect(withAI.html).toContain("核对来源数据");
   });
 });

@@ -1,4 +1,5 @@
 import type { CompassVisuals } from "./compass-ai-view";
+import { assistantPublicText } from "../../../packages/contracts/src/ai-presentation";
 
 export const compassAIStates: Record<string, string> = {
   READY: "已生成",
@@ -76,7 +77,7 @@ export function compassExecutionSteps(report?: CompassAIState, busy = false) {
           : state === "READY"
             ? "已读取本批报表的分析结果"
             : state === "FAILED"
-              ? report?.message || "生成失败，请重试"
+              ? assistantPublicText(report?.message || "生成失败，请重试")
               : "由有权限的用户发起生成",
     },
   ];

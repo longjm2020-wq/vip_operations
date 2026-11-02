@@ -28,6 +28,7 @@ import {
 import { CompassSharePanel } from "./compass-share";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "./api";
+import { assistantPublicText } from "../../../packages/contracts/src/ai-presentation";
 import { QueryState, useUser } from "./shared";
 import { CompassTrend } from "./compass-charts";
 import {
@@ -283,7 +284,7 @@ export function CompassReportView({
   const content = report.content,
     targets = productReferenceTargets(report.visuals);
   const linkedText = (text: string) => (
-    <CompassProductText text={text} targets={targets} onPreview={setPreview} />
+    <CompassProductText text={assistantPublicText(text)} targets={targets} onPreview={setPreview} />
   );
   return (
     <div className="compass-report-content">
@@ -398,7 +399,7 @@ export function CompassAIReport({
     try {
       const r = await api("/analytics/compass/ai-generate", "POST", {});
       if (r.data.state === "READY") message.success("AI 分析已生成");
-      else message.warning(r.data.message || "AI 分析尚未完成");
+      else message.warning(assistantPublicText(r.data.message || "AI 分析尚未完成"));
       await q.refetch();
     } catch (e) {
       message.error((e as Error).message);
@@ -456,9 +457,6 @@ export function CompassAIReport({
         <details className="ai-execution" open={!content} key={report?.state}>
           <summary>生成状态{content ? " · 已完成" : ""}</summary>
           <ThoughtChain items={compassExecutionSteps(report, busy)} />
-          {report?.responseModel && (
-            <small>实际返回模型：{report.responseModel}</small>
-          )}
         </details>
       )}
       {content ? (
@@ -469,7 +467,7 @@ export function CompassAIReport({
           <Alert
             type={report?.state === "FAILED" ? "warning" : "info"}
             showIcon
-            title={report?.message || "读取 AI 生成状态…"}
+            title={assistantPublicText(report?.message || "读取 AI 生成状态…")}
             description={
               !["NOT_GENERATED", "PENDING", "FAILED"].includes(report?.state)
                 ? "模型配置由超级管理员在系统设置中管理。"

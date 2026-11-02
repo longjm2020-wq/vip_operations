@@ -328,7 +328,7 @@ test("GPT 朗读失败保留文字及具体错误，不启动录音", async ({ p
   await dialog.getByPlaceholder(/告诉我你想完成什么/).fill("你好");
   await dialog.getByPlaceholder(/告诉我你想完成什么/).press("Enter");
   await dialog.getByRole("button", { name: "小序朗读这条回复" }).click();
-  await expect(dialog.getByRole("alert")).toContainText("OpenRouter 额度不足");
+  await expect(dialog.getByRole("alert")).toContainText("智能服务 额度不足");
   await expect(
     dialog.getByText("你好，我是小序。今天有什么想一起完成的？", {
       exact: true,
@@ -398,7 +398,7 @@ test("语音可跨业务页，拖动不重启录音，气泡保持在窗口内�
   page,
 }) => {
   const { bubble, turns } = await fixture(page);
-  await page.getByRole("button", { name: "GPT 语音", exact: true }).click();
+  await page.getByRole("button", { name: "智能语音", exact: true }).click();
   await expect(bubble.getByRole("status")).toHaveText("我在听，你说");
   await page
     .locator(".sidebar")

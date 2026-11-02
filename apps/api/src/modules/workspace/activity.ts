@@ -1,5 +1,7 @@
 import { db, one, rows } from "../../../../../packages/database/src/index.js";
 import type { Context } from "../../core.js";
+import { canUsePersonalAssistant } from "../../../../../packages/contracts/src/personal-assistant.js";
+import { assistantPublicText } from "../../../../../packages/contracts/src/ai-presentation.js";
 import { libraryAdmin, readableSql } from "../projects/library.js";
 import { workspaceScheduleSchema } from "../../../../../packages/contracts/src/personal-workspace.js";
 import {
@@ -232,6 +234,31 @@ export async function assistantActivity(
               : "attention",
       });
     }
+  }
+  if (canUsePersonalAssistant(c.actor)) {
+    const jobs = await rows(
+      db,
+      "SELECT id,title,status,stage,progress,error_note,updated_at FROM public.personal_assistant_jobs WHERE user_id=$1::bigint AND created_at>now()-interval '7 days' ORDER BY updated_at DESC LIMIT 15",
+      c.actor.id,
+    );
+    for (const job of jobs)
+      items.push({
+        id: `assistant-job:${job.id}`,
+        kind: "task",
+        title: assistantPublicText(job.title),
+        detail: assistantPublicText(job.error_note || job.stage),
+        href: "/my-workspace?assistant=tasks",
+        at: new Date(job.updated_at).toISOString(),
+        status:
+          job.status === "DONE"
+            ? "completed"
+            : job.status === "FAILED"
+              ? "attention"
+              : job.status === "CANCELED"
+                ? "info"
+                : "running",
+        progress: { done: job.progress, total: 100 },
+      });
   }
   const rank = (item: AssistantActivity) =>
     item.status === "attention"

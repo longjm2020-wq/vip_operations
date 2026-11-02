@@ -37,6 +37,7 @@ beforeAll(async () => {
   fixture.database = new PGlite();
   await fixture.database.exec(`
     CREATE TABLE personal_workspaces(user_id bigint PRIMARY KEY, config jsonb);
+    CREATE TABLE personal_assistant_jobs(id uuid,user_id bigint,status text,title text,stage text,progress int,error_note text,updated_at timestamptz DEFAULT now(),created_at timestamptz DEFAULT now());
     CREATE TABLE projects(id bigint PRIMARY KEY,name text,status text,owner_id bigint,visibility text,
       deleted_at timestamptz,document jsonb,updated_at timestamptz DEFAULT now());
     CREATE TABLE project_members(project_id bigint,user_id bigint);
@@ -51,7 +52,7 @@ beforeAll(async () => {
 });
 beforeEach(async () => {
   await fixture.database!.exec(
-    "TRUNCATE personal_workspaces,projects,project_members,project_library_acl,project_notifications,compass_update_jobs,compass_mail_runs,jushuitan_inventory_runs",
+    "TRUNCATE personal_assistant_jobs,personal_workspaces,projects,project_members,project_library_acl,project_notifications,compass_update_jobs,compass_mail_runs,jushuitan_inventory_runs",
   );
 });
 afterAll(async () => {

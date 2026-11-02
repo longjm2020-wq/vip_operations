@@ -591,7 +591,9 @@ test("小序全站自由悬浮，拖动后记住位置，跨页面确认日程�
     dialog.getByRole("button", { name: "已加入日程草稿", exact: true }),
   ).toBeDisabled();
   expect(fixture.workspace.schedule).toHaveLength(0);
-  await dialog.getByRole("button", { name: "关闭", exact: true }).click();
+  // The fixed test clock keeps the toast above the close button; Escape is
+  // the drawer's supported keyboard close path.
+  await dialog.press("Escape");
   await page.getByRole("button", { name: "保存工作台", exact: true }).click();
   await expect.poll(() => fixture.workspace.schedule.length).toBe(1);
   expect(fixture.assistantCalls()).toBe(1);
@@ -737,12 +739,15 @@ test("个人助理仅发送后调用模型，日程须确认且可随账号保�
   await expect(
     dialog.getByRole("button", { name: "已加入日程草稿", exact: true }),
   ).toBeDisabled();
-  await dialog.getByRole("button", { name: "关闭", exact: true }).click();
+  await dialog.press("Escape");
   await page.getByRole("button", { name: "保存工作台", exact: true }).click();
   await expect.poll(() => fixture.workspace.schedule.length).toBe(1);
   await page.reload();
   await page.getByRole("button", { name: "打开个人助理", exact: true }).click();
-  await expect(dialog.getByText("实际返回：openai/gpt-6.1-sol")).toBeVisible();
+  await expect(dialog.getByText(/实际返回：|openai\/gpt/i)).toHaveCount(0);
+  await expect(
+    dialog.getByText("已整理为日程草稿，请核对后加入日程。"),
+  ).toBeVisible();
   expect(fixture.assistantCalls()).toBe(1);
 });
 

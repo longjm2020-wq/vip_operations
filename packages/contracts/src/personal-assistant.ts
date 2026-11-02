@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { agentModelId, type AgentFile } from "./assistant-agent.js";
 import {
   workspaceScheduleSchema,
   type WorkspaceActor,
@@ -20,6 +21,10 @@ export const assistantSendSchema = z
     requestId: z.string().uuid(),
     includePersonalContext: z.boolean(),
     includeMemory: z.boolean().default(false),
+    model: agentModelId.optional(),
+    imageModel: agentModelId.optional(),
+    attachmentIds: z.array(z.string().uuid()).max(6).default([]),
+    webSearch: z.boolean().default(false),
   })
   .strict();
 const scheduleDraft = z
@@ -54,6 +59,9 @@ export type AssistantMessage = {
   schedules?: WorkspaceSchedule[];
   tools?: string[];
   responseModel?: string;
+  attachments?: AgentFile[];
+  jobIds?: string[];
+  citations?: { title: string; url: string }[];
   navigation?: string;
   evidence?: AssistantEvidence[];
   actions?: AssistantAction[];

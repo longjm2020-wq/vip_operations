@@ -1,4 +1,5 @@
 import { CopyableCode } from "./copyable-code";
+import { assistantPublicText } from "../../../packages/contracts/src/ai-presentation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, App, Button, Checkbox, Collapse, Empty, Input, Modal, Pagination, Progress, Select, Space, Tag, Typography } from "antd";
 import { BulbOutlined } from "@ant-design/icons";
@@ -256,8 +257,8 @@ export function SelectionTitleAi({ open, onClose, rows, fields, initialFieldKeys
       </>}
     </Space>}>
     <div className="selection-title-ai-scope">范围：{scopeLabel || "当前筛选结果"} · {eligibleRows.length} 款{mode === "blank" ? "有空白标题" : "符合处理条件"} · 每批最多 10 款，自动分批处理</div>
-    <Alert type="info" showIcon title="先生成候选，核对后保存" description={`生成会将有权查看的商品成分、类目、现有描述、图片、所属系列、已有款名及少量标题示例发送至 OpenRouter 和所选模型供应商，并产生 API 费用。${mode === "blank" ? "已有标题保留" : "确认后替换勾选单元格的原文"}；季节、材质、工艺等必须有资料依据。`} />
-    {status && !status.ready && <Alert className="selection-title-ai-alert" type="warning" showIcon title={status.message || "AI 服务尚未配置"} action={canConfigureAi && onConfigureAi ? <Button size="small" onClick={onConfigureAi}>配置 AI 服务</Button> : undefined} description="请联系有系统设置权限的管理员配置 AI 服务后重试。" />}
+    <Alert type="info" showIcon title="先生成候选，核对后保存" description={`生成会将有权查看的商品成分、类目、现有描述、图片、所属系列、已有款名及少量标题示例发送至 已配置的智能服务，并产生 API 费用。${mode === "blank" ? "已有标题保留" : "确认后替换勾选单元格的原文"}；季节、材质、工艺等必须有资料依据。`} />
+    {status && !status.ready && <Alert className="selection-title-ai-alert" type="warning" showIcon title={assistantPublicText(status.message || "AI 服务尚未配置")} action={canConfigureAi && onConfigureAi ? <Button size="small" onClick={onConfigureAi}>配置 AI 服务</Button> : undefined} description="请联系有系统设置权限的管理员配置 AI 服务后重试。" />}
     {!status && !statusLoading && <Button size="small" onClick={() => void checkStatus()}>重新检查 AI 服务</Button>}
     <div className="selection-title-ai-options">
       <Space wrap className="selection-title-ai-mode"><strong>处理方式</strong><Select aria-label="标题处理方式" value={mode} disabled={settingsLocked} options={modeOptions} onChange={next => { setMode(next); if (next === "complete") setFieldKeys(fields.filter(field => field.label === "长标题").map(field => field.key)); }} /></Space>
@@ -280,7 +281,7 @@ export function SelectionTitleAi({ open, onClose, rows, fields, initialFieldKeys
     {!!candidates.length && <>
       <div className="selection-title-ai-review-heading"><strong>候选标题 · {candidates.length} 款</strong><span>可修改标题、取消勾选。确认后按批保存；原内容及权限发生变化时须重新生成。</span></div>
       <div className="selection-title-ai-candidates">{candidates.slice((resultPage - 1) * pageSize, resultPage * pageSize).map(({ batch, row }) => <section className="selection-title-ai-candidate" key={`${batch.planToken}:${row.id}`}>
-        <div className="selection-title-ai-candidate-heading"><strong><CopyableCode value={row.xutiStyleNo} label="款号" /></strong>{expired(batch) ? <Tag color="red">候选已过期</Tag> : <Tag>{batch.model}</Tag>}</div>
+        <div className="selection-title-ai-candidate-heading"><strong><CopyableCode value={row.xutiStyleNo} label="款号" /></strong>{expired(batch) ? <Tag color="red">候选已过期</Tag> : <Tag>智能生成</Tag>}</div>
         {row.poeticName !== undefined && <div className="selection-title-ai-name">
           <label htmlFor={`title-name-${row.id}`}>款名 / 别名（2–4 字）</label>
           <Input id={`title-name-${row.id}`} aria-label={`${row.xutiStyleNo} 款名/别名`} value={row.poeticName} maxLength={4} disabled={!!busy || expired(batch)} status={nameIssue(row) ? "error" : undefined} onChange={event => changeName(batch.planToken, row.id, event.target.value)} />

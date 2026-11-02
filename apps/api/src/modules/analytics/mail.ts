@@ -22,6 +22,7 @@ import {
 import { compassSources } from "./service.js";
 import { collectCompassBundle } from "./report-data.js";
 import { CompassAIResult, ensureAIAnalysis } from "./ai.js";
+import { assistantPublicText } from "../../../../../packages/contracts/src/ai-presentation.js";
 import {
   decryptSecret as decryptMailPassword,
   encryptSecret as encryptMailPassword,
@@ -216,26 +217,30 @@ export function buildCompassEmail(
   const aiLines =
     ai?.state === "READY" && ai.content
       ? [
-          `AI 经营分析 · ${ai.responseModel} · ${ai.provider} · ${ai.generatedAt?.toISOString() || ""}`,
-          ai.content.summary,
+          `AI 经营分析 · ${ai.generatedAt?.toISOString() || ""}`,
+          assistantPublicText(ai.content.summary),
           "经营观察",
-          ...ai.content.observations,
+          ...ai.content.observations.map(assistantPublicText),
           "建议",
-          ...ai.content.actions,
+          ...ai.content.actions.map(assistantPublicText),
           "风险与数据限制",
-          ...ai.content.risks,
+          ...ai.content.risks.map(assistantPublicText),
         ]
-      : [ai?.message || "AI 分析尚未开启，本日报使用报表汇总"];
+      : [
+          assistantPublicText(
+            ai?.message || "AI 分析尚未开启，本日报使用报表汇总",
+          ),
+        ];
   const aiHtml =
     ai?.state === "READY" && ai.content
-      ? `<h2>AI 经营分析</h2><p>模型：${esc(ai.responseModel)} · ${esc(ai.provider)} · 数据截止 ${esc(ai.reportDate)} · AI 建议供经营决策参考</p><p>${esc(ai.content.summary)}</p>${[
+      ? `<h2>AI 经营分析</h2><p>数据截止 ${esc(ai.reportDate)} · AI 建议供经营决策参考</p><p>${esc(assistantPublicText(ai.content.summary))}</p>${[
           ["经营观察", ai.content.observations],
           ["建议", ai.content.actions],
           ["风险与数据限制", ai.content.risks],
         ]
           .map(
             ([label, items]) =>
-              `<h3>${esc(label)}</h3><ul>${(items as string[]).map((v) => `<li>${esc(v)}</li>`).join("")}</ul>`,
+              `<h3>${esc(label)}</h3><ul>${(items as string[]).map((v) => `<li>${esc(assistantPublicText(v))}</li>`).join("")}</ul>`,
           )
           .join("")}`
       : `<p>AI 状态：${esc(aiLines[0])}。以下为报表汇总。</p>`;

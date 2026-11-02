@@ -205,7 +205,7 @@ export function TaskList({
               size="small"
               status={task.stage === "failed" ? "exception" : undefined}
             />
-            {task.error && <Alert type="warning" showIcon title={task.error} />}
+            {task.error && <Alert type="warning" showIcon title={assistantPublicText(task.error)} />}
             <Space wrap>
               {!["completed", "failed", "paused", "attention"].includes(
                 task.stage,
@@ -289,7 +289,7 @@ export function TaskList({
                         {task.logs.slice(-30).map((log: Item, i: number) => (
                           <div key={i}>
                             <time>{new Date(log.at).toLocaleTimeString()}</time>{" "}
-                            {log.message}
+                            {assistantPublicText(log.message)}
                           </div>
                         ))}
                       </div>
@@ -377,9 +377,9 @@ function Keyframes({
         value={review.imageService?.model}
         disabled={busy || review.locked}
         onChange={(id) => void act("select-model", undefined, id)}
-        options={(review.imageModels || []).map((m: Item) => ({
+        options={(review.imageModels || []).map((m: Item, i: number) => ({
           value: m.id,
-          label: `${m.label}${m.configured ? "" : "（未配置）"}`,
+          label: `图像创作 ${i+1}${m.configured ? "" : "（未配置）"}`,
         }))}
       />
       <Button
@@ -588,3 +588,4 @@ function FidelityPanel({
     </Space>
   );
 }
+import { assistantPublicText } from "../../../../packages/contracts/src/ai-presentation";

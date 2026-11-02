@@ -12,6 +12,24 @@ import { readFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { PGlite } from "@electric-sql/pglite";
 import type { Context } from "../../apps/api/src/core.js";
+import type { AssistantMessage } from "../../packages/contracts/src/personal-assistant.js";
+import { Readable } from "node:stream";
+import type { Request } from "express";
+import {
+  saveAgentFile,
+  ownedAgentFiles,
+  uploadAgentFile,
+  deleteAgentFile,
+  attachmentContext,
+} from "../../apps/api/src/modules/workspace/agent-files.js";
+import {
+  queueAgentJob,
+  listAgentJobs,
+  runAgentJob,
+} from "../../apps/api/src/modules/workspace/agent-jobs.js";
+import { assistantPublicText } from "../../packages/contracts/src/ai-presentation.js";
+import { pollAssistantJobs } from "../../apps/worker/src/assistant-jobs.js";
+import sharp from "sharp";
 import type { Row, Tx } from "../../packages/database/src/index.js";
 import type { AuthRequest } from "../../apps/api/src/http.js";
 
@@ -148,11 +166,19 @@ beforeAll(async () => {
     "036_personal_workspaces.sql",
     "069_personal_assistant.sql",
     "079_assistant_tools_memory.sql",
+    "083_assistant_agent.sql",
   ])
     await fixture.database.exec(
       await readFile(`packages/database/migrations/${name}`, "utf8"),
     );
   await fixture.database.exec(`
+    ALTER TABLE users ADD COLUMN username text DEFAULT 'test', ADD COLUMN display_name text DEFAULT 'Test', ADD COLUMN status text DEFAULT 'ACTIVE';
+    CREATE TABLE permissions(id bigint,code text);
+    CREATE TABLE roles(id bigint,code text);
+    CREATE TABLE user_roles(user_id bigint,role_id bigint);
+    CREATE TABLE role_permissions(role_id bigint,permission_id bigint);
+    INSERT INTO permissions VALUES(1,'analytics.read'),(2,'analytics.manage');
+    INSERT INTO roles VALUES(1,'SUPER_ADMIN'); INSERT INTO user_roles VALUES(7,1);
     CREATE TABLE projects(id bigint PRIMARY KEY,name text,status text,owner_id bigint,visibility text,deleted_at timestamptz,document jsonb,updated_at timestamptz DEFAULT now());
     CREATE TABLE project_members(project_id bigint,user_id bigint);
     CREATE TABLE project_library_acl(kind text,resource_id bigint,user_id bigint,access text);
@@ -162,7 +188,7 @@ beforeEach(async () => {
   fixture.encrypted = true;
   calls = [];
   await fixture.database!.exec(
-    "TRUNCATE personal_assistant_conversations,personal_workspaces,idempotency_records,personal_assistant_actions,personal_assistant_memories,projects,project_members,project_library_acl; UPDATE compass_ai_settings SET enabled=true,verified_at=now()",
+    "TRUNCATE personal_assistant_jobs,personal_assistant_files,personal_assistant_conversations,personal_workspaces,idempotency_records,personal_assistant_actions,personal_assistant_memories,projects,project_members,project_library_acl; UPDATE compass_ai_settings SET enabled=true,verified_at=now(); UPDATE users SET status='ACTIVE'",
   );
   fixture.inventory.mockReset();
   fixture.queueInventory.mockReset();
@@ -203,6 +229,234 @@ const toolSession = (): AssistantToolSession => ({
   evidence: [],
   actions: [],
   memorySuggestions: [],
+});
+describe("multimodal agent ownership and jobs", () => {
+  it("uploads one multipart file, isolates owners and returns only the owner's content", async () => {
+    const boundary = "xuti-test-boundary";
+    const req = Readable.from([
+      Buffer.from(
+        `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="notes.txt"\r\nContent-Type: text/plain\r\n\r\nprivate notes\r\n--${boundary}--\r\n`,
+      ),
+    ]);
+    Object.assign(req, {
+      headers: { "content-type": `multipart/form-data; boundary=${boundary}` },
+      is: () => true,
+    });
+    const file = await uploadAgentFile(actor(), req as unknown as Request);
+    expect(file.name).toBe("notes.txt");
+    expect((await attachmentContext(actor(), [file.id], true))[1].text).toBe(
+      "private notes",
+    );
+    await expect(
+      ownedAgentFiles(actor("8"), [file.id], true),
+    ).rejects.toThrow();
+    await expect(deleteAgentFile(actor("8"), file.id)).rejects.toThrow();
+  });
+  it("deduplicates creation tasks and produces a downloadable private Word artifact", async () => {
+    const requestId = randomUUID(),
+      callId = randomUUID();
+    const body = {
+      title: "周报",
+      format: "docx",
+      sections: [{ heading: "进度", text: "完成商品资料整理", rows: [] }],
+    };
+    const first = await queueAgentJob(
+      actor(),
+      "create_document",
+      JSON.stringify(body),
+      requestId,
+      callId,
+      [],
+    );
+    const duplicate = await queueAgentJob(
+      actor(),
+      "create_document",
+      JSON.stringify(body),
+      requestId,
+      callId,
+      [],
+    );
+    expect(first.id).toBe(duplicate.id);
+    expect(await listAgentJobs(actor("8"))).toEqual([]);
+    const job = (
+      await fixture.database!.query("SELECT * FROM personal_assistant_jobs")
+    ).rows[0];
+    const outputs = await runAgentJob(
+      actor(),
+      job as Row,
+      async () => {},
+      AbortSignal.timeout(10000),
+    );
+    const file = (await ownedAgentFiles(actor(), outputs, true))[0];
+    expect(file.name).toBe("周报.docx");
+    expect(Buffer.from(file.content).subarray(0, 2).toString()).toBe("PK");
+    expect(file.extracted_text).toContain("完成商品资料整理");
+    expect(calls).toHaveLength(0);
+  });
+  it("only lets the model use explicitly attached files, and keeps a task even if final prose fails", async () => {
+    const file = await saveAgentFile(
+      actor(),
+      "private.txt",
+      "text/plain",
+      Buffer.from("私有内容"),
+      "upload",
+      "私有内容",
+    );
+    await expect(
+      queueAgentJob(
+        actor(),
+        "edit_video",
+        JSON.stringify({
+          title: "clip",
+          clips: [{ fileId: file.id, start: 0, end: 1 }],
+          aspectRatio: "original",
+          mute: false,
+        }),
+        randomUUID(),
+        "call",
+        [],
+      ),
+    ).rejects.toThrow();
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(
+          toolReply("create_document", {
+            title: "工作记录",
+            format: "txt",
+            sections: [{ heading: "", text: "工作完成", rows: [] }],
+          }),
+        )
+        .mockResolvedValueOnce(
+          provider({ text: "", schedules: [], tools: [] }),
+        ),
+    );
+    const response = await sendAssistant(actor(), input());
+    expect(response.state).toBe("FAILED");
+    expect(await listAgentJobs(actor())).toHaveLength(1);
+  });
+  it("hides historic provider identities while preserving private execution metadata", async () => {
+    expect(
+      assistantPublicText(
+        "GPT 语音 · openai/gpt-6.1-sol · DeepSeek · OpenRouter",
+      ),
+    ).not.toMatch(/gpt|deepseek|openrouter|openai/i);
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          provider({
+            text: "使用 GPT 语音，可通过 OpenRouter 回复。",
+            schedules: [],
+            tools: [],
+          }),
+        ),
+    );
+    const response = await sendAssistant(actor(), input());
+    expect(JSON.stringify(response)).not.toMatch(/gpt|openrouter|openai/i);
+  });
+  it("worker claims a queued task, persists a real artifact, and does not retry interrupted work", async () => {
+    const input = {
+      title: "工作器验收",
+      format: "txt",
+      sections: [{ heading: "测试", text: "结果来自后台任务", rows: [] }],
+    };
+    const queued = await queueAgentJob(
+      actor(),
+      "create_document",
+      JSON.stringify(input),
+      randomUUID(),
+      "worker-test",
+      [],
+    );
+    await pollAssistantJobs(AbortSignal.timeout(10000));
+    const [job] = await listAgentJobs(actor());
+    expect(job).toMatchObject({ id: queued.id, status: "DONE", progress: 100 });
+    expect(job.files).toHaveLength(1);
+    await fixture.database!.exec(
+      "UPDATE personal_assistant_jobs SET status='RUNNING',heartbeat_at=now()-interval '5 minutes'",
+    );
+    await pollAssistantJobs(AbortSignal.timeout(10000));
+    expect((await listAgentJobs(actor()))[0].status).toBe("FAILED");
+    expect(
+      (await fixture.database!.query("SELECT id FROM personal_assistant_files"))
+        .rows,
+    ).toHaveLength(1);
+  });
+  it("rechecks the job owner before executing and never treats failed image requests as success", async () => {
+    await queueAgentJob(
+      actor(),
+      "create_document",
+      JSON.stringify({
+        title: "已停用",
+        format: "txt",
+        sections: [{ heading: "", text: "不能生成", rows: [] }],
+      }),
+      randomUUID(),
+      "owner-test",
+      [],
+    );
+    await fixture.database!.exec(
+      "UPDATE users SET status='DISABLED' WHERE id=7",
+    );
+    await pollAssistantJobs(AbortSignal.timeout(10000));
+    expect((await listAgentJobs(actor()))[0]).toMatchObject({
+      status: "FAILED",
+      files: [],
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response("", { status: 402 })),
+    );
+    const imageJob = {
+      id: randomUUID(),
+      kind: "image",
+      input: {
+        model: "test/image",
+        title: "生成图",
+        prompt: "蓝色格子",
+        referenceIds: [],
+        aspectRatio: "1:1",
+      },
+    };
+    await expect(
+      runAgentJob(
+        actor(),
+        imageJob,
+        async () => {},
+        AbortSignal.timeout(10000),
+      ),
+    ).rejects.toThrow("HTTP 402");
+    const png = await sharp({
+      create: { width: 16, height: 16, channels: 3, background: "#435EE5" },
+    })
+      .png()
+      .toBuffer();
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          new Response(
+            JSON.stringify({
+              model: "test/image",
+              data: [{ b64_json: png.toString("base64") }],
+            }),
+          ),
+        ),
+    );
+    const [id] = await runAgentJob(
+      actor(),
+      imageJob,
+      async () => {},
+      AbortSignal.timeout(10000),
+    );
+    const [image] = await ownedAgentFiles(actor(), [id], true);
+    expect(image.mime).toBe("image/png");
+    expect(image.content).toEqual(new Uint8Array(png));
+  });
 });
 describe("assistant business tools and private memory", () => {
   it("runs explicit voice navigation without a model call; history playback and plain text do not navigate", async () => {
@@ -637,7 +891,7 @@ describe("assistant business tools and private memory", () => {
     vi.stubGlobal("fetch", fetcher);
     const result = await sendAssistant(actor(), input());
     expect(result.state).toBe("FAILED");
-    expect(fetcher).toHaveBeenCalledTimes(3);
+    expect(fetcher).toHaveBeenCalledTimes(4);
     expect(
       (
         await fixture.database!.query(
@@ -688,7 +942,13 @@ describe("private personal assistant", () => {
     const result = await sendAssistant(actor(), body);
     expect(result.messages).toHaveLength(2);
     expect(result.state).toBe("IDLE");
-    expect(result.messages[1].responseModel).toBe("openai/gpt-6.1-sol");
+    expect(result.messages[1].responseModel).toBeUndefined();
+    const stored = await fixture.database!.query(
+      "SELECT messages FROM personal_assistant_conversations WHERE user_id=7",
+    );
+    expect(
+      ((stored.rows[0] as Row).messages as AssistantMessage[])[1].responseModel,
+    ).toBe("openai/gpt-6.1-sol");
     expect((await sendAssistant(actor(), body)).messages).toEqual(
       result.messages,
     );

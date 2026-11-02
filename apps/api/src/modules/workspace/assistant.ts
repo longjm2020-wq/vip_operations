@@ -13,6 +13,9 @@ import {
 import { type WorkspaceConfig } from "../../../../../packages/contracts/src/personal-workspace.js";
 import { fail, hash, parse, type Context } from "../../core.js";
 import { COMPASS_AI_MODEL } from "../analytics/ai.js";
+import { assistantPublicText } from "../../../../../packages/contracts/src/ai-presentation.js";
+import { agentFileView, ownedAgentFiles } from "./agent-files.js";
+import { resolveAgentModel } from "./agent-models.js";
 import { encryptionReady } from "../analytics/secrets.js";
 
 import { requireAssistant, readAssistantMemory } from "./assistant-memory.js";
@@ -39,13 +42,17 @@ function publicConversation(row: Row | undefined, s: Row | undefined) {
     availabilityMessage: ready(s)
       ? "个人助理已就绪"
       : "请管理员在 AI 模型设置中启用并验证模型连接",
-    model: COMPASS_AI_MODEL,
+    model: "小序",
     version: row?.version || 0,
     state: expired(row) ? "FAILED" : row?.state || "IDLE",
     error: expired(row)
       ? "上次请求超时，请重新发送；未自动重试"
-      : row?.error_note || "",
-    messages: row?.messages || [],
+      : assistantPublicText(row?.error_note || ""),
+    messages: (row?.messages || []).map((m: AssistantMessage) => ({
+      ...m,
+      responseModel: undefined,
+      text: m.role === "assistant" ? assistantPublicText(m.text) : m.text,
+    })),
   };
 }
 export async function readAssistant(c: Context) {
@@ -122,6 +129,12 @@ export async function sendAssistant(
   const fingerprint = hash(JSON.stringify(body));
   const s = await settings();
   if (!ready(s)) fail("AI_NOT_READY", "请管理员先启用并验证 AI 模型连接", 503);
+  const selected = await resolveAgentModel(body.model);
+  const attachments = await ownedAgentFiles(c, body.attachmentIds);
+  if (attachments.reduce((sum, f) => sum + f.size, 0) > 80 * 1024 * 1024)
+    fail("FILE_LIMIT", "本次附件合计超过80MB，请分次处理", 400);
+  if (!selected.vision && attachments.some((f) => f.mime.startsWith("image/")))
+    fail("VISION_REQUIRED", "所选能力不支持看图，请选择标有“识图”的能力", 400);
   await db.$executeRawUnsafe(
     "INSERT INTO public.personal_assistant_conversations(user_id) VALUES($1::bigint) ON CONFLICT DO NOTHING",
     c.actor.id,
@@ -153,6 +166,9 @@ export async function sendAssistant(
       role: "user",
       text: body.message,
       createdAt: new Date().toISOString(),
+      ...(attachments.length
+        ? { attachments: attachments.map(agentFileView) }
+        : {}),
     },
   ];
   const reserved = await one(
@@ -200,6 +216,13 @@ export async function sendAssistant(
           today,
           memory?.entries || null,
           body.includePersonalContext,
+          {
+            model: body.model,
+            imageModel: body.imageModel,
+            attachmentIds: body.attachmentIds,
+            webSearch: body.webSearch,
+            requestId: body.requestId,
+          },
         );
     const reply: AssistantMessage = {
       id: randomUUID(),
@@ -210,7 +233,15 @@ export async function sendAssistant(
       evidence: answer.evidence,
       actions: answer.actions,
       memorySuggestions: answer.memorySuggestions,
-      responseModel: command ? undefined : COMPASS_AI_MODEL,
+      responseModel:
+        typeof answer.responseModel === "string"
+          ? answer.responseModel
+          : command
+            ? undefined
+            : COMPASS_AI_MODEL,
+      ...("jobIds" in answer
+        ? { jobIds: answer.jobIds, citations: answer.citations }
+        : {}),
       navigation: command?.kind === "navigate" ? command.toolId : undefined,
       createdAt: new Date().toISOString(),
     };

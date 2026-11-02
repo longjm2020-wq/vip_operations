@@ -239,7 +239,7 @@ export function AssistantVoiceSettingsPanel({
       {s && !s.ready && (
         <Alert
           type="info"
-          title="GPT 语音尚未就绪"
+          title="智能语音尚未就绪"
           description={
             s.error ||
             (!s.assistantReady
@@ -251,8 +251,7 @@ export function AssistantVoiceSettingsPanel({
         />
       )}
       <Space wrap>
-        <Tag>{s?.model || "GPT Audio"}</Tag>
-        <span>{s?.voice}</span>
+        <Tag>小序智能语音</Tag>
         <Button
           type="primary"
           icon={<AudioOutlined />}
@@ -285,7 +284,7 @@ export function AssistantVoiceSettingsPanel({
       )}
       <p className="realtime-footnote">
         每段最长25秒，停顿后自动发送；轮流说话，最多10分钟。语音识别、助理回答和声音生成通过
-        OpenRouter / OpenAI
+        已配置的智能语音服务
         按用量计费。网站不保存录音，文字保存在互动对话；日程、记忆和任务仍需确认。隐藏网页或点击结束会关闭麦克风。
       </p>
     </div>

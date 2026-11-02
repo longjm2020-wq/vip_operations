@@ -3,6 +3,7 @@ import { Alert, App, Button, Checkbox, Collapse, Empty, Modal, Pagination, Progr
 import { SafetyCertificateOutlined } from "@ant-design/icons";
 import type { api } from "./api";
 import { CopyableCode } from "./copyable-code";
+import { assistantPublicText } from "../../../packages/contracts/src/ai-presentation";
 import { selectionStandardsAIPreviewSchema, standardsTargetEligible, type SelectionStandardsAIMode, type SelectionStandardsAIPreview } from "../../../packages/contracts/src/selection-standards-ai.js";
 import type { SelectionTitleAiRow } from "./selection-title-ai";
 import "./selection-standards-ai.css";
@@ -116,12 +117,12 @@ export function SelectionStandardsAi({ rows, fields, scope, apiRequest: request,
       <Button type="primary" disabled={!checkedCount} onClick={() => void apply()}>确认填入 {checkedCount} 个单元格</Button>
     </>}</Space>}>
     <p>范围：{scope} · {eligible.length} 款 · 每批 5 款，自动分批处理</p>
-    <Alert type="info" showIcon title="结合商品图片、成分、三级类目和长标题适配，核对后填入" description="会将有权查看的本款商品字段和可读取的商品图发送至 OpenRouter 及模型供应商，产生 API 费用。洗唛/吊牌图不参与适配。请核对建议及其适用条件后确认填入；无法推荐的字段保留原值，建议不代表检测合格。" />
+    <Alert type="info" showIcon title="结合商品图片、成分、三级类目和长标题适配，核对后填入" description="会将有权查看的本款商品字段和可读取的商品图发送至 已配置的智能服务，产生 API 费用。洗唛/吊牌图不参与适配。请核对建议及其适用条件后确认填入；无法推荐的字段保留原值，建议不代表检测合格。" />
     <Space wrap className="standards-options"><strong>处理方式</strong><Select aria-label="标准适配处理方式" value={mode} disabled={!!busy || !!completed.length} style={{ width: 220 }} onChange={setMode}
       options={[{ value: "blank", label: "仅填补空白" }, { value: "replace", label: "重新适配（含已有内容）" }]} /></Space>
     <div className="standards-options"><strong>处理字段　</strong>{fields.map(field => <Checkbox key={field.key} disabled={!!busy || !!completed.length} checked={keys.includes(field.key)} onChange={event => setKeys(current => event.target.checked ? [...current, field.key] : current.filter(key => key !== field.key))}>{field.label}</Checkbox>)}</div>
     {mode === "replace" && <p>逐格对照原值；只有勾选的建议值会在确认后替换，相同值默认不勾选。</p>}
-    {status && !status.ready && <Alert type="warning" showIcon title={status.message} />}
+    {status && !status.ready && <Alert type="warning" showIcon title={assistantPublicText(status.message)} />}
     {!statusLoading && !status?.ready && <Button onClick={() => void checkStatus()}>重新检查 AI 服务</Button>}
     {busy && <div role="status"><p>{busy === "generate" ? "正在适配款式" : "正在保存批次"} · {progress.done} / {progress.total}</p><Progress percent={progress.total ? Math.round(progress.done / progress.total * 100) : 0} size="small" /></div>}
     {error && <Alert type="error" showIcon title={error} />}{result && <Alert type="success" showIcon title={result} />}
