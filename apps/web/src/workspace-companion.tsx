@@ -128,6 +128,7 @@ export function WorkspaceCompanion() {
   const [dragging, setDragging] = useState(false);
   const [compact, setCompact] = useState(false);
   const working =
+    hub.voiceVisible ||
     hub.busy ||
     !!hub.voiceState ||
     hub.feed?.items?.some(

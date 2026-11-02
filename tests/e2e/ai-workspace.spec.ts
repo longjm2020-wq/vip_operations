@@ -535,7 +535,7 @@ test("小序全站自由悬浮，拖动后记住位置，跨页面确认日程�
   await page.goto("/my-workspace");
   const companion = page.locator(".workspace-companion");
   await expect(
-    companion.getByRole("button", { name: "打开 AI 个人助理", exact: true }),
+    companion.getByRole("button", { name: "与小序语音对话", exact: true }),
   ).toBeVisible();
   await expect(page.locator(".sidebar .sidebar-assistant")).toHaveCount(0);
   await page.screenshot({
@@ -543,7 +543,7 @@ test("小序全站自由悬浮，拖动后记住位置，跨页面确认日程�
     fullPage: false,
   });
   const handle = companion.getByRole("button", {
-    name: "打开 AI 个人助理",
+    name: "与小序语音对话",
     exact: true,
   });
   const before = (await handle.boundingBox())!;
@@ -587,9 +587,8 @@ test("小序全站自由悬浮，拖动后记住位置，跨页面确认日程�
   await expect(sidebar).toBeVisible();
   await expect(page.locator(".workspace-companion")).toHaveCount(1);
   await expect(page.locator(".sidebar .sidebar-assistant")).toHaveCount(0);
-  await sidebar
-    .getByRole("button", { name: "打开 AI 个人助理", exact: true })
-    .click();
+  await sidebar.getByRole("button", { name: "展开小序状态与动态" }).click();
+  await page.getByRole("button", { name: "文字对话", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: /AI 个人助理/ });
   await dialog
     .getByPlaceholder(/告诉我你想完成什么/)

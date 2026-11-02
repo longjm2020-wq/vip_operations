@@ -4,11 +4,14 @@ import {
   MoreOutlined,
   SmileOutlined,
   UndoOutlined,
+  AudioOutlined,
+  SettingOutlined,
 } from "@ant-design/icons";
 import { Popover } from "antd";
 import { useAssistantHub } from "./assistant-hub-context";
 import { activityFingerprint } from "../../../packages/contracts/src/assistant-activity";
 import "./sidebar-assistant.css";
+import { CompanionVoice } from "./companion-voice";
 
 export function SidebarAssistant({
   floating = false,
@@ -18,6 +21,7 @@ export function SidebarAssistant({
   onReset?: () => void;
 }) {
   const hub = useAssistantHub();
+  const launch = useRef<HTMLButtonElement>(null);
   const lastActive = useRef(Date.now());
   const [idle, setIdle] = useState(false),
     [greeting, setGreeting] = useState(false);
@@ -56,7 +60,9 @@ export function SidebarAssistant({
     ? hub.voiceState
     : hub.busy || running
       ? "working"
-      : hub.feedError || hub.conversation?.state === "FAILED"
+      : hub.feedError ||
+          hub.conversation?.state === "FAILED" ||
+          (hub.voiceVisible && hub.gptVoice.error)
         ? "error"
         : greeting
           ? "happy"
@@ -66,6 +72,8 @@ export function SidebarAssistant({
               ? "slacking"
               : "idle";
   const labels = {
+    connecting: "正在连接",
+    thinking: "思考中",
     listening: "正在聆听",
     speaking: "正在说话",
     working: "工作中",
@@ -118,18 +126,30 @@ export function SidebarAssistant({
     <section
       className="sidebar-assistant"
       data-state={state}
+      data-muted={hub.gptVoice.muted}
       aria-label="小序个人助理"
     >
       <button
+        ref={launch}
         className="companion-launch"
         type="button"
-        aria-label="打开 AI 个人助理"
+        aria-label={
+          hub.allowed
+            ? hub.gptVoice.state === "speaking"
+              ? "打断小序并说话"
+              : "与小序语音对话"
+            : "打开 AI 个人助理"
+        }
         title={
           floating
-            ? "点击对话 · 拖动形象自由放置 · 方向键移动 · Home 寻找空位"
+            ? "点击语音对话 · 拖动自由放置 · 方向键移动 · Home 寻找空位"
             : undefined
         }
-        onClick={() => openPanel("chat")}
+        onClick={() => {
+          setDetailsOpen(false);
+          if (hub.allowed) hub.startVoice();
+          else openPanel("activity");
+        }}
       >
         <div className="companion-stage" aria-hidden="true">
           {!floating && <div className="companion-grid" />}
@@ -206,6 +226,13 @@ export function SidebarAssistant({
                 strokeWidth="2"
                 strokeLinecap="round"
               />
+              <ellipse
+                className="companion-speaking-mouth"
+                cx="90"
+                cy="81"
+                rx="5"
+                ry="4"
+              />
               <rect
                 className="companion-chassis"
                 x="66"
@@ -280,8 +307,34 @@ export function SidebarAssistant({
             </div>
             <div className="companion-interactions">
               <button type="button" onClick={() => openPanel("chat")}>
-                和我聊聊
+                文字对话
               </button>
+              {hub.allowed && (
+                <button
+                  type="button"
+                  aria-label="与小序语音对话"
+                  title="语音对话"
+                  onClick={() => {
+                    setDetailsOpen(false);
+                    hub.startVoice();
+                  }}
+                >
+                  <AudioOutlined />
+                </button>
+              )}
+              {hub.allowed && (
+                <button
+                  type="button"
+                  aria-label="语音设置"
+                  title="语音设置"
+                  onClick={() => {
+                    setDetailsOpen(false);
+                    hub.openVoiceSettings();
+                  }}
+                >
+                  <SettingOutlined />
+                </button>
+              )}
               <button
                 type="button"
                 aria-label="和小序打个招呼"
@@ -349,7 +402,8 @@ export function SidebarAssistant({
           )}
         </button>
       </Popover>
-      {reminder && (
+      {hub.allowed && hub.voiceVisible && <CompanionVoice anchor={launch} />}
+      {reminder && !hub.voiceVisible && (
         <div className="companion-reminder" role="status" aria-live="polite">
           {reminder}
         </div>

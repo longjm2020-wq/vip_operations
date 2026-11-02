@@ -13,196 +13,23 @@
   margin-right: 8px;
   color: var(--app-accent);
 }
-.realtime-stage {
-  display: grid;
-  justify-items: center;
-  padding: 30px 0 12px;
-  text-align: center;
-}
-.realtime-orb {
-  width: 138px;
-  height: 138px;
-  position: relative;
-  isolation: isolate;
-  overflow: hidden;
-  border-radius: 50%;
-  background: radial-gradient(
-    circle at 65% 20%,
-    #9fbaff 0,
-    #567aff 28%,
-    #344bdb 61%,
-    #193699 100%
-  );
-  box-shadow:
-    0 16px 48px -14px #435ee580,
-    inset 0 0 16px #afc4ff66;
-  animation: realtime-float 5s ease-in-out infinite;
-}
-.realtime-orb > div {
-  position: absolute;
-  inset: 30% -25% -38%;
-  border-radius: 46%;
-  background: radial-gradient(
-    ellipse,
-    #edf5ff 0,
-    #c4dcffbb 28%,
-    #91b7f022 64%,
-    transparent 72%
-  );
-  filter: blur(7px);
-  animation: realtime-wave 8s linear infinite;
-}
-.realtime-orb i {
-  position: absolute;
-  inset: 58% -20% -25%;
-  border-radius: 45%;
-  background: #e3efff88;
-  filter: blur(9px);
-  animation: realtime-wave 11s linear infinite reverse;
-}
-.realtime-orb b {
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  box-shadow: inset -9px -12px 25px #eff6ff66;
-}
-.is-thinking .realtime-orb,
-.is-connecting .realtime-orb {
-  animation: realtime-float 1.5s ease-in-out infinite;
-}
-.is-speaking .realtime-orb > div {
-  animation-duration: 1.8s;
-}
-.is-speaking .realtime-orb {
-  animation: realtime-speak 0.7s ease-in-out infinite alternate;
-}
-.is-muted .realtime-orb {
-  filter: saturate(0.35);
-}
-.realtime-stage h2 {
-  margin: 28px 0 8px;
-  font-size: 23px;
-  font-weight: 600;
-  letter-spacing: 0.03em;
-}
-.realtime-stage > p {
-  color: var(--app-secondary);
-  margin: 0 0 16px;
-}
-.realtime-model {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-wrap: wrap;
-  gap: 8px;
-  font-size: 11px;
-  color: var(--app-secondary);
-}
-.realtime-controls {
-  display: flex;
-  gap: 12px;
-  justify-content: center;
-  flex-wrap: wrap;
-  padding: 4px 0 16px;
-}
-.realtime-controls .ant-btn-primary:not(.ant-btn-dangerous) {
-  min-width: 200px;
-  box-shadow: 0 8px 26px -10px var(--app-accent);
-}
 .realtime-context {
   display: flex;
   gap: 10px;
   flex-wrap: wrap;
-  justify-content: center;
 }
 .realtime-context .ant-checkbox-wrapper {
   font-size: 12px;
 }
-.realtime-footnote,
-.realtime-note {
+.realtime-footnote {
   color: var(--app-secondary);
   font-size: 12px;
   line-height: 1.8;
   margin: 0;
-}
-.realtime-note {
-  text-align: center;
-  color: var(--app-accent);
-}
-.realtime-captions {
-  max-height: 300px;
-  overflow: auto;
-  border: 1px solid var(--app-border);
-  border-radius: 16px;
-  background: var(--app-surface);
-  padding: 16px;
-}
-.realtime-caption-heading {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  font-weight: 600;
-  font-size: 12px;
-}
-.realtime-caption-heading span {
-  color: var(--app-secondary);
-  font-weight: 400;
-  font-size: 11px;
-}
-.realtime-caption-empty {
-  color: var(--app-secondary);
-  padding: 22px 0 10px;
-  text-align: center;
-  font-size: 13px;
-}
-.realtime-caption {
-  padding-top: 18px;
-}
-.realtime-caption small {
-  color: var(--app-accent);
-}
-.realtime-caption.user small {
-  color: var(--app-secondary);
-}
-.realtime-caption p {
-  margin: 6px 0 0;
-  font-size: 14px;
-  line-height: 1.7;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
 }
 .realtime-settings .ant-form-item {
   margin-bottom: 18px;
 }
 .realtime-settings .realtime-footnote {
   margin-top: 14px;
-}
-@keyframes realtime-float {
-  0%,
-  100% {
-    transform: translateY(0);
-  }
-  50% {
-    transform: translateY(-5px);
-  }
-}
-@keyframes realtime-wave {
-  to {
-    transform: rotate(360deg);
-  }
-}
-@keyframes realtime-speak {
-  from {
-    transform: scale(0.97);
-  }
-  to {
-    transform: scale(1.04);
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .realtime-orb,
-  .realtime-orb > div,
-  .realtime-orb i {
-    animation: none !important;
-  }
 }

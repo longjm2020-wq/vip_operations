@@ -49,8 +49,9 @@ import "./personal-assistant.css";
 import { useAssistantVoice } from "./use-assistant-voice";
 import { AssistantMemoryPanel } from "./assistant-memory-panel";
 import { AssistantBusinessResults } from "./assistant-business-results";
-import { AssistantRealtimePanel } from "./assistant-realtime-panel";
-import type { VoiceState } from "./use-gpt-voice";
+import { AssistantVoiceSettingsPanel } from "./assistant-realtime-panel";
+import { useGptVoice } from "./use-gpt-voice";
+import type { AssistantVoiceStatus } from "../../../packages/contracts/src/assistant-voice";
 
 export function PersonalAssistantProvider({
   children,
@@ -127,7 +128,14 @@ export function PersonalAssistantProvider({
   const [memorySuggestion, setMemorySuggestion] =
     useState<AssistantMemoryEntry | null>(null);
   const voice = useAssistantVoice(setText);
-  const [realtimeState, setRealtimeState] = useState<VoiceState>("idle");
+  const [voiceVisible, setVoiceVisible] = useState(false);
+  const voiceStatus = useQuery({
+    queryKey: ["assistant-voice", user.id],
+    enabled: allowed,
+    queryFn: async () =>
+      (await api("/my-workspace/assistant/voice")).data as AssistantVoiceStatus,
+    staleTime: 30000,
+  });
   const playbackAllowed = useRef(false);
   playbackAllowed.current = open && section === "chat" && voiceReply;
   const memory = useQuery({
@@ -163,11 +171,11 @@ export function PersonalAssistantProvider({
         : false,
   });
   const data = q.data?.data as AssistantConversation | undefined;
+  const gptVoice = useGptVoice(() => {
+    void q.refetch();
+  });
   const busy =
-    sending ||
-    data?.state === "PENDING" ||
-    !!executing ||
-    realtimeState !== "idle";
+    sending || data?.state === "PENDING" || !!executing || gptVoice.active;
   const announce = useCallback(
     (value: string) => {
       if (voiceReminders && !voice.listening && !voice.speaking && !busy)
@@ -227,7 +235,41 @@ export function PersonalAssistantProvider({
       setExecuting(null);
     }
   };
+  const closeVoice = () => {
+    gptVoice.stop();
+    setVoiceVisible(false);
+  };
+  const startVoice = () => {
+    if (!allowed) return;
+    voice.stop();
+    setOpen(false);
+    setVoiceVisible(true);
+    if (gptVoice.state === "speaking") gptVoice.interrupt();
+    else if (
+      !gptVoice.active &&
+      voiceStatus.data?.ready &&
+      !sending &&
+      !executing &&
+      data?.state !== "PENDING"
+    )
+      void gptVoice.start({
+        includePersonalContext: includeContext,
+        includeMemory,
+      });
+    else if (!voiceStatus.data?.ready) void voiceStatus.refetch();
+  };
+  const openVoiceSettings = () => {
+    closeVoice();
+    voice.stop();
+    setSection("voice");
+    setOpen(true);
+  };
   const openPanel = (tab: "chat" | "activity" | "voice" = "chat") => {
+    if (tab === "voice") {
+      startVoice();
+      return;
+    }
+    closeVoice();
     voice.stop();
     setSection(allowed ? tab : "activity");
     setOpen(true);
@@ -348,16 +390,20 @@ export function PersonalAssistantProvider({
         allowed,
         conversation: data,
         busy,
-        voiceState:
-          realtimeState === "speaking"
-            ? "speaking"
-            : realtimeState !== "idle"
-              ? "listening"
-              : voice.listening
-                ? "listening"
-                : voice.speaking
-                  ? "speaking"
-                  : undefined,
+        gptVoice,
+        voiceStatus: voiceStatus.data,
+        voiceStatusError: voiceStatus.error?.message || "",
+        voiceVisible,
+        startVoice,
+        closeVoice,
+        openVoiceSettings,
+        voiceState: gptVoice.active
+          ? (gptVoice.state as Exclude<typeof gptVoice.state, "idle">)
+          : voice.listening
+            ? "listening"
+            : voice.speaking
+              ? "speaking"
+              : undefined,
         announce,
         compose: () => sender(),
         openPanel,
@@ -441,7 +487,7 @@ export function PersonalAssistantProvider({
               ? [
                   {
                     key: "voice",
-                    label: "GPT 语音",
+                    label: "语音设置",
                     disabled: sending || !!executing,
                   },
                 ]
@@ -484,13 +530,13 @@ export function PersonalAssistantProvider({
           </div>
         )}
         {open && section === "voice" && allowed && (
-          <AssistantRealtimePanel
-            userId={user.id}
-            onState={setRealtimeState}
-            onBusinessResult={() => {
-              void q.refetch();
-            }}
-            openChat={() => openPanel("chat")}
+          <AssistantVoiceSettingsPanel
+            status={voiceStatus}
+            context={includeContext}
+            setContext={setIncludeContext}
+            memory={includeMemory}
+            setMemory={setIncludeMemory}
+            startVoice={startVoice}
           />
         )}
         {section === "memory" && allowed && (

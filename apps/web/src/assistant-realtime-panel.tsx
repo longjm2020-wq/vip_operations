@@ -4,7 +4,6 @@ import {
   App,
   Button,
   Checkbox,
-  Collapse,
   Form,
   Input,
   Popconfirm,
@@ -17,32 +16,21 @@ import {
 } from "antd";
 import {
   AudioOutlined,
-  AudioMutedOutlined,
   CustomerServiceOutlined,
-  PhoneOutlined,
   ReloadOutlined,
-  SettingOutlined,
-  StopOutlined,
 } from "@ant-design/icons";
-import { useQuery } from "@tanstack/react-query";
+import type { UseQueryResult } from "@tanstack/react-query";
 import { api } from "./api";
 import {
   voiceModels,
   voiceNames,
   type AssistantVoiceStatus,
 } from "../../../packages/contracts/src/assistant-voice";
-import { useGptVoice, type VoiceState } from "./use-gpt-voice";
+
 import { pcmBuffer, pcmBytes } from "./voice-pcm";
 import "./assistant-realtime.css";
 
 const endpoint = "/my-workspace/assistant/voice";
-const stateLabels: Record<VoiceState, string> = {
-  idle: "小序在这里",
-  connecting: "正在打开麦克风…",
-  listening: "我在听，你说",
-  thinking: "让我想一想…",
-  speaking: "小序正在说话",
-};
 
 function VoiceSettings({
   value,
@@ -212,251 +200,94 @@ function VoiceSettings({
   );
 }
 
-export function AssistantRealtimePanel({
-  userId,
-  onState,
-  onBusinessResult,
-  openChat,
+export function AssistantVoiceSettingsPanel({
+  status,
+  context,
+  setContext,
+  memory,
+  setMemory,
+  startVoice,
 }: {
-  userId: string;
-  onState: (state: VoiceState) => void;
-  onBusinessResult: () => void;
-  openChat: () => void;
+  status: UseQueryResult<AssistantVoiceStatus, Error>;
+  context: boolean;
+  setContext: (value: boolean) => void;
+  memory: boolean;
+  setMemory: (value: boolean) => void;
+  startVoice: () => void;
 }) {
-  const status = useQuery({
-    queryKey: ["assistant-voice", userId],
-    queryFn: async () => (await api(endpoint)).data as AssistantVoiceStatus,
-    staleTime: 0,
-  });
-  const voice = useGptVoice(onBusinessResult),
-    [context, setContext] = useState(false),
-    [memory, setMemory] = useState(false);
-  const bottom = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    onState(voice.state);
-    return () => onState("idle");
-  }, [voice.state, onState]);
-  useEffect(() => {
-    bottom.current?.scrollIntoView({ block: "nearest" });
-  }, [voice.captions]);
   const s = status.data;
   return (
     <div className="realtime-panel">
       <div className="realtime-heading">
         <span>
-          <CustomerServiceOutlined /> 与小序语音对话
+          <CustomerServiceOutlined /> 小序的声音
         </span>
         <Button
           type="text"
           aria-label="刷新语音配置"
           icon={<ReloadOutlined />}
           loading={status.isFetching}
-          disabled={voice.active}
           onClick={() => void status.refetch()}
         />
       </div>
+      <p className="realtime-footnote">
+        直接点击页面上的小序就能开始语音对话，她会用动作和简短字幕回应。声音由
+        AI 生成。
+      </p>
       {status.isLoading && <Spin />}
-      {status.error && (
-        <Alert type="error" title={(status.error as Error).message} />
-      )}
+      {status.error && <Alert type="error" title={status.error.message} />}
       {s && !s.ready && (
         <Alert
-          showIcon
           type="info"
           title="GPT 语音尚未就绪"
           description={
             s.error ||
             (!s.assistantReady
-              ? "工作台助理尚未就绪，请先启用并验证原有 AI 模型。"
+              ? "请先启用并验证工作台助理模型。"
               : s.canManage
-                ? "展开下方语音设置，保存 OpenRouter API Key、启用并验证。"
-                : "请联系管理员配置并启用 GPT 语音服务。 ")
+                ? "保存下方语音设置并验证后即可使用。"
+                : "请联系管理员配置并启用语音服务。")
           }
         />
       )}
-      <div
-        className={`realtime-stage is-${voice.state}${voice.muted ? " is-muted" : ""}`}
-      >
-        <div className="realtime-orb" aria-hidden="true">
-          <div />
-          <i />
-          <b />
-        </div>
-        <h2 aria-live="polite">
-          {voice.muted && voice.active
-            ? "麦克风已静音"
-            : stateLabels[voice.state]}
-        </h2>
-        <p>
-          {voice.active
-            ? "说完停顿后回复，播放时可点击打断"
-            : "用声音聊想法，也把工作安排好"}
-        </p>
-        <div className="realtime-model">
-          <Tag>{voice.model || s?.model || "GPT Audio"}</Tag>
-          <span>OpenRouter · AI 生成声音 · {s?.voice || "coral"}</span>
-        </div>
-      </div>
-      <div className="realtime-controls">
-        {!voice.active ? (
-          <Button
-            type="primary"
-            size="large"
-            shape="round"
-            icon={<AudioOutlined />}
-            disabled={!s?.ready || !voice.supported}
-            onClick={() =>
-              void voice.start({
-                includePersonalContext: context,
-                includeMemory: memory,
-              })
-            }
-          >
-            开始语音对话
-          </Button>
-        ) : (
-          <>
-            <Button
-              shape="circle"
-              size="large"
-              icon={voice.muted ? <AudioMutedOutlined /> : <AudioOutlined />}
-              disabled={voice.state === "connecting"}
-              aria-label={voice.muted ? "取消静音" : "麦克风静音"}
-              title={voice.muted ? "取消静音" : "麦克风静音"}
-              onClick={voice.toggleMute}
-            />
-            {voice.state === "listening" ? (
-              <Button
-                shape="round"
-                size="large"
-                disabled={voice.muted}
-                onClick={voice.send}
-              >
-                发送这段
-              </Button>
-            ) : (
-              <Button
-                shape="round"
-                size="large"
-                icon={<StopOutlined />}
-                disabled={voice.state !== "speaking"}
-                onClick={voice.interrupt}
-              >
-                打断并说话
-              </Button>
-            )}
-            <Button
-              danger
-              type="primary"
-              shape="round"
-              size="large"
-              icon={<PhoneOutlined />}
-              onClick={() => voice.stop()}
-            >
-              结束语音
-            </Button>
-          </>
-        )}
-      </div>
-      {!voice.supported && (
-        <Alert
-          type="warning"
-          title="当前环境不支持语音，请在 HTTPS 网站使用 Chrome / Edge 等支持 Web Audio 的浏览器"
-        />
-      )}
-      {voice.playbackBlocked && (
-        <Button icon={<CustomerServiceOutlined />} onClick={voice.play}>
-          点击允许播放声音
+      <Space wrap>
+        <Tag>{s?.model || "GPT Audio"}</Tag>
+        <span>{s?.voice}</span>
+        <Button
+          type="primary"
+          icon={<AudioOutlined />}
+          disabled={!s?.ready}
+          onClick={startVoice}
+        >
+          与小序语音对话
         </Button>
-      )}
-      {voice.error && <Alert type="error" showIcon title={voice.error} />}
-      {voice.note && (
-        <p className="realtime-note" role="status">
-          {voice.note}
-        </p>
-      )}
+      </Space>
       <div className="realtime-context">
         <Checkbox
           checked={context}
-          disabled={voice.active}
           onChange={(e) => setContext(e.target.checked)}
         >
           查询时附带已保存日程与待办
         </Checkbox>
         <Checkbox
           checked={memory}
-          disabled={voice.active}
           onChange={(e) => setMemory(e.target.checked)}
         >
           使用个人记忆
         </Checkbox>
       </div>
-      <p className="realtime-footnote">
-        每段最长25秒，说完后自动发送给 OpenRouter /
-        OpenAI，语音识别、助理回答和声音生成分别按用量计费。轮流说话，每次最长10分钟；关闭窗口或隐藏网页结束。网站不保存录音，识别文字与助理回复保存在互动对话。
-      </p>
-      {voice.hasBusiness && (
-        <Alert
-          type="info"
-          title="回复已保存到互动对话"
-          description="日程、记忆和同步任务仍需在卡片中确认。"
-          action={
-            <Button
-              size="small"
-              onClick={() => {
-                voice.stop();
-                openChat();
-              }}
-            >
-              结束并查看
-            </Button>
-          }
+      {s?.canManage && (
+        <VoiceSettings
+          key={s.version}
+          value={s}
+          saved={() => status.refetch()}
         />
       )}
-      <section
-        className="realtime-captions"
-        aria-label="语音对话文字"
-        aria-live="polite"
-        aria-relevant="additions"
-      >
-        <div className="realtime-caption-heading">
-          对话文字<span>显示本次最近40条</span>
-        </div>
-        {!voice.captions.length && (
-          <p className="realtime-caption-empty">你的声音，会在这里变成文字。</p>
-        )}
-        {voice.captions.map((item) => (
-          <div key={item.id} className={`realtime-caption ${item.role}`}>
-            <small>{item.role === "user" ? "你" : "小序"}</small>
-            <p>{item.text}</p>
-          </div>
-        ))}
-        <div ref={bottom} />
-      </section>
       <p className="realtime-footnote">
-        回答沿用工作台助理及其权限，每小时最多20条语音，也计入助理消息额度。日程、记忆和同步仍需手动确认；语音识别的商品编码请核对。每条最多朗读600字，完整内容可在互动对话查看。
+        每段最长25秒，停顿后自动发送；轮流说话，最多10分钟。语音识别、助理回答和声音生成通过
+        OpenRouter / OpenAI
+        按用量计费。网站不保存录音，文字保存在互动对话；日程、记忆和任务仍需确认。隐藏网页或点击结束会关闭麦克风。
       </p>
-      {s?.canManage && !voice.active && (
-        <Collapse
-          items={[
-            {
-              key: "settings",
-              label: (
-                <span>
-                  <SettingOutlined /> 语音设置
-                </span>
-              ),
-              children: (
-                <VoiceSettings
-                  key={s.version}
-                  value={s}
-                  saved={() => status.refetch()}
-                />
-              ),
-            },
-          ]}
-        />
-      )}
     </div>
   );
 }

@@ -550,9 +550,106 @@
 .sidebar-assistant[data-state="listening"] .companion-beacon {
   animation: assistant-listening-pulse 1s ease-in-out infinite alternate;
 }
+.companion-speaking-mouth {
+  display: none;
+  fill: #a8c1ff;
+  transform-origin: 90px 81px;
+}
 .sidebar-assistant[data-state="speaking"] .companion-mouth {
-  animation: assistant-speaking-pulse 0.4s ease-in-out infinite alternate;
-  transform-origin: center;
+  display: none;
+}
+.sidebar-assistant[data-state="speaking"] .companion-speaking-mouth {
+  display: block;
+  animation: companion-talk-mouth 0.32s ease-in-out infinite alternate;
+}
+.sidebar-assistant[data-state="speaking"] .companion-body {
+  animation: companion-talk-nod 1.8s ease-in-out infinite;
+}
+.sidebar-assistant[data-state="speaking"] .companion-arm-right {
+  animation: companion-talk-hand 1.3s ease-in-out infinite;
+}
+.sidebar-assistant[data-state="listening"] .companion-body {
+  animation: companion-listen-lean 3s ease-in-out infinite;
+}
+.sidebar-assistant[data-state="listening"] .companion-ear {
+  animation: assistant-listening-pulse 1.2s ease-in-out infinite alternate;
+}
+.sidebar-assistant[data-state="thinking"] .companion-body {
+  animation: companion-think 2.4s ease-in-out infinite;
+}
+.sidebar-assistant[data-state="thinking"] .companion-arm-right {
+  transform: rotate(-42deg);
+}
+.sidebar-assistant[data-state="thinking"] .companion-eyes {
+  animation: companion-think-eyes 2.4s ease-in-out infinite;
+}
+.sidebar-assistant[data-state="connecting"] .companion-beacon {
+  animation: companion-pulse 0.7s ease-in-out infinite;
+}
+.sidebar-assistant[data-muted="true"] .companion-ear {
+  animation: none;
+  opacity: 0.6;
+}
+@keyframes companion-talk-mouth {
+  0%,
+  35% {
+    transform: scaleY(0.3);
+  }
+  65%,
+  100% {
+    transform: scaleY(1.2);
+  }
+}
+@keyframes companion-talk-nod {
+  0%,
+  100% {
+    transform: translateY(0) rotate(-2deg);
+  }
+  40% {
+    transform: translateY(-3px) rotate(2deg);
+  }
+  70% {
+    transform: translateY(1px);
+  }
+}
+@keyframes companion-talk-hand {
+  0%,
+  100% {
+    transform: rotate(-5deg);
+  }
+  45% {
+    transform: rotate(-24deg);
+  }
+  70% {
+    transform: rotate(-12deg);
+  }
+}
+@keyframes companion-listen-lean {
+  0%,
+  100% {
+    transform: rotate(5deg);
+  }
+  50% {
+    transform: rotate(8deg) translateY(-2px);
+  }
+}
+@keyframes companion-think {
+  0%,
+  100% {
+    transform: rotate(-5deg);
+  }
+  50% {
+    transform: rotate(-8deg) translateY(-3px);
+  }
+}
+@keyframes companion-think-eyes {
+  0%,
+  100% {
+    transform: translate(-2px, -2px);
+  }
+  50% {
+    transform: translate(1px, -3px) scaleY(0.85);
+  }
 }
 @keyframes assistant-listening-pulse {
   from {
