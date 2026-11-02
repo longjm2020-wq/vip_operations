@@ -28,10 +28,67 @@ import {
   saveAssistantMemory,
 } from "./assistant-memory.js";
 import { executeAssistantAction } from "./assistant-actions.js";
+import {
+  readVoiceStatus,
+  saveVoiceSettings,
+  verifyVoiceSettings,
+  runVoiceTurn,
+  voiceSafeError,
+} from "./assistant-voice.js";
 
 // The owner always comes from the authenticated session; there is no user-id route.
 @Controller("api/v1/my-workspace")
 export class PersonalWorkspaceController {
+  @Get("assistant/voice")
+  async voiceStatus(
+    @Req() request: AuthRequest,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    response.setHeader("Cache-Control", "private, no-store");
+    return readVoiceStatus(context(request));
+  }
+  @Post("assistant/voice/settings")
+  async voiceSettings(@Req() request: AuthRequest, @Body() input: unknown) {
+    return saveVoiceSettings(context(request), input);
+  }
+  @Post("assistant/voice/verify")
+  async voiceVerify(@Req() request: AuthRequest) {
+    return verifyVoiceSettings(context(request));
+  }
+  @Post("assistant/voice/turn")
+  async voiceTurn(
+    @Req() request: AuthRequest,
+    @Body() input: unknown,
+    @Res() response: Response,
+  ) {
+    response.setHeader("Cache-Control", "private, no-store");
+    response.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
+    response.setHeader("X-Accel-Buffering", "no");
+    const controller = new AbortController();
+    const closed = () => controller.abort();
+    response.on("close", closed);
+    const emit = (event: unknown) => {
+      if (!response.destroyed) response.write(JSON.stringify(event) + "\n");
+    };
+    // Keep proxies alive during business queries without persisting streamed audio.
+    const timer = setInterval(() => {
+      if (!response.destroyed) response.write("\n");
+    }, 15000);
+    try {
+      await runVoiceTurn(
+        context(request),
+        input,
+        AbortSignal.any([controller.signal, AbortSignal.timeout(235000)]),
+        emit,
+      );
+    } catch (e) {
+      emit({ type: "error", message: voiceSafeError(e) });
+    } finally {
+      clearInterval(timer);
+      response.off("close", closed);
+      response.end();
+    }
+  }
   @Get("activity")
   async activity(
     @Req() request: AuthRequest,

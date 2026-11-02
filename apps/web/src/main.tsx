@@ -77,7 +77,7 @@ const ProjectNotifications = React.lazy(() => import("./projects").then(module =
 import "./style.css";
 import "./workspace-shell.css";
 import { AppearanceProvider, ThemeToggle } from "./appearance";
-const coreFeatureSummary = "AI 个人助理 · 经营分析 · 聚水潭库存同步 · 协作表格 · AIGC";
+const coreFeatureSummary = "AI 个人助理与语音 · 经营分析 · 聚水潭库存同步 · 协作表格 · AIGC";
 const SupplierRegister = React.lazy(() => import("./supply").then(module => ({ default: module.SupplierRegister })));
 const SupplyProfile = React.lazy(() => import("./supply").then(module => ({ default: module.SupplyProfile })));
 const SupplyProducts = React.lazy(() => import("./supply").then(module => ({ default: module.SupplyProducts })));

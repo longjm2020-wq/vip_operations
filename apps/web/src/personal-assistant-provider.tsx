@@ -27,6 +27,7 @@ import {
   AudioOutlined,
   SoundOutlined,
   StopOutlined,
+  CustomerServiceOutlined,
 } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router-dom";
@@ -48,6 +49,8 @@ import "./personal-assistant.css";
 import { useAssistantVoice } from "./use-assistant-voice";
 import { AssistantMemoryPanel } from "./assistant-memory-panel";
 import { AssistantBusinessResults } from "./assistant-business-results";
+import { AssistantRealtimePanel } from "./assistant-realtime-panel";
+import type { VoiceState } from "./use-gpt-voice";
 
 export function PersonalAssistantProvider({
   children,
@@ -61,9 +64,9 @@ export function PersonalAssistantProvider({
     permissions: user.permissions,
     roleCodes: user.roleCodes,
   });
-  const [section, setSection] = useState<"chat" | "activity" | "memory">(
-    "chat",
-  );
+  const [section, setSection] = useState<
+    "chat" | "activity" | "memory" | "voice"
+  >("chat");
   const [pendingSchedules, setPendingSchedules] = useState<WorkspaceSchedule[]>(
     [],
   );
@@ -124,8 +127,9 @@ export function PersonalAssistantProvider({
   const [memorySuggestion, setMemorySuggestion] =
     useState<AssistantMemoryEntry | null>(null);
   const voice = useAssistantVoice(setText);
+  const [realtimeState, setRealtimeState] = useState<VoiceState>("idle");
   const playbackAllowed = useRef(false);
-  playbackAllowed.current = open && voiceReply;
+  playbackAllowed.current = open && section === "chat" && voiceReply;
   const memory = useQuery({
     queryKey: ["assistant-memory", user.id],
     enabled: allowed && (section === "memory" || includeMemory),
@@ -159,7 +163,11 @@ export function PersonalAssistantProvider({
         : false,
   });
   const data = q.data?.data as AssistantConversation | undefined;
-  const busy = sending || data?.state === "PENDING" || !!executing;
+  const busy =
+    sending ||
+    data?.state === "PENDING" ||
+    !!executing ||
+    realtimeState !== "idle";
   const announce = useCallback(
     (value: string) => {
       if (voiceReminders && !voice.listening && !voice.speaking && !busy)
@@ -219,7 +227,8 @@ export function PersonalAssistantProvider({
       setExecuting(null);
     }
   };
-  const openPanel = (tab: "chat" | "activity" = "chat") => {
+  const openPanel = (tab: "chat" | "activity" | "voice" = "chat") => {
+    voice.stop();
     setSection(allowed ? tab : "activity");
     setOpen(true);
   };
@@ -282,6 +291,16 @@ export function PersonalAssistantProvider({
         autoSize={{ minRows: inDrawer ? 2 : 1, maxRows: 5 }}
       />
       <div className="assistant-compose-meta">
+        <Button
+          type="text"
+          size="small"
+          icon={<CustomerServiceOutlined />}
+          aria-label="GPT 语音"
+          disabled={sending || !!executing}
+          onClick={() => openPanel("voice")}
+        >
+          GPT 语音
+        </Button>
         <Checkbox
           checked={includeContext}
           onChange={(e) => setIncludeContext(e.target.checked)}
@@ -329,11 +348,16 @@ export function PersonalAssistantProvider({
         allowed,
         conversation: data,
         busy,
-        voiceState: voice.listening
-          ? "listening"
-          : voice.speaking
+        voiceState:
+          realtimeState === "speaking"
             ? "speaking"
-            : undefined,
+            : realtimeState !== "idle"
+              ? "listening"
+              : voice.listening
+                ? "listening"
+                : voice.speaking
+                  ? "speaking"
+                  : undefined,
         announce,
         compose: () => sender(),
         openPanel,
@@ -408,16 +432,25 @@ export function PersonalAssistantProvider({
         <Tabs
           activeKey={section}
           onChange={(key) => {
-            setSection(key as "chat" | "activity" | "memory");
+            setSection(key as "chat" | "activity" | "memory" | "voice");
             voice.stop();
           }}
           items={[
             ...(allowed ? [{ key: "chat", label: "互动对话" }] : []),
+            ...(allowed
+              ? [
+                  {
+                    key: "voice",
+                    label: "GPT 语音",
+                    disabled: sending || !!executing,
+                  },
+                ]
+              : []),
             { key: "activity", label: "动态反馈" },
             ...(allowed ? [{ key: "memory", label: "个人记忆" }] : []),
           ]}
         />
-        {allowed && (
+        {allowed && section !== "voice" && (
           <div className="assistant-voice-options">
             <Checkbox
               checked={voiceReply}
@@ -449,6 +482,16 @@ export function PersonalAssistantProvider({
               </Button>
             )}
           </div>
+        )}
+        {open && section === "voice" && allowed && (
+          <AssistantRealtimePanel
+            userId={user.id}
+            onState={setRealtimeState}
+            onBusinessResult={() => {
+              void q.refetch();
+            }}
+            openChat={() => openPanel("chat")}
+          />
         )}
         {section === "memory" && allowed && (
           <AssistantMemoryPanel
