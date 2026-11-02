@@ -54,6 +54,7 @@ export type AssistantMessage = {
   schedules?: WorkspaceSchedule[];
   tools?: string[];
   responseModel?: string;
+  navigation?: string;
   evidence?: AssistantEvidence[];
   actions?: AssistantAction[];
   memorySuggestions?: { title: string; content: string }[];

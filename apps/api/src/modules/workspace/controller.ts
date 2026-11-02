@@ -33,7 +33,8 @@ import {
   saveVoiceSettings,
   verifyVoiceSettings,
   runVoiceTurn,
-  voiceSafeError,
+  runVoiceSpeech,
+  voiceErrorEvent,
 } from "./assistant-voice.js";
 
 // The owner always comes from the authenticated session; there is no user-id route.
@@ -61,6 +62,22 @@ export class PersonalWorkspaceController {
     @Body() input: unknown,
     @Res() response: Response,
   ) {
+    return this.streamVoice(request, input, response, runVoiceTurn);
+  }
+  @Post("assistant/voice/speech")
+  async voiceSpeech(
+    @Req() request: AuthRequest,
+    @Body() input: unknown,
+    @Res() response: Response,
+  ) {
+    return this.streamVoice(request, input, response, runVoiceSpeech);
+  }
+  private async streamVoice(
+    request: AuthRequest,
+    input: unknown,
+    response: Response,
+    run: typeof runVoiceTurn,
+  ) {
     response.setHeader("Cache-Control", "private, no-store");
     response.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
     response.setHeader("X-Accel-Buffering", "no");
@@ -75,14 +92,14 @@ export class PersonalWorkspaceController {
       if (!response.destroyed) response.write("\n");
     }, 15000);
     try {
-      await runVoiceTurn(
+      await run(
         context(request),
         input,
         AbortSignal.any([controller.signal, AbortSignal.timeout(235000)]),
         emit,
       );
     } catch (e) {
-      emit({ type: "error", message: voiceSafeError(e) });
+      emit(voiceErrorEvent(e));
     } finally {
       clearInterval(timer);
       response.off("close", closed);

@@ -18,6 +18,8 @@ import { encryptionReady } from "../analytics/secrets.js";
 import { requireAssistant, readAssistantMemory } from "./assistant-memory.js";
 import { askAssistantModel } from "./assistant-model.js";
 import { assistantActionViews } from "./assistant-actions.js";
+import { parseVoiceCommand } from "../../../../../packages/contracts/src/assistant-voice-commands.js";
+import { runAssistantVoiceCommand } from "./assistant-voice-commands.js";
 export { parseAssistantAnswer } from "./assistant-model.js";
 
 async function settings() {
@@ -110,7 +112,11 @@ export function assistantContext(
       })),
   };
 }
-export async function sendAssistant(c: Context, input: unknown) {
+export async function sendAssistant(
+  c: Context,
+  input: unknown,
+  voice?: { signal: AbortSignal },
+) {
   requireAssistant(c);
   const body = parse(assistantSendSchema, input);
   const fingerprint = hash(JSON.stringify(body));
@@ -135,6 +141,7 @@ export async function sendAssistant(c: Context, input: unknown) {
   if (existing.version !== body.version)
     fail("VERSION_CONFLICT", "对话已在其他页面更新，请刷新后继续", 409);
   if (
+    !voice &&
     Date.now() - new Date(existing.rate_window).getTime() < 3600000 &&
     existing.request_count >= 20
   )
@@ -150,12 +157,13 @@ export async function sendAssistant(c: Context, input: unknown) {
   ];
   const reserved = await one(
     db,
-    "UPDATE public.personal_assistant_conversations SET messages=$3::jsonb,state='PENDING',request_id=$4::uuid,request_hash=$5,pending_since=now(),error_note='',version=version+1,request_count=CASE WHEN rate_window<now()-interval '1 hour' THEN 1 ELSE request_count+1 END,rate_window=CASE WHEN rate_window<now()-interval '1 hour' THEN now() ELSE rate_window END,updated_at=now() WHERE user_id=$1::bigint AND version=$2 RETURNING *",
+    "UPDATE public.personal_assistant_conversations SET messages=$3::jsonb,state='PENDING',request_id=$4::uuid,request_hash=$5,pending_since=now(),error_note='',version=version+1,request_count=CASE WHEN $6 THEN request_count WHEN rate_window<now()-interval '1 hour' THEN 1 ELSE request_count+1 END,rate_window=CASE WHEN NOT $6 AND rate_window<now()-interval '1 hour' THEN now() ELSE rate_window END,updated_at=now() WHERE user_id=$1::bigint AND version=$2 RETURNING *",
     c.actor.id,
     body.version,
     JSON.stringify(messages),
     body.requestId,
     fingerprint,
+    !!voice,
   );
   if (!reserved)
     fail("VERSION_CONFLICT", "对话已在其他页面更新，请刷新后继续", 409);
@@ -174,17 +182,25 @@ export async function sendAssistant(c: Context, input: unknown) {
         )
       : undefined;
     const memory = body.includeMemory ? await readAssistantMemory(c) : null;
-    const answer = await askAssistantModel(
-      c,
-      s!,
-      messages,
-      body.includePersonalContext
-        ? assistantContext(stored?.config, today)
-        : null,
-      today,
-      memory?.entries || null,
-      body.includePersonalContext,
-    );
+    const command = voice && parseVoiceCommand(body.message);
+    const answer = command
+      ? await runAssistantVoiceCommand(
+          c,
+          command,
+          body.requestId,
+          voice!.signal,
+        )
+      : await askAssistantModel(
+          c,
+          s!,
+          messages,
+          body.includePersonalContext
+            ? assistantContext(stored?.config, today)
+            : null,
+          today,
+          memory?.entries || null,
+          body.includePersonalContext,
+        );
     const reply: AssistantMessage = {
       id: randomUUID(),
       role: "assistant",
@@ -194,7 +210,8 @@ export async function sendAssistant(c: Context, input: unknown) {
       evidence: answer.evidence,
       actions: answer.actions,
       memorySuggestions: answer.memorySuggestions,
-      responseModel: COMPASS_AI_MODEL,
+      responseModel: command ? undefined : COMPASS_AI_MODEL,
+      navigation: command?.kind === "navigate" ? command.toolId : undefined,
       createdAt: new Date().toISOString(),
     };
     await db.$transaction(async (tx) => {
@@ -208,7 +225,7 @@ export async function sendAssistant(c: Context, input: unknown) {
       if (!saved) return;
       for (const action of answer.actions)
         await tx.$executeRawUnsafe(
-          "INSERT INTO public.personal_assistant_actions(id,user_id,kind,note) VALUES($1::uuid,$2::bigint,$3,$4)",
+          "INSERT INTO public.personal_assistant_actions(id,user_id,kind,note) VALUES($1::uuid,$2::bigint,$3,$4) ON CONFLICT(id) DO NOTHING",
           action.id,
           c.actor.id,
           action.kind,

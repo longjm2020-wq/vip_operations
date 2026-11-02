@@ -26,7 +26,10 @@ type Connection = {
   expiry?: ReturnType<typeof setTimeout>;
   options: Options;
 };
-export function useGptVoice(onResult: () => void) {
+export function useGptVoice(
+  onResult: () => void,
+  onNavigate: (toolId: string) => void,
+) {
   const [state, setState] = useState<VoiceState>("idle"),
     [muted, setMuted] = useState(false);
   const [error, setError] = useState(""),
@@ -40,8 +43,10 @@ export function useGptVoice(onResult: () => void) {
   const connection = useRef<Connection | null>(null),
     epoch = useRef(0),
     starting = useRef(false),
-    callback = useRef(onResult);
+    callback = useRef(onResult),
+    navigate = useRef(onNavigate);
   callback.current = onResult;
+  navigate.current = onNavigate;
   const supported =
     window.isSecureContext &&
     typeof navigator.mediaDevices?.getUserMedia === "function" &&
@@ -157,6 +162,11 @@ export function useGptVoice(onResult: () => void) {
             if (!line.trim()) continue;
             const event = JSON.parse(line) as VoiceEvent;
             if (event.type === "error") throw Error(event.message);
+            if (event.type === "retry-listening") {
+              // Discard this segment; keep the device/session and await fresh speech.
+              completed = true;
+              setError("");
+            }
             if (event.type === "transcript") addCaption("user", event.text);
             if (event.type === "reply") {
               addCaption("assistant", event.text);
@@ -164,6 +174,7 @@ export function useGptVoice(onResult: () => void) {
               callback.current();
             }
             if (event.type === "model") setModel(event.model);
+            if (event.type === "navigate") navigate.current(event.toolId);
             if (event.type === "stage")
               setNote(
                 event.stage === "transcribing"

@@ -314,3 +314,19 @@
     gap: 2px;
   }
 }
+.assistant-speech-status {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0 16px;
+  color: var(--app-secondary);
+  font-size: 12px;
+}
+.assistant-speech-status [role="status"] {
+  color: var(--app-accent);
+}
+.assistant-speech-status [role="alert"] {
+  width: 100%;
+  color: var(--app-text);
+}

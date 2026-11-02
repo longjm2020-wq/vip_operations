@@ -56,6 +56,8 @@ import {
   saveVoiceSettings,
   verifyVoiceSettings,
   runVoiceTurn,
+  runVoiceSpeech,
+  voiceErrorEvent,
   validateVoiceWav,
   streamVoiceSpeech,
   voiceSafeError,
@@ -242,6 +244,7 @@ describe("OpenRouter GPT voice", () => {
         includePersonalContext: false,
         includeMemory: false,
       }),
+      { signal: expect.any(AbortSignal) },
     );
     expect(events.map((e) => e.type)).toEqual([
       "stage",
@@ -289,7 +292,7 @@ describe("OpenRouter GPT voice", () => {
       ).rows[0].state,
     ).toBe("FAILED");
   });
-  it("enforces concurrency and hourly quotas before any provider call", async () => {
+  it("enforces concurrency but allows voice beyond 20 requests", async () => {
     await fixture.database!.query(
       "INSERT INTO assistant_voice_requests(id,user_id) VALUES($1,7)",
       [randomUUID()],
@@ -297,16 +300,97 @@ describe("OpenRouter GPT voice", () => {
     await expect(
       runVoiceTurn(actor(), input(), new AbortController().signal, () => {}),
     ).rejects.toBeDefined();
+    expect(fetch).not.toHaveBeenCalled();
     await fixture.database!.exec("TRUNCATE assistant_voice_requests");
     for (let i = 0; i < 20; i++)
       await fixture.database!.query(
         "INSERT INTO assistant_voice_requests(id,user_id,state) VALUES($1,7,'DONE')",
         [randomUUID()],
       );
+    await runVoiceTurn(
+      actor(),
+      input(),
+      new AbortController().signal,
+      () => {},
+    );
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+  it("returns to listening only for unusable recognition, without asking the assistant", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          model: config.model,
+          choices: [{ message: { content: "[无语音]" } }],
+        }),
+      ),
+    );
+    let failure: unknown;
+    try {
+      await runVoiceTurn(
+        actor(),
+        input(),
+        new AbortController().signal,
+        () => {},
+      );
+    } catch (e) {
+      failure = e;
+    }
+    expect(voiceErrorEvent(failure)).toEqual({ type: "retry-listening" });
+    expect(fixture.send).not.toHaveBeenCalled();
+    expect(voiceErrorEvent(new Error("network"))).toMatchObject({
+      type: "error",
+    });
+    await runVoiceTurn(
+      actor(),
+      input(),
+      new AbortController().signal,
+      () => {},
+    );
+    expect(fixture.send).toHaveBeenCalledTimes(1);
+  });
+  it("reads only the owner's saved reply, uses the configured voice and never reruns business work", async () => {
+    const messageId = randomUUID(),
+      b = { id: randomUUID(), messageId };
+    fixture.read.mockImplementation(async (c: Context) => ({
+      ready: true,
+      state: "IDLE",
+      version: 0,
+      messages:
+        c.actor.id === "7"
+          ? [{ id: messageId, role: "assistant", text: "已提交后台任务。" }]
+          : [],
+    }));
     await expect(
-      runVoiceTurn(actor(), input(), new AbortController().signal, () => {}),
+      runVoiceSpeech(
+        actor(false, "8"),
+        b,
+        new AbortController().signal,
+        () => {},
+      ),
+    ).rejects.toBeDefined();
+    await expect(
+      runVoiceSpeech(
+        actor(),
+        { ...b, text: "伪造正文" },
+        new AbortController().signal,
+        () => {},
+      ),
     ).rejects.toBeDefined();
     expect(fetch).not.toHaveBeenCalled();
+    await fixture.database!.exec(
+      "UPDATE assistant_voice_settings SET voice='shimmer' WHERE id=1",
+    );
+    await runVoiceSpeech(actor(), b, new AbortController().signal, () => {});
+    const body = JSON.parse(vi.mocked(fetch).mock.calls[0][1]!.body as string);
+    expect(body.audio.voice).toBe("shimmer");
+    expect(JSON.parse(body.messages[1].content)).toEqual({
+      text: "已提交后台任务。",
+    });
+    expect(fixture.send).not.toHaveBeenCalled();
+    await expect(
+      runVoiceSpeech(actor(), b, new AbortController().signal, () => {}),
+    ).rejects.toBeDefined();
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
   it("verifies actual generated audio and retains safe failure status without provider secrets", async () => {
     const success = await verifyVoiceSettings(actor(true));

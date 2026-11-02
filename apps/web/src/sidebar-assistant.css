@@ -445,6 +445,9 @@
 .workspace-companion.is-roaming .companion-count {
   pointer-events: none;
 }
+.workspace-companion.is-voicing {
+  z-index: 1050;
+}
 .workspace-companion[data-passing="true"] {
   visibility: hidden !important;
 }

@@ -75,6 +75,7 @@ import {
 } from "../../apps/api/src/modules/workspace/assistant.js";
 import { PersonalWorkspaceController } from "../../apps/api/src/modules/workspace/controller.js";
 import { workspaceSaveSchema } from "../../packages/contracts/src/personal-workspace.js";
+import { parseVoiceCommand } from "../../packages/contracts/src/assistant-voice-commands.js";
 import {
   readAssistantMemory,
   saveAssistantMemory,
@@ -204,6 +205,91 @@ const toolSession = (): AssistantToolSession => ({
   memorySuggestions: [],
 });
 describe("assistant business tools and private memory", () => {
+  it("runs explicit voice navigation without a model call; history playback and plain text do not navigate", async () => {
+    const result = await sendAssistant(
+      actor(),
+      { ...input(), message: "打开经营分析" },
+      { signal: new AbortController().signal },
+    );
+    expect(result.messages.at(-1)).toMatchObject({
+      navigation: "analytics",
+      text: "正在为你打开经营分析。",
+    });
+    expect(fetch).not.toHaveBeenCalled();
+    const next = await sendAssistant(actor(), {
+      ...input(result.version),
+      message: "打开经营分析",
+    });
+    expect(next.messages.at(-1).navigation).toBeUndefined();
+    expect(fetch).toHaveBeenCalledTimes(1);
+    for (const text of [
+      "不要更新罗盘数据",
+      "能更新罗盘数据吗",
+      "如果更新罗盘数据会怎样",
+      "打开经营分析并更新罗盘数据",
+      "更新罗盘数据？",
+    ])
+      expect(parseVoiceCommand(text)).toBeUndefined();
+  });
+  it("submits an authorized spoken sync once and records its actual result", async () => {
+    fixture.queueCompass.mockResolvedValue({
+      job: { id: "91", status: "QUEUED" },
+    });
+    const b = { ...input(), message: "小序，请帮我更新罗盘数据。" };
+    const options = { signal: new AbortController().signal };
+    const result = await sendAssistant(actor(), b, options);
+    expect(result.messages.at(-1).text).toContain("已提交后台任务");
+    expect(result.messages.at(-1).actions[0]).toMatchObject({
+      status: "SUBMITTED",
+      jobId: "91",
+    });
+    expect(fixture.queueCompass).toHaveBeenCalledTimes(1);
+    await sendAssistant(actor(), b, options);
+    expect(fixture.queueCompass).toHaveBeenCalledTimes(1);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+  it("does not bypass sync permissions and does not turn service failure into success", async () => {
+    const c = actor();
+    c.actor.permissions = ["product.read", "product.update"];
+    const denied = await sendAssistant(
+      c,
+      { ...input(), message: "更新罗盘数据" },
+      { signal: new AbortController().signal },
+    );
+    expect(denied.state).toBe("FAILED");
+    expect(fixture.queueCompass).not.toHaveBeenCalled();
+    fixture.queueCompass.mockRejectedValue(new Error("worker unavailable"));
+    const failed = await sendAssistant(
+      actor(),
+      { ...input(denied.version), message: "更新罗盘数据" },
+      { signal: new AbortController().signal },
+    );
+    expect(failed.messages.at(-1).actions[0].status).toBe("FAILED");
+    expect(failed.messages.at(-1).text).toContain("暂不可用");
+  });
+  it("does not charge voice against the text quota or block it after 20 messages", async () => {
+    const c = actor();
+    const first = await sendAssistant(c, input());
+    await fixture.database!.exec(
+      "UPDATE personal_assistant_conversations SET request_count=20",
+    );
+    const voice = await sendAssistant(
+      c,
+      { ...input(first.version), message: "你好" },
+      { signal: new AbortController().signal },
+    );
+    expect(voice.state).toBe("IDLE");
+    expect(
+      (
+        await fixture.database!.query<{ request_count: number }>(
+          "SELECT request_count FROM personal_assistant_conversations",
+        )
+      ).rows[0].request_count,
+    ).toBe(20);
+    await expect(sendAssistant(c, input(voice.version))).rejects.toMatchObject({
+      response: { error: { code: "AI_RATE_LIMIT" } },
+    });
+  });
   it("saves memory only for its owner, detects edits from another tab and sends memory only by opt-in", async () => {
     const mine = {
       id: randomUUID(),

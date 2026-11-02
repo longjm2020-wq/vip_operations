@@ -42,6 +42,9 @@ export const voiceTurnSchema = z
     includeMemory: z.boolean().default(false),
   })
   .strict();
+export const voiceSpeechSchema = z
+  .object({ id: z.string().uuid(), messageId: z.string().uuid() })
+  .strict();
 export type AssistantVoiceStatus = {
   ready: boolean;
   enabled: boolean;
@@ -63,5 +66,7 @@ export type VoiceEvent =
   | { type: "audio"; data: string }
   | { type: "model"; model: string }
   | { type: "spoken"; text: string }
+  | { type: "retry-listening" }
+  | { type: "navigate"; toolId: string }
   | { type: "done" }
   | { type: "error"; message: string };

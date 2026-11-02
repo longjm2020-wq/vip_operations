@@ -418,7 +418,7 @@ export function WorkspaceCompanion() {
   return createPortal(
     <div
       ref={panel}
-      className={`workspace-companion${moving ? " is-roaming" : ""}${dragging ? " is-dragging" : ""}${compact ? " is-compact" : ""}`}
+      className={`workspace-companion${hub.voiceState ? " is-voicing" : ""}${moving ? " is-roaming" : ""}${dragging ? " is-dragging" : ""}${compact ? " is-compact" : ""}`}
       style={{
         transform: `translate3d(${position?.x || 0}px, ${position?.y || 0}px, 0)`,
         visibility: position ? "visible" : "hidden",

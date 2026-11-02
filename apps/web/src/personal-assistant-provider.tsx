@@ -51,6 +51,7 @@ import { AssistantMemoryPanel } from "./assistant-memory-panel";
 import { AssistantBusinessResults } from "./assistant-business-results";
 import { AssistantVoiceSettingsPanel } from "./assistant-realtime-panel";
 import { useGptVoice } from "./use-gpt-voice";
+import { useGptSpeech } from "./use-gpt-speech";
 import type { AssistantVoiceStatus } from "../../../packages/contracts/src/assistant-voice";
 
 export function PersonalAssistantProvider({
@@ -128,6 +129,7 @@ export function PersonalAssistantProvider({
   const [memorySuggestion, setMemorySuggestion] =
     useState<AssistantMemoryEntry | null>(null);
   const voice = useAssistantVoice(setText);
+  const speech = useGptSpeech();
   const [voiceVisible, setVoiceVisible] = useState(false);
   const voiceStatus = useQuery({
     queryKey: ["assistant-voice", user.id],
@@ -171,19 +173,42 @@ export function PersonalAssistantProvider({
         : false,
   });
   const data = q.data?.data as AssistantConversation | undefined;
-  const gptVoice = useGptVoice(() => {
-    void q.refetch();
-  });
+  const gptVoice = useGptVoice(
+    () => {
+      void q.refetch();
+      void activity.refetch();
+    },
+    (toolId) => {
+      const tool = available.find((item) => item.id === toolId);
+      if (tool) navigate(tool.path);
+    },
+  );
   const busy =
     sending || data?.state === "PENDING" || !!executing || gptVoice.active;
   const announce = useCallback(
     (value: string) => {
-      if (voiceReminders && !voice.listening && !voice.speaking && !busy)
+      if (
+        voiceReminders &&
+        !voice.listening &&
+        !voice.speaking &&
+        !speech.active &&
+        !busy
+      )
         voice.speak(value);
     },
-    [voiceReminders, voice.listening, voice.speaking, busy, voice.speak],
+    [
+      voiceReminders,
+      voice.listening,
+      voice.speaking,
+      speech.active,
+      busy,
+      voice.speak,
+    ],
   );
   const messages = data?.messages || [];
+  useEffect(() => {
+    if (!open || section !== "chat") speech.stop();
+  }, [open, section, speech.stop]);
   useEffect(() => {
     if (open) bottom.current?.scrollIntoView({ block: "end" });
   }, [open, messages.length, busy]);
@@ -194,6 +219,8 @@ export function PersonalAssistantProvider({
     setSending(true);
     setError("");
     voice.stop();
+    speech.stop();
+    if (voiceReply && voiceStatus.data?.ready) speech.prepare();
     try {
       const response = await api("/my-workspace/assistant", "POST", {
         message: value.trim(),
@@ -206,13 +233,18 @@ export function PersonalAssistantProvider({
       const latest = (response.data as AssistantConversation).messages?.at(-1);
       if (
         playbackAllowed.current &&
+        !document.hidden &&
+        voiceStatus.data?.ready &&
         latest?.role === "assistant" &&
         response.data.state === "IDLE"
       )
-        voice.speak(latest.text);
+        void speech.read(latest.id);
+      else speech.stop();
     } catch (e) {
+      speech.stop();
       setError((e as Error).message);
     } finally {
+      if (!playbackAllowed.current) speech.stop();
       setSending(false);
       await q.refetch();
     }
@@ -222,6 +254,7 @@ export function PersonalAssistantProvider({
     setExecuting(action.id);
     setError("");
     voice.stop();
+    speech.stop();
     try {
       const result = (
         await api("/my-workspace/assistant/actions", "POST", { id: action.id })
@@ -242,6 +275,7 @@ export function PersonalAssistantProvider({
   const startVoice = () => {
     if (!allowed) return;
     voice.stop();
+    speech.stop();
     setOpen(false);
     setVoiceVisible(true);
     if (gptVoice.state === "speaking") gptVoice.interrupt();
@@ -261,6 +295,7 @@ export function PersonalAssistantProvider({
   const openVoiceSettings = () => {
     closeVoice();
     voice.stop();
+    speech.stop();
     setSection("voice");
     setOpen(true);
   };
@@ -271,6 +306,7 @@ export function PersonalAssistantProvider({
     }
     closeVoice();
     voice.stop();
+    speech.stop();
     setSection(allowed ? tab : "activity");
     setOpen(true);
   };
@@ -299,16 +335,22 @@ export function PersonalAssistantProvider({
                 icon={voice.listening ? <StopOutlined /> : <AudioOutlined />}
                 aria-label={voice.listening ? "停止语音输入" : "语音输入"}
                 disabled={!voice.supported || busy || !data?.ready}
-                onClick={() => voice.start(text)}
+                onClick={() => {
+                  speech.stop();
+                  voice.start(text);
+                }}
               />
             </Tooltip>
-            {voice.speaking && (
+            {(voice.speaking || speech.active) && (
               <Button
                 type="text"
                 shape="circle"
                 icon={<StopOutlined />}
                 aria-label="停止朗读"
-                onClick={voice.stopSpeaking}
+                onClick={() => {
+                  voice.stopSpeaking();
+                  speech.stop();
+                }}
               />
             )}
             {busy ? (
@@ -399,11 +441,13 @@ export function PersonalAssistantProvider({
         openVoiceSettings,
         voiceState: gptVoice.active
           ? (gptVoice.state as Exclude<typeof gptVoice.state, "idle">)
-          : voice.listening
-            ? "listening"
-            : voice.speaking
-              ? "speaking"
-              : undefined,
+          : speech.active
+            ? (speech.state as "thinking" | "speaking")
+            : voice.listening
+              ? "listening"
+              : voice.speaking
+                ? "speaking"
+                : undefined,
         announce,
         compose: () => sender(),
         openPanel,
@@ -423,8 +467,10 @@ export function PersonalAssistantProvider({
       <Drawer
         open={open}
         onClose={() => {
+          playbackAllowed.current = false;
           setOpen(false);
           voice.stop();
+          speech.stop();
         }}
         title={
           <span>
@@ -442,6 +488,7 @@ export function PersonalAssistantProvider({
               okText="清空"
               cancelText="取消"
               onConfirm={async () => {
+                speech.stop();
                 try {
                   await api("/my-workspace/assistant/clear", "POST", {
                     version: data?.version || 0,
@@ -478,8 +525,10 @@ export function PersonalAssistantProvider({
         <Tabs
           activeKey={section}
           onChange={(key) => {
+            playbackAllowed.current = false;
             setSection(key as "chat" | "activity" | "memory" | "voice");
             voice.stop();
+            speech.stop();
           }}
           items={[
             ...(allowed ? [{ key: "chat", label: "互动对话" }] : []),
@@ -500,10 +549,12 @@ export function PersonalAssistantProvider({
           <div className="assistant-voice-options">
             <Checkbox
               checked={voiceReply}
-              disabled={!voice.canSpeak}
+              disabled={!speech.supported || !voiceStatus.data?.ready}
               onChange={(e) => {
                 setVoiceReply(e.target.checked);
-                if (!e.target.checked) voice.stopSpeaking();
+                playbackAllowed.current =
+                  open && section === "chat" && e.target.checked;
+                if (!e.target.checked) speech.stop();
               }}
             >
               语音回复
@@ -518,15 +569,46 @@ export function PersonalAssistantProvider({
             >
               播报新提醒
             </Checkbox>
-            {voice.speaking && (
+            {(voice.speaking || speech.active) && (
               <Button
                 size="small"
                 icon={<StopOutlined />}
-                onClick={voice.stopSpeaking}
+                onClick={() => {
+                  voice.stopSpeaking();
+                  speech.stop();
+                }}
               >
                 打断朗读
               </Button>
             )}
+          </div>
+        )}
+        {allowed && section === "chat" && (
+          <div className="assistant-speech-status">
+            <span>
+              小序 GPT 声音 · AI 生成
+              {voiceStatus.data?.ready
+                ? ` · ${voiceStatus.data.voice}`
+                : " · 尚未就绪"}
+            </span>
+            {!voiceStatus.data?.ready && (
+              <Button size="small" type="link" onClick={openVoiceSettings}>
+                语音设置
+              </Button>
+            )}
+            {speech.active && (
+              <span role="status">
+                {speech.state === "thinking"
+                  ? "小序正在准备声音…"
+                  : "小序正在说话"}
+              </span>
+            )}
+            {speech.blocked && (
+              <Button size="small" onClick={speech.play}>
+                播放小序声音
+              </Button>
+            )}
+            {speech.error && <div role="alert">{speech.error}</div>}
           </div>
         )}
         {open && section === "voice" && allowed && (
@@ -622,15 +704,34 @@ export function PersonalAssistantProvider({
                     <div className="assistant-message-text">{item.text}</div>
                   }
                 />
-                {item.role === "assistant" && voice.canSpeak && (
+                {item.role === "assistant" && (
                   <Button
                     size="small"
                     type="text"
-                    icon={<SoundOutlined />}
-                    aria-label="朗读这条回复"
-                    onClick={() => voice.speak(item.text)}
+                    icon={
+                      speech.messageId === item.id ? (
+                        <StopOutlined />
+                      ) : (
+                        <SoundOutlined />
+                      )
+                    }
+                    aria-label={
+                      speech.messageId === item.id
+                        ? "停止小序朗读"
+                        : "小序朗读这条回复"
+                    }
+                    disabled={
+                      !speech.supported || !voiceStatus.data?.ready || busy
+                    }
+                    onClick={() => {
+                      if (speech.messageId === item.id) speech.stop();
+                      else {
+                        voice.stop();
+                        void speech.read(item.id);
+                      }
+                    }}
                   >
-                    朗读
+                    {speech.messageId === item.id ? "停止朗读" : "小序朗读"}
                   </Button>
                 )}
                 <AssistantBusinessResults

@@ -63,9 +63,7 @@ async function mockBrowserVoice(page: Page, supported = true) {
   );
 }
 
-test("语音须主动启动，转写可编辑，回复可打断，关闭停止麦克风", async ({
-  page,
-}) => {
+test("语音输入须主动启动，转写可编辑，关闭停止麦克风", async ({ page }) => {
   await mockBrowserVoice(page);
   const fixture = await workspaceFixture(page);
   await page.goto("/my-workspace");
@@ -94,21 +92,6 @@ test("语音须主动启动，转写可编辑，回复可打断，关闭停止�
   ).toBeVisible();
   expect(await page.evaluate(() => window.assistantVoiceTest.spoken)).toEqual(
     [],
-  );
-  await dialog.getByRole("checkbox", { name: "语音回复", exact: true }).check();
-  await input.fill("帮我继续完善日程");
-  await input.press("Enter");
-  await expect
-    .poll(() => page.evaluate(() => window.assistantVoiceTest.spoken.length))
-    .toBe(1);
-  await expect(page.locator(".sidebar-assistant")).toHaveAttribute(
-    "data-state",
-    "speaking",
-  );
-  await dialog.getByRole("button", { name: "打断朗读" }).click();
-  await expect(page.locator(".sidebar-assistant")).not.toHaveAttribute(
-    "data-state",
-    "speaking",
   );
   await dialog.getByRole("button", { name: "语音输入", exact: true }).click();
   await dialog.getByRole("button", { name: "关闭", exact: true }).click();

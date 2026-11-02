@@ -2,17 +2,34 @@ import { expect, test, type Page } from "@playwright/test";
 
 declare global {
   interface Window {
-    gptVoiceTest: { starts: number; stops: number; silence: () => void };
+    gptVoiceTest: {
+      starts: number;
+      stops: number;
+      silence: () => void;
+      speak: () => void;
+    };
   }
 }
 
 async function fixture(
   page: Page,
-  options: { denied?: boolean; configured?: boolean; dark?: boolean } = {},
+  options: {
+    denied?: boolean;
+    configured?: boolean;
+    dark?: boolean;
+    missed?: boolean;
+    speechError?: boolean;
+    navigation?: boolean;
+  } = {},
 ) {
   await page.addInitScript(
     ({ denied }) => {
-      window.gptVoiceTest = { starts: 0, stops: 0, silence: () => {} };
+      window.gptVoiceTest = {
+        starts: 0,
+        stops: 0,
+        silence: () => {},
+        speak: () => {},
+      };
       Object.defineProperty(navigator.mediaDevices, "getUserMedia", {
         value: async () => {
           window.gptVoiceTest.starts++;
@@ -30,6 +47,9 @@ async function fixture(
           oscillator.start();
           window.gptVoiceTest.silence = () => {
             gain.gain.value = 0;
+          };
+          window.gptVoiceTest.speak = () => {
+            gain.gain.value = 0.1;
           };
           const track = output.stream.getAudioTracks()[0],
             originalStop = track.stop.bind(track);
@@ -60,7 +80,8 @@ async function fixture(
   };
   const appearance = { version: 0, mode: options.dark ? "dark" : "light" };
   const turns: Record<string, unknown>[] = [],
-    writes: Record<string, unknown>[] = [];
+    writes: Record<string, unknown>[] = [],
+    speeches: Record<string, unknown>[] = [];
   const assistant = {
     ready: true,
     availabilityMessage: "已就绪",
@@ -113,7 +134,43 @@ async function fixture(
       data = { items: [], serverTime: "2026-11-03T00:00:00Z" };
     if (path === "/my-workspace/assistant/memory")
       data = { version: 0, entries: [] };
-    if (path === "/my-workspace/assistant") data = assistant;
+    if (path === "/my-workspace/assistant") {
+      if (request.method() === "POST") {
+        assistant.messages.push(
+          {
+            id: crypto.randomUUID(),
+            role: "user",
+            text: request.postDataJSON().message,
+          },
+          {
+            id: crypto.randomUUID(),
+            role: "assistant",
+            text: "你好，我是小序。今天有什么想一起完成的？",
+          },
+        );
+        assistant.version++;
+      }
+      data = assistant;
+    }
+    if (path === "/my-workspace/assistant/voice/speech") {
+      const body = request.postDataJSON();
+      speeches.push(body);
+      expect(Object.keys(body).sort()).toEqual(["id", "messageId"]);
+      expect(request.headers()["x-csrf-token"]).toBe("fixture");
+      return route.fulfill({
+        contentType: "application/x-ndjson",
+        body: (options.speechError
+          ? [{ type: "error", message: "OpenRouter 额度不足，请检查额度" }]
+          : [
+              { type: "model", model: status.model },
+              { type: "audio", data: pcm.toString("base64") },
+              { type: "done" },
+            ]
+        )
+          .map((event) => JSON.stringify(event) + "\n")
+          .join(""),
+      });
+    }
     if (path === "/my-workspace/assistant/voice") data = status;
     if (path === "/my-workspace/assistant/voice/settings") {
       const body = request.postDataJSON();
@@ -141,6 +198,11 @@ async function fixture(
     if (path === "/my-workspace/assistant/voice/turn") {
       const body = request.postDataJSON();
       turns.push(body);
+      if (options.missed && turns.length === 1)
+        return route.fulfill({
+          contentType: "application/x-ndjson",
+          body: '{"type":"retry-listening"}\n',
+        });
       expect(request.headers()["x-csrf-token"]).toBe("fixture");
       const wav = Buffer.from(body.audio, "base64");
       expect(wav.toString("ascii", 0, 4)).toBe("RIFF");
@@ -157,6 +219,9 @@ async function fixture(
         body: [
           { type: "transcript", text: "安排明天下午三点选款会" },
           { type: "reply", text: reply, messageId: body.id + "a" },
+          ...(options.navigation
+            ? [{ type: "navigate", toolId: "analytics" }]
+            : []),
           { type: "model", model: "openai/gpt-audio" },
           { type: "audio", data: pcm.toString("base64") },
           { type: "done" },
@@ -177,8 +242,110 @@ async function fixture(
     bubble: page.getByRole("region", { name: "小序语音", exact: true }),
     turns,
     writes,
+    speeches,
   };
 }
+
+test("未识别完整文字后静默恢复聆听，下一句话可继续且不重启麦克风", async ({
+  page,
+}) => {
+  const { bubble, turns } = await fixture(page, { missed: true });
+  await page.locator(".companion-launch").click();
+  await expect(bubble.getByRole("status")).toHaveText("我在听，你说");
+  await page.waitForTimeout(600);
+  await page.evaluate(() => window.gptVoiceTest.silence());
+  await expect.poll(() => turns.length).toBe(1);
+  await expect(bubble.getByRole("status")).toHaveText("我在听，你说");
+  await expect(bubble).not.toContainText("重试");
+  expect(
+    await page.evaluate(() => [
+      window.gptVoiceTest.starts,
+      window.gptVoiceTest.stops,
+    ]),
+  ).toEqual([1, 0]);
+  await page.evaluate(() => window.gptVoiceTest.speak());
+  await page.waitForTimeout(600);
+  await page.evaluate(() => window.gptVoiceTest.silence());
+  await expect.poll(() => turns.length).toBe(2);
+  await expect(bubble.getByRole("status")).toHaveText("小序正在说话");
+  await bubble.getByRole("button", { name: "查看完整对话" }).click();
+});
+
+test("文字回复用 GPT 声音朗读和自动回答，不开启麦克风，停止与关闭立即中断", async ({
+  page,
+}) => {
+  const { speeches } = await fixture(page, { dark: true });
+  await page.getByRole("button", { name: "打开个人助理", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: /AI 个人助理/ });
+  const input = dialog.getByPlaceholder(/告诉我你想完成什么/);
+  await input.fill("你好");
+  await input.press("Enter");
+  await expect(
+    dialog.getByRole("button", { name: "小序朗读这条回复" }),
+  ).toBeEnabled();
+  expect(speeches).toHaveLength(0);
+  await dialog.getByRole("button", { name: "小序朗读这条回复" }).click();
+  await expect(dialog.getByRole("status")).toContainText("小序正在说话");
+  await expect(page.locator(".sidebar-assistant")).toHaveAttribute(
+    "data-state",
+    "speaking",
+  );
+  expect(await page.evaluate(() => window.gptVoiceTest.starts)).toBe(0);
+  await page.screenshot({
+    path: test.info().outputPath("chat-gpt-speech-dark.png"),
+  });
+  await dialog.getByRole("button", { name: "停止小序朗读" }).click();
+  await expect(page.locator(".sidebar-assistant")).not.toHaveAttribute(
+    "data-state",
+    "speaking",
+  );
+  await dialog.getByRole("checkbox", { name: "语音回复", exact: true }).check();
+  await input.fill("继续聊聊");
+  await input.press("Enter");
+  await expect.poll(() => speeches.length).toBe(2);
+  await expect(dialog.getByRole("status")).toContainText("小序正在说话");
+  await dialog
+    .getByRole("checkbox", { name: "语音回复", exact: true })
+    .uncheck();
+  await expect(page.locator(".sidebar-assistant")).not.toHaveAttribute(
+    "data-state",
+    "speaking",
+  );
+  await dialog.getByRole("button", { name: "小序朗读这条回复" }).last().click();
+  await expect.poll(() => speeches.length).toBe(3);
+  await dialog.getByRole("button", { name: "关闭", exact: true }).click();
+  await expect(page.locator(".sidebar-assistant")).not.toHaveAttribute(
+    "data-state",
+    "speaking",
+  );
+  expect(await page.evaluate(() => window.gptVoiceTest.starts)).toBe(0);
+});
+
+test("GPT 朗读失败保留文字及具体错误，不启动录音", async ({ page }) => {
+  await fixture(page, { speechError: true });
+  await page.getByRole("button", { name: "打开个人助理", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: /AI 个人助理/ });
+  await dialog.getByPlaceholder(/告诉我你想完成什么/).fill("你好");
+  await dialog.getByPlaceholder(/告诉我你想完成什么/).press("Enter");
+  await dialog.getByRole("button", { name: "小序朗读这条回复" }).click();
+  await expect(dialog.getByRole("alert")).toContainText("OpenRouter 额度不足");
+  await expect(
+    dialog.getByText("你好，我是小序。今天有什么想一起完成的？", {
+      exact: true,
+    }),
+  ).toBeVisible();
+  expect(await page.evaluate(() => window.gptVoiceTest.starts)).toBe(0);
+});
+
+test("授权语音导航事件直接打开经营分析", async ({ page }) => {
+  const { turns } = await fixture(page, { navigation: true });
+  await page.locator(".companion-launch").click();
+  await page.waitForTimeout(700);
+  await page.evaluate(() => window.gptVoiceTest.silence());
+  await expect.poll(() => turns.length).toBe(1);
+  await expect(page).toHaveURL(/analytics\/compass$/);
+  expect(await page.evaluate(() => window.gptVoiceTest.starts)).toBe(1);
+});
 
 test("直接点击小序录音，气泡回复和动作同步，播放可打断并关闭设备", async ({
   page,
