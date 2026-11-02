@@ -209,7 +209,8 @@ test("完善保存遇到并发冲突保留原文和候选，关闭未确认候�
 
 test("候选先核对再填补，已有标题保留，可编辑和取消单元格，避免网格自动保存", async ({ page }) => {
   const state = await fixture(page), panel = await openPanel(page);
-  await expect(panel).toContainText("OpenRouter 和所选模型供应商");
+  await expect(panel).toContainText("已配置的智能服务");
+  await expect(panel).not.toContainText(/OpenRouter|OpenAI|DeepSeek|ChatGPT/);
   await panel.getByRole("button", { name: "生成候选标题", exact: true }).click();
   await expect(panel.getByLabel("AI-002 长标题候选")).toBeVisible();
   expect(state.applies).toHaveLength(0);
@@ -391,7 +392,8 @@ test("后续批次冲突保留候选，已完成批次不会重复写入", async
 
 test("未配置 AI 时清楚提示管理员设置，不能生成或填补", async ({ page }) => {
   const state = await fixture(page, { configured: false }), panel = await openPanel(page);
-  await expect(panel).toContainText("请先在系统设置配置 OpenRouter API Key 和文本模型");
+  await expect(panel).toContainText("请联系有系统设置权限的管理员配置 AI 服务后重试。");
+  await expect(panel).not.toContainText(/OpenRouter|OpenAI|DeepSeek|ChatGPT/);
   await expect(panel.getByRole("button", { name: "生成候选标题", exact: true })).toBeDisabled();
   await expect(panel.getByRole("button", { name: /确认填补/ })).toBeDisabled();
   expect(state.generations).toHaveLength(0);

@@ -607,7 +607,9 @@ export async function testCompassAnalytics(h: Record<string, any>) {
     sendMail: async (options: any) => {
       sends++;
       assert.ok(options.html.includes("每日经营分析"));
-      assert.ok(options.html.includes(COMPASS_AI_MODEL));
+      assert.ok(options.html.includes("AI 经营分析"));
+      assert.ok(!options.html.includes(COMPASS_AI_MODEL));
+      assert.doesNotMatch(options.html, /OpenRouter|OpenAI|DeepSeek|ChatGPT/);
       assert.ok(!options.html.includes("<script>unsafe</script>"));
       assert.ok(options.html.includes("&lt;script&gt;unsafe&lt;/script&gt;"));
       return { accepted: [options.to], messageId: "test-" + sends };
