@@ -383,7 +383,8 @@ describe("OpenRouter GPT voice", () => {
     await runVoiceSpeech(actor(), b, new AbortController().signal, () => {});
     const body = JSON.parse(vi.mocked(fetch).mock.calls[0][1]!.body as string);
     expect(body.audio.voice).toBe("shimmer");
-    expect(JSON.parse(body.messages[1].content)).toEqual({
+    expect(body.messages[1].content).toMatch(/^请原样朗读/);
+    expect(JSON.parse(body.messages[1].content.split("\n")[1])).toEqual({
       text: "已提交后台任务。",
     });
     expect(fixture.send).not.toHaveBeenCalled();

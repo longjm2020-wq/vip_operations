@@ -2,8 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import {
   ArrowRightOutlined,
   MoreOutlined,
-  SmileOutlined,
-  UndoOutlined,
   AudioOutlined,
   SettingOutlined,
 } from "@ant-design/icons";
@@ -13,18 +11,11 @@ import { activityFingerprint } from "../../../packages/contracts/src/assistant-a
 import "./sidebar-assistant.css";
 import { CompanionVoice } from "./companion-voice";
 
-export function SidebarAssistant({
-  floating = false,
-  onReset,
-}: {
-  floating?: boolean;
-  onReset?: () => void;
-}) {
+export function SidebarAssistant({ floating = false }: { floating?: boolean }) {
   const hub = useAssistantHub();
   const launch = useRef<HTMLButtonElement>(null);
   const lastActive = useRef(Date.now());
-  const [idle, setIdle] = useState(false),
-    [greeting, setGreeting] = useState(false);
+  const [idle, setIdle] = useState(false);
   useEffect(() => {
     const active = () => {
       lastActive.current = Date.now();
@@ -42,12 +33,6 @@ export function SidebarAssistant({
       window.removeEventListener("keydown", active);
     };
   }, []);
-  useEffect(() => {
-    if (greeting) {
-      const timer = setTimeout(() => setGreeting(false), 2600);
-      return () => clearTimeout(timer);
-    }
-  }, [greeting]);
   const items = hub.feed?.items || [];
   const unread = items.filter(
     (item) => !hub.seen.includes(activityFingerprint(item)),
@@ -64,13 +49,11 @@ export function SidebarAssistant({
           hub.conversation?.state === "FAILED" ||
           (hub.voiceVisible && hub.gptVoice.error)
         ? "error"
-        : greeting
-          ? "happy"
-          : attention || unread.some((item) => item.status !== "upcoming")
-            ? "notice"
-            : idle
-              ? "slacking"
-              : "idle";
+        : attention || unread.some((item) => item.status !== "upcoming")
+          ? "notice"
+          : idle
+            ? "slacking"
+            : "idle";
   const labels = {
     connecting: "正在连接",
     thinking: "思考中",
@@ -78,7 +61,6 @@ export function SidebarAssistant({
     speaking: "正在说话",
     working: "工作中",
     error: "需要关注",
-    happy: "在呢，随时找我",
     notice: "有新动态",
     slacking: "摸鱼中",
     idle: "待命中",
@@ -333,27 +315,6 @@ export function SidebarAssistant({
                   }}
                 >
                   <SettingOutlined />
-                </button>
-              )}
-              <button
-                type="button"
-                aria-label="和小序打个招呼"
-                title="打个招呼"
-                onClick={() => setGreeting(true)}
-              >
-                <SmileOutlined />
-              </button>
-              {floating && (
-                <button
-                  type="button"
-                  aria-label="复位助理位置"
-                  title="重新寻找空位"
-                  onClick={() => {
-                    onReset?.();
-                    setDetailsOpen(false);
-                  }}
-                >
-                  <UndoOutlined />
                 </button>
               )}
             </div>

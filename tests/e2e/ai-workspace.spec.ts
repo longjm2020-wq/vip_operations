@@ -554,7 +554,13 @@ test("小序全站自由悬浮，拖动后记住位置，跨页面确认日程�
     2,
   );
   await companion.getByRole("button", { name: "展开小序状态与动态" }).click();
-  await page.getByRole("button", { name: "复位助理位置" }).click();
+  await expect(page.getByRole("button", { name: "复位助理位置" })).toHaveCount(
+    0,
+  );
+  await companion
+    .getByRole("button", { name: "展开小序状态与动态" })
+    .press("Escape");
+  await companion.locator(".companion-launch").press("Home");
   await expect(companion).toBeVisible();
   await expect(companion).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
   await expect(
@@ -591,7 +597,7 @@ test("小序全站自由悬浮，拖动后记住位置，跨页面确认日程�
   expect(fixture.assistantCalls()).toBe(1);
 });
 
-test("动态面板显示真实任务进度、筛选和已读，浏览与招呼不调用模型", async ({
+test("动态面板显示真实任务进度、筛选和已读，展开入口不调用模型", async ({
   page,
 }) => {
   const fixture = await workspaceFixture(page);
@@ -652,8 +658,11 @@ test("动态面板显示真实任务进度、筛选和已读，浏览与招呼�
   await expect(mascot).toHaveAttribute("data-state", "idle");
   await dialog.getByRole("button", { name: "关闭", exact: true }).click();
   await mascot.getByRole("button", { name: "展开小序状态与动态" }).click();
-  await page.getByRole("button", { name: "和小序打个招呼" }).click();
-  await expect(mascot).toHaveAttribute("data-state", "happy");
+  await expect(
+    page.getByRole("button", { name: "和小序打个招呼" }),
+  ).toHaveCount(0);
+  await expect(page.locator(".companion-interactions button")).toHaveCount(3);
+  await expect(mascot).toHaveAttribute("data-state", "idle");
   expect(fixture.assistantCalls()).toBe(0);
   await page.screenshot({
     path: test.info().outputPath("companion-sidebar-dark.png"),

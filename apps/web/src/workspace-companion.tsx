@@ -460,7 +460,7 @@ export function WorkspaceCompanion() {
         save(next);
       }}
     >
-      <SidebarAssistant floating onReset={reset} />
+      <SidebarAssistant floating />
     </div>,
     document.body,
   );
