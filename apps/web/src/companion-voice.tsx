@@ -239,8 +239,8 @@ export function CompanionVoice({
       ? "麦克风已静音"
       : {
           idle: "想聊什么？",
-          connecting: "正在打开麦克风…",
-          listening: "我在听，你说",
+          connecting: voice.realtime ? "正在连接实时语音…" : "正在打开麦克风…",
+          listening: voice.realtime ? "实时聆听中，你说" : "我在听，你说",
           thinking: "让我想一想…",
           speaking: "小序正在说话",
         }[voice.state];
@@ -258,7 +258,9 @@ export function CompanionVoice({
     (last
       ? `${last.role === "user" ? "你" : "小序"}：${last.text}`
       : voice.active
-        ? "说完停顿一下，我就会回应。"
+        ? voice.realtime
+          ? "实时通话中，可以随时开口打断我。"
+          : "说完停顿一下，我就会回应。"
         : voice.note || "点击开始，用声音和我聊聊。");
   const retry = !!workspaceSlot && !!voice.error && !voice.active;
   const elevated = !!workspaceSlot && overlay;
@@ -350,27 +352,31 @@ export function CompanionVoice({
                   >
                     {voice.muted ? <AudioMutedOutlined /> : <AudioOutlined />}
                   </button>
-                  <button
-                    aria-label={
-                      voice.state === "speaking" ? "打断并说话" : "发送这段"
-                    }
-                    title={
-                      voice.state === "speaking" ? "打断并说话" : "发送这段"
-                    }
-                    disabled={
-                      voice.state !== "speaking" &&
-                      (voice.state !== "listening" || voice.muted)
-                    }
-                    onClick={
-                      voice.state === "speaking" ? voice.interrupt : voice.send
-                    }
-                  >
-                    {voice.state === "speaking" ? (
-                      <StopOutlined />
-                    ) : (
-                      <SendOutlined />
-                    )}
-                  </button>
+                  {(!voice.realtime || voice.state === "speaking") && (
+                    <button
+                      aria-label={
+                        voice.state === "speaking" ? "打断并说话" : "发送这段"
+                      }
+                      title={
+                        voice.state === "speaking" ? "打断并说话" : "发送这段"
+                      }
+                      disabled={
+                        voice.state !== "speaking" &&
+                        (voice.state !== "listening" || voice.muted)
+                      }
+                      onClick={
+                        voice.state === "speaking"
+                          ? voice.interrupt
+                          : voice.send
+                      }
+                    >
+                      {voice.state === "speaking" ? (
+                        <StopOutlined />
+                      ) : (
+                        <SendOutlined />
+                      )}
+                    </button>
+                  )}
                   <button
                     className="companion-voice-end"
                     aria-label="结束语音"

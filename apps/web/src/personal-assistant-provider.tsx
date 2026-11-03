@@ -61,6 +61,8 @@ import { assistantPublicText } from "../../../packages/contracts/src/ai-presenta
 import { AssistantBusinessResults } from "./assistant-business-results";
 import { AssistantVoiceSettingsPanel } from "./assistant-realtime-panel";
 import { useGptVoice } from "./use-gpt-voice";
+import { useRealtimeVoice } from "./use-realtime-voice";
+import type { RealtimeStatus } from "../../../packages/contracts/src/assistant-realtime";
 import { useGptSpeech } from "./use-gpt-speech";
 import type { AssistantVoiceStatus } from "../../../packages/contracts/src/assistant-voice";
 import { workspaceHologramEvent } from "./workspace-hologram";
@@ -213,6 +215,13 @@ export function PersonalAssistantProvider({
     staleTime: 30000,
   });
   const playbackAllowed = useRef(false);
+  const realtimeStatus = useQuery({
+    queryKey: ["assistant-realtime", user.id],
+    enabled: allowed,
+    queryFn: async () =>
+      (await api("/my-workspace/assistant/realtime")).data as RealtimeStatus,
+    staleTime: 30000,
+  });
   playbackAllowed.current = open && section === "chat" && voiceReply;
   const memory = useQuery({
     queryKey: ["assistant-memory", user.id],
@@ -247,7 +256,7 @@ export function PersonalAssistantProvider({
         : false,
   });
   const data = q.data?.data as AssistantConversation | undefined;
-  const gptVoice = useGptVoice(
+  const legacyVoice = useGptVoice(
     () => {
       void q.refetch();
       void activity.refetch();
@@ -257,6 +266,39 @@ export function PersonalAssistantProvider({
       if (tool) navigate(tool.path);
     },
   );
+  const realtimeVoice = useRealtimeVoice(
+    () => {
+      void q.refetch();
+      void activity.refetch();
+    },
+    (toolId) => {
+      const tool = available.find((item) => item.id === toolId);
+      if (tool) navigate(tool.path);
+    },
+  );
+  // A live call owns its transport until it ends, including configuration refetches.
+  const useRealtime =
+    realtimeVoice.active ||
+    (!legacyVoice.active && !!realtimeStatus.data?.enabled);
+  const gptVoice = useRealtime ? realtimeVoice : legacyVoice;
+  const selectedVoiceStatus =
+    useRealtime && realtimeStatus.data
+      ? {
+          ...realtimeStatus.data,
+          model: "小序实时语音",
+          maxSeconds: 3600,
+          assistantReady: true,
+        }
+      : voiceStatus.data;
+  const activeVoiceStatus = selectedVoiceStatus
+    ? {
+        ...selectedVoiceStatus,
+        ready:
+          !realtimeStatus.isLoading &&
+          !realtimeStatus.error &&
+          selectedVoiceStatus.ready,
+      }
+    : undefined;
   const busy =
     sending ||
     uploading ||
@@ -378,7 +420,7 @@ export function PersonalAssistantProvider({
     if (gptVoice.state === "speaking") gptVoice.interrupt();
     else if (
       !gptVoice.active &&
-      voiceStatus.data?.ready &&
+      activeVoiceStatus?.ready &&
       !sending &&
       !executing &&
       data?.state !== "PENDING"
@@ -387,7 +429,10 @@ export function PersonalAssistantProvider({
         includePersonalContext: includeContext,
         includeMemory,
       });
-    else if (!voiceStatus.data?.ready) void voiceStatus.refetch();
+    else if (!activeVoiceStatus?.ready) {
+      void voiceStatus.refetch();
+      void realtimeStatus.refetch();
+    }
   };
   const openVoiceSettings = () => {
     closeVoice();
@@ -676,8 +721,11 @@ export function PersonalAssistantProvider({
         conversation: data,
         busy,
         gptVoice,
-        voiceStatus: voiceStatus.data,
-        voiceStatusError: voiceStatus.error?.message || "",
+        voiceStatus: activeVoiceStatus,
+        voiceStatusError:
+          realtimeStatus.error?.message ||
+          (!useRealtime && voiceStatus.error?.message) ||
+          "",
         voiceVisible,
         startVoice,
         closeVoice,
@@ -808,6 +856,7 @@ export function PersonalAssistantProvider({
           )}
         {open && section === "voice" && allowed && (
           <AssistantVoiceSettingsPanel
+            realtime={realtimeStatus}
             status={voiceStatus}
             context={includeContext}
             setContext={setIncludeContext}

@@ -4,6 +4,7 @@ import {
   App,
   Button,
   Checkbox,
+  Collapse,
   Form,
   Input,
   Popconfirm,
@@ -29,6 +30,8 @@ import {
 
 import { pcmBuffer, pcmBytes } from "./voice-pcm";
 import "./assistant-realtime.css";
+import { RealtimeVoiceSettings } from "./realtime-voice-settings";
+import type { RealtimeStatus } from "../../../packages/contracts/src/assistant-realtime";
 
 const endpoint = "/my-workspace/assistant/voice";
 
@@ -202,6 +205,7 @@ function VoiceSettings({
 
 export function AssistantVoiceSettingsPanel({
   status,
+  realtime,
   context,
   setContext,
   memory,
@@ -209,6 +213,7 @@ export function AssistantVoiceSettingsPanel({
   startVoice,
 }: {
   status: UseQueryResult<AssistantVoiceStatus, Error>;
+  realtime: UseQueryResult<RealtimeStatus, Error>;
   context: boolean;
   setContext: (value: boolean) => void;
   memory: boolean;
@@ -216,6 +221,8 @@ export function AssistantVoiceSettingsPanel({
   startVoice: () => void;
 }) {
   const s = status.data;
+  const native = realtime.data?.enabled;
+  const ready = native ? realtime.data?.ready : s?.ready;
   return (
     <div className="realtime-panel">
       <div className="realtime-heading">
@@ -227,7 +234,10 @@ export function AssistantVoiceSettingsPanel({
           aria-label="刷新语音配置"
           icon={<ReloadOutlined />}
           loading={status.isFetching}
-          onClick={() => void status.refetch()}
+          onClick={() => {
+            void status.refetch();
+            void realtime.refetch();
+          }}
         />
       </div>
       <p className="realtime-footnote">
@@ -236,7 +246,7 @@ export function AssistantVoiceSettingsPanel({
       </p>
       {status.isLoading && <Spin />}
       {status.error && <Alert type="error" title={status.error.message} />}
-      {s && !s.ready && (
+      {s && !s.ready && !native && (
         <Alert
           type="info"
           title="智能语音尚未就绪"
@@ -251,11 +261,11 @@ export function AssistantVoiceSettingsPanel({
         />
       )}
       <Space wrap>
-        <Tag>小序智能语音</Tag>
+        <Tag>{native ? "小序实时通话" : "小序智能语音"}</Tag>
         <Button
           type="primary"
           icon={<AudioOutlined />}
-          disabled={!s?.ready}
+          disabled={!ready || realtime.isLoading || !!realtime.error}
           onClick={startVoice}
         >
           与小序语音对话
@@ -275,17 +285,29 @@ export function AssistantVoiceSettingsPanel({
           使用个人记忆
         </Checkbox>
       </div>
+      <RealtimeVoiceSettings query={realtime} />
       {s?.canManage && (
-        <VoiceSettings
-          key={s.version}
-          value={s}
-          saved={() => status.refetch()}
+        <Collapse
+          items={[
+            {
+              key: "legacy",
+              label: "原有分段语音与朗读设置",
+              children: (
+                <VoiceSettings
+                  key={s.version}
+                  value={s}
+                  saved={() => status.refetch()}
+                />
+              ),
+            },
+          ]}
         />
       )}
       <p className="realtime-footnote">
-        每段最长25秒，停顿后自动发送；轮流说话，最多10分钟。语音识别、助理回答和声音生成通过
-        已配置的智能语音服务
-        按用量计费。网站不保存录音，文字保存在互动对话；日程、记忆和任务仍需确认。隐藏网页或点击结束会关闭麦克风。
+        {native
+          ? "实时音频直连声音服务，不限制语音条数；单次通话最长一小时，到期可重新开始。启用后不会在出错时自动降为分段语音。"
+          : "原有分段语音每段最长25秒，轮流说话，每次最多10分钟。"}
+        网站不保存录音，完成的文字对话保存在本人互动对话。隐藏页面或点击结束会关闭麦克风；打开页面和更新任务沿用现有权限，日程与记忆卡片仍需核对。
       </p>
     </div>
   );

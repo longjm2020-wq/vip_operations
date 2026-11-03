@@ -10,7 +10,10 @@ export type AssistantHubState = {
   conversation?: AssistantConversation;
   busy: boolean;
   voiceState?: Exclude<VoiceState, "idle">;
-  gptVoice: ReturnType<typeof useGptVoice>;
+  gptVoice: Omit<ReturnType<typeof useGptVoice>, "play"> & {
+    play: () => void;
+    realtime?: boolean;
+  };
   voiceStatus?: AssistantVoiceStatus;
   voiceStatusError: string;
   voiceVisible: boolean;

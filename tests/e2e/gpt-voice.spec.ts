@@ -177,6 +177,18 @@ async function fixture(
       });
     }
     if (path === "/my-workspace/assistant/voice") data = status;
+    if (path === "/my-workspace/assistant/realtime")
+      data = {
+        enabled: false,
+        ready: false,
+        voice: "marin",
+        canManage: true,
+        version: 0,
+        encryptionReady: true,
+        apiKeyConfigured: false,
+        verifiedAt: null,
+        error: "",
+      };
     if (path === "/my-workspace/assistant/voice/settings") {
       const body = request.postDataJSON();
       writes.push(body);
@@ -698,6 +710,7 @@ test("未就绪不录音，设置保存不回显，验证后从设置直接回�
   expect(await page.evaluate(() => window.gptVoiceTest.starts)).toBe(0);
   await bubble.getByRole("button", { name: "语音设置", exact: true }).click();
   const dialog = page.getByRole("dialog");
+  await dialog.getByText("原有分段语音与朗读设置", { exact: true }).click();
   await dialog.getByRole("switch", { name: "启用 GPT 语音" }).click();
   await dialog
     .getByLabel("OpenRouter API Key", { exact: true })

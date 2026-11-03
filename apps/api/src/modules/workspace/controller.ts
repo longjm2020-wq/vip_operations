@@ -40,6 +40,16 @@ import {
 import { executeAssistantAction } from "./assistant-actions.js";
 import { AssistantDesktopController } from "./desktop-controller.js";
 import {
+  readRealtimeStatus,
+  saveRealtimeSettings,
+  verifyRealtimeSettings,
+  startRealtime,
+  closeRealtime,
+  checkRealtime,
+  runRealtimeTool,
+  saveRealtimeCaptions,
+} from "./assistant-realtime.js";
+import {
   readVoiceStatus,
   saveVoiceSettings,
   verifyVoiceSettings,
@@ -51,6 +61,65 @@ import {
 // The owner always comes from the authenticated session; there is no user-id route.
 @Controller("api/v1/my-workspace")
 export class PersonalWorkspaceController {
+  @Get("assistant/realtime")
+  async realtimeStatus(
+    @Req() request: AuthRequest,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    response.setHeader("Cache-Control", "private, no-store");
+    return readRealtimeStatus(context(request));
+  }
+  @Post("assistant/realtime/settings")
+  async realtimeSettings(@Req() request: AuthRequest, @Body() input: unknown) {
+    return saveRealtimeSettings(context(request), input);
+  }
+  @Post("assistant/realtime/verify")
+  async realtimeVerify(@Req() request: AuthRequest) {
+    return verifyRealtimeSettings(context(request));
+  }
+  @Post("assistant/realtime/sessions")
+  async realtimeStart(
+    @Req() request: AuthRequest,
+    @Body() input: unknown,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    response.setHeader("Cache-Control", "private, no-store");
+    const c = context(request);
+    const result = await startRealtime(c, input);
+    // The request can disappear while the provider creates the call. Close that
+    // orphan even when the browser never receives the answer SDP.
+    if (response.destroyed) await closeRealtime(c, result.id);
+    return result;
+  }
+  @Post("assistant/realtime/sessions/:id/close")
+  async realtimeClose(@Req() request: AuthRequest, @Param("id") id: string) {
+    return closeRealtime(context(request), id);
+  }
+  @Get("assistant/realtime/sessions/:id")
+  async realtimeCheck(
+    @Req() request: AuthRequest,
+    @Param("id") id: string,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    response.setHeader("Cache-Control", "private, no-store");
+    return checkRealtime(context(request), id);
+  }
+  @Post("assistant/realtime/sessions/:id/tool")
+  async realtimeTool(
+    @Req() request: AuthRequest,
+    @Param("id") id: string,
+    @Body() input: unknown,
+  ) {
+    return runRealtimeTool(context(request), id, input);
+  }
+  @Post("assistant/realtime/sessions/:id/captions")
+  async realtimeCaptions(
+    @Req() request: AuthRequest,
+    @Param("id") id: string,
+    @Body() input: unknown,
+  ) {
+    return saveRealtimeCaptions(context(request), id, input);
+  }
   @Get("assistant/capabilities")
   async agentCapabilities(
     @Req() request: AuthRequest,
@@ -321,5 +390,7 @@ export class PersonalWorkspaceController {
     });
   }
 }
-@Module({ controllers: [PersonalWorkspaceController, AssistantDesktopController] })
+@Module({
+  controllers: [PersonalWorkspaceController, AssistantDesktopController],
+})
 export class PersonalWorkspaceModule {}
