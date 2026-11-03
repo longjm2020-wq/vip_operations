@@ -78,7 +78,7 @@ export function WorkspaceWorldBackdrop() {
           fade = Math.sin(progress * Math.PI) ** 2,
           x = particle.x + (progress - 0.5) * particle.dx,
           y = particle.y + (progress - 0.5) * particle.dy;
-        particleContext.globalAlpha = fade * (light ? 0.26 : 0.38);
+        particleContext.globalAlpha = fade * (light ? 0.2 : 0.3);
         particleContext.beginPath();
         particleContext.arc(x, y, particle.size, 0, Math.PI * 2);
         particleContext.fill();
@@ -167,58 +167,7 @@ export function WorkspaceWorldBackdrop() {
           scale,
         };
       };
-      const line = (a: Point, b: Point) => {
-        const from = project(a),
-          to = project(b);
-        if (!from || !to) return;
-        context.moveTo(from.x, from.y);
-        context.lineTo(to.x, to.y);
-      };
-
-      // Neighbouring lattice planes extend indefinitely; edge-on planes fade naturally.
-      const spacing = 110,
-        extent = spacing * 24,
-        origin = {
-          x: Math.round(camera.x / spacing) * spacing,
-          y: Math.round(camera.y / spacing) * spacing,
-          z: Math.round(camera.z / spacing) * spacing,
-        };
-      context.strokeStyle = accent;
-      context.lineWidth = 0.65;
-      for (const axis of ["x", "y", "z"] as const) {
-        const normal = rotate({
-          x: axis === "x" ? 1 : 0,
-          y: axis === "y" ? 1 : 0,
-          z: axis === "z" ? 1 : 0,
-        });
-        const alpha = Math.abs(normal.z) ** 3 * (light ? 0.1 : 0.085);
-        if (alpha < 0.008) continue;
-        const [u, v] =
-          axis === "x"
-            ? (["y", "z"] as const)
-            : axis === "y"
-              ? (["x", "z"] as const)
-              : (["x", "y"] as const);
-        const plane = {
-          ...origin,
-          [axis]: origin[axis] - Math.sign(normal.z || 1) * spacing * 3,
-        };
-        context.globalAlpha = alpha;
-        context.beginPath();
-        for (let index = -24; index <= 24; index++) {
-          const offset = index * spacing;
-          line(
-            { ...plane, [u]: origin[u] + offset, [v]: origin[v] - extent },
-            { ...plane, [u]: origin[u] + offset, [v]: origin[v] + extent },
-          );
-          line(
-            { ...plane, [u]: origin[u] - extent, [v]: origin[v] + offset },
-            { ...plane, [u]: origin[u] + extent, [v]: origin[v] + offset },
-          );
-        }
-        context.stroke();
-      }
-
+      // Sparse world-space stars preserve parallax without putting a grid over the scene.
       const cell = 260,
         grid = {
           x: Math.floor(camera.x / cell),
@@ -232,7 +181,7 @@ export function WorkspaceWorldBackdrop() {
         for (let y = grid.y - 5; y <= grid.y + 5; y++) {
           for (let z = grid.z - 5; z <= grid.z + 4; z++) {
             const seed = noise(x, y, z);
-            if (seed < 0.33) continue;
+            if (seed < 0.66) continue;
             const point = project({
               x: (x + noise(x, y, z, 731)) * cell,
               y: (y + noise(x, y, z, 1193)) * cell,
@@ -251,7 +200,7 @@ export function WorkspaceWorldBackdrop() {
               Math.max(0.45, point.scale * (0.45 + seed * 0.45)),
             );
             context.globalAlpha =
-              (light ? 0.18 : 0.24) * Math.min(1.7, point.scale) * seed;
+              (light ? 0.17 : 0.2) * Math.min(1.7, point.scale) * seed;
             context.beginPath();
             context.arc(point.x, point.y, size, 0, Math.PI * 2);
             context.fill();
@@ -268,12 +217,12 @@ export function WorkspaceWorldBackdrop() {
               };
               // Bounded deterministic sampling distributes motion across the entire view.
               particleCandidates++;
-              if (nextParticles.length < 72) nextParticles.push(particle);
+              if (nextParticles.length < 36) nextParticles.push(particle);
               else {
                 const index = Math.floor(
                   noise(x, y, z, 5561) * particleCandidates,
                 );
-                if (index < 72) nextParticles[index] = particle;
+                if (index < 36) nextParticles[index] = particle;
               }
             }
           }

@@ -38,7 +38,7 @@ export function mountWorkspaceThree(
   renderer.setClearColor(0, 0);
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.2;
+  renderer.toneMappingExposure = 1.05;
 
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(30, 1, 1, 4000);
@@ -51,12 +51,12 @@ export function mountWorkspaceThree(
   world.add(robotPose);
   if (nest) world.add(nest.group);
   scene.add(world);
-  const ambient = new THREE.HemisphereLight(0xdde9ff, 0x29305d, 2.1);
-  const key = new THREE.DirectionalLight(0xe6eeff, 3.1);
+  const ambient = new THREE.HemisphereLight(0xc6d7f4, 0x121c30, 1.6);
+  const key = new THREE.DirectionalLight(0xe6eeff, 2.8);
   key.position.set(-180, 240, 300);
-  const rim = new THREE.DirectionalLight(0x71dfff, 2.2);
+  const rim = new THREE.DirectionalLight(0x71c8ee, 2.5);
   rim.position.set(150, 60, -180);
-  const fill = new THREE.DirectionalLight(0xa0abff, 1.4);
+  const fill = new THREE.DirectionalLight(0x7c91ca, 0.8);
   fill.position.set(0, -100, -300);
   scene.add(ambient, key, rim, fill);
 

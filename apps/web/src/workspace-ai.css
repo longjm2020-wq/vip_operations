@@ -1,7 +1,7 @@
 .workspace-ai {
   --core-blue: var(--app-accent);
-  --core-cyan: #6bd4ec;
-  --core-line: color-mix(in srgb, var(--core-blue) 24%, transparent);
+  --core-cyan: #9cc8ff;
+  --core-line: color-mix(in srgb, var(--core-blue) 17%, transparent);
   --core-turn: 42s;
   position: relative;
   isolation: isolate;
@@ -43,7 +43,7 @@
   --core-yaw: 18deg;
   position: relative;
   flex: none;
-  width: 286px;
+  width: 320px;
   aspect-ratio: 1;
   margin: 0;
   touch-action: none;
@@ -168,14 +168,16 @@
   top: 50%;
   transform: translate(-50%, -50%);
   appearance: none;
-  padding: 8px 12px;
-  border: 1px solid var(--core-line);
+  padding: 9px 15px;
+  border: 1px solid color-mix(in srgb, var(--core-blue) 26%, transparent);
   border-radius: 999px;
   color: var(--core-blue);
-  background: color-mix(in srgb, var(--app-bg) 85%, transparent);
+  background: color-mix(in srgb, var(--app-surface) 88%, transparent);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 8px 28px var(--app-shadow);
   font: inherit;
   font-size: 11px;
-  letter-spacing: 1px;
+  letter-spacing: 0.5px;
   white-space: nowrap;
   cursor: pointer;
   transition:
@@ -238,13 +240,14 @@
 .workspace-ai-core-guides {
   stroke: var(--core-line);
   stroke-width: 0.6;
+  opacity: 0.65;
 }
 .workspace-ai-core-ticks {
-  stroke: color-mix(in srgb, var(--core-blue) 25%, transparent);
+  stroke: color-mix(in srgb, var(--core-blue) 12%, transparent);
   stroke-width: 0.7;
 }
 .workspace-ai-core-ticks .is-major {
-  stroke: color-mix(in srgb, var(--core-cyan) 65%, transparent);
+  stroke: color-mix(in srgb, var(--core-cyan) 36%, transparent);
   stroke-width: 1;
 }
 .workspace-ai-core-outer,
@@ -307,6 +310,88 @@
   width: 100%;
   max-width: 720px;
   margin: 0 auto;
+}
+.workspace-ai-start > .assistant-compose .ant-sender {
+  border: 1px solid color-mix(in srgb, var(--app-text) 12%, transparent);
+  border-radius: 28px;
+  background: linear-gradient(
+    165deg,
+    color-mix(in srgb, var(--app-surface) 94%, var(--app-accent)),
+    color-mix(in srgb, var(--app-surface) 92%, transparent)
+  );
+  box-shadow:
+    0 12px 40px color-mix(in srgb, var(--app-shadow) 90%, transparent),
+    inset 0 1px 0 color-mix(in srgb, var(--app-text) 4%, transparent);
+  backdrop-filter: blur(20px);
+  transition:
+    border-color 180ms ease,
+    box-shadow 180ms ease;
+}
+.workspace-ai-start > .assistant-compose .ant-sender:focus-within {
+  border-color: color-mix(in srgb, var(--app-accent) 48%, transparent);
+  box-shadow:
+    0 12px 40px color-mix(in srgb, var(--app-shadow) 90%, transparent),
+    0 0 0 3px color-mix(in srgb, var(--app-accent) 7%, transparent);
+}
+.workspace-ai-start > .assistant-compose .ant-sender-content {
+  min-height: 60px;
+  padding: 13px 16px 13px 20px;
+  gap: 10px;
+}
+.workspace-ai-start > .assistant-compose .ant-sender-input {
+  font-size: 13px;
+  line-height: 1.7;
+}
+.workspace-ai-start > .assistant-compose .ant-sender-input::placeholder {
+  color: var(--app-secondary);
+}
+.workspace-ai-start > .assistant-compose .agent-composer {
+  margin: 0 12px 9px;
+}
+.workspace-ai-start > .assistant-compose .agent-composer-tools {
+  gap: 7px;
+  min-height: 28px;
+}
+.workspace-ai-start > .assistant-compose .agent-composer-tools .ant-select {
+  min-width: 122px;
+  max-width: 168px;
+  font-size: 11px;
+}
+.workspace-ai-start
+  > .assistant-compose
+  .agent-composer-tools
+  .ant-select-selector {
+  background: color-mix(in srgb, var(--app-surface) 65%, transparent);
+  border-color: color-mix(in srgb, var(--app-text) 8%, transparent);
+  border-radius: 8px;
+}
+.workspace-ai-start
+  > .assistant-compose
+  :is(
+    .agent-composer-tools .ant-btn,
+    .agent-composer-tools .ant-checkbox-wrapper
+  ) {
+  color: var(--app-secondary);
+  font-size: 11px;
+}
+.workspace-ai-start > .assistant-compose .assistant-compose-meta {
+  justify-content: space-between;
+  gap: 8px 12px;
+  margin-top: 0;
+  padding: 10px 9px 0;
+}
+.workspace-ai-start > .assistant-compose .assistant-compose-meta .ant-btn {
+  padding-inline: 5px;
+  border-radius: 8px;
+}
+.workspace-ai-start > .assistant-compose .assistant-compose-meta .anticon {
+  font-size: 12px;
+}
+.workspace-ai-start
+  > .assistant-compose
+  :is(.agent-composer-tools .ant-btn, .assistant-compose-meta .ant-btn):hover {
+  color: var(--app-text);
+  background: color-mix(in srgb, var(--app-text) 5%, transparent);
 }
 .workspace-ai-core:hover .workspace-ai-core-aura,
 .workspace-ai-core:focus-within .workspace-ai-core-aura,
@@ -476,6 +561,22 @@
   .workspace-ai-companion-slot {
     width: 132px;
     height: 118px;
+  }
+  .workspace-ai-start > .assistant-compose .ant-sender {
+    border-radius: 24px;
+  }
+  .workspace-ai-start > .assistant-compose .ant-sender-content {
+    min-height: 56px;
+    padding: 12px 13px 12px 16px;
+    gap: 7px;
+  }
+  .workspace-ai-start > .assistant-compose .agent-composer {
+    margin-inline: 6px;
+  }
+  .workspace-ai-start > .assistant-compose .assistant-compose-meta {
+    justify-content: flex-start;
+    padding-inline: 4px;
+    gap: 8px 12px;
   }
 }
 @media (prefers-reduced-motion: reduce) {

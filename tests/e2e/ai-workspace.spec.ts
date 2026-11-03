@@ -2310,6 +2310,7 @@ test("球形光环与立体小序共同转向，正面侧面背面真实重绘�
     permissions: ["analytics.read", "analytics.manage", "project.read"],
   });
   await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto("/my-workspace");
   const renderer = page.locator(".workspace-three-canvas");
   const world = page.getByRole("region", {
@@ -2349,6 +2350,14 @@ test("球形光环与立体小序共同转向，正面侧面背面真实重绘�
   };
   const front = await page.screenshot({ clip: robotCrop });
   await page.screenshot({ path: ".local/three-workspace-dark-front.png" });
+  await openWorkspacePanel(page, "打开日程");
+  await expect(
+    page.getByRole("dialog", { name: "日程", exact: true }),
+  ).toBeVisible();
+  await page.screenshot({ path: ".local/three-workspace-dark-schedule.png" });
+  await page
+    .getByRole("button", { name: "收起工作台面板", exact: true })
+    .click();
   const beforeSide = Number(await renderer.getAttribute("data-render-frame"));
   await dragWorkspace(page, 300, 0);
   await expect(world).toHaveAttribute("data-world-yaw", "90");
@@ -2378,12 +2387,22 @@ test("球形光环与立体小序共同转向，正面侧面背面真实重绘�
   await expect
     .poll(async () => similarity(initial, await quaternion()))
     .toBeCloseTo(1, 4);
+  const beforeTheme = Number(await renderer.getAttribute("data-render-frame"));
   await page
     .getByRole("button", { name: "切换为亮色主题", exact: true })
     .click();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await expect
+    .poll(async () => Number(await renderer.getAttribute("data-render-frame")))
+    .toBeGreaterThan(beforeTheme);
+  await page.mouse.move(2, 2);
+  await expect(page.getByRole("tooltip")).toHaveCount(0);
   await page.screenshot({ path: ".local/three-workspace-light.png" });
   await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.locator(".sidebar")).toBeHidden();
+  await expect(
+    page.getByRole("button", { name: "展开工作区导航", exact: true }),
+  ).toBeVisible();
   await expect(renderer).toHaveAttribute("data-renderer-state", "ready");
   await expect
     .poll(async () => Number(await renderer.getAttribute("data-render-width")))
@@ -2401,6 +2420,20 @@ test("球形光环与立体小序共同转向，正面侧面背面真实重绘�
       ),
     )
     .toBe(true);
+  await page.screenshot({
+    path: ".local/three-workspace-mobile-light.png",
+    fullPage: true,
+  });
+  const beforeDark = Number(await renderer.getAttribute("data-render-frame"));
+  await page
+    .getByRole("button", { name: "切换为暗色主题", exact: true })
+    .click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await expect
+    .poll(async () => Number(await renderer.getAttribute("data-render-frame")))
+    .toBeGreaterThan(beforeDark);
+  await page.mouse.move(2, 2);
+  await expect(page.getByRole("tooltip")).toHaveCount(0);
   await page.screenshot({
     path: ".local/three-workspace-mobile.png",
     fullPage: true,
@@ -2524,7 +2557,7 @@ test("科技背景粒子实际缓慢运动，减少动态效果暂停并可恢�
   expect(moving.frame - sample.frame).toBeLessThanOrEqual(
     Math.ceil((moving.time - sample.time) / 50) + 2,
   );
-  // Let the slow scan reach the visible upper half of the background.
+  // Capture the slow ambient glow after it has visibly developed.
   await page.waitForTimeout(7000);
   await page.screenshot({
     path: ".local/three-workspace-dynamic-background.png",

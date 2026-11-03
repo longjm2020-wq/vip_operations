@@ -8,7 +8,6 @@ export type WorkspaceThreeModel = {
   setTheme(theme: WorkspaceModelTheme): void;
 };
 
-const tau = Math.PI * 2;
 const isWorking = (state: string) =>
   ["working", "thinking", "connecting", "processing"].includes(state);
 
@@ -16,242 +15,18 @@ function tube(
   points: THREE.Vector3[],
   radius: number,
   material: THREE.Material,
-  closed = false,
 ) {
-  // Closed curves already connect their ends; a duplicated endpoint produces a visible seam.
-  const controls =
-    closed && points[0].distanceToSquared(points[points.length - 1]) < 0.000001
-      ? points.slice(0, -1)
-      : points;
-  const curve = new THREE.CatmullRomCurve3(controls, closed, "centripetal");
   return new THREE.Mesh(
     new THREE.TubeGeometry(
-      curve,
-      Math.max(32, controls.length * 2),
+      new THREE.CatmullRomCurve3(points),
+      80,
       radius,
-      5,
-      closed,
+      6,
+      false,
     ),
     material,
   );
 }
-
-function circlePoints(radius: number, start = 0, length = tau, y = 0) {
-  return Array.from({ length: 65 }, (_, index) => {
-    const angle = start + (index / 64) * length;
-    return new THREE.Vector3(
-      Math.cos(angle) * radius,
-      Math.sin(angle) * radius + y,
-      0,
-    );
-  });
-}
-
-/** Genuine spherical meridians/latitudes, with no textures or postprocessing dependency. */
-export function createNestModel(): WorkspaceThreeModel {
-  const group = new THREE.Group();
-  group.name = "xuti-spherical-nest";
-  const skeleton = new THREE.Group(),
-    currents = new THREE.Group();
-  group.add(skeleton, currents);
-  const faint = new THREE.MeshBasicMaterial({
-    color: 0x526fae,
-    transparent: true,
-    opacity: 0.26,
-    depthWrite: false,
-  });
-  const blue = new THREE.MeshBasicMaterial({
-    color: 0x7a94ff,
-    transparent: true,
-    opacity: 0.72,
-    depthWrite: false,
-  });
-  const cyan = new THREE.MeshBasicMaterial({
-    color: 0x81dcef,
-    transparent: true,
-    opacity: 0.8,
-    depthWrite: false,
-  });
-  const atmosphere = new THREE.MeshBasicMaterial({
-    color: 0x526fd6,
-    transparent: true,
-    opacity: 0.018,
-    depthWrite: false,
-    side: THREE.BackSide,
-  });
-  const beacon = new THREE.MeshBasicMaterial({
-    color: 0xc2f2ff,
-    toneMapped: false,
-  });
-  const beaconGlow = new THREE.MeshBasicMaterial({
-    color: 0x6aabff,
-    transparent: true,
-    opacity: 0.14,
-    depthWrite: false,
-  });
-
-  // Three vertical great circles intersect a horizontal equator: every view has real depth.
-  for (const angle of [0, Math.PI / 3, (Math.PI * 2) / 3]) {
-    const meridian = tube(circlePoints(145), 0.43, faint, true);
-    meridian.rotation.y = angle;
-    skeleton.add(meridian);
-  }
-  for (const height of [-70, 0, 70]) {
-    const latitude = tube(
-      circlePoints(Math.sqrt(145 ** 2 - height ** 2)),
-      height === 0 ? 0.55 : 0.38,
-      faint,
-      true,
-    );
-    latitude.rotation.x = Math.PI / 2;
-    latitude.position.y = height;
-    skeleton.add(latitude);
-  }
-  skeleton.add(
-    new THREE.Mesh(new THREE.SphereGeometry(142, 32, 20), atmosphere),
-  );
-
-  const paths = [
-    {
-      radius: 146,
-      start: 0.1,
-      length: Math.PI * 0.76,
-      x: 0.4,
-      y: 0.4,
-      z: -0.3,
-      material: cyan,
-    },
-    {
-      radius: 143,
-      start: Math.PI * 0.8,
-      length: Math.PI * 0.58,
-      x: 1.2,
-      y: -0.6,
-      z: 0.7,
-      material: blue,
-    },
-    {
-      radius: 147,
-      start: Math.PI * 1.1,
-      length: Math.PI * 0.34,
-      x: -0.45,
-      y: 1.1,
-      z: 0.5,
-      material: cyan,
-    },
-    {
-      radius: 139,
-      start: Math.PI * 0.3,
-      length: Math.PI * 0.35,
-      x: 0.7,
-      y: 1.45,
-      z: 0.3,
-      material: blue,
-    },
-  ];
-  const nodeGeometry = new THREE.SphereGeometry(1.85, 10, 8),
-    glowGeometry = new THREE.SphereGeometry(4.1, 10, 8);
-  for (const path of paths) {
-    const orbit = new THREE.Group();
-    orbit.rotation.set(path.x, path.y, path.z);
-    orbit.add(
-      tube(
-        circlePoints(path.radius, path.start, path.length),
-        0.88,
-        path.material,
-      ),
-    );
-    const end = path.start + path.length;
-    const node = new THREE.Mesh(nodeGeometry, beacon),
-      glow = new THREE.Mesh(glowGeometry, beaconGlow);
-    node.position.set(
-      Math.cos(end) * path.radius,
-      Math.sin(end) * path.radius,
-      0,
-    );
-    glow.position.copy(node.position);
-    orbit.add(node, glow);
-    currents.add(orbit);
-  }
-
-  // Batched equatorial markers remain one draw call.
-  const marks: number[] = [];
-  for (let index = 0; index < 48; index++) {
-    const angle = (index / 48) * tau,
-      inner = index % 4 === 0 ? 141.2 : 143.2;
-    marks.push(
-      Math.cos(angle) * inner,
-      0,
-      Math.sin(angle) * inner,
-      Math.cos(angle) * 146,
-      0,
-      Math.sin(angle) * 146,
-    );
-  }
-  const ticks = new THREE.LineSegments(
-    new THREE.BufferGeometry().setAttribute(
-      "position",
-      new THREE.Float32BufferAttribute(marks, 3),
-    ),
-    new THREE.LineBasicMaterial({
-      color: 0x6f91d9,
-      transparent: true,
-      opacity: 0.35,
-      depthWrite: false,
-    }),
-  );
-  skeleton.add(ticks);
-  let light = false,
-    palette = "";
-  const setTheme = (theme: WorkspaceModelTheme) => {
-    light = theme === "light";
-    faint.color.setHex(light ? 0x5373b6 : 0x526fae);
-    blue.color.setHex(light ? 0x4666d9 : 0x7a94ff);
-    cyan.color.setHex(light ? 0x168eae : 0x81dcef);
-    beacon.color.setHex(light ? 0x168eae : 0xc2f2ff);
-    ticks.material.color.setHex(light ? 0x476dc1 : 0x6f91d9);
-    palette = "";
-  };
-  const update = (time: number, state: string, reduced: boolean) => {
-    const muted = state === "muted",
-      still = reduced || muted,
-      warning = state === "error",
-      notice = state === "notice",
-      t = still ? 0 : time,
-      active =
-        isWorking(state) || state === "listening" || state === "speaking",
-      breath = still ? 0.5 : (Math.sin(t * (active ? 1.7 : 0.82)) + 1) / 2;
-    const nextPalette = `${light}:${warning}:${muted}`;
-    if (nextPalette !== palette) {
-      palette = nextPalette;
-      beacon.color.setHex(
-        warning ? 0xffcf91 : muted ? 0x8aa1bd : light ? 0x168eae : 0xc2f2ff,
-      );
-      beaconGlow.color.setHex(warning ? 0xf6ad55 : 0x6aabff);
-    }
-    currents.rotation.y = still ? 0 : t * (active ? 0.2 : 0.065);
-    currents.rotation.z = still ? 0 : Math.sin(t * 0.23) * 0.05;
-    skeleton.scale.setScalar(1 + (still ? 0 : Math.sin(t * 0.82) * 0.005));
-    faint.opacity = (light ? 0.27 : 0.33) + breath * 0.06;
-    blue.opacity = 0.62 + breath * 0.24;
-    cyan.opacity = 0.72 + breath * 0.24;
-    atmosphere.opacity = (light ? 0.012 : 0.018) + breath * 0.012;
-    beaconGlow.opacity = muted
-      ? 0.05
-      : warning
-        ? 0.23
-        : notice
-          ? 0.16 + (still ? 0.5 : (Math.sin(t * 2.1) + 1) / 2) * 0.13
-          : 0.13 + breath * (active ? 0.18 : 0.1);
-    // A short, very small decorative tremor, without moving the robot or any hit target.
-    const tremor = !still && t % 9.6 > 8.6 ? Math.sin(t * 39) * 0.0012 : 0;
-    skeleton.rotation.z = tremor;
-  };
-  setTheme("dark");
-  update(0, "idle", true);
-  return { group, update, setTheme };
-}
-
 function roundBox(
   width: number,
   height: number,
@@ -260,301 +35,468 @@ function roundBox(
   material: THREE.Material,
 ) {
   return new THREE.Mesh(
-    new RoundedBoxGeometry(width, height, depth, 3, radius),
+    new RoundedBoxGeometry(width, height, depth, 4, radius),
     material,
   );
 }
 
-/** XUTI's small blue companion, built as a solid model with a detailed back and sides. */
-export function createRobotModel(): WorkspaceThreeModel {
-  const group = new THREE.Group();
-  group.name = "xuti-robot";
-  const body = new THREE.Group(),
-    head = new THREE.Group();
-  body.position.y = -9;
-  head.position.y = 24;
-  group.add(body);
-  body.add(head);
+const shellVertex = `
+  varying vec3 vNormalView;
+  varying vec3 vView;
+  void main() {
+    vec4 mv = modelViewMatrix * vec4(position, 1.0);
+    vNormalView = normalize(normalMatrix * normal);
+    vView = -mv.xyz;
+    gl_Position = projectionMatrix * mv;
+  }
+`;
+const shellFragment = `
+  uniform vec3 uTint;
+  uniform float uStrength;
+  varying vec3 vNormalView;
+  varying vec3 vView;
+  void main() {
+    float facing = max(0.0, dot(normalize(vNormalView), normalize(vView)));
+    float rim = pow(1.0 - facing, 3.3);
+    float softRim = pow(1.0 - facing, 1.6);
+    float alpha = (rim * 0.82 + softRim * 0.12 + 0.004) * uStrength;
+    gl_FragColor = vec4(uTint * (0.9 + rim * 0.18), alpha);
+    #include <tonemapping_fragment>
+    #include <colorspace_fragment>
+  }
+`;
 
-  const shell = new THREE.MeshStandardMaterial({
-    color: 0xd8e2ff,
-    roughness: 0.35,
-    metalness: 0.12,
-  });
-  const blue = new THREE.MeshStandardMaterial({
-    color: 0x627bea,
-    roughness: 0.36,
-    metalness: 0.22,
-    emissive: 0x1a3395,
-    emissiveIntensity: 0.12,
-  });
-  const trim = new THREE.MeshStandardMaterial({
-    color: 0x475eac,
-    roughness: 0.44,
-    metalness: 0.4,
-  });
-  const metal = new THREE.MeshStandardMaterial({
-    color: 0xa5b8e6,
-    roughness: 0.34,
-    metalness: 0.65,
-  });
-  const visor = new THREE.MeshStandardMaterial({
-    color: 0x111c37,
-    roughness: 0.2,
-    metalness: 0.25,
-  });
-  const eyeLight = new THREE.MeshBasicMaterial({
-    color: 0xc6e8ff,
-    toneMapped: false,
-  });
-  const signalLight = new THREE.MeshStandardMaterial({
-    color: 0x96d7ff,
-    emissive: 0x559bff,
-    emissiveIntensity: 0.65,
-    roughness: 0.25,
-  });
-  const signalGlow = new THREE.MeshBasicMaterial({
-    color: 0x6a96ff,
+// Perspective-aware masking keeps all decorative arcs clear of the resident's face.
+const arcVertex = `
+  varying vec3 vPositionView;
+  varying vec3 vCenterView;
+  varying float vModelScale;
+  void main() {
+    vec4 mv = modelViewMatrix * vec4(position, 1.0);
+    vPositionView = mv.xyz;
+    vCenterView = (modelViewMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+    vModelScale = length(modelViewMatrix[0].xyz);
+    gl_Position = projectionMatrix * mv;
+  }
+`;
+const arcFragment = `
+  uniform vec3 uTint;
+  uniform float uStrength;
+  varying vec3 vPositionView;
+  varying vec3 vCenterView;
+  varying float vModelScale;
+  void main() {
+    vec2 p = vPositionView.xy / max(1.0, -vPositionView.z);
+    vec2 center = vCenterView.xy / max(1.0, -vCenterView.z);
+    float distanceFromResident = length(p - center) * max(1.0, -vCenterView.z);
+    float clearFace = smoothstep(76.0 * vModelScale, 96.0 * vModelScale, distanceFromResident);
+    gl_FragColor = vec4(uTint, uStrength * clearFace);
+    #include <tonemapping_fragment>
+    #include <colorspace_fragment>
+  }
+`;
+
+/** A quiet volumetric energy shell, with just two sparse arcs and no wire cage. */
+export function createNestModel(): WorkspaceThreeModel {
+  const group = new THREE.Group();
+  group.name = "xuti-spherical-nest";
+  const shellMaterial = new THREE.ShaderMaterial({
+    vertexShader: shellVertex,
+    fragmentShader: shellFragment,
+    uniforms: {
+      uTint: { value: new THREE.Color(0x5c87d9) },
+      uStrength: { value: 0.3 },
+    },
     transparent: true,
-    opacity: 0.14,
+    depthWrite: false,
+    side: THREE.FrontSide,
+  });
+  const outerMaterial = shellMaterial.clone();
+  outerMaterial.uniforms.uStrength.value = 0.08;
+  const sphere = new THREE.SphereGeometry(145, 64, 40);
+  const shell = new THREE.Mesh(sphere, shellMaterial),
+    haze = new THREE.Mesh(sphere, outerMaterial);
+  haze.scale.setScalar(1.035);
+  group.add(shell, haze);
+
+  const arcMaterial = new THREE.ShaderMaterial({
+    vertexShader: arcVertex,
+    fragmentShader: arcFragment,
+    uniforms: {
+      uTint: { value: new THREE.Color(0x74b9f3) },
+      uStrength: { value: 0.55 },
+    },
+    transparent: true,
     depthWrite: false,
   });
-
-  head.add(roundBox(98, 66, 52, 22, shell));
-  const bezel = roundBox(93, 54, 38, 18, blue);
-  bezel.scale.z = 0.19;
-  bezel.position.set(0, -1, 25.8);
-  head.add(bezel);
-  const face = roundBox(85, 46, 34, 16.5, visor);
-  face.scale.z = 0.16;
-  face.position.set(0, -1, 29.6);
-  head.add(face);
-
-  const eyes = new THREE.Group();
-  eyes.position.set(0, 4.5, 33.4);
-  const eyeGeometry = new THREE.CapsuleGeometry(3.7, 6.5, 4, 10);
-  for (const x of [-21, 21]) {
-    const eye = new THREE.Mesh(eyeGeometry, eyeLight);
-    eye.position.x = x;
-    eye.scale.z = 0.38;
-    eyes.add(eye);
-  }
-  head.add(eyes);
-  const smile = new THREE.Mesh(
-    new THREE.TubeGeometry(
-      new THREE.QuadraticBezierCurve3(
-        new THREE.Vector3(-8, -10, 34),
-        new THREE.Vector3(0, -17, 35),
-        new THREE.Vector3(8, -10, 34),
+  const secondaryMaterial = arcMaterial.clone();
+  secondaryMaterial.uniforms.uTint.value.setHex(0x617dab);
+  const currents = new THREE.Group();
+  group.add(currents);
+  for (const [index, path] of [
+    {
+      start: -0.15,
+      length: Math.PI * 0.8,
+      x: 0.42,
+      y: -0.3,
+      z: 0.55,
+      radius: 149,
+    },
+    {
+      start: Math.PI * 0.6,
+      length: Math.PI * 0.62,
+      x: -0.62,
+      y: 0.75,
+      z: -0.25,
+      radius: 147,
+    },
+  ].entries()) {
+    const orbit = new THREE.Group(),
+      material = index === 0 ? arcMaterial : secondaryMaterial;
+    orbit.rotation.set(path.x, path.y, path.z);
+    const points = Array.from({ length: 41 }, (_, i) => {
+      const a = path.start + (path.length * i) / 40;
+      return new THREE.Vector3(
+        Math.cos(a) * path.radius,
+        Math.sin(a) * path.radius,
+        0,
+      );
+    });
+    orbit.add(tube(points, index === 0 ? 0.68 : 0.45, material));
+    const point = points[points.length - 1];
+    // Geometry translation keeps each mesh's local origin at the sphere center for the mask.
+    const node = new THREE.Mesh(
+      new THREE.SphereGeometry(index === 0 ? 1.7 : 1.2, 12, 8).translate(
+        point.x,
+        point.y,
+        point.z,
       ),
-      20,
-      1.2,
-      6,
-      false,
-    ),
-    eyeLight,
-  );
-  const speakingMouth = new THREE.Mesh(
-    new THREE.TorusGeometry(4.7, 1.1, 6, 20),
-    eyeLight,
-  );
-  speakingMouth.position.set(0, -11, 34.7);
-  speakingMouth.visible = false;
-  head.add(smile, speakingMouth);
-
-  const earGeometry = new THREE.CylinderGeometry(10, 10, 10, 20),
-    earLightGeometry = new THREE.CylinderGeometry(6, 6, 1.8, 20);
-  for (const sign of [-1, 1]) {
-    const ear = new THREE.Mesh(earGeometry, blue);
-    ear.rotation.z = Math.PI / 2;
-    ear.position.set(sign * 53.5, 0, 0);
-    const light = new THREE.Mesh(earLightGeometry, signalLight);
-    light.rotation.z = Math.PI / 2;
-    light.position.set(sign * 59.2, 0, 0);
-    head.add(ear, light);
-  }
-  const antenna = new THREE.Mesh(
-    new THREE.CylinderGeometry(1.8, 2.2, 15, 10),
-    metal,
-  );
-  antenna.position.set(0, 40, -1);
-  const antennaTip = new THREE.Mesh(
-    new THREE.SphereGeometry(4.8, 16, 12),
-    blue.clone(),
-  );
-  antennaTip.position.set(0, 51, -1);
-  const tipLight = new THREE.Mesh(
-    new THREE.SphereGeometry(2.2, 12, 8),
-    signalLight,
-  );
-  tipLight.position.set(0, 52, 2.2);
-  const tipGlow = new THREE.Mesh(
-    new THREE.SphereGeometry(6.5, 12, 8),
-    signalGlow,
-  );
-  tipGlow.position.copy(antennaTip.position);
-  head.add(antenna, antennaTip, tipLight, tipGlow);
-
-  // Back shell details are actual raised/recessed meshes, visible when the world turns around.
-  const backRim = roundBox(63, 35, 7, 3.4, blue);
-  backRim.position.set(0, -2, -25);
-  const backPanel = roundBox(56, 28, 5, 2.4, shell);
-  backPanel.position.set(0, -2, -28);
-  head.add(backRim, backPanel);
-  const ventGeometry = new THREE.CapsuleGeometry(1.1, 7, 3, 6);
-  for (let index = -2; index <= 2; index++) {
-    const vent = new THREE.Mesh(ventGeometry, trim);
-    vent.position.set(index * 6, -4, -30.7);
-    vent.scale.z = 0.35;
-    head.add(vent);
-  }
-  for (const sign of [-1, 1]) {
-    const mark = roundBox(1.8, 11, 1.3, 0.6, blue);
-    mark.position.set(0, 18, -25.3);
-    mark.rotation.z = sign * 0.58;
-    head.add(mark);
-  }
-
-  const neck = new THREE.Mesh(new THREE.CylinderGeometry(9, 10, 10, 16), trim);
-  neck.position.y = -9;
-  const torso = roundBox(49, 42, 35, 12, blue);
-  torso.position.y = -27;
-  body.add(neck, torso);
-  const chest = roundBox(28, 23, 8, 3.8, shell);
-  chest.position.set(0, -26, 17.4);
-  body.add(chest);
-  // The familiar V-shaped chest indicator is lit, but never represents task completion.
-  for (const sign of [-1, 1]) {
-    const coreMark = roundBox(2.6, 8, 2, 0.9, blue);
-    coreMark.position.set(sign * 2.6, -26, 22);
-    coreMark.rotation.z = (sign * -Math.PI) / 4;
-    body.add(coreMark);
-  }
-  const rearPort = roundBox(21, 11, 5, 2.4, visor);
-  rearPort.position.set(0, -29, -17.5);
-  const port = roundBox(9, 2, 1.5, 0.7, metal);
-  port.position.set(0, -29, -20.5);
-  body.add(rearPort, port);
-
-  const arms: THREE.Group[] = [];
-  const shoulderGeometry = new THREE.SphereGeometry(7, 12, 10),
-    armGeometry = new THREE.CapsuleGeometry(5.2, 13, 4, 10),
-    handGeometry = new THREE.SphereGeometry(6.4, 12, 10);
-  for (const sign of [-1, 1]) {
-    const shoulder = new THREE.Mesh(shoulderGeometry, metal);
-    shoulder.position.set(sign * 25, -18, 0);
-    body.add(shoulder);
-    const pivot = new THREE.Group();
-    pivot.position.set(sign * 28, -18, 0);
-    const arm = new THREE.Mesh(armGeometry, blue);
-    arm.position.set(sign * 7, -8, 0);
-    arm.rotation.z = sign * 0.53;
-    const hand = new THREE.Mesh(handGeometry, shell);
-    hand.position.set(sign * 13.5, -19, 1);
-    hand.scale.set(0.9, 0.95, 1.15);
-    pivot.add(arm, hand);
-    body.add(pivot);
-    arms.push(pivot);
-
-    const leg = new THREE.Mesh(
-      new THREE.CylinderGeometry(5.2, 5.8, 10, 12),
-      trim,
+      material,
     );
-    leg.position.set(sign * 13, -48, 0);
-    const foot = roundBox(22, 13, 28, 6, shell);
-    foot.position.set(sign * 14, -56, 5);
-    const sole = roundBox(23, 3.8, 29, 1.8, blue);
-    sole.position.set(sign * 14, -61, 5);
-    body.add(leg, foot, sole);
+    orbit.add(node);
+    currents.add(orbit);
   }
-
   let light = false,
     palette = "";
   const setTheme = (theme: WorkspaceModelTheme) => {
     light = theme === "light";
-    shell.color.setHex(light ? 0xe4ebff : 0xd8e2ff);
-    blue.color.setHex(light ? 0x526fe0 : 0x627bea);
-    trim.color.setHex(light ? 0x4059a1 : 0x475eac);
-    visor.color.setHex(light ? 0x172447 : 0x111c37);
-    eyeLight.color.setHex(light ? 0xb7dbff : 0xc6e8ff);
+    shellMaterial.uniforms.uTint.value.setHex(light ? 0x456bb0 : 0x5c87d9);
+    outerMaterial.uniforms.uTint.value.setHex(light ? 0x5375b1 : 0x466eac);
     palette = "";
   };
   const update = (time: number, state: string, reduced: boolean) => {
     const muted = state === "muted",
       still = reduced || muted,
       warning = state === "error",
-      notice = state === "notice",
-      t = still ? 0 : time,
+      notice = state === "notice";
+    const t = still ? 0 : time,
+      active =
+        isWorking(state) || state === "listening" || state === "speaking";
+    const breath = still ? 0.5 : (Math.sin(t * (active ? 1.25 : 0.65)) + 1) / 2;
+    const nextPalette = `${light}:${warning}:${muted}`;
+    if (palette !== nextPalette) {
+      palette = nextPalette;
+      arcMaterial.uniforms.uTint.value.setHex(
+        warning ? 0xcba575 : muted ? 0x647b9a : light ? 0x3c739e : 0x74b9f3,
+      );
+      secondaryMaterial.uniforms.uTint.value.setHex(
+        light ? 0x637ba9 : 0x617dab,
+      );
+    }
+    shellMaterial.uniforms.uStrength.value =
+      (light ? 0.18 : 0.29) + breath * 0.08;
+    outerMaterial.uniforms.uStrength.value =
+      (light ? 0.04 : 0.055) + breath * 0.025;
+    arcMaterial.uniforms.uStrength.value = muted
+      ? 0.28
+      : warning
+        ? 0.6
+        : 0.5 + breath * 0.15;
+    secondaryMaterial.uniforms.uStrength.value = 0.3 + breath * 0.1;
+    if (notice)
+      arcMaterial.uniforms.uStrength.value +=
+        (still ? 0.5 : (Math.sin(t * 1.8) + 1) / 2) * 0.09;
+    currents.rotation.y = still ? 0 : t * (active ? 0.075 : 0.027);
+    currents.rotation.z = still ? 0 : Math.sin(t * 0.18) * 0.035;
+    haze.scale.setScalar(1.035 + (still ? 0 : Math.sin(t * 0.65) * 0.006));
+    shell.rotation.z = !still && t % 11 > 10.2 ? Math.sin(t * 30) * 0.0006 : 0;
+  };
+  setTheme("dark");
+  update(0, "idle", true);
+  return { group, update, setTheme };
+}
+
+/** A floating rounded companion: continuous blue shells, glass visor and small free hands. */
+export function createRobotModel(): WorkspaceThreeModel {
+  const group = new THREE.Group();
+  group.name = "xuti-robot";
+  const body = new THREE.Group(),
+    head = new THREE.Group();
+  body.position.y = -4;
+  head.position.y = 18;
+  group.add(body);
+  body.add(head);
+  const shell = new THREE.MeshStandardMaterial({
+    color: 0x425b91,
+    roughness: 0.34,
+    metalness: 0.32,
+  });
+  const edge = new THREE.MeshStandardMaterial({
+    color: 0x6a84b1,
+    roughness: 0.32,
+    metalness: 0.58,
+  });
+  const inset = new THREE.MeshStandardMaterial({
+    color: 0x223754,
+    roughness: 0.45,
+    metalness: 0.35,
+  });
+  const visor = new THREE.MeshStandardMaterial({
+    color: 0x061224,
+    roughness: 0.18,
+    metalness: 0.18,
+  });
+  const eyeLight = new THREE.MeshBasicMaterial({ color: 0x9bc5e2 });
+  const signal = new THREE.MeshStandardMaterial({
+    color: 0x8cb2d5,
+    emissive: 0x3c6e9b,
+    emissiveIntensity: 0.35,
+    roughness: 0.32,
+    metalness: 0.2,
+  });
+  const signalGlow = new THREE.MeshBasicMaterial({
+    color: 0x6993be,
+    transparent: true,
+    opacity: 0.12,
+    depthWrite: false,
+  });
+
+  head.add(roundBox(110, 72, 64, 29, shell));
+  const bezel = roundBox(97, 57, 38, 18.5, edge);
+  bezel.scale.z = 0.13;
+  bezel.position.set(0, -2, 31);
+  head.add(bezel);
+  const face = roundBox(92, 52, 36, 17.5, visor);
+  face.scale.z = 0.12;
+  face.position.set(0, -2, 33);
+  head.add(face);
+  const eyes = new THREE.Group();
+  eyes.position.set(0, 2.5, 35.5);
+  const eyeGeometry = new THREE.CapsuleGeometry(3.3, 5.5, 5, 12);
+  for (const x of [-21, 21]) {
+    const eye = new THREE.Mesh(eyeGeometry, eyeLight);
+    eye.position.x = x;
+    eye.scale.z = 0.3;
+    eyes.add(eye);
+  }
+  head.add(eyes);
+  const smile = new THREE.Mesh(
+    new THREE.TubeGeometry(
+      new THREE.QuadraticBezierCurve3(
+        new THREE.Vector3(-8, -11, 35.6),
+        new THREE.Vector3(0, -17, 36),
+        new THREE.Vector3(8, -11, 35.6),
+      ),
+      24,
+      0.95,
+      7,
+      false,
+    ),
+    eyeLight,
+  );
+  const mouth = new THREE.Mesh(
+    new THREE.TorusGeometry(4.2, 0.95, 8, 24),
+    eyeLight,
+  );
+  mouth.position.set(0, -12, 35.8);
+  mouth.visible = false;
+  head.add(smile, mouth);
+
+  const earGeometry = new THREE.SphereGeometry(1, 20, 16);
+  for (const sign of [-1, 1]) {
+    const ear = new THREE.Mesh(earGeometry, inset);
+    ear.scale.set(4.3, 11.5, 8.7);
+    ear.position.set(sign * 54.5, -1, -2);
+    const port = new THREE.Mesh(
+      new THREE.CylinderGeometry(4.5, 4.5, 0.9, 20),
+      signal,
+    );
+    port.rotation.z = Math.PI / 2;
+    port.position.set(sign * 58.4, -1, -2);
+    head.add(ear, port);
+  }
+  const antenna = new THREE.Mesh(
+    new THREE.CylinderGeometry(1.25, 1.7, 14, 12),
+    edge,
+  );
+  antenna.position.set(0, 42, -2);
+  const antennaTip = new THREE.Mesh(
+    new THREE.SphereGeometry(3.5, 20, 14),
+    signal,
+  );
+  antennaTip.position.set(0, 52, -2);
+  const tipGlow = new THREE.Mesh(
+    new THREE.SphereGeometry(5, 16, 12),
+    signalGlow,
+  );
+  tipGlow.position.copy(antennaTip.position);
+  head.add(antenna, antennaTip, tipGlow);
+
+  // Subtle actual rear vents and a recessed back seam instead of a pasted rectangular panel.
+  const rearSeam = tube(
+    [
+      new THREE.Vector3(-22, 9, -29),
+      new THREE.Vector3(-11, 13, -31.4),
+      new THREE.Vector3(0, 14, -32.2),
+      new THREE.Vector3(11, 13, -31.4),
+      new THREE.Vector3(22, 9, -29),
+    ],
+    0.65,
+    inset,
+  );
+  head.add(rearSeam);
+  const ventGeometry = new THREE.CapsuleGeometry(0.8, 6, 4, 8);
+  for (const x of [-6, 0, 6]) {
+    const vent = new THREE.Mesh(ventGeometry, inset);
+    vent.position.set(x, -5, -32.1);
+    vent.scale.z = 0.45;
+    head.add(vent);
+  }
+
+  // A smooth lathed hull narrows into its levitation emitter; no legs, boots or chest badge.
+  const profile = new THREE.SplineCurve([
+    new THREE.Vector2(0, -57),
+    new THREE.Vector2(10, -56),
+    new THREE.Vector2(17, -50),
+    new THREE.Vector2(23, -39),
+    new THREE.Vector2(25, -29),
+    new THREE.Vector2(23, -20),
+    new THREE.Vector2(16, -14),
+    new THREE.Vector2(0, -13),
+  ]);
+  const hull = new THREE.Mesh(
+    new THREE.LatheGeometry(
+      profile
+        .getPoints(48)
+        .map((p) => new THREE.Vector2(Math.max(0, p.x), p.y)),
+      48,
+    ),
+    shell,
+  );
+  hull.scale.z = 0.78;
+  body.add(hull);
+  const chestSignal = roundBox(5.5, 1.4, 1.2, 0.5, signal);
+  chestSignal.position.set(0, -31, 19.5);
+  body.add(chestSignal);
+  const rearPort = roundBox(11, 3, 2, 0.9, inset);
+  rearPort.position.set(0, -34, -19.2);
+  body.add(rearPort);
+  const emitter = new THREE.Mesh(
+    new THREE.TorusGeometry(9.4, 0.65, 8, 40),
+    signal,
+  );
+  emitter.rotation.x = Math.PI / 2;
+  emitter.position.y = -56.8;
+  emitter.scale.y = 0.78;
+  body.add(emitter);
+  const hoverRing = new THREE.Mesh(
+    new THREE.TorusGeometry(12.5, 0.35, 6, 40),
+    signalGlow,
+  );
+  hoverRing.rotation.x = Math.PI / 2;
+  hoverRing.position.y = -64;
+  hoverRing.scale.y = 0.78;
+  body.add(hoverRing);
+  const hands: THREE.Group[] = [];
+  const handGeometry = new THREE.CapsuleGeometry(6.5, 10, 6, 16);
+  for (const sign of [-1, 1]) {
+    const pivot = new THREE.Group();
+    pivot.position.set(sign * 35, -25, 0);
+    const hand = new THREE.Mesh(handGeometry, shell);
+    hand.position.set(sign * 5, -7, 0);
+    hand.rotation.z = sign * 0.22;
+    hand.scale.z = 0.85;
+    const handSignal = roundBox(4.5, 1.2, 1, 0.45, signal);
+    handSignal.position.set(sign * 5, -6, 5.7);
+    pivot.add(hand, handSignal);
+    body.add(pivot);
+    hands.push(pivot);
+  }
+
+  let light = false,
+    palette = "";
+  const setTheme = (theme: WorkspaceModelTheme) => {
+    light = theme === "light";
+    shell.color.setHex(light ? 0x536e9e : 0x425b91);
+    edge.color.setHex(light ? 0x6d86ac : 0x6a84b1);
+    inset.color.setHex(light ? 0x2e4568 : 0x223754);
+    visor.color.setHex(light ? 0x0c1930 : 0x061224);
+    palette = "";
+  };
+  const update = (time: number, state: string, reduced: boolean) => {
+    const muted = state === "muted",
+      still = reduced || muted,
+      warning = state === "error",
+      notice = state === "notice";
+    const t = still ? 0 : time,
       working = isWorking(state),
       listening = state === "listening" || muted,
       speaking = state === "speaking",
       sleeping = ["sleeping", "sleep", "slacking"].includes(state);
     const nextPalette = `${light}:${warning}:${muted}`;
-    if (nextPalette !== palette) {
+    if (palette !== nextPalette) {
       palette = nextPalette;
       eyeLight.color.setHex(
-        warning ? 0xffd39a : muted ? 0x9eb4d5 : light ? 0xb7dbff : 0xc6e8ff,
+        warning ? 0xd8b18a : muted ? 0x758eab : light ? 0x8db8dc : 0x9bc5e2,
       );
-      signalLight.color.setHex(
-        warning ? 0xffca85 : muted ? 0x6d86af : 0x96d7ff,
-      );
-      signalLight.emissive.setHex(
-        warning ? 0xa46524 : muted ? 0x1d3556 : 0x559bff,
-      );
-      signalGlow.color.setHex(warning ? 0xffb45a : 0x6a96ff);
-      antennaTip.material.color.setHex(
-        warning ? 0xf6b55f : light ? 0x526fe0 : 0x627bea,
-      );
-      antennaTip.material.emissive.setHex(warning ? 0x71400c : 0x1a3395);
+      signal.color.setHex(warning ? 0xcda276 : muted ? 0x536d88 : 0x8cb2d5);
+      signal.emissive.setHex(warning ? 0x805222 : muted ? 0x162b3d : 0x3c6e9b);
+      signalGlow.color.setHex(warning ? 0xc79a69 : 0x6993be);
     }
     body.position.y =
-      -9 + (still ? 0 : Math.sin(t * (working ? 2 : 1.3)) * 1.15);
-    head.rotation.y = still ? 0 : Math.sin(t * 0.38) * (working ? 0.04 : 0.065);
+      -4 + (still ? 0 : Math.sin(t * (working ? 1.7 : 1.05)) * 1.1);
+    head.rotation.y = still
+      ? 0
+      : Math.sin(t * 0.32) * (working ? 0.025 : 0.045);
     head.rotation.z = listening
-      ? -0.09
+      ? -0.07
       : working
-        ? 0.035
+        ? 0.025
         : still
           ? 0
-          : Math.sin(t * 0.8) * 0.018;
-    head.rotation.x = sleeping ? 0.13 : listening ? -0.04 : 0;
-    const phase = t % 5.8,
+          : Math.sin(t * 0.65) * 0.012;
+    head.rotation.x = sleeping ? 0.1 : listening ? -0.03 : 0;
+    const phase = t % 6.2,
       blink =
-        !still && phase > 5.55
-          ? Math.max(0.1, Math.min(1, Math.abs(phase - 5.675) / 0.125))
+        !still && phase > 5.95
+          ? Math.max(0.1, Math.min(1, Math.abs(phase - 6.075) / 0.125))
           : 1;
     eyes.scale.y = sleeping ? 0.14 : blink;
-    eyes.position.x = still ? 0 : Math.sin(t * 0.38) * 0.7;
+    eyes.position.x = still ? 0 : Math.sin(t * 0.32) * 0.45;
     smile.visible = !speaking;
-    speakingMouth.visible = speaking;
-    speakingMouth.scale.y = still
-      ? 0.7
-      : 0.45 + Math.abs(Math.sin(t * 6.8)) * 0.6;
-    arms[0].rotation.z = working
-      ? -0.15
-      : still
-        ? 0
-        : Math.sin(t * 1.1) * 0.035;
-    arms[1].rotation.z = listening
-      ? 1.3
+    mouth.visible = speaking;
+    mouth.scale.y = still ? 0.7 : 0.48 + Math.abs(Math.sin(t * 6.2)) * 0.45;
+    hands[0].rotation.z = working ? -0.1 : still ? 0 : Math.sin(t * 0.9) * 0.03;
+    hands[1].rotation.z = listening
+      ? 0.65
       : speaking
-        ? 0.25 + (still ? 0 : Math.sin(t * 2.2) * 0.12)
-        : 0.12;
-    const pulse = still ? 0.5 : (Math.sin(t * (notice ? 2.1 : 2)) + 1) / 2;
-    signalLight.emissiveIntensity = muted
-      ? 0.12
+        ? 0.18 + (still ? 0 : Math.sin(t * 1.9) * 0.08)
+        : 0.05;
+    const pulse = still ? 0.5 : (Math.sin(t * (notice ? 1.8 : 1.5)) + 1) / 2;
+    signal.emissiveIntensity = muted
+      ? 0.08
       : warning
-        ? 0.6
+        ? 0.4
         : notice
-          ? 0.45 + pulse * 0.32
-          : 0.45 + (listening || working || speaking ? 0.35 : 0.1) * pulse;
+          ? 0.3 + pulse * 0.2
+          : 0.26 + (listening || working || speaking ? 0.22 : 0.06) * pulse;
     signalGlow.opacity = muted
-      ? 0.035
+      ? 0.025
       : warning
-        ? 0.22
+        ? 0.16
         : notice
-          ? 0.12 + pulse * 0.13
-          : 0.11 + (still ? 0.04 : (Math.sin(t * 1.4) + 1) * 0.045);
+          ? 0.09 + pulse * 0.1
+          : 0.07 + pulse * 0.06;
   };
   setTheme("dark");
   update(0, "idle", true);
