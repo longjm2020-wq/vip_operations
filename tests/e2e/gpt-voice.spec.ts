@@ -435,6 +435,28 @@ test("语音点击小序跃出巢穴，召回换位与跨页拖动不中断录�
   await expect(companion).toHaveAttribute("data-motion", "idle");
   await expect(bubble.getByRole("status")).toHaveText("我在听，你说");
   await expectBubbleInViewport();
+  const world = page.getByRole("region", {
+    name: "工作台三维场景",
+    exact: true,
+  });
+  const beforeCamera = (await bubble.boundingBox())!;
+  for (let step = 0; step < 3; step++) await world.press("Shift+ArrowLeft");
+  for (let step = 0; step < 3; step++) await world.press("ArrowRight");
+  await expect(world).toHaveAttribute("data-world-x", "-120");
+  await expect(world).toHaveAttribute("data-world-yaw", "12");
+  await expect
+    .poll(async () => {
+      const moved = (await bubble.boundingBox())!;
+      return Math.hypot(moved.x - beforeCamera.x, moved.y - beforeCamera.y);
+    })
+    .toBeGreaterThan(12);
+  await expectBubbleInViewport();
+  await expect(bubble.getByRole("status")).toHaveText("我在听，你说");
+  expect(await page.evaluate(() => window.gptVoiceTest.starts)).toBe(1);
+  expect(await page.evaluate(() => window.gptVoiceTest.stops)).toBe(0);
+  await page.getByRole("button", { name: "回到中心", exact: true }).click();
+  await expect(world).toHaveAttribute("data-world-x", "0");
+  await expect(world).toHaveAttribute("data-world-yaw", "0");
   await companion.getByRole("button", { name: "展开小序状态与动态" }).click();
   await page.getByRole("button", { name: "换个位置", exact: true }).click();
   await expect(companion).toHaveAttribute("data-docked", "false");

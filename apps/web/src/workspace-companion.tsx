@@ -343,12 +343,24 @@ export function WorkspaceCompanion() {
     };
     const nestVisible = () => {
       const box = nest?.getBoundingClientRect();
+      if (!box || box.width <= 0 || box.height <= 0) return false;
+      const clip = nest
+        ?.closest<HTMLElement>(".personal-workspace")
+        ?.getBoundingClientRect();
+      const left = Math.max(0, clip?.left ?? 0);
+      const top = Math.max(0, clip?.top ?? 0);
+      const right = Math.min(
+        document.documentElement.clientWidth,
+        clip?.right ?? document.documentElement.clientWidth,
+      );
+      const bottom = Math.min(innerHeight, clip?.bottom ?? innerHeight);
       return (
-        !!box &&
-        box.top >= 0 &&
-        box.bottom <= innerHeight &&
-        box.left >= 0 &&
-        box.right <= innerWidth
+        right > left &&
+        bottom > top &&
+        box.top >= top - 2 &&
+        box.bottom <= bottom + 2 &&
+        box.left >= left - 2 &&
+        box.right <= right + 2
       );
     };
     const travel = (
@@ -404,12 +416,14 @@ export function WorkspaceCompanion() {
     const command = (value: "home" | "explore") => {
       active();
       if (value === "home" && nest) {
+        if (!nestVisible()) {
+          window.dispatchEvent(new CustomEvent("xuti-workspace-center"));
+          nest.scrollIntoView({ block: "center", behavior: "instant" });
+        }
         if (state.docked) {
           cancelTransition();
           return;
         }
-        if (!nestVisible())
-          nest.scrollIntoView({ block: "center", behavior: "instant" });
         travel("home");
       } else {
         const next = destination(undefined, true);
@@ -498,15 +512,28 @@ export function WorkspaceCompanion() {
       cancelTransition();
       active();
       suppressClick.current = false;
-      const box = panel.current?.getBoundingClientRect();
-      if (!box) return;
-      const { width, height } = size();
+      const box = panel.current
+        ?.querySelector<HTMLButtonElement>(".companion-launch")
+        ?.getBoundingClientRect();
+      if (!box?.width || !box.height) return;
+      const width = state.compact ? 64 : 132;
+      const height = state.compact ? 58 : 118;
+      // Keep the grabbed point under the pointer when leaving the transformed
+      // nest. Reminder height affects collision bounds, never the grab origin.
+      const u = Math.max(
+        0,
+        Math.min(1, (event.clientX - box.left) / box.width),
+      );
+      const v = Math.max(
+        0,
+        Math.min(1, (event.clientY - box.top) / box.height),
+      );
       drag = {
         id: event.pointerId,
         start: { x: event.clientX, y: event.clientY },
         origin: {
-          x: box.x + (box.width - width) / 2,
-          y: box.y + (box.height - height) / 2,
+          x: event.clientX - u * width,
+          y: event.clientY - v * height,
         },
         moved: false,
       };
@@ -534,13 +561,14 @@ export function WorkspaceCompanion() {
       event.preventDefault();
       cancelTransition();
       active();
-      const box = panel.current?.getBoundingClientRect();
+      const box = panel.current
+        ?.querySelector<HTMLButtonElement>(".companion-launch")
+        ?.getBoundingClientRect();
       if (!box) return;
-      const { width, height } = size();
       const origin = state.docked
         ? {
-            x: box.x + (box.width - width) / 2,
-            y: box.y + (box.height - height) / 2,
+            x: box.x + (box.width - 132) / 2,
+            y: box.y + (box.height - 118) / 2,
           }
         : state.position!;
       attach(false);
@@ -598,6 +626,7 @@ export function WorkspaceCompanion() {
     window.addEventListener("blur", onVisibility);
     window.addEventListener("resize", onResize);
     window.addEventListener("scroll", onScroll, true);
+    window.addEventListener("xuti-workspace-view", onScroll);
     window.addEventListener("xuti-companion-command", onCommand);
     document.addEventListener("visibilitychange", onVisibility);
     reduced.addEventListener("change", onReducedMotion);
@@ -652,6 +681,7 @@ export function WorkspaceCompanion() {
       window.removeEventListener("blur", onVisibility);
       window.removeEventListener("resize", onResize);
       window.removeEventListener("scroll", onScroll, true);
+      window.removeEventListener("xuti-workspace-view", onScroll);
       window.removeEventListener("xuti-companion-command", onCommand);
       document.removeEventListener("visibilitychange", onVisibility);
       reduced.removeEventListener("change", onReducedMotion);

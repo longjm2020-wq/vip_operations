@@ -1,5 +1,3 @@
-import { useEffect, useRef, type PointerEvent } from "react";
-import { ReloadOutlined } from "@ant-design/icons";
 import { useAssistantHub } from "./assistant-hub-context";
 import { PersonalAssistant } from "./personal-assistant";
 import { useUser, type Row } from "./shared";
@@ -17,122 +15,11 @@ function requestCompanion(command: "home" | "explore") {
 }
 
 function AssistantCore() {
-  const core = useRef<HTMLDivElement>(null);
-  const view = useRef({ pitch: -14, yaw: 18 });
-  const frame = useRef<number | null>(null);
-  const drag = useRef<{
-    pointerId: number;
-    x: number;
-    y: number;
-    pitch: number;
-    yaw: number;
-  } | null>(null);
-  const writeView = () => {
-    frame.current = null;
-    const element = core.current;
-    if (!element) return;
-    element.style.setProperty("--core-pitch", `${view.current.pitch}deg`);
-    element.style.setProperty("--core-yaw", `${view.current.yaw}deg`);
-    element.dataset.viewPitch = String(view.current.pitch);
-    element.dataset.viewYaw = String(view.current.yaw);
-  };
-  const queueView = (pitch: number, yaw: number) => {
-    view.current = {
-      pitch: Math.round(Math.max(-48, Math.min(48, pitch)) * 100) / 100,
-      yaw: Math.round(Math.max(-55, Math.min(55, yaw)) * 100) / 100,
-    };
-    if (frame.current === null)
-      frame.current = requestAnimationFrame(writeView);
-  };
-  const resetView = () => queueView(-14, 18);
-  const isControl = (target: EventTarget) =>
-    target instanceof Element &&
-    !!target.closest(
-      ".workspace-ai-companion-slot, button, a, input, textarea, select, [contenteditable=true]",
-    );
-  const finishDrag = (event: PointerEvent<HTMLDivElement>) => {
-    if (drag.current?.pointerId !== event.pointerId) return;
-    drag.current = null;
-    delete event.currentTarget.dataset.viewDragging;
-    if (frame.current !== null) cancelAnimationFrame(frame.current);
-    writeView();
-    if (event.currentTarget.hasPointerCapture(event.pointerId))
-      event.currentTarget.releasePointerCapture(event.pointerId);
-  };
-  useEffect(() => {
-    const element = core.current;
-    if (element) {
-      element.style.setProperty("--core-pitch", "-14deg");
-      element.style.setProperty("--core-yaw", "18deg");
-      element.dataset.viewPitch = "-14";
-      element.dataset.viewYaw = "18";
-    }
-    return () => {
-      if (frame.current !== null) cancelAnimationFrame(frame.current);
-      const active = drag.current;
-      drag.current = null;
-      if (active && element?.hasPointerCapture(active.pointerId))
-        element.releasePointerCapture(active.pointerId);
-    };
-  }, []);
   return (
     <div
-      ref={core}
       className="workspace-ai-core"
       role="group"
       aria-label="小序巢穴三维视角"
-      aria-description="拖动圆环空白处或使用方向键调整视角，双击空白处或按 Home 复位。"
-      tabIndex={0}
-      onPointerDown={(event) => {
-        if (
-          event.button !== 0 ||
-          !event.isPrimary ||
-          drag.current ||
-          isControl(event.target)
-        )
-          return;
-        event.preventDefault();
-        event.currentTarget.focus({ preventScroll: true });
-        event.currentTarget.setPointerCapture(event.pointerId);
-        event.currentTarget.dataset.viewDragging = "true";
-        drag.current = {
-          pointerId: event.pointerId,
-          x: event.clientX,
-          y: event.clientY,
-          ...view.current,
-        };
-      }}
-      onPointerMove={(event) => {
-        const active = drag.current;
-        if (!active || active.pointerId !== event.pointerId) return;
-        queueView(
-          active.pitch - (event.clientY - active.y) * 0.28,
-          active.yaw + (event.clientX - active.x) * 0.28,
-        );
-      }}
-      onPointerUp={finishDrag}
-      onPointerCancel={finishDrag}
-      onLostPointerCapture={finishDrag}
-      onDoubleClick={(event) => {
-        if (!isControl(event.target)) resetView();
-      }}
-      onKeyDown={(event) => {
-        if (event.target !== event.currentTarget) return;
-        const directions: Record<string, [number, number]> = {
-          ArrowUp: [-4, 0],
-          ArrowDown: [4, 0],
-          ArrowLeft: [0, -4],
-          ArrowRight: [0, 4],
-        };
-        if (event.key === "Home") {
-          event.preventDefault();
-          resetView();
-        } else if (directions[event.key]) {
-          event.preventDefault();
-          const [pitch, yaw] = directions[event.key];
-          queueView(view.current.pitch + pitch, view.current.yaw + yaw);
-        }
-      }}
     >
       <div className="workspace-ai-core-perspective" aria-hidden="true">
         <div className="workspace-ai-core-scene">
@@ -230,15 +117,6 @@ function AssistantCore() {
       >
         召唤小序
       </button>
-      <button
-        className="workspace-ai-view-reset"
-        type="button"
-        aria-label="重置圆环视角"
-        title="重置视角（双击圆环或按 Home）"
-        onClick={resetView}
-      >
-        <ReloadOutlined aria-hidden="true" />
-      </button>
     </div>
   );
 }
@@ -273,8 +151,12 @@ export function WorkspaceAI({
     >
       <div className="workspace-ai-start">
         <div className="workspace-ai-core-stage">
-          <AssistantCore />
-          <div className="workspace-ai-orbit-slot" />
+          <div className="workspace-world-camera">
+            <div className="workspace-world-plane">
+              <AssistantCore />
+              <div className="workspace-ai-orbit-slot" />
+            </div>
+          </div>
         </div>
         <PersonalAssistant
           available={available}

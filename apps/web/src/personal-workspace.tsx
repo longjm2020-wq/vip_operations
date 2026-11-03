@@ -38,6 +38,10 @@ import {
   SaveOutlined,
   TeamOutlined,
   HolderOutlined,
+  DragOutlined,
+  RotateRightOutlined,
+  AimOutlined,
+  MinusOutlined,
 } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
@@ -49,6 +53,9 @@ import "./personal-workspace.css";
 import { PersonalWorkspaceContent } from "./personal-workspace-content";
 import { WorkspaceAI } from "./workspace-ai";
 import { PersonalSchedule } from "./personal-schedule";
+import { useWorkspaceWorld } from "./use-workspace-world";
+import { WorkspaceWorldBackdrop } from "./workspace-world-backdrop";
+import "./workspace-world.css";
 
 type WorkspacePanel = "tools" | "schedule" | "todos" | "note" | "content";
 const panelTitles: Record<WorkspacePanel, string> = {
@@ -308,6 +315,7 @@ function WorkspaceFloatingPanel({
 }
 
 export function PersonalWorkspacePage() {
+  const world = useWorkspaceWorld();
   const user = useUser(),
     { message } = App.useApp(),
     [draft, setDraft] = useState<WorkspaceConfig | null>(null),
@@ -412,8 +420,70 @@ export function PersonalWorkspacePage() {
     tables: <AppstoreOutlined />,
   };
   return (
-    <div className="personal-workspace">
-      <header className="personal-welcome">
+    <div
+      ref={world.surface}
+      className="personal-workspace"
+      role="region"
+      aria-label="工作台三维场景"
+      aria-description="空白处拖动旋转，Shift 加拖动或中键拖动平移，滚轮缩放；聚焦场景后方向键调整，Home 回到中心。"
+      tabIndex={0}
+    >
+      <WorkspaceWorldBackdrop />
+      <header className="personal-welcome" data-world-ui>
+        <div
+          className="workspace-world-controls"
+          role="group"
+          aria-label="场景视角"
+        >
+          <button
+            type="button"
+            aria-label="旋转场景"
+            aria-pressed="true"
+            data-world-mode-button="rotate"
+            title="拖动旋转场景"
+            onClick={() => world.mode("rotate")}
+          >
+            <RotateRightOutlined />
+          </button>
+          <button
+            type="button"
+            aria-label="平移场景"
+            aria-pressed="false"
+            data-world-mode-button="pan"
+            title="拖动平移（或 Shift 加拖动）"
+            onClick={() => world.mode("pan")}
+          >
+            <DragOutlined />
+          </button>
+          <span className="workspace-world-control-divider" aria-hidden />
+          <button
+            type="button"
+            aria-label="缩小场景"
+            title="缩小场景"
+            onClick={() => world.zoom(1 / 1.15)}
+          >
+            <MinusOutlined />
+          </button>
+          <output data-world-scale aria-label="场景缩放">
+            100%
+          </output>
+          <button
+            type="button"
+            aria-label="放大场景"
+            title="放大场景"
+            onClick={() => world.zoom(1.15)}
+          >
+            <PlusOutlined />
+          </button>
+          <button
+            type="button"
+            aria-label="回到中心"
+            title="回到中心（Home 或双击空白处）"
+            onClick={world.reset}
+          >
+            <AimOutlined />
+          </button>
+        </div>
         <span className="workspace-date">
           <CalendarOutlined aria-hidden />{" "}
           {new Intl.DateTimeFormat("zh-CN", {
@@ -432,10 +502,16 @@ export function PersonalWorkspacePage() {
             <div className="personal-workspace-main">
               {!canUsePersonalAssistant({ permissions: user.permissions }) && (
                 <div className="workspace-quiet">
-                  <AppstoreOutlined aria-hidden />
-                  <h2>你的工作，随时展开</h2>
-                  <p>打开身边的日程、待办与常用工具。</p>
-                  <div className="workspace-quiet-orbit-slot" />
+                  <div className="workspace-world-camera">
+                    <div className="workspace-world-plane">
+                      <div className="workspace-quiet-center">
+                        <AppstoreOutlined aria-hidden />
+                        <h2>你的工作，随时展开</h2>
+                        <p>打开身边的日程、待办与常用工具。</p>
+                      </div>
+                      <div className="workspace-quiet-orbit-slot" />
+                    </div>
+                  </div>
                 </div>
               )}
               <WorkspaceAI
@@ -519,6 +595,7 @@ export function PersonalWorkspacePage() {
                     {
                       "--orbit-angle": `${-90 + (index * 360) / items.length}deg`,
                       "--orbit-counter-angle": `${90 - (index * 360) / items.length}deg`,
+                      "--orbit-depth": `${[0, 90, -55, 60, -90][index % 5]}px`,
                     } as CSSProperties
                   }
                   aria-label={item.aria}
@@ -527,10 +604,12 @@ export function PersonalWorkspacePage() {
                   onClick={() => openPanel(item.key)}
                 >
                   <span className="workspace-dock-face">
-                    <span className="workspace-dock-icon" aria-hidden>
-                      {item.icon}
+                    <span className="workspace-dock-label">
+                      <span className="workspace-dock-icon" aria-hidden>
+                        {item.icon}
+                      </span>
+                      <strong>{item.label}</strong>
                     </span>
-                    <strong>{item.label}</strong>
                   </span>
                 </button>
               ))}

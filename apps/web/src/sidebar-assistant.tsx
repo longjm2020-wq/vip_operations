@@ -84,6 +84,12 @@ export function SidebarAssistant({
     unread.find((item) => item.status !== "upcoming") ||
     items.find((item) => item.kind === "schedule");
   const [detailsOpen, setDetailsOpen] = useState(false);
+  useEffect(() => {
+    if (!detailsOpen) return;
+    const close = () => setDetailsOpen(false);
+    window.addEventListener("xuti-workspace-view", close);
+    return () => window.removeEventListener("xuti-workspace-view", close);
+  }, [detailsOpen]);
   const announced = useRef<Set<string> | null>(null);
   const [reminder, setReminder] = useState("");
   useEffect(() => {

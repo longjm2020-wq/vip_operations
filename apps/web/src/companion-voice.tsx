@@ -96,6 +96,7 @@ export function CompanionVoice({
     if (bubble.current) resize.observe(bubble.current);
     window.addEventListener("resize", schedule);
     window.addEventListener("scroll", schedule, true);
+    window.addEventListener("xuti-workspace-view", schedule);
     align();
     return () => {
       cancelAnimationFrame(frame);
@@ -103,6 +104,7 @@ export function CompanionVoice({
       resize.disconnect();
       window.removeEventListener("resize", schedule);
       window.removeEventListener("scroll", schedule, true);
+      window.removeEventListener("xuti-workspace-view", schedule);
     };
   }, [anchor]);
   const state =

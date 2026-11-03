@@ -1,0 +1,289 @@
+/* The camera moves only the world objects; work cards and the composer stay still. */
+.workspace-future .content:has(> .personal-workspace[data-world-mode]) {
+  padding: 0;
+  background: var(--app-bg);
+}
+.personal-workspace[data-world-mode] {
+  --world-pitch: 0deg;
+  --world-yaw: 0deg;
+  --world-pan-x: 0px;
+  --world-pan-y: 0px;
+  --world-zoom: 1;
+  width: 100%;
+  max-width: none;
+  min-height: calc(100dvh - var(--workspace-topbar-height, 68px));
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 18px 30px 24px;
+  overflow: clip;
+  cursor: grab;
+  background: radial-gradient(
+    ellipse at 50% 36%,
+    color-mix(in srgb, var(--app-accent) 5%, transparent),
+    transparent 62%
+  );
+}
+.personal-workspace[data-world-mode]::before {
+  content: none;
+}
+.personal-workspace[data-world-mode]:focus-visible {
+  outline: 1px solid var(--app-accent-border);
+  outline-offset: -2px;
+}
+.workspace-world-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  display: block;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.personal-workspace[data-world-mode] .personal-welcome {
+  position: relative;
+  z-index: 5;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 34px;
+  cursor: default;
+}
+.personal-workspace[data-world-mode] .workspace-ai {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  padding: 0;
+  background: none;
+  isolation: auto;
+}
+.personal-workspace[data-world-mode] .workspace-ai-start {
+  z-index: auto;
+  flex: 1;
+  min-height: 0;
+}
+.personal-workspace[data-world-mode] .personal-workspace-body {
+  flex: 1;
+}
+.personal-workspace[data-world-mode] .personal-workspace-main {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+}
+.personal-workspace[data-world-mode] .workspace-ai-core-stage,
+.personal-workspace[data-world-mode] .workspace-quiet {
+  flex: 1;
+  min-height: clamp(350px, calc(100dvh - 340px), 500px);
+  margin: 0 0 14px;
+  touch-action: none;
+}
+.workspace-world-camera {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  perspective: 1000px;
+  perspective-origin: 50% 50%;
+  transform-style: preserve-3d;
+  pointer-events: none;
+}
+.workspace-world-plane {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  transform-origin: 50% 50%;
+  transform-style: preserve-3d;
+  transform: translate3d(var(--world-pan-x), var(--world-pan-y), 0)
+    rotateX(var(--world-pitch)) rotateY(var(--world-yaw))
+    scale(var(--world-zoom));
+  pointer-events: none;
+}
+.workspace-world-plane > .workspace-ai-core {
+  transform-style: preserve-3d;
+  pointer-events: auto;
+}
+.workspace-world-plane
+  :is(
+    .workspace-ai-orbit-slot,
+    .workspace-quiet-orbit-slot,
+    .workspace-dock,
+    .workspace-dock-orbit,
+    .workspace-dock-item,
+    .workspace-dock-face
+  ) {
+  transform-style: preserve-3d;
+}
+.workspace-world-plane .workspace-ai-companion-slot {
+  transform: translate(-50%, -50%) rotateY(calc(-1 * var(--world-yaw)))
+    rotateX(calc(-1 * var(--world-pitch)));
+  pointer-events: auto;
+}
+.workspace-world-plane :is(.workspace-ai-summon, .workspace-ai-view-reset) {
+  pointer-events: auto;
+}
+.workspace-world-plane .workspace-ai-summon {
+  transform: translate(-50%, -50%) rotateY(calc(-1 * var(--world-yaw)))
+    rotateX(calc(-1 * var(--world-pitch)));
+}
+.workspace-world-plane .workspace-dock-item {
+  padding: 0;
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  transform: rotate(var(--orbit-angle)) translateX(var(--orbit-radius))
+    rotate(var(--orbit-counter-angle)) translateZ(var(--orbit-depth, 0px));
+}
+.workspace-world-plane .workspace-dock-face {
+  width: 100%;
+  height: 100%;
+}
+.workspace-dock-label {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  gap: 7px;
+  padding: 5px;
+  border: 1px solid var(--app-accent-border);
+  border-radius: 50%;
+  background: var(--app-surface);
+  box-shadow: 0 0 28px color-mix(in srgb, var(--app-accent) 8%, transparent);
+  transform: rotateY(calc(-1 * var(--world-yaw)))
+    rotateX(calc(-1 * var(--world-pitch)));
+  pointer-events: auto;
+  cursor: pointer;
+}
+.workspace-dock-item:is(:hover, [aria-expanded="true"]) .workspace-dock-label {
+  background: var(--app-accent-soft);
+}
+.workspace-dock-item:focus-visible .workspace-dock-label {
+  outline: 2px solid var(--app-accent);
+  outline-offset: 3px;
+}
+.personal-workspace[data-world-mode] .assistant-compose {
+  position: relative;
+  z-index: 4;
+  flex: 0 0 auto;
+  margin-top: auto;
+  cursor: default;
+}
+.workspace-world-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--app-border);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--app-surface) 90%, transparent);
+  cursor: default;
+}
+.workspace-world-controls button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 30px;
+  min-height: 28px;
+  padding: 3px 7px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--app-secondary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.workspace-world-controls button:is(:hover, [aria-pressed="true"]) {
+  border-color: var(--app-accent-border);
+  background: var(--app-accent-soft);
+  color: var(--app-accent);
+}
+.workspace-world-controls button:focus-visible {
+  outline: 2px solid var(--app-accent);
+  outline-offset: 1px;
+}
+.workspace-world-controls button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.workspace-world-controls output {
+  min-width: 42px;
+  color: var(--app-secondary);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+.workspace-world-control-divider {
+  align-self: stretch;
+  width: 1px;
+  margin: 5px 3px;
+  background: var(--app-border);
+}
+.workspace-world-plane .workspace-quiet-center {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  transform: rotateY(calc(-1 * var(--world-yaw)))
+    rotateX(calc(-1 * var(--world-pitch)));
+}
+.workspace-quiet-center > .anticon {
+  color: var(--app-accent);
+  font-size: 58px;
+}
+.personal-workspace[data-world-dragging="true"] {
+  cursor: grabbing;
+  user-select: none;
+}
+.personal-workspace[data-world-dragging="true"] .workspace-world-plane {
+  will-change: transform;
+}
+.personal-workspace[data-world-dragging="true"]
+  :is(
+    .workspace-dock-orbit,
+    .workspace-dock-face,
+    .workspace-ai-core-aura,
+    .workspace-ai-core-resonance,
+    .workspace-ai-core-orbits
+  ),
+.personal-workspace[data-world-dragging="true"] .workspace-dock-item::before {
+  animation-play-state: paused;
+}
+@media (max-width: 767px) {
+  .personal-workspace[data-world-mode] {
+    min-height: calc(100dvh - var(--workspace-topbar-height, 58px));
+    padding: 12px 12px 24px;
+  }
+  .personal-workspace[data-world-mode] .personal-welcome {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .personal-workspace[data-world-mode] .workspace-date {
+    margin-left: auto;
+  }
+  .personal-workspace[data-world-mode] .workspace-ai-core-stage,
+  .personal-workspace[data-world-mode] .workspace-quiet {
+    min-height: 350px;
+    margin-bottom: 8px;
+  }
+  .workspace-dock-label {
+    gap: 5px;
+  }
+  .workspace-world-controls {
+    gap: 2px;
+  }
+  .workspace-world-controls button {
+    min-width: 30px;
+    padding-inline: 5px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .workspace-world-plane,
+  .workspace-dock-label,
+  .workspace-world-controls * {
+    transition: none;
+  }
+}

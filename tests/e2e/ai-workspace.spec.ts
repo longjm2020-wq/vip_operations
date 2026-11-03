@@ -1218,9 +1218,190 @@ test("手机导航可开关，助理和日程弹窗完整显示且业务页面�
   await expect(page).toHaveURL(/\/operations$/);
   await expect(page.locator(".workspace-future")).toHaveCount(0);
 });
-test("三维圆环可拖动视角和复位，拖动不误触语音且减少动态效果仍可操作", async ({
+async function readWorkspaceCamera(page: Page) {
+  return page.locator(".personal-workspace").evaluate((element) => ({
+    pitch: Number(element.getAttribute("data-world-pitch")),
+    yaw: Number(element.getAttribute("data-world-yaw")),
+    x: Number(element.getAttribute("data-world-x")),
+    y: Number(element.getAttribute("data-world-y")),
+    zoom: Number(element.getAttribute("data-world-zoom")),
+    mode: element.getAttribute("data-world-mode"),
+  }));
+}
+
+async function workspaceBlankPoint(page: Page) {
+  return page.locator(".personal-workspace").evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    const core = element
+      .querySelector(".workspace-ai-core")!
+      .getBoundingClientRect();
+    const left = Math.max(8, bounds.left),
+      right = Math.min(innerWidth - 8, bounds.right);
+    const top = Math.max(80, bounds.top),
+      bottom = Math.min(innerHeight - 8, bounds.bottom);
+    for (const horizontal of [0.04, 0.96, 0.12, 0.88]) {
+      for (const vertical of [0.25, 0.4, 0.55, 0.7]) {
+        const x = left + (right - left) * horizontal,
+          y = top + (bottom - top) * vertical;
+        const target = document.elementFromPoint(x, y);
+        if (
+          target &&
+          element.contains(target) &&
+          !target.closest(
+            "button,a,input,textarea,select,[contenteditable=true],.personal-welcome,.assistant-compose,.personal-workspace-panel,.workspace-companion,.workspace-world-controls",
+          ) &&
+          !(
+            x > core.left - 25 &&
+            x < core.right + 25 &&
+            y > core.top - 25 &&
+            y < core.bottom + 25
+          )
+        )
+          return { x, y };
+      }
+    }
+    throw new Error(
+      "No visible workspace background away from the core is available",
+    );
+  });
+}
+
+async function dragWorkspace(
+  page: Page,
+  dx: number,
+  dy: number,
+  options: { shift?: boolean; button?: "left" | "middle" } = {},
+) {
+  const point = await workspaceBlankPoint(page);
+  if (options.shift) await page.keyboard.down("Shift");
+  await page.mouse.move(point.x, point.y);
+  await page.mouse.down({ button: options.button || "left" });
+  await page.mouse.move(point.x + dx, point.y + dy, { steps: 8 });
+  await page.mouse.up({ button: options.button || "left" });
+  if (options.shift) await page.keyboard.up("Shift");
+}
+
+const defaultWorkspaceCamera = {
+  pitch: 0,
+  yaw: 0,
+  x: 0,
+  y: 0,
+  zoom: 1,
+  mode: "rotate",
+};
+
+test("工作台空白处控制整个三维场景，无界旋转平移、缩放与复位不移动固定输入和日期", async ({
   page,
 }) => {
+  const fixture = await workspaceFixture(page);
+  await page.goto("/my-workspace");
+  const world = page.getByRole("region", {
+    name: "工作台三维场景",
+    exact: true,
+  });
+  const input = page
+    .locator(".workspace-ai")
+    .getByPlaceholder(/告诉我你想完成什么/);
+  const date = page.locator(".workspace-date");
+  const controls = page.locator(".workspace-world-controls");
+  await expect
+    .poll(() => readWorkspaceCamera(page))
+    .toEqual(defaultWorkspaceCamera);
+  const fixed = {
+    input: await input.boundingBox(),
+    date: await date.boundingBox(),
+    controls: await controls.boundingBox(),
+  };
+  await dragWorkspace(page, 900, 600);
+  await expect
+    .poll(async () => (await readWorkspaceCamera(page)).pitch)
+    .toBe(-75);
+  await dragWorkspace(page, 900, -1200);
+  await expect
+    .poll(async () => (await readWorkspaceCamera(page)).pitch)
+    .toBe(75);
+  await expect
+    .poll(async () => (await readWorkspaceCamera(page)).yaw)
+    .toBeGreaterThan(360);
+  await world.press("Home");
+  await expect
+    .poll(() => readWorkspaceCamera(page))
+    .toEqual(defaultWorkspaceCamera);
+  for (let index = 0; index < 3; index++)
+    await dragWorkspace(page, 600, 400, { shift: true });
+  await expect
+    .poll(async () => (await readWorkspaceCamera(page)).x)
+    .toBeGreaterThan(1440);
+  await expect
+    .poll(async () => (await readWorkspaceCamera(page)).y)
+    .toBeGreaterThan(1000);
+  expect((await readWorkspaceCamera(page)).yaw).toBe(0);
+  const beforeMiddle = await readWorkspaceCamera(page);
+  await dragWorkspace(page, -160, -80, { button: "middle" });
+  await expect
+    .poll(async () => (await readWorkspaceCamera(page)).x)
+    .toBeLessThan(beforeMiddle.x);
+  await page.getByRole("button", { name: "平移场景", exact: true }).click();
+  await expect(world).toHaveAttribute("data-world-mode", "pan");
+  const beforePan = await readWorkspaceCamera(page);
+  await dragWorkspace(page, 90, 50);
+  await expect
+    .poll(async () => (await readWorkspaceCamera(page)).x)
+    .toBeGreaterThan(beforePan.x);
+  await page.getByRole("button", { name: "旋转场景", exact: true }).click();
+  await expect(world).toHaveAttribute("data-world-mode", "rotate");
+  const point = await workspaceBlankPoint(page);
+  await page.mouse.move(point.x, point.y);
+  await page.mouse.wheel(0, -20000);
+  await expect
+    .poll(async () => (await readWorkspaceCamera(page)).zoom)
+    .toBe(1.65);
+  await page.mouse.wheel(0, 20000);
+  await expect
+    .poll(async () => (await readWorkspaceCamera(page)).zoom)
+    .toBe(0.55);
+  await page.getByRole("button", { name: "放大场景", exact: true }).click();
+  await expect
+    .poll(async () => (await readWorkspaceCamera(page)).zoom)
+    .toBeGreaterThan(0.55);
+  const zoomed = (await readWorkspaceCamera(page)).zoom;
+  await page.getByRole("button", { name: "缩小场景", exact: true }).click();
+  await expect
+    .poll(async () => (await readWorkspaceCamera(page)).zoom)
+    .toBeLessThan(zoomed);
+  for (const [element, expected] of [
+    [input, fixed.input],
+    [date, fixed.date],
+    [controls, fixed.controls],
+  ] as const) {
+    const actual = (await element.boundingBox())!;
+    expect(
+      Math.abs(actual.x - expected!.x) + Math.abs(actual.y - expected!.y),
+    ).toBeLessThan(1);
+  }
+  expect(
+    await page.evaluate(
+      () =>
+        document.documentElement.scrollWidth <=
+        document.documentElement.clientWidth,
+    ),
+  ).toBe(true);
+  await page.getByRole("button", { name: "回到中心", exact: true }).click();
+  await expect
+    .poll(() => readWorkspaceCamera(page))
+    .toEqual(defaultWorkspaceCamera);
+  await world.press("ArrowRight");
+  await expect(world).toHaveAttribute("data-world-yaw", "4");
+  await world.press("Shift+ArrowDown");
+  await expect(world).toHaveAttribute("data-world-y", "40");
+  await world.press("Home");
+  await expect
+    .poll(() => readWorkspaceCamera(page))
+    .toEqual(defaultWorkspaceCamera);
+  expect(fixture.assistantCalls()).toBe(0);
+});
+
+test("输入文字、拖动小序和浮卡不会误转三维场景或启动语音", async ({ page }) => {
   const fixture = await workspaceFixture(page);
   await page.addInitScript(() => {
     Reflect.set(window, "workspaceMicrophoneRequests", 0);
@@ -1231,71 +1412,151 @@ test("三维圆环可拖动视角和复位，拖动不误触语音且减少动�
         Number(Reflect.get(window, "workspaceMicrophoneRequests")) + 1,
       );
       throw new DOMException(
-        "Ring rotation must not request a microphone",
+        "Scene interactions must not request a microphone",
         "NotAllowedError",
       );
     };
   });
   await page.goto("/my-workspace");
-  const core = page.getByRole("group", {
-    name: "小序巢穴三维视角",
+  const world = page.getByRole("region", {
+    name: "工作台三维场景",
     exact: true,
   });
-  await expect(core).toHaveAttribute("data-view-pitch", "-14");
-  await expect(core).toHaveAttribute("data-view-yaw", "18");
-  const before = (await core.boundingBox())!;
-  await page.mouse.move(
-    before.x + before.width * 0.18,
-    before.y + before.height * 0.18,
-  );
+  await world.press("ArrowRight");
+  await expect(world).toHaveAttribute("data-world-yaw", "4");
+  const camera = await readWorkspaceCamera(page);
+  const input = page
+    .locator(".workspace-ai")
+    .getByPlaceholder(/告诉我你想完成什么/);
+  await input.fill("输入草稿，Home仅移动文字光标");
+  await input.press("Control+A");
+  await input.press("Home");
+  expect(await readWorkspaceCamera(page)).toEqual(camera);
+  const companion = page.locator(".workspace-companion");
+  const robot = (await companion
+    .getByRole("button", { name: "与小序语音对话", exact: true })
+    .boundingBox())!;
+  await page.mouse.move(robot.x + robot.width / 2, robot.y + robot.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(1300, 870, { steps: 10 });
+  await page.mouse.up();
+  await expect(companion).toHaveAttribute("data-docked", "false");
+  expect(await readWorkspaceCamera(page)).toEqual(camera);
+  await openWorkspacePanel(page, "打开私有备忘");
+  const note = page.getByRole("textbox", { name: "私有备忘", exact: true });
+  await note.fill("浮卡仍可独立输入和滚动\n".repeat(30));
+  const handle = page.getByRole("button", {
+    name: "移动工作台面板",
+    exact: true,
+  });
+  const panel = page.locator(".personal-workspace-panel");
+  const before = (await panel.boundingBox())!;
+  const grip = (await handle.boundingBox())!;
+  await page.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2);
   await page.mouse.down();
   await page.mouse.move(
-    before.x + before.width * 0.18 + 80,
-    before.y + before.height * 0.18 + 40,
-    { steps: 10 },
+    grip.x + grip.width / 2 - 180,
+    grip.y + grip.height / 2 + 90,
+    { steps: 8 },
   );
   await page.mouse.up();
   await expect
-    .poll(async () => Number(await core.getAttribute("data-view-yaw")))
-    .toBeGreaterThan(30);
-  await expect
-    .poll(async () => Number(await core.getAttribute("data-view-pitch")))
-    .toBeLessThan(-20);
-  await expect(
-    page.getByRole("region", { name: "小序语音", exact: true }),
-  ).toHaveCount(0);
-  await page.getByRole("button", { name: "重置圆环视角", exact: true }).click();
-  await expect(core).toHaveAttribute("data-view-pitch", "-14");
-  await expect(core).toHaveAttribute("data-view-yaw", "18");
-  await page.emulateMedia({ reducedMotion: "reduce" });
-  await page.setViewportSize({ width: 390, height: 844 });
-  await core.press("ArrowRight");
-  await expect(core).toHaveAttribute("data-view-yaw", "22");
-  await core.press("Home");
-  await expect(core).toHaveAttribute("data-view-yaw", "18");
-  const mobile = (await core.boundingBox())!;
-  expect(mobile.x).toBeGreaterThanOrEqual(0);
-  expect(mobile.x + mobile.width).toBeLessThanOrEqual(390);
-  await page.mouse.move(
-    mobile.x + mobile.width * 0.18,
-    mobile.y + mobile.height * 0.18,
+    .poll(async () => {
+      const after = (await panel.boundingBox())!;
+      return Math.hypot(after.x - before.x, after.y - before.y);
+    })
+    .toBeGreaterThan(40);
+  await note.hover();
+  await page.mouse.wheel(0, 300);
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
   );
-  await page.mouse.down();
-  await page.mouse.move(
-    mobile.x + mobile.width * 0.18 + 30,
-    mobile.y + mobile.height * 0.18 + 20,
-    { steps: 5 },
-  );
-  await page.mouse.up();
-  await expect
-    .poll(async () => Number(await core.getAttribute("data-view-yaw")))
-    .toBeGreaterThan(22);
+  expect(await readWorkspaceCamera(page)).toEqual(camera);
+  await expect(input).toHaveValue("输入草稿，Home仅移动文字光标");
   expect(
     await page.evaluate(() =>
       Reflect.get(window, "workspaceMicrophoneRequests"),
     ),
   ).toBe(0);
   expect(fixture.assistantCalls()).toBe(0);
+});
+
+test("手机触摸与减少动态效果仍可操作三维场景，移出中心后固定控件可恢复且页面不溢出", async ({
+  page,
+  context,
+}) => {
+  const fixture = await workspaceFixture(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto("/my-workspace");
+  const world = page.getByRole("region", {
+    name: "工作台三维场景",
+    exact: true,
+  });
+  const client = await context.newCDPSession(page);
+  await client.send("Emulation.setTouchEmulationEnabled", {
+    enabled: true,
+    maxTouchPoints: 2,
+  });
+  const touchDrag = async (dx: number, dy: number) => {
+    const point = await workspaceBlankPoint(page);
+    await client.send("Input.dispatchTouchEvent", {
+      type: "touchStart",
+      touchPoints: [{ x: point.x, y: point.y }],
+    });
+    for (let step = 1; step <= 6; step++)
+      await client.send("Input.dispatchTouchEvent", {
+        type: "touchMove",
+        touchPoints: [
+          { x: point.x + (dx * step) / 6, y: point.y + (dy * step) / 6 },
+        ],
+      });
+    await client.send("Input.dispatchTouchEvent", {
+      type: "touchEnd",
+      touchPoints: [],
+    });
+  };
+  await touchDrag(80, 40);
+  await expect
+    .poll(async () => (await readWorkspaceCamera(page)).yaw)
+    .toBeGreaterThan(0);
+  await expect
+    .poll(async () => (await readWorkspaceCamera(page)).pitch)
+    .toBeLessThan(0);
+  await expect(page.locator(".workspace-ai-core-aura")).toHaveCSS(
+    "animation-name",
+    "none",
+  );
+  await page.getByRole("button", { name: "平移场景", exact: true }).click();
+  for (let index = 0; index < 5; index++) await touchDrag(110, 60);
+  await expect
+    .poll(async () => (await readWorkspaceCamera(page)).x)
+    .toBeGreaterThan(390);
+  const reset = page.getByRole("button", { name: "回到中心", exact: true });
+  await expect(reset).toBeInViewport({ ratio: 1 });
+  await expect(page.locator(".workspace-date")).toBeInViewport({ ratio: 1 });
+  expect(
+    await page.evaluate(
+      () =>
+        document.documentElement.scrollWidth <=
+        document.documentElement.clientWidth,
+    ),
+  ).toBe(true);
+  await reset.click();
+  await expect
+    .poll(() => readWorkspaceCamera(page))
+    .toEqual(defaultWorkspaceCamera);
+  await expect(world.locator(".workspace-ai-core")).toBeInViewport({
+    ratio: 0.99,
+  });
+  await page
+    .locator(".workspace-ai")
+    .getByPlaceholder(/告诉我你想完成什么/)
+    .fill("触摸操作后的输入仍可用");
+  expect(await readWorkspaceCamera(page)).toEqual(defaultWorkspaceCamera);
+  expect(fixture.assistantCalls()).toBe(0);
+  await client.detach();
 });
 
 test("工作台圆环是小序巢穴，可跃出换位与召回，文字和动态入口仍可用", async ({
@@ -1418,9 +1679,32 @@ test("小序可从巢穴拖出或用方向键离巢，Home归巢且移动不误�
   await voice.press("ArrowRight");
   await page.clock.runFor(1200);
   await expect(companion).toHaveAttribute("data-docked", "false");
+  const world = page.getByRole("region", {
+    name: "工作台三维场景",
+    exact: true,
+  });
+  const nest = page.locator(".workspace-ai-companion-slot");
+  const worldBounds = (await world.boundingBox())!;
+  const nestBounds = (await nest.boundingBox())!;
+  const steps = Math.round(
+    (nestBounds.x + nestBounds.width / 2 - worldBounds.x / 2) / 40,
+  );
+  for (let step = 0; step < steps; step++) await world.press("Shift+ArrowLeft");
+  await page.clock.runFor(50);
+  const clipped = (await nest.boundingBox())!;
+  // The nest is still inside the browser, but the workspace clips it behind the sidebar.
+  expect(clipped.x).toBeGreaterThanOrEqual(0);
+  expect(clipped.x + clipped.width).toBeLessThan(worldBounds.x);
+  expect(clipped.y).toBeGreaterThanOrEqual(0);
+  expect(clipped.y + clipped.height).toBeLessThan(page.viewportSize()!.height);
   await voice.press("Home");
   await page.clock.runFor(1200);
   await expect(companion).toHaveAttribute("data-docked", "true");
+  await expect
+    .poll(() => readWorkspaceCamera(page))
+    .toEqual(defaultWorkspaceCamera);
+  await expect(nest).toBeInViewport({ ratio: 1 });
+  expect((await nest.boundingBox())!.x).toBeGreaterThanOrEqual(worldBounds.x);
   await expect(
     page.getByRole("region", { name: "小序语音", exact: true }),
   ).toHaveCount(0);
@@ -1665,8 +1949,21 @@ test("中心AI核心在桌面与手机完整显示，页面打开不调用模型
     .locator(".workspace-ai-core")
     .hover({ position: { x: 25, y: 25 } });
   await page.screenshot({
-    path: ".local/jarvis-workspace-dark.png",
+    path: ".local/world-workspace-dark.png",
   });
+  const world = page.getByRole("region", {
+    name: "工作台三维场景",
+    exact: true,
+  });
+  for (let index = 0; index < 8; index++) await world.press("ArrowRight");
+  for (let index = 0; index < 3; index++) await world.press("ArrowUp");
+  await expect(world).toHaveAttribute("data-world-yaw", "32");
+  await expect(world).toHaveAttribute("data-world-pitch", "-12");
+  await page.screenshot({ path: ".local/world-workspace-rotated.png" });
+  await page.getByRole("button", { name: "回到中心", exact: true }).click();
+  await expect
+    .poll(() => readWorkspaceCamera(page))
+    .toEqual(defaultWorkspaceCamera);
   await page
     .getByRole("button", { name: "切换为亮色主题", exact: true })
     .click();
@@ -1675,7 +1972,7 @@ test("中心AI核心在桌面与手机完整显示，页面打开不调用模型
     .locator(".workspace-ai-core")
     .hover({ position: { x: 25, y: 25 } });
   await page.screenshot({
-    path: ".local/jarvis-workspace-light.png",
+    path: ".local/world-workspace-light.png",
   });
   await page
     .getByRole("button", { name: "切换为暗色主题", exact: true })
@@ -1686,7 +1983,7 @@ test("中心AI核心在桌面与手机完整显示，页面打开不调用模型
     page.getByRole("dialog", { name: "日程", exact: true }),
   ).toBeVisible();
   await page.screenshot({
-    path: ".local/jarvis-workspace-schedule.png",
+    path: ".local/world-workspace-schedule.png",
   });
   await page
     .getByRole("button", { name: "收起工作台面板", exact: true })
@@ -1706,7 +2003,7 @@ test("中心AI核心在桌面与手机完整显示，页面打开不调用模型
     .locator(".workspace-ai-core")
     .hover({ position: { x: 25, y: 25 } });
   await page.screenshot({
-    path: ".local/jarvis-workspace-mobile.png",
+    path: ".local/world-workspace-mobile.png",
     fullPage: true,
   });
   expect(fixture.assistantCalls()).toBe(0);
@@ -1837,11 +2134,17 @@ test("核心呼吸光晕与轻颤持续循环，操作时暂停且减少动态�
     frame.y + frame.height * 0.18 + 25,
     { steps: 5 },
   );
-  await expect(core).toHaveAttribute("data-view-dragging", "true");
+  await expect(page.locator(".personal-workspace")).toHaveAttribute(
+    "data-world-dragging",
+    "true",
+  );
   for (const { element } of decorations)
     await expect(element).toHaveCSS("animation-play-state", "paused");
   await page.mouse.up();
-  await expect(core).not.toHaveAttribute("data-view-dragging", "true");
+  await expect(page.locator(".personal-workspace")).not.toHaveAttribute(
+    "data-world-dragging",
+    "true",
+  );
   await page.locator(".workspace-title").click();
   await page.mouse.move(5, 5);
   for (const { element } of decorations)
