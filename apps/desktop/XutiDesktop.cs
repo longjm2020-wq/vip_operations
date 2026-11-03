@@ -21,12 +21,14 @@ using System.Linq;
 namespace XutiDesktop {
 static class Program {
     [STAThread] static int Main(string[] args) {
-        if (args.Length == 1 && args[0] == "--self-test") return Native.SelfTest();
+        ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12;
+        if (args.Length == 1 && args[0] == "--self-test") return Native.SelfTest() + ShellPolicy.SelfTest();
+        if (args.Length == 1 && args[0] == "--runtime-check") return DesktopShell.CheckRuntime();
         bool first;
         using (var mutex = new System.Threading.Mutex(true, "Local\\XutiDesktopAssistant", out first)) {
-            if (!first) { MessageBox.Show("本机助手已经运行，请切换至已打开的窗口。"); return 1; }
+            if (!first) { MessageBox.Show("小序已经运行，请切换至已打开的窗口。"); return 1; }
             Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false);
-            Application.Run(new AssistantForm());
+            Application.Run(new DesktopShell());
         }
         return 0;
     }
@@ -62,7 +64,13 @@ sealed class AssistantForm : Form {
     readonly Button pause = new Button { Text = "暂停", AutoSize = true };
     readonly Button stop = new Button { Text = "停止 (Ctrl+Alt+X)", AutoSize = true };
     readonly Timer timer = new Timer { Interval = 2000 };
-    string token = "", owner = "", taskId = "", approvedId = "", state = "";
+    string token = "", owner = "", deviceId = "", taskId = "", approvedId = "", state = "";
+    public event Action Changed;
+    public bool Connected { get { return token.Length > 0; } }
+    public string DeviceId { get { return deviceId; } }
+    public string ConnectionText { get { return connection.Text; } }
+    public string TaskText { get { return status.Text; } }
+    bool started, pairing;
     WindowChoice selected;
     bool polling, working, armed, closing, captureBlocked, allowing;
     long epoch;
@@ -71,13 +79,13 @@ sealed class AssistantForm : Form {
     Native.Hook inputHook;
 
     public AssistantForm() {
-        Text = "小序 · 本机助手"; Width = 650; Height = 590; MinimumSize = new Size(620, 510);
+        Text = "电脑任务"; Width = 650; Height = 590; MinimumSize = new Size(620, 510);
         StartPosition = FormStartPosition.CenterScreen; Font = new Font("Microsoft YaHei UI", 10);
         BackColor = Color.FromArgb(246, 247, 252);
         var layout = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoScroll = true, Padding = new Padding(20) };
         Controls.Add(layout);
-        layout.Controls.Add(new Label { Text = "小序电脑操作", AutoSize = true, Font = new Font(Font.FontFamily, 17, FontStyle.Bold), Margin = new Padding(0, 0, 0, 12) });
-        layout.Controls.Add(new Label { Text = "在网站「个人助理 → 电脑操作」生成配对码", AutoSize = true });
+        layout.Controls.Add(new Label { Text = "电脑任务", AutoSize = true, Font = new Font(Font.FontFamily, 17, FontStyle.Bold), Margin = new Padding(0, 0, 0, 12) });
+        layout.Controls.Add(new Label { Text = "在工作台的小序中点击「连接本机」；也可粘贴其他浏览器生成的配对码。", AutoSize = true, MaximumSize = new Size(570, 0) });
         var pairing = new FlowLayoutPanel { AutoSize = true };
         var pair = new Button { Text = "连接", AutoSize = true };
         var disconnect = new Button { Text = "断开本机", AutoSize = true };
@@ -92,31 +100,23 @@ sealed class AssistantForm : Form {
         buttons.Controls.Add(refresh); buttons.Controls.Add(allow); buttons.Controls.Add(pause); buttons.Controls.Add(stop); layout.Controls.Add(buttons);
         layout.Controls.Add(new Label { AutoSize = true, MaximumSize = new Size(570, 0), Margin = new Padding(0, 14, 0, 0), Text = "允许后，选定窗口的画面和控件文字将发送至网站已配置的智能服务。仅操作这个窗口，截图不保存。请先关闭敏感内容。\n\n切换窗口或手动移动鼠标、按键会暂停。登录、验证码、付款、发送和删除由你接手。不要以管理员身份运行助手。" });
         pair.Click += async (s, e) => await Safe(async () => {
-            if (token.Length > 0) throw new Exception("请先断开当前连接。");
-            string value = code.Text.Trim();
-            if (!Regex.IsMatch(value, "^[a-f0-9]{32}$")) throw new Exception("请粘贴网站生成的完整配对码。");
             pair.Enabled = false;
             try {
-                var data = await Request("pair", new { code = value, name = Environment.MachineName }, false);
-                token = S(data, "token"); owner = S(data, "owner");
-                if (!Regex.IsMatch(token, "^[a-f0-9]{64}$")) { token = ""; throw new Exception("连接返回无效。"); }
-                SaveProtected("connection.bin", json.Serialize(new { token, owner, origin = Origin }));
-                code.Clear(); ShowConnection();
+                await PairCode(code.Text.Trim());
             } finally { pair.Enabled = true; }
         });
-        disconnect.Click += async (s,e) => await Safe(async () => {
-            LocalPause();
-            if (taskId.Length > 0 && token.Length > 0) await Control("stop", "本机助手已断开");
-            token = ""; owner = ""; taskId = ""; task = null; approvedId = "";
-            if (File.Exists(Path.Combine(folder, "connection.bin"))) File.Delete(Path.Combine(folder, "connection.bin"));
-            ShowConnection(); status.Text = "本机已断开。网站可撤销设备授权。";
-        });
+        disconnect.Click += async (s,e) => await Safe(Disconnect);
         refresh.Click += (s,e) => { if (!armed) RefreshWindows(); };
         allow.Click += async (s,e) => await Safe(AllowTask);
         pause.Click += async (s,e) => await Safe(async () => { LocalPause(); await Control("pause", "你已暂停操作"); });
         stop.Click += async (s,e) => await StopTask();
         timer.Tick += async (s,e) => await Poll();
-        Shown += (s,e) => {
+        Shown += (s,e) => StartEngine();
+        FormClosing += (s,e) => Shutdown();
+    }
+    public void StartEngine() {
+            if (started) return;
+            started = true;
             try {
                 LoadSaved(); ShowConnection(); RefreshWindows();
                 if (!Native.RegisterHotKey(Handle, 1, 3, 0x58)) throw new Exception("无法注册停止快捷键，请关闭占用 Ctrl+Alt+X 的程序后重启助手。");
@@ -127,14 +127,50 @@ sealed class AssistantForm : Form {
                 });
                 timer.Start();
             } catch(Exception ex) { status.Text = ex.Message; allow.Enabled = false; }
-        };
-        FormClosing += (s,e) => { closing = true; LocalPause(); timer.Stop(); if (inputHook != null) inputHook.Dispose(); Native.UnregisterHotKey(Handle,1); };
+    }
+    public async Task PairCode(string value) {
+        if (pairing) throw new Exception("正在连接，请稍候。");
+        if (Connected) throw new Exception("本机已有连接。如需更换账号，请在电脑任务中先断开本机。");
+        if (!Regex.IsMatch(value ?? "", "^[a-f0-9]{32}$")) throw new Exception("配对码格式不正确，请重新生成。");
+        pairing = true;
+        try {
+            var data = await Request("pair", new { code = value, name = Environment.MachineName }, false);
+            string nextToken = S(data,"token"), nextId = S(data,"deviceId"), nextOwner = S(data,"owner");
+            Guid parsed;
+            if (!Regex.IsMatch(nextToken,"^[a-f0-9]{64}$") || !Guid.TryParse(nextId,out parsed)) throw new Exception("连接返回无效。");
+            SaveProtected("connection.bin",json.Serialize(new { token=nextToken, owner=nextOwner, deviceId=nextId, origin=Origin }));
+            token=nextToken; owner=nextOwner; deviceId=nextId;
+            code.Clear(); ShowConnection();
+        } finally { pairing=false; }
+    }
+    public async Task Disconnect() {
+        LocalPause();
+        try { if (taskId.Length > 0 && token.Length > 0) await Control("stop", "本机连接已断开"); }
+        finally {
+            token=""; owner=""; deviceId=""; taskId=""; task=null; approvedId="";
+            if (File.Exists(Path.Combine(folder,"connection.bin"))) File.Delete(Path.Combine(folder,"connection.bin"));
+            ShowConnection(); status.Text="本机已断开。网站可撤销设备授权。";
+        }
+    }
+    public async Task EndSession() {
+        LocalPause();
+        await Safe(async () => await Control("pause", "小序桌面端已退出，请重新打开并核对窗口后继续"));
+    }
+    public void Shutdown() {
+        if(closing) return;
+        closing=true; LocalPause(); timer.Stop();
+        if(inputHook!=null) { inputHook.Dispose(); inputHook=null; }
+        if(IsHandleCreated) Native.UnregisterHotKey(Handle,1);
+    }
+    protected override void Dispose(bool disposing) {
+        if(disposing) { Shutdown(); timer.Dispose(); http.Dispose(); }
+        base.Dispose(disposing);
     }
     protected override void WndProc(ref Message m) {
         if (m.Msg == 0x312) { LocalPause(); BeginInvoke(new Action(async () => await StopTask())); }
         base.WndProc(ref m);
     }
-    void ShowConnection() { connection.Text = token.Length > 0 ? "已连接 · " + owner : "未连接"; }
+    void ShowConnection() { connection.Text = token.Length > 0 ? "已连接 · " + owner : "未连接本机"; if(Changed!=null) Changed(); }
     void SaveProtected(string name, string value) {
         Directory.CreateDirectory(folder);
         byte[] bytes = ProtectedData.Protect(Encoding.UTF8.GetBytes(value), null, DataProtectionScope.CurrentUser);
@@ -146,7 +182,7 @@ sealed class AssistantForm : Form {
     void LoadSaved() {
         try {
             var saved = D(json.DeserializeObject(ReadProtected("connection.bin")));
-            if (S(saved,"origin") == Origin && Regex.IsMatch(S(saved,"token"),"^[a-f0-9]{64}$")) { token = S(saved,"token"); owner = S(saved,"owner"); }
+            if (S(saved,"origin") == Origin && Regex.IsMatch(S(saved,"token"),"^[a-f0-9]{64}$")) { token = S(saved,"token"); owner = S(saved,"owner"); deviceId=S(saved,"deviceId"); }
         } catch { token = ""; }
         try { foreach(var pair in D(json.DeserializeObject(ReadProtected("commands.bin")))) journal[pair.Key] = Convert.ToString(pair.Value); } catch { }
     }
@@ -223,7 +259,7 @@ sealed class AssistantForm : Form {
             if (state == "RUNNING" && armed && !working) { working = true; RunStep(taskId, epoch); }
         } catch(ApiFailure e) { LocalPause(); status.Text = e.Message; if (e.Status == 401 || e.Status == 403) { token = ""; ShowConnection(); } }
         catch { LocalPause(); status.Text = "网络连接中断，已停止本机输入。恢复连接后请核对任务并重新允许。"; }
-        finally { polling = false; }
+        finally { polling = false; if(!closing && Changed!=null) Changed(); }
     }
     void Check(string id, long version) {
         if (!armed || id != approvedId || id != taskId || version != epoch || closing) throw new Exception("操作已暂停");
@@ -278,6 +314,8 @@ sealed class AssistantForm : Form {
 }
 
 static class Native {
+    // Only dedicated, unprivileged browser windows can be selected from this process.
+    public static readonly System.Collections.Concurrent.ConcurrentDictionary<IntPtr,byte> BrowserWindows = new System.Collections.Concurrent.ConcurrentDictionary<IntPtr,byte>();
     [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left,Top,Right,Bottom; }
     [StructLayout(LayoutKind.Sequential)] struct POINT { public int X,Y; public POINT(int x,int y){X=x;Y=y;} }
     [StructLayout(LayoutKind.Sequential)] struct INPUT { public uint type; public UNION data; }
@@ -318,7 +356,7 @@ static class Native {
                 string title=Title(h); if(String.IsNullOrWhiteSpace(title))return true;
                 RECT rect; if(!GetWindowRect(h,out rect)||rect.Right-rect.Left<100||rect.Bottom-rect.Top<100)return true;
                 uint pid; GetWindowThreadProcessId(h,out pid); var process=Process.GetProcessById((int)pid);
-                if(BlockedApps.Contains(process.ProcessName)||pid==Process.GetCurrentProcess().Id)return true;
+                if(BlockedApps.Contains(process.ProcessName)||(pid==Process.GetCurrentProcess().Id&&!BrowserWindows.ContainsKey(h)))return true;
                 result.Add(new WindowChoice{Handle=h,Title=Cut(title,200),App=Cut(process.ProcessName,80),Pid=(int)pid,Started=process.StartTime.ToUniversalTime().Ticks});
             } catch { } return true;
         },IntPtr.Zero);
@@ -328,6 +366,7 @@ static class Native {
         if(w==null||!IsWindow(w.Handle)||!IsWindowVisible(w.Handle)||IsIconic(w.Handle))throw new Exception("窗口已关闭或最小化，请重新选择");
         uint pid; GetWindowThreadProcessId(w.Handle,out pid); var process=Process.GetProcessById((int)pid);
         if(pid!=w.Pid||process.StartTime.ToUniversalTime().Ticks!=w.Started||BlockedApps.Contains(process.ProcessName))throw new Exception("窗口应用已变化，请重新选择");
+        if(pid==Process.GetCurrentProcess().Id&&!BrowserWindows.ContainsKey(w.Handle))throw new Exception("不能操作小序自身的控制界面");
         if(foreground&&GetForegroundWindow()!=w.Handle)throw new Exception("当前窗口已切换，请核对后继续");
         if(Regex.IsMatch(Title(w.Handle),"Windows PowerShell|命令提示符|终端|管理员:|API.?Keys|密码管理",RegexOptions.IgnoreCase))throw new Exception("此窗口需要你亲自操作");
     }

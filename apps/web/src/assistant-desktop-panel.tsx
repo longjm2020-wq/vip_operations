@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Alert, App, Button, Empty, Space, Tag, Typography } from "antd";
 import {
   DownloadOutlined,
@@ -8,6 +8,7 @@ import {
   ReloadOutlined,
 } from "@ant-design/icons";
 import { api } from "./api";
+import { desktopClientRequest, isDesktopClient } from "./desktop-client";
 import {
   desktopStatusLabels,
   type DesktopState,
@@ -29,6 +30,20 @@ export function AssistantDesktopPanel({
     null,
   );
   const [busy, setBusy] = useState("");
+  const native = isDesktopClient();
+  const [localDevice, setLocalDevice] = useState("");
+  useEffect(() => {
+    if (!native) return;
+    let active = true;
+    void desktopClientRequest("status")
+      .then((r) => {
+        if (active) setLocalDevice(r.connected ? r.deviceId : "");
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [native, data]);
   async function run(key: string, fn: () => Promise<unknown>) {
     if (busy) return;
     setBusy(key);
@@ -58,16 +73,68 @@ export function AssistantDesktopPanel({
       <Alert
         type="info"
         showIcon
-        title="先连接这台电脑"
-        description="下载并解压本机助手，双击启动小序.cmd，再粘贴配对码。每次任务在本机选择一个窗口，允许后才会将窗口画面交给智能服务处理。"
+        title={native ? "小序桌面端已就绪" : "使用小序桌面端"}
+        description={
+          native
+            ? "点击连接本机即可使用电脑操作。收到任务后，在顶部「电脑任务」选择允许操作的窗口。"
+            : "下载并解压 Windows 桌面端，双击 XutiDesktop.exe。登录工作台后点击「连接本机」，无需再打开独立助手。"
+        }
       />
       <Space wrap style={{ margin: "16px 0" }}>
+        {native && (
+          <>
+            <Button
+              type="primary"
+              loading={busy === "native-pair"}
+              disabled={!!busy}
+              onClick={() =>
+                void run("native-pair", async () => {
+                  const current = await desktopClientRequest("status");
+                  if (current.connected) {
+                    if (data?.devices.some((d) => d.id === current.deviceId)) {
+                      choose(current.deviceId);
+                      return;
+                    }
+                    await desktopClientRequest("show-tasks");
+                    throw new Error(
+                      "本机已有连接，请先在电脑任务中断开，再连接当前账号",
+                    );
+                  }
+                  const pairCode = (
+                    await api(
+                      "/my-workspace/assistant/desktop/pair-code",
+                      "POST",
+                    )
+                  ).data.code as string;
+                  const result = await desktopClientRequest("pair", pairCode);
+                  setLocalDevice(result.deviceId);
+                  choose(result.deviceId);
+                  message.success("本机已连接，可以给小序下达电脑任务");
+                })
+              }
+            >
+              {localDevice && data?.devices.some((d) => d.id === localDevice)
+                ? "在本机执行"
+                : "连接本机"}
+            </Button>
+            <Button
+              onClick={() =>
+                void run("native-tasks", () =>
+                  desktopClientRequest("show-tasks"),
+                )
+              }
+              disabled={!!busy}
+            >
+              打开电脑任务
+            </Button>
+          </>
+        )}
         <Button
           href="/downloads/xuti-desktop.zip"
           download
           icon={<DownloadOutlined />}
         >
-          下载 Windows 助手
+          {native ? "下载新版桌面端" : "下载 Windows 桌面端"}
         </Button>
         <Button
           loading={busy === "pair"}
@@ -81,14 +148,14 @@ export function AssistantDesktopPanel({
             )
           }
         >
-          生成配对码
+          {native ? "连接其他电脑" : "生成配对码"}
         </Button>
       </Space>
       {pair && (
         <Alert
           showIcon
           type="info"
-          title="仅粘贴到本机助手，10分钟内有效"
+          title="仅粘贴到小序桌面端的电脑任务面板，10分钟内有效"
           description={
             <>
               <Typography.Text copyable={{ text: pair.code }} code>
@@ -216,7 +283,8 @@ export function AssistantDesktopPanel({
         </div>
       ))}
       <p className="assistant-desktop-note">
-        电脑需保持开机，本机助手需运行。切换窗口或手动输入会暂停；Ctrl + Alt + X
+        电脑需保持开机，小序桌面端需运行。切换窗口或手动输入会暂停；Ctrl + Alt +
+        X
         随时停止。登录、付款、对外发送和删除等操作由你接手。任务进度会保存，窗口截图不留存。
       </p>
     </div>

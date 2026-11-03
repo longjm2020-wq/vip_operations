@@ -13,6 +13,7 @@
     "dev:worker": "tsx apps/worker/src/main.ts",
     "build": "node scripts/prepare-ocr.mjs && node scripts/prepare-desktop.mjs && tsc -p tsconfig.server.json && node scripts/prepare-aigc.mjs && vite build --config apps/web/vite.config.ts",
     "typecheck": "tsc --noEmit && tsc -p apps/web/tsconfig.json --noEmit",
+    "build:desktop": "node scripts/build-desktop.mjs && node scripts/prepare-desktop.mjs",
     "lint": "eslint apps packages tests scripts",
     "test:unit": "vitest run tests/unit",
     "test:integration": "tsx tests/integration/run.ts",
