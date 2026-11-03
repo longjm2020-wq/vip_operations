@@ -14,7 +14,8 @@ import {
 import { useAssistantHub } from "./assistant-hub-context";
 import "./companion-voice.css";
 
-// A small, non-modal speech bubble follows the character, including while dragged.
+// Only the presentation moves between the workbench and the character. The
+// shared provider continues to own the same microphone and voice session.
 export function CompanionVoice({
   anchor,
 }: {
@@ -23,11 +24,28 @@ export function CompanionVoice({
   const hub = useAssistantHub(),
     voice = hub.gptVoice;
   const bubble = useRef<HTMLDivElement>(null);
+  const [workspaceSlot, setWorkspaceSlot] = useState<HTMLElement | null>(null);
   const [position, setPosition] = useState<{
     left: number;
     top: number;
   } | null>(null);
   useLayoutEffect(() => {
+    const discover = () =>
+      setWorkspaceSlot(
+        document.querySelector<HTMLElement>(
+          ".personal-workspace .workspace-voice-slot",
+        ),
+      );
+    const observer = new MutationObserver(discover);
+    observer.observe(document.querySelector(".workspace") || document.body, {
+      childList: true,
+      subtree: true,
+    });
+    discover();
+    return () => observer.disconnect();
+  }, []);
+  useLayoutEffect(() => {
+    if (workspaceSlot) return;
     let frame = 0;
     const align = () => {
       frame = 0;
@@ -106,7 +124,7 @@ export function CompanionVoice({
       window.removeEventListener("scroll", schedule, true);
       window.removeEventListener("xuti-workspace-view", schedule);
     };
-  }, [anchor]);
+  }, [anchor, workspaceSlot]);
   const state =
     voice.muted && voice.active
       ? "麦克风已静音"
@@ -133,13 +151,18 @@ export function CompanionVoice({
       : voice.active
         ? "说完停顿一下，我就会回应。"
         : voice.note || "点击开始，用声音和我聊聊。");
+  const retry = !!workspaceSlot && !!voice.error && !voice.active;
   return createPortal(
     <div
       ref={bubble}
-      className="companion-voice-bubble"
+      className={`companion-voice ${workspaceSlot ? "companion-voice-inline" : "companion-voice-bubble"}`}
       data-state={voice.state}
       data-muted={voice.muted}
-      style={{ ...position, visibility: position ? "visible" : "hidden" }}
+      style={
+        workspaceSlot
+          ? undefined
+          : { ...position, visibility: position ? "visible" : "hidden" }
+      }
       role="region"
       aria-label="小序语音"
       onKeyDown={(e) => {
@@ -154,19 +177,24 @@ export function CompanionVoice({
           <i />
         </span>
         <strong role="status">{state}</strong>
-        <button
-          aria-label={voice.active ? "结束并收起语音" : "收起语音"}
-          title="收起并关闭麦克风"
-          onClick={hub.closeVoice}
-        >
-          <CloseOutlined />
-        </button>
+        {!workspaceSlot && (
+          <button
+            aria-label={voice.active ? "结束并收起语音" : "收起语音"}
+            title="收起并关闭麦克风"
+            onClick={hub.closeVoice}
+          >
+            <CloseOutlined />
+          </button>
+        )}
       </div>
       <p
         className={
           problem ? "companion-voice-error" : "companion-voice-caption"
         }
         title={caption}
+        tabIndex={workspaceSlot ? 0 : undefined}
+        aria-label={workspaceSlot ? "语音字幕" : undefined}
+        role={problem ? "alert" : undefined}
         aria-live="polite"
       >
         {caption}
@@ -178,7 +206,7 @@ export function CompanionVoice({
             disabled={!hub.voiceStatus?.ready || !voice.supported || hub.busy}
             onClick={hub.startVoice}
           >
-            <AudioOutlined /> 开始语音对话
+            <AudioOutlined /> {retry ? "重试语音" : "开始语音对话"}
           </button>
         ) : (
           <>
@@ -215,6 +243,15 @@ export function CompanionVoice({
             </button>
           </>
         )}
+        {workspaceSlot && !voice.active && (
+          <button
+            aria-label="收起语音"
+            title="收起语音"
+            onClick={hub.closeVoice}
+          >
+            <CloseOutlined />
+          </button>
+        )}
         <span className="companion-voice-spacer" />
         {voice.playbackBlocked && (
           <button
@@ -241,6 +278,6 @@ export function CompanionVoice({
         </button>
       </div>
     </div>,
-    document.body,
+    workspaceSlot || document.body,
   );
 }

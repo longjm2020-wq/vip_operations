@@ -484,6 +484,7 @@ export function PersonalWorkspacePage() {
             <AimOutlined />
           </button>
         </div>
+        <div className="workspace-voice-slot" data-world-ui />
         <span className="workspace-date">
           <CalendarOutlined aria-hidden />{" "}
           {new Intl.DateTimeFormat("zh-CN", {

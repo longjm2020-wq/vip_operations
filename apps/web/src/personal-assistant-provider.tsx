@@ -12,10 +12,10 @@ import {
   Button,
   Checkbox,
   Drawer,
+  Dropdown,
   Popconfirm,
   Spin,
   Tag,
-  Tabs,
   Tooltip,
 } from "antd";
 import {
@@ -28,6 +28,7 @@ import {
   SoundOutlined,
   StopOutlined,
   CustomerServiceOutlined,
+  DownOutlined,
 } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useNavigate, useLocation } from "react-router-dom";
@@ -62,6 +63,8 @@ import { useGptVoice } from "./use-gpt-voice";
 import { useGptSpeech } from "./use-gpt-speech";
 import type { AssistantVoiceStatus } from "../../../packages/contracts/src/assistant-voice";
 
+type AssistantSection = "chat" | "activity" | "memory" | "voice" | "tasks";
+
 export function PersonalAssistantProvider({
   children,
 }: {
@@ -71,13 +74,12 @@ export function PersonalAssistantProvider({
     { message } = App.useApp();
   const navigate = useNavigate();
   const location = useLocation();
+  const inWorkspace = location.pathname === "/my-workspace";
   const available = availableWorkspaceTools({
     permissions: user.permissions,
     roleCodes: user.roleCodes,
   });
-  const [section, setSection] = useState<
-    "chat" | "activity" | "memory" | "voice" | "tasks"
-  >("chat");
+  const [section, setSection] = useState<AssistantSection>("chat");
   const [pendingSchedules, setPendingSchedules] = useState<WorkspaceSchedule[]>(
     [],
   );
@@ -361,13 +363,147 @@ export function PersonalAssistantProvider({
     setSection(allowed ? tab : "activity");
     setOpen(true);
   };
+  const selectSection = (next: AssistantSection) => {
+    playbackAllowed.current = false;
+    closeVoice();
+    voice.stop();
+    speech.stop();
+    setSection(allowed ? next : "activity");
+    setOpen(true);
+  };
+  const sectionItems = [
+    ...(allowed ? [{ key: "chat", label: "互动对话" }] : []),
+    ...(allowed ? [{ key: "tasks", label: "任务与文件" }] : []),
+    ...(allowed
+      ? [{ key: "voice", label: "语音设置", disabled: sending || !!executing }]
+      : []),
+    { key: "activity", label: "动态反馈" },
+    ...(allowed ? [{ key: "memory", label: "个人记忆" }] : []),
+  ];
+  const composerSettings = (inDrawer: boolean) => (
+    <>
+      <div className="assistant-settings-preferences">
+        <strong>发送内容</strong>
+        <Checkbox
+          checked={includeContext}
+          onChange={(e) => setIncludeContext(e.target.checked)}
+          disabled={busy}
+        >
+          附带已保存日程与待办
+        </Checkbox>
+        <Checkbox
+          checked={includeMemory}
+          onChange={(e) => setIncludeMemory(e.target.checked)}
+          disabled={busy}
+        >
+          使用个人记忆
+        </Checkbox>
+        <p>
+          仅勾选后随本次文字或语音提问附带；未保存草稿和私有备忘不发送。已发送内容仍在对话历史中。
+        </p>
+        <strong>声音</strong>
+        <Checkbox
+          checked={voiceReply}
+          disabled={!speech.supported || !voiceStatus.data?.ready}
+          onChange={(e) => {
+            setVoiceReply(e.target.checked);
+            playbackAllowed.current =
+              open && section === "chat" && e.target.checked;
+            if (!e.target.checked) speech.stop();
+          }}
+        >
+          语音回复
+        </Checkbox>
+        <Checkbox
+          checked={voiceReminders}
+          disabled={!voice.canSpeak}
+          onChange={(e) => {
+            setVoiceReminders(e.target.checked);
+            if (!e.target.checked) voice.stopSpeaking();
+          }}
+        >
+          播报新提醒
+        </Checkbox>
+        <p>
+          小序的声音 · AI 生成
+          {voiceStatus.data?.ready
+            ? ` · ${voiceStatus.data.voice}`
+            : " · 尚未就绪"}
+        </p>
+      </div>
+      <div className="assistant-settings-actions">
+        <Button
+          size="small"
+          icon={<CustomerServiceOutlined />}
+          aria-label="智能语音"
+          disabled={sending || !!executing}
+          data-settings-action
+          onClick={() => openPanel("voice")}
+        >
+          智能语音
+        </Button>
+        <Button
+          size="small"
+          data-settings-action
+          disabled={sending || !!executing}
+          onClick={openVoiceSettings}
+        >
+          语音设置
+        </Button>
+        {!inDrawer && (
+          <Button
+            size="small"
+            icon={<CommentOutlined />}
+            aria-label="打开个人助理"
+            data-settings-action
+            onClick={() => openPanel("chat")}
+          >
+            打开个人助理
+          </Button>
+        )}
+        <Button
+          size="small"
+          data-settings-action
+          onClick={() => selectSection("tasks")}
+        >
+          任务与文件
+        </Button>
+        <Button
+          size="small"
+          data-settings-action
+          onClick={() => selectSection("memory")}
+        >
+          个人记忆
+        </Button>
+        {(voice.speaking || speech.active) && (
+          <Button
+            size="small"
+            icon={<StopOutlined />}
+            onClick={() => {
+              voice.stopSpeaking();
+              speech.stop();
+            }}
+          >
+            打断朗读
+          </Button>
+        )}
+      </div>
+    </>
+  );
   const sender = (inDrawer = false) => (
-    <div className="assistant-compose">
+    <div
+      className="assistant-compose"
+      data-suppressed={!inDrawer && inWorkspace && open ? "true" : undefined}
+      inert={!inDrawer && inWorkspace && open}
+      aria-hidden={!inDrawer && inWorkspace && open ? true : undefined}
+    >
       <AgentComposer
         value={agent}
         change={setAgent}
         disabled={busy}
         onUploading={setUploading}
+        settingsContent={composerSettings(inDrawer)}
+        active={inDrawer ? open && section === "chat" : !inWorkspace || !open}
       />
       <Sender
         value={text}
@@ -427,47 +563,10 @@ export function PersonalAssistantProvider({
             ? "告诉我你想完成什么，例如：安排明天下午3点选款会…"
             : q.isLoading
               ? "正在连接个人助理…"
-              : "AI 尚未就绪，点击打开助理查看原因"
+              : "AI 尚未就绪，可从助理设置打开对话查看原因"
         }
         autoSize={{ minRows: inDrawer ? 2 : 1, maxRows: 5 }}
       />
-      <div className="assistant-compose-meta">
-        <Button
-          type="text"
-          size="small"
-          icon={<CustomerServiceOutlined />}
-          aria-label="智能语音"
-          disabled={sending || !!executing}
-          onClick={() => openPanel("voice")}
-        >
-          智能语音
-        </Button>
-        <Checkbox
-          checked={includeContext}
-          onChange={(e) => setIncludeContext(e.target.checked)}
-          disabled={busy}
-        >
-          附带已保存日程与待办
-        </Checkbox>
-        <Checkbox
-          checked={includeMemory}
-          onChange={(e) => setIncludeMemory(e.target.checked)}
-          disabled={busy}
-        >
-          使用个人记忆
-        </Checkbox>
-        {!inDrawer && (
-          <Button
-            type="text"
-            size="small"
-            icon={<CommentOutlined />}
-            aria-label="打开个人助理"
-            onClick={() => openPanel("chat")}
-          >
-            打开个人助理
-          </Button>
-        )}
-      </div>
       {voice.listening && (
         <div className="assistant-voice-status" role="status">
           <i />
@@ -530,12 +629,34 @@ export function PersonalAssistantProvider({
           speech.stop();
         }}
         title={
-          <span>
-            <CommentOutlined /> AI 个人助理
-          </span>
+          <div className="assistant-panel-heading">
+            <span>
+              <CommentOutlined /> AI 个人助理
+            </span>
+            <Dropdown
+              trigger={["click"]}
+              menu={{
+                items: sectionItems,
+                selectedKeys: [section],
+                onClick: ({ key }) => selectSection(key as AssistantSection),
+              }}
+            >
+              <Button type="text" size="small" aria-label="切换助理面板">
+                {sectionItems.find((item) => item.key === section)?.label ||
+                  "动态反馈"}
+                <DownOutlined />
+              </Button>
+            </Dropdown>
+          </div>
         }
         size={620}
-        rootClassName="personal-assistant-drawer"
+        rootClassName={`personal-assistant-drawer${inWorkspace ? " workspace-assistant-screen" : ""}`}
+        classNames={{
+          body:
+            section === "chat"
+              ? "assistant-chat-body"
+              : "assistant-secondary-body",
+        }}
         extra={
           section === "chat" &&
           allowed && (
@@ -579,98 +700,36 @@ export function PersonalAssistantProvider({
           ) : null
         }
       >
-        <Tabs
-          activeKey={section}
-          onChange={(key) => {
-            playbackAllowed.current = false;
-            setSection(
-              key as "chat" | "activity" | "memory" | "voice" | "tasks",
-            );
-            voice.stop();
-            speech.stop();
-          }}
-          items={[
-            ...(allowed ? [{ key: "chat", label: "互动对话" }] : []),
-            ...(allowed ? [{ key: "tasks", label: "任务与文件" }] : []),
-            ...(allowed
-              ? [
-                  {
-                    key: "voice",
-                    label: "语音设置",
-                    disabled: sending || !!executing,
-                  },
-                ]
-              : []),
-            { key: "activity", label: "动态反馈" },
-            ...(allowed ? [{ key: "memory", label: "个人记忆" }] : []),
-          ]}
-        />
-        {allowed && section !== "voice" && (
-          <div className="assistant-voice-options">
-            <Checkbox
-              checked={voiceReply}
-              disabled={!speech.supported || !voiceStatus.data?.ready}
-              onChange={(e) => {
-                setVoiceReply(e.target.checked);
-                playbackAllowed.current =
-                  open && section === "chat" && e.target.checked;
-                if (!e.target.checked) speech.stop();
-              }}
-            >
-              语音回复
-            </Checkbox>
-            <Checkbox
-              checked={voiceReminders}
-              disabled={!voice.canSpeak}
-              onChange={(e) => {
-                setVoiceReminders(e.target.checked);
-                if (!e.target.checked) voice.stopSpeaking();
-              }}
-            >
-              播报新提醒
-            </Checkbox>
-            {(voice.speaking || speech.active) && (
-              <Button
-                size="small"
-                icon={<StopOutlined />}
-                onClick={() => {
-                  voice.stopSpeaking();
-                  speech.stop();
-                }}
-              >
-                打断朗读
-              </Button>
-            )}
-          </div>
-        )}
-        {allowed && section === "chat" && (
-          <div className="assistant-speech-status">
-            <span>
-              小序的声音 · AI 生成
-              {voiceStatus.data?.ready
-                ? ` · ${voiceStatus.data.voice}`
-                : " · 尚未就绪"}
-            </span>
-            {!voiceStatus.data?.ready && (
-              <Button size="small" type="link" onClick={openVoiceSettings}>
-                语音设置
-              </Button>
-            )}
-            {speech.active && (
-              <span role="status">
-                {speech.state === "thinking"
-                  ? "小序正在准备声音…"
-                  : "小序正在说话"}
+        {allowed &&
+          section === "chat" &&
+          (speech.active || speech.blocked || speech.error) && (
+            <div className="assistant-speech-status">
+              <span>
+                小序的声音 · AI 生成
+                {voiceStatus.data?.ready
+                  ? ` · ${voiceStatus.data.voice}`
+                  : " · 尚未就绪"}
               </span>
-            )}
-            {speech.blocked && (
-              <Button size="small" onClick={speech.play}>
-                播放小序声音
-              </Button>
-            )}
-            {speech.error && <div role="alert">{speech.error}</div>}
-          </div>
-        )}
+              {!voiceStatus.data?.ready && (
+                <Button size="small" type="link" onClick={openVoiceSettings}>
+                  语音设置
+                </Button>
+              )}
+              {speech.active && (
+                <span role="status">
+                  {speech.state === "thinking"
+                    ? "小序正在准备声音…"
+                    : "小序正在说话"}
+                </span>
+              )}
+              {speech.blocked && (
+                <Button size="small" onClick={speech.play}>
+                  播放小序声音
+                </Button>
+              )}
+              {speech.error && <div role="alert">{speech.error}</div>}
+            </div>
+          )}
         {open && section === "voice" && allowed && (
           <AssistantVoiceSettingsPanel
             status={voiceStatus}

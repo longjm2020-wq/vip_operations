@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   App,
   Button,
@@ -51,15 +51,23 @@ export function AgentComposer({
   change,
   disabled,
   onUploading,
+  settingsContent,
+  active = true,
 }: {
   value: AgentOptions;
   change: (v: AgentOptions) => void;
   disabled: boolean;
   onUploading: (v: boolean) => void;
+  settingsContent?: ReactNode;
+  active?: boolean;
 }) {
   const input = useRef<HTMLInputElement>(null),
     { message } = App.useApp();
   const [uploading, setUploading] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  useEffect(() => {
+    if (!active) setSettingsOpen(false);
+  }, [active]);
   const [preferredPurpose, setPreferredPurpose] = useState<string>();
   const catalog = useQuery({
     queryKey: ["assistant-capabilities"],
@@ -161,15 +169,29 @@ export function AgentComposer({
         </Checkbox>
         <Popover
           trigger="click"
-          title="创作设置"
+          title={settingsContent ? "助理设置" : "创作设置"}
+          open={settingsOpen && active}
+          onOpenChange={setSettingsOpen}
           content={
-            <div className="agent-settings">
+            <div
+              className={`agent-settings${settingsContent ? " assistant-settings" : ""}`}
+              onClick={(event) => {
+                if (
+                  (event.target as HTMLElement).closest(
+                    "[data-settings-action]",
+                  )
+                )
+                  setSettingsOpen(false);
+              }}
+            >
+              {settingsContent}
               <p>图像创作能力</p>
               <Select
                 style={{ width: 230 }}
                 aria-label="图像创作能力"
                 placeholder="使用首个可用图像能力"
                 value={value.imageModel}
+                disabled={disabled || uploading}
                 allowClear
                 options={catalog.data?.imageModels?.map((m) => ({
                   value: m.id,
@@ -194,8 +216,8 @@ export function AgentComposer({
             size="small"
             type="text"
             icon={<SettingOutlined />}
-            aria-label="创作设置"
-            disabled={disabled}
+            aria-label={settingsContent ? "助理设置" : "创作设置"}
+            disabled={!active || (disabled && !settingsContent)}
           />
         </Popover>
       </div>

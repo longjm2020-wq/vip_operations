@@ -1,3 +1,7 @@
+import {
+  openPersonalAssistant,
+  selectAssistantPanel,
+} from "./assistant-controls.js";
 import { expect, test, type Page } from "@playwright/test";
 const fileId = "11111111-1111-4111-8111-111111111111";
 const resultId = "22222222-2222-4222-8222-222222222222";
@@ -151,17 +155,15 @@ test("附件、能力、联网与任务下载形成完整流程，历史回复�
 }) => {
   const requests = await setup(page);
   await page.goto("/my-workspace");
-  await page.getByRole("button", { name: "打开个人助理", exact: true }).click();
+  await openPersonalAssistant(page);
   const dialog = page.getByRole("dialog", { name: /AI 个人助理/ });
   await expect(dialog).toBeVisible();
   await expect(dialog).not.toContainText(/GPT|OpenRouter|DeepSeek|openai\//i);
-  await dialog
-    .getByLabel("上传助理附件")
-    .setInputFiles({
-      name: "资料.txt",
-      mimeType: "text/plain",
-      buffer: Buffer.from("测试库存：条码001234567890123456789 数量12"),
-    });
+  await dialog.getByLabel("上传助理附件").setInputFiles({
+    name: "资料.txt",
+    mimeType: "text/plain",
+    buffer: Buffer.from("测试库存：条码001234567890123456789 数量12"),
+  });
   await expect(dialog.locator(".agent-attachments")).toContainText("资料.txt");
   await dialog.getByRole("combobox", { name: "助理能力" }).click();
   await page.getByText("深度分析", { exact: true }).last().click();
@@ -181,7 +183,7 @@ test("附件、能力、联网与任务下载形成完整流程，历史回复�
     "href",
     "https://example.com/report",
   );
-  await dialog.getByRole("tab", { name: "任务与文件" }).click();
+  await selectAssistantPanel(page, "任务与文件");
   await expect(dialog.getByRole("heading", { name: "我的文件" })).toBeVisible();
   await expect(dialog).toContainText("已完成");
   await page.screenshot({ path: ".local/assistant-agent-dark.png" });
@@ -192,7 +194,7 @@ test("亮色窄屏保留附件入口和中性能力名称", async ({ page }) => 
   await page.goto("/my-workspace?assistant=tasks");
   const dialog = page.getByRole("dialog", { name: /AI 个人助理/ });
   await expect(dialog).toBeVisible();
-  await dialog.getByRole("tab", { name: "互动对话" }).click();
+  await selectAssistantPanel(page, "互动对话");
   await expect(
     dialog.getByRole("button", { name: "附件", exact: true }),
   ).toBeVisible();

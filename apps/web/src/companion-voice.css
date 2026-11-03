@@ -21,7 +21,7 @@
   flex: 1;
   font-weight: 600;
 }
-.companion-voice-bubble button {
+.companion-voice button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -37,19 +37,19 @@
   font: inherit;
   font-size: 13px;
 }
-.companion-voice-bubble button:hover {
+.companion-voice button:hover {
   background: var(--app-accent-soft);
   color: var(--app-accent);
 }
-.companion-voice-bubble button:focus-visible {
+.companion-voice button:focus-visible {
   outline: 2px solid var(--app-accent);
   outline-offset: 2px;
 }
-.companion-voice-bubble button:disabled {
+.companion-voice button:disabled {
   opacity: 0.4;
   cursor: default;
 }
-.companion-voice-bubble p {
+.companion-voice p {
   margin: 6px 0 10px;
   font-size: 12px;
   line-height: 1.7;
@@ -73,11 +73,53 @@
 .companion-voice-spacer {
   flex: 1;
 }
-.companion-voice-bubble .companion-voice-end {
+.companion-voice-inline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  column-gap: 12px;
+  color: var(--app-text);
+  cursor: default;
+}
+.companion-voice-inline .companion-voice-heading {
+  order: 1;
+  color: var(--app-secondary);
+}
+.companion-voice-inline .companion-voice-controls {
+  order: 2;
+  gap: 4px;
+}
+.companion-voice-inline .companion-voice-spacer {
+  display: none;
+}
+.companion-voice-inline p {
+  flex: 0 0 100%;
+  display: block;
+  max-height: 4.8em;
+  margin: 0 0 4px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  white-space: pre-wrap;
+  text-align: center;
+  font-size: 15px;
+  line-height: 1.6;
+  text-shadow: 0 1px 10px var(--app-bg);
+}
+.companion-voice-inline .companion-voice-caption {
+  color: var(--app-text);
+}
+.companion-voice-inline p:focus-visible {
+  outline: 1px solid var(--app-accent);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+.companion-voice .companion-voice-end {
   background: var(--app-accent-soft);
   color: var(--app-accent);
 }
-.companion-voice-bubble .companion-voice-start {
+.companion-voice .companion-voice-start {
   width: auto;
   border-radius: 18px;
   padding: 0 10px;
@@ -103,7 +145,7 @@
 .companion-voice-wave i:nth-child(3) {
   height: 11px;
 }
-.companion-voice-bubble[data-state="speaking"] .companion-voice-wave i {
+.companion-voice[data-state="speaking"] .companion-voice-wave i {
   animation: companion-voice-wave 0.65s ease-in-out infinite alternate;
 }
 .companion-voice-wave i:nth-child(2) {
@@ -112,7 +154,7 @@
 .companion-voice-wave i:nth-child(3) {
   animation-delay: -0.2s !important;
 }
-.companion-voice-bubble[data-muted="true"] .companion-voice-wave {
+.companion-voice[data-muted="true"] .companion-voice-wave {
   opacity: 0.4;
 }
 @keyframes companion-voice-wave {

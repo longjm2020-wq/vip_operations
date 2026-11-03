@@ -1,4 +1,5 @@
 import { expect, test, type BrowserContext, type Page } from "@playwright/test";
+import { openPersonalAssistant } from "./assistant-controls.js";
 import { selectionLayoutSchema } from "../../packages/contracts/src/selection-layout.js";
 
 async function openWorkspacePanel(page: Page, name: string) {
@@ -195,7 +196,7 @@ test("蓝色工作台移除工具摘要，切换不丢草稿且只保存主题",
   await fixture(context, state);
   await page.goto("/my-workspace");
   await expect(
-    page.getByRole("button", { name: "打开个人助理", exact: true }),
+    page.getByRole("button", { name: "助理设置", exact: true }),
   ).toBeVisible();
   await mode(page, "dark");
   await expect(page.getByText("专属 AI 工具")).toHaveCount(0);
@@ -336,7 +337,7 @@ test("手机两种主题、助理弹窗与导航不横向溢出", async ({ page,
     if (current === "light") await toggle(page, "light");
     await mode(page, current);
     await expect(
-      page.getByRole("button", { name: "打开个人助理", exact: true }),
+      page.getByRole("button", { name: "助理设置", exact: true }),
     ).toBeVisible();
     expect(
       await page.evaluate(() => document.documentElement.scrollWidth),
@@ -345,9 +346,7 @@ test("手机两种主题、助理弹窗与导航不横向溢出", async ({ page,
       path: test.info().outputPath(`${current}-mobile.png`),
       fullPage: true,
     });
-    await page
-      .getByRole("button", { name: "打开个人助理", exact: true })
-      .click();
+    await openPersonalAssistant(page);
     const dialog = page.getByRole("dialog", { name: /AI 个人助理/ });
     await expect(
       dialog.getByRole("button", { name: "发送给个人助理" }),

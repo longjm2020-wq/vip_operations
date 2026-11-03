@@ -48,6 +48,18 @@
   min-height: 34px;
   cursor: default;
 }
+/* Captions stay in screen space, independent of the world camera and robot. */
+.workspace-voice-slot {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: min(980px, calc(100% - 510px));
+  transform: translateX(-50%);
+  pointer-events: auto;
+}
+.workspace-voice-slot:empty {
+  display: none;
+}
 .personal-workspace[data-world-mode] .workspace-ai {
   display: flex;
   flex-direction: column;
@@ -278,6 +290,16 @@
   .workspace-world-controls button {
     min-width: 30px;
     padding-inline: 5px;
+  }
+}
+@media (max-width: 1199px) {
+  .workspace-voice-slot {
+    top: calc(100% + 12px);
+    width: min(760px, 100%);
+  }
+  .workspace-voice-slot .companion-voice-inline p {
+    max-height: 3.2em;
+    font-size: 13px;
   }
 }
 @media (prefers-reduced-motion: reduce) {

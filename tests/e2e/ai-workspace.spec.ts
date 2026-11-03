@@ -1,3 +1,8 @@
+import {
+  openPersonalAssistant,
+  selectAssistantPanel,
+  setAssistantOption,
+} from "./assistant-controls.js";
 import { expect, test, type Page } from "@playwright/test";
 import type { AssistantActivity } from "../../packages/contracts/src/assistant-activity.js";
 
@@ -100,7 +105,7 @@ test("语音输入须主动启动，转写可编辑，关闭停止麦克风", as
   await mockBrowserVoice(page);
   const fixture = await workspaceFixture(page);
   await page.goto("/my-workspace");
-  await page.getByRole("button", { name: "打开个人助理", exact: true }).click();
+  await openPersonalAssistant(page);
   const dialog = page.getByRole("dialog", { name: /AI 个人助理/ });
   expect(await page.evaluate(() => window.assistantVoiceTest.starts)).toBe(0);
   await dialog.getByRole("button", { name: "语音输入", exact: true }).click();
@@ -162,13 +167,13 @@ test("新提醒播报须开启，旧提醒不重播，识别权限错误可继�
     href: "/my-workspace",
   });
   await page.goto("/my-workspace");
-  await page.getByRole("button", { name: "打开个人助理", exact: true }).click();
+  await openPersonalAssistant(page);
   const dialog = page.getByRole("dialog", { name: /AI 个人助理/ });
-  await dialog.getByRole("checkbox", { name: "播报新提醒" }).check();
+  await setAssistantOption(page, "播报新提醒", true);
   expect(
     await page.evaluate(() => window.assistantVoiceTest.spoken.length),
   ).toBe(0);
-  await dialog.getByRole("tab", { name: "动态反馈" }).click();
+  await selectAssistantPanel(page, "动态反馈");
   fixture.activities.push({
     id: "schedule:new",
     kind: "schedule",
@@ -182,7 +187,7 @@ test("新提醒播报须开启，旧提醒不重播，识别权限错误可继�
   await expect
     .poll(() => page.evaluate(() => window.assistantVoiceTest.spoken))
     .toEqual(["新的选款会：10:20开始"]);
-  await dialog.getByRole("tab", { name: "互动对话" }).click();
+  await selectAssistantPanel(page, "互动对话");
   await dialog.getByRole("button", { name: "语音输入", exact: true }).click();
   await page.evaluate(() =>
     window.assistantVoiceTest.recognizer?.onerror?.({ error: "not-allowed" }),
@@ -194,9 +199,9 @@ test("新提醒播报须开启，旧提醒不重播，识别权限错误可继�
 test("个人记忆独立保存编辑删除，发送时明确选择是否使用", async ({ page }) => {
   const fixture = await workspaceFixture(page);
   await page.goto("/my-workspace");
-  await page.getByRole("button", { name: "打开个人助理", exact: true }).click();
+  await openPersonalAssistant(page);
   const dialog = page.getByRole("dialog", { name: /AI 个人助理/ });
-  await dialog.getByRole("tab", { name: "个人记忆" }).click();
+  await selectAssistantPanel(page, "个人记忆");
   await dialog.getByRole("button", { name: "新增记忆" }).click();
   await dialog.getByLabel("记忆名称", { exact: true }).fill("汇报偏好");
   await dialog
@@ -216,18 +221,22 @@ test("个人记忆独立保存编辑删除，发送时明确选择是否使用",
   await expect(dialog.locator(".assistant-memory-entry")).toContainText(
     "先列风险",
   );
-  await dialog.getByRole("tab", { name: "互动对话" }).click();
+  await selectAssistantPanel(page, "互动对话");
+  await dialog.getByRole("button", { name: "助理设置", exact: true }).click();
   await expect(
-    dialog.getByRole("checkbox", { name: "使用个人记忆" }),
+    page.getByRole("checkbox", { name: "使用个人记忆", exact: true }),
   ).not.toBeChecked();
-  await dialog.getByRole("checkbox", { name: "使用个人记忆" }).check();
+  await page
+    .getByRole("checkbox", { name: "使用个人记忆", exact: true })
+    .check();
+  await dialog.getByRole("button", { name: "助理设置", exact: true }).click();
   await dialog
     .getByPlaceholder(/告诉我你想完成什么/)
     .fill("帮我安排明天的会议");
   await dialog.getByPlaceholder(/告诉我你想完成什么/).press("Enter");
   await expect.poll(() => fixture.submitted.length).toBe(1);
   expect(fixture.submitted[0]).toMatchObject({ includeMemory: true });
-  await dialog.getByRole("tab", { name: "个人记忆" }).click();
+  await selectAssistantPanel(page, "个人记忆");
   await dialog.getByRole("button", { name: "删除记忆", exact: true }).click();
   await page.getByRole("button", { name: "删除", exact: true }).last().click();
   await expect(
@@ -273,7 +282,7 @@ test("查询证据保留条码；操作卡点击后提交，完成以真实动�
     ],
   });
   await page.goto("/my-workspace");
-  await page.getByRole("button", { name: "打开个人助理", exact: true }).click();
+  await openPersonalAssistant(page);
   const dialog = page.getByRole("dialog", { name: /AI 个人助理/ });
   await dialog.locator(".assistant-evidence summary").click();
   await expect(dialog.getByText(/000123456789012345678901234/)).toBeVisible();
@@ -293,9 +302,9 @@ test("查询证据保留条码；操作卡点击后提交，完成以真实动�
     href: "/analytics/compass",
     at: "2026-11-01T08:00:00Z",
   });
-  await dialog.getByRole("tab", { name: "动态反馈" }).click();
+  await selectAssistantPanel(page, "动态反馈");
   await dialog.getByRole("button", { name: "刷新助理动态" }).click();
-  await dialog.getByRole("tab", { name: "互动对话" }).click();
+  await selectAssistantPanel(page, "互动对话");
   await expect(action.getByText("已完成", { exact: true })).toBeVisible();
   await page.clock.runFor(4000);
   await page.screenshot({
@@ -304,11 +313,10 @@ test("查询证据保留条码；操作卡点击后提交，完成以真实动�
   await dialog.getByRole("button", { name: "关闭", exact: true }).click();
   await page.getByRole("button", { name: "切换为亮色主题" }).click();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
-  await page.getByRole("button", { name: "打开个人助理", exact: true }).click();
-  await expect(dialog.getByRole("tab", { name: "互动对话" })).toHaveAttribute(
-    "aria-selected",
-    "true",
-  );
+  await openPersonalAssistant(page);
+  await expect(
+    dialog.getByRole("button", { name: "切换助理面板", exact: true }),
+  ).toContainText("互动对话");
   await expect(dialog).toBeInViewport({ ratio: 0.99 });
   await page.screenshot({
     path: test.info().outputPath("assistant-business-light.png"),
@@ -545,7 +553,7 @@ test("工作台只保留个人助理，不再读取经营报告或显示专属�
   ).toHaveCount(0);
   await expect(page.locator(".personal-workspace h1")).toHaveCount(0);
   await expect(
-    page.getByRole("button", { name: "打开个人助理", exact: true }),
+    page.getByRole("button", { name: "助理设置", exact: true }),
   ).toBeVisible();
   await expect(page.getByText("专属 AI 工具")).toHaveCount(0);
   await expect(page.getByLabel("经营分析任务")).toHaveCount(0);
@@ -608,6 +616,139 @@ test("工作台面板默认收起，切换与重开保留草稿且只在保存�
     page.getByRole("checkbox", { name: "整理新品资料", exact: true }),
   ).toBeVisible();
   expect(fixture.assistantCalls()).toBe(0);
+});
+
+test("工作台透明宽屏对话仅保留一个可操作输入，菜单面板可达且关闭保留草稿", async ({
+  page,
+}) => {
+  const fixture = await workspaceFixture(page);
+  await page.goto("/my-workspace");
+  const source = page
+    .locator(".workspace-ai")
+    .getByPlaceholder(/告诉我你想完成什么/);
+  await source.fill("仍在编辑的选款会草稿");
+  await openPersonalAssistant(page);
+  const dialog = page.getByRole("dialog", { name: /AI 个人助理/ });
+  await expect(dialog).toBeVisible();
+  await expect(page.locator(".workspace-assistant-screen")).toBeVisible();
+  await expect(dialog.getByRole("tablist")).toHaveCount(0);
+  await expect(source).toBeHidden();
+  await expect(
+    page.locator('textarea[placeholder*="告诉我你想完成什么"]:visible'),
+  ).toHaveCount(1);
+  const rootBounds = (await page.locator(".personal-workspace").boundingBox())!;
+  expect((await dialog.boundingBox())!.width).toBeGreaterThan(
+    rootBounds.width * 0.7,
+  );
+  const input = dialog.getByPlaceholder(/告诉我你想完成什么/);
+  await expect(input).toHaveValue("仍在编辑的选款会草稿");
+  await input.fill("继续编辑但尚未发送");
+  for (const [section, label] of [
+    ["任务与文件", "我的文件"],
+    ["个人记忆", "新增记忆"],
+    ["动态反馈", "刷新助理动态"],
+  ] as const) {
+    await selectAssistantPanel(page, section);
+    await expect(
+      dialog.getByRole("button", { name: "切换助理面板", exact: true }),
+    ).toContainText(section);
+    await expect(
+      section === "任务与文件"
+        ? dialog.getByRole("heading", { name: label, exact: true })
+        : dialog.getByRole("button", { name: label }),
+    ).toBeVisible();
+  }
+  await selectAssistantPanel(page, "互动对话");
+  await expect(input).toHaveValue("继续编辑但尚未发送");
+  await page.screenshot({ path: ".local/workspace-chat-screen-dark.png" });
+  await dialog.getByRole("button", { name: "关闭", exact: true }).click();
+  await expect(source).toBeVisible();
+  await expect(source).toHaveValue("继续编辑但尚未发送");
+  await page
+    .getByRole("button", { name: "切换为亮色主题", exact: true })
+    .click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await openPersonalAssistant(page);
+  await expect(input).toHaveValue("继续编辑但尚未发送");
+  await page.screenshot({ path: ".local/workspace-chat-screen-light.png" });
+  await dialog.getByRole("button", { name: "关闭", exact: true }).click();
+  await page
+    .locator(".sidebar")
+    .getByRole("link", { name: "运营中心", exact: true })
+    .click();
+  await expect(page).toHaveURL(/operations$/);
+  await page
+    .getByRole("button", { name: "展开小序状态与动态", exact: true })
+    .click();
+  await page.getByRole("button", { name: "文字对话", exact: true }).click();
+  await expect(dialog).toBeVisible();
+  await expect(page.locator(".workspace-assistant-screen")).toHaveCount(0);
+  expect((await dialog.boundingBox())!.width).toBeLessThanOrEqual(621);
+  await expect(input).toHaveValue("继续编辑但尚未发送");
+  await dialog.getByRole("button", { name: "关闭", exact: true }).click();
+  expect(fixture.assistantCalls()).toBe(0);
+});
+
+test("齿轮收纳隐私选项且默认不发送，手机可选择后发送并保持唯一输入", async ({
+  page,
+}) => {
+  const fixture = await workspaceFixture(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/my-workspace");
+  const context = page.getByRole("checkbox", {
+    name: "附带已保存日程与待办",
+    exact: true,
+  });
+  const memory = page.getByRole("checkbox", {
+    name: "使用个人记忆",
+    exact: true,
+  });
+  await expect(context).toBeHidden();
+  await expect(memory).toBeHidden();
+  const gear = page.getByRole("button", { name: "助理设置", exact: true });
+  await gear.click();
+  await expect(context).not.toBeChecked();
+  await expect(memory).not.toBeChecked();
+  await expect(
+    page.getByRole("button", { name: "智能语音", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "打开个人助理", exact: true }),
+  ).toBeVisible();
+  await gear.click();
+  const source = page
+    .locator(".workspace-ai")
+    .getByPlaceholder(/告诉我你想完成什么/);
+  await source.fill("未勾选时询问工作安排");
+  await source.press("Enter");
+  await expect.poll(() => fixture.submitted.length).toBe(1);
+  expect(fixture.submitted[0]).toMatchObject({
+    includePersonalContext: false,
+    includeMemory: false,
+  });
+  const dialog = page.getByRole("dialog", { name: /AI 个人助理/ });
+  await expect(dialog).toBeVisible();
+  await setAssistantOption(page, "附带已保存日程与待办", true);
+  await setAssistantOption(page, "使用个人记忆", true);
+  const input = dialog.getByPlaceholder(/告诉我你想完成什么/);
+  await input.fill("勾选后使用已保存安排和记忆");
+  await input.press("Enter");
+  await expect.poll(() => fixture.submitted.length).toBe(2);
+  expect(fixture.submitted[1]).toMatchObject({
+    includePersonalContext: true,
+    includeMemory: true,
+  });
+  expect(JSON.stringify(fixture.submitted)).not.toContain("仅自己的备忘");
+  await expect(
+    page.locator('textarea[placeholder*="告诉我你想完成什么"]:visible'),
+  ).toHaveCount(1);
+  expect(
+    await page.evaluate(() => document.documentElement.scrollWidth),
+  ).toBeLessThanOrEqual(391);
+  await page.screenshot({
+    path: ".local/workspace-chat-screen-mobile.png",
+    fullPage: true,
+  });
 });
 
 test("功能圆环实际围绕核心公转，悬停与打开浮卡暂停以便操作", async ({
@@ -916,7 +1057,7 @@ test("小序在业务页记住浮动位置，工作台内嵌同一形象，跨�
   await page
     .getByRole("button", { name: "收起工作台面板", exact: true })
     .click();
-  await page.getByRole("button", { name: "打开个人助理", exact: true }).click();
+  await openPersonalAssistant(page);
   await expect(
     dialog.getByRole("button", { name: "已加入日程草稿", exact: true }),
   ).toBeDisabled();
@@ -1048,11 +1189,13 @@ test("日程可添加编辑删除，保存后跨页面恢复，拒绝无效时�
 test("个人助理仅发送后调用模型，日程须确认且可随账号保存", async ({ page }) => {
   const fixture = await workspaceFixture(page);
   await page.goto("/my-workspace");
-  await page.getByRole("button", { name: "打开个人助理", exact: true }).click();
+  await openPersonalAssistant(page);
   const dialog = page.getByRole("dialog", { name: /AI 个人助理/ });
+  await dialog.getByRole("button", { name: "助理设置", exact: true }).click();
   await expect(
-    dialog.getByRole("checkbox", { name: "附带已保存日程与待办" }),
+    page.getByRole("checkbox", { name: "附带已保存日程与待办", exact: true }),
   ).not.toBeChecked();
+  await dialog.getByRole("button", { name: "助理设置", exact: true }).click();
   expect(fixture.assistantCalls()).toBe(0);
   await dialog
     .getByPlaceholder(/告诉我你想完成什么/)
@@ -1074,7 +1217,7 @@ test("个人助理仅发送后调用模型，日程须确认且可随账号保�
   await page.getByRole("button", { name: "保存更改", exact: true }).click();
   await expect.poll(() => fixture.workspace.schedule.length).toBe(1);
   await page.reload();
-  await page.getByRole("button", { name: "打开个人助理", exact: true }).click();
+  await openPersonalAssistant(page);
   await expect(dialog.getByText(/实际返回：|openai\/gpt/i)).toHaveCount(0);
   await expect(
     dialog.getByText("已整理为日程草稿，请核对后加入日程。"),
@@ -1131,7 +1274,7 @@ test("手机工作台与收起面板不横向溢出，减少动态效果时核�
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/my-workspace");
   await expect(
-    page.getByRole("button", { name: "打开个人助理", exact: true }),
+    page.getByRole("button", { name: "助理设置", exact: true }),
   ).toBeVisible();
   await expect(page.locator(".workspace-ai-core")).toBeVisible();
   const size = await page.evaluate(() => ({
@@ -1155,7 +1298,7 @@ test("手机工作台与收起面板不横向溢出，减少动态效果时核�
         duration.split(",").every((value) => parseFloat(value) <= 0.01),
     ),
   ).toBe(true);
-  await page.getByRole("button", { name: "打开个人助理", exact: true }).click();
+  await openPersonalAssistant(page);
   const dialog = page.getByRole("dialog");
   await expect(
     dialog.getByRole("button", { name: "发送给个人助理" }),
@@ -1186,7 +1329,7 @@ test("手机导航可开关，助理和日程弹窗完整显示且业务页面�
   await page
     .getByRole("button", { name: "关闭工作区导航", exact: true })
     .click();
-  await page.getByRole("button", { name: "打开个人助理", exact: true }).click();
+  await openPersonalAssistant(page);
   const assistant = page.getByRole("dialog", { name: /AI 个人助理/ });
   await expect(
     assistant.getByRole("button", { name: "发送给个人助理" }),
@@ -1637,8 +1780,8 @@ test("工作台圆环是小序巢穴，可跃出换位与召回，文字和动�
     .click();
   const dialog = page.getByRole("dialog", { name: /AI 个人助理/ });
   await expect(
-    dialog.getByRole("tab", { name: "动态反馈", exact: true }),
-  ).toHaveAttribute("aria-selected", "true");
+    dialog.getByRole("button", { name: "切换助理面板", exact: true }),
+  ).toContainText("动态反馈");
   await expect(
     dialog.getByText("核心入口项目进展", { exact: true }),
   ).toBeVisible();

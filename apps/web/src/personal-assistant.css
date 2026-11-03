@@ -150,22 +150,58 @@
 .assistant-compose .ant-sender-input {
   font-size: 13px;
 }
-.assistant-compose-meta {
+/* Keep the home draft mounted, but expose only the active conversation composer. */
+.assistant-compose[data-suppressed="true"] {
+  visibility: hidden;
+  pointer-events: none;
+}
+.assistant-panel-heading {
   display: flex;
-  justify-content: space-between;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+}
+.assistant-panel-heading > span {
+  white-space: nowrap;
+}
+.assistant-panel-heading > .ant-btn {
+  color: var(--app-secondary);
+  font-size: 12px;
+  font-weight: 400;
+}
+.agent-settings.assistant-settings {
+  width: min(300px, calc(100vw - 64px));
+  max-width: 300px;
+  max-height: min(640px, calc(100dvh - 100px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.assistant-settings-preferences {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+.assistant-settings-preferences strong {
+  color: var(--app-text);
+  font-size: 12px;
+}
+.assistant-settings-preferences .ant-checkbox-wrapper {
+  font-size: 12px;
+  margin-inline-start: 0;
+}
+.assistant-settings-preferences p {
+  color: var(--app-secondary);
+  font-size: 11px;
+  line-height: 1.7;
+}
+.assistant-settings-actions {
+  display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  align-items: center;
-  margin-top: 9px;
-}
-.assistant-compose-meta .ant-checkbox-wrapper,
-.assistant-compose-meta .ant-btn {
-  font-size: 11px;
-  color: var(--app-secondary);
-}
-.assistant-compose-meta .ant-checkbox-inner {
-  width: 13px;
-  height: 13px;
+  padding: 12px 0;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--app-border);
 }
 .personal-assistant-drawer .ant-drawer-body {
   background: var(--app-bg);
@@ -310,9 +346,6 @@
   .personal-assistant-drawer .ant-drawer-body {
     padding: 16px;
   }
-  .assistant-compose-meta {
-    gap: 2px;
-  }
 }
 .assistant-speech-status {
   display: flex;
@@ -329,4 +362,98 @@
 .assistant-speech-status [role="alert"] {
   width: 100%;
   color: var(--app-text);
+}
+
+/* The workspace conversation is an overlay on the existing scene, not a side card. */
+.workspace-assistant-screen .ant-drawer-mask {
+  background: color-mix(in srgb, var(--app-bg) 78%, transparent);
+  backdrop-filter: blur(3px);
+}
+.workspace-assistant-screen .ant-drawer-content-wrapper {
+  width: min(1120px, calc(100vw - 48px)) !important;
+  right: max(24px, calc((100vw - 1120px) / 2));
+  top: 68px;
+  bottom: 24px;
+  height: auto;
+  box-shadow: none;
+}
+:root .workspace-assistant-screen .ant-drawer-section,
+.workspace-assistant-screen .ant-drawer-content {
+  background: transparent;
+  box-shadow: none;
+  border: 0;
+}
+.workspace-assistant-screen .ant-drawer-header {
+  padding: 12px 24px 18px;
+  border-bottom: 1px solid
+    color-mix(in srgb, var(--app-border) 60%, transparent);
+  background: transparent;
+}
+.workspace-assistant-screen .ant-drawer-body {
+  background: transparent;
+  padding: 20px 28px 28px;
+  scrollbar-gutter: stable;
+}
+.workspace-assistant-screen .ant-drawer-footer {
+  padding: 12px 28px 6px;
+  border-top: 0;
+  background: transparent;
+}
+.workspace-assistant-screen .assistant-compose,
+.workspace-assistant-screen .assistant-privacy,
+.workspace-assistant-screen .assistant-chat-body > div,
+.workspace-assistant-screen .assistant-secondary-body > div {
+  max-width: 920px;
+  margin-inline: auto;
+}
+.workspace-assistant-screen .assistant-message-text {
+  font-size: 14px;
+  line-height: 1.9;
+}
+.workspace-assistant-screen .assistant-message-user .ant-bubble-content {
+  background: color-mix(in srgb, var(--app-accent) 10%, var(--app-bg));
+}
+.workspace-assistant-screen .assistant-status {
+  margin-bottom: 24px;
+}
+.workspace-assistant-screen .assistant-empty {
+  max-width: 620px;
+  margin: auto;
+  padding-top: clamp(20px, 7vh, 72px);
+}
+.workspace-assistant-screen .assistant-empty > button {
+  background: color-mix(in srgb, var(--app-surface) 65%, transparent);
+}
+.workspace-assistant-screen .assistant-compose .ant-sender {
+  background: color-mix(in srgb, var(--app-bg) 88%, transparent);
+  box-shadow: 0 8px 32px color-mix(in srgb, var(--app-shadow) 65%, transparent);
+}
+.workspace-assistant-screen .assistant-privacy {
+  font-size: 11px;
+}
+@media (max-width: 700px) {
+  .workspace-assistant-screen .ant-drawer-mask {
+    background: color-mix(in srgb, var(--app-bg) 88%, transparent);
+  }
+  .workspace-assistant-screen .ant-drawer-content-wrapper {
+    width: 100vw !important;
+    right: 0;
+    top: 8px;
+    bottom: 0;
+  }
+  .workspace-assistant-screen .ant-drawer-header {
+    padding: 12px 16px;
+  }
+  .workspace-assistant-screen .ant-drawer-body {
+    padding: 16px;
+  }
+  .workspace-assistant-screen .ant-drawer-footer {
+    padding: 8px 16px max(12px, env(safe-area-inset-bottom));
+  }
+  .workspace-assistant-screen .assistant-panel-heading {
+    gap: 4px 8px;
+  }
+  .workspace-assistant-screen .assistant-empty {
+    padding-top: 20px;
+  }
 }
