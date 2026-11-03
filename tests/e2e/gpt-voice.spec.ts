@@ -524,9 +524,7 @@ test("顶部语音字幕在漫游与相机变化时固定，跨页恢复气泡�
     .click();
   await expect(page).toHaveURL(/my-workspace$/);
   await expect(companion).toHaveAttribute("data-docked", "true");
-  await expect(
-    page.locator(".workspace-ai-companion-slot .workspace-companion"),
-  ).toHaveCount(1);
+  await expect(companion).toHaveCount(1);
   await expect(page.locator(".sidebar-assistant")).toHaveCount(1);
   expect(
     await assistantElement!.evaluate((element) => element.isConnected),
@@ -545,7 +543,57 @@ test("顶部语音字幕在漫游与相机变化时固定，跨页恢复气泡�
   await expectWorkspaceCaptionsAtTop(page);
   await expect(bubble.getByRole("status")).toHaveText("我在听，你说");
   expect(await page.evaluate(() => window.gptVoiceTest.starts)).toBe(1);
-  await bubble.getByRole("button", { name: "结束语音", exact: true }).click();
+  await page.getByRole("button", { name: "打开日程", exact: true }).click();
+  await page.getByRole("button", { name: "新增日程", exact: true }).click();
+  const scheduleDialog = page.getByRole("dialog", {
+    name: "新增日程",
+    exact: true,
+  });
+  await expect(scheduleDialog).toBeVisible();
+  await expect
+    .poll(() =>
+      scheduleDialog.evaluate((element) =>
+        element
+          .getAnimations({ subtree: true })
+          .every((animation) => animation.playState !== "running"),
+      ),
+    )
+    .toBe(true);
+  const endVoice = bubble.getByRole("button", {
+    name: "结束语音",
+    exact: true,
+  });
+  const closeSchedule = scheduleDialog.getByRole("button", {
+    name: "关闭",
+    exact: true,
+  });
+  for (const control of [endVoice, closeSchedule]) {
+    await expect
+      .poll(() =>
+        control.evaluate((element) => {
+          const rect = element.getBoundingClientRect();
+          return element.contains(
+            document.elementFromPoint(
+              rect.x + rect.width / 2,
+              rect.y + rect.height / 2,
+            ),
+          );
+        }),
+      )
+      .toBe(true);
+  }
+  expect(await page.evaluate(() => window.gptVoiceTest.starts)).toBe(1);
+  expect(await page.evaluate(() => window.gptVoiceTest.stops)).toBe(0);
+  await page.screenshot({
+    path: ".local/companion-voice-over-modal-mobile.png",
+  });
+  await closeSchedule.click();
+  await expect(scheduleDialog).toBeHidden();
+  expect(await page.evaluate(() => window.gptVoiceTest.starts)).toBe(1);
+  expect(await page.evaluate(() => window.gptVoiceTest.stops)).toBe(0);
+  await page.getByRole("button", { name: "新增日程", exact: true }).click();
+  await expect(scheduleDialog).toBeVisible();
+  await endVoice.click();
   await expect
     .poll(() => page.evaluate(() => window.gptVoiceTest.stops))
     .toBe(1);

@@ -16,6 +16,7 @@ export function SidebarAssistant({
   docked = false,
   hasNest = false,
   onExplore,
+  onClimb,
   onHome,
   onInteract,
 }: {
@@ -23,6 +24,7 @@ export function SidebarAssistant({
   docked?: boolean;
   hasNest?: boolean;
   onExplore?: () => void;
+  onClimb?: () => void;
   onHome?: () => void;
   onInteract?: () => void;
 }) {
@@ -291,6 +293,10 @@ export function SidebarAssistant({
         </div>
       </button>
       <Popover
+        getPopupContainer={(trigger) =>
+          trigger.closest<HTMLElement>(".workspace-companion-host") ||
+          document.body
+        }
         trigger="click"
         open={detailsOpen}
         onOpenChange={setDetailsOpen}
@@ -352,6 +358,17 @@ export function SidebarAssistant({
                 >
                   换个位置
                 </button>
+                {onClimb && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDetailsOpen(false);
+                      onClimb();
+                    }}
+                  >
+                    攀爬组件
+                  </button>
+                )}
                 {hasNest && !docked && onHome && (
                   <button
                     type="button"

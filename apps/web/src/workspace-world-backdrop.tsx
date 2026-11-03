@@ -41,7 +41,6 @@ export function WorkspaceWorldBackdrop() {
       centerY = 0,
       frame = 0,
       visible = true,
-      accent = "#667bfa",
       elapsed = 0,
       lastTime = 0,
       paintedAt = 0,
@@ -104,7 +103,10 @@ export function WorkspaceWorldBackdrop() {
         rows = Math.ceil(reach / rowGap);
       let glyphs = 0,
         fontSize = 0;
-      context.fillStyle = accent;
+      const ink = light
+        ? { tail: "#3979b9", near: "#356fa3", head: "#326595" }
+        : { tail: "#659df0", near: "#a9d4ff", head: "#e4f3ff" };
+      context.shadowColor = "#90caff";
       context.textAlign = "center";
       context.textBaseline = "middle";
       planes: for (const axis of ["x", "y", "z"] as const) {
@@ -166,11 +168,15 @@ export function WorkspaceWorldBackdrop() {
               ),
               quietCenter = 0.22 + Math.min(1, distance / 1.4) * 0.78,
               edge = Math.min(1, point.y / 100, (height - point.y) / 160),
-              fade = (1 - tail / length) ** 1.3;
+              fade = (1 - tail / length) ** 1.15;
             context.globalAlpha = Math.max(
               0,
-              planeAlpha * quietCenter * edge * fade * (light ? 0.27 : 0.46),
+              planeAlpha * quietCenter * edge * fade * (light ? 0.32 : 0.68),
             );
+            context.fillStyle =
+              tail === 0 ? ink.head : tail < 3 ? ink.near : ink.tail;
+            // Only stream tips glow; the long blue trails stay crisp and inexpensive.
+            context.shadowBlur = tail === 0 && !light ? 5 : 0;
             const size = Math.round(
               Math.max(10, Math.min(17, 15 * point.scale * view.zoom)),
             );
@@ -189,6 +195,7 @@ export function WorkspaceWorldBackdrop() {
         }
       }
       context.globalAlpha = 1;
+      context.shadowBlur = 0;
       if (!motion.matches) schedule();
     };
     const schedule = () => {
@@ -223,8 +230,6 @@ export function WorkspaceWorldBackdrop() {
       invalidate();
     };
     const theme = () => {
-      const style = getComputedStyle(root);
-      accent = style.getPropertyValue("--app-accent").trim() || "#667bfa";
       light = document.documentElement.dataset.theme === "light";
       invalidate();
     };

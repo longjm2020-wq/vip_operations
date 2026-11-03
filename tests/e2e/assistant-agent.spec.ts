@@ -169,7 +169,9 @@ test("附件、能力、联网与任务下载形成完整流程，历史回复�
 }) => {
   const requests = await setup(page);
   await page.goto("/my-workspace");
-  await page.locator(".workspace-ai-core-stage").hover();
+  await page
+    .locator(".workspace-ai-core-stage")
+    .hover({ position: { x: 20, y: 20 } });
   await page.getByRole("button", { name: "打开私有备忘", exact: true }).click();
   await page
     .getByRole("textbox", { name: "私有备忘", exact: true })
@@ -227,7 +229,9 @@ test("附件、能力、联网与任务下载形成完整流程，历史回复�
   await screen
     .getByRole("button", { name: "关闭全息影像屏", exact: true })
     .click();
-  await page.locator(".workspace-ai-core-stage").hover();
+  await page
+    .locator(".workspace-ai-core-stage")
+    .hover({ position: { x: 20, y: 20 } });
   await page.getByRole("button", { name: "打开私有备忘", exact: true }).click();
   await expect(
     page.getByRole("textbox", { name: "私有备忘", exact: true }),

@@ -1,10 +1,39 @@
 import { useLayoutEffect, useRef, useState, type PointerEvent } from "react";
 import { createPortal } from "react-dom";
+import { App } from "antd";
 import { SidebarAssistant } from "./sidebar-assistant";
 import { useAssistantHub } from "./assistant-hub-context";
 import { useUser } from "./shared";
+import {
+  findClimbTarget,
+  climbRestPosition,
+  type ClimbTarget,
+} from "./companion-climbing";
 
 type Position = { x: number; y: number };
+function overlayControlAreas() {
+  return [
+    ...document.querySelectorAll<HTMLElement>(
+      "button, a, input, textarea, select, [contenteditable=true], [role=button], [role=slider]",
+    ),
+  ]
+    .filter(
+      (node) =>
+        !node.closest(".workspace-companion-host") &&
+        node.closest(".ant-drawer-open, .ant-modal-wrap") &&
+        getComputedStyle(node).visibility !== "hidden",
+    )
+    .map((node) => node.getBoundingClientRect())
+    .filter(
+      (r) =>
+        r.width > 0 &&
+        r.height > 0 &&
+        r.bottom > 0 &&
+        r.top < innerHeight &&
+        r.right > 0 &&
+        r.left < innerWidth,
+    );
+}
 // Use visible text/control bounds, not whole cards, so every part of the page can be visited.
 function occupiedAreas() {
   const root = document.querySelector(".workspace");
@@ -53,6 +82,17 @@ function occupiedAreas() {
     range.selectNodeContents(node);
     areas.push(...[...range.getClientRects()].filter(visible));
   }
+  // Drawers and dialogs are body portals, outside the business-page subtree.
+  // The foreground companion must also leave their controls usable.
+  for (const control of document.querySelectorAll<HTMLElement>(
+    "button, a, input, textarea, select, [contenteditable=true], [role=button], [role=slider]",
+  )) {
+    if (root.contains(control) || control.closest(".workspace-companion-host"))
+      continue;
+    const rect = control.getBoundingClientRect();
+    if (visible(rect) && getComputedStyle(control).visibility !== "hidden")
+      areas.push(rect);
+  }
   return areas;
 }
 function isClear(p: Position, width: number, height: number, areas: DOMRect[]) {
@@ -97,7 +137,8 @@ function findSpace(
     : candidates[Math.floor(Math.random() * candidates.length)];
 }
 
-type Motion = "idle" | "peek" | "departing" | "arriving" | "jumping";
+type Motion =
+  "idle" | "peek" | "departing" | "arriving" | "jumping" | "climbing";
 type CompanionView = {
   docked: boolean;
   hasNest: boolean;
@@ -105,13 +146,19 @@ type CompanionView = {
   compact: boolean;
   dragging: boolean;
   motion: Motion;
+  perched: boolean;
+  climbSide?: "left" | "right";
 };
 
 export function WorkspaceCompanion() {
   const user = useUser();
   const hub = useAssistantHub();
+  const { message } = App.useApp();
+  const feedback = useRef(message);
+  feedback.current = message;
   const storageKey = `xuti-companion-position:${user.id}`;
-  // The portal container never changes: moving between nest and page preserves voice and reminders.
+  // A permanent body-level host escapes transformed scene/card stacking contexts.
+  // The same portal and assistant instance preserve voice, drafts and reminders.
   const [host] = useState(() => {
     const node = document.createElement("div");
     node.className = "workspace-companion-host";
@@ -122,7 +169,7 @@ export function WorkspaceCompanion() {
   const suppressClick = useRef(false);
   const controls = useRef({
     active: () => {},
-    command: (_command: "home" | "explore") => {},
+    command: (_command: "home" | "explore" | "climb") => {},
     interact: () => {},
     start: (_event: PointerEvent<HTMLDivElement>) => {},
     key: (_event: React.KeyboardEvent<HTMLDivElement>) => {},
@@ -134,6 +181,7 @@ export function WorkspaceCompanion() {
     compact: false,
     dragging: false,
     motion: "idle",
+    perched: false,
   });
   const working = !!(
     hub.voiceVisible ||
@@ -156,6 +204,7 @@ export function WorkspaceCompanion() {
       compact: false,
       dragging: false,
       motion: "idle",
+      perched: false,
     };
     let nest: HTMLElement | null = null;
     let lastActive = Date.now();
@@ -175,6 +224,9 @@ export function WorkspaceCompanion() {
     let reflowTimer: ReturnType<typeof setTimeout> | undefined;
     let clickResetTimer: ReturnType<typeof setTimeout> | undefined;
     let dragFrame = 0;
+    let anchorFrame = 0;
+    let climbFrame = 0;
+    let perch: ClimbTarget | null = null;
     let parked: Position | undefined;
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)");
     try {
@@ -229,7 +281,7 @@ export function WorkspaceCompanion() {
     };
     const position = (point: Position, commit = true) => {
       state.position = constrain(point);
-      if (panel.current && !state.docked)
+      if (panel.current)
         panel.current.style.transform = `translate3d(${state.position.x}px, ${state.position.y}px, 0)`;
       if (commit) publish();
     };
@@ -248,25 +300,30 @@ export function WorkspaceCompanion() {
         /* Placement also works without storage. */
       }
     };
+    const alignNest = () => {
+      if (!state.docked || !nest || !panel.current) return;
+      const r = nest.getBoundingClientRect();
+      state.position = { x: r.left, y: r.top };
+      panel.current.style.setProperty("--companion-dock-width", `${r.width}px`);
+      panel.current.style.setProperty(
+        "--companion-dock-height",
+        `${r.height}px`,
+      );
+      panel.current.style.transform = `translate3d(${r.left}px, ${r.top}px, 0)`;
+    };
     const attach = (home: boolean) => {
       state.docked = !!(home && nest);
-      const parent = state.docked ? nest! : document.body;
-      if (host.parentElement !== parent) {
-        const focused = document.activeElement;
-        parent.appendChild(host);
-        if (focused instanceof HTMLElement && host.contains(focused))
-          focused.focus({ preventScroll: true });
-      }
+      if (host.parentElement !== document.body) document.body.appendChild(host);
       if (state.docked) state.compact = false;
-      // Apply the layout immediately when reparenting, before the next React render.
       if (panel.current) {
         panel.current.dataset.docked = String(state.docked);
-        panel.current.style.transform = state.docked
-          ? ""
-          : `translate3d(${state.position?.x || 0}px, ${state.position?.y || 0}px, 0)`;
+        panel.current.style.transform = `translate3d(${state.position?.x || 0}px, ${state.position?.y || 0}px, 0)`;
       }
+      alignNest();
     };
     const cancelTransition = () => {
+      cancelAnimationFrame(climbFrame);
+      climbFrame = 0;
       transition?.timers.forEach(clearTimeout);
       transition = null;
       if (state.motion !== "idle") {
@@ -341,6 +398,109 @@ export function WorkspaceCompanion() {
           constrain(preferred || { x: innerWidth - 72, y: innerHeight - 66 }),
       );
     };
+    const leavePerch = () => {
+      if (perch) targetObserver.unobserve(perch.element);
+      perchObserver.disconnect();
+      perch = null;
+      state.perched = false;
+      state.climbSide = undefined;
+    };
+    const followAnchor = () => {
+      anchorFrame = 0;
+      if (state.docked) alignNest();
+      else if (perch && !climbFrame && !drag) {
+        const next = climbRestPosition(perch);
+        if (next) position(next, false);
+        else {
+          leavePerch();
+          clearRest(state.position || undefined);
+        }
+      }
+    };
+    const scheduleAnchor = () => {
+      if (!anchorFrame) anchorFrame = requestAnimationFrame(followAnchor);
+    };
+    const targetObserver = new ResizeObserver(scheduleAnchor);
+    const perchObserver = new MutationObserver(scheduleAnchor);
+    const climb = (nearOnly = false) => {
+      const r = panel.current?.getBoundingClientRect();
+      const origin = { x: r?.left || 8, y: r?.top || 8 };
+      const target = findClimbTarget(origin, nearOnly);
+      if (!target) {
+        if (!nearOnly)
+          void feedback.current.info(
+            "附近暂无合适的攀爬位置，可先打开卡片或移动小序。",
+          );
+        return false;
+      }
+      cancelTransition();
+      leavePerch();
+      state.compact = target.compact;
+      attach(false);
+      perch = target;
+      targetObserver.observe(target.element);
+      for (
+        let element: HTMLElement | null = target.element;
+        element && element !== document.body;
+        element = element.parentElement
+      )
+        perchObserver.observe(element, {
+          attributes: true,
+          attributeFilter: ["style", "class", "hidden", "aria-hidden"],
+        });
+      state.climbSide = target.side;
+      state.motion = "climbing";
+      state.dragging = false;
+      lastActive = Date.now();
+      const finish = () => {
+        climbFrame = 0;
+        const next = climbRestPosition(target);
+        state.motion = "idle";
+        if (next) {
+          state.perched = true;
+          position(next);
+          persist();
+        } else {
+          leavePerch();
+          clearRest();
+        }
+      };
+      publish();
+      if (reduced.matches) finish();
+      else {
+        const started = performance.now();
+        const animate = (now: number) => {
+          if (!target.element.isConnected || document.hidden) {
+            finish();
+            return;
+          }
+          const elapsed = now - started;
+          if (elapsed >= 900) {
+            finish();
+            return;
+          }
+          if (elapsed < 260) {
+            const t = 1 - Math.pow(1 - elapsed / 260, 3);
+            position(
+              {
+                x: origin.x + (target.x - origin.x) * t,
+                y: origin.y + (target.fromY - origin.y) * t,
+              },
+              false,
+            );
+          } else {
+            const t = (elapsed - 260) / 640;
+            position(
+              { x: target.x, y: target.fromY + (target.y - target.fromY) * t },
+              false,
+            );
+          }
+          climbFrame = requestAnimationFrame(animate);
+        };
+        climbFrame = requestAnimationFrame(animate);
+      }
+      return true;
+    };
     const nestVisible = () => {
       const box = nest?.getBoundingClientRect();
       if (!box || box.width <= 0 || box.height <= 0) return false;
@@ -370,6 +530,7 @@ export function WorkspaceCompanion() {
     ) => {
       if (target === "home" && !nest) return;
       cancelTransition();
+      leavePerch();
       if (!automatic) active();
       lastTravel = Date.now();
       const finish = () => {
@@ -413,8 +574,12 @@ export function WorkspaceCompanion() {
         setTimeout(arrive, state.motion === "jumping" ? 520 : 420),
       );
     };
-    const command = (value: "home" | "explore") => {
+    const command = (value: "home" | "explore" | "climb") => {
       active();
+      if (value === "climb") {
+        climb();
+        return;
+      }
       if (value === "home" && nest) {
         if (!nestVisible()) {
           window.dispatchEvent(new CustomEvent("xuti-workspace-center"));
@@ -436,7 +601,10 @@ export function WorkspaceCompanion() {
       );
       if (next === nest && host.isConnected) return;
       cancelTransition();
+      leavePerch();
+      if (nest) targetObserver.unobserve(nest);
       nest = next;
+      if (nest) targetObserver.observe(nest);
       state.hasNest = !!nest;
       state.dragging = false;
       drag = null;
@@ -451,9 +619,30 @@ export function WorkspaceCompanion() {
       }
     };
     const reflow = () => {
+      scheduleAnchor();
       clearTimeout(reflowTimer);
       reflowTimer = setTimeout(() => {
-        if (state.docked || drag || transition) return;
+        if (drag || transition || perch) return;
+        if (state.docked) {
+          const rect = panel.current?.getBoundingClientRect();
+          if (
+            rect &&
+            !isClear(
+              { x: rect.x, y: rect.y },
+              rect.width,
+              rect.height,
+              overlayControlAreas(),
+            )
+          ) {
+            // A foreground robot must not block a dialog's controls. Leave the
+            // anchor only on a real collision; closing the dialog never teleports it back.
+            attach(false);
+            state.motion = "idle";
+            lastActive = Date.now() + 10000;
+            clearRest({ x: rect.x, y: rect.y });
+          }
+          return;
+        }
         const { width, height } = size();
         if (
           !state.position ||
@@ -467,8 +656,10 @@ export function WorkspaceCompanion() {
     const release = (event?: globalThis.PointerEvent) => {
       if (!drag || (event && event.pointerId !== drag.id)) return;
       if (drag.moved) {
-        clearRest(state.position || undefined);
-        persist();
+        if (!climb(true)) {
+          clearRest(state.position || undefined);
+          persist();
+        }
         clearTimeout(clickResetTimer);
         clickResetTimer = setTimeout(() => {
           suppressClick.current = false;
@@ -489,6 +680,7 @@ export function WorkspaceCompanion() {
         drag.moved = true;
         suppressClick.current = true;
         cancelTransition();
+        leavePerch();
         state.dragging = true;
         attach(false);
         publish();
@@ -545,6 +737,7 @@ export function WorkspaceCompanion() {
         if (nest) command("home");
         else {
           cancelTransition();
+          leavePerch();
           active();
           clearRest();
           persist();
@@ -560,6 +753,7 @@ export function WorkspaceCompanion() {
       if (!direction) return;
       event.preventDefault();
       cancelTransition();
+      leavePerch();
       active();
       const box = panel.current
         ?.querySelector<HTMLButtonElement>(".companion-launch")
@@ -587,12 +781,18 @@ export function WorkspaceCompanion() {
     };
     const onCommand = (event: Event) => {
       const value = (event as CustomEvent).detail;
-      if (value === "home" || value === "explore") command(value);
+      if (value === "home" || value === "explore" || value === "climb")
+        command(value);
     };
     const onResize = () => {
       cancelTransition();
       active();
-      if (!state.docked) clearRest(state.position || undefined);
+      if (perch) {
+        state.perched = true;
+        publish();
+      }
+      if (state.docked || perch) scheduleAnchor();
+      else clearRest(state.position || undefined);
     };
     const onScroll = () => {
       active();
@@ -602,19 +802,27 @@ export function WorkspaceCompanion() {
       cancelTransition();
       active();
       release();
+      if (perch) {
+        state.perched = true;
+        followAnchor();
+        publish();
+      }
     };
     const onReducedMotion = () => {
       cancelTransition();
       active();
+      if (perch) {
+        state.perched = true;
+        followAnchor();
+        publish();
+      }
     };
     const observer = new MutationObserver(() => {
       discoverNest();
       reflow();
     });
     discoverNest();
-    const workspace = document.querySelector(".workspace");
-    if (workspace)
-      observer.observe(workspace, { childList: true, subtree: true });
+    observer.observe(document.body, { childList: true, subtree: true });
     const resizeObserver = new ResizeObserver(reflow);
     if (panel.current) resizeObserver.observe(panel.current);
     const events = ["pointerdown", "keydown", "input", "focusin", "wheel"];
@@ -633,6 +841,7 @@ export function WorkspaceCompanion() {
     const timer = setInterval(() => {
       const blocked =
         busy.current ||
+        perch ||
         drag ||
         document.hidden ||
         innerWidth < 768 ||
@@ -670,9 +879,13 @@ export function WorkspaceCompanion() {
       clearTimeout(reflowTimer);
       clearTimeout(clickResetTimer);
       cancelAnimationFrame(dragFrame);
+      cancelAnimationFrame(anchorFrame);
+      cancelAnimationFrame(climbFrame);
       transition?.timers.forEach(clearTimeout);
       observer.disconnect();
       resizeObserver.disconnect();
+      targetObserver.disconnect();
+      perchObserver.disconnect();
       for (const event of events)
         window.removeEventListener(event, active, true);
       window.removeEventListener("pointermove", onPointerMove);
@@ -694,11 +907,11 @@ export function WorkspaceCompanion() {
       ref={panel}
       data-docked={view.docked}
       data-motion={view.motion}
+      data-perched={view.perched}
+      data-climb-side={view.climbSide}
       className={`workspace-companion${hub.voiceState ? " is-voicing" : ""}${view.dragging ? " is-dragging" : ""}${view.compact ? " is-compact" : ""}`}
       style={{
-        transform: view.docked
-          ? undefined
-          : `translate3d(${view.position?.x || 0}px, ${view.position?.y || 0}px, 0)`,
+        transform: `translate3d(${view.position?.x || 0}px, ${view.position?.y || 0}px, 0)`,
         visibility: view.docked || view.position ? "visible" : "hidden",
       }}
       onPointerDown={(event) => controls.current.start(event)}
@@ -719,6 +932,7 @@ export function WorkspaceCompanion() {
         docked={view.docked}
         hasNest={view.hasNest}
         onExplore={() => controls.current.command("explore")}
+        onClimb={() => controls.current.command("climb")}
         onHome={() => controls.current.command("home")}
         onInteract={() => controls.current.interact()}
       />

@@ -432,14 +432,22 @@
 }
 /* The companion lives outside the card layout; only the character and actions accept clicks. */
 .workspace-companion-host {
-  display: contents;
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  pointer-events: none;
+  background: transparent;
+  isolation: isolate;
+}
+.workspace-companion-host .companion-details-popover {
+  pointer-events: auto;
 }
 .workspace-companion {
   position: fixed;
   left: 0;
   top: 0;
   width: 132px;
-  z-index: 120;
+  z-index: 1;
   pointer-events: none;
   background: transparent;
   color: var(--app-text);
@@ -449,7 +457,7 @@
   pointer-events: none;
 }
 .workspace-companion.is-voicing {
-  z-index: 1050;
+  z-index: 2;
 }
 .workspace-companion[data-passing="true"] {
   visibility: hidden !important;
@@ -504,6 +512,7 @@
 }
 .companion-details .companion-interactions {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-start;
   margin: 12px 0;
 }
@@ -555,10 +564,67 @@
 }
 /* The workbench provides the same assistant a home inside its interactive core. */
 .workspace-companion[data-docked="true"] {
-  position: relative;
-  width: 100%;
-  height: 100%;
+  position: fixed;
+  width: var(--companion-dock-width, 168px);
+  height: var(--companion-dock-height, 150px);
   z-index: 1;
+}
+
+/* The anchor stays in the 3D scene, but the interactive character is above masks. */
+body:has(.workspace-companion[data-docked="true"]:is(:hover, :focus-within))
+  :is(
+    .workspace-ai-core-aura,
+    .workspace-ai-core-resonance,
+    .workspace-ai-core-orbits,
+    .workspace-ai-core-orbits > g,
+    .workspace-dock-orbit,
+    .workspace-dock-face
+  ),
+body:has(.workspace-companion[data-docked="true"]:is(:hover, :focus-within))
+  .workspace-dock-item::before {
+  animation-play-state: paused;
+}
+.workspace-companion[data-motion="climbing"] .companion-launch {
+  cursor: grabbing;
+}
+body:has(.workspace-companion[data-docked="true"]:is(:hover, :focus-within))
+  :is(.workspace-dock-halo-sweep, .workspace-dock-halo-counter),
+body:has(.workspace-companion[data-docked="true"]:is(:hover, :focus-within))
+  .workspace-dock-label::before {
+  animation-play-state: paused;
+}
+.workspace-companion[data-motion="climbing"]
+  :is(.companion-launch, .companion-count) {
+  pointer-events: none;
+}
+.workspace-companion[data-motion="climbing"] .companion-body {
+  animation: companion-climb 320ms ease-in-out infinite;
+}
+.workspace-companion[data-perched="true"] .companion-stage::after {
+  content: "";
+  position: absolute;
+  bottom: 5px;
+  left: 24%;
+  width: 52%;
+  height: 2px;
+  border-radius: 50%;
+  background: var(--app-accent);
+  opacity: 0.32;
+  pointer-events: none;
+}
+@keyframes companion-climb {
+  0%,
+  100% {
+    transform: translateY(0) rotate(-4deg);
+  }
+  50% {
+    transform: translateY(-3px) rotate(4deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .workspace-companion[data-motion="climbing"] .companion-body {
+    animation: none;
+  }
 }
 .workspace-companion[data-docked="true"] .companion-stage {
   width: 100%;

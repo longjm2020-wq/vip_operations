@@ -82,6 +82,23 @@
   color: var(--app-text);
   cursor: default;
 }
+.companion-voice-elevated {
+  position: fixed;
+  z-index: 3;
+  box-sizing: border-box;
+  padding: 8px 12px;
+  pointer-events: auto;
+  border: 1px solid var(--app-border);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--app-surface) 94%, transparent);
+  box-shadow: 0 4px 24px #0002;
+}
+@media (max-width: 1199px) {
+  .companion-voice-elevated.companion-voice-inline p {
+    max-height: 3.2em;
+    font-size: 13px;
+  }
+}
 .companion-voice-inline .companion-voice-heading {
   order: 1;
   color: var(--app-secondary);

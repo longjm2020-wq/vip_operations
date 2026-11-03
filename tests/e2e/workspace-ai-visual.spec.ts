@@ -23,7 +23,7 @@ async function openWorkspacePanel(page: Page, name: string) {
     const visibleBottom = Math.min(viewport.height - 8, box.y + box.height);
     await stage.hover({
       position: {
-        x: box.width / 2,
+        x: 20,
         y: (visibleTop + visibleBottom) / 2 - box.y,
       },
     });

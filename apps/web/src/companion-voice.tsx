@@ -24,28 +24,51 @@ export function CompanionVoice({
   const hub = useAssistantHub(),
     voice = hub.gptVoice;
   const bubble = useRef<HTMLDivElement>(null);
+  const placeholder = useRef<HTMLDivElement>(null);
+  const inlineHeight = useRef(84);
+  const requestAlign = useRef<() => void>(() => {});
   const [workspaceSlot, setWorkspaceSlot] = useState<HTMLElement | null>(null);
+  const [overlay, setOverlay] = useState(false);
   const [position, setPosition] = useState<{
     left: number;
     top: number;
+    width?: number;
   } | null>(null);
   useLayoutEffect(() => {
-    const discover = () =>
+    const discover = () => {
+      if (bubble.current?.classList.contains("companion-voice-inline"))
+        inlineHeight.current = bubble.current.getBoundingClientRect().height;
       setWorkspaceSlot(
         document.querySelector<HTMLElement>(
           ".personal-workspace .workspace-voice-slot",
         ),
       );
+      setOverlay(
+        [
+          ...document.querySelectorAll<HTMLElement>(
+            ".ant-drawer-open, .ant-modal-wrap",
+          ),
+        ].some(
+          (element) =>
+            element.getBoundingClientRect().width > 0 &&
+            getComputedStyle(element).visibility !== "hidden" &&
+            getComputedStyle(element).display !== "none",
+        ),
+      );
+      requestAlign.current();
+    };
     const observer = new MutationObserver(discover);
-    observer.observe(document.querySelector(".workspace") || document.body, {
+    observer.observe(document.body, {
       childList: true,
       subtree: true,
+      attributes: true,
+      attributeFilter: ["class", "hidden", "aria-hidden"],
     });
     discover();
     return () => observer.disconnect();
   }, []);
   useLayoutEffect(() => {
-    if (workspaceSlot) return;
+    if (workspaceSlot && !overlay) return;
     let frame = 0;
     const align = () => {
       frame = 0;
@@ -53,11 +76,83 @@ export function CompanionVoice({
         b = bubble.current?.getBoundingClientRect();
       if (!a || !b) return;
       const width = document.documentElement.clientWidth;
+      if (workspaceSlot) {
+        const slot = workspaceSlot.getBoundingClientRect();
+        const overlays = [
+          ...document.querySelectorAll<HTMLElement>(
+            ".ant-modal-wrap .ant-modal, .ant-drawer-open .ant-drawer-section",
+          ),
+        ].filter((node) => {
+          const r = node.getBoundingClientRect();
+          return (
+            r.width > 0 && r.height > 0 && r.bottom > 0 && r.top < innerHeight
+          );
+        });
+        const next = {
+          left: Math.max(8, Math.min(slot.left, width - slot.width - 8)),
+          top: Math.max(8, Math.min(slot.top, innerHeight - b.height - 8)),
+          width: Math.min(slot.width, width - 16),
+        };
+        const overlayRects = overlays.map((node) =>
+          node.getBoundingClientRect(),
+        );
+        const controls = overlays
+          .flatMap((node) => [
+            ...node.querySelectorAll<HTMLElement>(
+              "button, a, input, textarea, select, label, [role=button], .ant-modal-header, .ant-drawer-header",
+            ),
+          ])
+          .map((node) => node.getBoundingClientRect())
+          .filter((r) => r.width && r.height);
+        const candidates = [
+          ...overlayRects.map((r) => r.top - b.height - 8),
+          next.top,
+          ...overlayRects.map((r) => r.bottom + 8),
+          8,
+          innerHeight - b.height - 8,
+        ].map((top) => Math.max(8, Math.min(top, innerHeight - b.height - 8)));
+        const overlap = (top: number) =>
+          controls.reduce(
+            (sum, r) =>
+              sum +
+              Math.max(
+                0,
+                Math.min(next.left + next.width, r.right + 6) -
+                  Math.max(next.left, r.left - 6),
+              ) *
+                Math.max(
+                  0,
+                  Math.min(top + b.height, r.bottom + 6) -
+                    Math.max(top, r.top - 6),
+                ),
+            0,
+          );
+        // Prefer the gap above the dialog, then the original subtitle position.
+        // If neither fits, choose the least obstructive remaining screen area.
+        next.top = candidates.sort((a, c) => overlap(a) - overlap(c))[0];
+        if (
+          placeholder.current &&
+          placeholder.current.style.height !== `${b.height}px`
+        )
+          placeholder.current.style.height = `${b.height}px`;
+        setPosition((old) =>
+          old?.left === next.left &&
+          old.top === next.top &&
+          old.width === next.width
+            ? old
+            : next,
+        );
+        return;
+      }
       const obstacles = [
         ...document.querySelectorAll(
-          ".workspace button, .workspace a, .workspace input, .workspace textarea, .workspace select, .workspace [role=button]",
+          "button, a, input, textarea, select, [role=button]",
         ),
       ]
+        .filter(
+          (node) =>
+            !node.closest(".workspace-companion-host, .companion-voice"),
+        )
         .map((node) => node.getBoundingClientRect())
         .filter(
           (r) => r.width && r.height && r.bottom > 0 && r.top < innerHeight,
@@ -96,12 +191,17 @@ export function CompanionVoice({
       candidates.sort((p, q) => overlap(p) - overlap(q));
       const next = candidates[0];
       setPosition((old) =>
-        old?.left === next.left && old.top === next.top ? old : next,
+        old?.left === next.left &&
+        old.top === next.top &&
+        old.width === undefined
+          ? old
+          : next,
       );
     };
     const schedule = () => {
       if (!frame) frame = requestAnimationFrame(align);
     };
+    requestAlign.current = schedule;
     const host = anchor.current?.closest(".workspace-companion");
     const mutation = new MutationObserver(schedule);
     if (host)
@@ -112,11 +212,13 @@ export function CompanionVoice({
     const resize = new ResizeObserver(schedule);
     if (anchor.current) resize.observe(anchor.current);
     if (bubble.current) resize.observe(bubble.current);
+    if (workspaceSlot) resize.observe(workspaceSlot);
     window.addEventListener("resize", schedule);
     window.addEventListener("scroll", schedule, true);
     window.addEventListener("xuti-workspace-view", schedule);
     align();
     return () => {
+      requestAlign.current = () => {};
       cancelAnimationFrame(frame);
       mutation.disconnect();
       resize.disconnect();
@@ -124,7 +226,7 @@ export function CompanionVoice({
       window.removeEventListener("scroll", schedule, true);
       window.removeEventListener("xuti-workspace-view", schedule);
     };
-  }, [anchor, workspaceSlot]);
+  }, [anchor, workspaceSlot, overlay]);
   const state =
     voice.muted && voice.active
       ? "麦克风已静音"
@@ -152,132 +254,155 @@ export function CompanionVoice({
         ? "说完停顿一下，我就会回应。"
         : voice.note || "点击开始，用声音和我聊聊。");
   const retry = !!workspaceSlot && !!voice.error && !voice.active;
-  return createPortal(
-    <div
-      ref={bubble}
-      className={`companion-voice ${workspaceSlot ? "companion-voice-inline" : "companion-voice-bubble"}`}
-      data-state={voice.state}
-      data-muted={voice.muted}
-      style={
-        workspaceSlot
-          ? undefined
-          : { ...position, visibility: position ? "visible" : "hidden" }
-      }
-      role="region"
-      aria-label="小序语音"
-      onKeyDown={(e) => {
-        if (e.key === "Escape") hub.closeVoice();
-      }}
-    >
-      <div className="companion-voice-heading">
-        <span className="companion-voice-wave" aria-hidden>
-          <i />
-          <i />
-          <i />
-          <i />
-        </span>
-        <strong role="status">{state}</strong>
-        {!workspaceSlot && (
-          <button
-            aria-label={voice.active ? "结束并收起语音" : "收起语音"}
-            title="收起并关闭麦克风"
-            onClick={hub.closeVoice}
-          >
-            <CloseOutlined />
-          </button>
+  const elevated = !!workspaceSlot && overlay;
+  const foregroundHost =
+    anchor.current?.closest<HTMLElement>(".workspace-companion-host") ||
+    document.body;
+  return (
+    <>
+      {elevated &&
+        createPortal(
+          <div
+            ref={placeholder}
+            aria-hidden="true"
+            style={{ height: inlineHeight.current }}
+          />,
+          workspaceSlot,
         )}
-      </div>
-      <p
-        className={
-          problem ? "companion-voice-error" : "companion-voice-caption"
-        }
-        title={caption}
-        tabIndex={workspaceSlot ? 0 : undefined}
-        aria-label={workspaceSlot ? "语音字幕" : undefined}
-        role={problem ? "alert" : undefined}
-        aria-live="polite"
-      >
-        {caption}
-      </p>
-      <div className="companion-voice-controls">
-        {!voice.active ? (
-          <button
-            className="companion-voice-start"
-            disabled={!hub.voiceStatus?.ready || !voice.supported || hub.busy}
-            onClick={hub.startVoice}
-          >
-            <AudioOutlined /> {retry ? "重试语音" : "开始语音对话"}
-          </button>
-        ) : (
-          <>
-            <button
-              aria-label={voice.muted ? "取消静音" : "麦克风静音"}
-              title={voice.muted ? "取消静音" : "麦克风静音"}
-              disabled={voice.state === "connecting"}
-              onClick={voice.toggleMute}
-            >
-              {voice.muted ? <AudioMutedOutlined /> : <AudioOutlined />}
-            </button>
-            <button
-              aria-label={
-                voice.state === "speaking" ? "打断并说话" : "发送这段"
-              }
-              title={voice.state === "speaking" ? "打断并说话" : "发送这段"}
-              disabled={
-                voice.state !== "speaking" &&
-                (voice.state !== "listening" || voice.muted)
-              }
-              onClick={
-                voice.state === "speaking" ? voice.interrupt : voice.send
-              }
-            >
-              {voice.state === "speaking" ? <StopOutlined /> : <SendOutlined />}
-            </button>
-            <button
-              className="companion-voice-end"
-              aria-label="结束语音"
-              title="结束语音"
-              onClick={hub.closeVoice}
-            >
-              <PhoneOutlined />
-            </button>
-          </>
-        )}
-        {workspaceSlot && !voice.active && (
-          <button
-            aria-label="收起语音"
-            title="收起语音"
-            onClick={hub.closeVoice}
-          >
-            <CloseOutlined />
-          </button>
-        )}
-        <span className="companion-voice-spacer" />
-        {voice.playbackBlocked && (
-          <button
-            aria-label="允许播放声音"
-            title="允许播放声音"
-            onClick={voice.play}
-          >
-            <SoundOutlined />
-          </button>
-        )}
-        <button
-          aria-label="查看完整对话"
-          title="结束语音并查看完整对话"
-          onClick={() => hub.openPanel("chat")}
+      {createPortal(
+        <div
+          ref={bubble}
+          className={`companion-voice ${workspaceSlot ? "companion-voice-inline" : "companion-voice-bubble"}${elevated ? " companion-voice-elevated" : ""}`}
+          data-state={voice.state}
+          data-muted={voice.muted}
+          style={
+            workspaceSlot && !overlay
+              ? undefined
+              : { ...position, visibility: position ? "visible" : "hidden" }
+          }
+          role="region"
+          aria-label="小序语音"
+          onKeyDown={(e) => {
+            if (e.key === "Escape") hub.closeVoice();
+          }}
         >
-          <CommentOutlined />
-        </button>
-        <button
-          aria-label="语音设置"
-          title="语音设置"
-          onClick={hub.openVoiceSettings}
-        >
-          <SettingOutlined />
-        </button>
-      </div>
-    </div>,
-    workspaceSlot || document.body,
+          <div className="companion-voice-heading">
+            <span className="companion-voice-wave" aria-hidden>
+              <i />
+              <i />
+              <i />
+              <i />
+            </span>
+            <strong role="status">{state}</strong>
+            {!workspaceSlot && (
+              <button
+                aria-label={voice.active ? "结束并收起语音" : "收起语音"}
+                title="收起并关闭麦克风"
+                onClick={hub.closeVoice}
+              >
+                <CloseOutlined />
+              </button>
+            )}
+          </div>
+          <p
+            className={
+              problem ? "companion-voice-error" : "companion-voice-caption"
+            }
+            title={caption}
+            tabIndex={workspaceSlot ? 0 : undefined}
+            aria-label={workspaceSlot ? "语音字幕" : undefined}
+            role={problem ? "alert" : undefined}
+            aria-live="polite"
+          >
+            {caption}
+          </p>
+          <div className="companion-voice-controls">
+            {!voice.active ? (
+              <button
+                className="companion-voice-start"
+                disabled={
+                  !hub.voiceStatus?.ready || !voice.supported || hub.busy
+                }
+                onClick={hub.startVoice}
+              >
+                <AudioOutlined /> {retry ? "重试语音" : "开始语音对话"}
+              </button>
+            ) : (
+              <>
+                <button
+                  aria-label={voice.muted ? "取消静音" : "麦克风静音"}
+                  title={voice.muted ? "取消静音" : "麦克风静音"}
+                  disabled={voice.state === "connecting"}
+                  onClick={voice.toggleMute}
+                >
+                  {voice.muted ? <AudioMutedOutlined /> : <AudioOutlined />}
+                </button>
+                <button
+                  aria-label={
+                    voice.state === "speaking" ? "打断并说话" : "发送这段"
+                  }
+                  title={voice.state === "speaking" ? "打断并说话" : "发送这段"}
+                  disabled={
+                    voice.state !== "speaking" &&
+                    (voice.state !== "listening" || voice.muted)
+                  }
+                  onClick={
+                    voice.state === "speaking" ? voice.interrupt : voice.send
+                  }
+                >
+                  {voice.state === "speaking" ? (
+                    <StopOutlined />
+                  ) : (
+                    <SendOutlined />
+                  )}
+                </button>
+                <button
+                  className="companion-voice-end"
+                  aria-label="结束语音"
+                  title="结束语音"
+                  onClick={hub.closeVoice}
+                >
+                  <PhoneOutlined />
+                </button>
+              </>
+            )}
+            {workspaceSlot && !voice.active && (
+              <button
+                aria-label="收起语音"
+                title="收起语音"
+                onClick={hub.closeVoice}
+              >
+                <CloseOutlined />
+              </button>
+            )}
+            <span className="companion-voice-spacer" />
+            {voice.playbackBlocked && (
+              <button
+                aria-label="允许播放声音"
+                title="允许播放声音"
+                onClick={voice.play}
+              >
+                <SoundOutlined />
+              </button>
+            )}
+            <button
+              aria-label="查看完整对话"
+              title="结束语音并查看完整对话"
+              onClick={() => hub.openPanel("chat")}
+            >
+              <CommentOutlined />
+            </button>
+            <button
+              aria-label="语音设置"
+              title="语音设置"
+              onClick={hub.openVoiceSettings}
+            >
+              <SettingOutlined />
+            </button>
+          </div>
+        </div>,
+        workspaceSlot && !overlay ? workspaceSlot : foregroundHost,
+      )}
+    </>
   );
 }

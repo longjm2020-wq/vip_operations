@@ -700,18 +700,7 @@ export function PersonalAssistantProvider({
             </Popconfirm>
           )
         }
-        footer={
-          section === "chat" && allowed ? (
-            <>
-              {sender(true)}
-              <p className="assistant-privacy">
-                发送内容及最近对话将交给已配置的 AI
-                服务。按提问查询有权查看的业务数据；勾选后附带日程或个人记忆，私有备忘不发送。Enter
-                发送 · Shift+Enter 换行
-              </p>
-            </>
-          ) : null
-        }
+        footer={section === "chat" && allowed ? sender(true) : null}
       >
         {allowed &&
           section === "chat" &&
