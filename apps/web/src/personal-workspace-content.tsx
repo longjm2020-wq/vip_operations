@@ -15,7 +15,11 @@ const kinds = [
   { key: "project", permission: "project.read", path: "/projects" },
   { key: "table", permission: "project.read", path: "/project-tables" },
 ] as const;
-export function PersonalWorkspaceContent() {
+export function PersonalWorkspaceContent({
+  active = true,
+}: {
+  active?: boolean;
+}) {
   const user = useUser(),
     allowed = kinds.filter((k) => user.permissions.includes(k.permission)),
     [kind, setKind] = useState<LibraryKind>(allowed[0]?.key || "sop"),
@@ -25,7 +29,7 @@ export function PersonalWorkspaceContent() {
     q = useQuery({
       queryKey: ["workspace-content", user.id, kind, page],
       queryFn: () => api(`/my-workspace/content?kind=${kind}&page=${page}`),
-      enabled: !!current,
+      enabled: !!current && active,
     }),
     items: Row[] = q.data?.data.items || [];
   if (!allowed.length) return null;

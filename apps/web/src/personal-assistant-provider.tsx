@@ -123,6 +123,11 @@ export function PersonalAssistantProvider({
         ? previous
         : [...previous, event],
     );
+    // Continue in the workspace schedule panel without stacking two drawers.
+    playbackAllowed.current = false;
+    setOpen(false);
+    voice.stop();
+    speech.stop();
     navigate("/my-workspace");
   };
   const allowed = canUsePersonalAssistant({ permissions: user.permissions });

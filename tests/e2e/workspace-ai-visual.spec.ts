@@ -62,7 +62,8 @@ async function fixture(
         ],
         csrfToken: "fixture",
       };
-    if (path === "/my-workspace/appearance") data = { mode: "dark", version: 0 };
+    if (path === "/my-workspace/appearance")
+      data = { mode: "dark", version: 0 };
     if (path === "/my-workspace") {
       if (route.request().method() === "POST")
         Object.assign(workspace, route.request().postDataJSON(), {
@@ -659,23 +660,37 @@ test("个人工作台保存待办备忘，自己的表格可公开且显示创�
 }) => {
   const state = await fixture(page);
   await page.goto("/my-workspace");
+  await page.getByRole("button", { name: "打开个人待办", exact: true }).click();
   await page.getByLabel("待办事项", { exact: true }).fill("核对经营日报");
-  await page.getByRole("button", { name: /添加$/ }).click();
+  await page.getByRole("button", { name: "添加", exact: true }).click();
   await page
-    .getByLabel("私有备忘", { exact: true })
+    .getByRole("button", { name: "收起工作台面板", exact: true })
+    .click();
+  await page.getByRole("button", { name: "打开私有备忘", exact: true }).click();
+  await page
+    .getByRole("textbox", { name: "私有备忘", exact: true })
     .fill("只在自己的工作台中显示");
-  await page.getByRole("button", { name: "保存工作台", exact: true }).click();
+  await page.getByRole("button", { name: "保存更改", exact: true }).click();
   await expect(
     page.getByText("个人工作台已保存", { exact: true }),
   ).toBeVisible();
   await page.reload();
-  await expect(page.getByLabel("私有备忘", { exact: true })).toHaveValue(
-    "只在自己的工作台中显示",
-  );
+  await page.getByRole("button", { name: "打开私有备忘", exact: true }).click();
+  await expect(
+    page.getByRole("textbox", { name: "私有备忘", exact: true }),
+  ).toHaveValue("只在自己的工作台中显示");
+  await page
+    .getByRole("button", { name: "收起工作台面板", exact: true })
+    .click();
+  await page.getByRole("button", { name: "打开个人待办", exact: true }).click();
   await expect(
     page.getByRole("checkbox", { name: "核对经营日报", exact: true }),
   ).toBeVisible();
   expect(state.workspace.version).toBe(1);
+  await page
+    .getByRole("button", { name: "收起工作台面板", exact: true })
+    .click();
+  await page.getByRole("button", { name: "打开我的内容", exact: true }).click();
   await page.getByRole("tab", { name: "表格", exact: true }).click();
   await expect(page.locator(".personal-content")).toContainText(
     "创建者：测试用户",
@@ -756,10 +771,7 @@ test("明细内部滚动表头固定，分页条数与查询同步且切换后�
   await expect(page.locator(".compass-page > .compass-ai")).toHaveCount(0);
   const sortedHeader = detail.getByRole("columnheader", { name: /销售件数/ });
   await sortedHeader.click();
-  await expect(sortedHeader).toHaveCSS(
-    "background-color",
-    "rgb(33, 35, 41)",
-  );
+  await expect(sortedHeader).toHaveCSS("background-color", "rgb(33, 35, 41)");
   await page.mouse.move(0, 0);
   await expect(rows.first().locator(".ant-table-column-sort")).toHaveCSS(
     "background-color",

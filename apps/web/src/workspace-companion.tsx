@@ -32,7 +32,7 @@ function occupiedAreas() {
         if (node instanceof Element) {
           if (
             node.matches("[aria-hidden=true], script, style") &&
-            !node.matches(".workspace-matrix")
+            !node.matches(".workspace-ai-core")
           )
             return NodeFilter.FILTER_REJECT;
           const rect = node.getBoundingClientRect();
@@ -40,7 +40,7 @@ function occupiedAreas() {
             return NodeFilter.FILTER_REJECT;
           if (
             node.matches(
-              "button, a, input, textarea, select, [contenteditable=true], [role=button], table, [role=grid], canvas, .workspace-matrix, .brand",
+              "button, a, input, textarea, select, [contenteditable=true], [role=button], table, [role=grid], canvas, .workspace-ai-core, .brand",
             )
           ) {
             if (visible(rect)) areas.push(rect);

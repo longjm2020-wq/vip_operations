@@ -1,186 +1,339 @@
 .workspace-ai {
+  --core-blue: var(--app-accent);
+  --core-cyan: #6bd4ec;
+  --core-line: color-mix(in srgb, var(--core-blue) 24%, transparent);
+  --core-turn: 42s;
   position: relative;
   isolation: isolate;
-  overflow: hidden;
-  border: 1px solid var(--app-accent-border);
-  border-radius: 20px;
-  padding: 30px;
-  background:
-    radial-gradient(ellipse at 100% 0%, var(--app-glow), transparent 65%),
-    linear-gradient(130deg, var(--app-hero-start), var(--app-hero-end) 75%);
-  box-shadow:
-    0 16px 50px var(--app-shadow),
-    inset 0 1px 0 color-mix(in srgb, var(--app-effect-light) 8%, transparent);
+  min-width: 0;
+  padding: 16px 22px 24px;
+  background: radial-gradient(
+    ellipse 45% 38% at 50% 39%,
+    color-mix(in srgb, var(--app-accent) 5%, transparent),
+    transparent 85%
+  );
 }
 .workspace-ai-start {
   position: relative;
   z-index: 1;
   min-width: 0;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 20px;
+  min-height: 572px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
 }
 .workspace-ai-intro {
-  min-width: 0;
-  grid-column: 1;
-  grid-row: 1;
-  max-width: calc(100% - 270px);
-}
-.workspace-ai-start > .assistant-compose {
-  grid-column: 1 / -1;
+  width: 100%;
+  text-align: center;
 }
 .workspace-ai-eyebrow {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: 10px;
-  color: var(--app-accent);
-  letter-spacing: 2px;
+  justify-content: center;
+  gap: 12px;
+  color: var(--app-secondary);
+  font-size: 9px;
   font-weight: 500;
+  letter-spacing: 2px;
 }
-.workspace-ai-eyebrow > span {
-  font-size: 17px;
+.workspace-ai-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding-left: 12px;
+  border-left: 1px solid var(--app-border);
+  color: var(--core-blue);
+  font-size: 10px;
+  letter-spacing: 1px;
+}
+.workspace-ai-status i {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 8px color-mix(in srgb, currentColor 45%, transparent);
 }
 .workspace-ai h2 {
-  margin: 20px 0 14px;
-  font-size: clamp(30px, 2.8vw, 44px);
-  line-height: 1.4;
-  font-weight: 550;
-  letter-spacing: -1px;
+  margin: 12px 0 0;
   color: var(--app-text);
+  font-size: clamp(18px, 1.5vw, 23px);
+  font-weight: 450;
+  letter-spacing: 1px;
+  line-height: 1.5;
 }
-.workspace-ai h2 > span {
-  background: linear-gradient(
-    90deg,
-    var(--app-effect-light),
-    var(--app-effect-deep)
-  );
-  background-clip: text;
-  color: transparent;
-}
-.workspace-ai-intro > p {
-  color: var(--app-secondary);
-  margin: 0;
-  font-size: 12px;
-  max-width: 100%;
-  line-height: 1.8;
-}
-.workspace-matrix {
-  position: absolute;
-  width: min(38%, 250px);
-  aspect-ratio: 7 / 6;
-  right: 24px;
-  top: 24px;
-  pointer-events: none;
-  display: grid;
-  grid-template-columns: repeat(14, minmax(0, 1fr));
-  grid-template-rows: repeat(12, minmax(0, 1fr));
-  gap: 4px;
-  overflow: visible;
-}
-.workspace-matrix-cell {
+.workspace-ai-core {
   position: relative;
-  min-width: 0;
-  overflow: hidden;
-  border-radius: 2px;
-  background: color-mix(
-    in srgb,
-    var(--app-effect-light) var(--cell-tint),
-    var(--app-accent-fill)
-  );
-  opacity: var(--cell-level);
-  filter: blur(var(--cell-softness));
-  animation: workspace-matrix-wave 6s ease-in-out var(--cell-delay) infinite;
+  flex: none;
+  width: 286px;
+  aspect-ratio: 1;
+  margin: 23px auto 14px;
+  pointer-events: none;
 }
-.workspace-matrix-bits {
+.workspace-ai-core-aura {
+  position: absolute;
+  inset: 6%;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--core-cyan) 9%, transparent) 0%,
+    color-mix(in srgb, var(--core-blue) 7%, transparent) 40%,
+    transparent 70%
+  );
+  box-shadow: 0 0 70px color-mix(in srgb, var(--core-blue) 7%, transparent);
+  transition: opacity 300ms ease;
+}
+.workspace-ai-core-orbits {
   position: absolute;
   inset: 0;
-  height: 200%;
-  display: grid;
-  grid-template-rows: 1fr 1fr;
-  animation: workspace-matrix-code 8s var(--cell-delay) infinite;
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  stroke-linecap: round;
 }
-.workspace-matrix-bits b {
-  display: grid;
-  place-items: center;
-  font:
-    9px/1 ui-monospace,
-    "Cascadia Code",
-    Consolas,
-    monospace;
-  color: #ffffff;
+.workspace-ai-core-guides {
+  stroke: var(--core-line);
+  stroke-width: 0.6;
 }
-.workspace-ai .magic-border-beam > div {
-  background: linear-gradient(
-    to left,
-    var(--app-effect-light),
-    var(--app-effect-deep),
+.workspace-ai-core-ticks {
+  stroke: color-mix(in srgb, var(--core-blue) 25%, transparent);
+  stroke-width: 0.7;
+}
+.workspace-ai-core-ticks .is-major {
+  stroke: color-mix(in srgb, var(--core-cyan) 65%, transparent);
+  stroke-width: 1;
+}
+.workspace-ai-core-outer,
+.workspace-ai-core-middle,
+.workspace-ai-core-inner,
+.workspace-ai-core-orbit-plane {
+  transform-origin: 160px 160px;
+  animation: workspace-core-turn var(--core-turn) linear infinite;
+}
+.workspace-ai-core-outer {
+  stroke: color-mix(in srgb, var(--core-blue) 70%, transparent);
+  stroke-width: 1.1;
+}
+.workspace-ai-core-outer .is-node {
+  fill: var(--core-cyan);
+  stroke: none;
+  filter: drop-shadow(0 0 5px var(--core-cyan));
+}
+.workspace-ai-core-middle {
+  stroke: var(--core-cyan);
+  stroke-width: 2;
+  animation-duration: calc(var(--core-turn) * 0.72);
+  animation-direction: reverse;
+  filter: drop-shadow(
+    0 0 5px color-mix(in srgb, var(--core-cyan) 35%, transparent)
+  );
+}
+.workspace-ai-core-middle .is-trace {
+  stroke: var(--core-blue);
+  stroke-width: 1;
+}
+.workspace-ai-core-orbit-plane {
+  stroke: color-mix(in srgb, var(--core-blue) 28%, transparent);
+  stroke-width: 0.65;
+  animation-duration: calc(var(--core-turn) * 1.6);
+}
+.workspace-ai-core-inner {
+  stroke: color-mix(in srgb, var(--core-blue) 65%, transparent);
+  stroke-width: 1.2;
+  animation-duration: calc(var(--core-turn) * 1.2);
+}
+.workspace-ai-core-inner .is-inner-guide {
+  stroke: var(--core-line);
+  stroke-width: 0.6;
+}
+.workspace-ai-core-center {
+  position: absolute;
+  inset: 29%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid color-mix(in srgb, var(--core-blue) 10%, transparent);
+  border-radius: 50%;
+  color: var(--app-text);
+  background: radial-gradient(
+    circle,
+    var(--app-bg) 30%,
+    color-mix(in srgb, var(--app-bg) 90%, transparent) 70%,
     transparent
   );
 }
-@keyframes workspace-matrix-wave {
-  0%,
-  100% {
-    opacity: calc(var(--cell-level) * 0.65);
-  }
-  45%,
-  60% {
-    opacity: var(--cell-level);
+.workspace-ai-core-wordmark {
+  margin-left: 4px;
+  color: var(--core-blue);
+  font:
+    9px/1.5 ui-monospace,
+    "Cascadia Code",
+    Consolas,
+    monospace;
+  letter-spacing: 4px;
+}
+.workspace-ai-core-center b {
+  margin-top: 2px;
+  margin-left: 5px;
+  font-size: 30px;
+  font-weight: 400;
+  line-height: 1.4;
+  letter-spacing: 5px;
+}
+.workspace-ai-core-caption {
+  margin-top: 1px;
+  color: var(--app-secondary);
+  font-size: 8px;
+  letter-spacing: 1px;
+}
+.workspace-ai-core-signal {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  height: 12px;
+  margin-top: 7px;
+  color: var(--core-cyan);
+}
+.workspace-ai-core-signal i {
+  width: 2px;
+  height: 3px;
+  border-radius: 1px;
+  background: currentColor;
+  opacity: 0.65;
+  transition: height 240ms ease;
+}
+.workspace-ai-description {
+  min-height: 21px;
+  margin: 0 0 24px;
+  color: var(--app-secondary);
+  font-size: 12px;
+  line-height: 1.8;
+  letter-spacing: 0.3px;
+  text-align: center;
+}
+.workspace-ai-start > .assistant-compose {
+  align-self: stretch;
+  width: 100%;
+  max-width: 720px;
+  margin: auto auto 0;
+}
+.workspace-ai[data-core-state="thinking"],
+.workspace-ai[data-core-state="working"],
+.workspace-ai[data-core-state="connecting"] {
+  --core-turn: 15s;
+}
+.workspace-ai[data-core-state="listening"] {
+  --core-turn: 32s;
+}
+.workspace-ai[data-core-state="listening"] .workspace-ai-core-aura,
+.workspace-ai[data-core-state="speaking"] .workspace-ai-core-aura {
+  animation: workspace-core-breathe 2.8s ease-in-out infinite;
+}
+.workspace-ai[data-core-state="listening"] .workspace-ai-core-signal i {
+  height: 7px;
+}
+.workspace-ai[data-core-state="thinking"] .workspace-ai-core-signal i,
+.workspace-ai[data-core-state="working"] .workspace-ai-core-signal i,
+.workspace-ai[data-core-state="connecting"] .workspace-ai-core-signal i {
+  animation: workspace-core-pulse 1.4s ease-in-out infinite;
+}
+.workspace-ai[data-core-state="speaking"] .workspace-ai-core-signal i {
+  height: 10px;
+  animation: workspace-core-signal 900ms ease-in-out infinite alternate;
+}
+.workspace-ai .workspace-ai-core-signal i:nth-child(2) {
+  animation-delay: -250ms;
+}
+.workspace-ai .workspace-ai-core-signal i:nth-child(3) {
+  animation-delay: -500ms;
+}
+.workspace-ai .workspace-ai-core-signal i:nth-child(4) {
+  animation-delay: -150ms;
+}
+.workspace-ai .workspace-ai-core-signal i:nth-child(5) {
+  animation-delay: -400ms;
+}
+.workspace-ai[data-core-state="unavailable"] .workspace-ai-core-orbits {
+  opacity: 0.52;
+}
+.workspace-ai[data-core-state="unavailable"] .workspace-ai-core-orbits > g {
+  animation-play-state: paused;
+}
+.workspace-ai[data-core-state="unavailable"] .workspace-ai-status {
+  color: var(--app-secondary);
+}
+:root[data-theme="light"] .workspace-ai {
+  --core-cyan: #1591b2;
+  --core-line: color-mix(in srgb, var(--core-blue) 20%, transparent);
+}
+@keyframes workspace-core-turn {
+  to {
+    transform: rotate(360deg);
   }
 }
-@keyframes workspace-matrix-code {
-  0%,
-  38%,
-  100% {
-    transform: translateY(0);
-  }
-  48%,
-  88% {
-    transform: translateY(-50%);
+@keyframes workspace-core-breathe {
+  50% {
+    opacity: 0.55;
+    transform: scale(0.94);
   }
 }
-@media (max-width: 1250px) {
-  .workspace-ai {
-    padding: 24px;
+@keyframes workspace-core-pulse {
+  50% {
+    opacity: 0.25;
   }
-  .workspace-matrix {
-    right: 12px;
-    opacity: 1;
-  }
-  .workspace-ai h2 {
-    font-size: 34px;
+}
+@keyframes workspace-core-signal {
+  to {
+    transform: scaleY(0.35);
   }
 }
 @media (max-width: 767px) {
   .workspace-ai {
-    padding: 24px 20px;
-    border-radius: 16px;
-  }
-  .workspace-ai h2 {
-    font-size: 34px;
-  }
-  .workspace-matrix {
-    position: relative;
-    width: 182px;
-    top: auto;
-    right: auto;
-    margin: 0 0 24px auto;
-    gap: 3px;
-    opacity: 1;
-  }
-  .workspace-ai-intro {
-    max-width: 100%;
-  }
-  .workspace-ai-intro > p {
-    max-width: 95%;
+    padding: 12px 2px 18px;
   }
   .workspace-ai-start {
-    grid-template-columns: minmax(0, 1fr);
+    min-height: 490px;
+  }
+  .workspace-ai-eyebrow {
+    gap: 9px;
+    font-size: 8px;
+    letter-spacing: 1.5px;
+  }
+  .workspace-ai-status {
+    padding-left: 9px;
+    font-size: 9px;
+  }
+  .workspace-ai h2 {
+    font-size: 18px;
+  }
+  .workspace-ai-core {
+    width: 210px;
+    margin-block: 21px 14px;
+  }
+  .workspace-ai-core-center b {
+    font-size: 24px;
+  }
+  .workspace-ai-core-wordmark {
+    font-size: 7px;
+  }
+  .workspace-ai-core-caption {
+    font-size: 7px;
+  }
+  .workspace-ai-core-signal {
+    margin-top: 4px;
+    gap: 2px;
+  }
+  .workspace-ai-description {
+    font-size: 11px;
+    margin-bottom: 20px;
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .workspace-matrix-cell,
-  .workspace-matrix-bits {
-    animation: none;
+  .workspace-ai *,
+  .workspace-ai *::before,
+  .workspace-ai *::after {
+    animation: none !important;
+    transition: none !important;
   }
 }
