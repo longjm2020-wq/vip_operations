@@ -4,6 +4,7 @@ import { useUser, type Row } from "./shared";
 import { canUsePersonalAssistant } from "../../../packages/contracts/src/personal-assistant";
 import type { WorkspaceSchedule } from "../../../packages/contracts/src/personal-workspace";
 import "./workspace-ai.css";
+import { WorkspaceNestHandle } from "./workspace-nest-handle";
 
 // Fixed geometry keeps this decorative core independent of timers and model calls.
 const coreTicks = Array.from({ length: 60 }, (_, index) => index);
@@ -14,7 +15,13 @@ function requestCompanion(command: "home" | "explore") {
   );
 }
 
-function AssistantCore() {
+function AssistantCore({
+  branchLayout,
+  onToggleBranches,
+}: {
+  branchLayout: boolean;
+  onToggleBranches: () => void;
+}) {
   return (
     <div
       className="workspace-ai-core"
@@ -109,6 +116,10 @@ function AssistantCore() {
           </svg>
         </div>
       </div>
+      <WorkspaceNestHandle
+        branchLayout={branchLayout}
+        onToggleBranches={onToggleBranches}
+      />
       <div className="workspace-ai-companion-slot" />
       <button
         className="workspace-ai-summon"
@@ -125,10 +136,14 @@ export function WorkspaceAI({
   available,
   schedule,
   onSchedule,
+  branchLayout,
+  onToggleBranches,
 }: {
   available: Row[];
   schedule: WorkspaceSchedule[];
   onSchedule: (event: WorkspaceSchedule) => void;
+  branchLayout: boolean;
+  onToggleBranches: () => void;
 }) {
   const user = useUser();
   const hub = useAssistantHub();
@@ -153,7 +168,10 @@ export function WorkspaceAI({
         <div className="workspace-ai-core-stage">
           <div className="workspace-world-camera">
             <div className="workspace-world-plane">
-              <AssistantCore />
+              <AssistantCore
+                branchLayout={branchLayout}
+                onToggleBranches={onToggleBranches}
+              />
               <div className="workspace-ai-orbit-slot" />
             </div>
           </div>

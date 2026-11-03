@@ -21,6 +21,7 @@ import "./theme.css";
 
 const AppearanceContext = createContext({
   mode: "dark" as ThemeMode,
+  locked: false,
   busy: false,
   error: "",
   toggle: () => {},
@@ -48,9 +49,11 @@ function cacheMode(accountId: string | null, mode: ThemeMode) {
 // Keyed by authenticated account, never by route: changing theme preserves page drafts.
 export function AppearanceProvider({
   accountId,
+  forcedMode,
   children,
 }: {
   accountId: string | null;
+  forcedMode?: ThemeMode;
   children: ReactNode;
 }) {
   const [localMode, setLocalMode] = useState(() => cachedMode(accountId));
@@ -96,7 +99,8 @@ export function AppearanceProvider({
     },
     onSettled: () => setOptimistic(null),
   });
-  const mode = optimistic || preference.data?.mode || localMode;
+  // Landing pages control presentation without overwriting the account's business-page preference.
+  const mode = forcedMode || optimistic || preference.data?.mode || localMode;
   useLayoutEffect(() => {
     document.documentElement.dataset.theme = mode;
     document.documentElement.style.colorScheme = mode;
@@ -134,7 +138,7 @@ export function AppearanceProvider({
     void preference.refetch();
   };
   const toggle = () => {
-    if (busy) return;
+    if (forcedMode || busy) return;
     if (readError) return retry();
     const next = mode === "dark" ? "light" : "dark";
     if (accountId && preference.data)
@@ -146,7 +150,7 @@ export function AppearanceProvider({
   };
   return (
     <AppearanceContext.Provider
-      value={{ mode, busy, error: readError || error, toggle, retry }}
+      value={{ mode, locked: !!forcedMode, busy, error: readError || error, toggle, retry }}
     >
       <ConfigProvider
         button={{ autoInsertSpace: false }}
@@ -160,7 +164,8 @@ export function AppearanceProvider({
 }
 
 export function ThemeToggle({ standalone = false }: { standalone?: boolean }) {
-  const { mode, busy, error, toggle, retry } = useContext(AppearanceContext);
+  const { mode, locked, busy, error, toggle, retry } = useContext(AppearanceContext);
+  if (locked) return null;
   const label = mode === "dark" ? "切换为亮色主题" : "切换为暗色主题";
   return (
     <div

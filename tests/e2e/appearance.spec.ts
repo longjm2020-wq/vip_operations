@@ -38,6 +38,7 @@ async function openWorkspacePanel(page: Page, name: string) {
 const store = () => ({
   accounts: new Map<string, { mode: string; version: number }>(),
   writes: [] as string[],
+  appearanceReads: 0,
   fail: false,
   conflict: false,
 });
@@ -61,11 +62,13 @@ async function fixture(context: BrowserContext, state: Store, user = "1") {
           "product.update",
           "selection.read",
           "selection.manage",
+          "aigc.use",
         ],
         roleCodes: [],
         csrfToken: "fixture",
       };
     if (path === "/my-workspace/appearance") {
+      if (request.method() === "GET") state.appearanceReads++;
       if (request.method() === "POST") {
         if (state.fail)
           return route.fulfill({
@@ -88,6 +91,23 @@ async function fixture(context: BrowserContext, state: Store, user = "1") {
         });
       }
       data = state.accounts.get(user) || { mode: "dark", version: 0 };
+    }
+    if (path.startsWith("/aigc/")) {
+      const payload =
+        path === "/aigc/status"
+          ? { ready: true }
+          : path === "/aigc/state"
+            ? {
+                projects: [],
+                detailProjects: [],
+                digitalHumanProjects: [],
+                works: [],
+                tasks: [],
+              }
+            : path === "/aigc/templates"
+              ? { items: [] }
+              : [];
+      return route.fulfill({ json: payload });
     }
     if (path === "/my-workspace")
       data = {
@@ -188,54 +208,112 @@ const toggle = (page: Page, next: "light" | "dark") =>
     })
     .click();
 
-test("蓝色工作台移除工具摘要，切换不丢草稿且只保存主题", async ({
+test("一级入口固定暗色不改账号偏好，详情恢复亮色且跨页保留助理草稿", async ({
   page,
   context,
 }) => {
   const state = store();
+  state.accounts.set("1", { mode: "light", version: 3 });
   await fixture(context, state);
-  await page.goto("/my-workspace");
+  await page.addInitScript(() => {
+    localStorage.setItem("xuti:appearance:guest", "light");
+    localStorage.setItem("xuti:appearance:1", "light");
+  });
+  let finishAuth!: () => void;
+  const authReady = new Promise<void>((resolve) => {
+    finishAuth = resolve;
+  });
+  await page.route("**/api/v1/auth/me", async (route) => {
+    await authReady;
+    await route.fallback();
+  });
+  try {
+    await page.goto("/my-workspace/?source=theme#core");
+    await mode(page, "dark");
+    await expect(
+      page.getByRole("button", { name: /切换为.*色主题/ }),
+    ).toHaveCount(0);
+  } finally {
+    finishAuth();
+  }
   await expect(
     page.getByRole("button", { name: "助理设置", exact: true }),
   ).toBeVisible();
   await mode(page, "dark");
   await expect(page.getByText("专属 AI 工具")).toHaveCount(0);
   await expect(page.getByLabel("经营分析任务")).toHaveCount(0);
-  await openWorkspacePanel(page, "打开私有备忘");
+  for (const path of [
+    "/aigc/?view=studio#top",
+    "/OPERATIONS/?platform=vip#tools",
+  ]) {
+    await page.goto(path);
+    await expect(page.locator(".sidebar")).toBeVisible();
+    await mode(page, "dark");
+    await expect(
+      page.getByRole("button", { name: /切换为.*色主题/ }),
+    ).toHaveCount(0);
+  }
+  expect(state.writes).toEqual([]);
+  expect(state.accounts.get("1")).toEqual({ mode: "light", version: 3 });
+
+  await page.goto("/operations/vip/inventory");
+  await mode(page, "light");
   await page
-    .getByRole("textbox", { name: "私有备忘", exact: true })
-    .fill("未保存的备忘");
-  await page
-    .getByRole("button", { name: "收起工作台面板", exact: true })
+    .getByRole("button", { name: "展开小序状态与动态", exact: true })
     .click();
-  await page.locator(".workspace-ai").scrollIntoViewIfNeeded();
-  await page.evaluate(() => window.scrollTo(0, 0));
-  await page
-    .locator(".workspace-ai-core")
-    .hover({ position: { x: 25, y: 25 } });
-  await page.screenshot({
-    path: test.info().outputPath("charcoal-blue-desktop.png"),
-  });
+  await page.getByRole("button", { name: "文字对话", exact: true }).click();
+  const assistant = page.getByRole("dialog", { name: /AI 个人助理/ });
+  const draft = assistant.getByPlaceholder(/告诉我你想完成什么/);
+  await draft.fill("主题变化后继续编辑的草稿");
+  await assistant.getByRole("button", { name: "关闭", exact: true }).click();
+  const instance = await page.locator(".sidebar-assistant").elementHandle();
+  for (const name of ["我的工作台", "AIGC", "运营中心"]) {
+    await page
+      .locator(".sidebar")
+      .getByRole("link", { name, exact: true })
+      .click();
+    await mode(page, "dark");
+    await expect(
+      page.getByRole("button", { name: /切换为.*色主题/ }),
+    ).toHaveCount(0);
+    expect(await instance!.evaluate((element) => element.isConnected)).toBe(
+      true,
+    );
+  }
+  // Forced pages still refresh the saved preference, without replacing it with dark.
+  for (const preference of ["dark", "light"] as const) {
+    state.accounts.set("1", {
+      mode: preference,
+      version: preference === "dark" ? 4 : 5,
+    });
+    const reads = state.appearanceReads;
+    await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await expect.poll(() => state.appearanceReads).toBeGreaterThan(reads);
+    await expect
+      .poll(() =>
+        page.evaluate(() => localStorage.getItem("xuti:appearance:1")),
+      )
+      .toBe(preference);
+    await mode(page, "dark");
+  }
+  for (let index = 0; index < 3; index++) await page.goBack();
+  await expect(page).toHaveURL(/\/operations\/vip\/inventory$/);
+  await mode(page, "light");
+  expect(state.writes).toEqual([]);
+  await toggle(page, "dark");
+  await mode(page, "dark");
   await toggle(page, "light");
   await mode(page, "light");
-  await expect.poll(() => state.accounts.get("1")?.mode).toBe("light");
-  await openWorkspacePanel(page, "打开私有备忘");
-  await expect(
-    page.getByRole("textbox", { name: "私有备忘", exact: true }),
-  ).toHaveValue("未保存的备忘");
-  expect(state.writes).toEqual(["/my-workspace/appearance"]);
+  expect(state.writes).toEqual([
+    "/my-workspace/appearance",
+    "/my-workspace/appearance",
+  ]);
   await page
-    .getByRole("button", { name: "收起工作台面板", exact: true })
+    .getByRole("button", { name: "展开小序状态与动态", exact: true })
     .click();
-  await page.evaluate(() => window.scrollTo(0, 0));
-  await page
-    .locator(".workspace-ai-core")
-    .hover({ position: { x: 25, y: 25 } });
-  await page.screenshot({
-    path: test.info().outputPath("blue-light-desktop.png"),
-  });
-  await page.reload();
-  await mode(page, "light");
+  await page.getByRole("button", { name: "文字对话", exact: true }).click();
+  await expect(draft).toHaveValue("主题变化后继续编辑的草稿");
+  expect(await instance!.evaluate((element) => element.isConnected)).toBe(true);
 });
 test("跨浏览器读取账号主题，其他账号独立", async ({
   browser,
@@ -244,13 +322,13 @@ test("跨浏览器读取账号主题，其他账号独立", async ({
 }) => {
   const state = store();
   await fixture(context, state);
-  await page.goto("/my-workspace");
+  await page.goto("/operations/vip/inventory");
   await toggle(page, "light");
   await expect.poll(() => state.accounts.get("1")?.mode).toBe("light");
   const other = await browser.newContext();
   await fixture(other, state);
   const second = await other.newPage();
-  await second.goto(new URL("/operations", page.url()).href);
+  await second.goto(new URL("/operations/vip/inventory", page.url()).href);
   await mode(second, "light");
   await toggle(second, "dark");
   await expect.poll(() => state.accounts.get("1")?.mode).toBe("dark");
@@ -259,13 +337,13 @@ test("跨浏览器读取账号主题，其他账号独立", async ({
   const separate = await browser.newContext();
   await fixture(separate, state, "2");
   const third = await separate.newPage();
-  await third.goto(new URL("/operations", page.url()).href);
+  await third.goto(new URL("/operations/vip/inventory", page.url()).href);
   await mode(third, "dark");
   expect(state.accounts.has("2")).toBe(false);
   await other.close();
   await separate.close();
 });
-test("业务库存和弹出菜单跟随主题，页面切换保持主题", async ({
+test("业务库存可切换主题，工作台及日程弹窗固定暗色且不覆盖亮色偏好", async ({
   page,
   context,
 }) => {
@@ -286,25 +364,25 @@ test("业务库存和弹出菜单跟随主题，页面切换保持主题", async
     "rgb(240, 243, 251)",
   );
   await page.getByRole("link", { name: "我的工作台", exact: true }).click();
-  await mode(page, "light");
+  await mode(page, "dark");
+  await expect(
+    page.getByRole("button", { name: /切换为.*色主题/ }),
+  ).toHaveCount(0);
   await openWorkspacePanel(page, "打开日程");
   await page.getByRole("button", { name: "新增日程", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "新增日程", exact: true });
   await expect(dialog.locator(".ant-modal-container")).toHaveCSS(
     "background-color",
-    "rgb(255, 255, 255)",
+    "rgb(48, 52, 62)",
   );
   await dialog.getByRole("button", { name: "取消", exact: true }).click();
   await page
     .getByRole("button", { name: "收起工作台面板", exact: true })
     .click();
-  await toggle(page, "dark");
-  await openWorkspacePanel(page, "打开日程");
-  await page.getByRole("button", { name: "新增日程", exact: true }).click();
-  await expect(dialog.locator(".ant-modal-container")).toHaveCSS(
-    "background-color",
-    "rgb(48, 52, 62)",
-  );
+  await page.goBack();
+  await mode(page, "light");
+  expect(state.accounts.get("1")?.mode).toBe("light");
+  expect(state.writes).toEqual(["/my-workspace/appearance"]);
 });
 test("保存失败不假称同步，恢复最新设置后可重试；并发冲突不覆盖", async ({
   page,
@@ -312,7 +390,7 @@ test("保存失败不假称同步，恢复最新设置后可重试；并发冲�
 }) => {
   const state = store();
   await fixture(context, state);
-  await page.goto("/my-workspace");
+  await page.goto("/operations/vip/inventory");
   state.fail = true;
   await toggle(page, "light");
   await expect(page.getByRole("alert")).toContainText("主题保存未确认");
@@ -329,25 +407,51 @@ test("保存失败不假称同步，恢复最新设置后可重试；并发冲�
     .toEqual({ mode: "light", version: 3 });
   await expect(page.locator(".theme-error")).toHaveCount(0);
 });
-test("手机两种主题、助理弹窗与导航不横向溢出", async ({ page, context }) => {
-  await fixture(context, store());
+test("手机一级入口固定暗色，工作台和详情助理弹窗适配屏幕", async ({
+  page,
+  context,
+}) => {
+  const state = store();
+  state.accounts.set("1", { mode: "light", version: 1 });
+  await fixture(context, state);
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/my-workspace");
+  await mode(page, "dark");
+  await expect(
+    page.getByRole("button", { name: /切换为.*色主题/ }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "助理设置", exact: true }),
+  ).toBeVisible();
+  expect(
+    await page.evaluate(() => document.documentElement.scrollWidth),
+  ).toBeLessThanOrEqual(391);
+  await page.screenshot({
+    path: test.info().outputPath("forced-dark-workspace-mobile.png"),
+    fullPage: true,
+  });
+  await openPersonalAssistant(page);
+  const dialog = page.getByRole("dialog", { name: /AI 个人助理/ });
+  await expect(
+    dialog.getByRole("button", { name: "发送给个人助理" }),
+  ).toBeVisible();
+  expect((await dialog.boundingBox())!.width).toBeLessThanOrEqual(390.05);
+  await dialog.getByRole("button", { name: "关闭", exact: true }).click();
+  expect(state.writes).toEqual([]);
+
+  await page.goto("/operations/vip/inventory");
+  await mode(page, "light");
   for (const current of ["dark", "light"] as const) {
-    if (current === "light") await toggle(page, "light");
+    await toggle(page, current);
     await mode(page, current);
-    await expect(
-      page.getByRole("button", { name: "助理设置", exact: true }),
-    ).toBeVisible();
-    expect(
-      await page.evaluate(() => document.documentElement.scrollWidth),
-    ).toBeLessThanOrEqual(391);
     await page.screenshot({
       path: test.info().outputPath(`${current}-mobile.png`),
       fullPage: true,
     });
-    await openPersonalAssistant(page);
-    const dialog = page.getByRole("dialog", { name: /AI 个人助理/ });
+    await page
+      .getByRole("button", { name: "展开小序状态与动态", exact: true })
+      .click();
+    await page.getByRole("button", { name: "文字对话", exact: true }).click();
     await expect(
       dialog.getByRole("button", { name: "发送给个人助理" }),
     ).toBeVisible();

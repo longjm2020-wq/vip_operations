@@ -14,18 +14,10 @@ import { CompanionVoice } from "./companion-voice";
 export function SidebarAssistant({
   floating = false,
   docked = false,
-  hasNest = false,
-  onExplore,
-  onClimb,
-  onHome,
   onInteract,
 }: {
   floating?: boolean;
   docked?: boolean;
-  hasNest?: boolean;
-  onExplore?: () => void;
-  onClimb?: () => void;
-  onHome?: () => void;
   onInteract?: () => void;
 }) {
   const hub = useAssistantHub();
@@ -347,41 +339,6 @@ export function SidebarAssistant({
                 </button>
               )}
             </div>
-            {onExplore && (
-              <div className="companion-interactions companion-placement-actions">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setDetailsOpen(false);
-                    onExplore();
-                  }}
-                >
-                  换个位置
-                </button>
-                {onClimb && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setDetailsOpen(false);
-                      onClimb();
-                    }}
-                  >
-                    攀爬组件
-                  </button>
-                )}
-                {hasNest && !docked && onHome && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setDetailsOpen(false);
-                      onHome();
-                    }}
-                  >
-                    回到巢穴
-                  </button>
-                )}
-              </div>
-            )}
             <button
               className="companion-feedback"
               type="button"
@@ -427,7 +384,7 @@ export function SidebarAssistant({
           )}
         </button>
       </Popover>
-      {hub.allowed && hub.voiceVisible && <CompanionVoice anchor={launch} />}
+      {hub.allowed && <CompanionVoice anchor={launch} />}
       {reminder && !hub.voiceVisible && (
         <div className="companion-reminder" role="status" aria-live="polite">
           {reminder}

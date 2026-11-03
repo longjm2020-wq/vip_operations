@@ -106,6 +106,7 @@ export function useWorkspaceWorld() {
       setMode("rotate");
       // Synchronous: a companion returning from off-screen can remeasure its nest now.
       paint();
+      window.dispatchEvent(new Event("xuti-workspace-layout-reset"));
     };
     const zoom = (factor: number) => {
       view.zoom =
@@ -221,6 +222,16 @@ export function useWorkspaceWorld() {
     actions.current = { reset, zoom, mode: setMode };
     setMode("rotate");
     paint();
+    // Sidebar transitions resize the scene without a window resize event.
+    let layoutFrame = 0;
+    const layoutObserver = new ResizeObserver(() => {
+      if (!layoutFrame)
+        layoutFrame = requestAnimationFrame(() => {
+          layoutFrame = 0;
+          window.dispatchEvent(new Event("xuti-workspace-layout"));
+        });
+    });
+    layoutObserver.observe(element);
     element.addEventListener("pointerdown", start);
     element.addEventListener("pointermove", move);
     element.addEventListener("pointerup", finish);
@@ -235,6 +246,8 @@ export function useWorkspaceWorld() {
     document.addEventListener("visibilitychange", visibility);
     return () => {
       if (frame) cancelAnimationFrame(frame);
+      cancelAnimationFrame(layoutFrame);
+      layoutObserver.disconnect();
       const current = drag;
       drag = null;
       if (current && element.hasPointerCapture(current.id))

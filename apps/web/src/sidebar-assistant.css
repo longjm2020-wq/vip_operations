@@ -986,3 +986,148 @@ body:has(.workspace-companion[data-docked="true"]:is(:hover, :focus-within))
     animation: none;
   }
 }
+
+/* The workspace starts with one quiet, explicit voice entry. */
+.companion-voice-prompt > button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  min-height: 32px;
+  padding: 5px 14px;
+  border: 1px solid color-mix(in srgb, var(--app-accent) 25%, transparent);
+  border-radius: 18px;
+  color: var(--app-secondary);
+  background: color-mix(in srgb, var(--app-bg) 64%, transparent);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.companion-voice-prompt > button:hover {
+  color: var(--app-text);
+  border-color: var(--app-accent-border);
+}
+.companion-voice-prompt > button:focus-visible {
+  outline: 2px solid var(--app-accent);
+  outline-offset: 3px;
+}
+.companion-voice-prompt .companion-voice-wave {
+  color: color-mix(in srgb, var(--app-accent) 65%, #d8e9ff);
+}
+
+/* Only visibility edges animate. Caption text and recording-state changes do not. */
+.companion-voice-inline:not(.companion-voice-elevated) {
+  position: relative;
+}
+.companion-voice[data-caption-presence] {
+  isolation: isolate;
+}
+.companion-voice[data-caption-presence="entering"] {
+  animation: companion-caption-appear 340ms ease-out both;
+}
+.companion-voice[data-caption-presence="exiting"] {
+  animation: companion-caption-disappear 320ms ease-in both;
+  pointer-events: none;
+}
+.companion-voice[data-caption-presence="exiting"] * {
+  pointer-events: none;
+}
+.companion-voice::before,
+.companion-voice::after {
+  content: "";
+  display: none;
+  position: absolute;
+  z-index: -1;
+  inset: -10px -14px;
+  border-radius: 24px;
+  pointer-events: none;
+  opacity: 0;
+}
+.companion-voice::before {
+  background:
+    radial-gradient(ellipse at 22% 62%, #80b9f533, transparent 42%),
+    radial-gradient(ellipse at 69% 40%, #becdf52a, transparent 39%),
+    radial-gradient(ellipse at 49% 61%, #5999e920, transparent 58%);
+}
+.companion-voice::after {
+  background:
+    radial-gradient(circle at 5% 39%, #dbe8ffcc 0 1px, transparent 1.8px),
+    radial-gradient(circle at 15% 79%, #97b9f7aa 0 1.2px, transparent 2px),
+    radial-gradient(circle at 24% 17%, #e1edffbb 0 0.8px, transparent 1.6px),
+    radial-gradient(circle at 36% 87%, #acd0ffa6 0 1px, transparent 1.8px),
+    radial-gradient(circle at 47% 9%, #dbe8ffc0 0 0.8px, transparent 1.6px),
+    radial-gradient(circle at 60% 86%, #8cbbf7a6 0 1.2px, transparent 2px),
+    radial-gradient(circle at 71% 20%, #e1edffb3 0 1px, transparent 1.8px),
+    radial-gradient(circle at 83% 72%, #acd0ffb3 0 1.2px, transparent 2px),
+    radial-gradient(circle at 96% 33%, #dbe8ffcc 0 0.8px, transparent 1.6px);
+}
+.companion-voice[data-caption-presence="entering"]::before,
+.companion-voice[data-caption-presence="entering"]::after,
+.companion-voice[data-caption-presence="exiting"]::before,
+.companion-voice[data-caption-presence="exiting"]::after {
+  display: block;
+  animation: companion-caption-nebula 340ms ease-out both;
+}
+.companion-voice[data-caption-presence="entering"]::after {
+  animation-name: companion-caption-particles;
+}
+.companion-voice[data-caption-presence="exiting"]::before,
+.companion-voice[data-caption-presence="exiting"]::after {
+  animation-duration: 320ms;
+  animation-direction: reverse;
+}
+.companion-voice[data-caption-presence="exiting"]::after {
+  animation-name: companion-caption-particles;
+}
+@keyframes companion-caption-appear {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes companion-caption-disappear {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+@keyframes companion-caption-nebula {
+  0% {
+    opacity: 0;
+    transform: scale(1.08, 1.15);
+  }
+  40% {
+    opacity: 0.8;
+  }
+  100% {
+    opacity: 0;
+    transform: scale(0.98, 1);
+  }
+}
+@keyframes companion-caption-particles {
+  0% {
+    opacity: 0;
+    transform: translateY(7px) scale(1.04);
+  }
+  32% {
+    opacity: 0.85;
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .companion-voice[data-caption-presence] {
+    animation: none !important;
+  }
+  .companion-voice::before,
+  .companion-voice::after {
+    display: none !important;
+    animation: none !important;
+  }
+}

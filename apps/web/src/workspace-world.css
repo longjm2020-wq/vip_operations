@@ -133,9 +133,166 @@
   pointer-events: none;
 }
 .workspace-world-plane > .workspace-ai-core {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
   transform-style: preserve-3d;
   /* Its transparent corners must not intercept the smaller orbit controls. */
   pointer-events: none;
+}
+.workspace-nest-handle {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  border: 0;
+  padding: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--app-accent);
+  pointer-events: none;
+  touch-action: none;
+  cursor: ew-resize;
+}
+.workspace-nest-handle svg {
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.workspace-nest-handle circle {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 24;
+  pointer-events: stroke;
+}
+.workspace-nest-handle:focus-visible {
+  outline: none;
+}
+.workspace-nest-handle:is(:focus-visible, [data-ready="true"]) circle {
+  stroke: color-mix(in srgb, var(--app-accent) 24%, transparent);
+}
+.workspace-branch-lines {
+  display: none;
+}
+.personal-workspace[data-nest-dragging="true"] .workspace-dock-orbit,
+.personal-workspace[data-nest-dragging="true"] .workspace-dock-face {
+  animation-play-state: paused;
+}
+/* The same nest and functional nodes unfold without replacing their DOM or drafts. */
+.personal-workspace[data-workspace-layout="branches"] {
+  --branch-root-x: 20%;
+  --branch-node-x: 49%;
+  --branch-core-size: clamp(160px, 16vw, 230px);
+  --branch-node-size: 76px;
+}
+.personal-workspace[data-workspace-layout="branches"]
+  :is(.workspace-ai-core-stage, .workspace-quiet) {
+  min-height: 520px;
+}
+.personal-workspace[data-workspace-layout="branches"]
+  :is(.workspace-ai-core, .workspace-quiet-center) {
+  position: absolute;
+  left: var(--branch-root-x);
+  top: 50%;
+  width: var(--branch-core-size);
+  transform: translate(-50%, -50%);
+}
+.personal-workspace[data-workspace-layout="branches"]
+  :is(
+    .workspace-ai-orbit-slot,
+    .workspace-quiet-orbit-slot,
+    .workspace-dock,
+    .workspace-dock-orbit
+  ) {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  transform: none;
+  animation: none;
+}
+.personal-workspace[data-workspace-layout="branches"] .workspace-dock::before {
+  display: none;
+}
+.personal-workspace[data-workspace-layout="branches"] .workspace-dock-item {
+  left: var(--branch-node-x);
+  top: var(--branch-y);
+  width: var(--branch-node-size);
+  height: var(--branch-node-size);
+  transform: translate(-50%, -50%);
+}
+.personal-workspace[data-workspace-layout="branches"] .workspace-dock-face {
+  animation: none;
+  transform: none;
+}
+.personal-workspace[data-workspace-layout="branches"] .workspace-branch-lines {
+  position: absolute;
+  display: block;
+  left: calc(var(--branch-root-x) + var(--branch-core-size) / 2);
+  top: 0;
+  width: calc(
+    var(--branch-node-x) - var(--branch-root-x) - var(--branch-core-size) / 2 -
+      var(--branch-node-size) / 2
+  );
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+.workspace-branch-lines path {
+  fill: none;
+  stroke: color-mix(in srgb, var(--app-accent) 38%, transparent);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+.workspace-branch-lines path[data-active="true"] {
+  stroke: #a9d4ff;
+  stroke-width: 1.5;
+  filter: drop-shadow(0 0 3px #659df080);
+}
+.workspace-branch-panel-link {
+  position: fixed;
+  inset: 0;
+  z-index: 249;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  overflow: visible;
+}
+.workspace-branch-panel-link path {
+  fill: none;
+  stroke: #a9d4ff99;
+  stroke-width: 1.3;
+  filter: drop-shadow(0 0 3px #659df050);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .workspace-world-plane > .workspace-ai-core {
+    transition:
+      left 360ms ease,
+      width 360ms ease;
+  }
+  .workspace-dock-item {
+    transition:
+      left 360ms ease,
+      top 360ms ease,
+      transform 360ms ease;
+  }
+}
+@media (max-width: 767px) {
+  .personal-workspace[data-workspace-layout="branches"] {
+    --branch-root-x: 22%;
+    --branch-node-x: 72%;
+    --branch-core-size: 136px;
+    --branch-node-size: 64px;
+  }
+  .personal-workspace[data-workspace-layout="branches"]
+    :is(.workspace-ai-core-stage, .workspace-quiet) {
+    min-height: 460px;
+  }
+  .personal-workspace[data-workspace-layout="branches"]
+    .workspace-ai-companion-slot {
+    width: 108px;
+    height: 104px;
+  }
 }
 .workspace-world-plane
   :is(

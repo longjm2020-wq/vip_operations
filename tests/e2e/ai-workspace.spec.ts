@@ -3,7 +3,7 @@ import {
   selectAssistantPanel,
   setAssistantOption,
 } from "./assistant-controls.js";
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import type { AssistantActivity } from "../../packages/contracts/src/assistant-activity.js";
 
 async function openWorkspacePanel(page: Page, name: string) {
@@ -37,6 +37,27 @@ async function openWorkspacePanel(page: Page, name: string) {
   }
   await expect.poll(stationary).toBe(true);
   await page.getByRole("button", { name, exact: true }).click();
+}
+
+async function dragCompanionToPanel(page: Page, panel: Locator) {
+  const card = (await panel.boundingBox())!;
+  const companion = page.locator(".workspace-companion");
+  const launch = companion.getByRole("button", {
+    name: "与小序语音对话",
+    exact: true,
+  });
+  const start = (await launch.boundingBox())!;
+  const body = (await companion.boundingBox())!;
+  const left =
+    card.x >= body.width + 16
+      ? card.x - body.width + 8
+      : card.x + card.width - 8;
+  await page.mouse.move(start.x + start.width / 2, start.y + start.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(left + body.width / 2, card.y + 150 + body.height / 2, {
+    steps: 10,
+  });
+  await page.mouse.up();
 }
 
 type VoiceFixture = {
@@ -205,19 +226,16 @@ test("工作台0和1背景实际滚动，减少动态效果保持静态且仍可
   const resumed = await pixels();
   await expect.poll(pixels).not.toBe(resumed);
   await page.getByRole("button", { name: "回到中心", exact: true }).click();
-  await page
-    .getByRole("button", { name: "切换为亮色主题", exact: true })
-    .click();
-  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
-  await page.mouse.move(2, 2);
-  await expect(page.locator(".ant-tooltip:visible")).toHaveCount(0);
-  await page.screenshot({ path: ".local/workspace-binary-light.png" });
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await expect(
+    page.getByRole("button", { name: /切换为[亮暗]色主题/ }),
+  ).toHaveCount(0);
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(page.locator(".sidebar")).toBeHidden();
-  await page
-    .getByRole("button", { name: "切换为暗色主题", exact: true })
-    .click();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await expect(
+    page.getByRole("button", { name: /切换为[亮暗]色主题/ }),
+  ).toHaveCount(0);
   await page.mouse.move(2, 2);
   await expect(page.locator(".ant-tooltip:visible")).toHaveCount(0);
   await page.screenshot({
@@ -609,16 +627,17 @@ test("查询证据保留条码；操作卡点击后提交，完成以真实动�
     path: test.info().outputPath("assistant-business-dark.png"),
   });
   await dialog.getByRole("button", { name: "关闭", exact: true }).click();
-  await page.getByRole("button", { name: "切换为亮色主题" }).click();
-  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await expect(dialog).toBeHidden();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await expect(
+    page.getByRole("button", { name: /切换为[亮暗]色主题/ }),
+  ).toHaveCount(0);
   await openPersonalAssistant(page);
   await expect(
     dialog.getByRole("button", { name: "切换助理面板", exact: true }),
   ).toContainText("互动对话");
   await expect(dialog).toBeInViewport({ ratio: 0.99 });
-  await page.screenshot({
-    path: test.info().outputPath("assistant-business-light.png"),
-  });
+  await expect(action.getByText("已完成", { exact: true })).toBeVisible();
 });
 
 async function workspaceFixture(
@@ -916,6 +935,80 @@ test("工作台面板默认收起，切换与重开保留草稿且只在保存�
   expect(fixture.assistantCalls()).toBe(0);
 });
 
+for (const reducedMotion of [false, true]) {
+  test(`${reducedMotion ? "减少动态效果" : "星云动效"}下浮卡关闭后隐藏，重开和快速重开均保留草稿`, async ({
+    page,
+  }) => {
+    const fixture = await workspaceFixture(page);
+    await page.emulateMedia({
+      reducedMotion: reducedMotion ? "reduce" : "no-preference",
+    });
+    await page.goto("/my-workspace");
+    await openWorkspacePanel(page, "打开私有备忘");
+    const panel = page.locator(".personal-workspace-panel");
+    const note = panel.getByRole("textbox", { name: "私有备忘", exact: true });
+    await expect(panel).toHaveAttribute("data-panel-presence", "open");
+    await note.fill("星云散去后仍保留的草稿");
+    const input = await note.elementHandle();
+    const exit = await panel.evaluateHandle((element) => {
+      const surface = element as HTMLElement;
+      const record = { leaving: false, retained: false, blocked: false };
+      new MutationObserver(() => {
+        if (element.getAttribute("data-panel-presence") !== "leaving") return;
+        record.leaving = true;
+        record.retained = !surface.hidden;
+        record.blocked =
+          surface.inert && element.getAttribute("aria-hidden") === "true";
+      }).observe(element, {
+        attributes: true,
+        attributeFilter: ["data-panel-presence"],
+      });
+      return record;
+    });
+    if (reducedMotion)
+      await expect
+        .poll(() =>
+          panel.evaluate(
+            (element) =>
+              element
+                .getAnimations({ subtree: true })
+                .filter((animation) => animation.playState === "running")
+                .length,
+          ),
+        )
+        .toBe(0);
+    await panel
+      .getByRole("button", { name: "收起工作台面板", exact: true })
+      .click();
+    await expect(panel).toHaveAttribute("data-panel-presence", "hidden");
+    await expect(panel).toBeHidden();
+    expect(
+      await input!.evaluate((element) => ({
+        connected: element.isConnected,
+        value: (element as HTMLTextAreaElement).value,
+      })),
+    ).toEqual({ connected: true, value: "星云散去后仍保留的草稿" });
+    expect(await exit.jsonValue()).toEqual(
+      reducedMotion
+        ? { leaving: false, retained: false, blocked: false }
+        : { leaving: true, retained: true, blocked: true },
+    );
+    await exit.dispose();
+    await openWorkspacePanel(page, "打开私有备忘");
+    await expect(note).toHaveValue("星云散去后仍保留的草稿");
+    await panel
+      .getByRole("button", { name: "收起工作台面板", exact: true })
+      .click();
+    await openWorkspacePanel(page, "打开私有备忘");
+    await expect(panel).toHaveAttribute("data-panel-presence", "open");
+    await page.waitForTimeout(400);
+    await expect(note).toBeVisible();
+    await expect(note).toHaveValue("星云散去后仍保留的草稿");
+    expect(fixture.workspace.note).toBe("仅自己的备忘，不发送给模型");
+    expect(fixture.assistantCalls()).toBe(0);
+  });
+}
+
 test("工作台与业务页共用透明宽屏对话，单输入和菜单可用且跨页保留草稿", async ({
   page,
 }) => {
@@ -935,6 +1028,16 @@ test("工作台与业务页共用透明宽屏对话，单输入和菜单可用�
     page.locator('textarea[placeholder*="告诉我你想完成什么"]:visible'),
   ).toHaveCount(1);
   const rootBounds = (await page.locator(".personal-workspace").boundingBox())!;
+  await expect
+    .poll(() =>
+      dialog.evaluate((element) =>
+        Math.abs(
+          element.getBoundingClientRect().width -
+            (element as HTMLElement).offsetWidth,
+        ),
+      ),
+    )
+    .toBeLessThanOrEqual(0.5);
   const workspacePanelWidth = (await dialog.boundingBox())!.width;
   expect(workspacePanelWidth).toBeGreaterThan(rootBounds.width * 0.7);
   const input = dialog.getByPlaceholder(/告诉我你想完成什么/);
@@ -958,64 +1061,79 @@ test("工作台与业务页共用透明宽屏对话，单输入和菜单可用�
   await selectAssistantPanel(page, "互动对话");
   await expect(input).toHaveValue("继续编辑但尚未发送");
   await page.screenshot({ path: ".local/workspace-chat-screen-dark.png" });
+  const exitMotion = await page
+    .locator(".assistant-screen .ant-drawer-content-wrapper")
+    .evaluateHandle((element) => {
+      const record = { opacitySeconds: 0 };
+      element.addEventListener("transitionend", (event) => {
+        const transition = event as TransitionEvent;
+        if (event.target === element && transition.propertyName === "opacity")
+          record.opacitySeconds = transition.elapsedTime;
+      });
+      return record;
+    });
   await dialog.getByRole("button", { name: "关闭", exact: true }).click();
+  await expect(dialog).toBeHidden();
+  expect((await exitMotion.jsonValue()).opacitySeconds).toBeGreaterThanOrEqual(
+    0.3,
+  );
+  expect((await exitMotion.jsonValue()).opacitySeconds).toBeLessThanOrEqual(
+    0.4,
+  );
+  await exitMotion.dispose();
   await expect(source).toBeVisible();
   await expect(source).toHaveValue("继续编辑但尚未发送");
-  await page
-    .getByRole("button", { name: "切换为亮色主题", exact: true })
-    .click();
-  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await expect(
+    page.getByRole("button", { name: /切换为[亮暗]色主题/ }),
+  ).toHaveCount(0);
   await openPersonalAssistant(page);
   await expect(input).toHaveValue("继续编辑但尚未发送");
-  await page.screenshot({ path: ".local/workspace-chat-screen-light.png" });
   await dialog.getByRole("button", { name: "关闭", exact: true }).click();
+  await expect(dialog).toBeHidden();
   await page
     .locator(".sidebar")
     .getByRole("link", { name: "运营中心", exact: true })
     .click();
   await expect(page).toHaveURL(/operations$/);
-  for (const theme of ["light", "dark"] as const) {
-    if (theme === "dark") {
-      await page
-        .getByRole("button", { name: "切换为暗色主题", exact: true })
-        .click();
-      await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
-    }
-    await page
-      .getByRole("button", { name: "展开小序状态与动态", exact: true })
-      .click();
-    await page.getByRole("button", { name: "文字对话", exact: true }).click();
-    await expect(dialog).toBeInViewport({ ratio: 0.99 });
-    await expect(page.locator(".assistant-screen")).toBeVisible();
-    await expect(
-      page.locator(".assistant-screen .ant-drawer-section"),
-    ).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
-    const businessPanel = (await dialog.boundingBox())!;
-    expect(
-      Math.abs(businessPanel.width - workspacePanelWidth),
-    ).toBeLessThanOrEqual(1);
-    await expect
-      .poll(async () => {
-        const settled = (await dialog.boundingBox())!;
-        return Math.abs(
-          settled.x + settled.width / 2 - page.viewportSize()!.width / 2,
-        );
-      })
-      .toBeLessThanOrEqual(1);
-    await expect(
-      page.locator('textarea[placeholder*="告诉我你想完成什么"]:visible'),
-    ).toHaveCount(1);
-    await expect(input).toHaveValue("继续编辑但尚未发送");
-    await selectAssistantPanel(page, "个人记忆");
-    await expect(
-      dialog.getByRole("region", { name: "个人记忆管理", exact: true }),
-    ).toBeVisible();
-    await selectAssistantPanel(page, "互动对话");
-    await expect(input).toHaveValue("继续编辑但尚未发送");
-    await page.screenshot({ path: `.local/business-chat-screen-${theme}.png` });
-    if (theme === "light")
-      await dialog.getByRole("button", { name: "关闭", exact: true }).click();
-  }
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await expect(
+    page.getByRole("button", { name: /切换为[亮暗]色主题/ }),
+  ).toHaveCount(0);
+  await page
+    .getByRole("button", { name: "展开小序状态与动态", exact: true })
+    .click();
+  await page.getByRole("button", { name: "文字对话", exact: true }).click();
+  await expect(dialog).toBeInViewport({ ratio: 0.99 });
+  await expect(page.locator(".assistant-screen")).toBeVisible();
+  await expect(page.locator(".assistant-screen .ant-drawer-section")).toHaveCSS(
+    "background-color",
+    "rgba(0, 0, 0, 0)",
+  );
+  await expect
+    .poll(async () =>
+      Math.abs((await dialog.boundingBox())!.width - workspacePanelWidth),
+    )
+    .toBeLessThanOrEqual(1);
+  await expect
+    .poll(async () => {
+      const settled = (await dialog.boundingBox())!;
+      return Math.abs(
+        settled.x + settled.width / 2 - page.viewportSize()!.width / 2,
+      );
+    })
+    .toBeLessThanOrEqual(1);
+  await expect(
+    page.locator('textarea[placeholder*="告诉我你想完成什么"]:visible'),
+  ).toHaveCount(1);
+  await expect(input).toHaveValue("继续编辑但尚未发送");
+  await selectAssistantPanel(page, "个人记忆");
+  await expect(
+    dialog.getByRole("region", { name: "个人记忆管理", exact: true }),
+  ).toBeVisible();
+  await selectAssistantPanel(page, "互动对话");
+  await expect(input).toHaveValue("继续编辑但尚未发送");
+  await page.screenshot({ path: ".local/business-chat-screen-dark.png" });
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(dialog).toBeInViewport({ ratio: 0.99 });
   await expect(input).toHaveValue("继续编辑但尚未发送");
@@ -1165,8 +1283,15 @@ test("圆环入口打开可拖动浮卡，保留屏幕边距与草稿并在卡�
   await note.fill("移动浮卡后仍保留的备忘");
   const initial = (await panel.boundingBox())!;
   const core = (await page.locator(".workspace-ai-core").boundingBox())!;
-  if (core.x + core.width + 24 + initial.width <= 1416)
-    expect(initial.x).toBeGreaterThanOrEqual(core.x + core.width);
+  const entrance = (await menu
+    .getByRole("button", { name: "打开私有备忘", exact: true })
+    .locator(".workspace-dock-label")
+    .boundingBox())!;
+  const onLeft = entrance.x + entrance.width / 2 < core.x + core.width / 2;
+  if (onLeft && core.x - 24 - initial.width >= 24)
+    expect(initial.x + initial.width).toBeLessThanOrEqual(core.x - 23);
+  else if (!onLeft && core.x + core.width + 24 + initial.width <= 1416)
+    expect(initial.x).toBeGreaterThanOrEqual(core.x + core.width + 23);
   expect(initial.x).toBeGreaterThanOrEqual(23);
   expect(initial.x + initial.width).toBeLessThanOrEqual(1417);
   const handle = panel.getByRole("button", {
@@ -1473,7 +1598,7 @@ test("动态面板显示真实任务进度、筛选和已读，展开入口不�
   ).toHaveCount(0);
   await expect(
     page.getByRole("button", { name: "换个位置", exact: true }),
-  ).toBeVisible();
+  ).toHaveCount(0);
   await expect(
     page.getByRole("button", { name: "回到巢穴", exact: true }),
   ).toHaveCount(0);
@@ -2128,8 +2253,12 @@ test("小序在助理遮罩前仍可操作，攀爬浮卡后保持草稿且目�
     "查看我参与的项目进度",
   );
   await badge.click();
+  for (const name of ["换个位置", "攀爬组件", "回到巢穴"])
+    await expect(page.getByRole("button", { name, exact: true })).toHaveCount(
+      0,
+    );
   await expect(
-    page.getByRole("button", { name: "攀爬组件", exact: true }),
+    page.getByRole("button", { name: "文字对话", exact: true }),
   ).toBeVisible();
   await page.screenshot({ path: ".local/companion-over-assistant.png" });
   await badge.click();
@@ -2143,8 +2272,7 @@ test("小序在助理遮罩前仍可操作，攀爬浮卡后保持草稿且目�
   const note = panel.getByRole("textbox", { name: "私有备忘", exact: true });
   await note.fill("攀爬前尚未保存的备忘");
   const camera = await readWorkspaceCamera(page);
-  await badge.click();
-  await page.getByRole("button", { name: "攀爬组件", exact: true }).click();
+  await dragCompanionToPanel(page, panel);
   await expect(companion).toHaveAttribute("data-motion", "climbing");
   await page.waitForTimeout(350);
   const during = (await companion.boundingBox())!;
@@ -2190,23 +2318,9 @@ test("减少动态效果下拖近卡片立即停靠，移动卡片时跟随且�
   await page.goto("/my-workspace");
   await openWorkspacePanel(page, "打开私有备忘");
   const panel = page.getByRole("dialog", { name: "私有备忘", exact: true });
-  const card = (await panel.boundingBox())!;
   const companion = page.locator(".workspace-companion");
-  const voice = companion.getByRole("button", {
-    name: "与小序语音对话",
-    exact: true,
-  });
-  const start = (await voice.boundingBox())!;
-  const body = (await companion.boundingBox())!;
   const camera = await readWorkspaceCamera(page);
-  await page.mouse.move(start.x + start.width / 2, start.y + start.height / 2);
-  await page.mouse.down();
-  await page.mouse.move(
-    card.x - body.width / 2 + 8,
-    card.y + 150 + body.height / 2,
-    { steps: 10 },
-  );
-  await page.mouse.up();
+  await dragCompanionToPanel(page, panel);
   await expect(companion).toHaveAttribute("data-perched", "true");
   await expect(companion).toHaveAttribute("data-motion", "idle");
   const resting = (await companion.boundingBox())!;
@@ -2216,10 +2330,11 @@ test("减少动态效果下拖近卡片立即停靠，移动卡片时跟随且�
     name: "移动工作台面板",
     exact: true,
   });
-  await handle.press("ArrowUp");
+  // The memo orbit sits just above this edge; move into the clear space below.
+  await handle.press("ArrowDown");
   await expect
     .poll(async () => (await companion.boundingBox())!.y)
-    .toBeCloseTo(resting.y - 16, 0);
+    .toBeCloseTo(resting.y + 16, 0);
   await expect(companion).toHaveAttribute("data-perched", "true");
   expect(await readWorkspaceCamera(page)).toEqual(camera);
   await expect(
@@ -2228,7 +2343,7 @@ test("减少动态效果下拖近卡片立即停靠，移动卡片时跟随且�
   expect(fixture.assistantCalls()).toBe(0);
 });
 
-test("工作台圆环是小序巢穴，可跃出换位与召回，文字和动态入口仍可用", async ({
+test("工作台圆环是小序巢穴，可离巢移动与召回，文字和动态入口仍可用", async ({
   page,
 }) => {
   const fixture = await workspaceFixture(page);
@@ -2264,8 +2379,7 @@ test("工作台圆环是小序巢穴，可跃出换位与召回，文字和动�
   const assistantElement = await companion
     .locator(".sidebar-assistant")
     .elementHandle();
-  await companion.getByRole("button", { name: "展开小序状态与动态" }).click();
-  await page.getByRole("button", { name: "换个位置", exact: true }).click();
+  await voice.press("ArrowRight");
   await page.clock.runFor(1200);
   await expect(companion).toHaveAttribute("data-docked", "false");
   await expect(companion).toHaveAttribute("data-motion", "idle");
@@ -2276,16 +2390,13 @@ test("工作台圆环是小序巢穴，可跃出换位与召回，文字和动�
   expect(
     await assistantElement!.evaluate((element) => element.isConnected),
   ).toBe(true);
-  await companion.getByRole("button", { name: "展开小序状态与动态" }).click();
-  await page.getByRole("button", { name: "换个位置", exact: true }).click();
+  await voice.press("ArrowDown");
   await page.clock.runFor(1200);
   await expect(companion).toHaveAttribute("data-motion", "idle");
-  await companion.getByRole("button", { name: "展开小序状态与动态" }).click();
-  await page.getByRole("button", { name: "回到巢穴", exact: true }).click();
+  await voice.press("Home");
   await page.clock.runFor(1200);
   await expect(companion).toHaveAttribute("data-docked", "true");
-  await companion.getByRole("button", { name: "展开小序状态与动态" }).click();
-  await page.getByRole("button", { name: "换个位置", exact: true }).click();
+  await voice.press("ArrowRight");
   await page.clock.runFor(1200);
   await core.getByRole("button", { name: "召唤小序", exact: true }).click();
   await page.clock.runFor(1200);
@@ -2508,8 +2619,15 @@ for (const reducedMotion of [false, true]) {
     await page.clock.runFor(70000);
     await expect(companion).toHaveAttribute("data-docked", "true");
     await expect(companion).toHaveAttribute("data-motion", "idle");
-    await companion.getByRole("button", { name: "展开小序状态与动态" }).click();
-    await page.getByRole("button", { name: "换个位置", exact: true }).click();
+    await companion
+      .getByRole("button", { name: "与小序语音对话", exact: true })
+      .press("ArrowRight");
+    // Manual keyboard placement is allowed to overlap the nest; clear its return button.
+    if (!reducedMotion)
+      for (let step = 0; step < 8; step++)
+        await companion
+          .getByRole("button", { name: "与小序语音对话", exact: true })
+          .press("ArrowRight");
     await page.clock.runFor(1200);
     await expect(companion).toHaveAttribute("data-docked", "false");
     await expect(companion).toHaveAttribute("data-motion", "idle");
@@ -2615,8 +2733,8 @@ test("中心AI核心在桌面与手机完整显示，页面打开不调用模型
   const dockBounds = (await dock.boundingBox())!;
   expect(dockBounds.y + dockBounds.height).toBeLessThanOrEqual(1000);
   await page
-    .locator(".workspace-ai-core")
-    .hover({ position: { x: 25, y: 25 } });
+    .locator(".workspace-ai-core-stage")
+    .hover({ position: { x: 20, y: 140 } });
   await page.screenshot({
     path: ".local/world-workspace-dark.png",
   });
@@ -2633,20 +2751,10 @@ test("中心AI核心在桌面与手机完整显示，页面打开不调用模型
   await expect
     .poll(() => readWorkspaceCamera(page))
     .toEqual(defaultWorkspaceCamera);
-  await page
-    .getByRole("button", { name: "切换为亮色主题", exact: true })
-    .click();
-  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
-  await page
-    .locator(".workspace-ai-core")
-    .hover({ position: { x: 25, y: 25 } });
-  await page.screenshot({
-    path: ".local/world-workspace-light.png",
-  });
-  await page
-    .getByRole("button", { name: "切换为暗色主题", exact: true })
-    .click();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await expect(
+    page.getByRole("button", { name: /切换为[亮暗]色主题/ }),
+  ).toHaveCount(0);
   await openWorkspacePanel(page, "打开日程");
   await expect(
     page.getByRole("dialog", { name: "日程", exact: true }),
@@ -2660,8 +2768,14 @@ test("中心AI核心在桌面与手机完整显示，页面打开不调用模型
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(core).toBeVisible();
   await expect(
-    core.getByRole("button", { name: "与小序语音对话", exact: true }),
+    page
+      .locator(".workspace-companion")
+      .getByRole("button", { name: "与小序语音对话", exact: true }),
   ).toBeVisible();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await expect(
+    page.getByRole("button", { name: /切换为[亮暗]色主题/ }),
+  ).toHaveCount(0);
   const mobile = (await core.boundingBox())!;
   expect(mobile.x).toBeGreaterThanOrEqual(0);
   expect(mobile.x + mobile.width).toBeLessThanOrEqual(390);
@@ -2669,8 +2783,8 @@ test("中心AI核心在桌面与手机完整显示，页面打开不调用模型
     await page.evaluate(() => document.documentElement.scrollWidth),
   ).toBeLessThanOrEqual(391);
   await page
-    .locator(".workspace-ai-core")
-    .hover({ position: { x: 25, y: 25 } });
+    .locator(".workspace-ai-core-stage")
+    .hover({ position: { x: 20, y: 140 } });
   await page.screenshot({
     path: ".local/world-workspace-mobile.png",
     fullPage: true,

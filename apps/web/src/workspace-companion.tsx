@@ -835,6 +835,7 @@ export function WorkspaceCompanion() {
     window.addEventListener("resize", onResize);
     window.addEventListener("scroll", onScroll, true);
     window.addEventListener("xuti-workspace-view", onScroll);
+    window.addEventListener("xuti-workspace-layout", scheduleAnchor);
     window.addEventListener("xuti-companion-command", onCommand);
     document.addEventListener("visibilitychange", onVisibility);
     reduced.addEventListener("change", onReducedMotion);
@@ -895,6 +896,7 @@ export function WorkspaceCompanion() {
       window.removeEventListener("resize", onResize);
       window.removeEventListener("scroll", onScroll, true);
       window.removeEventListener("xuti-workspace-view", onScroll);
+      window.removeEventListener("xuti-workspace-layout", scheduleAnchor);
       window.removeEventListener("xuti-companion-command", onCommand);
       document.removeEventListener("visibilitychange", onVisibility);
       reduced.removeEventListener("change", onReducedMotion);
@@ -930,10 +932,6 @@ export function WorkspaceCompanion() {
       <SidebarAssistant
         floating
         docked={view.docked}
-        hasNest={view.hasNest}
-        onExplore={() => controls.current.command("explore")}
-        onClimb={() => controls.current.command("climb")}
-        onHome={() => controls.current.command("home")}
         onInteract={() => controls.current.interact()}
       />
     </div>,

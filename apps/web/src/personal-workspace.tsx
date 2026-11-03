@@ -11,7 +11,6 @@ import { createPortal } from "react-dom";
 import {
   App,
   Button,
-  Card,
   Checkbox,
   Empty,
   Input,
@@ -42,6 +41,7 @@ import {
   RotateRightOutlined,
   AimOutlined,
   MinusOutlined,
+  BranchesOutlined,
 } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
@@ -56,6 +56,7 @@ import { PersonalSchedule } from "./personal-schedule";
 import { useWorkspaceWorld } from "./use-workspace-world";
 import { WorkspaceWorldBackdrop } from "./workspace-world-backdrop";
 import { WorkspaceHologram } from "./workspace-hologram";
+import { WorkspacePanelLink } from "./workspace-panel-link";
 import "./workspace-world.css";
 
 type WorkspacePanel = "tools" | "schedule" | "todos" | "note" | "content";
@@ -120,10 +121,12 @@ function WorkspaceOrbit({
   children,
   paused,
   assistantEnabled,
+  selected,
 }: {
   children: ReactNode;
   paused: boolean;
   assistantEnabled: boolean;
+  selected: WorkspacePanel | null;
 }) {
   const [slot, setSlot] = useState<Element | null>(null);
   useLayoutEffect(() => {
@@ -140,6 +143,31 @@ function WorkspaceOrbit({
           aria-label="工作台功能面板"
           data-paused={paused}
         >
+          <svg
+            className="workspace-branch-lines"
+            viewBox="0 0 100 100"
+            preserveAspectRatio="none"
+            aria-hidden="true"
+          >
+            {[
+              "schedule",
+              "todos",
+              "tools",
+              "note",
+              ...(Array.isArray(children) && children.length === 5
+                ? ["content"]
+                : []),
+            ].map((key, index, items) => {
+              const y = ((index + 0.5) / items.length) * 100;
+              return (
+                <path
+                  key={key}
+                  data-active={selected === key}
+                  d={`M 0 50 C 50 50 50 ${y} 100 ${y}`}
+                />
+              );
+            })}
+          </svg>
           <div className="workspace-dock-orbit">{children}</div>
         </nav>,
         slot,
@@ -151,20 +179,52 @@ function WorkspaceOrbit({
 function WorkspaceFloatingPanel({
   open,
   title,
+  anchor,
+  branchLayout,
   onClose,
   footer,
   children,
 }: {
   open: boolean;
   title: string;
+  anchor: HTMLElement | null;
+  branchLayout: boolean;
   onClose: () => void;
   footer: ReactNode;
   children: ReactNode;
 }) {
+  const [presence, setPresence] = useState<
+    "entering" | "open" | "leaving" | "hidden"
+  >(open ? "entering" : "hidden");
+  useLayoutEffect(() => {
+    const reduced = matchMedia("(prefers-reduced-motion: reduce)");
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const settle = () => setPresence(open ? "open" : "hidden");
+    const motionChanged = () => {
+      if (reduced.matches) {
+        clearTimeout(timer);
+        settle();
+      }
+    };
+    if (reduced.matches) settle();
+    else {
+      setPresence((previous) =>
+        open ? "entering" : previous === "hidden" ? "hidden" : "leaving",
+      );
+      timer = setTimeout(settle, 340);
+    }
+    reduced.addEventListener("change", motionChanged);
+    return () => {
+      clearTimeout(timer);
+      reduced.removeEventListener("change", motionChanged);
+    };
+  }, [open]);
   const box = useRef<HTMLDivElement>(null),
     handle = useRef<HTMLButtonElement>(null);
   const position = useRef({ x: 0, y: 0 }),
-    lastFocus = useRef<HTMLElement | null>(null);
+    lastFocus = useRef<HTMLElement | null>(null),
+    lastAnchor = useRef<HTMLElement | null>(null),
+    lastLayout = useRef(branchLayout);
   const opened = useRef(false),
     frame = useRef(0);
   const drag = useRef<{
@@ -207,19 +267,77 @@ function WorkspaceFloatingPanel({
     );
   };
   const reset = () => {
+    const target = box.current;
+    if (!target) return;
+    const viewport = window.visualViewport,
+      viewportWidth = viewport?.width || innerWidth,
+      viewportLeft = viewport?.offsetLeft || 0,
+      mobile = viewportWidth < 768,
+      margin = mobile ? 12 : 24,
+      gap = 24;
     const core = document
-      .querySelector(".workspace-ai-core, .workspace-quiet")
+      .querySelector(".workspace-ai-core, .workspace-quiet-center")
       ?.getBoundingClientRect();
-    const limits = bounds();
+    const origin = anchor?.isConnected
+      ? (
+          anchor.querySelector(".workspace-dock-label") || anchor
+        ).getBoundingClientRect()
+      : core;
+    const center = core
+      ? core.left + core.width / 2
+      : viewportLeft + viewportWidth / 2;
+    const side =
+      !branchLayout && origin && origin.left + origin.width / 2 < center
+        ? "left"
+        : "right";
+    const outlines = [
+      ...(core ? [core] : []),
+      ...[...document.querySelectorAll(".workspace-dock-label")]
+        .map((node) => node.getBoundingClientRect())
+        .filter(
+          (rect) =>
+            rect.width > 0 &&
+            rect.height > 0 &&
+            rect.right > viewportLeft &&
+            rect.left < viewportLeft + viewportWidth &&
+            rect.bottom > 0 &&
+            rect.top < innerHeight,
+        ),
+    ];
+    const edge = outlines.length
+      ? side === "left"
+        ? Math.min(...outlines.map((rect) => rect.left))
+        : Math.max(...outlines.map((rect) => rect.right))
+      : center;
+    const available =
+      side === "left"
+        ? edge - gap - viewportLeft - margin
+        : viewportLeft + viewportWidth - margin - edge - gap;
+    const width = Math.min(
+      420,
+      viewportWidth - margin * 2,
+      !mobile && available >= 300 ? available : 420,
+    );
+    target.style.setProperty("--workspace-panel-width", `${width}px`);
+    target.dataset.openSide = mobile ? "center" : side;
+    const limits = bounds(),
+      rect = target.getBoundingClientRect();
     const topbar =
       document.querySelector(".topbar")?.getBoundingClientRect().bottom || 68;
-    const right = core ? core.right + 24 : limits.maxX;
-    const left = core
-      ? core.left - 24 - box.current!.getBoundingClientRect().width
-      : limits.minX;
     place(
-      right <= limits.maxX ? right : left >= limits.minX ? left : limits.maxX,
-      Math.max(topbar + 24, core?.top || topbar + 24),
+      mobile
+        ? viewportLeft + (viewportWidth - rect.width) / 2
+        : side === "left"
+          ? edge - gap - rect.width
+          : edge + gap,
+      mobile
+        ? topbar + 16
+        : Math.max(
+            topbar + 24,
+            origin
+              ? origin.top + origin.height / 2 - Math.min(96, rect.height / 3)
+              : topbar + 24,
+          ),
       limits,
     );
   };
@@ -252,11 +370,18 @@ function WorkspaceFloatingPanel({
       opened.current = false;
       return;
     }
-    if (!opened.current) {
-      lastFocus.current =
-        document.activeElement instanceof HTMLElement
+    if (
+      !opened.current ||
+      lastAnchor.current !== anchor ||
+      lastLayout.current !== branchLayout
+    ) {
+      lastLayout.current = branchLayout;
+      lastFocus.current = anchor?.isConnected
+        ? anchor
+        : document.activeElement instanceof HTMLElement
           ? document.activeElement
           : null;
+      lastAnchor.current = anchor;
       opened.current = true;
       reset();
       handle.current?.focus({ preventScroll: true });
@@ -266,9 +391,13 @@ function WorkspaceFloatingPanel({
       place(position.current.x, position.current.y);
     };
     const observer = new ResizeObserver(align);
+    const layout = () => {
+      if (!drag.current) reset();
+    };
     if (box.current) observer.observe(box.current);
     window.addEventListener("resize", align);
     window.addEventListener("blur", stop);
+    window.addEventListener("xuti-workspace-layout", layout);
     window.visualViewport?.addEventListener("resize", align);
     window.visualViewport?.addEventListener("scroll", align);
     return () => {
@@ -276,11 +405,12 @@ function WorkspaceFloatingPanel({
       observer.disconnect();
       window.removeEventListener("resize", align);
       window.removeEventListener("blur", stop);
+      window.removeEventListener("xuti-workspace-layout", layout);
       window.visualViewport?.removeEventListener("resize", align);
       window.visualViewport?.removeEventListener("scroll", align);
     };
     // Position and handlers are intentionally ref-driven, so dragging doesn't render the workbench.
-  }, [open, title]);
+  }, [open, title, anchor, branchLayout]);
   const start = (event: PointerEvent<HTMLButtonElement>) => {
     if (event.button !== 0 || !event.isPrimary) return;
     event.preventDefault();
@@ -301,7 +431,10 @@ function WorkspaceFloatingPanel({
     <div
       ref={box}
       className="personal-workspace-panel"
-      hidden={!open}
+      hidden={!open && presence === "hidden"}
+      inert={!open}
+      aria-hidden={!open}
+      data-panel-presence={presence}
       role="dialog"
       aria-modal="false"
       aria-labelledby="workspace-panel-title"
@@ -313,6 +446,11 @@ function WorkspaceFloatingPanel({
         }
       }}
     >
+      <WorkspacePanelLink
+        active={open && branchLayout}
+        anchor={anchor}
+        panel={box}
+      />
       <header className="workspace-panel-header">
         <button
           ref={handle}
@@ -374,12 +512,24 @@ export function PersonalWorkspacePage() {
     [configure, setConfigure] = useState(false),
     [tools, setTools] = useState<string[]>([]),
     [panel, setPanel] = useState<WorkspacePanel>("schedule"),
+    [panelAnchor, setPanelAnchor] = useState<HTMLElement | null>(null),
     [panelOpen, setPanelOpen] = useState(false),
+    [branchLayout, setBranchLayout] = useState(false),
     [visitedPanels, setVisitedPanels] = useState<Set<WorkspacePanel>>(
       new Set(),
     ),
     [title, setTitle] = useState(""),
     [dueDate, setDueDate] = useState("");
+  useEffect(() => {
+    const resetLayout = () => setBranchLayout(false);
+    window.addEventListener("xuti-workspace-layout-reset", resetLayout);
+    return () =>
+      window.removeEventListener("xuti-workspace-layout-reset", resetLayout);
+  }, []);
+  const toggleBranches = () => {
+    world.reset();
+    setBranchLayout(!branchLayout);
+  };
   const q = useQuery({
     queryKey: ["personal-workspace", user.id],
     queryFn: () => api("/my-workspace"),
@@ -447,8 +597,14 @@ export function PersonalWorkspacePage() {
     [next[index], next[index + offset]] = [next[index + offset], next[index]];
     setTools(next);
   };
-  const openPanel = (next: WorkspacePanel) => {
+  const openPanel = (next: WorkspacePanel, anchor?: HTMLElement) => {
     setVisitedPanels((visited) => new Set(visited).add(next));
+    setPanelAnchor(
+      anchor ||
+        document.querySelector<HTMLElement>(
+          `.workspace-dock-item[data-panel="${next}"]`,
+        ),
+    );
     setPanel(next);
     setPanelOpen(true);
   };
@@ -473,6 +629,7 @@ export function PersonalWorkspacePage() {
     <div
       ref={world.surface}
       className="personal-workspace"
+      data-workspace-layout={branchLayout ? "branches" : "orbit"}
       role="region"
       aria-label="工作台三维场景"
       aria-description="空白处拖动旋转，Shift 加拖动或中键拖动平移，滚轮缩放；聚焦场景后方向键调整，Home 回到中心。"
@@ -534,6 +691,19 @@ export function PersonalWorkspacePage() {
             <AimOutlined />
           </button>
           <span className="workspace-world-control-divider" aria-hidden />
+          <button
+            type="button"
+            aria-label={branchLayout ? "收起工作台分支图" : "展开工作台分支图"}
+            aria-pressed={branchLayout}
+            title={
+              branchLayout
+                ? "回到圆环布局"
+                : "展开分支图（也可向左拖动巢穴外环）"
+            }
+            onClick={toggleBranches}
+          >
+            <BranchesOutlined />
+          </button>
           <WorkspaceHologram />
         </div>
         <div className="workspace-voice-slot" data-world-ui />
@@ -568,6 +738,8 @@ export function PersonalWorkspacePage() {
                 </div>
               )}
               <WorkspaceAI
+                branchLayout={branchLayout}
+                onToggleBranches={toggleBranches}
                 available={available}
                 schedule={draft.schedule || []}
                 onSchedule={(event) => {
@@ -587,6 +759,7 @@ export function PersonalWorkspacePage() {
             </div>
             <WorkspaceOrbit
               paused={panelOpen}
+              selected={panelOpen ? panel : null}
               assistantEnabled={canUsePersonalAssistant({
                 permissions: user.permissions,
               })}
@@ -644,17 +817,19 @@ export function PersonalWorkspacePage() {
                   key={item.key}
                   type="button"
                   className="workspace-dock-item"
+                  data-panel={item.key}
                   style={
                     {
                       "--orbit-angle": `${-90 + (index * 360) / items.length}deg`,
                       "--orbit-counter-angle": `${90 - (index * 360) / items.length}deg`,
                       "--orbit-depth": `${[0, 90, -55, 60, -90][index % 5]}px`,
+                      "--branch-y": `${((index + 0.5) / items.length) * 100}%`,
                     } as CSSProperties
                   }
                   aria-label={item.aria}
                   title={`${item.label} · ${item.detail}`}
                   aria-expanded={panelOpen && panel === item.key}
-                  onClick={() => openPanel(item.key)}
+                  onClick={(event) => openPanel(item.key, event.currentTarget)}
                 >
                   <span className="workspace-dock-face">
                     <span className="workspace-dock-label">
@@ -671,6 +846,8 @@ export function PersonalWorkspacePage() {
           </div>
           <WorkspaceFloatingPanel
             title={panelTitles[panel]}
+            anchor={panelAnchor}
+            branchLayout={branchLayout}
             open={panelOpen}
             onClose={() => setPanelOpen(false)}
             footer={
@@ -697,15 +874,11 @@ export function PersonalWorkspacePage() {
           >
             {visitedPanels.has("tools") && (
               <section hidden={panel !== "tools"}>
-                <Card
-                  className="personal-tools-panel"
-                  title={
-                    <span>
-                      <AppstoreOutlined aria-hidden /> 常用工具{" "}
-                      <small>{draft.shortcuts.length}</small>
+                <div className="personal-tools-panel">
+                  <div className="workspace-panel-toolbar">
+                    <span className="secondary">
+                      {draft.shortcuts.length} 个常用工具
                     </span>
-                  }
-                  extra={
                     <Button
                       type="text"
                       size="small"
@@ -718,8 +891,7 @@ export function PersonalWorkspacePage() {
                     >
                       自定义工具
                     </Button>
-                  }
-                >
+                  </div>
                   <div className="personal-tools">
                     {draft.shortcuts.map((id) => {
                       const tool = available.find((t) => t.id === id);
@@ -754,7 +926,7 @@ export function PersonalWorkspacePage() {
                       description="添加常用工具，快速进入已有功能"
                     />
                   )}
-                </Card>
+                </div>
               </section>
             )}
             {visitedPanels.has("content") &&
@@ -777,128 +949,113 @@ export function PersonalWorkspacePage() {
             )}
             {visitedPanels.has("todos") && (
               <section hidden={panel !== "todos"}>
-                <Card
-                  title={
-                    <span>
-                      <CheckOutlined aria-hidden /> 个人待办
-                    </span>
-                  }
-                  extra={
-                    <span className="personal-todo-count">
-                      {incomplete.length} 待完成
-                      {overdue.length > 0 && <em> · {overdue.length} 逾期</em>}
-                    </span>
-                  }
-                >
-                  <div className="personal-todo-add">
-                    <Input
-                      value={title}
-                      aria-label="待办事项"
-                      placeholder="添加自己的待办事项"
-                      maxLength={160}
-                      disabled={busy || draft.todos.length >= 200}
-                      onChange={(e) => setTitle(e.target.value)}
-                      onPressEnter={addTodo}
-                    />
-                    <Input
-                      type="date"
-                      value={dueDate}
-                      aria-label="待办截止日期"
-                      disabled={busy}
-                      onChange={(e) => setDueDate(e.target.value)}
-                    />
-                    <Button
-                      icon={<PlusOutlined aria-hidden />}
-                      onClick={addTodo}
-                      disabled={
-                        busy || !title.trim() || draft.todos.length >= 200
-                      }
+                <div className="workspace-panel-toolbar">
+                  <span className="personal-todo-count">
+                    {incomplete.length} 待完成
+                    {overdue.length > 0 && <em> · {overdue.length} 逾期</em>}
+                  </span>
+                </div>
+                <div className="personal-todo-add">
+                  <Input
+                    value={title}
+                    aria-label="待办事项"
+                    placeholder="添加自己的待办事项"
+                    maxLength={160}
+                    disabled={busy || draft.todos.length >= 200}
+                    onChange={(e) => setTitle(e.target.value)}
+                    onPressEnter={addTodo}
+                  />
+                  <Input
+                    type="date"
+                    value={dueDate}
+                    aria-label="待办截止日期"
+                    disabled={busy}
+                    onChange={(e) => setDueDate(e.target.value)}
+                  />
+                  <Button
+                    icon={<PlusOutlined aria-hidden />}
+                    onClick={addTodo}
+                    disabled={
+                      busy || !title.trim() || draft.todos.length >= 200
+                    }
+                  >
+                    添加
+                  </Button>
+                </div>
+                <div className="personal-todos">
+                  {draft.todos.map((todo) => (
+                    <div
+                      className={"personal-todo" + (todo.done ? " done" : "")}
+                      key={todo.id}
                     >
-                      添加
-                    </Button>
-                  </div>
-                  <div className="personal-todos">
-                    {draft.todos.map((todo) => (
-                      <div
-                        className={"personal-todo" + (todo.done ? " done" : "")}
-                        key={todo.id}
+                      <Checkbox
+                        checked={todo.done}
+                        disabled={busy}
+                        onChange={(e) =>
+                          change({
+                            ...draft,
+                            todos: draft.todos.map((t) =>
+                              t.id === todo.id
+                                ? { ...t, done: e.target.checked }
+                                : t,
+                            ),
+                          })
+                        }
                       >
-                        <Checkbox
-                          checked={todo.done}
-                          disabled={busy}
-                          onChange={(e) =>
-                            change({
-                              ...draft,
-                              todos: draft.todos.map((t) =>
-                                t.id === todo.id
-                                  ? { ...t, done: e.target.checked }
-                                  : t,
-                              ),
-                            })
+                        {todo.title}
+                      </Checkbox>
+                      {todo.dueDate && (
+                        <Tag
+                          color={
+                            !todo.done && todo.dueDate < today
+                              ? "volcano"
+                              : undefined
                           }
                         >
-                          {todo.title}
-                        </Checkbox>
-                        {todo.dueDate && (
-                          <Tag
-                            color={
-                              !todo.done && todo.dueDate < today
-                                ? "volcano"
-                                : undefined
-                            }
-                          >
-                            {todo.dueDate}
-                          </Tag>
-                        )}
-                        <Button
-                          type="text"
-                          icon={<DeleteOutlined />}
-                          aria-label={`删除待办 ${todo.title}`}
-                          disabled={busy}
-                          onClick={() =>
-                            change({
-                              ...draft,
-                              todos: draft.todos.filter(
-                                (t) => t.id !== todo.id,
-                              ),
-                            })
-                          }
-                        />
-                      </div>
-                    ))}
-                  </div>
-                  {!draft.todos.length && (
-                    <Empty
-                      image={Empty.PRESENTED_IMAGE_SIMPLE}
-                      description="暂无个人待办"
-                    />
-                  )}
-                  <small className="secondary">
-                    个人待办仅自己可见。项目任务请在项目协作中查看。
-                  </small>
-                </Card>
+                          {todo.dueDate}
+                        </Tag>
+                      )}
+                      <Button
+                        type="text"
+                        icon={<DeleteOutlined />}
+                        aria-label={`删除待办 ${todo.title}`}
+                        disabled={busy}
+                        onClick={() =>
+                          change({
+                            ...draft,
+                            todos: draft.todos.filter((t) => t.id !== todo.id),
+                          })
+                        }
+                      />
+                    </div>
+                  ))}
+                </div>
+                {!draft.todos.length && (
+                  <Empty
+                    image={Empty.PRESENTED_IMAGE_SIMPLE}
+                    description="暂无个人待办"
+                  />
+                )}
+                <small className="secondary">
+                  个人待办仅自己可见。项目任务请在项目协作中查看。
+                </small>
               </section>
             )}
             {visitedPanels.has("note") && (
               <section hidden={panel !== "note"}>
-                <Card
-                  title="私有备忘"
-                  extra={<LockOutlined aria-label="仅自己可见" />}
-                >
-                  <Input.TextArea
-                    aria-label="私有备忘"
-                    value={draft.note}
-                    onChange={(e) => change({ ...draft, note: e.target.value })}
-                    placeholder="记录工作思路、提醒或备忘…"
-                    maxLength={4000}
-                    showCount
-                    rows={4}
-                    disabled={busy}
-                  />
-                  <p className="secondary">
-                    保存后随账号同步，其他用户及管理员的工作台不会显示这份内容。
-                  </p>
-                </Card>
+                <Input.TextArea
+                  aria-label="私有备忘"
+                  value={draft.note}
+                  onChange={(e) => change({ ...draft, note: e.target.value })}
+                  placeholder="记录工作思路、提醒或备忘…"
+                  maxLength={4000}
+                  showCount
+                  rows={4}
+                  disabled={busy}
+                />
+                <p className="secondary">
+                  保存后随账号同步，其他用户及管理员的工作台不会显示这份内容。
+                </p>
               </section>
             )}
           </WorkspaceFloatingPanel>

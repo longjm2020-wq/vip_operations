@@ -377,6 +377,158 @@
   height: auto;
   box-shadow: none;
 }
+/* Follow Drawer motion classes so its native close lifecycle owns the effect. */
+.assistant-screen .ant-drawer-content-wrapper::before,
+.assistant-screen .ant-drawer-content-wrapper::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  border-radius: inherit;
+  opacity: 0;
+  pointer-events: none;
+}
+.assistant-screen .ant-drawer-content-wrapper::before {
+  background:
+    radial-gradient(ellipse at 24% 30%, #adcfff52, transparent 48%),
+    radial-gradient(ellipse at 72% 65%, #dceaff42, transparent 46%),
+    radial-gradient(ellipse at 60% 16%, #769eec36, transparent 40%);
+}
+.assistant-screen .ant-drawer-content-wrapper::after {
+  background:
+    radial-gradient(circle at 12% 24%, #eaf3ff 0 1px, transparent 2px),
+    radial-gradient(circle at 24% 63%, #a7caff 0 1px, transparent 2px),
+    radial-gradient(circle at 31% 17%, #d9e8ff 0 1.5px, transparent 3px),
+    radial-gradient(circle at 42% 76%, #eef5ff 0 1px, transparent 2px),
+    radial-gradient(circle at 49% 35%, #9fc3fa 0 1px, transparent 2px),
+    radial-gradient(circle at 61% 83%, #d6e7ff 0 1px, transparent 2px),
+    radial-gradient(circle at 68% 22%, #dceaff 0 1.5px, transparent 3px),
+    radial-gradient(circle at 75% 54%, #a8c9f5 0 1px, transparent 2px),
+    radial-gradient(circle at 86% 36%, #edf5ff 0 1px, transparent 2px),
+    radial-gradient(circle at 90% 78%, #c6ddff 0 1px, transparent 2px);
+}
+.assistant-screen
+  .ant-drawer-content-wrapper:is(
+    .ant-drawer-panel-motion-right-appear,
+    .ant-drawer-panel-motion-right-enter,
+    .ant-drawer-panel-motion-right-leave
+  ) {
+  transition:
+    opacity 340ms ease,
+    transform 340ms cubic-bezier(0.2, 0.65, 0.3, 1);
+}
+.assistant-screen
+  .ant-drawer-content-wrapper:is(
+    .ant-drawer-panel-motion-right-appear,
+    .ant-drawer-panel-motion-right-enter,
+    .ant-drawer-panel-motion-right-leave-active
+  ) {
+  opacity: 0;
+  transform: translateY(6px) scale(0.986);
+}
+.assistant-screen
+  .ant-drawer-content-wrapper:is(
+    .ant-drawer-panel-motion-right-appear-active,
+    .ant-drawer-panel-motion-right-enter-active,
+    .ant-drawer-panel-motion-right-leave-start
+  ) {
+  opacity: 1;
+  transform: none;
+}
+.assistant-screen
+  .ant-drawer-content-wrapper:is(
+    .ant-drawer-panel-motion-right-appear-start,
+    .ant-drawer-panel-motion-right-enter-start,
+    .ant-drawer-panel-motion-right-leave-start
+  ) {
+  transition: none;
+}
+.assistant-screen
+  .ant-drawer-content-wrapper:is(
+    .ant-drawer-panel-motion-right-appear-active,
+    .ant-drawer-panel-motion-right-enter-active
+  )::before {
+  animation: assistant-nebula-gather 340ms ease-out both;
+}
+.assistant-screen
+  .ant-drawer-content-wrapper:is(
+    .ant-drawer-panel-motion-right-appear-active,
+    .ant-drawer-panel-motion-right-enter-active
+  )::after {
+  animation: assistant-stars-gather 340ms ease-out both;
+}
+.assistant-screen
+  .ant-drawer-content-wrapper.ant-drawer-panel-motion-right-leave-active::before {
+  animation: assistant-nebula-scatter 340ms ease-out both;
+}
+.assistant-screen
+  .ant-drawer-content-wrapper.ant-drawer-panel-motion-right-leave-active::after {
+  animation: assistant-stars-scatter 340ms ease-out both;
+}
+@keyframes assistant-nebula-gather {
+  0% {
+    opacity: 0;
+    transform: scale(1.025);
+  }
+  30% {
+    opacity: 0.8;
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1);
+  }
+}
+@keyframes assistant-stars-gather {
+  0% {
+    opacity: 0;
+    transform: translateY(8px) scale(1.035);
+  }
+  35% {
+    opacity: 0.8;
+  }
+  100% {
+    opacity: 0;
+    transform: none;
+  }
+}
+@keyframes assistant-nebula-scatter {
+  0% {
+    opacity: 0;
+    transform: scale(1);
+  }
+  28% {
+    opacity: 0.85;
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.035);
+  }
+}
+@keyframes assistant-stars-scatter {
+  0% {
+    opacity: 0;
+    transform: none;
+  }
+  24% {
+    opacity: 0.9;
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-10px) scale(1.045);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .assistant-screen .ant-drawer-content-wrapper,
+  .assistant-screen .ant-drawer-mask {
+    transition-duration: 0.01ms !important;
+    transform: none !important;
+  }
+  .assistant-screen .ant-drawer-content-wrapper::before,
+  .assistant-screen .ant-drawer-content-wrapper::after {
+    display: none;
+    animation: none !important;
+  }
+}
 :root .assistant-screen .ant-drawer-section,
 .assistant-screen .ant-drawer-content {
   background: transparent;
@@ -431,6 +583,35 @@
 .assistant-screen .assistant-privacy {
   font-size: 11px;
 }
+/* Keep the glass panel distinct from pale tables without changing dark mode. */
+:root[data-theme="light"] .assistant-screen .ant-drawer-content-wrapper {
+  overflow: hidden;
+  border: 1px solid rgba(117, 140, 171, 0.58);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.78);
+  box-shadow:
+    0 24px 64px rgba(41, 61, 89, 0.15),
+    0 4px 16px rgba(41, 61, 89, 0.08);
+}
+:root[data-theme="light"] .assistant-screen .ant-drawer-header {
+  border-bottom-color: rgba(117, 140, 171, 0.28);
+  background: rgba(246, 249, 253, 0.68);
+}
+:root[data-theme="light"] .assistant-screen .ant-drawer-footer {
+  border-top: 1px solid rgba(117, 140, 171, 0.22);
+  background: rgba(246, 249, 253, 0.6);
+}
+:root[data-theme="light"] .assistant-screen .assistant-compose .ant-sender {
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 4px 18px rgba(41, 61, 89, 0.08);
+}
+:root[data-theme="light"]
+  .assistant-screen
+  .assistant-compose
+  .ant-sender:focus-within {
+  box-shadow: 0 0 0 3px
+    color-mix(in srgb, var(--app-accent-border) 10%, transparent);
+}
 @media (max-width: 700px) {
   .assistant-screen .ant-drawer-mask {
     background: color-mix(in srgb, var(--app-bg) 88%, transparent);
@@ -440,6 +621,9 @@
     right: 0;
     top: 8px;
     bottom: 0;
+  }
+  :root[data-theme="light"] .assistant-screen .ant-drawer-content-wrapper {
+    border-radius: 16px 16px 0 0;
   }
   .assistant-screen .ant-drawer-header {
     padding: 12px 16px;
