@@ -12,7 +12,7 @@ type Point = { x: number; y: number; z: number };
 const initialView: WorldView = { pitch: 0, yaw: 0, x: 0, y: 0, zoom: 1 };
 const perspective = 1000;
 
-// Stable world coordinates make stars return to the same place when the view is reset.
+// Seeded columns keep the scenery coherent while panning and rotating.
 function noise(x: number, y: number, z: number, salt = 0) {
   let seed =
     Math.imul(x | 0, 374761393) ^
@@ -23,7 +23,7 @@ function noise(x: number, y: number, z: number, salt = 0) {
   return ((seed ^ (seed >>> 16)) >>> 0) / 4294967295;
 }
 
-/** A decorative, local canvas: redraw only on view changes, resize, or theme changes. */
+/** Local binary rain, independent of React rendering and business data. */
 export function WorkspaceWorldBackdrop() {
   const canvas = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
@@ -32,6 +32,7 @@ export function WorkspaceWorldBackdrop() {
     if (!element || !root) return;
     const context = element.getContext("2d");
     if (!context) return;
+    const motion = window.matchMedia("(prefers-reduced-motion: reduce)");
     let view = { ...initialView },
       width = 0,
       height = 0,
@@ -41,12 +42,25 @@ export function WorkspaceWorldBackdrop() {
       frame = 0,
       visible = true,
       accent = "#667bfa",
-      secondary = "#a3afcc",
+      elapsed = 0,
+      lastTime = 0,
+      paintedAt = 0,
+      dirty = true,
       light = false;
 
-    const draw = () => {
+    const draw = (now: number) => {
       frame = 0;
       if (document.hidden || !visible || !width || !height) return;
+      if (!motion.matches) {
+        if (lastTime) elapsed += Math.min(80, now - lastTime) / 1000;
+        lastTime = now;
+      }
+      if (!dirty && now - paintedAt < 1000 / 30) {
+        schedule();
+        return;
+      }
+      dirty = false;
+      paintedAt = now;
       context.setTransform(dpr, 0, 0, dpr, 0, 0);
       context.clearRect(0, 0, width, height);
       const pitch = ((view.pitch % 360) * Math.PI) / 180,
@@ -81,100 +95,109 @@ export function WorkspaceWorldBackdrop() {
           scale,
         };
       };
-      const line = (a: Point, b: Point) => {
-        const from = project(a),
-          to = project(b);
-        if (!from || !to) return;
-        context.moveTo(from.x, from.y);
-        context.lineTo(to.x, to.y);
-      };
-
-      // Neighbouring lattice planes extend indefinitely; edge-on planes fade naturally.
-      const spacing = 110,
-        extent = spacing * 24,
-        origin = {
-          x: Math.round(camera.x / spacing) * spacing,
-          y: Math.round(camera.y / spacing) * spacing,
-          z: Math.round(camera.z / spacing) * spacing,
-        };
-      context.strokeStyle = accent;
-      context.lineWidth = 0.65;
-      for (const axis of ["x", "y", "z"] as const) {
+      // Three neighbouring planes prevent the rain disappearing at side-on views.
+      // Their sparse streams extend with the camera instead of creating DOM nodes.
+      const columnGap = 68,
+        rowGap = 24,
+        reach = Math.min(4600, Math.max(width, height) / view.zoom + 600),
+        columns = Math.ceil(reach / columnGap),
+        rows = Math.ceil(reach / rowGap);
+      let glyphs = 0,
+        fontSize = 0;
+      context.fillStyle = accent;
+      context.textAlign = "center";
+      context.textBaseline = "middle";
+      planes: for (const axis of ["x", "y", "z"] as const) {
         const normal = rotate({
           x: axis === "x" ? 1 : 0,
           y: axis === "y" ? 1 : 0,
           z: axis === "z" ? 1 : 0,
         });
-        const alpha = Math.abs(normal.z) ** 3 * (light ? 0.1 : 0.085);
-        if (alpha < 0.008) continue;
+        const planeAlpha = Math.abs(normal.z) ** 3;
+        if (planeAlpha < 0.04) continue;
         const [u, v] =
           axis === "x"
             ? (["y", "z"] as const)
             : axis === "y"
               ? (["x", "z"] as const)
               : (["x", "y"] as const);
-        const plane = {
-          ...origin,
-          [axis]: origin[axis] - Math.sign(normal.z || 1) * spacing * 3,
-        };
-        context.globalAlpha = alpha;
-        context.beginPath();
-        for (let index = -24; index <= 24; index++) {
-          const offset = index * spacing;
-          line(
-            { ...plane, [u]: origin[u] + offset, [v]: origin[v] - extent },
-            { ...plane, [u]: origin[u] + offset, [v]: origin[v] + extent },
-          );
-          line(
-            { ...plane, [u]: origin[u] - extent, [v]: origin[v] + offset },
-            { ...plane, [u]: origin[u] + extent, [v]: origin[v] + offset },
-          );
-        }
-        context.stroke();
-      }
-
-      const cell = 260,
-        grid = {
-          x: Math.floor(camera.x / cell),
-          y: Math.floor(camera.y / cell),
-          z: Math.floor(camera.z / cell),
-        };
-      context.fillStyle = secondary;
-      for (let x = grid.x - 6; x <= grid.x + 6; x++) {
-        for (let y = grid.y - 5; y <= grid.y + 5; y++) {
-          for (let z = grid.z - 5; z <= grid.z + 4; z++) {
-            const seed = noise(x, y, z);
-            if (seed < 0.33) continue;
+        const columnOrigin = Math.floor(camera[u] / columnGap),
+          rowOrigin = Math.floor(camera[v] / rowGap),
+          axisSeed = axis.charCodeAt(0),
+          plane = {
+            x: 0,
+            y: 0,
+            z: 0,
+            [axis]:
+              Math.round(camera[axis] / 110) * 110 -
+              Math.sign(normal.z || 1) * 330,
+          };
+        for (
+          let column = columnOrigin - columns;
+          column <= columnOrigin + columns;
+          column++
+        ) {
+          const seed = noise(column, axisSeed, 13);
+          if (seed < 0.18) continue;
+          const travel = elapsed * (0.65 + seed * 1.15),
+            fraction = travel % 1,
+            head = Math.floor(travel) + Math.floor(seed * 44),
+            length = 9 + Math.floor(noise(column, axisSeed, 83) * 12);
+          for (let row = rowOrigin - rows; row <= rowOrigin + rows; row++) {
+            const tail = (((head - row) % 44) + 44) % 44;
+            if (tail >= length) continue;
             const point = project({
-              x: (x + noise(x, y, z, 731)) * cell,
-              y: (y + noise(x, y, z, 1193)) * cell,
-              z: (z + noise(x, y, z, 2017)) * cell,
+              ...plane,
+              [u]: (column + noise(column, axisSeed, 29) * 0.4) * columnGap,
+              [v]: (row + fraction) * rowGap,
             });
             if (
               !point ||
-              point.x < -3 ||
-              point.x > width + 3 ||
-              point.y < -3 ||
-              point.y > height + 3
+              point.x < -14 ||
+              point.x > width + 14 ||
+              point.y < -14 ||
+              point.y > height + 14
             )
               continue;
-            const size = Math.min(
-              1.8,
-              Math.max(0.45, point.scale * (0.45 + seed * 0.45)),
+            if (++glyphs > 1800) break planes;
+            const distance = Math.hypot(
+                (point.x - centerX) / 360,
+                (point.y - centerY) / 300,
+              ),
+              quietCenter = 0.22 + Math.min(1, distance / 1.4) * 0.78,
+              edge = Math.min(1, point.y / 100, (height - point.y) / 160),
+              fade = (1 - tail / length) ** 1.3;
+            context.globalAlpha = Math.max(
+              0,
+              planeAlpha * quietCenter * edge * fade * (light ? 0.27 : 0.46),
             );
-            context.globalAlpha =
-              (light ? 0.18 : 0.24) * Math.min(1.7, point.scale) * seed;
-            context.beginPath();
-            context.arc(point.x, point.y, size, 0, Math.PI * 2);
-            context.fill();
+            const size = Math.round(
+              Math.max(10, Math.min(17, 15 * point.scale * view.zoom)),
+            );
+            if (size !== fontSize) {
+              fontSize = size;
+              context.font = `${size}px ui-monospace, SFMono-Regular, Consolas, monospace`;
+            }
+            context.fillText(
+              noise(column, row, axisSeed, Math.floor(elapsed * 0.65)) > 0.5
+                ? "1"
+                : "0",
+              point.x,
+              point.y,
+            );
           }
         }
       }
       context.globalAlpha = 1;
+      if (!motion.matches) schedule();
     };
     const schedule = () => {
       if (!frame && visible && !document.hidden)
         frame = requestAnimationFrame(draw);
+    };
+    const invalidate = () => {
+      dirty = true;
+      schedule();
     };
     const measure = () => {
       width = root.clientWidth;
@@ -197,14 +220,13 @@ export function WorkspaceWorldBackdrop() {
           parent = parent.offsetParent as HTMLElement | null;
         }
       }
-      schedule();
+      invalidate();
     };
     const theme = () => {
       const style = getComputedStyle(root);
       accent = style.getPropertyValue("--app-accent").trim() || "#667bfa";
-      secondary = style.getPropertyValue("--app-secondary").trim() || "#a3afcc";
       light = document.documentElement.dataset.theme === "light";
-      schedule();
+      invalidate();
     };
     const update = (event: Event) => {
       const detail = (event as CustomEvent<WorldView>).detail;
@@ -216,7 +238,7 @@ export function WorkspaceWorldBackdrop() {
       )
         return;
       view = { ...detail, zoom: Math.min(2, Math.max(0.4, detail.zoom)) };
-      schedule();
+      invalidate();
     };
     const resized = new ResizeObserver(measure);
     resized.observe(root);
@@ -237,7 +259,8 @@ export function WorkspaceWorldBackdrop() {
     trackStage();
     const intersection = new IntersectionObserver(([entry]) => {
       visible = entry.isIntersecting;
-      if (visible) schedule();
+      lastTime = 0;
+      if (visible) invalidate();
       else if (frame) {
         cancelAnimationFrame(frame);
         frame = 0;
@@ -251,7 +274,14 @@ export function WorkspaceWorldBackdrop() {
     });
     window.addEventListener("xuti-workspace-view", update);
     window.addEventListener("resize", measure);
-    document.addEventListener("visibilitychange", schedule);
+    const playback = () => {
+      cancelAnimationFrame(frame);
+      frame = 0;
+      lastTime = 0;
+      invalidate();
+    };
+    document.addEventListener("visibilitychange", playback);
+    motion.addEventListener("change", playback);
     theme();
     measure();
     return () => {
@@ -262,7 +292,8 @@ export function WorkspaceWorldBackdrop() {
       themes.disconnect();
       window.removeEventListener("xuti-workspace-view", update);
       window.removeEventListener("resize", measure);
-      document.removeEventListener("visibilitychange", schedule);
+      document.removeEventListener("visibilitychange", playback);
+      motion.removeEventListener("change", playback);
     };
   }, []);
   return (

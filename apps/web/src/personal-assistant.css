@@ -364,12 +364,12 @@
   color: var(--app-text);
 }
 
-/* The workspace conversation is an overlay on the existing scene, not a side card. */
-.workspace-assistant-screen .ant-drawer-mask {
+/* One transparent conversation panel across the workbench and business pages. */
+.assistant-screen .ant-drawer-mask {
   background: color-mix(in srgb, var(--app-bg) 78%, transparent);
   backdrop-filter: blur(3px);
 }
-.workspace-assistant-screen .ant-drawer-content-wrapper {
+.assistant-screen .ant-drawer-content-wrapper {
   width: min(1120px, calc(100vw - 48px)) !important;
   right: max(24px, calc((100vw - 1120px) / 2));
   top: 68px;
@@ -377,83 +377,83 @@
   height: auto;
   box-shadow: none;
 }
-:root .workspace-assistant-screen .ant-drawer-section,
-.workspace-assistant-screen .ant-drawer-content {
+:root .assistant-screen .ant-drawer-section,
+.assistant-screen .ant-drawer-content {
   background: transparent;
   box-shadow: none;
   border: 0;
 }
-.workspace-assistant-screen .ant-drawer-header {
+.assistant-screen .ant-drawer-header {
   padding: 12px 24px 18px;
   border-bottom: 1px solid
     color-mix(in srgb, var(--app-border) 60%, transparent);
   background: transparent;
 }
-.workspace-assistant-screen .ant-drawer-body {
+.assistant-screen .ant-drawer-body {
   background: transparent;
   padding: 20px 28px 28px;
   scrollbar-gutter: stable;
 }
-.workspace-assistant-screen .ant-drawer-footer {
+.assistant-screen .ant-drawer-footer {
   padding: 12px 28px 6px;
   border-top: 0;
   background: transparent;
 }
-.workspace-assistant-screen .assistant-compose,
-.workspace-assistant-screen .assistant-privacy,
-.workspace-assistant-screen .assistant-chat-body > div,
-.workspace-assistant-screen .assistant-secondary-body > div {
+.assistant-screen .assistant-compose,
+.assistant-screen .assistant-privacy,
+.assistant-screen .assistant-chat-body > div,
+.assistant-screen .assistant-secondary-body > div {
   max-width: 920px;
   margin-inline: auto;
 }
-.workspace-assistant-screen .assistant-message-text {
+.assistant-screen .assistant-message-text {
   font-size: 14px;
   line-height: 1.9;
 }
-.workspace-assistant-screen .assistant-message-user .ant-bubble-content {
+.assistant-screen .assistant-message-user .ant-bubble-content {
   background: color-mix(in srgb, var(--app-accent) 10%, var(--app-bg));
 }
-.workspace-assistant-screen .assistant-status {
+.assistant-screen .assistant-status {
   margin-bottom: 24px;
 }
-.workspace-assistant-screen .assistant-empty {
+.assistant-screen .assistant-empty {
   max-width: 620px;
   margin: auto;
   padding-top: clamp(20px, 7vh, 72px);
 }
-.workspace-assistant-screen .assistant-empty > button {
+.assistant-screen .assistant-empty > button {
   background: color-mix(in srgb, var(--app-surface) 65%, transparent);
 }
-.workspace-assistant-screen .assistant-compose .ant-sender {
+.assistant-screen .assistant-compose .ant-sender {
   background: color-mix(in srgb, var(--app-bg) 88%, transparent);
   box-shadow: 0 8px 32px color-mix(in srgb, var(--app-shadow) 65%, transparent);
 }
-.workspace-assistant-screen .assistant-privacy {
+.assistant-screen .assistant-privacy {
   font-size: 11px;
 }
 @media (max-width: 700px) {
-  .workspace-assistant-screen .ant-drawer-mask {
+  .assistant-screen .ant-drawer-mask {
     background: color-mix(in srgb, var(--app-bg) 88%, transparent);
   }
-  .workspace-assistant-screen .ant-drawer-content-wrapper {
+  .assistant-screen .ant-drawer-content-wrapper {
     width: 100vw !important;
     right: 0;
     top: 8px;
     bottom: 0;
   }
-  .workspace-assistant-screen .ant-drawer-header {
+  .assistant-screen .ant-drawer-header {
     padding: 12px 16px;
   }
-  .workspace-assistant-screen .ant-drawer-body {
+  .assistant-screen .ant-drawer-body {
     padding: 16px;
   }
-  .workspace-assistant-screen .ant-drawer-footer {
+  .assistant-screen .ant-drawer-footer {
     padding: 8px 16px max(12px, env(safe-area-inset-bottom));
   }
-  .workspace-assistant-screen .assistant-panel-heading {
+  .assistant-screen .assistant-panel-heading {
     gap: 4px 8px;
   }
-  .workspace-assistant-screen .assistant-empty {
+  .assistant-screen .assistant-empty {
     padding-top: 20px;
   }
 }

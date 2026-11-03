@@ -55,6 +55,7 @@ import { WorkspaceAI } from "./workspace-ai";
 import { PersonalSchedule } from "./personal-schedule";
 import { useWorkspaceWorld } from "./use-workspace-world";
 import { WorkspaceWorldBackdrop } from "./workspace-world-backdrop";
+import { WorkspaceHologram } from "./workspace-hologram";
 import "./workspace-world.css";
 
 type WorkspacePanel = "tools" | "schedule" | "todos" | "note" | "content";
@@ -483,6 +484,8 @@ export function PersonalWorkspacePage() {
           >
             <AimOutlined />
           </button>
+          <span className="workspace-world-control-divider" aria-hidden />
+          <WorkspaceHologram />
         </div>
         <div className="workspace-voice-slot" data-world-ui />
         <span className="workspace-date">

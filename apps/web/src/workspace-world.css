@@ -27,6 +27,28 @@
 .personal-workspace[data-world-mode]::before {
   content: none;
 }
+.personal-workspace[data-world-mode]::after {
+  content: "";
+  position: absolute;
+  inset: 8px;
+  z-index: -1;
+  pointer-events: none;
+  border: 1px solid color-mix(in srgb, var(--app-accent) 9%, transparent);
+  border-radius: 16px;
+  box-shadow: inset 0 0 70px
+    color-mix(in srgb, var(--app-accent) 3%, transparent);
+  background:
+    radial-gradient(
+      ellipse at 0 0,
+      color-mix(in srgb, var(--app-accent) 10%, transparent),
+      transparent 32%
+    ),
+    radial-gradient(
+      ellipse at 100% 100%,
+      color-mix(in srgb, var(--app-accent) 7%, transparent),
+      transparent 32%
+    );
+}
 .personal-workspace[data-world-mode]:focus-visible {
   outline: 1px solid var(--app-accent-border);
   outline-offset: -2px;

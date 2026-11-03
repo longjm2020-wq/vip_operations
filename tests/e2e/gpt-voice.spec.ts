@@ -722,5 +722,24 @@ test("窄屏长语音字幕不遮挡日期与场景工具，滚动全文不改�
     path: ".local/workspace-voice-top-mobile.png",
     fullPage: true,
   });
+  await page.getByRole("button", { name: "全息影像屏", exact: true }).click();
+  const hologram = page.getByRole("dialog", {
+    name: "全息影像屏",
+    exact: true,
+  });
+  await expect(hologram).toBeVisible();
+  await expect(
+    bubble.getByRole("button", { name: "结束语音", exact: true }),
+  ).toBeInViewport();
+  await page.screenshot({
+    path: ".local/workspace-hologram-voice-mobile.png",
+    fullPage: true,
+  });
   await bubble.getByRole("button", { name: "结束语音", exact: true }).click();
+  await expect
+    .poll(() => page.evaluate(() => window.gptVoiceTest.stops))
+    .toBe(1);
+  await hologram
+    .getByRole("button", { name: "关闭全息影像屏", exact: true })
+    .click();
 });

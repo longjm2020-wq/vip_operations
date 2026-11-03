@@ -6,6 +6,7 @@ import { expect, test, type Page } from "@playwright/test";
 const fileId = "11111111-1111-4111-8111-111111111111";
 const resultId = "22222222-2222-4222-8222-222222222222";
 const jobId = "33333333-3333-4333-8333-333333333333";
+const previewId = "44444444-4444-4444-8444-444444444444";
 async function setup(page: Page, mode = "dark") {
   const requests: Record<string, any>[] = [];
   const file = {
@@ -21,6 +22,13 @@ async function setup(page: Page, mode = "dark") {
     id: resultId,
     name: "周报.docx",
     mime: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    source: "generated",
+  };
+  const preview = {
+    ...file,
+    id: previewId,
+    name: "预览图.png",
+    mime: "image/png",
     source: "generated",
   };
   const assistant = {
@@ -95,7 +103,7 @@ async function setup(page: Page, mode = "dark") {
         );
         uploaded = true;
         data = file;
-      } else data = uploaded ? [file, ...(done ? [result] : [])] : [];
+      } else data = uploaded ? [file, ...(done ? [result, preview] : [])] : [];
     } else if (path === "/my-workspace/assistant/jobs")
       data = done
         ? [
@@ -108,7 +116,7 @@ async function setup(page: Page, mode = "dark") {
               stage: "已完成",
               progress: 100,
               error: "",
-              files: [result],
+              files: [result, preview],
             },
           ]
         : [];
@@ -139,6 +147,12 @@ async function setup(page: Page, mode = "dark") {
         );
       }
       data = assistant;
+    } else if (path === `/my-workspace/assistant/files/${previewId}/content`) {
+      await route.fulfill({
+        path: "tests/fixtures/selection-care-label.png",
+        contentType: "image/png",
+      });
+      return;
     } else if (path.endsWith("/content")) {
       await route.fulfill({
         body: "fixture file",
@@ -155,6 +169,14 @@ test("附件、能力、联网与任务下载形成完整流程，历史回复�
 }) => {
   const requests = await setup(page);
   await page.goto("/my-workspace");
+  await page.locator(".workspace-ai-core-stage").hover();
+  await page.getByRole("button", { name: "打开私有备忘", exact: true }).click();
+  await page
+    .getByRole("textbox", { name: "私有备忘", exact: true })
+    .fill("同页投影保留未保存备忘");
+  await page
+    .getByRole("button", { name: "收起工作台面板", exact: true })
+    .click();
   await openPersonalAssistant(page);
   const dialog = page.getByRole("dialog", { name: /AI 个人助理/ });
   await expect(dialog).toBeVisible();
@@ -187,6 +209,69 @@ test("附件、能力、联网与任务下载形成完整流程，历史回复�
   await expect(dialog.getByRole("heading", { name: "我的文件" })).toBeVisible();
   await expect(dialog).toContainText("已完成");
   await page.screenshot({ path: ".local/assistant-agent-dark.png" });
+  const currentUrl = page.url();
+  await dialog
+    .locator(".agent-job")
+    .getByRole("button", { name: "在全息屏展示" })
+    .click();
+  const screen = page.getByRole("dialog", { name: "全息影像屏", exact: true });
+  await expect(screen).toBeVisible();
+  await expect(dialog).toBeHidden();
+  expect(page.url()).toBe(currentUrl);
+  await expect(
+    screen.getByRole("img", { name: "预览图.png", exact: true }),
+  ).toHaveAttribute(
+    "src",
+    `/api/v1/my-workspace/assistant/files/${previewId}/content`,
+  );
+  await screen
+    .getByRole("button", { name: "关闭全息影像屏", exact: true })
+    .click();
+  await page.locator(".workspace-ai-core-stage").hover();
+  await page.getByRole("button", { name: "打开私有备忘", exact: true }).click();
+  await expect(
+    page.getByRole("textbox", { name: "私有备忘", exact: true }),
+  ).toHaveValue("同页投影保留未保存备忘");
+  await page
+    .getByRole("button", { name: "收起工作台面板", exact: true })
+    .click();
+  await openPersonalAssistant(page);
+  const draft = "跨页全息预览后继续编辑的草稿";
+  await dialog.getByPlaceholder(/告诉我你想完成什么/).fill(draft);
+  await dialog.getByRole("button", { name: "关闭", exact: true }).click();
+  await page
+    .locator(".sidebar")
+    .getByRole("link", { name: "运营中心", exact: true })
+    .click();
+  await expect(page).toHaveURL(/operations$/);
+  await page
+    .getByRole("button", { name: "展开小序状态与动态", exact: true })
+    .click();
+  await page.getByRole("button", { name: "文字对话", exact: true }).click();
+  await selectAssistantPanel(page, "任务与文件");
+  await dialog
+    .locator(".agent-job")
+    .getByRole("button", { name: "在全息屏展示" })
+    .click();
+  await expect(page).toHaveURL(/my-workspace$/);
+  await expect(screen).toBeVisible();
+  await expect(
+    page.locator(".personal-assistant-drawer .ant-drawer-content-wrapper"),
+  ).toBeHidden();
+  await expect(
+    screen.getByRole("img", { name: "预览图.png", exact: true }),
+  ).toBeVisible();
+  await page.screenshot({
+    path: ".local/workspace-hologram-assistant-file.png",
+  });
+  await screen
+    .getByRole("button", { name: "关闭全息影像屏", exact: true })
+    .click();
+  await openPersonalAssistant(page);
+  await expect(dialog.getByPlaceholder(/告诉我你想完成什么/)).toHaveValue(
+    draft,
+  );
+  expect(requests).toHaveLength(1);
 });
 test("亮色窄屏保留附件入口和中性能力名称", async ({ page }) => {
   await setup(page, "light");

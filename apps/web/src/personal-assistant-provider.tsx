@@ -62,6 +62,7 @@ import { AssistantVoiceSettingsPanel } from "./assistant-realtime-panel";
 import { useGptVoice } from "./use-gpt-voice";
 import { useGptSpeech } from "./use-gpt-speech";
 import type { AssistantVoiceStatus } from "../../../packages/contracts/src/assistant-voice";
+import { workspaceHologramEvent } from "./workspace-hologram";
 
 type AssistantSection = "chat" | "activity" | "memory" | "voice" | "tasks";
 
@@ -173,6 +174,18 @@ export function PersonalAssistantProvider({
     useState<AssistantMemoryEntry | null>(null);
   const voice = useAssistantVoice(setText);
   const speech = useGptSpeech();
+  useEffect(() => {
+    const showMedia = () => {
+      document
+        .querySelectorAll<HTMLVideoElement>(".personal-assistant-drawer video")
+        .forEach((element) => element.pause());
+      setOpen(false);
+      voice.stop();
+      speech.stop();
+    };
+    window.addEventListener(workspaceHologramEvent, showMedia);
+    return () => window.removeEventListener(workspaceHologramEvent, showMedia);
+  }, [voice.stop, speech.stop]);
   const [voiceVisible, setVoiceVisible] = useState(false);
   const voiceStatus = useQuery({
     queryKey: ["assistant-voice", user.id],
@@ -649,8 +662,8 @@ export function PersonalAssistantProvider({
             </Dropdown>
           </div>
         }
-        size={620}
-        rootClassName={`personal-assistant-drawer${inWorkspace ? " workspace-assistant-screen" : ""}`}
+        size={1120}
+        rootClassName="personal-assistant-drawer assistant-screen"
         classNames={{
           body:
             section === "chat"

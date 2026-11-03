@@ -52,6 +52,8 @@ type VoiceFixture = {
 declare global {
   interface Window {
     assistantVoiceTest: VoiceFixture;
+    workspaceBinaryGlyphs: string[];
+    workspaceMediaUrls: { created: string[]; revoked: string[] };
   }
 }
 async function mockBrowserVoice(page: Page, supported = true) {
@@ -140,6 +142,302 @@ test("语音输入须主动启动，转写可编辑，关闭停止麦克风", as
     "data-state",
     "listening",
   );
+});
+
+test("工作台0和1背景实际滚动，减少动态效果保持静态且仍可调整视角", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    window.workspaceBinaryGlyphs = [];
+    const original = CanvasRenderingContext2D.prototype.fillText;
+    CanvasRenderingContext2D.prototype.fillText = function (
+      this: CanvasRenderingContext2D,
+      ...args: Parameters<CanvasRenderingContext2D["fillText"]>
+    ) {
+      if (
+        this.canvas.classList.contains("workspace-world-backdrop") &&
+        window.workspaceBinaryGlyphs.length < 512
+      )
+        window.workspaceBinaryGlyphs.push(args[0]);
+      return Reflect.apply(original, this, args);
+    };
+  });
+  const fixture = await workspaceFixture(page);
+  await page.goto("/my-workspace");
+  const canvas = page.locator(".workspace-world-backdrop");
+  await expect(canvas).toBeVisible();
+  await expect
+    .poll(() =>
+      page.evaluate(() => [...new Set(window.workspaceBinaryGlyphs)].sort()),
+    )
+    .toEqual(["0", "1"]);
+  const pixels = () =>
+    canvas.evaluate((element) => (element as HTMLCanvasElement).toDataURL());
+  const input = page
+    .locator(".workspace-ai")
+    .getByPlaceholder(/告诉我你想完成什么/);
+  await expect(input).toBeVisible();
+  for (let sample = 0; sample < 3; sample++) {
+    const before = await pixels();
+    await page.waitForTimeout(120);
+    expect(await pixels()).not.toBe(before);
+  }
+  await page.screenshot({ path: ".local/workspace-binary-dark.png" });
+  await input.fill("背景滚动不会发送或覆盖这段草稿");
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      ),
+  );
+  const still = await pixels();
+  await page.waitForTimeout(300);
+  expect(await pixels()).toBe(still);
+  const world = page.getByRole("region", {
+    name: "工作台三维场景",
+    exact: true,
+  });
+  await world.press("ArrowRight");
+  await expect(world).toHaveAttribute("data-world-yaw", "4");
+  await expect.poll(pixels).not.toBe(still);
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  const resumed = await pixels();
+  await expect.poll(pixels).not.toBe(resumed);
+  await page.getByRole("button", { name: "回到中心", exact: true }).click();
+  await page
+    .getByRole("button", { name: "切换为亮色主题", exact: true })
+    .click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await page.mouse.move(2, 2);
+  await expect(page.locator(".ant-tooltip:visible")).toHaveCount(0);
+  await page.screenshot({ path: ".local/workspace-binary-light.png" });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.locator(".sidebar")).toBeHidden();
+  await page
+    .getByRole("button", { name: "切换为暗色主题", exact: true })
+    .click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await page.mouse.move(2, 2);
+  await expect(page.locator(".ant-tooltip:visible")).toHaveCount(0);
+  await page.screenshot({
+    path: ".local/workspace-binary-mobile.png",
+    fullPage: true,
+  });
+  await expect(input).toHaveValue("背景滚动不会发送或覆盖这段草稿");
+  expect(fixture.assistantCalls()).toBe(0);
+  expect(fixture.reads()).toBe(0);
+  expect(fixture.generates()).toBe(0);
+});
+
+test("全息影像屏本机图片视频可预览，独立调整不转动场景且关闭释放媒体", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    window.workspaceMediaUrls = { created: [], revoked: [] };
+    const create = URL.createObjectURL.bind(URL);
+    const revoke = URL.revokeObjectURL.bind(URL);
+    URL.createObjectURL = (object) => {
+      const url = create(object);
+      window.workspaceMediaUrls.created.push(url);
+      return url;
+    };
+    URL.revokeObjectURL = (url) => {
+      window.workspaceMediaUrls.revoked.push(url);
+      revoke(url);
+    };
+  });
+  const fixture = await workspaceFixture(page);
+  const writes: string[] = [];
+  page.on("request", (request) => {
+    if (["POST", "PUT", "PATCH", "DELETE"].includes(request.method()))
+      writes.push(request.url());
+  });
+  await page.goto("/my-workspace");
+  const worldBefore = await readWorkspaceCamera(page);
+  await page.getByRole("button", { name: "全息影像屏", exact: true }).click();
+  const screen = page.getByRole("dialog", { name: "全息影像屏", exact: true });
+  await expect(screen).toBeVisible();
+  const file = screen.getByLabel("选择全息媒体文件", { exact: true });
+  await file.setInputFiles("tests/fixtures/selection-care-label.png");
+  const preview = screen.locator("img");
+  await expect(preview).toBeVisible();
+  await expect
+    .poll(() =>
+      preview.evaluate((element) => (element as HTMLImageElement).naturalWidth),
+    )
+    .toBeGreaterThan(0);
+  const imageUrl = await preview.getAttribute("src");
+  expect(imageUrl).toMatch(/^blob:/);
+  await screen
+    .getByRole("button", { name: "放大全息影像", exact: true })
+    .click();
+  await expect
+    .poll(async () => Number(await screen.getAttribute("data-hologram-zoom")))
+    .toBeGreaterThan(1);
+  const enlarged = Number(await screen.getAttribute("data-hologram-zoom"));
+  await screen
+    .getByRole("button", { name: "缩小全息影像", exact: true })
+    .click();
+  await expect
+    .poll(async () => Number(await screen.getAttribute("data-hologram-zoom")))
+    .toBeLessThan(enlarged);
+  const rotate = screen.getByRole("button", {
+    name: "调整全息影像视角",
+    exact: true,
+  });
+  const handle = (await rotate.boundingBox())!;
+  await page.mouse.move(
+    handle.x + handle.width / 2,
+    handle.y + handle.height / 2,
+  );
+  await page.mouse.down();
+  await page.mouse.move(
+    handle.x + handle.width / 2 + 50,
+    handle.y + handle.height / 2 + 25,
+    { steps: 5 },
+  );
+  await page.mouse.up();
+  await expect
+    .poll(async () =>
+      Math.abs(Number(await screen.getAttribute("data-hologram-yaw"))),
+    )
+    .toBeGreaterThan(0);
+  expect(await readWorkspaceCamera(page)).toEqual(worldBefore);
+  await screen
+    .getByRole("button", { name: "复位全息影像", exact: true })
+    .click();
+  await expect(screen).toHaveAttribute("data-hologram-yaw", "0");
+  await expect(screen).toHaveAttribute("data-hologram-pitch", "0");
+  await expect(screen).toHaveAttribute("data-hologram-zoom", "1");
+  await rotate.press("ArrowRight");
+  await expect
+    .poll(async () => Number(await screen.getAttribute("data-hologram-yaw")))
+    .toBeGreaterThan(0);
+  await rotate.press("Home");
+  await expect(screen).toHaveAttribute("data-hologram-yaw", "0");
+  await page.screenshot({ path: ".local/workspace-hologram-image.png" });
+  await file.setInputFiles("tests/fixtures/selection-care-label.png");
+  await expect(preview).not.toHaveAttribute("src", imageUrl!);
+  await expect
+    .poll(() => page.evaluate(() => window.workspaceMediaUrls.revoked))
+    .toContain(imageUrl);
+  const repeatedUrl = await preview.getAttribute("src");
+  const gif = Buffer.concat([
+    Buffer.from("GIF89a"),
+    Buffer.from("01000100800000000000ffffff21ff0b", "hex"),
+    Buffer.from("NETSCAPE2.0"),
+    Buffer.from("0301000000", "hex"),
+    Buffer.from("21f904000a0000002c0000000001000100000202440100", "hex"),
+    Buffer.from("21f904000a0000002c00000000010001000002024c01003b", "hex"),
+  ]);
+  await file.setInputFiles({
+    name: "local-animation.gif",
+    mimeType: "image/gif",
+    buffer: gif,
+  });
+  await expect
+    .poll(() =>
+      preview.evaluate((element) => (element as HTMLImageElement).naturalWidth),
+    )
+    .toBe(1);
+  await expect(preview).toHaveAttribute("alt", "local-animation.gif");
+  await expect(preview).toBeVisible();
+  await expect
+    .poll(() => page.evaluate(() => window.workspaceMediaUrls.revoked))
+    .toContain(repeatedUrl);
+  const gifUrl = await preview.getAttribute("src");
+  await file.setInputFiles({
+    name: "unsupported.txt",
+    mimeType: "text/plain",
+    buffer: Buffer.from("not an image"),
+  });
+  await expect(screen.getByRole("alert")).toContainText("请选择 PNG");
+  await expect(preview).toHaveAttribute("src", gifUrl!);
+  // Produce a real decodable local video without a device, network or repository artifact.
+  const bytes = await page.evaluate(async () => {
+    const canvas = document.createElement("canvas");
+    canvas.width = 160;
+    canvas.height = 90;
+    const context = canvas.getContext("2d")!;
+    context.fillStyle = "#235bcb";
+    context.fillRect(0, 0, 160, 90);
+    const stream = canvas.captureStream(5);
+    const recorder = new MediaRecorder(stream, {
+      mimeType: "video/webm;codecs=vp8",
+    });
+    const chunks: Blob[] = [];
+    recorder.ondataavailable = (event) => chunks.push(event.data);
+    const finished = new Promise<void>((resolve) => {
+      recorder.onstop = () => resolve();
+    });
+    recorder.start();
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    context.fillStyle = "#8ddfff";
+    context.fillRect(50, 20, 60, 50);
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    recorder.stop();
+    await finished;
+    stream.getTracks().forEach((track) => track.stop());
+    return [
+      ...new Uint8Array(
+        await new Blob(chunks, { type: "video/webm" }).arrayBuffer(),
+      ),
+    ];
+  });
+  await file.setInputFiles({
+    name: "local-preview.webm",
+    mimeType: "video/webm",
+    buffer: Buffer.from(bytes),
+  });
+  await expect
+    .poll(() => page.evaluate(() => window.workspaceMediaUrls.revoked))
+    .toContain(gifUrl);
+  const video = screen.locator("video");
+  await expect(video).toBeVisible();
+  await expect
+    .poll(() =>
+      video.evaluate((element) => (element as HTMLVideoElement).readyState),
+    )
+    .toBeGreaterThanOrEqual(1);
+  expect(
+    await video.evaluate((element) => ({
+      muted: (element as HTMLVideoElement).muted,
+      paused: (element as HTMLVideoElement).paused,
+      controls: (element as HTMLVideoElement).controls,
+      autoplay: (element as HTMLVideoElement).autoplay,
+    })),
+  ).toEqual({ muted: true, paused: true, controls: true, autoplay: false });
+  const videoUrl = await video.getAttribute("src");
+  await video.evaluate((element) => (element as HTMLVideoElement).play());
+  await expect
+    .poll(() =>
+      video.evaluate((element) => (element as HTMLVideoElement).currentTime),
+    )
+    .toBeGreaterThan(0);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.locator(".sidebar")).toBeHidden();
+  await expect(screen).toBeInViewport({ ratio: 0.99 });
+  await page.screenshot({
+    path: ".local/workspace-hologram-video-mobile.png",
+    fullPage: true,
+  });
+  await screen
+    .getByRole("button", { name: "关闭全息影像屏", exact: true })
+    .click();
+  await expect(screen).toBeHidden();
+  await expect
+    .poll(() => page.evaluate(() => window.workspaceMediaUrls.revoked))
+    .toContain(videoUrl);
+  await page.getByRole("button", { name: "全息影像屏", exact: true }).click();
+  await expect(screen).toBeVisible();
+  await expect(screen.locator("img,video")).toHaveCount(0);
+  await expect(
+    screen.getByRole("button", { name: "选择本地媒体" }),
+  ).toBeVisible();
+  expect(await readWorkspaceCamera(page)).toEqual(worldBefore);
+  expect(writes).toHaveLength(0);
+  expect(fixture.assistantCalls()).toBe(0);
 });
 
 test("语音不可用时保留文字输入；识别服务拒绝时显示原因", async ({ page }) => {
@@ -618,7 +916,7 @@ test("工作台面板默认收起，切换与重开保留草稿且只在保存�
   expect(fixture.assistantCalls()).toBe(0);
 });
 
-test("工作台透明宽屏对话仅保留一个可操作输入，菜单面板可达且关闭保留草稿", async ({
+test("工作台与业务页共用透明宽屏对话，单输入和菜单可用且跨页保留草稿", async ({
   page,
 }) => {
   const fixture = await workspaceFixture(page);
@@ -630,16 +928,15 @@ test("工作台透明宽屏对话仅保留一个可操作输入，菜单面板�
   await openPersonalAssistant(page);
   const dialog = page.getByRole("dialog", { name: /AI 个人助理/ });
   await expect(dialog).toBeVisible();
-  await expect(page.locator(".workspace-assistant-screen")).toBeVisible();
+  await expect(page.locator(".assistant-screen")).toBeVisible();
   await expect(dialog.getByRole("tablist")).toHaveCount(0);
   await expect(source).toBeHidden();
   await expect(
     page.locator('textarea[placeholder*="告诉我你想完成什么"]:visible'),
   ).toHaveCount(1);
   const rootBounds = (await page.locator(".personal-workspace").boundingBox())!;
-  expect((await dialog.boundingBox())!.width).toBeGreaterThan(
-    rootBounds.width * 0.7,
-  );
+  const workspacePanelWidth = (await dialog.boundingBox())!.width;
+  expect(workspacePanelWidth).toBeGreaterThan(rootBounds.width * 0.7);
   const input = dialog.getByPlaceholder(/告诉我你想完成什么/);
   await expect(input).toHaveValue("仍在编辑的选款会草稿");
   await input.fill("继续编辑但尚未发送");
@@ -677,14 +974,62 @@ test("工作台透明宽屏对话仅保留一个可操作输入，菜单面板�
     .getByRole("link", { name: "运营中心", exact: true })
     .click();
   await expect(page).toHaveURL(/operations$/);
-  await page
-    .getByRole("button", { name: "展开小序状态与动态", exact: true })
-    .click();
-  await page.getByRole("button", { name: "文字对话", exact: true }).click();
-  await expect(dialog).toBeVisible();
-  await expect(page.locator(".workspace-assistant-screen")).toHaveCount(0);
-  expect((await dialog.boundingBox())!.width).toBeLessThanOrEqual(621);
+  for (const theme of ["light", "dark"] as const) {
+    if (theme === "dark") {
+      await page
+        .getByRole("button", { name: "切换为暗色主题", exact: true })
+        .click();
+      await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+    }
+    await page
+      .getByRole("button", { name: "展开小序状态与动态", exact: true })
+      .click();
+    await page.getByRole("button", { name: "文字对话", exact: true }).click();
+    await expect(dialog).toBeInViewport({ ratio: 0.99 });
+    await expect(page.locator(".assistant-screen")).toBeVisible();
+    await expect(
+      page.locator(".assistant-screen .ant-drawer-section"),
+    ).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+    const businessPanel = (await dialog.boundingBox())!;
+    expect(
+      Math.abs(businessPanel.width - workspacePanelWidth),
+    ).toBeLessThanOrEqual(1);
+    await expect
+      .poll(async () => {
+        const settled = (await dialog.boundingBox())!;
+        return Math.abs(
+          settled.x + settled.width / 2 - page.viewportSize()!.width / 2,
+        );
+      })
+      .toBeLessThanOrEqual(1);
+    await expect(
+      page.locator('textarea[placeholder*="告诉我你想完成什么"]:visible'),
+    ).toHaveCount(1);
+    await expect(input).toHaveValue("继续编辑但尚未发送");
+    await selectAssistantPanel(page, "个人记忆");
+    await expect(
+      dialog.getByRole("region", { name: "个人记忆管理", exact: true }),
+    ).toBeVisible();
+    await selectAssistantPanel(page, "互动对话");
+    await expect(input).toHaveValue("继续编辑但尚未发送");
+    await page.screenshot({ path: `.local/business-chat-screen-${theme}.png` });
+    if (theme === "light")
+      await dialog.getByRole("button", { name: "关闭", exact: true }).click();
+  }
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(dialog).toBeInViewport({ ratio: 0.99 });
   await expect(input).toHaveValue("继续编辑但尚未发送");
+  await expect(
+    page.locator('textarea[placeholder*="告诉我你想完成什么"]:visible'),
+  ).toHaveCount(1);
+  expect((await dialog.boundingBox())!.width).toBeLessThanOrEqual(390.05);
+  expect(
+    await page.evaluate(() => document.documentElement.scrollWidth),
+  ).toBeLessThanOrEqual(391);
+  await page.screenshot({
+    path: ".local/business-chat-screen-mobile.png",
+    fullPage: true,
+  });
   await dialog.getByRole("button", { name: "关闭", exact: true }).click();
   expect(fixture.assistantCalls()).toBe(0);
 });

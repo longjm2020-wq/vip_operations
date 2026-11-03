@@ -1,4 +1,10 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   App,
   Button,
@@ -22,6 +28,7 @@ import {
   DeleteOutlined,
 } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
+import { useLocation, useNavigate } from "react-router-dom";
 import { api, csrf } from "./api";
 import { useUser } from "./shared";
 import type {
@@ -32,6 +39,7 @@ import type {
 import type { AssistantMessage } from "../../../packages/contracts/src/personal-assistant";
 import { assistantPublicText } from "../../../packages/contracts/src/ai-presentation";
 import { assistantPurposeMenu } from "./assistant-purpose-options";
+import { showWorkspaceHologram } from "./workspace-hologram";
 import "./assistant-agent.css";
 
 export type AgentOptions = {
@@ -256,6 +264,14 @@ export function AgentFileLink({
   file: AgentFile;
   preview?: boolean;
 }) {
+  const navigate = useNavigate(),
+    location = useLocation();
+  const previewVideo = useRef<HTMLVideoElement | null>(null);
+  const attachPreview = useCallback((element: HTMLVideoElement | null) => {
+    if (previewVideo.current && previewVideo.current !== element)
+      previewVideo.current.pause();
+    previewVideo.current = element;
+  }, []);
   const url = agentContentUrl(file.id);
   return (
     <div className="agent-file-result">
@@ -264,6 +280,7 @@ export function AgentFileLink({
       )}
       {preview && file.mime.startsWith("video/") && (
         <video
+          ref={attachPreview}
           src={url}
           controls
           preload="metadata"
@@ -274,6 +291,20 @@ export function AgentFileLink({
       <a href={url} download={file.name}>
         <DownloadOutlined /> {file.name} <small>{sizeLabel(file.size)}</small>
       </a>
+      {(file.mime.startsWith("image/") || file.mime.startsWith("video/")) && (
+        <Button
+          size="small"
+          type="text"
+          onClick={() => {
+            previewVideo.current?.pause();
+            showWorkspaceHologram(file);
+            if (location.pathname !== "/my-workspace")
+              navigate("/my-workspace");
+          }}
+        >
+          在全息屏展示
+        </Button>
+      )}
       {file.note && <small>{file.note}</small>}
     </div>
   );
