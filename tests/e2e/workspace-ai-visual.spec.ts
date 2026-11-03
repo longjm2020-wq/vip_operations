@@ -1,4 +1,37 @@
 import { expect, test, type Page } from "@playwright/test";
+async function openWorkspacePanel(page: Page, name: string) {
+  const stage = page
+    .locator(".workspace-ai-core-stage, .workspace-quiet")
+    .first();
+  const orbit = page.locator(".workspace-dock-orbit").first();
+  const stationary = () =>
+    orbit.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return (
+        style.animationName === "none" ||
+        (style.animationPlayState === "paused" &&
+          element
+            .getAnimations()
+            .every((animation) => animation.playState !== "running"))
+      );
+    });
+  if (!(await stationary())) {
+    await stage.scrollIntoViewIfNeeded();
+    const box = (await stage.boundingBox())!;
+    const viewport = page.viewportSize()!;
+    const visibleTop = Math.max(76, box.y);
+    const visibleBottom = Math.min(viewport.height - 8, box.y + box.height);
+    await stage.hover({
+      position: {
+        x: box.width / 2,
+        y: (visibleTop + visibleBottom) / 2 - box.y,
+      },
+    });
+  }
+  await expect.poll(stationary).toBe(true);
+  await page.getByRole("button", { name, exact: true }).click();
+}
+
 async function fixture(
   page: Page,
   role = "ADMIN",
@@ -660,13 +693,13 @@ test("个人工作台保存待办备忘，自己的表格可公开且显示创�
 }) => {
   const state = await fixture(page);
   await page.goto("/my-workspace");
-  await page.getByRole("button", { name: "打开个人待办", exact: true }).click();
+  await openWorkspacePanel(page, "打开个人待办");
   await page.getByLabel("待办事项", { exact: true }).fill("核对经营日报");
   await page.getByRole("button", { name: "添加", exact: true }).click();
   await page
     .getByRole("button", { name: "收起工作台面板", exact: true })
     .click();
-  await page.getByRole("button", { name: "打开私有备忘", exact: true }).click();
+  await openWorkspacePanel(page, "打开私有备忘");
   await page
     .getByRole("textbox", { name: "私有备忘", exact: true })
     .fill("只在自己的工作台中显示");
@@ -675,14 +708,14 @@ test("个人工作台保存待办备忘，自己的表格可公开且显示创�
     page.getByText("个人工作台已保存", { exact: true }),
   ).toBeVisible();
   await page.reload();
-  await page.getByRole("button", { name: "打开私有备忘", exact: true }).click();
+  await openWorkspacePanel(page, "打开私有备忘");
   await expect(
     page.getByRole("textbox", { name: "私有备忘", exact: true }),
   ).toHaveValue("只在自己的工作台中显示");
   await page
     .getByRole("button", { name: "收起工作台面板", exact: true })
     .click();
-  await page.getByRole("button", { name: "打开个人待办", exact: true }).click();
+  await openWorkspacePanel(page, "打开个人待办");
   await expect(
     page.getByRole("checkbox", { name: "核对经营日报", exact: true }),
   ).toBeVisible();
@@ -690,7 +723,7 @@ test("个人工作台保存待办备忘，自己的表格可公开且显示创�
   await page
     .getByRole("button", { name: "收起工作台面板", exact: true })
     .click();
-  await page.getByRole("button", { name: "打开我的内容", exact: true }).click();
+  await openWorkspacePanel(page, "打开我的内容");
   await page.getByRole("tab", { name: "表格", exact: true }).click();
   await expect(page.locator(".personal-content")).toContainText(
     "创建者：测试用户",

@@ -31,6 +31,7 @@ import type {
 } from "../../../packages/contracts/src/assistant-agent";
 import type { AssistantMessage } from "../../../packages/contracts/src/personal-assistant";
 import { assistantPublicText } from "../../../packages/contracts/src/ai-presentation";
+import { assistantPurposeMenu } from "./assistant-purpose-options";
 import "./assistant-agent.css";
 
 export type AgentOptions = {
@@ -59,12 +60,18 @@ export function AgentComposer({
   const input = useRef<HTMLInputElement>(null),
     { message } = App.useApp();
   const [uploading, setUploading] = useState(false);
+  const [preferredPurpose, setPreferredPurpose] = useState<string>();
   const catalog = useQuery({
     queryKey: ["assistant-capabilities"],
     queryFn: async () =>
       (await api("/my-workspace/assistant/capabilities")).data as AgentCatalog,
     staleTime: 600000,
   });
+  const purposeMenu = assistantPurposeMenu(
+    catalog.data,
+    value.model,
+    preferredPurpose,
+  );
   const upload = async (files: FileList | null) => {
     if (!files?.length) return;
     const chosen = Array.from(files);
@@ -132,15 +139,18 @@ export function AgentComposer({
         <Select
           size="small"
           aria-label="助理能力"
-          value={value.model || catalog.data?.defaultModel}
-          placeholder="通用助手"
+          value={purposeMenu.value}
+          placeholder="日常问答"
           disabled={disabled || uploading}
+          loading={catalog.isLoading}
           popupMatchSelectWidth={false}
-          options={catalog.data?.models?.map((m) => ({
-            value: m.id,
-            label: m.name + (m.vision ? " · 识图" : ""),
-          }))}
-          onChange={(model) => change({ ...value, model })}
+          options={purposeMenu.options}
+          onChange={(purpose) => {
+            const option = purposeMenu.options.find((o) => o.value === purpose);
+            if (!option) return;
+            setPreferredPurpose(purpose);
+            change({ ...value, model: option.model });
+          }}
         />
         <Checkbox
           checked={value.webSearch}
@@ -189,7 +199,7 @@ export function AgentComposer({
           />
         </Popover>
       </div>
-      {catalog.error && <small>服务列表加载失败，可继续使用通用助手。</small>}
+      {catalog.error && <small>能力列表加载失败，当前选择保持不变。</small>}
       {!!value.attachments.length && (
         <div className="agent-attachments">
           {value.attachments.map((file) => (

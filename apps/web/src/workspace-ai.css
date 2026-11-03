@@ -21,56 +21,183 @@
   flex-direction: column;
   align-items: center;
 }
-.workspace-ai-intro {
+.workspace-ai-core-stage {
+  position: relative;
+  display: grid;
+  place-items: center;
   width: 100%;
-  text-align: center;
+  min-height: 286px;
+  margin: 16px 0 4px;
 }
-.workspace-ai-eyebrow {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  color: var(--app-secondary);
-  font-size: 9px;
-  font-weight: 500;
-  letter-spacing: 2px;
-}
-.workspace-ai-status {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding-left: 12px;
-  border-left: 1px solid var(--app-border);
-  color: var(--core-blue);
-  font-size: 10px;
-  letter-spacing: 1px;
-}
-.workspace-ai-status i {
-  width: 4px;
-  height: 4px;
-  border-radius: 50%;
-  background: currentColor;
-  box-shadow: 0 0 8px color-mix(in srgb, currentColor 45%, transparent);
-}
-.workspace-ai h2 {
-  margin: 12px 0 0;
-  color: var(--app-text);
-  font-size: clamp(18px, 1.5vw, 23px);
-  font-weight: 450;
-  letter-spacing: 1px;
-  line-height: 1.5;
+.workspace-ai-orbit-slot {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 0;
+  height: 0;
+  overflow: visible;
+  pointer-events: none;
 }
 .workspace-ai-core {
+  --core-pitch: -14deg;
+  --core-yaw: 18deg;
   position: relative;
   flex: none;
   width: 286px;
   aspect-ratio: 1;
-  margin: 16px auto 4px;
+  margin: 0;
+  touch-action: none;
+  cursor: grab;
+  user-select: none;
+}
+.workspace-ai-core[data-view-dragging="true"] {
+  cursor: grabbing;
+}
+.workspace-ai-core:focus-visible {
+  outline: 1px solid var(--core-blue);
+  outline-offset: 6px;
+  border-radius: 50%;
+}
+.workspace-ai-core-perspective,
+.workspace-ai-core-scene {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.workspace-ai-core-perspective {
+  perspective: 760px;
+  perspective-origin: 50% 48%;
+}
+.workspace-ai-core-scene {
+  transform-style: preserve-3d;
+  transform: rotateX(var(--core-pitch)) rotateY(var(--core-yaw));
+  will-change: transform;
+}
+.workspace-ai-core-depth {
+  position: absolute;
+  inset: 9%;
+  border: 1px solid color-mix(in srgb, var(--core-cyan) 32%, transparent);
+  border-radius: 50%;
+  pointer-events: none;
+}
+.workspace-ai-core-depth-back {
+  transform: translateZ(-25px);
+  box-shadow:
+    0 0 0 5px color-mix(in srgb, var(--core-blue) 5%, transparent),
+    inset 0 0 18px color-mix(in srgb, var(--core-blue) 9%, transparent);
+}
+.workspace-ai-core-depth-cross {
+  inset: 5%;
+  border-color: color-mix(in srgb, var(--core-blue) 30%, transparent);
+  border-top-color: color-mix(in srgb, var(--core-cyan) 80%, transparent);
+  transform: rotateX(64deg);
+  animation: workspace-core-gyroscope 28s linear infinite;
+}
+.workspace-ai-view-reset {
+  position: absolute;
+  z-index: 2;
+  left: 50%;
+  bottom: 0;
+  transform: translateX(-50%);
+  appearance: none;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  color: var(--app-secondary);
+  background: color-mix(in srgb, var(--app-bg) 78%, transparent);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.workspace-ai-view-reset:hover {
+  color: var(--core-blue);
+  background: var(--app-accent-soft);
+}
+.workspace-ai-view-reset:focus-visible {
+  outline: 2px solid var(--core-blue);
+  outline-offset: 2px;
+}
+.workspace-ai-core-scene::before {
+  content: "";
+  position: absolute;
+  inset: 21%;
+  border: 1px solid color-mix(in srgb, var(--core-cyan) 36%, transparent);
+  border-radius: 50%;
+  background: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--core-cyan) 8%, transparent),
+    transparent 72%
+  );
+  box-shadow: inset 0 0 22px
+    color-mix(in srgb, var(--core-blue) 12%, transparent);
+  opacity: 0;
+  pointer-events: none;
+}
+.workspace-ai-core[data-nest-state="away"] {
+  --core-turn: 64s;
+}
+.workspace-ai-core[data-nest-state="away"] .workspace-ai-core-scene::before {
+  opacity: 0.65;
+}
+.workspace-ai-core[data-nest-state="departing"]
+  .workspace-ai-core-scene::before {
+  animation: workspace-nest-depart 420ms ease-out both;
+}
+.workspace-ai-core[data-nest-state="arriving"]
+  .workspace-ai-core-scene::before {
+  animation: workspace-nest-arrive 420ms ease-out both;
+}
+.workspace-ai-core:is(
+    [data-nest-state="departing"],
+    [data-nest-state="arriving"]
+  )
+  .workspace-ai-core-scene::before {
+  box-shadow:
+    inset 0 0 22px color-mix(in srgb, var(--core-cyan) 20%, transparent),
+    0 0 26px color-mix(in srgb, var(--core-cyan) 20%, transparent);
+}
+.workspace-ai-summon {
+  display: none;
+  position: absolute;
+  z-index: 2;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  appearance: none;
+  padding: 8px 12px;
+  border: 1px solid var(--core-line);
+  border-radius: 999px;
+  color: var(--core-blue);
+  background: color-mix(in srgb, var(--app-bg) 85%, transparent);
+  font: inherit;
+  font-size: 11px;
+  letter-spacing: 1px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    border-color 180ms ease,
+    box-shadow 180ms ease;
+}
+.workspace-ai-core[data-nest-state="away"] .workspace-ai-summon {
+  display: block;
+}
+.workspace-ai-summon:hover {
+  border-color: var(--core-cyan);
+  box-shadow: 0 0 20px color-mix(in srgb, var(--core-cyan) 15%, transparent);
+}
+.workspace-ai-summon:focus-visible {
+  outline: 2px solid var(--core-blue);
+  outline-offset: 4px;
 }
 .workspace-ai-core-aura {
   position: absolute;
   inset: 6%;
   pointer-events: none;
+  transform: translateZ(-32px);
   border-radius: 50%;
   background: radial-gradient(
     circle,
@@ -79,9 +206,21 @@
     transparent 70%
   );
   box-shadow: 0 0 70px color-mix(in srgb, var(--core-blue) 7%, transparent);
-  transition:
-    opacity 240ms ease,
-    box-shadow 240ms ease;
+  opacity: 0.65;
+  animation: workspace-core-breathe 6.8s ease-in-out infinite;
+}
+.workspace-ai-core-resonance {
+  position: absolute;
+  inset: 8%;
+  border: 1px solid color-mix(in srgb, var(--core-cyan) 55%, transparent);
+  border-radius: 50%;
+  box-shadow:
+    0 0 14px color-mix(in srgb, var(--core-cyan) 18%, transparent),
+    inset 0 0 14px color-mix(in srgb, var(--core-blue) 12%, transparent);
+  pointer-events: none;
+  opacity: 0.15;
+  transform: translateZ(14px);
+  animation: workspace-core-resonate 7.4s ease-in-out infinite;
 }
 .workspace-ai-core-orbits {
   position: absolute;
@@ -91,9 +230,10 @@
   height: 100%;
   overflow: visible;
   pointer-events: none;
+  transform: translateZ(18px);
   stroke-linecap: round;
   mask-image: radial-gradient(circle, transparent 29%, #000 44%);
-  transition: filter 240ms ease;
+  animation: workspace-core-shiver 9.6s ease-in-out infinite;
 }
 .workspace-ai-core-guides {
   stroke: var(--core-line);
@@ -162,63 +302,6 @@
   place-items: center;
   overflow: visible;
 }
-.workspace-ai-companion-intro {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: center;
-  column-gap: 10px;
-  max-width: 100%;
-  text-align: center;
-}
-.workspace-ai-companion-intro > strong {
-  color: var(--app-text);
-  font-size: 15px;
-  font-weight: 500;
-  letter-spacing: 2px;
-}
-.workspace-ai-description {
-  min-height: 21px;
-  margin: 0;
-  color: var(--app-secondary);
-  font-size: 12px;
-  line-height: 1.8;
-  letter-spacing: 0.3px;
-  text-align: center;
-}
-.workspace-ai-actions {
-  grid-column: 1 / -1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  margin-bottom: 6px;
-}
-.workspace-ai-actions button {
-  appearance: none;
-  border: 0;
-  border-radius: 6px;
-  padding: 4px 10px;
-  color: var(--app-secondary);
-  background: transparent;
-  font: inherit;
-  font-size: 11px;
-  cursor: pointer;
-  transition:
-    color 180ms ease,
-    background 180ms ease;
-}
-.workspace-ai-actions button:hover:not(:disabled) {
-  color: var(--app-accent);
-  background: var(--app-accent-soft);
-}
-.workspace-ai-actions button:focus-visible {
-  outline: 2px solid var(--app-accent);
-  outline-offset: 1px;
-}
-.workspace-ai-actions button:disabled {
-  opacity: 0.45;
-  cursor: default;
-}
 .workspace-ai-start > .assistant-compose {
   align-self: stretch;
   width: 100%;
@@ -247,7 +330,7 @@
 }
 .workspace-ai[data-core-state="listening"] .workspace-ai-core-aura,
 .workspace-ai[data-core-state="speaking"] .workspace-ai-core-aura {
-  animation: workspace-core-breathe 2.8s ease-in-out infinite;
+  animation-duration: 2.8s;
 }
 .workspace-ai[data-core-state="listening"] .workspace-ai-core-middle {
   stroke-width: 2.8;
@@ -258,11 +341,42 @@
 .workspace-ai[data-core-state="unavailable"] .workspace-ai-core-orbits {
   opacity: 0.52;
 }
+.workspace-ai[data-core-state="unavailable"]
+  :is(
+    .workspace-ai-core-aura,
+    .workspace-ai-core-resonance,
+    .workspace-ai-core-orbits
+  ) {
+  animation: none;
+}
+.workspace-ai-core:is(:hover, :focus-within, [data-view-dragging="true"])
+  :is(
+    .workspace-ai-core-aura,
+    .workspace-ai-core-resonance,
+    .workspace-ai-core-orbits
+  ),
+.workspace-ai-core-stage:has(
+    .workspace-dock:hover,
+    .workspace-dock:focus-within
+  )
+  :is(
+    .workspace-ai-core-aura,
+    .workspace-ai-core-resonance,
+    .workspace-ai-core-orbits
+  ),
+.workspace-ai:has(.assistant-compose:focus-within)
+  :is(
+    .workspace-ai-core-aura,
+    .workspace-ai-core-resonance,
+    .workspace-ai-core-orbits
+  ) {
+  animation-play-state: paused;
+}
 .workspace-ai[data-core-state="unavailable"] .workspace-ai-core-orbits > g {
   animation-play-state: paused;
 }
-.workspace-ai[data-core-state="unavailable"] .workspace-ai-status {
-  color: var(--app-secondary);
+.workspace-ai[data-core-state="unavailable"] .workspace-ai-core-depth-cross {
+  animation-play-state: paused;
 }
 :root[data-theme="light"] .workspace-ai {
   --core-cyan: #1591b2;
@@ -274,40 +388,94 @@
   }
 }
 @keyframes workspace-core-breathe {
+  0%,
+  100% {
+    opacity: 0.42;
+    transform: translateZ(-32px) scale(0.96);
+  }
   50% {
-    opacity: 0.55;
-    transform: scale(0.94);
+    opacity: 0.84;
+    transform: translateZ(-32px) scale(1.045);
+  }
+}
+@keyframes workspace-core-resonate {
+  0%,
+  100% {
+    opacity: 0.1;
+    transform: translateZ(14px) scale(0.985);
+  }
+  50% {
+    opacity: 0.36;
+    transform: translateZ(14px) scale(1.035);
+  }
+}
+/* A brief decorative tremor; the view controller and every hit area stay still. */
+@keyframes workspace-core-shiver {
+  0%,
+  86%,
+  100% {
+    transform: translate3d(0, 0, 18px) rotate(0deg);
+  }
+  89% {
+    transform: translate3d(0.6px, -0.3px, 18px) rotate(0.12deg);
+  }
+  92% {
+    transform: translate3d(-0.45px, 0.4px, 18px) rotate(-0.1deg);
+  }
+  95% {
+    transform: translate3d(0.25px, -0.2px, 18px) rotate(0.07deg);
+  }
+  98% {
+    transform: translate3d(-0.1px, 0.1px, 18px) rotate(-0.03deg);
+  }
+}
+@keyframes workspace-core-gyroscope {
+  from {
+    transform: rotateX(64deg) rotateY(0deg);
+  }
+  to {
+    transform: rotateX(64deg) rotateY(360deg);
+  }
+}
+@keyframes workspace-nest-depart {
+  0% {
+    opacity: 0;
+    transform: scale(0.75);
+  }
+  35% {
+    opacity: 0.95;
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.45);
+  }
+}
+@keyframes workspace-nest-arrive {
+  0% {
+    opacity: 0;
+    transform: scale(1.5);
+  }
+  45% {
+    opacity: 0.95;
+  }
+  100% {
+    opacity: 0;
+    transform: scale(0.8);
   }
 }
 @media (max-width: 767px) {
   .workspace-ai {
     padding: 12px 2px 18px;
   }
-  .workspace-ai-eyebrow {
-    gap: 9px;
-    font-size: 8px;
-    letter-spacing: 1.5px;
-  }
-  .workspace-ai-status {
-    padding-left: 9px;
-    font-size: 9px;
-  }
-  .workspace-ai h2 {
-    font-size: 18px;
-  }
   .workspace-ai-core {
     width: 210px;
-    margin-block: 16px 4px;
+  }
+  .workspace-ai-core-stage {
+    min-height: 210px;
   }
   .workspace-ai-companion-slot {
     width: 132px;
     height: 118px;
-  }
-  .workspace-ai-companion-intro > strong {
-    font-size: 14px;
-  }
-  .workspace-ai-description {
-    font-size: 11px;
   }
 }
 @media (prefers-reduced-motion: reduce) {

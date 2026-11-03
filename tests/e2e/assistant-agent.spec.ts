@@ -164,7 +164,7 @@ test("附件、能力、联网与任务下载形成完整流程，历史回复�
     });
   await expect(dialog.locator(".agent-attachments")).toContainText("资料.txt");
   await dialog.getByRole("combobox", { name: "助理能力" }).click();
-  await page.getByText("深度思考", { exact: true }).last().click();
+  await page.getByText("深度分析", { exact: true }).last().click();
   await dialog.getByRole("checkbox", { name: "联网", exact: true }).check();
   await dialog
     .getByPlaceholder(/告诉我你想完成什么/)

@@ -1,6 +1,39 @@
 import { expect, test, type BrowserContext, type Page } from "@playwright/test";
 import { selectionLayoutSchema } from "../../packages/contracts/src/selection-layout.js";
 
+async function openWorkspacePanel(page: Page, name: string) {
+  const stage = page
+    .locator(".workspace-ai-core-stage, .workspace-quiet")
+    .first();
+  const orbit = page.locator(".workspace-dock-orbit").first();
+  const stationary = () =>
+    orbit.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return (
+        style.animationName === "none" ||
+        (style.animationPlayState === "paused" &&
+          element
+            .getAnimations()
+            .every((animation) => animation.playState !== "running"))
+      );
+    });
+  if (!(await stationary())) {
+    await stage.scrollIntoViewIfNeeded();
+    const box = (await stage.boundingBox())!;
+    const viewport = page.viewportSize()!;
+    const visibleTop = Math.max(76, box.y);
+    const visibleBottom = Math.min(viewport.height - 8, box.y + box.height);
+    await stage.hover({
+      position: {
+        x: box.width / 2,
+        y: (visibleTop + visibleBottom) / 2 - box.y,
+      },
+    });
+  }
+  await expect.poll(stationary).toBe(true);
+  await page.getByRole("button", { name, exact: true }).click();
+}
+
 const store = () => ({
   accounts: new Map<string, { mode: string; version: number }>(),
   writes: [] as string[],
@@ -167,23 +200,25 @@ test("蓝色工作台移除工具摘要，切换不丢草稿且只保存主题",
   await mode(page, "dark");
   await expect(page.getByText("专属 AI 工具")).toHaveCount(0);
   await expect(page.getByLabel("经营分析任务")).toHaveCount(0);
-  await page.getByRole("button", { name: "打开私有备忘", exact: true }).click();
+  await openWorkspacePanel(page, "打开私有备忘");
   await page
     .getByRole("textbox", { name: "私有备忘", exact: true })
     .fill("未保存的备忘");
   await page
     .getByRole("button", { name: "收起工作台面板", exact: true })
     .click();
-  await page.getByRole("heading", { level: 1 }).scrollIntoViewIfNeeded();
+  await page.locator(".workspace-ai").scrollIntoViewIfNeeded();
   await page.evaluate(() => window.scrollTo(0, 0));
+  await page
+    .locator(".workspace-ai-core")
+    .hover({ position: { x: 25, y: 25 } });
   await page.screenshot({
-    animations: "disabled",
     path: test.info().outputPath("charcoal-blue-desktop.png"),
   });
   await toggle(page, "light");
   await mode(page, "light");
   await expect.poll(() => state.accounts.get("1")?.mode).toBe("light");
-  await page.getByRole("button", { name: "打开私有备忘", exact: true }).click();
+  await openWorkspacePanel(page, "打开私有备忘");
   await expect(
     page.getByRole("textbox", { name: "私有备忘", exact: true }),
   ).toHaveValue("未保存的备忘");
@@ -192,8 +227,10 @@ test("蓝色工作台移除工具摘要，切换不丢草稿且只保存主题",
     .getByRole("button", { name: "收起工作台面板", exact: true })
     .click();
   await page.evaluate(() => window.scrollTo(0, 0));
+  await page
+    .locator(".workspace-ai-core")
+    .hover({ position: { x: 25, y: 25 } });
   await page.screenshot({
-    animations: "disabled",
     path: test.info().outputPath("blue-light-desktop.png"),
   });
   await page.reload();
@@ -249,7 +286,7 @@ test("业务库存和弹出菜单跟随主题，页面切换保持主题", async
   );
   await page.getByRole("link", { name: "我的工作台", exact: true }).click();
   await mode(page, "light");
-  await page.getByRole("button", { name: "打开日程", exact: true }).click();
+  await openWorkspacePanel(page, "打开日程");
   await page.getByRole("button", { name: "新增日程", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "新增日程", exact: true });
   await expect(dialog.locator(".ant-modal-container")).toHaveCSS(
@@ -261,7 +298,7 @@ test("业务库存和弹出菜单跟随主题，页面切换保持主题", async
     .getByRole("button", { name: "收起工作台面板", exact: true })
     .click();
   await toggle(page, "dark");
-  await page.getByRole("button", { name: "打开日程", exact: true }).click();
+  await openWorkspacePanel(page, "打开日程");
   await page.getByRole("button", { name: "新增日程", exact: true }).click();
   await expect(dialog.locator(".ant-modal-container")).toHaveCSS(
     "background-color",

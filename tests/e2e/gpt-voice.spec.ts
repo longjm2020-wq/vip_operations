@@ -394,7 +394,7 @@ test("直接点击小序录音，气泡回复和动作同步，播放可打断�
   ).toBeVisible();
 });
 
-test("语音跨工作台内嵌与业务页悬浮持续，拖动不重启录音，气泡始终在窗口内", async ({
+test("语音点击小序跃出巢穴，召回换位与跨页拖动不中断录音，气泡始终在窗口内", async ({
   page,
 }) => {
   const { bubble, turns } = await fixture(page);
@@ -415,8 +415,12 @@ test("语音跨工作台内嵌与业务页悬浮持续，拖动不重启录音�
       .toBe(true);
   };
   await expect(companion).toHaveAttribute("data-docked", "true");
-  await page.getByRole("button", { name: "智能语音", exact: true }).click();
+  await companion
+    .getByRole("button", { name: "与小序语音对话", exact: true })
+    .click();
   await expect(bubble.getByRole("status")).toHaveText("我在听，你说");
+  await expect(companion).toHaveAttribute("data-docked", "false");
+  await expect(companion).toHaveAttribute("data-motion", "idle");
   await expect(page.locator(".workspace-ai")).toHaveAttribute(
     "data-core-state",
     "listening",
@@ -426,6 +430,19 @@ test("语音跨工作台内嵌与业务页悬浮持续，拖动不重启录音�
     .elementHandle();
   await expectBubbleInViewport();
   expect(await page.evaluate(() => window.gptVoiceTest.starts)).toBe(1);
+  await page.getByRole("button", { name: "召唤小序", exact: true }).click();
+  await expect(companion).toHaveAttribute("data-docked", "true");
+  await expect(companion).toHaveAttribute("data-motion", "idle");
+  await expect(bubble.getByRole("status")).toHaveText("我在听，你说");
+  await expectBubbleInViewport();
+  await companion.getByRole("button", { name: "展开小序状态与动态" }).click();
+  await page.getByRole("button", { name: "换个位置", exact: true }).click();
+  await expect(companion).toHaveAttribute("data-docked", "false");
+  await expect(companion).toHaveAttribute("data-motion", "idle");
+  await expect(bubble.getByRole("status")).toHaveText("我在听，你说");
+  await expectBubbleInViewport();
+  expect(await page.evaluate(() => window.gptVoiceTest.starts)).toBe(1);
+  expect(await page.evaluate(() => window.gptVoiceTest.stops)).toBe(0);
   await page
     .locator(".sidebar")
     .getByRole("link", { name: "运营中心", exact: true })

@@ -570,7 +570,7 @@
 }
 .workspace-companion[data-docked="true"] .companion-launch {
   cursor: pointer;
-  touch-action: manipulation;
+  touch-action: none;
 }
 .workspace-companion[data-docked="true"] .companion-count {
   top: 10%;
@@ -711,7 +711,210 @@
     opacity: 1;
   }
 }
+
+/* Motion changes the visual stage; the controller owns the outer position. */
+.workspace-companion::before,
+.workspace-companion::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 78%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  opacity: 0;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+.workspace-companion::before {
+  border: 1px solid color-mix(in srgb, var(--app-accent) 75%, transparent);
+  background: radial-gradient(
+    circle,
+    transparent 50%,
+    color-mix(in srgb, var(--app-accent) 12%, transparent) 69%,
+    transparent 73%
+  );
+  box-shadow:
+    0 0 18px color-mix(in srgb, var(--app-accent) 25%, transparent),
+    inset 0 0 14px color-mix(in srgb, var(--app-accent) 18%, transparent);
+}
+.workspace-companion::after {
+  z-index: 2;
+  background: linear-gradient(
+    115deg,
+    transparent 32%,
+    color-mix(in srgb, var(--app-accent) 35%, transparent) 49%,
+    transparent 66%
+  );
+  filter: blur(6px);
+}
+.workspace-companion[data-docked="true"] .companion-stage {
+  clip-path: inset(0 0 0 0);
+  transition:
+    clip-path 240ms ease,
+    transform 240ms ease;
+}
+.workspace-companion[data-docked="true"][data-motion="peek"] .companion-stage {
+  clip-path: inset(0 0 35% 0 round 0 0 26% 26%);
+  transform: translateY(-6px);
+}
+.workspace-companion[data-docked="true"][data-motion="peek"]::before {
+  top: 62%;
+  opacity: 0.8;
+  transform: translate(-50%, -50%) scale(0.95, 0.2);
+}
+.workspace-companion[data-motion="departing"] .companion-stage {
+  animation: companion-phase-out 420ms cubic-bezier(0.55, 0, 0.85, 0.4) both;
+}
+.workspace-companion[data-motion="arriving"] .companion-stage {
+  animation: companion-phase-in 420ms cubic-bezier(0.15, 0.7, 0.3, 1) both;
+}
+.workspace-companion[data-motion="jumping"] .companion-stage {
+  animation: companion-nest-jump 520ms cubic-bezier(0.2, 0.7, 0.4, 1) both;
+}
+.workspace-companion[data-motion="departing"]::before {
+  animation: companion-portal-out 420ms ease-out both;
+}
+.workspace-companion[data-motion="arriving"]::before {
+  animation: companion-portal-in 420ms ease-out both;
+}
+.workspace-companion[data-motion="jumping"]::before {
+  animation: companion-portal-out 520ms ease-out both;
+}
+.workspace-companion[data-motion="departing"]::after,
+.workspace-companion[data-motion="arriving"]::after {
+  animation: companion-phase-trail 420ms ease-out both;
+}
+.workspace-companion[data-motion="arriving"]::after {
+  animation-direction: reverse;
+}
+.workspace-companion[data-motion="jumping"]::after {
+  animation: companion-phase-trail 520ms ease-out both;
+}
+.workspace-companion:is(
+    [data-motion="departing"],
+    [data-motion="arriving"],
+    [data-motion="jumping"]
+  )
+  .companion-count {
+  opacity: 0;
+  pointer-events: none;
+}
+.workspace-companion:is(
+    [data-motion="departing"],
+    [data-motion="arriving"],
+    [data-motion="jumping"]
+  )
+  .companion-launch {
+  pointer-events: none;
+}
+@keyframes companion-phase-out {
+  0% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0);
+  }
+  35% {
+    opacity: 0.95;
+    transform: translateY(-5px) scale(0.96);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-16px) scale(0.35);
+    filter: blur(5px);
+  }
+}
+@keyframes companion-phase-in {
+  0% {
+    opacity: 0;
+    transform: translateY(10px) scale(0.35);
+    filter: blur(5px);
+  }
+  70% {
+    opacity: 1;
+    transform: translateY(-3px) scale(1.04);
+    filter: blur(0);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0);
+  }
+}
+@keyframes companion-nest-jump {
+  0% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0);
+  }
+  28% {
+    opacity: 1;
+    transform: translateY(5px) scale(1.04, 0.92);
+  }
+  66% {
+    opacity: 1;
+    transform: translateY(-18px) scale(0.94, 1.05);
+    filter: blur(0);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-30px) scale(0.4);
+    filter: blur(3px);
+  }
+}
+@keyframes companion-portal-out {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.45);
+  }
+  40% {
+    opacity: 0.9;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(1.45);
+  }
+}
+@keyframes companion-portal-in {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(1.4);
+  }
+  45% {
+    opacity: 0.9;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.6);
+  }
+}
+@keyframes companion-phase-trail {
+  0% {
+    opacity: 0;
+    transform: translate(-68%, -38%) scale(0.65);
+  }
+  45% {
+    opacity: 0.6;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-32%, -65%) scale(1.15);
+  }
+}
 @media (prefers-reduced-motion: reduce) {
+  .workspace-companion::before,
+  .workspace-companion::after {
+    display: none !important;
+    animation: none !important;
+  }
+  .workspace-companion[data-motion] .companion-stage {
+    animation: none !important;
+    transition: none !important;
+    clip-path: none !important;
+    transform: none !important;
+    filter: none !important;
+    opacity: 1 !important;
+  }
   .sidebar-assistant[data-state="listening"] .companion-beacon,
   .sidebar-assistant[data-state="speaking"] .companion-mouth {
     animation: none;

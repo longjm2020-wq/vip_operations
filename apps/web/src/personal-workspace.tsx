@@ -1,10 +1,18 @@
-import { useEffect, useState } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+  type PointerEvent,
+  type CSSProperties,
+} from "react";
+import { createPortal } from "react-dom";
 import {
   App,
   Button,
   Card,
   Checkbox,
-  Drawer,
   Empty,
   Input,
   Modal,
@@ -29,6 +37,7 @@ import {
   InboxOutlined,
   SaveOutlined,
   TeamOutlined,
+  HolderOutlined,
 } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
@@ -49,6 +58,254 @@ const panelTitles: Record<WorkspacePanel, string> = {
   note: "私有备忘",
   content: "我创建的内容",
 };
+
+function WorkspaceOrbit({
+  children,
+  paused,
+  assistantEnabled,
+}: {
+  children: ReactNode;
+  paused: boolean;
+  assistantEnabled: boolean;
+}) {
+  const [slot, setSlot] = useState<Element | null>(null);
+  useLayoutEffect(() => {
+    setSlot(
+      document.querySelector(
+        ".workspace-ai-orbit-slot, .workspace-quiet-orbit-slot",
+      ),
+    );
+  }, [assistantEnabled]);
+  return slot
+    ? createPortal(
+        <nav
+          className="workspace-dock"
+          aria-label="工作台功能面板"
+          data-paused={paused}
+        >
+          <div className="workspace-dock-orbit">{children}</div>
+        </nav>,
+        slot,
+      )
+    : null;
+}
+
+/** Non-modal work cards share the app's frame-coalesced transform dragging approach. */
+function WorkspaceFloatingPanel({
+  open,
+  title,
+  onClose,
+  footer,
+  children,
+}: {
+  open: boolean;
+  title: string;
+  onClose: () => void;
+  footer: ReactNode;
+  children: ReactNode;
+}) {
+  const box = useRef<HTMLDivElement>(null),
+    handle = useRef<HTMLButtonElement>(null);
+  const position = useRef({ x: 0, y: 0 }),
+    lastFocus = useRef<HTMLElement | null>(null);
+  const opened = useRef(false),
+    frame = useRef(0);
+  const drag = useRef<{
+    id: number;
+    startX: number;
+    startY: number;
+    x: number;
+    y: number;
+    clientX: number;
+    clientY: number;
+    minX: number;
+    maxX: number;
+    minY: number;
+    maxY: number;
+  } | null>(null);
+  const bounds = () => {
+    const view = window.visualViewport,
+      margin = innerWidth < 768 ? 12 : 24;
+    const width = view?.width || innerWidth,
+      height = view?.height || innerHeight;
+    const left = view?.offsetLeft || 0,
+      top = view?.offsetTop || 0;
+    box.current!.style.maxHeight = `${height - margin * 2}px`;
+    const rect = box.current!.getBoundingClientRect();
+    return {
+      minX: left + margin,
+      maxX: left + Math.max(margin, width - rect.width - margin),
+      minY: top + margin,
+      maxY: top + Math.max(margin, height - rect.height - margin),
+    };
+  };
+  const place = (x: number, y: number, limits = bounds()) => {
+    position.current = {
+      x: Math.min(limits.maxX, Math.max(limits.minX, x)),
+      y: Math.min(limits.maxY, Math.max(limits.minY, y)),
+    };
+    box.current?.style.setProperty(
+      "transform",
+      `translate3d(${position.current.x}px, ${position.current.y}px, 0)`,
+    );
+  };
+  const reset = () => {
+    const core = document
+      .querySelector(".workspace-ai-core, .workspace-quiet")
+      ?.getBoundingClientRect();
+    const limits = bounds();
+    const topbar =
+      document.querySelector(".topbar")?.getBoundingClientRect().bottom || 68;
+    const right = core ? core.right + 24 : limits.maxX;
+    const left = core
+      ? core.left - 24 - box.current!.getBoundingClientRect().width
+      : limits.minX;
+    place(
+      right <= limits.maxX ? right : left >= limits.minX ? left : limits.maxX,
+      Math.max(topbar + 24, core?.top || topbar + 24),
+      limits,
+    );
+  };
+  const paint = () => {
+    frame.current = 0;
+    const current = drag.current;
+    if (current)
+      place(
+        current.x + current.clientX - current.startX,
+        current.y + current.clientY - current.startY,
+        current,
+      );
+  };
+  const stop = () => {
+    if (frame.current) {
+      cancelAnimationFrame(frame.current);
+      paint();
+    }
+    const current = drag.current;
+    drag.current = null;
+    box.current?.removeAttribute("data-dragging");
+    if (current && handle.current?.hasPointerCapture(current.id))
+      handle.current.releasePointerCapture(current.id);
+  };
+  useLayoutEffect(() => {
+    if (!open) {
+      stop();
+      if (opened.current && lastFocus.current?.isConnected)
+        lastFocus.current.focus({ preventScroll: true });
+      opened.current = false;
+      return;
+    }
+    if (!opened.current) {
+      lastFocus.current =
+        document.activeElement instanceof HTMLElement
+          ? document.activeElement
+          : null;
+      opened.current = true;
+      reset();
+      handle.current?.focus({ preventScroll: true });
+    } else place(position.current.x, position.current.y);
+    const align = () => {
+      stop();
+      place(position.current.x, position.current.y);
+    };
+    const observer = new ResizeObserver(align);
+    if (box.current) observer.observe(box.current);
+    window.addEventListener("resize", align);
+    window.addEventListener("blur", stop);
+    window.visualViewport?.addEventListener("resize", align);
+    window.visualViewport?.addEventListener("scroll", align);
+    return () => {
+      stop();
+      observer.disconnect();
+      window.removeEventListener("resize", align);
+      window.removeEventListener("blur", stop);
+      window.visualViewport?.removeEventListener("resize", align);
+      window.visualViewport?.removeEventListener("scroll", align);
+    };
+    // Position and handlers are intentionally ref-driven, so dragging doesn't render the workbench.
+  }, [open, title]);
+  const start = (event: PointerEvent<HTMLButtonElement>) => {
+    if (event.button !== 0 || !event.isPrimary) return;
+    event.preventDefault();
+    handle.current?.focus({ preventScroll: true });
+    event.currentTarget.setPointerCapture(event.pointerId);
+    drag.current = {
+      id: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      clientX: event.clientX,
+      clientY: event.clientY,
+      ...position.current,
+      ...bounds(),
+    };
+    box.current?.setAttribute("data-dragging", "true");
+  };
+  return createPortal(
+    <div
+      ref={box}
+      className="personal-workspace-panel"
+      hidden={!open}
+      role="dialog"
+      aria-modal="false"
+      aria-labelledby="workspace-panel-title"
+      data-floating-panel-owned
+      onKeyDown={(event) => {
+        if (event.key === "Escape" && !event.defaultPrevented) {
+          event.preventDefault();
+          onClose();
+        }
+      }}
+    >
+      <header className="workspace-panel-header">
+        <button
+          ref={handle}
+          className="workspace-panel-handle"
+          type="button"
+          aria-label="移动工作台面板"
+          title="拖动标题移动卡片；方向键微调，Home 回到初始位置"
+          onPointerDown={start}
+          onPointerMove={(event) => {
+            if (drag.current?.id !== event.pointerId) return;
+            drag.current.clientX = event.clientX;
+            drag.current.clientY = event.clientY;
+            if (!frame.current) frame.current = requestAnimationFrame(paint);
+          }}
+          onPointerUp={stop}
+          onPointerCancel={stop}
+          onLostPointerCapture={stop}
+          onKeyDown={(event) => {
+            const directions: Record<string, [number, number]> = {
+              ArrowLeft: [-16, 0],
+              ArrowRight: [16, 0],
+              ArrowUp: [0, -16],
+              ArrowDown: [0, 16],
+            };
+            if (event.key === "Home") {
+              event.preventDefault();
+              reset();
+            } else if (directions[event.key]) {
+              event.preventDefault();
+              const [x, y] = directions[event.key];
+              place(position.current.x + x, position.current.y + y);
+            }
+          }}
+        >
+          <HolderOutlined aria-hidden />
+          <span id="workspace-panel-title">{title}</span>
+        </button>
+        <Button
+          type="text"
+          icon={<CloseOutlined aria-hidden />}
+          aria-label="收起工作台面板"
+          onClick={onClose}
+        />
+      </header>
+      <div className="workspace-panel-body">{children}</div>
+      <footer className="workspace-panel-footer">{footer}</footer>
+    </div>,
+    document.body,
+  );
+}
 
 export function PersonalWorkspacePage() {
   const user = useUser(),
@@ -157,45 +414,15 @@ export function PersonalWorkspacePage() {
   return (
     <div className="personal-workspace">
       <header className="personal-welcome">
-        <div>
-          <div className="personal-eyebrow">
-            XUTI <span>/</span> PERSONAL WORKSPACE
-          </div>
-          <h1>
-            {user.displayName} 的工作台
-            <span className="welcome-star" aria-hidden>
-              ✦
-            </span>
-          </h1>
-          <p>把注意力留给当下，让小序连接你的工作。</p>
-        </div>
-        <div className="personal-welcome-actions">
-          <span className="workspace-date">
-            <CalendarOutlined aria-hidden />{" "}
-            {new Intl.DateTimeFormat("zh-CN", {
-              timeZone: "Asia/Shanghai",
-              month: "long",
-              day: "numeric",
-              weekday: "long",
-            }).format(new Date())}
-          </span>
-          <Space wrap>
-            {dirty && (
-              <span className="personal-unsaved" role="status">
-                有未保存的更改
-              </span>
-            )}
-            <Button
-              type="primary"
-              icon={<SaveOutlined aria-hidden />}
-              onClick={save}
-              loading={busy}
-              disabled={!draft || !dirty}
-            >
-              保存工作台
-            </Button>
-          </Space>
-        </div>
+        <span className="workspace-date">
+          <CalendarOutlined aria-hidden />{" "}
+          {new Intl.DateTimeFormat("zh-CN", {
+            timeZone: "Asia/Shanghai",
+            month: "long",
+            day: "numeric",
+            weekday: "long",
+          }).format(new Date())}
+        </span>
       </header>
       <QueryState error={q.error} reload={() => q.refetch()} />
       {q.isLoading && <Spin />}
@@ -207,7 +434,8 @@ export function PersonalWorkspacePage() {
                 <div className="workspace-quiet">
                   <AppstoreOutlined aria-hidden />
                   <h2>你的工作，随时展开</h2>
-                  <p>从下方入口打开日程、待办和常用工具。</p>
+                  <p>打开身边的日程、待办与常用工具。</p>
+                  <div className="workspace-quiet-orbit-slot" />
                 </div>
               )}
               <WorkspaceAI
@@ -228,7 +456,12 @@ export function PersonalWorkspacePage() {
                 }}
               />
             </div>
-            <nav className="workspace-dock" aria-label="工作台功能面板">
+            <WorkspaceOrbit
+              paused={panelOpen}
+              assistantEnabled={canUsePersonalAssistant({
+                permissions: user.permissions,
+              })}
+            >
               {(
                 [
                   {
@@ -277,47 +510,38 @@ export function PersonalWorkspacePage() {
                   icon: React.ReactNode;
                   detail: string;
                 }[]
-              ).map((item) => (
+              ).map((item, index, items) => (
                 <button
                   key={item.key}
                   type="button"
                   className="workspace-dock-item"
+                  style={
+                    {
+                      "--orbit-angle": `${-90 + (index * 360) / items.length}deg`,
+                      "--orbit-counter-angle": `${90 - (index * 360) / items.length}deg`,
+                    } as CSSProperties
+                  }
                   aria-label={item.aria}
+                  title={`${item.label} · ${item.detail}`}
                   aria-expanded={panelOpen && panel === item.key}
                   onClick={() => openPanel(item.key)}
                 >
-                  <span className="workspace-dock-icon" aria-hidden>
-                    {item.icon}
-                  </span>
-                  <span>
+                  <span className="workspace-dock-face">
+                    <span className="workspace-dock-icon" aria-hidden>
+                      {item.icon}
+                    </span>
                     <strong>{item.label}</strong>
-                    <small>{item.detail}</small>
                   </span>
-                  <ArrowRightOutlined
-                    className="workspace-dock-arrow"
-                    aria-hidden
-                  />
                 </button>
               ))}
-            </nav>
+            </WorkspaceOrbit>
           </div>
-          <Drawer
+          <WorkspaceFloatingPanel
             title={panelTitles[panel]}
             open={panelOpen}
             onClose={() => setPanelOpen(false)}
-            closable={false}
-            width={panel === "content" ? 920 : panel === "tools" ? 740 : 520}
-            rootClassName="personal-workspace-drawer"
-            extra={
-              <Button
-                type="text"
-                icon={<CloseOutlined />}
-                aria-label="收起工作台面板"
-                onClick={() => setPanelOpen(false)}
-              />
-            }
             footer={
-              <div className="workspace-panel-footer">
+              <>
                 <span role="status">
                   {dirty
                     ? "有未保存的更改，收起面板后仍保留"
@@ -335,7 +559,7 @@ export function PersonalWorkspacePage() {
                 >
                   保存更改
                 </Button>
-              </div>
+              </>
             }
           >
             {visitedPanels.has("tools") && (
@@ -544,7 +768,7 @@ export function PersonalWorkspacePage() {
                 </Card>
               </section>
             )}
-          </Drawer>
+          </WorkspaceFloatingPanel>
         </>
       )}
       <Modal

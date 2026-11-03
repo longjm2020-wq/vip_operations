@@ -14,9 +14,17 @@ import { CompanionVoice } from "./companion-voice";
 export function SidebarAssistant({
   floating = false,
   docked = false,
+  hasNest = false,
+  onExplore,
+  onHome,
+  onInteract,
 }: {
   floating?: boolean;
   docked?: boolean;
+  hasNest?: boolean;
+  onExplore?: () => void;
+  onHome?: () => void;
+  onInteract?: () => void;
 }) {
   const hub = useAssistantHub();
   const launch = useRef<HTMLButtonElement>(null);
@@ -130,13 +138,14 @@ export function SidebarAssistant({
         }
         title={
           docked
-            ? "点击小序开始语音对话"
+            ? "点击小序跃出对话 · 拖动离巢 · Home 回巢"
             : floating
               ? "点击语音对话 · 拖动自由放置 · 方向键移动 · Home 寻找空位"
               : undefined
         }
         onClick={() => {
           setDetailsOpen(false);
+          onInteract?.();
           if (hub.allowed) hub.startVoice();
           else openPanel("activity");
         }}
@@ -326,6 +335,30 @@ export function SidebarAssistant({
                 </button>
               )}
             </div>
+            {onExplore && (
+              <div className="companion-interactions companion-placement-actions">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDetailsOpen(false);
+                    onExplore();
+                  }}
+                >
+                  换个位置
+                </button>
+                {hasNest && !docked && onHome && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDetailsOpen(false);
+                      onHome();
+                    }}
+                  >
+                    回到巢穴
+                  </button>
+                )}
+              </div>
+            )}
             <button
               className="companion-feedback"
               type="button"
