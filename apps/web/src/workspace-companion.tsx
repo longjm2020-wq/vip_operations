@@ -288,8 +288,11 @@ export function WorkspaceCompanion() {
         result.push(new DOMRect(pointer.x - 60, pointer.y - 45, 120, 90));
       return result;
     };
-    const destination = (preferred?: Position, random = false) => {
-      const areas = random ? obstacles() : occupiedAreas();
+    const destination = (
+      preferred?: Position,
+      random = false,
+      areas = random ? obstacles() : occupiedAreas(),
+    ) => {
       const { width, height } = size();
       if (random) {
         const origin = panel.current?.getBoundingClientRect();
@@ -390,12 +393,16 @@ export function WorkspaceCompanion() {
         } else {
           // Re-check after the departure animation in case page content changed.
           const { width, height } = size();
-          if (!isClear(target, width, height, obstacles())) {
+          const areas = obstacles();
+          const landing = isClear(target, width, height, areas)
+            ? target
+            : destination(target, false, areas);
+          if (!landing) {
             finish();
             return;
           }
           attach(false);
-          position(target, false);
+          position(landing, false);
         }
         state.motion = reduced.matches ? "idle" : "arriving";
         publish();

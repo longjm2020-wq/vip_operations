@@ -10,6 +10,7 @@ import { useAssistantHub } from "./assistant-hub-context";
 import { activityFingerprint } from "../../../packages/contracts/src/assistant-activity";
 import "./sidebar-assistant.css";
 import { CompanionVoice } from "./companion-voice";
+import { CompanionThreeVisual } from "./workspace-three";
 
 export function SidebarAssistant({
   floating = false,
@@ -157,6 +158,7 @@ export function SidebarAssistant({
         }}
       >
         <div className="companion-stage" aria-hidden="true">
+          {!docked && <CompanionThreeVisual />}
           {!floating && <div className="companion-grid" />}
           <svg className="companion-robot" viewBox="0 0 180 160" fill="none">
             {!floating && (
