@@ -247,7 +247,7 @@ function WorkspaceFloatingPanel({
       height = view?.height || innerHeight;
     const left = view?.offsetLeft || 0,
       top = view?.offsetTop || 0;
-    box.current!.style.maxHeight = `${height - margin * 2}px`;
+    box.current!.style.maxHeight = `${Math.min(width < 768 ? height : 520, height - margin * 2)}px`;
     const rect = box.current!.getBoundingClientRect();
     return {
       minX: left + margin,
@@ -273,8 +273,7 @@ function WorkspaceFloatingPanel({
       viewportWidth = viewport?.width || innerWidth,
       viewportLeft = viewport?.offsetLeft || 0,
       mobile = viewportWidth < 768,
-      margin = mobile ? 12 : 24,
-      gap = 24;
+      margin = mobile ? 12 : 24;
     const core = document
       .querySelector(".workspace-ai-core, .workspace-quiet-center")
       ?.getBoundingClientRect();
@@ -311,12 +310,19 @@ function WorkspaceFloatingPanel({
       : center;
     const available =
       side === "left"
-        ? edge - gap - viewportLeft - margin
-        : viewportLeft + viewportWidth - margin - edge - gap;
+        ? edge - viewportLeft - margin
+        : viewportLeft + viewportWidth - margin - edge;
+    // Leave a generous visual bridge on wide screens, then use that spare
+    // space before narrowing the card on smaller desktops.
+    const minimumGap = 24;
     const width = Math.min(
-      420,
+      360,
       viewportWidth - margin * 2,
-      !mobile && available >= 300 ? available : 420,
+      !mobile && available >= 300 + minimumGap ? available - minimumGap : 360,
+    );
+    const gap = Math.max(
+      minimumGap,
+      Math.min(220, viewportWidth * 0.115, available - width),
     );
     target.style.setProperty("--workspace-panel-width", `${width}px`);
     target.dataset.openSide = mobile ? "center" : side;
@@ -334,9 +340,7 @@ function WorkspaceFloatingPanel({
         ? topbar + 16
         : Math.max(
             topbar + 24,
-            origin
-              ? origin.top + origin.height / 2 - Math.min(96, rect.height / 3)
-              : topbar + 24,
+            origin ? origin.top + origin.height / 2 - 40 : topbar + 24,
           ),
       limits,
     );

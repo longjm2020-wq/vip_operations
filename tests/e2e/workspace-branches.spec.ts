@@ -202,8 +202,11 @@ test("拖动巢穴圆环展开分支图，空白三维拖动独立且不申请�
         );
       return (
         nodes.length === 5 &&
+        detail.width >= 300 &&
+        detail.width <= 380 &&
         nodes.every(
-          (box) => root.x + root.width < box.left && box.right < detail.x,
+          (box) =>
+            root.x + root.width < box.left && box.right + 160 <= detail.x,
         )
       );
     })
@@ -235,6 +238,35 @@ test("拖动巢穴圆环展开分支图，空白三维拖动独立且不申请�
   await panel
     .getByRole("button", { name: "收起工作台面板", exact: true })
     .click();
+  for (const [entry, title, file] of [
+    ["打开日程", "日程", "schedule"],
+    ["打开个人待办", "个人待办", "todos"],
+  ]) {
+    const node = menu(page).getByRole("button", { name: entry, exact: true });
+    await node.click();
+    const card = page.getByRole("dialog", { name: title, exact: true });
+    await expect(card).toHaveAttribute("data-panel-presence", "open");
+    const label = (await node.locator(".workspace-dock-label").boundingBox())!;
+    const box = (await card.boundingBox())!;
+    expect(box.width).toBeGreaterThanOrEqual(300);
+    expect(box.width).toBeLessThanOrEqual(380);
+    expect(box.x - (label.x + label.width)).toBeGreaterThanOrEqual(160);
+    expect(box.x + box.width).toBeLessThanOrEqual(1897);
+    await expect(
+      card.getByRole("button", { name: "保存更改", exact: true }),
+    ).toBeInViewport({ ratio: 1 });
+    expect(
+      await card
+        .locator(".workspace-panel-body")
+        .evaluate((element) => element.scrollWidth - element.clientWidth),
+    ).toBeLessThanOrEqual(1);
+    await page.screenshot({
+      path: `.local/workspace-compact-branches-${file}.png`,
+    });
+    await card
+      .getByRole("button", { name: "收起工作台面板", exact: true })
+      .click();
+  }
   await dragRing(page, 120);
   await expect(world(page)).toHaveAttribute("data-workspace-layout", "orbit");
   expect(await instance!.evaluate((element) => element.isConnected)).toBe(true);
@@ -354,6 +386,11 @@ test("手机减少动态效果下无AI及项目权限仍可使用四个分支，
     await expect(
       panel.getByRole("button", { name: "保存更改", exact: true }),
     ).toBeInViewport({ ratio: 1 });
+    expect(
+      await panel
+        .locator(".workspace-panel-body")
+        .evaluate((element) => element.scrollWidth - element.clientWidth),
+    ).toBeLessThanOrEqual(1);
     if (title === "私有备忘") {
       await panel
         .getByRole("textbox", { name: "私有备忘", exact: true })

@@ -20,7 +20,9 @@ function overlayControlAreas() {
     .filter(
       (node) =>
         !node.closest(".workspace-companion-host") &&
-        node.closest(".ant-drawer-open, .ant-modal-wrap") &&
+        node.closest(
+          ".ant-drawer-open, .ant-modal-wrap, .personal-workspace-panel:not([hidden]):not([inert])",
+        ) &&
         getComputedStyle(node).visibility !== "hidden",
     )
     .map((node) => node.getBoundingClientRect())
@@ -634,8 +636,8 @@ export function WorkspaceCompanion() {
               overlayControlAreas(),
             )
           ) {
-            // A foreground robot must not block a dialog's controls. Leave the
-            // anchor only on a real collision; closing the dialog never teleports it back.
+            // A foreground robot must not block dialog or workspace-card controls.
+            // Leave only on a real collision; closing never teleports it back.
             attach(false);
             state.motion = "idle";
             lastActive = Date.now() + 10000;
@@ -817,11 +819,30 @@ export function WorkspaceCompanion() {
         publish();
       }
     };
+    // Workspace cards retain their DOM when closed. Observe only that portal's
+    // geometry/visibility so reopening or moving a card also runs avoidance.
+    let workspaceCard: HTMLElement | null = null;
+    const cardObserver = new MutationObserver(reflow);
+    const discoverCard = () => {
+      const next = document.querySelector<HTMLElement>(
+        ".personal-workspace-panel",
+      );
+      if (next === workspaceCard) return;
+      cardObserver.disconnect();
+      workspaceCard = next;
+      if (workspaceCard)
+        cardObserver.observe(workspaceCard, {
+          attributes: true,
+          attributeFilter: ["hidden", "inert", "style"],
+        });
+    };
     const observer = new MutationObserver(() => {
       discoverNest();
+      discoverCard();
       reflow();
     });
     discoverNest();
+    discoverCard();
     observer.observe(document.body, { childList: true, subtree: true });
     const resizeObserver = new ResizeObserver(reflow);
     if (panel.current) resizeObserver.observe(panel.current);
@@ -884,6 +905,7 @@ export function WorkspaceCompanion() {
       cancelAnimationFrame(climbFrame);
       transition?.timers.forEach(clearTimeout);
       observer.disconnect();
+      cardObserver.disconnect();
       resizeObserver.disconnect();
       targetObserver.disconnect();
       perchObserver.disconnect();

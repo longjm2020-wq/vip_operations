@@ -191,20 +191,23 @@
   left: 0;
   top: 0;
   z-index: 250;
-  width: min(var(--workspace-panel-width, 420px), calc(100vw - 48px));
-  max-height: calc(100dvh - 48px);
+  width: min(360px, var(--workspace-panel-width, 360px), calc(100vw - 48px));
+  max-height: min(520px, calc(100dvh - 48px));
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--app-accent) 22%, transparent);
-  border-radius: 16px;
-  background: color-mix(in srgb, var(--app-bg) 68%, transparent);
-  backdrop-filter: blur(20px) saturate(115%);
-  -webkit-backdrop-filter: blur(20px) saturate(115%);
+  border: 1px solid color-mix(in srgb, var(--app-accent) 24%, transparent);
+  border-radius: 14px;
+  background:
+    linear-gradient(145deg, #8aafe910, transparent 48%),
+    color-mix(in srgb, var(--app-bg) 72%, transparent);
+  backdrop-filter: blur(16px) saturate(112%);
+  -webkit-backdrop-filter: blur(16px) saturate(112%);
   color: var(--app-text);
+  font-size: 12px;
   box-shadow:
-    0 18px 48px color-mix(in srgb, var(--app-shadow) 55%, transparent),
-    inset 0 1px 0 color-mix(in srgb, var(--app-text) 5%, transparent);
+    0 14px 40px color-mix(in srgb, var(--app-shadow) 48%, transparent),
+    inset 0 1px 0 color-mix(in srgb, var(--app-text) 6%, transparent);
 }
 .personal-workspace-panel[hidden] {
   display: none;
@@ -292,7 +295,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 8px 10px 8px 18px;
+  padding: 6px 8px 6px 14px;
   border-bottom: 1px solid
     color-mix(in srgb, var(--app-border) 55%, transparent);
   background: transparent;
@@ -303,7 +306,7 @@
   align-items: center;
   gap: 8px;
   flex: 1;
-  min-height: 34px;
+  min-height: 32px;
   padding: 0;
   border: 0;
   background: none;
@@ -329,12 +332,12 @@
 .workspace-panel-body {
   overflow: auto;
   overscroll-behavior: contain;
-  padding: 16px 18px;
+  padding: 12px 14px;
   min-height: 0;
 }
 .personal-workspace-panel > .workspace-panel-footer {
   flex: 0 0 auto;
-  padding: 12px 16px;
+  padding: 8px 12px;
   border-top: 1px solid color-mix(in srgb, var(--app-border) 55%, transparent);
   background: transparent;
 }
@@ -352,7 +355,7 @@
   border: 0;
   min-height: 0;
   padding: 0;
-  margin-bottom: 14px;
+  margin-bottom: 10px;
 }
 .personal-workspace-panel .ant-card-head-title,
 .personal-workspace-panel .workspace-panel-heading h2 {
@@ -366,40 +369,128 @@
 .personal-workspace-panel .ant-card-body {
   padding: 0;
 }
+.personal-workspace-panel .personal-schedule {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 8px;
+}
+.personal-workspace-panel .personal-schedule > .workspace-panel-heading {
+  grid-column: 2;
+  grid-row: 1;
+  margin: 0 0 10px;
+}
+.personal-workspace-panel .schedule-month {
+  grid-column: 1;
+  grid-row: 1;
+  gap: 8px;
+  margin: 0 0 10px;
+}
+.personal-workspace-panel .schedule-month > div {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 2px;
+}
+.personal-workspace-panel .schedule-month .ant-btn,
+.personal-workspace-panel .workspace-panel-heading .ant-btn,
+.personal-workspace-panel .schedule-day-heading .ant-btn {
+  min-width: 30px;
+  height: 30px;
+  font-size: 12px;
+}
+.personal-workspace-panel
+  .personal-schedule
+  > :is(
+    .schedule-weekdays,
+    .schedule-days,
+    .schedule-day-heading,
+    .schedule-agenda,
+    .schedule-timezone
+  ) {
+  grid-column: 1 / -1;
+}
+.personal-workspace-panel .schedule-weekdays {
+  margin-bottom: 6px;
+  font-size: 12px;
+}
+.personal-workspace-panel .schedule-days {
+  gap: 3px;
+}
+.personal-workspace-panel .schedule-days button {
+  min-height: 32px;
+  padding: 5px 0;
+  border-radius: 7px;
+}
+.personal-workspace-panel .schedule-day-heading {
+  margin-top: 10px;
+  padding-top: 10px;
+}
+.personal-workspace-panel .schedule-agenda {
+  max-height: 144px;
+  margin-top: 6px;
+}
+.personal-workspace-panel .schedule-empty {
+  padding: 4px 0;
+}
+.personal-workspace-panel .schedule-event {
+  gap: 10px;
+  margin-bottom: 6px;
+  padding: 9px 10px;
+}
+.personal-workspace-panel .schedule-event > span:last-child {
+  padding-left: 9px;
+}
+.personal-workspace-panel .schedule-timezone {
+  margin-top: 8px;
+}
+.personal-workspace-panel
+  :is(
+    .schedule-event small,
+    .schedule-day-heading small,
+    .schedule-timezone,
+    .personal-tool p,
+    .personal-content-item p,
+    .personal-content-footer small,
+    .personal-content .ant-tabs-extra-content a,
+    .personal-todo-count,
+    .personal-todo .ant-tag
+  ) {
+  font-size: 12px;
+}
 .workspace-panel-toolbar {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 10px;
-  margin-bottom: 14px;
-  font-size: 11px;
+  gap: 8px;
+  margin-bottom: 10px;
+  font-size: 12px;
 }
 .workspace-panel-footer {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
 }
 .workspace-panel-footer > .ant-btn {
   flex: 0 0 auto;
 }
 .workspace-panel-footer > span {
   color: var(--app-secondary);
-  font-size: 11px;
+  font-size: 12px;
+  line-height: 1.5;
 }
 .personal-workspace-panel .ant-input-textarea-show-count {
   margin-bottom: 18px;
 }
 .personal-workspace-panel small.secondary,
 .personal-workspace-panel p.secondary {
-  font-size: 11px;
-  line-height: 1.8;
+  font-size: 12px;
+  line-height: 1.6;
 }
 .personal-tools-panel {
   margin-top: 0;
 }
 .personal-tools-panel .workspace-panel-toolbar .ant-btn {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--app-secondary);
 }
 .personal-tools {
@@ -652,12 +743,28 @@
     font-size: 18px;
   }
   .personal-workspace-panel {
-    width: min(var(--workspace-panel-width, 420px), calc(100vw - 24px));
+    width: min(var(--workspace-panel-width, 360px), calc(100vw - 24px));
     max-height: calc(100dvh - 24px);
     border-radius: 14px;
   }
   .workspace-panel-body {
     padding: 12px;
+  }
+  .workspace-panel-handle {
+    min-height: 36px;
+  }
+  .workspace-panel-header > .ant-btn,
+  .workspace-panel-footer > .ant-btn {
+    min-height: 36px;
+  }
+  .personal-workspace-panel .schedule-days button {
+    min-height: 38px;
+  }
+  .personal-workspace-panel .schedule-month .ant-btn,
+  .personal-workspace-panel .workspace-panel-heading .ant-btn,
+  .personal-workspace-panel .schedule-day-heading .ant-btn {
+    min-width: 32px;
+    height: 32px;
   }
   .personal-tools,
   .personal-content-cards {
@@ -674,7 +781,7 @@
     margin-bottom: 10px;
   }
   .personal-content .ant-segmented {
-    font-size: 11px;
+    font-size: 12px;
   }
   .personal-content-footer {
     flex-wrap: wrap;

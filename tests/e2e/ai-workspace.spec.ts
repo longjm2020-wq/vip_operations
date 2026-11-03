@@ -1282,6 +1282,8 @@ test("圆环入口打开可拖动浮卡，保留屏幕边距与草稿并在卡�
   const note = panel.getByRole("textbox", { name: "私有备忘", exact: true });
   await note.fill("移动浮卡后仍保留的备忘");
   const initial = (await panel.boundingBox())!;
+  expect(initial.width).toBeGreaterThanOrEqual(300);
+  expect(initial.width).toBeLessThanOrEqual(380);
   const core = (await page.locator(".workspace-ai-core").boundingBox())!;
   const entrance = (await menu
     .getByRole("button", { name: "打开私有备忘", exact: true })
@@ -1329,18 +1331,82 @@ test("圆环入口打开可拖动浮卡，保留屏幕边距与草稿并在卡�
   await expect
     .poll(() => fixture.workspace.note)
     .toBe("移动浮卡后仍保留的备忘");
-  await page.setViewportSize({ width: 390, height: 844 });
-  await expect
-    .poll(async () => {
-      const mobile = (await panel.boundingBox())!;
-      return (
-        mobile.x >= 11 &&
-        mobile.y >= 11 &&
-        mobile.x + mobile.width <= 379 &&
-        mobile.y + mobile.height <= 833
-      );
-    })
-    .toBe(true);
+  for (const width of [1280, 1024, 390]) {
+    await page.setViewportSize({ width, height: 844 });
+    await panel
+      .getByRole("button", { name: "收起工作台面板", exact: true })
+      .click();
+    await expect(panel).toBeHidden();
+    await openWorkspacePanel(page, "打开私有备忘");
+    await expect(panel).toHaveAttribute("data-panel-presence", "open");
+    const margin = width < 768 ? 12 : 24;
+    const box = (await panel.boundingBox())!;
+    expect(box.x).toBeGreaterThanOrEqual(margin - 1);
+    expect(box.y).toBeGreaterThanOrEqual(margin - 1);
+    expect(box.x + box.width).toBeLessThanOrEqual(width - margin + 1);
+    expect(box.y + box.height).toBeLessThanOrEqual(844 - margin + 1);
+    expect(box.width).toBeLessThanOrEqual(380);
+    await expect(note).toHaveValue("移动浮卡后仍保留的备忘");
+    await expect(
+      panel.getByRole("button", { name: "保存更改", exact: true }),
+    ).toBeInViewport({ ratio: 1 });
+    expect(
+      await panel
+        .locator(".workspace-panel-body")
+        .evaluate((element) => element.scrollWidth - element.clientWidth),
+    ).toBeLessThanOrEqual(1);
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth),
+    ).toBeLessThanOrEqual(width + 1);
+    await page.screenshot({ path: `.local/workspace-compact-${width}.png` });
+    if (width === 1024) {
+      await panel
+        .getByRole("button", { name: "收起工作台面板", exact: true })
+        .click();
+      await expect(panel).toBeHidden();
+      await openWorkspacePanel(page, "打开日程");
+      const schedule = page.getByRole("dialog", { name: "日程", exact: true });
+      await expect(schedule).toHaveAttribute("data-panel-presence", "open");
+      const date = schedule.getByRole("button", {
+        name: "2026-10-19",
+        exact: true,
+      });
+      await expect
+        .poll(() =>
+          date.evaluate((element) => {
+            const box = element.getBoundingClientRect();
+            return element.contains(
+              document.elementFromPoint(
+                box.x + box.width / 2,
+                box.y + box.height / 2,
+              ),
+            );
+          }),
+        )
+        .toBe(true);
+      await date.click();
+      await expect(date).toHaveAttribute("aria-pressed", "true");
+      await expect(
+        schedule.getByRole("button", { name: "今天", exact: true }),
+      ).toBeInViewport({ ratio: 1 });
+      await expect(
+        schedule.getByRole("button", { name: "保存更改", exact: true }),
+      ).toBeInViewport({ ratio: 1 });
+      expect(
+        await schedule
+          .locator(".workspace-panel-body")
+          .evaluate((element) => element.scrollWidth - element.clientWidth),
+      ).toBeLessThanOrEqual(1);
+      await page.screenshot({
+        path: ".local/workspace-compact-schedule-1024.png",
+      });
+      await schedule
+        .getByRole("button", { name: "收起工作台面板", exact: true })
+        .click();
+      await expect(schedule).toBeHidden();
+      await openWorkspacePanel(page, "打开私有备忘");
+    }
+  }
   expect(fixture.assistantCalls()).toBe(0);
 });
 
