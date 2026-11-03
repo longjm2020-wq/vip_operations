@@ -1524,14 +1524,9 @@ test("手机触摸与减少动态效果仍可操作三维场景，移出中心�
   await expect
     .poll(async () => (await readWorkspaceCamera(page)).pitch)
     .toBeLessThan(0);
-  await expect(page.locator(".workspace-three-canvas")).toHaveAttribute(
-    "data-renderer-state",
-    "ready",
-    { timeout: 15000 },
-  );
-  await expect(page.locator(".workspace-three-canvas")).toHaveAttribute(
-    "data-render-animated",
-    "false",
+  await expect(page.locator(".workspace-ai-core-aura")).toHaveCSS(
+    "animation-name",
+    "none",
   );
   await page.getByRole("button", { name: "平移场景", exact: true }).click();
   for (let index = 0; index < 5; index++) await touchDrag(110, 60);
@@ -2076,61 +2071,93 @@ test("新提醒短文字输出后收起，历史记录不反复播报", async ({
   expect(fixture.assistantCalls()).toBe(0);
 });
 
-test("立体光环空闲持续渲染，悬停输入与拖动时暂停，减少动态效果只按变化重绘", async ({
+test("核心呼吸光晕与轻颤持续循环，操作时暂停且减少动态效果关闭装饰动画", async ({
   page,
 }) => {
   const fixture = await workspaceFixture(page);
+  await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto("/my-workspace");
-  const renderer = page.locator(".workspace-three-canvas");
-  const core = page.locator(".workspace-ai-core");
-  const frame = async () =>
-    Number(await renderer.getAttribute("data-render-frame"));
-  await expect(renderer).toHaveAttribute("data-renderer-state", "ready", {
-    timeout: 15000,
-  });
+  const core = page.getByRole("group", { name: "小序巢穴三维视角" });
+  const slot = core.locator(".workspace-ai-companion-slot");
+  const decorations = [
+    {
+      element: core.locator(".workspace-ai-core-aura"),
+      name: "workspace-core-breathe",
+    },
+    {
+      element: core.locator(".workspace-ai-core-resonance"),
+      name: "workspace-core-resonate",
+    },
+    {
+      element: core.locator(".workspace-ai-core-orbits"),
+      name: "workspace-core-shiver",
+    },
+  ];
   await page.mouse.move(5, 5);
-  await expect(renderer).toHaveAttribute("data-render-animated", "true");
-  const initial = await frame();
-  await expect.poll(frame).toBeGreaterThan(initial + 2);
-  const geometry = await core.boundingBox();
-  await core.hover();
-  await expect(renderer).toHaveAttribute("data-render-animated", "false");
-  await page.waitForTimeout(120);
-  const resting = await frame();
-  await page.waitForTimeout(250);
-  expect(await frame()).toBe(resting);
-  expect(await core.boundingBox()).toEqual(geometry);
+  for (const { element, name } of decorations) {
+    await expect(element).toHaveCSS("animation-name", name);
+    await expect(element).toHaveCSS("animation-iteration-count", "infinite");
+    await expect(element).toHaveCSS("animation-play-state", "running");
+  }
+  const geometry = {
+    core: await core.boundingBox(),
+    slot: await slot.boundingBox(),
+  };
+  const opacity = Number(
+    await decorations[0].element.evaluate(
+      (element) => getComputedStyle(element).opacity,
+    ),
+  );
+  await expect
+    .poll(async () =>
+      Math.abs(
+        Number(
+          await decorations[0].element.evaluate(
+            (element) => getComputedStyle(element).opacity,
+          ),
+        ) - opacity,
+      ),
+    )
+    .toBeGreaterThan(0.015);
+  expect(await core.boundingBox()).toEqual(geometry.core);
+  expect(await slot.boundingBox()).toEqual(geometry.slot);
 
-  await page.mouse.move(5, 5);
-  await expect(renderer).toHaveAttribute("data-render-animated", "true");
-  await page
-    .locator(".workspace-ai")
-    .getByPlaceholder(/告诉我你想完成什么/)
-    .focus();
-  await expect(renderer).toHaveAttribute("data-render-animated", "false");
-  await page.locator(".workspace-title").click();
-  await expect(renderer).toHaveAttribute("data-render-animated", "true");
-  const point = await workspaceBlankPoint(page);
-  await page.mouse.move(point.x, point.y);
+  const frame = (await core.boundingBox())!;
+  await core.hover({
+    position: { x: frame.width * 0.18, y: frame.height * 0.18 },
+  });
+  for (const { element } of decorations)
+    await expect(element).toHaveCSS("animation-play-state", "paused");
   await page.mouse.down();
-  await page.mouse.move(point.x + 70, point.y + 30, { steps: 5 });
+  await page.mouse.move(
+    frame.x + frame.width * 0.18 + 45,
+    frame.y + frame.height * 0.18 + 25,
+    { steps: 5 },
+  );
   await expect(page.locator(".personal-workspace")).toHaveAttribute(
     "data-world-dragging",
     "true",
   );
-  await expect(renderer).toHaveAttribute("data-render-animated", "false");
+  for (const { element } of decorations)
+    await expect(element).toHaveCSS("animation-play-state", "paused");
   await page.mouse.up();
-  await page.emulateMedia({ reducedMotion: "reduce" });
-  await expect(renderer).toHaveAttribute("data-render-animated", "false");
-  await page.waitForTimeout(120);
-  const staticFrame = await frame();
-  await page.waitForTimeout(250);
-  expect(await frame()).toBe(staticFrame);
+  await expect(page.locator(".personal-workspace")).not.toHaveAttribute(
+    "data-world-dragging",
+    "true",
+  );
+  await page.locator(".workspace-title").click();
+  await page.mouse.move(5, 5);
+  for (const { element } of decorations)
+    await expect(element).toHaveCSS("animation-play-state", "running");
   await page
-    .getByRole("region", { name: "工作台三维场景", exact: true })
-    .press("ArrowRight");
-  await expect.poll(frame).toBeGreaterThan(staticFrame);
-  await expect(renderer).toHaveAttribute("data-render-animated", "false");
+    .locator(".workspace-ai")
+    .getByPlaceholder(/告诉我你想完成什么/)
+    .focus();
+  for (const { element } of decorations)
+    await expect(element).toHaveCSS("animation-play-state", "paused");
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  for (const { element } of decorations)
+    await expect(element).toHaveCSS("animation-name", "none");
   expect(fixture.assistantCalls()).toBe(0);
 });
 
@@ -2300,300 +2327,5 @@ test("权限在页内刷新后圆环入口随AI与普通工作区切换，私有
   await expect(note).toHaveValue(draft);
   await page.getByRole("button", { name: "保存更改", exact: true }).click();
   await expect.poll(() => fixture.workspace.note).toBe(draft);
-  expect(fixture.assistantCalls()).toBe(0);
-});
-
-test("球形光环与立体小序共同转向，正面侧面背面真实重绘且主题和手机布局完整", async ({
-  page,
-}) => {
-  const fixture = await workspaceFixture(page, {
-    permissions: ["analytics.read", "analytics.manage", "project.read"],
-  });
-  await page.emulateMedia({ reducedMotion: "reduce" });
-  await page.setViewportSize({ width: 1440, height: 1000 });
-  await page.goto("/my-workspace");
-  const renderer = page.locator(".workspace-three-canvas");
-  const world = page.getByRole("region", {
-    name: "工作台三维场景",
-    exact: true,
-  });
-  await expect(renderer).toHaveAttribute("data-renderer-state", "ready", {
-    timeout: 15000,
-  });
-  await expect(renderer).toHaveAttribute("data-robot-visible", "true");
-  await expect(renderer).toHaveAttribute("data-render-animated", "false");
-  expect(
-    Number(await renderer.getAttribute("data-render-width")),
-  ).toBeGreaterThan(0);
-  expect(
-    Number(await renderer.getAttribute("data-render-height")),
-  ).toBeGreaterThan(0);
-  const assistant = await page.locator(".sidebar-assistant").elementHandle();
-  const quaternion = async () =>
-    (await renderer.getAttribute("data-robot-quaternion"))!
-      .split(",")
-      .map(Number);
-  const similarity = (a: number[], b: number[]) =>
-    Math.abs(a.reduce((sum, value, index) => sum + value * b[index], 0));
-  const initial = await quaternion();
-  expect(initial).toHaveLength(4);
-  expect(initial.reduce((sum, value) => sum + value * value, 0)).toBeCloseTo(
-    1,
-    4,
-  );
-  const core = (await page.locator(".workspace-ai-core").boundingBox())!;
-  const robotCrop = {
-    x: core.x + core.width / 2 - 65,
-    y: core.y + core.height / 2 - 85,
-    width: 130,
-    height: 170,
-  };
-  const front = await page.screenshot({ clip: robotCrop });
-  await page.screenshot({ path: ".local/three-workspace-dark-front.png" });
-  await openWorkspacePanel(page, "打开日程");
-  await expect(
-    page.getByRole("dialog", { name: "日程", exact: true }),
-  ).toBeVisible();
-  await page.screenshot({ path: ".local/three-workspace-dark-schedule.png" });
-  await page
-    .getByRole("button", { name: "收起工作台面板", exact: true })
-    .click();
-  const beforeSide = Number(await renderer.getAttribute("data-render-frame"));
-  await dragWorkspace(page, 300, 0);
-  await expect(world).toHaveAttribute("data-world-yaw", "90");
-  await expect
-    .poll(async () => Number(await renderer.getAttribute("data-render-frame")))
-    .toBeGreaterThan(beforeSide);
-  await expect
-    .poll(async () => similarity(initial, await quaternion()))
-    .toBeCloseTo(Math.SQRT1_2, 3);
-  const side = await page.screenshot({ clip: robotCrop });
-  expect(side.equals(front)).toBe(false);
-  await page.screenshot({ path: ".local/three-workspace-side.png" });
-  await dragWorkspace(page, 300, 0);
-  await expect(world).toHaveAttribute("data-world-yaw", "180");
-  await expect
-    .poll(async () => similarity(initial, await quaternion()))
-    .toBeLessThan(0.001);
-  const back = await page.screenshot({ clip: robotCrop });
-  expect(back.equals(front)).toBe(false);
-  expect(back.equals(side)).toBe(false);
-  await page.screenshot({ path: ".local/three-workspace-back.png" });
-  expect(await assistant!.evaluate((element) => element.isConnected)).toBe(
-    true,
-  );
-  await expect(page.locator(".sidebar-assistant")).toHaveCount(1);
-  await page.getByRole("button", { name: "回到中心", exact: true }).click();
-  await expect
-    .poll(async () => similarity(initial, await quaternion()))
-    .toBeCloseTo(1, 4);
-  const beforeTheme = Number(await renderer.getAttribute("data-render-frame"));
-  await page
-    .getByRole("button", { name: "切换为亮色主题", exact: true })
-    .click();
-  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
-  await expect
-    .poll(async () => Number(await renderer.getAttribute("data-render-frame")))
-    .toBeGreaterThan(beforeTheme);
-  await page.mouse.move(2, 2);
-  await expect(page.getByRole("tooltip")).toHaveCount(0);
-  await page.screenshot({ path: ".local/three-workspace-light.png" });
-  await page.setViewportSize({ width: 390, height: 844 });
-  await expect(page.locator(".sidebar")).toBeHidden();
-  await expect(
-    page.getByRole("button", { name: "展开工作区导航", exact: true }),
-  ).toBeVisible();
-  await expect(renderer).toHaveAttribute("data-renderer-state", "ready");
-  await expect
-    .poll(async () => Number(await renderer.getAttribute("data-render-width")))
-    .toBeLessThanOrEqual(390);
-  await expect(renderer).toBeInViewport({ ratio: 0.99 });
-  await expect(
-    page.getByRole("button", { name: "与小序语音对话", exact: true }),
-  ).toBeVisible();
-  await expect
-    .poll(() =>
-      page.evaluate(
-        () =>
-          document.documentElement.scrollWidth <=
-          document.documentElement.clientWidth,
-      ),
-    )
-    .toBe(true);
-  await page.screenshot({
-    path: ".local/three-workspace-mobile-light.png",
-    fullPage: true,
-  });
-  const beforeDark = Number(await renderer.getAttribute("data-render-frame"));
-  await page
-    .getByRole("button", { name: "切换为暗色主题", exact: true })
-    .click();
-  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
-  await expect
-    .poll(async () => Number(await renderer.getAttribute("data-render-frame")))
-    .toBeGreaterThan(beforeDark);
-  await page.mouse.move(2, 2);
-  await expect(page.getByRole("tooltip")).toHaveCount(0);
-  await page.screenshot({
-    path: ".local/three-workspace-mobile.png",
-    fullPage: true,
-  });
-  await openWorkspacePanel(page, "打开私有备忘");
-  await page
-    .getByRole("textbox", { name: "私有备忘", exact: true })
-    .fill("三维视角变化不影响工作台草稿");
-  await page.getByRole("button", { name: "保存更改", exact: true }).click();
-  await expect
-    .poll(() => fixture.workspace.note)
-    .toBe("三维视角变化不影响工作台草稿");
-  expect(fixture.assistantCalls()).toBe(0);
-});
-
-test("WebGL不可用时显示备用形象，移动、私有记录保存与助理对话仍可使用", async ({
-  page,
-}) => {
-  await page.addInitScript(() => {
-    const original = HTMLCanvasElement.prototype.getContext;
-    HTMLCanvasElement.prototype.getContext = function (
-      this: HTMLCanvasElement,
-      kind: string,
-      ...args: unknown[]
-    ) {
-      if (["webgl", "webgl2", "experimental-webgl"].includes(kind)) return null;
-      return Reflect.apply(original, this, [kind, ...args]);
-    } as HTMLCanvasElement["getContext"];
-  });
-  const fixture = await workspaceFixture(page);
-  await page.emulateMedia({ reducedMotion: "reduce" });
-  await page.goto("/my-workspace");
-  const renderer = page.locator(".workspace-three-canvas");
-  await expect(renderer).toHaveAttribute("data-renderer-state", "fallback", {
-    timeout: 15000,
-  });
-  await expect(page.locator(".workspace-ai-core-perspective")).toBeVisible();
-  const companion = page.locator(".workspace-companion");
-  const assistant = await companion
-    .locator(".sidebar-assistant")
-    .elementHandle();
-  await companion.getByRole("button", { name: "展开小序状态与动态" }).click();
-  await page.getByRole("button", { name: "换个位置", exact: true }).click();
-  await expect(companion).toHaveAttribute("data-docked", "false");
-  await expect(companion.locator(".companion-three-canvas")).toHaveAttribute(
-    "data-renderer-state",
-    "fallback",
-  );
-  await expect(companion.locator(".companion-robot")).toBeVisible();
-  await page.getByRole("button", { name: "召唤小序", exact: true }).click();
-  await expect(companion).toHaveAttribute("data-docked", "true");
-  expect(await assistant!.evaluate((element) => element.isConnected)).toBe(
-    true,
-  );
-  await openWorkspacePanel(page, "打开私有备忘");
-  await page
-    .getByRole("textbox", { name: "私有备忘", exact: true })
-    .fill("备用图形模式中的备忘");
-  await page.getByRole("button", { name: "保存更改", exact: true }).click();
-  await expect.poll(() => fixture.workspace.note).toBe("备用图形模式中的备忘");
-  await page
-    .getByRole("button", { name: "收起工作台面板", exact: true })
-    .click();
-  await page.getByRole("button", { name: "打开个人助理", exact: true }).click();
-  const dialog = page.getByRole("dialog", { name: /AI 个人助理/ });
-  await dialog
-    .getByPlaceholder(/告诉我你想完成什么/)
-    .fill("明天下午三点安排选款评审");
-  await dialog
-    .getByRole("button", { name: "发送给个人助理", exact: true })
-    .click();
-  await expect(
-    dialog.getByRole("button", { name: "加入日程草稿", exact: true }),
-  ).toBeVisible();
-  expect(fixture.assistantCalls()).toBe(1);
-  await dialog.getByRole("button", { name: "关闭", exact: true }).click();
-  await page.setViewportSize({ width: 390, height: 844 });
-  expect(
-    await page.evaluate(
-      () =>
-        document.documentElement.scrollWidth <=
-        document.documentElement.clientWidth,
-    ),
-  ).toBe(true);
-  await expect(
-    page.getByRole("button", { name: "与小序语音对话", exact: true }),
-  ).toBeVisible();
-});
-
-test("科技背景粒子实际缓慢运动，减少动态效果暂停并可恢复且不妨碍输入", async ({
-  page,
-}) => {
-  const fixture = await workspaceFixture(page);
-  await page.goto("/my-workspace");
-  const atmosphere = page.locator(".workspace-world-atmosphere");
-  const particles = atmosphere.locator(".workspace-world-particles");
-  const frame = async () =>
-    Number(await particles.getAttribute("data-motion-frame"));
-  await expect(atmosphere).toHaveAttribute("aria-hidden", "true");
-  await expect(atmosphere).toHaveCSS("pointer-events", "none");
-  await expect(atmosphere).toHaveAttribute("data-animated", "true");
-  await expect
-    .poll(async () =>
-      Number(await particles.getAttribute("data-particle-count")),
-    )
-    .toBeGreaterThan(0);
-  await expect(page.locator(".workspace-three-canvas")).toHaveAttribute(
-    "data-renderer-state",
-    "ready",
-    { timeout: 15000 },
-  );
-  const sample = await particles.evaluate((element) => ({
-    frame: Number(element.getAttribute("data-motion-frame")),
-    time: performance.now(),
-  }));
-  await expect.poll(frame).toBeGreaterThan(sample.frame + 3);
-  const moving = await particles.evaluate((element) => ({
-    frame: Number(element.getAttribute("data-motion-frame")),
-    time: performance.now(),
-  }));
-  expect(moving.frame - sample.frame).toBeLessThanOrEqual(
-    Math.ceil((moving.time - sample.time) / 50) + 2,
-  );
-  // Capture the slow ambient glow after it has visibly developed.
-  await page.waitForTimeout(7000);
-  await page.screenshot({
-    path: ".local/three-workspace-dynamic-background.png",
-  });
-  const input = page
-    .locator(".workspace-ai")
-    .getByPlaceholder(/告诉我你想完成什么/);
-  await input.fill("背景动效不妨碍输入");
-  await expect(input).toHaveValue("背景动效不妨碍输入");
-  await page.emulateMedia({ reducedMotion: "reduce" });
-  await expect(atmosphere).toHaveAttribute("data-animated", "false");
-  await expect(atmosphere.locator(".workspace-world-glow")).toHaveCSS(
-    "animation-name",
-    "none",
-  );
-  await expect(atmosphere.locator(".workspace-world-scan")).toHaveCSS(
-    "animation-name",
-    "none",
-  );
-  await page.waitForTimeout(120);
-  const staticFrame = await frame();
-  await page.waitForTimeout(250);
-  expect(await frame()).toBe(staticFrame);
-  const world = page.getByRole("region", {
-    name: "工作台三维场景",
-    exact: true,
-  });
-  await world.press("ArrowRight");
-  await expect(world).toHaveAttribute("data-world-yaw", "4");
-  await expect(atmosphere).toHaveAttribute("data-animated", "false");
-  await page.emulateMedia({ reducedMotion: "no-preference" });
-  await expect(atmosphere).toHaveAttribute("data-animated", "true");
-  const resumed = await frame();
-  await expect.poll(frame).toBeGreaterThan(resumed + 2);
-  await expect(input).toHaveValue("背景动效不妨碍输入");
-  expect(fixture.reads()).toBe(0);
-  expect(fixture.generates()).toBe(0);
   expect(fixture.assistantCalls()).toBe(0);
 });

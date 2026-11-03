@@ -4,7 +4,6 @@ import { useUser, type Row } from "./shared";
 import { canUsePersonalAssistant } from "../../../packages/contracts/src/personal-assistant";
 import type { WorkspaceSchedule } from "../../../packages/contracts/src/personal-workspace";
 import "./workspace-ai.css";
-import { WorkspaceThreeScene } from "./workspace-three";
 
 // Fixed geometry keeps this decorative core independent of timers and model calls.
 const coreTicks = Array.from({ length: 60 }, (_, index) => index);
@@ -152,7 +151,6 @@ export function WorkspaceAI({
     >
       <div className="workspace-ai-start">
         <div className="workspace-ai-core-stage">
-          <WorkspaceThreeScene />
           <div className="workspace-world-camera">
             <div className="workspace-world-plane">
               <AssistantCore />
@@ -160,7 +158,6 @@ export function WorkspaceAI({
             </div>
           </div>
         </div>
-        <div className="workspace-voice-slot" data-world-ui />
         <PersonalAssistant
           available={available}
           schedule={schedule}
