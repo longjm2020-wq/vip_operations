@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import { Response } from "express";
 import { AuthRequest } from "./http.js";
 import type { Actor } from "./core.js";
+import { canUsePersonalAssistant } from "../../../packages/contracts/src/personal-assistant.js";
 
 export const manualPermissions: Record<string, string | null> = {
   "36-aigc": "aigc.use",
@@ -36,6 +37,7 @@ export const manualPermissions: Record<string, string | null> = {
   "35-vip-product-registration": "product.read",
   "37-image-batch-naming": null,
   "38-jushuitan-inventory": "inventory.read",
+  "39-assistant-desktop": null,
 };
 export function canReadManual(
   actor: Actor,
@@ -44,6 +46,7 @@ export function canReadManual(
 ) {
   return (
     (!permission || actor.permissions.includes(permission)) &&
+    (id !== "39-assistant-desktop" || canUsePersonalAssistant(actor)) &&
     (id !== "37-image-batch-naming" || ["product.read", "selection.read", "project.read"].some(value => actor.permissions.includes(value))) &&
     (id !== "31-ai-settings" || !!actor.roleCodes?.includes("SUPER_ADMIN"))
   );

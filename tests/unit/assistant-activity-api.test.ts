@@ -38,6 +38,8 @@ beforeAll(async () => {
   await fixture.database.exec(`
     CREATE TABLE personal_workspaces(user_id bigint PRIMARY KEY, config jsonb);
     CREATE TABLE personal_assistant_jobs(id uuid,user_id bigint,status text,title text,stage text,progress int,error_note text,updated_at timestamptz DEFAULT now(),created_at timestamptz DEFAULT now());
+    CREATE TABLE assistant_desktop_devices(id uuid,last_seen_at timestamptz,revoked_at timestamptz);
+    CREATE TABLE assistant_desktop_tasks(id uuid,user_id bigint,device_id uuid,instruction text,status text,stage text,updated_at timestamptz DEFAULT now(),created_at timestamptz DEFAULT now());
     CREATE TABLE projects(id bigint PRIMARY KEY,name text,status text,owner_id bigint,visibility text,
       deleted_at timestamptz,document jsonb,updated_at timestamptz DEFAULT now());
     CREATE TABLE project_members(project_id bigint,user_id bigint);
@@ -52,7 +54,7 @@ beforeAll(async () => {
 });
 beforeEach(async () => {
   await fixture.database!.exec(
-    "TRUNCATE personal_assistant_jobs,personal_workspaces,projects,project_members,project_library_acl,project_notifications,compass_update_jobs,compass_mail_runs,jushuitan_inventory_runs",
+    "TRUNCATE assistant_desktop_tasks,assistant_desktop_devices,personal_assistant_jobs,personal_workspaces,projects,project_members,project_library_acl,project_notifications,compass_update_jobs,compass_mail_runs,jushuitan_inventory_runs",
   );
 });
 afterAll(async () => {
@@ -60,6 +62,26 @@ afterAll(async () => {
 });
 
 describe("personal assistant read-only activity feed", () => {
+  it("shows private desktop handoffs and marks disconnected running tasks for review", async () => {
+    await fixture.database!.exec(
+      "INSERT INTO assistant_desktop_devices VALUES('11111111-1111-4111-8111-111111111111','2026-10-25T00:00:00Z',NULL); INSERT INTO assistant_desktop_tasks(id,user_id,device_id,instruction,status,stage) VALUES('22222222-2222-4222-8222-222222222222',7,'11111111-1111-4111-8111-111111111111','整理笔记','RUNNING','正在输入')",
+    );
+    const permissions = ["analytics.read", "analytics.manage"];
+    expect(
+      (await assistantActivity(context(permissions), now)).items.find((x) =>
+        x.id.startsWith("desktop:"),
+      ),
+    ).toMatchObject({
+      status: "attention",
+      detail: "电脑连接中断，操作进度待核对",
+      href: "/my-workspace?assistant=desktop",
+    });
+    expect(
+      (await assistantActivity(context(permissions, "8"), now)).items.some(
+        (x) => x.id.startsWith("desktop:"),
+      ),
+    ).toBe(false);
+  });
   it("only exposes inventory feedback with read permission and never labels interrupted jobs as complete", async () => {
     await fixture.database!
       .exec(`INSERT INTO jushuitan_inventory_runs(id,status,stage,requested_count,received_count,started_at,heartbeat_at) VALUES

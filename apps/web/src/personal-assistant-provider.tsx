@@ -17,6 +17,7 @@ import {
   Spin,
   Tag,
   Tooltip,
+  Select,
 } from "antd";
 import {
   ArrowRightOutlined,
@@ -63,8 +64,11 @@ import { useGptVoice } from "./use-gpt-voice";
 import { useGptSpeech } from "./use-gpt-speech";
 import type { AssistantVoiceStatus } from "../../../packages/contracts/src/assistant-voice";
 import { workspaceHologramEvent } from "./workspace-hologram";
+import { AssistantDesktopPanel } from "./assistant-desktop-panel";
+import type { DesktopState } from "../../../packages/contracts/src/assistant-desktop";
 
-type AssistantSection = "chat" | "activity" | "memory" | "voice" | "tasks";
+type AssistantSection =
+  "chat" | "activity" | "memory" | "voice" | "tasks" | "desktop";
 
 export function PersonalAssistantProvider({
   children,
@@ -144,12 +148,26 @@ export function PersonalAssistantProvider({
     attachments: [],
   });
   const [uploading, setUploading] = useState(false);
+  const [desktopDeviceId, setDesktopDeviceId] = useState<string>();
+  const desktop = useQuery({
+    queryKey: ["assistant-desktop", user.id],
+    enabled: allowed,
+    queryFn: async () =>
+      (await api("/my-workspace/assistant/desktop")).data as DesktopState,
+    refetchInterval: open || desktopDeviceId ? 4000 : false,
+  });
   useEffect(() => {
     if (
       allowed &&
-      new URLSearchParams(location.search).get("assistant") === "tasks"
+      ["tasks", "desktop"].includes(
+        new URLSearchParams(location.search).get("assistant") || "",
+      )
     ) {
-      setSection("tasks");
+      setSection(
+        new URLSearchParams(location.search).get("assistant") === "desktop"
+          ? "desktop"
+          : "tasks",
+      );
       setOpen(true);
       navigate(location.pathname, { replace: true });
     }
@@ -292,11 +310,24 @@ export function PersonalAssistantProvider({
         imageModel: agent.imageModel,
         webSearch: agent.webSearch,
         attachmentIds: agent.attachments.map((f) => f.id),
+        desktopDeviceId,
       });
       setText("");
       setAgent((previous) => ({ ...previous, attachments: [] }));
       void jobs.refetch();
       const latest = (response.data as AssistantConversation).messages?.at(-1);
+      if (response.data.state === "IDLE" && latest?.role === "assistant") {
+        const tool = available.find((entry) => entry.id === latest.navigation);
+        if (tool) {
+          navigate(tool.path);
+          setOpen(false);
+        }
+        if (latest.desktopTaskId) {
+          void desktop.refetch();
+          setSection("desktop");
+          setOpen(true);
+        }
+      }
       if (
         playbackAllowed.current &&
         !document.hidden &&
@@ -387,6 +418,7 @@ export function PersonalAssistantProvider({
   const sectionItems = [
     ...(allowed ? [{ key: "chat", label: "互动对话" }] : []),
     ...(allowed ? [{ key: "tasks", label: "任务与文件" }] : []),
+    ...(allowed ? [{ key: "desktop", label: "电脑操作" }] : []),
     ...(allowed
       ? [{ key: "voice", label: "语音设置", disabled: sending || !!executing }]
       : []),
@@ -445,6 +477,13 @@ export function PersonalAssistantProvider({
         </p>
       </div>
       <div className="assistant-settings-actions">
+        <Button
+          size="small"
+          data-settings-action
+          onClick={() => selectSection("desktop")}
+        >
+          电脑操作
+        </Button>
         <Button
           size="small"
           icon={<CustomerServiceOutlined />}
@@ -573,13 +612,48 @@ export function PersonalAssistantProvider({
         )}
         placeholder={
           data?.ready
-            ? "告诉我你想完成什么，例如：安排明天下午3点选款会…"
+            ? desktopDeviceId
+              ? "描述电脑任务，发送后在本机选择窗口…"
+              : "告诉我你想完成什么，例如：打开经营分析…"
             : q.isLoading
               ? "正在连接个人助理…"
               : "AI 尚未就绪，可从助理设置打开对话查看原因"
         }
         autoSize={{ minRows: inDrawer ? 2 : 1, maxRows: 5 }}
       />
+      <div className="assistant-execution-target">
+        <span>执行位置</span>
+        <Select
+          size="small"
+          aria-label="执行位置"
+          value={desktopDeviceId || "website"}
+          disabled={busy}
+          style={{ minWidth: 160, maxWidth: 240 }}
+          options={[
+            { value: "website", label: "网站内" },
+            ...(desktop.data?.devices || []).map((d) => ({
+              value: d.id,
+              label: d.name + (d.online ? "" : " · 离线"),
+              disabled: !d.online,
+            })),
+          ]}
+          onChange={(value) =>
+            setDesktopDeviceId(value === "website" ? undefined : value)
+          }
+        />
+        <Button
+          size="small"
+          type="text"
+          onClick={() => selectSection("desktop")}
+        >
+          连接电脑 / 进度
+        </Button>
+      </div>
+      {desktopDeviceId && (
+        <div className="assistant-desktop-note">
+          电脑任务仅发送本条指令，不附带日程或记忆。请移除附件并关闭联网；可用麦克风输入后核对发送。
+        </div>
+      )}
       {voice.listening && (
         <div className="assistant-voice-status" role="status">
           <i />
@@ -773,6 +847,18 @@ export function PersonalAssistantProvider({
             }}
           />
         )}
+        {section === "desktop" && allowed && (
+          <AssistantDesktopPanel
+            data={desktop.data}
+            error={desktop.error?.message || ""}
+            refresh={() => void desktop.refetch()}
+            choose={(id) => {
+              setDesktopDeviceId(id);
+              setSection("chat");
+              setOpen(true);
+            }}
+          />
+        )}
         {section === "activity" && (
           <AssistantActivityPanel
             feed={activity.data}
@@ -939,6 +1025,11 @@ export function PersonalAssistantProvider({
                 )}
                 {!item.schedules?.length && (
                   <AgentMessageResults item={item} jobs={jobs.data || []} />
+                )}
+                {item.desktopTaskId && (
+                  <Button size="small" onClick={() => setSection("desktop")}>
+                    查看电脑任务进度
+                  </Button>
                 )}
               </div>
             ))}

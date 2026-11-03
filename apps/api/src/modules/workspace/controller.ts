@@ -38,6 +38,7 @@ import {
   saveAssistantMemory,
 } from "./assistant-memory.js";
 import { executeAssistantAction } from "./assistant-actions.js";
+import { AssistantDesktopController } from "./desktop-controller.js";
 import {
   readVoiceStatus,
   saveVoiceSettings,
@@ -320,5 +321,5 @@ export class PersonalWorkspaceController {
     });
   }
 }
-@Module({ controllers: [PersonalWorkspaceController] })
+@Module({ controllers: [PersonalWorkspaceController, AssistantDesktopController] })
 export class PersonalWorkspaceModule {}

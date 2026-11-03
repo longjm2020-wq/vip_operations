@@ -47,7 +47,7 @@ export async function runAssistantVoiceCommand(
   const reserved = await one(
     db,
     `INSERT INTO public.personal_assistant_actions(id,user_id,kind,note)
-     SELECT $1::uuid,$2::bigint,$3,'用户已明确发出语音更新指令'
+     SELECT $1::uuid,$2::bigint,$3,'用户已明确发出更新指令'
      WHERE EXISTS(SELECT 1 FROM public.personal_assistant_conversations WHERE user_id=$2::bigint AND request_id=$4::uuid AND state='PENDING') RETURNING id`,
     id,
     c.actor.id,

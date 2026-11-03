@@ -9,9 +9,9 @@
   "scripts": {
     "dev": "concurrently -k -n api,web,worker \"pnpm dev:api\" \"pnpm dev:web\" \"pnpm dev:worker\"",
     "dev:api": "tsx watch apps/api/src/main.ts",
-    "dev:web": "node scripts/prepare-ocr.mjs && vite --config apps/web/vite.config.ts",
+    "dev:web": "node scripts/prepare-ocr.mjs && node scripts/prepare-desktop.mjs && vite --config apps/web/vite.config.ts",
     "dev:worker": "tsx apps/worker/src/main.ts",
-    "build": "node scripts/prepare-ocr.mjs && tsc -p tsconfig.server.json && node scripts/prepare-aigc.mjs && vite build --config apps/web/vite.config.ts",
+    "build": "node scripts/prepare-ocr.mjs && node scripts/prepare-desktop.mjs && tsc -p tsconfig.server.json && node scripts/prepare-aigc.mjs && vite build --config apps/web/vite.config.ts",
     "typecheck": "tsc --noEmit && tsc -p apps/web/tsconfig.json --noEmit",
     "lint": "eslint apps packages tests scripts",
     "test:unit": "vitest run tests/unit",

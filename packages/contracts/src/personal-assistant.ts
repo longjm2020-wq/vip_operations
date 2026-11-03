@@ -25,6 +25,7 @@ export const assistantSendSchema = z
     imageModel: agentModelId.optional(),
     attachmentIds: z.array(z.string().uuid()).max(6).default([]),
     webSearch: z.boolean().default(false),
+    desktopDeviceId: z.string().uuid().optional(),
   })
   .strict();
 const scheduleDraft = z
@@ -63,6 +64,7 @@ export type AssistantMessage = {
   jobIds?: string[];
   citations?: { title: string; url: string }[];
   navigation?: string;
+  desktopTaskId?: string;
   evidence?: AssistantEvidence[];
   actions?: AssistantAction[];
   memorySuggestions?: { title: string; content: string }[];

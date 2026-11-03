@@ -167,6 +167,7 @@ beforeAll(async () => {
     "069_personal_assistant.sql",
     "079_assistant_tools_memory.sql",
     "083_assistant_agent.sql",
+    "084_assistant_desktop.sql",
   ])
     await fixture.database.exec(
       await readFile(`packages/database/migrations/${name}`, "utf8"),
@@ -188,7 +189,7 @@ beforeEach(async () => {
   fixture.encrypted = true;
   calls = [];
   await fixture.database!.exec(
-    "TRUNCATE personal_assistant_jobs,personal_assistant_files,personal_assistant_conversations,personal_workspaces,idempotency_records,personal_assistant_actions,personal_assistant_memories,projects,project_members,project_library_acl; UPDATE compass_ai_settings SET enabled=true,verified_at=now(); UPDATE users SET status='ACTIVE'",
+    "TRUNCATE assistant_desktop_tasks,assistant_desktop_devices,personal_assistant_jobs,personal_assistant_files,personal_assistant_conversations,personal_workspaces,idempotency_records,personal_assistant_actions,personal_assistant_memories,projects,project_members,project_library_acl; UPDATE compass_ai_settings SET enabled=true,verified_at=now(); UPDATE users SET status='ACTIVE'",
   );
   fixture.inventory.mockReset();
   fixture.queueInventory.mockReset();
@@ -344,15 +345,13 @@ describe("multimodal agent ownership and jobs", () => {
     ).not.toMatch(/gpt|deepseek|openrouter|openai/i);
     vi.stubGlobal(
       "fetch",
-      vi
-        .fn()
-        .mockResolvedValue(
-          provider({
-            text: "使用 GPT 语音，可通过 OpenRouter 回复。",
-            schedules: [],
-            tools: [],
-          }),
-        ),
+      vi.fn().mockResolvedValue(
+        provider({
+          text: "使用 GPT 语音，可通过 OpenRouter 回复。",
+          schedules: [],
+          tools: [],
+        }),
+      ),
     );
     const response = await sendAssistant(actor(), input());
     expect(JSON.stringify(response)).not.toMatch(/gpt|openrouter|openai/i);
@@ -436,16 +435,14 @@ describe("multimodal agent ownership and jobs", () => {
       .toBuffer();
     vi.stubGlobal(
       "fetch",
-      vi
-        .fn()
-        .mockResolvedValue(
-          new Response(
-            JSON.stringify({
-              model: "test/image",
-              data: [{ b64_json: png.toString("base64") }],
-            }),
-          ),
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            model: "test/image",
+            data: [{ b64_json: png.toString("base64") }],
+          }),
         ),
+      ),
     );
     const [id] = await runAgentJob(
       actor(),
@@ -459,7 +456,48 @@ describe("multimodal agent ownership and jobs", () => {
   });
 });
 describe("assistant business tools and private memory", () => {
-  it("runs explicit voice navigation without a model call; history playback and plain text do not navigate", async () => {
+  it("routes a selected computer task to a consent-gated queue without calling the model or attaching private context", async () => {
+    const deviceId = randomUUID();
+    await fixture.database!.query(
+      "INSERT INTO assistant_desktop_devices(id,user_id,name,session_hash,token_hash,last_seen_at) VALUES($1,7,'测试电脑','session','token',now())",
+      [deviceId],
+    );
+    const request = {
+      ...input(),
+      message: "整理已打开的记事本内容",
+      desktopDeviceId: deviceId,
+      includePersonalContext: true,
+      includeMemory: true,
+    };
+    const answer = await sendAssistant(actor(), request);
+    const reply = answer.messages.at(-1)!;
+    expect(reply.desktopTaskId).toBeTruthy();
+    expect(reply.navigation).toBeUndefined();
+    expect(reply.responseModel).toBeUndefined();
+    expect(fetch).not.toHaveBeenCalled();
+    const tasks = (
+      await fixture.database!.query<Row>(
+        "SELECT * FROM assistant_desktop_tasks",
+      )
+    ).rows;
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0].status).toBe("WAITING");
+    expect(tasks[0].instruction).toBe(request.message);
+    expect(tasks[0].history).toEqual([]);
+    await sendAssistant(actor(), request);
+    expect(
+      (await fixture.database!.query("SELECT id FROM assistant_desktop_tasks"))
+        .rows,
+    ).toHaveLength(1);
+    await expect(
+      sendAssistant(actor(), {
+        ...input(answer.version),
+        desktopDeviceId: deviceId,
+        webSearch: true,
+      }),
+    ).rejects.toThrow();
+  });
+  it("runs explicit voice and text navigation without a model call; questions and negations do not execute", async () => {
     const result = await sendAssistant(
       actor(),
       { ...input(), message: "打开经营分析" },
@@ -474,8 +512,8 @@ describe("assistant business tools and private memory", () => {
       ...input(result.version),
       message: "打开经营分析",
     });
-    expect(next.messages.at(-1).navigation).toBeUndefined();
-    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(next.messages.at(-1).navigation).toBe("analytics");
+    expect(fetch).not.toHaveBeenCalled();
     for (const text of [
       "不要更新罗盘数据",
       "能更新罗盘数据吗",
@@ -787,7 +825,7 @@ describe("assistant business tools and private memory", () => {
     );
     const result = await sendAssistant(actor(), {
       ...input(),
-      message: "更新罗盘报表",
+      message: "准备一个更新罗盘报表的操作卡片",
     });
     const action = result.messages.at(-1).actions[0];
     expect(action.status).toBe("PROPOSED");

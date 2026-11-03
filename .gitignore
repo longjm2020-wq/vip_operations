@@ -14,3 +14,5 @@ LOCAL_ACCESS.md
 
 apps/web/public/ocr/core/
 apps/web/public/ocr/worker.min.js
+apps/web/public/downloads/xuti-desktop.zip
+apps/desktop/*.exe

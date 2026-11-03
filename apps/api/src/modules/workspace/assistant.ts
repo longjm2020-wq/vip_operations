@@ -23,6 +23,7 @@ import { askAssistantModel } from "./assistant-model.js";
 import { assistantActionViews } from "./assistant-actions.js";
 import { parseVoiceCommand } from "../../../../../packages/contracts/src/assistant-voice-commands.js";
 import { runAssistantVoiceCommand } from "./assistant-voice-commands.js";
+import { queueDesktopTask } from "./desktop.js";
 export { parseAssistantAnswer } from "./assistant-model.js";
 
 async function settings() {
@@ -126,6 +127,15 @@ export async function sendAssistant(
 ) {
   requireAssistant(c);
   const body = parse(assistantSendSchema, input);
+  if (
+    body.desktopDeviceId &&
+    (body.attachmentIds.length || body.webSearch || voice)
+  )
+    fail(
+      "DESKTOP_INPUT",
+      "电脑任务请直接描述操作；附件和联网查询请切换回网站内",
+      400,
+    );
   const fingerprint = hash(JSON.stringify(body));
   const s = await settings();
   if (!ready(s)) fail("AI_NOT_READY", "请管理员先启用并验证 AI 模型连接", 503);
@@ -190,40 +200,67 @@ export async function sendAssistant(
       month: "2-digit",
       day: "2-digit",
     }).format(new Date());
-    const stored = body.includePersonalContext
-      ? await one(
-          db,
-          "SELECT config FROM public.personal_workspaces WHERE user_id=$1::bigint",
-          c.actor.id,
-        )
-      : undefined;
-    const memory = body.includeMemory ? await readAssistantMemory(c) : null;
-    const command = voice && parseVoiceCommand(body.message);
-    const answer = command
-      ? await runAssistantVoiceCommand(
-          c,
-          command,
-          body.requestId,
-          voice!.signal,
-        )
-      : await askAssistantModel(
-          c,
-          s!,
-          messages,
-          body.includePersonalContext
-            ? assistantContext(stored?.config, today)
-            : null,
-          today,
-          memory?.entries || null,
-          body.includePersonalContext,
-          {
-            model: body.model,
-            imageModel: body.imageModel,
-            attachmentIds: body.attachmentIds,
-            webSearch: body.webSearch,
-            requestId: body.requestId,
-          },
-        );
+    const stored =
+      body.includePersonalContext && !body.desktopDeviceId
+        ? await one(
+            db,
+            "SELECT config FROM public.personal_workspaces WHERE user_id=$1::bigint",
+            c.actor.id,
+          )
+        : undefined;
+    const memory =
+      body.includeMemory && !body.desktopDeviceId
+        ? await readAssistantMemory(c)
+        : null;
+    const command =
+      !body.desktopDeviceId && !body.attachmentIds.length && !body.webSearch
+        ? parseVoiceCommand(body.message)
+        : undefined;
+    const desktopTask = body.desktopDeviceId
+      ? await queueDesktopTask(c, {
+          deviceId: body.desktopDeviceId,
+          requestId: body.requestId,
+          instruction: body.message,
+          model: body.model,
+        })
+      : null;
+    const answer = desktopTask
+      ? {
+          text: "电脑任务已创建。请在本机助手选择要操作的窗口并允许本次任务；进度会显示在「电脑操作」中。",
+          schedules: [],
+          tools: [],
+          evidence: [],
+          actions: [],
+          memorySuggestions: [],
+          responseModel: undefined,
+          jobIds: [],
+          citations: [],
+        }
+      : command
+        ? await runAssistantVoiceCommand(
+            c,
+            command,
+            body.requestId,
+            voice?.signal || new AbortController().signal,
+          )
+        : await askAssistantModel(
+            c,
+            s!,
+            messages,
+            body.includePersonalContext
+              ? assistantContext(stored?.config, today)
+              : null,
+            today,
+            memory?.entries || null,
+            body.includePersonalContext,
+            {
+              model: body.model,
+              imageModel: body.imageModel,
+              attachmentIds: body.attachmentIds,
+              webSearch: body.webSearch,
+              requestId: body.requestId,
+            },
+          );
     const reply: AssistantMessage = {
       id: randomUUID(),
       role: "assistant",
@@ -236,13 +273,14 @@ export async function sendAssistant(
       responseModel:
         typeof answer.responseModel === "string"
           ? answer.responseModel
-          : command
+          : command || desktopTask
             ? undefined
             : COMPASS_AI_MODEL,
       ...("jobIds" in answer
         ? { jobIds: answer.jobIds, citations: answer.citations }
         : {}),
       navigation: command?.kind === "navigate" ? command.toolId : undefined,
+      desktopTaskId: desktopTask?.id,
       createdAt: new Date().toISOString(),
     };
     await db.$transaction(async (tx) => {
