@@ -11,7 +11,13 @@ import { activityFingerprint } from "../../../packages/contracts/src/assistant-a
 import "./sidebar-assistant.css";
 import { CompanionVoice } from "./companion-voice";
 
-export function SidebarAssistant({ floating = false }: { floating?: boolean }) {
+export function SidebarAssistant({
+  floating = false,
+  docked = false,
+}: {
+  floating?: boolean;
+  docked?: boolean;
+}) {
   const hub = useAssistantHub();
   const launch = useRef<HTMLButtonElement>(null);
   const lastActive = useRef(Date.now());
@@ -123,9 +129,11 @@ export function SidebarAssistant({ floating = false }: { floating?: boolean }) {
             : "打开 AI 个人助理"
         }
         title={
-          floating
-            ? "点击语音对话 · 拖动自由放置 · 方向键移动 · Home 寻找空位"
-            : undefined
+          docked
+            ? "点击小序开始语音对话"
+            : floating
+              ? "点击语音对话 · 拖动自由放置 · 方向键移动 · Home 寻找空位"
+              : undefined
         }
         onClick={() => {
           setDetailsOpen(false);

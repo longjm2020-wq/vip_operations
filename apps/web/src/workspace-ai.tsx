@@ -1,3 +1,4 @@
+import { useRef } from "react";
 import { useAssistantHub } from "./assistant-hub-context";
 import { PersonalAssistant } from "./personal-assistant";
 import { useUser, type Row } from "./shared";
@@ -6,7 +7,7 @@ import type { WorkspaceSchedule } from "../../../packages/contracts/src/personal
 import "./workspace-ai.css";
 
 const coreStates = {
-  idle: { label: "待命中", description: "把想法交给小序，让下一步更清晰。" },
+  idle: { label: "待命中", description: "点击小序开始语音，或在下方输入。" },
   connecting: { label: "正在连接", description: "正在准备语音连接。" },
   listening: { label: "正在聆听", description: "我在听，慢慢说。" },
   thinking: { label: "思考中", description: "正在梳理你的问题，请稍候。" },
@@ -23,9 +24,13 @@ const coreTicks = Array.from({ length: 60 }, (_, index) => index);
 
 function AssistantCore() {
   return (
-    <div className="workspace-ai-core" aria-hidden="true">
-      <div className="workspace-ai-core-aura" />
-      <svg className="workspace-ai-core-orbits" viewBox="0 0 320 320">
+    <div className="workspace-ai-core">
+      <div className="workspace-ai-core-aura" aria-hidden="true" />
+      <svg
+        className="workspace-ai-core-orbits"
+        viewBox="0 0 320 320"
+        aria-hidden="true"
+      >
         <g className="workspace-ai-core-guides" fill="none">
           <circle cx="160" cy="160" r="151" />
           <circle cx="160" cy="160" r="131" />
@@ -101,18 +106,7 @@ function AssistantCore() {
           <circle cx="160" cy="160" r="79" className="is-inner-guide" />
         </g>
       </svg>
-      <div className="workspace-ai-core-center">
-        <span className="workspace-ai-core-wordmark">XUTI</span>
-        <b>小序</b>
-        <span className="workspace-ai-core-caption">AI 个人助理</span>
-        <span className="workspace-ai-core-signal">
-          <i />
-          <i />
-          <i />
-          <i />
-          <i />
-        </span>
-      </div>
+      <div className="workspace-ai-companion-slot" />
     </div>
   );
 }
@@ -128,13 +122,33 @@ export function WorkspaceAI({
 }) {
   const user = useUser();
   const hub = useAssistantHub();
+  const section = useRef<HTMLElement>(null);
   if (!canUsePersonalAssistant({ permissions: user.permissions })) return null;
+  const backgroundTaskRunning = hub.feed?.items?.some(
+    (item) => item.kind === "task" && item.status === "running",
+  );
   const state =
     hub.voiceState ||
-    (hub.busy ? "working" : hub.conversation?.ready ? "idle" : "unavailable");
+    (hub.busy || backgroundTaskRunning
+      ? "working"
+      : hub.conversation?.ready
+        ? "idle"
+        : "unavailable");
   const status = coreStates[state];
+  const description =
+    backgroundTaskRunning && !hub.busy && !hub.voiceState
+      ? "后台任务正在进行，可查看动态了解进度。"
+      : status.description;
+  const focusComposer = () => {
+    section.current
+      ?.querySelector<HTMLTextAreaElement>(
+        ".assistant-compose textarea:not(:disabled)",
+      )
+      ?.focus();
+  };
   return (
     <section
+      ref={section}
       className="workspace-ai"
       data-core-state={state}
       aria-labelledby="workspace-ai-title"
@@ -155,7 +169,22 @@ export function WorkspaceAI({
           <h2 id="workspace-ai-title">从想法，到下一步行动。</h2>
         </header>
         <AssistantCore />
-        <p className="workspace-ai-description">{status.description}</p>
+        <div className="workspace-ai-companion-intro">
+          <strong>小序</strong>
+          <p className="workspace-ai-description">{description}</p>
+          <div className="workspace-ai-actions">
+            <button
+              type="button"
+              onClick={focusComposer}
+              disabled={hub.busy || !hub.conversation?.ready}
+            >
+              文字输入
+            </button>
+            <button type="button" onClick={() => hub.openPanel("activity")}>
+              查看动态
+            </button>
+          </div>
+        </div>
         <PersonalAssistant
           available={available}
           schedule={schedule}

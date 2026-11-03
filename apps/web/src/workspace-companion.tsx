@@ -1,6 +1,7 @@
 ﻿import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type PointerEvent,
@@ -109,6 +110,14 @@ export function WorkspaceCompanion() {
   const location = useLocation();
   const hub = useAssistantHub();
   const storageKey = `xuti-companion-position:${user.id}`;
+  // Keep a single portal container and assistant instance while its DOM home changes.
+  // Recreating the portal per route would reset reminders and an ongoing voice UI.
+  const [host] = useState(() => {
+    const node = document.createElement("div");
+    node.className = "workspace-companion-host";
+    return node;
+  });
+  const [docked, setDocked] = useState(false);
   const panel = useRef<HTMLDivElement>(null);
   const point = useRef<Position>({ x: 0, y: 0 });
   const lastClear = useRef<Position>({ x: 0, y: 0 });
@@ -134,6 +143,27 @@ export function WorkspaceCompanion() {
     hub.feed?.items?.some(
       (item) => item.kind === "task" && item.status === "running",
     );
+
+  useLayoutEffect(() => {
+    const attach = () => {
+      const slot = document.querySelector<HTMLElement>(
+        ".workspace-ai-companion-slot",
+      );
+      const target = slot || document.body;
+      if (host.parentElement !== target) target.appendChild(host);
+      setDocked(Boolean(slot));
+    };
+    attach();
+    // The workspace is lazy-loaded; observe its mount and removal as well as routing.
+    const observer = new MutationObserver(attach);
+    const workspace = document.querySelector(".workspace");
+    if (workspace)
+      observer.observe(workspace, { childList: true, subtree: true });
+    return () => {
+      observer.disconnect();
+      host.remove();
+    };
+  }, [host]);
 
   const place = useCallback((next: Position) => {
     point.current = next;
@@ -200,6 +230,14 @@ export function WorkspaceCompanion() {
   };
 
   useEffect(() => {
+    if (docked) {
+      stopWalking();
+      drag.current = null;
+      suppressClick.current = false;
+      setDragging(false);
+      setCompact(false);
+      return;
+    }
     let initial: Position | undefined;
     try {
       const saved = JSON.parse(localStorage.getItem(storageKey) || "null");
@@ -252,11 +290,12 @@ export function WorkspaceCompanion() {
       document.removeEventListener("visibilitychange", active);
       if (flight.current !== null) cancelAnimationFrame(flight.current);
     };
-  }, [storageKey, constrain, findRest, stopWalking]);
+  }, [docked, storageKey, constrain, findRest, stopWalking]);
 
   useEffect(() => {
     stopWalking();
     lastActive.current = Date.now();
+    if (docked) return;
     let timer: ReturnType<typeof setTimeout>;
     const ensureClear = () => {
       clearTimeout(timer);
@@ -283,9 +322,10 @@ export function WorkspaceCompanion() {
       resize.disconnect();
       window.removeEventListener("scroll", ensureClear, true);
     };
-  }, [location.pathname, findRest, stopWalking]);
+  }, [docked, location.pathname, findRest, stopWalking]);
 
   useEffect(() => {
+    if (docked) return;
     if (working) stopWalking();
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)");
     const paused = () =>
@@ -375,10 +415,11 @@ export function WorkspaceCompanion() {
       clearInterval(timer);
       stopWalking();
     };
-  }, [working, constrain, place, stopWalking]);
+  }, [docked, working, constrain, place, stopWalking]);
 
   const start = (event: PointerEvent<HTMLDivElement>) => {
     if (
+      docked ||
       event.button !== 0 ||
       !(event.target as Element).closest(".companion-launch")
     )
@@ -418,10 +459,13 @@ export function WorkspaceCompanion() {
   return createPortal(
     <div
       ref={panel}
+      data-docked={docked}
       className={`workspace-companion${hub.voiceState ? " is-voicing" : ""}${moving ? " is-roaming" : ""}${dragging ? " is-dragging" : ""}${compact ? " is-compact" : ""}`}
       style={{
-        transform: `translate3d(${position?.x || 0}px, ${position?.y || 0}px, 0)`,
-        visibility: position ? "visible" : "hidden",
+        transform: docked
+          ? undefined
+          : `translate3d(${position?.x || 0}px, ${position?.y || 0}px, 0)`,
+        visibility: docked || position ? "visible" : "hidden",
       }}
       onPointerDown={start}
       onPointerMove={move}
@@ -437,6 +481,7 @@ export function WorkspaceCompanion() {
         }
       }}
       onKeyDown={(event) => {
+        if (docked) return;
         if (!(event.target as Element).matches(".companion-launch")) return;
         if (event.key === "Home") {
           event.preventDefault();
@@ -460,8 +505,8 @@ export function WorkspaceCompanion() {
         save(next);
       }}
     >
-      <SidebarAssistant floating />
+      <SidebarAssistant floating docked={docked} />
     </div>,
-    document.body,
+    host,
   );
 }
