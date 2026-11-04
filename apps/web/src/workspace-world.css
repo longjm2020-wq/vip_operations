@@ -240,46 +240,52 @@
 }
 /* SVG strokes stay crisp; no blur filters or per-frame JavaScript are needed. */
 .workspace-flow-line {
-  --flow-duration: 5.6s;
-  --flow-color: color-mix(in srgb, var(--app-accent) 65%, #bcecff);
+  --flow-duration: 7.6s;
+  --flow-color: color-mix(in srgb, var(--app-accent) 42%, #c5edff);
   pointer-events: none;
 }
 .workspace-flow-line path {
   fill: none;
-  vector-effect: non-scaling-stroke;
   stroke-linecap: round;
 }
 .workspace-flow-track {
-  stroke: color-mix(in srgb, var(--app-accent) 38%, transparent);
-  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+  stroke: color-mix(in srgb, var(--app-accent) 30%, transparent);
+  stroke-width: 0.8;
 }
 .workspace-flow-line[data-active="true"] {
-  --flow-duration: 3.6s;
+  --flow-duration: 6.4s;
 }
 .workspace-flow-line[data-active="true"] .workspace-flow-track {
-  stroke: color-mix(in srgb, var(--flow-color) 70%, transparent);
-  stroke-width: 1.3;
+  stroke: color-mix(in srgb, var(--flow-color) 48%, transparent);
+  stroke-width: 1;
 }
+.workspace-flow-glow,
 .workspace-flow-trail,
 .workspace-flow-head {
+  /* Keep moving strokes in path units. Non-scaling-stroke repeats the dash
+     pattern in screen pixels instead of respecting the normalized path. */
   stroke: var(--flow-color);
   animation: workspace-line-flow var(--flow-duration) linear infinite;
   animation-delay: var(--flow-delay, 0s);
 }
+.workspace-flow-glow {
+  --flow-tail: 12px;
+  stroke-width: 4;
+  stroke-dasharray: 12 1000;
+  opacity: 0.06;
+}
 .workspace-flow-trail {
-  stroke-width: 2.6;
-  stroke-dasharray: 10 90;
-  opacity: 0.3;
+  stroke-width: 1.5;
 }
 .workspace-flow-head {
-  --flow-offset: -10px;
-  stroke-width: 2;
-  stroke-dasharray: 0.8 99.2;
-  opacity: 0.9;
+  stroke-width: 1.7;
+  stroke-dasharray: 0.55 1000;
+  opacity: 0.85;
 }
 .workspace-flow-line[data-active="true"] .workspace-flow-head {
   stroke: color-mix(in srgb, var(--app-accent) 30%, white);
-  stroke-width: 2.6;
+  stroke-width: 1.9;
 }
 [data-theme="light"] .workspace-flow-line {
   --flow-color: var(--app-accent);
@@ -291,21 +297,23 @@
 }
 @keyframes workspace-line-flow {
   from {
-    stroke-dashoffset: var(--flow-offset, 0px);
+    stroke-dashoffset: calc(var(--flow-tail, 0px) + 8px);
   }
   to {
-    /* Both endpoints must be lengths; a number-valued calc jumps discretely. */
-    stroke-dashoffset: calc(var(--flow-offset, 0px) - 100px);
+    /* Travel beyond both ends before restarting; the 1000-unit gap prevents
+       a second highlight from appearing anywhere on the 100-unit path. */
+    stroke-dashoffset: calc(var(--flow-tail, 0px) - 120px);
   }
 }
 .personal-workspace:is(
     [data-world-dragging="true"],
     [data-nest-dragging="true"]
   )
-  :is(.workspace-flow-trail, .workspace-flow-head) {
+  :is(.workspace-flow-glow, .workspace-flow-trail, .workspace-flow-head) {
   animation-play-state: paused;
 }
 @media (prefers-reduced-motion: reduce) {
+  .workspace-flow-glow,
   .workspace-flow-trail,
   .workspace-flow-head {
     display: none;

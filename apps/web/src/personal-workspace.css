@@ -447,7 +447,6 @@
     .schedule-event small,
     .schedule-day-heading small,
     .schedule-timezone,
-    .personal-tool p,
     .personal-content-item p,
     .personal-content-footer small,
     .personal-content .ant-tabs-extra-content a,
@@ -496,78 +495,58 @@
 .personal-tools {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
+  gap: 6px 10px;
 }
 .personal-tool {
-  position: relative;
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 16px;
+  align-items: center;
+  gap: 10px;
   min-width: 0;
-  padding: 18px 16px;
-  border: 1px solid var(--app-border);
-  border-radius: 12px;
+  min-height: 46px;
+  padding: 8px;
+  border-radius: 8px;
   color: var(--app-text);
-  background: var(--app-muted);
+  background: transparent;
+  text-decoration: none;
   transition:
     background 0.18s,
-    border-color 0.18s,
-    transform 0.18s;
+    color 0.18s;
 }
-.personal-tool:hover {
-  background: var(--app-surface);
-  border-color: var(--app-accent-border);
+.personal-tool:hover,
+.personal-tool:focus-visible {
+  background: var(--app-muted);
   color: var(--app-text);
-  transform: translateY(-3px);
+  text-decoration: none;
 }
 .personal-tool:focus-visible {
   outline: 2px solid var(--app-accent-border);
   outline-offset: 3px;
 }
 .personal-tool-icon {
-  width: 35px;
-  height: 35px;
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
   display: grid;
   place-items: center;
-  background: var(--app-surface);
-  border: 1px solid color-mix(in srgb, var(--app-border) 22%, transparent);
-  border-radius: 10px;
+  background: color-mix(in srgb, var(--app-accent) 7%, transparent);
+  border-radius: 7px;
   color: var(--app-accent);
-  font-size: 17px;
-}
-.personal-tool-icon-协作 {
-  color: var(--app-accent);
-  background: var(--app-surface);
-}
-.personal-tool-icon-仓储 {
-  color: var(--app-accent);
-  background: var(--app-surface);
-}
-.personal-tool-icon-商品 {
-  color: var(--app-accent);
-  background: var(--app-surface);
-}
-.personal-tool > div {
-  min-width: 0;
+  font-size: 15px;
 }
 .personal-tool strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 13px;
-  font-weight: 550;
-}
-.personal-tool p {
-  color: var(--app-secondary);
-  font-size: 11px;
-  line-height: 1.7;
-  margin: 6px 0 0;
+  font-weight: 500;
 }
 .personal-tool-arrow {
-  position: absolute;
-  top: 22px;
-  right: 15px;
+  flex: 0 0 auto;
+  margin-left: auto;
   color: var(--app-secondary);
-  transform: rotate(-35deg);
-  font-size: 12px;
+  opacity: 0.6;
+  font-size: 11px;
 }
 .personal-content {
   margin-top: 0;
@@ -771,7 +750,7 @@
     grid-template-columns: 1fr;
   }
   .personal-tool {
-    padding: 14px;
+    padding: 8px;
   }
   .personal-content .ant-tabs-nav {
     flex-wrap: wrap;
@@ -805,9 +784,6 @@
   .personal-tool,
   .workspace-dock-item {
     transition: none;
-  }
-  .personal-tool:hover {
-    transform: none;
   }
   .workspace-dock-item::before,
   .workspace-dock-orbit,

@@ -18,6 +18,7 @@ import {
   Space,
   Spin,
   Tag,
+  Tooltip,
 } from "antd";
 import {
   ArrowDownOutlined,
@@ -57,7 +58,7 @@ import { useWorkspaceWorld } from "./use-workspace-world";
 import { WorkspaceWorldBackdrop } from "./workspace-world-backdrop";
 import { WorkspaceHologram } from "./workspace-hologram";
 import { WorkspacePanelLink } from "./workspace-panel-link";
-import { WorkspaceFlowLine } from "./workspace-flow-line";
+import { WorkspaceBranchLines } from "./workspace-flow-line";
 import {
   WorkspaceDockRendering,
   WorkspaceDockCopy,
@@ -152,15 +153,9 @@ function WorkspaceOrbit({
             aria-label="工作台功能面板"
             data-paused={paused}
           >
-            <svg
-              className="workspace-branch-lines"
-              viewBox="0 0 100 100"
-              preserveAspectRatio="none"
-              shapeRendering="geometricPrecision"
-              aria-hidden="true"
-              focusable="false"
-            >
-              {[
+            <WorkspaceBranchLines
+              selected={selected}
+              panels={[
                 "schedule",
                 "todos",
                 "tools",
@@ -168,18 +163,8 @@ function WorkspaceOrbit({
                 ...(Array.isArray(children) && children.length === 5
                   ? ["content"]
                   : []),
-              ].map((key, index, items) => {
-                const y = ((index + 0.5) / items.length) * 100;
-                return (
-                  <WorkspaceFlowLine
-                    key={key}
-                    active={selected === key}
-                    delay={index * -0.85}
-                    d={`M 0 50 C 50 50 50 ${y} 100 ${y}`}
-                  />
-                );
-              })}
-            </svg>
+              ]}
+            />
             <div className="workspace-dock-orbit">{children}</div>
           </nav>
         </WorkspaceDockRendering>,
@@ -915,25 +900,31 @@ export function PersonalWorkspacePage() {
                       const tool = available.find((t) => t.id === id);
                       return (
                         tool && (
-                          <Link
+                          <Tooltip
                             key={id}
-                            to={tool.path}
-                            className="personal-tool"
+                            title={`${tool.title}：${tool.description}`}
+                            trigger={["hover", "focus"]}
+                            mouseEnterDelay={0.4}
                           >
-                            <span
-                              className={`personal-tool-icon personal-tool-icon-${tool.group}`}
+                            <Link
+                              to={tool.path}
+                              className="personal-tool"
+                              aria-label={tool.title}
+                              aria-description={tool.description}
                             >
-                              {toolIcons[id] || <AppstoreOutlined />}
-                            </span>
-                            <div>
+                              <span
+                                className="personal-tool-icon"
+                                aria-hidden="true"
+                              >
+                                {toolIcons[id] || <AppstoreOutlined />}
+                              </span>
                               <strong>{tool.title}</strong>
-                              <p>{tool.description}</p>
-                            </div>
-                            <ArrowRightOutlined
-                              aria-hidden="true"
-                              className="personal-tool-arrow"
-                            />
-                          </Link>
+                              <ArrowRightOutlined
+                                aria-hidden="true"
+                                className="personal-tool-arrow"
+                              />
+                            </Link>
+                          </Tooltip>
                         )
                       );
                     })}

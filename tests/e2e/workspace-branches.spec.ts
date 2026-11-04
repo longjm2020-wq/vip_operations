@@ -154,7 +154,7 @@ async function blankPoint(page: Page) {
   return point;
 }
 
-test("分支光点在曲线、直线和详情连线上连续移动，减少动态效果时隐藏", async ({
+test("每条分支只有一束连续流光，缩放后不平铺且减少动态效果时隐藏", async ({
   page,
 }) => {
   const state = await fixture(page);
@@ -167,37 +167,67 @@ test("分支光点在曲线、直线和详情连线上连续移动，减少动�
   await expectDetailLinkAttached(page);
 
   const heads = [
-    page.locator(".workspace-branch-lines .workspace-flow-head").first(),
-    page.locator(".workspace-branch-lines .workspace-flow-head").nth(2),
+    ...(await page
+      .locator(".workspace-branch-lines .workspace-flow-head")
+      .all()),
     page.locator(".workspace-branch-panel-link .workspace-flow-head"),
   ];
-  for (const head of heads) {
-    const frames = await head.evaluate((element) => {
-      const path = element as SVGPathElement;
-      const animation = path.getAnimations()[0];
-      const originalTime = animation.currentTime;
-      const length = path.getTotalLength();
-      animation.pause();
-      // Sample the painted stroke, not just its animated CSS value. Previously
-      // the offset jumped a full dash period and the visible dots never moved.
-      const samples = [0, 700, 1400].map((time) => {
-        animation.currentTime = time;
-        const offset = getComputedStyle(path).strokeDashoffset;
-        const painted = Array.from(
-          { length: 1001 },
-          (_, index) => index,
-        ).filter((index) =>
-          path.isPointInStroke(path.getPointAtLength((length * index) / 1000)),
-        );
-        return { offset, painted };
+  // Check normal and zoomed scenes: viewport-sized dash patterns previously
+  // tiled into many dots, especially on longer curves and after zooming.
+  for (const zoom of [false, true]) {
+    if (zoom) {
+      await page
+        .getByRole("button", { name: "收起工作台面板", exact: true })
+        .click();
+      await page.getByRole("button", { name: "放大场景", exact: true }).click();
+      await page
+        .getByRole("button", { name: "打开私有备忘", exact: true })
+        .click();
+      await expectDetailLinkAttached(page);
+    }
+    for (const head of heads) {
+      const frames = await head.evaluate((element) => {
+        const path = element as SVGPathElement;
+        const animation = path.getAnimations()[0];
+        const originalTime = animation.currentTime;
+        const timing = animation.effect!.getTiming();
+        const duration = Number(timing.duration);
+        const length = path.getTotalLength();
+        animation.pause();
+        // Sample the painted stroke, not just its animated CSS value. Previously
+        // the offset jumped a full dash period and the visible dots never moved.
+        const samples = [0.2, 0.45, 0.7].map((phase) => {
+          // The extra cycle keeps negative stagger delays past the WAAPI
+          // before-phase boundary while preserving each sampled position.
+          animation.currentTime = (timing.delay ?? 0) + duration * (1 + phase);
+          const offset = getComputedStyle(path).strokeDashoffset;
+          const painted = Array.from(
+            { length: 1001 },
+            (_, index) => index,
+          ).filter((index) =>
+            path.isPointInStroke(
+              path.getPointAtLength((length * index) / 1000),
+            ),
+          );
+          return { offset, painted };
+        });
+        animation.currentTime = originalTime;
+        animation.play();
+        return samples;
       });
-      animation.currentTime = originalTime;
-      animation.play();
-      return samples;
-    });
-    frames.forEach((frame) => expect(frame.painted.length).toBeGreaterThan(0));
-    expect(frames[1].painted).not.toEqual(frames[0].painted);
-    expect(frames[2].painted).not.toEqual(frames[1].painted);
+      frames.forEach((frame) => {
+        expect(frame.painted.length).toBeGreaterThan(0);
+        const clusters = frame.painted.filter(
+          (value, index, values) =>
+            index === 0 || value > values[index - 1] + 1,
+        );
+        expect(clusters).toHaveLength(1);
+      });
+      expect(frames[1].painted, JSON.stringify(frames)).not.toEqual(
+        frames[0].painted,
+      );
+      expect(frames[2].painted).not.toEqual(frames[1].painted);
+    }
   }
   await page.emulateMedia({ reducedMotion: "reduce" });
   for (const head of heads) await expect(head).toBeHidden();
