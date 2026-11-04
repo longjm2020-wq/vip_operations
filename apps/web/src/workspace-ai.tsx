@@ -37,6 +37,8 @@ function AssistantCore({
           <svg
             className="workspace-ai-core-orbits"
             viewBox="0 0 320 320"
+            shapeRendering="geometricPrecision"
+            focusable="false"
             aria-hidden="true"
           >
             <g className="workspace-ai-core-guides" fill="none">

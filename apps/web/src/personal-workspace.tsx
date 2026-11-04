@@ -57,6 +57,11 @@ import { useWorkspaceWorld } from "./use-workspace-world";
 import { WorkspaceWorldBackdrop } from "./workspace-world-backdrop";
 import { WorkspaceHologram } from "./workspace-hologram";
 import { WorkspacePanelLink } from "./workspace-panel-link";
+import { WorkspaceFlowLine } from "./workspace-flow-line";
+import {
+  WorkspaceDockRendering,
+  WorkspaceDockCopy,
+} from "./workspace-dock-rendering";
 import "./workspace-world.css";
 
 type WorkspacePanel = "tools" | "schedule" | "todos" | "note" | "content";
@@ -73,6 +78,7 @@ function WorkspaceDockHalo() {
     <svg
       className="workspace-dock-halo"
       viewBox="0 0 100 100"
+      shapeRendering="geometricPrecision"
       aria-hidden="true"
       focusable="false"
     >
@@ -138,38 +144,45 @@ function WorkspaceOrbit({
   }, [assistantEnabled]);
   return slot
     ? createPortal(
-        <nav
-          className="workspace-dock"
-          aria-label="工作台功能面板"
-          data-paused={paused}
+        <WorkspaceDockRendering
+          stage={slot.closest(".workspace-ai-core-stage, .workspace-quiet")}
         >
-          <svg
-            className="workspace-branch-lines"
-            viewBox="0 0 100 100"
-            preserveAspectRatio="none"
-            aria-hidden="true"
+          <nav
+            className="workspace-dock"
+            aria-label="工作台功能面板"
+            data-paused={paused}
           >
-            {[
-              "schedule",
-              "todos",
-              "tools",
-              "note",
-              ...(Array.isArray(children) && children.length === 5
-                ? ["content"]
-                : []),
-            ].map((key, index, items) => {
-              const y = ((index + 0.5) / items.length) * 100;
-              return (
-                <path
-                  key={key}
-                  data-active={selected === key}
-                  d={`M 0 50 C 50 50 50 ${y} 100 ${y}`}
-                />
-              );
-            })}
-          </svg>
-          <div className="workspace-dock-orbit">{children}</div>
-        </nav>,
+            <svg
+              className="workspace-branch-lines"
+              viewBox="0 0 100 100"
+              preserveAspectRatio="none"
+              shapeRendering="geometricPrecision"
+              aria-hidden="true"
+              focusable="false"
+            >
+              {[
+                "schedule",
+                "todos",
+                "tools",
+                "note",
+                ...(Array.isArray(children) && children.length === 5
+                  ? ["content"]
+                  : []),
+              ].map((key, index, items) => {
+                const y = ((index + 0.5) / items.length) * 100;
+                return (
+                  <WorkspaceFlowLine
+                    key={key}
+                    active={selected === key}
+                    delay={index * -0.85}
+                    d={`M 0 50 C 50 50 50 ${y} 100 ${y}`}
+                  />
+                );
+              })}
+            </svg>
+            <div className="workspace-dock-orbit">{children}</div>
+          </nav>
+        </WorkspaceDockRendering>,
         slot,
       )
     : null;
@@ -838,10 +851,11 @@ export function PersonalWorkspacePage() {
                   <span className="workspace-dock-face">
                     <span className="workspace-dock-label">
                       <WorkspaceDockHalo />
-                      <span className="workspace-dock-icon" aria-hidden>
-                        {item.icon}
-                      </span>
-                      <strong>{item.label}</strong>
+                      <WorkspaceDockCopy
+                        panel={item.key}
+                        icon={item.icon}
+                        label={item.label}
+                      />
                     </span>
                   </span>
                 </button>

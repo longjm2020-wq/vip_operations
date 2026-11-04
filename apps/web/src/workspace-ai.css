@@ -1,7 +1,7 @@
 .workspace-ai {
   --core-blue: var(--app-accent);
   --core-cyan: #6bd4ec;
-  --core-line: color-mix(in srgb, var(--core-blue) 24%, transparent);
+  --core-line: color-mix(in srgb, var(--core-blue) 38%, transparent);
   --core-turn: 42s;
   position: relative;
   isolation: isolate;
@@ -71,7 +71,6 @@
 .workspace-ai-core-scene {
   transform-style: preserve-3d;
   transform: rotateX(var(--core-pitch)) rotateY(var(--core-yaw));
-  will-change: transform;
 }
 .workspace-ai-core-depth {
   position: absolute;
@@ -232,16 +231,18 @@
   pointer-events: none;
   transform: translateZ(18px);
   stroke-linecap: round;
-  mask-image: radial-gradient(circle, transparent 29%, #000 44%);
   animation: workspace-core-shiver 9.6s ease-in-out infinite;
+}
+.workspace-ai-core-orbits :is(circle, ellipse, line, path) {
+  vector-effect: non-scaling-stroke;
 }
 .workspace-ai-core-guides {
   stroke: var(--core-line);
-  stroke-width: 0.6;
+  stroke-width: 1;
 }
 .workspace-ai-core-ticks {
-  stroke: color-mix(in srgb, var(--core-blue) 25%, transparent);
-  stroke-width: 0.7;
+  stroke: color-mix(in srgb, var(--core-blue) 40%, transparent);
+  stroke-width: 1;
 }
 .workspace-ai-core-ticks .is-major {
   stroke: color-mix(in srgb, var(--core-cyan) 65%, transparent);
@@ -261,24 +262,20 @@
 .workspace-ai-core-outer .is-node {
   fill: var(--core-cyan);
   stroke: none;
-  filter: drop-shadow(0 0 5px var(--core-cyan));
 }
 .workspace-ai-core-middle {
   stroke: var(--core-cyan);
   stroke-width: 2;
   animation-duration: calc(var(--core-turn) * 0.72);
   animation-direction: reverse;
-  filter: drop-shadow(
-    0 0 5px color-mix(in srgb, var(--core-cyan) 35%, transparent)
-  );
 }
 .workspace-ai-core-middle .is-trace {
   stroke: var(--core-blue);
   stroke-width: 1;
 }
 .workspace-ai-core-orbit-plane {
-  stroke: color-mix(in srgb, var(--core-blue) 28%, transparent);
-  stroke-width: 0.65;
+  stroke: color-mix(in srgb, var(--core-blue) 38%, transparent);
+  stroke-width: 1;
   animation-duration: calc(var(--core-turn) * 1.6);
 }
 .workspace-ai-core-inner {
@@ -288,7 +285,7 @@
 }
 .workspace-ai-core-inner .is-inner-guide {
   stroke: var(--core-line);
-  stroke-width: 0.6;
+  stroke-width: 1;
 }
 .workspace-ai-companion-slot {
   position: absolute;
@@ -312,13 +309,6 @@
 .workspace-ai-core:focus-within .workspace-ai-core-aura,
 .workspace-ai:has(.assistant-compose:focus-within) .workspace-ai-core-aura {
   box-shadow: 0 0 70px color-mix(in srgb, var(--core-cyan) 18%, transparent);
-}
-.workspace-ai-core:hover .workspace-ai-core-orbits,
-.workspace-ai-core:focus-within .workspace-ai-core-orbits,
-.workspace-ai:has(.assistant-compose:focus-within) .workspace-ai-core-orbits {
-  filter: drop-shadow(
-    0 0 5px color-mix(in srgb, var(--core-cyan) 22%, transparent)
-  );
 }
 .workspace-ai[data-core-state="thinking"],
 .workspace-ai[data-core-state="working"],
