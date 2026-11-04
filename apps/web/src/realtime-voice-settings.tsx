@@ -15,10 +15,18 @@ import type { UseQueryResult } from "@tanstack/react-query";
 import { api } from "./api";
 import {
   realtimeVoices,
+  doubaoRealtimeVoices,
+  type RealtimeProvider,
   type RealtimeStatus,
 } from "../../../packages/contracts/src/assistant-realtime";
 
 const names = { marin: "清朗", cedar: "沉稳", coral: "温柔", shimmer: "轻盈" };
+const doubaoNames: Record<string, string> = {
+  zh_female_vv_uranus_bigtts: "灵动",
+  zh_female_xiaohe_uranus_bigtts: "温柔",
+  zh_male_m191_uranus_bigtts: "沉稳",
+  zh_male_taocheng_uranus_bigtts: "清朗",
+};
 function Settings({
   value,
   saved,
@@ -29,15 +37,34 @@ function Settings({
   const { message } = App.useApp();
   const [enabled, setEnabled] = useState(value.enabled),
     [voice, setVoice] = useState(value.voice);
+  const [provider, setProvider] = useState<RealtimeProvider>(
+    value.provider ?? "openai",
+  );
   const [key, setKey] = useState(""),
     [busy, setBusy] = useState(false);
-  const dirty = !!key || enabled !== value.enabled || voice !== value.voice;
+  const profile =
+    value.profiles?.[provider] ??
+    (provider === (value.provider ?? "openai") ? value : undefined);
+  const dirty =
+    !!key ||
+    enabled !== value.enabled ||
+    voice !== value.voice ||
+    provider !== (value.provider ?? "openai");
+  const changeProvider = (next: RealtimeProvider) => {
+    setProvider(next);
+    setKey("");
+    setVoice(
+      value.profiles?.[next]?.voice ??
+        (next === "doubao" ? doubaoRealtimeVoices[0] : realtimeVoices[0]),
+    );
+  };
   const save = async (clearKey = false) => {
     setBusy(true);
     try {
       await api("/my-workspace/assistant/realtime/settings", "POST", {
         version: value.version,
         enabled,
+        provider,
         voice,
         clearKey,
         ...(key && !clearKey ? { apiKey: key } : {}),
@@ -70,12 +97,23 @@ function Settings({
   return (
     <Form layout="vertical" disabled={busy}>
       <Typography.Paragraph type="secondary">
-        实时通话需要 OpenAI 平台的独立 API 密钥，现有 OpenRouter
-        密钥不能用于此通道。密钥仅加密保存在服务器，不回显；原有语音配置继续保留。
+        选择已开通的实时服务。每个通道分别保存密钥和声音，切换后保留其他通道的配置。
+        密钥仅加密保存在服务器，不回显；原有分段语音与朗读配置继续保留。
       </Typography.Paragraph>
       {!value.encryptionReady && (
         <Alert type="warning" title="服务器凭据加密尚未就绪" />
       )}
+      <Form.Item label="实时服务通道">
+        <Select
+          aria-label="实时服务通道"
+          value={provider}
+          onChange={changeProvider}
+          options={[
+            { value: "doubao", label: "豆包实时语音（火山引擎）" },
+            { value: "openai", label: "OpenAI 实时语音" },
+          ]}
+        />
+      </Form.Item>
       <Form.Item label="优先使用实时通话">
         <Switch
           aria-label="优先使用实时通话"
@@ -84,17 +122,24 @@ function Settings({
         />
       </Form.Item>
       <Form.Item label="实时通话声音">
-        <Select
+        <Select<string>
           aria-label="实时通话声音"
           value={voice}
           onChange={setVoice}
-          options={realtimeVoices.map((v) => ({ value: v, label: names[v] }))}
+          options={
+            provider === "doubao"
+              ? doubaoRealtimeVoices.map((v) => ({
+                  value: v,
+                  label: doubaoNames[v],
+                }))
+              : realtimeVoices.map((v) => ({ value: v, label: names[v] }))
+          }
         />
       </Form.Item>
       <Form.Item
         label="实时服务密钥"
         extra={
-          value.apiKeyConfigured
+          profile?.apiKeyConfigured
             ? "已保存；留空保留原密钥"
             : "只在此处填写，请勿通过聊天发送"
         }
@@ -106,12 +151,19 @@ function Settings({
           maxLength={512}
           onChange={(e) => setKey(e.target.value)}
           placeholder={
-            value.apiKeyConfigured
+            profile?.apiKeyConfigured
               ? "已保存，不回显"
-              : "输入 OpenAI 平台 API Key"
+              : provider === "doubao"
+                ? "输入火山引擎语音服务 API Key"
+                : "输入 OpenAI 平台 API Key"
           }
         />
       </Form.Item>
+      <Typography.Paragraph type="secondary">
+        {provider === "doubao"
+          ? "请在火山引擎控制台开通端到端实时语音大模型全双工服务，并使用该语音服务的 API Key；不使用 AccessKey / SecretKey 或原有聚合语音密钥。"
+          : "此通道需要 OpenAI 平台的独立 API Key，原有聚合语音密钥不能用于此通道。"}
+      </Typography.Paragraph>
       <Space wrap>
         <Button
           type="primary"
@@ -122,14 +174,14 @@ function Settings({
           保存实时设置
         </Button>
         <Button
-          disabled={busy || dirty || !value.apiKeyConfigured}
+          disabled={busy || dirty || !profile?.apiKeyConfigured}
           onClick={() => void verify()}
         >
           验证实时通道
         </Button>
-        {value.apiKeyConfigured && (
+        {profile?.apiKeyConfigured && (
           <Popconfirm
-            title="清除实时服务密钥并停用实时通话？"
+            title="清除所选通道密钥并停用实时通话？"
             onConfirm={() => save(true)}
           >
             <Button danger>清除实时密钥</Button>

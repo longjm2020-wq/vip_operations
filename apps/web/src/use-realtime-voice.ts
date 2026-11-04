@@ -3,11 +3,13 @@ import {
   RealtimeVoiceSession,
   type RealtimeCaption,
 } from "./realtime-voice-session";
+import { DoubaoVoiceSession } from "./doubao-voice-session";
 import type { VoiceState } from "./use-gpt-voice";
 
 export function useRealtimeVoice(
   onResult: () => void,
   onNavigate: (id: string) => void,
+  transport: "webrtc" | "websocket" = "webrtc",
 ) {
   const [state, setState] = useState<VoiceState>("idle"),
     [muted, setMuted] = useState(false);
@@ -16,14 +18,20 @@ export function useRealtimeVoice(
   const [captions, setCaptions] = useState<RealtimeCaption[]>([]);
   const [playbackBlocked, setPlaybackBlocked] = useState(false),
     [hasBusiness, setHasBusiness] = useState(false);
-  const current = useRef<RealtimeVoiceSession | null>(null);
+  const current = useRef<RealtimeVoiceSession | DoubaoVoiceSession | null>(
+    null,
+  );
   const generation = useRef(0);
   const callbacks = useRef({ onResult, onNavigate });
   callbacks.current = { onResult, onNavigate };
   const supported =
     window.isSecureContext &&
     typeof navigator.mediaDevices?.getUserMedia === "function" &&
-    typeof RTCPeerConnection !== "undefined";
+    (transport === "websocket"
+      ? typeof WebSocket !== "undefined" &&
+        typeof AudioContext !== "undefined" &&
+        typeof AudioWorkletNode !== "undefined"
+      : typeof RTCPeerConnection !== "undefined");
   const stop = useCallback((reason?: string) => {
     const call = current.current;
     current.current = null;
@@ -45,7 +53,9 @@ export function useRealtimeVoice(
       setError("请使用支持实时语音的桌面客户端或 HTTPS 下的 Chrome / Edge");
       return;
     }
-    const call = new RealtimeVoiceSession({
+    const Session =
+      transport === "websocket" ? DoubaoVoiceSession : RealtimeVoiceSession;
+    const call = new Session({
       state: (value) => {
         if (turn !== generation.current) return;
         if (value === "idle" && current.current === call)

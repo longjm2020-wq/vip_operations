@@ -12,8 +12,11 @@ export type RealtimeCaption = {
   role: "user" | "assistant";
   text: string;
 };
-type Options = { includePersonalContext: boolean; includeMemory: boolean };
-type Callbacks = {
+export type RealtimeOptions = {
+  includePersonalContext: boolean;
+  includeMemory: boolean;
+};
+export type RealtimeCallbacks = {
   state: (state: VoiceState) => void;
   captions: (captions: RealtimeCaption[]) => void;
   note: (text: string) => void;
@@ -78,7 +81,7 @@ export class RealtimeVoiceSession {
   private heartbeat?: ReturnType<typeof setInterval>;
   private toolQueue: Promise<void> = Promise.resolve();
 
-  constructor(private cb: Callbacks) {}
+  constructor(private cb: RealtimeCallbacks) {}
   private path(suffix = "") {
     return `/my-workspace/assistant/realtime/sessions/${this.id}${suffix}`;
   }
@@ -399,7 +402,7 @@ export class RealtimeVoiceSession {
       }
     }
   }
-  async start(options: Options) {
+  async start(options: RealtimeOptions) {
     this.cb.state("connecting");
     try {
       const stream = await navigator.mediaDevices.getUserMedia({

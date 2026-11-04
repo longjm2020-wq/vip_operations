@@ -1,0 +1,362 @@
+import type { Server, IncomingMessage } from "node:http";
+import type { Duplex } from "node:stream";
+import { createHash, randomUUID } from "node:crypto";
+import WebSocket, { WebSocketServer } from "ws";
+import { actorForSessionHash } from "../auth/service.js";
+import type { Context } from "../../core.js";
+import { requireAssistant } from "./assistant-memory.js";
+import {
+  activateRealtimeSocket,
+  claimRealtimeSocket,
+  checkRealtime,
+  closeRealtime,
+  realtimeConfiguration,
+  runRealtimeTool,
+} from "./assistant-realtime.js";
+import {
+  closeDoubaoSocket,
+  doubaoConfiguration,
+  doubaoErrorMessage,
+  doubaoEventError,
+  doubaoProviderSocket,
+} from "./doubao-realtime.js";
+import {
+  registerRealtimeRelay,
+  closeAllRealtimeRelays,
+} from "./realtime-relay-registry.js";
+import { assistantPublicText } from "../../../../../packages/contracts/src/ai-presentation.js";
+
+const route =
+  /^\/api\/v1\/my-workspace\/assistant\/realtime\/sessions\/([\da-f-]{36})\/socket$/i;
+const simpleCommands = new Set([
+  "input_audio_buffer.commit",
+  "input_audio_mute.commit",
+  "input_audio_unmute.commit",
+  "response.cancel",
+  "session.close",
+]);
+/** Only the audio protocol is client-controlled; prompts, tools and tool results stay server-owned. */
+export function allowedRealtimeClientEvent(
+  value: unknown,
+): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const event = value as Record<string, unknown>;
+  if (typeof event.type !== "string") return null;
+  if (simpleCommands.has(event.type))
+    return Object.keys(event).length === 1 ? { type: event.type } : null;
+  if (
+    event.type !== "input_audio_buffer.append" ||
+    Object.keys(event).some((k) => !["type", "audio"].includes(k)) ||
+    typeof event.audio !== "string"
+  )
+    return null;
+  // 20 ms of mono PCM16 at 16 kHz. Reject malformed or oversized base64 before forwarding.
+  if (!/^[A-Za-z0-9+/]{854}==$/.test(event.audio)) return null;
+  const bytes = Buffer.from(event.audio, "base64");
+  if (bytes.length !== 640 || bytes.toString("base64") !== event.audio)
+    return null;
+  return { type: event.type, audio: event.audio };
+}
+const forwarded = new Set([
+  "input_audio_buffer.committed",
+  "conversation.item.input_audio_transcription.started",
+  "conversation.item.input_audio_transcription.delta",
+  "conversation.item.input_audio_transcription.completed",
+  "conversation.item.input_audio_transcription.failed",
+  "response.output_text.delta",
+  "response.output_text.done",
+  "response.output_audio.started",
+  "response.output_audio.delta",
+  "response.output_audio.done",
+  "response.done",
+  "response.canceled",
+]);
+// No raw session configuration, provider trace, usage metadata or errors reaches ordinary clients.
+export function publicRealtimeEvent(event: Record<string, unknown>) {
+  if (!forwarded.has(String(event.type))) return null;
+  const out: Record<string, unknown> = { type: event.type };
+  for (const key of [
+    "event_id",
+    "item_id",
+    "question_id",
+    "response_id",
+    "output_index",
+    "content_index",
+    "delta",
+    "text",
+    "transcript",
+    "asr_info",
+    "response",
+  ])
+    if (event[key] !== undefined && key !== "response" && key !== "asr_info")
+      out[key] = event[key];
+  if (event.response && typeof event.response === "object") {
+    const r = event.response as Record<string, unknown>;
+    out.response = { id: r.id, status: r.status };
+  }
+  // The protocol sends asr_info.is_interim on completed transcripts in some versions.
+  if (event.asr_info && typeof event.asr_info === "object")
+    out.asr_info = {
+      is_interim: (event.asr_info as Record<string, unknown>).is_interim,
+    };
+  if (String(event.type).startsWith("response.output_text")) {
+    for (const key of ["delta", "text"])
+      if (typeof out[key] === "string")
+        out[key] = assistantPublicText(out[key] as string);
+  }
+  return out;
+}
+function sessionHash(request: IncomingMessage) {
+  const token = /(?:^|;\s*)session=([^;]+)/.exec(
+    request.headers.cookie || "",
+  )?.[1];
+  if (!token || token.length > 512) throw Error("unauthenticated");
+  return createHash("sha256").update(decodeURIComponent(token)).digest("hex");
+}
+function rejectUpgrade(socket: Duplex, status = 403) {
+  socket.end(
+    `HTTP/1.1 ${status} Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`,
+  );
+}
+export function attachRealtimeRelay(server: Server) {
+  const websocketServer = new WebSocketServer({
+    noServer: true,
+    maxPayload: 8192,
+    perMessageDeflate: false,
+  });
+  const upgrade = (request: IncomingMessage, socket: Duplex, head: Buffer) => {
+    socket.on("error", () => {});
+    const matched = route.exec(request.url || "");
+    if (!matched || request.headers.origin !== process.env.APP_ORIGIN)
+      return rejectUpgrade(socket);
+    void (async () => {
+      const hash = sessionHash(request);
+      const c: Context = {
+        actor: await actorForSessionHash(hash),
+        requestId: randomUUID(),
+      };
+      requireAssistant(c);
+      if (socket.destroyed) return;
+      websocketServer.handleUpgrade(request, socket, head, (client) => {
+        runRelay(client, c, matched[1], hash);
+      });
+    })().catch(() => rejectUpgrade(socket));
+  };
+  server.on("upgrade", upgrade);
+  return () => {
+    server.off("upgrade", upgrade);
+    closeAllRealtimeRelays();
+    websocketServer.close();
+  };
+}
+function runRelay(
+  client: WebSocket,
+  context: Context,
+  id: string,
+  authHash: string,
+) {
+  let upstream: WebSocket | undefined;
+  let closed = false,
+    authenticating = false,
+    ready = false,
+    healthBusy = false,
+    pong = true;
+  let unregister: (() => void) | undefined;
+  let health: ReturnType<typeof setInterval> | undefined;
+  let lifetime: ReturnType<typeof setTimeout> | undefined;
+  let toolQueue = Promise.resolve();
+  let frameWindow = Date.now(),
+    frames = 0;
+  let c = context;
+  const send = (data: unknown) => {
+    if (closed || client.readyState !== WebSocket.OPEN) return;
+    if (client.bufferedAmount > 1024 * 1024) return stop();
+    client.send(JSON.stringify(data));
+  };
+  const stop = (message?: string) => {
+    if (closed) return;
+    if (message) send({ type: "xuti.error", message });
+    closed = true;
+    clearTimeout(connectTimer);
+    clearTimeout(lifetime);
+    clearInterval(health);
+    unregister?.();
+    if (upstream) closeDoubaoSocket(upstream);
+    client.close(1000);
+    // The close API may run on another replica; periodic ownership checks also observe its state.
+    void closeRealtime(c, id).catch(() => {});
+  };
+  const connectTimer = setTimeout(
+    () => stop("语音连接超时，请重新开始"),
+    20000,
+  );
+  const refreshActor = async () => {
+    const actor = await actorForSessionHash(authHash);
+    if (actor.id !== context.actor.id) throw Error("owner changed");
+    requireAssistant({ actor, requestId: c.requestId });
+    c = { ...c, actor };
+  };
+  client.on("error", () => stop());
+  client.on("pong", () => {
+    pong = true;
+  });
+  client.on("close", () => stop());
+  client.on("message", (raw, binary) => {
+    void (async () => {
+      if (closed) return;
+      if (binary) return stop("语音数据格式无效");
+      let event: Record<string, unknown>;
+      try {
+        event = JSON.parse(raw.toString());
+      } catch {
+        return stop("语音数据格式无效");
+      }
+      if (!authenticating) {
+        authenticating = true;
+        if (
+          event.type !== "authenticate" ||
+          typeof event.ticket !== "string" ||
+          !/^[\w-]{43}$/.test(event.ticket) ||
+          Object.keys(event).length !== 2
+        )
+          return stop("语音连接凭证无效，请重新开始");
+        const config = await claimRealtimeSocket(c, id, event.ticket);
+        if (closed) return;
+        unregister = registerRealtimeRelay(id, () => stop());
+        upstream = doubaoProviderSocket(config.key);
+        upstream.on("open", () => {
+          if (closed) return;
+          upstream!.send(
+            JSON.stringify(
+              doubaoConfiguration(
+                config.voice,
+                realtimeConfiguration(config.voice),
+              ),
+            ),
+          );
+        });
+        upstream.on("error", () => stop(doubaoErrorMessage(undefined)));
+        upstream.on("unexpected-response", (_req, res) => {
+          res.resume();
+          stop(doubaoErrorMessage(res.statusCode));
+        });
+        upstream.on("close", () =>
+          stop(ready ? "实时语音连接已结束" : "实时语音连接未建立，请检查配置"),
+        );
+        upstream.on("message", (data, isBinary) => {
+          void (async () => {
+            if (closed) return;
+            if (isBinary) return stop("实时语音服务返回格式异常");
+            const e = JSON.parse(data.toString()) as Record<string, unknown>;
+            if (e.type === "error") return stop(doubaoEventError(e));
+            if (e.type === "session.closed") return stop();
+            if (e.type === "session.created") {
+              if (ready) return;
+              if (
+                !e.session ||
+                typeof (e.session as Record<string, unknown>).id !== "string"
+              )
+                return stop("实时语音服务返回格式异常");
+              await refreshActor();
+              const expiresAt = await activateRealtimeSocket(c, id);
+              if (closed) return;
+              ready = true;
+              clearTimeout(connectTimer);
+              lifetime = setTimeout(
+                () => stop("本次实时通话已结束，可再次开始"),
+                3600000,
+              );
+              health = setInterval(() => {
+                if (healthBusy || closed) return;
+                if (!pong) return stop();
+                pong = false;
+                client.ping();
+                healthBusy = true;
+                void refreshActor()
+                  .then(() => checkRealtime(c, id))
+                  .catch(() => stop("登录或语音配置已变化，实时通话已结束"))
+                  .finally(() => {
+                    healthBusy = false;
+                  });
+              }, 15000);
+              send({ type: "xuti.ready", expiresAt });
+              return;
+            }
+            if (!ready) return;
+            if (e.type === "response.function_call_arguments.done") {
+              if (!Array.isArray(e.items) || e.items.length > 8)
+                return stop("语音指令格式无效");
+              const items = e.items;
+              const turn = {
+                question_id: e.question_id,
+                response_id: e.response_id,
+              };
+              send({ type: "xuti.tool_started", ...turn });
+              toolQueue = toolQueue
+                .then(async () => {
+                  if (closed) return;
+                  const results = [];
+                  for (const item of items) {
+                    if (closed) return;
+                    await refreshActor();
+                    if (
+                      !item ||
+                      item.name !== "workspace_request" ||
+                      typeof item.call_id !== "string" ||
+                      typeof item.arguments !== "string" ||
+                      item.arguments.length > 16000
+                    )
+                      throw Error("invalid tool");
+                    const args = JSON.parse(item.arguments);
+                    const result = await runRealtimeTool(c, id, {
+                      callId: item.call_id,
+                      request: args.request,
+                    });
+                    if (closed) return;
+                    results.push({
+                      type: "message",
+                      call_id: item.call_id,
+                      role: "tool",
+                      content: [
+                        { type: "input_text", text: JSON.stringify(result) },
+                      ],
+                    });
+                    send({
+                      type: "xuti.tool_result",
+                      call_id: item.call_id,
+                      result,
+                      ...turn,
+                    });
+                  }
+                  if (upstream?.readyState === WebSocket.OPEN && !closed)
+                    upstream.send(
+                      JSON.stringify({
+                        type: "conversation.item.create",
+                        items: results,
+                      }),
+                    );
+                })
+                .catch(() => stop("语音操作未完成，请查看完整对话后再试"));
+              return;
+            }
+            const safe = publicRealtimeEvent(e);
+            if (safe) send(safe);
+          })().catch(() => stop("实时语音服务返回异常，请重新开始"));
+        });
+        return;
+      }
+      const allowed = allowedRealtimeClientEvent(event);
+      if (!allowed) return stop("语音数据格式无效");
+      if (allowed.type === "session.close") return stop();
+      if (!ready || upstream?.readyState !== WebSocket.OPEN)
+        return stop("实时语音尚未连接，请重新开始");
+      if (Date.now() - frameWindow >= 1000) {
+        frameWindow = Date.now();
+        frames = 0;
+      }
+      if (++frames > 90 || upstream.bufferedAmount > 256 * 1024)
+        return stop("语音传输过快或网络拥塞，请重新开始");
+      upstream.send(JSON.stringify(allowed));
+    })().catch(() => stop("语音连接已失效，请重新开始"));
+  });
+}

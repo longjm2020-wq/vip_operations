@@ -31,6 +31,7 @@ import { CompetitorAnalysisModule } from "./modules/competitors/controller.js";
 import { CompassSharesModule } from "./modules/analytics/share-controller.js";
 import { selectionImportBodyParser } from "./selection-import-body.js";
 import { createAigcService } from "./modules/aigc/service.js";
+import { attachRealtimeRelay } from "./modules/workspace/realtime-relay.js";
 @Module({
   controllers: [ManualController],
   imports: [
@@ -120,6 +121,8 @@ export async function start() {
     Number(process.env.PORT || 3100),
     process.env.HOST || "127.0.0.1",
   );
+  const stopRealtime = attachRealtimeRelay(app.getHttpServer());
+  for (const signal of ["SIGINT", "SIGTERM"] as const) process.once(signal, stopRealtime);
   startImageMigration();
   const stopRecycle = startRecycleCleanup();
   for (const signal of ["SIGINT","SIGTERM"] as const) process.once(signal,() => void stopRecycle());

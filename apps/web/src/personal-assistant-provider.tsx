@@ -275,6 +275,7 @@ export function PersonalAssistantProvider({
       const tool = available.find((item) => item.id === toolId);
       if (tool) navigate(tool.path);
     },
+    realtimeStatus.data?.transport,
   );
   // A live call owns its transport until it ends, including configuration refetches.
   const useRealtime =

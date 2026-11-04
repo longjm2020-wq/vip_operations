@@ -9,6 +9,7 @@ import {
   climbRestPosition,
   type ClimbTarget,
 } from "./companion-climbing";
+import { beginCompanionReverie, findReverieSpace } from "./companion-reverie";
 
 type Position = { x: number; y: number };
 function overlayControlAreas() {
@@ -232,6 +233,8 @@ export function WorkspaceCompanion() {
     let climbFrame = 0;
     let perch: ClimbTarget | null = null;
     let parked: Position | undefined;
+    let reverie: ReturnType<typeof beginCompanionReverie> | null = null;
+    let nextReverieAt = Date.now() + 45000;
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)");
     try {
       const saved = JSON.parse(localStorage.getItem(storageKey) || "null");
@@ -325,7 +328,13 @@ export function WorkspaceCompanion() {
       }
       alignNest();
     };
+    const stopReverie = () => {
+      reverie?.cancel();
+      reverie = null;
+      panel.current?.removeAttribute("data-reverie");
+    };
     const cancelTransition = () => {
+      stopReverie();
       cancelAnimationFrame(climbFrame);
       climbFrame = 0;
       transition?.timers.forEach(clearTimeout);
@@ -336,6 +345,7 @@ export function WorkspaceCompanion() {
       }
     };
     const active = () => {
+      stopReverie();
       lastActive = Date.now();
       if (transition?.automatic) cancelTransition();
       if (state.motion === "peek") {
@@ -654,10 +664,28 @@ export function WorkspaceCompanion() {
       }
     };
     const reflow = () => {
+      if (reverie) {
+        const bounds = reverie.frame.getBoundingClientRect();
+        const scene = reverie.frame.closest<HTMLElement>(".personal-workspace");
+        if (
+          !reverie.frame.isConnected ||
+          scene?.dataset.scenePresence !== "closed" ||
+          !!document.querySelector(
+            ".ant-drawer-open, .ant-modal-wrap:not([style*='display: none']), .workspace-hologram:not([inert])",
+          ) ||
+          !isClear(
+            { x: bounds.x, y: bounds.y },
+            bounds.width,
+            bounds.height,
+            occupiedAreas(),
+          )
+        )
+          stopReverie();
+      }
       scheduleAnchor();
       clearTimeout(reflowTimer);
       reflowTimer = setTimeout(() => {
-        if (drag || transition || perch) return;
+        if (drag || transition || perch || reverie) return;
         if (state.docked) {
           const rect = panel.current?.getBoundingClientRect();
           if (
@@ -708,6 +736,16 @@ export function WorkspaceCompanion() {
     };
     const onPointerMove = (event: globalThis.PointerEvent) => {
       pointer = { x: event.clientX, y: event.clientY };
+      if (reverie) {
+        const bounds = reverie.frame.getBoundingClientRect();
+        if (
+          pointer.x > bounds.left - 24 &&
+          pointer.x < bounds.right + 24 &&
+          pointer.y > bounds.top - 24 &&
+          pointer.y < bounds.bottom + 24
+        )
+          active();
+      }
       if (!drag || drag.id !== event.pointerId) return;
       const dx = event.clientX - drag.start.x,
         dy = event.clientY - drag.start.y;
@@ -911,11 +949,41 @@ export function WorkspaceCompanion() {
           ".ant-drawer-open, .ant-modal-wrap:not([style*='display: none']), .workspace-nav-scrim, .companion-details-popover:not(.ant-popover-hidden), .personal-workspace-panel:not([hidden])",
         );
       if (blocked) {
+        stopReverie();
         if (transition?.automatic) cancelTransition();
         return;
       }
+      if (reverie) return;
       if (transition) return;
       const idleFor = Date.now() - lastActive;
+      if (idleFor >= 45000 && Date.now() >= nextReverieAt && nestAvailable()) {
+        // Keep this occasional and local to genuinely empty workspace space.
+        // The original interactive assistant stays mounted throughout the projection.
+        nextReverieAt = Date.now() + 90000;
+        const workspace = nest?.closest<HTMLElement>(".personal-workspace");
+        const robot =
+          panel.current?.querySelector<SVGSVGElement>(".companion-robot");
+        const area = workspace && findReverieSpace(workspace, obstacles());
+        if (workspace && robot && area) {
+          state.compact = false;
+          state.motion = "idle";
+          leavePerch();
+          reverie = beginCompanionReverie(workspace, robot, area, () => {
+            reverie = null;
+            panel.current?.removeAttribute("data-reverie");
+            lastTravel = Date.now();
+          });
+          panel.current?.setAttribute("data-reverie", "true");
+          attach(false);
+          position({
+            x: area.x + (area.width - 132) / 2,
+            y: area.y + (area.height - 118) / 2,
+          });
+          awayHops++;
+          lastTravel = Date.now();
+          return;
+        }
+      }
       if (state.docked && idleFor >= 6000 && state.motion === "idle") {
         state.motion = "peek";
         publish();
@@ -932,6 +1000,7 @@ export function WorkspaceCompanion() {
       }
     }, 1000);
     return () => {
+      stopReverie();
       clearInterval(timer);
       clearTimeout(reflowTimer);
       clearTimeout(clickResetTimer);

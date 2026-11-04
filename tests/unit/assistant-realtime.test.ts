@@ -18,6 +18,7 @@ const f = vi.hoisted(() => ({
   db: null as PGlite | null,
   read: vi.fn(),
   send: vi.fn(),
+  verifyDoubao: vi.fn(),
 }));
 vi.mock("../../packages/database/src/index.js", async (original) => {
   const exports =
@@ -49,6 +50,9 @@ vi.mock("../../apps/api/src/modules/analytics/secrets.js", () => ({
   encryptSecret: (v: string) => "encrypted:" + v,
   decryptSecret: () => "server-only-key",
 }));
+vi.mock("../../apps/api/src/modules/workspace/doubao-realtime.js", () => ({
+  verifyDoubaoRealtime: f.verifyDoubao,
+}));
 import {
   readRealtimeStatus,
   saveRealtimeSettings,
@@ -58,6 +62,8 @@ import {
   checkRealtime,
   runRealtimeTool,
   saveRealtimeCaptions,
+  claimRealtimeSocket,
+  activateRealtimeSocket,
 } from "../../apps/api/src/modules/workspace/assistant-realtime.js";
 
 const actor = (admin = false, id = "7"): Context => ({
@@ -87,32 +93,36 @@ beforeAll(async () => {
       "utf8",
     ),
   );
+  await f.db.exec(
+    await readFile(
+      "packages/database/migrations/086_doubao_realtime.sql",
+      "utf8",
+    ),
+  );
 });
 beforeEach(async () => {
   await f.db!
     .exec(`TRUNCATE assistant_realtime_sessions CASCADE; TRUNCATE personal_assistant_conversations;
-    UPDATE assistant_realtime_settings SET enabled=true,voice='marin',api_key_encrypted='encrypted',verified_at=now(),error_note='',version=0;`);
-  f.read
-    .mockReset()
-    .mockResolvedValue({
-      ready: true,
-      state: "IDLE",
-      version: 3,
-      messages: [],
-    });
-  f.send
-    .mockReset()
-    .mockResolvedValue({
-      state: "IDLE",
-      messages: [
-        {
-          id: randomUUID(),
-          role: "assistant",
-          text: "正在打开经营分析",
-          navigation: "analytics",
-        },
-      ],
-    });
+    UPDATE assistant_realtime_settings SET provider='openai',enabled=true,voice='marin',api_key_encrypted='encrypted',verified_at=now(),error_note='',version=0,
+    doubao_voice='zh_female_vv_uranus_bigtts',doubao_api_key_encrypted=NULL,doubao_verified_at=NULL,doubao_error_note='';`);
+  f.verifyDoubao.mockReset().mockResolvedValue(undefined);
+  f.read.mockReset().mockResolvedValue({
+    ready: true,
+    state: "IDLE",
+    version: 3,
+    messages: [],
+  });
+  f.send.mockReset().mockResolvedValue({
+    state: "IDLE",
+    messages: [
+      {
+        id: randomUUID(),
+        role: "assistant",
+        text: "正在打开经营分析",
+        navigation: "analytics",
+      },
+    ],
+  });
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string) =>
@@ -138,6 +148,91 @@ afterAll(async () => {
 });
 
 describe("native realtime voice authorization and lifecycle", () => {
+  it("keeps provider credentials separate and issues an owner-bound one-use socket ticket", async () => {
+    const admin = actor(true);
+    const configured = await saveRealtimeSettings(admin, {
+      version: 0,
+      enabled: true,
+      provider: "doubao",
+      voice: "zh_female_vv_uranus_bigtts",
+      apiKey: "doubao-private-opaque-api-key",
+    });
+    expect(configured.transport).toBe("websocket");
+    expect(configured.ready).toBe(false);
+    expect(configured.profiles!.openai.apiKeyConfigured).toBe(true);
+    const verified = await verifyRealtimeSettings(admin);
+    expect(verified.ready).toBe(true);
+    expect(f.verifyDoubao).toHaveBeenCalledWith(
+      "encrypted:doubao-private-opaque-api-key",
+      "zh_female_vv_uranus_bigtts",
+      expect.any(Object),
+    );
+    expect(fetch).not.toHaveBeenCalled();
+    const publicStatus = await readRealtimeStatus(actor());
+    expect(publicStatus.profiles).toBeUndefined();
+    expect(JSON.stringify(publicStatus)).not.toContain("private-opaque");
+    const id = randomUUID();
+    const started = await startRealtime(actor(), { id });
+    expect(started.transport).toBe("websocket");
+    expect(started.ticket).toMatch(/^[\w-]{43}$/);
+    expect(JSON.stringify(started)).not.toContain("private-opaque");
+    expect(
+      JSON.stringify(
+        (await f.db!.query("SELECT * FROM assistant_realtime_sessions")).rows,
+      ),
+    ).not.toContain(started.ticket!);
+    await expect(
+      claimRealtimeSocket(actor(false, "8"), id, started.ticket!),
+    ).rejects.toBeDefined();
+    await expect(
+      claimRealtimeSocket(actor(), id, "incorrect-ticket"),
+    ).rejects.toBeDefined();
+    expect(
+      await claimRealtimeSocket(actor(), id, started.ticket!),
+    ).toMatchObject({ key: "encrypted:doubao-private-opaque-api-key" });
+    await expect(
+      claimRealtimeSocket(actor(), id, started.ticket!),
+    ).rejects.toBeDefined();
+    await activateRealtimeSocket(actor(), id);
+    expect((await checkRealtime(actor(), id)).active).toBe(true);
+    await closeRealtime(actor(), id);
+    expect(fetch).not.toHaveBeenCalled();
+    const restored = await saveRealtimeSettings(admin, {
+      version: verified.version,
+      provider: "openai",
+      enabled: true,
+      voice: "marin",
+    });
+    expect(restored.ready).toBe(true);
+    expect(restored.transport).toBe("webrtc");
+    expect(restored.profiles!.doubao.apiKeyConfigured).toBe(true);
+  });
+  it("rejects expired/cancelled socket tickets and isolates provider voice validation", async () => {
+    await expect(
+      saveRealtimeSettings(actor(true), {
+        version: 0,
+        provider: "doubao",
+        enabled: true,
+        voice: "marin",
+      }),
+    ).rejects.toBeDefined();
+    await f.db!.exec(
+      "UPDATE assistant_realtime_settings SET provider='doubao',doubao_api_key_encrypted='encrypted',doubao_verified_at=now()",
+    );
+    const first = await startRealtime(actor(), { id: randomUUID() });
+    await f.db!.exec(
+      "UPDATE assistant_realtime_sessions SET expires_at=now()-interval '1 second'",
+    );
+    await expect(
+      claimRealtimeSocket(actor(), first.id, first.ticket!),
+    ).rejects.toBeDefined();
+    const next = await startRealtime(actor(), { id: randomUUID() });
+    await closeRealtime(actor(), next.id);
+    await expect(
+      claimRealtimeSocket(actor(), next.id, next.ticket!),
+    ).rejects.toBeDefined();
+    expect(fetch).not.toHaveBeenCalled();
+  });
   it("redacts secrets and models, rejects other-provider keys and non-admin edits", async () => {
     const status = await readRealtimeStatus(actor());
     expect(status.ready).toBe(true);

@@ -2,7 +2,8 @@ import {
   openPersonalAssistant,
   setAssistantOption,
 } from "./assistant-controls.js";
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page, type WebSocketRoute } from "@playwright/test";
+import type { RealtimeStatus } from "../../packages/contracts/src/assistant-realtime.js";
 
 declare global {
   interface Window {
@@ -14,6 +15,256 @@ declare global {
     };
   }
 }
+
+test("全双工实时通话用真实音频处理发送短帧，静音恢复与断开释放麦克风", async ({
+  page,
+}) => {
+  const { bubble } = await fixture(page, { configured: false });
+  let socket: WebSocketRoute | undefined;
+  const frames: Record<string, unknown>[] = [];
+  const writes: string[] = [];
+  await page.route(
+    "**/api/v1/my-workspace/assistant/realtime**",
+    async (route) => {
+      const path = new URL(route.request().url()).pathname;
+      writes.push(path);
+      let data: unknown = {
+        provider: "doubao",
+        transport: "websocket",
+        enabled: true,
+        ready: true,
+        voice: "zh_female_vv_uranus_bigtts",
+        apiKeyConfigured: true,
+        encryptionReady: true,
+        verifiedAt: "2026-11-05T00:00:00Z",
+        error: "",
+        canManage: true,
+        version: 1,
+      };
+      if (path.endsWith("/sessions")) {
+        expect(route.request().postDataJSON()).not.toHaveProperty("sdp");
+        data = {
+          transport: "websocket",
+          ticket: "fixture-one-use-ticket",
+          expiresAt: new Date(Date.now() + 60000).toISOString(),
+        };
+      } else if (path.endsWith("/close")) data = { closed: true };
+      else if (path.includes("/sessions/"))
+        data = {
+          active: true,
+          expiresAt: new Date(Date.now() + 3600000).toISOString(),
+        };
+      await route.fulfill({ json: { data } });
+    },
+  );
+  await page.routeWebSocket(
+    "**/api/v1/my-workspace/assistant/realtime/sessions/*/socket",
+    (ws) => {
+      socket = ws;
+      ws.onMessage((raw) => {
+        const event = JSON.parse(raw.toString());
+        frames.push(event);
+        if (event.type === "authenticate") {
+          expect(event.ticket).toBe("fixture-one-use-ticket");
+          ws.send(
+            JSON.stringify({
+              type: "xuti.ready",
+              expiresAt: new Date(Date.now() + 3600000).toISOString(),
+            }),
+          );
+        }
+        if (event.type === "session.close") ws.close();
+      });
+    },
+  );
+  await page.reload();
+  await page.locator(".companion-launch").click();
+  await expect(bubble.getByRole("status")).toHaveText("实时聆听中，你说");
+  await expect
+    .poll(
+      () => frames.filter((f) => f.type === "input_audio_buffer.append").length,
+    )
+    .toBeGreaterThan(3);
+  for (const frame of frames.filter(
+    (f) => f.type === "input_audio_buffer.append",
+  ))
+    expect(Buffer.from(String(frame.audio), "base64").length).toBe(640);
+  await bubble.getByRole("button", { name: "麦克风静音", exact: true }).click();
+  await expect
+    .poll(() => frames.some((f) => f.type === "input_audio_mute.commit"))
+    .toBe(true);
+  await bubble.getByRole("button", { name: "取消静音", exact: true }).click();
+  await expect
+    .poll(() => frames.some((f) => f.type === "input_audio_unmute.commit"))
+    .toBe(true);
+  socket!.send(
+    JSON.stringify({
+      type: "conversation.item.input_audio_transcription.started",
+      item_id: "q1",
+    }),
+  );
+  socket!.send(
+    JSON.stringify({
+      type: "conversation.item.input_audio_transcription.completed",
+      item_id: "q1",
+      transcript: "你好，小序",
+    }),
+  );
+  socket!.send(
+    JSON.stringify({
+      type: "response.output_text.done",
+      question_id: "q1",
+      response_id: "r1",
+      text: "我在，有什么需要帮忙？",
+    }),
+  );
+  socket!.send(
+    JSON.stringify({
+      type: "response.output_audio.started",
+      question_id: "q1",
+      response_id: "r1",
+    }),
+  );
+  socket!.send(
+    JSON.stringify({
+      type: "response.output_audio.delta",
+      question_id: "q1",
+      response_id: "r1",
+      delta: Buffer.alloc(48000).toString("base64"),
+    }),
+  );
+  await expect(bubble.getByRole("status")).toHaveText("小序正在说话");
+  socket!.send(
+    JSON.stringify({
+      type: "conversation.item.input_audio_transcription.started",
+      item_id: "q2",
+    }),
+  );
+  await expect(bubble.getByRole("status")).toHaveText("实时聆听中，你说");
+  expect(await page.evaluate(() => window.gptVoiceTest.stops)).toBe(0);
+  socket!.close();
+  await expect
+    .poll(() => page.evaluate(() => window.gptVoiceTest.stops))
+    .toBe(1);
+  await expect
+    .poll(() => writes.some((path) => path.endsWith("/close")))
+    .toBe(true);
+  await expect(bubble).not.toContainText("zh_female");
+});
+
+test("实时通道切换分别保留配置，密钥保存后清空且验证不录音", async ({
+  page,
+}) => {
+  const { bubble } = await fixture(page, { configured: false });
+  let status: RealtimeStatus = {
+    provider: "openai",
+    transport: "webrtc",
+    enabled: false,
+    ready: false,
+    voice: "marin",
+    apiKeyConfigured: true,
+    encryptionReady: true,
+    verifiedAt: "2026-11-03T00:00:00Z",
+    error: "",
+    canManage: true,
+    version: 0,
+    profiles: {
+      openai: {
+        voice: "marin",
+        apiKeyConfigured: true,
+        verifiedAt: "2026-11-03T00:00:00Z",
+        error: "",
+      },
+      doubao: {
+        voice: "zh_female_vv_uranus_bigtts",
+        apiKeyConfigured: false,
+        verifiedAt: null,
+        error: "",
+      },
+    },
+  };
+  const writes: Record<string, unknown>[] = [];
+  await page.route(
+    "**/api/v1/my-workspace/assistant/realtime**",
+    async (route) => {
+      const path = new URL(route.request().url()).pathname;
+      if (path.endsWith("/settings")) {
+        const body = route.request().postDataJSON();
+        writes.push(body);
+        expect(route.request().headers()["x-csrf-token"]).toBe("fixture");
+        const provider = body.provider as "openai" | "doubao";
+        const prior = status.profiles![provider];
+        const profile = {
+          ...prior,
+          voice: body.voice,
+          apiKeyConfigured: !!body.apiKey || prior.apiKeyConfigured,
+          verifiedAt: body.apiKey ? null : prior.verifiedAt,
+        };
+        status = {
+          ...status,
+          ...profile,
+          provider,
+          transport: provider === "doubao" ? "websocket" : "webrtc",
+          enabled: body.enabled,
+          ready: false,
+          version: status.version + 1,
+          profiles: { ...status.profiles!, [provider]: profile },
+        };
+      }
+      if (path.endsWith("/verify")) {
+        status = {
+          ...status,
+          ready: status.enabled,
+          verifiedAt: "2026-11-05T00:00:00Z",
+        };
+        status.profiles![status.provider!].verifiedAt = status.verifiedAt;
+      }
+      await route.fulfill({ json: { data: status } });
+    },
+  );
+  await page.reload();
+  await page.locator(".companion-launch").click();
+  await bubble.getByRole("button", { name: "语音设置", exact: true }).click();
+  const settings = page.locator(".realtime-settings");
+  await settings.getByLabel("实时服务通道", { exact: true }).click();
+  await page
+    .getByText("豆包实时语音（火山引擎）", { exact: true })
+    .last()
+    .click();
+  await expect(
+    settings.getByLabel("实时服务密钥", { exact: true }),
+  ).toHaveAttribute("placeholder", "输入火山引擎语音服务 API Key");
+  await settings.getByRole("switch", { name: "优先使用实时通话" }).click();
+  await settings
+    .getByLabel("实时服务密钥", { exact: true })
+    .fill("doubao-fixture-only-never-real-secret");
+  await settings.getByRole("button", { name: "保存实时设置" }).click();
+  await expect.poll(() => writes.length).toBe(1);
+  expect(writes[0]).toMatchObject({
+    provider: "doubao",
+    voice: "zh_female_vv_uranus_bigtts",
+    enabled: true,
+  });
+  await expect(
+    settings.getByLabel("实时服务密钥", { exact: true }),
+  ).toHaveValue("");
+  await settings.getByRole("button", { name: "验证实时通道" }).click();
+  await expect(
+    settings.getByText("实时通话已就绪", { exact: true }),
+  ).toBeVisible();
+  expect(await page.evaluate(() => window.gptVoiceTest.starts)).toBe(0);
+  expect(await page.evaluate(() => JSON.stringify(localStorage))).not.toContain(
+    "doubao-fixture-only",
+  );
+  await settings.getByLabel("实时服务通道", { exact: true }).click();
+  await page.getByText("OpenAI 实时语音", { exact: true }).last().click();
+  await expect(
+    settings.getByLabel("实时服务密钥", { exact: true }),
+  ).toHaveAttribute("placeholder", "已保存，不回显");
+  await expect(
+    settings.getByRole("button", { name: "验证实时通道" }),
+  ).toBeDisabled();
+});
 
 async function fixture(
   page: Page,

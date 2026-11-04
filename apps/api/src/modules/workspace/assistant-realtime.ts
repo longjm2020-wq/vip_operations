@@ -1,4 +1,4 @@
-import { randomUUID, createHash } from "node:crypto";
+import { randomUUID, randomBytes, createHash } from "node:crypto";
 import { z } from "zod";
 import {
   db,
@@ -25,6 +25,8 @@ import {
 import { requireAssistant } from "./assistant-memory.js";
 import { readAssistant, sendAssistant } from "./assistant.js";
 import { voiceSafeError } from "./assistant-voice.js";
+import { verifyDoubaoRealtime } from "./doubao-realtime.js";
+import { closeRealtimeRelay } from "./realtime-relay-registry.js";
 
 const root = "https://api.openai.com/v1/realtime";
 const settings = () =>
@@ -32,25 +34,49 @@ const settings = () =>
 const manager = (c: Context) =>
   !!c.actor.roleCodes?.includes("SUPER_ADMIN") &&
   c.actor.permissions.includes("analytics.manage");
+function providerFields(s: Row, provider = s.provider || "openai") {
+  const prefix = provider === "doubao" ? "doubao_" : "";
+  return {
+    voice: s[prefix + "voice"],
+    key: s[prefix + "api_key_encrypted"],
+    verified: s[prefix + "verified_at"],
+    error: s[prefix + "error_note"] || "",
+  };
+}
 function requireManager(c: Context) {
   requireAssistant(c);
   if (!manager(c))
     fail("FORBIDDEN", "仅有经营分析管理权限的超级管理员可配置实时语音", 403);
 }
 function view(c: Context, s: Row): RealtimeStatus {
+  const selected = providerFields(s);
+  const profile = (provider: string) => {
+    const p = providerFields(s, provider);
+    return {
+      voice: p.voice,
+      apiKeyConfigured: !!p.key,
+      verifiedAt: p.verified,
+      error: p.error,
+    };
+  };
   return {
+    provider: s.provider || "openai",
+    transport: s.provider === "doubao" ? "websocket" : "webrtc",
+    ...(manager(c)
+      ? { profiles: { openai: profile("openai"), doubao: profile("doubao") } }
+      : {}),
     enabled: s.enabled,
     ready: !!(
       s.enabled &&
-      s.api_key_encrypted &&
-      s.verified_at &&
+      selected.key &&
+      selected.verified &&
       encryptionReady()
     ),
-    voice: s.voice,
-    apiKeyConfigured: !!s.api_key_encrypted,
+    voice: selected.voice,
+    apiKeyConfigured: !!selected.key,
     encryptionReady: encryptionReady(),
-    verifiedAt: s.verified_at,
-    error: s.error_note || "",
+    verifiedAt: selected.verified,
+    error: selected.error,
     canManage: manager(c),
     version: s.version,
   };
@@ -64,18 +90,20 @@ export async function saveRealtimeSettings(c: Context, input: unknown) {
   const b = parse(realtimeSettingsSchema, input);
   if ((b.apiKey || b.enabled) && !encryptionReady())
     fail("VOICE_ENCRYPTION", "服务器凭据加密尚未就绪", 503);
+  const prefix = b.provider === "doubao" ? "doubao_" : "";
   const updated = await one(
     db,
     `UPDATE public.assistant_realtime_settings SET
-    enabled=$2,voice=$3,
-    api_key_encrypted=CASE WHEN $4 THEN NULL WHEN $5::text IS NOT NULL THEN $5 ELSE api_key_encrypted END,
-    verified_at=CASE WHEN $4 OR $5::text IS NOT NULL OR voice<>$3 THEN NULL ELSE verified_at END,
-    error_note='',version=version+1,updated_at=now() WHERE id=1 AND version=$1 RETURNING id`,
+    enabled=$2,${prefix}voice=$3,provider=$6,
+    ${prefix}api_key_encrypted=CASE WHEN $4 THEN NULL WHEN $5::text IS NOT NULL THEN $5 ELSE ${prefix}api_key_encrypted END,
+    ${prefix}verified_at=CASE WHEN $4 OR $5::text IS NOT NULL OR ${prefix}voice<>$3 THEN NULL ELSE ${prefix}verified_at END,
+    ${prefix}error_note='',version=version+1,updated_at=now() WHERE id=1 AND version=$1 RETURNING id`,
     b.version,
     b.clearKey ? false : b.enabled,
     b.voice,
     b.clearKey,
     b.apiKey ? encryptSecret(b.apiKey) : null,
+    b.provider,
   );
   if (!updated)
     fail("VERSION_CONFLICT", "实时语音设置已变化，请刷新后重试", 409);
@@ -164,33 +192,43 @@ async function providerRequest(
 export async function verifyRealtimeSettings(c: Context) {
   requireManager(c);
   const s = (await settings())!;
-  if (!s.api_key_encrypted || !encryptionReady())
+  const selected = providerFields(s);
+  if (!selected.key || !encryptionReady())
     fail("REALTIME_NOT_READY", "请先保存实时语音专用密钥", 409);
   let error = "";
   try {
-    const response = await providerRequest(
-      s,
-      "/client_secrets",
-      JSON.stringify({
-        expires_after: { anchor: "created_at", seconds: 10 },
-        session: realtimeConfiguration(s.voice),
-      }),
-      true,
-    );
-    const result = (await response.json()) as {
-      session?: { model?: string };
-      value?: string;
-    };
-    if (result.session?.model !== realtimeModel || !result.value)
-      fail("REALTIME_MODEL", "实时语音服务返回与配置不一致，验证未通过", 502);
-    // A verification token expires in ten seconds and is never returned, logged or stored.
+    if (s.provider === "doubao") {
+      await verifyDoubaoRealtime(
+        selected.key,
+        selected.voice,
+        realtimeConfiguration(selected.voice),
+      );
+    } else {
+      const response = await providerRequest(
+        s,
+        "/client_secrets",
+        JSON.stringify({
+          expires_after: { anchor: "created_at", seconds: 10 },
+          session: realtimeConfiguration(s.voice),
+        }),
+        true,
+      );
+      const result = (await response.json()) as {
+        session?: { model?: string };
+        value?: string;
+      };
+      if (result.session?.model !== realtimeModel || !result.value)
+        fail("REALTIME_MODEL", "实时语音服务返回与配置不一致，验证未通过", 502);
+      // A verification token expires in ten seconds and is never returned, logged or stored.
+    }
   } catch (e) {
     error = voiceSafeError(e);
   }
+  const prefix = s.provider === "doubao" ? "doubao_" : "";
   const saved = await one(
     db,
-    `UPDATE public.assistant_realtime_settings SET verified_at=CASE WHEN $2='' THEN now() ELSE NULL END,
-    error_note=$2,version=version+1,updated_at=now() WHERE id=1 AND version=$1 RETURNING id`,
+    `UPDATE public.assistant_realtime_settings SET ${prefix}verified_at=CASE WHEN $2='' THEN now() ELSE NULL END,
+    ${prefix}error_note=$2,version=version+1,updated_at=now() WHERE id=1 AND version=$1 RETURNING id`,
     s.version,
     error,
   );
@@ -226,6 +264,10 @@ export async function startRealtime(c: Context, input: unknown) {
     s = (await settings())!;
   if (!view(c, s).ready)
     fail("REALTIME_NOT_READY", "请先配置、启用并验证实时语音", 409);
+  if (s.provider !== "doubao" && !b.sdp)
+    fail("VALIDATION_ERROR", "缺少音频连接请求", 400);
+  const ticket =
+    s.provider === "doubao" ? randomBytes(32).toString("base64url") : undefined;
   await db.$transaction(async (tx) => {
     await tx.$executeRawUnsafe(
       "SELECT pg_advisory_xact_lock(hashtextextended($1,0))",
@@ -240,20 +282,29 @@ export async function startRealtime(c: Context, input: unknown) {
       fail("REALTIME_BUSY", "此账号已有实时通话，请先结束原通话", 409);
     const reserved = await one(
       tx,
-      `INSERT INTO public.assistant_realtime_sessions(id,user_id,settings_version,include_context,include_memory,state,expires_at)
-      VALUES($1::uuid,$2::bigint,$3,$4,$5,'CREATING',now()+interval '1 minute') ON CONFLICT(id) DO NOTHING RETURNING id`,
+      `INSERT INTO public.assistant_realtime_sessions(id,user_id,settings_version,include_context,include_memory,state,expires_at,provider,socket_ticket_hash)
+      VALUES($1::uuid,$2::bigint,$3,$4,$5,'CREATING',now()+interval '1 minute',$6,$7) ON CONFLICT(id) DO NOTHING RETURNING id`,
       b.id,
       c.actor.id,
       s.version,
       b.includePersonalContext,
       b.includeMemory,
+      s.provider || "openai",
+      ticket ? createHash("sha256").update(ticket).digest("hex") : null,
     );
     if (!reserved) fail("REALTIME_DUPLICATE", "该通话已处理，请重新开始", 409);
   });
+  if (ticket)
+    return {
+      id: b.id,
+      transport: "websocket" as const,
+      ticket,
+      expiresAt: new Date(Date.now() + 60000).toISOString(),
+    };
   let callId: string | undefined;
   try {
     const body = new FormData();
-    body.set("sdp", b.sdp);
+    body.set("sdp", b.sdp!);
     body.set("session", JSON.stringify(realtimeConfiguration(s.voice)));
     const response = await providerRequest(s, "/calls", body);
     const location = response.headers.get("Location") || "";
@@ -272,7 +323,12 @@ export async function startRealtime(c: Context, input: unknown) {
       callId,
     );
     if (!saved) fail("REALTIME_CANCELED", "通话已取消", 409);
-    return { id: b.id, sdp, expiresAt: saved.expires_at };
+    return {
+      id: b.id,
+      transport: "webrtc" as const,
+      sdp,
+      expiresAt: saved.expires_at,
+    };
   } catch (e) {
     if (callId)
       await providerRequest(s, `/calls/${callId}/hangup`).catch(() => {});
@@ -290,7 +346,9 @@ export async function closeRealtime(c: Context, id: string) {
     session.id,
   );
   const s = (await settings())!;
+  closeRealtimeRelay(session.id);
   if (
+    session.provider !== "doubao" &&
     session.provider_call_id &&
     s.api_key_encrypted &&
     session.state !== "CLOSED"
@@ -299,6 +357,49 @@ export async function closeRealtime(c: Context, id: string) {
       () => {},
     );
   return { closed: true };
+}
+/** A ticket is bound to the authenticated owner and can only be claimed once. */
+export async function claimRealtimeSocket(
+  c: Context,
+  id: string,
+  ticket: string,
+) {
+  const session = await ownedSession(c, id, false);
+  const s = (await settings())!;
+  if (
+    session.provider !== "doubao" ||
+    s.provider !== "doubao" ||
+    !view(c, s).ready ||
+    session.settings_version !== s.version
+  )
+    fail("REALTIME_EXPIRED", "实时通话设置已变化，请重新开始", 409);
+  const claimed = await one(
+    db,
+    `UPDATE public.assistant_realtime_sessions SET socket_ticket_hash=NULL
+    WHERE id=$1::uuid AND user_id=$2::bigint AND state='CREATING' AND expires_at>now() AND socket_ticket_hash=$3 RETURNING id`,
+    session.id,
+    c.actor.id,
+    createHash("sha256").update(ticket).digest("hex"),
+  );
+  if (!claimed) fail("REALTIME_TICKET", "语音连接已失效，请重新开始", 403);
+  return {
+    key: s.doubao_api_key_encrypted as string,
+    voice: s.doubao_voice as string,
+  };
+}
+export async function activateRealtimeSocket(c: Context, id: string) {
+  const session = await ownedSession(c, id, false);
+  const s = (await settings())!;
+  if (!view(c, s).ready || session.settings_version !== s.version)
+    fail("REALTIME_EXPIRED", "实时通话设置已变化，请重新开始", 409);
+  const updated = await one(
+    db,
+    `UPDATE public.assistant_realtime_sessions SET state='ACTIVE',expires_at=now()+interval '1 hour',last_seen_at=now()
+    WHERE id=$1::uuid AND state='CREATING' AND expires_at>now() AND socket_ticket_hash IS NULL AND provider='doubao' RETURNING expires_at`,
+    session.id,
+  );
+  if (!updated) fail("REALTIME_CANCELED", "通话已取消", 409);
+  return updated.expires_at;
 }
 export async function checkRealtime(c: Context, id: string) {
   const row = await ownedSession(c, id);
