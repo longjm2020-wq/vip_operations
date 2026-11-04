@@ -738,10 +738,22 @@ test("查询证据保留条码；操作卡点击后提交，完成以真实动�
     page.getByRole("button", { name: /切换为[亮暗]色主题/ }),
   ).toHaveCount(0);
   await openPersonalAssistant(page);
-  await expect(
-    dialog.getByRole("button", { name: "切换助理面板", exact: true }),
-  ).toContainText("互动对话");
+  await expect(dialog.locator(".assistant-panel-heading")).toHaveText("小序");
   await expect(dialog).toBeInViewport({ ratio: 0.99 });
+  await expect(action.getByText("已完成", { exact: true })).toBeVisible();
+  await dialog
+    .getByRole("button", { name: "更多助理操作", exact: true })
+    .click();
+  await page.getByRole("menuitem", { name: "清空对话", exact: true }).click();
+  const clearConfirmation = page.getByRole("dialog", {
+    name: "清空当前账号的助理对话？",
+    exact: true,
+  });
+  await expect(clearConfirmation).toBeVisible();
+  await clearConfirmation
+    .getByRole("button", { name: "取消", exact: true })
+    .click();
+  await expect(clearConfirmation).toBeHidden();
   await expect(action.getByText("已完成", { exact: true })).toBeVisible();
 });
 
@@ -1179,15 +1191,26 @@ test("工作台与业务页共用透明宽屏对话，单输入和菜单可用�
   const input = dialog.getByPlaceholder(/告诉我你想完成什么/);
   await expect(input).toHaveValue("仍在编辑的选款会草稿");
   await input.fill("继续编辑但尚未发送");
+  await expect(dialog.locator(".assistant-panel-heading")).toHaveText("小序");
+  await dialog
+    .getByRole("button", { name: "更多助理操作", exact: true })
+    .click();
+  await expect(
+    page.getByRole("menuitem", { name: "清空对话", exact: true }),
+  ).toBeDisabled();
+  await dialog
+    .getByRole("button", { name: "更多助理操作", exact: true })
+    .click();
+  await expect(
+    page.getByRole("menuitem", { name: "清空对话", exact: true }),
+  ).toBeHidden();
   for (const [section, label] of [
     ["任务与文件", "我的文件"],
     ["个人记忆", "新增记忆"],
     ["动态反馈", "刷新助理动态"],
   ] as const) {
     await selectAssistantPanel(page, section);
-    await expect(
-      dialog.getByRole("button", { name: "切换助理面板", exact: true }),
-    ).toContainText(section);
+    await expect(dialog.locator(".assistant-panel-heading")).toHaveText(section);
     await expect(
       section === "任务与文件"
         ? dialog.getByRole("heading", { name: label, exact: true })
@@ -1195,6 +1218,7 @@ test("工作台与业务页共用透明宽屏对话，单输入和菜单可用�
     ).toBeVisible();
   }
   await selectAssistantPanel(page, "互动对话");
+  await expect(dialog.locator(".assistant-panel-heading")).toHaveText("小序");
   await expect(input).toHaveValue("继续编辑但尚未发送");
   await page.screenshot({ path: ".local/workspace-chat-screen-dark.png" });
   const exitMotion = await page
@@ -2629,9 +2653,7 @@ test("工作台圆环是小序巢穴，可离巢移动与召回，文字和动�
     .getByRole("button", { name: "查看助理动态反馈", exact: true })
     .click();
   const dialog = page.getByRole("dialog", { name: /AI 个人助理/ });
-  await expect(
-    dialog.getByRole("button", { name: "切换助理面板", exact: true }),
-  ).toContainText("动态反馈");
+  await expect(dialog.locator(".assistant-panel-heading")).toHaveText("动态反馈");
   await expect(
     dialog.getByText("核心入口项目进展", { exact: true }),
   ).toBeVisible();

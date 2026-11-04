@@ -17,7 +17,7 @@ export async function openPersonalAssistant(page: Page) {
 export async function selectAssistantPanel(page: Page, name: string) {
   await page
     .getByRole("dialog", { name: /AI 个人助理/ })
-    .getByRole("button", { name: "切换助理面板", exact: true })
+    .getByRole("button", { name: "更多助理操作", exact: true })
     .click();
   await page.getByRole("menuitem", { name, exact: true }).click();
   await expect(page.getByRole("menuitem", { name, exact: true })).toBeHidden();

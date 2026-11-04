@@ -13,7 +13,6 @@ import {
   Checkbox,
   Drawer,
   Dropdown,
-  Popconfirm,
   Spin,
   Tooltip,
   Select,
@@ -28,7 +27,7 @@ import {
   SoundOutlined,
   StopOutlined,
   CustomerServiceOutlined,
-  DownOutlined,
+  EllipsisOutlined,
 } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useNavigate, useLocation } from "react-router-dom";
@@ -78,7 +77,7 @@ export function PersonalAssistantProvider({
   children: ReactNode;
 }) {
   const user = useUser(),
-    { message } = App.useApp();
+    { message, modal } = App.useApp();
   const navigate = useNavigate();
   const location = useLocation();
   const inWorkspace = location.pathname === "/my-workspace";
@@ -758,6 +757,9 @@ export function PersonalAssistantProvider({
       {children}
       <Drawer
         open={open}
+        aria-label="AI 个人助理"
+        aria-labelledby=""
+        closable={{ placement: "end" }}
         onClose={() => {
           playbackAllowed.current = false;
           setOpen(false);
@@ -765,25 +767,11 @@ export function PersonalAssistantProvider({
           speech.stop();
         }}
         title={
-          <div className="assistant-panel-heading">
-            <span>
-              <CommentOutlined /> AI 个人助理
-            </span>
-            <Dropdown
-              trigger={["click"]}
-              menu={{
-                items: sectionItems,
-                selectedKeys: [section],
-                onClick: ({ key }) => selectSection(key as AssistantSection),
-              }}
-            >
-              <Button type="text" size="small" aria-label="切换助理面板">
-                {sectionItems.find((item) => item.key === section)?.label ||
-                  "动态反馈"}
-                <DownOutlined />
-              </Button>
-            </Dropdown>
-          </div>
+          <span className="assistant-panel-heading">
+            {section === "chat"
+              ? "小序"
+              : sectionItems.find((item) => item.key === section)?.label}
+          </span>
         }
         size={1120}
         rootClassName="personal-assistant-drawer assistant-screen"
@@ -794,34 +782,63 @@ export function PersonalAssistantProvider({
               : "assistant-secondary-body",
         }}
         extra={
-          section === "chat" &&
-          allowed && (
-            <Popconfirm
-              title="清空当前账号的助理对话？"
-              description="日程、待办、备忘和个人记忆不受影响，未执行的操作卡片将取消。"
-              okText="清空"
-              cancelText="取消"
-              onConfirm={async () => {
-                speech.stop();
-                try {
-                  await api("/my-workspace/assistant/clear", "POST", {
-                    version: data?.version || 0,
-                  });
-                  await q.refetch();
-                  setError("");
-                } catch (e) {
-                  message.error((e as Error).message);
+          <Dropdown
+            trigger={["click"]}
+            menu={{
+              items: [
+                ...sectionItems,
+                ...(section === "chat" && allowed
+                  ? [
+                      { type: "divider" as const },
+                      {
+                        key: "clear",
+                        label: "清空对话",
+                        icon: <DeleteOutlined aria-hidden />,
+                        danger: true,
+                        disabled: busy || !messages.length,
+                      },
+                    ]
+                  : []),
+              ],
+              selectedKeys: [section],
+              onClick: ({ key }) => {
+                if (key !== "clear") {
+                  selectSection(key as AssistantSection);
+                  return;
                 }
-              }}
-            >
-              <Button
-                type="text"
-                icon={<DeleteOutlined />}
-                aria-label="清空助理对话"
-                disabled={busy || !messages.length}
-              />
-            </Popconfirm>
-          )
+                if (busy || !messages.length || !allowed) return;
+                modal.confirm({
+                  title: "清空当前账号的助理对话？",
+                  content:
+                    "日程、待办、备忘和个人记忆不受影响，未执行的操作卡片将取消。",
+                  okText: "清空",
+                  cancelText: "取消",
+                  okButtonProps: { danger: true },
+                  onOk: async () => {
+                    speech.stop();
+                    try {
+                      await api("/my-workspace/assistant/clear", "POST", {
+                        version: data?.version || 0,
+                      });
+                      await q.refetch();
+                      setError("");
+                    } catch (e) {
+                      message.error((e as Error).message);
+                      throw e;
+                    }
+                  },
+                });
+              },
+            }}
+          >
+            <Button
+              type="text"
+              className="assistant-panel-more"
+              icon={<EllipsisOutlined />}
+              aria-label="更多助理操作"
+              title="更多"
+            />
+          </Dropdown>
         }
         footer={section === "chat" && allowed ? sender(true) : null}
       >
