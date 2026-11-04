@@ -272,7 +272,7 @@
   opacity: 0.3;
 }
 .workspace-flow-head {
-  --flow-offset: -10;
+  --flow-offset: -10px;
   stroke-width: 2;
   stroke-dasharray: 0.8 99.2;
   opacity: 0.9;
@@ -291,10 +291,11 @@
 }
 @keyframes workspace-line-flow {
   from {
-    stroke-dashoffset: var(--flow-offset, 0);
+    stroke-dashoffset: var(--flow-offset, 0px);
   }
   to {
-    stroke-dashoffset: calc(var(--flow-offset, 0) - 100);
+    /* Both endpoints must be lengths; a number-valued calc jumps discretely. */
+    stroke-dashoffset: calc(var(--flow-offset, 0px) - 100px);
   }
 }
 .personal-workspace:is(

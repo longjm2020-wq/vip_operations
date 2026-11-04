@@ -154,6 +154,59 @@ async function blankPoint(page: Page) {
   return point;
 }
 
+test("分支光点在曲线、直线和详情连线上连续移动，减少动态效果时隐藏", async ({
+  page,
+}) => {
+  const state = await fixture(page);
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await page.goto("/my-workspace");
+  await page
+    .getByRole("button", { name: "展开工作台分支图", exact: true })
+    .click();
+  await page.getByRole("button", { name: "打开私有备忘", exact: true }).click();
+  await expectDetailLinkAttached(page);
+
+  const heads = [
+    page.locator(".workspace-branch-lines .workspace-flow-head").first(),
+    page.locator(".workspace-branch-lines .workspace-flow-head").nth(2),
+    page.locator(".workspace-branch-panel-link .workspace-flow-head"),
+  ];
+  for (const head of heads) {
+    const frames = await head.evaluate((element) => {
+      const path = element as SVGPathElement;
+      const animation = path.getAnimations()[0];
+      const originalTime = animation.currentTime;
+      const length = path.getTotalLength();
+      animation.pause();
+      // Sample the painted stroke, not just its animated CSS value. Previously
+      // the offset jumped a full dash period and the visible dots never moved.
+      const samples = [0, 700, 1400].map((time) => {
+        animation.currentTime = time;
+        const offset = getComputedStyle(path).strokeDashoffset;
+        const painted = Array.from(
+          { length: 1001 },
+          (_, index) => index,
+        ).filter((index) =>
+          path.isPointInStroke(path.getPointAtLength((length * index) / 1000)),
+        );
+        return { offset, painted };
+      });
+      animation.currentTime = originalTime;
+      animation.play();
+      return samples;
+    });
+    frames.forEach((frame) => expect(frame.painted.length).toBeGreaterThan(0));
+    expect(frames[1].painted).not.toEqual(frames[0].painted);
+    expect(frames[2].painted).not.toEqual(frames[1].painted);
+  }
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  for (const head of heads) await expect(head).toBeHidden();
+  await expect(
+    page.locator(".workspace-branch-lines .workspace-flow-track").first(),
+  ).toBeVisible();
+  expect(state.writes).toEqual([]);
+});
+
 test("拖动巢穴圆环展开分支图，空白三维拖动独立且不申请麦克风", async ({
   page,
 }) => {
