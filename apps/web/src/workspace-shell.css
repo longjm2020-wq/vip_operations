@@ -38,6 +38,9 @@
 .workspace-future .sidebar.ant-layout-sider-collapsed .ant-menu {
   padding: 0;
 }
+.workspace-future .sidebar.ant-layout-sider-collapsed .ant-menu-item-selected {
+  box-shadow: none;
+}
 .workspace-future .topbar {
   height: 68px;
   min-height: 68px;

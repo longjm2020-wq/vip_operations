@@ -135,12 +135,14 @@ function AssistantCore({
 }
 
 export function WorkspaceAI({
+  sceneCovered = false,
   available,
   schedule,
   onSchedule,
   branchLayout,
   onToggleBranches,
 }: {
+  sceneCovered?: boolean;
   available: Row[];
   schedule: WorkspaceSchedule[];
   onSchedule: (event: WorkspaceSchedule) => void;
@@ -167,7 +169,7 @@ export function WorkspaceAI({
       aria-label="小序智能工作区"
     >
       <div className="workspace-ai-start">
-        <div className="workspace-ai-core-stage">
+        <div className="workspace-ai-core-stage" inert={sceneCovered}>
           <div className="workspace-world-camera">
             <div className="workspace-world-plane">
               <AssistantCore

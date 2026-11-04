@@ -995,17 +995,21 @@ body:has(.workspace-companion[data-docked="true"]:is(:hover, :focus-within))
   gap: 9px;
   min-height: 32px;
   padding: 5px 14px;
-  border: 1px solid color-mix(in srgb, var(--app-accent) 25%, transparent);
-  border-radius: 18px;
+  border: 0;
+  border-radius: 6px;
   color: var(--app-secondary);
-  background: color-mix(in srgb, var(--app-bg) 64%, transparent);
+  background: transparent;
   font: inherit;
   font-size: 12px;
   cursor: pointer;
 }
 .companion-voice-prompt > button:hover {
   color: var(--app-text);
-  border-color: var(--app-accent-border);
+}
+.companion-voice-prompt.companion-voice-elevated {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
 }
 .companion-voice-prompt > button:focus-visible {
   outline: 2px solid var(--app-accent);

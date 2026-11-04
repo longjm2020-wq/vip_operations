@@ -55,7 +55,9 @@ function occupiedAreas() {
       acceptNode(node) {
         if (node instanceof Element) {
           if (
-            node.matches("[aria-hidden=true], script, style") &&
+            node.matches(
+              "[hidden], [inert], [aria-hidden=true], script, style",
+            ) &&
             !node.matches(".workspace-ai-core")
           )
             return NodeFilter.FILTER_REJECT;
@@ -64,7 +66,7 @@ function occupiedAreas() {
             return NodeFilter.FILTER_REJECT;
           if (
             node.matches(
-              "button, a, input, textarea, select, [contenteditable=true], [role=button], table, [role=grid], canvas, .workspace-ai-core, .workspace-dock, .brand",
+              "button, a, input, textarea, select, [contenteditable=true], [role=button], table, [role=grid], canvas, .workspace-hologram, .workspace-ai-core, .workspace-dock, .brand",
             )
           ) {
             if (visible(rect)) areas.push(rect);
@@ -503,7 +505,12 @@ export function WorkspaceCompanion() {
       }
       return true;
     };
+    const nestAvailable = () =>
+      !!nest &&
+      !nest.closest("[hidden], [inert], [aria-hidden=true]") &&
+      getComputedStyle(nest).visibility !== "hidden";
     const nestVisible = () => {
+      if (!nestAvailable()) return false;
       const box = nest?.getBoundingClientRect();
       if (!box || box.width <= 0 || box.height <= 0) return false;
       const clip = nest
@@ -530,7 +537,7 @@ export function WorkspaceCompanion() {
       automatic = false,
       jump = false,
     ) => {
-      if (target === "home" && !nest) return;
+      if (target === "home" && !nestAvailable()) return;
       cancelTransition();
       leavePerch();
       if (!automatic) active();
@@ -544,7 +551,7 @@ export function WorkspaceCompanion() {
       };
       const arrive = () => {
         if (target === "home") {
-          if (!nest) {
+          if (!nestAvailable()) {
             finish();
             return;
           }
@@ -583,6 +590,15 @@ export function WorkspaceCompanion() {
         return;
       }
       if (value === "home" && nest) {
+        // An overlay keeps the core mounted but inert. Do not reset or enter
+        // that hidden scene; use the same content-aware placement as roaming.
+        if (!nestAvailable()) {
+          cancelTransition();
+          leavePerch();
+          attach(false);
+          clearRest(state.position || undefined);
+          return;
+        }
         if (!nestVisible()) {
           window.dispatchEvent(new CustomEvent("xuti-workspace-center"));
           nest.scrollIntoView({ block: "center", behavior: "instant" });
@@ -604,15 +620,32 @@ export function WorkspaceCompanion() {
       if (next === nest && host.isConnected) return;
       cancelTransition();
       leavePerch();
+      nestObserver.disconnect();
       if (nest) targetObserver.unobserve(nest);
       nest = next;
-      if (nest) targetObserver.observe(nest);
+      if (nest) {
+        targetObserver.observe(nest);
+        for (
+          let element: HTMLElement | null = nest;
+          element && element !== document.body;
+          element = element.parentElement
+        )
+          nestObserver.observe(element, {
+            attributes: true,
+            attributeFilter: [
+              "hidden",
+              "inert",
+              "aria-hidden",
+              "data-scene-presence",
+            ],
+          });
+      }
       state.hasNest = !!nest;
       state.dragging = false;
       drag = null;
       active();
       lastTravel = Date.now() - 4000;
-      if (nest) {
+      if (nestAvailable()) {
         attach(true);
         publish();
       } else {
@@ -628,20 +661,21 @@ export function WorkspaceCompanion() {
         if (state.docked) {
           const rect = panel.current?.getBoundingClientRect();
           if (
-            rect &&
-            !isClear(
-              { x: rect.x, y: rect.y },
-              rect.width,
-              rect.height,
-              overlayControlAreas(),
-            )
+            !nestAvailable() ||
+            (rect &&
+              !isClear(
+                { x: rect.x, y: rect.y },
+                rect.width,
+                rect.height,
+                overlayControlAreas(),
+              ))
           ) {
-            // A foreground robot must not block dialog or workspace-card controls.
-            // Leave only on a real collision; closing never teleports it back.
+            // Hidden cores are not resting places. Also leave a visible nest
+            // when it blocks controls; closing never teleports the robot back.
             attach(false);
             state.motion = "idle";
             lastActive = Date.now() + 10000;
-            clearRest({ x: rect.x, y: rect.y });
+            clearRest(rect ? { x: rect.x, y: rect.y } : undefined);
           }
           return;
         }
@@ -823,6 +857,7 @@ export function WorkspaceCompanion() {
     // geometry/visibility so reopening or moving a card also runs avoidance.
     let workspaceCard: HTMLElement | null = null;
     const cardObserver = new MutationObserver(reflow);
+    const nestObserver = new MutationObserver(reflow);
     const discoverCard = () => {
       const next = document.querySelector<HTMLElement>(
         ".personal-workspace-panel",
@@ -906,6 +941,7 @@ export function WorkspaceCompanion() {
       transition?.timers.forEach(clearTimeout);
       observer.disconnect();
       cardObserver.disconnect();
+      nestObserver.disconnect();
       resizeObserver.disconnect();
       targetObserver.disconnect();
       perchObserver.disconnect();

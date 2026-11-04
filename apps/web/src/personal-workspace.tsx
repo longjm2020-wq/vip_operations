@@ -57,6 +57,10 @@ import { PersonalSchedule } from "./personal-schedule";
 import { useWorkspaceWorld } from "./use-workspace-world";
 import { WorkspaceWorldBackdrop } from "./workspace-world-backdrop";
 import { WorkspaceHologram } from "./workspace-hologram";
+import {
+  useWorkspaceScenePresence,
+  type WorkspacePresence,
+} from "./workspace-scene-presence";
 import { WorkspacePanelLink } from "./workspace-panel-link";
 import { WorkspaceBranchLines } from "./workspace-flow-line";
 import {
@@ -506,6 +510,10 @@ function WorkspaceFloatingPanel({
 
 export function PersonalWorkspacePage() {
   const world = useWorkspaceWorld();
+  const scenePresence = useWorkspaceScenePresence();
+  const sceneCovered = scenePresence !== "closed";
+  const [hologramPresence, setHologramPresence] =
+    useState<WorkspacePresence>("closed");
   const user = useUser(),
     { message } = App.useApp(),
     [draft, setDraft] = useState<WorkspaceConfig | null>(null),
@@ -632,6 +640,8 @@ export function PersonalWorkspacePage() {
       ref={world.surface}
       className="personal-workspace"
       data-workspace-layout={branchLayout ? "branches" : "orbit"}
+      data-scene-presence={scenePresence}
+      data-hologram-presence={hologramPresence}
       role="region"
       aria-label="工作台三维场景"
       aria-description="空白处拖动旋转，Shift 加拖动或中键拖动平移，滚轮缩放；聚焦场景后方向键调整，Home 回到中心。"
@@ -706,7 +716,7 @@ export function PersonalWorkspacePage() {
           >
             <BranchesOutlined />
           </button>
-          <WorkspaceHologram />
+          <WorkspaceHologram onPresenceChange={setHologramPresence} />
         </div>
         <div className="workspace-voice-slot" data-world-ui />
         <span className="workspace-date">
@@ -719,6 +729,22 @@ export function PersonalWorkspacePage() {
           }).format(new Date())}
         </span>
       </header>
+      <div className="workspace-scene-nebula" aria-hidden="true">
+        {Array.from({ length: 28 }, (_, index) => (
+          <i
+            key={index}
+            style={
+              {
+                "--star-x": `${8 + ((index * 37) % 84)}%`,
+                "--star-y": `${10 + ((index * 23) % 78)}%`,
+                "--star-dx": `${(index % 2 ? 1 : -1) * (12 + (index % 5) * 6)}px`,
+                "--star-dy": `${-12 - (index % 7) * 5}px`,
+                "--star-size": `${index % 3 === 0 ? 3 : 2}px`,
+              } as CSSProperties
+            }
+          />
+        ))}
+      </div>
       <QueryState error={q.error} reload={() => q.refetch()} />
       {q.isLoading && <Spin />}
       {draft && workspace && (
@@ -726,7 +752,7 @@ export function PersonalWorkspacePage() {
           <div className="personal-workspace-body">
             <div className="personal-workspace-main">
               {!canUsePersonalAssistant({ permissions: user.permissions }) && (
-                <div className="workspace-quiet">
+                <div className="workspace-quiet" inert={sceneCovered}>
                   <div className="workspace-world-camera">
                     <div className="workspace-world-plane">
                       <div className="workspace-quiet-center">
@@ -740,6 +766,7 @@ export function PersonalWorkspacePage() {
                 </div>
               )}
               <WorkspaceAI
+                sceneCovered={sceneCovered}
                 branchLayout={branchLayout}
                 onToggleBranches={toggleBranches}
                 available={available}
@@ -760,7 +787,7 @@ export function PersonalWorkspacePage() {
               />
             </div>
             <WorkspaceOrbit
-              paused={panelOpen}
+              paused={panelOpen || sceneCovered}
               selected={panelOpen ? panel : null}
               assistantEnabled={canUsePersonalAssistant({
                 permissions: user.permissions,
@@ -851,7 +878,7 @@ export function PersonalWorkspacePage() {
             title={panelTitles[panel]}
             anchor={panelAnchor}
             branchLayout={branchLayout}
-            open={panelOpen}
+            open={panelOpen && !sceneCovered}
             onClose={() => setPanelOpen(false)}
             footer={
               <>

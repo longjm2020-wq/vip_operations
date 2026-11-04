@@ -4,23 +4,19 @@
   --hologram-zoom: 1;
   position: absolute;
   z-index: 8;
-  top: 76px;
+  top: 60px;
   left: 50%;
-  width: min(880px, calc(100% - 48px));
+  width: min(1440px, 78%);
   transform: translateX(-50%);
   color: var(--app-text);
   cursor: default;
   isolation: isolate;
 }
-.workspace-hologram::before {
-  content: "";
-  position: absolute;
-  z-index: -1;
-  inset: -10px -16px;
-  border-radius: 22px;
-  background: color-mix(in srgb, var(--app-bg) 86%, transparent);
-  backdrop-filter: blur(12px);
-  box-shadow: 0 18px 70px color-mix(in srgb, var(--app-shadow) 65%, transparent);
+.workspace-hologram[data-hologram-presence="entering"] {
+  animation: workspace-hologram-reveal 520ms ease-out both;
+}
+.workspace-hologram[data-hologram-presence="leaving"] {
+  animation: workspace-scene-conceal 520ms ease-in both;
   pointer-events: none;
 }
 .workspace-hologram-header,
@@ -31,7 +27,7 @@
   min-width: 0;
 }
 .workspace-hologram-header {
-  padding: 4px 0 12px;
+  padding: 4px 0 8px;
 }
 .workspace-hologram-grip {
   display: inline-flex;
@@ -68,36 +64,20 @@
 }
 .workspace-hologram-stage {
   perspective: 1100px;
-  padding: 8px 18px 18px;
+  padding: 0;
 }
 .workspace-hologram-plane {
   position: relative;
   transform-style: preserve-3d;
   transform: rotateX(var(--hologram-pitch)) rotateY(var(--hologram-yaw));
-  border: 1px solid color-mix(in srgb, var(--app-accent) 55%, transparent);
-  border-radius: 14px;
-  background: color-mix(in srgb, var(--app-surface) 50%, transparent);
-  box-shadow:
-    0 0 26px color-mix(in srgb, var(--app-accent) 12%, transparent),
-    inset 0 0 35px color-mix(in srgb, var(--app-accent) 5%, transparent);
-}
-.workspace-hologram-plane::after {
-  content: "";
-  position: absolute;
-  inset: 7px;
-  border: 1px solid color-mix(in srgb, var(--app-accent) 17%, transparent);
-  border-radius: 9px;
-  pointer-events: none;
-  transform: translateZ(-8px);
+  border: 0;
+  background: transparent;
+  box-shadow: none;
 }
 .workspace-hologram-media {
-  height: var(
-    --hologram-media-height,
-    clamp(180px, calc(100dvh - 360px), 440px)
-  );
+  height: var(--hologram-media-height, max(180px, calc(100dvh - 320px)));
   overflow: auto;
   display: block;
-  border-radius: 13px;
   overscroll-behavior: contain;
 }
 .workspace-hologram-media > img,
@@ -117,12 +97,13 @@
   margin: auto;
 }
 .workspace-hologram-media > video {
-  background: #090e18;
+  background: transparent;
 }
 .workspace-hologram-empty {
   min-height: 100%;
   display: flex;
   flex-direction: column;
+  align-items: center;
   justify-content: center;
   text-align: center;
   padding: 28px 16px;
@@ -130,7 +111,7 @@
   font-size: 12px;
 }
 .workspace-hologram-empty > .anticon {
-  font-size: 38px;
+  font-size: 28px;
   color: var(--app-accent);
 }
 .workspace-hologram-empty > p {
@@ -150,13 +131,6 @@
   font-variant-numeric: tabular-nums;
   color: var(--app-secondary);
 }
-.workspace-hologram-note {
-  font-size: 10px;
-  line-height: 1.7;
-  color: var(--app-secondary);
-  text-align: center;
-  margin: 6px 0 0;
-}
 .workspace-hologram-error {
   margin-bottom: 10px;
 }
@@ -168,21 +142,11 @@
 }
 @media (max-width: 700px) {
   .workspace-hologram {
-    top: 112px;
+    top: 100px;
     width: calc(100% - 32px);
   }
-  .workspace-hologram::before {
-    inset: -8px;
-    border-radius: 15px;
-  }
   .workspace-hologram-stage {
-    padding: 6px 8px 14px;
-  }
-  .workspace-hologram-media {
-    height: var(
-      --hologram-media-height,
-      clamp(160px, calc(100dvh - 370px), 360px)
-    );
+    padding: 0;
   }
   .workspace-hologram-header {
     gap: 4px;
@@ -196,7 +160,115 @@
   }
 }
 @media (prefers-reduced-motion: reduce) {
+  .workspace-hologram[data-hologram-presence] {
+    animation: none;
+  }
   .workspace-hologram * {
     scroll-behavior: auto;
+  }
+}
+
+/* The scene remains mounted so layout, drafts and orbit positions survive. */
+.personal-workspace[data-scene-presence="entering"]
+  :is(.workspace-ai-core-stage, .workspace-quiet) {
+  animation: workspace-scene-conceal 520ms ease-out both;
+}
+.personal-workspace[data-scene-presence="open"]
+  :is(.workspace-ai-core-stage, .workspace-quiet) {
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+.personal-workspace[data-scene-presence="leaving"]
+  :is(.workspace-ai-core-stage, .workspace-quiet) {
+  animation: workspace-hologram-reveal 520ms ease-out both;
+}
+.workspace-scene-nebula {
+  position: absolute;
+  z-index: 9;
+  inset: 60px 10% 190px;
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+}
+.workspace-scene-nebula::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse at 40% 48%, #6b96ff22, transparent 35%),
+    radial-gradient(ellipse at 62% 55%, #7bc8ff18, transparent 38%),
+    radial-gradient(ellipse at 48% 38%, #bdcaff16, transparent 30%);
+}
+.workspace-scene-nebula i {
+  position: absolute;
+  left: var(--star-x);
+  top: var(--star-y);
+  width: var(--star-size);
+  height: var(--star-size);
+  background: #b5d5ff;
+  border-radius: 50%;
+  box-shadow: 0 0 10px #91b9ff66;
+}
+.personal-workspace:is(
+    [data-scene-presence="entering"],
+    [data-scene-presence="leaving"]
+  )
+  .workspace-scene-nebula {
+  visibility: visible;
+  animation: workspace-nebula-pulse 520ms ease-out both;
+}
+.personal-workspace[data-scene-presence="entering"] .workspace-scene-nebula i {
+  animation: workspace-stars-disperse 520ms ease-out both;
+}
+.personal-workspace[data-scene-presence="leaving"] .workspace-scene-nebula i {
+  animation: workspace-stars-disperse 520ms ease-in reverse both;
+}
+@keyframes workspace-scene-conceal {
+  0% {
+    opacity: 1;
+    filter: blur(0);
+  }
+  50%,
+  100% {
+    opacity: 0;
+    filter: blur(5px);
+  }
+}
+@keyframes workspace-hologram-reveal {
+  0%,
+  50% {
+    opacity: 0;
+    filter: blur(5px);
+  }
+  100% {
+    opacity: 1;
+    filter: blur(0);
+  }
+}
+@keyframes workspace-nebula-pulse {
+  0%,
+  100% {
+    opacity: 0;
+  }
+  36% {
+    opacity: 0.8;
+  }
+}
+@keyframes workspace-stars-disperse {
+  from {
+    transform: translate(0, 0) scale(0.6);
+  }
+  to {
+    transform: translate(var(--star-dx), var(--star-dy)) scale(1.15);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .personal-workspace[data-scene-presence]
+    :is(.workspace-ai-core-stage, .workspace-quiet) {
+    animation: none;
+  }
+  .workspace-scene-nebula {
+    display: none;
   }
 }

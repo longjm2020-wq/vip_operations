@@ -251,6 +251,7 @@ test("工作台0和1背景实际滚动，减少动态效果保持静态且仍可
 test("全息影像屏本机图片视频可预览，独立调整不转动场景且关闭释放媒体", async ({
   page,
 }) => {
+  await page.setViewportSize({ width: 1920, height: 1080 });
   await page.addInitScript(() => {
     window.workspaceMediaUrls = { created: [], revoked: [] };
     const create = URL.createObjectURL.bind(URL);
@@ -276,6 +277,34 @@ test("全息影像屏本机图片视频可预览，独立调整不转动场景�
   await page.getByRole("button", { name: "全息影像屏", exact: true }).click();
   const screen = page.getByRole("dialog", { name: "全息影像屏", exact: true });
   await expect(screen).toBeVisible();
+  await expect
+    .poll(async () => {
+      const viewport = (await page
+        .locator(".personal-workspace")
+        .boundingBox())!;
+      const box = (await screen.boundingBox())!;
+      const composer = (await page
+        .locator(".workspace-ai .assistant-compose")
+        .boundingBox())!;
+      return (
+        box.width >= viewport.width * 0.7 &&
+        box.y + box.height <= composer.y - 8
+      );
+    })
+    .toBe(true);
+  await expect(screen.locator(".workspace-hologram-plane")).toHaveCSS(
+    "border-top-width",
+    "0px",
+  );
+  await expect(screen.locator(".workspace-hologram-plane")).toHaveCSS(
+    "box-shadow",
+    "none",
+  );
+  await expect(page.locator(".personal-workspace")).toHaveAttribute(
+    "data-hologram-presence",
+    "open",
+  );
+  await page.screenshot({ path: ".local/workspace-hologram-large-empty.png" });
   const file = screen.getByLabel("选择全息媒体文件", { exact: true });
   await file.setInputFiles("tests/fixtures/selection-care-label.png");
   const preview = screen.locator("img");
@@ -372,42 +401,9 @@ test("全息影像屏本机图片视频可预览，独立调整不转动场景�
   });
   await expect(screen.getByRole("alert")).toContainText("请选择 PNG");
   await expect(preview).toHaveAttribute("src", gifUrl!);
-  // Produce a real decodable local video without a device, network or repository artifact.
-  const bytes = await page.evaluate(async () => {
-    const canvas = document.createElement("canvas");
-    canvas.width = 160;
-    canvas.height = 90;
-    const context = canvas.getContext("2d")!;
-    context.fillStyle = "#235bcb";
-    context.fillRect(0, 0, 160, 90);
-    const stream = canvas.captureStream(5);
-    const recorder = new MediaRecorder(stream, {
-      mimeType: "video/webm;codecs=vp8",
-    });
-    const chunks: Blob[] = [];
-    recorder.ondataavailable = (event) => chunks.push(event.data);
-    const finished = new Promise<void>((resolve) => {
-      recorder.onstop = () => resolve();
-    });
-    recorder.start();
-    await new Promise((resolve) => setTimeout(resolve, 250));
-    context.fillStyle = "#8ddfff";
-    context.fillRect(50, 20, 60, 50);
-    await new Promise((resolve) => setTimeout(resolve, 250));
-    recorder.stop();
-    await finished;
-    stream.getTracks().forEach((track) => track.stop());
-    return [
-      ...new Uint8Array(
-        await new Blob(chunks, { type: "video/webm" }).arrayBuffer(),
-      ),
-    ];
-  });
-  await file.setInputFiles({
-    name: "local-preview.webm",
-    mimeType: "video/webm",
-    buffer: Buffer.from(bytes),
-  });
+  // Deterministic two-second VP8 clip: headless canvas capture may return only a
+  // container header, which cannot verify playback and immediate pause on close.
+  await file.setInputFiles("tests/fixtures/workspace-hologram.webm");
   await expect
     .poll(() => page.evaluate(() => window.workspaceMediaUrls.revoked))
     .toContain(gifUrl);
@@ -415,9 +411,12 @@ test("全息影像屏本机图片视频可预览，独立调整不转动场景�
   await expect(video).toBeVisible();
   await expect
     .poll(() =>
-      video.evaluate((element) => (element as HTMLVideoElement).readyState),
+      video.evaluate((element) => ({
+        ready: (element as HTMLVideoElement).readyState >= 1,
+        error: (element as HTMLVideoElement).error?.message ?? null,
+      })),
     )
-    .toBeGreaterThanOrEqual(1);
+    .toEqual({ ready: true, error: null });
   expect(
     await video.evaluate((element) => ({
       muted: (element as HTMLVideoElement).muted,
@@ -427,6 +426,7 @@ test("全息影像屏本机图片视频可预览，独立调整不转动场景�
     })),
   ).toEqual({ muted: true, paused: true, controls: true, autoplay: false });
   const videoUrl = await video.getAttribute("src");
+  const videoElement = await video.elementHandle();
   await video.evaluate((element) => (element as HTMLVideoElement).play());
   await expect
     .poll(() =>
@@ -440,9 +440,23 @@ test("全息影像屏本机图片视频可预览，独立调整不转动场景�
     path: ".local/workspace-hologram-video-mobile.png",
     fullPage: true,
   });
+  await video.evaluate((element) => {
+    const player = element as HTMLVideoElement;
+    player.loop = true;
+    return player.play();
+  });
+  expect(
+    await video.evaluate((element) => (element as HTMLVideoElement).paused),
+  ).toBe(false);
   await screen
     .getByRole("button", { name: "关闭全息影像屏", exact: true })
     .click();
+  // Closing must stop playback immediately, even while the surface animates out.
+  expect(
+    await videoElement!.evaluate(
+      (element) => (element as HTMLVideoElement).paused,
+    ),
+  ).toBe(true);
   await expect(screen).toBeHidden();
   await expect
     .poll(() => page.evaluate(() => window.workspaceMediaUrls.revoked))
@@ -457,6 +471,97 @@ test("全息影像屏本机图片视频可预览，独立调整不转动场景�
   expect(writes).toHaveLength(0);
   expect(fixture.assistantCalls()).toBe(0);
 });
+
+for (const reducedMotion of [false, true]) {
+  test(`${reducedMotion ? "减少动态效果" : "星云过渡"}下全息屏暂时隐藏场景，关闭后恢复原有草稿`, async ({
+    page,
+  }) => {
+    const fixture = await workspaceFixture(page);
+    await page.setViewportSize({ width: 1920, height: 1080 });
+    await page.emulateMedia({
+      reducedMotion: reducedMotion ? "reduce" : "no-preference",
+    });
+    await page.goto("/my-workspace");
+    await openWorkspacePanel(page, "打开私有备忘");
+    const panel = page.locator(".personal-workspace-panel");
+    const note = panel.getByRole("textbox", { name: "私有备忘", exact: true });
+    await note.fill("影像关闭后继续编辑的备忘");
+    const retainedNote = await note.elementHandle();
+    const composer = page.locator(".workspace-ai .assistant-compose textarea");
+    await composer.fill("待发送的工作安排");
+    const worldBefore = await readWorkspaceCamera(page);
+    const host = page.locator(".personal-workspace");
+    const stage = page.locator(".workspace-ai-core-stage");
+    const sceneElement = await stage.elementHandle();
+    const transitions = await host.evaluateHandle((element) => {
+      const record: string[] = [];
+      new MutationObserver(() => {
+        const phase = element.getAttribute("data-hologram-presence");
+        if (phase) record.push(phase);
+      }).observe(element, {
+        attributes: true,
+        attributeFilter: ["data-hologram-presence"],
+      });
+      return record;
+    });
+    const trigger = page.getByRole("button", {
+      name: "全息影像屏",
+      exact: true,
+    });
+    await trigger.click();
+    await expect(stage).toHaveAttribute("inert", "");
+    await expect(host).toHaveAttribute("data-hologram-presence", "open");
+    await expect(stage).toBeHidden();
+    await expect(panel).toBeHidden();
+    await expect(composer).toHaveValue("待发送的工作安排");
+    await expect(composer).toBeEditable();
+    expect(await sceneElement!.evaluate((element) => element.isConnected)).toBe(
+      true,
+    );
+    const screen = page.getByRole("dialog", {
+      name: "全息影像屏",
+      exact: true,
+    });
+    await expect(screen).toBeVisible();
+    if (reducedMotion)
+      expect(
+        await screen.evaluate(
+          (element) =>
+            element
+              .getAnimations({ subtree: true })
+              .filter((animation) => animation.playState === "running").length,
+        ),
+      ).toBe(0);
+    await screen
+      .getByRole("button", { name: "关闭全息影像屏", exact: true })
+      .click();
+    await expect(host).toHaveAttribute("data-hologram-presence", "closed");
+    await expect(stage).not.toHaveAttribute("inert", "");
+    await expect(stage).toBeVisible();
+    await expect(note).toBeVisible();
+    await expect(note).toHaveValue("影像关闭后继续编辑的备忘");
+    expect(
+      await retainedNote!.evaluate((element) => ({
+        connected: element.isConnected,
+        value: (element as HTMLTextAreaElement).value,
+      })),
+    ).toEqual({ connected: true, value: "影像关闭后继续编辑的备忘" });
+    expect(await readWorkspaceCamera(page)).toEqual(worldBefore);
+    const phases = (await transitions.jsonValue()) as string[];
+    expect(phases).toContain("open");
+    expect(phases).toContain("closed");
+    if (reducedMotion) {
+      expect(phases).not.toContain("entering");
+      expect(phases).not.toContain("leaving");
+    } else {
+      expect(phases).toContain("entering");
+      expect(phases).toContain("leaving");
+    }
+    await transitions.dispose();
+    expect(fixture.workspace.note).toBe("仅自己的备忘，不发送给模型");
+    expect(fixture.assistantCalls()).toBe(0);
+  });
+}
 
 test("语音不可用时保留文字输入；识别服务拒绝时显示原因", async ({ page }) => {
   await mockBrowserVoice(page, false);
@@ -1017,11 +1122,42 @@ test("工作台与业务页共用透明宽屏对话，单输入和菜单可用�
   const source = page
     .locator(".workspace-ai")
     .getByPlaceholder(/告诉我你想完成什么/);
+  const voiceEntry = page.getByRole("button", {
+    name: "开始与小序语音对话",
+    exact: true,
+  });
+  await expect(voiceEntry).toHaveCSS("border-top-width", "0px");
+  await expect(voiceEntry).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
   await source.fill("仍在编辑的选款会草稿");
   await openPersonalAssistant(page);
   const dialog = page.getByRole("dialog", { name: /AI 个人助理/ });
   await expect(dialog).toBeVisible();
   await expect(page.locator(".assistant-screen")).toBeVisible();
+  await expect(page.locator(".personal-workspace")).toHaveAttribute(
+    "data-scene-presence",
+    "open",
+  );
+  await expect(page.locator(".workspace-ai-core-stage")).toHaveAttribute(
+    "inert",
+    "",
+  );
+  await expect(page.locator(".workspace-ai-core-stage")).toHaveCSS(
+    "opacity",
+    "0",
+  );
+  await expect(page.locator(".assistant-screen .ant-drawer-section")).toHaveCSS(
+    "box-shadow",
+    "none",
+  );
+  for (const selector of [
+    ".ant-drawer-section",
+    ".ant-drawer-header",
+    ".ant-drawer-footer",
+  ])
+    await expect(page.locator(`.assistant-screen ${selector}`)).toHaveCSS(
+      "border-bottom-width",
+      "0px",
+    );
   await expect(dialog.getByRole("tablist")).toHaveCount(0);
   await expect(source).toBeHidden();
   await expect(
@@ -1075,12 +1211,23 @@ test("工作台与业务页共用透明宽屏对话，单输入和菜单可用�
   await dialog.getByRole("button", { name: "关闭", exact: true }).click();
   await expect(dialog).toBeHidden();
   expect((await exitMotion.jsonValue()).opacitySeconds).toBeGreaterThanOrEqual(
-    0.3,
+    0.25,
   );
   expect((await exitMotion.jsonValue()).opacitySeconds).toBeLessThanOrEqual(
-    0.4,
+    0.32,
   );
   await exitMotion.dispose();
+  await expect(page.locator(".personal-workspace")).toHaveAttribute(
+    "data-scene-presence",
+    "closed",
+  );
+  await expect(page.locator(".workspace-ai-core-stage")).not.toHaveAttribute(
+    "inert",
+  );
+  await expect(page.locator(".workspace-ai-core-stage")).toHaveCSS(
+    "opacity",
+    "1",
+  );
   await expect(source).toBeVisible();
   await expect(source).toHaveValue("继续编辑但尚未发送");
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
@@ -3178,3 +3325,68 @@ test("权限在页内刷新后圆环入口随AI与普通工作区切换，私有
   await expect.poll(() => fixture.workspace.note).toBe(draft);
   expect(fixture.assistantCalls()).toBe(0);
 });
+
+for (const reducedMotion of [false, true]) {
+  test(`全息屏展开时小序避让媒体并保留实例，隐藏巢穴不可归巢（${reducedMotion ? "减少动态" : "标准动态"}）`, async ({
+    page,
+  }) => {
+    const fixture = await workspaceFixture(page);
+    await page.setViewportSize({ width: 1920, height: 1080 });
+    await page.emulateMedia({
+      reducedMotion: reducedMotion ? "reduce" : "no-preference",
+    });
+    await page.goto("/my-workspace");
+    const companion = page.locator(".workspace-companion");
+    const assistant = companion.locator(".sidebar-assistant");
+    await expect(companion).toHaveAttribute("data-docked", "true");
+    const instance = await assistant.elementHandle();
+    await page.getByRole("button", { name: "全息影像屏", exact: true }).click();
+    const screen = page.getByRole("dialog", {
+      name: "全息影像屏",
+      exact: true,
+    });
+    await expect(screen).toHaveAttribute("data-hologram-presence", "open");
+    await expect(companion).toHaveAttribute("data-docked", "false");
+    await expect
+      .poll(() =>
+        companion.evaluate((element) => {
+          const robot = element.getBoundingClientRect();
+          const media = document
+            .querySelector(".workspace-hologram")!
+            .getBoundingClientRect();
+          return !(
+            robot.left < media.right &&
+            robot.right > media.left &&
+            robot.top < media.bottom &&
+            robot.bottom > media.top
+          );
+        }),
+      )
+      .toBe(true);
+    const voice = companion.getByRole("button", {
+      name: "与小序语音对话",
+      exact: true,
+    });
+    await voice.focus();
+    await voice.press("Home");
+    await expect(companion).toHaveAttribute("data-motion", "idle");
+    await expect(companion).toHaveAttribute("data-docked", "false");
+    expect(await instance!.evaluate((element) => element.isConnected)).toBe(
+      true,
+    );
+    await expect(assistant).toHaveCount(1);
+    await screen
+      .getByRole("button", { name: "关闭全息影像屏", exact: true })
+      .click();
+    await expect(page.locator(".personal-workspace")).toHaveAttribute(
+      "data-scene-presence",
+      "closed",
+    );
+    await page.getByRole("button", { name: "召唤小序", exact: true }).click();
+    await expect(companion).toHaveAttribute("data-docked", "true");
+    expect(await instance!.evaluate((element) => element.isConnected)).toBe(
+      true,
+    );
+    expect(fixture.assistantCalls()).toBe(0);
+  });
+}

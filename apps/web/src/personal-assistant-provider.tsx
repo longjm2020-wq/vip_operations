@@ -15,7 +15,6 @@ import {
   Dropdown,
   Popconfirm,
   Spin,
-  Tag,
   Tooltip,
   Select,
 } from "antd";
@@ -68,6 +67,7 @@ import type { AssistantVoiceStatus } from "../../../packages/contracts/src/assis
 import { workspaceHologramEvent } from "./workspace-hologram";
 import { AssistantDesktopPanel } from "./assistant-desktop-panel";
 import type { DesktopState } from "../../../packages/contracts/src/assistant-desktop";
+import { useWorkspaceSceneCover } from "./workspace-scene-presence";
 
 type AssistantSection =
   "chat" | "activity" | "memory" | "voice" | "tasks" | "desktop";
@@ -142,6 +142,7 @@ export function PersonalAssistantProvider({
   const allowed = canUsePersonalAssistant({ permissions: user.permissions });
   const [open, setOpen] = useState(false),
     [text, setText] = useState("");
+  useWorkspaceSceneCover(open);
   const [includeContext, setIncludeContext] = useState(false),
     [sending, setSending] = useState(false);
   const [error, setError] = useState("");
@@ -921,8 +922,7 @@ export function PersonalAssistantProvider({
         )}
         <div hidden={section !== "chat" || !allowed}>
           <div className="assistant-status">
-            <Tag>{data?.ready ? "已连接" : "未就绪"}</Tag>
-            <span>小序智能体</span>
+            <span>{data?.ready ? "小序已就绪" : "小序暂未就绪"}</span>
             <Button
               type="text"
               size="small"

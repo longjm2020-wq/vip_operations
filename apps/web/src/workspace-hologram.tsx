@@ -18,6 +18,11 @@ import {
   UploadOutlined,
 } from "@ant-design/icons";
 import type { AgentFile } from "../../../packages/contracts/src/assistant-agent";
+import {
+  useWorkspaceSceneCover,
+  useWorkspacePresence,
+  type WorkspacePresence,
+} from "./workspace-scene-presence";
 import "./workspace-hologram.css";
 
 type Media = {
@@ -48,10 +53,21 @@ export function showWorkspaceHologram(
   window.dispatchEvent(new Event(workspaceHologramEvent));
 }
 
-export function WorkspaceHologram() {
+export function WorkspaceHologram({
+  onPresenceChange,
+}: {
+  onPresenceChange: (phase: WorkspacePresence) => void;
+}) {
   const [open, setOpen] = useState(false),
     [media, setMedia] = useState<Media | null>(null),
     [error, setError] = useState("");
+  const presence = useWorkspacePresence(open);
+  const rendered = open || presence !== "closed";
+  useWorkspaceSceneCover(open);
+  useLayoutEffect(
+    () => onPresenceChange(presence),
+    [presence, onPresenceChange],
+  );
   const [host, setHost] = useState<HTMLElement | null>(null);
   const trigger = useRef<HTMLButtonElement>(null),
     input = useRef<HTMLInputElement>(null),
@@ -59,6 +75,7 @@ export function WorkspaceHologram() {
     handle = useRef<HTMLButtonElement>(null);
   const video = useRef<HTMLVideoElement | null>(null),
     localUrl = useRef<string | null>(null),
+    releaseAfterExit = useRef(false),
     view = useRef(initialView()),
     frame = useRef(0);
   const drag = useRef<{
@@ -139,13 +156,22 @@ export function WorkspaceHologram() {
   };
   const close = () => {
     stopDrag();
-    releaseLocal();
+    video.current?.pause();
     view.current = initialView();
-    setMedia(null);
-    setError("");
+    releaseAfterExit.current = true;
     setOpen(false);
     trigger.current?.focus({ preventScroll: true });
   };
+  useEffect(() => {
+    // Only release an explicitly closed preview. The initial closed render can
+    // accept a queued assistant file before its state update has committed.
+    if (open || presence !== "closed" || !releaseAfterExit.current) return;
+    releaseAfterExit.current = false;
+    if (localUrl.current) URL.revokeObjectURL(localUrl.current);
+    localUrl.current = null;
+    setMedia(null);
+    setError("");
+  }, [open, presence]);
   useEffect(() => {
     setHost(
       trigger.current?.closest<HTMLElement>(".personal-workspace") || null,
@@ -154,6 +180,7 @@ export function WorkspaceHologram() {
       if (!queuedMedia) return;
       const next = queuedMedia;
       queuedMedia = null;
+      releaseAfterExit.current = false;
       video.current?.pause();
       if (localUrl.current) URL.revokeObjectURL(localUrl.current);
       localUrl.current = null;
@@ -184,7 +211,7 @@ export function WorkspaceHologram() {
     }
   }, [open, host, media]);
   useLayoutEffect(() => {
-    if (!open || !host) return;
+    if (!rendered || !host) return;
     let layoutFrame = 0;
     let captions: HTMLElement | null = null,
       composer: HTMLElement | null = null;
@@ -221,27 +248,31 @@ export function WorkspaceHologram() {
       const hostBox = host.getBoundingClientRect();
       const captionBox = captions?.getBoundingClientRect();
       const top = Math.max(
-        innerWidth <= 700 ? 112 : 76,
+        innerWidth <= 700 ? 100 : 60,
         captionBox && captionBox.height > 0
           ? captionBox.bottom - hostBox.top + 16
           : 0,
       );
       const composerBox = composer?.getBoundingClientRect();
+      const errorHeight =
+        target
+          .querySelector(".workspace-hologram-error")
+          ?.getBoundingClientRect().height || 0;
       // Short viewports grow the page instead of covering microphone controls or the composer.
       write(
         host,
         "--hologram-reserved-height",
-        `${top + 140 + 180 + (composerBox?.height || 0) + 48}px`,
+        `${top + 180 + 90 + errorHeight + (composerBox?.height || 0) + 48}px`,
       );
       const bottom =
         composerBox && composerBox.height > 0
-          ? composerBox.top - hostBox.top - 24
+          ? composerBox.top - hostBox.top - 20
           : host.clientHeight - 24;
       write(target, "top", `${top}px`);
       write(
         target,
         "--hologram-media-height",
-        `${Math.max(140, Math.min(440, bottom - top - 160))}px`,
+        `${Math.max(180, bottom - top - 88 - errorHeight)}px`,
       );
     };
     observer.observe(host);
@@ -258,7 +289,7 @@ export function WorkspaceHologram() {
       window.visualViewport?.removeEventListener("resize", schedule);
       host.style.removeProperty("--hologram-reserved-height");
     };
-  }, [open, host]);
+  }, [rendered, host]);
   const start = (event: PointerEvent<HTMLButtonElement>) => {
     if (!event.isPrimary || event.button !== 0) return;
     event.preventDefault();
@@ -302,12 +333,18 @@ export function WorkspaceHologram() {
         aria-expanded={open}
         onClick={() => {
           if (open) close();
-          else setOpen(true);
+          else {
+            releaseAfterExit.current = false;
+            releaseLocal();
+            setMedia(null);
+            setError("");
+            setOpen(true);
+          }
         }}
       >
         <PictureOutlined />
       </button>
-      {open &&
+      {rendered &&
         host &&
         createPortal(
           <div
@@ -316,6 +353,9 @@ export function WorkspaceHologram() {
             role="dialog"
             aria-label="全息影像屏"
             aria-modal="false"
+            data-hologram-presence={presence}
+            inert={!open}
+            aria-hidden={!open}
             data-world-ui
             onKeyDown={(event) => {
               if (event.key === "Escape") {
@@ -365,7 +405,7 @@ export function WorkspaceHologram() {
                 <span>全息影像屏</span>
               </button>
               <span className="workspace-hologram-name" title={media?.name}>
-                {media?.name || "本机预览"}
+                {media?.name || ""}
               </span>
               <Button
                 type="text"
@@ -381,8 +421,8 @@ export function WorkspaceHologram() {
                   {!media && (
                     <div className="workspace-hologram-empty">
                       <PictureOutlined aria-hidden />
-                      <p>图片、动画或视频，在这里展开。</p>
-                      <span>选择本地文件，仅在本机预览。</span>
+                      <p>图片、动画、视频</p>
+                      <span>选择媒体，在这里展开</span>
                     </div>
                   )}
                   {media?.kind === "image" && (
@@ -441,6 +481,12 @@ export function WorkspaceHologram() {
               <Button
                 size="small"
                 icon={<UploadOutlined />}
+                type="text"
+                title={
+                  media?.local === false
+                    ? "本人有权访问的助理文件；拖动标题调整视角，关闭后清空预览"
+                    : "本地文件仅在本机预览，不上传；拖动标题调整视角，关闭后清空预览"
+                }
                 onClick={() => input.current?.click()}
               >
                 {media ? "更换媒体" : "选择本地媒体"}
@@ -472,12 +518,6 @@ export function WorkspaceHologram() {
                 onClick={reset}
               />
             </footer>
-            <p className="workspace-hologram-note">
-              {media?.local === false
-                ? "本人有权访问的助理文件"
-                : "本地文件不上传"}{" "}
-              · 拖动标题调整视角 · 关闭后清空预览
-            </p>
           </div>,
           host,
         )}
