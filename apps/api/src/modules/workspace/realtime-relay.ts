@@ -1,5 +1,6 @@
 import type { Server, IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
+import { HttpException } from "@nestjs/common";
 import { createHash, randomUUID } from "node:crypto";
 import WebSocket, { WebSocketServer } from "ws";
 import { actorForSessionHash } from "../auth/service.js";
@@ -45,6 +46,52 @@ const simpleCommands = new Set([
   "response.cancel",
   "session.close",
 ]);
+/** 50 PCM frames/sec plus controls, allowing up to three seconds of network
+ * coalescing. A monotonic token budget avoids rejecting a healthy stream merely
+ * because packets arrive together at a wall-clock second boundary. */
+export class RealtimeFrameBudget {
+  private credit = 150;
+  private last: number;
+  constructor(private clock = () => performance.now()) {
+    this.last = clock();
+  }
+  take() {
+    const now = this.clock();
+    this.credit = Math.min(
+      150,
+      this.credit + Math.max(0, now - this.last) * 0.06,
+    );
+    this.last = now;
+    if (this.credit < 1) return false;
+    this.credit--;
+    return true;
+  }
+}
+function relayFailure(error: unknown) {
+  if (error instanceof HttpException) {
+    const response = error.getResponse() as {
+      error?: { code?: string; message?: string };
+    };
+    if (typeof response.error?.message === "string")
+      return assistantPublicText(response.error.message);
+  }
+  // Never log raw provider errors, credentials, request bodies or SQL arguments.
+  const safe = error as {
+    name?: string;
+    code?: string;
+    meta?: { code?: string };
+  };
+  const code = (value: unknown) =>
+    typeof value === "string" && /^[A-Za-z0-9_]{1,48}$/.test(value)
+      ? value
+      : "unknown";
+  console.error("Realtime relay failure", {
+    name: code(safe?.name),
+    code: code(safe?.code),
+    databaseCode: code(safe?.meta?.code),
+  });
+  return "实时语音连接失败，请重新开始";
+}
 /** Only the audio protocol is client-controlled; prompts, tools and tool results stay server-owned. */
 export function allowedRealtimeClientEvent(
   value: unknown,
@@ -178,8 +225,7 @@ function runRelay(
   let health: ReturnType<typeof setInterval> | undefined;
   let lifetime: ReturnType<typeof setTimeout> | undefined;
   let toolQueue = Promise.resolve();
-  let frameWindow = Date.now(),
-    frames = 0;
+  const frameBudget = new RealtimeFrameBudget();
   let c = context;
   const send = (data: unknown) => {
     if (closed || client.readyState !== WebSocket.OPEN) return;
@@ -413,14 +459,11 @@ function runRelay(
       if (allowed.type === "session.close") return stop();
       if (!ready || upstream?.readyState !== WebSocket.OPEN)
         return stop("实时语音尚未连接，请重新开始");
-      if (Date.now() - frameWindow >= 1000) {
-        frameWindow = Date.now();
-        frames = 0;
-      }
-      if (++frames > 90 || upstream.bufferedAmount > 256 * 1024)
-        return stop("语音传输过快或网络拥塞，请重新开始");
+      if (!frameBudget.take()) return stop("音频持续发送过快，请重新开始");
+      if (upstream.bufferedAmount > 256 * 1024)
+        return stop("实时音频网络持续拥塞，请检查网络后重新开始");
       if (qwen) qwen.command(allowed);
       else upstream.send(JSON.stringify(allowed));
-    })().catch(() => stop("语音连接已失效，请重新开始"));
+    })().catch((error) => stop(relayFailure(error)));
   });
 }

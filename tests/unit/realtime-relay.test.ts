@@ -65,8 +65,27 @@ import {
   allowedRealtimeClientEvent,
   attachRealtimeRelay,
   publicRealtimeEvent,
+  RealtimeFrameBudget,
 } from "../../apps/api/src/modules/workspace/realtime-relay.js";
 import { doubaoConfiguration } from "../../apps/api/src/modules/workspace/doubao-realtime.js";
+
+describe("realtime network jitter allowance", () => {
+  it("accepts normal PCM cadence and coalesced packets but rejects sustained flooding", () => {
+    let now = 0;
+    const budget = new RealtimeFrameBudget(() => now);
+    for (let second = 0; second < 30; second++) {
+      now += 1000;
+      for (let frame = 0; frame < 50; frame++) expect(budget.take()).toBe(true);
+    }
+    now += 2400;
+    for (let frame = 0; frame < 120; frame++) expect(budget.take()).toBe(true);
+    for (let frame = 0; frame < 30; frame++) expect(budget.take()).toBe(true);
+    expect(budget.take()).toBe(false);
+    now += 1000;
+    for (let frame = 0; frame < 60; frame++) expect(budget.take()).toBe(true);
+    expect(budget.take()).toBe(false);
+  });
+});
 
 let server: Server, detach: () => void, base: string;
 const clients: WebSocket[] = [];
