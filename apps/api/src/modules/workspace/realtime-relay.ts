@@ -21,6 +21,16 @@ import {
   doubaoProviderSocket,
 } from "./doubao-realtime.js";
 import {
+  closeQwenSocket,
+  qwenProviderSocket,
+  qwenConfiguration,
+  qwenSessionMatches,
+  qwenErrorMessage,
+  qwenEventError,
+  qwenBenignError,
+  QwenRealtimeProtocol,
+} from "./qwen-realtime.js";
+import {
   registerRealtimeRelay,
   closeAllRealtimeRelays,
 } from "./realtime-relay-registry.js";
@@ -59,6 +69,7 @@ export function allowedRealtimeClientEvent(
 }
 const forwarded = new Set([
   "input_audio_buffer.committed",
+  "input_audio_buffer.speech_stopped",
   "conversation.item.input_audio_transcription.started",
   "conversation.item.input_audio_transcription.delta",
   "conversation.item.input_audio_transcription.completed",
@@ -156,6 +167,8 @@ function runRelay(
   authHash: string,
 ) {
   let upstream: WebSocket | undefined;
+  let qwen: QwenRealtimeProtocol | undefined;
+  let configuring = false;
   let closed = false,
     authenticating = false,
     ready = false,
@@ -181,7 +194,7 @@ function runRelay(
     clearTimeout(lifetime);
     clearInterval(health);
     unregister?.();
-    if (upstream) closeDoubaoSocket(upstream);
+    if (upstream) (qwen ? closeQwenSocket : closeDoubaoSocket)(upstream);
     client.close(1000);
     // The close API may run on another replica; periodic ownership checks also observe its state.
     void closeRealtime(c, id).catch(() => {});
@@ -223,9 +236,16 @@ function runRelay(
         const config = await claimRealtimeSocket(c, id, event.ticket);
         if (closed) return;
         unregister = registerRealtimeRelay(id, () => stop());
-        upstream = doubaoProviderSocket(config.key);
+        if (config.provider === "qwen")
+          qwen = new QwenRealtimeProtocol((e) => {
+            if (!closed && upstream?.readyState === WebSocket.OPEN)
+              upstream.send(JSON.stringify(e));
+          });
+        upstream = qwen
+          ? qwenProviderSocket(config.key, config.workspaceId!)
+          : doubaoProviderSocket(config.key);
         upstream.on("open", () => {
-          if (closed) return;
+          if (closed || qwen) return;
           upstream!.send(
             JSON.stringify(
               doubaoConfiguration(
@@ -235,10 +255,12 @@ function runRelay(
             ),
           );
         });
-        upstream.on("error", () => stop(doubaoErrorMessage(undefined)));
+        upstream.on("error", () =>
+          stop((qwen ? qwenErrorMessage : doubaoErrorMessage)(undefined)),
+        );
         upstream.on("unexpected-response", (_req, res) => {
           res.resume();
-          stop(doubaoErrorMessage(res.statusCode));
+          stop((qwen ? qwenErrorMessage : doubaoErrorMessage)(res.statusCode));
         });
         upstream.on("close", () =>
           stop(ready ? "实时语音连接已结束" : "实时语音连接未建立，请检查配置"),
@@ -247,14 +269,39 @@ function runRelay(
           void (async () => {
             if (closed) return;
             if (isBinary) return stop("实时语音服务返回格式异常");
-            const e = JSON.parse(data.toString()) as Record<string, unknown>;
-            if (e.type === "error") return stop(doubaoEventError(e));
-            if (e.type === "session.closed") return stop();
-            if (e.type === "session.created") {
+            const rawEvent = JSON.parse(data.toString()) as Record<
+              string,
+              unknown
+            >;
+            if (rawEvent.type === "error") {
+              if (qwen && qwenBenignError(rawEvent)) return;
+              return stop((qwen ? qwenEventError : doubaoEventError)(rawEvent));
+            }
+            if (rawEvent.type === "session.closed") return stop();
+            if (qwen && rawEvent.type === "session.created") {
+              if (!configuring) {
+                configuring = true;
+                upstream!.send(
+                  JSON.stringify(
+                    qwenConfiguration(
+                      config.voice,
+                      realtimeConfiguration(config.voice),
+                    ),
+                  ),
+                );
+              }
+              return;
+            }
+            if (
+              rawEvent.type === (qwen ? "session.updated" : "session.created")
+            ) {
               if (ready) return;
               if (
-                !e.session ||
-                typeof (e.session as Record<string, unknown>).id !== "string"
+                qwen
+                  ? !configuring || !qwenSessionMatches(rawEvent, config.voice)
+                  : !rawEvent.session ||
+                    typeof (rawEvent.session as Record<string, unknown>).id !==
+                      "string"
               )
                 return stop("实时语音服务返回格式异常");
               await refreshActor();
@@ -283,64 +330,80 @@ function runRelay(
               return;
             }
             if (!ready) return;
-            if (e.type === "response.function_call_arguments.done") {
-              if (!Array.isArray(e.items) || e.items.length > 8)
-                return stop("语音指令格式无效");
-              const items = e.items;
-              const turn = {
-                question_id: e.question_id,
-                response_id: e.response_id,
-              };
-              send({ type: "xuti.tool_started", ...turn });
-              toolQueue = toolQueue
-                .then(async () => {
-                  if (closed) return;
-                  const results = [];
-                  for (const item of items) {
-                    if (closed) return;
-                    await refreshActor();
+            for (const e of qwen ? qwen.events(rawEvent) : [rawEvent]) {
+              if (e.type === "response.function_call_arguments.done") {
+                if (!Array.isArray(e.items) || e.items.length > 8)
+                  return stop("语音指令格式无效");
+                const items = e.items;
+                const turn = {
+                  question_id: e.question_id,
+                  response_id: e.response_id,
+                };
+                send({ type: "xuti.tool_started", ...turn });
+                toolQueue = toolQueue
+                  .then(async () => {
+                    if (closed || (qwen && !qwen.current(e.response_id)))
+                      return;
+                    const results = [];
+                    const qwenResults: { call_id: string; output: string }[] =
+                      [];
+                    for (const item of items) {
+                      if (closed) return;
+                      if (qwen && !qwen.current(e.response_id)) return;
+                      await refreshActor();
+                      if (
+                        !item ||
+                        item.name !== "workspace_request" ||
+                        typeof item.call_id !== "string" ||
+                        typeof item.arguments !== "string" ||
+                        item.arguments.length > 16000
+                      )
+                        throw Error("invalid tool");
+                      const args = JSON.parse(item.arguments);
+                      const result = await runRealtimeTool(c, id, {
+                        callId: item.call_id,
+                        request: args.request,
+                      });
+                      if (closed) return;
+                      qwenResults.push({
+                        call_id: item.call_id,
+                        output: JSON.stringify(result),
+                      });
+                      results.push({
+                        type: "message",
+                        call_id: item.call_id,
+                        role: "tool",
+                        content: [
+                          { type: "input_text", text: JSON.stringify(result) },
+                        ],
+                      });
+                      send({
+                        type: "xuti.tool_result",
+                        call_id: item.call_id,
+                        result,
+                        ...turn,
+                      });
+                    }
                     if (
-                      !item ||
-                      item.name !== "workspace_request" ||
-                      typeof item.call_id !== "string" ||
-                      typeof item.arguments !== "string" ||
-                      item.arguments.length > 16000
+                      upstream?.readyState === WebSocket.OPEN &&
+                      !closed &&
+                      qwen
                     )
-                      throw Error("invalid tool");
-                    const args = JSON.parse(item.arguments);
-                    const result = await runRealtimeTool(c, id, {
-                      callId: item.call_id,
-                      request: args.request,
-                    });
-                    if (closed) return;
-                    results.push({
-                      type: "message",
-                      call_id: item.call_id,
-                      role: "tool",
-                      content: [
-                        { type: "input_text", text: JSON.stringify(result) },
-                      ],
-                    });
-                    send({
-                      type: "xuti.tool_result",
-                      call_id: item.call_id,
-                      result,
-                      ...turn,
-                    });
-                  }
-                  if (upstream?.readyState === WebSocket.OPEN && !closed)
-                    upstream.send(
-                      JSON.stringify({
-                        type: "conversation.item.create",
-                        items: results,
-                      }),
-                    );
-                })
-                .catch(() => stop("语音操作未完成，请查看完整对话后再试"));
-              return;
+                      qwen.toolResults(e.response_id, qwenResults);
+                    else if (upstream?.readyState === WebSocket.OPEN && !closed)
+                      upstream.send(
+                        JSON.stringify({
+                          type: "conversation.item.create",
+                          items: results,
+                        }),
+                      );
+                  })
+                  .catch(() => stop("语音操作未完成，请查看完整对话后再试"));
+                continue;
+              }
+              const safe = publicRealtimeEvent(e);
+              if (safe) send(safe);
             }
-            const safe = publicRealtimeEvent(e);
-            if (safe) send(safe);
           })().catch(() => stop("实时语音服务返回异常，请重新开始"));
         });
         return;
@@ -356,7 +419,8 @@ function runRelay(
       }
       if (++frames > 90 || upstream.bufferedAmount > 256 * 1024)
         return stop("语音传输过快或网络拥塞，请重新开始");
-      upstream.send(JSON.stringify(allowed));
+      if (qwen) qwen.command(allowed);
+      else upstream.send(JSON.stringify(allowed));
     })().catch(() => stop("语音连接已失效，请重新开始"));
   });
 }

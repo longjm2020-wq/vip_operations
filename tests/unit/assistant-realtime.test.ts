@@ -19,6 +19,7 @@ const f = vi.hoisted(() => ({
   read: vi.fn(),
   send: vi.fn(),
   verifyDoubao: vi.fn(),
+  verifyQwen: vi.fn(),
 }));
 vi.mock("../../packages/database/src/index.js", async (original) => {
   const exports =
@@ -52,6 +53,9 @@ vi.mock("../../apps/api/src/modules/analytics/secrets.js", () => ({
 }));
 vi.mock("../../apps/api/src/modules/workspace/doubao-realtime.js", () => ({
   verifyDoubaoRealtime: f.verifyDoubao,
+}));
+vi.mock("../../apps/api/src/modules/workspace/qwen-realtime.js", () => ({
+  verifyQwenRealtime: f.verifyQwen,
 }));
 import {
   readRealtimeStatus,
@@ -99,13 +103,21 @@ beforeAll(async () => {
       "utf8",
     ),
   );
+  await f.db.exec(
+    await readFile(
+      "packages/database/migrations/087_qwen_realtime.sql",
+      "utf8",
+    ),
+  );
 });
 beforeEach(async () => {
   await f.db!
     .exec(`TRUNCATE assistant_realtime_sessions CASCADE; TRUNCATE personal_assistant_conversations;
     UPDATE assistant_realtime_settings SET provider='openai',enabled=true,voice='marin',api_key_encrypted='encrypted',verified_at=now(),error_note='',version=0,
-    doubao_voice='zh_female_vv_uranus_bigtts',doubao_api_key_encrypted=NULL,doubao_verified_at=NULL,doubao_error_note='';`);
+    doubao_voice='zh_female_vv_uranus_bigtts',doubao_api_key_encrypted=NULL,doubao_verified_at=NULL,doubao_error_note='',
+    qwen_voice='Tina',qwen_workspace_id='',qwen_free_only_confirmed=false,qwen_api_key_encrypted=NULL,qwen_verified_at=NULL,qwen_error_note='';`);
   f.verifyDoubao.mockReset().mockResolvedValue(undefined);
+  f.verifyQwen.mockReset().mockResolvedValue(undefined);
   f.read.mockReset().mockResolvedValue({
     ready: true,
     state: "IDLE",
@@ -148,6 +160,66 @@ afterAll(async () => {
 });
 
 describe("native realtime voice authorization and lifecycle", () => {
+  it("requires Qwen workspace and free-only confirmation, isolates credentials and invalidates configuration changes", async () => {
+    const admin = actor(true);
+    const config = {
+      version: 0,
+      provider: "qwen",
+      voice: "Tina",
+      enabled: true,
+      apiKey: "sk-qwen-test-key-only",
+      workspaceId: "workspace-1",
+      freeQuotaOnlyConfirmed: true,
+    };
+    await expect(
+      saveRealtimeSettings(admin, { ...config, freeQuotaOnlyConfirmed: false }),
+    ).rejects.toBeDefined();
+    await expect(
+      saveRealtimeSettings(admin, { ...config, workspaceId: "evil.example" }),
+    ).rejects.toBeDefined();
+    const saved = await saveRealtimeSettings(admin, {
+      ...config,
+      enabled: false,
+      freeQuotaOnlyConfirmed: false,
+    });
+    await expect(verifyRealtimeSettings(admin)).rejects.toMatchObject({
+      response: { error: { code: "REALTIME_FREE_ONLY" } },
+    });
+    expect(f.verifyQwen).not.toHaveBeenCalled();
+    await saveRealtimeSettings(admin, { ...config, version: saved.version });
+    const verified = await verifyRealtimeSettings(admin);
+    expect(verified.ready).toBe(true);
+    expect(f.verifyQwen).toHaveBeenCalledWith(
+      "encrypted:sk-qwen-test-key-only",
+      "workspace-1",
+      "Tina",
+      expect.any(Object),
+    );
+    expect(verified.profiles!.openai.apiKeyConfigured).toBe(true);
+    const publicStatus = await readRealtimeStatus(actor());
+    expect(publicStatus.profiles).toBeUndefined();
+    expect(JSON.stringify(publicStatus)).not.toMatch(
+      /sk-qwen|workspace-1|omni-flash/,
+    );
+    const session = await startRealtime(actor(), { id: randomUUID() });
+    expect(session.transport).toBe("websocket");
+    expect(
+      await claimRealtimeSocket(actor(), session.id, session.ticket!),
+    ).toMatchObject({ provider: "qwen", workspaceId: "workspace-1" });
+    await activateRealtimeSocket(actor(), session.id);
+    expect((await checkRealtime(actor(), session.id)).active).toBe(true);
+    const changed = await saveRealtimeSettings(admin, {
+      ...config,
+      version: verified.version,
+      apiKey: undefined,
+      workspaceId: "workspace-2",
+    });
+    expect(changed.ready).toBe(false);
+    expect(changed.verifiedAt).toBeNull();
+    await expect(checkRealtime(actor(), session.id)).rejects.toBeDefined();
+    await closeRealtime(actor(), session.id);
+    expect(fetch).not.toHaveBeenCalled();
+  });
   it("keeps provider credentials separate and issues an owner-bound one-use socket ticket", async () => {
     const admin = actor(true);
     const configured = await saveRealtimeSettings(admin, {
@@ -205,7 +277,7 @@ describe("native realtime voice authorization and lifecycle", () => {
     });
     expect(restored.ready).toBe(true);
     expect(restored.transport).toBe("webrtc");
-    expect(restored.profiles!.doubao.apiKeyConfigured).toBe(true);
+    expect(restored.profiles!.doubao!.apiKeyConfigured).toBe(true);
   });
   it("rejects expired/cancelled socket tickets and isolates provider voice validation", async () => {
     await expect(

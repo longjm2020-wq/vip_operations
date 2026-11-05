@@ -312,6 +312,11 @@ export class DoubaoVoiceSession {
           );
         }
         break;
+      case "input_audio_buffer.speech_stopped":
+        this.talking = false;
+        this.responding = true;
+        this.phase();
+        break;
       case "conversation.item.input_audio_transcription.completed":
         if (text.trim()) this.caption("user", text.trim(), true);
         this.talking = false;

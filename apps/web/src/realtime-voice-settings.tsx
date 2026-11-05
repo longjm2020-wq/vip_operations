@@ -3,6 +3,7 @@ import {
   Alert,
   App,
   Button,
+  Checkbox,
   Form,
   Input,
   Popconfirm,
@@ -16,6 +17,7 @@ import { api } from "./api";
 import {
   realtimeVoices,
   doubaoRealtimeVoices,
+  qwenRealtimeVoices,
   type RealtimeProvider,
   type RealtimeStatus,
 } from "../../../packages/contracts/src/assistant-realtime";
@@ -26,6 +28,12 @@ const doubaoNames: Record<string, string> = {
   zh_female_xiaohe_uranus_bigtts: "温柔",
   zh_male_m191_uranus_bigtts: "沉稳",
   zh_male_taocheng_uranus_bigtts: "清朗",
+};
+const qwenNames: Record<string, string> = {
+  Tina: "甜甜 · 温暖",
+  Serena: "苏瑶 · 温柔",
+  Mia: "舒然 · 自然",
+  Ryan: "甜茶 · 活力",
 };
 function Settings({
   value,
@@ -42,6 +50,12 @@ function Settings({
   );
   const [key, setKey] = useState(""),
     [busy, setBusy] = useState(false);
+  const [workspaceId, setWorkspaceId] = useState(
+    value.profiles?.qwen?.workspaceId ?? "",
+  );
+  const [freeOnly, setFreeOnly] = useState(
+    value.profiles?.qwen?.freeQuotaOnlyConfirmed ?? false,
+  );
   const profile =
     value.profiles?.[provider] ??
     (provider === (value.provider ?? "openai") ? value : undefined);
@@ -49,14 +63,24 @@ function Settings({
     !!key ||
     enabled !== value.enabled ||
     voice !== value.voice ||
+    (provider === "qwen" &&
+      (workspaceId !== (value.profiles?.qwen?.workspaceId ?? "") ||
+        freeOnly !==
+          (value.profiles?.qwen?.freeQuotaOnlyConfirmed ?? false))) ||
     provider !== (value.provider ?? "openai");
   const changeProvider = (next: RealtimeProvider) => {
     setProvider(next);
     setKey("");
     setVoice(
       value.profiles?.[next]?.voice ??
-        (next === "doubao" ? doubaoRealtimeVoices[0] : realtimeVoices[0]),
+        (next === "qwen"
+          ? qwenRealtimeVoices[0]
+          : next === "doubao"
+            ? doubaoRealtimeVoices[0]
+            : realtimeVoices[0]),
     );
+    setWorkspaceId(value.profiles?.qwen?.workspaceId ?? "");
+    setFreeOnly(value.profiles?.qwen?.freeQuotaOnlyConfirmed ?? false);
   };
   const save = async (clearKey = false) => {
     setBusy(true);
@@ -67,6 +91,9 @@ function Settings({
         provider,
         voice,
         clearKey,
+        ...(provider === "qwen"
+          ? { workspaceId, freeQuotaOnlyConfirmed: freeOnly }
+          : {}),
         ...(key && !clearKey ? { apiKey: key } : {}),
       });
       setKey("");
@@ -109,6 +136,7 @@ function Settings({
           value={provider}
           onChange={changeProvider}
           options={[
+            { value: "qwen", label: "千问实时语音（北京）" },
             { value: "doubao", label: "豆包实时语音（火山引擎）" },
             { value: "openai", label: "OpenAI 实时语音" },
           ]}
@@ -119,6 +147,7 @@ function Settings({
           aria-label="优先使用实时通话"
           checked={enabled}
           onChange={setEnabled}
+          disabled={busy || (provider === "qwen" && !freeOnly)}
         />
       </Form.Item>
       <Form.Item label="实时通话声音">
@@ -127,15 +156,60 @@ function Settings({
           value={voice}
           onChange={setVoice}
           options={
-            provider === "doubao"
-              ? doubaoRealtimeVoices.map((v) => ({
+            provider === "qwen"
+              ? qwenRealtimeVoices.map((v) => ({
                   value: v,
-                  label: doubaoNames[v],
+                  label: qwenNames[v],
                 }))
-              : realtimeVoices.map((v) => ({ value: v, label: names[v] }))
+              : provider === "doubao"
+                ? doubaoRealtimeVoices.map((v) => ({
+                    value: v,
+                    label: doubaoNames[v],
+                  }))
+                : realtimeVoices.map((v) => ({ value: v, label: names[v] }))
           }
         />
       </Form.Item>
+      {provider === "qwen" && (
+        <>
+          <Form.Item label="北京地域业务空间 ID">
+            <Input
+              aria-label="北京地域业务空间 ID"
+              value={workspaceId}
+              maxLength={63}
+              placeholder="填写百炼业务空间 ID，不填网址"
+              onChange={(e) => {
+                setWorkspaceId(e.target.value.trim());
+                setFreeOnly(false);
+                setEnabled(false);
+              }}
+            />
+          </Form.Item>
+          <Alert
+            type="info"
+            title="先确认免费额度保护"
+            description={
+              <>
+                <p>
+                  在百炼北京地域确认当前实时模型仍有可用免费额度，并开启“免费额度用完即停”。额度资格、有效期和生效状态以控制台为准。
+                </p>
+                <Checkbox
+                  checked={freeOnly}
+                  onChange={(e) => {
+                    setFreeOnly(e.target.checked);
+                    if (!e.target.checked) setEnabled(false);
+                  }}
+                >
+                  我已在百炼控制台确认“免费额度用完即停”已生效
+                </Checkbox>
+                <p>
+                  此处仅记录管理员确认，不会代替百炼开关；连接验证也不能核验计费设置。额度耗尽后结束通话，不自动切换通道。
+                </p>
+              </>
+            }
+          />
+        </>
+      )}
       <Form.Item
         label="实时服务密钥"
         extra={
@@ -149,32 +223,50 @@ function Settings({
           autoComplete="new-password"
           value={key}
           maxLength={512}
-          onChange={(e) => setKey(e.target.value)}
+          onChange={(e) => {
+            setKey(e.target.value);
+            if (provider === "qwen") {
+              setFreeOnly(false);
+              setEnabled(false);
+            }
+          }}
           placeholder={
             profile?.apiKeyConfigured
               ? "已保存，不回显"
-              : provider === "doubao"
-                ? "输入火山引擎语音服务 API Key"
-                : "输入 OpenAI 平台 API Key"
+              : provider === "qwen"
+                ? "输入百炼北京地域 API Key"
+                : provider === "doubao"
+                  ? "输入火山引擎语音服务 API Key"
+                  : "输入 OpenAI 平台 API Key"
           }
         />
       </Form.Item>
       <Typography.Paragraph type="secondary">
-        {provider === "doubao"
-          ? "请在火山引擎控制台开通端到端实时语音大模型全双工服务，并使用该语音服务的 API Key；不使用 AccessKey / SecretKey 或原有聚合语音密钥。"
-          : "此通道需要 OpenAI 平台的独立 API Key，原有聚合语音密钥不能用于此通道。"}
+        {provider === "qwen"
+          ? "使用百炼北京地域的专用 API Key 和对应业务空间。业务查询与页面操作仍使用已有助理服务，费用与实时语音额度分别计算。"
+          : provider === "doubao"
+            ? "请在火山引擎控制台开通端到端实时语音大模型全双工服务，并使用该语音服务的 API Key；不使用 AccessKey / SecretKey 或原有聚合语音密钥。"
+            : "此通道需要 OpenAI 平台的独立 API Key，原有聚合语音密钥不能用于此通道。"}
       </Typography.Paragraph>
       <Space wrap>
         <Button
           type="primary"
           loading={busy}
-          disabled={!value.encryptionReady}
+          disabled={
+            !value.encryptionReady ||
+            (provider === "qwen" && (!workspaceId || (enabled && !freeOnly)))
+          }
           onClick={() => void save()}
         >
           保存实时设置
         </Button>
         <Button
-          disabled={busy || dirty || !profile?.apiKeyConfigured}
+          disabled={
+            busy ||
+            dirty ||
+            !profile?.apiKeyConfigured ||
+            (provider === "qwen" && !freeOnly)
+          }
           onClick={() => void verify()}
         >
           验证实时通道
@@ -189,7 +281,7 @@ function Settings({
         )}
       </Space>
       <p className="realtime-footnote">
-        验证只检查通道配置，不录音、不代表麦克风或扬声器已测试。正式通话按服务用量计费，业务查询沿用现有助理服务。更改声音或密钥后需重新验证。
+        验证只检查通道配置，不录音、不代表麦克风、扬声器或计费设置已测试。更改声音、密钥、业务空间或费用保护确认后需重新验证。
       </p>
     </Form>
   );

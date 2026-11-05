@@ -26,6 +26,7 @@ import { requireAssistant } from "./assistant-memory.js";
 import { readAssistant, sendAssistant } from "./assistant.js";
 import { voiceSafeError } from "./assistant-voice.js";
 import { verifyDoubaoRealtime } from "./doubao-realtime.js";
+import { verifyQwenRealtime } from "./qwen-realtime.js";
 import { closeRealtimeRelay } from "./realtime-relay-registry.js";
 
 const root = "https://api.openai.com/v1/realtime";
@@ -34,8 +35,11 @@ const settings = () =>
 const manager = (c: Context) =>
   !!c.actor.roleCodes?.includes("SUPER_ADMIN") &&
   c.actor.permissions.includes("analytics.manage");
+function providerPrefix(provider: string) {
+  return provider === "qwen" ? "qwen_" : provider === "doubao" ? "doubao_" : "";
+}
 function providerFields(s: Row, provider = s.provider || "openai") {
-  const prefix = provider === "doubao" ? "doubao_" : "";
+  const prefix = providerPrefix(provider);
   return {
     voice: s[prefix + "voice"],
     key: s[prefix + "api_key_encrypted"],
@@ -57,19 +61,34 @@ function view(c: Context, s: Row): RealtimeStatus {
       apiKeyConfigured: !!p.key,
       verifiedAt: p.verified,
       error: p.error,
+      ...(provider === "qwen"
+        ? {
+            workspaceId: s.qwen_workspace_id,
+            freeQuotaOnlyConfirmed: s.qwen_free_only_confirmed,
+          }
+        : {}),
     };
   };
   return {
     provider: s.provider || "openai",
-    transport: s.provider === "doubao" ? "websocket" : "webrtc",
+    transport:
+      s.provider === "doubao" || s.provider === "qwen" ? "websocket" : "webrtc",
     ...(manager(c)
-      ? { profiles: { openai: profile("openai"), doubao: profile("doubao") } }
+      ? {
+          profiles: {
+            openai: profile("openai"),
+            doubao: profile("doubao"),
+            qwen: profile("qwen"),
+          },
+        }
       : {}),
     enabled: s.enabled,
     ready: !!(
       s.enabled &&
       selected.key &&
       selected.verified &&
+      (s.provider !== "qwen" ||
+        (s.qwen_workspace_id && s.qwen_free_only_confirmed)) &&
       encryptionReady()
     ),
     voice: selected.voice,
@@ -90,13 +109,16 @@ export async function saveRealtimeSettings(c: Context, input: unknown) {
   const b = parse(realtimeSettingsSchema, input);
   if ((b.apiKey || b.enabled) && !encryptionReady())
     fail("VOICE_ENCRYPTION", "服务器凭据加密尚未就绪", 503);
-  const prefix = b.provider === "doubao" ? "doubao_" : "";
+  const prefix = providerPrefix(b.provider);
   const updated = await one(
     db,
     `UPDATE public.assistant_realtime_settings SET
     enabled=$2,${prefix}voice=$3,provider=$6,
     ${prefix}api_key_encrypted=CASE WHEN $4 THEN NULL WHEN $5::text IS NOT NULL THEN $5 ELSE ${prefix}api_key_encrypted END,
-    ${prefix}verified_at=CASE WHEN $4 OR $5::text IS NOT NULL OR ${prefix}voice<>$3 THEN NULL ELSE ${prefix}verified_at END,
+    ${prefix}verified_at=CASE WHEN $4 OR $5::text IS NOT NULL OR ${prefix}voice<>$3
+      OR ($6='qwen' AND (qwen_workspace_id<>$7 OR qwen_free_only_confirmed<>$8)) THEN NULL ELSE ${prefix}verified_at END,
+    qwen_workspace_id=CASE WHEN $6='qwen' THEN $7 ELSE qwen_workspace_id END,
+    qwen_free_only_confirmed=CASE WHEN $6='qwen' THEN $8 ELSE qwen_free_only_confirmed END,
     ${prefix}error_note='',version=version+1,updated_at=now() WHERE id=1 AND version=$1 RETURNING id`,
     b.version,
     b.clearKey ? false : b.enabled,
@@ -104,6 +126,8 @@ export async function saveRealtimeSettings(c: Context, input: unknown) {
     b.clearKey,
     b.apiKey ? encryptSecret(b.apiKey) : null,
     b.provider,
+    b.workspaceId ?? "",
+    b.freeQuotaOnlyConfirmed ?? false,
   );
   if (!updated)
     fail("VERSION_CONFLICT", "实时语音设置已变化，请刷新后重试", 409);
@@ -195,11 +219,27 @@ export async function verifyRealtimeSettings(c: Context) {
   const selected = providerFields(s);
   if (!selected.key || !encryptionReady())
     fail("REALTIME_NOT_READY", "请先保存实时语音专用密钥", 409);
+  if (
+    s.provider === "qwen" &&
+    (!s.qwen_workspace_id || !s.qwen_free_only_confirmed)
+  )
+    fail(
+      "REALTIME_FREE_ONLY",
+      "请先在服务控制台开启免费额度用完即停并确认已生效",
+      409,
+    );
   let error = "";
   try {
     if (s.provider === "doubao") {
       await verifyDoubaoRealtime(
         selected.key,
+        selected.voice,
+        realtimeConfiguration(selected.voice),
+      );
+    } else if (s.provider === "qwen") {
+      await verifyQwenRealtime(
+        selected.key,
+        s.qwen_workspace_id,
         selected.voice,
         realtimeConfiguration(selected.voice),
       );
@@ -224,7 +264,7 @@ export async function verifyRealtimeSettings(c: Context) {
   } catch (e) {
     error = voiceSafeError(e);
   }
-  const prefix = s.provider === "doubao" ? "doubao_" : "";
+  const prefix = providerPrefix(s.provider);
   const saved = await one(
     db,
     `UPDATE public.assistant_realtime_settings SET ${prefix}verified_at=CASE WHEN $2='' THEN now() ELSE NULL END,
@@ -264,10 +304,12 @@ export async function startRealtime(c: Context, input: unknown) {
     s = (await settings())!;
   if (!view(c, s).ready)
     fail("REALTIME_NOT_READY", "请先配置、启用并验证实时语音", 409);
-  if (s.provider !== "doubao" && !b.sdp)
+  const socketProvider = s.provider === "doubao" || s.provider === "qwen";
+  if (!socketProvider && !b.sdp)
     fail("VALIDATION_ERROR", "缺少音频连接请求", 400);
-  const ticket =
-    s.provider === "doubao" ? randomBytes(32).toString("base64url") : undefined;
+  const ticket = socketProvider
+    ? randomBytes(32).toString("base64url")
+    : undefined;
   await db.$transaction(async (tx) => {
     await tx.$executeRawUnsafe(
       "SELECT pg_advisory_xact_lock(hashtextextended($1,0))",
@@ -348,7 +390,7 @@ export async function closeRealtime(c: Context, id: string) {
   const s = (await settings())!;
   closeRealtimeRelay(session.id);
   if (
-    session.provider !== "doubao" &&
+    session.provider === "openai" &&
     session.provider_call_id &&
     s.api_key_encrypted &&
     session.state !== "CLOSED"
@@ -367,8 +409,8 @@ export async function claimRealtimeSocket(
   const session = await ownedSession(c, id, false);
   const s = (await settings())!;
   if (
-    session.provider !== "doubao" ||
-    s.provider !== "doubao" ||
+    !["doubao", "qwen"].includes(session.provider) ||
+    s.provider !== session.provider ||
     !view(c, s).ready ||
     session.settings_version !== s.version
   )
@@ -383,8 +425,11 @@ export async function claimRealtimeSocket(
   );
   if (!claimed) fail("REALTIME_TICKET", "语音连接已失效，请重新开始", 403);
   return {
-    key: s.doubao_api_key_encrypted as string,
-    voice: s.doubao_voice as string,
+    provider: s.provider as "doubao" | "qwen",
+    key: providerFields(s).key as string,
+    voice: providerFields(s).voice as string,
+    workspaceId:
+      s.provider === "qwen" ? (s.qwen_workspace_id as string) : undefined,
   };
 }
 export async function activateRealtimeSocket(c: Context, id: string) {
@@ -395,7 +440,7 @@ export async function activateRealtimeSocket(c: Context, id: string) {
   const updated = await one(
     db,
     `UPDATE public.assistant_realtime_sessions SET state='ACTIVE',expires_at=now()+interval '1 hour',last_seen_at=now()
-    WHERE id=$1::uuid AND state='CREATING' AND expires_at>now() AND socket_ticket_hash IS NULL AND provider='doubao' RETURNING expires_at`,
+    WHERE id=$1::uuid AND state='CREATING' AND expires_at>now() AND socket_ticket_hash IS NULL AND provider IN ('doubao','qwen') RETURNING expires_at`,
     session.id,
   );
   if (!updated) fail("REALTIME_CANCELED", "通话已取消", 409);

@@ -8,13 +8,24 @@ export const doubaoRealtimeVoices = [
   "zh_male_m191_uranus_bigtts",
   "zh_male_taocheng_uranus_bigtts",
 ] as const;
-export type RealtimeProvider = "openai" | "doubao";
+export const qwenRealtimeModel = "qwen3.8-omni-flash-realtime";
+export const qwenRealtimeVoices = ["Tina", "Serena", "Mia", "Ryan"] as const;
+export const qwenWorkspaceIdSchema = z
+  .string()
+  .trim()
+  .regex(
+    /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/,
+    "请填写北京地域的业务空间 ID，不要填写网址",
+  );
+export type RealtimeProvider = "openai" | "doubao" | "qwen";
 export const realtimeSettingsSchema = z
   .object({
     version: z.number().int().min(0),
     enabled: z.boolean(),
-    provider: z.enum(["openai", "doubao"]).default("openai"),
+    provider: z.enum(["openai", "doubao", "qwen"]).default("openai"),
     voice: z.string().min(1).max(100),
+    workspaceId: qwenWorkspaceIdSchema.optional(),
+    freeQuotaOnlyConfirmed: z.boolean().optional(),
     apiKey: z
       .string()
       .trim()
@@ -29,7 +40,9 @@ export const realtimeSettingsSchema = z
     (v) =>
       v.provider === "doubao"
         ? (doubaoRealtimeVoices as readonly string[]).includes(v.voice)
-        : (realtimeVoices as readonly string[]).includes(v.voice),
+        : v.provider === "qwen"
+          ? (qwenRealtimeVoices as readonly string[]).includes(v.voice)
+          : (realtimeVoices as readonly string[]).includes(v.voice),
     "请选择当前通道的声音",
   )
   .refine(
@@ -39,7 +52,25 @@ export const realtimeSettingsSchema = z
       /^sk-(?!or-)[!-~]+$/.test(v.apiKey),
     "请填写当前通道的专用密钥",
   )
-  .refine((v) => !(v.apiKey && v.clearKey), "不能同时清除和填写密钥");
+  .refine((v) => !(v.apiKey && v.clearKey), "不能同时清除和填写密钥")
+  .refine(
+    (v) => v.provider !== "qwen" || !!v.workspaceId,
+    "请填写北京地域的业务空间 ID",
+  )
+  .refine(
+    (v) =>
+      v.provider === "qwen" ||
+      (v.workspaceId === undefined && v.freeQuotaOnlyConfirmed === undefined),
+    "费用保护与业务空间只适用于所选通道",
+  )
+  .refine(
+    (v) =>
+      v.provider !== "qwen" ||
+      !v.enabled ||
+      v.clearKey ||
+      v.freeQuotaOnlyConfirmed === true,
+    "请先在服务控制台开启免费额度用完即停并确认已生效",
+  );
 export const realtimeStartSchema = z
   .object({
     id: z.string().uuid(),
@@ -91,6 +122,8 @@ export type RealtimeStatus = {
       apiKeyConfigured: boolean;
       verifiedAt: string | null;
       error: string;
+      workspaceId?: string;
+      freeQuotaOnlyConfirmed?: boolean;
     }
   >;
   enabled: boolean;
