@@ -21,7 +21,7 @@ import {
   Alert,
 } from "antd";
 import {
-  PaperClipOutlined,
+  PlusOutlined,
   SettingOutlined,
   DownloadOutlined,
   FileOutlined,
@@ -60,6 +60,8 @@ export function AgentComposer({
   disabled,
   onUploading,
   settingsContent,
+  accessControl,
+  actions,
   active = true,
 }: {
   value: AgentOptions;
@@ -67,6 +69,8 @@ export function AgentComposer({
   disabled: boolean;
   onUploading: (v: boolean) => void;
   settingsContent?: ReactNode;
+  accessControl?: ReactNode;
+  actions?: ReactNode;
   active?: boolean;
 }) {
   const input = useRef<HTMLInputElement>(null),
@@ -132,102 +136,110 @@ export function AgentComposer({
   return (
     <div className="agent-composer">
       <div className="agent-composer-tools">
-        <input
-          ref={input}
-          type="file"
-          hidden
-          multiple
-          accept=".png,.jpg,.jpeg,.webp,.pdf,.txt,.md,.csv,.json,.docx,.xlsx,.pptx,.mp4,.mov,.webm"
-          onChange={(e) => void upload(e.target.files)}
-          aria-label="上传助理附件"
-        />
-        <Button
-          size="small"
-          type="text"
-          icon={<PaperClipOutlined />}
-          aria-label="附件"
-          loading={uploading}
-          disabled={disabled}
-          onClick={() => input.current?.click()}
-        >
-          附件
-        </Button>
-        <Select
-          size="small"
-          aria-label="助理能力"
-          value={purposeMenu.value}
-          placeholder="日常问答"
-          disabled={disabled || uploading}
-          loading={catalog.isLoading}
-          popupMatchSelectWidth={false}
-          options={purposeMenu.options}
-          onChange={(purpose) => {
-            const option = purposeMenu.options.find((o) => o.value === purpose);
-            if (!option) return;
-            setPreferredPurpose(purpose);
-            change({ ...value, model: option.model });
-          }}
-        />
-        <Checkbox
-          checked={value.webSearch}
-          disabled={disabled || uploading}
-          onChange={(e) => change({ ...value, webSearch: e.target.checked })}
-        >
-          联网
-        </Checkbox>
-        <Popover
-          trigger="click"
-          title={settingsContent ? "助理设置" : "创作设置"}
-          open={settingsOpen && active}
-          onOpenChange={setSettingsOpen}
-          content={
-            <div
-              className={`agent-settings${settingsContent ? " assistant-settings" : ""}`}
-              onClick={(event) => {
-                if (
-                  (event.target as HTMLElement).closest(
-                    "[data-settings-action]",
-                  )
-                )
-                  setSettingsOpen(false);
-              }}
-            >
-              {settingsContent}
-              <p>图像创作能力</p>
-              <Select
-                style={{ width: 230 }}
-                aria-label="图像创作能力"
-                placeholder="使用首个可用图像能力"
-                value={value.imageModel}
-                disabled={disabled || uploading}
-                allowClear
-                options={catalog.data?.imageModels?.map((m) => ({
-                  value: m.id,
-                  label: m.name + (m.reference ? " · 参考图" : ""),
-                }))}
-                onChange={(imageModel) => change({ ...value, imageModel })}
-              />
-              <p>仅在提出创作要求时运行。智能服务按实际用量计费。</p>
-              <p>附件仅本人可访问；发送时，所附内容会交给智能服务处理。</p>
-              {catalog.data?.notice && <p>{catalog.data.notice}</p>}
-              <Button
-                size="small"
-                loading={catalog.isFetching}
-                onClick={() => void catalog.refetch()}
-              >
-                刷新能力列表
-              </Button>
-            </div>
-          }
-        >
+        <div className="agent-composer-leading">
+          <input
+            ref={input}
+            type="file"
+            hidden
+            multiple
+            accept=".png,.jpg,.jpeg,.webp,.pdf,.txt,.md,.csv,.json,.docx,.xlsx,.pptx,.mp4,.mov,.webm"
+            onChange={(e) => void upload(e.target.files)}
+            aria-label="上传助理附件"
+          />
           <Button
             size="small"
             type="text"
-            icon={<SettingOutlined />}
-            aria-label={settingsContent ? "助理设置" : "创作设置"}
-            disabled={!active || (disabled && !settingsContent)}
+            icon={<PlusOutlined />}
+            title="添加附件"
+            aria-label="附件"
+            loading={uploading}
+            disabled={disabled}
+            onClick={() => input.current?.click()}
           />
-        </Popover>
+          {accessControl}
+        </div>
+        <div className="agent-composer-trailing">
+          <Select
+            size="small"
+            variant="borderless"
+            aria-label="助理能力"
+            value={purposeMenu.value}
+            placeholder="日常问答"
+            disabled={disabled || uploading}
+            loading={catalog.isLoading}
+            popupMatchSelectWidth={false}
+            options={purposeMenu.options}
+            onChange={(purpose) => {
+              const option = purposeMenu.options.find(
+                (o) => o.value === purpose,
+              );
+              if (!option) return;
+              setPreferredPurpose(purpose);
+              change({ ...value, model: option.model });
+            }}
+          />
+          <Checkbox
+            checked={value.webSearch}
+            disabled={disabled || uploading}
+            onChange={(e) => change({ ...value, webSearch: e.target.checked })}
+          >
+            联网
+          </Checkbox>
+          <Popover
+            trigger="click"
+            title={settingsContent ? "助理设置" : "创作设置"}
+            open={settingsOpen && active}
+            onOpenChange={setSettingsOpen}
+            content={
+              <div
+                className={`agent-settings${settingsContent ? " assistant-settings" : ""}`}
+                onClick={(event) => {
+                  if (
+                    (event.target as HTMLElement).closest(
+                      "[data-settings-action]",
+                    )
+                  )
+                    setSettingsOpen(false);
+                }}
+              >
+                {settingsContent}
+                <p>图像创作能力</p>
+                <Select
+                  style={{ width: 230 }}
+                  aria-label="图像创作能力"
+                  placeholder="使用首个可用图像能力"
+                  value={value.imageModel}
+                  disabled={disabled || uploading}
+                  allowClear
+                  options={catalog.data?.imageModels?.map((m) => ({
+                    value: m.id,
+                    label: m.name + (m.reference ? " · 参考图" : ""),
+                  }))}
+                  onChange={(imageModel) => change({ ...value, imageModel })}
+                />
+                <p>仅在提出创作要求时运行。智能服务按实际用量计费。</p>
+                <p>附件仅本人可访问；发送时，所附内容会交给智能服务处理。</p>
+                {catalog.data?.notice && <p>{catalog.data.notice}</p>}
+                <Button
+                  size="small"
+                  loading={catalog.isFetching}
+                  onClick={() => void catalog.refetch()}
+                >
+                  刷新能力列表
+                </Button>
+              </div>
+            }
+          >
+            <Button
+              size="small"
+              type="text"
+              icon={<SettingOutlined />}
+              aria-label={settingsContent ? "助理设置" : "创作设置"}
+              disabled={!active || (disabled && !settingsContent)}
+            />
+          </Popover>
+          {actions}
+        </div>
       </div>
       {catalog.error && <small>能力列表加载失败，当前选择保持不变。</small>}
       {!!value.attachments.length && (

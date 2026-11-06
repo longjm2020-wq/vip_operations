@@ -72,6 +72,7 @@ import {
   pollDesktop,
   queueDesktopTask,
   revokeDesktop,
+  setDesktopAuthorization,
 } from "../../apps/api/src/modules/workspace/desktop.js";
 const actor = (id = "7"): Context => ({
   actor: {
@@ -90,6 +91,12 @@ beforeAll(async () => {
   await fixture.db.exec(
     await readFile(
       "packages/database/migrations/084_assistant_desktop.sql",
+      "utf8",
+    ),
+  );
+  await fixture.db.exec(
+    await readFile(
+      "packages/database/migrations/088_desktop_authorization.sql",
       "utf8",
     ),
   );
@@ -168,6 +175,329 @@ async function shot() {
 }
 
 describe("paired desktop task execution", () => {
+  it("remembers a device grant across polls, isolates ownership and does not expose its identifier to the website", async () => {
+    const d = await paired();
+    expect((await desktopState(actor())).devices[0].crossWindowAuthorized).toBe(
+      false,
+    );
+    const grant = await setDesktopAuthorization(actor(), d.deviceId, true);
+    expect(grant.authorizationId).toBeTruthy();
+    expect(await setDesktopAuthorization(actor(), d.deviceId, true)).toEqual(
+      grant,
+    );
+    expect((await pollDesktop(actor(), d.deviceId)).authorizationId).toBe(
+      grant.authorizationId,
+    );
+    const state = await desktopState(actor());
+    expect(state.devices[0].crossWindowAuthorized).toBe(true);
+    expect(JSON.stringify(state)).not.toContain(grant.authorizationId);
+    const task = await queueDesktopTask(actor(), {
+      deviceId: d.deviceId,
+      requestId: randomUUID(),
+      instruction: "整理笔记",
+    });
+    expect(task.status).toBe("WAITING");
+    expect(task.stage).toBe("等待本机按设备授权开始");
+    await expect(
+      setDesktopAuthorization(actor("8"), d.deviceId, false),
+    ).rejects.toThrow();
+    const other = await paired();
+    expect(
+      (await pollDesktop(actor(), other.deviceId)).authorizationId,
+    ).toBeNull();
+    await setDesktopAuthorization(actor(), d.deviceId, false);
+    expect((await pollDesktop(actor(), d.deviceId)).authorizationId).toBeNull();
+    expect(
+      (await setDesktopAuthorization(actor(), d.deviceId, true))
+        .authorizationId,
+    ).not.toBe(grant.authorizationId);
+  });
+  it("requires the native device and its current grant before enabling cross-window execution", async () => {
+    const { d, t } = await queued();
+    const grant = await setDesktopAuthorization(actor(), d.deviceId, true);
+    const input = {
+      action: "allow",
+      window: "笔记",
+      application: "notepad",
+      windowId: randomUUID(),
+      ...grant,
+    };
+    await expect(desktopControl(actor(), t.id, input)).rejects.toThrow();
+    await expect(
+      desktopControl(actor(), t.id, input, randomUUID()),
+    ).rejects.toThrow();
+    await expect(
+      desktopControl(
+        actor(),
+        t.id,
+        { ...input, authorizationId: randomUUID() },
+        d.deviceId,
+      ),
+    ).rejects.toThrow();
+    expect((await pollDesktop(actor(), d.deviceId)).task?.status).toBe(
+      "WAITING",
+    );
+    expect((await desktopControl(actor(), t.id, input, d.deviceId)).scope).toBe(
+      "device",
+    );
+    await setDesktopAuthorization(actor(), d.deviceId, false);
+    await setDesktopAuthorization(actor(), d.deviceId, true);
+    await expect(
+      desktopControl(actor(), t.id, input, d.deviceId),
+    ).rejects.toThrow();
+  });
+  it("switches only to an observed window and binds the next screenshot after an acknowledged switch", async () => {
+    const { d, t } = await queued();
+    const grant = await setDesktopAuthorization(actor(), d.deviceId, true);
+    const first = { id: randomUUID(), title: "笔记", application: "notepad" };
+    const second = {
+      id: randomUUID(),
+      title: "业务网页",
+      application: "msedge",
+    };
+    await desktopControl(
+      actor(),
+      t.id,
+      {
+        action: "allow",
+        window: first.title,
+        application: first.application,
+        windowId: first.id,
+        ...grant,
+      },
+      d.deviceId,
+    );
+    const observation = {
+      ...(await shot()),
+      windowId: first.id,
+      windows: [first, second],
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        model({
+          kind: "switch_window",
+          windowId: second.id,
+          description: "查看业务网页",
+        }),
+      ),
+    );
+    const plan = await planDesktop(actor(), d.deviceId, t.id, observation);
+    expect(plan.command?.targetWindow).toEqual(second);
+    expect(
+      (
+        await permitDesktop(actor(), d.deviceId, t.id, {
+          commandId: plan.command!.id,
+        })
+      ).allowed,
+    ).toBe(true);
+    const next = {
+      ...observation,
+      requestId: randomUUID(),
+      windowId: second.id,
+      window: second.title,
+      application: second.application,
+    };
+    await expect(
+      planDesktop(actor(), d.deviceId, t.id, next),
+    ).rejects.toMatchObject({
+      response: { error: { code: "WINDOW_CHANGED" } },
+    });
+    const ack = { commandId: plan.command!.id, outcome: "ok", note: "已切换" };
+    expect(
+      (await acknowledgeDesktop(actor(), d.deviceId, t.id, ack)).window,
+    ).toBe(second.title);
+    expect(
+      (await acknowledgeDesktop(actor(), d.deviceId, t.id, ack)).step,
+    ).toBe(1);
+    await expect(
+      planDesktop(actor(), d.deviceId, t.id, observation),
+    ).rejects.toMatchObject({
+      response: { error: { code: "WINDOW_CHANGED" } },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => model({ kind: "wait", description: "等待网页加载" })),
+    );
+    expect(
+      (await planDesktop(actor(), d.deviceId, t.id, next)).command?.action.kind,
+    ).toBe("wait");
+    const sent = JSON.parse(vi.mocked(fetch).mock.calls[0][1]!.body as string);
+    expect(sent.messages[0].content).toContain("switch_window");
+    expect(JSON.parse(sent.messages[1].content[0].text).windows).toEqual([
+      first,
+      second,
+    ]);
+  });
+  it.each(["unknown", "duplicate", "missing"])(
+    "rejects %s window targets or observations",
+    async (mode) => {
+      const { d, t } = await queued();
+      const grant = await setDesktopAuthorization(actor(), d.deviceId, true);
+      const first = { id: randomUUID(), title: "笔记", application: "notepad" };
+      await desktopControl(
+        actor(),
+        t.id,
+        {
+          action: "allow",
+          window: first.title,
+          application: first.application,
+          windowId: first.id,
+          ...grant,
+        },
+        d.deviceId,
+      );
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () =>
+          model({
+            kind: "switch_window",
+            windowId: randomUUID(),
+            description: "切换",
+          }),
+        ),
+      );
+      await expect(
+        planDesktop(actor(), d.deviceId, t.id, {
+          ...(await shot()),
+          windowId: first.id,
+          ...(mode !== "missing"
+            ? { windows: mode === "duplicate" ? [first, first] : [first] }
+            : {}),
+        }),
+      ).rejects.toThrow();
+    },
+  );
+  it("keeps legacy tasks in one window even when the device has a saved grant", async () => {
+    const { d, t } = await allowed();
+    await setDesktopAuthorization(actor(), d.deviceId, true);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        model({
+          kind: "switch_window",
+          windowId: randomUUID(),
+          description: "切换",
+        }),
+      ),
+    );
+    const observation = await shot();
+    await expect(
+      planDesktop(actor(), d.deviceId, t.id, {
+        ...observation,
+        windows: [{ id: randomUUID(), title: "笔记", application: "notepad" }],
+      }),
+    ).rejects.toMatchObject({ response: { error: { code: "FORBIDDEN" } } });
+    await expect(
+      planDesktop(actor(), d.deviceId, t.id, observation),
+    ).rejects.toMatchObject({ response: { error: { code: "FORBIDDEN" } } });
+    expect((await pollDesktop(actor(), d.deviceId)).task?.status).toBe(
+      "PAUSED",
+    );
+  });
+  it("revokes a pending switch, never revives it on a late ack, and allows single-window use afterward", async () => {
+    const { d, t } = await queued();
+    const grant = await setDesktopAuthorization(actor(), d.deviceId, true);
+    const first = { id: randomUUID(), title: "笔记", application: "notepad" };
+    const second = { id: randomUUID(), title: "表格", application: "EXCEL" };
+    await desktopControl(
+      actor(),
+      t.id,
+      {
+        action: "allow",
+        window: first.title,
+        application: first.application,
+        windowId: first.id,
+        ...grant,
+      },
+      d.deviceId,
+    );
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        model({
+          kind: "switch_window",
+          windowId: second.id,
+          description: "切换",
+        }),
+      ),
+    );
+    const plan = await planDesktop(actor(), d.deviceId, t.id, {
+      ...(await shot()),
+      windowId: first.id,
+      windows: [first, second],
+    });
+    await setDesktopAuthorization(actor(), d.deviceId, false);
+    expect(
+      (
+        await permitDesktop(actor(), d.deviceId, t.id, {
+          commandId: plan.command!.id,
+        })
+      ).allowed,
+    ).toBe(false);
+    const late = await acknowledgeDesktop(actor(), d.deviceId, t.id, {
+      commandId: plan.command!.id,
+      outcome: "ok",
+      note: "迟到",
+    });
+    expect(late.status).toBe("PAUSED");
+    expect(late.window).toBe(first.title);
+    expect(late.step).toBe(0);
+    expect(
+      (
+        await desktopControl(
+          actor(),
+          t.id,
+          {
+            action: "allow",
+            window: first.title,
+            application: first.application,
+          },
+          d.deviceId,
+        )
+      ).scope,
+    ).toBe("window");
+  });
+  it("discards analysis completed after authorization was revoked and regranted", async () => {
+    const { d, t } = await queued();
+    const grant = await setDesktopAuthorization(actor(), d.deviceId, true);
+    const first = { id: randomUUID(), title: "笔记", application: "notepad" };
+    const input = {
+      action: "allow",
+      window: first.title,
+      application: first.application,
+      windowId: first.id,
+      ...grant,
+    };
+    await desktopControl(actor(), t.id, input, d.deviceId);
+    let finish!: (r: Response) => void;
+    let started!: () => void;
+    const start = new Promise<void>((r) => {
+      started = r;
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        () =>
+          new Promise<Response>((r) => {
+            finish = r;
+            started();
+          }),
+      ),
+    );
+    const pending = planDesktop(actor(), d.deviceId, t.id, {
+      ...(await shot()),
+      windowId: first.id,
+      windows: [first],
+    });
+    await start;
+    await setDesktopAuthorization(actor(), d.deviceId, false);
+    const next = await setDesktopAuthorization(actor(), d.deviceId, true);
+    await desktopControl(actor(), t.id, { ...input, ...next }, d.deviceId);
+    finish(model({ kind: "key", key: "ENTER", description: "迟到步骤" }));
+    expect((await pending).command).toBeNull();
+    expect((await pollDesktop(actor(), d.deviceId)).task?.step).toBe(0);
+  });
   it("makes pairing single-use and credentials owner-only, rejects browser use and revoked sessions", async () => {
     const d = await paired();
     await expect(

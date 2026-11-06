@@ -14,7 +14,7 @@ using Microsoft.Web.WebView2.WinForms;
 namespace XutiDesktop {
 static class ShellPolicy {
     public const string Origin = "https://vip-web-production.up.railway.app";
-    public const string Version = "1.1.0";
+    public const string Version = "1.2.0";
     public static bool Trusted(string value) {
         Uri uri;
         return Uri.TryCreate(value,UriKind.Absolute,out uri) && uri.Scheme=="https" &&
@@ -201,7 +201,7 @@ sealed class DesktopShell : Form {
             // No native object, token, filesystem or execution API is injected into any page.
             await core.AddScriptToExecuteOnDocumentCreatedAsync(@"(() => {
                 if (window !== window.top || location.origin !== 'https://vip-web-production.up.railway.app') return;
-                Object.defineProperty(window, 'xutiDesktop', {value: Object.freeze({version:'1.1.0'}), writable:false});
+                Object.defineProperty(window, 'xutiDesktop', {value: Object.freeze({version:'1.2.0'}), writable:false});
                 const theme = () => window.chrome.webview.postMessage({channel:'xuti-desktop',action:'theme',value:document.documentElement.dataset.theme === 'dark'?'dark':'light'});
                 addEventListener('DOMContentLoaded', () => {theme();new MutationObserver(theme).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});});
             })();");
@@ -262,7 +262,7 @@ sealed class BrowserWindow : Form {
                 core.NavigationStarting+=(o,a)=>{if(!ShellPolicy.WebAddress(a.Uri)&&a.Uri!="about:blank"){a.Cancel=true;progress.Text="仅支持 HTTPS 网页地址。";}else welcome.Visible=false;};
                 core.SourceChanged+=(o,a)=>{if(ShellPolicy.WebAddress(core.Source))address.Text=core.Source;};
                 core.DocumentTitleChanged+=(o,a)=>{Text="小序网页 · "+core.DocumentTitle;};
-                core.NavigationCompleted+=(o,a)=>{progress.Text=a.IsSuccess?"在「电脑任务」选择这个窗口后，小序可以按任务操作网页。":"网页加载失败，请检查地址或网络后重试。";};
+                core.NavigationCompleted+=(o,a)=>{progress.Text=a.IsSuccess?"在「电脑任务」允许此窗口，或记住跨窗口授权后，小序可以按任务操作网页。":"网页加载失败，请检查地址或网络后重试。";};
                 core.NewWindowRequested+=async(o,a)=>{
                     if(!a.IsUserInitiated||!ShellPolicy.WebAddress(a.Uri)||WindowCount>=8){a.Handled=true;return;}
                     using(var deferred=a.GetDeferral()) {

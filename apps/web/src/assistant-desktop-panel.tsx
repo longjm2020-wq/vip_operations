@@ -67,8 +67,8 @@ export function AssistantDesktopPanel({
         </Button>
       </div>
       <p>
-        让小序在你选择的 Windows
-        窗口中点击、输入和滚动。电脑任务使用当前选择的识图能力。
+        让小序操作 Windows
+        应用和网页。可逐次选择窗口，也可在本机记住跨窗口授权，让新任务自动执行。电脑任务使用当前选择的识图能力。
       </p>
       <Alert
         type="info"
@@ -76,7 +76,7 @@ export function AssistantDesktopPanel({
         title={native ? "小序桌面端已就绪" : "使用小序桌面端"}
         description={
           native
-            ? "点击连接本机即可使用电脑操作。收到任务后，在顶部「电脑任务」选择允许操作的窗口。"
+            ? "连接本机后，在顶部「电脑任务」点击「授权跨窗口操作」，确认一次即可记住这台设备；也可逐次选择窗口并允许。"
             : "下载并解压 Windows 桌面端，双击 XutiDesktop.exe。登录工作台后点击「连接本机」，无需再打开独立助手。"
         }
       />
@@ -180,6 +180,9 @@ export function AssistantDesktopPanel({
           <Tag color={d.online ? "processing" : undefined}>
             {d.online ? "在线" : "离线"}
           </Tag>
+          <Tag color={d.crossWindowAuthorized ? "blue" : undefined}>
+            {d.crossWindowAuthorized ? "已记住跨窗口授权" : "逐次允许"}
+          </Tag>
           <Space>
             <Button
               size="small"
@@ -203,6 +206,23 @@ export function AssistantDesktopPanel({
             >
               断开
             </Button>
+            {d.crossWindowAuthorized && (
+              <Button
+                size="small"
+                disabled={!!busy}
+                onClick={() =>
+                  void run(`authorization-${d.id}`, async () => {
+                    await api(
+                      `/my-workspace/assistant/desktop/devices/${d.id}/authorization/revoke`,
+                      "POST",
+                    );
+                    message.success("跨窗口授权已撤销，当前电脑任务已暂停");
+                  })
+                }
+              >
+                撤销跨窗口授权
+              </Button>
+            )}
           </Space>
         </div>
       ))}
@@ -215,6 +235,7 @@ export function AssistantDesktopPanel({
       {data?.tasks.map((t) => (
         <div className="assistant-desktop-item" key={t.id}>
           <Tag>{desktopStatusLabels[t.status]}</Tag>
+          {t.scope === "device" && <Tag>跨窗口</Tag>}
           <strong>{t.instruction}</strong>
           <div>
             {t.deviceName} · {t.window || "尚未选择窗口"} · 已执行 {t.step} 步
@@ -283,8 +304,8 @@ export function AssistantDesktopPanel({
         </div>
       ))}
       <p className="assistant-desktop-note">
-        电脑需保持开机，小序桌面端需运行。切换窗口或手动输入会暂停；Ctrl + Alt +
-        X
+        电脑需保持开机，小序桌面端需运行。授权在客户端重启后保留，断开或重新配对后需重新授权。小序可按授权切换窗口，你手动操作会暂停；Ctrl
+        + Alt + X
         随时停止。登录、付款、对外发送和删除等操作由你接手。任务进度会保存，窗口截图不留存。
       </p>
     </div>

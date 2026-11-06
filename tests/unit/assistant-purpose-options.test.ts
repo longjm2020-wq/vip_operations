@@ -25,9 +25,10 @@ const catalog = (models: AgentModel[]): AgentCatalog => ({
   notice: "",
 });
 
-it("maps four simple purposes to actual catalog entries without alternate labels", () => {
+it("maps the available purposes to actual catalog entries", () => {
   const source = catalog([
     model("default", "通用助手", { vision: true }),
+    model("flash", "快速问答", { vision: true }),
     model("deep-backup", "深度思考 · 备选"),
     model("deep", "深度思考"),
     model("visual", "视觉理解", { vision: true }),
@@ -37,10 +38,12 @@ it("maps four simple purposes to actual catalog entries without alternate labels
   expect(menu.value).toBe("daily");
   expect(menu.options.map(({ label, model: id }) => [label, id])).toEqual([
     ["日常问答", "engine/default"],
+    ["快速问答", "engine/flash"],
     ["深度分析", "engine/deep"],
     ["看图理解", "engine/visual"],
     ["写作", "engine/writer"],
   ]);
+  expect(assistantPurposeMenu(source, "engine/flash").value).toBe("quick");
   expect(source.imageModels).toEqual([
     { id: "engine/image", name: "图像创作", reference: true },
   ]);

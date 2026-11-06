@@ -226,7 +226,7 @@ export async function sendAssistant(
       : null;
     const answer = desktopTask
       ? {
-          text: "电脑任务已创建。请在本机助手选择要操作的窗口并允许本次任务；进度会显示在「电脑操作」中。",
+          text: "电脑任务已创建。已记住跨窗口授权的设备会自动开始；否则请在本机「电脑任务」选择窗口并允许。进度会显示在「电脑操作」中。",
           schedules: [],
           tools: [],
           evidence: [],

@@ -3,7 +3,7 @@ import type {
   AgentModel,
 } from "../../../packages/contracts/src/assistant-agent.js";
 
-type Purpose = "daily" | "analysis" | "vision" | "writing";
+type Purpose = "daily" | "quick" | "analysis" | "vision" | "writing";
 type PurposeOption = {
   value: Purpose | "current";
   label: string;
@@ -48,6 +48,7 @@ export function assistantPurposeMenu(
     if (model) options.push({ value, label, model: model.id });
   };
   add("daily", "日常问答", daily);
+  add("quick", "快速问答", named(["快速问答"]));
   add("analysis", "深度分析", analysis);
   add("vision", "看图理解", vision);
   add("writing", "写作", writing);

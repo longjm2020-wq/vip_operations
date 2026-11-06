@@ -15,7 +15,6 @@ import {
   Dropdown,
   Spin,
   Tooltip,
-  Select,
 } from "antd";
 import {
   ArrowRightOutlined,
@@ -65,6 +64,7 @@ import { useGptSpeech } from "./use-gpt-speech";
 import type { AssistantVoiceStatus } from "../../../packages/contracts/src/assistant-voice";
 import { workspaceHologramEvent } from "./workspace-hologram";
 import { AssistantDesktopPanel } from "./assistant-desktop-panel";
+import { AssistantDesktopAccess } from "./assistant-desktop-access";
 import type { DesktopState } from "../../../packages/contracts/src/assistant-desktop";
 import { useWorkspaceSceneCover } from "./workspace-scene-presence";
 
@@ -595,14 +595,6 @@ export function PersonalAssistantProvider({
       inert={!inDrawer && inWorkspace && open}
       aria-hidden={!inDrawer && inWorkspace && open ? true : undefined}
     >
-      <AgentComposer
-        value={agent}
-        change={setAgent}
-        disabled={busy}
-        onUploading={setUploading}
-        settingsContent={composerSettings(inDrawer)}
-        active={inDrawer ? open && section === "chat" : !inWorkspace || !open}
-      />
       <Sender
         value={text}
         onChange={(value) => setText(value.slice(0, 4000))}
@@ -611,90 +603,114 @@ export function PersonalAssistantProvider({
         readOnly={busy || voice.listening}
         disabled={!data?.ready || busy}
         submitType="enter"
-        suffix={(_, { components }) => (
-          <div className="assistant-send-actions">
-            <Tooltip
-              title={
-                voice.supported
-                  ? "点击说话，识别后核对发送。语音由浏览器识别，可能使用其在线服务。"
-                  : "此浏览器不支持语音识别，可继续键入。"
-              }
-            >
-              <Button
-                type={voice.listening ? "primary" : "text"}
-                shape="circle"
-                icon={voice.listening ? <StopOutlined /> : <AudioOutlined />}
-                aria-label={voice.listening ? "停止语音输入" : "语音输入"}
-                disabled={!voice.supported || busy || !data?.ready}
-                onClick={() => {
-                  speech.stop();
-                  voice.start(text);
-                }}
+        suffix={false}
+        footer={(_, { components }) => (
+          <AgentComposer
+            value={agent}
+            change={setAgent}
+            disabled={busy}
+            onUploading={setUploading}
+            settingsContent={composerSettings(inDrawer)}
+            active={
+              inDrawer ? open && section === "chat" : !inWorkspace || !open
+            }
+            accessControl={
+              <AssistantDesktopAccess
+                data={desktop.data}
+                deviceId={desktopDeviceId}
+                choose={setDesktopDeviceId}
+                manage={() => selectSection("desktop")}
+                refresh={() => void desktop.refetch()}
+                disabled={busy}
+                active={
+                  inDrawer ? open && section === "chat" : !inWorkspace || !open
+                }
               />
-            </Tooltip>
-            {(voice.speaking || speech.active) && (
-              <Button
-                type="text"
-                shape="circle"
-                icon={<StopOutlined />}
-                aria-label="停止朗读"
-                onClick={() => {
-                  voice.stopSpeaking();
-                  speech.stop();
-                }}
-              />
-            )}
-            {busy ? (
-              <Button
-                loading
-                disabled
-                shape="circle"
-                aria-label="助理正在回复"
-              />
-            ) : (
-              <components.SendButton aria-label="发送给个人助理" />
-            )}
-          </div>
+            }
+            actions={
+              <div className="assistant-send-actions">
+                <Tooltip
+                  title={
+                    voice.supported
+                      ? "点击说话，识别后核对发送。语音由浏览器识别，可能使用其在线服务。"
+                      : "此浏览器不支持语音识别，可继续键入。"
+                  }
+                >
+                  <Button
+                    type={voice.listening ? "primary" : "text"}
+                    shape="circle"
+                    icon={
+                      voice.listening ? <StopOutlined /> : <AudioOutlined />
+                    }
+                    aria-label={voice.listening ? "停止语音输入" : "语音输入"}
+                    disabled={!voice.supported || busy || !data?.ready}
+                    onClick={() => {
+                      speech.stop();
+                      voice.start(text);
+                    }}
+                  />
+                </Tooltip>
+                {(voice.speaking || speech.active) && (
+                  <Button
+                    type="text"
+                    shape="circle"
+                    icon={<StopOutlined />}
+                    aria-label="停止朗读"
+                    onClick={() => {
+                      voice.stopSpeaking();
+                      speech.stop();
+                    }}
+                  />
+                )}
+                {busy ? (
+                  <Button
+                    loading
+                    disabled
+                    shape="circle"
+                    aria-label="助理正在回复"
+                  />
+                ) : text.trim() ? (
+                  <components.SendButton aria-label="发送给个人助理" />
+                ) : (
+                  <Tooltip title="开始智能语音对话">
+                    <Button
+                      type="text"
+                      shape="circle"
+                      className="assistant-live-voice"
+                      icon={
+                        <span
+                          className="assistant-voice-wave"
+                          aria-hidden="true"
+                        >
+                          <i />
+                          <i />
+                          <i />
+                          <i />
+                        </span>
+                      }
+                      aria-label="开始智能语音对话"
+                      onClick={startVoice}
+                    />
+                  </Tooltip>
+                )}
+              </div>
+            }
+          />
         )}
         placeholder={
           data?.ready
             ? desktopDeviceId
-              ? "描述电脑任务，发送后在本机选择窗口…"
+              ? desktop.data?.devices?.find((d) => d.id === desktopDeviceId)
+                  ?.crossWindowAuthorized
+                ? "描述电脑任务，小序将按设备授权执行…"
+                : "描述电脑任务，发送后在本机选择窗口…"
               : "告诉我你想完成什么，例如：打开经营分析…"
             : q.isLoading
               ? "正在连接个人助理…"
               : "AI 尚未就绪，可从助理设置打开对话查看原因"
         }
-        autoSize={{ minRows: inDrawer ? 2 : 1, maxRows: 5 }}
+        autoSize={{ minRows: 2, maxRows: 5 }}
       />
-      <div className="assistant-execution-target">
-        <span>执行位置</span>
-        <Select
-          size="small"
-          aria-label="执行位置"
-          value={desktopDeviceId || "website"}
-          disabled={busy}
-          style={{ minWidth: 160, maxWidth: 240 }}
-          options={[
-            { value: "website", label: "网站内" },
-            ...(desktop.data?.devices || []).map((d) => ({
-              value: d.id,
-              label: d.name + (d.online ? "" : " · 离线"),
-              disabled: !d.online,
-            })),
-          ]}
-          onChange={(value) =>
-            setDesktopDeviceId(value === "website" ? undefined : value)
-          }
-        />
-        <Button
-          size="small"
-          type="text"
-          onClick={() => selectSection("desktop")}
-        >
-          连接电脑 / 进度
-        </Button>
-      </div>
       {desktopDeviceId && (
         <div className="assistant-desktop-note">
           电脑任务仅发送本条指令，不附带日程或记忆。请移除附件并关闭联网；可用麦克风输入后核对发送。

@@ -38,6 +38,7 @@ sealed class ApiFailure : Exception {
     public ApiFailure(int status, string text) : base(text) { Status = status; }
 }
 sealed class WindowChoice {
+    public string Id = Guid.NewGuid().ToString();
     public IntPtr Handle;
     public string Title, App;
     public int Pid;
@@ -63,8 +64,13 @@ sealed class AssistantForm : Form {
     readonly Button allow = new Button { Text = "允许本次任务", AutoSize = true, Enabled = false };
     readonly Button pause = new Button { Text = "暂停", AutoSize = true };
     readonly Button stop = new Button { Text = "停止 (Ctrl+Alt+X)", AutoSize = true };
+    readonly Button authorization = new Button { Text = "授权跨窗口操作", AutoSize = true };
+    readonly Label permission = new Label { AutoSize = true, MaximumSize = new Size(570, 0) };
     readonly Timer timer = new Timer { Interval = 2000 };
     string token = "", owner = "", deviceId = "", taskId = "", approvedId = "", state = "";
+    string authorizationId = "", activeAuthorizationId = "", autoAttemptedId = "";
+    bool changingAuthorization;
+    long permissionEpoch;
     public event Action Changed;
     public bool Connected { get { return token.Length > 0; } }
     public string DeviceId { get { return deviceId; } }
@@ -91,14 +97,16 @@ sealed class AssistantForm : Form {
         var disconnect = new Button { Text = "断开本机", AutoSize = true };
         pairing.Controls.Add(code); pairing.Controls.Add(pair); pairing.Controls.Add(disconnect); layout.Controls.Add(pairing);
         layout.Controls.Add(connection);
+        layout.Controls.Add(new Label { Text = "设备授权", AutoSize = true, Margin = new Padding(0, 18, 0, 5) });
+        layout.Controls.Add(permission); layout.Controls.Add(authorization);
         layout.Controls.Add(new Label { Text = "当前任务", AutoSize = true, Margin = new Padding(0, 18, 0, 5) });
         layout.Controls.Add(instruction); layout.Controls.Add(status);
-        layout.Controls.Add(new Label { Text = "选择允许操作的窗口", AutoSize = true, Margin = new Padding(0, 18, 0, 5) });
+        layout.Controls.Add(new Label { Text = "起始窗口（跨窗口授权后可自动选择）", AutoSize = true, Margin = new Padding(0, 18, 0, 5) });
         layout.Controls.Add(windows);
         var buttons = new FlowLayoutPanel { AutoSize = true };
         var refresh = new Button { Text = "刷新窗口", AutoSize = true };
         buttons.Controls.Add(refresh); buttons.Controls.Add(allow); buttons.Controls.Add(pause); buttons.Controls.Add(stop); layout.Controls.Add(buttons);
-        layout.Controls.Add(new Label { AutoSize = true, MaximumSize = new Size(570, 0), Margin = new Padding(0, 14, 0, 0), Text = "允许后，选定窗口的画面和控件文字将发送至网站已配置的智能服务。仅操作这个窗口，截图不保存。请先关闭敏感内容。\n\n切换窗口或手动移动鼠标、按键会暂停。登录、验证码、付款、发送和删除由你接手。不要以管理员身份运行助手。" });
+        layout.Controls.Add(new Label { AutoSize = true, MaximumSize = new Size(570, 0), Margin = new Padding(0, 14, 0, 0), Text = "逐次允许时仅操作选定窗口。记住设备授权后，新任务自动开始，可切换已打开的普通应用和网页。授权在重启后保留，可随时在这里或网站撤销。\n\n操作窗口的画面、控件文字和跨窗口模式下的可用窗口标题会发送至智能服务，截图不保存。手动操作会暂停；登录、验证码、付款、发送和删除由你接手。不要以管理员身份运行助手。" });
         pair.Click += async (s, e) => await Safe(async () => {
             pair.Enabled = false;
             try {
@@ -108,6 +116,7 @@ sealed class AssistantForm : Form {
         disconnect.Click += async (s,e) => await Safe(Disconnect);
         refresh.Click += (s,e) => { if (!armed) RefreshWindows(); };
         allow.Click += async (s,e) => await Safe(AllowTask);
+        authorization.Click += async (s,e) => await Safe(ChangeAuthorization);
         pause.Click += async (s,e) => await Safe(async () => { LocalPause(); await Control("pause", "你已暂停操作"); });
         stop.Click += async (s,e) => await StopTask();
         timer.Tick += async (s,e) => await Poll();
@@ -121,7 +130,7 @@ sealed class AssistantForm : Form {
                 LoadSaved(); ShowConnection(); RefreshWindows();
                 if (!Native.RegisterHotKey(Handle, 1, 3, 0x58)) throw new Exception("无法注册停止快捷键，请关闭占用 Ctrl+Alt+X 的程序后重启助手。");
                 inputHook = new Native.Hook(() => {
-                    if (!armed || closing) return;
+                    if ((!armed && !allowing) || closing) return;
                     LocalPause();
                     BeginInvoke(new Action(async () => await Safe(async () => await Control("pause", "检测到你的手动操作，已暂停"))));
                 });
@@ -139,13 +148,17 @@ sealed class AssistantForm : Form {
             Guid parsed;
             if (!Regex.IsMatch(nextToken,"^[a-f0-9]{64}$") || !Guid.TryParse(nextId,out parsed)) throw new Exception("连接返回无效。");
             SaveProtected("connection.bin",json.Serialize(new { token=nextToken, owner=nextOwner, deviceId=nextId, origin=Origin }));
-            token=nextToken; owner=nextOwner; deviceId=nextId;
+        token=nextToken; owner=nextOwner; deviceId=nextId; authorizationId=""; permissionEpoch++;
             code.Clear(); ShowConnection();
         } finally { pairing=false; }
     }
     public async Task Disconnect() {
-        LocalPause();
-        try { if (taskId.Length > 0 && token.Length > 0) await Control("stop", "本机连接已断开"); }
+        bool hadGrant=authorizationId.Length>0;
+        LocalPause(); permissionEpoch++; authorizationId="";
+        try {
+            if(hadGrant && token.Length>0) await Request("authorization",new {enabled=false});
+            if (taskId.Length > 0 && token.Length > 0) await Control("stop", "本机连接已断开");
+        }
         finally {
             token=""; owner=""; deviceId=""; taskId=""; task=null; approvedId="";
             if (File.Exists(Path.Combine(folder,"connection.bin"))) File.Delete(Path.Combine(folder,"connection.bin"));
@@ -170,7 +183,55 @@ sealed class AssistantForm : Form {
         if (m.Msg == 0x312) { LocalPause(); BeginInvoke(new Action(async () => await StopTask())); }
         base.WndProc(ref m);
     }
-    void ShowConnection() { connection.Text = token.Length > 0 ? "已连接 · " + owner : "未连接本机"; if(Changed!=null) Changed(); }
+    void ShowConnection() {
+        connection.Text = token.Length > 0 ? "已连接 · " + owner : "未连接本机";
+        bool granted = authorizationId.Length > 0;
+        permission.Text = granted ? "已记住这台设备的跨窗口授权，直到手动撤销。新任务自动执行；暂停后由你继续。" : "逐次允许：每次任务在本机选择一个窗口并允许。";
+        authorization.Text = granted ? "撤销跨窗口授权" : "授权跨窗口操作";
+        authorization.Enabled = Connected && !changingAuthorization;
+        allow.Text = granted ? "继续当前任务" : "允许本次任务";
+        if(Changed!=null) Changed();
+    }
+    void SaveConnection() {
+        SaveProtected("connection.bin",json.Serialize(new { token, owner, deviceId, origin=Origin, authorizationId }));
+    }
+    async Task ChangeAuthorization() {
+        if (!Connected || changingAuthorization) return;
+        bool enable = authorizationId.Length == 0;
+        if (enable && MessageBox.Show(this,
+            "允许小序在这台电脑上切换已打开的普通应用和网页，并执行你发送的电脑任务。\n\n新任务会自动开始。操作窗口的画面、控件文字及可用窗口标题将交给网站配置的智能服务处理。\n\n授权绑定当前账号与本机连接，重启后保留，直到你在本机或网站撤销；断开或重新配对后需重新授权。手动操作会暂停，Ctrl+Alt+X 可停止。登录、付款、发送、删除等仍由你接手。\n\n记住这台设备的跨窗口授权？",
+            "设备授权", MessageBoxButtons.YesNo, MessageBoxIcon.Information, MessageBoxDefaultButton.Button2) != DialogResult.Yes) return;
+        changingAuthorization=true; permissionEpoch++; LocalPause(); ShowConnection();
+        string connectionToken=token;
+        try {
+            if (!enable) {
+                authorizationId="";
+                // Always revoke remotely even if the local encrypted file cannot be written.
+                Exception storageFailure=null;
+                try { SaveConnection(); } catch(Exception e) { storageFailure=e; }
+                Exception remoteFailure=null;
+                try { await Request("authorization",new {enabled=false}); } catch(Exception e) { remoteFailure=e; }
+                if(remoteFailure!=null) throw new Exception(storageFailure==null
+                    ? "已在本机撤销，云端同步失败；联网后会重试，也可从网站撤销。"
+                    : "本机已暂停，但撤销未能保存或同步；请在网站撤销授权后再重启客户端。");
+                if(storageFailure!=null) throw new Exception("服务端已撤销授权，本机保存失败，请检查磁盘后重试。");
+                status.Text="跨窗口授权已撤销，当前任务已暂停。";
+            } else {
+                var result=await Request("authorization",new {enabled=true});
+                if(token!=connectionToken || closing) return;
+                string grant=S(result,"authorizationId"); Guid parsed;
+                if(!Guid.TryParse(grant,out parsed)) throw new Exception("授权返回无效，请更新网站和桌面端。");
+                authorizationId=grant;
+                bool saved=true;
+                try { SaveConnection(); } catch { authorizationId=""; saved=false; }
+                if(!saved) {
+                    await Request("authorization",new {enabled=false});
+                    throw new Exception("未能保存设备授权，请检查磁盘后重试。");
+                }
+                status.Text="已记住设备授权。你发送的新任务将自动开始，暂停的任务请点击继续。";
+            }
+        } finally { changingAuthorization=false; ShowConnection(); }
+    }
     void SaveProtected(string name, string value) {
         Directory.CreateDirectory(folder);
         byte[] bytes = ProtectedData.Protect(Encoding.UTF8.GetBytes(value), null, DataProtectionScope.CurrentUser);
@@ -182,7 +243,10 @@ sealed class AssistantForm : Form {
     void LoadSaved() {
         try {
             var saved = D(json.DeserializeObject(ReadProtected("connection.bin")));
-            if (S(saved,"origin") == Origin && Regex.IsMatch(S(saved,"token"),"^[a-f0-9]{64}$")) { token = S(saved,"token"); owner = S(saved,"owner"); deviceId=S(saved,"deviceId"); }
+            if (S(saved,"origin") == Origin && Regex.IsMatch(S(saved,"token"),"^[a-f0-9]{64}$")) {
+                token = S(saved,"token"); owner = S(saved,"owner"); deviceId=S(saved,"deviceId");
+                Guid grant; if(Guid.TryParse(S(saved,"authorizationId"),out grant)) authorizationId=grant.ToString();
+            }
         } catch { token = ""; }
         try { foreach(var pair in D(json.DeserializeObject(ReadProtected("commands.bin")))) journal[pair.Key] = Convert.ToString(pair.Value); } catch { }
     }
@@ -220,49 +284,91 @@ sealed class AssistantForm : Form {
         foreach(var item in Native.Windows(Handle)) windows.Items.Add(item);
         if (windows.Items.Count>0) windows.SelectedIndex = 0;
     }
-    async Task AllowTask() {
+    async Task AllowTask() { await StartTask(false); }
+    void CheckStart(string id,long version,string grant) {
+        if(closing || version!=epoch || taskId!=id || authorizationId!=grant) throw new Exception("开始操作已取消，请核对任务后继续。");
+    }
+    async Task StartTask(bool automatic) {
         if (captureBlocked) throw new Exception("窗口截取未响应，请重启本机助手后重试。");
-        if (working || polling || task == null || !new[]{"WAITING","PAUSED","NEEDS_USER"}.Contains(state)) throw new Exception("请等待当前状态更新后再试。");
+        if (working || (polling && !automatic) || changingAuthorization || allowing || task == null || !new[]{"WAITING","PAUSED","NEEDS_USER"}.Contains(state)) throw new Exception("请等待当前状态更新后再试。");
         allowing=true;
+        LocalPause(); long version=epoch;
+        string id=taskId, grant=authorizationId;
         Exception failure=null;
+        bool serverAllowed=false;
         try {
-        selected = windows.SelectedItem as WindowChoice;
+        selected = automatic ? Native.InitialWindow(Native.Windows(Handle)) : windows.SelectedItem as WindowChoice;
         if (selected == null) throw new Exception("请先打开要操作的应用，再刷新并选择窗口。");
         Native.ValidateWindow(selected, false);
-        LocalPause();
-        await Request("tasks/" + taskId + "/control", new { action = "allow", window = selected.Title, application = selected.App });
-        approvedId = taskId;
-        Native.SetForegroundWindow(selected.Handle);
+        Native.RefreshTitle(selected);
+        if(automatic) { status.Text="已收到电脑任务，即将按设备授权开始；Ctrl+Alt+X 可停止。"; await Task.Delay(1500); }
+        CheckStart(id,version,grant);
+        var payload=new Dictionary<string,object>{{"action","allow"},{"window",selected.Title},{"application",selected.App},{"windowId",selected.Id}};
+        if(grant.Length>0) payload["authorizationId"]=grant;
+        var result=await Request("tasks/" + id + "/control",payload);
+        serverAllowed=S(result,"status")=="RUNNING";
+        CheckStart(id,version,grant);
+        if(!serverAllowed) throw new Exception("任务已暂停或停止，请刷新后核对。");
+        approvedId = id; activeAuthorizationId=grant;
+        if(!Native.SetForegroundWindow(selected.Handle)) throw new Exception("无法激活操作窗口，请手动切换后继续。");
         await Task.Delay(700);
+        CheckStart(id,version,grant);
         Native.ValidateWindow(selected, true);
-        armed = true; epoch++; status.Text = "已允许；请暂时不要移动鼠标或按键。";
+        armed = true; epoch++; state="RUNNING"; allow.Enabled=false;
+        status.Text = "已允许；请暂时不要移动鼠标或按键。";
         } catch(Exception ex) { LocalPause(); failure=ex; }
         finally { allowing=false; }
         if(failure!=null) {
-            if(approvedId==taskId) await Control("handoff", "无法切换到指定窗口，请检查窗口后重新允许");
+            if(serverAllowed) await Request("tasks/"+id+"/control",new {action="handoff",note="本机操作未开始，请检查窗口后继续"});
             throw failure;
         }
     }
     async Task Poll() {
-        if (polling || allowing || token.Length == 0 || closing) return;
+        if (polling || allowing || changingAuthorization || token.Length == 0 || closing) return;
         polling = true;
+        string connectionToken=token; long permissionVersion=permissionEpoch;
         try {
             var result = await Request("poll", new {});
+            if(token!=connectionToken || permissionVersion!=permissionEpoch || closing) return;
+            string remoteGrant=S(result,"authorizationId");
+            if(authorizationId!=remoteGrant) {
+                LocalPause(); authorizationId=""; SaveConnection(); ShowConnection();
+                // A server grant alone never elevates the local client (including after rollback/re-pair).
+                if(remoteGrant.Length>0) { await Request("authorization",new {enabled=false}); return; }
+            }
             task = D(result.ContainsKey("task") ? result["task"] : null);
             if (task.Count == 0) { taskId = ""; state = ""; allow.Enabled = false; LocalPause(); if (!working) status.Text = "暂无进行中的电脑任务；结果可在网站查看。"; return; }
             string id = S(task,"id"); state = S(task,"status");
-            if (taskId != id) { LocalPause(); approvedId = ""; }
+            if (taskId != id) { LocalPause(); approvedId = ""; autoAttemptedId=""; }
             taskId = id; instruction.Text = S(task,"instruction"); status.Text = S(task,"stage");
             allow.Enabled = !captureBlocked && !working && new[]{"WAITING","PAUSED","NEEDS_USER"}.Contains(state);
             if (state != "RUNNING") LocalPause();
-            if (state == "RUNNING" && !armed && !working) await Control("handoff", "本机输入已暂停，请核对窗口并重新允许");
+            if (state=="PAUSED" || state=="NEEDS_USER") autoAttemptedId="";
+            if (authorizationId.Length>0 && state=="WAITING" && autoAttemptedId!=id && !working && !captureBlocked) {
+                autoAttemptedId=id;
+                await StartTask(true);
+                return;
+            }
+            if (state == "RUNNING" && !armed && !working) await Control("handoff", "本机输入已暂停，请核对任务和窗口后继续");
             if (state == "RUNNING" && armed && !working) { working = true; RunStep(taskId, epoch); }
-        } catch(ApiFailure e) { LocalPause(); status.Text = e.Message; if (e.Status == 401 || e.Status == 403) { token = ""; ShowConnection(); } }
-        catch { LocalPause(); status.Text = "网络连接中断，已停止本机输入。恢复连接后请核对任务并重新允许。"; }
+        } catch(ApiFailure e) {
+            if(token!=connectionToken || permissionVersion!=permissionEpoch || closing) return;
+            LocalPause(); status.Text = e.Message;
+            if (e.Status == 401 || e.Status == 403) {
+                token = ""; authorizationId="";
+                try { SaveConnection(); } catch { status.Text+=" 本机连接记录未能清理，请检查磁盘。"; }
+                ShowConnection();
+            }
+        }
+        catch(Exception e) {
+            if(token!=connectionToken || permissionVersion!=permissionEpoch || closing) return;
+            LocalPause(); status.Text = e is HttpRequestException || e is TaskCanceledException ? "网络连接中断，已停止本机输入。恢复后请核对任务并继续。" : e.Message;
+        }
         finally { polling = false; if(!closing && Changed!=null) Changed(); }
     }
     void Check(string id, long version) {
         if (!armed || id != approvedId || id != taskId || version != epoch || closing) throw new Exception("操作已暂停");
+        if(activeAuthorizationId.Length>0 && activeAuthorizationId!=authorizationId) throw new Exception("跨窗口授权已撤销");
         Native.ValidateWindow(selected, true);
     }
     async void RunStep(string id, long version) {
@@ -270,13 +376,17 @@ sealed class AssistantForm : Form {
         Exception failure = null;
         try {
             Check(id, version);
+            Native.RefreshTitle(selected);
+            var available = activeAuthorizationId.Length>0 ? Native.ObservationWindows(Handle,selected) : new List<WindowChoice>();
             // UI Automation and PrintWindow may wait on a hung application. Never capture another window as fallback.
             var capture = Task.Run(() => Native.Capture(selected));
             if (await Task.WhenAny(capture,Task.Delay(4000)) != capture) { captureBlocked=true; throw new Exception("应用窗口没有响应，请关闭本机助手后重试"); }
             Shot shot = await capture;
             Check(id, version);
             string requestId=Guid.NewGuid().ToString();
-            var plan = await Request("tasks/" + id + "/plan", new { requestId, image=shot.Image, width=shot.Width, height=shot.Height, window=selected.Title, application=selected.App, controls=shot.Controls });
+            var observation=new Dictionary<string,object>{{"requestId",requestId},{"image",shot.Image},{"width",shot.Width},{"height",shot.Height},{"window",selected.Title},{"application",selected.App},{"controls",shot.Controls},{"windowId",selected.Id}};
+            if(activeAuthorizationId.Length>0) observation["windows"]=available.Select(w=>new {id=w.Id,title=w.Title,application=w.App}).ToArray();
+            var plan = await Request("tasks/" + id + "/plan", observation);
             Check(id, version);
             var command = D(plan.ContainsKey("command") ? plan["command"] : null);
             if (command.Count == 0) { LocalPause(); return; }
@@ -292,12 +402,24 @@ sealed class AssistantForm : Form {
             var action = D(command.ContainsKey("action") ? command["action"] : null);
             if(S(command,"requestId")!=requestId) throw new Exception("待执行步骤来自旧画面，请核对窗口后继续");
             Native.ValidateAction(action);
+            WindowChoice target=null;
+            if(S(action,"kind")=="switch_window") {
+                if(activeAuthorizationId.Length==0) throw new Exception("尚未授权跨窗口操作");
+                target=Native.ResolveTarget(available,S(action,"windowId"),selected);
+                Native.ValidateWindow(target,false);
+            }
             Check(id,version);
             var permit = await Request("tasks/" + id + "/permit",new {commandId});
             if (!permit.ContainsKey("allowed") || !Convert.ToBoolean(permit["allowed"])) throw new Exception("步骤已过期或已暂停，请核对后继续");
             Check(id, version);
             Record(commandId,"uncertain"); // Write-ahead record must succeed before any input.
-            await Native.Execute(selected,shot,action,()=>Check(id,version));
+            if(target!=null) {
+                Check(id,version); Native.ValidateWindow(target,false);
+                if(!Native.SetForegroundWindow(target.Handle)) throw new Exception("无法切换目标窗口，请手动切换后继续。");
+                selected=target;
+                await Task.Delay(500);
+                Check(id,version);
+            } else await Native.Execute(selected,shot,action,()=>Check(id,version));
             Record(commandId,"ok");
             await Ack(id,commandId,"ok",S(action,"description"));
             await Task.Delay(600);
@@ -357,10 +479,26 @@ static class Native {
                 RECT rect; if(!GetWindowRect(h,out rect)||rect.Right-rect.Left<100||rect.Bottom-rect.Top<100)return true;
                 uint pid; GetWindowThreadProcessId(h,out pid); var process=Process.GetProcessById((int)pid);
                 if(BlockedApps.Contains(process.ProcessName)||(pid==Process.GetCurrentProcess().Id&&!BrowserWindows.ContainsKey(h)))return true;
-                result.Add(new WindowChoice{Handle=h,Title=Cut(title,200),App=Cut(process.ProcessName,80),Pid=(int)pid,Started=process.StartTime.ToUniversalTime().Ticks});
+                var choice=new WindowChoice{Handle=h,Title=Cut(title,200).Trim(),App=Cut(process.ProcessName,80).Trim(),Pid=(int)pid,Started=process.StartTime.ToUniversalTime().Ticks};
+                ValidateWindow(choice,false); result.Add(choice);
             } catch { } return true;
         },IntPtr.Zero);
         return result;
+    }
+    public static void RefreshTitle(WindowChoice w) { w.Title=Cut(Title(w.Handle),200).Trim(); }
+    public static WindowChoice InitialWindow(IEnumerable<WindowChoice> candidates) {
+        var list=candidates.ToList();
+        return list.FirstOrDefault(w=>w.Handle==GetForegroundWindow()) ?? list.FirstOrDefault();
+    }
+    public static List<WindowChoice> ObservationWindows(IntPtr own,WindowChoice current) {
+        var list=new List<WindowChoice>{current};
+        list.AddRange(Windows(own).Where(w=>w.Handle!=current.Handle).Take(39));
+        return list;
+    }
+    public static WindowChoice ResolveTarget(IEnumerable<WindowChoice> observed,string id,WindowChoice current) {
+        var matches=observed.Where(w=>w.Id==id && w.Id!=current.Id).ToList();
+        if(matches.Count!=1) throw new Exception("切换目标不在本次可用窗口中，请核对后继续。");
+        return matches[0];
     }
     public static void ValidateWindow(WindowChoice w,bool foreground) {
         if(w==null||!IsWindow(w.Handle)||!IsWindowVisible(w.Handle)||IsIconic(w.Handle))throw new Exception("窗口已关闭或最小化，请重新选择");
@@ -411,12 +549,14 @@ static class Native {
         if(kind=="click"&&!new[]{"left","right","double"}.Contains(S(a,"button")))throw new Exception("点击类型无效");
         if(kind=="scroll"){Number(a,"amount",1,6);if(!new[]{"up","down"}.Contains(S(a,"direction")))throw new Exception("滚动方向无效");}
         if(kind=="key"&&!Keys.ContainsKey(S(a,"key")))throw new Exception("此快捷键需要你亲自操作");
+        Guid target;
+        if(kind=="switch_window"&&!Guid.TryParse(S(a,"windowId"),out target))throw new Exception("窗口标识无效");
         if(kind=="type") {
             string value=S(a,"text");
             if(value.Length<1||value.Length>3000||Regex.IsMatch(value,"javascript:|data:text/html|(?im)^\\s*(powershell|pwsh|cmd(?:\\.exe)?|bash|wscript|cscript|mshta|curl|wget)(?:\\s|$)"))throw new Exception("此输入需要你亲自操作");
             if(value.Any(c=>Char.IsControl(c)&&c!='\n'&&c!='\r'&&c!='\t'))throw new Exception("输入包含不支持的控制字符");
         }
-        if(!new[]{"click","scroll","key","type","wait"}.Contains(kind))throw new Exception("不支持的电脑操作");
+        if(!new[]{"click","scroll","key","type","wait","switch_window"}.Contains(kind))throw new Exception("不支持的电脑操作");
     }
     static void GuardElement(AutomationElement element) {
         for(int i=0;element!=null&&i<5;i++,element=TreeWalker.ControlViewWalker.GetParent(element)) {
@@ -432,6 +572,7 @@ static class Native {
         ValidateAction(a); check(); RECT r;GetWindowRect(w.Handle,out r);
         if(r.Left!=shot.Rect.Left||r.Top!=shot.Rect.Top||r.Right!=shot.Rect.Right||r.Bottom!=shot.Rect.Bottom)throw new Exception("窗口位置或大小已变化，请核对后继续");
         string kind=S(a,"kind");
+        if(kind=="switch_window") throw new Exception("切换窗口必须经过本机设备授权和目标校验");
         if(kind=="wait"){await Task.Delay(800);return;}
         if(kind=="click"||kind=="scroll") {
             int x=r.Left+(int)Math.Round(Number(a,"x",0,1000)*(r.Right-r.Left-1)/1000.0);
@@ -474,7 +615,14 @@ static class Native {
             valid("{\"kind\":\"type\",\"text\":\"整理成三项：你好\"}");
             valid("{\"kind\":\"click\",\"x\":500,\"y\":1000,\"button\":\"left\"}");
             valid("{\"kind\":\"key\",\"key\":\"CTRL_S\"}");
-            foreach(string input in new[]{"{\"kind\":\"shell\"}","{\"kind\":\"key\",\"key\":\"WIN_R\"}","{\"kind\":\"type\",\"text\":\"powershell -enc ab\"}","{\"kind\":\"click\",\"x\":-1,\"y\":0,\"button\":\"left\"}"}) {
+            var current=new WindowChoice(); var other=new WindowChoice();
+            valid("{\"kind\":\"switch_window\",\"windowId\":\""+other.Id+"\"}");
+            if(ResolveTarget(new[]{current,other},other.Id,current)!=other) throw new Exception("Window target mismatch");
+            foreach(string id in new[]{current.Id,Guid.NewGuid().ToString()}) {
+                bool rejected=false; try{ResolveTarget(new[]{current,other},id,current);}catch{rejected=true;}
+                if(!rejected) throw new Exception("Unknown/current window accepted");
+            }
+            foreach(string input in new[]{"{\"kind\":\"switch_window\",\"windowId\":\"123\"}","{\"kind\":\"shell\"}","{\"kind\":\"key\",\"key\":\"WIN_R\"}","{\"kind\":\"type\",\"text\":\"powershell -enc ab\"}","{\"kind\":\"click\",\"x\":-1,\"y\":0,\"button\":\"left\"}"}) {
                 bool rejected=false;try{valid(input);}catch{rejected=true;}if(!rejected)throw new Exception("Unexpected accepted action");
             }
             if(Marshal.SizeOf(typeof(INPUT))!=(IntPtr.Size==8?40:28))throw new Exception("Native input layout invalid");

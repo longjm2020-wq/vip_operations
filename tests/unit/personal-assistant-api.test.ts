@@ -92,6 +92,7 @@ import {
   sendAssistant,
 } from "../../apps/api/src/modules/workspace/assistant.js";
 import { PersonalWorkspaceController } from "../../apps/api/src/modules/workspace/controller.js";
+import { publicAgentCatalog } from "../../apps/api/src/modules/workspace/agent-models.js";
 import { workspaceSaveSchema } from "../../packages/contracts/src/personal-workspace.js";
 import { parseVoiceCommand } from "../../packages/contracts/src/assistant-voice-commands.js";
 import {
@@ -168,6 +169,7 @@ beforeAll(async () => {
     "079_assistant_tools_memory.sql",
     "083_assistant_agent.sql",
     "084_assistant_desktop.sql",
+    "088_desktop_authorization.sql",
   ])
     await fixture.database.exec(
       await readFile(`packages/database/migrations/${name}`, "utf8"),
@@ -944,6 +946,68 @@ afterEach(() => vi.unstubAllGlobals());
 afterAll(async () => fixture.database?.close());
 
 describe("private personal assistant", () => {
+  it("routes the quick-answer selection to the exact Flash snapshot and rejects a different version", async () => {
+    const flashId = "deepseek/deepseek-v4.1-flash-1017";
+    let returnedModel = "deepseek/deepseek-v4.1-flash-20261017";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url.endsWith("/models"))
+          return Response.json({
+            data: url.endsWith("/images/models")
+              ? []
+              : [
+                  {
+                    id: flashId,
+                    architecture: {
+                      input_modalities: ["text", "image"],
+                      output_modalities: ["text"],
+                    },
+                    supported_parameters: [
+                      "tools",
+                      "tool_choice",
+                      "reasoning",
+                      "structured_outputs",
+                    ],
+                  },
+                ],
+          });
+        calls.push(JSON.parse(String(init?.body)));
+        return provider(reply, returnedModel);
+      }),
+    );
+    const catalog = await publicAgentCatalog();
+    const quick = catalog.models.find((m) => m.name === "快速问答")!;
+    expect(quick.vision).toBe(true);
+    expect(quick.id).not.toBe(catalog.defaultModel);
+    expect(quick.id).not.toBe(
+      catalog.models.find((m) => m.name === "深度思考")?.id,
+    );
+    expect(JSON.stringify(catalog)).not.toContain(flashId);
+
+    const accepted = await sendAssistant(actor(), {
+      ...input(),
+      model: quick.id,
+    });
+    expect(accepted.state).toBe("IDLE");
+    expect(accepted.messages.at(-1)?.text).toBe(reply.text);
+    expect(calls).toMatchObject([
+      {
+        model: flashId,
+        reasoning: { effort: "none" },
+        provider: { require_parameters: true, data_collection: "deny" },
+      },
+    ]);
+
+    returnedModel = "deepseek/deepseek-v4.1-flash";
+    const rejected = await sendAssistant(actor(), {
+      ...input(accepted.version),
+      model: quick.id,
+    });
+    expect(rejected.state).toBe("FAILED");
+    expect(rejected.error).toContain("模型标识不符");
+    expect(calls).toHaveLength(2);
+  });
   it("recovers an expired request without pretending it completed or retrying on read", async () => {
     await sendAssistant(actor(), input());
     await fixture.database!.exec(

@@ -13,7 +13,7 @@ export const desktopStatusLabels: Record<
   (typeof desktopTaskStatuses)[number],
   string
 > = {
-  WAITING: "等待本机允许",
+  WAITING: "等待本机执行",
   RUNNING: "操作中",
   PAUSED: "已暂停",
   NEEDS_USER: "需要你接手",
@@ -87,10 +87,24 @@ export const desktopActionSchema = z.discriminatedUnion("kind", [
     })
     .strict(),
   z.object({ kind: z.literal("wait"), description }).strict(),
+  z
+    .object({
+      kind: z.literal("switch_window"),
+      windowId: z.string().uuid(),
+      description,
+    })
+    .strict(),
   z.object({ kind: z.literal("done"), description }).strict(),
   z.object({ kind: z.literal("handoff"), description }).strict(),
 ]);
 export type DesktopAction = z.infer<typeof desktopActionSchema>;
+const desktopWindowSchema = z
+  .object({
+    id: z.string().uuid(),
+    title: z.string().trim().min(1).max(200),
+    application: z.string().trim().min(1).max(80),
+  })
+  .strict();
 export const desktopObservationSchema = z
   .object({
     requestId: z.string().uuid(),
@@ -103,6 +117,13 @@ export const desktopObservationSchema = z
     window: z.string().max(200),
     application: z.string().max(80),
     controls: z.string().max(12000),
+    windowId: z.string().uuid().optional(),
+    windows: z
+      .array(desktopWindowSchema)
+      .min(1)
+      .max(40)
+      .refine((list) => new Set(list.map((w) => w.id)).size === list.length)
+      .optional(),
   })
   .strict();
 export type DesktopDevice = {
@@ -111,6 +132,7 @@ export type DesktopDevice = {
   online: boolean;
   lastSeenAt: string | null;
   expiresAt: string;
+  crossWindowAuthorized: boolean;
 };
 export type DesktopTask = {
   id: string;
@@ -121,6 +143,7 @@ export type DesktopTask = {
   stage: string;
   step: number;
   window: string;
+  scope: "window" | "device";
   createdAt: string;
   updatedAt: string;
 };

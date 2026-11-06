@@ -77,6 +77,8 @@ async function setup(page: Page, mode = "dark") {
       data = { items: [], serverTime: new Date().toISOString() };
     else if (path === "/my-workspace/assistant/memory")
       data = { version: 0, entries: [] };
+    else if (path === "/my-workspace/assistant/desktop")
+      data = { devices: [], tasks: [] };
     else if (path === "/my-workspace/assistant/voice")
       data = {
         ready: false,
@@ -291,5 +293,101 @@ test("亮色窄屏保留附件入口和中性能力名称", async ({ page }) => 
   const box = await dialog.boundingBox();
   expect(box!.x).toBeGreaterThanOrEqual(0);
   expect(box!.width).toBeLessThanOrEqual(390);
+  const sender = dialog.locator(".ant-sender");
+  await expect(
+    sender.getByRole("button", { name: "电脑授权：网站内" }),
+  ).toBeVisible();
+  await expect(
+    sender.getByRole("button", { name: "开始智能语音对话" }),
+  ).toBeVisible();
+  expect(
+    await sender.evaluate((el) => el.scrollWidth <= el.clientWidth + 1),
+  ).toBe(true);
   await page.screenshot({ path: ".local/assistant-agent-light-mobile.png" });
+});
+
+test("输入框内选择电脑、显示真实授权并撤销，不从网页开启设备授权", async ({
+  page,
+}) => {
+  const requests = await setup(page);
+  const desktopId = "55555555-5555-4555-8555-555555555555";
+  let granted = true;
+  const mutations: string[] = [];
+  await page.route(
+    "**/api/v1/my-workspace/assistant/desktop**",
+    async (route) => {
+      const request = route.request();
+      if (request.method() === "POST") {
+        mutations.push(new URL(request.url()).pathname);
+        expect(request.url()).toContain(
+          `/devices/${desktopId}/authorization/revoke`,
+        );
+        granted = false;
+        await route.fulfill({ json: { data: { revoked: true } } });
+        return;
+      }
+      await route.fulfill({
+        json: {
+          data: {
+            devices: [
+              {
+                id: desktopId,
+                name: "测试电脑",
+                online: true,
+                crossWindowAuthorized: granted,
+                lastSeenAt: new Date().toISOString(),
+                expiresAt: "2026-12-01T00:00:00Z",
+              },
+              {
+                id: "66666666-6666-4666-8666-666666666666",
+                name: "离线电脑",
+                online: false,
+                crossWindowAuthorized: false,
+                lastSeenAt: null,
+                expiresAt: "2026-12-01T00:00:00Z",
+              },
+            ],
+            tasks: [],
+          },
+        },
+      });
+    },
+  );
+  await page.goto("/my-workspace");
+  const composer = page.locator(".assistant-compose:visible");
+  await expect(
+    composer.getByRole("button", { name: "附件", exact: true }),
+  ).toBeVisible();
+  await expect(
+    composer.getByRole("button", { name: "开始智能语音对话" }),
+  ).toBeVisible();
+  await page.screenshot({ path: ".local/assistant-composer-home.png" });
+  await composer.getByRole("button", { name: "电脑授权：网站内" }).click();
+  await page.getByRole("combobox", { name: "执行位置" }).click();
+  await expect(page.getByTitle("离线电脑 · 离线")).toHaveClass(/disabled/);
+  await page.getByText("测试电脑", { exact: true }).last().click();
+  await expect(page.locator(".ant-select-dropdown:visible")).toHaveCount(0);
+  await expect(
+    composer.getByRole("button", { name: "电脑授权：跨窗口授权" }),
+  ).toBeVisible();
+  await expect(page.locator(".assistant-access-menu")).toContainText(
+    "已记住此设备授权",
+  );
+  expect(mutations).toHaveLength(0);
+  await page.screenshot({
+    path: ".local/assistant-composer-authorization.png",
+  });
+  await page
+    .getByRole("button", { name: "撤销跨窗口授权", exact: true })
+    .click();
+  await expect(
+    composer.getByRole("button", { name: "电脑授权：逐次允许" }),
+  ).toBeVisible();
+  expect(mutations).toHaveLength(1);
+  const input = composer.getByPlaceholder(/描述电脑任务/);
+  await input.fill("整理已打开的笔记");
+  await composer.getByRole("button", { name: "发送给个人助理" }).click();
+  await expect.poll(() => requests.length).toBe(1);
+  expect(requests[0].desktopDeviceId).toBe(desktopId);
+  expect(requests[0]).not.toHaveProperty("authorizationId");
 });

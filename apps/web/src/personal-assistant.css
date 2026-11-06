@@ -140,7 +140,7 @@
   box-shadow:
     0 0 0 4px color-mix(in srgb, var(--app-accent-border) 3%, transparent),
     0 10px 30px var(--app-shadow);
-  border-radius: 14px;
+  border-radius: 24px;
 }
 .assistant-compose .ant-sender:focus-within {
   border-color: var(--app-accent-border);
@@ -149,6 +149,73 @@
 }
 .assistant-compose .ant-sender-input {
   font-size: 13px;
+}
+.assistant-compose .ant-sender-content {
+  padding: 16px 16px 4px;
+}
+.assistant-compose .ant-sender-footer {
+  padding: 4px 10px 10px;
+  border: 0;
+  background: transparent;
+}
+.assistant-compose .agent-composer {
+  margin: 0;
+}
+.assistant-compose .agent-composer-tools {
+  row-gap: 8px;
+}
+.assistant-compose .agent-composer-tools .ant-checkbox-wrapper {
+  font-size: 12px;
+}
+.assistant-access-trigger.ant-btn {
+  color: var(--app-secondary);
+  font-size: 12px;
+  padding-inline: 6px;
+}
+.assistant-compose .assistant-access-trigger[data-authorized="true"].ant-btn {
+  color: #e88442;
+}
+.assistant-access-trigger .anticon-down {
+  font-size: 9px;
+  opacity: 0.65;
+}
+.assistant-access-menu {
+  width: min(300px, calc(100vw - 64px));
+  font-size: 12px;
+  line-height: 1.7;
+}
+.assistant-access-menu .ant-select {
+  width: 100%;
+}
+.assistant-access-menu p {
+  color: var(--app-secondary);
+  margin: 10px 0;
+}
+.assistant-access-menu > .ant-btn + .ant-btn {
+  margin-top: 6px;
+}
+.assistant-compose .assistant-send-actions .assistant-live-voice.ant-btn {
+  background: var(--app-text);
+  color: var(--app-bg);
+  box-shadow: none;
+}
+.assistant-voice-wave {
+  display: flex;
+  height: 16px;
+  align-items: center;
+  gap: 2px;
+}
+.assistant-voice-wave i {
+  width: 2px;
+  height: 8px;
+  border-radius: 2px;
+  background: currentColor;
+}
+.assistant-voice-wave i:nth-child(2) {
+  height: 16px;
+}
+.assistant-voice-wave i:nth-child(3) {
+  height: 12px;
 }
 /* Keep the home draft mounted, but expose only the active conversation composer. */
 .assistant-compose[data-suppressed="true"] {
@@ -638,9 +705,9 @@
   background: color-mix(in srgb, var(--app-accent) 8%, transparent);
 }
 .assistant-screen .assistant-compose .ant-sender {
-  background: color-mix(in srgb, var(--app-surface) 44%, transparent);
-  border-color: transparent;
-  box-shadow: none;
+  background: color-mix(in srgb, var(--app-surface) 88%, transparent);
+  border-color: var(--app-border);
+  box-shadow: 0 8px 24px var(--app-shadow);
 }
 .assistant-screen .assistant-compose .ant-sender:focus-within {
   box-shadow: inset 0 -1px 0
@@ -687,8 +754,8 @@
   background: transparent;
 }
 :root[data-theme="light"] .assistant-screen .assistant-compose .ant-sender {
-  background: rgba(235, 241, 252, 0.48);
-  box-shadow: none;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 8px 24px rgba(41, 61, 89, 0.06);
 }
 :root[data-theme="light"]
   .assistant-screen

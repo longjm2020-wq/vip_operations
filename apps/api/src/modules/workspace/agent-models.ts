@@ -9,7 +9,9 @@ import { COMPASS_AI_MODEL } from "../analytics/ai.js";
 
 export const modelRef = (id: string) =>
   "engine/" + createHash("sha256").update(id).digest("hex").slice(0, 24);
-type Model = AgentModel & { actual: string };
+const flashModel = "deepseek/deepseek-v4.1-flash-1017";
+const flashCanonicalModel = "deepseek/deepseek-v4.1-flash-20261017";
+type Model = AgentModel & { actual: string; reasoningEffort?: "none" };
 type ImageModel = AgentCatalog["imageModels"][number] & {
   actual: string;
   aspects: string[];
@@ -26,6 +28,23 @@ const primary: Model = {
 let cached:
   { until: number; models: Model[]; imageModels: ImageModel[] } | undefined;
 let loading: Promise<NonNullable<typeof cached>> | undefined;
+function chatModel(m: Row, name: string): Model {
+  return {
+    id: modelRef(m.id),
+    actual: m.id,
+    name,
+    vision: m.architecture.input_modalities?.includes("image") || false,
+    pdf: m.architecture.input_modalities?.includes("file") || false,
+    structured: m.supported_parameters.includes("structured_outputs"),
+    parameters: m.supported_parameters,
+  };
+}
+export function matchesAgentModel(model: Model, returnedModel: unknown) {
+  return (
+    returnedModel === model.actual ||
+    (model.actual === flashModel && returnedModel === flashCanonicalModel)
+  );
+}
 async function discover(path: string): Promise<Row[]> {
   const response = await fetch("https://openrouter.ai/api/v1/" + path, {
     signal: AbortSignal.timeout(12000),
@@ -70,18 +89,21 @@ async function catalog() {
             )
             .slice(0, group.count);
           list.forEach((m, i) =>
-            models.push({
-              id: modelRef(m.id),
-              actual: m.id,
-              name: group.label + (i ? " · 备选" : ""),
-              vision:
-                m.architecture.input_modalities?.includes("image") || false,
-              pdf: m.architecture.input_modalities?.includes("file") || false,
-              structured: m.supported_parameters.includes("structured_outputs"),
-              parameters: m.supported_parameters,
-            }),
+            models.push(chatModel(m, group.label + (i ? " · 备选" : ""))),
           );
         }
+        const flash = candidates.find(
+          (m) =>
+            m.id === flashModel &&
+            m.supported_parameters.includes("reasoning") &&
+            m.supported_parameters.includes("tool_choice"),
+        );
+        if (flash)
+          models.push({
+            ...chatModel(flash, "快速问答"),
+            id: modelRef(`${flashModel}:quick`),
+            reasoningEffort: "none",
+          });
       }
       const imageModels: ImageModel[] =
         images.status === "fulfilled"
@@ -128,7 +150,9 @@ async function catalog() {
 export async function publicAgentCatalog(): Promise<AgentCatalog> {
   const data = await catalog();
   return {
-    models: data.models.map(({ actual: _actual, ...m }) => m),
+    models: data.models.map(
+      ({ actual: _actual, reasoningEffort: _reasoningEffort, ...m }) => m,
+    ),
     imageModels: data.imageModels.map(
       ({ actual: _actual, aspects: _aspects, ...m }) => m,
     ),

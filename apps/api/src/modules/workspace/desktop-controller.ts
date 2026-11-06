@@ -1,7 +1,8 @@
 import { Body, Controller, Get, Param, Post, Req, Res } from "@nestjs/common";
 import { Response } from "express";
+import { z } from "zod";
 import { AuthRequest, Public, context } from "../../http.js";
-import { fail } from "../../core.js";
+import { fail, parse } from "../../core.js";
 import {
   acknowledgeDesktop,
   createDesktopPair,
@@ -14,6 +15,7 @@ import {
   pollDesktop,
   queueDesktopTask,
   revokeDesktop,
+  setDesktopAuthorization,
 } from "./desktop.js";
 
 @Controller("api/v1/my-workspace/assistant/desktop")
@@ -41,6 +43,13 @@ export class AssistantDesktopController {
   @Post("tasks") async create(@Req() r: AuthRequest, @Body() input: unknown) {
     return queueDesktopTask(context(r), input);
   }
+  @Post("devices/:id/authorization/revoke") async revokeAuthorization(
+    @Req() r: AuthRequest,
+    @Param("id") id: string,
+  ) {
+    await setDesktopAuthorization(context(r), id, false);
+    return { revoked: true };
+  }
   @Post("tasks/:id/control") async control(
     @Req() r: AuthRequest,
     @Param("id") id: string,
@@ -60,6 +69,14 @@ export class AssistantDesktopController {
   @Public() @Post("client/poll") async poll(@Req() r: AuthRequest) {
     const d = await desktopIdentity(r.get("Authorization"), r.get("Origin"));
     return pollDesktop(d.c, d.deviceId);
+  }
+  @Public() @Post("client/authorization") async authorization(
+    @Req() r: AuthRequest,
+    @Body() input: unknown,
+  ) {
+    const d = await desktopIdentity(r.get("Authorization"), r.get("Origin"));
+    const b = parse(z.object({ enabled: z.boolean() }).strict(), input);
+    return setDesktopAuthorization(d.c, d.deviceId, b.enabled);
   }
   @Public() @Post("client/tasks/:id/control") async clientControl(
     @Req() r: AuthRequest,
