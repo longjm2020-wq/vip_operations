@@ -2008,7 +2008,19 @@ test("手机工作台与收起面板不横向溢出，减少动态效果时核�
   await openPersonalAssistant(page);
   const dialog = page.getByRole("dialog");
   await expect(
+    dialog.getByRole("button", { name: "开始智能语音对话" }),
+  ).toBeVisible();
+  const input = dialog.getByPlaceholder(/告诉我你想完成什么/);
+  await input.fill("核对库存");
+  await expect(
     dialog.getByRole("button", { name: "发送给个人助理" }),
+  ).toBeVisible();
+  await expect(
+    dialog.getByRole("button", { name: "开始智能语音对话" }),
+  ).toHaveCount(0);
+  await input.clear();
+  await expect(
+    dialog.getByRole("button", { name: "开始智能语音对话" }),
   ).toBeVisible();
   expect((await dialog.boundingBox())!.width).toBeLessThanOrEqual(390.05);
   await dialog.getByRole("button", { name: "关闭", exact: true }).click();
@@ -2061,7 +2073,7 @@ test("手机导航可开关，助理和日程弹窗完整显示且业务页面�
   await openPersonalAssistant(page);
   const assistant = page.getByRole("dialog", { name: /AI 个人助理/ });
   await expect(
-    assistant.getByRole("button", { name: "发送给个人助理" }),
+    assistant.getByRole("button", { name: "开始智能语音对话" }),
   ).toBeVisible();
   expect((await assistant.boundingBox())!.width).toBeLessThanOrEqual(390.05);
   await assistant.getByRole("button", { name: "关闭", exact: true }).click();
