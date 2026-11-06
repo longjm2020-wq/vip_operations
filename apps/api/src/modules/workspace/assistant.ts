@@ -22,6 +22,10 @@ import { requireAssistant, readAssistantMemory } from "./assistant-memory.js";
 import { askAssistantModel } from "./assistant-model.js";
 import { assistantActionViews } from "./assistant-actions.js";
 import { parseVoiceCommand } from "../../../../../packages/contracts/src/assistant-voice-commands.js";
+import {
+  assistantWebOpenText,
+  parseAssistantWebCommand,
+} from "../../../../../packages/contracts/src/assistant-web-command.js";
 import { runAssistantVoiceCommand } from "./assistant-voice-commands.js";
 import { queueDesktopTask } from "./desktop.js";
 export { parseAssistantAnswer } from "./assistant-model.js";
@@ -127,6 +131,16 @@ export async function sendAssistant(
 ) {
   requireAssistant(c);
   const body = parse(assistantSendSchema, input);
+  const webCommand =
+    !voice && !body.desktopDeviceId && !body.attachmentIds.length
+      ? parseAssistantWebCommand(body.message)
+      : undefined;
+  if (body.webOpenResult && !webCommand)
+    fail(
+      "WEB_COMMAND_INVALID",
+      "打开网页的结果与当前指令不符，请重新发送",
+      400,
+    );
   if (
     body.desktopDeviceId &&
     (body.attachmentIds.length || body.webSearch || voice)
@@ -224,9 +238,9 @@ export async function sendAssistant(
           model: body.model,
         })
       : null;
-    const answer = desktopTask
+    const answer = webCommand
       ? {
-          text: "电脑任务已创建。已记住跨窗口授权的设备会自动开始；否则请在本机「电脑任务」选择窗口并允许。进度会显示在「电脑操作」中。",
+          text: assistantWebOpenText(webCommand, body.webOpenResult),
           schedules: [],
           tools: [],
           evidence: [],
@@ -236,31 +250,43 @@ export async function sendAssistant(
           jobIds: [],
           citations: [],
         }
-      : command
-        ? await runAssistantVoiceCommand(
-            c,
-            command,
-            body.requestId,
-            voice?.signal || new AbortController().signal,
-          )
-        : await askAssistantModel(
-            c,
-            s!,
-            messages,
-            body.includePersonalContext
-              ? assistantContext(stored?.config, today)
-              : null,
-            today,
-            memory?.entries || null,
-            body.includePersonalContext,
-            {
-              model: body.model,
-              imageModel: body.imageModel,
-              attachmentIds: body.attachmentIds,
-              webSearch: body.webSearch,
-              requestId: body.requestId,
-            },
-          );
+      : desktopTask
+        ? {
+            text: "电脑任务已创建。已记住跨窗口授权的设备会自动开始；否则请在本机「电脑任务」选择窗口并允许。进度会显示在「电脑操作」中。",
+            schedules: [],
+            tools: [],
+            evidence: [],
+            actions: [],
+            memorySuggestions: [],
+            responseModel: undefined,
+            jobIds: [],
+            citations: [],
+          }
+        : command
+          ? await runAssistantVoiceCommand(
+              c,
+              command,
+              body.requestId,
+              voice?.signal || new AbortController().signal,
+            )
+          : await askAssistantModel(
+              c,
+              s!,
+              messages,
+              body.includePersonalContext
+                ? assistantContext(stored?.config, today)
+                : null,
+              today,
+              memory?.entries || null,
+              body.includePersonalContext,
+              {
+                model: body.model,
+                imageModel: body.imageModel,
+                attachmentIds: body.attachmentIds,
+                webSearch: body.webSearch,
+                requestId: body.requestId,
+              },
+            );
     const reply: AssistantMessage = {
       id: randomUUID(),
       role: "assistant",
@@ -273,13 +299,14 @@ export async function sendAssistant(
       responseModel:
         typeof answer.responseModel === "string"
           ? answer.responseModel
-          : command || desktopTask
+          : command || desktopTask || webCommand
             ? undefined
             : COMPASS_AI_MODEL,
       ...("jobIds" in answer
         ? { jobIds: answer.jobIds, citations: answer.citations }
         : {}),
       navigation: command?.kind === "navigate" ? command.toolId : undefined,
+      webNavigation: webCommand,
       desktopTaskId: desktopTask?.id,
       createdAt: new Date().toISOString(),
     };

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { agentModelId, type AgentFile } from "./assistant-agent.js";
+import type { AssistantWebCommand } from "./assistant-web-command.js";
 import {
   workspaceScheduleSchema,
   type WorkspaceActor,
@@ -26,6 +27,7 @@ export const assistantSendSchema = z
     attachmentIds: z.array(z.string().uuid()).max(6).default([]),
     webSearch: z.boolean().default(false),
     desktopDeviceId: z.string().uuid().optional(),
+    webOpenResult: z.enum(["opened", "requested", "blocked"]).optional(),
   })
   .strict();
 const scheduleDraft = z
@@ -64,6 +66,7 @@ export type AssistantMessage = {
   jobIds?: string[];
   citations?: { title: string; url: string }[];
   navigation?: string;
+  webNavigation?: AssistantWebCommand;
   desktopTaskId?: string;
   evidence?: AssistantEvidence[];
   actions?: AssistantAction[];

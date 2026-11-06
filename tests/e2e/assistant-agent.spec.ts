@@ -126,6 +126,23 @@ async function setup(page: Page, mode = "dark") {
       if (request.method() === "POST") {
         const body = request.postDataJSON();
         requests.push(body);
+        if (body.webOpenResult) {
+          assistant.version++;
+          assistant.messages.push(
+            { id: body.requestId, role: "user", text: body.message },
+            {
+              id: `reply-${body.requestId}`,
+              role: "assistant",
+              text:
+                body.webOpenResult === "blocked"
+                  ? "浏览器阻止了新窗口，请点击下方“打开百度”继续。"
+                  : "已在新标签页打开百度，当前对话保留。",
+              webNavigation: { title: "百度", url: "https://www.baidu.com/" },
+            },
+          );
+          await route.fulfill({ json: { data: assistant } });
+          return;
+        }
         done = true;
         assistant.version++;
         assistant.messages.push(
@@ -385,9 +402,72 @@ test("输入框内选择电脑、显示真实授权并撤销，不从网页开�
   ).toBeVisible();
   expect(mutations).toHaveLength(1);
   const input = composer.getByPlaceholder(/描述电脑任务/);
-  await input.fill("整理已打开的笔记");
+  await input.fill("打开百度");
   await composer.getByRole("button", { name: "发送给个人助理" }).click();
   await expect.poll(() => requests.length).toBe(1);
   expect(requests[0].desktopDeviceId).toBe(desktopId);
   expect(requests[0]).not.toHaveProperty("authorizationId");
+  expect(requests[0]).not.toHaveProperty("webOpenResult");
+  expect(page.context().pages()).toHaveLength(1);
+});
+
+test("发送打开百度立即新建网页，保留工作台，查看历史不会重复打开", async ({
+  page,
+  context,
+}) => {
+  const requests = await setup(page);
+  await context.route("https://www.baidu.com/**", (route) =>
+    route.fulfill({ body: "百度测试页", contentType: "text/html" }),
+  );
+  await page.goto("/my-workspace");
+  const composer = page.locator(".assistant-compose:visible");
+  await composer.getByPlaceholder(/告诉我你想完成什么/).fill("打开百度");
+  const opened = context.waitForEvent("page");
+  await composer.getByRole("button", { name: "发送给个人助理" }).click();
+  const target = await opened;
+  await expect(target).toHaveURL("https://www.baidu.com/");
+  expect(await target.evaluate(() => window.opener)).toBeNull();
+  await expect.poll(() => requests.length).toBe(1);
+  expect(requests[0].webOpenResult).toBe("opened");
+  await expect(page).toHaveURL(/\/my-workspace$/);
+  await expect(
+    page.getByText("已在新标签页打开百度，当前对话保留。", { exact: true }),
+  ).toBeVisible();
+  await target.close();
+  await page.bringToFront();
+  await page.reload();
+  await openPersonalAssistant(page);
+  await expect(page.getByRole("link", { name: "打开百度" })).toBeVisible();
+  expect(context.pages()).toHaveLength(1);
+});
+
+test("回车发送时提示弹窗拦截，并提供可直接点击的打开网页入口", async ({
+  page,
+  context,
+}) => {
+  const requests = await setup(page);
+  await page.addInitScript(() => {
+    window.open = () => null;
+  });
+  await context.route("https://www.baidu.com/**", (route) =>
+    route.fulfill({ body: "百度测试页", contentType: "text/html" }),
+  );
+  await page.goto("/my-workspace");
+  const input = page
+    .locator(".assistant-compose:visible")
+    .getByPlaceholder(/告诉我你想完成什么/);
+  await input.fill("打开百度");
+  await input.press("Enter");
+  await expect.poll(() => requests.length).toBe(1);
+  expect(requests[0].webOpenResult).toBe("blocked");
+  await expect(
+    page.getByText("浏览器阻止了新窗口，请点击下方“打开百度”继续。", {
+      exact: true,
+    }),
+  ).toBeVisible();
+  expect(context.pages()).toHaveLength(1);
+  const opened = context.waitForEvent("page");
+  await page.getByRole("link", { name: "打开百度" }).click();
+  await expect(await opened).toHaveURL("https://www.baidu.com/");
+  expect(requests).toHaveLength(1);
 });

@@ -67,6 +67,11 @@ import { AssistantDesktopPanel } from "./assistant-desktop-panel";
 import { AssistantDesktopAccess } from "./assistant-desktop-access";
 import type { DesktopState } from "../../../packages/contracts/src/assistant-desktop";
 import { useWorkspaceSceneCover } from "./workspace-scene-presence";
+import { openAssistantWebsite } from "./assistant-open-website";
+import {
+  assistantWebsiteUrl,
+  parseAssistantWebCommand,
+} from "../../../packages/contracts/src/assistant-web-command";
 
 type AssistantSection =
   "chat" | "activity" | "memory" | "voice" | "tasks" | "desktop";
@@ -335,6 +340,13 @@ export function PersonalAssistantProvider({
   }, [open, messages.length, busy]);
   const send = async (value: string) => {
     if (!value.trim() || !data?.ready || busy) return;
+    const webCommand =
+      !desktopDeviceId && !agent.attachments.length
+        ? parseAssistantWebCommand(value)
+        : undefined;
+    const webOpenResult = webCommand
+      ? openAssistantWebsite(webCommand.url)
+      : undefined;
     setSection("chat");
     setOpen(true);
     setSending(true);
@@ -354,6 +366,7 @@ export function PersonalAssistantProvider({
         webSearch: agent.webSearch,
         attachmentIds: agent.attachments.map((f) => f.id),
         desktopDeviceId,
+        webOpenResult,
       });
       setText("");
       setAgent((previous) => ({ ...previous, attachments: [] }));
@@ -382,7 +395,13 @@ export function PersonalAssistantProvider({
       else speech.stop();
     } catch (e) {
       speech.stop();
-      setError((e as Error).message);
+      setError(
+        (webOpenResult === "opened"
+          ? "网页已打开，但对话保存失败："
+          : webOpenResult === "requested"
+            ? "已发出打开网页请求，但对话保存失败："
+            : "") + (e as Error).message,
+      );
     } finally {
       if (!playbackAllowed.current) speech.stop();
       setSending(false);
@@ -1058,6 +1077,20 @@ export function PersonalAssistantProvider({
                     setSection("memory");
                   }}
                 />
+                {item.role === "assistant" &&
+                  item.webNavigation &&
+                  assistantWebsiteUrl(item.webNavigation.url) && (
+                    <div className="assistant-tool-links">
+                      <a
+                        href={assistantWebsiteUrl(item.webNavigation.url)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        打开{item.webNavigation.title}
+                        <ArrowRightOutlined />
+                      </a>
+                    </div>
+                  )}
                 {!!item.schedules?.length && (
                   <>
                     <AgentMessageResults item={item} jobs={jobs.data || []} />

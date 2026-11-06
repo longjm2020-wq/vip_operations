@@ -525,6 +525,72 @@ describe("assistant business tools and private memory", () => {
     ])
       expect(parseVoiceCommand(text)).toBeUndefined();
   });
+  it("records website navigation without model calls and keeps browser failures accurate", async () => {
+    const request = {
+      ...input(),
+      message: "打开百度",
+      webOpenResult: "opened",
+      webSearch: true,
+    };
+    const result = await sendAssistant(actor(), request);
+    expect(result.messages.at(-1)).toMatchObject({
+      webNavigation: { url: "https://www.baidu.com/", title: "百度" },
+      text: "已在新标签页打开百度，当前对话保留。",
+    });
+    expect(result.messages.at(-1).responseModel).toBeUndefined();
+    const duplicate = await sendAssistant(actor(), request);
+    expect(duplicate.messages).toEqual(result.messages);
+    const blocked = await sendAssistant(actor(), {
+      ...input(result.version),
+      message: "打开百度",
+      webOpenResult: "blocked",
+    });
+    expect(blocked.messages.at(-1).text).toContain("浏览器阻止了新窗口");
+    const fallback = await sendAssistant(actor(), {
+      ...input(blocked.version),
+      message: "打开 https://example.com/docs",
+    });
+    expect(fallback.messages.at(-1).text).toContain("点击下方");
+    expect(fallback.messages.at(-1).webNavigation.url).toBe(
+      "https://example.com/docs",
+    );
+    expect(fetch).not.toHaveBeenCalled();
+    expect((await readAssistant(actor())).messages.at(-1)).toEqual(
+      fallback.messages.at(-1),
+    );
+  });
+  it("rejects opening reports for other commands, remote devices, attachments or continuous voice", async () => {
+    for (const extra of [
+      { message: "安排明天会议" },
+      { desktopDeviceId: randomUUID() },
+      { attachmentIds: [randomUUID()] },
+    ]) {
+      await expect(
+        sendAssistant(actor(), {
+          ...input(),
+          message: "打开百度",
+          webOpenResult: "opened",
+          ...extra,
+        }),
+      ).rejects.toMatchObject({
+        response: { error: { code: "WEB_COMMAND_INVALID" } },
+      });
+    }
+    await expect(
+      sendAssistant(
+        actor(),
+        {
+          ...input(),
+          message: "打开百度",
+          webOpenResult: "opened",
+        },
+        { signal: new AbortController().signal },
+      ),
+    ).rejects.toMatchObject({
+      response: { error: { code: "WEB_COMMAND_INVALID" } },
+    });
+    expect(fetch).not.toHaveBeenCalled();
+  });
   it("submits an authorized spoken sync once and records its actual result", async () => {
     fixture.queueCompass.mockResolvedValue({
       job: { id: "91", status: "QUEUED" },
