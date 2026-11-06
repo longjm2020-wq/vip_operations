@@ -7,7 +7,11 @@ const fileId = "11111111-1111-4111-8111-111111111111";
 const resultId = "22222222-2222-4222-8222-222222222222";
 const jobId = "33333333-3333-4333-8333-333333333333";
 const previewId = "44444444-4444-4444-8444-444444444444";
-async function setup(page: Page, mode = "dark") {
+async function setup(
+  page: Page,
+  mode = "dark",
+  lookup?: { wait?: Promise<void>; ambiguous?: boolean },
+) {
   const requests: Record<string, any>[] = [];
   const file = {
     id: fileId,
@@ -49,7 +53,7 @@ async function setup(page: Page, mode = "dark") {
   };
   let uploaded = false,
     done = false;
-  await page.route("**/api/v1/**", async (route) => {
+  await page.context().route("**/api/v1/**", async (route) => {
     const request = route.request(),
       path = new URL(request.url()).pathname.replace("/api/v1", "");
     let data: unknown = [];
@@ -127,19 +131,40 @@ async function setup(page: Page, mode = "dark") {
         const body = request.postDataJSON();
         requests.push(body);
         if (body.webOpenResult) {
+          const resolving = body.message === "打开示例文库";
+          const title = resolving
+            ? "示例文库"
+            : body.message === "打开腾讯网"
+              ? "腾讯网"
+              : "百度";
+          const url = resolving
+            ? "https://docs.example.com/"
+            : title === "腾讯网"
+              ? "https://www.qq.com/"
+              : "https://www.baidu.com/";
           assistant.version++;
-          assistant.messages.push(
-            { id: body.requestId, role: "user", text: body.message },
-            {
-              id: `reply-${body.requestId}`,
-              role: "assistant",
-              text:
-                body.webOpenResult === "blocked"
-                  ? "浏览器阻止了新窗口，请点击下方“打开百度”继续。"
-                  : "已在新标签页打开百度，当前对话保留。",
-              webNavigation: { title: "百度", url: "https://www.baidu.com/" },
-            },
-          );
+          assistant.messages.push({
+            id: body.requestId,
+            role: "user",
+            text: body.message,
+          });
+          if (resolving) {
+            assistant.state = "PENDING";
+            await lookup?.wait;
+            assistant.state = "IDLE";
+          }
+          assistant.messages.push({
+            id: `reply-${body.requestId}`,
+            role: "assistant",
+            text: lookup?.ambiguous
+              ? "暂时不能唯一确认网站，请补充完整网站或品牌名称。"
+              : body.webOpenResult === "blocked"
+                ? `浏览器阻止了新窗口，请点击下方“打开${title}”继续。`
+                : resolving
+                  ? `已找到${title}，正在刚才的新窗口中打开。`
+                  : `已在新标签页打开${title}，当前对话保留。`,
+            ...(lookup?.ambiguous ? {} : { webNavigation: { title, url } }),
+          });
           await route.fulfill({ json: { data: assistant } });
           return;
         }
@@ -470,4 +495,74 @@ test("回车发送时提示弹窗拦截，并提供可直接点击的打开网�
   await page.getByRole("link", { name: "打开百度" }).click();
   await expect(await opened).toHaveURL("https://www.baidu.com/");
   expect(requests).toHaveLength(1);
+});
+
+test("直接发送打开腾讯网即可进入，不要求再次发送网址", async ({
+  page,
+  context,
+}) => {
+  const requests = await setup(page);
+  await context.route("https://www.qq.com/**", (route) =>
+    route.fulfill({ body: "腾讯网测试页", contentType: "text/html" }),
+  );
+  await page.goto("/my-workspace");
+  const composer = page.locator(".assistant-compose:visible");
+  await composer.getByPlaceholder(/告诉我你想完成什么/).fill("打开腾讯网");
+  const opened = context.waitForEvent("page");
+  await composer.getByRole("button", { name: "发送给个人助理" }).click();
+  const target = await opened;
+  await expect(target).toHaveURL("https://www.qq.com/");
+  await expect(page.getByRole("link", { name: "打开腾讯网" })).toBeVisible();
+  expect(requests).toHaveLength(1);
+  expect(requests[0].message).toBe("打开腾讯网");
+});
+
+test("未知网站名称先开等待页，查询完成后在同一窗口自动进入官网", async ({
+  page,
+  context,
+}) => {
+  let release!: () => void;
+  const wait = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const requests = await setup(page, "dark", { wait });
+  await context.route("https://docs.example.com/**", (route) =>
+    route.fulfill({ body: "示例文库官网", contentType: "text/html" }),
+  );
+  await page.goto("/my-workspace");
+  const composer = page.locator(".assistant-compose:visible");
+  await composer.getByPlaceholder(/告诉我你想完成什么/).fill("打开示例文库");
+  const opened = context.waitForEvent("page");
+  await composer.getByRole("button", { name: "发送给个人助理" }).click();
+  const target = await opened;
+  try {
+    await expect(target).toHaveURL(/\/assistant\/open-website\?requestId=/);
+    await expect(target.getByRole("status")).toContainText("正在查找网站");
+    expect(requests[0].webOpenResult).toBe("pending");
+    expect(await target.evaluate(() => window.opener)).toBeNull();
+  } finally {
+    release();
+  }
+  await expect(target).toHaveURL("https://docs.example.com/");
+  expect(context.pages()).toHaveLength(2);
+  expect(requests).toHaveLength(1);
+});
+
+test("名称有歧义时等待页说明原因，不跳转到猜测的网址", async ({
+  page,
+  context,
+}) => {
+  await setup(page, "dark", { ambiguous: true });
+  await page.goto("/my-workspace");
+  const composer = page.locator(".assistant-compose:visible");
+  await composer.getByPlaceholder(/告诉我你想完成什么/).fill("打开示例文库");
+  const opened = context.waitForEvent("page");
+  await composer.getByRole("button", { name: "发送给个人助理" }).click();
+  const target = await opened;
+  await expect(target.getByRole("status")).toContainText(
+    "补充完整网站或品牌名称",
+  );
+  await expect(target).toHaveURL(/\/assistant\/open-website\?requestId=/);
+  await expect(page.getByRole("link", { name: "打开示例文库" })).toHaveCount(0);
+  expect(context.pages()).toHaveLength(2);
 });

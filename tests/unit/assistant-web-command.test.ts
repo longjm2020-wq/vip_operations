@@ -2,8 +2,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   assistantWebsiteUrl,
   parseAssistantWebCommand,
+  parseAssistantWebsiteRequest,
 } from "../../packages/contracts/src/assistant-web-command.js";
-import { openAssistantWebsite } from "../../apps/web/src/assistant-open-website.js";
+import {
+  openAssistantWebsite,
+  prepareAssistantWebsite,
+} from "../../apps/web/src/assistant-open-website.js";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -23,6 +27,13 @@ describe("explicit website opening", () => {
     expect(parseAssistantWebCommand("打开 GitHub")?.url).toBe(
       "https://github.com/",
     );
+    expect(parseAssistantWebsiteRequest("打开腾讯网")).toEqual({
+      name: "腾讯网",
+      destination: { url: "https://www.qq.com/", title: "腾讯网" },
+    });
+    expect(parseAssistantWebsiteRequest("打开示例文库")).toEqual({
+      name: "示例文库",
+    });
     expect(
       parseAssistantWebCommand("打开网址 www.example.com/path?q=abc&x=1#result")
         ?.url,
@@ -56,7 +67,19 @@ describe("explicit website opening", () => {
       "打开 ms-settings:privacy",
       "打开 https://a:b@example.com",
     ])
-      expect(parseAssistantWebCommand(text), text).toBeUndefined();
+      expect(parseAssistantWebsiteRequest(text), text).toBeUndefined();
+  });
+  it("preserves existing internal navigation and local application intent", () => {
+    for (const text of [
+      "打开经营分析",
+      "打开库存明细",
+      "打开我的内容",
+      "打开设置",
+      "打开浏览器",
+      "打开本地文件",
+      "打开电脑终端",
+    ])
+      expect(parseAssistantWebsiteRequest(text), text).toBeUndefined();
   });
   it("rejects unsafe navigation protocols, malformed addresses and embedded credentials", () => {
     for (const url of [
@@ -114,5 +137,23 @@ describe("explicit website opening", () => {
       "_blank",
       "noopener,noreferrer",
     );
+  });
+  it("reserves a same-origin waiting page on desktop without forwarding a destination in its URL", () => {
+    const open = vi.fn(() => null);
+    vi.stubGlobal("window", {
+      open,
+      location: { origin: "https://workspace.example.com" },
+      xutiDesktop: { version: "1.2.0" },
+      chrome: { webview: {} },
+    });
+    const id = "12345678-1234-4123-8123-123456789012";
+    expect(prepareAssistantWebsite(id)).toBe("pending");
+    expect(open).toHaveBeenCalledWith(
+      `https://workspace.example.com/assistant/open-website?requestId=${id}`,
+      "_blank",
+      "noopener,noreferrer",
+    );
+    expect(prepareAssistantWebsite("https://evil.example")).toBe("blocked");
+    expect(open).toHaveBeenCalledTimes(1);
   });
 });

@@ -559,9 +559,59 @@ describe("assistant business tools and private memory", () => {
       fallback.messages.at(-1),
     );
   });
+  it("resolves an unfamiliar website name once and persists its navigation for the waiting window", async () => {
+    const fetch = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            id: "lookup",
+            model: "openai/gpt-6.1-sol",
+            choices: [
+              {
+                finish_reason: "stop",
+                message: {
+                  content: JSON.stringify({
+                    status: "resolved",
+                    url: "https://docs.example.com/",
+                  }),
+                  annotations: [
+                    {
+                      type: "url_citation",
+                      url_citation: {
+                        url: "https://docs.example.com/about",
+                        title: "官网",
+                      },
+                    },
+                  ],
+                },
+              },
+            ],
+          }),
+        ),
+    );
+    vi.stubGlobal("fetch", fetch);
+    const body = {
+      ...input(),
+      message: "打开示例文库",
+      webOpenResult: "pending",
+      webSearch: false,
+    };
+    const result = await sendAssistant(actor(), body);
+    expect(result.state).toBe("IDLE");
+    expect(result.messages.at(-1)).toMatchObject({
+      text: "已找到示例文库，正在刚才的新窗口中打开。",
+      webNavigation: { title: "示例文库", url: "https://docs.example.com/" },
+    });
+    expect((await readAssistant(actor("8"))).messages).toHaveLength(0);
+    expect((await sendAssistant(actor(), body)).messages).toEqual(
+      result.messages,
+    );
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
   it("rejects opening reports for other commands, remote devices, attachments or continuous voice", async () => {
     for (const extra of [
       { message: "安排明天会议" },
+      { message: "打开示例文库" },
       { desktopDeviceId: randomUUID() },
       { attachmentIds: [randomUUID()] },
     ]) {

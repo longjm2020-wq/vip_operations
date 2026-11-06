@@ -27,7 +27,9 @@ export const assistantSendSchema = z
     attachmentIds: z.array(z.string().uuid()).max(6).default([]),
     webSearch: z.boolean().default(false),
     desktopDeviceId: z.string().uuid().optional(),
-    webOpenResult: z.enum(["opened", "requested", "blocked"]).optional(),
+    webOpenResult: z
+      .enum(["opened", "requested", "blocked", "pending"])
+      .optional(),
   })
   .strict();
 const scheduleDraft = z

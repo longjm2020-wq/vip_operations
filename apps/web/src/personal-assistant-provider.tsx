@@ -67,10 +67,13 @@ import { AssistantDesktopPanel } from "./assistant-desktop-panel";
 import { AssistantDesktopAccess } from "./assistant-desktop-access";
 import type { DesktopState } from "../../../packages/contracts/src/assistant-desktop";
 import { useWorkspaceSceneCover } from "./workspace-scene-presence";
-import { openAssistantWebsite } from "./assistant-open-website";
+import {
+  openAssistantWebsite,
+  prepareAssistantWebsite,
+} from "./assistant-open-website";
 import {
   assistantWebsiteUrl,
-  parseAssistantWebCommand,
+  parseAssistantWebsiteRequest,
 } from "../../../packages/contracts/src/assistant-web-command";
 
 type AssistantSection =
@@ -340,12 +343,15 @@ export function PersonalAssistantProvider({
   }, [open, messages.length, busy]);
   const send = async (value: string) => {
     if (!value.trim() || !data?.ready || busy) return;
-    const webCommand =
+    const requestId = crypto.randomUUID();
+    const websiteRequest =
       !desktopDeviceId && !agent.attachments.length
-        ? parseAssistantWebCommand(value)
+        ? parseAssistantWebsiteRequest(value)
         : undefined;
-    const webOpenResult = webCommand
-      ? openAssistantWebsite(webCommand.url)
+    const webOpenResult = websiteRequest
+      ? websiteRequest.destination
+        ? openAssistantWebsite(websiteRequest.destination.url)
+        : prepareAssistantWebsite(requestId)
       : undefined;
     setSection("chat");
     setOpen(true);
@@ -358,7 +364,7 @@ export function PersonalAssistantProvider({
       const response = await api("/my-workspace/assistant", "POST", {
         message: value.trim(),
         version: data.version,
-        requestId: crypto.randomUUID(),
+        requestId,
         includePersonalContext: includeContext,
         includeMemory,
         model: agent.model,
@@ -400,7 +406,9 @@ export function PersonalAssistantProvider({
           ? "网页已打开，但对话保存失败："
           : webOpenResult === "requested"
             ? "已发出打开网页请求，但对话保存失败："
-            : "") + (e as Error).message,
+            : webOpenResult === "pending"
+              ? "网站查询未完成，请关闭等待页后重试："
+              : "") + (e as Error).message,
       );
     } finally {
       if (!playbackAllowed.current) speech.stop();

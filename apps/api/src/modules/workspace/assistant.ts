@@ -24,10 +24,11 @@ import { assistantActionViews } from "./assistant-actions.js";
 import { parseVoiceCommand } from "../../../../../packages/contracts/src/assistant-voice-commands.js";
 import {
   assistantWebOpenText,
-  parseAssistantWebCommand,
+  parseAssistantWebsiteRequest,
 } from "../../../../../packages/contracts/src/assistant-web-command.js";
 import { runAssistantVoiceCommand } from "./assistant-voice-commands.js";
 import { queueDesktopTask } from "./desktop.js";
+import { resolveAssistantWebsite } from "./assistant-website.js";
 export { parseAssistantAnswer } from "./assistant-model.js";
 
 async function settings() {
@@ -131,11 +132,16 @@ export async function sendAssistant(
 ) {
   requireAssistant(c);
   const body = parse(assistantSendSchema, input);
-  const webCommand =
+  const websiteRequest =
     !voice && !body.desktopDeviceId && !body.attachmentIds.length
-      ? parseAssistantWebCommand(body.message)
+      ? parseAssistantWebsiteRequest(body.message)
       : undefined;
-  if (body.webOpenResult && !webCommand)
+  if (
+    body.webOpenResult &&
+    (!websiteRequest ||
+      (!websiteRequest.destination &&
+        ["opened", "requested"].includes(body.webOpenResult)))
+  )
     fail(
       "WEB_COMMAND_INVALID",
       "打开网页的结果与当前指令不符，请重新发送",
@@ -208,6 +214,12 @@ export async function sendAssistant(
   if (!reserved)
     fail("VERSION_CONFLICT", "对话已在其他页面更新，请刷新后继续", 409);
   try {
+    const website = websiteRequest
+      ? websiteRequest.destination
+        ? { destination: websiteRequest.destination, text: "" }
+        : await resolveAssistantWebsite(s!, selected, websiteRequest.name)
+      : undefined;
+    const webCommand = website?.destination;
     const today = new Intl.DateTimeFormat("en-CA", {
       timeZone: "Asia/Shanghai",
       year: "numeric",
@@ -238,9 +250,11 @@ export async function sendAssistant(
           model: body.model,
         })
       : null;
-    const answer = webCommand
+    const answer = website
       ? {
-          text: assistantWebOpenText(webCommand, body.webOpenResult),
+          text: webCommand
+            ? assistantWebOpenText(webCommand, body.webOpenResult)
+            : website.text,
           schedules: [],
           tools: [],
           evidence: [],
@@ -299,7 +313,7 @@ export async function sendAssistant(
       responseModel:
         typeof answer.responseModel === "string"
           ? answer.responseModel
-          : command || desktopTask || webCommand
+          : command || desktopTask || websiteRequest
             ? undefined
             : COMPASS_AI_MODEL,
       ...("jobIds" in answer

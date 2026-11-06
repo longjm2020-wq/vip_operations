@@ -69,6 +69,7 @@ const ProjectTablePage = React.lazy(()=>import("./project-tables").then(module=>
 const StyleSelectionsPage = React.lazy(() => import("./style-selections").then(module => ({ default: module.StyleSelectionsPage })));
 import { ManualPage, manualHref } from "./manual";
 import { PersonalAssistantProvider } from "./personal-assistant-provider";
+import { AssistantWebsiteOpening } from "./assistant-website-opening";
 import { WorkspaceCompanion } from "./workspace-companion";
 const SopPage = React.lazy(() => import("./projects").then(module => ({ default: module.SopPage })));
 const ProjectsPage = React.lazy(() => import("./projects").then(module => ({ default: module.ProjectsPage })));
@@ -77,7 +78,7 @@ const ProjectNotifications = React.lazy(() => import("./projects").then(module =
 import "./style.css";
 import "./workspace-shell.css";
 import { AppearanceProvider, ThemeToggle } from "./appearance";
-const coreFeatureSummary = "小序智能体、网页直达、实时语音与跨窗口电脑操作 · 全息工作台 · 文档与视频创作 · 经营分析 · 聚水潭库存同步 · 协作表格 · AIGC";
+const coreFeatureSummary = "小序智能体、网站名称直达、实时语音与跨窗口电脑操作 · 全息工作台 · 文档与视频创作 · 经营分析 · 聚水潭库存同步 · 协作表格 · AIGC";
 const SupplierRegister = React.lazy(() => import("./supply").then(module => ({ default: module.SupplierRegister })));
 const SupplyProfile = React.lazy(() => import("./supply").then(module => ({ default: module.SupplyProfile })));
 const SupplyProducts = React.lazy(() => import("./supply").then(module => ({ default: module.SupplyProducts })));
@@ -591,6 +592,7 @@ function Root() {
         <Spin size="large" />
       </div>
     );
+  if (me.data && location.pathname === "/assistant/open-website") return <AssistantWebsiteOpening />;
   if (
     me.data?.roleCodes?.includes("SUPPLIER") &&
     !location.pathname.startsWith("/supply/") &&
