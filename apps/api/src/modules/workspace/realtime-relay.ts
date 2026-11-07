@@ -138,7 +138,8 @@ export class RealtimeUpstreamBuffer {
   }
   flush() {
     if (!this.queue.length || !this.check()) return;
-    // At most 40 ms of PCM per tick: catch up gradually after a brief stall.
+    // Drain at most two messages per tick after a brief stall. Qwen messages
+    // contain up to 100 ms PCM; the browser/Doubao frames remain 20 ms.
     for (let sent = 0; sent < 2 && this.queue.length; sent++) {
       this.prune();
       if (!this.queue.length) return;
@@ -316,16 +317,63 @@ function runRelay(
   let lifetime: ReturnType<typeof setTimeout> | undefined;
   let toolQueue = Promise.resolve();
   const frameBudget = new RealtimeFrameBudget();
+  let writeAttempts = 0,
+    writeCompletions = 0,
+    writeErrors = 0;
+  let writeBytes = 0,
+    completedWriteBytes = 0;
+  let lastWriteAt = 0,
+    lastWriteCompleteAt = 0;
   const upstreamBuffer = new RealtimeUpstreamBuffer(
     () => upstream?.bufferedAmount ?? 0,
     (payload) => {
-      if (!closed && upstream?.readyState === WebSocket.OPEN)
-        upstream.send(payload);
+      if (closed || upstream?.readyState !== WebSocket.OPEN) return;
+      const bytes = Buffer.byteLength(payload);
+      writeAttempts++;
+      writeBytes += bytes;
+      lastWriteAt = performance.now();
+      upstream.send(payload, (error) => {
+        if (error) {
+          writeErrors++;
+          if (!closed) stop("语音服务连接发送失败，请稍后重新开始");
+          return;
+        }
+        writeCompletions++;
+        completedWriteBytes += bytes;
+        lastWriteCompleteAt = performance.now();
+      });
     },
     (metrics) => {
+      const socket = (
+        upstream as unknown as
+          | {
+              _socket?: {
+                bytesRead?: number;
+                bytesWritten?: number;
+                writableLength?: number;
+                writableNeedDrain?: boolean;
+              };
+            }
+          | undefined
+      )?._socket;
+      const now = performance.now();
       console.warn("Realtime provider write congestion", {
         provider: qwen ? "qwen" : "doubao",
         ...metrics,
+        writeAttempts,
+        writeCompletions,
+        writeErrors,
+        writeBytes,
+        completedWriteBytes,
+        pendingWrites: writeAttempts - writeCompletions - writeErrors,
+        lastWriteAgeMs: lastWriteAt ? now - lastWriteAt : null,
+        lastWriteCompleteAgeMs: lastWriteCompleteAt
+          ? now - lastWriteCompleteAt
+          : null,
+        socketBytesRead: socket?.bytesRead,
+        socketBytesWritten: socket?.bytesWritten,
+        socketWritableLength: socket?.writableLength,
+        socketNeedsDrain: socket?.writableNeedDrain,
       });
       stop("语音服务连接持续拥塞，本次通话已停止，请稍后重新开始");
     },
@@ -344,6 +392,7 @@ function runRelay(
     clearTimeout(lifetime);
     clearInterval(health);
     clearInterval(upstreamDrain);
+    qwen?.close();
     upstreamBuffer.close();
     unregister?.();
     if (upstream) (qwen ? closeQwenSocket : closeDoubaoSocket)(upstream);
@@ -464,6 +513,7 @@ function runRelay(
               ready = true;
               upstreamDrain = setInterval(() => {
                 try {
+                  qwen?.drainAudio();
                   upstreamBuffer.flush();
                 } catch {
                   stop("语音服务连接已中断，请重新开始");

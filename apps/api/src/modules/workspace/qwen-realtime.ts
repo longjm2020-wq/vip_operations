@@ -191,12 +191,45 @@ export class QwenRealtimeProtocol {
   private manualCommit = false;
   private continuationEpoch = 0;
   private inputEpoch = 0;
-  constructor(private send: (event: Event, valid?: () => boolean) => void) {}
+  private audioChunks: Buffer[] = [];
+  private firstAudioAt = 0;
+  private closed = false;
+  constructor(
+    private send: (event: Event, valid?: () => boolean) => void,
+    private clock = () => performance.now(),
+  ) {}
+  private flushAudio() {
+    if (this.closed || !this.audioChunks.length) return;
+    const audio = Buffer.concat(this.audioChunks).toString("base64");
+    this.audioChunks = [];
+    this.send({ type: "input_audio_buffer.append", audio });
+  }
+  /** The relay's existing 20 ms timer sends a short final chunk within 100 ms. */
+  drainAudio() {
+    if (this.audioChunks.length && this.clock() - this.firstAudioAt >= 100)
+      this.flushAudio();
+  }
+  close() {
+    this.closed = true;
+    this.audioChunks = [];
+  }
   current(responseId: unknown) {
     const response = this.responses.get(String(responseId));
     return !!response && response.turn === this.turn && !response.canceled;
   }
   command(event: Event) {
+    if (this.closed) return;
+    if (event.type === "input_audio_buffer.append") {
+      if (this.muted) return;
+      this.bufferedFrames++;
+      if (!this.audioChunks.length) this.firstAudioAt = this.clock();
+      // Browser frames remain 20 ms. Coalesce only the provider hop, preserving
+      // every PCM byte while reducing Qwen WebSocket/TLS writes fivefold.
+      this.audioChunks.push(Buffer.from(String(event.audio), "base64"));
+      if (this.audioChunks.length >= 5) this.flushAudio();
+      return;
+    }
+    this.flushAudio();
     if (
       event.type === "input_audio_mute.commit" ||
       event.type === "input_audio_unmute.commit"
@@ -220,10 +253,6 @@ export class QwenRealtimeProtocol {
       }
       return;
     }
-    if (event.type === "input_audio_buffer.append") {
-      if (this.muted) return;
-      this.bufferedFrames++;
-    }
     if (event.type === "input_audio_buffer.commit") {
       if (this.muted || this.bufferedFrames < 5 || this.manualCommit) return;
       this.manualCommit = true;
@@ -232,6 +261,7 @@ export class QwenRealtimeProtocol {
     this.send(event);
   }
   events(event: Event): Event[] {
+    if (this.closed) return [];
     if (event.type === "input_audio_buffer.speech_started") {
       this.command({ type: "response.cancel" });
       this.turn++;
@@ -255,6 +285,7 @@ export class QwenRealtimeProtocol {
           const turn = this.turn,
             epoch = this.continuationEpoch,
             inputEpoch = this.inputEpoch;
+          this.flushAudio();
           this.send(
             { type: "response.create" },
             () =>
@@ -350,7 +381,8 @@ export class QwenRealtimeProtocol {
     responseId: unknown,
     results: { call_id: string; output: string }[],
   ) {
-    if (!this.current(responseId)) return;
+    if (this.closed || !this.current(responseId)) return;
+    this.flushAudio();
     const epoch = this.continuationEpoch;
     const valid = () =>
       this.current(responseId) && epoch === this.continuationEpoch;

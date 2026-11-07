@@ -261,6 +261,99 @@ describe("Qwen native realtime protocol", () => {
       expect.any(Function),
     );
   });
+  it("coalesces five browser frames into exactly 100 ms of identical PCM", () => {
+    const send = vi.fn(),
+      protocol = new QwenRealtimeProtocol(send);
+    const pcm = Array.from({ length: 5 }, (_, i) => Buffer.alloc(640, i + 1));
+    pcm
+      .slice(0, 4)
+      .forEach((frame) =>
+        protocol.command({
+          type: "input_audio_buffer.append",
+          audio: frame.toString("base64"),
+        }),
+      );
+    expect(send).not.toHaveBeenCalled();
+    protocol.command({
+      type: "input_audio_buffer.append",
+      audio: pcm[4].toString("base64"),
+    });
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(Buffer.from(send.mock.calls[0][0].audio, "base64")).toEqual(
+      Buffer.concat(pcm),
+    );
+    expect(Buffer.from(send.mock.calls[0][0].audio, "base64")).toHaveLength(
+      3200,
+    );
+  });
+  it("flushes a short final chunk by 100 ms without repeating it", () => {
+    let now = 0;
+    const send = vi.fn(),
+      protocol = new QwenRealtimeProtocol(send, () => now);
+    const audio = Buffer.alloc(640, 7).toString("base64");
+    protocol.command({ type: "input_audio_buffer.append", audio });
+    now = 99;
+    protocol.drainAudio();
+    expect(send).not.toHaveBeenCalled();
+    now = 100;
+    protocol.drainAudio();
+    protocol.drainAudio();
+    expect(send).toHaveBeenCalledExactlyOnceWith({
+      type: "input_audio_buffer.append",
+      audio,
+    });
+  });
+  it.each(["commit", "mute", "cancel", "tool"])(
+    "flushes partial PCM before %s in the original event order",
+    (control) => {
+      const send = vi.fn(),
+        protocol = new QwenRealtimeProtocol(send);
+      protocol.events({ type: "response.created", response: { id: "r1" } });
+      const audio = Buffer.alloc(640, 4).toString("base64");
+      for (let i = 0; i < 5; i++)
+        protocol.command({ type: "input_audio_buffer.append", audio });
+      send.mockClear();
+      protocol.command({ type: "input_audio_buffer.append", audio });
+      if (control === "tool")
+        protocol.toolResults("r1", [{ call_id: "call", output: "done" }]);
+      else
+        protocol.command({
+          type:
+            control === "commit"
+              ? "input_audio_buffer.commit"
+              : control === "mute"
+                ? "input_audio_mute.commit"
+                : "response.cancel",
+        });
+      expect(send.mock.calls[0][0]).toEqual({
+        type: "input_audio_buffer.append",
+        audio,
+      });
+      expect(send.mock.calls[1][0].type).toBe(
+        control === "commit"
+          ? "input_audio_buffer.commit"
+          : control === "mute"
+            ? "input_audio_buffer.clear"
+            : control === "cancel"
+              ? "response.cancel"
+              : "conversation.item.create",
+      );
+    },
+  );
+  it("discards partial PCM on close and never sends it through a later timer", () => {
+    let now = 0;
+    const send = vi.fn(),
+      protocol = new QwenRealtimeProtocol(send, () => now);
+    protocol.command({
+      type: "input_audio_buffer.append",
+      audio: Buffer.alloc(640).toString("base64"),
+    });
+    protocol.close();
+    now = 200;
+    protocol.drainAudio();
+    protocol.command({ type: "input_audio_mute.commit" });
+    expect(send).not.toHaveBeenCalled();
+  });
   it.each(["speech", "cancel"])(
     "invalidates queued tool continuations on %s, even after response.done",
     (interrupt) => {

@@ -9,7 +9,7 @@ type MockUpstream = EventEmitter & {
   readyState: number;
   bufferedAmount: number;
   sent: Record<string, unknown>[];
-  send: (s: string) => void;
+  send: (s: string, callback?: (error?: Error) => void) => void;
   close: () => void;
   terminate: () => void;
 };
@@ -259,9 +259,10 @@ beforeEach(async () => {
     s.readyState = WebSocket.CONNECTING;
     s.bufferedAmount = 0;
     s.sent = [];
-    s.send = (text: string) => {
+    s.send = (text: string, callback?: (error?: Error) => void) => {
       const event = JSON.parse(text);
       s.sent.push(event);
+      queueMicrotask(() => callback?.());
       if (event.type === "session.close")
         queueMicrotask(() =>
           s.emit("message", Buffer.from('{"type":"session.closed"}'), false),
@@ -441,9 +442,20 @@ describe("full-duplex relay", () => {
       expect(upstream.sent).toHaveLength(before);
       expect(events.some((e) => e.type === "xuti.error")).toBe(false);
       upstream.bufferedAmount = 0;
-      await vi.waitFor(() => expect(upstream.sent).toHaveLength(before + 3));
+      await vi.waitFor(() =>
+        expect(upstream.sent).toHaveLength(
+          before + (provider === "qwen" ? 2 : 3),
+        ),
+      );
       expect(upstream.sent.slice(before)).toEqual([
-        ...frames.map((audio) => ({
+        ...(provider === "qwen"
+          ? [
+              Buffer.concat(
+                frames.map((audio) => Buffer.from(audio, "base64")),
+              ).toString("base64"),
+            ]
+          : frames
+        ).map((audio) => ({
           type: "input_audio_buffer.append",
           audio,
         })),
