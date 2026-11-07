@@ -6,6 +6,13 @@ import {
   type RealtimeToolResult,
 } from "../../../packages/contracts/src/assistant-realtime.js";
 import { assistantPublicText } from "../../../packages/contracts/src/ai-presentation.js";
+import {
+  isPageToolName,
+  pageObserveSchema,
+  pageActionSchema,
+  type PageToolName,
+} from "../../../packages/contracts/src/assistant-page.js";
+import { RealtimePageController } from "./realtime-page-controller.js";
 import type {
   RealtimeCallbacks,
   RealtimeCaption,
@@ -36,7 +43,11 @@ type Event = {
   text?: string;
   error?: { code?: string; message?: string };
 };
-type Tool = { callId: string; name: RealtimeToolName; args: string };
+type Tool = {
+  callId: string;
+  name: RealtimeToolName | PageToolName;
+  args: string;
+};
 type Response = {
   turn: number;
   epoch: number;
@@ -44,6 +55,7 @@ type Response = {
   canceled: boolean;
   done: boolean;
   tools: Tool[];
+  cancel: AbortController;
 };
 type Caption = RealtimeCaption & {
   key: string;
@@ -64,6 +76,7 @@ export class QwenRealtimeVoiceSession {
   private channels = new Set<RTCDataChannel>();
   private dc?: RTCDataChannel;
   private configuration?: Configuration;
+  private page?: RealtimePageController;
   private created = false;
   private updateSent = false;
   private attaching = false;
@@ -198,6 +211,7 @@ export class QwenRealtimeVoiceSession {
     for (const [id, response] of this.responses) {
       if (response.turn !== this.turn) continue;
       response.canceled = true;
+      response.cancel.abort();
       this.captions
         .filter((item) => item.response === id)
         .forEach((item) => {
@@ -306,34 +320,131 @@ export class QwenRealtimeVoiceSession {
     if (batch.every((item) => item.saved) && eligible.length > batch.length)
       void this.flush();
   }
+  private waitForPage(signal: AbortSignal, frame = false) {
+    return new Promise<void>((resolve, reject) => {
+      let raf: number | undefined;
+      const finish = () => {
+        clearTimeout(timer);
+        if (raf !== undefined) cancelAnimationFrame(raf);
+        signal.removeEventListener("abort", abort);
+        if (signal.aborted)
+          reject(new DOMException("操作已取消", "AbortError"));
+        else resolve();
+      };
+      const abort = () => finish();
+      const timer = setTimeout(finish, frame ? 60 : 25);
+      signal.addEventListener("abort", abort, { once: true });
+      if (signal.aborted) finish();
+      else if (frame && typeof requestAnimationFrame === "function")
+        raf = requestAnimationFrame(finish);
+    });
+  }
+  private async preparePage(id: string, response: Response) {
+    this.cb.preparePage?.();
+    // React must commit the collapsed assistant drawer before the DOM snapshot.
+    // Its exit animation must not turn covered controls into click targets.
+    await this.waitForPage(response.cancel.signal, true);
+    await this.waitForPage(response.cancel.signal, true);
+    const deadline = performance.now() + 350;
+    while (
+      this.current(id) &&
+      typeof document !== "undefined" &&
+      performance.now() < deadline
+    ) {
+      const covered = [
+        ...document.querySelectorAll<HTMLElement>(
+          ".personal-assistant-drawer .ant-drawer-mask, .personal-assistant-drawer .ant-drawer-content-wrapper",
+        ),
+      ].some((element) => {
+        const style = getComputedStyle(element),
+          rect = element.getBoundingClientRect();
+        return (
+          style.display !== "none" &&
+          style.visibility !== "hidden" &&
+          Number(style.opacity) > 0 &&
+          rect.width > 0 &&
+          rect.height > 0 &&
+          rect.left < innerWidth &&
+          rect.right > 0 &&
+          rect.top < innerHeight &&
+          rect.bottom > 0
+        );
+      });
+      if (!covered) break;
+      await this.waitForPage(response.cancel.signal);
+    }
+    if (!this.current(id)) throw new DOMException("操作已取消", "AbortError");
+  }
   private async executeTools(id: string, response: Response) {
-    const outputs: { callId: string; result: RealtimeToolResult }[] = [];
+    const outputs: { callId: string; result: unknown }[] = [];
     try {
       for (const tool of response.tools) {
         if (!this.current(id)) return;
-        let result: RealtimeToolResult;
+        let result: unknown;
+        let navigation: string | undefined;
+        let pageActionAttempted = false;
         try {
-          const args = JSON.parse(tool.args) as { request?: unknown };
-          if (typeof args.request !== "string")
-            throw Error("语音操作参数不完整，请重新描述");
-          result = (
-            await api(
-              this.path("/tool"),
-              "POST",
-              {
-                callId: tool.callId,
-                request: args.request,
-                tool: tool.name,
-              },
-              undefined,
-              { signal: AbortSignal.timeout(180000) },
-            )
-          ).data as RealtimeToolResult;
-          this.cb.result();
+          const args: unknown = JSON.parse(tool.args);
+          if (isPageToolName(tool.name)) {
+            if (!this.page)
+              throw Error(
+                "本次通话未启用网站内操作，请在网站内模式重新开始通话",
+              );
+            const parsed = (
+              tool.name === "page_observe"
+                ? pageObserveSchema
+                : pageActionSchema
+            ).safeParse(args);
+            if (!parsed.success)
+              throw Error(
+                "页面操作参数不完整或无效，请重新观察页面后使用最新控件引用",
+              );
+            await this.preparePage(id, response);
+            if (tool.name === "page_observe") {
+              const query = pageObserveSchema.parse(parsed.data).query;
+              result = this.page.observe(query);
+            } else {
+              pageActionAttempted = true;
+              result = await this.page.action(
+                pageActionSchema.parse(parsed.data),
+                {
+                  signal: response.cancel.signal,
+                  isCurrent: () => this.current(id),
+                },
+              );
+            }
+          } else {
+            const request =
+              args && typeof args === "object"
+                ? (args as { request?: unknown }).request
+                : undefined;
+            if (typeof request !== "string")
+              throw Error("语音操作参数不完整，请重新描述");
+            const business = (
+              await api(
+                this.path("/tool"),
+                "POST",
+                {
+                  callId: tool.callId,
+                  request,
+                  tool: tool.name,
+                },
+                undefined,
+                { signal: AbortSignal.timeout(180000) },
+              )
+            ).data as RealtimeToolResult;
+            result = business;
+            navigation = business.navigation;
+            this.cb.result();
+          }
         } catch (error) {
           result = {
-            text:
-              (error as Error).name === "TimeoutError"
+            ...(isPageToolName(tool.name)
+              ? { dispatched: pageActionAttempted ? null : false }
+              : {}),
+            text: pageActionAttempted
+              ? "页面操作结果暂未确认，请先重新观察页面，避免重复提交。"
+              : (error as Error).name === "TimeoutError"
                 ? "等待操作结果超时，请在任务或完整对话中核验，不要重复提交"
                 : assistantPublicText((error as Error).message),
           };
@@ -341,7 +452,7 @@ export class QwenRealtimeVoiceSession {
         // An already submitted action remains in the task record, but its old
         // speech/navigation must never resume after interruption or closure.
         if (!this.current(id)) return;
-        if (result.navigation) this.cb.navigate(result.navigation);
+        if (navigation) this.cb.navigate(navigation);
         outputs.push({ callId: tool.callId, result });
       }
       for (const output of outputs) {
@@ -484,6 +595,7 @@ export class QwenRealtimeVoiceSession {
         canceled: !this.allowResponse,
         done: false,
         tools: [],
+        cancel: new AbortController(),
       });
       if (!this.allowResponse) {
         this.sendEvent({ type: "response.cancel" });
@@ -527,7 +639,7 @@ export class QwenRealtimeVoiceSession {
         break;
       case "response.function_call_arguments.done":
         if (
-          !isRealtimeToolName(event.name) ||
+          (!isRealtimeToolName(event.name) && !isPageToolName(event.name)) ||
           typeof event.call_id !== "string" ||
           this.toolIds.has(event.call_id) ||
           response.done
@@ -561,9 +673,12 @@ export class QwenRealtimeVoiceSession {
           return;
         }
         if (response.tools.length) {
-          this.businessUsers.add(response.user);
+          const business = response.tools.some((tool) =>
+            isRealtimeToolName(tool.name),
+          );
+          if (business) this.businessUsers.add(response.user);
           this.pendingTools += response.tools.length;
-          this.cb.business();
+          if (business) this.cb.business();
           this.toolQueue = this.toolQueue
             .then(() => this.executeTools(id, response))
             .catch(() =>
@@ -646,6 +761,7 @@ export class QwenRealtimeVoiceSession {
         provider: string;
         sdp: string;
         configuration: Configuration;
+        pageControl?: boolean;
         expiresAt: string;
       };
       this.registered = true;
@@ -660,6 +776,10 @@ export class QwenRealtimeVoiceSession {
       )
         throw Error("实时语音连接配置不完整，请重新开始");
       this.configuration = result.configuration;
+      if (result.pageControl === true && !options.desktopDeviceId)
+        this.page = new RealtimePageController({
+          navigate: this.cb.navigatePage,
+        });
       await pc.setRemoteDescription({
         type: "answer",
         sdp: String(result.sdp).trim().replace(/\r?\n/g, "\r\n") + "\r\n",
@@ -712,6 +832,8 @@ export class QwenRealtimeVoiceSession {
     this.closed = true;
     this.ready = false;
     this.epoch++;
+    this.responses.forEach((response) => response.cancel.abort());
+    this.page?.close();
     this.request.abort();
     clearTimeout(this.connectTimer);
     clearTimeout(this.disconnectTimer);

@@ -286,6 +286,7 @@ export function PersonalAssistantProvider({
     },
     realtimeStatus.data?.transport,
     realtimeStatus.data?.provider,
+    { prepare: () => setOpen(false), navigate: (path) => navigate(path) },
   );
   // A live call owns its transport until it ends, including configuration refetches.
   const useRealtime =

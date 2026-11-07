@@ -1,7 +1,23 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { qwenRealtimeModel } from "../../packages/contracts/src/assistant-realtime.js";
-const f = vi.hoisted(() => ({ api: vi.fn() }));
+const f = vi.hoisted(() => ({
+  api: vi.fn(),
+  pageCreated: vi.fn(),
+  observe: vi.fn(),
+  action: vi.fn(),
+  closePage: vi.fn(),
+}));
 vi.mock("../../apps/web/src/api.js", () => ({ api: f.api }));
+vi.mock("../../apps/web/src/realtime-page-controller.js", () => ({
+  RealtimePageController: class {
+    constructor(options: unknown) {
+      f.pageCreated(options);
+    }
+    observe = f.observe;
+    action = f.action;
+    close = f.closePage;
+  },
+}));
 import { QwenRealtimeVoiceSession } from "../../apps/web/src/qwen-realtime-voice-session.js";
 
 class Channel {
@@ -75,6 +91,8 @@ const callbacks = () => ({
   result: vi.fn(),
   navigate: vi.fn(),
   business: vi.fn(),
+  preparePage: vi.fn(),
+  navigatePage: vi.fn(),
 });
 let track: {
   enabled: boolean;
@@ -122,6 +140,8 @@ function done(id = "r1", channel = Peer.last.dc) {
   });
 }
 beforeEach(() => {
+  for (const mock of [f.pageCreated, f.observe, f.action, f.closePage])
+    mock.mockReset();
   Peer.ice = "complete";
   track = { enabled: true, onended: null, stop: vi.fn() };
   vi.stubGlobal("navigator", {
@@ -143,6 +163,265 @@ beforeEach(() => {
         ? { data: { text: "已完成", navigation: "analytics" } }
         : { data: { saved: true, closed: true, active: true } },
   );
+});
+
+const observation = {
+  snapshotId: "snapshot-1",
+  path: "/operations?platform=vip",
+  title: "工作区",
+  headings: ["工作区"],
+  text: "更新数据",
+  controls: [
+    {
+      ref: "control-1",
+      role: "button",
+      name: "更新数据",
+      disabled: false,
+      inViewport: true,
+    },
+  ],
+  truncated: false,
+};
+function allowPage() {
+  const normal = f.api.getMockImplementation()!;
+  f.api.mockImplementation(async (...args) => {
+    const result = await normal(...args);
+    return args[0].endsWith("/sessions")
+      ? { ...result, data: { ...result.data, pageControl: true } }
+      : result;
+  });
+  f.observe.mockReturnValue(observation);
+  f.action.mockResolvedValue({
+    text: "已派发点击，请根据页面反馈确认结果",
+    dispatched: true,
+    observation: { ...observation, snapshotId: "snapshot-2", text: "正在更新" },
+  });
+}
+function pageResponse(
+  name: string,
+  args: object,
+  id = "page-response",
+  callId = "page-call",
+) {
+  Peer.last.dc.emit({ type: "response.created", response: { id } });
+  Peer.last.dc.emit({
+    type: "response.function_call_arguments.done",
+    response_id: id,
+    name,
+    call_id: callId,
+    arguments: JSON.stringify(args),
+  });
+  done(id);
+}
+function pageOutput(callId = "page-call") {
+  const item = Peer.last.dc.sent.find(
+    (event) =>
+      event.type === "conversation.item.create" &&
+      (event.item as { call_id?: string })?.call_id === callId,
+  )?.item as { output: string } | undefined;
+  return item ? JSON.parse(item.output) : undefined;
+}
+
+describe("Qwen local website tools", () => {
+  it("observes the current page without a server business call and still saves normal conversation captions", async () => {
+    allowPage();
+    const cb = callbacks();
+    session = new QwenRealtimeVoiceSession(cb);
+    await session.start(options);
+    await ready();
+    Peer.last.dc.emit({
+      type: "input_audio_buffer.speech_started",
+      item_id: "user",
+    });
+    Peer.last.dc.emit({
+      type: "input_audio_buffer.speech_stopped",
+      item_id: "user",
+    });
+    Peer.last.dc.emit({
+      type: "conversation.item.input_audio_transcription.completed",
+      item_id: "user",
+      transcript: "看看当前页面",
+    });
+    pageResponse("page_observe", { query: "更新数据" });
+    await vi.waitFor(() => expect(pageOutput()).toEqual(observation));
+    expect(f.observe).toHaveBeenCalledExactlyOnceWith("更新数据");
+    expect(cb.preparePage).toHaveBeenCalledOnce();
+    expect(cb.business).not.toHaveBeenCalled();
+    expect(
+      f.api.mock.calls.filter(([path]) => path.endsWith("/tool")),
+    ).toHaveLength(0);
+    Peer.last.dc.emit({ type: "response.created", response: { id: "answer" } });
+    Peer.last.dc.emit({
+      type: "response.audio_transcript.done",
+      response_id: "answer",
+      transcript: "当前页面有更新数据按钮",
+    });
+    done("answer");
+    await vi.waitFor(() =>
+      expect(
+        f.api.mock.calls.some(([path]) => path.endsWith("/captions")),
+      ).toBe(true),
+    );
+  });
+  it("executes one referenced action and returns its actual observation while navigation stays in the same call", async () => {
+    allowPage();
+    const cb = callbacks();
+    session = new QwenRealtimeVoiceSession(cb);
+    await session.start(options);
+    await ready();
+    const args = {
+      snapshotId: "snapshot-1",
+      ref: "control-1",
+      action: "click",
+    };
+    pageResponse("page_action", args);
+    await vi.waitFor(() => expect(f.action).toHaveBeenCalledOnce());
+    const context = f.action.mock.calls[0][1];
+    expect(context.signal).toBeInstanceOf(AbortSignal);
+    expect(context.isCurrent()).toBe(true);
+    expect(f.action.mock.calls[0][0]).toEqual(args);
+    await vi.waitFor(() =>
+      expect(pageOutput()).toMatchObject({
+        dispatched: true,
+        observation: { text: "正在更新" },
+      }),
+    );
+    f.pageCreated.mock.calls[0][0].navigate("/operations?platform=vip");
+    expect(cb.navigatePage).toHaveBeenCalledExactlyOnceWith(
+      "/operations?platform=vip",
+    );
+    expect(Peer.last.dc.readyState).toBe("open");
+    expect(
+      f.api.mock.calls.filter(([path]) => path.endsWith("/sessions")),
+    ).toHaveLength(1);
+    expect(cb.business).not.toHaveBeenCalled();
+  });
+  it.each(["no-capability", "desktop"])(
+    "does not run local page tools for %s sessions",
+    async (kind) => {
+      if (kind === "desktop") allowPage();
+      session = new QwenRealtimeVoiceSession(callbacks());
+      await session.start({
+        ...options,
+        ...(kind === "desktop" ? { desktopDeviceId: "selected-device" } : {}),
+      });
+      await ready();
+      pageResponse("page_action", {
+        snapshotId: "s",
+        ref: "r",
+        action: "click",
+      });
+      await vi.waitFor(() =>
+        expect(pageOutput()).toMatchObject({
+          dispatched: false,
+          text: expect.stringContaining("未启用"),
+        }),
+      );
+      expect(f.pageCreated).not.toHaveBeenCalled();
+      expect(f.action).not.toHaveBeenCalled();
+      expect(
+        f.api.mock.calls.filter(([path]) => path.endsWith("/tool")),
+      ).toHaveLength(0);
+    },
+  );
+  it("rejects unknown action fields before preparing or touching the page", async () => {
+    allowPage();
+    const cb = callbacks();
+    session = new QwenRealtimeVoiceSession(cb);
+    await session.start(options);
+    await ready();
+    pageResponse("page_action", {
+      snapshotId: "s",
+      ref: "r",
+      action: "click",
+      javascript: "anything",
+    });
+    await vi.waitFor(() =>
+      expect(pageOutput()).toMatchObject({
+        dispatched: false,
+        text: expect.stringContaining("参数"),
+      }),
+    );
+    expect(cb.preparePage).not.toHaveBeenCalled();
+    expect(f.action).not.toHaveBeenCalled();
+  });
+  it("returns stale-reference feedback without claiming a click succeeded", async () => {
+    allowPage();
+    const blocked = {
+      text: "页面已变化，请重新观察",
+      dispatched: false,
+      observation,
+    };
+    f.action.mockResolvedValue(blocked);
+    session = new QwenRealtimeVoiceSession(callbacks());
+    await session.start(options);
+    await ready();
+    pageResponse("page_action", {
+      snapshotId: "old",
+      ref: "r",
+      action: "click",
+    });
+    await vi.waitFor(() => expect(pageOutput()).toEqual(blocked));
+  });
+  it("cancels during drawer settling before an action can start", async () => {
+    allowPage();
+    const cb = callbacks();
+    session = new QwenRealtimeVoiceSession(cb);
+    await session.start(options);
+    await ready();
+    pageResponse("page_action", { snapshotId: "s", ref: "r", action: "click" });
+    await settle();
+    expect(cb.preparePage).toHaveBeenCalledOnce();
+    session.interrupt();
+    await settle();
+    expect(f.action).not.toHaveBeenCalled();
+    expect(pageOutput()).toBeUndefined();
+  });
+  it.each(["interrupt", "close"])(
+    "aborts an in-flight local action on %s and suppresses its late continuation",
+    async (kind) => {
+      allowPage();
+      let resolve!: (value: unknown) => void;
+      f.action.mockImplementation(
+        () =>
+          new Promise((r) => {
+            resolve = r;
+          }),
+      );
+      session = new QwenRealtimeVoiceSession(callbacks());
+      await session.start(options);
+      await ready();
+      pageResponse("page_action", {
+        snapshotId: "s",
+        ref: "r",
+        action: "click",
+      });
+      await vi.waitFor(() => expect(f.action).toHaveBeenCalledOnce());
+      const context = f.action.mock.calls[0][1];
+      if (kind === "interrupt") session.interrupt();
+      else session.stop();
+      expect(context.signal.aborted).toBe(true);
+      expect(context.isCurrent()).toBe(false);
+      resolve({ text: "点击已派发", dispatched: true, observation });
+      await settle();
+      expect(pageOutput()).toBeUndefined();
+      if (kind === "close") expect(f.closePage).toHaveBeenCalledOnce();
+    },
+  );
+  it("reports an uncertain action exception without asserting failure or success that could invite duplicate submission", async () => {
+    allowPage();
+    f.action.mockRejectedValue(Error("unexpected error after dispatch"));
+    session = new QwenRealtimeVoiceSession(callbacks());
+    await session.start(options);
+    await ready();
+    pageResponse("page_action", { snapshotId: "s", ref: "r", action: "click" });
+    await vi.waitFor(() =>
+      expect(pageOutput()).toMatchObject({
+        dispatched: null,
+        text: expect.stringContaining("避免重复"),
+      }),
+    );
+  });
 });
 afterEach(() => {
   session?.stop();

@@ -13,6 +13,7 @@ export function useRealtimeVoice(
   onNavigate: (id: string) => void,
   transport: "webrtc" | "websocket" = "webrtc",
   provider: "openai" | "doubao" | "qwen" = "openai",
+  page?: { prepare: () => void; navigate: (path: string) => void },
 ) {
   const [state, setState] = useState<VoiceState>("idle"),
     [muted, setMuted] = useState(false);
@@ -25,8 +26,8 @@ export function useRealtimeVoice(
     RealtimeVoiceSession | DoubaoVoiceSession | QwenRealtimeVoiceSession | null
   >(null);
   const generation = useRef(0);
-  const callbacks = useRef({ onResult, onNavigate });
-  callbacks.current = { onResult, onNavigate };
+  const callbacks = useRef({ onResult, onNavigate, page });
+  callbacks.current = { onResult, onNavigate, page };
   const supported =
     window.isSecureContext &&
     typeof navigator.mediaDevices?.getUserMedia === "function" &&
@@ -81,6 +82,8 @@ export function useRealtimeVoice(
       result: () => callbacks.current.onResult(),
       navigate: (id) => callbacks.current.onNavigate(id),
       business: () => setHasBusiness(true),
+      preparePage: () => callbacks.current.page?.prepare(),
+      navigatePage: (path) => callbacks.current.page?.navigate(path),
     });
     current.current = call;
     await call.start(options);

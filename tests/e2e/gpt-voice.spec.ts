@@ -4,6 +4,10 @@ import {
 } from "./assistant-controls.js";
 import { expect, test, type Page, type WebSocketRoute } from "@playwright/test";
 import type { RealtimeStatus } from "../../packages/contracts/src/assistant-realtime.js";
+import type {
+  PageObservation,
+  PageActionResult,
+} from "../../packages/contracts/src/assistant-page.js";
 
 declare global {
   interface Window {
@@ -170,6 +174,7 @@ async function qwenRtcFixture(page: Page, holdConfiguration = false) {
         data = {
           provider: "qwen",
           transport: "webrtc",
+          pageControl: !body.desktopDeviceId,
           sdp: await page.evaluate(
             (sdp) => window.qwenRTCTest.answer(sdp),
             body.sdp,
@@ -208,32 +213,203 @@ async function qwenRtcFixture(page: Page, holdConfiguration = false) {
   return { starts, tools, writes };
 }
 
-async function sendQwenTool(page: Page, callId: string, tool: string) {
+async function sendQwenTool(
+  page: Page,
+  callId: string,
+  tool: string,
+  args: Record<string, unknown> = { request: callId },
+  newTurn = true,
+  interrupt = false,
+) {
   await page.evaluate(
-    ({ callId, tool }) => {
+    ({ callId, tool, args, newTurn, interrupt }) => {
       const send = window.qwenRTCTest.send;
       const id = `response-${callId}`;
-      send({
-        type: "input_audio_buffer.speech_started",
-        item_id: `user-${callId}`,
-      });
-      send({
-        type: "input_audio_buffer.speech_stopped",
-        item_id: `user-${callId}`,
-      });
+      if (newTurn) {
+        send({
+          type: "input_audio_buffer.speech_started",
+          item_id: `user-${callId}`,
+        });
+        send({
+          type: "input_audio_buffer.speech_stopped",
+          item_id: `user-${callId}`,
+        });
+      }
       send({ type: "response.created", response: { id } });
       send({
         type: "response.function_call_arguments.done",
         response_id: id,
         name: tool,
         call_id: callId,
-        arguments: JSON.stringify({ request: callId }),
+        arguments: JSON.stringify(args),
       });
       send({ type: "response.done", response: { id, status: "completed" } });
+      if (interrupt) {
+        send({
+          type: "input_audio_buffer.speech_started",
+          item_id: "interrupt-page-action",
+        });
+        send({
+          type: "input_audio_buffer.speech_stopped",
+          item_id: "interrupt-page-action",
+        });
+      }
     },
-    { callId, tool },
+    { callId, tool, args, newTurn, interrupt },
   );
 }
+
+async function qwenToolOutput<T>(page: Page, callId: string): Promise<T> {
+  const output = () =>
+    page.evaluate((id) => {
+      const event = window.qwenRTCTest.events.find((event) => {
+        const item = event.item as { call_id?: string } | undefined;
+        return (
+          event.type === "conversation.item.create" && item?.call_id === id
+        );
+      });
+      return (event?.item as { output?: string } | undefined)?.output;
+    }, callId);
+  await expect.poll(output).toBeTruthy();
+  return JSON.parse((await output())!) as T;
+}
+
+test("千问实时语音观察并点击任意新控件，跨业务页继续且打断后不派发旧动作", async ({
+  page,
+}) => {
+  const { bubble } = await fixture(page, { configured: false });
+  const { starts, tools } = await qwenRtcFixture(page);
+  const pageErrors: string[] = [];
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+  await page.reload();
+  await page.locator(".companion-launch").click();
+  await expect(bubble.getByRole("status")).toHaveText("实时聆听中，你说");
+  const arbitrary = `动态按钮-${crypto.randomUUID().slice(0, 8)}`;
+  await page.evaluate((name) => {
+    const panel = document.createElement("section");
+    panel.id = "voice-arbitrary-page";
+    panel.style.cssText =
+      "position:fixed;top:240px;left:420px;z-index:60;padding:20px;background:#fff;color:#111";
+    const button = document.createElement("button");
+    button.textContent = name;
+    button.onclick = () => {
+      panel.dataset.count = String(Number(panel.dataset.count || 0) + 1);
+    };
+    const link = document.createElement("a");
+    link.href = "/analytics/compass";
+    link.textContent = "任意业务页面链接";
+    panel.append(button, link);
+    document.body.append(panel);
+  }, arbitrary);
+  await sendQwenTool(page, "observe-a", "page_observe", { query: arbitrary });
+  const first = await qwenToolOutput<PageObservation>(page, "observe-a");
+  const target = first.controls.find((control) => control.name === arbitrary)!;
+  expect(target).toBeTruthy();
+  await sendQwenTool(
+    page,
+    "click-a",
+    "page_action",
+    { snapshotId: first.snapshotId, ref: target.ref, action: "click" },
+    false,
+  );
+  expect(
+    (await qwenToolOutput<PageActionResult>(page, "click-a")).dispatched,
+  ).toBe(true);
+  await expect(page.locator("#voice-arbitrary-page")).toHaveAttribute(
+    "data-count",
+    "1",
+  );
+  await sendQwenTool(
+    page,
+    "observe-link",
+    "page_observe",
+    { query: "任意业务页面链接" },
+    false,
+  );
+  const link = await qwenToolOutput<PageObservation>(page, "observe-link");
+  await sendQwenTool(
+    page,
+    "click-link",
+    "page_action",
+    {
+      snapshotId: link.snapshotId,
+      ref: link.controls.find((control) => control.name === "任意业务页面链接")!
+        .ref,
+      action: "click",
+    },
+    false,
+  );
+  expect(
+    (await qwenToolOutput<PageActionResult>(page, "click-link")).dispatched,
+  ).toBe(true);
+  await expect(page).toHaveURL(/\/analytics\/compass$/);
+  const next = `新页面控件-${crypto.randomUUID().slice(0, 8)}`;
+  await page.evaluate((name) => {
+    const panel = document.querySelector<HTMLElement>("#voice-arbitrary-page")!;
+    panel.replaceChildren();
+    panel.dataset.count = "0";
+    const button = document.createElement("button");
+    button.textContent = name;
+    button.onclick = () => {
+      panel.dataset.count = String(Number(panel.dataset.count || 0) + 1);
+    };
+    panel.append(button);
+  }, next);
+  await sendQwenTool(page, "observe-b", "page_observe", { query: next }, false);
+  const second = await qwenToolOutput<PageObservation>(page, "observe-b");
+  expect(second.path).toContain("/analytics/compass");
+  await sendQwenTool(
+    page,
+    "interrupted-click",
+    "page_action",
+    {
+      snapshotId: second.snapshotId,
+      ref: second.controls.find((control) => control.name === next)!.ref,
+      action: "click",
+    },
+    false,
+    true,
+  );
+  // A later observation completes after the canceled action's queue position.
+  await sendQwenTool(
+    page,
+    "observe-after-interrupt",
+    "page_observe",
+    { query: next },
+    false,
+  );
+  const after = await qwenToolOutput<PageObservation>(
+    page,
+    "observe-after-interrupt",
+  );
+  await expect(page.locator("#voice-arbitrary-page")).toHaveAttribute(
+    "data-count",
+    "0",
+  );
+  await sendQwenTool(
+    page,
+    "click-b",
+    "page_action",
+    {
+      snapshotId: after.snapshotId,
+      ref: after.controls.find((control) => control.name === next)!.ref,
+      action: "click",
+    },
+    false,
+  );
+  expect(
+    (await qwenToolOutput<PageActionResult>(page, "click-b")).dispatched,
+  ).toBe(true);
+  await expect(page.locator("#voice-arbitrary-page")).toHaveAttribute(
+    "data-count",
+    "1",
+  );
+  expect(tools).toHaveLength(0);
+  expect(starts).toHaveLength(1);
+  expect(await page.evaluate(() => window.gptVoiceTest.starts)).toBe(1);
+  expect(pageErrors).toEqual([]);
+  await bubble.getByRole("button", { name: "结束语音", exact: true }).click();
+});
 
 test("千问实时语音绑定所选电脑，刷新电脑任务并在同一通话返回工作台", async ({
   page,
@@ -846,6 +1022,8 @@ async function fixture(
         defaults: { name: "工作台", description: "", tools: [] },
       };
     if (path === "/my-workspace/content") data = { items: [], hasMore: false };
+    if (path === "/analytics/compass")
+      data = { empty: true, summary: {}, top: [], sources: [] };
     if (path === "/my-workspace/activity")
       data = { items: [], serverTime: "2026-11-03T00:00:00Z" };
     if (path === "/my-workspace/assistant/memory")

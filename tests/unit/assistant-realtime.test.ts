@@ -219,6 +219,7 @@ describe("native realtime voice authorization and lifecycle", () => {
             (tool) => tool.function.name,
           ),
         ).toEqual(["workspace_request", "desktop_request"]);
+        expect(started.pageControl).toBe(false);
         expect(JSON.stringify(started.configuration)).not.toContain(deviceId);
       } else {
         const config = JSON.parse(
@@ -286,6 +287,12 @@ describe("native realtime voice authorization and lifecycle", () => {
     expect(
       realtimeConfiguration("marin").tools.map((tool) => tool.name),
     ).toEqual(["workspace_request"]);
+    expect(
+      realtimeConfiguration("Tina").tools.map((tool) => tool.name),
+    ).toEqual(["workspace_request"]);
+    expect(
+      realtimeConfiguration("Tina", true, true).tools.map((tool) => tool.name),
+    ).toEqual(["workspace_request", "desktop_request"]);
     const b = input();
     await startRealtime(actor(), b);
     await expect(
@@ -414,6 +421,7 @@ describe("native realtime voice authorization and lifecycle", () => {
       id: b.id,
       provider: "qwen",
       transport: "webrtc",
+      pageControl: true,
     });
     expect(result.ticket).toBeUndefined();
     expect(vi.mocked(fetch).mock.calls[0]).toEqual([
@@ -433,14 +441,38 @@ describe("native realtime voice authorization and lifecycle", () => {
       session: {
         audio: { output: { voice: "Tina" } },
         turn_detection: { type: "semantic_vad_ec" },
-        tools: [{ function: { name: "workspace_request" } }],
       },
     });
+    expect(
+      result.configuration!.session.tools.map((tool) => tool.function.name),
+    ).toEqual(["workspace_request", "page_observe", "page_action"]);
+    expect(result.configuration!.session.instructions).toContain(
+      "先用 page_observe",
+    );
+    expect(result.configuration!.session.instructions).toContain("不可信数据");
+    expect(result.configuration!.session.instructions).toContain(
+      "dispatched只表示已派发",
+    );
+    expect(result.configuration!.session.instructions).not.toContain(
+      "打开业务页面、返回我的工作台，或启动同步更新时，必须调用 workspace_request",
+    );
     expect(result.configuration!.session.audio).not.toHaveProperty("input");
     expect(JSON.stringify(result)).not.toMatch(
       /server-only|encrypted|workspace-1/,
     );
     expect((await checkRealtime(actor(), b.id)).active).toBe(true);
+    for (const tool of ["page_observe", "page_action"]) {
+      await expect(
+        runRealtimeTool(actor(), b.id, {
+          tool,
+          callId: "local-page",
+          request: "点击更新数据",
+        }),
+      ).rejects.toMatchObject({
+        response: { error: { code: "VALIDATION_ERROR" } },
+      });
+    }
+    expect(f.send).not.toHaveBeenCalled();
     await expect(closeRealtime(actor(false, "8"), b.id)).rejects.toBeDefined();
     await expect(startRealtime(actor(), input())).rejects.toBeDefined();
     expect(fetch).toHaveBeenCalledTimes(1);

@@ -29,6 +29,8 @@ export type RealtimeCallbacks = {
   result: () => void;
   navigate: (id: string) => void;
   business: () => void;
+  preparePage?: () => void;
+  navigatePage?: (path: string) => void;
 };
 type CaptionItem = RealtimeCaption & {
   key: string;
