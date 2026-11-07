@@ -306,6 +306,33 @@ describe("native realtime voice authorization and lifecycle", () => {
     });
     expect(f.send).not.toHaveBeenCalled();
   });
+  it("routes requested page views through complete goals while retaining factual queries and read-only observations", () => {
+    const config = realtimeConfiguration("Tina", false, true);
+    expect(config.instructions).toMatch(
+      /打开或查看某个页面、报表视图.*组合时间范围、分析维度、筛选条件.*先调用 page_task_start/,
+    );
+    expect(config.instructions).toMatch(
+      /只要求观察当前已经显示的页面内容.*可直接调用 page_observe，无需建立写操作目标/,
+    );
+    expect(config.instructions).toMatch(
+      /只有用户要具体数值、业务事实、汇总解释.*才调用 workspace_request/,
+    );
+    expect(config.instructions).toContain("不按模块名称或单个词语分流");
+    expect(config.instructions).not.toContain("先用 page_observe");
+    const business = config.tools.find(
+      (tool) => tool.name === "workspace_request",
+    )!;
+    expect(business.description).toContain("具体数值、业务事实、汇总解释");
+    expect(business.description).toMatch(
+      /报表视图.*时间范围、分析维度或筛选条件.*先调用 page_task_start/,
+    );
+    expect(business.description).toContain(
+      "已建立的网页目标经实际观察确认没有对应导航入口",
+    );
+    expect(
+      realtimeConfiguration("Tina", true, true).instructions,
+    ).not.toContain("page_task_start");
+  });
   it("rejects foreign, offline, revoked devices and non-visual capabilities before starting a call", async () => {
     const id = randomUUID();
     await f.db!.query(
@@ -458,7 +485,7 @@ describe("native realtime voice authorization and lifecycle", () => {
       "page_wait",
     ]);
     expect(result.configuration!.session.instructions).toContain(
-      "先用 page_observe",
+      "先调用 page_task_start 保留完整目标及条件",
     );
     expect(result.configuration!.session.instructions).toContain("不可信数据");
     expect(result.configuration!.session.instructions).toContain(
