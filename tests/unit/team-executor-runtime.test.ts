@@ -47,6 +47,7 @@ vi.mock("../../apps/api/src/modules/analytics/secrets.js", () => ({
 }));
 vi.mock("../../apps/api/src/modules/workspace/team-models.js", () => ({
   resolveTeamModel: f.route,
+  resolveTeamImageModel: async () => ({ id: "engine/image" }),
 }));
 vi.mock("../../apps/api/src/modules/workspace/team-video.js", () => ({
   publicTeamVideoCatalog: async () => [],
@@ -143,7 +144,246 @@ async function runRow() {
   );
   return { run: { id, user_id: "1", input }, lease };
 }
+function startDocumentScenario(kind = "document", memberId = "writing") {
+  f.fetch
+    .mockResolvedValueOnce(
+      response({
+        summary: "交付实际产物",
+        steps: [
+          {
+            id: "write",
+            title: "实际产物",
+            memberId,
+            instruction: "交付完整内容和文件",
+            dependencies: [],
+            difficulty: "simple",
+            deliverable: kind,
+            acceptance: ["实际产物完整且可使用"],
+          },
+        ],
+      }),
+    )
+    .mockResolvedValueOnce(response({ brief: "按工具真实结果交付" }));
+}
+function toolResponse(name = "create_document") {
+  return Response.json({
+    model: "test/model",
+    choices: [
+      {
+        message: {
+          content: null,
+          tool_calls: [
+            {
+              id: "create-once",
+              type: "function",
+              function: {
+                name,
+                arguments: JSON.stringify({
+                  title: "说明",
+                  format: "txt",
+                  sections: [
+                    { heading: "说明", text: "实际文件正文", rows: [] },
+                  ],
+                }),
+              },
+            },
+          ],
+        },
+      },
+    ],
+  });
+}
+function finishDocumentScenario() {
+  f.fetch
+    .mockResolvedValueOnce(
+      response({ accepted: true, review: "实际文件已核对" }),
+    )
+    .mockResolvedValueOnce(response({ summary: "已验收文件", tags: ["说明"] }))
+    .mockResolvedValueOnce(response({ summary: "真实文件已完成并验收" }));
+}
+function successfulFileJob(runId: string) {
+  const fileId = randomUUID(),
+    jobId = randomUUID();
+  f.queue.mockImplementation(async () => {
+    await f.db!.query(
+      "INSERT INTO personal_assistant_files VALUES($1,1,'说明.txt','text/plain',12,'generated','{}',now(),$2,'实际文件正文')",
+      [fileId, Buffer.from("实际文件正文")],
+    );
+    await f.db!.query(
+      "INSERT INTO personal_assistant_jobs(id,user_id,request_id,status,output_ids) VALUES($1,1,$2,'DONE',$3::jsonb)",
+      [jobId, runId, JSON.stringify([fileId])],
+    );
+    return { id: jobId, status: "QUEUED" };
+  });
+  return { fileId, jobId };
+}
 describe("production team adapter", () => {
+  it("corrects a completed document with no file once, calls the real job path, then resumes strict final JSON", async () => {
+    const { run, lease } = await runRow(),
+      { fileId } = successfulFileJob(run.id);
+    startDocumentScenario();
+    f.fetch
+      .mockResolvedValueOnce(
+        response({ status: "completed", content: "这里是完整的说明正文。" }),
+      )
+      .mockResolvedValueOnce(toolResponse())
+      .mockResolvedValueOnce(
+        response({
+          status: "completed",
+          content: "实际文件已生成，内容为完整说明。",
+        }),
+      );
+    finishDocumentScenario();
+    const result = await runTeamExecution(
+      c,
+      run,
+      lease,
+      new AbortController().signal,
+    );
+    expect(result.status).toBe("DONE");
+    expect(result.artifacts[0].fileIds).toEqual([fileId]);
+    expect(f.queue).toHaveBeenCalledTimes(1);
+    const execution = f.fetch.mock.calls
+      .map((call) => JSON.parse(call[1].body))
+      .filter((body) => body.tools?.length);
+    expect(execution).toHaveLength(3);
+    expect(execution[0].response_format).toBeUndefined();
+    expect(execution[1]).toMatchObject({
+      tool_choice: { type: "function", function: { name: "create_document" } },
+    });
+    expect(execution[1].response_format).toBeUndefined();
+    expect(execution[2]).toMatchObject({
+      tool_choice: "none",
+      response_format: { json_schema: { name: "team_execute", strict: true } },
+    });
+  });
+  it("accepts plain working text through a final-schema decision before a bounded missing-file correction", async () => {
+    const { run, lease } = await runRow();
+    successfulFileJob(run.id);
+    startDocumentScenario();
+    f.fetch
+      .mockResolvedValueOnce(
+        Response.json({
+          model: "test/model",
+          choices: [{ message: { content: "这是已经写好的说明正文。" } }],
+        }),
+      )
+      .mockResolvedValueOnce(
+        response({ status: "completed", content: "这是完整说明正文。" }),
+      )
+      .mockResolvedValueOnce(toolResponse())
+      .mockResolvedValueOnce(
+        response({ status: "completed", content: "实际文件完成。" }),
+      );
+    finishDocumentScenario();
+    expect(
+      (await runTeamExecution(c, run, lease, new AbortController().signal))
+        .status,
+    ).toBe("DONE");
+    const execution = f.fetch.mock.calls
+      .map((call) => JSON.parse(call[1].body))
+      .filter((body) => body.tools?.length);
+    expect(execution).toHaveLength(4);
+    expect(execution[1].response_format.json_schema.name).toBe("team_execute");
+    expect(f.queue).toHaveBeenCalledTimes(1);
+  });
+  it("honors explicit missing-input needs_user without forcing file creation", async () => {
+    const { run, lease } = await runRow();
+    startDocumentScenario();
+    f.fetch
+      .mockResolvedValueOnce(
+        response({
+          status: "needs_user",
+          content: "缺少应作为依据的原始商品数据。",
+        }),
+      )
+      .mockResolvedValueOnce(
+        response({ summary: "缺少原始商品数据，未创建文件。" }),
+      );
+    const result = await runTeamExecution(
+      c,
+      run,
+      lease,
+      new AbortController().signal,
+    );
+    expect(result.status).toBe("NEEDS_USER");
+    expect(f.queue).not.toHaveBeenCalled();
+    expect(f.fetch).toHaveBeenCalledTimes(4);
+  });
+  it("does not retry a failed file tool after the one-time correction", async () => {
+    const { run, lease } = await runRow();
+    startDocumentScenario();
+    f.fetch
+      .mockResolvedValueOnce(
+        response({ status: "completed", content: "完整正文。" }),
+      )
+      .mockResolvedValueOnce(toolResponse())
+      .mockResolvedValueOnce(
+        response({ summary: "文件工具失败，未完成交付。" }),
+      );
+    f.queue.mockRejectedValueOnce(Error("任务文件生成失败"));
+    const result = await runTeamExecution(
+      c,
+      run,
+      lease,
+      new AbortController().signal,
+    );
+    expect(result.status).toBe("NEEDS_USER");
+    expect(f.queue).toHaveBeenCalledTimes(1);
+    expect(f.fetch).toHaveBeenCalledTimes(5);
+  });
+  it("does not keep correcting repeated completed claims without tool evidence", async () => {
+    const { run, lease } = await runRow();
+    startDocumentScenario();
+    f.fetch
+      .mockResolvedValueOnce(
+        response({ status: "completed", content: "完整正文。" }),
+      )
+      .mockResolvedValueOnce(
+        response({ status: "completed", content: "仍然只有正文。" }),
+      )
+      .mockResolvedValueOnce(
+        response({ summary: "执行成员没有完成真实文件交付。" }),
+      );
+    const result = await runTeamExecution(
+      c,
+      run,
+      lease,
+      new AbortController().signal,
+    );
+    expect(result.status).toBe("NEEDS_USER");
+    expect(f.queue).not.toHaveBeenCalled();
+    expect(f.fetch).toHaveBeenCalledTimes(5);
+    expect(result.state.steps[0].error).toContain("不表示系统缺少该能力");
+  });
+  it("does not force another image generation after a successful tool receipt lacks the required file type", async () => {
+    const { run, lease } = await runRow();
+    successfulFileJob(run.id);
+    startDocumentScenario("image", "design");
+    f.fetch
+      .mockResolvedValueOnce(toolResponse("generate_image"))
+      .mockResolvedValueOnce(
+        response({ status: "completed", content: "已完成。" }),
+      )
+      .mockResolvedValueOnce(
+        response({ summary: "执行成员没有交付要求的图片文件。" }),
+      );
+    const result = await runTeamExecution(
+      c,
+      run,
+      lease,
+      new AbortController().signal,
+    );
+    expect(result.status).toBe("NEEDS_USER");
+    expect(f.queue).toHaveBeenCalledTimes(1);
+    expect(f.fetch).toHaveBeenCalledTimes(5);
+    const execution = f.fetch.mock.calls
+      .map((call) => JSON.parse(call[1].body))
+      .filter((body) => body.tools?.length);
+    expect(
+      execution.every((body) => typeof body.tool_choice === "string"),
+    ).toBe(true);
+  });
   it("persists a real file result through planning, queue completion, source review, archive and final status", async () => {
     const { run, lease } = await runRow(),
       fileId = randomUUID(),
@@ -262,7 +502,7 @@ describe("production team adapter", () => {
       f.route.mock.calls.every((call) => call[0].taskModel === "engine/fixed"),
     ).toBe(true);
     const reviewBody = bodies.find(
-      (body) => body.response_format.json_schema.name === "team_review",
+      (body) => body.response_format?.json_schema.name === "team_review",
     );
     expect(JSON.stringify(reviewBody.messages)).toContain("实际文件正文");
   });
@@ -296,7 +536,7 @@ describe("production team adapter", () => {
     const { run, lease } = await runRow();
     f.fetch.mockImplementation(async (_url, options) => {
       const body = JSON.parse(options.body);
-      switch (body.response_format.json_schema.name) {
+      switch (body.response_format?.json_schema.name || "team_execute") {
         case "team_plan":
           return response({
             summary: "创作文字",
