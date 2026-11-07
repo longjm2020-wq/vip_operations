@@ -420,7 +420,10 @@ export async function executeTeamRun(
                 fileIds: [],
                 prompt: JSON.stringify({
                   artifact: {
-                    ...artifact,
+                    title: artifact.title,
+                    kind: artifact.kind,
+                    content: artifact.content,
+                    citations: artifact.citations,
                     files: artifact.files.map((f) => ({
                       id: f.id,
                       name: f.name,
@@ -428,7 +431,7 @@ export async function executeTeamRun(
                     })),
                   },
                   instruction:
-                    "仅输出简短检索摘要和标签：summary 200字以内，tags 最多5项，不展开验收分析或重述全文。保持事实与来源边界，不改变正文、不增加未验证结论。原始产物和验收意见已由系统保存。",
+                    "仅输出稳定的内容摘要和主题标签：summary 200字以内，tags 最多5项，只描述产物主题、内容、用途和文件格式，不展开验收分析或重述全文。该成果已通过独立验收，归档保存由系统完成；不要将DRAFT、待归档、待验收、已提交等暂态流程信息写入摘要或标签。保持事实与来源边界，不改变正文、不增加未验证结论。",
                 }),
               })
             ).data,
