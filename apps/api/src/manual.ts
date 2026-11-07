@@ -38,6 +38,7 @@ export const manualPermissions: Record<string, string | null> = {
   "37-image-batch-naming": null,
   "38-jushuitan-inventory": "inventory.read",
   "39-assistant-desktop": null,
+  "40-assistant-team": null,
 };
 export function canReadManual(
   actor: Actor,
@@ -46,7 +47,7 @@ export function canReadManual(
 ) {
   return (
     (!permission || actor.permissions.includes(permission)) &&
-    (id !== "39-assistant-desktop" || canUsePersonalAssistant(actor)) &&
+    (!["39-assistant-desktop", "40-assistant-team"].includes(id) || canUsePersonalAssistant(actor)) &&
     (id !== "37-image-batch-naming" || ["product.read", "selection.read", "project.read"].some(value => actor.permissions.includes(value))) &&
     (id !== "31-ai-settings" || !!actor.roleCodes?.includes("SUPER_ADMIN"))
   );

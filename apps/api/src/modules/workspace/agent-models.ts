@@ -11,11 +11,16 @@ export const modelRef = (id: string) =>
   "engine/" + createHash("sha256").update(id).digest("hex").slice(0, 24);
 const flashModel = "deepseek/deepseek-v4.1-flash-1017";
 const flashCanonicalModel = "deepseek/deepseek-v4.1-flash-20261017";
-type Model = AgentModel & { actual: string; reasoningEffort?: "none" };
-type ImageModel = AgentCatalog["imageModels"][number] & {
+export type AgentInternalModel = AgentModel & {
+  actual: string;
+  reasoningEffort?: "none";
+};
+type Model = AgentInternalModel;
+export type AgentInternalImageModel = AgentCatalog["imageModels"][number] & {
   actual: string;
   aspects: string[];
 };
+type ImageModel = AgentInternalImageModel;
 const primary: Model = {
   id: modelRef(COMPASS_AI_MODEL),
   actual: COMPASS_AI_MODEL,
@@ -161,6 +166,15 @@ export async function publicAgentCatalog(): Promise<AgentCatalog> {
       data.models.length === 1
         ? "服务列表暂未完整加载，可继续使用通用助手。"
         : "",
+  };
+}
+/** Server-only routing metadata; the existing public capability menu is unchanged. */
+export async function agentModelCandidates() {
+  const data = await catalog();
+  return {
+    models: data.models.map((model) => ({ ...model })),
+    imageModels: data.imageModels.map((model) => ({ ...model })),
+    defaultModel: primary.id,
   };
 }
 export async function resolveAgentModel(ref?: string) {

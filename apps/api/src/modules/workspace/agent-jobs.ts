@@ -11,6 +11,7 @@ import {
   documentJobSchema,
   imageJobSchema,
   videoJobSchema,
+  videoGenerationSchema,
   type AgentJob,
 } from "../../../../../packages/contracts/src/assistant-agent.js";
 import { assistantPublicText } from "../../../../../packages/contracts/src/ai-presentation.js";
@@ -27,6 +28,7 @@ import { createAgentDocument } from "./agent-documents.js";
 import { editVideo } from "./agent-media.js";
 import { decryptSecret, encryptionReady } from "../analytics/secrets.js";
 import sharp from "sharp";
+import { generateTeamVideo, resolveTeamVideoModel } from "./team-video.js";
 
 const common = {
   title: { type: "string", description: "简短的文件/任务名称" },
@@ -137,6 +139,8 @@ export async function queueAgentJob(
   callId: string,
   allowedIds: string[],
   imageRef?: string,
+  videoRef?: string,
+  teamLease?: string,
 ) {
   requireAssistant(c);
   if (args.length > 100000)
@@ -152,7 +156,7 @@ export async function queueAgentJob(
       ? "document"
       : name === "generate_image"
         ? "image"
-        : name === "edit_video"
+        : name === "edit_video" || name === "generate_video"
           ? "video"
           : null;
   if (!kind) fail("TOOL_INVALID", "工具不可用", 400);
@@ -161,11 +165,13 @@ export async function queueAgentJob(
       ? parse(documentJobSchema, value)
       : kind === "image"
         ? parse(imageJobSchema, value)
-        : parse(videoJobSchema, value);
+        : name === "generate_video"
+          ? parse(videoGenerationSchema, value)
+          : parse(videoJobSchema, value);
   const body: Row = { ...parsed };
   body.title = assistantPublicText(body.title);
   const refs: string[] =
-    kind === "image"
+    kind === "image" || name === "generate_video"
       ? body.referenceIds
       : kind === "video"
         ? body.clips.map((clip: Row) => clip.fileId)
@@ -188,7 +194,19 @@ export async function queueAgentJob(
       fail("IMAGE_REFERENCE", "所选图像能力不支持参考图，请重新选择", 400);
     body.model = model.actual;
   }
-  if (kind === "video")
+  if (name === "generate_video") {
+    if (files.some((f) => !f.mime.startsWith("image/")))
+      fail("FILE_TYPE", "视频生成参考素材必须为图片", 400);
+    const selected = await resolveTeamVideoModel(
+      c,
+      videoRef,
+      body as { duration: number; aspectRatio: string; referenceIds: string[] },
+    );
+    body.generation = true;
+    body.videoSelection = selected.selection;
+    body.model = selected.info.model;
+  }
+  if (kind === "video" && name !== "generate_video")
     for (const clip of body.clips) {
       const file = files.find((f) => f.id === clip.fileId);
       if (
@@ -202,6 +220,17 @@ export async function queueAgentJob(
       "SELECT pg_advisory_xact_lock(hashtextextended($1,0))",
       "assistant-jobs:" + c.actor.id,
     );
+    if (teamLease) {
+      const parent = await one(
+        tx,
+        "SELECT id FROM public.personal_assistant_team_runs WHERE id=$1::uuid AND user_id=$2::bigint AND lease_id=$3::uuid AND status IN ('PLANNING','RUNNING','REVIEWING') FOR UPDATE",
+        requestId,
+        c.actor.id,
+        teamLease,
+      );
+      if (!parent)
+        fail("TEAM_STOPPED", "团队任务已停止，未提交新的创作任务", 409);
+    }
     const previous = await one(
       tx,
       "SELECT id,status FROM public.personal_assistant_jobs WHERE user_id=$1::bigint AND request_id=$2::uuid AND call_id=$3",
@@ -303,6 +332,10 @@ export async function runAgentJob(
     await progress(35, "整理文档内容");
     ({ content, mime } = await createAgentDocument(input));
     name = input.title + "." + input.format;
+  } else if (job.kind === "video" && job.input.generation) {
+    content = await generateTeamVideo(c, job, progress, signal);
+    mime = "video/mp4";
+    name = job.input.title + ".mp4";
   } else if (job.kind === "video") {
     const input = parse(videoJobSchema, job.input);
     const files = await ownedAgentFiles(
@@ -415,6 +448,8 @@ export async function runAgentJob(
   signal.throwIfAborted();
   await progress(95, "保存处理结果");
   const inspection = await inspectAgentUpload(name, content, true);
+  signal.throwIfAborted();
+  await progress(98, "核验任务并归档文件");
   const file = await saveAgentFile(
     c,
     name,
@@ -423,6 +458,8 @@ export async function runAgentJob(
     "generated",
     inspection.text,
     { ...inspection.metadata, jobId: job.id },
+    undefined,
+    { id: job.id, leaseId: job.lease_id },
   );
   return [file.id];
 }

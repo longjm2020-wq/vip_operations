@@ -97,8 +97,6 @@ import { workspaceSaveSchema } from "../../packages/contracts/src/personal-works
 import { parseVoiceCommand } from "../../packages/contracts/src/assistant-voice-commands.js";
 import {
   startRealtime,
-  claimRealtimeSocket,
-  activateRealtimeSocket,
   runRealtimeTool,
 } from "../../apps/api/src/modules/workspace/assistant-realtime.js";
 import {
@@ -297,6 +295,10 @@ describe("multimodal agent ownership and jobs", () => {
     );
     expect(first.id).toBe(duplicate.id);
     expect(await listAgentJobs(actor("8"))).toEqual([]);
+    await fixture.database!.query(
+      "UPDATE personal_assistant_jobs SET status='RUNNING',lease_id=$1 WHERE id=$2",
+      [randomUUID(), first.id],
+    );
     const job = (
       await fixture.database!.query("SELECT * FROM personal_assistant_jobs")
     ).rows[0];
@@ -429,6 +431,7 @@ describe("multimodal agent ownership and jobs", () => {
     );
     const imageJob = {
       id: randomUUID(),
+      lease_id: randomUUID(),
       kind: "image",
       input: {
         model: "test/image",
@@ -446,6 +449,15 @@ describe("multimodal agent ownership and jobs", () => {
         AbortSignal.timeout(10000),
       ),
     ).rejects.toThrow("HTTP 402");
+    await fixture.database!.query(
+      "INSERT INTO personal_assistant_jobs(id,user_id,request_id,call_id,kind,title,input,status,lease_id) VALUES($1,7,$2,'image-result','image','生成图',$3::jsonb,'RUNNING',$4)",
+      [
+        imageJob.id,
+        randomUUID(),
+        JSON.stringify(imageJob.input),
+        imageJob.lease_id,
+      ],
+    );
     const png = await sharp({
       create: { width: 16, height: 16, channels: 3, background: "#435EE5" },
     })
@@ -483,14 +495,21 @@ describe("assistant business tools and private memory", () => {
     await fixture.database!.exec(
       "UPDATE assistant_realtime_settings SET provider='qwen',enabled=true,qwen_api_key_encrypted='test',qwen_verified_at=now(),qwen_workspace_id='workspace-1',qwen_free_only_confirmed=true",
     );
+    vi.mocked(fetch).mockResolvedValueOnce(
+      new Response("v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n", {
+        status: 201,
+      }),
+    );
     const session = await startRealtime(actor(), {
       id: randomUUID(),
+      sdp: "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=sendrecv\r\n",
       desktopDeviceId: deviceId,
       includePersonalContext: true,
       includeMemory: true,
     });
-    await claimRealtimeSocket(actor(), session.id, session.ticket!);
-    await activateRealtimeSocket(actor(), session.id);
+    expect(session.transport).toBe("webrtc");
+    // The remaining assertions concern business/desktop calls, after SDP setup.
+    vi.mocked(fetch).mockClear();
     return { deviceId, sessionId: session.id };
   }
   it("takes a realtime computer instruction through the real queue, screenshot plan, click acknowledgement and completion", async () => {

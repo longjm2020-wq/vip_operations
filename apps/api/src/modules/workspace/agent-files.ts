@@ -79,6 +79,7 @@ export async function saveAgentFile(
   extracted = "",
   metadata: Row = {},
   id = randomUUID(),
+  jobGuard?: { id: string; leaseId: string },
 ) {
   requireAssistant(c);
   if (!content.length || content.length > 100 * MiB)
@@ -88,6 +89,17 @@ export async function saveAgentFile(
       .replace(/[\x00-\x1f\x7f]/g, "")
       .slice(0, 180) || "附件";
   return db.$transaction(async (tx) => {
+    if (jobGuard) {
+      const active = await one(
+        tx,
+        "SELECT id FROM public.personal_assistant_jobs WHERE id=$1::uuid AND user_id=$2::bigint AND lease_id=$3::uuid AND status='RUNNING' FOR UPDATE",
+        jobGuard.id,
+        c.actor.id,
+        jobGuard.leaseId,
+      );
+      if (!active)
+        fail("FILE_JOB_STOPPED", "任务已停止，未写入新的交付文件", 409);
+    }
     await tx.$executeRawUnsafe(
       "SELECT pg_advisory_xact_lock(hashtextextended($1,0))",
       "assistant-files:" + c.actor.id,

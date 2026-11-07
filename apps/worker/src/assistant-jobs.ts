@@ -18,6 +18,8 @@ export async function pollAssistantJobs(signal: AbortSignal) {
     lease,
   );
   if (!job) return;
+  const canceled = new AbortController();
+  const jobSignal = AbortSignal.any([signal, canceled.signal]);
   const heartbeat = setInterval(() => {
     void db
       .$executeRawUnsafe(
@@ -25,6 +27,9 @@ export async function pollAssistantJobs(signal: AbortSignal) {
         job.id,
         lease,
       )
+      .then((updated) => {
+        if (!updated) canceled.abort(new Error("任务已取消或租约失效"));
+      })
       .catch(() => {});
   }, 15000);
   try {
@@ -64,7 +69,7 @@ export async function pollAssistantJobs(signal: AbortSignal) {
         );
         if (!saved) throw Error("任务已中断");
       },
-      signal,
+      jobSignal,
     );
     await db.$executeRawUnsafe(
       "UPDATE public.personal_assistant_jobs SET status='DONE',progress=100,stage='已完成',output_ids=$3::jsonb,updated_at=now() WHERE id=$1::uuid AND lease_id=$2::uuid AND status='RUNNING'",

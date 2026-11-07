@@ -58,6 +58,7 @@ export async function searchAgentWeb(
   model: string,
   args: string,
   signal: AbortSignal,
+  matchesModel?: (returnedModel: unknown) => boolean,
 ) {
   let raw: unknown;
   try {
@@ -112,6 +113,12 @@ export async function searchAgentWeb(
   }
   const payload = await response.json(),
     msg = payload.choices?.[0]?.message;
+  if (matchesModel && !matchesModel(payload.model))
+    fail(
+      "SEARCH_MODEL_MISMATCH",
+      "联网查询返回了非指定型号，未采用该结果或自动切换模型",
+      502,
+    );
   const citations = publicCitations(msg?.annotations);
   if (!citations.length || typeof msg?.content !== "string")
     fail(

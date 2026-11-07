@@ -61,6 +61,9 @@ export function AgentComposer({
   onUploading,
   settingsContent,
   accessControl,
+  modelControl,
+  searchControl,
+  teamMode = false,
   actions,
   active = true,
 }: {
@@ -70,6 +73,9 @@ export function AgentComposer({
   onUploading: (v: boolean) => void;
   settingsContent?: ReactNode;
   accessControl?: ReactNode;
+  modelControl?: ReactNode;
+  searchControl?: ReactNode;
+  teamMode?: boolean;
   actions?: ReactNode;
   active?: boolean;
 }) {
@@ -159,32 +165,38 @@ export function AgentComposer({
           {accessControl}
         </div>
         <div className="agent-composer-trailing">
-          <Select
-            size="small"
-            variant="borderless"
-            aria-label="助理能力"
-            value={purposeMenu.value}
-            placeholder="日常问答"
-            disabled={disabled || uploading}
-            loading={catalog.isLoading}
-            popupMatchSelectWidth={false}
-            options={purposeMenu.options}
-            onChange={(purpose) => {
-              const option = purposeMenu.options.find(
-                (o) => o.value === purpose,
-              );
-              if (!option) return;
-              setPreferredPurpose(purpose);
-              change({ ...value, model: option.model });
-            }}
-          />
-          <Checkbox
-            checked={value.webSearch}
-            disabled={disabled || uploading}
-            onChange={(e) => change({ ...value, webSearch: e.target.checked })}
-          >
-            联网
-          </Checkbox>
+          {modelControl ?? (
+            <Select
+              size="small"
+              variant="borderless"
+              aria-label="助理能力"
+              value={purposeMenu.value}
+              placeholder="日常问答"
+              disabled={disabled || uploading}
+              loading={catalog.isLoading}
+              popupMatchSelectWidth={false}
+              options={purposeMenu.options}
+              onChange={(purpose) => {
+                const option = purposeMenu.options.find(
+                  (o) => o.value === purpose,
+                );
+                if (!option) return;
+                setPreferredPurpose(purpose);
+                change({ ...value, model: option.model });
+              }}
+            />
+          )}
+          {searchControl ?? (
+            <Checkbox
+              checked={value.webSearch}
+              disabled={disabled || uploading}
+              onChange={(e) =>
+                change({ ...value, webSearch: e.target.checked })
+              }
+            >
+              联网
+            </Checkbox>
+          )}
           <Popover
             trigger="click"
             title={settingsContent ? "助理设置" : "创作设置"}
@@ -203,20 +215,26 @@ export function AgentComposer({
                 }}
               >
                 {settingsContent}
-                <p>图像创作能力</p>
-                <Select
-                  style={{ width: 230 }}
-                  aria-label="图像创作能力"
-                  placeholder="使用首个可用图像能力"
-                  value={value.imageModel}
-                  disabled={disabled || uploading}
-                  allowClear
-                  options={catalog.data?.imageModels?.map((m) => ({
-                    value: m.id,
-                    label: m.name + (m.reference ? " · 参考图" : ""),
-                  }))}
-                  onChange={(imageModel) => change({ ...value, imageModel })}
-                />
+                {!teamMode && (
+                  <>
+                    <p>图像创作能力</p>
+                    <Select
+                      style={{ width: 230 }}
+                      aria-label="图像创作能力"
+                      placeholder="使用首个可用图像能力"
+                      value={value.imageModel}
+                      disabled={disabled || uploading}
+                      allowClear
+                      options={catalog.data?.imageModels?.map((m) => ({
+                        value: m.id,
+                        label: m.name + (m.reference ? " · 参考图" : ""),
+                      }))}
+                      onChange={(imageModel) =>
+                        change({ ...value, imageModel })
+                      }
+                    />
+                  </>
+                )}
                 <p>仅在提出创作要求时运行。智能服务按实际用量计费。</p>
                 <p>附件仅本人可访问；发送时，所附内容会交给智能服务处理。</p>
                 {catalog.data?.notice && <p>{catalog.data.notice}</p>}

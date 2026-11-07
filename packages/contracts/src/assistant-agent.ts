@@ -108,3 +108,13 @@ export const videoJobSchema = z
     (v) => v.clips.reduce((s, c) => s + (c.end - c.start) / c.speed, 0) <= 600,
     "成片最长10分钟",
   );
+
+export const videoGenerationSchema = z
+  .object({
+    title: z.string().trim().min(1).max(100),
+    prompt: z.string().trim().min(1).max(6000),
+    referenceIds: z.array(z.string().uuid()).min(1).max(4),
+    duration: z.number().int().min(1).max(15),
+    aspectRatio: z.enum(["16:9", "9:16", "1:1", "4:3", "3:4"]),
+  })
+  .strict();

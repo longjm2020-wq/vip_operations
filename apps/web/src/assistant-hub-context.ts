@@ -23,7 +23,7 @@ export type AssistantHubState = {
   openVoiceSettings: () => void;
   announce?: (text: string) => void;
   compose: () => ReactNode;
-  openPanel: (tab?: "chat" | "activity" | "voice") => void;
+  openPanel: (tab?: "chat" | "activity" | "voice" | "team") => void;
   feed?: AssistantActivityFeed;
   feedLoading: boolean;
   feedError: Error | null;

@@ -31,6 +31,15 @@ import {
   deleteAgentFile,
 } from "./agent-files.js";
 import { listAgentJobs, cancelAgentJob } from "./agent-jobs.js";
+import {
+  readAssistantTeam,
+  saveAssistantTeam,
+  listTeamRuns,
+  createTeamRun,
+  readTeamRun,
+  cancelTeamRun,
+  readTeamLibrary,
+} from "./assistant-team.js";
 import { readAppearance, saveAppearance } from "./appearance.js";
 import { assistantActivity } from "./activity.js";
 import {
@@ -61,6 +70,57 @@ import {
 // The owner always comes from the authenticated session; there is no user-id route.
 @Controller("api/v1/my-workspace")
 export class PersonalWorkspaceController {
+  @Get("assistant/team")
+  async teamConfiguration(
+    @Req() request: AuthRequest,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    response.setHeader("Cache-Control", "private, no-store");
+    return readAssistantTeam(context(request));
+  }
+  @Post("assistant/team")
+  async teamSave(@Req() request: AuthRequest, @Body() input: unknown) {
+    return saveAssistantTeam(context(request), input);
+  }
+  @Get("assistant/team/runs")
+  async teamRuns(
+    @Req() request: AuthRequest,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    response.setHeader("Cache-Control", "private, no-store");
+    return listTeamRuns(context(request));
+  }
+  @Post("assistant/team/runs")
+  async teamStart(
+    @Req() request: AuthRequest,
+    @Body() input: unknown,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    response.setHeader("Cache-Control", "private, no-store");
+    return createTeamRun(context(request), input);
+  }
+  @Get("assistant/team/runs/:id")
+  async teamRun(
+    @Req() request: AuthRequest,
+    @Param("id") id: string,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    response.setHeader("Cache-Control", "private, no-store");
+    return readTeamRun(context(request), id);
+  }
+  @Post("assistant/team/runs/:id/cancel")
+  async teamCancel(@Req() request: AuthRequest, @Param("id") id: string) {
+    return cancelTeamRun(context(request), id);
+  }
+  @Get("assistant/team/library")
+  async teamLibrary(
+    @Req() request: AuthRequest,
+    @Query("q") query: string | undefined,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    response.setHeader("Cache-Control", "private, no-store");
+    return readTeamLibrary(context(request), query);
+  }
   @Get("assistant/realtime")
   async realtimeStatus(
     @Req() request: AuthRequest,

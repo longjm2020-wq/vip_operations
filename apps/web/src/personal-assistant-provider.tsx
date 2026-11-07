@@ -13,6 +13,7 @@ import {
   Checkbox,
   Drawer,
   Dropdown,
+  Select,
   Spin,
   Tooltip,
 } from "antd";
@@ -28,7 +29,7 @@ import {
   CustomerServiceOutlined,
   EllipsisOutlined,
 } from "@ant-design/icons";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useLocation } from "react-router-dom";
 import { api } from "./api";
 import { useUser } from "./shared";
@@ -65,6 +66,15 @@ import type { AssistantVoiceStatus } from "../../../packages/contracts/src/assis
 import { workspaceHologramEvent } from "./workspace-hologram";
 import { AssistantDesktopPanel } from "./assistant-desktop-panel";
 import { AssistantDesktopAccess } from "./assistant-desktop-access";
+import {
+  AssistantTeamPanel,
+  teamRunsKey,
+  useTeamConfiguration,
+} from "./assistant-team-panel";
+import type {
+  TeamRun,
+  TeamRunCreate,
+} from "../../../packages/contracts/src/assistant-team";
 import type { DesktopState } from "../../../packages/contracts/src/assistant-desktop";
 import { useWorkspaceSceneCover } from "./workspace-scene-presence";
 import {
@@ -77,7 +87,7 @@ import {
 } from "../../../packages/contracts/src/assistant-web-command";
 
 type AssistantSection =
-  "chat" | "activity" | "memory" | "voice" | "tasks" | "desktop";
+  "chat" | "activity" | "memory" | "voice" | "tasks" | "desktop" | "team";
 
 export function PersonalAssistantProvider({
   children,
@@ -87,6 +97,7 @@ export function PersonalAssistantProvider({
   const user = useUser(),
     { message, modal } = App.useApp();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const location = useLocation();
   const inWorkspace = location.pathname === "/my-workspace";
   const available = assistantNavigationTools({
@@ -159,6 +170,14 @@ export function PersonalAssistantProvider({
   });
   const [uploading, setUploading] = useState(false);
   const [desktopDeviceId, setDesktopDeviceId] = useState<string>();
+  const [teamMode, setTeamMode] = useState(false);
+  const [teamModel, setTeamModel] = useState<string>();
+  const [useKnowledge, setUseKnowledge] = useState(true);
+  const [selectedTeamRunId, setSelectedTeamRunId] = useState<string>();
+  const [teamSubmitError, setTeamSubmitError] = useState("");
+  const teamConfig = useTeamConfiguration(
+    allowed && (teamMode || section === "team"),
+  );
   const desktop = useQuery({
     queryKey: ["assistant-desktop", user.id],
     enabled: allowed,
@@ -169,15 +188,19 @@ export function PersonalAssistantProvider({
   useEffect(() => {
     if (
       allowed &&
-      ["tasks", "desktop"].includes(
+      ["tasks", "desktop", "team"].includes(
         new URLSearchParams(location.search).get("assistant") || "",
       )
     ) {
       setSection(
         new URLSearchParams(location.search).get("assistant") === "desktop"
           ? "desktop"
-          : "tasks",
+          : new URLSearchParams(location.search).get("assistant") === "team"
+            ? "team"
+            : "tasks",
       );
+      if (new URLSearchParams(location.search).get("assistant") === "team")
+        setTeamMode(true);
       setOpen(true);
       navigate(location.pathname, { replace: true });
     }
@@ -264,6 +287,7 @@ export function PersonalAssistantProvider({
         : false,
   });
   const data = q.data?.data as AssistantConversation | undefined;
+  const composerReady = teamMode ? teamConfig.data?.ready : data?.ready;
   const legacyVoice = useGptVoice(
     () => {
       void q.refetch();
@@ -349,8 +373,39 @@ export function PersonalAssistantProvider({
     if (open) bottom.current?.scrollIntoView({ block: "end" });
   }, [open, messages.length, busy]);
   const send = async (value: string) => {
-    if (!value.trim() || !data?.ready || busy) return;
+    if (!value.trim() || !composerReady || busy) return;
     const requestId = crypto.randomUUID();
+    if (teamMode) {
+      setSection("team");
+      setOpen(true);
+      setSending(true);
+      setTeamSubmitError("");
+      voice.stop();
+      speech.stop();
+      try {
+        const input: TeamRunCreate = {
+          id: requestId,
+          goal: value.trim(),
+          attachmentIds: agent.attachments.map((file) => file.id),
+          ...(teamModel ? { model: teamModel } : {}),
+          useKnowledge,
+        };
+        const run = (
+          await api("/my-workspace/assistant/team/runs", "POST", input)
+        ).data as TeamRun;
+        queryClient.setQueryData(["assistant-team-run", user.id, run.id], run);
+        setSelectedTeamRunId(run.id);
+        void queryClient.invalidateQueries({ queryKey: teamRunsKey(user.id) });
+        setText("");
+        setAgent((previous) => ({ ...previous, attachments: [] }));
+      } catch (cause) {
+        setTeamSubmitError((cause as Error).message);
+      } finally {
+        setSending(false);
+      }
+      return;
+    }
+    if (!data) return;
     const websiteRequest =
       !desktopDeviceId && !agent.attachments.length
         ? parseAssistantWebsiteRequest(value)
@@ -479,7 +534,7 @@ export function PersonalAssistantProvider({
     setSection("voice");
     setOpen(true);
   };
-  const openPanel = (tab: "chat" | "activity" | "voice" = "chat") => {
+  const openPanel = (tab: "chat" | "activity" | "voice" | "team" = "chat") => {
     if (tab === "voice") {
       startVoice();
       return;
@@ -487,6 +542,11 @@ export function PersonalAssistantProvider({
     closeVoice();
     voice.stop();
     speech.stop();
+    if (tab === "team") {
+      setTeamMode(true);
+      setDesktopDeviceId(undefined);
+    }
+    if (tab === "chat") setTeamMode(false);
     setSection(allowed ? tab : "activity");
     setOpen(true);
   };
@@ -496,10 +556,16 @@ export function PersonalAssistantProvider({
     voice.stop();
     speech.stop();
     setSection(allowed ? next : "activity");
+    if (next === "team") {
+      setTeamMode(true);
+      setDesktopDeviceId(undefined);
+    }
+    if (next === "chat") setTeamMode(false);
     setOpen(true);
   };
   const sectionItems = [
     ...(allowed ? [{ key: "chat", label: "互动对话" }] : []),
+    ...(allowed ? [{ key: "team", label: "智能体团队" }] : []),
     ...(allowed ? [{ key: "tasks", label: "任务与文件" }] : []),
     ...(allowed ? [{ key: "desktop", label: "电脑操作" }] : []),
     ...(allowed
@@ -510,56 +576,70 @@ export function PersonalAssistantProvider({
   ];
   const composerSettings = (inDrawer: boolean) => (
     <>
-      <div className="assistant-settings-preferences">
-        <strong>发送内容</strong>
-        <Checkbox
-          checked={includeContext}
-          onChange={(e) => setIncludeContext(e.target.checked)}
-          disabled={busy}
-        >
-          附带已保存日程与待办
-        </Checkbox>
-        <Checkbox
-          checked={includeMemory}
-          onChange={(e) => setIncludeMemory(e.target.checked)}
-          disabled={busy}
-        >
-          使用个人记忆
-        </Checkbox>
+      {!teamMode && (
+        <div className="assistant-settings-preferences">
+          <strong>发送内容</strong>
+          <Checkbox
+            checked={includeContext}
+            onChange={(e) => setIncludeContext(e.target.checked)}
+            disabled={busy}
+          >
+            附带已保存日程与待办
+          </Checkbox>
+          <Checkbox
+            checked={includeMemory}
+            onChange={(e) => setIncludeMemory(e.target.checked)}
+            disabled={busy}
+          >
+            使用个人记忆
+          </Checkbox>
+          <p>
+            仅勾选后随本次文字或语音提问附带；未保存草稿和私有备忘不发送。已发送内容仍在对话历史中。
+          </p>
+          <strong>声音</strong>
+          <Checkbox
+            checked={voiceReply}
+            disabled={!speech.supported || !voiceStatus.data?.ready}
+            onChange={(e) => {
+              setVoiceReply(e.target.checked);
+              playbackAllowed.current =
+                open && section === "chat" && e.target.checked;
+              if (!e.target.checked) speech.stop();
+            }}
+          >
+            语音回复
+          </Checkbox>
+          <Checkbox
+            checked={voiceReminders}
+            disabled={!voice.canSpeak}
+            onChange={(e) => {
+              setVoiceReminders(e.target.checked);
+              if (!e.target.checked) voice.stopSpeaking();
+            }}
+          >
+            播报新提醒
+          </Checkbox>
+          <p>
+            小序的声音 · AI 生成
+            {voiceStatus.data?.ready
+              ? ` · ${voiceStatus.data.voice}`
+              : " · 尚未就绪"}
+          </p>
+        </div>
+      )}
+      {teamMode && (
         <p>
-          仅勾选后随本次文字或语音提问附带；未保存草稿和私有备忘不发送。已发送内容仍在对话历史中。
+          团队按已保存的成员职责、模型及联网设置运行。可为本次任务指定文字模型，图像与视频生成模型由成员配置决定。
         </p>
-        <strong>声音</strong>
-        <Checkbox
-          checked={voiceReply}
-          disabled={!speech.supported || !voiceStatus.data?.ready}
-          onChange={(e) => {
-            setVoiceReply(e.target.checked);
-            playbackAllowed.current =
-              open && section === "chat" && e.target.checked;
-            if (!e.target.checked) speech.stop();
-          }}
-        >
-          语音回复
-        </Checkbox>
-        <Checkbox
-          checked={voiceReminders}
-          disabled={!voice.canSpeak}
-          onChange={(e) => {
-            setVoiceReminders(e.target.checked);
-            if (!e.target.checked) voice.stopSpeaking();
-          }}
-        >
-          播报新提醒
-        </Checkbox>
-        <p>
-          小序的声音 · AI 生成
-          {voiceStatus.data?.ready
-            ? ` · ${voiceStatus.data.voice}`
-            : " · 尚未就绪"}
-        </p>
-      </div>
+      )}
       <div className="assistant-settings-actions">
+        <Button
+          size="small"
+          data-settings-action
+          onClick={() => selectSection("team")}
+        >
+          智能体团队
+        </Button>
         <Button
           size="small"
           data-settings-action
@@ -632,13 +712,53 @@ export function PersonalAssistantProvider({
       inert={!inDrawer && inWorkspace && open}
       aria-hidden={!inDrawer && inWorkspace && open ? true : undefined}
     >
+      <div className="assistant-compose-mode">
+        {!teamMode && (
+          <Button
+            size="small"
+            type="link"
+            onClick={() => selectSection("team")}
+          >
+            智能体团队
+          </Button>
+        )}
+        <Select
+          size="small"
+          variant="borderless"
+          aria-label="助理工作模式"
+          value={teamMode ? "team" : "personal"}
+          disabled={busy}
+          options={[
+            { value: "personal", label: "个人助理" },
+            { value: "team", label: "团队协作" },
+          ]}
+          onChange={(mode) => {
+            setTeamMode(mode === "team");
+            setError("");
+            if (mode === "team") setDesktopDeviceId(undefined);
+            if (inDrawer) setSection(mode === "team" ? "team" : "chat");
+          }}
+        />
+        {teamMode && (
+          <>
+            <span className="team-mode-note">任务使用已保存的团队配置</span>
+            <Button
+              size="small"
+              type="link"
+              onClick={() => selectSection("team")}
+            >
+              管理团队
+            </Button>
+          </>
+        )}
+      </div>
       <Sender
         value={text}
-        onChange={(value) => setText(value.slice(0, 4000))}
+        onChange={(value) => setText(value.slice(0, teamMode ? 8000 : 4000))}
         onSubmit={(value) => void send(value)}
         loading={busy}
         readOnly={busy || voice.listening}
-        disabled={!data?.ready || busy}
+        disabled={!composerReady || busy}
         submitType="enter"
         suffix={false}
         footer={(_, { components }) => (
@@ -648,21 +768,59 @@ export function PersonalAssistantProvider({
             disabled={busy}
             onUploading={setUploading}
             settingsContent={composerSettings(inDrawer)}
+            teamMode={teamMode}
+            modelControl={
+              teamMode ? (
+                <Select
+                  size="small"
+                  variant="borderless"
+                  aria-label="团队任务模型"
+                  allowClear
+                  value={teamModel}
+                  disabled={busy}
+                  loading={teamConfig.isLoading}
+                  popupMatchSelectWidth={false}
+                  placeholder="按成员配置"
+                  options={teamConfig.data?.models.map((model) => ({
+                    value: model.id,
+                    label: `${model.name} · ${model.model}`,
+                  }))}
+                  onChange={setTeamModel}
+                />
+              ) : undefined
+            }
+            searchControl={
+              teamMode ? (
+                <Checkbox
+                  checked={useKnowledge}
+                  disabled={busy}
+                  onChange={(event) => setUseKnowledge(event.target.checked)}
+                >
+                  使用知识档案
+                </Checkbox>
+              ) : undefined
+            }
             active={
-              inDrawer ? open && section === "chat" : !inWorkspace || !open
+              inDrawer
+                ? open && (section === "chat" || section === "team")
+                : !inWorkspace || !open
             }
             accessControl={
-              <AssistantDesktopAccess
-                data={desktop.data}
-                deviceId={desktopDeviceId}
-                choose={setDesktopDeviceId}
-                manage={() => selectSection("desktop")}
-                refresh={() => void desktop.refetch()}
-                disabled={busy}
-                active={
-                  inDrawer ? open && section === "chat" : !inWorkspace || !open
-                }
-              />
+              !teamMode && (
+                <AssistantDesktopAccess
+                  data={desktop.data}
+                  deviceId={desktopDeviceId}
+                  choose={setDesktopDeviceId}
+                  manage={() => selectSection("desktop")}
+                  refresh={() => void desktop.refetch()}
+                  disabled={busy}
+                  active={
+                    inDrawer
+                      ? open && section === "chat"
+                      : !inWorkspace || !open
+                  }
+                />
+              )
             }
             actions={
               <div className="assistant-send-actions">
@@ -680,7 +838,7 @@ export function PersonalAssistantProvider({
                       voice.listening ? <StopOutlined /> : <AudioOutlined />
                     }
                     aria-label={voice.listening ? "停止语音输入" : "语音输入"}
-                    disabled={!voice.supported || busy || !data?.ready}
+                    disabled={!voice.supported || busy || !composerReady}
                     onClick={() => {
                       speech.stop();
                       voice.start(text);
@@ -706,8 +864,10 @@ export function PersonalAssistantProvider({
                     shape="circle"
                     aria-label="助理正在回复"
                   />
-                ) : text.trim() ? (
-                  <components.SendButton aria-label="发送给个人助理" />
+                ) : text.trim() || teamMode ? (
+                  <components.SendButton
+                    aria-label={teamMode ? "提交团队任务" : "发送给个人助理"}
+                  />
                 ) : (
                   <Tooltip title="开始智能语音对话">
                     <Button
@@ -735,19 +895,28 @@ export function PersonalAssistantProvider({
           />
         )}
         placeholder={
-          data?.ready
-            ? desktopDeviceId
-              ? desktop.data?.devices?.find((d) => d.id === desktopDeviceId)
-                  ?.crossWindowAuthorized
-                ? "描述电脑任务，小序将按设备授权执行…"
-                : "描述电脑任务，发送后在本机选择窗口…"
-              : "告诉我你想完成什么，例如：打开经营分析…"
-            : q.isLoading
-              ? "正在连接个人助理…"
-              : "AI 尚未就绪，可从助理设置打开对话查看原因"
+          teamMode
+            ? composerReady
+              ? "描述团队目标、交付要求和验收标准…"
+              : teamConfig.isLoading
+                ? "正在连接智能体团队…"
+                : "团队智能服务尚未就绪，请检查团队配置"
+            : data?.ready
+              ? desktopDeviceId
+                ? desktop.data?.devices?.find((d) => d.id === desktopDeviceId)
+                    ?.crossWindowAuthorized
+                  ? "描述电脑任务，小序将按设备授权执行…"
+                  : "描述电脑任务，发送后在本机选择窗口…"
+                : "告诉我你想完成什么，例如：打开经营分析…"
+              : q.isLoading
+                ? "正在连接个人助理…"
+                : "AI 尚未就绪，可从助理设置打开对话查看原因"
         }
         autoSize={{ minRows: 2, maxRows: 5 }}
       />
+      {teamMode && teamSubmitError && (
+        <Alert type="error" showIcon title={teamSubmitError} />
+      )}
       {desktopDeviceId && (
         <div className="assistant-desktop-note">
           电脑任务仅发送本条指令，不附带日程或记忆。请移除附件并关闭联网；开始实时通话后可直接说出需要识别、点击或输入的目标。
@@ -829,7 +998,7 @@ export function PersonalAssistantProvider({
           </span>
         }
         size={1120}
-        rootClassName="personal-assistant-drawer assistant-screen"
+        rootClassName={`personal-assistant-drawer assistant-screen${section === "team" ? " assistant-team-screen" : ""}`}
         classNames={{
           body:
             section === "chat"
@@ -895,8 +1064,18 @@ export function PersonalAssistantProvider({
             />
           </Dropdown>
         }
-        footer={section === "chat" && allowed ? sender(true) : null}
+        footer={
+          (section === "chat" || section === "team") && allowed
+            ? sender(true)
+            : null
+        }
       >
+        {allowed && section === "team" && (
+          <AssistantTeamPanel
+            selectedRunId={selectedTeamRunId}
+            selectRun={setSelectedTeamRunId}
+          />
+        )}
         {allowed &&
           section === "chat" &&
           (speech.active || speech.blocked || speech.error) && (

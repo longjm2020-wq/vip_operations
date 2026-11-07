@@ -1,0 +1,233 @@
+.assistant-team {
+  color: var(--app-text);
+  min-width: 0;
+}
+.team-heading,
+.team-toolbar,
+.team-card-heading,
+.team-save {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.team-heading {
+  margin-bottom: 16px;
+}
+.team-heading h2 {
+  margin: 0 0 6px;
+  font-size: 22px;
+}
+.team-heading p,
+.team-meta,
+.team-save {
+  color: var(--app-secondary);
+  font-size: 12px;
+}
+.team-heading p {
+  margin: 0;
+}
+.team-toolbar {
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+.team-members {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.team-member,
+.team-artifact,
+.team-step,
+.team-summary {
+  border: 1px solid var(--app-border);
+  background: var(--app-surface);
+  border-radius: 14px;
+  padding: 16px;
+  min-width: 0;
+}
+.team-chief {
+  grid-column: 1/-1;
+  border-color: var(--app-accent-border);
+  background: var(--app-accent-soft);
+}
+.team-member p {
+  font-size: 13px;
+  line-height: 1.7;
+  margin: 10px 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.team-card-heading {
+  align-items: flex-start;
+}
+.team-card-heading strong,
+.team-card-heading h3 {
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.team-card-heading h3 {
+  margin: 0;
+  font-size: 16px;
+}
+.team-card-heading .ant-tag {
+  flex-shrink: 0;
+  margin: 0;
+}
+.team-meta {
+  margin-top: 6px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.team-model-used {
+  font-size: 12px;
+  margin: 8px 0;
+  color: var(--app-text);
+  overflow-wrap: anywhere;
+}
+.team-member-editor {
+  display: grid;
+  gap: 12px;
+  padding-top: 8px;
+}
+.team-member-editor label,
+.team-limits label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+}
+.team-member-editor .ant-select {
+  width: 100%;
+  min-width: 0;
+}
+.team-limits {
+  display: flex;
+  align-items: flex-end;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.team-save {
+  margin-top: 16px;
+  flex-wrap: wrap;
+}
+.assistant-team .ant-alert {
+  margin: 12px 0;
+}
+.team-run-list {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0 20px;
+}
+.team-run-option {
+  border: 1px solid var(--app-border);
+  border-radius: 10px;
+  padding: 12px;
+  background: var(--app-surface);
+  color: var(--app-text);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+.team-run-option span:first-child {
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.team-run-option.is-selected {
+  border-color: var(--app-accent);
+  background: var(--app-accent-soft);
+}
+.team-run-option:focus-visible {
+  outline: 2px solid var(--app-accent);
+  outline-offset: 2px;
+}
+.team-steps {
+  list-style: none;
+  padding: 0;
+  display: grid;
+  gap: 12px;
+  margin: 16px 0;
+}
+.team-step details {
+  margin: 12px 0;
+  font-size: 12px;
+}
+.team-step summary {
+  cursor: pointer;
+  color: var(--app-secondary);
+}
+.team-prose {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  line-height: 1.8;
+  margin: 12px 0;
+  max-height: 480px;
+  overflow: auto;
+}
+.team-review {
+  font-size: 13px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+.team-artifact {
+  margin: 12px 0;
+}
+.team-citations {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  margin: 10px 0;
+  overflow-wrap: anywhere;
+}
+.assistant-compose-mode {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 7px;
+  flex-wrap: wrap;
+}
+.assistant-compose-mode .ant-select {
+  min-width: 110px;
+}
+.assistant-compose-mode .team-mode-note {
+  color: var(--app-secondary);
+  font-size: 11px;
+}
+body:has(.assistant-team-screen.ant-drawer-open) .workspace-companion-host {
+  display: none;
+}
+@media (max-width: 767px) {
+  .team-members {
+    grid-template-columns: 1fr;
+  }
+  .team-heading h2 {
+    font-size: 19px;
+  }
+  .team-member,
+  .team-step,
+  .team-artifact {
+    padding: 12px;
+  }
+  .team-card-heading {
+    flex-wrap: wrap;
+  }
+  .team-save {
+    align-items: stretch;
+  }
+  .team-save .ant-btn {
+    width: 100%;
+  }
+  .team-limits label {
+    width: 100%;
+  }
+  .team-limits .ant-input-number {
+    width: 100%;
+  }
+}
