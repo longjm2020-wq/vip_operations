@@ -308,8 +308,8 @@ test("千问实时语音观察并点击任意新控件，跨业务页继续且�
   await sendQwenTool(
     page,
     "click-a",
-    "page_action",
-    { snapshotId: first.snapshotId, ref: target.ref, action: "click" },
+    "page_click",
+    { snapshotId: first.snapshotId, ref: target.ref },
     false,
   );
   expect(
@@ -321,21 +321,106 @@ test("千问实时语音观察并点击任意新控件，跨业务页继续且�
   );
   await sendQwenTool(
     page,
+    "observe-legacy",
+    "page_observe",
+    { query: arbitrary },
+    false,
+  );
+  const legacy = await qwenToolOutput<PageObservation>(page, "observe-legacy");
+  await sendQwenTool(
+    page,
+    "legacy-empty-click",
+    "page_action",
+    {
+      snapshotId: legacy.snapshotId,
+      ref: legacy.controls.find((control) => control.name === arbitrary)!.ref,
+      action: "click",
+      value: "",
+      direction: null,
+    },
+    false,
+  );
+  const legacyResult = await qwenToolOutput<PageActionResult>(
+    page,
+    "legacy-empty-click",
+  );
+  expect(legacyResult.dispatched).toBe(true);
+  await expect(page.locator("#voice-arbitrary-page")).toHaveAttribute(
+    "data-count",
+    "2",
+  );
+  // Missing required fields must produce a recoverable tool result without
+  // dispatching anything or making up a target reference.
+  await sendQwenTool(
+    page,
+    "missing-click-ref",
+    "page_click",
+    {
+      snapshotId: legacyResult.observation.snapshotId,
+    },
+    false,
+  );
+  const invalid = await qwenToolOutput<{
+    dispatched: boolean;
+    code: string;
+    text: string;
+  }>(page, "missing-click-ref");
+  expect(invalid.dispatched).toBe(false);
+  expect(invalid.code).toBe("PAGE_TOOL_ARGUMENTS");
+  expect(invalid.text).toMatch(/ref|控件|引用/);
+  expect(invalid.text).not.toMatch(/invalid_type|ZodError|"issues"|stack/i);
+  await expect(page.locator("#voice-arbitrary-page")).toHaveAttribute(
+    "data-count",
+    "2",
+  );
+  const recovery = {
+    snapshotId: legacyResult.observation.snapshotId,
+    ref: legacyResult.observation.controls.find(
+      (control) => control.name === arbitrary,
+    )!.ref,
+  };
+  await sendQwenTool(page, "recovered-click", "page_click", recovery, false);
+  expect(
+    (await qwenToolOutput<PageActionResult>(page, "recovered-click"))
+      .dispatched,
+  ).toBe(true);
+  await expect(page.locator("#voice-arbitrary-page")).toHaveAttribute(
+    "data-count",
+    "3",
+  );
+  // A replay of the provider event with the same call ID is never a second click.
+  await sendQwenTool(page, "recovered-click", "page_click", recovery, false);
+  await sendQwenTool(
+    page,
     "observe-link",
     "page_observe",
     { query: "任意业务页面链接" },
     false,
   );
   const link = await qwenToolOutput<PageObservation>(page, "observe-link");
+  await expect(page.locator("#voice-arbitrary-page")).toHaveAttribute(
+    "data-count",
+    "3",
+  );
+  expect(
+    await page.evaluate(
+      () =>
+        window.qwenRTCTest.events.filter(
+          (event) =>
+            event.type === "conversation.item.create" &&
+            (event.item as { call_id?: string } | undefined)?.call_id ===
+              "recovered-click",
+        ).length,
+    ),
+  ).toBe(1);
   await sendQwenTool(
     page,
     "click-link",
-    "page_action",
+    "page_click",
     {
       snapshotId: link.snapshotId,
       ref: link.controls.find((control) => control.name === "任意业务页面链接")!
         .ref,
-      action: "click",
     },
     false,
   );
@@ -361,11 +446,10 @@ test("千问实时语音观察并点击任意新控件，跨业务页继续且�
   await sendQwenTool(
     page,
     "interrupted-click",
-    "page_action",
+    "page_click",
     {
       snapshotId: second.snapshotId,
       ref: second.controls.find((control) => control.name === next)!.ref,
-      action: "click",
     },
     false,
     true,
@@ -389,11 +473,10 @@ test("千问实时语音观察并点击任意新控件，跨业务页继续且�
   await sendQwenTool(
     page,
     "click-b",
-    "page_action",
+    "page_click",
     {
       snapshotId: after.snapshotId,
       ref: after.controls.find((control) => control.name === next)!.ref,
-      action: "click",
     },
     false,
   );

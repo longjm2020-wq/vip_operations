@@ -445,7 +445,14 @@ describe("native realtime voice authorization and lifecycle", () => {
     });
     expect(
       result.configuration!.session.tools.map((tool) => tool.function.name),
-    ).toEqual(["workspace_request", "page_observe", "page_action"]);
+    ).toEqual([
+      "workspace_request",
+      "page_observe",
+      "page_click",
+      "page_fill",
+      "page_select",
+      "page_scroll",
+    ]);
     expect(result.configuration!.session.instructions).toContain(
       "先用 page_observe",
     );
@@ -465,6 +472,9 @@ describe("native realtime voice authorization and lifecycle", () => {
     expect(result.configuration!.session.instructions).toContain(
       "dispatched只表示已派发",
     );
+    expect(result.configuration!.session.instructions).toContain(
+      "retryable:false 时停止本轮重试",
+    );
     expect(result.configuration!.session.instructions).not.toContain(
       "打开业务页面、返回我的工作台，或启动同步更新时，必须调用 workspace_request",
     );
@@ -473,7 +483,14 @@ describe("native realtime voice authorization and lifecycle", () => {
       /server-only|encrypted|workspace-1/,
     );
     expect((await checkRealtime(actor(), b.id)).active).toBe(true);
-    for (const tool of ["page_observe", "page_action"]) {
+    for (const tool of [
+      "page_observe",
+      "page_action",
+      "page_click",
+      "page_fill",
+      "page_select",
+      "page_scroll",
+    ]) {
       await expect(
         runRealtimeTool(actor(), b.id, {
           tool,

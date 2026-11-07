@@ -203,13 +203,21 @@ function pageResponse(
   id = "page-response",
   callId = "page-call",
 ) {
+  rawPageResponse(name, JSON.stringify(args), id, callId);
+}
+function rawPageResponse(
+  name: string,
+  args: unknown,
+  id = "page-response",
+  callId = "page-call",
+) {
   Peer.last.dc.emit({ type: "response.created", response: { id } });
   Peer.last.dc.emit({
     type: "response.function_call_arguments.done",
     response_id: id,
     name,
     call_id: callId,
-    arguments: JSON.stringify(args),
+    arguments: args,
   });
   done(id);
 }
@@ -272,14 +280,13 @@ describe("Qwen local website tools", () => {
     const args = {
       snapshotId: "snapshot-1",
       ref: "control-1",
-      action: "click",
     };
-    pageResponse("page_action", args);
+    pageResponse("page_click", args);
     await vi.waitFor(() => expect(f.action).toHaveBeenCalledOnce());
     const context = f.action.mock.calls[0][1];
     expect(context.signal).toBeInstanceOf(AbortSignal);
     expect(context.isCurrent()).toBe(true);
-    expect(f.action.mock.calls[0][0]).toEqual(args);
+    expect(f.action.mock.calls[0][0]).toEqual({ ...args, action: "click" });
     await vi.waitFor(() =>
       expect(pageOutput()).toMatchObject({
         dispatched: true,
@@ -295,6 +302,265 @@ describe("Qwen local website tools", () => {
       f.api.mock.calls.filter(([path]) => path.endsWith("/sessions")),
     ).toHaveLength(1);
     expect(cb.business).not.toHaveBeenCalled();
+  });
+  it.each([
+    [
+      "page_fill",
+      { ref: "r", value: "  保留输入空格  " },
+      { action: "fill", ref: "r", value: "  保留输入空格  " },
+    ],
+    [
+      "page_fill",
+      { ref: "r", value: "" },
+      { action: "fill", ref: "r", value: "" },
+    ],
+    [
+      "page_select",
+      { ref: "r", value: "observed-option" },
+      { action: "select", ref: "r", value: "observed-option" },
+    ],
+    [
+      "page_scroll",
+      { direction: "down" },
+      { action: "scroll", direction: "down" },
+    ],
+  ])(
+    "maps %s to the canonical action without changing its values",
+    async (name, args, canonical) => {
+      allowPage();
+      session = new QwenRealtimeVoiceSession(callbacks());
+      await session.start(options);
+      await ready();
+      pageResponse(name, { snapshotId: "s", ...args });
+      await vi.waitFor(() =>
+        expect(pageOutput()).toMatchObject({ dispatched: true }),
+      );
+      expect(f.action).toHaveBeenCalledExactlyOnceWith(
+        { snapshotId: "s", ...canonical },
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      );
+    },
+  );
+  it("accepts only known empty legacy placeholders and trims references without guessing targets", async () => {
+    allowPage();
+    session = new QwenRealtimeVoiceSession(callbacks());
+    await session.start(options);
+    await ready();
+    pageResponse("page_action", {
+      snapshotId: " snapshot-1 ",
+      ref: " control-1 ",
+      action: "click",
+      value: "",
+      direction: null,
+    });
+    await vi.waitFor(() =>
+      expect(pageOutput()).toMatchObject({ dispatched: true }),
+    );
+    expect(f.action.mock.calls[0][0]).toEqual({
+      snapshotId: "snapshot-1",
+      ref: "control-1",
+      action: "click",
+    });
+    expect(f.action).toHaveBeenCalledOnce();
+  });
+  it("returns a correctable missing-field result and executes one corrected new call without replaying the failed call", async () => {
+    allowPage();
+    const cb = callbacks();
+    session = new QwenRealtimeVoiceSession(cb);
+    await session.start(options);
+    await ready();
+    pageResponse(
+      "page_click",
+      { snapshotId: "snapshot-1" },
+      "invalid",
+      "invalid-call",
+    );
+    await vi.waitFor(() =>
+      expect(pageOutput("invalid-call")).toMatchObject({
+        dispatched: false,
+        code: "PAGE_TOOL_ARGUMENTS",
+        retryable: true,
+        text: expect.stringContaining("ref"),
+      }),
+    );
+    expect(cb.preparePage).not.toHaveBeenCalled();
+    expect(f.action).not.toHaveBeenCalled();
+    pageResponse(
+      "page_click",
+      { snapshotId: "snapshot-1", ref: "control-1" },
+      "corrected",
+      "corrected-call",
+    );
+    await vi.waitFor(() =>
+      expect(pageOutput("corrected-call")).toMatchObject({ dispatched: true }),
+    );
+    pageResponse(
+      "page_click",
+      { snapshotId: "snapshot-1", ref: "control-1" },
+      "duplicate",
+      "corrected-call",
+    );
+    await settle();
+    expect(f.action).toHaveBeenCalledOnce();
+    expect(
+      Peer.last.dc.sent.filter(
+        (event) =>
+          (event.item as { call_id?: string })?.call_id === "corrected-call",
+      ),
+    ).toHaveLength(1);
+    expect(
+      f.api.mock.calls.filter(([path]) => path.endsWith("/tool")),
+    ).toHaveLength(0);
+  });
+  it("stops repeated argument corrections within a user turn and restores actions only for a new user turn", async () => {
+    allowPage();
+    session = new QwenRealtimeVoiceSession(callbacks());
+    await session.start(options);
+    await ready();
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      pageResponse(
+        "page_click",
+        { snapshotId: "s" },
+        `bad-${attempt}`,
+        `bad-call-${attempt}`,
+      );
+      await vi.waitFor(() =>
+        expect(pageOutput(`bad-call-${attempt}`)).toMatchObject({
+          dispatched: false,
+          code: "PAGE_TOOL_ARGUMENTS",
+          retryable: attempt === 1,
+        }),
+      );
+    }
+    const stopped = {
+      dispatched: false,
+      code: "PAGE_TOOL_ARGUMENTS",
+      retryable: false,
+      text: "本轮参数修正仍未成功，停止重复尝试，等待用户新的指令",
+    };
+    expect(pageOutput("bad-call-2")).toEqual(stopped);
+    pageResponse("page_observe", {}, "observe", "observe-call");
+    await vi.waitFor(() =>
+      expect(pageOutput("observe-call")).toEqual(observation),
+    );
+    pageResponse(
+      "page_click",
+      { snapshotId: "s", ref: "r" },
+      "blocked",
+      "blocked-call",
+    );
+    await vi.waitFor(() => expect(pageOutput("blocked-call")).toEqual(stopped));
+    expect(f.action).not.toHaveBeenCalled();
+    expect(Peer.last.dc.readyState).toBe("open");
+    toolResponse("business", "business-call");
+    done("business");
+    await vi.waitFor(() =>
+      expect(pageOutput("business-call")).toMatchObject({ text: "已完成" }),
+    );
+    Peer.last.dc.emit({
+      type: "input_audio_buffer.speech_started",
+      item_id: "new-user",
+    });
+    Peer.last.dc.emit({
+      type: "input_audio_buffer.speech_stopped",
+      item_id: "new-user",
+    });
+    pageResponse(
+      "page_click",
+      { snapshotId: "s", ref: "r" },
+      "new-turn",
+      "new-turn-call",
+    );
+    await vi.waitFor(() =>
+      expect(pageOutput("new-turn-call")).toMatchObject({ dispatched: true }),
+    );
+    expect(f.action).toHaveBeenCalledOnce();
+  });
+  it.each([
+    ["malformed JSON", '{"ref":"PRIVATE_INPUT",', "合法 JSON"],
+    [
+      "non-string arguments",
+      { snapshotId: "s", ref: "PRIVATE_INPUT" },
+      "arguments 必须",
+    ],
+    [
+      "double-encoded JSON",
+      JSON.stringify(JSON.stringify({ snapshotId: "s", ref: "PRIVATE_INPUT" })),
+      "单层 JSON 对象",
+    ],
+    ["array", JSON.stringify(["PRIVATE_INPUT"]), "JSON 对象"],
+    ["null", "null", "JSON 对象"],
+  ])(
+    "rejects %s safely before any page mutation",
+    async (_kind, args, message) => {
+      allowPage();
+      const cb = callbacks();
+      session = new QwenRealtimeVoiceSession(cb);
+      await session.start(options);
+      await ready();
+      rawPageResponse("page_click", args);
+      await vi.waitFor(() =>
+        expect(pageOutput()).toMatchObject({
+          dispatched: false,
+          code: "PAGE_TOOL_ARGUMENTS",
+          retryable: true,
+          text: expect.stringContaining(message),
+        }),
+      );
+      expect(pageOutput().text).not.toContain("PRIVATE_INPUT");
+      expect(cb.preparePage).not.toHaveBeenCalled();
+      expect(f.action).not.toHaveBeenCalled();
+      expect(Peer.last.dc.readyState).toBe("open");
+    },
+  );
+  it("uses complete done arguments once despite deltas, duplicate done events and duplicate response completion", async () => {
+    allowPage();
+    session = new QwenRealtimeVoiceSession(callbacks());
+    await session.start(options);
+    await ready();
+    const dc = Peer.last.dc;
+    dc.emit({ type: "response.created", response: { id: "r" } });
+    for (const delta of ['{"snapshotId":"wrong",', '"ref":"wrong"}'])
+      dc.emit({
+        type: "response.function_call_arguments.delta",
+        response_id: "r",
+        call_id: "c",
+        name: "page_click",
+        delta,
+      });
+    const completed = {
+      type: "response.function_call_arguments.done",
+      response_id: "r",
+      call_id: "c",
+      name: "page_click",
+      arguments: JSON.stringify({ snapshotId: "snapshot-1", ref: "control-1" }),
+    };
+    dc.emit({ ...completed, event_id: "done-a" });
+    dc.emit({
+      ...completed,
+      event_id: "done-b",
+      arguments: JSON.stringify({ snapshotId: "different", ref: "different" }),
+    });
+    await settle();
+    expect(f.action).not.toHaveBeenCalled();
+    done("r");
+    done("r");
+    dc.emit({ ...completed, event_id: "late-done" });
+    await vi.waitFor(() =>
+      expect(pageOutput("c")).toMatchObject({ dispatched: true }),
+    );
+    expect(f.action).toHaveBeenCalledExactlyOnceWith(
+      { snapshotId: "snapshot-1", ref: "control-1", action: "click" },
+      expect.any(Object),
+    );
+    expect(
+      dc.sent.filter(
+        (event) => (event.item as { call_id?: string })?.call_id === "c",
+      ),
+    ).toHaveLength(1);
+    expect(
+      dc.sent.filter((event) => event.type === "response.create"),
+    ).toHaveLength(1);
   });
   it.each(["no-capability", "desktop"])(
     "does not run local page tools for %s sessions",
@@ -339,7 +605,9 @@ describe("Qwen local website tools", () => {
     await vi.waitFor(() =>
       expect(pageOutput()).toMatchObject({
         dispatched: false,
-        text: expect.stringContaining("参数"),
+        code: "PAGE_TOOL_ARGUMENTS",
+        retryable: true,
+        text: expect.stringContaining("不接受的字段"),
       }),
     );
     expect(cb.preparePage).not.toHaveBeenCalled();
@@ -391,10 +659,9 @@ describe("Qwen local website tools", () => {
       session = new QwenRealtimeVoiceSession(callbacks());
       await session.start(options);
       await ready();
-      pageResponse("page_action", {
+      pageResponse("page_click", {
         snapshotId: "s",
         ref: "r",
-        action: "click",
       });
       await vi.waitFor(() => expect(f.action).toHaveBeenCalledOnce());
       const context = f.action.mock.calls[0][1];

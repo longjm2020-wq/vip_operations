@@ -8,8 +8,10 @@ import {
 import { assistantPublicText } from "../../../packages/contracts/src/ai-presentation.js";
 import {
   isPageToolName,
-  pageObserveSchema,
-  pageActionSchema,
+  parsePageToolArguments,
+  pageToolArgumentError,
+  type PageObserveInput,
+  type PageActionInput,
   type PageToolName,
 } from "../../../packages/contracts/src/assistant-page.js";
 import { RealtimePageController } from "./realtime-page-controller.js";
@@ -37,7 +39,7 @@ type Event = {
   item_id?: string;
   call_id?: string;
   name?: string;
-  arguments?: string;
+  arguments?: unknown;
   delta?: string;
   transcript?: string;
   text?: string;
@@ -46,7 +48,7 @@ type Event = {
 type Tool = {
   callId: string;
   name: RealtimeToolName | PageToolName;
-  args: string;
+  args: unknown;
 };
 type Response = {
   turn: number;
@@ -64,6 +66,8 @@ type Caption = RealtimeCaption & {
   final: boolean;
   saved: boolean;
 };
+const pageArgumentRetryStopped =
+  "本轮参数修正仍未成功，停止重复尝试，等待用户新的指令";
 
 /** Qwen media travels directly over RTP. Only SDP and authenticated business
  * operations use the application server; no provider credential enters this class. */
@@ -97,6 +101,7 @@ export class QwenRealtimeVoiceSession {
   private businessUsers = new Set<string>();
   private captions: Caption[] = [];
   private pendingTools = 0;
+  private pageArgumentFailures = 0;
   private toolQueue: Promise<void> = Promise.resolve();
   private saving = false;
   private healthBusy = false;
@@ -383,37 +388,53 @@ export class QwenRealtimeVoiceSession {
         let result: unknown;
         let navigation: string | undefined;
         let pageActionAttempted = false;
+        let pageArgumentsInvalid = false;
         try {
-          const args: unknown = JSON.parse(tool.args);
           if (isPageToolName(tool.name)) {
             if (!this.page)
               throw Error(
                 "本次通话未启用网站内操作，请在网站内模式重新开始通话",
               );
-            const parsed = (
-              tool.name === "page_observe"
-                ? pageObserveSchema
-                : pageActionSchema
-            ).safeParse(args);
-            if (!parsed.success)
+            pageArgumentsInvalid = true;
+            if (tool.name !== "page_observe" && this.pageArgumentFailures >= 2)
+              throw Error(pageArgumentRetryStopped);
+            // The provider's done.arguments is the sole complete payload. Do
+            // not concatenate deltas, coerce objects, or recursively decode JSON.
+            if (typeof tool.args !== "string")
               throw Error(
-                "页面操作参数不完整或无效，请重新观察页面后使用最新控件引用",
+                "工具调用的 arguments 必须是 JSON 字符串，请自行按工具字段修正后重新调用，未执行页面操作。",
               );
+            let args: unknown;
+            try {
+              args = JSON.parse(tool.args);
+            } catch {
+              throw Error(
+                "工具参数不是合法 JSON，请重新生成完整参数对象，未执行页面操作。",
+              );
+            }
+            if (!args || typeof args !== "object" || Array.isArray(args))
+              throw Error(
+                typeof args === "string"
+                  ? "工具参数必须是单层 JSON 对象，不能将对象再次编码为字符串；请自行修正后重新调用，未执行页面操作。"
+                  : "工具参数必须是 JSON 对象，不接受数组或空值；请自行修正后重新调用，未执行页面操作。",
+              );
+            const parsed = parsePageToolArguments(tool.name, args);
+            if (!parsed.success)
+              throw Error(pageToolArgumentError(tool.name, parsed.error));
+            pageArgumentsInvalid = false;
             await this.preparePage(id, response);
             if (tool.name === "page_observe") {
-              const query = pageObserveSchema.parse(parsed.data).query;
+              const query = (parsed.data as PageObserveInput).query;
               result = this.page.observe(query);
             } else {
               pageActionAttempted = true;
-              result = await this.page.action(
-                pageActionSchema.parse(parsed.data),
-                {
-                  signal: response.cancel.signal,
-                  isCurrent: () => this.current(id),
-                },
-              );
+              result = await this.page.action(parsed.data as PageActionInput, {
+                signal: response.cancel.signal,
+                isCurrent: () => this.current(id),
+              });
             }
           } else {
+            const args: unknown = JSON.parse(String(tool.args));
             const request =
               args && typeof args === "object"
                 ? (args as { request?: unknown }).request
@@ -438,15 +459,29 @@ export class QwenRealtimeVoiceSession {
             this.cb.result();
           }
         } catch (error) {
+          if (pageArgumentsInvalid)
+            this.pageArgumentFailures = Math.min(
+              2,
+              this.pageArgumentFailures + 1,
+            );
           result = {
             ...(isPageToolName(tool.name)
               ? { dispatched: pageActionAttempted ? null : false }
               : {}),
-            text: pageActionAttempted
-              ? "页面操作结果暂未确认，请先重新观察页面，避免重复提交。"
-              : (error as Error).name === "TimeoutError"
-                ? "等待操作结果超时，请在任务或完整对话中核验，不要重复提交"
-                : assistantPublicText((error as Error).message),
+            ...(pageArgumentsInvalid
+              ? {
+                  code: "PAGE_TOOL_ARGUMENTS",
+                  retryable: this.pageArgumentFailures < 2,
+                }
+              : {}),
+            text:
+              pageArgumentsInvalid && this.pageArgumentFailures >= 2
+                ? pageArgumentRetryStopped
+                : pageActionAttempted
+                  ? "页面操作结果暂未确认，请先重新观察页面，避免重复提交。"
+                  : (error as Error).name === "TimeoutError"
+                    ? "等待操作结果超时，请在任务或完整对话中核验，不要重复提交"
+                    : assistantPublicText((error as Error).message),
           };
         }
         // An already submitted action remains in the task record, but its old
@@ -556,6 +591,7 @@ export class QwenRealtimeVoiceSession {
     if (event.type === "input_audio_buffer.speech_started") {
       this.invalidate();
       this.turn++;
+      this.pageArgumentFailures = 0;
       this.user = String(event.item_id || crypto.randomUUID());
       this.talking = true;
       for (const [id, response] of this.responses)
@@ -653,7 +689,7 @@ export class QwenRealtimeVoiceSession {
         response.tools.push({
           callId: event.call_id,
           name: event.name,
-          args: String(event.arguments),
+          args: event.arguments,
         });
         break;
       case "response.done":
