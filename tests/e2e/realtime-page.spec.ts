@@ -17,6 +17,8 @@ declare global {
       clicks: number;
       inputEvents: string[];
       navigations: string[];
+      navigationDelayMs: number;
+      pendingNavigation?: Promise<Result>;
     };
   }
 }
@@ -29,7 +31,7 @@ async function fixture(page: Page, body: string) {
       body { font: 16px sans-serif; margin: 24px; }
       button,input,textarea,select,[role=combobox],[role=option] { margin: 8px; padding: 10px; }
       [role=option] { background: #ddd; }
-    </style></head><body><main>${body}</main></body></html>`,
+    </style></head><body><main data-voice-page-root="true" data-voice-page-path="/my-workspace">${body}</main></body></html>`,
     }),
   );
   await page.goto("/my-workspace");
@@ -42,12 +44,26 @@ async function fixture(page: Page, body: string) {
       navigate: (path) => {
         window.pageEngineTest.navigations.push(path);
         history.pushState({}, "", path);
+        const root = document.querySelector<HTMLElement>(
+          "[data-voice-page-root]",
+        )!;
+        if (window.pageEngineTest.navigationDelayMs) {
+          setTimeout(() => {
+            root.innerHTML =
+              "<h1>延迟加载的新页面</h1><h3>旧页面入口卡片</h3><button>新页面专有操作</button>";
+            root.dataset.voicePagePath =
+              location.pathname + location.search + location.hash;
+          }, window.pageEngineTest.navigationDelayMs);
+        } else
+          root.dataset.voicePagePath =
+            location.pathname + location.search + location.hash;
       },
     });
     window.pageEngineTest = {
       clicks: 0,
       inputEvents: [],
       navigations: [],
+      navigationDelayMs: 0,
       observe: (query) => controller.observe(query),
       action: (args, guard) => {
         const abort = new AbortController();
@@ -103,6 +119,69 @@ async function act(
         };
   return page.evaluate((args) => window.pageEngineTest.action(args), args);
 }
+
+test("延迟导航等待新页面标记与内容就绪，不将新地址和旧控件拼成观察结果", async ({
+  page,
+}) => {
+  await fixture(
+    page,
+    `
+    <h1>原始业务页面</h1>
+    <button>旧页面专有操作</button>
+    <button>近 15 天</button>
+    <a href="/operations?view=delayed#new">打开延迟的新页面</a>
+  `,
+  );
+  const query = await observe(page, "近15天");
+  expect(query.controls.some((control) => control.name === "近 15 天")).toBe(
+    true,
+  );
+  const initial = await observe(page);
+  expect(initial.ready).toBe(true);
+  expect(initial.pageName).toBe("原始业务页面");
+  const target = initial.controls.find(
+    (control) => control.name === "打开延迟的新页面",
+  )!;
+  await page.evaluate(
+    (args) => {
+      window.pageEngineTest.navigationDelayMs = 500;
+      window.pageEngineTest.pendingNavigation =
+        window.pageEngineTest.action(args);
+    },
+    {
+      snapshotId: initial.snapshotId,
+      ref: target.ref,
+      action: "click" as const,
+    },
+  );
+  await expect(page).toHaveURL(/\/operations\?view=delayed#new$/);
+  const pending = await observe(page);
+  expect(pending.ready).toBe(false);
+  expect(pending.snapshotId).toBe("");
+  expect(pending.controls).toEqual([]);
+  expect(pending.headings).toEqual([]);
+  const result = await page.evaluate(
+    () => window.pageEngineTest.pendingNavigation!,
+  );
+  expect(result.dispatched).toBe(true);
+  expect(result.observation.ready).toBe(true);
+  expect(result.observation.path).toBe("/operations?view=delayed#new");
+  expect(result.observation.pageName).toBe("延迟加载的新页面");
+  expect(result.observation.pageName).not.toBe("旧页面入口卡片");
+  expect(
+    result.observation.controls.some(
+      (control) => control.name === "新页面专有操作",
+    ),
+  ).toBe(true);
+  expect(
+    result.observation.controls.some(
+      (control) => control.name === "旧页面专有操作",
+    ),
+  ).toBe(false);
+  expect(await page.evaluate(() => window.pageEngineTest.navigations)).toEqual([
+    "/operations?view=delayed#new",
+  ]);
+});
 
 test("通用识屏操作任意按钮、输入框、原生和自定义选项，并只报告已派发", async ({
   page,

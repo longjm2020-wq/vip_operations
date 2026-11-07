@@ -301,17 +301,44 @@ export class RealtimePageController {
   private observedAt = 0;
   private closed = false;
   private busy = false;
+  private routeBound = !!document.querySelector(
+    '[data-voice-page-root="true"]',
+  );
   private last?: PageObservation;
   constructor(private options: { navigate?: (path: string) => void } = {}) {}
+
+  private pageReady() {
+    const root = document.querySelector<HTMLElement>(
+      '[data-voice-page-root="true"]',
+    );
+    if (root) this.routeBound = true;
+    return (
+      !this.routeBound ||
+      (!!root &&
+        visible(root) &&
+        root.dataset.voicePagePath ===
+          location.pathname + location.search + location.hash)
+    );
+  }
 
   observe(query = ""): PageObservation {
     if (this.closed) throw Error("语音已结束，未读取页面");
     this.refs.clear();
+    if (!this.pageReady()) {
+      this.snapshotId = "";
+      this.last = {
+        ...this.emptyObservation(),
+        path: publicPath(),
+        ready: false,
+        text: "页面正在切换或加载，尚无可操作的页面快照，请稍后重新观察。",
+      };
+      return this.last;
+    }
     this.snapshotId = crypto.randomUUID();
     this.href = location.href;
     this.observedAt = Date.now();
     const dialog = activeDialog(),
-      needle = compact(query, 100).toLowerCase();
+      needle = compact(query, 100).toLowerCase().replace(/\s+/g, "");
     const all = new Set(
       Array.from(document.querySelectorAll<HTMLElement>(candidates)),
     );
@@ -340,7 +367,11 @@ export class RealtimePageController {
       const name = nameOf(element) || (scrollable(element) ? "可滚动区域" : "");
       if (
         !name ||
-        (needle && !`${name} ${context}`.toLowerCase().includes(needle))
+        (needle &&
+          !`${name} ${context}`
+            .toLowerCase()
+            .replace(/\s+/g, "")
+            .includes(needle))
       )
         continue;
       if (controls.length >= 100) {
@@ -437,10 +468,28 @@ export class RealtimePageController {
       parts.push(text);
       length += text.length;
     }
+    const pageRoot = document.querySelector<HTMLElement>(
+      '[data-voice-page-root="true"]',
+    );
+    const primaryHeadings = pageRoot
+      ? Array.from(
+          pageRoot.querySelectorAll<HTMLElement>(
+            ".page-heading h1,.page-heading h2",
+          ),
+        )
+      : [];
+    const pageHeading = [
+      ...primaryHeadings,
+      ...Array.from(
+        (pageRoot || document).querySelectorAll<HTMLElement>("h1,h2"),
+      ),
+    ].find((element) => visible(element) && !!visibleText(element, 180));
     this.last = {
       snapshotId: this.snapshotId,
       path: publicPath(),
       title: compact(document.title),
+      ready: true,
+      pageName: pageHeading ? visibleText(pageHeading, 180) : "",
       headings,
       text: parts.join("\n"),
       controls,
@@ -524,6 +573,7 @@ export class RealtimePageController {
     const validate = () => {
       this.assertCurrent(context);
       if (
+        !this.pageReady() ||
         args.snapshotId !== this.snapshotId ||
         this.href !== location.href ||
         (element &&
@@ -737,19 +787,23 @@ export class RealtimePageController {
     this.refs.clear();
     this.snapshotId = "";
     await new Promise<void>((resolve) => setTimeout(resolve, 160));
+    // A lazy React route can change the address before its DOM commits. Wait
+    // for the route marker so a new path never carries the previous page's refs.
+    const readyDeadline = Date.now() + 3000;
+    while (
+      !this.pageReady() &&
+      Date.now() < readyDeadline &&
+      !this.closed &&
+      !context.signal?.aborted &&
+      context.isCurrent()
+    ) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 40));
+    }
     if (this.closed || context.signal?.aborted || !context.isCurrent())
       return {
         text: description,
         dispatched: true,
-        observation: this.last || {
-          snapshotId: "",
-          path: "",
-          title: "",
-          headings: [],
-          text: "",
-          controls: [],
-          truncated: false,
-        },
+        observation: this.emptyObservation(),
       };
     return { text: description, dispatched: true, observation: this.observe() };
   }

@@ -451,6 +451,18 @@ describe("native realtime voice authorization and lifecycle", () => {
     );
     expect(result.configuration!.session.instructions).toContain("不可信数据");
     expect(result.configuration!.session.instructions).toContain(
+      "ready:false 表示页面尚在加载，不能操作",
+    );
+    expect(result.configuration!.session.instructions).toContain(
+      "稍后重新调用 page_observe",
+    );
+    expect(result.configuration!.session.instructions).toContain(
+      "判断当前页面优先使用 pageName 和 path",
+    );
+    expect(result.configuration!.session.instructions).toContain(
+      "不能把它们当作当前页名",
+    );
+    expect(result.configuration!.session.instructions).toContain(
       "dispatched只表示已派发",
     );
     expect(result.configuration!.session.instructions).not.toContain(

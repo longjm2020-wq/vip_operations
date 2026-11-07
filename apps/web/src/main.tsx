@@ -485,7 +485,12 @@ function Workspace({ user }: { user: Row }) {
               />
             </Space>
           </Layout.Header>
-          <Layout.Content className={`content${collaborationTable ? " selection-workspace-content" : ""}`}>
+          {/* Commit the route marker with its content, after lazy routes resolve. */}
+          <Layout.Content
+            className={`content${collaborationTable ? " selection-workspace-content" : ""}`}
+            data-voice-page-root="true"
+            data-voice-page-path={location.pathname + location.search + location.hash}
+          >
             <Routes>
               <Route path="/my-workspace" element={<PersonalWorkspacePage key={user.id} />} />
               <Route path="/aigc" element={<AigcPage key={user.id} />} />

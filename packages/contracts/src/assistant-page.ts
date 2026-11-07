@@ -53,6 +53,10 @@ export type PageActionInput = z.infer<typeof pageActionSchema>;
 export type PageObservation = {
   snapshotId: string;
   path: string;
+  /** False while the visible route content has not finished committing. */
+  ready?: boolean;
+  /** Current page identity; headings may also contain navigation cards. */
+  pageName?: string;
   title: string;
   headings: string[];
   text: string;
