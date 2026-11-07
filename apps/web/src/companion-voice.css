@@ -59,6 +59,14 @@
   -webkit-line-clamp: 3;
   overflow: hidden;
 }
+.companion-voice-target {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  opacity: 0.72;
+}
 .companion-voice-caption {
   color: var(--app-secondary);
 }

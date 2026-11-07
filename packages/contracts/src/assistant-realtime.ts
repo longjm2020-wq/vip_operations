@@ -85,10 +85,25 @@ export const realtimeStartSchema = z
       .optional(),
     includePersonalContext: z.boolean().default(false),
     includeMemory: z.boolean().default(false),
+    desktopDeviceId: z.string().uuid().optional(),
+    model: z
+      .string()
+      .regex(/^engine\/[a-f0-9]{24}$/)
+      .optional(),
   })
-  .strict();
+  .strict()
+  .refine((v) => !v.model || !!v.desktopDeviceId, "电脑操作能力需选择执行电脑");
+export const realtimeToolNames = [
+  "workspace_request",
+  "desktop_request",
+] as const;
+export type RealtimeToolName = (typeof realtimeToolNames)[number];
+export function isRealtimeToolName(value: unknown): value is RealtimeToolName {
+  return realtimeToolNames.some((name) => name === value);
+}
 export const realtimeToolSchema = z
   .object({
+    tool: z.enum(realtimeToolNames).default("workspace_request"),
     callId: z
       .string()
       .min(1)
@@ -140,4 +155,5 @@ export type RealtimeToolResult = {
   text: string;
   navigation?: string;
   messageId?: string;
+  desktopTaskId?: string;
 };

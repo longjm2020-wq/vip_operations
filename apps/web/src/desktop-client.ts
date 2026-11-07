@@ -1,4 +1,9 @@
-type ClientState = { version: string; connected: boolean; deviceId: string };
+type ClientState = {
+  version: string;
+  connected: boolean;
+  deviceId: string;
+  authorized?: boolean;
+};
 type WebViewBridge = {
   postMessage: (message: unknown) => void;
   addEventListener: (
@@ -25,17 +30,22 @@ export function isDesktopClient() {
   );
 }
 
-/** This bridge only connects this device and displays native controls. It cannot execute input. */
+/** Opens native controls/consent. It cannot grant permission or execute input itself. */
 export function desktopClientRequest(
-  action: "status" | "pair" | "show-tasks",
-  code?: string,
+  action: "status" | "pair" | "authorize" | "show-tasks",
+  argument?: string,
 ) {
   const bridge =
     typeof window !== "undefined" ? window.chrome?.webview : undefined;
   if (!isDesktopClient() || !bridge)
     return Promise.reject(new Error("请在小序桌面端中使用此功能"));
-  if (action === "pair" && !/^[a-f0-9]{32}$/.test(code || ""))
+  if (action === "pair" && !/^[a-f0-9]{32}$/.test(argument || ""))
     return Promise.reject(new Error("配对码无效，请重新连接"));
+  if (
+    action === "authorize" &&
+    !/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/i.test(argument || "")
+  )
+    return Promise.reject(new Error("设备无效，请重新连接"));
   return new Promise<ClientState>((resolve, reject) => {
     const id = crypto.randomUUID();
     const clean = () => {
@@ -60,7 +70,13 @@ export function desktopClientRequest(
       if (
         typeof value.data?.version !== "string" ||
         typeof value.data?.connected !== "boolean" ||
-        typeof value.data?.deviceId !== "string"
+        typeof value.data?.deviceId !== "string" ||
+        (value.data.authorized !== undefined &&
+          typeof value.data.authorized !== "boolean") ||
+        (action === "authorize" &&
+          (typeof value.data.authorized !== "boolean" ||
+            !value.data.connected ||
+            value.data.deviceId !== argument))
       )
         return reject(new Error("客户端返回无效，请更新客户端"));
       resolve(value.data);
@@ -76,7 +92,8 @@ export function desktopClientRequest(
         channel: "xuti-desktop",
         id,
         action,
-        ...(action === "pair" ? { code } : {}),
+        ...(action === "pair" ? { code: argument } : {}),
+        ...(action === "authorize" ? { deviceId: argument } : {}),
       });
     } catch {
       clean();

@@ -20,6 +20,7 @@ const f = vi.hoisted(() => ({
   send: vi.fn(),
   verifyDoubao: vi.fn(),
   verifyQwen: vi.fn(),
+  model: vi.fn(),
 }));
 vi.mock("../../packages/database/src/index.js", async (original) => {
   const exports =
@@ -46,6 +47,9 @@ vi.mock("../../apps/api/src/modules/workspace/assistant.js", () => ({
   readAssistant: f.read,
   sendAssistant: f.send,
 }));
+vi.mock("../../apps/api/src/modules/workspace/agent-models.js", () => ({
+  resolveAgentModel: f.model,
+}));
 vi.mock("../../apps/api/src/modules/analytics/secrets.js", () => ({
   encryptionReady: () => true,
   encryptSecret: (v: string) => "encrypted:" + v,
@@ -68,6 +72,7 @@ import {
   saveRealtimeCaptions,
   claimRealtimeSocket,
   activateRealtimeSocket,
+  realtimeConfiguration,
 } from "../../apps/api/src/modules/workspace/assistant-realtime.js";
 
 const actor = (admin = false, id = "7"): Context => ({
@@ -93,6 +98,12 @@ beforeAll(async () => {
     CREATE TABLE personal_assistant_conversations(user_id bigint PRIMARY KEY, messages jsonb DEFAULT '[]', state text DEFAULT 'IDLE', version int DEFAULT 0, updated_at timestamptz DEFAULT now());`);
   await f.db.exec(
     await readFile(
+      "packages/database/migrations/084_assistant_desktop.sql",
+      "utf8",
+    ),
+  );
+  await f.db.exec(
+    await readFile(
       "packages/database/migrations/085_assistant_realtime.sql",
       "utf8",
     ),
@@ -109,15 +120,24 @@ beforeAll(async () => {
       "utf8",
     ),
   );
+  await f.db.exec(
+    await readFile(
+      "packages/database/migrations/089_realtime_desktop.sql",
+      "utf8",
+    ),
+  );
 });
 beforeEach(async () => {
   await f.db!
-    .exec(`TRUNCATE assistant_realtime_sessions CASCADE; TRUNCATE personal_assistant_conversations;
+    .exec(`TRUNCATE assistant_desktop_devices CASCADE; TRUNCATE personal_assistant_conversations;
     UPDATE assistant_realtime_settings SET provider='openai',enabled=true,voice='marin',api_key_encrypted='encrypted',verified_at=now(),error_note='',version=0,
     doubao_voice='zh_female_vv_uranus_bigtts',doubao_api_key_encrypted=NULL,doubao_verified_at=NULL,doubao_error_note='',
     qwen_voice='Tina',qwen_workspace_id='',qwen_free_only_confirmed=false,qwen_api_key_encrypted=NULL,qwen_verified_at=NULL,qwen_error_note='';`);
   f.verifyDoubao.mockReset().mockResolvedValue(undefined);
   f.verifyQwen.mockReset().mockResolvedValue(undefined);
+  f.model
+    .mockReset()
+    .mockResolvedValue({ id: "engine/111111111111111111111111", vision: true });
   f.read.mockReset().mockResolvedValue({
     ready: true,
     state: "IDLE",
@@ -160,6 +180,149 @@ afterAll(async () => {
 });
 
 describe("native realtime voice authorization and lifecycle", () => {
+  it.each(["openai", "qwen", "doubao"])(
+    "binds %s computer tools to the chosen device and keeps private context out of the task",
+    async (provider) => {
+      const deviceId = randomUUID();
+      await f.db!.query(
+        "INSERT INTO assistant_desktop_devices(id,user_id,session_hash,token_hash,last_seen_at) VALUES($1,7,'session','token',now())",
+        [deviceId],
+      );
+      if (provider !== "openai")
+        await f.db!.exec(
+          `UPDATE assistant_realtime_settings SET provider='${provider}',${provider}_api_key_encrypted='encrypted',${provider}_verified_at=now(),qwen_workspace_id='workspace-1',qwen_free_only_confirmed=true`,
+        );
+      const b = {
+        ...input(),
+        desktopDeviceId: deviceId,
+        includeMemory: true,
+        model: "engine/111111111111111111111111",
+      };
+      const started = await startRealtime(actor(), b);
+      if (started.ticket) {
+        const config = await claimRealtimeSocket(actor(), b.id, started.ticket);
+        expect(config.desktopEnabled).toBe(true);
+        await activateRealtimeSocket(actor(), b.id);
+      } else {
+        const config = JSON.parse(
+          (vi.mocked(fetch).mock.calls[0][1]!.body as FormData).get(
+            "session",
+          ) as string,
+        );
+        expect(config.tools.map((tool: { name: string }) => tool.name)).toEqual(
+          ["workspace_request", "desktop_request"],
+        );
+        expect(JSON.stringify(config)).not.toContain(deviceId);
+      }
+      const taskId = randomUUID();
+      f.send.mockResolvedValueOnce({
+        state: "IDLE",
+        messages: [
+          {
+            id: randomUUID(),
+            role: "assistant",
+            text: "电脑任务已创建",
+            desktopTaskId: taskId,
+          },
+        ],
+      });
+      const body = {
+        tool: "desktop_request",
+        callId: "click_once",
+        request: "点击记事本里的编辑菜单",
+      };
+      const result = await runRealtimeTool(actor(), b.id, body);
+      expect(result.desktopTaskId).toBe(taskId);
+      expect(await runRealtimeTool(actor(), b.id, body)).toEqual(result);
+      expect(f.send).toHaveBeenCalledTimes(1);
+      expect(f.send.mock.calls[0][1]).toMatchObject({
+        message: body.request,
+        desktopDeviceId: deviceId,
+        model: b.model,
+        includePersonalContext: false,
+        includeMemory: false,
+      });
+      expect(f.send.mock.calls[0][2].desktopRequest).toBe(true);
+      await expect(
+        runRealtimeTool(actor(), b.id, { ...body, tool: "workspace_request" }),
+      ).rejects.toThrow();
+      await expect(
+        runRealtimeTool(actor(), b.id, {
+          ...body,
+          callId: "forged",
+          desktopDeviceId: randomUUID(),
+        }),
+      ).rejects.toThrow();
+      await expect(
+        runRealtimeTool(actor(false, "8"), b.id, { ...body, callId: "other" }),
+      ).rejects.toThrow();
+      await runRealtimeTool(actor(), b.id, {
+        tool: "desktop_request",
+        callId: "home",
+        request: "返回到我的工作台",
+      });
+      expect(f.send.mock.calls[1][1]).not.toHaveProperty("desktopDeviceId");
+      expect(f.send.mock.calls[1][2]).not.toHaveProperty("desktopRequest");
+    },
+  );
+  it("does not advertise or accept computer execution without a selected device", async () => {
+    expect(
+      realtimeConfiguration("marin").tools.map((tool) => tool.name),
+    ).toEqual(["workspace_request"]);
+    const b = input();
+    await startRealtime(actor(), b);
+    await expect(
+      runRealtimeTool(actor(), b.id, {
+        tool: "desktop_request",
+        callId: "no_device",
+        request: "点击搜索框",
+      }),
+    ).rejects.toMatchObject({
+      response: { error: { code: "DESKTOP_NOT_SELECTED" } },
+    });
+    expect(f.send).not.toHaveBeenCalled();
+  });
+  it("rejects foreign, offline, revoked devices and non-visual capabilities before starting a call", async () => {
+    const id = randomUUID();
+    await f.db!.query(
+      "INSERT INTO assistant_desktop_devices(id,user_id,session_hash,token_hash,last_seen_at) VALUES($1,8,'session','token',now())",
+      [id],
+    );
+    await expect(
+      startRealtime(actor(), { ...input(), desktopDeviceId: id }),
+    ).rejects.toThrow();
+    await f.db!.query(
+      "UPDATE assistant_desktop_devices SET user_id=7,last_seen_at=now()-interval '1 minute' WHERE id=$1",
+      [id],
+    );
+    await expect(
+      startRealtime(actor(), { ...input(), desktopDeviceId: id }),
+    ).rejects.toThrow();
+    await f.db!.query(
+      "UPDATE assistant_desktop_devices SET last_seen_at=now(),revoked_at=now() WHERE id=$1",
+      [id],
+    );
+    await expect(
+      startRealtime(actor(), { ...input(), desktopDeviceId: id }),
+    ).rejects.toThrow();
+    await f.db!.query(
+      "UPDATE assistant_desktop_devices SET revoked_at=NULL WHERE id=$1",
+      [id],
+    );
+    f.model.mockResolvedValueOnce({
+      id: "engine/111111111111111111111111",
+      vision: false,
+    });
+    await expect(
+      startRealtime(actor(), { ...input(), desktopDeviceId: id }),
+    ).rejects.toMatchObject({
+      response: { error: { code: "VISION_REQUIRED" } },
+    });
+    expect(
+      (await f.db!.query("SELECT id FROM assistant_realtime_sessions")).rows,
+    ).toHaveLength(0);
+    expect(fetch).not.toHaveBeenCalled();
+  });
   it("requires Qwen workspace and free-only confirmation, isolates credentials and invalidates configuration changes", async () => {
     const admin = actor(true);
     const config = {

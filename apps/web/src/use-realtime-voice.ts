@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   RealtimeVoiceSession,
   type RealtimeCaption,
+  type RealtimeOptions,
 } from "./realtime-voice-session";
 import { DoubaoVoiceSession } from "./doubao-voice-session";
 import type { VoiceState } from "./use-gpt-voice";
@@ -38,10 +39,7 @@ export function useRealtimeVoice(
     call?.stop(reason);
     setMuted(false);
   }, []);
-  const start = async (options: {
-    includePersonalContext: boolean;
-    includeMemory: boolean;
-  }) => {
+  const start = async (options: RealtimeOptions) => {
     if (current.current) return;
     const turn = ++generation.current;
     setError("");

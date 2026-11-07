@@ -95,6 +95,44 @@ describe("desktop client connection bridge", () => {
     await timeoutHandled;
     expect(f.leaves.size).toBe(0);
   });
+  it("opens device-bound native consent and preserves a declined result", async () => {
+    const f = fixture();
+    const deviceId = "55555555-5555-4555-8555-555555555555";
+    await expect(desktopClientRequest("authorize", "bad")).rejects.toThrow(
+      "设备无效",
+    );
+    expect(f.sent).toHaveLength(0);
+    const promise = desktopClientRequest("authorize", deviceId);
+    expect(f.sent[0]).toMatchObject({ action: "authorize", deviceId });
+    expect(f.sent[0]).not.toHaveProperty("enabled");
+    f.reply({
+      channel: "xuti-desktop",
+      id: f.sent[0].id,
+      ok: true,
+      data: { version: "1.2.1", connected: true, deviceId, authorized: false },
+    });
+    expect((await promise).authorized).toBe(false);
+    expect(f.messages.size).toBe(0);
+  });
+  it("rejects authorization replies for another device", async () => {
+    const f = fixture();
+    const promise = desktopClientRequest(
+      "authorize",
+      "55555555-5555-4555-8555-555555555555",
+    );
+    f.reply({
+      channel: "xuti-desktop",
+      id: f.sent[0].id,
+      ok: true,
+      data: {
+        version: "1.2.1",
+        connected: true,
+        deviceId: "other",
+        authorized: true,
+      },
+    });
+    await expect(promise).rejects.toThrow("返回无效");
+  });
   it("rejects malformed native data and a disconnected bridge", async () => {
     const f = fixture();
     const promise = desktopClientRequest("status");

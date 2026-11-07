@@ -6,6 +6,7 @@ import WebSocket, { WebSocketServer } from "ws";
 import { actorForSessionHash } from "../auth/service.js";
 import type { Context } from "../../core.js";
 import { requireAssistant } from "./assistant-memory.js";
+import { isRealtimeToolName } from "../../../../../packages/contracts/src/assistant-realtime.js";
 import {
   activateRealtimeSocket,
   claimRealtimeSocket,
@@ -296,7 +297,7 @@ function runRelay(
             JSON.stringify(
               doubaoConfiguration(
                 config.voice,
-                realtimeConfiguration(config.voice),
+                realtimeConfiguration(config.voice, config.desktopEnabled),
               ),
             ),
           );
@@ -331,7 +332,10 @@ function runRelay(
                   JSON.stringify(
                     qwenConfiguration(
                       config.voice,
-                      realtimeConfiguration(config.voice),
+                      realtimeConfiguration(
+                        config.voice,
+                        config.desktopEnabled,
+                      ),
                     ),
                   ),
                 );
@@ -399,7 +403,7 @@ function runRelay(
                       await refreshActor();
                       if (
                         !item ||
-                        item.name !== "workspace_request" ||
+                        !isRealtimeToolName(item.name) ||
                         typeof item.call_id !== "string" ||
                         typeof item.arguments !== "string" ||
                         item.arguments.length > 16000
@@ -407,6 +411,7 @@ function runRelay(
                         throw Error("invalid tool");
                       const args = JSON.parse(item.arguments);
                       const result = await runRealtimeTool(c, id, {
+                        tool: item.name,
                         callId: item.call_id,
                         request: args.request,
                       });

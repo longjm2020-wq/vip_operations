@@ -128,7 +128,7 @@ export function assistantContext(
 export async function sendAssistant(
   c: Context,
   input: unknown,
-  voice?: { signal: AbortSignal },
+  voice?: { signal: AbortSignal; desktopRequest?: boolean },
 ) {
   requireAssistant(c);
   const body = parse(assistantSendSchema, input);
@@ -149,7 +149,9 @@ export async function sendAssistant(
     );
   if (
     body.desktopDeviceId &&
-    (body.attachmentIds.length || body.webSearch || voice)
+    (body.attachmentIds.length ||
+      body.webSearch ||
+      (voice && !voice.desktopRequest))
   )
     fail(
       "DESKTOP_INPUT",

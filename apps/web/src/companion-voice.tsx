@@ -319,6 +319,14 @@ export function CompanionVoice({
                 </button>
               )}
             </div>
+            {voice.realtime && hub.voiceExecutionLabel && (
+              <div
+                className="companion-voice-target"
+                title={hub.voiceExecutionLabel}
+              >
+                {hub.voiceExecutionLabel}
+              </div>
+            )}
             <p
               className={
                 problem ? "companion-voice-error" : "companion-voice-caption"

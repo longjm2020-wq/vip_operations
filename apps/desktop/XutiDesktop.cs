@@ -73,6 +73,7 @@ sealed class AssistantForm : Form {
     long permissionEpoch;
     public event Action Changed;
     public bool Connected { get { return token.Length > 0; } }
+    public bool Authorized { get { return Connected && authorizationId.Length > 0; } }
     public string DeviceId { get { return deviceId; } }
     public string ConnectionText { get { return connection.Text; } }
     public string TaskText { get { return status.Text; } }
@@ -91,7 +92,7 @@ sealed class AssistantForm : Form {
         var layout = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoScroll = true, Padding = new Padding(20) };
         Controls.Add(layout);
         layout.Controls.Add(new Label { Text = "电脑任务", AutoSize = true, Font = new Font(Font.FontFamily, 17, FontStyle.Bold), Margin = new Padding(0, 0, 0, 12) });
-        layout.Controls.Add(new Label { Text = "在工作台的小序中点击「连接本机」；也可粘贴其他浏览器生成的配对码。", AutoSize = true, MaximumSize = new Size(570, 0) });
+        layout.Controls.Add(new Label { Text = "在工作台的小序中点击「连接并授权本机」，确认一次即可；也可粘贴其他浏览器生成的配对码。", AutoSize = true, MaximumSize = new Size(570, 0) });
         var pairing = new FlowLayoutPanel { AutoSize = true };
         var pair = new Button { Text = "连接", AutoSize = true };
         var disconnect = new Button { Text = "断开本机", AutoSize = true };
@@ -195,15 +196,23 @@ sealed class AssistantForm : Form {
     void SaveConnection() {
         SaveProtected("connection.bin",json.Serialize(new { token, owner, deviceId, origin=Origin, authorizationId }));
     }
+    public async Task RequestAuthorization(string expectedDeviceId) {
+        if(!Connected || deviceId!=expectedDeviceId) throw new Exception("本机连接已变化，请重新选择电脑。");
+        if(changingAuthorization) throw new Exception("请先完成当前本机确认。");
+        // Repeated setup is idempotent; a web request can only open native consent, never revoke or silently grant.
+        if(!Authorized) await ChangeAuthorization();
+    }
     async Task ChangeAuthorization() {
         if (!Connected || changingAuthorization) return;
         bool enable = authorizationId.Length == 0;
-        if (enable && MessageBox.Show(this,
-            "允许小序在这台电脑上切换已打开的普通应用和网页，并执行你发送的电脑任务。\n\n新任务会自动开始。操作窗口的画面、控件文字及可用窗口标题将交给网站配置的智能服务处理。\n\n授权绑定当前账号与本机连接，重启后保留，直到你在本机或网站撤销；断开或重新配对后需重新授权。手动操作会暂停，Ctrl+Alt+X 可停止。登录、付款、发送、删除等仍由你接手。\n\n记住这台设备的跨窗口授权？",
-            "设备授权", MessageBoxButtons.YesNo, MessageBoxIcon.Information, MessageBoxDefaultButton.Button2) != DialogResult.Yes) return;
-        changingAuthorization=true; permissionEpoch++; LocalPause(); ShowConnection();
+        changingAuthorization=true; ShowConnection();
         string connectionToken=token;
         try {
+            if (enable && MessageBox.Show(TopLevelControl ?? this,
+                "允许小序按你的指令识别、点击已打开的网页和应用？\n\n确认一次后记住本机，新任务自动执行。操作画面、控件文字及窗口标题会交给已配置的智能服务处理。\n\n可随时撤销；Ctrl+Alt+X 停止。登录、付款、发送、删除仍由你接手。断开或换账号后需重新授权。",
+                "允许小序操作这台电脑", MessageBoxButtons.YesNo, MessageBoxIcon.Information, MessageBoxDefaultButton.Button2) != DialogResult.Yes) return;
+            if(token!=connectionToken || !Connected || closing) return;
+            permissionEpoch++; LocalPause();
             if (!enable) {
                 authorizationId="";
                 // Always revoke remotely even if the local encrypted file cannot be written.

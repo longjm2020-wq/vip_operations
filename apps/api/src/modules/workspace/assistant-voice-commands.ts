@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { availableWorkspaceTools } from "../../../../../packages/contracts/src/personal-workspace.js";
+import { assistantNavigationTools } from "../../../../../packages/contracts/src/assistant-voice-commands.js";
 import {
   assistantActionLabels,
   canRunAssistantSync,
@@ -30,7 +30,7 @@ export async function runAssistantVoiceCommand(
   };
   if (command.kind === "navigate") {
     if (
-      !availableWorkspaceTools(c.actor).some(
+      !assistantNavigationTools(c.actor).some(
         (tool) => tool.id === command.toolId,
       )
     )

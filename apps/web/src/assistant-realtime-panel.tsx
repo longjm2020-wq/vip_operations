@@ -204,6 +204,7 @@ function VoiceSettings({
 }
 
 export function AssistantVoiceSettingsPanel({
+  executionLabel,
   status,
   realtime,
   context,
@@ -212,6 +213,7 @@ export function AssistantVoiceSettingsPanel({
   setMemory,
   startVoice,
 }: {
+  executionLabel: string;
   status: UseQueryResult<AssistantVoiceStatus, Error>;
   realtime: UseQueryResult<RealtimeStatus, Error>;
   context: boolean;
@@ -262,6 +264,7 @@ export function AssistantVoiceSettingsPanel({
       )}
       <Space wrap>
         <Tag>{native ? "小序实时通话" : "小序智能语音"}</Tag>
+        <Tag>执行位置：{executionLabel}</Tag>
         <Button
           type="primary"
           icon={<AudioOutlined />}
@@ -308,6 +311,8 @@ export function AssistantVoiceSettingsPanel({
           ? "实时传输声音并持续交谈，不限制语音条数；单次通话最长一小时，到期可重新开始。启用后不会在出错时自动降为分段语音。"
           : "原有分段语音每段最长25秒，轮流说话，每次最多10分钟。"}
         网站不保存录音，完成的文字对话保存在本人互动对话。隐藏页面或点击结束会关闭麦克风；打开页面和更新任务沿用现有权限，日程与记忆卡片仍需核对。
+        {native &&
+          "实时通话可向所选电脑下达识屏点击、输入和滚动任务；先在对话输入区选择执行电脑。通话开始后固定电脑和识图能力，更换需重新开始。电脑执行仍遵守本机授权，结束通话不撤销已提交任务。"}
       </p>
     </div>
   );

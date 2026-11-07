@@ -10,6 +10,10 @@ import {
 import { api } from "./api";
 import { desktopClientRequest, isDesktopClient } from "./desktop-client";
 import {
+  connectAndAuthorizeDesktop,
+  desktopSetupMessage,
+} from "./desktop-setup";
+import {
   desktopStatusLabels,
   type DesktopState,
 } from "../../../packages/contracts/src/assistant-desktop";
@@ -32,6 +36,7 @@ export function AssistantDesktopPanel({
   const [busy, setBusy] = useState("");
   const native = isDesktopClient();
   const [localDevice, setLocalDevice] = useState("");
+  const local = data?.devices.find((d) => d.id === localDevice);
   useEffect(() => {
     if (!native) return;
     let active = true;
@@ -67,8 +72,8 @@ export function AssistantDesktopPanel({
         </Button>
       </div>
       <p>
-        让小序操作 Windows
-        应用和网页。可逐次选择窗口，也可在本机记住跨窗口授权，让新任务自动执行。电脑任务使用当前选择的识图能力。
+        让小序按你的指令识别、点击 Windows
+        应用和网页。首次确认一次，后续直接说或输入要做的事。
       </p>
       <Alert
         type="info"
@@ -76,8 +81,8 @@ export function AssistantDesktopPanel({
         title={native ? "小序桌面端已就绪" : "使用小序桌面端"}
         description={
           native
-            ? "连接本机后，在顶部「电脑任务」点击「授权跨窗口操作」，确认一次即可记住这台设备；也可逐次选择窗口并允许。"
-            : "下载并解压 Windows 桌面端，双击 XutiDesktop.exe。登录工作台后点击「连接本机」，无需再打开独立助手。"
+            ? "点击下方按钮，在本机弹窗确认后即可使用。授权会记住，可随时撤销。"
+            : "下载并解压桌面端，打开 XutiDesktop.exe，登录后点击「连接并授权本机」。只需首次确认，之后可从网页或桌面端下达指令。"
         }
       />
       <Space wrap style={{ margin: "16px 0" }}>
@@ -89,33 +94,20 @@ export function AssistantDesktopPanel({
               disabled={!!busy}
               onClick={() =>
                 void run("native-pair", async () => {
-                  const current = await desktopClientRequest("status");
-                  if (current.connected) {
-                    if (data?.devices.some((d) => d.id === current.deviceId)) {
-                      choose(current.deviceId);
-                      return;
-                    }
-                    await desktopClientRequest("show-tasks");
-                    throw new Error(
-                      "本机已有连接，请先在电脑任务中断开，再连接当前账号",
-                    );
-                  }
-                  const pairCode = (
-                    await api(
-                      "/my-workspace/assistant/desktop/pair-code",
-                      "POST",
-                    )
-                  ).data.code as string;
-                  const result = await desktopClientRequest("pair", pairCode);
+                  const result = await connectAndAuthorizeDesktop(
+                    (data?.devices || []).map((d) => d.id),
+                  );
                   setLocalDevice(result.deviceId);
                   choose(result.deviceId);
-                  message.success("本机已连接，可以给小序下达电脑任务");
+                  message.info(desktopSetupMessage(result.authorized));
                 })
               }
             >
-              {localDevice && data?.devices.some((d) => d.id === localDevice)
-                ? "在本机执行"
-                : "连接本机"}
+              {local
+                ? local.crossWindowAuthorized
+                  ? "在本机执行"
+                  : "授权本机操作"
+                : "连接并授权本机"}
             </Button>
             <Button
               onClick={() =>
@@ -130,12 +122,16 @@ export function AssistantDesktopPanel({
           </>
         )}
         <Button
+          type={native ? "default" : "primary"}
           href="/downloads/xuti-desktop.zip"
           download
           icon={<DownloadOutlined />}
         >
           {native ? "下载新版桌面端" : "下载 Windows 桌面端"}
         </Button>
+      </Space>
+      <details>
+        <summary>连接其他电脑或使用配对码</summary>
         <Button
           loading={busy === "pair"}
           disabled={!!busy}
@@ -148,24 +144,26 @@ export function AssistantDesktopPanel({
             )
           }
         >
-          {native ? "连接其他电脑" : "生成配对码"}
+          生成配对码
         </Button>
-      </Space>
-      {pair && (
-        <Alert
-          showIcon
-          type="info"
-          title="仅粘贴到小序桌面端的电脑任务面板，10分钟内有效"
-          description={
-            <>
-              <Typography.Text copyable={{ text: pair.code }} code>
-                {pair.code}
-              </Typography.Text>
-              <div>有效至 {new Date(pair.expiresAt).toLocaleTimeString()}</div>
-            </>
-          }
-        />
-      )}
+        {pair && (
+          <Alert
+            showIcon
+            type="info"
+            title="仅粘贴到小序桌面端的电脑任务面板，10分钟内有效"
+            description={
+              <>
+                <Typography.Text copyable={{ text: pair.code }} code>
+                  {pair.code}
+                </Typography.Text>
+                <div>
+                  有效至 {new Date(pair.expiresAt).toLocaleTimeString()}
+                </div>
+              </>
+            }
+          />
+        )}
+      </details>
       {error && <Alert type="error" title={error} />}
       <h4>已连接电脑</h4>
       {!data?.devices.length && (

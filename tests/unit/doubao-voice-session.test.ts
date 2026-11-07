@@ -151,6 +151,31 @@ afterEach(() => {
 });
 
 describe("full duplex PCM session", () => {
+  it("binds the selected computer through the session API and refreshes one submitted task result", async () => {
+    const cb = callbacks();
+    session = new DoubaoVoiceSession(cb);
+    const selected = {
+      ...options,
+      desktopDeviceId: "11111111-1111-4111-8111-111111111111",
+      model: "engine/111111111111111111111111",
+    };
+    await session.start(selected);
+    expect(f.api.mock.calls[0][2]).toMatchObject(selected);
+    ready();
+    const event = {
+      type: "xuti.tool_result",
+      call_id: "desktop-call",
+      question_id: "q1",
+      result: { text: "电脑任务已创建", desktopTaskId: "task" },
+    };
+    Socket.last.emit(event);
+    Socket.last.emit(event);
+    expect(cb.result).toHaveBeenCalledOnce();
+    expect(cb.navigate).not.toHaveBeenCalled();
+    expect(JSON.stringify(Socket.last.sent)).not.toContain(
+      selected.desktopDeviceId,
+    );
+  });
   it("authenticates without URL secrets and sends paced audio only after ready", async () => {
     const cb = callbacks();
     session = new DoubaoVoiceSession(cb);

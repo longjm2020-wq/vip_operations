@@ -39,7 +39,7 @@ import {
   type AssistantMemory,
   type AssistantMemoryEntry,
 } from "../../../packages/contracts/src/personal-assistant";
-import { availableWorkspaceTools } from "../../../packages/contracts/src/personal-workspace";
+import { assistantNavigationTools } from "../../../packages/contracts/src/assistant-voice-commands";
 import { AssistantHubContext } from "./assistant-hub-context";
 import { AssistantActivityPanel } from "./assistant-activity-panel";
 import type { AssistantActivityFeed } from "../../../packages/contracts/src/assistant-activity";
@@ -89,7 +89,7 @@ export function PersonalAssistantProvider({
   const navigate = useNavigate();
   const location = useLocation();
   const inWorkspace = location.pathname === "/my-workspace";
-  const available = availableWorkspaceTools({
+  const available = assistantNavigationTools({
     permissions: user.permissions,
     roleCodes: user.roleCodes,
   });
@@ -278,6 +278,7 @@ export function PersonalAssistantProvider({
     () => {
       void q.refetch();
       void activity.refetch();
+      void desktop.refetch();
     },
     (toolId) => {
       const tool = available.find((item) => item.id === toolId);
@@ -290,6 +291,10 @@ export function PersonalAssistantProvider({
     realtimeVoice.active ||
     (!legacyVoice.active && !!realtimeStatus.data?.enabled);
   const gptVoice = useRealtime ? realtimeVoice : legacyVoice;
+  const voiceExecutionLabel =
+    useRealtime && desktopDeviceId
+      ? `电脑操作 · ${desktop.data?.devices?.find((device) => device.id === desktopDeviceId)?.name || "所选电脑"}`
+      : "网站内";
   const selectedVoiceStatus =
     useRealtime && realtimeStatus.data
       ? {
@@ -456,6 +461,9 @@ export function PersonalAssistantProvider({
       void gptVoice.start({
         includePersonalContext: includeContext,
         includeMemory,
+        ...(useRealtime && desktopDeviceId
+          ? { desktopDeviceId, model: agent.model }
+          : {}),
       });
     else if (!activeVoiceStatus?.ready) {
       void voiceStatus.refetch();
@@ -740,7 +748,7 @@ export function PersonalAssistantProvider({
       />
       {desktopDeviceId && (
         <div className="assistant-desktop-note">
-          电脑任务仅发送本条指令，不附带日程或记忆。请移除附件并关闭联网；可用麦克风输入后核对发送。
+          电脑任务仅发送本条指令，不附带日程或记忆。请移除附件并关闭联网；开始实时通话后可直接说出需要识别、点击或输入的目标。
         </div>
       )}
       {voice.listening && (
@@ -771,6 +779,7 @@ export function PersonalAssistantProvider({
           (!useRealtime && voiceStatus.error?.message) ||
           "",
         voiceVisible,
+        voiceExecutionLabel,
         startVoice,
         closeVoice,
         openVoiceSettings,
@@ -918,6 +927,7 @@ export function PersonalAssistantProvider({
           )}
         {open && section === "voice" && allowed && (
           <AssistantVoiceSettingsPanel
+            executionLabel={voiceExecutionLabel}
             realtime={realtimeStatus}
             status={voiceStatus}
             context={includeContext}

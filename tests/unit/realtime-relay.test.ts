@@ -38,9 +38,12 @@ vi.mock("../../apps/api/src/modules/workspace/assistant-realtime.js", () => ({
   checkRealtime: f.check,
   closeRealtime: f.close,
   runRealtimeTool: f.tool,
-  realtimeConfiguration: () => ({
+  realtimeConfiguration: (_voice: string, desktopEnabled = false) => ({
     instructions: "server-owned",
-    tools: [{ name: "workspace_request" }],
+    tools: [
+      { name: "workspace_request" },
+      ...(desktopEnabled ? [{ name: "desktop_request" }] : []),
+    ],
   }),
 }));
 vi.mock(
@@ -184,91 +187,106 @@ async function ready() {
 }
 
 describe("full-duplex relay", () => {
-  it("adapts Qwen readiness, scoped tool execution and resumed PCM output through the authenticated relay", async () => {
-    f.claim.mockResolvedValue({
-      provider: "qwen",
-      key: "encrypted-server-only",
-      workspaceId: "workspace-1",
-      voice: "Tina",
-    });
-    const { socket, events } = await client();
-    socket.send(
-      JSON.stringify({ type: "authenticate", ticket: "a".repeat(43) }),
-    );
-    await vi.waitFor(() => expect(f.sockets).toHaveLength(1));
-    const upstream = f.sockets[0];
-    const emit = (e: unknown) =>
-      upstream.emit("message", Buffer.from(JSON.stringify(e)), false);
-    emit({ type: "session.created", session: { id: "private-session" } });
-    expect(f.provider).toHaveBeenCalledWith(
-      "encrypted-server-only",
-      "workspace-1",
-    );
-    expect(f.activate).not.toHaveBeenCalled();
-    expect(upstream.sent[0]).toMatchObject({
-      type: "session.update",
-      session: { audio: { output: { voice: "Tina" } } },
-    });
-    emit({
-      type: "session.updated",
-      session: { id: "private-session", audio: { output: { voice: "Tina" } } },
-    });
-    await vi.waitFor(() =>
-      expect(events.some((e) => e.type === "xuti.ready")).toBe(true),
-    );
-    emit({ type: "input_audio_buffer.speech_started", item_id: "q" });
-    emit({ type: "input_audio_buffer.committed", item_id: "q" });
-    emit({ type: "response.created", response: { id: "r" } });
-    emit({
-      type: "response.function_call_arguments.done",
-      response_id: "r",
-      name: "workspace_request",
-      call_id: "call",
-      arguments: '{"request":"打开经营分析"}',
-    });
-    expect(f.tool).not.toHaveBeenCalled();
-    emit({ type: "response.done", response: { id: "r", status: "completed" } });
-    await vi.waitFor(() =>
-      expect(upstream.sent.some((e) => e.type === "response.create")).toBe(
-        true,
-      ),
-    );
-    expect(f.tool).toHaveBeenCalledWith(
-      expect.objectContaining({ actor: expect.objectContaining({ id: "7" }) }),
-      expect.any(String),
-      { callId: "call", request: "打开经营分析" },
-    );
-    expect(upstream.sent.at(-2)).toMatchObject({
-      type: "conversation.item.create",
-      item: { type: "function_call_output", call_id: "call" },
-    });
-    emit({ type: "response.created", response: { id: "r2" } });
-    emit({
-      type: "response.audio.delta",
-      response_id: "r2",
-      delta: "pcm",
-      private: "secret",
-    });
-    await vi.waitFor(() =>
-      expect(events.some((e) => e.type === "response.output_audio.delta")).toBe(
-        true,
-      ),
-    );
-    expect(
-      events.find((e) => e.type === "response.output_audio.delta"),
-    ).toMatchObject({ question_id: "q", response_id: "r2", delta: "pcm" });
-    expect(JSON.stringify(events)).not.toMatch(
-      /private-session|encrypted|secret/,
-    );
-    emit({
-      type: "error",
-      error: { code: "AllocationQuota.FreeTierOnly", message: "raw-secret" },
-    });
-    await once(socket, "close");
-    expect(String(events.at(-1)?.message)).toContain("免费额度");
-    expect(f.provider).toHaveBeenCalledTimes(1);
-    expect(upstream.readyState).toBe(WebSocket.CLOSED);
-  });
+  it.each(["workspace_request", "desktop_request"])(
+    "adapts Qwen readiness, scoped %s execution and resumed PCM output through the authenticated relay",
+    async (tool) => {
+      const request =
+        tool === "desktop_request" ? "点击编辑菜单" : "打开经营分析";
+      f.claim.mockResolvedValue({
+        provider: "qwen",
+        key: "encrypted-server-only",
+        workspaceId: "workspace-1",
+        voice: "Tina",
+        desktopEnabled: tool === "desktop_request",
+      });
+      const { socket, events } = await client();
+      socket.send(
+        JSON.stringify({ type: "authenticate", ticket: "a".repeat(43) }),
+      );
+      await vi.waitFor(() => expect(f.sockets).toHaveLength(1));
+      const upstream = f.sockets[0];
+      const emit = (e: unknown) =>
+        upstream.emit("message", Buffer.from(JSON.stringify(e)), false);
+      emit({ type: "session.created", session: { id: "private-session" } });
+      expect(f.provider).toHaveBeenCalledWith(
+        "encrypted-server-only",
+        "workspace-1",
+      );
+      expect(f.activate).not.toHaveBeenCalled();
+      expect(upstream.sent[0]).toMatchObject({
+        type: "session.update",
+        session: { audio: { output: { voice: "Tina" } } },
+      });
+      expect(JSON.stringify(upstream.sent[0])).toContain(tool);
+      emit({
+        type: "session.updated",
+        session: {
+          id: "private-session",
+          audio: { output: { voice: "Tina" } },
+        },
+      });
+      await vi.waitFor(() =>
+        expect(events.some((e) => e.type === "xuti.ready")).toBe(true),
+      );
+      emit({ type: "input_audio_buffer.speech_started", item_id: "q" });
+      emit({ type: "input_audio_buffer.committed", item_id: "q" });
+      emit({ type: "response.created", response: { id: "r" } });
+      emit({
+        type: "response.function_call_arguments.done",
+        response_id: "r",
+        name: tool,
+        call_id: "call",
+        arguments: JSON.stringify({ request }),
+      });
+      expect(f.tool).not.toHaveBeenCalled();
+      emit({
+        type: "response.done",
+        response: { id: "r", status: "completed" },
+      });
+      await vi.waitFor(() =>
+        expect(upstream.sent.some((e) => e.type === "response.create")).toBe(
+          true,
+        ),
+      );
+      expect(f.tool).toHaveBeenCalledWith(
+        expect.objectContaining({
+          actor: expect.objectContaining({ id: "7" }),
+        }),
+        expect.any(String),
+        { callId: "call", request, tool },
+      );
+      expect(upstream.sent.at(-2)).toMatchObject({
+        type: "conversation.item.create",
+        item: { type: "function_call_output", call_id: "call" },
+      });
+      emit({ type: "response.created", response: { id: "r2" } });
+      emit({
+        type: "response.audio.delta",
+        response_id: "r2",
+        delta: "pcm",
+        private: "secret",
+      });
+      await vi.waitFor(() =>
+        expect(
+          events.some((e) => e.type === "response.output_audio.delta"),
+        ).toBe(true),
+      );
+      expect(
+        events.find((e) => e.type === "response.output_audio.delta"),
+      ).toMatchObject({ question_id: "q", response_id: "r2", delta: "pcm" });
+      expect(JSON.stringify(events)).not.toMatch(
+        /private-session|encrypted|secret/,
+      );
+      emit({
+        type: "error",
+        error: { code: "AllocationQuota.FreeTierOnly", message: "raw-secret" },
+      });
+      await once(socket, "close");
+      expect(String(events.at(-1)?.message)).toContain("免费额度");
+      expect(f.provider).toHaveBeenCalledTimes(1);
+      expect(upstream.readyState).toBe(WebSocket.CLOSED);
+    },
+  );
   it("rejects cross-origin and missing-cookie upgrades before opening a provider connection", async () => {
     await expect(
       client({ Origin: "https://untrusted.test" }),
@@ -380,6 +398,7 @@ describe("full-duplex relay", () => {
     );
     expect(f.tool).toHaveBeenCalledTimes(2);
     expect(f.tool.mock.calls[0][2]).toEqual({
+      tool: "workspace_request",
       callId: "one",
       request: "打开经营分析",
     });

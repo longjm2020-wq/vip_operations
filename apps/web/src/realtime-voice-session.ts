@@ -1,6 +1,8 @@
 import { api } from "./api.js";
 import {
   realtimeModel,
+  isRealtimeToolName,
+  type RealtimeToolName,
   type RealtimeToolResult,
 } from "../../../packages/contracts/src/assistant-realtime.js";
 import { assistantPublicText } from "../../../packages/contracts/src/ai-presentation.js";
@@ -15,6 +17,8 @@ export type RealtimeCaption = {
 export type RealtimeOptions = {
   includePersonalContext: boolean;
   includeMemory: boolean;
+  desktopDeviceId?: string;
+  model?: string;
 };
 export type RealtimeCallbacks = {
   state: (state: VoiceState) => void;
@@ -199,8 +203,20 @@ export class RealtimeVoiceSession {
         i.saved = true;
       });
   }
-  private async executeTool(callId: string, args: string, user: string) {
+  private async executeTool(
+    callId: string,
+    args: string,
+    user: string,
+    tool: RealtimeToolName,
+    response?: string,
+  ) {
     if (this.closed) return;
+    if (response && this.interruptedResponses.has(response)) {
+      this.pendingTools--;
+      this.phase();
+      this.resumeToolResponse();
+      return;
+    }
     let result: RealtimeToolResult;
     try {
       const value = JSON.parse(args) as { request?: unknown };
@@ -210,7 +226,7 @@ export class RealtimeVoiceSession {
         await api(
           this.path("/tool"),
           "POST",
-          { callId, request: value.request },
+          { callId, request: value.request, tool },
           undefined,
           { signal: AbortSignal.timeout(180000) },
         )
@@ -350,7 +366,8 @@ export class RealtimeVoiceSession {
         break;
       case "response.function_call_arguments.done": {
         if (
-          e.name !== "workspace_request" ||
+          !isRealtimeToolName(e.name) ||
+          (e.response_id && this.interruptedResponses.has(e.response_id)) ||
           typeof e.call_id !== "string" ||
           this.toolIds.has(e.call_id)
         )
@@ -363,8 +380,15 @@ export class RealtimeVoiceSession {
         this.cb.business();
         this.phase();
         const callId = e.call_id;
+        const tool = e.name;
         this.toolQueue = this.toolQueue.then(() =>
-          this.executeTool(callId, String(e.arguments), user),
+          this.executeTool(
+            callId,
+            String(e.arguments),
+            user,
+            tool,
+            e.response_id,
+          ),
         );
         break;
       }

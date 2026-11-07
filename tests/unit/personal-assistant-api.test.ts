@@ -96,6 +96,18 @@ import { publicAgentCatalog } from "../../apps/api/src/modules/workspace/agent-m
 import { workspaceSaveSchema } from "../../packages/contracts/src/personal-workspace.js";
 import { parseVoiceCommand } from "../../packages/contracts/src/assistant-voice-commands.js";
 import {
+  startRealtime,
+  claimRealtimeSocket,
+  activateRealtimeSocket,
+  runRealtimeTool,
+} from "../../apps/api/src/modules/workspace/assistant-realtime.js";
+import {
+  desktopControl,
+  planDesktop,
+  permitDesktop,
+  acknowledgeDesktop,
+} from "../../apps/api/src/modules/workspace/desktop.js";
+import {
   readAssistantMemory,
   saveAssistantMemory,
 } from "../../apps/api/src/modules/workspace/assistant-memory.js";
@@ -169,7 +181,11 @@ beforeAll(async () => {
     "079_assistant_tools_memory.sql",
     "083_assistant_agent.sql",
     "084_assistant_desktop.sql",
+    "085_assistant_realtime.sql",
+    "086_doubao_realtime.sql",
+    "087_qwen_realtime.sql",
     "088_desktop_authorization.sql",
+    "089_realtime_desktop.sql",
   ])
     await fixture.database.exec(
       await readFile(`packages/database/migrations/${name}`, "utf8"),
@@ -191,7 +207,7 @@ beforeEach(async () => {
   fixture.encrypted = true;
   calls = [];
   await fixture.database!.exec(
-    "TRUNCATE assistant_desktop_tasks,assistant_desktop_devices,personal_assistant_jobs,personal_assistant_files,personal_assistant_conversations,personal_workspaces,idempotency_records,personal_assistant_actions,personal_assistant_memories,projects,project_members,project_library_acl; UPDATE compass_ai_settings SET enabled=true,verified_at=now(); UPDATE users SET status='ACTIVE'",
+    "TRUNCATE assistant_realtime_tools,assistant_realtime_sessions,assistant_desktop_tasks,assistant_desktop_devices,personal_assistant_jobs,personal_assistant_files,personal_assistant_conversations,personal_workspaces,idempotency_records,personal_assistant_actions,personal_assistant_memories,projects,project_members,project_library_acl; UPDATE compass_ai_settings SET enabled=true,verified_at=now(); UPDATE users SET status='ACTIVE'",
   );
   fixture.inventory.mockReset();
   fixture.queueInventory.mockReset();
@@ -458,6 +474,168 @@ describe("multimodal agent ownership and jobs", () => {
   });
 });
 describe("assistant business tools and private memory", () => {
+  async function computerCall() {
+    const deviceId = randomUUID();
+    await fixture.database!.query(
+      "INSERT INTO assistant_desktop_devices(id,user_id,name,session_hash,token_hash,last_seen_at) VALUES($1,7,'语音电脑','session','token',now())",
+      [deviceId],
+    );
+    await fixture.database!.exec(
+      "UPDATE assistant_realtime_settings SET provider='qwen',enabled=true,qwen_api_key_encrypted='test',qwen_verified_at=now(),qwen_workspace_id='workspace-1',qwen_free_only_confirmed=true",
+    );
+    const session = await startRealtime(actor(), {
+      id: randomUUID(),
+      desktopDeviceId: deviceId,
+      includePersonalContext: true,
+      includeMemory: true,
+    });
+    await claimRealtimeSocket(actor(), session.id, session.ticket!);
+    await activateRealtimeSocket(actor(), session.id);
+    return { deviceId, sessionId: session.id };
+  }
+  it("takes a realtime computer instruction through the real queue, screenshot plan, click acknowledgement and completion", async () => {
+    const { deviceId, sessionId } = await computerCall();
+    const request = {
+      tool: "desktop_request",
+      callId: "click_edit",
+      request: "点击记事本的编辑菜单",
+    };
+    const result = await runRealtimeTool(actor(), sessionId, request);
+    expect(result.desktopTaskId).toBeTruthy();
+    expect(result.text).toContain("电脑任务已创建");
+    expect(await runRealtimeTool(actor(), sessionId, request)).toEqual(result);
+    const tasks = (
+      await fixture.database!.query<Row>(
+        "SELECT * FROM assistant_desktop_tasks",
+      )
+    ).rows;
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]).toMatchObject({
+      device_id: deviceId,
+      instruction: request.request,
+      status: "WAITING",
+    });
+    expect(fetch).not.toHaveBeenCalled();
+    const taskId = result.desktopTaskId!;
+    const observation = {
+      requestId: randomUUID(),
+      image: (
+        await sharp({
+          create: { width: 400, height: 400, channels: 3, background: "white" },
+        })
+          .png()
+          .toBuffer()
+      ).toString("base64"),
+      width: 400,
+      height: 400,
+      window: "笔记",
+      application: "notepad",
+      controls: "MenuItem: 编辑",
+    };
+    expect(
+      (await planDesktop(actor(), deviceId, taskId, observation)).command,
+    ).toBeNull();
+    await desktopControl(
+      actor(),
+      taskId,
+      { action: "allow", window: "笔记", application: "notepad" },
+      deviceId,
+    );
+    vi.mocked(fetch).mockResolvedValueOnce(
+      provider({
+        kind: "click",
+        x: 250,
+        y: 100,
+        button: "left",
+        description: "点击编辑菜单",
+      }),
+    );
+    const plan = await planDesktop(actor(), deviceId, taskId, observation);
+    expect(plan.command?.action).toMatchObject({
+      kind: "click",
+      x: 250,
+      y: 100,
+    });
+    const sent = JSON.parse(vi.mocked(fetch).mock.calls[0][1]!.body as string);
+    expect(JSON.parse(sent.messages[1].content[0].text)).toMatchObject({
+      instruction: request.request,
+      controls: observation.controls,
+    });
+    expect(sent.messages[1].content[1].image_url.url).toMatch(
+      /^data:image\/jpeg;base64,/,
+    );
+    expect(JSON.stringify(sent)).not.toMatch(/personalContext|memories|评审/);
+    expect(
+      (
+        await permitDesktop(actor(), deviceId, taskId, {
+          commandId: plan.command!.id,
+        })
+      ).allowed,
+    ).toBe(true);
+    const clicked = await acknowledgeDesktop(actor(), deviceId, taskId, {
+      commandId: plan.command!.id,
+      outcome: "ok",
+      note: "点击已执行",
+    });
+    expect(clicked.status).toBe("RUNNING");
+    expect(clicked.step).toBe(1);
+    vi.mocked(fetch).mockResolvedValueOnce(
+      provider({ kind: "done", description: "已看到编辑菜单展开" }),
+    );
+    const completed = await planDesktop(actor(), deviceId, taskId, {
+      ...observation,
+      requestId: randomUUID(),
+      controls: "Menu: 编辑（已展开）",
+    });
+    expect(completed.task.status).toBe("DONE");
+    expect(completed.command).toBeNull();
+  });
+  it("rechecks device revocation before queuing a realtime computer task", async () => {
+    const { deviceId, sessionId } = await computerCall();
+    await fixture.database!.query(
+      "UPDATE assistant_desktop_devices SET revoked_at=now() WHERE id=$1",
+      [deviceId],
+    );
+    const result = await runRealtimeTool(actor(), sessionId, {
+      tool: "desktop_request",
+      callId: "revoked",
+      request: "点击编辑菜单",
+    });
+    expect(result.desktopTaskId).toBeUndefined();
+    expect(
+      (await fixture.database!.query("SELECT id FROM assistant_desktop_tasks"))
+        .rows,
+    ).toHaveLength(0);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+  it.each([
+    "返回到我的工作台",
+    "回到工作台",
+    "打开我的工作台",
+    "小序，请帮我返回工作台",
+  ])(
+    "navigates home for %s without a model or computer task",
+    async (message) => {
+      const response = await sendAssistant(
+        actor(),
+        { ...input(), message },
+        { signal: new AbortController().signal },
+      );
+      expect(response.messages.at(-1)).toMatchObject({
+        navigation: "workspace",
+        text: "正在为你打开我的工作台。",
+      });
+      expect(fetch).not.toHaveBeenCalled();
+      for (const text of [
+        "不要返回工作台",
+        "如何返回工作台",
+        "能返回工作台吗",
+        "返回工作台并更新罗盘数据",
+        "返回工作台？",
+      ])
+        expect(parseVoiceCommand(text)).toBeUndefined();
+    },
+  );
   it("routes a selected computer task to a consent-gated queue without calling the model or attaching private context", async () => {
     const deviceId = randomUUID();
     await fixture.database!.query(

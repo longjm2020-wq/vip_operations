@@ -14,7 +14,7 @@ using Microsoft.Web.WebView2.WinForms;
 namespace XutiDesktop {
 static class ShellPolicy {
     public const string Origin = "https://vip-web-production.up.railway.app";
-    public const string Version = "1.2.0";
+    public const string Version = "1.2.1";
     public static bool Trusted(string value) {
         Uri uri;
         return Uri.TryCreate(value,UriKind.Absolute,out uri) && uri.Scheme=="https" &&
@@ -30,14 +30,16 @@ static class ShellPolicy {
         if(!Trusted(source)||!Trusted(current)||raw==null||raw.Length>4096) throw new Exception("不支持的客户端请求");
         var d=AssistantForm.D(new JavaScriptSerializer().DeserializeObject(raw));
         string channel=AssistantForm.S(d,"channel"), action=AssistantForm.S(d,"action");
-        if(channel!="xuti-desktop"||!new[]{"status","pair","show-tasks","theme"}.Contains(action)) throw new Exception("不支持的客户端请求");
+        if(channel!="xuti-desktop"||!new[]{"status","pair","authorize","show-tasks","theme"}.Contains(action)) throw new Exception("不支持的客户端请求");
         if(action=="theme") {
             if(d.Keys.Any(k=>!new[]{"channel","action","value"}.Contains(k))||!new[]{"light","dark"}.Contains(AssistantForm.S(d,"value"))) throw new Exception("主题无效");
         } else {
             Guid id;
-            if(!Guid.TryParse(AssistantForm.S(d,"id"),out id)||d.Keys.Any(k=>!new[]{"channel","action","id","code"}.Contains(k))) throw new Exception("请求无效");
+            if(!Guid.TryParse(AssistantForm.S(d,"id"),out id)||d.Keys.Any(k=>!new[]{"channel","action","id","code","deviceId"}.Contains(k))) throw new Exception("请求无效");
             if(action=="pair"&&!Regex.IsMatch(AssistantForm.S(d,"code"),"^[a-f0-9]{32}$")) throw new Exception("配对码无效");
             if(action!="pair"&&d.ContainsKey("code")) throw new Exception("请求无效");
+            if(action=="authorize"&&!Guid.TryParse(AssistantForm.S(d,"deviceId"),out id)) throw new Exception("设备无效");
+            if(action!="authorize"&&d.ContainsKey("deviceId")) throw new Exception("请求无效");
         }
         return d;
     }
@@ -49,6 +51,10 @@ static class ShellPolicy {
             var j=new JavaScriptSerializer();
             string valid=j.Serialize(new{channel="xuti-desktop",action="status",id=Guid.NewGuid().ToString()});
             Message(Origin,Origin,valid);
+            Message(Origin,Origin,j.Serialize(new{channel="xuti-desktop",action="authorize",id=Guid.NewGuid().ToString(),deviceId=Guid.NewGuid().ToString()}));
+            foreach(string bad in new[]{j.Serialize(new{channel="xuti-desktop",action="authorize",id=Guid.NewGuid().ToString()}),j.Serialize(new{channel="xuti-desktop",action="authorize",id=Guid.NewGuid().ToString(),deviceId="wrong"}),j.Serialize(new{channel="xuti-desktop",action="status",id=Guid.NewGuid().ToString(),deviceId=Guid.NewGuid().ToString()})}) {
+                bool rejected=false;try{Message(Origin,Origin,bad);}catch{rejected=true;}if(!rejected)throw new Exception("Invalid authorization request accepted");
+            }
             foreach(string bad in new[]{j.Serialize(new{channel="xuti-desktop",action="shell",id=Guid.NewGuid().ToString()}),j.Serialize(new{channel="xuti-desktop",action="pair",id=Guid.NewGuid().ToString(),code="bad"}),j.Serialize(new{channel="xuti-desktop",action="status",id=Guid.NewGuid().ToString(),token="private"})}) {
                 bool rejected=false;try{Message(Origin,Origin,bad);}catch{rejected=true;}if(!rejected)throw new Exception("Invalid bridge message accepted");
             }
@@ -201,7 +207,7 @@ sealed class DesktopShell : Form {
             // No native object, token, filesystem or execution API is injected into any page.
             await core.AddScriptToExecuteOnDocumentCreatedAsync(@"(() => {
                 if (window !== window.top || location.origin !== 'https://vip-web-production.up.railway.app') return;
-                Object.defineProperty(window, 'xutiDesktop', {value: Object.freeze({version:'1.2.0'}), writable:false});
+                Object.defineProperty(window, 'xutiDesktop', {value: Object.freeze({version:'1.2.1'}), writable:false});
                 const theme = () => window.chrome.webview.postMessage({channel:'xuti-desktop',action:'theme',value:document.documentElement.dataset.theme === 'dark'?'dark':'light'});
                 addEventListener('DOMContentLoaded', () => {theme();new MutationObserver(theme).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});});
             })();");
@@ -219,8 +225,12 @@ sealed class DesktopShell : Form {
                 await assistant.PairCode(AssistantForm.S(data,"code"));
                 if(version!=navigation){await assistant.Disconnect();return;}
             }
+            if(action=="authorize") {
+                await assistant.RequestAuthorization(AssistantForm.S(data,"deviceId"));
+                if(version!=navigation){await assistant.Disconnect();return;}
+            }
             if(action=="show-tasks")ShowTasks();
-            Reply(version,new{channel="xuti-desktop",id,ok=true,data=new{version=ShellPolicy.Version,connected=assistant.Connected,deviceId=assistant.DeviceId}});
+            Reply(version,new{channel="xuti-desktop",id,ok=true,data=new{version=ShellPolicy.Version,connected=assistant.Connected,deviceId=assistant.DeviceId,authorized=assistant.Authorized}});
         } catch(Exception ex) {
             if(id.Length>0)Reply(version,new{channel="xuti-desktop",id,ok=false,error=ex is ApiFailure?ex.Message:"未能连接本机，请在电脑任务中检查连接，或重新生成配对码。"});
         }

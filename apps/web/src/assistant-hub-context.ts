@@ -17,6 +17,7 @@ export type AssistantHubState = {
   voiceStatus?: AssistantVoiceStatus;
   voiceStatusError: string;
   voiceVisible: boolean;
+  voiceExecutionLabel?: string;
   startVoice: () => void;
   closeVoice: () => void;
   openVoiceSettings: () => void;

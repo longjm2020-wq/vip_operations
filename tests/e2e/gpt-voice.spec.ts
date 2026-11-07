@@ -16,6 +16,140 @@ declare global {
   }
 }
 
+test("千问实时语音绑定所选电脑，刷新电脑任务并在同一通话返回工作台", async ({
+  page,
+}) => {
+  const { bubble } = await fixture(page, { configured: false });
+  const deviceId = "55555555-5555-4555-8555-555555555555";
+  const starts: Record<string, unknown>[] = [];
+  let socket: WebSocketRoute | undefined;
+  let desktopReads = 0;
+  await page.route(
+    "**/api/v1/my-workspace/assistant/desktop",
+    async (route) => {
+      desktopReads++;
+      await route.fulfill({
+        json: {
+          data: {
+            devices: [
+              {
+                id: deviceId,
+                name: "测试电脑",
+                online: true,
+                crossWindowAuthorized: true,
+                lastSeenAt: new Date().toISOString(),
+                expiresAt: "2026-12-01T00:00:00Z",
+              },
+            ],
+            tasks: [],
+          },
+        },
+      });
+    },
+  );
+  await page.route(
+    "**/api/v1/my-workspace/assistant/realtime**",
+    async (route) => {
+      const path = new URL(route.request().url()).pathname;
+      let data: unknown = {
+        provider: "qwen",
+        transport: "websocket",
+        enabled: true,
+        ready: true,
+        voice: "Tina",
+        apiKeyConfigured: true,
+        encryptionReady: true,
+        verifiedAt: "2026-11-07T00:00:00Z",
+        error: "",
+        canManage: true,
+        version: 1,
+      };
+      if (path.endsWith("/sessions")) {
+        starts.push(route.request().postDataJSON());
+        data = {
+          transport: "websocket",
+          ticket: "test-ticket",
+          expiresAt: new Date(Date.now() + 60000).toISOString(),
+        };
+      } else if (path.endsWith("/close")) data = { closed: true };
+      else if (path.includes("/sessions/"))
+        data = { active: true, saved: true };
+      await route.fulfill({ json: { data } });
+    },
+  );
+  await page.routeWebSocket(
+    "**/api/v1/my-workspace/assistant/realtime/sessions/*/socket",
+    (ws) => {
+      socket = ws;
+      ws.onMessage((raw) => {
+        const event = JSON.parse(raw.toString());
+        if (event.type === "authenticate")
+          ws.send(
+            JSON.stringify({
+              type: "xuti.ready",
+              expiresAt: new Date(Date.now() + 3600000).toISOString(),
+            }),
+          );
+        if (event.type === "session.close") ws.close();
+      });
+    },
+  );
+  await page.reload();
+  const composer = page.locator(".assistant-compose:visible");
+  await composer.getByRole("button", { name: "电脑授权：网站内" }).click();
+  await page.getByRole("combobox", { name: "执行位置" }).click();
+  await page.getByText("测试电脑", { exact: true }).last().click();
+  await composer.getByRole("button", { name: "电脑授权：跨窗口授权" }).click();
+  await composer.getByRole("button", { name: "开始智能语音对话" }).click();
+  await expect(bubble.getByRole("status")).toHaveText("实时聆听中，你说");
+  await expect(bubble.locator(".companion-voice-target")).toHaveText(
+    "电脑操作 · 测试电脑",
+  );
+  expect(starts).toHaveLength(1);
+  expect(starts[0]).toMatchObject({ desktopDeviceId: deviceId });
+  expect(starts[0]).not.toHaveProperty("authorizationId");
+  // Full-page captures can stall the main thread while the synthetic audio worklet
+  // keeps recording. Mute during visual capture; exercise navigation unmuted.
+  await bubble.getByRole("button", { name: "麦克风静音", exact: true }).click();
+  await page.screenshot({ path: ".local/realtime-desktop-voice.png" });
+  await bubble.getByRole("button", { name: "取消静音", exact: true }).click();
+  const before = desktopReads;
+  socket!.send(
+    JSON.stringify({
+      type: "xuti.tool_result",
+      call_id: "computer",
+      result: { text: "电脑任务已创建", desktopTaskId: "task" },
+    }),
+  );
+  await expect.poll(() => desktopReads).toBeGreaterThan(before);
+  socket!.send(
+    JSON.stringify({
+      type: "xuti.tool_result",
+      call_id: "analytics",
+      result: { text: "正在打开经营分析", navigation: "analytics" },
+    }),
+  );
+  await expect(page).toHaveURL(/\/analytics\/compass$/);
+  socket!.send(
+    JSON.stringify({
+      type: "xuti.tool_result",
+      call_id: "home",
+      result: { text: "正在为你打开我的工作台", navigation: "workspace" },
+    }),
+  );
+  await expect(page).toHaveURL(/\/my-workspace$/);
+  expect(starts).toHaveLength(1);
+  expect(await page.evaluate(() => window.gptVoiceTest.starts)).toBe(1);
+  await bubble.getByRole("button", { name: "麦克风静音", exact: true }).click();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(bubble.locator(".companion-voice-target")).toBeInViewport();
+  await page.screenshot({ path: ".local/realtime-desktop-voice-mobile.png" });
+  await bubble.getByRole("button", { name: "结束语音", exact: true }).click();
+  await expect
+    .poll(() => page.evaluate(() => window.gptVoiceTest.stops))
+    .toBe(1);
+});
+
 for (const provider of ["doubao", "qwen"] as const) {
   test(`${provider} 全双工实时通话用真实音频处理发送短帧，静音恢复与断开释放麦克风`, async ({
     page,

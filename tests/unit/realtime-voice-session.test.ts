@@ -102,6 +102,77 @@ afterEach(() => {
   vi.useRealTimers();
 });
 describe("realtime media ownership and event handling", () => {
+  it("passes the selected computer at start and sends a named desktop tool only once", async () => {
+    const cb = callbacks();
+    session = new RealtimeVoiceSession(cb);
+    const selected = {
+      ...options,
+      desktopDeviceId: "11111111-1111-4111-8111-111111111111",
+      model: "engine/111111111111111111111111",
+    };
+    await session.start(selected);
+    expect(f.api.mock.calls[0][2]).toMatchObject(selected);
+    ready();
+    const normal = f.api.getMockImplementation()!;
+    f.api.mockImplementation((...args) =>
+      args[0].endsWith("/tool")
+        ? Promise.resolve({
+            data: { text: "电脑任务已创建", desktopTaskId: "task" },
+          })
+        : normal(...args),
+    );
+    Peer.last.dc.emit({
+      type: "response.created",
+      response: { id: "desktop-response" },
+    });
+    const event = {
+      type: "response.function_call_arguments.done",
+      name: "desktop_request",
+      call_id: "desktop-call",
+      response_id: "desktop-response",
+      arguments: JSON.stringify({ request: "点击编辑菜单" }),
+    };
+    Peer.last.dc.emit(event);
+    Peer.last.dc.emit(event);
+    await vi.waitFor(() => expect(cb.result).toHaveBeenCalledOnce());
+    expect(
+      f.api.mock.calls.find((call) => call[0].endsWith("/tool"))?.[2],
+    ).toEqual({
+      tool: "desktop_request",
+      callId: "desktop-call",
+      request: "点击编辑菜单",
+    });
+    expect(cb.navigate).not.toHaveBeenCalled();
+    expect(JSON.stringify(Peer.last.dc.sent)).toContain("desktopTaskId");
+  });
+  it("does not submit a computer action whose response was interrupted before execution", async () => {
+    session = new RealtimeVoiceSession(callbacks());
+    await session.start(options);
+    ready();
+    Peer.last.dc.emit({ type: "response.created", response: { id: "old" } });
+    Peer.last.dc.emit({
+      type: "response.function_call_arguments.done",
+      name: "desktop_request",
+      call_id: "queued",
+      response_id: "old",
+      arguments: '{"request":"点击编辑菜单"}',
+    });
+    Peer.last.dc.emit({
+      type: "input_audio_buffer.speech_started",
+      item_id: "new",
+    });
+    Peer.last.dc.emit({
+      type: "response.function_call_arguments.done",
+      name: "desktop_request",
+      call_id: "late",
+      response_id: "old",
+      arguments: '{"request":"点击编辑菜单"}',
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(
+      f.api.mock.calls.filter((call) => call[0].endsWith("/tool")),
+    ).toHaveLength(0);
+  });
   it("sends an SDP offer, keeps mic alive during speech, and supports natural interruption", async () => {
     const cb = callbacks();
     session = new RealtimeVoiceSession(cb);

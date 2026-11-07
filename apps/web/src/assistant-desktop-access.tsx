@@ -4,6 +4,10 @@ import { DownOutlined, SafetyCertificateOutlined } from "@ant-design/icons";
 import type { DesktopState } from "../../../packages/contracts/src/assistant-desktop";
 import { api } from "./api";
 import { desktopClientRequest, isDesktopClient } from "./desktop-client";
+import {
+  connectAndAuthorizeDesktop,
+  desktopSetupMessage,
+} from "./desktop-setup";
 
 export function AssistantDesktopAccess({
   data,
@@ -39,17 +43,32 @@ export function AssistantDesktopAccess({
     if (!active) setOpen(false);
   }, [active]);
   async function manageAuthorization() {
+    if (pending) return;
     setOpen(false);
+    if (device?.crossWindowAuthorized) {
+      manage();
+      return;
+    }
     if (isDesktopClient()) {
+      setPending(true);
       try {
         const local = await desktopClientRequest("status");
-        if (deviceId && local.connected && local.deviceId === deviceId) {
-          await desktopClientRequest("show-tasks");
-          return;
+        if (!deviceId || local.deviceId === deviceId) {
+          const result = await connectAndAuthorizeDesktop(
+            (data?.devices || []).map((d) => d.id),
+          );
+          choose(result.deviceId);
+          message.info(desktopSetupMessage(result.authorized));
+        } else {
+          manage();
         }
       } catch (e) {
         message.error((e as Error).message);
+      } finally {
+        refresh();
+        setPending(false);
       }
+      return;
     }
     manage();
   }
@@ -95,27 +114,30 @@ export function AssistantDesktopAccess({
           />
           <p role="status">
             {!deviceId
-              ? "使用当前账号已获准的网站功能。选择在线电脑后，可发送电脑任务。"
+              ? "网站内操作直接使用，无需额外授权。需要操作其他网页或应用时，连接电脑即可。"
               : !device
                 ? "设备连接已失效，请重新连接或选择其他执行位置。"
                 : device.crossWindowAuthorized
                   ? "已记住此设备授权，可在已打开的普通应用和网页间切换；新任务自动开始。"
-                  : "逐次允许：在对应电脑的桌面端选择窗口并允许本次任务。"}
+                  : "首次在本机确认一次，记住后新任务自动执行。也可在电脑任务中逐次允许。"}
           </p>
           {device && !device.online && (
             <p>电脑当前离线，请打开小序桌面端并恢复连接。</p>
           )}
-          <p>
-            记住设备授权需在对应电脑的「电脑任务 →
-            授权跨窗口操作」中确认。登录、付款等仍由你接手。
-          </p>
           <Button
             block
             type="primary"
-            disabled={pending}
+            loading={pending}
+            disabled={disabled}
             onClick={() => void manageAuthorization()}
           >
-            {deviceId ? "管理电脑授权" : "连接电脑 / 管理授权"}
+            {device?.crossWindowAuthorized
+              ? "查看电脑任务进度"
+              : isDesktopClient()
+                ? deviceId
+                  ? "授权本机操作"
+                  : "连接并授权本机"
+                : "连接电脑"}
           </Button>
           {device?.crossWindowAuthorized && (
             <Button
@@ -128,16 +150,18 @@ export function AssistantDesktopAccess({
               撤销跨窗口授权
             </Button>
           )}
-          <Button
-            block
-            type="text"
-            onClick={() => {
-              setOpen(false);
-              manage();
-            }}
-          >
-            查看电脑任务进度
-          </Button>
+          {!device?.crossWindowAuthorized && (
+            <Button
+              block
+              type="text"
+              onClick={() => {
+                setOpen(false);
+                manage();
+              }}
+            >
+              查看电脑任务进度
+            </Button>
+          )}
         </div>
       }
     >

@@ -1,4 +1,19 @@
-import { workspaceTools } from "./personal-workspace.js";
+import {
+  workspaceTools,
+  availableWorkspaceTools,
+  type WorkspaceActor,
+} from "./personal-workspace.js";
+
+const workspaceHome = {
+  id: "workspace",
+  title: "我的工作台",
+  path: "/my-workspace",
+} as const;
+
+// Home is available to every signed-in user, but is not a configurable shortcut.
+export function assistantNavigationTools(actor: WorkspaceActor) {
+  return [workspaceHome, ...availableWorkspaceTools(actor)];
+}
 
 export type VoiceCommand =
   | { kind: "navigate"; toolId: string; title: string }
@@ -21,11 +36,13 @@ export function parseVoiceCommand(text: string): VoiceCommand | undefined {
   if (/^(?:开始)?(?:同步|更新)聚水潭库存(?:一下|吧)?$/.test(command))
     return { kind: "sync", syncKind: "jushuitan" };
   const match =
-    /^(?:打开|进入|前往|切换到)(?:唯品会)?(.+?)(?:页面)?(?:一下|吧)?$/.exec(
+    /^(?:打开|进入|前往|切换到|返回到?|回到?|切回到?)(?:唯品会)?(.+?)(?:页面)?(?:一下|吧)?$/.exec(
       command,
     );
-  const target =
-    match && workspaceTools.find((tool) => tool.title === match[1]);
+  const name = match?.[1];
+  const target = ["我的工作台", "工作台", "首页"].includes(name || "")
+    ? workspaceHome
+    : workspaceTools.find((tool) => tool.title === name);
   if (target)
     return { kind: "navigate", toolId: target.id, title: target.title };
 }

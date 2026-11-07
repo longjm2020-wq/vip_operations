@@ -348,6 +348,121 @@ test("亮色窄屏保留附件入口和中性能力名称", async ({ page }) => 
   await page.screenshot({ path: ".local/assistant-agent-light-mobile.png" });
 });
 
+test("桌面端从输入框一次连接并唤起本机确认，自动选中电脑", async ({ page }) => {
+  await setup(page);
+  const deviceId = "55555555-5555-4555-8555-555555555555";
+  await page.addInitScript(
+    ({ deviceId }) => {
+      let connected = false,
+        authorized = false;
+      const events = new EventTarget();
+      const actions: string[] = [];
+      Object.defineProperty(window, "xutiDesktop", {
+        value: { version: "1.2.1" },
+      });
+      Object.assign(window.chrome || (window.chrome = {}), {
+        webview: {
+          addEventListener: events.addEventListener.bind(events),
+          removeEventListener: events.removeEventListener.bind(events),
+          postMessage(request: {
+            action: string;
+            id: string;
+            deviceId?: string;
+          }) {
+            actions.push(request.action);
+            if (request.action === "pair") connected = true;
+            if (
+              request.action === "authorize" &&
+              connected &&
+              request.deviceId === deviceId
+            )
+              authorized = true;
+            queueMicrotask(() =>
+              events.dispatchEvent(
+                new MessageEvent("message", {
+                  data: {
+                    channel: "xuti-desktop",
+                    id: request.id,
+                    ok: true,
+                    data: {
+                      version: "1.2.1",
+                      connected,
+                      deviceId: connected ? deviceId : "",
+                      authorized,
+                    },
+                  },
+                }),
+              ),
+            );
+          },
+        },
+      });
+      Object.assign(window, {
+        desktopTestState: () => ({ connected, authorized, actions }),
+      });
+    },
+    { deviceId },
+  );
+  let pairCodes = 0;
+  await page.route(
+    "**/api/v1/my-workspace/assistant/desktop**",
+    async (route) => {
+      if (route.request().method() === "POST") {
+        expect(route.request().url()).toContain("/pair-code");
+        pairCodes++;
+        await route.fulfill({ json: { data: { code: "a".repeat(32) } } });
+        return;
+      }
+      const state = await page.evaluate(() =>
+        (window as any).desktopTestState(),
+      );
+      await route.fulfill({
+        json: {
+          data: {
+            devices: state.connected
+              ? [
+                  {
+                    id: deviceId,
+                    name: "本机测试电脑",
+                    online: true,
+                    crossWindowAuthorized: state.authorized,
+                    lastSeenAt: new Date().toISOString(),
+                  },
+                ]
+              : [],
+            tasks: [],
+          },
+        },
+      });
+    },
+  );
+  await page.goto("/my-workspace");
+  const composer = page.locator(".assistant-compose:visible");
+  await composer.getByRole("button", { name: "电脑授权：网站内" }).click();
+  await page
+    .getByRole("button", { name: "连接并授权本机", exact: true })
+    .click();
+  await expect(
+    composer.getByRole("button", { name: "电脑授权：跨窗口授权" }),
+  ).toBeVisible();
+  await expect(composer.getByPlaceholder(/描述电脑任务/)).toBeVisible();
+  expect(pairCodes).toBe(1);
+  const state = await page.evaluate(() => (window as any).desktopTestState());
+  expect(state.actions.filter((a: string) => a === "pair")).toHaveLength(1);
+  expect(state.actions.filter((a: string) => a === "authorize")).toHaveLength(
+    1,
+  );
+  expect(state.actions).not.toContain("show-tasks");
+  await composer.getByRole("button", { name: "电脑授权：跨窗口授权" }).click();
+  await expect(
+    page.getByRole("button", { name: "撤销跨窗口授权", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "连接并授权本机", exact: true }),
+  ).toHaveCount(0);
+  await page.screenshot({ path: ".local/desktop-simple-authorization.png" });
+});
+
 test("输入框内选择电脑、显示真实授权并撤销，不从网页开启设备授权", async ({
   page,
 }) => {
