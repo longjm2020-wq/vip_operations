@@ -7,6 +7,11 @@ import {
 
 export type TeamModelTier = "fast" | "standard" | "strong";
 
+/** Explicit endpoint modes are not interchangeable with synchronous Chat calls. */
+function supportsSynchronousTeamChat(model: AgentInternalModel): boolean {
+  return !/(?:^|:)(?:batch|async|asynchronous)(?=:|$)/i.test(model.actual);
+}
+
 /** A routing policy for the available configured catalog, not a global ranking. */
 export function teamModelTier(model: AgentInternalModel): TeamModelTier {
   if (
@@ -26,7 +31,7 @@ export function teamModelTier(model: AgentInternalModel): TeamModelTier {
 export async function readTeamModelCatalog() {
   const catalog = await agentModelCandidates();
   return {
-    models: catalog.models.map((model) => ({
+    models: catalog.models.filter(supportsSynchronousTeamChat).map((model) => ({
       id: model.id,
       name: model.name,
       model: model.actual,
@@ -61,6 +66,7 @@ export async function resolveTeamModel(options: {
   const catalog = await agentModelCandidates();
   const fixed = options.taskModel || options.profileModel;
   const matches = (model: AgentInternalModel) =>
+    supportsSynchronousTeamChat(model) &&
     model.parameters.includes("tools") &&
     (!options.vision || model.vision) &&
     (!options.pdf || model.pdf) &&
@@ -71,6 +77,12 @@ export async function resolveTeamModel(options: {
       fail(
         "TEAM_MODEL_UNAVAILABLE",
         "指定的团队模型当前不可用，请更新模型选择后重新发起；未切换到其他模型",
+        409,
+      );
+    if (!supportsSynchronousTeamChat(model))
+      fail(
+        "TEAM_MODEL_CAPABILITY",
+        "指定型号仅用于批处理或异步调用，不支持团队当前的同步对话执行；未调用该型号，也未切换到其他模型",
         409,
       );
     if (!matches(model))
@@ -98,17 +110,15 @@ export async function resolveTeamModel(options: {
       : desired === "strong"
         ? ["strong", "standard", "fast"]
         : ["standard", "strong", "fast"];
-  const available = catalog.models.filter(matches).sort((left, right) => {
-    const tier =
-      priorities.indexOf(teamModelTier(left)) -
-      priorities.indexOf(teamModelTier(right));
-    return (
-      tier ||
-      Number(right.id === catalog.defaultModel) -
-        Number(left.id === catalog.defaultModel) ||
-      left.id.localeCompare(right.id)
+  // Stable sorting preserves the catalog's configured preference within a tier.
+  // Opaque model IDs are identifiers, never a quality or priority ranking.
+  const available = catalog.models
+    .filter(matches)
+    .sort(
+      (left, right) =>
+        priorities.indexOf(teamModelTier(left)) -
+        priorities.indexOf(teamModelTier(right)),
     );
-  });
   const model = available[0];
   if (!model)
     fail(

@@ -122,6 +122,60 @@ describe("team model routing", () => {
       response: { error: { code: "TEAM_MODEL_UNAVAILABLE" } },
     });
   });
+  it("excludes explicit asynchronous models and retains catalog order instead of hash order within a tier", async () => {
+    const batch = {
+      ...models[1],
+      id: "engine/000-batch",
+      actual: "google/gemini-4-argon:batch",
+    };
+    const preferred = { ...models[1], id: "engine/zzz-preferred" };
+    const later = { ...models[1], id: "engine/aaa-later" };
+    f.catalog.mockResolvedValue({
+      models: [batch, preferred, later, models[0]],
+      defaultModel: later.id,
+      imageModels: [],
+    });
+    expect(await resolveTeamModel({ difficulty: "simple" })).toMatchObject({
+      id: preferred.id,
+    });
+    expect(
+      (await readTeamModelCatalog()).models.map((item) => item.id),
+    ).toEqual([preferred.id, later.id, models[0].id]);
+    await expect(
+      resolveTeamModel({ taskModel: batch.id }),
+    ).rejects.toMatchObject({
+      response: { error: { code: "TEAM_MODEL_CAPABILITY" } },
+    });
+    await expect(
+      resolveTeamModel({ profileModel: batch.id }),
+    ).rejects.toMatchObject({
+      response: { error: { code: "TEAM_MODEL_CAPABILITY" } },
+    });
+    expect(
+      await resolveTeamModel({
+        taskModel: later.id,
+        profileModel: preferred.id,
+      }),
+    ).toMatchObject({ id: later.id, selectionReason: "本次任务指定模型" });
+  });
+  it.each([":batch", ":BATCH", ":batch:free", ":async", ":asynchronous"])(
+    "rejects an asynchronous-only catalog (%s) before a provider call",
+    async (mode) => {
+      f.catalog.mockResolvedValue({
+        models: [{ ...models[1], actual: "provider/model" + mode }],
+        imageModels: [],
+        defaultModel: models[1].id,
+      });
+      await expect(resolveTeamModel({})).rejects.toMatchObject({
+        response: { error: { code: "TEAM_MODEL_UNAVAILABLE" } },
+      });
+      await expect(
+        resolveTeamModel({ profileModel: models[1].id }),
+      ).rejects.toMatchObject({
+        response: { error: { code: "TEAM_MODEL_CAPABILITY" } },
+      });
+    },
+  );
   it("shows actual team model names without changing the opaque selected ids", async () => {
     const catalog = await readTeamModelCatalog();
     expect(catalog.models[0]).toMatchObject({

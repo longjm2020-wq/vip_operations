@@ -292,4 +292,74 @@ describe("production team adapter", () => {
     expect(f.fetch).toHaveBeenCalledTimes(1);
     expect(f.queue).not.toHaveBeenCalled();
   });
+  it("records the selected model before a failing execution request and persists its safe diagnosis", async () => {
+    const { run, lease } = await runRow();
+    f.fetch.mockImplementation(async (_url, options) => {
+      const body = JSON.parse(options.body);
+      switch (body.response_format.json_schema.name) {
+        case "team_plan":
+          return response({
+            summary: "创作文字",
+            steps: [
+              {
+                id: "write",
+                title: "文字",
+                memberId: "writing",
+                instruction: "写正文",
+                dependencies: [],
+                difficulty: "simple",
+                deliverable: "text",
+                acceptance: ["实际正文完整"],
+              },
+            ],
+          });
+        case "team_brief":
+          return response({ brief: "创作正文" });
+        case "team_execute": {
+          const stored = (
+            await f.db!.query<{
+              state: { steps: { model: string; status: string }[] };
+            }>("SELECT state FROM personal_assistant_team_runs WHERE id=$1", [
+              run.id,
+            ])
+          ).rows[0];
+          expect(stored.state.steps[0]).toMatchObject({
+            model: "test/model",
+            status: "RUNNING",
+          });
+          return Response.json(
+            {
+              error: {
+                code: 404,
+                message: "private-key-or-request",
+                metadata: { error_type: "not_found" },
+              },
+            },
+            { status: 404 },
+          );
+        }
+        case "team_summary":
+          return response({ summary: "写作模型端点不可用，尚未完成" });
+        default:
+          throw Error("Unexpected request");
+      }
+    });
+    const result = await runTeamExecution(
+      c,
+      run,
+      lease,
+      new AbortController().signal,
+    );
+    expect(result.state.steps[0]).toMatchObject({
+      status: "NEEDS_USER",
+      model: "test/model",
+      modelId: "engine/fixed",
+      routeReason: "固定测试模型",
+    });
+    expect(result.state.steps[0].error).toContain(
+      "HTTP 404，code=404，type=not_found",
+    );
+    expect(JSON.stringify(result)).not.toContain("private-key-or-request");
+    expect(f.fetch).toHaveBeenCalledTimes(4);
+  });
 });

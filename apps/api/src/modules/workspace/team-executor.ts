@@ -62,6 +62,9 @@ export type TeamModelRequest = {
   fileIds: string[];
   step?: TeamStep;
   onJob?: (id: string) => Promise<void>;
+  onModel?: (
+    selection: Pick<TeamModelResult, "model" | "modelId" | "routeReason">,
+  ) => Promise<void>;
 };
 export type TeamModelResult = {
   data: unknown;
@@ -164,7 +167,7 @@ export async function executeTeamRun(
       maxSteps: settings.maxSteps,
       members: settings.members.filter((m) => m.enabled),
       rules:
-        "规划最多指定数量步骤，依赖必须指向前序步骤。执行成员仅 researcher/writer/designer/video/custom；协调和归档由系统单独调度。将必要资料、文件制作与验收标准写清；不要虚构用户附件或服务。公开搜索不传私有资料；生成图像/视频需实际工具完成，剪辑需实际素材。缺少必要条件必须由对应步骤明确报告。每项交付应能独立验收。",
+        "规划最多指定数量步骤，依赖必须指向前序步骤。执行成员仅 researcher/writer/designer/video/custom；协调和归档由系统单独调度，不另建执行成员的验收、归档或主脑汇总步骤。acceptance 仅描述交付本身可核实的内容、事实、来源、文件要求，不得把已通过独立验收、已有归档证据、主脑已汇总写为交付前提。独立验收由 coordinator 执行，不由作者或主脑自我验收；通过后系统调用 librarian 归档，最后才由主脑汇总。将必要资料、文件制作与实质标准写清；不要虚构用户附件或服务。公开搜索不传私有资料；生成图像/视频需实际工具完成，剪辑需实际素材。缺少必要条件必须由对应步骤明确报告。每项交付应能独立验收。",
     }),
   });
   const plan = teamPlanSchema.parse(planning.data);
@@ -239,7 +242,7 @@ export async function executeTeamRun(
             citations: a.citations,
           })),
           instruction:
-            "给执行成员准备资料简报、统一约束和逐项验收关注点。历史资料与附件仅作参考，不替代当前目标。不要声称已执行。",
+            "给执行成员准备资料简报、统一约束和逐项验收关注点。验收关注实际交付本身的内容、来源和文件；独立验收、归档、主脑汇总是系统后置流程，不列为交付前提。历史资料与附件仅作参考，不替代当前目标。不要声称已执行。",
         }),
       })
     ).data,
@@ -278,6 +281,12 @@ export async function executeTeamRun(
           schema: executionSchema,
           step,
           fileIds: allowedIds,
+          onModel: async (selection) => {
+            step.model = selection.model;
+            step.modelId = selection.modelId;
+            step.routeReason = selection.routeReason;
+            await save("RUNNING", `执行：${step.title}`);
+          },
           onJob: async (id) => {
             step.jobIds = distinct([...step.jobIds, id]);
             await save("RUNNING", `等待真实文件完成：${step.title}`);
@@ -370,7 +379,7 @@ export async function executeTeamRun(
                   citations: a.citations,
                 })),
                 instruction:
-                  "根据实际正文、来源和附带真实文件按 acceptance 独立验收。计划/排队/提示词不是成品。发现缺失请拒收并说明具体修改；不要迁就。图片已作为视觉输入；视频仅抽样画面和元数据，不能声称检查完整视频画质、连续动作、音轨或精确镜头。若验收要求超出能观察的证据，拒收并说明需要人工检查。",
+                  "你是 coordinator，当前调用就是系统的独立验收，作者或主脑的自评不能代替它。根据实际正文、来源和附带真实文件检查 acceptance 中交付本身的实质要求。若计划误把已通过验收、已归档或主脑已汇总列为标准，这些是系统后置流程，不作为本次拒收原因：本次通过后系统才会归档，全部步骤结束后才汇总；不要谎称后置流程已经完成。其他内容、事实、来源和文件要求仍须逐项核实，不得降低质量标准。计划/排队/提示词不是成品。发现实质缺失请拒收并说明具体修改；不要迁就。图片已作为视觉输入；视频仅抽样画面和元数据，不能声称检查完整视频画质、连续动作、音轨或精确镜头。若实质验收要求超出能观察的证据，拒收并说明需要人工检查。",
               }),
             })
           ).data,
@@ -521,6 +530,7 @@ export async function teamDelay(ms: number, signal: AbortSignal) {
 export async function readTeamModelResponse(
   response: Response,
   signal: AbortSignal,
+  maxBytes = 300 * 1024,
 ) {
   if (!response.body) throw new TeamNeedsUser("模型返回空结果，未采用该结果");
   const reader = response.body.getReader();
@@ -544,7 +554,7 @@ export async function readTeamModelResponse(
       );
       if (value.done) break;
       size += value.value.byteLength;
-      if (size > 300 * 1024)
+      if (size > maxBytes)
         throw new TeamNeedsUser("模型响应超过大小限制，未采用该结果");
       chunks.push(value.value);
     }
@@ -557,6 +567,73 @@ export async function readTeamModelResponse(
     void reader.cancel().catch(() => {});
     reader.releaseLock();
   }
+}
+
+// Only documented typed categories and numeric status codes may leave this boundary.
+// Provider message, provider_code and metadata can contain account or request data.
+export function teamModelErrorMessage(status: number, payload?: unknown) {
+  const descriptions: Record<string, string> = {
+    authentication: "模型服务凭据未通过验证",
+    permission_denied: "模型服务拒绝此请求",
+    payment_required: "模型服务额度不足",
+    rate_limit_exceeded: "模型服务达到速率限制",
+    provider_unavailable: "模型供应端点不可用",
+    provider_overloaded: "模型供应端点暂时繁忙",
+    timeout: "模型服务请求超时",
+    context_length_exceeded: "任务输入超过模型上下文限制",
+    max_tokens_exceeded: "模型输出达到长度限制",
+    token_limit_exceeded: "模型调用达到令牌限制",
+    string_too_long: "任务输入字段超过模型长度限制",
+    invalid_request: "模型请求参数不被接受",
+    not_found: "型号或请求资源不可用，请核对型号和可用端点",
+    server: "模型服务内部错误",
+  };
+  const raw =
+    payload && typeof payload === "object" ? (payload as Row).error : undefined;
+  const code =
+    typeof raw?.code === "number" &&
+    Number.isInteger(raw.code) &&
+    raw.code >= 400 &&
+    raw.code <= 599
+      ? raw.code
+      : undefined;
+  const type =
+    typeof raw?.metadata?.error_type === "string" &&
+    Object.hasOwn(descriptions, raw.metadata.error_type)
+      ? (raw.metadata.error_type as string)
+      : undefined;
+  const byStatus: Record<number, string> = {
+    400: "请求参数不被模型端点接受",
+    401: "模型服务凭据未通过验证",
+    402: "模型服务额度不足",
+    403: "模型服务拒绝此请求",
+    404: "型号或请求资源不可用，请核对型号和可用端点",
+    408: "模型服务请求超时",
+    429: "模型服务达到速率限制",
+    502: "模型供应端点未返回有效结果",
+    503: "没有满足当前路由要求的可用模型端点",
+  };
+  const detail = type
+    ? descriptions[type]
+    : byStatus[code || status] || "模型调用未完成";
+  return `团队模型：${detail}（HTTP ${status}${code ? `，code=${code}` : ""}${type ? `，type=${type}` : ""}）；未切换模型或自动重试`;
+}
+
+export async function readTeamModelError(
+  response: Response,
+  signal: AbortSignal,
+) {
+  let payload: unknown;
+  try {
+    payload = await readTeamModelResponse(
+      response,
+      AbortSignal.any([signal, AbortSignal.timeout(1500)]),
+      8 * 1024,
+    );
+  } catch {
+    signal.throwIfAborted();
+  }
+  return teamModelErrorMessage(response.status, payload);
 }
 
 /** Production adapter: all writes are bound to the current owner and worker lease. */
@@ -715,6 +792,11 @@ export async function runTeamExecution(
       pdf: files.some((f) => f.mime === "application/pdf"),
       structured: true,
     });
+    await request.onModel?.({
+      model: model.actual,
+      modelId: model.id,
+      routeReason: model.selectionReason,
+    });
     const context = await attachmentContext(c, request.fileIds, model.vision);
     const videoCatalog = await publicTeamVideoCatalog(c);
     const selectedVideoCatalog = request.member.videoModelId
@@ -816,12 +898,16 @@ export async function runTeamExecution(
         }),
       });
       if (!response.ok) {
-        await response.body?.cancel();
         throw new TeamNeedsUser(
-          `团队模型调用未完成（HTTP ${response.status}），未切换模型或自动重试`,
+          await readTeamModelError(response, requestSignal),
         );
       }
       const payload = await readTeamModelResponse(response, requestSignal);
+      const providerError = payload.error || payload.choices?.[0]?.error;
+      if (providerError)
+        throw new TeamNeedsUser(
+          teamModelErrorMessage(response.status, { error: providerError }),
+        );
       if (!matchesAgentModel(model, payload.model))
         throw new TeamNeedsUser("模型服务返回了非指定型号，未继续使用该结果");
       const message = payload.choices?.[0]?.message;

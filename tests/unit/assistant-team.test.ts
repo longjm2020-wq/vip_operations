@@ -53,6 +53,15 @@ vi.mock("../../apps/api/src/modules/workspace/agent-models.js", () => ({
         structured: true,
         parameters: ["tools"],
       },
+      {
+        id: "engine/batch",
+        actual: "google/gemini-4-argon:batch",
+        name: "批处理型号",
+        vision: true,
+        pdf: true,
+        structured: true,
+        parameters: ["tools"],
+      },
     ],
     imageModels: [
       {
@@ -198,6 +207,22 @@ describe("assistant team storage and owner boundaries", () => {
     expect(JSON.stringify(viewed)).not.toMatch(
       /private-runtime-context|private-provider-payload|providerPayload/,
     );
+  });
+  it("rejects a fixed asynchronous task model before persisting or scheduling a run", async () => {
+    await expect(
+      createTeamRun(actor(), { ...body(), model: "engine/batch" }),
+    ).rejects.toMatchObject(errorCode("TEAM_MODEL_CAPABILITY"));
+    expect(await listTeamRuns(actor())).toEqual([]);
+    expect(
+      (await readAssistantTeam(actor())).models.map((model) => model.id),
+    ).toEqual(["engine/strong"]);
+    const settings = defaultTeamSettings();
+    settings.members[0].modelMode = "fixed";
+    settings.members[0].modelId = "engine/batch";
+    await expect(
+      saveAssistantTeam(actor(), { ...settings, version: 0 }),
+    ).rejects.toMatchObject(errorCode("TEAM_MODEL_UNAVAILABLE"));
+    expect((await readAssistantTeam(actor())).version).toBe(0);
   });
   it("enforces ownership for runs, files, cancellation and matching UUID collisions", async () => {
     const input = body();

@@ -8,6 +8,8 @@ import {
 import {
   executeTeamRun,
   readTeamModelResponse,
+  readTeamModelError,
+  teamModelErrorMessage,
   teamDelay,
   type TeamExecutionDependencies,
   type TeamExecutionInput,
@@ -101,6 +103,27 @@ function fixture(steps: TeamPlanStep[] = [step("write")]) {
 }
 
 describe("team orchestration", () => {
+  it("separates deliverable quality requirements from the system review, archive and summary stages", async () => {
+    const planned = step("write");
+    planned.acceptance.push("已经独立验收通过", "已有归档证据", "主脑已汇总");
+    const f = fixture([planned]);
+    await f.run();
+    const planning = f.calls.find((r) => r.purpose === "plan")!;
+    expect(planning.prompt).toContain("acceptance 仅描述交付本身可核实");
+    expect(planning.prompt).toContain(
+      "不得把已通过独立验收、已有归档证据、主脑已汇总写为交付前提",
+    );
+    const review = f.calls.find((r) => r.purpose === "review")!;
+    expect(review.member.role).toBe("coordinator");
+    expect(review.prompt).toContain("作者或主脑的自评不能代替");
+    expect(review.prompt).toContain("不作为本次拒收原因");
+    expect(review.prompt).toContain(
+      "其他内容、事实、来源和文件要求仍须逐项核实",
+    );
+    expect(f.calls.findIndex((r) => r.purpose === "archive")).toBeGreaterThan(
+      f.calls.findIndex((r) => r.purpose === "review"),
+    );
+  });
   it("executes ready steps concurrently, waits for acceptance before dependencies, and archives actual results", async () => {
     const f = fixture([
       step("first"),
@@ -251,8 +274,14 @@ describe("team orchestration", () => {
   it("does not retry failed provider work, and keeps independent accepted work", async () => {
     const f = fixture([step("failed"), step("usable")]);
     f.handle(async (request) => {
-      if (request.purpose === "execute" && request.step!.id === "failed")
+      if (request.purpose === "execute" && request.step!.id === "failed") {
+        await request.onModel!({
+          model: "selected/model",
+          modelId: "engine/selected",
+          routeReason: "本次任务指定模型",
+        });
         throw Error("provider secret body");
+      }
       return undefined;
     });
     const result = await f.run();
@@ -261,6 +290,18 @@ describe("team orchestration", () => {
       f.calls.filter((r) => r.purpose === "execute" && r.step!.id === "failed"),
     ).toHaveLength(1);
     expect(result.state.steps[0].error).not.toContain("secret");
+    expect(result.state.steps[0]).toMatchObject({
+      model: "selected/model",
+      modelId: "engine/selected",
+      routeReason: "本次任务指定模型",
+    });
+    expect(
+      f.save.mock.calls.some(
+        ([state]) =>
+          state.steps[0]?.status === "RUNNING" &&
+          state.steps[0]?.model === "selected/model",
+      ),
+    ).toBe(true);
     expect(f.artifacts[0].status).toBe("ACCEPTED");
   });
   it("requires verified citations for research", async () => {
@@ -350,5 +391,44 @@ describe("team orchestration", () => {
     );
     controller.abort(new Error("canceled"));
     await expect(pending).rejects.toThrow("canceled");
+  });
+  it("retains only safe numeric codes and known error categories", () => {
+    const safe = teamModelErrorMessage(404, {
+      error: {
+        code: 404,
+        message: "secret request content",
+        metadata: { error_type: "not_found", provider_code: "private-account" },
+      },
+    });
+    expect(safe).toContain("HTTP 404，code=404，type=not_found");
+    expect(safe).not.toMatch(/secret|private-account/);
+    const unknown = teamModelErrorMessage(500, {
+      error: {
+        code: "secret-key",
+        metadata: { error_type: "secret-workspace" },
+      },
+    });
+    expect(unknown).toContain("HTTP 500");
+    expect(unknown).not.toContain("secret");
+    expect(
+      teamModelErrorMessage(200, {
+        error: { code: 503, metadata: { error_type: "provider_unavailable" } },
+      }),
+    ).toContain("模型供应端点不可用");
+  });
+  it("discards oversized or malformed diagnostic bodies and returns only the safe HTTP classification", async () => {
+    const signal = new AbortController().signal;
+    await expect(
+      readTeamModelError(
+        Response.json(
+          { error: { code: 404, message: "secret".repeat(2000) } },
+          { status: 404 },
+        ),
+        signal,
+      ),
+    ).resolves.toBe(teamModelErrorMessage(404));
+    await expect(
+      readTeamModelError(new Response("secret-body", { status: 503 }), signal),
+    ).resolves.toBe(teamModelErrorMessage(503));
   });
 });
