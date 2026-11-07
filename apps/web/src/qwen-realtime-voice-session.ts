@@ -425,7 +425,18 @@ export class QwenRealtimeVoiceSession {
             await this.preparePage(id, response);
             if (tool.name === "page_observe") {
               const query = (parsed.data as PageObserveInput).query;
-              result = this.page.observe(query);
+              const deadline = performance.now() + 3000;
+              let observation = this.page.observe(query);
+              while (
+                observation.ready === false &&
+                performance.now() < deadline
+              ) {
+                if (!this.current(id)) return;
+                await this.waitForPage(response.cancel.signal);
+                if (!this.current(id)) return;
+                observation = this.page.observe(query);
+              }
+              result = observation;
             } else {
               pageActionAttempted = true;
               result = await this.page.action(parsed.data as PageActionInput, {

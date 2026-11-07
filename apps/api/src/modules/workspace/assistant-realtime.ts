@@ -190,8 +190,9 @@ export function realtimeConfiguration(
       {
         type: "function",
         name: "workspace_request",
-        description:
-          "按当前账号权限查询或操作工作台。传入本次用户原话，保留完整商品编码及条件。明确的打开页面或同步更新可执行；其他修改返回待核对卡片。",
+        description: pageControl
+          ? "按当前账号权限查询业务数据、库存、项目、日程、记忆、任务进度，或按明确指令同步业务数据。传入本次用户原话。打开当前页面可见的入口必须先page_observe再page_click，不使用本工具代替页面点击；只有观察确认页面没有对应导航入口时才用本工具导航。其他修改返回待核对卡片。"
+          : "按当前账号权限查询或操作工作台。传入本次用户原话，保留完整商品编码及条件。明确的打开页面或同步更新可执行；其他修改返回待核对卡片。",
         parameters: {
           type: "object",
           properties: {

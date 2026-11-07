@@ -303,6 +303,96 @@ describe("Qwen local website tools", () => {
     ).toHaveLength(1);
     expect(cb.business).not.toHaveBeenCalled();
   });
+  it("waits for a loading route and returns only the ready observation from the same tool call", async () => {
+    allowPage();
+    const loaded = { ...observation, ready: true };
+    f.observe
+      .mockReturnValueOnce({
+        ...observation,
+        ready: false,
+        snapshotId: "",
+        controls: [],
+      })
+      .mockReturnValue(loaded);
+    session = new QwenRealtimeVoiceSession(callbacks());
+    await session.start(options);
+    await ready();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    pageResponse("page_observe", { query: "经营分析" });
+    await vi.advanceTimersByTimeAsync(120);
+    expect(f.observe).toHaveBeenCalledExactlyOnceWith("经营分析");
+    expect(pageOutput()).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(25);
+    expect(pageOutput()).toEqual(loaded);
+    expect(f.observe.mock.calls).toEqual([["经营分析"], ["经营分析"]]);
+    expect(f.action).not.toHaveBeenCalled();
+    expect(
+      Peer.last.dc.sent.filter(
+        (event) =>
+          (event.item as { call_id?: string })?.call_id === "page-call",
+      ),
+    ).toHaveLength(1);
+  });
+  it.each(["interrupt", "stop"])(
+    "cancels the loading-route observation wait on %s without a stale result or continuation",
+    async (kind) => {
+      allowPage();
+      f.observe.mockReturnValue({
+        ...observation,
+        ready: false,
+        snapshotId: "",
+        controls: [],
+      });
+      session = new QwenRealtimeVoiceSession(callbacks());
+      await session.start(options);
+      await ready();
+      vi.useFakeTimers({
+        toFake: ["setTimeout", "clearTimeout", "performance"],
+      });
+      pageResponse("page_observe", {});
+      await vi.advanceTimersByTimeAsync(120);
+      expect(f.observe).toHaveBeenCalledOnce();
+      if (kind === "interrupt") session.interrupt();
+      else session.stop();
+      f.observe.mockReturnValue({ ...observation, ready: true });
+      await vi.advanceTimersByTimeAsync(4000);
+      expect(f.observe).toHaveBeenCalledOnce();
+      expect(pageOutput()).toBeUndefined();
+      expect(
+        Peer.last.dc.sent.some((event) => event.type === "response.create"),
+      ).toBe(false);
+    },
+  );
+  it("returns the truthful loading observation after a bounded three-second wait", async () => {
+    allowPage();
+    const loading = {
+      ...observation,
+      ready: false,
+      snapshotId: "",
+      headings: [],
+      controls: [],
+      text: "新页面正在加载，请稍后重新观察",
+    };
+    f.observe.mockReturnValue(loading);
+    session = new QwenRealtimeVoiceSession(callbacks());
+    await session.start(options);
+    await ready();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    pageResponse("page_observe", {});
+    await vi.advanceTimersByTimeAsync(120);
+    expect(f.observe).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(2999);
+    expect(pageOutput()).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(pageOutput()).toEqual(loading);
+    const observed = f.observe.mock.calls.length;
+    expect(observed).toBeGreaterThan(1);
+    expect(observed).toBeLessThanOrEqual(122);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(f.observe).toHaveBeenCalledTimes(observed);
+    expect(f.action).not.toHaveBeenCalled();
+    expect(Peer.last.dc.readyState).toBe("open");
+  });
   it.each([
     [
       "page_fill",
