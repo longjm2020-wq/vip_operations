@@ -14,6 +14,37 @@ export function qwenRealtimeEndpoint(workspaceId: string) {
   const workspace = qwenWorkspaceIdSchema.parse(workspaceId);
   return `wss://${workspace}.cn-beijing.maas.aliyuncs.com/api-ws/v1/realtime?model=${qwenRealtimeModel}`;
 }
+export function qwenRealtimeWebRtcEndpoint(workspaceId: string) {
+  const workspace = qwenWorkspaceIdSchema.parse(workspaceId);
+  return `https://${workspace}.cn-beijing.maas.aliyuncs.com/api/v1/webrtc/realtime?model=${qwenRealtimeModel}`;
+}
+/** Exchange only SDP. The long-lived key stays on the application server. */
+export async function createQwenWebRtcSession(
+  encryptedKey: string,
+  workspaceId: string,
+  offer: string,
+  signal: AbortSignal,
+) {
+  const response = await fetch(qwenRealtimeWebRtcEndpoint(workspaceId), {
+    method: "POST",
+    redirect: "error",
+    signal: AbortSignal.any([signal, AbortSignal.timeout(30000)]),
+    headers: {
+      Authorization: `Bearer ${decryptSecret(encryptedKey)}`,
+      "Content-Type": "application/sdp",
+    },
+    body: offer,
+  });
+  if (!response.ok) {
+    // Provider bodies may contain credentials or infrastructure diagnostics.
+    await response.body?.cancel();
+    fail("REALTIME_PROVIDER", qwenErrorMessage(response.status), 502);
+  }
+  const sdp = await response.text();
+  if (!sdp.startsWith("v=0") || !/m=audio\s/.test(sdp) || sdp.length > 65536)
+    fail("REALTIME_RESPONSE", "实时音频连接未建立，请重新开始", 502);
+  return sdp;
+}
 export function qwenConfiguration(voice: string, base: Base) {
   return {
     type: "session.update",
@@ -51,6 +82,17 @@ export function qwenConfiguration(voice: string, base: Base) {
         };
       }),
       // Qwen Realtime does not support tool_choice or parallel_tool_calls.
+    },
+  };
+}
+export function qwenWebRtcConfiguration(voice: string, base: Base) {
+  const configuration = qwenConfiguration(voice, base);
+  return {
+    ...configuration,
+    session: {
+      ...configuration.session,
+      // Media formats are negotiated in SDP, not sent as base64 PCM events.
+      audio: { output: { voice } },
     },
   };
 }

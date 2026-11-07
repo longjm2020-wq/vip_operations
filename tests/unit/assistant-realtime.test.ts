@@ -13,7 +13,10 @@ import { readFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import type { Context } from "../../apps/api/src/core.js";
 import type { Tx } from "../../packages/database/src/index.js";
-import { realtimeModel } from "../../packages/contracts/src/assistant-realtime.js";
+import {
+  qwenRealtimeModel,
+  realtimeModel,
+} from "../../packages/contracts/src/assistant-realtime.js";
 const f = vi.hoisted(() => ({
   db: null as PGlite | null,
   read: vi.fn(),
@@ -58,9 +61,15 @@ vi.mock("../../apps/api/src/modules/analytics/secrets.js", () => ({
 vi.mock("../../apps/api/src/modules/workspace/doubao-realtime.js", () => ({
   verifyDoubaoRealtime: f.verifyDoubao,
 }));
-vi.mock("../../apps/api/src/modules/workspace/qwen-realtime.js", () => ({
-  verifyQwenRealtime: f.verifyQwen,
-}));
+vi.mock(
+  "../../apps/api/src/modules/workspace/qwen-realtime.js",
+  async (original) => ({
+    ...(await original<
+      typeof import("../../apps/api/src/modules/workspace/qwen-realtime.js")
+    >()),
+    verifyQwenRealtime: f.verifyQwen,
+  }),
+);
 import {
   readRealtimeStatus,
   saveRealtimeSettings,
@@ -203,6 +212,14 @@ describe("native realtime voice authorization and lifecycle", () => {
         const config = await claimRealtimeSocket(actor(), b.id, started.ticket);
         expect(config.desktopEnabled).toBe(true);
         await activateRealtimeSocket(actor(), b.id);
+      } else if (provider === "qwen") {
+        if (started.transport !== "webrtc") throw Error("expected WebRTC");
+        expect(
+          started.configuration!.session.tools.map(
+            (tool) => tool.function.name,
+          ),
+        ).toEqual(["workspace_request", "desktop_request"]);
+        expect(JSON.stringify(started.configuration)).not.toContain(deviceId);
       } else {
         const config = JSON.parse(
           (vi.mocked(fetch).mock.calls[0][1]!.body as FormData).get(
@@ -364,12 +381,11 @@ describe("native realtime voice authorization and lifecycle", () => {
     expect(JSON.stringify(publicStatus)).not.toMatch(
       /sk-qwen|workspace-1|omni-flash/,
     );
-    const session = await startRealtime(actor(), { id: randomUUID() });
-    expect(session.transport).toBe("websocket");
-    expect(
-      await claimRealtimeSocket(actor(), session.id, session.ticket!),
-    ).toMatchObject({ provider: "qwen", workspaceId: "workspace-1" });
-    await activateRealtimeSocket(actor(), session.id);
+    const session = await startRealtime(actor(), input());
+    if (session.transport !== "webrtc") throw Error("expected WebRTC");
+    expect(session.transport).toBe("webrtc");
+    expect(session.provider).toBe("qwen");
+    expect(publicStatus.transport).toBe("webrtc");
     expect((await checkRealtime(actor(), session.id)).active).toBe(true);
     const changed = await saveRealtimeSettings(admin, {
       ...config,
@@ -381,8 +397,166 @@ describe("native realtime voice authorization and lifecycle", () => {
     expect(changed.verifiedAt).toBeNull();
     await expect(checkRealtime(actor(), session.id)).rejects.toBeDefined();
     await closeRealtime(actor(), session.id);
-    expect(fetch).not.toHaveBeenCalled();
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
+  it("exchanges Qwen SDP only with Beijing, keeps credentials server-side, and owns the resulting call", async () => {
+    await f.db!.exec(
+      "UPDATE assistant_realtime_settings SET provider='qwen',qwen_api_key_encrypted='encrypted',qwen_verified_at=now(),qwen_workspace_id='workspace-1',qwen_free_only_confirmed=true",
+    );
+    const b = input();
+    // Qwen has no OpenAI Location/call-id header and needs no client secret.
+    vi.mocked(fetch).mockResolvedValueOnce(
+      new Response("v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n"),
+    );
+    const result = await startRealtime(actor(), b);
+    if (result.transport !== "webrtc") throw Error("expected WebRTC");
+    expect(result).toMatchObject({
+      id: b.id,
+      provider: "qwen",
+      transport: "webrtc",
+    });
+    expect(result.ticket).toBeUndefined();
+    expect(vi.mocked(fetch).mock.calls[0]).toEqual([
+      `https://workspace-1.cn-beijing.maas.aliyuncs.com/api/v1/webrtc/realtime?model=${qwenRealtimeModel}`,
+      expect.objectContaining({
+        method: "POST",
+        redirect: "error",
+        body: b.sdp,
+        headers: {
+          Authorization: "Bearer server-only-key",
+          "Content-Type": "application/sdp",
+        },
+      }),
+    ]);
+    expect(result.configuration).toMatchObject({
+      type: "session.update",
+      session: {
+        audio: { output: { voice: "Tina" } },
+        turn_detection: { type: "semantic_vad_ec" },
+        tools: [{ function: { name: "workspace_request" } }],
+      },
+    });
+    expect(result.configuration!.session.audio).not.toHaveProperty("input");
+    expect(JSON.stringify(result)).not.toMatch(
+      /server-only|encrypted|workspace-1/,
+    );
+    expect((await checkRealtime(actor(), b.id)).active).toBe(true);
+    await expect(closeRealtime(actor(false, "8"), b.id)).rejects.toBeDefined();
+    await expect(startRealtime(actor(), input())).rejects.toBeDefined();
+    expect(fetch).toHaveBeenCalledTimes(1);
+    await closeRealtime(actor(), b.id);
+    await expect(checkRealtime(actor(), b.id)).rejects.toBeDefined();
+    expect(fetch).toHaveBeenCalledTimes(1);
+    const row = (
+      await f.db!.query<{
+        state: string;
+        provider_call_id: string | null;
+        socket_ticket_hash: string | null;
+      }>("SELECT * FROM assistant_realtime_sessions WHERE id=$1", [b.id])
+    ).rows[0];
+    expect(row.state).toBe("CLOSED");
+    expect(row.provider_call_id).toBeNull();
+    expect(row.socket_ticket_hash).toBeNull();
+    expect(JSON.stringify(row)).not.toMatch(/m=audio|server-only/);
+  });
+  it.each(["no SDP", "free quota not confirmed"])(
+    "rejects Qwen setup before contacting the provider: %s",
+    async (reason) => {
+      await f.db!.exec(
+        "UPDATE assistant_realtime_settings SET provider='qwen',qwen_api_key_encrypted='encrypted',qwen_verified_at=now(),qwen_workspace_id='workspace-1',qwen_free_only_confirmed=true",
+      );
+      if (reason === "free quota not confirmed")
+        await f.db!.exec(
+          "UPDATE assistant_realtime_settings SET qwen_free_only_confirmed=false",
+        );
+      await expect(
+        startRealtime(
+          actor(),
+          reason === "no SDP" ? { id: randomUUID() } : input(),
+        ),
+      ).rejects.toBeDefined();
+      expect(fetch).not.toHaveBeenCalled();
+      expect(
+        (await f.db!.query("SELECT id FROM assistant_realtime_sessions")).rows,
+      ).toHaveLength(0);
+    },
+  );
+  it.each(["closed", "expired", "settings changed"])(
+    "rejects a late Qwen answer when setup is %s",
+    async (reason) => {
+      await f.db!.exec(
+        "UPDATE assistant_realtime_settings SET provider='qwen',qwen_api_key_encrypted='encrypted',qwen_verified_at=now(),qwen_workspace_id='workspace-1',qwen_free_only_confirmed=true",
+      );
+      let finish!: (r: Response) => void;
+      vi.mocked(fetch).mockImplementationOnce(
+        () =>
+          new Promise((r) => {
+            finish = r;
+          }),
+      );
+      const b = input(),
+        start = startRealtime(actor(), b);
+      await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+      const signal = vi.mocked(fetch).mock.calls[0][1]!.signal!;
+      if (reason === "closed") {
+        await closeRealtime(actor(), b.id);
+        expect(signal.aborted).toBe(true);
+      } else if (reason === "expired") {
+        await f.db!.query(
+          "UPDATE assistant_realtime_sessions SET expires_at=now()-interval '1 second' WHERE id=$1",
+          [b.id],
+        );
+      } else {
+        await f.db!.exec(
+          "UPDATE assistant_realtime_settings SET version=version+1",
+        );
+      }
+      finish(new Response("v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n"));
+      await expect(start).rejects.toBeDefined();
+      const row = (
+        await f.db!.query<{ state: string }>(
+          "SELECT state FROM assistant_realtime_sessions WHERE id=$1",
+          [b.id],
+        )
+      ).rows[0];
+      expect(row.state).toBe(reason === "closed" ? "CLOSED" : "FAILED");
+      expect(fetch).toHaveBeenCalledTimes(1);
+    },
+  );
+  it.each(["unauthorized", "malformed", "oversized"])(
+    "fails Qwen SDP safely without switching provider: %s",
+    async (reason) => {
+      await f.db!.exec(
+        "UPDATE assistant_realtime_settings SET provider='qwen',qwen_api_key_encrypted='encrypted',qwen_verified_at=now(),qwen_workspace_id='workspace-1',qwen_free_only_confirmed=true",
+      );
+      vi.mocked(fetch).mockResolvedValueOnce(
+        reason === "unauthorized"
+          ? new Response("sk-sensitive private diagnostic", { status: 401 })
+          : new Response(
+              reason === "oversized"
+                ? input().sdp + "a".repeat(65536)
+                : "private diagnostic",
+            ),
+      );
+      const b = input();
+      const error = await startRealtime(actor(), b).catch((e: unknown) => e);
+      expect(JSON.stringify(error)).not.toMatch(
+        /sk-sensitive|private diagnostic/,
+      );
+      expect(error).toMatchObject({
+        response: { error: { code: "REALTIME_CONNECT" } },
+      });
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(
+        (
+          await f.db!.query<{ state: string }>(
+            "SELECT state FROM assistant_realtime_sessions WHERE id=$1",
+            [b.id],
+          )
+        ).rows[0].state,
+      ).toBe("FAILED");
+    },
+  );
   it("keeps provider credentials separate and issues an owner-bound one-use socket ticket", async () => {
     const admin = actor(true);
     const configured = await saveRealtimeSettings(admin, {
@@ -513,6 +687,7 @@ describe("native realtime voice authorization and lifecycle", () => {
   it("creates WebRTC using a server-only key, semantic turn detection and native audio", async () => {
     const b = input();
     const result = await startRealtime(actor(), b);
+    if (result.transport !== "webrtc") throw Error("expected WebRTC");
     expect(result.sdp).toContain("v=0");
     const [url, init] = vi.mocked(fetch).mock.calls[0];
     expect(url).toBe("https://api.openai.com/v1/realtime/calls");

@@ -26,12 +26,17 @@ import { requireAssistant } from "./assistant-memory.js";
 import { readAssistant, sendAssistant } from "./assistant.js";
 import { voiceSafeError } from "./assistant-voice.js";
 import { verifyDoubaoRealtime } from "./doubao-realtime.js";
-import { verifyQwenRealtime } from "./qwen-realtime.js";
+import {
+  createQwenWebRtcSession,
+  qwenWebRtcConfiguration,
+  verifyQwenRealtime,
+} from "./qwen-realtime.js";
 import { closeRealtimeRelay } from "./realtime-relay-registry.js";
 import { resolveAgentModel } from "./agent-models.js";
 import { parseVoiceCommand } from "../../../../../packages/contracts/src/assistant-voice-commands.js";
 
 const root = "https://api.openai.com/v1/realtime";
+const pendingQwenSessions = new Map<string, AbortController>();
 const settings = () =>
   one(db, "SELECT * FROM public.assistant_realtime_settings WHERE id=1");
 const manager = (c: Context) =>
@@ -73,8 +78,7 @@ function view(c: Context, s: Row): RealtimeStatus {
   };
   return {
     provider: s.provider || "openai",
-    transport:
-      s.provider === "doubao" || s.provider === "qwen" ? "websocket" : "webrtc",
+    transport: s.provider === "doubao" ? "websocket" : "webrtc",
     ...(manager(c)
       ? {
           profiles: {
@@ -331,9 +335,15 @@ export async function startRealtime(c: Context, input: unknown) {
     s = (await settings())!;
   if (!view(c, s).ready)
     fail("REALTIME_NOT_READY", "请先配置、启用并验证实时语音", 409);
-  const socketProvider = s.provider === "doubao" || s.provider === "qwen";
+  const socketProvider = s.provider === "doubao";
   if (!socketProvider && !b.sdp)
-    fail("VALIDATION_ERROR", "缺少音频连接请求", 400);
+    fail(
+      "VALIDATION_ERROR",
+      s.provider === "qwen"
+        ? "千问通话已更新，请刷新页面后重新开始"
+        : "缺少音频连接请求",
+      400,
+    );
   let desktopModel: string | null = null;
   if (b.desktopDeviceId) {
     const device = await one(
@@ -388,28 +398,41 @@ export async function startRealtime(c: Context, input: unknown) {
       expiresAt: new Date(Date.now() + 60000).toISOString(),
     };
   let callId: string | undefined;
+  const qwenRequest = s.provider === "qwen" ? new AbortController() : undefined;
+  if (qwenRequest) pendingQwenSessions.set(b.id, qwenRequest);
   try {
-    const body = new FormData();
-    body.set("sdp", b.sdp!);
-    body.set(
-      "session",
-      JSON.stringify(realtimeConfiguration(s.voice, !!b.desktopDeviceId)),
-    );
-    const response = await providerRequest(s, "/calls", body);
-    const location = response.headers.get("Location") || "";
-    callId = /\/(rtc_[\w-]+)$/.exec(location)?.[1];
-    const sdp = await response.text();
-    if (!callId || !sdp.startsWith("v=0") || sdp.length > 65536)
-      fail("REALTIME_RESPONSE", "实时音频连接未建立，请重新开始", 502);
+    let sdp: string;
+    if (qwenRequest) {
+      sdp = await createQwenWebRtcSession(
+        providerFields(s).key,
+        s.qwen_workspace_id,
+        b.sdp!,
+        qwenRequest.signal,
+      );
+      qwenRequest.signal.throwIfAborted();
+    } else {
+      const body = new FormData();
+      body.set("sdp", b.sdp!);
+      body.set(
+        "session",
+        JSON.stringify(realtimeConfiguration(s.voice, !!b.desktopDeviceId)),
+      );
+      const response = await providerRequest(s, "/calls", body);
+      const location = response.headers.get("Location") || "";
+      callId = /\/(rtc_[\w-]+)$/.exec(location)?.[1];
+      sdp = await response.text();
+      if (!callId || !sdp.startsWith("v=0") || sdp.length > 65536)
+        fail("REALTIME_RESPONSE", "实时音频连接未建立，请重新开始", 502);
+    }
     const current = (await settings())!;
     if (!view(c, current).ready || current.version !== s.version)
       fail("REALTIME_EXPIRED", "语音设置已变化，请重新开始", 409);
     const saved = await one(
       db,
       `UPDATE public.assistant_realtime_sessions SET provider_call_id=$2,state='ACTIVE',expires_at=now()+interval '1 hour',last_seen_at=now()
-      WHERE id=$1::uuid AND state='CREATING' RETURNING expires_at`,
+      WHERE id=$1::uuid AND state='CREATING' AND expires_at>now() RETURNING expires_at`,
       b.id,
-      callId,
+      callId ?? null,
     );
     if (!saved) fail("REALTIME_CANCELED", "通话已取消", 409);
     return {
@@ -417,15 +440,29 @@ export async function startRealtime(c: Context, input: unknown) {
       transport: "webrtc" as const,
       sdp,
       expiresAt: saved.expires_at,
+      ...(qwenRequest
+        ? {
+            provider: "qwen" as const,
+            configuration: qwenWebRtcConfiguration(
+              providerFields(s).voice,
+              realtimeConfiguration(
+                providerFields(s).voice,
+                !!b.desktopDeviceId,
+              ),
+            ),
+          }
+        : {}),
     };
   } catch (e) {
     if (callId)
       await providerRequest(s, `/calls/${callId}/hangup`).catch(() => {});
     await db.$executeRawUnsafe(
-      "UPDATE public.assistant_realtime_sessions SET state='FAILED',ended_at=now() WHERE id=$1::uuid",
+      "UPDATE public.assistant_realtime_sessions SET state='FAILED',ended_at=now() WHERE id=$1::uuid AND state='CREATING'",
       b.id,
     );
     fail("REALTIME_CONNECT", voiceSafeError(e), 502);
+  } finally {
+    pendingQwenSessions.delete(b.id);
   }
 }
 export async function closeRealtime(c: Context, id: string) {
@@ -434,6 +471,7 @@ export async function closeRealtime(c: Context, id: string) {
     "UPDATE public.assistant_realtime_sessions SET state='CLOSED',ended_at=now() WHERE id=$1::uuid",
     session.id,
   );
+  pendingQwenSessions.get(session.id)?.abort();
   const s = (await settings())!;
   closeRealtimeRelay(session.id);
   if (

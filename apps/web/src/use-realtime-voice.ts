@@ -5,12 +5,14 @@ import {
   type RealtimeOptions,
 } from "./realtime-voice-session";
 import { DoubaoVoiceSession } from "./doubao-voice-session";
+import { QwenRealtimeVoiceSession } from "./qwen-realtime-voice-session";
 import type { VoiceState } from "./use-gpt-voice";
 
 export function useRealtimeVoice(
   onResult: () => void,
   onNavigate: (id: string) => void,
   transport: "webrtc" | "websocket" = "webrtc",
+  provider: "openai" | "doubao" | "qwen" = "openai",
 ) {
   const [state, setState] = useState<VoiceState>("idle"),
     [muted, setMuted] = useState(false);
@@ -19,9 +21,9 @@ export function useRealtimeVoice(
   const [captions, setCaptions] = useState<RealtimeCaption[]>([]);
   const [playbackBlocked, setPlaybackBlocked] = useState(false),
     [hasBusiness, setHasBusiness] = useState(false);
-  const current = useRef<RealtimeVoiceSession | DoubaoVoiceSession | null>(
-    null,
-  );
+  const current = useRef<
+    RealtimeVoiceSession | DoubaoVoiceSession | QwenRealtimeVoiceSession | null
+  >(null);
   const generation = useRef(0);
   const callbacks = useRef({ onResult, onNavigate });
   callbacks.current = { onResult, onNavigate };
@@ -52,7 +54,11 @@ export function useRealtimeVoice(
       return;
     }
     const Session =
-      transport === "websocket" ? DoubaoVoiceSession : RealtimeVoiceSession;
+      transport === "websocket"
+        ? DoubaoVoiceSession
+        : provider === "qwen"
+          ? QwenRealtimeVoiceSession
+          : RealtimeVoiceSession;
     const call = new Session({
       state: (value) => {
         if (turn !== generation.current) return;

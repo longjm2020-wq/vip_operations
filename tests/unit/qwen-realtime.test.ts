@@ -43,6 +43,8 @@ import {
   qwenConfiguration,
   qwenErrorMessage,
   qwenRealtimeEndpoint,
+  qwenRealtimeWebRtcEndpoint,
+  qwenWebRtcConfiguration,
   verifyQwenRealtime,
 } from "../../apps/api/src/modules/workspace/qwen-realtime.js";
 import { qwenRealtimeModel } from "../../packages/contracts/src/assistant-realtime.js";
@@ -67,6 +69,9 @@ describe("Qwen native realtime protocol", () => {
     expect(qwenRealtimeEndpoint("workspace-1")).toBe(
       `wss://workspace-1.cn-beijing.maas.aliyuncs.com/api-ws/v1/realtime?model=${qwenRealtimeModel}`,
     );
+    expect(qwenRealtimeWebRtcEndpoint("workspace-1")).toBe(
+      `https://workspace-1.cn-beijing.maas.aliyuncs.com/api/v1/webrtc/realtime?model=${qwenRealtimeModel}`,
+    );
     for (const input of [
       "",
       "../evil",
@@ -74,8 +79,10 @@ describe("Qwen native realtime protocol", () => {
       "x.evil",
       "x?model=other",
       "-bad",
-    ])
+    ]) {
       expect(() => qwenRealtimeEndpoint(input)).toThrow();
+      expect(() => qwenRealtimeWebRtcEndpoint(input)).toThrow();
+    }
     const config = qwenConfiguration("Tina", base).session;
     expect(config.audio.input.format).toMatchObject({
       type: "pcm",
@@ -92,6 +99,10 @@ describe("Qwen native realtime protocol", () => {
     ]);
     expect(config).not.toHaveProperty("tool_choice");
     expect(config).not.toHaveProperty("parallel_tool_calls");
+    const rtc = qwenWebRtcConfiguration("Tina", base).session;
+    expect(rtc.audio).toEqual({ output: { voice: "Tina" } });
+    expect(rtc.tools).toEqual(config.tools);
+    expect(rtc.turn_detection).toEqual(config.turn_detection);
   });
   it("verifies configuration acknowledgement, not merely an open socket, without generating audio", async () => {
     const promise = verifyQwenRealtime(
@@ -265,14 +276,12 @@ describe("Qwen native realtime protocol", () => {
     const send = vi.fn(),
       protocol = new QwenRealtimeProtocol(send);
     const pcm = Array.from({ length: 5 }, (_, i) => Buffer.alloc(640, i + 1));
-    pcm
-      .slice(0, 4)
-      .forEach((frame) =>
-        protocol.command({
-          type: "input_audio_buffer.append",
-          audio: frame.toString("base64"),
-        }),
-      );
+    pcm.slice(0, 4).forEach((frame) =>
+      protocol.command({
+        type: "input_audio_buffer.append",
+        audio: frame.toString("base64"),
+      }),
+    );
     expect(send).not.toHaveBeenCalled();
     protocol.command({
       type: "input_audio_buffer.append",

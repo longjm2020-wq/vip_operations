@@ -12,8 +12,227 @@ declare global {
       stops: number;
       silence: () => void;
       speak: () => void;
+      audioTrack?: MediaStreamTrack;
+    };
+    qwenRTCTest: {
+      answer: (sdp: string) => Promise<string>;
+      send: (event: Record<string, unknown>) => void;
+      acknowledge: () => void;
+      events: Record<string, unknown>[];
+      stats: () => Promise<{ bytes: number; rms: number; state: string }>;
+      close: () => void;
     };
   }
+}
+
+// The service is mocked, but both WebRTC peers, ICE, DTLS and RTP are real.
+// No browser media transport is replaced by a fake implementation.
+async function qwenRtcFixture(page: Page, holdConfiguration = false) {
+  await page.addInitScript(
+    ({ hold }) => {
+      let peer: RTCPeerConnection | undefined;
+      let channel: RTCDataChannel | undefined;
+      let receiver: AudioContext | undefined;
+      let analyser: AnalyserNode | undefined;
+      let player: HTMLAudioElement | undefined;
+      let followup = 0;
+      const events: Record<string, unknown>[] = [];
+      const send = (event: Record<string, unknown>) =>
+        channel!.send(JSON.stringify(event));
+      const acknowledge = () =>
+        send({
+          type: "session.updated",
+          session: {
+            id: "qwen-fixture",
+            model: "qwen3.8-omni-flash-realtime",
+            audio: { output: { voice: "Tina" } },
+          },
+        });
+      window.qwenRTCTest = {
+        events,
+        send,
+        acknowledge,
+        close: () => {
+          player?.pause();
+          peer?.close();
+          void receiver?.close();
+        },
+        stats: async () => {
+          let bytes = 0;
+          for (const value of (await peer!.getStats()).values()) {
+            if (value.type === "inbound-rtp" && value.kind === "audio") {
+              bytes += value.bytesReceived || 0;
+            }
+          }
+          // Chromium can report totalAudioEnergy=0 even while decoding audio.
+          // Measure the actual received waveform to prove signal and silence.
+          const samples = new Float32Array(2048);
+          analyser?.getFloatTimeDomainData(samples);
+          const rms = Math.sqrt(
+            samples.reduce((sum, value) => sum + value * value, 0) /
+              samples.length,
+          );
+          return { bytes, rms, state: peer!.connectionState };
+        },
+        answer: async (sdp) => {
+          peer = new RTCPeerConnection({ iceServers: [] });
+          peer.ontrack = ({ track }) => {
+            // Start the native RTP decoder, keeping its output inaudible.
+            player = new Audio();
+            player.volume = 0.000001;
+            player.srcObject = new MediaStream([track]);
+            void player.play();
+            receiver = new AudioContext();
+            const source = receiver.createMediaStreamSource(
+              new MediaStream([track]),
+            );
+            analyser = receiver.createAnalyser();
+            source.connect(analyser);
+            const silentOutput = receiver.createGain();
+            silentOutput.gain.value = 0.000001;
+            analyser.connect(silentOutput);
+            silentOutput.connect(receiver.destination);
+            void receiver.resume();
+          };
+          peer.ondatachannel = ({ channel: value }) => {
+            channel = value;
+            const created = () =>
+              send({
+                type: "session.created",
+                session: {
+                  id: "qwen-fixture",
+                  model: "qwen3.8-omni-flash-realtime",
+                },
+              });
+            channel.onopen = created;
+            if (channel.readyState === "open") created();
+            channel.onmessage = ({ data }) => {
+              const event = JSON.parse(String(data));
+              events.push(event);
+              if (event.type === "session.update" && !hold) acknowledge();
+              if (event.type === "response.create") {
+                const id = `followup-${++followup}`;
+                send({ type: "response.created", response: { id } });
+                send({
+                  type: "response.done",
+                  response: { id, status: "completed" },
+                });
+              }
+            };
+          };
+          await peer.setRemoteDescription({ type: "offer", sdp });
+          await peer.setLocalDescription(await peer.createAnswer());
+          if (peer.iceGatheringState !== "complete")
+            await new Promise<void>((resolve, reject) => {
+              const timer = setTimeout(
+                () => reject(Error("Fixture ICE timed out")),
+                5000,
+              );
+              peer!.addEventListener("icegatheringstatechange", () => {
+                if (peer!.iceGatheringState === "complete") {
+                  clearTimeout(timer);
+                  resolve();
+                }
+              });
+            });
+          return peer.localDescription!.sdp;
+        },
+      };
+    },
+    { hold: holdConfiguration },
+  );
+  const starts: Record<string, unknown>[] = [];
+  const tools: Record<string, unknown>[] = [];
+  const writes: string[] = [];
+  await page.route(
+    "**/api/v1/my-workspace/assistant/realtime**",
+    async (route) => {
+      const path = new URL(route.request().url()).pathname;
+      writes.push(path);
+      let data: unknown = {
+        provider: "qwen",
+        transport: "webrtc",
+        enabled: true,
+        ready: true,
+        voice: "Tina",
+        apiKeyConfigured: true,
+        encryptionReady: true,
+        verifiedAt: "2026-11-07T00:00:00Z",
+        error: "",
+        canManage: true,
+        version: 1,
+      };
+      if (path.endsWith("/sessions")) {
+        const body = route.request().postDataJSON();
+        starts.push(body);
+        expect(body.sdp).toContain("m=audio");
+        expect(body.sdp).toContain("a=candidate:");
+        data = {
+          provider: "qwen",
+          transport: "webrtc",
+          sdp: await page.evaluate(
+            (sdp) => window.qwenRTCTest.answer(sdp),
+            body.sdp,
+          ),
+          configuration: {
+            type: "session.update",
+            session: {
+              modalities: ["text", "audio"],
+              audio: { output: { voice: "Tina" } },
+              turn_detection: { type: "semantic_vad_ec" },
+              tools: [],
+            },
+          },
+          expiresAt: new Date(Date.now() + 3600000).toISOString(),
+        };
+      } else if (path.endsWith("/tool")) {
+        const body = route.request().postDataJSON();
+        tools.push(body);
+        data =
+          body.callId === "computer"
+            ? { text: "电脑任务已创建", desktopTaskId: "task" }
+            : {
+                text: "正在打开页面",
+                navigation: body.callId === "home" ? "workspace" : "analytics",
+              };
+      } else if (path.endsWith("/close")) data = { closed: true };
+      else if (path.includes("/sessions/"))
+        data = {
+          active: true,
+          saved: true,
+          expiresAt: new Date(Date.now() + 3600000).toISOString(),
+        };
+      await route.fulfill({ json: { data } });
+    },
+  );
+  return { starts, tools, writes };
+}
+
+async function sendQwenTool(page: Page, callId: string, tool: string) {
+  await page.evaluate(
+    ({ callId, tool }) => {
+      const send = window.qwenRTCTest.send;
+      const id = `response-${callId}`;
+      send({
+        type: "input_audio_buffer.speech_started",
+        item_id: `user-${callId}`,
+      });
+      send({
+        type: "input_audio_buffer.speech_stopped",
+        item_id: `user-${callId}`,
+      });
+      send({ type: "response.created", response: { id } });
+      send({
+        type: "response.function_call_arguments.done",
+        response_id: id,
+        name: tool,
+        call_id: callId,
+        arguments: JSON.stringify({ request: callId }),
+      });
+      send({ type: "response.done", response: { id, status: "completed" } });
+    },
+    { callId, tool },
+  );
 }
 
 test("千问实时语音绑定所选电脑，刷新电脑任务并在同一通话返回工作台", async ({
@@ -21,8 +240,7 @@ test("千问实时语音绑定所选电脑，刷新电脑任务并在同一通�
 }) => {
   const { bubble } = await fixture(page, { configured: false });
   const deviceId = "55555555-5555-4555-8555-555555555555";
-  const starts: Record<string, unknown>[] = [];
-  let socket: WebSocketRoute | undefined;
+  const { starts, tools } = await qwenRtcFixture(page);
   let desktopReads = 0;
   await page.route(
     "**/api/v1/my-workspace/assistant/desktop",
@@ -47,53 +265,6 @@ test("千问实时语音绑定所选电脑，刷新电脑任务并在同一通�
       });
     },
   );
-  await page.route(
-    "**/api/v1/my-workspace/assistant/realtime**",
-    async (route) => {
-      const path = new URL(route.request().url()).pathname;
-      let data: unknown = {
-        provider: "qwen",
-        transport: "websocket",
-        enabled: true,
-        ready: true,
-        voice: "Tina",
-        apiKeyConfigured: true,
-        encryptionReady: true,
-        verifiedAt: "2026-11-07T00:00:00Z",
-        error: "",
-        canManage: true,
-        version: 1,
-      };
-      if (path.endsWith("/sessions")) {
-        starts.push(route.request().postDataJSON());
-        data = {
-          transport: "websocket",
-          ticket: "test-ticket",
-          expiresAt: new Date(Date.now() + 60000).toISOString(),
-        };
-      } else if (path.endsWith("/close")) data = { closed: true };
-      else if (path.includes("/sessions/"))
-        data = { active: true, saved: true };
-      await route.fulfill({ json: { data } });
-    },
-  );
-  await page.routeWebSocket(
-    "**/api/v1/my-workspace/assistant/realtime/sessions/*/socket",
-    (ws) => {
-      socket = ws;
-      ws.onMessage((raw) => {
-        const event = JSON.parse(raw.toString());
-        if (event.type === "authenticate")
-          ws.send(
-            JSON.stringify({
-              type: "xuti.ready",
-              expiresAt: new Date(Date.now() + 3600000).toISOString(),
-            }),
-          );
-        if (event.type === "session.close") ws.close();
-      });
-    },
-  );
   await page.reload();
   const composer = page.locator(".assistant-compose:visible");
   await composer.getByRole("button", { name: "电脑授权：网站内" }).click();
@@ -110,30 +281,13 @@ test("千问实时语音绑定所选电脑，刷新电脑任务并在同一通�
   expect(starts[0]).not.toHaveProperty("authorizationId");
   await page.screenshot({ path: ".local/realtime-desktop-voice.png" });
   const before = desktopReads;
-  socket!.send(
-    JSON.stringify({
-      type: "xuti.tool_result",
-      call_id: "computer",
-      result: { text: "电脑任务已创建", desktopTaskId: "task" },
-    }),
-  );
+  await sendQwenTool(page, "computer", "desktop_request");
   await expect.poll(() => desktopReads).toBeGreaterThan(before);
-  socket!.send(
-    JSON.stringify({
-      type: "xuti.tool_result",
-      call_id: "analytics",
-      result: { text: "正在打开经营分析", navigation: "analytics" },
-    }),
-  );
+  await sendQwenTool(page, "analytics", "workspace_request");
   await expect(page).toHaveURL(/\/analytics\/compass$/);
-  socket!.send(
-    JSON.stringify({
-      type: "xuti.tool_result",
-      call_id: "home",
-      result: { text: "正在为你打开我的工作台", navigation: "workspace" },
-    }),
-  );
+  await sendQwenTool(page, "home", "workspace_request");
   await expect(page).toHaveURL(/\/my-workspace$/);
+  expect(tools).toHaveLength(3);
   expect(starts).toHaveLength(1);
   expect(await page.evaluate(() => window.gptVoiceTest.starts)).toBe(1);
   await page.setViewportSize({ width: 390, height: 844 });
@@ -145,7 +299,92 @@ test("千问实时语音绑定所选电脑，刷新电脑任务并在同一通�
     .toBe(1);
 });
 
-for (const provider of ["doubao", "qwen"] as const) {
+test("千问 WebRTC 真实 RTP 在页面卡顿后继续，配置确认后才发送并支持静音清理", async ({
+  page,
+}) => {
+  const { bubble } = await fixture(page, { configured: false });
+  const { starts, writes } = await qwenRtcFixture(page, true);
+  await page.reload();
+  await page.locator(".companion-launch").click();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          window.qwenRTCTest.events.filter((e) => e.type === "session.update")
+            .length,
+      ),
+    )
+    .toBe(1);
+  expect(
+    await page.evaluate(() => window.gptVoiceTest.audioTrack?.enabled),
+  ).toBe(false);
+  expect((await page.evaluate(() => window.qwenRTCTest.stats())).bytes).toBe(0);
+  await page.evaluate(() => window.qwenRTCTest.acknowledge());
+  await expect(bubble.getByRole("status")).toHaveText("实时聆听中，你说");
+  await expect
+    .poll(
+      async () => (await page.evaluate(() => window.qwenRTCTest.stats())).bytes,
+    )
+    .toBeGreaterThan(0);
+  await expect
+    .poll(
+      async () => (await page.evaluate(() => window.qwenRTCTest.stats())).rms,
+    )
+    .toBeGreaterThan(0.01);
+  const before = await page.evaluate(() => window.qwenRTCTest.stats());
+  expect(before.state).toBe("connected");
+  await page.evaluate(() => {
+    const until = performance.now() + 750;
+    while (performance.now() < until) {
+      /* Simulated rendering stall while native RTP continues. */
+    }
+  });
+  await expect
+    .poll(
+      async () => (await page.evaluate(() => window.qwenRTCTest.stats())).bytes,
+    )
+    .toBeGreaterThan(before.bytes + 1000);
+  await expect(bubble.getByRole("status")).toHaveText("实时聆听中，你说");
+  expect(starts).toHaveLength(1);
+  expect(await page.evaluate(() => window.gptVoiceTest.starts)).toBe(1);
+  await bubble.getByRole("button", { name: "麦克风静音", exact: true }).click();
+  await expect
+    .poll(() => page.evaluate(() => window.gptVoiceTest.audioTrack?.enabled))
+    .toBe(false);
+  await expect
+    .poll(
+      async () => (await page.evaluate(() => window.qwenRTCTest.stats())).rms,
+    )
+    .toBeLessThan(0.0001);
+  await bubble.getByRole("button", { name: "取消静音", exact: true }).click();
+  await expect
+    .poll(
+      async () => (await page.evaluate(() => window.qwenRTCTest.stats())).rms,
+    )
+    .toBeGreaterThan(0.01);
+  expect(
+    await page.evaluate(() => window.gptVoiceTest.audioTrack?.enabled),
+  ).toBe(true);
+  // Qwen WebRTC carries audio over RTP; no PCM append/commit events are sent.
+  expect(
+    await page.evaluate(() =>
+      window.qwenRTCTest.events.filter(
+        (e) =>
+          e.type === "input_audio_buffer.append" ||
+          e.type === "input_audio_buffer.commit",
+      ),
+    ),
+  ).toEqual([]);
+  await page.evaluate(() => window.qwenRTCTest.close());
+  await expect
+    .poll(() => page.evaluate(() => window.gptVoiceTest.stops))
+    .toBe(1);
+  await expect
+    .poll(() => writes.some((path) => path.endsWith("/close")))
+    .toBe(true);
+});
+
+for (const provider of ["doubao"] as const) {
   test(`${provider} 全双工实时通话用真实音频处理发送短帧，静音恢复与断开释放麦克风`, async ({
     page,
   }) => {
@@ -163,7 +402,7 @@ for (const provider of ["doubao", "qwen"] as const) {
           transport: "websocket",
           enabled: true,
           ready: true,
-          voice: provider === "qwen" ? "Tina" : "zh_female_vv_uranus_bigtts",
+          voice: "zh_female_vv_uranus_bigtts",
           apiKeyConfigured: true,
           encryptionReady: true,
           verifiedAt: "2026-11-05T00:00:00Z",
@@ -371,7 +610,7 @@ test("实时通道切换分别保留配置，密钥保存后清空且验证不�
           ...status,
           ...profile,
           provider,
-          transport: provider !== "openai" ? "websocket" : "webrtc",
+          transport: provider === "doubao" ? "websocket" : "webrtc",
           enabled: body.enabled,
           ready: false,
           version: status.version + 1,
@@ -527,6 +766,9 @@ async function fixture(
           };
           const track = output.stream.getAudioTracks()[0],
             originalStop = track.stop.bind(track);
+          // Preserve the synthetic tone through WebRTC's speech preprocessing.
+          track.contentHint = "music";
+          window.gptVoiceTest.audioTrack = track;
           track.stop = () => {
             window.gptVoiceTest.stops++;
             originalStop();
