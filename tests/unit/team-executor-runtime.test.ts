@@ -218,6 +218,132 @@ function successfulFileJob(runId: string) {
   return { fileId, jobId };
 }
 describe("production team adapter", () => {
+  it("passes current accepted archive status, saved review and owned file evidence directly to selection, briefing, execution and review", async () => {
+    const source = await runRow(),
+      archiveId = randomUUID(),
+      fileId = randomUUID();
+    const original =
+      "历史正文曾写 DRAFT、待归档。逐字引用：真实归档原文件中的经营说明。";
+    await f.db!.query(
+      "UPDATE personal_assistant_team_runs SET status='DONE' WHERE id=$1",
+      [source.run.id],
+    );
+    await f.db!.query(
+      "INSERT INTO personal_assistant_files VALUES($1,1,'已验收说明.md','text/markdown',128,'generated','{}',now(),$2,$3)",
+      [fileId, Buffer.from(original), original],
+    );
+    await f.db!.query(
+      "INSERT INTO personal_assistant_team_artifacts(id,user_id,run_id,step_id,member_id,attempt,title,kind,content,file_ids,citations,status,review,tags) VALUES($1,1,$2,'source','writing',1,'已验收经营说明','document',$3,$4::jsonb,'[]','ACCEPTED','独立验收已核对原文件和完整正文','[\"说明\"]')",
+      [archiveId, source.run.id, original, JSON.stringify([fileId])],
+    );
+    const { run, lease } = await runRow();
+    run.input.useKnowledge = true;
+    run.input.goal = "复用已验收经营说明，给出档案状态并逐字引用原文件";
+    await f.db!.query(
+      "UPDATE personal_assistant_team_runs SET input=$2::jsonb WHERE id=$1",
+      [run.id, JSON.stringify(run.input)],
+    );
+    const visited: string[] = [];
+    f.fetch.mockImplementation(async (_url, options) => {
+      const body = JSON.parse(options.body),
+        purpose = body.response_format?.json_schema.name || "team_execute";
+      const prompt = JSON.parse(body.messages[1].content[0].text);
+      if (
+        [
+          "team_knowledge",
+          "team_brief",
+          "team_execute",
+          "team_review",
+        ].includes(purpose)
+      ) {
+        visited.push(purpose);
+        const record = (prompt.records || prompt.knowledge)[0];
+        expect(record).toMatchObject({
+          id: archiveId,
+          status: "ACCEPTED",
+          review: "独立验收已核对原文件和完整正文",
+          fileIds: [fileId],
+          files: [
+            expect.objectContaining({
+              id: fileId,
+              name: "已验收说明.md",
+              mime: "text/markdown",
+            }),
+          ],
+        });
+        expect(prompt.serverEvidence).toContain("旧描述不能覆盖当前数据库状态");
+        expect(prompt.serverEvidence).toContain(
+          "若模型简报与服务器字段冲突，以服务器字段为准",
+        );
+        if (["team_execute", "team_review"].includes(purpose)) {
+          expect(JSON.stringify(body.messages)).toContain(original);
+          expect(JSON.stringify(body.messages)).toContain(
+            "服务器已校验文件属于当前账号，并实际读取文件",
+          );
+        }
+      }
+      switch (purpose) {
+        case "team_plan":
+          return response({
+            summary: "引用已验收说明",
+            steps: [
+              {
+                id: "quote",
+                title: "引用说明",
+                memberId: "writing",
+                instruction: "核对档案状态与原文引用",
+                dependencies: [],
+                difficulty: "simple",
+                deliverable: "text",
+                acceptance: ["状态来自数据库且引用与原文件一致"],
+              },
+            ],
+          });
+        case "team_knowledge":
+          return response({
+            ids: [archiveId],
+            summary: "该说明与当前目标相关",
+          });
+        case "team_brief":
+          return response({
+            brief: "无法独立证明档案是否验收，无法自行打开原文件。",
+          });
+        case "team_execute":
+          return response({
+            status: "completed",
+            content:
+              "档案当前为ACCEPTED。逐字引用：真实归档原文件中的经营说明。",
+          });
+        case "team_review":
+          return response({
+            accepted: true,
+            review: "已核对数据库状态及实际原文",
+          });
+        case "team_archive":
+          return response({ summary: "引用已验收说明", tags: ["引用"] });
+        case "team_summary":
+          return response({
+            summary: "已基于已验收档案和真实原文件完成引用。",
+          });
+        default:
+          throw Error("Unexpected request");
+      }
+    });
+    const result = await runTeamExecution(
+      c,
+      run,
+      lease,
+      new AbortController().signal,
+    );
+    expect(result.status).toBe("DONE");
+    expect(visited).toEqual([
+      "team_knowledge",
+      "team_brief",
+      "team_execute",
+      "team_review",
+    ]);
+    expect(f.queue).not.toHaveBeenCalled();
+  });
   it("durably archives an accepted file when optional archive output ends at its reasoning/token limit", async () => {
     const { run, lease } = await runRow(),
       { fileId } = successfulFileJob(run.id);
