@@ -311,7 +311,7 @@ for (const [label, viewport] of [
   });
 }
 
-test("每条分支只有一束连续流光，缩放后不平铺且减少动态效果时隐藏", async ({
+test("连线与流光同宽，前缘照亮尾迹衰减，缩放后不平铺且减少动态效果时隐藏", async ({
   page,
 }) => {
   const state = await fixture(page);
@@ -323,12 +323,17 @@ test("每条分支只有一束连续流光，缩放后不平铺且减少动态�
   await page.getByRole("button", { name: "打开私有备忘", exact: true }).click();
   await expectDetailLinkAttached(page);
 
-  const heads = [
+  const pulses = [
     ...(await page
-      .locator(".workspace-branch-lines .workspace-flow-head")
+      .locator(".workspace-branch-lines .workspace-flow-trail:last-child")
       .all()),
-    page.locator(".workspace-branch-panel-link .workspace-flow-head"),
+    page.locator(
+      ".workspace-branch-panel-link .workspace-flow-trail:last-child",
+    ),
   ];
+  await expect(
+    page.locator(".workspace-flow-head,.workspace-flow-glow"),
+  ).toHaveCount(0);
   // Check normal and zoomed scenes: viewport-sized dash patterns previously
   // tiled into many dots, especially on longer curves and after zooming.
   for (const zoom of [false, true]) {
@@ -342,8 +347,26 @@ test("每条分支只有一束连续流光，缩放后不平铺且减少动态�
         .click();
       await expectDetailLinkAttached(page);
     }
-    for (const head of heads) {
-      const frames = await head.evaluate((element) => {
+    for (const pulse of pulses) {
+      const strokes = await pulse.evaluate((element) =>
+        Array.from(element.parentElement!.querySelectorAll("path")).map(
+          (path) => {
+            const style = getComputedStyle(path);
+            return {
+              width: style.strokeWidth,
+              cap: style.strokeLinecap,
+              vectorEffect: style.vectorEffect,
+            };
+          },
+        ),
+      );
+      expect(new Set(strokes.map((stroke) => stroke.width)).size).toBe(1);
+      expect(
+        strokes.every(
+          (stroke) => stroke.cap === "butt" && stroke.vectorEffect === "none",
+        ),
+      ).toBe(true);
+      const frames = await pulse.evaluate((element) => {
         const path = element as SVGPathElement;
         const animation = path.getAnimations()[0];
         const originalTime = animation.currentTime;
@@ -384,10 +407,70 @@ test("每条分支只有一束连续流光，缩放后不平铺且减少动态�
         frames[0].painted,
       );
       expect(frames[2].painted).not.toEqual(frames[1].painted);
+      const brightness = await pulse.evaluate((element) => {
+        const layers = Array.from(
+          element.parentElement!.querySelectorAll<SVGPathElement>(
+            ".workspace-flow-trail",
+          ),
+        );
+        const animations = layers.map((path) => path.getAnimations()[0]!);
+        const original = animations.map((animation) => animation.currentTime);
+        const phase = (fraction: number) =>
+          animations.forEach((animation) => {
+            const timing = animation.effect!.getTiming();
+            animation.pause();
+            animation.currentTime =
+              (timing.delay ?? 0) + Number(timing.duration) * (1 + fraction);
+          });
+        phase(0.5);
+        const length = layers[0]!.getTotalLength();
+        // At this phase the common front is 66/100 along the path. Use real
+        // painted SVG strokes to compare the leading edge and receding trail.
+        const profile = [1, 8, 16, 24, 31].map((distance) => {
+          const point = layers[0]!.getPointAtLength(
+            (length * (66 - distance)) / 100,
+          );
+          return (
+            1 -
+            layers.reduce(
+              (remaining, path) =>
+                path.isPointInStroke(point)
+                  ? remaining * (1 - Number(getComputedStyle(path).opacity))
+                  : remaining,
+              1,
+            )
+          );
+        });
+        phase(0.99);
+        const tailCleared = Array.from(
+          { length: 101 },
+          (_, index) => index,
+        ).every(
+          (index) =>
+            !layers[0]!.isPointInStroke(
+              layers[0]!.getPointAtLength((length * index) / 100),
+            ),
+        );
+        animations.forEach((animation, index) => {
+          animation.currentTime = original[index]!;
+          animation.play();
+        });
+        return { profile, tailCleared };
+      });
+      expect(brightness.profile[0]).toBeGreaterThan(0.6);
+      for (let index = 1; index < brightness.profile.length; index++)
+        expect(brightness.profile[index]).toBeLessThan(
+          brightness.profile[index - 1]!,
+        );
+      expect(brightness.profile.at(-1)).toBe(0);
+      expect(brightness.tailCleared).toBe(true);
     }
   }
+  await page.screenshot({
+    path: test.info().outputPath("workspace-lines-uniform.png"),
+  });
   await page.emulateMedia({ reducedMotion: "reduce" });
-  for (const head of heads) await expect(head).toBeHidden();
+  for (const pulse of pulses) await expect(pulse).toBeHidden();
   await expect(
     page.locator(".workspace-branch-lines .workspace-flow-track").first(),
   ).toBeVisible();

@@ -18,6 +18,97 @@ export function qwenRealtimeWebRtcEndpoint(workspaceId: string) {
   const workspace = qwenWorkspaceIdSchema.parse(workspaceId);
   return `https://${workspace}.cn-beijing.maas.aliyuncs.com/api/v1/webrtc/realtime?model=${qwenRealtimeModel}`;
 }
+// Exact public error codes only. Never classify from provider message text,
+// which can include credentials, request contents or infrastructure details.
+const qwenHttpErrorMessages = new Map<string, string>([
+  [
+    "AllocationQuota.FreeTierOnly",
+    "免费额度已用完或不适用于当前服务，实时通话已按费用保护停止；不会自动切换通道或关闭保护",
+  ],
+  ...["InvalidApiKey", "invalid_api_key"].map((code): [string, string] => [
+    code,
+    "实时语音密钥校验失败，请核对北京地域的密钥及接入配置",
+  ]),
+  ...[
+    "Throttling",
+    "Throttling.AllocationQuota",
+    "insufficient_quota",
+    "Throttling.RateQuota",
+    "LimitRequests",
+    "limit_requests",
+    "Throttling.BurstRate",
+    "limit_burst_rate",
+    "Throttling.Concurrency",
+    "Throttling.ServiceOverloaded",
+    "Throttling.ResourceExhausted",
+    "ResourceExhausted",
+  ].map((code): [string, string] => [
+    code,
+    "实时语音调用触发额度或限流限制，请稍后重试并核对服务用量；费用保护保持不变",
+  ]),
+  ...[
+    "AccessDenied",
+    "access_denied",
+    "Workspace.AccessDenied",
+    "Endpoint.AccessDenied",
+  ].map((code): [string, string] => [
+    code,
+    "实时语音访问被拒绝，请核对业务空间与服务可用性",
+  ]),
+  ...["Arrearage", "BudgetLimitExceeded"].map((code): [string, string] => [
+    code,
+    "实时语音服务账户或预算状态受限，请核对服务状态；费用保护保持不变",
+  ]),
+]);
+/** Read at most 8 KiB for at most 1.5 seconds; retain only a known code.
+ * No body, message, request ID, key or workspace is returned or logged. */
+async function qwenHttpErrorCode(response: Response, signal: AbortSignal) {
+  const reader = response.body?.getReader();
+  if (!reader) return undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let stop!: () => void;
+  const deadline = new Promise<undefined>((resolve) => {
+    stop = () => resolve(undefined);
+    timer = setTimeout(stop, 1500);
+    signal.addEventListener("abort", stop, { once: true });
+    if (signal.aborted) stop();
+  });
+  const reading = (async () => {
+    const chunks: Uint8Array[] = [];
+    let bytes = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > 8192) return undefined;
+      chunks.push(value);
+    }
+    const data: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    if (!data || typeof data !== "object" || Array.isArray(data))
+      return undefined;
+    const root = data as { code?: unknown; error?: unknown };
+    const nested =
+      root.error && typeof root.error === "object" && !Array.isArray(root.error)
+        ? (root.error as { code?: unknown }).code
+        : undefined;
+    const known = new Set(
+      [root.code, nested].filter(
+        (code): code is string =>
+          typeof code === "string" && qwenHttpErrorMessages.has(code),
+      ),
+    );
+    return known.size === 1 ? [...known][0] : undefined;
+  })().catch(() => undefined);
+  try {
+    return await Promise.race([reading, deadline]);
+  } finally {
+    clearTimeout(timer);
+    signal.removeEventListener("abort", stop);
+    // A stalled provider body must not hold up error reporting or cleanup.
+    void reader.cancel().catch(() => undefined);
+    reader.releaseLock();
+  }
+}
 /** Exchange only SDP. The long-lived key stays on the application server. */
 export async function createQwenWebRtcSession(
   encryptedKey: string,
@@ -36,9 +127,11 @@ export async function createQwenWebRtcSession(
     body: offer,
   });
   if (!response.ok) {
-    // Provider bodies may contain credentials or infrastructure diagnostics.
-    await response.body?.cancel();
-    fail("REALTIME_PROVIDER", qwenErrorMessage(response.status), 502);
+    const code = await qwenHttpErrorCode(response, signal);
+    const message =
+      (code && qwenHttpErrorMessages.get(code)) ||
+      "实时语音连接未建立，服务返回未识别的错误；请稍后重试或核对服务状态";
+    fail("REALTIME_PROVIDER", `${message}（HTTP ${response.status}）`, 502);
   }
   const sdp = await response.text();
   if (!sdp.startsWith("v=0") || !/m=audio\s/.test(sdp) || sdp.length > 65536)

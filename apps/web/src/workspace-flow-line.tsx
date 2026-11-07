@@ -6,7 +6,18 @@ import {
   type Ref,
 } from "react";
 
-/** Nested, coincident strokes form one tapered beam, never a repeating dotted line. */
+// Composite the same-width strokes into a smooth light trail. Its brightness
+// falls quadratically with distance behind the shared leading edge.
+const flowLayers = Array.from({ length: 24 }, (_, index) => {
+  const previous = 0.78 * (index / 24) ** 2;
+  const next = 0.78 * ((index + 1) / 24) ** 2;
+  return {
+    length: 30 * (1 - index / 24),
+    opacity: (next - previous) / (1 - previous),
+  };
+});
+
+/** One constant-width line lights ahead and fades behind, without a wider halo. */
 export function WorkspaceFlowLine({
   d,
   active = false,
@@ -26,8 +37,7 @@ export function WorkspaceFlowLine({
       style={{ "--flow-delay": `${delay}s` } as CSSProperties}
     >
       <path className="workspace-flow-track" d={d} pathLength="100" />
-      <path className="workspace-flow-glow" d={d} pathLength="100" />
-      {[14, 12, 10, 8, 6, 4, 2].map((length, index) => (
+      {flowLayers.map(({ length, opacity }) => (
         <path
           key={length}
           className="workspace-flow-trail"
@@ -37,12 +47,11 @@ export function WorkspaceFlowLine({
             {
               "--flow-tail": `${length}px`,
               strokeDasharray: `${length} 1000`,
-              opacity: [0.04, 0.05, 0.06, 0.08, 0.1, 0.14, 0.2][index],
+              opacity,
             } as CSSProperties
           }
         />
       ))}
-      <path className="workspace-flow-head" d={d} pathLength="100" />
     </g>
   );
 }

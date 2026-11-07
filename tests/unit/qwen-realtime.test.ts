@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EventEmitter } from "node:events";
 type FakeSocket = EventEmitter & {
   sent: Record<string, any>[];
@@ -45,6 +45,7 @@ import {
   qwenRealtimeEndpoint,
   qwenRealtimeWebRtcEndpoint,
   qwenWebRtcConfiguration,
+  createQwenWebRtcSession,
   verifyQwenRealtime,
 } from "../../apps/api/src/modules/workspace/qwen-realtime.js";
 import { qwenRealtimeModel } from "../../packages/contracts/src/assistant-realtime.js";
@@ -64,6 +65,163 @@ beforeEach(() => {
   f.sockets.length = 0;
   f.connections.length = 0;
 });
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.useRealTimers();
+});
+
+describe("Qwen WebRTC safe handshake errors", () => {
+  const connect = (signal = new AbortController().signal) =>
+    createQwenWebRtcSession(
+      "encrypted",
+      "workspace-1",
+      "v=0\r\nm=audio 9\r\n",
+      signal,
+    );
+  async function failure(body: BodyInit | null, status = 403) {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(body, { status })),
+    );
+    const error = await connect().catch((error: unknown) => error);
+    expect(error).toMatchObject({
+      response: {
+        error: {
+          code: "REALTIME_PROVIDER",
+          message: expect.stringContaining(`HTTP ${status}`),
+        },
+      },
+      status: 502,
+    });
+    expect(JSON.stringify(error)).not.toMatch(
+      /provider-private|test-secret|workspace-1|request-private/,
+    );
+    expect(fetch).toHaveBeenCalledTimes(1);
+    return (error as { response: { error: { message: string } } }).response
+      .error.message;
+  }
+  it.each([
+    [403, { code: "AllocationQuota.FreeTierOnly" }, "按费用保护停止"],
+    [
+      403,
+      {
+        error: {
+          code: "AllocationQuota.FreeTierOnly",
+          message: "provider-private",
+        },
+      },
+      "按费用保护停止",
+    ],
+    [429, { code: "Throttling.AllocationQuota" }, "额度或限流限制"],
+    [429, { error: { code: "insufficient_quota" } }, "额度或限流限制"],
+    [401, { code: "InvalidApiKey" }, "密钥校验失败"],
+    [401, { error: { code: "invalid_api_key" } }, "密钥校验失败"],
+    [403, { code: "Workspace.AccessDenied" }, "访问被拒绝"],
+    [403, { code: "Arrearage" }, "账户或预算状态受限"],
+    [429, { code: "BudgetLimitExceeded" }, "账户或预算状态受限"],
+  ])(
+    "classifies only a known error code for HTTP %s without exposing diagnostic content",
+    async (status, code, expected) => {
+      const message = await failure(
+        JSON.stringify({
+          ...code,
+          message: "provider-private test-secret workspace-1",
+          request_id: "request-private",
+        }),
+        status,
+      );
+      expect(message).toContain(expected);
+    },
+  );
+  it.each([
+    '{"message":"AllocationQuota.FreeTierOnly provider-private"}',
+    '{"code":"prefix-InvalidApiKey-provider-private"}',
+    '{"error":{"code":"UnknownQuotaProviderCode","message":"InvalidApiKey"}}',
+    '{"code":"InvalidApiKey","error":{"code":"AllocationQuota.FreeTierOnly"}}',
+    '[{"code":"AllocationQuota.FreeTierOnly"}]',
+    '"AllocationQuota.FreeTierOnly"',
+    "<html>AllocationQuota.FreeTierOnly provider-private</html>",
+    '{"code":"AllocationQuota.FreeTierOnly",',
+    "null",
+  ])(
+    "keeps unknown, conflicting or malformed responses generic",
+    async (body) => {
+      const message = await failure(body);
+      expect(message).toContain("未识别的错误");
+      expect(message).not.toMatch(/密钥校验失败|按费用保护停止|额度或限流限制/);
+    },
+  );
+  it("reads a small chunked JSON error and ignores its private message", async () => {
+    const bytes = new TextEncoder().encode(
+      JSON.stringify({
+        error: {
+          code: "AllocationQuota.FreeTierOnly",
+          message: "provider-private 私密",
+        },
+      }),
+    );
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(bytes.slice(0, 25));
+        controller.enqueue(bytes.slice(25));
+        controller.close();
+      },
+    });
+    expect(await failure(stream)).toContain("按费用保护停止");
+  });
+  it("cancels an oversized body without trusting a valid code hidden in it", async () => {
+    const canceled = vi.fn();
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(
+          new TextEncoder().encode(
+            JSON.stringify({
+              code: "InvalidApiKey",
+              message: "provider-private".repeat(1000),
+            }),
+          ),
+        );
+      },
+      cancel: canceled,
+    });
+    expect(await failure(stream)).toContain("未识别的错误");
+    expect(canceled).toHaveBeenCalledOnce();
+  });
+  it("bounds a stalled body read and does not wait for stalled cancellation", async () => {
+    vi.useFakeTimers();
+    const canceled = vi.fn(() => new Promise<void>(() => {}));
+    const stream = new ReadableStream<Uint8Array>({ cancel: canceled });
+    const pending = failure(stream);
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(await pending).toContain("未识别的错误");
+    expect(canceled).toHaveBeenCalledOnce();
+  });
+  it("stops reading promptly when the caller closes the pending session", async () => {
+    const canceled = vi.fn();
+    const stream = new ReadableStream<Uint8Array>({ cancel: canceled });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(stream, { status: 403 })),
+    );
+    const controller = new AbortController();
+    const pending = connect(controller.signal).catch((error: unknown) => error);
+    await Promise.resolve();
+    controller.abort();
+    expect(await pending).toMatchObject({
+      response: { error: { message: expect.stringContaining("未识别的错误") } },
+    });
+    expect(canceled).toHaveBeenCalledOnce();
+  });
+  it("discards read failures instead of returning their provider content", async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.error(Error("provider-private test-secret workspace-1"));
+      },
+    });
+    expect(await failure(stream, 500)).toContain("未识别的错误");
+  });
+});
+
 describe("Qwen native realtime protocol", () => {
   it("pins Beijing and translates the exact audio/tool schema without allowing arbitrary hosts", () => {
     expect(qwenRealtimeEndpoint("workspace-1")).toBe(
