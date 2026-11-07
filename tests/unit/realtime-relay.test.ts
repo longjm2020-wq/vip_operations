@@ -194,6 +194,42 @@ describe("realtime network jitter allowance", () => {
     expect(write).not.toHaveBeenCalled();
     expect(failed).not.toHaveBeenCalled();
   });
+  it("prunes invalidated continuations before timeout while preserving fresh audio FIFO", () => {
+    let now = 0,
+      buffered = 300 * 1024,
+      current = true;
+    const writes: Record<string, unknown>[] = [],
+      failed = vi.fn();
+    const queue = new RealtimeUpstreamBuffer(
+      () => buffered,
+      (p) => writes.push(JSON.parse(p)),
+      failed,
+      () => now,
+    );
+    queue.send(
+      { type: "conversation.item.create", output: "old tool" },
+      () => current,
+    );
+    queue.send({ type: "response.create" }, () => current);
+    now = 1900;
+    queue.send({
+      type: "input_audio_buffer.append",
+      audio: "new speech first",
+    });
+    queue.send({
+      type: "input_audio_buffer.append",
+      audio: "new speech second",
+    });
+    current = false;
+    now = 2100;
+    buffered = 0;
+    queue.flush();
+    expect(failed).not.toHaveBeenCalled();
+    expect(writes).toEqual([
+      { type: "input_audio_buffer.append", audio: "new speech first" },
+      { type: "input_audio_buffer.append", audio: "new speech second" },
+    ]);
+  });
 });
 
 let server: Server, detach: () => void, base: string;
@@ -311,6 +347,81 @@ async function ready(provider = "doubao") {
 }
 
 describe("full-duplex relay", () => {
+  it("does not execute an interrupted Qwen tool while its permission refresh is pending", async () => {
+    const { upstream } = await ready("qwen");
+    const emit = (event: unknown) =>
+      upstream.emit("message", Buffer.from(JSON.stringify(event)), false);
+    emit({ type: "input_audio_buffer.speech_started", item_id: "q1" });
+    emit({ type: "response.created", response: { id: "r1" } });
+    let resolveActor!: (actor: unknown) => void;
+    f.actor.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveActor = resolve;
+        }),
+    );
+    emit({
+      type: "response.function_call_arguments.done",
+      response_id: "r1",
+      name: "workspace_request",
+      call_id: "call",
+      arguments: '{"request":"更新罗盘数据"}',
+    });
+    emit({
+      type: "response.done",
+      response: { id: "r1", status: "completed" },
+    });
+    await vi.waitFor(() => expect(resolveActor).toBeTypeOf("function"));
+    emit({ type: "input_audio_buffer.speech_started", item_id: "q2" });
+    resolveActor({ id: "7", permissions: ["analytics.read"] });
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(f.tool).not.toHaveBeenCalled();
+    expect(
+      upstream.sent.some((e) => e.type === "conversation.item.create"),
+    ).toBe(false);
+  });
+  it("does not resume interrupted Qwen tool replies after provider backpressure recovers", async () => {
+    const { socket, events, upstream } = await ready("qwen");
+    const emit = (event: unknown) =>
+      upstream.emit("message", Buffer.from(JSON.stringify(event)), false);
+    emit({ type: "input_audio_buffer.speech_started", item_id: "q1" });
+    emit({ type: "response.created", response: { id: "r1" } });
+    upstream.bufferedAmount = 300 * 1024;
+    emit({
+      type: "response.function_call_arguments.done",
+      response_id: "r1",
+      name: "workspace_request",
+      call_id: "call",
+      arguments: '{"request":"查询库存"}',
+    });
+    emit({
+      type: "response.done",
+      response: { id: "r1", status: "completed" },
+    });
+    await vi.waitFor(() =>
+      expect(events.some((e) => e.type === "xuti.tool_result")).toBe(true),
+    );
+    emit({ type: "input_audio_buffer.speech_started", item_id: "q2" });
+    const audio = Buffer.alloc(640, 3).toString("base64");
+    socket.send(JSON.stringify({ type: "input_audio_buffer.append", audio }));
+    upstream.bufferedAmount = 0;
+    await vi.waitFor(() =>
+      expect(
+        upstream.sent.some((e) => e.type === "input_audio_buffer.append"),
+      ).toBe(true),
+    );
+    expect(
+      upstream.sent.filter((e) => e.type === "input_audio_buffer.append"),
+    ).toEqual([{ type: "input_audio_buffer.append", audio }]);
+    expect(
+      upstream.sent.some((e) =>
+        ["conversation.item.create", "response.create"].includes(
+          String(e.type),
+        ),
+      ),
+    ).toBe(false);
+    expect(socket.readyState).toBe(WebSocket.OPEN);
+  });
   it.each(["doubao", "qwen"])(
     "recovers %s provider backpressure without dropping audio or reordering mute",
     async (provider) => {

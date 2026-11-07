@@ -189,7 +189,9 @@ export class QwenRealtimeProtocol {
   private muted = false;
   private bufferedFrames = 0;
   private manualCommit = false;
-  constructor(private send: (event: Event) => void) {}
+  private continuationEpoch = 0;
+  private inputEpoch = 0;
+  constructor(private send: (event: Event, valid?: () => boolean) => void) {}
   current(responseId: unknown) {
     const response = this.responses.get(String(responseId));
     return !!response && response.turn === this.turn && !response.canceled;
@@ -200,15 +202,19 @@ export class QwenRealtimeProtocol {
       event.type === "input_audio_unmute.commit"
     ) {
       this.muted = event.type === "input_audio_mute.commit";
+      this.inputEpoch++;
       this.bufferedFrames = 0;
       this.manualCommit = false;
       this.send({ type: "input_audio_buffer.clear" });
       return;
     }
     if (event.type === "response.cancel") {
+      this.continuationEpoch++;
+      // A completed tool-call response may still be awaiting business results.
+      // Cancel that continuation too, even when no audio response is active.
+      for (const response of this.responses.values())
+        if (response.turn === this.turn) response.canceled = true;
       if (this.activeResponse) {
-        const response = this.responses.get(this.activeResponse);
-        if (response) response.canceled = true;
         this.send({ type: "response.cancel" });
         this.activeResponse = "";
       }
@@ -245,7 +251,20 @@ export class QwenRealtimeProtocol {
       this.itemId = event.item_id;
       if (this.manualCommit) {
         this.manualCommit = false;
-        if (!this.activeResponse) this.send({ type: "response.create" });
+        if (!this.activeResponse) {
+          const turn = this.turn,
+            epoch = this.continuationEpoch,
+            inputEpoch = this.inputEpoch;
+          this.send(
+            { type: "response.create" },
+            () =>
+              turn === this.turn &&
+              epoch === this.continuationEpoch &&
+              inputEpoch === this.inputEpoch &&
+              !this.muted &&
+              !this.activeResponse,
+          );
+        }
       }
     }
     if (event.type === "response.created") {
@@ -332,11 +351,17 @@ export class QwenRealtimeProtocol {
     results: { call_id: string; output: string }[],
   ) {
     if (!this.current(responseId)) return;
+    const epoch = this.continuationEpoch;
+    const valid = () =>
+      this.current(responseId) && epoch === this.continuationEpoch;
     for (const result of results)
-      this.send({
-        type: "conversation.item.create",
-        item: { type: "function_call_output", ...result },
-      });
-    this.send({ type: "response.create" });
+      this.send(
+        {
+          type: "conversation.item.create",
+          item: { type: "function_call_output", ...result },
+        },
+        valid,
+      );
+    this.send({ type: "response.create" }, valid);
   }
 }

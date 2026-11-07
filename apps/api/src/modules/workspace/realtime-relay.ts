@@ -71,7 +71,12 @@ export class RealtimeFrameBudget {
 /** Preserve a short interruption in provider writes without dropping or replaying
  * speech. Once queued, audio and control/tool events share one ordered drain. */
 export class RealtimeUpstreamBuffer {
-  private queue: { payload: string; bytes: number; at: number }[] = [];
+  private queue: {
+    payload: string;
+    bytes: number;
+    at: number;
+    valid?: () => boolean;
+  }[] = [];
   private queuedBytes = 0;
   private closed = false;
   constructor(
@@ -85,8 +90,9 @@ export class RealtimeUpstreamBuffer {
     }) => void,
     private clock = () => performance.now(),
   ) {}
-  send(event: Record<string, unknown>) {
-    if (this.closed) return;
+  send(event: Record<string, unknown>, valid?: () => boolean) {
+    if (this.closed || (valid && !valid())) return;
+    this.prune();
     const payload = JSON.stringify(event);
     const bytes = Buffer.byteLength(payload);
     const pending = this.bufferedAmount();
@@ -94,12 +100,22 @@ export class RealtimeUpstreamBuffer {
       this.write(payload);
       return;
     }
-    this.queue.push({ payload, bytes, at: this.clock() });
+    this.queue.push({ payload, bytes, at: this.clock(), valid });
     this.queuedBytes += bytes;
     this.check();
   }
+  private prune() {
+    // Only obsolete response continuations carry this predicate. Audio and user
+    // controls never do, so interruption cannot truncate retained speech.
+    this.queue = this.queue.filter((entry) => {
+      if (!entry.valid || entry.valid()) return true;
+      this.queuedBytes -= entry.bytes;
+      return false;
+    });
+  }
   private check() {
     if (this.closed) return false;
+    this.prune();
     const bufferedBytes = this.bufferedAmount();
     const waitMs = this.queue.length ? this.clock() - this.queue[0].at : 0;
     if (
@@ -124,6 +140,8 @@ export class RealtimeUpstreamBuffer {
     if (!this.queue.length || !this.check()) return;
     // At most 40 ms of PCM per tick: catch up gradually after a brief stall.
     for (let sent = 0; sent < 2 && this.queue.length; sent++) {
+      this.prune();
+      if (!this.queue.length) return;
       const next = this.queue[0];
       if (this.bufferedAmount() + next.bytes > 256 * 1024) return;
       this.queue.shift();
@@ -371,7 +389,9 @@ function runRelay(
         if (closed) return;
         unregister = registerRealtimeRelay(id, () => stop());
         if (config.provider === "qwen")
-          qwen = new QwenRealtimeProtocol((e) => upstreamBuffer.send(e));
+          qwen = new QwenRealtimeProtocol((e, valid) =>
+            upstreamBuffer.send(e, valid),
+          );
         upstream = qwen
           ? qwenProviderSocket(config.key, config.workspaceId!)
           : doubaoProviderSocket(config.key);
@@ -492,6 +512,8 @@ function runRelay(
                       if (closed) return;
                       if (qwen && !qwen.current(e.response_id)) return;
                       await refreshActor();
+                      if (closed || (qwen && !qwen.current(e.response_id)))
+                        return;
                       if (
                         !item ||
                         !isRealtimeToolName(item.name) ||

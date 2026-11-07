@@ -256,6 +256,87 @@ describe("Qwen native realtime protocol", () => {
       send.mock.calls.filter((c) => c[0].type === "input_audio_buffer.commit"),
     ).toHaveLength(1);
     protocol.events({ type: "input_audio_buffer.committed", item_id: "q" });
-    expect(send).toHaveBeenLastCalledWith({ type: "response.create" });
+    expect(send).toHaveBeenLastCalledWith(
+      { type: "response.create" },
+      expect.any(Function),
+    );
   });
+  it.each(["speech", "cancel"])(
+    "invalidates queued tool continuations on %s, even after response.done",
+    (interrupt) => {
+      const send = vi.fn(),
+        protocol = new QwenRealtimeProtocol(send);
+      protocol.events({ type: "response.created", response: { id: "r1" } });
+      protocol.events({
+        type: "response.done",
+        response: { id: "r1", status: "completed" },
+      });
+      protocol.toolResults("r1", [{ call_id: "call", output: "done" }]);
+      const pending = send.mock.calls.map((call) => call[1] as () => boolean);
+      expect(pending).toHaveLength(2);
+      expect(pending.every((valid) => valid())).toBe(true);
+      if (interrupt === "speech")
+        protocol.events({
+          type: "input_audio_buffer.speech_started",
+          item_id: "q2",
+        });
+      else protocol.command({ type: "response.cancel" });
+      expect(pending.every((valid) => !valid())).toBe(true);
+    },
+  );
+  it("does not resume a canceled tool response when its business result arrives later", () => {
+    const send = vi.fn(),
+      protocol = new QwenRealtimeProtocol(send);
+    protocol.events({ type: "response.created", response: { id: "r1" } });
+    protocol.events({
+      type: "response.done",
+      response: { id: "r1", status: "completed" },
+    });
+    protocol.command({ type: "response.cancel" });
+    protocol.toolResults("r1", [{ call_id: "call", output: "late result" }]);
+    expect(send).not.toHaveBeenCalled();
+  });
+  it("keeps a queued tool reply valid when only the microphone is muted", () => {
+    const send = vi.fn(),
+      protocol = new QwenRealtimeProtocol(send);
+    protocol.events({ type: "response.created", response: { id: "r1" } });
+    protocol.events({
+      type: "response.done",
+      response: { id: "r1", status: "completed" },
+    });
+    protocol.toolResults("r1", [{ call_id: "call", output: "done" }]);
+    const pending = send.mock.calls.map((call) => call[1] as () => boolean);
+    protocol.command({ type: "input_audio_mute.commit" });
+    expect(pending.every((valid) => valid())).toBe(true);
+    protocol.command({ type: "input_audio_unmute.commit" });
+    expect(pending.every((valid) => valid())).toBe(true);
+  });
+  it.each(["speech", "cancel", "mute", "response"])(
+    "invalidates a queued manual response.create on %s",
+    (interrupt) => {
+      const send = vi.fn(),
+        protocol = new QwenRealtimeProtocol(send);
+      for (let i = 0; i < 5; i++)
+        protocol.command({ type: "input_audio_buffer.append", audio: "pcm" });
+      protocol.command({ type: "input_audio_buffer.commit" });
+      protocol.events({ type: "input_audio_buffer.committed", item_id: "q1" });
+      const valid = send.mock.calls.at(-1)![1] as () => boolean;
+      expect(valid()).toBe(true);
+      if (interrupt === "speech")
+        protocol.events({
+          type: "input_audio_buffer.speech_started",
+          item_id: "q2",
+        });
+      else if (interrupt === "response")
+        protocol.events({ type: "response.created", response: { id: "r2" } });
+      else
+        protocol.command({
+          type:
+            interrupt === "cancel"
+              ? "response.cancel"
+              : "input_audio_mute.commit",
+        });
+      expect(valid()).toBe(false);
+    },
+  );
 });
