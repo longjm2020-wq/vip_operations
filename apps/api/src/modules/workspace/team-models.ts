@@ -119,7 +119,18 @@ export async function resolveTeamModel(options: {
         priorities.indexOf(teamModelTier(left)) -
         priorities.indexOf(teamModelTier(right)),
     );
-  const model = available[0];
+  const preferred = available[0];
+  // A "flash" model can expose both a normal reasoning profile and an explicit
+  // quick profile. For simple work, prefer that configured profile of the same
+  // actual model; never invent unsupported reasoning options or change providers.
+  const model =
+    desired === "fast" && preferred
+      ? available.find(
+          (candidate) =>
+            candidate.actual === preferred.actual &&
+            candidate.reasoningEffort === "none",
+        ) || preferred
+      : preferred;
   if (!model)
     fail(
       "TEAM_MODEL_UNAVAILABLE",
@@ -132,7 +143,7 @@ export async function resolveTeamModel(options: {
     tier,
     selectionReason:
       tier === desired
-        ? `按${options.orchestrator ? "主智能体" : "任务"}的${desired}能力偏好自动匹配`
+        ? `按${options.orchestrator ? "主智能体" : "任务"}的${desired}能力偏好自动匹配${desired === "fast" && model.reasoningEffort === "none" ? "，使用同型号已配置的快速模式" : ""}`
         : `当前${desired}候选不可用，自动选择满足输入能力的${tier}候选`,
   };
 }

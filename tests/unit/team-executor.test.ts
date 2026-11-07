@@ -271,6 +271,78 @@ describe("team orchestration", () => {
       "缺少第二部分",
     );
   });
+  it("preserves the independent review before archive metadata and archives accepted originals if that model fails", async () => {
+    const f = fixture();
+    f.handle(async (request) => {
+      if (request.purpose === "archive") {
+        expect(f.artifacts[0]).toMatchObject({
+          status: "DRAFT",
+          review: "正文满足全部验收项",
+        });
+        throw Error("private-provider-payload");
+      }
+      return undefined;
+    });
+    const result = await f.run();
+    expect(result.status).toBe("DONE");
+    expect(result.state.steps[0].status).toBe("DONE");
+    expect(f.artifacts[0]).toMatchObject({
+      status: "ACCEPTED",
+      tags: [],
+      content: "这是一份完整说明正文。",
+    });
+    expect(f.artifacts[0].review).toContain(
+      "知识摘要未生成，原始产物与验收意见已归档",
+    );
+    expect(f.artifacts[0].review).not.toContain("private-provider-payload");
+    expect(
+      f.calls.filter((request) => request.purpose === "archive"),
+    ).toHaveLength(1);
+  });
+  it("does not archive after cancellation or a lost lease during metadata generation", async () => {
+    const canceled = fixture(),
+      controller = new AbortController();
+    canceled.handle(async (request) => {
+      if (request.purpose === "archive") {
+        controller.abort();
+        throw Error("metadata interrupted");
+      }
+      return undefined;
+    });
+    await expect(canceled.run(controller.signal)).rejects.toThrow();
+    expect(canceled.artifacts[0]).toMatchObject({
+      status: "DRAFT",
+      review: "正文满足全部验收项",
+    });
+    const lost = fixture();
+    let valid = true;
+    lost.deps.check = async () => {
+      if (!valid) throw Error("lease lost");
+    };
+    lost.handle(async (request) => {
+      if (request.purpose === "archive") {
+        valid = false;
+        throw Error("metadata interrupted");
+      }
+      return undefined;
+    });
+    await expect(lost.run()).rejects.toThrow("lease lost");
+    expect(lost.artifacts[0].status).toBe("DRAFT");
+  });
+  it("does not mark an artifact accepted when the actual archive database write fails", async () => {
+    const f = fixture(),
+      persist = f.deps.artifact;
+    f.deps.artifact = async (artifact) => {
+      if (artifact.status === "ACCEPTED") throw Error("database unavailable");
+      await persist(artifact);
+    };
+    const result = await f.run();
+    expect(result.status).toBe("NEEDS_USER");
+    expect(result.state.steps[0].status).toBe("NEEDS_USER");
+    expect(result.artifacts[0].status).toBe("DRAFT");
+    expect(f.artifacts[0].status).toBe("DRAFT");
+    expect(f.artifacts[0].review).toBe("正文满足全部验收项");
+  });
   it("does not retry failed provider work, and keeps independent accepted work", async () => {
     const f = fixture([step("failed"), step("usable")]);
     f.handle(async (request) => {

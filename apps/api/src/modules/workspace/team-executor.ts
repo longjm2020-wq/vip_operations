@@ -406,33 +406,45 @@ export async function executeTeamRun(
           );
           continue;
         }
-        const archived = archiveSchema.parse(
-          (
-            await call({
-              purpose: "archive",
-              member: member("librarian"),
-              difficulty: "simple",
-              schema: archiveSchema,
-              fileIds: [],
-              prompt: JSON.stringify({
-                artifact: {
-                  ...artifact,
-                  files: artifact.files.map((f) => ({
-                    id: f.id,
-                    name: f.name,
-                    mime: f.mime,
-                  })),
-                },
-                instruction:
-                  "归纳已验收产物的检索标签和摘要，保持事实与来源边界，不改变正文、不增加未验证结论。",
-              }),
-            })
-          ).data,
-        );
-        artifact.status = "ACCEPTED";
-        artifact.tags = archived.tags.map(clean);
-        artifact.review += "\n归档摘要：" + clean(archived.summary);
+        // The independent review is durable before optional AI metadata starts.
         await deps.artifact(artifact);
+        await save("RUNNING", `验收通过，整理归档：${step.title}`);
+        try {
+          const archived = archiveSchema.parse(
+            (
+              await call({
+                purpose: "archive",
+                member: member("librarian"),
+                difficulty: "simple",
+                schema: archiveSchema,
+                fileIds: [],
+                prompt: JSON.stringify({
+                  artifact: {
+                    ...artifact,
+                    files: artifact.files.map((f) => ({
+                      id: f.id,
+                      name: f.name,
+                      mime: f.mime,
+                    })),
+                  },
+                  instruction:
+                    "仅输出简短检索摘要和标签：summary 200字以内，tags 最多5项，不展开验收分析或重述全文。保持事实与来源边界，不改变正文、不增加未验证结论。原始产物和验收意见已由系统保存。",
+                }),
+              })
+            ).data,
+          );
+          artifact.tags = archived.tags.map(clean);
+          artifact.review += "\n归档摘要：" + clean(archived.summary);
+        } catch (error) {
+          // A canceled run or lost owner/lease must never be promoted to accepted.
+          await guard();
+          artifact.tags = [];
+          artifact.review +=
+            "\n知识摘要未生成，原始产物与验收意见已归档。原因：" +
+            safeTeamError(error);
+        }
+        await deps.artifact({ ...artifact, status: "ACCEPTED" });
+        artifact.status = "ACCEPTED";
         step.status = "DONE";
         step.result = artifact.content;
         await save("RUNNING", `已验收并归档：${step.title}`);
@@ -491,7 +503,7 @@ export async function executeTeamRun(
             steps: state.steps,
             accepted: artifacts.filter((a) => a.status === "ACCEPTED"),
             instruction:
-              "只整合实际已验收成果，给出可用文件及来源；只根据步骤实际 error 说明阻塞与确有必要的用户操作。执行成员未调用工具或未返回文件，不表示系统没有文件创建、调度、验收或归档能力；这些功能已接通，不得无依据要求用户开启已有能力或上传本应由团队创建的文件。不得把未验收成果说成完成，不虚构链接或完整视频验收。",
+              "只整合实际已验收成果，给出可用文件及来源；只根据步骤实际 error 说明阻塞与确有必要的用户操作。执行成员未调用工具或未返回文件，不表示系统没有文件创建、调度、验收或归档能力；这些功能已接通，不得无依据要求用户开启已有能力或上传本应由团队创建的文件。知识摘要未生成但原始产物与验收意见已归档时，产物仍已完成；不得把可选摘要缺失说成未归档或交付失败。不得把未验收成果说成完成，不虚构链接或完整视频验收。",
           }),
         })
       ).data,
@@ -639,6 +651,63 @@ export async function readTeamModelError(
     signal.throwIfAborted();
   }
   return teamModelErrorMessage(response.status, payload);
+}
+
+const purposeLabels: Record<TeamPurpose, string> = {
+  plan: "团队规划",
+  knowledge: "知识检索",
+  brief: "资料简报",
+  execute: "成员执行",
+  review: "独立验收",
+  archive: "知识摘要",
+  summary: "主脑汇总",
+};
+function completionStats(payload: Row) {
+  const fields = {
+    completion_tokens: payload.usage?.completion_tokens,
+    reasoning_tokens:
+      payload.usage?.completion_tokens_details?.reasoning_tokens,
+  };
+  return Object.entries(fields)
+    .filter(
+      ([, value]) =>
+        typeof value === "number" &&
+        Number.isInteger(value) &&
+        value >= 0 &&
+        value <= 1_000_000_000,
+    )
+    .map(([key, value]) => `${key}=${value}`)
+    .join("，");
+}
+function checkCompletionLength(payload: Row, purpose: TeamPurpose) {
+  if (payload.choices?.[0]?.finish_reason !== "length") return;
+  const counts = completionStats(payload);
+  throw new TeamNeedsUser(
+    `${purposeLabels[purpose]}达到模型输出额度，未取得完整结果（finish_reason=length${counts ? "，" + counts : ""}）；未自动重试`,
+  );
+}
+function completionText(payload: Row, purpose: TeamPurpose): string {
+  const raw = payload.choices?.[0]?.message?.content;
+  const text =
+    typeof raw === "string"
+      ? raw
+      : Array.isArray(raw) &&
+          raw.every(
+            (part) => part?.type === "text" && typeof part.text === "string",
+          )
+        ? raw.map((part) => part.text).join("")
+        : undefined;
+  if (raw == null || text?.trim() === "") {
+    const counts = completionStats(payload);
+    throw new TeamNeedsUser(
+      `${purposeLabels[purpose]}未返回可用正文${counts ? "（" + counts + "）" : ""}；无法据此确认原因，未自动重试`,
+    );
+  }
+  if (typeof text !== "string" || text.length > 200000)
+    throw new TeamNeedsUser(
+      `${purposeLabels[purpose]}返回的正文类型或长度无效，未采用该结果`,
+    );
+  return text;
 }
 
 /** Production adapter: all writes are bound to the current owner and worker lease. */
@@ -928,6 +997,7 @@ export async function runTeamExecution(
         );
       if (!matchesAgentModel(model, payload.model))
         throw new TeamNeedsUser("模型服务返回了非指定型号，未继续使用该结果");
+      checkCompletionLength(payload, request.purpose);
       const message = payload.choices?.[0]?.message;
       if (!message || message.refusal)
         throw new TeamNeedsUser("模型未提供可执行结果，请调整任务要求");
@@ -1037,17 +1107,13 @@ export async function runTeamExecution(
         }
         continue;
       }
-      if (
-        typeof message.content !== "string" ||
-        message.content.length > 200000
-      )
-        throw new TeamNeedsUser("模型返回的结果格式无效，未采用该结果");
+      const content = completionText(payload, request.purpose);
       let data: unknown;
       try {
-        data = request.schema.parse(JSON.parse(message.content));
+        data = request.schema.parse(JSON.parse(content));
       } catch {
         if (toolsEnabled) {
-          messages.push({ role: "assistant", content: message.content });
+          messages.push({ role: "assistant", content });
           messages.push({
             role: "system",
             content:
@@ -1088,7 +1154,7 @@ export async function runTeamExecution(
         evidenceCorrection = true;
         forcedTool = correctiveTool;
         finalOutput = false;
-        messages.push({ role: "assistant", content: message.content });
+        messages.push({ role: "assistant", content });
         messages.push({
           role: "system",
           content: `执行器核验：你报告 completed，但本步骤尚无要求的${request.step.deliverable === "document" ? "真实文件" : "可核验公开来源"}。${correctiveTool} 已提供且可调用，请基于现有目标与已写正文调用此工具，得到成功结果后再报告完成。本次只纠正一次未执行工具的遗漏，不重试失败请求，不伪造用户确认，不重复已有交付。`,

@@ -122,6 +122,77 @@ describe("team model routing", () => {
       response: { error: { code: "TEAM_MODEL_UNAVAILABLE" } },
     });
   });
+  it("prefers an explicit quick profile of the same automatic simple model without changing a fixed profile", async () => {
+    const normal = {
+      ...models[0],
+      id: "engine/deepseek-normal",
+      actual: "deepseek/deepseek-v4.1-flash-1017",
+      name: "深度思考",
+      parameters: ["tools", "reasoning", "tool_choice"],
+    };
+    const quick = {
+      ...normal,
+      id: "engine/deepseek-quick",
+      name: "快速问答",
+      reasoningEffort: "none",
+    };
+    const unrelatedQuick = {
+      ...quick,
+      id: "engine/other-quick",
+      actual: "google/gemini-flash",
+    };
+    f.catalog.mockResolvedValue({
+      models: [models[0], normal, unrelatedQuick, quick],
+      defaultModel: models[0].id,
+      imageModels: [],
+    });
+    expect(await resolveTeamModel({ difficulty: "simple" })).toMatchObject({
+      id: quick.id,
+      actual: normal.actual,
+      reasoningEffort: "none",
+      selectionReason: expect.stringContaining("同型号已配置的快速模式"),
+    });
+    const fixed = await resolveTeamModel({
+      taskModel: normal.id,
+      difficulty: "simple",
+    });
+    expect(fixed).toMatchObject({ id: normal.id, actual: normal.actual });
+    expect(fixed).not.toHaveProperty("reasoningEffort");
+    expect(
+      await resolveTeamModel({ profileModel: quick.id, difficulty: "complex" }),
+    ).toMatchObject({ id: quick.id, reasoningEffort: "none" });
+    expect(
+      await resolveTeamModel({ orchestrator: true, difficulty: "simple" }),
+    ).toMatchObject({ id: models[0].id });
+    expect(normal).not.toHaveProperty("reasoningEffort");
+  });
+  it("keeps the original automatic model profile when its quick profile lacks required input capability", async () => {
+    const normal = {
+      ...models[0],
+      id: "engine/flash-normal",
+      actual: "deepseek/deepseek-v4.1-flash-1017",
+      parameters: ["tools", "reasoning", "tool_choice"],
+    };
+    f.catalog.mockResolvedValue({
+      models: [
+        normal,
+        {
+          ...normal,
+          id: "engine/flash-quick",
+          reasoningEffort: "none",
+          vision: false,
+        },
+      ],
+      defaultModel: normal.id,
+      imageModels: [],
+    });
+    const selected = await resolveTeamModel({
+      difficulty: "simple",
+      vision: true,
+    });
+    expect(selected).toMatchObject({ id: normal.id });
+    expect(selected).not.toHaveProperty("reasoningEffort");
+  });
   it("excludes explicit asynchronous models and retains catalog order instead of hash order within a tier", async () => {
     const batch = {
       ...models[1],

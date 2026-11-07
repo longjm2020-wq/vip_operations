@@ -269,51 +269,54 @@ describe("multimodal agent ownership and jobs", () => {
     ).rejects.toThrow();
     await expect(deleteAgentFile(actor("8"), file.id)).rejects.toThrow();
   });
-  it("deduplicates creation tasks and produces a downloadable private Word artifact", async () => {
-    const requestId = randomUUID(),
-      callId = randomUUID();
-    const body = {
-      title: "周报",
-      format: "docx",
-      sections: [{ heading: "进度", text: "完成商品资料整理", rows: [] }],
-    };
-    const first = await queueAgentJob(
-      actor(),
-      "create_document",
-      JSON.stringify(body),
-      requestId,
-      callId,
-      [],
-    );
-    const duplicate = await queueAgentJob(
-      actor(),
-      "create_document",
-      JSON.stringify(body),
-      requestId,
-      callId,
-      [],
-    );
-    expect(first.id).toBe(duplicate.id);
-    expect(await listAgentJobs(actor("8"))).toEqual([]);
-    await fixture.database!.query(
-      "UPDATE personal_assistant_jobs SET status='RUNNING',lease_id=$1 WHERE id=$2",
-      [randomUUID(), first.id],
-    );
-    const job = (
-      await fixture.database!.query("SELECT * FROM personal_assistant_jobs")
-    ).rows[0];
-    const outputs = await runAgentJob(
-      actor(),
-      job as Row,
-      async () => {},
-      AbortSignal.timeout(10000),
-    );
-    const file = (await ownedAgentFiles(actor(), outputs, true))[0];
-    expect(file.name).toBe("周报.docx");
-    expect(Buffer.from(file.content).subarray(0, 2).toString()).toBe("PK");
-    expect(file.extracted_text).toContain("完成商品资料整理");
-    expect(calls).toHaveLength(0);
-  });
+  it.each(["周报", "周报.docx"])(
+    "deduplicates creation tasks and produces a private Word artifact without repeating the extension: %s",
+    async (title) => {
+      const requestId = randomUUID(),
+        callId = randomUUID();
+      const body = {
+        title,
+        format: "docx",
+        sections: [{ heading: "进度", text: "完成商品资料整理", rows: [] }],
+      };
+      const first = await queueAgentJob(
+        actor(),
+        "create_document",
+        JSON.stringify(body),
+        requestId,
+        callId,
+        [],
+      );
+      const duplicate = await queueAgentJob(
+        actor(),
+        "create_document",
+        JSON.stringify(body),
+        requestId,
+        callId,
+        [],
+      );
+      expect(first.id).toBe(duplicate.id);
+      expect(await listAgentJobs(actor("8"))).toEqual([]);
+      await fixture.database!.query(
+        "UPDATE personal_assistant_jobs SET status='RUNNING',lease_id=$1 WHERE id=$2",
+        [randomUUID(), first.id],
+      );
+      const job = (
+        await fixture.database!.query("SELECT * FROM personal_assistant_jobs")
+      ).rows[0];
+      const outputs = await runAgentJob(
+        actor(),
+        job as Row,
+        async () => {},
+        AbortSignal.timeout(10000),
+      );
+      const file = (await ownedAgentFiles(actor(), outputs, true))[0];
+      expect(file.name).toBe("周报.docx");
+      expect(Buffer.from(file.content).subarray(0, 2).toString()).toBe("PK");
+      expect(file.extracted_text).toContain("完成商品资料整理");
+      expect(calls).toHaveLength(0);
+    },
+  );
   it("only lets the model use explicitly attached files, and keeps a task even if final prose fails", async () => {
     const file = await saveAgentFile(
       actor(),

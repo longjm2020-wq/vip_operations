@@ -218,6 +218,134 @@ function successfulFileJob(runId: string) {
   return { fileId, jobId };
 }
 describe("production team adapter", () => {
+  it("durably archives an accepted file when optional archive output ends at its reasoning/token limit", async () => {
+    const { run, lease } = await runRow(),
+      { fileId } = successfulFileJob(run.id);
+    startDocumentScenario();
+    f.fetch
+      .mockResolvedValueOnce(toolResponse())
+      .mockResolvedValueOnce(
+        response({ status: "completed", content: "实际文件已生成。" }),
+      )
+      .mockResolvedValueOnce(
+        response({ accepted: true, review: "原始文件与内容已逐项核验通过" }),
+      )
+      .mockImplementationOnce(async () => {
+        const saved = (
+          await f.db!.query<{ status: string; review: string }>(
+            "SELECT status,review FROM personal_assistant_team_artifacts WHERE run_id=$1",
+            [run.id],
+          )
+        ).rows[0];
+        expect(saved).toMatchObject({
+          status: "DRAFT",
+          review: "原始文件与内容已逐项核验通过",
+        });
+        return Response.json({
+          model: "test/model",
+          choices: [{ finish_reason: "length", message: { content: null } }],
+          usage: {
+            completion_tokens: 2500,
+            completion_tokens_details: { reasoning_tokens: 2490 },
+          },
+        });
+      })
+      .mockResolvedValueOnce(
+        response({ summary: "已验收原始文件完成归档，知识摘要未生成。" }),
+      );
+    const result = await runTeamExecution(
+      c,
+      run,
+      lease,
+      new AbortController().signal,
+    );
+    expect(result.status).toBe("DONE");
+    expect(result.artifacts[0]).toMatchObject({
+      status: "ACCEPTED",
+      fileIds: [fileId],
+      tags: [],
+    });
+    expect(result.artifacts[0].review).toContain(
+      "知识摘要未生成，原始产物与验收意见已归档",
+    );
+    expect(result.artifacts[0].review).toContain(
+      "finish_reason=length，completion_tokens=2500，reasoning_tokens=2490",
+    );
+    expect(f.fetch).toHaveBeenCalledTimes(7);
+    expect(f.queue).toHaveBeenCalledTimes(1);
+    const stored = (
+      await f.db!.query<{ status: string; review: string }>(
+        "SELECT status,review FROM personal_assistant_team_artifacts WHERE run_id=$1",
+        [run.id],
+      )
+    ).rows[0];
+    expect(stored.status).toBe("ACCEPTED");
+    expect(stored.review).toContain("逐项核验通过");
+  });
+  it("does not execute a potentially truncated tool call when finish_reason is length", async () => {
+    const { run, lease } = await runRow();
+    startDocumentScenario();
+    const truncated = await toolResponse().json();
+    truncated.choices[0].finish_reason = "length";
+    truncated.usage = {
+      completion_tokens: 7500,
+      completion_tokens_details: { reasoning_tokens: 7400 },
+    };
+    f.fetch
+      .mockResolvedValueOnce(Response.json(truncated))
+      .mockResolvedValueOnce(
+        response({ summary: "执行输出达到额度，未提交不完整工具调用。" }),
+      );
+    const result = await runTeamExecution(
+      c,
+      run,
+      lease,
+      new AbortController().signal,
+    );
+    expect(result.status).toBe("NEEDS_USER");
+    expect(result.state.steps[0].error).toContain("finish_reason=length");
+    expect(f.queue).not.toHaveBeenCalled();
+    expect(f.fetch).toHaveBeenCalledTimes(4);
+  });
+  it("reports empty output accurately and accepts only ordinary text content arrays", async () => {
+    const empty = await runRow();
+    f.fetch.mockResolvedValueOnce(
+      Response.json({
+        model: "test/model",
+        choices: [{ finish_reason: "stop", message: { content: null } }],
+      }),
+    );
+    await expect(
+      runTeamExecution(c, empty.run, empty.lease, new AbortController().signal),
+    ).rejects.toThrow("团队规划未返回可用正文");
+    const { run, lease } = await runRow();
+    startDocumentScenario("text");
+    const text = JSON.stringify({
+      status: "completed",
+      content: "实际文字内容。",
+    });
+    f.fetch.mockResolvedValueOnce(
+      Response.json({
+        model: "test/model",
+        choices: [
+          {
+            message: {
+              content: [
+                { type: "text", text: text.slice(0, 10) },
+                { type: "text", text: text.slice(10) },
+              ],
+            },
+          },
+        ],
+      }),
+    );
+    finishDocumentScenario();
+    expect(
+      (await runTeamExecution(c, run, lease, new AbortController().signal))
+        .status,
+    ).toBe("DONE");
+    expect(f.queue).not.toHaveBeenCalled();
+  });
   it("corrects a completed document with no file once, calls the real job path, then resumes strict final JSON", async () => {
     const { run, lease } = await runRow(),
       { fileId } = successfulFileJob(run.id);

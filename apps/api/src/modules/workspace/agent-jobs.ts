@@ -331,7 +331,10 @@ export async function runAgentJob(
     const input = parse(documentJobSchema, job.input);
     await progress(35, "整理文档内容");
     ({ content, mime } = await createAgentDocument(input));
-    name = input.title + "." + input.format;
+    const extension = "." + input.format;
+    name = input.title.toLowerCase().endsWith(extension)
+      ? input.title
+      : input.title + extension;
   } else if (job.kind === "video" && job.input.generation) {
     content = await generateTeamVideo(c, job, progress, signal);
     mime = "video/mp4";
