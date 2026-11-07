@@ -422,6 +422,7 @@ describe("native realtime voice authorization and lifecycle", () => {
       provider: "qwen",
       transport: "webrtc",
       pageControl: true,
+      pageTaskControl: true,
     });
     expect(result.ticket).toBeUndefined();
     expect(vi.mocked(fetch).mock.calls[0]).toEqual([
@@ -452,6 +453,9 @@ describe("native realtime voice authorization and lifecycle", () => {
       "page_fill",
       "page_select",
       "page_scroll",
+      "page_task_start",
+      "page_task_finish",
+      "page_wait",
     ]);
     expect(result.configuration!.session.instructions).toContain(
       "先用 page_observe",
@@ -490,6 +494,9 @@ describe("native realtime voice authorization and lifecycle", () => {
       "page_fill",
       "page_select",
       "page_scroll",
+      "page_task_start",
+      "page_task_finish",
+      "page_wait",
     ]) {
       await expect(
         runRealtimeTool(actor(), b.id, {

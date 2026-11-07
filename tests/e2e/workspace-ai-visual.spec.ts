@@ -1,35 +1,9 @@
 import { expect, test, type Page } from "@playwright/test";
 async function openWorkspacePanel(page: Page, name: string) {
-  const stage = page
-    .locator(".workspace-ai-core-stage, .workspace-quiet")
-    .first();
-  const orbit = page.locator(".workspace-dock-orbit").first();
-  const stationary = () =>
-    orbit.evaluate((element) => {
-      const style = getComputedStyle(element);
-      return (
-        style.animationName === "none" ||
-        (style.animationPlayState === "paused" &&
-          element
-            .getAnimations()
-            .every((animation) => animation.playState !== "running"))
-      );
-    });
-  if (!(await stationary())) {
-    await stage.scrollIntoViewIfNeeded();
-    const box = (await stage.boundingBox())!;
-    const viewport = page.viewportSize()!;
-    const visibleTop = Math.max(76, box.y);
-    const visibleBottom = Math.min(viewport.height - 8, box.y + box.height);
-    await stage.hover({
-      position: {
-        x: 20,
-        y: (visibleTop + visibleBottom) / 2 - box.y,
-      },
-    });
-  }
-  await expect.poll(stationary).toBe(true);
-  await page.getByRole("button", { name, exact: true }).click();
+  // Keyboard focus pauses a moving entry; pointer hover intentionally does not.
+  const entry = page.getByRole("button", { name, exact: true });
+  await entry.focus();
+  await entry.click();
 }
 
 async function fixture(

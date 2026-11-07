@@ -8,11 +8,17 @@ import {
 import { assistantPublicText } from "../../../packages/contracts/src/ai-presentation.js";
 import {
   isPageToolName,
+  isPageTaskToolName,
+  pageTaskStartSchema,
+  pageTaskFinishSchema,
+  pageWaitSchema,
   parsePageToolArguments,
   pageToolArgumentError,
   type PageObserveInput,
   type PageActionInput,
   type PageToolName,
+  type PageTaskToolName,
+  type PageObservation,
 } from "../../../packages/contracts/src/assistant-page.js";
 import { RealtimePageController } from "./realtime-page-controller.js";
 import type {
@@ -47,7 +53,7 @@ type Event = {
 };
 type Tool = {
   callId: string;
-  name: RealtimeToolName | PageToolName;
+  name: RealtimeToolName | PageToolName | PageTaskToolName;
   args: unknown;
 };
 type Response = {
@@ -66,6 +72,17 @@ type Caption = RealtimeCaption & {
   final: boolean;
   saved: boolean;
 };
+type PageTask = {
+  goal: string;
+  turn: number;
+  epoch: number;
+  status: "active" | "paused" | "completed" | "needs_user";
+  actionCount: number;
+  toolCount: number;
+  idleNudges: number;
+};
+const isLocalPageTool = (name: unknown) =>
+  isPageToolName(name) || isPageTaskToolName(name);
 const pageArgumentRetryStopped =
   "本轮参数修正仍未成功，停止重复尝试，等待用户新的指令";
 
@@ -81,6 +98,9 @@ export class QwenRealtimeVoiceSession {
   private dc?: RTCDataChannel;
   private configuration?: Configuration;
   private page?: RealtimePageController;
+  private pageTaskControl = false;
+  private pageTask?: PageTask;
+  private latestObservation?: PageObservation;
   private created = false;
   private updateSent = false;
   private attaching = false;
@@ -122,7 +142,7 @@ export class QwenRealtimeVoiceSession {
         ? "listening"
         : this.speaking
           ? "speaking"
-          : this.activeResponse || this.pendingTools
+          : this.activeResponse || this.pendingTools || this.activePageTask()
             ? "thinking"
             : "listening",
     );
@@ -211,7 +231,42 @@ export class QwenRealtimeVoiceSession {
       response.epoch === this.epoch
     );
   }
+  private activePageTask() {
+    const task = this.pageTask;
+    return task?.status === "active" &&
+      task.turn === this.turn &&
+      task.epoch === this.epoch
+      ? task
+      : undefined;
+  }
+  private taskSummary() {
+    const task = this.pageTask;
+    return task
+      ? {
+          goal: task.goal,
+          status: task.status,
+          actionCount: task.actionCount,
+          toolCount: task.toolCount,
+        }
+      : undefined;
+  }
+  private pausePageTask(message: string) {
+    const task = this.activePageTask();
+    if (!task) return;
+    task.status = "needs_user";
+    this.cb.note(message);
+  }
+  private taskResult(result: unknown) {
+    return this.pageTask && result && typeof result === "object"
+      ? { ...result, task: this.taskSummary() }
+      : result;
+  }
   private invalidate(cancel = true) {
+    if (this.activePageTask()) {
+      this.pageTask!.status = "paused";
+      this.cb.note("网页任务已暂停，等待你的新指令。");
+    }
+    this.latestObservation = undefined;
     this.epoch++;
     for (const [id, response] of this.responses) {
       if (response.turn !== this.turn) continue;
@@ -325,7 +380,7 @@ export class QwenRealtimeVoiceSession {
     if (batch.every((item) => item.saved) && eligible.length > batch.length)
       void this.flush();
   }
-  private waitForPage(signal: AbortSignal, frame = false) {
+  private waitForPage(signal: AbortSignal, frame = false, delay = 25) {
     return new Promise<void>((resolve, reject) => {
       let raf: number | undefined;
       const finish = () => {
@@ -337,7 +392,7 @@ export class QwenRealtimeVoiceSession {
         else resolve();
       };
       const abort = () => finish();
-      const timer = setTimeout(finish, frame ? 60 : 25);
+      const timer = setTimeout(finish, frame ? 60 : delay);
       signal.addEventListener("abort", abort, { once: true });
       if (signal.aborted) finish();
       else if (frame && typeof requestAnimationFrame === "function")
@@ -380,21 +435,106 @@ export class QwenRealtimeVoiceSession {
     }
     if (!this.current(id)) throw new DOMException("操作已取消", "AbortError");
   }
+  private async observeReady(id: string, response: Response, query?: string) {
+    const deadline = performance.now() + 3000;
+    let observation = this.page!.observe(query);
+    while (observation.ready === false && performance.now() < deadline) {
+      if (!this.current(id)) throw new DOMException("操作已取消", "AbortError");
+      await this.waitForPage(response.cancel.signal);
+      if (!this.current(id)) throw new DOMException("操作已取消", "AbortError");
+      observation = this.page!.observe(query);
+    }
+    if (!this.current(id)) throw new DOMException("操作已取消", "AbortError");
+    this.latestObservation = observation;
+    return observation;
+  }
   private async executeTools(id: string, response: Response) {
     const outputs: { callId: string; result: unknown }[] = [];
+    const pageBatch =
+      !!this.activePageTask() ||
+      response.tools.some((tool) => isLocalPageTool(tool.name));
+    let resume = true;
+    let businessMarked = false;
     try {
-      for (const tool of response.tools) {
+      for (const [index, tool] of response.tools.entries()) {
         if (!this.current(id)) return;
+        if (pageBatch && index > 0) {
+          outputs.push({
+            callId: tool.callId,
+            result: this.taskResult({
+              dispatched: false,
+              code: "PAGE_STEP_DEFERRED",
+              text: "本步骤尚未执行。请先读取前一步的实际结果，再使用最新观察为下一步单独调用工具；不要重放旧快照或猜测引用。",
+            }),
+          });
+          continue;
+        }
+        const task = this.activePageTask();
+        if (task && task.toolCount >= 60) {
+          this.pausePageTask(
+            "本次连续操作已达到保护上限，未确认全部完成。请给出新的指令后继续。",
+          );
+          outputs.push({
+            callId: tool.callId,
+            result: this.taskResult({
+              dispatched: false,
+              code: "PAGE_TASK_LIMIT",
+              text: "本次连续操作已达到保护上限，停止自动执行，等待用户新的指令。",
+            }),
+          });
+          resume = false;
+          continue;
+        }
+        if (task) {
+          task.toolCount++;
+          task.idleNudges = 0;
+        }
+        const stoppedThisTurn =
+          this.pageTask &&
+          this.pageTask.turn === this.turn &&
+          this.pageTask.status !== "active";
+        if (stoppedThisTurn) resume = false;
+        if (stoppedThisTurn && !isLocalPageTool(tool.name)) {
+          outputs.push({
+            callId: tool.callId,
+            result: this.taskResult({
+              dispatched: false,
+              code: "PAGE_TASK_STOPPED",
+              text: "本轮网页任务已停止，不再执行后续步骤，等待用户新的指令。",
+            }),
+          });
+          continue;
+        }
         let result: unknown;
         let navigation: string | undefined;
         let pageActionAttempted = false;
         let pageArgumentsInvalid = false;
         try {
-          if (isPageToolName(tool.name)) {
+          if (isLocalPageTool(tool.name)) {
             if (!this.page)
               throw Error(
                 "本次通话未启用网站内操作，请在网站内模式重新开始通话",
               );
+            if (isPageTaskToolName(tool.name) && !this.pageTaskControl)
+              throw Error("本次通话未启用连续网页任务，请重新开始通话");
+            if (
+              this.pageTaskControl &&
+              tool.name !== "page_observe" &&
+              tool.name !== "page_task_start" &&
+              !task
+            ) {
+              outputs.push({
+                callId: tool.callId,
+                result: this.taskResult({
+                  dispatched: false,
+                  code: "PAGE_TASK_REQUIRED",
+                  text: stoppedThisTurn
+                    ? "本轮任务已停止，等待用户新的指令；不要继续执行或重放动作。"
+                    : "尚未建立本轮网页任务。请先用 page_task_start 理解并记录用户本轮完整目标，再根据真实页面逐步执行；不要从零散语音或控件名称猜测目标。",
+                }),
+              });
+              continue;
+            }
             pageArgumentsInvalid = true;
             if (tool.name !== "page_observe" && this.pageArgumentFailures >= 2)
               throw Error(pageArgumentRetryStopped);
@@ -418,31 +558,135 @@ export class QwenRealtimeVoiceSession {
                   ? "工具参数必须是单层 JSON 对象，不能将对象再次编码为字符串；请自行修正后重新调用，未执行页面操作。"
                   : "工具参数必须是 JSON 对象，不接受数组或空值；请自行修正后重新调用，未执行页面操作。",
               );
-            const parsed = parsePageToolArguments(tool.name, args);
-            if (!parsed.success)
-              throw Error(pageToolArgumentError(tool.name, parsed.error));
-            pageArgumentsInvalid = false;
-            await this.preparePage(id, response);
-            if (tool.name === "page_observe") {
-              const query = (parsed.data as PageObserveInput).query;
-              const deadline = performance.now() + 3000;
-              let observation = this.page.observe(query);
-              while (
-                observation.ready === false &&
-                performance.now() < deadline
-              ) {
+            if (isPageTaskToolName(tool.name)) {
+              if (tool.name === "page_task_start") {
+                const parsed = pageTaskStartSchema.safeParse(args);
+                if (!parsed.success)
+                  throw Error(
+                    "page_task_start 只接受必填的完整目标 goal 字符串，请按工具字段修正，不猜测或扩大用户意图。",
+                  );
+                pageArgumentsInvalid = false;
+                if (stoppedThisTurn) {
+                  result = {
+                    dispatched: false,
+                    code: "PAGE_TASK_STOPPED",
+                    text: "本轮任务已停止，等待用户新的指令后才能建立任务。",
+                  };
+                } else {
+                  if (!task)
+                    this.pageTask = {
+                      goal: parsed.data.goal,
+                      turn: this.turn,
+                      epoch: this.epoch,
+                      status: "active",
+                      actionCount: 0,
+                      toolCount: 1,
+                      idleNudges: 0,
+                    };
+                  await this.preparePage(id, response);
+                  const observation = await this.observeReady(id, response);
+                  result = {
+                    observation,
+                    text: "已记录本轮目标。请依据当前真实页面逐步执行，每次只调用一个下一步；完成或确需用户操作时，用最新快照和可见证据调用 page_task_finish。",
+                  };
+                }
+              } else if (tool.name === "page_wait") {
+                const parsed = pageWaitSchema.safeParse(args);
+                if (!parsed.success)
+                  throw Error(
+                    "page_wait 只接受必填 seconds 整数，范围1至10秒；不要传其他字段。",
+                  );
+                pageArgumentsInvalid = false;
+                await this.waitForPage(
+                  response.cancel.signal,
+                  false,
+                  parsed.data.seconds * 1000,
+                );
                 if (!this.current(id)) return;
-                await this.waitForPage(response.cancel.signal);
-                if (!this.current(id)) return;
-                observation = this.page.observe(query);
+                await this.preparePage(id, response);
+                result = {
+                  observation: await this.observeReady(id, response),
+                  text: "等待结束，已重新观察当前页面。请根据实际进展继续原目标，不重复点击来猜进度。",
+                };
+              } else {
+                const parsed = pageTaskFinishSchema.safeParse(args);
+                if (!parsed.success)
+                  throw Error(
+                    "page_task_finish 必须提供 outcome（completed或needs_user）、summary、最新 snapshotId 和页面原文 evidence；不要猜测证据或传其他字段。",
+                  );
+                pageArgumentsInvalid = false;
+                const input = parsed.data;
+                const observed = this.latestObservation;
+                const normalized = (value: string) =>
+                  value.replace(/\s+/g, "").toLowerCase();
+                const evidence = normalized(input.evidence);
+                const sources = observed
+                  ? [
+                      observed.path,
+                      observed.pageName || "",
+                      observed.text,
+                      ...observed.controls.map((control) => control.name),
+                    ]
+                  : [];
+                if (
+                  !observed ||
+                  observed.ready === false ||
+                  observed.snapshotId !== input.snapshotId ||
+                  !this.page.currentSnapshot(input.snapshotId) ||
+                  evidence.length < 2 ||
+                  !sources.some((source) =>
+                    normalized(source).includes(evidence),
+                  ) ||
+                  !this.page.currentEvidence(input.snapshotId, input.evidence)
+                ) {
+                  result = {
+                    dispatched: false,
+                    code: "PAGE_TASK_EVIDENCE",
+                    text: "尚不能确认任务结果。请重新观察当前页面，原样使用最新 snapshotId 和能证明完成或需要用户操作的页面原文 evidence；不能仅凭计划、按钮名称或 summary 声称完成。",
+                  };
+                } else {
+                  task!.status = input.outcome;
+                  result = {
+                    observation: observed,
+                    text: assistantPublicText(input.summary),
+                  };
+                  if (input.outcome === "needs_user")
+                    this.cb.note(
+                      `任务需要你操作：${assistantPublicText(input.summary)}`,
+                    );
+                }
               }
-              result = observation;
             } else {
-              pageActionAttempted = true;
-              result = await this.page.action(parsed.data as PageActionInput, {
-                signal: response.cancel.signal,
-                isCurrent: () => this.current(id),
-              });
+              const parsed = parsePageToolArguments(
+                tool.name as PageToolName,
+                args,
+              );
+              if (!parsed.success)
+                throw Error(
+                  pageToolArgumentError(
+                    tool.name as PageToolName,
+                    parsed.error,
+                  ),
+                );
+              pageArgumentsInvalid = false;
+              await this.preparePage(id, response);
+              if (tool.name === "page_observe") {
+                const query = (parsed.data as PageObserveInput).query;
+                result = await this.observeReady(id, response, query);
+              } else {
+                pageActionAttempted = true;
+                const action = await this.page.action(
+                  parsed.data as PageActionInput,
+                  {
+                    signal: response.cancel.signal,
+                    isCurrent: () => this.current(id),
+                  },
+                );
+                if (!this.current(id)) return;
+                this.latestObservation = action.observation;
+                if (task && action.dispatched) task.actionCount++;
+                result = action;
+              }
             }
           } else {
             const args: unknown = JSON.parse(String(tool.args));
@@ -452,6 +696,11 @@ export class QwenRealtimeVoiceSession {
                 : undefined;
             if (typeof request !== "string")
               throw Error("语音操作参数不完整，请重新描述");
+            if (!businessMarked) {
+              this.businessUsers.add(response.user);
+              this.cb.business();
+              businessMarked = true;
+            }
             const business = (
               await api(
                 this.path("/tool"),
@@ -476,7 +725,7 @@ export class QwenRealtimeVoiceSession {
               this.pageArgumentFailures + 1,
             );
           result = {
-            ...(isPageToolName(tool.name)
+            ...(isLocalPageTool(tool.name)
               ? { dispatched: pageActionAttempted ? null : false }
               : {}),
             ...(pageArgumentsInvalid
@@ -494,12 +743,14 @@ export class QwenRealtimeVoiceSession {
                     ? "等待操作结果超时，请在任务或完整对话中核验，不要重复提交"
                     : assistantPublicText((error as Error).message),
           };
+          if (pageArgumentsInvalid && this.pageArgumentFailures >= 2)
+            this.pausePageTask(pageArgumentRetryStopped);
         }
         // An already submitted action remains in the task record, but its old
         // speech/navigation must never resume after interruption or closure.
         if (!this.current(id)) return;
         if (navigation) this.cb.navigate(navigation);
-        outputs.push({ callId: tool.callId, result });
+        outputs.push({ callId: tool.callId, result: this.taskResult(result) });
       }
       for (const output of outputs) {
         if (!this.current(id)) return;
@@ -515,7 +766,7 @@ export class QwenRealtimeVoiceSession {
         )
           return;
       }
-      if (outputs.length && this.current(id)) {
+      if (resume && outputs.length && this.current(id)) {
         this.allowResponse = true;
         this.sendEvent({ type: "response.create" });
       }
@@ -686,7 +937,9 @@ export class QwenRealtimeVoiceSession {
         break;
       case "response.function_call_arguments.done":
         if (
-          (!isRealtimeToolName(event.name) && !isPageToolName(event.name)) ||
+          (!isRealtimeToolName(event.name) &&
+            !isPageToolName(event.name) &&
+            !isPageTaskToolName(event.name)) ||
           typeof event.call_id !== "string" ||
           this.toolIds.has(event.call_id) ||
           response.done
@@ -720,17 +973,27 @@ export class QwenRealtimeVoiceSession {
           return;
         }
         if (response.tools.length) {
-          const business = response.tools.some((tool) =>
-            isRealtimeToolName(tool.name),
-          );
-          if (business) this.businessUsers.add(response.user);
           this.pendingTools += response.tools.length;
-          if (business) this.cb.business();
           this.toolQueue = this.toolQueue
             .then(() => this.executeTools(id, response))
             .catch(() =>
               this.fail("语音操作处理异常，请查看任务记录后重新开始"),
             );
+        } else {
+          const task = this.activePageTask();
+          if (task && this.current(id) && !this.pendingTools) {
+            if (task.idleNudges >= 2) {
+              this.pausePageTask(
+                "网页任务尚未确认完成，已停止重复口头续答。请给出新的指令后继续。",
+              );
+            } else {
+              task.idleNudges++;
+              this.allowResponse = true;
+              // Qwen supports bare response.create; its persistent task rules
+              // guide this continuation without fabricating a user message.
+              this.sendEvent({ type: "response.create" });
+            }
+          }
         }
         this.phase();
         void this.flush();
@@ -809,6 +1072,7 @@ export class QwenRealtimeVoiceSession {
         sdp: string;
         configuration: Configuration;
         pageControl?: boolean;
+        pageTaskControl?: boolean;
         expiresAt: string;
       };
       this.registered = true;
@@ -823,10 +1087,12 @@ export class QwenRealtimeVoiceSession {
       )
         throw Error("实时语音连接配置不完整，请重新开始");
       this.configuration = result.configuration;
-      if (result.pageControl === true && !options.desktopDeviceId)
+      if (result.pageControl === true && !options.desktopDeviceId) {
         this.page = new RealtimePageController({
           navigate: this.cb.navigatePage,
         });
+        this.pageTaskControl = result.pageTaskControl === true;
+      }
       await pc.setRemoteDescription({
         type: "answer",
         sdp: String(result.sdp).trim().replace(/\r?\n/g, "\r\n") + "\r\n",
@@ -881,6 +1147,8 @@ export class QwenRealtimeVoiceSession {
     this.epoch++;
     this.responses.forEach((response) => response.cancel.abort());
     this.page?.close();
+    if (this.pageTask?.status === "active") this.pageTask.status = "paused";
+    this.latestObservation = undefined;
     this.request.abort();
     clearTimeout(this.connectTimer);
     clearTimeout(this.disconnectTimer);

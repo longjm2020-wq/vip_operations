@@ -34,7 +34,10 @@ import {
 import { closeRealtimeRelay } from "./realtime-relay-registry.js";
 import { resolveAgentModel } from "./agent-models.js";
 import { parseVoiceCommand } from "../../../../../packages/contracts/src/assistant-voice-commands.js";
-import { pageToolDefinitions } from "../../../../../packages/contracts/src/assistant-page.js";
+import {
+  pageToolDefinitions,
+  pageTaskToolDefinitions,
+} from "../../../../../packages/contracts/src/assistant-page.js";
 
 const root = "https://api.openai.com/v1/realtime";
 const pendingQwenSessions = new Map<string, AbortController>();
@@ -166,6 +169,10 @@ export function realtimeConfiguration(
           : "本次通话执行位置为网站内，支持站内导航和业务工具。用户需要电脑识屏点击时，说明在输入区选择已连接电脑，然后重新开始实时通话；不要笼统声称小序不能操作电脑。",
       ...(pageControl
         ? [
+            "网页操作按用户的最终目标执行，而不是只完成第一次点击。先调用 page_task_start 记录本轮完整目标与限制，依据返回的当前页面自行决定必要步骤。单一目标可以包含跨页面、多层弹窗、填写、选择、滚动和等待；普通中间步骤已由该目标授权，不反复向用户询问是否继续。没有目标任务时页面写动作不会执行。",
+            "每个响应只发出一个下一步工具，收到真实结果后再决定后续操作；PAGE_STEP_DEFERRED 表示后续预先生成的动作没有执行，必须基于前一步的新观察重新生成调用，不能沿用旧快照。当前最上层弹窗优先，关闭后再观察下层，不点击背景或穿透遮罩。弹窗标题和层数由 observation.dialog 提供。",
+            "任务处于 active 时，不要在中间步骤仅说‘我来帮你’或‘马上就好’就结束。若上次回复只口头承诺且未执行工具，继续选择下一步工具，不重复承诺。页面或后台任务尚在变化时使用 page_wait 等待再检查，不能重复提交来猜进度。",
+            "完整目标已有实际页面证据后，调用 page_task_finish(outcome=completed) 并用最新 snapshotId 和原样短 evidence 核验；点击成功、打开更新面板、发起后台任务均不自动等于业务目标完成。需要用户扫码、验证码、授权确认、处理 blockedControls，或目标确实有歧义时，调用 page_task_finish(outcome=needs_user)，说明具体需要用户做什么，等待用户明确继续。用户新开口或打断后旧任务已暂停，不自行恢复；用户要求继续时先用 page_task_start 恢复原目标，并重新观察当前状态。",
             "页面观察结果 ready:false 表示页面尚在加载，不能操作或声称已打开完成，应稍后重新调用 page_observe。判断当前页面优先使用 pageName 和 path；headings 中的 h3 入口卡片、菜单名称可能指向其他页面，不能把它们当作当前页名。",
             "工具返回 PAGE_TOOL_ARGUMENTS 且 dispatched:false 时，页面尚未执行该操作。按返回的字段要求自行修正一次，不让用户处理内部参数，不猜目标引用；retryable:false 时停止本轮重试，简短说明这次未完成并等待新指令，不反复承诺换个方式或马上就好。",
           ]
@@ -227,7 +234,9 @@ export function realtimeConfiguration(
             },
           ]
         : []),
-      ...(pageControl ? pageToolDefinitions : []),
+      ...(pageControl
+        ? [...pageToolDefinitions, ...pageTaskToolDefinitions]
+        : []),
     ],
     tool_choice: "auto",
   };
@@ -462,6 +471,7 @@ export async function startRealtime(c: Context, input: unknown) {
         ? {
             provider: "qwen" as const,
             pageControl: !b.desktopDeviceId,
+            pageTaskControl: !b.desktopDeviceId,
             configuration: qwenWebRtcConfiguration(
               providerFields(s).voice,
               realtimeConfiguration(

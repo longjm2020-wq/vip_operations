@@ -14,6 +14,13 @@ declare global {
         guard?: "aborted" | "interrupted",
       ) => Promise<Result>;
       close: () => void;
+      currentSnapshot: (snapshotId: string) => boolean;
+      currentEvidence: (snapshotId: string, evidence: string) => boolean;
+      waitForReady: (
+        guard?: "aborted" | "interrupted",
+        timeoutMs?: number,
+      ) => Promise<boolean>;
+      cancelWait: () => void;
       clicks: number;
       inputEvents: string[];
       navigations: string[];
@@ -59,6 +66,7 @@ async function fixture(page: Page, body: string) {
             location.pathname + location.search + location.hash;
       },
     });
+    let pendingWait: AbortController | undefined;
     window.pageEngineTest = {
       clicks: 0,
       inputEvents: [],
@@ -74,6 +82,21 @@ async function fixture(page: Page, body: string) {
         });
       },
       close: () => controller.close(),
+      currentSnapshot: (snapshotId) => controller.currentSnapshot(snapshotId),
+      currentEvidence: (snapshotId, evidence) =>
+        controller.currentEvidence(snapshotId, evidence),
+      waitForReady: (guard, timeoutMs) => {
+        pendingWait = new AbortController();
+        if (guard === "aborted") pendingWait.abort();
+        return controller.waitForReady(
+          {
+            signal: pendingWait.signal,
+            isCurrent: () => guard !== "interrupted",
+          },
+          timeoutMs,
+        );
+      },
+      cancelWait: () => pendingWait?.abort(),
     };
     document.querySelectorAll("[data-count-click]").forEach((element) => {
       element.addEventListener("click", () => {
@@ -99,6 +122,79 @@ async function observe(page: Page, query?: string) {
   return page.evaluate((query) => window.pageEngineTest.observe(query), query);
 }
 
+async function evidence(page: Page, snapshotId: string, text: string) {
+  return page.evaluate(
+    ({ snapshotId, text }) =>
+      window.pageEngineTest.currentEvidence(snapshotId, text),
+    { snapshotId, text },
+  );
+}
+
+test("任务完成证据核对现场状态，状态变化、否定、隐藏和敏感内容不能沿用旧成功", async ({
+  page,
+}) => {
+  await fixture(
+    page,
+    `<h1>同步结果页面</h1><p id="status" role="status">本轮更新完成，共 12 条</p>
+     <p id="clock">无关刷新次数 1</p>
+     <button id="return" aria-label="返回更新面板">↩</button>`,
+  );
+  const snapshot = await observe(page);
+  expect(await evidence(page, snapshot.snapshotId, "更新完成")).toBe(true);
+  expect(await evidence(page, snapshot.snapshotId, "返回更新面板")).toBe(true);
+  expect(await evidence(page, snapshot.snapshotId, "同步结果页面")).toBe(true);
+  expect(await evidence(page, snapshot.snapshotId, "/my-workspace")).toBe(true);
+  await page.locator("#clock").evaluate((element) => {
+    element.textContent = "无关刷新次数 2";
+  });
+  expect(await evidence(page, snapshot.snapshotId, "更新完成")).toBe(true);
+  // A background poll changes only the status node; route, modal and snapshot
+  // remain valid, so checking the cached observation alone would falsely finish.
+  await page.locator("#status").evaluate((element) => {
+    element.textContent = "本轮更新失败，请重新检查";
+  });
+  expect(
+    await page.evaluate(
+      (id) => window.pageEngineTest.currentSnapshot(id),
+      snapshot.snapshotId,
+    ),
+  ).toBe(true);
+  expect(await evidence(page, snapshot.snapshotId, "更新完成")).toBe(false);
+  await page.locator("#status").evaluate((element) => {
+    element.textContent = "本轮未更新完成，共 12 条";
+  });
+  expect(await evidence(page, snapshot.snapshotId, "更新完成")).toBe(false);
+  await page.locator("#status").evaluate((element) => {
+    element.textContent = "本轮更新完成，共 12 条";
+    (element as HTMLElement).hidden = true;
+  });
+  expect(await evidence(page, snapshot.snapshotId, "更新完成")).toBe(false);
+  await page.locator("#status").evaluate((element) => {
+    (element as HTMLElement).hidden = false;
+    element.setAttribute("data-voice-private", "true");
+  });
+  expect(await evidence(page, snapshot.snapshotId, "更新完成")).toBe(false);
+  await page.locator("#return").evaluate((element) => {
+    element.setAttribute("aria-label", "未返回更新面板");
+  });
+  expect(await evidence(page, snapshot.snapshotId, "返回更新面板")).toBe(false);
+  expect(await evidence(page, snapshot.snapshotId, "从未出现的成功结果")).toBe(
+    false,
+  );
+  // Evidence checks are read-only and do not consume the existing snapshot.
+  expect(
+    await page.evaluate(
+      (id) => window.pageEngineTest.currentSnapshot(id),
+      snapshot.snapshotId,
+    ),
+  ).toBe(true);
+  await observe(page);
+  expect(await evidence(page, snapshot.snapshotId, "同步结果页面")).toBe(false);
+  const latest = await observe(page);
+  await page.evaluate(() => window.pageEngineTest.close());
+  expect(await evidence(page, latest.snapshotId, "同步结果页面")).toBe(false);
+});
+
 async function act(
   page: Page,
   observation: Observation,
@@ -119,6 +215,224 @@ async function act(
         };
   return page.evaluate((args) => window.pageEngineTest.action(args), args);
 }
+
+async function stackedModalFixture(page: Page) {
+  await fixture(page, "<h1>模拟经营分析</h1><button>背景页面操作</button>");
+  await page.evaluate(() => {
+    const style = document.createElement("style");
+    style.textContent = `
+      .ant-modal-root { position:fixed; inset:0; }
+      .ant-modal-mask { position:absolute; inset:0; background:#0003; }
+      .ant-modal-wrap { position:absolute; inset:0; }
+      .ant-modal { position:absolute; top:140px; left:180px; width:540px; padding:24px; background:white; }
+      #inner-root .ant-modal { top:180px; left:220px; width:420px; }
+      .ant-select-dropdown { position:fixed; top:24px; z-index:3000; padding:16px; background:white; }
+    `;
+    document.head.append(style);
+    const container = document.createElement("div");
+    container.id = "modal-fixture";
+    // Intentionally reverse DOM order: the earlier inner dialog is visually on top.
+    container.innerHTML = `
+      <div id="inner-root" class="ant-modal-root" style="z-index:2000" hidden>
+        <div class="ant-modal-mask"></div><div class="ant-modal-wrap">
+          <div id="inner-dialog" class="ant-modal" role="dialog" aria-modal="true" aria-labelledby="inner-title">
+            <h2 id="inner-title">内层登录状态 SAVED</h2>
+            <button id="return-panel">返回更新面板</button>
+            <div id="inner-combo" role="combobox" tabindex="0" aria-label="当前弹窗选择器" aria-expanded="true" aria-controls="inner-options">展开当前选项</div>
+          </div>
+        </div>
+      </div>
+      <div id="outer-root" class="ant-modal-root" style="z-index:1000">
+        <div class="ant-modal-mask"></div><div class="ant-modal-wrap">
+          <div id="outer-dialog" class="ant-modal" role="dialog" aria-modal="true" aria-labelledby="outer-title">
+            <h2 id="outer-title">外层数据更新面板</h2>
+            <button id="outer-action">继续下一项更新</button>
+            <div role="combobox" tabindex="0" aria-label="背景弹窗选择器" aria-expanded="true" aria-controls="background-options">背景选项</div>
+          </div>
+        </div>
+      </div>
+    `;
+    document.body.append(container);
+    document.querySelector("#outer-action")!.addEventListener("click", () => {
+      window.pageEngineTest.clicks++;
+    });
+    document.querySelector("#return-panel")!.addEventListener("click", () => {
+      const inner = document.querySelector<HTMLElement>("#inner-root")!;
+      const dialog = document.querySelector<HTMLElement>("#inner-dialog")!;
+      dialog.classList.add("ant-zoom-leave", "ant-zoom-leave-active");
+      dialog.style.pointerEvents = "none";
+      inner.querySelector(".ant-modal-mask")!.classList.add("ant-fade-leave");
+      // Keep the mask and disabled inner dialog alive during the closing animation.
+      setTimeout(() => inner.remove(), 500);
+    });
+  });
+}
+
+test("多层弹窗按视觉层级选择，内层退场期间不穿透，返回外层后使用新快照", async ({
+  page,
+}) => {
+  await stackedModalFixture(page);
+  const outerBefore = await observe(page);
+  expect(
+    outerBefore.controls.some((control) => control.name === "继续下一项更新"),
+  ).toBe(true);
+  expect(
+    await page.evaluate(
+      (id) => window.pageEngineTest.currentSnapshot(id),
+      outerBefore.snapshotId,
+    ),
+  ).toBe(true);
+  await page
+    .locator("#inner-root")
+    .evaluate((element) => element.removeAttribute("hidden"));
+  expect(
+    await page.evaluate(
+      (id) => window.pageEngineTest.currentSnapshot(id),
+      outerBefore.snapshotId,
+    ),
+  ).toBe(false);
+  const inner = await observe(page);
+  expect(inner.ready).toBe(true);
+  expect(inner.headings).toContain("内层登录状态 SAVED");
+  expect(
+    inner.controls.some((control) => control.name === "返回更新面板"),
+  ).toBe(true);
+  expect(
+    inner.controls.some((control) => control.name === "继续下一项更新"),
+  ).toBe(false);
+  const target = inner.controls.find(
+    (control) => control.name === "返回更新面板",
+  )!;
+  await page.evaluate(
+    (args) => {
+      window.pageEngineTest.pendingNavigation =
+        window.pageEngineTest.action(args);
+    },
+    { snapshotId: inner.snapshotId, ref: target.ref, action: "click" as const },
+  );
+  await expect(page.locator("#inner-dialog")).toHaveClass(/ant-zoom-leave/);
+  const closing = await observe(page);
+  expect(closing.ready).toBe(false);
+  expect(closing.snapshotId).toBe("");
+  expect(closing.controls).toEqual([]);
+  expect(closing.headings).toEqual([]);
+  expect(
+    await page.evaluate(
+      (id) => window.pageEngineTest.currentSnapshot(id),
+      inner.snapshotId,
+    ),
+  ).toBe(false);
+  expect(await page.evaluate(() => window.pageEngineTest.clicks)).toBe(0);
+  const returned = await page.evaluate(
+    () => window.pageEngineTest.pendingNavigation!,
+  );
+  expect(returned.dispatched).toBe(true);
+  expect(returned.observation.ready).toBe(true);
+  expect(returned.observation.snapshotId).not.toBe(inner.snapshotId);
+  expect(returned.observation.headings).toContain("外层数据更新面板");
+  expect(
+    returned.observation.controls.some(
+      (control) => control.name === "继续下一项更新",
+    ),
+  ).toBe(true);
+  await expect(page.locator("#inner-root")).toHaveCount(0);
+  expect(
+    (await act(page, outerBefore, "继续下一项更新", "click")).dispatched,
+  ).toBe(false);
+  expect(await page.evaluate(() => window.pageEngineTest.clicks)).toBe(0);
+  expect(
+    (await act(page, await observe(page), "继续下一项更新", "click"))
+      .dispatched,
+  ).toBe(true);
+  expect(await page.evaluate(() => window.pageEngineTest.clicks)).toBe(1);
+});
+
+test("弹窗 portal 仅允许当前层触发器关联的选项，不泄漏背景下拉框", async ({
+  page,
+}) => {
+  await stackedModalFixture(page);
+  await page.evaluate(() => {
+    document.querySelector("#inner-root")!.removeAttribute("hidden");
+    const portals = document.createElement("div");
+    portals.innerHTML = `
+      <div class="ant-select-dropdown" style="left:24px"><div id="inner-options" role="listbox"><div role="option" tabindex="0">当前层选项</div></div></div>
+      <div class="ant-select-dropdown" style="right:24px"><div id="background-options" role="listbox"><div role="option" tabindex="0">背景层选项</div></div></div>
+    `;
+    document.body.append(portals);
+    document
+      .querySelector("#inner-options [role=option]")!
+      .addEventListener("click", () => window.pageEngineTest.clicks++);
+    document
+      .querySelector("#background-options [role=option]")!
+      .addEventListener("click", () => (window.pageEngineTest.clicks += 100));
+  });
+  await expect(page.getByRole("option", { name: "背景层选项" })).toBeVisible();
+  let snapshot = await observe(page);
+  expect(
+    snapshot.controls.some((control) => control.name === "当前层选项"),
+  ).toBe(true);
+  expect(
+    snapshot.controls.some((control) => control.name === "背景层选项"),
+  ).toBe(false);
+  await page.locator("#inner-combo").evaluate((element) => {
+    element.removeAttribute("aria-controls");
+    element.setAttribute("aria-owns", "inner-options");
+  });
+  snapshot = await observe(page);
+  expect(
+    snapshot.controls.some((control) => control.name === "当前层选项"),
+  ).toBe(true);
+  expect((await act(page, snapshot, "当前层选项", "click")).dispatched).toBe(
+    true,
+  );
+  expect(await page.evaluate(() => window.pageEngineTest.clicks)).toBe(1);
+  await page
+    .locator("#inner-combo")
+    .evaluate((element) => element.removeAttribute("aria-owns"));
+  const unrelated = await observe(page);
+  expect(
+    unrelated.controls.some((control) =>
+      /当前层选项|背景层选项/.test(control.name),
+    ),
+  ).toBe(false);
+});
+
+test("弹窗等待在退出动画期间可打断或结束，不等待超时后继续操作", async ({
+  page,
+}) => {
+  await stackedModalFixture(page);
+  await page.evaluate(() => {
+    document.querySelector("#inner-root")!.removeAttribute("hidden");
+    const dialog = document.querySelector<HTMLElement>("#inner-dialog")!;
+    dialog.classList.add("ant-zoom-leave");
+    dialog.style.pointerEvents = "none";
+  });
+  expect((await observe(page)).ready).toBe(false);
+  expect(
+    await page.evaluate(() =>
+      window.pageEngineTest.waitForReady(undefined, 10),
+    ),
+  ).toBe(false);
+  for (const stop of ["abort", "close"] as const) {
+    const result = await page.evaluate(async (stop) => {
+      const started = performance.now();
+      const waiting = window.pageEngineTest.waitForReady();
+      setTimeout(() => {
+        if (stop === "abort") window.pageEngineTest.cancelWait();
+        else window.pageEngineTest.close();
+      }, 80);
+      try {
+        await waiting;
+        return { rejected: false, elapsed: performance.now() - started };
+      } catch {
+        return { rejected: true, elapsed: performance.now() - started };
+      }
+    }, stop);
+    expect(result.rejected).toBe(true);
+    expect(result.elapsed).toBeLessThan(1000);
+  }
+  expect(await page.evaluate(() => window.pageEngineTest.clicks)).toBe(0);
+});
 
 test("延迟导航等待新页面标记与内容就绪，不将新地址和旧控件拼成观察结果", async ({
   page,

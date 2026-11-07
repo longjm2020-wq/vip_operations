@@ -8,6 +8,11 @@ import {
   pageToolDefinitions,
   parsePageToolArguments,
   pageToolArgumentError,
+  isPageTaskToolName,
+  pageTaskToolNames,
+  pageTaskStartSchema,
+  pageTaskFinishSchema,
+  pageWaitSchema,
   type PageToolName,
 } from "../../packages/contracts/src/assistant-page.js";
 import {
@@ -16,6 +21,55 @@ import {
 } from "../../packages/contracts/src/assistant-realtime.js";
 
 describe("current-page tool contract", () => {
+  it("keeps goal coordination local and rejects ambiguous completion or unbounded waits", () => {
+    for (const tool of pageTaskToolNames) {
+      expect(isPageTaskToolName(tool)).toBe(true);
+      expect(isPageToolName(tool)).toBe(false);
+      expect(isRealtimeToolName(tool)).toBe(false);
+      expect(
+        realtimeToolSchema.safeParse({
+          tool,
+          callId: "c1",
+          request: "完成目标",
+        }).success,
+      ).toBe(false);
+    }
+    expect(isPageTaskToolName("workspace_request")).toBe(false);
+    expect(
+      pageTaskStartSchema.parse({ goal: " 查看近15天货号分析 " }).goal,
+    ).toBe("查看近15天货号分析");
+    for (const input of [
+      { goal: " " },
+      { goal: "查看报表", script: "click()" },
+    ]) {
+      expect(pageTaskStartSchema.safeParse(input).success).toBe(false);
+    }
+    const finish = {
+      outcome: "completed",
+      summary: "已打开",
+      snapshotId: "snapshot-1",
+      evidence: "按货号分析",
+    };
+    expect(pageTaskFinishSchema.safeParse(finish).success).toBe(true);
+    expect(
+      pageTaskFinishSchema.safeParse({ ...finish, outcome: "needs_user" })
+        .success,
+    ).toBe(true);
+    for (const input of [
+      { ...finish, snapshotId: undefined },
+      { ...finish, evidence: " " },
+      { ...finish, outcome: "running" },
+    ]) {
+      expect(pageTaskFinishSchema.safeParse(input).success).toBe(false);
+    }
+    for (const seconds of [0, 0.5, 11, "3", Infinity]) {
+      expect(pageWaitSchema.safeParse({ seconds }).success).toBe(false);
+    }
+    expect(pageWaitSchema.safeParse({ seconds: 10 }).success).toBe(true);
+    expect(
+      pageWaitSchema.safeParse({ seconds: 1, script: "click()" }).success,
+    ).toBe(false);
+  });
   it("keeps local page tools out of the authenticated business tool endpoint", () => {
     for (const tool of pageToolNames) {
       expect(isPageToolName(tool)).toBe(true);

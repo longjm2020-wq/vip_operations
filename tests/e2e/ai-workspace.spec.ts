@@ -7,36 +7,10 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 import type { AssistantActivity } from "../../packages/contracts/src/assistant-activity.js";
 
 async function openWorkspacePanel(page: Page, name: string) {
-  const stage = page
-    .locator(".workspace-ai-core-stage, .workspace-quiet")
-    .first();
-  const orbit = page.locator(".workspace-dock-orbit").first();
-  const stationary = () =>
-    orbit.evaluate((element) => {
-      const style = getComputedStyle(element);
-      return (
-        style.animationName === "none" ||
-        (style.animationPlayState === "paused" &&
-          element
-            .getAnimations()
-            .every((animation) => animation.playState !== "running"))
-      );
-    });
-  if (!(await stationary())) {
-    await stage.scrollIntoViewIfNeeded();
-    const box = (await stage.boundingBox())!;
-    const viewport = page.viewportSize()!;
-    const visibleTop = Math.max(76, box.y);
-    const visibleBottom = Math.min(viewport.height - 8, box.y + box.height);
-    await stage.hover({
-      position: {
-        x: 20,
-        y: (visibleTop + visibleBottom) / 2 - box.y,
-      },
-    });
-  }
-  await expect.poll(stationary).toBe(true);
-  await page.getByRole("button", { name, exact: true }).click();
+  // Keyboard focus pauses a moving entry; pointer hover intentionally does not.
+  const entry = page.getByRole("button", { name, exact: true });
+  await entry.focus();
+  await entry.click();
 }
 
 async function dragCompanionToPanel(page: Page, panel: Locator) {
@@ -1210,7 +1184,9 @@ test("工作台与业务页共用透明宽屏对话，单输入和菜单可用�
     ["动态反馈", "刷新助理动态"],
   ] as const) {
     await selectAssistantPanel(page, section);
-    await expect(dialog.locator(".assistant-panel-heading")).toHaveText(section);
+    await expect(dialog.locator(".assistant-panel-heading")).toHaveText(
+      section,
+    );
     await expect(
       section === "任务与文件"
         ? dialog.getByRole("heading", { name: label, exact: true })
@@ -1385,7 +1361,7 @@ test("齿轮收纳隐私选项且默认不发送，手机可选择后发送并�
   });
 });
 
-test("功能圆环实际围绕核心公转，悬停与打开浮卡暂停以便操作", async ({
+test("功能圆环悬停页面仍持续公转，键盘聚焦与打开浮卡暂停以便操作", async ({
   page,
 }) => {
   const fixture = await workspaceFixture(page, {
@@ -1406,14 +1382,44 @@ test("功能圆环实际围绕核心公转，悬停与打开浮卡暂停以便�
     .toBeGreaterThan(6);
   const stage = (await page.locator(".workspace-ai-core-stage").boundingBox())!;
   await page.mouse.move(stage.x + 10, stage.y + 10);
-  await expect(orbit).toHaveCSS("animation-play-state", "paused");
-  const hovered = (await entry.boundingBox())!;
-  await page.waitForTimeout(350);
-  const stillHovered = (await entry.boundingBox())!;
+  await expect(orbit).toHaveCSS("animation-play-state", "running");
+  const orbitDetails = [
+    menu.locator(".workspace-dock-face").first(),
+    menu.locator(".workspace-dock-halo-sweep").first(),
+    menu.locator(".workspace-dock-halo-counter").first(),
+  ];
+  for (const detail of orbitDetails)
+    await expect(detail).toHaveCSS("animation-play-state", "running");
   expect(
-    Math.hypot(stillHovered.x - hovered.x, stillHovered.y - hovered.y),
+    await entry.evaluate(
+      (element) => getComputedStyle(element, "::before").animationPlayState,
+    ),
+  ).toBe("running");
+  expect(
+    await entry
+      .locator(".workspace-dock-label")
+      .evaluate(
+        (element) => getComputedStyle(element, "::before").animationPlayState,
+      ),
+  ).toBe("running");
+  const hovered = (await entry.boundingBox())!;
+  await expect
+    .poll(async () => {
+      const moving = (await entry.boundingBox())!;
+      return Math.hypot(moving.x - hovered.x, moving.y - hovered.y);
+    })
+    .toBeGreaterThan(6);
+  await entry.focus();
+  await expect(orbit).toHaveCSS("animation-play-state", "paused");
+  for (const detail of orbitDetails)
+    await expect(detail).toHaveCSS("animation-play-state", "paused");
+  const focused = (await entry.boundingBox())!;
+  await page.waitForTimeout(350);
+  const stillFocused = (await entry.boundingBox())!;
+  expect(
+    Math.hypot(stillFocused.x - focused.x, stillFocused.y - focused.y),
   ).toBeLessThan(1);
-  await entry.click();
+  await entry.press("Enter");
   await expect(
     page.getByRole("dialog", { name: "日程", exact: true }),
   ).toBeVisible();
@@ -2665,7 +2671,9 @@ test("工作台圆环是小序巢穴，可离巢移动与召回，文字和动�
     .getByRole("button", { name: "查看助理动态反馈", exact: true })
     .click();
   const dialog = page.getByRole("dialog", { name: /AI 个人助理/ });
-  await expect(dialog.locator(".assistant-panel-heading")).toHaveText("动态反馈");
+  await expect(dialog.locator(".assistant-panel-heading")).toHaveText(
+    "动态反馈",
+  );
   await expect(
     dialog.getByText("核心入口项目进展", { exact: true }),
   ).toBeVisible();
@@ -3101,7 +3109,7 @@ test("新提醒短文字输出后收起，历史记录不反复播报", async ({
   expect(fixture.assistantCalls()).toBe(0);
 });
 
-test("核心呼吸光晕与轻颤持续循环，操作时暂停且减少动态效果关闭装饰动画", async ({
+test("核心光晕悬停持续循环，拖动和输入暂停且减少动态效果关闭装饰动画", async ({
   page,
 }) => {
   const fixture = await workspaceFixture(page);
@@ -3157,7 +3165,7 @@ test("核心呼吸光晕与轻颤持续循环，操作时暂停且减少动态�
     position: { x: frame.width * 0.18, y: frame.height * 0.18 },
   });
   for (const { element } of decorations)
-    await expect(element).toHaveCSS("animation-play-state", "paused");
+    await expect(element).toHaveCSS("animation-play-state", "running");
   await page.mouse.down();
   await page.mouse.move(
     frame.x + frame.width * 0.18 + 45,
@@ -3165,14 +3173,14 @@ test("核心呼吸光晕与轻颤持续循环，操作时暂停且减少动态�
     { steps: 5 },
   );
   await expect(page.locator(".personal-workspace")).toHaveAttribute(
-    "data-world-dragging",
+    "data-nest-dragging",
     "true",
   );
   for (const { element } of decorations)
     await expect(element).toHaveCSS("animation-play-state", "paused");
   await page.mouse.up();
   await expect(page.locator(".personal-workspace")).not.toHaveAttribute(
-    "data-world-dragging",
+    "data-nest-dragging",
     "true",
   );
   await page.locator(".workspace-title").click();

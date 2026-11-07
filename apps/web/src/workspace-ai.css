@@ -339,16 +339,13 @@
   ) {
   animation: none;
 }
-.workspace-ai-core:is(:hover, :focus-within, [data-view-dragging="true"])
+.workspace-ai-core:is(:focus-within, [data-view-dragging="true"])
   :is(
     .workspace-ai-core-aura,
     .workspace-ai-core-resonance,
     .workspace-ai-core-orbits
   ),
-.workspace-ai-core-stage:has(
-    .workspace-dock:hover,
-    .workspace-dock:focus-within
-  )
+.workspace-ai-core-stage:has(.workspace-dock:focus-within)
   :is(
     .workspace-ai-core-aura,
     .workspace-ai-core-resonance,

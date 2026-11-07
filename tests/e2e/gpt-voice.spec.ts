@@ -31,9 +31,13 @@ declare global {
 
 // The service is mocked, but both WebRTC peers, ICE, DTLS and RTP are real.
 // No browser media transport is replaced by a fake implementation.
-async function qwenRtcFixture(page: Page, holdConfiguration = false) {
+async function qwenRtcFixture(
+  page: Page,
+  holdConfiguration = false,
+  options: { pageTaskControl?: boolean; autoRespond?: boolean } = {},
+) {
   await page.addInitScript(
-    ({ hold }) => {
+    ({ hold, autoRespond }) => {
       let peer: RTCPeerConnection | undefined;
       let channel: RTCDataChannel | undefined;
       let receiver: AudioContext | undefined;
@@ -114,7 +118,7 @@ async function qwenRtcFixture(page: Page, holdConfiguration = false) {
               const event = JSON.parse(String(data));
               events.push(event);
               if (event.type === "session.update" && !hold) acknowledge();
-              if (event.type === "response.create") {
+              if (event.type === "response.create" && autoRespond) {
                 const id = `followup-${++followup}`;
                 send({ type: "response.created", response: { id } });
                 send({
@@ -143,7 +147,7 @@ async function qwenRtcFixture(page: Page, holdConfiguration = false) {
         },
       };
     },
-    { hold: holdConfiguration },
+    { hold: holdConfiguration, autoRespond: options.autoRespond !== false },
   );
   const starts: Record<string, unknown>[] = [];
   const tools: Record<string, unknown>[] = [];
@@ -175,6 +179,7 @@ async function qwenRtcFixture(page: Page, holdConfiguration = false) {
           provider: "qwen",
           transport: "webrtc",
           pageControl: !body.desktopDeviceId,
+          ...(options.pageTaskControl ? { pageTaskControl: true } : {}),
           sdp: await page.evaluate(
             (sdp) => window.qwenRTCTest.answer(sdp),
             body.sdp,
@@ -273,6 +278,289 @@ async function qwenToolOutput<T>(page: Page, callId: string): Promise<T> {
   await expect.poll(output).toBeTruthy();
   return JSON.parse((await output())!) as T;
 }
+
+test("千问实时语音按一个目标连续处理多层弹窗，逐步观察并在人工介入或打断后停止", async ({
+  page,
+}) => {
+  const { bubble } = await fixture(page, { configured: false });
+  const { starts, tools } = await qwenRtcFixture(page, false, {
+    pageTaskControl: true,
+    autoRespond: false,
+  });
+  const pageErrors: string[] = [];
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+  await page.reload();
+  await page.locator(".companion-launch").click();
+  await expect(bubble.getByRole("status")).toHaveText("实时聆听中，你说");
+  await page.evaluate(() => {
+    const fixture = document.createElement("section");
+    fixture.id = "voice-goal-fixture";
+    fixture.dataset.steps = "0";
+    const layer = (id: string, z: number, content: string) => `
+      <div id="${id}" class="ant-modal-root" style="position:fixed;inset:0;z-index:${z}">
+        <div class="ant-modal-mask" style="position:absolute;inset:0;background:#0003"></div>
+        <div class="ant-modal-wrap" style="position:absolute;inset:0;z-index:1">
+          <div role="dialog" aria-modal="true" style="position:absolute;top:180px;left:360px;width:500px;padding:24px;background:white;color:#111">${content}</div>
+        </div>
+      </div>`;
+    fixture.innerHTML =
+      layer(
+        "voice-inner",
+        2000,
+        '<h2>SAVED 内层登录状态</h2><button id="voice-return">返回外层面板</button>',
+      ) +
+      layer(
+        "voice-outer",
+        1000,
+        '<h2>任意业务的更新面板</h2><div id="voice-step"><button id="voice-choose">选择下一项检查</button></div>',
+      );
+    document.body.append(fixture);
+    const count = () =>
+      (fixture.dataset.steps = String(Number(fixture.dataset.steps) + 1));
+    document.querySelector("#voice-return")!.addEventListener("click", () => {
+      count();
+      const inner = document.querySelector<HTMLElement>("#voice-inner")!;
+      const dialog = inner.querySelector<HTMLElement>('[role="dialog"]')!;
+      dialog.classList.add("ant-zoom-leave");
+      dialog.style.pointerEvents = "none";
+      setTimeout(() => inner.remove(), 450);
+    });
+    document.querySelector("#voice-choose")!.addEventListener("click", () => {
+      count();
+      const step = document.querySelector("#voice-step")!;
+      step.innerHTML = '<button id="voice-preview">检查页面最终状态</button>';
+      document
+        .querySelector("#voice-preview")!
+        .addEventListener("click", () => {
+          count();
+          step.innerHTML =
+            '<p>三个页面步骤已完成</p><p>后续业务需要人工验证</p><button id="voice-after">人工验证后的下一步</button>';
+          document
+            .querySelector("#voice-after")!
+            .addEventListener("click", count);
+        });
+    });
+  });
+  type TaskOutput = {
+    task: { status: string; goal: string; actionCount: number };
+    observation: PageObservation;
+    text: string;
+  };
+  const clickArgs = (observation: PageObservation, name: string) => {
+    const target = observation.controls.find(
+      (control) => control.name === name,
+    );
+    expect(target, `Observed workflow target: ${name}`).toBeTruthy();
+    return { snapshotId: observation.snapshotId, ref: target!.ref };
+  };
+  const responseCount = () =>
+    page.evaluate(
+      () =>
+        window.qwenRTCTest.events.filter(
+          (event) => event.type === "response.create",
+        ).length,
+    );
+  const steps = page.locator("#voice-goal-fixture");
+  await sendQwenTool(page, "goal-observe", "page_observe", {});
+  const unstarted = await qwenToolOutput<PageObservation>(page, "goal-observe");
+  await sendQwenTool(
+    page,
+    "goal-required",
+    "page_click",
+    clickArgs(unstarted, "返回外层面板"),
+    false,
+  );
+  expect(
+    (await qwenToolOutput<{ code: string }>(page, "goal-required")).code,
+  ).toBe("PAGE_TASK_REQUIRED");
+  await expect(steps).toHaveAttribute("data-steps", "0");
+  await sendQwenTool(
+    page,
+    "goal-start",
+    "page_task_start",
+    { goal: "从内层返回，完成外层的两步页面检查" },
+    false,
+  );
+  const started = await qwenToolOutput<TaskOutput>(page, "goal-start");
+  expect(started.task.status).toBe("active");
+  await sendQwenTool(
+    page,
+    "goal-return",
+    "page_click",
+    clickArgs(started.observation, "返回外层面板"),
+    false,
+  );
+  const returned = await qwenToolOutput<PageActionResult & TaskOutput>(
+    page,
+    "goal-return",
+  );
+  expect(returned.dispatched).toBe(true);
+  expect(returned.observation.ready).toBe(true);
+  expect(
+    returned.observation.controls.some(
+      (control) => control.name === "选择下一项检查",
+    ),
+  ).toBe(true);
+  await expect(steps).toHaveAttribute("data-steps", "1");
+  // A spoken promise without a tool is not treated as task completion. The
+  // client requests another provider response, without fabricating user input.
+  const beforePromise = await responseCount();
+  await page.evaluate(() => {
+    const send = window.qwenRTCTest.send;
+    const id = "goal-spoken-promise";
+    send({ type: "response.created", response: { id } });
+    send({
+      type: "response.audio_transcript.done",
+      response_id: id,
+      transcript: "我会继续处理外层的下一项检查。",
+    });
+    send({ type: "response.done", response: { id, status: "completed" } });
+  });
+  await expect.poll(responseCount).toBe(beforePromise + 1);
+  await expect(steps).toHaveAttribute("data-steps", "1");
+  const choose = clickArgs(returned.observation, "选择下一项检查");
+  await page.evaluate((args) => {
+    const send = window.qwenRTCTest.send;
+    const id = "goal-batch-response";
+    send({ type: "response.created", response: { id } });
+    for (const call_id of ["goal-choose", "goal-duplicate-batch"]) {
+      send({
+        type: "response.function_call_arguments.done",
+        response_id: id,
+        name: "page_click",
+        call_id,
+        arguments: JSON.stringify(args),
+      });
+    }
+    send({ type: "response.done", response: { id, status: "completed" } });
+  }, choose);
+  const chosen = await qwenToolOutput<PageActionResult & TaskOutput>(
+    page,
+    "goal-choose",
+  );
+  expect(chosen.dispatched).toBe(true);
+  const deferred = await qwenToolOutput<{ code: string; dispatched: boolean }>(
+    page,
+    "goal-duplicate-batch",
+  );
+  expect(deferred).toMatchObject({
+    code: "PAGE_STEP_DEFERRED",
+    dispatched: false,
+  });
+  await expect(steps).toHaveAttribute("data-steps", "2");
+  expect(chosen.observation.snapshotId).not.toBe(
+    returned.observation.snapshotId,
+  );
+  await sendQwenTool(
+    page,
+    "goal-preview",
+    "page_click",
+    clickArgs(chosen.observation, "检查页面最终状态"),
+    false,
+  );
+  const finalStep = await qwenToolOutput<PageActionResult & TaskOutput>(
+    page,
+    "goal-preview",
+  );
+  expect(finalStep.dispatched).toBe(true);
+  expect(finalStep.task.actionCount).toBe(3);
+  expect(finalStep.observation.text).toContain("三个页面步骤已完成");
+  await expect(steps).toHaveAttribute("data-steps", "3");
+  await sendQwenTool(
+    page,
+    "goal-finish",
+    "page_task_finish",
+    {
+      outcome: "completed",
+      summary: "三步页面检查完成",
+      snapshotId: finalStep.observation.snapshotId,
+      evidence: "三个页面步骤已完成",
+    },
+    false,
+  );
+  expect(
+    (await qwenToolOutput<TaskOutput>(page, "goal-finish")).task.status,
+  ).toBe("completed");
+  // A new goal may stop at a visible human-required step without clicking it.
+  await sendQwenTool(page, "human-start", "page_task_start", {
+    goal: "处理后续业务的验证步骤",
+  });
+  const human = await qwenToolOutput<TaskOutput>(page, "human-start");
+  await sendQwenTool(
+    page,
+    "human-finish",
+    "page_task_finish",
+    {
+      outcome: "needs_user",
+      summary: "等待人工完成页面验证",
+      snapshotId: human.observation.snapshotId,
+      evidence: "后续业务需要人工验证",
+    },
+    false,
+  );
+  const stopped = await qwenToolOutput<TaskOutput>(page, "human-finish");
+  expect(stopped.task.status).toBe("needs_user");
+  await sendQwenTool(
+    page,
+    "human-blocked-click",
+    "page_click",
+    clickArgs(stopped.observation, "人工验证后的下一步"),
+    false,
+  );
+  expect(
+    (await qwenToolOutput<{ code: string }>(page, "human-blocked-click")).code,
+  ).toBe("PAGE_TASK_REQUIRED");
+  await expect(steps).toHaveAttribute("data-steps", "3");
+  // Interruption cancels an in-flight step and does not silently resume the goal.
+  await sendQwenTool(page, "interrupt-goal", "page_task_start", {
+    goal: "执行验证后的下一步",
+  });
+  const interruptGoal = await qwenToolOutput<TaskOutput>(
+    page,
+    "interrupt-goal",
+  );
+  await sendQwenTool(
+    page,
+    "interrupt-step",
+    "page_click",
+    clickArgs(interruptGoal.observation, "人工验证后的下一步"),
+    false,
+    true,
+  );
+  await sendQwenTool(page, "interrupt-observe", "page_observe", {}, false);
+  const interrupted = await qwenToolOutput<PageObservation>(
+    page,
+    "interrupt-observe",
+  );
+  await sendQwenTool(
+    page,
+    "interrupt-blocked-click",
+    "page_click",
+    clickArgs(interrupted, "人工验证后的下一步"),
+    false,
+  );
+  expect(
+    (await qwenToolOutput<{ code: string }>(page, "interrupt-blocked-click"))
+      .code,
+  ).toBe("PAGE_TASK_REQUIRED");
+  await expect(steps).toHaveAttribute("data-steps", "3");
+  expect(
+    await page.evaluate(() =>
+      window.qwenRTCTest.events.some(
+        (event) =>
+          event.type === "conversation.item.create" &&
+          (event.item as { role?: string } | undefined)?.role === "user",
+      ),
+    ),
+  ).toBe(false);
+  expect(tools).toHaveLength(0);
+  expect(starts).toHaveLength(1);
+  expect(pageErrors).toEqual([]);
+  await page
+    .locator("#voice-goal-fixture")
+    .evaluate((element) => element.remove());
+  await bubble.getByRole("button", { name: "结束语音", exact: true }).click();
+});
 
 test("千问实时语音观察并点击任意新控件，跨业务页继续且打断后不派发旧动作", async ({
   page,

@@ -6,6 +6,8 @@ const f = vi.hoisted(() => ({
   observe: vi.fn(),
   action: vi.fn(),
   closePage: vi.fn(),
+  currentSnapshot: vi.fn(),
+  currentEvidence: vi.fn(),
 }));
 vi.mock("../../apps/web/src/api.js", () => ({ api: f.api }));
 vi.mock("../../apps/web/src/realtime-page-controller.js", () => ({
@@ -16,6 +18,8 @@ vi.mock("../../apps/web/src/realtime-page-controller.js", () => ({
     observe = f.observe;
     action = f.action;
     close = f.closePage;
+    currentSnapshot = f.currentSnapshot;
+    currentEvidence = f.currentEvidence;
   },
 }));
 import { QwenRealtimeVoiceSession } from "../../apps/web/src/qwen-realtime-voice-session.js";
@@ -140,8 +144,17 @@ function done(id = "r1", channel = Peer.last.dc) {
   });
 }
 beforeEach(() => {
-  for (const mock of [f.pageCreated, f.observe, f.action, f.closePage])
+  for (const mock of [
+    f.pageCreated,
+    f.observe,
+    f.action,
+    f.closePage,
+    f.currentSnapshot,
+    f.currentEvidence,
+  ])
     mock.mockReset();
+  f.currentSnapshot.mockReturnValue(true);
+  f.currentEvidence.mockReturnValue(true);
   Peer.ice = "complete";
   track = { enabled: true, onended: null, stop: vi.fn() };
   vi.stubGlobal("navigator", {
@@ -197,6 +210,16 @@ function allowPage() {
     observation: { ...observation, snapshotId: "snapshot-2", text: "正在更新" },
   });
 }
+function allowWorkflow() {
+  allowPage();
+  const normal = f.api.getMockImplementation()!;
+  f.api.mockImplementation(async (...args) => {
+    const result = await normal(...args);
+    return args[0].endsWith("/sessions")
+      ? { ...result, data: { ...result.data, pageTaskControl: true } }
+      : result;
+  });
+}
 function pageResponse(
   name: string,
   args: object,
@@ -229,6 +252,513 @@ function pageOutput(callId = "page-call") {
   )?.item as { output: string } | undefined;
   return item ? JSON.parse(item.output) : undefined;
 }
+
+describe("Qwen goal-driven page workflow", () => {
+  async function startWorkflow(cb = callbacks()) {
+    allowWorkflow();
+    session = new QwenRealtimeVoiceSession(cb);
+    await session.start(options);
+    await ready();
+    return cb;
+  }
+  async function beginTask() {
+    pageResponse(
+      "page_task_start",
+      { goal: "返回更新面板并检查更新结果" },
+      "start",
+      "start-call",
+    );
+    await vi.waitFor(() =>
+      expect(pageOutput("start-call")).toMatchObject({
+        task: { status: "active" },
+        observation,
+      }),
+    );
+  }
+  it("requires a complete task goal before writes when enabled without treating the missing task as bad parameters", async () => {
+    await startWorkflow();
+    for (let i = 0; i < 3; i++) {
+      pageResponse(
+        "page_click",
+        { snapshotId: "snapshot-1", ref: "control-1" },
+        `required-${i}`,
+        `required-call-${i}`,
+      );
+      await vi.waitFor(() =>
+        expect(pageOutput(`required-call-${i}`)).toMatchObject({
+          code: "PAGE_TASK_REQUIRED",
+          dispatched: false,
+        }),
+      );
+    }
+    expect(f.action).not.toHaveBeenCalled();
+    await beginTask();
+    expect(pageOutput("start-call").task).toEqual({
+      goal: "返回更新面板并检查更新结果",
+      status: "active",
+      actionCount: 0,
+      toolCount: 1,
+    });
+    pageResponse(
+      "page_click",
+      { snapshotId: "snapshot-1", ref: "control-1" },
+      "click",
+      "click-call",
+    );
+    await vi.waitFor(() =>
+      expect(pageOutput("click-call")).toMatchObject({
+        dispatched: true,
+        task: { actionCount: 1 },
+      }),
+    );
+  });
+  it("executes separate steps using their fresh observations and finishes only with current visible evidence", async () => {
+    const cb = await startWorkflow();
+    await beginTask();
+    for (let step = 1; step <= 2; step++) {
+      f.action.mockResolvedValueOnce({
+        dispatched: true,
+        text: "已派发操作",
+        observation: {
+          ...observation,
+          snapshotId: `snapshot-${step + 1}`,
+          text: step === 2 ? "更新完成，共20条" : "更新面板",
+        },
+      });
+      pageResponse(
+        "page_click",
+        { snapshotId: `snapshot-${step}`, ref: "control-1" },
+        `step-${step}`,
+        `step-call-${step}`,
+      );
+      await vi.waitFor(() =>
+        expect(pageOutput(`step-call-${step}`)).toMatchObject({
+          task: { status: "active", actionCount: step },
+        }),
+      );
+      expect(cb.state).toHaveBeenLastCalledWith("thinking");
+    }
+    pageResponse(
+      "page_task_finish",
+      {
+        outcome: "completed",
+        summary: "更新已完成",
+        snapshotId: "snapshot-3",
+        evidence: "更新完成，共20条",
+      },
+      "finish",
+      "finish-call",
+    );
+    await vi.waitFor(() =>
+      expect(pageOutput("finish-call")).toMatchObject({
+        task: { status: "completed", actionCount: 2, toolCount: 4 },
+      }),
+    );
+    expect(f.currentSnapshot).toHaveBeenCalledExactlyOnceWith("snapshot-3");
+    expect(f.currentEvidence).toHaveBeenCalledExactlyOnceWith(
+      "snapshot-3",
+      "更新完成，共20条",
+    );
+    expect(f.action.mock.calls.map(([input]) => input.snapshotId)).toEqual([
+      "snapshot-1",
+      "snapshot-2",
+    ]);
+    expect(cb.state).toHaveBeenLastCalledWith("listening");
+  });
+  it.each(["stale-id", "changed-dom", "invented-evidence", "changed-evidence"])(
+    "does not finish with %s or replace the model's submitted snapshot",
+    async (kind) => {
+      await startWorkflow();
+      await beginTask();
+      if (kind === "changed-dom") f.currentSnapshot.mockReturnValue(false);
+      if (kind === "changed-evidence") f.currentEvidence.mockReturnValue(false);
+      const id = kind === "stale-id" ? "old-snapshot" : observation.snapshotId;
+      pageResponse(
+        "page_task_finish",
+        {
+          outcome: "completed",
+          summary: "成功",
+          snapshotId: id,
+          evidence:
+            kind === "invented-evidence" ? "实际不存在的完成结果" : "更新数据",
+        },
+        "finish",
+        "finish-call",
+      );
+      await vi.waitFor(() =>
+        expect(pageOutput("finish-call")).toMatchObject({
+          code: "PAGE_TASK_EVIDENCE",
+          dispatched: false,
+          task: { status: "active" },
+        }),
+      );
+      expect(f.observe).toHaveBeenCalledOnce();
+      if (kind === "stale-id") expect(f.currentSnapshot).not.toHaveBeenCalled();
+      else expect(f.currentSnapshot).toHaveBeenCalledExactlyOnceWith(id);
+      if (kind === "changed-evidence")
+        expect(f.currentEvidence).toHaveBeenCalledExactlyOnceWith(
+          id,
+          "更新数据",
+        );
+    },
+  );
+  it("defers every precomputed tool after the first and keeps deferred calls out of action and parameter budgets", async () => {
+    const cb = await startWorkflow();
+    const dc = Peer.last.dc;
+    dc.emit({
+      type: "input_audio_buffer.speech_started",
+      item_id: "workflow-user",
+    });
+    dc.emit({
+      type: "input_audio_buffer.speech_stopped",
+      item_id: "workflow-user",
+    });
+    dc.emit({
+      type: "conversation.item.input_audio_transcription.completed",
+      item_id: "workflow-user",
+      transcript: "返回面板",
+    });
+    dc.emit({ type: "response.created", response: { id: "batch" } });
+    for (const [call_id, name, args] of [
+      ["start-call", "page_task_start", { goal: "返回面板" }],
+      ["deferred-a", "page_click", { snapshotId: "old", ref: "old" }],
+      ["deferred-b", "workspace_request", { request: "更新数据" }],
+    ] as const)
+      dc.emit({
+        type: "response.function_call_arguments.done",
+        response_id: "batch",
+        call_id,
+        name,
+        arguments: JSON.stringify(args),
+      });
+    done("batch");
+    await vi.waitFor(() =>
+      expect(pageOutput("deferred-b")).toMatchObject({
+        code: "PAGE_STEP_DEFERRED",
+        dispatched: false,
+        task: { toolCount: 1 },
+      }),
+    );
+    expect(pageOutput("deferred-a")).toMatchObject({
+      code: "PAGE_STEP_DEFERRED",
+      dispatched: false,
+    });
+    expect(f.observe).toHaveBeenCalledOnce();
+    expect(f.action).not.toHaveBeenCalled();
+    expect(cb.business).not.toHaveBeenCalled();
+    expect(
+      f.api.mock.calls.filter(([path]) => path.endsWith("/tool")),
+    ).toHaveLength(0);
+    expect(
+      dc.sent.filter((event) => event.type === "response.create"),
+    ).toHaveLength(1);
+    pageResponse(
+      "page_click",
+      { snapshotId: "snapshot-1", ref: "control-1" },
+      "next",
+      "next-call",
+    );
+    await vi.waitFor(() =>
+      expect(pageOutput("next-call")).toMatchObject({
+        dispatched: true,
+        task: { actionCount: 1, toolCount: 2 },
+      }),
+    );
+    expect(f.action).toHaveBeenCalledOnce();
+    dc.emit({ type: "response.created", response: { id: "step-comment" } });
+    dc.emit({
+      type: "response.audio_transcript.done",
+      response_id: "step-comment",
+      transcript: "正在核对页面结果",
+    });
+    done("step-comment");
+    await vi.waitFor(() =>
+      expect(
+        f.api.mock.calls.some(([path]) => path.endsWith("/captions")),
+      ).toBe(true),
+    );
+    expect(
+      f.api.mock.calls.find(([path]) => path.endsWith("/captions"))?.[2],
+    ).toMatchObject({
+      messages: expect.arrayContaining([
+        { id: expect.any(String), role: "user", text: "返回面板" },
+      ]),
+    });
+  });
+  it.each([true, false])(
+    "serializes business-only batches only while a page task is active (%s)",
+    async (active) => {
+      const cb = await startWorkflow();
+      if (active) await beginTask();
+      const dc = Peer.last.dc;
+      dc.emit({ type: "response.created", response: { id: "business-batch" } });
+      for (const call of ["first", "second"])
+        dc.emit({
+          type: "response.function_call_arguments.done",
+          response_id: "business-batch",
+          call_id: `business-${call}`,
+          name: "workspace_request",
+          arguments: JSON.stringify({ request: `查询${call}` }),
+        });
+      done("business-batch");
+      await vi.waitFor(() =>
+        expect(pageOutput("business-second")).toBeDefined(),
+      );
+      const calls = f.api.mock.calls.filter(([path]) => path.endsWith("/tool"));
+      expect(calls).toHaveLength(active ? 1 : 2);
+      expect(calls[0][2]).toMatchObject({ callId: "business-first" });
+      expect(cb.business).toHaveBeenCalledOnce();
+      if (active)
+        expect(pageOutput("business-second")).toMatchObject({
+          code: "PAGE_STEP_DEFERRED",
+          dispatched: false,
+          task: { toolCount: 2 },
+        });
+      else
+        expect(pageOutput("business-second")).toMatchObject({ text: "已完成" });
+    },
+  );
+  it("uses at most two bare continuations for idle task replies and stops without fabricating user confirmation", async () => {
+    const cb = await startWorkflow();
+    await beginTask();
+    const dc = Peer.last.dc;
+    for (let n = 1; n <= 3; n++) {
+      dc.emit({ type: "response.created", response: { id: `idle-${n}` } });
+      dc.emit({
+        type: "response.audio_transcript.done",
+        response_id: `idle-${n}`,
+        transcript: "我来帮你完成",
+      });
+      done(`idle-${n}`);
+    }
+    expect(dc.sent.filter((event) => event.type === "response.create")).toEqual(
+      [
+        { type: "response.create" },
+        { type: "response.create" },
+        { type: "response.create" },
+      ],
+    );
+    expect(
+      dc.sent
+        .filter((event) => event.type === "conversation.item.create")
+        .every(
+          (event) =>
+            (event.item as { type: string }).type === "function_call_output",
+        ),
+    ).toBe(true);
+    expect(cb.note).toHaveBeenLastCalledWith(
+      expect.stringContaining("停止重复口头续答"),
+    );
+    expect(cb.state).toHaveBeenLastCalledWith("listening");
+    pageResponse(
+      "page_task_start",
+      { goal: "不能重置保护门限" },
+      "restart",
+      "restart-call",
+    );
+    await vi.waitFor(() =>
+      expect(pageOutput("restart-call")).toMatchObject({
+        code: "PAGE_TASK_STOPPED",
+        task: { status: "needs_user" },
+      }),
+    );
+    expect(
+      dc.sent.filter((event) => event.type === "response.create"),
+    ).toHaveLength(3);
+  });
+  it("releases the task when a real user step is required and refuses further same-turn writes", async () => {
+    const cb = await startWorkflow();
+    f.observe.mockReturnValue({ ...observation, text: "请扫码登录" });
+    pageResponse(
+      "page_task_start",
+      { goal: "更新数据" },
+      "start",
+      "start-call",
+    );
+    await vi.waitFor(() => expect(pageOutput("start-call")).toBeDefined());
+    pageResponse(
+      "page_task_finish",
+      {
+        outcome: "needs_user",
+        summary: "请完成扫码登录",
+        snapshotId: observation.snapshotId,
+        evidence: "请扫码登录",
+      },
+      "finish",
+      "finish-call",
+    );
+    await vi.waitFor(() =>
+      expect(pageOutput("finish-call")).toMatchObject({
+        task: { status: "needs_user" },
+      }),
+    );
+    expect(cb.note).toHaveBeenLastCalledWith("任务需要你操作：请完成扫码登录");
+    pageResponse(
+      "page_click",
+      { snapshotId: observation.snapshotId, ref: "control-1" },
+      "late",
+      "late-call",
+    );
+    await vi.waitFor(() =>
+      expect(pageOutput("late-call")).toMatchObject({
+        code: "PAGE_TASK_REQUIRED",
+        dispatched: false,
+      }),
+    );
+    expect(f.action).not.toHaveBeenCalled();
+    pageResponse(
+      "workspace_request",
+      { request: "继续更新数据" },
+      "late-business",
+      "late-business-call",
+    );
+    await vi.waitFor(() =>
+      expect(pageOutput("late-business-call")).toMatchObject({
+        code: "PAGE_TASK_STOPPED",
+        dispatched: false,
+      }),
+    );
+    expect(
+      f.api.mock.calls.filter(([path]) => path.endsWith("/tool")),
+    ).toHaveLength(0);
+    Peer.last.dc.emit({
+      type: "input_audio_buffer.speech_started",
+      item_id: "new-business",
+    });
+    Peer.last.dc.emit({
+      type: "input_audio_buffer.speech_stopped",
+      item_id: "new-business",
+    });
+    pageResponse(
+      "workspace_request",
+      { request: "查询库存" },
+      "new-business",
+      "new-business-call",
+    );
+    await vi.waitFor(() =>
+      expect(pageOutput("new-business-call")).toMatchObject({ text: "已完成" }),
+    );
+    expect(
+      f.api.mock.calls.filter(([path]) => path.endsWith("/tool")),
+    ).toHaveLength(1);
+  });
+  it.each(["speech", "interrupt", "stop"])(
+    "aborts page_wait on %s and never resumes its task automatically",
+    async (kind) => {
+      await startWorkflow();
+      await beginTask();
+      vi.useFakeTimers({
+        toFake: ["setTimeout", "clearTimeout", "performance"],
+      });
+      pageResponse("page_wait", { seconds: 10 }, "wait", "wait-call");
+      await vi.advanceTimersByTimeAsync(1000);
+      const continuations = Peer.last.dc.sent.filter(
+        (event) => event.type === "response.create",
+      ).length;
+      Peer.last.dc.emit({
+        type: "response.created",
+        response: { id: "while-waiting" },
+      });
+      done("while-waiting");
+      expect(
+        Peer.last.dc.sent.filter((event) => event.type === "response.create"),
+      ).toHaveLength(continuations);
+      if (kind === "speech")
+        Peer.last.dc.emit({
+          type: "input_audio_buffer.speech_started",
+          item_id: "new",
+        });
+      else if (kind === "interrupt") session.interrupt();
+      else session.stop();
+      const sent = Peer.last.dc.sent.length;
+      await vi.advanceTimersByTimeAsync(12000);
+      expect(pageOutput("wait-call")).toBeUndefined();
+      expect(Peer.last.dc.sent).toHaveLength(sent);
+      expect(f.observe).toHaveBeenCalledOnce();
+      if (kind === "speech") {
+        Peer.last.dc.emit({
+          type: "input_audio_buffer.speech_stopped",
+          item_id: "new",
+        });
+        pageResponse(
+          "page_click",
+          { snapshotId: "snapshot-1", ref: "control-1" },
+          "old-action",
+          "old-action-call",
+        );
+        await vi.advanceTimersByTimeAsync(1);
+        expect(pageOutput("old-action-call")).toMatchObject({
+          code: "PAGE_TASK_REQUIRED",
+        });
+        pageResponse(
+          "page_task_start",
+          { goal: "用户明确要求的新目标" },
+          "new-task",
+          "new-task-call",
+        );
+        await vi.advanceTimersByTimeAsync(120);
+        expect(pageOutput("new-task-call")).toMatchObject({
+          task: {
+            status: "active",
+            goal: "用户明确要求的新目标",
+            toolCount: 1,
+            actionCount: 0,
+          },
+        });
+      }
+    },
+  );
+  it("waits without clicking and returns a new observation when asynchronous work advances", async () => {
+    await startWorkflow();
+    await beginTask();
+    const completed = {
+      ...observation,
+      snapshotId: "wait-result",
+      text: "后台更新完成",
+    };
+    f.observe.mockReturnValue(completed);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    pageResponse("page_wait", { seconds: 1 }, "wait", "wait-call");
+    await vi.advanceTimersByTimeAsync(999);
+    expect(pageOutput("wait-call")).toBeUndefined();
+    expect(f.observe).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(121);
+    expect(pageOutput("wait-call")).toMatchObject({
+      observation: completed,
+      task: { status: "active", toolCount: 2, actionCount: 0 },
+    });
+    expect(f.action).not.toHaveBeenCalled();
+  });
+  it("bounds the total task tool budget even when observations keep returning valid results", async () => {
+    const cb = await startWorkflow();
+    await beginTask();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    for (let i = 2; i <= 60; i++) {
+      pageResponse("page_observe", {}, `observe-${i}`, `observe-call-${i}`);
+      await vi.advanceTimersByTimeAsync(120);
+      expect(pageOutput(`observe-call-${i}`)).toMatchObject({
+        task: { status: "active", toolCount: i },
+      });
+    }
+    const before = Peer.last.dc.sent.filter(
+      (event) => event.type === "response.create",
+    ).length;
+    pageResponse("page_observe", {}, "limit", "limit-call");
+    await vi.advanceTimersByTimeAsync(1);
+    expect(pageOutput("limit-call")).toMatchObject({
+      code: "PAGE_TASK_LIMIT",
+      dispatched: false,
+      task: { status: "needs_user", toolCount: 60 },
+    });
+    expect(f.observe).toHaveBeenCalledTimes(60);
+    expect(cb.note).toHaveBeenLastCalledWith(
+      expect.stringContaining("保护上限"),
+    );
+    expect(
+      Peer.last.dc.sent.filter((event) => event.type === "response.create"),
+    ).toHaveLength(before);
+  });
+});
 
 describe("Qwen local website tools", () => {
   it("observes the current page without a server business call and still saves normal conversation captions", async () => {

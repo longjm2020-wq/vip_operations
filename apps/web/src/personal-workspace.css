@@ -111,16 +111,10 @@
 .workspace-dock-item:nth-child(even)::before {
   animation-direction: reverse;
 }
-.workspace-ai-core-stage:hover .workspace-dock-orbit,
-.workspace-ai-core-stage:hover .workspace-dock-face,
-.workspace-quiet:hover .workspace-dock-orbit,
-.workspace-quiet:hover .workspace-dock-face,
 .workspace-dock:focus-within .workspace-dock-orbit,
 .workspace-dock:focus-within .workspace-dock-face,
 .workspace-dock[data-paused="true"] .workspace-dock-orbit,
 .workspace-dock[data-paused="true"] .workspace-dock-face,
-.workspace-ai-core-stage:hover .workspace-dock-item::before,
-.workspace-quiet:hover .workspace-dock-item::before,
 .workspace-dock:focus-within .workspace-dock-item::before,
 .workspace-dock[data-paused="true"] .workspace-dock-item::before {
   animation-play-state: paused;

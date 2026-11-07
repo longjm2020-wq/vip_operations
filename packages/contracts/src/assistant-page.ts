@@ -175,6 +175,10 @@ export type PageObservation = {
   ready?: boolean;
   /** Current page identity; headings may also contain navigation cards. */
   pageName?: string;
+  /** The top interactive modal; background controls are outside this scope. */
+  dialog?: { title: string; depth: number };
+  /** Visible actions which retain an existing manual confirmation boundary. */
+  blockedControls?: { name: string; reason: string }[];
   title: string;
   headings: string[];
   text: string;
@@ -190,6 +194,89 @@ export type PageObservation = {
   }[];
   truncated: boolean;
 };
+
+/** Goal coordination has its own schemas, separate from referenced DOM actions. */
+export const pageTaskToolNames = [
+  "page_task_start",
+  "page_task_finish",
+  "page_wait",
+] as const;
+export type PageTaskToolName = (typeof pageTaskToolNames)[number];
+export function isPageTaskToolName(value: unknown): value is PageTaskToolName {
+  return pageTaskToolNames.some((name) => name === value);
+}
+export const pageTaskStartSchema = z
+  .object({ goal: z.string().trim().min(1).max(500) })
+  .strict();
+export const pageTaskFinishSchema = z
+  .object({
+    outcome: z.enum(["completed", "needs_user"]),
+    summary: z.string().trim().min(1).max(500),
+    snapshotId: reference,
+    evidence: z.string().trim().min(1).max(180),
+  })
+  .strict();
+export const pageWaitSchema = z
+  .object({ seconds: z.number().int().min(1).max(10) })
+  .strict();
+export type PageTaskStartInput = z.infer<typeof pageTaskStartSchema>;
+export type PageTaskFinishInput = z.infer<typeof pageTaskFinishSchema>;
+
+export const pageTaskToolDefinitions = [
+  {
+    type: "function",
+    name: "page_task_start",
+    description:
+      "理解用户本轮明确要达到的完整目标并开始或恢复当前网页任务，返回当前真实页面。所有网页操作先建立目标；将必要的跨页、弹窗、选择和等待步骤自动串行完成，不让用户逐步报按钮。仅询问能力、闲聊、否定执行时不要开始。新话语打断后，只有用户明确要求继续才恢复原目标。goal忠实保留原意及禁止事项，不扩大任务。",
+    parameters: {
+      type: "object",
+      properties: {
+        goal: {
+          type: "string",
+          minLength: 1,
+          maxLength: 500,
+          description: "用户本轮明确要求的最终目标和限制，不是仅下一次点击",
+        },
+      },
+      required: ["goal"],
+      additionalProperties: false,
+    },
+  },
+  {
+    type: "function",
+    name: "page_task_finish",
+    description:
+      "以最新页面证据结束目标流程：completed仅在完整目标已有真实结果时使用；needs_user用于扫码、验证码、授权确认、目标歧义等确需用户参与的阻挡。summary说明完成结果或用户需做的具体一步；evidence原样摘取最新页面中支持结论的短文本、页名、路径或控件名，snapshotId来自同一最新观察。只说准备做或点击已派发不能作为目标完成依据。",
+    parameters: {
+      type: "object",
+      properties: {
+        outcome: { type: "string", enum: ["completed", "needs_user"] },
+        summary: { type: "string", minLength: 1, maxLength: 500 },
+        snapshotId: {
+          type: "string",
+          minLength: 1,
+          maxLength: 128,
+          pattern: "^[\\w-]+$",
+        },
+        evidence: { type: "string", minLength: 1, maxLength: 180 },
+      },
+      required: ["outcome", "summary", "snapshotId", "evidence"],
+      additionalProperties: false,
+    },
+  },
+  {
+    type: "function",
+    name: "page_wait",
+    description:
+      "当前网页目标正在执行、页面或后台任务仍在变化时等待1到10秒，然后重新读取真实页面。等待可以被用户打断。用于等弹窗、加载和任务结果，不要重复点击提交按钮来猜进度；等待期间没有执行额外业务动作。",
+    parameters: {
+      type: "object",
+      properties: { seconds: { type: "integer", minimum: 1, maximum: 10 } },
+      required: ["seconds"],
+      additionalProperties: false,
+    },
+  },
+];
 export type PageActionResult = {
   text: string;
   dispatched: boolean;
