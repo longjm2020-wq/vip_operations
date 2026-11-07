@@ -68,6 +68,76 @@ export class RealtimeFrameBudget {
     return true;
   }
 }
+/** Preserve a short interruption in provider writes without dropping or replaying
+ * speech. Once queued, audio and control/tool events share one ordered drain. */
+export class RealtimeUpstreamBuffer {
+  private queue: { payload: string; bytes: number; at: number }[] = [];
+  private queuedBytes = 0;
+  private closed = false;
+  constructor(
+    private bufferedAmount: () => number,
+    private write: (payload: string) => void,
+    private failed: (metrics: {
+      bufferedBytes: number;
+      queuedBytes: number;
+      queuedMessages: number;
+      waitMs: number;
+    }) => void,
+    private clock = () => performance.now(),
+  ) {}
+  send(event: Record<string, unknown>) {
+    if (this.closed) return;
+    const payload = JSON.stringify(event);
+    const bytes = Buffer.byteLength(payload);
+    const pending = this.bufferedAmount();
+    if (!this.queue.length && pending + bytes <= 256 * 1024) {
+      this.write(payload);
+      return;
+    }
+    this.queue.push({ payload, bytes, at: this.clock() });
+    this.queuedBytes += bytes;
+    this.check();
+  }
+  private check() {
+    if (this.closed) return false;
+    const bufferedBytes = this.bufferedAmount();
+    const waitMs = this.queue.length ? this.clock() - this.queue[0].at : 0;
+    if (
+      bufferedBytes > 512 * 1024 ||
+      this.queuedBytes > 128 * 1024 ||
+      this.queue.length > 100 ||
+      waitMs >= 2000
+    ) {
+      const metrics = {
+        bufferedBytes,
+        queuedBytes: this.queuedBytes,
+        queuedMessages: this.queue.length,
+        waitMs,
+      };
+      this.close();
+      this.failed(metrics);
+      return false;
+    }
+    return true;
+  }
+  flush() {
+    if (!this.queue.length || !this.check()) return;
+    // At most 40 ms of PCM per tick: catch up gradually after a brief stall.
+    for (let sent = 0; sent < 2 && this.queue.length; sent++) {
+      const next = this.queue[0];
+      if (this.bufferedAmount() + next.bytes > 256 * 1024) return;
+      this.queue.shift();
+      this.queuedBytes -= next.bytes;
+      this.write(next.payload);
+      if (this.closed) return;
+    }
+  }
+  close() {
+    this.closed = true;
+    this.queue = [];
+    this.queuedBytes = 0;
+  }
+}
 function relayFailure(error: unknown) {
   if (error instanceof HttpException) {
     const response = error.getResponse() as {
@@ -224,9 +294,24 @@ function runRelay(
     pong = true;
   let unregister: (() => void) | undefined;
   let health: ReturnType<typeof setInterval> | undefined;
+  let upstreamDrain: ReturnType<typeof setInterval> | undefined;
   let lifetime: ReturnType<typeof setTimeout> | undefined;
   let toolQueue = Promise.resolve();
   const frameBudget = new RealtimeFrameBudget();
+  const upstreamBuffer = new RealtimeUpstreamBuffer(
+    () => upstream?.bufferedAmount ?? 0,
+    (payload) => {
+      if (!closed && upstream?.readyState === WebSocket.OPEN)
+        upstream.send(payload);
+    },
+    (metrics) => {
+      console.warn("Realtime provider write congestion", {
+        provider: qwen ? "qwen" : "doubao",
+        ...metrics,
+      });
+      stop("语音服务连接持续拥塞，本次通话已停止，请稍后重新开始");
+    },
+  );
   let c = context;
   const send = (data: unknown) => {
     if (closed || client.readyState !== WebSocket.OPEN) return;
@@ -240,6 +325,8 @@ function runRelay(
     clearTimeout(connectTimer);
     clearTimeout(lifetime);
     clearInterval(health);
+    clearInterval(upstreamDrain);
+    upstreamBuffer.close();
     unregister?.();
     if (upstream) (qwen ? closeQwenSocket : closeDoubaoSocket)(upstream);
     client.close(1000);
@@ -284,10 +371,7 @@ function runRelay(
         if (closed) return;
         unregister = registerRealtimeRelay(id, () => stop());
         if (config.provider === "qwen")
-          qwen = new QwenRealtimeProtocol((e) => {
-            if (!closed && upstream?.readyState === WebSocket.OPEN)
-              upstream.send(JSON.stringify(e));
-          });
+          qwen = new QwenRealtimeProtocol((e) => upstreamBuffer.send(e));
         upstream = qwen
           ? qwenProviderSocket(config.key, config.workspaceId!)
           : doubaoProviderSocket(config.key);
@@ -358,6 +442,13 @@ function runRelay(
               const expiresAt = await activateRealtimeSocket(c, id);
               if (closed) return;
               ready = true;
+              upstreamDrain = setInterval(() => {
+                try {
+                  upstreamBuffer.flush();
+                } catch {
+                  stop("语音服务连接已中断，请重新开始");
+                }
+              }, 20);
               clearTimeout(connectTimer);
               lifetime = setTimeout(
                 () => stop("本次实时通话已结束，可再次开始"),
@@ -442,12 +533,10 @@ function runRelay(
                     )
                       qwen.toolResults(e.response_id, qwenResults);
                     else if (upstream?.readyState === WebSocket.OPEN && !closed)
-                      upstream.send(
-                        JSON.stringify({
-                          type: "conversation.item.create",
-                          items: results,
-                        }),
-                      );
+                      upstreamBuffer.send({
+                        type: "conversation.item.create",
+                        items: results,
+                      });
                   })
                   .catch(() => stop("语音操作未完成，请查看完整对话后再试"));
                 continue;
@@ -465,10 +554,8 @@ function runRelay(
       if (!ready || upstream?.readyState !== WebSocket.OPEN)
         return stop("实时语音尚未连接，请重新开始");
       if (!frameBudget.take()) return stop("音频持续发送过快，请重新开始");
-      if (upstream.bufferedAmount > 256 * 1024)
-        return stop("实时音频网络持续拥塞，请检查网络后重新开始");
       if (qwen) qwen.command(allowed);
-      else upstream.send(JSON.stringify(allowed));
+      else upstreamBuffer.send(allowed);
     })().catch((error) => stop(relayFailure(error)));
   });
 }

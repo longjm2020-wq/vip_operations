@@ -69,6 +69,7 @@ import {
   attachRealtimeRelay,
   publicRealtimeEvent,
   RealtimeFrameBudget,
+  RealtimeUpstreamBuffer,
 } from "../../apps/api/src/modules/workspace/realtime-relay.js";
 import { doubaoConfiguration } from "../../apps/api/src/modules/workspace/doubao-realtime.js";
 
@@ -87,6 +88,111 @@ describe("realtime network jitter allowance", () => {
     now += 1000;
     for (let frame = 0; frame < 60; frame++) expect(budget.take()).toBe(true);
     expect(budget.take()).toBe(false);
+  });
+  it("retains audio, mute and tool results in order through a brief provider stall", () => {
+    let now = 0,
+      buffered = 300 * 1024;
+    const writes: Record<string, unknown>[] = [];
+    const failed = vi.fn();
+    const queue = new RealtimeUpstreamBuffer(
+      () => buffered,
+      (p) => writes.push(JSON.parse(p)),
+      failed,
+      () => now,
+    );
+    const events = [
+      { type: "input_audio_buffer.append", audio: "first" },
+      { type: "input_audio_buffer.append", audio: "second" },
+      { type: "input_audio_buffer.clear" },
+      { type: "conversation.item.create", item: { output: "result" } },
+    ];
+    events.forEach((e) => queue.send(e));
+    now = 800;
+    queue.flush();
+    expect(writes).toEqual([]);
+    expect(failed).not.toHaveBeenCalled();
+    buffered = 0;
+    queue.flush();
+    expect(writes).toEqual(events.slice(0, 2));
+    now += 20;
+    queue.flush();
+    expect(writes).toEqual(events);
+    queue.flush();
+    expect(writes).toEqual(events);
+  });
+  it("stops once after two seconds of retained speech and never replays it later", () => {
+    let now = 0,
+      buffered = 300 * 1024;
+    const write = vi.fn(),
+      failed = vi.fn();
+    const queue = new RealtimeUpstreamBuffer(
+      () => buffered,
+      write,
+      failed,
+      () => now,
+    );
+    queue.send({ type: "input_audio_buffer.append", audio: "private-speech" });
+    now = 1999;
+    queue.flush();
+    expect(failed).not.toHaveBeenCalled();
+    now = 2000;
+    queue.flush();
+    expect(failed).toHaveBeenCalledTimes(1);
+    expect(failed).toHaveBeenCalledWith({
+      bufferedBytes: buffered,
+      queuedBytes: expect.any(Number),
+      queuedMessages: 1,
+      waitMs: 2000,
+    });
+    expect(JSON.stringify(failed.mock.calls)).not.toContain("private-speech");
+    buffered = 0;
+    queue.flush();
+    queue.send({ type: "input_audio_buffer.commit" });
+    expect(write).not.toHaveBeenCalled();
+    expect(failed).toHaveBeenCalledTimes(1);
+  });
+  it("caps both queued audio duration and total bytes, including tool results", () => {
+    const failed = vi.fn(),
+      write = vi.fn();
+    const queue = new RealtimeUpstreamBuffer(() => 300 * 1024, write, failed);
+    for (let i = 0; i < 100; i++)
+      queue.send({
+        type: "input_audio_buffer.append",
+        audio: Buffer.alloc(640).toString("base64"),
+      });
+    expect(failed).not.toHaveBeenCalled();
+    queue.send({ type: "input_audio_buffer.commit" });
+    expect(failed).toHaveBeenCalledTimes(1);
+    const oversized = new RealtimeUpstreamBuffer(
+      () => 300 * 1024,
+      write,
+      failed,
+    );
+    oversized.send({
+      type: "conversation.item.create",
+      output: "x".repeat(128 * 1024),
+    });
+    expect(failed).toHaveBeenCalledTimes(2);
+    const fullSocket = new RealtimeUpstreamBuffer(
+      () => 513 * 1024,
+      write,
+      failed,
+    );
+    fullSocket.send({ type: "input_audio_buffer.commit" });
+    expect(failed).toHaveBeenCalledTimes(3);
+    expect(write).not.toHaveBeenCalled();
+  });
+  it("abandons queued input immediately when a session closes", () => {
+    let buffered = 300 * 1024;
+    const write = vi.fn(),
+      failed = vi.fn();
+    const queue = new RealtimeUpstreamBuffer(() => buffered, write, failed);
+    queue.send({ type: "input_audio_buffer.append", audio: "pending" });
+    queue.close();
+    buffered = 0;
+    queue.flush();
+    expect(write).not.toHaveBeenCalled();
+    expect(failed).not.toHaveBeenCalled();
   });
 });
 
@@ -163,7 +269,14 @@ async function client(headers: Record<string, string> = {}) {
   socket.on("message", (d) => events.push(JSON.parse(d.toString())));
   return { socket, events };
 }
-async function ready() {
+async function ready(provider = "doubao") {
+  if (provider === "qwen")
+    f.claim.mockResolvedValue({
+      provider,
+      key: "encrypted-server-only",
+      workspaceId: "workspace-1",
+      voice: "Tina",
+    });
   const connection = await client();
   connection.socket.send(
     JSON.stringify({ type: "authenticate", ticket: "a".repeat(43) }),
@@ -180,6 +293,17 @@ async function ready() {
     ),
     false,
   );
+  if (provider === "qwen")
+    upstream.emit(
+      "message",
+      Buffer.from(
+        JSON.stringify({
+          type: "session.updated",
+          session: { id: "provider-private-id", voice: "Tina" },
+        }),
+      ),
+      false,
+    );
   await vi.waitFor(() =>
     expect(connection.events.some((e) => e.type === "xuti.ready")).toBe(true),
   );
@@ -187,6 +311,74 @@ async function ready() {
 }
 
 describe("full-duplex relay", () => {
+  it.each(["doubao", "qwen"])(
+    "recovers %s provider backpressure without dropping audio or reordering mute",
+    async (provider) => {
+      const { socket, events, upstream } = await ready(provider);
+      const before = upstream.sent.length;
+      const frames = [
+        Buffer.alloc(640, 1).toString("base64"),
+        Buffer.alloc(640, 2).toString("base64"),
+      ];
+      upstream.bufferedAmount = 300 * 1024;
+      for (const audio of frames)
+        socket.send(
+          JSON.stringify({ type: "input_audio_buffer.append", audio }),
+        );
+      socket.send(JSON.stringify({ type: "input_audio_mute.commit" }));
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      expect(upstream.sent).toHaveLength(before);
+      expect(events.some((e) => e.type === "xuti.error")).toBe(false);
+      upstream.bufferedAmount = 0;
+      await vi.waitFor(() => expect(upstream.sent).toHaveLength(before + 3));
+      expect(upstream.sent.slice(before)).toEqual([
+        ...frames.map((audio) => ({
+          type: "input_audio_buffer.append",
+          audio,
+        })),
+        {
+          type:
+            provider === "qwen"
+              ? "input_audio_buffer.clear"
+              : "input_audio_mute.commit",
+        },
+      ]);
+      expect(socket.readyState).toBe(WebSocket.OPEN);
+      expect(f.provider).toHaveBeenCalledTimes(1);
+    },
+  );
+  it("closes a persistently congested upstream without sending retained speech", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const { socket, events, upstream } = await ready();
+      upstream.bufferedAmount = 300 * 1024;
+      socket.send(
+        JSON.stringify({
+          type: "input_audio_buffer.append",
+          audio: Buffer.alloc(640).toString("base64"),
+        }),
+      );
+      await once(socket, "close");
+      expect(events.at(-1)).toMatchObject({
+        type: "xuti.error",
+        message: "语音服务连接持续拥塞，本次通话已停止，请稍后重新开始",
+      });
+      expect(
+        upstream.sent.some((e) => e.type === "input_audio_buffer.append"),
+      ).toBe(false);
+      expect(f.provider).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledWith(
+        "Realtime provider write congestion",
+        expect.objectContaining({
+          provider: "doubao",
+          bufferedBytes: 300 * 1024,
+          queuedMessages: 1,
+        }),
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
   it.each(["workspace_request", "desktop_request"])(
     "adapts Qwen readiness, scoped %s execution and resumed PCM output through the authenticated relay",
     async (tool) => {

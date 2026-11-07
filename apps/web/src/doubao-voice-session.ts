@@ -59,6 +59,7 @@ export class DoubaoVoiceSession {
   private output = new Set<AudioBufferSourceNode>();
   private outputUntil = 0;
   private frames: ArrayBuffer[] = [];
+  private congestedSince?: number;
   private connectTimer?: ReturnType<typeof setTimeout>;
   private expiry?: ReturnType<typeof setTimeout>;
   private heartbeat?: ReturnType<typeof setInterval>;
@@ -397,6 +398,7 @@ export class DoubaoVoiceSession {
   }
   private setCapture(active: boolean) {
     this.frames = [];
+    this.congestedSince = undefined;
     this.capture?.port.postMessage({ active });
     this.stream?.getAudioTracks().forEach((track) => {
       track.enabled = active;
@@ -460,8 +462,10 @@ export class DoubaoVoiceSession {
         )
           return;
         this.frames.push(event.data);
-        if (this.frames.length > 25)
-          this.fail("音频传输延迟过大，请检查网络或设备后重试");
+        // Retain up to two seconds in order through a short render/network stall.
+        // Never silently discard part of a spoken instruction to catch up.
+        if (this.frames.length > 100)
+          this.fail("麦克风音频积压过久，通话已停止，请重新开始");
       };
       capture.onprocessorerror = () =>
         this.fail("麦克风处理已中断，请重新开始通话");
@@ -507,19 +511,34 @@ export class DoubaoVoiceSession {
       let nextFrameAt = performance.now() + 20;
       const pump = () => {
         if (this.closed) return;
-        if (this.ready && !this.muted && this.frames.length) {
-          if (socket.bufferedAmount > 64000) {
-            this.fail("音频传输延迟过大，请检查网络后重试");
+        if (this.ready && !this.muted) {
+          const now = performance.now();
+          if (socket.bufferedAmount > 256000) {
+            this.fail("本机到网站的音频连接积压过多，请重新开始");
             return;
           }
-          const frame = this.frames.shift();
-          if (frame)
-            this.sendEvent({
-              type: "input_audio_buffer.append",
-              audio: bytesBase64(new Uint8Array(frame)),
-            });
+          if (socket.bufferedAmount > 64000) {
+            this.congestedSince ??= now;
+            if (now - this.congestedSince >= 2000) {
+              this.fail("本机到网站的音频连接持续拥塞，请重新开始");
+              return;
+            }
+          } else {
+            this.congestedSince = undefined;
+            // Small, bounded catch-up batches recover latency after rendering a
+            // new page without flooding the relay with the entire backlog.
+            const count = this.frames.length > 5 ? 2 : 1;
+            for (let i = 0; i < count && socket.bufferedAmount <= 64000; i++) {
+              const frame = this.frames.shift();
+              if (!frame) break;
+              this.sendEvent({
+                type: "input_audio_buffer.append",
+                audio: bytesBase64(new Uint8Array(frame)),
+              });
+            }
+          }
         }
-        // Compensate normal timer drift without bursting an old backlog after a stall.
+        // Compensate timer drift; the batch above bounds recovery after a stall.
         nextFrameAt += 20;
         const now = performance.now();
         if (nextFrameAt < now) nextFrameAt = now + 20;

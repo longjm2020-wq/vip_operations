@@ -226,6 +226,119 @@ describe("full duplex PCM session", () => {
     expect(Socket.last.close).toHaveBeenCalledOnce();
   });
 
+  it("drains a rendering backlog in bounded batches without losing or replaying audio", async () => {
+    const cb = callbacks();
+    session = new DoubaoVoiceSession(cb);
+    await session.start(options);
+    ready();
+    for (let i = 0; i < 50; i++) {
+      const frame = new ArrayBuffer(640);
+      new DataView(frame).setUint16(0, i, true);
+      Capture.last.port.onmessage?.({ data: frame });
+    }
+    expect(cb.error).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(20);
+    expect(
+      Socket.last.sent.filter((e) => e.type === "input_audio_buffer.append"),
+    ).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(1000);
+    const frames = Socket.last.sent.filter(
+      (e) => e.type === "input_audio_buffer.append",
+    );
+    expect(
+      frames.map((e) => Buffer.from(String(e.audio), "base64").readUInt16LE(0)),
+    ).toEqual(Array.from({ length: 50 }, (_, i) => i));
+    expect(track.stop).not.toHaveBeenCalled();
+  });
+
+  it("recovers a brief transport backlog in the same session", async () => {
+    const cb = callbacks();
+    session = new DoubaoVoiceSession(cb);
+    await session.start(options);
+    ready();
+    Socket.last.bufferedAmount = 65000;
+    for (let i = 0; i < 40; i++) Capture.last.frame();
+    await vi.advanceTimersByTimeAsync(600);
+    expect(
+      Socket.last.sent.filter((e) => e.type === "input_audio_buffer.append"),
+    ).toHaveLength(0);
+    expect(cb.error).not.toHaveBeenCalled();
+    Socket.last.bufferedAmount = 0;
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(
+      Socket.last.sent.filter((e) => e.type === "input_audio_buffer.append"),
+    ).toHaveLength(40);
+    expect(track.stop).not.toHaveBeenCalled();
+  });
+
+  it("stops persistent congestion even without further microphone frames, and releases resources", async () => {
+    const cb = callbacks();
+    session = new DoubaoVoiceSession(cb);
+    await session.start(options);
+    ready();
+    Socket.last.bufferedAmount = 65000;
+    await vi.advanceTimersByTimeAsync(2100);
+    expect(cb.error).toHaveBeenCalledWith(
+      "本机到网站的音频连接持续拥塞，请重新开始",
+    );
+    expect(track.stop).toHaveBeenCalledOnce();
+    expect(Socket.last.close).toHaveBeenCalledOnce();
+    Socket.last.bufferedAmount = 0;
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(
+      Socket.last.sent.filter((e) => e.type === "input_audio_buffer.append"),
+    ).toHaveLength(0);
+  });
+
+  it("stops immediately at the hard transport cap and never resumes after closure", async () => {
+    const cb = callbacks();
+    session = new DoubaoVoiceSession(cb);
+    await session.start(options);
+    ready();
+    Capture.last.frame();
+    Socket.last.bufferedAmount = 256001;
+    await vi.advanceTimersByTimeAsync(20);
+    expect(cb.error).toHaveBeenCalledWith(
+      "本机到网站的音频连接积压过多，请重新开始",
+    );
+    expect(track.stop).toHaveBeenCalledOnce();
+    expect(Capture.last.port.close).toHaveBeenCalledOnce();
+    Socket.last.bufferedAmount = 0;
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(
+      Socket.last.sent.filter((e) => e.type === "input_audio_buffer.append"),
+    ).toHaveLength(0);
+  });
+
+  it("does not resend queued microphone input after mute and resume", async () => {
+    session = new DoubaoVoiceSession(callbacks());
+    await session.start(options);
+    ready();
+    Socket.last.bufferedAmount = 65000;
+    for (let i = 0; i < 20; i++) Capture.last.frame();
+    await vi.advanceTimersByTimeAsync(100);
+    session.toggleMute();
+    Socket.last.bufferedAmount = 0;
+    session.toggleMute();
+    Capture.last.frame();
+    await vi.advanceTimersByTimeAsync(500);
+    expect(
+      Socket.last.sent.filter((e) => e.type === "input_audio_buffer.append"),
+    ).toHaveLength(1);
+  });
+
+  it("fails safely on an excessive audio backlog instead of skipping a command fragment", async () => {
+    const cb = callbacks();
+    session = new DoubaoVoiceSession(cb);
+    await session.start(options);
+    ready();
+    for (let i = 0; i < 101; i++) Capture.last.frame();
+    expect(cb.error).toHaveBeenCalledWith(
+      "麦克风音频积压过久，通话已停止，请重新开始",
+    );
+    expect(track.stop).toHaveBeenCalledOnce();
+  });
+
   it("keeps microphone live during speech, clears playback on barge in and ignores old response frames", async () => {
     const cb = callbacks();
     session = new DoubaoVoiceSession(cb);

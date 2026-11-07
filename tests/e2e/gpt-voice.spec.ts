@@ -108,11 +108,7 @@ test("千问实时语音绑定所选电脑，刷新电脑任务并在同一通�
   expect(starts).toHaveLength(1);
   expect(starts[0]).toMatchObject({ desktopDeviceId: deviceId });
   expect(starts[0]).not.toHaveProperty("authorizationId");
-  // Full-page captures can stall the main thread while the synthetic audio worklet
-  // keeps recording. Mute during visual capture; exercise navigation unmuted.
-  await bubble.getByRole("button", { name: "麦克风静音", exact: true }).click();
   await page.screenshot({ path: ".local/realtime-desktop-voice.png" });
-  await bubble.getByRole("button", { name: "取消静音", exact: true }).click();
   const before = desktopReads;
   socket!.send(
     JSON.stringify({
@@ -140,7 +136,6 @@ test("千问实时语音绑定所选电脑，刷新电脑任务并在同一通�
   await expect(page).toHaveURL(/\/my-workspace$/);
   expect(starts).toHaveLength(1);
   expect(await page.evaluate(() => window.gptVoiceTest.starts)).toBe(1);
-  await bubble.getByRole("button", { name: "麦克风静音", exact: true }).click();
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(bubble.locator(".companion-voice-target")).toBeInViewport();
   await page.screenshot({ path: ".local/realtime-desktop-voice-mobile.png" });
@@ -225,6 +220,25 @@ for (const provider of ["doubao", "qwen"] as const) {
       (f) => f.type === "input_audio_buffer.append",
     ))
       expect(Buffer.from(String(frame.audio), "base64").length).toBe(640);
+    // The audio worklet continues recording while navigation/rendering blocks
+    // the main thread. Recover that backlog within this same live session.
+    const beforeStall = frames.filter(
+      (f) => f.type === "input_audio_buffer.append",
+    ).length;
+    await page.evaluate(() => {
+      const until = performance.now() + 750;
+      while (performance.now() < until) {
+        /* Simulated rendering stall. */
+      }
+    });
+    await expect
+      .poll(
+        () =>
+          frames.filter((f) => f.type === "input_audio_buffer.append").length,
+      )
+      .toBeGreaterThan(beforeStall + 45);
+    await expect(bubble.getByRole("status")).toHaveText("实时聆听中，你说");
+    expect(await page.evaluate(() => window.gptVoiceTest.starts)).toBe(1);
     await bubble
       .getByRole("button", { name: "麦克风静音", exact: true })
       .click();
