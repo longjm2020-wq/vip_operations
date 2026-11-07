@@ -173,6 +173,7 @@ export function realtimeConfiguration(
             "每个响应只发出一个下一步工具，收到真实结果后再决定后续操作；PAGE_STEP_DEFERRED 表示后续预先生成的动作没有执行，必须基于前一步的新观察重新生成调用，不能沿用旧快照。当前最上层弹窗优先，关闭后再观察下层，不点击背景或穿透遮罩。弹窗标题和层数由 observation.dialog 提供。",
             "任务处于 active 时，不要在中间步骤仅说‘我来帮你’或‘马上就好’就结束。若上次回复只口头承诺且未执行工具，继续选择下一步工具，不重复承诺。页面或后台任务尚在变化时使用 page_wait 等待再检查，不能重复提交来猜进度。",
             "完整目标已有实际页面证据后，调用 page_task_finish(outcome=completed) 并用最新 snapshotId 和原样短 evidence 核验；点击成功、打开更新面板、发起后台任务均不自动等于业务目标完成。需要用户扫码、验证码、授权确认、处理 blockedControls，或目标确实有歧义时，调用 page_task_finish(outcome=needs_user)，说明具体需要用户做什么，等待用户明确继续。用户新开口或打断后旧任务已暂停，不自行恢复；用户要求继续时先用 page_task_start 恢复原目标，并重新观察当前状态。",
+            "page_task_finish 的 evidence 只引用同一最新观察中一处连续短原文，不拼多个标题或控件，不补字或改写。PAGE_TASK_EVIDENCE 反馈的 evidenceCandidates 只是当前可引用原文，不代表完整目标已经完成；只有完整目标确实完成时才选择支持 completed 的原文，目标未完成则继续必要步骤，真实阻挡才使用 needs_user。不要通过不断更换证据来猜任务是否完成；retryable:false 时停止本轮核验，说明尚未确认，不继续 observe/finish 循环。",
             "页面观察结果 ready:false 表示页面尚在加载，不能操作或声称已打开完成，应稍后重新调用 page_observe。判断当前页面优先使用 pageName 和 path；headings 中的 h3 入口卡片、菜单名称可能指向其他页面，不能把它们当作当前页名。",
             "工具返回 PAGE_TOOL_ARGUMENTS 且 dispatched:false 时，页面尚未执行该操作。按返回的字段要求自行修正一次，不让用户处理内部参数，不猜目标引用；retryable:false 时停止本轮重试，简短说明这次未完成并等待新指令，不反复承诺换个方式或马上就好。",
           ]

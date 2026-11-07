@@ -581,23 +581,8 @@
     opacity: 0.95;
   }
 }
-.workspace-dock:is(:focus-within, [data-paused="true"])
-  :is(.workspace-dock-halo-sweep, .workspace-dock-halo-counter),
-.personal-workspace:is(
-    [data-world-dragging="true"],
-    [data-nest-dragging="true"]
-  )
-  :is(.workspace-dock-halo-sweep, .workspace-dock-halo-counter),
-.workspace-dock:is(:focus-within, [data-paused="true"])
-  .workspace-dock-label::before,
-.personal-workspace:is(
-    [data-world-dragging="true"],
-    [data-nest-dragging="true"]
-  )
-  .workspace-dock-label::before {
-  animation-play-state: paused;
-}
-@media (max-width: 767px), (prefers-reduced-motion: reduce) {
+/* These rings are decoration, independent of paused orbital positioning. */
+@media (prefers-reduced-motion: reduce) {
   .workspace-dock-halo-sweep,
   .workspace-dock-halo-counter,
   .workspace-dock-label::before {
@@ -692,12 +677,7 @@
     .workspace-ai-core-aura,
     .workspace-ai-core-resonance,
     .workspace-ai-core-orbits
-  ),
-.personal-workspace:is(
-    [data-world-dragging="true"],
-    [data-nest-dragging="true"]
-  )
-  .workspace-dock-item::before {
+  ) {
   animation-play-state: paused;
 }
 @media (max-width: 767px) {

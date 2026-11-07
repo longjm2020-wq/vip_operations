@@ -114,9 +114,7 @@
 .workspace-dock:focus-within .workspace-dock-orbit,
 .workspace-dock:focus-within .workspace-dock-face,
 .workspace-dock[data-paused="true"] .workspace-dock-orbit,
-.workspace-dock[data-paused="true"] .workspace-dock-face,
-.workspace-dock:focus-within .workspace-dock-item::before,
-.workspace-dock[data-paused="true"] .workspace-dock-item::before {
+.workspace-dock[data-paused="true"] .workspace-dock-face {
   animation-play-state: paused;
 }
 .workspace-dock-item:hover,
@@ -702,8 +700,7 @@
     padding: 5px;
   }
   .workspace-dock-orbit,
-  .workspace-dock-face,
-  .workspace-dock-item::before {
+  .workspace-dock-face {
     animation: none;
   }
   .workspace-dock-face {

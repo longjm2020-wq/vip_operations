@@ -154,6 +154,163 @@ async function blankPoint(page: Page) {
   return point;
 }
 
+for (const [label, viewport] of [
+  ["桌面", { width: 1920, height: 1080 }],
+  ["手机", { width: 390, height: 844 }],
+] as const) {
+  test(`分支五个入口装饰环在卡片、聚焦和拖动时持续旋转，位置文字稳定（${label}）`, async ({
+    page,
+  }) => {
+    const state = await fixture(page);
+    await page.setViewportSize(viewport);
+    await page.goto("/my-workspace");
+    await page
+      .getByRole("button", { name: "展开工作台分支图", exact: true })
+      .click();
+    await expect(world(page)).toHaveAttribute(
+      "data-workspace-layout",
+      "branches",
+    );
+    const entries = page.locator(".workspace-dock-item");
+    await expect(entries).toHaveCount(5);
+    const toolsEntry = menu(page).getByRole("button", {
+      name: "打开常用工具",
+      exact: true,
+    });
+    await toolsEntry.click();
+    await expect(
+      page.getByRole("dialog", { name: "常用工具", exact: true }),
+    ).toBeVisible();
+    await expect(menu(page)).toHaveAttribute("data-paused", "true");
+    await toolsEntry.focus();
+    await expect(toolsEntry).toBeFocused();
+    await expect
+      .poll(() =>
+        entries.evaluateAll((elements) =>
+          elements.every((element) =>
+            element
+              .getAnimations()
+              .every((animation) => animation.playState !== "running"),
+          ),
+        ),
+      )
+      .toBe(true);
+    const readRings = () =>
+      entries.evaluateAll((elements) =>
+        elements.map((element) => {
+          const label = element.querySelector(".workspace-dock-label")!;
+          const text = document.querySelector(
+            `.workspace-dock-copy[data-dock-copy="${element.getAttribute("data-panel")}"] strong`,
+          )!;
+          const rect = element.getBoundingClientRect();
+          const textRect = text.getBoundingClientRect();
+          return {
+            x: rect.x,
+            y: rect.y,
+            textX: textRect.x,
+            textY: textRect.y,
+            glow: getComputedStyle(label, "::before").animationPlayState,
+            rings: Array.from(
+              element.querySelectorAll(
+                ".workspace-dock-halo-sweep,.workspace-dock-halo-counter",
+              ),
+            ).map((ring) => {
+              const style = getComputedStyle(ring);
+              const matrix = new DOMMatrix(style.transform);
+              return {
+                name: style.animationName,
+                state: style.animationPlayState,
+                a: matrix.a,
+                b: matrix.b,
+              };
+            }),
+          };
+        }),
+      );
+    const initial = await readRings();
+    expect(initial).toHaveLength(5);
+    for (const entry of initial) {
+      expect(entry.glow).toBe("running");
+      expect(entry.rings).toHaveLength(2);
+      for (const ring of entry.rings)
+        expect(ring).toMatchObject({
+          name: "workspace-dock-ring",
+          state: "running",
+        });
+    }
+    await expect
+      .poll(async () => {
+        const current = await readRings();
+        return current.every((entry, index) =>
+          entry.rings.every(
+            (ring, ringIndex) =>
+              Math.hypot(
+                ring.a - initial[index]!.rings[ringIndex]!.a,
+                ring.b - initial[index]!.rings[ringIndex]!.b,
+              ) > 0.01,
+          ),
+        );
+      })
+      .toBe(true);
+    const after = await readRings();
+    for (const [index, entry] of after.entries()) {
+      expect(
+        Math.hypot(entry.x - initial[index]!.x, entry.y - initial[index]!.y),
+      ).toBeLessThan(1);
+      expect(
+        Math.hypot(
+          entry.textX - initial[index]!.textX,
+          entry.textY - initial[index]!.textY,
+        ),
+      ).toBeLessThan(1);
+    }
+    // Hold a real nest drag without crossing the layout-toggle threshold.
+    const handle = page.getByRole("button", {
+      name: /拖动巢穴[展开收起]+工作台/,
+    });
+    const stroke = (await handle.locator("circle").boundingBox())!;
+    await page.mouse.move(stroke.x, stroke.y + stroke.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(stroke.x + 25, stroke.y + stroke.height / 2, {
+      steps: 3,
+    });
+    await expect(world(page)).toHaveAttribute("data-nest-dragging", "true");
+    const duringDrag = await readRings();
+    await expect
+      .poll(async () => {
+        const current = await readRings();
+        return current.every((entry, index) =>
+          entry.rings.every(
+            (ring, ringIndex) =>
+              ring.state === "running" &&
+              Math.hypot(
+                ring.a - duringDrag[index]!.rings[ringIndex]!.a,
+                ring.b - duringDrag[index]!.rings[ringIndex]!.b,
+              ) > 0.01,
+          ),
+        );
+      })
+      .toBe(true);
+    await page.mouse.up();
+    await expect(world(page)).toHaveAttribute(
+      "data-workspace-layout",
+      "branches",
+    );
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await expect
+      .poll(async () =>
+        (await readRings()).every((entry) =>
+          entry.rings.every((ring) => ring.name === "none"),
+        ),
+      )
+      .toBe(true);
+    expect(state.writes).toEqual([]);
+    expect(
+      await page.evaluate(() => window.workspaceBranchMicrophoneRequests),
+    ).toBe(0);
+  });
+}
+
 test("每条分支只有一束连续流光，缩放后不平铺且减少动态效果时隐藏", async ({
   page,
 }) => {

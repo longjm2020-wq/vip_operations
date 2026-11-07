@@ -487,6 +487,21 @@ describe("native realtime voice authorization and lifecycle", () => {
     expect(result.configuration!.session.instructions).toContain(
       "先调用 page_task_start 保留完整目标及条件",
     );
+    expect(result.configuration!.session.instructions).toContain(
+      "evidenceCandidates 只是当前可引用原文，不代表完整目标已经完成",
+    );
+    const finishTool = result.configuration!.session.tools.find(
+      (tool) => tool.function.name === "page_task_finish",
+    );
+    expect(finishTool!.function.parameters).toMatchObject({
+      properties: {
+        evidence: {
+          type: "string",
+          maxLength: 180,
+          description: expect.stringContaining("一处连续短原文"),
+        },
+      },
+    });
     expect(result.configuration!.session.instructions).toContain("不可信数据");
     expect(result.configuration!.session.instructions).toContain(
       "ready:false 表示页面尚在加载，不能操作",

@@ -246,7 +246,7 @@ export const pageTaskToolDefinitions = [
     type: "function",
     name: "page_task_finish",
     description:
-      "以最新页面证据结束目标流程：completed仅在完整目标已有真实结果时使用；needs_user用于扫码、验证码、授权确认、目标歧义等确需用户参与的阻挡。summary说明完成结果或用户需做的具体一步；evidence原样摘取最新页面中支持结论的短文本、页名、路径或控件名，snapshotId来自同一最新观察。只说准备做或点击已派发不能作为目标完成依据。",
+      "以最新页面证据结束目标流程：completed仅在完整目标已有真实结果时使用；needs_user用于扫码、验证码、授权确认、目标歧义等确需用户参与的阻挡。summary说明完成结果或用户需做的具体一步；evidence只引用最新观察中一处连续短原文，可来自短文本、页名、路径或单个控件名，不拼多个标题或控件，不补字或改写，snapshotId来自同一最新观察。反馈的evidenceCandidates只是引用格式参考，不代表目标完成；只有完整目标确实完成时，才能选择支持completed结论的原文，否则继续必要步骤或说明真实阻挡。只说准备做或点击已派发不能作为目标完成依据。",
     parameters: {
       type: "object",
       properties: {
@@ -258,7 +258,13 @@ export const pageTaskToolDefinitions = [
           maxLength: 128,
           pattern: "^[\\w-]+$",
         },
-        evidence: { type: "string", minLength: 1, maxLength: 180 },
+        evidence: {
+          type: "string",
+          minLength: 1,
+          maxLength: 180,
+          description:
+            "只引用同一最新观察中一处连续短原文，不拼多个标题或控件，不补字或改写。反馈候选不代表目标完成，须先确认完整目标或真实阻挡，再选择支持相应结论的原文。",
+        },
       },
       required: ["outcome", "summary", "snapshotId", "evidence"],
       additionalProperties: false,

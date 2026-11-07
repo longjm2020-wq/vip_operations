@@ -387,7 +387,10 @@ describe("Qwen goal-driven page workflow", () => {
       );
       await vi.waitFor(() =>
         expect(pageOutput("finish-call")).toMatchObject({
-          code: "PAGE_TASK_EVIDENCE",
+          code:
+            kind === "stale-id" || kind === "changed-dom"
+              ? "PAGE_TASK_SNAPSHOT"
+              : "PAGE_TASK_EVIDENCE",
           dispatched: false,
           task: { status: "active" },
         }),
@@ -400,8 +403,290 @@ describe("Qwen goal-driven page workflow", () => {
           id,
           "更新数据",
         );
+      if (kind !== "invented-evidence")
+        expect(pageOutput("finish-call")).not.toHaveProperty(
+          "evidenceCandidates",
+        );
+      if (kind === "changed-evidence")
+        expect(pageOutput("finish-call")).toMatchObject({
+          reason: "changed",
+          text: expect.stringContaining("不能改用其他页名或控件代替"),
+        });
     },
   );
+  it("offers only live verified contiguous evidence candidates for joined text and accepts one correction without re-observing", async () => {
+    await startWorkflow();
+    const view = {
+      ...observation,
+      pageName: "经营分析",
+      text: "统计日期\n近 15 天\n按货号分析\n现场已失效的文字",
+    };
+    f.observe.mockReturnValue(view);
+    const actual = ["经营分析", "近 15 天", "按货号分析"];
+    f.currentEvidence.mockImplementation(
+      (id, evidence) => id === view.snapshotId && actual.includes(evidence),
+    );
+    pageResponse(
+      "page_task_start",
+      { goal: "查看指定报表视图" },
+      "start",
+      "start-call",
+    );
+    await vi.waitFor(() => expect(pageOutput("start-call")).toBeDefined());
+    pageResponse(
+      "page_task_finish",
+      {
+        outcome: "completed",
+        summary: "已切换视图",
+        snapshotId: view.snapshotId,
+        evidence: "统计日期 近 15 天 按货号分析",
+      },
+      "joined",
+      "joined-call",
+    );
+    await vi.waitFor(() =>
+      expect(pageOutput("joined-call")).toMatchObject({
+        code: "PAGE_TASK_EVIDENCE",
+        reason: "format",
+        dispatched: false,
+        retryable: true,
+        finishAttemptsRemaining: 2,
+        evidenceCandidates: actual,
+        task: { status: "active" },
+      }),
+    );
+    expect(pageOutput("joined-call").text).toContain("不必反复 page_observe");
+    expect(pageOutput("joined-call").text).toContain("整个目标已达到");
+    for (const candidate of pageOutput("joined-call").evidenceCandidates)
+      expect(f.currentEvidence).toHaveBeenCalledWith(
+        view.snapshotId,
+        candidate,
+      );
+    expect(f.observe).toHaveBeenCalledOnce();
+    pageResponse(
+      "page_task_finish",
+      {
+        outcome: "completed",
+        summary: "目标视图已显示",
+        snapshotId: view.snapshotId,
+        evidence: "按货号分析",
+      },
+      "fixed",
+      "fixed-call",
+    );
+    await vi.waitFor(() =>
+      expect(pageOutput("fixed-call")).toMatchObject({
+        task: { status: "completed" },
+      }),
+    );
+    expect(f.observe).toHaveBeenCalledOnce();
+    expect(f.action).not.toHaveBeenCalled();
+  });
+  it("bounds live evidence candidate scans and never constructs a combined quotation", async () => {
+    await startWorkflow();
+    f.observe.mockReturnValue({
+      ...observation,
+      text: Array.from({ length: 100 }, (_, i) => `原文片段${i}`).join("\n"),
+    });
+    f.currentEvidence.mockReturnValue(false);
+    pageResponse(
+      "page_task_start",
+      { goal: "核对页面" },
+      "start",
+      "start-call",
+    );
+    await vi.waitFor(() => expect(pageOutput("start-call")).toBeDefined());
+    pageResponse(
+      "page_task_finish",
+      {
+        outcome: "completed",
+        summary: "核对结束",
+        snapshotId: observation.snapshotId,
+        evidence: "拼接的无效证据",
+      },
+      "invalid",
+      "invalid-call",
+    );
+    await vi.waitFor(() =>
+      expect(pageOutput("invalid-call")).toMatchObject({
+        reason: "format",
+        evidenceCandidates: [],
+      }),
+    );
+    expect(f.currentEvidence.mock.calls.length).toBeLessThanOrEqual(30);
+    expect(
+      f.currentEvidence.mock.calls.every(
+        ([, value]) => !String(value).includes("\n"),
+      ),
+    ).toBe(true);
+  });
+  it("requires a fresh observation after live evidence changed instead of accepting a substitute page name", async () => {
+    await startWorkflow();
+    await beginTask();
+    f.currentEvidence.mockReturnValue(false);
+    pageResponse(
+      "page_task_finish",
+      {
+        outcome: "completed",
+        summary: "旧结论",
+        snapshotId: observation.snapshotId,
+        evidence: "更新数据",
+      },
+      "changed",
+      "changed-call",
+    );
+    await vi.waitFor(() =>
+      expect(pageOutput("changed-call")).toMatchObject({ reason: "changed" }),
+    );
+    f.currentEvidence.mockReturnValue(true);
+    pageResponse(
+      "page_task_finish",
+      {
+        outcome: "completed",
+        summary: "不能替换证明",
+        snapshotId: observation.snapshotId,
+        evidence: observation.path,
+      },
+      "substitute",
+      "substitute-call",
+    );
+    await vi.waitFor(() =>
+      expect(pageOutput("substitute-call")).toMatchObject({
+        code: "PAGE_TASK_SNAPSHOT",
+        finishAttemptsRemaining: 1,
+      }),
+    );
+    expect(f.currentEvidence).toHaveBeenCalledOnce();
+    f.observe.mockReturnValue({
+      ...observation,
+      snapshotId: "fresh-failure",
+      text: "更新失败，请检查登录",
+    });
+    pageResponse("page_observe", {}, "fresh", "fresh-call");
+    await vi.waitFor(() =>
+      expect(pageOutput("fresh-call")).toMatchObject({
+        snapshotId: "fresh-failure",
+      }),
+    );
+    pageResponse(
+      "page_task_finish",
+      {
+        outcome: "needs_user",
+        summary: "需要检查登录",
+        snapshotId: "fresh-failure",
+        evidence: "更新失败，请检查登录",
+      },
+      "actual",
+      "actual-call",
+    );
+    await vi.waitFor(() =>
+      expect(pageOutput("actual-call")).toMatchObject({
+        task: { status: "needs_user" },
+      }),
+    );
+    expect(f.observe).toHaveBeenCalledTimes(2);
+  });
+  it("stops after three finish verification failures even when observe and repeated start occur between them", async () => {
+    const cb = await startWorkflow();
+    await beginTask();
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      pageResponse(
+        "page_task_finish",
+        {
+          outcome: "completed",
+          summary: "没有核验",
+          snapshotId: observation.snapshotId,
+          evidence: "观察中不存在的结论",
+        },
+        `finish-${attempt}`,
+        `finish-call-${attempt}`,
+      );
+      await vi.waitFor(() =>
+        expect(pageOutput(`finish-call-${attempt}`)).toMatchObject({
+          retryable: attempt < 3,
+          finishAttemptsRemaining: 3 - attempt,
+          task: { status: attempt < 3 ? "active" : "needs_user" },
+        }),
+      );
+      if (attempt < 3) {
+        pageResponse(
+          attempt === 1 ? "page_task_start" : "page_observe",
+          attempt === 1 ? { goal: "不能清除核验次数" } : {},
+          `refresh-${attempt}`,
+          `refresh-call-${attempt}`,
+        );
+        await vi.waitFor(() =>
+          expect(pageOutput(`refresh-call-${attempt}`)).toBeDefined(),
+        );
+      }
+    }
+    expect(pageOutput("finish-call-3")).toMatchObject({
+      code: "PAGE_TASK_VERIFICATION_LIMIT",
+    });
+    expect(cb.note).toHaveBeenLastCalledWith(
+      expect.stringContaining("连续三次未能核验"),
+    );
+    expect(Peer.last.dc.readyState).toBe("open");
+    expect(cb.state).toHaveBeenLastCalledWith("listening");
+    expect(f.action).not.toHaveBeenCalled();
+  });
+  it("resets finish verification failures only after a dispatched page action", async () => {
+    await startWorkflow();
+    await beginTask();
+    const failFinish = async (
+      number: number,
+      snapshotId = observation.snapshotId,
+    ) => {
+      pageResponse(
+        "page_task_finish",
+        {
+          outcome: "completed",
+          summary: "尚未核验",
+          snapshotId,
+          evidence: "没有这段原文",
+        },
+        `finish-${number}`,
+        `finish-call-${number}`,
+      );
+      await vi.waitFor(() =>
+        expect(pageOutput(`finish-call-${number}`)).toBeDefined(),
+      );
+    };
+    await failFinish(1);
+    f.action.mockResolvedValueOnce({
+      dispatched: false,
+      text: "页面操作被阻止",
+      observation,
+    });
+    pageResponse(
+      "page_click",
+      { snapshotId: observation.snapshotId, ref: "control-1" },
+      "blocked",
+      "blocked-call",
+    );
+    await vi.waitFor(() =>
+      expect(pageOutput("blocked-call")).toMatchObject({ dispatched: false }),
+    );
+    await failFinish(2);
+    expect(pageOutput("finish-call-2")).toMatchObject({
+      finishAttemptsRemaining: 1,
+    });
+    pageResponse(
+      "page_click",
+      { snapshotId: observation.snapshotId, ref: "control-1" },
+      "actual",
+      "actual-call",
+    );
+    await vi.waitFor(() =>
+      expect(pageOutput("actual-call")).toMatchObject({ dispatched: true }),
+    );
+    await failFinish(3, "snapshot-2");
+    expect(pageOutput("finish-call-3")).toMatchObject({
+      finishAttemptsRemaining: 2,
+      retryable: true,
+      task: { status: "active", actionCount: 1 },
+    });
+  });
   it("defers every precomputed tool after the first and keeps deferred calls out of action and parameter budgets", async () => {
     const cb = await startWorkflow();
     const dc = Peer.last.dc;

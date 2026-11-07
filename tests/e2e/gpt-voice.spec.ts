@@ -466,6 +466,43 @@ test("千问实时语音按一个目标连续处理多层弹窗，逐步观察�
   expect(finalStep.task.actionCount).toBe(3);
   expect(finalStep.observation.text).toContain("三个页面步骤已完成");
   await expect(steps).toHaveAttribute("data-steps", "3");
+  // The model must quote one live fragment, not concatenate separate pieces of
+  // page text. A format correction keeps the valid snapshot and never re-clicks.
+  await sendQwenTool(
+    page,
+    "goal-finish-joined-evidence",
+    "page_task_finish",
+    {
+      outcome: "completed",
+      summary: "三步页面检查完成",
+      snapshotId: finalStep.observation.snapshotId,
+      evidence: "三个页面步骤已完成；后续业务需要人工验证",
+    },
+    false,
+  );
+  const corrected = await qwenToolOutput<
+    TaskOutput & {
+      code: string;
+      reason: string;
+      dispatched: boolean;
+      retryable: boolean;
+      finishAttemptsRemaining: number;
+      evidenceCandidates: string[];
+    }
+  >(page, "goal-finish-joined-evidence");
+  expect(corrected).toMatchObject({
+    code: "PAGE_TASK_EVIDENCE",
+    reason: "format",
+    dispatched: false,
+    retryable: true,
+    finishAttemptsRemaining: 2,
+    task: { status: "active", actionCount: 3 },
+  });
+  const liveEvidence = corrected.evidenceCandidates.find(
+    (candidate) => candidate === "三个页面步骤已完成",
+  );
+  expect(liveEvidence).toBe("三个页面步骤已完成");
+  await expect(steps).toHaveAttribute("data-steps", "3");
   await sendQwenTool(
     page,
     "goal-finish",
@@ -474,7 +511,7 @@ test("千问实时语音按一个目标连续处理多层弹窗，逐步观察�
       outcome: "completed",
       summary: "三步页面检查完成",
       snapshotId: finalStep.observation.snapshotId,
-      evidence: "三个页面步骤已完成",
+      evidence: liveEvidence,
     },
     false,
   );

@@ -1383,12 +1383,12 @@ test("功能圆环悬停页面仍持续公转，键盘聚焦与打开浮卡暂�
   const stage = (await page.locator(".workspace-ai-core-stage").boundingBox())!;
   await page.mouse.move(stage.x + 10, stage.y + 10);
   await expect(orbit).toHaveCSS("animation-play-state", "running");
-  const orbitDetails = [
-    menu.locator(".workspace-dock-face").first(),
+  const orbitDetails = [menu.locator(".workspace-dock-face").first()];
+  const ringDecorations = [
     menu.locator(".workspace-dock-halo-sweep").first(),
     menu.locator(".workspace-dock-halo-counter").first(),
   ];
-  for (const detail of orbitDetails)
+  for (const detail of [...orbitDetails, ...ringDecorations])
     await expect(detail).toHaveCSS("animation-play-state", "running");
   expect(
     await entry.evaluate(
@@ -1413,6 +1413,8 @@ test("功能圆环悬停页面仍持续公转，键盘聚焦与打开浮卡暂�
   await expect(orbit).toHaveCSS("animation-play-state", "paused");
   for (const detail of orbitDetails)
     await expect(detail).toHaveCSS("animation-play-state", "paused");
+  for (const decoration of ringDecorations)
+    await expect(decoration).toHaveCSS("animation-play-state", "running");
   const focused = (await entry.boundingBox())!;
   await page.waitForTimeout(350);
   const stillFocused = (await entry.boundingBox())!;
@@ -1426,6 +1428,8 @@ test("功能圆环悬停页面仍持续公转，键盘聚焦与打开浮卡暂�
   await page.mouse.move(5, 5);
   await expect(menu).toHaveAttribute("data-paused", "true");
   await expect(orbit).toHaveCSS("animation-play-state", "paused");
+  for (const decoration of ringDecorations)
+    await expect(decoration).toHaveCSS("animation-play-state", "running");
   const opened = (await entry.boundingBox())!;
   await page.waitForTimeout(350);
   const stillOpened = (await entry.boundingBox())!;

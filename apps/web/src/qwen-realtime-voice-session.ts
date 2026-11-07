@@ -80,6 +80,7 @@ type PageTask = {
   actionCount: number;
   toolCount: number;
   idleNudges: number;
+  finishFailures: number;
 };
 const isLocalPageTool = (name: unknown) =>
   isPageToolName(name) || isPageTaskToolName(name);
@@ -582,6 +583,7 @@ export class QwenRealtimeVoiceSession {
                       actionCount: 0,
                       toolCount: 1,
                       idleNudges: 0,
+                      finishFailures: 0,
                     };
                   await this.preparePage(id, response);
                   const observation = await this.observeReady(id, response);
@@ -624,26 +626,87 @@ export class QwenRealtimeVoiceSession {
                   ? [
                       observed.path,
                       observed.pageName || "",
-                      observed.text,
+                      ...observed.text.split("\n"),
                       ...observed.controls.map((control) => control.name),
                     ]
                   : [];
-                if (
-                  !observed ||
-                  observed.ready === false ||
-                  observed.snapshotId !== input.snapshotId ||
-                  !this.page.currentSnapshot(input.snapshotId) ||
-                  evidence.length < 2 ||
-                  !sources.some((source) =>
+                const snapshotValid = !!(
+                  observed &&
+                  observed.ready !== false &&
+                  observed.snapshotId === input.snapshotId &&
+                  this.page.currentSnapshot(input.snapshotId)
+                );
+                const matchesObserved =
+                  evidence.length >= 2 &&
+                  sources.some((source) =>
                     normalized(source).includes(evidence),
-                  ) ||
+                  );
+                if (
+                  !snapshotValid ||
+                  !matchesObserved ||
                   !this.page.currentEvidence(input.snapshotId, input.evidence)
                 ) {
-                  result = {
-                    dispatched: false,
-                    code: "PAGE_TASK_EVIDENCE",
-                    text: "尚不能确认任务结果。请重新观察当前页面，原样使用最新 snapshotId 和能证明完成或需要用户操作的页面原文 evidence；不能仅凭计划、按钮名称或 summary 声称完成。",
-                  };
+                  task!.finishFailures++;
+                  if (task!.finishFailures >= 3) {
+                    const text =
+                      "任务结果连续三次未能核验，已暂停自动重试。请确认当前页面后给出新的指令。";
+                    this.pausePageTask(text);
+                    result = {
+                      dispatched: false,
+                      code: "PAGE_TASK_VERIFICATION_LIMIT",
+                      retryable: false,
+                      finishAttemptsRemaining: 0,
+                      text,
+                    };
+                  } else if (!snapshotValid) {
+                    result = {
+                      dispatched: false,
+                      code: "PAGE_TASK_SNAPSHOT",
+                      retryable: true,
+                      finishAttemptsRemaining: 3 - task!.finishFailures,
+                      text: "提交的 snapshotId 已失效、页面尚未就绪或不是最近一次观察。请重新调用 page_observe 获取当前快照，再依据其真实结果核验；不要猜测或替换快照引用。",
+                    };
+                  } else if (matchesObserved) {
+                    this.latestObservation = undefined;
+                    result = {
+                      dispatched: false,
+                      code: "PAGE_TASK_EVIDENCE",
+                      reason: "changed",
+                      retryable: true,
+                      finishAttemptsRemaining: 3 - task!.finishFailures,
+                      text: "提交的证据曾出现在观察中，但现场内容已经变化，不能沿用旧结论，也不能改用其他页名或控件代替。请重新调用 page_observe 核对当前结果，再按新观察决定继续操作或结束任务。",
+                    };
+                  } else {
+                    const evidenceCandidates: string[] = [];
+                    const seen = new Set<string>();
+                    for (const source of [
+                      observed!.pageName || "",
+                      ...observed!.text.split("\n"),
+                      ...observed!.controls.map((control) => control.name),
+                      observed!.path,
+                    ].slice(0, 30)) {
+                      const candidate = source.trim().slice(0, 180);
+                      const key = normalized(candidate);
+                      if (key.length < 2 || seen.has(key)) continue;
+                      seen.add(key);
+                      if (
+                        this.page.currentEvidence(input.snapshotId, candidate)
+                      )
+                        evidenceCandidates.push(candidate);
+                      if (evidenceCandidates.length >= 5) break;
+                    }
+                    result = {
+                      dispatched: false,
+                      code: "PAGE_TASK_EVIDENCE",
+                      reason: "format",
+                      retryable: true,
+                      finishAttemptsRemaining: 3 - task!.finishFailures,
+                      evidenceCandidates,
+                      text: evidenceCandidates.length
+                        ? "当前快照引用有效。evidence 只能复制一处连续原文，不要拼接多个标题、日期或控件。可从 evidenceCandidates 原样选一条，页面未变化时不必反复 page_observe。候选仅说明原文仍可引用；必须先根据完整观察确认整个目标已达到，否则继续操作，不能只凭候选宣称完成。"
+                        : "当前快照引用有效，但提交的证据不再是现场可核验的连续原文，也没有仍有效的原文候选。页面内容可能已变化，请重新观察一次；之后只复制一处连续原文，不拼接多个标题或控件。",
+                    };
+                  }
                 } else {
                   task!.status = input.outcome;
                   result = {
@@ -684,7 +747,10 @@ export class QwenRealtimeVoiceSession {
                 );
                 if (!this.current(id)) return;
                 this.latestObservation = action.observation;
-                if (task && action.dispatched) task.actionCount++;
+                if (task && action.dispatched) {
+                  task.actionCount++;
+                  task.finishFailures = 0;
+                }
                 result = action;
               }
             }
