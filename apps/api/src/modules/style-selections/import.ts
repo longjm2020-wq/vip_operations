@@ -29,7 +29,8 @@ type Binding = z.infer<typeof bindingSchema>;
 const isCreationTimeBinding = (binding: Binding) => binding.key === "registrationBatch" && selectionImportHeader(binding.header)?.builtinKey === "createdAt";
 const nonempty = (value: unknown) => value !== null && value !== undefined && value !== "" && (!Array.isArray(value) || value.length > 0);
 const workspace = () => selectionScope.getStore() || "default";
-const iso = (value: unknown) => value ? new Date(String(value)).toISOString() : null;
+// Keep millisecond precision: String(Date) drops milliseconds, which would let a same-second concurrent edit pass the stale check.
+const iso = (value: unknown) => value instanceof Date ? value.toISOString() : value ? new Date(String(value)).toISOString() : null;
 // The editable business column retains its historical layout/protection key;
 // imported timestamps must write metadata instead of the old batch-date column.
 const importFieldKey = (key: string) => key === "createdAt" ? "registrationBatch" : key;

@@ -115,7 +115,10 @@ describe("opt-in fixed remembered sessions", () => {
   it("rechecks account status and permissions for a remembered device", async () => {
     const { token } = await signIn(true);
     permissions = ["project.read", "analytics.read"];
-    await expect(auth.actorFor(token)).resolves.toMatchObject({ permissions });
+    // Permissions are returned in a stable sorted order regardless of database row order.
+    await expect(auth.actorFor(token)).resolves.toMatchObject({ permissions: ["analytics.read", "project.read"] });
+    permissions = ["analytics.read", "project.read"];
+    await expect(auth.actorFor(token)).resolves.toMatchObject({ permissions: ["analytics.read", "project.read"] });
     user.status = "INACTIVE";
     await expect(auth.actorFor(token)).rejects.toMatchObject({ status: 401 });
   });
