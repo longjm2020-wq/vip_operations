@@ -37,6 +37,47 @@ afterAll(async () => {
 });
 
 describe("DeerFlow v2.2 native Gateway adapter", () => {
+  it("satisfies native CSRF on mutations with fresh service-only cookie/header pairs", async () => {
+    const requests: { method: string; cookie?: string; csrf?: string; authorization?: string }[] = [];
+    handler = (request, response) => {
+      const csrf = request.headers["x-csrf-token"] as string | undefined;
+      const cookie = request.headers.cookie;
+      requests.push({ method: request.method || "", cookie, csrf, authorization: request.headers.authorization });
+      if (["POST", "PUT", "PATCH", "DELETE"].includes(request.method || "") && (!csrf || cookie !== `csrf_token=${csrf}`)) {
+        return send(response, { detail: "CSRF token missing or mismatched" }, 403);
+      }
+      // Remote session cookies must never be copied to the next service request.
+      response.setHeader("set-cookie", "access_token=unrelated-user-session; Path=/");
+      if (request.url === "/api/threads") return send(response, { thread_id: "team-1" });
+      if (request.url?.endsWith("/uploads")) return send(response, { success: true, skipped_files: [], files: [{ filename: "x.txt", size: 1, virtual_path: "/mnt/user-data/uploads/x.txt" }] });
+      if (request.url?.includes("/cancel?")) { response.writeHead(202); return response.end(); }
+      return send(response, run);
+    };
+    const missing = await fetch(`${base}/api/threads`, { method: "POST" });
+    expect(missing.status).toBe(403);
+    await missing.text();
+    const mismatch = await fetch(`${base}/api/threads`, { method: "POST", headers: { Cookie: "csrf_token=a", "X-CSRF-Token": "b" } });
+    expect(mismatch.status).toBe(403);
+    await mismatch.text();
+    requests.length = 0;
+    const client = createDeerFlowClient("1");
+    await client.createThread("team-1");
+    await client.upload("team-1", { name: "x.txt", mime: "text/plain", content: Buffer.from("x") });
+    await client.startRun("team-1", "goal");
+    await client.cancel("team-1", "run-1");
+    await createDeerFlowClient("2").createThread("team-1");
+    await client.getRun("team-1", "run-1");
+    const mutations = requests.filter(request => request.method === "POST");
+    expect(mutations).toHaveLength(5);
+    expect(new Set(mutations.map(request => request.csrf)).size).toBe(5);
+    for (const request of mutations) {
+      expect(request.csrf).toMatch(/^[a-f0-9]{64}$/);
+      expect(request.cookie).toBe(`csrf_token=${request.csrf}`);
+    }
+    expect(requests.every(request => request.authorization === undefined)).toBe(true);
+    expect(requests.at(-1)).toEqual({ method: "GET", cookie: undefined, csrf: undefined, authorization: undefined });
+  });
+
   it("uses owner-scoped native endpoints for background runs, files and cancellation", async () => {
     handler = (request, response) => {
       switch (request.url) {

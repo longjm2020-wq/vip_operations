@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { z } from "zod";
 
 // Wire contract: bytedance/deer-flow v2.2.0 (58fc5bd), native Gateway /api routes.
@@ -150,6 +151,16 @@ export function createDeerFlowClient(userId: string, signal?: AbortSignal) {
     const timeout = AbortSignal.timeout(60_000);
     try {
       const headers = new Headers(init.headers);
+      // Native v2.2 still checks double-submit CSRF for trusted internal POSTs
+      // (the upstream channel client sends this same pair). Use no browser session.
+      headers.delete("Authorization");
+      headers.delete("Cookie");
+      headers.delete("X-CSRF-Token");
+      if (["POST", "PUT", "PATCH", "DELETE"].includes((init.method || "GET").toUpperCase())) {
+        const csrf = randomBytes(32).toString("hex");
+        headers.set("Cookie", `csrf_token=${csrf}`);
+        headers.set("X-CSRF-Token", csrf);
+      }
       headers.set("X-DeerFlow-Internal-Token", token);
       headers.set("X-DeerFlow-Owner-User-Id", `erp-${userId}`);
       const response = await fetch(base + path, {
