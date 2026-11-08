@@ -399,7 +399,8 @@ it("recovers failure details for the original task once without creating another
           task_id: "old-failed-task",
           task_status: "FAILED",
           code: "AllocationQuota.FreeTierOnly",
-          message: "sensitive provider details",
+          message:
+            "free quota exceeded sk-private-test https://private.example.test",
         },
       }),
       { headers: { "content-type": "application/json" } },
@@ -413,7 +414,9 @@ it("recovers failure details for the original task once without creating another
       errorCode: "AllocationQuota.FreeTierOnly",
     });
     expect(result.data.message).toContain("费用保护");
-    expect(JSON.stringify(result.data)).not.toContain("sensitive");
+    expect(JSON.stringify(result.data)).not.toMatch(
+      /sk-private-test|private.example/,
+    );
     await request("/services/bailian-video-check");
     expect(polls).toBe(1);
   } finally {

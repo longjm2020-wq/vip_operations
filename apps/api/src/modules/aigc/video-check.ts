@@ -85,7 +85,7 @@ export async function videoCheckStatus() {
   const setting = await storedSettings();
   const check = setting.config.bailianVideoCheck;
   const missingFailureDetails =
-    check?.state === "failed" && !check.detailsCheckedAt;
+    check?.state === "failed" && check.diagnosticVersion !== 1;
   if (
     !check ||
     (check.state !== "pending" && !missingFailureDetails) ||
@@ -95,18 +95,23 @@ export async function videoCheckStatus() {
   const config = await engineConfig();
   const provider = bailianVideoProvider(config),
     route = { ...provider, model: provider.models[0], resolution: "768P" };
-  const result = await pollBailianVideo(config, route, check.taskId);
+  const result = await pollBailianVideo(
+    { ...config, bailianTestDiagnostics: true },
+    route,
+    check.taskId,
+  );
   if (result.pending) return check;
   return persistCheck(setting.revision, {
     ...check,
     state: result.url ? "succeeded" : "failed",
     completedAt: new Date().toISOString(),
     detailsCheckedAt: new Date().toISOString(),
+    diagnosticVersion: 1,
     ...(result.url
       ? { videoUrl: result.url }
       : {
           errorCode: result.errorCode || null,
-          message: `百炼任务结束于 ${result.state}${result.errorCode ? `（${result.errorCode}）` : ""}；${result.errorHint || "未重复提交"}`,
+          message: `百炼任务结束于 ${result.state}${result.errorCode ? `（${result.errorCode}）` : ""}；${result.errorHint || "未重复提交"}${result.errorDiagnostic ? `：${result.errorDiagnostic}` : ""}`,
         }),
   });
 }

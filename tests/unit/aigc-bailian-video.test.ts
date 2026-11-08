@@ -234,6 +234,15 @@ it("reports safe provider failure codes without echoing prompts, URLs or credent
   });
   expect(JSON.stringify(result)).not.toMatch(/secret|private/);
   expect(spy).toHaveBeenCalledTimes(1);
+  const diagnostic = await pollVideo(
+    { ...config, bailianTestDiagnostics: true },
+    route(),
+    "failed-task",
+  );
+  expect(diagnostic.errorDiagnostic).toContain("duration is invalid");
+  expect(diagnostic.errorDiagnostic).not.toMatch(
+    /sk-private-secret|https:\/\/private.example.test/,
+  );
 });
 it("keeps media limits and the explicit price estimate separate from actual bills", () => {
   const model = route().model;
