@@ -137,7 +137,9 @@ test("H3 settings reuse a saved connection and require confirmation before one p
     encryptionReady: true,
     bailianReuseAvailable: true,
     bailianReuseWorkspaceId: "ws-fixture12345678",
-    secrets: {},
+    videoRelayBaseUrl: "https://relay.example.test",
+    xhaiBaseUrl: "https://images.example.test",
+    secrets: { XAI_API_KEY: true },
   };
   let saved: any,
     submitted = 0;
@@ -148,7 +150,11 @@ test("H3 settings reuse a saved connection and require confirmation before one p
         ...settings,
         revision: 2,
         bailianWorkspaceId: saved.bailianWorkspaceId,
-        secrets: { BAILIAN_VIDEO_API_KEY: true },
+        secrets: {
+          ...settings.secrets,
+          BAILIAN_VIDEO_API_KEY: true,
+          XYLP_IMAGE_TT25_KEY: true,
+        },
       };
     }
     await route.fulfill({ json: settings });
@@ -170,11 +176,18 @@ test("H3 settings reuse a saved connection and require confirmation before one p
     },
   );
   await page.goto("/aigc");
+  await page.setViewportSize({ width: 680, height: 900 });
   await page.getByRole("button", { name: /服务设置/ }).click();
   const drawer = page.getByRole("dialog", { name: "AIGC 服务设置" });
   await expect(
     drawer.getByText("视频生成：MiniMax/MiniMax-H3", { exact: true }),
   ).toBeVisible();
+  await expect(drawer.getByLabel("xAI 官方视频 Key")).not.toBeVisible();
+  await drawer.getByRole("button", { name: /^图片生成/ }).click();
+  await drawer
+    .getByLabel("TT Image 2.5 · 按量渠道 Key")
+    .fill("fixture-new-image-key");
+  await drawer.getByRole("button", { name: /^图片生成/ }).click();
   await drawer.getByText("使用已保存的百炼语音连接", { exact: true }).click();
   await expect(drawer.getByLabel("百炼北京业务空间 ID")).toHaveValue(
     "ws-fixture12345678",
@@ -186,8 +199,11 @@ test("H3 settings reuse a saved connection and require confirmation before one p
   expect(saved).toMatchObject({
     useSavedQwenConnection: true,
     bailianWorkspaceId: "ws-fixture12345678",
-    secrets: {},
+    videoRelayBaseUrl: "https://relay.example.test",
+    xhaiBaseUrl: "https://images.example.test",
+    secrets: { XYLP_IMAGE_TT25_KEY: "fixture-new-image-key" },
   });
+  expect(saved.secrets).not.toHaveProperty("XAI_API_KEY");
   await drawer.getByRole("button", { name: "验证 H3 视频连接" }).click();
   await expect(page.getByText(/刊例约 2 元，无免费额度/)).toBeVisible();
   expect(submitted).toBe(0);
@@ -196,6 +212,22 @@ test("H3 settings reuse a saved connection and require confirmation before one p
     drawer.getByText("H3 视频生成已验证", { exact: true }),
   ).toBeVisible();
   expect(submitted).toBe(1);
+  await expect(
+    drawer.getByText("任务编号：fixture-task", { exact: true }),
+  ).not.toBeVisible();
+  await drawer.getByText("测试详情", { exact: true }).click();
+  await expect(
+    drawer.getByText("任务编号：fixture-task", { exact: true }),
+  ).toBeVisible();
+  await drawer.getByText("测试详情", { exact: true }).click();
+  expect(
+    await drawer.evaluate(
+      (element) => element.scrollWidth <= element.clientWidth,
+    ),
+  ).toBe(true);
+  await page.screenshot({
+    path: test.info().outputPath("aigc-connections.png"),
+  });
 });
 test("native blue studio supports all five entries and omits commercial navigation", async ({
   page,
