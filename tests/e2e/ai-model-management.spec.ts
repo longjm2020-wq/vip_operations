@@ -6,7 +6,16 @@ import {
 
 async function fixture(page: Page, superAdmin = true) {
   const changes: Record<string, unknown>[] = [],
+    connectionChanges: Record<string, unknown>[] = [],
+    verifications: string[] = [],
     sessions: string[] = [];
+  const connection = {
+    enabled: true,
+    model: "openai/gpt-6.1-sol",
+    encryptionReady: true,
+    apiKeyConfigured: true,
+    verifiedAt: null as string | null,
+  };
   const usage = {
     requests: 0,
     succeeded: 0,
@@ -141,13 +150,23 @@ async function fixture(page: Page, superAdmin = true) {
         verifiedAt: null,
         error: "",
       };
-    if (path === "/analytics/compass/ai-settings")
-      data = {
-        enabled: true,
-        model: "openai/gpt-6.1-sol",
-        encryptionReady: true,
-        apiKeyConfigured: true,
-      };
+    if (path === "/analytics/compass/ai-settings") {
+      if (req.method() === "POST") {
+        const input = req.postDataJSON();
+        connectionChanges.push(input);
+        connection.enabled = input.enabled;
+        if (input.clearKey) {
+          connection.apiKeyConfigured = false;
+          connection.verifiedAt = null;
+        }
+      }
+      data = connection;
+    }
+    if (path === "/analytics/compass/ai-test") {
+      verifications.push(path);
+      connection.verifiedAt = new Date().toISOString();
+      data = { model: connection.model };
+    }
     if (path === "/ai-model-management") {
       if (req.method() === "POST") {
         const input = req.postDataJSON();
@@ -168,8 +187,32 @@ async function fixture(page: Page, superAdmin = true) {
     }
     await route.fulfill({ json: { data } });
   });
-  return { changes, sessions };
+  return { changes, sessions, connectionChanges, verifications };
 }
+
+test("shared connection preserves the saved key and does not verify a disabled service", async ({
+  page,
+}) => {
+  const f = await fixture(page);
+  await page.goto("/settings/ai");
+  await page.getByRole("button", { name: "OpenRouter 连接配置", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "OpenRouter 连接", exact: true });
+  await expect(dialog.getByLabel("API Key", { exact: true })).toHaveValue("");
+  await dialog.getByRole("button", { name: "保存并验证", exact: true }).click();
+  await expect(dialog.getByText("连接已验证", { exact: true })).toBeVisible();
+  expect(f.connectionChanges).toEqual([{ enabled: true }]);
+  expect(f.verifications).toHaveLength(1);
+  await dialog.getByRole("switch", { name: "启用连接" }).click();
+  await dialog.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(dialog.getByText("已关闭", { exact: true })).toBeVisible();
+  expect(f.connectionChanges).toEqual([{ enabled: true }, { enabled: false }]);
+  expect(f.verifications).toHaveLength(1);
+  await dialog.getByRole("button", { name: "清除密钥", exact: true }).click();
+  await page.getByRole("button", { name: "取消", exact: true }).click();
+  await expect(page.getByRole("dialog", { name: "清除 OpenRouter API Key？", exact: true })).toBeHidden();
+  expect(f.connectionChanges).toHaveLength(2);
+  await page.screenshot({ path: test.info().outputPath("compact-connection.png") });
+});
 
 test("management lists actual sources, persists a per-feature model and filters entries", async ({
   page,

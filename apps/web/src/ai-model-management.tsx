@@ -7,6 +7,7 @@ import {
   Drawer,
   Empty,
   Input,
+  Modal,
   Select,
   Table,
   Tag,
@@ -99,6 +100,7 @@ export function AiModelManagementPage({
     [search, setSearch] = useState(""),
     [group, setGroup] = useState("全部功能");
   const [busy, setBusy] = useState<string>(),
+    [connectionsOpen, setConnectionsOpen] = useState(false),
     [drawer, setDrawer] = useState<string>(),
     [detail, setDetail] = useState<AiManagementRow>();
   const q = useQuery({
@@ -155,7 +157,8 @@ export function AiModelManagementPage({
           <>
             <Button
               icon={<SettingOutlined />}
-              onClick={() => setDrawer("connections")}
+              aria-label="OpenRouter 连接配置"
+              onClick={() => setConnectionsOpen(true)}
             >
               连接配置
             </Button>
@@ -397,13 +400,25 @@ export function AiModelManagementPage({
           开始；仅补录已有供应商回执的经营分析历史。不同币种、供应商积分分别统计，不折算为估算账单。
         </p>
       )}
+      <Modal
+        title="OpenRouter 连接"
+        open={connectionsOpen}
+        width={460}
+        centered
+        footer={null}
+        destroyOnHidden
+        onCancel={() => {
+          setConnectionsOpen(false);
+          void refresh();
+        }}
+      >
+        {connections}
+      </Modal>
       <Drawer
         title={
-          drawer === "connections"
-            ? "OpenRouter 共享连接"
-            : drawer === "aigc"
-              ? "AIGC 模型与工作流连接"
-              : "语音模型配置"
+          drawer === "aigc"
+            ? "AIGC 模型与工作流连接"
+            : "语音模型配置"
         }
         open={!!drawer}
         width={680}
@@ -413,9 +428,7 @@ export function AiModelManagementPage({
           void refresh();
         }}
       >
-        {drawer === "connections" ? (
-          connections
-        ) : drawer === "aigc" ? (
+        {drawer === "aigc" ? (
           canAigc ? (
             <ServiceSettings
               onSaved={() => {

@@ -3,10 +3,8 @@ import {
   Alert,
   App,
   Button,
-  Card,
   Form,
   Input,
-  Space,
   Switch,
   Tag,
 } from "antd";
@@ -14,13 +12,13 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./api";
 import { QueryState, Row, useUser } from "./shared";
 import { AiModelManagementPage } from "./ai-model-management";
-import "./compass-ai.css";
 
 function SettingsForm() {
   const [form] = Form.useForm(),
     { message, modal } = App.useApp(),
     client = useQueryClient(),
     [busy, setBusy] = useState(false);
+  const enabled = Form.useWatch("enabled", form);
   const q = useQuery({
     queryKey: ["compass-ai-settings"],
     queryFn: () => api("/analytics/compass/ai-settings"),
@@ -43,7 +41,7 @@ function SettingsForm() {
         ...(values.apiKey?.trim() ? { apiKey: values.apiKey.trim() } : {}),
       });
       form.setFieldValue("apiKey", "");
-      if (saved.data.apiKeyConfigured) {
+      if (saved.data.enabled && saved.data.apiKeyConfigured) {
         const result = await api("/analytics/compass/ai-test", "POST", {});
         message.success(`连接已验证：${result.data.model}`);
       } else message.success("AI 设置已保存");
@@ -72,10 +70,10 @@ function SettingsForm() {
       },
     });
   return (
-    <Card className="compass-ai-settings">
+    <div className="ai-connection-settings">
       <QueryState error={q.error} reload={() => q.refetch()} />
-      <p>
-        小序、团队、经营分析与商品资料共用此连接。各功能的默认模型在管理列表中分别选择。
+      <p className="ai-connection-hint">
+        小序、团队、经营分析及商品资料等功能共用。
       </p>
       <Form
         form={form}
@@ -84,16 +82,13 @@ function SettingsForm() {
         initialValues={{ enabled: false }}
         disabled={busy || q.isFetching || !settings}
       >
-        <Form.Item label="连接测试使用的经营分析模型">
-          <Input value={settings?.model || "读取中…"} readOnly aria-label="连接测试模型" />
-        </Form.Item>
         <Form.Item
           name="apiKey"
-          label="OpenRouter API Key"
+          label="API Key"
           extra={
             settings?.apiKeyConfigured
-              ? "已加密保存；留空保留原密钥，密钥不会回显。"
-              : "请在本页填写密钥；不要在聊天或表格中发送。"
+              ? "密钥已加密保存，留空保留。"
+              : "密钥将加密保存，不会回显。"
           }
         >
           <Input.Password
@@ -105,25 +100,21 @@ function SettingsForm() {
             }
           />
         </Form.Item>
-        <Form.Item name="enabled" label="开启 AI 功能" valuePropName="checked">
-          <Switch />
-        </Form.Item>
-        <Alert
-          type="info"
-          title="经营分析发送报表汇总与商品编码；商品资料生成发送有权查看的成分、类目和商品图片；个人助理发送用户消息、最近对话、主动附加的文件及按权限查询的数据；勾选后附带日程、待办或个人记忆，联网时发送必要检索词。数据交由已配置的服务处理，不发送私有备忘或登录凭据。"
-        />
-        <p className="secondary">
-          验证会调用少量测试内容；经营分析与标题生成按 OpenRouter
-          实际用量计费。每份经营分析最多 4096 个输出
-          token，同一批数据生成后复用给多个收件人。
-          <a
-            href={`https://openrouter.ai/${(settings?.model || "openai/gpt-6.1-sol").split("/").map(encodeURIComponent).join("/")}#providers`}
-            target="_blank"
-            rel="noreferrer"
-          >
-            查看模型与价格
-          </a>
-        </p>
+        <div className="ai-connection-state">
+          <label htmlFor="enabled">启用连接</label>
+          <Form.Item name="enabled" valuePropName="checked" noStyle>
+            <Switch aria-label="启用连接" />
+          </Form.Item>
+          {settings && (
+            <Tag color={settings.enabled && settings.verifiedAt ? "green" : "default"}>
+              {!settings.enabled
+                ? "已关闭"
+                : settings.verifiedAt
+                  ? "连接已验证"
+                  : "待验证"}
+            </Tag>
+          )}
+        </div>
         {!settings?.encryptionReady && settings && (
           <Alert
             type="warning"
@@ -133,21 +124,21 @@ function SettingsForm() {
         {settings?.errorNote && (
           <Alert type="error" title={settings.errorNote} />
         )}
-        <Space wrap style={{ marginTop: 16 }}>
-          <Button type="primary" htmlType="submit" loading={busy}>
-            保存并验证连接
-          </Button>
-          <Tag color={settings?.verifiedAt ? "green" : "default"}>
-            {settings?.verifiedAt ? "共享连接已验证" : "共享连接待验证"}
-          </Tag>
+        <p className="ai-connection-hint">
+          验证使用经营分析的当前模型，会产生少量用量。
+        </p>
+        <div className="ai-connection-actions">
           {settings?.apiKeyConfigured && (
-            <Button type="link" onClick={clear}>
+            <Button type="text" danger onClick={clear}>
               清除密钥
             </Button>
           )}
-        </Space>
+          <Button type="primary" htmlType="submit" loading={busy}>
+            {enabled ? "保存并验证" : "保存"}
+          </Button>
+        </div>
       </Form>
-    </Card>
+    </div>
   );
 }
 

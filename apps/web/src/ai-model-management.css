@@ -118,6 +118,34 @@
   margin: 4px 0;
   overflow-wrap: anywhere;
 }
+.ai-connection-settings .ant-form-item {
+  margin-bottom: 18px;
+}
+.ai-connection-hint {
+  color: var(--app-secondary);
+  font-size: 12px;
+  line-height: 1.7;
+  margin: 12px 0 18px;
+}
+.ai-connection-state {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 20px 0;
+}
+.ai-connection-state .ant-tag {
+  margin-left: auto;
+  margin-inline-end: 0;
+}
+.ai-connection-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 24px;
+}
+.ai-connection-actions .ant-btn-primary {
+  margin-left: auto;
+}
 @media (max-width: 700px) {
   .ai-management-overview {
     gap: 20px;
