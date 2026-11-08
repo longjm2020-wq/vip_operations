@@ -206,7 +206,25 @@ async function setup(
         ready: true,
         state: "IDLE",
         version: 0,
-        messages: [],
+        messages: run
+          ? [
+              {
+                id: run.id,
+                role: "user",
+                text: run.goal,
+                source: "team",
+                createdAt: run.createdAt,
+              },
+              {
+                id: "reply-" + run.id,
+                role: "assistant",
+                text: currentRun()!.summary || currentRun()!.stage,
+                teamRunId: run.id,
+                source: "team",
+                createdAt: run.createdAt,
+              },
+            ]
+          : [],
         error: "",
         availabilityMessage: "已就绪",
       };
@@ -312,7 +330,7 @@ async function setup(
 async function openTeam(page: Page) {
   await page.goto("/my-workspace");
   await openPersonalAssistant(page);
-  await selectAssistantPanel(page, "智能体团队");
+  await selectAssistantPanel(page, "团队设置");
   await expect(
     page.getByRole("heading", { name: "智能体团队", exact: true }),
   ).toBeVisible();
@@ -328,6 +346,43 @@ async function selectOption(page: Page, label: string, name: string) {
     .getByText(name, { exact: true })
     .click();
 }
+
+test("聊天中选择团队并展示交付，切回普通模型继续追问且刷新保留任务卡片", async ({
+  page,
+}) => {
+  const fixture = await setup(page, { deerflow: true });
+  await page.goto("/my-workspace");
+  await openPersonalAssistant(page);
+  const panel = page.getByRole("dialog", { name: /AI 个人助理/ });
+  await panel.getByRole("button", { name: "选择对话模型" }).click();
+  await page.getByRole("menuitem", { name: /智能体团队/ }).click();
+  await expect(
+    panel.getByRole("button", { name: "选择对话模型" }),
+  ).toContainText("智能体团队");
+  await panel.locator("textarea").fill("根据刚才的讨论整理活动文案");
+  await panel.getByRole("button", { name: "提交团队任务" }).click();
+  const card = panel.getByRole("article", { name: "对话中的团队任务" });
+  await expect(card).toContainText("团队正在处理资料");
+  await expect(page.getByRole("dialog")).toHaveCount(1);
+  fixture.complete();
+  await expect(card.getByRole("heading", { name: "任务结果" })).toBeVisible({
+    timeout: 10000,
+  });
+  await panel.getByRole("button", { name: "选择对话模型" }).click();
+  await page.getByRole("menuitem", { name: /通用助手/ }).click();
+  await panel.locator("textarea").fill("把刚才的结果概括为两点");
+  await panel.getByRole("button", { name: "发送给个人助理" }).click();
+  await expect.poll(() => fixture.personal.length).toBe(1);
+  expect(fixture.personal[0]).toMatchObject({
+    model: "engine/fast",
+    message: "把刚才的结果概括为两点",
+  });
+  await expect(card).toBeVisible();
+  await page.reload();
+  await openPersonalAssistant(page);
+  await expect(card).toContainText("团队成果已返回");
+  await page.screenshot({ path: ".local/unified-chat-team.png" });
+});
 
 test("团队可新增和编辑独立模型，保存才用于新任务，核心职责不能关闭", async ({
   page,
@@ -393,6 +448,12 @@ test("团队任务提交附件与明确模型，按后台轮询验收版本并�
 }) => {
   const fixture = await setup(page);
   const panel = await openTeam(page);
+  await panel.locator(".assistant-team-task-settings summary").click();
+  await selectOption(page, "团队任务模型", "推理模型 · qwen3-max");
+  await panel
+    .getByRole("checkbox", { name: "使用知识档案", exact: true })
+    .uncheck();
+  await panel.getByRole("button", { name: "返回聊天并使用团队" }).click();
   await expect(page.locator("textarea:visible")).toHaveCount(1);
   await panel.getByLabel("上传助理附件").setInputFiles({
     name: "素材.txt",
@@ -400,11 +461,6 @@ test("团队任务提交附件与明确模型，按后台轮询验收版本并�
     buffer: Buffer.from("活动素材与要求"),
   });
   await expect(panel.getByText("素材.txt", { exact: true })).toBeVisible();
-  await panel.locator(".assistant-team-task-settings summary").click();
-  await selectOption(page, "团队任务模型", "推理模型 · qwen3-max");
-  await panel
-    .getByRole("checkbox", { name: "使用知识档案", exact: true })
-    .uncheck();
   await panel
     .locator("textarea")
     .fill("根据素材创作完整活动文案，并由调度验收后归档");
@@ -422,16 +478,19 @@ test("团队任务提交附件与明确模型，按后台轮询验收版本并�
     useKnowledge: false,
   });
   expect(fixture.personal).toHaveLength(0);
+  await panel.locator(".assistant-team-message > details > summary").click();
   await expect(
     panel.getByText("本步骤模型：qwen3-max", { exact: true }),
   ).toBeVisible();
   await expect(panel.getByText("已验收归档", { exact: true })).toHaveCount(0);
+  await panel.locator(".assistant-team-message > details > summary").click();
   fixture.complete();
   await expect(panel.getByText("验收与归档完成", { exact: true })).toBeVisible({
     timeout: 10000,
   });
   await expect(panel.getByText("第 2 版", { exact: false })).toBeVisible();
   await expect(panel.getByText("已验收归档", { exact: true })).toBeVisible();
+  await selectAssistantPanel(page, "团队设置");
   await panel.getByRole("tab", { name: "知识档案", exact: true }).click();
   await panel
     .getByRole("searchbox", { name: "搜索团队知识档案", exact: true })
@@ -467,6 +526,7 @@ test("手机配置冲突与提交失败保留草稿，团队面板不横向溢�
   await expect(
     panel.getByRole("textbox", { name: "智能体名称", exact: true }),
   ).toHaveValue("待保存校对员");
+  await panel.getByRole("button", { name: "返回聊天并使用团队" }).click();
   const input = panel.getByPlaceholder("描述团队目标、交付要求和验收标准…");
   await input.fill("创作一份新品上市方案");
   await panel
@@ -497,6 +557,7 @@ test("默认团队策略可直接提交，停止任务读取后台取消状态�
 }) => {
   const fixture = await setup(page);
   const panel = await openTeam(page);
+  await panel.getByRole("button", { name: "返回聊天并使用团队" }).click();
   await panel
     .getByPlaceholder("描述团队目标、交付要求和验收标准…")
     .fill("整理一份新品宣传文案");
@@ -547,6 +608,7 @@ test("DeerFlow 团队直接提交附件与目标，隐藏原生配置并将返�
   await panel
     .getByRole("checkbox", { name: "使用知识档案", exact: true })
     .uncheck();
+  await panel.getByRole("button", { name: "返回聊天并使用团队" }).click();
   await panel.getByLabel("上传助理附件").setInputFiles({
     name: "素材.txt",
     mimeType: "text/plain",
@@ -586,6 +648,7 @@ test("DeerFlow 团队直接提交附件与目标，隐藏原生配置并将返�
     panel.getByText("结果已返回，尚未经过本站独立验收。", { exact: true }),
   ).toBeVisible();
   await expect(panel.getByText("已验收归档", { exact: true })).toHaveCount(0);
+  await selectAssistantPanel(page, "团队设置");
   await panel.getByRole("tab", { name: "知识档案", exact: true }).click();
   await expect(
     panel.getByText("尚无匹配的知识档案", { exact: true }),
@@ -599,11 +662,12 @@ test("DeerFlow 未就绪时显示服务原因并阻止提交", async ({ page }) 
   await expect(
     panel.getByText("团队服务连接尚未配置，请联系管理员。", { exact: true }),
   ).toBeVisible();
+  await panel.getByRole("button", { name: "返回聊天并使用团队" }).click();
   await expect(
     panel.getByPlaceholder("团队智能服务尚未就绪，请查看面板提示"),
   ).toBeDisabled();
   await expect(
     panel.getByRole("button", { name: "提交团队任务", exact: true }),
-  ).toBeDisabled();
+  ).toHaveCount(0);
   expect(fixture.submissions).toHaveLength(0);
 });

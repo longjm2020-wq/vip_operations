@@ -89,7 +89,11 @@ async function row(sql: string, params: unknown[] = []) {
   return (await f.db!.query<Row>(sql, params)).rows[0];
 }
 async function task(
-  input: Partial<{ attachmentIds: string[]; useKnowledge: boolean }> = {},
+  input: Partial<{
+    attachmentIds: string[];
+    useKnowledge: boolean;
+    conversationContext: string;
+  }> = {},
 ) {
   const id = randomUUID(),
     lease = randomUUID();
@@ -198,12 +202,16 @@ describe("DeerFlow execution ownership and truthful delivery", () => {
     const current = await task({
       attachmentIds: [attached],
       useKnowledge: true,
+      conversationContext: "当前聊天主题：秋季轻旅",
     });
     await execute(current);
     expect(f.knowledge).toHaveBeenCalledWith("7", "整理产品资料", true);
     expect(f.client.upload).toHaveBeenCalledTimes(2);
     expect(f.client.startRun).toHaveBeenCalledTimes(1);
     expect(f.client.startRun.mock.calls[0][1]).toContain("旧资料正文");
+    expect(f.client.startRun.mock.calls[0][1]).toContain(
+      "当前聊天主题：秋季轻旅",
+    );
     expect(f.client.startRun.mock.calls[0][3]).toEqual({
       idempotencyKey: current.run.id,
     });

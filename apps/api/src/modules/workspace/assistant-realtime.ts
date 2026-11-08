@@ -24,6 +24,7 @@ import {
 } from "../analytics/secrets.js";
 import { requireAssistant } from "./assistant-memory.js";
 import { readAssistant, sendAssistant } from "./assistant.js";
+import { readConversationReference } from "./assistant-shared-context.js";
 import { voiceSafeError } from "./assistant-voice.js";
 import { verifyDoubaoRealtime } from "./doubao-realtime.js";
 import {
@@ -147,6 +148,7 @@ export function realtimeConfiguration(
   voice: string,
   desktopEnabled = false,
   pageEnabled = false,
+  history = "",
 ) {
   const pageControl = pageEnabled && !desktopEnabled;
   return {
@@ -179,6 +181,7 @@ export function realtimeConfiguration(
           ]
         : []),
       "普通聊天直接用语音回答，不调用工作台工具。私人日程和记忆仅在用户已授权时由工具读取；未知信息不猜测。",
+      history,
     ].join("\n"),
     audio: {
       input: {
@@ -430,6 +433,9 @@ export async function startRealtime(c: Context, input: unknown) {
   if (qwenRequest) pendingQwenSessions.set(b.id, qwenRequest);
   try {
     let sdp: string;
+    const history = b.desktopDeviceId
+      ? ""
+      : await readConversationReference(c.actor.id);
     if (qwenRequest) {
       sdp = await createQwenWebRtcSession(
         providerFields(s).key,
@@ -443,7 +449,9 @@ export async function startRealtime(c: Context, input: unknown) {
       body.set("sdp", b.sdp!);
       body.set(
         "session",
-        JSON.stringify(realtimeConfiguration(s.voice, !!b.desktopDeviceId)),
+        JSON.stringify(
+          realtimeConfiguration(s.voice, !!b.desktopDeviceId, false, history),
+        ),
       );
       const response = await providerRequest(s, "/calls", body);
       const location = response.headers.get("Location") || "";
@@ -479,6 +487,7 @@ export async function startRealtime(c: Context, input: unknown) {
                 providerFields(s).voice,
                 !!b.desktopDeviceId,
                 !b.desktopDeviceId,
+                history,
               ),
             ),
           }
@@ -545,6 +554,9 @@ export async function claimRealtimeSocket(
     key: providerFields(s).key as string,
     voice: providerFields(s).voice as string,
     desktopEnabled: !!session.desktop_device_id,
+    history: session.desktop_device_id
+      ? ""
+      : await readConversationReference(c.actor.id),
     workspaceId:
       s.provider === "qwen" ? (s.qwen_workspace_id as string) : undefined,
   };
@@ -695,6 +707,7 @@ export async function saveRealtimeCaptions(
         ...m,
         text: m.role === "assistant" ? assistantPublicText(m.text) : m.text,
         createdAt: new Date().toISOString(),
+        source: "voice",
       }));
     if (fresh.length)
       await tx.$executeRawUnsafe(

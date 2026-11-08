@@ -95,8 +95,18 @@ async function setup(
       data = {
         defaultModel: "engine/default",
         models: [
-          { id: "engine/default", name: "通用助手", vision: true },
-          { id: "engine/deep", name: "深度思考", vision: false },
+          {
+            id: "engine/default",
+            name: "通用助手",
+            displayName: "GPT-6.1 Sol",
+            vision: true,
+          },
+          {
+            id: "engine/deep",
+            name: "深度思考",
+            displayName: "DeepSeek V3.2",
+            vision: false,
+          },
         ],
         imageModels: [
           { id: "engine/image", name: "图像创作", reference: true },
@@ -208,6 +218,74 @@ async function setup(
   });
   return requests;
 }
+test("模型菜单显示真实名称、发送所选模型并在重开对话后保留", async ({
+  page,
+}) => {
+  const requests = await setup(page);
+  await page.goto("/my-workspace");
+  const composer = page.locator(".assistant-compose:visible");
+  await expect(
+    composer.getByRole("button", { name: "选择对话模型" }),
+  ).toContainText("GPT-6.1 Sol");
+  await composer.getByRole("button", { name: "选择对话模型" }).click();
+  await page.getByRole("menuitem", { name: /DeepSeek V3.2/ }).click();
+  await expect(
+    composer.getByRole("button", { name: "选择对话模型" }),
+  ).toContainText("DeepSeek V3.2");
+  expect(requests).toHaveLength(0);
+  await openPersonalAssistant(page);
+  const dialog = page.getByRole("dialog", { name: /AI 个人助理/ });
+  await expect(
+    dialog.getByRole("button", { name: "选择对话模型" }),
+  ).toContainText("DeepSeek V3.2");
+  await dialog.getByPlaceholder(/告诉我你想完成什么/).fill("整理两条建议");
+  await dialog.getByRole("button", { name: "发送给个人助理" }).click();
+  await expect.poll(() => requests.length).toBe(1);
+  expect(requests[0].model).toBe("engine/deep");
+  expect(requests[0]).not.toHaveProperty("webSearch");
+});
+
+test("选中模型失效后保留草稿并要求重选，不静默降级", async ({ page }) => {
+  const requests = await setup(page);
+  await page.goto("/my-workspace");
+  const composer = page.locator(".assistant-compose:visible");
+  await composer.getByRole("button", { name: "选择对话模型" }).click();
+  await page.getByRole("menuitem", { name: /DeepSeek V3.2/ }).click();
+  await composer.getByPlaceholder(/告诉我你想完成什么/).fill("保留我的草稿");
+  await page.route("**/api/v1/my-workspace/assistant/capabilities", (route) =>
+    route.fulfill({
+      json: {
+        data: {
+          defaultModel: "engine/default",
+          models: [
+            {
+              id: "engine/default",
+              name: "通用助手",
+              displayName: "GPT-6.1 Sol",
+              vision: true,
+            },
+          ],
+          imageModels: [],
+          notice: "",
+        },
+      },
+    }),
+  );
+  await composer.getByRole("button", { name: "选择对话模型" }).click();
+  await page.getByRole("menuitem", { name: "刷新模型列表" }).click();
+  await expect(composer.getByRole("alert")).toContainText("所选模型已不可用");
+  await expect(
+    composer.getByRole("button", { name: "发送给个人助理" }),
+  ).toBeDisabled();
+  await expect(composer.locator("textarea")).toHaveValue("保留我的草稿");
+  expect(requests).toHaveLength(0);
+  await composer.getByRole("button", { name: "选择对话模型" }).click();
+  await page.getByRole("menuitem", { name: /GPT-6.1 Sol/ }).click();
+  await expect(
+    composer.getByRole("button", { name: "发送给个人助理" }),
+  ).toBeEnabled();
+});
+
 test("简洁输入区直接发送附件并下载任务结果，历史回复隐藏型号", async ({
   page,
 }) => {
@@ -228,14 +306,16 @@ test("简洁输入区直接发送附件并下载任务结果，历史回复隐�
   await openPersonalAssistant(page);
   const dialog = page.getByRole("dialog", { name: /AI 个人助理/ });
   await expect(dialog).toBeVisible();
-  await expect(dialog).not.toContainText(/GPT|OpenRouter|DeepSeek|openai\//i);
+  await expect(dialog.locator(".assistant-messages")).not.toContainText(
+    /GPT|OpenRouter|DeepSeek|openai\//i,
+  );
   await dialog.getByLabel("上传助理附件").setInputFiles({
     name: "资料.txt",
     mimeType: "text/plain",
     buffer: Buffer.from("测试库存：条码001234567890123456789 数量12"),
   });
   await expect(dialog.locator(".agent-attachments")).toContainText("资料.txt");
-  await expect(dialog.locator(".agent-composer-tools button")).toHaveCount(2);
+  await expect(dialog.locator(".agent-composer-tools button")).toHaveCount(4);
   await expect(dialog.getByRole("combobox")).toHaveCount(0);
   await dialog
     .getByPlaceholder(/告诉我你想完成什么/)
@@ -324,28 +404,36 @@ test("简洁输入区直接发送附件并下载任务结果，历史回复隐�
   );
   expect(requests).toHaveLength(1);
 });
-test("亮色窄屏保留附件入口和中性能力名称", async ({ page }) => {
+test("窄屏模型听写语音布局不溢出，输入后原位切换发送", async ({ page }) => {
   await setup(page, "light");
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/my-workspace?assistant=tasks");
   const dialog = page.getByRole("dialog", { name: /AI 个人助理/ });
   await expect(dialog).toBeVisible();
-  await selectAssistantPanel(page, "互动对话");
+  await selectAssistantPanel(page, "聊天");
   await expect(
     dialog.getByRole("button", { name: "附件", exact: true }),
   ).toBeVisible();
-  await expect(dialog).not.toContainText(/GPT|OpenRouter|DeepSeek|openai\//i);
+  await expect(
+    dialog.getByRole("button", { name: "选择对话模型" }),
+  ).toContainText("GPT-6.1 Sol");
   const box = await dialog.boundingBox();
   expect(box!.x).toBeGreaterThanOrEqual(0);
   expect(box!.width).toBeLessThanOrEqual(390);
   const sender = dialog.locator(".ant-sender");
-  await expect(sender.locator("button")).toHaveCount(2);
+  await expect(sender.locator("button")).toHaveCount(4);
   const send = sender.getByRole("button", { name: "发送给个人助理" });
-  await expect(send).toBeDisabled();
+  await expect(
+    sender.getByRole("button", { name: "开始语音对话", exact: true }),
+  ).toBeVisible();
+  await expect(send).toHaveCount(0);
   await dialog.getByPlaceholder(/告诉我你想完成什么/).fill("直接输入");
   await expect(send).toBeEnabled();
   await dialog.getByPlaceholder(/告诉我你想完成什么/).clear();
-  await expect(send).toBeDisabled();
+  await expect(
+    sender.getByRole("button", { name: "开始语音对话", exact: true }),
+  ).toBeVisible();
+  await expect(send).toHaveCount(0);
   expect(
     await sender.evaluate((el) => el.scrollWidth <= el.clientWidth + 1),
   ).toBe(true);
@@ -522,7 +610,7 @@ test("电脑操作面板选择设备并撤销授权，输入区仅显示当前�
   await expect(
     composer.getByRole("button", { name: "附件", exact: true }),
   ).toBeVisible();
-  await expect(composer.locator(".agent-composer-tools button")).toHaveCount(2);
+  await expect(composer.locator(".agent-composer-tools button")).toHaveCount(4);
   await page.screenshot({ path: ".local/assistant-composer-home.png" });
   await openPersonalAssistant(page);
   await selectAssistantPanel(page, "电脑操作");

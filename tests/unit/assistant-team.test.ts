@@ -14,6 +14,11 @@ import { randomUUID } from "node:crypto";
 import type { Context } from "../../apps/api/src/core.js";
 import type { Tx } from "../../packages/database/src/index.js";
 import { defaultTeamSettings } from "../../packages/contracts/src/assistant-team.js";
+import {
+  hydrateTeamMessages,
+  readConversationReference,
+} from "../../apps/api/src/modules/workspace/assistant-shared-context.js";
+import type { AssistantMessage } from "../../packages/contracts/src/personal-assistant.js";
 const f = vi.hoisted(() => ({ db: null as PGlite | null, videos: vi.fn() }));
 vi.mock("../../packages/database/src/index.js", async (original) => {
   const exports =
@@ -106,14 +111,18 @@ beforeAll(async () => {
   await f.db.exec(
     "CREATE TABLE users(id bigint PRIMARY KEY); INSERT INTO users VALUES(7),(8); CREATE TABLE compass_ai_settings(id int PRIMARY KEY,enabled boolean,verified_at timestamptz,api_key_encrypted text); INSERT INTO compass_ai_settings VALUES(1,true,now(),'private-provider-key');",
   );
-  for (const file of ["083_assistant_agent.sql", "090_assistant_team.sql"])
+  for (const file of [
+    "069_personal_assistant.sql",
+    "083_assistant_agent.sql",
+    "090_assistant_team.sql",
+  ])
     await f.db.exec(
       await readFile("packages/database/migrations/" + file, "utf8"),
     );
 });
 beforeEach(async () => {
   await f.db!.exec(
-    "TRUNCATE personal_assistant_team_runs CASCADE; TRUNCATE personal_assistant_teams; TRUNCATE personal_assistant_jobs; TRUNCATE personal_assistant_files; UPDATE compass_ai_settings SET enabled=true;",
+    "TRUNCATE personal_assistant_team_runs CASCADE; TRUNCATE personal_assistant_conversations; TRUNCATE personal_assistant_teams; TRUNCATE personal_assistant_jobs; TRUNCATE personal_assistant_files; UPDATE compass_ai_settings SET enabled=true;",
   );
   f.videos.mockReset().mockResolvedValue([]);
 });
@@ -123,28 +132,107 @@ afterAll(async () => {
 afterEach(() => vi.unstubAllEnvs());
 
 describe("assistant team storage and owner boundaries", () => {
+  it("shares text and voice context with a team once, resolves its latest result, and respects clear and owner boundaries", async () => {
+    const prior = [
+      {
+        id: randomUUID(),
+        role: "user",
+        text: "本次发布主题为秋季轻旅",
+        createdAt: new Date().toISOString(),
+        source: "voice",
+      },
+    ];
+    await f.db!.query(
+      "INSERT INTO personal_assistant_conversations(user_id,messages) VALUES(7,$1::jsonb),(8,$2::jsonb)",
+      [
+        JSON.stringify(prior),
+        JSON.stringify([{ ...prior[0], text: "其他账号的私密主题" }]),
+      ],
+    );
+    const input = { ...body(), goal: "按刚才的主题写文案" };
+    const run = await createTeamRun(actor(), input);
+    await createTeamRun(actor(), input);
+    const stored = (
+      await f.db!.query<{ input: { conversationContext: string } }>(
+        "SELECT input FROM personal_assistant_team_runs WHERE id=$1",
+        [run.id],
+      )
+    ).rows[0];
+    expect(stored.input.conversationContext).toContain("秋季轻旅");
+    expect(stored.input.conversationContext).not.toContain("私密主题");
+    const history = (
+      await f.db!.query<{ messages: AssistantMessage[] }>(
+        "SELECT messages FROM personal_assistant_conversations WHERE user_id=7",
+      )
+    ).rows[0].messages;
+    expect(history).toHaveLength(3);
+    expect(history.at(-1)).toMatchObject({ teamRunId: run.id, source: "team" });
+    await f.db!.query(
+      "UPDATE personal_assistant_team_runs SET status='DONE',stage='已交付',summary='轻旅出发，文案已整理。' WHERE id=$1",
+      [run.id],
+    );
+    expect((await hydrateTeamMessages("7", history)).at(-1)?.text).toContain(
+      "轻旅出发",
+    );
+    expect(await readConversationReference("7")).toContain("轻旅出发");
+    expect((await hydrateTeamMessages("8", history)).at(-1)?.text).toBe(
+      "团队任务已不可用。",
+    );
+    await f.db!.query(
+      "UPDATE personal_assistant_conversations SET messages='[]' WHERE user_id=7",
+    );
+    expect(await readConversationReference("7")).toBe("");
+  });
+  it("does not overwrite an in-flight chat when a team is submitted from another window", async () => {
+    await f.db!.exec(
+      "INSERT INTO personal_assistant_conversations(user_id,state,pending_since) VALUES(7,'PENDING',now())",
+    );
+    await expect(createTeamRun(actor(), body())).rejects.toMatchObject(
+      errorCode("AI_BUSY"),
+    );
+    expect(await listTeamRuns(actor())).toEqual([]);
+  });
   it("snapshots the remote engine while preserving owner isolation and hiding connection secrets", async () => {
     vi.stubEnv("DEER_FLOW_URL", "http://deerflow.railway.internal:8001");
     vi.stubEnv("DEER_FLOW_INTERNAL_AUTH_TOKEN", "test-internal-token");
     vi.stubEnv("DEER_FLOW_MODEL_PROXY_TOKEN", "a".repeat(64));
     await f.db!.exec("UPDATE compass_ai_settings SET enabled=false");
-    expect(await readAssistantTeam(actor())).toMatchObject({ engine: "deerflow", ready: false });
+    expect(await readAssistantTeam(actor())).toMatchObject({
+      engine: "deerflow",
+      ready: false,
+    });
     await f.db!.exec("UPDATE compass_ai_settings SET enabled=true");
-    expect(await readAssistantTeam(actor())).toMatchObject({ engine: "deerflow", ready: true, models: [] });
+    expect(await readAssistantTeam(actor())).toMatchObject({
+      engine: "deerflow",
+      ready: true,
+      models: [],
+    });
     const input = body();
     const run = await createTeamRun(actor(), input);
     expect(run).toMatchObject({ engine: "deerflow", status: "QUEUED" });
     expect(JSON.stringify(run)).not.toMatch(/internal-token|railway.internal/);
-    await expect(readTeamRun(actor("8"), run.id)).rejects.toMatchObject(errorCode("NOT_FOUND"));
-    await expect(saveAssistantTeam(actor(), { ...defaultTeamSettings(), version: 0 })).rejects.toMatchObject(errorCode("TEAM_MANAGED"));
+    await expect(readTeamRun(actor("8"), run.id)).rejects.toMatchObject(
+      errorCode("NOT_FOUND"),
+    );
+    await expect(
+      saveAssistantTeam(actor(), { ...defaultTeamSettings(), version: 0 }),
+    ).rejects.toMatchObject(errorCode("TEAM_MANAGED"));
     vi.stubEnv("DEER_FLOW_URL", "");
-    expect(await createTeamRun(actor(), input)).toMatchObject({ id: run.id, engine: "deerflow" });
+    expect(await createTeamRun(actor(), input)).toMatchObject({
+      id: run.id,
+      engine: "deerflow",
+    });
   });
   it("does not silently fall back to the native executor when remote configuration is incomplete", async () => {
     vi.stubEnv("DEER_FLOW_URL", "http://deerflow.railway.internal:8001");
     vi.stubEnv("DEER_FLOW_INTERNAL_AUTH_TOKEN", "");
-    expect(await readAssistantTeam(actor())).toMatchObject({ engine: "deerflow", ready: false });
-    await expect(createTeamRun(actor(), body())).rejects.toMatchObject(errorCode("TEAM_UNAVAILABLE"));
+    expect(await readAssistantTeam(actor())).toMatchObject({
+      engine: "deerflow",
+      ready: false,
+    });
+    await expect(createTeamRun(actor(), body())).rejects.toMatchObject(
+      errorCode("TEAM_UNAVAILABLE"),
+    );
     expect(await listTeamRuns(actor())).toEqual([]);
   });
   it("returns seven defaults and catalog metadata without persisting or exposing service secrets", async () => {
@@ -307,12 +395,14 @@ describe("assistant team storage and owner boundaries", () => {
         "SELECT id,status FROM personal_assistant_jobs",
       )
     ).rows;
-    expect(Object.fromEntries(jobs.map((job) => [job.id, job.status]))).toEqual({
-      [childIds[0]]: "CANCELED",
-      [childIds[1]]: "CANCELED",
-      [childIds[2]]: "QUEUED",
-      [childIds[3]]: "QUEUED",
-    });
+    expect(Object.fromEntries(jobs.map((job) => [job.id, job.status]))).toEqual(
+      {
+        [childIds[0]]: "CANCELED",
+        [childIds[1]]: "CANCELED",
+        [childIds[2]]: "QUEUED",
+        [childIds[3]]: "QUEUED",
+      },
+    );
     await expect(createTeamRun(actor(), body())).resolves.toMatchObject({
       status: "QUEUED",
     });

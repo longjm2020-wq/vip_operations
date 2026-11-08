@@ -98,19 +98,22 @@ async function mockBrowserVoice(page: Page, supported = true) {
   );
 }
 
-test("简洁输入区直接发送文字，不申请麦克风或展示模式选择", async ({ page }) => {
+test("简洁输入区展示模型和语音入口，发送文字不申请麦克风", async ({ page }) => {
   await mockBrowserVoice(page);
   const fixture = await workspaceFixture(page);
   await page.goto("/my-workspace");
   const composer = page.locator(".assistant-compose:visible");
-  await expect(composer.locator(".agent-composer-tools button")).toHaveCount(2);
+  await expect(composer.locator(".agent-composer-tools button")).toHaveCount(4);
   await expect(composer.getByRole("combobox")).toHaveCount(0);
   await expect(
     composer.getByRole("button", { name: "语音输入", exact: true }),
-  ).toHaveCount(0);
+  ).toBeVisible();
   await expect(
     composer.getByRole("button", { name: "发送给个人助理" }),
-  ).toBeDisabled();
+  ).toHaveCount(0);
+  await expect(
+    composer.getByRole("button", { name: "开始语音对话", exact: true }),
+  ).toBeVisible();
   expect(await page.evaluate(() => window.assistantVoiceTest.starts)).toBe(0);
   const input = composer.getByPlaceholder(/告诉我你想完成什么/);
   await input.fill("安排明天下午3点选款会");
@@ -125,6 +128,57 @@ test("简洁输入区直接发送文字，不申请麦克风或展示模式选�
     dialog.getByText("已整理为日程草稿，请核对后加入日程。", { exact: true }),
   ).toBeVisible();
   expect(await page.evaluate(() => window.assistantVoiceTest.starts)).toBe(0);
+});
+
+test("麦克风听写追加草稿、停止后可编辑，过期识别事件不改写或自动发送", async ({
+  page,
+}) => {
+  await mockBrowserVoice(page);
+  const fixture = await workspaceFixture(page);
+  await page.goto("/my-workspace");
+  const composer = page.locator(".assistant-compose:visible");
+  const input = composer.locator("textarea");
+  await input.fill("已有草稿");
+  await composer.getByRole("button", { name: "语音输入", exact: true }).click();
+  await expect(composer.getByRole("status")).toContainText("正在听写");
+  await expect(input).not.toBeEditable();
+  await input.press("Enter");
+  expect(fixture.assistantCalls()).toBe(0);
+  await page.evaluate(() =>
+    window.assistantVoiceTest.recognizer?.onresult?.({
+      results: [{ 0: { transcript: "补充内容" }, isFinal: true }],
+    }),
+  );
+  await expect(input).toHaveValue("已有草稿 补充内容");
+  expect(fixture.assistantCalls()).toBe(0);
+  await composer.getByRole("button", { name: "停止听写", exact: true }).click();
+  await expect(input).toBeEditable();
+  await page.evaluate(() =>
+    window.assistantVoiceTest.recognizer?.onresult?.({
+      results: [{ 0: { transcript: "过期内容" }, isFinal: true }],
+    }),
+  );
+  await expect(input).toHaveValue("已有草稿 补充内容");
+  await input.fill("安排明天下午3点选款会");
+  await input.press("Enter");
+  await expect.poll(() => fixture.assistantCalls()).toBe(1);
+  expect(await page.evaluate(() => window.assistantVoiceTest.starts)).toBe(1);
+});
+
+test("听写权限被拒绝时保留草稿并允许继续键入", async ({ page }) => {
+  await mockBrowserVoice(page);
+  const fixture = await workspaceFixture(page);
+  await page.goto("/my-workspace");
+  const composer = page.locator(".assistant-compose:visible");
+  await composer.locator("textarea").fill("已有草稿");
+  await composer.getByRole("button", { name: "语音输入", exact: true }).click();
+  await page.evaluate(() =>
+    window.assistantVoiceTest.recognizer?.onerror?.({ error: "not-allowed" }),
+  );
+  await expect(composer.getByRole("alert")).toContainText("麦克风权限未开启");
+  await expect(composer.locator("textarea")).toHaveValue("已有草稿");
+  await expect(composer.locator("textarea")).toBeEditable();
+  expect(fixture.assistantCalls()).toBe(0);
 });
 
 test("工作台0和1背景实际滚动，减少动态效果保持静态且仍可调整视角", async ({
@@ -529,9 +583,10 @@ test("浏览器不支持语音识别时仍可直接输入文字", async ({ page 
   await mockBrowserVoice(page, false);
   await workspaceFixture(page);
   await page.goto("/my-workspace");
+  await page.getByRole("button", { name: "语音输入", exact: true }).click();
   await expect(
-    page.getByRole("button", { name: "语音输入", exact: true }),
-  ).toHaveCount(0);
+    page.locator(".assistant-compose:visible").getByRole("alert"),
+  ).toContainText("此浏览器不支持语音输入");
   await expect(page.getByPlaceholder(/告诉我你想完成什么/)).toBeEditable();
 });
 
@@ -568,7 +623,7 @@ test("新提醒播报须开启，旧提醒不重播，文字输入保持可用",
   await expect
     .poll(() => page.evaluate(() => window.assistantVoiceTest.spoken))
     .toEqual(["新的选款会：10:20开始"]);
-  await selectAssistantPanel(page, "互动对话");
+  await selectAssistantPanel(page, "聊天");
   await expect(dialog.getByPlaceholder(/告诉我你想完成什么/)).toBeEditable();
 });
 
@@ -597,7 +652,7 @@ test("个人记忆独立保存编辑删除，发送时明确选择是否使用",
   await expect(dialog.locator(".assistant-memory-entry")).toContainText(
     "先列风险",
   );
-  await selectAssistantPanel(page, "互动对话");
+  await selectAssistantPanel(page, "聊天");
   await selectAssistantPanel(page, "对话设置");
   await expect(
     page.getByRole("checkbox", { name: "使用个人记忆", exact: true }),
@@ -680,7 +735,7 @@ test("查询证据保留条码；操作卡点击后提交，完成以真实动�
   });
   await selectAssistantPanel(page, "动态反馈");
   await dialog.getByRole("button", { name: "刷新助理动态" }).click();
-  await selectAssistantPanel(page, "互动对话");
+  await selectAssistantPanel(page, "聊天");
   await expect(action.getByText("已完成", { exact: true })).toBeVisible();
   await page.clock.runFor(4000);
   await page.screenshot({
@@ -1174,7 +1229,7 @@ test("工作台与业务页共用透明宽屏对话，单输入和菜单可用�
         : dialog.getByRole("button", { name: label }),
     ).toBeVisible();
   }
-  await selectAssistantPanel(page, "互动对话");
+  await selectAssistantPanel(page, "聊天");
   await expect(dialog.locator(".assistant-panel-heading")).toHaveText("小序");
   await expect(input).toHaveValue("继续编辑但尚未发送");
   await page.screenshot({ path: ".local/workspace-chat-screen-dark.png" });
@@ -1259,7 +1314,7 @@ test("工作台与业务页共用透明宽屏对话，单输入和菜单可用�
   await expect(
     dialog.getByRole("region", { name: "个人记忆管理", exact: true }),
   ).toBeVisible();
-  await selectAssistantPanel(page, "互动对话");
+  await selectAssistantPanel(page, "聊天");
   await expect(input).toHaveValue("继续编辑但尚未发送");
   await page.screenshot({ path: ".local/business-chat-screen-dark.png" });
   await page.setViewportSize({ width: 390, height: 844 });
@@ -1996,7 +2051,7 @@ test("手机工作台与收起面板不横向溢出，减少动态效果时核�
   await openPersonalAssistant(page);
   const dialog = page.getByRole("dialog");
   await expect(
-    dialog.getByRole("button", { name: "发送给个人助理" }),
+    dialog.getByRole("button", { name: "开始语音对话", exact: true }),
   ).toBeVisible();
   const input = dialog.getByPlaceholder(/告诉我你想完成什么/);
   await input.fill("核对库存");
@@ -2008,7 +2063,7 @@ test("手机工作台与收起面板不横向溢出，减少动态效果时核�
   ).toHaveCount(0);
   await input.clear();
   await expect(
-    dialog.getByRole("button", { name: "发送给个人助理" }),
+    dialog.getByRole("button", { name: "开始语音对话", exact: true }),
   ).toBeVisible();
   expect((await dialog.boundingBox())!.width).toBeLessThanOrEqual(390.05);
   await dialog.getByRole("button", { name: "关闭", exact: true }).click();
@@ -2061,7 +2116,7 @@ test("手机导航可开关，助理和日程弹窗完整显示且业务页面�
   await openPersonalAssistant(page);
   const assistant = page.getByRole("dialog", { name: /AI 个人助理/ });
   await expect(
-    assistant.getByRole("button", { name: "发送给个人助理" }),
+    assistant.getByRole("button", { name: "开始语音对话", exact: true }),
   ).toBeVisible();
   expect((await assistant.boundingBox())!.width).toBeLessThanOrEqual(390.05);
   await assistant.getByRole("button", { name: "关闭", exact: true }).click();

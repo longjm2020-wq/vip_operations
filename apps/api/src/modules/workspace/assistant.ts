@@ -29,6 +29,7 @@ import {
 import { runAssistantVoiceCommand } from "./assistant-voice-commands.js";
 import { queueDesktopTask } from "./desktop.js";
 import { resolveAssistantWebsite } from "./assistant-website.js";
+import { hydrateTeamMessages } from "./assistant-shared-context.js";
 export { parseAssistantAnswer } from "./assistant-model.js";
 
 async function settings() {
@@ -72,6 +73,7 @@ export async function readAssistant(c: Context) {
     settings(),
   ]);
   const view = publicConversation(row, s);
+  view.messages = await hydrateTeamMessages(c.actor.id, view.messages);
   const actionIds = view.messages.flatMap(
     (item: AssistantMessage) => item.actions?.map((action) => action.id) || [],
   );
@@ -192,11 +194,12 @@ export async function sendAssistant(
   )
     fail("AI_RATE_LIMIT", "每小时最多发送20条消息，请稍后再试", 429);
   const messages: AssistantMessage[] = [
-    ...existing.messages.slice(-38),
+    ...(await hydrateTeamMessages(c.actor.id, existing.messages.slice(-38))),
     {
       id: body.requestId,
       role: "user",
       text: body.message,
+      ...(voice ? { source: "voice" as const } : {}),
       createdAt: new Date().toISOString(),
       ...(attachments.length
         ? { attachments: attachments.map(agentFileView) }
@@ -307,6 +310,7 @@ export async function sendAssistant(
       id: randomUUID(),
       role: "assistant",
       text: answer.text,
+      ...(voice ? { source: "voice" as const } : {}),
       schedules: answer.schedules,
       tools: answer.tools,
       evidence: answer.evidence,

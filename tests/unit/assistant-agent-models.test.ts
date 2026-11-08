@@ -7,7 +7,7 @@ import {
 } from "../../apps/api/src/modules/workspace/agent-models.js";
 import { assistantPublicText } from "../../packages/contracts/src/ai-presentation.js";
 afterEach(() => vi.unstubAllGlobals());
-it("keeps identities private while routing explicit capability selections to the exact provider model", async () => {
+it("publishes model display names while routing opaque selections to the exact provider model", async () => {
   vi.stubGlobal(
     "fetch",
     vi.fn(
@@ -30,6 +30,7 @@ it("keeps identities private while routing explicit capability selections to the
               : [
                   {
                     id: "deepseek/deepseek-v3.2",
+                    name: "DeepSeek: DeepSeek V3.2",
                     created: 3,
                     architecture: {
                       input_modalities: ["text"],
@@ -52,12 +53,12 @@ it("keeps identities private while routing explicit capability selections to the
     ),
   );
   const catalog = await publicAgentCatalog();
-  expect(JSON.stringify(catalog)).not.toMatch(
-    /openai|gpt|deepseek|google|gemini/i,
-  );
+  expect(catalog.models.every((m) => m.id.startsWith("engine/"))).toBe(true);
+  expect(catalog.models.every((m) => !Object.hasOwn(m, "actual"))).toBe(true);
   expect(catalog.models.find((m) => m.name === "深度思考")).toMatchObject({
     vision: false,
     id: modelRef("deepseek/deepseek-v3.2"),
+    displayName: "DeepSeek V3.2",
   });
   expect(
     (await resolveAgentModel(modelRef("deepseek/deepseek-v3.2"))).actual,

@@ -407,7 +407,7 @@ test("手机一级入口固定暗色，工作台和详情助理弹窗适配屏�
   await openPersonalAssistant(page);
   const dialog = page.getByRole("dialog", { name: /AI 个人助理/ });
   await expect(
-    dialog.getByRole("button", { name: "发送给个人助理" }),
+    dialog.getByRole("button", { name: "开始语音对话", exact: true }),
   ).toBeVisible();
   expect((await dialog.boundingBox())!.width).toBeLessThanOrEqual(390.05);
   await dialog.getByRole("button", { name: "关闭", exact: true }).click();
@@ -427,7 +427,7 @@ test("手机一级入口固定暗色，工作台和详情助理弹窗适配屏�
       .click();
     await page.getByRole("button", { name: "文字对话", exact: true }).click();
     await expect(
-      dialog.getByRole("button", { name: "发送给个人助理" }),
+      dialog.getByRole("button", { name: "开始语音对话", exact: true }),
     ).toBeVisible();
     expect((await dialog.boundingBox())!.width).toBeLessThanOrEqual(390.05);
     await dialog.getByRole("button", { name: "关闭", exact: true }).click();

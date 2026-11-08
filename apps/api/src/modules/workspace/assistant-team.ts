@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { randomUUID } from "node:crypto";
 import {
   db,
   one,
@@ -24,6 +25,10 @@ import { agentFileView, ownedAgentFiles } from "./agent-files.js";
 import { readTeamModelCatalog, resolveTeamModel } from "./team-models.js";
 import { publicTeamVideoCatalog } from "./team-video.js";
 import { deerFlowEnabled, deerFlowConfigured } from "./deerflow-client.js";
+import {
+  conversationReference,
+  hydrateTeamMessages,
+} from "./assistant-shared-context.js";
 
 const active = "('QUEUED','PLANNING','RUNNING','REVIEWING')";
 const identifier = z.string().uuid();
@@ -31,7 +36,12 @@ const safeText = (value: unknown, limit = 120000) =>
   assistantPublicText(typeof value === "string" ? value.slice(0, limit) : "");
 
 export async function teamServiceReady() {
-  if (deerFlowEnabled() && (!deerFlowConfigured() || !/^[a-f0-9]{64}$/i.test(process.env.DEER_FLOW_MODEL_PROXY_TOKEN || ""))) return false;
+  if (
+    deerFlowEnabled() &&
+    (!deerFlowConfigured() ||
+      !/^[a-f0-9]{64}$/i.test(process.env.DEER_FLOW_MODEL_PROXY_TOKEN || ""))
+  )
+    return false;
   const settings = await one(
     db,
     "SELECT enabled,verified_at,(api_key_encrypted IS NOT NULL) AS has_key FROM public.compass_ai_settings WHERE id=1",
@@ -73,7 +83,9 @@ export async function readAssistantTeam(
       notice: ready
         ? "团队任务由独立协作服务执行；成员、模型和工具由管理员配置。交付保留供你核对，不自动加入已验收档案。"
         : "团队协作服务尚未就绪，请管理员检查服务连接、模型代理及已验证的 AI 服务。",
-      models: [], imageModels: [], videoModels: [],
+      models: [],
+      imageModels: [],
+      videoModels: [],
     };
   }
   const [saved, catalog, ready, videoModels] = await Promise.all([
@@ -137,7 +149,8 @@ export async function saveAssistantTeam(
   input: unknown,
 ): Promise<TeamConfiguration> {
   requireAssistant(c);
-  if (deerFlowEnabled()) fail("TEAM_MANAGED", "团队成员与模型由独立协作服务管理", 409);
+  if (deerFlowEnabled())
+    fail("TEAM_MANAGED", "团队成员与模型由独立协作服务管理", 409);
   const { version, ...settings } = parse(teamSaveSchema, input);
   await validateSettingsModels(c, settings);
   await db.$transaction(async (tx) => {
@@ -333,16 +346,17 @@ export async function createTeamRun(
   const chief = saved.settings.members.find(
     (member) => member.role === "orchestrator",
   )!;
-  if (!deerFlowEnabled()) await resolveTeamModel({
-    taskModel: body.model,
-    profileModel: chief.modelMode === "fixed" ? chief.modelId : undefined,
-    orchestrator: true,
-    vision: files.some(
-      (file) =>
-        file.mime.startsWith("image/") || file.mime.startsWith("video/"),
-    ),
-    pdf: files.some((file) => file.mime === "application/pdf"),
-  });
+  if (!deerFlowEnabled())
+    await resolveTeamModel({
+      taskModel: body.model,
+      profileModel: chief.modelMode === "fixed" ? chief.modelId : undefined,
+      orchestrator: true,
+      vision: files.some(
+        (file) =>
+          file.mime.startsWith("image/") || file.mime.startsWith("video/"),
+      ),
+      pdf: files.some((file) => file.mime === "application/pdf"),
+    });
   await db.$transaction(async (tx) => {
     await tx.$executeRawUnsafe(
       "SELECT pg_advisory_xact_lock(hashtextextended($1,0))",
@@ -373,6 +387,25 @@ export async function createTeamRun(
     if (count!.n >= 3)
       fail("TEAM_BUSY", "已有3个团队任务正在处理，请等待完成后继续", 409);
     await tx.$executeRawUnsafe(
+      "INSERT INTO public.personal_assistant_conversations(user_id) VALUES($1::bigint) ON CONFLICT DO NOTHING",
+      c.actor.id,
+    );
+    const conversation = (await one(
+      tx,
+      "SELECT messages,state,pending_since FROM public.personal_assistant_conversations WHERE user_id=$1::bigint FOR UPDATE",
+      c.actor.id,
+    ))!;
+    if (
+      conversation.state === "PENDING" &&
+      Date.now() - new Date(conversation.pending_since).getTime() < 180000
+    )
+      fail("AI_BUSY", "小序正在回复，请稍后再提交团队任务", 409);
+    const history = await hydrateTeamMessages(
+      c.actor.id,
+      conversation.messages,
+      tx,
+    );
+    await tx.$executeRawUnsafe(
       "INSERT INTO public.personal_assistant_team_runs(id,user_id,request_hash,input,state) VALUES($1::uuid,$2::bigint,$3,$4::jsonb,$5::jsonb)",
       body.id,
       c.actor.id,
@@ -382,8 +415,33 @@ export async function createTeamRun(
         ...(deerFlowEnabled() ? { engine: "deerflow" } : {}),
         settings: saved.settings,
         settingsVersion: saved.version,
+        conversationContext: conversationReference(history),
       }),
       JSON.stringify({ plan: "", steps: [], members: saved.settings.members }),
+    );
+    const createdAt = new Date().toISOString();
+    await tx.$executeRawUnsafe(
+      "UPDATE public.personal_assistant_conversations SET messages=$2::jsonb,version=version+1,updated_at=now() WHERE user_id=$1::bigint",
+      c.actor.id,
+      JSON.stringify([
+        ...history.slice(-38),
+        {
+          id: body.id,
+          role: "user",
+          text: body.goal,
+          source: "team",
+          createdAt,
+          ...(files.length ? { attachments: files.map(agentFileView) } : {}),
+        },
+        {
+          id: randomUUID(),
+          role: "assistant",
+          text: "团队任务已提交",
+          teamRunId: body.id,
+          source: "team",
+          createdAt,
+        },
+      ]),
     );
   });
   return readTeamRun(c, body.id);

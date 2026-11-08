@@ -85,7 +85,7 @@ const configurationDraft = (config: TeamConfiguration): TeamSettings => ({
   allowWeb: config.allowWeb,
 });
 
-function ArtifactCard({ artifact }: { artifact: TeamArtifact }) {
+export function ArtifactCard({ artifact }: { artifact: TeamArtifact }) {
   return (
     <article className="team-artifact" aria-label={`交付：${artifact.title}`}>
       <div className="team-card-heading">

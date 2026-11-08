@@ -1,6 +1,12 @@
 import { expect, type Page } from "@playwright/test";
 
 export async function openPersonalAssistant(page: Page) {
+  const dialog = page.getByRole("dialog", { name: /AI 个人助理/ });
+  if (await dialog.isVisible()) {
+    if (!(await dialog.locator(".ant-drawer-footer textarea").isVisible()))
+      await selectAssistantPanel(page, "聊天");
+    return;
+  }
   const launcher = page.getByRole("button", {
     name: "文字对话",
     exact: true,

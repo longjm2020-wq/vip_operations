@@ -19,6 +19,7 @@ export type AgentFile = {
 export type AgentModel = {
   id: string;
   name: string;
+  displayName?: string;
   vision: boolean;
   pdf: boolean;
   structured: boolean;

@@ -450,7 +450,12 @@ function runRelay(
             JSON.stringify(
               doubaoConfiguration(
                 config.voice,
-                realtimeConfiguration(config.voice, config.desktopEnabled),
+                realtimeConfiguration(
+                  config.voice,
+                  config.desktopEnabled,
+                  false,
+                  config.history,
+                ),
               ),
             ),
           );
@@ -488,6 +493,8 @@ function runRelay(
                       realtimeConfiguration(
                         config.voice,
                         config.desktopEnabled,
+                        false,
+                        config.history,
                       ),
                     ),
                   ),

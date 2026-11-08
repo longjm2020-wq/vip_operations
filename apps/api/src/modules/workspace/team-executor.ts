@@ -731,7 +731,12 @@ export async function runTeamExecution(
   lease: string,
   signal: AbortSignal,
 ) {
-  const { settings: storedSettings, settingsVersion, ...body } = run.input;
+  const {
+    settings: storedSettings,
+    settingsVersion,
+    conversationContext,
+    ...body
+  } = run.input;
   const input: TeamExecutionInput = {
     ...teamRunCreateSchema.parse(body),
     settings: teamSettingsSchema.parse(storedSettings),
@@ -923,6 +928,9 @@ export async function runTeamExecution(
         role: "user",
         content: [
           { type: "text", text: request.prompt },
+          ...(typeof conversationContext === "string" && conversationContext
+            ? [{ type: "text", text: conversationContext.slice(0, 20000) }]
+            : []),
           {
             type: "text",
             text: JSON.stringify({

@@ -70,6 +70,8 @@ export type AssistantMessage = {
   navigation?: string;
   webNavigation?: AssistantWebCommand;
   desktopTaskId?: string;
+  teamRunId?: string;
+  source?: "voice" | "team";
   evidence?: AssistantEvidence[];
   actions?: AssistantAction[];
   memorySuggestions?: { title: string; content: string }[];

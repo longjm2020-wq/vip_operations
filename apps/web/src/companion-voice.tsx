@@ -45,22 +45,27 @@ export function CompanionVoice({
     const discover = () => {
       if (bubble.current?.classList.contains("companion-voice-inline"))
         inlineHeight.current = bubble.current.getBoundingClientRect().height;
+      const chatSlot = document.querySelector<HTMLElement>(
+        ".ant-drawer-open .assistant-chat-voice-slot",
+      );
       setWorkspaceSlot(
-        document.querySelector<HTMLElement>(
-          ".personal-workspace .workspace-voice-slot",
-        ),
+        chatSlot ||
+          document.querySelector<HTMLElement>(
+            ".personal-workspace .workspace-voice-slot",
+          ),
       );
       setOverlay(
-        [
-          ...document.querySelectorAll<HTMLElement>(
-            ".ant-drawer-open, .ant-modal-wrap",
+        !chatSlot &&
+          [
+            ...document.querySelectorAll<HTMLElement>(
+              ".ant-drawer-open, .ant-modal-wrap",
+            ),
+          ].some(
+            (element) =>
+              element.getBoundingClientRect().width > 0 &&
+              getComputedStyle(element).visibility !== "hidden" &&
+              getComputedStyle(element).display !== "none",
           ),
-        ].some(
-          (element) =>
-            element.getBoundingClientRect().width > 0 &&
-            getComputedStyle(element).visibility !== "hidden" &&
-            getComputedStyle(element).display !== "none",
-        ),
       );
       requestAlign.current();
     };
@@ -327,18 +332,22 @@ export function CompanionVoice({
                 {hub.voiceExecutionLabel}
               </div>
             )}
-            <p
-              className={
-                problem ? "companion-voice-error" : "companion-voice-caption"
-              }
-              title={caption}
-              tabIndex={workspaceSlot ? 0 : undefined}
-              aria-label={workspaceSlot ? "语音字幕" : undefined}
-              role={problem ? "alert" : undefined}
-              aria-live="polite"
-            >
-              {caption}
-            </p>
+            {(!workspaceSlot?.classList.contains("assistant-chat-voice-slot") ||
+              problem ||
+              !last) && (
+              <p
+                className={
+                  problem ? "companion-voice-error" : "companion-voice-caption"
+                }
+                title={caption}
+                tabIndex={workspaceSlot ? 0 : undefined}
+                aria-label={workspaceSlot ? "语音字幕" : undefined}
+                role={problem ? "alert" : undefined}
+                aria-live="polite"
+              >
+                {caption}
+              </p>
+            )}
             <div className="companion-voice-controls">
               {!voice.active ? (
                 <button
@@ -414,13 +423,17 @@ export function CompanionVoice({
                   <SoundOutlined />
                 </button>
               )}
-              <button
-                aria-label="查看完整对话"
-                title="结束语音并查看完整对话"
-                onClick={() => hub.openPanel("chat")}
-              >
-                <CommentOutlined />
-              </button>
+              {!workspaceSlot?.classList.contains(
+                "assistant-chat-voice-slot",
+              ) && (
+                <button
+                  aria-label="查看完整对话"
+                  title="结束语音并查看完整对话"
+                  onClick={() => hub.openPanel("chat")}
+                >
+                  <CommentOutlined />
+                </button>
+              )}
               <button
                 aria-label="语音设置"
                 title="语音设置"

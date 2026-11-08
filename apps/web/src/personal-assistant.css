@@ -13,7 +13,83 @@
 }
 .assistant-send-actions {
   flex-wrap: nowrap;
-  gap: 2px;
+  gap: 6px;
+  min-width: 0;
+}
+.assistant-chat-voice-slot {
+  margin-top: 14px;
+  padding: 12px 0;
+  border-top: 1px solid var(--app-border);
+}
+body:has(.assistant-screen.ant-drawer-open) .sidebar-assistant,
+body:has(.assistant-screen.ant-drawer-open) .companion-voice-prompt {
+  visibility: hidden;
+  pointer-events: none;
+}
+.assistant-team-message {
+  min-width: 0;
+  margin: 14px 0;
+  padding: 16px;
+  border: 1px solid var(--app-border);
+  border-radius: 16px;
+  overflow-wrap: anywhere;
+}
+.assistant-team-message details > summary {
+  color: var(--app-secondary);
+  cursor: pointer;
+  margin-top: 12px;
+}
+.assistant-model-picker.ant-btn {
+  height: 30px;
+  padding-inline: 7px;
+  gap: 7px;
+  max-width: min(230px, 40vw);
+  color: var(--app-text);
+  font-size: 12px;
+  font-weight: 500;
+  box-shadow: none;
+}
+.assistant-model-picker > span:not(.anticon) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.assistant-model-picker .anticon-down {
+  font-size: 9px;
+  color: var(--app-secondary);
+}
+.assistant-model-option {
+  display: grid;
+  gap: 3px;
+  max-width: min(300px, 70vw);
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.assistant-model-option small {
+  font-size: 11px;
+  color: var(--app-secondary);
+}
+.assistant-dictation-button.ant-btn {
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
+  color: var(--app-secondary);
+}
+.assistant-dictation-button[aria-pressed="true"] {
+  color: var(--app-accent);
+  background: color-mix(in srgb, var(--app-accent) 14%, transparent);
+}
+.assistant-voice-button.ant-btn {
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--app-accent);
+  border: 0;
+  color: #fff;
+  box-shadow: none;
 }
 .assistant-voice-options {
   margin-bottom: 18px;

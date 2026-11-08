@@ -434,6 +434,19 @@ describe("native realtime voice authorization and lifecycle", () => {
     expect(fetch).toHaveBeenCalledTimes(1);
   });
   it("exchanges Qwen SDP only with Beijing, keeps credentials server-side, and owns the resulting call", async () => {
+    await f.db!.query(
+      "INSERT INTO personal_assistant_conversations(user_id,messages) VALUES(7,$1::jsonb)",
+      [
+        JSON.stringify([
+          {
+            id: randomUUID(),
+            role: "user",
+            text: "刚才文字讨论的主题是秋季轻旅",
+            createdAt: new Date().toISOString(),
+          },
+        ]),
+      ],
+    );
     await f.db!.exec(
       "UPDATE assistant_realtime_settings SET provider='qwen',qwen_api_key_encrypted='encrypted',qwen_verified_at=now(),qwen_workspace_id='workspace-1',qwen_free_only_confirmed=true",
     );
@@ -452,6 +465,9 @@ describe("native realtime voice authorization and lifecycle", () => {
       pageTaskControl: true,
     });
     expect(result.ticket).toBeUndefined();
+    expect(result.configuration!.session.instructions).toContain(
+      "刚才文字讨论的主题是秋季轻旅",
+    );
     expect(vi.mocked(fetch).mock.calls[0]).toEqual([
       `https://workspace-1.cn-beijing.maas.aliyuncs.com/api/v1/webrtc/realtime?model=${qwenRealtimeModel}`,
       expect.objectContaining({

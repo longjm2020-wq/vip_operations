@@ -25,6 +25,7 @@ const primary: Model = {
   id: modelRef(COMPASS_AI_MODEL),
   actual: COMPASS_AI_MODEL,
   name: "通用助手",
+  displayName: COMPASS_AI_MODEL.split("/").at(-1),
   vision: true,
   pdf: true,
   structured: true,
@@ -38,11 +39,19 @@ function chatModel(m: Row, name: string): Model {
     id: modelRef(m.id),
     actual: m.id,
     name,
+    displayName: modelDisplayName(m),
     vision: m.architecture.input_modalities?.includes("image") || false,
     pdf: m.architecture.input_modalities?.includes("file") || false,
     structured: m.supported_parameters.includes("structured_outputs"),
     parameters: m.supported_parameters,
   };
+}
+function modelDisplayName(m: Row): string {
+  return (
+    typeof m.name === "string" && m.name.trim()
+      ? m.name.trim().replace(/^[^:]{1,40}:\s*/, "")
+      : String(m.id).split("/").at(-1) || "默认模型"
+  ).slice(0, 100);
 }
 export function matchesAgentModel(model: Model, returnedModel: unknown) {
   return (
@@ -70,6 +79,9 @@ async function catalog() {
       ]);
       const models: Model[] = [primary];
       if (chat.status === "fulfilled") {
+        const current = chat.value.find((m) => m.id === primary.actual);
+        if (current)
+          models[0] = { ...primary, displayName: modelDisplayName(current) };
         const candidates = chat.value
           .filter(
             (m) =>
@@ -79,7 +91,7 @@ async function catalog() {
               !/(:free|:extended|:thinking|:online)$/.test(m.id),
           )
           .sort((a, b) => (b.created || 0) - (a.created || 0));
-        // A small capability menu, with providers retained only on the server.
+        // Offer a bounded model menu; routing IDs and credentials stay server-side.
         const groups = [
           { prefix: "deepseek/", label: "深度思考", count: 2 },
           { prefix: "openai/", label: "全能助手", count: 2 },
@@ -108,6 +120,7 @@ async function catalog() {
             ...chatModel(flash, "快速问答"),
             id: modelRef(`${flashModel}:quick`),
             reasoningEffort: "none",
+            displayName: modelDisplayName(flash) + " · 快速",
           });
       }
       const imageModels: ImageModel[] =
@@ -183,7 +196,7 @@ export async function resolveAgentModel(ref?: string) {
   if (!model)
     fail(
       "MODEL_UNAVAILABLE",
-      "所选能力暂不可用，请刷新服务列表后重新选择",
+      "所选模型暂不可用，请刷新模型列表后重新选择",
       400,
     );
   return model;

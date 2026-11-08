@@ -59,8 +59,8 @@ export function useAssistantVoice(onText: (value: string) => void) {
     stopListening();
     stopSpeaking();
   }, [stopListening, stopSpeaking]);
-  const start = (existing: string) => {
-    if (listening) {
+  const start = (existing: string, maxLength = 4000) => {
+    if (recognition.current) {
       stopListening();
       return;
     }
@@ -83,7 +83,7 @@ export function useAssistantVoice(onText: (value: string) => void) {
         .map((result) => result[0].transcript)
         .join("");
       callback.current(
-        (existing + (existing && words ? " " : "") + words).slice(0, 4000),
+        (existing + (existing && words ? " " : "") + words).slice(0, maxLength),
       );
     };
     current.onerror = (event) => {
