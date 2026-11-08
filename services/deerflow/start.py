@@ -37,7 +37,7 @@ def configuration(env):
         "llm_call": {"retry_max_attempts": 1},
         "models": [{
             "name": "erp-default", "display_name": "网站智能服务", "model": "erp-default",
-            "use": "langchain_openai:ChatOpenAI",
+            "use": "erp_chat_model:ERPChatOpenAI",
             "base_url": base + "/internal/deerflow/v1",
             "api_key": "$DEER_FLOW_MODEL_PROXY_TOKEN",
             "max_tokens": 8192, "timeout": 180, "max_retries": 0,

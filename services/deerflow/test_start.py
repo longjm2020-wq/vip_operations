@@ -18,6 +18,7 @@ class StartupConfigurationTests(unittest.TestCase):
         self.assertEqual(config["database"]["sqlite_dir"], "/data/deerflow/data")
         self.assertEqual(config["run_events"]["backend"], "db")
         self.assertEqual(config["models"][0]["max_retries"], 0)
+        self.assertEqual(config["models"][0]["use"], "erp_chat_model:ERPChatOpenAI")
         self.assertEqual(config["llm_call"]["retry_max_attempts"], 1)
         self.assertEqual(config["recursion_limit"], 300)
         self.assertEqual(config["max_recursion_limit"], 400)

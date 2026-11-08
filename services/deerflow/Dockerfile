@@ -18,6 +18,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 COPY --from=builder /opt/deerflow/backend /opt/deerflow/backend
 COPY --from=builder /opt/deerflow/LICENSE /opt/deerflow/LICENSE
 COPY services/deerflow/start.py /opt/deerflow/start.py
+COPY services/deerflow/erp_chat_model.py services/deerflow/test_erp_chat_model.py /opt/deerflow/backend/
 ENV PATH=/opt/deerflow/backend/.venv/bin:$PATH \
     PYTHONPATH=/opt/deerflow/backend \
     PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 \
@@ -26,6 +27,8 @@ ENV PATH=/opt/deerflow/backend/.venv/bin:$PATH \
     DEER_FLOW_CONFIG_PATH=/data/deerflow/config.json \
     DEER_FLOW_AUTH_DISABLED=0 PORT=8001
 WORKDIR /opt/deerflow/backend
+# Uses a loopback HTTP fixture only; no supplier credentials or paid requests.
+RUN python test_erp_chat_model.py && rm test_erp_chat_model.py
 # start.py initializes only its own volume directories, then drops root before
 # importing the Gateway. There is no host socket, shell tool, or ERP volume.
 EXPOSE 8001

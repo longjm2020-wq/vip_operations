@@ -279,16 +279,21 @@ describe("assistant team storage and owner boundaries", () => {
     await expect(createTeamRun(actor(), body())).rejects.toMatchObject(
       errorCode("TEAM_BUSY"),
     );
+    const childIds: string[] = [];
     for (const [id, status, owner] of [
       [inputs[0].id, "QUEUED", 7],
       [inputs[0].id, "RUNNING", 7],
       [inputs[1].id, "QUEUED", 7],
       [inputs[0].id, "QUEUED", 8],
-    ] as const)
+    ] as const) {
+      const childId = randomUUID();
+      childIds.push(childId);
+      // Equal timestamps must not change which owner's children are canceled.
       await f.db!.query(
-        "INSERT INTO personal_assistant_jobs(id,user_id,request_id,call_id,kind,title,input,status) VALUES($1,$2,$3,$4,'image','test','{}',$5)",
-        [randomUUID(), owner, id, randomUUID(), status],
+        "INSERT INTO personal_assistant_jobs(id,user_id,request_id,call_id,kind,title,input,status,created_at) VALUES($1,$2,$3,$4,'image','test','{}',$5,'2026-01-01T00:00:00Z')",
+        [childId, owner, id, randomUUID(), status],
       );
+    }
     expect(await cancelTeamRun(actor(), inputs[0].id)).toMatchObject({
       canceled: true,
       note: expect.stringContaining("不保证远端停止或费用回退"),
@@ -298,16 +303,16 @@ describe("assistant team storage and owner boundaries", () => {
     });
     expect((await readTeamRun(actor(), inputs[0].id)).status).toBe("CANCELED");
     const jobs = (
-      await f.db!.query<{ status: string }>(
-        "SELECT status FROM personal_assistant_jobs ORDER BY created_at",
+      await f.db!.query<{ id: string; status: string }>(
+        "SELECT id,status FROM personal_assistant_jobs",
       )
     ).rows;
-    expect(jobs.map((job) => job.status)).toEqual([
-      "CANCELED",
-      "CANCELED",
-      "QUEUED",
-      "QUEUED",
-    ]);
+    expect(Object.fromEntries(jobs.map((job) => [job.id, job.status]))).toEqual({
+      [childIds[0]]: "CANCELED",
+      [childIds[1]]: "CANCELED",
+      [childIds[2]]: "QUEUED",
+      [childIds[3]]: "QUEUED",
+    });
     await expect(createTeamRun(actor(), body())).resolves.toMatchObject({
       status: "QUEUED",
     });
