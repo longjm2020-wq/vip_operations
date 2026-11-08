@@ -412,7 +412,7 @@ export async function aiModelManagement(
     generatedAt: new Date().toISOString(),
     recordingSince: iso(meta?.recording_since),
     catalogNotice:
-      "模型来自服务目录，列出不代表当前密钥均可调用。接通状态反映配置或最近一次验证，不保证后续可用。计费单位分别列示，未返回的费用及历史缺失记录显示未知。",
+      "管理目录用于配置，列出不代表已接通；聊天菜单仅显示当前共享连接最近调用成功的多模态型号。接通状态反映配置或最近一次验证，不保证后续可用。计费单位分别列示，未返回的费用及历史缺失记录显示未知。",
   };
 }
 

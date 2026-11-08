@@ -76,7 +76,7 @@ export function AssistantModelPicker({
                     ? "正在读取模型…"
                     : failed
                       ? "模型列表加载失败"
-                      : "暂无可选模型",
+                      : "暂无已接通模型",
                 },
               ]
             : []),

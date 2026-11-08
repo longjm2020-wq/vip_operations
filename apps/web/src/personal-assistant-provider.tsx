@@ -182,7 +182,7 @@ export function PersonalAssistantProvider({
     enabled: allowed,
     queryFn: async () =>
       (await api("/my-workspace/assistant/capabilities")).data as AgentCatalog,
-    staleTime: 600000,
+    staleTime: 30000,
   });
   const [desktopDeviceId, setDesktopDeviceId] = useState<string>();
   const [teamMode, setTeamMode] = useState(false);
@@ -314,7 +314,9 @@ export function PersonalAssistantProvider({
     !teamMode &&
     !desktopDeviceId &&
     (modelCatalog.data && !selectedModel
-      ? "所选模型已不可用，请重新选择支持文字和图片的多模态模型。"
+      ? modelCatalog.data.models.length
+        ? "所选模型已不可用或未接通，请从列表重新选择。"
+        : "暂无已接通的多模态模型，请管理员检查连接。"
       : "");
   const composerReady = teamMode
     ? teamConfig.data?.ready

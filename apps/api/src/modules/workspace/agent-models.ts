@@ -7,6 +7,7 @@ import type { Row } from "../../../../../packages/database/src/index.js";
 import { fail } from "../../core.js";
 import { COMPASS_AI_MODEL } from "../../ai-model-constants.js";
 import { featureModelRef } from "../../ai-model-routing.js";
+import { connectedModelRefs } from "../../ai-model-connections.js";
 import { aiFeatures, type AiFeatureId } from "../../../../../packages/contracts/src/ai-management.js";
 
 export const modelRef = (id: string) =>
@@ -175,21 +176,22 @@ async function catalog() {
 }
 export async function publicAgentCatalog(): Promise<AgentCatalog> {
   const data = await catalog();
+  const connected = await connectedModelRefs(data.models);
+  const models = data.models.filter((model) => connected.has(model.id));
   return {
-    models: data.models.map(
+    models: models.map(
       ({ actual: _actual, reasoningEffort: _reasoningEffort, ...m }) => m,
     ),
     imageModels: data.imageModels.map(
       ({ actual: _actual, aspects: _aspects, ...m }) => m,
     ),
     defaultModel: (await featureModelRef("assistant_chat")) || primary.id,
-    notice:
-      data.models.length === 1
-        ? "服务列表暂未完整加载，可继续使用通用助手。"
-        : "",
+    notice: models.length
+      ? "仅显示当前连接最近调用成功的多模态模型。"
+      : "暂无已接通的多模态模型，请在 AI 模型管理中检查连接。",
   };
 }
-/** Server-only routing metadata; the existing public capability menu is unchanged. */
+/** Full routing metadata remains available to administrators for configuration. */
 export async function agentModelCandidates() {
   const data = await catalog();
   return {

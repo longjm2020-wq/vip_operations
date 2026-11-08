@@ -257,53 +257,96 @@ test("模型菜单只显示多模态型号、发送所选模型并在重开对�
   expect(requests[0]).not.toHaveProperty("webSearch");
 });
 
-test("选中模型失去多模态能力后保留草稿并要求重选，不静默降级", async ({
-  page,
-}) => {
+for (const disconnected of [false, true]) {
+  test(`选中模型${disconnected ? "未接通" : "失去多模态能力"}后保留草稿并要求重选，不静默降级`, async ({
+    page,
+  }) => {
+    const requests = await setup(page);
+    await page.goto("/my-workspace");
+    const composer = page.locator(".assistant-compose:visible");
+    await composer.getByRole("button", { name: "选择对话模型" }).click();
+    await page.getByRole("menuitem", { name: /Gemini 2.5 Pro/ }).click();
+    await composer.getByPlaceholder(/告诉我你想完成什么/).fill("保留我的草稿");
+    await page.route("**/api/v1/my-workspace/assistant/capabilities", (route) =>
+      route.fulfill({
+        json: {
+          data: {
+            defaultModel: "engine/default",
+            models: [
+              {
+                id: "engine/default",
+                name: "通用助手",
+                displayName: "GPT-6.1 Sol",
+                vision: true,
+              },
+              ...(!disconnected
+                ? [
+                    {
+                      id: "engine/vision",
+                      name: "深度思考",
+                      displayName: "Gemini 2.5 Pro",
+                      vision: false,
+                    },
+                  ]
+                : []),
+            ],
+            imageModels: [],
+            notice: "",
+          },
+        },
+      }),
+    );
+    await composer.getByRole("button", { name: "选择对话模型" }).click();
+    await page.getByRole("menuitem", { name: "刷新模型列表" }).click();
+    await expect(composer.getByRole("alert")).toContainText("所选模型已不可用");
+    await expect(
+      composer.getByRole("button", { name: "发送给个人助理" }),
+    ).toBeDisabled();
+    await expect(composer.locator("textarea")).toHaveValue("保留我的草稿");
+    expect(requests).toHaveLength(0);
+    await composer.getByRole("button", { name: "选择对话模型" }).click();
+    await expect(
+      page.getByRole("menuitem", { name: /Gemini 2.5 Pro/ }),
+    ).toHaveCount(0);
+    await page.getByRole("menuitem", { name: /GPT-6.1 Sol/ }).click();
+    await expect(
+      composer.getByRole("button", { name: "发送给个人助理" }),
+    ).toBeEnabled();
+  });
+}
+
+test("没有已接通模型时菜单显示空状态并保留草稿", async ({ page }) => {
   const requests = await setup(page);
   await page.goto("/my-workspace");
   const composer = page.locator(".assistant-compose:visible");
-  await composer.getByRole("button", { name: "选择对话模型" }).click();
-  await page.getByRole("menuitem", { name: /Gemini 2.5 Pro/ }).click();
-  await composer.getByPlaceholder(/告诉我你想完成什么/).fill("保留我的草稿");
+  await composer.getByPlaceholder(/告诉我你想完成什么/).fill("等待连接后继续");
   await page.route("**/api/v1/my-workspace/assistant/capabilities", (route) =>
     route.fulfill({
       json: {
         data: {
           defaultModel: "engine/default",
-          models: [
-            {
-              id: "engine/default",
-              name: "通用助手",
-              displayName: "GPT-6.1 Sol",
-              vision: true,
-            },
-            {
-              id: "engine/vision",
-              name: "深度思考",
-              displayName: "Gemini 2.5 Pro",
-              vision: false,
-            },
-          ],
+          models: [],
           imageModels: [],
-          notice: "",
+          notice: "暂无已接通模型",
         },
       },
     }),
   );
   await composer.getByRole("button", { name: "选择对话模型" }).click();
   await page.getByRole("menuitem", { name: "刷新模型列表" }).click();
-  await expect(composer.getByRole("alert")).toContainText("所选模型已不可用");
+  await expect(composer.getByRole("alert")).toContainText("暂无已接通");
   await expect(
     composer.getByRole("button", { name: "发送给个人助理" }),
   ).toBeDisabled();
-  await expect(composer.locator("textarea")).toHaveValue("保留我的草稿");
-  expect(requests).toHaveLength(0);
   await composer.getByRole("button", { name: "选择对话模型" }).click();
-  await page.getByRole("menuitem", { name: /GPT-6.1 Sol/ }).click();
   await expect(
-    composer.getByRole("button", { name: "发送给个人助理" }),
-  ).toBeEnabled();
+    page.getByRole("menuitem", { name: "暂无已接通模型" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("menuitem", { name: /GPT-6.1 Sol|Gemini 2.5 Pro/ }),
+  ).toHaveCount(0);
+  await expect(composer.locator("textarea")).toHaveValue("等待连接后继续");
+  expect(requests).toHaveLength(0);
 });
 
 test("简洁输入区直接发送附件并下载任务结果，历史回复隐藏型号", async ({

@@ -59,6 +59,7 @@ import {
   recordAiReceipt,
 } from "../../apps/api/src/ai-metering.js";
 import { featureModelRef } from "../../apps/api/src/ai-model-routing.js";
+import { connectedModelRefs } from "../../apps/api/src/ai-model-connections.js";
 import {
   modelRef,
   resolveFeatureModel,
@@ -169,13 +170,78 @@ beforeAll(async () => {
 }, 30000);
 beforeEach(async () => {
   await fixture.db!.exec(
-    "TRUNCATE ai_feature_models,ai_model_usage,idempotency_records,audit_logs; UPDATE compass_ai_settings SET enabled=true,verified_at=now()-interval '1 day'",
+    "TRUNCATE ai_feature_models,ai_model_usage,idempotency_records,audit_logs; UPDATE compass_ai_settings SET enabled=true,api_key_encrypted='shared-key',verified_at=now()-interval '1 day',updated_at=now()",
   );
   vi.stubGlobal("fetch", vi.fn(catalogFetch));
 });
 afterEach(() => vi.unstubAllGlobals());
 afterAll(async () => {
   await fixture.db?.close();
+});
+
+describe("connected models in the public chat menu", () => {
+  const models = [
+    { id: "engine/connected", actual: "google/connected" },
+    { id: "engine/other", actual: "openai/other" },
+  ];
+  beforeEach(async () => {
+    await query(
+      "UPDATE compass_ai_settings SET api_key_encrypted='shared-key',updated_at=now()-interval '1 day'",
+    );
+  });
+  const receipt = async (
+    model: string,
+    status: string,
+    minutes = 1,
+    feature = "assistant_chat",
+    source = "openrouter.ai",
+  ) => {
+    await fixture.db!.query(
+      `INSERT INTO ai_model_usage(id,feature_id,source,model,response_model,status,started_at,completed_at)
+       VALUES($1::uuid,$2,$3,$4,$4,$5,now()-($6::int*interval '1 minute'),now())`,
+      [randomUUID(), feature, source, model, status, minutes],
+    );
+  };
+  it("hides untested models and uses real receipts without sending verification requests", async () => {
+    expect(await connectedModelRefs(models)).toEqual(new Set());
+    await receipt(models[0].actual, "success");
+    expect(await connectedModelRefs(models)).toEqual(new Set([models[0].id]));
+    expect(fetch).not.toHaveBeenCalled();
+  });
+  it("hides a model after its latest failed or unverified response and restores it after success", async () => {
+    await receipt(models[0].actual, "success", 5);
+    await receipt(models[0].actual, "failed", 3);
+    await receipt(models[1].actual, "responded", 1);
+    expect(await connectedModelRefs(models)).toEqual(new Set());
+    await receipt(models[0].actual, "success", 1);
+    expect(await connectedModelRefs(models)).toEqual(new Set([models[0].id]));
+  });
+  it("rejects stale credentials and receipts from independent audio, AIGC or provider connections", async () => {
+    await receipt(models[0].actual, "success", 1500);
+    await receipt(models[0].actual, "success", 3, "browser_dictation");
+    await receipt(models[0].actual, "success", 2, "aigc_compile");
+    await receipt(
+      models[0].actual,
+      "success",
+      1,
+      "assistant_chat",
+      "api.openai.com",
+    );
+    await receipt(models[1].actual, "started");
+    expect(await connectedModelRefs(models)).toEqual(new Set());
+    await receipt(models[0].actual, "success", 1, "compass_analysis");
+    expect(await connectedModelRefs(models)).toEqual(new Set([models[0].id]));
+    await query("UPDATE compass_ai_settings SET updated_at=now()");
+    expect(await connectedModelRefs(models)).toEqual(new Set());
+  });
+  it.each(["enabled=false", "api_key_encrypted=NULL", "verified_at=NULL"])(
+    "hides every model when the shared connection has %s",
+    async (setting) => {
+      await receipt(models[0].actual, "success");
+      await query(`UPDATE compass_ai_settings SET ${setting}`);
+      expect(await connectedModelRefs(models)).toEqual(new Set());
+    },
+  );
 });
 
 describe("AI model administration and real routing", () => {

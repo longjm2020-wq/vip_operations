@@ -1,6 +1,11 @@
 vi.mock("../../apps/api/src/ai-model-routing.js", () => ({
   featureModelRef: async () => undefined,
 }));
+const connections = vi.hoisted(() => ({ allowed: null as string[] | null }));
+vi.mock("../../apps/api/src/ai-model-connections.js", () => ({
+  connectedModelRefs: async (models: { id: string }[]) =>
+    new Set(connections.allowed ?? models.map((model) => model.id)),
+}));
 import { afterEach, expect, it, vi } from "vitest";
 import {
   publicAgentCatalog,
@@ -9,7 +14,10 @@ import {
   modelRef,
 } from "../../apps/api/src/modules/workspace/agent-models.js";
 import { assistantPublicText } from "../../packages/contracts/src/ai-presentation.js";
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  connections.allowed = null;
+});
 it("only offers multimodal chat models and routes eligible selections to the exact provider model", async () => {
   vi.stubGlobal(
     "fetch",
@@ -118,6 +126,18 @@ it("only offers multimodal chat models and routes eligible selections to the exa
     vision: true,
     id: modelRef("google/gemini-2.5-pro"),
     displayName: "Gemini 2.5 Pro",
+  });
+  connections.allowed = [modelRef("google/gemini-2.5-pro")];
+  const connectedCatalog = await publicAgentCatalog();
+  expect(connectedCatalog.models.map((model) => model.id)).toEqual(
+    connections.allowed,
+  );
+  // A disconnected default is never replaced silently with a different model.
+  expect(connectedCatalog.defaultModel).toBe(modelRef("openai/gpt-6.1-sol"));
+  connections.allowed = [];
+  expect(await publicAgentCatalog()).toMatchObject({
+    models: [],
+    notice: expect.stringContaining("暂无已接通"),
   });
   expect(
     (await resolveAgentModel(modelRef("google/gemini-2.5-pro"))).actual,
