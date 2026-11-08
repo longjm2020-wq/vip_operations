@@ -51,12 +51,13 @@ def configuration(env):
         "run_events": {"backend": "db", "max_trace_content": 10240, "track_token_usage": True},
         "auth": {"local": {"allow_registration": False}},
         "memory": {"enabled": False},
-        "recursion_limit": 40, "max_recursion_limit": 60,
+        # LangGraph counts middleware transitions, not just paid model calls.
+        "recursion_limit": 300, "max_recursion_limit": 400,
         "subagents": {"max_total_per_run": 6, "max_turns": 25, "timeout_seconds": 600},
         "subagent_runtime": {"max_running": 2, "max_queued": 8, "admission_policy": "queue", "queue_timeout_seconds": 120},
         "token_budget": {"enabled": True, "max_tokens": 200000, "warn_threshold": 0.8, "hard_stop_threshold": 1.0},
         "token_usage": {"enabled": True},
-        "lead_prompt_overlay": {"append": "使用中文向用户交付清楚、简洁的结果。按需分配研究、撰写和独立检查子任务。只引用实际工具结果，不把计划或口头承诺当作文件交付。当前环境支持公开研究与隔离的文本文件读写，不支持运行代码、操作网站业务或生成图片视频。"},
+        "lead_prompt_overlay": {"append": "使用中文向用户交付清楚、简洁的结果。按需分配研究、撰写和独立检查子任务。只引用实际工具结果，不把计划或口头承诺当作文件交付。需要文件交付时，将最终文件写入 /mnt/user-data/outputs/ 并调用 present_files 发布后再总结；不得仅给虚构链接。当前环境支持公开研究与隔离的文本文件读写，不支持运行代码、操作网站业务或生成图片视频。"},
     }
 
 
