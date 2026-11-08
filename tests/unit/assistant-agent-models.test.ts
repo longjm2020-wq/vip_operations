@@ -47,6 +47,16 @@ it("publishes model display names while routing opaque selections to the exact p
                     },
                     supported_parameters: ["tools", "structured_outputs"],
                   },
+                  ...["batch", "async", "asynchronous"].map((mode) => ({
+                    id: `deepseek/newest:${mode}`,
+                    name: "Asynchronous model",
+                    created: 100,
+                    architecture: {
+                      input_modalities: ["text"],
+                      output_modalities: ["text"],
+                    },
+                    supported_parameters: ["tools"],
+                  })),
                 ],
           }),
         ),
@@ -55,6 +65,9 @@ it("publishes model display names while routing opaque selections to the exact p
   const catalog = await publicAgentCatalog();
   expect(catalog.models.every((m) => m.id.startsWith("engine/"))).toBe(true);
   expect(catalog.models.every((m) => !Object.hasOwn(m, "actual"))).toBe(true);
+  expect(
+    catalog.models.some((m) => m.displayName === "Asynchronous model"),
+  ).toBe(false);
   expect(catalog.models.find((m) => m.name === "深度思考")).toMatchObject({
     vision: false,
     id: modelRef("deepseek/deepseek-v3.2"),

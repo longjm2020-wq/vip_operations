@@ -88,6 +88,7 @@ async function catalog() {
               typeof m.id === "string" &&
               m.supported_parameters?.includes("tools") &&
               m.architecture?.output_modalities?.includes("text") &&
+              !/(?:^|:)(?:batch|async|asynchronous)(?=:|$)/i.test(m.id) &&
               !/(:free|:extended|:thinking|:online)$/.test(m.id),
           )
           .sort((a, b) => (b.created || 0) - (a.created || 0));

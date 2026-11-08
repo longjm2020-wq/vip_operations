@@ -37,6 +37,7 @@ export function AssistantModelPicker({
       disabled={disabled}
       placement="topRight"
       menu={{
+        style: { maxHeight: "min(560px, 70vh)", overflowY: "auto" },
         selectable: true,
         selectedKeys: selectedId ? [selectedId] : [],
         items: [
