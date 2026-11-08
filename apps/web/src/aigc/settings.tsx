@@ -16,6 +16,7 @@ import {
 import { Link } from "react-router-dom";
 import { studioApi, type Item } from "./api";
 const secretLabels: Record<string, string> = {
+  BAILIAN_VIDEO_API_KEY: "百炼 MiniMax H3 视频 API Key",
   VIDEO_RELAY_API_KEY: "玄宇令牌 · 视频及兼容图像 Key",
   XYLP_IMAGE_TT25_KEY: "TT Image 2.5 · 按量渠道 Key",
   XYLP_IMAGE_BANANA_PRO_KEY: "纳米香蕉 Pro · 图像渠道 Key",
@@ -35,16 +36,54 @@ const secretLabels: Record<string, string> = {
   XYLP_CHAT_SOL56_KEY: "TT-5.6 Sol 编译渠道 Key",
 };
 export function ServiceSettings({ onSaved }: { onSaved: () => void }) {
-  const { message } = App.useApp();
+  const { message, modal } = App.useApp();
   const [config, setConfig] = useState<Item>();
   const [keys, setKeys] = useState<Item>({});
+  const [reuseQwen, setReuseQwen] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [checking, setChecking] = useState(false);
+  const [dirty, setDirty] = useState(false);
   const [error, setError] = useState("");
   useEffect(() => {
     void studioApi("/services")
       .then(setConfig)
       .catch((e) => setError(e.message));
   }, []);
+  useEffect(() => {
+    if (config?.bailianVideoCheck?.state !== "pending") return;
+    const timer = window.setInterval(() => {
+      void studioApi("/services/bailian-video-check")
+        .then((check) => {
+          setConfig((value: Item) => ({ ...value, bailianVideoCheck: check }));
+          if (check?.state === "succeeded") onSaved();
+        })
+        .catch((e) => message.error(e.message));
+    }, 15000);
+    return () => window.clearInterval(timer);
+  }, [config?.bailianVideoCheck?.state]);
+  const checkVideo = () =>
+    modal.confirm({
+      title: "生成 4 秒 H3 连接测试",
+      content:
+        "将创建一条 768P、4 秒的纯文字测试视频，不使用业务素材。刊例约 2 元，无免费额度，实际以百炼账单为准。",
+      okText: "开始测试",
+      cancelText: "取消",
+      onOk: async () => {
+        setChecking(true);
+        try {
+          const check = await studioApi(
+            "/services/bailian-video-check",
+            "POST",
+            { confirmPaid: true },
+          );
+          setConfig((value: Item) => ({ ...value, bailianVideoCheck: check }));
+        } catch (e: any) {
+          message.error(e.message);
+        } finally {
+          setChecking(false);
+        }
+      },
+    });
   if (error) return <Alert type="error" title={error} />;
   if (!config) return <Spin />;
   const save = async () => {
@@ -53,6 +92,8 @@ export function ServiceSettings({ onSaved }: { onSaved: () => void }) {
       setConfig(
         await studioApi("/services", "PUT", {
           revision: config.revision,
+          bailianWorkspaceId: config.bailianWorkspaceId || "",
+          useSavedQwenConnection: reuseQwen,
           videoRelayBaseUrl: config.videoRelayBaseUrl || "",
           xhaiBaseUrl: config.xhaiBaseUrl || "",
           opentalkingBaseUrl: config.opentalkingBaseUrl || "",
@@ -61,6 +102,8 @@ export function ServiceSettings({ onSaved }: { onSaved: () => void }) {
         }),
       );
       setKeys({});
+      setReuseQwen(false);
+      setDirty(false);
       message.success("连接配置已加密保存");
       onSaved();
     } catch (e: any) {
@@ -89,6 +132,106 @@ export function ServiceSettings({ onSaved }: { onSaved: () => void }) {
                   </>
                 }
               />
+              <Alert
+                type="info"
+                title="视频生成：MiniMax/MiniMax-H3"
+                description="使用百炼北京业务空间，支持 768P / 2K、每段 4～15 秒。该模型无免费额度；768P 刊例为 0.50 元/秒，2K 为 0.80 元/秒，输入视频及超过 5 张的图片另计，实际以百炼账单为准。"
+              />
+              {config.bailianReuseAvailable && (
+                <Form.Item>
+                  <Checkbox
+                    checked={reuseQwen}
+                    onChange={(event) => {
+                      setDirty(true);
+                      setReuseQwen(event.target.checked);
+                      if (event.target.checked)
+                        setConfig({
+                          ...config,
+                          bailianWorkspaceId: config.bailianReuseWorkspaceId,
+                        });
+                    }}
+                  >
+                    使用已保存的百炼语音连接
+                  </Checkbox>
+                  <div>
+                    保存时在服务器复制密钥与业务空间；视频服务之后独立配置。
+                  </div>
+                </Form.Item>
+              )}
+              <Form.Item label="百炼北京业务空间 ID">
+                <Input
+                  aria-label="百炼北京业务空间 ID"
+                  placeholder="ws-…"
+                  value={config.bailianWorkspaceId || ""}
+                  disabled={reuseQwen}
+                  onChange={(event) => {
+                    setDirty(true);
+                    setConfig({
+                      ...config,
+                      bailianWorkspaceId: event.target.value,
+                    });
+                  }}
+                />
+              </Form.Item>
+              {config.secrets?.BAILIAN_VIDEO_API_KEY && (
+                <Space direction="vertical" style={{ marginBottom: 16 }}>
+                  <Button
+                    loading={
+                      checking ||
+                      ["submitting", "pending"].includes(
+                        config.bailianVideoCheck?.state,
+                      )
+                    }
+                    disabled={
+                      dirty ||
+                      reuseQwen ||
+                      Object.values(keys).some(Boolean) ||
+                      ["submitting", "pending", "uncertain"].includes(
+                        config.bailianVideoCheck?.state,
+                      )
+                    }
+                    onClick={checkVideo}
+                  >
+                    验证 H3 视频连接
+                  </Button>
+                  <span>测试使用已保存配置；请先保存页面上的修改。</span>
+                  {!dirty && config.bailianVideoCheck && (
+                    <Alert
+                      type={
+                        config.bailianVideoCheck.state === "succeeded"
+                          ? "success"
+                          : config.bailianVideoCheck.state === "pending"
+                            ? "info"
+                            : "warning"
+                      }
+                      title={
+                        {
+                          submitting: "测试提交中，请勿重复操作",
+                          pending: "测试视频生成中，页面每 15 秒查询一次",
+                          succeeded: "H3 视频生成已验证",
+                          failed: "测试生成失败",
+                          uncertain: "测试结果待核实，已阻止重复提交",
+                        }[String(config.bailianVideoCheck.state)]
+                      }
+                      description={
+                        config.bailianVideoCheck.message ||
+                        (config.bailianVideoCheck.taskId
+                          ? `任务编号：${config.bailianVideoCheck.taskId}`
+                          : "")
+                      }
+                    />
+                  )}
+                  {!dirty && config.bailianVideoCheck?.videoUrl && (
+                    <a
+                      href={config.bailianVideoCheck.videoUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      查看 4 秒测试视频
+                    </a>
+                  )}
+                </Space>
+              )}
               <div className="aigc-form-grid">
                 {[
                   [
@@ -112,9 +255,10 @@ export function ServiceSettings({ onSaved }: { onSaved: () => void }) {
                     <Input
                       value={config[key] || ""}
                       placeholder={placeholder}
-                      onChange={(e) =>
-                        setConfig({ ...config, [key]: e.target.value })
-                      }
+                      onChange={(e) => {
+                        setDirty(true);
+                        setConfig({ ...config, [key]: e.target.value });
+                      }}
                     />
                   </Form.Item>
                 ))}
@@ -130,9 +274,11 @@ export function ServiceSettings({ onSaved }: { onSaved: () => void }) {
                   <Input.Password
                     autoComplete="new-password"
                     value={keys[key] || ""}
-                    onChange={(e) =>
-                      setKeys({ ...keys, [key]: e.target.value })
-                    }
+                    disabled={key === "BAILIAN_VIDEO_API_KEY" && reuseQwen}
+                    onChange={(e) => {
+                      setDirty(true);
+                      setKeys({ ...keys, [key]: e.target.value });
+                    }}
                     placeholder="填写后加密保存在服务器，不回显原值"
                   />
                 </Form.Item>

@@ -1,3 +1,4 @@
+import { bailianChatReady, bailianChatConnection } from "./bailian-chat.js";
 import { randomUUID } from "node:crypto";
 import { HttpException } from "@nestjs/common";
 import { z } from "zod";
@@ -43,12 +44,17 @@ const ready = (s?: Row) =>
 const expired = (r?: Row) =>
   r?.state === "PENDING" &&
   Date.now() - new Date(r.pending_since).getTime() > 180000;
-function publicConversation(row: Row | undefined, s: Row | undefined) {
+function publicConversation(
+  row: Row | undefined,
+  s: Row | undefined,
+  bailianReady = false,
+) {
   return {
-    ready: ready(s),
-    availabilityMessage: ready(s)
-      ? "个人助理已就绪"
-      : "请管理员在 AI 模型管理中启用并验证模型连接",
+    ready: ready(s) || bailianReady,
+    availabilityMessage:
+      ready(s) || bailianReady
+        ? "个人助理已就绪"
+        : "请管理员在 AI 模型管理中启用并验证模型连接",
     model: "小序",
     version: row?.version || 0,
     state: expired(row) ? "FAILED" : row?.state || "IDLE",
@@ -64,15 +70,16 @@ function publicConversation(row: Row | undefined, s: Row | undefined) {
 }
 export async function readAssistant(c: Context) {
   requireAssistant(c);
-  const [row, s] = await Promise.all([
+  const [row, s, bailian] = await Promise.all([
     one(
       db,
       "SELECT * FROM public.personal_assistant_conversations WHERE user_id=$1::bigint",
       c.actor.id,
     ),
     settings(),
+    one(db, "SELECT * FROM public.bailian_chat_settings WHERE id=1"),
   ]);
-  const view = publicConversation(row, s);
+  const view = publicConversation(row, s, bailianChatReady(bailian));
   view.messages = await hydrateTeamMessages(c.actor.id, view.messages);
   const actionIds = view.messages.flatMap(
     (item: AssistantMessage) => item.actions?.map((action) => action.id) || [],
@@ -162,8 +169,10 @@ export async function sendAssistant(
     );
   const fingerprint = hash(JSON.stringify(body));
   const s = await settings();
-  if (!ready(s)) fail("AI_NOT_READY", "请管理员先启用并验证 AI 模型连接", 503);
   const selected = await resolveAgentModel(body.model);
+  if (selected.provider === "bailian") await bailianChatConnection();
+  else if (!ready(s))
+    fail("AI_NOT_READY", "请管理员先启用并验证 AI 模型连接", 503);
   const attachments = await ownedAgentFiles(c, body.attachmentIds);
   if (attachments.reduce((sum, f) => sum + f.size, 0) > 80 * 1024 * 1024)
     fail("FILE_LIMIT", "本次附件合计超过80MB，请分次处理", 400);

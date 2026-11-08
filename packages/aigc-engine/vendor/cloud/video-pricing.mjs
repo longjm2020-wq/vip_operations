@@ -49,6 +49,7 @@ export function pricingFor(route) {
     if (route.model.model === "wan3.0-video-cankaosheng" && route.model.params?.version !== "standard") price = null;
     if (price) price = { ...price, currency: "算力" };
   }
+  if (route.protocol === "bailian" && /^https:\/\/ws-[a-z0-9]+\.cn-beijing\.maas\.aliyuncs\.com\/api\/v1$/.test(route.baseUrl) && route.model.model === "MiniMax/MiniMax-H3") return { currency: "CNY", source: "https://help.aliyun.com/zh/model-studio/minimax-h3", checkedAt: "2026-11-08", unit: "second", note: "官方刊例预估，非实际账单；输入视频和输出视频按相同秒价，前 5 张图片免费。", lines: [line("百炼 MiniMax H3", { "768P": .5, "2K": .8 }, .2, 5)] };
   return price ? { ...price, checkedAt } : null;
 }
 

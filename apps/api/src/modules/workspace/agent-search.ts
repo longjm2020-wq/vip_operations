@@ -1,3 +1,4 @@
+import { bailianChatModel } from "../../../../../packages/contracts/src/bailian-chat.js";
 import { aiFetch } from "../../ai-metering.js";
 import { featureModelRef } from "../../ai-model-routing.js";
 import { resolveAgentModel, matchesAgentModel } from "./agent-models.js";
@@ -63,11 +64,15 @@ export async function searchAgentWeb(
   signal: AbortSignal,
   matchesModel?: (returnedModel: unknown) => boolean,
 ) {
+  const fromBailian = model === bailianChatModel;
   const configured = await featureModelRef("assistant_search");
-  if (configured) {
-    const selected = await resolveAgentModel(configured);
+  if (configured || model === bailianChatModel) {
+    const selected = await resolveAgentModel(
+      configured || undefined,
+      "assistant_search",
+    );
     model = selected.actual;
-    matchesModel = returned => matchesAgentModel(selected, returned);
+    matchesModel = (returned) => matchesAgentModel(selected, returned);
   }
   let raw: unknown;
   try {
@@ -79,6 +84,11 @@ export async function searchAgentWeb(
     z.object({ query: z.string().trim().min(1).max(500) }).strict(),
     raw,
   );
+  if (
+    fromBailian &&
+    (!settings?.enabled || !settings.api_key_encrypted || !settings.verified_at)
+  )
+    fail("SEARCH_FAILED", "公开搜索连接尚未验证，请管理员检查搜索服务", 503);
   const response = await aiFetch("assistant_search", COMPASS_AI_ENDPOINT, {
     method: "POST",
     redirect: "error",

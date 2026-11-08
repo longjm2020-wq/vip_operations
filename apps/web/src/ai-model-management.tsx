@@ -1,3 +1,4 @@
+import { BailianChatSettings } from "./bailian-chat-settings";
 import { useState, type ReactNode } from "react";
 import {
   Alert,
@@ -163,6 +164,9 @@ export function AiModelManagementPage({
             >
               连接配置
             </Button>
+            <Button onClick={() => setDrawer("bailian-chat")}>
+              百炼聊天连接
+            </Button>
             <Button
               icon={<ReloadOutlined />}
               aria-label="刷新模型管理"
@@ -325,6 +329,15 @@ export function AiModelManagementPage({
               render: (_, row) => (
                 <div className="ai-management-source">
                   {row.source}
+                  {row.id === "assistant_chat" && (
+                    <Button
+                      size="small"
+                      type="link"
+                      onClick={() => setDrawer("bailian-chat")}
+                    >
+                      百炼聊天连接
+                    </Button>
+                  )}
                   {row.group === "AIGC" && canAigc && (
                     <Button
                       size="small"
@@ -365,6 +378,19 @@ export function AiModelManagementPage({
                       <span>
                         Token：<strong>{count(row.usage.totalTokens)}</strong>
                       </span>
+                      {(row.usage.inputVideoSeconds != null ||
+                        row.usage.outputVideoSeconds != null) && (
+                        <span>
+                          视频秒数：输入{" "}
+                          {count(row.usage.inputVideoSeconds ?? null)} / 输出{" "}
+                          {count(row.usage.outputVideoSeconds ?? null)}
+                        </span>
+                      )}
+                      {row.usage.billableImages != null && (
+                        <span>
+                          计费参考图：{count(row.usage.billableImages)} 张
+                        </span>
+                      )}
                       {row.usage.inputCharacters != null && (
                         <span>
                           合成输入字符：{count(row.usage.inputCharacters)}
@@ -421,7 +447,13 @@ export function AiModelManagementPage({
         {connections}
       </Modal>
       <Drawer
-        title={drawer === "aigc" ? "AIGC 模型与工作流连接" : "语音模型配置"}
+        title={
+          drawer === "aigc"
+            ? "AIGC 模型与工作流连接"
+            : drawer === "bailian-chat"
+              ? "百炼聊天连接"
+              : "语音模型配置"
+        }
         open={!!drawer}
         width={680}
         destroyOnHidden
@@ -430,7 +462,16 @@ export function AiModelManagementPage({
           void refresh();
         }}
       >
-        {drawer === "aigc" ? (
+        {drawer === "bailian-chat" ? (
+          <BailianChatSettings
+            saved={() => {
+              void refresh();
+              void client.invalidateQueries({
+                queryKey: ["assistant-capabilities"],
+              });
+            }}
+          />
+        ) : drawer === "aigc" ? (
           canAigc ? (
             <ServiceSettings
               onSaved={() => {
@@ -469,6 +510,15 @@ export function AiModelManagementPage({
                 {count(detail.usage.totalTokens)}
               </dd>
               <dt>已返回的消耗</dt>
+              {(detail.usage.inputVideoSeconds != null ||
+                detail.usage.outputVideoSeconds != null) && (
+                <dd>
+                  供应商视频用量：输入{" "}
+                  {count(detail.usage.inputVideoSeconds ?? null)} 秒 / 输出{" "}
+                  {count(detail.usage.outputVideoSeconds ?? null)}{" "}
+                  秒；计费参考图 {count(detail.usage.billableImages ?? null)} 张
+                </dd>
+              )}
               {detail.usage.inputCharacters != null && (
                 <dd>语音合成输入字符：{count(detail.usage.inputCharacters)}</dd>
               )}

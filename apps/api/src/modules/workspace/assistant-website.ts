@@ -24,8 +24,22 @@ export async function resolveAssistantWebsite(
   model: Awaited<ReturnType<typeof resolveAgentModel>>,
   name: string,
 ): Promise<{ destination?: AssistantWebCommand; text: string }> {
+  const fromBailian = model.provider === "bailian";
   const configured = await featureModelRef("assistant_website");
-  if (configured) model = await resolveAgentModel(configured);
+  if (configured || model.provider === "bailian")
+    model = await resolveAgentModel(
+      configured || undefined,
+      "assistant_website",
+    );
+  if (
+    fromBailian &&
+    (!settings?.enabled || !settings.api_key_encrypted || !settings.verified_at)
+  )
+    fail(
+      "WEBSITE_LOOKUP_FAILED",
+      "网站识别连接尚未验证，请管理员检查搜索服务",
+      503,
+    );
   const response = await aiFetch("assistant_website", COMPASS_AI_ENDPOINT, {
     method: "POST",
     redirect: "error",

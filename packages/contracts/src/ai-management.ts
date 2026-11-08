@@ -107,7 +107,7 @@ export const aiFeatures = [
     group: "AIGC",
     href: "/aigc",
     boundary:
-      "生成视频；默认值用于新项目，既有项目继续使用已选模型，时长与参考素材限制随模型变化。",
+      "通过百炼 MiniMax H3 生成视频；新项目使用当前线路，旧项目提交新任务前需重新选择，已提交任务保留原路由。",
     kind: "aigc_video",
   },
   {
@@ -187,6 +187,9 @@ export type AiFeatureUsage = {
   unknown: number;
   inputTokens: number | null;
   inputCharacters?: number | null;
+  inputVideoSeconds?: number | null;
+  outputVideoSeconds?: number | null;
+  billableImages?: number | null;
   outputTokens: number | null;
   totalTokens: number | null;
   amounts: { unit: string; amount: number }[];

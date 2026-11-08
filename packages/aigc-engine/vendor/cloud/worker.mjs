@@ -21,6 +21,7 @@ import { buildCompileInstructions, COMPILE_KERNEL } from "./kernel.mjs";
 import { compileRevision, KERNEL_CAPABILITIES } from "./kernel-source.mjs";
 import { generationProject, referenceSnapshot } from "./project-references.mjs";
 import { alignVideoDuration, planVideoDurations, supportedVideoDurations } from "./video-duration.mjs";
+import { prepareBailianImages } from "./bailian-video.mjs";
 import { videoCatalog, selectVideoRoute, videoKey, videoReferenceCount, validateVideoInput, preflightXhaiVideo, XhaiVideoAdjustmentError, submitVideo, pollVideo } from "./video-providers.mjs";
 import { keyframeImageRoute, assertImageAccess } from "./image-provider.mjs";
 import { uploadXhaiImages } from "./xhai-files.mjs";
@@ -518,6 +519,7 @@ export class CloudWorker {
     if (project.status === "ended") throw new Error("项目已结束；不会继续提交视频生成");
     const timestamp = now();
     const videoRoute = selectVideoRoute(this.config, project.videoSelection);
+    if (this.config.enabledVideoProviders && !this.config.enabledVideoProviders.includes(videoRoute.id)) throw new AttentionError("原视频线路已移出可选列表，请选择当前视频服务并保存");
     assertVideoAccess(data, project.ownerId, videoRoute);
     const firstFrame = videoRoute.model.inputMode === "first-frame";
     const imageRoute = firstFrame ? keyframeImageRoute(this.config, project.imageSelection) : undefined;
@@ -1254,7 +1256,7 @@ export class CloudWorker {
         return;
       }
       if (response.pending) {
-        await this.#waitForProvider(job, this.config.xaiPollMs);
+        await this.#waitForProvider(job, route.protocol === "bailian" ? 15000 : this.config.xaiPollMs);
         return;
       }
       if (!response.url) {
@@ -1289,6 +1291,7 @@ export class CloudWorker {
       return;
     }
 
+    if (this.config.enabledVideoProviders && !this.config.enabledVideoProviders.includes(route.id)) throw new AttentionError("原视频线路已移出可选列表；已提交请求可继续查询，新生成须使用当前视频服务");
     if (!videoKey(this.config, route)) throw new AttentionError(`${route.label} 尚未配置 ${route.keyEnv}`);
     if (job.payload?.videoSubmission?.state === "inflight") throw new AttentionError("上次视频提交结果不确定；请先在原中转站核对请求记录，避免重复扣费。任务未自动重提。");
     if (!job.payload.keyframeGate?.frames.some(f => f.requestId || f.submission?.state === "inflight")) {
@@ -1355,6 +1358,11 @@ export class CloudWorker {
           addLog(taskFor(data, job.taskId), "info", `${unit.id} 提示词已适配 ${label}：${prepared.original.chars} → ${prepared.chars} 字符 / ${prepared.bytes} 字节；保留全部分镜、时序与角色绑定${prepared.imageBasedObservations ? "，商品外观直接以原图为准" : ""}。`);
         });
       }
+    }
+    if (route.protocol === "bailian") {
+      const preparedImages = await prepareBailianImages(this.store, this.config, job, unit.id, references);
+      input.referenceImages = preparedImages.urls;
+      job = this.store.getJob(job.id);
     }
     let xhaiReferenceUploads = job.payload?.xhaiReferenceUploads;
     let xhaiPreflight;

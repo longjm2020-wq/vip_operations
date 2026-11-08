@@ -45,6 +45,7 @@ export function validateReferenceFiles(model, type, files) {
     if (!info || !Number.isFinite(info.durationSeconds) || info.durationSeconds < capability.minSeconds || info.durationSeconds > capability.maxSeconds) throw new Error(`参考${label}单段须为 ${capability.minSeconds}～${capability.maxSeconds} 秒`);
     if (type === "video") {
       const aspect = info.width / info.height;
+      if ((capability.minSide && Math.min(info.width, info.height) < capability.minSide) || (capability.maxSide && Math.max(info.width, info.height) > capability.maxSide)) throw new Error("参考视频尺寸须为 256～5760 像素");
       if (!Number.isFinite(info.fps) || info.fps < capability.minFps - .001 || info.fps > capability.maxFps || !Number.isFinite(aspect) || aspect <= 0 || (capability.minAspect && (aspect < capability.minAspect || aspect > capability.maxAspect))) throw new Error(`参考视频帧率或宽高比不受当前模型支持`);
     }
     seconds += info.durationSeconds;
@@ -96,7 +97,12 @@ export function referenceDownloadOwner(store, config, assetId, params, now = Dat
   if (!config.sessionSecret || !/^\d+$/.test(expires || "") || Number(expires) <= Math.floor(now / 1000) || !/^[a-f0-9]{64}$/.test(sig)) return null;
   if (!timingSafeEqual(Buffer.from(sig), Buffer.from(signature(config.sessionSecret, assetId, jobId, expires)))) return null;
   const job = store.getJob(jobId), asset = store.getAssetMetadata(assetId);
-  if (!job || !["running", "queued", "paused"].includes(job.status) || !asset || asset.projectId !== job.projectId || asset.ownerId !== job.ownerId || !["referenceVideo", "referenceAudio"].includes(asset.kind) || asset.source !== "upload") return null;
+  if (!job || !["running", "waiting_provider", "queued", "paused"].includes(job.status) || !asset || asset.projectId !== job.projectId || asset.ownerId !== job.ownerId ) return null;
+  if (asset.kind === "referenceImage" && asset.source === "bailian-video-reference") {
+    const selected = Object.values(job.payload?.bailianReferenceImages || {}).flatMap(value => value.assets || []);
+    return job.payload?.videoRoute?.protocol === "bailian" && selected.some(file => file.path === assetId) ? asset.ownerId : null;
+  }
+  if (!["referenceVideo", "referenceAudio"].includes(asset.kind) || asset.source !== "upload") return null;
   const inputs = job.payload?.artifacts?.referenceSnapshot?.assets || job.payload?.inputProject?.assets;
   if (![...(inputs?.referenceVideos || []), ...(inputs?.referenceAudios || [])].some(f => f.path === assetId)) return null;
   return asset.ownerId;

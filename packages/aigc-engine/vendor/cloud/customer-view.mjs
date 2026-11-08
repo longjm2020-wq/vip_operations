@@ -44,6 +44,7 @@ export function selectionForSave(user, config, selection) {
   }
   if (user.role !== "super_admin" && selection?.providerId && selection.providerId !== "platform") fail("此视频服务仅限超级管理员使用，请重新选择可用模型", 403);
   const route = selectVideoRoute(config, user.role === "super_admin" ? selection : { ...selection, providerId: customerProvider(config).id });
+  if (config.enabledVideoProviders && !config.enabledVideoProviders.includes(route.id)) fail("原视频线路已移出可选列表，请选择当前视频服务并保存", 400);
   if (route.model.legacy) fail("旧模型已从新项目移除，请重新选择已分类模型", 400);
   return { providerId: route.id, modelId: route.model.id, resolution: route.resolution };
 }

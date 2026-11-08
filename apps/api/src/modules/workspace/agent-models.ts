@@ -1,3 +1,4 @@
+import { bailianChatModel } from "../../../../../packages/contracts/src/bailian-chat.js";
 import { createHash } from "node:crypto";
 import type {
   AgentCatalog,
@@ -8,7 +9,10 @@ import { fail } from "../../core.js";
 import { COMPASS_AI_MODEL } from "../../ai-model-constants.js";
 import { featureModelRef } from "../../ai-model-routing.js";
 import { connectedModelRefs } from "../../ai-model-connections.js";
-import { aiFeatures, type AiFeatureId } from "../../../../../packages/contracts/src/ai-management.js";
+import {
+  aiFeatures,
+  type AiFeatureId,
+} from "../../../../../packages/contracts/src/ai-management.js";
 
 export const modelRef = (id: string) =>
   "engine/" + createHash("sha256").update(id).digest("hex").slice(0, 24);
@@ -16,6 +20,7 @@ const flashModel = "deepseek/deepseek-v4.1-flash-1017";
 const flashCanonicalModel = "deepseek/deepseek-v4.1-flash-20261017";
 export type AgentInternalModel = AgentModel & {
   actual: string;
+  provider?: "bailian";
   reasoningEffort?: "none";
 };
 type Model = AgentInternalModel;
@@ -33,6 +38,18 @@ const primary: Model = {
   pdf: true,
   structured: true,
   parameters: ["tools", "structured_outputs", "reasoning"],
+};
+const bailian: Model = {
+  id: modelRef("bailian/" + bailianChatModel),
+  actual: bailianChatModel,
+  provider: "bailian",
+  name: "快速问答",
+  displayName: "DeepSeek V4.1 Flash · 百炼",
+  chatOnly: true,
+  vision: true,
+  pdf: false,
+  structured: false,
+  parameters: ["tools", "tool_choice", "response_format"],
 };
 let cached:
   { until: number; models: Model[]; imageModels: ImageModel[] } | undefined;
@@ -80,7 +97,7 @@ async function catalog() {
         discover("models"),
         discover("images/models"),
       ]);
-      const models: Model[] = [primary];
+      const models: Model[] = [primary, bailian];
       if (chat.status === "fulfilled") {
         const current = chat.value.find((m) => m.id === primary.actual);
         if (current)
@@ -180,7 +197,12 @@ export async function publicAgentCatalog(): Promise<AgentCatalog> {
   const models = data.models.filter((model) => connected.has(model.id));
   return {
     models: models.map(
-      ({ actual: _actual, reasoningEffort: _reasoningEffort, ...m }) => m,
+      ({
+        actual: _actual,
+        provider: _provider,
+        reasoningEffort: _reasoningEffort,
+        ...m
+      }) => m,
     ),
     imageModels: data.imageModels.map(
       ({ actual: _actual, aspects: _aspects, ...m }) => m,
@@ -200,7 +222,10 @@ export async function agentModelCandidates() {
     defaultModel: primary.id,
   };
 }
-export async function resolveAgentModel(ref?: string, feature: AiFeatureId = "assistant_chat") {
+export async function resolveAgentModel(
+  ref?: string,
+  feature: AiFeatureId = "assistant_chat",
+) {
   ref ||= await featureModelRef(feature);
   if (!ref || ref === primary.id) return primary;
   const model = (await catalog()).models.find((m) => m.id === ref);
@@ -210,15 +235,37 @@ export async function resolveAgentModel(ref?: string, feature: AiFeatureId = "as
       "所选模型不可用或不支持多模态对话，请刷新模型列表后重新选择",
       400,
     );
+  if (model.provider === "bailian" && feature !== "assistant_chat")
+    fail(
+      "AI_MODEL_CAPABILITY",
+      "此百炼模型用于网站内聊天，请为当前功能选择其他已接通模型",
+      409,
+    );
   return model;
 }
 export async function resolveFeatureModel(feature: AiFeatureId) {
   const model = await resolveAgentModel(undefined, feature);
-  const kind = aiFeatures.find(item => item.id === feature)?.kind;
-  if ((kind === "vision" || kind === "vision_structured" || kind === "aigc_compile") && !model.vision)
-    fail("AI_MODEL_CAPABILITY", "当前功能需要支持图片输入的模型，请在 AI 模型管理中重新选择", 409);
-  if ((kind === "structured" || kind === "vision_structured") && !model.structured)
-    fail("AI_MODEL_CAPABILITY", "当前功能需要结构化输出，请在 AI 模型管理中重新选择", 409);
+  const kind = aiFeatures.find((item) => item.id === feature)?.kind;
+  if (
+    (kind === "vision" ||
+      kind === "vision_structured" ||
+      kind === "aigc_compile") &&
+    !model.vision
+  )
+    fail(
+      "AI_MODEL_CAPABILITY",
+      "当前功能需要支持图片输入的模型，请在 AI 模型管理中重新选择",
+      409,
+    );
+  if (
+    (kind === "structured" || kind === "vision_structured") &&
+    !model.structured
+  )
+    fail(
+      "AI_MODEL_CAPABILITY",
+      "当前功能需要结构化输出，请在 AI 模型管理中重新选择",
+      409,
+    );
   return model;
 }
 export async function resolveImageModel(ref?: string) {

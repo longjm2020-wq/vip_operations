@@ -24,6 +24,7 @@ export type AgentModel = {
   pdf: boolean;
   structured: boolean;
   parameters: string[];
+  chatOnly?: boolean;
 };
 export type AgentCatalog = {
   models: AgentModel[];

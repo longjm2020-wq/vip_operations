@@ -190,6 +190,85 @@ async function fixture(page: Page, superAdmin = true) {
   return { changes, sessions, connectionChanges, verifications };
 }
 
+test("Bailian chat copies a saved connection without changing the default and verifies only on request", async ({
+  page,
+}) => {
+  const existing = await fixture(page);
+  let value: any = {
+    enabled: false,
+    workspaceId: "",
+    model: "deepseek-v4.1-flash-1017",
+    endpoint: "",
+    apiKeyConfigured: false,
+    encryptionReady: true,
+    verifiedAt: null,
+    errorNote: "",
+    version: 0,
+    reuseAvailable: true,
+    reuseWorkspaceId: "ws-fixture12345678",
+  };
+  let saved: any,
+    calls = 0;
+  await page.route(
+    "**/api/v1/ai-model-management/bailian-chat",
+    async (route) => {
+      if (route.request().method() === "POST") {
+        saved = route.request().postDataJSON();
+        value = {
+          ...value,
+          enabled: saved.enabled,
+          workspaceId: saved.workspaceId,
+          apiKeyConfigured: true,
+          version: 1,
+        };
+      }
+      await route.fulfill({ json: { data: value } });
+    },
+  );
+  await page.route(
+    "**/api/v1/ai-model-management/bailian-chat/test",
+    async (route) => {
+      calls++;
+      value = { ...value, verifiedAt: new Date().toISOString() };
+      await route.fulfill({ json: { data: value } });
+    },
+  );
+  await page.goto("/settings/ai");
+  await page
+    .getByRole("button", { name: "百炼聊天连接", exact: true })
+    .first()
+    .click();
+  const drawer = page.getByRole("dialog", {
+    name: "百炼聊天连接",
+    exact: true,
+  });
+  await drawer.getByText("使用已保存的百炼语音连接", { exact: true }).click();
+  await expect(drawer.getByLabel("百炼北京业务空间 ID")).toHaveValue(
+    "ws-fixture12345678",
+  );
+  await drawer.getByRole("switch", { name: "启用百炼聊天" }).click();
+  await drawer
+    .getByRole("button", { name: "保存聊天连接", exact: true })
+    .click();
+  await expect(
+    drawer.getByRole("button", { name: "验证 DeepSeek 连接" }),
+  ).toBeEnabled();
+  expect(saved).toMatchObject({
+    enabled: true,
+    workspaceId: "ws-fixture12345678",
+    useSavedQwenConnection: true,
+    apiKey: "",
+  });
+  expect(calls).toBe(0);
+  expect(existing.changes).toEqual([]);
+  await drawer.getByRole("button", { name: "验证 DeepSeek 连接" }).click();
+  await expect(
+    drawer.getByText("聊天连接已验证", { exact: true }),
+  ).toBeVisible();
+  expect(calls).toBe(1);
+  expect(existing.changes).toEqual([]);
+});
+
 test("shared connection preserves the saved key and does not verify a disabled service", async ({
   page,
 }) => {

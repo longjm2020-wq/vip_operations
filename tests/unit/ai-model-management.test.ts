@@ -1,3 +1,16 @@
+import { bailianChatModel } from "../../packages/contracts/src/bailian-chat.js";
+import {
+  readBailianChat,
+  saveBailianChat,
+  testBailianChat,
+  bailianChatEndpoint,
+  bailianChatBody,
+} from "../../apps/api/src/modules/workspace/bailian-chat.js";
+import { askAssistantModel } from "../../apps/api/src/modules/workspace/assistant-model.js";
+import {
+  agentModelCandidates,
+  publicAgentCatalog,
+} from "../../apps/api/src/modules/workspace/agent-models.js";
 import {
   afterAll,
   afterEach,
@@ -74,7 +87,12 @@ const admin = (): Context => ({
     id: "7",
     username: "admin",
     displayName: "Admin",
-    permissions: ["analytics.manage", "aigc.use", "aigc.manage"],
+    permissions: [
+      "analytics.read",
+      "analytics.manage",
+      "aigc.use",
+      "aigc.manage",
+    ],
     roleCodes: ["SUPER_ADMIN"],
   },
   requestId: randomUUID(),
@@ -177,6 +195,9 @@ beforeAll(async () => {
 }, 30000);
 beforeEach(async () => {
   await fixture.db!.exec(
+    "UPDATE bailian_chat_settings SET enabled=false,workspace_id='',api_key_encrypted=NULL,verified_at=NULL,last_test_at=NULL,error_note='',version=0,updated_at=now(); UPDATE assistant_realtime_settings SET qwen_api_key_encrypted=NULL,qwen_workspace_id=''",
+  );
+  await fixture.db!.exec(
     "UPDATE assistant_voice_settings SET provider='openrouter',enabled=false,qwen_api_key_encrypted=NULL,qwen_verified_at=NULL,qwen_workspace_id=''",
   );
   await fixture.db!.exec(
@@ -189,6 +210,68 @@ afterAll(async () => {
   await fixture.db?.close();
 });
 
+it("tracks H3 by task id without inventing tokens or currency and does not double count polling", async () => {
+  const source = "ws-fixture12345678.cn-beijing.maas.aliyuncs.com";
+  vi.stubGlobal("fetch", async () =>
+    json({
+      request_id: "submission",
+      output: { task_id: "h3-task", task_status: "PENDING" },
+    }),
+  );
+  await (
+    await aiFetch(
+      "aigc_video",
+      `https://${source}/api/v1/services/aigc/video-generation/video-synthesis`,
+      { method: "POST", body: JSON.stringify({ model: "MiniMax/MiniMax-H3" }) },
+    )
+  ).json();
+  const receipt = {
+    request_id: "poll-different-id",
+    output: {
+      task_id: "h3-task",
+      task_status: "SUCCEEDED",
+      video_url: "https://media.example.test/video.mp4",
+    },
+    usage: {
+      input_seconds: 3,
+      output_seconds: 4,
+      image_count: 2,
+      total_seconds: 7,
+    },
+  };
+  await recordAiReceipt("aigc_video", source, "MiniMax/MiniMax-H3", receipt);
+  await recordAiReceipt("aigc_video", source, "MiniMax/MiniMax-H3", receipt);
+  const records = await query(
+    "SELECT * FROM ai_model_usage WHERE feature_id='aigc_video'",
+  );
+  expect(records).toHaveLength(1);
+  expect(records[0]).toMatchObject({
+    provider_request_id: "h3-task",
+    status: "success",
+    amount: null,
+    total_tokens: null,
+    response_model: null,
+  });
+  expect(Number(records[0].input_video_seconds)).toBe(3);
+  expect(Number(records[0].output_video_seconds)).toBe(4);
+  expect(Number(records[0].billable_images)).toBe(2);
+  vi.stubGlobal("fetch", vi.fn(catalogFetch));
+  const video = (await aiModelManagement(admin())).features.find(
+    (feature) => feature.id === "aigc_video",
+  )!;
+  expect(video.choices.map((choice) => choice.value)).toEqual([
+    "bailian|minimax-h3",
+  ]);
+  expect(video.usage).toMatchObject({
+    requests: 1,
+    unknown: 0,
+    inputVideoSeconds: 3,
+    outputVideoSeconds: 4,
+    billableImages: 2,
+    totalTokens: null,
+    amounts: [],
+  });
+});
 describe("connected models in the public chat menu", () => {
   const models = [
     { id: "engine/connected", actual: "google/connected" },
@@ -544,5 +627,270 @@ describe("provider receipts and metering", () => {
     expect(saved.error_code).toBe("HTTP_401");
     expect(saved.total_tokens).toBeNull();
     expect(JSON.stringify(saved)).not.toContain("secret provider error");
+  });
+});
+
+describe("Bailian DeepSeek chat", () => {
+  const workspace = "ws-fixture12345678";
+  const modelId = modelRef("bailian/" + bailianChatModel);
+  const source = workspace + ".cn-beijing.maas.aliyuncs.com";
+  const configure = async (verified = false) => {
+    await fixture.db!.query(
+      "UPDATE bailian_chat_settings SET enabled=true,workspace_id=$1,api_key_encrypted='bailian-key',verified_at=CASE WHEN $2 THEN now() ELSE NULL END,updated_at=now()-interval '1 minute'",
+      [workspace, verified],
+    );
+  };
+  it("isolates credentials, fixes Beijing endpoint and strips OpenRouter-only request fields", () => {
+    expect(bailianChatEndpoint(workspace)).toBe(
+      "https://" + source + "/compatible-mode/v1/chat/completions",
+    );
+    expect(() => bailianChatEndpoint("ws-test.evil.test")).toThrow();
+    expect(
+      bailianChatBody({
+        model: "wrong",
+        stream: true,
+        provider: {},
+        plugins: [{}],
+        reasoning: {},
+        messages: [],
+        response_format: { type: "json_schema" },
+        tools: [],
+      }),
+    ).toEqual({
+      model: bailianChatModel,
+      stream: false,
+      enable_thinking: false,
+      messages: [],
+      response_format: { type: "json_object" },
+      tools: [],
+    });
+  });
+  it("copies the saved Qwen key server-side, invalidates verification and preserves the default and voice profile", async () => {
+    await fixture.db!.query(
+      "UPDATE assistant_realtime_settings SET qwen_api_key_encrypted='qwen-key',qwen_workspace_id=$1",
+      [workspace],
+    );
+    const before = (
+      await query("SELECT * FROM assistant_realtime_settings")
+    )[0];
+    const saved = await saveBailianChat(admin(), {
+      version: 0,
+      enabled: true,
+      workspaceId: workspace,
+      useSavedQwenConnection: true,
+    });
+    expect(saved).toMatchObject({
+      apiKeyConfigured: true,
+      verifiedAt: null,
+      version: 1,
+      reuseAvailable: true,
+    });
+    expect(JSON.stringify(saved)).not.toMatch(
+      /fixture-secret|qwen-key|encrypted/,
+    );
+    expect(
+      (await query("SELECT * FROM assistant_realtime_settings"))[0],
+    ).toEqual(before);
+    expect(await featureModelRef("assistant_chat")).toBeUndefined();
+    expect(
+      (await publicAgentCatalog()).models.some((m) => m.id === modelId),
+    ).toBe(false);
+    await expect(
+      saveBailianChat(admin(), {
+        version: 0,
+        enabled: true,
+        workspaceId: workspace,
+      }),
+    ).rejects.toMatchObject(errorCode("VERSION_CONFLICT"));
+    await expect(
+      readBailianChat({
+        ...admin(),
+        actor: { ...admin().actor, roleCodes: [] },
+      }),
+    ).rejects.toMatchObject(errorCode("FORBIDDEN"));
+  });
+  it("verifies vision, tool response and JSON using two real transport calls then lists only this provider receipt", async () => {
+    await configure();
+    const bodies: any[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string | URL, init?: RequestInit) => {
+        if (String(url).includes("openrouter.ai"))
+          return catalogFetch(url, init);
+        expect(String(url)).toBe(bailianChatEndpoint(workspace));
+        const body = JSON.parse(String(init?.body));
+        bodies.push(body);
+        expect(new Headers(init?.headers).get("Authorization")).toBe(
+          "Bearer fixture-secret",
+        );
+        return json({
+          id: randomUUID(),
+          model: bailianChatModel,
+          usage: { prompt_tokens: 8, completion_tokens: 4, total_tokens: 12 },
+          choices: [
+            bodies.length === 1
+              ? {
+                  finish_reason: "tool_calls",
+                  message: {
+                    tool_calls: [
+                      {
+                        id: "call-probe",
+                        type: "function",
+                        function: {
+                          name: "connection_probe",
+                          arguments: '{"color":"blue"}',
+                        },
+                      },
+                    ],
+                  },
+                }
+              : { finish_reason: "stop", message: { content: '{"ok":true}' } },
+          ],
+        });
+      }),
+    );
+    const result = await testBailianChat(admin());
+    expect(result.verifiedAt).toBeTruthy();
+    expect(bodies).toHaveLength(2);
+    expect(bodies[0].messages[0].content[1].image_url.url).toMatch(
+      /^data:image\/png;base64,/,
+    );
+    expect(bodies[1].messages.at(-1)).toMatchObject({
+      role: "tool",
+      tool_call_id: "call-probe",
+    });
+    expect(bodies[1].response_format).toEqual({ type: "json_object" });
+    const catalog = await publicAgentCatalog();
+    expect(catalog.models.map((m) => m.id)).toContain(modelId);
+    expect(catalog.defaultModel).toBe(modelRef("openai/gpt-6.1-sol"));
+    expect(catalog.models.find((m) => m.id === modelId)).toMatchObject({
+      vision: true,
+      structured: false,
+      chatOnly: true,
+    });
+    const usage = await query(
+      "SELECT source,model,total_tokens,amount FROM ai_model_usage ORDER BY started_at",
+    );
+    expect(usage).toHaveLength(2);
+    expect(usage[0]).toMatchObject({
+      source,
+      model: bailianChatModel,
+      total_tokens: "12",
+      amount: null,
+    });
+    await expect(testBailianChat(admin())).rejects.toMatchObject(
+      errorCode("BAILIAN_CHAT_TEST_BUSY"),
+    );
+    expect(bodies).toHaveLength(2);
+    await saveBailianChat(admin(), {
+      version: 0,
+      enabled: true,
+      workspaceId: workspace,
+    });
+    expect(
+      (await publicAgentCatalog()).models.some((m) => m.id === modelId),
+    ).toBe(false);
+  });
+  it("does not accept an OpenRouter receipt, incorrect returned model, or failed latest response as a Bailian connection", async () => {
+    await configure(true);
+    await fixture.db!.query(
+      "INSERT INTO ai_model_usage(id,feature_id,source,model,response_model,status,started_at,completed_at) VALUES($1,'assistant_chat','openrouter.ai',$2,$2,'success',now(),now())",
+      [randomUUID(), bailianChatModel],
+    );
+    expect(
+      (await connectedModelRefs((await agentModelCandidates()).models)).has(
+        modelId,
+      ),
+    ).toBe(false);
+    vi.stubGlobal("fetch", async () =>
+      json({
+        id: randomUUID(),
+        model: "wrong-model",
+        choices: [{ message: { content: '{"ok":true}' } }],
+      }),
+    );
+    await expect(testBailianChat(admin())).rejects.toMatchObject(
+      errorCode("BAILIAN_CHAT_TEST_FAILED"),
+    );
+    expect((await readBailianChat(admin())).verifiedAt).toBeNull();
+    expect(
+      (await publicAgentCatalog()).models.some((m) => m.id === modelId),
+    ).toBe(false);
+  });
+  it("routes selected chat to Bailian with JSON Object and does not require or send the shared key", async () => {
+    await configure(true);
+    const call = vi.fn(async (url: string | URL, init?: RequestInit) => {
+      if (String(url).includes("openrouter.ai")) return catalogFetch(url, init);
+      expect(String(url)).toBe(bailianChatEndpoint(workspace));
+      const body = JSON.parse(String(init?.body));
+      expect(body).toMatchObject({
+        model: bailianChatModel,
+        response_format: { type: "json_object" },
+        enable_thinking: false,
+      });
+      expect(body.provider).toBeUndefined();
+      expect(body.reasoning).toBeUndefined();
+      expect(body.tools.length).toBeGreaterThan(0);
+      return json({
+        id: randomUUID(),
+        model: bailianChatModel,
+        choices: [
+          {
+            finish_reason: "stop",
+            message: {
+              content: '{"text":"连接正常","schedules":[],"tools":[]}',
+            },
+          },
+        ],
+      });
+    });
+    vi.stubGlobal("fetch", call);
+    const answer = await askAssistantModel(
+      admin(),
+      {},
+      [
+        {
+          id: randomUUID(),
+          role: "user",
+          text: "你好",
+          createdAt: new Date().toISOString(),
+        },
+      ],
+      undefined,
+      "2026-11-08",
+      undefined,
+      false,
+      { model: modelId },
+    );
+    expect(answer.text).toBe("连接正常");
+    expect(
+      call.mock.calls.filter(
+        ([url]) => String(url) === bailianChatEndpoint(workspace),
+      ),
+    ).toHaveLength(1);
+    const current = (await aiModelManagement(admin())).features.find(
+      (f) => f.id === "assistant_chat",
+    )!;
+    expect(current.model).toBe("openai/gpt-6.1-sol");
+    expect(current.choices.some((c) => c.value === modelId)).toBe(true);
+    const view = await aiModelManagement(admin());
+    expect(
+      view.features
+        .filter((f) => f.id !== "assistant_chat")
+        .every((f) => !f.choices.some((c) => c.value === modelId)),
+    ).toBe(true);
+    await saveAiFeatureModel(admin(), {
+      feature: "assistant_chat",
+      model: modelId,
+      revision: 0,
+    });
+    const selected = (await aiModelManagement(admin())).features.find(
+      (f) => f.id === "assistant_chat",
+    )!;
+    expect(selected.source).toContain(source);
+    expect(selected.model).toBe(bailianChatModel);
+    await expect(
+      resolveTeamModel({ taskModel: modelId }),
+    ).rejects.toMatchObject(errorCode("TEAM_MODEL_CAPABILITY"));
   });
 });

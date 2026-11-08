@@ -72,6 +72,14 @@ export function VideoEditor({
   const provider =
     videoProviders.find((x) => x.id === draft.videoSelection?.providerId) ||
     videoProviders[0];
+  const unavailableVideo = Boolean(
+    draft.videoSelection?.providerId &&
+    !videoProviders.some(
+      (p) =>
+        p.id === draft.videoSelection.providerId &&
+        p.models.some((m: Item) => m.id === draft.videoSelection.modelId),
+    ),
+  );
   const models = provider?.models.filter((m: Item) => !m.legacy) || [];
   const model =
     models.find((x: Item) => x.id === draft.videoSelection?.modelId) ||
@@ -85,6 +93,29 @@ export function VideoEditor({
     <div className="aigc-editor">
       <div className="aigc-editor-main">
         <Form layout="vertical">
+          {unavailableVideo && (
+            <Alert
+              type="warning"
+              title="原视频线路已移出可选列表"
+              description="已提交任务仍按原任务编号查询。提交新任务前，请改用当前视频服务并保存。"
+              action={
+                <Button
+                  onClick={() =>
+                    patch({
+                      videoSelection: {
+                        providerId: videoProviders[0]?.id,
+                        modelId: videoProviders[0]?.models[0]?.id,
+                        resolution:
+                          videoProviders[0]?.models[0]?.resolutions[0],
+                      },
+                    })
+                  }
+                >
+                  改用当前视频服务
+                </Button>
+              }
+            />
+          )}
           <Form.Item label="项目名称" htmlFor="aigc-project-name">
             <Input
               id="aigc-project-name"
@@ -175,7 +206,7 @@ export function VideoEditor({
                 }}
                 options={videoProviders.map((p, i) => ({
                   value: p.id,
-                  label: `视频服务 ${i+1}${p.configured ? "" : " · 未配置"}`,
+                  label: `视频服务 ${i + 1}${p.configured ? "" : " · 未配置"}`,
                 }))}
               />
             </Form.Item>
@@ -194,7 +225,7 @@ export function VideoEditor({
                 }}
                 options={models.map((m: Item, i: number) => ({
                   value: m.id,
-                  label: `视频创作 ${i+1}`,
+                  label: `视频创作 ${i + 1}`,
                 }))}
               />
             </Form.Item>
@@ -202,7 +233,16 @@ export function VideoEditor({
               <Select
                 value={draft.videoAspectRatio}
                 onChange={(videoAspectRatio) => patch({ videoAspectRatio })}
-                options={["9:16", "16:9", "1:1", "2:3", "3:2"]
+                options={[
+                  "9:16",
+                  "16:9",
+                  "1:1",
+                  "4:3",
+                  "3:4",
+                  "21:9",
+                  "2:3",
+                  "3:2",
+                ]
                   .filter((r) => !model || model.aspects.includes(r))
                   .map((value) => ({ value, label: value }))}
               />
@@ -510,7 +550,7 @@ export function DetailEditor({
                   Array.isArray(imageModels)
                     ? imageModels.map((m: Item, i: number) => ({
                         value: m.id,
-                        label: `图像创作 ${i+1}${m.configured ? "" : " · 未配置"}`,
+                        label: `图像创作 ${i + 1}${m.configured ? "" : " · 未配置"}`,
                       }))
                     : []
                 }

@@ -32,7 +32,10 @@ vi.mock("pg", () => ({
   },
 }));
 vi.mock("../../packages/database/src/index.js", () => ({
-  db: {},
+  db: {
+    $queryRawUnsafe: async (sql: string, ...args: any[]) =>
+      (await fixture.db!.query(sql, args)).rows,
+  },
   one: async (_db: unknown, sql: string, ...args: any[]) =>
     (await fixture.db!.query(sql, args)).rows[0],
   rows: async (_db: unknown, sql: string, ...args: any[]) =>
@@ -133,7 +136,7 @@ beforeAll(async () => {
   vi.stubEnv("AWS_S3_BUCKET_NAME", "");
   fixture.db = new PGlite();
   await fixture.db.exec(
-    `CREATE TABLE users(id bigint PRIMARY KEY,username text,display_name text,status text);CREATE TABLE permissions(id serial PRIMARY KEY,code text UNIQUE,name text);CREATE TABLE roles(id bigint PRIMARY KEY,code text);CREATE TABLE user_roles(user_id bigint,role_id bigint);CREATE TABLE role_permissions(role_id bigint,permission_id int,PRIMARY KEY(role_id,permission_id));CREATE TABLE compass_ai_settings(id int,enabled boolean,api_key_encrypted text,verified_at timestamptz);INSERT INTO users VALUES(1,'owner','测试站长','ACTIVE'),(2,'other','其他用户','ACTIVE');INSERT INTO roles VALUES(1,'SUPER_ADMIN'),(2,'CREATOR');INSERT INTO user_roles VALUES(1,1),(2,2);`,
+    `CREATE TABLE users(id bigint PRIMARY KEY,username text,display_name text,status text);CREATE TABLE permissions(id serial PRIMARY KEY,code text UNIQUE,name text);CREATE TABLE roles(id bigint PRIMARY KEY,code text);CREATE TABLE user_roles(user_id bigint,role_id bigint);CREATE TABLE role_permissions(role_id bigint,permission_id int,PRIMARY KEY(role_id,permission_id));CREATE TABLE assistant_realtime_settings(id int,qwen_api_key_encrypted text,qwen_workspace_id text);CREATE TABLE compass_ai_settings(id int,enabled boolean,api_key_encrypted text,verified_at timestamptz);INSERT INTO users VALUES(1,'owner','测试站长','ACTIVE'),(2,'other','其他用户','ACTIVE');INSERT INTO roles VALUES(1,'SUPER_ADMIN'),(2,'CREATOR');INSERT INTO user_roles VALUES(1,1),(2,2);`,
   );
   await installAiManagementSchema(fixture.db);
   await fixture.db.exec(
@@ -275,6 +278,152 @@ it("encrypts and masks provider credentials, detects stale edits", async () => {
       })
     ).status,
   ).toBe(400);
+});
+it("copies the saved Bailian connection without exposing credentials and verifies one durable video task", async () => {
+  const { encryptSecret } =
+    await import("../../apps/api/src/modules/analytics/secrets.js");
+  await fixture.db!.query(
+    "INSERT INTO assistant_realtime_settings VALUES(1,$1,'ws-fixture12345678')",
+    [encryptSecret("sk-fixture-never-real")],
+  );
+  const settings = (await request("/services")).data;
+  expect(settings.bailianReuseAvailable).toBe(true);
+  const saved = await request("/services", "PUT", {
+    ...settings,
+    useSavedQwenConnection: true,
+    secrets: {},
+  });
+  expect(saved.status).toBe(200);
+  expect(saved.data.secrets.BAILIAN_VIDEO_API_KEY).toBe(true);
+  expect(saved.data.bailianWorkspaceId).toBe("ws-fixture12345678");
+  expect(JSON.stringify(saved.data)).not.toContain("sk-fixture");
+  const nativeFetch = globalThis.fetch;
+  let submitted = 0,
+    polled = 0;
+  vi.stubGlobal("fetch", async (url: any, init?: RequestInit) => {
+    if (!String(url).includes(".maas.aliyuncs.com"))
+      return nativeFetch(url, init);
+    if (init?.method === "POST") {
+      submitted++;
+      expect(JSON.parse(String(init.body))).toMatchObject({
+        model: "MiniMax/MiniMax-H3",
+        parameters: { duration: 4, resolution: "768P" },
+      });
+      return new Response(
+        JSON.stringify({
+          request_id: "request-submit",
+          output: { task_id: "fixture-h3-task", task_status: "PENDING" },
+        }),
+        { headers: { "content-type": "application/json" } },
+      );
+    }
+    polled++;
+    return new Response(
+      JSON.stringify({
+        request_id: "request-poll",
+        output: {
+          task_id: "fixture-h3-task",
+          task_status: "SUCCEEDED",
+          video_url: "https://media.example.test/test.mp4",
+        },
+        usage: { input_seconds: 0, output_seconds: 4, image_count: 0 },
+      }),
+      { headers: { "content-type": "application/json" } },
+    );
+  });
+  try {
+    expect(
+      (await request("/services/bailian-video-check", "POST", {}, "other"))
+        .status,
+    ).toBe(403);
+    expect(
+      (await request("/services/bailian-video-check", "POST", {})).status,
+    ).toBe(400);
+    expect(
+      (
+        await request("/services/bailian-video-check", "POST", {
+          confirmPaid: true,
+        })
+      ).data.state,
+    ).toBe("pending");
+    expect(
+      (
+        await request("/services/bailian-video-check", "POST", {
+          confirmPaid: true,
+        })
+      ).data.taskId,
+    ).toBe("fixture-h3-task");
+    expect(submitted).toBe(1);
+    expect(
+      (await request("/services", "PUT", { ...saved.data, secrets: {} }))
+        .status,
+    ).toBe(409);
+    expect((await request("/services/bailian-video-check")).data.state).toBe(
+      "succeeded",
+    );
+    await request("/services/bailian-video-check");
+    expect(polled).toBe(1);
+    const records = (
+      await fixture.db!.query<any>(
+        "SELECT * FROM ai_model_usage WHERE feature_id='aigc_video'",
+      )
+    ).rows;
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      status: "success",
+      provider_request_id: "fixture-h3-task",
+      amount: null,
+      total_tokens: null,
+      response_model: null,
+    });
+    expect(Number(records[0].output_video_seconds)).toBe(4);
+  } finally {
+    vi.stubGlobal("fetch", nativeFetch);
+  }
+});
+it("blocks duplicate uncertain video checks but lets rejected credentials be corrected", async () => {
+  const nativeFetch = globalThis.fetch;
+  let calls = 0;
+  vi.stubGlobal("fetch", async (url: any, init?: RequestInit) => {
+    if (!String(url).includes(".maas.aliyuncs.com"))
+      return nativeFetch(url, init);
+    calls++;
+    if (calls === 1) return new Response("denied", { status: 403 });
+    throw new Error("network disconnected after send");
+  });
+  try {
+    expect(
+      (
+        await request("/services/bailian-video-check", "POST", {
+          confirmPaid: true,
+        })
+      ).data.state,
+    ).toBe("failed");
+    const settings = (await request("/services")).data;
+    expect(
+      (await request("/services", "PUT", { ...settings, secrets: {} })).status,
+    ).toBe(200);
+    expect(
+      (
+        await request("/services/bailian-video-check", "POST", {
+          confirmPaid: true,
+        })
+      ).data.state,
+    ).toBe("uncertain");
+    expect(
+      (
+        await request("/services/bailian-video-check", "POST", {
+          confirmPaid: true,
+        })
+      ).status,
+    ).toBe(409);
+    expect(calls).toBe(2);
+  } finally {
+    vi.stubGlobal("fetch", nativeFetch);
+    await fixture.db!.exec(
+      "UPDATE aigc_settings SET config=config-'bailianVideoCheck'",
+    );
+  }
 });
 it("only one scheduler holds the lease, and persisted projects survive engine restart", async () => {
   const contender = new StudioDatabase("test");

@@ -120,6 +120,7 @@ it("only offers multimodal chat models and routes eligible selections to the exa
   expect(catalog.models.every((m) => m.vision)).toBe(true);
   expect(catalog.models.map((m) => m.id)).toEqual([
     modelRef("openai/gpt-6.1-sol"),
+    modelRef("bailian/deepseek-v4.1-flash-1017"),
     modelRef("google/gemini-2.5-pro"),
   ]);
   expect(catalog.models.find((m) => m.name === "视觉理解")).toMatchObject({

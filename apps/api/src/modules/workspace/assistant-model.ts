@@ -1,3 +1,4 @@
+import { bailianChatConnection, postBailianChat } from "./bailian-chat.js";
 import { aiFetch } from "../../ai-metering.js";
 import { randomUUID } from "node:crypto";
 import type { Row } from "../../../../../packages/database/src/index.js";
@@ -95,6 +96,8 @@ export async function askAssistantModel(
 ) {
   const available = availableWorkspaceTools(c.actor);
   const model = await resolveAgentModel(options.model);
+  const bailian =
+    model.provider === "bailian" ? await bailianChatConnection() : undefined;
   const tools = [
     ...assistantToolDefinitions(c),
     ...agentToolDefinitions,
@@ -162,32 +165,36 @@ export async function askAssistantModel(
   let used = 0;
   for (let round = 0; round < 4; round++) {
     const allowTools = round < 3 && used < 6;
-    const response = await aiFetch("assistant_chat", COMPASS_AI_ENDPOINT, {
-      method: "POST",
-      redirect: "error",
-      signal,
-      headers: {
-        Authorization: "Bearer " + decryptSecret(settings.api_key_encrypted),
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: model.actual,
-        stream: false,
-        max_tokens: 5000,
-        ...(model.parameters.includes("reasoning")
-          ? { reasoning: { effort: model.reasoningEffort ?? "low" } }
+    const request = {
+      model: model.actual,
+      stream: false,
+      max_tokens: 5000,
+      ...(model.parameters.includes("reasoning")
+        ? { reasoning: { effort: model.reasoningEffort ?? "low" } }
+        : {}),
+      provider: { require_parameters: true, data_collection: "deny" },
+      messages: transcript,
+      ...(model.structured
+        ? { response_format: responseFormat }
+        : model.parameters.includes("response_format")
+          ? { response_format: { type: "json_object" } }
           : {}),
-        provider: { require_parameters: true, data_collection: "deny" },
-        messages: transcript,
-        ...(model.structured
-          ? { response_format: responseFormat }
-          : model.parameters.includes("response_format")
-            ? { response_format: { type: "json_object" } }
-            : {}),
-        tools,
-        tool_choice: allowTools ? "auto" : "none",
-      }),
-    });
+      tools,
+      tool_choice: allowTools ? "auto" : "none",
+    };
+    const response = bailian
+      ? await postBailianChat(bailian, request, signal)
+      : await aiFetch("assistant_chat", COMPASS_AI_ENDPOINT, {
+          method: "POST",
+          redirect: "error",
+          signal,
+          headers: {
+            Authorization:
+              "Bearer " + decryptSecret(settings.api_key_encrypted),
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(request),
+        });
     if (!response.ok) {
       await response.body?.cancel();
       fail(

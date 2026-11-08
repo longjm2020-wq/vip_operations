@@ -10,7 +10,10 @@ export type TeamModelTier = "fast" | "standard" | "strong";
 
 /** Explicit endpoint modes are not interchangeable with synchronous Chat calls. */
 function supportsSynchronousTeamChat(model: AgentInternalModel): boolean {
-  return !/(?:^|:)(?:batch|async|asynchronous)(?=:|$)/i.test(model.actual);
+  return (
+    model.provider !== "bailian" &&
+    !/(?:^|:)(?:batch|async|asynchronous)(?=:|$)/i.test(model.actual)
+  );
 }
 
 /** A routing policy for the available configured catalog, not a global ranking. */
@@ -97,7 +100,11 @@ export async function resolveTeamModel(options: {
     return {
       ...model,
       tier: teamModelTier(model),
-      selectionReason: options.taskModel ? "本次任务指定模型" : options.profileModel ? "成员固定模型" : "AI 模型管理默认值",
+      selectionReason: options.taskModel
+        ? "本次任务指定模型"
+        : options.profileModel
+          ? "成员固定模型"
+          : "AI 模型管理默认值",
     };
   }
   const desired = options.orchestrator

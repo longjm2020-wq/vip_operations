@@ -16,6 +16,10 @@ const number = (value: unknown): number | null =>
 const text = (value: unknown, limit = 200) =>
   typeof value === "string" ? value.slice(0, limit) : null;
 type Receipt = {
+  inputVideoSeconds: number | null;
+  outputVideoSeconds: number | null;
+  billableImages: number | null;
+  completedVideoTask: boolean;
   characters: number | null;
   input: number | null;
   output: number | null;
@@ -61,7 +65,25 @@ export function providerUsage(payload: unknown, source: string): Receipt {
             ? currency
             : null;
   const credits = number(usage.credits ?? usage.points);
+  const bailian = /^ws-[a-z0-9]+\.cn-beijing\.maas\.aliyuncs\.com$/.test(
+    source,
+  );
+  const task =
+    bailian && response.output && typeof response.output === "object"
+      ? response.output
+      : {};
+  const taskId = text(task.task_id);
+  const taskState = text(task.task_status);
   return {
+    inputVideoSeconds: bailian ? number(usage.input_seconds) : null,
+    outputVideoSeconds: bailian ? number(usage.output_seconds) : null,
+    billableImages: bailian ? number(usage.image_count) : null,
+    completedVideoTask: Boolean(
+      taskId &&
+      taskState === "SUCCEEDED" &&
+      typeof task.video_url === "string" &&
+      task.video_url.startsWith("https://"),
+    ),
     characters: number(usage.characters),
     input,
     output,
@@ -74,25 +96,32 @@ export function providerUsage(payload: unknown, source: string): Receipt {
     creditUnit: credits === null ? null : `${source}:credits`,
     model: text(response.model),
     requestId: text(
-      response.id ?? response.request_id ?? response.task_id ?? response.taskId,
+      taskId ??
+        response.id ??
+        response.request_id ??
+        response.task_id ??
+        response.taskId,
     ),
     failed:
       !!response.error ||
+      ["FAILED", "CANCELED", "UNKNOWN"].includes(taskState || "") ||
       (source.endsWith(".maas.aliyuncs.com") &&
         (Boolean(response.code) ||
           Number(response.status_code || 200) >= 400)) ||
       response.status === "failed" ||
       response.state === "failed" ||
       (typeof response.code === "number" && ![0, 200].includes(response.code)),
-    pending: [
-      "pending",
-      "queued",
-      "running",
-      "processing",
-      "in_progress",
-      "created",
-      "submitted",
-    ].includes(response.status || response.state),
+    pending:
+      ["PENDING", "RUNNING"].includes(taskState || "") ||
+      [
+        "pending",
+        "queued",
+        "running",
+        "processing",
+        "in_progress",
+        "created",
+        "submitted",
+      ].includes(response.status || response.state),
   };
 }
 
@@ -123,17 +152,22 @@ async function finish(
   }
   // Successful HTTP alone does not establish that a selected model ran.
   const confirmed =
-    !value.pending &&
-    value.model &&
-    (!requestedModel ||
-      value.model === requestedModel ||
-      value.model.startsWith(requestedModel + "-20") ||
-      (requestedModel === "deepseek/deepseek-v4.1-flash-1017" &&
-        value.model === "deepseek/deepseek-v4.1-flash-20261017"));
+    (!value.pending &&
+      value.completedVideoTask &&
+      requestedModel === "MiniMax/MiniMax-H3") ||
+    (!value.pending &&
+      value.model &&
+      (!requestedModel ||
+        value.model === requestedModel ||
+        value.model.startsWith(requestedModel + "-20") ||
+        (requestedModel === "deepseek/deepseek-v4.1-flash-1017" &&
+          value.model === "deepseek/deepseek-v4.1-flash-20261017")));
   await db.$queryRawUnsafe(
     `UPDATE public.ai_model_usage SET status=$2,response_model=$3,
     input_tokens=COALESCE($4,input_tokens),output_tokens=COALESCE($5,output_tokens),total_tokens=COALESCE($6,total_tokens),amount=COALESCE($7,amount),amount_unit=COALESCE($8,amount_unit),credits=COALESCE($9,credits),credit_unit=COALESCE($10,credit_unit),
     provider_request_id=COALESCE($11,provider_request_id),input_characters=COALESCE($12,input_characters),
+    input_video_seconds=COALESCE($13,input_video_seconds),output_video_seconds=COALESCE($14,output_video_seconds),billable_images=COALESCE($15,billable_images),
+    error_code=CASE WHEN $2='failed' THEN COALESCE(error_code,'PROVIDER_ERROR') ELSE NULL END,
     completed_at=now() WHERE id=$1::uuid`,
     id,
     value.failed ? "failed" : confirmed ? "success" : "responded",
@@ -147,6 +181,9 @@ async function finish(
     value.creditUnit,
     value.requestId,
     value.characters,
+    value.inputVideoSeconds,
+    value.outputVideoSeconds,
+    value.billableImages,
   );
 }
 

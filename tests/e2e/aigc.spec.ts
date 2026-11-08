@@ -24,7 +24,10 @@ test.beforeAll(async () => {
       dataDir: dir,
       videoSecrets: {},
       videoProviders: [],
-      publicVideoProvider: "xylp",
+      publicVideoProvider: "bailian",
+      enabledVideoProviders: ["bailian"],
+      defaultVideoSelection: { providerId: "bailian", modelId: "minimax-h3" },
+      bailianWorkspaceId: "ws-fixture12345678",
       maxUploadBytes: 20 * 1024 * 1024,
       maxGenerationSegments: 24,
       maxVideoSecondsPerProject: 180,
@@ -125,6 +128,75 @@ async function fixture(page: Page, mode = "dark", permitted = true) {
     await route.fulfill({ json: { data } });
   });
 }
+test("H3 settings reuse a saved connection and require confirmation before one paid test", async ({
+  page,
+}) => {
+  await fixture(page);
+  let settings: any = {
+    revision: 1,
+    encryptionReady: true,
+    bailianReuseAvailable: true,
+    bailianReuseWorkspaceId: "ws-fixture12345678",
+    secrets: {},
+  };
+  let saved: any,
+    submitted = 0;
+  await page.route("**/api/v1/aigc/services", async (route) => {
+    if (route.request().method() === "PUT") {
+      saved = route.request().postDataJSON();
+      settings = {
+        ...settings,
+        revision: 2,
+        bailianWorkspaceId: saved.bailianWorkspaceId,
+        secrets: { BAILIAN_VIDEO_API_KEY: true },
+      };
+    }
+    await route.fulfill({ json: settings });
+  });
+  await page.route(
+    "**/api/v1/aigc/services/bailian-video-check",
+    async (route) => {
+      if (route.request().method() === "POST") {
+        submitted++;
+        expect(route.request().postDataJSON()).toEqual({ confirmPaid: true });
+      }
+      await route.fulfill({
+        json: {
+          state: "succeeded",
+          taskId: "fixture-task",
+          videoUrl: "https://media.example.test/video.mp4",
+        },
+      });
+    },
+  );
+  await page.goto("/aigc");
+  await page.getByRole("button", { name: /服务设置/ }).click();
+  const drawer = page.getByRole("dialog", { name: "AIGC 服务设置" });
+  await expect(
+    drawer.getByText("视频生成：MiniMax/MiniMax-H3", { exact: true }),
+  ).toBeVisible();
+  await drawer.getByText("使用已保存的百炼语音连接", { exact: true }).click();
+  await expect(drawer.getByLabel("百炼北京业务空间 ID")).toHaveValue(
+    "ws-fixture12345678",
+  );
+  await drawer.getByRole("button", { name: "保存服务配置" }).click();
+  await expect(
+    drawer.getByRole("button", { name: "验证 H3 视频连接" }),
+  ).toBeVisible();
+  expect(saved).toMatchObject({
+    useSavedQwenConnection: true,
+    bailianWorkspaceId: "ws-fixture12345678",
+    secrets: {},
+  });
+  await drawer.getByRole("button", { name: "验证 H3 视频连接" }).click();
+  await expect(page.getByText(/刊例约 2 元，无免费额度/)).toBeVisible();
+  expect(submitted).toBe(0);
+  await page.getByRole("button", { name: "开始测试", exact: true }).click();
+  await expect(
+    drawer.getByText("H3 视频生成已验证", { exact: true }),
+  ).toBeVisible();
+  expect(submitted).toBe(1);
+});
 test("native blue studio supports all five entries and omits commercial navigation", async ({
   page,
 }) => {

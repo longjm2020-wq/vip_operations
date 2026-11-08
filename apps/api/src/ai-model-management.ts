@@ -1,3 +1,4 @@
+import { bailianChatModel } from "../../../packages/contracts/src/bailian-chat.js";
 import { z } from "zod";
 import {
   qwenDictationModel,
@@ -43,6 +44,9 @@ export const emptyAiUsage = (): AiFeatureUsage => ({
   unknown: 0,
   inputTokens: null,
   inputCharacters: null,
+  inputVideoSeconds: null,
+  outputVideoSeconds: null,
+  billableImages: null,
   outputTokens: null,
   totalTokens: null,
   amounts: [],
@@ -52,6 +56,7 @@ export const emptyAiUsage = (): AiFeatureUsage => ({
   lastError: null,
 });
 export function supportsFeature(kind: string, model: AgentInternalModel) {
+  if (model.provider === "bailian" && kind !== "chat") return false;
   return (
     (!(
       kind === "chat" ||
@@ -103,6 +108,7 @@ export async function aiModelManagement(
     meta,
     config,
     state,
+    bailian,
   ] = await Promise.all([
     rows(
       db,
@@ -129,8 +135,8 @@ export async function aiModelManagement(
       db,
       `SELECT feature_id,count(*)::int AS requests,count(*) FILTER(WHERE status='success')::int AS succeeded,
       count(*) FILTER(WHERE status='failed')::int AS failed,
-      count(*) FILTER(WHERE total_tokens IS NULL AND input_tokens IS NULL AND output_tokens IS NULL AND input_characters IS NULL AND amount IS NULL AND credits IS NULL)::int AS unknown,
-      sum(input_tokens)::text AS input,sum(output_tokens)::text AS output,sum(total_tokens)::text AS total,sum(input_characters)::text AS characters,min(started_at) AS first
+      count(*) FILTER(WHERE total_tokens IS NULL AND input_tokens IS NULL AND output_tokens IS NULL AND input_characters IS NULL AND input_video_seconds IS NULL AND output_video_seconds IS NULL AND billable_images IS NULL AND amount IS NULL AND credits IS NULL)::int AS unknown,
+      sum(input_tokens)::text AS input,sum(output_tokens)::text AS output,sum(total_tokens)::text AS total,sum(input_characters)::text AS characters,sum(input_video_seconds)::text AS video_input,sum(output_video_seconds)::text AS video_output,sum(billable_images)::text AS billable_images,min(started_at) AS first
       FROM public.ai_model_usage WHERE $1::int=0 OR started_at>=now()-($1::int*interval '1 day') GROUP BY feature_id`,
       days,
     ),
@@ -144,7 +150,7 @@ export async function aiModelManagement(
     ),
     rows(
       db,
-      "SELECT DISTINCT ON(feature_id) feature_id,status,response_model,model,completed_at,error_code FROM public.ai_model_usage ORDER BY feature_id,started_at DESC",
+      "SELECT DISTINCT ON(feature_id) feature_id,status,response_model,model,source,completed_at,error_code FROM public.ai_model_usage ORDER BY feature_id,started_at DESC",
     ),
     one(
       db,
@@ -154,6 +160,10 @@ export async function aiModelManagement(
     one(
       db,
       "SELECT document->'compileSettings' AS compiler FROM public.aigc_state WHERE id=1",
+    ),
+    one(
+      db,
+      "SELECT enabled,workspace_id,api_key_encrypted IS NOT NULL AS configured,verified_at,updated_at FROM public.bailian_chat_settings WHERE id=1",
     ),
   ]);
   const aigc = aigcModelManagement(config, state?.compiler);
@@ -180,6 +190,9 @@ export async function aiModelManagement(
           unknown: u.unknown,
           inputTokens: numeric(u.input),
           inputCharacters: numeric(u.characters),
+          inputVideoSeconds: numeric(u.video_input),
+          outputVideoSeconds: numeric(u.video_output),
+          billableImages: numeric(u.billable_images),
           outputTokens: numeric(u.output),
           totalTokens: numeric(u.total),
           amounts: amounts
@@ -299,6 +312,7 @@ export async function aiModelManagement(
           ...catalog.models
             .filter(
               (model) =>
+                model.provider !== "bailian" &&
                 supportsFeature("aigc_compile", model) &&
                 model.reasoningEffort !== "none",
             )
@@ -312,7 +326,9 @@ export async function aiModelManagement(
           ...row.choices,
         ];
       row.usageNote +=
-        " 新默认值在服务刷新后生效（约 10 秒）；项目明确选择和已提交任务保留原型号。";
+        feature.id === "aigc_video"
+          ? " H3 记录供应商返回的输入/输出视频秒数与计费图片数；未返回金额保持未知。新生成仅提供百炼 H3，已提交任务保留原路由。"
+          : " 新默认值在服务刷新后生效（约 10 秒）；项目明确选择和已提交任务保留原型号。";
       const selectedBoundary = row.choices.find(
         (choice) => choice.value === row.selection,
       )?.boundary;
@@ -345,13 +361,25 @@ export async function aiModelManagement(
       });
     } else {
       row.choices = catalog.models
-        .filter((model) => supportsFeature(feature.kind, model))
+        .filter(
+          (model) =>
+            supportsFeature(feature.kind, model) &&
+            (model.provider !== "bailian" || feature.id === "assistant_chat"),
+        )
         .map((model) => ({
           value: model.id,
           label: model.displayName || model.actual,
-          source: row.source,
-          boundary: capability(model),
-          available: true,
+          source:
+            model.provider === "bailian" ? "阿里云百炼 · 北京" : row.source,
+          boundary:
+            capability(model) +
+            (model.provider === "bailian" ? " · 网站内聊天 · JSON Object" : ""),
+          available:
+            model.provider === "bailian"
+              ? Boolean(
+                  bailian?.enabled && bailian.configured && encryptionReady(),
+                )
+              : true,
         }));
       const automatic = feature.kind === "team";
       const followsChat =
@@ -365,6 +393,35 @@ export async function aiModelManagement(
           : !row.selection && followsChat
             ? "跟随本次对话模型"
             : selected?.actual || "所选模型暂不在目录中";
+      if (selected?.provider === "bailian" && feature.id === "assistant_chat") {
+        row.source =
+          "阿里云百炼 · " +
+          (bailian?.workspace_id
+            ? "https://" +
+              bailian.workspace_id +
+              ".cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
+            : "北京业务空间未配置");
+        row.status = !bailian?.enabled
+          ? "disabled"
+          : !bailian.configured || !encryptionReady()
+            ? "unconfigured"
+            : "configured";
+        row.statusText =
+          row.status === "disabled"
+            ? "百炼聊天已关闭"
+            : row.status === "unconfigured"
+              ? "百炼密钥或加密未配置"
+              : bailian?.verified_at
+                ? "百炼聊天已验证；查看最近调用"
+                : "百炼聊天待验证";
+        row.boundary +=
+          " 仅用于网站内聊天；JSON Object 回复由服务器校验。搜索与网站识别使用独立的 OpenRouter 搜索服务。";
+      }
+      if (!row.selection && followsChat) {
+        row.source = "OpenRouter · https://openrouter.ai/api/v1";
+        row.boundary +=
+          " 百炼聊天使用本功能单独选择的 OpenRouter 型号；未设置时使用系统默认搜索型号。";
+      }
       if (selected && row.selection)
         row.boundary += ` 当前型号：${capability(selected)}。`;
       row.choices.unshift({
@@ -387,17 +444,25 @@ export async function aiModelManagement(
       }
       if (
         row.selection &&
-        (!selected || !supportsFeature(feature.kind, selected))
+        (!selected ||
+          !supportsFeature(feature.kind, selected) ||
+          (selected.provider === "bailian" && feature.id !== "assistant_chat"))
       ) {
         row.status = "unavailable";
         row.statusText = "型号下架或不满足功能能力，需重新选择";
       }
     }
+    const usingBailianChat =
+      feature.id === "assistant_chat" && row.model === bailianChatModel;
+    const activeConnection = usingBailianChat ? bailian : shared;
+    const matchingSource =
+      !usingBailianChat ||
+      last?.source === bailian?.workspace_id + ".cn-beijing.maas.aliyuncs.com";
     const after = Math.max(
       new Date(binding?.updated_at || 0).getTime(),
       feature.group === "AIGC"
         ? new Date(config.aiConfigurationUpdatedAt || 0).getTime()
-        : new Date(shared?.updated_at || 0).getTime(),
+        : new Date(activeConnection?.updated_at || 0).getTime(),
       feature.id === "aigc_compile" && row.source.startsWith("OpenRouter")
         ? new Date(shared?.updated_at || 0).getTime()
         : 0,
@@ -409,7 +474,14 @@ export async function aiModelManagement(
         feature.id === "assistant_website");
     if (
       row.status === "configured" &&
-      (feature.group === "AIGC" || readyKey) &&
+      (feature.group === "AIGC" ||
+        (usingBailianChat
+          ? bailian?.verified_at &&
+            bailian.configured &&
+            bailian.enabled &&
+            encryptionReady()
+          : readyKey)) &&
+      matchingSource &&
       last?.status === "success" &&
       new Date(last.completed_at).getTime() > after &&
       (automatic ||
@@ -420,12 +492,14 @@ export async function aiModelManagement(
       row.statusText = "最近调用成功";
     } else if (
       row.status === "configured" &&
+      matchingSource &&
       last?.status === "failed" &&
       new Date(last.completed_at).getTime() > after
     ) {
       row.statusText = "最近调用失败；可检查连接与额度";
     } else if (
       row.status === "configured" &&
+      matchingSource &&
       last?.status === "responded" &&
       new Date(last.completed_at).getTime() > after
     ) {

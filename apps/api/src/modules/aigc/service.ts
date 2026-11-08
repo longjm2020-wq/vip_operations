@@ -12,6 +12,7 @@ import {
   objectStorageReady,
 } from "./persistence.js";
 import { engineConfig, visibleSettings, saveSettings } from "./config.js";
+import { startVideoCheck, videoCheckStatus } from "./video-check.js";
 import type { Actor } from "../../core.js";
 
 const PREFIX = "/api/v1/aigc";
@@ -159,7 +160,9 @@ export function createAigcService() {
       )
         return res.status(404).json({ error: "未提供此接口" });
       if (
-        (suffix.startsWith("/admin/") || suffix === "/services") &&
+        (suffix.startsWith("/admin/") ||
+          suffix === "/services" ||
+          suffix.startsWith("/services/")) &&
         !actor?.permissions.includes("aigc.manage")
       )
         return res.status(403).json({ error: "没有 AIGC 服务管理权限" });
@@ -176,9 +179,8 @@ export function createAigcService() {
             studio?.config.videoSecrets?.XHAI_API_KEY,
           ),
           video: Boolean(
-            studio?.config.xaiApiKey ||
-            studio?.config.videoSecrets?.VIDEO_RELAY_API_KEY ||
-            studio?.config.videoSecrets?.XHAI_API_KEY,
+            studio?.config.bailianWorkspaceId &&
+            studio?.config.videoSecrets?.BAILIAN_VIDEO_API_KEY,
           ),
           digital: Boolean(studio?.config.opentalkingBaseUrl),
           model: "openai/gpt-6.1-sol",
@@ -196,6 +198,14 @@ export function createAigcService() {
           throw Object.assign(new Error("AIGC 暂时无法同步账号权限"), {
             statusCode: 503,
           });
+      }
+      if (suffix === "/services/bailian-video-check") {
+        if (req.method === "GET") return res.json(await videoCheckStatus());
+        if (req.method === "POST")
+          return res
+            .status(202)
+            .json(await startVideoCheck(await jsonBody(req), actor!.id));
+        return res.status(405).json({ error: "不支持此操作" });
       }
       if (suffix === "/services") {
         if (req.method === "GET") return res.json(await visibleSettings());
@@ -231,12 +241,10 @@ export function createAigcService() {
                 studio.store.data.digitalHuman?.operations || {},
               ).some((op) => op.remoteId))
           )
-            return res
-              .status(409)
-              .json({
-                error:
-                  "已有数字人形象或远端任务，请保持原推理服务地址，避免将旧任务编号发送到另一服务",
-              });
+            return res.status(409).json({
+              error:
+                "已有数字人形象或远端任务，请保持原推理服务地址，避免将旧任务编号发送到另一服务",
+            });
           const result = await saveSettings(actor!.id, input);
           Object.assign(studio.config, await engineConfig());
           return res.json(result);

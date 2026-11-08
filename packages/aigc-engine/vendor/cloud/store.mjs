@@ -113,6 +113,9 @@ function scrubJobAssetReferences(payload, paths) {
       history: (frame.history || []).filter(item => !paths.has(item.asset?.path)),
     }));
   }
+  if (next.bailianReferenceImages) {
+    next.bailianReferenceImages = Object.fromEntries(Object.entries(next.bailianReferenceImages).map(([id, value]) => [id, { ...value, assets: value.assets.filter(asset => !paths.has(asset.path)) }]).filter(([, value]) => value.assets.length));
+  }
   return next;
 }
 
@@ -544,7 +547,7 @@ export class CloudStore {
       // New browser uploads are tagged with a project id. Include files that a
       // user replaced or removed during the run so they cannot become orphans.
       for (const metadata of Object.values(this.data.assets)) {
-        if (["upload", "keyframe-upload"].includes(metadata?.source) && metadata.kind !== "template" && metadata.projectId === projectId) sourcePaths.add(metadata.id);
+        if (["upload", "keyframe-upload", "bailian-video-reference"].includes(metadata?.source) && metadata.kind !== "template" && metadata.projectId === projectId) sourcePaths.add(metadata.id);
       }
 
       const activeReferences = new Set();

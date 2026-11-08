@@ -1,5 +1,6 @@
 // Provider endpoints and credentials are separate from model capabilities. Only
 // non-secret routing snapshots are persisted with jobs; keys stay on the server.
+import { bailianVideoProvider, bailianVideoBody, submitBailianVideo, pollBailianVideo } from "./bailian-video.mjs";
 import { xhaiJson } from "./xhai-files.mjs";
 import { modelFetch, modelReceipt } from "./ai-accounting.mjs";
 import { jobRequestSignal } from "./job-request.mjs";
@@ -64,14 +65,14 @@ export function videoProviders(config) {
     { id: "xylp", label: "玄宇令牌", protocol: "media", baseUrl: config.videoRelayBaseUrl || "https://api.lk888.ai", keyEnv: "VIDEO_RELAY_API_KEY", models: [...MEDIA_MODELS, ...LEGACY_MEDIA_MODELS] },
     { id: "xhai", label: "星火 AIGC", protocol: "xhai", baseUrl: `${(config.xhaiBaseUrl || "https://xhai.token6688.com").replace(/\/+$/, "")}/v1`, keyEnv: "XHAI_API_KEY", models: XHAI_MODELS },
   ];
-  const providers = [...builtins];
+  const providers = [...builtins, bailianVideoProvider(config)];
   for (const item of config.videoProviders || []) {
     const at = providers.findIndex(p => p.id === item.id);
     const provider = { ...item, models: item.models || (item.protocol === "media" ? MEDIA_MODELS : item.protocol === "xhai" ? XHAI_MODELS : []) };
     if (at >= 0) providers[at] = provider; else providers.push(provider);
   }
   for (const p of providers) {
-    if (!/^[\w-]+$/.test(p.id) || !["xai", "media", "xhai"].includes(p.protocol) || !/^[A-Z][A-Z0-9_]*$/.test(p.keyEnv)) throw new Error("视频中转站配置无效");
+    if (!/^[\w-]+$/.test(p.id) || !["xai", "media", "xhai", "bailian"].includes(p.protocol) || !/^[A-Z][A-Z0-9_]*$/.test(p.keyEnv)) throw new Error("视频中转站配置无效");
     p.baseUrl = endpoint(p.baseUrl);
     if (!p.models.length || new Set(p.models.map(m => m.id)).size !== p.models.length) throw new Error("视频模型列表为空或 ID 重复");
     for (const m of p.models) {
@@ -81,7 +82,7 @@ export function videoProviders(config) {
       if (m.imagesValue && !["single", "array"].includes(m.imagesValue)) throw new Error("视频模型图片字段类型无效");
       if (m.inputMode === "first-frame" && (!["media", "xhai"].includes(p.protocol) || m.maxImages !== 1)) throw new Error("首帧模型须使用媒体协议且只接收 1 张图");
       if (m.imagesValue === "single" && m.maxImages !== 1) throw new Error("单图字段不能配置多张参考图");
-      if (m.mediaReferences && (p.protocol !== "media" || m.inputMode === "first-frame")) throw new Error("视频、音频参考仅支持已适配的多图媒体协议");
+      if (m.mediaReferences && (!["media", "bailian"].includes(p.protocol) || m.inputMode === "first-frame")) throw new Error("视频、音频参考仅支持已适配的多图媒体协议");
       for (const type of ["video", "audio"]) {
         const cap = m.mediaReferences?.[type];
         if (cap && (!/^[a-z][a-z0-9_]*$/.test(cap.field || "") || [m.imagesField, m.aspectField || "aspect_ratio", m.durationField || "duration", m.qualityField || "resolution", "prompt", "model", "__proto__", "constructor"].includes(cap.field) || !Number.isInteger(cap.maxFiles) || cap.maxFiles < 1 || cap.maxFiles > 10 || !Array.isArray(cap.extensions) || !cap.extensions.length || ![cap.maxBytes, cap.minSeconds, cap.maxSeconds, cap.maxTotalSeconds].every(v => Number.isFinite(v) && v > 0) || cap.minSeconds > cap.maxSeconds || !Number.isFinite(cap.priceMultiplier) || cap.priceMultiplier < 0)) throw new Error("视频、音频参考能力配置无效");
@@ -92,11 +93,12 @@ export function videoProviders(config) {
 }
 
 export function videoKey(config, route) {
+  if (route.protocol === "bailian" && route.baseUrl.includes("unconfigured.invalid")) return "";
   return route.keyEnv === "XAI_API_KEY" ? config.xaiApiKey : config.videoSecrets?.[route.keyEnv];
 }
 
 export function videoCatalog(config) {
-  return videoProviders(config).map(p => ({
+  return videoProviders(config).filter(p => !config.enabledVideoProviders || config.enabledVideoProviders.includes(p.id)).map(p => ({
     id: p.id, label: p.label, configured: p.models.some(model => !model.legacy && Boolean(videoKey(config, { ...p, keyEnv: p.id === "xylp" ? model.keyEnv || p.keyEnv : p.keyEnv }))),
     models: p.models.filter(model => !model.legacy).map(({ id, label, group, channel, keyEnv, successRate, speedSeconds, priceHint, durations, durationsByResolution, maxImages, resolutions, aspects, note, inputMode = "references", minImageSide, mediaReferences }) => ({ id, label, group, channel, successRate, speedSeconds, priceHint, configured: Boolean(videoKey(config, { ...p, keyEnv: p.id === "xylp" ? keyEnv || p.keyEnv : p.keyEnv })), durations, durationsByResolution, maxImages, resolutions, aspects, note, inputMode, minImageSide, mediaReferences, roleBinding: videoRoleProfile({id,inputMode}) })),
   }));
@@ -118,7 +120,7 @@ export function validateVideoInput(route, { prompt, duration, aspectRatio, refer
   const m = route.model;
   validateRoleBindingPayload(roleBinding,referenceImages);
   for (const [type, urls] of [["video", referenceVideos], ["audio", referenceAudios]]) {
-    if (!Array.isArray(urls) || (urls.length && (!m.mediaReferences?.[type] || route.protocol !== "media" || urls.length > m.mediaReferences[type].maxFiles))) throw new Error(`当前模型不支持所选数量的${type === "video" ? "视频" : "音频"}参考，不会静默丢弃`);
+    if (!Array.isArray(urls) || (urls.length && (!m.mediaReferences?.[type] || !["media", "bailian"].includes(route.protocol) || urls.length > m.mediaReferences[type].maxFiles))) throw new Error(`当前模型不支持所选数量的${type === "video" ? "视频" : "音频"}参考，不会静默丢弃`);
     for (const value of urls) {
       let url; try { url = new URL(value); } catch { throw new Error("生成参考素材必须使用 HTTPS 文件地址"); }
       if (url.protocol !== "https:" || url.username || url.password) throw new Error("生成参考素材必须使用 HTTPS 文件地址");
@@ -141,6 +143,7 @@ export function videoRequestBody(route, input) {
   validateVideoInput(route, input);
   const { prompt, duration, aspectRatio, referenceImages } = input;
   const m = route.model;
+  if (route.protocol === "bailian") return bailianVideoBody(route, input);
   if (route.protocol === "xai") return { model: m.model, prompt, reference_images: referenceImages.map(url => ({ url })), duration, aspect_ratio: aspectRatio, resolution: route.resolution, generate_audio: false };
   const params = { ...m.params, [m.imagesField]: m.imagesValue === "single" ? referenceImages[0] : referenceImages, [m.aspectField || "aspect_ratio"]: aspectRatio };
   if (input.referenceVideos?.length) params[m.mediaReferences.video.field] = input.referenceVideos;
@@ -234,6 +237,7 @@ export async function mediaCall(config, route, pathname, body) {
 
 export async function submitVideo(config, route, input, preflight) {
   const body = videoRequestBody(route, input);
+  if (route.protocol === "bailian") return submitBailianVideo(config, route, input);
   if (route.protocol === "xhai") {
     const key = videoKey(config, route);
     if (!key) throw new Error(`${route.label} 尚未配置 ${route.keyEnv}`);
@@ -253,6 +257,7 @@ export async function submitVideo(config, route, input, preflight) {
 }
 
 export async function pollVideo(config, route, id) {
+  if (route.protocol === "bailian") return pollBailianVideo(config, route, id);
   const result = await mediaCall(config, route, route.protocol === "xai" ? `/videos/${encodeURIComponent(id)}` : route.protocol === "xhai" ? `/tasks/${encodeURIComponent(id)}` : `/v1/media/status?task_id=${encodeURIComponent(id)}`);
   if (result.is_final === true || ["done", "completed", "failed", "success"].includes(result.status || result.state))
     await modelReceipt(config, route.id === "xylp-enhance" ? "aigc_enhance" : "aigc_video", route.baseUrl, route.model.model || route.model.id, { ...result, task_id: id });
