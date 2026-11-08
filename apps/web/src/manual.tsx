@@ -29,24 +29,6 @@ export function manualHref(path: string) {
   if (path.startsWith("/operations/vip/inventory")) return "/help?chapter=04-inventory.md";
   if(path.startsWith("/analytics/competitors")) return "/help?chapter=33-competitor-analysis.md";
   if(path.startsWith("/settings/ai")) return "/help?chapter=31-ai-settings.md";
-  if (path.startsWith("/supply/reconciliation"))
-    return "/help?chapter=25-supply-statements.md";
-  if (path.startsWith("/supply/statements"))
-    return "/help?chapter=26-supplier-statements.md";
-  if (path.startsWith("/supply/procurement"))
-    return "/help?chapter=23-supply-orders.md";
-  if (path.startsWith("/supply/orders"))
-    return "/help?chapter=24-supplier-orders.md";
-  if (path.startsWith("/supply/"))
-    return (
-      "/help?chapter=" +
-      (path.includes("/review")
-        ? "21-supply-review"
-        : path.includes("/catalog")
-          ? "22-supply-products"
-          : "20-supply-portal") +
-      ".md"
-    );
   const chapter = moduleChapters[path.split("/")[1]];
   return chapter ? `/help?chapter=${chapter}.md` : "/help";
 }

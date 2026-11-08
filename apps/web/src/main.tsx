@@ -43,7 +43,6 @@ import {
   InboxOutlined,
   DatabaseOutlined,
   ApartmentOutlined,
-  TruckOutlined,
   SettingOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
@@ -79,12 +78,6 @@ import "./style.css";
 import "./workspace-shell.css";
 import { AppearanceProvider, ThemeToggle } from "./appearance";
 const coreFeatureSummary = "小序多智能体协作 · AI 模型管理与用量 · 实时语音目标执行与电脑操作 · 全息工作台 · 文档、图像与视频创作 · 经营分析 · 聚水潭库存同步 · 协作表格 · AIGC";
-const SupplierRegister = React.lazy(() => import("./supply").then(module => ({ default: module.SupplierRegister })));
-const SupplyProfile = React.lazy(() => import("./supply").then(module => ({ default: module.SupplyProfile })));
-const SupplyProducts = React.lazy(() => import("./supply").then(module => ({ default: module.SupplyProducts })));
-const SupplyReview = React.lazy(() => import("./supply").then(module => ({ default: module.SupplyReview })));
-const SupplyOrders = React.lazy(() => import("./supply-orders").then(module => ({ default: module.SupplyOrders })));
-const SupplyStatements = React.lazy(() => import("./supply-statements").then(module => ({ default: module.SupplyStatements })));
 const useUi = create<{ collapsed: boolean; toggle: () => void }>((set) => ({
   collapsed: false,
   toggle: () => set((s) => ({ collapsed: !s.collapsed })),
@@ -101,7 +94,6 @@ function BrandMark({ collapsed = false }: { collapsed?: boolean }) {
   );
 }
 function Login() {
-  const supplierLogin = useLocation().pathname.startsWith("/supply");
   const [busy, setBusy] = useState(false),
     [error, setError] = useState("");
   return (
@@ -124,12 +116,7 @@ function Login() {
           <span className="eyebrow">工作台登录</span>
           <h2>欢迎回来</h2>
           <p className="secondary">
-            {supplierLogin
-              ? "供应商登录序缇供应链后台。"
-              : "使用管理员为您建立的账户登录。"}
-          </p>
-          <p>
-            <Link to="/supply/register">供应商持邀请码注册入驻</Link>
+            使用管理员为您建立的账户登录。
           </p>
           {error && <Alert type="error" title={error} className="notice" />}
           <Form
@@ -260,57 +247,6 @@ function Workspace({ user }: { user: Row }) {
         }]
       : []),
     originalItems.find((i) => i.key === "/project-management")!,
-    {
-      key: "/supply",
-      label: "供应链端",
-      icon: <TruckOutlined />,
-      children: [
-        ...(user.roleCodes?.includes("SUPPLIER")
-          ? [
-              {
-                key: "/supply/profile",
-                label: "企业资质管理",
-                permission: "supply.portal",
-              },
-              {
-                key: "/supply/products",
-                label: "供应商产品库",
-                permission: "supply.portal",
-              },
-              {
-                key: "/supply/orders",
-                label: "订单中心",
-                permission: "supply.portal",
-              },
-              {
-                key: "/supply/statements",
-                label: "对账中心",
-                permission: "supply.portal",
-              },
-            ]
-          : []),
-        {
-          key: "/supply/review",
-          label: "入驻审核 / 邀请码",
-          permission: "supply.review",
-        },
-        {
-          key: "/supply/catalog",
-          label: "供应链产品库",
-          permission: "supply.manage",
-        },
-        {
-          key: "/supply/procurement",
-          label: "订单中心",
-          permission: "supply.purchase",
-        },
-        {
-          key: "/supply/reconciliation",
-          label: "对账中心",
-          permission: "supply.reconcile",
-        },
-      ],
-    },
     settings,
   ];
   const visibleItems = items
@@ -404,9 +340,7 @@ function Workspace({ user }: { user: Row }) {
           </Link>
           {!navCollapsed && (
             <div className="sidebar-caption" title={coreFeatureSummary}>
-              {user.roleCodes?.includes("SUPPLIER")
-                ? "序缇供应链后台"
-                : "内部管理系统"}
+              内部管理系统
             </div>
           )}
           <Menu
@@ -495,23 +429,6 @@ function Workspace({ user }: { user: Row }) {
               <Route path="/my-workspace" element={<PersonalWorkspacePage key={user.id} />} />
               <Route path="/aigc" element={<AigcPage key={user.id} />} />
               <Route path="/settings/ai" element={<CompassAISettingsPage />} />
-              <Route path="/supply/profile" element={<SupplyProfile />} />
-              <Route path="/supply/products" element={<SupplyProducts />} />
-              <Route path="/supply/orders" element={<SupplyOrders />} />
-              <Route path="/supply/statements" element={<SupplyStatements />} />
-              <Route
-                path="/supply/reconciliation"
-                element={<SupplyStatements internal />}
-              />
-              <Route
-                path="/supply/procurement"
-                element={<SupplyOrders internal />}
-              />
-              <Route path="/supply/review" element={<SupplyReview />} />
-              <Route
-                path="/supply/catalog"
-                element={<SupplyProducts internal />}
-              />
               <Route path="/help" element={<ManualPage />} />
               <Route path="/operations" element={<OperationsWorkspacePage />} />
               <Route path="/operations/vip/inventory" element={<InventoryDetailsPage />} />
@@ -600,7 +517,6 @@ function Root() {
   if (me.data && location.pathname === "/assistant/open-website") return <AssistantWebsiteOpening />;
   if (
     me.data?.roleCodes?.includes("SUPPLIER") &&
-    !location.pathname.startsWith("/supply/") &&
     location.pathname !== "/my-workspace" &&
     location.pathname !== "/help"
   )
@@ -608,8 +524,6 @@ function Root() {
   if (me.data && location.pathname === "/mobile/style-photos") return <UserContext.Provider value={me.data}><SelectionWorkspace key={new URLSearchParams(location.search).get("tableId") || "default"} tableId={new URLSearchParams(location.search).get("tableId") || undefined} archive={new URLSearchParams(location.search).get("archive")==="1"}><SelectionMobilePhotos /></SelectionWorkspace></UserContext.Provider>;
   return me.data ? (
     <Workspace user={me.data} />
-  ) : location.pathname === "/supply/register" ? (
-    <SupplierRegister />
   ) : (
     <Login />
   );

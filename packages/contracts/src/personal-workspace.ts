@@ -75,74 +75,6 @@ export const workspaceTools = [
     group: "协作",
   },
   {
-    id: "review",
-    title: "入驻审核",
-    description: "审核供应商资质及管理邀请码",
-    path: "/supply/review",
-    permission: "supply.review",
-    group: "供应链",
-  },
-  {
-    id: "catalog",
-    title: "供应链产品库",
-    description: "查看供应商提报与产品资料",
-    path: "/supply/catalog",
-    permission: "supply.manage",
-    group: "供应链",
-  },
-  {
-    id: "procurement",
-    title: "供应链订单",
-    description: "管理供应链采购与交付",
-    path: "/supply/procurement",
-    permission: "supply.purchase",
-    group: "供应链",
-  },
-  {
-    id: "reconciliation",
-    title: "供应链对账",
-    description: "查看订单账单及结算记录",
-    path: "/supply/reconciliation",
-    permission: "supply.reconcile",
-    group: "财务",
-  },
-  {
-    id: "profile",
-    title: "企业资质管理",
-    description: "维护企业资料与入驻资质",
-    path: "/supply/profile",
-    permission: "supply.portal",
-    role: "SUPPLIER",
-    group: "供应商",
-  },
-  {
-    id: "supplier-products",
-    title: "供应商产品库",
-    description: "提报产品、维护供应资料",
-    path: "/supply/products",
-    permission: "supply.portal",
-    role: "SUPPLIER",
-    group: "供应商",
-  },
-  {
-    id: "supplier-orders",
-    title: "我的订单",
-    description: "查看和处理本企业采购订单",
-    path: "/supply/orders",
-    permission: "supply.portal",
-    role: "SUPPLIER",
-    group: "供应商",
-  },
-  {
-    id: "supplier-statements",
-    title: "我的对账",
-    description: "核对本企业账单及结算进度",
-    path: "/supply/statements",
-    permission: "supply.portal",
-    role: "SUPPLIER",
-    group: "供应商",
-  },
-  {
     id: "users",
     title: "用户管理",
     description: "维护账号与角色分配",
@@ -169,23 +101,10 @@ export const workspaceTools = [
 ] as const;
 export function availableWorkspaceTools(actor: WorkspaceActor) {
   return workspaceTools.filter(
-    (tool) =>
-      actor.permissions.includes(tool.permission) &&
-      (!("role" in tool) || actor.roleCodes?.includes(tool.role)),
+    (tool) => actor.permissions.includes(tool.permission),
   );
 }
 const profiles = [
-  {
-    role: "SUPPLIER",
-    name: "供应商工作台",
-    description: "提报产品、跟进订单与核对结算",
-    tools: [
-      "supplier-orders",
-      "supplier-products",
-      "supplier-statements",
-      "profile",
-    ],
-  },
   {
     role: "SUPER_ADMIN",
     name: "系统管理工作台",
@@ -197,12 +116,6 @@ const profiles = [
     name: "管理工作台",
     description: "查看经营与库存，协调团队工作",
     tools: ["analytics", "projects", "inventory", "users", "audit"],
-  },
-  {
-    role: "SUPPLY_MANAGER",
-    name: "供应链工作台",
-    description: "处理入驻、产品提报与交付结算",
-    tools: ["review", "catalog", "procurement", "reconciliation", "projects"],
   },
   {
     role: "OPERATOR",
@@ -237,8 +150,8 @@ const profiles = [
   {
     role: "FINANCE",
     name: "财务工作台",
-    description: "核对账单与经营数据",
-    tools: ["reconciliation", "analytics", "projects"],
+    description: "核对经营数据与协作进度",
+    tools: ["analytics", "projects"],
   },
   {
     role: "ANALYST",

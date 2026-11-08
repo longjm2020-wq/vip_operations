@@ -39,22 +39,6 @@ export function WorkspaceMenuIcon({
         </>
       );
       break;
-    case "/supply":
-      shape = selected ? (
-        <>
-          <rect x="2" y="5" width="12" height="11" rx="1" />
-          <path fillRule="evenodd" d="M14 8h4l4 5v3h-8V8Zm2 2v3h3.5L17 10h-1Z" />
-          <circle cx="6" cy="18" r="2" />
-          <circle cx="18" cy="18" r="2" />
-        </>
-      ) : (
-        <>
-          <path d="M4 17H2V5h12v12H8m6-8h4l4 4v4h-2m-6 0h2" />
-          <circle cx="6" cy="17" r="2" />
-          <circle cx="18" cy="17" r="2" />
-        </>
-      );
-      break;
     case "/settings":
       shape = selected ? (
         <path

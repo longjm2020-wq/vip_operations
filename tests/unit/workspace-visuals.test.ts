@@ -13,11 +13,11 @@ import {
 import { canReadManual, manualPermissions } from "../../apps/api/src/manual.js";
 import { roleSeeds } from "../../packages/contracts/src/domain.js";
 describe("private workspace role defaults and validation", () => {
-  test("retired ERP shortcuts and manuals are absent while shared inventory and VIP access remain", () => {
-    const available = availableWorkspaceTools({ permissions: ["purchase.read", "receipt.read", "supplier.read", "warehouse.read", "inventory.read", "vip.settings", "product.read"], roleCodes: ["ADMIN"] });
+  test("retired ERP and supply shortcuts and manuals are absent while inventory and VIP access remain", () => {
+    const available = availableWorkspaceTools({ permissions: ["purchase.read", "receipt.read", "supplier.read", "warehouse.read", "inventory.read", "vip.settings", "product.read", "supply.review", "supply.manage", "supply.purchase", "supply.reconcile"], roleCodes: ["ADMIN"] });
     expect(available.map(tool => tool.id)).toEqual(["products", "inventory", "vip-integration"]);
     expect(available.find(tool => tool.id === "vip-integration")?.path).toBe("/operations/vip/integration");
-    for (const id of ["05-transactions", "06-suggestions", "07-purchases", "08-receipts", "09-suppliers", "12-warehouses", "13-categories", "15-brands", "29-inventory-transfers"]) expect(manualPermissions).not.toHaveProperty(id);
+    for (const id of ["05-transactions", "06-suggestions", "07-purchases", "08-receipts", "09-suppliers", "12-warehouses", "13-categories", "15-brands", "20-supply-portal", "21-supply-review", "22-supply-products", "23-supply-orders", "24-supplier-orders", "25-supply-statements", "26-supplier-statements", "29-inventory-transfers"]) expect(manualPermissions).not.toHaveProperty(id);
     expect(manualPermissions["04-inventory"]).toBe("inventory.read");
     expect(manualPermissions["19-vip"]).toBe("vip.settings");
   });
@@ -55,12 +55,7 @@ describe("private workspace role defaults and validation", () => {
         permissions: ["supply.portal"],
         roleCodes: ["SUPPLIER"],
       }).tools,
-    ).toEqual([
-      "supplier-orders",
-      "supplier-products",
-      "supplier-statements",
-      "profile",
-    ]);
+    ).toEqual([]);
   });
   test("cannot submit an owner, invalid calendar date, duplicate tools or duplicate tasks", () => {
     const base = { version: 0, shortcuts: [], note: "private", todos: [] };

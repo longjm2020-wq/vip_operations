@@ -5,7 +5,7 @@ async function login(page: Page) {
   await page.getByLabel("用户名", { exact: true }).fill("admin");
   await page.getByLabel("密码", { exact: true }).fill(process.env.E2E_PASSWORD!);
   await page.getByRole("button", { name: "进入工作台" }).click();
-  await expect(page.getByRole("heading", { name: /欢迎回来/ })).toBeVisible();
+  await expect(page.getByRole("region", { name: "工作台三维场景", exact: true })).toBeVisible();
 }
 
 const searchHost = (page: Page) => page.getByRole("search", { name: "当前页面搜索", exact: true });
@@ -16,7 +16,7 @@ test("shared search stays compact across page controls when a query exceeds the 
   const longQuery = "QUERY-".repeat(20);
   for (const path of [
     "/products", "/analytics/compass", "/analytics/competitors",
-    "/operations/vip/inventory", "/supply/catalog", "/supply/procurement", "/help", "/style-selections",
+    "/operations/vip/inventory", "/help", "/style-selections",
   ]) {
     await page.goto(path);
     const host = searchHost(page), input = host.getByRole("textbox"), control = host.locator(".page-search-control");

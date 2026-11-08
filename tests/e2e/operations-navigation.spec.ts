@@ -21,7 +21,7 @@ test("唯品会 API 图标与平台标签同排，侧栏和页脚移除 ERP 及�
   await fixture(page);
   await page.goto("/operations?platform=vip");
   const workspace = page.locator(".operations-workspace");
-  await expect(page.locator(".sidebar .ant-menu-root > .ant-menu-item, .sidebar .ant-menu-root > .ant-menu-submenu > .ant-menu-submenu-title")).toHaveText(["我的工作台", "运营中心", "项目协作", "供应链端", "系统设置"]);
+  await expect(page.locator(".sidebar .ant-menu-root > .ant-menu-item, .sidebar .ant-menu-root > .ant-menu-submenu > .ant-menu-submenu-title")).toHaveText(["我的工作台", "运营中心", "项目协作", "系统设置"]);
   const integration = workspace.getByRole("link", { name: "唯品会接入", exact: true });
   await expect(integration).toHaveAttribute("href", "/operations/vip/integration");
   await expect(integration).toHaveText("");
@@ -66,14 +66,15 @@ test("普通运营人员不能使用新接入地址扩大权限", async ({ page 
   expect(requests.some(path => path.startsWith("/integrations/vip"))).toBe(false);
 });
 
-test("旧 ERP 网址均退出业务页面且不发起旧模块请求", async ({ page }) => {
+test("旧 ERP 和供应链网址均退出业务页面且不发起旧模块请求", async ({ page }) => {
+  test.setTimeout(90000);
   const requests = await fixture(page);
-  for (const path of ["/erp", "/inventory", "/inventory/transactions?skuId=1", "/purchase-suggestions", "/purchase-orders", "/purchase-orders/new", "/purchase-orders/1", "/receipts", "/receipts/1", "/suppliers", "/warehouses", "/categories", "/brands", "/skus"]) {
+  for (const path of ["/erp", "/inventory", "/inventory/transactions?skuId=1", "/purchase-suggestions", "/purchase-orders", "/purchase-orders/new", "/purchase-orders/1", "/receipts", "/receipts/1", "/suppliers", "/warehouses", "/categories", "/brands", "/skus", "/supply", "/supply/register", "/supply/review", "/supply/catalog", "/supply/procurement", "/supply/reconciliation", "/supply/profile", "/supply/products", "/supply/orders", "/supply/statements"]) {
     await page.goto(path);
     await expect(page).toHaveURL(/\/my-workspace$/);
-    await expect(page.getByRole("heading", { name: /欢迎回来/ })).toBeVisible();
+    await expect(page.getByRole("region", { name: "工作台三维场景", exact: true })).toBeVisible();
   }
-  expect(requests.filter(path => /^\/(inventory|purchase-orders|purchase-suggestions|receipts|suppliers|warehouses|categories|brands|skus)(\/|$)/.test(path))).toEqual([]);
+  expect(requests.filter(path => /^\/(inventory|purchase-orders|purchase-suggestions|receipts|suppliers|warehouses|categories|brands|skus|supply)(\/|$)/.test(path))).toEqual([]);
 });
 
 test("商品详情保留 SKU 与库存，移除采购页签和旧流水入口", async ({ page }) => {

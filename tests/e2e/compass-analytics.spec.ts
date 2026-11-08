@@ -23,14 +23,14 @@ test("罗盘数据、日期区间、五种明细视图、维度下钻与邮件�
     .getByLabel("密码", { exact: true })
     .fill(process.env.E2E_PASSWORD!);
   await page.getByRole("button", { name: "进入工作台" }).click();
-  await expect(page.getByRole("heading", { name: /欢迎回来/ })).toBeVisible();
+  await expect(page.getByRole("region", { name: "工作台三维场景", exact: true })).toBeVisible();
   const sidebar = page.locator(".sidebar"),
     operations = sidebar.getByRole("link", { name: "运营中心", exact: true });
   await expect(
     sidebar.locator(
       ".ant-menu-root > .ant-menu-item, .ant-menu-root > .ant-menu-submenu > .ant-menu-submenu-title",
     ),
-  ).toHaveText(["我的工作台", "运营中心", "项目协作", "供应链端", "系统设置"]);
+  ).toHaveText(["我的工作台", "运营中心", "项目协作", "系统设置"]);
   await expect(
     page
       .locator(".sidebar")
