@@ -314,7 +314,7 @@ export function PersonalAssistantProvider({
     !teamMode &&
     !desktopDeviceId &&
     (modelCatalog.data && !selectedModel
-      ? modelCatalog.data.models.length
+      ? modelCatalog.data.models?.length
         ? "所选模型已不可用或未接通，请从列表重新选择。"
         : "暂无已接通的多模态模型，请管理员检查连接。"
       : "");
