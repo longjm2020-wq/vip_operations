@@ -48,7 +48,7 @@ function publicConversation(row: Row | undefined, s: Row | undefined) {
     ready: ready(s),
     availabilityMessage: ready(s)
       ? "个人助理已就绪"
-      : "请管理员在 AI 模型设置中启用并验证模型连接",
+      : "请管理员在 AI 模型管理中启用并验证模型连接",
     model: "小序",
     version: row?.version || 0,
     state: expired(row) ? "FAILED" : row?.state || "IDLE",

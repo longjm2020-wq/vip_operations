@@ -23,6 +23,16 @@ const secretLabels: Record<string, string> = {
   XAI_API_KEY: "xAI 官方视频 Key",
   RUNNINGHUB_API_KEY: "RunningHub 深度参考 Key",
   OPENTALKING_GATEWAY_KEY: "OpenTalking 网关 Key",
+  XYLP_VIDEO_H3_OMNI_KEY: "海螺 H3 视频渠道 Key",
+  XYLP_VIDEO_SD20_OMNI_KEY: "SD 2.0 视频渠道 Key",
+  XYLP_VIDEO_SD25_OMNI_KEY: "SD 2.5 视频渠道 Key",
+  XYLP_VIDEO_VIDU_Q3_KEY: "Vidu Q3 视频渠道 Key",
+  XYLP_VIDEO_GK35_KEY: "GK-video-3.5 视频渠道 Key",
+  XYLP_VIDEO_OMNI11_KEY: "Omni 1.1 视频渠道 Key",
+  XYLP_VIDEO_ENHANCE_KEY: "视频增强渠道 Key",
+  XYLP_CHAT_ASTRA_KEY: "TT-6 Astra 编译渠道 Key",
+  XYLP_CHAT_SOL6_KEY: "TT-6 Sol 编译渠道 Key",
+  XYLP_CHAT_SOL56_KEY: "TT-5.6 Sol 编译渠道 Key",
 };
 export function ServiceSettings({ onSaved }: { onSaved: () => void }) {
   const { message } = App.useApp();
@@ -72,9 +82,8 @@ export function ServiceSettings({ onSaved }: { onSaved: () => void }) {
                 title="内部创作使用自己的模型服务"
                 description={
                   <>
-                    拆解复用本站已验证的 OpenRouter 设置，模型为
-                    openai/gpt-6.1-sol。
-                    <Link to="/settings/ai">打开 AI 模型设置</Link>
+                    脚本、图片和视频的默认模型由 AI 模型管理统一选择。
+                    <Link to="/settings/ai">打开 AI 模型管理</Link>
                     。图片、视频和数字人使用各自的服务；第三方 API
                     可能产生供应商费用。
                   </>

@@ -78,7 +78,7 @@ const ProjectNotifications = React.lazy(() => import("./projects").then(module =
 import "./style.css";
 import "./workspace-shell.css";
 import { AppearanceProvider, ThemeToggle } from "./appearance";
-const coreFeatureSummary = "小序多智能体协作与模型调度 · 实时语音目标执行与电脑操作 · 全息工作台 · 文档、图像与视频创作 · 经营分析 · 聚水潭库存同步 · 协作表格 · AIGC";
+const coreFeatureSummary = "小序多智能体协作 · AI 模型管理与用量 · 实时语音目标执行与电脑操作 · 全息工作台 · 文档、图像与视频创作 · 经营分析 · 聚水潭库存同步 · 协作表格 · AIGC";
 const SupplierRegister = React.lazy(() => import("./supply").then(module => ({ default: module.SupplierRegister })));
 const SupplyProfile = React.lazy(() => import("./supply").then(module => ({ default: module.SupplyProfile })));
 const SupplyProducts = React.lazy(() => import("./supply").then(module => ({ default: module.SupplyProducts })));
@@ -239,7 +239,7 @@ function Workspace({ user }: { user: Row }) {
         { key: "/users", label: "用户", permission: "user.read" },
         { key: "/roles", label: "角色权限", permission: "role.read" },
         { key: "/audit-logs", label: "操作日志", permission: "audit.read" },
-        ...(user.roleCodes?.includes("SUPER_ADMIN") ? [{ key: "/settings/ai", label: "AI 模型设置", permission: "analytics.manage" }] : []),
+        ...(user.roleCodes?.includes("SUPER_ADMIN") ? [{ key: "/settings/ai", label: "AI 模型管理", permission: "analytics.manage" }] : []),
       ],
     },
   ];

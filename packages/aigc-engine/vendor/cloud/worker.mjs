@@ -256,11 +256,11 @@ async function videoFrames(buffer, label, config, model, overview = false) {
   }
 }
 
-async function jsonResponse(url, options) {
+async function jsonResponse(url, options, fetchImpl = fetch) {
   let response;
   let content;
   try {
-    response = await fetch(url, { ...options, signal: jobRequestSignal(options?.signal ? 1_800_000 : 60_000, options?.signal) });
+    response = await fetchImpl(url, { ...options, signal: jobRequestSignal(options?.signal ? 1_800_000 : 60_000, options?.signal) });
     content = await response.text();
   } catch (error) {
     throw new ProviderError(`网络连接失败：${error instanceof Error ? error.message : "未知错误"}`, 0);
@@ -890,7 +890,7 @@ export class CloudWorker {
       headers,
       signal: AbortSignal.timeout(this.config.compileRequestTimeoutMs),
       body: JSON.stringify(body),
-    });
+    }, this.config.aiFetch ? (url, options) => this.config.aiFetch("aigc_compile", url, options) : fetch);
   }
 
   async #prepareXhaiCompileImages(job, provider, imageItems) {
@@ -916,7 +916,10 @@ export class CloudWorker {
       if (this.config.openrouterSiteUrl) headers["HTTP-Referer"] = this.config.openrouterSiteUrl;
       if (this.config.openrouterAppTitle) headers["X-OpenRouter-Title"] = this.config.openrouterAppTitle;
     }
-    return jsonResponse(`${provider.baseUrl}/responses/${encodeURIComponent(id)}`, { headers });
+    const result = await jsonResponse(`${provider.baseUrl}/responses/${encodeURIComponent(id)}`, { headers });
+    if (["completed", "failed", "incomplete"].includes(result.status))
+      await this.config.recordAiReceipt?.("aigc_compile", new URL(provider.baseUrl).hostname, provider.model, result).catch(() => {});
+    return result;
   }
 
   async #runCompile(job) {

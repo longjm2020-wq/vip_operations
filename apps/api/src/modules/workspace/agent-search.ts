@@ -1,3 +1,6 @@
+import { aiFetch } from "../../ai-metering.js";
+import { featureModelRef } from "../../ai-model-routing.js";
+import { resolveAgentModel, matchesAgentModel } from "./agent-models.js";
 import { z } from "zod";
 import type { Row } from "../../../../../packages/database/src/index.js";
 import { parse, fail } from "../../core.js";
@@ -60,6 +63,12 @@ export async function searchAgentWeb(
   signal: AbortSignal,
   matchesModel?: (returnedModel: unknown) => boolean,
 ) {
+  const configured = await featureModelRef("assistant_search");
+  if (configured) {
+    const selected = await resolveAgentModel(configured);
+    model = selected.actual;
+    matchesModel = returned => matchesAgentModel(selected, returned);
+  }
   let raw: unknown;
   try {
     raw = JSON.parse(args);
@@ -70,7 +79,7 @@ export async function searchAgentWeb(
     z.object({ query: z.string().trim().min(1).max(500) }).strict(),
     raw,
   );
-  const response = await fetch(COMPASS_AI_ENDPOINT, {
+  const response = await aiFetch("assistant_search", COMPASS_AI_ENDPOINT, {
     method: "POST",
     redirect: "error",
     signal,

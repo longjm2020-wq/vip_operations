@@ -5,7 +5,8 @@ import path from "node:path";
 import sharp from "sharp";
 import { createStudio } from "../../packages/aigc-engine/index.mjs";
 
-it("reference compilation uses the configured model once, saves artifacts and waits for explicit video generation", async () => {
+it.each([false, true])("reference compilation uses the configured model once and preserves queued snapshots (managed=%s)", async (managed) => {
+  const expectedModel = managed ? "provider/managed-vision" : "openai/gpt-6.1-sol";
   const directory = await mkdtemp(path.join(tmpdir(), "aigc-compile-test-"));
   let snapshot: any;
   const engine = await createStudio({
@@ -15,6 +16,11 @@ it("reference compilation uses the configured model once, saves artifacts and wa
       compileProvider: "openrouter",
       openrouterApiKey: "fixture-only",
       openrouterModel: "openai/gpt-6.1-sol",
+      ...(managed ? { managedCompiler: { providerId: "openrouter", model: expectedModel } } : {}),
+      aiFetch: (feature: string, url: string | URL, options: RequestInit) => {
+        expect(feature).toBe("aigc_compile");
+        return fetch(url, options);
+      },
       openrouterBaseUrl: "https://compile.test",
       compileMaxOutputTokens: 10000,
       compileRequestTimeoutMs: 5000,
@@ -93,7 +99,7 @@ it("reference compilation uses the configured model once, saves artifacts and wa
   const action = "人物站立，双手握扇轻旋，再缓慢抬头。";
   const response = {
     id: "fixture_request",
-    model: "openai/gpt-6.1-sol",
+    model: expectedModel,
     status: "completed",
     output_text: JSON.stringify({
       schema: "XUTI_COMPILE_V1",
@@ -116,7 +122,7 @@ it("reference compilation uses the configured model once, saves artifacts and wa
     async (input: string | URL | Request, options?: RequestInit) => {
       expect(String(input)).toBe("https://compile.test/responses");
       expect(JSON.parse(String(options?.body)).model).toBe(
-        "openai/gpt-6.1-sol",
+        expectedModel,
       );
       return new Response(JSON.stringify(response), {
         headers: { "Content-Type": "application/json" },
@@ -128,6 +134,7 @@ it("reference compilation uses the configured model once, saves artifacts and wa
     const task = await engine.worker.startCompile("project", undefined, {
       compileOnly: true,
     });
+    if (managed) engine.config.managedCompiler = { providerId: "openrouter", model: "provider/next-default" };
     await engine.worker.tick();
     const job = engine.store.getJob(task.id);
     expect(

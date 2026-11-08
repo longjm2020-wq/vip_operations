@@ -1,3 +1,4 @@
+import { aiFetch } from "../../ai-metering.js";
 import { randomUUID } from "node:crypto";
 import { HttpException } from "@nestjs/common";
 import { z } from "zod";
@@ -399,7 +400,7 @@ export async function runAgentJob(
       })),
     );
     await progress(20, "图像创作中");
-    const response = await fetch("https://openrouter.ai/api/v1/images", {
+    const response = await aiFetch("assistant_image", "https://openrouter.ai/api/v1/images", {
       method: "POST",
       redirect: "error",
       signal: AbortSignal.any([signal, AbortSignal.timeout(300000)]),

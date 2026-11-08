@@ -1,3 +1,4 @@
+import { aiFetch } from "../../ai-metering.js";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import {
@@ -972,7 +973,7 @@ export async function runTeamExecution(
         AbortSignal.timeout(150000),
       ]);
       const toolsEnabled = !finalOutput && round < 4;
-      const response = await fetch(COMPASS_AI_ENDPOINT, {
+      const response = await aiFetch("assistant_team", COMPASS_AI_ENDPOINT, {
         method: "POST",
         redirect: "error",
         signal: requestSignal,

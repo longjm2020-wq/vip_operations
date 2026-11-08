@@ -1,3 +1,5 @@
+import { resolveFeatureModel, matchesAgentModel, type AgentInternalModel } from "../workspace/agent-models.js";
+import { aiFetch } from "../../ai-metering.js";
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 import { db, one, rows, type Row, type Tx } from "../../../../../packages/database/src/index.js";
@@ -6,7 +8,7 @@ import { selectionFieldSchema, type SelectionField } from "../../../../../packag
 import { splitChoiceValues } from "../../../../../packages/contracts/src/selection-field-validation.js";
 import { selectionTitleAIApplySchema, selectionTitleAIGenerateSchema, selectionTitleAIModeSchema, selectionTitleTargetEligible, selectionTitleWordingIssue, type SelectionTitleAIPreview, type SelectionTitleAIStatus, type SelectionTitleAIRow } from "../../../../../packages/contracts/src/selection-title-ai.js";
 import { command, fail, parse, requirePermission, type Context } from "../../core.js";
-import { COMPASS_AI_ENDPOINT, COMPASS_AI_MODEL } from "../analytics/ai.js";
+import { COMPASS_AI_ENDPOINT } from "../analytics/ai.js";
 import { decryptSecret, encryptionReady } from "../analytics/secrets.js";
 import * as protection from "./protection.js";
 import { persist } from "./service.js";
@@ -25,7 +27,7 @@ const verifiedSettings = (settings?: Row) => encryptionReady() && !!settings?.en
 export async function titleAIStatus(c: Context): Promise<SelectionTitleAIStatus> {
   requirePermission(c.actor, "selection.manage");
   const settings = await one(db, "SELECT enabled,api_key_encrypted,verified_at FROM public.compass_ai_settings WHERE id=1");
-  return verifiedSettings(settings) ? { ready: true, message: "AI 商品标题已就绪" } : { ready: false, message: "请超级管理员在系统设置 → AI 模型设置中启用 AI 并保存并验证模型后使用" };
+  return verifiedSettings(settings) ? { ready: true, message: "AI 商品标题已就绪" } : { ready: false, message: "请超级管理员在系统设置 → AI 模型管理中启用 AI 并保存并验证模型后使用" };
 }
 type SignedRow = { id: string; expectedUpdatedAt: string; keys: string[]; fingerprint: string; visual: boolean; poeticName?: string };
 const planSchema = z.object({ actor: z.string(), scope: z.string(), mode: selectionTitleAIModeSchema.optional(), expires: z.number(), nonce: z.string().uuid(), policy: z.string(), rows: z.array(z.object({ id: z.string(), expectedUpdatedAt: z.string(), keys: z.array(z.string()).max(2), fingerprint: z.string(), visual: z.boolean(), poeticName: z.string().max(4).optional() }).strict()).max(10) }).strict();
@@ -117,15 +119,15 @@ export function parseTitleAIResponse(content: unknown, expected: { id: string; k
   }
   return result.data.rows;
 }
-async function callTitleModel(settings: Row, products: Row[], examples: Row[], preferences: unknown, namingContext: unknown) {
+async function callTitleModel(selected: AgentInternalModel, settings: Row, products: Row[], examples: Row[], preferences: unknown, namingContext: unknown) {
   const content: Row[] = [{ type: "text", text: JSON.stringify({ products: products.map(({ pictures: _pictures, ...product }) => product), styleExamples: examples, preferences, namingContext }) }];
   for (const product of products) for (const [index, image] of product.pictures.entries()) {
     content.push({ type: "text", text: `以下是商品 ID ${product.id} 的第 ${index + 1} 张图片；只分析这件产品的可见设计。` }, { type: "image_url", image_url: { url: image, detail: "low" } });
   }
-  const response = await fetch(COMPASS_AI_ENDPOINT, {
+  const response = await aiFetch("product_titles", COMPASS_AI_ENDPOINT, {
     method: "POST", redirect: "error", signal: AbortSignal.timeout(90000),
     headers: { Authorization: "Bearer " + decryptSecret(settings.api_key_encrypted), "Content-Type": "application/json" },
-    body: JSON.stringify({ model: COMPASS_AI_MODEL, stream: false, max_tokens: 8000, reasoning: { effort: "low" }, provider: { require_parameters: true, data_collection: "deny" },
+    body: JSON.stringify({ model: selected.actual, stream: false, max_tokens: 8000, ...(selected.parameters.includes("reasoning") ? { reasoning: { effort: selected.reasoningEffort ?? "low" } } : {}), provider: { require_parameters: true, data_collection: "deny" },
       messages: [{ role: "system", content: productTitleSystemPrompt }, { role: "user", content }],
       response_format: { type: "json_schema", json_schema: { name: "selection_product_titles", strict: true, schema: {
         type: "object", additionalProperties: false, required: ["rows"], properties: { rows: { type: "array", items: {
@@ -144,7 +146,7 @@ async function callTitleModel(settings: Row, products: Row[], examples: Row[], p
   let payload: Row;
   try { payload = JSON.parse(text); } catch { fail("AI_RESPONSE_INVALID", "AI 返回格式无效，未采用此结果", 502); }
   const choice = payload.choices?.[0];
-  if (payload.model !== COMPASS_AI_MODEL || !payload.id || choice?.finish_reason !== "stop" || choice?.message?.refusal || typeof choice?.message?.content !== "string")
+  if (!matchesAgentModel(selected, payload.model) || !payload.id || choice?.finish_reason !== "stop" || choice?.message?.refusal || typeof choice?.message?.content !== "string")
     fail("AI_RESPONSE_INVALID", "AI 模型标识或结果不完整，未采用此结果", 502);
   try { return JSON.parse(choice.message.content); } catch { fail("AI_RESPONSE_INVALID", "AI 标题格式无效，未采用此结果", 502); }
 }
@@ -157,6 +159,7 @@ export async function generateTitles(c: Context, input: unknown): Promise<Select
   // existing one-request-per-user/two-request global limit.
   active.add(caller); activeRequests++;
   try {
+    const selected = await resolveFeatureModel("product_titles");
     const settings = await one(db, "SELECT enabled,api_key_encrypted,verified_at FROM public.compass_ai_settings WHERE id=1");
     if (!verifiedSettings(settings)) fail("AI_NOT_READY", "请超级管理员先启用并测试 AI 连接", 503);
     const initial = await snapshot(c, body.rowIds, body.targetKeys), products: Row[] = [], signedRows: SignedRow[] = [], skipped: string[] = [];
@@ -250,7 +253,7 @@ export async function generateTitles(c: Context, input: unknown): Promise<Select
       if (beforeProvider.digest !== initial.digest || signedRows.some(row => sourceFingerprint(beforeProvider.projected.find(value => String(value.id) === row.id)!, beforeProvider.fields) !== row.fingerprint))
         fail("AI_SOURCE_CHANGED", "生成前产品资料或权限已变化，请刷新后重新生成", 409);
       let response: unknown;
-      try { response = await callTitleModel(settings!, products, examples, body.preferences || { usePoeticName: true, instruction: "" }, naming.context); }
+      try { response = await callTitleModel(selected, settings!, products, examples, body.preferences || { usePoeticName: true, instruction: "" }, naming.context); }
       catch (error) { if ((error as { getStatus?: unknown }).getStatus) throw error; fail("AI_PROVIDER_ERROR", "AI 请求未完成，请检查网络或稍后重试；本次没有填入标题", 502); }
       const generated = parseTitleAIResponse(response, signedRows.map(row => ({ id: row.id, keys: row.keys })));
       result = generated.map(candidate => {
@@ -295,7 +298,7 @@ export async function generateTitles(c: Context, input: unknown): Promise<Select
     }
     const expires = Date.now() + 30 * 60_000;
     const accepted = signedRows.filter(row => result.some(candidate => candidate.id === row.id && candidate.titles.length));
-    return { planToken: signTitlePlan({ actor: c.actor.id, scope: scopeKey(), mode: body.mode, expires, nonce: randomUUID(), policy: initial.digest, rows: accepted }), expiresAt: new Date(expires).toISOString(), model: COMPASS_AI_MODEL, rows: result, warnings };
+    return { planToken: signTitlePlan({ actor: c.actor.id, scope: scopeKey(), mode: body.mode, expires, nonce: randomUUID(), policy: initial.digest, rows: accepted }), expiresAt: new Date(expires).toISOString(), model: selected.actual, rows: result, warnings };
   } finally { active.delete(caller); activeRequests--; }
 }
 

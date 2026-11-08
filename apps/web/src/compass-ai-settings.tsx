@@ -12,10 +12,10 @@ import {
 } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./api";
-import { Header, QueryState, Row, useUser } from "./shared";
+import { QueryState, Row, useUser } from "./shared";
+import { AiModelManagementPage } from "./ai-model-management";
 import "./compass-ai.css";
 
-const model = "openai/gpt-6.1-sol";
 function SettingsForm() {
   const [form] = Form.useForm(),
     { message, modal } = App.useApp(),
@@ -33,6 +33,7 @@ function SettingsForm() {
   const refresh = async () => {
     await q.refetch();
     await client.invalidateQueries({ queryKey: ["compass-ai-report"] });
+    await client.invalidateQueries({ queryKey: ["ai-model-management"] });
   };
   const save = async (values: Row) => {
     setBusy(true);
@@ -58,7 +59,7 @@ function SettingsForm() {
     modal.confirm({
       title: "清除 OpenRouter API Key？",
       content:
-        "将关闭 AI 经营分析、商品资料生成与个人助理，日报继续提供报表汇总。",
+        "将关闭依赖此共享连接的小序、团队、经营分析、商品资料及 AIGC 编译；日报继续提供报表汇总。独立语音和媒体凭据另行管理。",
       okText: "清除",
       cancelText: "取消",
       onOk: async () => {
@@ -74,7 +75,7 @@ function SettingsForm() {
     <Card className="compass-ai-settings">
       <QueryState error={q.error} reload={() => q.refetch()} />
       <p>
-        使用 OpenRouter 的指定模型提供经营分析、商品资料生成与 AI 个人助理。
+        小序、团队、经营分析与商品资料共用此连接。各功能的默认模型在管理列表中分别选择。
       </p>
       <Form
         form={form}
@@ -83,8 +84,8 @@ function SettingsForm() {
         initialValues={{ enabled: false }}
         disabled={busy || q.isFetching || !settings}
       >
-        <Form.Item label="模型">
-          <Input value={model} readOnly aria-label="AI 模型" />
+        <Form.Item label="连接测试使用的经营分析模型">
+          <Input value={settings?.model || "读取中…"} readOnly aria-label="连接测试模型" />
         </Form.Item>
         <Form.Item
           name="apiKey"
@@ -116,7 +117,7 @@ function SettingsForm() {
           实际用量计费。每份经营分析最多 4096 个输出
           token，同一批数据生成后复用给多个收件人。
           <a
-            href="https://openrouter.ai/openai/gpt-6.1-sol#providers"
+            href={`https://openrouter.ai/${(settings?.model || "openai/gpt-6.1-sol").split("/").map(encodeURIComponent).join("/")}#providers`}
             target="_blank"
             rel="noreferrer"
           >
@@ -134,10 +135,10 @@ function SettingsForm() {
         )}
         <Space wrap style={{ marginTop: 16 }}>
           <Button type="primary" htmlType="submit" loading={busy}>
-            保存并验证模型
+            保存并验证连接
           </Button>
           <Tag color={settings?.verifiedAt ? "green" : "default"}>
-            {settings?.verifiedAt ? "模型连接已验证" : "模型连接待验证"}
+            {settings?.verifiedAt ? "共享连接已验证" : "共享连接待验证"}
           </Tag>
           {settings?.apiKeyConfigured && (
             <Button type="link" onClick={clear}>
@@ -157,13 +158,5 @@ export function CompassAISettingsPage() {
     !user.permissions.includes("analytics.manage")
   )
     return <Alert type="warning" title="仅超级管理员可以配置 AI 模型" />;
-  return (
-    <>
-      <Header
-        title="AI 模型设置"
-        subtitle="配置经营分析、商品资料与个人助理使用的模型连接"
-      />
-      <SettingsForm />
-    </>
-  );
+  return <AiModelManagementPage connections={<SettingsForm />} />;
 }

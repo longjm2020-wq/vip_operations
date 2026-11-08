@@ -5,7 +5,9 @@ import type {
 } from "../../../../../packages/contracts/src/assistant-agent.js";
 import type { Row } from "../../../../../packages/database/src/index.js";
 import { fail } from "../../core.js";
-import { COMPASS_AI_MODEL } from "../analytics/ai.js";
+import { COMPASS_AI_MODEL } from "../../ai-model-constants.js";
+import { featureModelRef } from "../../ai-model-routing.js";
+import { aiFeatures, type AiFeatureId } from "../../../../../packages/contracts/src/ai-management.js";
 
 export const modelRef = (id: string) =>
   "engine/" + createHash("sha256").update(id).digest("hex").slice(0, 24);
@@ -175,7 +177,7 @@ export async function publicAgentCatalog(): Promise<AgentCatalog> {
     imageModels: data.imageModels.map(
       ({ actual: _actual, aspects: _aspects, ...m }) => m,
     ),
-    defaultModel: primary.id,
+    defaultModel: (await featureModelRef("assistant_chat")) || primary.id,
     notice:
       data.models.length === 1
         ? "服务列表暂未完整加载，可继续使用通用助手。"
@@ -191,7 +193,8 @@ export async function agentModelCandidates() {
     defaultModel: primary.id,
   };
 }
-export async function resolveAgentModel(ref?: string) {
+export async function resolveAgentModel(ref?: string, feature: AiFeatureId = "assistant_chat") {
+  ref ||= await featureModelRef(feature);
   if (!ref || ref === primary.id) return primary;
   const model = (await catalog()).models.find((m) => m.id === ref);
   if (!model)
@@ -202,7 +205,17 @@ export async function resolveAgentModel(ref?: string) {
     );
   return model;
 }
+export async function resolveFeatureModel(feature: AiFeatureId) {
+  const model = await resolveAgentModel(undefined, feature);
+  const kind = aiFeatures.find(item => item.id === feature)?.kind;
+  if ((kind === "vision" || kind === "vision_structured" || kind === "aigc_compile") && !model.vision)
+    fail("AI_MODEL_CAPABILITY", "当前功能需要支持图片输入的模型，请在 AI 模型管理中重新选择", 409);
+  if ((kind === "structured" || kind === "vision_structured") && !model.structured)
+    fail("AI_MODEL_CAPABILITY", "当前功能需要结构化输出，请在 AI 模型管理中重新选择", 409);
+  return model;
+}
 export async function resolveImageModel(ref?: string) {
+  ref ||= await featureModelRef("assistant_image");
   const model = (await catalog()).imageModels.find((m) =>
     ref ? m.id === ref : true,
   );

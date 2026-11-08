@@ -35,8 +35,8 @@ export async function uploadXhaiImages(baseUrl, apiKey, sources) {
   return urls;
 }
 
-export async function xhaiJson(baseUrl, apiKey, pathname, body) {
-  const response = await fetch(new URL(pathname, baseUrl), {
+export async function xhaiJson(baseUrl, apiKey, pathname, body, fetchImpl = fetch) {
+  const response = await fetchImpl(new URL(pathname, baseUrl), {
     method: body ? "POST" : "GET", redirect: "error", signal: jobRequestSignal(body ? 60_000 : 30_000),
     headers: { Authorization: `Bearer ${apiKey}`, ...(body ? { "Content-Type": "application/json" } : {}) },
     ...(body ? { body: JSON.stringify(body) } : {}),

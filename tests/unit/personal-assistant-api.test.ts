@@ -1,3 +1,4 @@
+import { installAiManagementSchema } from "../fixtures/ai-management-schema.js";
 import {
   afterAll,
   afterEach,
@@ -173,6 +174,7 @@ beforeAll(async () => {
   await fixture.database.exec(
     "CREATE TABLE users(id bigint PRIMARY KEY); INSERT INTO users VALUES(7),(8); CREATE TABLE compass_ai_settings(id int PRIMARY KEY,enabled boolean,api_key_encrypted text,verified_at timestamptz); INSERT INTO compass_ai_settings VALUES(1,true,'test-only',now()); CREATE TABLE idempotency_records(id bigserial PRIMARY KEY,actor_id bigint,operation text,idempotency_key text,request_hash text,response_status int,response_body jsonb,created_at timestamptz DEFAULT now(),updated_at timestamptz DEFAULT now());",
   );
+  await installAiManagementSchema(fixture.database);
   for (const name of [
     "036_personal_workspaces.sql",
     "069_personal_assistant.sql",

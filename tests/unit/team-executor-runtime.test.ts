@@ -1,3 +1,4 @@
+import { installAiManagementSchema } from "../fixtures/ai-management-schema.js";
 import {
   afterAll,
   afterEach,
@@ -101,6 +102,7 @@ beforeAll(async () => {
     CREATE TABLE compass_ai_settings(id int,enabled bool,verified_at timestamptz,api_key_encrypted text);INSERT INTO compass_ai_settings VALUES(1,true,now(),'test');
     CREATE TABLE personal_assistant_files(id uuid PRIMARY KEY,user_id bigint,name text,mime text,size int,source text,metadata jsonb,created_at timestamptz,content bytea,extracted_text text);
     CREATE TABLE personal_assistant_jobs(id uuid PRIMARY KEY,user_id bigint,request_id uuid,status text,output_ids jsonb,error_note text,stage text,updated_at timestamptz);`);
+  await installAiManagementSchema(f.db);
   await f.db.exec(
     await readFile(
       "packages/database/migrations/090_assistant_team.sql",

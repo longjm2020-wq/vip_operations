@@ -1,3 +1,5 @@
+import { resolveFeatureModel, matchesAgentModel, type AgentInternalModel } from "../workspace/agent-models.js";
+import { aiFetch } from "../../ai-metering.js";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import {
@@ -22,9 +24,8 @@ import { decryptSecret, encryptSecret, encryptionReady } from "./secrets.js";
 import { collectCompassBundle, CompassBundle } from "./report-data.js";
 import { compassSources } from "./service.js";
 
-export const COMPASS_AI_MODEL = "openai/gpt-6.1-sol";
-export const COMPASS_AI_ENDPOINT =
-  "https://openrouter.ai/api/v1/chat/completions";
+import { COMPASS_AI_MODEL, COMPASS_AI_ENDPOINT } from "../../ai-model-constants.js";
+export { COMPASS_AI_MODEL, COMPASS_AI_ENDPOINT } from "../../ai-model-constants.js";
 const PROMPT_VERSION = "compass-1";
 export const aiSettingsSchema = z
   .object({
@@ -85,9 +86,9 @@ function publicSettings(s: Row) {
 }
 export async function getAISettings(c: Context) {
   requireAIConfiguration(c);
-  return publicSettings(
+  return { ...publicSettings(
     (await one(db, "SELECT * FROM compass_ai_settings WHERE id=1"))!,
-  );
+  ), model: (await resolveFeatureModel("compass_analysis")).actual };
 }
 export async function saveAISettings(c: Context, input: unknown) {
   requireAIConfiguration(c);
@@ -134,7 +135,7 @@ const errorMessage = (e: unknown) =>
     : "OpenRouter 请求未完成，请检查网络或稍后重试；未生成 AI 分析";
 const responseSchema = z.object({
   id: z.string().min(1).max(300),
-  model: z.literal(COMPASS_AI_MODEL),
+  model: z.string(),
   provider: z.string().max(120).optional(),
   choices: z
     .array(
@@ -156,7 +157,8 @@ const responseSchema = z.object({
     })
     .optional(),
 });
-async function callOpenRouter(settings: Row, data: unknown, test = false) {
+async function callOpenRouter(settings: Row, data: unknown, test = false, model?: AgentInternalModel) {
+  const selected = model || await resolveFeatureModel("compass_analysis");
   const schema = test
     ? {
         type: "object",
@@ -175,7 +177,7 @@ async function callOpenRouter(settings: Row, data: unknown, test = false) {
         required: ["summary", "observations", "actions", "risks"],
         additionalProperties: false,
       };
-  const response = await fetch(COMPASS_AI_ENDPOINT, {
+  const response = await aiFetch("compass_analysis", COMPASS_AI_ENDPOINT, {
     method: "POST",
     redirect: "error",
     signal: AbortSignal.timeout(test ? 45000 : 90000),
@@ -184,10 +186,10 @@ async function callOpenRouter(settings: Row, data: unknown, test = false) {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: COMPASS_AI_MODEL,
+      model: selected.actual,
       stream: false,
       max_tokens: test ? 512 : 4096,
-      reasoning: { effort: "low" },
+      ...(selected.parameters.includes("reasoning") ? { reasoning: { effort: selected.reasoningEffort ?? "low" } } : {}),
       provider: { require_parameters: true, data_collection: "deny" },
       messages: [
         {
@@ -230,7 +232,7 @@ async function callOpenRouter(settings: Row, data: unknown, test = false) {
   const text = await response.text();
   if (text.length > 200000) throw new AIError("AI 返回内容过大，未采用此结果");
   const parsed = responseSchema.safeParse(JSON.parse(text));
-  if (!parsed.success)
+  if (!parsed.success || !matchesAgentModel(selected, parsed.data.model))
     throw new AIError("AI 返回的模型标识或数据格式不符合要求，未采用此结果");
   const result = parsed.data,
     choice = result.choices[0];
@@ -364,33 +366,35 @@ function publicReport(r: Row): CompassAIResult {
       (r.status === "GENERATING" ? "AI 正在生成，完成后可刷新查看" : undefined),
   };
 }
-function availability(settings: Row): CompassAIResult | null {
+function availability(settings: Row, model = COMPASS_AI_MODEL): CompassAIResult | null {
   if (!settings.enabled)
     return {
       state: "DISABLED",
-      model: COMPASS_AI_MODEL,
+      model,
       message: "AI 分析尚未开启，当前日报使用报表汇总",
     };
   if (!settings.api_key_encrypted)
     return {
       state: "WAITING_KEY",
-      model: COMPASS_AI_MODEL,
+      model,
       message: "请配置 OpenRouter API Key",
     };
   if (!settings.verified_at)
     return {
       state: "WAITING_VERIFICATION",
-      model: COMPASS_AI_MODEL,
+      model,
       message: "模型配置待验证，当前日报使用报表汇总",
     };
   return null;
 }
 export async function getAIReport(): Promise<CompassAIResult> {
+  const selected = await resolveFeatureModel("compass_analysis");
+  const promptVersion = selected.reasoningEffort === "none" ? PROMPT_VERSION + ":quick" : PROMPT_VERSION;
   const settings = (await one(
       db,
       "SELECT * FROM compass_ai_settings WHERE id=1",
     ))!,
-    unavailable = availability(settings);
+    unavailable = availability(settings, selected.actual);
   if (unavailable) return unavailable;
   const sources = await compassSources(),
     date = sources[0]?.end_date;
@@ -403,7 +407,7 @@ export async function getAIReport(): Promise<CompassAIResult> {
   )
     return {
       state: "WAITING_DATA",
-      model: COMPASS_AI_MODEL,
+      model: selected.actual,
       message: "等待同一截止日期的三张完整近30天报表",
     };
   const report = await one(
@@ -411,8 +415,8 @@ export async function getAIReport(): Promise<CompassAIResult> {
     "SELECT *,report_date::text FROM compass_ai_reports WHERE report_date=$1::date AND imported_ids=$2::jsonb AND model=$3 AND prompt_version=$4 ORDER BY id DESC LIMIT 1",
     date,
     JSON.stringify(sources.map((s) => String(s.id))),
-    COMPASS_AI_MODEL,
-    PROMPT_VERSION,
+    selected.actual,
+    promptVersion,
   );
   // Upgrade existing cached reports without another paid model call.
   if (report?.status === "READY" && report.visual_data?.imagesVersion !== 1) {
@@ -420,7 +424,7 @@ export async function getAIReport(): Promise<CompassAIResult> {
     if (!bundle || canonical(bundle.ids) !== canonical(report.imported_ids))
       return {
         state: "WAITING_DATA",
-        model: COMPASS_AI_MODEL,
+        model: selected.actual,
         message: "报表正在更新，请刷新后查看",
       };
     report.visual_data = aiVisuals(
@@ -438,7 +442,7 @@ export async function getAIReport(): Promise<CompassAIResult> {
     ? publicReport(report)
     : {
         state: "NOT_GENERATED",
-        model: COMPASS_AI_MODEL,
+        model: selected.actual,
         reportDate: date,
         message: "已配置指定模型，可生成经营分析",
       };
@@ -446,17 +450,19 @@ export async function getAIReport(): Promise<CompassAIResult> {
 export async function ensureAIAnalysis(
   bundle: CompassBundle,
 ): Promise<CompassAIResult> {
+  const selected = await resolveFeatureModel("compass_analysis");
+  const promptVersion = selected.reasoningEffort === "none" ? PROMPT_VERSION + ":quick" : PROMPT_VERSION;
   const settings = (await one(
       db,
       "SELECT * FROM compass_ai_settings WHERE id=1",
     ))!,
-    unavailable = availability(settings);
+    unavailable = availability(settings, selected.actual);
   if (unavailable) return unavailable;
   const payload = aiPayload(bundle),
     inputHash = hash(
       canonical({
-        model: COMPASS_AI_MODEL,
-        promptVersion: PROMPT_VERSION,
+        model: selected.actual,
+        promptVersion: promptVersion,
         ids: bundle.ids,
         payload,
       }),
@@ -486,7 +492,7 @@ export async function ensureAIAnalysis(
       return {
         existing: {
           state: "FAILED",
-          model: COMPASS_AI_MODEL,
+          model: selected.actual,
           message: "上次 AI 请求结果未确认；如需重试，请稍后手动生成",
         },
       };
@@ -503,8 +509,8 @@ export async function ensureAIAnalysis(
       bundle.date,
       inputHash,
       JSON.stringify(bundle.ids),
-      COMPASS_AI_MODEL,
-      PROMPT_VERSION,
+      selected.actual,
+      promptVersion,
       token,
       JSON.stringify(aiVisuals(bundle, payload)),
     );
@@ -512,7 +518,7 @@ export async function ensureAIAnalysis(
   });
   if (claim.existing) return claim.existing;
   try {
-    const result = await callOpenRouter(settings, payload);
+    const result = await callOpenRouter(settings, payload, false, selected);
     const current = (await one(
       db,
       "SELECT * FROM compass_ai_settings WHERE id=1",
@@ -534,7 +540,7 @@ export async function ensureAIAnalysis(
       ? publicReport(report)
       : {
           state: "FAILED",
-          model: COMPASS_AI_MODEL,
+          model: selected.actual,
           message: "本次 AI 生成结果已失效，请刷新查看",
         };
   } catch (e) {
@@ -547,7 +553,7 @@ export async function ensureAIAnalysis(
     );
     return {
       state: "FAILED",
-      model: COMPASS_AI_MODEL,
+      model: selected.actual,
       reportDate: bundle.date,
       message,
     };
@@ -555,11 +561,12 @@ export async function ensureAIAnalysis(
 }
 export async function generateAIReport(c: Context) {
   requirePermission(c.actor, "analytics.manage");
+  const selected = await resolveFeatureModel("compass_analysis");
   const bundle = await collectCompassBundle();
   if (!bundle)
     return {
       state: "WAITING_DATA",
-      model: COMPASS_AI_MODEL,
+      model: selected.actual,
       message: "等待同一截止日期的三张完整近30天报表",
     };
   const result = await ensureAIAnalysis(bundle);

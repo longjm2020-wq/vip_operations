@@ -33,6 +33,7 @@ export function compileProviders(config) {
 }
 
 export function selectCompiler(config, settings, snapshot) {
+  if (!snapshot && config.managedCompiler) settings = config.managedCompiler;
   const providers = compileProviders(config);
   const selectedId = snapshot?.id || settings?.providerId || config.compileProvider;
   const provider = providers.find(p => p.id === selectedId) || providers.find(p => p.apiKey) || providers[0];
@@ -50,6 +51,7 @@ export function selectCompiler(config, settings, snapshot) {
   return result;
 }
 export function publicCompiler(config, settings) {
+  if (config.managedCompiler?.providerId !== "xhai" && config.managedCompiler) settings = config.managedCompiler;
   const providers = compileProviders(config).filter(provider => provider.id !== "xhai");
   const requestedId = settings?.providerId === "xhai"
     ? settings.publicProviderId
@@ -107,6 +109,7 @@ export function compilerCatalog(config, settings) {
 }
 export async function saveCompilerSettings(store, config, user, input) {
   requireRole(user, ["super_admin"]);
+  if (config.useModelManagement) fail("请在系统设置 → AI 模型管理中切换 AIGC 编译模型", 409);
   const provider = compileProviders(config).find(p => p.id === input?.providerId);
   if (!provider || !validModel(input.model)) fail("请选择编译服务并填写有效的模型 ID");
   if (!(provider.id === "xylp" ? config.videoSecrets?.[provider.models.find(model => model.id === input.model)?.keyEnv] : provider.apiKey)) fail("该编译模型尚未配置指定渠道 API 密钥", 409);

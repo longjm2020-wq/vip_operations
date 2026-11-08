@@ -1,3 +1,4 @@
+vi.mock("../../apps/api/src/ai-metering.js", () => ({ aiFetch: (_feature: string, url: string | URL, options: RequestInit) => fetch(url, options), recordAiReceipt: async () => {} }));
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { qwenRealtimeModel } from "../../packages/contracts/src/assistant-realtime.js";
 const f = vi.hoisted(() => ({

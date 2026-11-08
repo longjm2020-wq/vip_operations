@@ -1,0 +1,137 @@
+.ai-management {
+  min-width: 0;
+}
+.ai-management-overview {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 28px;
+  margin: 22px 0;
+}
+.ai-management-overview > div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.ai-management-overview strong {
+  font-size: 27px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.ai-management-overview span,
+.ai-management-overview p,
+.ai-management-note {
+  color: var(--app-secondary);
+  font-size: 12px;
+}
+.ai-management-overview p {
+  max-width: 400px;
+  margin: 0 0 0 auto;
+  line-height: 1.8;
+}
+.ai-management-card .ant-card-body {
+  padding: 0;
+}
+.ai-management-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 16px;
+}
+.ai-management-toolbar .ant-input-affix-wrapper {
+  flex: 1 1 260px;
+  max-width: 390px;
+}
+.ai-management-toolbar .ant-select {
+  min-width: 140px;
+}
+.ai-management-toolbar .ant-select:last-child {
+  margin-left: auto;
+}
+.ai-management .ant-table-cell {
+  vertical-align: top;
+}
+.ai-management-feature,
+.ai-management-model,
+.ai-management-usage {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+}
+.ai-management-feature strong {
+  font-weight: 500;
+}
+.ai-management-feature > span,
+.ai-management-small {
+  display: block;
+  color: var(--app-secondary);
+  font-size: 11px;
+}
+.ai-management-model {
+  min-width: 0;
+}
+.ai-management-model code {
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.ai-management-model .ant-select {
+  width: 100%;
+}
+.ai-management .ant-tag {
+  white-space: normal;
+  line-height: 1.6;
+  padding: 3px 7px;
+  margin-bottom: 5px;
+}
+.ai-management-boundary,
+.ai-management-source,
+.ai-management-usage {
+  font-size: 12px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+.ai-management-source .ant-btn {
+  display: block;
+  padding-left: 0;
+}
+.ai-management-usage {
+  gap: 3px;
+  font-variant-numeric: tabular-nums;
+}
+.ai-management-usage .ant-btn {
+  padding-left: 0;
+}
+.ai-management-note {
+  margin: 12px 2px 0;
+  line-height: 1.7;
+}
+.ai-management-detail {
+  line-height: 1.8;
+}
+.ai-management-detail dt {
+  color: var(--app-secondary);
+  font-size: 12px;
+  margin-top: 16px;
+}
+.ai-management-detail dd {
+  margin: 4px 0;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 700px) {
+  .ai-management-overview {
+    gap: 20px;
+  }
+  .ai-management-overview p {
+    flex-basis: 100%;
+    margin-left: 0;
+  }
+  .ai-management-toolbar .ant-input-affix-wrapper {
+    max-width: none;
+    flex-basis: 100%;
+  }
+  .ai-management-toolbar .ant-select {
+    flex: 1;
+    min-width: 110px;
+  }
+}

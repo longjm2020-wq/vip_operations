@@ -1,3 +1,5 @@
+vi.mock("../../apps/api/src/ai-metering.js", () => ({ aiFetch: (_feature: string, url: string | URL, options: RequestInit) => fetch(url, options), recordAiReceipt: async () => {} }));
+vi.mock("../../apps/api/src/ai-model-routing.js", () => ({ featureModelRef: async () => undefined }));
 import { afterEach, describe, expect, it, vi } from "vitest";
 vi.mock("../../apps/api/src/modules/analytics/secrets.js", () => ({
   decryptSecret: () => "test-only",

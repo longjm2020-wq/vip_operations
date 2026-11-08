@@ -2,6 +2,7 @@ import type { Server, IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import { HttpException } from "@nestjs/common";
 import { createHash, randomUUID } from "node:crypto";
+import { recordAiReceipt } from "../../ai-metering.js";
 import WebSocket, { WebSocketServer } from "ws";
 import { actorForSessionHash } from "../auth/service.js";
 import type { Context } from "../../core.js";
@@ -478,6 +479,9 @@ function runRelay(
               string,
               unknown
             >;
+            if (rawEvent.type === "response.done") {
+              void recordAiReceipt("voice_realtime", qwen ? "dashscope.aliyuncs.com" : "openspeech.bytedance.com", qwen ? "qwen3.8-omni-flash-realtime" : "1.2.6.1", rawEvent).catch(() => {});
+            }
             if (rawEvent.type === "error") {
               if (qwen && qwenBenignError(rawEvent)) return;
               return stop((qwen ? qwenEventError : doubaoEventError)(rawEvent));

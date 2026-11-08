@@ -1,3 +1,4 @@
+import { installAiManagementSchema } from "../fixtures/ai-management-schema.js";
 import {
   beforeAll,
   beforeEach,
@@ -111,6 +112,7 @@ beforeAll(async () => {
   await f.db.exec(
     "CREATE TABLE users(id bigint PRIMARY KEY); INSERT INTO users VALUES(7),(8); CREATE TABLE compass_ai_settings(id int PRIMARY KEY,enabled boolean,verified_at timestamptz,api_key_encrypted text); INSERT INTO compass_ai_settings VALUES(1,true,now(),'private-provider-key');",
   );
+  await installAiManagementSchema(f.db);
   for (const file of [
     "069_personal_assistant.sql",
     "083_assistant_agent.sql",

@@ -1,0 +1,256 @@
+import { test, expect, type Page } from "@playwright/test";
+import {
+  aiFeatures,
+  type AiManagementRow,
+} from "../../packages/contracts/src/ai-management.js";
+
+async function fixture(page: Page, superAdmin = true) {
+  const changes: Record<string, unknown>[] = [],
+    sessions: string[] = [];
+  const usage = {
+    requests: 0,
+    succeeded: 0,
+    failed: 0,
+    unknown: 0,
+    inputTokens: null,
+    outputTokens: null,
+    totalTokens: null,
+    amounts: [],
+    firstRecordedAt: null,
+    lastSuccessAt: null,
+    lastModel: null,
+    lastError: null,
+  };
+  const features: AiManagementRow[] = aiFeatures.map((f) => ({
+    ...f,
+    model: f.kind === "fixed" ? "浏览器服务" : "openai/gpt-6.1-sol",
+    selection: "",
+    revision: 0,
+    source:
+      f.kind === "realtime"
+        ? "阿里云百炼 · 北京业务空间 / WebRTC"
+        : "OpenRouter · https://openrouter.ai/api/v1",
+    status: f.kind === "fixed" ? "local" : "configured",
+    statusText: f.kind === "fixed" ? "浏览器支持" : "已配置；当前型号待验证",
+    choices: [
+      {
+        value: "",
+        label: "系统默认",
+        available: true,
+        source: "OpenRouter",
+        boundary: "默认",
+      },
+      {
+        value: "fixture-b",
+        label: "视觉模型 B",
+        available: true,
+        source: "OpenRouter",
+        boundary: "图片和结构化输出",
+      },
+    ],
+    mode:
+      f.kind === "fixed"
+        ? "fixed"
+        : f.group === "语音"
+          ? "voice"
+          : f.kind === "external"
+            ? "aigc"
+            : "select",
+    usage: { ...usage },
+    usageNote: "只统计供应商真实回执；未返回的消耗为未知。",
+  }));
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator.mediaDevices, "getUserMedia", {
+      value: () => {
+        throw new Error("Settings must not start the microphone");
+      },
+    });
+  });
+  await page.route("**/api/v1/**", async (route) => {
+    const req = route.request(),
+      url = new URL(req.url()),
+      path = url.pathname.replace("/api/v1", "");
+    let data: unknown = [];
+    if (path.includes("/sessions")) sessions.push(path);
+    if (path === "/auth/me")
+      data = {
+        id: "1",
+        username: "test",
+        displayName: "管理测试",
+        roleCodes: superAdmin ? ["SUPER_ADMIN"] : ["ADMIN"],
+        permissions: [
+          "analytics.manage",
+          "analytics.read",
+          "product.read",
+          "aigc.use",
+          "aigc.manage",
+        ],
+        csrfToken: "fixture",
+      };
+    if (path === "/my-workspace/appearance")
+      data = { version: 0, mode: "dark" };
+    if (path === "/my-workspace")
+      data = {
+        version: 0,
+        note: "",
+        todos: [],
+        schedule: [],
+        shortcuts: [],
+        available: [],
+        defaults: { name: "工作台", description: "", tools: [] },
+      };
+    if (path === "/my-workspace/content") data = { items: [], hasMore: false };
+    if (path === "/my-workspace/activity")
+      data = { items: [], serverTime: new Date().toISOString() };
+    if (path === "/my-workspace/assistant")
+      data = {
+        ready: true,
+        model: "openai/gpt-6.1-sol",
+        version: 0,
+        state: "IDLE",
+        error: "",
+        messages: [],
+      };
+    if (path === "/my-workspace/assistant/memory")
+      data = { version: 0, entries: [] };
+    if (path === "/my-workspace/assistant/desktop")
+      data = { devices: [], tasks: [] };
+    if (path === "/my-workspace/assistant/voice")
+      data = {
+        ready: false,
+        enabled: false,
+        model: "openai/gpt-audio",
+        voice: "coral",
+        canManage: true,
+        version: 0,
+        maxSeconds: 25,
+        assistantReady: true,
+        encryptionReady: true,
+        apiKeyConfigured: false,
+      };
+    if (path === "/my-workspace/assistant/realtime")
+      data = {
+        provider: "openai",
+        enabled: false,
+        ready: false,
+        voice: "marin",
+        canManage: true,
+        version: 0,
+        encryptionReady: true,
+        apiKeyConfigured: false,
+        verifiedAt: null,
+        error: "",
+      };
+    if (path === "/analytics/compass/ai-settings")
+      data = {
+        enabled: true,
+        model: "openai/gpt-6.1-sol",
+        encryptionReady: true,
+        apiKeyConfigured: true,
+      };
+    if (path === "/ai-model-management") {
+      if (req.method() === "POST") {
+        const input = req.postDataJSON();
+        changes.push(input);
+        const row = features.find((f) => f.id === input.feature)!;
+        row.selection = input.model;
+        row.model = "provider/vision-b";
+        row.revision++;
+        data = { revision: row.revision };
+      } else
+        data = {
+          features,
+          days: Number(url.searchParams.get("days")),
+          generatedAt: new Date().toISOString(),
+          recordingSince: "2026-11-08T00:00:00Z",
+          catalogNotice: "目录列出不代表密钥均能调用；未知用量不记为零。",
+        };
+    }
+    await route.fulfill({ json: { data } });
+  });
+  return { changes, sessions };
+}
+
+test("management lists actual sources, persists a per-feature model and filters entries", async ({
+  page,
+}) => {
+  const f = await fixture(page);
+  await page.goto("/settings/ai");
+  await expect(
+    page.getByRole("heading", { name: "AI 模型管理", exact: true }),
+  ).toBeVisible();
+  await expect(page.locator("tr[data-row-key]")).toHaveCount(20);
+  await expect(page.getByText("已配置；当前型号待验证").first()).toBeVisible();
+  await page.getByRole("combobox", { name: "小序互动对话的默认模型" }).click();
+  await page.getByText("视觉模型 B", { exact: true }).click();
+  await expect
+    .poll(() => f.changes)
+    .toEqual([{ feature: "assistant_chat", model: "fixture-b", revision: 0 }]);
+  await expect(
+    page.getByText("provider/vision-b", { exact: true }),
+  ).toBeVisible();
+  await page.getByRole("textbox", { name: "搜索 AI 功能" }).fill("商品");
+  await expect(page.locator("tr[data-row-key]")).toHaveCount(2);
+  await expect(page.getByText("积分 / 金额：未知").first()).toBeVisible();
+  await page.getByRole("textbox", { name: "搜索 AI 功能" }).fill("");
+  await page.screenshot({
+    path: test.info().outputPath("ai-management-desktop.png"),
+    fullPage: true,
+  });
+});
+
+test("voice configuration and direct links do not start a call", async ({
+  page,
+}) => {
+  const f = await fixture(page);
+  await page.goto("/settings/ai");
+  await page
+    .locator('tr[data-row-key="voice_realtime"]')
+    .getByRole("button", { name: "切换 / 配置" })
+    .click();
+  await expect(
+    page.getByRole("dialog").getByText("实时通话", { exact: true }),
+  ).toBeVisible();
+  expect(f.sessions).toEqual([]);
+  await page.getByRole("button", { name: "关闭", exact: true }).click();
+  await page.getByRole("link", { name: "打开小序实时语音通话" }).click();
+  await expect(page).toHaveURL(/assistant=voice/);
+  await expect(page.getByText("小序的声音", { exact: false })).toBeVisible();
+  expect(f.sessions).toEqual([]);
+});
+
+test("mobile keeps the wide comparison inside a scrollable table", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await fixture(page);
+  await page.goto("/settings/ai");
+  await expect(
+    page.getByRole("heading", { name: "AI 模型管理", exact: true }),
+  ).toBeVisible();
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth + 1,
+    ),
+  ).toBe(true);
+  expect(
+    await page
+      .locator(".ai-management .ant-table-content")
+      .evaluate((el) => el.scrollWidth > el.clientWidth),
+  ).toBe(true);
+  await page.screenshot({
+    path: test.info().outputPath("ai-management-mobile.png"),
+    fullPage: true,
+  });
+});
+
+test("non-super-admin cannot access the management interface", async ({
+  page,
+}) => {
+  await fixture(page, false);
+  await page.goto("/settings/ai");
+  await expect(
+    page.getByText("仅超级管理员可以配置 AI 模型", { exact: true }),
+  ).toBeVisible();
+  await expect(page.locator(".ai-management")).toHaveCount(0);
+});

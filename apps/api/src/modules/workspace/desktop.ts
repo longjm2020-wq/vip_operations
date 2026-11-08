@@ -1,3 +1,4 @@
+import { aiFetch } from "../../ai-metering.js";
 import { randomBytes, randomUUID } from "node:crypto";
 import sharp from "sharp";
 import { z } from "zod";
@@ -205,7 +206,7 @@ export async function setDesktopAuthorization(
 export async function queueDesktopTask(c: Context, input: unknown) {
   requireAssistant(c);
   const b = parse(desktopTaskSchema, input);
-  const model = await resolveAgentModel(b.model);
+  const model = await resolveAgentModel(b.model, "assistant_desktop");
   if (!model.vision)
     fail("VISION_REQUIRED", "操作电脑需要选择支持看图的助理能力", 400);
   return db.$transaction(async (tx) => {
@@ -541,7 +542,7 @@ export async function planDesktop(
       !settings.api_key_encrypted
     )
       fail("AI_NOT_READY", "请管理员启用并验证智能服务", 503);
-    const model = await resolveAgentModel(old.model_ref);
+    const model = await resolveAgentModel(old.model_ref, "assistant_desktop");
     if (!model.vision)
       fail("VISION_REQUIRED", "当前能力不支持识图，请重新选择", 400);
     const bytes = Buffer.from(b.image, "base64");
@@ -555,7 +556,7 @@ export async function planDesktop(
     )
       fail("INVALID_IMAGE", "窗口画面格式不符", 400);
     const jpeg = await sharp(bytes).jpeg({ quality: 80 }).toBuffer();
-    const response = await fetch(COMPASS_AI_ENDPOINT, {
+    const response = await aiFetch("assistant_desktop", COMPASS_AI_ENDPOINT, {
       method: "POST",
       redirect: "error",
       signal: AbortSignal.timeout(90000),

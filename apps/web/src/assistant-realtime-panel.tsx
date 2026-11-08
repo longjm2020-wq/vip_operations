@@ -35,7 +35,7 @@ import type { RealtimeStatus } from "../../../packages/contracts/src/assistant-r
 
 const endpoint = "/my-workspace/assistant/voice";
 
-function VoiceSettings({
+export function VoiceSettings({
   value,
   saved,
 }: {

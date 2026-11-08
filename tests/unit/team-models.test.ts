@@ -1,3 +1,4 @@
+vi.mock("../../apps/api/src/ai-model-routing.js", () => ({ featureModelRef: async () => undefined }));
 import { beforeEach, describe, expect, it, vi } from "vitest";
 const f = vi.hoisted(() => ({ catalog: vi.fn() }));
 vi.mock("../../apps/api/src/modules/workspace/agent-models.js", () => ({

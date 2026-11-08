@@ -1,6 +1,7 @@
 import { mediaCall, videoKey } from "./video-providers.mjs";
 import { uploadXhaiImages, xhaiJson } from "./xhai-files.mjs";
 import { fail } from "./access.mjs";
+import { modelFetch, modelReceipt } from "./ai-accounting.mjs";
 
 // Vendor API names verified against its media protocol on 2026-09-22.
 // Do not alias TT Image to an unverified upstream model name.
@@ -89,7 +90,7 @@ export async function submitKeyframe(config, route, body) {
     const key = videoKey(config, route);
     if (!key) throw new Error("星火 AIGC 尚未配置 XHAI_API_KEY");
     const images = await uploadXhaiImages(route.baseUrl, key, body.params.images);
-    const result = await xhaiJson(route.baseUrl, key, "/api/v1/model-runtime/invoke", { ...body, params: { ...body.params, images } });
+    const result = await xhaiJson(route.baseUrl, key, "/api/v1/model-runtime/invoke", { ...body, params: { ...body.params, images } }, (url, options) => modelFetch(config, "aigc_image", url, options));
     if (!result.task_id) throw new Error("星火 AIGC 图片提交未返回任务编号，请核对原请求");
     return String(result.task_id);
   }
@@ -101,12 +102,14 @@ export async function submitKeyframe(config, route, body) {
 export async function pollKeyframe(config, route, id) {
   if (route.protocol === "xhai-image") {
     const result = await xhaiJson(route.baseUrl, videoKey(config, route), `/v1/tasks/${encodeURIComponent(id)}`);
+    if (result.is_final === true || ["completed", "failed"].includes(result.status)) await modelReceipt(config, "aigc_image", route.baseUrl, route.model, { ...result, task_id: id });
     if (result.is_final === false || ["pending", "processing", "needs_review"].includes(result.status)) return { pending: true };
     if (result.status === "failed") throw Object.assign(new Error(`星火 AIGC 图片生成失败：${result.error || "请核对原任务"}`), { terminal: true });
     if (result.status !== "completed" || typeof result.output_url !== "string" || !result.output_url.startsWith("https://")) throw new Error("星火 AIGC 图片任务已结束但未返回 HTTPS 图片地址，请核对原任务");
     return { url: result.output_url, cost: result.actual_cost_micro_usd === undefined ? undefined : { actual_cost_micro_usd: result.actual_cost_micro_usd } };
   }
   const result = await mediaCall(config, route, `/v1/media/status?task_id=${encodeURIComponent(id)}`);
+  if (result.is_final === true) await modelReceipt(config, "aigc_image", route.baseUrl, route.model, { ...result, task_id: id });
   if (result.is_final === false && ["pending", "running"].includes(result.state)) return { pending: true };
   if (result.is_final === true && result.state === "failed") throw Object.assign(new Error("本次关键帧生成失败，未自动重做；可手动再次生成"), { terminal: true });
   const url = typeof result.result_url === "string" ? result.result_url : Array.isArray(result.result_url) && result.result_url.length === 1 ? result.result_url[0] : null;

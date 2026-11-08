@@ -1,6 +1,7 @@
 // Provider endpoints and credentials are separate from model capabilities. Only
 // non-secret routing snapshots are persisted with jobs; keys stay on the server.
 import { xhaiJson } from "./xhai-files.mjs";
+import { modelFetch, modelReceipt } from "./ai-accounting.mjs";
 import { jobRequestSignal } from "./job-request.mjs";
 import { omniReferences } from "./media-references.mjs";
 import { videoRoleProfile } from "../shared/video-role-profile.mjs";
@@ -218,7 +219,9 @@ export class XhaiVideoAdjustmentError extends Error {
 export async function mediaCall(config, route, pathname, body) {
   const key = videoKey(config, route);
   if (!key) throw new Error(`${route.label} 尚未配置 ${route.keyEnv}`);
-  const response = await fetch(`${route.baseUrl}${pathname}`, {
+  const feature = route.id === "keyframe-image" ? "aigc_image" : route.id === "xylp-enhance" ? "aigc_enhance" : "aigc_video";
+  const call = body ? (url, options) => modelFetch(config, feature, url, options) : fetch;
+  const response = await call(`${route.baseUrl}${pathname}`, {
     method: body ? "POST" : "GET", redirect: "error", signal: jobRequestSignal(body ? 310_000 : 60_000),
     headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
     ...(body ? { body: JSON.stringify(body) } : {}),
@@ -236,7 +239,7 @@ export async function submitVideo(config, route, input, preflight) {
     if (!key) throw new Error(`${route.label} 尚未配置 ${route.keyEnv}`);
     const { lane_id: laneId, ...prepared } = preflight?.request || {};
     if (typeof laneId !== "string" || !laneId || JSON.stringify(prepared) !== JSON.stringify(xhaiInvokeBody(route, input))) throw new Error("星火 AIGC 视频缺少与本次参数一致的单渠道估价，未提交");
-    const response = await xhaiJson(route.baseUrl, key, "/api/v1/model-runtime/invoke", preflight.request);
+    const response = await xhaiJson(route.baseUrl, key, "/api/v1/model-runtime/invoke", preflight.request, (url, options) => modelFetch(config, "aigc_video", url, options));
     if (response.task_id === undefined || response.task_id === null || !String(response.task_id)) throw new Error("星火 AIGC 未返回任务编号，提交结果待核对");
     const id = String(response.task_id);
     try { assertXhaiAdjustments(preflight.request.params, response.param_adjustments); }
@@ -251,6 +254,8 @@ export async function submitVideo(config, route, input, preflight) {
 
 export async function pollVideo(config, route, id) {
   const result = await mediaCall(config, route, route.protocol === "xai" ? `/videos/${encodeURIComponent(id)}` : route.protocol === "xhai" ? `/tasks/${encodeURIComponent(id)}` : `/v1/media/status?task_id=${encodeURIComponent(id)}`);
+  if (result.is_final === true || ["done", "completed", "failed", "success"].includes(result.status || result.state))
+    await modelReceipt(config, route.id === "xylp-enhance" ? "aigc_enhance" : "aigc_video", route.baseUrl, route.model.model || route.model.id, { ...result, task_id: id });
   if (route.protocol === "xai") return { pending: ["pending", "queued", "in_progress"].includes(result.status), url: result.status === "done" ? result.video?.url : undefined, state: result.status };
   if (route.protocol === "xhai") {
     const state = result.status;

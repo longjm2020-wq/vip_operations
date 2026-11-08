@@ -39,6 +39,9 @@ export function catalogFor(user, config) {
 }
 
 export function selectionForSave(user, config, selection) {
+  if (!selection?.providerId && config.defaultVideoSelection && (user.role === "super_admin" || config.defaultVideoSelection.providerId === customerProvider(config).id)) {
+    selection = { ...config.defaultVideoSelection, ...(user.role === "super_admin" ? {} : { providerId: "platform" }) };
+  }
   if (user.role !== "super_admin" && selection?.providerId && selection.providerId !== "platform") fail("此视频服务仅限超级管理员使用，请重新选择可用模型", 403);
   const route = selectVideoRoute(config, user.role === "super_admin" ? selection : { ...selection, providerId: customerProvider(config).id });
   if (route.model.legacy) fail("旧模型已从新项目移除，请重新选择已分类模型", 400);

@@ -33,8 +33,9 @@ import { CompassSharesModule } from "./modules/analytics/share-controller.js";
 import { selectionImportBodyParser } from "./selection-import-body.js";
 import { createAigcService } from "./modules/aigc/service.js";
 import { attachRealtimeRelay } from "./modules/workspace/realtime-relay.js";
+import { AiModelManagementController } from "./ai-model-management-controller.js";
 @Module({
-  controllers: [ManualController, DeerFlowModelGatewayController],
+  controllers: [ManualController, DeerFlowModelGatewayController, AiModelManagementController],
   imports: [
     CompassSharesModule,
     CompetitorAnalysisModule,

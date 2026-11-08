@@ -219,8 +219,8 @@ export function AigcPage() {
         project = await studioApi("/detail-projects", "POST", {
           ...detailDraft(framework),
           imageModelId:
-            catalog.image?.models?.find((m: Item) => m.configured)?.id ||
             catalog.image?.defaultModelId ||
+            catalog.image?.models?.find((m: Item) => m.configured)?.id ||
             "tt-image-2.5-token",
         });
       else

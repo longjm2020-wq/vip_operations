@@ -1,4 +1,5 @@
 import { fail } from "../../core.js";
+import { featureModelRef } from "../../ai-model-routing.js";
 import type { TeamDifficulty } from "../../../../../packages/contracts/src/assistant-team.js";
 import {
   agentModelCandidates,
@@ -55,6 +56,7 @@ export async function readTeamModelCatalog() {
 }
 
 export async function resolveTeamModel(options: {
+  feature?: "assistant_team" | "deerflow_team";
   taskModel?: string;
   profileModel?: string;
   difficulty?: TeamDifficulty;
@@ -64,7 +66,8 @@ export async function resolveTeamModel(options: {
   structured?: boolean;
 }) {
   const catalog = await agentModelCandidates();
-  const fixed = options.taskModel || options.profileModel;
+  const managed = await featureModelRef(options.feature || "assistant_team");
+  const fixed = options.taskModel || options.profileModel || managed;
   const matches = (model: AgentInternalModel) =>
     supportsSynchronousTeamChat(model) &&
     model.parameters.includes("tools") &&
@@ -94,7 +97,7 @@ export async function resolveTeamModel(options: {
     return {
       ...model,
       tier: teamModelTier(model),
-      selectionReason: options.taskModel ? "本次任务指定模型" : "成员固定模型",
+      selectionReason: options.taskModel ? "本次任务指定模型" : options.profileModel ? "成员固定模型" : "AI 模型管理默认值",
     };
   }
   const desired = options.orchestrator

@@ -1,3 +1,4 @@
+import { installAiManagementSchema } from "../fixtures/ai-management-schema.js";
 import { afterAll, beforeAll, beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { PGlite } from "@electric-sql/pglite";
 import { installSelectionContentCreatedTimeSchema } from "../fixtures/selection-content-created-time-schema.js";
@@ -68,6 +69,7 @@ beforeAll(async () => {
     CREATE TABLE audit_logs(id bigserial,actor_id bigint,actor_label text,action text,entity_type text,entity_id text,request_id text,before_data jsonb,after_data jsonb,reason text,selection_table_id bigint);
     CREATE TABLE compass_ai_settings(id int PRIMARY KEY,enabled boolean,api_key_encrypted text,verified_at timestamptz);
   `);
+  await installAiManagementSchema(fixture.database);
   await installSelectionContentCreatedTimeSchema(fixture.database);
 }, 30000);
 beforeEach(async () => {

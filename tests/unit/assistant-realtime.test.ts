@@ -1,3 +1,4 @@
+import { installAiManagementSchema } from "../fixtures/ai-management-schema.js";
 import {
   beforeAll,
   beforeEach,
@@ -105,6 +106,7 @@ beforeAll(async () => {
   await f.db
     .exec(`CREATE TABLE users(id bigint PRIMARY KEY); INSERT INTO users VALUES(7),(8);
     CREATE TABLE personal_assistant_conversations(user_id bigint PRIMARY KEY, messages jsonb DEFAULT '[]', state text DEFAULT 'IDLE', version int DEFAULT 0, updated_at timestamptz DEFAULT now());`);
+  await installAiManagementSchema(f.db);
   await f.db.exec(
     await readFile(
       "packages/database/migrations/084_assistant_desktop.sql",

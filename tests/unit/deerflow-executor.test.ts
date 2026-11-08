@@ -1,3 +1,4 @@
+import { installAiManagementSchema } from "../fixtures/ai-management-schema.js";
 import {
   beforeAll,
   beforeEach,
@@ -134,6 +135,7 @@ beforeAll(async () => {
   await f.db.exec(
     "CREATE TABLE users(id bigint PRIMARY KEY,status text); INSERT INTO users VALUES(7,'ACTIVE'),(8,'ACTIVE'); CREATE TABLE permissions(id bigint PRIMARY KEY,code text); INSERT INTO permissions VALUES(1,'analytics.read'); CREATE TABLE roles(id bigint PRIMARY KEY,code text); INSERT INTO roles VALUES(1,'STAFF'); CREATE TABLE user_roles(user_id bigint,role_id bigint); INSERT INTO user_roles VALUES(7,1),(8,1); CREATE TABLE role_permissions(role_id bigint,permission_id bigint); INSERT INTO role_permissions VALUES(1,1);",
   );
+  await installAiManagementSchema(f.db);
   for (const file of ["083_assistant_agent.sql", "090_assistant_team.sql"])
     await f.db.exec(
       await readFile("packages/database/migrations/" + file, "utf8"),

@@ -6,6 +6,7 @@ import { fail, requireRole, reserve, markSubmitted, settle, MICRO } from "./acce
 import { MEDIA_LIMIT, OpenTalkingClient, remoteId, serviceUrl } from "./opentalking.mjs";
 import { normalizeDigitalAudio, validateDigitalMedia } from "./digital-human-media.mjs";
 import { DigitalGpuPower } from "./compshare-gpu.mjs";
+import { inferenceFetch } from "./ai-accounting.mjs";
 
 const now = () => new Date().toISOString();
 const active = op => ["submitting", "queued", "generating", "starting", "ready", "closing", "uncertain", "saving"].includes(op.status);
@@ -34,7 +35,8 @@ export class DigitalHumanService {
   }
   get data() { return this.store.data.digitalHuman; }
   settings() { return { ...settingsDefaults, ...this.data?.settings }; }
-  connection() { return { baseUrl: this.config.opentalkingBaseUrl || "", apiKey: this.config.opentalkingApiKey || "" }; }
+  connection() { return { baseUrl: this.config.opentalkingBaseUrl || "", apiKey: this.config.opentalkingApiKey || "",
+    fetchImpl: inferenceFetch(this.config, "aigc_digitalhuman", (pathname, options) => options?.method === "POST" && ["/avatars/custom", "/video-creation/jobs", "/sessions"].includes(pathname)) }; }
   client() { return this.clientFactory(this.connection()); }
   async init() {
     await this.store.mutate(data => {

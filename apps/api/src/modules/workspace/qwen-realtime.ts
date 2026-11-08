@@ -1,4 +1,5 @@
 import WebSocket from "ws";
+import { aiFetch } from "../../ai-metering.js";
 import { decryptSecret } from "../analytics/secrets.js";
 import { fail } from "../../core.js";
 import {
@@ -116,7 +117,7 @@ export async function createQwenWebRtcSession(
   offer: string,
   signal: AbortSignal,
 ) {
-  const response = await fetch(qwenRealtimeWebRtcEndpoint(workspaceId), {
+  const response = await aiFetch("voice_realtime", qwenRealtimeWebRtcEndpoint(workspaceId), {
     method: "POST",
     redirect: "error",
     signal: AbortSignal.any([signal, AbortSignal.timeout(30000)]),

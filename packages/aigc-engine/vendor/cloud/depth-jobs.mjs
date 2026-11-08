@@ -37,7 +37,9 @@ export function depthInputLimit(info, cap) {
 export class DepthJobs {
   constructor(store, config, { client, fetchImpl = fetch } = {}) {
     this.store = store; this.config = config; this.fetch = fetchImpl;
-    this.client = client || new RunningHubDepthClient({ apiKey: config.runninghubApiKey, workflowId: config.runninghubWorkflowId });
+    this.client = client || new RunningHubDepthClient({ apiKey: config.runninghubApiKey, workflowId: config.runninghubWorkflowId,
+      fetchImpl: (url, options) => new URL(url).pathname === "/task/openapi/create" && config.aiFetch ? config.aiFetch("aigc_depth", url, options) : fetch(url, options),
+      recordUsage: config.recordAiReceipt });
     this.busy = false; this.stopped = false;
   }
   row(id) { return this.store.data.depthJobs?.[id]; }

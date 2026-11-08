@@ -1,3 +1,4 @@
+import { installAiManagementSchema } from "../fixtures/ai-management-schema.js";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import { PGlite } from "@electric-sql/pglite";
 import { readFile } from "node:fs/promises";
@@ -134,6 +135,7 @@ beforeAll(async () => {
   await fixture.db.exec(
     `CREATE TABLE users(id bigint PRIMARY KEY,username text,display_name text,status text);CREATE TABLE permissions(id serial PRIMARY KEY,code text UNIQUE,name text);CREATE TABLE roles(id bigint PRIMARY KEY,code text);CREATE TABLE user_roles(user_id bigint,role_id bigint);CREATE TABLE role_permissions(role_id bigint,permission_id int,PRIMARY KEY(role_id,permission_id));CREATE TABLE compass_ai_settings(id int,enabled boolean,api_key_encrypted text,verified_at timestamptz);INSERT INTO users VALUES(1,'owner','测试站长','ACTIVE'),(2,'other','其他用户','ACTIVE');INSERT INTO roles VALUES(1,'SUPER_ADMIN'),(2,'CREATOR');INSERT INTO user_roles VALUES(1,1),(2,2);`,
   );
+  await installAiManagementSchema(fixture.db);
   await fixture.db.exec(
     await readFile("packages/database/migrations/071_aigc_studio.sql", "utf8"),
   );

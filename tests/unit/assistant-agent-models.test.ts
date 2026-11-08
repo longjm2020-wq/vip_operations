@@ -1,3 +1,4 @@
+vi.mock("../../apps/api/src/ai-model-routing.js", () => ({ featureModelRef: async () => undefined }));
 import { afterEach, expect, it, vi } from "vitest";
 import {
   publicAgentCatalog,

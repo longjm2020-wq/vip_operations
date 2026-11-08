@@ -1,3 +1,5 @@
+import { aiFetch } from "../../ai-metering.js";
+import { featureModelRef } from "../../ai-model-routing.js";
 import { z } from "zod";
 import type { Row } from "../../../../../packages/database/src/index.js";
 import {
@@ -8,7 +10,7 @@ import { fail } from "../../core.js";
 import { COMPASS_AI_ENDPOINT } from "../analytics/ai.js";
 import { decryptSecret } from "../analytics/secrets.js";
 import { publicCitations } from "./agent-search.js";
-import { matchesAgentModel, type resolveAgentModel } from "./agent-models.js";
+import { matchesAgentModel, resolveAgentModel } from "./agent-models.js";
 
 const answerSchema = z
   .object({
@@ -22,7 +24,9 @@ export async function resolveAssistantWebsite(
   model: Awaited<ReturnType<typeof resolveAgentModel>>,
   name: string,
 ): Promise<{ destination?: AssistantWebCommand; text: string }> {
-  const response = await fetch(COMPASS_AI_ENDPOINT, {
+  const configured = await featureModelRef("assistant_website");
+  if (configured) model = await resolveAgentModel(configured);
+  const response = await aiFetch("assistant_website", COMPASS_AI_ENDPOINT, {
     method: "POST",
     redirect: "error",
     signal: AbortSignal.timeout(45000),

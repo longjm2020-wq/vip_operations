@@ -1,3 +1,4 @@
+import { aiFetch } from "../../ai-metering.js";
 import { HttpException } from "@nestjs/common";
 import { randomUUID } from "node:crypto";
 import {
@@ -118,7 +119,7 @@ function providerError(status: number) {
 }
 async function request(s: Row, body: object, signal: AbortSignal) {
   signal.throwIfAborted();
-  const response = await fetch(endpoint, {
+  const response = await aiFetch("voice_audio", endpoint, {
     method: "POST",
     redirect: "error",
     signal: AbortSignal.any([signal, AbortSignal.timeout(90000)]),

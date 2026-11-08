@@ -1,3 +1,4 @@
+import { installAiManagementSchema } from "../fixtures/ai-management-schema.js";
 import {
   beforeAll,
   afterAll,
@@ -88,6 +89,7 @@ beforeAll(async () => {
   await fixture.db.exec(
     "CREATE TABLE users(id bigint PRIMARY KEY);INSERT INTO users VALUES(7),(8);CREATE TABLE compass_ai_settings(id int PRIMARY KEY,enabled boolean,api_key_encrypted text,verified_at timestamptz);INSERT INTO compass_ai_settings VALUES(1,true,'fixture',now());",
   );
+  await installAiManagementSchema(fixture.db);
   await fixture.db.exec(
     await readFile(
       "packages/database/migrations/084_assistant_desktop.sql",

@@ -1,3 +1,4 @@
+import { aiFetch } from "./ai-metering.js";
 import { Body, Controller, Post, Req, Res } from "@nestjs/common";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { once } from "node:events";
@@ -168,13 +169,14 @@ export async function proxyDeerFlowModel(
         message.content.some((part) => part.type === "image_url"),
     );
     const model = await resolveTeamModel({
+      feature: "deerflow_team",
       orchestrator: true,
       vision,
       structured: !!body.response_format,
     });
     signal.throwIfAborted();
     const { max_completion_tokens, ...forwarded } = body;
-    const upstream = await fetch(COMPASS_AI_ENDPOINT, {
+    const upstream = await aiFetch("deerflow_team", COMPASS_AI_ENDPOINT, {
       method: "POST",
       redirect: "error",
       signal,

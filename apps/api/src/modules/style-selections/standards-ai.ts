@@ -1,3 +1,5 @@
+import { resolveFeatureModel, matchesAgentModel, type AgentInternalModel } from "../workspace/agent-models.js";
+import { aiFetch } from "../../ai-metering.js";
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 import { db, one, rows, type Row, type Tx } from "../../../../../packages/database/src/index.js";
@@ -6,7 +8,7 @@ import { selectionFieldSchema, type SelectionField } from "../../../../../packag
 import { fieldTextLengthError, splitChoiceValues } from "../../../../../packages/contracts/src/selection-field-validation.js";
 import { selectionStandardsAIApplySchema, selectionStandardsAIGenerateSchema, selectionStandardsAIModeSchema, standardsFieldKind, standardsTargetEligible, type SelectionStandardsAIPreview } from "../../../../../packages/contracts/src/selection-standards-ai.js";
 import { command, fail, parse, requirePermission, type Context } from "../../core.js";
-import { COMPASS_AI_ENDPOINT, COMPASS_AI_MODEL } from "../analytics/ai.js";
+import { COMPASS_AI_ENDPOINT } from "../analytics/ai.js";
 import { decryptSecret, encryptionReady } from "../analytics/secrets.js";
 import * as protection from "./protection.js";
 import { isArchive } from "./archive.js";
@@ -26,7 +28,7 @@ async function requireArchive(c: Context) {
 export async function standardsAIStatus(c: Context) {
   await requireArchive(c);
   const settings = await one(db, "SELECT enabled,api_key_encrypted,verified_at FROM public.compass_ai_settings WHERE id=1");
-  return { ready: ready(settings), message: ready(settings) ? "AI 适配已就绪" : "请超级管理员在系统设置 → AI 模型设置中启用并验证模型后使用" };
+  return { ready: ready(settings), message: ready(settings) ? "AI 适配已就绪" : "请超级管理员在系统设置 → AI 模型管理中启用并验证模型后使用" };
 }
 const descriptorLabels = /^(?:三级类目|三级分类|品类|商品类目|成分|材质|材质成分|面料|主面料|里料|填充物|配料|长标题|短标题|商品名称|适用年龄|适用人群|穿着方式|织造方式|工艺|产品卖点|商品卖点)$/u;
 type Fact = { key: string; label: string; value: string };
@@ -108,14 +110,14 @@ const responseSchema = z.object({ rows: z.array(z.object({
   id: z.string(), values: z.array(z.object({ key: z.string(), value: z.string().trim().max(100), reason: z.string().trim().min(1).max(600), checks: z.array(z.string().trim().min(1).max(300)).max(6), evidence: z.array(z.string().max(100)).max(10) }).strict()).max(2),
   warnings: z.array(z.string().max(600)).max(6),
 }).strict()).max(5) }).strict();
-async function callModel(settings: Row, products: Row[]) {
+async function callModel(selected: AgentInternalModel, settings: Row, products: Row[]) {
   const content: Row[] = [{ type: "text", text: JSON.stringify({ asOf: new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10),
     products: products.map(({ pictures, ...product }) => ({ ...product, imageInputs: pictures.map((image: Row) => image.id) })) }) }];
   for (const product of products) for (const image of product.pictures) content.push({ type: "text", text: `本款ID ${product.id}，图片依据 ${image.id}（商品图）` }, { type: "image_url", image_url: { url: image.data, detail: "high" } });
-  const response = await fetch(COMPASS_AI_ENDPOINT, {
+  const response = await aiFetch("product_standards", COMPASS_AI_ENDPOINT, {
     method: "POST", redirect: "error", signal: AbortSignal.timeout(90000),
     headers: { Authorization: "Bearer " + decryptSecret(settings.api_key_encrypted), "Content-Type": "application/json" },
-    body: JSON.stringify({ model: COMPASS_AI_MODEL, stream: false, max_tokens: 7000, reasoning: { effort: "low" }, provider: { require_parameters: true, data_collection: "deny" },
+    body: JSON.stringify({ model: selected.actual, stream: false, max_tokens: 7000, ...(selected.parameters.includes("reasoning") ? { reasoning: { effort: selected.reasoningEffort ?? "low" } } : {}), provider: { require_parameters: true, data_collection: "deny" },
       messages: [{ role: "system", content: standardsSystemPrompt }, { role: "user", content }],
       response_format: { type: "json_schema", json_schema: { name: "product_standards", strict: true, schema: {
         type: "object", additionalProperties: false, required: ["rows"], properties: { rows: { type: "array", items: {
@@ -136,7 +138,7 @@ async function callModel(settings: Row, products: Row[]) {
   let payload: Row;
   try { payload = JSON.parse(text); } catch { fail("AI_RESPONSE_INVALID", "AI 返回格式错误", 502); }
   const choice = payload.choices?.[0];
-  if (payload.model !== COMPASS_AI_MODEL || !payload.id || choice?.finish_reason !== "stop" || choice?.message?.refusal || typeof choice?.message?.content !== "string") fail("AI_RESPONSE_INVALID", "AI 返回不完整，未采用此结果", 502);
+  if (!matchesAgentModel(selected, payload.model) || !payload.id || choice?.finish_reason !== "stop" || choice?.message?.refusal || typeof choice?.message?.content !== "string") fail("AI_RESPONSE_INVALID", "AI 返回不完整，未采用此结果", 502);
   let result: unknown;
   try { result = JSON.parse(choice.message.content); } catch { fail("AI_RESPONSE_INVALID", "AI 适配格式错误", 502); }
   const parsed = responseSchema.safeParse(result);
@@ -155,6 +157,7 @@ export async function generateStandards(c: Context, input: unknown): Promise<Sel
   if (active.has(caller) || active.size >= 2) fail("AI_BUSY", "AI 适配正在生成，请稍后重试", 429);
   active.add(caller);
   try {
+    const selected = await resolveFeatureModel("product_standards");
     const settings = await one(db, "SELECT enabled,api_key_encrypted,verified_at FROM public.compass_ai_settings WHERE id=1");
     if (!ready(settings)) fail("AI_NOT_READY", "请超级管理员先启用并验证 AI 模型", 503);
     const initial = await snapshot(c, body.rowIds, body.targetKeys), products: Row[] = [];
@@ -189,7 +192,7 @@ export async function generateStandards(c: Context, input: unknown): Promise<Sel
     await unchanged();
     const withFacts = products.filter(product => product.facts.length || product.pictures.length);
     let generated: z.infer<typeof responseSchema>["rows"] = [];
-    try { if (withFacts.length) generated = await callModel(settings!, withFacts); }
+    try { if (withFacts.length) generated = await callModel(selected, settings!, withFacts); }
     catch (error) { if ((error as { getStatus?: unknown }).getStatus) throw error; fail("AI_PROVIDER_ERROR", "AI 适配请求未完成，请稍后重试；本次没有填入资料", 502); }
     const verified = new Map<string, StandardVerification>();
     const proposals = [...new Map(generated.flatMap(row => row.values.filter(value => value.value).map(value => {
@@ -239,7 +242,7 @@ export async function generateStandards(c: Context, input: unknown): Promise<Sel
       return { id: row.id, expectedUpdatedAt: String(source.updatedAt), fingerprint: fingerprint(source, initial.fields), values: row.values.filter(value => value.value).map(({ key, value }) => ({ key, value })) };
     });
     return { planToken: signPlan({ actor: c.actor.id, scope: scopeKey(), mode: body.mode, expires, nonce: randomUUID(), policy: initial.digest, catalog: standardsPolicyVersion, rows: signedRows }),
-      expiresAt: new Date(expires).toISOString(), model: COMPASS_AI_MODEL, catalogCheckedAt: standardsPolicyVersion, rows: result,
+      expiresAt: new Date(expires).toISOString(), model: selected.actual, catalogCheckedAt: standardsPolicyVersion, rows: result,
       warnings: products.length === body.rowIds.length ? [] : [`跳过 ${body.rowIds.length - products.length} 款：无可处理的目标、未填写款号或没有编辑权限`] };
   } finally { active.delete(caller); }
 }

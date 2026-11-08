@@ -1,4 +1,5 @@
 import { randomUUID, randomBytes, createHash } from "node:crypto";
+import { aiFetch } from "../../ai-metering.js";
 import { z } from "zod";
 import {
   db,
@@ -251,7 +252,7 @@ async function providerRequest(
   body?: BodyInit,
   json = false,
 ) {
-  const response = await fetch(root + path, {
+  const response = await aiFetch("voice_realtime", root + path, {
     method: "POST",
     redirect: "error",
     signal: AbortSignal.timeout(30000),
@@ -385,7 +386,7 @@ export async function startRealtime(c: Context, input: unknown) {
     );
     if (!device)
       fail("DEVICE_OFFLINE", "请先连接所选电脑，再开始实时语音", 409);
-    const model = await resolveAgentModel(b.model);
+    const model = await resolveAgentModel(b.model, "assistant_desktop");
     if (!model.vision)
       fail("VISION_REQUIRED", "操作电脑需要选择支持看图的助理能力", 400);
     desktopModel = model.id;

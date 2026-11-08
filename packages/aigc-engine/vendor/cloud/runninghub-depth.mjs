@@ -106,7 +106,8 @@ async function boundedJson(response) {
 }
 
 export class RunningHubDepthClient {
-  constructor({ apiKey, workflowId = RUNNINGHUB_DEPTH_WORKFLOW_ID, fetchImpl = fetch }) {
+  constructor({ apiKey, workflowId = RUNNINGHUB_DEPTH_WORKFLOW_ID, fetchImpl = fetch, recordUsage }) {
+    this.recordUsage = recordUsage;
     this.apiKey = apiKey; this.workflowId = workflowId; this.fetch = fetchImpl;
   }
   preflight(signal) { return preflightRunningHubDepth({ apiKey: this.apiKey, workflowId: this.workflowId, fetchImpl: this.fetch, signal }); }
@@ -147,6 +148,7 @@ export class RunningHubDepthClient {
     if (files.length !== 1) throw new Error("深度输出节点未返回唯一 MP4");
     const reported = files[0].consumeCoins;
     const coins = reported !== null && reported !== undefined && reported !== "" && Number.isFinite(Number(reported)) && Number(reported)>=0 ? Number(reported) : undefined;
+    await this.recordUsage?.("aigc_depth", new URL(ORIGIN).hostname, this.workflowId, { task_id: taskId, usage: { credits: coins } }).catch(() => {});
     return { state: "completed", url: files[0].fileUrl, coins };
   }
   async cancel(taskId) {

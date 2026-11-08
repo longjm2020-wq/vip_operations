@@ -604,6 +604,16 @@ export function PersonalAssistantProvider({
     }
     setOpen(true);
   };
+  useEffect(() => {
+    if (!allowed || location.pathname !== "/my-workspace") return;
+    const target = new URLSearchParams(location.search).get("assistant");
+    if (!["chat", "team", "desktop", "voice"].includes(target || "")) return;
+    // A settings deep link never starts recording or opens a voice session.
+    if (target === "voice") openVoiceSettings();
+    else if (target === "desktop") selectSection("desktop");
+    else openPanel(target === "team" ? "team" : "chat");
+    // React to navigation, not to changing voice/session state.
+  }, [location.key, location.pathname, location.search, allowed]);
   const sectionItems = [
     ...(allowed ? [{ key: "chat", label: "聊天" }] : []),
     ...(allowed ? [{ key: "team", label: "团队设置" }] : []),

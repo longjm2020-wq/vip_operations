@@ -1,3 +1,4 @@
+import { installAiManagementSchema } from "../fixtures/ai-management-schema.js";
 import {
   afterAll,
   afterEach,
@@ -104,6 +105,7 @@ beforeAll(async () => {
   await fixture.database.exec(
     "CREATE TABLE users(id bigint PRIMARY KEY); INSERT INTO users VALUES(7),(8)",
   );
+  await installAiManagementSchema(fixture.database);
   await fixture.database.exec(
     await readFile(
       "packages/database/migrations/082_assistant_voice.sql",

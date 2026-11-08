@@ -1,3 +1,4 @@
+import { aiFetch } from "../../ai-metering.js";
 import { randomUUID } from "node:crypto";
 import type { Row } from "../../../../../packages/database/src/index.js";
 import {
@@ -161,7 +162,7 @@ export async function askAssistantModel(
   let used = 0;
   for (let round = 0; round < 4; round++) {
     const allowTools = round < 3 && used < 6;
-    const response = await fetch(COMPASS_AI_ENDPOINT, {
+    const response = await aiFetch("assistant_chat", COMPASS_AI_ENDPOINT, {
       method: "POST",
       redirect: "error",
       signal,
