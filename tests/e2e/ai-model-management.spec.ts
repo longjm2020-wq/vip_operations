@@ -278,7 +278,7 @@ test("voice configuration and direct links do not start a call", async ({
       .getByRole("combobox", { name: "语音模型", exact: true }),
   ).toBeVisible();
   await expect(page.getByRole("dialog")).toContainText(
-    "麦克风听写、分段语音和朗读共用",
+    "麦克风听写与分段语音使用同一识别模型",
   );
   expect(f.sessions).toEqual([]);
   await page.getByRole("button", { name: "关闭", exact: true }).click();
@@ -322,4 +322,112 @@ test("non-super-admin cannot access the management interface", async ({
     page.getByText("仅超级管理员可以配置 AI 模型", { exact: true }),
   ).toBeVisible();
   await expect(page.locator(".ai-management")).toHaveCount(0);
+});
+
+test("Qwen audio configuration reuses the saved connection without exposing a credential or starting a call", async ({
+  page,
+}) => {
+  const f = await fixture(page);
+  const writes: Record<string, unknown>[] = [];
+  let version = 0;
+  await page.route("**/api/v1/my-workspace/assistant/realtime", (route) =>
+    route.fulfill({
+      json: {
+        data: {
+          provider: "qwen",
+          enabled: true,
+          ready: true,
+          canManage: true,
+          version: 2,
+          voice: "Mia",
+          apiKeyConfigured: true,
+          encryptionReady: true,
+          verifiedAt: "2026-11-08T00:00:00Z",
+          error: "",
+          profiles: {
+            qwen: {
+              voice: "Mia",
+              apiKeyConfigured: true,
+              workspaceId: "ws-test",
+              verifiedAt: "2026-11-08T00:00:00Z",
+              error: "",
+            },
+          },
+        },
+      },
+    }),
+  );
+  await page.route(
+    "**/api/v1/my-workspace/assistant/voice**",
+    async (route) => {
+      if (route.request().method() === "POST") {
+        writes.push(route.request().postDataJSON());
+        version++;
+      }
+      await route.fulfill({
+        json: {
+          data: {
+            provider: version ? "qwen" : "openrouter",
+            enabled: !!version,
+            ready: false,
+            canManage: true,
+            version,
+            model: version ? "qwen3.8-omni-flash" : "openai/gpt-audio",
+            voice: version ? "Serena" : "coral",
+            speechModel: version ? "qwen3-tts-flash" : "openai/gpt-audio",
+            workspaceId: version ? "ws-test" : undefined,
+            apiKeyConfigured: !!version,
+            encryptionReady: true,
+            verifiedAt: null,
+            error: "",
+            maxSeconds: 25,
+            assistantReady: true,
+          },
+        },
+      });
+    },
+  );
+  await page.goto("/settings/ai");
+  await page
+    .locator('tr[data-row-key="browser_dictation"]')
+    .getByRole("button", { name: "切换 / 配置" })
+    .click();
+  const dialog = page.getByRole("dialog");
+  await dialog.getByRole("combobox", { name: "音频服务", exact: true }).click();
+  await page.getByText("千问 · 北京", { exact: true }).click();
+  await expect(
+    dialog.getByText("qwen3.8-omni-flash", { exact: true }),
+  ).toBeVisible();
+  await expect(dialog.getByRole("textbox", { name: "朗读模型" })).toHaveValue(
+    "qwen3-tts-flash",
+  );
+  await dialog
+    .getByRole("checkbox", { name: "使用已保存的千问实时语音连接" })
+    .check();
+  await dialog.getByRole("switch", { name: "启用分段语音与听写" }).click();
+  await expect(
+    dialog.getByRole("button", { name: "验证并试听" }),
+  ).toBeDisabled();
+  await dialog.getByRole("button", { name: "保存语音设置" }).click();
+  await expect
+    .poll(() => writes)
+    .toEqual([
+      {
+        version: 0,
+        provider: "qwen",
+        enabled: true,
+        model: "qwen3.8-omni-flash",
+        voice: "Serena",
+        workspaceId: "ws-test",
+        useRealtimeCredentials: true,
+        clearKey: false,
+      },
+    ]);
+  await expect(
+    dialog.getByRole("button", { name: "验证并试听" }),
+  ).toBeEnabled();
+  await expect(
+    dialog.getByLabel("千问北京 API Key", { exact: true }),
+  ).toHaveValue("");
+  expect(f.sessions).toEqual([]);
 });

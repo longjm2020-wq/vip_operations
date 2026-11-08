@@ -10,6 +10,7 @@ import {
 } from "vitest";
 import { PGlite } from "@electric-sql/pglite";
 import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import { installAiManagementSchema } from "../fixtures/ai-management-schema.js";
 import type { Context } from "../../apps/api/src/core.js";
 import type { Tx } from "../../packages/database/src/index.js";
@@ -167,8 +168,17 @@ beforeAll(async () => {
     CREATE TABLE audit_logs(id bigserial,actor_id bigint,actor_label text,action text,entity_type text,entity_id text,request_id text,before_data jsonb,after_data jsonb,reason text);
   `);
   await installAiManagementSchema(fixture.db);
+  await fixture.db.exec(
+    await readFile(
+      "packages/database/migrations/092_qwen_segmented_voice.sql",
+      "utf8",
+    ),
+  );
 }, 30000);
 beforeEach(async () => {
+  await fixture.db!.exec(
+    "UPDATE assistant_voice_settings SET provider='openrouter',enabled=false,qwen_api_key_encrypted=NULL,qwen_verified_at=NULL,qwen_workspace_id=''",
+  );
   await fixture.db!.exec(
     "TRUNCATE ai_feature_models,ai_model_usage,idempotency_records,audit_logs; UPDATE compass_ai_settings SET enabled=true,api_key_encrypted='shared-key',verified_at=now()-interval '1 day',updated_at=now()",
   );
@@ -301,6 +311,29 @@ describe("AI model administration and real routing", () => {
         revision: 0,
       }),
     ).rejects.toMatchObject(errorCode("AI_MODEL_UNAVAILABLE"));
+  });
+  it("shows Qwen recognition and speech models separately with actual character usage", async () => {
+    await fixture.db!.exec(
+      "UPDATE assistant_voice_settings SET enabled=true,provider='qwen',qwen_api_key_encrypted='qwen-key',qwen_workspace_id='ws-test',qwen_verified_at=now()",
+    );
+    await fixture.db!.query(
+      "INSERT INTO ai_model_usage(id,feature_id,source,model,status,input_characters) VALUES($1::uuid,'voice_audio','ws-test.cn-beijing.maas.aliyuncs.com','qwen3-tts-flash','responded',8)",
+      [randomUUID()],
+    );
+    const view = await aiModelManagement(admin());
+    expect(
+      view.features.find((f) => f.id === "browser_dictation"),
+    ).toMatchObject({ model: "qwen3.8-omni-flash", status: "ready" });
+    const voice = view.features.find((f) => f.id === "voice_audio")!;
+    expect(voice.model).toContain("识别：qwen3.8-omni-flash");
+    expect(voice.model).toContain("朗读：qwen3-tts-flash");
+    expect(voice.source).toContain("阿里云百炼");
+    expect(voice.usage).toMatchObject({
+      inputCharacters: 8,
+      unknown: 0,
+      amounts: [],
+    });
+    expect(JSON.stringify(view)).not.toContain("qwen-key");
   });
   it("changes persisted defaults, enforces compare-and-save, and does not rewrite other functions", async () => {
     const c = admin();

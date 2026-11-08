@@ -59,7 +59,7 @@ function VoiceConnections({
   const user = useUser();
   const realtime = useQuery({
     queryKey: ["assistant-realtime", user.id],
-    enabled: kind === "voice_realtime",
+    enabled: true,
     queryFn: async () =>
       (await api("/my-workspace/assistant/realtime")).data as RealtimeStatus,
   });
@@ -76,6 +76,7 @@ function VoiceConnections({
       <QueryState error={audio.error} reload={() => audio.refetch()} />
       {audio.data && (
         <VoiceSettings
+          realtime={realtime.data}
           key={audio.data.version}
           value={audio.data}
           saved={async () => {
@@ -272,7 +273,7 @@ export function AiModelManagementPage({
                       aria-label={`${row.name}的默认模型`}
                       value={row.selection}
                       loading={busy === row.id}
-                      disabled={!!busy || row.group === "AIGC" && !canAigc}
+                      disabled={!!busy || (row.group === "AIGC" && !canAigc)}
                       showSearch
                       optionFilterProp="label"
                       onChange={(model) => void change(row, model)}
@@ -364,6 +365,11 @@ export function AiModelManagementPage({
                       <span>
                         Token：<strong>{count(row.usage.totalTokens)}</strong>
                       </span>
+                      {row.usage.inputCharacters != null && (
+                        <span>
+                          合成输入字符：{count(row.usage.inputCharacters)}
+                        </span>
+                      )}
                       <span>
                         {row.usage.amounts.length
                           ? row.usage.amounts
@@ -415,11 +421,7 @@ export function AiModelManagementPage({
         {connections}
       </Modal>
       <Drawer
-        title={
-          drawer === "aigc"
-            ? "AIGC 模型与工作流连接"
-            : "语音模型配置"
-        }
+        title={drawer === "aigc" ? "AIGC 模型与工作流连接" : "语音模型配置"}
         open={!!drawer}
         width={680}
         destroyOnHidden
@@ -467,6 +469,9 @@ export function AiModelManagementPage({
                 {count(detail.usage.totalTokens)}
               </dd>
               <dt>已返回的消耗</dt>
+              {detail.usage.inputCharacters != null && (
+                <dd>语音合成输入字符：{count(detail.usage.inputCharacters)}</dd>
+              )}
               <dd>
                 {detail.usage.amounts.length
                   ? detail.usage.amounts.map((a) => (

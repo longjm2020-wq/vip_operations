@@ -358,6 +358,9 @@ export function PersonalAssistantProvider({
     useRealtime && realtimeStatus.data
       ? {
           ...realtimeStatus.data,
+          // The shared voice display does not carry provider-specific settings.
+          provider: undefined,
+          profiles: undefined,
           model: "小序实时语音",
           maxSeconds: 3600,
           assistantReady: true,

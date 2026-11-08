@@ -45,7 +45,8 @@ export const aiFeatures = [
     name: "网站原有智能体团队",
     group: "团队",
     href: "/my-workspace?assistant=team",
-    boundary: "从多模态对话目录选型并按步骤组织任务与验收；任务或成员指定型号优先于管理页默认值。",
+    boundary:
+      "从多模态对话目录选型并按步骤组织任务与验收；任务或成员指定型号优先于管理页默认值。",
     kind: "team",
   },
   {
@@ -147,7 +148,8 @@ export const aiFeatures = [
     name: "小序分段语音与朗读",
     group: "语音",
     href: "/my-workspace?assistant=voice",
-    boundary: "识别短段录音与朗读回复；使用独立音频模型和密钥。",
+    boundary:
+      "识别短段录音与朗读回复；千问分别使用音频识别与语音合成模型，语音连接独立配置。",
     kind: "audio",
   },
   {
@@ -184,6 +186,7 @@ export type AiFeatureUsage = {
   failed: number;
   unknown: number;
   inputTokens: number | null;
+  inputCharacters?: number | null;
   outputTokens: number | null;
   totalTokens: number | null;
   amounts: { unit: string; amount: number }[];

@@ -25,6 +25,10 @@ import { api } from "./api";
 import {
   voiceModels,
   voiceNames,
+  qwenDictationModel,
+  qwenSpeechModel,
+  qwenSpeechVoices,
+  type VoiceProvider,
   type AssistantVoiceStatus,
 } from "../../../packages/contracts/src/assistant-voice";
 
@@ -38,14 +42,38 @@ const endpoint = "/my-workspace/assistant/voice";
 export function VoiceSettings({
   value,
   saved,
+  realtime,
 }: {
   value: AssistantVoiceStatus;
   saved: () => Promise<unknown>;
+  realtime?: RealtimeStatus;
 }) {
   const { message } = App.useApp();
   const [enabled, setEnabled] = useState(value.enabled),
+    [provider, setProvider] = useState<VoiceProvider>(
+      value.provider || "openrouter",
+    ),
     [model, setModel] = useState(value.model),
     [voice, setVoice] = useState(value.voice);
+  const [workspace, setWorkspace] = useState(value.workspaceId || "");
+  const [reuse, setReuse] = useState(false);
+  const qwen = provider === "qwen";
+  const configured =
+    value.profiles?.[provider]?.apiKeyConfigured ??
+    (provider === (value.provider || "openrouter") && value.apiKeyConfigured);
+  const changeProvider = (next: VoiceProvider) => {
+    const profile = value.profiles?.[next];
+    setProvider(next);
+    setModel(
+      profile?.model || (next === "qwen" ? qwenDictationModel : voiceModels[0]),
+    );
+    setVoice(profile?.voice || (next === "qwen" ? "Serena" : "coral"));
+    setWorkspace(
+      profile?.workspaceId || realtime?.profiles?.qwen.workspaceId || "",
+    );
+    setReuse(false);
+    setKey("");
+  };
   const [key, setKey] = useState(""),
     [busy, setBusy] = useState(false);
   const sampleContext = useRef<AudioContext | null>(null);
@@ -63,6 +91,13 @@ export function VoiceSettings({
         enabled: clearKey ? false : enabled,
         model,
         voice,
+        provider,
+        ...(qwen
+          ? {
+              workspaceId: workspace || undefined,
+              useRealtimeCredentials: !clearKey && reuse,
+            }
+          : {}),
         ...(key && !clearKey ? { apiKey: key } : {}),
         clearKey,
       });
@@ -87,7 +122,7 @@ export function VoiceSettings({
         .data as AssistantVoiceStatus & { sample?: string };
       await saved();
       if (result.verifiedAt && result.sample) {
-        message.success("GPT 声音生成已验证");
+        message.success(qwen ? "千问识别与朗读已验证" : "声音生成已验证");
         if (context.state !== "closed") {
           const source = context.createBufferSource();
           source.buffer = pcmBuffer(context, pcmBytes(result.sample));
@@ -108,15 +143,17 @@ export function VoiceSettings({
   };
   const dirty =
     !!key ||
+    reuse ||
+    provider !== (value.provider || "openrouter") ||
+    (qwen && workspace !== (value.workspaceId || "")) ||
     enabled !== value.enabled ||
     model !== value.model ||
     voice !== value.voice;
   return (
     <Form layout="vertical" className="realtime-settings" disabled={busy}>
       <Typography.Paragraph type="secondary">
-        麦克风听写、分段语音和朗读共用此音频模型与密钥，通过 OpenRouter 使用 GPT
-        Audio，按 API 用量计费。建议配置小序专用密钥并在 OpenRouter
-        设置额度。密钥仅加密保存在服务器，保存后不回显。
+        麦克风听写与分段语音使用同一识别模型，朗读使用当前服务的声音模型。
+        按供应商实际用量计费。密钥仅加密保存在服务器，保存后不回显。
       </Typography.Paragraph>
       {!value.encryptionReady && (
         <Alert
@@ -124,47 +161,100 @@ export function VoiceSettings({
           title="服务器凭据加密尚未就绪，请联系部署管理员"
         />
       )}
-      <Form.Item label="启用 GPT 语音">
+      <Form.Item label="启用分段语音与听写">
         <Switch
           checked={enabled}
           onChange={setEnabled}
-          aria-label="启用 GPT 语音"
+          aria-label="启用分段语音与听写"
         />
       </Form.Item>
-      <Form.Item label="语音模型">
+      <Form.Item label="音频服务">
+        <Select
+          aria-label="音频服务"
+          value={provider}
+          onChange={changeProvider}
+          options={[
+            { value: "qwen", label: "千问 · 北京" },
+            { value: "openrouter", label: "OpenRouter · GPT Audio" },
+          ]}
+        />
+      </Form.Item>
+      <Form.Item label={qwen ? "语音识别模型" : "语音模型"}>
         <Select
           aria-label="语音模型"
           value={model}
           onChange={setModel}
-          options={voiceModels.map((v) => ({ value: v, label: v }))}
+          options={(qwen ? [qwenDictationModel] : voiceModels).map((v) => ({
+            value: v,
+            label: v,
+          }))}
         />
       </Form.Item>
+      {qwen && (
+        <>
+          <Form.Item label="朗读模型">
+            <Input aria-label="朗读模型" value={qwenSpeechModel} readOnly />
+          </Form.Item>
+          <Typography.Paragraph type="secondary">
+            识别模型只返回文字；朗读由千问语音合成完成。
+          </Typography.Paragraph>
+          {realtime?.profiles?.qwen.apiKeyConfigured && (
+            <Form.Item>
+              <Checkbox
+                checked={reuse}
+                onChange={(e) => {
+                  setReuse(e.target.checked);
+                  setKey("");
+                  if (e.target.checked)
+                    setWorkspace(realtime.profiles!.qwen.workspaceId || "");
+                }}
+              >
+                使用已保存的千问实时语音连接
+              </Checkbox>
+              <div className="realtime-footnote">
+                保存时复制密钥与业务空间；两个语音服务之后独立配置。
+              </div>
+            </Form.Item>
+          )}
+          <Form.Item label="北京业务空间 ID">
+            <Input
+              aria-label="分段语音业务空间 ID"
+              value={workspace}
+              onChange={(e) => setWorkspace(e.target.value)}
+              disabled={reuse}
+              placeholder="ws-…"
+            />
+          </Form.Item>
+        </>
+      )}
       <Form.Item label="声音">
         <Select
           aria-label="声音"
           value={voice}
           onChange={setVoice}
-          options={voiceNames.map((v) => ({ value: v, label: v }))}
+          options={(qwen ? qwenSpeechVoices : voiceNames).map((v) => ({
+            value: v,
+            label: v,
+          }))}
         />
       </Form.Item>
       <Form.Item
-        label="OpenRouter API Key"
+        label={qwen ? "千问北京 API Key" : "OpenRouter API Key"}
         extra={
-          value.apiKeyConfigured
+          configured
             ? "已配置；留空保留原密钥"
             : "请在此页面填写，不要通过聊天发送密钥"
         }
       >
         <Input.Password
-          aria-label="OpenRouter API Key"
+          aria-label={qwen ? "千问北京 API Key" : "OpenRouter API Key"}
+          disabled={reuse}
           value={key}
           onChange={(e) => setKey(e.target.value)}
           autoComplete="new-password"
           maxLength={512}
           placeholder={
-            value.apiKeyConfigured
-              ? "已保存，不回显"
-              : "输入 OpenRouter API Key"
+            configured ? "已保存，不回显" : "输入当前音频服务 API Key"
           }
         />
       </Form.Item>
@@ -183,9 +273,9 @@ export function VoiceSettings({
         >
           验证并试听
         </Button>
-        {value.apiKeyConfigured && (
+        {configured && (
           <Popconfirm
-            title="清除语音密钥并停用 GPT 语音？"
+            title="清除当前音频服务密钥并停用分段语音与听写？"
             onConfirm={() => save(true)}
           >
             <Button danger disabled={busy}>
@@ -195,8 +285,14 @@ export function VoiceSettings({
         )}
       </Space>
       <p className="realtime-footnote">
-        验证会实际生成一句简短语音并产生少量费用，不会录音。
-        {value.verifiedAt ? "声音生成已验证。" : "尚未验证。"}{" "}
+        {qwen
+          ? "验证会生成一句短语音并转写，产生两次模型调用；不会开启麦克风。"
+          : "验证会实际生成一句简短语音并产生少量费用，不会录音。"}
+        {value.verifiedAt && !dirty
+          ? qwen
+            ? "识别与朗读通路已验证。"
+            : "声音生成已验证。"
+          : "尚未验证。"}{" "}
         新设置从下一条语音请求生效。
       </p>
     </Form>
@@ -299,6 +395,7 @@ export function AssistantVoiceSettingsPanel({
                 <VoiceSettings
                   key={s.version}
                   value={s}
+                  realtime={realtime.data}
                   saved={() => status.refetch()}
                 />
               ),

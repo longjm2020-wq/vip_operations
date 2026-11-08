@@ -11,6 +11,8 @@ import {
   voiceTurnSchema,
   voiceSpeechSchema,
   voiceDictationSchema,
+  qwenDictationModel,
+  qwenSpeechModel,
   type AssistantDictationStatus,
   type AssistantVoiceStatus,
   type VoiceEvent,
@@ -25,10 +27,47 @@ import {
 import { requireAssistant } from "./assistant-memory.js";
 import { readAssistant, sendAssistant } from "./assistant.js";
 import { assistantPublicText } from "../../../../../packages/contracts/src/ai-presentation.js";
+import {
+  qwenAudioBase,
+  checkQwenAudioResponse,
+  streamQwenSpeech,
+  pcmToVoiceWav,
+} from "./qwen-audio.js";
 
 const endpoint = "https://openrouter.ai/api/v1/chat/completions";
-const settings = () =>
-  one(db, "SELECT * FROM public.assistant_voice_settings WHERE id=1");
+const settings = async (): Promise<Row | undefined> => {
+  const s = await one(
+    db,
+    "SELECT * FROM public.assistant_voice_settings WHERE id=1",
+  );
+  if (!s) return s;
+  const profiles = {
+    openrouter: {
+      model: s.model,
+      voice: s.voice,
+      apiKeyConfigured: !!s.api_key_encrypted,
+      verifiedAt: s.verified_at,
+    },
+    qwen: {
+      model: qwenDictationModel,
+      voice: s.qwen_voice || "Serena",
+      apiKeyConfigured: !!s.qwen_api_key_encrypted,
+      verifiedAt: s.qwen_verified_at || null,
+      workspaceId: s.qwen_workspace_id || "",
+    },
+  };
+  return s.provider === "qwen"
+    ? {
+        ...s,
+        profiles,
+        model: qwenDictationModel,
+        voice: s.qwen_voice,
+        api_key_encrypted: s.qwen_api_key_encrypted,
+        verified_at: s.qwen_verified_at,
+        error_note: s.qwen_error_note,
+      }
+    : { ...s, profiles };
+};
 const canManage = (c: Context) =>
   Boolean(
     c.actor.roleCodes?.includes("SUPER_ADMIN") &&
@@ -36,7 +75,7 @@ const canManage = (c: Context) =>
   );
 function requireManager(c: Context) {
   if (!canManage(c))
-    fail("FORBIDDEN", "仅有经营分析管理权限的超级管理员可配置 GPT 语音", 403);
+    fail("FORBIDDEN", "仅有经营分析管理权限的超级管理员可配置语音服务", 403);
 }
 function publicSettings(
   c: Context,
@@ -44,6 +83,16 @@ function publicSettings(
   assistantReady = false,
 ): AssistantVoiceStatus {
   return {
+    ...(canManage(c)
+      ? {
+          provider: s.provider || "openrouter",
+          profiles: s.profiles,
+          speechModel: s.provider === "qwen" ? qwenSpeechModel : s.model,
+          ...(s.provider === "qwen"
+            ? { workspaceId: s.qwen_workspace_id }
+            : {}),
+        }
+      : {}),
     ready: Boolean(
       s.enabled &&
       s.api_key_encrypted &&
@@ -74,9 +123,41 @@ export async function saveVoiceSettings(c: Context, input: unknown) {
   const b = parse(voiceSettingsSchema, input);
   if ((b.apiKey || b.enabled) && !encryptionReady())
     fail("VOICE_ENCRYPTION", "服务器尚未配置凭据加密密钥", 503);
+  if (b.provider === "qwen") {
+    const shared = b.useRealtimeCredentials
+      ? await one(
+          db,
+          "SELECT qwen_api_key_encrypted,qwen_workspace_id FROM public.assistant_realtime_settings WHERE id=1",
+        )
+      : undefined;
+    if (
+      b.useRealtimeCredentials &&
+      (!shared?.qwen_api_key_encrypted || !shared.qwen_workspace_id)
+    )
+      fail("VOICE_KEY_MISSING", "尚未保存可复用的千问实时语音连接", 400);
+    const workspace = shared?.qwen_workspace_id || b.workspaceId;
+    const encrypted =
+      shared?.qwen_api_key_encrypted ||
+      (b.apiKey ? encryptSecret(b.apiKey) : null);
+    const updated = await one(
+      db,
+      `UPDATE public.assistant_voice_settings SET provider='qwen',enabled=$2,qwen_voice=$3,qwen_workspace_id=$4,
+      qwen_api_key_encrypted=CASE WHEN $5 THEN NULL WHEN $6::text IS NOT NULL THEN $6 ELSE qwen_api_key_encrypted END,
+      qwen_verified_at=CASE WHEN $5 OR $6::text IS NOT NULL OR qwen_voice<>$3 OR qwen_workspace_id<>$4 THEN NULL ELSE qwen_verified_at END,
+      qwen_error_note='',version=version+1,updated_at=now() WHERE id=1 AND version=$1 RETURNING id`,
+      b.version,
+      b.clearKey ? false : b.enabled,
+      b.voice,
+      workspace,
+      b.clearKey,
+      encrypted,
+    );
+    if (!updated) fail("VERSION_CONFLICT", "语音设置已更新，请刷新后重试", 409);
+    return readVoiceStatus(c);
+  }
   const s = await one(
     db,
-    `UPDATE public.assistant_voice_settings SET enabled=$2,model=$3,voice=$4,
+    `UPDATE public.assistant_voice_settings SET provider='openrouter',enabled=$2,model=$3,voice=$4,
     api_key_encrypted=CASE WHEN $5 THEN NULL WHEN $6::text IS NOT NULL THEN $6 ELSE api_key_encrypted END,
     verified_at=CASE WHEN $5 OR $6::text IS NOT NULL OR model<>$3 OR voice<>$4 THEN NULL ELSE verified_at END,
     error_note='',version=version+1,updated_at=now() WHERE id=1 AND version=$1 RETURNING id`,
@@ -126,26 +207,39 @@ async function request(
   feature: "voice_audio" | "browser_dictation" = "voice_audio",
 ) {
   signal.throwIfAborted();
-  const response = await aiFetch(feature, endpoint, {
-    method: "POST",
-    redirect: "error",
-    signal: AbortSignal.any([signal, AbortSignal.timeout(90000)]),
-    headers: {
-      Authorization: `Bearer ${decryptSecret(s.api_key_encrypted)}`,
-      "Content-Type": "application/json",
-      "X-Title": "XUTI Voice",
-    },
-    body: JSON.stringify({
-      model: s.model,
-      provider: {
-        allow_fallbacks: false,
-        require_parameters: true,
-        data_collection: "deny",
+  const qwen = s.provider === "qwen";
+  const response = await aiFetch(
+    feature,
+    qwen
+      ? `${qwenAudioBase(s.qwen_workspace_id)}/compatible-mode/v1/chat/completions`
+      : endpoint,
+    {
+      method: "POST",
+      redirect: "error",
+      signal: AbortSignal.any([signal, AbortSignal.timeout(90000)]),
+      headers: {
+        Authorization: `Bearer ${decryptSecret(s.api_key_encrypted)}`,
+        "Content-Type": "application/json",
+        "X-Title": "XUTI Voice",
       },
-      ...body,
-    }),
-  });
-  if (!response.ok) fail("VOICE_PROVIDER", providerError(response.status), 502);
+      body: JSON.stringify({
+        model: s.model,
+        ...(qwen
+          ? { reasoning_effort: "none" }
+          : {
+              provider: {
+                allow_fallbacks: false,
+                require_parameters: true,
+                data_collection: "deny",
+              },
+            }),
+        ...body,
+      }),
+    },
+  );
+  if (qwen) await checkQwenAudioResponse(response);
+  else if (!response.ok)
+    fail("VOICE_PROVIDER", providerError(response.status), 502);
   return response;
 }
 function checkModel(actual: unknown, configured: string) {
@@ -206,7 +300,13 @@ async function transcribe(
           content: [
             {
               type: "input_audio",
-              input_audio: { data: audio, format: "wav" },
+              input_audio: {
+                data:
+                  s.provider === "qwen"
+                    ? `data:audio/wav;base64,${audio}`
+                    : audio,
+                format: "wav",
+              },
             },
           ],
         },
@@ -217,7 +317,7 @@ async function transcribe(
   );
   const data = (await response.json()) as Row;
   if (data.error)
-    fail("VOICE_PROVIDER", "音频识别失败，请检查 OpenRouter 模型状态", 502);
+    fail("VOICE_PROVIDER", "音频识别失败，请检查当前模型服务状态", 502);
   checkModel(data.model, s.model);
   const text = data.choices?.[0]?.message?.content?.trim();
   if (
@@ -236,6 +336,7 @@ export async function streamVoiceSpeech(
   signal: AbortSignal,
   emit: (event: VoiceEvent) => void,
 ) {
+  if (s.provider === "qwen") return streamQwenSpeech(s, text, signal, emit);
   const response = await request(
     s,
     {
@@ -319,7 +420,7 @@ export async function verifyVoiceSettings(c: Context) {
   requireManager(c);
   const s = (await settings())!;
   if (!s.api_key_encrypted || !encryptionReady())
-    fail("VOICE_KEY_MISSING", "请先保存 OpenRouter API Key", 400);
+    fail("VOICE_KEY_MISSING", "请先保存当前语音服务的 API Key", 400);
   const chunks: Buffer[] = [];
   let note = "";
   try {
@@ -332,12 +433,19 @@ export async function verifyVoiceSettings(c: Context) {
           chunks.push(Buffer.from(event.data, "base64"));
       },
     );
+    if (s.provider === "qwen") {
+      const sample = pcmToVoiceWav(Buffer.concat(chunks));
+      validateVoiceWav(sample);
+      await transcribe(s, sample, AbortSignal.timeout(45000));
+    }
   } catch (e) {
     note = voiceSafeError(e);
   }
   const updated = await one(
     db,
-    "UPDATE public.assistant_voice_settings SET verified_at=CASE WHEN $2='' THEN now() ELSE NULL END,error_note=$2 WHERE id=1 AND version=$1 RETURNING id",
+    s.provider === "qwen"
+      ? "UPDATE public.assistant_voice_settings SET qwen_verified_at=CASE WHEN $2='' THEN now() ELSE NULL END,qwen_error_note=$2 WHERE id=1 AND version=$1 RETURNING id"
+      : "UPDATE public.assistant_voice_settings SET verified_at=CASE WHEN $2='' THEN now() ELSE NULL END,error_note=$2 WHERE id=1 AND version=$1 RETURNING id",
     s.version,
     note,
   );
@@ -433,7 +541,7 @@ export async function runVoiceDictation(
 function spokenText(text: string) {
   text = assistantPublicText(text);
   return text.length > 600
-    ? text.slice(0, 600) + "。完整内容请查看互动对话。"
+    ? text.slice(0, 584) + "。完整内容请查看互动对话。"
     : text;
 }
 export async function runVoiceSpeech(

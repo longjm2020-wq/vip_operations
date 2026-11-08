@@ -1,4 +1,8 @@
 import { z } from "zod";
+import {
+  qwenDictationModel,
+  qwenSpeechModel,
+} from "../../../packages/contracts/src/assistant-voice.js";
 import { db, one, rows } from "../../../packages/database/src/index.js";
 import {
   aiFeatures,
@@ -11,7 +15,14 @@ import {
   qwenRealtimeModel,
 } from "../../../packages/contracts/src/assistant-realtime.js";
 import { aigcModelManagement } from "../../../packages/aigc-engine/model-management.mjs";
-import { audit, command, fail, parse, requirePermission, type Context } from "./core.js";
+import {
+  audit,
+  command,
+  fail,
+  parse,
+  requirePermission,
+  type Context,
+} from "./core.js";
 import { requireAIConfiguration } from "./modules/analytics/ai.js";
 import { encryptionReady } from "./modules/analytics/secrets.js";
 import {
@@ -31,6 +42,7 @@ export const emptyAiUsage = (): AiFeatureUsage => ({
   failed: 0,
   unknown: 0,
   inputTokens: null,
+  inputCharacters: null,
   outputTokens: null,
   totalTokens: null,
   amounts: [],
@@ -103,7 +115,9 @@ export async function aiModelManagement(
     ),
     one(
       db,
-      "SELECT enabled,model,api_key_encrypted IS NOT NULL AS configured,verified_at,updated_at FROM public.assistant_voice_settings WHERE id=1",
+      `SELECT enabled,provider,model,api_key_encrypted IS NOT NULL AS configured,verified_at,updated_at,
+      qwen_api_key_encrypted IS NOT NULL AS qwen_configured,qwen_verified_at,qwen_workspace_id
+      FROM public.assistant_voice_settings WHERE id=1`,
     ),
     one(
       db,
@@ -115,8 +129,8 @@ export async function aiModelManagement(
       db,
       `SELECT feature_id,count(*)::int AS requests,count(*) FILTER(WHERE status='success')::int AS succeeded,
       count(*) FILTER(WHERE status='failed')::int AS failed,
-      count(*) FILTER(WHERE total_tokens IS NULL AND input_tokens IS NULL AND output_tokens IS NULL AND amount IS NULL AND credits IS NULL)::int AS unknown,
-      sum(input_tokens)::text AS input,sum(output_tokens)::text AS output,sum(total_tokens)::text AS total,min(started_at) AS first
+      count(*) FILTER(WHERE total_tokens IS NULL AND input_tokens IS NULL AND output_tokens IS NULL AND input_characters IS NULL AND amount IS NULL AND credits IS NULL)::int AS unknown,
+      sum(input_tokens)::text AS input,sum(output_tokens)::text AS output,sum(total_tokens)::text AS total,sum(input_characters)::text AS characters,min(started_at) AS first
       FROM public.ai_model_usage WHERE $1::int=0 OR started_at>=now()-($1::int*interval '1 day') GROUP BY feature_id`,
       days,
     ),
@@ -165,6 +179,7 @@ export async function aiModelManagement(
           failed: u.failed,
           unknown: u.unknown,
           inputTokens: numeric(u.input),
+          inputCharacters: numeric(u.characters),
           outputTokens: numeric(u.output),
           totalTokens: numeric(u.total),
           amounts: amounts
@@ -214,7 +229,9 @@ export async function aiModelManagement(
       row.mode = "voice";
       const rt = feature.kind === "realtime";
       const s = rt ? realtime : voice;
-      const p = rt ? realtime?.provider || "openai" : "audio";
+      const p = rt
+        ? realtime?.provider || "openai"
+        : voice?.provider || "openrouter";
       const prefix = p === "qwen" ? "qwen_" : p === "doubao" ? "doubao_" : "";
       const configured = s?.[prefix + "configured"] && encryptionReady();
       const verified = s?.[prefix + "verified_at"];
@@ -224,21 +241,28 @@ export async function aiModelManagement(
           : p === "doubao"
             ? "豆包端到端实时语音 1.2.6.1"
             : realtimeModel
-        : s?.model || "未配置";
+        : p === "qwen"
+          ? feature.id === "browser_dictation"
+            ? qwenDictationModel
+            : `识别：${qwenDictationModel}；朗读：${qwenSpeechModel}`
+          : s?.model || "未配置";
       row.source = rt
         ? p === "qwen"
           ? "阿里云百炼 · 北京业务空间 / WebRTC"
           : p === "doubao"
             ? "火山引擎 · openspeech.bytedance.com"
             : "OpenAI · api.openai.com"
-        : "OpenRouter · 独立音频密钥";
+        : p === "qwen"
+          ? "阿里云百炼 · 北京业务空间 / 音频识别与合成"
+          : "OpenRouter · 独立音频密钥";
       row.status = !s?.enabled
         ? "disabled"
         : !configured
           ? "unconfigured"
           : verified &&
               (p !== "qwen" ||
-                (s?.qwen_workspace_id && s?.qwen_free_only_confirmed)) &&
+                (s?.qwen_workspace_id &&
+                  (!rt || s?.qwen_free_only_confirmed))) &&
               (rt || feature.id === "browser_dictation" || readyKey)
             ? "ready"
             : "configured";
@@ -253,6 +277,9 @@ export async function aiModelManagement(
       if (rt)
         row.usageNote =
           "服务器可见的供应商回执才会计入。WebRTC 音频直连供应商，其 Token / 额度 / 费用请查供应商账单；本站未获得的账单为未知。";
+      else if (p === "qwen")
+        row.usageNote +=
+          " 千问识别记录 Token，朗读另外记录供应商返回的输入字符数；未返回的金额显示未知。";
       return row;
     }
     if (feature.group === "AIGC") {

@@ -90,6 +90,42 @@ const config = {
   voice: "coral",
   api_key_encrypted: "encrypted",
 };
+const qwenConfig = {
+  provider: "qwen",
+  model: "qwen3.8-omni-flash",
+  voice: "Serena",
+  api_key_encrypted: "qwen-encrypted",
+  qwen_workspace_id: "ws-test",
+};
+const qwenSpeech = (finish = true) =>
+  new Response(
+    new ReadableStream({
+      start(controller) {
+        const pcm = Buffer.from(audio(), "base64")
+          .subarray(44)
+          .toString("base64");
+        const parts = [
+          { request_id: "qwen-tts-test", output: { audio: { data: pcm } } },
+          ...(finish
+            ? [
+                {
+                  request_id: "qwen-tts-test",
+                  output: { finish_reason: "stop", audio: { data: "" } },
+                  usage: { characters: 8, input_tokens: 0, output_tokens: 0 },
+                },
+              ]
+            : []),
+        ];
+        const bytes = new TextEncoder().encode(
+          parts.map((p) => `data: ${JSON.stringify(p)}\n\n`).join(""),
+        );
+        for (let i = 0; i < bytes.length; i += 137)
+          controller.enqueue(bytes.slice(i, i + 137));
+        controller.close();
+      },
+    }),
+    { headers: { "content-type": "text/event-stream" } },
+  );
 const speech = (model = "openai/gpt-audio") =>
   new Response(
     new ReadableStream({
@@ -113,6 +149,15 @@ beforeAll(async () => {
       "packages/database/migrations/082_assistant_voice.sql",
       "utf8",
     ),
+  );
+  await fixture.database.exec(
+    await readFile(
+      "packages/database/migrations/092_qwen_segmented_voice.sql",
+      "utf8",
+    ),
+  );
+  await fixture.database.exec(
+    "CREATE TABLE assistant_realtime_settings(id int PRIMARY KEY,qwen_api_key_encrypted text,qwen_workspace_id text); INSERT INTO assistant_realtime_settings VALUES(1,'existing-qwen-key','ws-test')",
   );
 });
 beforeEach(async () => {
@@ -138,7 +183,7 @@ beforeEach(async () => {
     ],
   });
   await fixture.database!.exec(
-    "TRUNCATE assistant_voice_requests; UPDATE assistant_voice_settings SET enabled=true,model='openai/gpt-audio',voice='coral',api_key_encrypted='encrypted',verified_at=now(),version=0,error_note='' WHERE id=1",
+    "TRUNCATE assistant_voice_requests; UPDATE assistant_voice_settings SET provider='openrouter',qwen_api_key_encrypted=NULL,qwen_verified_at=NULL,qwen_error_note='',qwen_workspace_id='',qwen_voice='Serena',enabled=true,model='openai/gpt-audio',voice='coral',api_key_encrypted='encrypted',verified_at=now(),version=0,error_note='' WHERE id=1",
   );
   vi.stubGlobal(
     "fetch",
@@ -523,5 +568,222 @@ describe("OpenRouter GPT voice", () => {
     expect(failed.error).toContain("额度");
     expect(JSON.stringify(failed)).not.toContain("test-secret");
     expect(voiceSafeError(Error("secret"))).not.toContain("secret");
+  });
+});
+
+describe("Qwen segmented speech and dictation", () => {
+  const saveQwen = () =>
+    saveVoiceSettings(actor(true), {
+      version: 0,
+      enabled: true,
+      provider: "qwen",
+      model: "qwen3.8-omni-flash",
+      voice: "Serena",
+      useRealtimeCredentials: true,
+    });
+  it("copies the existing Beijing credential on the server and preserves the other profile", async () => {
+    const status = await saveQwen();
+    expect(status).toMatchObject({
+      provider: "qwen",
+      model: "qwen3.8-omni-flash",
+      speechModel: "qwen3-tts-flash",
+      workspaceId: "ws-test",
+      apiKeyConfigured: true,
+      verifiedAt: null,
+      ready: false,
+    });
+    expect(JSON.stringify(status)).not.toMatch(
+      /existing-qwen-key|encrypted|test-secret/,
+    );
+    const row = (
+      await fixture.database!.query("SELECT * FROM assistant_voice_settings")
+    ).rows[0] as Record<string, unknown>;
+    expect(row.api_key_encrypted).toBe("encrypted");
+    expect(row.qwen_api_key_encrypted).toBe("existing-qwen-key");
+    expect(fetch).not.toHaveBeenCalled();
+    const restored = await saveVoiceSettings(actor(true), {
+      version: 1,
+      enabled: true,
+      model: "openai/gpt-audio",
+      voice: "coral",
+    });
+    expect(restored).toMatchObject({ provider: "openrouter", ready: true });
+  });
+  it("rejects a mismatched provider credential or unsupported voice before making requests", async () => {
+    for (const change of [
+      { apiKey: "sk-or-this-key-is-for-openrouter" },
+      { voice: "coral" },
+      { workspaceId: "https://evil.example" },
+    ]) {
+      await expect(
+        saveVoiceSettings(actor(true), {
+          version: 0,
+          enabled: true,
+          provider: "qwen",
+          model: "qwen3.8-omni-flash",
+          voice: "Serena",
+          workspaceId: "ws-test",
+          ...change,
+        }),
+      ).rejects.toThrow();
+    }
+    await expect(
+      saveVoiceSettings(actor(), {
+        version: 0,
+        enabled: true,
+        provider: "qwen",
+        model: "qwen3.8-omni-flash",
+        voice: "Serena",
+        useRealtimeCredentials: true,
+      }),
+    ).rejects.toThrow();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+  it("routes unsent dictation to the exact Omni model, without thinking or business tools", async () => {
+    await saveQwen();
+    await fixture.database!.exec(
+      "UPDATE assistant_voice_settings SET qwen_verified_at=now()",
+    );
+    vi.mocked(fetch).mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          model: "qwen3.8-omni-flash",
+          choices: [
+            {
+              finish_reason: "stop",
+              message: { content: "查询商品 A123 库存" },
+            },
+          ],
+          usage: { prompt_tokens: 20, completion_tokens: 5, total_tokens: 25 },
+        }),
+      ),
+    );
+    expect(
+      await runVoiceDictation(
+        actor(),
+        { id: randomUUID(), audio: audio() },
+        new AbortController().signal,
+      ),
+    ).toEqual({ text: "查询商品 A123 库存" });
+    const [url, init] = vi.mocked(fetch).mock.calls[0];
+    expect(url).toBe(
+      "https://ws-test.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions",
+    );
+    const body = JSON.parse(String(init?.body));
+    expect(body).toMatchObject({
+      model: "qwen3.8-omni-flash",
+      stream: false,
+      modalities: ["text"],
+      reasoning_effort: "none",
+    });
+    expect(body.provider).toBeUndefined();
+    expect(body.messages[1].content[0].input_audio.data).toBe(
+      "data:audio/wav;base64," + audio(),
+    );
+    expect(fixture.send).not.toHaveBeenCalled();
+    const rows = await fixture.database!.query(
+      "SELECT source,model,total_tokens FROM ai_model_usage WHERE feature_id='browser_dictation' ORDER BY started_at DESC LIMIT 1",
+    );
+    expect(rows.rows[0]).toMatchObject({
+      source: "ws-test.cn-beijing.maas.aliyuncs.com",
+      model: "qwen3.8-omni-flash",
+      total_tokens: "25",
+    });
+  });
+  it("streams fragmented PCM and records actual characters without inventing a returned model or money", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(qwenSpeech());
+    const events: VoiceEvent[] = [];
+    await streamVoiceSpeech(
+      qwenConfig,
+      "你好，我是小序。",
+      new AbortController().signal,
+      (e) => events.push(e),
+    );
+    expect(events.some((e) => e.type === "audio")).toBe(true);
+    const [url, init] = vi.mocked(fetch).mock.calls[0];
+    expect(url).toBe(
+      "https://ws-test.cn-beijing.maas.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation",
+    );
+    expect(JSON.parse(String(init?.body))).toEqual({
+      model: "qwen3-tts-flash",
+      input: {
+        text: "你好，我是小序。",
+        voice: "Serena",
+        language_type: "Auto",
+      },
+    });
+    const receipt = (
+      await fixture.database!.query(
+        "SELECT input_characters,amount,response_model,status FROM ai_model_usage WHERE provider_request_id='qwen-tts-test'",
+      )
+    ).rows[0];
+    expect(receipt).toMatchObject({
+      input_characters: "8",
+      amount: null,
+      response_model: null,
+      status: "responded",
+    });
+  });
+  it("verifies both synthesis and recognition before enabling the connection", async () => {
+    await saveQwen();
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(qwenSpeech())
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            model: "qwen3.8-omni-flash",
+            choices: [
+              {
+                finish_reason: "stop",
+                message: { content: "你好，我是小序。" },
+              },
+            ],
+          }),
+        ),
+      );
+    const result = await verifyVoiceSettings(actor(true));
+    expect(result.ready).toBe(true);
+    expect(result.verifiedAt).toBeTruthy();
+    expect(result.sample).toBeTruthy();
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(fixture.send).not.toHaveBeenCalled();
+  });
+  it("leaves the connection unverified when recognition fails after successful synthesis", async () => {
+    await saveQwen();
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(qwenSpeech())
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            code: "AllocationQuota.FreeTierOnly",
+            message: "secret provider detail",
+          }),
+          { status: 403 },
+        ),
+      );
+    const result = await verifyVoiceSettings(actor(true));
+    expect(result.ready).toBe(false);
+    expect(result.verifiedAt).toBeNull();
+    expect(result.sample).toBeNull();
+    expect(result.error).toContain("免费额度");
+    expect(JSON.stringify(result)).not.toContain("secret provider detail");
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+  it("rejects truncated audio and honors cancellation without switching providers", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(qwenSpeech(false));
+    await expect(
+      streamVoiceSpeech(
+        qwenConfig,
+        "你好",
+        new AbortController().signal,
+        () => {},
+      ),
+    ).rejects.toThrow();
+    const cancel = new AbortController();
+    cancel.abort();
+    await expect(
+      streamVoiceSpeech(qwenConfig, "你好", cancel.signal, () => {}),
+    ).rejects.toThrow();
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
 });

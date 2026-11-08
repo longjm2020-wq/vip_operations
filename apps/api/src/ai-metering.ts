@@ -16,6 +16,7 @@ const number = (value: unknown): number | null =>
 const text = (value: unknown, limit = 200) =>
   typeof value === "string" ? value.slice(0, limit) : null;
 type Receipt = {
+  characters: number | null;
   input: number | null;
   output: number | null;
   total: number | null;
@@ -61,6 +62,7 @@ export function providerUsage(payload: unknown, source: string): Receipt {
             : null;
   const credits = number(usage.credits ?? usage.points);
   return {
+    characters: number(usage.characters),
     input,
     output,
     total:
@@ -76,6 +78,9 @@ export function providerUsage(payload: unknown, source: string): Receipt {
     ),
     failed:
       !!response.error ||
+      (source.endsWith(".maas.aliyuncs.com") &&
+        (Boolean(response.code) ||
+          Number(response.status_code || 200) >= 400)) ||
       response.status === "failed" ||
       response.state === "failed" ||
       (typeof response.code === "number" && ![0, 200].includes(response.code)),
@@ -128,7 +133,7 @@ async function finish(
   await db.$queryRawUnsafe(
     `UPDATE public.ai_model_usage SET status=$2,response_model=$3,
     input_tokens=COALESCE($4,input_tokens),output_tokens=COALESCE($5,output_tokens),total_tokens=COALESCE($6,total_tokens),amount=COALESCE($7,amount),amount_unit=COALESCE($8,amount_unit),credits=COALESCE($9,credits),credit_unit=COALESCE($10,credit_unit),
-    provider_request_id=COALESCE($11,provider_request_id),
+    provider_request_id=COALESCE($11,provider_request_id),input_characters=COALESCE($12,input_characters),
     completed_at=now() WHERE id=$1::uuid`,
     id,
     value.failed ? "failed" : confirmed ? "success" : "responded",
@@ -141,6 +146,7 @@ async function finish(
     value.credits,
     value.creditUnit,
     value.requestId,
+    value.characters,
   );
 }
 
@@ -241,13 +247,20 @@ export async function aiFetch(
       try {
         const event = JSON.parse(line.slice(5));
         const value = event.response || event;
-        if (value.model || value.id)
+        if (value.model || value.id || value.request_id)
           seen = {
             ...seen,
             ...(value.model ? { model: value.model } : {}),
             ...(value.id ? { id: value.id } : {}),
+            ...(value.request_id ? { request_id: value.request_id } : {}),
           };
-        if (value.usage || value.error || value.status === "failed")
+        if (
+          value.usage ||
+          value.error ||
+          value.status === "failed" ||
+          (source.endsWith(".maas.aliyuncs.com") &&
+            (value.code || Number(value.status_code || 200) >= 400))
+        )
           receipt = { ...((receipt as object) || {}), ...seen, ...value };
       } catch {
         /* Incomplete or non-JSON event; never infer usage. */

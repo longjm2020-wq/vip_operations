@@ -1883,7 +1883,7 @@ test("未就绪不录音，设置保存不回显，验证后从设置直接回�
   await bubble.getByRole("button", { name: "语音设置", exact: true }).click();
   const dialog = page.getByRole("dialog");
   await dialog.getByText("原有分段语音与朗读设置", { exact: true }).click();
-  await dialog.getByRole("switch", { name: "启用 GPT 语音" }).click();
+  await dialog.getByRole("switch", { name: "启用分段语音与听写" }).click();
   await dialog
     .getByLabel("OpenRouter API Key", { exact: true })
     .fill("sk-or-test-only-never-real-secret");
