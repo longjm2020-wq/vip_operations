@@ -368,6 +368,17 @@ test("聊天中选择团队并展示交付，切回普通模型继续追问且�
   await expect(card.getByRole("heading", { name: "任务结果" })).toBeVisible({
     timeout: 10000,
   });
+  await expect(
+    card.getByText("已整理活动文案，请核对交付内容。", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    card.getByRole("article", { name: "交付：活动文案交付" }),
+  ).toBeHidden();
+  await card.locator("details > summary").click();
+  await expect(
+    card.getByRole("article", { name: "交付：活动文案交付" }),
+  ).toBeVisible();
+  await card.locator("details > summary").click();
   await panel.getByRole("button", { name: "选择对话模型" }).click();
   await page.getByRole("menuitem", { name: /通用助手/ }).click();
   await panel.locator("textarea").fill("把刚才的结果概括为两点");
@@ -488,6 +499,7 @@ test("团队任务提交附件与明确模型，按后台轮询验收版本并�
   await expect(panel.getByText("验收与归档完成", { exact: true })).toBeVisible({
     timeout: 10000,
   });
+  await panel.locator(".assistant-team-message > details > summary").click();
   await expect(panel.getByText("第 2 版", { exact: false })).toBeVisible();
   await expect(panel.getByText("已验收归档", { exact: true })).toBeVisible();
   await selectAssistantPanel(page, "团队设置");

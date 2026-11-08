@@ -3,6 +3,7 @@ import { Alert, App, Button, Spin, Tag } from "antd";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./api";
 import { useUser } from "./shared";
+import { AgentFileLink } from "./assistant-agent-panel";
 import { ArtifactCard, teamActive, teamRunsKey } from "./assistant-team-panel";
 import type { TeamRun } from "../../../packages/contracts/src/assistant-team";
 
@@ -45,6 +46,13 @@ export function AssistantTeamMessage({ id }: { id: string }) {
     }
   };
   const value = run.data;
+  const files = [
+    ...new Map(
+      value?.artifacts.flatMap((artifact) =>
+        artifact.files.map((file) => [file.id, file] as const),
+      ),
+    ).values(),
+  ];
   return (
     <article className="assistant-team-message" aria-label="对话中的团队任务">
       <div className="team-card-heading">
@@ -101,12 +109,17 @@ export function AssistantTeamMessage({ id }: { id: string }) {
             value.artifacts.some((artifact) => artifact.status === "DRAFT") && (
               <p className="team-meta">结果已返回，尚未经过本站独立验收。</p>
             )}
-          {value.artifacts.map((artifact) => (
-            <ArtifactCard key={artifact.id} artifact={artifact} />
+          {files.map((file) => (
+            <AgentFileLink key={file.id} file={file} preview />
           ))}
-          {(value.plan || value.steps.length > 0) && (
+          {(value.plan ||
+            value.steps.length > 0 ||
+            value.artifacts.length > 0) && (
             <details>
               <summary>执行详情</summary>
+              {value.artifacts.map((artifact) => (
+                <ArtifactCard key={artifact.id} artifact={artifact} />
+              ))}
               {value.plan && <p className="team-prose">{value.plan}</p>}
               <ol className="team-steps">
                 {value.steps.map((step) => (
