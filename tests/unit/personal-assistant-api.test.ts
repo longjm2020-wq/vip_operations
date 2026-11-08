@@ -172,7 +172,7 @@ let calls: Row[];
 beforeAll(async () => {
   fixture.database = new PGlite();
   await fixture.database.exec(
-    "CREATE TABLE users(id bigint PRIMARY KEY); INSERT INTO users VALUES(7),(8); CREATE TABLE compass_ai_settings(id int PRIMARY KEY,enabled boolean,api_key_encrypted text,verified_at timestamptz); INSERT INTO compass_ai_settings VALUES(1,true,'test-only',now()); CREATE TABLE idempotency_records(id bigserial PRIMARY KEY,actor_id bigint,operation text,idempotency_key text,request_hash text,response_status int,response_body jsonb,created_at timestamptz DEFAULT now(),updated_at timestamptz DEFAULT now());",
+    "CREATE TABLE users(id bigint PRIMARY KEY); INSERT INTO users VALUES(7),(8); CREATE TABLE compass_ai_settings(id int PRIMARY KEY,enabled boolean,api_key_encrypted text,verified_at timestamptz,updated_at timestamptz NOT NULL DEFAULT now()); INSERT INTO compass_ai_settings(id,enabled,api_key_encrypted,verified_at) VALUES(1,true,'test-only',now()); CREATE TABLE idempotency_records(id bigserial PRIMARY KEY,actor_id bigint,operation text,idempotency_key text,request_hash text,response_status int,response_body jsonb,created_at timestamptz DEFAULT now(),updated_at timestamptz DEFAULT now());",
   );
   await installAiManagementSchema(fixture.database);
   for (const name of [
@@ -1293,6 +1293,15 @@ describe("private personal assistant", () => {
         calls.push(JSON.parse(String(init?.body)));
         return provider(reply, returnedModel);
       }),
+    );
+    expect(
+      (await publicAgentCatalog()).models.some(
+        (model) => model.name === "快速问答",
+      ),
+    ).toBe(false);
+    await fixture.database!.query(
+      "INSERT INTO ai_model_usage(id,feature_id,source,model,response_model,status,completed_at) VALUES($1::uuid,'assistant_chat','openrouter.ai',$2,$3,'success',now())",
+      [randomUUID(), flashId, returnedModel],
     );
     const catalog = await publicAgentCatalog();
     const quick = catalog.models.find((m) => m.name === "快速问答")!;
