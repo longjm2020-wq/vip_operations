@@ -42,16 +42,17 @@ export const aiFeatures = [
   },
   {
     id: "assistant_team",
-    name: "网站原有智能体团队",
+    name: "智能体团队",
     group: "团队",
     href: "/my-workspace?assistant=team",
     boundary:
-      "从多模态对话目录选型并按步骤组织任务与验收；任务或成员指定型号优先于管理页默认值。",
+      "统一使用网站团队，支持公开研究、办公文档及已配置的图片视频工具，按步骤独立验收与归档；任务或成员指定型号优先于管理页默认值。",
     kind: "team",
   },
   {
+    // Retained for historical runs, model gateway routing and metering only.
     id: "deerflow_team",
-    name: "DeerFlow 智能体团队",
+    name: "DeerFlow 历史团队",
     group: "团队",
     href: "/my-workspace?assistant=chat",
     boundary:

@@ -272,6 +272,94 @@ it("tracks H3 by task id without inventing tokens or currency and does not doubl
     amounts: [],
   });
 });
+it("merges historical team usage by period and currency without verifying the current team from legacy calls", async () => {
+  await fixture.db!.exec(`
+    INSERT INTO ai_model_usage(id,feature_id,source,model,response_model,status,input_tokens,output_tokens,total_tokens,credits,credit_unit,amount,amount_unit,completed_at) VALUES
+    (gen_random_uuid(),'deerflow_team','openrouter.ai','legacy/model','legacy/model','success',4,6,10,2,'OpenRouter credits',0.2,'USD',now()+interval '1 second');
+    INSERT INTO ai_model_usage(id,feature_id,source,status,started_at,completed_at) VALUES
+    (gen_random_uuid(),'deerflow_team','openrouter.ai','failed',now()-interval '1 hour',now()-interval '1 hour');
+    INSERT INTO ai_model_usage(id,feature_id,source,status,total_tokens,started_at,completed_at) VALUES
+    (gen_random_uuid(),'deerflow_team','openrouter.ai','success',1000,now()-interval '200 days',now()-interval '200 days');
+  `);
+  const read = async (days = 30) =>
+    (await aiModelManagement(admin(), { days })).features.find(
+      (f) => f.id === "assistant_team",
+    )!;
+  const legacyOnly = await read();
+  expect(legacyOnly.status).toBe("configured");
+  expect(legacyOnly.usage).toMatchObject({
+    requests: 2,
+    succeeded: 1,
+    failed: 1,
+    unknown: 1,
+    totalTokens: 10,
+    lastModel: null,
+    lastSuccessAt: null,
+  });
+  expect(legacyOnly.usageNote).toContain("历史 DeerFlow");
+  await fixture.db!.exec(`
+    INSERT INTO ai_model_usage(id,feature_id,source,model,status,input_tokens,output_tokens,total_tokens,credits,credit_unit,error_code,completed_at) VALUES
+    (gen_random_uuid(),'assistant_team','openrouter.ai','website/model','failed',2,3,5,1,'OpenRouter credits','PROVIDER_HTTP_503',now()+interval '1 second');
+  `);
+  const combined = await read();
+  expect(combined.status).toBe("configured");
+  expect(combined.statusText).toContain("最近调用失败");
+  expect(combined.usage).toMatchObject({
+    requests: 3,
+    succeeded: 1,
+    failed: 2,
+    unknown: 1,
+    inputTokens: 6,
+    outputTokens: 9,
+    totalTokens: 15,
+    lastModel: "website/model",
+    lastError: "PROVIDER_HTTP_503",
+    lastSuccessAt: null,
+  });
+  expect(combined.usage.amounts).toEqual(
+    expect.arrayContaining([
+      { unit: "OpenRouter credits", amount: 3 },
+      { unit: "USD", amount: 0.2 },
+    ]),
+  );
+  expect(combined.usage.amounts).toHaveLength(2);
+  expect((await read(0)).usage).toMatchObject({
+    requests: 4,
+    totalTokens: 1015,
+  });
+  expect(
+    await query(
+      "SELECT feature_id,count(*)::int AS n FROM ai_model_usage GROUP BY feature_id ORDER BY feature_id",
+    ),
+  ).toEqual([
+    { feature_id: "assistant_team", n: 1 },
+    { feature_id: "deerflow_team", n: 3 },
+  ]);
+});
+
+it("rejects editing the retired team default while retaining its binding for existing runs", async () => {
+  await fixture.db!.query(
+    "INSERT INTO ai_feature_models(feature_id,model_ref,revision) VALUES('deerflow_team',$1,4)",
+    [modelRef(vision)],
+  );
+  await expect(
+    saveAiFeatureModel(admin(), {
+      feature: "deerflow_team",
+      model: "",
+      revision: 4,
+    }),
+  ).rejects.toMatchObject(errorCode("AI_FEATURE_RETIRED"));
+  expect(
+    await query(
+      "SELECT model_ref,revision FROM ai_feature_models WHERE feature_id='deerflow_team'",
+    ),
+  ).toEqual([{ model_ref: modelRef(vision), revision: 4 }]);
+  expect(
+    (await resolveTeamModel({ feature: "deerflow_team", orchestrator: true }))
+      .actual,
+  ).toBe(vision);
+});
+
 describe("connected models in the public chat menu", () => {
   const models = [
     { id: "engine/connected", actual: "google/connected" },
@@ -353,7 +441,10 @@ describe("AI model administration and real routing", () => {
   });
   it("registers all actual capabilities, exposes safe API sources and distinguishes unknown from zero", async () => {
     const view = await aiModelManagement(admin());
-    expect(view.features).toHaveLength(20);
+    expect(view.features).toHaveLength(19);
+    expect(view.features.filter((row) => row.group === "团队")).toMatchObject([
+      { id: "assistant_team", name: "智能体团队" },
+    ]);
     expect(view.features.find((f) => f.id === "compass_analysis")?.href).toBe(
       "/analytics/compass",
     );

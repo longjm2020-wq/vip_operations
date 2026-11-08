@@ -30,7 +30,8 @@ async function fixture(page: Page, superAdmin = true) {
     lastModel: null,
     lastError: null,
   };
-  const features: AiManagementRow[] = aiFeatures.map((f) => ({
+  const currentFeatures = aiFeatures.filter((f) => f.id !== "deerflow_team");
+  const features: AiManagementRow[] = currentFeatures.map((f) => ({
     ...f,
     model: f.kind === "fixed" ? "浏览器服务" : "openai/gpt-6.1-sol",
     selection: "",
@@ -313,7 +314,7 @@ test("management lists actual sources, persists a per-feature model and filters 
   await expect(
     page.getByRole("heading", { name: "AI 模型管理", exact: true }),
   ).toBeVisible();
-  await expect(page.locator("tr[data-row-key]")).toHaveCount(20);
+  await expect(page.locator("tr[data-row-key]")).toHaveCount(19);
   await expect(page.getByText("已配置；当前型号待验证").first()).toBeVisible();
   await page.getByRole("combobox", { name: "小序互动对话的默认模型" }).click();
   await page.getByText("视觉模型 B", { exact: true }).click();
@@ -323,6 +324,12 @@ test("management lists actual sources, persists a per-feature model and filters 
   await expect(
     page.getByText("provider/vision-b", { exact: true }),
   ).toBeVisible();
+  await expect(
+    page
+      .locator('tr[data-row-key="assistant_team"]')
+      .getByText("智能体团队", { exact: true }),
+  ).toBeVisible();
+  await expect(page.locator('tr[data-row-key="deerflow_team"]')).toHaveCount(0);
   await page.getByRole("textbox", { name: "搜索 AI 功能" }).fill("商品");
   await expect(page.locator("tr[data-row-key]")).toHaveCount(2);
   await expect(page.getByText("积分 / 金额：未知").first()).toBeVisible();

@@ -194,48 +194,69 @@ describe("assistant team storage and owner boundaries", () => {
     );
     expect(await listTeamRuns(actor())).toEqual([]);
   });
-  it("snapshots the remote engine while preserving owner isolation and hiding connection secrets", async () => {
+  it("uses the website team for new work even when legacy remote service variables remain", async () => {
     vi.stubEnv("DEER_FLOW_URL", "http://deerflow.railway.internal:8001");
-    vi.stubEnv("DEER_FLOW_INTERNAL_AUTH_TOKEN", "test-internal-token");
-    vi.stubEnv("DEER_FLOW_MODEL_PROXY_TOKEN", "a".repeat(64));
-    await f.db!.exec("UPDATE compass_ai_settings SET enabled=false");
-    expect(await readAssistantTeam(actor())).toMatchObject({
-      engine: "deerflow",
-      ready: false,
-    });
-    await f.db!.exec("UPDATE compass_ai_settings SET enabled=true");
-    expect(await readAssistantTeam(actor())).toMatchObject({
-      engine: "deerflow",
-      ready: true,
-      models: [],
-    });
-    const input = body();
-    const run = await createTeamRun(actor(), input);
-    expect(run).toMatchObject({ engine: "deerflow", status: "QUEUED" });
+    vi.stubEnv("DEER_FLOW_INTERNAL_AUTH_TOKEN", "");
+    vi.stubEnv("DEER_FLOW_MODEL_PROXY_TOKEN", "");
+    const config = await readAssistantTeam(actor());
+    expect(config).toMatchObject({ engine: "native", ready: true });
+    expect(config.models).not.toHaveLength(0);
+    expect(
+      await saveAssistantTeam(actor(), {
+        ...defaultTeamSettings(),
+        version: 0,
+      }),
+    ).toMatchObject({ engine: "native", version: 1 });
+    const run = await createTeamRun(actor(), body());
+    expect(run).toMatchObject({ engine: "native", status: "QUEUED" });
+    const saved = (
+      await f.db!.query<{ input: { engine: string } }>(
+        "SELECT input FROM personal_assistant_team_runs WHERE id=$1",
+        [run.id],
+      )
+    ).rows[0];
+    expect(saved.input.engine).toBe("native");
     expect(JSON.stringify(run)).not.toMatch(/internal-token|railway.internal/);
     await expect(readTeamRun(actor("8"), run.id)).rejects.toMatchObject(
       errorCode("NOT_FOUND"),
     );
     await expect(
-      saveAssistantTeam(actor(), { ...defaultTeamSettings(), version: 0 }),
-    ).rejects.toMatchObject(errorCode("TEAM_MANAGED"));
-    vi.stubEnv("DEER_FLOW_URL", "");
-    expect(await createTeamRun(actor(), input)).toMatchObject({
-      id: run.id,
-      engine: "deerflow",
-    });
-  });
-  it("does not silently fall back to the native executor when remote configuration is incomplete", async () => {
-    vi.stubEnv("DEER_FLOW_URL", "http://deerflow.railway.internal:8001");
-    vi.stubEnv("DEER_FLOW_INTERNAL_AUTH_TOKEN", "");
+      createTeamRun(actor(), { ...body(), model: "missing" }),
+    ).rejects.toMatchObject(errorCode("TEAM_MODEL_UNAVAILABLE"));
+    await f.db!.exec("UPDATE compass_ai_settings SET enabled=false");
     expect(await readAssistantTeam(actor())).toMatchObject({
-      engine: "deerflow",
+      engine: "native",
       ready: false,
     });
     await expect(createTeamRun(actor(), body())).rejects.toMatchObject(
       errorCode("TEAM_UNAVAILABLE"),
     );
-    expect(await listTeamRuns(actor())).toEqual([]);
+  });
+  it("retains legacy engine snapshots on read, retry and cancellation without creating new remote work", async () => {
+    const input = body();
+    const run = await createTeamRun(actor(), input);
+    await f.db!.query(
+      `UPDATE personal_assistant_team_runs SET input=jsonb_set(input,'{engine}','"deerflow"') WHERE id=$1`,
+      [run.id],
+    );
+    expect(await readTeamRun(actor(), run.id)).toMatchObject({
+      engine: "deerflow",
+    });
+    expect(await createTeamRun(actor(), input)).toMatchObject({
+      id: run.id,
+      engine: "deerflow",
+    });
+    expect(await listTeamRuns(actor())).toHaveLength(1);
+    await expect(readTeamRun(actor("8"), run.id)).rejects.toMatchObject(
+      errorCode("NOT_FOUND"),
+    );
+    expect(await cancelTeamRun(actor(), run.id)).toMatchObject({
+      canceled: true,
+    });
+    expect(await readTeamRun(actor(), run.id)).toMatchObject({
+      engine: "deerflow",
+      status: "CANCELED",
+    });
   });
   it("returns seven defaults and catalog metadata without persisting or exposing service secrets", async () => {
     const config = await readAssistantTeam(actor());

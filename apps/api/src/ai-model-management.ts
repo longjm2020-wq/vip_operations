@@ -30,7 +30,6 @@ import {
   agentModelCandidates,
   type AgentInternalModel,
 } from "./modules/workspace/agent-models.js";
-import { deerFlowConfigured } from "./modules/workspace/deerflow-client.js";
 import { engineConfig } from "./modules/aigc/config.js";
 
 const iso = (value: unknown) =>
@@ -133,19 +132,19 @@ export async function aiModelManagement(
     ),
     rows(
       db,
-      `SELECT feature_id,count(*)::int AS requests,count(*) FILTER(WHERE status='success')::int AS succeeded,
+      `SELECT CASE WHEN feature_id='deerflow_team' THEN 'assistant_team' ELSE feature_id END AS feature_id,count(*)::int AS requests,count(*) FILTER(WHERE status='success')::int AS succeeded,
       count(*) FILTER(WHERE status='failed')::int AS failed,
       count(*) FILTER(WHERE total_tokens IS NULL AND input_tokens IS NULL AND output_tokens IS NULL AND input_characters IS NULL AND input_video_seconds IS NULL AND output_video_seconds IS NULL AND billable_images IS NULL AND amount IS NULL AND credits IS NULL)::int AS unknown,
       sum(input_tokens)::text AS input,sum(output_tokens)::text AS output,sum(total_tokens)::text AS total,sum(input_characters)::text AS characters,sum(input_video_seconds)::text AS video_input,sum(output_video_seconds)::text AS video_output,sum(billable_images)::text AS billable_images,min(started_at) AS first
-      FROM public.ai_model_usage WHERE $1::int=0 OR started_at>=now()-($1::int*interval '1 day') GROUP BY feature_id`,
+      FROM public.ai_model_usage WHERE $1::int=0 OR started_at>=now()-($1::int*interval '1 day') GROUP BY 1`,
       days,
     ),
     rows(
       db,
-      `SELECT feature_id,unit,sum(value)::text AS amount FROM (
+      `SELECT CASE WHEN feature_id='deerflow_team' THEN 'assistant_team' ELSE feature_id END AS feature_id,unit,sum(value)::text AS amount FROM (
       SELECT feature_id,amount_unit AS unit,amount AS value,started_at FROM public.ai_model_usage WHERE amount IS NOT NULL
       UNION ALL SELECT feature_id,credit_unit AS unit,credits AS value,started_at FROM public.ai_model_usage WHERE credits IS NOT NULL
-      ) values_by_unit WHERE $1::int=0 OR started_at>=now()-($1::int*interval '1 day') GROUP BY feature_id,unit`,
+      ) values_by_unit WHERE $1::int=0 OR started_at>=now()-($1::int*interval '1 day') GROUP BY 1,unit`,
       days,
     ),
     rows(
@@ -178,7 +177,12 @@ export async function aiModelManagement(
     : !shared.configured || !encryptionReady()
       ? "unconfigured"
       : "configured";
-  const features: AiManagementRow[] = aiFeatures.map((feature) => {
+  // Historical DeerFlow usage joins the one current team row. Keep its latest
+  // receipt separate: it cannot verify the website team's current connection.
+  const currentFeatures = aiFeatures.filter(
+    (feature) => feature.id !== "deerflow_team",
+  );
+  const features: AiManagementRow[] = currentFeatures.map((feature) => {
     const binding = bindings.find((row) => row.feature_id === feature.id);
     const u = usageRows.find((row) => row.feature_id === feature.id);
     const last = latest.find((row) => row.feature_id === feature.id);
@@ -229,6 +233,9 @@ export async function aiModelManagement(
       usageNote:
         "供应商实际回执；未知用量不记为零。统计包含测试、重试与失败请求已返回的消耗，可能涉及多个历史型号。",
     };
+    if (feature.id === "assistant_team")
+      row.usageNote +=
+        " 包含网站团队与历史 DeerFlow 团队已记录的文字调用；接通状态及最近型号只依据网站团队记录。图片、视频等子调用在对应功能单独统计。";
     if (feature.kind === "fixed") {
       row.mode = "fixed";
       row.status = "local";
@@ -435,13 +442,6 @@ export async function aiModelManagement(
         boundary: "使用此功能的默认路由规则",
         available: true,
       });
-      if (feature.id === "deerflow_team") {
-        row.source = "DeerFlow 独立服务 → 网站模型网关 → OpenRouter";
-        if (!deerFlowConfigured()) {
-          row.status = "unconfigured";
-          row.statusText = "DeerFlow 独立服务未配置";
-        }
-      }
       if (
         row.selection &&
         (!selected ||
@@ -536,7 +536,13 @@ export async function saveAiFeatureModel(c: Context, input: unknown) {
   );
   const row = (await aiModelManagement(c)).features.find(
     (f) => f.id === b.feature,
-  )!;
+  );
+  if (!row)
+    fail(
+      "AI_FEATURE_RETIRED",
+      "该功能已合并，请在智能体团队中配置新任务的模型",
+      409,
+    );
   if (row.group === "AIGC") {
     requirePermission(c.actor, "aigc.use");
     requirePermission(c.actor, "aigc.manage");
