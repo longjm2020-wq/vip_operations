@@ -128,11 +128,12 @@ const response = (data: unknown) =>
     model: "test/model",
     choices: [{ message: { content: JSON.stringify(data) } }],
   });
-async function runRow() {
+async function runRow(includeEngine = true) {
   const id = randomUUID(),
     lease = randomUUID();
   const input = {
     id,
+    ...(includeEngine ? { engine: "native" } : {}),
     goal: "生成可下载的文字文件",
     attachmentIds: [],
     useKnowledge: false,
@@ -220,6 +221,42 @@ function successfulFileJob(runId: string) {
   return { fileId, jobId };
 }
 describe("production team adapter", () => {
+  it.each([true, false])(
+    "executes stored native and legacy snapshots without sending internal fields as public input (engine: %s)",
+    async (includeEngine) => {
+      const { run, lease } = await runRow(includeEngine);
+      startDocumentScenario("text");
+      f.fetch.mockResolvedValueOnce(
+        response({ status: "completed", content: "连接检查测试正文。" }),
+      );
+      finishDocumentScenario();
+      const result = await runTeamExecution(
+        c,
+        run,
+        lease,
+        new AbortController().signal,
+      );
+      expect(result.status).toBe("DONE");
+      expect(result.artifacts[0]).toMatchObject({
+        status: "ACCEPTED",
+        content: "连接检查测试正文。",
+      });
+      expect(f.fetch).toHaveBeenCalledTimes(6);
+      expect(f.queue).not.toHaveBeenCalled();
+    },
+  );
+  it("still rejects unexpected public task fields before making a provider call", async () => {
+    const { run, lease } = await runRow();
+    await expect(
+      runTeamExecution(
+        c,
+        { ...run, input: { ...run.input, unexpected: true } },
+        lease,
+        new AbortController().signal,
+      ),
+    ).rejects.toThrow();
+    expect(f.fetch).not.toHaveBeenCalled();
+  });
   it("passes current accepted archive status, saved review and owned file evidence directly to selection, briefing, execution and review", async () => {
     const source = await runRow(),
       archiveId = randomUUID(),

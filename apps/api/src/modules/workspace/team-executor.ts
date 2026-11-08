@@ -736,6 +736,7 @@ export async function runTeamExecution(
     settings: storedSettings,
     settingsVersion,
     conversationContext,
+    engine: _engine,
     ...body
   } = run.input;
   const input: TeamExecutionInput = {
