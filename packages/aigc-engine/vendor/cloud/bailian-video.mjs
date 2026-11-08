@@ -69,7 +69,8 @@ export async function pollBailianVideo(config, route, id) {
   const providerMessage = String(result.output?.message || result.message || "").slice(0, 1000);
   const detail = `${errorCode || ""} ${providerMessage}`;
   let errorHint = "请在百炼核对该任务；未自动重新生成";
-  if (/FreeTierOnly|free.?tier|free.?quota/i.test(detail)) errorHint = "免费额度用完即停限制了该模型，请核对该型号的费用保护设置";
+  if (/product is not activated|service not activated|not.?activated|未开通/i.test(detail)) errorHint = "MiniMax 视频服务尚未开通，请在百炼模型广场开通 MiniMax 视频模型，生效后再试";
+  else if (/FreeTierOnly|free.?tier|free.?quota/i.test(detail)) errorHint = "免费额度用完即停限制了该模型，请核对该型号的费用保护设置";
   else if (/Arrear|Overdue|Balance|Insufficient|payment/i.test(detail)) errorHint = "账户余额或计费状态不满足要求";
   else if (/AccessDenied|Unauthorized|permission|authorize/i.test(detail)) errorHint = "请核对该型号的业务空间与 API Key 权限";
   else if (/DataInspection|content.?filter|safety/i.test(detail)) errorHint = "输入或输出未通过供应商内容检查";

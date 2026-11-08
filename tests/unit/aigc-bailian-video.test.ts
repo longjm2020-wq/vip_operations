@@ -244,6 +244,26 @@ it("reports safe provider failure codes without echoing prompts, URLs or credent
     /sk-private-secret|https:\/\/private.example.test/,
   );
 });
+it("identifies an unactivated MiniMax product even when the provider uses InvalidParameter", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () =>
+      json({
+        output: {
+          task_id: "not-activated",
+          task_status: "FAILED",
+          code: "InvalidParameter",
+          message:
+            "The product is not activated, please confirm that you have activated products and try again after activation.",
+        },
+      }),
+    ),
+  );
+  const result = await pollVideo(config, route(), "not-activated");
+  expect(result.errorCode).toBe("InvalidParameter");
+  expect(result.errorHint).toContain("MiniMax 视频服务尚未开通");
+  expect(result.errorHint).not.toContain("拒绝请求参数");
+});
 it("keeps media limits and the explicit price estimate separate from actual bills", () => {
   const model = route().model;
   const clip = {
