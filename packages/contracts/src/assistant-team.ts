@@ -154,6 +154,7 @@ export type TeamModel = {
   structured: boolean;
 };
 export type TeamConfiguration = TeamSettings & {
+  engine?: "native" | "deerflow";
   version: number;
   ready: boolean;
   notice: string;
@@ -279,6 +280,7 @@ export type TeamStep = TeamPlanStep & {
   artifactIds: string[];
 };
 export type TeamRun = {
+  engine?: "native" | "deerflow";
   id: string;
   goal: string;
   status: TeamRunStatus;

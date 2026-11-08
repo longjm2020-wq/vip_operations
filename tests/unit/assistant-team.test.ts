@@ -2,6 +2,7 @@ import {
   beforeAll,
   beforeEach,
   afterAll,
+  afterEach,
   describe,
   expect,
   it,
@@ -119,8 +120,33 @@ beforeEach(async () => {
 afterAll(async () => {
   await f.db?.close();
 });
+afterEach(() => vi.unstubAllEnvs());
 
 describe("assistant team storage and owner boundaries", () => {
+  it("snapshots the remote engine while preserving owner isolation and hiding connection secrets", async () => {
+    vi.stubEnv("DEER_FLOW_URL", "http://deerflow.railway.internal:8001");
+    vi.stubEnv("DEER_FLOW_INTERNAL_AUTH_TOKEN", "test-internal-token");
+    vi.stubEnv("DEER_FLOW_MODEL_PROXY_TOKEN", "a".repeat(64));
+    await f.db!.exec("UPDATE compass_ai_settings SET enabled=false");
+    expect(await readAssistantTeam(actor())).toMatchObject({ engine: "deerflow", ready: false });
+    await f.db!.exec("UPDATE compass_ai_settings SET enabled=true");
+    expect(await readAssistantTeam(actor())).toMatchObject({ engine: "deerflow", ready: true, models: [] });
+    const input = body();
+    const run = await createTeamRun(actor(), input);
+    expect(run).toMatchObject({ engine: "deerflow", status: "QUEUED" });
+    expect(JSON.stringify(run)).not.toMatch(/internal-token|railway.internal/);
+    await expect(readTeamRun(actor("8"), run.id)).rejects.toMatchObject(errorCode("NOT_FOUND"));
+    await expect(saveAssistantTeam(actor(), { ...defaultTeamSettings(), version: 0 })).rejects.toMatchObject(errorCode("TEAM_MANAGED"));
+    vi.stubEnv("DEER_FLOW_URL", "");
+    expect(await createTeamRun(actor(), input)).toMatchObject({ id: run.id, engine: "deerflow" });
+  });
+  it("does not silently fall back to the native executor when remote configuration is incomplete", async () => {
+    vi.stubEnv("DEER_FLOW_URL", "http://deerflow.railway.internal:8001");
+    vi.stubEnv("DEER_FLOW_INTERNAL_AUTH_TOKEN", "");
+    expect(await readAssistantTeam(actor())).toMatchObject({ engine: "deerflow", ready: false });
+    await expect(createTeamRun(actor(), body())).rejects.toMatchObject(errorCode("TEAM_UNAVAILABLE"));
+    expect(await listTeamRuns(actor())).toEqual([]);
+  });
   it("returns seven defaults and catalog metadata without persisting or exposing service secrets", async () => {
     const config = await readAssistantTeam(actor());
     expect(config).toMatchObject({ version: 0, ready: true, videoModels: [] });

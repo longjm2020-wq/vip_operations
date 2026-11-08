@@ -20,6 +20,8 @@ async function setup(
     rejectSubmission?: boolean;
     saveConflict?: boolean;
     video?: boolean;
+    deerflow?: boolean;
+    ready?: boolean;
   } = {},
 ) {
   let configuration: TeamConfiguration = {
@@ -70,6 +72,18 @@ async function setup(
         ]
       : [],
   };
+  if (options.deerflow) {
+    configuration = {
+      ...configuration,
+      engine: "deerflow",
+      ready: options.ready ?? true,
+      notice:
+        options.ready === false ? "团队服务连接尚未配置，请联系管理员。" : "",
+      models: [],
+      imageModels: [],
+      videoModels: [],
+    };
+  }
   const submissions: TeamRunCreate[] = [],
     saves: TeamConfiguration[] = [],
     personal: unknown[] = [];
@@ -93,6 +107,15 @@ async function setup(
     tags: ["活动文案"],
     createdAt: new Date().toISOString(),
   };
+  if (options.deerflow) {
+    Object.assign(artifact, {
+      attempt: 1,
+      title: "活动文案交付",
+      content: "根据所附资料整理的活动文案。",
+      status: "DRAFT",
+      review: "",
+    });
+  }
   const currentRun = () =>
     run && {
       ...run,
@@ -101,8 +124,10 @@ async function setup(
         : completed
           ? {
               status: "DONE" as const,
-              stage: "验收与归档完成",
-              summary: "任务已按验收要求完成，第二版已归档。",
+              stage: options.deerflow ? "团队成果已返回" : "验收与归档完成",
+              summary: options.deerflow
+                ? "已整理活动文案，请核对交付内容。"
+                : "任务已按验收要求完成，第二版已归档。",
               artifacts: [{ ...artifact, runId: run.id }],
               steps: run.steps.map((step) => ({
                 ...step,
@@ -217,29 +242,36 @@ async function setup(
         }
         run = {
           id: input.id,
+          engine: options.deerflow ? "deerflow" : "native",
           goal: input.goal,
           status: "RUNNING",
-          stage: "编剧正在根据素材生成第一版",
-          plan: "由主脑拆分目标，编剧创作，调度独立验收。",
-          steps: [
-            {
-              id: "draft",
-              title: "创作活动文案",
-              memberId: "writing",
-              instruction: "结合所附资料完成活动文案",
-              dependencies: [],
-              difficulty: "complex",
-              deliverable: "text",
-              acceptance: ["内容与资料一致", "交付完整正文"],
-              status: "RUNNING",
-              attempts: 1,
-              model: "qwen3-max",
-              modelId: "engine/strong",
-              routeReason: "复杂任务选择高能力模型",
-              jobIds: [],
-              artifactIds: [],
-            },
-          ],
+          stage: options.deerflow
+            ? "团队正在处理资料"
+            : "编剧正在根据素材生成第一版",
+          plan: options.deerflow
+            ? ""
+            : "由主脑拆分目标，编剧创作，调度独立验收。",
+          steps: options.deerflow
+            ? []
+            : [
+                {
+                  id: "draft",
+                  title: "创作活动文案",
+                  memberId: "writing",
+                  instruction: "结合所附资料完成活动文案",
+                  dependencies: [],
+                  difficulty: "complex",
+                  deliverable: "text",
+                  acceptance: ["内容与资料一致", "交付完整正文"],
+                  status: "RUNNING",
+                  attempts: 1,
+                  model: "qwen3-max",
+                  modelId: "engine/strong",
+                  routeReason: "复杂任务选择高能力模型",
+                  jobIds: [],
+                  artifactIds: [],
+                },
+              ],
           artifacts: [],
           summary: "",
           error: "",
@@ -259,6 +291,7 @@ async function setup(
     } else if (path === `${root}/library`)
       data =
         completed &&
+        artifact.status === "ACCEPTED" &&
         (!url.searchParams.get("q") ||
           artifact.content.includes(url.searchParams.get("q")!) ||
           artifact.title.includes(url.searchParams.get("q")!))
@@ -491,4 +524,86 @@ test("默认团队策略可直接提交，停止任务读取后台取消状态�
     panel.getByRole("button", { name: "停止团队任务", exact: true }),
   ).toHaveCount(0);
   await expect(panel.getByText("已验收归档", { exact: true })).toHaveCount(0);
+});
+
+test("DeerFlow 团队直接提交附件与目标，隐藏原生配置并将返回成果标为待验收", async ({
+  page,
+}) => {
+  const fixture = await setup(page, { deerflow: true });
+  const panel = await openTeam(page);
+  await expect(
+    panel.getByRole("tab", { name: "协作任务", exact: true }),
+  ).toHaveAttribute("aria-selected", "true");
+  await expect(
+    panel.getByRole("tab", { name: "团队成员", exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    panel.getByRole("button", { name: "保存团队配置", exact: true }),
+  ).toHaveCount(0);
+  await panel.locator(".assistant-team-task-settings summary").click();
+  await expect(
+    panel.getByRole("combobox", { name: "团队任务模型", exact: true }),
+  ).toHaveCount(0);
+  await panel
+    .getByRole("checkbox", { name: "使用知识档案", exact: true })
+    .uncheck();
+  await panel.getByLabel("上传助理附件").setInputFiles({
+    name: "素材.txt",
+    mimeType: "text/plain",
+    buffer: Buffer.from("新品上市素材"),
+  });
+  await expect(panel.getByText("素材.txt", { exact: true })).toBeVisible();
+  await panel
+    .getByPlaceholder("描述团队目标、交付要求和验收标准…")
+    .fill("根据附件整理新品上市活动文案");
+  await panel
+    .getByRole("button", { name: "提交团队任务", exact: true })
+    .click();
+  await expect(
+    panel.getByText("团队正在处理资料", { exact: true }),
+  ).toBeVisible();
+  expect(fixture.submissions).toHaveLength(1);
+  expect(fixture.submissions[0]).toMatchObject({
+    goal: "根据附件整理新品上市活动文案",
+    attachmentIds: [attachmentId],
+    useKnowledge: false,
+  });
+  expect(fixture.submissions[0].model).toBeUndefined();
+  expect(fixture.personal).toHaveLength(0);
+  fixture.complete();
+  await expect(panel.getByText("团队成果已返回", { exact: true })).toBeVisible({
+    timeout: 10000,
+  });
+  await expect(
+    panel.getByRole("heading", { name: "任务结果", exact: true }),
+  ).toBeVisible();
+  await expect(
+    panel
+      .getByRole("article", { name: "交付：活动文案交付", exact: true })
+      .getByText("待验收", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    panel.getByText("结果已返回，尚未经过本站独立验收。", { exact: true }),
+  ).toBeVisible();
+  await expect(panel.getByText("已验收归档", { exact: true })).toHaveCount(0);
+  await panel.getByRole("tab", { name: "知识档案", exact: true }).click();
+  await expect(
+    panel.getByText("尚无匹配的知识档案", { exact: true }),
+  ).toBeVisible();
+  expect(fixture.saves).toHaveLength(0);
+});
+
+test("DeerFlow 未就绪时显示服务原因并阻止提交", async ({ page }) => {
+  const fixture = await setup(page, { deerflow: true, ready: false });
+  const panel = await openTeam(page);
+  await expect(
+    panel.getByText("团队服务连接尚未配置，请联系管理员。", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    panel.getByPlaceholder("团队智能服务尚未就绪，请查看面板提示"),
+  ).toBeDisabled();
+  await expect(
+    panel.getByRole("button", { name: "提交团队任务", exact: true }),
+  ).toBeDisabled();
+  expect(fixture.submissions).toHaveLength(0);
 });

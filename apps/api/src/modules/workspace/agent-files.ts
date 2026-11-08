@@ -80,6 +80,7 @@ export async function saveAgentFile(
   metadata: Row = {},
   id = randomUUID(),
   jobGuard?: { id: string; leaseId: string },
+  teamGuard?: { id: string; leaseId: string },
 ) {
   requireAssistant(c);
   if (!content.length || content.length > 100 * MiB)
@@ -89,6 +90,12 @@ export async function saveAgentFile(
       .replace(/[\x00-\x1f\x7f]/g, "")
       .slice(0, 180) || "附件";
   return db.$transaction(async (tx) => {
+    if (teamGuard) {
+      const active = await one(tx,
+        "SELECT id FROM public.personal_assistant_team_runs WHERE id=$1::uuid AND user_id=$2::bigint AND lease_id=$3::uuid AND status='RUNNING' FOR UPDATE",
+        teamGuard.id, c.actor.id, teamGuard.leaseId);
+      if (!active) fail("FILE_JOB_STOPPED", "团队任务已停止，未保存过期文件", 409);
+    }
     if (jobGuard) {
       const active = await one(
         tx,

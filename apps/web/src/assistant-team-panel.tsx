@@ -71,6 +71,10 @@ const colorFor = (status: string) =>
       : ["NEEDS_USER", "REWORK"].includes(status)
         ? "warning"
         : "processing";
+const runStatusLabel = (run: TeamRun) =>
+  run.engine === "deerflow" && run.status === "DONE"
+    ? "已交付"
+    : statusLabels[run.status];
 const requiredRole = (member: TeamMember) =>
   ["orchestrator", "coordinator", "librarian"].includes(member.role);
 const configurationDraft = (config: TeamConfiguration): TeamSettings => ({
@@ -143,7 +147,7 @@ function TeamRunDetail({
     <div className="team-run-detail" aria-label="团队任务详情">
       <div className="team-card-heading">
         <h3>{run.goal}</h3>
-        <Tag color={colorFor(run.status)}>{statusLabels[run.status]}</Tag>
+        <Tag color={colorFor(run.status)}>{runStatusLabel(run)}</Tag>
       </div>
       <p role="status">{run.stage}</p>
       {teamActive(run.status) && (
@@ -208,13 +212,17 @@ function TeamRunDetail({
       </ol>
       {run.summary && (
         <section className="team-summary">
-          <h3>主智能体汇总</h3>
+          <h3>{run.engine === "deerflow" ? "任务结果" : "主智能体汇总"}</h3>
           <div className="team-prose">{run.summary}</div>
         </section>
       )}
       {!!run.artifacts.length && (
         <section>
           <h3>交付与版本</h3>
+          {run.engine === "deerflow" &&
+            run.artifacts.some((artifact) => artifact.status === "DRAFT") && (
+              <p className="team-meta">结果已返回，尚未经过本站独立验收。</p>
+            )}
           {run.artifacts.map((artifact) => (
             <ArtifactCard key={artifact.id} artifact={artifact} />
           ))}
@@ -235,6 +243,7 @@ export function AssistantTeamPanel({
     { message } = App.useApp(),
     client = useQueryClient();
   const config = useTeamConfiguration();
+  const deerflow = config.data?.engine === "deerflow";
   const [tab, setTab] = useState(selectedRunId ? "runs" : "members");
   const [draft, setDraft] = useState<TeamSettings>();
   const [version, setVersion] = useState(0);
@@ -352,7 +361,16 @@ export function AssistantTeamPanel({
           <h2>
             <TeamOutlined aria-hidden /> 智能体团队
           </h2>
-          <p>把目标交给主智能体，团队按职责执行、验收并整理成果。</p>
+          <p>
+            {deerflow
+              ? "输入目标，团队自动分工并交付成果。"
+              : "把目标交给主智能体，团队按职责执行、验收并整理成果。"}
+          </p>
+          {deerflow && (
+            <p className="team-meta">
+              支持研究、写作和文本文件交付；图片视频请使用原有创作功能。
+            </p>
+          )}
         </div>
         <Button
           icon={<ReloadOutlined />}
@@ -378,7 +396,10 @@ export function AssistantTeamPanel({
           type="warning"
           title="团队智能服务尚未就绪"
           description={
-            config.data.notice || "请管理员检查智能服务连接。配置可以先保存。"
+            config.data.notice ||
+            (deerflow
+              ? "请管理员检查团队服务连接。"
+              : "请管理员检查智能服务连接。配置可以先保存。")
           }
         />
       )}
@@ -386,7 +407,7 @@ export function AssistantTeamPanel({
         <Alert type="info" title={config.data.notice} />
       )}
       <Tabs
-        activeKey={tab}
+        activeKey={deerflow && tab === "members" ? "runs" : tab}
         onChange={setTab}
         items={[
           {
@@ -723,7 +744,7 @@ export function AssistantTeamPanel({
                     >
                       <span>{entry.goal}</span>
                       <Tag color={colorFor(entry.status)}>
-                        {statusLabels[entry.status]}
+                        {runStatusLabel(entry)}
                       </Tag>
                     </button>
                   ))}
@@ -775,7 +796,7 @@ export function AssistantTeamPanel({
               </>
             ),
           },
-        ]}
+        ].filter((item) => !deerflow || item.key !== "members")}
       />
     </div>
   );

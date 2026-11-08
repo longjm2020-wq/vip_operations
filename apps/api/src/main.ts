@@ -25,6 +25,7 @@ import { AuthGuard, Envelope, ErrorFilter } from "./http.js";
 import { validateIntegrationMode } from "./integrations/vip/index.js";
 import { enrichOpenApi } from "./openapi.js";
 import { ManualController } from "./manual.js";
+import { DeerFlowModelGatewayController } from "./deerflow-model-gateway.js";
 import { CompassAnalyticsModule } from "./modules/analytics/controller.js";
 import { PersonalWorkspaceModule } from "./modules/workspace/controller.js";
 import { CompetitorAnalysisModule } from "./modules/competitors/controller.js";
@@ -33,7 +34,7 @@ import { selectionImportBodyParser } from "./selection-import-body.js";
 import { createAigcService } from "./modules/aigc/service.js";
 import { attachRealtimeRelay } from "./modules/workspace/realtime-relay.js";
 @Module({
-  controllers: [ManualController],
+  controllers: [ManualController, DeerFlowModelGatewayController],
   imports: [
     CompassSharesModule,
     CompetitorAnalysisModule,

@@ -76,6 +76,7 @@ export function teamKnowledgeTerms(goal: string): string[] {
 export async function searchTeamKnowledge(
   userId: string,
   goal: string,
+  matchedOnly = false,
 ): Promise<Row[]> {
   if (!/^[1-9]\d{0,18}$/.test(userId)) throw Error("知识检索账号无效");
   const terms = teamKnowledgeTerms(goal);
@@ -85,7 +86,7 @@ export async function searchTeamKnowledge(
     WITH terms AS (
       SELECT term, least(length(term),4) AS weight FROM unnest($2::text[]) AS term
     )
-    SELECT a.* FROM public.personal_assistant_team_artifacts a
+    SELECT a.*,relevance.score AS relevance_score FROM public.personal_assistant_team_artifacts a
     CROSS JOIN LATERAL (
       SELECT coalesce(sum(weight * (
         CASE WHEN position(term in lower(a.title))>0 THEN 8 ELSE 0 END +
@@ -93,10 +94,11 @@ export async function searchTeamKnowledge(
         CASE WHEN position(term in lower(a.content))>0 THEN 1 ELSE 0 END
       )),0) AS score FROM terms
     ) relevance
-    WHERE a.user_id=$1::bigint AND a.status='ACCEPTED'
+    WHERE a.user_id=$1::bigint AND a.status='ACCEPTED' AND (NOT $3::boolean OR relevance.score>0)
     ORDER BY relevance.score DESC,a.created_at DESC,a.id
     LIMIT 30`,
     userId,
     terms,
+    matchedOnly,
   );
 }

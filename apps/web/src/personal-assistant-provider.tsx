@@ -388,7 +388,9 @@ export function PersonalAssistantProvider({
           id: requestId,
           goal: value.trim(),
           attachmentIds: agent.attachments.map((file) => file.id),
-          ...(teamModel ? { model: teamModel } : {}),
+          ...(teamModel && teamConfig.data?.engine !== "deerflow"
+            ? { model: teamModel }
+            : {}),
           useKnowledge,
         };
         const run = (
@@ -710,7 +712,7 @@ export function PersonalAssistantProvider({
               ? "描述团队目标、交付要求和验收标准…"
               : teamConfig.isLoading
                 ? "正在连接智能体团队…"
-                : "团队智能服务尚未就绪，请检查团队配置"
+                : "团队智能服务尚未就绪，请查看面板提示"
             : data?.ready
               ? desktopDeviceId
                 ? desktop.data?.devices?.find((d) => d.id === desktopDeviceId)
@@ -890,21 +892,23 @@ export function PersonalAssistantProvider({
             />
             <details className="assistant-team-task-settings">
               <summary>本次任务设置</summary>
-              <Select
-                size="small"
-                aria-label="团队任务模型"
-                allowClear
-                value={teamModel}
-                disabled={busy}
-                loading={teamConfig.isLoading}
-                popupMatchSelectWidth={false}
-                placeholder="按成员配置"
-                options={teamConfig.data?.models.map((model) => ({
-                  value: model.id,
-                  label: model.name + " · " + model.model,
-                }))}
-                onChange={setTeamModel}
-              />
+              {teamConfig.data?.engine !== "deerflow" && (
+                <Select
+                  size="small"
+                  aria-label="团队任务模型"
+                  allowClear
+                  value={teamModel}
+                  disabled={busy}
+                  loading={teamConfig.isLoading}
+                  popupMatchSelectWidth={false}
+                  placeholder="按成员配置"
+                  options={teamConfig.data?.models.map((model) => ({
+                    value: model.id,
+                    label: model.name + " · " + model.model,
+                  }))}
+                  onChange={setTeamModel}
+                />
+              )}
               <Checkbox
                 checked={useKnowledge}
                 disabled={busy}

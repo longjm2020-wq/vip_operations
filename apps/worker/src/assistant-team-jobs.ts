@@ -5,6 +5,7 @@ import {
   runTeamExecution,
   safeTeamError,
 } from "../../api/src/modules/workspace/team-executor.js";
+import { runDeerFlowExecution, stopOrphanedDeerFlowRuns } from "../../api/src/modules/workspace/deerflow-executor.js";
 
 /** Separate from the media worker, so waiting for a file never consumes its slot. */
 export async function pollAssistantTeamJobs(signal: AbortSignal) {
@@ -16,6 +17,7 @@ export async function pollAssistantTeamJobs(signal: AbortSignal) {
     "UPDATE public.personal_assistant_jobs j SET status='CANCELED',stage='团队任务已停止',updated_at=now() WHERE j.status IN ('QUEUED','RUNNING') AND EXISTS(SELECT 1 FROM public.personal_assistant_team_runs r WHERE r.id=j.request_id AND r.user_id=j.user_id AND r.status IN ('CANCELED','NEEDS_USER','FAILED'))",
   );
   signal.throwIfAborted();
+  await stopOrphanedDeerFlowRuns();
   const lease = randomUUID();
   const run = await one(
     db,
@@ -66,7 +68,8 @@ export async function pollAssistantTeamJobs(signal: AbortSignal) {
       requestId: run.id,
       key: run.id,
     };
-    await runTeamExecution(c, run, lease, combined);
+    if (run.input.engine === "deerflow") await runDeerFlowExecution(c, run, lease, combined);
+    else await runTeamExecution(c, run, lease, combined);
   } catch (error) {
     const note = combined.aborted
       ? "团队执行已中断，已保留实际成果；未自动重试付费调用，请检查结果后重新发起"
