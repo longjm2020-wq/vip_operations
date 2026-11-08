@@ -415,7 +415,7 @@ export async function aiModelManagement(
                 ? "百炼聊天已验证；查看最近调用"
                 : "百炼聊天待验证";
         row.boundary +=
-          " 仅用于网站内聊天；JSON Object 回复由服务器校验。搜索与网站识别使用独立的 OpenRouter 搜索服务。";
+          " 仅用于网站内聊天；JSON Object 回复由服务器校验，格式错误最多额外调用一次进行修复，不重复执行工具，用量按实际调用记录。搜索与网站识别使用独立的 OpenRouter 搜索服务。";
       }
       if (!row.selection && followsChat) {
         row.source = "OpenRouter · https://openrouter.ai/api/v1";

@@ -893,4 +893,212 @@ describe("Bailian DeepSeek chat", () => {
       resolveTeamModel({ taskModel: modelId }),
     ).rejects.toMatchObject(errorCode("TEAM_MODEL_CAPABILITY"));
   });
+  const askGreeting = () =>
+    askAssistantModel(
+      admin(),
+      {},
+      [
+        {
+          id: randomUUID(),
+          role: "assistant",
+          text: "我在这儿呢。",
+          source: "voice",
+          createdAt: new Date().toISOString(),
+        },
+        {
+          id: randomUUID(),
+          role: "user",
+          text: "你好呀！",
+          createdAt: new Date().toISOString(),
+        },
+      ],
+      undefined,
+      "2026-11-08",
+      undefined,
+      false,
+      { model: modelId },
+    );
+  const completion = (
+    content: string,
+    finishReason = "stop",
+    returnedModel = bailianChatModel,
+  ) =>
+    json({
+      id: randomUUID(),
+      model: returnedModel,
+      usage: { prompt_tokens: 8, completion_tokens: 4, total_tokens: 12 },
+      choices: [{ finish_reason: finishReason, message: { content } }],
+    });
+  it("repairs a plain greeting once without tools and meters both actual calls", async () => {
+    await configure(true);
+    const bodies: any[] = [];
+    vi.stubGlobal("fetch", async (url: string | URL, init?: RequestInit) => {
+      if (String(url).includes("openrouter.ai")) return catalogFetch(url, init);
+      expect(String(url)).toBe(bailianChatEndpoint(workspace));
+      const body = JSON.parse(String(init?.body));
+      bodies.push(body);
+      if (bodies.length === 1) {
+        expect(body.tools.length).toBeGreaterThan(0);
+        expect(
+          body.messages.find((m: any) => m.role === "assistant").content,
+        ).toBe('{"text":"我在这儿呢。","schedules":[],"tools":[]}');
+        expect(body.messages.at(-1).content).toContain(
+          '"required":["text","schedules","tools"]',
+        );
+        return completion("你好呀！有什么可以帮你？");
+      }
+      expect(body.tools).toBeUndefined();
+      expect(body.tool_choice).toBeUndefined();
+      expect(body.messages).toHaveLength(2);
+      expect(JSON.parse(body.messages[1].content)).toEqual({
+        draft: "你好呀！有什么可以帮你？",
+      });
+      return completion(
+        '{"text":"你好呀！有什么可以帮你？","schedules":[],"tools":[]}',
+      );
+    });
+    expect(await askGreeting()).toMatchObject({
+      text: "你好呀！有什么可以帮你？",
+      schedules: [],
+      tools: [],
+      jobIds: [],
+    });
+    expect(bodies).toHaveLength(2);
+    const receipts = await query(
+      "SELECT source,model,total_tokens,amount FROM ai_model_usage",
+    );
+    expect(receipts).toHaveLength(2);
+    expect(
+      receipts.every(
+        (r) =>
+          r.source === source &&
+          r.model === bailianChatModel &&
+          r.total_tokens === "12" &&
+          r.amount === null,
+      ),
+    ).toBe(true);
+  });
+  it.each([
+    {
+      name: "malformed again",
+      content: "仍是普通文字",
+      finish: "stop",
+      model: bailianChatModel,
+    },
+    {
+      name: "invalid schedule",
+      content: JSON.stringify({
+        text: "草稿",
+        tools: [],
+        schedules: [
+          {
+            title: "会",
+            date: "invalid",
+            startTime: "",
+            endTime: "",
+            note: "",
+          },
+        ],
+      }),
+      finish: "stop",
+      model: bailianChatModel,
+    },
+    {
+      name: "unauthorized entry",
+      content: '{"text":"你好","schedules":[],"tools":["forbidden-tool"]}',
+      finish: "stop",
+      model: bailianChatModel,
+    },
+    {
+      name: "truncated",
+      content: '{"text":"你好","schedules":[],"tools":[]}',
+      finish: "length",
+      model: bailianChatModel,
+    },
+    {
+      name: "wrong model",
+      content: '{"text":"你好","schedules":[],"tools":[]}',
+      finish: "stop",
+      model: "wrong-model",
+    },
+  ])("rejects $name after one format repair", async (sample) => {
+    await configure(true);
+    let calls = 0;
+    vi.stubGlobal("fetch", async (url: string | URL, init?: RequestInit) => {
+      if (String(url).includes("openrouter.ai")) return catalogFetch(url, init);
+      calls++;
+      return calls === 1
+        ? completion("你好呀！")
+        : completion(sample.content, sample.finish, sample.model);
+    });
+    await expect(askGreeting()).rejects.toMatchObject(
+      errorCode("AI_RESPONSE_INVALID"),
+    );
+    expect(calls).toBe(2);
+  });
+  it("preserves a completed tool result and never repeats it during final format repair", async () => {
+    await configure(true);
+    let calls = 0;
+    vi.stubGlobal("fetch", async (url: string | URL, init?: RequestInit) => {
+      if (String(url).includes("openrouter.ai")) return catalogFetch(url, init);
+      const body = JSON.parse(String(init?.body));
+      calls++;
+      if (calls === 1)
+        return json({
+          id: randomUUID(),
+          model: bailianChatModel,
+          choices: [
+            {
+              finish_reason: "tool_calls",
+              message: {
+                content: null,
+                tool_calls: [
+                  {
+                    id: "memory-once",
+                    type: "function",
+                    function: {
+                      name: "propose_memory",
+                      arguments:
+                        '{"title":"回复偏好","content":"喜欢简洁回复"}',
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        });
+      if (calls === 2) {
+        expect(body.messages.at(-1).tool_call_id).toBe("memory-once");
+        return completion("已整理成记忆草稿，请确认后保存。");
+      }
+      expect(body.tools).toBeUndefined();
+      expect(
+        body.messages.some((m: any) => m.role === "tool" || m.tool_calls),
+      ).toBe(false);
+      return completion(
+        '{"text":"已整理成记忆草稿，请确认后保存。","schedules":[],"tools":[]}',
+      );
+    });
+    const answer = await askAssistantModel(
+      admin(),
+      {},
+      [
+        {
+          id: randomUUID(),
+          role: "user",
+          text: "记住我喜欢简洁回复",
+          createdAt: new Date().toISOString(),
+        },
+      ],
+      undefined,
+      "2026-11-08",
+      undefined,
+      false,
+      { model: modelId },
+    );
+    expect(answer.memorySuggestions).toEqual([
+      { title: "回复偏好", content: "喜欢简洁回复" },
+    ]);
+    expect(calls).toBe(3);
+  });
 });
