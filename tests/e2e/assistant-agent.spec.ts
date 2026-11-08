@@ -208,7 +208,7 @@ async function setup(
   });
   return requests;
 }
-test("附件、能力、联网与任务下载形成完整流程，历史回复隐藏型号", async ({
+test("简洁输入区直接发送附件并下载任务结果，历史回复隐藏型号", async ({
   page,
 }) => {
   const requests = await setup(page);
@@ -218,7 +218,7 @@ test("附件、能力、联网与任务下载形成完整流程，历史回复�
     exact: true,
   });
   await noteEntry.focus();
-  await noteEntry.click();
+  await noteEntry.press("Enter");
   await page
     .getByRole("textbox", { name: "私有备忘", exact: true })
     .fill("同页投影保留未保存备忘");
@@ -235,19 +235,18 @@ test("附件、能力、联网与任务下载形成完整流程，历史回复�
     buffer: Buffer.from("测试库存：条码001234567890123456789 数量12"),
   });
   await expect(dialog.locator(".agent-attachments")).toContainText("资料.txt");
-  await dialog.getByRole("combobox", { name: "助理能力" }).click();
-  await page.getByText("深度分析", { exact: true }).last().click();
-  await dialog.getByRole("checkbox", { name: "联网", exact: true }).check();
+  await expect(dialog.locator(".agent-composer-tools button")).toHaveCount(2);
+  await expect(dialog.getByRole("combobox")).toHaveCount(0);
   await dialog
     .getByPlaceholder(/告诉我你想完成什么/)
-    .fill("将附件整理成Word周报，并核查公开参考资料");
+    .fill("将附件整理成Word周报");
   await dialog.getByRole("button", { name: "发送给个人助理" }).click();
   await expect.poll(() => requests.length).toBe(1);
   expect(requests[0]).toMatchObject({
-    model: "engine/deep",
     attachmentIds: [fileId],
-    webSearch: true,
   });
+  expect(requests[0]).not.toHaveProperty("model");
+  expect(requests[0]).not.toHaveProperty("webSearch");
   await expect(dialog.getByRole("link", { name: /周报.docx/ })).toBeVisible();
   await expect(dialog.getByRole("link", { name: "资料来源" })).toHaveAttribute(
     "href",
@@ -276,8 +275,11 @@ test("附件、能力、联网与任务下载形成完整流程，历史回复�
     .getByRole("button", { name: "关闭全息影像屏", exact: true })
     .click();
   await expect(screen).toBeHidden();
+  await expect(page.locator(".workspace-ai-core-stage")).not.toHaveAttribute(
+    "inert",
+  );
   await noteEntry.focus();
-  await noteEntry.click();
+  await noteEntry.press("Enter");
   await expect(
     page.getByRole("textbox", { name: "私有备忘", exact: true }),
   ).toHaveValue("同页投影保留未保存备忘");
@@ -337,19 +339,22 @@ test("亮色窄屏保留附件入口和中性能力名称", async ({ page }) => 
   expect(box!.x).toBeGreaterThanOrEqual(0);
   expect(box!.width).toBeLessThanOrEqual(390);
   const sender = dialog.locator(".ant-sender");
-  await expect(
-    sender.getByRole("button", { name: "电脑授权：网站内" }),
-  ).toBeVisible();
-  await expect(
-    sender.getByRole("button", { name: "开始智能语音对话" }),
-  ).toBeVisible();
+  await expect(sender.locator("button")).toHaveCount(2);
+  const send = sender.getByRole("button", { name: "发送给个人助理" });
+  await expect(send).toBeDisabled();
+  await dialog.getByPlaceholder(/告诉我你想完成什么/).fill("直接输入");
+  await expect(send).toBeEnabled();
+  await dialog.getByPlaceholder(/告诉我你想完成什么/).clear();
+  await expect(send).toBeDisabled();
   expect(
     await sender.evaluate((el) => el.scrollWidth <= el.clientWidth + 1),
   ).toBe(true);
   await page.screenshot({ path: ".local/assistant-agent-light-mobile.png" });
 });
 
-test("桌面端从输入框一次连接并唤起本机确认，自动选中电脑", async ({ page }) => {
+test("桌面端从电脑操作面板一次连接并唤起本机确认，自动选中电脑", async ({
+  page,
+}) => {
   await setup(page);
   const deviceId = "55555555-5555-4555-8555-555555555555";
   await page.addInitScript(
@@ -439,13 +444,14 @@ test("桌面端从输入框一次连接并唤起本机确认，自动选中电�
   );
   await page.goto("/my-workspace");
   const composer = page.locator(".assistant-compose:visible");
-  await composer.getByRole("button", { name: "电脑授权：网站内" }).click();
+  await openPersonalAssistant(page);
+  await selectAssistantPanel(page, "电脑操作");
   await page
     .getByRole("button", { name: "连接并授权本机", exact: true })
     .click();
-  await expect(
-    composer.getByRole("button", { name: "电脑授权：跨窗口授权" }),
-  ).toBeVisible();
+  await expect(composer.locator(".assistant-desktop-note")).toContainText(
+    "电脑操作",
+  );
   await expect(composer.getByPlaceholder(/描述电脑任务/)).toBeVisible();
   expect(pairCodes).toBe(1);
   const state = await page.evaluate(() => (window as any).desktopTestState());
@@ -454,7 +460,7 @@ test("桌面端从输入框一次连接并唤起本机确认，自动选中电�
     1,
   );
   expect(state.actions).not.toContain("show-tasks");
-  await composer.getByRole("button", { name: "电脑授权：跨窗口授权" }).click();
+  await selectAssistantPanel(page, "电脑操作");
   await expect(
     page.getByRole("button", { name: "撤销跨窗口授权", exact: true }),
   ).toBeVisible();
@@ -464,7 +470,7 @@ test("桌面端从输入框一次连接并唤起本机确认，自动选中电�
   await page.screenshot({ path: ".local/desktop-simple-authorization.png" });
 });
 
-test("输入框内选择电脑、显示真实授权并撤销，不从网页开启设备授权", async ({
+test("电脑操作面板选择设备并撤销授权，输入区仅显示当前目标", async ({
   page,
 }) => {
   const requests = await setup(page);
@@ -516,21 +522,20 @@ test("输入框内选择电脑、显示真实授权并撤销，不从网页开�
   await expect(
     composer.getByRole("button", { name: "附件", exact: true }),
   ).toBeVisible();
-  await expect(
-    composer.getByRole("button", { name: "开始智能语音对话" }),
-  ).toBeVisible();
+  await expect(composer.locator(".agent-composer-tools button")).toHaveCount(2);
   await page.screenshot({ path: ".local/assistant-composer-home.png" });
-  await composer.getByRole("button", { name: "电脑授权：网站内" }).click();
-  await page.getByRole("combobox", { name: "执行位置" }).click();
-  await expect(page.getByTitle("离线电脑 · 离线")).toHaveClass(/disabled/);
-  await page.getByText("测试电脑", { exact: true }).last().click();
-  await expect(page.locator(".ant-select-dropdown:visible")).toHaveCount(0);
+  await openPersonalAssistant(page);
+  await selectAssistantPanel(page, "电脑操作");
+  const device = page
+    .locator(".assistant-desktop-item")
+    .filter({ hasText: "测试电脑" });
+  const offline = page
+    .locator(".assistant-desktop-item")
+    .filter({ hasText: "离线电脑" });
   await expect(
-    composer.getByRole("button", { name: "电脑授权：跨窗口授权" }),
-  ).toBeVisible();
-  await expect(page.locator(".assistant-access-menu")).toContainText(
-    "已记住此设备授权",
-  );
+    offline.getByRole("button", { name: "在这台电脑执行" }),
+  ).toBeDisabled();
+  await expect(device).toContainText("已记住跨窗口授权");
   expect(mutations).toHaveLength(0);
   await page.screenshot({
     path: ".local/assistant-composer-authorization.png",
@@ -538,9 +543,11 @@ test("输入框内选择电脑、显示真实授权并撤销，不从网页开�
   await page
     .getByRole("button", { name: "撤销跨窗口授权", exact: true })
     .click();
-  await expect(
-    composer.getByRole("button", { name: "电脑授权：逐次允许" }),
-  ).toBeVisible();
+  await expect(device).toContainText("逐次允许");
+  await device.getByRole("button", { name: "在这台电脑执行" }).click();
+  await expect(composer.locator(".assistant-desktop-note")).toContainText(
+    "测试电脑",
+  );
   expect(mutations).toHaveLength(1);
   const input = composer.getByPlaceholder(/描述电脑任务/);
   await input.fill("打开百度");
@@ -550,6 +557,8 @@ test("输入框内选择电脑、显示真实授权并撤销，不从网页开�
   expect(requests[0]).not.toHaveProperty("authorizationId");
   expect(requests[0]).not.toHaveProperty("webOpenResult");
   expect(page.context().pages()).toHaveLength(1);
+  await composer.getByRole("button", { name: "返回网站对话" }).click();
+  await expect(composer.getByPlaceholder(/告诉我你想完成什么/)).toBeVisible();
 });
 
 test("发送打开百度立即新建网页，保留工作台，查看历史不会重复打开", async ({

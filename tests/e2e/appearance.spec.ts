@@ -211,7 +211,7 @@ test("一级入口固定暗色不改账号偏好，详情恢复亮色且跨页�
     finishAuth();
   }
   await expect(
-    page.getByRole("button", { name: "助理设置", exact: true }),
+    page.getByRole("button", { name: "附件", exact: true }),
   ).toBeVisible();
   await mode(page, "dark");
   await expect(page.getByText("专属 AI 工具")).toHaveCount(0);
@@ -395,7 +395,7 @@ test("手机一级入口固定暗色，工作台和详情助理弹窗适配屏�
     page.getByRole("button", { name: /切换为.*色主题/ }),
   ).toHaveCount(0);
   await expect(
-    page.getByRole("button", { name: "助理设置", exact: true }),
+    page.getByRole("button", { name: "附件", exact: true }),
   ).toBeVisible();
   expect(
     await page.evaluate(() => document.documentElement.scrollWidth),
@@ -407,7 +407,7 @@ test("手机一级入口固定暗色，工作台和详情助理弹窗适配屏�
   await openPersonalAssistant(page);
   const dialog = page.getByRole("dialog", { name: /AI 个人助理/ });
   await expect(
-    dialog.getByRole("button", { name: "开始智能语音对话" }),
+    dialog.getByRole("button", { name: "发送给个人助理" }),
   ).toBeVisible();
   expect((await dialog.boundingBox())!.width).toBeLessThanOrEqual(390.05);
   await dialog.getByRole("button", { name: "关闭", exact: true }).click();
@@ -427,7 +427,7 @@ test("手机一级入口固定暗色，工作台和详情助理弹窗适配屏�
       .click();
     await page.getByRole("button", { name: "文字对话", exact: true }).click();
     await expect(
-      dialog.getByRole("button", { name: "开始智能语音对话" }),
+      dialog.getByRole("button", { name: "发送给个人助理" }),
     ).toBeVisible();
     expect((await dialog.boundingBox())!.width).toBeLessThanOrEqual(390.05);
     await dialog.getByRole("button", { name: "关闭", exact: true }).click();

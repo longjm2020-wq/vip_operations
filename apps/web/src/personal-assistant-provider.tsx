@@ -15,18 +15,14 @@ import {
   Dropdown,
   Select,
   Spin,
-  Tooltip,
 } from "antd";
 import {
   ArrowRightOutlined,
   CalendarOutlined,
-  CommentOutlined,
   DeleteOutlined,
   ReloadOutlined,
-  AudioOutlined,
   SoundOutlined,
   StopOutlined,
-  CustomerServiceOutlined,
   EllipsisOutlined,
 } from "@ant-design/icons";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -65,7 +61,6 @@ import { useGptSpeech } from "./use-gpt-speech";
 import type { AssistantVoiceStatus } from "../../../packages/contracts/src/assistant-voice";
 import { workspaceHologramEvent } from "./workspace-hologram";
 import { AssistantDesktopPanel } from "./assistant-desktop-panel";
-import { AssistantDesktopAccess } from "./assistant-desktop-access";
 import {
   AssistantTeamPanel,
   teamRunsKey,
@@ -87,7 +82,14 @@ import {
 } from "../../../packages/contracts/src/assistant-web-command";
 
 type AssistantSection =
-  "chat" | "activity" | "memory" | "voice" | "tasks" | "desktop" | "team";
+  | "chat"
+  | "activity"
+  | "memory"
+  | "voice"
+  | "tasks"
+  | "desktop"
+  | "team"
+  | "settings";
 
 export function PersonalAssistantProvider({
   children,
@@ -165,7 +167,6 @@ export function PersonalAssistantProvider({
     [sending, setSending] = useState(false);
   const [error, setError] = useState("");
   const [agent, setAgent] = useState<AgentOptions>({
-    webSearch: false,
     attachments: [],
   });
   const [uploading, setUploading] = useState(false);
@@ -429,9 +430,6 @@ export function PersonalAssistantProvider({
         requestId,
         includePersonalContext: includeContext,
         includeMemory,
-        model: agent.model,
-        imageModel: agent.imageModel,
-        webSearch: agent.webSearch,
         attachmentIds: agent.attachments.map((f) => f.id),
         desktopDeviceId,
         webOpenResult,
@@ -518,9 +516,7 @@ export function PersonalAssistantProvider({
       void gptVoice.start({
         includePersonalContext: includeContext,
         includeMemory,
-        ...(useRealtime && desktopDeviceId
-          ? { desktopDeviceId, model: agent.model }
-          : {}),
+        ...(useRealtime && desktopDeviceId ? { desktopDeviceId } : {}),
       });
     else if (!activeVoiceStatus?.ready) {
       void voiceStatus.refetch();
@@ -573,136 +569,62 @@ export function PersonalAssistantProvider({
       : []),
     { key: "activity", label: "动态反馈" },
     ...(allowed ? [{ key: "memory", label: "个人记忆" }] : []),
+    ...(allowed ? [{ key: "settings", label: "对话设置" }] : []),
   ];
-  const composerSettings = (inDrawer: boolean) => (
+  const conversationSettings = (
     <>
-      {!teamMode && (
-        <div className="assistant-settings-preferences">
-          <strong>发送内容</strong>
-          <Checkbox
-            checked={includeContext}
-            onChange={(e) => setIncludeContext(e.target.checked)}
-            disabled={busy}
-          >
-            附带已保存日程与待办
-          </Checkbox>
-          <Checkbox
-            checked={includeMemory}
-            onChange={(e) => setIncludeMemory(e.target.checked)}
-            disabled={busy}
-          >
-            使用个人记忆
-          </Checkbox>
-          <p>
-            仅勾选后随本次文字或语音提问附带；未保存草稿和私有备忘不发送。已发送内容仍在对话历史中。
-          </p>
-          <strong>声音</strong>
-          <Checkbox
-            checked={voiceReply}
-            disabled={!speech.supported || !voiceStatus.data?.ready}
-            onChange={(e) => {
-              setVoiceReply(e.target.checked);
-              playbackAllowed.current =
-                open && section === "chat" && e.target.checked;
-              if (!e.target.checked) speech.stop();
-            }}
-          >
-            语音回复
-          </Checkbox>
-          <Checkbox
-            checked={voiceReminders}
-            disabled={!voice.canSpeak}
-            onChange={(e) => {
-              setVoiceReminders(e.target.checked);
-              if (!e.target.checked) voice.stopSpeaking();
-            }}
-          >
-            播报新提醒
-          </Checkbox>
-          <p>
-            小序的声音 · AI 生成
-            {voiceStatus.data?.ready
-              ? ` · ${voiceStatus.data.voice}`
-              : " · 尚未就绪"}
-          </p>
-        </div>
-      )}
-      {teamMode && (
+      <div className="assistant-settings-preferences">
+        <strong>发送内容</strong>
+        <Checkbox
+          checked={includeContext}
+          onChange={(e) => setIncludeContext(e.target.checked)}
+          disabled={busy}
+        >
+          附带已保存日程与待办
+        </Checkbox>
+        <Checkbox
+          checked={includeMemory}
+          onChange={(e) => setIncludeMemory(e.target.checked)}
+          disabled={busy}
+        >
+          使用个人记忆
+        </Checkbox>
         <p>
-          团队按已保存的成员职责、模型及联网设置运行。可为本次任务指定文字模型，图像与视频生成模型由成员配置决定。
+          仅勾选后随本次文字或语音提问附带；未保存草稿和私有备忘不发送。已发送内容仍在对话历史中。
         </p>
-      )}
-      <div className="assistant-settings-actions">
-        <Button
-          size="small"
-          data-settings-action
-          onClick={() => selectSection("team")}
+        <strong>声音</strong>
+        <Checkbox
+          checked={voiceReply}
+          disabled={!speech.supported || !voiceStatus.data?.ready}
+          onChange={(e) => {
+            setVoiceReply(e.target.checked);
+            playbackAllowed.current =
+              open && section === "chat" && e.target.checked;
+            if (!e.target.checked) speech.stop();
+          }}
         >
-          智能体团队
-        </Button>
-        <Button
-          size="small"
-          data-settings-action
-          onClick={() => selectSection("desktop")}
+          语音回复
+        </Checkbox>
+        <Checkbox
+          checked={voiceReminders}
+          disabled={!voice.canSpeak}
+          onChange={(e) => {
+            setVoiceReminders(e.target.checked);
+            if (!e.target.checked) voice.stopSpeaking();
+          }}
         >
-          电脑操作
-        </Button>
-        <Button
-          size="small"
-          icon={<CustomerServiceOutlined />}
-          aria-label="智能语音"
-          disabled={sending || !!executing}
-          data-settings-action
-          onClick={() => openPanel("voice")}
-        >
-          智能语音
-        </Button>
-        <Button
-          size="small"
-          data-settings-action
-          disabled={sending || !!executing}
-          onClick={openVoiceSettings}
-        >
-          语音设置
-        </Button>
-        {!inDrawer && (
-          <Button
-            size="small"
-            icon={<CommentOutlined />}
-            aria-label="打开个人助理"
-            data-settings-action
-            onClick={() => openPanel("chat")}
-          >
-            打开个人助理
-          </Button>
-        )}
-        <Button
-          size="small"
-          data-settings-action
-          onClick={() => selectSection("tasks")}
-        >
-          任务与文件
-        </Button>
-        <Button
-          size="small"
-          data-settings-action
-          onClick={() => selectSection("memory")}
-        >
-          个人记忆
-        </Button>
-        {(voice.speaking || speech.active) && (
-          <Button
-            size="small"
-            icon={<StopOutlined />}
-            onClick={() => {
-              voice.stopSpeaking();
-              speech.stop();
-            }}
-          >
-            打断朗读
-          </Button>
-        )}
+          播报新提醒
+        </Checkbox>
+        <p>
+          小序的声音 · AI 生成
+          {voiceStatus.data?.ready
+            ? ` · ${voiceStatus.data.voice}`
+            : " · 尚未就绪"}
+        </p>
       </div>
+      <Button style={{ marginTop: 20 }} onClick={() => selectSection("chat")}>
+        返回对话
+      </Button>
     </>
   );
   const sender = (inDrawer = false) => (
@@ -712,52 +634,36 @@ export function PersonalAssistantProvider({
       inert={!inDrawer && inWorkspace && open}
       aria-hidden={!inDrawer && inWorkspace && open ? true : undefined}
     >
-      <div className="assistant-compose-mode">
-        {!teamMode && (
+      {teamMode && (
+        <div className="assistant-compose-mode">
+          <span>团队协作</span>
           <Button
             size="small"
             type="link"
             onClick={() => selectSection("team")}
           >
-            智能体团队
+            管理团队
           </Button>
-        )}
-        <Select
-          size="small"
-          variant="borderless"
-          aria-label="助理工作模式"
-          value={teamMode ? "team" : "personal"}
-          disabled={busy}
-          options={[
-            { value: "personal", label: "个人助理" },
-            { value: "team", label: "团队协作" },
-          ]}
-          onChange={(mode) => {
-            setTeamMode(mode === "team");
-            setError("");
-            if (mode === "team") setDesktopDeviceId(undefined);
-            if (inDrawer) setSection(mode === "team" ? "team" : "chat");
-          }}
-        />
-        {teamMode && (
-          <>
-            <span className="team-mode-note">任务使用已保存的团队配置</span>
-            <Button
-              size="small"
-              type="link"
-              onClick={() => selectSection("team")}
-            >
-              管理团队
-            </Button>
-          </>
-        )}
-      </div>
+          <Button
+            size="small"
+            type="link"
+            disabled={busy}
+            onClick={() => {
+              setTeamMode(false);
+              setError("");
+              if (inDrawer) setSection("chat");
+            }}
+          >
+            返回个人助理
+          </Button>
+        </div>
+      )}
       <Sender
         value={text}
         onChange={(value) => setText(value.slice(0, teamMode ? 8000 : 4000))}
         onSubmit={(value) => void send(value)}
         loading={busy}
-        readOnly={busy || voice.listening}
+        readOnly={busy}
         disabled={!composerReady || busy}
         submitType="enter"
         suffix={false}
@@ -767,84 +673,8 @@ export function PersonalAssistantProvider({
             change={setAgent}
             disabled={busy}
             onUploading={setUploading}
-            settingsContent={composerSettings(inDrawer)}
-            teamMode={teamMode}
-            modelControl={
-              teamMode ? (
-                <Select
-                  size="small"
-                  variant="borderless"
-                  aria-label="团队任务模型"
-                  allowClear
-                  value={teamModel}
-                  disabled={busy}
-                  loading={teamConfig.isLoading}
-                  popupMatchSelectWidth={false}
-                  placeholder="按成员配置"
-                  options={teamConfig.data?.models.map((model) => ({
-                    value: model.id,
-                    label: `${model.name} · ${model.model}`,
-                  }))}
-                  onChange={setTeamModel}
-                />
-              ) : undefined
-            }
-            searchControl={
-              teamMode ? (
-                <Checkbox
-                  checked={useKnowledge}
-                  disabled={busy}
-                  onChange={(event) => setUseKnowledge(event.target.checked)}
-                >
-                  使用知识档案
-                </Checkbox>
-              ) : undefined
-            }
-            active={
-              inDrawer
-                ? open && (section === "chat" || section === "team")
-                : !inWorkspace || !open
-            }
-            accessControl={
-              !teamMode && (
-                <AssistantDesktopAccess
-                  data={desktop.data}
-                  deviceId={desktopDeviceId}
-                  choose={setDesktopDeviceId}
-                  manage={() => selectSection("desktop")}
-                  refresh={() => void desktop.refetch()}
-                  disabled={busy}
-                  active={
-                    inDrawer
-                      ? open && section === "chat"
-                      : !inWorkspace || !open
-                  }
-                />
-              )
-            }
             actions={
               <div className="assistant-send-actions">
-                <Tooltip
-                  title={
-                    voice.supported
-                      ? "点击说话，识别后核对发送。语音由浏览器识别，可能使用其在线服务。"
-                      : "此浏览器不支持语音识别，可继续键入。"
-                  }
-                >
-                  <Button
-                    type={voice.listening ? "primary" : "text"}
-                    shape="circle"
-                    icon={
-                      voice.listening ? <StopOutlined /> : <AudioOutlined />
-                    }
-                    aria-label={voice.listening ? "停止语音输入" : "语音输入"}
-                    disabled={!voice.supported || busy || !composerReady}
-                    onClick={() => {
-                      speech.stop();
-                      voice.start(text);
-                    }}
-                  />
-                </Tooltip>
                 {(voice.speaking || speech.active) && (
                   <Button
                     type="text"
@@ -864,31 +694,11 @@ export function PersonalAssistantProvider({
                     shape="circle"
                     aria-label="助理正在回复"
                   />
-                ) : text.trim() || teamMode ? (
+                ) : (
                   <components.SendButton
                     aria-label={teamMode ? "提交团队任务" : "发送给个人助理"}
+                    disabled={!text.trim() || !composerReady}
                   />
-                ) : (
-                  <Tooltip title="开始智能语音对话">
-                    <Button
-                      type="text"
-                      shape="circle"
-                      className="assistant-live-voice"
-                      icon={
-                        <span
-                          className="assistant-voice-wave"
-                          aria-hidden="true"
-                        >
-                          <i />
-                          <i />
-                          <i />
-                          <i />
-                        </span>
-                      }
-                      aria-label="开始智能语音对话"
-                      onClick={startVoice}
-                    />
-                  </Tooltip>
                 )}
               </div>
             }
@@ -910,7 +720,7 @@ export function PersonalAssistantProvider({
                 : "告诉我你想完成什么，例如：打开经营分析…"
               : q.isLoading
                 ? "正在连接个人助理…"
-                : "AI 尚未就绪，可从助理设置打开对话查看原因"
+                : "AI 尚未就绪，可打开小序的文字对话查看原因"
         }
         autoSize={{ minRows: 2, maxRows: 5 }}
       />
@@ -919,20 +729,21 @@ export function PersonalAssistantProvider({
       )}
       {desktopDeviceId && (
         <div className="assistant-desktop-note">
-          电脑任务仅发送本条指令，不附带日程或记忆。请移除附件并关闭联网；开始实时通话后可直接说出需要识别、点击或输入的目标。
-        </div>
-      )}
-      {voice.listening && (
-        <div className="assistant-voice-status" role="status">
-          <i />
-          <i />
-          <i />
-          正在聆听…识别结果可编辑后发送
-        </div>
-      )}
-      {voice.error && (
-        <div className="assistant-voice-error" role="status">
-          {voice.error}
+          <span>
+            电脑操作 ·{" "}
+            {desktop.data?.devices?.find(
+              (device) => device.id === desktopDeviceId,
+            )?.name || "所选电脑"}
+            。仅发送本条指令，请移除附件。
+          </span>
+          <Button
+            size="small"
+            type="link"
+            disabled={busy}
+            onClick={() => setDesktopDeviceId(undefined)}
+          >
+            返回网站对话
+          </Button>
         </div>
       )}
     </div>
@@ -1070,11 +881,39 @@ export function PersonalAssistantProvider({
             : null
         }
       >
+        {allowed && section === "settings" && conversationSettings}
         {allowed && section === "team" && (
-          <AssistantTeamPanel
-            selectedRunId={selectedTeamRunId}
-            selectRun={setSelectedTeamRunId}
-          />
+          <>
+            <AssistantTeamPanel
+              selectedRunId={selectedTeamRunId}
+              selectRun={setSelectedTeamRunId}
+            />
+            <details className="assistant-team-task-settings">
+              <summary>本次任务设置</summary>
+              <Select
+                size="small"
+                aria-label="团队任务模型"
+                allowClear
+                value={teamModel}
+                disabled={busy}
+                loading={teamConfig.isLoading}
+                popupMatchSelectWidth={false}
+                placeholder="按成员配置"
+                options={teamConfig.data?.models.map((model) => ({
+                  value: model.id,
+                  label: model.name + " · " + model.model,
+                }))}
+                onChange={setTeamModel}
+              />
+              <Checkbox
+                checked={useKnowledge}
+                disabled={busy}
+                onChange={(event) => setUseKnowledge(event.target.checked)}
+              >
+                使用知识档案
+              </Checkbox>
+            </details>
+          </>
         )}
         {allowed &&
           section === "chat" &&

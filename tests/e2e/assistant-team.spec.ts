@@ -1,3 +1,7 @@
+import {
+  openPersonalAssistant,
+  selectAssistantPanel,
+} from "./assistant-controls.js";
 import { expect, test, type Page } from "@playwright/test";
 import {
   defaultTeamSettings,
@@ -274,7 +278,8 @@ async function setup(
 
 async function openTeam(page: Page) {
   await page.goto("/my-workspace");
-  await page.getByRole("button", { name: "智能体团队", exact: true }).click();
+  await openPersonalAssistant(page);
+  await selectAssistantPanel(page, "智能体团队");
   await expect(
     page.getByRole("heading", { name: "智能体团队", exact: true }),
   ).toBeVisible();
@@ -362,6 +367,7 @@ test("团队任务提交附件与明确模型，按后台轮询验收版本并�
     buffer: Buffer.from("活动素材与要求"),
   });
   await expect(panel.getByText("素材.txt", { exact: true })).toBeVisible();
+  await panel.locator(".assistant-team-task-settings summary").click();
   await selectOption(page, "团队任务模型", "推理模型 · qwen3-max");
   await panel
     .getByRole("checkbox", { name: "使用知识档案", exact: true })

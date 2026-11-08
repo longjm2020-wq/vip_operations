@@ -164,59 +164,6 @@
 .assistant-compose .agent-composer-tools {
   row-gap: 8px;
 }
-.assistant-compose .agent-composer-tools .ant-checkbox-wrapper {
-  font-size: 12px;
-}
-.assistant-access-trigger.ant-btn {
-  color: var(--app-secondary);
-  font-size: 12px;
-  padding-inline: 6px;
-}
-.assistant-compose .assistant-access-trigger[data-authorized="true"].ant-btn {
-  color: #e88442;
-}
-.assistant-access-trigger .anticon-down {
-  font-size: 9px;
-  opacity: 0.65;
-}
-.assistant-access-menu {
-  width: min(300px, calc(100vw - 64px));
-  font-size: 12px;
-  line-height: 1.7;
-}
-.assistant-access-menu .ant-select {
-  width: 100%;
-}
-.assistant-access-menu p {
-  color: var(--app-secondary);
-  margin: 10px 0;
-}
-.assistant-access-menu > .ant-btn + .ant-btn {
-  margin-top: 6px;
-}
-.assistant-compose .assistant-send-actions .assistant-live-voice.ant-btn {
-  background: var(--app-text);
-  color: var(--app-bg);
-  box-shadow: none;
-}
-.assistant-voice-wave {
-  display: flex;
-  height: 16px;
-  align-items: center;
-  gap: 2px;
-}
-.assistant-voice-wave i {
-  width: 2px;
-  height: 8px;
-  border-radius: 2px;
-  background: currentColor;
-}
-.assistant-voice-wave i:nth-child(2) {
-  height: 16px;
-}
-.assistant-voice-wave i:nth-child(3) {
-  height: 12px;
-}
 /* Keep the home draft mounted, but expose only the active conversation composer. */
 .assistant-compose[data-suppressed="true"] {
   visibility: hidden;
@@ -227,13 +174,6 @@
   color: var(--app-secondary);
   font-size: 13px;
   font-weight: 500;
-}
-.agent-settings.assistant-settings {
-  width: min(300px, calc(100vw - 64px));
-  max-width: 300px;
-  max-height: min(640px, calc(100dvh - 100px));
-  overflow-y: auto;
-  overscroll-behavior: contain;
 }
 .assistant-settings-preferences {
   display: flex;
@@ -253,14 +193,6 @@
   color: var(--app-secondary);
   font-size: 11px;
   line-height: 1.7;
-}
-.assistant-settings-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  padding: 12px 0;
-  margin-bottom: 12px;
-  border-bottom: 1px solid var(--app-border);
 }
 .personal-assistant-drawer .ant-drawer-body {
   background: var(--app-bg);
@@ -824,4 +756,17 @@
   flex-wrap: wrap;
   font-size: 12px;
   margin-top: 8px;
+}
+
+.assistant-team-task-settings {
+  margin: 16px 0;
+  color: var(--app-secondary);
+}
+.assistant-team-task-settings summary {
+  cursor: pointer;
+  margin-bottom: 12px;
+}
+.assistant-team-task-settings .ant-select {
+  min-width: 200px;
+  margin-right: 12px;
 }

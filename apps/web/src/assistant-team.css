@@ -200,13 +200,6 @@
   margin-bottom: 7px;
   flex-wrap: wrap;
 }
-.assistant-compose-mode .ant-select {
-  min-width: 110px;
-}
-.assistant-compose-mode .team-mode-note {
-  color: var(--app-secondary);
-  font-size: 11px;
-}
 body:has(.assistant-team-screen.ant-drawer-open) .workspace-companion-host {
   display: none;
 }

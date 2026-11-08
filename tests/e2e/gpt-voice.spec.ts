@@ -1,5 +1,6 @@
 import {
   openPersonalAssistant,
+  selectAssistantPanel,
   setAssistantOption,
 } from "./assistant-controls.js";
 import { expect, test, type Page, type WebSocketRoute } from "@playwright/test";
@@ -850,12 +851,20 @@ test("千问实时语音绑定所选电脑，刷新电脑任务并在同一通�
     },
   );
   await page.reload();
-  const composer = page.locator(".assistant-compose:visible");
-  await composer.getByRole("button", { name: "电脑授权：网站内" }).click();
-  await page.getByRole("combobox", { name: "执行位置" }).click();
-  await page.getByText("测试电脑", { exact: true }).last().click();
-  await composer.getByRole("button", { name: "电脑授权：跨窗口授权" }).click();
-  await composer.getByRole("button", { name: "开始智能语音对话" }).click();
+  await openPersonalAssistant(page);
+  await selectAssistantPanel(page, "电脑操作");
+  await page
+    .locator(".assistant-desktop-item")
+    .filter({ hasText: "测试电脑" })
+    .getByRole("button", { name: "在这台电脑执行" })
+    .click();
+  await page
+    .getByRole("dialog", { name: /AI 个人助理/ })
+    .getByRole("button", { name: "关闭", exact: true })
+    .click();
+  await page
+    .getByRole("button", { name: "开始与小序语音对话", exact: true })
+    .click();
   await expect(bubble.getByRole("status")).toHaveText("实时聆听中，你说");
   await expect(bubble.locator(".companion-voice-target")).toHaveText(
     "电脑操作 · 测试电脑",

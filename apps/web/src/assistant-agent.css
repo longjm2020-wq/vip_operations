@@ -19,10 +19,6 @@
 .agent-composer-trailing {
   margin-left: auto;
 }
-.agent-composer-tools .ant-select {
-  min-width: 110px;
-  max-width: 160px;
-}
 .agent-attachments {
   display: flex;
   flex-wrap: wrap;
@@ -33,13 +29,6 @@
   max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-.agent-settings {
-  max-width: 270px;
-  font-size: 12px;
-}
-.agent-settings p {
-  margin: 8px 0;
 }
 .agent-job {
   padding: 12px;

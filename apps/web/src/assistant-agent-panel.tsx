@@ -1,20 +1,11 @@
-import {
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
+import { useCallback, useRef, useState, type ReactNode } from "react";
 import {
   App,
   Button,
-  Checkbox,
   Empty,
   Image,
   Popconfirm,
-  Popover,
   Progress,
-  Select,
   Space,
   Tag,
   Tooltip,
@@ -22,7 +13,6 @@ import {
 } from "antd";
 import {
   PlusOutlined,
-  SettingOutlined,
   DownloadOutlined,
   FileOutlined,
   DeleteOutlined,
@@ -32,20 +22,15 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { api, csrf } from "./api";
 import { useUser } from "./shared";
 import type {
-  AgentCatalog,
   AgentFile,
   AgentJob,
 } from "../../../packages/contracts/src/assistant-agent";
 import type { AssistantMessage } from "../../../packages/contracts/src/personal-assistant";
 import { assistantPublicText } from "../../../packages/contracts/src/ai-presentation";
-import { assistantPurposeMenu } from "./assistant-purpose-options";
 import { showWorkspaceHologram } from "./workspace-hologram";
 import "./assistant-agent.css";
 
 export type AgentOptions = {
-  model?: string;
-  imageModel?: string;
-  webSearch: boolean;
   attachments: AgentFile[];
 };
 export const agentContentUrl = (id: string) =>
@@ -59,45 +44,17 @@ export function AgentComposer({
   change,
   disabled,
   onUploading,
-  settingsContent,
-  accessControl,
-  modelControl,
-  searchControl,
-  teamMode = false,
   actions,
-  active = true,
 }: {
   value: AgentOptions;
   change: (v: AgentOptions) => void;
   disabled: boolean;
   onUploading: (v: boolean) => void;
-  settingsContent?: ReactNode;
-  accessControl?: ReactNode;
-  modelControl?: ReactNode;
-  searchControl?: ReactNode;
-  teamMode?: boolean;
   actions?: ReactNode;
-  active?: boolean;
 }) {
   const input = useRef<HTMLInputElement>(null),
     { message } = App.useApp();
   const [uploading, setUploading] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  useEffect(() => {
-    if (!active) setSettingsOpen(false);
-  }, [active]);
-  const [preferredPurpose, setPreferredPurpose] = useState<string>();
-  const catalog = useQuery({
-    queryKey: ["assistant-capabilities"],
-    queryFn: async () =>
-      (await api("/my-workspace/assistant/capabilities")).data as AgentCatalog,
-    staleTime: 600000,
-  });
-  const purposeMenu = assistantPurposeMenu(
-    catalog.data,
-    value.model,
-    preferredPurpose,
-  );
   const upload = async (files: FileList | null) => {
     if (!files?.length) return;
     const chosen = Array.from(files);
@@ -155,111 +112,17 @@ export function AgentComposer({
           <Button
             size="small"
             type="text"
+            shape="circle"
             icon={<PlusOutlined />}
             title="添加附件"
             aria-label="附件"
             loading={uploading}
-            disabled={disabled}
+            disabled={disabled || uploading}
             onClick={() => input.current?.click()}
           />
-          {accessControl}
         </div>
-        <div className="agent-composer-trailing">
-          {modelControl ?? (
-            <Select
-              size="small"
-              variant="borderless"
-              aria-label="助理能力"
-              value={purposeMenu.value}
-              placeholder="日常问答"
-              disabled={disabled || uploading}
-              loading={catalog.isLoading}
-              popupMatchSelectWidth={false}
-              options={purposeMenu.options}
-              onChange={(purpose) => {
-                const option = purposeMenu.options.find(
-                  (o) => o.value === purpose,
-                );
-                if (!option) return;
-                setPreferredPurpose(purpose);
-                change({ ...value, model: option.model });
-              }}
-            />
-          )}
-          {searchControl ?? (
-            <Checkbox
-              checked={value.webSearch}
-              disabled={disabled || uploading}
-              onChange={(e) =>
-                change({ ...value, webSearch: e.target.checked })
-              }
-            >
-              联网
-            </Checkbox>
-          )}
-          <Popover
-            trigger="click"
-            title={settingsContent ? "助理设置" : "创作设置"}
-            open={settingsOpen && active}
-            onOpenChange={setSettingsOpen}
-            content={
-              <div
-                className={`agent-settings${settingsContent ? " assistant-settings" : ""}`}
-                onClick={(event) => {
-                  if (
-                    (event.target as HTMLElement).closest(
-                      "[data-settings-action]",
-                    )
-                  )
-                    setSettingsOpen(false);
-                }}
-              >
-                {settingsContent}
-                {!teamMode && (
-                  <>
-                    <p>图像创作能力</p>
-                    <Select
-                      style={{ width: 230 }}
-                      aria-label="图像创作能力"
-                      placeholder="使用首个可用图像能力"
-                      value={value.imageModel}
-                      disabled={disabled || uploading}
-                      allowClear
-                      options={catalog.data?.imageModels?.map((m) => ({
-                        value: m.id,
-                        label: m.name + (m.reference ? " · 参考图" : ""),
-                      }))}
-                      onChange={(imageModel) =>
-                        change({ ...value, imageModel })
-                      }
-                    />
-                  </>
-                )}
-                <p>仅在提出创作要求时运行。智能服务按实际用量计费。</p>
-                <p>附件仅本人可访问；发送时，所附内容会交给智能服务处理。</p>
-                {catalog.data?.notice && <p>{catalog.data.notice}</p>}
-                <Button
-                  size="small"
-                  loading={catalog.isFetching}
-                  onClick={() => void catalog.refetch()}
-                >
-                  刷新能力列表
-                </Button>
-              </div>
-            }
-          >
-            <Button
-              size="small"
-              type="text"
-              icon={<SettingOutlined />}
-              aria-label={settingsContent ? "助理设置" : "创作设置"}
-              disabled={!active || (disabled && !settingsContent)}
-            />
-          </Popover>
-          {actions}
-        </div>
+        <div className="agent-composer-trailing">{actions}</div>
       </div>
-      {catalog.error && <small>能力列表加载失败，当前选择保持不变。</small>}
       {!!value.attachments.length && (
         <div className="agent-attachments">
           {value.attachments.map((file) => (
