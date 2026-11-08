@@ -1,4 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+// Model routing and metering are covered by ai-model-management.test.ts.
+// Keep these provider-response checks independent of a configured database.
+vi.mock("../../apps/api/src/ai-model-routing.js", () => ({
+  featureModelRef: async () => undefined,
+}));
+vi.mock("../../apps/api/src/ai-metering.js", () => ({
+  aiFetch: (_feature: string, url: string | URL, options: RequestInit) =>
+    fetch(url, options),
+}));
 vi.mock("../../apps/api/src/modules/analytics/secrets.js", () => ({
   decryptSecret: () => "test-only-key",
 }));
