@@ -57,6 +57,8 @@ pnpm dev
 
 已提供Dockerfile、前端Nginx和Compose。设置 `.env` 中 `POSTGRES_PASSWORD` 与 `ADMIN_PASSWORD`，以及可选 `COMPOSE_ORIGIN`（默认http://localhost:8080）。密码如含URL特殊字符，数据库URL需要URL编码；开发可使用随机字母数字密码。
 
+Linux 容器与 CI 从系统软件源安装 FFmpeg，并设置 `FFMPEG_BIN=/usr/bin/ffmpeg`，让 `ffmpeg-static` 直接使用已安装的可执行文件，避免构建依赖 GitHub Release 的二进制及许可证文件下载。API／Worker 镜像构建时运行现有媒体测试，实际验证剪辑、拼接、缩放、静音和帧提取；镜像保留系统包许可证。Windows 本地开发仍使用原有平台二进制。此项仅调整构建依赖来源，不改变用户界面或媒体功能，因此无需修改用户手册。
+
 ```sh
 docker compose up --build -d
 docker compose logs api worker
