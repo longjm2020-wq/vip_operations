@@ -65,6 +65,8 @@ import {
   runVoiceTurn,
   runVoiceSpeech,
   voiceErrorEvent,
+  readDictationStatus,
+  runVoiceDictation,
 } from "./assistant-voice.js";
 
 // The owner always comes from the authenticated session; there is no user-id route.
@@ -236,6 +238,34 @@ export class PersonalWorkspaceController {
   @Post("assistant/voice/settings")
   async voiceSettings(@Req() request: AuthRequest, @Body() input: unknown) {
     return saveVoiceSettings(context(request), input);
+  }
+  @Get("assistant/dictation")
+  async dictationStatus(
+    @Req() request: AuthRequest,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    response.setHeader("Cache-Control", "private, no-store");
+    return readDictationStatus(context(request));
+  }
+  @Post("assistant/dictation")
+  async dictate(
+    @Req() request: AuthRequest,
+    @Body() input: unknown,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    response.setHeader("Cache-Control", "private, no-store");
+    const controller = new AbortController();
+    const closed = () => controller.abort();
+    response.on("close", closed);
+    try {
+      return await runVoiceDictation(
+        context(request),
+        input,
+        controller.signal,
+      );
+    } finally {
+      response.off("close", closed);
+    }
   }
   @Post("assistant/voice/verify")
   async voiceVerify(@Req() request: AuthRequest) {

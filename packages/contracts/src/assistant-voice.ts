@@ -45,6 +45,15 @@ export const voiceTurnSchema = z
 export const voiceSpeechSchema = z
   .object({ id: z.string().uuid(), messageId: z.string().uuid() })
   .strict();
+export const voiceDictationSchema = voiceTurnSchema.pick({
+  id: true,
+  audio: true,
+});
+export type AssistantDictationStatus = {
+  ready: boolean;
+  message: string;
+  maxSeconds: number;
+};
 export type AssistantVoiceStatus = {
   ready: boolean;
   enabled: boolean;

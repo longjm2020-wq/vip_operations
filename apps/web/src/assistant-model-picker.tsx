@@ -9,7 +9,6 @@ export function AssistantModelPicker({
   disabled,
   loading,
   failed,
-  hasImage,
   refresh,
   teamSelected,
   selectTeam,
@@ -20,17 +19,18 @@ export function AssistantModelPicker({
   disabled: boolean;
   loading: boolean;
   failed: boolean;
-  hasImage: boolean;
   refresh: () => void;
   teamSelected?: boolean;
   selectTeam?: () => void;
 }) {
+  const models =
+    catalog?.models?.filter((model) => model.vision === true) || [];
   const selectedId = teamSelected ? "team" : value || catalog?.defaultModel;
-  const selected = catalog?.models?.find((model) => model.id === selectedId);
+  const selected = models.find((model) => model.id === selectedId);
   const title =
     (teamSelected ? "智能体团队" : selected?.displayName) ||
     selected?.name ||
-    (value ? "所选模型不可用" : "默认模型");
+    (selectedId ? "所选模型不可用" : "默认模型");
   return (
     <Dropdown
       trigger={["click"]}
@@ -55,21 +55,19 @@ export function AssistantModelPicker({
                 { type: "divider" as const },
               ]
             : []),
-          ...(catalog?.models || []).map((model) => ({
+          ...models.map((model) => ({
             key: model.id,
-            disabled: hasImage && !model.vision,
             label: (
               <div className="assistant-model-option">
                 <span>{model.displayName || model.name}</span>
                 <small>
                   {model.name}
-                  {model.vision ? " · 识图" : ""}
-                  {hasImage && !model.vision ? " · 不支持当前图片" : ""}
+                  {" · 多模态"}
                 </small>
               </div>
             ),
           })),
-          ...(!catalog?.models?.length
+          ...(!models.length
             ? [
                 {
                   key: "notice",

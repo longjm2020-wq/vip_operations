@@ -201,6 +201,10 @@ describe("AI model administration and real routing", () => {
     const title = view.features.find((f) => f.id === "product_titles")!;
     expect(title.choices.map((c) => c.value)).toContain(modelRef(vision));
     expect(title.choices.map((c) => c.value)).not.toContain(modelRef(plain));
+    const chat = view.features.find((f) => f.id === "assistant_chat")!;
+    expect(chat.choices.map((c) => c.value)).toContain(modelRef(vision));
+    expect(chat.choices.map((c) => c.value)).not.toContain(modelRef(plain));
+    expect(chat.boundary).toContain("多模态");
     expect(title.status).toBe("configured");
     expect(title.usage.totalTokens).toBeNull();
     expect(title.usage.amounts).toEqual([]);
@@ -208,11 +212,25 @@ describe("AI model administration and real routing", () => {
       /fixture-secret|fixture-xai|fixture-image|shared-key|media-keys/,
     );
     expect(view.features.find((f) => f.id === "browser_dictation")?.mode).toBe(
-      "fixed",
+      "voice",
     );
+    expect(
+      view.features.find((f) => f.id === "browser_dictation"),
+    ).toMatchObject({
+      model: "openai/gpt-audio",
+      source: "OpenRouter · 独立音频密钥",
+      status: "disabled",
+    });
     await expect(
       saveAiFeatureModel(admin(), {
         feature: "product_titles",
+        model: modelRef(plain),
+        revision: 0,
+      }),
+    ).rejects.toMatchObject(errorCode("AI_MODEL_UNAVAILABLE"));
+    await expect(
+      saveAiFeatureModel(admin(), {
+        feature: "assistant_chat",
         model: modelRef(plain),
         revision: 0,
       }),
@@ -265,10 +283,10 @@ describe("AI model administration and real routing", () => {
     });
     await saveAiFeatureModel(admin(), {
       feature: "assistant_team",
-      model: modelRef(plain),
+      model: modelRef(vision),
       revision: 0,
     });
-    expect((await resolveTeamModel({})).actual).toBe(plain);
+    expect((await resolveTeamModel({})).actual).toBe(vision);
     expect(
       (await resolveTeamModel({ feature: "deerflow_team", orchestrator: true }))
         .actual,

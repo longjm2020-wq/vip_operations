@@ -65,7 +65,7 @@ function VoiceConnections({
   });
   const audio = useQuery({
     queryKey: ["assistant-voice", user.id],
-    enabled: kind === "voice_audio",
+    enabled: kind === "voice_audio" || kind === "browser_dictation",
     queryFn: async () =>
       (await api("/my-workspace/assistant/voice")).data as AssistantVoiceStatus,
   });

@@ -88,13 +88,18 @@ async function catalog() {
           .filter(
             (m) =>
               typeof m.id === "string" &&
-              m.supported_parameters?.includes("tools") &&
-              m.architecture?.output_modalities?.includes("text") &&
+              Array.isArray(m.supported_parameters) &&
+              m.supported_parameters.includes("tools") &&
+              Array.isArray(m.architecture?.input_modalities) &&
+              m.architecture.input_modalities.includes("text") &&
+              m.architecture.input_modalities.includes("image") &&
+              Array.isArray(m.architecture?.output_modalities) &&
+              m.architecture.output_modalities.includes("text") &&
               !/(?:^|:)(?:batch|async|asynchronous)(?=:|$)/i.test(m.id) &&
               !/(:free|:extended|:thinking|:online)$/.test(m.id),
           )
           .sort((a, b) => (b.created || 0) - (a.created || 0));
-        // Offer a bounded model menu; routing IDs and credentials stay server-side.
+        // Only multimodal chat models enter the shared chat, team and management catalog.
         const groups = [
           { prefix: "deepseek/", label: "深度思考", count: 2 },
           { prefix: "openai/", label: "全能助手", count: 2 },
@@ -200,7 +205,7 @@ export async function resolveAgentModel(ref?: string, feature: AiFeatureId = "as
   if (!model)
     fail(
       "MODEL_UNAVAILABLE",
-      "所选模型暂不可用，请刷新模型列表后重新选择",
+      "所选模型不可用或不支持多模态对话，请刷新模型列表后重新选择",
       400,
     );
   return model;

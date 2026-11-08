@@ -102,9 +102,15 @@ async function setup(
             vision: true,
           },
           {
-            id: "engine/deep",
+            id: "engine/vision",
             name: "深度思考",
-            displayName: "DeepSeek V3.2",
+            displayName: "Gemini 2.5 Pro",
+            vision: true,
+          },
+          {
+            id: "engine/text-only",
+            name: "纯文本旧型号",
+            displayName: "Text Only",
             vision: false,
           },
         ],
@@ -218,7 +224,7 @@ async function setup(
   });
   return requests;
 }
-test("模型菜单显示真实名称、发送所选模型并在重开对话后保留", async ({
+test("模型菜单只显示多模态型号、发送所选模型并在重开对话后保留", async ({
   page,
 }) => {
   const requests = await setup(page);
@@ -228,29 +234,37 @@ test("模型菜单显示真实名称、发送所选模型并在重开对话后�
     composer.getByRole("button", { name: "选择对话模型" }),
   ).toContainText("GPT-6.1 Sol");
   await composer.getByRole("button", { name: "选择对话模型" }).click();
-  await page.getByRole("menuitem", { name: /DeepSeek V3.2/ }).click();
+  await expect(page.getByRole("menuitem", { name: /Text Only/ })).toHaveCount(
+    0,
+  );
+  await expect(
+    page.getByRole("menuitem", { name: /Gemini 2.5 Pro/ }),
+  ).toContainText("多模态");
+  await page.getByRole("menuitem", { name: /Gemini 2.5 Pro/ }).click();
   await expect(
     composer.getByRole("button", { name: "选择对话模型" }),
-  ).toContainText("DeepSeek V3.2");
+  ).toContainText("Gemini 2.5 Pro");
   expect(requests).toHaveLength(0);
   await openPersonalAssistant(page);
   const dialog = page.getByRole("dialog", { name: /AI 个人助理/ });
   await expect(
     dialog.getByRole("button", { name: "选择对话模型" }),
-  ).toContainText("DeepSeek V3.2");
+  ).toContainText("Gemini 2.5 Pro");
   await dialog.getByPlaceholder(/告诉我你想完成什么/).fill("整理两条建议");
   await dialog.getByRole("button", { name: "发送给个人助理" }).click();
   await expect.poll(() => requests.length).toBe(1);
-  expect(requests[0].model).toBe("engine/deep");
+  expect(requests[0].model).toBe("engine/vision");
   expect(requests[0]).not.toHaveProperty("webSearch");
 });
 
-test("选中模型失效后保留草稿并要求重选，不静默降级", async ({ page }) => {
+test("选中模型失去多模态能力后保留草稿并要求重选，不静默降级", async ({
+  page,
+}) => {
   const requests = await setup(page);
   await page.goto("/my-workspace");
   const composer = page.locator(".assistant-compose:visible");
   await composer.getByRole("button", { name: "选择对话模型" }).click();
-  await page.getByRole("menuitem", { name: /DeepSeek V3.2/ }).click();
+  await page.getByRole("menuitem", { name: /Gemini 2.5 Pro/ }).click();
   await composer.getByPlaceholder(/告诉我你想完成什么/).fill("保留我的草稿");
   await page.route("**/api/v1/my-workspace/assistant/capabilities", (route) =>
     route.fulfill({
@@ -263,6 +277,12 @@ test("选中模型失效后保留草稿并要求重选，不静默降级", async
               name: "通用助手",
               displayName: "GPT-6.1 Sol",
               vision: true,
+            },
+            {
+              id: "engine/vision",
+              name: "深度思考",
+              displayName: "Gemini 2.5 Pro",
+              vision: false,
             },
           ],
           imageModels: [],

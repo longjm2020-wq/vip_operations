@@ -5,7 +5,7 @@ export const aiFeatures = [
     group: "小序",
     href: "/my-workspace?assistant=chat",
     boundary:
-      "文字、图片与主动上传的资料；工具操作仍遵守账号权限。对话中可临时选择其他模型。",
+      "仅使用支持文字和图片输入、文字回复的多模态模型；主动上传资料按模型能力处理，工具操作遵守账号权限。对话中可临时切换。",
     kind: "chat",
   },
   {
@@ -45,7 +45,7 @@ export const aiFeatures = [
     name: "网站原有智能体团队",
     group: "团队",
     href: "/my-workspace?assistant=team",
-    boundary: "按步骤组织任务与验收；任务或成员指定型号优先于管理页默认值。",
+    boundary: "从多模态对话目录选型并按步骤组织任务与验收；任务或成员指定型号优先于管理页默认值。",
     kind: "team",
   },
   {
@@ -54,7 +54,7 @@ export const aiFeatures = [
     group: "团队",
     href: "/my-workspace?assistant=chat",
     boundary:
-      "公开研究与隔离的文本文件交付；当前未接入业务写入、电脑控制及图片视频生成工具。",
+      "通过网站网关使用多模态对话模型，进行公开研究与隔离的文本文件交付；未接入业务写入、电脑控制及图片视频生成工具。",
     kind: "team",
   },
   {
@@ -153,11 +153,11 @@ export const aiFeatures = [
   {
     id: "browser_dictation",
     name: "输入框麦克风听写",
-    group: "本地与浏览器",
+    group: "语音",
     href: "/my-workspace?assistant=chat",
     boundary:
-      "调用浏览器语音识别，转成可编辑草稿；服务由浏览器提供，本站无模型切换与账单接口。",
-    kind: "fixed",
+      "录制最多25秒音频，通过已配置的音频模型转成可编辑草稿；不自动发送或执行指令，不保存原始录音。与分段语音共用模型和密钥，用量独立记录。",
+    kind: "audio",
   },
   {
     id: "product_ocr",

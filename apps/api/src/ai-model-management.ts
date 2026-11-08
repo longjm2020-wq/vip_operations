@@ -42,6 +42,7 @@ export const emptyAiUsage = (): AiFeatureUsage => ({
 export function supportsFeature(kind: string, model: AgentInternalModel) {
   return (
     (!(
+      kind === "chat" ||
       kind === "vision" ||
       kind === "vision_structured" ||
       kind === "aigc_compile"
@@ -203,22 +204,10 @@ export async function aiModelManagement(
     if (feature.kind === "fixed") {
       row.mode = "fixed";
       row.status = "local";
-      row.model =
-        feature.id === "browser_dictation"
-          ? "浏览器 SpeechRecognition"
-          : "Tesseract.js 本地 OCR";
-      row.source =
-        feature.id === "browser_dictation"
-          ? "浏览器 / 系统语音服务"
-          : "当前浏览器本地运行";
-      row.statusText =
-        feature.id === "browser_dictation"
-          ? "取决于浏览器支持及授权"
-          : "本地功能";
-      row.usageNote =
-        feature.id === "browser_dictation"
-          ? "本网站没有该浏览器服务的用量和账单接口。"
-          : "不调用收费模型 API；本站 API 费用为 0。";
+      row.model = "Tesseract.js 本地 OCR";
+      row.source = "当前浏览器本地运行";
+      row.statusText = "本地功能";
+      row.usageNote = "不调用收费模型 API；本站 API 费用为 0。";
       return row;
     }
     if (feature.kind === "realtime" || feature.kind === "audio") {
@@ -250,7 +239,7 @@ export async function aiModelManagement(
           : verified &&
               (p !== "qwen" ||
                 (s?.qwen_workspace_id && s?.qwen_free_only_confirmed)) &&
-              (rt || readyKey)
+              (rt || feature.id === "browser_dictation" || readyKey)
             ? "ready"
             : "configured";
       row.statusText =

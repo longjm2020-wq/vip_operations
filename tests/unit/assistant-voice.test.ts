@@ -62,6 +62,8 @@ import {
   validateVoiceWav,
   streamVoiceSpeech,
   voiceSafeError,
+  readDictationStatus,
+  runVoiceDictation,
 } from "../../apps/api/src/modules/workspace/assistant-voice.js";
 const actor = (admin = false, id = "7"): Context => ({
   actor: {
@@ -162,6 +164,120 @@ afterAll(async () => {
   await fixture.database?.close();
 });
 describe("OpenRouter GPT voice", () => {
+  it("transcribes an unsent draft with the configured audio model, separate usage, and no business calls", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          id: randomUUID(),
+          model: "openai/gpt-audio",
+          choices: [
+            {
+              finish_reason: "stop",
+              message: { content: "查询 XFA16X31196L029004 库存" },
+            },
+          ],
+          usage: {
+            prompt_tokens: 20,
+            completion_tokens: 8,
+            total_tokens: 28,
+            cost: 0.002,
+          },
+        }),
+      ),
+    );
+    expect(await readDictationStatus(actor())).toEqual({
+      ready: true,
+      maxSeconds: 25,
+      message: "听写已就绪",
+    });
+    const body = { id: randomUUID(), audio: audio() };
+    const result = await runVoiceDictation(
+      actor(),
+      body,
+      new AbortController().signal,
+    );
+    expect(result.text).toBe("查询 XFA16X31196L029004 库存");
+    expect(fixture.read).not.toHaveBeenCalled();
+    expect(fixture.send).not.toHaveBeenCalled();
+    const sent = JSON.parse(String(vi.mocked(fetch).mock.calls[0][1]?.body));
+    expect(sent).toMatchObject({
+      model: "openai/gpt-audio",
+      modalities: ["text"],
+      stream: false,
+    });
+    expect(sent.messages[1].content[0]).toMatchObject({
+      type: "input_audio",
+      input_audio: { format: "wav", data: body.audio },
+    });
+    const usage = await fixture.database!.query<Record<string, unknown>>(
+      "SELECT feature_id,model,total_tokens,amount FROM ai_model_usage WHERE feature_id='browser_dictation'",
+    );
+    expect(
+      usage.rows.map((row) => ({
+        ...row,
+        total_tokens: Number(row.total_tokens),
+        amount: Number(row.amount),
+      })),
+    ).toMatchObject([
+      {
+        feature_id: "browser_dictation",
+        model: "openai/gpt-audio",
+        total_tokens: 28,
+        amount: 0.002,
+      },
+    ]);
+    await expect(
+      runVoiceDictation(actor(), body, new AbortController().signal),
+    ).rejects.toBeDefined();
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+  it("refuses unconfigured, unauthorized or silent dictation before an API charge", async () => {
+    const unprivileged = actor();
+    unprivileged.actor.permissions = [];
+    await expect(readDictationStatus(unprivileged)).rejects.toBeDefined();
+    await expect(
+      runVoiceDictation(
+        actor(),
+        { id: randomUUID(), audio: wavFromFrames([new Float32Array(12000)]) },
+        new AbortController().signal,
+      ),
+    ).rejects.toBeDefined();
+    await fixture.database!.exec(
+      "UPDATE assistant_voice_settings SET enabled=false WHERE id=1",
+    );
+    expect((await readDictationStatus(actor())).ready).toBe(false);
+    await expect(
+      runVoiceDictation(
+        actor(),
+        { id: randomUUID(), audio: audio() },
+        new AbortController().signal,
+      ),
+    ).rejects.toBeDefined();
+    expect(fetch).not.toHaveBeenCalled();
+    expect(fixture.send).not.toHaveBeenCalled();
+  });
+  it("does not return late dictation after cancellation and releases the request reservation", async () => {
+    const abort = new AbortController();
+    vi.mocked(fetch).mockImplementationOnce(async () => {
+      abort.abort();
+      return new Response(
+        JSON.stringify({
+          model: "openai/gpt-audio",
+          choices: [{ message: { content: "迟到的文字" } }],
+        }),
+      );
+    });
+    const id = randomUUID();
+    await expect(
+      runVoiceDictation(actor(), { id, audio: audio() }, abort.signal),
+    ).rejects.toBeDefined();
+    const saved = await fixture.database!.query(
+      "SELECT state FROM assistant_voice_requests WHERE id=$1",
+      [id],
+    );
+    expect(saved.rows).toEqual([{ state: "FAILED" }]);
+    expect(fixture.send).not.toHaveBeenCalled();
+  });
   it("redacts credentials and limits configuration to administrators", async () => {
     const value = await readVoiceStatus(actor());
     expect(value.ready).toBe(true);

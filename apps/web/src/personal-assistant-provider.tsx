@@ -306,18 +306,16 @@ export function PersonalAssistantProvider({
   });
   const data = q.data?.data as AssistantConversation | undefined;
   const selectedModel = modelCatalog.data?.models?.find(
-    (model) => model.id === (chatModel || modelCatalog.data?.defaultModel),
+    (model) =>
+      model.vision === true &&
+      model.id === (chatModel || modelCatalog.data?.defaultModel),
   );
   const modelProblem =
     !teamMode &&
     !desktopDeviceId &&
-    (chatModel && modelCatalog.data && !selectedModel
-      ? "所选模型已不可用，请重新选择。"
-      : selectedModel &&
-          !selectedModel.vision &&
-          agent.attachments.some((file) => file.mime.startsWith("image/"))
-        ? "当前模型不支持图片，请选择支持识图的模型。"
-        : "");
+    (modelCatalog.data && !selectedModel
+      ? "所选模型已不可用，请重新选择支持文字和图片的多模态模型。"
+      : "");
   const composerReady = teamMode
     ? teamConfig.data?.ready
     : data?.ready && !modelProblem;
@@ -722,9 +720,6 @@ export function PersonalAssistantProvider({
                     disabled={busy || voice.listening}
                     loading={modelCatalog.isFetching}
                     failed={!!modelCatalog.error}
-                    hasImage={agent.attachments.some((file) =>
-                      file.mime.startsWith("image/"),
-                    )}
                     refresh={() => void modelCatalog.refetch()}
                   />
                 )}
@@ -733,10 +728,18 @@ export function PersonalAssistantProvider({
                   shape="circle"
                   className="assistant-dictation-button"
                   icon={voice.listening ? <StopOutlined /> : <AudioOutlined />}
-                  aria-label={voice.listening ? "停止听写" : "语音输入"}
+                  aria-label={
+                    voice.listening
+                      ? voice.phase === "recording"
+                        ? "停止听写"
+                        : "取消听写"
+                      : "语音输入"
+                  }
                   aria-pressed={voice.listening}
                   title={
-                    voice.listening ? "停止听写" : "语音输入 · 转成文字后发送"
+                    voice.listening
+                      ? "结束或取消听写"
+                      : "语音输入 · 转成文字后发送"
                   }
                   disabled={busy}
                   onClick={() => {
@@ -832,7 +835,7 @@ export function PersonalAssistantProvider({
           <i />
           <i />
           <i />
-          正在听写，说完后核对文字再发送
+          {voice.note}
         </div>
       )}
       {voice.error && (

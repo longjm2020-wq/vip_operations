@@ -195,8 +195,13 @@ test("shared connection preserves the saved key and does not verify a disabled s
 }) => {
   const f = await fixture(page);
   await page.goto("/settings/ai");
-  await page.getByRole("button", { name: "OpenRouter 连接配置", exact: true }).click();
-  const dialog = page.getByRole("dialog", { name: "OpenRouter 连接", exact: true });
+  await page
+    .getByRole("button", { name: "OpenRouter 连接配置", exact: true })
+    .click();
+  const dialog = page.getByRole("dialog", {
+    name: "OpenRouter 连接",
+    exact: true,
+  });
   await expect(dialog.getByLabel("API Key", { exact: true })).toHaveValue("");
   await dialog.getByRole("button", { name: "保存并验证", exact: true }).click();
   await expect(dialog.getByText("连接已验证", { exact: true })).toBeVisible();
@@ -209,9 +214,16 @@ test("shared connection preserves the saved key and does not verify a disabled s
   expect(f.verifications).toHaveLength(1);
   await dialog.getByRole("button", { name: "清除密钥", exact: true }).click();
   await page.getByRole("button", { name: "取消", exact: true }).click();
-  await expect(page.getByRole("dialog", { name: "清除 OpenRouter API Key？", exact: true })).toBeHidden();
+  await expect(
+    page.getByRole("dialog", {
+      name: "清除 OpenRouter API Key？",
+      exact: true,
+    }),
+  ).toBeHidden();
   expect(f.connectionChanges).toHaveLength(2);
-  await page.screenshot({ path: test.info().outputPath("compact-connection.png") });
+  await page.screenshot({
+    path: test.info().outputPath("compact-connection.png"),
+  });
 });
 
 test("management lists actual sources, persists a per-feature model and filters entries", async ({
@@ -254,6 +266,20 @@ test("voice configuration and direct links do not start a call", async ({
   await expect(
     page.getByRole("dialog").getByText("实时通话", { exact: true }),
   ).toBeVisible();
+  expect(f.sessions).toEqual([]);
+  await page.getByRole("button", { name: "关闭", exact: true }).click();
+  await page
+    .locator('tr[data-row-key="browser_dictation"]')
+    .getByRole("button", { name: "切换 / 配置" })
+    .click();
+  await expect(
+    page
+      .getByRole("dialog")
+      .getByRole("combobox", { name: "语音模型", exact: true }),
+  ).toBeVisible();
+  await expect(page.getByRole("dialog")).toContainText(
+    "麦克风听写、分段语音和朗读共用",
+  );
   expect(f.sessions).toEqual([]);
   await page.getByRole("button", { name: "关闭", exact: true }).click();
   await page.getByRole("link", { name: "打开小序实时语音通话" }).click();

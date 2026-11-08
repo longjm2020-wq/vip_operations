@@ -114,8 +114,8 @@ export function VoiceSettings({
   return (
     <Form layout="vertical" className="realtime-settings" disabled={busy}>
       <Typography.Paragraph type="secondary">
-        通过 OpenRouter 使用 GPT Audio，按 API
-        用量计费。建议配置小序专用密钥并在 OpenRouter
+        麦克风听写、分段语音和朗读共用此音频模型与密钥，通过 OpenRouter 使用 GPT
+        Audio，按 API 用量计费。建议配置小序专用密钥并在 OpenRouter
         设置额度。密钥仅加密保存在服务器，保存后不回显。
       </Typography.Paragraph>
       {!value.encryptionReady && (

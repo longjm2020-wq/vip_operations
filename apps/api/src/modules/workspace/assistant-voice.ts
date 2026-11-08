@@ -10,6 +10,8 @@ import {
   voiceSettingsSchema,
   voiceTurnSchema,
   voiceSpeechSchema,
+  voiceDictationSchema,
+  type AssistantDictationStatus,
   type AssistantVoiceStatus,
   type VoiceEvent,
 } from "../../../../../packages/contracts/src/assistant-voice.js";
@@ -117,9 +119,14 @@ function providerError(status: number) {
     return "所选 GPT 音频模型或声音不可用，请检查模型权限和配置";
   return "OpenRouter 语音服务暂不可用，请稍后手动重试";
 }
-async function request(s: Row, body: object, signal: AbortSignal) {
+async function request(
+  s: Row,
+  body: object,
+  signal: AbortSignal,
+  feature: "voice_audio" | "browser_dictation" = "voice_audio",
+) {
   signal.throwIfAborted();
-  const response = await aiFetch("voice_audio", endpoint, {
+  const response = await aiFetch(feature, endpoint, {
     method: "POST",
     redirect: "error",
     signal: AbortSignal.any([signal, AbortSignal.timeout(90000)]),
@@ -176,7 +183,12 @@ export function validateVoiceWav(base64: string) {
   if (Math.sqrt(energy / ((b.length - 44) / 2)) < 0.002)
     fail("VOICE_SILENT", "没有听到清晰语音，请靠近麦克风重试", 400);
 }
-async function transcribe(s: Row, audio: string, signal: AbortSignal) {
+async function transcribe(
+  s: Row,
+  audio: string,
+  signal: AbortSignal,
+  feature: "voice_audio" | "browser_dictation" = "voice_audio",
+) {
   const response = await request(
     s,
     {
@@ -201,6 +213,7 @@ async function transcribe(s: Row, audio: string, signal: AbortSignal) {
       ],
     },
     signal,
+    feature,
   );
   const data = (await response.json()) as Row;
   if (data.error)
@@ -376,6 +389,46 @@ async function finishVoiceRequest(id: string, state: "DONE" | "FAILED") {
   await db.$executeRawUnsafe(
     "DELETE FROM public.assistant_voice_requests WHERE state<>'PENDING' AND created_at<now()-interval '7 days'",
   );
+}
+function dictationStatus(s: Row | undefined): AssistantDictationStatus {
+  const ready = Boolean(
+    s?.enabled && s.api_key_encrypted && s.verified_at && encryptionReady(),
+  );
+  return {
+    ready,
+    maxSeconds: 25,
+    message: ready
+      ? "听写已就绪"
+      : "听写服务尚未就绪，请在语音设置中启用并验证音频服务。",
+  };
+}
+export async function readDictationStatus(c: Context) {
+  requireAssistant(c);
+  return dictationStatus(await settings());
+}
+export async function runVoiceDictation(
+  c: Context,
+  input: unknown,
+  signal: AbortSignal,
+) {
+  requireAssistant(c);
+  const b = parse(voiceDictationSchema, input);
+  validateVoiceWav(b.audio);
+  const s = await settings();
+  const status = dictationStatus(s);
+  if (!status.ready) fail("VOICE_NOT_READY", status.message, 409);
+  signal.throwIfAborted();
+  await reserveVoiceRequest(c, b.id);
+  try {
+    // Dictation only returns editable text; it never sends a chat or executes a tool.
+    const text = await transcribe(s!, b.audio, signal, "browser_dictation");
+    signal.throwIfAborted();
+    await finishVoiceRequest(b.id, "DONE");
+    return { text };
+  } catch (error) {
+    await finishVoiceRequest(b.id, "FAILED");
+    throw error;
+  }
 }
 function spokenText(text: string) {
   text = assistantPublicText(text);

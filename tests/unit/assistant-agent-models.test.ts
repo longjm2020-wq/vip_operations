@@ -1,4 +1,6 @@
-vi.mock("../../apps/api/src/ai-model-routing.js", () => ({ featureModelRef: async () => undefined }));
+vi.mock("../../apps/api/src/ai-model-routing.js", () => ({
+  featureModelRef: async () => undefined,
+}));
 import { afterEach, expect, it, vi } from "vitest";
 import {
   publicAgentCatalog,
@@ -8,7 +10,7 @@ import {
 } from "../../apps/api/src/modules/workspace/agent-models.js";
 import { assistantPublicText } from "../../packages/contracts/src/ai-presentation.js";
 afterEach(() => vi.unstubAllGlobals());
-it("publishes model display names while routing opaque selections to the exact provider model", async () => {
+it("only offers multimodal chat models and routes eligible selections to the exact provider model", async () => {
   vi.stubGlobal(
     "fetch",
     vi.fn(
@@ -41,6 +43,7 @@ it("publishes model display names while routing opaque selections to the exact p
                   },
                   {
                     id: "google/gemini-2.5-pro",
+                    name: "Google: Gemini 2.5 Pro",
                     created: 1,
                     architecture: {
                       input_modalities: ["text", "image"],
@@ -48,12 +51,49 @@ it("publishes model display names while routing opaque selections to the exact p
                     },
                     supported_parameters: ["tools", "structured_outputs"],
                   },
+                  ...[
+                    {
+                      id: "openai/text-only",
+                      input: ["text"],
+                      output: ["text"],
+                    },
+                    { id: "openai/unknown-input", output: ["text"] },
+                    {
+                      id: "google/image-only-input",
+                      input: ["image"],
+                      output: ["text"],
+                    },
+                    {
+                      id: "google/image-only-output",
+                      input: ["text", "image"],
+                      output: ["image"],
+                    },
+                    {
+                      id: "anthropic/malformed-input",
+                      input: "text,image",
+                      output: ["text"],
+                    },
+                    { id: "qwen/unknown-output", input: ["text", "image"] },
+                    {
+                      id: "deepseek/deepseek-v4.1-flash-1017",
+                      input: ["text"],
+                      output: ["text"],
+                    },
+                  ].map(({ id, input, output }) => ({
+                    id,
+                    created: 200,
+                    architecture: {
+                      input_modalities: input,
+                      output_modalities: output,
+                    },
+                    supported_parameters: ["tools", "reasoning", "tool_choice"],
+                  })),
                   ...["batch", "async", "asynchronous"].map((mode) => ({
                     id: `deepseek/newest:${mode}`,
                     name: "Asynchronous model",
                     created: 100,
                     architecture: {
-                      input_modalities: ["text"],
+                      input_modalities: ["text", "image"],
                       output_modalities: ["text"],
                     },
                     supported_parameters: ["tools"],
@@ -69,14 +109,29 @@ it("publishes model display names while routing opaque selections to the exact p
   expect(
     catalog.models.some((m) => m.displayName === "Asynchronous model"),
   ).toBe(false);
-  expect(catalog.models.find((m) => m.name === "深度思考")).toMatchObject({
-    vision: false,
-    id: modelRef("deepseek/deepseek-v3.2"),
-    displayName: "DeepSeek V3.2",
+  expect(catalog.models.every((m) => m.vision)).toBe(true);
+  expect(catalog.models.map((m) => m.id)).toEqual([
+    modelRef("openai/gpt-6.1-sol"),
+    modelRef("google/gemini-2.5-pro"),
+  ]);
+  expect(catalog.models.find((m) => m.name === "视觉理解")).toMatchObject({
+    vision: true,
+    id: modelRef("google/gemini-2.5-pro"),
+    displayName: "Gemini 2.5 Pro",
   });
   expect(
-    (await resolveAgentModel(modelRef("deepseek/deepseek-v3.2"))).actual,
-  ).toBe("deepseek/deepseek-v3.2");
+    (await resolveAgentModel(modelRef("google/gemini-2.5-pro"))).actual,
+  ).toBe("google/gemini-2.5-pro");
+  await expect(
+    resolveAgentModel(modelRef("deepseek/deepseek-v3.2")),
+  ).rejects.toMatchObject({
+    response: { error: { code: "MODEL_UNAVAILABLE" } },
+  });
+  await expect(
+    resolveAgentModel(modelRef("deepseek/deepseek-v4.1-flash-1017:quick")),
+  ).rejects.toMatchObject({
+    response: { error: { code: "MODEL_UNAVAILABLE" } },
+  });
   expect((await resolveImageModel()).aspects).toContain("16:9");
   await expect(resolveAgentModel("engine/unknown")).rejects.toThrow();
   expect(

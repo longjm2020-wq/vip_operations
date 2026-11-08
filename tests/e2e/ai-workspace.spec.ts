@@ -39,10 +39,8 @@ type VoiceFixture = {
   aborts: number;
   spoken: string[];
   canceled: number;
-  recognizer?: {
-    onresult?: (event: unknown) => void;
-    onerror?: (event: unknown) => void;
-  };
+  rejectMicrophone?: boolean;
+  recorder?: { onmessage: ((event: { data: Float32Array }) => void) | null };
 };
 declare global {
   interface Window {
@@ -61,24 +59,58 @@ async function mockBrowserVoice(page: Page, supported = true) {
         canceled: 0,
       };
       window.assistantVoiceTest = stats;
-      class Recognizer {
-        onresult?: (event: unknown) => void;
-        onerror?: (event: unknown) => void;
-        start() {
-          stats.starts++;
-          stats.recognizer = this;
+      class AudioContextFixture {
+        sampleRate = 24000;
+        state = "running";
+        destination = {};
+        audioWorklet = { addModule: async () => {} };
+        async resume() {}
+        async close() {
+          this.state = "closed";
         }
-        abort() {
-          stats.aborts++;
+        createMediaStreamSource() {
+          return { connect() {}, disconnect() {} };
         }
       }
+      class RecorderFixture {
+        port: VoiceFixture["recorder"] = { onmessage: null };
+        constructor() {
+          stats.recorder = this.port;
+        }
+        connect() {}
+        disconnect() {}
+      }
+      Object.defineProperty(window, "AudioContext", {
+        configurable: true,
+        value: supported ? AudioContextFixture : undefined,
+      });
+      Object.defineProperty(window, "AudioWorkletNode", {
+        configurable: true,
+        value: RecorderFixture,
+      });
+      Object.defineProperty(navigator.mediaDevices, "getUserMedia", {
+        configurable: true,
+        value: async () => {
+          stats.starts++;
+          if (stats.rejectMicrophone)
+            throw new DOMException("Denied", "NotAllowedError");
+          const track = {
+            onended: null,
+            stop: () => {
+              stats.aborts++;
+            },
+          };
+          return { getTracks: () => [track], getAudioTracks: () => [track] };
+        },
+      });
+      // A network-failing browser recognizer must never be used by the new path.
       Object.defineProperty(window, "SpeechRecognition", {
         configurable: true,
-        value: supported ? Recognizer : undefined,
-      });
-      Object.defineProperty(window, "webkitSpeechRecognition", {
-        configurable: true,
-        value: undefined,
+        value: class {
+          constructor() {
+            throw Error("Browser recognition network unavailable");
+          }
+        },
       });
       Object.defineProperty(window, "speechSynthesis", {
         configurable: true,
@@ -145,17 +177,18 @@ test("麦克风听写追加草稿、停止后可编辑，过期识别事件不�
   await input.press("Enter");
   expect(fixture.assistantCalls()).toBe(0);
   await page.evaluate(() =>
-    window.assistantVoiceTest.recognizer?.onresult?.({
-      results: [{ 0: { transcript: "补充内容" }, isFinal: true }],
+    window.assistantVoiceTest.recorder?.onmessage?.({
+      data: new Float32Array(12000).fill(0.1),
     }),
   );
-  await expect(input).toHaveValue("已有草稿 补充内容");
+  await expect(input).toHaveValue("已有草稿");
   expect(fixture.assistantCalls()).toBe(0);
   await composer.getByRole("button", { name: "停止听写", exact: true }).click();
+  await expect(input).toHaveValue("已有草稿 补充内容");
   await expect(input).toBeEditable();
   await page.evaluate(() =>
-    window.assistantVoiceTest.recognizer?.onresult?.({
-      results: [{ 0: { transcript: "过期内容" }, isFinal: true }],
+    window.assistantVoiceTest.recorder?.onmessage?.({
+      data: new Float32Array(12000).fill(0.1),
     }),
   );
   await expect(input).toHaveValue("已有草稿 补充内容");
@@ -171,14 +204,87 @@ test("听写权限被拒绝时保留草稿并允许继续键入", async ({ page 
   await page.goto("/my-workspace");
   const composer = page.locator(".assistant-compose:visible");
   await composer.locator("textarea").fill("已有草稿");
+  await page.evaluate(() => {
+    window.assistantVoiceTest.rejectMicrophone = true;
+  });
   await composer.getByRole("button", { name: "语音输入", exact: true }).click();
-  await page.evaluate(() =>
-    window.assistantVoiceTest.recognizer?.onerror?.({ error: "not-allowed" }),
-  );
   await expect(composer.getByRole("alert")).toContainText("麦克风权限未开启");
   await expect(composer.locator("textarea")).toHaveValue("已有草稿");
   await expect(composer.locator("textarea")).toBeEditable();
   expect(fixture.assistantCalls()).toBe(0);
+});
+
+test("听写服务未配置时不申请麦克风，草稿保持可编辑", async ({ page }) => {
+  await mockBrowserVoice(page);
+  const fixture = await workspaceFixture(page);
+  await page.route("**/api/v1/my-workspace/assistant/dictation", (route) =>
+    route.fulfill({
+      json: {
+        data: {
+          ready: false,
+          message: "听写服务尚未就绪，请检查语音设置。",
+          maxSeconds: 25,
+        },
+      },
+    }),
+  );
+  await page.goto("/my-workspace");
+  const composer = page.locator(".assistant-compose:visible");
+  await composer.locator("textarea").fill("保留草稿");
+  await composer.getByRole("button", { name: "语音输入", exact: true }).click();
+  await expect(composer.getByRole("alert")).toContainText("听写服务尚未就绪");
+  await expect(composer.locator("textarea")).toHaveValue("保留草稿");
+  await expect(composer.locator("textarea")).toBeEditable();
+  expect(await page.evaluate(() => window.assistantVoiceTest.starts)).toBe(0);
+  expect(fixture.assistantCalls()).toBe(0);
+});
+
+test("取消正在转写的听写后，迟到结果不会覆盖草稿或发送任务", async ({
+  page,
+}) => {
+  await mockBrowserVoice(page);
+  const fixture = await workspaceFixture(page);
+  let complete!: () => void;
+  const wait = new Promise<void>((resolve) => {
+    complete = resolve;
+  });
+  let returned = false;
+  await page.route(
+    "**/api/v1/my-workspace/assistant/dictation",
+    async (route) => {
+      if (route.request().method() !== "POST") return route.fallback();
+      await wait;
+      await route
+        .fulfill({ json: { data: { text: "迟到的文字" } } })
+        .catch(() => {});
+      returned = true;
+    },
+  );
+  await page.goto("/my-workspace");
+  const composer = page.locator(".assistant-compose:visible");
+  const input = composer.locator("textarea");
+  await input.fill("原有草稿");
+  await composer.getByRole("button", { name: "语音输入", exact: true }).click();
+  await expect(
+    composer.getByRole("button", { name: "停止听写", exact: true }),
+  ).toBeVisible();
+  await page.evaluate(() =>
+    window.assistantVoiceTest.recorder?.onmessage?.({
+      data: new Float32Array(12000).fill(0.1),
+    }),
+  );
+  await composer.getByRole("button", { name: "停止听写", exact: true }).click();
+  await expect(composer.getByRole("status")).toContainText("正在转成文字");
+  await composer.getByRole("button", { name: "取消听写", exact: true }).click();
+  await expect(input).toBeEditable();
+  await input.fill("取消后编辑的草稿");
+  complete();
+  await expect.poll(() => returned).toBe(true);
+  await expect(input).toHaveValue("取消后编辑的草稿");
+  expect(fixture.assistantCalls()).toBe(0);
+  expect(
+    await page.evaluate(() => window.assistantVoiceTest.aborts),
+  ).toBeGreaterThan(0);
 });
 
 test("工作台0和1背景实际滚动，减少动态效果保持静态且仍可调整视角", async ({
@@ -579,14 +685,14 @@ for (const reducedMotion of [false, true]) {
   });
 }
 
-test("浏览器不支持语音识别时仍可直接输入文字", async ({ page }) => {
+test("浏览器不支持录音时仍可直接输入文字", async ({ page }) => {
   await mockBrowserVoice(page, false);
   await workspaceFixture(page);
   await page.goto("/my-workspace");
   await page.getByRole("button", { name: "语音输入", exact: true }).click();
   await expect(
     page.locator(".assistant-compose:visible").getByRole("alert"),
-  ).toContainText("此浏览器不支持语音输入");
+  ).toContainText("此浏览器不支持录音");
   await expect(page.getByPlaceholder(/告诉我你想完成什么/)).toBeEditable();
 });
 
@@ -917,6 +1023,30 @@ async function workspaceFixture(
         submitted.push(body);
       }
       data = assistant;
+    }
+    if (path === "/my-workspace/assistant/capabilities")
+      data = {
+        defaultModel: "engine/default",
+        models: [
+          {
+            id: "engine/default",
+            name: "通用助手",
+            displayName: "GPT-6.1 Sol",
+            vision: true,
+          },
+        ],
+        imageModels: [],
+        notice: "",
+      };
+    if (path === "/my-workspace/assistant/dictation") {
+      if (request.method() === "POST") {
+        const body = request.postDataJSON();
+        expect(Object.keys(body).sort()).toEqual(["audio", "id"]);
+        expect(
+          Buffer.from(body.audio, "base64").subarray(0, 4).toString(),
+        ).toBe("RIFF");
+        data = { text: "补充内容" };
+      } else data = { ready: true, maxSeconds: 25, message: "听写已就绪" };
     }
     if (path === "/my-workspace/assistant/memory") {
       if (request.method() === "POST") {
