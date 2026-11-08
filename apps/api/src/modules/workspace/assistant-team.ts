@@ -13,6 +13,7 @@ import {
   teamSettingsSchema,
   type TeamArtifact,
   type TeamConfiguration,
+  type TeamEngine,
   type TeamRun,
   type TeamSettings,
   type TeamStep,
@@ -24,6 +25,7 @@ import { requireAssistant } from "./assistant-memory.js";
 import { agentFileView, ownedAgentFiles } from "./agent-files.js";
 import { readTeamModelCatalog, resolveTeamModel } from "./team-models.js";
 import { publicTeamVideoCatalog } from "./team-video.js";
+import { deerFlowConfigured } from "./deerflow-client.js";
 import {
   conversationReference,
   hydrateTeamMessages,
@@ -34,7 +36,16 @@ const identifier = z.string().uuid();
 const safeText = (value: unknown, limit = 120000) =>
   assistantPublicText(typeof value === "string" ? value.slice(0, limit) : "");
 
-export async function teamServiceReady() {
+export const effectiveTeamEngine = (settings: TeamSettings): TeamEngine =>
+  settings.engine || "native";
+
+export async function teamServiceReady(engine: TeamEngine = "native") {
+  if (
+    engine === "deerflow" &&
+    (!deerFlowConfigured() ||
+      !/^[a-f0-9]{64}$/i.test(process.env.DEER_FLOW_MODEL_PROXY_TOKEN || ""))
+  )
+    return false;
   const settings = await one(
     db,
     "SELECT enabled,verified_at,(api_key_encrypted IS NOT NULL) AS has_key FROM public.compass_ai_settings WHERE id=1",
@@ -65,20 +76,27 @@ export async function readAssistantTeam(
   c: Context,
 ): Promise<TeamConfiguration> {
   requireAssistant(c);
-  const [saved, catalog, ready, videoModels] = await Promise.all([
-    savedSettings(c),
+  const saved = await savedSettings(c);
+  const engine = effectiveTeamEngine(saved.settings);
+  const [catalog, ready, videoModels] = await Promise.all([
     readTeamModelCatalog(),
-    teamServiceReady(),
+    teamServiceReady(engine),
     publicTeamVideoCatalog(c),
   ]);
   return {
     ...saved.settings,
-    engine: "native",
+    engine,
     version: saved.version,
     ready,
     notice:
-      (ready ? "" : "团队创作服务尚未启用或验证，请管理员检查 AI 服务设置。") +
-      catalog.notice,
+      engine === "deerflow"
+        ? ready
+          ? "DeerFlow 独立执行研究、写作和文本文件交付；成员与工具由服务端管理，交付保留待核对。"
+          : "DeerFlow 尚未就绪，请管理员检查独立服务、模型代理与共享 AI 连接。"
+        : (ready
+            ? ""
+            : "团队创作服务尚未启用或验证，请管理员检查 AI 服务设置。") +
+          catalog.notice,
     models: catalog.models,
     imageModels: catalog.imageModels,
     videoModels,
@@ -128,7 +146,8 @@ export async function saveAssistantTeam(
 ): Promise<TeamConfiguration> {
   requireAssistant(c);
   const { version, ...settings } = parse(teamSaveSchema, input);
-  await validateSettingsModels(c, settings);
+  if (effectiveTeamEngine(settings) !== "deerflow")
+    await validateSettingsModels(c, settings);
   await db.$transaction(async (tx) => {
     await tx.$executeRawUnsafe(
       "SELECT pg_advisory_xact_lock(hashtextextended($1,0))",
@@ -229,7 +248,12 @@ export async function teamArtifactViews(
 
 function runView(run: Row, artifacts: TeamArtifact[]): TeamRun {
   return {
-    engine: run.input.engine === "deerflow" ? "deerflow" : "native",
+    engine:
+      run.input.engine === "deerflow"
+        ? "deerflow"
+        : run.input.engine === "mastra"
+          ? "mastra"
+          : "native",
     id: run.id,
     goal: safeText(run.input.goal, 8000),
     status: run.status,
@@ -317,21 +341,28 @@ export async function createTeamRun(
   }
   const saved = await savedSettings(c);
   const files = await ownedAgentFiles(c, body.attachmentIds);
-  if (!(await teamServiceReady()))
-    fail("TEAM_UNAVAILABLE", "团队创作服务尚未启用或验证", 409);
+  const engine = effectiveTeamEngine(saved.settings);
+  if (!(await teamServiceReady(engine)))
+    fail(
+      "TEAM_UNAVAILABLE",
+      "所选团队服务尚未就绪，请检查团队设置及 AI 连接",
+      409,
+    );
   const chief = saved.settings.members.find(
     (member) => member.role === "orchestrator",
   )!;
-  await resolveTeamModel({
-    taskModel: body.model,
-    profileModel: chief.modelMode === "fixed" ? chief.modelId : undefined,
-    orchestrator: true,
-    vision: files.some(
-      (file) =>
-        file.mime.startsWith("image/") || file.mime.startsWith("video/"),
-    ),
-    pdf: files.some((file) => file.mime === "application/pdf"),
-  });
+  if (engine !== "deerflow")
+    await resolveTeamModel({
+      feature: engine === "mastra" ? "mastra_team" : "assistant_team",
+      taskModel: body.model,
+      profileModel: chief.modelMode === "fixed" ? chief.modelId : undefined,
+      orchestrator: true,
+      vision: files.some(
+        (file) =>
+          file.mime.startsWith("image/") || file.mime.startsWith("video/"),
+      ),
+      pdf: files.some((file) => file.mime === "application/pdf"),
+    });
   await db.$transaction(async (tx) => {
     await tx.$executeRawUnsafe(
       "SELECT pg_advisory_xact_lock(hashtextextended($1,0))",
@@ -387,9 +418,7 @@ export async function createTeamRun(
       requestHash,
       JSON.stringify({
         ...body,
-        // Existing runs keep their snapshotted engine; all new work uses the
-        // website team, regardless of legacy DeerFlow service configuration.
-        engine: "native",
+        engine,
         settings: saved.settings,
         settingsVersion: saved.version,
         conversationContext: conversationReference(history),

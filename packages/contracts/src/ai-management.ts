@@ -42,21 +42,29 @@ export const aiFeatures = [
   },
   {
     id: "assistant_team",
-    name: "智能体团队",
+    name: "网站智能体团队",
     group: "团队",
     href: "/my-workspace?assistant=team",
     boundary:
-      "统一使用网站团队，支持公开研究、办公文档及已配置的图片视频工具，按步骤独立验收与归档；任务或成员指定型号优先于管理页默认值。",
+      "支持公开研究、办公文档及已配置的图片视频工具，按步骤独立验收与归档；任务或成员指定型号优先于管理页默认值。",
     kind: "team",
   },
   {
-    // Retained for historical runs, model gateway routing and metering only.
     id: "deerflow_team",
-    name: "DeerFlow 历史团队",
+    name: "DeerFlow 智能体团队",
     group: "团队",
     href: "/my-workspace?assistant=chat",
     boundary:
       "通过网站网关使用多模态对话模型，进行公开研究与隔离的文本文件交付；未接入业务写入、电脑控制及图片视频生成工具。",
+    kind: "team",
+  },
+  {
+    id: "mastra_team",
+    name: "Mastra 智能体团队",
+    group: "团队",
+    href: "/my-workspace?assistant=team",
+    boundary:
+      "在团队设置选择 Mastra 后生效；成员通过 Mastra Agent 调用多模态模型，复用网站已授权工具、独立验收与归档。任务或成员指定优先，无跨引擎自动重试。",
     kind: "team",
   },
   {

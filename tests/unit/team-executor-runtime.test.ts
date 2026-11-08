@@ -125,15 +125,23 @@ beforeEach(async () => {
 afterEach(() => vi.unstubAllGlobals());
 const response = (data: unknown) =>
   Response.json({
+    id: "fixture-response",
+    created: 1,
     model: "test/model",
-    choices: [{ message: { content: JSON.stringify(data) } }],
+    choices: [
+      {
+        index: 0,
+        finish_reason: "stop",
+        message: { role: "assistant", content: JSON.stringify(data) },
+      },
+    ],
   });
-async function runRow(includeEngine = true) {
+async function runRow(engine: "native" | "mastra" | false = "native") {
   const id = randomUUID(),
     lease = randomUUID();
   const input = {
     id,
-    ...(includeEngine ? { engine: "native" } : {}),
+    ...(engine ? { engine } : {}),
     goal: "生成可下载的文字文件",
     attachmentIds: [],
     useKnowledge: false,
@@ -170,10 +178,15 @@ function startDocumentScenario(kind = "document", memberId = "writing") {
 }
 function toolResponse(name = "create_document") {
   return Response.json({
+    id: "fixture-tool",
+    created: 1,
     model: "test/model",
     choices: [
       {
+        index: 0,
+        finish_reason: "tool_calls",
         message: {
+          role: "assistant",
           content: null,
           tool_calls: [
             {
@@ -224,7 +237,7 @@ describe("production team adapter", () => {
   it.each([true, false])(
     "executes stored native and legacy snapshots without sending internal fields as public input (engine: %s)",
     async (includeEngine) => {
-      const { run, lease } = await runRow(includeEngine);
+      const { run, lease } = await runRow(includeEngine ? "native" : false);
       startDocumentScenario("text");
       f.fetch.mockResolvedValueOnce(
         response({ status: "completed", content: "连接检查测试正文。" }),
@@ -256,6 +269,43 @@ describe("production team adapter", () => {
       ),
     ).rejects.toThrow();
     expect(f.fetch).not.toHaveBeenCalled();
+  });
+  it("runs a Mastra task through real Agent generation, guarded document delivery, independent review and metering", async () => {
+    const { run, lease } = await runRow("mastra");
+    const { fileId } = successfulFileJob(run.id);
+    startDocumentScenario();
+    f.fetch
+      .mockResolvedValueOnce(toolResponse())
+      .mockResolvedValueOnce(
+        response({ status: "completed", content: "实际文件已生成。" }),
+      );
+    finishDocumentScenario();
+    const result = await runTeamExecution(
+      c,
+      run,
+      lease,
+      new AbortController().signal,
+    );
+    expect(result.status).toBe("DONE");
+    expect(f.queue).toHaveBeenCalledTimes(1);
+    expect(result.artifacts[0]).toMatchObject({
+      status: "ACCEPTED",
+      fileIds: [fileId],
+    });
+    expect(
+      f.route.mock.calls.every(
+        ([options]) => options.feature === "mastra_team",
+      ),
+    ).toBe(true);
+    expect(f.fetch).toHaveBeenCalledTimes(7);
+    await vi.waitFor(async () => {
+      const rows = (
+        await f.db!.query<{ feature_id: string; n: number }>(
+          "SELECT feature_id,count(*)::int AS n FROM ai_model_usage WHERE feature_id='mastra_team' GROUP BY feature_id",
+        )
+      ).rows;
+      expect(rows).toEqual([{ feature_id: "mastra_team", n: 7 }]);
+    });
   });
   it("passes current accepted archive status, saved review and owned file evidence directly to selection, briefing, execution and review", async () => {
     const source = await runRow(),

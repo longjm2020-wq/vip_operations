@@ -736,7 +736,7 @@ export async function runTeamExecution(
     settings: storedSettings,
     settingsVersion,
     conversationContext,
-    engine: _engine,
+    engine,
     ...body
   } = run.input;
   const input: TeamExecutionInput = {
@@ -876,6 +876,7 @@ export async function runTeamExecution(
     await settings();
     const files = await ownedAgentFiles(c, request.fileIds);
     const model = await resolveTeamModel({
+      feature: engine === "mastra" ? "mastra_team" : "assistant_team",
       taskModel: input.model,
       profileModel:
         request.member.modelMode === "fixed"
@@ -974,55 +975,70 @@ export async function runTeamExecution(
         AbortSignal.timeout(150000),
       ]);
       const toolsEnabled = !finalOutput && round < 4;
-      const response = await aiFetch("assistant_team", COMPASS_AI_ENDPOINT, {
-        method: "POST",
-        redirect: "error",
-        signal: requestSignal,
-        headers: {
-          Authorization: "Bearer " + decryptSecret(current.api_key_encrypted),
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model: model.actual,
-          stream: false,
-          max_tokens:
-            request.purpose === "execute"
-              ? 7500
-              : request.purpose === "plan"
-                ? 4000
-                : 2500,
-          provider: { require_parameters: true, data_collection: "deny" },
-          ...(model.parameters.includes("reasoning")
-            ? { reasoning: { effort: model.reasoningEffort || "low" } }
-            : {}),
-          messages,
-          ...(!toolsEnabled
-            ? {
-                response_format: {
-                  type: "json_schema",
-                  json_schema: {
-                    name: "team_" + request.purpose,
-                    strict: true,
-                    schema: z.toJSONSchema(request.schema),
-                  },
+      const modelBody = {
+        model: model.actual,
+        stream: false,
+        max_tokens:
+          request.purpose === "execute"
+            ? 7500
+            : request.purpose === "plan"
+              ? 4000
+              : 2500,
+        provider: { require_parameters: true, data_collection: "deny" },
+        ...(model.parameters.includes("reasoning")
+          ? { reasoning: { effort: model.reasoningEffort || "low" } }
+          : {}),
+        messages,
+        ...(!toolsEnabled
+          ? {
+              response_format: {
+                type: "json_schema",
+                json_schema: {
+                  name: "team_" + request.purpose,
+                  strict: true,
+                  schema: z.toJSONSchema(request.schema),
                 },
-              }
-            : {}),
-          ...(definitions.length
-            ? {
-                tools: definitions,
-                tool_choice: toolsEnabled
-                  ? forcedTool
-                    ? { type: "function", function: { name: forcedTool } }
-                    : "auto"
-                  : "none",
-                ...(model.parameters.includes("parallel_tool_calls")
-                  ? { parallel_tool_calls: false }
-                  : {}),
-              }
-            : {}),
-        }),
-      });
+              },
+            }
+          : {}),
+        ...(definitions.length
+          ? {
+              tools: definitions,
+              tool_choice: toolsEnabled
+                ? forcedTool
+                  ? { type: "function", function: { name: forcedTool } }
+                  : "auto"
+                : "none",
+              ...(model.parameters.includes("parallel_tool_calls")
+                ? { parallel_tool_calls: false }
+                : {}),
+            }
+          : {}),
+      };
+      const apiKey = decryptSecret(current.api_key_encrypted);
+      const response =
+        engine === "mastra"
+          ? await (
+              await import("./mastra-team.js")
+            ).generateMastraTeamResponse({
+              endpoint: COMPASS_AI_ENDPOINT,
+              apiKey,
+              memberId: request.member.id,
+              memberName: request.member.name,
+              body: modelBody,
+              schema: request.schema,
+              signal: requestSignal,
+            })
+          : await aiFetch("assistant_team", COMPASS_AI_ENDPOINT, {
+              method: "POST",
+              redirect: "error",
+              signal: requestSignal,
+              headers: {
+                Authorization: "Bearer " + apiKey,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify(modelBody),
+            });
       if (!response.ok) {
         throw new TeamNeedsUser(
           await readTeamModelError(response, requestSignal),

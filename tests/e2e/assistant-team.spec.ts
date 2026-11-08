@@ -347,6 +347,37 @@ async function selectOption(page: Page, label: string, name: string) {
     .click();
 }
 
+test("团队设置可从 DeerFlow 切换 Mastra 并保存，选择期间不发送任务", async ({
+  page,
+}) => {
+  const fixture = await setup(page, { deerflow: true });
+  const panel = await openTeam(page);
+  await expect(
+    panel.getByRole("combobox", { name: "团队执行引擎" }),
+  ).toBeVisible();
+  await selectOption(page, "团队执行引擎", "Mastra");
+  await expect(
+    panel.getByRole("tab", { name: "团队成员", exact: true }),
+  ).toBeVisible();
+  expect(fixture.saves).toHaveLength(0);
+  expect(fixture.submissions).toHaveLength(0);
+  await panel
+    .getByRole("button", { name: "保存团队配置", exact: true })
+    .click();
+  await expect.poll(() => fixture.saves[0]?.engine).toBe("mastra");
+  await expect(
+    panel.getByRole("button", { name: "保存团队配置", exact: true }),
+  ).toBeDisabled();
+  await selectOption(page, "团队执行引擎", "DeerFlow");
+  await panel
+    .getByRole("button", { name: "保存团队配置", exact: true })
+    .click();
+  await expect.poll(() => fixture.saves[1]?.engine).toBe("deerflow");
+  await expect(
+    panel.getByRole("tab", { name: "团队成员", exact: true }),
+  ).toHaveCount(0);
+});
+
 test("聊天中选择团队并展示交付，切回普通模型继续追问且刷新保留任务卡片", async ({
   page,
 }) => {
@@ -427,7 +458,7 @@ test("团队可新增和编辑独立模型，保存才用于新任务，核心�
     .getByRole("button", { name: "保存团队配置", exact: true })
     .click();
   await expect(
-    panel.getByText("已保存配置 · 版本 2", { exact: false }),
+    panel.getByText("配置已保存，仅用于新任务", { exact: false }),
   ).toBeVisible();
   expect(fixture.saves).toHaveLength(1);
   expect(fixture.saves[0].members.at(-1)).toMatchObject({
@@ -612,7 +643,7 @@ test("DeerFlow 团队直接提交附件与目标，隐藏原生配置并将返�
   ).toHaveCount(0);
   await expect(
     panel.getByRole("button", { name: "保存团队配置", exact: true }),
-  ).toHaveCount(0);
+  ).toBeDisabled();
   await panel.locator(".assistant-team-task-settings summary").click();
   await expect(
     panel.getByRole("combobox", { name: "团队任务模型", exact: true }),
@@ -651,6 +682,7 @@ test("DeerFlow 团队直接提交附件与目标，隐藏原生配置并将返�
   await expect(
     panel.getByRole("heading", { name: "任务结果", exact: true }),
   ).toBeVisible();
+  await panel.locator("summary").filter({ hasText: "执行详情" }).click();
   await expect(
     panel
       .getByRole("article", { name: "交付：活动文案交付", exact: true })

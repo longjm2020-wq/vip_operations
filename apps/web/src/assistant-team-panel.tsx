@@ -21,6 +21,8 @@ import { useUser } from "./shared";
 import { AgentFileLink } from "./assistant-agent-panel";
 import {
   teamRoleLabels,
+  teamEngines,
+  teamEngineLabels,
   teamSaveSchema,
   type TeamArtifact,
   type TeamConfiguration,
@@ -78,6 +80,7 @@ const runStatusLabel = (run: TeamRun) =>
 const requiredRole = (member: TeamMember) =>
   ["orchestrator", "coordinator", "librarian"].includes(member.role);
 const configurationDraft = (config: TeamConfiguration): TeamSettings => ({
+  engine: config.engine || "native",
   members: config.members.map((member) => ({ ...member })),
   maxSteps: config.maxSteps,
   maxRevisions: config.maxRevisions,
@@ -150,6 +153,9 @@ function TeamRunDetail({
         <Tag color={colorFor(run.status)}>{runStatusLabel(run)}</Tag>
       </div>
       <p role="status">{run.stage}</p>
+      <p className="team-meta">
+        执行引擎：{teamEngineLabels[run.engine || "native"]}
+      </p>
       {teamActive(run.status) && (
         <Button loading={canceling} onClick={cancel}>
           停止团队任务
@@ -243,9 +249,9 @@ export function AssistantTeamPanel({
     { message } = App.useApp(),
     client = useQueryClient();
   const config = useTeamConfiguration();
-  const deerflow = config.data?.engine === "deerflow";
   const [tab, setTab] = useState(selectedRunId ? "runs" : "members");
   const [draft, setDraft] = useState<TeamSettings>();
+  const deerflow = (draft?.engine || config.data?.engine) === "deerflow";
   const [version, setVersion] = useState(0);
   const [dirty, setDirty] = useState(false);
   const [editing, setEditing] = useState<string>();
@@ -405,6 +411,57 @@ export function AssistantTeamPanel({
       )}
       {config.data?.ready && config.data.notice && (
         <Alert type="info" title={config.data.notice} />
+      )}
+      {draft && (
+        <div className="team-toolbar">
+          <label>
+            执行引擎
+            <Select
+              aria-label="团队执行引擎"
+              value={draft.engine}
+              disabled={saving}
+              style={{ minWidth: 160, marginLeft: 8 }}
+              options={teamEngines.map((engine) => ({
+                value: engine,
+                label: teamEngineLabels[engine],
+              }))}
+              onChange={(engine) => update({ engine })}
+            />
+          </label>
+          <span className="team-meta">
+            {dirty ? "有未保存配置" : "配置已保存"}，仅用于新任务
+          </span>
+          <Button
+            type="primary"
+            aria-label="保存团队配置"
+            loading={saving}
+            disabled={!dirty}
+            onClick={() => void save()}
+          >
+            保存团队配置
+          </Button>
+        </div>
+      )}
+      {saveError && (
+        <Alert
+          type="error"
+          title={saveError}
+          action={
+            <Button
+              onClick={async () => {
+                const next = await config.refetch();
+                if (next.data) {
+                  setDraft(configurationDraft(next.data));
+                  setVersion(next.data.version);
+                  setDirty(false);
+                  setSaveError("");
+                }
+              }}
+            >
+              重新载入服务器配置
+            </Button>
+          }
+        />
       )}
       <Tabs
         activeKey={deerflow && tab === "members" ? "runs" : tab}
@@ -675,43 +732,6 @@ export function AssistantTeamPanel({
                     },
                   ]}
                 />
-                {saveError && (
-                  <Alert
-                    type="error"
-                    title={saveError}
-                    action={
-                      <Button
-                        onClick={async () => {
-                          const next = await config.refetch();
-                          if (next.data) {
-                            setDraft(configurationDraft(next.data));
-                            setVersion(next.data.version);
-                            setDirty(false);
-                            setSaveError("");
-                          }
-                        }}
-                      >
-                        重新载入服务器配置
-                      </Button>
-                    }
-                  />
-                )}
-                <div className="team-save">
-                  <span>
-                    {dirty
-                      ? "有未保存的团队配置"
-                      : `已保存配置 · 版本 ${version}`}
-                    ，配置变更用于新任务。
-                  </span>
-                  <Button
-                    type="primary"
-                    loading={saving}
-                    disabled={!dirty}
-                    onClick={() => void save()}
-                  >
-                    保存团队配置
-                  </Button>
-                </div>
               </>
             ),
           },

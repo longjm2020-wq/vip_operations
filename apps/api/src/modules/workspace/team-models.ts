@@ -59,7 +59,7 @@ export async function readTeamModelCatalog() {
 }
 
 export async function resolveTeamModel(options: {
-  feature?: "assistant_team" | "deerflow_team";
+  feature?: "assistant_team" | "deerflow_team" | "mastra_team";
   taskModel?: string;
   profileModel?: string;
   difficulty?: TeamDifficulty;

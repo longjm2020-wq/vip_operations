@@ -47,8 +47,16 @@ export const teamMemberSchema = z
     "指定模型时请选择模型",
   );
 export type TeamMember = z.infer<typeof teamMemberSchema>;
+export const teamEngines = ["native", "mastra", "deerflow"] as const;
+export type TeamEngine = (typeof teamEngines)[number];
+export const teamEngineLabels: Record<TeamEngine, string> = {
+  native: "网站团队",
+  mastra: "Mastra",
+  deerflow: "DeerFlow",
+};
 export const teamSettingsSchema = z
   .object({
+    engine: z.enum(teamEngines).optional(),
     members: z.array(teamMemberSchema).min(7).max(24),
     maxSteps: z.number().int().min(1).max(12).default(8),
     maxRevisions: z.number().int().min(0).max(2).default(1),
@@ -154,7 +162,7 @@ export type TeamModel = {
   structured: boolean;
 };
 export type TeamConfiguration = TeamSettings & {
-  engine?: "native" | "deerflow";
+  engine?: TeamEngine;
   version: number;
   ready: boolean;
   notice: string;
@@ -280,7 +288,7 @@ export type TeamStep = TeamPlanStep & {
   artifactIds: string[];
 };
 export type TeamRun = {
-  engine?: "native" | "deerflow";
+  engine?: TeamEngine;
   id: string;
   goal: string;
   status: TeamRunStatus;

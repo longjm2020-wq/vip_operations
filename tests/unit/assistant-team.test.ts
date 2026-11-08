@@ -258,6 +258,55 @@ describe("assistant team storage and owner boundaries", () => {
       status: "CANCELED",
     });
   });
+  it("selects Mastra and DeerFlow per owner while retaining the original task engine on retries", async () => {
+    const settings = defaultTeamSettings();
+    const mastra = await saveAssistantTeam(actor(), {
+      ...settings,
+      engine: "mastra",
+      version: 0,
+    });
+    expect(mastra).toMatchObject({ engine: "mastra", ready: true });
+    expect(await readAssistantTeam(actor("8"))).toMatchObject({
+      engine: "native",
+    });
+    const input = body();
+    const run = await createTeamRun(actor(), input);
+    expect(run.engine).toBe("mastra");
+    vi.stubEnv("DEER_FLOW_URL", "http://deerflow.railway.internal:8001");
+    vi.stubEnv("DEER_FLOW_INTERNAL_AUTH_TOKEN", "test-internal-token");
+    vi.stubEnv("DEER_FLOW_MODEL_PROXY_TOKEN", "a".repeat(64));
+    expect(
+      await saveAssistantTeam(actor(), {
+        ...settings,
+        engine: "deerflow",
+        version: 1,
+      }),
+    ).toMatchObject({ engine: "deerflow", ready: true });
+    expect((await createTeamRun(actor(), input)).engine).toBe("mastra");
+    expect((await createTeamRun(actor(), body())).engine).toBe("deerflow");
+    vi.stubEnv("DEER_FLOW_INTERNAL_AUTH_TOKEN", "");
+    expect((await readAssistantTeam(actor())).ready).toBe(false);
+    await expect(createTeamRun(actor(), body())).rejects.toMatchObject(
+      errorCode("TEAM_UNAVAILABLE"),
+    );
+    expect(
+      await saveAssistantTeam(actor(), {
+        ...settings,
+        engine: "mastra",
+        version: 2,
+      }),
+    ).toMatchObject({ engine: "mastra", ready: true });
+    await expect(
+      createTeamRun(actor(), { ...body(), engine: "deerflow" }),
+    ).rejects.toBeDefined();
+    await expect(
+      saveAssistantTeam(actor(), {
+        ...settings,
+        engine: "unknown",
+        version: 3,
+      }),
+    ).rejects.toBeDefined();
+  });
   it("returns seven defaults and catalog metadata without persisting or exposing service secrets", async () => {
     const config = await readAssistantTeam(actor());
     expect(config).toMatchObject({ version: 0, ready: true, videoModels: [] });

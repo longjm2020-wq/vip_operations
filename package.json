@@ -28,10 +28,12 @@
     "format": "prettier --write apps packages scripts tests"
   },
   "dependencies": {
+    "@ai-sdk/openai-compatible": "2.0.92",
     "@ant-design/icons": "^6.1.0",
     "@ant-design/x": "2.9.0",
     "@aws-sdk/client-s3": "^3.1133.0",
     "@aws-sdk/s3-request-presigner": "^3.1133.0",
+    "@mastra/core": "1.82.0",
     "@nestjs/common": "^11.1.0",
     "@nestjs/core": "^11.1.0",
     "@nestjs/platform-express": "^11.1.0",
