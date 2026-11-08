@@ -213,6 +213,28 @@ it("polls without resubmission, records only the terminal receipt, and rejects t
   );
   await expect(pollVideo(cfg, route(), "task-1")).rejects.toThrow(/编号不匹配/);
 });
+it("reports safe provider failure codes without echoing prompts, URLs or credentials", async () => {
+  const spy = vi.fn(async () =>
+    json({
+      output: {
+        task_id: "failed-task",
+        task_status: "FAILED",
+        code: "InvalidParameter",
+        message:
+          "duration is invalid; secret prompt https://private.example.test sk-private-secret",
+      },
+    }),
+  );
+  vi.stubGlobal("fetch", spy);
+  const result = await pollVideo(config, route(), "failed-task");
+  expect(result).toMatchObject({
+    state: "failed",
+    errorCode: "InvalidParameter",
+    errorHint: "供应商拒绝请求参数（duration / prompt）",
+  });
+  expect(JSON.stringify(result)).not.toMatch(/secret|private/);
+  expect(spy).toHaveBeenCalledTimes(1);
+});
 it("keeps media limits and the explicit price estimate separate from actual bills", () => {
   const model = route().model;
   const clip = {

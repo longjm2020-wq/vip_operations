@@ -64,7 +64,19 @@ export async function pollBailianVideo(config, route, id) {
   if (["PENDING", "RUNNING"].includes(state)) return { pending: true, state: state.toLowerCase() };
   if (["SUCCEEDED", "FAILED", "CANCELED", "UNKNOWN"].includes(state)) await modelReceipt(config, "aigc_video", route.baseUrl, route.model.model, result);
   if (state === "SUCCEEDED") return { pending: false, state: "success", url: publicUrl(result.output.video_url) };
-  return { pending: false, state: { FAILED: "failed", CANCELED: "cancelled", UNKNOWN: "expired" }[state] || "unknown" };
+  const errorCode = typeof result.output?.code === "string" ? result.output.code.replace(/[^a-zA-Z0-9_.-]/g, "").slice(0, 100) : undefined;
+  // Provider prose may echo user prompts or URLs. Expose a classified hint, not raw errors.
+  const detail = `${errorCode || ""} ${String(result.output?.message || "").slice(0, 1000)}`;
+  let errorHint = "请在百炼核对该任务；未自动重新生成";
+  if (/FreeTierOnly|free.?tier|free.?quota/i.test(detail)) errorHint = "免费额度用完即停限制了该模型，请核对该型号的费用保护设置";
+  else if (/Arrear|Overdue|Balance|Insufficient|payment/i.test(detail)) errorHint = "账户余额或计费状态不满足要求";
+  else if (/AccessDenied|Unauthorized|permission|authorize/i.test(detail)) errorHint = "请核对该型号的业务空间与 API Key 权限";
+  else if (/DataInspection|content.?filter|safety/i.test(detail)) errorHint = "输入或输出未通过供应商内容检查";
+  else if (/InvalidParameter|parameter|not.supported/i.test(detail)) {
+    const fields = ["duration", "resolution", "ratio", "media", "model", "prompt", "image", "audio", "video"].filter(field => new RegExp(`\\b${field}\\b`, "i").test(detail));
+    errorHint = "供应商拒绝请求参数" + (fields.length ? `（${fields.join(" / ")}）` : "");
+  } else if (/InternalError|ServiceUnavailable|Capacity|timeout/i.test(detail)) errorHint = "供应商服务暂时失败，请核对任务记录后再试";
+  return { pending: false, state: { FAILED: "failed", CANCELED: "cancelled", UNKNOWN: "expired" }[state] || "unknown", errorCode, errorHint };
 }
 
 // Private JPEG derivatives get a job-bound, expiring download URL. Neither API

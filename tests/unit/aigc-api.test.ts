@@ -381,6 +381,48 @@ it("copies the saved Bailian connection without exposing credentials and verifie
     vi.stubGlobal("fetch", nativeFetch);
   }
 });
+it("recovers failure details for the original task once without creating another paid video", async () => {
+  await fixture.db!.query(
+    "UPDATE aigc_settings SET config=jsonb_set(config,'{bailianVideoCheck}',$1::jsonb,true)",
+    [JSON.stringify({ state: "failed", taskId: "old-failed-task" })],
+  );
+  const nativeFetch = globalThis.fetch;
+  let polls = 0;
+  vi.stubGlobal("fetch", async (url: any, init?: RequestInit) => {
+    if (!String(url).includes(".maas.aliyuncs.com"))
+      return nativeFetch(url, init);
+    expect(init?.method).toBe("GET");
+    polls++;
+    return new Response(
+      JSON.stringify({
+        output: {
+          task_id: "old-failed-task",
+          task_status: "FAILED",
+          code: "AllocationQuota.FreeTierOnly",
+          message: "sensitive provider details",
+        },
+      }),
+      { headers: { "content-type": "application/json" } },
+    );
+  });
+  try {
+    const result = await request("/services/bailian-video-check");
+    expect(result.data).toMatchObject({
+      state: "failed",
+      taskId: "old-failed-task",
+      errorCode: "AllocationQuota.FreeTierOnly",
+    });
+    expect(result.data.message).toContain("费用保护");
+    expect(JSON.stringify(result.data)).not.toContain("sensitive");
+    await request("/services/bailian-video-check");
+    expect(polls).toBe(1);
+  } finally {
+    vi.stubGlobal("fetch", nativeFetch);
+    await fixture.db!.exec(
+      "UPDATE aigc_settings SET config=config-'bailianVideoCheck'",
+    );
+  }
+});
 it("blocks duplicate uncertain video checks but lets rejected credentials be corrected", async () => {
   const nativeFetch = globalThis.fetch;
   let calls = 0;

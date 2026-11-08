@@ -84,7 +84,13 @@ export async function startVideoCheck(input: unknown, userId: string) {
 export async function videoCheckStatus() {
   const setting = await storedSettings();
   const check = setting.config.bailianVideoCheck;
-  if (!check || check.state !== "pending" || !check.taskId)
+  const missingFailureDetails =
+    check?.state === "failed" && !check.detailsCheckedAt;
+  if (
+    !check ||
+    (check.state !== "pending" && !missingFailureDetails) ||
+    !check.taskId
+  )
     return check || null;
   const config = await engineConfig();
   const provider = bailianVideoProvider(config),
@@ -95,8 +101,12 @@ export async function videoCheckStatus() {
     ...check,
     state: result.url ? "succeeded" : "failed",
     completedAt: new Date().toISOString(),
+    detailsCheckedAt: new Date().toISOString(),
     ...(result.url
       ? { videoUrl: result.url }
-      : { message: `百炼任务结束于 ${result.state}，未重复提交` }),
+      : {
+          errorCode: result.errorCode || null,
+          message: `百炼任务结束于 ${result.state}${result.errorCode ? `（${result.errorCode}）` : ""}；${result.errorHint || "未重复提交"}`,
+        }),
   });
 }
