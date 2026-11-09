@@ -460,6 +460,10 @@ test("星轨展示真实协作、仅在新交付时汇聚、保留配色并可�
     "delivered",
   );
   await expect(page.getByRole("dialog", { name: /AI 个人助理/ })).toBeHidden();
+  await expect(page.locator(".workspace-companion")).toHaveAttribute(
+    "data-docked",
+    "true",
+  );
   expect(fixture.submissions).toHaveLength(1);
 });
 

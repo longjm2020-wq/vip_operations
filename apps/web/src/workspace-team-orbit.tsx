@@ -227,10 +227,16 @@ export function WorkspaceTeamOrbit({
     });
   }, [tone, active, collecting, covered, visible, error, run?.updatedAt, host]);
   useEffect(() => {
-    window.dispatchEvent(
-      new CustomEvent("xuti-companion-command", { detail: "home" }),
+    // A history task opens while the chat's exit transition still covers the
+    // nest. Wait until it is available before asking the original pet to dock.
+    if (covered || !host) return;
+    const frame = requestAnimationFrame(() =>
+      window.dispatchEvent(
+        new CustomEvent("xuti-companion-command", { detail: "home" }),
+      ),
     );
-  }, []);
+    return () => cancelAnimationFrame(frame);
+  }, [covered, host]);
   const chooseTone = (next: TeamEnergyTone) => {
     setTone(next);
     try {

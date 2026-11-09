@@ -944,6 +944,7 @@ export function WorkspaceCompanion() {
     const timer = setInterval(() => {
       const blocked =
         busy.current ||
+        nest?.closest('[data-team-active="true"]') ||
         perch ||
         drag ||
         document.hidden ||
