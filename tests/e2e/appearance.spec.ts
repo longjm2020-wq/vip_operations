@@ -112,9 +112,7 @@ async function fixture(context: BrowserContext, state: Store, user = "1") {
     if (path === "/my-workspace/assistant/capabilities")
       data = {
         defaultModel: "openai/gpt-6.1-sol",
-        models: [
-          { id: "openai/gpt-6.1-sol", name: "通用助手", vision: true },
-        ],
+        models: [{ id: "openai/gpt-6.1-sol", name: "通用助手", vision: true }],
         imageModels: [],
       };
     if (path.endsWith("/layout-preferences"))
@@ -297,6 +295,102 @@ test("一级入口固定暗色不改账号偏好，详情恢复亮色且跨页�
   await expect(draft).toHaveValue("主题变化后继续编辑的草稿");
   expect(await instance!.evaluate((element) => element.isConnected)).toBe(true);
 });
+test("项目协作及系统设置固定暗色，详情和弹窗无切换按钮且保留运营页偏好", async ({
+  page,
+  context,
+}) => {
+  test.setTimeout(120_000);
+  const state = store();
+  state.accounts.set("1", { mode: "light", version: 3 });
+  await fixture(context, state);
+  await context.route("**/api/v1/auth/me", (route) =>
+    route.fulfill({
+      json: {
+        data: {
+          id: "1",
+          displayName: "主题测试",
+          username: "theme",
+          permissions: [
+            "project.read",
+            "project.create",
+            "sop.manage",
+            "user.read",
+            "role.read",
+            "audit.read",
+            "analytics.manage",
+            "inventory.read",
+          ],
+          roleCodes: ["SUPER_ADMIN"],
+          csrfToken: "fixture",
+        },
+      },
+    }),
+  );
+  await context.route("**/api/v1/projects/theme-project", (route) =>
+    route.fulfill({
+      json: {
+        data: {
+          id: "theme-project",
+          name: "暗色项目详情",
+          status: "DRAFT",
+          document: { tasks: [], stages: [], attachments: [] },
+          members: [],
+        },
+      },
+    }),
+  );
+  await context.route("**/api/v1/project-tables/theme-table", (route) =>
+    route.fulfill({
+      json: {
+        data: {
+          id: "theme-table",
+          name: "暗色表格详情",
+          initialLayout: "empty",
+          canEdit: false,
+          canManage: false,
+        },
+      },
+    }),
+  );
+  await page.addInitScript(() =>
+    localStorage.setItem("xuti:appearance:1", "light"),
+  );
+  for (const path of [
+    "/sops/?source=theme#top",
+    "/projects",
+    "/projects/theme-project",
+    "/project-tables",
+    "/project-tables/theme-table",
+    "/users",
+    "/roles",
+    "/audit-logs",
+    "/SETTINGS/ai/",
+  ]) {
+    await page.goto(path);
+    await expect(page.locator(".sidebar")).toBeVisible({ timeout: 15_000 });
+    await mode(page, "dark");
+    await expect(
+      page.getByRole("button", { name: /切换为.*色主题/ }),
+    ).toHaveCount(0);
+  }
+  await page.goto("/project-tables");
+  await page.getByRole("button", { name: "新建表格", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "新建表格", exact: true });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.locator(".ant-modal-container")).toHaveCSS(
+    "background-color",
+    "rgb(41, 44, 53)",
+  );
+  await dialog.getByRole("button", { name: "关闭", exact: true }).click();
+  expect(state.accounts.get("1")).toEqual({ mode: "light", version: 3 });
+  expect(state.writes).not.toContain("/my-workspace/appearance");
+  await page.goto("/operations/vip/inventory");
+  await mode(page, "light");
+  await expect(
+    page.getByRole("button", { name: "切换为暗色主题", exact: true }),
+  ).toBeVisible();
+});
+
 test("跨浏览器读取账号主题，其他账号独立", async ({
   browser,
   page,

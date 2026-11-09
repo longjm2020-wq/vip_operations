@@ -1,16 +1,22 @@
 .personal-workspace[data-world-mode]
   .workspace-ai-core-stage[data-team-active="true"] {
-  --team-energy: #ff8dd8;
-  --team-energy-soft: #f36ac5;
+  --team-energy: #73baff;
+  --team-energy-soft: #357cfa;
   --team-radius-x: min(244px, calc(50% - 60px));
   --team-radius-y: 244px;
   --team-lift: 0px;
   min-height: 720px;
   transition: min-height 0.7s ease;
 }
-.personal-workspace .workspace-ai-core-stage[data-team-tone="ice"] {
-  --team-energy: #85edff;
-  --team-energy-soft: #40cff4;
+.personal-workspace[data-world-mode]
+  .workspace-ai-core-stage[data-team-tone="purple"] {
+  --team-energy: #9c88ff;
+  --team-energy-soft: #7058e5;
+}
+.personal-workspace[data-world-mode]
+  .workspace-ai-core-stage[data-team-tone="gold"] {
+  --team-energy: #ffd277;
+  --team-energy-soft: #eaa33a;
 }
 .personal-workspace
   .workspace-ai-core-stage[data-team-active="true"]

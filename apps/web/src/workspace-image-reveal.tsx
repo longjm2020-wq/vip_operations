@@ -146,18 +146,18 @@ export function WorkspaceImageReveal() {
         );
         context.restore();
       });
-      // The mask moves; the image stays anchored to the entire workbench.
-      const scale = Math.max(
-        width / photo.naturalWidth,
-        height / photo.naturalHeight,
-      );
+      // Keep the astronaut smaller and to the left of the central nest.
+      // Only the mask moves; the original image remains fixed in the background.
+      const scale =
+        Math.max(width / photo.naturalWidth, height / photo.naturalHeight) *
+        0.9;
       const imageWidth = photo.naturalWidth * scale,
         imageHeight = photo.naturalHeight * scale;
       context.globalCompositeOperation = "source-in";
       context.globalAlpha = 0.76;
       context.drawImage(
         photo,
-        (width - imageWidth) / 2,
+        (width - imageWidth) / 2 - width * 0.16,
         (height - imageHeight) / 2,
         imageWidth,
         imageHeight,

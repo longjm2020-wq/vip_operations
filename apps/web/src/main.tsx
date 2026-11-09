@@ -530,10 +530,15 @@ function Root() {
   };
   const publicPage = publicCollection || publicReport || publicCompetitors;
   const accountId = !publicPage && me.data ? String(me.data.id) : null;
-  // Expandable menu groups have no landing route; their business pages retain the saved theme.
-  const darkLandingPage = (me.isLoading || !!accountId) &&
-    ["/my-workspace", "/aigc", "/operations"].includes(location.pathname.replace(/\/+$/, "").toLowerCase());
-  return <AppearanceProvider key={accountId || "guest"} accountId={accountId} forcedMode={darkLandingPage ? "dark" : undefined}><App><FloatingPanels />{(publicPage || (!me.isLoading && !me.data) || location.pathname === "/mobile/style-photos") && <ThemeToggle standalone />}{renderContent()}</App></AppearanceProvider>;
+  const themePath = location.pathname.replace(/\/+$/, "").toLowerCase();
+  // These sections stay dark without changing the saved preference used by operations pages.
+  const fixedDarkPage = (me.isLoading || !!accountId) && (
+    ["/my-workspace", "/aigc", "/operations"].includes(themePath) ||
+    ["/sops", "/projects", "/project-tables", "/users", "/roles", "/audit-logs", "/settings"].some(
+      (root) => themePath === root || themePath.startsWith(`${root}/`),
+    )
+  );
+  return <AppearanceProvider key={accountId || "guest"} accountId={accountId} forcedMode={fixedDarkPage ? "dark" : undefined}><App><FloatingPanels />{(publicPage || (!me.isLoading && !me.data) || location.pathname === "/mobile/style-photos") && <ThemeToggle standalone />}{renderContent()}</App></AppearanceProvider>;
 }
 createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

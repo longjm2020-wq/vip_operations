@@ -333,7 +333,7 @@ async function setup(
           steps: run.steps.map((step) => ({ ...step, status: "PENDING" })),
         };
     },
-    executionStage: (stage: "writing" | "design") => {
+    executionStage: (stage: "writing" | "design", instruction?: string) => {
       if (!run) throw new Error("Submit a team task before updating its steps");
       const draft = run.steps.find((step) => step.id === "draft")!;
       run = {
@@ -355,7 +355,7 @@ async function setup(
             id: "design",
             title: "制作上新主视觉",
             memberId: "design",
-            instruction: "依据已完成文案制作针织上新主视觉",
+            instruction: instruction ?? "依据已完成文案制作针织上新主视觉",
             dependencies: ["draft"],
             deliverable: "image",
             status: stage === "writing" ? "PENDING" : "RUNNING",
@@ -440,8 +440,14 @@ test("星轨左侧执行详情跟随真实步骤，完成项可展开且中断�
   });
   await expect(current).toHaveAttribute("data-active", "true");
   await expect(rail).toHaveAttribute("data-compact", "false");
-  for (const width of [960, 1280, 1440, 1920]) {
-    await page.setViewportSize({ width, height: 900 });
+  for (const { width, height } of [
+    { width: 1920, height: 951 },
+    { width: 1440, height: 900 },
+    { width: 1366, height: 768 },
+    { width: 1280, height: 720 },
+    { width: 960, height: 900 },
+  ]) {
+    await page.setViewportSize({ width, height });
     await expect
       .poll(
         () =>
@@ -473,11 +479,29 @@ test("星轨左侧执行详情跟随真实步骤，完成项可展开且中断�
               .querySelector(".team-orbit-caption")!
               .getBoundingClientRect();
             const railBounds = panel.getBoundingClientRect();
+            const composer = document
+              .querySelector(".personal-workspace .assistant-compose")!
+              .getBoundingClientRect();
+            const documentBounds = document.documentElement;
             return {
+              pageFitsViewport:
+                documentBounds.scrollWidth <= window.innerWidth + 1 &&
+                documentBounds.scrollHeight <= window.innerHeight + 1 &&
+                Math.abs(window.scrollY) < 1,
+              composerInsideViewport:
+                composer.top >= 0 &&
+                composer.bottom <= window.innerHeight &&
+                composer.left >= 0 &&
+                composer.right <= window.innerWidth,
+              widerDesktopPanel:
+                window.innerWidth < 1440 || railBounds.width >= 320,
               insideStageAndViewport:
                 envelope.left >= Math.max(0, stageBounds.left) &&
                 envelope.right <=
-                  Math.min(window.innerWidth, stageBounds.right),
+                  Math.min(window.innerWidth, stageBounds.right) &&
+                envelope.top >= Math.max(0, stageBounds.top) &&
+                envelope.bottom <=
+                  Math.min(window.innerHeight, stageBounds.bottom),
               belowHeading: envelope.top >= heading.bottom,
               aboveCaption: envelope.bottom <= caption.top,
               clearOfExecutionPanel:
@@ -487,14 +511,21 @@ test("星轨左侧执行详情跟随真实步骤，完成项可展开且中断�
             };
           }),
         {
-          message: `${width}px viewport keeps the full member orbit clear of the execution UI`,
+          message: `${width}x${height} viewport contains the composer and full member orbit without page scrolling`,
         },
       )
       .toEqual({
+        pageFitsViewport: true,
+        composerInsideViewport: true,
+        widerDesktopPanel: true,
         insideStageAndViewport: true,
         belowHeading: true,
         aboveCaption: true,
         clearOfExecutionPanel: true,
+      });
+    if ([1920, 1366, 960].includes(width))
+      await page.screenshot({
+        path: `.local/team-viewport-20261109/execution-${width}x${height}.png`,
       });
   }
   await page.setViewportSize({ width: 1600, height: 1000 });
@@ -546,6 +577,30 @@ test("星轨左侧执行详情跟随真实步骤，完成项可展开且中断�
     fullPage: true,
   });
   await page.setViewportSize({ width: 1600, height: 1000 });
+
+  // Long server-provided detail remains accessible inside its own panel.
+  const longInstruction =
+    "请逐项核对素材、版式与交付规格，记录每一项结果。".repeat(60);
+  fixture.executionStage("design", longInstruction);
+  await expect(current.locator(".team-execution-instruction")).toContainText(
+    longInstruction,
+    { timeout: 10000 },
+  );
+  const detailScroll = current.locator(".team-execution-scroll");
+  await expect
+    .poll(() =>
+      detailScroll.evaluate((el) => {
+        el.scrollTop = el.scrollHeight;
+        return {
+          internallyScrollable:
+            el.scrollHeight > el.clientHeight && el.scrollTop > 0,
+          pageStillFits:
+            document.documentElement.scrollHeight <= window.innerHeight + 1 &&
+            Math.abs(window.scrollY) < 1,
+        };
+      }),
+    )
+    .toEqual({ internallyScrollable: true, pageStillFits: true });
 
   // Retain the last server step snapshot while the overall run is interrupted.
   fixture.interrupt("NEEDS_USER");
@@ -625,6 +680,7 @@ test("星轨成员公转保持文字正向，悬停继续旋转且键盘和详�
 test("星轨展示真实协作、仅在新交付时汇聚、保留配色并可打开成果", async ({
   page,
 }) => {
+  test.setTimeout(90000);
   const fixture = await setup(page);
   await submitInWorkspace(page);
   await expect(page.getByRole("dialog", { name: /AI 个人助理/ })).toBeHidden();
@@ -699,12 +755,28 @@ test("星轨展示真实协作、仅在新交付时汇聚、保留配色并可�
     )
     .toBeGreaterThan(1.1);
   await page.screenshot({ path: ".local/team-orbit-20261109/collecting.png" });
-  await page.getByRole("button", { name: "能量配色" }).click();
-  await page.getByRole("menuitem", { name: "冰蓝能量" }).click();
-  await expect(page.locator(".workspace-team-layer")).toHaveAttribute(
-    "data-tone",
-    "ice",
-  );
+  for (const [label, tone, energyColor] of [
+    ["紫色能量", "purple", "#9c88ff"],
+    ["金色能量", "gold", "#ffd277"],
+    ["蓝色能量", "blue", "#73baff"],
+  ]) {
+    await page.getByRole("button", { name: "能量配色" }).click();
+    await expect(page.getByRole("menuitem", { name: /粉|玫瑰/ })).toHaveCount(
+      0,
+    );
+    await page.getByRole("menuitem", { name: label }).click();
+    await expect(page.locator(".workspace-team-layer")).toHaveAttribute(
+      "data-tone",
+      tone,
+    );
+    await expect
+      .poll(() =>
+        teamScene.evaluate((el) =>
+          getComputedStyle(el).getPropertyValue("--team-energy").trim(),
+        ),
+      )
+      .toBe(energyColor);
+  }
   await expect(
     page.getByRole("button", { name: "查看交付：已验收活动文案" }),
   ).toBeVisible({ timeout: 12000 });
@@ -717,6 +789,58 @@ test("星轨展示真实协作、仅在新交付时汇聚、保留配色并可�
       el.getAnimations().map((animation) => animation.finished),
     );
   });
+  for (const viewport of [
+    { width: 1366, height: 768 },
+    { width: 960, height: 900 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          const bounds = (selector: string) =>
+            document.querySelector(selector)!.getBoundingClientRect();
+          const composer = bounds(".personal-workspace .assistant-compose");
+          const delivery = bounds(".team-orbit-deliveries");
+          const card = bounds(".team-orbit-file");
+          const rail = bounds(".team-execution-rail");
+          const nest = bounds(".workspace-world-plane > .workspace-ai-core");
+          const insideViewport = (rect: DOMRect) =>
+            rect.left >= 0 &&
+            rect.top >= 0 &&
+            rect.right <= innerWidth &&
+            rect.bottom <= innerHeight;
+          return {
+            pageFits:
+              document.documentElement.scrollHeight <= innerHeight + 1 &&
+              document.documentElement.scrollWidth <= innerWidth + 1,
+            composerVisible: insideViewport(composer),
+            deliveryVisible:
+              insideViewport(delivery) &&
+              insideViewport(card) &&
+              card.bottom <= delivery.bottom + 1,
+            deliveryRightOfNest: delivery.left >= nest.right - 1,
+            deliveryAboveComposer: delivery.bottom <= composer.top,
+            deliveryClearOfRail:
+              delivery.bottom <= rail.top ||
+              delivery.top >= rail.bottom ||
+              delivery.right <= rail.left ||
+              delivery.left >= rail.right,
+          };
+        }),
+      )
+      .toEqual({
+        pageFits: true,
+        composerVisible: true,
+        deliveryVisible: true,
+        deliveryRightOfNest: true,
+        deliveryAboveComposer: true,
+        deliveryClearOfRail: true,
+      });
+    await page.screenshot({
+      path: `.local/team-viewport-20261109/delivered-${viewport.width}x${viewport.height}.png`,
+    });
+  }
+  await page.setViewportSize(desktopViewport);
   await expect
     .poll(() =>
       page.evaluate(() => {
@@ -745,7 +869,7 @@ test("星轨展示真实协作、仅在新交付时汇聚、保留配色并可�
   );
   await expect(page.locator(".workspace-team-layer")).toHaveAttribute(
     "data-tone",
-    "ice",
+    "blue",
   );
   await expect(page.locator(".workspace-team-layer")).toHaveAttribute(
     "data-collecting",

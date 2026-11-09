@@ -43,8 +43,12 @@ export function paintTeamEnergy({
   const motion = matchMedia("(prefers-reduced-motion: reduce)");
   const compact = matchMedia("(max-width: 760px)");
   const workspace = layer.closest<HTMLElement>(".personal-workspace");
-  const color = tone === "rose" ? [255, 128, 211] : [140, 217, 246];
-  const white = tone === "rose" ? [255, 243, 253] : [233, 252, 255];
+  const palette = {
+    blue: { color: [115, 186, 255], white: [238, 248, 255] },
+    purple: { color: [156, 136, 255], white: [244, 240, 255] },
+    gold: { color: [255, 210, 119], white: [255, 249, 233] },
+  }[tone];
+  const { color, white } = palette;
   let width = 0,
     height = 0,
     dpr = 1,

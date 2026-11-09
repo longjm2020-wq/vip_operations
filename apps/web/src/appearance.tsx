@@ -99,7 +99,7 @@ export function AppearanceProvider({
     },
     onSettled: () => setOptimistic(null),
   });
-  // Landing pages control presentation without overwriting the account's business-page preference.
+  // Fixed-theme sections control presentation without overwriting the account's saved preference.
   const mode = forcedMode || optimistic || preference.data?.mode || localMode;
   useLayoutEffect(() => {
     document.documentElement.dataset.theme = mode;

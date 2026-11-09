@@ -6,6 +6,7 @@ import {
 } from "../../packages/contracts/src/assistant-team.js";
 import {
   hasTeamDelivery,
+  normalizeTeamEnergyTone,
   shouldCollectTeamEnergy,
   teamMemberActivity,
   teamSceneArtifacts,
@@ -48,6 +49,12 @@ const artifact = (
   createdAt: "2026-11-09T10:00:00Z",
 });
 describe("workspace team visualization reflects server results", () => {
+  test("retired energy preferences fall back to blue without losing supported choices", () => {
+    for (const value of [undefined, null, "", "rose", "ice", "unknown", "blue"])
+      expect(normalizeTeamEnergyTone(value)).toBe("blue");
+    expect(normalizeTeamEnergyTone("purple")).toBe("purple");
+    expect(normalizeTeamEnergyTone("gold")).toBe("gold");
+  });
   test("only a newly observed successful delivery can collect energy", () => {
     const run = {
       ...base(),

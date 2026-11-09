@@ -118,10 +118,8 @@ export function WorkspaceTeamExecution({
   useEffect(() => {
     const host = rail.current?.closest<HTMLElement>(".workspace-ai-core-stage");
     if (!host) return;
-    const resize = new ResizeObserver(() =>
-      setCompact(host.clientWidth < 1000),
-    );
-    setCompact(host.clientWidth < 1000);
+    const resize = new ResizeObserver(() => setCompact(host.clientWidth < 820));
+    setCompact(host.clientWidth < 820);
     resize.observe(host);
     return () => resize.disconnect();
   }, []);

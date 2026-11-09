@@ -1,0 +1,164 @@
+/* Fit the desktop scene into the viewport; long task text scrolls in its rail. */
+@media (min-width: 761px) {
+  .workspace.workspace-future:has(
+      .workspace-ai-core-stage[data-team-active="true"]
+    ) {
+    height: 100dvh;
+    min-height: 0;
+    overflow: hidden;
+  }
+  .workspace-future:has(.workspace-ai-core-stage[data-team-active="true"])
+    > .ant-layout {
+    min-height: 0;
+  }
+  .workspace-future:has(.workspace-ai-core-stage[data-team-active="true"])
+    .topbar {
+    flex: none;
+  }
+  .workspace-future
+    .content:has(.workspace-ai-core-stage[data-team-active="true"]) {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+  }
+  .personal-workspace[data-world-mode]:has(
+      .workspace-ai-core-stage[data-team-active="true"]
+    ) {
+    height: 100%;
+    min-height: 0;
+    flex: 1;
+  }
+  .personal-workspace[data-world-mode]:has(
+      .workspace-ai-core-stage[data-team-active="true"]
+    )
+    :is(
+      .personal-workspace-body,
+      .personal-workspace-main,
+      .workspace-ai,
+      .workspace-ai-start
+    ) {
+    min-height: 0;
+  }
+  .personal-workspace[data-world-mode]:has(
+      .workspace-ai-core-stage[data-team-active="true"]
+    )
+    .personal-welcome {
+    flex: none;
+  }
+  .personal-workspace[data-world-mode]:has(
+      .workspace-ai-core-stage[data-team-active="true"]
+    )
+    .assistant-compose {
+    flex: none;
+    max-height: min(260px, 30dvh);
+    overflow-y: auto;
+    scrollbar-width: thin;
+  }
+  .personal-workspace[data-world-mode]
+    .workspace-ai-core-stage[data-team-active="true"][data-team-fit] {
+    --team-lift: 0px;
+    --team-radius-x: 244px;
+    --team-radius-y: 244px;
+    min-height: 0;
+    flex: 1;
+    transition: none;
+  }
+  .workspace-ai-core-stage[data-team-fit] .workspace-world-camera {
+    top: var(--team-scene-top);
+    bottom: var(--team-scene-bottom);
+    left: var(--team-scene-inset);
+    right: var(--team-scene-right);
+  }
+  .workspace-ai-core-stage[data-team-fit] .workspace-world-plane {
+    inset: auto;
+    left: 50%;
+    top: 50%;
+    width: var(--team-plane-size);
+    height: var(--team-plane-size);
+    transform: translate(-50%, -50%)
+      translate3d(var(--world-pan-x), var(--world-pan-y), 0)
+      rotateX(var(--world-pitch)) rotateY(var(--world-yaw))
+      scale(calc(var(--world-zoom) * var(--team-scene-scale)));
+  }
+  .personal-workspace[data-world-mode]
+    .workspace-ai-core-stage[data-team-fit]
+    .workspace-world-plane
+    > .workspace-ai-core {
+    width: var(--team-core-size);
+    height: var(--team-core-size);
+  }
+  .workspace-ai-core-stage[data-team-fit] .team-orbit-node {
+    width: calc(98px * var(--team-node-scale));
+    height: calc(98px * var(--team-node-scale));
+  }
+  .workspace-ai-core-stage[data-team-fit]
+    .team-orbit-disc.workspace-dock-label {
+    width: calc(90px * var(--team-node-scale));
+    height: calc(90px * var(--team-node-scale));
+    gap: calc(4px * var(--team-node-scale));
+    padding: calc(8px * var(--team-node-scale))
+      calc(6px * var(--team-node-scale));
+  }
+  .workspace-ai-core-stage[data-team-fit] .team-orbit-disc > .anticon {
+    font-size: calc(22px * var(--team-node-scale));
+  }
+  .workspace-ai-core-stage[data-team-fit] .team-orbit-node strong {
+    font-size: calc(12px * var(--team-node-scale));
+  }
+  .workspace-ai-core-stage[data-team-fit] .team-orbit-node small {
+    font-size: calc(10px * var(--team-node-scale));
+  }
+  .workspace-ai-core-stage[data-team-fit="side"] .team-execution-rail {
+    top: 72px;
+    bottom: 76px;
+    max-height: none;
+  }
+  .workspace-ai-core-stage[data-team-fit="stacked"] .team-execution-rail {
+    bottom: 72px;
+    max-height: 180px;
+  }
+  .workspace-ai-core-stage[data-team-fit][data-team-phase="delivered"]
+    .team-execution-rail {
+    top: 72px;
+    bottom: 76px;
+    max-height: none;
+  }
+  .workspace-ai-core-stage[data-team-fit][data-team-phase="delivered"]
+    .team-orbit-deliveries {
+    top: 72px;
+    bottom: 76px;
+    left: auto;
+    right: 17px;
+    width: var(--team-delivery-width);
+    max-height: none;
+    display: flex;
+    flex-direction: column;
+    transform: none;
+    overflow: hidden;
+  }
+  .workspace-ai-core-stage[data-team-fit][data-team-phase="delivered"]
+    .team-orbit-delivery-heading {
+    flex: none;
+  }
+  .workspace-ai-core-stage[data-team-fit][data-team-phase="delivered"]
+    .team-orbit-file-row {
+    min-height: 0;
+    grid-template-columns: minmax(0, 1fr);
+    align-content: start;
+    gap: 12px;
+    padding: 2px;
+    overflow: auto;
+    scrollbar-width: thin;
+    overscroll-behavior: contain;
+  }
+  .workspace-ai-core-stage[data-team-fit][data-team-delivery-fit="stacked"]
+    .team-execution-rail {
+    top: 72px;
+    bottom: auto;
+    left: 17px;
+    right: calc(var(--team-delivery-width) + 42px);
+    width: auto;
+    max-height: var(--team-delivery-rail-height);
+  }
+}

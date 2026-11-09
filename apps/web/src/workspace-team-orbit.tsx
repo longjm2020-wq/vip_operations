@@ -28,6 +28,7 @@ import { ArtifactCard } from "./assistant-team-panel";
 import { useWorkspaceSceneCover } from "./workspace-scene-presence";
 import {
   hasTeamDelivery,
+  normalizeTeamEnergyTone,
   shouldCollectTeamEnergy,
   teamIsRunning,
   teamMemberActivity,
@@ -44,6 +45,7 @@ import type {
   TeamRun,
 } from "../../../packages/contracts/src/assistant-team";
 import "./workspace-team-orbit.css";
+import "./workspace-team-viewport.css";
 
 const icons: Record<TeamMember["role"], ReactNode> = {
   orchestrator: <TeamOutlined />,
@@ -75,9 +77,9 @@ type Node = {
 };
 function readTone(key: string): TeamEnergyTone {
   try {
-    return localStorage.getItem(key) === "ice" ? "ice" : "rose";
+    return normalizeTeamEnergyTone(localStorage.getItem(key));
   } catch {
-    return "rose";
+    return "blue";
   }
 }
 function readSeen(key: string): string[] {
@@ -131,6 +133,120 @@ export function WorkspaceTeamOrbit({
       ),
     [],
   );
+  useLayoutEffect(() => {
+    if (!host) return;
+    const desktop = matchMedia("(min-width: 761px)");
+    const fit = () => {
+      if (!desktop.matches) {
+        delete host.dataset.teamFit;
+        delete host.dataset.teamDeliveryFit;
+        return;
+      }
+      const compact = host.clientWidth < 820;
+      const delivered = host.dataset.teamPhase === "delivered";
+      const panel = Math.min(360, Math.max(320, host.clientWidth * 0.25));
+      const deliveryStacked = delivered && host.clientWidth < 1000;
+      const deliveryWidth = compact
+        ? Math.min(240, Math.max(220, host.clientWidth * 0.32))
+        : Math.min(320, Math.max(300, host.clientWidth * 0.23));
+      const deliveryRailHeight = Math.min(
+        160,
+        Math.max(72, host.clientHeight * 0.24),
+      );
+      const sceneTop = deliveryStacked ? 72 + deliveryRailHeight + 18 : 64;
+      const sceneRight = delivered ? deliveryWidth + 42 : 0;
+      const deliveryInset = deliveryStacked ? 0 : panel + 42;
+      const bottom = delivered ? 72 : compact ? 272 : 72;
+      const sceneSize = delivered ? 320 : 620;
+      const availableWidth = delivered
+        ? host.clientWidth - deliveryInset - sceneRight
+        : compact
+          ? host.clientWidth - 24
+          : host.clientWidth - panel - 60;
+      let scale = Math.max(
+        0.1,
+        Math.min(
+          1,
+          (host.clientHeight - sceneTop - bottom) / sceneSize,
+          availableWidth / sceneSize,
+        ),
+      );
+      // Preserve readable member discs when the orbital path needs to shrink.
+      // 488 is the path diameter; the halo retains at least 80% of its size.
+      if (!delivered && scale < 0.8)
+        scale = Math.max(
+          0.1,
+          (Math.min(host.clientHeight - 64 - bottom, availableWidth) -
+            108 * 0.8) /
+            512,
+        );
+      const nodeScale = delivered ? 1 : Math.max(1, 0.8 / scale);
+      const coreSize = delivered
+        ? 274
+        : Math.min(274, Math.max(100, 2 * (244 - 54 * nodeScale - 24)));
+      const sceneWidth = delivered
+        ? sceneSize * scale
+        : 488 * scale + 108 * nodeScale * scale + 24;
+      // Keep the nest centered on wide screens, then make room for the rail
+      // before reducing the scene on shorter or narrower desktop windows.
+      const inset = delivered
+        ? deliveryInset
+        : compact
+          ? 0
+          : Math.max(0, 2 * (panel + 42 + sceneWidth / 2) - host.clientWidth);
+      host.dataset.teamFit = compact ? "stacked" : "side";
+      if (delivered)
+        host.dataset.teamDeliveryFit = deliveryStacked ? "stacked" : "side";
+      else delete host.dataset.teamDeliveryFit;
+      host.style.setProperty("--team-panel-width", `${panel}px`);
+      host.style.setProperty("--team-delivery-width", `${deliveryWidth}px`);
+      host.style.setProperty(
+        "--team-delivery-rail-height",
+        `${deliveryRailHeight}px`,
+      );
+      host.style.setProperty("--team-scene-scale", String(scale));
+      host.style.setProperty("--team-node-scale", String(nodeScale));
+      host.style.setProperty(
+        "--team-plane-size",
+        `${Math.max(620, Math.ceil(2 * (244 + 54 * nodeScale + 32)))}px`,
+      );
+      host.style.setProperty("--team-core-size", `${coreSize}px`);
+      host.style.setProperty("--team-scene-inset", `${inset}px`);
+      host.style.setProperty("--team-scene-right", `${sceneRight}px`);
+      host.style.setProperty("--team-scene-top", `${sceneTop}px`);
+      host.style.setProperty("--team-scene-bottom", `${bottom}px`);
+    };
+    const resize = new ResizeObserver(fit);
+    const phase = new MutationObserver(fit);
+    resize.observe(host);
+    phase.observe(host, {
+      attributes: true,
+      attributeFilter: ["data-team-phase"],
+    });
+    desktop.addEventListener("change", fit);
+    fit();
+    return () => {
+      resize.disconnect();
+      phase.disconnect();
+      desktop.removeEventListener("change", fit);
+      delete host.dataset.teamFit;
+      delete host.dataset.teamDeliveryFit;
+      for (const name of [
+        "panel-width",
+        "delivery-width",
+        "delivery-rail-height",
+        "scene-scale",
+        "node-scale",
+        "plane-size",
+        "core-size",
+        "scene-inset",
+        "scene-right",
+        "scene-top",
+        "scene-bottom",
+      ])
+        host.style.removeProperty(`--team-${name}`);
+    };
+  }, [host]);
   useEffect(() => {
     const visibility = () => setVisible(!document.hidden);
     document.addEventListener("visibilitychange", visibility);
@@ -353,8 +469,9 @@ export function WorkspaceTeamOrbit({
                   menu={{
                     selectedKeys: [tone],
                     items: [
-                      { key: "rose", label: "紫粉能量" },
-                      { key: "ice", label: "冰蓝能量" },
+                      { key: "blue", label: "蓝色能量" },
+                      { key: "purple", label: "紫色能量" },
+                      { key: "gold", label: "金色能量" },
                     ],
                     onClick: ({ key }) => chooseTone(key as TeamEnergyTone),
                   }}
