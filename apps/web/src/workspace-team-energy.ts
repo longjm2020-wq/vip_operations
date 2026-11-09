@@ -18,6 +18,7 @@ export function paintTeamEnergy({
   active,
   collecting,
   elapsed,
+  activityTime,
   onCollected,
 }: {
   canvas: HTMLCanvasElement;
@@ -26,6 +27,7 @@ export function paintTeamEnergy({
   active: boolean;
   collecting: boolean;
   elapsed: { current: number };
+  activityTime: { current: number };
   onCollected: () => void;
 }) {
   const ctx = canvas.getContext("2d");
@@ -54,6 +56,7 @@ export function paintTeamEnergy({
   );
   const core =
     layer.parentElement?.querySelector<HTMLElement>(".workspace-ai-core");
+  if (!active) delete canvas.dataset.ringTime;
   const ink = (a: number, hot = false) =>
     `rgba(${(hot ? white : color).join(",")},${clamp(a)})`;
   const center = (): Point => ({
@@ -97,6 +100,132 @@ export function paintTeamEnergy({
     context.arc(point.x, point.y, radius, 0, Math.PI * 2);
     context.fillStyle = ink(alpha, true);
     context.fill();
+  };
+  const nodeCenter = (node: HTMLElement): Point => {
+    const disc = node.querySelector<HTMLElement>(".team-orbit-disc");
+    return {
+      x: node.offsetLeft,
+      y:
+        node.offsetTop -
+        node.offsetHeight / 2 +
+        (disc?.offsetTop || 0) +
+        (disc?.offsetHeight || 60) / 2,
+    };
+  };
+  const ringPoint = (point: Point, radius: number, angle: number): Point => ({
+    x: point.x + Math.cos(angle) * radius,
+    y: point.y + Math.sin(angle) * radius,
+  });
+  // Counter-rotating arcs carry short electric discharges along the perimeter.
+  // Their timing is decorative only; it does not estimate task completion.
+  const energyRing = (
+    point: Point,
+    radius: number,
+    time: number,
+    seed: number,
+    powered: boolean,
+  ) => {
+    const large = radius > 80;
+    context.save();
+    context.globalCompositeOperation = "lighter";
+    context.lineCap = "round";
+    context.lineJoin = "round";
+    for (let band = 0; band < 2; band++) {
+      const r = radius + band * (large ? 7 : 3),
+        direction = band ? -1 : 1,
+        head = time * (powered ? 0.55 : 0.22) * direction + seed * 1.31;
+      context.beginPath();
+      context.arc(point.x, point.y, r, 0, Math.PI * 2);
+      context.strokeStyle = powered ? ink(0.13) : "rgba(153,180,225,.12)";
+      context.lineWidth = 0.65;
+      context.stroke();
+      for (let arc = 0; arc < 3; arc++) {
+        for (let part = 0; part < 16; part++) {
+          const a = head + (arc * Math.PI * 2) / 3 + part * 0.045 * direction;
+          context.beginPath();
+          context.arc(
+            point.x,
+            point.y,
+            r,
+            a,
+            a + 0.047 * direction,
+            direction < 0,
+          );
+          const alpha = (part / 16) ** 1.5 * (powered ? 0.84 : 0.32);
+          context.strokeStyle = powered
+            ? ink(alpha, part > 13)
+            : `rgba(160,200,241,${alpha})`;
+          context.lineWidth = powered ? (large ? 1.6 : 1.1) : 0.85;
+          context.stroke();
+        }
+      }
+    }
+    if (!powered) {
+      context.restore();
+      return;
+    }
+    const patches = large ? 3 : 2;
+    for (let patch = 0; patch < patches; patch++) {
+      const phase = time * 0.8 + seed * 1.7 + patch * 2.31,
+        start = phase + (patch * Math.PI * 2) / patches,
+        span = large ? 0.48 : 0.58,
+        alpha = 0.58 + 0.2 * Math.sin(time * 2.3 + patch + seed),
+        points: Point[] = [];
+      for (let k = 0; k <= 20; k++) {
+        const taper = Math.sin((k / 20) * Math.PI),
+          jitter =
+            (Math.sin(k * 2.31 + phase * 3) + Math.sin(k * 5.7 - phase * 2)) *
+            taper;
+        points.push(
+          ringPoint(
+            point,
+            radius + 3 + jitter * (large ? 3.1 : 1.7),
+            start + (k / 20) * span,
+          ),
+        );
+      }
+      const trace = () => {
+        context.beginPath();
+        points.forEach((p, k) =>
+          k ? context.lineTo(p.x, p.y) : context.moveTo(p.x, p.y),
+        );
+      };
+      // A restrained colored halo, a thin colored stroke, and a white core.
+      trace();
+      context.strokeStyle = ink(alpha * 0.12);
+      context.lineWidth = large ? 7 : 4;
+      context.stroke();
+      trace();
+      context.strokeStyle = ink(alpha * 0.65);
+      context.lineWidth = 2.1;
+      context.stroke();
+      trace();
+      context.strokeStyle = ink(alpha, true);
+      context.lineWidth = 0.75;
+      context.stroke();
+      for (let spark = 0; spark < (large ? 7 : 3); spark++) {
+        const age = (time * 0.65 + random(seed * 41 + patch * 17 + spark)) % 1,
+          angle = start + span * random(spark * 13 + patch + seed),
+          base = ringPoint(point, radius + 4 + age * (large ? 15 : 8), angle),
+          tip = ringPoint(
+            point,
+            radius + 7 + age * (large ? 20 : 10),
+            angle + 0.018,
+          ),
+          life = Math.sin(age * Math.PI) * alpha;
+        context.beginPath();
+        context.moveTo(base.x, base.y);
+        context.lineTo(tip.x, tip.y);
+        context.strokeStyle = ink(life * 0.75, true);
+        context.lineWidth = 0.65;
+        context.stroke();
+        if (spark % 3 === 0) {
+          glow(base, large ? 7 : 4, life * 0.3);
+          dot(base, 0.9, life);
+        }
+      }
+    }
+    context.restore();
   };
   // Fine, curved filaments and small needle sparks follow the selected reference.
   // Everything is drawn at the display resolution; no smoke or video texture.
@@ -147,13 +276,33 @@ export function paintTeamEnergy({
     }
     context.restore();
   };
-  function draw(now: number) {
+  function draw() {
     const target = center(),
       small = width < 540;
     context.setTransform(dpr, 0, 0, dpr, 0, 0);
     context.clearRect(0, 0, width, height);
     if (motion.matches) return;
-    const time = collecting ? elapsed.current : now / 1000;
+    const time = collecting ? elapsed.current : activityTime.current;
+    if (active && !collecting) {
+      canvas.dataset.ringTime = time.toFixed(2);
+      energyRing(
+        target,
+        (core?.offsetWidth || (small ? 190 : 274)) / 2 + 3,
+        time,
+        0,
+        true,
+      );
+      members.forEach((node, i) => {
+        const disc = node.querySelector<HTMLElement>(".team-orbit-disc");
+        energyRing(
+          nodeCenter(node),
+          (disc?.offsetWidth || 90) / 2 + 5,
+          time,
+          i + 1,
+          node.dataset.active === "true",
+        );
+      });
+    }
     if (collecting) canvas.dataset.energyTime = time.toFixed(2);
     if (collecting) {
       const envelope = smooth(time / 1.2) * (1 - smooth((time - 3.9) / 1.4));
@@ -162,16 +311,11 @@ export function paintTeamEnergy({
       glow(target, small ? 130 : 200, envelope * 0.1);
       context.restore();
     }
-    sources.forEach((node, i) => {
-      const disc = node.querySelector<HTMLElement>(".team-orbit-disc");
-      const source = {
-        x: node.offsetLeft,
-        y:
-          node.offsetTop -
-          node.offsetHeight / 2 +
-          (disc?.offsetTop || 0) +
-          (disc?.offsetHeight || 60) / 2,
-      };
+    const currentSources = collecting
+      ? sources
+      : members.filter((node) => node.dataset.active === "true");
+    currentSources.forEach((node, i) => {
+      const source = nodeCenter(node);
       if (!collecting) {
         const p = (time / 4 + i * 0.3) % 1;
         context.beginPath();
@@ -282,24 +426,28 @@ export function paintTeamEnergy({
       return;
     }
     if (motion.matches) {
-      draw(now);
+      draw();
       if (collecting) finish();
       return;
     }
     if (collecting && previous)
       elapsed.current += Math.max(0, (now - previous) / 1000);
+    if (active && previous)
+      activityTime.current += Math.max(
+        0,
+        Math.min(0.1, (now - previous) / 1000),
+      );
     previous = now;
     if (now - lastPaint >= 1000 / 30) {
       lastPaint = now;
-      draw(now);
+      draw();
     }
     if (collecting && elapsed.current >= 5.4) {
       context.clearRect(0, 0, width, height);
       finish();
       return;
     }
-    if (collecting || (active && sources.length))
-      frame = requestAnimationFrame(tick);
+    if (collecting || active) frame = requestAnimationFrame(tick);
   };
   const schedule = () => {
     if (!frame && !disposed && !complete) frame = requestAnimationFrame(tick);
@@ -310,7 +458,7 @@ export function paintTeamEnergy({
     dpr = Math.min(devicePixelRatio || 1, 2);
     canvas.width = Math.ceil(width * dpr);
     canvas.height = Math.ceil(height * dpr);
-    draw(performance.now());
+    draw();
     schedule();
   });
   const intersection = new IntersectionObserver(([entry]) => {

@@ -324,6 +324,15 @@ async function setup(
     complete: () => {
       completed = true;
     },
+    phase: (status: "QUEUED" | "PLANNING") => {
+      if (run)
+        run = {
+          ...run,
+          status,
+          stage: status === "QUEUED" ? "等待团队开始" : "主脑正在制定执行计划",
+          steps: run.steps.map((step) => ({ ...step, status: "PENDING" })),
+        };
+    },
     interrupt: (status: "FAILED" | "CANCELED" | "NEEDS_USER") => {
       if (run)
         run = {
@@ -380,12 +389,41 @@ test("星轨展示真实协作、仅在新交付时汇聚、保留配色并可�
     fullPage: true,
   });
   await page.setViewportSize(desktopViewport);
+  const teamScene = page.locator(".workspace-team-layer");
+  const energyCanvas = page.locator(".team-energy-canvas");
+  await expect(teamScene).toHaveAttribute("data-energized", "true");
+  await expect
+    .poll(async () => Number(await energyCanvas.getAttribute("data-ring-time")))
+    .toBeGreaterThan(0);
+  await page.screenshot({
+    path: ".local/team-orbit-20261109/running-ring.png",
+  });
+  fixture.phase("QUEUED");
+  await expect(teamScene).toHaveAttribute("data-status", "QUEUED", {
+    timeout: 10000,
+  });
+  await expect(teamScene).toHaveAttribute("data-energized", "false");
+  fixture.phase("PLANNING");
+  await expect(teamScene).toHaveAttribute("data-status", "PLANNING", {
+    timeout: 10000,
+  });
+  await expect(teamScene).toHaveAttribute("data-energized", "true");
+  await expect(
+    page.locator('.team-orbit-node[data-active="true"]'),
+  ).toHaveCount(0);
+  const planningTime = Number(
+    await energyCanvas.getAttribute("data-ring-time"),
+  );
+  await expect
+    .poll(async () => Number(await energyCanvas.getAttribute("data-ring-time")))
+    .toBeGreaterThan(planningTime + 0.15);
   fixture.complete();
   await expect(page.locator(".workspace-team-layer")).toHaveAttribute(
     "data-collecting",
     "true",
     { timeout: 10000 },
   );
+  await expect(teamScene).toHaveAttribute("data-energized", "false");
   await expect
     .poll(async () =>
       Number(
@@ -476,6 +514,9 @@ test("手机星轨尊重减少动态效果，DeerFlow 不伪造成员与独立�
   await submitInWorkspace(page);
   await expect(page.locator(".team-orbit-node")).toHaveCount(1);
   await expect(page.locator(".team-orbit-node")).toContainText("DeerFlow");
+  expect(
+    await page.locator(".team-energy-canvas").getAttribute("data-ring-time"),
+  ).toBeNull();
   fixture.complete();
   await expect(page.locator(".team-orbit-deliveries")).toContainText(
     "待独立验收",
@@ -514,6 +555,10 @@ test("星轨遇到执行失败不播放成功动效", async ({ page }) => {
     "false",
   );
   await expect(page.locator(".team-orbit-deliveries")).toHaveCount(0);
+  await expect(page.locator(".workspace-team-layer")).toHaveAttribute(
+    "data-energized",
+    "false",
+  );
   await expect(
     page.getByText("执行服务暂时不可用", { exact: true }),
   ).toBeVisible();

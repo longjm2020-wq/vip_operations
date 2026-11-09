@@ -117,6 +117,7 @@ export function WorkspaceTeamOrbit({
   const pending = useRef(false),
     previous = useRef<TeamRun["status"] | undefined>(undefined);
   const collectionTime = useRef(0),
+    activityTime = useRef(0),
     played = useRef(new Set(readSeen(seenKey)));
   const [visible, setVisible] = useState(!document.hidden);
   useWorkspaceSceneCover(detail !== null);
@@ -162,6 +163,10 @@ export function WorkspaceTeamOrbit({
   }, [run, covered, visible, seenKey]);
   const delivered = run?.status === "DONE" && !collecting && !pending.current;
   const active = !!run && teamIsRunning(run.status);
+  const energized =
+    !!run &&
+    ["PLANNING", "RUNNING", "REVIEWING"].includes(run.status) &&
+    !error;
   const allMembers = run ? teamSceneMembers(run) : [];
   const nodes: Node[] = allMembers.slice(0, 6).map((member) => ({
     id: member.id,
@@ -220,12 +225,22 @@ export function WorkspaceTeamOrbit({
       canvas: canvas.current,
       layer: layer.current,
       tone,
-      active: active && !error,
+      active: energized,
       collecting,
       elapsed: collectionTime,
+      activityTime,
       onCollected: () => setCollecting(false),
     });
-  }, [tone, active, collecting, covered, visible, error, run?.updatedAt, host]);
+  }, [
+    tone,
+    energized,
+    collecting,
+    covered,
+    visible,
+    error,
+    run?.updatedAt,
+    host,
+  ]);
   useEffect(() => {
     // A history task opens while the chat's exit transition still covers the
     // nest. Wait until it is available before asking the original pet to dock.
@@ -254,6 +269,7 @@ export function WorkspaceTeamOrbit({
         aria-label="智能体团队星轨"
         data-status={run?.status || "LOADING"}
         data-collecting={collecting}
+        data-energized={energized}
         data-tone={tone}
       >
         <canvas

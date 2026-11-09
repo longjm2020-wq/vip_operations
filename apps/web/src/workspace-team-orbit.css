@@ -52,6 +52,23 @@
 .personal-workspace .workspace-ai-core-stage[data-team-phase="delivered"] {
   --team-lift: 72px;
 }
+.workspace-ai-core-stage:has(.workspace-team-layer[data-energized="true"])
+  .workspace-ai-core-aura {
+  background: radial-gradient(
+    ellipse,
+    color-mix(in srgb, var(--team-energy) 14%, transparent),
+    transparent 70%
+  );
+}
+.workspace-ai-core-stage:has(.workspace-team-layer[data-energized="true"])
+  .workspace-ai-core-orbit-plane {
+  opacity: 0.55;
+}
+.workspace-team-layer[data-energized="true"]
+  .team-orbit-node[data-active="true"]
+  .team-orbit-node-ring {
+  border-color: color-mix(in srgb, var(--team-energy) 40%, transparent);
+}
 .personal-workspace:has(.workspace-ai-core-stage[data-team-active="true"])
   .companion-voice-prompt {
   visibility: hidden;
