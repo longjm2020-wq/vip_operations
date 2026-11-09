@@ -16,18 +16,22 @@ export function paintTeamEnergy({
   layer,
   tone,
   active,
+  orbiting,
   collecting,
   elapsed,
   activityTime,
+  orbitTime,
   onCollected,
 }: {
   canvas: HTMLCanvasElement;
   layer: HTMLElement;
   tone: TeamEnergyTone;
   active: boolean;
+  orbiting: boolean;
   collecting: boolean;
   elapsed: { current: number };
   activityTime: { current: number };
+  orbitTime: { current: number };
   onCollected: () => void;
 }) {
   const ctx = canvas.getContext("2d");
@@ -37,6 +41,8 @@ export function paintTeamEnergy({
   }
   const context = ctx;
   const motion = matchMedia("(prefers-reduced-motion: reduce)");
+  const compact = matchMedia("(max-width: 760px)");
+  const workspace = layer.closest<HTMLElement>(".personal-workspace");
   const color = tone === "rose" ? [255, 128, 211] : [140, 217, 246];
   const white = tone === "rose" ? [255, 243, 253] : [233, 252, 255];
   let width = 0,
@@ -49,6 +55,24 @@ export function paintTeamEnergy({
     disposed = false,
     complete = false;
   const members = [...layer.querySelectorAll<HTMLElement>(".team-orbit-node")];
+  const canOrbit = () =>
+    orbiting &&
+    !motion.matches &&
+    !compact.matches &&
+    !members.some((node) => node.matches(":focus-visible")) &&
+    workspace?.dataset.worldDragging !== "true" &&
+    workspace?.dataset.nestDragging !== "true";
+  // Move positions, not the discs themselves: text and icons stay upright and
+  // canvas sparks share the exact same local coordinates as their member.
+  const positionMembers = () => {
+    const turn = compact.matches ? 0 : (orbitTime.current * Math.PI * 2) / 60;
+    members.forEach((node, index) => {
+      const angle =
+        -Math.PI * 0.82 + (index * Math.PI * 2) / members.length + turn;
+      node.style.setProperty("--team-node-x", String(Math.cos(angle)));
+      node.style.setProperty("--team-node-y", String(Math.sin(angle)));
+    });
+  };
   const sources = members.filter((node) =>
     collecting
       ? node.dataset.source === "true"
@@ -277,6 +301,7 @@ export function paintTeamEnergy({
     context.restore();
   };
   function draw() {
+    positionMembers();
     const target = center(),
       small = width < 540;
     context.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -437,6 +462,9 @@ export function paintTeamEnergy({
         0,
         Math.min(0.1, (now - previous) / 1000),
       );
+    const moving = canOrbit();
+    if (moving && previous)
+      orbitTime.current += Math.max(0, Math.min(0.1, (now - previous) / 1000));
     previous = now;
     if (now - lastPaint >= 1000 / 30) {
       lastPaint = now;
@@ -447,7 +475,7 @@ export function paintTeamEnergy({
       finish();
       return;
     }
-    if (collecting || active) frame = requestAnimationFrame(tick);
+    if (collecting || active || moving) frame = requestAnimationFrame(tick);
   };
   const schedule = () => {
     if (!frame && !disposed && !complete) frame = requestAnimationFrame(tick);
@@ -477,6 +505,22 @@ export function paintTeamEnergy({
   resize.observe(layer);
   intersection.observe(layer);
   motion.addEventListener("change", visibility);
+  compact.addEventListener("change", visibility);
+  const interactionEvents = [
+    "pointerover",
+    "pointerout",
+    "focusin",
+    "focusout",
+  ];
+  interactionEvents.forEach((event) =>
+    layer.addEventListener(event, visibility),
+  );
+  const dragging = new MutationObserver(visibility);
+  if (workspace)
+    dragging.observe(workspace, {
+      attributes: true,
+      attributeFilter: ["data-world-dragging", "data-nest-dragging"],
+    });
   document.addEventListener("visibilitychange", visibility);
   schedule();
   return () => {
@@ -485,6 +529,11 @@ export function paintTeamEnergy({
     resize.disconnect();
     intersection.disconnect();
     motion.removeEventListener("change", visibility);
+    compact.removeEventListener("change", visibility);
+    interactionEvents.forEach((event) =>
+      layer.removeEventListener(event, visibility),
+    );
+    dragging.disconnect();
     document.removeEventListener("visibilitychange", visibility);
   };
 }

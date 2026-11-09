@@ -1,15 +1,15 @@
 .personal-workspace .workspace-ai-core-stage[data-team-active="true"] {
-  --team-energy: #efa6d8;
-  --team-energy-soft: #e691cd;
-  --team-radius-x: min(34vw, 270px);
-  --team-radius-y: 184px;
+  --team-energy: #ff8dd8;
+  --team-energy-soft: #f36ac5;
+  --team-radius-x: min(28vw, 208px);
+  --team-radius-y: 208px;
   --team-lift: 0px;
-  min-height: 570px;
+  min-height: 600px;
   transition: min-height 0.7s ease;
 }
 .personal-workspace .workspace-ai-core-stage[data-team-tone="ice"] {
-  --team-energy: #a5dfed;
-  --team-energy-soft: #6bc7e7;
+  --team-energy: #85edff;
+  --team-energy-soft: #40cff4;
 }
 .personal-workspace
   .workspace-ai-core-stage[data-team-active="true"]
@@ -91,6 +91,24 @@
   position: absolute;
   inset: 0;
 }
+.team-orbit-track {
+  position: absolute;
+  left: 50%;
+  top: calc(50% - var(--team-lift));
+  width: calc(var(--team-radius-x) * 2);
+  height: calc(var(--team-radius-y) * 2);
+  border: 1px dashed #779bff38;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  box-shadow:
+    0 0 48px #3265e506,
+    inset 0 0 48px #3265e506;
+  pointer-events: none;
+  transition: opacity 0.6s;
+}
+[data-team-phase="delivered"] .team-orbit-track {
+  opacity: 0;
+}
 .team-orbit-node {
   position: absolute;
   left: calc(50% + var(--team-node-x) * var(--team-radius-x));
@@ -109,9 +127,7 @@
   font: inherit;
   cursor: pointer;
   pointer-events: auto;
-  transition:
-    opacity 0.5s,
-    top 0.95s cubic-bezier(0.2, 0.75, 0.2, 1);
+  transition: opacity 0.5s;
 }
 .team-orbit-disc {
   position: relative;
@@ -127,10 +143,10 @@
   box-sizing: border-box;
   border: 1px solid #b1bce3a6;
   border-radius: 50%;
-  color: #b9ccff;
+  color: #e0eaff;
   background:
-    radial-gradient(ellipse at 30% 10%, #a2b2d628, transparent 65%),
-    linear-gradient(145deg, #343d52, #1b2539);
+    radial-gradient(ellipse at 30% 10%, #83b9ff38, transparent 65%),
+    linear-gradient(145deg, #2d426a, #14223d);
   box-shadow:
     inset 0 1px 2px #d7e4ff60,
     inset 0 -3px 8px #03091873,
@@ -187,7 +203,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 12px;
-  font-weight: 500;
+  font-weight: 600;
   letter-spacing: 0.4px;
 }
 .team-orbit-node small {
@@ -199,7 +215,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 10px;
-  color: #b5c2d9;
+  color: #c6d5f2;
 }
 .team-orbit-node[data-active="true"] .team-orbit-disc,
 [data-team-phase="collecting"]

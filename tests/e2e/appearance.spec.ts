@@ -109,6 +109,14 @@ async function fixture(context: BrowserContext, state: Store, user = "1") {
         messages: [],
         model: "openai/gpt-6.1-sol",
       };
+    if (path === "/my-workspace/assistant/capabilities")
+      data = {
+        defaultModel: "openai/gpt-6.1-sol",
+        models: [
+          { id: "openai/gpt-6.1-sol", name: "通用助手", vision: true },
+        ],
+        imageModels: [],
+      };
     if (path.endsWith("/layout-preferences"))
       data = { preferences: null, revision: 0 };
     if (path.endsWith("/shared-view"))
@@ -329,13 +337,13 @@ test("业务库存可切换主题，工作台及日程弹窗固定暗色且不�
   ).toHaveCount(1);
   await expect(page.locator(".ant-table-thead th").first()).toHaveCSS(
     "background-color",
-    "rgb(37, 41, 54)",
+    "rgb(32, 48, 76)",
   );
   await toggle(page, "light");
   await mode(page, "light");
   await expect(page.locator(".ant-table-thead th").first()).toHaveCSS(
     "background-color",
-    "rgb(240, 243, 251)",
+    "rgb(230, 237, 255)",
   );
   await page.getByRole("link", { name: "我的工作台", exact: true }).click();
   await mode(page, "dark");
@@ -347,7 +355,7 @@ test("业务库存可切换主题，工作台及日程弹窗固定暗色且不�
   const dialog = page.getByRole("dialog", { name: "新增日程", exact: true });
   await expect(dialog.locator(".ant-modal-container")).toHaveCSS(
     "background-color",
-    "rgb(48, 52, 62)",
+    "rgb(41, 44, 53)",
   );
   await dialog.getByRole("button", { name: "取消", exact: true }).click();
   await page
@@ -457,7 +465,7 @@ test("表格用户填色和文字保留，无填色单元格随全站主题切�
     );
     await expect(page.locator(".selection-sheet")).toHaveCSS(
       "background-color",
-      current === "dark" ? "rgb(27, 27, 27)" : "rgb(255, 255, 255)",
+      current === "dark" ? "rgb(23, 24, 29)" : "rgb(255, 255, 255)",
     );
     await page.screenshot({
       path: test.info().outputPath(`${current}-sheet.png`),
@@ -527,23 +535,23 @@ test("原生表头与库存表头一致，Ant预设标签和选项标签实际�
     if (current === "light") await toggle(page, "light");
     await expect(blue).toHaveCSS(
       "color",
-      current === "dark" ? "rgb(143, 164, 255)" : "rgb(67, 94, 229)",
+      current === "dark" ? "rgb(143, 169, 255)" : "rgb(40, 75, 214)",
     );
     await expect(blue).toHaveCSS(
       "background-color",
-      current === "dark" ? "rgb(34, 42, 72)" : "rgb(239, 242, 255)",
+      current === "dark" ? "rgb(36, 53, 95)" : "rgb(230, 237, 255)",
     );
     await expect(green).toHaveCSS(
       "color",
-      current === "dark" ? "rgb(141, 200, 161)" : "rgb(52, 116, 73)",
+      current === "dark" ? "rgb(78, 226, 162)" : "rgb(8, 123, 79)",
     );
     await expect(green).toHaveCSS(
       "background-color",
-      current === "dark" ? "rgb(29, 48, 37)" : "rgb(239, 248, 239)",
+      current === "dark" ? "rgb(18, 59, 49)" : "rgb(232, 250, 241)",
     );
     await expect(page.locator(".selection-sheet thead th").first()).toHaveCSS(
       "background-color",
-      current === "dark" ? "rgb(37, 41, 54)" : "rgb(240, 243, 251)",
+      current === "dark" ? "rgb(32, 48, 76)" : "rgb(230, 237, 255)",
     );
     await page.screenshot({
       path: test.info().outputPath(`${current}-unified-tags.png`),
@@ -552,5 +560,5 @@ test("原生表头与库存表头一致，Ant预设标签和选项标签实际�
   await page.goto("/operations/vip/inventory");
   await expect(
     page.locator(".inventory-summary-table .ant-tag-blue").first(),
-  ).toHaveCSS("color", "rgb(67, 94, 229)");
+  ).toHaveCSS("color", "rgb(40, 75, 214)");
 });

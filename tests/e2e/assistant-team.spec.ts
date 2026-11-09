@@ -333,6 +333,40 @@ async function setup(
           steps: run.steps.map((step) => ({ ...step, status: "PENDING" })),
         };
     },
+    executionStage: (stage: "writing" | "design") => {
+      if (!run) throw new Error("Submit a team task before updating its steps");
+      const draft = run.steps.find((step) => step.id === "draft")!;
+      run = {
+        ...run,
+        status: "RUNNING",
+        stage:
+          stage === "writing" ? "编剧正在整理活动文案" : "设计师正在制作主视觉",
+        steps: [
+          {
+            ...draft,
+            status: stage === "writing" ? "RUNNING" : "DONE",
+            result:
+              stage === "writing"
+                ? "已核对针织材质，正在整理活动卖点。"
+                : "活动文案已完成：以柔软针织为主题，突出通勤与叠穿场景。",
+          },
+          {
+            ...draft,
+            id: "design",
+            title: "制作上新主视觉",
+            memberId: "design",
+            instruction: "依据已完成文案制作针织上新主视觉",
+            dependencies: ["draft"],
+            deliverable: "image",
+            status: stage === "writing" ? "PENDING" : "RUNNING",
+            result:
+              stage === "writing"
+                ? undefined
+                : "已读取文案，正在确认主视觉构图。",
+          },
+        ],
+      };
+    },
     interrupt: (status: "FAILED" | "CANCELED" | "NEEDS_USER") => {
       if (run)
         run = {
@@ -359,6 +393,188 @@ async function submitInWorkspace(page: Page) {
   );
 }
 
+async function memberMovement(page: Page) {
+  return page.locator(".team-orbit-node").evaluateAll(async (nodes) => {
+    const centers = () =>
+      nodes.map((node) => {
+        const rect = node.getBoundingClientRect();
+        return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+      });
+    const before = centers();
+    const start = performance.now();
+    await new Promise<void>((resolve) => {
+      const sample = () => {
+        if (performance.now() - start >= 350) resolve();
+        else requestAnimationFrame(sample);
+      };
+      requestAnimationFrame(sample);
+    });
+    return Math.max(
+      ...centers().map((point, index) =>
+        Math.hypot(point.x - before[index].x, point.y - before[index].y),
+      ),
+    );
+  });
+}
+
+test("星轨左侧执行详情跟随真实步骤，完成项可展开且中断不伪装执行", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1600, height: 1000 });
+  const fixture = await setup(page);
+  await submitInWorkspace(page);
+  const rail = page.getByRole("complementary", { name: "团队执行详情" });
+  const current = rail.locator(".team-execution-current");
+  const visibleOutput = current.locator(
+    '.team-execution-output > span[aria-hidden="true"]',
+  );
+  fixture.executionStage("writing");
+  await expect(
+    current.getByRole("heading", { name: "创作活动文案" }),
+  ).toBeVisible();
+  await expect(current.locator(".team-execution-instruction")).toContainText(
+    "结合所附资料完成活动文案",
+  );
+  await expect(visibleOutput).toHaveText("已核对针织材质，正在整理活动卖点。", {
+    timeout: 10000,
+  });
+  await expect(current).toHaveAttribute("data-active", "true");
+  await expect(rail).toHaveAttribute("data-compact", "false");
+  expect(
+    await rail.evaluate((panel) => {
+      const railBounds = panel.getBoundingClientRect();
+      const track = document
+        .querySelector(".team-orbit-track")!
+        .getBoundingClientRect();
+      const memberWidth = document
+        .querySelector(".team-orbit-node")!
+        .getBoundingClientRect().width;
+      return railBounds.right + 8 <= track.left - memberWidth / 2;
+    }),
+  ).toBe(true);
+
+  fixture.executionStage("design");
+  await expect(
+    current.getByRole("heading", { name: "制作上新主视觉" }),
+  ).toBeVisible({ timeout: 10000 });
+  await expect(current.locator(".team-execution-member")).toHaveText("设计师");
+  await expect(current.locator(".team-execution-instruction")).toContainText(
+    "依据已完成文案制作针织上新主视觉",
+  );
+  await expect(visibleOutput).toHaveText("已读取文案，正在确认主视觉构图。");
+  const completed = rail.locator(".team-execution-completed");
+  await expect(completed.locator(":scope > summary b")).toHaveText("1");
+  await completed.locator(":scope > summary").click();
+  const finishedStep = completed.locator(".team-execution-completed-step");
+  await finishedStep.locator("summary").click();
+  await expect(
+    finishedStep.locator(".team-execution-completed-copy"),
+  ).toContainText("活动文案已完成：以柔软针织为主题，突出通勤与叠穿场景。");
+  await expect(current).not.toContainText("活动文案已完成：");
+  await page.screenshot({
+    path: ".local/team-orbit-20261109/execution-desktop.png",
+    fullPage: true,
+  });
+
+  await completed.locator(":scope > summary").click();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(rail).toHaveAttribute("data-compact", "true");
+  await expect
+    .poll(() =>
+      rail.evaluate((panel) => {
+        const bounds = panel.getBoundingClientRect();
+        return (
+          bounds.left >= 0 &&
+          bounds.right <= window.innerWidth &&
+          document.documentElement.scrollWidth <= window.innerWidth
+        );
+      }),
+    )
+    .toBe(true);
+  await current
+    .getByRole("heading", { name: "制作上新主视觉" })
+    .scrollIntoViewIfNeeded();
+  await page.screenshot({
+    path: ".local/team-orbit-20261109/execution-mobile.png",
+    fullPage: true,
+  });
+  await page.setViewportSize({ width: 1600, height: 1000 });
+
+  // Retain the last server step snapshot while the overall run is interrupted.
+  fixture.interrupt("NEEDS_USER");
+  await expect(current.locator(".team-execution-status")).toHaveText(
+    "等待你补充",
+    { timeout: 10000 },
+  );
+  await expect(current).toHaveAttribute("data-active", "false");
+  await expect(current.locator(".anticon-spin")).toHaveCount(0);
+  fixture.interrupt("FAILED");
+  // Terminal runs stop polling; reopening reloads the latest saved task state.
+  await page.reload();
+  await expect(current.locator(".team-execution-status")).toHaveText(
+    "执行中断",
+    { timeout: 10000 },
+  );
+  await expect(current).toHaveAttribute("data-active", "false");
+  await expect(current.locator(".team-execution-problem")).toHaveText(
+    "执行服务暂时不可用",
+  );
+  await completed.locator(":scope > summary").click();
+  await finishedStep.locator("summary").click();
+  await expect(
+    finishedStep.locator(".team-execution-completed-copy"),
+  ).toBeVisible();
+
+  expect(fixture.submissions).toHaveLength(1);
+});
+
+test("星轨成员公转保持文字正向，悬停继续旋转且键盘和详情可操作", async ({
+  page,
+}) => {
+  await setup(page);
+  await submitInWorkspace(page);
+  const member = page.getByRole("button", { name: "查看团队成员：编剧" });
+  await expect.poll(() => memberMovement(page)).toBeGreaterThan(2);
+  await member.hover({ force: true });
+  await expect.poll(() => memberMovement(page)).toBeGreaterThan(2);
+  expect(
+    await member.evaluate((node) =>
+      [
+        node,
+        ...node.querySelectorAll(".team-orbit-disc, strong, small, .anticon"),
+      ].every((element) => {
+        const transform = getComputedStyle(element).transform;
+        if (transform === "none") return true;
+        const matrix = new DOMMatrix(transform);
+        return (
+          matrix.a > 0 &&
+          matrix.d > 0 &&
+          Math.abs(matrix.b) < 0.001 &&
+          Math.abs(matrix.c) < 0.001
+        );
+      }),
+    ),
+  ).toBe(true);
+
+  // Switch to keyboard input before focusing, so :focus-visible pauses motion.
+  await page.keyboard.press("Tab");
+  await member.focus();
+  await expect(member).toBeFocused();
+  await expect.poll(() => memberMovement(page)).toBeLessThan(1);
+  await page.keyboard.press("Enter");
+  await expect(
+    page.getByRole("dialog", { name: "编剧", exact: true }),
+  ).toBeVisible();
+  await expect.poll(() => memberMovement(page)).toBeLessThan(1);
+  await page.locator(".ant-modal-close").click();
+  await member.evaluate((node) => node.blur());
+  await page.mouse.move(0, 0);
+  await expect.poll(() => memberMovement(page)).toBeGreaterThan(2);
+
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await expect.poll(() => memberMovement(page)).toBeLessThan(1);
+});
+
 test("星轨展示真实协作、仅在新交付时汇聚、保留配色并可打开成果", async ({
   page,
 }) => {
@@ -384,6 +600,7 @@ test("星轨展示真实协作、仅在新交付时汇聚、保留配色并可�
       ),
     )
     .toBe(true);
+  await expect.poll(() => memberMovement(page)).toBeLessThan(1);
   await page.screenshot({
     path: ".local/team-orbit-20261109/mobile-members.png",
     fullPage: true,
@@ -396,7 +613,7 @@ test("星轨展示真实协作、仅在新交付时汇聚、保留配色并可�
     .poll(async () => Number(await energyCanvas.getAttribute("data-ring-time")))
     .toBeGreaterThan(0);
   await page.screenshot({
-    path: ".local/team-orbit-20261109/running-ring.png",
+    path: ".local/team-orbit-20261109/orbital-running.png",
   });
   fixture.phase("QUEUED");
   await expect(teamScene).toHaveAttribute("data-status", "QUEUED", {
@@ -424,6 +641,7 @@ test("星轨展示真实协作、仅在新交付时汇聚、保留配色并可�
     { timeout: 10000 },
   );
   await expect(teamScene).toHaveAttribute("data-energized", "false");
+  await expect.poll(() => memberMovement(page)).toBeLessThan(1);
   await expect
     .poll(async () =>
       Number(

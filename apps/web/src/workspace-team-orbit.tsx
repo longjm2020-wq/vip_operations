@@ -36,6 +36,7 @@ import {
   type TeamEnergyTone,
 } from "./workspace-team-state";
 import { paintTeamEnergy } from "./workspace-team-energy";
+import { WorkspaceTeamExecution } from "./workspace-team-execution";
 import type {
   TeamArtifact,
   TeamMember,
@@ -118,6 +119,7 @@ export function WorkspaceTeamOrbit({
     previous = useRef<TeamRun["status"] | undefined>(undefined);
   const collectionTime = useRef(0),
     activityTime = useRef(0),
+    orbitTime = useRef(0),
     played = useRef(new Set(readSeen(seenKey)));
   const [visible, setVisible] = useState(!document.hidden);
   useWorkspaceSceneCover(detail !== null);
@@ -162,6 +164,7 @@ export function WorkspaceTeamOrbit({
     }
   }, [run, covered, visible, seenKey]);
   const delivered = run?.status === "DONE" && !collecting && !pending.current;
+  const orbiting = !!run && !delivered && !collecting && !error;
   const active = !!run && teamIsRunning(run.status);
   const energized =
     !!run &&
@@ -226,14 +229,17 @@ export function WorkspaceTeamOrbit({
       layer: layer.current,
       tone,
       active: energized,
+      orbiting,
       collecting,
       elapsed: collectionTime,
       activityTime,
+      orbitTime,
       onCollected: () => setCollecting(false),
     });
   }, [
     tone,
     energized,
+    orbiting,
     collecting,
     covered,
     visible,
@@ -270,6 +276,7 @@ export function WorkspaceTeamOrbit({
         data-status={run?.status || "LOADING"}
         data-collecting={collecting}
         data-energized={energized}
+        data-orbiting={orbiting}
         data-tone={tone}
       >
         <canvas
@@ -277,6 +284,7 @@ export function WorkspaceTeamOrbit({
           className="team-energy-canvas"
           aria-hidden="true"
         />
+        <div className="team-orbit-track" aria-hidden="true" />
         <div className="team-orbit-members" inert={!!delivered}>
           {nodes.map((node, index) => (
             <button
@@ -369,6 +377,15 @@ export function WorkspaceTeamOrbit({
                 </Button>
               </div>
             </header>
+            {run && (
+              <WorkspaceTeamExecution
+                run={run}
+                covered={covered}
+                stale={!!error}
+                onOpenArtifact={setDetail}
+                onRetry={retry}
+              />
+            )}
             <div
               className="team-orbit-caption"
               role="status"
@@ -398,7 +415,7 @@ export function WorkspaceTeamOrbit({
                   : ""}
               </div>
             )}
-            {error && (
+            {error && !run && (
               <Alert
                 className="team-orbit-alert"
                 type="warning"
@@ -409,13 +426,6 @@ export function WorkspaceTeamOrbit({
                     重试
                   </Button>
                 }
-              />
-            )}
-            {run?.error && !error && !active && (
-              <Alert
-                className="team-orbit-alert"
-                type={run.status === "FAILED" ? "error" : "warning"}
-                title={run.error}
               />
             )}
             {delivered && availableResults && (
