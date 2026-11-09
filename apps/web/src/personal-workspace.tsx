@@ -51,7 +51,8 @@ import { QueryState, Row, useUser } from "./shared";
 import type { WorkspaceConfig } from "../../../packages/contracts/src/personal-workspace";
 import { canUsePersonalAssistant } from "../../../packages/contracts/src/personal-assistant";
 import "./personal-workspace.css";
-import { PersonalWorkspaceContent } from "./personal-workspace-content";
+import { lazyPage } from "./page-resource-loader";
+import { PageResourceBoundary } from "./page-resource-boundary";
 import { WorkspaceAI } from "./workspace-ai";
 import { PersonalSchedule } from "./personal-schedule";
 import { useWorkspaceWorld } from "./use-workspace-world";
@@ -70,6 +71,12 @@ import {
   WorkspaceDockCopy,
 } from "./workspace-dock-rendering";
 import "./workspace-world.css";
+
+const PersonalWorkspaceContent = lazyPage(() =>
+  import("./personal-workspace-content").then((module) => ({
+    default: module.PersonalWorkspaceContent,
+  })),
+);
 
 type WorkspacePanel = "tools" | "schedule" | "todos" | "note" | "content";
 const panelTitles: Record<WorkspacePanel, string> = {
@@ -921,9 +928,11 @@ export function PersonalWorkspacePage() {
             {visitedPanels.has("content") &&
               user.permissions.includes("project.read") && (
                 <section hidden={panel !== "content"}>
-                  <PersonalWorkspaceContent
-                    active={panelOpen && panel === "content"}
-                  />
+                  <PageResourceBoundary>
+                    <PersonalWorkspaceContent
+                      active={panelOpen && panel === "content"}
+                    />
+                  </PageResourceBoundary>
                 </section>
               )}
             {visitedPanels.has("schedule") && (

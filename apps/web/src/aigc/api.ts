@@ -1,5 +1,5 @@
-import { csrf, queryClient } from "../api";
-import { requestJson } from "../request-json";
+import { csrf, queryClient } from "../api.js";
+import { requestJson } from "../request-json.js";
 export type Item = Record<string, any>;
 export const assetUrl = (id: string, download = false) =>
   `/api/v1/aigc/assets/${encodeURIComponent(id)}${download ? "?download=1" : ""}`;

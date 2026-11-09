@@ -1,5 +1,5 @@
 import { QueryClient } from "@tanstack/react-query";
-import { requestJson } from "./request-json";
+import { requestJson } from "./request-json.js";
 export const queryClient = new QueryClient({
   defaultOptions: {
     queries: { retry: false, staleTime: 10000 },

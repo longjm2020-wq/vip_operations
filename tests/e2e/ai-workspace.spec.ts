@@ -1757,6 +1757,16 @@ test("圆环入口打开可拖动浮卡，保留屏幕边距与草稿并在卡�
 test("我的内容在首次展开时才读取，关闭后保留分类与显示样式", async ({
   page,
 }) => {
+  const contentModules: string[] = [],
+    writes: string[] = [];
+  const deferredContentModule =
+    /\/(?:src\/(?:personal-workspace-content|project-library)\.tsx|assets\/(?:personal-workspace-content|project-library|Table)-[^/?]+\.js)(?:\?.*)?$/;
+  page.on("request", (request) => {
+    if (deferredContentModule.test(request.url()))
+      contentModules.push(request.url());
+    if (request.url().includes("/api/v1/") && request.method() !== "GET")
+      writes.push(`${request.method()} ${new URL(request.url()).pathname}`);
+  });
   const fixture = await workspaceFixture(page, {
     permissions: ["project.read", "analytics.read", "analytics.manage"],
   });
@@ -1765,16 +1775,23 @@ test("我的内容在首次展开时才读取，关闭后保留分类与显示�
     page.getByRole("button", { name: "打开我的内容", exact: true }),
   ).toBeVisible();
   expect(fixture.contentReads()).toBe(0);
+  expect(contentModules).toEqual([]);
   await openWorkspacePanel(page, "打开常用工具");
   await expect(
     page.getByRole("dialog", { name: "常用工具", exact: true }),
   ).toBeVisible();
   expect(fixture.contentReads()).toBe(0);
+  expect(contentModules).toEqual([]);
   await page
     .getByRole("button", { name: "收起工作台面板", exact: true })
     .click();
   await openWorkspacePanel(page, "打开我的内容");
   await expect.poll(() => fixture.contentReads()).toBe(1);
+  expect(
+    contentModules.some((url) => url.includes("personal-workspace-content")),
+  ).toBe(true);
+  const loadedContentModules = [...contentModules];
+  await expect(page.locator(".personal-content")).toContainText("我创建的内容");
   await page.getByRole("tab", { name: "表格", exact: true }).click();
   await page
     .getByRole("radiogroup", { name: "我的内容显示样式" })
@@ -1798,6 +1815,10 @@ test("我的内容在首次展开时才读取，关闭后保留分类与显示�
       .getByRole("radiogroup", { name: "我的内容显示样式" })
       .getByRole("radio", { name: /列表$/ }),
   ).toBeChecked();
+  expect(contentModules).toEqual(loadedContentModules);
+  await page.screenshot({
+    path: ".local/loading-recovery-20261110/content-reopened.png",
+  });
   await page
     .getByRole("button", { name: "收起工作台面板", exact: true })
     .click();
@@ -1806,6 +1827,7 @@ test("我的内容在首次展开时才读取，关闭后保留分类与显示�
     "2026 年 11 月",
   );
   expect(fixture.assistantCalls()).toBe(0);
+  expect(writes).toEqual([]);
 });
 
 test("小序在业务页记住浮动位置，返回工作台巢穴保留同一形象，跨页面日程仍需保存", async ({
