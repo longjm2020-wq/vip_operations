@@ -333,7 +333,11 @@ async function setup(
           steps: run.steps.map((step) => ({ ...step, status: "PENDING" })),
         };
     },
-    executionStage: (stage: "writing" | "design", instruction?: string) => {
+    executionStage: (
+      stage: "writing" | "design",
+      instruction?: string,
+      completedResult?: string,
+    ) => {
       if (!run) throw new Error("Submit a team task before updating its steps");
       const draft = run.steps.find((step) => step.id === "draft")!;
       run = {
@@ -348,7 +352,8 @@ async function setup(
             result:
               stage === "writing"
                 ? "已核对针织材质，正在整理活动卖点。"
-                : "活动文案已完成：以柔软针织为主题，突出通勤与叠穿场景。",
+                : (completedResult ??
+                  "活动文案已完成：以柔软针织为主题，突出通勤与叠穿场景。"),
           },
           {
             ...draft,
@@ -479,6 +484,14 @@ test("星轨左侧执行详情跟随真实步骤，完成项可展开且中断�
               .querySelector(".team-orbit-caption")!
               .getBoundingClientRect();
             const railBounds = panel.getBoundingClientRect();
+            const toolbar = document
+              .querySelector(".workspace-world-controls")!
+              .getBoundingClientRect();
+            const cards = [
+              ...panel.querySelectorAll(
+                ".team-execution-completed, .team-execution-current",
+              ),
+            ].map((card) => card.getBoundingClientRect());
             const composer = document
               .querySelector(".personal-workspace .assistant-compose")!
               .getBoundingClientRect();
@@ -495,6 +508,15 @@ test("星轨左侧执行详情跟随真实步骤，完成项可展开且中断�
                 composer.right <= window.innerWidth,
               widerDesktopPanel:
                 window.innerWidth < 1440 || railBounds.width >= 320,
+              alignedDesktopColumn:
+                panel.getAttribute("data-compact") === "true" ||
+                [railBounds, ...cards].every(
+                  (rect) =>
+                    Math.abs(rect.left - toolbar.left) <= 1 &&
+                    Math.abs(rect.width - toolbar.width) <= 1,
+                ),
+              noOuterRailScrollbar:
+                getComputedStyle(panel).overflowY === "hidden",
               insideStageAndViewport:
                 envelope.left >= Math.max(0, stageBounds.left) &&
                 envelope.right <=
@@ -518,6 +540,8 @@ test("星轨左侧执行详情跟随真实步骤，完成项可展开且中断�
         pageFitsViewport: true,
         composerInsideViewport: true,
         widerDesktopPanel: true,
+        alignedDesktopColumn: true,
+        noOuterRailScrollbar: true,
         insideStageAndViewport: true,
         belowHeading: true,
         aboveCaption: true,
@@ -581,7 +605,9 @@ test("星轨左侧执行详情跟随真实步骤，完成项可展开且中断�
   // Long server-provided detail remains accessible inside its own panel.
   const longInstruction =
     "请逐项核对素材、版式与交付规格，记录每一项结果。".repeat(60);
-  fixture.executionStage("design", longInstruction);
+  const longCompletedResult =
+    "已完成文案校对，所有卖点与素材一致，已记录验收结果。".repeat(60);
+  fixture.executionStage("design", longInstruction, longCompletedResult);
   await expect(current.locator(".team-execution-instruction")).toContainText(
     longInstruction,
     { timeout: 10000 },
@@ -593,7 +619,10 @@ test("星轨左侧执行详情跟随真实步骤，完成项可展开且中断�
         el.scrollTop = el.scrollHeight;
         return {
           internallyScrollable:
-            el.scrollHeight > el.clientHeight && el.scrollTop > 0,
+            el.clientHeight > 0 &&
+            el.scrollHeight > el.clientHeight &&
+            el.scrollTop > 0 &&
+            Math.abs(el.scrollHeight - el.clientHeight - el.scrollTop) <= 1,
           pageStillFits:
             document.documentElement.scrollHeight <= window.innerHeight + 1 &&
             Math.abs(window.scrollY) < 1,
@@ -601,6 +630,60 @@ test("星轨左侧执行详情跟随真实步骤，完成项可展开且中断�
       }),
     )
     .toEqual({ internallyScrollable: true, pageStillFits: true });
+
+  await completed.locator(":scope > summary").click();
+  if ((await finishedStep.getAttribute("open")) === null)
+    await finishedStep.locator("summary").click();
+  await expect(
+    finishedStep.locator(".team-execution-completed-copy"),
+  ).toContainText(longCompletedResult);
+  for (const viewport of [
+    { width: 1920, height: 951 },
+    { width: 1366, height: 768 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await expect
+      .poll(() =>
+        rail.evaluate((panel) => {
+          const list = panel.querySelector<HTMLElement>(
+            ".team-execution-completed-list",
+          )!;
+          list.scrollTop = list.scrollHeight;
+          const railBounds = panel.getBoundingClientRect();
+          const completedBounds = panel
+            .querySelector(".team-execution-completed")!
+            .getBoundingClientRect();
+          const currentBounds = panel
+            .querySelector(".team-execution-current")!
+            .getBoundingClientRect();
+          return {
+            completedScrollReachesBottom:
+              list.clientHeight > 0 &&
+              list.scrollHeight > list.clientHeight &&
+              list.scrollTop > 0 &&
+              Math.abs(
+                list.scrollHeight - list.clientHeight - list.scrollTop,
+              ) <= 1,
+            currentCardAccessible:
+              currentBounds.height > 100 &&
+              currentBounds.top >= completedBounds.bottom &&
+              currentBounds.bottom <= railBounds.bottom + 1,
+            noOuterRailScroll:
+              getComputedStyle(panel).overflowY === "hidden" &&
+              panel.scrollHeight <= panel.clientHeight + 1,
+          };
+        }),
+      )
+      .toEqual({
+        completedScrollReachesBottom: true,
+        currentCardAccessible: true,
+        noOuterRailScroll: true,
+      });
+    await page.screenshot({
+      path: `.local/vector-rings-checks-20261110/left-column-expanded-${viewport.width}x${viewport.height}.png`,
+    });
+  }
+  await page.setViewportSize({ width: 1600, height: 1000 });
 
   // Retain the last server step snapshot while the overall run is interrupted.
   fixture.interrupt("NEEDS_USER");

@@ -1,4 +1,4 @@
-/* Fit the desktop scene into the viewport; long task text scrolls in its rail. */
+/* Fit the desktop scene into the viewport; long task text scrolls in its cards. */
 @media (min-width: 761px) {
   .workspace.workspace-future:has(
       .workspace-ai-core-stage[data-team-active="true"]
@@ -49,6 +49,18 @@
   .personal-workspace[data-world-mode]:has(
       .workspace-ai-core-stage[data-team-active="true"]
     )
+    .workspace-world-controls {
+    width: var(--team-toolbar-width, 340px);
+    max-width: 100%;
+    box-sizing: border-box;
+    justify-content: space-between;
+  }
+  .workspace-ai-core-stage[data-team-active="true"] .team-orbit-heading {
+    left: 0;
+  }
+  .personal-workspace[data-world-mode]:has(
+      .workspace-ai-core-stage[data-team-active="true"]
+    )
     .assistant-compose {
     flex: none;
     max-height: min(260px, 30dvh);
@@ -58,8 +70,8 @@
   .personal-workspace[data-world-mode]
     .workspace-ai-core-stage[data-team-active="true"][data-team-fit] {
     --team-lift: 0px;
-    --team-radius-x: 244px;
-    --team-radius-y: 244px;
+    --team-radius-x: calc(244px * var(--team-scene-scale));
+    --team-radius-y: calc(244px * var(--team-scene-scale));
     min-height: 0;
     flex: 1;
     transition: none;
@@ -74,54 +86,69 @@
     inset: auto;
     left: 50%;
     top: 50%;
-    width: var(--team-plane-size);
-    height: var(--team-plane-size);
+    /* Lay out at display size so SVG lines and text are rasterized only once. */
+    width: calc(var(--team-plane-size) * var(--team-scene-scale));
+    height: calc(var(--team-plane-size) * var(--team-scene-scale));
     transform: translate(-50%, -50%)
       translate3d(var(--world-pan-x), var(--world-pan-y), 0)
       rotateX(var(--world-pitch)) rotateY(var(--world-yaw))
-      scale(calc(var(--world-zoom) * var(--team-scene-scale)));
+      scale(var(--world-zoom));
   }
   .personal-workspace[data-world-mode]
     .workspace-ai-core-stage[data-team-fit]
     .workspace-world-plane
     > .workspace-ai-core {
-    width: var(--team-core-size);
-    height: var(--team-core-size);
+    width: calc(var(--team-core-size) * var(--team-scene-scale));
+    height: calc(var(--team-core-size) * var(--team-scene-scale));
+  }
+  .workspace-ai-core-stage[data-team-fit] .workspace-ai-companion-slot {
+    width: calc(168px * var(--team-scene-scale));
+    height: calc(150px * var(--team-scene-scale));
   }
   .workspace-ai-core-stage[data-team-fit] .team-orbit-node {
-    width: calc(98px * var(--team-node-scale));
-    height: calc(98px * var(--team-node-scale));
+    --team-member-scale: calc(var(--team-node-scale) * var(--team-scene-scale));
+    width: calc(98px * var(--team-member-scale));
+    height: calc(98px * var(--team-member-scale));
   }
   .workspace-ai-core-stage[data-team-fit]
     .team-orbit-disc.workspace-dock-label {
-    width: calc(90px * var(--team-node-scale));
-    height: calc(90px * var(--team-node-scale));
-    gap: calc(4px * var(--team-node-scale));
-    padding: calc(8px * var(--team-node-scale))
-      calc(6px * var(--team-node-scale));
+    width: calc(90px * var(--team-member-scale));
+    height: calc(90px * var(--team-member-scale));
+    gap: calc(4px * var(--team-member-scale));
+    padding: calc(8px * var(--team-member-scale))
+      calc(6px * var(--team-member-scale));
+  }
+  .workspace-ai-core-stage[data-team-fit] .workspace-dock-halo {
+    inset: calc(-9px * var(--team-scene-scale));
+    width: calc(100% + 18px * var(--team-scene-scale));
+    height: calc(100% + 18px * var(--team-scene-scale));
   }
   .workspace-ai-core-stage[data-team-fit] .team-orbit-disc > .anticon {
-    font-size: calc(22px * var(--team-node-scale));
+    font-size: calc(22px * var(--team-member-scale));
   }
   .workspace-ai-core-stage[data-team-fit] .team-orbit-node strong {
-    font-size: calc(12px * var(--team-node-scale));
+    font-size: calc(12px * var(--team-member-scale));
   }
   .workspace-ai-core-stage[data-team-fit] .team-orbit-node small {
-    font-size: calc(10px * var(--team-node-scale));
+    font-size: calc(10px * var(--team-member-scale));
   }
   .workspace-ai-core-stage[data-team-fit="side"] .team-execution-rail {
     top: 72px;
     bottom: 76px;
+    height: auto;
     max-height: none;
   }
   .workspace-ai-core-stage[data-team-fit="stacked"] .team-execution-rail {
     bottom: 72px;
+    left: 0;
+    right: 0;
     max-height: 180px;
   }
   .workspace-ai-core-stage[data-team-fit][data-team-phase="delivered"]
     .team-execution-rail {
     top: 72px;
     bottom: 76px;
+    height: auto;
     max-height: none;
   }
   .workspace-ai-core-stage[data-team-fit][data-team-phase="delivered"]
@@ -156,9 +183,10 @@
     .team-execution-rail {
     top: 72px;
     bottom: auto;
-    left: 17px;
+    left: 0;
     right: calc(var(--team-delivery-width) + 42px);
     width: auto;
+    height: var(--team-delivery-rail-height);
     max-height: var(--team-delivery-rail-height);
   }
 }

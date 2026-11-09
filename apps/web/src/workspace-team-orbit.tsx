@@ -135,11 +135,13 @@ export function WorkspaceTeamOrbit({
   );
   useLayoutEffect(() => {
     if (!host) return;
+    const workspace = host.closest<HTMLElement>(".personal-workspace");
     const desktop = matchMedia("(min-width: 761px)");
     const fit = () => {
       if (!desktop.matches) {
         delete host.dataset.teamFit;
         delete host.dataset.teamDeliveryFit;
+        workspace?.style.removeProperty("--team-toolbar-width");
         return;
       }
       const compact = host.clientWidth < 820;
@@ -199,6 +201,7 @@ export function WorkspaceTeamOrbit({
         host.dataset.teamDeliveryFit = deliveryStacked ? "stacked" : "side";
       else delete host.dataset.teamDeliveryFit;
       host.style.setProperty("--team-panel-width", `${panel}px`);
+      workspace?.style.setProperty("--team-toolbar-width", `${panel}px`);
       host.style.setProperty("--team-delivery-width", `${deliveryWidth}px`);
       host.style.setProperty(
         "--team-delivery-rail-height",
@@ -231,6 +234,7 @@ export function WorkspaceTeamOrbit({
       desktop.removeEventListener("change", fit);
       delete host.dataset.teamFit;
       delete host.dataset.teamDeliveryFit;
+      workspace?.style.removeProperty("--team-toolbar-width");
       for (const name of [
         "panel-width",
         "delivery-width",

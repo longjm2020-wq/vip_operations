@@ -74,6 +74,9 @@ export function WorkspaceImageReveal() {
     const pointer = matchMedia("(any-hover: hover) and (any-pointer: fine)");
     const photo = new Image();
     photo.decoding = "async";
+    const backdrop = document.createElement("canvas");
+    const backdropContext = backdrop.getContext("2d");
+    if (!backdropContext) return;
     let brushes: HTMLCanvasElement[] = [];
     let traces: Trace[] = [];
     let frame = 0,
@@ -87,6 +90,48 @@ export function WorkspaceImageReveal() {
       disposed = false,
       visible = true;
     let last: { x: number; y: number; time: number } | undefined;
+    const prepareBackdrop = () => {
+      if (!ready || !width || !height) return;
+      backdrop.width = element.width;
+      backdrop.height = element.height;
+      backdropContext.setTransform(dpr, 0, 0, dpr, 0, 0);
+      const sourceWidth = photo.naturalWidth;
+      const sourceHeight = photo.naturalHeight;
+      // Keep the astronaut left and small, but never leave uncovered vertical edges.
+      const scale = Math.max(
+        height / sourceHeight,
+        Math.max(width / sourceWidth, height / sourceHeight) * 0.9,
+      );
+      const imageWidth = sourceWidth * scale;
+      const imageHeight = sourceHeight * scale;
+      const left = (width - imageWidth) / 2 - width * 0.16;
+      const top = (height - imageHeight) / 2;
+      const extension = Math.max(0, width - left - imageWidth);
+      if (!extension) {
+        backdropContext.drawImage(photo, left, top, imageWidth, imageHeight);
+        return;
+      }
+      // Extend only the planet/space on the right, keeping continuous ring lines.
+      // Cache this on load/resize; the animation still draws just one bitmap.
+      const position = (x: number) =>
+        left + x * scale + extension * smooth((x / sourceWidth - 0.6) / 0.4);
+      for (let strip = 0; strip < 96; strip++) {
+        const start = (strip * sourceWidth) / 96;
+        const end = ((strip + 1) * sourceWidth) / 96;
+        const x = position(start);
+        backdropContext.drawImage(
+          photo,
+          start,
+          0,
+          end - start,
+          sourceHeight,
+          x,
+          top,
+          position(end) - x + 1 / dpr,
+          imageHeight,
+        );
+      }
+    };
     const blocked =
       "button,a,input,textarea,select,summary,[contenteditable=true],[role=dialog],.assistant-compose,.team-execution-rail,.personal-workspace-panel,.workspace-world-controls";
     const allowed = () =>
@@ -146,22 +191,10 @@ export function WorkspaceImageReveal() {
         );
         context.restore();
       });
-      // Keep the astronaut smaller and to the left of the central nest.
-      // Only the mask moves; the original image remains fixed in the background.
-      const scale =
-        Math.max(width / photo.naturalWidth, height / photo.naturalHeight) *
-        0.9;
-      const imageWidth = photo.naturalWidth * scale,
-        imageHeight = photo.naturalHeight * scale;
+      // The full-coverage backdrop stays fixed; only the local mask moves.
       context.globalCompositeOperation = "source-in";
       context.globalAlpha = 0.76;
-      context.drawImage(
-        photo,
-        (width - imageWidth) / 2 - width * 0.16,
-        (height - imageHeight) / 2,
-        imageWidth,
-        imageHeight,
-      );
+      context.drawImage(backdrop, 0, 0, width, height);
       context.globalCompositeOperation = "source-over";
       context.globalAlpha = 1;
       schedule();
@@ -174,6 +207,7 @@ export function WorkspaceImageReveal() {
       if (disposed) return;
       ready = true;
       brushes = [cloudBrush(11), cloudBrush(37), cloudBrush(79)];
+      prepareBackdrop();
       if (allowed()) schedule();
     };
     photo.onerror = () => {
@@ -235,6 +269,7 @@ export function WorkspaceImageReveal() {
       dpr = Math.min(1.5, devicePixelRatio || 1);
       element.width = Math.max(1, Math.round(width * dpr));
       element.height = Math.max(1, Math.round(height * dpr));
+      prepareBackdrop();
       clear();
     };
     const resize = new ResizeObserver(measure);

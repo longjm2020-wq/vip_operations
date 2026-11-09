@@ -229,19 +229,18 @@
   height: 100%;
   overflow: visible;
   pointer-events: none;
-  transform: translateZ(18px);
   stroke-linecap: round;
-  animation: workspace-core-shiver 9.6s ease-in-out infinite;
+  /* Front-face vectors stay flat and sharp; rear depth and aura keep their motion. */
 }
 .workspace-ai-core-orbits :is(circle, ellipse, line, path) {
   vector-effect: non-scaling-stroke;
 }
 .workspace-ai-core-guides {
-  stroke: var(--core-line);
+  stroke: color-mix(in srgb, var(--core-blue) 50%, transparent);
   stroke-width: 1;
 }
 .workspace-ai-core-ticks {
-  stroke: color-mix(in srgb, var(--core-blue) 40%, transparent);
+  stroke: color-mix(in srgb, var(--core-blue) 58%, transparent);
   stroke-width: 1;
 }
 .workspace-ai-core-ticks .is-major {
@@ -394,26 +393,6 @@
   50% {
     opacity: 0.36;
     transform: translateZ(14px) scale(1.035);
-  }
-}
-/* A brief decorative tremor; the view controller and every hit area stay still. */
-@keyframes workspace-core-shiver {
-  0%,
-  86%,
-  100% {
-    transform: translate3d(0, 0, 18px) rotate(0deg);
-  }
-  89% {
-    transform: translate3d(0.6px, -0.3px, 18px) rotate(0.12deg);
-  }
-  92% {
-    transform: translate3d(-0.45px, 0.4px, 18px) rotate(-0.1deg);
-  }
-  95% {
-    transform: translate3d(0.25px, -0.2px, 18px) rotate(0.07deg);
-  }
-  98% {
-    transform: translate3d(-0.1px, 0.1px, 18px) rotate(-0.03deg);
   }
 }
 @keyframes workspace-core-gyroscope {

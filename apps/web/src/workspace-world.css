@@ -437,15 +437,15 @@
 .workspace-dock-halo-inner {
   stroke: var(--app-accent);
   stroke-width: 1;
-  opacity: 0.45;
+  opacity: 0.65;
 }
 .workspace-dock-halo-inner {
-  opacity: 0.3;
+  opacity: 0.42;
 }
 .workspace-dock-halo-ticks {
   stroke: var(--dock-glint);
-  stroke-width: 1.9;
-  opacity: 0.55;
+  stroke-width: 1;
+  opacity: 0.72;
 }
 .workspace-dock-halo-sweep,
 .workspace-dock-halo-counter {
@@ -496,7 +496,7 @@
   text-shadow: none;
   letter-spacing: 0;
 }
-.workspace-dock-halo circle {
+.workspace-dock-halo :is(circle, line, path) {
   vector-effect: non-scaling-stroke;
 }
 /* The invisible projected buttons retain focus, hit testing and panel anchors. */

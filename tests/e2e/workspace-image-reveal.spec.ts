@@ -156,6 +156,82 @@ test("背景揭示尊重减少动态效果，切换偏好立即隐藏图像", as
   await expect.poll(async () => (await revealPixels(page)).coverage).toBe(0);
 });
 
+test("缩小并左移宇航员后，窗口四周仍能连续揭示背景", async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(90000);
+  const writes = await workspace(page);
+  for (const viewport of [
+    { width: 1920, height: 951 },
+    { width: 1440, height: 1000 },
+    { width: 960, height: 900 },
+  ]) {
+    await page.setViewportSize(viewport);
+    const canvas = page.locator(".workspace-image-reveal");
+    await expect
+      .poll(() =>
+        canvas.evaluate((element) => {
+          const c = element as HTMLCanvasElement;
+          const r = c.getBoundingClientRect();
+          const ratio = Math.min(1.5, devicePixelRatio || 1);
+          return Math.abs(c.width - r.width * ratio) <= 1;
+        }),
+      )
+      .toBe(true);
+    const bounds = await canvas.boundingBox();
+    if (!bounds) throw new Error("工作台背景未显示");
+    for (const [edge, nx, ny] of [
+      ["right", 0.94, 0.52],
+      ["left", 0.02, 0.45],
+      ["top", 0.78, 0.02],
+      ["bottom", 0.94, 0.98],
+      ["former-boundary", 0.79, 0.58],
+    ] as const) {
+      if (edge === "former-boundary" && viewport.width < 1440) continue;
+      const x = bounds.x + bounds.width * nx;
+      const y = bounds.y + bounds.height * ny;
+      await expect
+        .poll(
+          async () => {
+            // A cold image can load after the first short-lived trace expires.
+            await page.mouse.move(x - 7, y + 2);
+            await page.mouse.move(x, y);
+            return canvas.evaluate(
+              (element, point) => {
+                const c = element as HTMLCanvasElement;
+                const r = c.getBoundingClientRect();
+                const px = Math.floor(((point.x - r.left) * c.width) / r.width);
+                const py = Math.floor(
+                  ((point.y - r.top) * c.height) / r.height,
+                );
+                const pixels = c
+                  .getContext("2d")!
+                  .getImageData(px - 1, py - 1, 3, 3).data;
+                return Math.min(
+                  ...Array.from({ length: 9 }, (_, i) => pixels[i * 4 + 3]),
+                );
+              },
+              { x, y },
+            );
+          },
+          {
+            message: `${viewport.width}×${viewport.height} ${edge} edge has image under the local mask`,
+          },
+        )
+        .toBeGreaterThan(16);
+      if (edge === "right" || edge === "former-boundary")
+        await page.screenshot({
+          path: testInfo.outputPath(`${edge}-${viewport.width}.png`),
+        });
+      await page.mouse.move(3, 3);
+      await expect
+        .poll(async () => (await revealPixels(page)).coverage)
+        .toBe(0);
+    }
+  }
+  expect(writes).toEqual([]);
+});
+
 test.describe("触屏背景揭示", () => {
   test.use({
     viewport: { width: 390, height: 844 },

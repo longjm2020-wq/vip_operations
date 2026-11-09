@@ -3,16 +3,15 @@
   --execution-muted: #b3c4e7;
   position: absolute;
   top: 88px;
-  left: 17px;
+  left: 0;
   width: var(--team-panel-width, 340px);
+  height: calc(100% - 150px);
   max-height: calc(100% - 150px);
   display: flex;
   flex-direction: column;
   gap: 14px;
-  overflow: auto;
-  overscroll-behavior: contain;
-  scrollbar-width: thin;
-  scrollbar-color: #6b8ed259 transparent;
+  overflow: hidden;
+  container-type: size;
   pointer-events: auto;
   color: var(--execution-ink);
   font-size: 12px;
@@ -63,10 +62,13 @@
   transform: rotate(180deg);
 }
 .team-execution-completed-list {
-  max-height: 260px;
+  max-height: max(0px, calc(100cqh - 54px));
   overflow: auto;
   padding: 0 12px 10px;
-  scrollbar-width: thin;
+}
+.team-execution-rail:has(.team-execution-current)
+  .team-execution-completed-list {
+  max-height: clamp(32px, calc(42cqh - 54px), 260px);
 }
 .team-execution-completed-step {
   border-top: 1px solid #7398e824;
@@ -123,6 +125,10 @@
 }
 .team-execution-current {
   position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
   padding: 14px;
 }
 .team-execution-current::before {
@@ -135,6 +141,7 @@
   background: linear-gradient(90deg, #79d5ff, #bb83ff, transparent);
 }
 .team-execution-current > header {
+  flex: none;
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -194,10 +201,44 @@
   background: #6b72ee26;
 }
 .team-execution-scroll {
-  max-height: min(360px, calc(100dvh - 490px));
+  flex: 1 1 auto;
+  min-height: 0;
   overflow: auto;
+  padding-right: 5px;
+}
+.team-execution-rail
+  :is(
+    .team-execution-scroll,
+    .team-execution-completed-list,
+    .team-execution-parallel
+  ) {
+  --execution-scroll-thumb: #8198bd38;
   scrollbar-width: thin;
+  scrollbar-color: var(--execution-scroll-thumb) transparent;
+  scrollbar-gutter: stable;
   overscroll-behavior: contain;
+}
+.team-execution-rail
+  :is(
+    .team-execution-scroll,
+    .team-execution-completed-list,
+    .team-execution-parallel
+  ):is(:hover, :focus-within) {
+  --execution-scroll-thumb: #a4bce26b;
+}
+.team-execution-rail ::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+.team-execution-rail ::-webkit-scrollbar-track {
+  background: transparent;
+}
+.team-execution-rail ::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: var(--execution-scroll-thumb);
+}
+.team-execution-rail ::-webkit-scrollbar-button {
+  display: none;
 }
 .team-execution-scroll small {
   display: block;
@@ -229,6 +270,7 @@
   overflow-wrap: anywhere;
 }
 .team-execution-refresh {
+  flex: none;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -304,6 +346,7 @@
   left: 10px;
   right: 10px;
   width: auto;
+  height: 180px;
   max-height: 180px;
   gap: 8px;
 }
@@ -316,14 +359,12 @@
 .team-execution-rail[data-compact="true"] .team-execution-current h4 {
   margin-top: 5px;
 }
-.team-execution-rail[data-compact="true"] .team-execution-scroll {
-  max-height: 140px;
-}
 .team-execution-rail[data-delivered="true"][data-compact="true"] {
   top: 72px;
   bottom: auto;
   width: min(260px, calc(100% - 20px));
   right: auto;
+  height: 240px;
   max-height: 240px;
 }
 @keyframes team-execution-blink {

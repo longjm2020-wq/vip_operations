@@ -1,4 +1,6 @@
-/** Shared ring artwork for workbench entries and team members. */
+const haloTicks = Array.from({ length: 40 }, (_, index) => index);
+
+/** Shared vector ring artwork; glow is a separate backdrop, never a line filter. */
 export function WorkspaceDockHalo() {
   return (
     <svg
@@ -9,14 +11,18 @@ export function WorkspaceDockHalo() {
       focusable="false"
     >
       <circle className="workspace-dock-halo-track" cx="50" cy="50" r="47" />
-      <circle
-        className="workspace-dock-halo-ticks"
-        cx="50"
-        cy="50"
-        r="43"
-        pathLength="100"
-        strokeDasharray="0.3 4.7"
-      />
+      <g className="workspace-dock-halo-ticks">
+        {haloTicks.map((tick) => (
+          <line
+            key={tick}
+            x1="50"
+            x2="50"
+            y1={tick % 5 === 0 ? 5.5 : 7}
+            y2="9.5"
+            transform={`rotate(${tick * 9} 50 50)`}
+          />
+        ))}
+      </g>
       <circle className="workspace-dock-halo-inner" cx="50" cy="50" r="38" />
       <g className="workspace-dock-halo-sweep">
         <circle

@@ -162,7 +162,11 @@ export function WorkspaceTeamExecution({
           <b>{completed.length}</b>
           <DownOutlined />
         </summary>
-        <div className="team-execution-completed-list">
+        <div
+          className="team-execution-completed-list"
+          tabIndex={0}
+          aria-label="已完成步骤"
+        >
           {!completed.length && (
             <p className="team-execution-empty">完成的步骤会保留在这里</p>
           )}
@@ -232,34 +236,37 @@ export function WorkspaceTeamExecution({
               </small>
             )}
           </header>
-          <h4>
-            {step?.title ||
-              (run.status === "PLANNING" ? "拆解任务与分配成员" : run.goal)}
-          </h4>
-          {step && memberName(step.memberId) && (
-            <div className="team-execution-member">
-              {memberName(step.memberId)}
-            </div>
-          )}
-          {live && step && working.length > 1 && (
-            <div className="team-execution-parallel" aria-label="并行执行步骤">
-              {working.map((item) => (
-                <button
-                  type="button"
-                  key={item.id}
-                  aria-pressed={item.id === step?.id}
-                  onClick={() => setSelected(item.id)}
-                >
-                  {item.title}
-                </button>
-              ))}
-            </div>
-          )}
           <div
             className="team-execution-scroll"
             tabIndex={0}
             aria-label="执行内容"
           >
+            <h4>
+              {step?.title ||
+                (run.status === "PLANNING" ? "拆解任务与分配成员" : run.goal)}
+            </h4>
+            {step && memberName(step.memberId) && (
+              <div className="team-execution-member">
+                {memberName(step.memberId)}
+              </div>
+            )}
+            {live && step && working.length > 1 && (
+              <div
+                className="team-execution-parallel"
+                aria-label="并行执行步骤"
+              >
+                {working.map((item) => (
+                  <button
+                    type="button"
+                    key={item.id}
+                    aria-pressed={item.id === step?.id}
+                    onClick={() => setSelected(item.id)}
+                  >
+                    {item.title}
+                  </button>
+                ))}
+              </div>
+            )}
             {problem && (
               <div className="team-execution-problem" role="status">
                 {problem}
