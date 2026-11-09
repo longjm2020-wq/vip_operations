@@ -39,6 +39,7 @@ import {
 import { paintTeamEnergy } from "./workspace-team-energy";
 import { WorkspaceDockHalo } from "./workspace-dock-halo";
 import { WorkspaceTeamExecution } from "./workspace-team-execution";
+import { WorkspaceTeamProgress } from "./workspace-team-progress";
 import type {
   TeamArtifact,
   TeamMember,
@@ -387,8 +388,16 @@ export function WorkspaceTeamOrbit({
       /* Keep choice in memory. */
     }
   };
+  const progressHost = host
+    ?.closest(".personal-workspace")
+    ?.querySelector(".personal-welcome");
   return (
     <>
+      {progressHost &&
+        createPortal(
+          <WorkspaceTeamProgress run={run} stale={!!error} tone={tone} />,
+          progressHost,
+        )}
       <div
         ref={layer}
         className="workspace-team-layer"

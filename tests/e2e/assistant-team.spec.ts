@@ -89,7 +89,8 @@ async function setup(
     personal: unknown[] = [];
   let run: TeamRun | undefined,
     completed = false,
-    canceled = false;
+    canceled = false,
+    refreshFailed = false;
   const artifact: TeamArtifact = {
     id: artifactId,
     runId: "",
@@ -299,8 +300,16 @@ async function setup(
         };
         data = run;
       } else data = run ? [currentRun()] : [];
-    } else if (run && path === `${root}/runs/${run.id}`) data = currentRun();
-    else if (run && path === `${root}/runs/${run.id}/cancel`) {
+    } else if (run && path === `${root}/runs/${run.id}`) {
+      if (refreshFailed) {
+        await route.fulfill({
+          status: 503,
+          json: { error: { message: "进度读取暂时失败" } },
+        });
+        return;
+      }
+      data = currentRun();
+    } else if (run && path === `${root}/runs/${run.id}/cancel`) {
       canceled = true;
       data = {
         canceled: true,
@@ -324,14 +333,25 @@ async function setup(
     complete: () => {
       completed = true;
     },
-    phase: (status: "QUEUED" | "PLANNING") => {
+    phase: (status: "QUEUED" | "PLANNING" | "REVIEWING") => {
       if (run)
         run = {
           ...run,
           status,
-          stage: status === "QUEUED" ? "等待团队开始" : "主脑正在制定执行计划",
-          steps: run.steps.map((step) => ({ ...step, status: "PENDING" })),
+          stage:
+            status === "QUEUED"
+              ? "等待团队开始"
+              : status === "REVIEWING"
+                ? "正在核对交付与验收标准"
+                : "主脑正在制定执行计划",
+          steps: run.steps.map((step) => ({
+            ...step,
+            status: status === "REVIEWING" ? "REVIEWING" : "PENDING",
+          })),
         };
+    },
+    failRefresh: (failed: boolean) => {
+      refreshFailed = failed;
     },
     executionStage: (
       stage: "writing" | "design",
@@ -425,11 +445,15 @@ async function memberMovement(page: Page) {
 test("星轨左侧执行详情跟随真实步骤，完成项可展开且中断不伪装执行", async ({
   page,
 }) => {
+  test.setTimeout(90000);
   await page.setViewportSize({ width: 1600, height: 1000 });
   const fixture = await setup(page);
   await submitInWorkspace(page);
   const rail = page.getByRole("complementary", { name: "团队执行详情" });
-  const current = rail.locator(".team-execution-current");
+  const current = rail.locator(".team-execution-current-content");
+  const detailScroll = rail.locator(".team-execution-scroll");
+  const header = rail.locator(".team-execution-header");
+  const progress = page.getByLabel("团队任务进度", { exact: true });
   const visibleOutput = current.locator(
     '.team-execution-output > span[aria-hidden="true"]',
   );
@@ -440,10 +464,13 @@ test("星轨左侧执行详情跟随真实步骤，完成项可展开且中断�
   await expect(current.locator(".team-execution-instruction")).toContainText(
     "结合所附资料完成活动文案",
   );
+  await current.locator(".team-execution-instruction > summary").click();
+  await expect(current.locator(".team-execution-instruction p")).toBeVisible();
+  await current.locator(".team-execution-instruction > summary").click();
   await expect(visibleOutput).toHaveText("已核对针织材质，正在整理活动卖点。", {
     timeout: 10000,
   });
-  await expect(current).toHaveAttribute("data-active", "true");
+  await expect(rail).toHaveAttribute("data-active", "true");
   await expect(rail).toHaveAttribute("data-compact", "false");
   for (const { width, height } of [
     { width: 1920, height: 951 },
@@ -451,6 +478,7 @@ test("星轨左侧执行详情跟随真实步骤，完成项可展开且中断�
     { width: 1366, height: 768 },
     { width: 1280, height: 720 },
     { width: 960, height: 900 },
+    { width: 800, height: 900 },
   ]) {
     await page.setViewportSize({ width, height });
     await expect
@@ -487,11 +515,21 @@ test("星轨左侧执行详情跟随真实步骤，完成项可展开且中断�
             const toolbar = document
               .querySelector(".workspace-world-controls")!
               .getBoundingClientRect();
-            const cards = [
-              ...panel.querySelectorAll(
-                ".team-execution-completed, .team-execution-current",
-              ),
-            ].map((card) => card.getBoundingClientRect());
+            const panelStyle = getComputedStyle(panel);
+            const progress = document.querySelector<HTMLElement>(
+              ".team-task-progress",
+            )!;
+            const progressBounds = progress.getBoundingClientRect();
+            const date = document
+              .querySelector(".workspace-date")!
+              .getBoundingClientRect();
+            const clearOf = (rect: DOMRect) =>
+              rect.width === 0 ||
+              rect.height === 0 ||
+              progressBounds.right <= rect.left + 1 ||
+              progressBounds.left >= rect.right - 1 ||
+              progressBounds.bottom <= rect.top + 1 ||
+              progressBounds.top >= rect.bottom - 1;
             const composer = document
               .querySelector(".personal-workspace .assistant-compose")!
               .getBoundingClientRect();
@@ -510,11 +548,19 @@ test("星轨左侧执行详情跟随真实步骤，完成项可展开且中断�
                 window.innerWidth < 1440 || railBounds.width >= 320,
               alignedDesktopColumn:
                 panel.getAttribute("data-compact") === "true" ||
-                [railBounds, ...cards].every(
-                  (rect) =>
-                    Math.abs(rect.left - toolbar.left) <= 1 &&
-                    Math.abs(rect.width - toolbar.width) <= 1,
-                ),
+                (Math.abs(railBounds.left - toolbar.left) <= 1 &&
+                  Math.abs(railBounds.width - toolbar.width) <= 1),
+              transparentPanel:
+                panelStyle.backgroundColor === "rgba(0, 0, 0, 0)" &&
+                panelStyle.backgroundImage === "none" &&
+                panelStyle.boxShadow === "none",
+              progressFitsHeader:
+                progressBounds.left >= 0 &&
+                progressBounds.right <= window.innerWidth &&
+                progressBounds.bottom <= stageBounds.top + 1 &&
+                progress.scrollWidth <= progress.clientWidth + 1 &&
+                clearOf(toolbar) &&
+                clearOf(date),
               noOuterRailScrollbar:
                 getComputedStyle(panel).overflowY === "hidden",
               insideStageAndViewport:
@@ -541,15 +587,17 @@ test("星轨左侧执行详情跟随真实步骤，完成项可展开且中断�
         composerInsideViewport: true,
         widerDesktopPanel: true,
         alignedDesktopColumn: true,
+        transparentPanel: true,
+        progressFitsHeader: true,
         noOuterRailScrollbar: true,
         insideStageAndViewport: true,
         belowHeading: true,
         aboveCaption: true,
         clearOfExecutionPanel: true,
       });
-    if ([1920, 1366, 960].includes(width))
+    if ([1920, 1366, 960, 800].includes(width))
       await page.screenshot({
-        path: `.local/team-viewport-20261109/execution-${width}x${height}.png`,
+        path: `.local/minimal-execution-20261110/execution-${width}x${height}.png`,
       });
   }
   await page.setViewportSize({ width: 1600, height: 1000 });
@@ -564,17 +612,19 @@ test("星轨左侧执行详情跟随真实步骤，完成项可展开且中断�
     "依据已完成文案制作针织上新主视觉",
   );
   await expect(visibleOutput).toHaveText("已读取文案，正在确认主视觉构图。");
-  const completed = rail.locator(".team-execution-completed");
-  await expect(completed.locator(":scope > summary b")).toHaveText("1");
+  const completed = rail.locator(".team-execution-history");
+  await expect(completed.locator(":scope > summary")).toContainText(
+    /已完成\s*1\s*步/,
+  );
   await completed.locator(":scope > summary").click();
-  const finishedStep = completed.locator(".team-execution-completed-step");
+  const finishedStep = completed.locator(".team-execution-history-step");
   await finishedStep.locator("summary").click();
-  await expect(
-    finishedStep.locator(".team-execution-completed-copy"),
-  ).toContainText("活动文案已完成：以柔软针织为主题，突出通勤与叠穿场景。");
+  await expect(finishedStep).toContainText(
+    "活动文案已完成：以柔软针织为主题，突出通勤与叠穿场景。",
+  );
   await expect(current).not.toContainText("活动文案已完成：");
   await page.screenshot({
-    path: ".local/team-orbit-20261109/execution-desktop.png",
+    path: ".local/minimal-execution-20261110/history-desktop.png",
     fullPage: true,
   });
 
@@ -597,7 +647,7 @@ test("星轨左侧执行详情跟随真实步骤，完成项可展开且中断�
     .getByRole("heading", { name: "制作上新主视觉" })
     .scrollIntoViewIfNeeded();
   await page.screenshot({
-    path: ".local/team-orbit-20261109/execution-mobile.png",
+    path: ".local/minimal-execution-20261110/execution-mobile.png",
     fullPage: true,
   });
   await page.setViewportSize({ width: 1600, height: 1000 });
@@ -612,7 +662,7 @@ test("星轨左侧执行详情跟随真实步骤，完成项可展开且中断�
     longInstruction,
     { timeout: 10000 },
   );
-  const detailScroll = current.locator(".team-execution-scroll");
+  await current.locator(".team-execution-instruction > summary").click();
   await expect
     .poll(() =>
       detailScroll.evaluate((el) => {
@@ -634,9 +684,7 @@ test("星轨左侧执行详情跟随真实步骤，完成项可展开且中断�
   await completed.locator(":scope > summary").click();
   if ((await finishedStep.getAttribute("open")) === null)
     await finishedStep.locator("summary").click();
-  await expect(
-    finishedStep.locator(".team-execution-completed-copy"),
-  ).toContainText(longCompletedResult);
+  await expect(finishedStep).toContainText(longCompletedResult);
   for (const viewport of [
     { width: 1920, height: 951 },
     { width: 1366, height: 768 },
@@ -645,29 +693,44 @@ test("星轨左侧执行详情跟随真实步骤，完成项可展开且中断�
     await expect
       .poll(() =>
         rail.evaluate((panel) => {
-          const list = panel.querySelector<HTMLElement>(
-            ".team-execution-completed-list",
+          const scroll = panel.querySelector<HTMLElement>(
+            ".team-execution-scroll",
           )!;
-          list.scrollTop = list.scrollHeight;
+          scroll.scrollTop = scroll.scrollHeight;
+          const historyReachesBottom =
+            scroll.clientHeight > 0 &&
+            scroll.scrollHeight > scroll.clientHeight &&
+            scroll.scrollTop > 0 &&
+            Math.abs(
+              scroll.scrollHeight - scroll.clientHeight - scroll.scrollTop,
+            ) <= 1;
+          const verticalScrollAreas = [
+            ...panel.querySelectorAll<HTMLElement>("*"),
+          ].filter(
+            (el) =>
+              ["auto", "scroll"].includes(getComputedStyle(el).overflowY) &&
+              el.scrollHeight > el.clientHeight + 1,
+          );
+          const heading = panel.querySelector<HTMLElement>(
+            ".team-execution-current-content h4",
+          )!;
+          heading.scrollIntoView({ block: "nearest" });
           const railBounds = panel.getBoundingClientRect();
-          const completedBounds = panel
-            .querySelector(".team-execution-completed")!
-            .getBoundingClientRect();
-          const currentBounds = panel
-            .querySelector(".team-execution-current")!
+          const scrollBounds = scroll.getBoundingClientRect();
+          const headingBounds = heading.getBoundingClientRect();
+          const headerBounds = panel
+            .querySelector(".team-execution-header")!
             .getBoundingClientRect();
           return {
-            completedScrollReachesBottom:
-              list.clientHeight > 0 &&
-              list.scrollHeight > list.clientHeight &&
-              list.scrollTop > 0 &&
-              Math.abs(
-                list.scrollHeight - list.clientHeight - list.scrollTop,
-              ) <= 1,
-            currentCardAccessible:
-              currentBounds.height > 100 &&
-              currentBounds.top >= completedBounds.bottom &&
-              currentBounds.bottom <= railBounds.bottom + 1,
+            historyReachesBottom,
+            singleVerticalScrollArea:
+              verticalScrollAreas.length === 1 &&
+              verticalScrollAreas[0] === scroll,
+            currentContentAccessible:
+              headingBounds.top >= scrollBounds.top - 1 &&
+              headingBounds.bottom <= scrollBounds.bottom + 1 &&
+              scrollBounds.top >= headerBounds.bottom &&
+              scrollBounds.bottom <= railBounds.bottom + 1,
             noOuterRailScroll:
               getComputedStyle(panel).overflowY === "hidden" &&
               panel.scrollHeight <= panel.clientHeight + 1,
@@ -675,40 +738,74 @@ test("星轨左侧执行详情跟随真实步骤，完成项可展开且中断�
         }),
       )
       .toEqual({
-        completedScrollReachesBottom: true,
-        currentCardAccessible: true,
+        historyReachesBottom: true,
+        singleVerticalScrollArea: true,
+        currentContentAccessible: true,
         noOuterRailScroll: true,
       });
+    const scrollBounds = (await detailScroll.boundingBox())!;
+    await detailScroll.hover({
+      position: {
+        x: scrollBounds.width - 3,
+        y: Math.min(80, scrollBounds.height / 2),
+      },
+      force: true,
+    });
     await page.screenshot({
-      path: `.local/vector-rings-checks-20261110/left-column-expanded-${viewport.width}x${viewport.height}.png`,
+      path: `.local/minimal-execution-20261110/history-expanded-${viewport.width}x${viewport.height}.png`,
     });
   }
   await page.setViewportSize({ width: 1600, height: 1000 });
 
+  fixture.failRefresh(true);
+  await expect(progress).toHaveAttribute("data-health", "stale", {
+    timeout: 10000,
+  });
+  await expect(progress.locator('[data-step="delivery"]')).not.toHaveAttribute(
+    "data-state",
+    "complete",
+  );
+  await expect(rail).toHaveAttribute("data-active", "false");
+  await expect(header).toContainText("进度暂未更新");
+  fixture.failRefresh(false);
+  await rail.getByRole("button", { name: "重试", exact: true }).click();
+  await expect(progress).toHaveAttribute("data-health", "normal");
+  await expect(rail).toHaveAttribute("data-active", "true");
+
   // Retain the last server step snapshot while the overall run is interrupted.
   fixture.interrupt("NEEDS_USER");
-  await expect(current.locator(".team-execution-status")).toHaveText(
+  await expect(header.locator(".team-execution-status")).toHaveText(
     "等待你补充",
     { timeout: 10000 },
   );
-  await expect(current).toHaveAttribute("data-active", "false");
-  await expect(current.locator(".anticon-spin")).toHaveCount(0);
+  await expect(rail).toHaveAttribute("data-active", "false");
+  await expect(progress).toHaveAttribute("data-health", "attention");
+  await expect(progress).toContainText("等待补充资料");
+  await expect(progress.locator('[data-step="delivery"]')).not.toHaveAttribute(
+    "data-state",
+    "complete",
+  );
+  await expect(header.locator(".anticon-spin")).toHaveCount(0);
   fixture.interrupt("FAILED");
   // Terminal runs stop polling; reopening reloads the latest saved task state.
   await page.reload();
-  await expect(current.locator(".team-execution-status")).toHaveText(
+  await expect(header.locator(".team-execution-status")).toHaveText(
     "执行中断",
     { timeout: 10000 },
   );
-  await expect(current).toHaveAttribute("data-active", "false");
+  await expect(rail).toHaveAttribute("data-active", "false");
+  await expect(progress).toHaveAttribute("data-health", "error");
+  await expect(progress).toContainText("执行中断");
+  await expect(progress.locator('[data-step="delivery"]')).not.toHaveAttribute(
+    "data-state",
+    "complete",
+  );
   await expect(current.locator(".team-execution-problem")).toHaveText(
     "执行服务暂时不可用",
   );
   await completed.locator(":scope > summary").click();
   await finishedStep.locator("summary").click();
-  await expect(
-    finishedStep.locator(".team-execution-completed-copy"),
-  ).toBeVisible();
+  await expect(finishedStep).toBeVisible();
 
   expect(fixture.submissions).toHaveLength(1);
 });
@@ -793,6 +890,15 @@ test("星轨展示真实协作、仅在新交付时汇聚、保留配色并可�
   });
   await page.setViewportSize(desktopViewport);
   const teamScene = page.locator(".workspace-team-layer");
+  const progress = page.getByLabel("团队任务进度", { exact: true });
+  await expect(progress.locator('[data-step="execution"]')).toHaveAttribute(
+    "data-state",
+    "current",
+  );
+  await expect(progress.locator('[data-step="delivery"]')).toHaveAttribute(
+    "data-state",
+    "waiting",
+  );
   const energyCanvas = page.locator(".team-energy-canvas");
   await expect(teamScene).toHaveAttribute("data-energized", "true");
   await expect
@@ -806,11 +912,16 @@ test("星轨展示真实协作、仅在新交付时汇聚、保留配色并可�
     timeout: 10000,
   });
   await expect(teamScene).toHaveAttribute("data-energized", "false");
+  await expect(progress.locator('[data-state="complete"]')).toHaveCount(0);
   fixture.phase("PLANNING");
   await expect(teamScene).toHaveAttribute("data-status", "PLANNING", {
     timeout: 10000,
   });
   await expect(teamScene).toHaveAttribute("data-energized", "true");
+  await expect(progress.locator('[data-step="planning"]')).toHaveAttribute(
+    "data-state",
+    "current",
+  );
   await expect(
     page.locator('.team-orbit-node[data-active="true"]'),
   ).toHaveCount(0);
@@ -820,6 +931,26 @@ test("星轨展示真实协作、仅在新交付时汇聚、保留配色并可�
   await expect
     .poll(async () => Number(await energyCanvas.getAttribute("data-ring-time")))
     .toBeGreaterThan(planningTime + 0.15);
+  fixture.executionStage("writing");
+  await expect(teamScene).toHaveAttribute("data-status", "RUNNING", {
+    timeout: 10000,
+  });
+  await expect(progress.locator('[data-step="execution"]')).toHaveAttribute(
+    "data-state",
+    "current",
+  );
+  fixture.phase("REVIEWING");
+  await expect(teamScene).toHaveAttribute("data-status", "REVIEWING", {
+    timeout: 10000,
+  });
+  await expect(progress.locator('[data-step="review"]')).toHaveAttribute(
+    "data-state",
+    "current",
+  );
+  await expect(progress.locator('[data-step="delivery"]')).toHaveAttribute(
+    "data-state",
+    "waiting",
+  );
   fixture.complete();
   await expect(page.locator(".workspace-team-layer")).toHaveAttribute(
     "data-collecting",
@@ -827,6 +958,7 @@ test("星轨展示真实协作、仅在新交付时汇聚、保留配色并可�
     { timeout: 10000 },
   );
   await expect(teamScene).toHaveAttribute("data-energized", "false");
+  await expect(progress.locator('[data-state="complete"]')).toHaveCount(4);
   await expect.poll(() => memberMovement(page)).toBeLessThan(1);
   await expect
     .poll(async () =>
@@ -998,6 +1130,16 @@ test("手机星轨尊重减少动态效果，DeerFlow 不伪造成员与独立�
     "data-collecting",
     "false",
   );
+  const progress = page.getByLabel("团队任务进度", { exact: true });
+  await expect(progress.locator('[data-step="review"]')).toHaveAttribute(
+    "data-state",
+    "unverified",
+  );
+  await expect(progress.locator('[data-step="delivery"]')).toHaveAttribute(
+    "data-state",
+    "complete",
+  );
+  await expect(progress.locator('[data-state="complete"]')).not.toHaveCount(4);
   await page.screenshot({
     path: ".local/team-orbit-20261109/mobile.png",
     fullPage: true,

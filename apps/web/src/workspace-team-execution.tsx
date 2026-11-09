@@ -153,94 +153,97 @@ export function WorkspaceTeamExecution({
       aria-label="团队执行详情"
       data-compact={compact}
       data-delivered={terminal}
+      data-active={live}
       data-world-ui
     >
-      <details className="team-execution-completed" key={run.id}>
-        <summary>
-          <CheckCircleOutlined />
-          <span>已完成</span>
-          <b>{completed.length}</b>
-          <DownOutlined />
-        </summary>
-        <div
-          className="team-execution-completed-list"
-          tabIndex={0}
-          aria-label="已完成步骤"
-        >
-          {!completed.length && (
-            <p className="team-execution-empty">完成的步骤会保留在这里</p>
+      <header className="team-execution-header">
+        <span className="team-execution-status">
+          {live ? (
+            <LoadingOutlined />
+          ) : terminal ? (
+            <CheckCircleOutlined />
+          ) : (
+            <span className="team-execution-status-dot" />
           )}
-          {completed.map((item) => (
-            <details className="team-execution-completed-step" key={item.id}>
-              <summary>
-                <span>{item.title}</span>
-                <DownOutlined />
-              </summary>
-              <div className="team-execution-completed-copy">
-                {memberName(item.memberId) && (
-                  <small>{memberName(item.memberId)}</small>
-                )}
-                <p>{item.result || item.instruction}</p>
-                {item.review && (
-                  <p className="team-execution-review">{item.review}</p>
-                )}
-                {run.artifacts
-                  .filter(
-                    (artifact) =>
-                      artifact.stepId === item.id &&
-                      artifact.status !== "REJECTED",
-                  )
-                  .map((artifact) => (
-                    <button
-                      type="button"
-                      key={artifact.id}
-                      onClick={() => onOpenArtifact(artifact)}
-                    >
-                      <FileTextOutlined />
-                      <span>{artifact.title}</span>
-                    </button>
-                  ))}
-              </div>
-            </details>
-          ))}
-        </div>
-      </details>
-      {stale && (
-        <div className="team-execution-refresh" role="status">
-          <span>进度暂未更新，保留上次内容</span>
-          {onRetry && (
-            <button type="button" onClick={onRetry}>
-              重试
-            </button>
-          )}
-        </div>
-      )}
-      {!terminal && (
-        <section className="team-execution-current" data-active={live}>
-          <header>
-            <span className="team-execution-status">
-              {live ? (
-                <LoadingOutlined />
-              ) : (
-                <span className="team-execution-status-dot" />
-              )}
-              {stale
-                ? "进度暂未更新"
-                : step
-                  ? stepLabels[step.status]
-                  : statusLabels[run.status]}
-            </span>
-            {step && (
-              <small>
-                {run.steps.indexOf(step) + 1} / {run.steps.length}
-              </small>
+          {stale
+            ? "进度暂未更新"
+            : step
+              ? stepLabels[step.status]
+              : statusLabels[run.status]}
+        </span>
+        {step && (
+          <small>
+            步骤 {run.steps.indexOf(step) + 1} / {run.steps.length}
+          </small>
+        )}
+      </header>
+      <div
+        className="team-execution-scroll"
+        tabIndex={0}
+        aria-label="执行内容与已完成步骤"
+      >
+        {terminal && (
+          <p className="team-execution-delivery-note">
+            本次成果已交付，可在成果栏查看。
+          </p>
+        )}
+        <details className="team-execution-history" key={run.id}>
+          <summary>
+            <CheckCircleOutlined />
+            <span>已完成 {completed.length} 步</span>
+            <DownOutlined />
+          </summary>
+          <div className="team-execution-history-list">
+            {!completed.length && (
+              <p className="team-execution-empty">完成的步骤会保留在这里</p>
             )}
-          </header>
-          <div
-            className="team-execution-scroll"
-            tabIndex={0}
-            aria-label="执行内容"
-          >
+            {completed.map((item) => (
+              <details className="team-execution-history-step" key={item.id}>
+                <summary>
+                  <span>{item.title}</span>
+                  <DownOutlined />
+                </summary>
+                <div className="team-execution-history-copy">
+                  {memberName(item.memberId) && (
+                    <small>{memberName(item.memberId)}</small>
+                  )}
+                  <p>{item.result || item.instruction}</p>
+                  {item.review && (
+                    <p className="team-execution-review">{item.review}</p>
+                  )}
+                  {run.artifacts
+                    .filter(
+                      (artifact) =>
+                        artifact.stepId === item.id &&
+                        artifact.status !== "REJECTED",
+                    )
+                    .map((artifact) => (
+                      <button
+                        type="button"
+                        key={artifact.id}
+                        onClick={() => onOpenArtifact(artifact)}
+                      >
+                        <FileTextOutlined />
+                        <span>{artifact.title}</span>
+                      </button>
+                    ))}
+                </div>
+              </details>
+            ))}
+          </div>
+        </details>
+        {stale && (
+          <div className="team-execution-refresh" role="status">
+            <span>进度暂未更新，保留上次内容</span>
+            {onRetry && (
+              <button type="button" onClick={onRetry}>
+                重试
+              </button>
+            )}
+          </div>
+        )}
+        {!terminal && (
+          <section className="team-execution-current-content">
             <h4>
               {step?.title ||
                 (run.status === "PLANNING" ? "拆解任务与分配成员" : run.goal)}
@@ -272,12 +275,6 @@ export function WorkspaceTeamExecution({
                 {problem}
               </div>
             )}
-            {step?.instruction && (
-              <div className="team-execution-instruction">
-                <small>执行目标</small>
-                <p>{step.instruction}</p>
-              </div>
-            )}
             {output && (
               <div className="team-execution-returned">
                 <small>{step?.result ? "已返回内容" : "当前状态"}</small>
@@ -288,9 +285,18 @@ export function WorkspaceTeamExecution({
                 />
               </div>
             )}
-          </div>
-        </section>
-      )}
+            {step?.instruction && (
+              <details className="team-execution-instruction" key={step.id}>
+                <summary>
+                  任务要求
+                  <DownOutlined />
+                </summary>
+                <p>{step.instruction}</p>
+              </details>
+            )}
+          </section>
+        )}
+      </div>
     </aside>
   );
 }
