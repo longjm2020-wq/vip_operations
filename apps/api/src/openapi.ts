@@ -13,6 +13,7 @@ import { settingsSchema } from "./modules/analytics/mail.js";
 import { aiSettingsSchema } from "./modules/analytics/ai.js";
 import { loginSchema } from "./modules/auth/service.js";
 import { compassProbeRequestSchema } from "./integrations/vip/compass.js";
+import { vipControlImportSchema } from "../../../packages/contracts/src/vip-control.js";
 import { replenishmentPolicyWriteSchema } from "../../../packages/contracts/src/inventory-replenishment.js";
 import { inventoryCalculationWriteSchema, inventoryCalculationFieldWriteSchema, inventoryCalculationFieldDeleteSchema, inventoryCalculationFieldViewSchema } from "../../../packages/contracts/src/inventory-formula.js";
 import { assistantSendSchema, assistantMemorySaveSchema } from "../../../packages/contracts/src/personal-assistant.js";
@@ -102,6 +103,12 @@ export function enrichOpenApi(doc: OpenAPIObject) {
   };
   delete doc.paths["/api/v1/{resource}"];
   delete doc.paths["/api/v1/{resource}/{id}"];
+  set("/api/v1/integrations/vip/control", "get", undefined, "按供应商分页查询 VC 导出管控资料（商品/货号维度）");
+  doc.paths["/api/v1/integrations/vip/control"]!.get!.parameters!.push(
+    { name: "namespace", in: "query", required: true, schema: { type: "string" } },
+    { name: "q", in: "query", required: false, schema: { type: "string", maxLength: 100 } },
+  );
+  set("/api/v1/integrations/vip/control/import", "post", vipControlImportSchema, "导入 VC 原始管控类型和最后一次下架原因，不推算当前管控状态");
   set(
     "/api/v1/integrations/vip/catalog",
     "get",

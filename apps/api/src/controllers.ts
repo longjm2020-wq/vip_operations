@@ -56,6 +56,7 @@ import { list as auditLogs } from "./modules/audit/service.js";
 import { vipStatus } from "./integrations/vip/index.js";
 import { compassProbeRequestSchema } from "./integrations/vip/compass.js";
 import { platformCatalog } from "./integrations/vip/catalog.js";
+import { importVipControl, listVipControl } from "./integrations/vip/control.js";
 import { listingRequestSchema } from "./integrations/vip/listing.js";
 const paramId = (v: string) => parse(id, v);
 @ApiTags("登录与权限")
@@ -393,6 +394,16 @@ class SuggestionController {
 @ApiTags("审计与接入")
 @Controller("api/v1")
 class SystemController {
+  @Permission("vip.settings") @Get("integrations/vip/control") control(
+    @Query() q: any,
+  ) {
+    return listVipControl(q);
+  }
+  @Permission("vip.settings") @Post("integrations/vip/control/import") @HttpCode(200) importControl(
+    @Req() r: AuthRequest, @Body() b: unknown,
+  ) {
+    return importVipControl(context(r), b);
+  }
   @Permission("vip.settings") @Get("integrations/vip/catalog") async catalog(
     @Query() q: any,
   ) {

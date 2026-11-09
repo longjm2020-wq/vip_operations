@@ -11,6 +11,12 @@ API 前缀已确定为 `/api/v1`。下述补充路径、DTO、错误码与幂等
 - `RESPONSE_RECEIVED` 表示结构符合官方 SDK，但不宣称业务成功或指标口径已验证；VOP 网关 `returnCode=0` 不能代替内部 `CompassDataResponse.code`。已公开的403/405/400业务错误分别提示权限或并发、参数及查询失败。
 - 状态和元数据独立保存于 `vop_compass_probes`，每个命名空间共用现有 VOP 锁；配置指纹改变后旧验证结果失效。此准备阶段没有官方指标自动同步能力。
 
+### VC 管控资料导入（2026-11-09）
+
+- `GET /integrations/vip/control`：vip.settings；必填 namespace，可选 q、page、pageSize。按商品/货号维度返回原始管控类型、历史下架原因、导出时状态、来源文件和导出/导入时间，统计同一筛选条件的总数及有值条数。
+- `POST /integrations/vip/control/import`：vip.settings；需要会话、CSRF、幂等键及审计。严格输入 namespace、fileName、exportedAt、rows（1—5000 条，JSON 不超过 6MB）。编号保留字符串；同一文件商品 ID 不得重复。按供应商连接串行写入，商品 ID 为更新键，旧快照跳过、相同时间冲突整次回滚、未出现商品保留。空值保持未提供，不推算当前管控状态，不修改条码状态、库存或价格。
+- 独立保存于 `vop_control_products`，不把货号级导出记录按款号或条码前缀投射到所有尺码。这是文件导入能力，不表示已开通 VC 管控官方 API 或自动网页采集。
+
 ### 唯品会商品上下架状态（2026-10-03）
 
 - `GET /integrations/vip/status`：vip.settings；`listing` 包含已采集档期条码范围、两小时有效期及各连接任务的已核对数、总条码数、未解决错误数、心跳及最近成功时间，不返回应用密钥或接口原始消息。

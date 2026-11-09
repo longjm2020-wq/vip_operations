@@ -17,6 +17,7 @@ import {
 import { ApiOutlined, HistoryOutlined, RightOutlined } from "@ant-design/icons";
 import { api, queryClient } from "./api";
 import { Header, useCan, when, type Row } from "./shared";
+import { VipControlPanel } from "./vip-control-panel";
 
 const labels: Record<string, string> = {
   READY: "待启动",
@@ -96,6 +97,7 @@ const status = (value: string, names = labels) => (
 export function VipPage() {
   const can = useCan("vip.settings");
   const { message } = App.useApp();
+  const [controlOpen, setControlOpen] = useState(false);
   const [page, setPage] = useState(1),
     [panel, setPanel] = useState<"compass" | "runs">("compass"),
     [panelOpen, setPanelOpen] = useState(false),
@@ -227,6 +229,9 @@ export function VipPage() {
         ))}
 
         <Space wrap size="middle" aria-label="接入管理工具">
+          <Button disabled={!data?.connections?.length} onClick={() => setControlOpen(true)}>
+            VC 管控资料 <RightOutlined aria-hidden />
+          </Button>
           <Button
             icon={<ApiOutlined aria-hidden />}
             aria-haspopup="dialog"
@@ -583,6 +588,7 @@ export function VipPage() {
           </>
         )}
       </Drawer>
+      {controlOpen && <VipControlPanel connections={data?.connections || []} onClose={() => setControlOpen(false)} />}
     </>
   );
 }

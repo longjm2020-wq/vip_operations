@@ -26,6 +26,8 @@ export async function readWorkbook(
     dateTimeColumns?: string[];
     /** Read only saved HTTP(S) image links; never evaluate workbook formulas. */
     cachedImageFormulaColumns?: readonly string[];
+    /** Long platform identifiers must remain text in the source workbook. */
+    textOnlyColumns?: readonly string[];
     maxFileSizeMB?: number;
     maxRows?: number;
   } = {},
@@ -47,6 +49,7 @@ export async function readWorkbook(
   const book = new Workbook();
   await book.xlsx.load(await file.arrayBuffer());
   const allowedImageHeaders = new Set(options.cachedImageFormulaColumns?.map(normalizeHeader));
+  const textOnlyHeaders = new Set(options.textOnlyColumns?.map(normalizeHeader));
   return book.worksheets
     .map((sheet) => {
       // ExcelJS derives columnCount by scanning rows; compute it once for large sheets.
@@ -61,6 +64,10 @@ export async function readWorkbook(
         for (let c = 1; c <= columnCount; c++) {
           const cell = row.getCell(c),
             value = cell.value;
+          if (row.number > 1 && typeof value === "number" &&
+              textOnlyHeaders.has(normalizeHeader(sheet.getRow(1).getCell(c).text))) {
+            throw Error(`工作表「${sheet.name}」${cell.address} 的编号被存成数字，请重新从平台导出并保留文本格式，避免长编号或前导零丢失`);
+          }
           if (
             value &&
             typeof value === "object" &&
