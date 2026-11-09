@@ -4,10 +4,10 @@ import type {
   TeamRun,
 } from "../../../packages/contracts/src/assistant-team.js";
 
-export type TeamEnergyTone = "blue" | "purple" | "gold";
-/** Retired rose/ice preferences and unknown values use the new blue default. */
+export type TeamEnergyTone = "blue" | "purple";
+/** Retired gold/rose/ice preferences and unknown values use the blue default. */
 export function normalizeTeamEnergyTone(value: unknown): TeamEnergyTone {
-  return value === "purple" || value === "gold" ? value : "blue";
+  return value === "purple" ? value : "blue";
 }
 export const teamIsRunning = (status: TeamRun["status"]) =>
   ["QUEUED", "PLANNING", "RUNNING", "REVIEWING"].includes(status);

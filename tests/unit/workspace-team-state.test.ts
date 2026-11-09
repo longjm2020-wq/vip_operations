@@ -50,10 +50,18 @@ const artifact = (
 });
 describe("workspace team visualization reflects server results", () => {
   test("retired energy preferences fall back to blue without losing supported choices", () => {
-    for (const value of [undefined, null, "", "rose", "ice", "unknown", "blue"])
+    for (const value of [
+      undefined,
+      null,
+      "",
+      "gold",
+      "rose",
+      "ice",
+      "unknown",
+      "blue",
+    ])
       expect(normalizeTeamEnergyTone(value)).toBe("blue");
     expect(normalizeTeamEnergyTone("purple")).toBe("purple");
-    expect(normalizeTeamEnergyTone("gold")).toBe("gold");
   });
   test("only a newly observed successful delivery can collect energy", () => {
     const run = {

@@ -442,6 +442,86 @@ async function memberMovement(page: Page) {
   });
 }
 
+async function memberLabelState(page: Page, desktop = true) {
+  return page.evaluate((desktop) => {
+    const nodes = [
+      ...document.querySelectorAll<HTMLElement>(".team-orbit-node"),
+    ];
+    const labels = [
+      ...document.querySelectorAll<HTMLElement>(".team-member-label"),
+    ];
+    const matches = nodes.map((node) => ({
+      node,
+      label: labels.find(
+        (label) => label.dataset.teamLabelId === node.dataset.teamNodeId,
+      ),
+    }));
+    return {
+      allMembersLabelled:
+        nodes.length > 0 &&
+        labels.length === nodes.length &&
+        matches.every(({ label }) => !!label),
+      crispScreenText: matches.every(({ label }) => {
+        if (!label) return false;
+        const text = [
+          label,
+          ...label.querySelectorAll(
+            ".team-member-label-icon, .team-member-label-name, .team-member-label-status",
+          ),
+        ];
+        const size = (selector: string) =>
+          parseFloat(getComputedStyle(label.querySelector(selector)!).fontSize);
+        return (
+          !label.closest(".workspace-world-plane, .workspace-world-camera") &&
+          text.every((part) => {
+            const style = getComputedStyle(part);
+            return style.transform === "none" && style.filter === "none";
+          }) &&
+          (!desktop ||
+            (size(".team-member-label-name") >= 12 &&
+              size(".team-member-label-status") >= 11 &&
+              size(".team-member-label-icon") >= 22))
+        );
+      }),
+      labelsFollowDiscs: matches.every(({ node, label }) => {
+        if (!label) return false;
+        const disc = node
+          .querySelector(".team-orbit-disc")!
+          .getBoundingClientRect();
+        const copy = label.getBoundingClientRect();
+        return (
+          Math.hypot(
+            copy.left + copy.width / 2 - disc.left - disc.width / 2,
+            copy.top + copy.height / 2 - disc.top - disc.height / 2,
+          ) <= 1
+        );
+      }),
+      labelsInsideViewport: labels.every((label) => {
+        const rect = label.getBoundingClientRect();
+        return (
+          rect.left >= 0 &&
+          rect.right <= innerWidth &&
+          (!desktop || (rect.top >= 0 && rect.bottom <= innerHeight))
+        );
+      }),
+      labelsPreserveClickTargets: matches.every(({ node, label }) => {
+        if (!label) return false;
+        const rect = label.getBoundingClientRect();
+        if (!desktop && (rect.top < 0 || rect.bottom > innerHeight))
+          return true;
+        return (
+          document
+            .elementFromPoint(
+              rect.left + rect.width / 2,
+              rect.top + rect.height / 2,
+            )
+            ?.closest(".team-orbit-node") === node
+        );
+      }),
+    };
+  }, desktop);
+}
+
 test("星轨左侧执行详情跟随真实步骤，完成项可展开且中断不伪装执行", async ({
   page,
 }) => {
@@ -595,6 +675,22 @@ test("星轨左侧执行详情跟随真实步骤，完成项可展开且中断�
         aboveCaption: true,
         clearOfExecutionPanel: true,
       });
+    if ([1920, 1366, 960].includes(width)) {
+      await expect
+        .poll(() => memberLabelState(page), {
+          message: `${width}x${height} member labels remain sharp, readable and aligned with clickable discs`,
+        })
+        .toEqual({
+          allMembersLabelled: true,
+          crispScreenText: true,
+          labelsFollowDiscs: true,
+          labelsInsideViewport: true,
+          labelsPreserveClickTargets: true,
+        });
+      await page.screenshot({
+        path: `.local/member-labels-20261110/execution-${width}x${height}.png`,
+      });
+    }
     if ([1920, 1366, 960, 800].includes(width))
       await page.screenshot({
         path: `.local/minimal-execution-20261110/execution-${width}x${height}.png`,
@@ -819,6 +915,17 @@ test("星轨成员公转保持文字正向，悬停继续旋转且键盘和详�
   await expect.poll(() => memberMovement(page)).toBeGreaterThan(2);
   await member.hover({ force: true });
   await expect.poll(() => memberMovement(page)).toBeGreaterThan(2);
+  const label = page.locator(".team-member-label").filter({ hasText: "编剧" });
+  const labelBounds = (await label.boundingBox())!;
+  await page.mouse.click(
+    labelBounds.x + labelBounds.width / 2,
+    labelBounds.y + labelBounds.height / 2,
+  );
+  await expect(
+    page.getByRole("dialog", { name: "编剧", exact: true }),
+  ).toBeVisible();
+  await page.locator(".ant-modal-close").click();
+  await member.evaluate((node) => node.blur());
   expect(
     await member.evaluate((node) =>
       [
@@ -884,6 +991,15 @@ test("星轨展示真实协作、仅在新交付时汇聚、保留配色并可�
     )
     .toBe(true);
   await expect.poll(() => memberMovement(page)).toBeLessThan(1);
+  await expect
+    .poll(() => memberLabelState(page, false))
+    .toEqual({
+      allMembersLabelled: true,
+      crispScreenText: true,
+      labelsFollowDiscs: true,
+      labelsInsideViewport: true,
+      labelsPreserveClickTargets: true,
+    });
   await page.screenshot({
     path: ".local/team-orbit-20261109/mobile-members.png",
     fullPage: true,
@@ -972,13 +1088,12 @@ test("星轨展示真实协作、仅在新交付时汇聚、保留配色并可�
   await page.screenshot({ path: ".local/team-orbit-20261109/collecting.png" });
   for (const [label, tone, energyColor] of [
     ["紫色能量", "purple", "#9c88ff"],
-    ["金色能量", "gold", "#ffd277"],
     ["蓝色能量", "blue", "#73baff"],
   ]) {
     await page.getByRole("button", { name: "能量配色" }).click();
-    await expect(page.getByRole("menuitem", { name: /粉|玫瑰/ })).toHaveCount(
-      0,
-    );
+    await expect(
+      page.getByRole("menuitem", { name: /粉|玫瑰|金色/ }),
+    ).toHaveCount(0);
     await page.getByRole("menuitem", { name: label }).click();
     await expect(page.locator(".workspace-team-layer")).toHaveAttribute(
       "data-tone",
@@ -1077,6 +1192,7 @@ test("星轨展示真实协作、仅在新交付时汇聚、保留配色并可�
     page.getByRole("dialog", { name: "已验收活动文案" }),
   ).toContainText("第二版文案：按目标与素材形成的最终正文。");
   await page.locator(".ant-modal-close").click();
+  await page.evaluate(() => localStorage.setItem("xuti-team-energy:7", "gold"));
   await page.reload();
   await expect(page.locator(".workspace-ai-core-stage")).toHaveAttribute(
     "data-team-phase",

@@ -21,9 +21,6 @@
 .team-task-progress[data-tone="purple"] {
   --progress-accent: #9c88ff;
 }
-.team-task-progress[data-tone="gold"] {
-  --progress-accent: #ffd277;
-}
 .team-task-progress ol {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));

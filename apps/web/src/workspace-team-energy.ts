@@ -1,4 +1,5 @@
 import type { TeamEnergyTone } from "./workspace-team-state";
+import { createTeamLabelPainter } from "./workspace-team-labels";
 
 type Point = { x: number; y: number };
 const clamp = (v: number) => Math.max(0, Math.min(1, v));
@@ -34,8 +35,10 @@ export function paintTeamEnergy({
   orbitTime: { current: number };
   onCollected: () => void;
 }) {
+  const paintLabels = createTeamLabelPainter(layer);
   const ctx = canvas.getContext("2d");
   if (!ctx) {
+    paintLabels();
     if (collecting) onCollected();
     return () => {};
   }
@@ -46,7 +49,6 @@ export function paintTeamEnergy({
   const palette = {
     blue: { color: [115, 186, 255], white: [238, 248, 255] },
     purple: { color: [156, 136, 255], white: [244, 240, 255] },
-    gold: { color: [255, 210, 119], white: [255, 249, 233] },
   }[tone];
   const { color, white } = palette;
   let width = 0,
@@ -55,6 +57,7 @@ export function paintTeamEnergy({
     frame = 0,
     previous = 0,
     lastPaint = 0,
+    settleUntil = 0,
     visible = true,
     disposed = false,
     complete = false;
@@ -306,6 +309,7 @@ export function paintTeamEnergy({
   };
   function draw() {
     positionMembers();
+    paintLabels();
     const target = center(),
       small = width < 540;
     context.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -482,7 +486,8 @@ export function paintTeamEnergy({
       finish();
       return;
     }
-    if (collecting || active || moving) frame = requestAnimationFrame(tick);
+    if (collecting || active || moving || now < settleUntil)
+      frame = requestAnimationFrame(tick);
   };
   const schedule = () => {
     if (!frame && !disposed && !complete) frame = requestAnimationFrame(tick);
@@ -509,6 +514,12 @@ export function paintTeamEnergy({
     previous = 0;
     schedule();
   };
+  const viewChanged = () => {
+    settleUntil = performance.now() + 450;
+    schedule();
+  };
+  const viewEvents = ["resize", "xuti-workspace-view", "xuti-workspace-layout"];
+  viewEvents.forEach((event) => window.addEventListener(event, viewChanged));
   resize.observe(layer);
   intersection.observe(layer);
   motion.addEventListener("change", visibility);
@@ -532,6 +543,9 @@ export function paintTeamEnergy({
   schedule();
   return () => {
     disposed = true;
+    viewEvents.forEach((event) =>
+      window.removeEventListener(event, viewChanged),
+    );
     cancelAnimationFrame(frame);
     resize.disconnect();
     intersection.disconnect();

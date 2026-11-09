@@ -38,6 +38,7 @@ import {
 } from "./workspace-team-state";
 import { paintTeamEnergy } from "./workspace-team-energy";
 import { WorkspaceDockHalo } from "./workspace-dock-halo";
+import { WorkspaceTeamLabels } from "./workspace-team-labels";
 import { WorkspaceTeamExecution } from "./workspace-team-execution";
 import { WorkspaceTeamProgress } from "./workspace-team-progress";
 import type {
@@ -393,6 +394,12 @@ export function WorkspaceTeamOrbit({
     ?.querySelector(".personal-welcome");
   return (
     <>
+      <WorkspaceTeamLabels
+        host={host}
+        nodes={nodes.map((node) => ({ ...node, active: node.active && !error }))}
+        tone={tone}
+        hidden={covered || !visible || delivered}
+      />
       {progressHost &&
         createPortal(
           <WorkspaceTeamProgress run={run} stale={!!error} tone={tone} />,
@@ -421,6 +428,8 @@ export function WorkspaceTeamOrbit({
               type="button"
               key={node.id}
               className="team-orbit-node"
+              data-team-node-id={node.id}
+              data-screen-label={!!host}
               data-active={node.active && !error}
               data-source={
                 !!run &&
@@ -452,6 +461,7 @@ export function WorkspaceTeamOrbit({
               }
               onClick={() => setDetail(node)}
               aria-label={`查看团队成员：${node.name}`}
+              aria-description={node.label}
               title={`${node.name} · ${node.label}`}
             >
               <span className="team-orbit-disc workspace-dock-label">
@@ -484,7 +494,6 @@ export function WorkspaceTeamOrbit({
                     items: [
                       { key: "blue", label: "蓝色能量" },
                       { key: "purple", label: "紫色能量" },
-                      { key: "gold", label: "金色能量" },
                     ],
                     onClick: ({ key }) => chooseTone(key as TeamEnergyTone),
                   }}

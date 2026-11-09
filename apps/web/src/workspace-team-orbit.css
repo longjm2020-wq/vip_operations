@@ -13,11 +13,6 @@
   --team-energy: #9c88ff;
   --team-energy-soft: #7058e5;
 }
-.personal-workspace[data-world-mode]
-  .workspace-ai-core-stage[data-team-tone="gold"] {
-  --team-energy: #ffd277;
-  --team-energy-soft: #eaa33a;
-}
 .personal-workspace
   .workspace-ai-core-stage[data-team-active="true"]
   :is(.workspace-ai-orbit-slot, .workspace-dock-copy) {
@@ -158,6 +153,11 @@
   color: color-mix(in srgb, var(--app-accent) 72%, var(--dock-glint));
   font-size: 22px;
   margin-bottom: 1px;
+}
+.team-orbit-node[data-screen-label="true"]
+  .team-orbit-disc
+  > :is(.anticon, strong, small) {
+  visibility: hidden;
 }
 .team-orbit-node strong {
   flex-shrink: 0;
