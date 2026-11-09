@@ -2,16 +2,17 @@ import {SelectionWorkspace} from "./selection-workspace";
 import { BrandVideo } from "./brand-video";
 import { FloatingPanels } from "./floating-panels";
 import React, { useState } from "react";
-const CompassAnalyticsPage = React.lazy(() => import("./compass-analytics").then(module => ({ default: module.CompassAnalyticsPage })));
-const CompetitorAnalysisPage = React.lazy(() => import("./competitor-analysis").then(module => ({ default: module.CompetitorAnalysisPage })));
-const OperationsWorkspacePage = React.lazy(() => import("./operations-workspace").then(module => ({ default: module.OperationsWorkspacePage })));
-const PersonalWorkspacePage = React.lazy(() => import("./personal-workspace").then(module => ({ default: module.PersonalWorkspacePage })));
-const AigcPage = React.lazy(() => import("./aigc").then(module => ({ default: module.AigcPage })));
-const CompassAISettingsPage = React.lazy(() => import("./compass-ai-settings").then(module => ({ default: module.CompassAISettingsPage })));
-const PublicSelectionCollection = React.lazy(() => import("./selection-collections").then(module => ({ default: module.PublicSelectionCollection })));
-const PublicCompassReport = React.lazy(() => import("./public-compass-report").then(module => ({ default: module.PublicCompassReport })));
-const PublicCompetitorAnalysis = React.lazy(() => import("./public-competitor-analysis").then(module => ({ default: module.PublicCompetitorAnalysis })));
-const SelectionMobilePhotos = React.lazy(() => import("./selection-mobile-photos").then(module => ({ default: module.SelectionMobilePhotos })));
+import { lazyPage } from "./page-resource-loader";
+const CompassAnalyticsPage = lazyPage(() => import("./compass-analytics").then(module => ({ default: module.CompassAnalyticsPage })));
+const CompetitorAnalysisPage = lazyPage(() => import("./competitor-analysis").then(module => ({ default: module.CompetitorAnalysisPage })));
+const OperationsWorkspacePage = lazyPage(() => import("./operations-workspace").then(module => ({ default: module.OperationsWorkspacePage })));
+const PersonalWorkspacePage = lazyPage(() => import("./personal-workspace").then(module => ({ default: module.PersonalWorkspacePage })));
+const AigcPage = lazyPage(() => import("./aigc").then(module => ({ default: module.AigcPage })));
+const CompassAISettingsPage = lazyPage(() => import("./compass-ai-settings").then(module => ({ default: module.CompassAISettingsPage })));
+const PublicSelectionCollection = lazyPage(() => import("./selection-collections").then(module => ({ default: module.PublicSelectionCollection })));
+const PublicCompassReport = lazyPage(() => import("./public-compass-report").then(module => ({ default: module.PublicCompassReport })));
+const PublicCompetitorAnalysis = lazyPage(() => import("./public-competitor-analysis").then(module => ({ default: module.PublicCompetitorAnalysis })));
+const SelectionMobilePhotos = lazyPage(() => import("./selection-mobile-photos").then(module => ({ default: module.SelectionMobilePhotos })));
 import { createRoot } from "react-dom/client";
 import { QueryClientProvider, useQuery } from "@tanstack/react-query";
 import {
@@ -56,24 +57,25 @@ import { UserContext, Row } from "./shared";
 import { PageSearchContext } from "./page-search";
 import { AccountMenu } from "./account-menu";
 import { WorkspaceMenuIcon } from "./workspace-menu-icon";
-const ColorSizeMappings = React.lazy(() => import("./color-size-mappings").then(module => ({ default: module.ColorSizeMappings })));
-const ProductArchive = React.lazy(() => import("./product-archive").then(module => ({ default: module.ProductArchive })));
-const InventoryDetailsPage = React.lazy(() => import("./operations").then(module => ({ default: module.InventoryDetailsPage })));
-const ProductDetail = React.lazy(() => import("./operations").then(module => ({ default: module.ProductDetail })));
-const AccessPage = React.lazy(() => import("./system").then(module => ({ default: module.AccessPage })));
-const AuditPage = React.lazy(() => import("./system").then(module => ({ default: module.AuditPage })));
-const VipPage = React.lazy(() => import("./vip").then(module => ({ default: module.VipPage })));
-const ProjectTablesPage = React.lazy(()=>import("./project-tables").then(module=>({default:module.ProjectTablesPage})));
-const ProjectTablePage = React.lazy(()=>import("./project-tables").then(module=>({default:module.ProjectTablePage})));
-const StyleSelectionsPage = React.lazy(() => import("./style-selections").then(module => ({ default: module.StyleSelectionsPage })));
+import { ProjectNotifications } from "./project-notifications";
+import { PageResourceBoundary } from "./page-resource-boundary";
+const ColorSizeMappings = lazyPage(() => import("./color-size-mappings").then(module => ({ default: module.ColorSizeMappings })));
+const ProductArchive = lazyPage(() => import("./product-archive").then(module => ({ default: module.ProductArchive })));
+const InventoryDetailsPage = lazyPage(() => import("./operations").then(module => ({ default: module.InventoryDetailsPage })));
+const ProductDetail = lazyPage(() => import("./operations").then(module => ({ default: module.ProductDetail })));
+const AccessPage = lazyPage(() => import("./system").then(module => ({ default: module.AccessPage })));
+const AuditPage = lazyPage(() => import("./system").then(module => ({ default: module.AuditPage })));
+const VipPage = lazyPage(() => import("./vip").then(module => ({ default: module.VipPage })));
+const ProjectTablesPage = lazyPage(()=>import("./project-tables").then(module=>({default:module.ProjectTablesPage})));
+const ProjectTablePage = lazyPage(()=>import("./project-tables").then(module=>({default:module.ProjectTablePage})));
+const StyleSelectionsPage = lazyPage(() => import("./style-selections").then(module => ({ default: module.StyleSelectionsPage })));
 import { ManualPage, manualHref } from "./manual";
 import { PersonalAssistantProvider } from "./personal-assistant-provider";
 import { AssistantWebsiteOpening } from "./assistant-website-opening";
 import { WorkspaceCompanion } from "./workspace-companion";
-const SopPage = React.lazy(() => import("./projects").then(module => ({ default: module.SopPage })));
-const ProjectsPage = React.lazy(() => import("./projects").then(module => ({ default: module.ProjectsPage })));
-const ProjectDetailPage = React.lazy(() => import("./projects").then(module => ({ default: module.ProjectDetailPage })));
-const ProjectNotifications = React.lazy(() => import("./projects").then(module => ({ default: module.ProjectNotifications })));
+const SopPage = lazyPage(() => import("./projects").then(module => ({ default: module.SopPage })));
+const ProjectsPage = lazyPage(() => import("./projects").then(module => ({ default: module.ProjectsPage })));
+const ProjectDetailPage = lazyPage(() => import("./projects").then(module => ({ default: module.ProjectDetailPage })));
 import "./style.css";
 import "./workspace-shell.css";
 import { AppearanceProvider, ThemeToggle } from "./appearance";
@@ -420,6 +422,7 @@ function Workspace({ user }: { user: Row }) {
             </Space>
           </Layout.Header>
           {/* Commit the route marker with its content, after lazy routes resolve. */}
+          <PageResourceBoundary routeContent>
           <Layout.Content
             className={`content${collaborationTable ? " selection-workspace-content" : ""}`}
             data-voice-page-root="true"
@@ -479,6 +482,7 @@ function Workspace({ user }: { user: Row }) {
               XUTI
             </footer>}
           </Layout.Content>
+          </PageResourceBoundary>
         </Layout>
       </Layout>
       <WorkspaceCompanion />
@@ -493,13 +497,17 @@ function Root() {
   const me = useQuery({
     queryKey: ["me"],
     enabled: !publicCollection && !publicReport && !publicCompetitors,
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       try {
-        const r = await api("/auth/me");
+        const r = await api("/auth/me", "GET", undefined, undefined, { signal });
         setCsrf(r.data.csrfToken);
         return r.data;
-      } catch {
-        return null;
+      } catch (error) {
+        if ((error as { status?: number }).status === 401) {
+          setCsrf("");
+          return null;
+        }
+        throw error;
       }
     },
     retry: false,
@@ -512,6 +520,18 @@ function Root() {
     return (
       <div className="loading">
         <Spin size="large" />
+      </div>
+    );
+  if (me.isError && !me.data)
+    return (
+      <div className="loading" data-testid="session-loading-error">
+        <Alert
+          type="warning"
+          showIcon
+          title="暂时无法加载账号信息"
+          description={me.error.message}
+          action={<Button loading={me.isFetching} onClick={() => void me.refetch()}>重试加载</Button>}
+        />
       </div>
     );
   if (me.data && location.pathname === "/assistant/open-website") return <AssistantWebsiteOpening />;
@@ -532,7 +552,7 @@ function Root() {
   const accountId = !publicPage && me.data ? String(me.data.id) : null;
   const themePath = location.pathname.replace(/\/+$/, "").toLowerCase();
   // These sections stay dark without changing the saved preference used by operations pages.
-  const fixedDarkPage = (me.isLoading || !!accountId) && (
+  const fixedDarkPage = (me.isLoading || me.isError || !!accountId) && (
     ["/my-workspace", "/aigc", "/operations"].includes(themePath) ||
     ["/sops", "/projects", "/project-tables", "/users", "/roles", "/audit-logs", "/settings"].some(
       (root) => themePath === root || themePath.startsWith(`${root}/`),
@@ -544,7 +564,7 @@ createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
-        <React.Suspense fallback={<div className="loading"><Spin size="large" /></div>}><Root /></React.Suspense>
+        <PageResourceBoundary><Root /></PageResourceBoundary>
       </BrowserRouter>
     </QueryClientProvider>
   </React.StrictMode>,

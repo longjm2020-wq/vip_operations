@@ -585,6 +585,7 @@ export function CompetitorAnalysisPage({
               ...(selected.length ? { brandIds: selected.join(",") } : {}),
               ...(search ? { keyword: search } : {}),
             }),
+          "GET", undefined, undefined, { signal, readTimeoutMs: 60_000 },
         )
       ).data;
     },

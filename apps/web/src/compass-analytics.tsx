@@ -307,7 +307,7 @@ export function CompassAnalyticsPage() {
   const q = useQuery({
     enabled: !searchError,
     queryKey: [...queryScope, page, pageSize, sort, miniMetric],
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       api(
         "/analytics/compass?" +
           new URLSearchParams({
@@ -324,6 +324,7 @@ export function CompassAnalyticsPage() {
             sort,
             miniMetric,
           }),
+        "GET", undefined, undefined, { signal, readTimeoutMs: 60_000 },
       ),
     // Keep the dashboard mounted while sorting or paging so its scroll anchor survives.
     placeholderData: (previousData, previousQuery) =>
