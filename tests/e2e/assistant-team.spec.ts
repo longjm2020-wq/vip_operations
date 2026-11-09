@@ -440,18 +440,65 @@ test("星轨左侧执行详情跟随真实步骤，完成项可展开且中断�
   });
   await expect(current).toHaveAttribute("data-active", "true");
   await expect(rail).toHaveAttribute("data-compact", "false");
-  expect(
-    await rail.evaluate((panel) => {
-      const railBounds = panel.getBoundingClientRect();
-      const track = document
-        .querySelector(".team-orbit-track")!
-        .getBoundingClientRect();
-      const memberWidth = document
-        .querySelector(".team-orbit-node")!
-        .getBoundingClientRect().width;
-      return railBounds.right + 8 <= track.left - memberWidth / 2;
-    }),
-  ).toBe(true);
+  for (const width of [960, 1280, 1440, 1920]) {
+    await page.setViewportSize({ width, height: 900 });
+    await expect
+      .poll(
+        () =>
+          rail.evaluate((panel) => {
+            const stage = panel.closest(".workspace-ai-core-stage")!;
+            const stageBounds = stage.getBoundingClientRect();
+            const track = stage
+              .querySelector(".team-orbit-track")!
+              .getBoundingClientRect();
+            const halos = [
+              ...stage.querySelectorAll(
+                ".team-orbit-node .workspace-dock-halo",
+              ),
+            ].map((halo) => halo.getBoundingClientRect());
+            const halfWidth = Math.max(...halos.map((halo) => halo.width)) / 2;
+            const halfHeight =
+              Math.max(...halos.map((halo) => halo.height)) / 2;
+            // The whole orbit envelope must fit, not just members' current angles.
+            const envelope = {
+              left: track.left - halfWidth,
+              right: track.right + halfWidth,
+              top: track.top - halfHeight,
+              bottom: track.bottom + halfHeight,
+            };
+            const heading = stage
+              .querySelector(".team-orbit-heading")!
+              .getBoundingClientRect();
+            const caption = stage
+              .querySelector(".team-orbit-caption")!
+              .getBoundingClientRect();
+            const railBounds = panel.getBoundingClientRect();
+            return {
+              insideStageAndViewport:
+                envelope.left >= Math.max(0, stageBounds.left) &&
+                envelope.right <=
+                  Math.min(window.innerWidth, stageBounds.right),
+              belowHeading: envelope.top >= heading.bottom,
+              aboveCaption: envelope.bottom <= caption.top,
+              clearOfExecutionPanel:
+                panel.getAttribute("data-compact") === "true"
+                  ? envelope.bottom <= railBounds.top
+                  : envelope.left >= railBounds.right,
+            };
+          }),
+        {
+          message: `${width}px viewport keeps the full member orbit clear of the execution UI`,
+        },
+      )
+      .toEqual({
+        insideStageAndViewport: true,
+        belowHeading: true,
+        aboveCaption: true,
+        clearOfExecutionPanel: true,
+      });
+  }
+  await page.setViewportSize({ width: 1600, height: 1000 });
+  await expect(rail).toHaveAttribute("data-compact", "false");
 
   fixture.executionStage("design");
   await expect(

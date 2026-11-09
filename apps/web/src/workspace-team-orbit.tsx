@@ -36,6 +36,7 @@ import {
   type TeamEnergyTone,
 } from "./workspace-team-state";
 import { paintTeamEnergy } from "./workspace-team-energy";
+import { WorkspaceDockHalo } from "./workspace-dock-halo";
 import { WorkspaceTeamExecution } from "./workspace-team-execution";
 import type {
   TeamArtifact,
@@ -324,12 +325,11 @@ export function WorkspaceTeamOrbit({
               aria-label={`查看团队成员：${node.name}`}
               title={`${node.name} · ${node.label}`}
             >
-              <span className="team-orbit-disc">
-                <span className="team-orbit-node-ring" aria-hidden />
+              <span className="team-orbit-disc workspace-dock-label">
+                <WorkspaceDockHalo />
                 {node.icon}
                 <strong>{node.name}</strong>
                 <small>{node.label}</small>
-                <i aria-hidden />
               </span>
             </button>
           ))}

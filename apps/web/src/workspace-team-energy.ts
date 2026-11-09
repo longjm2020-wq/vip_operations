@@ -319,9 +319,12 @@ export function paintTeamEnergy({
       );
       members.forEach((node, i) => {
         const disc = node.querySelector<HTMLElement>(".team-orbit-disc");
+        const halo = node.querySelector<SVGSVGElement>(".workspace-dock-halo");
         energyRing(
           nodeCenter(node),
-          (disc?.offsetWidth || 90) / 2 + 5,
+          halo?.clientWidth
+            ? halo.clientWidth * 0.47 + 2
+            : (disc?.offsetWidth || 90) / 2 + 5,
           time,
           i + 1,
           node.dataset.active === "true",

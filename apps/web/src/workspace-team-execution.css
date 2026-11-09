@@ -4,7 +4,7 @@
   position: absolute;
   top: 88px;
   left: 17px;
-  width: min(260px, calc(50% - 285px));
+  width: min(260px, calc(50% - 328px));
   max-height: calc(100% - 150px);
   display: flex;
   flex-direction: column;
@@ -327,6 +327,15 @@
 @keyframes team-execution-blink {
   to {
     opacity: 0;
+  }
+}
+@media (min-width: 761px) {
+  .personal-workspace
+    .workspace-ai-core-stage[data-team-active="true"]:not(
+      [data-team-phase="delivered"]
+    ):has(.team-execution-rail[data-compact="true"]) {
+    --team-lift: 110px;
+    min-height: 940px;
   }
 }
 @media (prefers-reduced-motion: reduce) {
