@@ -1,6 +1,8 @@
 packages:
   - apps/*
   - packages/*
+overrides:
+  '@mastra/core>ws': 8.22.1
 allowBuilds:
   '@prisma/engines': true
   esbuild: true
