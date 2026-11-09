@@ -421,7 +421,14 @@ export function WorkspaceCompanion() {
     };
     const followAnchor = () => {
       anchorFrame = 0;
-      if (state.docked) alignNest();
+      if (state.docked) {
+        alignNest();
+        // Delivery lifts the nest using a short CSS transition. Follow that
+        // geometry until it settles, without turning idle anchoring into a loop.
+        if (nest?.closest(".workspace-ai-core")?.getAnimations().some(
+          (animation) => animation.playState === "running",
+        )) anchorFrame = requestAnimationFrame(followAnchor);
+      }
       else if (perch && !climbFrame && !drag) {
         const next = climbRestPosition(perch);
         if (next) position(next, false);
@@ -647,6 +654,7 @@ export function WorkspaceCompanion() {
               "inert",
               "aria-hidden",
               "data-scene-presence",
+              "data-team-phase",
             ],
           });
       }

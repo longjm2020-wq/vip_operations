@@ -77,7 +77,7 @@ const ProjectNotifications = React.lazy(() => import("./projects").then(module =
 import "./style.css";
 import "./workspace-shell.css";
 import { AppearanceProvider, ThemeToggle } from "./appearance";
-const coreFeatureSummary = "小序多智能体协作 · AI 模型管理与用量 · 实时语音目标执行与电脑操作 · 全息工作台 · 文档、图像与视频创作 · 经营分析 · 唯品会商品资料 · 聚水潭库存同步 · 协作表格 · AIGC";
+const coreFeatureSummary = "小序星轨团队协作与交付 · AI 模型管理与用量 · 实时语音目标执行与电脑操作 · 全息工作台 · 文档、图像与视频创作 · 经营分析 · 唯品会商品资料 · 聚水潭库存同步 · 协作表格 · AIGC";
 const useUi = create<{ collapsed: boolean; toggle: () => void }>((set) => ({
   collapsed: false,
   toggle: () => set((s) => ({ collapsed: !s.collapsed })),

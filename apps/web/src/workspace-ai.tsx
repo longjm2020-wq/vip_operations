@@ -5,6 +5,9 @@ import { canUsePersonalAssistant } from "../../../packages/contracts/src/persona
 import type { WorkspaceSchedule } from "../../../packages/contracts/src/personal-workspace";
 import "./workspace-ai.css";
 import { WorkspaceNestHandle } from "./workspace-nest-handle";
+import { useWorkspaceTeam } from "./use-workspace-team";
+import { WorkspaceTeamOrbit } from "./workspace-team-orbit";
+import { teamIsRunning } from "./workspace-team-state";
 
 // Fixed geometry keeps this decorative core independent of timers and model calls.
 const coreTicks = Array.from({ length: 60 }, (_, index) => index);
@@ -151,13 +154,16 @@ export function WorkspaceAI({
 }) {
   const user = useUser();
   const hub = useAssistantHub();
+  const team = useWorkspaceTeam();
   if (!canUsePersonalAssistant({ permissions: user.permissions })) return null;
   const backgroundTaskRunning = hub.feed?.items?.some(
     (item) => item.kind === "task" && item.status === "running",
   );
   const state =
     hub.voiceState ||
-    (hub.busy || backgroundTaskRunning
+    (hub.busy ||
+    backgroundTaskRunning ||
+    (team.visible && team.run && teamIsRunning(team.run.status))
       ? "working"
       : hub.conversation?.ready
         ? "idle"
@@ -169,13 +175,27 @@ export function WorkspaceAI({
       aria-label="小序智能工作区"
     >
       <div className="workspace-ai-start">
-        <div className="workspace-ai-core-stage" inert={sceneCovered}>
+        <div
+          className="workspace-ai-core-stage"
+          inert={sceneCovered}
+          data-team-active={team.visible}
+        >
           <div className="workspace-world-camera">
             <div className="workspace-world-plane">
               <AssistantCore
                 branchLayout={branchLayout}
                 onToggleBranches={onToggleBranches}
               />
+              {team.visible && (
+                <WorkspaceTeamOrbit
+                  key={team.id}
+                  run={team.run}
+                  error={team.error}
+                  covered={sceneCovered}
+                  dismiss={team.dismiss}
+                  retry={team.retry}
+                />
+              )}
               <div className="workspace-ai-orbit-slot" />
             </div>
           </div>

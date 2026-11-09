@@ -9,6 +9,7 @@ export type AssistantHubState = {
   allowed: boolean;
   conversation?: AssistantConversation;
   busy: boolean;
+  selectedTeamRunId?: string;
   voiceState?: Exclude<VoiceState, "idle">;
   gptVoice: Omit<ReturnType<typeof useGptVoice>, "play"> & {
     play: () => void;

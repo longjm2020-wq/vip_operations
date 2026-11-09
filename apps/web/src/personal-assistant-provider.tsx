@@ -66,6 +66,7 @@ import type { RealtimeStatus } from "../../../packages/contracts/src/assistant-r
 import { useGptSpeech } from "./use-gpt-speech";
 import type { AssistantVoiceStatus } from "../../../packages/contracts/src/assistant-voice";
 import { workspaceHologramEvent } from "./workspace-hologram";
+import { workspaceTeamEvent } from "./workspace-team-navigation";
 import { AssistantDesktopPanel } from "./assistant-desktop-panel";
 import {
   AssistantTeamPanel,
@@ -350,6 +351,18 @@ export function PersonalAssistantProvider({
     realtimeVoice.active ||
     (!legacyVoice.active && !!realtimeStatus.data?.enabled);
   const gptVoice = useRealtime ? realtimeVoice : legacyVoice;
+  useEffect(() => {
+    const showTeam = () => {
+      playbackAllowed.current = false;
+      setOpen(false);
+      setVoiceVisible(false);
+      voice.stopListening();
+      speech.stop();
+      gptVoice.stop();
+    };
+    window.addEventListener(workspaceTeamEvent, showTeam);
+    return () => window.removeEventListener(workspaceTeamEvent, showTeam);
+  }, [voice.stopListening, speech.stop, gptVoice.stop]);
   const voiceExecutionLabel =
     useRealtime && desktopDeviceId
       ? `电脑操作 · ${desktop.data?.devices?.find((device) => device.id === desktopDeviceId)?.name || "所选电脑"}`
@@ -423,7 +436,8 @@ export function PersonalAssistantProvider({
     const requestId = crypto.randomUUID();
     if (teamMode) {
       setSection("chat");
-      setOpen(true);
+      // A task submitted from the workspace composer stays in its live scene.
+      setOpen(open || location.pathname !== "/my-workspace");
       setSending(true);
       setTeamSubmitError("");
       voice.stop();
@@ -893,6 +907,7 @@ export function PersonalAssistantProvider({
         allowed,
         conversation: data,
         busy,
+        selectedTeamRunId,
         gptVoice,
         voiceStatus: activeVoiceStatus,
         voiceStatusError:
@@ -996,6 +1011,7 @@ export function PersonalAssistantProvider({
                       await api("/my-workspace/assistant/clear", "POST", {
                         version: data?.version || 0,
                       });
+                      setSelectedTeamRunId(undefined);
                       await q.refetch();
                       setError("");
                     } catch (e) {

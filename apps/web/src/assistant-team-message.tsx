@@ -6,8 +6,11 @@ import { useUser } from "./shared";
 import { AgentFileLink } from "./assistant-agent-panel";
 import { ArtifactCard, teamActive, teamRunsKey } from "./assistant-team-panel";
 import type { TeamRun } from "../../../packages/contracts/src/assistant-team";
+import { useNavigate } from "react-router-dom";
+import { showWorkspaceTeam } from "./workspace-team-navigation";
 
 export function AssistantTeamMessage({ id }: { id: string }) {
+  const navigate = useNavigate();
   const user = useUser(),
     client = useQueryClient(),
     { message } = App.useApp();
@@ -89,6 +92,16 @@ export function AssistantTeamMessage({ id }: { id: string }) {
       {value && (
         <>
           <p role="status">{value.stage}</p>
+          <Button
+            size="small"
+            type="text"
+            onClick={() => {
+              showWorkspaceTeam(id);
+              navigate("/my-workspace");
+            }}
+          >
+            在星轨中查看
+          </Button>
           {teamActive(value.status) && (
             <Button
               size="small"

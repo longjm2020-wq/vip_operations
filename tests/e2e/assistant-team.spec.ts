@@ -324,8 +324,182 @@ async function setup(
     complete: () => {
       completed = true;
     },
+    interrupt: (status: "FAILED" | "CANCELED" | "NEEDS_USER") => {
+      if (run)
+        run = {
+          ...run,
+          status,
+          stage: "需要核对任务结果",
+          error: status === "FAILED" ? "执行服务暂时不可用" : "",
+        };
+    },
   };
 }
+
+async function submitInWorkspace(page: Page) {
+  await page.goto("/my-workspace");
+  await page.getByRole("button", { name: "选择对话模型" }).click();
+  await page.getByRole("menuitem", { name: /智能体团队/ }).click();
+  await page
+    .locator(".assistant-compose textarea")
+    .fill("根据商品资料制作秋冬针织上新方案");
+  await page.getByRole("button", { name: "提交团队任务" }).click();
+  await expect(page.locator(".workspace-team-layer")).toHaveAttribute(
+    "data-status",
+    "RUNNING",
+  );
+}
+
+test("星轨展示真实协作、仅在新交付时汇聚、保留配色并可打开成果", async ({
+  page,
+}) => {
+  const fixture = await setup(page);
+  await submitInWorkspace(page);
+  await expect(page.getByRole("dialog", { name: /AI 个人助理/ })).toBeHidden();
+  await expect(page.locator(".team-orbit-node")).toHaveCount(6);
+  await expect(
+    page.getByRole("button", { name: "查看团队成员：编剧" }),
+  ).toContainText("正在执行");
+  await expect(
+    page.getByRole("button", { name: "查看团队成员：设计师" }),
+  ).toContainText("未分配步骤");
+  fixture.complete();
+  await expect(page.locator(".workspace-team-layer")).toHaveAttribute(
+    "data-collecting",
+    "true",
+    { timeout: 10000 },
+  );
+  await expect
+    .poll(async () =>
+      Number(
+        await page
+          .locator(".team-energy-canvas")
+          .getAttribute("data-energy-time"),
+      ),
+    )
+    .toBeGreaterThan(1.1);
+  await page.screenshot({ path: ".local/team-orbit-20261109/collecting.png" });
+  await page.getByRole("button", { name: "能量配色" }).click();
+  await page.getByRole("menuitem", { name: "冰蓝能量" }).click();
+  await expect(page.locator(".workspace-team-layer")).toHaveAttribute(
+    "data-tone",
+    "ice",
+  );
+  await expect(
+    page.getByRole("button", { name: "查看交付：已验收活动文案" }),
+  ).toBeVisible({ timeout: 12000 });
+  await expect(page.locator(".workspace-team-layer")).toHaveAttribute(
+    "data-collecting",
+    "false",
+  );
+  await page.locator(".team-orbit-deliveries").evaluate(async (el) => {
+    await Promise.all(
+      el.getAnimations().map((animation) => animation.finished),
+    );
+  });
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const slot = document
+          .querySelector(".workspace-ai-companion-slot")!
+          .getBoundingClientRect();
+        const pet = document
+          .querySelector('.workspace-companion[data-docked="true"]')
+          ?.getBoundingClientRect();
+        return pet
+          ? Math.abs(pet.top - slot.top) + Math.abs(pet.left - slot.left)
+          : 999;
+      }),
+    )
+    .toBeLessThan(2);
+  await page.screenshot({ path: ".local/team-orbit-20261109/delivered.png" });
+  await page.getByRole("button", { name: "查看交付：已验收活动文案" }).click();
+  await expect(
+    page.getByRole("dialog", { name: "已验收活动文案" }),
+  ).toContainText("第二版文案：按目标与素材形成的最终正文。");
+  await page.locator(".ant-modal-close").click();
+  await page.reload();
+  await expect(page.locator(".workspace-ai-core-stage")).toHaveAttribute(
+    "data-team-phase",
+    "delivered",
+  );
+  await expect(page.locator(".workspace-team-layer")).toHaveAttribute(
+    "data-tone",
+    "ice",
+  );
+  await expect(page.locator(".workspace-team-layer")).toHaveAttribute(
+    "data-collecting",
+    "false",
+  );
+  await page.getByRole("button", { name: "返回工作台", exact: true }).click();
+  await expect(page.locator(".workspace-team-layer")).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "打开日程", exact: true }),
+  ).toBeVisible();
+  await openPersonalAssistant(page);
+  await page.getByRole("button", { name: "在星轨中查看", exact: true }).click();
+  await expect(page.locator(".workspace-ai-core-stage")).toHaveAttribute(
+    "data-team-phase",
+    "delivered",
+  );
+  await expect(page.getByRole("dialog", { name: /AI 个人助理/ })).toBeHidden();
+  expect(fixture.submissions).toHaveLength(1);
+});
+
+test("手机星轨尊重减少动态效果，DeerFlow 不伪造成员与独立验收", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  const fixture = await setup(page, { deerflow: true });
+  await submitInWorkspace(page);
+  await expect(page.locator(".team-orbit-node")).toHaveCount(1);
+  await expect(page.locator(".team-orbit-node")).toContainText("DeerFlow");
+  fixture.complete();
+  await expect(page.locator(".team-orbit-deliveries")).toContainText(
+    "待独立验收",
+    { timeout: 10000 },
+  );
+  await expect(page.locator(".workspace-team-layer")).toHaveAttribute(
+    "data-collecting",
+    "false",
+  );
+  await page.screenshot({
+    path: ".local/team-orbit-20261109/mobile.png",
+    fullPage: true,
+  });
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    ),
+  ).toBe(true);
+  await page.getByRole("button", { name: "查看交付：活动文案交付" }).click();
+  await expect(
+    page.getByRole("dialog", { name: "活动文案交付" }),
+  ).toContainText("待验收");
+});
+
+test("星轨遇到执行失败不播放成功动效", async ({ page }) => {
+  const fixture = await setup(page);
+  await submitInWorkspace(page);
+  fixture.interrupt("FAILED");
+  await expect(page.locator(".workspace-team-layer")).toHaveAttribute(
+    "data-status",
+    "FAILED",
+    { timeout: 10000 },
+  );
+  await expect(page.locator(".workspace-team-layer")).toHaveAttribute(
+    "data-collecting",
+    "false",
+  );
+  await expect(page.locator(".team-orbit-deliveries")).toHaveCount(0);
+  await expect(
+    page.getByText("执行服务暂时不可用", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.locator('.team-orbit-node[data-active="true"]'),
+  ).toHaveCount(0);
+});
 
 async function openTeam(page: Page) {
   await page.goto("/my-workspace");
