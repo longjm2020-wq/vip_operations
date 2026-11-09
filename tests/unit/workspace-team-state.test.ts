@@ -3,14 +3,14 @@ import {
   defaultTeamSettings,
   type TeamArtifact,
   type TeamRun,
-} from "../../packages/contracts/src/assistant-team";
+} from "../../packages/contracts/src/assistant-team.js";
 import {
   hasTeamDelivery,
   shouldCollectTeamEnergy,
   teamMemberActivity,
   teamSceneArtifacts,
   teamSceneMembers,
-} from "../../apps/web/src/workspace-team-state";
+} from "../../apps/web/src/workspace-team-state.js";
 
 const base = (): TeamRun => ({
   id: "run",

@@ -297,10 +297,10 @@ export function WorkspaceTeamOrbit({
               <span className="team-orbit-disc">
                 <span className="team-orbit-node-ring" aria-hidden />
                 {node.icon}
+                <strong>{node.name}</strong>
+                <small>{node.label}</small>
                 <i aria-hidden />
               </span>
-              <strong>{node.name}</strong>
-              <small>{node.label}</small>
             </button>
           ))}
         </div>

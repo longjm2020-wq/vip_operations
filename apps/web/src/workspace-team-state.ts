@@ -2,7 +2,7 @@ import type {
   TeamArtifact,
   TeamMember,
   TeamRun,
-} from "../../../packages/contracts/src/assistant-team";
+} from "../../../packages/contracts/src/assistant-team.js";
 
 export type TeamEnergyTone = "rose" | "ice";
 export const teamIsRunning = (status: TeamRun["status"]) =>

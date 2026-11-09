@@ -363,6 +363,23 @@ test("星轨展示真实协作、仅在新交付时汇聚、保留配色并可�
   await expect(
     page.getByRole("button", { name: "查看团队成员：设计师" }),
   ).toContainText("未分配步骤");
+  const desktopViewport = page.viewportSize()!;
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect
+    .poll(() =>
+      page.locator(".team-orbit-node").evaluateAll((nodes) =>
+        nodes.every((node) => {
+          const bounds = node.getBoundingClientRect();
+          return bounds.left >= 0 && bounds.right <= window.innerWidth;
+        }),
+      ),
+    )
+    .toBe(true);
+  await page.screenshot({
+    path: ".local/team-orbit-20261109/mobile-members.png",
+    fullPage: true,
+  });
+  await page.setViewportSize(desktopViewport);
   fixture.complete();
   await expect(page.locator(".workspace-team-layer")).toHaveAttribute(
     "data-collecting",

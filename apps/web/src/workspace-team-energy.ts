@@ -10,17 +10,6 @@ const random = (n: number) => {
   const v = Math.sin(n * 127.1 + 311.7) * 43758.5453;
   return v - Math.floor(v);
 };
-const textures = new Map<TeamEnergyTone, HTMLImageElement>();
-function textureFor(tone: TeamEnergyTone) {
-  let image = textures.get(tone);
-  if (!image) {
-    image = new Image();
-    image.src = `/team-orbit/energy-${tone}.webp`;
-    textures.set(tone, image);
-  }
-  return image;
-}
-
 /** Visual time only; it never changes or estimates the server's task progress. */
 export function paintTeamEnergy({
   canvas,
@@ -46,8 +35,8 @@ export function paintTeamEnergy({
   }
   const context = ctx;
   const motion = matchMedia("(prefers-reduced-motion: reduce)");
-  const image = collecting ? textureFor(tone) : null;
-  const color = tone === "rose" ? [244, 147, 218] : [140, 217, 246];
+  const color = tone === "rose" ? [255, 128, 211] : [140, 217, 246];
+  const white = tone === "rose" ? [255, 243, 253] : [233, 252, 255];
   let width = 0,
     height = 0,
     dpr = 1,
@@ -65,7 +54,8 @@ export function paintTeamEnergy({
   );
   const core =
     layer.parentElement?.querySelector<HTMLElement>(".workspace-ai-core");
-  const ink = (a: number) => `rgba(${color.join(",")},${clamp(a)})`;
+  const ink = (a: number, hot = false) =>
+    `rgba(${(hot ? white : color).join(",")},${clamp(a)})`;
   const center = (): Point => ({
     x: core?.offsetLeft ?? width / 2,
     y: core?.offsetTop ?? height / 2,
@@ -91,14 +81,71 @@ export function paintTeamEnergy({
       radius * 2,
     );
   };
-  const path = (source: Point, target: Point, p: number): Point => {
+  const path = (source: Point, target: Point, p: number, seed = 0): Point => {
     const dx = source.x - target.x,
-      dy = source.y - target.y,
-      bend = Math.sin(p * Math.PI) * 0.25;
+      dy = (source.y - target.y) / 0.88,
+      angle =
+        Math.atan2(dy, dx) + p * 1.75 + Math.sin(p * Math.PI) * seed * 0.1,
+      radius = Math.hypot(dx, dy) * Math.pow(1 - clamp(p), 1.06);
     return {
-      x: target.x + dx * (1 - p) - dy * bend,
-      y: target.y + dy * (1 - p) + dx * bend,
+      x: target.x + Math.cos(angle) * radius,
+      y: target.y + Math.sin(angle) * radius * 0.88,
     };
+  };
+  const dot = (point: Point, radius: number, alpha: number) => {
+    context.beginPath();
+    context.arc(point.x, point.y, radius, 0, Math.PI * 2);
+    context.fillStyle = ink(alpha, true);
+    context.fill();
+  };
+  // Fine, curved filaments and small needle sparks follow the selected reference.
+  // Everything is drawn at the display resolution; no smoke or video texture.
+  const sparkCluster = (
+    source: Point,
+    target: Point,
+    i: number,
+    time: number,
+    small: boolean,
+  ) => {
+    const p = (time - i * 0.095) / 3.35;
+    if (p <= 0 || p >= 1) return;
+    const head = path(source, target, p),
+      prev = path(source, target, clamp(p - 0.012)),
+      angle = Math.atan2(head.y - prev.y, head.x - prev.x),
+      life = smooth(p / 0.09) * (1 - smooth((p - 0.85) / 0.15));
+    context.save();
+    context.translate(head.x, head.y);
+    context.rotate(angle);
+    if (small) context.scale(0.75, 0.75);
+    const glint = context.createRadialGradient(0, 0, 0, 0, 0, 22);
+    glint.addColorStop(0, ink(life * 0.65, true));
+    glint.addColorStop(0.12, ink(life * 0.52, true));
+    glint.addColorStop(0.38, ink(life * 0.27));
+    glint.addColorStop(1, ink(0));
+    context.fillStyle = glint;
+    context.fillRect(-22, -22, 44, 44);
+    for (let k = 0; k < (small ? 16 : 23); k++) {
+      const s = Math.sin((k + 1) * 12.17 + i * 6.91),
+        v = Math.cos((k + 1) * 7.61 + i * 9.21),
+        age = (time * (0.58 + (s + 1) * 0.17) + k * 0.167) % 1,
+        spread = (1 - age) * (6 + Math.abs(v) * 15),
+        x = -age * (13 + Math.abs(s) * 38),
+        y = v * spread + Math.sin(age * 6 + i) * 2,
+        endX = x + (1 - age) * (3 + Math.abs(v) * 12),
+        endY = y + s * (1 - age) * (4 + Math.abs(s) * 10);
+      const tint = context.createLinearGradient(x - 8, y, endX, endY);
+      tint.addColorStop(0, ink(life * 0.025));
+      tint.addColorStop(0.45, ink(life * 0.35));
+      tint.addColorStop(1, ink((0.4 + 0.45 * (1 - age)) * life, true));
+      context.beginPath();
+      context.moveTo(x - 7, y - s * 3);
+      context.quadraticCurveTo(x, y, endX, endY);
+      context.strokeStyle = tint;
+      context.lineWidth = 0.55 + (1 - age) * 0.55;
+      context.stroke();
+      if (k % 6 === 0) dot({ x: endX, y: endY }, 0.85, life * 0.8);
+    }
+    context.restore();
   };
   function draw(now: number) {
     const target = center(),
@@ -112,7 +159,7 @@ export function paintTeamEnergy({
       const envelope = smooth(time / 1.2) * (1 - smooth((time - 3.9) / 1.4));
       context.save();
       context.globalCompositeOperation = "lighter";
-      glow(target, small ? 150 : 240, envelope * 0.18);
+      glow(target, small ? 130 : 200, envelope * 0.1);
       context.restore();
     }
     sources.forEach((node, i) => {
@@ -145,70 +192,49 @@ export function paintTeamEnergy({
         }
         return;
       }
-      const p = (time - i * 0.13) / 3.05;
-      if (p <= 0 || p >= 1) return;
-      const q = smooth(p),
-        point = path(source, target, q),
-        before = path(source, target, Math.max(0, q - 0.008));
-      const angle =
-        Math.atan2(point.y - before.y, point.x - before.x) + Math.PI;
-      const alpha = Math.pow(Math.sin(p * Math.PI), 0.75),
-        scale = (small ? 0.25 : 0.46) * (0.48 + 0.53 * Math.sin(p * Math.PI));
       context.save();
       context.globalCompositeOperation = "lighter";
-      context.globalAlpha = alpha;
-      glow(point, small ? 34 : 51, 0.23);
-      if (image?.complete && image.naturalWidth) {
-        const cell = (Math.floor(time * 18) + i * 3) % 16;
-        context.save();
-        context.translate(point.x, point.y);
-        context.rotate(angle);
-        context.scale(scale, scale);
-        context.drawImage(
-          image,
-          (cell % 4) * 512,
-          Math.floor(cell / 4) * 224,
-          512,
-          224,
-          -74,
-          -108,
-          512,
-          224,
-        );
-        context.restore();
-      } else {
-        // Loading/unsupported image decoding still has a soft, inexpensive fallback.
-        glow(point, 14, 0.8);
-        for (let k = 0; k < 18; k++) {
-          const a = random(i * 23 + k) * Math.PI * 2,
-            len = 3 + random(k + 18) * 12;
-          context.strokeStyle = k % 3 ? ink(0.6) : "rgba(255,248,255,.9)";
-          context.lineWidth = 0.7;
-          context.beginPath();
-          context.moveTo(point.x, point.y);
-          context.lineTo(
-            point.x + Math.cos(a) * len,
-            point.y + Math.sin(a) * len,
-          );
-          context.stroke();
-        }
-      }
-      for (let k = 0; k < 13; k++) {
-        const point2 = path(
-            source,
-            target,
-            clamp(q - random(i * 23 + k) * 0.15),
-          ),
-          spread = (1 - p) * 8;
-        const x = point2.x + (random(k + i) - 0.5) * spread,
-          y = point2.y + (random(k + 19) - 0.5) * spread;
-        context.strokeStyle = ink(0.2 + random(k + 31) * 0.5);
-        context.lineWidth = 0.6;
+      const envelope = smooth(time / 0.5) * (1 - smooth((time - 3.25) / 0.7));
+      // A few translucent threads form a ribbon, with clear space between them.
+      for (let strand = 0; strand < 3; strand++) {
         context.beginPath();
-        context.moveTo(x, y);
-        context.lineTo(x + Math.cos(angle) * 3, y + Math.sin(angle) * 3);
+        for (let k = 0; k <= 48; k++) {
+          const point = path(source, target, k / 48, (strand - 1) * 1.4);
+          if (!k) context.moveTo(point.x, point.y);
+          else context.lineTo(point.x, point.y);
+        }
+        context.strokeStyle = ink(envelope * (strand === 1 ? 0.11 : 0.045));
+        context.lineWidth = strand === 1 ? 0.75 : 0.55;
         context.stroke();
       }
+      const count = small ? 14 : 20;
+      for (let k = 0; k < count; k++) {
+        const seed = Math.sin((i + 1) * 17.9 + (k + 1) * 3.72),
+          delay = (k / count) * 1.15 + i * 0.045,
+          travel = 3.7 * (0.56 + (seed + 1) * 0.05),
+          p = (time - delay) / travel;
+        if (p <= 0 || p >= 1) continue;
+        const alpha = smooth(p / 0.08) * (1 - smooth((p - 0.88) / 0.12)) * 0.82,
+          tail = 0.055 + Math.abs(seed) * 0.024;
+        for (let segment = 0; segment < 5; segment++) {
+          const s = segment / 5,
+            a = path(source, target, clamp(p - tail * (1 - s)), seed),
+            b = path(
+              source,
+              target,
+              clamp(p - tail * (1 - (segment + 1) / 5)),
+              seed,
+            );
+          context.beginPath();
+          context.moveTo(a.x, a.y);
+          context.lineTo(b.x, b.y);
+          context.strokeStyle = ink(alpha * (0.1 + 0.52 * s), segment > 3);
+          context.lineWidth = 0.7 + (seed + 1) * 0.22;
+          context.stroke();
+        }
+        dot(path(source, target, p, seed), 0.75 + (seed + 1) * 0.26, alpha);
+      }
+      sparkCluster(source, target, i, time, small);
       context.restore();
     });
     if (collecting) {
@@ -217,7 +243,7 @@ export function paintTeamEnergy({
       if (seal > 0) {
         context.save();
         context.globalCompositeOperation = "lighter";
-        glow(target, small ? 100 : 174, seal * 0.22);
+        glow(target, small ? 100 : 174, seal * 0.13);
         const r =
           (small ? 73 : 123) +
           smooth((time - 3.55) / 1.65) * (small ? 55 : 100);
@@ -304,8 +330,6 @@ export function paintTeamEnergy({
   intersection.observe(layer);
   motion.addEventListener("change", visibility);
   document.addEventListener("visibilitychange", visibility);
-  image?.addEventListener("load", schedule);
-  image?.addEventListener("error", schedule);
   schedule();
   return () => {
     disposed = true;
@@ -314,7 +338,5 @@ export function paintTeamEnergy({
     intersection.disconnect();
     motion.removeEventListener("change", visibility);
     document.removeEventListener("visibilitychange", visibility);
-    image?.removeEventListener("load", schedule);
-    image?.removeEventListener("error", schedule);
   };
 }
