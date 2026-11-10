@@ -9,7 +9,7 @@
 }
 .workspace-future .sidebar {
   background: var(--app-bg) !important;
-  border-right: 1px solid var(--app-border);
+  border-right: 1px solid var(--app-shell-border);
 }
 .workspace-future .brand {
   height: 100px;
@@ -47,7 +47,7 @@
   flex-wrap: nowrap;
   padding: 0 32px;
   background: var(--app-header);
-  border-color: var(--app-border);
+  border-color: var(--app-shell-border);
   backdrop-filter: blur(16px);
 }
 .workspace-future .workspace-title {

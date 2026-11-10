@@ -553,12 +553,13 @@ function Root() {
   const themePath = location.pathname.replace(/\/+$/, "").toLowerCase();
   // Editing and inventory workspaces share the reference light palette.
   const fixedLightPage = (me.isLoading || me.isError || !!accountId) &&
-    ["/sops", "/projects", "/project-tables", "/products", "/style-selections", "/operations/vip/inventory"].some(
-      (root) => themePath === root || themePath.startsWith(`${root}/`),
-    );
+    (["/sops", "/projects", "/project-tables"].some((root) => themePath.startsWith(`${root}/`)) ||
+      ["/products", "/style-selections", "/operations/vip/inventory"].some(
+        (root) => themePath === root || themePath.startsWith(`${root}/`),
+      ));
   // Immersive and system sections keep their existing dark presentation.
   const fixedDarkPage = (me.isLoading || me.isError || !!accountId) && (
-    ["/my-workspace", "/aigc", "/operations"].includes(themePath) ||
+    ["/my-workspace", "/aigc", "/operations", "/sops", "/projects", "/project-tables"].includes(themePath) ||
     ["/users", "/roles", "/audit-logs", "/settings"].some(
       (root) => themePath === root || themePath.startsWith(`${root}/`),
     )

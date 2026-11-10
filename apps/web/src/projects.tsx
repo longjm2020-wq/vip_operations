@@ -29,6 +29,7 @@ import {
 } from "antd";
 import { CommentOutlined, PlusOutlined } from "@ant-design/icons";
 import { api, queryClient } from "./api";
+import { useLightWorkspace } from "./appearance";
 import { Header, Row, useCan, useUser, when, personLabel } from "./shared";
 import { Sheet } from "./sheet";
 import { SheetColumn, resolveCell, validateSheet } from "./sheet-data";
@@ -499,6 +500,7 @@ export function SopPage() {
     [edit, setEdit] = useState<Row | null>(null),
     [settingsOpen, setSettingsOpen] = useState(false),
     [busy, setBusy] = useState(false);
+  useLightWorkspace(!!view || !!edit);
   const opened=useRef<string>("");
   useEffect(()=>{const value=params.get("open") || "",selected=(list.data||[]).find((s:Row)=>String(s.id)===value);if(selected&&opened.current!==value){setView(selected);opened.current=value;}},[list.data,params]);
   useEffect(()=>{
@@ -800,6 +802,7 @@ function ProjectEditor({
   onClose: () => void;
   onSaved: (r: Row) => void;
 }) {
+  useLightWorkspace();
   const user = useUser(),
     { message } = App.useApp();
   const [value, setValue] = useState<Row>(() =>

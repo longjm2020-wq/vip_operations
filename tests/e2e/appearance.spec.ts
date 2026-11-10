@@ -233,6 +233,10 @@ test("一级入口固定暗色不改账号偏好，详情恢复亮色且跨页�
   ).toBeVisible();
   await mode(page, "dark");
   await expect(page.getByText("专属 AI 工具")).toHaveCount(0);
+  await page.screenshot({
+    path: test.info().outputPath("soft-dark-workspace-dividers.png"),
+    animations: "disabled",
+  });
   await expect(page.getByLabel("经营分析任务")).toHaveCount(0);
   for (const path of [
     "/aigc/?view=studio#top",
@@ -307,7 +311,7 @@ test("一级入口固定暗色不改账号偏好，详情恢复亮色且跨页�
   await expect(draft).toHaveValue("主题变化后继续编辑的草稿");
   expect(await instance!.evaluate((element) => element.isConnected)).toBe(true);
 });
-test("项目协作及库存使用参考浅色配色，系统设置保持暗色且不改账号偏好", async ({
+test("协作入口暗色、编辑区浅色，切换保留草稿和账号主题偏好", async ({
   page,
   context,
 }) => {
@@ -368,24 +372,33 @@ test("项目协作及库存使用参考浅色配色，系统设置保持暗色�
   await page.addInitScript(() =>
     localStorage.setItem("xuti:appearance:1", "dark"),
   );
-  for (const path of [
-    "/sops/?source=theme#top",
-    "/projects",
-    "/projects/theme-project",
-    "/project-tables",
-    "/project-tables/theme-table",
-    "/operations/vip/inventory",
-  ]) {
+  for (const [path, expectedMode] of [
+    ["/sops/?source=theme#top", "dark"],
+    ["/projects", "dark"],
+    ["/projects/theme-project", "light"],
+    ["/project-tables", "dark"],
+    ["/project-tables/theme-table", "light"],
+    ["/operations/vip/inventory", "light"],
+  ] as const) {
     await page.goto(path);
     await expect(page.locator(".sidebar")).toBeVisible({ timeout: 15_000 });
-    await mode(page, "light");
+    await mode(page, expectedMode);
     await expect(page.locator("body")).toHaveCSS(
       "background-color",
-      "rgb(247, 248, 252)",
+      expectedMode === "light" ? "rgb(247, 248, 252)" : "rgb(11, 12, 15)",
     );
     await expect(
       page.getByRole("button", { name: /切换为.*色主题/ }),
     ).toHaveCount(0);
+    if (path.startsWith("/sops")) {
+      await expect(
+        page.getByRole("heading", { name: "新建SOP", exact: true }),
+      ).toBeVisible();
+      await page.screenshot({
+        path: test.info().outputPath("dark-sop-home.png"),
+        animations: "disabled",
+      });
+    }
     if (path === "/operations/vip/inventory") {
       await expect(
         page.locator(".inventory-summary-table tr[data-row-key]"),
@@ -411,11 +424,13 @@ test("项目协作及库存使用参考浅色配色，系统设置保持暗色�
   await expect(dialog).toBeVisible();
   await expect(dialog.locator(".ant-modal-container")).toHaveCSS(
     "background-color",
-    "rgb(255, 255, 255)",
+    "rgb(41, 44, 53)",
   );
   await dialog.getByRole("button", { name: "关闭", exact: true }).click();
   await page.goto("/sops");
+  await mode(page, "dark");
   await page.getByRole("button", { name: /新建 SOP$/ }).click();
+  await mode(page, "light");
   await expect(page.locator(".project-canvas")).toBeInViewport({ ratio: 0.9 });
   await expect(page.locator(".project-canvas")).toHaveCSS(
     "background-color",
@@ -425,6 +440,34 @@ test("项目协作及库存使用参考浅色配色，系统设置保持暗色�
     path: test.info().outputPath("neutral-sop.png"),
     animations: "disabled",
   });
+  const sop = page.getByRole("dialog", { name: "新建 SOP", exact: true });
+  await sop.getByRole("button", { name: "编辑设置", exact: true }).click();
+  const settings = page.getByRole("dialog", { name: "编辑设置", exact: true });
+  await settings.getByRole("textbox").first().fill("浅色编辑区的 SOP 草稿");
+  await settings.getByRole("button", { name: "关闭", exact: true }).click();
+  await expect(settings).not.toBeVisible();
+  await mode(page, "light");
+  await sop.getByRole("button", { name: "编辑设置", exact: true }).click();
+  await expect(settings.getByRole("textbox").first()).toHaveValue(
+    "浅色编辑区的 SOP 草稿",
+  );
+  await settings.getByRole("button", { name: "关闭", exact: true }).click();
+  await expect(settings).not.toBeVisible();
+  await sop.getByRole("button", { name: "关闭", exact: true }).click();
+  await mode(page, "dark");
+  await page.goto("/projects");
+  await page.getByRole("button", { name: /新建项目$/ }).click();
+  const project = page.getByRole("dialog", { name: "新建项目", exact: true });
+  await mode(page, "light");
+  const projectName = project.getByPlaceholder("商品周上新");
+  await projectName.fill("浅色编辑区的项目草稿");
+  const reads = state.appearanceReads;
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await expect.poll(() => state.appearanceReads).toBeGreaterThan(reads);
+  await mode(page, "light");
+  await expect(projectName).toHaveValue("浅色编辑区的项目草稿");
+  await project.getByRole("button", { name: "关闭", exact: true }).click();
+  await mode(page, "dark");
   for (const path of ["/users", "/roles", "/audit-logs", "/SETTINGS/ai/"]) {
     await page.goto(path);
     await expect(page.locator(".sidebar")).toBeVisible();

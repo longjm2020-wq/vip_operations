@@ -15,6 +15,7 @@
   --app-secondary: #becde6;
   --app-subtle: #9caccc;
   --app-border: #334564;
+  --app-shell-border: #ffffff0a;
   --app-border-strong: #60769f;
   --app-accent: #8fa9ff;
   --app-accent-hover: #b8c8ff;
@@ -88,6 +89,7 @@
   --app-secondary: #626b80;
   --app-subtle: #788297;
   --app-border: #dde1ec;
+  --app-shell-border: var(--app-border);
   --app-border-strong: #b5c1e3;
   --app-accent: #435ee5;
   --app-accent-hover: #344bca;
@@ -297,7 +299,7 @@ body {
 }
 .workspace .sidebar {
   background: var(--app-surface) !important;
-  border-right: 1px solid var(--app-border);
+  border-right: 1px solid var(--app-shell-border);
 }
 .workspace .sidebar-caption {
   color: var(--app-secondary);

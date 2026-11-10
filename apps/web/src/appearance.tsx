@@ -1,8 +1,10 @@
 import {
   createContext,
+  useCallback,
   useContext,
   useEffect,
   useLayoutEffect,
+  useId,
   useState,
   type ReactNode,
 } from "react";
@@ -26,6 +28,7 @@ const AppearanceContext = createContext({
   error: "",
   toggle: () => {},
   retry: () => {},
+  registerLightWorkspace: (_key: string) => () => {},
 });
 const storageKey = (accountId: string | null) =>
   `xuti:appearance:${accountId || "guest"}`;
@@ -59,6 +62,18 @@ export function AppearanceProvider({
   const [localMode, setLocalMode] = useState(() => cachedMode(accountId));
   const [optimistic, setOptimistic] = useState<ThemeMode | null>(null);
   const [error, setError] = useState("");
+  const [lightWorkspaces, setLightWorkspaces] = useState(
+    () => new Set<string>(),
+  );
+  const registerLightWorkspace = useCallback((key: string) => {
+    setLightWorkspaces((current) => new Set(current).add(key));
+    return () =>
+      setLightWorkspaces((current) => {
+        const next = new Set(current);
+        next.delete(key);
+        return next;
+      });
+  }, []);
   const queryKey = ["appearance", accountId];
   const preference = useQuery({
     queryKey,
@@ -100,7 +115,11 @@ export function AppearanceProvider({
     onSettled: () => setOptimistic(null),
   });
   // Fixed-theme sections control presentation without overwriting the account's saved preference.
-  const mode = forcedMode || optimistic || preference.data?.mode || localMode;
+  const workspaceOpen = lightWorkspaces.size > 0;
+  const mode = workspaceOpen
+    ? "light"
+    : forcedMode || optimistic || preference.data?.mode || localMode;
+  const locked = !!forcedMode || workspaceOpen;
   useLayoutEffect(() => {
     document.documentElement.dataset.theme = mode;
     document.documentElement.style.colorScheme = mode;
@@ -138,7 +157,7 @@ export function AppearanceProvider({
     void preference.refetch();
   };
   const toggle = () => {
-    if (forcedMode || busy) return;
+    if (locked || busy) return;
     if (readError) return retry();
     const next = mode === "dark" ? "light" : "dark";
     if (accountId && preference.data)
@@ -150,7 +169,15 @@ export function AppearanceProvider({
   };
   return (
     <AppearanceContext.Provider
-      value={{ mode, locked: !!forcedMode, busy, error: readError || error, toggle, retry }}
+      value={{
+        mode,
+        locked,
+        busy,
+        error: readError || error,
+        toggle,
+        retry,
+        registerLightWorkspace,
+      }}
     >
       <ConfigProvider
         button={{ autoInsertSpace: false }}
@@ -163,8 +190,18 @@ export function AppearanceProvider({
   );
 }
 
+// A drawer editor shares the app theme and restores its parent page when closed.
+export function useLightWorkspace(open = true) {
+  const key = useId();
+  const { registerLightWorkspace } = useContext(AppearanceContext);
+  useLayoutEffect(() => {
+    if (open) return registerLightWorkspace(key);
+  }, [key, open, registerLightWorkspace]);
+}
+
 export function ThemeToggle({ standalone = false }: { standalone?: boolean }) {
-  const { mode, locked, busy, error, toggle, retry } = useContext(AppearanceContext);
+  const { mode, locked, busy, error, toggle, retry } =
+    useContext(AppearanceContext);
   if (locked) return null;
   const label = mode === "dark" ? "切换为亮色主题" : "切换为暗色主题";
   return (
