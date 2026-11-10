@@ -160,6 +160,58 @@
     transform: scaleY(0.08);
   }
 }
+.companion-mouth {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+  transform: translate(
+    var(--companion-mouth-x, 0px),
+    var(--companion-mouth-y, 0px)
+  );
+  filter: drop-shadow(0 0 0.6px #43eec2)
+    drop-shadow(0 0 2px rgb(67 238 194 / 70%))
+    drop-shadow(0 0 4px rgb(67 238 194 / 35%));
+}
+.companion-mouth-smile,
+.companion-mouth-open {
+  fill: none;
+  stroke: #43eec2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.companion-pose-front .companion-mouth-smile,
+.companion-pose-front .companion-mouth-open {
+  stroke-width: 8;
+}
+.companion-pose-three-quarter-left .companion-mouth-smile,
+.companion-pose-three-quarter-left .companion-mouth-open,
+.companion-pose-three-quarter-right .companion-mouth-smile,
+.companion-pose-three-quarter-right .companion-mouth-open {
+  stroke-width: 7;
+}
+.companion-mouth-open {
+  opacity: 0;
+  transform-box: fill-box;
+  transform-origin: 50% 50%;
+}
+.sidebar-assistant[data-state="speaking"] .companion-mouth-smile {
+  opacity: 0;
+}
+.sidebar-assistant[data-state="speaking"] .companion-mouth-open {
+  opacity: 1;
+  animation: companion-talk-lips 0.22s ease-in-out infinite alternate;
+}
+@keyframes companion-talk-lips {
+  from {
+    transform: scaleY(0.3);
+  }
+  to {
+    transform: scaleY(1.08);
+  }
+}
 .companion-shadow {
   position: absolute;
   left: 22%;
