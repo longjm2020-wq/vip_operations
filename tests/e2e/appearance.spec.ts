@@ -1,5 +1,5 @@
 import { expect, test, type BrowserContext, type Page } from "@playwright/test";
-import { openPersonalAssistant } from "./assistant-controls.js";
+import { openCompanionMenu, openPersonalAssistant } from "./assistant-controls.js";
 import { selectionLayoutSchema } from "../../packages/contracts/src/selection-layout.js";
 
 async function openWorkspacePanel(page: Page, name: string) {
@@ -254,9 +254,7 @@ test("一级入口固定暗色不改账号偏好，详情恢复亮色且跨页�
 
   await page.goto("/operations/vip/integration");
   await mode(page, "light");
-  await page
-    .getByRole("button", { name: "展开小序状态与动态", exact: true })
-    .click();
+  await openCompanionMenu(page);
   await page.getByRole("button", { name: "文字对话", exact: true }).click();
   const assistant = page.getByRole("dialog", { name: /AI 个人助理/ });
   const draft = assistant.getByPlaceholder(/告诉我你想完成什么/);
@@ -304,9 +302,7 @@ test("一级入口固定暗色不改账号偏好，详情恢复亮色且跨页�
     "/my-workspace/appearance",
     "/my-workspace/appearance",
   ]);
-  await page
-    .getByRole("button", { name: "展开小序状态与动态", exact: true })
-    .click();
+  await openCompanionMenu(page);
   await page.getByRole("button", { name: "文字对话", exact: true }).click();
   await expect(draft).toHaveValue("主题变化后继续编辑的草稿");
   expect(await instance!.evaluate((element) => element.isConnected)).toBe(true);
@@ -612,9 +608,7 @@ test("手机一级入口固定暗色，工作台和详情助理弹窗适配屏�
       path: test.info().outputPath(`${current}-mobile.png`),
       fullPage: true,
     });
-    await page
-      .getByRole("button", { name: "展开小序状态与动态", exact: true })
-      .click();
+    await openCompanionMenu(page);
     await page.getByRole("button", { name: "文字对话", exact: true }).click();
     await expect(
       dialog.getByRole("button", { name: "开始语音对话", exact: true }),

@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import {
   ArrowRightOutlined,
-  MoreOutlined,
   AudioOutlined,
   SettingOutlined,
 } from "@ant-design/icons";
@@ -108,7 +107,7 @@ export function SidebarAssistant({
         !hub.seen.includes(activityFingerprint(item)) &&
         !announced.current?.has(activityFingerprint(item)),
     );
-    // Existing history stays in the badge; only urgent items announce on first load.
+    // Existing history stays unread in the feed; only urgent items announce on first load.
     const next =
       fresh.find((item) => item.status === "attention") ||
       (announced.current ? fresh[0] : undefined);
@@ -133,67 +132,27 @@ export function SidebarAssistant({
     setDetailsOpen(false);
     hub.openPanel(tab);
   };
+  const menuTitle =
+    labels[state] +
+    (unread.length ? " · " + unread.length + " 条新动态" : " · 右键展开");
+  const openMenu = () => setDetailsOpen(true);
   return (
     <section
       className="sidebar-assistant"
       data-state={state}
       data-muted={hub.gptVoice.muted}
       aria-label="小序个人助理"
+      onContextMenu={(event) => {
+        event.preventDefault();
+        openMenu();
+      }}
     >
-      <button
-        ref={launch}
-        className="companion-launch"
-        type="button"
-        aria-label={
-          hub.allowed
-            ? hub.gptVoice.state === "speaking"
-              ? "打断小序并说话"
-              : "与小序语音对话"
-            : "打开 AI 个人助理"
-        }
-        title={
-          docked
-            ? "点击小序跃出对话 · 拖动离巢 · Home 回巢"
-            : floating
-              ? "点击语音对话 · 拖动自由放置 · 方向键移动 · Home 寻找空位"
-              : undefined
-        }
-        onClick={() => {
-          setDetailsOpen(false);
-          onInteract?.();
-          if (hub.allowed) hub.startVoice();
-          else openPanel("activity");
-        }}
-      >
-        <div className="companion-stage" aria-hidden="true">
-          {!floating && <div className="companion-grid" />}
-          <div className="companion-robot">
-            {!floating && <div className="companion-shadow" />}
-            <div className="companion-body">
-              {companionPoses.map(([pose, src]) => (
-                <img
-                  key={pose}
-                  className={`companion-pose companion-pose-${pose}`}
-                  src={src}
-                  alt=""
-                  draggable={false}
-                />
-              ))}
-              <span className="companion-sleep">
-                <span>z</span>
-                <span>z</span>
-              </span>
-              <span className="companion-notice">!</span>
-            </div>
-          </div>
-        </div>
-      </button>
       <Popover
         getPopupContainer={(trigger) =>
           trigger.closest<HTMLElement>(".workspace-companion-host") ||
           document.body
         }
-        trigger="click"
+        trigger="contextMenu"
         open={detailsOpen}
         onOpenChange={setDetailsOpen}
         destroyOnHidden
@@ -263,29 +222,63 @@ export function SidebarAssistant({
         }
       >
         <button
-          className="companion-count"
+          ref={launch}
+          className="companion-launch"
           type="button"
-          aria-label="展开小序状态与动态"
+          aria-label={
+            hub.allowed
+              ? hub.gptVoice.state === "speaking"
+                ? "打断小序并说话"
+                : "与小序语音对话"
+              : "打开 AI 个人助理"
+          }
+          aria-haspopup="dialog"
           aria-expanded={detailsOpen}
           title={
-            labels[state] +
-            (unread.length
-              ? " · " + unread.length + " 条新动态"
-              : " · 点击展开")
+            docked
+              ? "点击小序跃出对话 · 右键展开状态与动态 · 拖动离巢 · Home 回巢"
+              : floating
+                ? "点击语音对话 · 右键展开状态与动态 · 拖动自由放置 · 方向键移动 · Home 寻找空位"
+                : menuTitle
           }
+          onClick={() => {
+            setDetailsOpen(false);
+            onInteract?.();
+            if (hub.allowed) hub.startVoice();
+            else openPanel("activity");
+          }}
           onKeyDown={(event) => {
-            if (event.key === "Escape") setDetailsOpen(false);
+            if (
+              event.key === "ContextMenu" ||
+              (event.shiftKey && event.key === "F10")
+            ) {
+              event.preventDefault();
+              openMenu();
+            } else if (event.key === "Escape") setDetailsOpen(false);
           }}
         >
-          {unread.length > 0 ? (
-            unread.length > 99 ? (
-              "99+"
-            ) : (
-              unread.length
-            )
-          ) : (
-            <MoreOutlined />
-          )}
+          <div className="companion-stage" aria-hidden="true">
+            {!floating && <div className="companion-grid" />}
+            <div className="companion-robot">
+              {!floating && <div className="companion-shadow" />}
+              <div className="companion-body">
+                {companionPoses.map(([pose, src]) => (
+                  <img
+                    key={pose}
+                    className={`companion-pose companion-pose-${pose}`}
+                    src={src}
+                    alt=""
+                    draggable={false}
+                  />
+                ))}
+                <span className="companion-sleep">
+                  <span>z</span>
+                  <span>z</span>
+                </span>
+                <span className="companion-notice">!</span>
+              </div>
+            </div>
+          </div>
         </button>
       </Popover>
       {hub.allowed && <CompanionVoice anchor={launch} />}
