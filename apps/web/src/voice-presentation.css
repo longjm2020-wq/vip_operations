@@ -2,17 +2,14 @@
   position: fixed;
   z-index: 1090;
   top: 50%;
-  right: clamp(12px, 4vw, 56px);
-  width: min(460px, calc(100vw - 24px));
-  min-width: 300px;
-  min-height: 260px;
-  max-height: min(76vh, 720px);
-  max-width: calc(100vw - 24px);
+  right: clamp(12px, 3vw, 48px);
+  /* Width comes from presentationPanelWidth(); the frame is always 21:9. */
+  width: min(72vw, 1100px, calc(60vh * 21 / 9));
+  aspect-ratio: 21 / 9;
   box-sizing: border-box;
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
   overflow: hidden;
-  resize: both;
   color: var(--app-text);
   background: color-mix(in srgb, var(--app-surface) 68%, transparent);
   border: 1px solid color-mix(in srgb, var(--app-border) 70%, transparent);
@@ -25,6 +22,9 @@
   outline: none;
   animation: voice-presentation-in 260ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
+.voice-presentation * {
+  box-sizing: border-box;
+}
 .voice-presentation:focus-visible {
   box-shadow:
     0 0 0 2px var(--app-accent-border, var(--app-accent)),
@@ -33,14 +33,15 @@
 @keyframes voice-presentation-in {
   from {
     opacity: 0;
-    translate: 24px 0;
   }
 }
 .voice-presentation-header {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 10px 10px 6px 16px;
+  min-width: 0;
+  padding: 6px 10px 0 18px;
+  overflow: hidden;
   cursor: grab;
   touch-action: none;
   user-select: none;
@@ -87,77 +88,23 @@
   cursor: default;
 }
 .voice-presentation-stage {
-  flex: 1;
+  min-width: 0;
   min-height: 0;
-  overflow: auto;
-  padding: 4px 20px 12px;
-  animation: voice-presentation-slide 320ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  overflow: hidden;
+  padding: 2px 26px 4px;
+  container-type: size;
+  animation: voice-presentation-slide 320ms ease-out;
 }
 @keyframes voice-presentation-slide {
   from {
     opacity: 0;
-    transform: translateX(18px);
+    filter: blur(4px);
   }
-}
-.voice-presentation-slide h3 {
-  margin: 4px 0 10px;
-  font-size: 20px;
-  font-weight: 650;
-  line-height: 1.35;
-  color: var(--app-text);
-}
-.voice-presentation-slide ul {
-  margin: 0 0 12px;
-  padding: 0;
-  list-style: none;
-}
-.voice-presentation-slide li {
-  position: relative;
-  margin: 6px 0;
-  padding-left: 16px;
-  font-size: 14px;
-  line-height: 1.55;
-  color: color-mix(in srgb, var(--app-text) 88%, transparent);
-  animation: voice-presentation-bullet 360ms both;
-}
-.voice-presentation-slide li::before {
-  position: absolute;
-  top: 0.62em;
-  left: 2px;
-  width: 6px;
-  height: 6px;
-  content: "";
-  background: var(--app-accent);
-  border-radius: 50%;
 }
 @keyframes voice-presentation-bullet {
   from {
     opacity: 0;
-    transform: translateY(6px);
   }
-}
-.voice-presentation-media {
-  margin: 0;
-}
-.voice-presentation-media img,
-.voice-presentation-media video {
-  display: block;
-  width: 100%;
-  max-height: 260px;
-  object-fit: contain;
-  background: color-mix(in srgb, var(--app-bg) 50%, transparent);
-  border-radius: 12px;
-}
-.voice-presentation-media figcaption,
-.voice-presentation-media-missing {
-  margin-top: 6px;
-  font-size: 12px;
-  color: var(--app-secondary);
-}
-.voice-presentation-chart {
-  display: block;
-  width: 100%;
-  height: auto;
 }
 .voice-presentation-grid {
   stroke: var(--app-border);
@@ -196,23 +143,6 @@
     opacity: 0;
   }
 }
-.voice-presentation-highlight {
-  display: grid;
-  gap: 6px;
-  place-items: center;
-  padding: 18px 8px;
-  text-align: center;
-}
-.voice-presentation-highlight strong {
-  font-size: clamp(30px, 6vw, 48px);
-  font-weight: 750;
-  line-height: 1.1;
-  color: var(--app-accent);
-}
-.voice-presentation-highlight span {
-  font-size: 13px;
-  color: var(--app-secondary);
-}
 .voice-presentation-highlight.effect-pulse strong {
   animation: voice-presentation-pulse 1.8s ease-in-out infinite;
 }
@@ -241,13 +171,6 @@
   to {
     clip-path: inset(0 0 0 0);
   }
-}
-.voice-presentation-spot-note {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 13px;
-  color: var(--app-secondary);
 }
 .voice-presentation-spot-dot {
   flex: none;
@@ -282,7 +205,9 @@
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 6px 10px 10px;
+  min-width: 0;
+  padding: 0 10px 6px 22px;
+  overflow: hidden;
 }
 .voice-presentation-dots {
   display: flex;
@@ -317,12 +242,6 @@
 .voice-presentation-dots button.active:not(:has(i)) {
   background: var(--app-accent);
 }
-.voice-presentation-ended {
-  padding: 0 16px 10px;
-  font-size: 12px;
-  color: var(--app-secondary);
-  text-align: center;
-}
 .voice-presentation-pill {
   top: auto;
   bottom: 96px;
@@ -330,6 +249,8 @@
   min-height: 0;
   width: auto;
   height: auto;
+  aspect-ratio: auto;
+  display: flex;
   flex-direction: row;
   align-items: center;
   gap: 8px;
@@ -345,15 +266,6 @@
   background: var(--app-accent);
   border-radius: 50%;
 }
-@media (max-width: 640px) {
-  .voice-presentation:not(.voice-presentation-pill) {
-    right: 12px;
-    left: 12px;
-    width: auto;
-    min-width: 0;
-    resize: none;
-  }
-}
 @media (prefers-reduced-motion: reduce) {
   .voice-presentation,
   .voice-presentation *,
@@ -364,4 +276,192 @@
   .voice-presentation-line {
     stroke-dashoffset: 0;
   }
+}
+
+/* 21:9 slide layout: text left (~38%), visual right (~62%), nothing scrolls. */
+.voice-presentation-slide {
+  --fit: 1;
+  --density: 1;
+  display: grid;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  gap: 3cqw;
+  align-items: center;
+}
+.voice-presentation-slide.with-visual {
+  grid-template-columns: minmax(0, 38fr) minmax(0, 62fr);
+}
+.voice-presentation-slide.text-only {
+  grid-template-columns: minmax(0, 1fr);
+  justify-items: center;
+  text-align: center;
+}
+.voice-presentation-text {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-width: 0;
+  max-height: 100%;
+  overflow: hidden;
+}
+.voice-presentation-slide.text-only .voice-presentation-text {
+  max-width: 78cqw;
+}
+.voice-presentation-text h3 {
+  margin: 0 0 calc(3cqh * min(var(--fit), 1));
+  font-size: calc(
+    clamp(15px, min(3cqw, 11cqh), 40px) * min(var(--fit), 1.1) *
+      (0.6 + 0.4 * var(--density))
+  );
+  font-weight: 650;
+  line-height: 1.25;
+  color: var(--app-text);
+  overflow-wrap: anywhere;
+}
+.voice-presentation-text ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.voice-presentation-slide.text-only ul {
+  display: inline-block;
+  text-align: left;
+}
+.voice-presentation-text li {
+  position: relative;
+  margin: calc(1.6cqh * var(--fit) * var(--density)) 0 0;
+  padding-left: 1.1em;
+  font-size: calc(
+    clamp(12px, min(1.75cqw, 6.6cqh), 22px) * var(--density) * var(--fit)
+  );
+  line-height: 1.45;
+  color: color-mix(in srgb, var(--app-text) 88%, transparent);
+  overflow-wrap: anywhere;
+  animation: voice-presentation-bullet 360ms both;
+}
+.voice-presentation-text li::before {
+  position: absolute;
+  top: 0.6em;
+  left: 0.15em;
+  width: 0.4em;
+  height: 0.4em;
+  content: "";
+  background: var(--app-accent);
+  border-radius: 50%;
+}
+/* Last resort when even the smallest scale cannot fit. */
+.voice-presentation-slide[data-clamped="true"] h3,
+.voice-presentation-slide[data-clamped="true"] li {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.voice-presentation-visual {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.voice-presentation-media {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  margin: 0;
+  overflow: hidden;
+}
+.voice-presentation-media img,
+.voice-presentation-media video {
+  display: block;
+  flex: 1 1 0;
+  width: 100%;
+  min-height: 0;
+  object-fit: contain;
+  background: color-mix(in srgb, var(--app-bg) 40%, transparent);
+  border-radius: 12px;
+}
+.voice-presentation-media figcaption,
+.voice-presentation-media-missing {
+  flex: none;
+  max-width: 100%;
+  margin-top: 1.2cqh;
+  overflow: hidden;
+  font-size: clamp(10px, min(1.2cqw, 4.4cqh), 14px);
+  line-height: 1.3;
+  color: var(--app-secondary);
+  text-align: center;
+  white-space: nowrap;
+  text-overflow: clip;
+}
+.voice-presentation-chart {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+.voice-presentation-highlight {
+  display: flex;
+  flex-direction: column;
+  gap: 2cqh;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  text-align: center;
+}
+.voice-presentation-highlight strong {
+  font-size: clamp(28px, min(10cqw, 34cqh), 140px);
+  font-weight: 750;
+  line-height: 1.1;
+  color: var(--app-accent);
+  white-space: nowrap;
+}
+.voice-presentation-highlight span {
+  max-width: 100%;
+  font-size: clamp(11px, min(1.5cqw, 5.4cqh), 18px);
+  color: var(--app-secondary);
+  overflow-wrap: anywhere;
+}
+.voice-presentation-spot-note {
+  display: flex;
+  align-items: center;
+  gap: 0.6em;
+  max-width: 100%;
+  overflow: hidden;
+  font-size: clamp(11px, min(1.6cqw, 6cqh), 20px);
+  color: var(--app-secondary);
+  overflow-wrap: anywhere;
+}
+.voice-presentation-ended {
+  font-style: normal;
+  color: var(--app-secondary);
+}
+.voice-presentation-resize {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 18px;
+  height: 18px;
+  cursor: nesw-resize;
+  touch-action: none;
+  background: linear-gradient(
+    45deg,
+    transparent 0 40%,
+    color-mix(in srgb, var(--app-text) 28%, transparent) 40% 48%,
+    transparent 48% 62%,
+    color-mix(in srgb, var(--app-text) 28%, transparent) 62% 70%,
+    transparent 70%
+  );
+  transform: scaleX(-1);
+  border-bottom-left-radius: 18px;
 }

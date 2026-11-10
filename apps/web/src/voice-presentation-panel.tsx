@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import type { CSSProperties, RefObject } from "react";
 import { createPortal } from "react-dom";
 import {
   CaretRightOutlined,
@@ -15,6 +16,13 @@ import {
   type PresentationVisual,
 } from "../../../packages/contracts/src/assistant-presentation";
 import { usePresentationStore } from "./voice-presentation-store";
+import {
+  presentationAspect,
+  presentationDensity,
+  presentationMaxFit,
+  presentationMinFit,
+  presentationPanelWidth,
+} from "./voice-presentation-size";
 import "./voice-presentation.css";
 
 const palette = [
@@ -364,20 +372,79 @@ function Visual({ visual }: { visual: PresentationVisual }) {
   );
 }
 
+/** Shrink text until the slide fits its 21:9 frame; line-clamp only as a last resort. */
+function useFitText(
+  root: RefObject<HTMLDivElement | null>,
+  slide: PresentationSlide,
+) {
+  useLayoutEffect(() => {
+    const el = root.current;
+    if (!el) return;
+    const text = () =>
+      el.querySelector<HTMLElement>(".voice-presentation-text");
+    const overflowing = () => {
+      const column = text();
+      if (!column) return false;
+      return [column, ...column.querySelectorAll<HTMLElement>("*")].some(
+        (node) =>
+          node.scrollHeight > node.clientHeight + 1 ||
+          node.scrollWidth > node.clientWidth + 1,
+      );
+    };
+    // Start large and step down, so sparse slides use the space and dense
+    // slides shrink until every line is visible.
+    const fit = () => {
+      let scale = presentationMaxFit;
+      el.dataset.clamped = "false";
+      el.style.setProperty("--fit", String(scale));
+      while (overflowing() && scale > presentationMinFit) {
+        scale = Math.round((scale - 0.05) * 100) / 100;
+        el.style.setProperty("--fit", String(scale));
+      }
+      if (overflowing()) el.dataset.clamped = "true";
+    };
+    fit();
+    const observer = new ResizeObserver(fit);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [root, slide]);
+}
+
 export function PresentationSlideView({ slide }: { slide: PresentationSlide }) {
+  const root = useRef<HTMLDivElement>(null);
+  useFitText(root, slide);
   return (
-    <div className="voice-presentation-slide">
-      <h3>{slide.title}</h3>
-      {slide.bullets.length > 0 && (
-        <ul>
-          {slide.bullets.map((b, i) => (
-            <li key={i} style={{ animationDelay: `${120 + i * 90}ms` }}>
-              {b}
-            </li>
-          ))}
-        </ul>
+    <div
+      ref={root}
+      className={`voice-presentation-slide ${slide.visual ? "with-visual" : "text-only"}`}
+      style={
+        {
+          "--density": presentationDensity(
+            slide.bullets.length,
+            slide.title.length,
+          ),
+        } as CSSProperties
+      }
+    >
+      <div className="voice-presentation-text">
+        <h3>{slide.title}</h3>
+        {slide.bullets.length > 0 && (
+          <ul>
+            {slide.bullets.map((b, i) => (
+              <li key={i} style={{ animationDelay: `${120 + i * 90}ms` }}>
+                {b}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+      {slide.visual && (
+        <div
+          className={`voice-presentation-visual visual-${slide.visual.type}`}
+        >
+          <Visual visual={slide.visual} />
+        </div>
       )}
-      {slide.visual && <Visual visual={slide.visual} />}
     </div>
   );
 }
@@ -404,6 +471,12 @@ export function VoicePresentationPanel({
   const state = usePresentationStore();
   const { deck, index, paused, minimized, ended, dispatch } = state;
   const [offset, setOffset] = useState({ x: 0, y: 0 });
+  const [requestedWidth, setRequestedWidth] = useState<number>();
+  const [viewport, setViewport] = useState(() => ({
+    width: window.innerWidth,
+    height: window.innerHeight,
+  }));
+  const resize = useRef<{ x: number; y: number; width: number } | null>(null);
   const drag = useRef<{ x: number; y: number; ox: number; oy: number } | null>(
     null,
   );
@@ -430,6 +503,12 @@ export function VoicePresentationPanel({
   }, [deck, paused, ended, dispatch]);
   useEffect(() => setOffset({ x: 0, y: 0 }), [deck?.id]);
   useEffect(() => {
+    const update = () =>
+      setViewport({ width: window.innerWidth, height: window.innerHeight });
+    window.addEventListener("resize", update);
+    return () => window.removeEventListener("resize", update);
+  }, []);
+  useEffect(() => {
     if (!deck) return;
     const key = (e: KeyboardEvent) => {
       if (typing(e.target) || e.altKey || e.ctrlKey || e.metaKey) return;
@@ -446,6 +525,7 @@ export function VoicePresentationPanel({
   const slide = deck.slides[index];
   const total = deck.slides.length;
   const progress = Math.min(1, state.elapsed / (slide.seconds * 1000));
+  const width = presentationPanelWidth(viewport, requestedWidth);
   if (minimized)
     return createPortal(
       <button
@@ -467,6 +547,7 @@ export function VoicePresentationPanel({
       aria-label={`小序演示：${deck.title}`}
       tabIndex={-1}
       style={{
+        width,
         transform: `translate(${offset.x}px, calc(-50% + ${offset.y}px))`,
       }}
     >
@@ -493,6 +574,11 @@ export function VoicePresentationPanel({
       >
         <span className="voice-presentation-title" title={deck.title}>
           {deck.title}
+          {ended && (
+            <em className="voice-presentation-ended">
+              · 通话已结束，可继续翻看或关闭
+            </em>
+          )}
         </span>
         <span className="voice-presentation-count" aria-live="polite">
           {index + 1}/{total}
@@ -564,11 +650,33 @@ export function VoicePresentationPanel({
           {paused ? <CaretRightOutlined /> : <PauseOutlined />}
         </button>
       </footer>
-      {ended && (
-        <div className="voice-presentation-ended">
-          通话已结束，可继续翻看或关闭
-        </div>
-      )}
+      <div
+        className="voice-presentation-resize"
+        role="separator"
+        aria-label="拖动调整演示面板大小（保持21:9）"
+        onPointerDown={(e) => {
+          resize.current = { x: e.clientX, y: e.clientY, width };
+          (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+          e.preventDefault();
+        }}
+        onPointerMove={(e) => {
+          const r = resize.current;
+          if (!r) return;
+          // The panel is anchored on the right: dragging left or down grows it.
+          const byX = r.width - (e.clientX - r.x);
+          const byY = r.width + (e.clientY - r.y) * presentationAspect;
+          setRequestedWidth(
+            presentationPanelWidth(
+              viewport,
+              Math.abs(byX - r.width) >= Math.abs(byY - r.width) ? byX : byY,
+            ),
+          );
+        }}
+        onPointerUp={() => {
+          resize.current = null;
+        }}
+        onDoubleClick={() => setRequestedWidth(undefined)}
+      />
     </div>,
     document.body,
   );
