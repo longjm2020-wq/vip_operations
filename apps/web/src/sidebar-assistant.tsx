@@ -11,16 +11,12 @@ import "./sidebar-assistant.css";
 import { CompanionVoice } from "./companion-voice";
 import xiaoxuFront from "./assets/xiaoxu/front.webp";
 import xiaoxuBack from "./assets/xiaoxu/back.webp";
-import xiaoxuSideLeft from "./assets/xiaoxu/side-left.webp";
-import xiaoxuSideRight from "./assets/xiaoxu/side-right.webp";
 import xiaoxuThreeQuarterLeft from "./assets/xiaoxu/three-quarter-left.webp";
 import xiaoxuThreeQuarterRight from "./assets/xiaoxu/three-quarter-right.webp";
 
 const companionPoses = [
   ["front", xiaoxuFront],
   ["back", xiaoxuBack],
-  ["side-left", xiaoxuSideLeft],
-  ["side-right", xiaoxuSideRight],
   ["three-quarter-left", xiaoxuThreeQuarterLeft],
   ["three-quarter-right", xiaoxuThreeQuarterRight],
 ] as const;

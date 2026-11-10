@@ -129,7 +129,7 @@
 .sidebar-assistant[data-state="listening"] .companion-pose-three-quarter-right {
   opacity: 1;
 }
-.sidebar-assistant[data-state="thinking"] .companion-pose-side-left {
+.sidebar-assistant[data-state="thinking"] .companion-pose-three-quarter-left {
   opacity: 1;
 }
 .workspace-companion[data-climb-side="left"]
@@ -635,6 +635,8 @@ body:has(.workspace-companion[data-docked="true"]:is(:hover, :focus-within))
   animation: companion-listen-lean 3s ease-in-out infinite;
 }
 .sidebar-assistant[data-state="thinking"] .companion-body {
+  /* Resting lean remains if motion is reduced; the animation only adds a soft sway. */
+  transform: rotate(-6deg) translateX(-2px);
   animation: companion-think 2.4s ease-in-out infinite;
 }
 .sidebar-assistant[data-state="connecting"] .companion-pose-front {
@@ -689,10 +691,10 @@ body:has(.workspace-companion[data-docked="true"]:is(:hover, :focus-within))
 @keyframes companion-think {
   0%,
   100% {
-    transform: rotate(-5deg);
+    transform: rotate(-6deg) translateX(-2px);
   }
   50% {
-    transform: rotate(-8deg) translateY(-3px);
+    transform: rotate(-10deg) translate(-3px, -3px);
   }
 }
 @keyframes companion-think-eyes {
