@@ -12,6 +12,7 @@ export type Entry = {
   error?: string;
   uncertain?: boolean;
   saved?: boolean;
+  result?: Record<string, unknown>;
 };
 
 const normalize = (s: string) =>
@@ -199,7 +200,7 @@ export type ImportProgress = {
   failed: number;
   firstError?: string;
 };
-export type BatchResult = { key: string; saved: boolean; error?: string };
+export type BatchResult = { key: string; saved: boolean; error?: string; result?: Record<string, unknown> };
 export async function importInventoryRows(
   entries: Entry[],
   submit: (entries: Entry[]) => Promise<BatchResult[]>,
@@ -257,6 +258,7 @@ export async function importInventoryRows(
         updated[index] = {
           ...updated[index],
           saved: r.saved,
+          result: r.saved ? r.result : undefined,
           error: r.saved ? undefined : r.error || "导入失败",
           uncertain: false,
         };

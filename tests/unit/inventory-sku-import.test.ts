@@ -3,7 +3,9 @@ import {
   inventorySkuImageTargets,
   inventorySkuTemplate,
   inventorySkuTemplateLabel,
+  inventorySkuSupplierChanges,
   parseInventorySkuRows,
+  supplierChangeText,
 } from "../../packages/contracts/src/inventory-sku-import.js";
 
 const header = inventorySkuTemplate.map(inventorySkuTemplateLabel);
@@ -53,6 +55,41 @@ describe("导入SKU template parsing", () => {
       "第 6 行：「颜色」不能填写“多颜色”",
     ]);
     expect(entries.map((entry) => entry.line)).toEqual([7]);
+  });
+
+  it("fails every row of a 款号 that carries several 供应商款式编码, in row order", () => {
+    const { entries, errors } = parseInventorySkuRows([
+      header,
+      row({ skuCode: "SKU-1", supplierStyleCode: "YL77" }),
+      row({ skuCode: "SKU-2", styleNo: "" }),
+      row({ skuCode: "SKU-3", supplierStyleCode: "YL78" }),
+      row({ skuCode: "SKU-4", styleNo: "S15X8036", supplierStyleCode: "QQ1" }),
+      row({ skuCode: "SKU-5", styleNo: "S15X8036", supplierStyleCode: "QQ1" }),
+    ]);
+    expect(errors).toEqual([
+      "第 2 行：款号 S22X20130 在文件中有多个供应商款式编码：YL77（第 2 行）、YL78（第 4 行），无法确定以哪个为准，请统一后重新上传",
+      "第 3 行：「款号」必填",
+      "第 4 行：款号 S22X20130 在文件中有多个供应商款式编码：YL77（第 2 行）、YL78（第 4 行），无法确定以哪个为准，请统一后重新上传",
+    ]);
+    expect(entries.map((entry) => entry.line)).toEqual([5, 6]);
+  });
+
+  it("lists one archive 供应商款式编码 change per existing 款号", () => {
+    const { entries } = parseInventorySkuRows([
+      header,
+      row({ skuCode: "SKU-1", supplierStyleCode: "XFA19" }),
+      row({ skuCode: "SKU-2", supplierStyleCode: "XFA19" }),
+      row({ skuCode: "SKU-3", styleNo: "S15X8036", supplierStyleCode: "QQ1" }),
+      row({ skuCode: "SKU-4", styleNo: "S15X19287", supplierStyleCode: "QQ2" }),
+      row({ skuCode: "SKU-5", styleNo: "NEW", supplierStyleCode: "QQ3" }),
+    ]);
+    const changes = inventorySkuSupplierChanges(entries, new Map([["S22X20130", "YL77"], ["S15X8036", "QQ1"], ["S15X19287", ""]]));
+    expect([...changes.values()]).toEqual([
+      { styleNo: "S22X20130", from: "YL77", to: "XFA19" },
+      { styleNo: "S15X19287", from: "", to: "QQ2" },
+    ]);
+    expect(supplierChangeText(changes.get("S22X20130")!)).toBe("供应商款式编码 YL77 → XFA19");
+    expect(supplierChangeText(changes.get("S15X19287")!)).toBe("供应商款式编码 （空） → QQ2");
   });
 
   it("rejects unknown or missing columns before reading rows", () => {

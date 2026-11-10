@@ -101,3 +101,8 @@ export const inventoryImportSchema = z
   })
   .strict();
 export type InventoryImportInput = z.infer<typeof inventoryImportSchema>;
+
+/** 导入SKU preview: look up the archive 供应商款式编码 of the file's 款号. */
+export const inventorySkuStyleLookupSchema = z
+  .object({ styleNos: z.array(z.string().trim().min(1).max(64)).min(1).max(5000) })
+  .strict();

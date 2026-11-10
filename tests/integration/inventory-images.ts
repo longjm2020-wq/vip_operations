@@ -70,5 +70,67 @@ export async function testInventoryImages(h: Record<string, any>) {
   });
   assert.equal(mismatch.results[0].saved, false);
   assert.equal(mismatch.results[0].code, "STYLE_MISMATCH");
+  // 导入SKU: the file's 供应商款式编码 is the latest value and updates the archive once per 款号.
+  const field = "f00000000000000000000000000000001";
+  await db.$executeRawUnsafe(`UPDATE products SET custom_fields=custom_fields||jsonb_build_object('${field}','YL77') WHERE id=${Number(product.id)}`);
+  const lookup = await ok("/inventory/fulfilment/sku-import/styles", "POST", { styleNos: [product.style_no, "NO-SUCH-STYLE"] });
+  assert.deepEqual(lookup.styles, [{ styleNo: product.style_no, supplierStyleCode: "YL77" }]);
+  const ambiguous = await ok("/inventory/fulfilment/import-batch", "POST", {
+    rows: [
+      { key: randomUUID(), input: { skuCode: sku.sku_code, mode: "sku", creation: { styleNo: product.style_no, supplierStyleCode: "NEW-A" }, changes: { colorName: sku.color_name, sizeName: sku.size_name } } },
+      { key: randomUUID(), input: { skuCode: sku.sku_code + "-AMB", mode: "sku", creation: { styleNo: product.style_no, supplierStyleCode: "NEW-B" }, changes: { colorName: sku.color_name, sizeName: "AMB" } } },
+    ],
+  });
+  assert.deepEqual(ambiguous.results.map((r: any) => r.code), ["AMBIGUOUS_SUPPLIER_STYLE", "AMBIGUOUS_SUPPLIER_STYLE"]);
+  assert.match(ambiguous.results[0].error, /NEW-A、NEW-B/);
+  assert.equal((await one(db, `SELECT custom_fields->>'${field}' AS v FROM products WHERE id=$1::bigint`, product.id)).v, "YL77", "ambiguous rows change nothing");
+  // Mirror into a 商品档案 table so the archive path is exercised end to end.
+  let archiveTable = await one(db, "SELECT id::text FROM project_tables WHERE system_key='PRODUCT_ARCHIVE'");
+  const temporaryArchive = !archiveTable;
+  if (temporaryArchive) {
+    archiveTable = await one(db, "INSERT INTO project_tables(name,created_by,system_key,initial_layout) SELECT '商品档案',id,'PRODUCT_ARCHIVE','selection' FROM users ORDER BY id LIMIT 1 RETURNING id::text");
+    await one(db, "SELECT public.create_project_table_workspace($1::bigint)::text AS ok", archiveTable.id);
+  }
+  const updateKey = randomUUID();
+  const updateBody = { rows: [{ key: updateKey, input: { skuCode: sku.sku_code, mode: "sku", creation: { styleNo: product.style_no, supplierStyleCode: "NEW-A" }, changes: { colorName: sku.color_name, sizeName: sku.size_name } } }] };
+  const updated = await ok("/inventory/fulfilment/import-batch", "POST", updateBody);
+  assert.equal(updated.results[0].saved, true, JSON.stringify(updated.results[0]));
+  assert.deepEqual(updated.results[0].result.supplierStyleCodeChange, { styleNo: product.style_no, from: "YL77", to: "NEW-A" });
+  assert.equal((await one(db, `SELECT custom_fields->>'${field}' AS v FROM products WHERE id=$1::bigint`, product.id)).v, "NEW-A");
+  const archiveAudit = await one(db, "SELECT before_data->'custom_fields'->>$2 AS before,after_data->'custom_fields'->>$2 AS after,reason FROM audit_logs WHERE entity_type='products' AND action='UPDATE' AND entity_id=$1::bigint ORDER BY id DESC LIMIT 1", product.id, field);
+  assert.deepEqual(archiveAudit, { before: "YL77", after: "NEW-A", reason: "导入SKU：供应商款式编码以导入表格为准（YL77 → NEW-A）" });
+  assert.equal((await one(db, `SELECT supplier_style_no FROM selection_table_${Number(archiveTable.id)}.style_selections WHERE product_id=$1::bigint`, product.id))?.supplier_style_no, "NEW-A", "商品档案表 mirrors the product master");
+  if (temporaryArchive) await db.$executeRawUnsafe(`DELETE FROM project_tables WHERE id=${Number(archiveTable.id)}`);
+  const retried = await ok("/inventory/fulfilment/import-batch", "POST", updateBody);
+  assert.deepEqual(retried.results[0].result, updated.results[0].result, "retrying the same key replays the stored result");
+  const same = await ok("/inventory/fulfilment/import-batch", "POST", { rows: [{ ...updateBody.rows[0], key: randomUUID() }] });
+  assert.equal(same.results[0].saved, true);
+  assert.equal(same.results[0].result.supplierStyleCodeChange, undefined, "an unchanged code is not rewritten");
+  // A rejected archive update fails only that 款号's rows; the rest of the batch saves.
+  // A brand-new 款号 takes its 供应商款式编码 from the file at creation.
+  const created = await ok("/inventory/fulfilment/import-batch", "POST", {
+    rows: [{ key: randomUUID(), input: { skuCode: "SUP-OTHER-1", mode: "sku", creation: { styleNo: "SUP-OTHER", supplierStyleCode: "KEEP" }, changes: { colorName: sku.color_name, sizeName: sku.size_name } } }],
+  });
+  assert.equal(created.results[0].saved, true, JSON.stringify(created.results[0]));
+  assert.equal(created.results[0].result.supplierStyleCodeChange, undefined);
+  const other = await one(db, `SELECT pr.id::text,pr.style_no,pr.custom_fields->>'${field}' AS code,s.sku_code,s.color_name,s.size_name FROM products pr JOIN skus s ON s.product_id=pr.id WHERE pr.style_no='SUP-OTHER'`);
+  assert.equal(other.code, "KEEP");
+  {
+    await db.$executeRawUnsafe(`UPDATE product_fields SET active=false WHERE id='${field}'`);
+    try {
+      const partial = await ok("/inventory/fulfilment/import-batch", "POST", {
+        rows: [
+          { key: randomUUID(), input: { skuCode: sku.sku_code, mode: "sku", creation: { styleNo: product.style_no, supplierStyleCode: "NEW-C" }, changes: { colorName: sku.color_name, sizeName: sku.size_name } } },
+          { key: randomUUID(), input: { skuCode: other.sku_code, mode: "sku", creation: { styleNo: other.style_no, supplierStyleCode: "KEEP" }, changes: { colorName: other.color_name, sizeName: other.size_name } } },
+        ],
+      });
+      assert.equal(partial.results[0].code, "SUPPLIER_STYLE_UPDATE_FAILED", JSON.stringify(partial.results[0]));
+      assert.match(partial.results[0].error, /NEW-A → NEW-C/);
+      assert.equal(partial.results[1].saved, true, JSON.stringify(partial.results[1]));
+      assert.equal((await one(db, `SELECT custom_fields->>'${field}' AS v FROM products WHERE id=$1::bigint`, product.id)).v, "NEW-A");
+    } finally {
+      await db.$executeRawUnsafe(`UPDATE product_fields SET active=true WHERE id='${field}'`);
+    }
+  }
   check("inventory user images upload, replace, batch import, delete, serve and audit with permissions");
 }
