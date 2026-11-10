@@ -39,6 +39,16 @@ export function lerpGaze(current: number, target: number, factor: number) {
   return current + (target - current) * factor;
 }
 
+/** Mouth follows the eyes in the same direction, with slightly less travel for parallax. */
+export const COMPANION_MOUTH_GAZE = 0.8;
+
+export function companionMouthOffset(gaze: { x: number; y: number }) {
+  return {
+    x: gaze.x * COMPANION_MOUTH_GAZE,
+    y: gaze.y * COMPANION_MOUTH_GAZE,
+  };
+}
+
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
 }
@@ -117,7 +127,7 @@ function tick() {
               range: width * 1.85,
               maxX: width * 0.042,
               maxYUp: width * 0.034,
-              maxYDown: width * 0.012,
+              maxYDown: width * 0.016,
             },
           );
     const prev = current.get(el) || { x: 0, y: 0 };
@@ -128,8 +138,11 @@ function tick() {
     if (target.x === 0 && Math.abs(next.x) < 0.02) next.x = 0;
     if (target.y === 0 && Math.abs(next.y) < 0.02) next.y = 0;
     current.set(el, next);
+    const mouth = companionMouthOffset(next);
     el.style.setProperty("--companion-gaze-x", `${next.x.toFixed(2)}px`);
     el.style.setProperty("--companion-gaze-y", `${next.y.toFixed(2)}px`);
+    el.style.setProperty("--companion-mouth-x", `${mouth.x.toFixed(2)}px`);
+    el.style.setProperty("--companion-mouth-y", `${mouth.y.toFixed(2)}px`);
     if (
       Math.abs(next.x - target.x) > 0.04 ||
       Math.abs(next.y - target.y) > 0.04
@@ -149,6 +162,8 @@ export function subscribeCompanionGaze(el: HTMLElement) {
     current.delete(el);
     el.style.removeProperty("--companion-gaze-x");
     el.style.removeProperty("--companion-gaze-y");
+    el.style.removeProperty("--companion-mouth-x");
+    el.style.removeProperty("--companion-mouth-y");
     if (!figures.size) unbind?.();
   };
 }

@@ -22,6 +22,21 @@ const companionPoses = [
   ["three-quarter-right", xiaoxuThreeQuarterRight],
 ] as const;
 
+const companionMouths = {
+  front: {
+    smile: "M 297.80 351.00 C 312.00 361.50, 329.00 360.30, 343.20 351.00",
+    open: { cx: 320.5, cy: 355.5, rx: 18, ry: 8.5 },
+  },
+  "three-quarter-left": {
+    smile: "M 227.20 373.53 C 238.33 384.40, 251.67 383.70, 262.80 373.97",
+    open: { cx: 245, cy: 378.5, rx: 14, ry: 7 },
+  },
+  "three-quarter-right": {
+    smile: "M 403.20 358.70 C 413.67 367.40, 426.33 367.70, 436.80 353.30",
+    open: { cx: 420, cy: 360.5, rx: 14, ry: 7 },
+  },
+} as const;
+
 export function SidebarAssistant({
   floating = false,
   docked = false,
@@ -136,9 +151,7 @@ export function SidebarAssistant({
     setDetailsOpen(false);
     hub.openPanel(tab);
   };
-  const launchLabel = hub.allowed
-    ? "打开小序文字对话"
-    : "打开 AI 个人助理";
+  const launchLabel = hub.allowed ? "打开小序文字对话" : "打开 AI 个人助理";
   const menuTitle =
     labels[state] +
     (unread.length ? " · " + unread.length + " 条新动态" : " · 右键展开");
@@ -276,14 +289,33 @@ export function SidebarAssistant({
                     >
                       <img src={src} alt="" draggable={false} />
                       {pose !== "back" ? (
-                        <span className="companion-eyes">
-                          <span className="companion-eye companion-eye-left">
-                            <span className="companion-eye-dot" />
+                        <>
+                          <span className="companion-eyes">
+                            <span className="companion-eye companion-eye-left">
+                              <span className="companion-eye-dot" />
+                            </span>
+                            <span className="companion-eye companion-eye-right">
+                              <span className="companion-eye-dot" />
+                            </span>
                           </span>
-                          <span className="companion-eye companion-eye-right">
-                            <span className="companion-eye-dot" />
-                          </span>
-                        </span>
+                          <svg
+                            className="companion-mouth"
+                            viewBox="0 0 640 640"
+                            aria-hidden="true"
+                          >
+                            <path
+                              className="companion-mouth-smile"
+                              d={companionMouths[pose].smile}
+                            />
+                            <ellipse
+                              className="companion-mouth-open"
+                              cx={companionMouths[pose].open.cx}
+                              cy={companionMouths[pose].open.cy}
+                              rx={companionMouths[pose].open.rx}
+                              ry={companionMouths[pose].open.ry}
+                            />
+                          </svg>
+                        </>
                       ) : null}
                     </div>
                   ))}
