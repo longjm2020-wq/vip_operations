@@ -140,7 +140,7 @@
   position: absolute;
   left: 50%;
   top: 50%;
-  /* Billboard the nest and rings so they stay flat; only the mascot tilts. */
+  /* Billboard the nest, rings and docked mascot so they stay flat-facing. */
   transform: translate(-50%, -50%) rotateY(calc(-1 * var(--world-yaw)))
     rotateX(calc(-1 * var(--world-pitch)));
   transform-style: preserve-3d;
@@ -353,8 +353,8 @@
     rotateX(calc(-1 * var(--world-pitch)));
 }
 .workspace-world-plane .workspace-ai-companion-slot {
-  transform: translate(-50%, -50%) rotateX(var(--world-pitch))
-    rotateY(var(--world-yaw));
+  /* Parent core is already billboarded; do not re-apply the camera tilt. */
+  transform: translate(-50%, -50%);
   pointer-events: auto;
 }
 .workspace-world-plane :is(.workspace-ai-summon, .workspace-ai-view-reset) {
@@ -369,7 +369,7 @@
   background: transparent;
   box-shadow: none;
   transform: rotate(var(--orbit-angle)) translateX(var(--orbit-radius))
-    rotate(var(--orbit-counter-angle)) translateZ(var(--orbit-depth, 0px));
+    rotate(var(--orbit-counter-angle));
 }
 .workspace-world-plane .workspace-dock-item::before {
   content: none;
