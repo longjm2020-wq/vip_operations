@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { subscribeCompanionGaze } from "./companion-gaze";
 import {
   ArrowRightOutlined,
   AudioOutlined,
@@ -34,7 +35,12 @@ export function SidebarAssistant({
 }) {
   const hub = useAssistantHub();
   const launch = useRef<HTMLButtonElement>(null);
+  const figure = useRef<HTMLDivElement>(null);
   const lastActive = useRef(Date.now());
+  useEffect(() => {
+    if (!figure.current) return;
+    return subscribeCompanionGaze(figure.current);
+  }, []);
   const [idle, setIdle] = useState(false);
   useEffect(() => {
     const active = () => {
@@ -262,15 +268,26 @@ export function SidebarAssistant({
             <div className="companion-robot">
               {!floating && <div className="companion-shadow" />}
               <div className="companion-body">
-                {companionPoses.map(([pose, src]) => (
-                  <img
-                    key={pose}
-                    className={`companion-pose companion-pose-${pose}`}
-                    src={src}
-                    alt=""
-                    draggable={false}
-                  />
-                ))}
+                <div className="companion-figure" ref={figure}>
+                  {companionPoses.map(([pose, src]) => (
+                    <div
+                      key={pose}
+                      className={`companion-pose companion-pose-${pose}`}
+                    >
+                      <img src={src} alt="" draggable={false} />
+                      {pose !== "back" ? (
+                        <span className="companion-eyes">
+                          <span className="companion-eye companion-eye-left">
+                            <span className="companion-eye-dot" />
+                          </span>
+                          <span className="companion-eye companion-eye-right">
+                            <span className="companion-eye-dot" />
+                          </span>
+                        </span>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
                 <span className="companion-sleep">
                   <span>z</span>
                   <span>z</span>

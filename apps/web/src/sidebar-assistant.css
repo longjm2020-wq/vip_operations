@@ -55,8 +55,25 @@
   inset: 0;
   animation: companion-float 4s ease-in-out infinite;
   transform-origin: 50% 62%;
+  container-type: size;
+  container-name: companion-body;
+}
+.companion-figure {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: min(100%, 100cqh);
+  height: min(100%, 100cqw);
 }
 .companion-pose {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  user-select: none;
+  opacity: 0;
+  transition: opacity 180ms ease;
+}
+.companion-pose img {
   position: absolute;
   inset: 0;
   width: 100%;
@@ -64,11 +81,84 @@
   object-fit: contain;
   pointer-events: none;
   user-select: none;
-  opacity: 0;
-  transition: opacity 180ms ease;
 }
 .companion-pose-front {
   opacity: 1;
+}
+.companion-eyes {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.companion-eye {
+  position: absolute;
+  display: block;
+  transform: translate(-50%, -50%)
+    translate(var(--companion-gaze-x, 0px), var(--companion-gaze-y, 0px));
+}
+.companion-eye-dot {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 999px;
+  background: #43eec2;
+  box-shadow:
+    0 0 0.6px #43eec2,
+    0 0 2px rgb(67 238 194 / 75%),
+    0 0 4px rgb(67 238 194 / 35%);
+  transform-origin: 50% 50%;
+  animation: companion-blink 5.4s ease-in-out infinite;
+}
+.companion-eye-right .companion-eye-dot {
+  animation-delay: 0.06s;
+}
+.companion-pose-front .companion-eye-left {
+  left: 36.5625%;
+  top: 48.671875%;
+  width: 5.15625%;
+  height: 11.5625%;
+}
+.companion-pose-front .companion-eye-right {
+  left: 63.046875%;
+  top: 48.671875%;
+  width: 5.15625%;
+  height: 11.5625%;
+}
+.companion-pose-three-quarter-left .companion-eye-left {
+  left: 29.296875%;
+  top: 52.734375%;
+  width: 3.4375%;
+  height: 10.625%;
+}
+.companion-pose-three-quarter-left .companion-eye-right {
+  left: 47.1875%;
+  top: 53.046875%;
+  width: 3.90625%;
+  height: 10.625%;
+}
+.companion-pose-three-quarter-right .companion-eye-left {
+  left: 56.953125%;
+  top: 50.859375%;
+  width: 3.75%;
+  height: 10.625%;
+}
+.companion-pose-three-quarter-right .companion-eye-right {
+  left: 73.828125%;
+  top: 49.0625%;
+  width: 2.8125%;
+  height: 10.15625%;
+}
+@keyframes companion-blink {
+  0%,
+  86%,
+  94%,
+  100% {
+    transform: scaleY(1);
+  }
+  90%,
+  91.5% {
+    transform: scaleY(0.08);
+  }
 }
 .companion-shadow {
   position: absolute;
@@ -81,8 +171,8 @@
   opacity: 0.22;
   pointer-events: none;
 }
-.companion-launch:hover .companion-pose,
-[data-state="happy"] .companion-pose {
+.companion-launch:hover .companion-figure,
+[data-state="happy"] .companion-figure {
   transform: scale(1.04);
   transform-origin: 50% 70%;
 }
@@ -144,8 +234,8 @@
   .companion-pose-three-quarter-left {
   opacity: 1;
 }
-[data-state="working"] .companion-pose-front,
-[data-state="connecting"] .companion-pose-front {
+[data-state="working"] .companion-figure,
+[data-state="connecting"] .companion-figure {
   animation: companion-pulse 1s ease-in-out infinite;
 }
 [data-state="slacking"] .companion-sleep {
@@ -639,10 +729,10 @@ body:has(.workspace-companion[data-docked="true"]:is(:hover, :focus-within))
   transform: rotate(-6deg) translateX(-2px);
   animation: companion-think 2.4s ease-in-out infinite;
 }
-.sidebar-assistant[data-state="connecting"] .companion-pose-front {
+.sidebar-assistant[data-state="connecting"] .companion-figure {
   animation: companion-pulse 0.7s ease-in-out infinite;
 }
-.sidebar-assistant[data-muted="true"] .companion-pose {
+.sidebar-assistant[data-muted="true"] .companion-figure {
   filter: grayscale(0.12) brightness(0.92);
 }
 @keyframes companion-talk-mouth {
@@ -920,8 +1010,8 @@ body:has(.workspace-companion[data-docked="true"]:is(:hover, :focus-within))
   }
   .sidebar-assistant[data-state="listening"] .companion-robot,
   .sidebar-assistant[data-state="speaking"] .companion-robot,
-  .sidebar-assistant[data-state="working"] .companion-pose-front,
-  .sidebar-assistant[data-state="connecting"] .companion-pose-front {
+  .sidebar-assistant[data-state="working"] .companion-figure,
+  .sidebar-assistant[data-state="connecting"] .companion-figure {
     animation: none;
     filter: none;
   }
