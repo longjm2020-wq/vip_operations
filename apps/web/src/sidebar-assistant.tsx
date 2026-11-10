@@ -10,6 +10,21 @@ import { useAssistantHub } from "./assistant-hub-context";
 import { activityFingerprint } from "../../../packages/contracts/src/assistant-activity";
 import "./sidebar-assistant.css";
 import { CompanionVoice } from "./companion-voice";
+import xiaoxuFront from "./assets/xiaoxu/front.webp";
+import xiaoxuBack from "./assets/xiaoxu/back.webp";
+import xiaoxuSideLeft from "./assets/xiaoxu/side-left.webp";
+import xiaoxuSideRight from "./assets/xiaoxu/side-right.webp";
+import xiaoxuThreeQuarterLeft from "./assets/xiaoxu/three-quarter-left.webp";
+import xiaoxuThreeQuarterRight from "./assets/xiaoxu/three-quarter-right.webp";
+
+const companionPoses = [
+  ["front", xiaoxuFront],
+  ["back", xiaoxuBack],
+  ["side-left", xiaoxuSideLeft],
+  ["side-right", xiaoxuSideRight],
+  ["three-quarter-left", xiaoxuThreeQuarterLeft],
+  ["three-quarter-right", xiaoxuThreeQuarterRight],
+] as const;
 
 export function SidebarAssistant({
   floating = false,
@@ -152,136 +167,25 @@ export function SidebarAssistant({
       >
         <div className="companion-stage" aria-hidden="true">
           {!floating && <div className="companion-grid" />}
-          <svg className="companion-robot" viewBox="0 0 180 160" fill="none">
-            {!floating && (
-              <ellipse
-                className="companion-shadow"
-                cx="90"
-                cy="145"
-                rx="39"
-                ry="6"
-              />
-            )}
-            <g className="companion-body">
-              <path
-                className="companion-antenna"
-                d="M90 25V16"
-                strokeWidth="3"
-                strokeLinecap="round"
-              />
-              <circle className="companion-beacon" cx="90" cy="12" r="5" />
-              <rect
-                className="companion-ear"
-                x="28"
-                y="57"
-                width="12"
-                height="25"
-                rx="6"
-              />
-              <rect
-                className="companion-ear"
-                x="140"
-                y="57"
-                width="12"
-                height="25"
-                rx="6"
-              />
-              <rect
-                className="companion-helmet"
-                x="35"
-                y="29"
-                width="110"
-                height="78"
-                rx="30"
-              />
-              <path
-                className="companion-highlight"
-                d="M51 48C56 38 69 37 78 37"
-                strokeWidth="3"
-                strokeLinecap="round"
-              />
-              <rect
-                className="companion-face"
-                x="44"
-                y="45"
-                width="92"
-                height="49"
-                rx="19"
-              />
-              <g className="companion-eyes">
-                <rect x="63" y="61" width="10" height="15" rx="5" />
-                <rect x="107" y="61" width="10" height="15" rx="5" />
-              </g>
-              <g
-                className="companion-sleep-eyes"
-                strokeWidth="3"
-                strokeLinecap="round"
-              >
-                <path d="M62 71h13M106 71h13" />
-              </g>
-              <path
-                className="companion-mouth"
-                d="M84 80Q90 85 96 80"
-                strokeWidth="2"
-                strokeLinecap="round"
-              />
-              <ellipse
-                className="companion-speaking-mouth"
-                cx="90"
-                cy="81"
-                rx="5"
-                ry="4"
-              />
-              <rect
-                className="companion-chassis"
-                x="66"
-                y="105"
-                width="48"
-                height="29"
-                rx="12"
-              />
-              <path
-                className="companion-core"
-                d="m84 116 6 6 6-6"
-                strokeWidth="3"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-              <path
-                className="companion-arm companion-arm-left"
-                d="M64 113q-16-3-19 6"
-                strokeWidth="9"
-                strokeLinecap="round"
-              />
-              <path
-                className="companion-arm companion-arm-right"
-                d="M116 113q16-3 19-16"
-                strokeWidth="9"
-                strokeLinecap="round"
-              />
-              <g className="companion-laptop">
-                <path d="M63 112h54l-5 23H68z" />
-                <path d="M61 137h58" strokeWidth="3" strokeLinecap="round" />
-                <path d="m83 122-4 3 4 3m14-6 4 3-4 3" strokeWidth="1.6" />
-              </g>
-              <g className="companion-sleep">
-                <text x="132" y="34">
-                  z
-                </text>
-                <text x="148" y="21">
-                  z
-                </text>
-              </g>
-              <g className="companion-notice">
-                <circle cx="139" cy="35" r="10" />
-                <path
-                  d="M139 30v6m0 3v.2"
-                  strokeWidth="2"
-                  strokeLinecap="round"
+          <div className="companion-robot">
+            {!floating && <div className="companion-shadow" />}
+            <div className="companion-body">
+              {companionPoses.map(([pose, src]) => (
+                <img
+                  key={pose}
+                  className={`companion-pose companion-pose-${pose}`}
+                  src={src}
+                  alt=""
+                  draggable={false}
                 />
-              </g>
-            </g>
-          </svg>
+              ))}
+              <span className="companion-sleep">
+                <span>z</span>
+                <span>z</span>
+              </span>
+              <span className="companion-notice">!</span>
+            </div>
+          </div>
         </div>
       </button>
       <Popover

@@ -64,10 +64,10 @@ export function findReverieSpace(workspace: HTMLElement, obstacles: DOMRect[]) {
   return null;
 }
 
-/** A decorative projection of the existing vector, never another assistant or voice session. */
+/** A decorative projection of the existing companion figure, never another assistant or voice session. */
 export function beginCompanionReverie(
   workspace: HTMLElement,
-  robot: SVGSVGElement,
+  robot: HTMLElement,
   area: Area,
   onComplete: () => void,
 ) {
@@ -92,7 +92,7 @@ export function beginCompanionReverie(
   );
   const figure = document.createElement("div");
   figure.className = "workspace-reverie-figure";
-  const projection = robot.cloneNode(true) as SVGSVGElement;
+  const projection = robot.cloneNode(true) as HTMLElement;
   projection.setAttribute("aria-hidden", "true");
   projection.setAttribute("focusable", "false");
   figure.appendChild(projection);
