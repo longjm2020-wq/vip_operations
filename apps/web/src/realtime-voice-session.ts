@@ -6,6 +6,8 @@ import {
   type RealtimeToolResult,
 } from "../../../packages/contracts/src/assistant-realtime.js";
 import { assistantPublicText } from "../../../packages/contracts/src/ai-presentation.js";
+import { isPresentationToolName } from "../../../packages/contracts/src/assistant-presentation.js";
+import { runPresentationTool } from "./voice-presentation-store.js";
 
 type VoiceState = "idle" | "connecting" | "listening" | "thinking" | "speaking";
 
@@ -367,6 +369,27 @@ export class RealtimeVoiceSession {
           );
         break;
       case "response.function_call_arguments.done": {
+        if (
+          isPresentationToolName(e.name) &&
+          typeof e.call_id === "string" &&
+          !this.toolIds.has(e.call_id) &&
+          !(e.response_id && this.interruptedResponses.has(e.response_id))
+        ) {
+          // The panel runs locally; only the function output returns to the model.
+          this.toolIds.add(e.call_id);
+          const output = runPresentationTool(e.name, String(e.arguments), this.id, () => this.cb.result());
+          this.sendEvent({
+            type: "conversation.item.create",
+            item: {
+              type: "function_call_output",
+              call_id: e.call_id,
+              output: JSON.stringify(output),
+            },
+          });
+          this.followup = true;
+          this.resumeToolResponse();
+          return;
+        }
         if (
           !isRealtimeToolName(e.name) ||
           (e.response_id && this.interruptedResponses.has(e.response_id)) ||

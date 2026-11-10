@@ -40,6 +40,10 @@ import {
   pageToolDefinitions,
   pageTaskToolDefinitions,
 } from "../../../../../packages/contracts/src/assistant-page.js";
+import {
+  presentationInstructions,
+  presentationToolDefinitions,
+} from "../../../../../packages/contracts/src/assistant-presentation.js";
 
 const root = "https://api.openai.com/v1/realtime";
 const pendingQwenSessions = new Map<string, AbortController>();
@@ -150,6 +154,7 @@ export function realtimeConfiguration(
   desktopEnabled = false,
   pageEnabled = false,
   history = "",
+  presentation = true,
 ) {
   const pageControl = pageEnabled && !desktopEnabled;
   return {
@@ -182,6 +187,7 @@ export function realtimeConfiguration(
           ]
         : []),
       "普通聊天直接用语音回答，不调用工作台工具。私人日程和记忆仅在用户已授权时由工具读取；未知信息不猜测。",
+      ...(presentation ? [presentationInstructions] : []),
       history,
     ].join("\n"),
     audio: {
@@ -242,6 +248,8 @@ export function realtimeConfiguration(
       ...(pageControl
         ? [...pageToolDefinitions, ...pageTaskToolDefinitions]
         : []),
+      // Presentation tools run in the browser panel; they never touch business data.
+      ...(presentation ? presentationToolDefinitions : []),
     ],
     tool_choice: "auto",
   };
@@ -297,7 +305,7 @@ export async function verifyRealtimeSettings(c: Context) {
       await verifyDoubaoRealtime(
         selected.key,
         selected.voice,
-        realtimeConfiguration(selected.voice),
+        realtimeConfiguration(selected.voice, false, false, "", false),
       );
     } else if (s.provider === "qwen") {
       await verifyQwenRealtime(

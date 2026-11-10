@@ -3,6 +3,7 @@ import { realtimeModel } from "../../packages/contracts/src/assistant-realtime.j
 const f = vi.hoisted(() => ({ api: vi.fn() }));
 vi.mock("../../apps/web/src/api.js", () => ({ api: f.api }));
 import { RealtimeVoiceSession } from "../../apps/web/src/realtime-voice-session.js";
+import { usePresentationStore } from "../../apps/web/src/voice-presentation-store.js";
 class Channel {
   readyState = "open";
   onmessage?: (e: { data: string }) => void;
@@ -297,6 +298,47 @@ describe("realtime media ownership and event handling", () => {
     expect(
       Peer.last.dc.sent.filter((e) => e.type === "response.create"),
     ).toHaveLength(1);
+  });
+  it("opens the presentation panel locally and lets the model narrate it", async () => {
+    const cb = callbacks();
+    session = new RealtimeVoiceSession(cb);
+    await session.start(options);
+    ready();
+    Peer.last.dc.emit({ type: "response.created", response: { id: "p1" } });
+    const event = {
+      type: "response.function_call_arguments.done",
+      name: "present_slides",
+      call_id: "deck",
+      response_id: "p1",
+      arguments: JSON.stringify({
+        title: "本周经营",
+        slides: [{ title: "销售额" }, { title: "退货率" }],
+      }),
+    };
+    Peer.last.dc.emit(event);
+    Peer.last.dc.emit(event);
+    expect(usePresentationStore.getState().deck?.slides).toHaveLength(2);
+    expect(f.api.mock.calls.filter((c) => c[0].endsWith("/tool"))).toHaveLength(0);
+    const outputs = Peer.last.dc.sent.filter(
+      (e) => e.type === "conversation.item.create",
+    );
+    expect(outputs).toHaveLength(1);
+    expect(JSON.stringify(outputs[0])).toContain("演示面板已打开");
+    expect(cb.business).not.toHaveBeenCalled();
+    expect(Peer.last.dc.sent.some((e) => e.type === "response.create")).toBe(false);
+    Peer.last.dc.emit({
+      type: "response.done",
+      response: { id: "p1", status: "completed" },
+    });
+    expect(Peer.last.dc.sent.filter((e) => e.type === "response.create")).toHaveLength(1);
+    await vi.waitFor(() =>
+      expect(
+        f.api.mock.calls.find((c) => c[0].endsWith("/captions"))?.[2],
+      ).toMatchObject({
+        messages: [{ role: "assistant", text: expect.stringContaining("【语音演示】本周经营") }],
+      }),
+    );
+    usePresentationStore.getState().dispatch({ type: "close" });
   });
   it("suppresses late navigation and speech after a call is closed", async () => {
     let resolve!: (v: unknown) => void;

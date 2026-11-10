@@ -62,6 +62,7 @@ import { AssistantBusinessResults } from "./assistant-business-results";
 import { AssistantVoiceSettingsPanel } from "./assistant-realtime-panel";
 import { useGptVoice } from "./use-gpt-voice";
 import { useRealtimeVoice } from "./use-realtime-voice";
+import { VoicePresentationPanel } from "./voice-presentation-panel";
 import type { RealtimeStatus } from "../../../packages/contracts/src/assistant-realtime";
 import { useGptSpeech } from "./use-gpt-speech";
 import type { AssistantVoiceStatus } from "../../../packages/contracts/src/assistant-voice";
@@ -949,6 +950,13 @@ export function PersonalAssistantProvider({
       }}
     >
       {children}
+      <VoicePresentationPanel
+        voiceActive={realtimeVoice.active}
+        speaking={realtimeVoice.state === "speaking"}
+        caption={realtimeVoice.captions
+          .filter((caption) => caption.role === "assistant")
+          .at(-1)}
+      />
       <Drawer
         open={open}
         aria-label="AI 个人助理"
