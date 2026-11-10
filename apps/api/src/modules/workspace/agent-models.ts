@@ -8,11 +8,16 @@ import type { Row } from "../../../../../packages/database/src/index.js";
 import { fail } from "../../core.js";
 import { COMPASS_AI_MODEL } from "../../ai-model-constants.js";
 import { featureModelRef } from "../../ai-model-routing.js";
-import { connectedModelRefs } from "../../ai-model-connections.js";
 import {
   aiFeatures,
   type AiFeatureId,
 } from "../../../../../packages/contracts/src/ai-management.js";
+import {
+  firstEligibleConnected,
+  modelFallbackNotice,
+  publicModelLabel,
+  safeConnectedModelRefs,
+} from "./model-fallback.js";
 
 export const modelRef = (id: string) =>
   "engine/" + createHash("sha256").update(id).digest("hex").slice(0, 24);
@@ -193,8 +198,18 @@ async function catalog() {
 }
 export async function publicAgentCatalog(): Promise<AgentCatalog> {
   const data = await catalog();
-  const connected = await connectedModelRefs(data.models);
+  const connected = await safeConnectedModelRefs(data.models);
   const models = data.models.filter((model) => connected.has(model.id));
+  const configured = (await featureModelRef("assistant_chat")) || primary.id;
+  const fallback = firstEligibleConnected(
+    models,
+    connected,
+    (model) => model.vision === true,
+  );
+  const defaultModel = models.some((model) => model.id === configured)
+    ? configured
+    : fallback?.id || configured;
+  const switched = defaultModel !== configured && fallback;
   return {
     models: models.map(
       ({
@@ -207,12 +222,97 @@ export async function publicAgentCatalog(): Promise<AgentCatalog> {
     imageModels: data.imageModels.map(
       ({ actual: _actual, aspects: _aspects, ...m }) => m,
     ),
-    defaultModel: (await featureModelRef("assistant_chat")) || primary.id,
+    defaultModel,
     notice: models.length
       ? "仅显示当前连接最近调用成功的多模态模型。"
       : "暂无已接通的多模态模型，请在 AI 模型管理中检查连接。",
+    ...(switched
+      ? {
+          fallbackNotice: modelFallbackNotice(
+            publicModelLabel(fallback),
+            "原默认模型未接通或最近一次调用未成功",
+          ),
+        }
+      : {}),
   };
 }
+
+async function chatModelPool(requested?: string) {
+  const baseline: Model[] = [primary, bailian];
+  if (!requested || baseline.some((model) => model.id === requested))
+    return baseline;
+  try {
+    return (await catalog()).models;
+  } catch {
+    return baseline;
+  }
+}
+
+export async function resolveChatModel(
+  ref?: string,
+  needs: { vision?: boolean; pdf?: boolean } = {},
+) {
+  const requested = ref || (await featureModelRef("assistant_chat"));
+  const pool = await chatModelPool(requested);
+  const preferred =
+    pool.find((model) => model.id === (requested || primary.id)) ||
+    (!requested ? primary : undefined);
+  const connected = await safeConnectedModelRefs(pool);
+  const eligible = (model: Model) =>
+    (!needs.vision || model.vision) && (!needs.pdf || model.pdf);
+  if (
+    preferred &&
+    eligible(preferred) &&
+    (!connected.size || connected.has(preferred.id))
+  )
+    return { model: preferred, notice: "" };
+  const fallback = firstEligibleConnected(
+    pool,
+    connected,
+    eligible,
+    preferred ? [preferred.id] : [],
+  );
+  if (fallback)
+    return {
+      model: fallback,
+      notice: modelFallbackNotice(
+        publicModelLabel(fallback),
+        preferred && connected.has(preferred.id)
+          ? "原选型不满足本次输入能力"
+          : "原默认或所选模型未接通或最近一次调用未成功",
+      ),
+    };
+  return { model: await resolveAgentModel(ref), notice: "" };
+}
+
+export async function fallbackChatModel(
+  current: Model,
+  needs: { vision?: boolean; pdf?: boolean } = {},
+) {
+  let models: Model[] = [primary, bailian];
+  try {
+    models = (await catalog()).models;
+  } catch {
+    models = [primary, bailian];
+  }
+  const connected = await safeConnectedModelRefs(models);
+  const fallback = firstEligibleConnected(
+    models,
+    connected,
+    (model) => (!needs.vision || model.vision) && (!needs.pdf || model.pdf),
+    [current.id],
+  );
+  return fallback
+    ? {
+        model: fallback,
+        notice: modelFallbackNotice(
+          publicModelLabel(fallback),
+          "原模型访问被拒绝或额度不足",
+        ),
+      }
+    : undefined;
+}
+
 /** Full routing metadata remains available to administrators for configuration. */
 export async function agentModelCandidates() {
   const data = await catalog();

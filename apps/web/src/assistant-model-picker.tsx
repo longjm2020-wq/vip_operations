@@ -2,6 +2,13 @@ import { Button, Dropdown } from "antd";
 import { DownOutlined, ReloadOutlined } from "@ant-design/icons";
 import type { AgentCatalog } from "../../../packages/contracts/src/assistant-agent";
 
+import { resolveAssistantModelPickerState } from "../../../packages/contracts/src/assistant-model-picker";
+
+export {
+  visibleAssistantModels,
+  resolveAssistantModelPickerState,
+} from "../../../packages/contracts/src/assistant-model-picker";
+
 export function AssistantModelPicker({
   catalog,
   value,
@@ -23,14 +30,11 @@ export function AssistantModelPicker({
   teamSelected?: boolean;
   selectTeam?: () => void;
 }) {
-  const models =
-    catalog?.models?.filter((model) => model.vision === true) || [];
-  const selectedId = teamSelected ? "team" : value || catalog?.defaultModel;
-  const selected = models.find((model) => model.id === selectedId);
-  const title =
-    (teamSelected ? "智能体团队" : selected?.displayName) ||
-    selected?.name ||
-    (selectedId ? "所选模型不可用" : "默认模型");
+  const { models, selectedId, title } = resolveAssistantModelPickerState({
+    catalog,
+    value,
+    teamSelected,
+  });
   return (
     <Dropdown
       trigger={["click"]}

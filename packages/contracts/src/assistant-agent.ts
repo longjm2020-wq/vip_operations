@@ -31,6 +31,7 @@ export type AgentCatalog = {
   imageModels: { id: string; name: string; reference: boolean }[];
   defaultModel: string;
   notice: string;
+  fallbackNotice?: string;
 };
 export type AgentJob = {
   id: string;

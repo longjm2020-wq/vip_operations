@@ -133,8 +133,9 @@ it("only offers multimodal chat models and routes eligible selections to the exa
   expect(connectedCatalog.models.map((model) => model.id)).toEqual(
     connections.allowed,
   );
-  // A disconnected default is never replaced silently with a different model.
-  expect(connectedCatalog.defaultModel).toBe(modelRef("openai/gpt-6.1-sol"));
+  expect(connectedCatalog.defaultModel).toBe(modelRef("google/gemini-2.5-pro"));
+  expect(connectedCatalog.fallbackNotice).toContain("已自动切换到");
+  expect(connectedCatalog.fallbackNotice).toContain("未接通");
   connections.allowed = [];
   expect(await publicAgentCatalog()).toMatchObject({
     models: [],

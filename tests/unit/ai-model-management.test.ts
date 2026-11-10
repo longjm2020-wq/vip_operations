@@ -516,6 +516,9 @@ describe("AI model administration and real routing", () => {
       revision: 0,
     });
     expect((await resolveTeamModel({})).actual).toBe(vision);
+    await query(
+      "INSERT INTO ai_model_usage(id,feature_id,source,model,response_model,status,started_at,completed_at) VALUES(gen_random_uuid(),'assistant_team','openrouter.ai','openai/gpt-6.1-sol','openai/gpt-6.1-sol','success',now(),now())",
+    );
     expect(
       (await resolveTeamModel({ feature: "deerflow_team", orchestrator: true }))
         .actual,
@@ -809,7 +812,8 @@ describe("Bailian DeepSeek chat", () => {
     expect(bodies[1].response_format).toEqual({ type: "json_object" });
     const catalog = await publicAgentCatalog();
     expect(catalog.models.map((m) => m.id)).toContain(modelId);
-    expect(catalog.defaultModel).toBe(modelRef("openai/gpt-6.1-sol"));
+    expect(catalog.defaultModel).toBe(modelId);
+    expect(catalog.fallbackNotice).toContain("已自动切换到");
     expect(catalog.models.find((m) => m.id === modelId)).toMatchObject({
       vision: true,
       structured: false,

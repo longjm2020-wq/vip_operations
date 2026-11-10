@@ -48,6 +48,7 @@ vi.mock("../../apps/api/src/modules/analytics/secrets.js", () => ({
 }));
 vi.mock("../../apps/api/src/modules/workspace/team-models.js", () => ({
   resolveTeamModel: f.route,
+  fallbackTeamModel: async () => undefined,
   resolveTeamImageModel: async () => ({ id: "engine/image" }),
 }));
 vi.mock("../../apps/api/src/modules/workspace/team-video.js", () => ({

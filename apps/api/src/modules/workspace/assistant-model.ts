@@ -10,7 +10,12 @@ import { availableWorkspaceTools } from "../../../../../packages/contracts/src/p
 import { fail, type Context } from "../../core.js";
 import { COMPASS_AI_ENDPOINT } from "../analytics/ai.js";
 import { assistantPublicText } from "../../../../../packages/contracts/src/ai-presentation.js";
-import { matchesAgentModel, resolveAgentModel } from "./agent-models.js";
+import {
+  fallbackChatModel,
+  matchesAgentModel,
+  resolveChatModel,
+} from "./agent-models.js";
+import { isModelAccessFallbackError } from "./model-fallback.js";
 import { attachmentContext } from "./agent-files.js";
 import {
   agentToolDefinitions,
@@ -98,8 +103,12 @@ export async function askAssistantModel(
   } = {},
 ) {
   const available = availableWorkspaceTools(c.actor);
-  const model = await resolveAgentModel(options.model);
-  const bailian =
+  const needs = { vision: true as const };
+  const selected = await resolveChatModel(options.model, needs);
+  let model = selected.model;
+  let notice = selected.notice;
+  let usedAccessFallback = false;
+  let bailian =
     model.provider === "bailian" ? await bailianChatConnection() : undefined;
   const tools = [
     ...assistantToolDefinitions(c),
@@ -220,6 +229,36 @@ export async function askAssistantModel(
           },
           body: JSON.stringify(request),
         });
+    let accessPayload: unknown;
+    if (!response.ok && response.status === 429) {
+      try {
+        const rawError = await response.clone().text();
+        if (rawError.length <= 8192) accessPayload = JSON.parse(rawError);
+      } catch {
+        /* Quota classification is optional; generic 429 stays on this model. */
+      }
+    }
+    if (
+      !response.ok &&
+      !usedAccessFallback &&
+      isModelAccessFallbackError(response.status, accessPayload)
+    ) {
+      const fallback = await fallbackChatModel(model, needs);
+      if (fallback) {
+        await response.body?.cancel();
+        usedAccessFallback = true;
+        model = fallback.model;
+        notice = fallback.notice;
+        bailian =
+          model.provider === "bailian"
+            ? await bailianChatConnection()
+            : undefined;
+        if (bailian)
+          transcript.push({ role: "system", content: jsonAnswerInstruction });
+        round -= 1;
+        continue;
+      }
+    }
     if (!response.ok) {
       await response.body?.cancel();
       fail(
@@ -365,6 +404,7 @@ export async function askAssistantModel(
       ...answer,
       text: assistantPublicText(answer.text),
       responseModel: payload.model,
+      ...(notice ? { notice } : {}),
       jobIds,
       citations: [...new Map(citations.map((c) => [c.url, c])).values()],
       ...session,

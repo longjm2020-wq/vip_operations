@@ -16,7 +16,7 @@ import { fail, hash, parse, type Context } from "../../core.js";
 import { COMPASS_AI_MODEL } from "../analytics/ai.js";
 import { assistantPublicText } from "../../../../../packages/contracts/src/ai-presentation.js";
 import { agentFileView, ownedAgentFiles } from "./agent-files.js";
-import { resolveAgentModel } from "./agent-models.js";
+import { resolveChatModel } from "./agent-models.js";
 import { encryptionReady } from "../analytics/secrets.js";
 
 import { requireAssistant, readAssistantMemory } from "./assistant-memory.js";
@@ -169,7 +169,10 @@ export async function sendAssistant(
     );
   const fingerprint = hash(JSON.stringify(body));
   const s = await settings();
-  const selected = await resolveAgentModel(body.model);
+  const chatSelection = await resolveChatModel(body.model, {
+    vision: true,
+  });
+  const selected = chatSelection.model;
   if (selected.provider === "bailian") await bailianChatConnection();
   else if (!ready(s))
     fail("AI_NOT_READY", "请管理员先启用并验证 AI 模型连接", 503);
@@ -331,6 +334,14 @@ export async function sendAssistant(
           : command || desktopTask || websiteRequest
             ? undefined
             : COMPASS_AI_MODEL,
+      notice:
+        command || desktopTask || websiteRequest
+          ? undefined
+          : ("notice" in answer && typeof answer.notice === "string"
+              ? answer.notice
+              : "") ||
+            chatSelection.notice ||
+            undefined,
       ...("jobIds" in answer
         ? { jobIds: answer.jobIds, citations: answer.citations }
         : {}),

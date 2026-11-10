@@ -26,7 +26,12 @@ import type { Context } from "../../core.js";
 import { COMPASS_AI_ENDPOINT } from "../analytics/ai.js";
 import { decryptSecret, encryptionReady } from "../analytics/secrets.js";
 import { requireAssistant } from "./assistant-memory.js";
-import { resolveTeamModel, resolveTeamImageModel } from "./team-models.js";
+import {
+  fallbackTeamModel,
+  resolveTeamModel,
+  resolveTeamImageModel,
+} from "./team-models.js";
+import { isModelAccessFallbackError } from "./model-fallback.js";
 import { matchesAgentModel } from "./agent-models.js";
 import {
   agentFileView,
@@ -875,8 +880,9 @@ export async function runTeamExecution(
   const call: TeamExecutionDependencies["call"] = async (request) => {
     await settings();
     const files = await ownedAgentFiles(c, request.fileIds);
-    const model = await resolveTeamModel({
-      feature: engine === "mastra" ? "mastra_team" : "assistant_team",
+    const modelOptions = {
+      feature: (engine === "mastra" ? "mastra_team" : "assistant_team") as
+        "mastra_team" | "assistant_team",
       taskModel: input.model,
       profileModel:
         request.member.modelMode === "fixed"
@@ -887,7 +893,9 @@ export async function runTeamExecution(
       vision: files.some((f) => /^(image|video)\//.test(f.mime)),
       pdf: files.some((f) => f.mime === "application/pdf"),
       structured: true,
-    });
+    };
+    let model = await resolveTeamModel(modelOptions);
+    let usedAccessFallback = false;
     await request.onModel?.({
       model: model.actual,
       modelId: model.id,
@@ -1040,16 +1048,61 @@ export async function runTeamExecution(
               body: JSON.stringify(modelBody),
             });
       if (!response.ok) {
+        let payload: unknown;
+        try {
+          payload = await readTeamModelResponse(
+            response,
+            AbortSignal.any([requestSignal, AbortSignal.timeout(1500)]),
+            8 * 1024,
+          );
+        } catch {
+          requestSignal.throwIfAborted();
+        }
+        if (
+          !usedAccessFallback &&
+          isModelAccessFallbackError(response.status, payload)
+        ) {
+          const fallback = await fallbackTeamModel(model, modelOptions);
+          if (fallback) {
+            usedAccessFallback = true;
+            model = fallback;
+            await request.onModel?.({
+              model: model.actual,
+              modelId: model.id,
+              routeReason: model.selectionReason,
+            });
+            round -= 1;
+            continue;
+          }
+        }
         throw new TeamNeedsUser(
-          await readTeamModelError(response, requestSignal),
+          teamModelErrorMessage(response.status, payload),
         );
       }
       const payload = await readTeamModelResponse(response, requestSignal);
       const providerError = payload.error || payload.choices?.[0]?.error;
-      if (providerError)
+      if (providerError) {
+        if (
+          !usedAccessFallback &&
+          isModelAccessFallbackError(response.status, { error: providerError })
+        ) {
+          const fallback = await fallbackTeamModel(model, modelOptions);
+          if (fallback) {
+            usedAccessFallback = true;
+            model = fallback;
+            await request.onModel?.({
+              model: model.actual,
+              modelId: model.id,
+              routeReason: model.selectionReason,
+            });
+            round -= 1;
+            continue;
+          }
+        }
         throw new TeamNeedsUser(
           teamModelErrorMessage(response.status, { error: providerError }),
         );
+      }
       if (!matchesAgentModel(model, payload.model))
         throw new TeamNeedsUser("模型服务返回了非指定型号，未继续使用该结果");
       checkCompletionLength(payload, request.purpose);
