@@ -382,6 +382,48 @@ describe("full-duplex relay", () => {
       upstream.sent.some((e) => e.type === "conversation.item.create"),
     ).toBe(false);
   });
+  it("forwards validated presentation calls to the browser without running business tools", async () => {
+    const { events, upstream } = await ready("qwen");
+    const emit = (event: unknown) =>
+      upstream.emit("message", Buffer.from(JSON.stringify(event)), false);
+    emit({ type: "input_audio_buffer.speech_started", item_id: "q1" });
+    emit({ type: "response.created", response: { id: "r1" } });
+    emit({
+      type: "response.function_call_arguments.done",
+      response_id: "r1",
+      name: "present_slides",
+      call_id: "deck",
+      arguments: JSON.stringify({ slides: [{ title: "销售额" }] }),
+    });
+    emit({
+      type: "response.function_call_arguments.done",
+      response_id: "r1",
+      name: "present_slides",
+      call_id: "bad",
+      arguments: JSON.stringify({
+        slides: [{ title: "图", visual: { type: "video", url: "https://evil.example/x.mp4" } }],
+      }),
+    });
+    emit({
+      type: "response.done",
+      response: { id: "r1", status: "completed" },
+    });
+    await vi.waitFor(() =>
+      expect(
+        upstream.sent.some((e) => e.type === "conversation.item.create"),
+      ).toBe(true),
+    );
+    expect(f.tool).not.toHaveBeenCalled();
+    expect(events.some((e) => e.type === "xuti.tool_started")).toBe(false);
+    const forwarded = events.filter((e) => e.type === "xuti.presentation");
+    expect(forwarded).toHaveLength(1);
+    expect(forwarded[0]).toMatchObject({ call_id: "deck", name: "present_slides" });
+    const outputs = JSON.stringify(
+      upstream.sent.filter((e) => e.type === "conversation.item.create"),
+    );
+    expect(outputs).toContain("演示面板已打开");
+    expect(outputs).toContain("视频地址不在允许范围");
+  });
   it("does not resume interrupted Qwen tool replies after provider backpressure recovers", async () => {
     const { socket, events, upstream } = await ready("qwen");
     const emit = (event: unknown) =>

@@ -7,6 +7,7 @@ import type {
   RealtimeOptions,
 } from "./realtime-voice-session.js";
 import { bytesBase64, pcmBuffer, pcmBytes } from "./voice-pcm.js";
+import { runPresentationTool } from "./voice-presentation-store.js";
 
 type Caption = RealtimeCaption & {
   key: string;
@@ -27,6 +28,8 @@ type VoiceEvent = {
   question_id?: string;
   response_id?: string;
   call_id?: string;
+  name?: string;
+  arguments?: string;
   expiresAt?: string;
 };
 
@@ -243,7 +246,8 @@ export class DoubaoVoiceSession {
     let eventTurn = this.turn;
     if (
       event.type?.startsWith("response.") ||
-      event.type?.startsWith("xuti.tool_")
+      event.type?.startsWith("xuti.tool_") ||
+      event.type === "xuti.presentation"
     ) {
       eventTurn =
         (event.response_id
@@ -383,6 +387,15 @@ export class DoubaoVoiceSession {
         this.cb.business();
         this.cb.result();
         if (event.result?.navigation) this.cb.navigate(event.result.navigation);
+        break;
+      case "xuti.presentation":
+        // The relay already validated the call; the panel validates it again.
+        if (
+          eventTurn === this.turn &&
+          typeof event.name === "string" &&
+          typeof event.arguments === "string"
+        )
+          runPresentationTool(event.name, event.arguments, this.id, () => this.cb.result());
         break;
       case "xuti.error":
         this.fail(

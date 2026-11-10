@@ -5,6 +5,11 @@ import {
   type RealtimeToolName,
   type RealtimeToolResult,
 } from "../../../packages/contracts/src/assistant-realtime.js";
+import {
+  isPresentationToolName,
+  type PresentationToolName,
+} from "../../../packages/contracts/src/assistant-presentation.js";
+import { runPresentationTool } from "./voice-presentation-store.js";
 import { assistantPublicText } from "../../../packages/contracts/src/ai-presentation.js";
 import {
   isPageToolName,
@@ -53,7 +58,7 @@ type Event = {
 };
 type Tool = {
   callId: string;
-  name: RealtimeToolName | PageToolName | PageTaskToolName;
+  name: RealtimeToolName | PageToolName | PageTaskToolName | PresentationToolName;
   args: unknown;
 };
 type Response = {
@@ -457,8 +462,19 @@ export class QwenRealtimeVoiceSession {
     let resume = true;
     let businessMarked = false;
     try {
-      for (const [index, tool] of response.tools.entries()) {
+      let stepIndex = 0;
+      for (const tool of response.tools) {
         if (!this.current(id)) return;
+        // Presentation calls only drive the local panel and never count as page
+        // or business steps, so they run even inside a page task batch.
+        if (isPresentationToolName(tool.name)) {
+          outputs.push({
+            callId: tool.callId,
+            result: runPresentationTool(tool.name, String(tool.args), this.id, () => this.cb.result()),
+          });
+          continue;
+        }
+        const index = stepIndex++;
         if (pageBatch && index > 0) {
           outputs.push({
             callId: tool.callId,
@@ -1005,7 +1021,8 @@ export class QwenRealtimeVoiceSession {
         if (
           (!isRealtimeToolName(event.name) &&
             !isPageToolName(event.name) &&
-            !isPageTaskToolName(event.name)) ||
+            !isPageTaskToolName(event.name) &&
+            !isPresentationToolName(event.name)) ||
           typeof event.call_id !== "string" ||
           this.toolIds.has(event.call_id) ||
           response.done

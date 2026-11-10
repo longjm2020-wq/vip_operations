@@ -149,7 +149,7 @@ export const aiFeatures = [
     group: "语音",
     href: "/my-workspace?assistant=voice",
     boundary:
-      "持续语音交流与打断；支持切换已适配的语音服务。WebRTC 用量由供应商结算，不接收浏览器自报账单。",
+      "持续语音交流与打断；支持切换已适配的语音服务。讲解时可调用演示面板工具逐页展示图文、图表、视频与页面高亮（豆包通道不提供演示工具），演示在浏览器本地渲染、不额外调用模型。WebRTC 用量由供应商结算，不接收浏览器自报账单。",
     kind: "realtime",
   },
   {

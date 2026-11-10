@@ -9,6 +9,11 @@ import type { Context } from "../../core.js";
 import { requireAssistant } from "./assistant-memory.js";
 import { isRealtimeToolName } from "../../../../../packages/contracts/src/assistant-realtime.js";
 import {
+  isPresentationToolName,
+  parsePresentationCall,
+  presentationToolResult,
+} from "../../../../../packages/contracts/src/assistant-presentation.js";
+import {
   activateRealtimeSocket,
   claimRealtimeSocket,
   checkRealtime,
@@ -451,11 +456,13 @@ function runRelay(
             JSON.stringify(
               doubaoConfiguration(
                 config.voice,
+                // The Doubao dialogue model only receives the business tools.
                 realtimeConfiguration(
                   config.voice,
                   config.desktopEnabled,
                   false,
                   config.history,
+                  false,
                 ),
               ),
             ),
@@ -561,7 +568,14 @@ function runRelay(
                   question_id: e.question_id,
                   response_id: e.response_id,
                 };
-                send({ type: "xuti.tool_started", ...turn });
+                // Presentation calls only drive the browser panel; they are not business work.
+                if (
+                  items.some(
+                    (item: { name?: unknown }) =>
+                      !isPresentationToolName(item?.name),
+                  )
+                )
+                  send({ type: "xuti.tool_started", ...turn });
                 toolQueue = toolQueue
                   .then(async () => {
                     if (closed || (qwen && !qwen.current(e.response_id)))
@@ -575,6 +589,42 @@ function runRelay(
                       await refreshActor();
                       if (closed || (qwen && !qwen.current(e.response_id)))
                         return;
+                      if (
+                        item &&
+                        isPresentationToolName(item.name) &&
+                        typeof item.call_id === "string" &&
+                        typeof item.arguments === "string"
+                      ) {
+                        const parsed = parsePresentationCall(
+                          item.name,
+                          item.arguments,
+                          { origin: process.env.APP_ORIGIN },
+                        );
+                        const output = parsed.ok
+                          ? presentationToolResult(parsed.command)
+                          : { ok: false, text: parsed.error };
+                        if (parsed.ok)
+                          send({
+                            type: "xuti.presentation",
+                            call_id: item.call_id,
+                            name: item.name,
+                            arguments: item.arguments,
+                            ...turn,
+                          });
+                        qwenResults.push({
+                          call_id: item.call_id,
+                          output: JSON.stringify(output),
+                        });
+                        results.push({
+                          type: "message",
+                          call_id: item.call_id,
+                          role: "tool",
+                          content: [
+                            { type: "input_text", text: JSON.stringify(output) },
+                          ],
+                        });
+                        continue;
+                      }
                       if (
                         !item ||
                         !isRealtimeToolName(item.name) ||

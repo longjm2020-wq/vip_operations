@@ -18,6 +18,7 @@ import {
   qwenRealtimeModel,
   realtimeModel,
 } from "../../packages/contracts/src/assistant-realtime.js";
+import { presentationToolNames } from "../../packages/contracts/src/assistant-presentation.js";
 const f = vi.hoisted(() => ({
   db: null as PGlite | null,
   read: vi.fn(),
@@ -220,7 +221,11 @@ describe("native realtime voice authorization and lifecycle", () => {
           started.configuration!.session.tools.map(
             (tool) => tool.function.name,
           ),
-        ).toEqual(["workspace_request", "desktop_request"]);
+        ).toEqual([
+          "workspace_request",
+          "desktop_request",
+          ...presentationToolNames,
+        ]);
         expect(started.pageControl).toBe(false);
         expect(JSON.stringify(started.configuration)).not.toContain(deviceId);
       } else {
@@ -230,7 +235,7 @@ describe("native realtime voice authorization and lifecycle", () => {
           ) as string,
         );
         expect(config.tools.map((tool: { name: string }) => tool.name)).toEqual(
-          ["workspace_request", "desktop_request"],
+          ["workspace_request", "desktop_request", ...presentationToolNames],
         );
         expect(JSON.stringify(config)).not.toContain(deviceId);
       }
@@ -288,13 +293,19 @@ describe("native realtime voice authorization and lifecycle", () => {
   it("does not advertise or accept computer execution without a selected device", async () => {
     expect(
       realtimeConfiguration("marin").tools.map((tool) => tool.name),
-    ).toEqual(["workspace_request"]);
+    ).toEqual(["workspace_request", ...presentationToolNames]);
     expect(
       realtimeConfiguration("Tina").tools.map((tool) => tool.name),
-    ).toEqual(["workspace_request"]);
+    ).toEqual(["workspace_request", ...presentationToolNames]);
     expect(
       realtimeConfiguration("Tina", true, true).tools.map((tool) => tool.name),
-    ).toEqual(["workspace_request", "desktop_request"]);
+    ).toEqual(["workspace_request", "desktop_request", ...presentationToolNames]);
+    // Doubao dialogue sessions only receive business tools.
+    expect(
+      realtimeConfiguration("x", false, false, "", false).tools.map(
+        (tool) => tool.name,
+      ),
+    ).toEqual(["workspace_request"]);
     const b = input();
     await startRealtime(actor(), b);
     await expect(
@@ -501,6 +512,7 @@ describe("native realtime voice authorization and lifecycle", () => {
       "page_task_start",
       "page_task_finish",
       "page_wait",
+      ...presentationToolNames,
     ]);
     expect(result.configuration!.session.instructions).toContain(
       "先调用 page_task_start 保留完整目标及条件",
