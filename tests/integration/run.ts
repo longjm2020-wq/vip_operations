@@ -1036,6 +1036,8 @@ try {
   );
   await migrate();
   check("migrations rerun without modifying data");
+  const {testInventoryImages}=await import("./inventory-images.js");
+  await testInventoryImages({ok,request,db,one,check,buyer,session});
   const { testOperationsViewPermissions, testInternalCollaborationPermissions } = await import("./operations-view-permissions.js");
   await testOperationsViewPermissions({ok,request,db,rows,check});
   await testInternalCollaborationPermissions({ok,request,db,rows,check});

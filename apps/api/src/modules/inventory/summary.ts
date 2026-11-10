@@ -21,6 +21,7 @@ import {
 import { applyCompassReferences } from "./compass-reference.js";
 import { applyCompassImages } from "./compass-images.js";
 import { applyVipInventoryCatalog, inventoryListingCte } from "./vip-catalog.js";
+import { applyInventoryUserImages } from "./images.js";
 import { jushuitanSource } from "./jushuitan.js";
 import { jushuitanStockFields } from "../../../../../packages/contracts/src/jushuitan-inventory.js";
 import { inventoryCalculationPolicy, inventoryFormulaSql } from "./calculation-policy.js";
@@ -261,7 +262,7 @@ async function inventorySummarySnapshot(q: Row, tx: Tx, userId?: string) {
     : data;
   const images = dimension === "style" ? references : await applyCompassImages(references, tx, source);
   return {
-    data: await applyVipInventoryCatalog(images, dimension, tx),
+    data: await applyInventoryUserImages(await applyVipInventoryCatalog(images, dimension, tx), dimension, tx),
     ...p,
     total: first.group_count,
     totals,

@@ -98,6 +98,16 @@ export async function applyVipInventoryCatalog(
         (!inventory.inventory_image || row.color_name === "多颜色")
           ? null
           : inventory.main_image_url,
+      // Ordered fallbacks: Vipshop sources first; user and archive pictures are
+      // appended later. The page tries the next source when one fails to load.
+      image_sources:
+        dimension === "style"
+          ? inventory.main_image_url
+            ? [{ url: inventory.main_image_url, source: "archive" }]
+            : []
+          : inventory.inventory_image && row.color_name !== "多颜色" && inventory.main_image_url
+            ? [{ url: inventory.main_image_url, source: "compass" }]
+            : [],
       ...emptyTimes,
       listing_scope: dimension === "sku" ? "barcode" : "style",
       barcode_listing_state: "UNMATCHED",
@@ -133,10 +143,15 @@ export async function applyVipInventoryCatalog(
               (b.image_synced_at ?? "").localeCompare(a.image_synced_at ?? "") ||
               a.barcode_key.localeCompare(b.barcode_key),
           )[0];
-      let imageField = "platform_variant_image";
-      let image = pick(imageField);
-      if (!image && dimension === "style")
-        image = pick((imageField = "platform_image"));
+      const variant = pick("platform_variant_image");
+      const gallery = dimension === "style" ? pick("platform_image") : undefined;
+      const platform = [
+        ...(variant ? [{ url: imageUrl(variant.platform_variant_image)!, source: "vip" }] : []),
+        ...(gallery ? [{ url: imageUrl(gallery.platform_image)!, source: "vip-style" }] : []),
+      ].filter((item, index, list) => list.findIndex((other) => other.url === item.url) === index);
+      result.image_sources = [...platform, ...result.image_sources];
+      const imageField = variant ? "platform_variant_image" : "platform_image";
+      const image = variant ?? gallery;
       if (image) {
         result.main_image_url = imageUrl(image[imageField]);
         result.inventory_image = {

@@ -17,8 +17,10 @@ import { InventorySourceNotice } from "./inventory-source-notice";
 import { InventorySummaryInfo } from "./inventory-summary-info";
 import { InventoryStatusCards } from "./inventory-status-cards";
 import { InventoryListingStatus, InventoryListingTime, inventoryListingLabel, inventoryListingChange, inventoryListingOperation } from "./inventory-listing";
+import { InventoryImageCell } from "./inventory-image-cell";
+import { InventoryImageImport } from "./inventory-image-import";
+import { InventorySkuImport } from "./inventory-sku-import";
 import {
-  CompassProductImage,
   CompassImagePreview,
   type CompassImageTarget,
 } from "./compass-product-image";
@@ -81,6 +83,9 @@ export function InventoryDetailsPage() {
   );
 }
 function InventoryBalances() {
+  const canEditImages = useCan("inventory.adjust");
+  const canCreateProducts = useCan("product.create"), canUpdateProducts = useCan("product.update");
+  const canImportSku = canCreateProducts || canUpdateProducts;
   const [dimension, setDimension] = useState<InventoryDimension>("sku");
   const [pageSize, setPageSize] = useState(20);
   const { height: tableHeight, surface: tableSurface } = useInventoryTableHeight();
@@ -117,18 +122,17 @@ function InventoryBalances() {
       title: "图片",
       dataIndex: "mainImageUrl",
       className: "inventory-image-cell",
-      render: (v, r) =>
-        v ? (
-          <CompassProductImage
-            image={v}
-            code={[r.articleNo || r.styleNo, r.colorName]
-              .filter(Boolean)
-              .join(" · ")}
-            onPreview={setImagePreview}
-          />
-        ) : (
-          "—"
-        ),
+      render: (_, r) => (
+        <InventoryImageCell
+          row={r}
+          code={[r.articleNo || r.styleNo, dimension === "style" ? "" : r.colorName]
+            .filter(Boolean)
+            .join(" · ")}
+          canEdit={canEditImages}
+          onPreview={setImagePreview}
+          onChanged={() => void q.refetch()}
+        />
+      ),
     },
     { title: "款号", dataIndex: "styleNo" },
     {
@@ -339,6 +343,7 @@ function InventoryBalances() {
           <Space wrap>
             <JushuitanInventory onView={()=>{q.setPage(1);void q.refetch();}} />
             <InventoryPlatformSync />
+            {canEditImages && <InventoryImageImport onDone={() => void q.refetch()} />}
             <InventorySearch codes={searchCodes} onSearch={(value, codes) => { setSearch(value); setSearchCodes(codes); q.setPage(1); }} />
             <Select<InventoryDimension>
               aria-label="库存汇总维度"
@@ -383,6 +388,7 @@ function InventoryBalances() {
           <Space>
             {manager}
             <InventoryFormulaPanel records={q.items} skuView={skuView} />
+            {canImportSku && <InventorySkuImport onDone={() => void q.refetch()} />}
             <Button
               aria-label="导出"
               icon={<ExportOutlined />}
@@ -437,6 +443,8 @@ function InventoryBalances() {
                         key,
                         ["barcodeListingState", "styleListingState"].includes(key)
                           ? total ? "—" : inventoryListingLabel(row[key])
+                          : key === "mainImageUrl" && typeof row[key] === "string" && row[key].startsWith("/")
+                          ? new URL(row[key], window.location.origin).href
                           : key === "listingCheckedAt" ? when(row[key])
                           : key === "lastListingChangeAt" ? inventoryListingChange(row)
                           : key === "lastListingChangeType" ? inventoryListingOperation(row)

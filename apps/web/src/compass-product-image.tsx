@@ -11,15 +11,18 @@ export function CompassProductImage({
   onPreview,
   onHover,
   hoverPreview = true,
+  onFailed,
 }: {
   image?: string;
   code: string;
   onPreview: (target: CompassImageTarget) => void;
   onHover?: () => void;
   hoverPreview?: boolean;
+  /** Lets a caller try its next image source instead of a dead icon. */
+  onFailed?: (image: string) => void;
 }) {
   const [failedImage, setFailedImage] = useState<string>();
-  if (!image || !/^https:\/\//i.test(image) || failedImage === image)
+  if (!image || !/^(https:\/\/|\/api\/v1\/)/i.test(image) || failedImage === image)
     return (
       <span
         className="compass-product-image-placeholder"
@@ -62,7 +65,10 @@ export function CompassProductImage({
           alt=""
           loading="lazy"
           referrerPolicy="no-referrer"
-          onError={() => setFailedImage(image)}
+          onError={() => {
+            setFailedImage(image);
+            onFailed?.(image);
+          }}
         />
       </button>
     </Popover>
