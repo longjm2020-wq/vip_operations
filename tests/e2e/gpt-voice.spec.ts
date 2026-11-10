@@ -2,6 +2,7 @@ import {
   openPersonalAssistant,
   selectAssistantPanel,
   setAssistantOption,
+  startWorkspaceVoice,
 } from "./assistant-controls.js";
 import { expect, test, type Page, type WebSocketRoute } from "@playwright/test";
 import type { RealtimeStatus } from "../../packages/contracts/src/assistant-realtime.js";
@@ -291,7 +292,7 @@ test("千问实时语音按一个目标连续处理多层弹窗，逐步观察�
   const pageErrors: string[] = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
   await page.reload();
-  await page.locator(".companion-launch").click();
+  await startWorkspaceVoice(page);
   await expect(bubble.getByRole("status")).toHaveText("实时聆听中，你说");
   await page.evaluate(() => {
     const fixture = document.createElement("section");
@@ -608,7 +609,7 @@ test("千问实时语音观察并点击任意新控件，跨业务页继续且�
   const pageErrors: string[] = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
   await page.reload();
-  await page.locator(".companion-launch").click();
+  await startWorkspaceVoice(page);
   await expect(bubble.getByRole("status")).toHaveText("实时聆听中，你说");
   const arbitrary = `动态按钮-${crypto.randomUUID().slice(0, 8)}`;
   await page.evaluate((name) => {
@@ -927,7 +928,7 @@ test("千问 WebRTC 真实 RTP 在页面卡顿后继续，配置确认后才发�
   const { bubble } = await fixture(page, { configured: false });
   const { starts, writes } = await qwenRtcFixture(page, true);
   await page.reload();
-  await page.locator(".companion-launch").click();
+  await startWorkspaceVoice(page);
   await expect
     .poll(() =>
       page.evaluate(
@@ -1069,7 +1070,7 @@ for (const provider of ["doubao"] as const) {
       },
     );
     await page.reload();
-    await page.locator(".companion-launch").click();
+    await startWorkspaceVoice(page);
     await expect(bubble.getByRole("status")).toHaveText("实时聆听中，你说");
     await expect
       .poll(
@@ -1251,7 +1252,7 @@ test("实时通道切换分别保留配置，密钥保存后清空且验证不�
     },
   );
   await page.reload();
-  await page.locator(".companion-launch").click();
+  await startWorkspaceVoice(page);
   await bubble.getByRole("button", { name: "语音设置", exact: true }).click();
   const settings = page.locator(".realtime-settings");
   await settings.getByLabel("实时服务通道", { exact: true }).click();
@@ -1599,11 +1600,18 @@ async function fixture(
   };
 }
 
-async function expectChatCaptions(page: Page) {
+async function expectVoiceCaptions(page: Page) {
   const dialog = page.getByRole("dialog", { name: /AI 个人助理/ });
-  await expect(
-    dialog.locator(".assistant-chat-voice-slot .companion-voice-inline"),
-  ).toBeVisible();
+  const chatSlot = dialog.locator(
+    ".assistant-chat-voice-slot .companion-voice-inline",
+  );
+  if (await dialog.isVisible() && (await chatSlot.isVisible())) {
+    await expect(chatSlot).toHaveCount(1);
+  } else {
+    await expect(
+      page.getByRole("region", { name: "小序语音", exact: true }),
+    ).toBeVisible();
+  }
   await expect(
     page.getByRole("region", { name: "小序语音", exact: true }),
   ).toHaveCount(1);
@@ -1614,7 +1622,7 @@ test("未识别完整文字后静默恢复聆听，下一句话可继续且不�
   page,
 }) => {
   const { bubble, turns } = await fixture(page, { missed: true });
-  await page.locator(".companion-launch").click();
+  await startWorkspaceVoice(page);
   await expect(bubble.getByRole("status")).toHaveText("我在听，你说");
   await page.waitForTimeout(600);
   await page.evaluate(() => window.gptVoiceTest.silence());
@@ -1701,7 +1709,7 @@ test("GPT 朗读失败保留文字及具体错误，不启动录音", async ({ p
 
 test("授权语音导航事件直接打开经营分析", async ({ page }) => {
   const { turns } = await fixture(page, { navigation: true });
-  await page.locator(".companion-launch").click();
+  await startWorkspaceVoice(page);
   await page.waitForTimeout(700);
   await page.evaluate(() => window.gptVoiceTest.silence());
   await expect.poll(() => turns.length).toBe(1);
@@ -1709,14 +1717,14 @@ test("授权语音导航事件直接打开经营分析", async ({ page }) => {
   expect(await page.evaluate(() => window.gptVoiceTest.starts)).toBe(1);
 });
 
-test("直接点击小序录音，顶部字幕和动作同步，播放可打断并关闭设备", async ({
+test("点击想聊什么开始录音，顶部字幕和动作同步，播放可打断并关闭设备", async ({
   page,
 }) => {
   const { bubble, turns } = await fixture(page);
   expect(await page.evaluate(() => window.gptVoiceTest.starts)).toBe(0);
-  await page.locator(".companion-launch").click();
+  await startWorkspaceVoice(page);
   await expect(bubble.getByRole("status")).toHaveText("我在听，你说");
-  await expectChatCaptions(page);
+  await expectVoiceCaptions(page);
   const captions = page.locator(
     ".companion-voice-inline[data-caption-presence]",
   );
@@ -1834,7 +1842,7 @@ test("减少动态效果下语音字幕静态开关，立即停录且再次主�
   expect(await page.evaluate(() => window.gptVoiceTest.stops)).toBe(2);
 });
 
-test("文字草稿与语音共用聊天面板，关闭面板释放麦克风并保留草稿", async ({
+test("文字草稿与语音共用记录，关闭面板保留通话和草稿", async ({
   page,
 }) => {
   const { bubble } = await fixture(page);
@@ -1842,25 +1850,30 @@ test("文字草稿与语音共用聊天面板，关闭面板释放麦克风并�
   await page
     .locator(".assistant-compose:visible textarea")
     .fill("尚未发送的草稿");
-  await page.locator(".companion-launch").click();
+  await startWorkspaceVoice(page);
   await expect(bubble.getByRole("status")).toHaveText("我在听，你说");
-  await expectChatCaptions(page);
+  await expectVoiceCaptions(page);
+  await expect(dialog).toBeHidden();
+  await openPersonalAssistant(page);
   await expect(dialog.locator("textarea")).toHaveValue("尚未发送的草稿");
+  await expectVoiceCaptions(page);
   await dialog.getByRole("button", { name: "关闭", exact: true }).click();
-  await expect
-    .poll(() => page.evaluate(() => window.gptVoiceTest.stops))
-    .toBe(1);
-  await expect(bubble).toHaveCount(0);
+  expect(await page.evaluate(() => window.gptVoiceTest.stops)).toBe(0);
+  await expect(bubble.getByRole("status")).toHaveText("我在听，你说");
   await openPersonalAssistant(page);
   await expect(dialog.locator("textarea")).toHaveValue("尚未发送的草稿");
   expect(await page.evaluate(() => window.gptVoiceTest.starts)).toBe(1);
+  await bubble.getByRole("button", { name: "结束语音", exact: true }).click();
+  await expect
+    .poll(() => page.evaluate(() => window.gptVoiceTest.stops))
+    .toBe(1);
 });
 
 test("麦克风拒绝在顶部字幕说明原因，设置不会开启麦克风", async ({ page }) => {
   const { bubble, turns } = await fixture(page, { denied: true });
-  await page.locator(".companion-launch").click();
+  await startWorkspaceVoice(page);
   await expect(bubble.getByText(/麦克风权限未获允许/)).toBeVisible();
-  await expectChatCaptions(page);
+  await expectVoiceCaptions(page);
   await expect(bubble.getByRole("button", { name: "重试语音" })).toBeEnabled();
   expect(await page.evaluate(() => window.gptVoiceTest.starts)).toBe(1);
   await bubble.getByRole("button", { name: "重试语音" }).click();
@@ -1875,7 +1888,7 @@ test("未就绪不录音，设置保存不回显，验证后从设置直接回�
   page,
 }) => {
   const { bubble, writes } = await fixture(page, { configured: false });
-  await page.locator(".companion-launch").click();
+  await startWorkspaceVoice(page);
   await expect(
     bubble.getByRole("button", { name: "开始语音对话" }),
   ).toBeDisabled();
@@ -1906,7 +1919,9 @@ test("未就绪不录音，设置保存不回显，验证后从设置直接回�
   await dialog.getByRole("button", { name: "与小序语音对话" }).click();
   await expect(bubble.getByRole("status")).toHaveText("我在听，你说");
   await expect(dialog).toBeVisible();
-  await expectChatCaptions(page);
+  await expect(
+    page.getByRole("region", { name: "小序语音", exact: true }),
+  ).toBeVisible();
   await bubble.getByRole("button", { name: "结束语音", exact: true }).focus();
   await page.keyboard.press("Escape");
   await expect
@@ -1918,15 +1933,23 @@ test("语音使用聊天面板的暗色布局，结束后可直接输入文字",
   page,
 }, testInfo) => {
   const { bubble } = await fixture(page, { dark: false });
-  await page.locator(".companion-launch").click();
+  await openPersonalAssistant(page);
+  const dialog = page.getByRole("dialog", { name: /AI 个人助理/ });
+  await startWorkspaceVoice(page);
   await expect(bubble.getByRole("status")).toHaveText("我在听，你说");
-  await expectChatCaptions(page);
+  await expectVoiceCaptions(page);
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  const mascot = dialog.locator(".sidebar-assistant-compact");
+  await expect(mascot).toBeVisible();
+  const heading = (await dialog.locator(".ant-drawer-header").boundingBox())!;
+  const body = (await dialog.locator(".ant-drawer-body").boundingBox())!;
+  const avatar = (await mascot.boundingBox())!;
+  expect(avatar.y + avatar.height).toBeLessThanOrEqual(body.y + 1);
+  expect(avatar.x).toBeGreaterThanOrEqual(heading.x);
   await page.screenshot({
     path: testInfo.outputPath("unified-chat-voice.png"),
   });
   await bubble.getByRole("button", { name: "结束语音", exact: true }).click();
-  const dialog = page.getByRole("dialog", { name: /AI 个人助理/ });
   await expect(dialog.locator("textarea")).toBeEditable();
   await dialog.locator("textarea").fill("继续刚才的话题");
   await expect(
@@ -1937,17 +1960,17 @@ test("语音使用聊天面板的暗色布局，结束后可直接输入文字",
 
 test("刷新不自动重启麦克风，再次主动对话仍使用顶部字幕", async ({ page }) => {
   const { bubble, turns } = await fixture(page);
-  await page.locator(".companion-launch").click();
+  await startWorkspaceVoice(page);
   await expect(bubble.getByRole("status")).toHaveText("我在听，你说");
-  await expectChatCaptions(page);
+  await expectVoiceCaptions(page);
   expect(await page.evaluate(() => window.gptVoiceTest.starts)).toBe(1);
   await page.reload();
   await expect(page.locator(".companion-launch")).toBeVisible();
   await expect(bubble).toHaveCount(0);
   expect(await page.evaluate(() => window.gptVoiceTest.starts)).toBe(0);
-  await page.locator(".companion-launch").click();
+  await startWorkspaceVoice(page);
   await expect(bubble.getByRole("status")).toHaveText("我在听，你说");
-  await expectChatCaptions(page);
+  await expectVoiceCaptions(page);
   expect(await page.evaluate(() => window.gptVoiceTest.starts)).toBe(1);
   await bubble.getByRole("button", { name: "结束语音", exact: true }).click();
   await expect
@@ -1961,18 +1984,19 @@ test("窄屏长语音记录在同一聊天面板可读且不横向溢出", async
     "这是一段需要核对的较长语音回复，请确认日期、时间与商品编码。".repeat(15);
   const { bubble } = await fixture(page, { dark: true, reply });
   await page.setViewportSize({ width: 320, height: 844 });
-  await page.locator(".companion-launch").click();
+  await openPersonalAssistant(page);
+  await startWorkspaceVoice(page);
   await expect(bubble.getByRole("status")).toHaveText("我在听，你说");
   await page.waitForTimeout(250);
   await bubble.getByRole("button", { name: "发送这段", exact: true }).click();
-  await expect(page.locator(".assistant-messages")).toContainText(reply);
   const dialog = page.getByRole("dialog", { name: /AI 个人助理/ });
+  await expect(page.locator(".assistant-messages")).toContainText(reply);
   await expect(
     dialog.locator(".assistant-message-text").filter({ hasText: reply }),
   ).toHaveCount(1);
   for (const width of [320, 360]) {
     await page.setViewportSize({ width, height: 844 });
-    await expectChatCaptions(page);
+    await expectVoiceCaptions(page);
     expect(
       await dialog.evaluate(
         (element) => element.scrollWidth <= element.clientWidth + 1,

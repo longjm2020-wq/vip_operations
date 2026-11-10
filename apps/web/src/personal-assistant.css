@@ -21,7 +21,7 @@
   padding: 12px 0;
   border-top: 1px solid var(--app-border);
 }
-body:has(.assistant-screen.ant-drawer-open) .sidebar-assistant,
+body:has(.assistant-screen.ant-drawer-open) .workspace-companion-host .sidebar-assistant,
 body:has(.assistant-screen.ant-drawer-open) .companion-voice-prompt {
   visibility: hidden;
   pointer-events: none;
@@ -246,10 +246,34 @@ body:has(.assistant-screen.ant-drawer-open) .companion-voice-prompt {
   pointer-events: none;
 }
 .assistant-panel-heading {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 48px;
   white-space: nowrap;
   color: var(--app-secondary);
   font-size: 13px;
   font-weight: 500;
+}
+.assistant-panel-title {
+  min-width: 0;
+}
+.assistant-screen .sidebar-assistant-compact {
+  margin: 0;
+  flex: 0 0 auto;
+  width: 48px;
+  height: 48px;
+}
+.assistant-screen .sidebar-assistant-compact .companion-stage {
+  width: 48px;
+  height: 48px;
+  background: none;
+}
+.assistant-screen .sidebar-assistant-compact .companion-launch {
+  width: 48px;
+}
+.assistant-screen .ant-drawer-header {
+  min-height: 60px;
 }
 .assistant-settings-preferences {
   display: flex;
