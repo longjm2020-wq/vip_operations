@@ -36,6 +36,7 @@ async function fixture(context: BrowserContext, state: Store, user = "1") {
           "product.update",
           "selection.read",
           "selection.manage",
+          "project.read",
           "aigc.use",
         ],
         roleCodes: [],
@@ -295,13 +296,13 @@ test("一级入口固定暗色不改账号偏好，详情恢复亮色且跨页�
   await expect(draft).toHaveValue("主题变化后继续编辑的草稿");
   expect(await instance!.evaluate((element) => element.isConnected)).toBe(true);
 });
-test("项目协作及系统设置固定暗色，详情和弹窗无切换按钮且保留运营页偏好", async ({
+test("项目协作固定浅灰，系统设置保持暗色且不改账号偏好", async ({
   page,
   context,
 }) => {
   test.setTimeout(120_000);
   const state = store();
-  state.accounts.set("1", { mode: "light", version: 3 });
+  state.accounts.set("1", { mode: "dark", version: 3 });
   await fixture(context, state);
   await context.route("**/api/v1/auth/me", (route) =>
     route.fulfill({
@@ -331,7 +332,7 @@ test("项目协作及系统设置固定暗色，详情和弹窗无切换按钮�
       json: {
         data: {
           id: "theme-project",
-          name: "暗色项目详情",
+          name: "浅灰项目详情",
           status: "DRAFT",
           document: { tasks: [], stages: [], attachments: [] },
           members: [],
@@ -344,7 +345,7 @@ test("项目协作及系统设置固定暗色，详情和弹窗无切换按钮�
       json: {
         data: {
           id: "theme-table",
-          name: "暗色表格详情",
+          name: "浅灰表格详情",
           initialLayout: "empty",
           canEdit: false,
           canManage: false,
@@ -353,7 +354,7 @@ test("项目协作及系统设置固定暗色，详情和弹窗无切换按钮�
     }),
   );
   await page.addInitScript(() =>
-    localStorage.setItem("xuti:appearance:1", "light"),
+    localStorage.setItem("xuti:appearance:1", "dark"),
   );
   for (const path of [
     "/sops/?source=theme#top",
@@ -361,14 +362,14 @@ test("项目协作及系统设置固定暗色，详情和弹窗无切换按钮�
     "/projects/theme-project",
     "/project-tables",
     "/project-tables/theme-table",
-    "/users",
-    "/roles",
-    "/audit-logs",
-    "/SETTINGS/ai/",
   ]) {
     await page.goto(path);
     await expect(page.locator(".sidebar")).toBeVisible({ timeout: 15_000 });
-    await mode(page, "dark");
+    await mode(page, "light");
+    await expect(page.locator("body")).toHaveCSS(
+      "background-color",
+      "rgb(245, 245, 245)",
+    );
     await expect(
       page.getByRole("button", { name: /切换为.*色主题/ }),
     ).toHaveCount(0);
@@ -379,15 +380,31 @@ test("项目协作及系统设置固定暗色，详情和弹窗无切换按钮�
   await expect(dialog).toBeVisible();
   await expect(dialog.locator(".ant-modal-container")).toHaveCSS(
     "background-color",
-    "rgb(41, 44, 53)",
+    "rgb(255, 255, 255)",
   );
   await dialog.getByRole("button", { name: "关闭", exact: true }).click();
-  expect(state.accounts.get("1")).toEqual({ mode: "light", version: 3 });
+  await page.goto("/sops");
+  await page.getByRole("button", { name: /新建 SOP$/ }).click();
+  await expect(page.locator(".project-canvas")).toBeInViewport({ ratio: 0.9 });
+  await expect(page.locator(".project-canvas")).toHaveCSS(
+    "background-color",
+    "rgb(245, 245, 245)",
+  );
+  await page.screenshot({
+    path: test.info().outputPath("neutral-sop.png"),
+    animations: "disabled",
+  });
+  for (const path of ["/users", "/roles", "/audit-logs", "/SETTINGS/ai/"]) {
+    await page.goto(path);
+    await expect(page.locator(".sidebar")).toBeVisible();
+    await mode(page, "dark");
+  }
+  expect(state.accounts.get("1")).toEqual({ mode: "dark", version: 3 });
   expect(state.writes).not.toContain("/my-workspace/appearance");
   await page.goto("/operations/vip/inventory");
-  await mode(page, "light");
+  await mode(page, "dark");
   await expect(
-    page.getByRole("button", { name: "切换为暗色主题", exact: true }),
+    page.getByRole("button", { name: "切换为亮色主题", exact: true }),
   ).toBeVisible();
 });
 
@@ -437,7 +454,7 @@ test("业务库存可切换主题，工作台及日程弹窗固定暗色且不�
   await mode(page, "light");
   await expect(page.locator(".ant-table-thead th").first()).toHaveCSS(
     "background-color",
-    "rgb(230, 237, 255)",
+    "rgb(240, 240, 240)",
   );
   await page.getByRole("link", { name: "我的工作台", exact: true }).click();
   await mode(page, "dark");
@@ -536,16 +553,43 @@ test("手机一级入口固定暗色，工作台和详情助理弹窗适配屏�
   }
 });
 
-test("表格用户填色和文字保留，无填色单元格随全站主题切换", async ({
+test("所有协作表格恢复浅灰工作区并保留用户填色和文字", async ({
   page,
   context,
 }) => {
-  await fixture(context, store());
-  await page.goto("/style-selections");
+  const state = store();
+  state.accounts.set("1", { mode: "dark", version: 3 });
+  await fixture(context, state);
+  for (const endpoint of [
+    "/product-archive-table",
+    "/project-tables/color-table",
+  ]) {
+    await context.route(`**/api/v1${endpoint}`, (route) =>
+      route.fulfill({
+        json: {
+          data: {
+            id: "color-table",
+            name: "浅灰协作表格",
+            initialLayout: "selection",
+            canEdit: true,
+            canManage: true,
+          },
+        },
+      }),
+    );
+  }
   const cells = page.locator('td[data-selection-column="xutiStyleNo"]');
-  await expect(cells).toHaveCount(3);
-  for (const current of ["dark", "light"] as const) {
-    if (current === "light") await toggle(page, "light");
+  for (const path of [
+    "/style-selections",
+    "/products",
+    "/project-tables/color-table",
+  ]) {
+    await page.goto(path);
+    await expect(cells).toHaveCount(3);
+    await mode(page, "light");
+    await expect(
+      page.getByRole("button", { name: /切换为.*色主题/ }),
+    ).toHaveCount(0);
     await expect(cells.nth(0)).toHaveCSS(
       "background-color",
       "rgb(255, 241, 231)",
@@ -559,19 +603,40 @@ test("表格用户填色和文字保留，无填色单元格随全站主题切�
     );
     await expect(page.locator(".selection-sheet")).toHaveCSS(
       "background-color",
-      current === "dark" ? "rgb(23, 24, 29)" : "rgb(255, 255, 255)",
+      "rgb(255, 255, 255)",
+    );
+    for (const selector of [
+      ".selection-toolbar",
+      ".selection-bulk-add",
+      ".selection-sheet tbody .selection-index",
+    ]) {
+      await expect(page.locator(selector).first()).toHaveCSS(
+        "background-color",
+        "rgb(245, 245, 245)",
+      );
+    }
+    await expect(
+      page.locator(".selection-sheet thead th[data-selection-column]").first(),
+    ).toHaveCSS("background-color", "rgb(240, 240, 240)");
+    await expect(cells.nth(1)).toHaveCSS(
+      "border-bottom-color",
+      "rgb(217, 217, 217)",
     );
     await page.screenshot({
-      path: test.info().outputPath(`${current}-sheet.png`),
+      path: test.info().outputPath(`neutral${path.replaceAll("/", "-")}.png`),
     });
   }
+  expect(state.accounts.get("1")).toEqual({ mode: "dark", version: 3 });
+  expect(state.writes).not.toContain("/my-workspace/appearance");
 });
 
-test("原生表头与库存表头一致，Ant预设标签和选项标签实际采用共享亮暗配色", async ({
+test("浅灰原生和库存表头保留预设标签及选项原色系", async ({
   page,
   context,
 }) => {
-  await fixture(context, store());
+  const state = store();
+  state.accounts.set("1", { mode: "light", version: 3 });
+  await fixture(context, state);
   const preferences = selectionLayoutSchema.parse({
     columns: [
       { key: "xutiStyleNo", label: "款号", width: 120, type: "text" },
@@ -625,33 +690,21 @@ test("原生表头与库存表头一致，Ant预设标签和选项标签实际�
   const green = page
     .locator('td[data-selection-column="custom:soft"] .ant-tag')
     .first();
-  for (const current of ["dark", "light"] as const) {
-    if (current === "light") await toggle(page, "light");
-    await expect(blue).toHaveCSS(
-      "color",
-      current === "dark" ? "rgb(143, 169, 255)" : "rgb(40, 75, 214)",
-    );
-    await expect(blue).toHaveCSS(
-      "background-color",
-      current === "dark" ? "rgb(36, 53, 95)" : "rgb(230, 237, 255)",
-    );
-    await expect(green).toHaveCSS(
-      "color",
-      current === "dark" ? "rgb(78, 226, 162)" : "rgb(8, 123, 79)",
-    );
-    await expect(green).toHaveCSS(
-      "background-color",
-      current === "dark" ? "rgb(18, 59, 49)" : "rgb(232, 250, 241)",
-    );
-    await expect(page.locator(".selection-sheet thead th").first()).toHaveCSS(
-      "background-color",
-      current === "dark" ? "rgb(32, 48, 76)" : "rgb(230, 237, 255)",
-    );
-    await page.screenshot({
-      path: test.info().outputPath(`${current}-unified-tags.png`),
-    });
-  }
+  await expect(blue).toHaveCSS("color", "rgb(40, 75, 214)");
+  await expect(blue).toHaveCSS("background-color", "rgb(230, 237, 255)");
+  await expect(green).toHaveCSS("color", "rgb(8, 123, 79)");
+  await expect(green).toHaveCSS("background-color", "rgb(232, 250, 241)");
+  await expect(page.locator(".selection-sheet thead th").first()).toHaveCSS(
+    "background-color",
+    "rgb(240, 240, 240)",
+  );
+  await page.screenshot({
+    path: test.info().outputPath("neutral-tags.png"),
+  });
   await page.goto("/operations/vip/inventory");
+  await expect(
+    page.locator(".inventory-summary-table .ant-table-thead th").first(),
+  ).toHaveCSS("background-color", "rgb(240, 240, 240)");
   await expect(
     page.locator(".inventory-summary-table .ant-tag-blue").first(),
   ).toHaveCSS("color", "rgb(40, 75, 214)");
