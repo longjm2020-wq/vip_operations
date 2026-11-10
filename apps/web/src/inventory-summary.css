@@ -2,6 +2,11 @@
   padding-bottom: 8px;
 }
 
+.inventory-details-card .table-toolbar,
+.inventory-view-toolbar {
+  background: var(--app-muted);
+}
+
 .inventory-summary-table .inventory-total-row > td {
   background: var(--app-muted);
   color: var(--app-secondary);
@@ -21,6 +26,8 @@
   flex-wrap: wrap;
   row-gap: 8px;
   margin-top: 12px;
+  background: var(--app-muted);
+  box-shadow: 0 -1px 0 var(--app-border);
 }
 
 .inventory-summary-table .compass-product-image-thumb {

@@ -551,9 +551,9 @@ function Root() {
   const publicPage = publicCollection || publicReport || publicCompetitors;
   const accountId = !publicPage && me.data ? String(me.data.id) : null;
   const themePath = location.pathname.replace(/\/+$/, "").toLowerCase();
-  // Editing workspaces use a neutral light canvas without changing account preferences.
+  // Editing and inventory workspaces share the reference light palette.
   const fixedLightPage = (me.isLoading || me.isError || !!accountId) &&
-    ["/sops", "/projects", "/project-tables", "/products", "/style-selections"].some(
+    ["/sops", "/projects", "/project-tables", "/products", "/style-selections", "/operations/vip/inventory"].some(
       (root) => themePath === root || themePath.startsWith(`${root}/`),
     );
   // Immersive and system sections keep their existing dark presentation.
