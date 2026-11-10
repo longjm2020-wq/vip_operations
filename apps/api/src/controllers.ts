@@ -34,6 +34,7 @@ import {
 } from "./modules/master/product-fields.js";
 import * as inventory from "./modules/inventory/service.js";
 import { inventorySummary } from "./modules/inventory/summary.js";
+import { saveInventoryImage, deleteInventoryImage, importInventoryImages, readInventoryImage } from "./modules/inventory/images.js";
 import { inventoryTrend } from "./modules/inventory/trend.js";
 import {
   jushuitanStatus,
@@ -205,6 +206,23 @@ class InventoryController {
   }
   @Permission("inventory.read") @Get() list(@Query() q: any) {
     return inventory.balances(q);
+  }
+  @Permission("inventory.read") @Get("images/:imageId") async image(@Param("imageId") v: string, @Res() res: Response) {
+    const file = await readInventoryImage(v);
+    // Identifiers change on every replacement, so the bytes are immutable.
+    res.setHeader("Content-Type", file.content_type);
+    res.setHeader("Cache-Control", "private, max-age=86400, immutable");
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.send(Buffer.from(file.content));
+  }
+  @Permission("inventory.adjust") @Post("images") saveImage(@Req() r: AuthRequest, @Body() b: unknown) {
+    return saveInventoryImage(context(r), b);
+  }
+  @Permission("inventory.adjust") @Post("images/delete") deleteImage(@Req() r: AuthRequest, @Body() b: unknown) {
+    return deleteInventoryImage(context(r), b);
+  }
+  @Permission("inventory.adjust") @Post("images/batch") importImages(@Req() r: AuthRequest, @Body() b: unknown) {
+    return importInventoryImages(context(r), b);
   }
   @Permission("inventory.read") @Get("summary") summary(@Req() r: AuthRequest, @Query() q: any) {
     return inventorySummary(q, db, r.actor.id);

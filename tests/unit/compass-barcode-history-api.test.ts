@@ -90,6 +90,7 @@ beforeAll(async () => {
     CREATE TABLE inventory_shipment_items(shipment_id bigint,sku_id bigint,quantity int,qualified_qty int,putaway_qty int);
   `);
   await fixture.database.exec(await readFile(new URL("../../packages/database/migrations/067_inventory_replenishment_policies.sql", import.meta.url), "utf8"));
+  await fixture.database.exec(await readFile(new URL("../../packages/database/migrations/097_inventory_images.sql", import.meta.url), "utf8"));
   // Seed retained complete files before migration to test backfill independently
   // of the new finish hook. Distinct report days are verified before archiving.
   const old = await report("2026-01-01", "2026-01-02", { sales: 1 });

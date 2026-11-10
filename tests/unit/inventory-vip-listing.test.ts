@@ -452,4 +452,30 @@ describe("inventory platform status projection", () => {
       ).toBe(shared);
     }
   });
+  it("prefers a member's product picture over a newer SPU gallery page in style view", async () => {
+    await catalog("RED");
+    await catalog("BLUE");
+    const product = "https://a.vpimg4.com/red-front.jpg",
+      sizeChart = "https://a.vpimg4.com/size-chart.jpg";
+    await sql(
+      "INSERT INTO vop_product_details(namespace,barcode,detail,synced_at) VALUES('a','RED',$1::jsonb,now()-interval '1 hour'),('a','BLUE',$2::jsonb,now())",
+      [
+        JSON.stringify({ productImages: [product], styleImages: [sizeChart], images: [product, sizeChart] }),
+        JSON.stringify({ productImages: [], styleImages: [sizeChart], images: [sizeChart] }),
+      ],
+    );
+    const [row] = await applyVipListingStatuses(
+      [{ ...inventory("RED"), main_image_url: null }],
+      "style",
+      tx,
+    );
+    expect(row.main_image_url).toBe(product);
+    await sql("DELETE FROM vop_product_details WHERE barcode='RED'");
+    const [fallback] = await applyVipListingStatuses(
+      [{ ...inventory("RED"), main_image_url: null }],
+      "style",
+      tx,
+    );
+    expect(fallback.main_image_url).toBe(sizeChart);
+  });
 });

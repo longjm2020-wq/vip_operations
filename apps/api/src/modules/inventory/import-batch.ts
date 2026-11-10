@@ -180,6 +180,18 @@ export async function importInventoryBatch(c: Context, input: unknown) {
           )
         ).map((r) => [r.style_no, r]),
       );
+      // Owners of existing SKUs, so a file cannot silently move a code to another style.
+      const owners = new Map(
+        (
+          await rows(
+            tx,
+            "SELECT id,style_no,custom_fields FROM products WHERE id=ANY($1::bigint[])",
+            [...skus.values()].map((s) => String(s.product_id)),
+          )
+        ).map((r) => [String(r.id), r]),
+      );
+      const supplierCode = (product: Row | undefined) =>
+        String(product?.custom_fields?.f00000000000000000000000000000001 ?? "").trim();
       const warehouses = await rows(tx, "SELECT * FROM warehouses"),
         balances = new Map(
           (
@@ -193,6 +205,17 @@ export async function importInventoryBatch(c: Context, input: unknown) {
       for (const e of pending) {
         const v = e.input.changes;
         e.sku = skus.get(e.input.skuCode);
+        const owner = e.sku ? owners.get(String(e.sku.product_id)) : e.input.creation?.styleNo ? products.get(e.input.creation.styleNo) : undefined;
+        const verify = e.input.mode === "sku";
+        if (verify && e.sku && e.input.creation?.styleNo && owner && owner.style_no !== e.input.creation.styleNo) {
+          reject(e, "STYLE_MISMATCH", `商品编码已建档在款号 ${owner.style_no} 下，与文件中的款号 ${e.input.creation.styleNo} 不一致；如需调整款号请在商品档案处理`);
+          continue;
+        }
+        const fileSupplierCode = e.input.creation?.supplierStyleCode?.trim();
+        if (verify && fileSupplierCode && supplierCode(owner) && supplierCode(owner) !== fileSupplierCode) {
+          reject(e, "SUPPLIER_STYLE_MISMATCH", `供应商款式编码与商品档案（${supplierCode(owner)}）不一致；已建档款号请在商品档案修改`);
+          continue;
+        }
         if (!e.sku) {
           if (!c.actor.permissions.includes("product.create")) {
             reject(

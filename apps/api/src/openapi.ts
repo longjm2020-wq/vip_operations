@@ -14,6 +14,7 @@ import { aiSettingsSchema } from "./modules/analytics/ai.js";
 import { loginSchema } from "./modules/auth/service.js";
 import { compassProbeRequestSchema } from "./integrations/vip/compass.js";
 import { vipControlImportSchema } from "../../../packages/contracts/src/vip-control.js";
+import { inventoryImageWriteSchema, inventoryImageDeleteSchema, inventoryImageBatchSchema } from "../../../packages/contracts/src/inventory-image.js";
 import { replenishmentPolicyWriteSchema } from "../../../packages/contracts/src/inventory-replenishment.js";
 import { inventoryCalculationWriteSchema, inventoryCalculationFieldWriteSchema, inventoryCalculationFieldDeleteSchema, inventoryCalculationFieldViewSchema } from "../../../packages/contracts/src/inventory-formula.js";
 import { assistantSendSchema, assistantMemorySaveSchema } from "../../../packages/contracts/src/personal-assistant.js";
@@ -171,7 +172,7 @@ export function enrichOpenApi(doc: OpenAPIObject) {
   );
   for (const action of ["mark-received", "post", "cancel"])
     set("/api/v1/receipts/{id}/" + action, "post", cmdInput);
-  set("/api/v1/inventory/summary", "get", undefined, "按条码（商品编码）、货号或款号汇总库存；totals覆盖全部筛选结果。附带只读唯品会条码/款号状态、核验和最后上下架时间；未匹配或歧义不推断状态，款号状态汇总平台全部已采集条码。图片优先使用匹配的平台主图，缺失时保留罗盘或内部档案来源，不改写库存或档案。");
+  set("/api/v1/inventory/summary", "get", undefined, "按条码（商品编码）、货号或款号汇总库存；totals覆盖全部筛选结果。附带只读唯品会条码/款号状态、核验和最后上下架时间；未匹配或歧义不推断状态，款号状态汇总平台全部已采集条码。图片顺序：唯品会商品图（款号视图其次为整款图）及罗盘图 → 用户上传图 → 选款登记档案图（仅款号视图）；imageSources按顺序列出供加载失败时回退，inventoryUserImage为当前行可替换的上传图。");
   doc.paths["/api/v1/inventory/summary"].get!.parameters!.push(
     { name: "dimension", in: "query", schema: { type: "string", enum: ["sku", "article", "style"], default: "sku" } },
     { name: "reportMatch", in: "query", schema: { type: "string", enum: ["all", "matched", "unmatched"], default: "all" }, description: "条码维度按所选经营参考周期的报表匹配情况筛选" },
@@ -181,6 +182,10 @@ export function enrichOpenApi(doc: OpenAPIObject) {
     { name: "q", in: "query", schema: { type: "string", maxLength: 100 }, description: "商品编码、货号、款号、名称或条码关键词" },
     ...["warehouseId", "skuId", "productId", "supplierId", "categoryId"].map((name) => ({ name, in: "query" as const, schema: { type: "string" as const, pattern: "^[1-9][0-9]*$" } })),
   );
+  set("/api/v1/inventory/images", "post", inventoryImageWriteSchema, "上传或替换款号（colorName为空）或颜色的库存图片；JPG/PNG/WebP且小于500 KB。仅在唯品会无图片时显示，独立保存，不依赖选款登记权限；需库存调整权限");
+  set("/api/v1/inventory/images/delete", "post", inventoryImageDeleteSchema, "删除上传的库存图片；不影响唯品会、罗盘或档案图片");
+  set("/api/v1/inventory/images/batch", "post", inventoryImageBatchSchema, "按款号批量导入库存图片，每次最多8张；逐张返回SAVED、NOT_FOUND或INVALID，部分失败不影响其余图片");
+  set("/api/v1/inventory/images/{imageId}", "get", undefined, "读取已登记的库存上传图片；只提供本功能保存的图片");
   set("/api/v1/inventory/replenishment-policy", "get", undefined, "读取当前账号的计算配置及版本号");
   doc.paths["/api/v1/inventory/replenishment-policy"].get!.parameters = [];
   set("/api/v1/inventory/replenishment-policy", "post", replenishmentPolicyWriteSchema, "保存当前账号的计算配置；版本冲突返回409，不修改库存或创建采购单");

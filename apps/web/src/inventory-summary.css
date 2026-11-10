@@ -273,3 +273,52 @@
 }
 .inventory-source-notice .ant-alert-content { min-width: 0; }
 .inventory-source-notice-line { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.inventory-image-frame {
+  position: relative;
+  display: inline-flex;
+  line-height: 0;
+}
+
+.inventory-image-frame .inventory-image-edit {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 20px;
+  min-width: 20px;
+  height: 20px;
+  padding: 0;
+  border-radius: 50%;
+  background: var(--app-surface);
+  box-shadow: 0 1px 3px var(--app-shadow);
+  opacity: 0;
+  font-size: 11px;
+}
+
+.inventory-image-frame:hover .inventory-image-edit,
+.inventory-image-frame .inventory-image-edit:focus-visible,
+.inventory-image-frame .inventory-image-edit.ant-btn-loading {
+  opacity: 1;
+}
+
+.inventory-image-upload {
+  width: 32px;
+  height: 42px;
+}
+
+.inventory-sku-import-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 16px;
+  padding: 12px;
+  border-radius: 6px;
+  background: var(--app-accent-soft);
+}
+
+.inventory-sku-import-errors {
+  max-height: 160px;
+  margin-top: 8px;
+  overflow: auto;
+}

@@ -19,6 +19,7 @@ function cachedImageLink(result: unknown): string | null {
     return null;
   }
 }
+export type EmbeddedImage = { type: string; bytes: Uint8Array };
 export async function readWorkbook(
   file: File,
   options: {
@@ -28,6 +29,8 @@ export async function readWorkbook(
     cachedImageFormulaColumns?: readonly string[];
     /** Long platform identifiers must remain text in the source workbook. */
     textOnlyColumns?: readonly string[];
+    /** Pictures floating over these columns are returned per data row. */
+    embeddedImageColumns?: readonly string[];
     maxFileSizeMB?: number;
     maxRows?: number;
   } = {},
@@ -41,6 +44,7 @@ export async function readWorkbook(
       {
         name: file.name,
         rows: parseDelimited(await file.text(), ",", maxRows),
+        images: {} as Record<number, EmbeddedImage>,
       },
     ];
   if (!/\.xlsx$/i.test(file.name))
@@ -50,6 +54,7 @@ export async function readWorkbook(
   await book.xlsx.load(await file.arrayBuffer());
   const allowedImageHeaders = new Set(options.cachedImageFormulaColumns?.map(normalizeHeader));
   const textOnlyHeaders = new Set(options.textOnlyColumns?.map(normalizeHeader));
+  const embeddedHeaders = new Set(options.embeddedImageColumns?.map(normalizeHeader));
   return book.worksheets
     .map((sheet) => {
       // ExcelJS derives columnCount by scanning rows; compute it once for large sheets.
@@ -102,8 +107,24 @@ export async function readWorkbook(
         }
         rows.push(values);
       });
-      while (rows.length && rows.at(-1)!.every((v) => !v)) rows.pop();
-      return { name: sheet.name, rows };
+      // Floating pictures anchored in an image column belong to that row. The
+      // first picture per row wins; rows index matches `rows` (header is 0).
+      const images: Record<number, EmbeddedImage> = {};
+      if (embeddedHeaders.size) {
+        const columns = new Set(Array.from({ length: columnCount }, (_, index) => index)
+          .filter((index) => embeddedHeaders.has(normalizeHeader(sheet.getRow(1).getCell(index + 1).text))));
+        for (const image of sheet.getImages()) {
+          const row = Math.floor(image.range.tl.nativeRow ?? image.range.tl.row), col = Math.floor(image.range.tl.nativeCol ?? image.range.tl.col);
+          if (row < 1 || !columns.has(col) || images[row]) continue;
+          const media = book.getImage(Number(image.imageId)) as { buffer?: ArrayBuffer | Uint8Array; base64?: string; extension?: string };
+          const type = ({ png: "image/png", jpeg: "image/jpeg", jpg: "image/jpeg", webp: "image/webp", gif: "image/gif" } as Record<string, string>)[String(media.extension).toLowerCase()];
+          const bytes = media.buffer ? new Uint8Array(media.buffer as ArrayBuffer) : undefined;
+          if (!type || (!bytes && !media.base64)) continue;
+          images[row] = { type, bytes: bytes ?? Uint8Array.from(atob(media.base64!.replace(/^data:[^,]*,/, "")), (c) => c.charCodeAt(0)) };
+        }
+      }
+      while (rows.length && rows.at(-1)!.every((v) => !v) && !images[rows.length - 1]) rows.pop();
+      return { name: sheet.name, rows, images };
     })
     .filter((s) => s.rows.length);
 }

@@ -46,6 +46,8 @@ const count = z.number().int().min(0).max(10000000);
 export const inventoryImportSchema = z
   .object({
     skuCode: text,
+    /** 「导入SKU」 rows also verify 款号/供应商款式编码 of existing codes. */
+    mode: z.literal("sku").optional(),
     warehouse: z.string().trim().min(1).max(100).optional(),
     warehouseId: z
       .string()
