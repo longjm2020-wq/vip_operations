@@ -1,5 +1,21 @@
 /* The camera moves only the world objects; work cards and the composer stay still. */
+.workspace.workspace-future:has(.personal-workspace[data-world-mode]) {
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
+}
+.workspace-future:has(.personal-workspace[data-world-mode]) > .ant-layout {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  height: auto;
+  overflow: hidden;
+}
 .workspace-future .content:has(> .personal-workspace[data-world-mode]) {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
   padding: 0;
   background: var(--app-bg);
 }
@@ -11,7 +27,9 @@
   --world-zoom: 1;
   width: 100%;
   max-width: none;
-  min-height: calc(100dvh - var(--workspace-topbar-height, 68px));
+  height: 100%;
+  min-height: 0;
+  flex: 1;
   display: flex;
   flex-direction: column;
   margin: 0;
@@ -101,16 +119,20 @@
 }
 .personal-workspace[data-world-mode] .personal-workspace-body {
   flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 .personal-workspace[data-world-mode] .personal-workspace-main {
   display: flex;
   flex-direction: column;
   flex: 1;
+  min-height: 0;
 }
 .personal-workspace[data-world-mode] .workspace-ai-core-stage,
 .personal-workspace[data-world-mode] .workspace-quiet {
   flex: 1;
-  min-height: clamp(320px, calc(100dvh - 340px), var(--hub-span-base, 580px));
+  min-height: 0;
   margin: 0 0 14px;
   touch-action: none;
 }
@@ -674,7 +696,7 @@
   }
   .personal-workspace[data-world-mode] .workspace-ai-core-stage,
   .personal-workspace[data-world-mode] .workspace-quiet {
-    min-height: 350px;
+    min-height: 0;
     margin-bottom: 8px;
   }
   .workspace-dock-label {

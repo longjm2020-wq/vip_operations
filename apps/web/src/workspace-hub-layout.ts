@@ -9,6 +9,10 @@ export const WORKSPACE_HUB_NODE_PAD = 16;
 export const WORKSPACE_HUB_TOAST_GAP = 10;
 /** Reserved height of the status reminder chip. */
 export const WORKSPACE_HUB_TOAST_BAND = 44;
+/** Fill this fraction of the stage's shorter side. */
+export const WORKSPACE_HUB_FILL = 0.8;
+/** Do not grow past this, even on a very tall stage. */
+export const WORKSPACE_HUB_MAX_SCALE = 1.35;
 
 export const WORKSPACE_HUB_ORBIT_RADIUS =
   WORKSPACE_HUB_NEST_SIZE / 2 +
@@ -43,7 +47,12 @@ export type WorkspaceHubMetrics = {
 export function workspaceHubScale(width: number, height: number): number {
   const space = Math.min(width, height);
   if (!(space > 0)) return 1;
-  return Math.min(1, space / WORKSPACE_HUB_SPAN);
+  // 80% of the shorter stage side, never larger than the stage itself.
+  return Math.min(
+    WORKSPACE_HUB_MAX_SCALE,
+    (space * WORKSPACE_HUB_FILL) / WORKSPACE_HUB_SPAN,
+    space / WORKSPACE_HUB_SPAN,
+  );
 }
 
 export function workspaceHubMetrics(
@@ -55,8 +64,7 @@ export function workspaceHubMetrics(
   const nodeSize = WORKSPACE_HUB_NODE_SIZE * scale;
   const orbitRadius = WORKSPACE_HUB_ORBIT_RADIUS * scale;
   const ringGap = orbitRadius - nestSize / 2 - nodeSize / 2;
-  const adjacentGap =
-    2 * orbitRadius * Math.sin(Math.PI / 5) - nodeSize;
+  const adjacentGap = 2 * orbitRadius * Math.sin(Math.PI / 5) - nodeSize;
   return {
     scale,
     nestSize,
@@ -64,8 +72,15 @@ export function workspaceHubMetrics(
     orbitRadius,
     ringGap,
     adjacentGap,
-    composition:
-      orbitRadius * 2 + nodeSize + WORKSPACE_HUB_NODE_PAD * scale,
+    composition: orbitRadius * 2 + nodeSize + WORKSPACE_HUB_NODE_PAD * scale,
     span: WORKSPACE_HUB_SPAN * scale,
   };
+}
+
+/** Apply measured stage metrics as CSS variables the nest, dock and portal inherit. */
+export function applyWorkspaceHubMetrics(element: HTMLElement): WorkspaceHubMetrics {
+  const rect = element.getBoundingClientRect();
+  const metrics = workspaceHubMetrics(rect.width, rect.height);
+  element.style.setProperty("--hub-scale", String(metrics.scale));
+  return metrics;
 }

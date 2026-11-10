@@ -437,7 +437,7 @@
     padding: 12px 2px 18px;
   }
   .workspace-ai-core-stage {
-    min-height: min(var(--hub-span-base, 580px), max(210px, calc(100dvh - 280px)));
+    min-height: 0;
   }
 }
 @media (prefers-reduced-motion: reduce) {

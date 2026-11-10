@@ -322,6 +322,7 @@ export function WorkspaceCompanion() {
       if (hub) {
         const styles = getComputedStyle(hub);
         for (const name of [
+          "--hub-scale",
           "--orbit-radius",
           "--dock-node-size",
           "--hub-toast-gap",

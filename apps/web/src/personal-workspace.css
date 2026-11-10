@@ -61,15 +61,10 @@
       var(--dock-node-pad-base) + var(--hub-toast-gap-base) +
       var(--hub-toast-band-base)
   );
+  /* Resolved by applyWorkspaceHubMetrics from the stage's used box.
+     100cqh/100cqw must not be set on this element: it is the size container,
+     and container query units only see an *ancestor* container. */
   --hub-scale: 1;
-  --hub-scale: max(
-    0.45,
-    min(
-      1,
-      100cqw / var(--hub-span-base),
-      100cqh / var(--hub-span-base)
-    )
-  );
   --nest-size: calc(var(--nest-size-base) * var(--hub-scale));
   --dock-node-size: calc(var(--dock-node-size-base) * var(--hub-scale));
   --dock-node-pad: calc(var(--dock-node-pad-base) * var(--hub-scale));
@@ -95,10 +90,7 @@
   pointer-events: none;
 }
 .personal-workspace .workspace-ai-core-stage {
-  min-height: min(
-    var(--hub-span-base),
-    max(320px, calc(100dvh - 340px))
-  );
+  min-height: 0;
 }
 .workspace-dock::before {
   content: "";
@@ -728,10 +720,7 @@
     gap: 14px;
   }
   .personal-workspace .workspace-ai-core-stage {
-    min-height: min(
-      var(--hub-span-base),
-      max(300px, calc(100dvh - 280px))
-    );
+    min-height: 0;
   }
   .workspace-dock-item {
     gap: 5px;
