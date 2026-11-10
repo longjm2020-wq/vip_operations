@@ -24,10 +24,12 @@ const companionPoses = [
 export function SidebarAssistant({
   floating = false,
   docked = false,
+  compact = false,
   onInteract,
 }: {
   floating?: boolean;
   docked?: boolean;
+  compact?: boolean;
   onInteract?: () => void;
 }) {
   const hub = useAssistantHub();
@@ -97,7 +99,7 @@ export function SidebarAssistant({
   const announced = useRef<Set<string> | null>(null);
   const [reminder, setReminder] = useState("");
   useEffect(() => {
-    if (!hub.feed?.items) return;
+    if (compact || !hub.feed?.items) return;
     const fresh = hub.feed.items.filter(
       (item) =>
         !hub.seen.includes(activityFingerprint(item)) &&
@@ -118,7 +120,7 @@ export function SidebarAssistant({
       setReminder(text.length > 32 ? text.slice(0, 31) + "…" : text);
       hub.announce?.(text.slice(0, 100));
     }
-  }, [hub.feed, hub.seen, hub.announce]);
+  }, [compact, hub.feed, hub.seen, hub.announce]);
   useEffect(() => {
     if (!reminder) return;
     const timer = setTimeout(() => setReminder(""), 8000);
@@ -128,15 +130,19 @@ export function SidebarAssistant({
     setDetailsOpen(false);
     hub.openPanel(tab);
   };
+  const launchLabel = hub.allowed
+    ? "打开小序文字对话"
+    : "打开 AI 个人助理";
   const menuTitle =
     labels[state] +
     (unread.length ? " · " + unread.length + " 条新动态" : " · 右键展开");
   const openMenu = () => setDetailsOpen(true);
   return (
     <section
-      className="sidebar-assistant"
+      className={`sidebar-assistant${compact ? " sidebar-assistant-compact" : ""}`}
       data-state={state}
       data-muted={hub.gptVoice.muted}
+      data-compact={compact ? "true" : undefined}
       aria-label="小序个人助理"
       onContextMenu={(event) => {
         event.preventDefault();
@@ -145,14 +151,17 @@ export function SidebarAssistant({
     >
       <Popover
         getPopupContainer={(trigger) =>
-          trigger.closest<HTMLElement>(".workspace-companion-host") ||
-          document.body
+          trigger.closest<HTMLElement>(
+            compact
+              ? ".personal-assistant-drawer"
+              : ".workspace-companion-host",
+          ) || document.body
         }
         trigger="contextMenu"
         open={detailsOpen}
         onOpenChange={setDetailsOpen}
         destroyOnHidden
-        placement={floating ? "topRight" : "right"}
+        placement={compact ? "bottomLeft" : floating ? "topRight" : "right"}
         classNames={{ root: "companion-details-popover" }}
         content={
           <div
@@ -221,27 +230,22 @@ export function SidebarAssistant({
           ref={launch}
           className="companion-launch"
           type="button"
-          aria-label={
-            hub.allowed
-              ? hub.gptVoice.state === "speaking"
-                ? "打断小序并说话"
-                : "与小序语音对话"
-              : "打开 AI 个人助理"
-          }
+          aria-label={launchLabel}
           aria-haspopup="dialog"
           aria-expanded={detailsOpen}
           title={
-            docked
-              ? "点击小序跃出对话 · 右键展开状态与动态 · 拖动离巢 · Home 回巢"
-              : floating
-                ? "点击语音对话 · 右键展开状态与动态 · 拖动自由放置 · 方向键移动 · Home 寻找空位"
-                : menuTitle
+            compact
+              ? "点击回到文字对话 · 右键展开状态与动态"
+              : docked
+                ? "点击打开文字对话 · 右键展开状态与动态 · 拖动离巢 · Home 回巢"
+                : floating
+                  ? "点击打开文字对话 · 右键展开状态与动态 · 拖动自由放置 · 方向键移动 · Home 寻找空位"
+                  : menuTitle
           }
           onClick={() => {
             setDetailsOpen(false);
             onInteract?.();
-            if (hub.allowed) hub.startVoice();
-            else openPanel("activity");
+            openPanel(hub.allowed ? "chat" : "activity");
           }}
           onKeyDown={(event) => {
             if (
@@ -277,8 +281,8 @@ export function SidebarAssistant({
           </div>
         </button>
       </Popover>
-      {hub.allowed && <CompanionVoice anchor={launch} />}
-      {reminder && !hub.voiceVisible && (
+      {hub.allowed && !compact && <CompanionVoice anchor={launch} />}
+      {reminder && !compact && !hub.voiceVisible && (
         <div className="companion-reminder" role="status" aria-live="polite">
           {reminder}
         </div>

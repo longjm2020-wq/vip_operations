@@ -45,9 +45,11 @@ export function CompanionVoice({
     const discover = () => {
       if (bubble.current?.classList.contains("companion-voice-inline"))
         inlineHeight.current = bubble.current.getBoundingClientRect().height;
-      const chatSlot = document.querySelector<HTMLElement>(
-        ".ant-drawer-open .assistant-chat-voice-slot",
-      );
+      const chatSlot = [
+        ...document.querySelectorAll<HTMLElement>(
+          ".ant-drawer-open .assistant-chat-voice-slot",
+        ),
+      ].find((node) => !node.closest("[hidden]")) || null;
       setWorkspaceSlot(
         chatSlot ||
           document.querySelector<HTMLElement>(

@@ -19,7 +19,7 @@ async function dragCompanionToPanel(page: Page, panel: Locator) {
   const card = (await panel.boundingBox())!;
   const companion = page.locator(".workspace-companion");
   const launch = companion.getByRole("button", {
-    name: "与小序语音对话",
+    name: "打开小序文字对话",
     exact: true,
   });
   const start = (await launch.boundingBox())!;
@@ -856,7 +856,7 @@ test("查询证据保留条码；操作卡点击后提交，完成以真实动�
     page.getByRole("button", { name: /切换为[亮暗]色主题/ }),
   ).toHaveCount(0);
   await openPersonalAssistant(page);
-  await expect(dialog.locator(".assistant-panel-heading")).toHaveText("小序");
+  await expect(dialog.locator(".assistant-panel-title")).toHaveText("小序");
   await expect(dialog).toBeInViewport({ ratio: 0.99 });
   await expect(action.getByText("已完成", { exact: true })).toBeVisible();
   await dialog
@@ -1286,6 +1286,14 @@ test("工作台与业务页共用透明宽屏对话，单输入和菜单可用�
   await openPersonalAssistant(page);
   const dialog = page.getByRole("dialog", { name: /AI 个人助理/ });
   await expect(dialog).toBeVisible();
+  const mascot = dialog.locator(".sidebar-assistant-compact");
+  await expect(mascot).toBeVisible();
+  const heading = (await dialog.locator(".ant-drawer-header").boundingBox())!;
+  const body = (await dialog.locator(".ant-drawer-body").boundingBox())!;
+  const avatar = (await mascot.boundingBox())!;
+  expect(avatar.y + avatar.height).toBeLessThanOrEqual(body.y + 1);
+  expect(avatar.x).toBeGreaterThanOrEqual(heading.x);
+  await expect(page.locator(".workspace-companion-host .sidebar-assistant")).toBeHidden();
   await expect(page.locator(".assistant-screen")).toBeVisible();
   await expect(page.locator(".personal-workspace")).toHaveAttribute(
     "data-scene-presence",
@@ -1333,7 +1341,7 @@ test("工作台与业务页共用透明宽屏对话，单输入和菜单可用�
   const input = dialog.getByPlaceholder(/告诉我你想完成什么/);
   await expect(input).toHaveValue("仍在编辑的选款会草稿");
   await input.fill("继续编辑但尚未发送");
-  await expect(dialog.locator(".assistant-panel-heading")).toHaveText("小序");
+  await expect(dialog.locator(".assistant-panel-title")).toHaveText("小序");
   await dialog
     .getByRole("button", { name: "更多助理操作", exact: true })
     .click();
@@ -1352,7 +1360,7 @@ test("工作台与业务页共用透明宽屏对话，单输入和菜单可用�
     ["动态反馈", "刷新助理动态"],
   ] as const) {
     await selectAssistantPanel(page, section);
-    await expect(dialog.locator(".assistant-panel-heading")).toHaveText(
+    await expect(dialog.locator(".assistant-panel-title")).toHaveText(
       section,
     );
     await expect(
@@ -1362,7 +1370,7 @@ test("工作台与业务页共用透明宽屏对话，单输入和菜单可用�
     ).toBeVisible();
   }
   await selectAssistantPanel(page, "聊天");
-  await expect(dialog.locator(".assistant-panel-heading")).toHaveText("小序");
+  await expect(dialog.locator(".assistant-panel-title")).toHaveText("小序");
   await expect(input).toHaveValue("继续编辑但尚未发送");
   await page.screenshot({ path: ".local/workspace-chat-screen-dark.png" });
   const exitMotion = await page
@@ -1838,7 +1846,7 @@ test("小序在业务页记住浮动位置，返回工作台巢穴保留同一�
   const companion = page.locator(".workspace-companion");
   await expect(companion).toHaveAttribute("data-docked", "false");
   await expect(
-    companion.getByRole("button", { name: "与小序语音对话", exact: true }),
+    companion.getByRole("button", { name: "打开小序文字对话", exact: true }),
   ).toBeVisible();
   await expect(page.locator(".sidebar .sidebar-assistant")).toHaveCount(0);
   await page.screenshot({
@@ -1846,7 +1854,7 @@ test("小序在业务页记住浮动位置，返回工作台巢穴保留同一�
     fullPage: false,
   });
   const handle = companion.getByRole("button", {
-    name: "与小序语音对话",
+    name: "打开小序文字对话",
     exact: true,
   });
   const before = (await handle.boundingBox())!;
@@ -2511,7 +2519,7 @@ test("输入文字、拖动小序和浮卡不会误转三维场景或启动语�
   expect(await readWorkspaceCamera(page)).toEqual(camera);
   const companion = page.locator(".workspace-companion");
   const robot = (await companion
-    .getByRole("button", { name: "与小序语音对话", exact: true })
+    .getByRole("button", { name: "打开小序文字对话", exact: true })
     .boundingBox())!;
   await page.mouse.move(robot.x + robot.width / 2, robot.y + robot.height / 2);
   await page.mouse.down();
@@ -2654,7 +2662,7 @@ test("小序在助理遮罩前仍可操作，攀爬浮卡后保持草稿且目�
   await page.goto("/my-workspace");
   const companion = page.locator(".workspace-companion");
   const voice = companion.getByRole("button", {
-    name: "与小序语音对话",
+    name: "打开小序文字对话",
     exact: true,
   });
   const instance = await companion
@@ -2800,7 +2808,7 @@ test("工作台圆环是小序巢穴，可离巢移动与召回，文字和动�
   await expect(page.locator(".workspace-companion")).toHaveCount(1);
   await expect(page.locator(".sidebar-assistant")).toHaveCount(1);
   const voice = companion.getByRole("button", {
-    name: "与小序语音对话",
+    name: "打开小序文字对话",
     exact: true,
   });
   await expect(voice).toBeVisible();
@@ -2852,7 +2860,7 @@ test("工作台圆环是小序巢穴，可离巢移动与召回，文字和动�
     .getByRole("button", { name: "查看助理动态反馈", exact: true })
     .click();
   const dialog = page.getByRole("dialog", { name: /AI 个人助理/ });
-  await expect(dialog.locator(".assistant-panel-heading")).toHaveText(
+  await expect(dialog.locator(".assistant-panel-title")).toHaveText(
     "动态反馈",
   );
   await expect(
@@ -2869,7 +2877,7 @@ test("小序可从巢穴拖出或用方向键离巢，Home归巢且移动不误�
   await page.goto("/my-workspace");
   const companion = page.locator(".workspace-companion");
   const voice = companion.getByRole("button", {
-    name: "与小序语音对话",
+    name: "打开小序文字对话",
     exact: true,
   });
   await expect(companion).toHaveAttribute("data-docked", "true");
@@ -3056,13 +3064,13 @@ for (const reducedMotion of [false, true]) {
     await expect(companion).toHaveAttribute("data-docked", "true");
     await expect(companion).toHaveAttribute("data-motion", "idle");
     await companion
-      .getByRole("button", { name: "与小序语音对话", exact: true })
+      .getByRole("button", { name: "打开小序文字对话", exact: true })
       .press("ArrowRight");
     // Manual keyboard placement is allowed to overlap the nest; clear its return button.
     if (!reducedMotion)
       for (let step = 0; step < 8; step++)
         await companion
-          .getByRole("button", { name: "与小序语音对话", exact: true })
+          .getByRole("button", { name: "打开小序文字对话", exact: true })
           .press("ArrowRight");
     await page.clock.runFor(1200);
     await expect(companion).toHaveAttribute("data-docked", "false");
@@ -3216,7 +3224,7 @@ test("中心AI核心在桌面与手机完整显示，页面打开不调用模型
   await expect(
     page
       .locator(".workspace-companion")
-      .getByRole("button", { name: "与小序语音对话", exact: true }),
+      .getByRole("button", { name: "打开小序文字对话", exact: true }),
   ).toBeVisible();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
   await expect(
@@ -3402,7 +3410,7 @@ test("页底新提醒按实际换行高度留在窗口内，拖动后整块形�
   await page.goto("/my-workspace");
   const companion = page.locator(".workspace-companion");
   const handle = companion.getByRole("button", {
-    name: "与小序语音对话",
+    name: "打开小序文字对话",
     exact: true,
   });
   const move = async (x: number, y: number) => {
@@ -3599,7 +3607,7 @@ for (const reducedMotion of [false, true]) {
       )
       .toBe(true);
     const voice = companion.getByRole("button", {
-      name: "与小序语音对话",
+      name: "打开小序文字对话",
       exact: true,
     });
     await voice.focus();

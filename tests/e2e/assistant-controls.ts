@@ -2,8 +2,29 @@ import { expect, type Locator, type Page } from "@playwright/test";
 
 export function companionLaunch(scope: Page | Locator) {
   return scope.getByRole("button", {
-    name: /与小序语音对话|打断小序并说话|打开 AI 个人助理/,
+    name: /打开小序文字对话|打开 AI 个人助理/,
   });
+}
+
+export function workspaceVoiceStart(scope: Page | Locator) {
+  return scope.getByRole("button", {
+    name: "开始与小序语音对话",
+    exact: true,
+  });
+}
+
+export async function startWorkspaceVoice(page: Page) {
+  const prompt = workspaceVoiceStart(page);
+  if (await prompt.isVisible()) {
+    await prompt.click();
+    return;
+  }
+  const composer = page.getByRole("button", {
+    name: "开始语音对话",
+    exact: true,
+  });
+  await expect(composer).toBeVisible();
+  await composer.click();
 }
 
 export async function openCompanionMenu(scope: Page | Locator) {
@@ -17,12 +38,17 @@ export async function openPersonalAssistant(page: Page) {
       await selectAssistantPanel(page, "聊天");
     return;
   }
-  const launcher = page.getByRole("button", {
-    name: "文字对话",
-    exact: true,
-  });
-  if (!(await launcher.isVisible())) await openCompanionMenu(page);
-  await launcher.click();
+  const mascot = companionLaunch(page);
+  if (await mascot.first().isVisible()) {
+    await mascot.first().click();
+  } else {
+    const launcher = page.getByRole("button", {
+      name: "文字对话",
+      exact: true,
+    });
+    if (!(await launcher.isVisible())) await openCompanionMenu(page);
+    await launcher.click();
+  }
   await expect(
     page.getByRole("dialog", { name: /AI 个人助理/ }),
   ).toBeInViewport({ ratio: 0.99 });

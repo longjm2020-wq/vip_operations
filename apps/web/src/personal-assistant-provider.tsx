@@ -87,6 +87,8 @@ import {
   assistantWebsiteUrl,
   parseAssistantWebsiteRequest,
 } from "../../../packages/contracts/src/assistant-web-command";
+import { useAssistantChatScroll } from "./assistant-chat-scroll";
+import { SidebarAssistant } from "./sidebar-assistant";
 
 type AssistantSection =
   | "chat"
@@ -428,9 +430,13 @@ export function PersonalAssistantProvider({
   useEffect(() => {
     if (!open || section !== "chat") speech.stop();
   }, [open, section, speech.stop]);
-  useEffect(() => {
-    if (open) bottom.current?.scrollIntoView({ block: "end" });
-  }, [open, messages.length, busy, liveCaptions.at(-1)?.text]);
+  const [drawerSettled, setDrawerSettled] = useState(false);
+  useAssistantChatScroll(
+    open && section === "chat",
+    drawerSettled,
+    bottom,
+    `${messages.length}:${Number(busy)}:${liveCaptions.at(-1)?.text || ""}:${Number(voiceVisible)}:${Number(q.isLoading)}`,
+  );
   const send = async (value: string) => {
     if (!value.trim() || !composerReady || busy || voice.listening) return;
     const requestId = crypto.randomUUID();
@@ -566,8 +572,7 @@ export function PersonalAssistantProvider({
     if (!allowed) return;
     voice.stop();
     speech.stop();
-    setSection("chat");
-    setOpen(true);
+    // Starting or stopping a call never opens or closes the text chat panel.
     setVoiceVisible(true);
     if (gptVoice.state === "speaking") gptVoice.interrupt();
     else if (
@@ -949,18 +954,21 @@ export function PersonalAssistantProvider({
         aria-label="AI 个人助理"
         aria-labelledby=""
         closable={{ placement: "end" }}
+        afterOpenChange={setDrawerSettled}
         onClose={() => {
           playbackAllowed.current = false;
           setOpen(false);
-          closeVoice();
           voice.stop();
           speech.stop();
         }}
         title={
           <span className="assistant-panel-heading">
-            {section === "chat"
-              ? "小序"
-              : sectionItems.find((item) => item.key === section)?.label}
+            {allowed && <SidebarAssistant compact />}
+            <span className="assistant-panel-title">
+              {section === "chat"
+                ? "小序"
+                : sectionItems.find((item) => item.key === section)?.label}
+            </span>
           </span>
         }
         size={1120}
