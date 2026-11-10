@@ -8,6 +8,7 @@ import { WorkspaceNestHandle } from "./workspace-nest-handle";
 import { useWorkspaceTeam } from "./use-workspace-team";
 import { WorkspaceTeamOrbit } from "./workspace-team-orbit";
 import { teamIsRunning } from "./workspace-team-state";
+import { useWorkspaceHubStage } from "./use-workspace-hub-stage";
 
 // Fixed geometry keeps this decorative core independent of timers and model calls.
 const coreTicks = Array.from({ length: 60 }, (_, index) => index);
@@ -155,6 +156,7 @@ export function WorkspaceAI({
   const user = useUser();
   const hub = useAssistantHub();
   const team = useWorkspaceTeam();
+  const stage = useWorkspaceHubStage();
   if (!canUsePersonalAssistant({ permissions: user.permissions })) return null;
   const backgroundTaskRunning = hub.feed?.items?.some(
     (item) => item.kind === "task" && item.status === "running",
@@ -177,6 +179,7 @@ export function WorkspaceAI({
       <div className="workspace-ai-start">
         <div
           className="workspace-ai-core-stage"
+          ref={stage}
           inert={sceneCovered}
           data-team-active={team.visible}
         >

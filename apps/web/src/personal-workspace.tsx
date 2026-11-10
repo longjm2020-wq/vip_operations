@@ -56,6 +56,7 @@ import { PageResourceBoundary } from "./page-resource-boundary";
 import { WorkspaceAI } from "./workspace-ai";
 import { PersonalSchedule } from "./personal-schedule";
 import { useWorkspaceWorld } from "./use-workspace-world";
+import { useWorkspaceHubStage } from "./use-workspace-hub-stage";
 import { WorkspaceWorldBackdrop } from "./workspace-world-backdrop";
 import { WorkspaceDockHalo } from "./workspace-dock-halo";
 import { WorkspaceImageReveal } from "./workspace-image-reveal";
@@ -469,6 +470,7 @@ function WorkspaceFloatingPanel({
 
 export function PersonalWorkspacePage() {
   const world = useWorkspaceWorld();
+  const quietStage = useWorkspaceHubStage();
   const scenePresence = useWorkspaceScenePresence();
   const sceneCovered = scenePresence !== "closed";
   const [hologramPresence, setHologramPresence] =
@@ -712,7 +714,7 @@ export function PersonalWorkspacePage() {
           <div className="personal-workspace-body">
             <div className="personal-workspace-main">
               {!canUsePersonalAssistant({ permissions: user.permissions }) && (
-                <div className="workspace-quiet" inert={sceneCovered}>
+                <div className="workspace-quiet" ref={quietStage} inert={sceneCovered}>
                   <div className="workspace-world-camera">
                     <div className="workspace-world-plane">
                       <div className="workspace-quiet-center">

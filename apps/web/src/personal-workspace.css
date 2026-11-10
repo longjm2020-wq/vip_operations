@@ -45,30 +45,44 @@
 }
 .workspace-ai-core-stage,
 .workspace-quiet {
+  /* Keep these in sync with apps/web/src/workspace-hub-layout.ts */
+  --nest-size-base: 286px;
+  --dock-node-size-base: 76px;
+  --dock-ring-gap-base: 36px;
+  --dock-node-pad-base: 16px;
+  --hub-toast-gap-base: 10px;
+  --hub-toast-band-base: 44px;
+  --orbit-radius-base: calc(
+    var(--nest-size-base) / 2 + var(--dock-node-size-base) / 2 +
+      var(--dock-ring-gap-base)
+  );
+  --hub-span-base: calc(
+    var(--orbit-radius-base) * 2 + var(--dock-node-size-base) +
+      var(--dock-node-pad-base) + var(--hub-toast-gap-base) +
+      var(--hub-toast-band-base)
+  );
+  /* Resolved by applyWorkspaceHubMetrics from the stage's used box.
+     100cqh/100cqw must not be set on this element: it is the size container,
+     and container query units only see an *ancestor* container. */
+  --hub-scale: 1;
+  --nest-size: calc(var(--nest-size-base) * var(--hub-scale));
+  --dock-node-size: calc(var(--dock-node-size-base) * var(--hub-scale));
+  --dock-node-pad: calc(var(--dock-node-pad-base) * var(--hub-scale));
+  --orbit-radius: calc(var(--orbit-radius-base) * var(--hub-scale));
+  --hub-toast-gap: calc(var(--hub-toast-gap-base) * var(--hub-scale));
+  --hub-toast-band: calc(var(--hub-toast-band-base) * var(--hub-scale));
+  --hub-nudge-y: calc((var(--hub-toast-gap) + var(--hub-toast-band)) / 2);
   container-type: size;
   container-name: workspace-hub;
   overflow: visible;
 }
 .workspace-dock {
-  --dock-node-size: 76px;
-  --dock-clearance: 16px;
-  --orbit-radius: min(
-    204px,
-    max(
-      96px,
-      calc(
-        (min(100cqw, 100cqh) - var(--dock-node-size)) / 2 - var(--dock-clearance)
-      )
-    )
-  );
   position: absolute;
   width: calc(
-    var(--orbit-radius) * 2 + var(--dock-node-size) + var(--dock-clearance) *
-      2
+    var(--orbit-radius) * 2 + var(--dock-node-size) + var(--dock-node-pad)
   );
   height: calc(
-    var(--orbit-radius) * 2 + var(--dock-node-size) + var(--dock-clearance) *
-      2
+    var(--orbit-radius) * 2 + var(--dock-node-size) + var(--dock-node-pad)
   );
   left: 0;
   top: 0;
@@ -76,7 +90,7 @@
   pointer-events: none;
 }
 .personal-workspace .workspace-ai-core-stage {
-  min-height: 500px;
+  min-height: 0;
 }
 .workspace-dock::before {
   content: "";
@@ -149,7 +163,7 @@
   outline-offset: 2px;
 }
 .workspace-dock-icon {
-  font-size: 20px;
+  font-size: max(14px, calc(20px * var(--hub-scale, 1)));
   color: var(--app-accent);
 }
 .workspace-dock-face {
@@ -162,7 +176,7 @@
 }
 .workspace-dock-item strong {
   display: block;
-  font-size: 11px;
+  font-size: max(9px, calc(11px * var(--hub-scale, 1)));
   font-weight: 550;
 }
 @keyframes workspace-dock-ring {
@@ -195,7 +209,7 @@
 .workspace-quiet-orbit-slot {
   position: absolute;
   left: 50%;
-  top: 50%;
+  top: calc(50% + var(--hub-nudge-y, 0px));
   width: 0;
   height: 0;
   pointer-events: none;
@@ -705,22 +719,8 @@
   .personal-workspace-body {
     gap: 14px;
   }
-  .workspace-dock {
-    --dock-node-size: 62px;
-    --dock-clearance: 10px;
-    --orbit-radius: min(
-      134px,
-      max(
-        86px,
-        calc(
-          (min(100cqw, 100cqh, 100vw - 32px) - var(--dock-node-size)) / 2 -
-            var(--dock-clearance)
-        )
-      )
-    );
-  }
   .personal-workspace .workspace-ai-core-stage {
-    min-height: 360px;
+    min-height: 0;
   }
   .workspace-dock-item {
     gap: 5px;

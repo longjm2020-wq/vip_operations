@@ -707,12 +707,18 @@ body:has(.workspace-companion[data-docked="true"]:is(:hover, :focus-within))
 }
 .workspace-companion[data-docked="true"] .companion-reminder {
   position: absolute;
-  top: -56px;
   left: 50%;
+  top: auto;
+  bottom: calc(
+    100% + var(--orbit-radius, 217px) + var(--dock-node-size, 76px) / 2 -
+      var(--companion-dock-height, 150px) / 2 + var(--hub-toast-gap, 10px)
+  );
   transform: translateX(-50%);
-  width: 230px;
-  max-width: calc(100vw - 40px);
+  width: max-content;
+  max-width: min(360px, calc(100vw - 40px));
   padding: 8px 12px;
+  white-space: nowrap;
+  z-index: 2;
   border: 1px solid var(--app-border);
   border-radius: 10px;
   background: var(--app-surface);

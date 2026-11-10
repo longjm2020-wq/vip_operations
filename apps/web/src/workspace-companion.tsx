@@ -316,6 +316,21 @@ export function WorkspaceCompanion() {
         "--companion-dock-height",
         `${r.height}px`,
       );
+      const hub = nest.closest<HTMLElement>(
+        ".workspace-ai-core-stage, .workspace-quiet",
+      );
+      if (hub) {
+        const styles = getComputedStyle(hub);
+        for (const name of [
+          "--hub-scale",
+          "--orbit-radius",
+          "--dock-node-size",
+          "--hub-toast-gap",
+        ]) {
+          const value = styles.getPropertyValue(name).trim();
+          if (value) panel.current.style.setProperty(name, value);
+        }
+      }
       panel.current.style.transform = `translate3d(${r.left}px, ${r.top}px, 0)`;
     };
     const attach = (home: boolean) => {

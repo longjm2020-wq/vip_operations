@@ -32,18 +32,21 @@
 .workspace-ai-orbit-slot {
   position: absolute;
   left: 50%;
-  top: 50%;
+  top: calc(50% + var(--hub-nudge-y, 0px));
   width: 0;
   height: 0;
   overflow: visible;
   pointer-events: none;
+}
+.workspace-ai-core-stage > .workspace-ai-core {
+  margin-top: var(--hub-nudge-y, 0px);
 }
 .workspace-ai-core {
   --core-pitch: -14deg;
   --core-yaw: 18deg;
   position: relative;
   flex: none;
-  width: 286px;
+  width: var(--nest-size, 286px);
   aspect-ratio: 1;
   margin: 0;
   touch-action: none;
@@ -291,8 +294,8 @@
   z-index: 1;
   left: 50%;
   top: 50%;
-  width: 168px;
-  height: 150px;
+  width: 58.74%;
+  height: 52.45%;
   transform: translate(-50%, -50%);
   display: grid;
   place-items: center;
@@ -433,15 +436,8 @@
   .workspace-ai {
     padding: 12px 2px 18px;
   }
-  .workspace-ai-core {
-    width: 210px;
-  }
   .workspace-ai-core-stage {
-    min-height: 210px;
-  }
-  .workspace-ai-companion-slot {
-    width: 132px;
-    height: 118px;
+    min-height: 0;
   }
 }
 @media (prefers-reduced-motion: reduce) {
