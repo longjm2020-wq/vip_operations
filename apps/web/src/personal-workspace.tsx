@@ -811,7 +811,6 @@ export function PersonalWorkspacePage() {
                     {
                       "--orbit-angle": `${-90 + (index * 360) / items.length}deg`,
                       "--orbit-counter-angle": `${90 - (index * 360) / items.length}deg`,
-                      "--orbit-depth": `${[0, 90, -55, 60, -90][index % 5]}px`,
                       "--branch-y": `${((index + 0.5) / items.length) * 100}%`,
                     } as CSSProperties
                   }

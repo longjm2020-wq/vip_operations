@@ -43,11 +43,33 @@
 .personal-workspace-main {
   min-width: 0;
 }
+.workspace-ai-core-stage,
+.workspace-quiet {
+  container-type: size;
+  container-name: workspace-hub;
+  overflow: visible;
+}
 .workspace-dock {
-  --orbit-radius: 204px;
+  --dock-node-size: 76px;
+  --dock-clearance: 16px;
+  --orbit-radius: min(
+    204px,
+    max(
+      96px,
+      calc(
+        (min(100cqw, 100cqh) - var(--dock-node-size)) / 2 - var(--dock-clearance)
+      )
+    )
+  );
   position: absolute;
-  width: 500px;
-  height: 500px;
+  width: calc(
+    var(--orbit-radius) * 2 + var(--dock-node-size) + var(--dock-clearance) *
+      2
+  );
+  height: calc(
+    var(--orbit-radius) * 2 + var(--dock-node-size) + var(--dock-clearance) *
+      2
+  );
   left: 0;
   top: 0;
   transform: translate(-50%, -50%);
@@ -72,10 +94,10 @@
 .workspace-dock-item {
   appearance: none;
   position: absolute;
-  left: calc(50% - 38px);
-  top: calc(50% - 38px);
-  width: 76px;
-  height: 76px;
+  left: calc(50% - var(--dock-node-size) / 2);
+  top: calc(50% - var(--dock-node-size) / 2);
+  width: var(--dock-node-size);
+  height: var(--dock-node-size);
   display: flex;
   flex-direction: column;
   justify-content: center;
@@ -684,18 +706,23 @@
     gap: 14px;
   }
   .workspace-dock {
-    --orbit-radius: min(134px, calc((100vw - 90px) / 2));
-    width: min(340px, calc(100vw - 32px));
-    height: min(340px, calc(100vw - 32px));
+    --dock-node-size: 62px;
+    --dock-clearance: 10px;
+    --orbit-radius: min(
+      134px,
+      max(
+        86px,
+        calc(
+          (min(100cqw, 100cqh, 100vw - 32px) - var(--dock-node-size)) / 2 -
+            var(--dock-clearance)
+        )
+      )
+    );
   }
   .personal-workspace .workspace-ai-core-stage {
     min-height: 360px;
   }
   .workspace-dock-item {
-    width: 62px;
-    height: 62px;
-    left: calc(50% - 31px);
-    top: calc(50% - 31px);
     gap: 5px;
     padding: 5px;
   }
