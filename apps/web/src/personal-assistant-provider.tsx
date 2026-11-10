@@ -56,6 +56,7 @@ import type {
   AgentJob,
 } from "../../../packages/contracts/src/assistant-agent";
 import { AssistantModelPicker } from "./assistant-model-picker";
+import { resolveAssistantModelPickerState } from "../../../packages/contracts/src/assistant-model-picker";
 import { AssistantTeamMessage } from "./assistant-team-message";
 import { assistantPublicText } from "../../../packages/contracts/src/ai-presentation";
 import { AssistantBusinessResults } from "./assistant-business-results";
@@ -189,6 +190,15 @@ export function PersonalAssistantProvider({
   });
   const [desktopDeviceId, setDesktopDeviceId] = useState<string>();
   const [teamMode, setTeamMode] = useState(false);
+  useEffect(() => {
+    if (teamMode) return;
+    const next = resolveAssistantModelPickerState({
+      catalog: modelCatalog.data,
+      value: chatModel,
+    });
+    if (next.autoSwitched && next.selectedId && next.selectedId !== chatModel)
+      setChatModel(next.selectedId);
+  }, [teamMode, modelCatalog.data, chatModel]);
   const [teamModel, setTeamModel] = useState<string>();
   const [useKnowledge, setUseKnowledge] = useState(true);
   const [selectedTeamRunId, setSelectedTeamRunId] = useState<string>();
@@ -308,19 +318,19 @@ export function PersonalAssistantProvider({
         : false,
   });
   const data = q.data?.data as AssistantConversation | undefined;
-  const selectedModel = modelCatalog.data?.models?.find(
-    (model) =>
-      model.vision === true &&
-      model.id === (chatModel || modelCatalog.data?.defaultModel),
-  );
+  const pickerState = resolveAssistantModelPickerState({
+    catalog: modelCatalog.data,
+    value: chatModel,
+    teamSelected: teamMode,
+  });
+  const modelHint = !teamMode && !desktopDeviceId ? pickerState.hint : "";
   const modelProblem =
     !teamMode &&
     !desktopDeviceId &&
-    (modelCatalog.data && !selectedModel
-      ? modelCatalog.data.models?.length
-        ? "所选模型已不可用或未接通，请从列表重新选择。"
-        : "暂无已接通的多模态模型，请管理员检查连接。"
-      : "");
+    modelCatalog.data &&
+    !pickerState.models.length
+      ? "暂无已接通的多模态模型，请管理员检查连接。"
+      : "";
   const composerReady = teamMode
     ? teamConfig.data?.ready
     : data?.ready && !modelProblem;
@@ -872,6 +882,11 @@ export function PersonalAssistantProvider({
           {modelProblem}
         </div>
       )}
+      {!modelProblem && modelHint && (
+        <div className="assistant-model-hint" role="status">
+          {modelHint}
+        </div>
+      )}
       {teamMode && teamSubmitError && (
         <Alert type="error" showIcon title={teamSubmitError} />
       )}
@@ -1253,6 +1268,11 @@ export function PersonalAssistantProvider({
                         {item.role === "assistant"
                           ? assistantPublicText(item.text)
                           : item.text}
+                        {item.role === "assistant" && item.notice ? (
+                          <div className="assistant-model-hint">
+                            {item.notice}
+                          </div>
+                        ) : null}
                       </div>
                     }
                   />

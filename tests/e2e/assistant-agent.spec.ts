@@ -259,7 +259,7 @@ test("模型菜单只显示多模态型号、发送所选模型并在重开对�
 });
 
 for (const disconnected of [false, true]) {
-  test(`选中模型${disconnected ? "未接通" : "失去多模态能力"}后保留草稿并要求重选，不静默降级`, async ({
+  test(`选中模型${disconnected ? "未接通" : "失去多模态能力"}后自动改用已接通模型并保留草稿`, async ({
     page,
   }) => {
     const requests = await setup(page);
@@ -299,20 +299,19 @@ for (const disconnected of [false, true]) {
     );
     await composer.getByRole("button", { name: "选择对话模型" }).click();
     await page.getByRole("menuitem", { name: "刷新模型列表" }).click();
-    await expect(composer.getByRole("alert")).toContainText("所选模型已不可用");
+    await expect(composer.getByRole("status")).toContainText("已自动切换到");
+    await expect(
+      composer.getByRole("button", { name: "选择对话模型" }),
+    ).toContainText("GPT-6.1 Sol");
     await expect(
       composer.getByRole("button", { name: "发送给个人助理" }),
-    ).toBeDisabled();
+    ).toBeEnabled();
     await expect(composer.locator("textarea")).toHaveValue("保留我的草稿");
     expect(requests).toHaveLength(0);
     await composer.getByRole("button", { name: "选择对话模型" }).click();
     await expect(
       page.getByRole("menuitem", { name: /Gemini 2.5 Pro/ }),
     ).toHaveCount(0);
-    await page.getByRole("menuitem", { name: /GPT-6.1 Sol/ }).click();
-    await expect(
-      composer.getByRole("button", { name: "发送给个人助理" }),
-    ).toBeEnabled();
   });
 }
 

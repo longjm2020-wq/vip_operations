@@ -21,7 +21,9 @@
   padding: 12px 0;
   border-top: 1px solid var(--app-border);
 }
-body:has(.assistant-screen.ant-drawer-open) .workspace-companion-host .sidebar-assistant,
+body:has(.assistant-screen.ant-drawer-open)
+  .workspace-companion-host
+  .sidebar-assistant,
 body:has(.assistant-screen.ant-drawer-open) .companion-voice-prompt {
   visibility: hidden;
   pointer-events: none;
@@ -122,6 +124,12 @@ body:has(.assistant-screen.ant-drawer-open) .companion-voice-prompt {
 .assistant-voice-error {
   font-size: 12px;
   color: var(--app-secondary);
+  margin-top: 8px;
+}
+.assistant-model-hint {
+  font-size: 12px;
+  color: var(--ant-color-text-secondary, #7e879f);
+  line-height: 1.6;
   margin-top: 8px;
 }
 .assistant-evidence,

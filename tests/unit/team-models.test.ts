@@ -1,14 +1,25 @@
-vi.mock("../../apps/api/src/ai-model-routing.js", () => ({ featureModelRef: async () => undefined }));
+vi.mock("../../apps/api/src/ai-model-routing.js", () => ({
+  featureModelRef: async () => undefined,
+}));
 import { beforeEach, describe, expect, it, vi } from "vitest";
-const f = vi.hoisted(() => ({ catalog: vi.fn() }));
+const f = vi.hoisted(() => ({
+  catalog: vi.fn(),
+  connected: null as string[] | null,
+}));
 vi.mock("../../apps/api/src/modules/workspace/agent-models.js", () => ({
   agentModelCandidates: f.catalog,
 }));
+vi.mock("../../apps/api/src/ai-model-connections.js", () => ({
+  connectedModelRefs: async (models: { id: string }[]) =>
+    new Set(f.connected ?? models.map((model) => model.id)),
+}));
 import {
+  fallbackTeamModel,
   readTeamModelCatalog,
   resolveTeamModel,
   resolveTeamImageModel,
 } from "../../apps/api/src/modules/workspace/team-models.js";
+import type { AgentInternalModel } from "../../apps/api/src/modules/workspace/agent-models.js";
 
 const models = [
   {
@@ -40,7 +51,8 @@ const models = [
     parameters: ["tools"],
   },
 ];
-beforeEach(() =>
+beforeEach(() => {
+  f.connected = null;
   f.catalog.mockReset().mockResolvedValue({
     models,
     defaultModel: models[0].id,
@@ -60,8 +72,8 @@ beforeEach(() =>
         aspects: ["1:1"],
       },
     ],
-  }),
-);
+  });
+});
 describe("team model routing", () => {
   it("honors task override before member fixed selection, without silently replacing unavailable or incompatible fixed models", async () => {
     expect(
@@ -312,6 +324,41 @@ describe("team model routing", () => {
       }),
     ).rejects.toMatchObject({
       response: { error: { code: "TEAM_IMAGE_MODEL_CAPABILITY" } },
+    });
+  });
+  it("falls back from a disconnected default or fixed team model and records a visible notice", async () => {
+    f.connected = ["engine/standard"];
+    const fallback = await resolveTeamModel({
+      profileModel: "engine/strong",
+      orchestrator: true,
+    });
+    expect(fallback).toMatchObject({
+      id: "engine/standard",
+      selectionReason: expect.stringContaining("已自动切换到 中文助手"),
+    });
+    expect(fallback.selectionReason).toContain("未接通");
+    expect(await resolveTeamModel({ difficulty: "complex" })).toMatchObject({
+      id: "engine/standard",
+    });
+  });
+  it("selects the next connected eligible model after an access error", async () => {
+    f.connected = ["engine/strong", "engine/standard"];
+    expect(
+      await fallbackTeamModel(models[0] as AgentInternalModel, {
+        structured: true,
+        vision: true,
+      }),
+    ).toMatchObject({
+      id: "engine/standard",
+      selectionReason: expect.stringContaining("已自动切换到 中文助手"),
+    });
+  });
+  it("does not replace an explicit model that is connected but lacks required capability", async () => {
+    f.connected = ["engine/fast", "engine/standard"];
+    await expect(
+      resolveTeamModel({ taskModel: "engine/fast", vision: true }),
+    ).rejects.toMatchObject({
+      response: { error: { code: "TEAM_MODEL_CAPABILITY" } },
     });
   });
 });
