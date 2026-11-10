@@ -16,7 +16,6 @@
   cursor: pointer;
   font: inherit;
 }
-.companion-count:focus-visible,
 .companion-launch:focus-visible,
 .companion-feedback:focus-visible,
 .companion-interactions button:focus-visible {
@@ -166,22 +165,6 @@
     0 0 8px color-mix(in srgb, var(--app-accent) 45%, transparent)
   );
 }
-.companion-count {
-  position: absolute;
-  top: 13px;
-  right: 9px;
-  background: var(--app-accent-fill);
-  color: #fff;
-  min-width: 24px;
-  min-height: 24px;
-  border: 0;
-  cursor: pointer;
-  pointer-events: auto;
-  border-radius: 9px;
-  padding: 2px 5px;
-  font-size: 10px;
-  font-weight: 600;
-}
 .companion-name {
   font-size: 13px;
   font-weight: 600;
@@ -263,10 +246,6 @@
 .sidebar.ant-layout-sider-collapsed .companion-feedback,
 .sidebar.ant-layout-sider-collapsed .companion-grid {
   display: none;
-}
-.sidebar.ant-layout-sider-collapsed .companion-count {
-  top: 0;
-  right: -3px;
 }
 .assistant-activity-toolbar {
   display: flex;
@@ -463,8 +442,7 @@
   background: transparent;
   color: var(--app-text);
 }
-.workspace-companion.is-roaming .companion-launch,
-.workspace-companion.is-roaming .companion-count {
+.workspace-companion.is-roaming .companion-launch {
   pointer-events: none;
 }
 .workspace-companion.is-voicing {
@@ -479,13 +457,6 @@
 .workspace-companion.is-compact .companion-stage {
   width: 64px;
   height: 58px;
-}
-.workspace-companion.is-compact .companion-count {
-  top: 0;
-  right: -4px;
-  min-width: 20px;
-  min-height: 20px;
-  padding: 1px 3px;
 }
 .workspace-companion .sidebar-assistant {
   margin: 0;
@@ -503,10 +474,6 @@
   width: 132px;
   height: 118px;
   background: none;
-}
-.workspace-companion .companion-count {
-  top: 10px;
-  right: 3px;
 }
 .companion-details {
   width: 220px;
@@ -604,8 +571,7 @@ body:has(.workspace-companion[data-docked="true"]:is(:hover, :focus-within))
   .workspace-dock-label::before {
   animation-play-state: paused;
 }
-.workspace-companion[data-motion="climbing"]
-  :is(.companion-launch, .companion-count) {
+.workspace-companion[data-motion="climbing"] .companion-launch {
   pointer-events: none;
 }
 .workspace-companion[data-motion="climbing"] .companion-body {
@@ -648,11 +614,6 @@ body:has(.workspace-companion[data-docked="true"]:is(:hover, :focus-within))
 .workspace-companion[data-docked="true"] .companion-launch {
   cursor: pointer;
   touch-action: none;
-}
-.workspace-companion[data-docked="true"] .companion-count {
-  top: 10%;
-  right: 0;
-  box-shadow: 0 0 0 4px var(--app-bg);
 }
 .workspace-companion[data-docked="true"] .companion-reminder {
   position: absolute;
@@ -839,15 +800,6 @@ body:has(.workspace-companion[data-docked="true"]:is(:hover, :focus-within))
 }
 .workspace-companion[data-motion="jumping"]::after {
   animation: companion-phase-trail 520ms ease-out both;
-}
-.workspace-companion:is(
-    [data-motion="departing"],
-    [data-motion="arriving"],
-    [data-motion="jumping"]
-  )
-  .companion-count {
-  opacity: 0;
-  pointer-events: none;
 }
 .workspace-companion:is(
     [data-motion="departing"],

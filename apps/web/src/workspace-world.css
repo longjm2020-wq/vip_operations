@@ -140,7 +140,9 @@
   position: absolute;
   left: 50%;
   top: 50%;
-  transform: translate(-50%, -50%);
+  /* Billboard the nest and rings so they stay flat; only the mascot tilts. */
+  transform: translate(-50%, -50%) rotateY(calc(-1 * var(--world-yaw)))
+    rotateX(calc(-1 * var(--world-pitch)));
   transform-style: preserve-3d;
   /* Its transparent corners must not intercept the smaller orbit controls. */
   pointer-events: none;
@@ -345,17 +347,21 @@
   ) {
   transform-style: preserve-3d;
 }
-.workspace-world-plane .workspace-ai-companion-slot {
-  transform: translate(-50%, -50%) rotateY(calc(-1 * var(--world-yaw)))
+.workspace-world-plane
+  :is(.workspace-ai-orbit-slot, .workspace-quiet-orbit-slot) {
+  transform: rotateY(calc(-1 * var(--world-yaw)))
     rotateX(calc(-1 * var(--world-pitch)));
+}
+.workspace-world-plane .workspace-ai-companion-slot {
+  transform: translate(-50%, -50%) rotateX(var(--world-pitch))
+    rotateY(var(--world-yaw));
   pointer-events: auto;
 }
 .workspace-world-plane :is(.workspace-ai-summon, .workspace-ai-view-reset) {
   pointer-events: auto;
 }
 .workspace-world-plane .workspace-ai-summon {
-  transform: translate(-50%, -50%) rotateY(calc(-1 * var(--world-yaw)))
-    rotateX(calc(-1 * var(--world-pitch)));
+  transform: translate(-50%, -50%);
 }
 .workspace-world-plane .workspace-dock-item {
   padding: 0;
@@ -402,8 +408,6 @@
     inset 0 -8px 18px color-mix(in srgb, var(--app-accent) 5%, transparent),
     0 5px 18px color-mix(in srgb, var(--app-shadow) 48%, transparent),
     0 0 24px color-mix(in srgb, var(--app-accent) 10%, transparent);
-  transform: rotateY(calc(-1 * var(--world-yaw)))
-    rotateX(calc(-1 * var(--world-pitch)));
   pointer-events: auto;
   cursor: pointer;
   transition:

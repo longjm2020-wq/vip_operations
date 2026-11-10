@@ -1,4 +1,6 @@
 import {
+  companionLaunch,
+  openCompanionMenu,
   openPersonalAssistant,
   selectAssistantPanel,
   setAssistantOption,
@@ -1413,9 +1415,7 @@ test("工作台与业务页共用透明宽屏对话，单输入和菜单可用�
   await expect(
     page.getByRole("button", { name: /切换为[亮暗]色主题/ }),
   ).toHaveCount(0);
-  await page
-    .getByRole("button", { name: "展开小序状态与动态", exact: true })
-    .click();
+  await openCompanionMenu(page);
   await page.getByRole("button", { name: "文字对话", exact: true }).click();
   await expect(dialog).toBeInViewport({ ratio: 0.99 });
   await expect(page.locator(".assistant-screen")).toBeVisible();
@@ -1916,13 +1916,11 @@ test("小序在业务页记住浮动位置，返回工作台巢穴保留同一�
       localStorage.getItem("xuti-companion-position:105"),
     ),
   ).toBe(savedPosition);
-  await companion.getByRole("button", { name: "展开小序状态与动态" }).click();
+  await openCompanionMenu(companion);
   await expect(page.getByRole("button", { name: "复位助理位置" })).toHaveCount(
     0,
   );
-  await companion
-    .getByRole("button", { name: "展开小序状态与动态" })
-    .press("Escape");
+  await page.keyboard.press("Escape");
   await companion.locator(".companion-launch").press("Home");
   await expect(companion).toBeVisible();
   await expect(companion).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
@@ -1935,7 +1933,7 @@ test("小序在业务页记住浮动位置，返回工作台巢穴保留同一�
   await expect(sidebar).toBeVisible();
   await expect(page.locator(".workspace-companion")).toHaveCount(1);
   await expect(page.locator(".sidebar .sidebar-assistant")).toHaveCount(0);
-  await sidebar.getByRole("button", { name: "展开小序状态与动态" }).click();
+  await openCompanionMenu(sidebar);
   await page.getByRole("button", { name: "文字对话", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: /AI 个人助理/ });
   await dialog
@@ -2002,7 +2000,7 @@ test("动态面板显示真实任务进度、筛选和已读，展开入口不�
   await page.goto("/operations");
   const mascot = page.locator(".sidebar-assistant");
   await expect(mascot).toHaveAttribute("data-state", "working");
-  await mascot.getByRole("button", { name: "展开小序状态与动态" }).click();
+  await openCompanionMenu(mascot);
   await page.getByRole("button", { name: "查看助理动态反馈" }).click();
   const dialog = page.getByRole("dialog", { name: /AI 个人助理/ });
   await expect(
@@ -2024,7 +2022,7 @@ test("动态面板显示真实任务进度、筛选和已读，展开入口不�
   await dialog.getByRole("button", { name: "这些动态我已看过" }).click();
   await expect(mascot).toHaveAttribute("data-state", "idle");
   await dialog.getByRole("button", { name: "关闭", exact: true }).click();
-  await mascot.getByRole("button", { name: "展开小序状态与动态" }).click();
+  await openCompanionMenu(mascot);
   await expect(
     page.getByRole("button", { name: "和小序打个招呼" }),
   ).toHaveCount(0);
@@ -2659,31 +2657,25 @@ test("小序在助理遮罩前仍可操作，攀爬浮卡后保持草稿且目�
     name: "与小序语音对话",
     exact: true,
   });
-  const badge = companion.getByRole("button", {
-    name: "展开小序状态与动态",
-    exact: true,
-  });
   const instance = await companion
     .locator(".sidebar-assistant")
     .elementHandle();
   await openPersonalAssistant(page);
   const assistant = page.getByRole("dialog", { name: /AI 个人助理/ });
   await expect(assistant).toBeVisible();
-  for (const control of [voice, badge]) {
-    await expect
-      .poll(() =>
-        control.evaluate((element) => {
-          const rect = element.getBoundingClientRect();
-          return element.contains(
-            document.elementFromPoint(
-              rect.x + rect.width / 2,
-              rect.y + rect.height / 2,
-            ),
-          );
-        }),
-      )
-      .toBe(true);
-  }
+  await expect
+    .poll(() =>
+      voice.evaluate((element) => {
+        const rect = element.getBoundingClientRect();
+        return element.contains(
+          document.elementFromPoint(
+            rect.x + rect.width / 2,
+            rect.y + rect.height / 2,
+          ),
+        );
+      }),
+    )
+    .toBe(true);
   const suggestion = assistant.getByRole("button", {
     name: /查看我参与的项目进度/,
   });
@@ -2696,7 +2688,7 @@ test("小序在助理遮罩前仍可操作，攀爬浮卡后保持草稿且目�
   await expect(assistant.getByPlaceholder(/告诉我你想完成什么/)).toHaveValue(
     "查看我参与的项目进度",
   );
-  await badge.click();
+  await openCompanionMenu(companion);
   for (const name of ["换个位置", "攀爬组件", "回到巢穴"])
     await expect(page.getByRole("button", { name, exact: true })).toHaveCount(
       0,
@@ -2705,7 +2697,7 @@ test("小序在助理遮罩前仍可操作，攀爬浮卡后保持草稿且目�
     page.getByRole("button", { name: "文字对话", exact: true }),
   ).toBeVisible();
   await page.screenshot({ path: ".local/companion-over-assistant.png" });
-  await badge.click();
+  await openCompanionMenu(companion);
   await assistant.getByRole("button", { name: "关闭", exact: true }).click();
   await expect(
     page.locator(".personal-assistant-drawer .ant-drawer-content-wrapper"),
@@ -2855,7 +2847,7 @@ test("工作台圆环是小序巢穴，可离巢移动与召回，文字和动�
   await expect(
     page.locator(".workspace-ai").getByPlaceholder(/告诉我你想完成什么/),
   ).toBeFocused();
-  await companion.getByRole("button", { name: "展开小序状态与动态" }).click();
+  await openCompanionMenu(companion);
   await page
     .getByRole("button", { name: "查看助理动态反馈", exact: true })
     .click();
@@ -3022,7 +3014,7 @@ test("输入、弹窗与后台任务运行期间小序不自主离巢", async ({
   await page.clock.runFor(70000);
   await expect(companion).toHaveAttribute("data-docked", "true");
   fixture.activities[0].status = "completed";
-  await companion.getByRole("button", { name: "展开小序状态与动态" }).click();
+  await openCompanionMenu(companion);
   await page
     .getByRole("button", { name: "查看助理动态反馈", exact: true })
     .click();
@@ -3090,7 +3082,7 @@ for (const reducedMotion of [false, true]) {
   });
 }
 
-test("业务页小序空闲游动，对话与减少动态效果暂停，角标展开反馈", async ({
+test("业务页小序空闲游动，对话与减少动态效果暂停，右键菜单展开反馈", async ({
   page,
 }) => {
   const fixture = await workspaceFixture(page);
@@ -3108,8 +3100,12 @@ test("业务页小序空闲游动，对话与减少动态效果暂停，角标�
   const companion = page.locator(".workspace-companion");
   await expect(companion).toBeVisible();
   await expect(companion).toHaveAttribute("data-docked", "false");
-  const badge = companion.getByRole("button", { name: "展开小序状态与动态" });
-  await expect(badge).toHaveText("1");
+  await expect(companion.locator(".sidebar-assistant")).toHaveAttribute(
+    "data-state",
+    "notice",
+  );
+  await expect(companion.locator(".companion-count")).toHaveCount(0);
+  await expect(companion.locator(".companion-notice")).toBeVisible();
   await expect(
     page.getByRole("button", { name: "查看助理动态反馈" }),
   ).toHaveCount(0);
@@ -3120,7 +3116,7 @@ test("业务页小序空闲游动，对话与减少动态效果暂停，角标�
   expect(Math.hypot(after.x - before.x, after.y - before.y)).toBeGreaterThan(
     15,
   );
-  await badge.click();
+  await openCompanionMenu(companion);
   await page.getByRole("button", { name: "文字对话", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: /AI 个人助理/ });
   const input = dialog.getByPlaceholder(/告诉我你想完成什么/);
@@ -3133,13 +3129,19 @@ test("业务页小序空闲游动，对话与减少动态效果暂停，角标�
   const reduced = await companion.boundingBox();
   await page.clock.runFor(35000);
   expect(await companion.boundingBox()).toEqual(reduced);
-  await badge.click();
-  await expect(badge).toHaveAttribute("aria-expanded", "true");
+  await openCompanionMenu(companion);
+  await expect(companionLaunch(companion)).toHaveAttribute(
+    "aria-expanded",
+    "true",
+  );
   await expect(
     page.getByRole("button", { name: "查看助理动态反馈" }),
   ).toBeVisible();
   await page.locator(".workspace-title").click();
-  await expect(badge).toHaveAttribute("aria-expanded", "false");
+  await expect(companionLaunch(companion)).toHaveAttribute(
+    "aria-expanded",
+    "false",
+  );
   expect(fixture.assistantCalls()).toBe(0);
 });
 
@@ -3251,9 +3253,11 @@ test("新提醒短文字输出后收起，历史记录不反复播报", async ({
   });
   await page.goto("/operations");
   const companion = page.locator(".workspace-companion");
-  await expect(
-    companion.getByRole("button", { name: "展开小序状态与动态" }),
-  ).toHaveText("1");
+  await expect(companion.locator(".sidebar-assistant")).toHaveAttribute(
+    "data-state",
+    "notice",
+  );
+  await expect(companion.locator(".companion-count")).toHaveCount(0);
   await expect(companion.locator(".companion-reminder")).toHaveCount(0);
   fixture.activities.push({
     id: "schedule:due",

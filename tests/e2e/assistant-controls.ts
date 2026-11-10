@@ -1,4 +1,14 @@
-import { expect, type Page } from "@playwright/test";
+import { expect, type Locator, type Page } from "@playwright/test";
+
+export function companionLaunch(scope: Page | Locator) {
+  return scope.getByRole("button", {
+    name: /与小序语音对话|打断小序并说话|打开 AI 个人助理/,
+  });
+}
+
+export async function openCompanionMenu(scope: Page | Locator) {
+  await companionLaunch(scope).first().click({ button: "right" });
+}
 
 export async function openPersonalAssistant(page: Page) {
   const dialog = page.getByRole("dialog", { name: /AI 个人助理/ });
@@ -11,10 +21,7 @@ export async function openPersonalAssistant(page: Page) {
     name: "文字对话",
     exact: true,
   });
-  if (!(await launcher.isVisible()))
-    await page
-      .getByRole("button", { name: "展开小序状态与动态", exact: true })
-      .click();
+  if (!(await launcher.isVisible())) await openCompanionMenu(page);
   await launcher.click();
   await expect(
     page.getByRole("dialog", { name: /AI 个人助理/ }),

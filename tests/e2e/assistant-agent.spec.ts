@@ -1,4 +1,5 @@
 import {
+  openCompanionMenu,
   openPersonalAssistant,
   selectAssistantPanel,
 } from "./assistant-controls.js";
@@ -444,9 +445,7 @@ test("简洁输入区直接发送附件并下载任务结果，历史回复隐�
     .getByRole("link", { name: "运营中心", exact: true })
     .click();
   await expect(page).toHaveURL(/operations$/);
-  await page
-    .getByRole("button", { name: "展开小序状态与动态", exact: true })
-    .click();
+  await openCompanionMenu(page);
   await page.getByRole("button", { name: "文字对话", exact: true }).click();
   await selectAssistantPanel(page, "任务与文件");
   await dialog
