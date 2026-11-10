@@ -110,7 +110,7 @@
 .personal-workspace[data-world-mode] .workspace-ai-core-stage,
 .personal-workspace[data-world-mode] .workspace-quiet {
   flex: 1;
-  min-height: clamp(350px, calc(100dvh - 340px), 500px);
+  min-height: clamp(320px, calc(100dvh - 340px), var(--hub-span-base, 580px));
   margin: 0 0 14px;
   touch-action: none;
 }
@@ -139,7 +139,7 @@
 .workspace-world-plane > .workspace-ai-core {
   position: absolute;
   left: 50%;
-  top: 50%;
+  top: calc(50% + var(--hub-nudge-y, 0px));
   /* Billboard the nest, rings and docked mascot so they stay flat-facing. */
   transform: translate(-50%, -50%) rotateY(calc(-1 * var(--world-yaw)))
     rotateX(calc(-1 * var(--world-pitch)));
@@ -201,6 +201,7 @@
   left: var(--branch-root-x);
   top: 50%;
   width: var(--branch-core-size);
+  margin: 0;
   transform: translate(-50%, -50%);
 }
 .personal-workspace[data-workspace-layout="branches"]
