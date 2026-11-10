@@ -46,7 +46,7 @@ async function fixture(page: Page) {
   return writes;
 }
 
-test("空闲背景探身仅在空位展示近大远小的矢量投影，完整现身不重建助理", async ({
+test("空闲背景探身仅在空位展示近大远小的形象投影，完整现身不重建助理", async ({
   page,
 }, testInfo) => {
   const writes = await fixture(page);

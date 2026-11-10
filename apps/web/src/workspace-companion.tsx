@@ -971,7 +971,7 @@ export function WorkspaceCompanion() {
         nextReverieAt = Date.now() + 90000;
         const workspace = nest?.closest<HTMLElement>(".personal-workspace");
         const robot =
-          panel.current?.querySelector<SVGSVGElement>(".companion-robot");
+          panel.current?.querySelector<HTMLElement>(".companion-robot");
         const area = workspace && findReverieSpace(workspace, obstacles());
         if (workspace && robot && area) {
           state.compact = false;

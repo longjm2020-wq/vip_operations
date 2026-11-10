@@ -68,9 +68,72 @@
   animation: companion-depth-reveal 6.8s cubic-bezier(0.22, 0.55, 0.32, 1) both;
   will-change: transform, opacity;
 }
-.workspace-reverie-figure .companion-body,
-.workspace-reverie-figure .companion-eyes {
+.workspace-reverie-figure .companion-body {
   animation: none;
+}
+.workspace-reverie-figure .companion-pose {
+  opacity: 0;
+  transition: none;
+}
+.workspace-reverie-figure .companion-pose-three-quarter-left {
+  animation: companion-reverie-pose-near 6.8s ease both;
+}
+.workspace-reverie-figure .companion-pose-back {
+  animation: companion-reverie-pose-turn 6.8s ease both;
+}
+.workspace-reverie-figure .companion-pose-three-quarter-right {
+  animation: companion-reverie-pose-mid 6.8s ease both;
+}
+.workspace-reverie-figure .companion-pose-front {
+  animation: companion-reverie-pose-settle 6.8s ease both;
+}
+@keyframes companion-reverie-pose-near {
+  0%,
+  20% {
+    opacity: 1;
+  }
+  32%,
+  100% {
+    opacity: 0;
+  }
+}
+@keyframes companion-reverie-pose-turn {
+  0%,
+  18% {
+    opacity: 0;
+  }
+  28%,
+  42% {
+    opacity: 1;
+  }
+  54%,
+  100% {
+    opacity: 0;
+  }
+}
+@keyframes companion-reverie-pose-mid {
+  0%,
+  40% {
+    opacity: 0;
+  }
+  50%,
+  68% {
+    opacity: 1;
+  }
+  80%,
+  100% {
+    opacity: 0;
+  }
+}
+@keyframes companion-reverie-pose-settle {
+  0%,
+  66% {
+    opacity: 0;
+  }
+  80%,
+  100% {
+    opacity: 1;
+  }
 }
 .workspace-companion[data-reverie="true"] {
   opacity: 0;
