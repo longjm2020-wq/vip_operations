@@ -2,6 +2,7 @@ import { z } from "zod";
 import {
   inventoryImportLimits,
   inventoryImportSchema,
+  inventorySkuStyleLookupSchema,
   type InventoryImportInput,
 } from "../../../../../packages/contracts/src/inventory-import.js";
 import {
@@ -13,6 +14,8 @@ import {
 } from "../../../../../packages/database/src/index.js";
 import { selectionScope } from "../../../../../packages/database/src/selection-scope.js";
 import { assertArchiveProductTextLimits } from "../style-selections/text-limits.js";
+import { archiveFieldIds } from "../../../../../packages/contracts/src/product-archive.js";
+import { persistMaster } from "../master/service.js";
 import {
   type Context,
   parse,
@@ -68,7 +71,10 @@ type Pending = {
   delta: number;
   result?: Row;
   adjustment?: Row;
+  supplierChange?: SupplierChange;
 };
+/** 导入SKU: the file's 供应商款式编码 replaces the archive value of its 款号. */
+export type SupplierChange = { productId: string; styleNo: string; from: string; to: string };
 const skuFields = ["colorName", "sizeName", "barcode"] as const;
 const refFields = [
   "articleNo",
@@ -191,7 +197,15 @@ export async function importInventoryBatch(c: Context, input: unknown) {
         ).map((r) => [String(r.id), r]),
       );
       const supplierCode = (product: Row | undefined) =>
-        String(product?.custom_fields?.f00000000000000000000000000000001 ?? "").trim();
+        String(product?.custom_fields?.[archiveFieldIds.supplierStyle] ?? "").trim();
+      // One 款号 with several 供应商款式编码 in the same request cannot be resolved
+      // without guessing which row is "latest", so all of those rows fail.
+      const fileCodes = new Map<string, Set<string>>();
+      for (const e of pending) {
+        const style = e.input.creation?.styleNo, code = e.input.creation?.supplierStyleCode?.trim();
+        if (e.input.mode !== "sku" || !style || !code) continue;
+        fileCodes.set(style, (fileCodes.get(style) ?? new Set()).add(code));
+      }
       const warehouses = await rows(tx, "SELECT * FROM warehouses"),
         balances = new Map(
           (
@@ -212,9 +226,17 @@ export async function importInventoryBatch(c: Context, input: unknown) {
           continue;
         }
         const fileSupplierCode = e.input.creation?.supplierStyleCode?.trim();
-        if (verify && fileSupplierCode && supplierCode(owner) && supplierCode(owner) !== fileSupplierCode) {
-          reject(e, "SUPPLIER_STYLE_MISMATCH", `供应商款式编码与商品档案（${supplierCode(owner)}）不一致；已建档款号请在商品档案修改`);
+        const codes = verify && e.input.creation?.styleNo ? fileCodes.get(e.input.creation.styleNo) : undefined;
+        if (codes && codes.size > 1) {
+          reject(e, "AMBIGUOUS_SUPPLIER_STYLE", `文件中款号 ${e.input.creation!.styleNo} 有多个供应商款式编码（${[...codes].join("、")}），无法确定以哪个为准；请统一后重试`);
           continue;
+        }
+        if (verify && fileSupplierCode && owner && supplierCode(owner) !== fileSupplierCode) {
+          if (!c.actor.permissions.includes("product.update")) {
+            reject(e, "FORBIDDEN", `更新商品档案的供应商款式编码（${supplierCode(owner) || "空"} → ${fileSupplierCode}）需要商品编辑权限`);
+            continue;
+          }
+          e.supplierChange = { productId: String(owner.id), styleNo: String(owner.style_no), from: supplierCode(owner), to: fileSupplierCode };
         }
         if (!e.sku) {
           if (!c.actor.permissions.includes("product.create")) {
@@ -398,6 +420,28 @@ export async function importInventoryBatch(c: Context, input: unknown) {
         mappingCodes[field] = codes;
         // Insert only mappings referenced by rows that still pass all checks.
         mappingAdds[table] = added;
+      }
+      valid = valid.filter((e) => !results.has(e.key));
+      // Update each 款号 once through the product master path (validation, text
+      // limits, audit, archive-table mirror trigger). A savepoint keeps one
+      // rejected 款号 from rolling back the rest of the batch.
+      const supplierUpdates = new Map<string, { change: SupplierChange; entries: Pending[] }>();
+      for (const e of valid)
+        if (e.supplierChange) {
+          const item = supplierUpdates.get(e.supplierChange.productId) ?? { change: e.supplierChange, entries: [] };
+          item.entries.push(e);
+          supplierUpdates.set(e.supplierChange.productId, item);
+        }
+      for (const { change, entries } of supplierUpdates.values()) {
+        await tx.$executeRawUnsafe("SAVEPOINT inventory_supplier_style");
+        try {
+          await persistMaster(tx, c, "products", { customFields: { [archiveFieldIds.supplierStyle]: change.to } }, change.productId, `导入SKU：供应商款式编码以导入表格为准（${change.from || "空"} → ${change.to}）`);
+          await tx.$executeRawUnsafe("RELEASE SAVEPOINT inventory_supplier_style");
+        } catch (error) {
+          await tx.$executeRawUnsafe("ROLLBACK TO SAVEPOINT inventory_supplier_style");
+          for (const e of entries)
+            reject(e, "SUPPLIER_STYLE_UPDATE_FAILED", `供应商款式编码未能更新到商品档案（${change.from || "空"} → ${change.to}）：${(error as Error).message}`);
+        }
       }
       valid = valid.filter((e) => !results.has(e.key));
       const fresh = valid.filter((e) => !e.sku);
@@ -641,6 +685,7 @@ export async function importInventoryBatch(c: Context, input: unknown) {
               (k) => k !== "reason" && k !== "remark",
             ),
             created: fresh.includes(e),
+            ...(e.supplierChange ? { supplierStyleCodeChange: { styleNo: e.supplierChange.styleNo, from: e.supplierChange.from, to: e.supplierChange.to } } : {}),
           };
           results.set(e.key, { key: e.key, saved: true, result: e.result });
           return {
@@ -657,4 +702,16 @@ export async function importInventoryBatch(c: Context, input: unknown) {
     },
     { timeout: 30000, maxWait: 15000 },
   );
+}
+
+/** Read-only lookup for the 导入SKU preview: current archive 供应商款式编码 per 款号. */
+export async function inventorySkuStyles(c: Context, input: unknown) {
+  requirePermission(c.actor, "inventory.read");
+  const b = parse(inventorySkuStyleLookupSchema, input);
+  const found = await rows(
+    db,
+    `SELECT style_no,custom_fields->>'${archiveFieldIds.supplierStyle}' AS supplier_style_code FROM products WHERE style_no=ANY($1::text[])`,
+    [...new Set(b.styleNos)],
+  );
+  return { styles: found.map((r) => ({ styleNo: r.style_no, supplierStyleCode: String(r.supplier_style_code ?? "").trim() })) };
 }

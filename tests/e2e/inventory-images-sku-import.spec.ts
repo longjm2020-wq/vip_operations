@@ -35,8 +35,13 @@ async function fixture(page: Page) {
       return route.fulfill({ json: { data: { id: "new", url: "/api/v1/inventory/images/new" } } });
     if (url.pathname.endsWith("/inventory/images/batch"))
       return route.fulfill({ json: { data: { results: request.postDataJSON().items.map((item: any) => ({ ...item, status: "SAVED" })) } } });
+    if (url.pathname.endsWith("/inventory/fulfilment/sku-import/styles"))
+      return route.fulfill({ json: { data: { styles: [{ styleNo: "S22X20130", supplierStyleCode: "YL77" }] } } });
     if (url.pathname.endsWith("/inventory/fulfilment/import-batch"))
-      return route.fulfill({ json: { data: { results: request.postDataJSON().rows.map((row: any) => ({ key: row.key, saved: true })) } } });
+      return route.fulfill({ json: { data: { results: request.postDataJSON().rows.map((row: any) => ({
+        key: row.key, saved: true,
+        result: { skuCode: row.input.skuCode, supplierStyleCodeChange: { styleNo: "S22X20130", from: "YL77", to: row.input.creation.supplierStyleCode } },
+      })) } } });
     if (url.pathname.endsWith("/inventory/summary"))
       return route.fulfill({ json: { data: rows, total: rows.length, page: 1, pageSize: 20, listingCounts: null, totals: { physicalQty: 3 } } });
     if (url.pathname.endsWith("/my-workspace/appearance")) return route.fulfill({ json: { data: { mode: "light", version: 1 } } });
@@ -84,13 +89,24 @@ test("导入SKU提供模板下载、逐行校验并在确认后导入和保存�
   await expect(dialog.getByRole("list", { name: "校验错误" })).toContainText("第 3 行：「款号」必填；「颜色」必填");
   await expect(dialog.getByRole("button", { name: "确认导入" })).toBeDisabled();
   await input.setInputFiles(await workbook([
+    ["", "S22X20130", "A1", "SKU-1", "YL77", "黑色", "M"],
+    ["", "S22X20130", "A1", "SKU-2", "QQWJX5992", "黑色", "L"],
+  ]));
+  await expect(dialog.getByRole("list", { name: "校验错误" })).toContainText("第 2 行：款号 S22X20130 在文件中有多个供应商款式编码：YL77（第 2 行）、QQWJX5992（第 3 行）");
+  await expect(dialog.getByRole("button", { name: "确认导入" })).toBeDisabled();
+  await input.setInputFiles(await workbook([
     ["https://a.vpimg4.com/s22.jpg", "S22X20130", "A1", "SKU-1", "QQWJX5992", "黑色", "M"],
     ["", "S22X20130", "A1", "SKU-2", "QQWJX5992", "黑色", "L"],
   ]));
   await expect(dialog).toContainText("校验通过：共 2 行，含图片 1 行");
   await expect(dialog.getByRole("table")).toContainText("SKU-2");
+  await expect(dialog).toContainText("将以导入表格为准更新 1 个款号的供应商款式编码");
+  await expect(dialog.getByRole("list", { name: "供应商款式编码变更" })).toHaveText("S22X20130：供应商款式编码 YL77 → QQWJX5992");
+  await expect(dialog.getByRole("table")).toContainText("供应商款式编码 YL77 → QQWJX5992");
+  expect(writes.find((write) => write.path.endsWith("/sku-import/styles"))!.body).toEqual({ styleNos: ["S22X20130"] });
   await dialog.getByRole("button", { name: "确认导入" }).click();
-  await expect(dialog).toContainText("导入成功 2 行，失败 0 行；图片 1 / 1 张已保存");
+  await expect(dialog).toContainText("导入成功 2 行，失败 0 行；图片 1 / 1 张已保存。已按导入表格更新 1 个款号的供应商款式编码。");
+  await expect(dialog.getByRole("list", { name: "已更新供应商款式编码" })).toHaveText("S22X20130：供应商款式编码 YL77 → QQWJX5992");
   const batch = writes.find((write) => write.path.endsWith("/fulfilment/import-batch"))!.body;
   expect(batch.rows.map((row: any) => row.input)).toEqual([
     expect.objectContaining({ skuCode: "SKU-1", mode: "sku", creation: expect.objectContaining({ styleNo: "S22X20130", mainImageUrl: "https://a.vpimg4.com/s22.jpg" }) }),

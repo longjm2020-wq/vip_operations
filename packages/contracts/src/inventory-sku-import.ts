@@ -100,6 +100,27 @@ export function parseInventorySkuRows(rows: string[][], embeddedRows: ReadonlySe
     }
     entries.push({ line, input: parsed.data, ...(image ? { image } : {}) });
   }
+  // The file is the latest source for 供应商款式编码, but only when it is unambiguous.
+  const codes = new Map<string, Map<string, number[]>>();
+  for (const entry of entries) {
+    const style = entry.input.creation!.styleNo!, code = entry.input.creation!.supplierStyleCode!;
+    const byCode = codes.get(style) ?? new Map<string, number[]>();
+    byCode.set(code, [...(byCode.get(code) ?? []), entry.line]);
+    codes.set(style, byCode);
+  }
+  const ambiguous = new Set([...codes].filter(([, byCode]) => byCode.size > 1).map(([style]) => style));
+  if (ambiguous.size) {
+    const lineErrors: { line: number; text: string }[] = errors.map((text) => ({ line: Number(/^第 (\d+) 行/.exec(text)?.[1] ?? 0), text }));
+    for (const entry of entries) {
+      const style = entry.input.creation!.styleNo!;
+      if (!ambiguous.has(style)) continue;
+      const detail = [...codes.get(style)!].map(([code, lines]) => `${code}（第 ${lines.slice(0, 5).join("、")}${lines.length > 5 ? " 等" : ""} 行）`).join("、");
+      lineErrors.push({ line: entry.line, text: `第 ${entry.line} 行：款号 ${style} 在文件中有多个供应商款式编码：${detail}，无法确定以哪个为准，请统一后重新上传` });
+    }
+    lineErrors.sort((a, b) => a.line - b.line);
+    errors.splice(0, errors.length, ...lineErrors.map((item) => item.text));
+    entries.splice(0, entries.length, ...entries.filter((entry) => !ambiguous.has(entry.input.creation!.styleNo!)));
+  }
   if (!entries.length && !errors.length) throw Error("文件没有可导入的数据行。");
   return { entries, errors };
 }
@@ -115,3 +136,16 @@ export function inventorySkuImageTargets(entries: readonly InventorySkuEntry[]) 
   }
   return [...targets.values()];
 }
+
+/** Archive 供应商款式编码 changes the import will make, one per 款号 (preview/result). */
+export function inventorySkuSupplierChanges(entries: readonly InventorySkuEntry[], archive: ReadonlyMap<string, string>) {
+  const changes = new Map<string, { styleNo: string; from: string; to: string }>();
+  for (const entry of entries) {
+    const styleNo = entry.input.creation!.styleNo!, to = entry.input.creation!.supplierStyleCode!;
+    if (!archive.has(styleNo) || changes.has(styleNo)) continue;
+    const from = archive.get(styleNo)!;
+    if (from !== to) changes.set(styleNo, { styleNo, from, to });
+  }
+  return changes;
+}
+export const supplierChangeText = (change: { from: string; to: string }) => `供应商款式编码 ${change.from || "（空）"} → ${change.to}`;

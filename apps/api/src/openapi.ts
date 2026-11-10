@@ -14,6 +14,7 @@ import { aiSettingsSchema } from "./modules/analytics/ai.js";
 import { loginSchema } from "./modules/auth/service.js";
 import { compassProbeRequestSchema } from "./integrations/vip/compass.js";
 import { vipControlImportSchema } from "../../../packages/contracts/src/vip-control.js";
+import { inventorySkuStyleLookupSchema } from "../../../packages/contracts/src/inventory-import.js";
 import { inventoryImageWriteSchema, inventoryImageDeleteSchema, inventoryImageBatchSchema } from "../../../packages/contracts/src/inventory-image.js";
 import { replenishmentPolicyWriteSchema } from "../../../packages/contracts/src/inventory-replenishment.js";
 import { inventoryCalculationWriteSchema, inventoryCalculationFieldWriteSchema, inventoryCalculationFieldDeleteSchema, inventoryCalculationFieldViewSchema } from "../../../packages/contracts/src/inventory-formula.js";
@@ -184,6 +185,7 @@ export function enrichOpenApi(doc: OpenAPIObject) {
   );
   set("/api/v1/inventory/images", "post", inventoryImageWriteSchema, "上传或替换款号（colorName为空）或颜色的库存图片；JPG/PNG/WebP且小于500 KB。仅在唯品会无图片时显示，独立保存，不依赖选款登记权限；需库存调整权限");
   set("/api/v1/inventory/images/delete", "post", inventoryImageDeleteSchema, "删除上传的库存图片；不影响唯品会、罗盘或档案图片");
+  set("/api/v1/inventory/fulfilment/sku-import/styles", "post", inventorySkuStyleLookupSchema, "导入SKU预览：按款号读取商品档案当前的供应商款式编码（只读），用于显示将更新的编码；未建档款号不返回；需库存查看权限");
   set("/api/v1/inventory/images/batch", "post", inventoryImageBatchSchema, "按款号批量导入库存图片，每次最多8张；逐张返回SAVED、NOT_FOUND或INVALID，部分失败不影响其余图片");
   set("/api/v1/inventory/images/{imageId}", "get", undefined, "读取已登记的库存上传图片；只提供本功能保存的图片");
   set("/api/v1/inventory/replenishment-policy", "get", undefined, "读取当前账号的计算配置及版本号");

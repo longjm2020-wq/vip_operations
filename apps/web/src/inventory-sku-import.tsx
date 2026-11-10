@@ -13,6 +13,8 @@ import {
   inventorySkuTemplate,
   inventorySkuTemplateLabel,
   parseInventorySkuRows,
+  inventorySkuSupplierChanges,
+  supplierChangeText,
   type InventorySkuEntry,
 } from "../../../packages/contracts/src/inventory-sku-import";
 
@@ -20,12 +22,14 @@ const templateNotes = [
   "首行保留列名，列顺序可调整；带「必填」的列每行都必须填写。编码、条码请使用文本格式，公式请粘贴为值。",
   "图片（选填）：可填写 https 图片链接，或把图片插入到该行的图片单元格内（浮动图片，左上角放在该单元格）。图片按款号+颜色保存，同款同色只取第一张；唯品会已有图片时仍优先显示唯品会图片。",
   "商品编码未建档：新增 SKU；款号未建档时同时新建款号（归入「导入待分类」），需商品新建权限。",
-  "商品编码已建档：更新颜色、尺码和货号（需商品编辑及库存调整权限）；款号必须与档案一致，供应商款式编码与档案不一致时该行失败，已建档款号的款号、供应商款式编码请在商品档案修改。",
+  "商品编码已建档：更新颜色、尺码和货号（需商品编辑及库存调整权限）；款号必须与档案一致，如需调整款号请在商品档案处理。",
+  "供应商款式编码以导入表格为准：与商品档案不一致（或档案为空）时更新该款号的商品档案，影响该款号下所有 SKU，需商品编辑权限；同一款号在文件中填写了不同供应商款式编码时，这些行不能导入。",
   "上传后先预览校验，全部行通过后点击「确认导入」才保存；不会修改库存数量。",
   `每次最多 ${inventorySkuMaxRows} 行、${inventoryImportLimits.maxFileSizeMB}MB；支持 .xlsx 和 UTF-8 CSV（CSV 不含图片）。`,
 ];
 
 type Parsed = { entries: InventorySkuEntry[]; errors: string[]; images: Record<number, EmbeddedImage> };
+type SupplierChange = { styleNo: string; from: string; to: string };
 
 /** 「导入SKU」: template download, full-file validation preview, then save
  * through the existing inventory import endpoint and attach row pictures. */
@@ -41,8 +45,11 @@ export function InventorySkuImport({ onDone }: { onDone: () => void }) {
   const [entries, setEntries] = useState<Entry[]>([]);
   const [report, setReport] = useState("");
   const [imageReport, setImageReport] = useState<string[]>([]);
+  const [archive, setArchive] = useState<Map<string, string>>();
+  const [archiveError, setArchiveError] = useState("");
+  const [updatedCodes, setUpdatedCodes] = useState<SupplierChange[]>([]);
   const lock = useRef(false);
-  const reset = () => { setParsed(undefined); setError(""); setEntries([]); setReport(""); setImageReport([]); setProgress(undefined); };
+  const reset = () => { setParsed(undefined); setError(""); setEntries([]); setReport(""); setImageReport([]); setProgress(undefined); setArchive(undefined); setArchiveError(""); setUpdatedCodes([]); };
   const read = async (selected: File) => {
     if (lock.current) return;
     lock.current = true;
@@ -63,6 +70,15 @@ export function InventorySkuImport({ onDone }: { onDone: () => void }) {
       const result = parseInventorySkuRows(sheet.rows, new Set(Object.keys(sheet.images ?? {}).map(Number)));
       setParsed({ ...result, images: sheet.images ?? {} });
       setEntries(result.entries.map((entry) => ({ line: entry.line, input: entry.input, key: crypto.randomUUID() })));
+      if (!result.errors.length) {
+        try {
+          const styleNos = [...new Set(result.entries.map((entry) => entry.input.creation!.styleNo!))];
+          const response = await api("/inventory/fulfilment/sku-import/styles", "POST", { styleNos });
+          setArchive(new Map((response.data.styles as { styleNo: string; supplierStyleCode: string }[]).map((style) => [style.styleNo, style.supplierStyleCode])));
+        } catch (e) {
+          setArchiveError(`未能读取商品档案中的供应商款式编码，预览无法显示将更新的款号：${(e as Error).message}`);
+        }
+      }
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -113,7 +129,13 @@ export function InventorySkuImport({ onDone }: { onDone: () => void }) {
       const savedLines = new Set(updated.filter((entry) => entry.saved).map((entry) => entry.line));
       const images = savedLines.size ? await uploadImages(savedLines) : { total: 0, failed: [] };
       const failed = updated.length - savedLines.size;
-      setReport(`导入成功 ${savedLines.size} 行，失败 ${failed} 行；图片 ${images.total - images.failed.length} / ${images.total} 张已保存。${failed ? "修正失败行后可再次点击确认导入，仅提交失败行。" : ""}`);
+      const changed = new Map<string, SupplierChange>();
+      for (const entry of updated) {
+        const change = entry.result?.supplierStyleCodeChange as SupplierChange | undefined;
+        if (change && !changed.has(change.styleNo)) changed.set(change.styleNo, change);
+      }
+      setUpdatedCodes((previous) => [...new Map([...previous.map((change) => [change.styleNo, change] as const), ...changed]).values()]);
+      setReport(`导入成功 ${savedLines.size} 行，失败 ${failed} 行；图片 ${images.total - images.failed.length} / ${images.total} 张已保存。${changed.size ? `已按导入表格更新 ${changed.size} 个款号的供应商款式编码。` : ""}${failed ? "修正失败行后可再次点击「重试失败行」，仅提交失败行。" : ""}`);
       setImageReport(images.failed);
       if (savedLines.size) {
         await queryClient.invalidateQueries();
@@ -129,6 +151,7 @@ export function InventorySkuImport({ onDone }: { onDone: () => void }) {
   const failures = entries.filter((entry) => entry.error);
   const pending = entries.some((entry) => !entry.saved);
   const preview = parsed?.entries.slice(0, 200) ?? [];
+  const planned = parsed && archive ? inventorySkuSupplierChanges(parsed.entries, archive) : new Map<string, SupplierChange>();
   return (
     <>
       <Button icon={<ImportOutlined />} onClick={() => { reset(); setFile(""); setOpen(true); }}>
@@ -196,7 +219,27 @@ export function InventorySkuImport({ onDone }: { onDone: () => void }) {
         {parsed && !parsed.errors.length && !report && (
           <Alert type="info" showIcon title={`校验通过：共 ${parsed.entries.length} 行，含图片 ${parsed.entries.filter((entry) => entry.image).length} 行。确认无误后点击「确认导入」。`} />
         )}
+        {archiveError && !report && <Alert type="warning" showIcon style={{ marginTop: 8 }} title={archiveError} />}
+        {!!planned.size && !report && (
+          <Alert
+            type="warning"
+            showIcon
+            style={{ marginTop: 8 }}
+            title={`将以导入表格为准更新 ${planned.size} 个款号的供应商款式编码（影响该款号下所有 SKU 及商品档案）`}
+            description={
+              <div className="inventory-sku-import-errors" role="list" aria-label="供应商款式编码变更">
+                {[...planned.values()].slice(0, 100).map((change) => <div role="listitem" key={change.styleNo}>{change.styleNo}：{supplierChangeText(change)}</div>)}
+                {planned.size > 100 && <div>仅显示前 100 个款号</div>}
+              </div>
+            }
+          />
+        )}
         {report && <Alert type={pending ? "warning" : "success"} showIcon title={report} />}
+        {!!updatedCodes.length && (
+          <div className="inventory-sku-import-errors" role="list" aria-label="已更新供应商款式编码">
+            {updatedCodes.slice(0, 100).map((change) => <div role="listitem" key={change.styleNo}>{change.styleNo}：{supplierChangeText(change)}</div>)}
+          </div>
+        )}
         {busy && progress && (
           <Progress style={{ marginTop: 12 }} percent={Number(((progress.completed / progress.total) * 100).toFixed(1))} format={() => `${progress.completed} / ${progress.total}`} />
         )}
@@ -224,7 +267,13 @@ export function InventorySkuImport({ onDone }: { onDone: () => void }) {
               { title: "款号", render: (_, entry) => entry.input.creation?.styleNo },
               { title: "货号", render: (_, entry) => entry.input.changes.articleNo },
               { title: "商品编码", render: (_, entry) => entry.input.skuCode },
-              { title: "供应商款式编码", render: (_, entry) => entry.input.creation?.supplierStyleCode },
+              {
+                title: "供应商款式编码",
+                render: (_, entry) => {
+                  const change = planned.get(entry.input.creation!.styleNo!);
+                  return change ? <span title="将更新商品档案">{supplierChangeText(change)}</span> : entry.input.creation?.supplierStyleCode;
+                },
+              },
               { title: "颜色", render: (_, entry) => entry.input.changes.colorName },
               { title: "尺码", render: (_, entry) => entry.input.changes.sizeName },
             ]}

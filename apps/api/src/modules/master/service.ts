@@ -340,7 +340,7 @@ export async function masterWrite(
   return command(c, name + "/" + (value ?? "create"), b, tx => persistMaster(tx,c,name,b,value));
 }
 
-export async function persistMaster(tx: Tx, c: Context, name: Resource, b: Row, value?: string) {
+export async function persistMaster(tx: Tx, c: Context, name: Resource, b: Row, value?: string, reason?: string) {
   const r = getResource(name);
     // This lock also serializes inventory/PO checks against warehouse disabling.
     await rows(tx, "SELECT pg_advisory_xact_lock(91002)::text");
@@ -474,6 +474,7 @@ export async function persistMaster(tx: Tx, c: Context, name: Resource, b: Row, 
       result.id,
       before,
       result,
+      reason,
     );
     return result;
 }
