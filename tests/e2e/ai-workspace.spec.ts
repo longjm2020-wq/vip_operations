@@ -3113,7 +3113,7 @@ test("业务页小序空闲游动，对话与减少动态效果暂停，右键�
     "notice",
   );
   await expect(companion.locator(".companion-count")).toHaveCount(0);
-  await expect(companion.locator(".companion-notice")).toBeVisible();
+  await expect(companion.locator(".companion-notice")).toHaveCount(0);
   await expect(
     page.getByRole("button", { name: "查看助理动态反馈" }),
   ).toHaveCount(0);
