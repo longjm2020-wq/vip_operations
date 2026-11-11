@@ -324,7 +324,6 @@ export function SidebarAssistant({
                   <span>z</span>
                   <span>z</span>
                 </span>
-                <span className="companion-notice">!</span>
               </div>
             </div>
           </div>
