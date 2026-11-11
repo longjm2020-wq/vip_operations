@@ -8,6 +8,7 @@ import {
   Empty,
   Input,
   InputNumber,
+  Segmented,
   Select,
   Spin,
   Switch,
@@ -24,13 +25,32 @@ import {
   teamEngines,
   teamEngineLabels,
   teamSaveSchema,
+  defaultTeamMemberSkills,
+  teamMemberSkillMaxLength,
   type TeamArtifact,
   type TeamConfiguration,
   type TeamMember,
   type TeamRun,
   type TeamSettings,
 } from "../../../packages/contracts/src/assistant-team";
+import { SkillMarkdownView } from "./skill-markdown-view";
 import "./assistant-team.css";
+
+const skillPlaceholder = `## 何时使用
+说明在什么任务或情况下使用本成员。
+
+## 步骤
+1. …
+2. …
+
+## 交付格式
+- …
+
+## 验收标准
+- …
+
+## 禁止事项
+- …`;
 
 const root = "/my-workspace/assistant/team";
 export const teamConfigurationKey = (userId: string) => [
@@ -255,6 +275,7 @@ export function AssistantTeamPanel({
   const [version, setVersion] = useState(0);
   const [dirty, setDirty] = useState(false);
   const [editing, setEditing] = useState<string>();
+  const [skillPreview, setSkillPreview] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
   const [canceling, setCanceling] = useState(false);
@@ -532,6 +553,9 @@ export function AssistantTeamPanel({
                           ? "按任务难度自动选择模型"
                           : `固定模型：${config.data?.models.find((model) => model.id === member.modelId)?.model || member.modelId || "待选择"}`}
                       </div>
+                      {!!member.skill?.trim() && (
+                        <div className="team-skill-hint">已配置操作技能</div>
+                      )}
                       <Button
                         size="small"
                         type="link"
@@ -575,6 +599,66 @@ export function AssistantTeamPanel({
                               }
                             />
                           </label>
+                          <div className="team-skill-editor">
+                            <div className="team-skill-header">
+                              <span>操作技能（Markdown）</span>
+                              <Segmented
+                                size="small"
+                                aria-label="操作技能编辑或预览"
+                                value={skillPreview ? "preview" : "edit"}
+                                options={[
+                                  { value: "edit", label: "编辑" },
+                                  { value: "preview", label: "预览" },
+                                ]}
+                                onChange={(value) =>
+                                  setSkillPreview(value === "preview")
+                                }
+                              />
+                              {defaultTeamMemberSkills[member.id] && (
+                                <Button
+                                  size="small"
+                                  type="link"
+                                  disabled={
+                                    saving ||
+                                    member.skill ===
+                                      defaultTeamMemberSkills[member.id]
+                                  }
+                                  onClick={() =>
+                                    updateMember(member.id, {
+                                      skill: defaultTeamMemberSkills[member.id],
+                                    })
+                                  }
+                                >
+                                  恢复默认
+                                </Button>
+                              )}
+                            </div>
+                            {skillPreview ? (
+                              <div className="team-skill-preview">
+                                <SkillMarkdownView
+                                  source={member.skill || ""}
+                                />
+                              </div>
+                            ) : (
+                              <Input.TextArea
+                                aria-label="智能体操作技能"
+                                value={member.skill || ""}
+                                maxLength={teamMemberSkillMaxLength}
+                                showCount
+                                placeholder={skillPlaceholder}
+                                autoSize={{ minRows: 6, maxRows: 16 }}
+                                disabled={saving}
+                                onChange={(event) =>
+                                  updateMember(member.id, {
+                                    skill: event.target.value,
+                                  })
+                                }
+                              />
+                            )}
+                            <small className="team-meta">
+                              执行任务时会附在职责说明之后，作为该成员的工作流程（SOP）。建议包含：何时使用、步骤、交付格式、验收标准、禁止事项。
+                            </small>
+                          </div>
                           <label>
                             模型策略
                             <Select
