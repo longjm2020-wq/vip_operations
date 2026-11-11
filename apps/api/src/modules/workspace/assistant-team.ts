@@ -8,6 +8,7 @@ import {
 } from "../../../../../packages/database/src/index.js";
 import {
   defaultTeamSettings,
+  withDefaultMemberSkills,
   teamRunCreateSchema,
   teamSaveSchema,
   teamSettingsSchema,
@@ -66,7 +67,7 @@ async function savedSettings(c: Context) {
   );
   return {
     settings: row
-      ? parse(teamSettingsSchema, row.config)
+      ? withDefaultMemberSkills(parse(teamSettingsSchema, row.config))
       : defaultTeamSettings(),
     version: row?.version || 0,
   };

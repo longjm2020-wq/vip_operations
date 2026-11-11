@@ -231,3 +231,94 @@ body:has(.assistant-team-screen.ant-drawer-open) .workspace-companion-host {
     width: 100%;
   }
 }
+.team-skill-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--app-text);
+  opacity: 0.6;
+  margin: 0 0 4px;
+}
+.team-skill-hint::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ant-color-success, #52c41a);
+  opacity: 0.75;
+}
+.team-skill-editor {
+  display: grid;
+  gap: 6px;
+  font-size: 12px;
+}
+.team-skill-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.team-skill-header > span {
+  flex: 1;
+  min-width: 0;
+}
+.team-skill-preview {
+  max-height: 360px;
+  overflow: auto;
+  padding: 8px 12px;
+  border: 1px solid var(--app-border, #d9d9d9);
+  border-radius: 6px;
+}
+.skill-markdown {
+  font-size: 13px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+.skill-markdown h3,
+.skill-markdown h4,
+.skill-markdown h5,
+.skill-markdown h6 {
+  font-size: 13px;
+  font-weight: 600;
+  margin: 10px 0 4px;
+}
+.skill-markdown h3:first-child,
+.skill-markdown h4:first-child {
+  margin-top: 0;
+}
+.skill-markdown ul,
+.skill-markdown ol {
+  margin: 0 0 6px;
+  padding-left: 20px;
+}
+.skill-markdown p,
+.team-member .skill-markdown p {
+  margin: 0 0 6px;
+  white-space: normal;
+}
+.skill-markdown blockquote {
+  margin: 0 0 6px;
+  padding-left: 10px;
+  border-left: 3px solid var(--app-border, #d9d9d9);
+  opacity: 0.85;
+}
+.skill-markdown code,
+.skill-markdown pre {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  background: rgba(127, 127, 127, 0.12);
+  border-radius: 4px;
+}
+.skill-markdown code {
+  padding: 0 4px;
+}
+.skill-markdown pre {
+  padding: 8px;
+  margin: 0 0 6px;
+  white-space: pre-wrap;
+}
+.skill-markdown-empty {
+  color: var(--app-text);
+  opacity: 0.6;
+}

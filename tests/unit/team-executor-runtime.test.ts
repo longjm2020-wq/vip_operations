@@ -849,6 +849,14 @@ describe("production team adapter", () => {
       (body) => body.response_format?.json_schema.name === "team_review",
     );
     expect(JSON.stringify(reviewBody.messages)).toContain("实际文件正文");
+    const writerSystem = bodies
+      .map((body) => String(body.messages?.[0]?.content || ""))
+      .find((text) => text.includes("小序 · 编剧"));
+    expect(writerSystem).toContain("<操作技能>");
+    expect(writerSystem).toContain("不虚构产品参数");
+    expect(writerSystem!.indexOf("职责：")).toBeLessThan(
+      writerSystem!.indexOf("<操作技能>"),
+    );
   });
   it("does not make any provider call after cancellation invalidates the lease", async () => {
     const { run, lease } = await runRow();
