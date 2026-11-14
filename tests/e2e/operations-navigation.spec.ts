@@ -113,14 +113,28 @@ test("唯品会工作区子页面同窗打开并支持顶部 TAB 切换与关闭
   await expect(tablist.getByRole("tab", { name: "商品档案" })).toHaveAttribute("aria-selected", "false");
   await expect(tablist.getByRole("tab", { name: "经营分析" })).toHaveAttribute("aria-selected", "true");
 
+  // 鼠标悬停「唯品会工作区」显示子版块下拉菜单，可直达其他子版块
+  await page.locator(".topbar").getByRole("link", { name: /唯品会工作区/ }).hover();
+  await expect(page.locator(".vip-workspace-root-dropdown").getByRole("link", { name: "选款登记" })).toBeVisible();
+  await page.locator(".vip-workspace-root-dropdown").getByRole("link", { name: "选款登记" }).click();
+  await expect(page).toHaveURL(/\/style-selections$/);
+
+  // 拖动调整 TAB 顺序
+  const selectionTab = tablist.locator(".vip-workspace-tab", { hasText: "选款登记" });
+  const productsTab = tablist.locator(".vip-workspace-tab", { hasText: "商品档案" });
+  await selectionTab.dragTo(productsTab);
+  const tabTexts = await tablist.getByRole("tab").allTextContents();
+  expect(tabTexts.indexOf("选款登记")).toBeLessThan(tabTexts.indexOf("商品档案"));
+
   await tablist.getByRole("tab", { name: "商品档案" }).click();
   await expect(page).toHaveURL(/\/products$/);
   await expect(tablist.getByRole("tab", { name: "商品档案" })).toHaveAttribute("aria-selected", "true");
 
   await tablist.getByRole("button", { name: "关闭商品档案" }).click();
-  await expect(page).toHaveURL(/\/analytics\/compass$/);
+  await expect(page).toHaveURL(/\/(analytics\/compass|style-selections)$/);
   await expect(tablist.getByRole("tab", { name: "商品档案" })).toHaveCount(0);
 
+  await tablist.getByRole("button", { name: "关闭选款登记" }).click();
   await tablist.getByRole("button", { name: "关闭经营分析" }).click();
   await expect(page).toHaveURL(/\/operations\?platform=vip$/);
 });

@@ -4,6 +4,7 @@ import { FloatingPanels } from "./floating-panels";
 import {
   resolveVipWorkspaceRoute,
   useVipWorkspaceTabs,
+  VipWorkspaceRootDropdown,
   VipWorkspaceTabBar,
 } from "./vip-workspace-tabs";
 import React, { useState } from "react";
@@ -288,6 +289,7 @@ function Workspace({ user }: { user: Row }) {
     tabs: vipTabs,
     activeTabKey: activeVipTabKey,
     closeTab: closeVipTab,
+    reorderTabs: reorderVipTabs,
   } = useVipWorkspaceTabs(user?.id);
   const menu = visibleItems.map((item) => {
     const children = item.children?.map((child) => ({
@@ -394,14 +396,13 @@ function Workspace({ user }: { user: Row }) {
             >
               {routeBack ? <div className="workspace-path"><Link to={routeBack.href} aria-label={routeBack.label}><ArrowLeftOutlined/> {routeBack.label}</Link></div> : vipWorkspaceRoute ? (
                 <div className="workspace-path">
-                  <Link to="/operations?platform=vip">
-                    <ArrowLeftOutlined /> 唯品会工作区
-                  </Link>
+                  <VipWorkspaceRootDropdown activeTabKey={activeVipTabKey} />
                   <span aria-hidden="true">/</span>
                   <VipWorkspaceTabBar
                     tabs={vipTabs}
                     activeTabKey={activeVipTabKey}
                     onCloseTab={closeVipTab}
+                    onReorderTabs={reorderVipTabs}
                   />
                 </div>
               ) : null}
