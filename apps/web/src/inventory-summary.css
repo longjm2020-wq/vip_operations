@@ -203,15 +203,8 @@
   user-select: none !important;
 }
 
-.inventory-summary-table th[data-inventory-group="true"]::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 3px;
-  background: var(--app-accent);
-  pointer-events: none;
+.inventory-summary-table .ant-table-thead > tr > th[data-inventory-group="true"] {
+  box-shadow: inset 0 3px 0 var(--app-accent);
 }
 
 .inventory-reference-incomplete {
@@ -232,6 +225,12 @@
 .inventory-summary-table .ant-table-thead > tr > th.inventory-column-selected {
   box-shadow: inset 0 -2px 0 var(--app-accent-border);
   color: var(--app-secondary);
+}
+
+.inventory-summary-table .ant-table-thead > tr > th[data-inventory-group="true"].inventory-column-selected {
+  box-shadow:
+    inset 0 3px 0 var(--app-accent),
+    inset 0 -2px 0 var(--app-accent-border);
 }
 
 /*

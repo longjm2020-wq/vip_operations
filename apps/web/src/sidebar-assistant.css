@@ -96,16 +96,44 @@
   transform: translate(-50%, -50%)
     translate(var(--companion-gaze-x, 0px), var(--companion-gaze-y, 0px));
 }
+:root,
+:root[data-theme="dark"] {
+  --companion-blue-core: #ffffff;
+  --companion-blue-inner: var(--app-logo-highlight);
+  --companion-blue-mid: var(--app-accent);
+  --companion-blue-edge: #4d6bff;
+  --companion-blue-glow: var(--app-accent-hover);
+  --companion-blue-halo: color-mix(in srgb, var(--app-accent) 92%, transparent);
+  --companion-blue-ambient: color-mix(in srgb, var(--app-accent-fill) 65%, transparent);
+  --companion-mouth-stroke: #c4d1ff;
+}
+:root[data-theme="light"] {
+  --companion-blue-core: #ffffff;
+  --companion-blue-inner: #d2dcff;
+  --companion-blue-mid: #6e85ff;
+  --companion-blue-edge: var(--app-accent);
+  --companion-blue-glow: #9aaeff;
+  --companion-blue-halo: color-mix(in srgb, var(--app-accent) 95%, transparent);
+  --companion-blue-ambient: color-mix(in srgb, var(--app-accent) 60%, transparent);
+  --companion-mouth-stroke: #9fb0ff;
+}
 .companion-eye-dot {
   display: block;
   width: 100%;
   height: 100%;
   border-radius: 999px;
-  background: #435ee5;
+  background: radial-gradient(
+    circle at 42% 35%,
+    var(--companion-blue-core) 0%,
+    var(--companion-blue-inner) 28%,
+    var(--companion-blue-mid) 64%,
+    var(--companion-blue-edge) 100%
+  );
   box-shadow:
-    0 0 0.8px #7b8eff,
-    0 0 3px rgb(67 94 229 / 95%),
-    0 0 6px rgb(67 94 229 / 60%);
+    0 0 1px var(--companion-blue-core),
+    0 0 2.5px var(--companion-blue-glow),
+    0 0 5px var(--companion-blue-halo),
+    0 0 8px var(--companion-blue-ambient);
   transform-origin: 50% 50%;
   animation: companion-blink 5.4s ease-in-out infinite;
 }
@@ -171,14 +199,14 @@
     var(--companion-mouth-x, 0px),
     var(--companion-mouth-y, 0px)
   );
-  filter: drop-shadow(0 0 0.8px #7b8eff)
-    drop-shadow(0 0 3px rgb(67 94 229 / 90%))
-    drop-shadow(0 0 6px rgb(67 94 229 / 55%));
+  filter: drop-shadow(0 0 0.7px var(--companion-blue-core))
+    drop-shadow(0 0 2px var(--companion-blue-glow))
+    drop-shadow(0 0 5px var(--companion-blue-halo));
 }
 .companion-mouth-smile,
 .companion-mouth-open {
   fill: none;
-  stroke: #435ee5;
+  stroke: var(--companion-mouth-stroke);
   stroke-linecap: round;
   stroke-linejoin: round;
 }
@@ -1119,21 +1147,21 @@ body:has(.workspace-companion[data-docked="true"]:is(:hover, :focus-within))
 }
 .companion-voice::before {
   background:
-    radial-gradient(ellipse at 22% 62%, #80b9f533, transparent 42%),
-    radial-gradient(ellipse at 69% 40%, #becdf52a, transparent 39%),
-    radial-gradient(ellipse at 49% 61%, #5999e920, transparent 58%);
+    radial-gradient(ellipse at 22% 62%, color-mix(in srgb, var(--app-accent) 22%, transparent), transparent 42%),
+    radial-gradient(ellipse at 69% 40%, color-mix(in srgb, var(--app-logo-highlight) 18%, transparent), transparent 39%),
+    radial-gradient(ellipse at 49% 61%, color-mix(in srgb, var(--app-accent-fill) 14%, transparent), transparent 58%);
 }
 .companion-voice::after {
   background:
-    radial-gradient(circle at 5% 39%, #dbe8ffcc 0 1px, transparent 1.8px),
-    radial-gradient(circle at 15% 79%, #97b9f7aa 0 1.2px, transparent 2px),
-    radial-gradient(circle at 24% 17%, #e1edffbb 0 0.8px, transparent 1.6px),
-    radial-gradient(circle at 36% 87%, #acd0ffa6 0 1px, transparent 1.8px),
-    radial-gradient(circle at 47% 9%, #dbe8ffc0 0 0.8px, transparent 1.6px),
-    radial-gradient(circle at 60% 86%, #8cbbf7a6 0 1.2px, transparent 2px),
-    radial-gradient(circle at 71% 20%, #e1edffb3 0 1px, transparent 1.8px),
-    radial-gradient(circle at 83% 72%, #acd0ffb3 0 1.2px, transparent 2px),
-    radial-gradient(circle at 96% 33%, #dbe8ffcc 0 0.8px, transparent 1.6px);
+    radial-gradient(circle at 5% 39%, color-mix(in srgb, var(--app-logo-highlight) 80%, transparent) 0 1px, transparent 1.8px),
+    radial-gradient(circle at 15% 79%, color-mix(in srgb, var(--app-accent) 68%, transparent) 0 1.2px, transparent 2px),
+    radial-gradient(circle at 24% 17%, color-mix(in srgb, var(--app-logo-highlight) 75%, transparent) 0 0.8px, transparent 1.6px),
+    radial-gradient(circle at 36% 87%, color-mix(in srgb, var(--app-accent) 65%, transparent) 0 1px, transparent 1.8px),
+    radial-gradient(circle at 47% 9%, color-mix(in srgb, var(--app-logo-highlight) 75%, transparent) 0 0.8px, transparent 1.6px),
+    radial-gradient(circle at 60% 86%, color-mix(in srgb, var(--app-accent) 65%, transparent) 0 1.2px, transparent 2px),
+    radial-gradient(circle at 71% 20%, color-mix(in srgb, var(--app-logo-highlight) 70%, transparent) 0 1px, transparent 1.8px),
+    radial-gradient(circle at 83% 72%, color-mix(in srgb, var(--app-accent) 70%, transparent) 0 1.2px, transparent 2px),
+    radial-gradient(circle at 96% 33%, color-mix(in srgb, var(--app-logo-highlight) 80%, transparent) 0 0.8px, transparent 1.6px);
 }
 .companion-voice[data-caption-presence="entering"]::before,
 .companion-voice[data-caption-presence="entering"]::after,
