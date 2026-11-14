@@ -89,3 +89,38 @@ test("商品详情保留 SKU 与库存，移除采购页签和旧流水入口", 
   await page.getByRole("tab", { name: "唯品会信息", exact: true }).click();
   await expect(page.getByRole("link", { name: "查看唯品会接入", exact: true })).toHaveAttribute("href", "/operations/vip/integration");
 });
+
+test("唯品会工作区子页面同窗打开并支持顶部 TAB 切换与关闭", async ({ page }) => {
+  await fixture(page);
+  await page.goto("/operations?platform=vip");
+
+  const productsLink = page.getByRole("link", { name: "商品档案" });
+  const compassLink = page.getByRole("link", { name: "经营分析" });
+  await expect(productsLink).not.toHaveAttribute("target", "_blank");
+  await expect(compassLink).not.toHaveAttribute("target", "_blank");
+
+  await productsLink.click();
+  await expect(page).toHaveURL(/\/products$/);
+
+  const tablist = page.locator(".topbar").getByRole("tablist", { name: "唯品会工作区已打开页面" });
+  await expect(tablist.getByRole("tab", { name: "商品档案" })).toHaveAttribute("aria-selected", "true");
+
+  await page.locator(".topbar").getByRole("link", { name: /唯品会工作区/ }).click();
+  await expect(page).toHaveURL(/\/operations\?platform=vip$/);
+  await page.getByRole("link", { name: "经营分析" }).click();
+  await expect(page).toHaveURL(/\/analytics\/compass$/);
+
+  await expect(tablist.getByRole("tab", { name: "商品档案" })).toHaveAttribute("aria-selected", "false");
+  await expect(tablist.getByRole("tab", { name: "经营分析" })).toHaveAttribute("aria-selected", "true");
+
+  await tablist.getByRole("tab", { name: "商品档案" }).click();
+  await expect(page).toHaveURL(/\/products$/);
+  await expect(tablist.getByRole("tab", { name: "商品档案" })).toHaveAttribute("aria-selected", "true");
+
+  await tablist.getByRole("button", { name: "关闭商品档案" }).click();
+  await expect(page).toHaveURL(/\/analytics\/compass$/);
+  await expect(tablist.getByRole("tab", { name: "商品档案" })).toHaveCount(0);
+
+  await tablist.getByRole("button", { name: "关闭经营分析" }).click();
+  await expect(page).toHaveURL(/\/operations\?platform=vip$/);
+});

@@ -1,6 +1,11 @@
 import {SelectionWorkspace} from "./selection-workspace";
 import { BrandVideo } from "./brand-video";
 import { FloatingPanels } from "./floating-panels";
+import {
+  resolveVipWorkspaceRoute,
+  useVipWorkspaceTabs,
+  VipWorkspaceTabBar,
+} from "./vip-workspace-tabs";
 import React, { useState } from "react";
 import { lazyPage } from "./page-resource-loader";
 const CompassAnalyticsPage = lazyPage(() => import("./compass-analytics").then(module => ({ default: module.CompassAnalyticsPage })));
@@ -278,19 +283,12 @@ function Workspace({ user }: { user: Row }) {
   const activeWorkspace = visibleItems.find((i) => i.key === activeKey);
   const tableDetail = location.pathname.startsWith("/project-tables/");
   const collaborationTable = location.pathname.startsWith("/style-selections") || location.pathname === "/products" || tableDetail;
-  const operationTool = location.pathname.startsWith("/analytics/compass")
-    ? "经营分析"
-    : location.pathname.startsWith("/analytics/competitors")
-      ? "竞品分析"
-    : location.pathname.startsWith("/style-selections")
-      ? "选款登记"
-    : location.pathname.startsWith("/products")
-      ? "商品档案"
-    : location.pathname.startsWith("/operations/vip/inventory")
-      ? "库存明细"
-    : location.pathname.startsWith("/operations/vip/integration")
-      ? "唯品会接入"
-      : undefined;
+  const vipWorkspaceRoute = resolveVipWorkspaceRoute(location.pathname);
+  const {
+    tabs: vipTabs,
+    activeTabKey: activeVipTabKey,
+    closeTab: closeVipTab,
+  } = useVipWorkspaceTabs(user?.id);
   const menu = visibleItems.map((item) => {
     const children = item.children?.map((child) => ({
       key: child.key,
@@ -394,13 +392,17 @@ function Workspace({ user }: { user: Row }) {
               className="workspace-subnav"
               aria-label={`${activeWorkspace?.label || "工作台"}功能导航`}
             >
-              {routeBack ? <div className="workspace-path"><Link to={routeBack.href} aria-label={routeBack.label}><ArrowLeftOutlined/> {routeBack.label}</Link></div> : operationTool ? (
+              {routeBack ? <div className="workspace-path"><Link to={routeBack.href} aria-label={routeBack.label}><ArrowLeftOutlined/> {routeBack.label}</Link></div> : vipWorkspaceRoute ? (
                 <div className="workspace-path">
                   <Link to="/operations?platform=vip">
                     <ArrowLeftOutlined /> 唯品会工作区
                   </Link>
                   <span aria-hidden="true">/</span>
-                  <span aria-current="page">{operationTool}</span>
+                  <VipWorkspaceTabBar
+                    tabs={vipTabs}
+                    activeTabKey={activeVipTabKey}
+                    onCloseTab={closeVipTab}
+                  />
                 </div>
               ) : null}
             </nav>
