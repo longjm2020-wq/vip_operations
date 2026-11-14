@@ -101,11 +101,11 @@
   width: 100%;
   height: 100%;
   border-radius: 999px;
-  background: #1668ff;
+  background: #29b6ff;
   box-shadow:
-    0 0 0.6px #1668ff,
-    0 0 2px rgb(22 104 255 / 85%),
-    0 0 5px rgb(22 104 255 / 50%);
+    0 0 0.8px #70d1ff,
+    0 0 3px rgb(41 182 255 / 95%),
+    0 0 6px rgb(41 182 255 / 60%);
   transform-origin: 50% 50%;
   animation: companion-blink 5.4s ease-in-out infinite;
 }
@@ -171,14 +171,14 @@
     var(--companion-mouth-x, 0px),
     var(--companion-mouth-y, 0px)
   );
-  filter: drop-shadow(0 0 0.6px #1668ff)
-    drop-shadow(0 0 2px rgb(22 104 255 / 80%))
-    drop-shadow(0 0 5px rgb(22 104 255 / 45%));
+  filter: drop-shadow(0 0 0.8px #70d1ff)
+    drop-shadow(0 0 3px rgb(41 182 255 / 90%))
+    drop-shadow(0 0 6px rgb(41 182 255 / 55%));
 }
 .companion-mouth-smile,
 .companion-mouth-open {
   fill: none;
-  stroke: #1668ff;
+  stroke: #29b6ff;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
