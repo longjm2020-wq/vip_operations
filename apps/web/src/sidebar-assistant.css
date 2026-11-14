@@ -224,6 +224,40 @@
   transform-box: fill-box;
   transform-origin: 50% 50%;
 }
+.companion-mouth-hitbox {
+  fill: transparent;
+  stroke: none;
+  pointer-events: none;
+}
+.sidebar-assistant:not([data-state="listening"]):not([data-state="thinking"])
+  .companion-pose-front
+  .companion-mouth-hitbox,
+.sidebar-assistant[data-state="listening"]
+  .companion-pose-three-quarter-right
+  .companion-mouth-hitbox,
+.sidebar-assistant[data-state="thinking"]
+  .companion-pose-three-quarter-left
+  .companion-mouth-hitbox,
+.workspace-companion[data-climb-side="left"]
+  .companion-pose-three-quarter-right
+  .companion-mouth-hitbox,
+.workspace-companion[data-climb-side="right"]
+  .companion-pose-three-quarter-left
+  .companion-mouth-hitbox {
+  pointer-events: auto;
+  cursor: pointer;
+}
+.workspace-companion[data-climb-side]
+  .companion-pose-front
+  .companion-mouth-hitbox {
+  pointer-events: none;
+  cursor: default;
+}
+.companion-mouth:has(.companion-mouth-hitbox:hover) {
+  filter: drop-shadow(0 0 1.4px var(--companion-blue-glow))
+    drop-shadow(0 0 4.5px var(--companion-blue-halo))
+    drop-shadow(0 0 8px var(--companion-blue-ambient));
+}
 .sidebar-assistant[data-state="speaking"] .companion-mouth-smile {
   opacity: 0;
 }

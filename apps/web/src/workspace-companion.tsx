@@ -932,7 +932,7 @@ export function WorkspaceCompanion() {
           "input, textarea, select, [contenteditable=true]",
         ) ||
         document.querySelector(
-          ".ant-drawer-open, .ant-modal-wrap:not([style*='display: none']), .workspace-nav-scrim, .companion-details-popover:not(.ant-popover-hidden), .personal-workspace-panel:not([hidden])",
+          ".ant-drawer-open, .ant-modal-wrap:not([style*='display: none']), .workspace-nav-scrim, .personal-workspace-panel:not([hidden])",
         );
       if (blocked) {
         if (transition?.automatic) cancelTransition();

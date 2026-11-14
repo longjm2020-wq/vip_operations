@@ -1,11 +1,5 @@
 import { useEffect, useRef, useState } from "react";
 import { subscribeCompanionGaze } from "./companion-gaze";
-import {
-  ArrowRightOutlined,
-  AudioOutlined,
-  SettingOutlined,
-} from "@ant-design/icons";
-import { Popover } from "antd";
 import { useAssistantHub } from "./assistant-hub-context";
 import { activityFingerprint } from "../../../packages/contracts/src/assistant-activity";
 import "./sidebar-assistant.css";
@@ -95,28 +89,6 @@ export function SidebarAssistant({
           : idle
             ? "slacking"
             : "idle";
-  const labels = {
-    connecting: "正在连接",
-    thinking: "思考中",
-    listening: "正在聆听",
-    speaking: "正在说话",
-    working: "工作中",
-    error: "需要关注",
-    notice: "有新动态",
-    slacking: "摸鱼中",
-    idle: "待命中",
-  };
-  const preview =
-    attention ||
-    unread.find((item) => item.status !== "upcoming") ||
-    items.find((item) => item.kind === "schedule");
-  const [detailsOpen, setDetailsOpen] = useState(false);
-  useEffect(() => {
-    if (!detailsOpen) return;
-    const close = () => setDetailsOpen(false);
-    window.addEventListener("xuti-workspace-view", close);
-    return () => window.removeEventListener("xuti-workspace-view", close);
-  }, [detailsOpen]);
   const announced = useRef<Set<string> | null>(null);
   const [reminder, setReminder] = useState("");
   useEffect(() => {
@@ -148,14 +120,9 @@ export function SidebarAssistant({
     return () => clearTimeout(timer);
   }, [reminder]);
   const openPanel = (tab: "chat" | "activity") => {
-    setDetailsOpen(false);
     hub.openPanel(tab);
   };
   const launchLabel = hub.allowed ? "打开小序文字对话" : "打开 AI 个人助理";
-  const menuTitle =
-    labels[state] +
-    (unread.length ? " · " + unread.length + " 条新动态" : " · 右键展开");
-  const openMenu = () => setDetailsOpen(true);
   return (
     <section
       className={`sidebar-assistant${compact ? " sidebar-assistant-compact" : ""}`}
@@ -163,172 +130,98 @@ export function SidebarAssistant({
       data-muted={hub.gptVoice.muted}
       data-compact={compact ? "true" : undefined}
       aria-label="小序个人助理"
-      onContextMenu={(event) => {
-        event.preventDefault();
-        openMenu();
-      }}
     >
-      <Popover
-        getPopupContainer={(trigger) =>
-          trigger.closest<HTMLElement>(
-            compact
-              ? ".personal-assistant-drawer"
-              : ".workspace-companion-host",
-          ) || document.body
+      <button
+        ref={launch}
+        className="companion-launch"
+        type="button"
+        aria-label={launchLabel}
+        aria-haspopup="dialog"
+        title={
+          compact
+            ? "点击回到文字对话"
+            : docked
+              ? "点击身体打开文字对话 · 点嘴实时语音 · 拖动离巢 · Home 回巢"
+              : floating
+                ? "点击身体打开文字对话 · 点嘴实时语音 · 拖动自由放置 · 方向键移动 · Home 寻找空位"
+                : "点击身体打开文字对话 · 点嘴实时语音"
         }
-        trigger="contextMenu"
-        open={detailsOpen}
-        onOpenChange={setDetailsOpen}
-        destroyOnHidden
-        placement={compact ? "bottomLeft" : floating ? "topRight" : "right"}
-        classNames={{ root: "companion-details-popover" }}
-        content={
-          <div
-            className="companion-details"
-            onKeyDown={(event) => {
-              if (event.key === "Escape") setDetailsOpen(false);
-            }}
-          >
-            <div className="companion-details-heading">
-              <span className="companion-name">
-                小序 <small>AI 助理</small>
-              </span>
-              <span className="companion-state">{labels[state]}</span>
-            </div>
-            <div className="companion-interactions">
-              <button type="button" onClick={() => openPanel("chat")}>
-                文字对话
-              </button>
-              {hub.allowed && (
-                <button
-                  type="button"
-                  aria-label="与小序语音对话"
-                  title="语音对话"
-                  onClick={() => {
-                    setDetailsOpen(false);
-                    hub.startVoice();
-                  }}
-                >
-                  <AudioOutlined />
-                </button>
-              )}
-              {hub.allowed && (
-                <button
-                  type="button"
-                  aria-label="语音设置"
-                  title="语音设置"
-                  onClick={() => {
-                    setDetailsOpen(false);
-                    hub.openVoiceSettings();
-                  }}
-                >
-                  <SettingOutlined />
-                </button>
-              )}
-            </div>
-            <button
-              className="companion-feedback"
-              type="button"
-              aria-label="查看助理动态反馈"
-              onClick={() => openPanel("activity")}
-            >
-              <span>
-                {hub.feedError
-                  ? "动态连接中断，点击重试"
-                  : hub.feedLoading
-                    ? "正在读取动态…"
-                    : preview?.title || "日程 · 项目 · 定时任务"}
-                <small>{preview?.detail || "在这里查看工作反馈"}</small>
-              </span>
-              <ArrowRightOutlined />
-            </button>
-          </div>
-        }
-      >
-        <button
-          ref={launch}
-          className="companion-launch"
-          type="button"
-          aria-label={launchLabel}
-          aria-haspopup="dialog"
-          aria-expanded={detailsOpen}
-          title={
-            compact
-              ? "点击回到文字对话 · 右键展开状态与动态"
-              : docked
-                ? "点击打开文字对话 · 右键展开状态与动态 · 拖动离巢 · Home 回巢"
-                : floating
-                  ? "点击打开文字对话 · 右键展开状态与动态 · 拖动自由放置 · 方向键移动 · Home 寻找空位"
-                  : menuTitle
+        onClick={(event) => {
+          onInteract?.();
+          if (
+            hub.allowed &&
+            !compact &&
+            (event.target as Element).closest(".companion-mouth-hitbox")
+          ) {
+            hub.startVoice();
+            return;
           }
-          onClick={() => {
-            setDetailsOpen(false);
-            onInteract?.();
-            openPanel(hub.allowed ? "chat" : "activity");
-          }}
-          onKeyDown={(event) => {
-            if (
-              event.key === "ContextMenu" ||
-              (event.shiftKey && event.key === "F10")
-            ) {
-              event.preventDefault();
-              openMenu();
-            } else if (event.key === "Escape") setDetailsOpen(false);
-          }}
-        >
-          <div className="companion-stage" aria-hidden="true">
-            {!floating && <div className="companion-grid" />}
-            <div className="companion-robot">
-              {!floating && <div className="companion-shadow" />}
-              <div className="companion-body">
-                <div className="companion-figure" ref={figure}>
-                  {companionPoses.map(([pose, src]) => (
-                    <div
-                      key={pose}
-                      className={`companion-pose companion-pose-${pose}`}
-                    >
-                      <img src={src} alt="" draggable={false} />
-                      {pose !== "back" ? (
-                        <>
-                          <span className="companion-eyes">
-                            <span className="companion-eye companion-eye-left">
-                              <span className="companion-eye-dot" />
-                            </span>
-                            <span className="companion-eye companion-eye-right">
-                              <span className="companion-eye-dot" />
-                            </span>
+          openPanel(hub.allowed ? "chat" : "activity");
+        }}
+      >
+        <div className="companion-stage" aria-hidden="true">
+          {!floating && <div className="companion-grid" />}
+          <div className="companion-robot">
+            {!floating && <div className="companion-shadow" />}
+            <div className="companion-body">
+              <div className="companion-figure" ref={figure}>
+                {companionPoses.map(([pose, src]) => (
+                  <div
+                    key={pose}
+                    className={`companion-pose companion-pose-${pose}`}
+                  >
+                    <img src={src} alt="" draggable={false} />
+                    {pose !== "back" ? (
+                      <>
+                        <span className="companion-eyes">
+                          <span className="companion-eye companion-eye-left">
+                            <span className="companion-eye-dot" />
                           </span>
-                          <svg
-                            className="companion-mouth"
-                            viewBox="0 0 640 640"
-                            aria-hidden="true"
-                          >
-                            <path
-                              className="companion-mouth-smile"
-                              d={companionMouths[pose].smile}
-                            />
+                          <span className="companion-eye companion-eye-right">
+                            <span className="companion-eye-dot" />
+                          </span>
+                        </span>
+                        <svg
+                          className="companion-mouth"
+                          viewBox="0 0 640 640"
+                          aria-hidden="true"
+                        >
+                          <path
+                            className="companion-mouth-smile"
+                            d={companionMouths[pose].smile}
+                          />
+                          <ellipse
+                            className="companion-mouth-open"
+                            cx={companionMouths[pose].open.cx}
+                            cy={companionMouths[pose].open.cy}
+                            rx={companionMouths[pose].open.rx}
+                            ry={companionMouths[pose].open.ry}
+                          />
+                          {hub.allowed && !compact && (
                             <ellipse
-                              className="companion-mouth-open"
+                              className="companion-mouth-hitbox"
                               cx={companionMouths[pose].open.cx}
-                              cy={companionMouths[pose].open.cy}
-                              rx={companionMouths[pose].open.rx}
-                              ry={companionMouths[pose].open.ry}
-                            />
-                          </svg>
-                        </>
-                      ) : null}
-                    </div>
-                  ))}
-                </div>
-                <span className="companion-sleep">
-                  <span>z</span>
-                  <span>z</span>
-                </span>
+                              cy={companionMouths[pose].open.cy + 1.5}
+                              rx={42}
+                              ry={21}
+                            >
+                              <title>点嘴进行实时语音聊天</title>
+                            </ellipse>
+                          )}
+                        </svg>
+                      </>
+                    ) : null}
+                  </div>
+                ))}
               </div>
+              <span className="companion-sleep">
+                <span>z</span>
+                <span>z</span>
+              </span>
             </div>
           </div>
-        </button>
-      </Popover>
+        </div>
+      </button>
       {hub.allowed && !compact && <CompanionVoice anchor={launch} />}
       {reminder && !compact && !hub.voiceVisible && (
         <div className="companion-reminder" role="status" aria-live="polite">
