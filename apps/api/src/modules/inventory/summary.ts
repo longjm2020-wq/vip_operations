@@ -71,7 +71,15 @@ async function inventorySummarySnapshot(q: Row, tx: Tx, userId?: string) {
       ? "'style:'||pr.id::text"
       : "'article:'||pr.id::text||':'||CASE WHEN trim(COALESCE(ref.article_no,''))<>'' THEN 'code:'||trim(ref.article_no) ELSE 'sku:'||s.id::text END";
   const calculation = external ? await inventoryCalculationPolicy(userId, tx) : null;
-  const calculationFields = external ? (await inventoryCalculationFields(userId, tx)).filter(field => !field.hidden) : [];
+  const allCalculationFields = external ? await inventoryCalculationFields(userId, tx) : [];
+  const calculationFields = allCalculationFields.filter(field => !field.hidden);
+  const replenishmentStockField = external
+    ? allCalculationFields.find(field => field.name === "在仓总库存") ??
+      allCalculationFields.find(field => field.name === "在仓可用库存") ??
+      calculationFields[0]
+    : null;
+  const replenishmentFormula = external ? (replenishmentStockField?.formula ?? calculation?.formula ?? null) : null;
+  const replenishmentStockLabel = external ? (replenishmentStockField?.name ?? "在仓总库存") : "可售库存";
   const formulas = new Map(calculationFields.map(field => [snake(field.key), field.formula as string]));
   const stockFields = (external ? ["warehouseTotalQty", ...calculationFields.map(field => field.key), ...jushuitanStockFields] : inventoryStockFields).map(snake);
   const sumStock = (key: string) => external ? `CASE WHEN count(${key})=count(*) THEN sum(${key}) END` : `sum(${key})`;
@@ -129,7 +137,7 @@ async function inventorySummarySnapshot(q: Row, tx: Tx, userId?: string) {
         pr.style_no,pr.name AS product_name,pr.main_image_url,
         pr.custom_fields->>'f00000000000000000000000000000001' AS supplier_style_code,
         w.id AS warehouse_id,w.name AS warehouse_name,
-        ${external ? stockFields.map(k => `${k === "warehouse_total_qty" ? inventoryFormulaSql(calculation!.formula) : formulas.has(k) ? inventoryFormulaSql(formulas.get(k)!) : `jst.${k}`} AS ${k}`).join(",") : `COALESCE(b.physical_qty,0) AS physical_qty,COALESCE(b.reserved_qty,0) AS reserved_qty,
+        ${external ? stockFields.map(k => `${k === "warehouse_total_qty" ? inventoryFormulaSql(replenishmentFormula) : formulas.has(k) ? inventoryFormulaSql(formulas.get(k)!) : `jst.${k}`} AS ${k}`).join(",") : `COALESCE(b.physical_qty,0) AS physical_qty,COALESCE(b.reserved_qty,0) AS reserved_qty,
         COALESCE(b.damaged_qty,0) AS damaged_qty,
         COALESCE(b.physical_qty-b.reserved_qty-b.damaged_qty,0) AS available_qty,
         COALESCE(sh.in_transit_qty,0) AS in_transit_qty,COALESCE(sh.transfer_transit_qty,0) AS transfer_transit_qty,
@@ -244,20 +252,27 @@ async function inventorySummarySnapshot(q: Row, tx: Tx, userId?: string) {
       for (const k of stockFields) record[k] = quantity(record[k], k);
       return record;
     });
+  const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai" }).format(new Date());
   const references = skuView
     ? (await applyCompassReferences(data, tx, source, window, {
       dailySales: policy!.policy.dailySalesMethod, returnRate: policy!.policy.returnRateMethod,
-    })).map((row: Row) => {
-      // A configurable warehouse total is not saleable stock. Keep the internal
-      // replenishment formula separate from the read-only JST snapshot.
-      if (external) return { ...row, replenishment_qty: null, coverage_days: null, replenishment_plan: null };
+    }, policy!.policy)).map((row: Row) => {
+      // JST: the account's warehouse-total formula is the stock that covers demand.
+      // Purchase/transfer in transit and the receiving warehouse have no ETA and are
+      // shown for checking only, never credited.
+      const inbound = external
+        ? ["in_transit_qty", "transfer_transit_qty", "incoming_qty"].reduce((sum, key) => sum + (Number(row[key]) || 0), 0)
+        : row.in_transit_qty + row.transfer_transit_qty + row.incoming_qty;
       const plan = calculateReplenishmentPlan({ demand: row.planning_demand,
-        availableQty: row.available_qty,
-        unconfirmedInboundQty: row.in_transit_qty + row.transfer_transit_qty + row.incoming_qty,
+        availableQty: external ? row.warehouse_total_qty ?? null : row.available_qty,
+        availableStockLabel: replenishmentStockLabel,
+        unconfirmedInboundQty: inbound,
         referenceReturnRate: row.return_rate == null ? null : Number(row.return_rate),
+        today,
       }, policy!.policy);
       return { ...row, planning_daily_sales: plan.demand.dailySales,
-        replenishment_qty: plan.quantity, coverage_days: plan.coverageDays, replenishment_plan: plan };
+        replenishment_qty: plan.quantity, coverage_days: plan.coverageDays,
+        replenishment_status: plan.status, replenishment_plan: plan };
     })
     : data;
   const images = dimension === "style" ? references : await applyCompassImages(references, tx, source);

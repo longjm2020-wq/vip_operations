@@ -16,8 +16,17 @@ export const inventoryReportMatchSchema = z.enum([
 export type InventoryReportMatch = z.infer<typeof inventoryReportMatchSchema>;
 export const inventoryBarcodeStateSchema = z.enum(["LISTED", "UNLISTED", "UNPUBLISHED"]);
 export const inventoryStyleStateSchema = z.enum(["LISTED", "UNLISTED", "PARTIAL", "UNPUBLISHED"]);
+export const inventoryReplenishmentStateSchema = z.enum([
+  "URGENT",
+  "REORDER",
+  "OK",
+  "OVERSTOCK",
+  "SEASON_END",
+  "MISSING",
+]);
 export type InventoryBarcodeState = z.infer<typeof inventoryBarcodeStateSchema>;
 export type InventoryStyleState = z.infer<typeof inventoryStyleStateSchema>;
+export type InventoryReplenishmentState = z.infer<typeof inventoryReplenishmentStateSchema>;
 export type InventoryListingCounts = {
   barcode: Record<InventoryBarcodeState, number> & { total: number; other: number };
   style: Record<InventoryStyleState, number> & { total: number; other: number };

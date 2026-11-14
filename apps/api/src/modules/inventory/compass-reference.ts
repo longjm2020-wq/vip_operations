@@ -10,7 +10,12 @@ import {
   type InventoryReferenceWindow,
   type InventoryReferenceMethod,
 } from "../../../../../packages/contracts/src/compass-inventory-reference.js";
-import { planningDemand } from "../../../../../packages/contracts/src/inventory-replenishment.js";
+import {
+  planningDemand,
+  planningDemandFromDays,
+  type DemandDay,
+  type ReplenishmentPolicy,
+} from "../../../../../packages/contracts/src/inventory-replenishment.js";
 
 export async function applyCompassReferences(
   data: Row[],
@@ -18,6 +23,7 @@ export async function applyCompassReferences(
   source: Row | null,
   window: InventoryReferenceWindow,
   methods: { dailySales: InventoryReferenceMethod; returnRate: InventoryReferenceMethod } = { dailySales: "median", returnRate: "median" },
+  demandPolicy?: ReplenishmentPolicy,
 ) {
   const code = (row: Row) =>
     String(row.barcode || "").trim() || String(row.sku_code || "").trim();
@@ -35,6 +41,7 @@ export async function applyCompassReferences(
     )
     SELECT r.barcode,r.business_date::text AS business_date,
       r.payload->'metrics'->'salesQty' AS sales_qty,r.payload->'reportedReturnRate' AS reported_return_rate,
+      r.payload->'metrics'->'saleableStock' AS saleable_stock,
       d.normalization_version,m.sku_count
     FROM compass_barcode_history_records r JOIN compass_barcode_history_days d USING(business_date)
     LEFT JOIN sku_matches m ON m.barcode=r.barcode
@@ -46,6 +53,7 @@ export async function applyCompassReferences(
       )
     : [];
   const byBarcode = new Map<string, CompassReferenceDay[]>();
+  const demandDays = new Map<string, DemandDay[]>();
   const legacyBarcodes = new Set<string>();
   const duplicateSkuBarcodes = new Set<string>();
   for (const record of records) {
@@ -57,6 +65,12 @@ export async function applyCompassReferences(
       reportedReturnRate: record.reported_return_rate,
     });
     byBarcode.set(record.barcode, days);
+    const stock = record.saleable_stock == null ? null : Number(record.saleable_stock);
+    demandDays.set(record.barcode, [...(demandDays.get(record.barcode) || []), {
+      date: record.business_date,
+      salesQty: record.sales_qty == null ? null : Number(record.sales_qty),
+      saleableStock: stock != null && Number.isFinite(stock) ? stock : null,
+    }]);
     if (record.normalization_version < 3) legacyBarcodes.add(record.barcode);
     if (record.sku_count > 1) duplicateSkuBarcodes.add(record.barcode);
   }
@@ -67,11 +81,17 @@ export async function applyCompassReferences(
       reference.salesQty,
       reference.returnRate.value,
     );
-    const demand = planningDemand({
-      complete: window.complete, days: window.days, recordedDays: reference.recordedDays,
-      salesSamples: reference.dailySales.samples, salesQty: reference.salesQty,
-      ambiguous: reference.ambiguous || duplicateSkuBarcodes.has(barcode), manualDailySales: row.daily_sales,
-    });
+    const ambiguous = reference.ambiguous || duplicateSkuBarcodes.has(barcode);
+    const demand = demandPolicy
+      ? planningDemandFromDays({
+          complete: window.complete, windowDays: window.days, endDate: window.end_date,
+          days: demandDays.get(barcode) || [], ambiguous, manualDailySales: row.daily_sales,
+        }, demandPolicy)
+      : planningDemand({
+          complete: window.complete, days: window.days, recordedDays: reference.recordedDays,
+          salesSamples: reference.dailySales.samples, salesQty: reference.salesQty,
+          ambiguous, manualDailySales: row.daily_sales,
+        });
     if (duplicateSkuBarcodes.has(barcode)) demand.reason = demand.source === "manual"
       ? "同一条码关联多个内部SKU，采用本SKU已维护的人工日销"
       : "同一条码关联多个内部SKU，请核对编码；不重复分配整份渠道销量用于补货";

@@ -27,8 +27,8 @@ export function InventoryEstimateValue({ row, field }: {
   const value = row[field], zeroMedianSales = inventoryHasZeroMedianSales(row);
   const text = value == null
     ? field === "coverageDays" && row.dailySales != null && Number(row.dailySales) === 0
-      ? zeroMedianSales ? "中位数为0" : "日销参考为0"
-      : "暂无数据"
+      ? zeroMedianSales ? "暂不估算" : "日销参考为0"
+      : "暂不估算"
     : format(value) + (field === "coverageDays" ? "天" : "件");
   if (!zeroMedianSales || (field === "coverageDays" ? value != null : value == null || Number(value) !== 0)) return <>{text}</>;
   return <Tooltip trigger={["hover", "focus"]} title={<div>
