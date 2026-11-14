@@ -1,7 +1,7 @@
 .aigc-page {
   max-width: 1560px;
   margin: auto;
-  padding: 18px 10px 50px;
+  padding: 10px 0 50px;
   color: var(--app-text);
 }
 .aigc-page-header {

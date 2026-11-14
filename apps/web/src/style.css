@@ -287,7 +287,7 @@ a {
 .workspace-subnav { overflow: hidden; }
 .workspace-path { min-width: 0; }
 .workspace-path > a, .workspace-path > span[aria-current] { overflow: hidden; text-overflow: ellipsis; }
-.content.selection-workspace-content { height: calc(100dvh - var(--workspace-topbar-height, 48px)); flex: none; box-sizing: border-box; display: flex; flex-direction: column; min-height: 0; overflow: hidden; padding-bottom: 0; }
+.content.selection-workspace-content { height: calc(100dvh - var(--workspace-topbar-height, 48px)); flex: none; box-sizing: border-box; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
 .selection-workspace-content > .page-heading { flex: none; }
 .selection-workspace-content > .selection-card { flex: 1; min-height: 0; }
 @media (max-width: 1100px) {
@@ -330,7 +330,7 @@ a {
   }
 }
 .content {
-  padding: 10px 16px 0;
+  padding: 8px;
   max-width: none;
   width: 100%;
   margin: 0 auto;
@@ -587,7 +587,7 @@ pre {
 }
 @media (max-width: 1000px) {
   .content {
-    padding: 12px 18px;
+    padding: 8px;
   }
   .login-story {
     padding: 40px;
@@ -996,7 +996,7 @@ pre {
 }
 @media (max-width: 700px) {
   .content {
-    padding: 10px 12px 0;
+    padding: 8px;
   }
   .page-heading > .ant-space {
     justify-content: flex-start;
