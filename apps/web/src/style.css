@@ -209,7 +209,19 @@ a {
   background: transparent;
   color: var(--app-subtle);
   flex-shrink: 0;
-  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+  cursor: grab;
+  user-select: none;
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, opacity 0.15s ease;
+}
+.vip-workspace-tab:active {
+  cursor: grabbing;
+}
+.vip-workspace-tab.is-dragging {
+  opacity: 0.45;
+}
+.vip-workspace-tab.is-drag-over {
+  border-color: #1677ff;
+  box-shadow: inset 2px 0 0 #1677ff;
 }
 .vip-workspace-tab:hover {
   background: var(--app-surface-2, #f5f7fa);

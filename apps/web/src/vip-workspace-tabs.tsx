@@ -1,6 +1,17 @@
-import { CloseOutlined } from "@ant-design/icons";
-import { useEffect, useMemo, useState } from "react";
+import {
+  ApiOutlined,
+  AppstoreOutlined,
+  ArrowLeftOutlined,
+  BarChartOutlined,
+  CloseOutlined,
+  DatabaseOutlined,
+  FundProjectionScreenOutlined,
+  InboxOutlined,
+} from "@ant-design/icons";
+import { Dropdown, type MenuProps } from "antd";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
+import { useCan } from "./shared";
 
 export interface VipWorkspaceTab {
   key: string;
@@ -11,13 +22,45 @@ export interface VipWorkspaceTab {
 const VIP_WORKSPACE_ROUTES: ReadonlyArray<{
   prefix: string;
   label: string;
+  permission: string;
+  icon: ReactNode;
 }> = [
-  { prefix: "/analytics/compass", label: "经营分析" },
-  { prefix: "/analytics/competitors", label: "竞品分析" },
-  { prefix: "/style-selections", label: "选款登记" },
-  { prefix: "/products", label: "商品档案" },
-  { prefix: "/operations/vip/inventory", label: "库存明细" },
-  { prefix: "/operations/vip/integration", label: "唯品会接入" },
+  {
+    prefix: "/analytics/compass",
+    label: "经营分析",
+    permission: "analytics.read",
+    icon: <BarChartOutlined />,
+  },
+  {
+    prefix: "/style-selections",
+    label: "选款登记",
+    permission: "selection.read",
+    icon: <DatabaseOutlined />,
+  },
+  {
+    prefix: "/products",
+    label: "商品档案",
+    permission: "product.read",
+    icon: <AppstoreOutlined />,
+  },
+  {
+    prefix: "/analytics/competitors",
+    label: "竞品分析",
+    permission: "analytics.read",
+    icon: <FundProjectionScreenOutlined />,
+  },
+  {
+    prefix: "/operations/vip/inventory",
+    label: "库存明细",
+    permission: "inventory.read",
+    icon: <InboxOutlined />,
+  },
+  {
+    prefix: "/operations/vip/integration",
+    label: "唯品会接入",
+    permission: "vip.settings",
+    icon: <ApiOutlined />,
+  },
 ];
 
 /** Resolve a pathname to its canonical VIP workspace tab metadata. */
@@ -122,25 +165,96 @@ export function useVipWorkspaceTabs(userId?: number | string) {
     }
   };
 
+  const reorderTabs = (fromKey: string, toKey: string) => {
+    if (fromKey === toKey) return;
+    setTabs((prev) => {
+      const fromIdx = prev.findIndex((tab) => tab.key === fromKey);
+      const toIdx = prev.findIndex((tab) => tab.key === toKey);
+      if (fromIdx === -1 || toIdx === -1 || fromIdx === toIdx) return prev;
+      const next = [...prev];
+      const [moved] = next.splice(fromIdx, 1);
+      next.splice(toIdx, 0, moved);
+      saveStoredTabs(storageKey, next);
+      return next;
+    });
+  };
+
   return {
     tabs,
     activeTabKey: activeRoute?.key,
     closeTab,
+    reorderTabs,
   };
+}
+
+/** Render the 唯品会工作区 link with a hover dropdown of permitted sub-module entries. */
+export function VipWorkspaceRootDropdown({
+  activeTabKey,
+}: {
+  activeTabKey?: string;
+}) {
+  const analytics = useCan("analytics.read");
+  const selection = useCan("selection.read");
+  const products = useCan("product.read");
+  const inventory = useCan("inventory.read");
+  const vipSettings = useCan("vip.settings");
+
+  const permissions: Record<string, boolean> = {
+    "analytics.read": analytics,
+    "selection.read": selection,
+    "product.read": products,
+    "inventory.read": inventory,
+    "vip.settings": vipSettings,
+  };
+
+  const menuItems: MenuProps["items"] = VIP_WORKSPACE_ROUTES.filter(
+    (route) => permissions[route.permission]
+  ).map((route) => ({
+    key: route.prefix,
+    icon: route.icon,
+    label: <Link to={route.prefix}>{route.label}</Link>,
+  }));
+
+  const rootLink = (
+    <Link to="/operations?platform=vip" className="vip-workspace-root-link">
+      <ArrowLeftOutlined /> 唯品会工作区
+    </Link>
+  );
+
+  if (!menuItems.length) return rootLink;
+
+  return (
+    <Dropdown
+      menu={{
+        items: menuItems,
+        selectedKeys: activeTabKey ? [activeTabKey] : [],
+      }}
+      trigger={["hover"]}
+      placement="bottomLeft"
+      overlayClassName="vip-workspace-root-dropdown"
+    >
+      {rootLink}
+    </Dropdown>
+  );
 }
 
 interface VipWorkspaceTabBarProps {
   tabs: VipWorkspaceTab[];
   activeTabKey?: string;
   onCloseTab: (key: string) => void;
+  onReorderTabs: (fromKey: string, toKey: string) => void;
 }
 
-/** Render switchable, closeable tabs for opened VIP workspace sub-pages. */
+/** Render switchable, closeable, drag-reorderable tabs for opened VIP workspace sub-pages. */
 export function VipWorkspaceTabBar({
   tabs,
   activeTabKey,
   onCloseTab,
+  onReorderTabs,
 }: VipWorkspaceTabBarProps) {
+  const [draggingKey, setDraggingKey] = useState<string | null>(null);
+  const [dragOverKey, setDragOverKey] = useState<string | null>(null);
+
   if (!tabs.length) return null;
 
   return (
@@ -151,13 +265,43 @@ export function VipWorkspaceTabBar({
     >
       {tabs.map((tab) => {
         const isActive = tab.key === activeTabKey;
+        const isDragging = tab.key === draggingKey;
+        const isDragOver = tab.key === dragOverKey && draggingKey !== tab.key;
         return (
           <div
             key={tab.key}
-            className={`vip-workspace-tab${isActive ? " is-active" : ""}`}
+            draggable
+            onDragStart={(e) => {
+              e.dataTransfer.effectAllowed = "move";
+              e.dataTransfer.setData("text/plain", tab.key);
+              setDraggingKey(tab.key);
+            }}
+            onDragOver={(e) => {
+              e.preventDefault();
+              e.dataTransfer.dropEffect = "move";
+              if (dragOverKey !== tab.key) setDragOverKey(tab.key);
+            }}
+            onDrop={(e) => {
+              e.preventDefault();
+              const fromKey =
+                draggingKey || e.dataTransfer.getData("text/plain");
+              if (fromKey && fromKey !== tab.key) {
+                onReorderTabs(fromKey, tab.key);
+              }
+              setDraggingKey(null);
+              setDragOverKey(null);
+            }}
+            onDragEnd={() => {
+              setDraggingKey(null);
+              setDragOverKey(null);
+            }}
+            className={`vip-workspace-tab${isActive ? " is-active" : ""}${
+              isDragging ? " is-dragging" : ""
+            }${isDragOver ? " is-drag-over" : ""}`}
           >
             <Link
               to={tab.href}
+              draggable={false}
               role="tab"
               aria-selected={isActive}
               aria-current={isActive ? "page" : undefined}
