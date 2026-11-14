@@ -67,7 +67,7 @@
   color: var(--app-secondary);
 }
 .workspace-future .content {
-  padding: 30px 36px 40px;
+  padding: 10px 16px 16px;
   background:
     radial-gradient(ellipse at 80% 0%, var(--app-glow), transparent 42%), var(--app-bg);
 }
@@ -99,11 +99,13 @@ body:has(.workspace-future) .account-dropdown-profile small {
   color: var(--app-secondary);
 }
 @media (max-width: 1250px) {
-  .workspace-future .content {
-    padding: 24px;
-  }
   .workspace-future .topbar {
     padding-inline: 24px;
+  }
+}
+@media (max-width: 1000px) {
+  .workspace-future .content {
+    padding: 12px 18px;
   }
 }
 @media (max-width: 767px) {
@@ -138,7 +140,7 @@ body:has(.workspace-future) .account-dropdown-profile small {
     min-height: 58px;
   }
   .workspace-future .content {
-    padding: 22px 16px 32px;
+    padding: 10px 12px 12px;
   }
   .workspace-future .topbar-actions {
     overflow: visible;
