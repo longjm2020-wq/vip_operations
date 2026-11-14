@@ -98,24 +98,24 @@
 }
 :root,
 :root[data-theme="dark"] {
-  --companion-blue-core: #edf2ff;
-  --companion-blue-inner: color-mix(in srgb, var(--app-accent) 80%, #ffffff);
-  --companion-blue-mid: var(--app-accent);
-  --companion-blue-edge: #4d6bff;
-  --companion-blue-glow: var(--app-accent-hover);
-  --companion-blue-halo: color-mix(in srgb, var(--app-accent) 90%, transparent);
-  --companion-blue-ambient: color-mix(in srgb, var(--app-accent-fill) 55%, transparent);
-  --companion-mouth-stroke: color-mix(in srgb, var(--app-accent) 80%, #ffffff);
+  --companion-blue-core: #f4f7ff;
+  --companion-blue-inner: color-mix(in srgb, var(--app-accent) 60%, #ffffff);
+  --companion-blue-mid: color-mix(in srgb, var(--app-accent) 80%, #ffffff);
+  --companion-blue-edge: var(--app-accent);
+  --companion-blue-glow: color-mix(in srgb, var(--app-accent) 60%, #ffffff);
+  --companion-blue-halo: color-mix(in srgb, var(--app-accent) 88%, transparent);
+  --companion-blue-ambient: color-mix(in srgb, var(--app-accent-fill) 50%, transparent);
+  --companion-mouth-stroke: color-mix(in srgb, var(--app-accent) 60%, #ffffff);
 }
 :root[data-theme="light"] {
-  --companion-blue-core: #dfe5ff;
-  --companion-blue-inner: #697eea;
-  --companion-blue-mid: #536de7;
+  --companion-blue-core: #eef2ff;
+  --companion-blue-inner: #8e9eef;
+  --companion-blue-mid: #7286ec;
   --companion-blue-edge: var(--app-accent);
-  --companion-blue-glow: #8da0f5;
-  --companion-blue-halo: color-mix(in srgb, var(--app-accent) 92%, transparent);
-  --companion-blue-ambient: color-mix(in srgb, var(--app-accent) 55%, transparent);
-  --companion-mouth-stroke: #697eea;
+  --companion-blue-glow: #9fb0f5;
+  --companion-blue-halo: color-mix(in srgb, var(--app-accent) 88%, transparent);
+  --companion-blue-ambient: color-mix(in srgb, var(--app-accent) 50%, transparent);
+  --companion-mouth-stroke: #8e9eef;
 }
 .companion-eye-dot {
   display: block;
@@ -123,10 +123,10 @@
   height: 100%;
   border-radius: 999px;
   background: radial-gradient(
-    circle at 38% 32%,
+    circle at 38% 34%,
     var(--companion-blue-core) 0%,
-    var(--companion-blue-inner) 26%,
-    var(--companion-blue-mid) 62%,
+    var(--companion-blue-inner) 38%,
+    var(--companion-blue-mid) 72%,
     var(--companion-blue-edge) 100%
   );
   box-shadow:
