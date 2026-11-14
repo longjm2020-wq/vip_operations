@@ -3,14 +3,18 @@ import {
   Alert,
   App,
   Button,
+  DatePicker,
   Drawer,
   Form,
   InputNumber,
   Select,
   Space,
+  Switch,
+  Tag,
   Tooltip,
 } from "antd";
 import { CalculatorOutlined } from "@ant-design/icons";
+import dayjs from "dayjs";
 import {
   inventoryReferencePeriods,
   type InventoryReferencePeriod,
@@ -20,11 +24,15 @@ import { api, queryClient } from "./api";
 import type { Row } from "./shared";
 import {
   replenishmentPolicySchema,
+  replenishmentServiceLevels,
+  replenishmentStatusLabels,
   type ReplenishmentPolicy,
+  type ReplenishmentStatus,
 } from "../../../packages/contracts/src/inventory-replenishment";
 
 const number = (value: number) =>
   value.toLocaleString("zh-CN", { maximumFractionDigits: 4 });
+const grid = { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 20px" } as const;
 
 export function InventoryCalculationPanel({
   referencePeriod,
@@ -49,6 +57,8 @@ export function InventoryCalculationPanel({
         ...policy,
         referencePeriod,
         resalableRate: policy.resalableRate * 100,
+        recentWeight: policy.recentWeight * 100,
+        stopDate: policy.stopDate ? dayjs(policy.stopDate) : null,
         confirmedReturnRate:
           policy.confirmedReturnRate == null
             ? null
@@ -67,6 +77,8 @@ export function InventoryCalculationPanel({
       const parsed = replenishmentPolicySchema.safeParse({
         ...values,
         resalableRate: values.resalableRate / 100,
+        recentWeight: values.recentWeight / 100,
+        stopDate: values.stopDate ? dayjs(values.stopDate).format("YYYY-MM-DD") : null,
         confirmedReturnRate:
           values.confirmedReturnRate == null
             ? null
@@ -84,25 +96,32 @@ export function InventoryCalculationPanel({
       onSaved(parsed.data.referencePeriod);
       await queryClient.invalidateQueries({ queryKey: ["/inventory/summary"] });
       setOpen(false);
-      message.success("计算配置已按账号保存");
+      message.success("补货配置已按账号保存");
     } catch (error) {
       if (error instanceof Error) message.error(error.message);
     } finally {
       setSaving(false);
     }
   };
+  const days = (name: string, label: string, min: number, max: number, extra?: string) => (
+    <Form.Item name={name} label={label} rules={[{ required: true }]} extra={extra}>
+      <InputNumber min={min} max={max} precision={0} style={{ width: "100%" }} />
+    </Form.Item>
+  );
   return (
     <>
-      <Tooltip title={open ? null : "计算配置"}>
+      <Tooltip title={open ? null : "补货配置"}>
         <Button
-          aria-label="计算配置"
+          aria-label="补货配置"
           icon={<CalculatorOutlined />}
           onClick={load}
           loading={loading}
-        />
+        >
+          补货配置
+        </Button>
       </Tooltip>
       <Drawer
-        title="计算面板"
+        title="补货配置"
         forceRender
         open={open}
         onClose={() => !saving && setOpen(false)}
@@ -119,10 +138,10 @@ export function InventoryCalculationPanel({
         }
       >
         <p>
-          按当前账号保存到服务器，跨电脑、浏览器恢复；应用于当前账号查看的所有条码。按实际情况调整交期后重新估算。
+          按当前账号保存到服务器，适用于当前账号查看的所有条码。补货只给出建议，不会下采购单或调整库存。
         </p>
         <Form form={form} layout="vertical" disabled={saving}>
-          <h3>渠道日销与退货率</h3>
+          <h3>1. 需求估计（补货日均）</h3>
           <Form.Item
             name="referencePeriod"
             label="报表周期（保存为默认）"
@@ -133,18 +152,97 @@ export function InventoryCalculationPanel({
               options={[...inventoryReferencePeriods]}
             />
           </Form.Item>
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "1fr 1fr",
-              gap: "0 20px",
-            }}
-          >
+          <div style={grid}>
             <Form.Item
-              name="dailySalesMethod"
-              label="渠道日销参考取值"
+              name="recentWeight"
+              label="近7天权重（%）"
+              rules={[{ required: true }]}
+              extra="补货日均 = (1−权重)×周期日均 + 权重×近7天日均；默认30%"
+            >
+              <InputNumber min={0} max={100} precision={0} style={{ width: "100%" }} />
+            </Form.Item>
+            {days("minValidDays", "最少有效在售天数", 1, 60, "不足时改用人工日销或显示数据不足")}
+            <Form.Item
+              name="excludeStockoutDays"
+              label="剔除缺货日"
+              valuePropName="checked"
+              extra="当天唯品会可售库存为0且无销量，不计入日均分母"
+            >
+              <Switch />
+            </Form.Item>
+            <Form.Item
+              name="capSpikes"
+              label="截断异常峰值"
+              valuePropName="checked"
+              extra="单日销量高于 Q3+3×IQR（至少2×Q3、3件）按上限计入"
+            >
+              <Switch />
+            </Form.Item>
+          </div>
+          <p className="secondary">
+            罗盘当天没有该条码记录（未上架、新品上架前）不计入分母，也不补0。
+          </p>
+          <h3>2. 覆盖周期与安全库存</h3>
+          <div style={grid}>
+            {days("purchaseLeadDays", "采购交期（天）", 1, 365, "下单到可售的天数，初始20天")}
+            {days("reviewDays", "补货复核间隔（天）", 1, 90, "多久看一次补货，初始每天")}
+            <Form.Item
+              name="serviceLevel"
+              label="服务水平（不缺货概率）"
+              rules={[{ required: true }]}
+              extra="安全库存 = z × 日销标准差 × √(交期+复核)"
+            >
+              <Select
+                aria-label="服务水平"
+                options={Object.entries(replenishmentServiceLevels).map(([value, item]) => ({
+                  value,
+                  label: item.z == null ? item.label : `${item.label}（z=${item.z}）`,
+                }))}
+              />
+            </Form.Item>
+            {days("safetyDays", "额外安全库存（天）", 0, 90, "在统计安全库存之外再加的天数")}
+          </div>
+          <h3>3. 下单规则</h3>
+          <div style={grid}>
+            {days("minOrderQty", "最小起订量（件）", 0, 1_000_000, "0 表示不限制")}
+            {days("packSize", "装箱倍数（件）", 1, 100_000, "建议量向上取整到该倍数")}
+            <Form.Item
+              name="stopDate"
+              label="季末停止销售日期（可留空）"
+              extra="到货晚于此日期时不建议补货；否则只覆盖到该日期"
+            >
+              <DatePicker style={{ width: "100%" }} />
+            </Form.Item>
+            {days("overstockDays", "滞销阈值（可售天数）", 1, 730, "可售天数超过此值标为滞销")}
+          </div>
+          <h3>4. 退货回仓</h3>
+          <div style={grid}>
+            {days("returnDaysMin", "最短可再售回仓周期（天）", 1, 365)}
+            {days("returnDaysMax", "最长可再售回仓周期（天）", 1, 365)}
+            <Form.Item
+              name="resalableRate"
+              label="退回商品预计可再售比例（%）"
               rules={[{ required: true }]}
             >
+              <InputNumber min={0} max={100} precision={2} style={{ width: "100%" }} />
+            </Form.Item>
+            <Form.Item
+              name="confirmedReturnRate"
+              label="已核验的订单批次退货率（%，可留空）"
+              extra="留空时不抵扣主建议，报表退货率只用于情景试算"
+            >
+              <InputNumber
+                min={0}
+                max={100}
+                precision={4}
+                placeholder="未核验，暂不抵扣"
+                style={{ width: "100%" }}
+              />
+            </Form.Item>
+          </div>
+          <h3>渠道日销与退货率参考列</h3>
+          <div style={grid}>
+            <Form.Item name="dailySalesMethod" label="渠道日销参考取值" rules={[{ required: true }]}>
               <Select
                 aria-label="渠道日销参考取值"
                 options={Object.entries(inventoryReferenceMethodLabels).map(
@@ -152,11 +250,7 @@ export function InventoryCalculationPanel({
                 )}
               />
             </Form.Item>
-            <Form.Item
-              name="returnRateMethod"
-              label="退货率参考取值"
-              rules={[{ required: true }]}
-            >
+            <Form.Item name="returnRateMethod" label="退货率参考取值" rules={[{ required: true }]}>
               <Select
                 aria-label="退货率参考取值"
                 options={Object.entries(inventoryReferenceMethodLabels).map(
@@ -165,123 +259,13 @@ export function InventoryCalculationPanel({
               />
             </Form.Item>
           </div>
-          <p>
-            中位数取排序后的中间值；众数取最高频次，多个数并列时取这些数的均值；平均值为有效每日记录合计÷有效天数。明确的0参与计算，缺失不补0。
-          </p>
-          <p>
-            预估销退数 = 所选期间销量合计 ×
-            退货率参考。报表每日退货率可能跨销售批次，仅作经营参考。
-          </p>
-          <h3>补货与可售天数</h3>
-          <p>
-            补货日均固定采用完整逐日销量的平均值；缺少完整记录时使用已维护的人工日销，并标注来源。可售天数
-            = 可售库存÷补货日均。
-          </p>
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "1fr 1fr",
-              gap: "0 20px",
-            }}
-          >
-            <Form.Item
-              name="purchaseLeadDays"
-              label="采购交期（天）"
-              rules={[{ required: true }]}
-              extra="通常3–20天，初始按20天"
-            >
-              <InputNumber
-                min={1}
-                max={365}
-                precision={0}
-                style={{ width: "100%" }}
-              />
-            </Form.Item>
-            <Form.Item
-              name="reviewDays"
-              label="补货复核间隔（天）"
-              rules={[{ required: true }]}
-              extra="初始每天复核一次"
-            >
-              <InputNumber
-                min={1}
-                max={90}
-                precision={0}
-                style={{ width: "100%" }}
-              />
-            </Form.Item>
-            <Form.Item
-              name="returnDaysMin"
-              label="最短可再售回仓周期（天）"
-              rules={[{ required: true }]}
-            >
-              <InputNumber
-                min={1}
-                max={365}
-                precision={0}
-                style={{ width: "100%" }}
-              />
-            </Form.Item>
-            <Form.Item
-              name="returnDaysMax"
-              label="最长可再售回仓周期（天）"
-              rules={[{ required: true }]}
-            >
-              <InputNumber
-                min={1}
-                max={365}
-                precision={0}
-                style={{ width: "100%" }}
-              />
-            </Form.Item>
-            <Form.Item
-              name="resalableRate"
-              label="退回商品预计可再售比例（%）"
-              rules={[{ required: true }]}
-            >
-              <InputNumber
-                min={0}
-                max={100}
-                precision={2}
-                style={{ width: "100%" }}
-              />
-            </Form.Item>
-            <Form.Item
-              name="safetyDays"
-              label="额外安全库存（天）"
-              rules={[{ required: true }]}
-              extra="初始为0；尚未按缺货容忍度设置缓冲"
-            >
-              <InputNumber
-                min={0}
-                max={90}
-                precision={0}
-                style={{ width: "100%" }}
-              />
-            </Form.Item>
-          </div>
-          <p>
-            回仓周期从销售发货日开始，截止质检合格可再售。未来第1天发货的商品，按15天周期最早在第16天重新可售。
-          </p>
-          <Form.Item
-            name="confirmedReturnRate"
-            label="已核验的订单批次退货率（%，可留空）"
-            extra="填写后用于本账号所有条码的补货估算，请仅在该概率适用于这些商品时填写。留空时，报表参考退货率只用于回仓情景试算，不抵扣主建议。"
-          >
-            <InputNumber
-              min={0}
-              max={100}
-              precision={4}
-              placeholder="未核验，暂不抵扣"
-              style={{ width: "100%" }}
-            />
-          </Form.Item>
+          <p className="secondary">这两项只影响「渠道日销参考」「退货率」列，不参与补货日均。</p>
         </Form>
         <Alert
           type="info"
           showIcon
-          title="主建议按补货日均、交期、复核间隔和安全库存估算。"
-          description="只模拟未来新发货的延迟退回，不将过去30天的预估销退数当作待回仓库存。没有预计可售日期的在途、进货仓数量需人工核对，暂不抵扣。保存参数不会下采购单或调整库存。"
+          title="补货建议 = 补货日均 × (交期 + 复核 + 额外安全天数) + 统计安全库存 − 在仓总库存，再按起订量和装箱倍数取整。"
+          description="在仓总库存按当前账号「计算字段」中的仓库总数公式计算。采购在途、调拨在途、进货仓没有预计可售日期，不抵扣，下单前请人工核对，避免重复采购。"
         />
       </Drawer>
     </>
@@ -290,68 +274,76 @@ export function InventoryCalculationPanel({
 
 function PlanDetails({ plan }: { plan: Row }) {
   const p = plan.policy as ReplenishmentPolicy;
+  const d = plan.demand;
   return (
     <div>
-      {plan.demand.reason && <div>{plan.demand.reason}</div>}
-      <div>
-        {plan.demand.source === "report_mean"
-          ? `期间销量 ${number(plan.demand.salesQty)} ÷ 完整 ${plan.demand.days} 天`
-          : "人工维护日销"}
-        ；补货日均 {number(plan.demand.dailySales)} 件
-      </div>
-      <div>
-        采购交期 {p.purchaseLeadDays} 天 + 复核间隔 {p.reviewDays} 天；安全库存{" "}
-        {p.safetyDays} 天
-      </div>
-      <div>
-        当前可售 {number(plan.availableQty)} 件；未抵扣退货的需求{" "}
-        {number(plan.grossQuantity)} 件
-      </div>
-      <div>
-        从销售发货至可再售 {p.returnDaysMin}–{p.returnDaysMax} 天；预计可再售{" "}
-        {number(p.resalableRate * 100)}%
-      </div>
-      {plan.scenarioReturnRate == null ? (
-        <div>
-          缺少有效退货概率，暂不估算回仓；大于100%的报表退货比不能作为概率。
-        </div>
-      ) : (
+      {d.reason && <div>{d.reason}</div>}
+      {d.source === "report_weighted" ? (
         <>
           <div>
-            {p.confirmedReturnRate == null
-              ? "报表参考退货率情景（未核验订单批次）"
-              : "人工核验订单批次退货率"}
-            ：{number(plan.scenarioReturnRate * 100)}%
+            有效在售 {d.validDays} 天（剔除缺货 {d.stockoutDays?.length ?? 0} 天、无记录 {d.noRecordDays} 天）
           </div>
           <div>
-            {plan.horizonDays} 天内未来新发货预计可再售回仓：
-            {number(plan.expectedReusableReturnsMin)}–
-            {number(plan.expectedReusableReturnsMax)} 件
+            周期日均 {number(d.windowMean)}
+            {d.recentMean != null
+              ? `；近7天日均 ${number(d.recentMean)}（${d.recentDays} 天，权重 ${number(d.recentWeight * 100)}%）`
+              : "；近7天有效天数不足3天，未加权"}
+          </div>
+          {d.cappedDays?.length > 0 && (
+            <div>
+              峰值截断（上限 {number(d.cap)} 件）：
+              {d.cappedDays.map((c: Row) => `${c.date.slice(5)} ${c.salesQty}→${number(c.cappedQty)}`).join("、")}
+            </div>
+          )}
+        </>
+      ) : d.source === "report_mean" ? (
+        <div>期间销量 {number(d.salesQty)} ÷ 完整 {d.days} 天</div>
+      ) : d.source === "manual" ? (
+        <div>人工维护日销</div>
+      ) : null}
+      {d.dailySales != null && <div>补货日均 {number(d.dailySales)} 件</div>}
+      {plan.status === "MISSING" && plan.warningCodes?.includes("MISSING_STOCK") && (
+        <div>{plan.availableStockLabel ?? "在仓总库存"}无法计算（未匹配聚水潭或尚未在「计算字段配置」保存公式），暂不估算。</div>
+      )}
+      {plan.quantity != null && (
+        <>
+          <div>
+            覆盖 {plan.horizonDays} 天（交期 {p.purchaseLeadDays} + 复核 {p.reviewDays}
+            {plan.daysToStop != null ? `，季末剩余 ${plan.daysToStop} 天` : ""}）+ 额外 {p.safetyDays} 天
           </div>
           <div>
-            抵扣情景需求：{number(plan.returnAdjustedQuantityMin)}–
-            {number(plan.returnAdjustedQuantityMax)} 件；
-            {p.confirmedReturnRate == null
-              ? "主建议未抵扣"
-              : "主建议采用最长回仓周期"}
+            统计安全库存{" "}
+            {plan.serviceLevelZ == null
+              ? "未启用"
+              : d.stdDev == null
+                ? "无法计算（缺少逐日波动）"
+                : `${number(plan.safetyStock)} 件 = ${plan.serviceLevelZ} × σ${number(d.stdDev)} × √${plan.horizonDays}`}
           </div>
+          <div>
+            目标库存 {number(plan.targetStock)} − {plan.availableStockLabel ?? "在仓总库存"} {number(plan.availableQty)} → {plan.rawQuantity} 件
+            {plan.quantity !== plan.rawQuantity &&
+              `，按起订量 ${p.minOrderQty} / 装箱 ${p.packSize} 取整为 ${plan.quantity} 件`}
+          </div>
+          {plan.scenarioReturnRate != null && (
+            <div>
+              {p.confirmedReturnRate == null ? "报表退货率情景（未核验，不抵扣）" : "已核验退货率"}{" "}
+              {number(plan.scenarioReturnRate * 100)}%：抵扣后 {number(plan.returnAdjustedQuantityMin)}–
+              {number(plan.returnAdjustedQuantityMax)} 件
+            </div>
+          )}
+          {plan.unconfirmedInboundQty > 0 && (
+            <div>
+              另有在途及进货仓 {number(plan.unconfirmedInboundQty)} 件，预计可售日未知，未抵扣；下单前核对。
+            </div>
+          )}
+          {plan.shortageBeforeArrival > 0 && (
+            <div>
+              到货前预计缺口 {number(plan.shortageBeforeArrival)} 件，常规采购来不及，需评估加急或调拨。
+            </div>
+          )}
+          {plan.status === "SEASON_END" && <div>按交期到货已晚于季末停止销售日期，不建议补货。</div>}
         </>
       )}
-      {plan.unconfirmedInboundQty > 0 && (
-        <div>
-          另有在途及进货仓 {number(plan.unconfirmedInboundQty)}{" "}
-          件，预计可售日未知，未抵扣；下单前核对，避免重复采购。
-        </div>
-      )}
-      {plan.shortageBeforeArrival > 0 && (
-        <div>
-          到货前预计缺口 {number(plan.shortageBeforeArrival)}{" "}
-          件，需评估加急或调拨；常规采购不能解决交期内缺货。
-        </div>
-      )}
-      <div>
-        既往订单待退回数量未知，不重复计入；未来发货按可满足需求的情景估算。尚未校准季节、促销及缺货造成的销量损失。
-      </div>
     </div>
   );
 }
@@ -372,21 +364,18 @@ export function ReplenishmentValue({
     );
   const value = row[field];
   const text =
-    value == null
-      ? "补货日均为0"
-      : number(Number(value)) +
-        (field === "coverageDays"
-          ? "天"
-          : field === "replenishmentQty"
-            ? "件"
-            : "");
+    field === "replenishmentQty" && value == null
+      ? "暂不估算"
+      : value == null
+        ? field === "coverageDays" ? "日均为0" : "—"
+        : number(Number(value)) +
+          (field === "coverageDays" ? "天" : field === "replenishmentQty" ? "件" : "");
   return (
     <Tooltip trigger={["hover", "focus"]} title={<PlanDetails plan={plan} />}>
       <span tabIndex={0}>
         {text}
         {field === "replenishmentQty" &&
-          (plan.unconfirmedInboundQty > 0 ||
-            plan.shortageBeforeArrival > 0) && (
+          (plan.unconfirmedInboundQty > 0 || plan.shortageBeforeArrival > 0) && (
             <span style={{ marginLeft: 6, color: "var(--app-warning)", fontSize: 12 }}>
               需核对
             </span>
@@ -396,18 +385,54 @@ export function ReplenishmentValue({
   );
 }
 
+const statusColors: Record<ReplenishmentStatus, string> = {
+  MISSING: "default",
+  SEASON_END: "purple",
+  URGENT: "red",
+  REORDER: "orange",
+  OVERSTOCK: "blue",
+  OK: "green",
+};
+
+export function replenishmentStatusText(row: Row) {
+  const status = row.replenishmentPlan?.status as ReplenishmentStatus | undefined;
+  return status ? replenishmentStatusLabels[status] : "";
+}
+
+export function ReplenishmentStatusTag({ row }: { row: Row }) {
+  const plan = row.replenishmentPlan;
+  if (!plan) return <span>—</span>;
+  const status = plan.status as ReplenishmentStatus;
+  return (
+    <Tooltip trigger={["hover", "focus"]} title={<PlanDetails plan={plan} />}>
+      <Tag tabIndex={0} color={statusColors[status]}>
+        {replenishmentStatusLabels[status]}
+      </Tag>
+    </Tooltip>
+  );
+}
+
 export function replenishmentExportNote(row: Row) {
   const plan = row.replenishmentPlan;
   if (!plan) return "";
-  if (plan.quantity == null) return `补货数据不足：${plan.demand.reason}`;
-  const p = plan.policy;
+  if (plan.quantity == null)
+    return `补货数据不足：${plan.demand.reason ?? (plan.warningCodes?.includes("MISSING_STOCK") ? "在仓总库存无法计算" : "")}`;
+  const p = plan.policy as ReplenishmentPolicy;
+  const d = plan.demand;
+  const demandText =
+    d.source === "report_weighted"
+      ? `补货日均${number(d.dailySales)}（有效${d.validDays}天，剔除缺货${d.stockoutDays?.length ?? 0}天，截断峰值${d.cappedDays?.length ?? 0}天，近7天权重${number((d.recentWeight ?? 0) * 100)}%）`
+      : d.source === "manual"
+        ? `人工日销${number(d.dailySales)}`
+        : `完整逐日日均${number(d.dailySales)}`;
   return (
-    `补货按${plan.demand.source === "report_mean" ? "完整逐日日均" : "人工日销"}；交期${p.purchaseLeadDays}天+复核${p.reviewDays}天+安全库存${p.safetyDays}天；` +
-    `回仓${p.returnDaysMin}–${p.returnDaysMax}天（销售发货至可再售），可再售${number(p.resalableRate * 100)}%；` +
-    (p.confirmedReturnRate == null
-      ? "订单批次退货率未核验，主建议不抵扣退货；"
-      : `人工核验退货率${number(p.confirmedReturnRate * 100)}%，按最长回仓周期抵扣未来新发货的预计退货；`) +
-    `未抵扣退货需求${plan.grossQuantity}件；回仓情景需求${plan.returnAdjustedQuantityMin ?? "—"}–${plan.returnAdjustedQuantityMax ?? "—"}件；` +
-    `预计可售日未知的在途及进货仓${plan.unconfirmedInboundQty}件未抵扣；到货前预计缺口${plan.shortageBeforeArrival}件；既往订单待回仓不作估计；需人工核对`
+    `${demandText}；覆盖${plan.horizonDays}天+额外${p.safetyDays}天；` +
+    `安全库存${plan.serviceLevelZ == null ? "未启用" : `${number(plan.safetyStock)}件(服务水平${p.serviceLevel}%)`}；` +
+    `目标库存${number(plan.targetStock)}−${plan.availableStockLabel ?? "在仓总库存"}${number(plan.availableQty)}=${plan.rawQuantity}件` +
+    (plan.quantity !== plan.rawQuantity ? `，取整后${plan.quantity}件` : "") +
+    `；状态${replenishmentStatusLabels[plan.status as ReplenishmentStatus]}` +
+    (p.confirmedReturnRate == null ? "；退货率未核验不抵扣" : `；按核验退货率${number(p.confirmedReturnRate * 100)}%抵扣`) +
+    (plan.unconfirmedInboundQty > 0 ? `；在途及进货仓${plan.unconfirmedInboundQty}件未抵扣需核对` : "") +
+    (plan.shortageBeforeArrival > 0 ? `；到货前缺口${plan.shortageBeforeArrival}件` : "")
   );
 }

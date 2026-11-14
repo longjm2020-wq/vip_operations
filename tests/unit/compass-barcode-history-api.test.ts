@@ -154,27 +154,41 @@ describe("complete barcode daily history and inventory median windows", () => {
     expect((await query("SELECT main_image_url FROM products WHERE id=1"))[0].main_image_url).toBe("https://example.com/catalog.jpg");
   });
 
-  it("keeps the median reference and calculates replenishment from complete daily demand", async () => {
+  it("keeps the median reference and calculates replenishment from weighted daily demand with spike capping", async () => {
     await finish(await report(shiftCompassDate(day, -29), day, { sales: 0 }));
     await finish(await report(day, day, { sales: 30 }));
     const row = (await summary()).data[0];
     expect(row.dailySales).toBe(0);
-    expect(row.planningDailySales).toBe(1);
-    expect(row.coverageDays).toBe(14);
-    expect(row.replenishmentQty).toBe(7);
-    expect(row.replenishmentPlan).toMatchObject({ demand: { source: "report_mean", salesQty: 30, days: 30 },
-      availableQty: 14, grossQuantity: 7, quantity: 7 });
+    // 29 zero-sale days + 1 spike day (30 capped to 3): windowMean = 3/30 = 0.1, recentMean = 3/7, weighted = 0.19857143
+    expect(row.planningDailySales).toBe(0.19857143);
+    expect(row.coverageDays).toBe(70.5);
+    expect(row.replenishmentQty).toBe(0);
+    expect(row.replenishmentPlan).toMatchObject({
+      demand: { source: "report_weighted", salesQty: 30, days: 30, validDays: 30, cap: 3 },
+      availableQty: 14,
+      quantity: 0,
+      status: "OK",
+    });
     expect((await query("SELECT daily_sales FROM inventory_sku_references WHERE sku_id=1"))[0].daily_sales).toBe("8");
   });
 
-  it("does not use a partially recorded SKU average as a complete planning window", async () => {
+  it("treats unrecorded pre-launch days as absent and falls back to manual when valid in-stock days are below minValidDays", async () => {
     await finish(await report(shiftCompassDate(day, -29), day));
     await finish(await report(day, day, { omitBarcode: true }));
     const row = (await summary()).data[0];
     expect(row.channelReference.recordedDays).toBe(29);
     expect(row.dailySales).toBe(3);
-    expect(row.planningDailySales).toBe(8);
-    expect(row.replenishmentPlan.demand.source).toBe("manual");
+    expect(row.planningDailySales).toBe(3);
+    expect(row.replenishmentPlan.demand).toMatchObject({
+      source: "report_weighted",
+      validDays: 29,
+      noRecordDays: 1,
+    });
+    // When valid days are fewer than minValidDays (7), falls back to manual daily sales (8)
+    await finish(await report(shiftCompassDate(day, -29), shiftCompassDate(day, -5), { omitBarcode: true }));
+    const scarce = (await summary()).data[0];
+    expect(scarce.planningDailySales).toBe(8);
+    expect(scarce.replenishmentPlan.demand.source).toBe("manual");
   });
 
   it("does not allocate a shared barcode's channel demand twice, even when filtering one SKU", async () => {
@@ -231,7 +245,7 @@ describe("complete barcode daily history and inventory median windows", () => {
     await finish(await report(day, day, { sales: 9, rate: 0.5 }));
     const c = context(); c.actor.permissions.push("inventory.read");
     await saveReplenishmentPolicy(c, { revision: 0, policy: { ...defaultReplenishmentPolicy,
-      referencePeriod: "3d", dailySalesMethod: "mean", returnRateMethod: "mode" } });
+      referencePeriod: "3d", dailySalesMethod: "mean", returnRateMethod: "mode", minValidDays: 3, capSpikes: false } });
     const result = await summary({}, "1"), row = result.data[0];
     expect(result.reportCoverage.window).toMatchObject({ period: "3d", days: 3, method: "mean" });
     expect(row.dailySales).toBe(5);

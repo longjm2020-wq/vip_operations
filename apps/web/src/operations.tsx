@@ -6,8 +6,8 @@ import { JushuitanInventory } from "./jushuitan-inventory";
 import { jushuitanStockFields } from "../../../packages/contracts/src/jushuitan-inventory";
 import { InventoryFormulaPanel } from "./inventory-formula-panel";
 import type { InventoryCalculationField } from "../../../packages/contracts/src/inventory-formula";
-import { InventoryReferenceValue } from "./inventory-reference-value";
-import { ReplenishmentValue } from "./inventory-replenishment";
+import { InventoryReferenceValue, InventoryEstimateValue } from "./inventory-reference-value";
+import { InventoryCalculationPanel, ReplenishmentStatusTag, ReplenishmentValue, replenishmentExportNote, replenishmentStatusText } from "./inventory-replenishment";
 import { inventoryReferenceMethodLabels, type InventoryReferenceMethod } from "../../../packages/contracts/src/compass-inventory-reference";
 import { InventoryColumnPinning } from "./inventory-column-pinning";
 import { InventoryColumnGroups } from "./inventory-column-groups";
@@ -210,12 +210,17 @@ function InventoryBalances() {
     {
       title: "可售天数",
       dataIndex: "coverageDays",
-      render: () => "暂不估算",
+      render: (_, row) => <InventoryEstimateValue row={row} field="coverageDays" />,
     },
     {
       title: "补货建议",
       dataIndex: "replenishmentQty",
-      render: () => "暂不估算",
+      render: (_, row) => <InventoryEstimateValue row={row} field="replenishmentQty" />,
+    },
+    {
+      title: "补货状态",
+      dataIndex: "replenishmentStatus",
+      render: (_, row) => <ReplenishmentStatusTag row={row} />,
     },
     { title: "条码状态", dataIndex: "barcodeListingState", render: (_, row) => <InventoryListingStatus row={row} /> },
     { title: "款号状态", dataIndex: "styleListingState", render: (_, row) => <InventoryListingStatus row={row} style /> },
@@ -233,6 +238,7 @@ function InventoryBalances() {
     "coverageDays",
     "replenishmentQty",
     "planningDailySales",
+    "replenishmentStatus",
     "barcodeListingState",
   ]);
   const columns = allColumns.filter((column) => {
@@ -281,14 +287,14 @@ function InventoryBalances() {
             ([key, label]) =>
               `${label}：${row.channelReference?.[key]?.value != null ? (key === "estimatedReturns" ? `期间销量×退货率${methodLabel(row.channelReference.returnRate?.method)}` : `罗盘${methodLabel(row.channelReference[key].method)}`) : row[key] != null ? "人工参考" : "暂无数据"}`,
           ),
-          "聚水潭库存暂不估算补货建议和可售天数",
+          replenishmentExportNote(row) || "补货数据尚未加载",
         ].join("；")
       : "库存总计；经营参考不汇总",
   });
   const summaryInfo = (
     <>
       <div className="inventory-report-coverage secondary">
-        {`库存来源：聚水潭 · ${q.data?.stockSourceInfo?.warehouseName ?? "序缇杭州总仓"}。未匹配编码或字段显示暂无数据，汇总含缺失值时显示不完整。在仓总库存按当前账号公式计算；暂不估算补货建议和可售天数。`}
+        {`库存来源：聚水潭 · ${q.data?.stockSourceInfo?.warehouseName ?? "序缇杭州总仓"}。未匹配编码或字段显示暂无数据，汇总含缺失值时显示不完整。在仓总库存按当前账号公式计算；补货建议以在仓总库存为可用库存，采购在途、调拨在途和进货仓没有预计可售日，不抵扣、仅提示核对。`}
       </div>
       {skuView && q.data?.reportCoverage && (
         <div className="inventory-report-coverage secondary" role="status">
@@ -387,6 +393,12 @@ function InventoryBalances() {
           </Space>
           <Space>
             {manager}
+            {skuView && (
+              <InventoryCalculationPanel
+                referencePeriod={effectivePeriod}
+                onSaved={(period) => { setReferencePeriod(period); q.setPage(1); }}
+              />
+            )}
             <InventoryFormulaPanel records={q.items} skuView={skuView} />
             {canImportSku && <InventorySkuImport onDone={() => void q.refetch()} />}
             <Button
@@ -436,7 +448,7 @@ function InventoryBalances() {
                       },
                     );
                   const exportRow = (row: Row, total = false) => ({
-                    stockSourceNote: `聚水潭 · ${q.data?.stockSourceInfo?.warehouseName} · 同步 ${when(q.data?.stockSourceInfo?.finishedAt)}；空白库存表示未匹配或原表未提供数量；补货暂不估算`,
+                    stockSourceNote: `聚水潭 · ${q.data?.stockSourceInfo?.warehouseName} · 同步 ${when(q.data?.stockSourceInfo?.finishedAt)}；空白库存表示未匹配或原表未提供数量；补货按在仓总库存估算`,
                     calculationNote: calculationFields.length ? `${calculationFields.map(field => `${calculationLabel(field)}：${field.formula}`).join("；")}；逐商品计算并保留4位小数后汇总，缺失值和除零不补0` : "未显示计算字段",
                     ...Object.fromEntries(
                       keys.map((key) => [
@@ -448,6 +460,8 @@ function InventoryBalances() {
                           : key === "listingCheckedAt" ? when(row[key])
                           : key === "lastListingChangeAt" ? inventoryListingChange(row)
                           : key === "lastListingChangeType" ? inventoryListingOperation(row)
+                          : key === "replenishmentStatus"
+                          ? total ? "—" : replenishmentStatusText(row)
                           : key === "periodSalesQty"
                           ? total ? "—" : (row.channelReference?.salesQty ?? null)
                           : key === "articleNo" &&

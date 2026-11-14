@@ -44,6 +44,7 @@ const defaults: SelectionColumnGroup[] = [
       "planningDailySales",
       "coverageDays",
       "replenishmentQty",
+      "replenishmentStatus",
     ],
   },
   {
