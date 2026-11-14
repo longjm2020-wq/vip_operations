@@ -98,24 +98,24 @@
 }
 :root,
 :root[data-theme="dark"] {
-  --companion-blue-core: #ffffff;
-  --companion-blue-inner: var(--app-logo-highlight);
+  --companion-blue-core: #edf2ff;
+  --companion-blue-inner: color-mix(in srgb, var(--app-accent) 80%, #ffffff);
   --companion-blue-mid: var(--app-accent);
   --companion-blue-edge: #4d6bff;
   --companion-blue-glow: var(--app-accent-hover);
-  --companion-blue-halo: color-mix(in srgb, var(--app-accent) 92%, transparent);
-  --companion-blue-ambient: color-mix(in srgb, var(--app-accent-fill) 65%, transparent);
-  --companion-mouth-stroke: #c4d1ff;
+  --companion-blue-halo: color-mix(in srgb, var(--app-accent) 90%, transparent);
+  --companion-blue-ambient: color-mix(in srgb, var(--app-accent-fill) 55%, transparent);
+  --companion-mouth-stroke: color-mix(in srgb, var(--app-accent) 80%, #ffffff);
 }
 :root[data-theme="light"] {
-  --companion-blue-core: #ffffff;
-  --companion-blue-inner: #d2dcff;
-  --companion-blue-mid: #6e85ff;
+  --companion-blue-core: #dfe5ff;
+  --companion-blue-inner: #697eea;
+  --companion-blue-mid: #536de7;
   --companion-blue-edge: var(--app-accent);
-  --companion-blue-glow: #9aaeff;
-  --companion-blue-halo: color-mix(in srgb, var(--app-accent) 95%, transparent);
-  --companion-blue-ambient: color-mix(in srgb, var(--app-accent) 60%, transparent);
-  --companion-mouth-stroke: #9fb0ff;
+  --companion-blue-glow: #8da0f5;
+  --companion-blue-halo: color-mix(in srgb, var(--app-accent) 92%, transparent);
+  --companion-blue-ambient: color-mix(in srgb, var(--app-accent) 55%, transparent);
+  --companion-mouth-stroke: #697eea;
 }
 .companion-eye-dot {
   display: block;
@@ -123,17 +123,16 @@
   height: 100%;
   border-radius: 999px;
   background: radial-gradient(
-    circle at 42% 35%,
+    circle at 38% 32%,
     var(--companion-blue-core) 0%,
-    var(--companion-blue-inner) 28%,
-    var(--companion-blue-mid) 64%,
+    var(--companion-blue-inner) 26%,
+    var(--companion-blue-mid) 62%,
     var(--companion-blue-edge) 100%
   );
   box-shadow:
-    0 0 1px var(--companion-blue-core),
-    0 0 2.5px var(--companion-blue-glow),
-    0 0 5px var(--companion-blue-halo),
-    0 0 8px var(--companion-blue-ambient);
+    0 0 0.8px var(--companion-blue-glow),
+    0 0 3px var(--companion-blue-halo),
+    0 0 6px var(--companion-blue-ambient);
   transform-origin: 50% 50%;
   animation: companion-blink 5.4s ease-in-out infinite;
 }
@@ -199,9 +198,9 @@
     var(--companion-mouth-x, 0px),
     var(--companion-mouth-y, 0px)
   );
-  filter: drop-shadow(0 0 0.7px var(--companion-blue-core))
-    drop-shadow(0 0 2px var(--companion-blue-glow))
-    drop-shadow(0 0 5px var(--companion-blue-halo));
+  filter: drop-shadow(0 0 0.8px var(--companion-blue-glow))
+    drop-shadow(0 0 3px var(--companion-blue-halo))
+    drop-shadow(0 0 5px var(--companion-blue-ambient));
 }
 .companion-mouth-smile,
 .companion-mouth-open {
