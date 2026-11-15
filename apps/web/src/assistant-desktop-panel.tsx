@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Alert, App, Button, Empty, Space, Tag, Typography } from "antd";
 import {
   DownloadOutlined,
@@ -15,6 +15,7 @@ import {
 } from "../../../packages/contracts/src/assistant-desktop";
 
 export function AssistantDesktopPanel({
+  open,
   data,
   error,
   refresh,
@@ -25,6 +26,7 @@ export function AssistantDesktopPanel({
   setupNote = "",
   selectedId,
 }: {
+  open: boolean;
   data?: DesktopState;
   error: string;
   refresh: () => void;
@@ -36,6 +38,12 @@ export function AssistantDesktopPanel({
   selectedId?: string;
 }) {
   const { message } = App.useApp();
+  const panelRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    if (!open) return;
+    const scroller = panelRef.current?.closest<HTMLElement>(".ant-drawer-body");
+    if (scroller) scroller.scrollTop = 0;
+  }, [open]);
   const [pair, setPair] = useState<{ code: string; expiresAt: string } | null>(
     null,
   );
@@ -68,7 +76,7 @@ export function AssistantDesktopPanel({
     }
   }
   return (
-    <div className="assistant-desktop-panel">
+    <div className="assistant-desktop-panel" ref={panelRef}>
       <div className="assistant-desktop-heading">
         <h3>
           <DesktopOutlined /> 电脑操作

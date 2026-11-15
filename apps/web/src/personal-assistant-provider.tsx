@@ -1379,6 +1379,7 @@ export function PersonalAssistantProvider({
         )}
         {section === "desktop" && allowed && (
           <AssistantDesktopPanel
+            open={open && drawerSettled}
             data={desktop.data}
             error={desktop.error?.message || ""}
             refresh={() => void desktop.refetch()}

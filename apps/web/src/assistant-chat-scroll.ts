@@ -115,7 +115,13 @@ export function useAssistantChatScroll(
     ) as HTMLElement | null;
     if (!scroller) return;
 
-    const pin = () => controller.pin(scroller);
+    let disposed = false;
+    const pin = () => {
+      // The drawer body is reused by other panels before passive cleanup runs.
+      if (disposed || !scroller.classList.contains("assistant-chat-body"))
+        return;
+      controller.pin(scroller);
+    };
     pin();
     let inner = 0;
     const outer = requestAnimationFrame(() => {
@@ -132,6 +138,7 @@ export function useAssistantChatScroll(
     if (content && content !== scroller) ro.observe(content);
 
     return () => {
+      disposed = true;
       cancelAnimationFrame(outer);
       cancelAnimationFrame(inner);
       scroller.removeEventListener("scroll", onScroll);

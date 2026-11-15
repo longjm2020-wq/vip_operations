@@ -869,6 +869,92 @@ test("电脑操作面板选择设备并撤销授权，输入区仅显示当前�
   await expect(composer.getByPlaceholder(/告诉我你想完成什么/)).toBeVisible();
 });
 
+test("长聊天打开电脑面板从顶部显示连接入口，刷新任务保留手动滚动", async ({
+  page,
+}) => {
+  await desktopScenario(page, false);
+  await page.route("**/api/v1/my-workspace/assistant", (route) =>
+    route.fulfill({
+      json: {
+        data: {
+          ready: true,
+          state: "IDLE",
+          version: 1,
+          error: "",
+          messages: Array.from({ length: 30 }, (_, index) => ({
+            id: `history-${index}`,
+            role: index % 2 ? "assistant" : "user",
+            text: `第 ${index + 1} 条历史对话：核对库存与供应商更新情况。\n${"这是保留的聊天内容。".repeat(20)}`,
+            createdAt: new Date().toISOString(),
+          })),
+        },
+      },
+    }),
+  );
+  let stage = "已完成历史电脑操作";
+  await page.route("**/api/v1/my-workspace/assistant/desktop", (route) =>
+    route.fulfill({
+      json: {
+        data: {
+          devices: [],
+          tasks: Array.from({ length: 10 }, (_, index) => ({
+            id: `desktop-history-${index}`,
+            status: "DONE",
+            scope: "device",
+            instruction: `历史电脑任务 ${index + 1}`,
+            deviceName: "本机测试电脑",
+            window: "测试文档",
+            step: 3,
+            updatedAt: new Date().toISOString(),
+            stage,
+          })),
+        },
+      },
+    }),
+  );
+  await page.goto("/my-workspace");
+  await openPersonalAssistant(page);
+  const dialog = page.getByRole("dialog", { name: /AI 个人助理/ });
+  const body = dialog.locator(".ant-drawer-body");
+  await expect
+    .poll(() => body.evaluate((el) => el.scrollTop))
+    .toBeGreaterThan(500);
+  await dialog.getByRole("button", { name: "电脑操作", exact: true }).click();
+  const panel = dialog.locator(".assistant-desktop-panel");
+  await expect(panel.getByRole("status")).toHaveCount(10);
+  await expect.poll(() => body.evaluate((el) => el.scrollTop)).toBe(0);
+  await expect(
+    panel.getByRole("heading", { name: /电脑操作/ }),
+  ).toBeInViewport({ ratio: 1 });
+  await expect(
+    panel.getByRole("link", { name: "下载 Windows 桌面端" }),
+  ).toBeInViewport({ ratio: 1 });
+  await page.screenshot({ path: ".local/desktop-panel-scroll-top.png" });
+
+  await body.evaluate((el) => {
+    el.scrollTop = 360;
+  });
+  stage = "任务状态已刷新";
+  await page.evaluate(async () => {
+    const modulePath = "/src/api.ts";
+    const { queryClient } = await import(modulePath);
+    await queryClient.invalidateQueries({ queryKey: ["assistant-desktop"] });
+  });
+  await expect(panel.getByRole("status").first()).toHaveText(stage);
+  expect(await body.evaluate((el) => el.scrollTop)).toBe(360);
+
+  await dialog.locator(".ant-drawer-close").click();
+  await expect(dialog).toBeHidden();
+  await page
+    .locator(".assistant-compose:visible")
+    .getByRole("button", { name: "电脑操作", exact: true })
+    .click();
+  await expect.poll(() => body.evaluate((el) => el.scrollTop)).toBe(0);
+  await expect(
+    panel.getByRole("link", { name: "下载 Windows 桌面端" }),
+  ).toBeInViewport({ ratio: 1 });
+});
+
 test("取消本机授权保留团队模式和原文附件，重试成功才切换电脑", async ({
   page,
 }) => {
