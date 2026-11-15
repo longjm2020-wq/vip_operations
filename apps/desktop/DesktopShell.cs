@@ -14,7 +14,7 @@ using Microsoft.Web.WebView2.WinForms;
 namespace XutiDesktop {
 static class ShellPolicy {
     public const string Origin = "https://vip-web-production.up.railway.app";
-    public const string Version = "1.2.2";
+    public const string Version = "1.2.3";
     public const string SetupPath = "/my-workspace?assistant=desktop&connect=1";
     public static bool Trusted(string value) {
         Uri uri;
@@ -224,7 +224,7 @@ sealed class DesktopShell : Form {
             // No native object, token, filesystem or execution API is injected into any page.
             await core.AddScriptToExecuteOnDocumentCreatedAsync(@"(() => {
                 if (window !== window.top || location.origin !== 'https://vip-web-production.up.railway.app') return;
-                Object.defineProperty(window, 'xutiDesktop', {value: Object.freeze({version:'1.2.2'}), writable:false});
+                Object.defineProperty(window, 'xutiDesktop', {value: Object.freeze({version:'1.2.3'}), writable:false});
                 const theme = () => window.chrome.webview.postMessage({channel:'xuti-desktop',action:'theme',value:document.documentElement.dataset.theme === 'dark'?'dark':'light'});
                 addEventListener('DOMContentLoaded', () => {theme();new MutationObserver(theme).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});});
             })();");

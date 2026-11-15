@@ -71,6 +71,10 @@ import type { AssistantVoiceStatus } from "../../../packages/contracts/src/assis
 import { workspaceHologramEvent } from "./workspace-hologram";
 import { workspaceTeamEvent } from "./workspace-team-navigation";
 import { AssistantDesktopPanel } from "./assistant-desktop-panel";
+import {
+  AssistantDesktopTaskCard,
+  isActiveDesktopTask,
+} from "./assistant-desktop-task-card";
 import { isDesktopClient } from "./desktop-client";
 import {
   connectAndAuthorizeDesktop,
@@ -265,6 +269,9 @@ export function PersonalAssistantProvider({
   });
   const desktopTarget = desktop.data?.devices.find(
     (device) => device.id === desktopTargetId,
+  );
+  const activeDesktopTask = desktop.data?.tasks.find(
+    (task) => task.deviceId === desktopTargetId && isActiveDesktopTask(task),
   );
   // A remembered ID is only routed after the current account's server list confirms ownership.
   const desktopDeviceId = desktopTarget?.id;
@@ -644,6 +651,27 @@ export function PersonalAssistantProvider({
     speech.stop();
     if (voiceReply && voiceStatus.data?.ready) speech.prepare();
     try {
+      if (desktopDeviceId) {
+        const current = await desktop.refetch();
+        if (
+          !desktopSetupLifecycle.current.mounted ||
+          currentOwner.current !== user.id
+        )
+          return;
+        if (current.error || !current.data)
+          throw new Error("暂时无法核对电脑任务，请刷新后重试。");
+        if (
+          current.data.tasks.some(
+            (task) =>
+              task.deviceId === desktopDeviceId && isActiveDesktopTask(task),
+          )
+        ) {
+          message.info(
+            "已显示当前电脑任务。指令已保留，请继续或停止当前任务，无需重复发送。",
+          );
+          return;
+        }
+      }
       const response = await api("/my-workspace/assistant", "POST", {
         message: value.trim(),
         version: data.version,
@@ -655,20 +683,18 @@ export function PersonalAssistantProvider({
         desktopDeviceId,
         webOpenResult,
       });
-      setText("");
-      setAgent((previous) => ({ ...previous, attachments: [] }));
+      if (!desktopDeviceId || response.data.state !== "FAILED") {
+        setText("");
+        setAgent((previous) => ({ ...previous, attachments: [] }));
+      }
       void jobs.refetch();
+      if (desktopDeviceId) await desktop.refetch();
       const latest = (response.data as AssistantConversation).messages?.at(-1);
       if (response.data.state === "IDLE" && latest?.role === "assistant") {
         const tool = available.find((entry) => entry.id === latest.navigation);
         if (tool) {
           navigate(tool.path);
           setOpen(false);
-        }
-        if (latest.desktopTaskId) {
-          void desktop.refetch();
-          setSection("desktop");
-          setOpen(true);
         }
       }
       if (
@@ -901,6 +927,14 @@ export function PersonalAssistantProvider({
       inert={!inDrawer && inWorkspace && open}
       aria-hidden={!inDrawer && inWorkspace && open ? true : undefined}
     >
+      {!teamMode && activeDesktopTask && (
+        <AssistantDesktopTaskCard
+          task={activeDesktopTask}
+          device={desktopTarget}
+          compact
+          refresh={() => desktop.refetch()}
+        />
+      )}
       <div className="assistant-desktop-entry">
         <Button
           size="small"
@@ -1382,7 +1416,7 @@ export function PersonalAssistantProvider({
             open={open && drawerSettled}
             data={desktop.data}
             error={desktop.error?.message || ""}
-            refresh={() => void desktop.refetch()}
+            refresh={() => desktop.refetch()}
             choose={chooseDesktop}
             connectLocal={() => void setupDesktop()}
             connecting={desktopConnecting}
@@ -1589,11 +1623,29 @@ export function PersonalAssistantProvider({
                   {!item.schedules?.length && (
                     <AgentMessageResults item={item} jobs={jobs.data || []} />
                   )}
-                  {item.desktopTaskId && (
-                    <Button size="small" onClick={() => setSection("desktop")}>
-                      查看电脑任务进度
-                    </Button>
-                  )}
+                  {item.desktopTaskId &&
+                    item.desktopTaskId !== activeDesktopTask?.id &&
+                    (() => {
+                      const task = desktop.data?.tasks.find(
+                        (entry) => entry.id === item.desktopTaskId,
+                      );
+                      return task ? (
+                        <AssistantDesktopTaskCard
+                          task={task}
+                          device={desktop.data?.devices.find(
+                            (entry) => entry.id === task.deviceId,
+                          )}
+                          refresh={() => desktop.refetch()}
+                        />
+                      ) : (
+                        <Button
+                          size="small"
+                          onClick={() => setSection("desktop")}
+                        >
+                          查看电脑任务进度
+                        </Button>
+                      );
+                    })()}
                 </div>
               ),
             )}

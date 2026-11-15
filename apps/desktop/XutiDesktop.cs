@@ -84,6 +84,11 @@ sealed class AssistantForm : Form {
     bool started, pairing, isolatedPreview;
     WindowChoice selected;
     bool polling, working, armed, closing, captureBlocked, allowing;
+    bool manualPauseSent, manualPausePending;
+    long manualPauseVersion=-1;
+    string manualPauseNote="", startFailureNote="", executingKind="";
+    Action<Action> manualPauseDispatch;
+    Func<WindowChoice> startWindowOverride;
     long epoch;
     Dictionary<string, object> task;
     readonly Dictionary<string, string> journal = new Dictionary<string, string>();
@@ -106,7 +111,7 @@ sealed class AssistantForm : Form {
         layout.Controls.Add(instruction); layout.Controls.Add(status);
         var controls = new FlowLayoutPanel { AutoSize = true };
         controls.Controls.Add(allow); controls.Controls.Add(pause); controls.Controls.Add(stop); layout.Controls.Add(controls);
-        layout.Controls.Add(new Label { AutoSize = true, MaximumSize = new Size(570, 0), Margin = new Padding(0, 10, 0, 8), Text = "手动操作鼠标或键盘会暂停。登录、付款、发送和删除仍由你接手；暂停后无需重新授权。" });
+        layout.Controls.Add(new Label { AutoSize = true, MaximumSize = new Size(570, 0), Margin = new Padding(0, 10, 0, 8), Text = "点击鼠标、滚轮或按键会暂停；仅移动鼠标不会中断。登录、付款、发送和删除仍由你接手。" });
         var advancedToggle = new Button { Text = "高级设置 ▸", AutoSize = true, Margin = new Padding(0, 12, 0, 5) };
         var advanced = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.TopDown, WrapContents = false, Visible = false, MaximumSize = new Size(580, 0) };
         advancedPanel=advanced;
@@ -147,11 +152,7 @@ sealed class AssistantForm : Form {
             try {
                 LoadSaved(); ShowConnection(); RefreshWindows();
                 if (!Native.RegisterHotKey(Handle, 1, 3, 0x58)) throw new Exception("无法注册停止快捷键，请关闭占用 Ctrl+Alt+X 的程序后重启助手。");
-                inputHook = new Native.Hook(() => {
-                    if ((!armed && !allowing) || closing) return;
-                    LocalPause();
-                    BeginInvoke(new Action(async () => await Safe(async () => await Control("pause", "检测到你的手动操作，已暂停"))));
-                });
+                inputHook = new Native.Hook(ManualInput);
                 timer.Start();
             } catch(Exception ex) { status.Text = ex.Message; allow.Enabled = false; manualAllow.Enabled = false; }
     }
@@ -359,6 +360,38 @@ sealed class AssistantForm : Form {
         await Request("tasks/" + taskId + "/control", new { action, note });
     }
     void LocalPause() { armed = false; epoch++; }
+    bool CurrentOperation(string id,string connectionToken,long version) {
+        return !closing && id.Length>0 && id==taskId && token==connectionToken && version==epoch;
+    }
+    void ManualInput(string reason) {
+        if((!armed && !allowing) || closing || manualPauseSent) return;
+        manualPauseSent=true;manualPausePending=true;
+        string id=taskId, connectionToken=token;
+        manualPauseNote=reason+(executingKind=="type" ? "；文字输入已暂停，请核对已输入部分后继续" : "，已暂停");
+        if(allowing) startFailureNote=manualPauseNote;
+        LocalPause();long version=epoch;manualPauseVersion=version;string note=manualPauseNote;
+        status.Text=note;
+        Action send=async()=>await Safe(async()=>await ReportManualPause(id,connectionToken,version,note));
+        if(manualPauseDispatch!=null)manualPauseDispatch(send);else BeginInvoke(send);
+    }
+    async Task ReportManualPause(string id,string connectionToken,long version,string note) {
+        try {
+            if(!CurrentOperation(id,connectionToken,version)) return;
+            var result=await Request("tasks/"+id+"/control",new {action="pause",note});
+            if(!CurrentOperation(id,connectionToken,version)) return;
+            state=S(result,"status");task=result;status.Text=S(result,"stage");ShowTaskControls();
+            if(Changed!=null)Changed();
+        } finally {
+            if(manualPauseVersion==version)manualPausePending=false;
+        }
+    }
+    async Task ReportStartFailure(string id,string connectionToken,long version,string note) {
+        if(!CurrentOperation(id,connectionToken,version))return;
+        var result=await Request("tasks/"+id+"/control",new {action="handoff",startupFailure=true,note=note.Substring(0,Math.Min(300,note.Length))});
+        if(!CurrentOperation(id,connectionToken,version))return;
+        state=S(result,"status");task=result;status.Text=S(result,"stage");startFailureNote="";ShowTaskControls();
+        if(Changed!=null)Changed();
+    }
     async Task StopTask() { LocalPause(); await Safe(async () => { await Control("stop", "你已停止操作"); status.Text = "已停止"; }); }
     void RefreshWindows() {
         windows.Items.Clear();
@@ -366,66 +399,75 @@ sealed class AssistantForm : Form {
         if (windows.Items.Count>0) windows.SelectedIndex = 0;
     }
     async Task AllowTask() { await StartTask(false); }
-    void CheckStart(string id,long version,string grant) {
-        if(closing || version!=epoch || taskId!=id || authorizationId!=grant) throw new Exception("开始操作已取消，请核对任务后继续。");
+    bool CurrentStart(string id,string connectionToken,long version,string grant) {
+        return CurrentOperation(id,connectionToken,version) && authorizationId==grant;
+    }
+    void CheckStart(string id,string connectionToken,long version,string grant) {
+        if(!CurrentStart(id,connectionToken,version,grant)) throw new Exception("开始操作已取消，请核对任务后继续。");
     }
     async Task StartTask(bool automatic) {
         if (captureBlocked) throw new Exception("窗口截取未响应，请重启本机助手后重试。");
         if (working || (polling && !automatic) || changingAuthorization || allowing || task == null || !new[]{"WAITING","PAUSED","NEEDS_USER"}.Contains(state)) throw new Exception("请等待当前状态更新后再试。");
         allowing=true;
         LocalPause(); long version=epoch;
-        string id=taskId, grant=authorizationId;
+        string id=taskId, grant=authorizationId, connectionToken=token;
+        manualPauseSent=false;manualPausePending=false;manualPauseVersion=-1;manualPauseNote="";startFailureNote="";autoAttemptedId=id;
         Exception failure=null;
-        bool serverAllowed=false;
         try {
-        selected = automatic ? Native.InitialWindow(Native.Windows(Handle)) : windows.SelectedItem as WindowChoice;
+        selected = startWindowOverride!=null ? startWindowOverride() : automatic ? Native.InitialWindow(Native.Windows(Handle)) : windows.SelectedItem as WindowChoice;
         if (selected == null) throw new Exception("请先打开要操作的应用，再刷新并选择窗口。");
         Native.ValidateWindow(selected, false);
         Native.RefreshTitle(selected);
         if(automatic) { status.Text="已收到电脑任务，即将按设备授权开始；Ctrl+Alt+X 可停止。"; await Task.Delay(1500); }
-        CheckStart(id,version,grant);
+        CheckStart(id,connectionToken,version,grant);
         var payload=new Dictionary<string,object>{{"action","allow"},{"window",selected.Title},{"application",selected.App},{"windowId",selected.Id}};
         if(grant.Length>0) payload["authorizationId"]=grant;
         var result=await Request("tasks/" + id + "/control",payload);
-        serverAllowed=S(result,"status")=="RUNNING";
-        CheckStart(id,version,grant);
-        if(!serverAllowed) throw new Exception("任务已暂停或停止，请刷新后核对。");
+        CheckStart(id,connectionToken,version,grant);
+        if(S(result,"status")!="RUNNING") throw new Exception("任务已暂停或停止，请刷新后核对。");
         approvedId = id; activeAuthorizationId=grant;
         if(!Native.SetForegroundWindow(selected.Handle)) throw new Exception("无法激活操作窗口，请手动切换后继续。");
         await Task.Delay(700);
-        CheckStart(id,version,grant);
+        CheckStart(id,connectionToken,version,grant);
         Native.ValidateWindow(selected, true);
         armed = true; epoch++; state="RUNNING"; allow.Enabled=false; manualAllow.Enabled=false;
-        status.Text = "已允许；请暂时不要移动鼠标或按键。";
-        } catch(Exception ex) { LocalPause(); failure=ex; }
+        status.Text = "正在操作；点击、滚轮或按键可接手，移动鼠标不会中断。";
+        } catch(Exception ex) {
+            // A user pause/stop, grant change or newer task owns its own outcome.
+            if(!CurrentStart(id,connectionToken,version,grant))return;
+            LocalPause();version=epoch;failure=ex;startFailureNote=ex.Message;
+        }
         finally { allowing=false; }
         if(failure!=null) {
-            if(serverAllowed) await Request("tasks/"+id+"/control",new {action="handoff",note="本机操作未开始，请检查窗口后继续"});
-            throw failure;
+            await ReportStartFailure(id,connectionToken,version,startFailureNote);
         }
     }
     async Task Poll() {
         if (polling || allowing || changingAuthorization || token.Length == 0 || closing) return;
         polling = true;
-        string connectionToken=token; long permissionVersion=permissionEpoch;
+        string connectionToken=token; long permissionVersion=permissionEpoch, pollVersion=epoch;
         try {
             var result = await Request("poll", new {});
-            if(token!=connectionToken || permissionVersion!=permissionEpoch || closing) return;
+            if(token!=connectionToken || permissionVersion!=permissionEpoch || pollVersion!=epoch || closing) return;
             if(!await ReconcileAuthorization(result)) return;
             task = D(result.ContainsKey("task") ? result["task"] : null);
             if (task.Count == 0) { taskId = ""; state = ""; allow.Enabled = false; LocalPause(); if (!working) status.Text = "暂无进行中的电脑任务；结果可在网站查看。"; return; }
             string id = S(task,"id"); state = S(task,"status");
-            if (taskId != id) { LocalPause(); approvedId = ""; autoAttemptedId=""; }
-            taskId = id; instruction.Text = S(task,"instruction"); status.Text = S(task,"stage");
+            if (taskId != id) { LocalPause(); approvedId = ""; autoAttemptedId="";startFailureNote="";manualPauseSent=false;manualPausePending=false; }
+            taskId = id; instruction.Text = S(task,"instruction"); if(!manualPausePending || !new[]{"WAITING","RUNNING"}.Contains(state))status.Text = S(task,"stage");
             allow.Enabled = !captureBlocked && !working && new[]{"WAITING","PAUSED","NEEDS_USER"}.Contains(state);
-            if (state != "RUNNING") LocalPause();
-            if (state=="PAUSED" || state=="NEEDS_USER") autoAttemptedId="";
+            if (state != "RUNNING" && armed) LocalPause();
+            if (state=="PAUSED" || state=="NEEDS_USER") { autoAttemptedId="";startFailureNote=""; }
+            if(new[]{"WAITING","RUNNING"}.Contains(state) && autoAttemptedId==id && startFailureNote.Length>0 && !manualPausePending && !working) {
+                // Retry only the failure report after a network loss, never desktop input.
+                await ReportStartFailure(id,connectionToken,epoch,startFailureNote);return;
+            }
             if (authorizationId.Length>0 && state=="WAITING" && autoAttemptedId!=id && !working && !captureBlocked) {
                 autoAttemptedId=id;
                 await StartTask(true);
                 return;
             }
-            if (state == "RUNNING" && !armed && !working) await Control("handoff", "本机输入已暂停，请核对任务和窗口后继续");
+            if (state == "RUNNING" && !armed && !working && !manualPausePending) await Control("handoff", manualPauseNote.Length>0?manualPauseNote:"本机输入已暂停，请核对任务和窗口后继续");
             if (state == "RUNNING" && armed && !working) { working = true; RunStep(taskId, epoch); }
         } catch(ApiFailure e) {
             if(token!=connectionToken || permissionVersion!=permissionEpoch || closing) return;
@@ -493,13 +535,14 @@ sealed class AssistantForm : Form {
                 selected=target;
                 await Task.Delay(500);
                 Check(id,version);
-            } else await Native.Execute(selected,shot,action,()=>Check(id,version));
+            } else { executingKind=S(action,"kind");await Native.Execute(selected,shot,action,()=>Check(id,version)); }
             Record(commandId,"ok");
             await Ack(id,commandId,"ok",S(action,"description"));
             await Task.Delay(600);
         } catch(Exception e) {
+            if(version!=epoch || taskId!=id || closing)return;
             LocalPause(); status.Text = e.Message; failure=e;
-        } finally { working = false; }
+        } finally { working = false;executingKind=""; }
         if(failure!=null) {
             try { if(commandId.Length>0) await Ack(id,commandId,"uncertain","操作已中止，请核对窗口后继续"); else await Request("tasks/"+id+"/control",new {action="handoff",note=failure is ApiFailure ? "连接或智能服务异常，请检查网站任务状态" : failure.Message.Substring(0,Math.Min(300,failure.Message.Length))}); } catch { }
         }
@@ -545,8 +588,45 @@ sealed class AssistantForm : Form {
                 fake.Reply=req=>{if(req.RequestUri.AbsolutePath.EndsWith("/authorization")){revocations++;bool blocked=false;try{form.RequestAuthorization(form.deviceId).GetAwaiter().GetResult();}catch(Exception e){blocked=e.Message.Contains("状态正在更新");}if(!blocked)throw new Exception("New consent overlapped an in-flight old revoke");return TestResponse(200,"{\"data\":{}}");}return TestResponse(200,"{\"data\":{\"authorizationId\":\""+Guid.NewGuid().ToString()+"\"}}");};
                 form.RefreshStatus().GetAwaiter().GetResult();
                 if(form.Authorized||revocations!=1)throw new Exception("Status elevated an unconfirmed local grant");
+                Action newTask=()=>{seed();form.taskId=Guid.NewGuid().ToString();form.task=new Dictionary<string,object>{{"id",form.taskId},{"status","WAITING"},{"stage","Waiting"}};form.state="WAITING";form.armed=false;form.allowing=false;form.working=false;form.manualPauseSent=false;form.manualPausePending=false;form.manualPauseVersion=-1;form.startFailureNote="";form.autoAttemptedId="";form.epoch++;};
+                newTask();int calls=0;string firstTask=form.taskId,firstToken=form.token;
+                var queued=new List<Action>();form.manualPauseDispatch=queued.Add;form.allowing=true;form.executingKind="type";
+                form.ManualInput(Native.KeyInputReason(0x0100,0));
+                long pauseVersion=form.manualPauseVersion;
+                form.ManualInput(Native.MouseInputReason(0x0201,0));
+                if(queued.Count!=1||form.armed||!form.manualPauseNote.Contains("文字输入已暂停"))throw new Exception("Manual takeover was not deduplicated or type reason missing");
+                fake.Reply=req=>{calls++;if(!req.RequestUri.AbsolutePath.EndsWith("/"+firstTask+"/control"))throw new Exception("Pause targeted another task");return TestResponse(200,"{\"data\":{\"status\":\"PAUSED\",\"stage\":\"manual key\"}}");};
+                form.ReportManualPause(firstTask,firstToken,pauseVersion,form.manualPauseNote).GetAwaiter().GetResult();
+                if(calls!=1||form.state!="PAUSED"||form.manualPausePending)throw new Exception("Manual pause was not reported once");
+                form.taskId=Guid.NewGuid().ToString();
+                form.ReportManualPause(firstTask,firstToken,pauseVersion,"old task").GetAwaiter().GetResult();
+                form.ReportManualPause(form.taskId,new string('b',64),form.epoch,"old token").GetAwaiter().GetResult();
+                form.ReportManualPause(form.taskId,form.token,form.epoch-1,"old epoch").GetAwaiter().GetResult();
+                if(calls!=1)throw new Exception("Stale pause reached the API");
+                newTask();form.allowing=true;form.executingKind="";form.ManualInput(Native.MouseInputReason(0x020A,0));
+                pauseVersion=form.manualPauseVersion;firstTask=form.taskId;firstToken=form.token;
+                fake.Reply=req=>{form.LocalPause();throw new HttpRequestException("pause network failure");};
+                try{form.ReportManualPause(firstTask,firstToken,pauseVersion,form.manualPauseNote).GetAwaiter().GetResult();}catch(HttpRequestException){}
+                if(form.manualPausePending)throw new Exception("Failed pause retained a pending flag after epoch changed");
+                newTask();int starts=0;form.startWindowOverride=()=>{starts++;return null;};calls=0;
+                fake.Reply=req=>{calls++;var body=D(form.json.DeserializeObject(req.Content.ReadAsStringAsync().GetAwaiter().GetResult()));if(S(body,"action")!="handoff"||!body.ContainsKey("startupFailure")||!Convert.ToBoolean(body["startupFailure"]))throw new Exception("Startup failure was not marked");return TestResponse(200,"{\"data\":{\"status\":\"NEEDS_USER\",\"stage\":\"Open an application then continue\"}}");};
+                form.StartTask(true).GetAwaiter().GetResult();
+                if(calls!=1||starts!=1||form.state!="NEEDS_USER"||form.armed)throw new Exception("Pre-allow failure remained waiting");
+                newTask();calls=0;form.startWindowOverride=()=>{form.LocalPause();form.state="PAUSED";return null;};
+                form.StartTask(true).GetAwaiter().GetResult();
+                if(calls!=0||form.state!="PAUSED")throw new Exception("Canceled startup overwrote a user pause");
+                newTask();string newerTask=Guid.NewGuid().ToString();form.startWindowOverride=()=>{form.taskId=newerTask;return null;};
+                form.StartTask(true).GetAwaiter().GetResult();
+                if(calls!=0||form.taskId!=newerTask)throw new Exception("Old startup reported against a new task");
+                newTask();starts=0;int reports=0;form.startWindowOverride=()=>{starts++;return null;};
+                fake.Reply=req=>{reports++;throw new HttpRequestException("failure report offline");};
+                try{form.StartTask(true).GetAwaiter().GetResult();}catch(HttpRequestException){}
+                if(form.startFailureNote.Length==0||form.armed)throw new Exception("Unreported startup failure was lost");
+                fake.Reply=req=>{if(req.RequestUri.AbsolutePath.EndsWith("/poll"))return TestResponse(200,form.json.Serialize(new{data=new{authorizationId=form.authorizationId,task=new{id=form.taskId,status="WAITING",stage="Waiting"}}}));reports++;return TestResponse(200,"{\"data\":{\"status\":\"NEEDS_USER\",\"stage\":\"Open an application then continue\"}}");};
+                form.Poll().GetAwaiter().GetResult();
+                if(starts!=1||reports!=2||form.state!="NEEDS_USER")throw new Exception("Recovery retried input or left startup waiting");
             }
-            Console.WriteLine("Desktop connection validation: passed (fake HTTP, isolated credentials, no desktop input)");return 0;
+            Console.WriteLine("Desktop connection and startup validation: passed (fake HTTP, isolated credentials, no desktop input)");return 0;
         } catch(Exception ex){Console.WriteLine(ex.Message);return 1;}
         finally {
             foreach(string name in new[]{"connection.bin","connection.bin.tmp"}){string file=Path.Combine(isolated,name);if(File.Exists(file))File.Delete(file);}
@@ -722,12 +802,13 @@ static class Native {
             int y=r.Top+(int)Math.Round(Number(a,"y",0,1000)*(r.Bottom-r.Top-1)/1000.0);
             if(GetAncestor(WindowFromPoint(new POINT(x,y)),2)!=w.Handle)throw new Exception("目标位置被其他窗口遮挡，请核对后继续");
             GuardElement(AutomationElement.FromPoint(new System.Windows.Point(x,y))); check();
-            // SetCursorPos is not used: SendInput marks pointer movement as injected for the manual-input pause hook.
+            // Move and act in one injected batch. A harmless physical move between
+            // separate calls must not redirect the click or scroll to another control.
             var screen=SystemInformation.VirtualScreen;
-            Send(new INPUT{type=0,data=new UNION{mouse=new MOUSE{dx=(int)((x-screen.Left)*65535.0/(screen.Width-1)),dy=(int)((y-screen.Top)*65535.0/(screen.Height-1)),flags=0xC001}}});
+            var move=new INPUT{type=0,data=new UNION{mouse=new MOUSE{dx=(int)((x-screen.Left)*65535.0/(screen.Width-1)),dy=(int)((y-screen.Top)*65535.0/(screen.Height-1)),flags=0xC001}}};
             check();
-            if(kind=="scroll")Send(Mouse(0x0800,unchecked((uint)((S(a,"direction")=="up"?120:-120)*Number(a,"amount",1,6)))));
-            else { bool right=S(a,"button")=="right";Send(Mouse(right?0x0008u:0x0002u),Mouse(right?0x0010u:0x0004u));if(S(a,"button")=="double"){await Task.Delay(80);check();Send(Mouse(2),Mouse(4));} }
+            if(kind=="scroll")Send(move,Mouse(0x0800,unchecked((uint)((S(a,"direction")=="up"?120:-120)*Number(a,"amount",1,6)))));
+            else { bool right=S(a,"button")=="right";Send(move,Mouse(right?0x0008u:0x0002u),Mouse(right?0x0010u:0x0004u));if(S(a,"button")=="double"){await Task.Delay(80);check();Send(move,Mouse(2),Mouse(4));} }
             return;
         }
         GuardElement(AutomationElement.FocusedElement); check();
@@ -744,16 +825,33 @@ static class Native {
     }
     public sealed class Hook : IDisposable {
         readonly HookProc mouseProc,keyProc;readonly IntPtr mouse,key;
-        public Hook(Action pause) {
-            mouseProc=(n,w,l)=>{if(n>=0&&(((MouseHook)Marshal.PtrToStructure(l,typeof(MouseHook))).flags&1)==0)pause();return CallNextHookEx(IntPtr.Zero,n,w,l);};
-            keyProc=(n,w,l)=>{if(n>=0&&(((KeyHook)Marshal.PtrToStructure(l,typeof(KeyHook))).flags&16)==0)pause();return CallNextHookEx(IntPtr.Zero,n,w,l);};
+        public Hook(Action<string> pause) {
+            mouseProc=(n,w,l)=>{if(n>=0){string reason=MouseInputReason(w.ToInt32(),((MouseHook)Marshal.PtrToStructure(l,typeof(MouseHook))).flags);if(reason!=null)pause(reason);}return CallNextHookEx(IntPtr.Zero,n,w,l);};
+            keyProc=(n,w,l)=>{if(n>=0){string reason=KeyInputReason(w.ToInt32(),((KeyHook)Marshal.PtrToStructure(l,typeof(KeyHook))).flags);if(reason!=null)pause(reason);}return CallNextHookEx(IntPtr.Zero,n,w,l);};
             mouse=SetWindowsHookEx(14,mouseProc,GetModuleHandle(null),0);key=SetWindowsHookEx(13,keyProc,GetModuleHandle(null),0);
             if(mouse==IntPtr.Zero||key==IntPtr.Zero){Dispose();throw new Exception("无法启用手动操作暂停保护，请重启本机助手。");}
         }
         public void Dispose(){if(mouse!=IntPtr.Zero)UnhookWindowsHookEx(mouse);if(key!=IntPtr.Zero)UnhookWindowsHookEx(key);}
     }
+    public static string MouseInputReason(int message,uint flags) {
+        if((flags&3)!=0)return null; // Injected or lower-integrity injected input.
+        if(message==0x0201||message==0x0204||message==0x0207||message==0x020B)return "检测到你点击鼠标";
+        if(message==0x020A||message==0x020E)return "检测到你滚动鼠标";
+        return null; // Movement and button release do not constitute taking over.
+    }
+    public static string KeyInputReason(int message,uint flags) {
+        if((flags&0x12)!=0)return null;
+        return message==0x0100||message==0x0104 ? "检测到你按键" : null;
+    }
     public static int SelfTest() {
         try {
+            foreach(int message in new[]{0x0200,0x0202,0x0205,0x0208,0x020C})if(MouseInputReason(message,0)!=null)throw new Exception("Mouse movement/release incorrectly took over");
+            foreach(int message in new[]{0x0201,0x0204,0x0207,0x020B,0x020A,0x020E}) {
+                if(MouseInputReason(message,0)==null)throw new Exception("Physical mouse press/wheel was ignored");
+                if(MouseInputReason(message,1)!=null||MouseInputReason(message,2)!=null)throw new Exception("Injected mouse input took over");
+            }
+            foreach(int message in new[]{0x0101,0x0105})if(KeyInputReason(message,0)!=null)throw new Exception("Key release incorrectly took over");
+            foreach(int message in new[]{0x0100,0x0104})if(KeyInputReason(message,0)==null||KeyInputReason(message,0x10)!=null||KeyInputReason(message,2)!=null)throw new Exception("Physical/injected key classification incorrect");
             var j=new JavaScriptSerializer();Action<string> valid=s=>ValidateAction(AssistantForm.D(j.DeserializeObject(s)));
             valid("{\"kind\":\"type\",\"text\":\"整理成三项：你好\"}");
             valid("{\"kind\":\"click\",\"x\":500,\"y\":1000,\"button\":\"left\"}");

@@ -3,16 +3,12 @@ import { Alert, App, Button, Empty, Space, Tag, Typography } from "antd";
 import {
   DownloadOutlined,
   DesktopOutlined,
-  PauseOutlined,
-  StopOutlined,
   ReloadOutlined,
 } from "@ant-design/icons";
 import { api } from "./api";
 import { desktopClientRequest, isDesktopClient } from "./desktop-client";
-import {
-  desktopStatusLabels,
-  type DesktopState,
-} from "../../../packages/contracts/src/assistant-desktop";
+import type { DesktopState } from "../../../packages/contracts/src/assistant-desktop";
+import { AssistantDesktopTaskCard } from "./assistant-desktop-task-card";
 
 export function AssistantDesktopPanel({
   open,
@@ -29,7 +25,7 @@ export function AssistantDesktopPanel({
   open: boolean;
   data?: DesktopState;
   error: string;
-  refresh: () => void;
+  refresh: () => Promise<unknown>;
   choose: (id: string) => void;
   connectLocal: () => void;
   connecting?: boolean;
@@ -260,75 +256,12 @@ export function AssistantDesktopPanel({
         </p>
       )}
       {data?.tasks.map((t) => (
-        <div className="assistant-desktop-item" key={t.id}>
-          <Tag>{desktopStatusLabels[t.status]}</Tag>
-          {t.scope === "device" && <Tag>跨窗口</Tag>}
-          <strong>{t.instruction}</strong>
-          <div>
-            {t.deviceName} · {t.window || "尚未选择窗口"} · 已执行 {t.step} 步
-          </div>
-          <time dateTime={t.updatedAt}>
-            {new Date(t.updatedAt).toLocaleString("zh-CN")}
-          </time>
-          <p role="status">{t.stage}</p>
-          <Space>
-            {t.status === "RUNNING" && (
-              <Button
-                size="small"
-                icon={<PauseOutlined />}
-                disabled={!!busy}
-                onClick={() =>
-                  void run(t.id, () =>
-                    api(
-                      `/my-workspace/assistant/desktop/tasks/${t.id}/control`,
-                      "POST",
-                      { action: "pause" },
-                    ),
-                  )
-                }
-              >
-                暂停
-              </Button>
-            )}
-            {["PAUSED", "NEEDS_USER"].includes(t.status) && (
-              <Button
-                size="small"
-                disabled={!!busy}
-                onClick={() =>
-                  void run(t.id, () =>
-                    api(
-                      `/my-workspace/assistant/desktop/tasks/${t.id}/control`,
-                      "POST",
-                      { action: "resume" },
-                    ),
-                  )
-                }
-              >
-                继续
-              </Button>
-            )}
-            {["WAITING", "RUNNING", "PAUSED", "NEEDS_USER"].includes(
-              t.status,
-            ) && (
-              <Button
-                size="small"
-                icon={<StopOutlined />}
-                disabled={!!busy}
-                onClick={() =>
-                  void run(t.id, () =>
-                    api(
-                      `/my-workspace/assistant/desktop/tasks/${t.id}/control`,
-                      "POST",
-                      { action: "stop" },
-                    ),
-                  )
-                }
-              >
-                停止
-              </Button>
-            )}
-          </Space>
-        </div>
+        <AssistantDesktopTaskCard
+          key={t.id}
+          task={t}
+          device={data.devices.find((device) => device.id === t.deviceId)}
+          refresh={refresh}
+        />
       ))}
       <p className="assistant-desktop-note">
         电脑需保持开机，小序桌面端需运行。授权在客户端重启后保留，断开或重新配对后需重新授权。小序可按授权切换窗口，你手动操作会暂停；Ctrl

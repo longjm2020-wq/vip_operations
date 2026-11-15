@@ -20,6 +20,7 @@ import { desktopActionSchema } from "../../packages/contracts/src/assistant-desk
 const fixture = vi.hoisted(() => ({
   db: null as PGlite | null,
   session: true,
+  beforeControlUpdate: undefined as (() => Promise<void>) | undefined,
 }));
 vi.mock("../../packages/database/src/index.js", async (original) => {
   const real =
@@ -35,8 +36,14 @@ vi.mock("../../packages/database/src/index.js", async (original) => {
   return {
     ...real,
     db: {
-      $queryRawUnsafe: async (sql: string, ...p: unknown[]) =>
-        (await fixture.db!.query(sql, p)).rows,
+      $queryRawUnsafe: async (sql: string, ...p: unknown[]) => {
+        if (sql.startsWith("UPDATE assistant_desktop_tasks SET status=$3,")) {
+          const beforeUpdate = fixture.beforeControlUpdate;
+          fixture.beforeControlUpdate = undefined;
+          await beforeUpdate?.();
+        }
+        return (await fixture.db!.query(sql, p)).rows;
+      },
       $executeRawUnsafe: async (sql: string, ...p: unknown[]) =>
         sql.includes("pg_advisory_xact_lock")
           ? 0
@@ -105,6 +112,7 @@ beforeAll(async () => {
 });
 beforeEach(async () => {
   fixture.session = true;
+  fixture.beforeControlUpdate = undefined;
   await fixture.db!.exec(
     "TRUNCATE assistant_desktop_tasks,assistant_desktop_devices;",
   );
@@ -563,6 +571,123 @@ describe("paired desktop task execution", () => {
     ).toBeNull();
     expect(fetch).not.toHaveBeenCalled();
   });
+  it.each(["WAITING", "RUNNING"])(
+    "records a native startup failure from %s and invalidates pending execution",
+    async (status) => {
+      const { d, t } = status === "RUNNING" ? await allowed() : await queued();
+      await fixture.db!.query(
+        "UPDATE assistant_desktop_tasks SET pending=$2::jsonb,planning_id=$3::uuid WHERE id=$1::uuid",
+        [t.id, JSON.stringify({ id: randomUUID() }), randomUUID()],
+      );
+      const result = await desktopControl(
+        actor(),
+        t.id,
+        {
+          action: "handoff",
+          startupFailure: true,
+          note: "没有可操作窗口，请打开应用后继续",
+        },
+        d.deviceId,
+      );
+      expect(result.status).toBe("NEEDS_USER");
+      expect(result.stage).toBe("没有可操作窗口，请打开应用后继续");
+      expect(result.step).toBe(0);
+      const stored = (
+        await fixture.db!.query<Row>(
+          "SELECT pending,planning_id FROM assistant_desktop_tasks WHERE id=$1::uuid",
+          [t.id],
+        )
+      ).rows[0];
+      expect(stored).toEqual({ pending: null, planning_id: null });
+      expect(fetch).not.toHaveBeenCalled();
+    },
+  );
+  it.each(["PAUSED", "NEEDS_USER", "CANCELED", "DONE", "FAILED"])(
+    "preserves %s and its reason when a startup failure arrives later",
+    async (status) => {
+      const { d, t } = await queued();
+      await fixture.db!.query(
+        "UPDATE assistant_desktop_tasks SET status=$2,stage='已由用户或执行器确认' WHERE id=$1::uuid",
+        [t.id, status],
+      );
+      const result = await desktopControl(
+        actor(),
+        t.id,
+        { action: "handoff", startupFailure: true, note: "迟到的启动失败" },
+        d.deviceId,
+      );
+      expect(result.status).toBe(status);
+      expect(result.stage).toBe("已由用户或执行器确认");
+      expect((await desktopState(actor())).tasks[0]).toMatchObject({
+        status,
+        stage: result.stage,
+      });
+    },
+  );
+  it("accepts startup failure only from the owning native device with handoff", async () => {
+    const { d, t } = await queued();
+    const input = { action: "handoff", startupFailure: true, note: "启动失败" };
+    await expect(desktopControl(actor(), t.id, input)).rejects.toMatchObject({
+      response: { error: { code: "FORBIDDEN" } },
+    });
+    await expect(
+      desktopControl(actor("8"), t.id, input, d.deviceId),
+    ).rejects.toMatchObject({ response: { error: { code: "NOT_FOUND" } } });
+    await expect(
+      desktopControl(actor(), t.id, input, randomUUID()),
+    ).rejects.toMatchObject({ response: { error: { code: "NOT_FOUND" } } });
+    for (const action of ["pause", "stop", "resume", "allow"])
+      await expect(
+        desktopControl(actor(), t.id, { ...input, action }, d.deviceId),
+      ).rejects.toMatchObject({ response: { error: { code: "FORBIDDEN" } } });
+    await expect(
+      desktopControl(
+        actor(),
+        t.id,
+        { ...input, startupFailure: false },
+        d.deviceId,
+      ),
+    ).rejects.toMatchObject({
+      response: { error: { code: "VALIDATION_ERROR" } },
+    });
+    expect((await pollDesktop(actor(), d.deviceId)).task?.status).toBe(
+      "WAITING",
+    );
+    await desktopControl(actor(), t.id, { action: "pause" });
+    expect(
+      (
+        await desktopControl(
+          actor(),
+          t.id,
+          { action: "handoff", note: "旧客户端接手" },
+          d.deviceId,
+        )
+      ).status,
+    ).toBe("NEEDS_USER");
+  });
+  it.each(["PAUSED", "CANCELED"])(
+    "does not overwrite %s committed between reading and updating a startup failure",
+    async (status) => {
+      const { d, t } = await allowed();
+      fixture.beforeControlUpdate = async () => {
+        await fixture.db!.query(
+          "UPDATE assistant_desktop_tasks SET status=$2,stage='用户先停止了启动' WHERE id=$1::uuid",
+          [t.id, status],
+        );
+      };
+      const result = await desktopControl(
+        actor(),
+        t.id,
+        { action: "handoff", startupFailure: true, note: "迟到的启动失败" },
+        d.deviceId,
+      );
+      expect(result).toMatchObject({ status, stage: "用户先停止了启动" });
+      expect((await desktopState(actor())).tasks[0]).toMatchObject({
+        status,
+        stage: "用户先停止了启动",
+      });
+    },
+  );
   it("executes one validated step and acknowledges exactly once without storing the screen", async () => {
     const { d, t } = await allowed(),
       observation = await shot();
@@ -640,6 +765,31 @@ describe("paired desktop task execution", () => {
       desktopIdentity("Bearer " + d.token, undefined),
     ).rejects.toThrow();
     expect((await desktopState(actor())).tasks[0].status).toBe("CANCELED");
+  });
+  it("describes resuming a pre-start pause using the current device grant without binding the task early", async () => {
+    const { d, t } = await queued();
+    await setDesktopAuthorization(actor(), d.deviceId, true);
+    await desktopControl(actor(), t.id, { action: "pause" });
+    const resumed = await desktopControl(actor(), t.id, { action: "resume" });
+    expect(resumed).toMatchObject({
+      status: "WAITING",
+      stage: "等待本机按设备授权继续",
+      scope: "window",
+      window: "",
+      step: 0,
+    });
+    expect(
+      (
+        await fixture.db!.query<Row>(
+          "SELECT authorization_id,window_id FROM assistant_desktop_tasks WHERE id=$1::uuid",
+          [t.id],
+        )
+      ).rows[0],
+    ).toEqual({ authorization_id: null, window_id: null });
+    await setDesktopAuthorization(actor(), d.deviceId, false);
+    expect(
+      (await desktopControl(actor(), t.id, { action: "resume" })).stage,
+    ).toBe("请在本机重新确认操作窗口");
   });
   it("requires a fresh local selection after resume and exposes handoffs honestly", async () => {
     const { d, t } = await allowed();

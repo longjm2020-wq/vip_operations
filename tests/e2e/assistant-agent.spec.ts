@@ -5,6 +5,7 @@ import {
 } from "./assistant-controls.js";
 import { expect, test, type Page } from "@playwright/test";
 import { defaultTeamSettings } from "../../packages/contracts/src/assistant-team.js";
+import type { DesktopTask } from "../../packages/contracts/src/assistant-desktop.js";
 const fileId = "11111111-1111-4111-8111-111111111111";
 const resultId = "22222222-2222-4222-8222-222222222222";
 const jobId = "33333333-3333-4333-8333-333333333333";
@@ -23,6 +24,8 @@ async function desktopScenario(page: Page, native = true) {
     pairCodes: 0,
     statusWait: undefined as Promise<void> | undefined,
     completedStatus: 0,
+    tasks: [] as DesktopTask[],
+    taskControls: [] as { id: string; action: string }[],
   };
   if (native) {
     await page.exposeFunction(
@@ -95,6 +98,31 @@ async function desktopScenario(page: Page, native = true) {
     "**/api/v1/my-workspace/assistant/desktop**",
     async (route) => {
       if (route.request().method() === "POST") {
+        const taskControl = new URL(route.request().url()).pathname.match(
+          /\/tasks\/([^/]+)\/control$/,
+        );
+        if (taskControl) {
+          const { action } = route.request().postDataJSON();
+          state.taskControls.push({ id: taskControl[1], action });
+          const task = state.tasks.find(
+            (entry) => entry.id === taskControl[1],
+          )!;
+          task.status =
+            action === "resume"
+              ? "WAITING"
+              : action === "pause"
+                ? "PAUSED"
+                : "CANCELED";
+          task.stage =
+            action === "resume"
+              ? "等待本机继续当前任务"
+              : action === "pause"
+                ? "你已暂停当前任务"
+                : "你已停止当前任务";
+          task.updatedAt = new Date().toISOString();
+          await route.fulfill({ json: { data: task } });
+          return;
+        }
         if (route.request().url().endsWith("/pair-code")) state.pairCodes++;
         if (route.request().url().endsWith("/authorization/revoke"))
           state.authorized = false;
@@ -118,7 +146,7 @@ async function desktopScenario(page: Page, native = true) {
                     },
                   ]
                 : [],
-            tasks: [],
+            tasks: state.tasks,
           },
         },
       });
@@ -869,6 +897,152 @@ test("电脑操作面板选择设备并撤销授权，输入区仅显示当前�
   await expect(composer.getByPlaceholder(/告诉我你想完成什么/)).toBeVisible();
 });
 
+test("电脑任务在聊天实时显示暂停原因，重复发送保留草稿并可继续原任务", async ({
+  page,
+}) => {
+  const { state } = await desktopScenario(page, false);
+  state.authorized = true;
+  const taskId = "77777777-7777-4777-8777-777777777777";
+  const sent: Record<string, unknown>[] = [];
+  const conversation = {
+    ready: true,
+    state: "IDLE",
+    version: 0,
+    error: "",
+    messages: [] as Record<string, unknown>[],
+  };
+  await page.route("**/api/v1/my-workspace/assistant", async (route) => {
+    if (route.request().method() === "POST") {
+      const input = route.request().postDataJSON();
+      sent.push(input);
+      expect(input.desktopDeviceId).toBe(desktopFixtureId);
+      state.tasks = [
+        {
+          id: taskId,
+          deviceId: desktopFixtureId,
+          deviceName: "本机测试电脑",
+          instruction: input.message,
+          status: "WAITING",
+          stage: "等待本机按设备授权开始",
+          step: 0,
+          window: "",
+          scope: "window",
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+      ];
+      conversation.messages.push(
+        { id: input.requestId, role: "user", text: input.message },
+        {
+          id: "desktop-reply",
+          role: "assistant",
+          text: "电脑任务已创建。",
+          desktopTaskId: taskId,
+        },
+      );
+      conversation.version++;
+    }
+    await route.fulfill({ json: { data: conversation } });
+  });
+  await page.addInitScript(
+    (id) => localStorage.setItem("xuti-assistant-desktop:7", id),
+    desktopFixtureId,
+  );
+  await page.goto("/my-workspace");
+  const composer = page.locator(".assistant-compose:visible");
+  await composer
+    .getByPlaceholder(/描述电脑任务/)
+    .fill("整理记事本中的测试文字");
+  await composer.getByRole("button", { name: "发送给个人助理" }).click();
+  const card = composer.locator(".assistant-desktop-task");
+  await expect(card).toContainText("等待本机执行");
+  await expect(page.locator(".assistant-desktop-panel")).toHaveCount(0);
+  state.tasks[0].status = "PAUSED";
+  state.tasks[0].stage = "检测到你的手动操作，已暂停";
+  await expect(card.getByRole("status")).toHaveText(state.tasks[0].stage, {
+    timeout: 10000,
+  });
+  await expect(card).toContainText("已执行 0 步");
+  await expect(card).not.toContainText("授权尚未开启");
+  expect(state.taskControls).toEqual([]);
+  await composer.getByPlaceholder(/描述电脑任务/).fill("现在进度如何");
+  await composer.getByRole("button", { name: "发送给个人助理" }).click();
+  await expect(
+    composer.getByRole("button", { name: "发送给个人助理" }),
+  ).toBeEnabled();
+  expect(sent).toHaveLength(1);
+  await expect(composer.getByPlaceholder(/描述电脑任务/)).toHaveValue(
+    "现在进度如何",
+  );
+  await page.screenshot({ path: ".local/desktop-task-live-paused.png" });
+
+  await card.getByRole("button", { name: "继续当前任务", exact: true }).click();
+  await expect(card.getByRole("status")).toHaveText("等待本机继续当前任务");
+  expect(state.taskControls).toEqual([{ id: taskId, action: "resume" }]);
+  state.tasks[0].status = "RUNNING";
+  state.tasks[0].stage = "已识别测试文档，正在整理";
+  state.tasks[0].step = 2;
+  state.tasks[0].window = "测试文档 - 记事本";
+  await expect(card).toContainText("已执行 2 步", { timeout: 10000 });
+  await card.getByRole("button", { name: "暂停任务", exact: true }).click();
+  await expect(card.getByRole("status")).toHaveText("你已暂停当前任务");
+  await card.getByRole("button", { name: "停止任务", exact: true }).click();
+  await expect(card).toHaveCount(0);
+  const historyCard = page.locator(
+    ".assistant-messages .assistant-desktop-task",
+  );
+  await expect(historyCard).toContainText("已停止");
+  await expect(historyCard).toContainText("你已停止当前任务");
+  expect(state.taskControls).toEqual([
+    { id: taskId, action: "resume" },
+    { id: taskId, action: "pause" },
+    { id: taskId, action: "stop" },
+  ]);
+  expect(sent).toHaveLength(1);
+});
+
+test("发送前核对已有电脑任务，跨页面新建的暂停任务直接显示且不重复提交", async ({
+  page,
+}) => {
+  const { state, requests } = await desktopScenario(page, false);
+  state.authorized = true;
+  await page.addInitScript(
+    (id) => localStorage.setItem("xuti-assistant-desktop:7", id),
+    desktopFixtureId,
+  );
+  await page.goto("/my-workspace");
+  const composer = page.locator(".assistant-compose:visible");
+  const input = composer.getByPlaceholder(/描述电脑任务/);
+  await expect(input).toBeEnabled();
+  await expect(composer.locator(".assistant-desktop-task")).toHaveCount(0);
+  state.tasks = [
+    {
+      id: "88888888-8888-4888-8888-888888888888",
+      deviceId: desktopFixtureId,
+      deviceName: "本机测试电脑",
+      instruction: "另一页面已有的测试任务",
+      status: "PAUSED",
+      stage: "检测到你的手动操作，已暂停",
+      step: 0,
+      window: "",
+      scope: "window",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    },
+  ];
+  await input.fill("再次整理测试文字");
+  await composer.getByRole("button", { name: "发送给个人助理" }).click();
+  await expect(
+    composer.getByRole("button", { name: "发送给个人助理" }),
+  ).toBeEnabled();
+  await expect(composer.locator(".assistant-desktop-task")).toContainText(
+    "另一页面已有的测试任务",
+  );
+  await expect(input).toHaveValue("再次整理测试文字");
+  expect(requests).toHaveLength(0);
+  expect(state.taskControls).toEqual([]);
+});
+
 test("长聊天打开电脑面板从顶部显示连接入口，刷新任务保留手动滚动", async ({
   page,
 }) => {
@@ -923,9 +1097,9 @@ test("长聊天打开电脑面板从顶部显示连接入口，刷新任务保�
   const panel = dialog.locator(".assistant-desktop-panel");
   await expect(panel.getByRole("status")).toHaveCount(10);
   await expect.poll(() => body.evaluate((el) => el.scrollTop)).toBe(0);
-  await expect(
-    panel.getByRole("heading", { name: /电脑操作/ }),
-  ).toBeInViewport({ ratio: 1 });
+  await expect(panel.getByRole("heading", { name: /电脑操作/ })).toBeInViewport(
+    { ratio: 1 },
+  );
   await expect(
     panel.getByRole("link", { name: "下载 Windows 桌面端" }),
   ).toBeInViewport({ ratio: 1 });

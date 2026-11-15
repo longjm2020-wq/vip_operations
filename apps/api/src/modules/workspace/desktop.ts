@@ -279,6 +279,7 @@ export async function desktopControl(
         application: z.string().trim().max(80).optional(),
         windowId: z.string().uuid().optional(),
         authorizationId: z.string().uuid().optional(),
+        startupFailure: z.literal(true).optional(),
         note: z.string().max(300).optional(),
       })
       .strict(),
@@ -292,6 +293,11 @@ export async function desktopControl(
   );
   if (!old || (deviceId && old.device_id !== deviceId))
     fail("NOT_FOUND", "任务不存在", 404);
+  if (b.startupFailure && (!deviceId || b.action !== "handoff"))
+    fail("FORBIDDEN", "启动失败只能由本机助手上报", 403);
+  // A late startup report must preserve a user's pause or an already settled task.
+  if (b.startupFailure && !["WAITING", "RUNNING"].includes(old.status))
+    return desktopTaskView(old);
   if (!active.includes(old.status)) return desktopTaskView(old);
   if (
     !deviceId &&
@@ -323,12 +329,21 @@ export async function desktopControl(
     allow: "RUNNING",
     handoff: "NEEDS_USER",
   }[b.action];
+  const resumeDevice =
+    b.action === "resume"
+      ? await one(
+          db,
+          "SELECT authorization_id FROM assistant_desktop_devices WHERE id=$1::uuid AND user_id=$2::bigint AND token_hash IS NOT NULL AND revoked_at IS NULL AND expires_at>now()",
+          old.device_id,
+          c.actor.id,
+        )
+      : undefined;
   const stage =
     b.note ||
     {
       pause: "任务已暂停",
       stop: "任务已停止",
-      resume: old.authorization_id
+      resume: resumeDevice?.authorization_id
         ? "等待本机按设备授权继续"
         : "请在本机重新确认操作窗口",
       allow: b.authorizationId
@@ -356,6 +371,8 @@ export async function desktopControl(
       "任务状态或设备授权已变化，请在本机核对后继续",
       409,
     );
+  if (!row && b.startupFailure)
+    return desktopTaskView(await deviceTask(c, deviceId!, taskId));
   return desktopTaskView(row || old);
 }
 export async function pollDesktop(c: Context, deviceId: string) {

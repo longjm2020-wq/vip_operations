@@ -283,7 +283,7 @@ export async function sendAssistant(
         }
       : desktopTask
         ? {
-            text: "电脑任务已创建。已记住跨窗口授权的设备会自动开始；否则请在本机「电脑任务」选择窗口并允许。进度会显示在「电脑操作」中。",
+            text: "电脑任务已提交，等待本机执行。实际进度、暂停原因及继续操作会显示在下方任务卡中。",
             schedules: [],
             tools: [],
             evidence: [],

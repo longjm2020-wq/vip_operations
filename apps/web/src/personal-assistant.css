@@ -875,6 +875,39 @@ body:has(.assistant-screen.ant-drawer-open) .companion-voice-prompt {
   line-height: 1.7;
   margin-top: 8px;
 }
+.assistant-desktop-task-heading {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+}
+.assistant-desktop-task p {
+  margin: 8px 0;
+}
+.assistant-desktop-task-meta,
+.assistant-desktop-task-hint {
+  color: var(--app-secondary);
+  font-size: 12px;
+}
+.assistant-desktop-task-meta time {
+  display: inline-block;
+  margin-left: 10px;
+}
+.assistant-desktop-task-compact {
+  margin: 0 0 10px;
+  padding: 10px 12px;
+  background: var(--app-accent-soft);
+  border-color: var(--app-accent-border);
+  font-size: 13px;
+}
+.assistant-desktop-task-compact .assistant-desktop-task-heading {
+  margin-top: 0;
+}
+.assistant-desktop-task-compact strong {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
 .assistant-execution-target {
   display: flex;
   gap: 8px;

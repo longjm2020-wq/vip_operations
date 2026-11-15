@@ -526,7 +526,7 @@ describe("assistant business tools and private memory", () => {
     };
     const result = await runRealtimeTool(actor(), sessionId, request);
     expect(result.desktopTaskId).toBeTruthy();
-    expect(result.text).toContain("电脑任务已创建");
+    expect(result.text).toContain("电脑任务已提交，等待本机执行");
     expect(await runRealtimeTool(actor(), sessionId, request)).toEqual(result);
     const tasks = (
       await fixture.database!.query<Row>(
