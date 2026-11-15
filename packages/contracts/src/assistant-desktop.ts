@@ -1,5 +1,11 @@
 import { z } from "zod";
 
+export const desktopDevicePurposes = ["personal", "dedicated"] as const;
+export type DesktopDevicePurpose = (typeof desktopDevicePurposes)[number];
+export const desktopDevicePurposeSchema = z
+  .object({ purpose: z.enum(desktopDevicePurposes) })
+  .strict();
+
 export const desktopTaskStatuses = [
   "WAITING",
   "RUNNING",
@@ -133,6 +139,8 @@ export type DesktopDevice = {
   lastSeenAt: string | null;
   expiresAt: string;
   crossWindowAuthorized: boolean;
+  /** User-declared use, not a claim that virtualization was detected. */
+  purpose?: DesktopDevicePurpose;
 };
 export type DesktopTask = {
   id: string;
@@ -147,4 +155,9 @@ export type DesktopTask = {
   createdAt: string;
   updatedAt: string;
 };
-export type DesktopState = { devices: DesktopDevice[]; tasks: DesktopTask[] };
+export type DesktopState = {
+  devices: DesktopDevice[];
+  tasks: DesktopTask[];
+  /** Missing on older servers; null/missing means no independent environment. */
+  preferredDedicatedDeviceId?: string | null;
+};

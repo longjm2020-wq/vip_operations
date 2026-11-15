@@ -8,6 +8,7 @@ const sharedFeatures = [
   "assistant_search",
   "assistant_website",
   "assistant_desktop",
+  "assistant_browser",
   "assistant_team",
   "deerflow_team",
   "compass_analysis",

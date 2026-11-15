@@ -21,6 +21,8 @@ export function AssistantDesktopPanel({
   disabled = false,
   setupNote = "",
   selectedId,
+  dedicatedSelected = false,
+  chooseDedicated,
 }: {
   open: boolean;
   data?: DesktopState;
@@ -32,6 +34,8 @@ export function AssistantDesktopPanel({
   disabled?: boolean;
   setupNote?: string;
   selectedId?: string;
+  dedicatedSelected?: boolean;
+  chooseDedicated: () => void;
 }) {
   const { message } = App.useApp();
   const panelRef = useRef<HTMLDivElement>(null);
@@ -47,6 +51,12 @@ export function AssistantDesktopPanel({
   const native = isDesktopClient();
   const [localDevice, setLocalDevice] = useState("");
   const local = data?.devices.find((d) => d.id === localDevice);
+  const dedicated = data?.devices.find(
+    (device) =>
+      device.id === data.preferredDedicatedDeviceId &&
+      device.purpose === "dedicated",
+  );
+  const [connectingDedicated, setConnectingDedicated] = useState(false);
   useEffect(() => {
     if (!native) return;
     let active = true;
@@ -64,7 +74,7 @@ export function AssistantDesktopPanel({
     setBusy(key);
     try {
       await fn();
-      refresh();
+      await refresh();
     } catch (e) {
       message.error((e as Error).message);
     } finally {
@@ -82,9 +92,80 @@ export function AssistantDesktopPanel({
         </Button>
       </div>
       <p>
-        让小序按你的指令识别、点击 Windows
-        应用和网页。首次确认一次，后续直接说或输入要做的事。
+        电脑任务优先使用你指定的小序专用电脑。网站内操作保持在网站内；需要使用自己的电脑时，明确选择对应设备。
       </p>
+      <section
+        className="assistant-dedicated-environment"
+        aria-label="小序专用电脑设置"
+      >
+        <h4>
+          小序专用电脑 <Tag color="blue">电脑任务默认</Tag>
+        </h4>
+        <p>
+          请使用已准备好的专用 Windows
+          电脑或云电脑。把当前电脑设为专用电脑，并不会隔离鼠标和键盘。
+        </p>
+        {dedicated ? (
+          <>
+            <strong>{dedicated.name}</strong>
+            <Tag color={dedicated.online ? "processing" : undefined}>
+              {dedicated.online ? "在线" : "离线"}
+            </Tag>
+            <Tag>
+              {dedicated.crossWindowAuthorized
+                ? "已记住授权"
+                : "需在该电脑允许任务"}
+            </Tag>
+            <p>
+              {dedicated.online
+                ? "点击使用后固定这台设备；后续修改账号默认不会替换当前目标。"
+                : "专用电脑离线，请先启动该电脑和小序桌面端。不会改到我的电脑执行。"}
+            </p>
+          </>
+        ) : (
+          <Alert
+            type="info"
+            showIcon
+            title="尚未配置小序专用电脑"
+            description="先在专用电脑中安装并连接小序桌面端，再从下方设备列表指定为默认专用电脑。已有我的电脑不会自动代替。"
+          />
+        )}
+        <Space wrap>
+          <Button
+            type="primary"
+            disabled={!!busy || disabled || !dedicated?.online}
+            onClick={chooseDedicated}
+          >
+            使用小序专用电脑
+          </Button>
+          <Button
+            disabled={!!busy || disabled}
+            onClick={() => setConnectingDedicated((value) => !value)}
+          >
+            连接专用电脑
+          </Button>
+        </Space>
+        {dedicatedSelected && selectedId && selectedId !== dedicated?.id && (
+          <p>
+            当前对话已固定另一台专用设备；点击「使用小序专用电脑」才会改用这里的默认设备。
+          </p>
+        )}
+        {connectingDedicated && (
+          <div className="assistant-dedicated-connection">
+            <p>
+              在准备好的专用电脑或云电脑中打开桌面端，登录同一账号并点击「操作本机」完成一次授权。连接后回到这里指定用途即可。若需手动接管，请使用该电脑的远程桌面或云电脑控制台。
+            </p>
+            <Button
+              href="/downloads/xuti-desktop.zip"
+              download
+              icon={<DownloadOutlined aria-hidden />}
+            >
+              下载 Windows 桌面端
+            </Button>
+          </div>
+        )}
+      </section>
+      <h4>我的电脑</h4>
       <Alert
         type="info"
         showIcon
@@ -109,7 +190,6 @@ export function AssistantDesktopPanel({
         {native && (
           <>
             <Button
-              type="primary"
               loading={connecting}
               disabled={!!busy || disabled}
               onClick={connectLocal}
@@ -130,7 +210,6 @@ export function AssistantDesktopPanel({
         )}
         {!native && (
           <Button
-            type={native ? "default" : "primary"}
             href="/downloads/xuti-desktop.zip"
             download
             icon={<DownloadOutlined />}
@@ -201,15 +280,52 @@ export function AssistantDesktopPanel({
             {d.crossWindowAuthorized ? "已记住跨窗口授权" : "逐次允许"}
           </Tag>
           {selectedId === d.id && <Tag color="blue">当前执行电脑</Tag>}
+          <Tag>{d.purpose === "dedicated" ? "小序专用电脑" : "我的电脑"}</Tag>
+          {d.id === data.preferredDedicatedDeviceId && (
+            <Tag color="blue">默认专用电脑</Tag>
+          )}
           <Space>
             <Button
               size="small"
-              type="primary"
               disabled={!d.online || !!busy || disabled}
               onClick={() => choose(d.id)}
             >
               在这台电脑执行
             </Button>
+            {d.id !== data.preferredDedicatedDeviceId && (
+              <Button
+                size="small"
+                disabled={!!busy || disabled}
+                onClick={() =>
+                  void run(`purpose-${d.id}`, () =>
+                    api(
+                      `/my-workspace/assistant/desktop/devices/${d.id}/purpose`,
+                      "POST",
+                      { purpose: "dedicated" },
+                    ),
+                  )
+                }
+              >
+                设为默认专用电脑
+              </Button>
+            )}
+            {d.purpose === "dedicated" && (
+              <Button
+                size="small"
+                disabled={!!busy || disabled}
+                onClick={() =>
+                  void run(`purpose-${d.id}`, () =>
+                    api(
+                      `/my-workspace/assistant/desktop/devices/${d.id}/purpose`,
+                      "POST",
+                      { purpose: "personal" },
+                    ),
+                  )
+                }
+              >
+                设为我的电脑
+              </Button>
+            )}
           </Space>
           <details className="assistant-desktop-management">
             <summary>管理连接与授权</summary>
@@ -260,6 +376,7 @@ export function AssistantDesktopPanel({
           key={t.id}
           task={t}
           device={data.devices.find((device) => device.id === t.deviceId)}
+          localDeviceId={localDevice}
           refresh={refresh}
         />
       ))}

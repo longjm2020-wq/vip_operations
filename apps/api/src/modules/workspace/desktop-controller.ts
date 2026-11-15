@@ -16,6 +16,7 @@ import {
   queueDesktopTask,
   revokeDesktop,
   setDesktopAuthorization,
+  setDesktopPurpose,
 } from "./desktop.js";
 
 @Controller("api/v1/my-workspace/assistant/desktop")
@@ -39,6 +40,13 @@ export class AssistantDesktopController {
     @Param("id") id: string,
   ) {
     return revokeDesktop(context(r), id);
+  }
+  @Post("devices/:id/purpose") async purpose(
+    @Req() r: AuthRequest,
+    @Param("id") id: string,
+    @Body() input: unknown,
+  ) {
+    return setDesktopPurpose(context(r), id, input);
   }
   @Post("tasks") async create(@Req() r: AuthRequest, @Body() input: unknown) {
     return queueDesktopTask(context(r), input);

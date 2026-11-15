@@ -29,7 +29,17 @@ export const aiFeatures = [
     name: "小序电脑识屏与操作",
     group: "小序",
     href: "/my-workspace?assistant=desktop",
-    boundary: "读取已授权电脑的当前窗口并规划操作；需要在线客户端与本机授权。识屏使用 OpenRouter，独立于实时语音连接；调用失败暂停并显示安全错误原因，不自动换模型或重复操作。",
+    boundary:
+      "读取已授权电脑的当前窗口并规划操作；需要在线客户端与本机授权。识屏使用 OpenRouter，独立于实时语音连接；调用失败暂停并显示安全错误原因，不自动换模型或重复操作。",
+    kind: "vision",
+  },
+  {
+    id: "assistant_browser",
+    name: "小序独立浏览器",
+    group: "小序",
+    href: "/my-workspace?assistant=browser",
+    boundary:
+      "在服务器独立浏览器中观察公开网页并逐步操作，不占用你的鼠标键盘；登录态按账号加密隔离。登录及敏感步骤由本人接管，模型只使用去除输入值的页面观察和遮挡输入框的截图。需要在线浏览器工作进程；调用失败暂停，不自动换模型或重试输入。",
     kind: "vision",
   },
   {

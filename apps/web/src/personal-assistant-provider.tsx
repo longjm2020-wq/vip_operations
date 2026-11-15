@@ -26,6 +26,7 @@ import {
   EllipsisOutlined,
   AudioOutlined,
   DesktopOutlined,
+  GlobalOutlined,
 } from "@ant-design/icons";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useLocation } from "react-router-dom";
@@ -72,10 +73,16 @@ import { workspaceHologramEvent } from "./workspace-hologram";
 import { workspaceTeamEvent } from "./workspace-team-navigation";
 import { AssistantDesktopPanel } from "./assistant-desktop-panel";
 import {
+  AssistantBrowserPanel,
+  AssistantBrowserTaskCard,
+  isActiveBrowserTask,
+} from "./assistant-browser-panel";
+import type { BrowserState } from "../../../packages/contracts/src/assistant-browser";
+import { desktopClientRequest, isDesktopClient } from "./desktop-client";
+import {
   AssistantDesktopTaskCard,
   isActiveDesktopTask,
 } from "./assistant-desktop-task-card";
-import { isDesktopClient } from "./desktop-client";
 import {
   connectAndAuthorizeDesktop,
   desktopSetupMessage,
@@ -109,20 +116,36 @@ type AssistantSection =
   | "voice"
   | "tasks"
   | "desktop"
+  | "browser"
   | "team"
   | "settings";
 
 const desktopSelectionKey = (userId: string) =>
   `xuti-assistant-desktop:${userId}`;
-function readDesktopSelection(userId: string) {
+type DesktopChoice =
+  | { mode: "site" }
+  | { mode: "browser" }
+  | { mode: "device"; deviceId: string }
+  | { mode: "dedicated"; deviceId?: string };
+const desktopIdPattern = /^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/i;
+function readDesktopSelection(userId: string): DesktopChoice {
   try {
-    const id = localStorage.getItem(desktopSelectionKey(userId));
-    return id && /^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/i.test(id)
-      ? id
-      : undefined;
+    const stored = localStorage.getItem(desktopSelectionKey(userId));
+    if (stored && desktopIdPattern.test(stored))
+      return { mode: "device", deviceId: stored };
+    const choice = stored ? JSON.parse(stored) : null;
+    if (choice?.mode === "browser") return { mode: "browser" };
+    if (
+      choice?.mode === "dedicated" &&
+      (choice.deviceId === undefined ||
+        (typeof choice.deviceId === "string" &&
+          desktopIdPattern.test(choice.deviceId)))
+    )
+      return { mode: "dedicated", deviceId: choice.deviceId };
   } catch {
-    return undefined;
+    /* A missing or invalid stored choice starts in the website. */
   }
+  return { mode: "site" };
 }
 
 export function PersonalAssistantProvider({
@@ -214,14 +237,39 @@ export function PersonalAssistantProvider({
   });
   const [desktopSelection, setDesktopSelection] = useState(() => ({
     owner: user.id,
-    id: readDesktopSelection(user.id),
+    choice: readDesktopSelection(user.id),
   }));
-  const desktopTargetId =
+  const desktopChoice =
     desktopSelection.owner === user.id
-      ? desktopSelection.id
+      ? desktopSelection.choice
       : readDesktopSelection(user.id);
+  const browserMode = desktopChoice.mode === "browser";
+  const desktopMode =
+    desktopChoice.mode === "device" || desktopChoice.mode === "dedicated";
+  const externalMode = desktopMode || browserMode;
+  const desktopTargetId =
+    desktopChoice.mode === "device" || desktopChoice.mode === "dedicated"
+      ? desktopChoice.deviceId
+      : undefined;
   const nativeDesktop = isDesktopClient();
+  const [localDesktopId, setLocalDesktopId] = useState<string>();
+  useEffect(() => {
+    if (!nativeDesktop) return;
+    let current = true;
+    void desktopClientRequest("status")
+      .then((result) => {
+        if (current)
+          setLocalDesktopId(result.connected ? result.deviceId : undefined);
+      })
+      .catch(() => {});
+    return () => {
+      current = false;
+    };
+  }, [nativeDesktop]);
   const [desktopConnecting, setDesktopConnecting] = useState(false);
+  const [checkingVoiceTarget, setCheckingVoiceTarget] = useState(false);
+  const voiceStartAttempt = useRef(0);
+  const voiceStartPending = useRef(false);
   const [desktopSetupNote, setDesktopSetupNote] = useState("");
   const desktopSetupRunning = useRef(false);
   const desktopSetupLifecycle = useRef({ mounted: true, epoch: 0 });
@@ -234,15 +282,24 @@ export function PersonalAssistantProvider({
       desktopSetupLifecycle.current.epoch++;
     };
   }, []);
-  const rememberDesktop = (id?: string) => {
-    setDesktopSelection({ owner: user.id, id });
+  const rememberDesktopChoice = (choice: DesktopChoice) => {
+    setDesktopSelection({ owner: user.id, choice });
     try {
-      if (id) localStorage.setItem(desktopSelectionKey(user.id), id);
-      else localStorage.removeItem(desktopSelectionKey(user.id));
+      if (choice.mode === "site")
+        localStorage.removeItem(desktopSelectionKey(user.id));
+      else
+        localStorage.setItem(
+          desktopSelectionKey(user.id),
+          choice.mode === "device" ? choice.deviceId : JSON.stringify(choice),
+        );
     } catch {
       /* The choice remains available for this page. */
     }
   };
+  const rememberDesktop = (id?: string) =>
+    rememberDesktopChoice(
+      id ? { mode: "device", deviceId: id } : { mode: "site" },
+    );
   const [teamMode, setTeamMode] = useState(false);
   useEffect(() => {
     if (teamMode) return;
@@ -266,7 +323,7 @@ export function PersonalAssistantProvider({
     queryFn: async () =>
       (await api("/my-workspace/assistant/desktop")).data as DesktopState,
     refetchInterval: (query) =>
-      open || desktopTargetId || query.state.data?.tasks.some(isActiveDesktopTask)
+      open || desktopMode || query.state.data?.tasks.some(isActiveDesktopTask)
         ? 4000
         : false,
     // Native execution moves focus away from this WebView; task progress must continue.
@@ -274,22 +331,78 @@ export function PersonalAssistantProvider({
     refetchOnWindowFocus: "always",
     refetchOnReconnect: "always",
   });
+  const [selectedBrowserTaskId, setSelectedBrowserTaskId] = useState<string>();
+  const browser = useQuery({
+    queryKey: ["assistant-browser", user.id],
+    enabled: allowed,
+    queryFn: async ({ signal }) => {
+      const state = (
+        await api(
+          "/my-workspace/assistant/browser",
+          "GET",
+          undefined,
+          undefined,
+          { signal },
+        )
+      ).data as BrowserState;
+      if (
+        !state ||
+        !Array.isArray(state.tasks) ||
+        typeof state.ready !== "boolean"
+      )
+        throw new Error("暂时无法核对独立浏览器，请刷新后重试。");
+      return state;
+    },
+    refetchInterval: (query) =>
+      browserMode ||
+      (open && section === "browser") ||
+      query.state.data?.tasks.some(isActiveBrowserTask)
+        ? 3000
+        : false,
+    refetchIntervalInBackground: true,
+    refetchOnWindowFocus: "always",
+    refetchOnReconnect: "always",
+  });
+  const activeBrowserTask = browser.data?.tasks.find(isActiveBrowserTask);
+  const browserProblem = !browserMode
+    ? ""
+    : browser.isPending
+      ? "正在核对小序独立浏览器…"
+      : browser.error
+        ? "暂时无法核对独立浏览器，请刷新后重试；未切换执行位置。"
+        : !browser.data?.ready
+          ? browser.data?.note ||
+            "小序独立浏览器尚未就绪；不会改到我的电脑或网站内执行。"
+          : "";
   const desktopTarget = desktop.data?.devices.find(
-    (device) => device.id === desktopTargetId,
+    (device) =>
+      device.id === desktopTargetId &&
+      (desktopChoice.mode !== "dedicated" || device.purpose === "dedicated"),
+  );
+  const preferredDedicated = desktop.data?.devices.find(
+    (device) =>
+      device.id === desktop.data.preferredDedicatedDeviceId &&
+      device.purpose === "dedicated",
   );
   const activeDesktopTask = desktop.data?.tasks.find(
     (task) => task.deviceId === desktopTargetId && isActiveDesktopTask(task),
   );
   // A remembered ID is only routed after the current account's server list confirms ownership.
   const desktopDeviceId = desktopTarget?.id;
-  const desktopProblem = !desktopTargetId
+  const desktopProblem = !desktopMode
     ? ""
     : desktop.isPending
       ? "正在核对已记住的电脑…"
       : desktop.error
         ? "暂时无法核对电脑连接，请刷新后重试。"
         : !desktopTarget
-          ? "上次选择的电脑连接已失效，请重新连接或主动返回网站对话。"
+          ? desktopChoice.mode === "dedicated"
+            ? desktopTargetId
+              ? "所选专用电脑的连接或用途已变化，请重新选择；不会改到我的电脑执行。"
+              : preferredDedicated
+                ? "专用电脑已配置，请点击「使用小序专用电脑」后再发送。"
+                : "尚未配置小序专用电脑。请连接一台专用设备并指定用途；不会改到我的电脑执行。"
+            : "上次选择的电脑连接已失效，请重新连接或主动返回网站对话。"
           : !desktopTarget.online
             ? "所选电脑离线，请打开该电脑的小序桌面端。"
             : "";
@@ -383,17 +496,19 @@ export function PersonalAssistantProvider({
     value: chatModel,
     teamSelected: teamMode,
   });
-  const modelHint = !teamMode && !desktopTargetId ? pickerState.hint : "";
+  const modelHint = !teamMode && !externalMode ? pickerState.hint : "";
   const modelProblem =
     !teamMode &&
-    !desktopTargetId &&
+    !externalMode &&
     modelCatalog.data &&
     !pickerState.models.length
       ? "暂无已接通的多模态模型，请管理员检查连接。"
       : "";
   const composerReady = teamMode
     ? teamConfig.data?.ready
-    : data?.ready && !modelProblem && !desktopProblem;
+    : browserMode
+      ? !!data && browser.data?.ready && !browserProblem
+      : data?.ready && !modelProblem && !desktopProblem;
   const legacyVoice = useGptVoice(
     () => {
       void q.refetch();
@@ -409,6 +524,7 @@ export function PersonalAssistantProvider({
       void q.refetch();
       void activity.refetch();
       void desktop.refetch();
+      void browser.refetch();
     },
     (toolId) => {
       const tool = available.find((item) => item.id === toolId);
@@ -435,10 +551,16 @@ export function PersonalAssistantProvider({
     window.addEventListener(workspaceTeamEvent, showTeam);
     return () => window.removeEventListener(workspaceTeamEvent, showTeam);
   }, [voice.stopListening, speech.stop, gptVoice.stop]);
-  const voiceExecutionLabel =
-    useRealtime && desktopTargetId
-      ? `电脑操作 · ${desktopTarget?.name || "所选电脑"}`
-      : "网站内";
+  const activeVoiceDesktopLabel = useRef<string | undefined>(undefined);
+  const selectedVoiceExecutionLabel =
+    useRealtime && browserMode
+      ? "小序独立浏览器"
+      : useRealtime && desktopMode
+        ? `${desktopChoice.mode === "dedicated" ? "小序专用电脑" : "电脑操作"} · ${desktopTarget?.name || "尚未选择设备"}`
+        : "网站内";
+  const voiceExecutionLabel = gptVoice.active
+    ? activeVoiceDesktopLabel.current || selectedVoiceExecutionLabel
+    : selectedVoiceExecutionLabel;
   const selectedVoiceStatus =
     useRealtime && realtimeStatus.data
       ? {
@@ -462,6 +584,7 @@ export function PersonalAssistantProvider({
     : undefined;
   const busy =
     desktopConnecting ||
+    checkingVoiceTarget ||
     sending ||
     uploading ||
     data?.state === "PENDING" ||
@@ -469,6 +592,7 @@ export function PersonalAssistantProvider({
     gptVoice.active;
   const executionBusy = useRef(false);
   executionBusy.current =
+    checkingVoiceTarget ||
     sending ||
     uploading ||
     data?.state === "PENDING" ||
@@ -479,9 +603,35 @@ export function PersonalAssistantProvider({
     if (executionBusy.current || desktopSetupRunning.current) return;
     const device = desktop.data?.devices.find((entry) => entry.id === id);
     if (!device?.online) return;
-    rememberDesktop(id);
+    rememberDesktopChoice(
+      device.purpose === "dedicated"
+        ? { mode: "dedicated", deviceId: id }
+        : { mode: "device", deviceId: id },
+    );
     setTeamMode(false);
     setSection("chat");
+    setOpen(true);
+  };
+  const chooseDedicated = () => {
+    if (executionBusy.current || desktopSetupRunning.current) return;
+    rememberDesktopChoice({
+      mode: "dedicated",
+      deviceId: preferredDedicated?.id,
+    });
+    setTeamMode(false);
+    setSection(preferredDedicated?.online ? "chat" : "desktop");
+    setOpen(true);
+  };
+  const chooseBrowser = () => {
+    if (executionBusy.current || desktopSetupRunning.current) return;
+    rememberDesktopChoice({ mode: "browser" });
+    setTeamMode(false);
+    setSection(browser.data?.ready ? "chat" : "browser");
+    setOpen(true);
+  };
+  const inspectBrowser = (id?: string) => {
+    setSelectedBrowserTaskId(id);
+    setSection("browser");
     setOpen(true);
   };
   const setupDesktop = async () => {
@@ -527,6 +677,7 @@ export function PersonalAssistantProvider({
         )
           throw new Error("本机连接尚未同步，请稍后重试。");
         rememberDesktop(result.deviceId);
+        setLocalDesktopId(result.deviceId);
         setTeamMode(false);
         setSection("chat");
         setOpen(true);
@@ -642,7 +793,7 @@ export function PersonalAssistantProvider({
     }
     if (!data) return;
     const websiteRequest =
-      !desktopDeviceId && !agent.attachments.length
+      !externalMode && !agent.attachments.length
         ? parseAssistantWebsiteRequest(value)
         : undefined;
     const webOpenResult = websiteRequest
@@ -658,6 +809,28 @@ export function PersonalAssistantProvider({
     speech.stop();
     if (voiceReply && voiceStatus.data?.ready) speech.prepare();
     try {
+      if (externalMode && agent.attachments.length)
+        throw new Error("外部操作仅接收本条指令，请先移除附件后发送。");
+      if (browserMode) {
+        const epoch = desktopSetupLifecycle.current.epoch;
+        const current = await browser.refetch();
+        if (
+          !desktopSetupLifecycle.current.mounted ||
+          desktopSetupLifecycle.current.epoch !== epoch ||
+          currentOwner.current !== user.id
+        )
+          return;
+        if (current.error || !current.data?.ready)
+          throw new Error(
+            current.data?.note || "独立浏览器暂不可用，未切换到其他执行位置。",
+          );
+        if (current.data.tasks.some(isActiveBrowserTask)) {
+          message.info(
+            "已显示当前浏览器任务。指令已保留，请先继续或停止当前任务，无需重复发送。",
+          );
+          return;
+        }
+      }
       if (desktopDeviceId) {
         const current = await desktop.refetch();
         if (
@@ -667,6 +840,17 @@ export function PersonalAssistantProvider({
           return;
         if (current.error || !current.data)
           throw new Error("暂时无法核对电脑任务，请刷新后重试。");
+        const currentDevice = current.data.devices.find(
+          (device) => device.id === desktopDeviceId,
+        );
+        if (
+          !currentDevice?.online ||
+          (desktopChoice.mode === "dedicated" &&
+            currentDevice.purpose !== "dedicated")
+        )
+          throw new Error(
+            "所选电脑的连接或用途已变化，请重新选择后发送；未切换到其他电脑。",
+          );
         if (
           current.data.tasks.some(
             (task) =>
@@ -683,19 +867,21 @@ export function PersonalAssistantProvider({
         message: value.trim(),
         version: data.version,
         requestId,
-        includePersonalContext: includeContext,
-        includeMemory,
+        includePersonalContext: externalMode ? false : includeContext,
+        includeMemory: externalMode ? false : includeMemory,
         attachmentIds: agent.attachments.map((f) => f.id),
-        ...(!desktopDeviceId && chatModel ? { model: chatModel } : {}),
+        ...(!externalMode && chatModel ? { model: chatModel } : {}),
         desktopDeviceId,
+        ...(browserMode ? { browserExecution: true } : {}),
         webOpenResult,
       });
-      if (!desktopDeviceId || response.data.state !== "FAILED") {
+      if (!externalMode || response.data.state !== "FAILED") {
         setText("");
         setAgent((previous) => ({ ...previous, attachments: [] }));
       }
       void jobs.refetch();
       if (desktopDeviceId) await desktop.refetch();
+      if (browserMode) await browser.refetch();
       const latest = (response.data as AssistantConversation).messages?.at(-1);
       if (response.data.state === "IDLE" && latest?.role === "assistant") {
         const tool = available.find((entry) => entry.id === latest.navigation);
@@ -750,35 +936,97 @@ export function PersonalAssistantProvider({
     }
   };
   const closeVoice = () => {
+    voiceStartAttempt.current++;
+    voiceStartPending.current = false;
+    setCheckingVoiceTarget(false);
     gptVoice.stop();
     setVoiceVisible(false);
   };
-  const startVoice = () => {
+  const startVoice = async () => {
     if (!allowed) return;
-    if (desktopConnecting || desktopProblem) {
-      message.info(desktopProblem || "请先完成本机连接");
+    // An existing call keeps its bound target and can always be interrupted.
+    if (gptVoice.active) {
+      if (gptVoice.state === "speaking") gptVoice.interrupt();
+      setVoiceVisible(true);
       return;
     }
-    voice.stop();
-    speech.stop();
-    // Starting or stopping a call never opens or closes the text chat panel.
-    setVoiceVisible(true);
-    if (gptVoice.state === "speaking") gptVoice.interrupt();
-    else if (
-      !gptVoice.active &&
-      activeVoiceStatus?.ready &&
-      !sending &&
-      !executing &&
-      data?.state !== "PENDING"
-    )
-      void gptVoice.start({
-        includePersonalContext: includeContext,
-        includeMemory,
-        ...(useRealtime && desktopDeviceId ? { desktopDeviceId } : {}),
-      });
-    else if (!activeVoiceStatus?.ready) {
+    if (voiceStartPending.current) return;
+    if (desktopConnecting || desktopProblem || browserProblem) {
+      message.info(desktopProblem || browserProblem || "请先完成本机连接");
+      return;
+    }
+    if (!activeVoiceStatus?.ready) {
       void voiceStatus.refetch();
       void realtimeStatus.refetch();
+      return;
+    }
+    if (sending || executing || uploading || data?.state === "PENDING") return;
+    if (externalMode && !useRealtime) {
+      message.info("外部操作请使用实时语音或文字输入。");
+      return;
+    }
+    const attempt = ++voiceStartAttempt.current;
+    const owner = user.id;
+    const epoch = desktopSetupLifecycle.current.epoch;
+    const capturedDeviceId = desktopDeviceId;
+    const capturedMode = desktopChoice.mode;
+    const isCurrent = () =>
+      desktopSetupLifecycle.current.mounted &&
+      desktopSetupLifecycle.current.epoch === epoch &&
+      currentOwner.current === owner &&
+      voiceStartAttempt.current === attempt;
+    voiceStartPending.current = true;
+    try {
+      if (browserMode) {
+        setCheckingVoiceTarget(true);
+        const current = await browser.refetch();
+        if (!isCurrent()) return;
+        if (current.error || !current.data?.ready)
+          throw new Error(
+            current.data?.note || "独立浏览器暂不可用，未切换到其他执行位置。",
+          );
+      }
+      if (desktopMode) {
+        setCheckingVoiceTarget(true);
+        const current = await desktop.refetch();
+        if (!isCurrent()) return;
+        const device = current.data?.devices.find(
+          (entry) => entry.id === capturedDeviceId,
+        );
+        if (
+          current.error ||
+          !device?.online ||
+          (capturedMode === "dedicated" && device.purpose !== "dedicated")
+        )
+          throw new Error(
+            "所选电脑的连接或用途已变化，请重新选择后开始语音；未切换到其他电脑。",
+          );
+      }
+      if (!isCurrent()) return;
+      activeVoiceDesktopLabel.current = selectedVoiceExecutionLabel;
+      voice.stop();
+      speech.stop();
+      // Starting or stopping a call never opens or closes the text chat panel.
+      setVoiceVisible(true);
+      await gptVoice.start({
+        includePersonalContext: externalMode ? false : includeContext,
+        includeMemory: externalMode ? false : includeMemory,
+        ...(useRealtime && capturedMode === "browser"
+          ? {
+              browserExecution: true,
+            }
+          : {}),
+        ...(useRealtime && capturedDeviceId
+          ? { desktopDeviceId: capturedDeviceId }
+          : {}),
+      });
+    } catch (cause) {
+      if (isCurrent()) message.info((cause as Error).message);
+    } finally {
+      if (isCurrent()) {
+        voiceStartPending.current = false;
+        setCheckingVoiceTarget(false);
+      }
     }
   };
   const openVoiceSettings = () => {
@@ -823,7 +1071,9 @@ export function PersonalAssistantProvider({
     const params = new URLSearchParams(location.search);
     const target = params.get("assistant");
     if (
-      !["chat", "team", "desktop", "voice", "tasks"].includes(target || "") ||
+      !["chat", "team", "desktop", "browser", "voice", "tasks"].includes(
+        target || "",
+      ) ||
       consumedAssistantLink.current === location.key
     )
       return;
@@ -855,7 +1105,8 @@ export function PersonalAssistantProvider({
             void setupDesktopRef.current();
         });
       } else selectSection("desktop");
-    } else if (target === "tasks") selectSection("tasks");
+    } else if (target === "browser") selectSection("browser");
+    else if (target === "tasks") selectSection("tasks");
     else openPanel(target === "team" ? "team" : "chat");
     // React to navigation, not to changing voice/session state.
   }, [location.key, location.pathname, location.search, allowed]);
@@ -864,6 +1115,7 @@ export function PersonalAssistantProvider({
     ...(allowed ? [{ key: "team", label: "团队设置" }] : []),
     ...(allowed ? [{ key: "tasks", label: "任务与文件" }] : []),
     ...(allowed ? [{ key: "desktop", label: "电脑操作" }] : []),
+    ...(allowed ? [{ key: "browser", label: "独立浏览器" }] : []),
     ...(allowed
       ? [{ key: "voice", label: "语音设置", disabled: sending || !!executing }]
       : []),
@@ -938,23 +1190,101 @@ export function PersonalAssistantProvider({
         <AssistantDesktopTaskCard
           task={activeDesktopTask}
           device={desktopTarget}
+          localDeviceId={localDesktopId}
           compact
           refresh={() => desktop.refetch()}
         />
       )}
+      {!teamMode && browserMode && activeBrowserTask && (
+        <AssistantBrowserTaskCard
+          task={activeBrowserTask}
+          compact
+          refresh={() => browser.refetch()}
+          inspect={() => inspectBrowser(activeBrowserTask.id)}
+        />
+      )}
       <div className="assistant-desktop-entry">
+        <Select
+          size="small"
+          aria-label="执行位置"
+          value={
+            desktopChoice.mode === "browser"
+              ? "browser"
+              : desktopChoice.mode === "site"
+                ? "site"
+                : desktopChoice.mode === "dedicated"
+                  ? "dedicated"
+                  : desktopChoice.deviceId
+          }
+          disabled={busy || voice.listening}
+          options={[
+            { value: "site", label: "网站内" },
+            { value: "browser", label: "小序独立浏览器" },
+            { value: "dedicated", label: "小序专用电脑" },
+            ...(desktop.data?.devices
+              .filter(
+                (device) =>
+                  device.purpose !== "dedicated" ||
+                  (desktopChoice.mode === "device" &&
+                    device.id === desktopTargetId),
+              )
+              .map((device) => ({
+                value: device.id,
+                label: `${device.purpose === "dedicated" ? "专用设备" : "我的电脑"} · ${device.name}`,
+                disabled: !device.online,
+              })) || []),
+          ]}
+          onChange={(value) => {
+            if (value === "site") {
+              rememberDesktop();
+              setTeamMode(false);
+            } else if (value === "browser") chooseBrowser();
+            else if (value === "dedicated") chooseDedicated();
+            else chooseDesktop(value);
+          }}
+        />
         <Button
           size="small"
-          type="text"
+          icon={<GlobalOutlined aria-hidden />}
+          disabled={busy || voice.listening}
+          onClick={() => (browserMode ? inspectBrowser() : chooseBrowser())}
+        >
+          独立浏览器
+        </Button>
+        {nativeDesktop && (
+          <Button
+            type="primary"
+            size="small"
+            disabled={busy || voice.listening}
+            onClick={chooseDedicated}
+          >
+            小序专用电脑
+          </Button>
+        )}
+        <Button
+          size="small"
+          type={nativeDesktop ? "text" : "primary"}
           icon={<DesktopOutlined aria-hidden />}
           aria-label={nativeDesktop ? "操作本机" : "电脑操作"}
           loading={desktopConnecting}
           disabled={busy || voice.listening}
           onClick={() =>
-            nativeDesktop ? void setupDesktop() : selectSection("desktop")
+            nativeDesktop
+              ? void setupDesktop()
+              : desktopMode
+                ? selectSection("desktop")
+                : chooseDedicated()
           }
         >
           {nativeDesktop ? "操作本机" : "电脑操作"}
+        </Button>
+        <Button
+          size="small"
+          type="text"
+          disabled={busy || voice.listening}
+          onClick={() => selectSection("desktop")}
+        >
+          管理电脑
         </Button>
       </div>
       <Sender
@@ -974,7 +1304,7 @@ export function PersonalAssistantProvider({
             onUploading={setUploading}
             actions={
               <div className="assistant-send-actions">
-                {!desktopTargetId && (
+                {!externalMode && (
                   <AssistantModelPicker
                     catalog={modelCatalog.data}
                     value={chatModel}
@@ -1059,7 +1389,9 @@ export function PersonalAssistantProvider({
                     className="assistant-voice-button"
                     aria-label="开始语音对话"
                     title={useRealtime ? "实时语音对话" : "语音对话"}
-                    disabled={voice.listening || !!desktopProblem}
+                    disabled={
+                      voice.listening || !!desktopProblem || !!browserProblem
+                    }
                     onClick={startVoice}
                   >
                     <svg
@@ -1087,13 +1419,15 @@ export function PersonalAssistantProvider({
               : teamConfig.isLoading
                 ? "正在连接智能体团队…"
                 : "团队智能服务尚未就绪，请查看面板提示"
-            : data?.ready
-              ? desktopTargetId
-                ? desktop.data?.devices?.find((d) => d.id === desktopDeviceId)
-                    ?.crossWindowAuthorized
-                  ? "描述电脑任务，小序将按设备授权执行…"
-                  : "描述电脑任务，发送后在本机选择窗口…"
-                : "告诉我你想完成什么，例如：打开经营分析…"
+            : data?.ready || (browserMode && browser.data?.ready)
+              ? browserMode
+                ? "描述网页目标，小序将在独立浏览器中连续操作…"
+                : desktopMode
+                  ? desktop.data?.devices?.find((d) => d.id === desktopDeviceId)
+                      ?.crossWindowAuthorized
+                    ? "描述电脑任务，小序将按设备授权执行…"
+                    : "描述电脑任务，发送后在所选电脑允许…"
+                  : "告诉我你想完成什么，例如：打开经营分析…"
               : q.isLoading
                 ? "正在连接个人助理…"
                 : "AI 尚未就绪，可打开小序的文字对话查看原因"
@@ -1136,14 +1470,19 @@ export function PersonalAssistantProvider({
           }
         />
       )}
-      {desktopTargetId && (
+      {desktopMode && (
         <div className="assistant-desktop-note">
           <span>
-            电脑操作 · {desktopTarget?.name || "上次选择的电脑"}
+            {desktopChoice.mode === "dedicated" ? "小序专用电脑" : "电脑操作"} ·{" "}
+            {desktopTarget?.name || "尚未选择设备"}
             。仅发送本条指令，请移除附件。
             {desktopTarget &&
               !desktopTarget.crossWindowAuthorized &&
-              " 本机授权尚未开启，任务需在本机允许。"}
+              " 设备授权尚未开启，任务需在所选电脑允许。"}
+            {desktopChoice.mode === "dedicated" &&
+              desktopTarget &&
+              desktopTarget.id !== preferredDedicated?.id &&
+              " 当前固定使用这台设备，账号默认已变化；重新选择专用电脑才会切换。"}
           </span>
           <Button
             size="small"
@@ -1156,6 +1495,23 @@ export function PersonalAssistantProvider({
         </div>
       )}
       {desktopProblem && <Alert type="warning" title={desktopProblem} />}
+      {browserMode && (
+        <div className="assistant-desktop-note">
+          <span>
+            小序独立浏览器 ·
+            仅发送本条指令，请移除附件。需要你处理时可查看画面并接管。
+          </span>
+          <Button
+            size="small"
+            type="link"
+            disabled={busy}
+            onClick={() => rememberDesktop()}
+          >
+            返回网站对话
+          </Button>
+        </div>
+      )}
+      {browserProblem && <Alert type="warning" title={browserProblem} />}
     </div>
   );
   return (
@@ -1430,6 +1786,21 @@ export function PersonalAssistantProvider({
             disabled={busy || voice.listening}
             setupNote={desktopSetupNote}
             selectedId={desktopTargetId}
+            dedicatedSelected={desktopChoice.mode === "dedicated"}
+            chooseDedicated={chooseDedicated}
+          />
+        )}
+        {section === "browser" && allowed && (
+          <AssistantBrowserPanel
+            open={open && drawerSettled}
+            owner={user.id}
+            data={browser.data}
+            error={browser.error?.message}
+            refresh={() => browser.refetch()}
+            choose={chooseBrowser}
+            disabled={busy || voice.listening}
+            selectedId={selectedBrowserTaskId}
+            selectTask={setSelectedBrowserTaskId}
           />
         )}
         {section === "activity" && (
@@ -1445,7 +1816,15 @@ export function PersonalAssistantProvider({
         )}
         <div hidden={section !== "chat" || !allowed}>
           <div className="assistant-status">
-            <span>{data?.ready ? "小序已就绪" : "小序暂未就绪"}</span>
+            <span>
+              {browserMode
+                ? browser.data?.ready
+                  ? "独立浏览器已就绪"
+                  : "独立浏览器暂未就绪"
+                : data?.ready
+                  ? "小序已就绪"
+                  : "小序暂未就绪"}
+            </span>
             <Button
               type="text"
               size="small"
@@ -1457,7 +1836,7 @@ export function PersonalAssistantProvider({
           </div>
           {q.isLoading && <Spin />}
           {q.error && <Alert type="error" title={(q.error as Error).message} />}
-          {!q.isLoading && data && !data.ready && (
+          {!browserMode && !q.isLoading && data && !data.ready && (
             <Alert
               type="warning"
               title={
@@ -1630,6 +2009,28 @@ export function PersonalAssistantProvider({
                   {!item.schedules?.length && (
                     <AgentMessageResults item={item} jobs={jobs.data || []} />
                   )}
+                  {item.browserTaskId &&
+                    item.browserTaskId !==
+                      (browserMode ? activeBrowserTask?.id : undefined) &&
+                    (() => {
+                      const task = browser.data?.tasks.find(
+                        (entry) => entry.id === item.browserTaskId,
+                      );
+                      return task ? (
+                        <AssistantBrowserTaskCard
+                          task={task}
+                          refresh={() => browser.refetch()}
+                          inspect={() => inspectBrowser(task.id)}
+                        />
+                      ) : (
+                        <Button
+                          size="small"
+                          onClick={() => inspectBrowser(item.browserTaskId)}
+                        >
+                          查看浏览器任务进度
+                        </Button>
+                      );
+                    })()}
                   {item.desktopTaskId &&
                     item.desktopTaskId !== activeDesktopTask?.id &&
                     (() => {
@@ -1639,6 +2040,7 @@ export function PersonalAssistantProvider({
                       return task ? (
                         <AssistantDesktopTaskCard
                           task={task}
+                          localDeviceId={localDesktopId}
                           device={desktop.data?.devices.find(
                             (entry) => entry.id === task.deviceId,
                           )}

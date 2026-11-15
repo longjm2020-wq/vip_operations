@@ -11,6 +11,7 @@ import {
 } from "../../../../../packages/database/src/index.js";
 import {
   desktopActionSchema,
+  desktopDevicePurposeSchema,
   desktopObservationSchema,
   desktopTaskSchema,
   type DesktopTask,
@@ -231,7 +232,7 @@ export async function desktopState(c: Context) {
   const [devices, tasks] = await Promise.all([
     rows(
       db,
-      "SELECT id,name,last_seen_at,expires_at,authorization_id FROM assistant_desktop_devices WHERE user_id=$1::bigint AND token_hash IS NOT NULL AND revoked_at IS NULL AND expires_at>now() ORDER BY created_at DESC",
+      "SELECT id,name,last_seen_at,expires_at,authorization_id,purpose,assistant_default FROM assistant_desktop_devices WHERE user_id=$1::bigint AND token_hash IS NOT NULL AND revoked_at IS NULL AND expires_at>now() ORDER BY created_at DESC",
       c.actor.id,
     ),
     rows(
@@ -241,6 +242,9 @@ export async function desktopState(c: Context) {
     ),
   ]);
   return {
+    preferredDedicatedDeviceId:
+      devices.find((d) => d.purpose === "dedicated" && d.assistant_default)
+        ?.id || null,
     devices: devices.map((d) => ({
       id: d.id,
       name: d.name,
@@ -250,9 +254,49 @@ export async function desktopState(c: Context) {
       lastSeenAt: d.last_seen_at,
       expiresAt: d.expires_at,
       crossWindowAuthorized: !!d.authorization_id,
+      purpose: d.purpose,
     })),
     tasks: tasks.map(desktopTaskView),
   };
+}
+export async function setDesktopPurpose(
+  c: Context,
+  id: string,
+  input: unknown,
+) {
+  requireAssistant(c);
+  parse(z.string().uuid(), id);
+  const b = parse(desktopDevicePurposeSchema, input);
+  await db.$transaction(async (tx) => {
+    // Serialize default selection with submissions; existing tasks retain their device.
+    await one(
+      tx,
+      "SELECT id FROM users WHERE id=$1::bigint FOR UPDATE",
+      c.actor.id,
+    );
+    const device = await one(
+      tx,
+      "SELECT id FROM assistant_desktop_devices WHERE id=$1::uuid AND user_id=$2::bigint AND token_hash IS NOT NULL AND revoked_at IS NULL AND expires_at>now() FOR UPDATE",
+      id,
+      c.actor.id,
+    );
+    if (!device) fail("NOT_FOUND", "电脑连接不存在或已失效", 404);
+    // This is an explicit preference, not permission to operate the device.
+    // Keep other dedicated labels but never silently choose one as a replacement.
+    if (b.purpose === "dedicated")
+      await tx.$executeRawUnsafe(
+        "UPDATE assistant_desktop_devices SET assistant_default=false WHERE user_id=$1::bigint AND assistant_default",
+        c.actor.id,
+      );
+    await tx.$executeRawUnsafe(
+      "UPDATE assistant_desktop_devices SET purpose=$3,assistant_default=$4 WHERE id=$1::uuid AND user_id=$2::bigint",
+      id,
+      c.actor.id,
+      b.purpose,
+      b.purpose === "dedicated",
+    );
+  });
+  return desktopState(c);
 }
 export async function createDesktopPair(c: Context, sessionToken: string) {
   requireAssistant(c);
@@ -345,7 +389,7 @@ export async function revokeDesktop(c: Context, id: string) {
   parse(z.string().uuid(), id);
   await db.$transaction(async (tx) => {
     await tx.$executeRawUnsafe(
-      "UPDATE assistant_desktop_devices SET revoked_at=now(),token_hash=NULL,pair_hash=NULL,authorization_id=NULL WHERE id=$1::uuid AND user_id=$2::bigint",
+      "UPDATE assistant_desktop_devices SET revoked_at=now(),token_hash=NULL,pair_hash=NULL,authorization_id=NULL,assistant_default=false WHERE id=$1::uuid AND user_id=$2::bigint",
       id,
       c.actor.id,
     );

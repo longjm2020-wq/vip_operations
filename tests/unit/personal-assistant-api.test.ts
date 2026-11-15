@@ -186,6 +186,7 @@ beforeAll(async () => {
     "087_qwen_realtime.sql",
     "088_desktop_authorization.sql",
     "089_realtime_desktop.sql",
+    "099_assistant_browser.sql",
   ])
     await fixture.database.exec(
       await readFile(`packages/database/migrations/${name}`, "utf8"),
@@ -206,6 +207,9 @@ beforeAll(async () => {
 beforeEach(async () => {
   fixture.encrypted = true;
   calls = [];
+  await fixture.database!.exec(
+    "TRUNCATE personal_assistant_browser_actions,personal_assistant_browser_tasks,personal_assistant_browser_profiles; UPDATE personal_assistant_browser_runtime SET ready=false,heartbeat_at=NULL",
+  );
   await fixture.database!.exec(
     "TRUNCATE assistant_realtime_tools,assistant_realtime_sessions,assistant_desktop_tasks,assistant_desktop_devices,personal_assistant_jobs,personal_assistant_files,personal_assistant_conversations,personal_workspaces,idempotency_records,personal_assistant_actions,personal_assistant_memories,projects,project_members,project_library_acl; UPDATE compass_ai_settings SET enabled=true,verified_at=now(); UPDATE users SET status='ACTIVE'",
   );
@@ -250,6 +254,79 @@ const toolSession = (): AssistantToolSession => ({
   memorySuggestions: [],
 });
 describe("multimodal agent ownership and jobs", () => {
+  it("queues browser instructions once without opening the user's browser or starting desktop work", async () => {
+    await fixture.database!.exec(
+      "UPDATE personal_assistant_browser_runtime SET ready=true,heartbeat_at=now()",
+    );
+    const body = {
+      ...input(),
+      message: "打开百度并搜索服装趋势",
+      browserExecution: true,
+    };
+    const result = await sendAssistant(actor(), body);
+    expect(result.state).toBe("IDLE");
+    expect(result.messages.at(-1)).toMatchObject({
+      browserTaskId: expect.any(String),
+    });
+    expect(result.messages.at(-1).desktopTaskId).toBeUndefined();
+    expect(result.messages.at(-1).webNavigation).toBeUndefined();
+    expect(result.messages.at(-1).text).toContain("服务端独立浏览器");
+    expect(await sendAssistant(actor(), body)).toMatchObject({
+      messages: result.messages,
+    });
+    expect(
+      (
+        await fixture.database!.query(
+          "SELECT user_id,instruction,status FROM personal_assistant_browser_tasks",
+        )
+      ).rows,
+    ).toEqual([{ user_id: 7, instruction: body.message, status: "QUEUED" }]);
+    expect(
+      (await fixture.database!.query("SELECT * FROM assistant_desktop_tasks"))
+        .rows,
+    ).toEqual([]);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+  it("keeps browser failures visible and never falls back to site or desktop execution", async () => {
+    const result = await sendAssistant(actor(), {
+      ...input(),
+      message: "打开百度",
+      browserExecution: true,
+    });
+    expect(result.state).toBe("FAILED");
+    expect(
+      (
+        await fixture.database!.query(
+          "SELECT * FROM personal_assistant_browser_tasks",
+        )
+      ).rows,
+    ).toEqual([]);
+    expect(
+      (await fixture.database!.query("SELECT * FROM assistant_desktop_tasks"))
+        .rows,
+    ).toEqual([]);
+    expect(fetch).not.toHaveBeenCalled();
+    for (const extra of [
+      { desktopDeviceId: randomUUID() },
+      { webSearch: true },
+      { attachmentIds: [randomUUID()] },
+    ]) {
+      await expect(
+        sendAssistant(actor(), {
+          ...input(),
+          browserExecution: true,
+          ...extra,
+        }),
+      ).rejects.toThrow();
+    }
+    await expect(
+      sendAssistant(
+        actor(),
+        { ...input(), browserExecution: true },
+        { signal: new AbortController().signal },
+      ),
+    ).rejects.toThrow();
+  });
   it("uploads one multipart file, isolates owners and returns only the owner's content", async () => {
     const boundary = "xuti-test-boundary";
     const req = Readable.from([
@@ -526,7 +603,7 @@ describe("assistant business tools and private memory", () => {
     };
     const result = await runRealtimeTool(actor(), sessionId, request);
     expect(result.desktopTaskId).toBeTruthy();
-    expect(result.text).toContain("电脑任务已提交，等待本机执行");
+    expect(result.text).toContain("电脑任务已提交，等待所选电脑执行");
     expect(await runRealtimeTool(actor(), sessionId, request)).toEqual(result);
     const tasks = (
       await fixture.database!.query<Row>(

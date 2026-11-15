@@ -236,6 +236,40 @@ export async function assistantActivity(
     }
   }
   if (canUsePersonalAssistant(c.actor)) {
+    const browserTasks = await rows(
+      db,
+      "SELECT id,instruction,status,stage,step,heartbeat_at,expires_at,updated_at FROM personal_assistant_browser_tasks WHERE user_id=$1::bigint AND created_at>now()-interval '7 days' ORDER BY updated_at DESC LIMIT 10",
+      c.actor.id,
+    );
+    for (const task of browserTasks) {
+      const active = ["QUEUED", "RUNNING", "PAUSED", "NEEDS_USER"].includes(
+        task.status,
+      );
+      const stale =
+        active &&
+        (now > new Date(task.expires_at) ||
+          (task.status === "RUNNING" &&
+            (!task.heartbeat_at ||
+              now.getTime() - new Date(task.heartbeat_at).getTime() > 60000)));
+      items.push({
+        id: `browser:${task.id}`,
+        kind: "task",
+        title: "独立浏览器 · " + task.instruction.slice(0, 50),
+        detail: stale
+          ? "浏览器连接中断，操作进度待核对"
+          : `已执行 ${task.step} 步 · ${assistantPublicText(task.stage)}`,
+        href: "/my-workspace?assistant=browser",
+        at: new Date(task.updated_at).toISOString(),
+        status:
+          task.status === "DONE"
+            ? "completed"
+            : task.status === "CANCELED"
+              ? "info"
+              : !stale && ["QUEUED", "RUNNING"].includes(task.status)
+                ? "running"
+                : "attention",
+      });
+    }
     const desktopTasks = await rows(
       db,
       "SELECT t.id,t.instruction,t.status,t.stage,t.updated_at,d.last_seen_at,d.revoked_at FROM assistant_desktop_tasks t JOIN assistant_desktop_devices d ON d.id=t.device_id WHERE t.user_id=$1::bigint AND t.created_at>now()-interval '7 days' ORDER BY t.updated_at DESC LIMIT 10",

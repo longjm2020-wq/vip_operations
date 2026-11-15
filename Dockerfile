@@ -12,4 +12,9 @@ RUN pnpm exec playwright install --with-deps chromium --only-shell
 RUN pnpm db:generate \
     && pnpm exec vitest run tests/unit/assistant-agent-media.test.ts --maxWorkers=1 \
     && pnpm build
+# Arbitrary assistant pages require Chromium's real Linux sandbox. Keep the
+# runtime unprivileged; a host that cannot create the sandbox reports unavailable.
+RUN chown -R node:node /app \
+    && chmod -R a+rX /ms-playwright
+USER node
 CMD ["sh", "-c", "pnpm db:migrate && pnpm start:api"]

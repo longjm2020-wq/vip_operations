@@ -26,6 +26,7 @@ const f = vi.hoisted(() => ({
   verifyDoubao: vi.fn(),
   verifyQwen: vi.fn(),
   model: vi.fn(),
+  browserStatus: vi.fn(),
 }));
 vi.mock("../../packages/database/src/index.js", async (original) => {
   const exports =
@@ -54,6 +55,9 @@ vi.mock("../../apps/api/src/modules/workspace/assistant.js", () => ({
 }));
 vi.mock("../../apps/api/src/modules/workspace/agent-models.js", () => ({
   resolveAgentModel: f.model,
+}));
+vi.mock("../../apps/api/src/modules/workspace/assistant-browser.js", () => ({
+  browserStatus: f.browserStatus,
 }));
 vi.mock("../../apps/api/src/modules/analytics/secrets.js", () => ({
   encryptionReady: () => true,
@@ -138,6 +142,12 @@ beforeAll(async () => {
       "utf8",
     ),
   );
+  await f.db.exec(
+    await readFile(
+      "packages/database/migrations/099_assistant_browser.sql",
+      "utf8",
+    ),
+  );
 });
 beforeEach(async () => {
   await f.db!
@@ -147,6 +157,7 @@ beforeEach(async () => {
     qwen_voice='Tina',qwen_workspace_id='',qwen_free_only_confirmed=false,qwen_api_key_encrypted=NULL,qwen_verified_at=NULL,qwen_error_note='';`);
   f.verifyDoubao.mockReset().mockResolvedValue(undefined);
   f.verifyQwen.mockReset().mockResolvedValue(undefined);
+  f.browserStatus.mockReset().mockResolvedValue({ ready: true });
   f.model
     .mockReset()
     .mockResolvedValue({ id: "engine/111111111111111111111111", vision: true });
@@ -192,6 +203,128 @@ afterAll(async () => {
 });
 
 describe("native realtime voice authorization and lifecycle", () => {
+  it.each(["openai", "qwen", "doubao"])(
+    "routes %s browser voice tasks to the bound browser planner without a desktop fallback",
+    async (provider) => {
+      if (provider !== "openai")
+        await f.db!.exec(
+          `UPDATE assistant_realtime_settings SET provider='${provider}',${provider}_api_key_encrypted='encrypted',${provider}_verified_at=now(),qwen_workspace_id='workspace-1',qwen_free_only_confirmed=true`,
+        );
+      const b = {
+        ...input(),
+        browserExecution: true,
+        model: "engine/111111111111111111111111",
+      };
+      const started = await startRealtime(actor(), b);
+      expect(f.model).toHaveBeenCalledWith(b.model, "assistant_browser");
+      if (started.ticket) {
+        const config = await claimRealtimeSocket(actor(), b.id, started.ticket);
+        expect(config).toMatchObject({
+          browserEnabled: true,
+          desktopEnabled: false,
+          history: "",
+        });
+        await activateRealtimeSocket(actor(), b.id);
+      } else if (provider === "qwen") {
+        if (started.transport !== "webrtc") throw Error("expected WebRTC");
+        expect(
+          started.configuration!.session.tools.map((t) => t.function.name),
+        ).toEqual([
+          "workspace_request",
+          "browser_request",
+          ...presentationToolNames,
+        ]);
+        expect(started.pageControl).toBe(false);
+      } else {
+        const config = JSON.parse(
+          (vi.mocked(fetch).mock.calls[0][1]!.body as FormData).get(
+            "session",
+          ) as string,
+        );
+        expect(config.tools.map((t: { name: string }) => t.name)).toEqual([
+          "workspace_request",
+          "browser_request",
+          ...presentationToolNames,
+        ]);
+      }
+      const taskId = randomUUID();
+      f.send.mockResolvedValueOnce({
+        state: "IDLE",
+        messages: [
+          {
+            id: randomUUID(),
+            role: "assistant",
+            text: "浏览器任务已提交",
+            browserTaskId: taskId,
+          },
+        ],
+      });
+      const request = {
+        tool: "browser_request",
+        callId: "browser-once",
+        request: "打开网站并查看帮助文档",
+      };
+      expect(await runRealtimeTool(actor(), b.id, request)).toMatchObject({
+        browserTaskId: taskId,
+      });
+      await runRealtimeTool(actor(), b.id, request);
+      expect(f.send).toHaveBeenCalledTimes(1);
+      expect(f.send.mock.calls[0][1]).toMatchObject({
+        browserExecution: true,
+        model: b.model,
+        includePersonalContext: false,
+        includeMemory: false,
+      });
+      expect(f.send.mock.calls[0][1]).not.toHaveProperty("desktopDeviceId");
+      expect(f.send.mock.calls[0][2]).toMatchObject({ browserRequest: true });
+      await expect(
+        runRealtimeTool(actor(), b.id, {
+          ...request,
+          tool: "desktop_request",
+          callId: "wrong-tool",
+        }),
+      ).rejects.toMatchObject({
+        response: { error: { code: "DESKTOP_NOT_SELECTED" } },
+      });
+      await expect(
+        runRealtimeTool(actor(false, "8"), b.id, {
+          ...request,
+          callId: "other-owner",
+        }),
+      ).rejects.toThrow();
+    },
+  );
+  it("refuses unavailable browser execution before contacting the realtime provider", async () => {
+    f.browserStatus.mockResolvedValueOnce({
+      ready: false,
+      note: "独立浏览器不可用",
+    });
+    await expect(
+      startRealtime(actor(), { ...input(), browserExecution: true }),
+    ).rejects.toMatchObject({
+      response: { error: { code: "BROWSER_NOT_READY" } },
+    });
+    expect(fetch).not.toHaveBeenCalled();
+    expect(f.send).not.toHaveBeenCalled();
+    await expect(
+      startRealtime(actor(), {
+        ...input(),
+        browserExecution: true,
+        desktopDeviceId: randomUUID(),
+      }),
+    ).rejects.toThrow();
+    const b = input();
+    await startRealtime(actor(), b);
+    await expect(
+      runRealtimeTool(actor(), b.id, {
+        tool: "browser_request",
+        callId: "unselected",
+        request: "打开网页",
+      }),
+    ).rejects.toMatchObject({
+      response: { error: { code: "BROWSER_NOT_SELECTED" } },
+    });
+  });
   it.each(["openai", "qwen", "doubao"])(
     "binds %s computer tools to the chosen device and keeps private context out of the task",
     async (provider) => {
@@ -299,7 +432,11 @@ describe("native realtime voice authorization and lifecycle", () => {
     ).toEqual(["workspace_request", ...presentationToolNames]);
     expect(
       realtimeConfiguration("Tina", true, true).tools.map((tool) => tool.name),
-    ).toEqual(["workspace_request", "desktop_request", ...presentationToolNames]);
+    ).toEqual([
+      "workspace_request",
+      "desktop_request",
+      ...presentationToolNames,
+    ]);
     // Doubao dialogue sessions only receive business tools.
     expect(
       realtimeConfiguration("x", false, false, "", false).tools.map(

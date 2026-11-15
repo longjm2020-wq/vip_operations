@@ -1,0 +1,93 @@
+.assistant-browser-panel {
+  display: grid;
+  gap: 14px;
+  color: var(--app-text);
+}
+.assistant-browser-heading,
+.assistant-browser-task-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.assistant-browser-heading h3,
+.assistant-browser-heading h4,
+.assistant-browser-panel p,
+.assistant-browser-panel h4 {
+  margin: 0;
+}
+.assistant-browser-panel p,
+.assistant-browser-task p {
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+.assistant-browser-task {
+  padding: 14px;
+  border: 1px solid var(--app-accent-border);
+  border-radius: 14px;
+  background: var(--app-accent-soft);
+}
+.assistant-browser-task-heading {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+}
+.assistant-browser-task-heading strong {
+  flex: 1;
+  min-width: 180px;
+  overflow-wrap: anywhere;
+}
+.assistant-browser-task-meta,
+.assistant-browser-session,
+.assistant-browser-location {
+  color: var(--app-secondary);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.assistant-browser-task-compact {
+  margin-bottom: 10px;
+}
+.assistant-browser-task .ant-alert {
+  margin-top: 10px;
+}
+.assistant-browser-takeover {
+  display: grid;
+  gap: 12px;
+}
+.assistant-browser-screen {
+  display: block;
+  width: 100%;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--app-border-strong);
+  border-radius: 8px;
+  background: #111;
+  cursor: crosshair;
+}
+.assistant-browser-screen:disabled {
+  cursor: default;
+}
+.assistant-browser-screen:focus-visible {
+  outline: 2px solid var(--app-accent);
+  outline-offset: 3px;
+}
+.assistant-browser-screen img {
+  display: block;
+  width: 100%;
+  height: auto;
+  user-select: none;
+}
+.assistant-browser-manual {
+  display: grid;
+  gap: 10px;
+}
+.assistant-browser-task-select {
+  width: 100%;
+}
+@media (max-width: 600px) {
+  .assistant-browser-heading {
+    align-items: flex-start;
+  }
+  .assistant-browser-task {
+    padding: 10px;
+  }
+}

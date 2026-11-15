@@ -27,11 +27,16 @@ export const assistantSendSchema = z
     attachmentIds: z.array(z.string().uuid()).max(6).default([]),
     webSearch: z.boolean().default(false),
     desktopDeviceId: z.string().uuid().optional(),
+    browserExecution: z.literal(true).optional(),
     webOpenResult: z
       .enum(["opened", "requested", "blocked", "pending"])
       .optional(),
   })
-  .strict();
+  .strict()
+  .refine(
+    (v) => !(v.browserExecution && v.desktopDeviceId),
+    "独立浏览器与电脑操作只能选择一处执行",
+  );
 const scheduleDraft = z
   .object({
     title: z.string(),
@@ -71,6 +76,7 @@ export type AssistantMessage = {
   navigation?: string;
   webNavigation?: AssistantWebCommand;
   desktopTaskId?: string;
+  browserTaskId?: string;
   teamRunId?: string;
   source?: "voice" | "team";
   evidence?: AssistantEvidence[];

@@ -893,6 +893,167 @@ test("千问实时语音绑定所选电脑，刷新电脑任务并在同一通�
     .toBe(1);
 });
 
+test("专用电脑语音启动前核对最新用途，通话中默认变化仍固定原设备", async ({
+  page,
+}) => {
+  const { bubble } = await fixture(page, { configured: false });
+  const { starts } = await qwenRtcFixture(page);
+  const deviceId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const otherId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+  let purpose = "dedicated",
+    preferred = deviceId;
+  await page.route("**/api/v1/my-workspace/assistant/desktop", (route) =>
+    route.fulfill({
+      json: {
+        data: {
+          devices: [
+            {
+              id: deviceId,
+              name: "专用电脑 A",
+              purpose,
+              online: true,
+              crossWindowAuthorized: true,
+              lastSeenAt: new Date().toISOString(),
+              expiresAt: "2026-12-01T00:00:00Z",
+            },
+            {
+              id: otherId,
+              name: "专用电脑 B",
+              purpose: "dedicated",
+              online: true,
+              crossWindowAuthorized: true,
+              lastSeenAt: new Date().toISOString(),
+              expiresAt: "2026-12-01T00:00:00Z",
+            },
+          ],
+          tasks: [],
+          preferredDedicatedDeviceId: preferred,
+        },
+      },
+    }),
+  );
+  await page.addInitScript(
+    (id) =>
+      localStorage.setItem(
+        "xuti-assistant-desktop:1",
+        JSON.stringify({ mode: "dedicated", deviceId: id }),
+      ),
+    deviceId,
+  );
+  await page.reload();
+  const composer = page.locator(".assistant-compose:visible");
+  const begin = composer.getByRole("button", {
+    name: "开始语音对话",
+    exact: true,
+  });
+  await expect(begin).toHaveAttribute("title", "实时语音对话");
+  await expect(composer.locator(".assistant-desktop-note")).toContainText(
+    "专用电脑 A",
+  );
+  purpose = "personal";
+  await begin.click();
+  await expect(
+    page.getByText(
+      "所选电脑的连接或用途已变化，请重新选择后开始语音；未切换到其他电脑。",
+      { exact: true },
+    ),
+  ).toBeVisible();
+  expect(starts).toHaveLength(0);
+  expect(await page.evaluate(() => window.gptVoiceTest.starts)).toBe(0);
+  purpose = "dedicated";
+  await expect(begin).toBeEnabled({ timeout: 10000 });
+  await begin.click();
+  await expect(bubble.getByRole("status")).toHaveText("实时聆听中，你说");
+  expect(starts).toHaveLength(1);
+  expect(starts[0]).toMatchObject({ desktopDeviceId: deviceId });
+  preferred = otherId;
+  await expect(composer.locator(".assistant-desktop-note")).toContainText(
+    "账号默认已变化",
+    { timeout: 10000 },
+  );
+  await expect(bubble.locator(".companion-voice-target")).toHaveText(
+    "小序专用电脑 · 专用电脑 A",
+  );
+  await expect(
+    composer.getByRole("combobox", { name: "执行位置" }),
+  ).toBeDisabled();
+  expect(starts).toHaveLength(1);
+  await bubble.getByRole("button", { name: "结束语音", exact: true }).click();
+  await expect
+    .poll(() => page.evaluate(() => window.gptVoiceTest.stops))
+    .toBe(1);
+});
+
+test("独立浏览器语音核对服务并固定执行环境，不使用本机或站内点击", async ({
+  page,
+}) => {
+  const { bubble } = await fixture(page, { configured: false });
+  const { starts } = await qwenRtcFixture(page);
+  let ready = true;
+  await page.route("**/api/v1/my-workspace/assistant/browser", (route) =>
+    route.fulfill({
+      json: {
+        data: {
+          ready,
+          workerOnline: ready,
+          encryptionReady: true,
+          note: ready ? "已就绪" : "独立浏览器执行服务尚未连接",
+          profile: null,
+          tasks: [],
+        },
+      },
+    }),
+  );
+  await page.addInitScript(() =>
+    localStorage.setItem(
+      "xuti-assistant-desktop:1",
+      JSON.stringify({ mode: "browser" }),
+    ),
+  );
+  await page.reload();
+  const composer = page.locator(".assistant-compose:visible");
+  const begin = composer.getByRole("button", {
+    name: "开始语音对话",
+    exact: true,
+  });
+  await expect(begin).toHaveAttribute("title", "实时语音对话");
+  await expect(composer.locator(".assistant-desktop-note")).toContainText(
+    "小序独立浏览器",
+  );
+  ready = false;
+  await begin.click();
+  await expect(
+    page.locator(".ant-message").getByText("独立浏览器执行服务尚未连接"),
+  ).toBeVisible();
+  expect(starts).toHaveLength(0);
+  expect(await page.evaluate(() => window.gptVoiceTest.starts)).toBe(0);
+  ready = true;
+  await expect(begin).toBeEnabled({ timeout: 8000 });
+  await begin.click();
+  await expect(bubble.getByRole("status")).toHaveText("实时聆听中，你说");
+  expect(starts).toHaveLength(1);
+  expect(starts[0]).toMatchObject({
+    browserExecution: true,
+    includePersonalContext: false,
+    includeMemory: false,
+  });
+  expect(starts[0].desktopDeviceId).toBeUndefined();
+  await expect(bubble.locator(".companion-voice-target")).toHaveText(
+    "小序独立浏览器",
+  );
+  await expect(
+    composer.getByRole("combobox", { name: "执行位置" }),
+  ).toBeDisabled();
+  // Even a malformed server response offering pageControl cannot enable local DOM tools.
+  await sendQwenTool(page, "browser-no-local", "page_observe", {});
+  const output = await qwenToolOutput(page, "browser-no-local");
+  expect(output).not.toHaveProperty("snapshotId");
+  await bubble.getByRole("button", { name: "结束语音", exact: true }).click();
+  await expect
+    .poll(() => page.evaluate(() => window.gptVoiceTest.stops))
+    .toBe(1);
+});
+
 test("输入栏蓝色声波按钮建立真实实时音频通道并在原位结束", async ({ page }) => {
   const { bubble } = await fixture(page, { configured: false });
   const { starts } = await qwenRtcFixture(page);
@@ -1475,6 +1636,8 @@ async function fixture(
       data = { items: [], serverTime: "2026-11-03T00:00:00Z" };
     if (path === "/my-workspace/assistant/memory")
       data = { version: 0, entries: [] };
+    if (path === "/my-workspace/assistant/desktop")
+      data = { devices: [], tasks: [], preferredDedicatedDeviceId: null };
     if (path === "/my-workspace/assistant") {
       if (request.method() === "POST") {
         assistant.messages.push(
@@ -1605,7 +1768,7 @@ async function expectVoiceCaptions(page: Page) {
   const chatSlot = dialog.locator(
     ".assistant-chat-voice-slot .companion-voice-inline",
   );
-  if (await dialog.isVisible() && (await chatSlot.isVisible())) {
+  if ((await dialog.isVisible()) && (await chatSlot.isVisible())) {
     await expect(chatSlot).toHaveCount(1);
   } else {
     await expect(
@@ -1842,9 +2005,7 @@ test("减少动态效果下语音字幕静态开关，立即停录且再次主�
   expect(await page.evaluate(() => window.gptVoiceTest.stops)).toBe(2);
 });
 
-test("文字草稿与语音共用记录，关闭面板保留通话和草稿", async ({
-  page,
-}) => {
+test("文字草稿与语音共用记录，关闭面板保留通话和草稿", async ({ page }) => {
   const { bubble } = await fixture(page);
   const dialog = page.getByRole("dialog", { name: /AI 个人助理/ });
   await page

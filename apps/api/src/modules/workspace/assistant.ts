@@ -29,6 +29,7 @@ import {
 } from "../../../../../packages/contracts/src/assistant-web-command.js";
 import { runAssistantVoiceCommand } from "./assistant-voice-commands.js";
 import { queueDesktopTask } from "./desktop.js";
+import { queueBrowserTask } from "./assistant-browser.js";
 import { resolveAssistantWebsite } from "./assistant-website.js";
 import { hydrateTeamMessages } from "./assistant-shared-context.js";
 export { parseAssistantAnswer } from "./assistant-model.js";
@@ -137,12 +138,19 @@ export function assistantContext(
 export async function sendAssistant(
   c: Context,
   input: unknown,
-  voice?: { signal: AbortSignal; desktopRequest?: boolean },
+  voice?: {
+    signal: AbortSignal;
+    desktopRequest?: boolean;
+    browserRequest?: boolean;
+  },
 ) {
   requireAssistant(c);
   const body = parse(assistantSendSchema, input);
   const websiteRequest =
-    !voice && !body.desktopDeviceId && !body.attachmentIds.length
+    !voice &&
+    !body.desktopDeviceId &&
+    !body.browserExecution &&
+    !body.attachmentIds.length
       ? parseAssistantWebsiteRequest(body.message)
       : undefined;
   if (
@@ -157,6 +165,17 @@ export async function sendAssistant(
       400,
     );
   if (
+    body.browserExecution &&
+    (body.attachmentIds.length ||
+      body.webSearch ||
+      (voice && !voice.browserRequest))
+  )
+    fail(
+      "BROWSER_INPUT",
+      "浏览器任务请直接描述操作；附件和资料查询请切换回网站内",
+      400,
+    );
+  if (
     body.desktopDeviceId &&
     (body.attachmentIds.length ||
       body.webSearch ||
@@ -168,18 +187,24 @@ export async function sendAssistant(
       400,
     );
   const fingerprint = hash(JSON.stringify(body));
-  const s = await settings();
-  const chatSelection = await resolveChatModel(body.model, {
-    vision: true,
-  });
-  const selected = chatSelection.model;
-  if (selected.provider === "bailian") await bailianChatConnection();
-  else if (!ready(s))
+  // Browser execution validates its own registered planner. A disabled chat
+  // provider must not prevent an otherwise configured browser task from starting.
+  const s = body.browserExecution ? undefined : await settings();
+  const chatSelection = body.browserExecution
+    ? null
+    : await resolveChatModel(body.model, { vision: true });
+  const selected = chatSelection?.model;
+  if (selected?.provider === "bailian") await bailianChatConnection();
+  else if (!body.browserExecution && !ready(s))
     fail("AI_NOT_READY", "请管理员先启用并验证 AI 模型连接", 503);
   const attachments = await ownedAgentFiles(c, body.attachmentIds);
   if (attachments.reduce((sum, f) => sum + f.size, 0) > 80 * 1024 * 1024)
     fail("FILE_LIMIT", "本次附件合计超过80MB，请分次处理", 400);
-  if (!selected.vision && attachments.some((f) => f.mime.startsWith("image/")))
+  if (
+    selected &&
+    !selected.vision &&
+    attachments.some((f) => f.mime.startsWith("image/"))
+  )
     fail("VISION_REQUIRED", "所选能力不支持看图，请选择标有“识图”的能力", 400);
   await db.$executeRawUnsafe(
     "INSERT INTO public.personal_assistant_conversations(user_id) VALUES($1::bigint) ON CONFLICT DO NOTHING",
@@ -234,7 +259,7 @@ export async function sendAssistant(
     const website = websiteRequest
       ? websiteRequest.destination
         ? { destination: websiteRequest.destination, text: "" }
-        : await resolveAssistantWebsite(s!, selected, websiteRequest.name)
+        : await resolveAssistantWebsite(s!, selected!, websiteRequest.name)
       : undefined;
     const webCommand = website?.destination;
     const today = new Intl.DateTimeFormat("en-CA", {
@@ -244,7 +269,9 @@ export async function sendAssistant(
       day: "2-digit",
     }).format(new Date());
     const stored =
-      body.includePersonalContext && !body.desktopDeviceId
+      body.includePersonalContext &&
+      !body.desktopDeviceId &&
+      !body.browserExecution
         ? await one(
             db,
             "SELECT config FROM public.personal_workspaces WHERE user_id=$1::bigint",
@@ -252,16 +279,26 @@ export async function sendAssistant(
           )
         : undefined;
     const memory =
-      body.includeMemory && !body.desktopDeviceId
+      body.includeMemory && !body.desktopDeviceId && !body.browserExecution
         ? await readAssistantMemory(c)
         : null;
     const command =
-      !body.desktopDeviceId && !body.attachmentIds.length && !body.webSearch
+      !body.desktopDeviceId &&
+      !body.browserExecution &&
+      !body.attachmentIds.length &&
+      !body.webSearch
         ? parseVoiceCommand(body.message)
         : undefined;
     const desktopTask = body.desktopDeviceId
       ? await queueDesktopTask(c, {
           deviceId: body.desktopDeviceId,
+          requestId: body.requestId,
+          instruction: body.message,
+          model: body.model,
+        })
+      : null;
+    const browserTask = body.browserExecution
+      ? await queueBrowserTask(c, {
           requestId: body.requestId,
           instruction: body.message,
           model: body.model,
@@ -281,9 +318,11 @@ export async function sendAssistant(
           jobIds: [],
           citations: [],
         }
-      : desktopTask
+      : desktopTask || browserTask
         ? {
-            text: "电脑任务已提交，等待本机执行。实际进度、暂停原因及继续操作会显示在下方任务卡中。",
+            text: browserTask
+              ? "浏览器任务已提交，小序会在服务端独立浏览器中执行。下方任务卡显示实际进度，需要登录或确认时会停下来提醒你。"
+              : "电脑任务已提交，等待所选电脑执行。实际进度、暂停原因及继续操作会显示在下方任务卡中。",
             schedules: [],
             tools: [],
             evidence: [],
@@ -331,16 +370,16 @@ export async function sendAssistant(
       responseModel:
         typeof answer.responseModel === "string"
           ? answer.responseModel
-          : command || desktopTask || websiteRequest
+          : command || desktopTask || browserTask || websiteRequest
             ? undefined
             : COMPASS_AI_MODEL,
       notice:
-        command || desktopTask || websiteRequest
+        command || desktopTask || browserTask || websiteRequest
           ? undefined
           : ("notice" in answer && typeof answer.notice === "string"
               ? answer.notice
               : "") ||
-            chatSelection.notice ||
+            chatSelection?.notice ||
             undefined,
       ...("jobIds" in answer
         ? { jobIds: answer.jobIds, citations: answer.citations }
@@ -348,6 +387,7 @@ export async function sendAssistant(
       navigation: command?.kind === "navigate" ? command.toolId : undefined,
       webNavigation: webCommand,
       desktopTaskId: desktopTask?.id,
+      browserTaskId: browserTask?.id,
       createdAt: new Date().toISOString(),
     };
     await db.$transaction(async (tx) => {

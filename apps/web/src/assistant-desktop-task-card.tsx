@@ -15,11 +15,13 @@ export const isActiveDesktopTask = (task: DesktopTask) =>
 export function AssistantDesktopTaskCard({
   task,
   device,
+  localDeviceId,
   refresh,
   compact = false,
 }: {
   task: DesktopTask;
   device?: DesktopDevice;
+  localDeviceId?: string;
   refresh: () => Promise<unknown>;
   compact?: boolean;
 }) {
@@ -88,9 +90,16 @@ export function AssistantDesktopTaskCard({
           请先处理上方提示，再继续当前任务；也可以停止后换一个任务。
         </p>
       )}
+      {active &&
+        device?.purpose === "dedicated" &&
+        task.deviceId !== localDeviceId && (
+          <p className="assistant-desktop-task-hint">
+            手动接管请打开该专用电脑的远程桌面或云电脑控制台。这里显示任务进度，不提供实时画面。
+          </p>
+        )}
       {task.status === "WAITING" && device && !device.crossWindowAuthorized && (
         <p className="assistant-desktop-task-hint">
-          请在本机「电脑任务」选择窗口并允许本次任务。
+          请在该电脑的「电脑任务」选择窗口并允许本次任务。
         </p>
       )}
       {active && (
@@ -126,7 +135,7 @@ export function AssistantDesktopTaskCard({
           >
             停止任务
           </Button>
-          {isDesktopClient() && (
+          {isDesktopClient() && task.deviceId === localDeviceId && (
             <Button
               size="small"
               disabled={!!busy}

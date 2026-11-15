@@ -83,6 +83,7 @@ import {
   readDesktopProviderError,
   revokeDesktop,
   setDesktopAuthorization,
+  setDesktopPurpose,
 } from "../../apps/api/src/modules/workspace/desktop.js";
 const actor = (id = "7"): Context => ({
   actor: {
@@ -108,6 +109,12 @@ beforeAll(async () => {
   await fixture.db.exec(
     await readFile(
       "packages/database/migrations/088_desktop_authorization.sql",
+      "utf8",
+    ),
+  );
+  await fixture.db.exec(
+    await readFile(
+      "packages/database/migrations/098_desktop_device_purpose.sql",
       "utf8",
     ),
   );
@@ -191,6 +198,155 @@ async function shot() {
 }
 
 describe("paired desktop task execution", () => {
+  it("keeps legacy pairing personal until the owner explicitly selects an independent environment", async () => {
+    const first = await paired();
+    const second = await paired();
+    const initial = await desktopState(actor());
+    expect(initial.preferredDedicatedDeviceId).toBeNull();
+    expect(initial.devices).toHaveLength(2);
+    expect(
+      initial.devices.every(
+        (d) => d.purpose === "personal" && !d.crossWindowAuthorized,
+      ),
+    ).toBe(true);
+    const selected = await setDesktopPurpose(actor(), first.deviceId, {
+      purpose: "dedicated",
+    });
+    expect(selected.preferredDedicatedDeviceId).toBe(first.deviceId);
+    expect(selected.devices.find((d) => d.id === first.deviceId)).toMatchObject(
+      { purpose: "dedicated", crossWindowAuthorized: false },
+    );
+    expect(
+      selected.devices.find((d) => d.id === second.deviceId)?.purpose,
+    ).toBe("personal");
+    // Re-running the additive migration must preserve an explicit preference.
+    await fixture.db!.exec(
+      await readFile(
+        "packages/database/migrations/098_desktop_device_purpose.sql",
+        "utf8",
+      ),
+    );
+    expect((await desktopState(actor())).preferredDedicatedDeviceId).toBe(
+      first.deviceId,
+    );
+    expect(fetch).not.toHaveBeenCalled();
+  });
+  it("keeps an explicitly selected offline environment and never substitutes the online personal computer", async () => {
+    const independent = await paired();
+    const personal = await paired();
+    await fixture.db!.query(
+      "UPDATE assistant_desktop_devices SET last_seen_at=now()-interval '1 minute' WHERE id=$1::uuid",
+      [independent.deviceId],
+    );
+    const state = await setDesktopPurpose(actor(), independent.deviceId, {
+      purpose: "dedicated",
+    });
+    expect(state.preferredDedicatedDeviceId).toBe(independent.deviceId);
+    expect(
+      state.devices.find((d) => d.id === independent.deviceId),
+    ).toMatchObject({ online: false, purpose: "dedicated" });
+    expect(state.devices.find((d) => d.id === personal.deviceId)).toMatchObject(
+      { online: true, purpose: "personal" },
+    );
+    await expect(
+      queueDesktopTask(actor(), {
+        deviceId: state.preferredDedicatedDeviceId,
+        requestId: randomUUID(),
+        instruction: "整理笔记",
+      }),
+    ).rejects.toMatchObject({
+      response: { error: { code: "DEVICE_OFFLINE" } },
+    });
+    expect((await desktopState(actor())).tasks).toEqual([]);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+  it("changes only the explicit default, preserves task ownership and never selects a replacement on removal", async () => {
+    const { d: first, t } = await allowed();
+    const grant = await setDesktopAuthorization(actor(), first.deviceId, true);
+    const second = await paired();
+    await setDesktopPurpose(actor(), first.deviceId, { purpose: "dedicated" });
+    let state = await setDesktopPurpose(actor(), second.deviceId, {
+      purpose: "dedicated",
+    });
+    expect(state.preferredDedicatedDeviceId).toBe(second.deviceId);
+    expect(state.devices.every((d) => d.purpose === "dedicated")).toBe(true);
+    expect(state.tasks.find((task) => task.id === t.id)).toMatchObject({
+      deviceId: first.deviceId,
+      status: "RUNNING",
+      scope: "window",
+    });
+    expect((await pollDesktop(actor(), first.deviceId)).authorizationId).toBe(
+      grant.authorizationId,
+    );
+    state = await setDesktopPurpose(actor(), second.deviceId, {
+      purpose: "personal",
+    });
+    expect(state.preferredDedicatedDeviceId).toBeNull();
+    expect(state.devices.find((d) => d.id === first.deviceId)?.purpose).toBe(
+      "dedicated",
+    );
+    await setDesktopPurpose(actor(), second.deviceId, { purpose: "dedicated" });
+    await revokeDesktop(actor(), second.deviceId);
+    expect((await desktopState(actor())).preferredDedicatedDeviceId).toBeNull();
+    expect(
+      (await desktopState(actor())).tasks.find((task) => task.id === t.id)
+        ?.status,
+    ).toBe("RUNNING");
+  });
+  it("rejects another owner's, unpaired, expired or revoked devices without changing the existing preference", async () => {
+    const selected = await paired();
+    const other = await paired();
+    await setDesktopPurpose(actor(), selected.deviceId, {
+      purpose: "dedicated",
+    });
+    await expect(
+      setDesktopPurpose(actor("8"), other.deviceId, { purpose: "dedicated" }),
+    ).rejects.toMatchObject({ response: { error: { code: "NOT_FOUND" } } });
+    expect(
+      (await desktopState(actor("8"))).preferredDedicatedDeviceId,
+    ).toBeNull();
+    const pair = await createDesktopPair(actor(), "owner-session");
+    const pending = (
+      await fixture.db!.query<Row>(
+        "SELECT id FROM assistant_desktop_devices WHERE pair_hash=$1",
+        [hash(pair.code)],
+      )
+    ).rows[0];
+    await expect(
+      setDesktopPurpose(actor(), pending.id, { purpose: "dedicated" }),
+    ).rejects.toThrow();
+    await fixture.db!.query(
+      "UPDATE assistant_desktop_devices SET expires_at=now()-interval '1 minute' WHERE id=$1::uuid",
+      [other.deviceId],
+    );
+    await expect(
+      setDesktopPurpose(actor(), other.deviceId, { purpose: "dedicated" }),
+    ).rejects.toThrow();
+    await revokeDesktop(actor(), other.deviceId);
+    await expect(
+      setDesktopPurpose(actor(), other.deviceId, { purpose: "personal" }),
+    ).rejects.toThrow();
+    await expect(
+      setDesktopPurpose(actor(), selected.deviceId, {
+        purpose: "dedicated",
+        authorizationId: randomUUID(),
+      }),
+    ).rejects.toThrow();
+    await expect(
+      setDesktopPurpose(actor(), selected.deviceId, {
+        purpose: "virtual_machine",
+      }),
+    ).rejects.toThrow();
+    expect((await desktopState(actor())).preferredDedicatedDeviceId).toBe(
+      selected.deviceId,
+    );
+    await fixture.db!.query(
+      "UPDATE assistant_desktop_devices SET expires_at=now()-interval '1 minute' WHERE id=$1::uuid",
+      [selected.deviceId],
+    );
+    expect((await desktopState(actor())).preferredDedicatedDeviceId).toBeNull();
+    expect(fetch).not.toHaveBeenCalled();
+  });
   it.each([
     ["openrouter_guardrail_budget", "DESKTOP_PROVIDER_BUDGET"],
     ["openrouter_workspace_budget", "DESKTOP_PROVIDER_BUDGET"],

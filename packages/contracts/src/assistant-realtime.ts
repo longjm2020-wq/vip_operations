@@ -86,16 +86,25 @@ export const realtimeStartSchema = z
     includePersonalContext: z.boolean().default(false),
     includeMemory: z.boolean().default(false),
     desktopDeviceId: z.string().uuid().optional(),
+    browserExecution: z.literal(true).optional(),
     model: z
       .string()
       .regex(/^engine\/[a-f0-9]{24}$/)
       .optional(),
   })
   .strict()
-  .refine((v) => !v.model || !!v.desktopDeviceId, "电脑操作能力需选择执行电脑");
+  .refine(
+    (v) => !(v.browserExecution && v.desktopDeviceId),
+    "独立浏览器与电脑操作只能选择一处执行",
+  )
+  .refine(
+    (v) => !v.model || !!v.desktopDeviceId || !!v.browserExecution,
+    "操作能力需选择执行环境",
+  );
 export const realtimeToolNames = [
   "workspace_request",
   "desktop_request",
+  "browser_request",
 ] as const;
 export type RealtimeToolName = (typeof realtimeToolNames)[number];
 export function isRealtimeToolName(value: unknown): value is RealtimeToolName {
@@ -156,4 +165,5 @@ export type RealtimeToolResult = {
   navigation?: string;
   messageId?: string;
   desktopTaskId?: string;
+  browserTaskId?: string;
 };

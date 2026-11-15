@@ -1,16 +1,43 @@
 import {
-  openCompanionMenu,
   openPersonalAssistant,
   selectAssistantPanel,
 } from "./assistant-controls.js";
 import { expect, test, type Page } from "@playwright/test";
 import { defaultTeamSettings } from "../../packages/contracts/src/assistant-team.js";
-import type { DesktopTask } from "../../packages/contracts/src/assistant-desktop.js";
+import type {
+  DesktopDevice,
+  DesktopTask,
+} from "../../packages/contracts/src/assistant-desktop.js";
 const fileId = "11111111-1111-4111-8111-111111111111";
 const resultId = "22222222-2222-4222-8222-222222222222";
 const jobId = "33333333-3333-4333-8333-333333333333";
 const previewId = "44444444-4444-4444-8444-444444444444";
 const desktopFixtureId = "55555555-5555-4555-8555-555555555555";
+const dedicatedFixtureId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const secondDedicatedFixtureId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+const deviceFixture = (
+  id: string,
+  name: string,
+  purpose: "personal" | "dedicated" = "personal",
+): DesktopDevice => ({
+  id,
+  name,
+  purpose,
+  online: true,
+  lastSeenAt: new Date().toISOString(),
+  expiresAt: "2026-12-01T00:00:00Z",
+  crossWindowAuthorized: true,
+});
+async function selectExecution(page: Page, name: string) {
+  await page
+    .locator(".assistant-compose:visible")
+    .getByRole("combobox", { name: "执行位置" })
+    .click();
+  await page
+    .locator(".ant-select-dropdown:visible")
+    .getByText(name, { exact: true })
+    .click();
+}
 async function desktopScenario(page: Page, native = true) {
   const requests = await setup(page);
   const state = {
@@ -26,6 +53,9 @@ async function desktopScenario(page: Page, native = true) {
     completedStatus: 0,
     tasks: [] as DesktopTask[],
     taskControls: [] as { id: string; action: string }[],
+    devicesOverride: undefined as DesktopDevice[] | undefined,
+    preferredDedicatedDeviceId: undefined as string | null | undefined,
+    purposeMutations: [] as { id: string; purpose: string }[],
   };
   if (native) {
     await page.exposeFunction(
@@ -98,6 +128,31 @@ async function desktopScenario(page: Page, native = true) {
     "**/api/v1/my-workspace/assistant/desktop**",
     async (route) => {
       if (route.request().method() === "POST") {
+        const purposeChange = new URL(route.request().url()).pathname.match(
+          /\/devices\/([^/]+)\/purpose$/,
+        );
+        if (purposeChange) {
+          const { purpose } = route.request().postDataJSON();
+          const device = state.devicesOverride!.find(
+            (entry) => entry.id === purposeChange[1],
+          )!;
+          device.purpose = purpose;
+          state.purposeMutations.push({ id: device.id, purpose });
+          if (purpose === "dedicated")
+            state.preferredDedicatedDeviceId = device.id;
+          else if (state.preferredDedicatedDeviceId === device.id)
+            state.preferredDedicatedDeviceId = null;
+          await route.fulfill({
+            json: {
+              data: {
+                devices: state.devicesOverride,
+                tasks: state.tasks,
+                preferredDedicatedDeviceId: state.preferredDedicatedDeviceId,
+              },
+            },
+          });
+          return;
+        }
         const taskControl = new URL(route.request().url()).pathname.match(
           /\/tasks\/([^/]+)\/control$/,
         );
@@ -136,7 +191,8 @@ async function desktopScenario(page: Page, native = true) {
         json: {
           data: {
             devices:
-              state.connected && state.owned
+              state.devicesOverride ||
+              (state.connected && state.owned
                 ? [
                     {
                       id: desktopFixtureId,
@@ -145,8 +201,9 @@ async function desktopScenario(page: Page, native = true) {
                       crossWindowAuthorized: state.authorized,
                     },
                   ]
-                : [],
+                : []),
             tasks: state.tasks,
+            preferredDedicatedDeviceId: state.preferredDedicatedDeviceId,
           },
         },
       });
@@ -519,6 +576,16 @@ test("简洁输入区直接发送附件并下载任务结果，历史回复隐�
   page,
 }) => {
   const requests = await setup(page);
+  const openFromKeyboard = async () => {
+    const launcher = page
+      .getByRole("button", {
+        name: "打开小序文字对话",
+        exact: true,
+      })
+      .first();
+    await launcher.focus();
+    await launcher.press("Enter");
+  };
   await page.goto("/my-workspace");
   const noteEntry = page.getByRole("button", {
     name: "打开私有备忘",
@@ -532,7 +599,8 @@ test("简洁输入区直接发送附件并下载任务结果，历史回复隐�
   await page
     .getByRole("button", { name: "收起工作台面板", exact: true })
     .click();
-  await openPersonalAssistant(page);
+  // The scene resumes moving after the card closes; activate its accessible launcher by keyboard.
+  await openFromKeyboard();
   const dialog = page.getByRole("dialog", { name: /AI 个人助理/ });
   await expect(dialog).toBeVisible();
   await expect(dialog.locator(".assistant-messages")).not.toContainText(
@@ -545,7 +613,9 @@ test("简洁输入区直接发送附件并下载任务结果，历史回复隐�
   });
   await expect(dialog.locator(".agent-attachments")).toContainText("资料.txt");
   await expect(dialog.locator(".agent-composer-tools button")).toHaveCount(4);
-  await expect(dialog.getByRole("combobox")).toHaveCount(0);
+  await expect(dialog.getByRole("combobox", { name: "执行位置" })).toHaveCount(
+    1,
+  );
   await dialog
     .getByPlaceholder(/告诉我你想完成什么/)
     .fill("将附件整理成Word周报");
@@ -595,7 +665,7 @@ test("简洁输入区直接发送附件并下载任务结果，历史回复隐�
   await page
     .getByRole("button", { name: "收起工作台面板", exact: true })
     .click();
-  await openPersonalAssistant(page);
+  await openFromKeyboard();
   const draft = "跨页全息预览后继续编辑的草稿";
   await dialog.getByPlaceholder(/告诉我你想完成什么/).fill(draft);
   await dialog.getByRole("button", { name: "关闭", exact: true }).click();
@@ -604,8 +674,7 @@ test("简洁输入区直接发送附件并下载任务结果，历史回复隐�
     .getByRole("link", { name: "运营中心", exact: true })
     .click();
   await expect(page).toHaveURL(/operations$/);
-  await openCompanionMenu(page);
-  await page.getByRole("button", { name: "文字对话", exact: true }).click();
+  await openFromKeyboard();
   await selectAssistantPanel(page, "任务与文件");
   await dialog
     .locator(".agent-job")
@@ -625,7 +694,7 @@ test("简洁输入区直接发送附件并下载任务结果，历史回复隐�
   await screen
     .getByRole("button", { name: "关闭全息影像屏", exact: true })
     .click();
-  await openPersonalAssistant(page);
+  await openFromKeyboard();
   await expect(dialog.getByPlaceholder(/告诉我你想完成什么/)).toHaveValue(
     draft,
   );
@@ -665,6 +734,229 @@ test("窄屏模型听写语音布局不溢出，输入后原位切换发送", as
     await sender.evaluate((el) => el.scrollWidth <= el.clientWidth + 1),
   ).toBe(true);
   await page.screenshot({ path: ".local/assistant-agent-light-mobile.png" });
+});
+
+test("电脑入口默认专用设备并固定目标，修改默认和刷新不替换已有明确选择", async ({
+  page,
+}) => {
+  const { state, requests } = await desktopScenario(page, false);
+  state.devicesOverride = [
+    deviceFixture(desktopFixtureId, "本机测试电脑"),
+    deviceFixture(dedicatedFixtureId, "专用环境 A", "dedicated"),
+    deviceFixture(secondDedicatedFixtureId, "专用环境 B", "dedicated"),
+  ];
+  state.preferredDedicatedDeviceId = dedicatedFixtureId;
+  await page.goto("/my-workspace");
+  const composer = page.locator(".assistant-compose:visible");
+  await expect(composer.getByPlaceholder(/告诉我你想完成什么/)).toBeEnabled();
+  await composer
+    .getByPlaceholder(/告诉我你想完成什么/)
+    .fill("整理专用环境内的测试文档");
+  await composer.getByRole("button", { name: "电脑操作", exact: true }).click();
+  await expect(composer.locator(".assistant-desktop-note")).toContainText(
+    "专用环境 A",
+  );
+  await expect(composer.getByPlaceholder(/描述电脑任务/)).toHaveValue(
+    "整理专用环境内的测试文档",
+  );
+  state.preferredDedicatedDeviceId = secondDedicatedFixtureId;
+  await expect(composer.locator(".assistant-desktop-note")).toContainText(
+    "账号默认已变化",
+    { timeout: 10000 },
+  );
+  await composer.getByRole("button", { name: "发送给个人助理" }).click();
+  await expect.poll(() => requests.length).toBe(1);
+  expect(requests[0].desktopDeviceId).toBe(dedicatedFixtureId);
+  await page.reload();
+  await expect(composer.locator(".assistant-desktop-note")).toContainText(
+    "专用环境 A",
+  );
+  await selectExecution(page, "我的电脑 · 本机测试电脑");
+  await expect(composer.locator(".assistant-desktop-note")).toContainText(
+    "本机测试电脑",
+  );
+  await page.reload();
+  await expect(composer.locator(".assistant-desktop-note")).toContainText(
+    "本机测试电脑",
+  );
+  await selectExecution(page, "网站内");
+  await expect(composer.getByPlaceholder(/告诉我你想完成什么/)).toBeEnabled();
+  expect(
+    await page.evaluate(() => localStorage.getItem("xuti-assistant-desktop:7")),
+  ).toBeNull();
+});
+
+test("专用电脑未配置不退回本机，可指定已连接设备且不自动授权", async ({
+  page,
+}) => {
+  const { state, requests } = await desktopScenario(page);
+  state.devicesOverride = [
+    deviceFixture(desktopFixtureId, "本机测试电脑"),
+    deviceFixture(dedicatedFixtureId, "准备好的专用环境"),
+  ];
+  state.preferredDedicatedDeviceId = null;
+  await page.goto("/my-workspace");
+  const composer = page.locator(".assistant-compose:visible");
+  await composer
+    .getByPlaceholder(/告诉我你想完成什么/)
+    .fill("保留这条专用电脑指令");
+  await composer
+    .getByRole("button", { name: "小序专用电脑", exact: true })
+    .click();
+  const panel = page.locator(".assistant-desktop-panel");
+  await expect(
+    panel.getByRole("region", { name: "小序专用电脑设置" }),
+  ).toContainText("尚未配置小序专用电脑");
+  await expect(panel).toContainText("并不会隔离鼠标和键盘");
+  await page
+    .getByRole("dialog", { name: /AI 个人助理/ })
+    .locator(".ant-drawer-close")
+    .click();
+  await expect(composer.getByPlaceholder(/描述电脑任务/)).toBeDisabled();
+  await expect(composer.getByPlaceholder(/描述电脑任务/)).toHaveValue(
+    "保留这条专用电脑指令",
+  );
+  await expect(composer).toContainText("不会改到我的电脑执行");
+  await composer.getByRole("button", { name: "管理电脑", exact: true }).click();
+  const device = panel
+    .locator(".assistant-desktop-item")
+    .filter({ hasText: "准备好的专用环境" });
+  await device
+    .getByRole("button", { name: "设为默认专用电脑", exact: true })
+    .click();
+  await expect(
+    panel.getByRole("region", { name: "小序专用电脑设置" }),
+  ).toContainText("准备好的专用环境");
+  expect(state.purposeMutations).toEqual([
+    { id: dedicatedFixtureId, purpose: "dedicated" },
+  ]);
+  await panel
+    .getByRole("button", { name: "使用小序专用电脑", exact: true })
+    .click();
+  await expect(composer.getByPlaceholder(/描述电脑任务/)).toBeEnabled();
+  await expect(composer.locator(".assistant-desktop-note")).toContainText(
+    "准备好的专用环境",
+  );
+  expect(state.actions).not.toContain("authorize");
+  expect(state.actions).not.toContain("pair");
+  expect(requests).toHaveLength(0);
+  await page.screenshot({ path: ".local/desktop-dedicated-selected.png" });
+});
+
+test("已选专用电脑离线或用途撤回时阻止发送，不选择其他默认或我的电脑", async ({
+  page,
+}) => {
+  const { state, requests } = await desktopScenario(page, false);
+  state.devicesOverride = [
+    deviceFixture(desktopFixtureId, "本机测试电脑"),
+    {
+      ...deviceFixture(dedicatedFixtureId, "离线专用环境", "dedicated"),
+      online: false,
+    },
+    deviceFixture(secondDedicatedFixtureId, "另一专用环境", "dedicated"),
+  ];
+  state.preferredDedicatedDeviceId = dedicatedFixtureId;
+  await page.addInitScript(
+    (id) =>
+      localStorage.setItem(
+        "xuti-assistant-desktop:7",
+        JSON.stringify({ mode: "dedicated", deviceId: id }),
+      ),
+    dedicatedFixtureId,
+  );
+  await page.goto("/my-workspace");
+  const composer = page.locator(".assistant-compose:visible");
+  await expect(composer).toContainText("所选电脑离线");
+  await expect(composer.getByPlaceholder(/描述电脑任务/)).toBeDisabled();
+  state.devicesOverride[1].purpose = "personal";
+  state.devicesOverride[1].online = true;
+  state.preferredDedicatedDeviceId = secondDedicatedFixtureId;
+  await expect(composer).toContainText("连接或用途已变化", { timeout: 10000 });
+  await expect(composer.getByPlaceholder(/描述电脑任务/)).toBeDisabled();
+  expect(requests).toHaveLength(0);
+  expect(
+    JSON.parse(
+      (await page.evaluate(() =>
+        localStorage.getItem("xuti-assistant-desktop:7"),
+      ))!,
+    ),
+  ).toEqual({ mode: "dedicated", deviceId: dedicatedFixtureId });
+  await selectExecution(page, "网站内");
+  await expect(composer.getByPlaceholder(/告诉我你想完成什么/)).toBeEnabled();
+  await composer.getByRole("button", { name: "电脑操作", exact: true }).click();
+  await expect(composer.locator(".assistant-desktop-note")).toContainText(
+    "另一专用环境",
+  );
+  await composer.getByPlaceholder(/描述电脑任务/).fill("保留这条竞态检查指令");
+  state.devicesOverride[2].purpose = "personal";
+  await composer.getByRole("button", { name: "发送给个人助理" }).click();
+  await expect(
+    page.getByText(
+      "所选电脑的连接或用途已变化，请重新选择后发送；未切换到其他电脑。",
+      { exact: true },
+    ),
+  ).toBeVisible();
+  await expect(composer.getByPlaceholder(/描述电脑任务/)).toHaveValue(
+    "保留这条竞态检查指令",
+  );
+  expect(requests).toHaveLength(0);
+});
+
+test("远程独立任务只显示接管方式，本机任务按钮按桥接设备身份显示", async ({
+  page,
+}) => {
+  const { state } = await desktopScenario(page);
+  state.authorized = true;
+  state.devicesOverride = [
+    deviceFixture(desktopFixtureId, "本机测试电脑"),
+    deviceFixture(dedicatedFixtureId, "远程专用环境", "dedicated"),
+  ];
+  state.preferredDedicatedDeviceId = dedicatedFixtureId;
+  const task = {
+    id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+    deviceId: dedicatedFixtureId,
+    deviceName: "远程专用环境",
+    instruction: "测试专用环境任务",
+    status: "PAUSED" as const,
+    stage: "请核对当前窗口后继续",
+    step: 0,
+    window: "",
+    scope: "window" as const,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  state.tasks = [
+    task,
+    {
+      ...task,
+      id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+      deviceId: desktopFixtureId,
+      deviceName: "本机测试电脑",
+      instruction: "测试本机任务",
+    },
+  ];
+  await page.addInitScript(
+    (id) =>
+      localStorage.setItem(
+        "xuti-assistant-desktop:7",
+        JSON.stringify({ mode: "dedicated", deviceId: id }),
+      ),
+    dedicatedFixtureId,
+  );
+  await page.goto("/my-workspace");
+  const composer = page.locator(".assistant-compose:visible");
+  const card = composer.locator(".assistant-desktop-task");
+  await expect(card).toContainText("远程桌面或云电脑控制台");
+  await expect(
+    card.getByRole("button", { name: "打开本机任务", exact: true }),
+  ).toHaveCount(0);
+  await selectExecution(page, "我的电脑 · 本机测试电脑");
+  await expect(card).toContainText("测试本机任务");
+  await expect(
+    card.getByRole("button", { name: "打开本机任务", exact: true }),
+  ).toBeVisible();
+  expect(state.taskControls).toEqual([]);
+  await page.screenshot({ path: ".local/desktop-dedicated-takeover.png" });
 });
 
 test("桌面端一键操作本机，首次确认后刷新仍记住目标且不重复授权", async ({

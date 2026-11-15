@@ -58,7 +58,8 @@ type Event = {
 };
 type Tool = {
   callId: string;
-  name: RealtimeToolName | PageToolName | PageTaskToolName | PresentationToolName;
+  name:
+    RealtimeToolName | PageToolName | PageTaskToolName | PresentationToolName;
   args: unknown;
 };
 type Response = {
@@ -470,7 +471,12 @@ export class QwenRealtimeVoiceSession {
         if (isPresentationToolName(tool.name)) {
           outputs.push({
             callId: tool.callId,
-            result: runPresentationTool(tool.name, String(tool.args), this.id, () => this.cb.result()),
+            result: runPresentationTool(
+              tool.name,
+              String(tool.args),
+              this.id,
+              () => this.cb.result(),
+            ),
           });
           continue;
         }
@@ -1170,7 +1176,11 @@ export class QwenRealtimeVoiceSession {
       )
         throw Error("实时语音连接配置不完整，请重新开始");
       this.configuration = result.configuration;
-      if (result.pageControl === true && !options.desktopDeviceId) {
+      if (
+        result.pageControl === true &&
+        !options.desktopDeviceId &&
+        !options.browserExecution
+      ) {
         this.page = new RealtimePageController({
           navigate: this.cb.navigatePage,
         });

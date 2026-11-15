@@ -4,6 +4,7 @@ import { validateIntegrationMode } from "../../api/src/integrations/vip/index.js
 import { startVopScheduler } from "./vop-scheduler.js";
 import { startAssistantJobs } from "./assistant-jobs.js";
 import { startAssistantTeamJobs } from "./assistant-team-jobs.js";
+import { startAssistantBrowserJobs } from "./assistant-browser-jobs.js";
 import { startSupplyLogistics } from "./supply-logistics.js";
 import { startInventoryLogistics } from "./inventory-logistics.js";
 import { startJushuitanInventory } from "./jushuitan-inventory.js";
@@ -15,6 +16,7 @@ import { startRecycleCleanup } from "../../api/src/modules/projects/recycle.js";
 const stopRecycleCleanup = startRecycleCleanup();
 const stopAssistantJobs = startAssistantJobs();
 const stopAssistantTeamJobs = startAssistantTeamJobs();
+const stopAssistantBrowserJobs = startAssistantBrowserJobs();
 const stopCompassMail = startCompassMail();
 const stopCompetitorCrawler = startCompetitorCrawler();
 const stopCompetitorCloudLogin = startCompetitorCloudLogin();
@@ -60,6 +62,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const)
       worker.close(),
       stopAssistantJobs(),
       stopAssistantTeamJobs(),
+      stopAssistantBrowserJobs(),
       stopVop(),
       stopSupplyLogistics(),
       stopInventoryLogistics(),

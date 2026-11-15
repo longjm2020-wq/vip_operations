@@ -20,6 +20,7 @@ export type RealtimeOptions = {
   includePersonalContext: boolean;
   includeMemory: boolean;
   desktopDeviceId?: string;
+  browserExecution?: true;
   model?: string;
 };
 export type RealtimeCallbacks = {
@@ -377,7 +378,12 @@ export class RealtimeVoiceSession {
         ) {
           // The panel runs locally; only the function output returns to the model.
           this.toolIds.add(e.call_id);
-          const output = runPresentationTool(e.name, String(e.arguments), this.id, () => this.cb.result());
+          const output = runPresentationTool(
+            e.name,
+            String(e.arguments),
+            this.id,
+            () => this.cb.result(),
+          );
           this.sendEvent({
             type: "conversation.item.create",
             item: {

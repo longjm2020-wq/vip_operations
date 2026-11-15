@@ -37,6 +37,7 @@ beforeAll(async () => {
   fixture.database = new PGlite();
   await fixture.database.exec(`
     CREATE TABLE personal_workspaces(user_id bigint PRIMARY KEY, config jsonb);
+    CREATE TABLE personal_assistant_browser_tasks(id uuid,user_id bigint,instruction text,status text,stage text,step int DEFAULT 0,heartbeat_at timestamptz,expires_at timestamptz DEFAULT now()+interval '30 minutes',updated_at timestamptz DEFAULT now(),created_at timestamptz DEFAULT now());
     CREATE TABLE personal_assistant_jobs(id uuid,user_id bigint,status text,title text,stage text,progress int,error_note text,updated_at timestamptz DEFAULT now(),created_at timestamptz DEFAULT now());
     CREATE TABLE assistant_desktop_devices(id uuid,last_seen_at timestamptz,revoked_at timestamptz);
     CREATE TABLE assistant_desktop_tasks(id uuid,user_id bigint,device_id uuid,instruction text,status text,stage text,updated_at timestamptz DEFAULT now(),created_at timestamptz DEFAULT now());
@@ -53,6 +54,7 @@ beforeAll(async () => {
   `);
 });
 beforeEach(async () => {
+  await fixture.database!.exec("TRUNCATE personal_assistant_browser_tasks");
   await fixture.database!.exec(
     "TRUNCATE assistant_desktop_tasks,assistant_desktop_devices,personal_assistant_jobs,personal_workspaces,projects,project_members,project_library_acl,project_notifications,compass_update_jobs,compass_mail_runs,jushuitan_inventory_runs",
   );
@@ -62,6 +64,34 @@ afterAll(async () => {
 });
 
 describe("personal assistant read-only activity feed", () => {
+  it("reports browser handoffs and interrupted work only to the task owner", async () => {
+    await fixture.database!
+      .exec(`INSERT INTO personal_assistant_browser_tasks(id,user_id,instruction,status,stage,step,heartbeat_at) VALUES
+    ('11111111-1111-4111-8111-111111111111',7,'查看资料','NEEDS_USER','请登录网站',3,NULL),
+    ('22222222-2222-4222-8222-222222222222',7,'整理网页','RUNNING','正在浏览',4,'2026-10-26T01:00:00Z');`);
+    const permissions = ["analytics.read", "analytics.manage"];
+    const feed = await assistantActivity(context(permissions), now);
+    expect(feed.items.find((x) => x.id.endsWith("111111111111"))).toMatchObject(
+      {
+        status: "attention",
+        detail: "已执行 3 步 · 请登录网站",
+        href: "/my-workspace?assistant=browser",
+      },
+    );
+    expect(feed.items.find((x) => x.id.endsWith("222222222222"))).toMatchObject(
+      { status: "attention", detail: "浏览器连接中断，操作进度待核对" },
+    );
+    expect(
+      (await assistantActivity(context(permissions, "8"), now)).items.some(
+        (x) => x.id.startsWith("browser:"),
+      ),
+    ).toBe(false);
+    expect(
+      (await assistantActivity(context(), now)).items.some((x) =>
+        x.id.startsWith("browser:"),
+      ),
+    ).toBe(false);
+  });
   it("shows private desktop handoffs and marks disconnected running tasks for review", async () => {
     await fixture.database!.exec(
       "INSERT INTO assistant_desktop_devices VALUES('11111111-1111-4111-8111-111111111111','2026-10-25T00:00:00Z',NULL); INSERT INTO assistant_desktop_tasks(id,user_id,device_id,instruction,status,stage) VALUES('22222222-2222-4222-8222-222222222222',7,'11111111-1111-4111-8111-111111111111','整理笔记','RUNNING','正在输入')",
