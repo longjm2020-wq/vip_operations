@@ -24,7 +24,7 @@ export function WorkspaceDockHalo() {
         ))}
       </g>
       <circle className="workspace-dock-halo-inner" cx="50" cy="50" r="38" />
-      <g className="workspace-dock-halo-sweep">
+      <g className="workspace-dock-halo-sweep workspace-ring-animation">
         <circle
           className="workspace-dock-halo-arc"
           cx="50"
@@ -41,7 +41,7 @@ export function WorkspaceDockHalo() {
           r="3.5"
         />
       </g>
-      <g className="workspace-dock-halo-counter">
+      <g className="workspace-dock-halo-counter workspace-ring-animation">
         <circle
           className="workspace-dock-halo-arc-inner"
           cx="50"

@@ -441,9 +441,21 @@
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .workspace-ai *,
-  .workspace-ai *::before,
-  .workspace-ai *::after {
+  .workspace-ai
+    *:not(
+      .personal-workspace[data-workspace-ring-motion="enabled"]
+        .workspace-ring-animation
+    ),
+  .workspace-ai
+    *:not(
+      .personal-workspace[data-workspace-ring-motion="enabled"]
+        .workspace-ring-animation
+    )::before,
+  .workspace-ai
+    *:not(
+      .personal-workspace[data-workspace-ring-motion="enabled"]
+        .workspace-ring-animation
+    )::after {
     animation: none !important;
     transition: none !important;
   }

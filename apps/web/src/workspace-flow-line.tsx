@@ -40,7 +40,7 @@ export function WorkspaceFlowLine({
       {flowLayers.map(({ length, opacity }) => (
         <path
           key={length}
-          className="workspace-flow-trail"
+          className="workspace-flow-trail workspace-ring-animation"
           d={d}
           pathLength="100"
           style={

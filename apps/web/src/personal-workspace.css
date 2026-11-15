@@ -803,9 +803,12 @@
   .workspace-dock-item {
     transition: none;
   }
-  .workspace-dock-item::before,
-  .workspace-dock-orbit,
-  .workspace-dock-face {
+  .personal-workspace:not([data-workspace-ring-motion="enabled"])
+    .workspace-dock-item::before,
+  .personal-workspace:not([data-workspace-ring-motion="enabled"])
+    .workspace-dock-orbit,
+  .personal-workspace:not([data-workspace-ring-motion="enabled"])
+    .workspace-dock-face {
     animation: none;
   }
 }

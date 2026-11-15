@@ -315,7 +315,11 @@
   animation-play-state: paused;
 }
 @media (prefers-reduced-motion: reduce) {
-  .workspace-flow-trail {
+  .personal-workspace:not([data-workspace-ring-motion="enabled"])
+    .workspace-flow-trail,
+  body:not(:has(.personal-workspace[data-workspace-ring-motion="enabled"]))
+    .workspace-branch-panel-link
+    .workspace-flow-trail {
     display: none;
     animation: none;
   }
@@ -585,9 +589,12 @@
 }
 /* These rings are decoration, independent of paused orbital positioning. */
 @media (prefers-reduced-motion: reduce) {
-  .workspace-dock-halo-sweep,
-  .workspace-dock-halo-counter,
-  .workspace-dock-label::before {
+  .personal-workspace:not([data-workspace-ring-motion="enabled"])
+    .workspace-dock-halo-sweep,
+  .personal-workspace:not([data-workspace-ring-motion="enabled"])
+    .workspace-dock-halo-counter,
+  .personal-workspace:not([data-workspace-ring-motion="enabled"])
+    .workspace-dock-label::before {
     animation: none;
   }
 }

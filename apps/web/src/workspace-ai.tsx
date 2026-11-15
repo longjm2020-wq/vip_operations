@@ -34,10 +34,16 @@ function AssistantCore({
     >
       <div className="workspace-ai-core-perspective" aria-hidden="true">
         <div className="workspace-ai-core-scene">
-          <div className="workspace-ai-core-aura" aria-hidden="true" />
-          <div className="workspace-ai-core-resonance" aria-hidden="true" />
+          <div
+            className="workspace-ai-core-aura workspace-ring-animation"
+            aria-hidden="true"
+          />
+          <div
+            className="workspace-ai-core-resonance workspace-ring-animation"
+            aria-hidden="true"
+          />
           <div className="workspace-ai-core-depth workspace-ai-core-depth-back" />
-          <div className="workspace-ai-core-depth workspace-ai-core-depth-cross" />
+          <div className="workspace-ai-core-depth workspace-ai-core-depth-cross workspace-ring-animation" />
         </div>
         <svg
           className="workspace-ai-core-orbits"
@@ -65,7 +71,10 @@ function AssistantCore({
               />
             ))}
           </g>
-          <g className="workspace-ai-core-outer" fill="none">
+          <g
+            className="workspace-ai-core-outer workspace-ring-animation"
+            fill="none"
+          >
             <circle
               cx="160"
               cy="160"
@@ -76,7 +85,10 @@ function AssistantCore({
             <circle cx="160" cy="15" r="2.6" className="is-node" />
             <circle cx="160" cy="305" r="2.6" className="is-node" />
           </g>
-          <g className="workspace-ai-core-middle" fill="none">
+          <g
+            className="workspace-ai-core-middle workspace-ring-animation"
+            fill="none"
+          >
             <circle
               cx="160"
               cy="160"
@@ -93,7 +105,10 @@ function AssistantCore({
               className="is-trace"
             />
           </g>
-          <g className="workspace-ai-core-orbit-plane" fill="none">
+          <g
+            className="workspace-ai-core-orbit-plane workspace-ring-animation"
+            fill="none"
+          >
             <ellipse cx="160" cy="160" rx="111" ry="55" />
             <ellipse
               cx="160"
@@ -110,7 +125,10 @@ function AssistantCore({
               transform="rotate(120 160 160)"
             />
           </g>
-          <g className="workspace-ai-core-inner" fill="none">
+          <g
+            className="workspace-ai-core-inner workspace-ring-animation"
+            fill="none"
+          >
             <circle
               cx="160"
               cy="160"

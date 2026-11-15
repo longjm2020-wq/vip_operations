@@ -72,6 +72,10 @@ import {
   WorkspaceDockCopy,
 } from "./workspace-dock-rendering";
 import "./workspace-world.css";
+import {
+  useWorkspaceRingMotion,
+  WorkspaceRingMotionControl,
+} from "./workspace-ring-motion";
 
 const PersonalWorkspaceContent = lazyPage(() =>
   import("./personal-workspace-content").then((module) => ({
@@ -129,7 +133,9 @@ function WorkspaceOrbit({
                   : []),
               ]}
             />
-            <div className="workspace-dock-orbit">{children}</div>
+            <div className="workspace-dock-orbit workspace-ring-animation">
+              {children}
+            </div>
           </nav>
         </WorkspaceDockRendering>,
         slot,
@@ -491,6 +497,7 @@ export function PersonalWorkspacePage() {
     ),
     [title, setTitle] = useState(""),
     [dueDate, setDueDate] = useState("");
+  const ringMotion = useWorkspaceRingMotion(user.id);
   useEffect(() => {
     const resetLayout = () => setBranchLayout(false);
     window.addEventListener("xuti-workspace-layout-reset", resetLayout);
@@ -601,6 +608,7 @@ export function PersonalWorkspacePage() {
       ref={world.surface}
       className="personal-workspace"
       data-workspace-layout={branchLayout ? "branches" : "orbit"}
+      data-workspace-ring-motion={ringMotion.enabled ? "enabled" : "disabled"}
       data-scene-presence={scenePresence}
       data-hologram-presence={hologramPresence}
       role="region"
@@ -679,6 +687,7 @@ export function PersonalWorkspacePage() {
             <BranchesOutlined />
           </button>
           <WorkspaceHologram onPresenceChange={setHologramPresence} />
+          <WorkspaceRingMotionControl motion={ringMotion} />
         </div>
         <div className="workspace-voice-slot" data-world-ui />
         <span className="workspace-date">
@@ -714,7 +723,11 @@ export function PersonalWorkspacePage() {
           <div className="personal-workspace-body">
             <div className="personal-workspace-main">
               {!canUsePersonalAssistant({ permissions: user.permissions }) && (
-                <div className="workspace-quiet" ref={quietStage} inert={sceneCovered}>
+                <div
+                  className="workspace-quiet"
+                  ref={quietStage}
+                  inert={sceneCovered}
+                >
                   <div className="workspace-world-camera">
                     <div className="workspace-world-plane">
                       <div className="workspace-quiet-center">
@@ -821,8 +834,8 @@ export function PersonalWorkspacePage() {
                   aria-expanded={panelOpen && panel === item.key}
                   onClick={(event) => openPanel(item.key, event.currentTarget)}
                 >
-                  <span className="workspace-dock-face">
-                    <span className="workspace-dock-label">
+                  <span className="workspace-dock-face workspace-ring-animation">
+                    <span className="workspace-dock-label workspace-ring-animation">
                       <WorkspaceDockHalo />
                       <WorkspaceDockCopy
                         panel={item.key}

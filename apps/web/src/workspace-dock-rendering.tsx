@@ -47,16 +47,18 @@ export function WorkspaceDockRendering({
         ),
       }));
       const moving =
-        !motion.matches &&
-        (performance.now() < settleUntil ||
-          orbit
+        performance.now() < settleUntil ||
+        ((root.dataset.workspaceRingMotion === "enabled" ||
+          (root.dataset.workspaceRingMotion !== "disabled" &&
+            !motion.matches)) &&
+          (orbit
             .getAnimations()
             .some((animation) => animation.playState === "running") ||
-          measurements.some(({ item }) =>
-            item
-              .getAnimations()
-              .some((animation) => animation.playState === "running"),
-          ));
+            measurements.some(({ item }) =>
+              item
+                .getAnimations()
+                .some((animation) => animation.playState === "running"),
+            )));
       const snap = (value: number) =>
         Math.round(value * devicePixelRatio) / devicePixelRatio;
       for (const { box, copy } of measurements) {
@@ -83,6 +85,7 @@ export function WorkspaceDockRendering({
       attributeFilter: [
         "style",
         "data-workspace-layout",
+        "data-workspace-ring-motion",
         "data-world-dragging",
         "data-nest-dragging",
       ],
