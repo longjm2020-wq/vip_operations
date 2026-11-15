@@ -25,6 +25,7 @@ import {
   StopOutlined,
   EllipsisOutlined,
   AudioOutlined,
+  DesktopOutlined,
 } from "@ant-design/icons";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useLocation } from "react-router-dom";
@@ -70,6 +71,11 @@ import type { AssistantVoiceStatus } from "../../../packages/contracts/src/assis
 import { workspaceHologramEvent } from "./workspace-hologram";
 import { workspaceTeamEvent } from "./workspace-team-navigation";
 import { AssistantDesktopPanel } from "./assistant-desktop-panel";
+import { isDesktopClient } from "./desktop-client";
+import {
+  connectAndAuthorizeDesktop,
+  desktopSetupMessage,
+} from "./desktop-setup";
 import {
   AssistantTeamPanel,
   teamRunsKey,
@@ -101,6 +107,19 @@ type AssistantSection =
   | "desktop"
   | "team"
   | "settings";
+
+const desktopSelectionKey = (userId: string) =>
+  `xuti-assistant-desktop:${userId}`;
+function readDesktopSelection(userId: string) {
+  try {
+    const id = localStorage.getItem(desktopSelectionKey(userId));
+    return id && /^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/i.test(id)
+      ? id
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 export function PersonalAssistantProvider({
   children,
@@ -189,7 +208,37 @@ export function PersonalAssistantProvider({
       (await api("/my-workspace/assistant/capabilities")).data as AgentCatalog,
     staleTime: 30000,
   });
-  const [desktopDeviceId, setDesktopDeviceId] = useState<string>();
+  const [desktopSelection, setDesktopSelection] = useState(() => ({
+    owner: user.id,
+    id: readDesktopSelection(user.id),
+  }));
+  const desktopTargetId =
+    desktopSelection.owner === user.id
+      ? desktopSelection.id
+      : readDesktopSelection(user.id);
+  const nativeDesktop = isDesktopClient();
+  const [desktopConnecting, setDesktopConnecting] = useState(false);
+  const [desktopSetupNote, setDesktopSetupNote] = useState("");
+  const desktopSetupRunning = useRef(false);
+  const desktopSetupLifecycle = useRef({ mounted: true, epoch: 0 });
+  const currentOwner = useRef(user.id);
+  currentOwner.current = user.id;
+  useEffect(() => {
+    desktopSetupLifecycle.current.mounted = true;
+    return () => {
+      desktopSetupLifecycle.current.mounted = false;
+      desktopSetupLifecycle.current.epoch++;
+    };
+  }, []);
+  const rememberDesktop = (id?: string) => {
+    setDesktopSelection({ owner: user.id, id });
+    try {
+      if (id) localStorage.setItem(desktopSelectionKey(user.id), id);
+      else localStorage.removeItem(desktopSelectionKey(user.id));
+    } catch {
+      /* The choice remains available for this page. */
+    }
+  };
   const [teamMode, setTeamMode] = useState(false);
   useEffect(() => {
     if (teamMode) return;
@@ -212,28 +261,24 @@ export function PersonalAssistantProvider({
     enabled: allowed,
     queryFn: async () =>
       (await api("/my-workspace/assistant/desktop")).data as DesktopState,
-    refetchInterval: open || desktopDeviceId ? 4000 : false,
+    refetchInterval: open || desktopTargetId ? 4000 : false,
   });
-  useEffect(() => {
-    if (
-      allowed &&
-      ["tasks", "desktop", "team"].includes(
-        new URLSearchParams(location.search).get("assistant") || "",
-      )
-    ) {
-      setSection(
-        new URLSearchParams(location.search).get("assistant") === "desktop"
-          ? "desktop"
-          : new URLSearchParams(location.search).get("assistant") === "team"
-            ? "chat"
-            : "tasks",
-      );
-      if (new URLSearchParams(location.search).get("assistant") === "team")
-        setTeamMode(true);
-      setOpen(true);
-      navigate(location.pathname, { replace: true });
-    }
-  }, [allowed, location.search, location.pathname, navigate]);
+  const desktopTarget = desktop.data?.devices.find(
+    (device) => device.id === desktopTargetId,
+  );
+  // A remembered ID is only routed after the current account's server list confirms ownership.
+  const desktopDeviceId = desktopTarget?.id;
+  const desktopProblem = !desktopTargetId
+    ? ""
+    : desktop.isPending
+      ? "正在核对已记住的电脑…"
+      : desktop.error
+        ? "暂时无法核对电脑连接，请刷新后重试。"
+        : !desktopTarget
+          ? "上次选择的电脑连接已失效，请重新连接或主动返回网站对话。"
+          : !desktopTarget.online
+            ? "所选电脑离线，请打开该电脑的小序桌面端。"
+            : "";
   const jobs = useQuery({
     queryKey: ["assistant-jobs", user.id],
     enabled: allowed,
@@ -324,17 +369,17 @@ export function PersonalAssistantProvider({
     value: chatModel,
     teamSelected: teamMode,
   });
-  const modelHint = !teamMode && !desktopDeviceId ? pickerState.hint : "";
+  const modelHint = !teamMode && !desktopTargetId ? pickerState.hint : "";
   const modelProblem =
     !teamMode &&
-    !desktopDeviceId &&
+    !desktopTargetId &&
     modelCatalog.data &&
     !pickerState.models.length
       ? "暂无已接通的多模态模型，请管理员检查连接。"
       : "";
   const composerReady = teamMode
     ? teamConfig.data?.ready
-    : data?.ready && !modelProblem;
+    : data?.ready && !modelProblem && !desktopProblem;
   const legacyVoice = useGptVoice(
     () => {
       void q.refetch();
@@ -377,8 +422,8 @@ export function PersonalAssistantProvider({
     return () => window.removeEventListener(workspaceTeamEvent, showTeam);
   }, [voice.stopListening, speech.stop, gptVoice.stop]);
   const voiceExecutionLabel =
-    useRealtime && desktopDeviceId
-      ? `电脑操作 · ${desktop.data?.devices?.find((device) => device.id === desktopDeviceId)?.name || "所选电脑"}`
+    useRealtime && desktopTargetId
+      ? `电脑操作 · ${desktopTarget?.name || "所选电脑"}`
       : "网站内";
   const selectedVoiceStatus =
     useRealtime && realtimeStatus.data
@@ -402,11 +447,107 @@ export function PersonalAssistantProvider({
       }
     : undefined;
   const busy =
+    desktopConnecting ||
     sending ||
     uploading ||
     data?.state === "PENDING" ||
     !!executing ||
     gptVoice.active;
+  const executionBusy = useRef(false);
+  executionBusy.current =
+    sending ||
+    uploading ||
+    data?.state === "PENDING" ||
+    !!executing ||
+    gptVoice.active ||
+    voice.listening;
+  const chooseDesktop = (id: string) => {
+    if (executionBusy.current || desktopSetupRunning.current) return;
+    const device = desktop.data?.devices.find((entry) => entry.id === id);
+    if (!device?.online) return;
+    rememberDesktop(id);
+    setTeamMode(false);
+    setSection("chat");
+    setOpen(true);
+  };
+  const setupDesktop = async () => {
+    if (!desktopSetupLifecycle.current.mounted || desktopSetupRunning.current)
+      return;
+    if (executionBusy.current) {
+      setDesktopSetupNote("请先结束当前语音或等待发送完成，再选择操作电脑。");
+      setSection("desktop");
+      setOpen(true);
+      return;
+    }
+    const owner = user.id;
+    const epoch = desktopSetupLifecycle.current.epoch;
+    const isCurrent = () =>
+      desktopSetupLifecycle.current.mounted &&
+      desktopSetupLifecycle.current.epoch === epoch &&
+      currentOwner.current === owner;
+    desktopSetupRunning.current = true;
+    setDesktopConnecting(true);
+    setDesktopSetupNote("");
+    try {
+      const latest = await desktop.refetch();
+      if (!isCurrent()) return;
+      if (latest.error || !latest.data)
+        throw new Error("无法核对当前账号的电脑连接，请稍后重试。");
+      if (executionBusy.current) {
+        setDesktopSetupNote("请先结束当前语音或等待发送完成，再选择操作电脑。");
+        return;
+      }
+      const result = await connectAndAuthorizeDesktop(
+        latest.data.devices.map((device) => device.id),
+        isCurrent,
+      );
+      if (!isCurrent()) return;
+      const refreshed = await desktop.refetch();
+      if (!isCurrent() || executionBusy.current) return;
+      if (result.authorized === true) {
+        if (
+          refreshed.error ||
+          !refreshed.data?.devices.some(
+            (device) => device.id === result.deviceId,
+          )
+        )
+          throw new Error("本机连接尚未同步，请稍后重试。");
+        rememberDesktop(result.deviceId);
+        setTeamMode(false);
+        setSection("chat");
+        setOpen(true);
+        message.success("已选择本机，可以直接下达电脑操作指令");
+      } else {
+        setDesktopSetupNote(desktopSetupMessage(result.authorized));
+        setSection("desktop");
+        setOpen(true);
+      }
+    } catch (cause) {
+      if (isCurrent()) {
+        setDesktopSetupNote((cause as Error).message);
+        setSection("desktop");
+        setOpen(true);
+      }
+    } finally {
+      if (isCurrent()) {
+        desktopSetupRunning.current = false;
+        setDesktopConnecting(false);
+      }
+    }
+  };
+  const setupDesktopRef = useRef(setupDesktop);
+  setupDesktopRef.current = setupDesktop;
+  useEffect(() => {
+    if (!allowed || !nativeDesktop) return;
+    const requestSetup = (event: Event) => {
+      event.preventDefault();
+      setSection("desktop");
+      setOpen(true);
+      void setupDesktopRef.current();
+    };
+    window.addEventListener("xuti-desktop-setup", requestSetup);
+    return () => window.removeEventListener("xuti-desktop-setup", requestSetup);
+  }, [allowed, nativeDesktop]);
   const announce = useCallback(
     (value: string) => {
       if (
@@ -581,6 +722,10 @@ export function PersonalAssistantProvider({
   };
   const startVoice = () => {
     if (!allowed) return;
+    if (desktopConnecting || desktopProblem) {
+      message.info(desktopProblem || "请先完成本机连接");
+      return;
+    }
     voice.stop();
     speech.stop();
     // Starting or stopping a call never opens or closes the text chat panel.
@@ -611,6 +756,7 @@ export function PersonalAssistantProvider({
     setOpen(true);
   };
   const openPanel = (tab: "chat" | "activity" | "voice" | "team" = "chat") => {
+    if (tab === "team" && busy) return;
     if (tab === "voice") {
       startVoice();
       return;
@@ -620,12 +766,13 @@ export function PersonalAssistantProvider({
     speech.stop();
     if (tab === "team") {
       setTeamMode(true);
-      setDesktopDeviceId(undefined);
+      rememberDesktop();
     }
     setSection(allowed ? (tab === "team" ? "chat" : tab) : "activity");
     setOpen(true);
   };
   const selectSection = (next: AssistantSection) => {
+    if ((next === "team" || next === "desktop") && busy) return;
     playbackAllowed.current = false;
     closeVoice();
     voice.stop();
@@ -633,17 +780,49 @@ export function PersonalAssistantProvider({
     setSection(allowed ? next : "activity");
     if (next === "team") {
       setTeamMode(true);
-      setDesktopDeviceId(undefined);
+      rememberDesktop();
     }
     setOpen(true);
   };
+  const consumedAssistantLink = useRef("");
   useEffect(() => {
     if (!allowed || location.pathname !== "/my-workspace") return;
-    const target = new URLSearchParams(location.search).get("assistant");
-    if (!["chat", "team", "desktop", "voice"].includes(target || "")) return;
+    const params = new URLSearchParams(location.search);
+    const target = params.get("assistant");
+    if (
+      !["chat", "team", "desktop", "voice", "tasks"].includes(target || "") ||
+      consumedAssistantLink.current === location.key
+    )
+      return;
+    consumedAssistantLink.current = location.key;
+    const connect = target === "desktop" && params.get("connect") === "1";
+    params.delete("assistant");
+    params.delete("connect");
+    navigate(
+      {
+        pathname: location.pathname,
+        search: params.toString() ? `?${params}` : "",
+        hash: location.hash,
+      },
+      { replace: true },
+    );
     // A settings deep link never starts recording or opens a voice session.
     if (target === "voice") openVoiceSettings();
-    else if (target === "desktop") selectSection("desktop");
+    else if (target === "desktop") {
+      if (connect && nativeDesktop) {
+        setSection("desktop");
+        setOpen(true);
+        // Start after StrictMode's mount cleanup, while the link is consumed once.
+        const owner = user.id;
+        queueMicrotask(() => {
+          if (
+            desktopSetupLifecycle.current.mounted &&
+            currentOwner.current === owner
+          )
+            void setupDesktopRef.current();
+        });
+      } else selectSection("desktop");
+    } else if (target === "tasks") selectSection("tasks");
     else openPanel(target === "team" ? "team" : "chat");
     // React to navigation, not to changing voice/session state.
   }, [location.key, location.pathname, location.search, allowed]);
@@ -722,6 +901,21 @@ export function PersonalAssistantProvider({
       inert={!inDrawer && inWorkspace && open}
       aria-hidden={!inDrawer && inWorkspace && open ? true : undefined}
     >
+      <div className="assistant-desktop-entry">
+        <Button
+          size="small"
+          type="text"
+          icon={<DesktopOutlined aria-hidden />}
+          aria-label={nativeDesktop ? "操作本机" : "电脑操作"}
+          loading={desktopConnecting}
+          disabled={busy || voice.listening}
+          onClick={() =>
+            nativeDesktop ? void setupDesktop() : selectSection("desktop")
+          }
+        >
+          {nativeDesktop ? "操作本机" : "电脑操作"}
+        </Button>
+      </div>
       <Sender
         value={text}
         onChange={(value) => setText(value.slice(0, teamMode ? 8000 : 4000))}
@@ -739,7 +933,7 @@ export function PersonalAssistantProvider({
             onUploading={setUploading}
             actions={
               <div className="assistant-send-actions">
-                {!desktopDeviceId && (
+                {!desktopTargetId && (
                   <AssistantModelPicker
                     catalog={modelCatalog.data}
                     value={chatModel}
@@ -750,7 +944,7 @@ export function PersonalAssistantProvider({
                     teamSelected={teamMode}
                     selectTeam={() => {
                       setTeamMode(true);
-                      setDesktopDeviceId(undefined);
+                      rememberDesktop();
                     }}
                     disabled={busy || voice.listening}
                     loading={modelCatalog.isFetching}
@@ -824,7 +1018,7 @@ export function PersonalAssistantProvider({
                     className="assistant-voice-button"
                     aria-label="开始语音对话"
                     title={useRealtime ? "实时语音对话" : "语音对话"}
-                    disabled={voice.listening}
+                    disabled={voice.listening || !!desktopProblem}
                     onClick={startVoice}
                   >
                     <svg
@@ -853,7 +1047,7 @@ export function PersonalAssistantProvider({
                 ? "正在连接智能体团队…"
                 : "团队智能服务尚未就绪，请查看面板提示"
             : data?.ready
-              ? desktopDeviceId
+              ? desktopTargetId
                 ? desktop.data?.devices?.find((d) => d.id === desktopDeviceId)
                     ?.crossWindowAuthorized
                   ? "描述电脑任务，小序将按设备授权执行…"
@@ -901,25 +1095,26 @@ export function PersonalAssistantProvider({
           }
         />
       )}
-      {desktopDeviceId && (
+      {desktopTargetId && (
         <div className="assistant-desktop-note">
           <span>
-            电脑操作 ·{" "}
-            {desktop.data?.devices?.find(
-              (device) => device.id === desktopDeviceId,
-            )?.name || "所选电脑"}
+            电脑操作 · {desktopTarget?.name || "上次选择的电脑"}
             。仅发送本条指令，请移除附件。
+            {desktopTarget &&
+              !desktopTarget.crossWindowAuthorized &&
+              " 本机授权尚未开启，任务需在本机允许。"}
           </span>
           <Button
             size="small"
             type="link"
             disabled={busy}
-            onClick={() => setDesktopDeviceId(undefined)}
+            onClick={() => rememberDesktop()}
           >
             返回网站对话
           </Button>
         </div>
       )}
+      {desktopProblem && <Alert type="warning" title={desktopProblem} />}
     </div>
   );
   return (
@@ -1187,11 +1382,12 @@ export function PersonalAssistantProvider({
             data={desktop.data}
             error={desktop.error?.message || ""}
             refresh={() => void desktop.refetch()}
-            choose={(id) => {
-              setDesktopDeviceId(id);
-              setSection("chat");
-              setOpen(true);
-            }}
+            choose={chooseDesktop}
+            connectLocal={() => void setupDesktop()}
+            connecting={desktopConnecting}
+            disabled={busy || voice.listening}
+            setupNote={desktopSetupNote}
+            selectedId={desktopTargetId}
           />
         )}
         {section === "activity" && (

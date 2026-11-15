@@ -14,7 +14,8 @@ using Microsoft.Web.WebView2.WinForms;
 namespace XutiDesktop {
 static class ShellPolicy {
     public const string Origin = "https://vip-web-production.up.railway.app";
-    public const string Version = "1.2.1";
+    public const string Version = "1.2.2";
+    public const string SetupPath = "/my-workspace?assistant=desktop&connect=1";
     public static bool Trusted(string value) {
         Uri uri;
         return Uri.TryCreate(value,UriKind.Absolute,out uri) && uri.Scheme=="https" &&
@@ -112,7 +113,7 @@ sealed class DesktopShell : Form {
         header.Controls.Add(workButton);
         header.Controls.Add(ShellStyle.Button("打开网页",()=>OpenBrowser(null)));
         header.Controls.Add(taskButton);
-        header.Controls.Add(ShellStyle.Button("连接本机",()=>ShowWorkspace("/my-workspace?assistant=desktop")));
+        header.Controls.Add(ShellStyle.Button("操作本机",()=>{var ignored=RequestSetup();}));
         header.Controls.Add(ShellStyle.Button("刷新",()=>{if(ready){ShowWorkspace(null);workspace.Reload();}else{var ignored=Initialize();}}));
         header.Controls.Add(ShellStyle.Button("使用帮助",()=>ShowWorkspace("/help?chapter=39-assistant-desktop.md")));
         workPanel.Controls.Add(workspace);workPanel.Controls.Add(notice);
@@ -125,6 +126,7 @@ sealed class DesktopShell : Form {
         taskPanel.Controls.Add(assistant);
         Controls.Add(workPanel);Controls.Add(taskPanel);Controls.Add(footer);Controls.Add(header);
         assistant.Changed+=()=>UpdateFooter();
+        assistant.SetupRequested+=()=>{var ignored=RequestSetup();};
         Shown+=async(s,e)=>{assistant.Show();assistant.StartEngine();await Initialize();};
         FormClosing+=async(s,e)=>{
             if(exiting)return;
@@ -154,7 +156,7 @@ sealed class DesktopShell : Form {
         if(keyData==(Keys.Control|Keys.D1))return ()=>ShowWorkspace(null);
         if(keyData==(Keys.Control|Keys.D2))return ()=>OpenBrowser(null);
         if(keyData==(Keys.Control|Keys.D3))return ShowTasks;
-        if(keyData==(Keys.Control|Keys.Shift|Keys.L))return ()=>ShowWorkspace("/my-workspace?assistant=desktop");
+        if(keyData==(Keys.Control|Keys.Shift|Keys.L))return ()=>{var ignored=RequestSetup();};
         return null;
     }
     protected override bool ProcessCmdKey(ref Message msg,Keys keyData) {
@@ -164,6 +166,21 @@ sealed class DesktopShell : Form {
     void ShowWorkspace(string path) {
         workPanel.Visible=true;taskPanel.Visible=false;workPanel.BringToFront();
         if(path!=null){pendingUrl=ShellPolicy.Origin+path;if(ready)workspace.CoreWebView2.Navigate(pendingUrl);}
+    }
+    async Task RequestSetup() {
+        ShowWorkspace(null);
+        if(ready && ShellPolicy.Trusted(workspace.CoreWebView2.Source)) {
+            long version=navigation;
+            try {
+                string handled=await workspace.CoreWebView2.ExecuteScriptAsync("(() => { if (window !== window.top || location.origin !== 'https://vip-web-production.up.railway.app') return false; return !window.dispatchEvent(new Event('xuti-desktop-setup', {cancelable:true})); })()");
+                if(version!=navigation || exiting) return;
+                if(handled=="true") return;
+            } catch {
+                if(!exiting) footer.Text="页面暂时无法响应，请稍后再点「操作本机」。当前通话和任务保持不变。";
+                return;
+            }
+        }
+        ShowWorkspace(ShellPolicy.SetupPath);
     }
     void ShowNotice(string text){noticeText.Text=text;notice.Visible=true;notice.BringToFront();}
     void OpenSystem(string url) {
@@ -207,7 +224,7 @@ sealed class DesktopShell : Form {
             // No native object, token, filesystem or execution API is injected into any page.
             await core.AddScriptToExecuteOnDocumentCreatedAsync(@"(() => {
                 if (window !== window.top || location.origin !== 'https://vip-web-production.up.railway.app') return;
-                Object.defineProperty(window, 'xutiDesktop', {value: Object.freeze({version:'1.2.1'}), writable:false});
+                Object.defineProperty(window, 'xutiDesktop', {value: Object.freeze({version:'1.2.2'}), writable:false});
                 const theme = () => window.chrome.webview.postMessage({channel:'xuti-desktop',action:'theme',value:document.documentElement.dataset.theme === 'dark'?'dark':'light'});
                 addEventListener('DOMContentLoaded', () => {theme();new MutationObserver(theme).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});});
             })();");
@@ -221,6 +238,7 @@ sealed class DesktopShell : Form {
             var data=ShellPolicy.Message(e.Source,workspace.CoreWebView2.Source,e.WebMessageAsJson);
             string action=AssistantForm.S(data,"action");id=AssistantForm.S(data,"id");
             if(action=="theme"){ApplyTheme(AssistantForm.S(data,"value")=="dark");return;}
+            if(action=="status") await assistant.RefreshStatus();
             if(action=="pair") {
                 await assistant.PairCode(AssistantForm.S(data,"code"));
                 if(version!=navigation){await assistant.Disconnect();return;}

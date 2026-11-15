@@ -833,6 +833,24 @@ body:has(.assistant-screen.ant-drawer-open) .companion-voice-prompt {
 .assistant-desktop-panel {
   padding: 4px 2px 24px;
 }
+.assistant-desktop-entry {
+  display: flex;
+  align-items: center;
+  margin-bottom: 6px;
+}
+.assistant-desktop-entry .ant-btn {
+  color: var(--app-text);
+  background: var(--app-accent-soft);
+  border: 1px solid var(--app-accent-border);
+}
+.assistant-desktop-panel details {
+  margin: 12px 0;
+}
+.assistant-desktop-panel summary {
+  cursor: pointer;
+  color: var(--app-secondary);
+  margin-bottom: 8px;
+}
 .assistant-desktop-heading {
   display: flex;
   align-items: center;

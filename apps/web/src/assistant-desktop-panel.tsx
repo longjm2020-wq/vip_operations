@@ -10,10 +10,6 @@ import {
 import { api } from "./api";
 import { desktopClientRequest, isDesktopClient } from "./desktop-client";
 import {
-  connectAndAuthorizeDesktop,
-  desktopSetupMessage,
-} from "./desktop-setup";
-import {
   desktopStatusLabels,
   type DesktopState,
 } from "../../../packages/contracts/src/assistant-desktop";
@@ -23,11 +19,21 @@ export function AssistantDesktopPanel({
   error,
   refresh,
   choose,
+  connectLocal,
+  connecting = false,
+  disabled = false,
+  setupNote = "",
+  selectedId,
 }: {
   data?: DesktopState;
   error: string;
   refresh: () => void;
   choose: (id: string) => void;
+  connectLocal: () => void;
+  connecting?: boolean;
+  disabled?: boolean;
+  setupNote?: string;
+  selectedId?: string;
 }) {
   const { message } = App.useApp();
   const [pair, setPair] = useState<{ code: string; expiresAt: string } | null>(
@@ -78,11 +84,21 @@ export function AssistantDesktopPanel({
       <Alert
         type="info"
         showIcon
-        title={native ? "小序桌面端已就绪" : "使用小序桌面端"}
+        title={
+          native
+            ? local?.crossWindowAuthorized
+              ? "本机已记住授权"
+              : local
+                ? "本机已连接，尚未授权"
+                : "小序桌面端已就绪"
+            : "使用小序桌面端"
+        }
         description={
           native
-            ? "点击下方按钮，在本机弹窗确认后即可使用。授权会记住，可随时撤销。"
-            : "下载并解压桌面端，打开 XutiDesktop.exe，登录后点击「连接并授权本机」。只需首次确认，之后可从网页或桌面端下达指令。"
+            ? local?.crossWindowAuthorized
+              ? "已记住本机授权，点击「操作本机」即可返回对话下达指令。"
+              : "点击下方按钮，在本机弹窗确认后即可使用。授权会记住，可随时撤销。"
+            : "下载并解压桌面端，打开 XutiDesktop.exe，登录后点击「操作本机」。只需首次确认，之后可从网页或桌面端下达指令。"
         }
       />
       <Space wrap style={{ margin: "16px 0" }}>
@@ -90,24 +106,11 @@ export function AssistantDesktopPanel({
           <>
             <Button
               type="primary"
-              loading={busy === "native-pair"}
-              disabled={!!busy}
-              onClick={() =>
-                void run("native-pair", async () => {
-                  const result = await connectAndAuthorizeDesktop(
-                    (data?.devices || []).map((d) => d.id),
-                  );
-                  setLocalDevice(result.deviceId);
-                  choose(result.deviceId);
-                  message.info(desktopSetupMessage(result.authorized));
-                })
-              }
+              loading={connecting}
+              disabled={!!busy || disabled}
+              onClick={connectLocal}
             >
-              {local
-                ? local.crossWindowAuthorized
-                  ? "在本机执行"
-                  : "授权本机操作"
-                : "连接并授权本机"}
+              操作本机
             </Button>
             <Button
               onClick={() =>
@@ -115,26 +118,38 @@ export function AssistantDesktopPanel({
                   desktopClientRequest("show-tasks"),
                 )
               }
-              disabled={!!busy}
+              disabled={!!busy || disabled}
             >
               打开电脑任务
             </Button>
           </>
         )}
-        <Button
-          type={native ? "default" : "primary"}
-          href="/downloads/xuti-desktop.zip"
-          download
-          icon={<DownloadOutlined />}
-        >
-          {native ? "下载新版桌面端" : "下载 Windows 桌面端"}
-        </Button>
+        {!native && (
+          <Button
+            type={native ? "default" : "primary"}
+            href="/downloads/xuti-desktop.zip"
+            download
+            icon={<DownloadOutlined />}
+          >
+            下载 Windows 桌面端
+          </Button>
+        )}
       </Space>
+      {setupNote && <Alert type="info" showIcon title={setupNote} />}
       <details>
-        <summary>连接其他电脑或使用配对码</summary>
+        <summary>其他连接方式与客户端更新</summary>
+        {native && (
+          <Button
+            href="/downloads/xuti-desktop.zip"
+            download
+            icon={<DownloadOutlined />}
+          >
+            下载新版桌面端
+          </Button>
+        )}
         <Button
           loading={busy === "pair"}
-          disabled={!!busy}
+          disabled={!!busy || disabled}
           onClick={() =>
             void run("pair", async () =>
               setPair(
@@ -181,47 +196,53 @@ export function AssistantDesktopPanel({
           <Tag color={d.crossWindowAuthorized ? "blue" : undefined}>
             {d.crossWindowAuthorized ? "已记住跨窗口授权" : "逐次允许"}
           </Tag>
+          {selectedId === d.id && <Tag color="blue">当前执行电脑</Tag>}
           <Space>
             <Button
               size="small"
               type="primary"
-              disabled={!d.online}
+              disabled={!d.online || !!busy || disabled}
               onClick={() => choose(d.id)}
             >
               在这台电脑执行
             </Button>
-            <Button
-              size="small"
-              disabled={!!busy}
-              onClick={() =>
-                void run(d.id, async () => {
-                  await api(
-                    `/my-workspace/assistant/desktop/devices/${d.id}/revoke`,
-                    "POST",
-                  );
-                })
-              }
-            >
-              断开
-            </Button>
-            {d.crossWindowAuthorized && (
+          </Space>
+          <details className="assistant-desktop-management">
+            <summary>管理连接与授权</summary>
+            <Space wrap>
               <Button
                 size="small"
-                disabled={!!busy}
+                disabled={!!busy || connecting}
                 onClick={() =>
-                  void run(`authorization-${d.id}`, async () => {
+                  void run(d.id, async () => {
                     await api(
-                      `/my-workspace/assistant/desktop/devices/${d.id}/authorization/revoke`,
+                      `/my-workspace/assistant/desktop/devices/${d.id}/revoke`,
                       "POST",
                     );
-                    message.success("跨窗口授权已撤销，当前电脑任务已暂停");
                   })
                 }
               >
-                撤销跨窗口授权
+                断开
               </Button>
-            )}
-          </Space>
+              {d.crossWindowAuthorized && (
+                <Button
+                  size="small"
+                  disabled={!!busy || connecting}
+                  onClick={() =>
+                    void run(`authorization-${d.id}`, async () => {
+                      await api(
+                        `/my-workspace/assistant/desktop/devices/${d.id}/authorization/revoke`,
+                        "POST",
+                      );
+                      message.success("跨窗口授权已撤销，当前电脑任务已暂停");
+                    })
+                  }
+                >
+                  撤销跨窗口授权
+                </Button>
+              )}
+            </Space>
+          </details>
         </div>
       ))}
       <h4>操作任务</h4>

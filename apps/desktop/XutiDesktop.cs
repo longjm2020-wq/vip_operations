@@ -22,8 +22,9 @@ namespace XutiDesktop {
 static class Program {
     [STAThread] static int Main(string[] args) {
         ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12;
-        if (args.Length == 1 && args[0] == "--self-test") return Native.SelfTest() + ShellPolicy.SelfTest();
+        if (args.Length == 1 && args[0] == "--self-test") return Native.SelfTest() + ShellPolicy.SelfTest() + AssistantForm.ConnectionSelfTest();
         if (args.Length == 1 && args[0] == "--runtime-check") return DesktopShell.CheckRuntime();
+        if (args.Length == 2 && args[0] == "--ui-preview") { Application.EnableVisualStyles(); Application.SetCompatibleTextRenderingDefault(false); return AssistantForm.Preview(args[1]); }
         bool first;
         using (var mutex = new System.Threading.Mutex(true, "Local\\XutiDesktopAssistant", out first)) {
             if (!first) { MessageBox.Show("小序已经运行，请切换至已打开的窗口。"); return 1; }
@@ -61,23 +62,26 @@ sealed class AssistantForm : Form {
     readonly Label status = new Label { AutoSize = true, MaximumSize = new Size(580, 0), Text = "连接后等待网站发送任务。" };
     readonly Label instruction = new Label { AutoSize = true, MaximumSize = new Size(580, 0), Font = new Font("Microsoft YaHei UI", 11, FontStyle.Bold) };
     readonly ComboBox windows = new ComboBox { Width = 565, DropDownStyle = ComboBoxStyle.DropDownList };
-    readonly Button allow = new Button { Text = "允许本次任务", AutoSize = true, Enabled = false };
+    readonly Button allow = new Button { Text = "继续当前任务", AutoSize = true, Enabled = false, Visible = false };
+    readonly Button manualAllow = new Button { Text = "允许本次任务", AutoSize = true, Enabled = false };
     readonly Button pause = new Button { Text = "暂停", AutoSize = true };
     readonly Button stop = new Button { Text = "停止 (Ctrl+Alt+X)", AutoSize = true };
     readonly Button authorization = new Button { Text = "授权跨窗口操作", AutoSize = true };
     readonly Label permission = new Label { AutoSize = true, MaximumSize = new Size(570, 0) };
+    FlowLayoutPanel advancedPanel;
     readonly Timer timer = new Timer { Interval = 2000 };
     string token = "", owner = "", deviceId = "", taskId = "", approvedId = "", state = "";
     string authorizationId = "", activeAuthorizationId = "", autoAttemptedId = "";
     bool changingAuthorization;
     long permissionEpoch;
     public event Action Changed;
+    public event Action SetupRequested;
     public bool Connected { get { return token.Length > 0; } }
     public bool Authorized { get { return Connected && authorizationId.Length > 0; } }
     public string DeviceId { get { return deviceId; } }
     public string ConnectionText { get { return connection.Text; } }
     public string TaskText { get { return status.Text; } }
-    bool started, pairing;
+    bool started, pairing, isolatedPreview;
     WindowChoice selected;
     bool polling, working, armed, closing, captureBlocked, allowing;
     long epoch;
@@ -91,23 +95,35 @@ sealed class AssistantForm : Form {
         BackColor = Color.FromArgb(246, 247, 252);
         var layout = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoScroll = true, Padding = new Padding(20) };
         Controls.Add(layout);
-        layout.Controls.Add(new Label { Text = "电脑任务", AutoSize = true, Font = new Font(Font.FontFamily, 17, FontStyle.Bold), Margin = new Padding(0, 0, 0, 12) });
-        layout.Controls.Add(new Label { Text = "在工作台的小序中点击「连接并授权本机」，确认一次即可；也可粘贴其他浏览器生成的配对码。", AutoSize = true, MaximumSize = new Size(570, 0) });
+        layout.Controls.Add(new Label { Text = "本机操作", AutoSize = true, Font = new Font(Font.FontFamily, 17, FontStyle.Bold), Margin = new Padding(0, 0, 0, 12) });
+        layout.Controls.Add(new Label { Text = "点击「操作本机」，首次允许并记住后，就可以在工作台直接说或输入任务。", AutoSize = true, MaximumSize = new Size(570, 0) });
+        layout.Controls.Add(connection);
+        layout.Controls.Add(permission);
+        var setup = new Button { Text = "操作本机", AutoSize = true, Padding = new Padding(10, 5, 10, 5), Margin = new Padding(0, 10, 0, 10) };
+        setup.Click += (s,e) => { if(SetupRequested!=null) SetupRequested(); };
+        layout.Controls.Add(setup);
+        layout.Controls.Add(new Label { Text = "当前任务", AutoSize = true, Margin = new Padding(0, 18, 0, 5) });
+        layout.Controls.Add(instruction); layout.Controls.Add(status);
+        var controls = new FlowLayoutPanel { AutoSize = true };
+        controls.Controls.Add(allow); controls.Controls.Add(pause); controls.Controls.Add(stop); layout.Controls.Add(controls);
+        layout.Controls.Add(new Label { AutoSize = true, MaximumSize = new Size(570, 0), Margin = new Padding(0, 10, 0, 8), Text = "手动操作鼠标或键盘会暂停。登录、付款、发送和删除仍由你接手；暂停后无需重新授权。" });
+        var advancedToggle = new Button { Text = "高级设置 ▸", AutoSize = true, Margin = new Padding(0, 12, 0, 5) };
+        var advanced = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.TopDown, WrapContents = false, Visible = false, MaximumSize = new Size(580, 0) };
+        advancedPanel=advanced;
+        advancedToggle.Click += (s,e) => { advanced.Visible = !advanced.Visible; advancedToggle.Text = advanced.Visible ? "收起高级设置 ▾" : "高级设置 ▸"; };
+        layout.Controls.Add(advancedToggle); layout.Controls.Add(advanced);
+        advanced.Controls.Add(new Label { Text = "连接其他浏览器：粘贴该账号生成的配对码", AutoSize = true, MaximumSize = new Size(570, 0) });
         var pairing = new FlowLayoutPanel { AutoSize = true };
         var pair = new Button { Text = "连接", AutoSize = true };
         var disconnect = new Button { Text = "断开本机", AutoSize = true };
-        pairing.Controls.Add(code); pairing.Controls.Add(pair); pairing.Controls.Add(disconnect); layout.Controls.Add(pairing);
-        layout.Controls.Add(connection);
-        layout.Controls.Add(new Label { Text = "设备授权", AutoSize = true, Margin = new Padding(0, 18, 0, 5) });
-        layout.Controls.Add(permission); layout.Controls.Add(authorization);
-        layout.Controls.Add(new Label { Text = "当前任务", AutoSize = true, Margin = new Padding(0, 18, 0, 5) });
-        layout.Controls.Add(instruction); layout.Controls.Add(status);
-        layout.Controls.Add(new Label { Text = "起始窗口（跨窗口授权后可自动选择）", AutoSize = true, Margin = new Padding(0, 18, 0, 5) });
-        layout.Controls.Add(windows);
+        pairing.Controls.Add(code); pairing.Controls.Add(pair); pairing.Controls.Add(disconnect); advanced.Controls.Add(pairing);
+        advanced.Controls.Add(authorization);
+        advanced.Controls.Add(new Label { Text = "手动选择起始窗口（已记住允许时可自动选择）", AutoSize = true, Margin = new Padding(0, 18, 0, 5) });
+        advanced.Controls.Add(windows);
         var buttons = new FlowLayoutPanel { AutoSize = true };
         var refresh = new Button { Text = "刷新窗口", AutoSize = true };
-        buttons.Controls.Add(refresh); buttons.Controls.Add(allow); buttons.Controls.Add(pause); buttons.Controls.Add(stop); layout.Controls.Add(buttons);
-        layout.Controls.Add(new Label { AutoSize = true, MaximumSize = new Size(570, 0), Margin = new Padding(0, 14, 0, 0), Text = "逐次允许时仅操作选定窗口。记住设备授权后，新任务自动开始，可切换已打开的普通应用和网页。授权在重启后保留，可随时在这里或网站撤销。\n\n操作窗口的画面、控件文字和跨窗口模式下的可用窗口标题会发送至智能服务，截图不保存。手动操作会暂停；登录、验证码、付款、发送和删除由你接手。不要以管理员身份运行助手。" });
+        buttons.Controls.Add(refresh); buttons.Controls.Add(manualAllow); advanced.Controls.Add(buttons);
+        advanced.Controls.Add(new Label { AutoSize = true, MaximumSize = new Size(570, 0), Margin = new Padding(0, 14, 0, 0), Text = "手动允许时只操作选定窗口。记住允许后，新任务可自动选择已打开的普通应用和网页。允许在重启后保留，可随时撤销。\n\n操作画面、控件文字及窗口标题会交给智能服务处理，截图不保存。不要以管理员身份运行助手。" });
         pair.Click += async (s, e) => await Safe(async () => {
             pair.Enabled = false;
             try {
@@ -116,12 +132,13 @@ sealed class AssistantForm : Form {
         });
         disconnect.Click += async (s,e) => await Safe(Disconnect);
         refresh.Click += (s,e) => { if (!armed) RefreshWindows(); };
-        allow.Click += async (s,e) => await Safe(AllowTask);
+        manualAllow.Click += async (s,e) => await Safe(AllowTask);
+        allow.Click += async (s,e) => await Safe(async () => { if(!Authorized) throw new Exception("本机允许已撤销，请重新确认。"); await StartTask(true); });
         authorization.Click += async (s,e) => await Safe(ChangeAuthorization);
         pause.Click += async (s,e) => await Safe(async () => { LocalPause(); await Control("pause", "你已暂停操作"); });
         stop.Click += async (s,e) => await StopTask();
         timer.Tick += async (s,e) => await Poll();
-        Shown += (s,e) => StartEngine();
+        Shown += (s,e) => { if(!isolatedPreview) StartEngine(); };
         FormClosing += (s,e) => Shutdown();
     }
     public void StartEngine() {
@@ -136,7 +153,7 @@ sealed class AssistantForm : Form {
                     BeginInvoke(new Action(async () => await Safe(async () => await Control("pause", "检测到你的手动操作，已暂停"))));
                 });
                 timer.Start();
-            } catch(Exception ex) { status.Text = ex.Message; allow.Enabled = false; }
+            } catch(Exception ex) { status.Text = ex.Message; allow.Enabled = false; manualAllow.Enabled = false; }
     }
     public async Task PairCode(string value) {
         if (pairing) throw new Exception("正在连接，请稍候。");
@@ -187,18 +204,62 @@ sealed class AssistantForm : Form {
     void ShowConnection() {
         connection.Text = token.Length > 0 ? "已连接 · " + owner : "未连接本机";
         bool granted = authorizationId.Length > 0;
-        permission.Text = granted ? "已记住这台设备的跨窗口授权，直到手动撤销。新任务自动执行；暂停后由你继续。" : "逐次允许：每次任务在本机选择一个窗口并允许。";
-        authorization.Text = granted ? "撤销跨窗口授权" : "授权跨窗口操作";
+        permission.Text = granted ? "已允许并记住本机，新任务自动开始。可在高级设置中撤销。" : "尚未允许自动操作；点击「操作本机」完成首次确认。";
+        authorization.Text = granted ? "撤销本机操作授权" : "允许并记住本机操作";
         authorization.Enabled = Connected && !changingAuthorization;
-        allow.Text = granted ? "继续当前任务" : "允许本次任务";
+        ShowTaskControls();
         if(Changed!=null) Changed();
+    }
+    void ShowTaskControls() {
+        bool ready = task!=null && !captureBlocked && !working && !allowing && !changingAuthorization && new[]{"WAITING","PAUSED","NEEDS_USER"}.Contains(state);
+        allow.Visible = Authorized && new[]{"PAUSED","NEEDS_USER"}.Contains(state);
+        allow.Enabled = ready; manualAllow.Enabled = ready;
+        manualAllow.Text = Authorized ? "从此窗口继续" : "允许本次任务";
     }
     void SaveConnection() {
         SaveProtected("connection.bin",json.Serialize(new { token, owner, deviceId, origin=Origin, authorizationId }));
     }
+    void ClearExpiredConnection() {
+        LocalPause(); permissionEpoch++;
+        token=""; owner=""; deviceId=""; authorizationId=""; activeAuthorizationId="";
+        taskId=""; approvedId=""; state=""; task=null; autoAttemptedId=""; instruction.Text="";
+        try { SaveConnection(); } catch { status.Text+=" 本机连接记录未能清理，请检查磁盘。"; }
+        ShowConnection();
+    }
+    async Task<bool> ReconcileAuthorization(Dictionary<string,object> result) {
+        if(changingAuthorization) return false;
+        string remoteGrant=S(result,"authorizationId");
+        if(authorizationId==remoteGrant) return true;
+        changingAuthorization=true;
+        try {
+            LocalPause(); authorizationId=""; SaveConnection(); ShowConnection();
+            // Keep an old revoke serialized with consent so it cannot clear a new grant.
+            // A server grant alone never elevates this local Windows user.
+            if(remoteGrant.Length>0) { await Request("authorization",new {enabled=false}); return false; }
+            return true;
+        } finally { changingAuthorization=false; ShowConnection(); }
+    }
+    public async Task RefreshStatus() {
+        if(token.Length==0 || closing || pairing || changingAuthorization) return;
+        string connectionToken=token; long permissionVersion=permissionEpoch;
+        try {
+            var result=await Request("poll",new {});
+            if(token!=connectionToken || permissionVersion!=permissionEpoch || closing) return;
+            await ReconcileAuthorization(result);
+        } catch(ApiFailure e) {
+            if(token!=connectionToken || permissionVersion!=permissionEpoch || closing) return;
+            if(e.Status!=401 && e.Status!=403) throw;
+            status.Text="本机连接已失效，请点击「操作本机」重新连接。";
+            ClearExpiredConnection();
+        } catch(HttpRequestException) {
+            throw new ApiFailure(503,"暂时无法验证本机连接，原有连接已保留，请检查网络后重试。");
+        } catch(TaskCanceledException) {
+            throw new ApiFailure(503,"验证本机连接超时，原有连接已保留，请稍后重试。");
+        }
+    }
     public async Task RequestAuthorization(string expectedDeviceId) {
         if(!Connected || deviceId!=expectedDeviceId) throw new Exception("本机连接已变化，请重新选择电脑。");
-        if(changingAuthorization) throw new Exception("请先完成当前本机确认。");
+        if(changingAuthorization) throw new Exception("本机允许状态正在更新，请稍后再试。");
         // Repeated setup is idempotent; a web request can only open native consent, never revoke or silently grant.
         if(!Authorized) await ChangeAuthorization();
     }
@@ -208,9 +269,7 @@ sealed class AssistantForm : Form {
         changingAuthorization=true; ShowConnection();
         string connectionToken=token;
         try {
-            if (enable && MessageBox.Show(TopLevelControl ?? this,
-                "允许小序按你的指令识别、点击已打开的网页和应用？\n\n确认一次后记住本机，新任务自动执行。操作画面、控件文字及窗口标题会交给已配置的智能服务处理。\n\n可随时撤销；Ctrl+Alt+X 停止。登录、付款、发送、删除仍由你接手。断开或换账号后需重新授权。",
-                "允许小序操作这台电脑", MessageBoxButtons.YesNo, MessageBoxIcon.Information, MessageBoxDefaultButton.Button2) != DialogResult.Yes) return;
+            if (enable && !ConfirmAuthorization()) return;
             if(token!=connectionToken || !Connected || closing) return;
             permissionEpoch++; LocalPause();
             if (!enable) {
@@ -240,6 +299,19 @@ sealed class AssistantForm : Form {
                 status.Text="已记住设备授权。你发送的新任务将自动开始，暂停的任务请点击继续。";
             }
         } finally { changingAuthorization=false; ShowConnection(); }
+    }
+    static Form AuthorizationDialog() {
+        var dialog=new Form { Text="允许小序操作本机", Width=540, Height=290, StartPosition=FormStartPosition.CenterParent, FormBorderStyle=FormBorderStyle.FixedDialog, MaximizeBox=false, MinimizeBox=false, ShowInTaskbar=false, Font=new Font("Microsoft YaHei UI",10), AutoScaleMode=AutoScaleMode.Dpi };
+            var text=new Label { Dock=DockStyle.Fill, Padding=new Padding(24,20,24,12), Text="按你的指令点击、输入和切换已打开的网页与应用。确认一次后记住本机，新任务无需再次确认。\n\n操作画面、控件文字及窗口标题会交给智能服务处理。登录、付款、发送和删除由你接手。\n\n随时可撤销；Ctrl + Alt + X 停止。" };
+            var buttons=new FlowLayoutPanel { Dock=DockStyle.Bottom, Height=62, Padding=new Padding(18,10,18,10), FlowDirection=FlowDirection.RightToLeft };
+            var accept=new Button { Text="允许并记住", Width=145, Height=36, DialogResult=DialogResult.Yes };
+            var cancel=new Button { Text="取消", Width=100, Height=36, DialogResult=DialogResult.Cancel };
+            buttons.Controls.Add(accept);buttons.Controls.Add(cancel);dialog.Controls.Add(text);dialog.Controls.Add(buttons);
+            dialog.CancelButton=cancel;dialog.AcceptButton=cancel;dialog.ActiveControl=cancel;
+        return dialog;
+    }
+    bool ConfirmAuthorization() {
+        using(var dialog=AuthorizationDialog()) return dialog.ShowDialog(TopLevelControl ?? this)==DialogResult.Yes;
     }
     void SaveProtected(string name, string value) {
         Directory.CreateDirectory(folder);
@@ -323,7 +395,7 @@ sealed class AssistantForm : Form {
         await Task.Delay(700);
         CheckStart(id,version,grant);
         Native.ValidateWindow(selected, true);
-        armed = true; epoch++; state="RUNNING"; allow.Enabled=false;
+        armed = true; epoch++; state="RUNNING"; allow.Enabled=false; manualAllow.Enabled=false;
         status.Text = "已允许；请暂时不要移动鼠标或按键。";
         } catch(Exception ex) { LocalPause(); failure=ex; }
         finally { allowing=false; }
@@ -339,12 +411,7 @@ sealed class AssistantForm : Form {
         try {
             var result = await Request("poll", new {});
             if(token!=connectionToken || permissionVersion!=permissionEpoch || closing) return;
-            string remoteGrant=S(result,"authorizationId");
-            if(authorizationId!=remoteGrant) {
-                LocalPause(); authorizationId=""; SaveConnection(); ShowConnection();
-                // A server grant alone never elevates the local client (including after rollback/re-pair).
-                if(remoteGrant.Length>0) { await Request("authorization",new {enabled=false}); return; }
-            }
+            if(!await ReconcileAuthorization(result)) return;
             task = D(result.ContainsKey("task") ? result["task"] : null);
             if (task.Count == 0) { taskId = ""; state = ""; allow.Enabled = false; LocalPause(); if (!working) status.Text = "暂无进行中的电脑任务；结果可在网站查看。"; return; }
             string id = S(task,"id"); state = S(task,"status");
@@ -364,16 +431,14 @@ sealed class AssistantForm : Form {
             if(token!=connectionToken || permissionVersion!=permissionEpoch || closing) return;
             LocalPause(); status.Text = e.Message;
             if (e.Status == 401 || e.Status == 403) {
-                token = ""; authorizationId="";
-                try { SaveConnection(); } catch { status.Text+=" 本机连接记录未能清理，请检查磁盘。"; }
-                ShowConnection();
+                ClearExpiredConnection();
             }
         }
         catch(Exception e) {
             if(token!=connectionToken || permissionVersion!=permissionEpoch || closing) return;
             LocalPause(); status.Text = e is HttpRequestException || e is TaskCanceledException ? "网络连接中断，已停止本机输入。恢复后请核对任务并继续。" : e.Message;
         }
-        finally { polling = false; if(!closing && Changed!=null) Changed(); }
+        finally { polling = false; if(!closing) { ShowTaskControls(); if(Changed!=null) Changed(); } }
     }
     void Check(string id, long version) {
         if (!armed || id != approvedId || id != taskId || version != epoch || closing) throw new Exception("操作已暂停");
@@ -440,6 +505,75 @@ sealed class AssistantForm : Form {
         }
     }
     async Task Ack(string id,string commandId,string outcome,string note) { await Request("tasks/"+id+"/ack",new {commandId,outcome,note}); }
+    // Self-tests use a hidden form, fake HTTP and a fresh temporary directory.
+    // They never start the engine, load real credentials, install hooks or send desktop input.
+    sealed class FakeHandler : HttpMessageHandler {
+        public Func<HttpRequestMessage,HttpResponseMessage> Reply;
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,System.Threading.CancellationToken cancellationToken) { return Task.FromResult(Reply(request)); }
+    }
+    AssistantForm(HttpMessageHandler handler,string isolatedFolder) : this() {
+        http.Dispose(); http=new HttpClient(handler); folder=isolatedFolder; isolatedPreview=true;
+    }
+    static HttpResponseMessage TestResponse(int code,string body) { return new HttpResponseMessage((HttpStatusCode)code){Content=new StringContent(body,Encoding.UTF8,"application/json")}; }
+    public static int ConnectionSelfTest() {
+        string isolated=Path.Combine(Path.GetTempPath(),"xuti-connection-test-"+Guid.NewGuid().ToString("N"));
+        try {
+            var fake=new FakeHandler();
+            using(var form=new AssistantForm(fake,isolated)) {
+                System.Threading.SynchronizationContext.SetSynchronizationContext(null);
+                Action seed=()=>{form.token=new string('a',64);form.owner="Isolated self-test";form.deviceId=Guid.NewGuid().ToString();form.authorizationId=Guid.NewGuid().ToString();};
+                seed(); string grant=form.authorizationId;
+                fake.Reply=req=>{if(!req.RequestUri.AbsolutePath.EndsWith("/poll"))throw new Exception("Status must only poll");return TestResponse(200,"{\"data\":{\"authorizationId\":\""+grant+"\",\"task\":{\"status\":\"WAITING\"}}}");};
+                form.RefreshStatus().GetAwaiter().GetResult();
+                if(!form.Connected||!form.Authorized||form.taskId.Length>0||form.armed)throw new Exception("Status changed valid authorization or started execution");
+                foreach(int code in new[]{401,403}) {
+                    seed();fake.Reply=req=>TestResponse(code,"{\"error\":{\"message\":\"expired\"}}");
+                    form.RefreshStatus().GetAwaiter().GetResult();
+                    if(form.Connected||form.Authorized||form.deviceId.Length>0)throw new Exception("Expired credential retained");
+                }
+                seed();string retained=form.token;grant=form.authorizationId;
+                fake.Reply=req=>{throw new HttpRequestException("isolated network failure");};
+                bool network=false;try{form.RefreshStatus().GetAwaiter().GetResult();}catch(ApiFailure e){network=e.Status==503;}
+                if(!network||form.token!=retained||form.authorizationId!=grant)throw new Exception("Network error erased saved authorization");
+                seed();fake.Reply=req=>{form.token=new string('b',64);form.deviceId="new-device";form.permissionEpoch++;return TestResponse(401,"{}");};
+                form.RefreshStatus().GetAwaiter().GetResult();
+                if(form.token!=new string('b',64)||form.deviceId!="new-device")throw new Exception("Late status erased a newer connection");
+                seed();fake.Reply=req=>TestResponse(200,"{\"data\":{\"authorizationId\":null}}");
+                form.RefreshStatus().GetAwaiter().GetResult();
+                if(!form.Connected||form.Authorized)throw new Exception("Remote revocation did not preserve unprivileged connection");
+                seed();form.authorizationId="";int revocations=0;
+                fake.Reply=req=>{if(req.RequestUri.AbsolutePath.EndsWith("/authorization")){revocations++;bool blocked=false;try{form.RequestAuthorization(form.deviceId).GetAwaiter().GetResult();}catch(Exception e){blocked=e.Message.Contains("状态正在更新");}if(!blocked)throw new Exception("New consent overlapped an in-flight old revoke");return TestResponse(200,"{\"data\":{}}");}return TestResponse(200,"{\"data\":{\"authorizationId\":\""+Guid.NewGuid().ToString()+"\"}}");};
+                form.RefreshStatus().GetAwaiter().GetResult();
+                if(form.Authorized||revocations!=1)throw new Exception("Status elevated an unconfirmed local grant");
+            }
+            Console.WriteLine("Desktop connection validation: passed (fake HTTP, isolated credentials, no desktop input)");return 0;
+        } catch(Exception ex){Console.WriteLine(ex.Message);return 1;}
+        finally {
+            foreach(string name in new[]{"connection.bin","connection.bin.tmp"}){string file=Path.Combine(isolated,name);if(File.Exists(file))File.Delete(file);}
+            if(Directory.Exists(isolated))Directory.Delete(isolated);
+        }
+    }
+    sealed class PreviewHost : Form { protected override bool ShowWithoutActivation { get { return true; } } }
+    public static int Preview(string output) {
+        try {
+            Directory.CreateDirectory(output);
+            Action<Form,string> draw=(control,name)=>{
+                using(var host=new PreviewHost { ShowInTaskbar=false, FormBorderStyle=FormBorderStyle.None, StartPosition=FormStartPosition.Manual, Location=new Point(-32000,-32000), Size=control.Size, Opacity=0 }) {
+                    control.TopLevel=false;control.Location=Point.Empty;host.Controls.Add(control);control.Show();host.Show();Application.DoEvents();control.PerformLayout();
+                    using(var bitmap=new Bitmap(control.Width,control.Height)){control.DrawToBitmap(bitmap,new Rectangle(Point.Empty,bitmap.Size));bitmap.Save(Path.Combine(output,name),ImageFormat.Png);}
+                    host.Hide();host.Controls.Remove(control);
+                }
+            };
+            var fake=new FakeHandler { Reply=req=>{throw new Exception("Preview must not access the network");} };
+            using(var form=new AssistantForm(fake,Path.Combine(output,"unused-test-profile"))) {
+                form.token="";form.ShowConnection();draw(form,"desktop-main.png");
+                form.advancedPanel.Visible=true;foreach(Control child in form.Controls[0].Controls)if(child is Button && child.Text=="高级设置 ▸")child.Text="收起高级设置 ▾";form.Height=850;draw(form,"desktop-advanced.png");
+                form.authorizationId=Guid.NewGuid().ToString();form.token=new string('a',64);form.owner="隔离预览";form.task=new Dictionary<string,object>();form.state="PAUSED";form.status.Text="任务已暂停，核对窗口后可直接继续。";form.advancedPanel.Visible=false;foreach(Control child in form.Controls[0].Controls)if(child is Button && child.Text=="收起高级设置 ▾")child.Text="高级设置 ▸";form.Height=590;form.ShowConnection();draw(form,"desktop-paused.png");
+            }
+            using(var dialog=AuthorizationDialog()) draw(dialog,"desktop-consent.png");
+            Console.WriteLine("Desktop isolated UI previews saved; no engine or connection loaded.");return 0;
+        } catch(Exception ex){Console.WriteLine(ex.Message);return 1;}
+    }
     public static Dictionary<string,object> D(object value) { return value as Dictionary<string,object> ?? new Dictionary<string,object>(); }
     public static string S(Dictionary<string,object> value, string key) { object v; return value.TryGetValue(key,out v) ? Convert.ToString(v) : ""; }
 }
