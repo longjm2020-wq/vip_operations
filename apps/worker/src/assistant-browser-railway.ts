@@ -1,0 +1,206 @@
+import { readFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
+import { Sandbox } from 'railway';
+import type { BrowserRun } from '../../api/src/modules/workspace/assistant-browser.js';
+import type * as environments from './assistant-browser-environments.js';
+import { openRemoteBrowser, type BrowserRpcTransport } from './assistant-browser-remote.js';
+import { BrowserUnavailable } from './assistant-browser-page.js';
+
+const endpoint='https://backboard.railway.com/graphql/v2';
+const vmRoot='/tmp/xuti-browser-runtime';
+const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const require=createRequire(import.meta.url);
+const defaultStore:typeof environments={
+  reserveBrowserEnvironment:async(...args)=>(await import('./assistant-browser-environments.js')).reserveBrowserEnvironment(...args),
+  recordBrowserEnvironment:async(...args)=>(await import('./assistant-browser-environments.js')).recordBrowserEnvironment(...args),
+  releaseBrowserEnvironment:async(...args)=>(await import('./assistant-browser-environments.js')).releaseBrowserEnvironment(...args),
+  browserEnvironmentsToCleanup:async(...args)=>(await import('./assistant-browser-environments.js')).browserEnvironmentsToCleanup(...args),
+};
+export type RailwayBrowserConfig={token:string;environmentId:string};
+export function railwayBrowserConfig(env:NodeJS.ProcessEnv=process.env):RailwayBrowserConfig {
+  const token=env.ASSISTANT_BROWSER_RAILWAY_TOKEN,environmentId=env.ASSISTANT_BROWSER_RAILWAY_ENVIRONMENT_ID;
+  if(!token||!environmentId||!uuid.test(environmentId))throw Error('BROWSER_RUNTIME_UNAVAILABLE');
+  return {token,environmentId};
+}
+export const browserRuntimeFiles=[
+  'apps/worker/src/assistant-browser-vm-main.js','apps/worker/src/assistant-browser-bridge.js',
+  'apps/worker/src/assistant-browser-page.js','apps/worker/src/assistant-browser-proxy.js',
+  'apps/worker/src/assistant-browser-rpc.js','apps/worker/src/assistant-browser-diagnostics.js',
+  'apps/worker/src/assistant-browser-isolation.js',
+  'packages/contracts/src/assistant-browser.js',
+] as const;
+export async function browserRuntimeAssets() {
+  const base=new URL('../../../',import.meta.url);
+  return Promise.all(browserRuntimeFiles.map(async path=>{
+    const content=await readFile(new URL(path,base),'utf8');
+    if(Buffer.byteLength(content)>1024*1024)throw Error('BROWSER_RUNTIME_UNAVAILABLE');
+    return {path,content};
+  }));
+}
+export function browserRuntimeSetup(playwright:string,zod:string) {
+  if(![playwright,zod].every(value=>/^\d+\.\d+\.\d+$/.test(value)))throw Error('BROWSER_RUNTIME_UNAVAILABLE');
+  return `#!/bin/sh
+set -eu
+umask 022
+export DEBIAN_FRONTEND=noninteractive
+export PLAYWRIGHT_BROWSERS_PATH=${vmRoot}/browsers
+test "$(id -u)" = 0
+node -e 'if(Number(process.versions.node.split(".")[0])<22)process.exit(2)'
+NODE_SOURCE="$(node -p 'process.execPath')"
+mkdir -p ${vmRoot}/runtime
+install -m 0755 "$NODE_SOURCE" ${vmRoot}/runtime/node
+npm install --prefix ${vmRoot} --ignore-scripts --no-audit --no-fund --save-exact @playwright/test@${playwright} zod@${zod} >${vmRoot}/install.log 2>&1
+node ${vmRoot}/node_modules/playwright/cli.js install --with-deps chromium --only-shell >>${vmRoot}/install.log 2>&1
+id xutibrowser >/dev/null 2>&1 || useradd --create-home --shell /bin/sh xutibrowser
+chmod -R a+rX ${vmRoot}
+runuser -u xutibrowser -- /usr/bin/env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/home/xutibrowser LANG=C.UTF-8 ${vmRoot}/runtime/node -e 'if(process.getuid()===0)process.exit(2)'
+echo XUTI_BROWSER_RUNTIME_READY
+`;
+}
+export const browserRuntimeCommand=`runuser -u xutibrowser -- /usr/bin/env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/home/xutibrowser LANG=C.UTF-8 PLAYWRIGHT_BROWSERS_PATH=${vmRoot}/browsers ${vmRoot}/runtime/node ${vmRoot}/apps/worker/src/assistant-browser-vm-main.js`;
+
+type Dependencies={
+  sdk:Pick<typeof Sandbox,'create'|'connect'|'list'>;
+  store:typeof environments;
+  fetch:typeof fetch;
+  assets:typeof browserRuntimeAssets;
+  versions:{playwright:string;zod:string};
+  cleanupMs:number;
+  onStage:(stage:BrowserRuntimeStage)=>void|Promise<void>;
+};
+export type BrowserRuntimeStage='CREATING'|'UPLOADING'|'INSTALLING'|'CONNECTING'|'READY'|'CLEANUP';
+function safeLog(code:string) { console.warn(JSON.stringify({event:'assistant_browser_runtime',code})); }
+function canceled(signal:AbortSignal) { if(signal.aborted)throw new BrowserUnavailable(); }
+function bounded<T>(promise:PromiseLike<T>,signal:AbortSignal):Promise<T> {
+  return new Promise((resolve,reject)=>{
+    const abort=()=>reject(new BrowserUnavailable());
+    if(signal.aborted){Promise.resolve(promise).catch(()=>{});abort();return;}
+    signal.addEventListener('abort',abort,{once:true});
+    Promise.resolve(promise).then(resolve,reject).finally(()=>signal.removeEventListener('abort',abort));
+  });
+}
+
+/** A task allocates one isolated VM. Probes and reconciliation never create resources. */
+export class RailwayBrowserRuntime {
+  private readonly deps:Dependencies;
+  constructor(private readonly config:RailwayBrowserConfig,dependencies:Partial<Dependencies>={}) {
+    this.deps={sdk:Sandbox,store:defaultStore,fetch:globalThis.fetch,assets:browserRuntimeAssets,
+      versions:{playwright:require('@playwright/test/package.json').version,zod:require('zod/package.json').version},cleanupMs:20000,
+      onStage:stage=>console.info(JSON.stringify({event:'assistant_browser_runtime_stage',stage})),...dependencies};
+  }
+  private async stage(stage:BrowserRuntimeStage) { try { await this.deps.onStage(stage); } catch { /* Diagnostics cannot prevent cleanup. */ } }
+  private client(request:typeof fetch) {
+    return {token:this.config.token,authType:'project-token' as const,environmentId:this.config.environmentId,endpoint,verbose:false,fetch:request};
+  }
+  private request(signal:AbortSignal,maximum=15000):typeof fetch {
+    return (url,init={})=>{
+      if(String(url)!==endpoint)throw Error('BROWSER_CONTROL_ENDPOINT');
+      return this.deps.fetch(url,{...init,signal:AbortSignal.any([signal,AbortSignal.timeout(maximum),...(init.signal?[init.signal]:[])])});
+    };
+  }
+  async probe(signal:AbortSignal) {
+    await this.deps.assets();canceled(signal);
+    // Read-only authentication/configuration validation; never a paid health VM.
+    await bounded(this.deps.sdk.list({...this.client(this.request(signal)),first:1}),signal);
+  }
+  async cleanup(signal:AbortSignal) {
+    const pending=await this.deps.store.browserEnvironmentsToCleanup(this.config.environmentId);
+    for(const item of pending.slice(0,1)){
+      if(signal.aborted)return;
+      await this.stage('CLEANUP');
+      await this.destroy(item.id,item.sandboxId).catch(()=>safeLog('BROWSER_VM_CLEANUP_UNCONFIRMED'));
+    }
+  }
+  private async destroy(intentId:string,sandboxId:string) {
+    const signal=AbortSignal.timeout(this.deps.cleanupMs),client=this.client(this.request(signal,10000));
+    try {
+      const target=await bounded(this.deps.sdk.connect(sandboxId,client),signal);
+      if(target.environmentId!==this.config.environmentId||target.id!==sandboxId)throw Error('BROWSER_VM_SCOPE');
+      if(target.status!=='DESTROYED')await bounded(target.destroy(),signal);
+      while(!signal.aborted){
+        const latest=await bounded(this.deps.sdk.connect(sandboxId,client),signal);
+        if(latest.environmentId!==this.config.environmentId||latest.id!==sandboxId)throw Error('BROWSER_VM_SCOPE');
+        if(latest.status==='DESTROYED'){await this.deps.store.releaseBrowserEnvironment(intentId,sandboxId);return;}
+        await new Promise(resolve=>setTimeout(resolve,250));
+      }
+      throw Error('BROWSER_VM_CLEANUP_UNCONFIRMED');
+    }catch(error){
+      if(error instanceof Error&&error.name==='SandboxNotFoundError'){await this.deps.store.releaseBrowserEnvironment(intentId,sandboxId);return;}
+      throw Error('BROWSER_VM_CLEANUP_UNCONFIRMED');
+    }
+  }
+  async open(run:BrowserRun,saved:unknown,parent:AbortSignal) {
+    const deadline=Math.min(Date.parse(run.expiresAt),Date.now()+30*60*1000);
+    if(!Number.isFinite(deadline)||deadline<=Date.now())throw new BrowserUnavailable();
+    const lifetime=new AbortController(),signal=AbortSignal.any([parent,lifetime.signal,AbortSignal.timeout(deadline-Date.now())]);
+    const assets=await this.deps.assets();canceled(signal);
+    const intentId=await this.deps.store.reserveBrowserEnvironment(run,this.config.environmentId);
+    if(!intentId)throw new BrowserUnavailable();
+    let sandboxId:string|undefined,attempted=false,closing:Promise<void>|undefined;
+    let execution:ReturnType<Sandbox['exec']>|undefined;
+    const close=()=>closing??=(async()=>{
+      lifetime.abort();
+      await this.stage('CLEANUP');
+      if(execution)await bounded(execution.kill('TERM'),AbortSignal.timeout(5000)).catch(()=>false);
+      if(sandboxId)await this.destroy(intentId,sandboxId);
+      else if(!attempted)await this.deps.store.releaseBrowserEnvironment(intentId,null);
+      else safeLog('BROWSER_VM_CREATE_OUTCOME_UNKNOWN');
+    })();
+    const controlFetch:typeof fetch=async(url,init={})=>{
+      if(String(url)!==endpoint)throw Error('BROWSER_CONTROL_ENDPOINT');
+      const body=typeof init.body==='string'?JSON.parse(init.body):{};
+      const query=String(body.query||''),creating=/\bsandboxCreate\s*\(/.test(query);
+      if(creating){canceled(signal);if(attempted)throw Error('BROWSER_VM_DUPLICATE_CREATE');attempted=true;}
+      // Once sent, keep the bounded CREATE receipt alive across user cancellation.
+      // Work still stops immediately; a late ID is recorded and destroyed below.
+      const response=creating
+        ? await this.deps.fetch(url,{...init,signal:AbortSignal.timeout(Math.max(1,Math.min(15000,deadline-Date.now())))})
+        : await this.request(signal,/\bsandboxExec\s*\(/.test(query)?Math.max(1,Math.min(300000,deadline-Date.now())):15000)(url,init);
+      if(creating){
+        const data=await response.clone().json().catch(()=>null),info=data?.data?.sandboxCreate;
+        if(typeof info?.id==='string'&&uuid.test(info.id)){
+          const capturedId:string=info.id;sandboxId=capturedId;
+          if(!await this.deps.store.recordBrowserEnvironment(intentId,capturedId))throw Error('BROWSER_VM_LEDGER');
+          if(info.environmentId!==this.config.environmentId)throw Error('BROWSER_VM_SCOPE');
+          if(signal.aborted)await this.destroy(intentId,capturedId).catch(()=>safeLog('BROWSER_VM_CLEANUP_UNCONFIRMED'));
+        }
+      }
+      return response;
+    };
+    try{
+      canceled(signal);
+      await this.stage('CREATING');
+      const vm=await bounded(this.deps.sdk.create({...this.client(controlFetch),resources:{cpu:1,memoryGB:2},networkIsolation:'ISOLATED',idleTimeoutMinutes:1,domains:[],env:{}}),signal);
+      if(!sandboxId){sandboxId=vm.id;if(!uuid.test(sandboxId)||!await this.deps.store.recordBrowserEnvironment(intentId,sandboxId))throw Error('BROWSER_VM_LEDGER');}
+      if(vm.id!==sandboxId||vm.environmentId!==this.config.environmentId||vm.networkIsolation!=='ISOLATED'||vm.domains.length)throw Error('BROWSER_VM_SCOPE');
+      canceled(signal);
+      await this.stage('UPLOADING');
+      await bounded(vm.files.write(vmRoot+'/package.json','{"type":"module","private":true}',{mode:0o644}),signal);
+      for(const asset of assets){
+        if(!(browserRuntimeFiles as readonly string[]).includes(asset.path))throw Error('BROWSER_RUNTIME_UNAVAILABLE');
+        canceled(signal);await bounded(vm.files.write(vmRoot+'/'+asset.path,asset.content,{mode:0o644}),signal);
+      }
+      await bounded(vm.files.write(vmRoot+'/setup.sh',browserRuntimeSetup(this.deps.versions.playwright,this.deps.versions.zod),{mode:0o700}),signal);
+      const remaining=()=>Math.max(1,Math.floor((deadline-Date.now())/1000));
+      await this.stage('INSTALLING');
+      const setup=await bounded(vm.execHttp('sh '+vmRoot+'/setup.sh',{timeoutSec:Math.min(300,remaining())}),signal);
+      if(setup.exitCode!==0||setup.timedOut||!setup.stdout.includes('XUTI_BROWSER_RUNTIME_READY'))throw Error('BROWSER_RUNTIME_UNAVAILABLE');
+      canceled(signal);
+      await this.stage('CONNECTING');
+      let onChunk:(chunk:string)=>void=()=>{},onClose:()=>void=()=>{},finished=false;
+      execution=vm.exec(browserRuntimeCommand,{stdin:true,ephemeral:true,captureOutput:false,timeoutSec:remaining(),signal,onStdout:chunk=>onChunk(chunk),onStderr:()=>{}});
+      void Promise.resolve(execution).then(()=>{finished=true;onClose();},()=>{finished=true;onClose();});
+      const transport:BrowserRpcTransport={
+        write:line=>execution!.stdin.write(line),
+        subscribe:(chunk,closed)=>{onChunk=chunk;onClose=closed;if(finished)queueMicrotask(closed);return()=>{onChunk=()=>{};onClose=()=>{};};},
+        close,
+      };
+      const driver=await openRemoteBrowser(transport,saved,signal);
+      await this.stage('READY');
+      return driver;
+    }catch(error){
+      await close().catch(()=>safeLog('BROWSER_VM_CLEANUP_UNCONFIRMED'));
+      throw error;
+    }
+  }
+}

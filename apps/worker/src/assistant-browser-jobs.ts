@@ -3,6 +3,7 @@ import { openIndependentBrowser } from "./assistant-browser-page.js";
 import { runIndependentBrowser } from "./assistant-browser-runner.js";
 import { classifyBrowserStartupFailure } from "./assistant-browser-diagnostics.js";
 import type { BrowserRuntimeIssue } from "../../../packages/contracts/src/assistant-browser.js";
+import { RailwayBrowserRuntime, railwayBrowserConfig } from "./assistant-browser-railway.js";
 
 /** Browser work has its own bounded pool and cannot block media/report workers. */
 export function startAssistantBrowserJobs() {
@@ -13,22 +14,28 @@ export function startAssistantBrowserJobs() {
     testedAt = 0,
     heartbeatAt = 0;
   let polling: Promise<void> | undefined;
+  let remote: RailwayBrowserRuntime | undefined;
+  let cleanupAt = 0;
   let issue: BrowserRuntimeIssue = "BROWSER_RUNTIME_UNAVAILABLE";
   const tick = async () => {
     if (checking || controller.signal.aborted) return;
     checking = true;
     try {
-      if (!ready && Date.now() - testedAt > 30000) {
+      if ((!ready && Date.now() - testedAt > 30000) || (remote && Date.now() - testedAt > 60000)) {
         testedAt = Date.now();
         // Probe the real Chromium sandbox. An unavailable sandbox is never disabled.
         try {
-          const browser = await openIndependentBrowser(
-            undefined,
-            controller.signal,
-          );
-          await browser.close();
+          const mode = process.env.ASSISTANT_BROWSER_RUNTIME || 'local';
+          if (mode === 'railway') {
+            remote ||= new RailwayBrowserRuntime(railwayBrowserConfig());
+            await remote.probe(controller.signal);
+          } else if (mode === 'local') {
+            const browser = await openIndependentBrowser(undefined, controller.signal);
+            await browser.close();
+          } else throw Error('BROWSER_RUNTIME_UNAVAILABLE');
           ready = true;
         } catch (error) {
+          ready = false;
           issue = classifyBrowserStartupFailure(error);
           throw error;
         }
@@ -40,7 +47,8 @@ export function startAssistantBrowserJobs() {
       if (!ready || active.size >= 2) return;
       const run = await store.claimBrowserTask();
       if (!run) return;
-      const running = runIndependentBrowser(run, store, controller.signal)
+      const running = runIndependentBrowser(run, store, controller.signal,
+        remote ? (saved, signal) => remote!.open(run, saved, signal) : openIndependentBrowser)
         .catch(() => {})
         .finally(() => active.delete(running));
       active.add(running);
@@ -55,6 +63,10 @@ export function startAssistantBrowserJobs() {
         }),
       );
     } finally {
+      if (remote && !controller.signal.aborted && Date.now() - cleanupAt > 15000) {
+        cleanupAt = Date.now();
+        await remote.cleanup(controller.signal).catch(() => {});
+      }
       checking = false;
     }
   };

@@ -124,6 +124,9 @@ export async function expireBrowserTasks() {
     active,
   );
   await db.$executeRawUnsafe(
+    "UPDATE personal_assistant_browser_tasks SET frame_id=NULL,frame_encrypted=NULL WHERE frame_id IS NOT NULL AND (status IN ('FAILED','CANCELED') OR (status='DONE' AND frame_at<now()-interval '24 hours'))",
+  );
+  await db.$executeRawUnsafe(
     "DELETE FROM personal_assistant_browser_actions WHERE created_at<now()-interval '10 minutes' OR EXISTS(SELECT 1 FROM personal_assistant_browser_tasks t WHERE t.id=task_id AND t.status IN ('DONE','FAILED','CANCELED'))",
   );
 }
@@ -308,11 +311,16 @@ export async function browserTaskFrame(
 ): Promise<BrowserFrame | null> {
   await expireBrowserTasks();
   const row = await ownedTask(c, id);
+  // Recheck current permissions before decrypting a retained private result.
+  await browserActor(c.actor.id);
+  const readOnly = row.status === "DONE";
+  const ttl = readOnly ? 24 * 60 * 60 * 1000 : 15000;
   if (
-    !active.includes(row.status) ||
+    (!active.includes(row.status) && !readOnly) ||
     !row.frame_encrypted ||
     !row.frame_id ||
-    Date.now() - new Date(row.frame_at).getTime() > 15000
+    !row.frame_at ||
+    Date.now() - new Date(row.frame_at).getTime() > ttl
   )
     return null;
   const jpeg = decryptBrowserData(
@@ -329,6 +337,9 @@ export async function browserTaskFrame(
     image: `data:image/jpeg;base64,${jpeg}`,
     url: row.page_url,
     title: row.page_title,
+    readOnly,
+    capturedAt: new Date(row.frame_at).toISOString(),
+    expiresAt: new Date(new Date(row.frame_at).getTime() + ttl).toISOString(),
   };
 }
 export async function queueBrowserManualAction(
@@ -400,6 +411,10 @@ export async function clearBrowserSession(c: Context) {
       "UPDATE personal_assistant_browser_tasks SET status='CANCELED',stage='你已清除独立浏览器登录状态',lease_id=NULL,epoch=epoch+1,frame_id=NULL,frame_encrypted=NULL,updated_at=now() WHERE user_id=$1::bigint AND status=ANY($2::text[])",
       c.actor.id,
       active,
+    );
+    await tx.$executeRawUnsafe(
+      "UPDATE personal_assistant_browser_tasks SET frame_id=NULL,frame_encrypted=NULL WHERE user_id=$1::bigint AND frame_id IS NOT NULL",
+      c.actor.id,
     );
     await tx.$executeRawUnsafe(
       "UPDATE personal_assistant_browser_profiles SET encrypted_state=NULL,saved_at=NULL,expires_at=NULL,state_version=state_version+1 WHERE user_id=$1::bigint",
@@ -551,26 +566,33 @@ export async function saveBrowserSession(
     ));
   });
 }
+export type BrowserCapturedFrame = {
+  frameId: string;
+  jpeg: Buffer;
+  width: number;
+  height: number;
+  url: string;
+  title: string;
+};
+function validBrowserFrame(frame: BrowserCapturedFrame) {
+  parse(z.uuid(), frame.frameId);
+  return (
+    Buffer.isBuffer(frame.jpeg) &&
+    frame.jpeg.length > 0 &&
+    frame.jpeg.length <= 1024 * 1024 &&
+    Number.isInteger(frame.width) &&
+    Number.isInteger(frame.height) &&
+    frame.width >= 100 &&
+    frame.height >= 100 &&
+    frame.width <= 1600 &&
+    frame.height <= 1600
+  );
+}
 export async function publishBrowserFrame(
   run: BrowserRun,
-  frame: {
-    frameId: string;
-    jpeg: Buffer;
-    width: number;
-    height: number;
-    url: string;
-    title: string;
-  },
+  frame: BrowserCapturedFrame,
 ): Promise<boolean> {
-  parse(z.uuid(), frame.frameId);
-  if (
-    frame.jpeg.length > 1024 * 1024 ||
-    frame.width < 100 ||
-    frame.height < 100 ||
-    frame.width > 1600 ||
-    frame.height > 1600
-  )
-    return false;
+  if (!validBrowserFrame(frame)) return false;
   return !!(await db.$executeRawUnsafe(
     "UPDATE personal_assistant_browser_tasks SET frame_id=$5::uuid,frame_encrypted=$6,frame_width=$7,frame_height=$8,frame_at=now(),page_url=$9,page_title=$10,heartbeat_at=now() WHERE id=$1::uuid AND user_id=$2::bigint AND lease_id=$3::uuid AND epoch=$4 AND status=ANY($11::text[]) AND expires_at>now()",
     run.id,
@@ -655,7 +677,37 @@ export async function finishBrowserTask(
   run: BrowserRun,
   status: "DONE" | "NEEDS_USER" | "FAILED",
   note: string,
+  finalFrame?: BrowserCapturedFrame,
 ): Promise<boolean> {
+  if (status === "DONE") {
+    // Never attach a previously published live frame to a completed result.
+    if (!finalFrame) return false;
+    if (!validBrowserFrame(finalFrame))
+      fail(
+        "BROWSER_FINAL_FRAME_UNAVAILABLE",
+        "未能保存最终画面，请核对当前页面后继续",
+        502,
+      );
+    await browserActor(run.userId);
+    return !!(await db.$executeRawUnsafe(
+      "UPDATE personal_assistant_browser_tasks SET status='DONE',stage=$5,epoch=epoch+1,lease_id=NULL,frame_id=$6::uuid,frame_encrypted=$7,frame_width=$8,frame_height=$9,frame_at=now(),page_url=$10,page_title=$11,updated_at=now() WHERE id=$1::uuid AND user_id=$2::bigint AND lease_id=$3::uuid AND epoch=$4 AND status='RUNNING' AND expires_at>now() AND EXISTS(SELECT 1 FROM personal_assistant_browser_profiles p WHERE p.id=profile_id AND p.user_id=$2::bigint AND p.state_version=profile_version)",
+      run.id,
+      run.userId,
+      run.leaseId,
+      run.epoch,
+      assistantPublicText(note).slice(0, 300),
+      finalFrame.frameId,
+      encryptBrowserData(
+        run.userId,
+        `frame:${run.id}:${finalFrame.frameId}`,
+        finalFrame.jpeg.toString("base64"),
+      ),
+      finalFrame.width,
+      finalFrame.height,
+      publicUrl(finalFrame.url),
+      finalFrame.title.slice(0, 200),
+    ));
+  }
   return !!(await db.$executeRawUnsafe(
     "UPDATE personal_assistant_browser_tasks SET status=$5,stage=$6,epoch=epoch+1,lease_id=CASE WHEN $5='NEEDS_USER' THEN lease_id ELSE NULL END,frame_id=NULL,frame_encrypted=NULL,updated_at=now() WHERE id=$1::uuid AND user_id=$2::bigint AND lease_id=$3::uuid AND epoch=$4 AND status=ANY($7::text[])",
     run.id,

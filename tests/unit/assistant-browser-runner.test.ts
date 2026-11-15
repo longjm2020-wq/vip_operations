@@ -32,10 +32,23 @@ function setup() {
 }
 describe('independent browser lease execution',()=>{
   it('restores only the owned profile and saves before ending and closing its context',async()=>{
-    const f=setup();await f.run();
+    const f=setup();let screenshots=0;
+    f.driver.frame=vi.fn(async()=>({jpeg:Buffer.from('jpeg'),width:1280,height:800,url:'https://example.com/',title:++screenshots===1?'执行前':'最终结果'}));
+    await f.run();
     expect(f.open).toHaveBeenCalledWith({cookies:[{name:'isolated-cookie'}],origins:[]},expect.any(AbortSignal));
     expect(f.store.saveBrowserSession).toHaveBeenCalled();
-    expect(f.store.finishBrowserTask).toHaveBeenCalledWith(expect.objectContaining({epoch:0}),'DONE','已核验目标页面');
+    expect(f.store.finishBrowserTask).toHaveBeenCalledWith(expect.objectContaining({epoch:0}),'DONE','已核验目标页面',expect.objectContaining({frameId:expect.any(String),jpeg:Buffer.from('jpeg'),title:'最终结果'}));
+    expect(f.driver.frame).toHaveBeenCalledTimes(2);
+    expect(f.driver.close).toHaveBeenCalledTimes(1);
+  });
+  it('does not complete when the final screenshot fails and does not reuse a live frame',async()=>{
+    const f=setup();let screenshots=0;
+    f.driver.frame=vi.fn(async()=>{if(++screenshots>1)throw Error('capture failed');return {jpeg:Buffer.from('old-frame'),width:1280,height:800,url:'https://example.com/',title:'旧画面'};});
+    f.store.takeBrowserManualAction=vi.fn(async()=>{f.setState(null);return null;});
+    await f.run();
+    expect(vi.mocked(f.store.finishBrowserTask).mock.calls.some(call=>call[1]==='DONE')).toBe(false);
+    expect(f.store.finishBrowserTask).toHaveBeenCalledWith(expect.any(Object),'NEEDS_USER',expect.any(String));
+    expect(f.store.planBrowserStep).toHaveBeenCalledTimes(1);
     expect(f.driver.close).toHaveBeenCalledTimes(1);
   });
   it('discards a pending model action on stop and closes the context without dispatch',async()=>{
@@ -52,7 +65,7 @@ describe('independent browser lease execution',()=>{
     const run=f.run();await pending;f.setState({...f.getState()!,status:'PAUSED',epoch:1});await run;
     expect(f.driver.execute).not.toHaveBeenCalled();expect(f.driver.observe).toHaveBeenCalledTimes(2);
     expect(f.store.finishBrowserTask).toHaveBeenCalledTimes(1);
-    expect(f.store.finishBrowserTask).toHaveBeenCalledWith(expect.objectContaining({epoch:2}),'DONE','重新观察后完成');
+    expect(f.store.finishBrowserTask).toHaveBeenCalledWith(expect.objectContaining({epoch:2}),'DONE','重新观察后完成',expect.any(Object));
   });
   it('does not submit an input after its manual epoch changes, and cannot overwrite resume',async()=>{
     const f=setup();f.setState({...f.initial,status:'PAUSED',epoch:1});
@@ -60,7 +73,7 @@ describe('independent browser lease execution',()=>{
     const inputs:string[]=[];
     f.driver.manual=vi.fn(async(action,current)=>{if(!await current())throw Error('stale');if(action.kind==='type')inputs.push(action.text);});
     await f.run();expect(inputs).toEqual([]);
-    expect(f.store.finishBrowserTask).toHaveBeenLastCalledWith(expect.objectContaining({epoch:2}),'DONE','已核验目标页面');
+    expect(f.store.finishBrowserTask).toHaveBeenLastCalledWith(expect.objectContaining({epoch:2}),'DONE','已核验目标页面',expect.any(Object));
     expect(JSON.stringify(vi.mocked(f.store.finishBrowserTask).mock.calls)).not.toContain('private-test-password');
   });
   it('shuts down a paused browser as FAILED instead of advertising a resumable missing context',async()=>{

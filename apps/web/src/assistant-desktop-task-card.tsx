@@ -94,7 +94,7 @@ export function AssistantDesktopTaskCard({
         device?.purpose === "dedicated" &&
         task.deviceId !== localDeviceId && (
           <p className="assistant-desktop-task-hint">
-            手动接管请打开该专用电脑的远程桌面或云电脑控制台。这里显示任务进度，不提供实时画面。
+            手动接管请到所选电脑上操作。这里显示任务进度，不提供实时画面。
           </p>
         )}
       {task.status === "WAITING" && device && !device.crossWindowAuthorized && (

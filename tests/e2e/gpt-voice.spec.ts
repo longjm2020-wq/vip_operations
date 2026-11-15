@@ -853,7 +853,7 @@ test("千问实时语音绑定所选电脑，刷新电脑任务并在同一通�
   );
   await page.reload();
   await openPersonalAssistant(page);
-  await selectAssistantPanel(page, "电脑操作");
+  await selectAssistantPanel(page, "我的电脑");
   await page
     .locator(".assistant-desktop-item")
     .filter({ hasText: "测试电脑" })
@@ -868,7 +868,7 @@ test("千问实时语音绑定所选电脑，刷新电脑任务并在同一通�
     .click();
   await expect(bubble.getByRole("status")).toHaveText("实时聆听中，你说");
   await expect(bubble.locator(".companion-voice-target")).toHaveText(
-    "电脑操作 · 测试电脑",
+    "我的电脑 · 测试电脑",
   );
   expect(starts).toHaveLength(1);
   expect(starts[0]).toMatchObject({ desktopDeviceId: deviceId });
@@ -893,14 +893,12 @@ test("千问实时语音绑定所选电脑，刷新电脑任务并在同一通�
     .toBe(1);
 });
 
-test("专用电脑语音启动前核对最新用途，通话中默认变化仍固定原设备", async ({
-  page,
-}) => {
+test("我的电脑语音启动前核对最新连接，通话中仍固定原设备", async ({ page }) => {
   const { bubble } = await fixture(page, { configured: false });
   const { starts } = await qwenRtcFixture(page);
   const deviceId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
   const otherId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
-  let purpose = "dedicated",
+  let online = true,
     preferred = deviceId;
   await page.route("**/api/v1/my-workspace/assistant/desktop", (route) =>
     route.fulfill({
@@ -910,8 +908,7 @@ test("专用电脑语音启动前核对最新用途，通话中默认变化仍�
             {
               id: deviceId,
               name: "专用电脑 A",
-              purpose,
-              online: true,
+              online,
               crossWindowAuthorized: true,
               lastSeenAt: new Date().toISOString(),
               expiresAt: "2026-12-01T00:00:00Z",
@@ -933,11 +930,7 @@ test("专用电脑语音启动前核对最新用途，通话中默认变化仍�
     }),
   );
   await page.addInitScript(
-    (id) =>
-      localStorage.setItem(
-        "xuti-assistant-desktop:1",
-        JSON.stringify({ mode: "dedicated", deviceId: id }),
-      ),
+    (id) => localStorage.setItem("xuti-assistant-desktop:1", id),
     deviceId,
   );
   await page.reload();
@@ -950,29 +943,25 @@ test("专用电脑语音启动前核对最新用途，通话中默认变化仍�
   await expect(composer.locator(".assistant-desktop-note")).toContainText(
     "专用电脑 A",
   );
-  purpose = "personal";
+  online = false;
   await begin.click();
   await expect(
     page.getByText(
-      "所选电脑的连接或用途已变化，请重新选择后开始语音；未切换到其他电脑。",
+      "所选电脑的连接已变化，请重新选择后开始语音；未切换到其他电脑。",
       { exact: true },
     ),
   ).toBeVisible();
   expect(starts).toHaveLength(0);
   expect(await page.evaluate(() => window.gptVoiceTest.starts)).toBe(0);
-  purpose = "dedicated";
+  online = true;
   await expect(begin).toBeEnabled({ timeout: 10000 });
   await begin.click();
   await expect(bubble.getByRole("status")).toHaveText("实时聆听中，你说");
   expect(starts).toHaveLength(1);
   expect(starts[0]).toMatchObject({ desktopDeviceId: deviceId });
   preferred = otherId;
-  await expect(composer.locator(".assistant-desktop-note")).toContainText(
-    "账号默认已变化",
-    { timeout: 10000 },
-  );
   await expect(bubble.locator(".companion-voice-target")).toHaveText(
-    "小序专用电脑 · 专用电脑 A",
+    "我的电脑 · 专用电脑 A",
   );
   await expect(
     composer.getByRole("combobox", { name: "执行位置" }),
@@ -990,6 +979,7 @@ test("独立浏览器语音核对服务并固定执行环境，不使用本机�
   const { bubble } = await fixture(page, { configured: false });
   const { starts } = await qwenRtcFixture(page);
   let ready = true;
+  const browserTasks: Record<string, unknown>[] = [];
   await page.route("**/api/v1/my-workspace/assistant/browser", (route) =>
     route.fulfill({
       json: {
@@ -999,7 +989,7 @@ test("独立浏览器语音核对服务并固定执行环境，不使用本机�
           encryptionReady: true,
           note: ready ? "已就绪" : "独立浏览器执行服务尚未连接",
           profile: null,
-          tasks: [],
+          tasks: browserTasks,
         },
       },
     }),
@@ -1048,6 +1038,44 @@ test("独立浏览器语音核对服务并固定执行环境，不使用本机�
   await sendQwenTool(page, "browser-no-local", "page_observe", {});
   const output = await qwenToolOutput(page, "browser-no-local");
   expect(output).not.toHaveProperty("snapshotId");
+  await page.route(
+    "**/api/v1/my-workspace/assistant/realtime/sessions/*/tool",
+    async (route) => {
+      browserTasks.push({
+        id: "33333333-3333-4333-8333-333333333333",
+        instruction: "查看示例网页",
+        status: "RUNNING",
+        stage: "正在读取页面标题",
+        step: 1,
+        url: "https://example.com",
+        title: "示例页面",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      });
+      await route.fulfill({
+        json: {
+          data: { text: "已创建浏览器任务", browserTaskId: browserTasks[0].id },
+        },
+      });
+    },
+  );
+  await page.route(
+    "**/api/v1/my-workspace/assistant/browser/tasks/*/frame",
+    (route) => route.fulfill({ json: { data: null } }),
+  );
+  await sendQwenTool(page, "browser-created", "browser_request", {
+    request: "查看示例网页",
+  });
+  await qwenToolOutput(page, "browser-created");
+  await expect(
+    page.getByRole("heading", { name: "浏览器画面", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.locator(".assistant-browser-panel .assistant-browser-task"),
+  ).toContainText("正在读取页面标题");
+  expect(starts).toHaveLength(1);
+  expect(await page.evaluate(() => window.gptVoiceTest.stops)).toBe(0);
+  await expect(bubble.getByRole("status")).toHaveText("实时聆听中，你说");
   await bubble.getByRole("button", { name: "结束语音", exact: true }).click();
   await expect
     .poll(() => page.evaluate(() => window.gptVoiceTest.stops))

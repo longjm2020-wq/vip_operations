@@ -83,6 +83,16 @@
 .assistant-browser-task-select {
   width: 100%;
 }
+.assistant-browser-settings {
+  margin-top: 8px;
+}
+.assistant-browser-settings summary {
+  cursor: pointer;
+  color: var(--app-secondary);
+}
+.assistant-browser-settings[open] > :not(summary) {
+  margin-top: 12px;
+}
 @media (max-width: 600px) {
   .assistant-browser-heading {
     align-items: flex-start;

@@ -181,7 +181,113 @@ async function frame(run: Awaited<ReturnType<typeof started>>) {
   ).toBe(true);
   return frameId;
 }
+const finalFrame = () => ({
+  frameId: randomUUID(),
+  jpeg: Buffer.from("private-final-screen"),
+  width: 1080,
+  height: 760,
+  url: "https://example.com/result?token=secret#private",
+  title: "完成结果",
+});
 describe("independent assistant browser", () => {
+  it("atomically retains the completed owner's final frame for 24 hours without permitting inputs", async () => {
+    const run = await started();
+    await frame(run);
+    const completed = finalFrame();
+    expect(await finishBrowserTask(run, "DONE", "已核对结果", completed)).toBe(
+      true,
+    );
+    expect(await currentBrowserTask(run)).toBeNull();
+    await f.db!.query(
+      "UPDATE personal_assistant_browser_tasks SET frame_at=now()-interval '1 hour' WHERE id=$1::uuid",
+      [run.id],
+    );
+    const view = await browserTaskFrame(actor(), run.id);
+    expect(view).toMatchObject({
+      frameId: completed.frameId,
+      epoch: run.epoch + 1,
+      readOnly: true,
+      title: "完成结果",
+      url: "https://example.com/result",
+      image: `data:image/jpeg;base64,${completed.jpeg.toString("base64")}`,
+    });
+    expect(
+      new Date(view!.expiresAt!).getTime() -
+        new Date(view!.capturedAt!).getTime(),
+    ).toBe(24 * 60 * 60 * 1000);
+    await expect(browserTaskFrame(actor("8"), run.id)).rejects.toThrow();
+    await expect(
+      queueBrowserManualAction(actor(), run.id, {
+        requestId: randomUUID(),
+        frameId: completed.frameId,
+        epoch: view!.epoch,
+        action: { kind: "click", x: 10, y: 10 },
+      }),
+    ).rejects.toMatchObject({
+      response: { error: { code: "STALE_BROWSER_FRAME" } },
+    });
+    const stored = (
+      await f.db!.query<Row>(
+        "SELECT * FROM personal_assistant_browser_tasks WHERE id=$1::uuid",
+        [run.id],
+      )
+    ).rows[0];
+    expect(stored.status).toBe("DONE");
+    expect(stored.lease_id).toBeNull();
+    expect(JSON.stringify(stored)).not.toMatch(
+      /private-final-screen|token=secret/,
+    );
+    await f.db!.query(
+      "UPDATE personal_assistant_browser_tasks SET frame_at=now()-interval '25 hours' WHERE id=$1::uuid",
+      [run.id],
+    );
+    expect(await browserTaskFrame(actor(), run.id)).toBeNull();
+    expect(
+      (
+        await f.db!.query<Row>(
+          "SELECT frame_encrypted FROM personal_assistant_browser_tasks WHERE id=$1::uuid",
+          [run.id],
+        )
+      ).rows[0].frame_encrypted,
+    ).toBeNull();
+  });
+  it("denies retained frames after permission revocation and clears them with the saved session", async () => {
+    const run = await started();
+    await finishBrowserTask(run, "DONE", "已完成", finalFrame());
+    await f.db!.exec("DELETE FROM role_permissions");
+    // Even a stale in-process actor cannot decrypt the saved result.
+    await expect(browserTaskFrame(actor(), run.id)).rejects.toThrow();
+    await f.db!.exec("INSERT INTO role_permissions VALUES(1,1),(1,2)");
+    expect((await browserTaskFrame(actor(), run.id))?.readOnly).toBe(true);
+    await clearBrowserSession(actor());
+    expect(await browserTaskFrame(actor(), run.id)).toBeNull();
+    expect((await browserStatus(actor())).tasks[0].status).toBe("DONE");
+  });
+  it("cannot attach a final frame after pause or profile clear, and failure drops the live frame", async () => {
+    const run = await started();
+    await frame(run);
+    await controlBrowserTask(actor(), run.id, { action: "pause" });
+    expect(await finishBrowserTask(run, "DONE", "迟到完成", finalFrame())).toBe(
+      false,
+    );
+    const paused = (await currentBrowserTask(run))!;
+    expect(
+      await finishBrowserTask(paused, "DONE", "暂停中完成", finalFrame()),
+    ).toBe(false);
+    await controlBrowserTask(actor(), run.id, { action: "resume" });
+    const resumed = (await currentBrowserTask(run))!;
+    await frame(resumed);
+    expect(
+      await finishBrowserTask(resumed, "FAILED", "连接已断开", finalFrame()),
+    ).toBe(true);
+    expect(await browserTaskFrame(actor(), run.id)).toBeNull();
+    const next = await started();
+    await clearBrowserSession(actor());
+    expect(
+      await finishBrowserTask(next, "DONE", "清理后迟到完成", finalFrame()),
+    ).toBe(false);
+    expect(await browserTaskFrame(actor(), next.id)).toBeNull();
+  });
   it("shows only a fixed fresh runtime reason while preserving account permissions and task ownership", async () => {
     const run = await started();
     await heartbeatBrowserWorker(false, "BROWSER_SANDBOX_UNAVAILABLE");

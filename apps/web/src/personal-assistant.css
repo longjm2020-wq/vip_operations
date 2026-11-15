@@ -844,22 +844,6 @@ body:has(.assistant-screen.ant-drawer-open) .companion-voice-prompt {
   min-width: 140px;
   max-width: min(280px, 100%);
 }
-.assistant-dedicated-environment {
-  padding: 16px;
-  margin: 12px 0 20px;
-  border: 1px solid var(--app-accent-border);
-  border-radius: 12px;
-  background: var(--app-accent-soft);
-}
-.assistant-dedicated-environment h4 {
-  margin-top: 0;
-}
-.assistant-dedicated-environment .ant-alert {
-  margin-bottom: 12px;
-}
-.assistant-dedicated-connection {
-  margin-top: 12px;
-}
 .assistant-desktop-entry .ant-btn {
   color: var(--app-text);
   background: var(--app-accent-soft);

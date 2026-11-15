@@ -88,7 +88,11 @@ export function AssistantBrowserTaskCard({
       <Space wrap>
         {inspect && (
           <Button size="small" onClick={inspect}>
-            查看画面与接管
+            {task.status === "DONE"
+              ? "查看最终画面"
+              : isActiveBrowserTask(task)
+                ? "查看画面与接管"
+                : "查看任务详情"}
           </Button>
         )}
         {isActiveBrowserTask(task) && (
@@ -169,7 +173,9 @@ function BrowserTakeover({
     staleTime: 0,
     gcTime: 0,
   });
-  const manual = ["PAUSED", "NEEDS_USER"].includes(task.status);
+  const manual =
+    ["PAUSED", "NEEDS_USER"].includes(task.status) &&
+    frame.data?.readOnly !== true;
   const usable =
     manual &&
     !!frame.data &&
@@ -238,7 +244,7 @@ function BrowserTakeover({
       aria-label="独立浏览器画面与接管"
     >
       <div className="assistant-browser-heading">
-        <h4>浏览器画面</h4>
+        <h4>{task.status === "DONE" ? "完成时画面" : "浏览器画面"}</h4>
         <Button
           size="small"
           icon={<ReloadOutlined />}
@@ -254,7 +260,7 @@ function BrowserTakeover({
           ? "任务已让出控制。点击画面定位后输入文字，或使用下方按键操作；登录、验证码等需要你完成。"
           : isActiveBrowserTask(task)
             ? "小序正在操作。需要登录或手动处理时，先暂停任务，再在这里接管。"
-            : "此任务已结束，画面仅供查看。"}{" "}
+            : "此任务已结束，最终画面仅供查看。"}{" "}
         这里是定期更新的截图。
       </p>
       {frame.error && <Alert type="warning" title={frame.error.message} />}
@@ -263,6 +269,15 @@ function BrowserTakeover({
           <p className="assistant-browser-location">
             {frame.data.title} · {frame.data.url}
           </p>
+          {frame.data.readOnly && (
+            <p className="assistant-browser-location">
+              最终画面仅供查看
+              {frame.data.expiresAt
+                ? `，保留至 ${new Date(frame.data.expiresAt).toLocaleString("zh-CN")}`
+                : ""}
+              。执行页面已关闭，下一条任务可复用已保存的登录状态。
+            </p>
+          )}
           <button
             type="button"
             className="assistant-browser-screen"
@@ -272,7 +287,9 @@ function BrowserTakeover({
             title={
               manual
                 ? "点击画面中的位置；键盘用户可使用下方 Tab 与 Enter 按键"
-                : "请先暂停任务再操作"
+                : task.status === "DONE" || frame.data.readOnly
+                  ? "最终画面仅供查看，不能操作"
+                  : "请先暂停任务再操作"
             }
           >
             <img
@@ -290,7 +307,9 @@ function BrowserTakeover({
           description={
             frame.isPending
               ? "正在获取浏览器画面…"
-              : "暂无画面，等待浏览器打开网页后刷新。"
+              : task.status === "DONE"
+                ? "没有可查看的最终画面，可能已过期或已清除。"
+                : "暂无画面，等待浏览器打开网页后刷新。"
           }
         />
       )}
@@ -373,6 +392,7 @@ export function AssistantBrowserPanel({
   disabled,
   selectedId,
   selectTask,
+  returnToChat,
 }: {
   open: boolean;
   owner: string;
@@ -383,6 +403,7 @@ export function AssistantBrowserPanel({
   disabled: boolean;
   selectedId?: string;
   selectTask: (id: string) => void;
+  returnToChat: () => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const { modal, message } = App.useApp();
@@ -444,6 +465,9 @@ export function AssistantBrowserPanel({
         <h3>
           <GlobalOutlined /> 小序独立浏览器
         </h3>
+        <Button size="small" onClick={returnToChat}>
+          返回对话
+        </Button>
         <Button
           size="small"
           icon={<ReloadOutlined />}
@@ -452,53 +476,6 @@ export function AssistantBrowserPanel({
           刷新
         </Button>
       </div>
-      <p>
-        网页任务在小序的独立浏览器中执行，不占用你的鼠标和键盘。同一账号换电脑登录后，可继续查看任务和已保存的网页会话。
-      </p>
-      {error ? (
-        <Alert type="error" title={error} />
-      ) : !data?.ready ? (
-        <Alert
-          type="warning"
-          showIcon
-          title={data ? "独立浏览器暂不可用" : "正在核对独立浏览器"}
-          description={
-            data?.note ||
-            "服务尚未就绪，请稍后刷新。不会切换到我的电脑或网站内执行。"
-          }
-        />
-      ) : (
-        <Alert
-          type="success"
-          showIcon
-          title="独立浏览器已就绪"
-          description={
-            data.note ||
-            "描述目标后，小序会连续操作；需要你处理的步骤会暂停并提示接管。"
-          }
-        />
-      )}
-      <Space wrap>
-        <Button
-          type="primary"
-          disabled={disabled || !data?.ready}
-          onClick={choose}
-        >
-          使用小序独立浏览器
-        </Button>
-        <Button
-          disabled={disabled || clearing || !data?.profile}
-          loading={clearing}
-          onClick={clear}
-        >
-          清除浏览器登录状态
-        </Button>
-      </Space>
-      <p className="assistant-browser-session">
-        {data?.profile?.hasSavedSession
-          ? "此账号已保存网页会话；登录是否仍有效以目标网站为准。"
-          : "尚未保存网页登录状态；需要时可在画面中自行登录。"}
-      </p>
       <h4>任务与接管</h4>
       {!!tasks.length && (
         <Select
@@ -530,6 +507,56 @@ export function AssistantBrowserPanel({
           description="还没有浏览器任务。选择独立浏览器后，在对话中描述要完成的目标。"
         />
       )}
+      <details className="assistant-browser-settings" open={!task}>
+        <summary>浏览器设置与登录状态</summary>
+        <p>
+          网页任务在小序的独立浏览器中执行，不占用你的鼠标和键盘。同一账号换电脑登录后，可继续查看任务和已保存的网页会话。
+        </p>
+        {error ? (
+          <Alert type="error" title={error} />
+        ) : !data?.ready ? (
+          <Alert
+            type="warning"
+            showIcon
+            title={data ? "独立浏览器暂不可用" : "正在核对独立浏览器"}
+            description={
+              data?.note ||
+              "服务尚未就绪，请稍后刷新。不会切换到我的电脑或网站内执行。"
+            }
+          />
+        ) : (
+          <Alert
+            type="success"
+            showIcon
+            title="独立浏览器已就绪"
+            description={
+              data.note ||
+              "描述目标后，小序会连续操作；需要你处理的步骤会暂停并提示接管。"
+            }
+          />
+        )}
+        <Space wrap>
+          <Button
+            type="primary"
+            disabled={disabled || !data?.ready}
+            onClick={choose}
+          >
+            使用小序独立浏览器
+          </Button>
+          <Button
+            disabled={disabled || clearing || !data?.profile}
+            loading={clearing}
+            onClick={clear}
+          >
+            清除浏览器登录状态
+          </Button>
+        </Space>
+        <p className="assistant-browser-session">
+          {data?.profile?.hasSavedSession
+            ? "此账号已保存网页会话；登录是否仍有效以目标网站为准。"
+            : "尚未保存网页登录状态；需要时可在画面中自行登录。"}
+        </p>
+      </details>
     </div>
   );
 }

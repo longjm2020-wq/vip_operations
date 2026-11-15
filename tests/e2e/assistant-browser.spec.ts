@@ -297,13 +297,19 @@ test("独立浏览器目标发送、后台进度与跨页面恢复保留同一�
   expect(state.requests[0].webOpenResult).toBeUndefined();
   expect(page.context().pages()).toHaveLength(1);
   await expect(
-    composer.getByRole("region", { name: "浏览器任务：打开百度" }),
+    page.getByRole("heading", { name: "浏览器画面", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("region", { name: "浏览器任务：打开百度" }),
   ).toContainText("等待独立浏览器");
   state.tasks[0].status = "NEEDS_USER";
   state.tasks[0].stage = "请接管完成登录";
-  await expect(composer.getByRole("status")).toContainText("请接管完成登录", {
+  await expect(
+    page.locator(".assistant-browser-panel").getByRole("status"),
+  ).toContainText("请接管完成登录", {
     timeout: 8000,
   });
+  await page.getByRole("button", { name: "返回对话", exact: true }).click();
   await composer.locator("textarea").fill("继续查找帮助");
   await composer.getByRole("button", { name: "发送给个人助理" }).click();
   await expect(
@@ -406,6 +412,26 @@ test("浏览器截图接管绑定新画面，旧画面不重放，继续与清�
   await expect(screen).toBeDisabled();
   expect(state.controls).toEqual(["pause", "resume"]);
   expect(state.actions).toHaveLength(3);
+  state.tasks[0].status = "DONE";
+  state.tasks[0].stage = "已完成页面查看";
+  state.frame = {
+    ...state.frame!,
+    readOnly: true,
+    capturedAt: new Date().toISOString(),
+    expiresAt: new Date(Date.now() + 86400000).toISOString(),
+  };
+  await expect(
+    page.getByRole("heading", { name: "完成时画面", exact: true }),
+  ).toBeVisible({ timeout: 8000 });
+  await expect(screen).toBeDisabled();
+  await expect(
+    page.getByRole("img", { name: "小序独立浏览器当前截图" }),
+  ).toBeVisible();
+  await expect(page.getByText(/最终画面仅供查看，保留至/)).toBeVisible();
+  await expect(
+    page.getByLabel("向当前焦点输入文字", { exact: true }),
+  ).toHaveCount(0);
+  await page.locator(".assistant-browser-settings summary").click();
   await page
     .getByRole("button", { name: "清除浏览器登录状态", exact: true })
     .click();

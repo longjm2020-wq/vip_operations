@@ -205,4 +205,7 @@ export type BrowserFrame = {
   image: string;
   url: string;
   title: string;
+  readOnly?: boolean;
+  capturedAt?: string;
+  expiresAt?: string;
 };

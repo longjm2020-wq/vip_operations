@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { browserStepLabels, type BrowserAction, type BrowserManualAction, type BrowserObservation, type BrowserRecentStep } from '../../../packages/contracts/src/assistant-browser.js';
-import type { BrowserRun } from '../../api/src/modules/workspace/assistant-browser.js';
+import type { BrowserCapturedFrame, BrowserRun } from '../../api/src/modules/workspace/assistant-browser.js';
 import { BrowserHandoff, BrowserUnavailable, browserObservationUrl, browserPause, openIndependentBrowser, type BrowserDriver } from './assistant-browser-page.js';
 
 export type BrowserStore = {
@@ -10,7 +10,7 @@ export type BrowserStore = {
   saveBrowserSession(run: BrowserRun, state: unknown): Promise<boolean>;
   publishBrowserFrame(run: BrowserRun, frame: { frameId: string; jpeg: Buffer; width: number; height: number; url: string; title: string }): Promise<boolean>;
   takeBrowserManualAction(run: BrowserRun): Promise<{ id: string; action: BrowserManualAction } | null>;
-  finishBrowserTask(run: BrowserRun, status: 'DONE' | 'NEEDS_USER' | 'FAILED', note: string): Promise<boolean>;
+  finishBrowserTask(run: BrowserRun, status: 'DONE' | 'NEEDS_USER' | 'FAILED', note: string, finalFrame?: BrowserCapturedFrame): Promise<boolean>;
   recordBrowserStep(run: BrowserRun, description: string): Promise<boolean>;
   planBrowserStep(run: BrowserRun, observation: BrowserObservation, signal: AbortSignal): Promise<BrowserAction>;
 };
@@ -33,6 +33,7 @@ export function safeBrowserFailure(error: unknown) {
     AI_NOT_READY: '智能服务尚未启用并验证，请完成配置后继续',
     VISION_REQUIRED: '当前模型不支持浏览器画面，请更换支持图片的模型后重新发起',
     BROWSER_AI_RESULT: '智能服务未返回有效操作，已暂停，请核对当前页面后继续',
+    BROWSER_FINAL_FRAME_UNAVAILABLE: '未能保存最终画面，已暂停，请核对当前页面后继续',
     BROWSER_STALE_CONTROL: '页面控件已变化，已暂停，请核对当前页面后继续',
     BROWSER_PROVIDER_BUDGET: '智能服务额度达到限制，请调整额度后继续',
     BROWSER_PROVIDER_CREDITS: '智能服务余额不足，请处理后继续',
@@ -152,7 +153,9 @@ export async function runIndependentBrowser(
           if (action.kind === 'done') {
             await save(snapshot, true);
             phase.throwIfAborted();
-            if (await store.finishBrowserTask(snapshot, 'DONE', action.description)) { ended = true; lifetime.abort(); }
+            const finalFrame = { ...await driver!.frame(), frameId: randomUUID() };
+            phase.throwIfAborted();
+            if (await store.finishBrowserTask(snapshot, 'DONE', action.description, finalFrame)) { ended = true; lifetime.abort(); }
             return;
           }
           await driver!.execute(action, () => current(), phase);
