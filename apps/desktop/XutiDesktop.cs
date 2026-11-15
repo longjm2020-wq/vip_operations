@@ -36,7 +36,62 @@ static class Program {
 }
 sealed class ApiFailure : Exception {
     public readonly int Status;
-    public ApiFailure(int status, string text) : base(text) { Status = status; }
+    public readonly string Code, RequestId, Diagnostic;
+    public ApiFailure(int status, string text) : this(status,text,"CONNECTION_CHECK","") { }
+    ApiFailure(int status,string text,string code,string requestId) : base(text+Details(status,code,requestId)) {
+        Status=status;Code=code;RequestId=requestId;Diagnostic=Details(status,code,requestId);
+    }
+    static string Details(int status,string code,string requestId) {
+        return "（诊断："+code+" / HTTP "+status+(requestId.Length>0?" / 请求 "+requestId:"")+"）";
+    }
+    static readonly Dictionary<string,string> Messages=new Dictionary<string,string> {
+        {"UNAUTHENTICATED","本机连接已失效，请点击「操作本机」重新连接。"},
+        {"DEVICE_REVOKED","电脑连接已断开或过期，请点击「操作本机」重新连接。"},
+        {"PAIR_EXPIRED","配对码已失效，请在网站重新生成。"},
+        {"DEVICE_LIMIT","最多连接5台电脑，请先断开不用的设备。"},
+        {"DEVICE_OFFLINE","电脑暂时离线，请检查本机助手连接。"},
+        {"DESKTOP_BUSY","这台电脑已有任务，请完成或停止后再发送。"},
+        {"REQUEST_CONFLICT","任务标识已被使用，请刷新网站任务状态。"},
+        {"VALIDATION_ERROR","电脑画面或操作参数校验失败，请更新桌面端后核对任务。"},
+        {"WINDOW_CHANGED","操作窗口已变化，请在本机核对窗口后继续。"},
+        {"AUTHORIZATION_CHANGED","跨窗口授权已变化，请在本机核对后继续。"},
+        {"DESKTOP_PLANNING","当前窗口仍在分析，请稍后核对任务状态。"},
+        {"AI_NOT_READY","智能服务尚未启用或验证，请管理员检查服务配置。"},
+        {"VISION_REQUIRED","所选模型不支持识图，请在网站选择支持图片输入的模型。"},
+        {"INVALID_IMAGE","窗口画面格式校验失败，请重新核对窗口后继续。"},
+        {"DESKTOP_AI_ERROR","智能服务未返回有效操作，请核对服务状态后继续。"},
+        {"DESKTOP_PROVIDER_BUDGET","智能服务已达到预算限制，请管理员检查额度后继续。"},
+        {"DESKTOP_PROVIDER_CREDITS","智能服务余额不足，请管理员检查余额后继续。"},
+        {"DESKTOP_PROVIDER_AUTH","智能服务凭据未通过验证，请管理员检查配置。"},
+        {"DESKTOP_PROVIDER_PERMISSION","智能服务未允许调用所选模型，请管理员检查模型权限。"},
+        {"DESKTOP_PROVIDER_POLICY","智能服务的调用规则阻止了本次请求，请核对任务与服务配置。"},
+        {"DESKTOP_PROVIDER_PRIVACY","当前模型没有符合数据隐私要求的可用服务，请管理员核对模型与服务配置。"},
+        {"DESKTOP_PROVIDER_REGION","智能服务当前区域不支持本次调用，请管理员检查配置。"},
+        {"DESKTOP_PROVIDER_UNAVAILABLE","智能服务暂不可用，请稍后核对任务并继续。"},
+        {"DESKTOP_PROVIDER_RATE_LIMIT","智能服务请求过于频繁，请稍后核对任务并继续。"},
+        {"DESKTOP_PROVIDER_HTTP","智能服务未接受本次请求，请凭诊断编号检查服务状态。"},
+        {"MODEL_UNAVAILABLE","所选模型当前不可用，请在网站刷新模型列表并重新选择。"},
+        {"AI_MODEL_CAPABILITY","所选模型不支持电脑操作，请在网站重新选择已接通的识图模型。"},
+        {"NOT_FOUND","电脑任务或连接不存在，请刷新网站任务状态。"},
+        {"FORBIDDEN","当前操作未获允许，请核对账号权限和本机授权。"},
+        {"INTERNAL_ERROR","网站处理未完成，请凭诊断编号检查服务状态。"},
+        {"INVALID_RESPONSE","网站返回格式异常，请检查网站服务后重试。"}
+    };
+    public static ApiFailure FromResponse(int status,string code,string requestId,string message) {
+        string text;
+        if(!Messages.TryGetValue(code,out text)) {code="API_ERROR";text=status==429?"请求过于频繁，请稍后再试。":status>=500?"网站服务暂不可用，请稍后核对任务状态。":"电脑请求未完成，请核对网站任务状态。";}
+        // Only a known application template may contribute a numeric provider status.
+        // Arbitrary upstream messages, codes and response bodies are never displayed.
+        if(code=="DESKTOP_AI_ERROR") {
+            var match=Regex.Match(message??"","^智能服务暂不可用（HTTP ([1-5][0-9]{2})），任务已暂停$");
+            if(match.Success)text="智能服务暂不可用（供应商 HTTP "+match.Groups[1].Value+"），请核对所选模型与服务状态。";
+            else if(message=="操作指令格式无效")text="智能服务返回的操作指令格式无效，请核对模型后继续。";
+            else if(message=="智能服务返回异常，任务已暂停")text="智能服务返回异常，任务已暂停，请核对模型后继续。";
+        }
+        Guid parsed;
+        requestId=Guid.TryParseExact(requestId,"D",out parsed)?parsed.ToString():"";
+        return new ApiFailure(status,text,code,requestId);
+    }
 }
 sealed class WindowChoice {
     public string Id = Guid.NewGuid().ToString();
@@ -80,13 +135,17 @@ sealed class AssistantForm : Form {
     public bool Authorized { get { return Connected && authorizationId.Length > 0; } }
     public string DeviceId { get { return deviceId; } }
     public string ConnectionText { get { return connection.Text; } }
-    public string TaskText { get { return status.Text; } }
+    public string TaskText { get {
+        if(task!=null && taskId.Length>0 && new[]{"PAUSED","NEEDS_USER"}.Contains(state))return (state=="PAUSED"?"任务已暂停：":"需要你接手：")+TaskStage(task);
+        return status.Text;
+    } }
     bool started, pairing, isolatedPreview;
     WindowChoice selected;
     bool polling, working, armed, closing, captureBlocked, allowing;
     bool manualPauseSent, manualPausePending;
     long manualPauseVersion=-1;
     string manualPauseNote="", startFailureNote="", executingKind="";
+    string failureTaskId="", failureDiagnostic="";
     Action<Action> manualPauseDispatch;
     Func<WindowChoice> startWindowOverride;
     long epoch;
@@ -346,14 +405,43 @@ sealed class AssistantForm : Form {
             if (auth) req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
             req.Content = new StringContent(json.Serialize(payload ?? new {}), Encoding.UTF8, "application/json");
             using(var response = await http.SendAsync(req)) {
-                var parsed = D(json.DeserializeObject(await response.Content.ReadAsStringAsync()));
+                string body=await response.Content.ReadAsStringAsync();
+                IEnumerable<string> ids;string requestId=response.Headers.TryGetValues("X-Request-Id",out ids)?ids.FirstOrDefault()??"":"";
+                Dictionary<string,object> parsed;
+                try { parsed=D(json.DeserializeObject(body)); }
+                catch { throw ApiFailure.FromResponse((int)response.StatusCode,"INVALID_RESPONSE",requestId,""); }
+                if(requestId.Length==0)requestId=S(parsed,"requestId");
                 if (!response.IsSuccessStatusCode) {
                     var error = D(parsed.ContainsKey("error") ? parsed["error"] : null);
-                    throw new ApiFailure((int)response.StatusCode, S(error,"message").Length>0 ? S(error,"message") : "连接失败，请检查网站和网络。");
+                    throw ApiFailure.FromResponse((int)response.StatusCode,S(error,"code"),requestId,S(error,"message"));
                 }
                 return D(parsed.ContainsKey("data") ? parsed["data"] : null);
             }
         }
+    }
+    string TaskStage(Dictionary<string,object> value) {
+        string text=S(value,"stage");
+        if(taskId==failureTaskId && new[]{"PAUSED","NEEDS_USER"}.Contains(S(value,"status")) && failureDiagnostic.Length>0 && !text.Contains(failureDiagnostic))text+=failureDiagnostic;
+        return text;
+    }
+    static string FailureText(Exception error) {
+        if(error is HttpRequestException)return "网络连接中断，已停止本机输入；恢复后请核对任务并继续。";
+        if(error is TaskCanceledException)return "网站请求超时，已停止本机输入；请核对任务状态后继续。";
+        return error.Message.Substring(0,Math.Min(300,error.Message.Length));
+    }
+    async Task ReportStepFailure(string id,string connectionToken,long version,string commandId,Exception error) {
+        if(!CurrentOperation(id,connectionToken,version))return;
+        var api=error as ApiFailure;failureTaskId=id;failureDiagnostic=api==null?"":api.Diagnostic;
+        string note=FailureText(error);status.Text=note;
+        if(commandId.Length>0)note="操作已中止，请核对窗口。"+note;
+        note=note.Substring(0,Math.Min(300,note.Length));
+        // The conditional handoff preserves a server/user pause or stop that won the race.
+        var result=commandId.Length>0
+            ? await Request("tasks/"+id+"/ack",new {commandId,outcome="uncertain",note})
+            : await Request("tasks/"+id+"/control",new {action="handoff",startupFailure=true,note});
+        if(!CurrentOperation(id,connectionToken,version))return;
+        state=S(result,"status");task=result;status.Text=TaskStage(result);ShowTaskControls();
+        if(Changed!=null)Changed();
     }
     async Task Control(string action, string note) {
         if (taskId.Length == 0 || token.Length == 0) return;
@@ -412,6 +500,7 @@ sealed class AssistantForm : Form {
         LocalPause(); long version=epoch;
         string id=taskId, grant=authorizationId, connectionToken=token;
         manualPauseSent=false;manualPausePending=false;manualPauseVersion=-1;manualPauseNote="";startFailureNote="";autoAttemptedId=id;
+        failureTaskId="";failureDiagnostic="";
         Exception failure=null;
         try {
         selected = startWindowOverride!=null ? startWindowOverride() : automatic ? Native.InitialWindow(Native.Windows(Handle)) : windows.SelectedItem as WindowChoice;
@@ -454,7 +543,7 @@ sealed class AssistantForm : Form {
             if (task.Count == 0) { taskId = ""; state = ""; allow.Enabled = false; LocalPause(); if (!working) status.Text = "暂无进行中的电脑任务；结果可在网站查看。"; return; }
             string id = S(task,"id"); state = S(task,"status");
             if (taskId != id) { LocalPause(); approvedId = ""; autoAttemptedId="";startFailureNote="";manualPauseSent=false;manualPausePending=false; }
-            taskId = id; instruction.Text = S(task,"instruction"); if(!manualPausePending || !new[]{"WAITING","RUNNING"}.Contains(state))status.Text = S(task,"stage");
+            taskId = id; instruction.Text = S(task,"instruction"); if(!manualPausePending || !new[]{"WAITING","RUNNING"}.Contains(state))status.Text = TaskStage(task);
             allow.Enabled = !captureBlocked && !working && new[]{"WAITING","PAUSED","NEEDS_USER"}.Contains(state);
             if (state != "RUNNING" && armed) LocalPause();
             if (state=="PAUSED" || state=="NEEDS_USER") { autoAttemptedId="";startFailureNote=""; }
@@ -488,8 +577,9 @@ sealed class AssistantForm : Form {
         Native.ValidateWindow(selected, true);
     }
     async void RunStep(string id, long version) {
-        string commandId = "";
-        Exception failure = null;
+        string commandId = "",connectionToken=token;
+        Exception failure=null;
+        try {
         try {
             Check(id, version);
             Native.RefreshTitle(selected);
@@ -541,11 +631,12 @@ sealed class AssistantForm : Form {
             await Task.Delay(600);
         } catch(Exception e) {
             if(version!=epoch || taskId!=id || closing)return;
-            LocalPause(); status.Text = e.Message; failure=e;
-        } finally { working = false;executingKind=""; }
-        if(failure!=null) {
-            try { if(commandId.Length>0) await Ack(id,commandId,"uncertain","操作已中止，请核对窗口后继续"); else await Request("tasks/"+id+"/control",new {action="handoff",note=failure is ApiFailure ? "连接或智能服务异常，请检查网站任务状态" : failure.Message.Substring(0,Math.Min(300,failure.Message.Length))}); } catch { }
+            LocalPause();status.Text=FailureText(e);failure=e;
         }
+        if(failure!=null) {
+            try { await ReportStepFailure(id,connectionToken,epoch,commandId,failure); } catch { /* Keep the original safe failure; never retry desktop input here. */ }
+        }
+        } finally { working = false;executingKind="";if(!closing){ShowTaskControls();if(Changed!=null)Changed();} }
     }
     async Task Ack(string id,string commandId,string outcome,string note) { await Request("tasks/"+id+"/ack",new {commandId,outcome,note}); }
     // Self-tests use a hidden form, fake HTTP and a fresh temporary directory.
@@ -625,8 +716,39 @@ sealed class AssistantForm : Form {
                 fake.Reply=req=>{if(req.RequestUri.AbsolutePath.EndsWith("/poll"))return TestResponse(200,form.json.Serialize(new{data=new{authorizationId=form.authorizationId,task=new{id=form.taskId,status="WAITING",stage="Waiting"}}}));reports++;return TestResponse(200,"{\"data\":{\"status\":\"NEEDS_USER\",\"stage\":\"Open an application then continue\"}}");};
                 form.Poll().GetAwaiter().GetResult();
                 if(starts!=1||reports!=2||form.state!="NEEDS_USER")throw new Exception("Recovery retried input or left startup waiting");
+                string diagnosticId=Guid.NewGuid().ToString(),secret="isolated-secret-must-not-appear";
+                var providerError=ApiFailure.FromResponse(502,"DESKTOP_AI_ERROR",diagnosticId,"智能服务暂不可用（HTTP 403），任务已暂停");
+                if(providerError.Status!=502||providerError.Code!="DESKTOP_AI_ERROR"||providerError.RequestId!=diagnosticId||!providerError.Message.Contains("供应商 HTTP 403"))throw new Exception("Structured provider diagnosis was lost");
+                foreach(string untrusted in new[]{"UNKNOWN_"+secret,"MODEL_UNAVAILABLE","DESKTOP_PROVIDER_PERMISSION"}) {
+                    var safe=ApiFailure.FromResponse(403,untrusted,secret,secret);
+                    if(safe.Message.Contains(secret)||safe.RequestId.Length>0)throw new Exception("Untrusted response text leaked into diagnosis");
+                }
+                seed();fake.Reply=req=>TestResponse(502,form.json.Serialize(new{error=new{code="DESKTOP_AI_ERROR",message="智能服务暂不可用（HTTP 403），任务已暂停"},requestId=diagnosticId}));
+                bool structured=false;try{form.Request("poll",new{}).GetAwaiter().GetResult();}catch(ApiFailure e){structured=e.Status==502&&e.Code=="DESKTOP_AI_ERROR"&&e.RequestId==diagnosticId;}
+                if(!structured)throw new Exception("HTTP response error structure was discarded");
+                fake.Reply=req=>{var response=TestResponse(503,"<html>"+secret+"</html>");response.Headers.Add("X-Request-Id",diagnosticId);return response;};
+                bool malformed=false;try{form.Request("poll",new{}).GetAwaiter().GetResult();}catch(ApiFailure e){malformed=e.Status==503&&e.Code=="INVALID_RESPONSE"&&e.RequestId==diagnosticId&&!e.Message.Contains(secret);}
+                if(!malformed)throw new Exception("Malformed response lost safe HTTP diagnosis");
+                newTask();firstTask=form.taskId;firstToken=form.token;long failureVersion=form.epoch;calls=0;
+                fake.Reply=req=>{calls++;var body=D(form.json.DeserializeObject(req.Content.ReadAsStringAsync().GetAwaiter().GetResult()));if(S(body,"action")!="handoff"||!body.ContainsKey("startupFailure")||!Convert.ToBoolean(body["startupFailure"])||!S(body,"note").Contains(diagnosticId))throw new Exception("Failure handoff lacked guarded diagnosis");return TestResponse(200,form.json.Serialize(new{data=new{id=firstTask,status="PAUSED",stage="智能服务暂不可用（HTTP 403），任务已暂停"}}));};
+                form.ReportStepFailure(firstTask,firstToken,failureVersion,"",providerError).GetAwaiter().GetResult();
+                if(calls!=1||form.state!="PAUSED"||!form.TaskText.Contains("HTTP 403")||!form.TaskText.Contains(diagnosticId)||!form.TaskText.StartsWith("任务已暂停："))throw new Exception("Server pause or footer diagnosis was overwritten");
+                fake.Reply=req=>TestResponse(200,form.json.Serialize(new{data=new{authorizationId=form.authorizationId,task=new{id=firstTask,status="PAUSED",stage="智能服务暂不可用（HTTP 403），任务已暂停"}}}));
+                form.Poll().GetAwaiter().GetResult();
+                if(!form.TaskText.Contains(diagnosticId)||form.status.Text.Contains("连接或智能服务异常"))throw new Exception("Polling erased the same-task diagnosis");
+                form.taskId=Guid.NewGuid().ToString();
+                form.ReportStepFailure(firstTask,firstToken,failureVersion,"",providerError).GetAwaiter().GetResult();
+                if(calls!=1)throw new Exception("Old failure reached a newer task");
+                newTask();firstTask=form.taskId;firstToken=form.token;failureVersion=form.epoch;
+                fake.Reply=req=>{form.taskId=Guid.NewGuid().ToString();form.state="WAITING";return TestResponse(200,"{\"data\":{\"status\":\"PAUSED\",\"stage\":\"old failure\"}}");};
+                form.ReportStepFailure(firstTask,firstToken,failureVersion,"",providerError).GetAwaiter().GetResult();
+                if(form.state!="WAITING")throw new Exception("Late failure overwrote the new task");
+                newTask();firstTask=form.taskId;firstToken=form.token;failureVersion=form.epoch;
+                fake.Reply=req=>TestResponse(200,"{\"data\":{\"status\":\"CANCELED\",\"stage\":\"你已停止操作\"}}");
+                form.ReportStepFailure(firstTask,firstToken,failureVersion,"",providerError).GetAwaiter().GetResult();
+                if(form.state!="CANCELED"||form.TaskText!="你已停止操作")throw new Exception("Failure revived a stopped task");
             }
-            Console.WriteLine("Desktop connection and startup validation: passed (fake HTTP, isolated credentials, no desktop input)");return 0;
+            Console.WriteLine("Desktop connection, startup and safe diagnosis validation: passed (fake HTTP, isolated credentials, no desktop input)");return 0;
         } catch(Exception ex){Console.WriteLine(ex.Message);return 1;}
         finally {
             foreach(string name in new[]{"connection.bin","connection.bin.tmp"}){string file=Path.Combine(isolated,name);if(File.Exists(file))File.Delete(file);}

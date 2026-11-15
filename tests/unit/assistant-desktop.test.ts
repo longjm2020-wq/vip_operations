@@ -72,6 +72,7 @@ import {
   acknowledgeDesktop,
   createDesktopPair,
   desktopControl,
+  desktopProviderDiagnostic,
   desktopIdentity,
   desktopState,
   pairDesktop,
@@ -79,6 +80,7 @@ import {
   planDesktop,
   pollDesktop,
   queueDesktopTask,
+  readDesktopProviderError,
   revokeDesktop,
   setDesktopAuthorization,
 } from "../../apps/api/src/modules/workspace/desktop.js";
@@ -129,7 +131,11 @@ beforeEach(async () => {
     ),
   );
 });
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+});
 afterAll(async () => {
   await fixture.db?.close();
 });
@@ -185,6 +191,185 @@ async function shot() {
 }
 
 describe("paired desktop task execution", () => {
+  it.each([
+    ["openrouter_guardrail_budget", "DESKTOP_PROVIDER_BUDGET"],
+    ["openrouter_workspace_budget", "DESKTOP_PROVIDER_BUDGET"],
+    ["openrouter_key_limit", "DESKTOP_PROVIDER_BUDGET"],
+  ])(
+    "classifies the documented budget source %s without provider text",
+    (limit_source, code) => {
+      const result = desktopProviderDiagnostic(403, {
+        error: {
+          code: 403,
+          message: "secret-account-value",
+          metadata: { limit_source, raw: "secret-provider-body" },
+        },
+      });
+      expect(result).toMatchObject({
+        code,
+        category: limit_source,
+        upstreamCode: 403,
+        upstreamStatus: 403,
+      });
+      expect(result.message).toContain("上游 HTTP 403");
+      expect(JSON.stringify(result)).not.toContain("secret");
+    },
+  );
+  it.each([
+    ["permission_denied", "DESKTOP_PROVIDER_PERMISSION"],
+    ["content_policy_violation", "DESKTOP_PROVIDER_POLICY"],
+    ["refusal", "DESKTOP_PROVIDER_POLICY"],
+    ["authentication", "DESKTOP_PROVIDER_AUTH"],
+  ])("uses only the known error type %s", (error_type, code) => {
+    expect(
+      desktopProviderDiagnostic(403, { error: { metadata: { error_type } } })
+        .code,
+    ).toBe(code);
+  });
+  it.each([
+    ["Budget limit exceeded (private account)", "DESKTOP_PROVIDER_BUDGET"],
+    ["Key limit reached.", "DESKTOP_PROVIDER_BUDGET"],
+    ["Access denied by security policy", "DESKTOP_PROVIDER_PERMISSION"],
+    ["User not found.", "DESKTOP_PROVIDER_AUTH"],
+    ["Inference is blocked on this account", "DESKTOP_PROVIDER_PERMISSION"],
+    [
+      "No endpoints found that match your data policy. Private detail",
+      "DESKTOP_PROVIDER_PRIVACY",
+    ],
+  ])(
+    "recognizes the anchored standard message %s without exposing it",
+    (message, code) => {
+      const result = desktopProviderDiagnostic(403, { error: { message } });
+      expect(result.code).toBe(code);
+      expect(result.message).not.toContain(message);
+    },
+  );
+  it("does not guess unknown 403 causes or echo arbitrary codes and messages", () => {
+    const result = desktopProviderDiagnostic(403, {
+      error: {
+        code: "private-token",
+        message: "Details mention Budget limit exceeded but this is unrelated",
+        metadata: { error_type: "private-cause", raw: "private-body" },
+      },
+    });
+    expect(result).toEqual({
+      code: "DESKTOP_PROVIDER_HTTP",
+      message:
+        "智能服务拒绝了此次请求，尚未提供可识别的原因（上游 HTTP 403）；任务已暂停",
+      upstreamStatus: 403,
+    });
+  });
+  it("bounds upstream error reads and does not wait indefinitely for a streaming error", async () => {
+    expect(
+      await readDesktopProviderError(
+        new Response(JSON.stringify({ error: { code: 403 } })),
+      ),
+    ).toEqual({ error: { code: 403 } });
+    expect(
+      await readDesktopProviderError(new Response(" ".repeat(8193))),
+    ).toBeUndefined();
+    expect(
+      await readDesktopProviderError(
+        new Response("<html>private error</html>"),
+      ),
+    ).toBeUndefined();
+    vi.useFakeTimers();
+    const cancel = vi.fn();
+    const pending = readDesktopProviderError(
+      new Response(new ReadableStream({ cancel })),
+    );
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(await pending).toBeUndefined();
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+  it("persists a safe provider reason and preserves it against the native failure handoff", async () => {
+    const { d, t } = await allowed();
+    const c = actor();
+    const observation = await shot();
+    const logs = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              error: {
+                code: 403,
+                message: "private-credential",
+                metadata: {
+                  limit_source: "openrouter_key_limit",
+                  raw: "private-provider-body",
+                },
+              },
+            }),
+            { status: 403 },
+          ),
+      ),
+    );
+    await expect(
+      planDesktop(c, d.deviceId, t.id, observation),
+    ).rejects.toMatchObject({
+      response: { error: { code: "DESKTOP_PROVIDER_BUDGET" } },
+    });
+    const paused = (await desktopState(actor())).tasks[0];
+    expect(paused.status).toBe("PAUSED");
+    expect(paused.stage).toContain("预算已达上限");
+    expect(paused.stage).toContain("HTTP 403");
+    expect(
+      (
+        await desktopControl(
+          actor(),
+          t.id,
+          { action: "handoff", startupFailure: true, note: "客户端连接错误" },
+          d.deviceId,
+        )
+      ).stage,
+    ).toBe(paused.stage);
+    const record = JSON.parse(String(logs.mock.calls[0][0]));
+    expect(record).toMatchObject({
+      event: "desktop_plan_failed",
+      requestId: c.requestId,
+      taskId: t.id,
+      code: "DESKTOP_PROVIDER_BUDGET",
+      upstreamStatus: 403,
+      upstreamCode: 403,
+      category: "openrouter_key_limit",
+    });
+    expect(JSON.stringify(logs.mock.calls)).not.toContain("private-");
+    expect(JSON.stringify(logs.mock.calls)).not.toContain(observation.image);
+    expect(JSON.stringify(logs.mock.calls)).not.toContain(observation.controls);
+  });
+  it("cannot replace a user stop when a late upstream failure arrives", async () => {
+    const { d, t } = await allowed();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    let finish!: (r: Response) => void;
+    let started!: () => void;
+    const start = new Promise<void>((r) => {
+      started = r;
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        () =>
+          new Promise<Response>((r) => {
+            finish = r;
+            started();
+          }),
+      ),
+    );
+    const pending = planDesktop(actor(), d.deviceId, t.id, await shot());
+    const rejected = expect(pending).rejects.toThrow();
+    await start;
+    const stopped = await desktopControl(actor(), t.id, { action: "stop" });
+    finish(
+      new Response(JSON.stringify({ error: { code: 403 } }), { status: 403 }),
+    );
+    await rejected;
+    expect((await desktopState(actor())).tasks[0]).toMatchObject({
+      status: "CANCELED",
+      stage: stopped.stage,
+    });
+  });
   it("remembers a device grant across polls, isolates ownership and does not expose its identifier to the website", async () => {
     const d = await paired();
     expect((await desktopState(actor())).devices[0].crossWindowAuthorized).toBe(
@@ -325,6 +510,19 @@ describe("paired desktop task execution", () => {
     ).rejects.toMatchObject({
       response: { error: { code: "WINDOW_CHANGED" } },
     });
+    await desktopControl(actor(), t.id, { action: "resume" });
+    await desktopControl(
+      actor(),
+      t.id,
+      {
+        action: "allow",
+        window: second.title,
+        application: second.application,
+        windowId: second.id,
+        ...grant,
+      },
+      d.deviceId,
+    );
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => model({ kind: "wait", description: "等待网页加载" })),
@@ -398,6 +596,13 @@ describe("paired desktop task execution", () => {
         windows: [{ id: randomUUID(), title: "笔记", application: "notepad" }],
       }),
     ).rejects.toMatchObject({ response: { error: { code: "FORBIDDEN" } } });
+    await desktopControl(actor(), t.id, { action: "resume" });
+    await desktopControl(
+      actor(),
+      t.id,
+      { action: "allow", window: "笔记", application: "notepad" },
+      d.deviceId,
+    );
     await expect(
       planDesktop(actor(), d.deviceId, t.id, observation),
     ).rejects.toMatchObject({ response: { error: { code: "FORBIDDEN" } } });
@@ -750,6 +955,17 @@ describe("paired desktop task execution", () => {
         application: "cmd",
       }),
     ).rejects.toThrow();
+    expect((await desktopState(actor())).tasks[0]).toMatchObject({
+      status: "PAUSED",
+      stage: "操作窗口或窗口列表已变化，请核对窗口后继续",
+    });
+    await desktopControl(actor(), t.id, { action: "resume" });
+    await desktopControl(
+      actor(),
+      t.id,
+      { action: "allow", window: "笔记", application: "notepad" },
+      d.deviceId,
+    );
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => model({ kind: "shell", command: "whoami" })),

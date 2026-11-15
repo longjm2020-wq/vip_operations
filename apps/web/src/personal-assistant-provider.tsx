@@ -265,7 +265,14 @@ export function PersonalAssistantProvider({
     enabled: allowed,
     queryFn: async () =>
       (await api("/my-workspace/assistant/desktop")).data as DesktopState,
-    refetchInterval: open || desktopTargetId ? 4000 : false,
+    refetchInterval: (query) =>
+      open || desktopTargetId || query.state.data?.tasks.some(isActiveDesktopTask)
+        ? 4000
+        : false,
+    // Native execution moves focus away from this WebView; task progress must continue.
+    refetchIntervalInBackground: true,
+    refetchOnWindowFocus: "always",
+    refetchOnReconnect: "always",
   });
   const desktopTarget = desktop.data?.devices.find(
     (device) => device.id === desktopTargetId,

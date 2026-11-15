@@ -1043,6 +1043,75 @@ test("发送前核对已有电脑任务，跨页面新建的暂停任务直接�
   expect(state.taskControls).toEqual([]);
 });
 
+test("工作台电脑任务卡在后台继续刷新，返回前台立即显示最新原因", async ({
+  page,
+}) => {
+  const { state, requests } = await desktopScenario(page, false);
+  state.authorized = true;
+  state.tasks = [
+    {
+      id: "99999999-9999-4999-8999-999999999999",
+      deviceId: desktopFixtureId,
+      deviceName: "本机测试电脑",
+      instruction: "测试后台状态刷新",
+      status: "WAITING",
+      stage: "等待本机按设备授权开始",
+      step: 0,
+      window: "",
+      scope: "window",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    },
+  ];
+  await page.addInitScript(
+    (id) => localStorage.setItem("xuti-assistant-desktop:7", id),
+    desktopFixtureId,
+  );
+  await page.goto("/my-workspace");
+  const card = page.locator(
+    ".assistant-compose:visible .assistant-desktop-task",
+  );
+  await expect(card.getByRole("status")).toHaveText("等待本机按设备授权开始");
+  await expect(page.getByRole("dialog", { name: /AI 个人助理/ })).toBeHidden();
+  await page.evaluate(() => {
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      value: "hidden",
+    });
+    Object.defineProperty(document, "hidden", {
+      configurable: true,
+      value: true,
+    });
+    document.dispatchEvent(new Event("visibilitychange", { bubbles: true }));
+  });
+  state.tasks[0].status = "NEEDS_USER";
+  state.tasks[0].stage = "连接或智能服务异常，请检查网站任务状态";
+  await expect(card.getByRole("status")).toHaveText(state.tasks[0].stage, {
+    timeout: 10000,
+  });
+  await expect(card).toContainText("需要你接手");
+  // The last poll is fresh; returning must still fetch the newly changed state.
+  state.tasks[0].status = "PAUSED";
+  state.tasks[0].stage = "已核对窗口，等待你继续";
+  await page.evaluate(() => {
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      value: "visible",
+    });
+    Object.defineProperty(document, "hidden", {
+      configurable: true,
+      value: false,
+    });
+    document.dispatchEvent(new Event("visibilitychange", { bubbles: true }));
+  });
+  await expect(card.getByRole("status")).toHaveText(state.tasks[0].stage, {
+    timeout: 2000,
+  });
+  await expect(page.getByRole("dialog", { name: /AI 个人助理/ })).toBeHidden();
+  expect(requests).toHaveLength(0);
+  expect(state.taskControls).toEqual([]);
+});
+
 test("长聊天打开电脑面板从顶部显示连接入口，刷新任务保留手动滚动", async ({
   page,
 }) => {

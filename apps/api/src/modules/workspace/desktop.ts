@@ -1,5 +1,6 @@
 import { aiFetch } from "../../ai-metering.js";
 import { randomBytes, randomUUID } from "node:crypto";
+import { HttpException } from "@nestjs/common";
 import sharp from "sharp";
 import { z } from "zod";
 import {
@@ -23,6 +24,193 @@ import { COMPASS_AI_ENDPOINT } from "../analytics/ai.js";
 import { decryptSecret, encryptionReady } from "../analytics/secrets.js";
 
 const active = ["WAITING", "RUNNING", "PAUSED", "NEEDS_USER"];
+type DesktopDiagnostic = {
+  code: string;
+  message: string;
+  upstreamStatus?: number;
+  upstreamCode?: number;
+  category?: string;
+};
+const providerCategories: Record<string, [string, string]> = {
+  authentication: ["DESKTOP_PROVIDER_AUTH", "智能服务凭据未通过验证"],
+  permission_denied: [
+    "DESKTOP_PROVIDER_PERMISSION",
+    "智能服务因权限或服务保护规则拒绝请求",
+  ],
+  payment_required: [
+    "DESKTOP_PROVIDER_CREDITS",
+    "智能服务账号或密钥可用额度不足",
+  ],
+  content_policy_violation: [
+    "DESKTOP_PROVIDER_POLICY",
+    "智能服务的内容审核规则拒绝了本次请求",
+  ],
+  refusal: ["DESKTOP_PROVIDER_POLICY", "智能服务明确拒绝了本次请求"],
+  rate_limit_exceeded: [
+    "DESKTOP_PROVIDER_RATE_LIMIT",
+    "智能服务请求达到速率限制",
+  ],
+  provider_unavailable: [
+    "DESKTOP_PROVIDER_UNAVAILABLE",
+    "智能服务供应端点未返回有效结果",
+  ],
+  provider_overloaded: [
+    "DESKTOP_PROVIDER_UNAVAILABLE",
+    "智能服务供应端点暂时繁忙",
+  ],
+};
+const providerBudgetSources = new Set([
+  "openrouter_guardrail_budget",
+  "openrouter_workspace_budget",
+  "openrouter_key_limit",
+]);
+const providerMessageCategories: [RegExp, string, string, string][] = [
+  [
+    /^Budget limit exceeded(?:[.(: ]|$)/i,
+    "budget_limit",
+    "DESKTOP_PROVIDER_BUDGET",
+    "智能服务的保护预算已达上限",
+  ],
+  [
+    /^Key limit reached(?:[.(: ]|$)/i,
+    "key_limit",
+    "DESKTOP_PROVIDER_BUDGET",
+    "智能服务的密钥调用额度已达上限",
+  ],
+  [
+    /^Access denied by security policy[.!]?$/i,
+    "security_policy",
+    "DESKTOP_PROVIDER_PERMISSION",
+    "智能服务的安全策略拒绝了本次请求",
+  ],
+  [
+    /^User not found[.!]?$/i,
+    "account_not_found",
+    "DESKTOP_PROVIDER_AUTH",
+    "智能服务未识别当前账号凭据",
+  ],
+  [
+    /^Inference is blocked on this account[.!]?$/i,
+    "inference_blocked",
+    "DESKTOP_PROVIDER_PERMISSION",
+    "智能服务已限制当前账号的模型调用",
+  ],
+  [
+    /^No endpoints found (?:that match|matching) your data policy(?:[.(: ]|$)/i,
+    "data_policy",
+    "DESKTOP_PROVIDER_PRIVACY",
+    "没有符合当前隐私策略的可用模型端点",
+  ],
+];
+/** Only known categories and numeric codes escape this boundary, never provider text. */
+export function desktopProviderDiagnostic(
+  status: number,
+  payload?: unknown,
+): DesktopDiagnostic {
+  const raw =
+    payload && typeof payload === "object" ? (payload as Row).error : undefined;
+  const metadata = raw && typeof raw === "object" ? raw.metadata : undefined;
+  const knownMessage =
+    typeof raw?.message === "string"
+      ? providerMessageCategories.find(([pattern]) => pattern.test(raw.message))
+      : undefined;
+  const upstreamCode =
+    typeof raw?.code === "number" &&
+    Number.isInteger(raw.code) &&
+    raw.code >= 400 &&
+    raw.code <= 599
+      ? raw.code
+      : undefined;
+  let category: string | undefined;
+  let code = "DESKTOP_PROVIDER_HTTP";
+  let message = "智能服务请求未完成，尚未取得可识别的原因";
+  if (
+    typeof metadata?.limit_source === "string" &&
+    providerBudgetSources.has(metadata.limit_source)
+  ) {
+    category = metadata.limit_source;
+    code = "DESKTOP_PROVIDER_BUDGET";
+    message = "智能服务的密钥、工作区或保护预算已达上限";
+  } else if (
+    metadata?.provider_code === "unsupported_country_region_territory"
+  ) {
+    category = "unsupported_country_region_territory";
+    code = "DESKTOP_PROVIDER_REGION";
+    message = "智能服务报告当前请求地区不受支持";
+  } else if (
+    typeof metadata?.error_type === "string" &&
+    Object.hasOwn(providerCategories, metadata.error_type)
+  ) {
+    category = metadata.error_type;
+    [code, message] = providerCategories[category!];
+  } else if (knownMessage) {
+    [, category, code, message] = knownMessage;
+  } else if (status === 401 || upstreamCode === 401) {
+    code = "DESKTOP_PROVIDER_AUTH";
+    message = "智能服务凭据未通过验证";
+  } else if (status === 402 || upstreamCode === 402) {
+    code = "DESKTOP_PROVIDER_CREDITS";
+    message = "智能服务账号或密钥可用额度不足";
+  } else if (status === 403 || upstreamCode === 403) {
+    message = "智能服务拒绝了此次请求，尚未提供可识别的原因";
+  }
+  return {
+    code,
+    message: `${message}（上游 HTTP ${status}）；任务已暂停`,
+    upstreamStatus: status,
+    ...(upstreamCode ? { upstreamCode } : {}),
+    ...(category ? { category } : {}),
+  };
+}
+export async function readDesktopProviderError(response: Response) {
+  const reader = response.body?.getReader();
+  if (!reader) return undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<undefined>((resolve) => {
+    timer = setTimeout(() => resolve(undefined), 1500);
+  });
+  const reading = (async () => {
+    const chunks: Uint8Array[] = [];
+    let bytes = 0;
+    for (;;) {
+      const part = await reader.read();
+      if (part.done) break;
+      bytes += part.value.byteLength;
+      if (bytes > 8192) return undefined;
+      chunks.push(part.value);
+    }
+    return JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
+  })().catch(() => undefined);
+  try {
+    return await Promise.race([reading, deadline]);
+  } finally {
+    clearTimeout(timer);
+    try {
+      void reader.cancel().catch(() => {});
+    } catch {
+      /* Preserve the diagnostic if cleanup fails. */
+    }
+    try {
+      reader.releaseLock();
+    } catch {
+      /* A pending read must not replace the original error. */
+    }
+  }
+}
+const desktopFailureMessages: Record<string, string> = {
+  VALIDATION_ERROR: "窗口观察或模型动作的字段不符合要求，请更新客户端后重试",
+  WINDOW_CHANGED: "操作窗口或窗口列表已变化，请核对窗口后继续",
+  AUTHORIZATION_CHANGED: "跨窗口授权已变化，请在本机核对后继续",
+  DESKTOP_PLANNING: "正在分析窗口，请稍候",
+  AI_NOT_READY: "智能服务尚未启用或通过验证，请管理员核对连接",
+  VISION_REQUIRED: "当前模型不支持识图，请管理员核对电脑操作模型",
+  INVALID_IMAGE: "窗口画面的格式或尺寸不符合要求",
+  MODEL_UNAVAILABLE: "电脑操作模型当前不可用，请管理员核对模型配置",
+  AI_MODEL_CAPABILITY: "当前模型不支持电脑操作，请管理员核对模型配置",
+  DESKTOP_AI_ERROR: "智能服务返回的模型或动作结果无效，任务已暂停",
+  FORBIDDEN: "本次窗口操作不在当前授权范围内，任务已暂停",
+  NOT_FOUND: "电脑任务不存在或不属于当前设备",
+};
 export function desktopTaskView(row: Row): DesktopTask {
   return {
     id: row.id,
@@ -492,62 +680,69 @@ export async function planDesktop(
   id: string,
   input: unknown,
 ) {
-  const b = parse(desktopObservationSchema, input);
-  const old = await deviceTask(c, deviceId, id);
-  if (old.status !== "RUNNING")
-    return { task: desktopTaskView(old), command: null };
-  if (
-    old.authorization_id &&
-    old.authorization_id !== old.device_authorization_id
-  )
-    fail("AUTHORIZATION_CHANGED", "跨窗口授权已撤销，请在本机核对后继续", 409);
-  if (
-    old.application !== b.application ||
-    (old.window_id
-      ? old.window_id !== b.windowId
-      : old.window_name !== b.window)
-  )
-    fail("WINDOW_CHANGED", "操作窗口已变化，请在本机重新选择", 409);
-  if (b.windows && !old.authorization_id)
-    fail("FORBIDDEN", "尚未允许跨窗口操作", 403);
-  if (
-    old.authorization_id &&
-    !b.windows?.some(
-      (w) =>
-        w.id === b.windowId &&
-        w.title === b.window &&
-        w.application === b.application,
-    )
-  )
-    fail("WINDOW_CHANGED", "授权窗口列表与当前画面不符", 409);
-  if (old.pending) return { task: desktopTaskView(old), command: old.pending };
-  if (
-    old.step >= 80 ||
-    Date.now() - new Date(old.started_at).getTime() > 1800000
-  ) {
-    const task = await desktopControl(
-      c,
-      id,
-      {
-        action: "handoff",
-        note: "本次操作已达到检查点，请核对进度后创建后续任务",
-      },
-      deviceId,
-    );
-    return { task, command: null };
-  }
-  const lease = randomUUID();
-  const claimed = await one(
-    db,
-    "UPDATE assistant_desktop_tasks SET planning_id=$2::uuid,planning_at=now(),stage='正在观察当前窗口',window_name=$3,updated_at=now() WHERE id=$1::uuid AND status='RUNNING' AND pending IS NULL AND authorization_id IS NOT DISTINCT FROM $4::uuid AND window_id IS NOT DISTINCT FROM $5::uuid AND (planning_id IS NULL OR planning_at<now()-interval '3 minutes') RETURNING *",
-    id,
-    lease,
-    b.window,
-    old.authorization_id,
-    old.window_id,
-  );
-  if (!claimed) fail("DESKTOP_PLANNING", "正在分析窗口，请稍候", 409);
+  let lease: string | undefined;
+  let providerFailure: DesktopDiagnostic | undefined;
   try {
+    const b = parse(desktopObservationSchema, input);
+    const old = await deviceTask(c, deviceId, id);
+    if (old.status !== "RUNNING")
+      return { task: desktopTaskView(old), command: null };
+    if (
+      old.authorization_id &&
+      old.authorization_id !== old.device_authorization_id
+    )
+      fail(
+        "AUTHORIZATION_CHANGED",
+        "跨窗口授权已撤销，请在本机核对后继续",
+        409,
+      );
+    if (
+      old.application !== b.application ||
+      (old.window_id
+        ? old.window_id !== b.windowId
+        : old.window_name !== b.window)
+    )
+      fail("WINDOW_CHANGED", "操作窗口已变化，请在本机重新选择", 409);
+    if (b.windows && !old.authorization_id)
+      fail("FORBIDDEN", "尚未允许跨窗口操作", 403);
+    if (
+      old.authorization_id &&
+      !b.windows?.some(
+        (w) =>
+          w.id === b.windowId &&
+          w.title === b.window &&
+          w.application === b.application,
+      )
+    )
+      fail("WINDOW_CHANGED", "授权窗口列表与当前画面不符", 409);
+    if (old.pending)
+      return { task: desktopTaskView(old), command: old.pending };
+    if (
+      old.step >= 80 ||
+      Date.now() - new Date(old.started_at).getTime() > 1800000
+    ) {
+      const task = await desktopControl(
+        c,
+        id,
+        {
+          action: "handoff",
+          note: "本次操作已达到检查点，请核对进度后创建后续任务",
+        },
+        deviceId,
+      );
+      return { task, command: null };
+    }
+    lease = randomUUID();
+    const claimed = await one(
+      db,
+      "UPDATE assistant_desktop_tasks SET planning_id=$2::uuid,planning_at=now(),stage='正在观察当前窗口',window_name=$3,updated_at=now() WHERE id=$1::uuid AND status='RUNNING' AND pending IS NULL AND authorization_id IS NOT DISTINCT FROM $4::uuid AND window_id IS NOT DISTINCT FROM $5::uuid AND (planning_id IS NULL OR planning_at<now()-interval '3 minutes') RETURNING *",
+      id,
+      lease,
+      b.window,
+      old.authorization_id,
+      old.window_id,
+    );
+    if (!claimed) fail("DESKTOP_PLANNING", "正在分析窗口，请稍候", 409);
     const settings = await one(
       db,
       "SELECT enabled,api_key_encrypted,verified_at FROM compass_ai_settings WHERE id=1",
@@ -627,14 +822,17 @@ export async function planDesktop(
       }),
     });
     if (!response.ok) {
-      await response.body?.cancel();
-      fail(
-        "DESKTOP_AI_ERROR",
-        `智能服务暂不可用（HTTP ${response.status}），任务已暂停`,
-        502,
+      providerFailure = desktopProviderDiagnostic(
+        response.status,
+        await readDesktopProviderError(response),
       );
+      fail(providerFailure.code, providerFailure.message, 502);
     }
     const payload = await response.json();
+    if (payload?.error) {
+      providerFailure = desktopProviderDiagnostic(response.status, payload);
+      fail(providerFailure.code, providerFailure.message, 502);
+    }
     if (
       !matchesAgentModel(model, payload.model) ||
       payload.choices?.[0]?.message?.refusal
@@ -690,11 +888,47 @@ export async function planDesktop(
       command: row ? command : null,
     };
   } catch (e) {
-    await db.$executeRawUnsafe(
-      "UPDATE assistant_desktop_tasks SET status='PAUSED',stage='画面分析未完成，请核对网络与智能服务后继续',planning_id=NULL,updated_at=now() WHERE id=$1::uuid AND planning_id=$2::uuid AND status='RUNNING'",
-      id,
-      lease,
+    const rawCode =
+      e instanceof HttpException
+        ? (e.getResponse() as { error?: { code?: unknown } }).error?.code
+        : undefined;
+    const code =
+      typeof rawCode === "string" &&
+      Object.hasOwn(desktopFailureMessages, rawCode)
+        ? rawCode
+        : "DESKTOP_PLAN_FAILED";
+    const diagnostic = providerFailure || {
+      code,
+      message:
+        desktopFailureMessages[code] ||
+        "窗口分析未完成，任务已暂停；请提供诊断编号排查",
+    };
+    console.warn(
+      JSON.stringify({
+        event: "desktop_plan_failed",
+        requestId: c.requestId,
+        route: "desktop/client/tasks/:id/plan",
+        ...(z.string().uuid().safeParse(id).success ? { taskId: id } : {}),
+        code: diagnostic.code,
+        ...(e instanceof HttpException ? { httpStatus: e.getStatus() } : {}),
+        ...(providerFailure
+          ? {
+              upstreamStatus: providerFailure.upstreamStatus,
+              upstreamCode: providerFailure.upstreamCode,
+              category: providerFailure.category,
+            }
+          : {}),
+      }),
     );
+    if (z.string().uuid().safeParse(id).success)
+      await db.$executeRawUnsafe(
+        "UPDATE assistant_desktop_tasks SET status='PAUSED',stage=$4,planning_id=NULL,updated_at=now() WHERE id=$1::uuid AND user_id=$2::bigint AND device_id=$3::uuid AND status='RUNNING' AND (($5::uuid IS NOT NULL AND planning_id=$5::uuid) OR ($5::uuid IS NULL AND planning_id IS NULL AND pending IS NULL))",
+        id,
+        c.actor.id,
+        deviceId,
+        diagnostic.message,
+        lease || null,
+      );
     throw e;
   }
 }
