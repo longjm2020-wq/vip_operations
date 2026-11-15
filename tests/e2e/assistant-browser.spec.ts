@@ -223,6 +223,106 @@ async function chooseBrowser(page: Page) {
     .click();
 }
 
+for (const viewport of [
+  { name: "desktop", width: 1440, height: 1000 },
+  { name: "mobile", width: 390, height: 844 },
+]) {
+  test(`长浏览器任务与真实 1280 截图在 ${viewport.name} 面板内完整缩放，不横向溢出`, async ({
+    page,
+  }) => {
+    const { state } = await fixture(page);
+    const capture = await page.context().newPage();
+    await capture.setViewportSize({ width: 1280, height: 800 });
+    await capture.setContent(
+      '<html><body style="margin:0;background:#f5f7fa;font:24px Arial"><header style="padding:36px;background:#e5edf3">IANA · Public page fixture</header><main style="padding:48px"><h1>Example Domains</h1><p>This public information page is rendered at 1280 × 800.</p></main></body></html>',
+    );
+    const jpeg = await capture.screenshot({ type: "jpeg" });
+    await capture.close();
+    const instruction =
+      "打开 https://example.com/，实际点击页面上的 Learn more 链接进入 IANA。不要直接输入 IANA 网址代替点击。核对新页面标题与 Example Domains 内容，再完成任务；只访问这两个公开网站，不登录、不填写表单、不发送、不购买、不下载，也不操作我的电脑。";
+    state.tasks = [
+      {
+        ...makeTask(),
+        instruction,
+        status: "DONE",
+        stage: "已点击 Learn more 进入 IANA，并核对 Example Domains 页面。",
+        url: "https://www.iana.org/help/example-domains",
+        title: "Example Domains",
+      },
+    ];
+    state.frame = {
+      ...state.frame!,
+      width: 1280,
+      height: 800,
+      image: `data:image/jpeg;base64,${jpeg.toString("base64")}`,
+      url: state.tasks[0].url,
+      title: state.tasks[0].title,
+      readOnly: true,
+      capturedAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 86400000).toISOString(),
+    };
+    await page.setViewportSize({
+      width: viewport.width,
+      height: viewport.height,
+    });
+    await page.goto("/my-workspace?assistant=browser");
+    const panel = page.locator(".assistant-browser-panel");
+    const image = panel.getByRole("img", { name: "小序独立浏览器当前截图" });
+    await expect(image).toBeVisible();
+    await expect(image).toHaveJSProperty("naturalWidth", 1280);
+    await expect(image).toHaveJSProperty("naturalHeight", 800);
+    await expect(
+      panel.locator(".assistant-browser-task-heading strong"),
+    ).toHaveText(instruction);
+    const dimensions = await panel.evaluate((element) => {
+      const drawer = element.closest<HTMLElement>(".ant-drawer-body")!;
+      const panelRect = element.getBoundingClientRect();
+      const drawerRect = drawer.getBoundingClientRect();
+      return {
+        drawerOverflow: drawer.scrollWidth - drawer.clientWidth,
+        panelWidth: element.clientWidth,
+        panelRight: panelRect.right,
+        drawerRight: drawerRect.left + drawer.clientWidth,
+        boxes: [
+          element,
+          ...element.querySelectorAll(
+            ".assistant-browser-task-select,.assistant-browser-task,.assistant-browser-takeover,.assistant-browser-screen,.assistant-browser-screen img",
+          ),
+        ].map((box) => {
+          const rect = box.getBoundingClientRect();
+          return {
+            className: box.className,
+            overflow: box.scrollWidth - box.clientWidth,
+            left: rect.left,
+            right: rect.right,
+            width: rect.width,
+          };
+        }),
+      };
+    });
+    expect(dimensions.drawerOverflow).toBeLessThanOrEqual(1);
+    expect(dimensions.panelRight).toBeLessThanOrEqual(
+      dimensions.drawerRight + 1,
+    );
+    for (const box of dimensions.boxes) {
+      expect(box.overflow, `${box.className} overflow`).toBeLessThanOrEqual(1);
+      expect(box.width, `${box.className} width`).toBeLessThanOrEqual(
+        dimensions.panelWidth + 1,
+      );
+      expect(box.right, `${box.className} right edge`).toBeLessThanOrEqual(
+        dimensions.panelRight + 1,
+      );
+    }
+    const rendered = await image.boundingBox();
+    expect(rendered!.width).toBeLessThan(1280);
+    expect(rendered!.width / rendered!.height).toBeCloseTo(1280 / 800, 2);
+    await image.scrollIntoViewIfNeeded();
+    await page.screenshot({
+      path: `.local/browser-long-task-${viewport.name}.png`,
+    });
+  });
+}
+
 test("独立浏览器未就绪不影响网站对话，显式选择后阻断且不回退主机", async ({
   page,
 }) => {

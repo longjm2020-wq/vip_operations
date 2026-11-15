@@ -1,11 +1,22 @@
 .assistant-browser-panel {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  width: 100%;
+  min-width: 0;
   gap: 14px;
   color: var(--app-text);
+}
+.assistant-browser-panel > *,
+.assistant-browser-takeover > *,
+.assistant-browser-manual > * {
+  min-width: 0;
+  max-width: 100%;
 }
 .assistant-browser-heading,
 .assistant-browser-task-heading {
   display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
@@ -22,6 +33,9 @@
   overflow-wrap: anywhere;
 }
 .assistant-browser-task {
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
   padding: 14px;
   border: 1px solid var(--app-accent-border);
   border-radius: 14px;
@@ -33,7 +47,7 @@
 }
 .assistant-browser-task-heading strong {
   flex: 1;
-  min-width: 180px;
+  min-width: 0;
   overflow-wrap: anywhere;
 }
 .assistant-browser-task-meta,
@@ -51,11 +65,16 @@
 }
 .assistant-browser-takeover {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
   gap: 12px;
 }
 .assistant-browser-screen {
   display: block;
   width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
   padding: 0;
   overflow: hidden;
   border: 1px solid var(--app-border-strong);
@@ -73,15 +92,20 @@
 .assistant-browser-screen img {
   display: block;
   width: 100%;
+  max-width: 100%;
   height: auto;
   user-select: none;
 }
 .assistant-browser-manual {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
   gap: 10px;
 }
 .assistant-browser-task-select {
   width: 100%;
+  max-width: 100%;
+  min-width: 0;
 }
 .assistant-browser-settings {
   margin-top: 8px;
