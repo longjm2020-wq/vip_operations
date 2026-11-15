@@ -43,6 +43,10 @@ import { encryptSecret } from "../../apps/api/src/modules/analytics/secrets.js";
 import { assistantSendSchema } from "../../packages/contracts/src/personal-assistant.js";
 import { realtimeStartSchema } from "../../packages/contracts/src/assistant-realtime.js";
 import {
+  browserRuntimeNotes,
+  type BrowserRuntimeIssue,
+} from "../../packages/contracts/src/assistant-browser.js";
+import {
   browserStatus,
   queueBrowserTask,
   controlBrowserTask,
@@ -178,6 +182,75 @@ async function frame(run: Awaited<ReturnType<typeof started>>) {
   return frameId;
 }
 describe("independent assistant browser", () => {
+  it("shows only a fixed fresh runtime reason while preserving account permissions and task ownership", async () => {
+    const run = await started();
+    await heartbeatBrowserWorker(false, "BROWSER_SANDBOX_UNAVAILABLE");
+    const own = await browserStatus(actor());
+    expect(own).toMatchObject({
+      ready: false,
+      workerOnline: false,
+      note: browserRuntimeNotes.BROWSER_SANDBOX_UNAVAILABLE,
+    });
+    expect(own.tasks.map((task) => task.id)).toContain(run.id);
+    const other = await browserStatus(actor("8"));
+    expect(other.note).toBe(browserRuntimeNotes.BROWSER_SANDBOX_UNAVAILABLE);
+    expect(other.tasks).toEqual([]);
+    expect(other.profile).toBeNull();
+    await expect(
+      browserStatus({
+        ...actor(),
+        actor: { ...actor().actor, permissions: [] },
+      }),
+    ).rejects.toThrow();
+    expect(
+      (
+        await f.db!.query<Row>(
+          "SELECT note FROM personal_assistant_browser_runtime WHERE id=1",
+        )
+      ).rows[0].note,
+    ).toBe("BROWSER_SANDBOX_UNAVAILABLE");
+  });
+  it("hides expired runtime diagnoses and clears the old reason after readiness recovers", async () => {
+    await heartbeatBrowserWorker(false, "BROWSER_SANDBOX_UNAVAILABLE");
+    await f.db!.exec(
+      "UPDATE personal_assistant_browser_runtime SET heartbeat_at=now()-interval '45 seconds' WHERE id=1",
+    );
+    expect((await browserStatus(actor())).note).toBe(
+      browserRuntimeNotes.BROWSER_RUNTIME_UNAVAILABLE,
+    );
+    await heartbeatBrowserWorker(true);
+    expect(await browserStatus(actor())).toMatchObject({
+      ready: true,
+      note: "",
+    });
+    expect(
+      (
+        await f.db!.query<Row>(
+          "SELECT note FROM personal_assistant_browser_runtime WHERE id=1",
+        )
+      ).rows[0].note,
+    ).toBe("");
+  });
+  it("does not echo unknown database notes or unvalidated heartbeat strings", async () => {
+    await heartbeatBrowserWorker(
+      false,
+      "DATABASE_URL=private-secret" as BrowserRuntimeIssue,
+    );
+    expect(
+      (
+        await f.db!.query<Row>(
+          "SELECT note FROM personal_assistant_browser_runtime WHERE id=1",
+        )
+      ).rows[0].note,
+    ).toBe("BROWSER_RUNTIME_UNAVAILABLE");
+    await f.db!.query(
+      "UPDATE personal_assistant_browser_runtime SET note=$1,heartbeat_at=now() WHERE id=1",
+      ["https://private.example/?token=private-secret"],
+    );
+    const state = await browserStatus(actor());
+    expect(state.note).toBe(browserRuntimeNotes.BROWSER_RUNTIME_UNAVAILABLE);
+    expect(JSON.stringify(state)).not.toContain("private-secret");
+  });
   it("requires real readiness and never creates a task or personal device fallback when unavailable", async () => {
     expect(await browserStatus(actor())).toMatchObject({
       ready: false,

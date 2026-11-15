@@ -184,6 +184,19 @@ export type BrowserState = {
   } | null;
   tasks: BrowserTask[];
 };
+
+/** Only these fixed diagnostics may be persisted or shown for runtime startup. */
+export const browserRuntimeNotes = {
+  BROWSER_SANDBOX_UNAVAILABLE:
+    "服务器尚未允许浏览器隔离运行，请管理员检查运行环境；不会关闭隔离或改到你的电脑执行",
+  BROWSER_EXECUTABLE_MISSING:
+    "服务器尚未安装所需的浏览器程序，请管理员检查部署",
+  BROWSER_DEPENDENCIES_MISSING:
+    "服务器缺少浏览器运行组件，请管理员检查部署依赖",
+  BROWSER_RUNTIME_UNAVAILABLE:
+    "独立浏览器服务尚未就绪，请稍后重试；不会改到你的电脑执行",
+} as const;
+export type BrowserRuntimeIssue = keyof typeof browserRuntimeNotes;
 export type BrowserFrame = {
   frameId: string;
   epoch: number;

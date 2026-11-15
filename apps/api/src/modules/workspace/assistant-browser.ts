@@ -16,6 +16,7 @@ import {
   browserManualRequestSchema,
   browserActionSchema,
   browserStepLabels,
+  browserRuntimeNotes,
   type BrowserAction,
   type BrowserFrame,
   type BrowserManualAction,
@@ -23,6 +24,7 @@ import {
   type BrowserState,
   type BrowserTask,
   type BrowserTaskStatus,
+  type BrowserRuntimeIssue,
 } from "../../../../../packages/contracts/src/assistant-browser.js";
 import { assistantPublicText } from "../../../../../packages/contracts/src/ai-presentation.js";
 import { fail, parse, type Context } from "../../core.js";
@@ -152,6 +154,13 @@ export async function browserStatus(c: Context): Promise<BrowserState> {
     worker = !!runtime?.online && !!runtime.ready;
   const ai =
     !!settings?.enabled && !!settings.verified_at && !!settings.configured;
+  const runtimeIssue =
+    runtime?.online &&
+    runtime.ready === false &&
+    typeof runtime.note === "string" &&
+    Object.hasOwn(browserRuntimeNotes, runtime.note)
+      ? (runtime.note as BrowserRuntimeIssue)
+      : "BROWSER_RUNTIME_UNAVAILABLE";
   return {
     ready: encrypted && worker && ai,
     workerOnline: worker,
@@ -159,7 +168,7 @@ export async function browserStatus(c: Context): Promise<BrowserState> {
     note: !encrypted
       ? "独立浏览器会话加密尚未配置"
       : !worker
-        ? "独立浏览器服务尚未就绪，请稍后重试；不会改到你的电脑执行"
+        ? browserRuntimeNotes[runtimeIssue]
         : !ai
           ? "智能服务尚未启用并验证"
           : "",
@@ -434,11 +443,18 @@ const runView = (r: Row): BrowserRun => ({
   step: r.step,
   expiresAt: iso(r.expires_at)!,
 });
-export async function heartbeatBrowserWorker(ready: boolean, _note?: string) {
+export async function heartbeatBrowserWorker(
+  ready: boolean,
+  issue?: BrowserRuntimeIssue,
+) {
   await db.$executeRawUnsafe(
     "UPDATE personal_assistant_browser_runtime SET ready=$1,heartbeat_at=now(),note=$2 WHERE id=1",
     ready,
-    ready ? "" : "浏览器进程尚未就绪",
+    ready
+      ? ""
+      : typeof issue === "string" && Object.hasOwn(browserRuntimeNotes, issue)
+        ? issue
+        : "BROWSER_RUNTIME_UNAVAILABLE",
   );
 }
 export async function claimBrowserTask(): Promise<BrowserRun | null> {
