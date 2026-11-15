@@ -16,5 +16,9 @@ RUN pnpm db:generate \
 # runtime unprivileged; a host that cannot create the sandbox reports unavailable.
 RUN chown -R node:node /app \
     && chmod -R a+rX /ms-playwright
-USER node
+# Drop privileges at the entry point as well as for all service children. This
+# keeps the non-root runtime compatible with hosts that select their container
+# security profile from the image's initial user; sandbox support is still
+# checked by the worker and never disabled.
+ENTRYPOINT ["runuser", "-u", "node", "--"]
 CMD ["sh", "-c", "pnpm db:migrate && pnpm start:api"]
