@@ -95,6 +95,7 @@ export async function searchTeamKnowledge(
       )),0) AS score FROM terms
     ) relevance
     WHERE a.user_id=$1::bigint AND a.status='ACCEPTED' AND (NOT $3::boolean OR relevance.score>0)
+      AND NOT EXISTS(SELECT 1 FROM public.personal_assistant_team_runs employee_run WHERE employee_run.id=a.run_id AND employee_run.input ? 'employeeContext')
     ORDER BY relevance.score DESC,a.created_at DESC,a.id
     LIMIT 30`,
     userId,

@@ -51,6 +51,15 @@ export const aiFeatures = [
     kind: "image",
   },
   {
+    id: "assistant_employee",
+    name: "工作台 AI 员工",
+    group: "团队",
+    href: "/my-workspace?assistant=employees",
+    boundary:
+      "独立交办与小序派单共用员工队列，配置按任务保存快照。工作模型支持固定、候选与受限备用策略；固定型号不自动替换。图像和视频使用员工执行模型及已有创作服务，媒体用量分别记入图像或 AIGC 视频功能；对话用量在本项记录，未返回的费用显示未知。不会取得浏览器、电脑或业务写入权限。",
+    kind: "team",
+  },
+  {
     id: "assistant_team",
     name: "网站智能体团队",
     group: "团队",

@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import {
+  employeeTemplate,
+  employeeMemberId,
+} from "../../packages/contracts/src/assistant-employees.js";
+import {
   defaultTeamSettings,
   type TeamArtifact,
   type TeamPlanStep,
@@ -103,6 +107,85 @@ function fixture(steps: TeamPlanStep[] = [step("write")]) {
 }
 
 describe("team orchestration", () => {
+  it("resumes an employee at a safe checkpoint without replanning or repeating accepted work", async () => {
+    const id = randomUUID(),
+      memberId = employeeMemberId(id),
+      profile = employeeTemplate("writing");
+    const steps = [
+      { ...step("first"), memberId },
+      { ...step("second", ["first"]), memberId },
+    ];
+    const f = fixture(steps);
+    f.input.useKnowledge = false;
+    f.input.employeeContext = {
+      origin: "direct",
+      employeeId: id,
+      employees: [{ id, version: 1, profile }],
+      maxModelCalls: 40,
+    };
+    f.input.settings.members = f.input.settings.members.map((m) =>
+      m.id === "writing" ? { ...m, id: memberId } : m,
+    );
+    let checkpoint:
+      | import("../../apps/api/src/modules/workspace/team-executor.js").TeamExecutionState
+      | undefined;
+    f.deps.pause = async (state) => {
+      if (state.steps[0].status !== "DONE") return false;
+      checkpoint = { ...state, employeePaused: true };
+      return true;
+    };
+    const paused = await f.run();
+    expect(paused.status).toBe("QUEUED");
+    expect(
+      f.calls.filter((r) => r.purpose === "execute").map((r) => r.step?.id),
+    ).toEqual(["first"]);
+    f.deps.resume = { state: checkpoint!, artifacts: paused.artifacts };
+    f.deps.pause = async () => false;
+    expect((await f.run()).status).toBe("DONE");
+    expect(f.calls.filter((r) => r.purpose === "plan")).toHaveLength(1);
+    expect(
+      f.calls.filter((r) => r.purpose === "execute").map((r) => r.step?.id),
+    ).toEqual(["first", "second"]);
+    expect(f.artifacts.filter((a) => a.status === "ACCEPTED")).toHaveLength(2);
+  });
+  it("honors each employee's rework cap and refuses an unsafe resume", async () => {
+    const id = randomUUID(),
+      memberId = employeeMemberId(id),
+      f = fixture([{ ...step("first"), memberId }]);
+    f.input.employeeContext = {
+      origin: "direct",
+      employeeId: id,
+      employees: [
+        {
+          id,
+          version: 1,
+          profile: { ...employeeTemplate("writing"), maxRevisions: 0 },
+        },
+      ],
+      maxModelCalls: 40,
+    };
+    f.input.settings.members = f.input.settings.members.map((m) =>
+      m.id === "writing" ? { ...m, id: memberId } : m,
+    );
+    f.handle(async (request) =>
+      request.purpose === "review"
+        ? { data: { accepted: false, review: "缺少事实依据" } }
+        : undefined,
+    );
+    const result = await f.run();
+    expect(result.status).toBe("NEEDS_USER");
+    expect(f.calls.filter((r) => r.purpose === "execute")).toHaveLength(1);
+    f.deps.resume = {
+      state: {
+        ...result.state,
+        phase: "execute",
+        employeePaused: true,
+        steps: [{ ...result.state.steps[0], status: "RUNNING" }],
+      },
+      artifacts: result.artifacts,
+    };
+    await expect(f.run()).rejects.toThrow("不在可安全恢复");
+  });
   it("separates deliverable quality requirements from the system review, archive and summary stages", async () => {
     const planned = step("write");
     planned.acceptance.push("已经独立验收通过", "已有归档证据", "主脑已汇总");

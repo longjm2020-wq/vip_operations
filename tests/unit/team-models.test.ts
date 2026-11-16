@@ -75,6 +75,47 @@ beforeEach(() => {
   });
 });
 describe("team model routing", () => {
+  it("never falls back outside a fixed employee policy even when another model is connected", async () => {
+    f.connected = ["engine/strong"];
+    const options = {
+      policy: { mode: "fixed" as const, modelIds: ["engine/standard"] },
+    };
+    const selected = await resolveTeamModel(options);
+    expect(selected.id).toBe("engine/standard");
+    expect(await fallbackTeamModel(selected, options)).toBeUndefined();
+  });
+  it("confines employee candidates and ordered fallback to the declared models", async () => {
+    const options = {
+      policy: {
+        mode: "fallback" as const,
+        modelIds: ["engine/standard", "engine/fast"],
+      },
+    };
+    const selected = await resolveTeamModel(options);
+    expect(selected.id).toBe("engine/standard");
+    expect((await fallbackTeamModel(selected, options))?.id).toBe(
+      "engine/fast",
+    );
+    expect(
+      await fallbackTeamModel(selected, options, [
+        "engine/standard",
+        "engine/fast",
+      ]),
+    ).toBeUndefined();
+    await expect(
+      resolveTeamModel({ ...options, pdf: true }),
+    ).rejects.toMatchObject({
+      response: { error: { code: "TEAM_MODEL_UNAVAILABLE" } },
+    });
+    await expect(
+      resolveTeamImageModel({
+        policy: { mode: "fixed", modelIds: ["engine/plain-image"] },
+        reference: true,
+      }),
+    ).rejects.toMatchObject({
+      response: { error: { code: "TEAM_IMAGE_MODEL_CAPABILITY" } },
+    });
+  });
   it("honors task override before member fixed selection, without silently replacing unavailable or incompatible fixed models", async () => {
     expect(
       await resolveTeamModel({

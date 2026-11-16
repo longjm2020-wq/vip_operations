@@ -1,6 +1,7 @@
 import { fail } from "../../core.js";
 import { featureModelRef } from "../../ai-model-routing.js";
 import type { TeamDifficulty } from "../../../../../packages/contracts/src/assistant-team.js";
+import type { EmployeeModelPolicy } from "../../../../../packages/contracts/src/assistant-employees.js";
 import {
   agentModelCandidates,
   type AgentInternalModel,
@@ -69,7 +70,9 @@ export async function readTeamModelCatalog() {
 }
 
 export async function resolveTeamModel(options: {
-  feature?: "assistant_team" | "deerflow_team" | "mastra_team";
+  feature?:
+    "assistant_team" | "deerflow_team" | "mastra_team" | "assistant_employee";
+  policy?: EmployeeModelPolicy;
   taskModel?: string;
   profileModel?: string;
   difficulty?: TeamDifficulty;
@@ -80,9 +83,16 @@ export async function resolveTeamModel(options: {
 }) {
   const catalog = await agentModelCandidates();
   const managed = await featureModelRef(options.feature || "assistant_team");
-  const fixed = options.taskModel || options.profileModel || managed;
+  const policy = options.policy;
+  const restricted = policy && policy.mode !== "auto";
+  const fixed = restricted
+    ? policy.mode === "fixed"
+      ? policy.modelIds[0]
+      : undefined
+    : options.taskModel || options.profileModel || managed;
   const matches = (model: AgentInternalModel) =>
     supportsSynchronousTeamChat(model) &&
+    (!restricted || policy.modelIds.includes(model.id)) &&
     model.parameters.includes("tools") &&
     (!options.vision || model.vision) &&
     (!options.pdf || model.pdf) &&
@@ -110,7 +120,7 @@ export async function resolveTeamModel(options: {
         "指定模型不支持本步骤需要的输入或结构化输出能力；未切换到其他模型",
         409,
       );
-    if (!connected.size || connected.has(model.id))
+    if (policy?.mode === "fixed" || !connected.size || connected.has(model.id))
       return {
         ...model,
         tier: teamModelTier(model),
@@ -164,6 +174,13 @@ export async function resolveTeamModel(options: {
         priorities.indexOf(teamModelTier(left)) -
         priorities.indexOf(teamModelTier(right)),
     );
+  if (restricted && policy.mode === "fallback") {
+    // Only catalog availability/capability can select a backup before submission.
+    // Provider timeouts and uncertain media submissions never trigger a retry.
+    available.sort(
+      (a, b) => policy.modelIds.indexOf(a.id) - policy.modelIds.indexOf(b.id),
+    );
+  }
   const preferred = available[0];
   // A "flash" model can expose both a normal reasoning profile and an explicit
   // quick profile. For simple work, prefer that configured profile of the same
@@ -188,24 +205,35 @@ export async function resolveTeamModel(options: {
   return {
     ...model,
     tier,
-    selectionReason:
-      tier === desired
+    selectionReason: restricted
+      ? `员工${policy.mode === "fallback" ? "主备顺序" : "限定候选"}：${model.name}`
+      : tier === desired
         ? `按${options.orchestrator ? "主智能体" : "任务"}的${desired}能力偏好自动匹配${desired === "fast" && model.reasoningEffort === "none" ? "，使用同型号已配置的快速模式" : ""}`
         : `当前${desired}候选不可用，自动选择满足输入能力的${tier}候选`,
   };
 }
 
 export async function resolveTeamImageModel(options: {
+  policy?: EmployeeModelPolicy;
   taskImageModel?: string;
   profileImageModel?: string;
   reference?: boolean;
   aspectRatio?: string;
 }) {
   const { imageModels } = await agentModelCandidates();
-  const fixed = options.taskImageModel || options.profileImageModel;
+  const policy = options.policy;
+  const restricted = policy && policy.mode !== "auto";
+  const fixed = restricted
+    ? policy.mode === "fixed"
+      ? policy.modelIds[0]
+      : undefined
+    : options.taskImageModel || options.profileImageModel;
+  const candidates = restricted
+    ? policy.modelIds.flatMap((id) => imageModels.filter((m) => m.id === id))
+    : imageModels;
   const model = fixed
     ? imageModels.find((item) => item.id === fixed)
-    : imageModels.find(
+    : candidates.find(
         (item) =>
           (!options.reference || item.reference) &&
           (!options.aspectRatio || item.aspects.includes(options.aspectRatio)),
@@ -238,11 +266,17 @@ export async function resolveTeamImageModel(options: {
 export async function fallbackTeamModel(
   current: AgentInternalModel,
   options: Parameters<typeof resolveTeamModel>[0],
+  excluded: string[] = [current.id],
 ) {
+  if (options.policy?.mode === "fixed") return undefined;
   const catalog = await agentModelCandidates();
   const connected = await connectedTeamModels(catalog.models);
   const fallback = firstEligibleConnected(
-    catalog.models,
+    options.policy && options.policy.mode !== "auto"
+      ? options.policy.modelIds.flatMap((id) =>
+          catalog.models.filter((m) => m.id === id),
+        )
+      : catalog.models,
     connected,
     (model) =>
       supportsSynchronousTeamChat(model) &&
@@ -250,7 +284,7 @@ export async function fallbackTeamModel(
       (!options.vision || model.vision) &&
       (!options.pdf || model.pdf) &&
       (!options.structured || model.structured),
-    [current.id],
+    excluded,
   );
   if (!fallback) return undefined;
   return {

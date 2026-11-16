@@ -12,6 +12,7 @@ import {
   GlobalOutlined,
   LeftOutlined,
   RightOutlined,
+  TeamOutlined,
 } from "@ant-design/icons";
 import {
   useAssistantHub,
@@ -62,6 +63,7 @@ export function WorkspaceColumns({ children }: { children: ReactNode }) {
   };
   if (!dock) return children;
   const extra: { key: AssistantToolSection; label: string }[] = [
+    { key: "employees", label: "AI 员工" },
     { key: "tasks", label: "任务与文件" },
     { key: "team", label: "团队设置" },
     { key: "activity", label: "动态反馈" },
@@ -184,6 +186,13 @@ export function WorkspaceColumns({ children }: { children: ReactNode }) {
             aria-label="展开右侧工具栏"
             title="展开右侧工具栏"
             onClick={() => dock.setToolsOpen(true)}
+          />
+          <Button
+            type="text"
+            icon={<TeamOutlined />}
+            aria-label="展开 AI 员工"
+            title="AI 员工"
+            onClick={() => dock.openEmployee()}
           />
           <Button
             type="text"

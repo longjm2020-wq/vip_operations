@@ -247,7 +247,7 @@ export async function teamArtifactViews(
   });
 }
 
-function runView(run: Row, artifacts: TeamArtifact[]): TeamRun {
+export function runView(run: Row, artifacts: TeamArtifact[]): TeamRun {
   return {
     engine:
       run.input.engine === "deerflow"
@@ -314,7 +314,7 @@ export async function listTeamRuns(c: Context): Promise<TeamRun[]> {
   requireAssistant(c);
   const runs = await rows(
     db,
-    "SELECT * FROM public.personal_assistant_team_runs WHERE user_id=$1::bigint ORDER BY created_at DESC LIMIT 30",
+    "SELECT * FROM public.personal_assistant_team_runs WHERE user_id=$1::bigint AND NOT (input ? 'employeeContext') ORDER BY created_at DESC LIMIT 30",
     c.actor.id,
   );
   // List rows retain progress; large deliverable bodies are fetched by run detail.
@@ -388,7 +388,7 @@ export async function createTeamRun(
     }
     const count = await one(
       tx,
-      `SELECT count(*)::int AS n FROM public.personal_assistant_team_runs WHERE user_id=$1::bigint AND status IN ${active}`,
+      `SELECT count(*)::int AS n FROM public.personal_assistant_team_runs WHERE user_id=$1::bigint AND NOT (input ? 'employeeContext') AND status IN ${active}`,
       c.actor.id,
     );
     if (count!.n >= 3)
@@ -494,7 +494,7 @@ export async function readTeamLibrary(
   const q = parse(z.string().trim().max(100), query ?? "");
   const artifacts = await rows(
     db,
-    "SELECT * FROM public.personal_assistant_team_artifacts WHERE user_id=$1::bigint AND status='ACCEPTED' AND ($2='' OR position(lower($2) in lower(title||' '||content||' '||tags::text))>0) ORDER BY created_at DESC LIMIT 30",
+    "SELECT a.* FROM public.personal_assistant_team_artifacts a WHERE a.user_id=$1::bigint AND a.status='ACCEPTED' AND NOT EXISTS(SELECT 1 FROM public.personal_assistant_team_runs r WHERE r.id=a.run_id AND r.input ? 'employeeContext') AND ($2='' OR position(lower($2) in lower(a.title||' '||a.content||' '||a.tags::text))>0) ORDER BY a.created_at DESC LIMIT 30",
     c.actor.id,
     q,
   );

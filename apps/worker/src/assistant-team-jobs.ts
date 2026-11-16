@@ -5,7 +5,11 @@ import {
   runTeamExecution,
   safeTeamError,
 } from "../../api/src/modules/workspace/team-executor.js";
-import { runDeerFlowExecution, stopOrphanedDeerFlowRuns } from "../../api/src/modules/workspace/deerflow-executor.js";
+import {
+  runDeerFlowExecution,
+  stopOrphanedDeerFlowRuns,
+} from "../../api/src/modules/workspace/deerflow-executor.js";
+import { claimAssistantRun } from "../../api/src/modules/workspace/employee-runtime.js";
 
 /** Separate from the media worker, so waiting for a file never consumes its slot. */
 export async function pollAssistantTeamJobs(signal: AbortSignal) {
@@ -19,11 +23,7 @@ export async function pollAssistantTeamJobs(signal: AbortSignal) {
   signal.throwIfAborted();
   await stopOrphanedDeerFlowRuns();
   const lease = randomUUID();
-  const run = await one(
-    db,
-    "UPDATE public.personal_assistant_team_runs SET status='PLANNING',stage='主智能体准备规划',lease_id=$1::uuid,heartbeat_at=now(),updated_at=now() WHERE id=(SELECT id FROM public.personal_assistant_team_runs WHERE status='QUEUED' ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING *",
-    lease,
-  );
+  const run = await claimAssistantRun(lease);
   if (!run) return;
   const controller = new AbortController();
   const combined = AbortSignal.any([signal, controller.signal]);
@@ -68,7 +68,8 @@ export async function pollAssistantTeamJobs(signal: AbortSignal) {
       requestId: run.id,
       key: run.id,
     };
-    if (run.input.engine === "deerflow") await runDeerFlowExecution(c, run, lease, combined);
+    if (run.input.engine === "deerflow")
+      await runDeerFlowExecution(c, run, lease, combined);
     else await runTeamExecution(c, run, lease, combined);
   } catch (error) {
     const note = combined.aborted
@@ -93,20 +94,21 @@ export async function pollAssistantTeamJobs(signal: AbortSignal) {
 
 export function startAssistantTeamJobs() {
   const controller = new AbortController();
-  let active: Promise<void> | undefined;
+  const active = new Set<Promise<void>>();
   const tick = () => {
-    if (controller.signal.aborted || active) return;
-    active = pollAssistantTeamJobs(controller.signal)
+    if (controller.signal.aborted || active.size >= 3) return;
+    const task = pollAssistantTeamJobs(controller.signal)
       .catch(() => console.warn("Assistant team polling unavailable"))
       .finally(() => {
-        active = undefined;
+        active.delete(task);
       });
+    active.add(task);
   };
   const timer = setInterval(tick, 3000);
   tick();
   return async () => {
     clearInterval(timer);
     controller.abort();
-    await active;
+    await Promise.allSettled(active);
   };
 }

@@ -14,6 +14,7 @@ export type AssistantSection =
   | "desktop"
   | "browser"
   | "team"
+  | "employees"
   | "settings";
 export type AssistantToolSection = Exclude<AssistantSection, "chat">;
 
@@ -50,6 +51,7 @@ export type AssistantHubState = {
     tool: AssistantToolSection;
     setToolsOpen: (open: boolean) => void;
     selectTool: (tool: AssistantToolSection) => void;
+    openEmployee: (id?: string) => void;
     registerTools: (host: HTMLDivElement | null) => void;
     registerChat: (host: HTMLDivElement | null) => void;
   };

@@ -23,6 +23,9 @@ beforeAll(async () => {
   f.db = new PGlite();
   await f.db.exec(`CREATE TABLE personal_assistant_team_artifacts(
     id uuid PRIMARY KEY,user_id bigint,status text,title text,content text,tags jsonb,created_at timestamptz)`);
+  await f.db.exec(
+    "ALTER TABLE personal_assistant_team_artifacts ADD COLUMN run_id uuid; CREATE TABLE personal_assistant_team_runs(id uuid PRIMARY KEY,input jsonb)",
+  );
 });
 beforeEach(async () => {
   await f.db!.exec("TRUNCATE personal_assistant_team_artifacts");
@@ -40,7 +43,7 @@ async function artifact(input: {
 }) {
   const id = randomUUID();
   await f.db!.query(
-    "INSERT INTO personal_assistant_team_artifacts VALUES($1,$2,$3,$4,$5,$6::jsonb,now()-($7::int * interval '1 day'))",
+    "INSERT INTO personal_assistant_team_artifacts(id,user_id,status,title,content,tags,created_at) VALUES($1,$2,$3,$4,$5,$6::jsonb,now()-($7::int * interval '1 day'))",
     [
       id,
       input.owner || 7,
@@ -54,6 +57,19 @@ async function artifact(input: {
   return id;
 }
 describe("team knowledge relevance retrieval", () => {
+  it("does not inject private employee deliveries into ordinary team knowledge", async () => {
+    const id = await artifact({ title: "员工专属新品资料" }),
+      run = randomUUID();
+    await f.db!.query(
+      "INSERT INTO personal_assistant_team_runs VALUES($1,$2::jsonb)",
+      [run, JSON.stringify({ employeeContext: { origin: "direct" } })],
+    );
+    await f.db!.query(
+      "UPDATE personal_assistant_team_artifacts SET run_id=$1 WHERE id=$2",
+      [run, id],
+    );
+    expect(await searchTeamKnowledge("7", "员工专属新品资料")).toEqual([]);
+  });
   it("recalls an old relevant accepted artifact even when more than thirty newer records exist", async () => {
     const old = await artifact({
       title: "春季蓝色衬衫宣传素材",

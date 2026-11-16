@@ -15,6 +15,10 @@ import { randomUUID } from "node:crypto";
 import type { Tx } from "../../packages/database/src/index.js";
 import type { Context } from "../../apps/api/src/core.js";
 import { defaultTeamSettings } from "../../packages/contracts/src/assistant-team.js";
+import {
+  employeeMemberId,
+  employeeTemplate,
+} from "../../packages/contracts/src/assistant-employees.js";
 const f = vi.hoisted(() => ({
   db: null as PGlite | null,
   route: vi.fn(),
@@ -107,6 +111,12 @@ beforeAll(async () => {
   await f.db.exec(
     await readFile(
       "packages/database/migrations/090_assistant_team.sql",
+      "utf8",
+    ),
+  );
+  await f.db.exec(
+    await readFile(
+      "packages/database/migrations/101_assistant_employees.sql",
       "utf8",
     ),
   );
@@ -235,6 +245,82 @@ function successfulFileJob(runId: string) {
   return { fileId, jobId };
 }
 describe("production team adapter", () => {
+  it("uses employee snapshots in real requests and records bounded calls in the central employee meter", async () => {
+    const { run, lease } = await runRow(),
+      employeeId = randomUUID(),
+      memberId = employeeMemberId(employeeId);
+    const profile = {
+      ...employeeTemplate("writing"),
+      knowledge: "独立品牌语气：克制",
+      workModel: { mode: "fixed" as const, modelIds: ["engine/fixed"] },
+    };
+    const input = {
+      ...run.input,
+      employeeContext: {
+        origin: "direct",
+        employeeId,
+        employees: [{ id: employeeId, version: 1, profile }],
+        maxModelCalls: 6,
+      },
+      settings: {
+        ...run.input.settings,
+        members: run.input.settings.members.map((m) =>
+          m.id === "writing" ? { ...m, id: memberId } : m,
+        ),
+      },
+    };
+    await f.db!.query(
+      "INSERT INTO personal_assistant_employees(id,user_id,profile) VALUES($1,1,$2::jsonb)",
+      [employeeId, JSON.stringify(profile)],
+    );
+    await f.db!.query(
+      "UPDATE personal_assistant_team_runs SET input=$2::jsonb WHERE id=$1",
+      [run.id, JSON.stringify(input)],
+    );
+    await f.db!.query(
+      "INSERT INTO personal_assistant_employee_tasks(run_id,user_id,employee_id,employee_ids,origin,max_model_calls) VALUES($1,1,$2,$3::uuid[],'direct',6)",
+      [run.id, employeeId, [employeeId]],
+    );
+    startDocumentScenario("text", memberId);
+    f.fetch.mockResolvedValueOnce(
+      response({ status: "completed", content: "实际员工文案" }),
+    );
+    finishDocumentScenario();
+    const result = await runTeamExecution(
+      c,
+      { ...run, input },
+      lease,
+      new AbortController().signal,
+    );
+    expect(result.status).toBe("DONE");
+    expect(f.fetch).toHaveBeenCalledTimes(6);
+    expect(
+      f.route.mock.calls.every(
+        ([options]) => options.feature === "assistant_employee",
+      ),
+    ).toBe(true);
+    expect(
+      f.route.mock.calls.some(([options]) => options.policy?.mode === "fixed"),
+    ).toBe(true);
+    expect(JSON.stringify(f.fetch.mock.calls)).toContain("独立品牌语气");
+    expect(
+      (
+        await f.db!.query<{ model_calls: number }>(
+          "SELECT model_calls FROM personal_assistant_employee_tasks WHERE run_id=$1",
+          [run.id],
+        )
+      ).rows[0].model_calls,
+    ).toBe(6);
+    await vi.waitFor(async () =>
+      expect(
+        (
+          await f.db!.query<{ n: number }>(
+            "SELECT count(*)::int AS n FROM ai_model_usage WHERE feature_id='assistant_employee'",
+          )
+        ).rows[0].n,
+      ).toBe(6),
+    );
+  });
   it.each([true, false])(
     "executes stored native and legacy snapshots without sending internal fields as public input (engine: %s)",
     async (includeEngine) => {

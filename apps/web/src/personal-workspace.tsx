@@ -52,6 +52,7 @@ import type { WorkspaceConfig } from "../../../packages/contracts/src/personal-w
 import { canUsePersonalAssistant } from "../../../packages/contracts/src/personal-assistant";
 import "./personal-workspace.css";
 import { WorkspaceColumns } from "./workspace-columns";
+import { EmployeeStrip } from "./assistant-employees";
 import { lazyPage } from "./page-resource-loader";
 import { PageResourceBoundary } from "./page-resource-boundary";
 import { WorkspaceAI } from "./workspace-ai";
@@ -701,6 +702,7 @@ export function PersonalWorkspacePage() {
           </div>
           <div className="workspace-voice-slot" data-world-ui />
         </header>
+        <EmployeeStrip />
         <div className="workspace-scene-nebula" aria-hidden="true">
           {Array.from({ length: 28 }, (_, index) => (
             <i

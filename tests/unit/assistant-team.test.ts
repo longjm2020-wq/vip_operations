@@ -16,6 +16,23 @@ import type { Context } from "../../apps/api/src/core.js";
 import type { Tx } from "../../packages/database/src/index.js";
 import { defaultTeamSettings } from "../../packages/contracts/src/assistant-team.js";
 import {
+  employeeTemplate,
+  employeeMemberId,
+} from "../../packages/contracts/src/assistant-employees.js";
+import {
+  saveEmployee,
+  archiveEmployee,
+  listEmployees,
+  createEmployeeTask,
+  controlEmployeeTask,
+  readEmployeeTask,
+  employeeTeamSettings,
+} from "../../apps/api/src/modules/workspace/assistant-employees.js";
+import {
+  claimAssistantRun,
+  reserveEmployeeCall,
+} from "../../apps/api/src/modules/workspace/employee-runtime.js";
+import {
   hydrateTeamMessages,
   readConversationReference,
 } from "../../apps/api/src/modules/workspace/assistant-shared-context.js";
@@ -117,12 +134,14 @@ beforeAll(async () => {
     "069_personal_assistant.sql",
     "083_assistant_agent.sql",
     "090_assistant_team.sql",
+    "101_assistant_employees.sql",
   ])
     await f.db.exec(
       await readFile("packages/database/migrations/" + file, "utf8"),
     );
 });
 beforeEach(async () => {
+  await f.db!.exec("TRUNCATE personal_assistant_employees CASCADE");
   await f.db!.exec(
     "TRUNCATE personal_assistant_team_runs CASCADE; TRUNCATE personal_assistant_conversations; TRUNCATE personal_assistant_teams; TRUNCATE personal_assistant_jobs; TRUNCATE personal_assistant_files; UPDATE compass_ai_settings SET enabled=true;",
   );
@@ -134,6 +153,174 @@ afterAll(async () => {
 afterEach(() => vi.unstubAllEnvs());
 
 describe("assistant team storage and owner boundaries", () => {
+  it("isolates employee ownership, snapshots configuration, retries creation idempotently and keeps the main chat untouched", async () => {
+    const profile = employeeTemplate("writing"),
+      id = randomUUID();
+    const employee = await saveEmployee(actor(), { id, version: 0, profile });
+    await expect(
+      saveEmployee(actor("8"), { id, version: 1, profile }),
+    ).rejects.toMatchObject(errorCode("NOT_FOUND"));
+    await expect(
+      saveEmployee(actor(), { id, version: 0, profile }),
+    ).rejects.toMatchObject(errorCode("VERSION_CONFLICT"));
+    const input = {
+      id: randomUUID(),
+      employeeId: id,
+      goal: "完成员工专属文案",
+      attachmentIds: [],
+    };
+    const task = await createEmployeeTask(actor(), input);
+    expect(task).toMatchObject({
+      origin: "direct",
+      employeeId: id,
+      status: "QUEUED",
+      profiles: [{ version: 1, profile: { name: profile.name } }],
+    });
+    await saveEmployee(actor(), {
+      id,
+      version: employee.version,
+      profile: { ...profile, name: "新称呼" },
+    });
+    expect((await createEmployeeTask(actor(), input)).profiles[0].version).toBe(
+      1,
+    );
+    await expect(
+      createEmployeeTask(actor(), { ...input, goal: "不同目标" }),
+    ).rejects.toMatchObject(errorCode("IDEMPOTENCY_CONFLICT"));
+    await expect(readEmployeeTask(actor("8"), task.id)).rejects.toMatchObject(
+      errorCode("NOT_FOUND"),
+    );
+    await expect(
+      controlEmployeeTask(actor("8"), task.id, { action: "stop" }),
+    ).rejects.toMatchObject(errorCode("NOT_FOUND"));
+    expect(await listTeamRuns(actor())).toEqual([]);
+    expect(
+      (await f.db!.query("SELECT * FROM personal_assistant_conversations"))
+        .rows,
+    ).toEqual([]);
+    expect((await listEmployees(actor("8"))).employees).toEqual([]);
+  });
+  it("keeps direct task context within one employee and excludes unrelated main chat", async () => {
+    const id = randomUUID();
+    await saveEmployee(actor(), {
+      id,
+      version: 0,
+      profile: employeeTemplate("writing"),
+    });
+    const first = await createEmployeeTask(actor(), {
+      id: randomUUID(),
+      employeeId: id,
+      goal: "专属语气是温柔克制",
+    });
+    await f.db!.query(
+      "UPDATE personal_assistant_team_runs SET status='DONE',summary='记住克制语气' WHERE id=$1",
+      [first.id],
+    );
+    const second = await createEmployeeTask(actor(), {
+      id: randomUUID(),
+      employeeId: id,
+      goal: "继续创作第二份文案",
+    });
+    const stored = (
+      await f.db!.query<{ input: { conversationContext: string } }>(
+        "SELECT input FROM personal_assistant_team_runs WHERE id=$1",
+        [second.id],
+      )
+    ).rows[0];
+    expect(stored.input.conversationContext).toContain("温柔克制");
+  });
+  it("checks dispatch switches, separates reviewers, prevents busy archives and preserves history after archive", async () => {
+    const id = randomUUID(),
+      reviewer = randomUUID();
+    await saveEmployee(actor(), {
+      id,
+      version: 0,
+      profile: { ...employeeTemplate("writing"), allowDispatch: false },
+    });
+    await expect(
+      createEmployeeTask(actor(), {
+        id: randomUUID(),
+        employeeIds: [id],
+        goal: "派单创作文案",
+      }),
+    ).rejects.toMatchObject(errorCode("EMPLOYEE_DISPATCH_DISABLED"));
+    const task = await createEmployeeTask(actor(), {
+      id: randomUUID(),
+      employeeId: id,
+      goal: "直接创作文案",
+    });
+    await expect(
+      archiveEmployee(actor(), id, { version: 1, archived: true }),
+    ).rejects.toMatchObject(errorCode("EMPLOYEE_BUSY"));
+    await controlEmployeeTask(actor(), task.id, { action: "stop" });
+    const archived = await archiveEmployee(actor(), id, {
+      version: 1,
+      archived: true,
+    });
+    expect(archived.archived).toBe(true);
+    expect((await readEmployeeTask(actor(), task.id)).status).toBe("CANCELED");
+    await archiveEmployee(actor(), id, {
+      version: archived.version,
+      archived: false,
+    });
+    const context = {
+      origin: "dispatch" as const,
+      employees: [
+        { id, version: 1, profile: employeeTemplate("image") },
+        { id: reviewer, version: 1, profile: employeeTemplate("review") },
+      ],
+      maxModelCalls: 80,
+    };
+    const settings = employeeTeamSettings(context);
+    expect(settings.members.find((m) => m.role === "coordinator")?.id).toBe(
+      employeeMemberId(reviewer),
+    );
+    expect(
+      settings.members.filter((m) => m.enabled && m.role === "designer"),
+    ).toHaveLength(1);
+  });
+  it("claims by priority without exceeding employee capacity, skips paused and non-accepting queues, and bounds calls by owner and lease", async () => {
+    const id = randomUUID();
+    await saveEmployee(actor(), {
+      id,
+      version: 0,
+      profile: { ...employeeTemplate("writing"), maxModelCalls: 6 },
+    });
+    const first = await createEmployeeTask(actor(), {
+      id: randomUUID(),
+      employeeId: id,
+      goal: "第一份文案",
+    });
+    const second = await createEmployeeTask(actor(), {
+      id: randomUUID(),
+      employeeId: id,
+      goal: "第二份文案",
+    });
+    await controlEmployeeTask(actor(), first.id, { action: "pause" });
+    const lease = randomUUID(),
+      claimed = await claimAssistantRun(lease);
+    expect(claimed?.id).toBe(second.id);
+    await controlEmployeeTask(actor(), first.id, { action: "resume" });
+    expect(await claimAssistantRun(randomUUID())).toBeUndefined();
+    expect(await reserveEmployeeCall(second.id, "8", lease)).toBe(false);
+    expect(await reserveEmployeeCall(second.id, "7", randomUUID())).toBe(false);
+    for (let i = 0; i < 6; i++)
+      expect(await reserveEmployeeCall(second.id, "7", lease)).toBe(true);
+    expect(await reserveEmployeeCall(second.id, "7", lease)).toBe(false);
+    await controlEmployeeTask(actor(), second.id, { action: "stop" });
+    await saveEmployee(actor(), {
+      id,
+      version: 1,
+      profile: { ...employeeTemplate("writing"), accepting: false },
+    });
+    expect(await claimAssistantRun(randomUUID())).toBeUndefined();
+    await saveEmployee(actor(), {
+      id,
+      version: 2,
+      profile: employeeTemplate("writing"),
+    });
+    expect((await claimAssistantRun(randomUUID()))?.id).toBe(first.id);
+  });
   it("shares text and voice context with a team once, resolves its latest result, and respects clear and owner boundaries", async () => {
     const prior = [
       {

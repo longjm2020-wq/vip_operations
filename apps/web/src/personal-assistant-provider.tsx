@@ -66,6 +66,10 @@ import type {
 import { AssistantModelPicker } from "./assistant-model-picker";
 import { resolveAssistantModelPickerState } from "../../../packages/contracts/src/assistant-model-picker";
 import { AssistantTeamMessage } from "./assistant-team-message";
+import {
+  AssistantEmployeesPanel,
+  type EmployeeDraft,
+} from "./assistant-employees";
 import { assistantPublicText } from "../../../packages/contracts/src/ai-presentation";
 import { AssistantBusinessResults } from "./assistant-business-results";
 import { AssistantVoiceSettingsPanel } from "./assistant-realtime-panel";
@@ -156,6 +160,12 @@ export function PersonalAssistantProvider({
   const [workspaceTool, setWorkspaceTool] =
     useState<AssistantToolSection>("browser");
   const [workspaceChatOpen, setWorkspaceChatOpen] = useState(false);
+  const [selectedEmployee, setSelectedEmployee] = useState<string>();
+  const [employeeDrafts, setEmployeeDrafts] = useState<Record<string, EmployeeDraft>>({});
+  useEffect(() => {
+    setSelectedEmployee(undefined);
+    setEmployeeDrafts({});
+  }, [user.id]);
   const [workspaceToolsOpen, setWorkspaceToolsOpen] = useState(() => {
     try {
       const saved = localStorage.getItem(
@@ -1136,7 +1146,7 @@ export function PersonalAssistantProvider({
     const params = new URLSearchParams(location.search);
     const target = params.get("assistant");
     if (
-      !["chat", "team", "desktop", "browser", "voice", "tasks"].includes(
+      !["chat", "team", "desktop", "browser", "voice", "tasks", "employees"].includes(
         target || "",
       ) ||
       consumedAssistantLink.current === location.key
@@ -1171,6 +1181,7 @@ export function PersonalAssistantProvider({
         });
       } else selectSection("desktop");
     } else if (target === "browser") selectSection("browser");
+    else if (target === "employees") selectSection("employees");
     else if (target === "tasks") selectSection("tasks");
     else openPanel(target === "team" ? "team" : "chat");
     // React to navigation, not to changing voice/session state.
@@ -1178,6 +1189,7 @@ export function PersonalAssistantProvider({
   const sectionItems = [
     ...(allowed ? [{ key: "chat", label: "聊天" }] : []),
     ...(allowed ? [{ key: "team", label: "团队设置" }] : []),
+    ...(allowed ? [{ key: "employees", label: "AI 员工" }] : []),
     ...(allowed ? [{ key: "tasks", label: "任务与文件" }] : []),
     ...(allowed ? [{ key: "desktop", label: "我的电脑" }] : []),
     ...(allowed ? [{ key: "browser", label: "独立浏览器" }] : []),
@@ -1626,6 +1638,15 @@ export function PersonalAssistantProvider({
   );
   const panels = (
     <>
+      {allowed && panelSection === "employees" && (
+        <AssistantEmployeesPanel
+          key={user.id}
+          selected={selectedEmployee}
+          select={setSelectedEmployee}
+          drafts={employeeDrafts}
+          setDrafts={setEmployeeDrafts}
+        />
+      )}
       {allowed && panelSection === "settings" && conversationSettings}
       {allowed && panelSection === "team" && (
         <>
@@ -2135,6 +2156,10 @@ export function PersonalAssistantProvider({
               tool: workspaceTool,
               setToolsOpen,
               selectTool: setSection,
+              openEmployee: (id) => {
+                setSelectedEmployee(id);
+                setSection("employees");
+              },
               registerTools: setWorkspaceToolsHost,
               registerChat: setWorkspaceChatHost,
             }
@@ -2153,7 +2178,10 @@ export function PersonalAssistantProvider({
         workspaceToolsHost &&
         createPortal(
           <>
-            <div className="workspace-execution-controls">
+            <div
+              className="workspace-execution-controls"
+              hidden={panelSection === "employees"}
+            >
               <div className="workspace-execution-select">
                 <span>执行位置</span>
                 {executionSelector}

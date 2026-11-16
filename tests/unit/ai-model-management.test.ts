@@ -395,13 +395,15 @@ describe("AI model administration and real routing", () => {
   });
   it("registers all actual capabilities, exposes safe API sources and distinguishes unknown from zero", async () => {
     const view = await aiModelManagement(admin());
-    expect(view.features).toHaveLength(22);
+    expect(view.features).toHaveLength(23);
+    expect(view.features.find(feature => feature.id === "assistant_employee")).toMatchObject({href:"/my-workspace?assistant=employees",name:"工作台 AI 员工"});
     const browser = view.features.find((feature) => feature.id === "assistant_browser")!;
     expect(browser.href).toBe("/my-workspace?assistant=browser");
     expect(browser.choices.map((choice) => choice.value)).toContain(modelRef(vision));
     expect(browser.choices.map((choice) => choice.value)).not.toContain(modelRef(plain));
     expect(browser.boundary).toContain("不占用你的鼠标键盘");
     expect(view.features.filter((row) => row.group === "团队")).toMatchObject([
+      { id: "assistant_employee", name: "工作台 AI 员工" },
       { id: "assistant_team", name: "网站智能体团队" },
       { id: "deerflow_team", name: "DeerFlow 智能体团队" },
       { id: "mastra_team", name: "Mastra 智能体团队" },

@@ -924,6 +924,9 @@ test("星轨成员公转保持文字正向，悬停继续旋转且键盘和详�
     page.getByRole("dialog", { name: "编剧", exact: true }),
   ).toBeVisible();
   await page.locator(".ant-modal-close").click();
+  await expect(
+    page.getByRole("dialog", { name: "编剧", exact: true }),
+  ).toBeHidden();
   await member.evaluate((node) => node.blur());
   expect(
     await member.evaluate((node) =>
@@ -945,6 +948,10 @@ test("星轨成员公转保持文字正向，悬停继续旋转且键盘和详�
   ).toBe(true);
 
   // Switch to keyboard input before focusing, so :focus-visible pauses motion.
+  // The scene remains inert until its closing transition finishes after the modal.
+  await expect
+    .poll(() => member.evaluate((node) => node.closest("[inert]") === null))
+    .toBe(true);
   await page.keyboard.press("Tab");
   await member.focus();
   await expect(member).toBeFocused();
@@ -955,6 +962,9 @@ test("星轨成员公转保持文字正向，悬停继续旋转且键盘和详�
   ).toBeVisible();
   await expect.poll(() => memberMovement(page)).toBeLessThan(1);
   await page.locator(".ant-modal-close").click();
+  await expect(
+    page.getByRole("dialog", { name: "编剧", exact: true }),
+  ).toBeHidden();
   await member.evaluate((node) => node.blur());
   await page.mouse.move(0, 0);
   await expect.poll(() => memberMovement(page)).toBeGreaterThan(2);
@@ -979,6 +989,11 @@ test("星轨展示真实协作、仅在新交付时汇聚、保留配色并可�
   ).toContainText("未分配步骤");
   const desktopViewport = page.viewportSize()!;
   await page.setViewportSize({ width: 390, height: 844 });
+  const collapseTools = page.getByRole("button", {
+    name: "收起右侧工具栏",
+    exact: true,
+  });
+  if (await collapseTools.isVisible()) await collapseTools.click();
   await expect
     .poll(() =>
       page.locator(".team-orbit-node").evaluateAll((nodes) =>
@@ -1303,13 +1318,10 @@ async function openTeam(page: Page) {
   await expect(
     page.getByRole("heading", { name: "智能体团队", exact: true }),
   ).toBeVisible();
-  return page.getByRole("dialog", { name: /AI 个人助理/ });
+  return page.locator(".workspace-tool-panels");
 }
 async function selectOption(page: Page, label: string, name: string) {
-  await page
-    .getByRole("dialog")
-    .getByRole("combobox", { name: label, exact: true })
-    .click();
+  await page.getByRole("combobox", { name: label, exact: true }).click();
   await page
     .locator(".ant-select-dropdown:visible")
     .getByText(name, { exact: true })
@@ -1458,13 +1470,14 @@ test("团队任务提交附件与明确模型，按后台轮询验收版本并�
   page,
 }) => {
   const fixture = await setup(page);
-  const panel = await openTeam(page);
+  let panel = await openTeam(page);
   await panel.locator(".assistant-team-task-settings summary").click();
   await selectOption(page, "团队任务模型", "推理模型 · qwen3-max");
   await panel
     .getByRole("checkbox", { name: "使用知识档案", exact: true })
     .uncheck();
   await panel.getByRole("button", { name: "返回聊天并使用团队" }).click();
+  panel = page.getByRole("dialog", { name: /AI 个人助理/ });
   await expect(page.locator("textarea:visible")).toHaveCount(1);
   await panel.getByLabel("上传助理附件").setInputFiles({
     name: "素材.txt",
@@ -1503,6 +1516,7 @@ test("团队任务提交附件与明确模型，按后台轮询验收版本并�
   await expect(panel.getByText("第 2 版", { exact: false })).toBeVisible();
   await expect(panel.getByText("已验收归档", { exact: true })).toBeVisible();
   await selectAssistantPanel(page, "团队设置");
+  panel = page.locator(".workspace-tool-panels");
   await panel.getByRole("tab", { name: "知识档案", exact: true }).click();
   await panel
     .getByRole("searchbox", { name: "搜索团队知识档案", exact: true })
@@ -1522,7 +1536,7 @@ test("手机配置冲突与提交失败保留草稿，团队面板不横向溢�
     rejectSubmission: true,
     saveConflict: true,
   });
-  const panel = await openTeam(page);
+  let panel = await openTeam(page);
   await panel.getByRole("button", { name: "新增智能体", exact: true }).click();
   await panel
     .getByRole("textbox", { name: "智能体名称", exact: true })
@@ -1539,6 +1553,7 @@ test("手机配置冲突与提交失败保留草稿，团队面板不横向溢�
     panel.getByRole("textbox", { name: "智能体名称", exact: true }),
   ).toHaveValue("待保存校对员");
   await panel.getByRole("button", { name: "返回聊天并使用团队" }).click();
+  panel = page.getByRole("dialog", { name: /AI 个人助理/ });
   const input = panel.getByPlaceholder("描述团队目标、交付要求和验收标准…");
   await input.fill("创作一份新品上市方案");
   await panel
@@ -1568,8 +1583,9 @@ test("默认团队策略可直接提交，停止任务读取后台取消状态�
   page,
 }) => {
   const fixture = await setup(page);
-  const panel = await openTeam(page);
+  let panel = await openTeam(page);
   await panel.getByRole("button", { name: "返回聊天并使用团队" }).click();
+  panel = page.getByRole("dialog", { name: /AI 个人助理/ });
   await panel
     .getByPlaceholder("描述团队目标、交付要求和验收标准…")
     .fill("整理一份新品宣传文案");
@@ -1603,7 +1619,7 @@ test("DeerFlow 团队直接提交附件与目标，隐藏原生配置并将返�
   page,
 }) => {
   const fixture = await setup(page, { deerflow: true });
-  const panel = await openTeam(page);
+  let panel = await openTeam(page);
   await expect(
     panel.getByRole("tab", { name: "协作任务", exact: true }),
   ).toHaveAttribute("aria-selected", "true");
@@ -1621,6 +1637,7 @@ test("DeerFlow 团队直接提交附件与目标，隐藏原生配置并将返�
     .getByRole("checkbox", { name: "使用知识档案", exact: true })
     .uncheck();
   await panel.getByRole("button", { name: "返回聊天并使用团队" }).click();
+  panel = page.getByRole("dialog", { name: /AI 个人助理/ });
   await panel.getByLabel("上传助理附件").setInputFiles({
     name: "素材.txt",
     mimeType: "text/plain",
@@ -1662,6 +1679,7 @@ test("DeerFlow 团队直接提交附件与目标，隐藏原生配置并将返�
   ).toBeVisible();
   await expect(panel.getByText("已验收归档", { exact: true })).toHaveCount(0);
   await selectAssistantPanel(page, "团队设置");
+  panel = page.locator(".workspace-tool-panels");
   await panel.getByRole("tab", { name: "知识档案", exact: true }).click();
   await expect(
     panel.getByText("尚无匹配的知识档案", { exact: true }),
@@ -1671,11 +1689,12 @@ test("DeerFlow 团队直接提交附件与目标，隐藏原生配置并将返�
 
 test("DeerFlow 未就绪时显示服务原因并阻止提交", async ({ page }) => {
   const fixture = await setup(page, { deerflow: true, ready: false });
-  const panel = await openTeam(page);
+  let panel = await openTeam(page);
   await expect(
     panel.getByText("团队服务连接尚未配置，请联系管理员。", { exact: true }),
   ).toBeVisible();
   await panel.getByRole("button", { name: "返回聊天并使用团队" }).click();
+  panel = page.getByRole("dialog", { name: /AI 个人助理/ });
   await expect(
     panel.getByPlaceholder("团队智能服务尚未就绪，请查看面板提示"),
   ).toBeDisabled();
