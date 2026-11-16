@@ -128,7 +128,10 @@ export function WorkspaceColumns({ children }: { children: ReactNode }) {
         }}
       />
       <aside className="workspace-right" aria-label="右侧工具栏">
-        <header className="workspace-tools-header" hidden={!dock.toolsOpen}>
+        <header
+          className="workspace-tools-header"
+          hidden={!dock.toolsOpen || dock.tool === "browser"}
+        >
           <nav className="workspace-tools-tabs" aria-label="右栏工具">
             <Button
               type="text"

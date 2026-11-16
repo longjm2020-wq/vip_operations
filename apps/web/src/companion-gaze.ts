@@ -67,7 +67,7 @@ function canTrack(event: PointerEvent) {
 function start() {
   if (unbind || typeof window === "undefined") return;
   const onMove = (event: PointerEvent) => {
-    if (reduced || !canTrack(event)) return;
+    if (!canTrack(event) || document.hidden) return;
     pointer.x = event.clientX;
     pointer.y = event.clientY;
     pointer.active = true;
@@ -78,22 +78,26 @@ function start() {
     pointer.active = false;
     schedule();
   };
+  const visibility = () => {
+    if (document.hidden) rest();
+  };
   const motion = window.matchMedia("(prefers-reduced-motion: reduce)");
   const onMotion = () => {
     reduced = motion.matches;
-    if (reduced) pointer.active = false;
     schedule();
   };
   onMotion();
   window.addEventListener("pointermove", onMove, { passive: true });
   window.addEventListener("pointerleave", rest);
   document.addEventListener("mouseleave", rest);
+  document.addEventListener("visibilitychange", visibility);
   window.addEventListener("blur", rest);
   motion.addEventListener("change", onMotion);
   unbind = () => {
     window.removeEventListener("pointermove", onMove);
     window.removeEventListener("pointerleave", rest);
     document.removeEventListener("mouseleave", rest);
+    document.removeEventListener("visibilitychange", visibility);
     window.removeEventListener("blur", rest);
     motion.removeEventListener("change", onMotion);
     if (raf) cancelAnimationFrame(raf);
@@ -116,7 +120,7 @@ function tick() {
     const rect = el.getBoundingClientRect();
     const width = rect.width;
     const target =
-      reduced || idle || width < 8
+      idle || document.hidden || width < 8
         ? { x: 0, y: 0 }
         : companionGazeOffset(
             pointer.x,
@@ -131,9 +135,12 @@ function tick() {
             },
           );
     const prev = current.get(el) || { x: 0, y: 0 };
+    // Pointer-directed feedback remains available with reduced motion, without
+    // a following animation. Leaving or hiding the page settles immediately.
+    const factor = reduced || !pointer.active || document.hidden ? 1 : LERP;
     const next = {
-      x: lerpGaze(prev.x, target.x, LERP),
-      y: lerpGaze(prev.y, target.y, LERP),
+      x: lerpGaze(prev.x, target.x, factor),
+      y: lerpGaze(prev.y, target.y, factor),
     };
     if (target.x === 0 && Math.abs(next.x) < 0.02) next.x = 0;
     if (target.y === 0 && Math.abs(next.y) < 0.02) next.y = 0;
@@ -150,7 +157,7 @@ function tick() {
       keepGoing = true;
     }
   }
-  if (keepGoing || (!idle && !reduced && figures.size)) schedule();
+  if (keepGoing || (!idle && !document.hidden && figures.size)) schedule();
 }
 
 export function subscribeCompanionGaze(el: HTMLElement) {

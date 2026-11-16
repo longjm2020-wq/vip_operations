@@ -17,7 +17,6 @@ import {
   Segmented,
   Spin,
   Switch,
-  Tabs,
   Tag,
   Tooltip,
 } from "antd";
@@ -26,6 +25,7 @@ import {
   CameraOutlined,
   EditOutlined,
   LoadingOutlined,
+  LeftOutlined,
   PlusOutlined,
   SearchOutlined,
   SendOutlined,
@@ -969,37 +969,92 @@ export function AssistantEmployeesPanel({
     });
     message.success("已附加产物，可继续填写任务；每次最多 6 个文件");
   };
+  const employeeStatus = employee
+    ? employee.archived
+      ? "已归档"
+      : employee.activeTasks
+        ? `执行中 ${employee.activeTasks}`
+        : !employee.accepting
+          ? "暂停接单"
+          : employee.queuedTasks
+            ? `排队 ${employee.queuedTasks}`
+            : "空闲"
+    : "";
+  const editing = creating || tab !== "chat";
+  const settingsLabel = editing
+    ? employee
+      ? "返回员工聊天"
+      : "返回小序派单"
+    : employee
+      ? "员工配置"
+      : "员工管理";
   return (
     <section className="employee-panel" aria-label="AI 员工工作台">
       <header className="employee-panel-heading">
-        <TeamOutlined />
-        <strong>AI 员工</strong>
+        {employee ? (
+          <span
+            title={`${employeeKindLabels[employee.kind]} · ${employeeStatus}${employee.queuedTasks ? ` · 排队 ${employee.queuedTasks}` : ""}`}
+          >
+            <EmployeeAvatar employee={employee} />
+          </span>
+        ) : (
+          <span
+            className="employee-avatar employee-dispatch-avatar"
+            aria-hidden
+          >
+            {creating ? <UserOutlined /> : <TeamOutlined />}
+          </span>
+        )}
+        <Select
+          className="employee-switcher"
+          variant="borderless"
+          size="small"
+          aria-label="选择员工"
+          value={selected || "dispatch"}
+          disabled={sending || uploading}
+          onChange={(v) => changeEmployee(v === "dispatch" ? undefined : v)}
+          options={[
+            { value: "dispatch", label: "小序派单" },
+            ...employees
+              .filter((e) => !e.archived || e.id === selected)
+              .map((e) => ({
+                value: e.id,
+                label: e.name + (e.archived ? " · 已归档" : ""),
+              })),
+            ...(creating ? [{ value: "new", label: "新建员工" }] : []),
+          ]}
+        />
+        {employee && (
+          <span
+            className="employee-current-status"
+            role="status"
+            title={employeeStatus}
+          >
+            {employeeStatus}
+          </span>
+        )}
+        <Button
+          type="text"
+          size="small"
+          icon={editing ? <LeftOutlined /> : <SettingOutlined />}
+          aria-label={settingsLabel}
+          title={settingsLabel}
+          disabled={sending || uploading}
+          onClick={() => {
+            if (creating) changeEmployee();
+            else setTab(editing ? "chat" : employee ? "settings" : "directory");
+          }}
+        />
         <Button
           type="text"
           size="small"
           icon={<PlusOutlined />}
           aria-label="新建员工"
+          title="新建员工"
           onClick={() => changeEmployee("new")}
           disabled={sending}
         />
       </header>
-      <Select
-        className="employee-switcher"
-        aria-label="选择员工"
-        value={selected || "dispatch"}
-        disabled={sending || uploading}
-        onChange={(v) => changeEmployee(v === "dispatch" ? undefined : v)}
-        options={[
-          { value: "dispatch", label: "小序 · 协作派单" },
-          ...employees
-            .filter((e) => !e.archived || e.id === selected)
-            .map((e) => ({
-              value: e.id,
-              label: e.name + (e.archived ? " · 已归档" : ""),
-            })),
-          ...(creating ? [{ value: "new", label: "新建员工" }] : []),
-        ]}
-      />
       {(directory.error || catalog.error) && (
         <Alert
           type="error"
@@ -1027,46 +1082,6 @@ export function AssistantEmployeesPanel({
         <Spin />
       ) : (
         <>
-          {employee && (
-            <div className="employee-profile-heading">
-              <EmployeeAvatar employee={employee} />
-              <div>
-                <strong>{employee.name}</strong>
-                <p>
-                  {employeeKindLabels[employee.kind]} ·{" "}
-                  {employee.activeTasks
-                    ? `${employee.activeTasks} 个执行中`
-                    : employee.accepting
-                      ? "空闲"
-                      : "暂停接单"}
-                  {employee.queuedTasks
-                    ? ` · ${employee.queuedTasks} 个排队`
-                    : ""}
-                </p>
-              </div>
-            </div>
-          )}
-          <Tabs
-            size="small"
-            activeKey={tab}
-            onChange={setTab}
-            items={[
-              { key: "chat", label: employee ? "聊天与任务" : "协作任务" },
-              ...(employee
-                ? [
-                    {
-                      key: "settings",
-                      label: (
-                        <>
-                          <SettingOutlined aria-hidden />
-                          配置
-                        </>
-                      ),
-                    },
-                  ]
-                : [{ key: "directory", label: "员工管理" }]),
-            ]}
-          />
           {tab === "settings" && employee ? (
             <EmployeeEditor
               key={employee.id}

@@ -31,6 +31,22 @@ export async function openCompanionMenu(scope: Page | Locator) {
   await companionLaunch(scope).first().click({ button: "right" });
 }
 
+async function collapseWorkspaceTools(page: Page) {
+  const browserClose = page.getByRole("button", {
+    name: "关闭浏览器面板",
+    exact: true,
+  });
+  if (await browserClose.isVisible()) {
+    await browserClose.click();
+    return;
+  }
+  const collapse = page.getByRole("button", {
+    name: "收起右侧工具栏",
+    exact: true,
+  });
+  if (await collapse.isVisible()) await collapse.click();
+}
+
 export async function openPersonalAssistant(page: Page) {
   const dialog = page.getByRole("dialog", { name: /AI 个人助理/ });
   if (await dialog.isVisible()) {
@@ -40,15 +56,13 @@ export async function openPersonalAssistant(page: Page) {
   }
   const mascot = companionLaunch(page);
   if (new URL(page.url()).pathname === "/my-workspace") {
-    const collapse = page.getByRole("button", {
-      name: "收起右侧工具栏",
-      exact: true,
-    });
-    if (
-      (page.viewportSize()?.width || 1440) <= 1050 &&
-      (await collapse.isVisible())
-    )
-      await collapse.click();
+    if ((page.viewportSize()?.width || 1440) <= 1050)
+      await collapseWorkspaceTools(page);
+    if (await dialog.isVisible()) {
+      if (!(await dialog.locator(".ant-drawer-footer textarea").isVisible()))
+        await selectAssistantPanel(page, "聊天");
+      return;
+    }
     await expect(mascot.first()).toBeVisible();
   }
   if (await mascot.first().isVisible()) {
@@ -71,22 +85,33 @@ export async function selectAssistantPanel(page: Page, name: string) {
   if (new URL(page.url()).pathname === "/my-workspace") {
     await expect(page.locator(".workspace-columns")).toBeVisible();
     if (name === "聊天") {
-      if ((page.viewportSize()?.width || 1440) <= 1050) {
-        const collapse = page.getByRole("button", {
-          name: "收起右侧工具栏",
-          exact: true,
-        });
-        if (await collapse.isVisible()) await collapse.click();
-      }
+      if ((page.viewportSize()?.width || 1440) <= 1050)
+        await collapseWorkspaceTools(page);
       if (!(await page.locator(".workspace-inline-chat").isVisible()))
         await companionLaunch(page).first().press("Enter");
       return;
     }
-    const expand = page.getByRole("button", {
-      name: "展开右侧工具栏",
-      exact: true,
-    });
-    if (await expand.isVisible()) await expand.click();
+    const browser = page.locator(".assistant-browser-panel");
+    if (await browser.isVisible()) {
+      if (name === "独立浏览器") return;
+      await collapseWorkspaceTools(page);
+    }
+    const rail = page.getByRole("navigation", { name: "已收起的右栏工具" });
+    if (await rail.isVisible()) {
+      const shortcuts: Record<string, string> = {
+        独立浏览器: "展开独立浏览器",
+        我的电脑: "展开我的电脑",
+        "AI 员工": "展开 AI 员工",
+      };
+      const shortcut = shortcuts[name];
+      await rail
+        .getByRole("button", {
+          name: shortcut || "展开我的电脑",
+          exact: true,
+        })
+        .click();
+      if (shortcut) return;
+    }
     if (["独立浏览器", "我的电脑"].includes(name)) {
       await page
         .getByRole("navigation", { name: "右栏工具" })
@@ -124,11 +149,8 @@ export async function selectAssistantExecution(page: Page, name: string) {
   const workspace = page.locator(".workspace-columns");
   if (new URL(page.url()).pathname === "/my-workspace") {
     await expect(workspace).toBeVisible();
-    const expand = page.getByRole("button", {
-      name: "展开右侧工具栏",
-      exact: true,
-    });
-    if (await expand.isVisible()) await expand.click();
+    if ((page.viewportSize()?.width || 1440) <= 1050)
+      await collapseWorkspaceTools(page);
   }
   await page.getByRole("combobox", { name: "执行位置", exact: true }).click();
   await page

@@ -5,16 +5,28 @@ import {
   useState,
   type MouseEvent,
 } from "react";
-import { Alert, App, Button, Empty, Input, Select, Space, Tag } from "antd";
+import {
+  Alert,
+  App,
+  Button,
+  Dropdown,
+  Empty,
+  Input,
+  Space,
+  Tag,
+  Tooltip,
+} from "antd";
 import {
   ArrowUpOutlined,
   CloseOutlined,
   ExpandOutlined,
   CompressOutlined,
   GlobalOutlined,
+  PauseOutlined,
+  PlayCircleOutlined,
   PlusOutlined,
   ReloadOutlined,
-  SearchOutlined,
+  StopOutlined,
 } from "@ant-design/icons";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -36,11 +48,13 @@ export function AssistantBrowserTaskCard({
   refresh,
   inspect,
   compact = false,
+  inline = false,
 }: {
   task: BrowserTask;
   refresh: () => Promise<unknown>;
   inspect?: () => void;
   compact?: boolean;
+  inline?: boolean;
 }) {
   const [pending, setPending] = useState("");
   const [error, setError] = useState("");
@@ -64,6 +78,62 @@ export function AssistantBrowserTaskCard({
       setPending("");
     }
   };
+  if (inline)
+    return (
+      <section
+        className="assistant-browser-status"
+        aria-label={`浏览器任务：${task.instruction}`}
+        data-browser-task-id={task.id}
+      >
+        <div className="assistant-browser-status-text" role="status">
+          <span>{browserStatusLabels[task.status]}</span>
+          <span title={task.stage}>{task.stage}</span>
+          <small>{task.step} 步</small>
+        </div>
+        {isActiveBrowserTask(task) && (
+          <Space size={4}>
+            {task.status === "RUNNING" && (
+              <Button
+                size="small"
+                type="text"
+                icon={<PauseOutlined />}
+                aria-label="暂停浏览器任务"
+                disabled={!!pending}
+                loading={pending === "pause"}
+                onClick={() => void control("pause")}
+              >
+                暂停
+              </Button>
+            )}
+            {["PAUSED", "NEEDS_USER"].includes(task.status) && (
+              <Button
+                size="small"
+                type="text"
+                icon={<PlayCircleOutlined />}
+                aria-label="继续浏览器任务"
+                disabled={!!pending}
+                loading={pending === "resume"}
+                onClick={() => void control("resume")}
+              >
+                继续
+              </Button>
+            )}
+            <Button
+              size="small"
+              type="text"
+              icon={<StopOutlined />}
+              aria-label="停止浏览器任务"
+              disabled={!!pending}
+              loading={pending === "stop"}
+              onClick={() => void control("stop")}
+            >
+              停止
+            </Button>
+          </Space>
+        )}
+        {error && <Alert type="error" showIcon title={error} />}
+      </section>
+    );
   return (
     <section
       className={`assistant-browser-task${compact ? " assistant-browser-task-compact" : ""}`}
@@ -192,6 +262,11 @@ function BrowserTakeover({
     !frame.error &&
     frame.data.frameId !== submittedFrame &&
     !pending;
+  const readOnlyNote =
+    "任务已结束，执行页面已关闭。最终画面仅供查看" +
+    (frame.data?.expiresAt
+      ? `，保留至 ${new Date(frame.data.expiresAt).toLocaleString("zh-CN")}`
+      : "");
   const send = async (action: BrowserManualAction) => {
     const currentFrame = frame.data;
     if (
@@ -222,9 +297,7 @@ function BrowserTakeover({
       if (!current()) return;
       setSubmittedFrame(currentFrame.frameId);
       if (action.kind === "type") setText("");
-      setNote(
-        "操作已提交，请查看更新后的画面。完成接管后点击「继续浏览器任务」。",
-      );
+      setNote("操作已提交，等待更新画面。");
       await Promise.all([frame.refetch(), refresh()]);
     } catch (cause) {
       if (!current()) return;
@@ -253,25 +326,30 @@ function BrowserTakeover({
       className="assistant-browser-takeover"
       aria-label="独立浏览器画面与接管"
     >
-      <div className="assistant-browser-heading">
-        <h4>{task.status === "DONE" ? "完成时画面" : "浏览器画面"}</h4>
-        <Button
-          size="small"
-          icon={<ReloadOutlined />}
-          loading={frame.isFetching}
-          disabled={pending}
-          onClick={() => void frame.refetch()}
-        >
-          刷新画面
-        </Button>
-      </div>
       <div
         className="assistant-browser-address"
         title={frame.data?.url || task.url}
+        aria-label="当前网页地址"
       >
         <GlobalOutlined aria-hidden />
         <span>{frame.data?.url || task.url || "正在打开网页…"}</span>
+        {(task.status === "DONE" || frame.data?.readOnly) && (
+          <Tooltip title={readOnlyNote} trigger={["hover", "focus"]}>
+            <span
+              className="assistant-browser-readonly"
+              tabIndex={0}
+              aria-label="最终画面只读"
+              aria-description={readOnlyNote}
+              title={readOnlyNote}
+            >
+              只读
+            </span>
+          </Tooltip>
+        )}
       </div>
+      {(isActiveBrowserTask(task) || task.status === "FAILED") && (
+        <AssistantBrowserTaskCard task={task} refresh={refresh} inline />
+      )}
       <div className="assistant-browser-page">
         {frame.error && <Alert type="warning" title={frame.error.message} />}
         {frame.data ? (
@@ -305,55 +383,46 @@ function BrowserTakeover({
                 ? "正在获取浏览器画面…"
                 : task.status === "DONE"
                   ? "没有可查看的最终画面，可能已过期或已清除。"
-                  : "暂无画面，等待浏览器打开网页后刷新。"
+                  : isActiveBrowserTask(task)
+                    ? "暂无画面，等待浏览器打开网页后刷新。"
+                    : "任务已结束，没有保留画面。"
             }
           />
         )}
       </div>
-      <p>
-        {manual
-          ? "任务已让出控制。点击画面定位后输入文字，或使用下方按键操作；登录、验证码等需要你完成。"
-          : isActiveBrowserTask(task)
-            ? "小序正在操作。需要登录或手动处理时，先暂停任务，再在这里接管。"
-            : "此任务已结束，最终画面仅供查看。"}{" "}
-        这里是定期更新的截图。
-      </p>
-      {frame.data ? (
-        <>
-          {frame.data.readOnly && (
-            <p className="assistant-browser-location">
-              最终画面仅供查看
-              {frame.data.expiresAt
-                ? `，保留至 ${new Date(frame.data.expiresAt).toLocaleString("zh-CN")}`
-                : ""}
-              。执行页面已关闭，下一条任务可复用已保存的登录状态。
-            </p>
-          )}
-        </>
-      ) : null}
       {manual && (
         <div className="assistant-browser-manual">
-          <label htmlFor={`browser-input-${task.id}`}>向当前焦点输入文字</label>
-          <Input.Password
-            id={`browser-input-${task.id}`}
-            autoComplete="off"
-            value={text}
-            maxLength={2000}
-            disabled={!usable}
-            onChange={(event) => setText(event.target.value)}
-            placeholder="先点击网页输入框，再填写内容"
-            onPressEnter={() => {
-              if (text) void send({ kind: "type", text });
-            }}
-          />
-          <Button
-            aria-label="输入到浏览器"
-            disabled={!usable || !text}
-            loading={pending}
-            onClick={() => void send({ kind: "type", text })}
+          <label
+            className="assistant-browser-input-label"
+            htmlFor={`browser-input-${task.id}`}
           >
-            输入到浏览器
-          </Button>
+            向当前焦点输入文字
+          </label>
+          <div className="assistant-browser-manual-compose">
+            <Input.Password
+              id={`browser-input-${task.id}`}
+              autoComplete="off"
+              value={text}
+              maxLength={2000}
+              disabled={!usable}
+              onChange={(event) => setText(event.target.value)}
+              placeholder="先点击网页输入框，再填写内容"
+              onPressEnter={() => {
+                if (text) void send({ kind: "type", text });
+              }}
+            />
+            <Button
+              type="primary"
+              size="small"
+              icon={<ArrowUpOutlined />}
+              aria-label="输入到浏览器"
+              disabled={!usable || !text}
+              loading={pending}
+              onClick={() => void send({ kind: "type", text })}
+            >
+              输入
+            </Button>
+          </div>
           <Space wrap>
             {(
               [
@@ -395,8 +464,8 @@ function BrowserTakeover({
           </Space>
         </div>
       )}
-      {error && <Alert type="error" showIcon title={error} />}
-      {note && <p role="status">{note}</p>}
+      {manual && error && <Alert type="error" showIcon title={error} />}
+      {manual && note && <p role="status">{note}</p>}
     </section>
   );
 }
@@ -441,6 +510,8 @@ export function AssistantBrowserPanel({
   const [newTab, setNewTab] = useState(false);
   const [address, setAddress] = useState("");
   const [starting, setStarting] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const refreshingRef = useRef(false);
   const [startError, setStartError] = useState("");
   const startingRef = useRef(false);
   const request = useRef<{ value: string; id: string } | null>(null);
@@ -470,6 +541,28 @@ export function AssistantBrowserPanel({
     tasks[0];
   const task = newTab ? undefined : selectedTask;
   const activeTask = tasks.find(isActiveBrowserTask);
+  const refreshAll = async () => {
+    if (refreshingRef.current) return;
+    refreshingRef.current = true;
+    setRefreshing(true);
+    try {
+      await Promise.all([
+        refresh(),
+        ...(task
+          ? [
+              queryClient.invalidateQueries({
+                queryKey: ["assistant-browser-frame", owner, task.id],
+              }),
+            ]
+          : []),
+      ]);
+    } catch (cause) {
+      if (mounted.current) message.error((cause as Error).message);
+    } finally {
+      refreshingRef.current = false;
+      if (mounted.current) setRefreshing(false);
+    }
+  };
   const start = async () => {
     const value = address.trim();
     if (
@@ -543,7 +636,7 @@ export function AssistantBrowserPanel({
     clearDialog.current = modal.confirm({
       title: "清除独立浏览器登录状态？",
       content:
-        "将停止当前浏览器任务，并清除该账号已保存的网站登录状态。之后需要重新登录这些网站。",
+        "将停止当前浏览器任务，并清除已保存的网站登录状态与任务截图。之后需要重新登录这些网站。",
       okText: "清除并停止",
       cancelText: "保留",
       okButtonProps: { danger: true },
@@ -576,8 +669,84 @@ export function AssistantBrowserPanel({
           className="assistant-browser-tab"
           title={task?.title || task?.instruction || "新任务"}
         >
-          <GlobalOutlined aria-hidden />
-          <span>{task?.title || (task ? "网页任务" : "新任务")}</span>
+          <Dropdown
+            trigger={["click"]}
+            menu={{
+              className: "assistant-browser-menu",
+              selectedKeys: task ? [`task:${task.id}`] : [],
+              items: [
+                {
+                  key: "history",
+                  type: "group",
+                  label: "最近任务",
+                  children: tasks.length
+                    ? tasks.map((entry) => ({
+                        key: `task:${entry.id}`,
+                        label: (
+                          <span title={entry.instruction}>
+                            {browserStatusLabels[entry.status]} ·{" "}
+                            {entry.instruction}
+                          </span>
+                        ),
+                      }))
+                    : [{ key: "empty", label: "暂无历史任务", disabled: true }],
+                },
+                { type: "divider" },
+                {
+                  key: "choose",
+                  label: "在对话中使用浏览器",
+                  disabled: disabled || !data?.ready,
+                },
+                ...(!embedded
+                  ? [
+                      {
+                        key: "expand",
+                        className: "assistant-browser-menu-expand",
+                        icon: expanded ? (
+                          <CompressOutlined />
+                        ) : (
+                          <ExpandOutlined />
+                        ),
+                        label: expanded ? "恢复分栏" : "展开浏览器",
+                      },
+                    ]
+                  : []),
+                { type: "divider" },
+                {
+                  key: "session",
+                  disabled: true,
+                  label: data?.profile?.hasSavedSession
+                    ? "已保存网页登录状态"
+                    : "尚未保存网页登录状态",
+                },
+                {
+                  key: "clear",
+                  label: "清除浏览器登录状态",
+                  danger: true,
+                  disabled: disabled || clearing || !data?.profile,
+                },
+              ],
+              onClick: ({ key }) => {
+                if (key.startsWith("task:")) {
+                  setNewTab(false);
+                  selectTask(key.slice(5));
+                } else if (key === "choose") choose();
+                else if (key === "expand") toggleExpanded();
+                else if (key === "clear") clear();
+              },
+            }}
+          >
+            <Button
+              type="text"
+              size="small"
+              className="assistant-browser-tab-label"
+              icon={<GlobalOutlined />}
+              aria-label="浏览器标签与会话菜单"
+              title="查看最近任务和浏览器登录状态"
+            >
+              {task?.title || (task ? "网页任务" : "新任务")}
+            </Button>
+          </Dropdown>
           <Button
             type="text"
             size="small"
@@ -601,40 +770,13 @@ export function AssistantBrowserPanel({
             size="small"
             icon={<ReloadOutlined />}
             aria-label="刷新浏览器状态"
-            title="刷新状态"
-            onClick={() => void refresh()}
-          />
-          <Button
-            type="text"
-            size="small"
-            className="assistant-browser-expand"
-            icon={expanded ? <CompressOutlined /> : <ExpandOutlined />}
-            aria-label={expanded ? "恢复分栏" : "展开浏览器"}
-            title={expanded ? "恢复分栏" : "展开浏览器"}
-            onClick={toggleExpanded}
+            title="刷新网页画面与任务状态"
+            loading={refreshing}
+            onClick={() => void refreshAll()}
           />
         </div>
       </div>
       <div className="assistant-browser-content">
-        <div className="assistant-browser-toolbar">
-          <h3>小序独立浏览器</h3>
-          {!!tasks.length && (
-            <Select
-              className="assistant-browser-task-select"
-              aria-label="选择浏览器任务"
-              value={task?.id}
-              placeholder="最近任务"
-              onChange={(id) => {
-                setNewTab(false);
-                selectTask(id);
-              }}
-              options={tasks.map((entry) => ({
-                value: entry.id,
-                label: `${browserStatusLabels[entry.status]} · ${entry.instruction}`,
-              }))}
-            />
-          )}
-        </div>
         {task ? (
           <>
             {open && (
@@ -645,15 +787,9 @@ export function AssistantBrowserPanel({
                 refresh={refresh}
               />
             )}
-            <AssistantBrowserTaskCard task={task} refresh={refresh} />
           </>
         ) : (
           <div className="assistant-browser-start">
-            <div className="assistant-browser-welcome">
-              <GlobalOutlined aria-hidden />
-              <h4>从一个网页开始</h4>
-              <p>输入网址，或告诉小序要在网页上完成什么</p>
-            </div>
             <form
               className="assistant-browser-search"
               onSubmit={(event) => {
@@ -661,7 +797,7 @@ export function AssistantBrowserPanel({
                 void start();
               }}
             >
-              <SearchOutlined aria-hidden />
+              <GlobalOutlined aria-hidden />
               <Input
                 variant="borderless"
                 aria-label="网址或网页任务"
@@ -704,56 +840,6 @@ export function AssistantBrowserPanel({
             {startError && <Alert type="error" showIcon title={startError} />}
           </div>
         )}
-        <details className="assistant-browser-settings">
-          <summary>浏览器设置与登录状态</summary>
-          <p>
-            网页任务在小序的独立浏览器中执行，不占用你的鼠标和键盘。同一账号换电脑登录后，可继续查看任务和已保存的网页会话。
-          </p>
-          {error ? (
-            <Alert type="error" title={error} />
-          ) : !data?.ready ? (
-            <Alert
-              type="warning"
-              showIcon
-              title={data ? "独立浏览器暂不可用" : "正在核对独立浏览器"}
-              description={
-                data?.note ||
-                "服务尚未就绪，请稍后刷新。不会切换到我的电脑或网站内执行。"
-              }
-            />
-          ) : (
-            <Alert
-              type="success"
-              showIcon
-              title="独立浏览器已就绪"
-              description={
-                data.note ||
-                "描述目标后，小序会连续操作；需要你处理的步骤会暂停并提示接管。"
-              }
-            />
-          )}
-          <Space wrap>
-            <Button
-              type="primary"
-              disabled={disabled || !data?.ready}
-              onClick={choose}
-            >
-              使用小序独立浏览器
-            </Button>
-            <Button
-              disabled={disabled || clearing || !data?.profile}
-              loading={clearing}
-              onClick={clear}
-            >
-              清除浏览器登录状态
-            </Button>
-          </Space>
-          <p className="assistant-browser-session">
-            {data?.profile?.hasSavedSession
-              ? "此账号已保存网页会话；登录是否仍有效以目标网站为准。"
-              : "尚未保存网页登录状态；需要时可在画面中自行登录。"}
-          </p>
-        </details>
         {(!data?.ready || error) && (
           <Alert
             type="warning"

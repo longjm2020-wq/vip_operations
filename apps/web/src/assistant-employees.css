@@ -139,26 +139,35 @@
 .employee-panel-heading {
   display: flex;
   align-items: center;
-  gap: 8px;
+  min-width: 0;
+  gap: 6px;
 }
 .employee-panel-heading > button {
-  margin-left: auto;
+  flex-shrink: 0;
+}
+.employee-panel-heading > span {
+  flex-shrink: 0;
+}
+.employee-panel-heading .employee-avatar {
+  width: 28px;
+  height: 28px;
+  font-size: 15px;
+}
+.employee-dispatch-avatar {
+  --employee-color: #9baaff;
 }
 .employee-switcher {
-  width: 100%;
+  flex: 1;
+  min-width: 0;
+  font-weight: 500;
 }
-.employee-profile-heading {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-.employee-profile-heading p {
-  margin: 4px 0 0;
+.employee-current-status {
+  max-width: 90px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
   color: var(--text-secondary, #97a0b2);
-  font-size: 12px;
-}
-.employee-panel .ant-tabs-nav {
-  margin-bottom: 0;
+  font-size: 11px;
 }
 .employee-chat-history {
   display: flex;
@@ -360,6 +369,9 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
 }
 .employee-directory > button:not(.ant-btn) {
   border: 0;

@@ -11,6 +11,7 @@ import {
 
 const taskId = "11111111-1111-4111-8111-111111111111";
 const frameId = "22222222-2222-4222-8222-222222222222";
+const historyTaskId = "33333333-3333-4333-8333-333333333333";
 const modelId = "engine/aaaaaaaaaaaaaaaaaaaaaaaa";
 const makeTask = (): BrowserTask => ({
   id: taskId,
@@ -36,6 +37,8 @@ async function fixture(page: Page) {
     actions: [] as Record<string, any>[],
     rejectAction: false,
     frame: null as BrowserFrame | null,
+    frames: {} as Record<string, BrowserFrame | null>,
+    frameRequests: [] as string[],
     saved: true,
     cleared: 0,
   };
@@ -151,9 +154,15 @@ async function fixture(page: Page) {
         stage: "等待独立浏览器",
       };
       state.tasks = [data as BrowserTask];
-    } else if (path === `/my-workspace/assistant/browser/tasks/${taskId}/frame`)
-      data = state.frame;
-    else if (
+    } else if (
+      /^\/my-workspace\/assistant\/browser\/tasks\/[^/]+\/frame$/.test(path)
+    ) {
+      const selectedTask = path.split("/").at(-2)!;
+      state.frameRequests.push(selectedTask);
+      data = Object.hasOwn(state.frames, selectedTask)
+        ? state.frames[selectedTask]
+        : state.frame;
+    } else if (
       path === `/my-workspace/assistant/browser/tasks/${taskId}/control`
     ) {
       const action = request.postDataJSON().action;
@@ -247,7 +256,7 @@ for (const viewport of [
   { name: "desktop", width: 1440, height: 1000 },
   { name: "mobile", width: 390, height: 844 },
 ]) {
-  test(`长浏览器任务与真实 1280 截图在 ${viewport.name} 面板内完整缩放，不横向溢出`, async ({
+  test(`完成态在 ${viewport.name} 只保留浏览器工具、地址与只读画面，历史和刷新仍可达`, async ({
     page,
   }) => {
     const { state } = await fixture(page);
@@ -292,8 +301,49 @@ for (const viewport of [
     await expect(image).toHaveJSProperty("naturalWidth", 1280);
     await expect(image).toHaveJSProperty("naturalHeight", 800);
     await expect(
-      panel.locator(".assistant-browser-task-heading strong"),
-    ).toHaveText(instruction);
+      panel.getByRole("button", { name: "浏览器标签与会话菜单", exact: true }),
+    ).toContainText("Example Domains");
+    await expect(
+      panel.getByLabel("当前网页地址", { exact: true }),
+    ).toContainText(state.tasks[0].url);
+    await expect(
+      panel.getByLabel("最终画面只读", { exact: true }),
+    ).toBeVisible();
+    await expect(panel.getByRole("heading")).toHaveCount(0);
+    await expect(
+      panel.getByRole("region", {
+        name: `浏览器任务：${instruction}`,
+        exact: true,
+      }),
+    ).toHaveCount(0);
+    await expect(panel.getByRole("combobox")).toHaveCount(0);
+    await expect(panel.getByText(instruction, { exact: true })).toHaveCount(0);
+    await expect(panel.getByRole("button", { name: /刷新/ })).toHaveCount(1);
+    await expect(
+      panel.getByRole("button", { name: "刷新浏览器状态", exact: true }),
+    ).toBeVisible();
+    await expect(
+      panel.getByRole("button", { name: "新建浏览器任务", exact: true }),
+    ).toBeVisible();
+    await expect(
+      panel.getByRole("button", { name: "关闭浏览器面板", exact: true }),
+    ).toBeVisible();
+    await expect(
+      page
+        .locator(".workspace-right")
+        .getByRole("navigation", { name: "右栏工具", exact: true }),
+    ).toBeHidden();
+    await expect(
+      page
+        .locator(".workspace-right")
+        .getByRole("combobox", { name: "执行位置", exact: true }),
+    ).toHaveCount(0);
+    await expect(
+      panel.getByLabel("向当前焦点输入文字", { exact: true }),
+    ).toHaveCount(0);
+    await expect(
+      panel.getByRole("button", { name: "点击独立浏览器画面", exact: true }),
+    ).toBeDisabled();
     const dimensions = await panel.evaluate((element) => {
       const drawer = element.closest<HTMLElement>(
         ".workspace-tools-host, .ant-drawer-body",
@@ -308,7 +358,7 @@ for (const viewport of [
         boxes: [
           element,
           ...element.querySelectorAll(
-            ".assistant-browser-task-select,.assistant-browser-task,.assistant-browser-takeover,.assistant-browser-screen,.assistant-browser-screen img",
+            ".assistant-browser-tabbar,.assistant-browser-takeover,.assistant-browser-screen,.assistant-browser-screen img",
           ),
         ].map((box) => {
           const rect = box.getBoundingClientRect();
@@ -346,8 +396,62 @@ for (const viewport of [
       ).toBeHidden();
     }
     await page.screenshot({
-      path: `.local/browser-long-task-${viewport.name}.png`,
+      path: `.local/browser-minimal-done-${viewport.name}.png`,
     });
+    state.tasks.push({
+      ...makeTask(),
+      id: historyTaskId,
+      status: "DONE",
+      instruction: "查看历史帮助页",
+      title: "历史帮助页",
+      url: "https://example.com/history",
+    });
+    state.frames[historyTaskId] = {
+      ...state.frame!,
+      frameId: crypto.randomUUID(),
+      url: "https://example.com/history",
+      title: "历史帮助页",
+    };
+    await panel
+      .getByRole("button", { name: "刷新浏览器状态", exact: true })
+      .click();
+    await panel
+      .getByRole("button", { name: "浏览器标签与会话菜单", exact: true })
+      .click();
+    await expect(
+      page.getByRole("menuitem", { name: "清除浏览器登录状态", exact: true }),
+    ).toBeVisible();
+    await page
+      .getByRole("menuitem", { name: "已完成 · 查看历史帮助页", exact: true })
+      .click();
+    await expect(
+      panel.getByRole("button", { name: "浏览器标签与会话菜单", exact: true }),
+    ).toContainText("历史帮助页");
+    await expect(
+      panel.getByLabel("当前网页地址", { exact: true }),
+    ).toContainText("https://example.com/history");
+    const reads = state.frameRequests.filter(
+      (id) => id === historyTaskId,
+    ).length;
+    state.frames[historyTaskId] = {
+      ...state.frames[historyTaskId]!,
+      frameId: crypto.randomUUID(),
+      url: "https://example.com/history-updated",
+    };
+    await panel
+      .getByRole("button", { name: "刷新浏览器状态", exact: true })
+      .click();
+    await expect
+      .poll(
+        () => state.frameRequests.filter((id) => id === historyTaskId).length,
+      )
+      .toBeGreaterThan(reads);
+    await expect(
+      panel.getByLabel("当前网页地址", { exact: true }),
+    ).toContainText("https://example.com/history-updated");
+    expect(state.actions).toEqual([]);
+    expect(state.controls).toEqual([]);
+    expect(state.browserRequests).toEqual([]);
   });
 }
 
@@ -362,7 +466,7 @@ test("独立浏览器未就绪不影响网站对话，显式选择后阻断且�
   await composer.locator("textarea").fill("保留这个网页任务草稿");
   await chooseBrowser(page);
   await expect(
-    page.getByRole("heading", { name: "小序独立浏览器" }),
+    page.getByRole("button", { name: "浏览器标签与会话菜单", exact: true }),
   ).toBeVisible();
   await expect(
     page
@@ -426,7 +530,7 @@ test("独立浏览器目标发送、后台进度与跨页面恢复保留同一�
   expect(state.requests[0].webOpenResult).toBeUndefined();
   expect(page.context().pages()).toHaveLength(1);
   await expect(
-    page.getByRole("heading", { name: "浏览器画面", exact: true }),
+    page.getByRole("img", { name: "小序独立浏览器当前截图", exact: true }),
   ).toBeVisible();
   await expect(
     page.getByRole("region", { name: "浏览器任务：打开百度" }),
@@ -551,34 +655,46 @@ test("浏览器截图接管绑定新画面，旧画面不重放，继续与清�
     capturedAt: new Date().toISOString(),
     expiresAt: new Date(Date.now() + 86400000).toISOString(),
   };
-  await expect(
-    page.getByRole("heading", { name: "完成时画面", exact: true }),
-  ).toBeVisible({ timeout: 8000 });
+  await expect(page.getByLabel("最终画面只读", { exact: true })).toBeVisible({
+    timeout: 8000,
+  });
   await expect(screen).toBeDisabled();
   await expect(
     page.getByRole("img", { name: "小序独立浏览器当前截图" }),
   ).toBeVisible();
-  await expect(page.getByText(/最终画面仅供查看，保留至/)).toBeVisible();
+  await expect(
+    page.getByLabel("最终画面只读", { exact: true }),
+  ).toHaveAttribute("title", /保留至/);
   await expect(
     page.getByLabel("向当前焦点输入文字", { exact: true }),
   ).toHaveCount(0);
-  await page.locator(".assistant-browser-settings summary").click();
   await page
-    .getByRole("button", { name: "清除浏览器登录状态", exact: true })
+    .getByRole("button", { name: "浏览器标签与会话菜单", exact: true })
+    .click();
+  await page
+    .getByRole("menuitem", { name: "清除浏览器登录状态", exact: true })
     .click();
   await page.getByRole("button", { name: "保留", exact: true }).click();
   expect(state.cleared).toBe(0);
+  await expect(
+    page.getByRole("img", { name: "小序独立浏览器当前截图", exact: true }),
+  ).toBeVisible();
   await page
-    .getByRole("button", { name: "清除浏览器登录状态", exact: true })
+    .getByRole("button", { name: "浏览器标签与会话菜单", exact: true })
+    .click();
+  await page
+    .getByRole("menuitem", { name: "清除浏览器登录状态", exact: true })
     .click();
   await page.getByRole("button", { name: "清除并停止", exact: true }).click();
   await expect.poll(() => state.cleared).toBe(1);
+  await page
+    .getByRole("button", { name: "浏览器标签与会话菜单", exact: true })
+    .click();
+  await expect(page.getByRole("menu")).toContainText("未保存网页登录状态");
   await expect(
-    page.getByText("尚未保存网页登录状态；需要时可在画面中自行登录。", {
-      exact: true,
-    }),
+    page.getByRole("menuitem", { name: /已停止 · 打开示例网站并查找帮助/ }),
   ).toBeVisible();
-  await expect(page.locator("[data-browser-task-id]")).toContainText("已停止");
+  await page.keyboard.press("Escape");
   await expect(
     page.getByRole("img", { name: "小序独立浏览器当前截图" }),
   ).toHaveCount(0);
@@ -598,15 +714,15 @@ test("工作台三栏保留原场景与草稿，左右收起和调宽不提交�
   await expect(center.locator(".personal-workspace")).toBeVisible();
   await expect(center.locator(".workspace-world-controls")).toBeVisible();
   await expect(center.locator(".workspace-date")).toHaveCount(0);
-  await expect(center.getByRole("combobox", { name: "执行位置" })).toHaveCount(
-    0,
-  );
+  await expect(
+    center.getByRole("combobox", { name: "执行位置", exact: true }),
+  ).toBeVisible();
   await expect(center.locator(".assistant-desktop-entry")).toHaveCount(0);
   await expect(
     page
       .locator(".workspace-right")
       .getByRole("combobox", { name: "执行位置" }),
-  ).toBeVisible();
+  ).toHaveCount(0);
   await expect(center.locator(".assistant-execution-hint")).toContainText(
     "网站内",
   );
@@ -630,7 +746,7 @@ test("工作台三栏保留原场景与草稿，左右收起和调宽不提交�
     .getByRole("button", { name: "收起工作区导航", exact: true })
     .click();
   await page
-    .getByRole("button", { name: "收起右侧工具栏", exact: true })
+    .getByRole("button", { name: "关闭浏览器面板", exact: true })
     .click();
   await expect(panel).toBeHidden();
   expect((await center.boundingBox())!.width).toBeGreaterThan(centerBox!.width);
@@ -658,7 +774,7 @@ test("工作台三栏保留原场景与草稿，左右收起和调宽不提交�
   );
   await page.screenshot({ path: ".local/workspace-columns-scene.png" });
   await page
-    .getByRole("button", { name: "收起右侧工具栏", exact: true })
+    .getByRole("button", { name: "关闭浏览器面板", exact: true })
     .click();
   await page.reload();
   await expect(
@@ -677,7 +793,7 @@ test("工作台三栏保留原场景与草稿，左右收起和调宽不提交�
     makeTask(),
     {
       ...makeTask(),
-      id: "33333333-3333-4333-8333-333333333333",
+      id: historyTaskId,
       title: "历史网页",
       instruction: "查看历史网页",
       status: "DONE",
@@ -687,10 +803,11 @@ test("工作台三栏保留原场景与草稿，左右收起和调宽不提交�
   await expect(panel.locator(".assistant-browser-tab")).toContainText(
     "示例网站",
   );
-  await panel.getByRole("combobox", { name: "选择浏览器任务" }).click();
+  await panel
+    .getByRole("button", { name: "浏览器标签与会话菜单", exact: true })
+    .click();
   await page
-    .locator(".ant-select-dropdown:visible")
-    .getByText("已完成 · 查看历史网页", { exact: true })
+    .getByRole("menuitem", { name: "已完成 · 查看历史网页", exact: true })
     .click();
   await expect(panel.locator(".assistant-browser-tab")).toContainText(
     "历史网页",
@@ -717,6 +834,11 @@ for (const width of [1440, 390]) {
     const panel = page.locator(".assistant-browser-panel");
     const input = panel.getByRole("textbox", { name: "网址或网页任务" });
     const submit = panel.getByRole("button", { name: "开始浏览器任务" });
+    await expect(input).toBeVisible();
+    await expect(panel.getByRole("heading")).toHaveCount(0);
+    await expect(panel.getByRole("combobox")).toHaveCount(0);
+    await expect(panel.getByRole("button", { name: /刷新/ })).toHaveCount(1);
+    await page.screenshot({ path: `.local/browser-minimal-new-${width}.png` });
     await input.fill("file:///C:/private");
     await input.press("Enter");
     await expect(panel.getByRole("alert")).toContainText("HTTP/HTTPS");
@@ -729,7 +851,7 @@ for (const width of [1440, 390]) {
     state.createError = "";
     await submit.click();
     await expect(
-      panel.getByRole("heading", { name: "浏览器画面", exact: true }),
+      panel.getByRole("img", { name: "小序独立浏览器当前截图", exact: true }),
     ).toBeVisible();
     expect(state.browserRequests).toHaveLength(2);
     expect(state.browserRequests[1]).toEqual({

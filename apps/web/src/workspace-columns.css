@@ -104,27 +104,6 @@
   flex-direction: column;
   overflow: hidden;
 }
-.workspace-execution-controls {
-  flex-shrink: 0;
-  padding: 8px 14px;
-  border-bottom: 1px solid var(--app-shell-border);
-  color: var(--app-secondary);
-  font-size: 12px;
-}
-.workspace-execution-select {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-.workspace-execution-select .ant-select {
-  flex: 1;
-  min-width: 0;
-  max-width: 240px;
-}
-.workspace-execution-controls p {
-  margin: 6px 0 0;
-  line-height: 1.6;
-}
 .workspace-tool-panels {
   overflow: auto;
   padding: 16px;
@@ -142,9 +121,6 @@
 }
 .workspace-tool-panels .assistant-browser-panel {
   height: 100%;
-}
-.workspace-tool-panels .assistant-browser-expand {
-  display: none;
 }
 .workspace-tool-panels .assistant-desktop-panel {
   max-width: 100%;

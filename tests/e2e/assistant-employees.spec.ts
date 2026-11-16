@@ -261,6 +261,92 @@ async function openEmployee(page: Page, name: string) {
   ).toBeVisible();
 }
 
+test("紧凑员工栏保留切换、配置返回与新增，长称呼在手机不撑开布局", async ({
+  page,
+}) => {
+  const f = await setup(page, 2);
+  const longName = "面料细节与商品背景修饰专员";
+  f.employees[0].name = longName;
+  f.employees[0].activeTasks = 1;
+  f.employees[0].queuedTasks = 2;
+  await page.goto("/my-workspace");
+  await openEmployee(page, longName);
+  const panel = page.getByRole("region", { name: "AI 员工工作台" });
+  const heading = panel.locator(".employee-panel-heading");
+  await expect(heading.locator(".employee-avatar")).toHaveCount(1);
+  await expect(panel.getByRole("combobox", { name: "选择员工" })).toHaveCount(
+    1,
+  );
+  await expect(panel.getByRole("tablist")).toHaveCount(0);
+  await expect(panel.locator(".employee-profile-heading")).toHaveCount(0);
+  await expect(heading.getByRole("status")).toHaveText("执行中 1");
+  expect((await heading.boundingBox())!.height).toBeLessThanOrEqual(40);
+  const draft = "只整理背景，保留所有面料纹理";
+  await panel.getByRole("textbox", { name: "交办员工任务" }).fill(draft);
+  await page.mouse.move(200, 700);
+  await expect(page.locator(".ant-tooltip:visible")).toHaveCount(0);
+  await page.screenshot({ path: ".local/employees-compact-desktop.png" });
+  await heading.getByRole("button", { name: "员工配置", exact: true }).click();
+  await expect(panel.getByRole("textbox", { name: "员工称呼" })).toHaveValue(
+    longName,
+  );
+  await heading
+    .getByRole("button", { name: "返回员工聊天", exact: true })
+    .click();
+  await expect(
+    panel.getByRole("textbox", { name: "交办员工任务" }),
+  ).toHaveValue(draft);
+  const chooseEmployee = async (name: string) => {
+    await heading.getByRole("combobox", { name: "选择员工" }).click();
+    await page
+      .locator(".ant-select-dropdown:visible")
+      .getByText(name, { exact: true })
+      .click();
+    await expect(page.locator(".ant-select-dropdown:visible")).toHaveCount(0);
+  };
+  await chooseEmployee("视频师");
+  await expect(
+    panel.getByRole("textbox", { name: "交办员工任务" }),
+  ).toHaveValue("");
+  await chooseEmployee("小序派单");
+  await heading.getByRole("button", { name: "员工管理", exact: true }).click();
+  await expect(
+    panel.getByRole("button", { name: "配齐岗位技能", exact: true }),
+  ).toBeVisible();
+  await heading
+    .getByRole("button", { name: "返回小序派单", exact: true })
+    .click();
+  await expect(panel.getByRole("combobox", { name: "协作员工" })).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await chooseEmployee(longName);
+  await expect(
+    panel.getByRole("textbox", { name: "交办员工任务" }),
+  ).toHaveValue(draft);
+  expect((await heading.boundingBox())!.height).toBeLessThanOrEqual(40);
+  expect(
+    await heading.evaluate(
+      (element) => element.scrollWidth <= element.clientWidth + 1,
+    ),
+  ).toBe(true);
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth + 1,
+    ),
+  ).toBe(true);
+  await page.screenshot({ path: ".local/employees-compact-mobile.png" });
+  await heading.getByRole("button", { name: "新建员工", exact: true }).click();
+  await expect(panel.getByRole("textbox", { name: "员工称呼" })).toBeVisible();
+  await heading
+    .getByRole("button", { name: "返回小序派单", exact: true })
+    .click();
+  await expect(
+    panel.getByRole("textbox", { name: "交办员工任务" }),
+  ).toBeVisible();
+  expect(f.employees).toHaveLength(2);
+  expect(f.submissions).toHaveLength(0);
+  expect(f.personal).toHaveLength(0);
+});
+
 test("新建员工保存到目录，固定工作模型作用于配置，刷新后仍有入口", async ({
   page,
 }) => {
@@ -369,7 +455,7 @@ test("配置冲突保留输入；手机右栏可收起且不横向溢出", async
   await setup(page, 1, true);
   await page.goto("/my-workspace");
   await openEmployee(page, "修图师");
-  await page.getByRole("tab", { name: "配置" }).click();
+  await page.getByRole("button", { name: "员工配置", exact: true }).click();
   await page
     .getByRole("textbox", { name: "员工称呼" })
     .fill("保留我的配置草稿");
@@ -475,7 +561,7 @@ test("岗位技能批量补空，模板预览和 MD 导入下载不提前保存�
   const f = await setup(page, 2);
   f.employees[1].skill = "保留原有视频规范";
   await page.goto("/my-workspace?assistant=employees");
-  await page.getByRole("tab", { name: "员工管理", exact: true }).click();
+  await page.getByRole("button", { name: "员工管理", exact: true }).click();
   await page.getByRole("button", { name: "配齐岗位技能", exact: true }).click();
   await expect(
     page.getByText("已配置 1 位，保留已有技能 1 位", { exact: true }),
@@ -483,7 +569,7 @@ test("岗位技能批量补空，模板预览和 MD 导入下载不提前保存�
   expect(f.employees[0].skill).toBe(f.skills[0].content);
   expect(f.employees[1].skill).toBe("保留原有视频规范");
   await openEmployee(page, "修图师");
-  await page.getByRole("tab", { name: "配置", exact: true }).click();
+  await page.getByRole("button", { name: "员工配置", exact: true }).click();
   await page.getByRole("button", { name: "技能与知识", exact: true }).click();
   await expect(
     page.getByRole("textbox", { name: "员工技能", exact: true }),
@@ -515,7 +601,7 @@ test("岗位技能批量补空，模板预览和 MD 导入下载不提前保存�
     .toBe("# 自定义修图规范\n保留面料纹理和所有扣件。");
   await page.reload();
   await openEmployee(page, "修图师");
-  await page.getByRole("tab", { name: "配置", exact: true }).click();
+  await page.getByRole("button", { name: "员工配置", exact: true }).click();
   await page.getByRole("button", { name: "技能与知识", exact: true }).click();
   await expect(
     page.getByRole("textbox", { name: "员工技能", exact: true }),

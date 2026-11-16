@@ -882,6 +882,17 @@ body:has(.assistant-screen.ant-drawer-open) .companion-voice-prompt {
   line-height: 1.7;
   margin-top: 8px;
 }
+.assistant-execution-hint {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px;
+}
+.assistant-execution-hint .ant-select {
+  width: 166px;
+  max-width: 100%;
+  font-size: 12px;
+}
 .assistant-desktop-task-heading {
   display: flex;
   align-items: baseline;

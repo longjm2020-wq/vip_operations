@@ -1266,8 +1266,10 @@ export function PersonalAssistantProvider({
   const executionSelector = (
     <Select
       size="small"
+      variant={docked ? "borderless" : "outlined"}
       aria-label="执行位置"
-      value={desktopMode ? "computer" : desktopChoice.mode}
+      value={teamMode ? undefined : desktopMode ? "computer" : desktopChoice.mode}
+      placeholder={teamMode ? "智能体团队" : undefined}
       disabled={busy || voice.listening}
       loading={desktopConnecting}
       options={[
@@ -1288,11 +1290,6 @@ export function PersonalAssistantProvider({
       }}
     />
   );
-  const executionNote = desktopMode
-    ? `仅发送本条指令，请移除附件。${desktopTarget && !desktopTarget.crossWindowAuthorized ? "设备授权尚未开启，任务需在所选电脑允许。" : ""}`
-    : browserMode
-      ? "仅发送本条指令，请移除附件。需要你处理时可查看画面并接管。"
-      : undefined;
   const sender = (inDrawer = false) => (
     <div
       className="assistant-compose"
@@ -1532,8 +1529,14 @@ export function PersonalAssistantProvider({
         />
       )}
       {docked && (
-        <div className="assistant-execution-hint" aria-label="当前执行位置">
-          执行位置：{executionLabel}
+        <div
+          className="assistant-execution-hint"
+          aria-label="当前执行位置"
+          title={executionLabel}
+        >
+          <span>执行位置：</span>
+          {executionSelector}
+          {desktopMode && desktopTarget && <span>· {desktopTarget.name}</span>}
         </div>
       )}
       {!docked && desktopMode && (
@@ -2177,21 +2180,9 @@ export function PersonalAssistantProvider({
       {docked &&
         workspaceToolsHost &&
         createPortal(
-          <>
-            <div
-              className="workspace-execution-controls"
-              hidden={panelSection === "employees"}
-            >
-              <div className="workspace-execution-select">
-                <span>执行位置</span>
-                {executionSelector}
-              </div>
-              {executionNote && <p>{executionNote}</p>}
-            </div>
-            <div className="workspace-tool-panels" data-tool={panelSection}>
-              {panels}
-            </div>
-          </>,
+          <div className="workspace-tool-panels" data-tool={panelSection}>
+            {panels}
+          </div>,
           workspaceToolsHost,
         )}
       {docked &&
