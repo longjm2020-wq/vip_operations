@@ -217,6 +217,71 @@ const finalFrame = () => ({
   title: "完成结果",
 });
 describe("independent assistant browser", () => {
+  it.each([1920, 2560])(
+    "publishes and reads a %ipx full-screen frame after resizing without weakening frame receipts",
+    async (width) => {
+      await heartbeatBrowserWorker(true);
+      const task = await queueBrowserBrowse(actor(), {
+        requestId: randomUUID(),
+        url: "https://example.com/",
+        viewport: { width: 907, height: 773 },
+      });
+      const initial = (await claimBrowserTask())!;
+      expect(initial.id).toBe(task.id);
+      await frame(initial);
+      const requestId = randomUUID();
+      const resized = await queueBrowserNavigation(actor(), task.id, {
+        requestId,
+        epoch: initial.epoch,
+        action: { kind: "resize", viewport: { width, height: 837 } },
+      });
+      expect(resized).toMatchObject({
+        status: "PAUSED",
+        viewport: { width, height: 837 },
+      });
+      expect(await browserTaskFrame(actor(), task.id)).toBeNull();
+      const current = (await currentBrowserTask(initial))!;
+      const navigation = (await takeBrowserNavigationAction(current))!;
+      expect(navigation.action).toEqual({
+        kind: "resize",
+        viewport: { width, height: 837 },
+      });
+      expect(await completeBrowserAction(current, navigation.id)).toBe(true);
+      const captured = { ...finalFrame(), width, height: 837 };
+      expect(await publishBrowserFrame(current, captured)).toBe(true);
+      expect(await browserTaskFrame(actor(), task.id)).toMatchObject({
+        frameId: captured.frameId,
+        width,
+        height: 837,
+        epoch: current.epoch,
+        appliedRequestId: requestId,
+        image: "data:image/jpeg;base64," + captured.jpeg.toString("base64"),
+      });
+      expect(
+        (await browserStatus(actor())).tasks.find(
+          (item) => item.id === task.id,
+        ),
+      ).toMatchObject({ navigationState: "READY" });
+      expect(await publishBrowserFrame(initial, captured)).toBe(false);
+      expect(
+        await publishBrowserFrame(current, {
+          ...captured,
+          frameId: randomUUID(),
+          width: 2561,
+        }),
+      ).toBe(false);
+      expect(
+        await publishBrowserFrame(current, {
+          ...captured,
+          frameId: randomUUID(),
+          height: 1601,
+        }),
+      ).toBe(false);
+      expect((await browserTaskFrame(actor(), task.id))?.frameId).toBe(
+        captured.frameId,
+      );
+    },
+  );
   it("retains the original stable-frame expiry and consumes it once before acknowledging a new frame", async () => {
     const initial = await started();
     await controlBrowserTask(actor(), initial.id, { action: "pause" });

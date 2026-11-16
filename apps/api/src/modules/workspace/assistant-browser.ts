@@ -979,7 +979,7 @@ function validBrowserFrame(frame: BrowserCapturedFrame) {
     Number.isInteger(frame.height) &&
     frame.width >= 100 &&
     frame.height >= 100 &&
-    frame.width <= 1600 &&
+    frame.width <= 2560 &&
     frame.height <= 1600
   );
 }
