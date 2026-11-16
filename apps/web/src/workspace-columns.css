@@ -4,7 +4,7 @@
       0,
       clamp(320px, var(--workspace-right-width, 42%), calc(100% - 386px))
     );
-  height: calc(100dvh - var(--workspace-topbar-height, 68px) - 16px);
+  height: calc(100dvh - var(--workspace-topbar-height, 48px) - 16px);
   min-height: 0;
   width: 100%;
   overflow: hidden;

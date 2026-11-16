@@ -136,7 +136,7 @@
 }
 .personal-workspace[data-world-mode]:has(> .workspace-hologram) {
   min-height: max(
-    calc(100dvh - var(--workspace-topbar-height, 68px)),
+    calc(100dvh - var(--workspace-topbar-height, 48px)),
     var(--hologram-reserved-height, 0px)
   );
 }
@@ -157,14 +157,6 @@
   }
   .workspace-hologram-controls {
     gap: 3px;
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .workspace-hologram[data-hologram-presence] {
-    animation: none;
-  }
-  .workspace-hologram * {
-    scroll-behavior: auto;
   }
 }
 
@@ -261,14 +253,5 @@
   }
   to {
     transform: translate(var(--star-dx), var(--star-dy)) scale(1.15);
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .personal-workspace[data-scene-presence]
-    :is(.workspace-ai-core-stage, .workspace-quiet) {
-    animation: none;
-  }
-  .workspace-scene-nebula {
-    display: none;
   }
 }

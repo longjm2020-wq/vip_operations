@@ -314,16 +314,6 @@
   .workspace-flow-trail {
   animation-play-state: paused;
 }
-@media (prefers-reduced-motion: reduce) {
-  .personal-workspace:not([data-workspace-ring-motion="enabled"])
-    .workspace-flow-trail,
-  body:not(:has(.personal-workspace[data-workspace-ring-motion="enabled"]))
-    .workspace-branch-panel-link
-    .workspace-flow-trail {
-    display: none;
-    animation: none;
-  }
-}
 .workspace-branch-panel-link {
   position: fixed;
   inset: 0;
@@ -333,18 +323,16 @@
   pointer-events: none;
   overflow: visible;
 }
-@media (prefers-reduced-motion: no-preference) {
-  .workspace-world-plane > .workspace-ai-core {
-    transition:
-      left 360ms ease,
-      width 360ms ease;
-  }
-  .workspace-dock-item {
-    transition:
-      left 360ms ease,
-      top 360ms ease,
-      transform 360ms ease;
-  }
+.workspace-world-plane > .workspace-ai-core {
+  transition:
+    left 360ms ease,
+    width 360ms ease;
+}
+.workspace-dock-item {
+  transition:
+    left 360ms ease,
+    top 360ms ease,
+    transform 360ms ease;
 }
 @media (max-width: 767px) {
   .personal-workspace[data-workspace-layout="branches"] {
@@ -588,16 +576,6 @@
   }
 }
 /* These rings are decoration, independent of paused orbital positioning. */
-@media (prefers-reduced-motion: reduce) {
-  .personal-workspace:not([data-workspace-ring-motion="enabled"])
-    .workspace-dock-halo-sweep,
-  .personal-workspace:not([data-workspace-ring-motion="enabled"])
-    .workspace-dock-halo-counter,
-  .personal-workspace:not([data-workspace-ring-motion="enabled"])
-    .workspace-dock-label::before {
-    animation: none;
-  }
-}
 .personal-workspace[data-world-mode] .assistant-compose {
   position: relative;
   z-index: 4;
@@ -691,7 +669,7 @@
 }
 @media (max-width: 767px) {
   .personal-workspace[data-world-mode] {
-    min-height: calc(100dvh - var(--workspace-topbar-height, 58px));
+    min-height: calc(100dvh - var(--workspace-topbar-height, 48px));
     padding: 12px 12px 24px;
   }
   .personal-workspace[data-world-mode] .personal-welcome {
@@ -725,13 +703,6 @@
   .workspace-voice-slot .companion-voice-inline p {
     max-height: 3.2em;
     font-size: 13px;
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .workspace-world-plane,
-  .workspace-dock-label,
-  .workspace-world-controls * {
-    transition: none;
   }
 }
 .workspace-voice-slot:has(> .companion-voice-prompt) {

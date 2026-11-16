@@ -37,10 +37,11 @@ describe('private browser RPC',() => {
     const f=fixture();await f.client.initialize(null);
     const current=vi.fn(async()=>true);
     await f.client.navigate({kind:'goto',url:'https://example.com/'},current,new AbortController().signal);
-    await f.client.navigate({kind:'resize',viewport:{width:700,height:900}},current,new AbortController().signal);
+    await f.client.navigate({kind:'resize',viewport:{width:1920,height:900}},current,new AbortController().signal);
     expect(f.dispatches).toEqual(['navigate:goto','navigate:resize']);expect(current).toHaveBeenCalledTimes(2);
     await expect(f.client.navigate({kind:'reload'},async()=>false,new AbortController().signal)).rejects.toThrow('BROWSER_HANDOFF');
     expect(browserRpcRequest.safeParse({v:1,id:9,op:'navigate',action:{kind:'goto',url:'file:///secret'}}).success).toBe(false);
+    expect(browserRpcRequest.safeParse({v:1,id:10,op:'navigate',action:{kind:'resize',viewport:{width:2561,height:900}}}).success).toBe(false);
     await f.client.close();
   });
   it('opens one owned session, returns bounded observations/frames and asks permission at dispatch',async () => {

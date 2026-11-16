@@ -291,10 +291,8 @@ export function WorkspaceTeamOrbit({
     } catch {
       /* Session memory is enough when storage is unavailable. */
     }
-    if (!matchMedia("(prefers-reduced-motion: reduce)").matches) {
-      collectionTime.current = 0;
-      setCollecting(true);
-    }
+    collectionTime.current = 0;
+    setCollecting(true);
   }, [run, covered, visible, seenKey]);
   const delivered = run?.status === "DONE" && !collecting && !pending.current;
   const orbiting = !!run && !delivered && !collecting && !error;

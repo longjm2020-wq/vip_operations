@@ -42,8 +42,8 @@
   box-shadow: none;
 }
 .workspace-future .topbar {
-  height: 68px;
-  min-height: 68px;
+  height: 48px;
+  min-height: 48px;
   flex-wrap: nowrap;
   padding: 0 32px;
   background: var(--app-header);
@@ -131,8 +131,8 @@ body:has(.workspace-future) .account-dropdown-profile small {
   }
   .workspace-future .topbar {
     padding: 0 14px;
-    height: 58px;
-    min-height: 58px;
+    height: 48px;
+    min-height: 48px;
   }
   .workspace-future .content {
     padding: 8px;

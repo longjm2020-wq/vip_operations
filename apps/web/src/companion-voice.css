@@ -187,8 +187,3 @@
     transform: scaleY(0.3);
   }
 }
-@media (prefers-reduced-motion: reduce) {
-  .companion-voice-wave i {
-    animation: none !important;
-  }
-}

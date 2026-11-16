@@ -29,27 +29,12 @@ export function useWorkspaceSceneCover(active: boolean) {
 export function useWorkspacePresence(active: boolean): WorkspacePresence {
   const [phase, setPhase] = useState<WorkspacePresence>("closed");
   useLayoutEffect(() => {
-    const reduced = matchMedia("(prefers-reduced-motion: reduce)");
-    let timer: ReturnType<typeof setTimeout> | undefined;
     const settle = () => setPhase(active ? "open" : "closed");
-    const change = () => {
-      if (reduced.matches) {
-        clearTimeout(timer);
-        settle();
-      }
-    };
-    if (reduced.matches) settle();
-    else {
-      setPhase((previous) =>
-        active ? "entering" : previous === "closed" ? "closed" : "leaving",
-      );
-      timer = setTimeout(settle, 520);
-    }
-    reduced.addEventListener("change", change);
-    return () => {
-      clearTimeout(timer);
-      reduced.removeEventListener("change", change);
-    };
+    setPhase((previous) =>
+      active ? "entering" : previous === "closed" ? "closed" : "leaving",
+    );
+    const timer = setTimeout(settle, 520);
+    return () => clearTimeout(timer);
   }, [active]);
   return phase;
 }

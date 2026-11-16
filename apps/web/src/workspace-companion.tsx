@@ -174,7 +174,6 @@ export function WorkspaceCompanion() {
     return node;
   });
   const panel = useRef<HTMLDivElement>(null);
-  const busy = useRef(false);
   const suppressClick = useRef(false);
   const controls = useRef({
     active: () => {},
@@ -192,19 +191,6 @@ export function WorkspaceCompanion() {
     motion: "idle",
     perched: false,
   });
-  const working = !!(
-    hub.voiceVisible ||
-    hub.busy ||
-    hub.voiceState ||
-    hub.feed?.items?.some(
-      (item) => item.kind === "task" && item.status === "running",
-    )
-  );
-  useLayoutEffect(() => {
-    busy.current = working;
-    if (working) controls.current.active();
-  }, [working]);
-
   useLayoutEffect(() => {
     const state: CompanionView = {
       docked: false,
@@ -237,7 +223,6 @@ export function WorkspaceCompanion() {
     let climbFrame = 0;
     let perch: ClimbTarget | null = null;
     let parked: Position | undefined;
-    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)");
     try {
       const saved = JSON.parse(localStorage.getItem(storageKey) || "null");
       if (saved && Number.isFinite(saved.x) && Number.isFinite(saved.y))
@@ -361,7 +346,6 @@ export function WorkspaceCompanion() {
     };
     const active = () => {
       lastActive = Date.now();
-      if (transition?.automatic) cancelTransition();
       if (state.motion === "peek") {
         state.motion = "idle";
         publish();
@@ -504,8 +488,7 @@ export function WorkspaceCompanion() {
         }
       };
       publish();
-      if (reduced.matches) finish();
-      else {
+      {
         const started = performance.now();
         const animate = (now: number) => {
           if (!target.element.isConnected || document.hidden) {
@@ -601,16 +584,11 @@ export function WorkspaceCompanion() {
           attach(false);
           position(target, false);
         }
-        state.motion = reduced.matches ? "idle" : "arriving";
+        state.motion = "arriving";
         publish();
-        if (reduced.matches) finish();
-        else transition!.timers.push(setTimeout(finish, 420));
+        transition!.timers.push(setTimeout(finish, 420));
       };
       transition = { automatic, timers: [] };
-      if (reduced.matches) {
-        arrive();
-        return;
-      }
       state.motion = jump && state.docked ? "jumping" : "departing";
       publish();
       transition.timers.push(
@@ -879,15 +857,6 @@ export function WorkspaceCompanion() {
         publish();
       }
     };
-    const onReducedMotion = () => {
-      cancelTransition();
-      active();
-      if (perch) {
-        state.perched = true;
-        followAnchor();
-        publish();
-      }
-    };
     // Workspace cards retain their DOM when closed. Observe only that portal's
     // geometry/visibility so reopening or moving a card also runs avoidance.
     let workspaceCard: HTMLElement | null = null;
@@ -929,17 +898,12 @@ export function WorkspaceCompanion() {
     window.addEventListener("xuti-workspace-layout", scheduleAnchor);
     window.addEventListener("xuti-companion-command", onCommand);
     document.addEventListener("visibilitychange", onVisibility);
-    reduced.addEventListener("change", onReducedMotion);
     const timer = setInterval(() => {
       const blocked =
-        busy.current ||
-        nest?.closest('[data-team-active="true"]') ||
         perch ||
         drag ||
         document.hidden ||
         innerWidth < 768 ||
-        reduced.matches ||
-        panel.current?.matches(":hover, :focus-within") ||
         document.activeElement?.matches(
           "input, textarea, select, [contenteditable=true]",
         ) ||
@@ -993,7 +957,6 @@ export function WorkspaceCompanion() {
       window.removeEventListener("xuti-workspace-layout", scheduleAnchor);
       window.removeEventListener("xuti-companion-command", onCommand);
       document.removeEventListener("visibilitychange", onVisibility);
-      reduced.removeEventListener("change", onReducedMotion);
       host.remove();
     };
   }, [host, storageKey]);

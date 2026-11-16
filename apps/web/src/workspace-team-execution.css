@@ -306,12 +306,3 @@
     opacity: 0;
   }
 }
-@media (prefers-reduced-motion: reduce) {
-  .team-execution-caret,
-  .team-execution-status .anticon-spin {
-    animation: none;
-  }
-  .team-execution-rail summary > .anticon:last-child {
-    transition: none;
-  }
-}

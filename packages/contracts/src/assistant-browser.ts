@@ -51,7 +51,7 @@ export const browserTaskSchema = z
   .strict();
 export const browserViewportSchema = z
   .object({
-    width: z.number().int().min(320).max(1600),
+    width: z.number().int().min(320).max(2560),
     height: z.number().int().min(240).max(1600),
   })
   .strict();

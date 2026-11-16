@@ -24,6 +24,8 @@ import {
   ExpandOutlined,
   CompressOutlined,
   DoubleRightOutlined,
+  FullscreenOutlined,
+  FullscreenExitOutlined,
   GlobalOutlined,
   PauseOutlined,
   PlayCircleOutlined,
@@ -324,6 +326,7 @@ function BrowserTakeover({
   const readOnly = task?.status === "DONE" || frame.data?.readOnly === true;
   const manual =
     live && ["PAUSED", "NEEDS_USER"].includes(task!.status) && !readOnly;
+  const canResize = live && !readOnly && task?.status !== "QUEUED";
   const loading =
     task?.navigationState === "LOADING" ||
     task?.navigationState === "STARTING" ||
@@ -347,7 +350,7 @@ function BrowserTakeover({
       timer = setTimeout(() => {
         const width = Math.max(
           320,
-          Math.min(1600, Math.round(entry.contentRect.width)),
+          Math.min(2560, Math.round(entry.contentRect.width)),
         );
         const height = Math.max(
           240,
@@ -556,8 +559,8 @@ function BrowserTakeover({
   };
   const navigation = async (action: BrowserNavigationAction) => {
     if (operation.current || abort.current?.signal.aborted) return;
-    if (!manual && action.kind !== "goto") return;
-    if (live && !manual) {
+    if (!manual && action.kind !== "goto" && action.kind !== "resize") return;
+    if (live && !manual && action.kind !== "resize") {
       report(new Error("请先暂停小序操作，再浏览网页"));
       return;
     }
@@ -611,7 +614,7 @@ function BrowserTakeover({
   };
   useEffect(() => {
     if (
-      !manual ||
+      !canResize ||
       loading ||
       pending ||
       !task ||
@@ -641,7 +644,7 @@ function BrowserTakeover({
     return () => clearTimeout(timer);
     // The dispatch reads the current task and epoch; rerun when the live frame settles.
   }, [
-    manual,
+    canResize,
     loading,
     pending,
     viewport.width,
@@ -795,7 +798,16 @@ function BrowserTakeover({
         (isActiveBrowserTask(task) || task.status === "FAILED") && (
           <AssistantBrowserTaskCard task={task} refresh={refresh} inline />
         )}
-      <div className="assistant-browser-page" ref={page}>
+      <div
+        className="assistant-browser-page"
+        ref={page}
+        onPointerDownCapture={(event) => {
+          if (pending && manual && !navigating) {
+            event.preventDefault();
+            keyboard.current?.focus({ preventScroll: true });
+          }
+        }}
+      >
         {frame.data ? (
           <button
             ref={screen}
@@ -803,7 +815,7 @@ function BrowserTakeover({
             className="assistant-browser-screen"
             aria-label="点击独立浏览器画面"
             aria-busy={pending || loading}
-            disabled={!usable && !pending}
+            disabled={!usable || pending}
             onClick={click}
             onFocus={() => {
               if (manual) keyboard.current?.focus({ preventScroll: true });
@@ -915,10 +927,50 @@ export function AssistantBrowserPanel({
   const [clearing, setClearing] = useState(false);
   const [closing, setClosing] = useState(false);
   const [newTab, setNewTab] = useState(false);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const [fullscreen, setFullscreen] = useState(false);
+  const [pageFullscreen, setPageFullscreen] = useState(false);
   const request = useRef<{ value: string; id: string } | null>(null);
   const clearDialog = useRef<{ destroy: () => void } | null>(null);
   const mounted = useRef(true);
   useEffect(() => setNewTab(false), [selectedId]);
+  useEffect(() => {
+    const changed = () =>
+      setFullscreen(document.fullscreenElement === panelRef.current);
+    document.addEventListener("fullscreenchange", changed);
+    return () => document.removeEventListener("fullscreenchange", changed);
+  }, []);
+  useEffect(() => {
+    if (!pageFullscreen && !fullscreen) return;
+    const escape = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        setPageFullscreen(false);
+        if (document.fullscreenElement === panelRef.current)
+          void document.exitFullscreen();
+      }
+    };
+    window.addEventListener("keydown", escape, true);
+    return () => window.removeEventListener("keydown", escape, true);
+  }, [pageFullscreen, fullscreen]);
+  const leaveFullscreen = async () => {
+    setPageFullscreen(false);
+    if (document.fullscreenElement === panelRef.current)
+      await document.exitFullscreen();
+  };
+  const toggleFullscreen = async () => {
+    if (fullscreen || pageFullscreen) {
+      await leaveFullscreen();
+      return;
+    }
+    try {
+      if (!panelRef.current?.requestFullscreen) throw new Error("unsupported");
+      await panelRef.current.requestFullscreen();
+    } catch {
+      if (mounted.current) setPageFullscreen(true);
+    }
+  };
   useEffect(() => {
     mounted.current = true;
     return () => {
@@ -981,7 +1033,9 @@ export function AssistantBrowserPanel({
       if (mounted.current) onSubmitting(false);
     }
   };
-  const clear = () => {
+  const clear = async () => {
+    await leaveFullscreen();
+    if (!mounted.current) return;
     clearDialog.current = modal.confirm({
       title: "清除独立浏览器登录状态？",
       content:
@@ -1033,7 +1087,11 @@ export function AssistantBrowserPanel({
     }
   };
   return (
-    <div className="assistant-browser-panel">
+    <div
+      ref={panelRef}
+      className={`assistant-browser-panel${pageFullscreen ? " assistant-browser-page-fullscreen" : ""}`}
+      data-browser-fullscreen={fullscreen || pageFullscreen}
+    >
       <div className="assistant-browser-tabbar">
         <div
           className="assistant-browser-tab"
@@ -1041,6 +1099,7 @@ export function AssistantBrowserPanel({
         >
           <Dropdown
             trigger={["click"]}
+            getPopupContainer={() => panelRef.current || document.body}
             menu={{
               className: "assistant-browser-menu",
               selectedKeys: task ? [`task:${task.id}`] : [],
@@ -1105,7 +1164,7 @@ export function AssistantBrowserPanel({
                   selectTask(key.slice(5));
                 } else if (key === "choose") choose();
                 else if (key === "expand") toggleExpanded();
-                else if (key === "clear") clear();
+                else if (key === "clear") void clear();
               },
             }}
           >
@@ -1142,10 +1201,30 @@ export function AssistantBrowserPanel({
           <Button
             type="text"
             size="small"
+            icon={
+              fullscreen || pageFullscreen ? (
+                <FullscreenExitOutlined />
+              ) : (
+                <FullscreenOutlined />
+              )
+            }
+            aria-label={fullscreen || pageFullscreen ? "退出全屏" : "全屏查看"}
+            title={
+              fullscreen || pageFullscreen
+                ? "退出全屏（Esc）"
+                : "全屏查看浏览器"
+            }
+            onClick={() => void toggleFullscreen()}
+          />
+          <Button
+            type="text"
+            size="small"
             icon={<DoubleRightOutlined />}
             aria-label={embedded ? "关闭浏览器面板" : "返回对话"}
             title="收起面板，保留当前网页"
-            onClick={returnToChat}
+            onClick={() => {
+              void leaveFullscreen().finally(returnToChat);
+            }}
           />
         </div>
       </div>

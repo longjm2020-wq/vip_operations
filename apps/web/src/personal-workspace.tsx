@@ -102,27 +102,12 @@ function WorkspaceFloatingPanel({
     "entering" | "open" | "leaving" | "hidden"
   >(open ? "entering" : "hidden");
   useLayoutEffect(() => {
-    const reduced = matchMedia("(prefers-reduced-motion: reduce)");
-    let timer: ReturnType<typeof setTimeout> | undefined;
     const settle = () => setPresence(open ? "open" : "hidden");
-    const motionChanged = () => {
-      if (reduced.matches) {
-        clearTimeout(timer);
-        settle();
-      }
-    };
-    if (reduced.matches) settle();
-    else {
-      setPresence((previous) =>
-        open ? "entering" : previous === "hidden" ? "hidden" : "leaving",
-      );
-      timer = setTimeout(settle, 340);
-    }
-    reduced.addEventListener("change", motionChanged);
-    return () => {
-      clearTimeout(timer);
-      reduced.removeEventListener("change", motionChanged);
-    };
+    setPresence((previous) =>
+      open ? "entering" : previous === "hidden" ? "hidden" : "leaving",
+    );
+    const timer = setTimeout(settle, 340);
+    return () => clearTimeout(timer);
   }, [open]);
   const box = useRef<HTMLDivElement>(null),
     handle = useRef<HTMLButtonElement>(null);

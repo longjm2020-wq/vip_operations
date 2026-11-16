@@ -161,7 +161,9 @@ export function PersonalAssistantProvider({
     useState<AssistantToolSection>("browser");
   const [workspaceChatOpen, setWorkspaceChatOpen] = useState(false);
   const [selectedEmployee, setSelectedEmployee] = useState<string>();
-  const [employeeDrafts, setEmployeeDrafts] = useState<Record<string, EmployeeDraft>>({});
+  const [employeeDrafts, setEmployeeDrafts] = useState<
+    Record<string, EmployeeDraft>
+  >({});
   useEffect(() => {
     setSelectedEmployee(undefined);
     setEmployeeDrafts({});
@@ -434,7 +436,9 @@ export function PersonalAssistantProvider({
     setSection("browser");
     setOpen(true);
   }, [browser.data, browserMode]);
-  const activeBrowserTask = browser.data?.tasks.find((task) => isActiveBrowserTask(task) && task.mode !== "BROWSE");
+  const activeBrowserTask = browser.data?.tasks.find(
+    (task) => isActiveBrowserTask(task) && task.mode !== "BROWSE",
+  );
   const browserProblem = !browserMode
     ? ""
     : browser.isPending
@@ -889,7 +893,11 @@ export function PersonalAssistantProvider({
           throw new Error(
             current.data?.note || "独立浏览器暂不可用，未切换到其他执行位置。",
           );
-        if (current.data.tasks.some((task) => isActiveBrowserTask(task) && task.mode !== "BROWSE")) {
+        if (
+          current.data.tasks.some(
+            (task) => isActiveBrowserTask(task) && task.mode !== "BROWSE",
+          )
+        ) {
           message.info(
             "已显示当前浏览器任务。指令已保留，请先继续或停止当前任务，无需重复发送。",
           );
@@ -1151,9 +1159,15 @@ export function PersonalAssistantProvider({
     const params = new URLSearchParams(location.search);
     const target = params.get("assistant");
     if (
-      !["chat", "team", "desktop", "browser", "voice", "tasks", "employees"].includes(
-        target || "",
-      ) ||
+      ![
+        "chat",
+        "team",
+        "desktop",
+        "browser",
+        "voice",
+        "tasks",
+        "employees",
+      ].includes(target || "") ||
       consumedAssistantLink.current === location.key
     )
       return;
@@ -1268,31 +1282,36 @@ export function PersonalAssistantProvider({
       : desktopMode
         ? `我的电脑 · ${desktopTarget?.name || "尚未选择设备"}`
         : "网站内";
+  const changeExecution = (value: string) => {
+    if (busy || voice.listening) return;
+    if (value === "site") {
+      rememberDesktop();
+      setTeamMode(false);
+    } else if (value === "browser") chooseBrowser();
+    else if (value === "computer") {
+      if (nativeDesktop) void setupDesktop();
+      else if (desktopTarget?.online) chooseDesktop(desktopTarget.id);
+      else selectSection("desktop");
+    }
+  };
+  const executionOptions = [
+    { value: "site", label: "网站内" },
+    { value: "browser", label: "小序独立浏览器" },
+    { value: "computer", label: "我的电脑" },
+  ];
   const executionSelector = (
     <Select
       size="small"
       variant={docked ? "borderless" : "outlined"}
       aria-label="执行位置"
-      value={teamMode ? undefined : desktopMode ? "computer" : desktopChoice.mode}
+      value={
+        teamMode ? undefined : desktopMode ? "computer" : desktopChoice.mode
+      }
       placeholder={teamMode ? "智能体团队" : undefined}
       disabled={busy || voice.listening}
       loading={desktopConnecting}
-      options={[
-        { value: "site", label: "网站内" },
-        { value: "browser", label: "小序独立浏览器" },
-        { value: "computer", label: "我的电脑" },
-      ]}
-      onChange={(value) => {
-        if (value === "site") {
-          rememberDesktop();
-          setTeamMode(false);
-        } else if (value === "browser") chooseBrowser();
-        else if (value === "computer") {
-          if (nativeDesktop) void setupDesktop();
-          else if (desktopTarget?.online) chooseDesktop(desktopTarget.id);
-          else selectSection("desktop");
-        }
-      }}
+      options={executionOptions}
+      onChange={changeExecution}
     />
   );
   const sender = (inDrawer = false) => (
@@ -1365,6 +1384,30 @@ export function PersonalAssistantProvider({
             change={setAgent}
             disabled={busy || voice.listening}
             onUploading={setUploading}
+            menuCurrent={docked ? executionLabel : undefined}
+            menu={
+              docked
+                ? {
+                    className: "assistant-compose-menu",
+                    selectable: true,
+                    selectedKeys: teamMode
+                      ? []
+                      : [desktopMode ? "computer" : desktopChoice.mode],
+                    items: [
+                      {
+                        key: "execution",
+                        type: "group",
+                        label: `执行位置 · 当前：${executionLabel}`,
+                        children: executionOptions.map((option) => ({
+                          key: option.value,
+                          label: option.label,
+                        })),
+                      },
+                    ],
+                    onClick: ({ key }) => changeExecution(key),
+                  }
+                : undefined
+            }
             actions={
               <div className="assistant-send-actions">
                 {!externalMode && (
@@ -1532,17 +1575,6 @@ export function PersonalAssistantProvider({
             "团队服务尚未就绪，请检查团队设置"
           }
         />
-      )}
-      {docked && (
-        <div
-          className="assistant-execution-hint"
-          aria-label="当前执行位置"
-          title={executionLabel}
-        >
-          <span>执行位置：</span>
-          {executionSelector}
-          {desktopMode && desktopTarget && <span>· {desktopTarget.name}</span>}
-        </div>
       )}
       {!docked && desktopMode && (
         <div className="assistant-desktop-note">

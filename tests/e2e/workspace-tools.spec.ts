@@ -114,6 +114,87 @@ async function fixture(
   return { workspace, writes };
 }
 
+test("减少动态偏好下数字雨、小序身体和星环在悬停与输入时持续播放", async ({
+  page,
+}) => {
+  const state = await fixture(page);
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto("/my-workspace");
+  const rain = page.locator(".workspace-world-backdrop");
+  const body = page.locator(".workspace-companion .companion-body");
+  const rings = page.locator(
+    ".workspace-ai-core-aura, .workspace-ai-core-outer",
+  );
+  await expect(body).toBeVisible();
+  const pixels = () =>
+    rain.evaluate((node) => (node as HTMLCanvasElement).toDataURL());
+  const moving = async () => {
+    const previous = await pixels();
+    await expect.poll(pixels).not.toBe(previous);
+    for (const node of [body, ...(await rings.all())]) {
+      await expect(node).not.toHaveCSS("animation-name", "none");
+      await expect(node).toHaveCSS("animation-play-state", "running");
+      const time = () =>
+        node.evaluate((element) =>
+          Number(element.getAnimations()[0]?.currentTime),
+        );
+      const before = await time();
+      await expect.poll(time).toBeGreaterThan(before);
+    }
+  };
+  await page.locator(".workspace-companion .companion-launch").hover();
+  await moving();
+  await page
+    .locator(".assistant-compose textarea")
+    .fill("动画继续，草稿不发送");
+  await moving();
+  // Service availability changes appearance, never disables local scenery.
+  await page.locator(".workspace-ai").evaluate((node) => {
+    (node as HTMLElement).dataset.coreState = "unavailable";
+  });
+  await moving();
+  expect(state.writes).toEqual([]);
+});
+
+test("减少动态偏好下小序沿卡片真实爬升再停靠", async ({ page }) => {
+  const state = await fixture(page);
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto("/my-workspace");
+  const companion = page.locator(".workspace-companion");
+  await expect(companion).toBeVisible();
+  await expect(companion).toHaveAttribute("data-docked", "true");
+  await page.clock.install();
+  await page.evaluate(() => {
+    const card = document.createElement("div");
+    card.className = "ant-card motion-test-card";
+    card.style.cssText =
+      "position:fixed;left:400px;top:180px;width:320px;height:460px;background:#222;z-index:1900";
+    document.body.append(card);
+  });
+  await page.clock.runFor(400);
+  await page.evaluate(() => {
+    window.dispatchEvent(
+      new CustomEvent("xuti-companion-command", { detail: "climb" }),
+    );
+  });
+  await expect(companion).toHaveAttribute("data-motion", "climbing");
+  await expect(companion.locator(".companion-body")).toHaveCSS(
+    "animation-name",
+    "companion-climb",
+  );
+  const origin = await companion.boundingBox();
+  await page.clock.runFor(400);
+  const midway = await companion.boundingBox();
+  expect(midway).not.toEqual(origin);
+  await expect(companion).toHaveAttribute("data-motion", "climbing");
+  await page.clock.runFor(650);
+  await expect(companion).toHaveAttribute("data-motion", "idle");
+  await expect(companion).toHaveAttribute("data-perched", "true");
+  expect(await companion.boundingBox()).not.toEqual(midway);
+  expect(state.writes).toEqual([]);
+});
+
 test("移除工具菜单后中央保留小序，旧偏好不恢复菜单、圆形入口或分支开关", async ({
   page,
 }) => {
@@ -150,11 +231,12 @@ for (const width of [1440, 390]) {
     const state = await fixture(page);
     await page.setViewportSize({ width, height: 1000 });
     await page.goto("/my-workspace?assistant=browser");
+    await expect(page.locator(".topbar")).toHaveCSS("height", "48px");
     const browser = page.locator(".assistant-browser-panel");
     const right = page.getByRole("complementary", { name: "右侧工具栏" });
     const center = page.getByRole("region", { name: "工作台中栏" });
-    const execution = center.getByRole("combobox", {
-      name: "执行位置",
+    const execution = center.getByRole("button", {
+      name: "输入框菜单",
       exact: true,
     });
     await expect(browser).toBeVisible();
@@ -197,6 +279,35 @@ for (const width of [1440, 390]) {
     await expect(execution).toBeVisible();
     const draft = center.locator(".assistant-compose:visible textarea");
     await draft.fill("切换工具后仍保留的草稿");
+    await expect(center.locator(".assistant-execution-hint")).toHaveCount(0);
+    await expect(
+      center.getByRole("combobox", { name: "执行位置", exact: true }),
+    ).toHaveCount(0);
+    await execution.click();
+    await expect(page.locator(".assistant-compose-menu:visible")).toContainText(
+      "执行位置 · 当前：网站内",
+    );
+    await expect(
+      page.getByRole("menuitem", { name: "网站内", exact: true }),
+    ).toHaveClass(/ant-dropdown-menu-item-selected/);
+    const chooserPromise = page.waitForEvent("filechooser");
+    await page.getByRole("menuitem", { name: "添加附件", exact: true }).click();
+    await (await chooserPromise).setFiles([]);
+    await selectAssistantExecution(page, "小序独立浏览器");
+    if (width === 390)
+      await page
+        .getByRole("button", { name: "关闭浏览器面板", exact: true })
+        .click();
+    await execution.click();
+    await expect(page.locator(".assistant-compose-menu:visible")).toContainText(
+      "执行位置 · 当前：小序独立浏览器",
+    );
+    await page.screenshot({ path: `.local/assistant-input-menu-${width}.png` });
+    await expect(
+      page.getByRole("menuitem", { name: "小序独立浏览器", exact: true }),
+    ).toHaveClass(/ant-dropdown-menu-item-selected/);
+    await page.getByRole("menuitem", { name: "网站内", exact: true }).click();
+    await expect(draft).toHaveValue("切换工具后仍保留的草稿");
     await selectAssistantPanel(page, "独立浏览器");
     await expect(browser).toBeVisible();
     if (width === 1440) {

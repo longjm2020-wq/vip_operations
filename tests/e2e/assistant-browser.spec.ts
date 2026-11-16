@@ -603,8 +603,8 @@ test("独立浏览器目标发送、后台进度与跨页面恢复保留同一�
   await expect(composer.locator("textarea")).toHaveValue("继续查找帮助");
   await page.reload();
   await expect(
-    page.locator(".assistant-compose:visible .assistant-execution-hint"),
-  ).toContainText("小序独立浏览器");
+    page.locator(".assistant-compose:visible [aria-label='输入框菜单']"),
+  ).toHaveAttribute("title", /小序独立浏览器/);
   await expect(
     page.locator(".assistant-compose:visible [data-browser-task-id]"),
   ).toContainText("请接管完成登录");
@@ -612,8 +612,8 @@ test("独立浏览器目标发送、后台进度与跨页面恢复保留同一�
   state.tasks = [];
   await page.reload();
   await expect(
-    page.locator(".assistant-compose:visible .assistant-execution-hint"),
-  ).toContainText("网站内");
+    page.locator(".assistant-compose:visible [aria-label='输入框菜单']"),
+  ).toHaveAttribute("title", /网站内/);
   expect(
     await page.evaluate(() => localStorage.getItem("xuti-assistant-desktop:8")),
   ).toBeNull();
@@ -643,6 +643,13 @@ test("网页内键盘、中文与粘贴串行等待执行回执，旧画面不�
     bounds.y + bounds.height / 2,
   );
   await expect.poll(() => state.actions.length).toBe(1);
+  await expect(screen).toBeDisabled();
+  await expect(screen).toHaveCSS("cursor", "progress");
+  await page.mouse.click(
+    bounds.x + bounds.width / 2,
+    bounds.y + bounds.height / 2,
+  );
+  expect(state.actions).toHaveLength(1);
   expect(state.actions[0]).toMatchObject({
     frameId: oldFrame,
     action: { kind: "click" },
@@ -801,7 +808,7 @@ test("工作台三栏保留原场景与草稿，左右收起和调宽不提交�
   await expect(center.locator(".workspace-world-controls")).toBeVisible();
   await expect(center.locator(".workspace-date")).toHaveCount(0);
   await expect(
-    center.getByRole("combobox", { name: "执行位置", exact: true }),
+    center.getByRole("button", { name: "输入框菜单", exact: true }),
   ).toBeVisible();
   await expect(center.locator(".assistant-desktop-entry")).toHaveCount(0);
   await expect(
@@ -809,8 +816,9 @@ test("工作台三栏保留原场景与草稿，左右收起和调宽不提交�
       .locator(".workspace-right")
       .getByRole("combobox", { name: "执行位置" }),
   ).toHaveCount(0);
-  await expect(center.locator(".assistant-execution-hint")).toContainText(
-    "网站内",
+  await expect(center.locator("[aria-label='输入框菜单']")).toHaveAttribute(
+    "title",
+    /网站内/,
   );
   await draft.fill("保留中栏工作台草稿");
   const centerBox = await center.boundingBox();
@@ -841,8 +849,9 @@ test("工作台三栏保留原场景与草稿，左右收起和调宽不提交�
   await expect(
     page.locator(".workspace-right .assistant-desktop-panel"),
   ).toBeVisible();
-  await expect(center.locator(".assistant-execution-hint")).toContainText(
-    "网站内",
+  await expect(center.locator("[aria-label='输入框菜单']")).toHaveAttribute(
+    "title",
+    /网站内/,
   );
   await expect(draft).toHaveValue("保留中栏工作台草稿");
   await selectAssistantPanel(page, "独立浏览器");
@@ -963,8 +972,8 @@ for (const width of [1440, 390]) {
       .getByRole("button", { name: "关闭浏览器面板", exact: true })
       .click();
     await expect(
-      page.locator(".assistant-compose:visible .assistant-execution-hint"),
-    ).toContainText("小序独立浏览器");
+      page.locator(".assistant-compose:visible [aria-label='输入框菜单']"),
+    ).toHaveAttribute("title", /小序独立浏览器/);
     expect(state.controls).toEqual([]);
   });
 }
@@ -973,6 +982,7 @@ test("直接浏览不依赖模型，真实导航和视口随面板变化，地�
   page,
 }) => {
   const { state } = await fixture(page);
+  await page.setViewportSize({ width: 1920, height: 1080 });
   state.ready = false;
   state.canBrowse = true;
   state.tasks = [
@@ -996,7 +1006,7 @@ test("直接浏览不依赖模型，真实导航和视口随面板变化，地�
   const viewport = state.navigations.at(-1)!.action.viewport;
   const region = await panel.locator(".assistant-browser-page").boundingBox();
   expect(viewport.width).toBe(
-    Math.max(320, Math.min(1600, Math.round(region!.width))),
+    Math.max(320, Math.min(2560, Math.round(region!.width))),
   );
   expect(viewport.height).toBe(
     Math.max(240, Math.min(1600, Math.round(region!.height))),
@@ -1038,6 +1048,90 @@ test("直接浏览不依赖模型，真实导航和视口随面板变化，地�
   expect(state.browserRequests).toEqual([]);
   expect(state.requests).toEqual([]);
   expect(state.controls).toEqual([]);
+  const originalWidth = (await panel.boundingBox())!.width;
+  await panel.getByRole("button", { name: "全屏查看", exact: true }).click();
+  await expect(panel).toHaveAttribute("data-browser-fullscreen", "true");
+  await expect
+    .poll(() =>
+      panel.evaluate((element) => document.fullscreenElement === element),
+    )
+    .toBe(true);
+  await expect
+    .poll(async () => (await panel.boundingBox())!.width)
+    .toBeGreaterThan(originalWidth + 200);
+  await expect
+    .poll(() => state.navigations.at(-1)!.action.viewport?.width)
+    .toBe(1920);
+  await expect(screen).toHaveAttribute("aria-busy", "false");
+  await page.screenshot({ path: ".local/browser-fullscreen.png" });
+  await panel
+    .getByRole("button", { name: "浏览器标签与会话菜单", exact: true })
+    .click();
+  await expect(panel.locator(".assistant-browser-menu")).toBeVisible();
+  await expect(panel.locator(".assistant-browser-menu")).toBeInViewport();
+  await panel
+    .getByRole("menuitem", { name: "清除浏览器登录状态", exact: true })
+    .click();
+  await expect(panel).toHaveAttribute("data-browser-fullscreen", "false");
+  await expect(
+    page.getByRole("button", { name: "清除并停止", exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "保留", exact: true }).click();
+  expect(state.cleared).toBe(0);
+  await expect
+    .poll(async () =>
+      Math.abs((await panel.boundingBox())!.width - originalWidth),
+    )
+    .toBeLessThan(2);
+  await expect
+    .poll(() => state.navigations.at(-1)!.action.viewport?.width)
+    .toBeLessThan(originalWidth + 2);
+  await expect(screen).toHaveAttribute("aria-busy", "false");
+  await panel.evaluate((element) =>
+    Object.defineProperty(element, "requestFullscreen", {
+      value: undefined,
+      configurable: true,
+    }),
+  );
+  await panel.getByRole("button", { name: "全屏查看", exact: true }).click();
+  await expect(panel).toHaveClass(/assistant-browser-page-fullscreen/);
+  await expect.poll(async () => (await panel.boundingBox())!.width).toBe(1920);
+  await expect
+    .poll(() => state.navigations.at(-1)!.action.viewport?.width)
+    .toBe(1920);
+  await expect(screen).toHaveAttribute("aria-busy", "false");
+  await panel.getByLabel("网页键盘输入", { exact: true }).focus();
+  const actionsBeforeEscape = state.actions.length;
+  await page.keyboard.press("Escape");
+  await expect(panel).toHaveAttribute("data-browser-fullscreen", "false");
+  expect(state.actions).toHaveLength(actionsBeforeEscape);
+  state.tasks[0].mode = "AGENT";
+  state.tasks[0].status = "RUNNING";
+  state.tasks[0].automationStatus = "RUNNING";
+  await expect(
+    panel.getByRole("button", { name: "暂停浏览器任务", exact: true }),
+  ).toBeVisible({ timeout: 8000 });
+  await expect
+    .poll(() => state.navigations.at(-1)!.action.viewport?.width)
+    .toBeLessThan(originalWidth + 2);
+  await expect(screen).toHaveAttribute("aria-busy", "false");
+  const beforeAgentFullscreen = state.navigations.length;
+  await panel.getByRole("button", { name: "全屏查看", exact: true }).click();
+  await expect
+    .poll(() => state.navigations.length)
+    .toBeGreaterThan(beforeAgentFullscreen);
+  await expect
+    .poll(() => state.navigations.at(-1)!.action.viewport?.width)
+    .toBe(1920);
+  await expect(screen).toHaveAttribute("aria-busy", "false");
+  expect(state.tasks[0]).toMatchObject({
+    mode: "AGENT",
+    status: "RUNNING",
+    automationStatus: "RUNNING",
+  });
+  expect(state.controls).toEqual([]);
+  expect(state.actions).toEqual([]);
+  await panel.getByRole("button", { name: "退出全屏", exact: true }).click();
   await page.setViewportSize({ width: 390, height: 844 });
   await expect
     .poll(() => state.navigations.at(-1)!.action.viewport?.width)

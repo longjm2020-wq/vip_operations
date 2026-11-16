@@ -52,7 +52,6 @@ function ReturnedText({
     current.identity = identity;
     current.text = text;
     setDisplay(text.slice(0, current.shown));
-    const reduced = matchMedia("(prefers-reduced-motion: reduce)");
     let frame = 0;
     let previous = 0;
     const paint = (now: number) => {
@@ -61,8 +60,7 @@ function ReturnedText({
         previous = 0;
         return;
       }
-      if (reduced.matches) current.shown = text.length;
-      else if (previous)
+      if (previous)
         current.shown = Math.min(
           text.length,
           current.shown +
@@ -77,11 +75,9 @@ function ReturnedText({
       if (!frame) frame = requestAnimationFrame(paint);
     };
     resume();
-    reduced.addEventListener("change", resume);
     document.addEventListener("visibilitychange", resume);
     return () => {
       cancelAnimationFrame(frame);
-      reduced.removeEventListener("change", resume);
       document.removeEventListener("visibilitychange", resume);
     };
   }, [text, identity, paused]);

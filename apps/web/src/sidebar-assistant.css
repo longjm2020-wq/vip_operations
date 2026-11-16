@@ -104,7 +104,11 @@
   --companion-blue-edge: var(--app-accent);
   --companion-blue-glow: color-mix(in srgb, var(--app-accent) 60%, #ffffff);
   --companion-blue-halo: color-mix(in srgb, var(--app-accent) 88%, transparent);
-  --companion-blue-ambient: color-mix(in srgb, var(--app-accent-fill) 50%, transparent);
+  --companion-blue-ambient: color-mix(
+    in srgb,
+    var(--app-accent-fill) 50%,
+    transparent
+  );
   --companion-mouth-stroke: color-mix(in srgb, var(--app-accent) 60%, #ffffff);
 }
 :root[data-theme="light"] {
@@ -114,7 +118,11 @@
   --companion-blue-edge: var(--app-accent);
   --companion-blue-glow: #9fb0f5;
   --companion-blue-halo: color-mix(in srgb, var(--app-accent) 88%, transparent);
-  --companion-blue-ambient: color-mix(in srgb, var(--app-accent) 50%, transparent);
+  --companion-blue-ambient: color-mix(
+    in srgb,
+    var(--app-accent) 50%,
+    transparent
+  );
   --companion-mouth-stroke: #8e9eef;
 }
 .companion-eye-dot {
@@ -597,16 +605,6 @@
     display: none;
   }
 }
-@media (prefers-reduced-motion: reduce) {
-  /* Keep the explicitly enabled facial feedback; the body and other effects
-     still follow the system preference. */
-  .sidebar-assistant *:not(.companion-eye-dot):not(.companion-mouth-open),
-  .sidebar-assistant *::before,
-  .sidebar-assistant *::after {
-    animation: none !important;
-    transition: none !important;
-  }
-}
 /* The companion lives outside the card layout; only the character and actions accept clicks. */
 .workspace-companion-host {
   position: fixed;
@@ -711,11 +709,6 @@
     transform: translateY(-4px) rotate(4deg);
   }
 }
-@media (prefers-reduced-motion: reduce) {
-  .workspace-companion .companion-body {
-    animation: none;
-  }
-}
 
 .companion-reminder {
   padding: 5px 3px;
@@ -736,27 +729,8 @@
 }
 
 /* The anchor stays in the 3D scene, but the interactive character is above masks. */
-body:has(.workspace-companion[data-docked="true"]:is(:hover, :focus-within))
-  :is(
-    .workspace-ai-core-aura,
-    .workspace-ai-core-resonance,
-    .workspace-ai-core-orbits,
-    .workspace-ai-core-orbits > g,
-    .workspace-dock-orbit,
-    .workspace-dock-face
-  ),
-body:has(.workspace-companion[data-docked="true"]:is(:hover, :focus-within))
-  .workspace-dock-item::before {
-  animation-play-state: paused;
-}
 .workspace-companion[data-motion="climbing"] .companion-launch {
   cursor: grabbing;
-}
-body:has(.workspace-companion[data-docked="true"]:is(:hover, :focus-within))
-  :is(.workspace-dock-halo-sweep, .workspace-dock-halo-counter),
-body:has(.workspace-companion[data-docked="true"]:is(:hover, :focus-within))
-  .workspace-dock-label::before {
-  animation-play-state: paused;
 }
 .workspace-companion[data-motion="climbing"] .companion-launch {
   pointer-events: none;
@@ -783,11 +757,6 @@ body:has(.workspace-companion[data-docked="true"]:is(:hover, :focus-within))
   }
   50% {
     transform: translateY(-3px) rotate(4deg);
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .workspace-companion[data-motion="climbing"] .companion-body {
-    animation: none;
   }
 }
 .workspace-companion[data-docked="true"] .companion-stage {
@@ -1097,28 +1066,6 @@ body:has(.workspace-companion[data-docked="true"]:is(:hover, :focus-within))
     transform: translate(-32%, -65%) scale(1.15);
   }
 }
-@media (prefers-reduced-motion: reduce) {
-  .workspace-companion::before,
-  .workspace-companion::after {
-    display: none !important;
-    animation: none !important;
-  }
-  .workspace-companion[data-motion] .companion-stage {
-    animation: none !important;
-    transition: none !important;
-    clip-path: none !important;
-    transform: none !important;
-    filter: none !important;
-    opacity: 1 !important;
-  }
-  .sidebar-assistant[data-state="listening"] .companion-robot,
-  .sidebar-assistant[data-state="speaking"] .companion-robot,
-  .sidebar-assistant[data-state="working"] .companion-figure,
-  .sidebar-assistant[data-state="connecting"] .companion-figure {
-    animation: none;
-    filter: none;
-  }
-}
 
 /* The workspace starts with one quiet, explicit voice entry. */
 .companion-voice-prompt > button {
@@ -1182,21 +1129,69 @@ body:has(.workspace-companion[data-docked="true"]:is(:hover, :focus-within))
 }
 .companion-voice::before {
   background:
-    radial-gradient(ellipse at 22% 62%, color-mix(in srgb, var(--app-accent) 22%, transparent), transparent 42%),
-    radial-gradient(ellipse at 69% 40%, color-mix(in srgb, var(--app-logo-highlight) 18%, transparent), transparent 39%),
-    radial-gradient(ellipse at 49% 61%, color-mix(in srgb, var(--app-accent-fill) 14%, transparent), transparent 58%);
+    radial-gradient(
+      ellipse at 22% 62%,
+      color-mix(in srgb, var(--app-accent) 22%, transparent),
+      transparent 42%
+    ),
+    radial-gradient(
+      ellipse at 69% 40%,
+      color-mix(in srgb, var(--app-logo-highlight) 18%, transparent),
+      transparent 39%
+    ),
+    radial-gradient(
+      ellipse at 49% 61%,
+      color-mix(in srgb, var(--app-accent-fill) 14%, transparent),
+      transparent 58%
+    );
 }
 .companion-voice::after {
   background:
-    radial-gradient(circle at 5% 39%, color-mix(in srgb, var(--app-logo-highlight) 80%, transparent) 0 1px, transparent 1.8px),
-    radial-gradient(circle at 15% 79%, color-mix(in srgb, var(--app-accent) 68%, transparent) 0 1.2px, transparent 2px),
-    radial-gradient(circle at 24% 17%, color-mix(in srgb, var(--app-logo-highlight) 75%, transparent) 0 0.8px, transparent 1.6px),
-    radial-gradient(circle at 36% 87%, color-mix(in srgb, var(--app-accent) 65%, transparent) 0 1px, transparent 1.8px),
-    radial-gradient(circle at 47% 9%, color-mix(in srgb, var(--app-logo-highlight) 75%, transparent) 0 0.8px, transparent 1.6px),
-    radial-gradient(circle at 60% 86%, color-mix(in srgb, var(--app-accent) 65%, transparent) 0 1.2px, transparent 2px),
-    radial-gradient(circle at 71% 20%, color-mix(in srgb, var(--app-logo-highlight) 70%, transparent) 0 1px, transparent 1.8px),
-    radial-gradient(circle at 83% 72%, color-mix(in srgb, var(--app-accent) 70%, transparent) 0 1.2px, transparent 2px),
-    radial-gradient(circle at 96% 33%, color-mix(in srgb, var(--app-logo-highlight) 80%, transparent) 0 0.8px, transparent 1.6px);
+    radial-gradient(
+      circle at 5% 39%,
+      color-mix(in srgb, var(--app-logo-highlight) 80%, transparent) 0 1px,
+      transparent 1.8px
+    ),
+    radial-gradient(
+      circle at 15% 79%,
+      color-mix(in srgb, var(--app-accent) 68%, transparent) 0 1.2px,
+      transparent 2px
+    ),
+    radial-gradient(
+      circle at 24% 17%,
+      color-mix(in srgb, var(--app-logo-highlight) 75%, transparent) 0 0.8px,
+      transparent 1.6px
+    ),
+    radial-gradient(
+      circle at 36% 87%,
+      color-mix(in srgb, var(--app-accent) 65%, transparent) 0 1px,
+      transparent 1.8px
+    ),
+    radial-gradient(
+      circle at 47% 9%,
+      color-mix(in srgb, var(--app-logo-highlight) 75%, transparent) 0 0.8px,
+      transparent 1.6px
+    ),
+    radial-gradient(
+      circle at 60% 86%,
+      color-mix(in srgb, var(--app-accent) 65%, transparent) 0 1.2px,
+      transparent 2px
+    ),
+    radial-gradient(
+      circle at 71% 20%,
+      color-mix(in srgb, var(--app-logo-highlight) 70%, transparent) 0 1px,
+      transparent 1.8px
+    ),
+    radial-gradient(
+      circle at 83% 72%,
+      color-mix(in srgb, var(--app-accent) 70%, transparent) 0 1.2px,
+      transparent 2px
+    ),
+    radial-gradient(
+      circle at 96% 33%,
+      color-mix(in srgb, var(--app-logo-highlight) 80%, transparent) 0 0.8px,
+      transparent 1.6px
+    );
 }
 .companion-voice[data-caption-presence="entering"]::before,
 .companion-voice[data-caption-presence="entering"]::after,
@@ -1256,15 +1251,5 @@ body:has(.workspace-companion[data-docked="true"]:is(:hover, :focus-within))
   100% {
     opacity: 0;
     transform: translateY(-4px) scale(0.98);
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .companion-voice[data-caption-presence] {
-    animation: none !important;
-  }
-  .companion-voice::before,
-  .companion-voice::after {
-    display: none !important;
-    animation: none !important;
   }
 }

@@ -474,25 +474,44 @@ export class RailwayBrowserRuntime {
       };
       signal.addEventListener("abort", stopHeartbeat, { once: true });
       await stage("UPLOADING");
-      await bounded(
-        vm.files.write(
-          vmRoot + "/package.json",
-          '{"type":"module","private":true}',
-          { mode: 0o644 },
-        ),
-        signal,
-      );
       for (const asset of assets) {
         if (!(browserRuntimeFiles as readonly string[]).includes(asset.path))
           throw Error("BROWSER_RUNTIME_UNAVAILABLE");
-        canceled(signal);
-        await bounded(
-          vm.files.write(vmRoot + "/" + asset.path, asset.content, {
-            mode: 0o644,
-          }),
-          signal,
-        );
       }
+      const files = [
+        { path: "package.json", content: '{"type":"module","private":true}' },
+        ...assets,
+      ];
+      const uploads = new AbortController();
+      const uploadSignal = AbortSignal.any([signal, uploads.signal]);
+      const dispatchedWrites: Promise<void>[] = [];
+      let nextFile = 0;
+      // SDK writes use independent connections and create missing parents.
+      // Its default 0644 avoids a redundant remote chmod exec for each file;
+      // VERIFYING still applies the required permissions before any code runs.
+      await Promise.all(
+        Array.from({ length: Math.min(3, files.length) }, async () => {
+          while (nextFile < files.length) {
+            canceled(uploadSignal);
+            const file = files[nextFile++];
+            const writing = vm.files.write(
+              vmRoot + "/" + file.path,
+              file.content,
+            );
+            dispatchedWrites.push(writing);
+            await bounded(writing, uploadSignal);
+          }
+        }),
+      ).catch(async (error) => {
+        uploads.abort();
+        // SDK file writes cannot be aborted. Drain already dispatched writes
+        // before destroying their VM, with a bound for a stalled connection.
+        await bounded(
+          Promise.allSettled(dispatchedWrites),
+          AbortSignal.timeout(10000),
+        ).catch(() => safeLog("BROWSER_VM_UPLOAD_DRAIN_TIMEOUT"));
+        throw error;
+      });
       const remaining = () =>
         Math.max(1, Math.floor((deadline - Date.now()) / 1000));
       await stage("VERIFYING");

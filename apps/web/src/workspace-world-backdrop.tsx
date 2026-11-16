@@ -32,7 +32,6 @@ export function WorkspaceWorldBackdrop() {
     if (!element || !root) return;
     const context = element.getContext("2d");
     if (!context) return;
-    const motion = window.matchMedia("(prefers-reduced-motion: reduce)");
     let view = { ...initialView },
       width = 0,
       height = 0,
@@ -50,10 +49,8 @@ export function WorkspaceWorldBackdrop() {
     const draw = (now: number) => {
       frame = 0;
       if (document.hidden || !visible || !width || !height) return;
-      if (!motion.matches) {
-        if (lastTime) elapsed += Math.min(80, now - lastTime) / 1000;
-        lastTime = now;
-      }
+      if (lastTime) elapsed += Math.min(80, now - lastTime) / 1000;
+      lastTime = now;
       if (!dirty && now - paintedAt < 1000 / 30) {
         schedule();
         return;
@@ -196,7 +193,7 @@ export function WorkspaceWorldBackdrop() {
       }
       context.globalAlpha = 1;
       context.shadowBlur = 0;
-      if (!motion.matches) schedule();
+      schedule();
     };
     const schedule = () => {
       if (!frame && visible && !document.hidden)
@@ -286,7 +283,6 @@ export function WorkspaceWorldBackdrop() {
       invalidate();
     };
     document.addEventListener("visibilitychange", playback);
-    motion.addEventListener("change", playback);
     theme();
     measure();
     return () => {
@@ -298,7 +294,6 @@ export function WorkspaceWorldBackdrop() {
       window.removeEventListener("xuti-workspace-view", update);
       window.removeEventListener("resize", measure);
       document.removeEventListener("visibilitychange", playback);
-      motion.removeEventListener("change", playback);
     };
   }, []);
   return (

@@ -26,7 +26,6 @@ export function WorkspaceDockRendering({
       visible = true,
       settleUntil = 0;
     const styles = new WeakMap<HTMLElement, string>();
-    const motion = matchMedia("(prefers-reduced-motion: reduce)");
     const paint = () => {
       frame = 0;
       if (document.hidden || !visible) return;
@@ -48,17 +47,14 @@ export function WorkspaceDockRendering({
       }));
       const moving =
         performance.now() < settleUntil ||
-        ((root.dataset.workspaceRingMotion === "enabled" ||
-          (root.dataset.workspaceRingMotion !== "disabled" &&
-            !motion.matches)) &&
-          (orbit
+        orbit
+          .getAnimations()
+          .some((animation) => animation.playState === "running") ||
+        measurements.some(({ item }) =>
+          item
             .getAnimations()
-            .some((animation) => animation.playState === "running") ||
-            measurements.some(({ item }) =>
-              item
-                .getAnimations()
-                .some((animation) => animation.playState === "running"),
-            )));
+            .some((animation) => animation.playState === "running"),
+        );
       const snap = (value: number) =>
         Math.round(value * devicePixelRatio) / devicePixelRatio;
       for (const { box, copy } of measurements) {
@@ -114,7 +110,6 @@ export function WorkspaceDockRendering({
     ])
       window.addEventListener(event, schedule);
     document.addEventListener("visibilitychange", schedule);
-    motion.addEventListener("change", schedule);
     paint();
     return () => {
       cancelAnimationFrame(frame);
@@ -136,7 +131,6 @@ export function WorkspaceDockRendering({
       ])
         window.removeEventListener(event, schedule);
       document.removeEventListener("visibilitychange", schedule);
-      motion.removeEventListener("change", schedule);
     };
   }, [stage]);
   return <DockStage.Provider value={stage}>{children}</DockStage.Provider>;

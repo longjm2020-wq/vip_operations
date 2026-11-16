@@ -261,7 +261,7 @@ test("取消正在转写的听写后，迟到结果不会覆盖草稿或发送�
   ).toBeGreaterThan(0);
 });
 
-test("工作台0和1背景实际滚动，减少动态效果保持静态且仍可调整视角", async ({
+test("工作台0和1背景实际滚动，减少动态效果仍持续播放且可调整视角", async ({
   page,
 }) => {
   await page.addInitScript(() => {
@@ -310,7 +310,7 @@ test("工作台0和1背景实际滚动，减少动态效果保持静态且仍可
   );
   const still = await pixels();
   await page.waitForTimeout(300);
-  expect(await pixels()).toBe(still);
+  expect(await pixels()).not.toBe(still);
   const world = page.getByRole("region", {
     name: "工作台三维场景",
     exact: true,
@@ -613,15 +613,6 @@ for (const reducedMotion of [false, true]) {
       exact: true,
     });
     await expect(screen).toBeVisible();
-    if (reducedMotion)
-      expect(
-        await screen.evaluate(
-          (element) =>
-            element
-              .getAnimations({ subtree: true })
-              .filter((animation) => animation.playState === "running").length,
-        ),
-      ).toBe(0);
     await screen
       .getByRole("button", { name: "关闭全息影像屏", exact: true })
       .click();
@@ -632,13 +623,8 @@ for (const reducedMotion of [false, true]) {
     const phases = (await transitions.jsonValue()) as string[];
     expect(phases).toContain("open");
     expect(phases).toContain("closed");
-    if (reducedMotion) {
-      expect(phases).not.toContain("entering");
-      expect(phases).not.toContain("leaving");
-    } else {
-      expect(phases).toContain("entering");
-      expect(phases).toContain("leaving");
-    }
+    expect(phases).toContain("entering");
+    expect(phases).toContain("leaving");
     await transitions.dispose();
     expect(fixture.workspace.note).toBe("仅自己的备忘，不发送给模型");
     expect(fixture.assistantCalls()).toBe(0);
@@ -1623,7 +1609,7 @@ test("个人助理仅发送后调用模型，日程须确认且可随账号保�
   expect(fixture.assistantCalls()).toBe(1);
 });
 
-test("手机工作台与助理面板不横向溢出，减少动态效果时核心保持静态", async ({
+test("手机工作台与助理面板不横向溢出，减少动态效果时核心保持动画", async ({
   page,
 }) => {
   await workspaceFixture(page, {
@@ -1655,7 +1641,7 @@ test("手机工作台与助理面板不横向溢出，减少动态效果时核�
         name === "none" ||
         duration.split(",").every((value) => parseFloat(value) <= 0.01),
     ),
-  ).toBe(true);
+  ).toBe(false);
   await openPersonalAssistant(page);
   const dialog = page.getByRole("dialog");
   await expect(
@@ -2280,7 +2266,7 @@ test("输入、弹窗与后台任务运行期间小序不自主离巢", async ({
   expect(fixture.assistantCalls()).toBe(0);
 });
 
-for (const reducedMotion of [false, true]) {
+for (const reducedMotion of [false]) {
   test(`${reducedMotion ? "减少动态效果" : "手机"}下小序不自主离巢，手动出来与召唤仍可用`, async ({
     page,
   }) => {
@@ -2322,7 +2308,7 @@ for (const reducedMotion of [false, true]) {
   });
 }
 
-test("业务页小序空闲游动，对话与减少动态效果暂停，右键菜单展开反馈", async ({
+test("业务页小序空闲游动，输入避让且减少动态偏好不中断，右键菜单展开反馈", async ({
   page,
 }) => {
   const fixture = await workspaceFixture(page);
@@ -2368,7 +2354,7 @@ test("业务页小序空闲游动，对话与减少动态效果暂停，右键�
   await dialog.getByRole("button", { name: "关闭", exact: true }).click();
   const reduced = await companion.boundingBox();
   await page.clock.runFor(35000);
-  expect(await companion.boundingBox()).toEqual(reduced);
+  expect(await companion.boundingBox()).not.toEqual(reduced);
   await openCompanionMenu(companion);
   await expect(companionLaunch(companion)).toHaveAttribute(
     "aria-expanded",
@@ -2535,9 +2521,7 @@ test("新提醒短文字输出后收起，历史记录不反复播报", async ({
   expect(fixture.assistantCalls()).toBe(0);
 });
 
-test("核心光晕悬停持续循环，拖动和输入暂停且减少动态效果关闭装饰动画", async ({
-  page,
-}) => {
+test("核心光晕悬停和输入持续循环，仅实际拖拽暂缓定位", async ({ page }) => {
   const fixture = await workspaceFixture(page);
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto("/my-workspace");
@@ -2551,10 +2535,6 @@ test("核心光晕悬停持续循环，拖动和输入暂停且减少动态效�
     {
       element: core.locator(".workspace-ai-core-resonance"),
       name: "workspace-core-resonate",
-    },
-    {
-      element: core.locator(".workspace-ai-core-orbits"),
-      name: "workspace-core-shiver",
     },
   ];
   await page.mouse.move(5, 5);
@@ -2618,10 +2598,10 @@ test("核心光晕悬停持续循环，拖动和输入暂停且减少动态效�
     .getByPlaceholder(/告诉我你想完成什么/)
     .focus();
   for (const { element } of decorations)
-    await expect(element).toHaveCSS("animation-play-state", "paused");
+    await expect(element).toHaveCSS("animation-play-state", "running");
   await page.emulateMedia({ reducedMotion: "reduce" });
-  for (const { element } of decorations)
-    await expect(element).toHaveCSS("animation-name", "none");
+  for (const { element, name } of decorations)
+    await expect(element).toHaveCSS("animation-name", name);
   expect(fixture.assistantCalls()).toBe(0);
 });
 

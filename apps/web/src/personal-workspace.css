@@ -147,12 +147,6 @@
 .workspace-dock-item:nth-child(even)::before {
   animation-direction: reverse;
 }
-.workspace-dock:focus-within .workspace-dock-orbit,
-.workspace-dock:focus-within .workspace-dock-face,
-.workspace-dock[data-paused="true"] .workspace-dock-orbit,
-.workspace-dock[data-paused="true"] .workspace-dock-face {
-  animation-play-state: paused;
-}
 .workspace-dock-item:hover,
 .workspace-dock-item[aria-expanded="true"] {
   background: var(--app-accent-soft);
@@ -306,16 +300,6 @@
   100% {
     opacity: 0;
     transform: translateY(-8px) scale(1.04);
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .personal-workspace-panel[data-panel-presence] {
-    animation: none;
-  }
-  .personal-workspace-panel::before,
-  .personal-workspace-panel::after {
-    display: none;
-    animation: none;
   }
 }
 .workspace-panel-header {
@@ -796,19 +780,5 @@
   }
   .workspace-quiet p {
     max-width: 140px;
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .personal-tool,
-  .workspace-dock-item {
-    transition: none;
-  }
-  .personal-workspace:not([data-workspace-ring-motion="enabled"])
-    .workspace-dock-item::before,
-  .personal-workspace:not([data-workspace-ring-motion="enabled"])
-    .workspace-dock-orbit,
-  .personal-workspace:not([data-workspace-ring-motion="enabled"])
-    .workspace-dock-face {
-    animation: none;
   }
 }

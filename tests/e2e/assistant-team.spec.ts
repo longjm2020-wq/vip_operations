@@ -970,7 +970,7 @@ test("星轨成员公转保持文字正向，悬停继续旋转且键盘和详�
   await expect.poll(() => memberMovement(page)).toBeGreaterThan(2);
 
   await page.emulateMedia({ reducedMotion: "reduce" });
-  await expect.poll(() => memberMovement(page)).toBeLessThan(1);
+  await expect.poll(() => memberMovement(page)).toBeGreaterThan(2);
 });
 
 test("星轨展示真实协作、仅在新交付时汇聚、保留配色并可打开成果", async ({
@@ -1239,7 +1239,7 @@ test("星轨展示真实协作、仅在新交付时汇聚、保留配色并可�
   expect(fixture.submissions).toHaveLength(1);
 });
 
-test("手机星轨尊重减少动态效果，DeerFlow 不伪造成员与独立验收", async ({
+test("手机星轨在减少动态偏好下播放能量，DeerFlow 不伪造成员与独立验收", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 390, height: 844 });
@@ -1248,9 +1248,13 @@ test("手机星轨尊重减少动态效果，DeerFlow 不伪造成员与独立�
   await submitInWorkspace(page);
   await expect(page.locator(".team-orbit-node")).toHaveCount(1);
   await expect(page.locator(".team-orbit-node")).toContainText("DeerFlow");
-  expect(
-    await page.locator(".team-energy-canvas").getAttribute("data-ring-time"),
-  ).toBeNull();
+  const ringTime = () =>
+    page.locator(".team-energy-canvas").getAttribute("data-ring-time");
+  await expect.poll(ringTime).not.toBeNull();
+  const initialTime = Number(await ringTime());
+  await expect
+    .poll(async () => Number(await ringTime()))
+    .toBeGreaterThan(initialTime);
   fixture.complete();
   await expect(page.locator(".team-orbit-deliveries")).toContainText(
     "待独立验收",
@@ -1259,6 +1263,7 @@ test("手机星轨尊重减少动态效果，DeerFlow 不伪造成员与独立�
   await expect(page.locator(".workspace-team-layer")).toHaveAttribute(
     "data-collecting",
     "false",
+    { timeout: 10000 },
   );
   const progress = page.getByLabel("团队任务进度", { exact: true });
   await expect(progress.locator('[data-step="review"]')).toHaveAttribute(

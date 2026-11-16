@@ -153,6 +153,12 @@ export async function selectAssistantExecution(page: Page, name: string) {
     await expect(workspace).toBeVisible();
     if ((page.viewportSize()?.width || 1440) <= 1050)
       await collapseWorkspaceTools(page);
+    await page
+      .locator(".assistant-compose:visible")
+      .getByRole("button", { name: "输入框菜单", exact: true })
+      .click();
+    await page.getByRole("menuitem", { name, exact: true }).click();
+    return;
   }
   await page.getByRole("combobox", { name: "执行位置", exact: true }).click();
   await page

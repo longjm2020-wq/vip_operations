@@ -943,8 +943,9 @@ test("我的电脑语音启动前核对最新连接，通话中仍固定原设�
     exact: true,
   });
   await expect(begin).toHaveAttribute("title", "实时语音对话");
-  await expect(composer.locator(".assistant-execution-hint")).toContainText(
-    "专用电脑 A",
+  await expect(composer.locator("[aria-label='输入框菜单']")).toHaveAttribute(
+    "title",
+    /专用电脑 A/,
   );
   online = false;
   await begin.click();
@@ -966,7 +967,7 @@ test("我的电脑语音启动前核对最新连接，通话中仍固定原设�
   await expect(bubble.locator(".companion-voice-target")).toHaveText(
     "我的电脑 · 专用电脑 A",
   );
-  await expect(page.getByRole("combobox", { name: "执行位置" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "输入框菜单" })).toBeDisabled();
   expect(starts).toHaveLength(1);
   await bubble.getByRole("button", { name: "结束语音", exact: true }).click();
   await expect
@@ -1008,8 +1009,9 @@ test("独立浏览器语音核对服务并固定执行环境，不使用本机�
     exact: true,
   });
   await expect(begin).toHaveAttribute("title", "实时语音对话");
-  await expect(composer.locator(".assistant-execution-hint")).toContainText(
-    "小序独立浏览器",
+  await expect(composer.locator("[aria-label='输入框菜单']")).toHaveAttribute(
+    "title",
+    /小序独立浏览器/,
   );
   ready = false;
   await begin.click();
@@ -1032,7 +1034,7 @@ test("独立浏览器语音核对服务并固定执行环境，不使用本机�
   await expect(bubble.locator(".companion-voice-target")).toHaveText(
     "小序独立浏览器",
   );
-  await expect(page.getByRole("combobox", { name: "执行位置" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "输入框菜单" })).toBeDisabled();
   // Even a malformed server response offering pageControl cannot enable local DOM tools.
   await sendQwenTool(page, "browser-no-local", "page_observe", {});
   const output = await qwenToolOutput(page, "browser-no-local");
@@ -1067,10 +1069,10 @@ test("独立浏览器语音核对服务并固定执行环境，不使用本机�
   });
   await qwenToolOutput(page, "browser-created");
   await expect(
-    page.getByRole("heading", { name: "浏览器画面", exact: true }),
+    page.getByRole("region", { name: "独立浏览器画面与接管", exact: true }),
   ).toBeVisible();
   await expect(
-    page.locator(".assistant-browser-panel .assistant-browser-task"),
+    page.locator(".assistant-browser-panel .assistant-browser-status-text"),
   ).toContainText("正在读取页面标题");
   expect(starts).toHaveLength(1);
   expect(await page.evaluate(() => window.gptVoiceTest.stops)).toBe(0);

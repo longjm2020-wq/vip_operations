@@ -333,40 +333,6 @@
 .workspace-ai[data-core-state="unavailable"] .workspace-ai-core-orbits {
   opacity: 0.52;
 }
-.workspace-ai[data-core-state="unavailable"]
-  :is(
-    .workspace-ai-core-aura,
-    .workspace-ai-core-resonance,
-    .workspace-ai-core-orbits
-  ) {
-  animation: none;
-}
-.workspace-ai-core:is(:focus-within, [data-view-dragging="true"])
-  :is(
-    .workspace-ai-core-aura,
-    .workspace-ai-core-resonance,
-    .workspace-ai-core-orbits
-  ),
-.workspace-ai-core-stage:has(.workspace-dock:focus-within)
-  :is(
-    .workspace-ai-core-aura,
-    .workspace-ai-core-resonance,
-    .workspace-ai-core-orbits
-  ),
-.workspace-ai:has(.assistant-compose:focus-within)
-  :is(
-    .workspace-ai-core-aura,
-    .workspace-ai-core-resonance,
-    .workspace-ai-core-orbits
-  ) {
-  animation-play-state: paused;
-}
-.workspace-ai[data-core-state="unavailable"] .workspace-ai-core-orbits > g {
-  animation-play-state: paused;
-}
-.workspace-ai[data-core-state="unavailable"] .workspace-ai-core-depth-cross {
-  animation-play-state: paused;
-}
 :root[data-theme="light"] .workspace-ai {
   --core-cyan: #1591b2;
   --core-line: color-mix(in srgb, var(--core-blue) 20%, transparent);
@@ -438,25 +404,5 @@
   }
   .workspace-ai-core-stage {
     min-height: 0;
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .workspace-ai
-    *:not(
-      .personal-workspace[data-workspace-ring-motion="enabled"]
-        .workspace-ring-animation
-    ),
-  .workspace-ai
-    *:not(
-      .personal-workspace[data-workspace-ring-motion="enabled"]
-        .workspace-ring-animation
-    )::before,
-  .workspace-ai
-    *:not(
-      .personal-workspace[data-workspace-ring-motion="enabled"]
-        .workspace-ring-animation
-    )::after {
-    animation: none !important;
-    transition: none !important;
   }
 }

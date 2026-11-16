@@ -79,14 +79,12 @@ export function WorkspaceNestHandle({
     const changed = previousLayout.current !== branchLayout;
     previousLayout.current = branchLayout;
     if (changed) cancel.current();
-    const reduced = matchMedia("(prefers-reduced-motion: reduce)");
     let frame = 0;
     const started = performance.now();
     const track = (now: number) => {
       // The body's stable companion mirrors the moving nest without remounting.
       window.dispatchEvent(new Event("xuti-workspace-layout"));
-      if (changed && !reduced.matches && now - started < 440)
-        frame = requestAnimationFrame(track);
+      if (changed && now - started < 440) frame = requestAnimationFrame(track);
     };
     frame = requestAnimationFrame(track);
     return () => cancelAnimationFrame(frame);

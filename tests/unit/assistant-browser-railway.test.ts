@@ -110,7 +110,7 @@ function fixture(configuredTemplate?: string) {
     releaseBrowserEnvironment: release,
     browserEnvironmentsToCleanup: cleanup,
   } as unknown as typeof Environments;
-  const write = vi.fn(async () => {
+  const write = vi.fn(async (_path: string, _content: string) => {
     events.push("file");
   });
   const destroy = vi.fn(async () => {
@@ -252,6 +252,81 @@ afterEach(() => {
 });
 
 describe("Railway independent browser lifecycle (no real resources)", () => {
+  it("uploads at most three fixed files together and verifies only after all finish", async () => {
+    const f = fixture();
+    const uploads: ReturnType<typeof deferred<void>>[] = [];
+    let active = 0,
+      peak = 0;
+    f.write.mockImplementation(async () => {
+      const pending = deferred<void>();
+      uploads.push(pending);
+      peak = Math.max(peak, ++active);
+      await pending.promise;
+      active--;
+    });
+    const opening = f.runtime.open(f.run, null, f.controller.signal);
+    await vi.waitFor(() => expect(uploads).toHaveLength(3));
+    expect(f.execHttp).not.toHaveBeenCalled();
+    for (let batch = 0; batch < 3; batch++) {
+      for (const upload of uploads.slice(batch * 3, batch * 3 + 3))
+        upload.resolve();
+      if (batch < 2)
+        await vi.waitFor(() => expect(uploads).toHaveLength((batch + 2) * 3));
+    }
+    const driver = await opening;
+    expect(peak).toBe(3);
+    expect(f.write).toHaveBeenCalledTimes(9);
+    expect(f.write.mock.calls.every((call) => call.length === 2)).toBe(true);
+    expect(new Set(f.write.mock.calls.map(([path]) => path)).size).toBe(9);
+    expect(f.execHttp).toHaveBeenCalledTimes(1);
+    await driver.close();
+  });
+  it("stops the remaining upload queue and never executes partial runtime files after failure", async () => {
+    const f = fixture();
+    const uploads: ReturnType<typeof deferred<void>>[] = [];
+    f.write.mockImplementation(() => {
+      const pending = deferred<void>();
+      uploads.push(pending);
+      return pending.promise;
+    });
+    const opening = f.runtime.open(f.run, null, f.controller.signal);
+    const failed = expect(opening).rejects.toThrow();
+    await vi.waitFor(() => expect(uploads).toHaveLength(3));
+    uploads[0].reject(Error("upload failed"));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(f.destroy).not.toHaveBeenCalled();
+    uploads[1].resolve();
+    uploads[2].resolve();
+    await failed;
+    expect(f.write).toHaveBeenCalledTimes(3);
+    expect(f.execHttp).not.toHaveBeenCalled();
+    expect(f.exec).not.toHaveBeenCalled();
+    expect(f.create).toHaveBeenCalledTimes(1);
+    expect(f.destroy).toHaveBeenCalledTimes(1);
+    expect(f.release).toHaveBeenCalledWith(f.intentId, f.sandboxId);
+  });
+  it("drains submitted uploads on cancellation without starting queued files or browser code", async () => {
+    const f = fixture();
+    const uploads: ReturnType<typeof deferred<void>>[] = [];
+    f.write.mockImplementation(() => {
+      const pending = deferred<void>();
+      uploads.push(pending);
+      return pending.promise;
+    });
+    const opening = f.runtime.open(f.run, null, f.controller.signal);
+    const failed = expect(opening).rejects.toThrow();
+    await vi.waitFor(() => expect(uploads).toHaveLength(3));
+    f.controller.abort();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(f.destroy).not.toHaveBeenCalled();
+    for (const upload of uploads) upload.resolve();
+    await failed;
+    expect(f.write).toHaveBeenCalledTimes(3);
+    expect(f.execHttp).not.toHaveBeenCalled();
+    expect(f.exec).not.toHaveBeenCalled();
+    expect(f.destroy).toHaveBeenCalledTimes(1);
+    expect(f.release).toHaveBeenCalledWith(f.intentId, f.sandboxId);
+  });
   it("keeps only the live VM alive past its provider idle timeout and stops at close", async () => {
     vi.useFakeTimers();
     const f = fixture();

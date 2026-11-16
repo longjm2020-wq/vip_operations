@@ -70,7 +70,6 @@ export function WorkspaceImageReveal() {
     const root = element?.closest<HTMLElement>(".personal-workspace");
     const context = element?.getContext("2d");
     if (!element || !root || !context) return;
-    const motion = matchMedia("(prefers-reduced-motion: reduce)");
     const pointer = matchMedia("(any-hover: hover) and (any-pointer: fine)");
     const photo = new Image();
     photo.decoding = "async";
@@ -135,7 +134,6 @@ export function WorkspaceImageReveal() {
     const blocked =
       "button,a,input,textarea,select,summary,[contenteditable=true],[role=dialog],.assistant-compose,.team-execution-rail,.personal-workspace-panel,.workspace-world-controls";
     const allowed = () =>
-      !motion.matches &&
       pointer.matches &&
       !document.hidden &&
       visible &&
@@ -300,7 +298,6 @@ export function WorkspaceImageReveal() {
     root.addEventListener("pointercancel", clear, { passive: true });
     root.addEventListener("focusin", focus);
     document.addEventListener("visibilitychange", clear);
-    motion.addEventListener("change", clear);
     pointer.addEventListener("change", clear);
     measure();
     return () => {
@@ -315,7 +312,6 @@ export function WorkspaceImageReveal() {
       root.removeEventListener("pointercancel", clear);
       root.removeEventListener("focusin", focus);
       document.removeEventListener("visibilitychange", clear);
-      motion.removeEventListener("change", clear);
       pointer.removeEventListener("change", clear);
     };
   }, []);

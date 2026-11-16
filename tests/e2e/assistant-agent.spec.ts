@@ -755,8 +755,9 @@ test("我的电脑无设备只显示连接入口，旧专用偏好不自动选�
   await panel
     .getByRole("button", { name: "在这台电脑执行", exact: true })
     .click();
-  await expect(composer.locator(".assistant-execution-hint")).toContainText(
-    "我的电脑 · 本机测试电脑",
+  await expect(composer.locator("[aria-label='输入框菜单']")).toHaveAttribute(
+    "title",
+    /我的电脑 · 本机测试电脑/,
   );
   await selectAssistantExecution(page, "网站内");
   await expect(composer.getByPlaceholder(/告诉我你想完成什么/)).toBeEnabled();
@@ -869,8 +870,9 @@ test("桌面端一键操作本机，首次确认后刷新仍记住目标且不�
   await page.goto("/my-workspace");
   const composer = page.locator(".assistant-compose:visible");
   await selectAssistantExecution(page, "我的电脑");
-  await expect(composer.locator(".assistant-execution-hint")).toContainText(
-    "我的电脑",
+  await expect(composer.locator("[aria-label='输入框菜单']")).toHaveAttribute(
+    "title",
+    /我的电脑/,
   );
   await expect(composer.getByPlaceholder(/描述电脑任务/)).toBeVisible();
   expect(pairCodes).toBe(1);
@@ -977,8 +979,9 @@ test("电脑操作面板选择设备并撤销授权，输入区仅显示当前�
     .click();
   await expect(device).toContainText("逐次允许");
   await device.getByRole("button", { name: "在这台电脑执行" }).click();
-  await expect(composer.locator(".assistant-execution-hint")).toContainText(
-    "测试电脑",
+  await expect(composer.locator("[aria-label='输入框菜单']")).toHaveAttribute(
+    "title",
+    /测试电脑/,
   );
   expect(mutations).toHaveLength(1);
   const input = composer.getByPlaceholder(/描述电脑任务/);
@@ -1386,8 +1389,9 @@ test("记住的电脑离线或归属失效时不改发网站，不同账号不�
   state.userId = "8";
   await page.reload();
   await expect(composer.getByPlaceholder(/告诉我你想完成什么/)).toBeEnabled();
-  await expect(composer.locator(".assistant-execution-hint")).toContainText(
-    "网站内",
+  await expect(composer.locator("[aria-label='输入框菜单']")).toHaveAttribute(
+    "title",
+    /网站内/,
   );
   state.userId = "7";
   await page.reload();
@@ -1518,7 +1522,7 @@ test("本机连接等待期间切换账号会中止旧授权流程，不继续�
     const { queryClient } = await import(modulePath);
     await queryClient.invalidateQueries({ queryKey: ["me"] });
   });
-  await expect(page.getByRole("combobox", { name: "执行位置" })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "输入框菜单" })).toBeEnabled();
   expect(await page.evaluate(() => performance.timeOrigin)).toBe(
     navigationBefore,
   );

@@ -43,7 +43,6 @@ export function paintTeamEnergy({
     return () => {};
   }
   const context = ctx;
-  const motion = matchMedia("(prefers-reduced-motion: reduce)");
   const compact = matchMedia("(max-width: 760px)");
   const workspace = layer.closest<HTMLElement>(".personal-workspace");
   const palette = {
@@ -64,7 +63,6 @@ export function paintTeamEnergy({
   const members = [...layer.querySelectorAll<HTMLElement>(".team-orbit-node")];
   const canOrbit = () =>
     orbiting &&
-    !motion.matches &&
     !compact.matches &&
     !members.some((node) => node.matches(":focus-visible")) &&
     workspace?.dataset.worldDragging !== "true" &&
@@ -314,7 +312,6 @@ export function paintTeamEnergy({
       small = width < 540;
     context.setTransform(dpr, 0, 0, dpr, 0, 0);
     context.clearRect(0, 0, width, height);
-    if (motion.matches) return;
     const time = collecting ? elapsed.current : activityTime.current;
     if (active && !collecting) {
       canvas.dataset.ringTime = time.toFixed(2);
@@ -461,11 +458,6 @@ export function paintTeamEnergy({
       previous = 0;
       return;
     }
-    if (motion.matches) {
-      draw();
-      if (collecting) finish();
-      return;
-    }
     if (collecting && previous)
       elapsed.current += Math.max(0, (now - previous) / 1000);
     if (active && previous)
@@ -522,7 +514,6 @@ export function paintTeamEnergy({
   viewEvents.forEach((event) => window.addEventListener(event, viewChanged));
   resize.observe(layer);
   intersection.observe(layer);
-  motion.addEventListener("change", visibility);
   compact.addEventListener("change", visibility);
   const interactionEvents = [
     "pointerover",
@@ -549,7 +540,6 @@ export function paintTeamEnergy({
     cancelAnimationFrame(frame);
     resize.disconnect();
     intersection.disconnect();
-    motion.removeEventListener("change", visibility);
     compact.removeEventListener("change", visibility);
     interactionEvents.forEach((event) =>
       layer.removeEventListener(event, visibility),

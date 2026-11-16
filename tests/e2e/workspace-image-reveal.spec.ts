@@ -137,18 +137,23 @@ test("背景揭示仅显露鼠标附近原图，停止和离开后回到黑底�
   expect(writes).toEqual([]);
 });
 
-test("背景揭示尊重减少动态效果，切换偏好立即隐藏图像", async ({ page }) => {
+test("背景揭示在减少动态效果偏好下仍然响应鼠标", async ({ page }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
   await workspace(page);
   await moveAcrossBackground(page);
-  expect((await revealPixels(page)).coverage).toBe(0);
+  await expect
+    .poll(async () => (await revealPixels(page)).coverage)
+    .toBeGreaterThan(0);
   await page.emulateMedia({ reducedMotion: "no-preference" });
   await moveAcrossBackground(page);
   await expect
     .poll(async () => (await revealPixels(page)).coverage)
     .toBeGreaterThan(0);
   await page.emulateMedia({ reducedMotion: "reduce" });
-  await expect.poll(async () => (await revealPixels(page)).coverage).toBe(0);
+  await moveAcrossBackground(page);
+  await expect
+    .poll(async () => (await revealPixels(page)).coverage)
+    .toBeGreaterThan(0);
 });
 
 test("缩小并左移宇航员后，窗口四周仍能连续揭示背景", async ({

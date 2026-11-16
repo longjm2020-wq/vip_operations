@@ -213,11 +213,6 @@ body:has(.assistant-screen.ant-drawer-open) .companion-voice-prompt {
     transform: scaleY(1);
   }
 }
-@media (prefers-reduced-motion: reduce) {
-  .assistant-voice-status i {
-    animation: none;
-  }
-}
 .assistant-compose .ant-sender {
   background: color-mix(in srgb, var(--app-bg) 85%, transparent);
   border-color: var(--app-border);
@@ -634,20 +629,6 @@ body:has(.assistant-screen.ant-drawer-open) .companion-voice-prompt {
     transform: translateY(-12px) scale(1.09);
   }
 }
-@media (prefers-reduced-motion: reduce) {
-  .assistant-screen .ant-drawer-content-wrapper,
-  .assistant-screen .ant-drawer-mask {
-    transition-duration: 0.01ms !important;
-    transition-delay: 0ms !important;
-    transform: none !important;
-    filter: none !important;
-  }
-  .assistant-screen .ant-drawer-content-wrapper::before,
-  .assistant-screen .ant-drawer-content-wrapper::after {
-    display: none;
-    animation: none !important;
-  }
-}
 /* Higher specificity than the global floating-surface inset edge. */
 :root .personal-assistant-drawer.assistant-screen .ant-drawer-section,
 :root .personal-assistant-drawer.assistant-screen .ant-drawer-content {
@@ -875,23 +856,18 @@ body:has(.assistant-screen.ant-drawer-open) .companion-voice-prompt {
 .assistant-desktop-item > div {
   margin-top: 8px;
 }
-.assistant-desktop-note,
-.assistant-execution-hint {
+.assistant-desktop-note {
   color: var(--ant-color-text-secondary, #7e879f);
   font-size: 12px;
   line-height: 1.7;
   margin-top: 8px;
 }
-.assistant-execution-hint {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 2px;
+.assistant-compose-menu {
+  max-width: min(340px, calc(100vw - 24px));
 }
-.assistant-execution-hint .ant-select {
-  width: 166px;
-  max-width: 100%;
-  font-size: 12px;
+.assistant-compose-menu .ant-dropdown-menu-item-group-title {
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 .assistant-desktop-task-heading {
   display: flex;
