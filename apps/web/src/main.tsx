@@ -344,7 +344,7 @@ function Workspace({ user }: { user: Row }) {
     <PageSearchContext.Provider value={searchHost}><UserContext.Provider value={user}><PersonalAssistantProvider key={user.id}>
       <Layout className={`workspace${personalWorkspace ? " workspace-future" : ""}`}>
         {mobileWorkspace && workspaceNavOpen && <button type="button" className="workspace-nav-scrim" aria-label="关闭工作区导航" onClick={() => setWorkspaceNavOpen(false)} />}
-        <Layout.Sider width={personalWorkspace ? 216 : 200} collapsed={navCollapsed} collapsedWidth={mobileWorkspace ? 0 : 80} className="sidebar">
+        <Layout.Sider width={216} collapsed={navCollapsed} collapsedWidth={mobileWorkspace ? 0 : 80} className="sidebar">
           <Link
             to={
               "/my-workspace"
