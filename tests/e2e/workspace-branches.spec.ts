@@ -101,25 +101,21 @@ const world = (page: Page) =>
 const menu = (page: Page) =>
   page.getByRole("navigation", { name: "工作台功能面板", exact: true });
 
-test("圆环动效默认跟随系统，显式开启后悬停持续旋转且文字跟随，刷新记忆与关闭仍有效", async ({
+test("圆环默认开启且无开关，忽略旧关闭偏好，悬停旋转与文字同步在刷新后保留", async ({
   page,
 }) => {
   await fixture(page);
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.addInitScript(() =>
+    localStorage.setItem("xuti-workspace-ring-motion:105", "disabled"),
+  );
   await page.goto("/my-workspace");
   const setting = page.getByRole("combobox", { name: "圆环动效", exact: true });
   const orbit = page.locator(".workspace-dock-orbit");
   const sweep = page.locator(".workspace-dock-halo-sweep").first();
   const core = page.locator(".workspace-ai-core-outer");
-  await expect(setting).toHaveValue("system");
-  await expect(world(page)).toHaveAttribute(
-    "data-workspace-ring-motion",
-    "disabled",
-  );
-  for (const element of [orbit, sweep, core])
-    await expect(element).toHaveCSS("animation-name", "none");
-  await setting.selectOption("enabled");
+  await expect(setting).toHaveCount(0);
   await expect(world(page)).toHaveAttribute(
     "data-workspace-ring-motion",
     "enabled",
@@ -175,59 +171,18 @@ test("圆环动效默认跟随系统，显式开启后悬停持续旋转且文�
     ),
   ).toBe(true);
   await page.reload();
-  await expect(setting).toHaveValue("enabled");
+  await expect(setting).toHaveCount(0);
   await expect(orbit).toHaveCSS("animation-name", "workspace-dock-ring");
-  await setting.selectOption("disabled");
-  for (const element of [orbit, sweep, core])
-    await expect(element).toHaveCSS("animation-name", "none");
-  await page.emulateMedia({ reducedMotion: "no-preference" });
-  await expect(orbit).toHaveCSS("animation-name", "none");
-  for (const action of ["展开工作台分支图", "收起工作台分支图"]) {
-    await page.getByRole("button", { name: action, exact: true }).click();
-    // Motion is disabled, but the ordinary 360 ms layout transition still settles.
-    await page.waitForTimeout(500);
-    await expect
-      .poll(() =>
-        page.evaluate(() =>
-          [...document.querySelectorAll(".workspace-dock-item")].every(
-            (element) => {
-              const label = element
-                .querySelector(".workspace-dock-label")!
-                .getBoundingClientRect();
-              const copy = document
-                .querySelector(
-                  `.workspace-dock-copy[data-dock-copy="${element.getAttribute("data-panel")}"]`,
-                )!
-                .getBoundingClientRect();
-              return (
-                Math.hypot(
-                  label.x + label.width / 2 - copy.x - copy.width / 2,
-                  label.y + label.height / 2 - copy.y - copy.height / 2,
-                ) < 2
-              );
-            },
-          ),
-        ),
-      )
-      .toBe(true);
-  }
-  await setting.selectOption("system");
-  await expect(orbit).toHaveCSS("animation-name", "workspace-dock-ring");
-  await page.emulateMedia({ reducedMotion: "reduce" });
-  await expect(orbit).toHaveCSS("animation-name", "none");
+  await entry.focus();
+  await expect(orbit).toHaveCSS("animation-play-state", "paused");
+  await expect(sweep).toHaveCSS("animation-play-state", "running");
 });
 
-test("圆环动效选择按账号隔离，减少动态下开启分支仍保留静态位置和流光", async ({
-  page,
-  context,
-}) => {
+test("减少动态下分支位置仍固定，装饰圆环与流光默认播放", async ({ page }) => {
   await fixture(page);
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.goto("/my-workspace");
-  await page
-    .getByRole("combobox", { name: "圆环动效", exact: true })
-    .selectOption("enabled");
   await page
     .getByRole("button", { name: "展开工作台分支图", exact: true })
     .click();
@@ -248,26 +203,6 @@ test("圆环动效选择按账号隔离，减少动态下开启分支仍保留�
     .first();
   await expect(trail).toHaveCSS("animation-name", "workspace-line-flow");
   await expect(trail).not.toHaveCSS("display", "none");
-  const other = await context.newPage();
-  await fixture(
-    other,
-    ["analytics.read", "analytics.manage", "project.read"],
-    "106",
-  );
-  await other.emulateMedia({ reducedMotion: "reduce" });
-  await other.goto("/my-workspace");
-  await expect(
-    other.getByRole("combobox", { name: "圆环动效", exact: true }),
-  ).toHaveValue("system");
-  await expect(world(other)).toHaveAttribute(
-    "data-workspace-ring-motion",
-    "disabled",
-  );
-  await expect(other.locator(".workspace-dock-orbit")).toHaveCSS(
-    "animation-name",
-    "none",
-  );
-  await other.close();
 });
 
 async function expectDetailLinkAttached(page: Page) {
@@ -492,7 +427,7 @@ for (const [label, viewport] of [
   });
 }
 
-test("连线与流光同宽，前缘照亮尾迹衰减，缩放后不平铺且减少动态效果时隐藏", async ({
+test("连线与流光同宽，前缘照亮尾迹衰减，缩放后不平铺且减少动态效果时仍播放", async ({
   page,
 }) => {
   const state = await fixture(page);
@@ -651,7 +586,11 @@ test("连线与流光同宽，前缘照亮尾迹衰减，缩放后不平铺且�
     path: test.info().outputPath("workspace-lines-uniform.png"),
   });
   await page.emulateMedia({ reducedMotion: "reduce" });
-  for (const pulse of pulses) await expect(pulse).toBeHidden();
+  for (const pulse of pulses) {
+    // Horizontal SVG paths can have zero-height bounds while their stroke is painted.
+    await expect(pulse).not.toHaveCSS("display", "none");
+    await expect(pulse).toHaveCSS("animation-name", "workspace-line-flow");
+  }
   await expect(
     page.locator(".workspace-branch-lines .workspace-flow-track").first(),
   ).toBeVisible();

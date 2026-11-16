@@ -4,7 +4,10 @@ import type {
   BrowserState,
   BrowserTask,
 } from "../../packages/contracts/src/assistant-browser.js";
-import { selectAssistantPanel } from "./assistant-controls.js";
+import {
+  selectAssistantPanel,
+  selectAssistantExecution,
+} from "./assistant-controls.js";
 
 const taskId = "11111111-1111-4111-8111-111111111111";
 const frameId = "22222222-2222-4222-8222-222222222222";
@@ -237,12 +240,7 @@ async function fixture(page: Page) {
   return { state, freshFrame };
 }
 async function chooseBrowser(page: Page) {
-  const composer = page.locator(".assistant-compose:visible");
-  await composer.getByRole("combobox", { name: "执行位置" }).click();
-  await page
-    .locator(".ant-select-dropdown:visible")
-    .getByText("小序独立浏览器", { exact: true })
-    .click();
+  await selectAssistantExecution(page, "小序独立浏览器");
 }
 
 for (const viewport of [
@@ -381,7 +379,7 @@ test("独立浏览器未就绪不影响网站对话，显式选择后阻断且�
   );
   await expect(composer.locator("textarea")).toBeDisabled();
   expect(state.requests).toEqual([]);
-  await composer.getByRole("button", { name: "返回网站对话" }).click();
+  await selectAssistantExecution(page, "网站内");
   await expect(composer.locator("textarea")).toBeEnabled();
   await composer.getByRole("button", { name: "发送给个人助理" }).click();
   await expect.poll(() => state.requests.length).toBe(1);
@@ -455,7 +453,7 @@ test("独立浏览器目标发送、后台进度与跨页面恢复保留同一�
   await expect(composer.locator("textarea")).toHaveValue("继续查找帮助");
   await page.reload();
   await expect(
-    page.locator(".assistant-compose:visible .assistant-desktop-note"),
+    page.locator(".assistant-compose:visible .assistant-execution-hint"),
   ).toContainText("小序独立浏览器");
   await expect(
     page.locator(".assistant-compose:visible [data-browser-task-id]"),
@@ -464,8 +462,8 @@ test("独立浏览器目标发送、后台进度与跨页面恢复保留同一�
   state.tasks = [];
   await page.reload();
   await expect(
-    page.locator(".assistant-compose:visible .assistant-desktop-note"),
-  ).toHaveCount(0);
+    page.locator(".assistant-compose:visible .assistant-execution-hint"),
+  ).toContainText("网站内");
   expect(
     await page.evaluate(() => localStorage.getItem("xuti-assistant-desktop:8")),
   ).toBeNull();
@@ -600,6 +598,18 @@ test("工作台三栏保留原场景与草稿，左右收起和调宽不提交�
   await expect(center.locator(".personal-workspace")).toBeVisible();
   await expect(center.locator(".workspace-world-controls")).toBeVisible();
   await expect(center.locator(".workspace-date")).toHaveCount(0);
+  await expect(center.getByRole("combobox", { name: "执行位置" })).toHaveCount(
+    0,
+  );
+  await expect(center.locator(".assistant-desktop-entry")).toHaveCount(0);
+  await expect(
+    page
+      .locator(".workspace-right")
+      .getByRole("combobox", { name: "执行位置" }),
+  ).toBeVisible();
+  await expect(center.locator(".assistant-execution-hint")).toContainText(
+    "网站内",
+  );
   await draft.fill("保留中栏工作台草稿");
   const centerBox = await center.boundingBox();
   const panelBox = await panel.boundingBox();
@@ -629,6 +639,9 @@ test("工作台三栏保留原场景与草稿，左右收起和调宽不提交�
   await expect(
     page.locator(".workspace-right .assistant-desktop-panel"),
   ).toBeVisible();
+  await expect(center.locator(".assistant-execution-hint")).toContainText(
+    "网站内",
+  );
   await expect(draft).toHaveValue("保留中栏工作台草稿");
   await selectAssistantPanel(page, "独立浏览器");
   await expect(panel).toBeVisible();
@@ -738,7 +751,7 @@ for (const width of [1440, 390]) {
       .getByRole("button", { name: "关闭浏览器面板", exact: true })
       .click();
     await expect(
-      page.locator(".assistant-compose:visible .assistant-desktop-note"),
+      page.locator(".assistant-compose:visible .assistant-execution-hint"),
     ).toContainText("小序独立浏览器");
     expect(state.controls).toEqual([]);
   });

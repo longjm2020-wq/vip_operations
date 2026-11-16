@@ -98,7 +98,32 @@
   flex: 1;
   min-height: 0;
   min-width: 0;
-  height: 100%;
+}
+.workspace-tools-host {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.workspace-execution-controls {
+  flex-shrink: 0;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--app-shell-border);
+  color: var(--app-secondary);
+  font-size: 12px;
+}
+.workspace-execution-select {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.workspace-execution-select .ant-select {
+  flex: 1;
+  min-width: 0;
+  max-width: 240px;
+}
+.workspace-execution-controls p {
+  margin: 6px 0 0;
+  line-height: 1.6;
 }
 .workspace-tool-panels {
   overflow: auto;
@@ -178,8 +203,7 @@ body:has(.workspace-columns[data-chat-open="true"])
   .personal-workspace[data-world-mode] {
     padding: 12px;
   }
-  .workspace-center
-    .workspace-world-controls:has(.workspace-ring-motion-control) {
+  .workspace-center .workspace-world-controls {
     flex-wrap: wrap;
     max-width: 100%;
   }

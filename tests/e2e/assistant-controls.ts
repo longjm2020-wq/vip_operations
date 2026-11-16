@@ -68,7 +68,8 @@ export async function openPersonalAssistant(page: Page) {
 }
 
 export async function selectAssistantPanel(page: Page, name: string) {
-  if (await page.locator(".workspace-columns").isVisible()) {
+  if (new URL(page.url()).pathname === "/my-workspace") {
+    await expect(page.locator(".workspace-columns")).toBeVisible();
     if (name === "聊天") {
       if ((page.viewportSize()?.width || 1440) <= 1050) {
         const collapse = page.getByRole("button", {
@@ -117,4 +118,21 @@ export async function setAssistantOption(
   await selectAssistantPanel(page, "对话设置");
   await page.getByRole("checkbox", { name, exact: true }).setChecked(checked);
   await page.getByRole("button", { name: "返回对话", exact: true }).click();
+}
+
+export async function selectAssistantExecution(page: Page, name: string) {
+  const workspace = page.locator(".workspace-columns");
+  if (new URL(page.url()).pathname === "/my-workspace") {
+    await expect(workspace).toBeVisible();
+    const expand = page.getByRole("button", {
+      name: "展开右侧工具栏",
+      exact: true,
+    });
+    if (await expand.isVisible()) await expand.click();
+  }
+  await page.getByRole("combobox", { name: "执行位置", exact: true }).click();
+  await page
+    .locator(".ant-select-dropdown:visible")
+    .getByText(name, { exact: true })
+    .click();
 }

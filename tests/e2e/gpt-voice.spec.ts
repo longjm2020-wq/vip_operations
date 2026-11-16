@@ -885,6 +885,9 @@ test("千问实时语音绑定所选电脑，刷新电脑任务并在同一通�
   expect(starts).toHaveLength(1);
   expect(await page.evaluate(() => window.gptVoiceTest.starts)).toBe(1);
   await page.setViewportSize({ width: 390, height: 844 });
+  await page
+    .getByRole("button", { name: "收起右侧工具栏", exact: true })
+    .click();
   await expect(bubble.locator(".companion-voice-target")).toBeInViewport();
   await page.screenshot({ path: ".local/realtime-desktop-voice-mobile.png" });
   await bubble.getByRole("button", { name: "结束语音", exact: true }).click();
@@ -940,7 +943,7 @@ test("我的电脑语音启动前核对最新连接，通话中仍固定原设�
     exact: true,
   });
   await expect(begin).toHaveAttribute("title", "实时语音对话");
-  await expect(composer.locator(".assistant-desktop-note")).toContainText(
+  await expect(composer.locator(".assistant-execution-hint")).toContainText(
     "专用电脑 A",
   );
   online = false;
@@ -963,9 +966,7 @@ test("我的电脑语音启动前核对最新连接，通话中仍固定原设�
   await expect(bubble.locator(".companion-voice-target")).toHaveText(
     "我的电脑 · 专用电脑 A",
   );
-  await expect(
-    composer.getByRole("combobox", { name: "执行位置" }),
-  ).toBeDisabled();
+  await expect(page.getByRole("combobox", { name: "执行位置" })).toBeDisabled();
   expect(starts).toHaveLength(1);
   await bubble.getByRole("button", { name: "结束语音", exact: true }).click();
   await expect
@@ -1007,7 +1008,7 @@ test("独立浏览器语音核对服务并固定执行环境，不使用本机�
     exact: true,
   });
   await expect(begin).toHaveAttribute("title", "实时语音对话");
-  await expect(composer.locator(".assistant-desktop-note")).toContainText(
+  await expect(composer.locator(".assistant-execution-hint")).toContainText(
     "小序独立浏览器",
   );
   ready = false;
@@ -1031,9 +1032,7 @@ test("独立浏览器语音核对服务并固定执行环境，不使用本机�
   await expect(bubble.locator(".companion-voice-target")).toHaveText(
     "小序独立浏览器",
   );
-  await expect(
-    composer.getByRole("combobox", { name: "执行位置" }),
-  ).toBeDisabled();
+  await expect(page.getByRole("combobox", { name: "执行位置" })).toBeDisabled();
   // Even a malformed server response offering pageControl cannot enable local DOM tools.
   await sendQwenTool(page, "browser-no-local", "page_observe", {});
   const output = await qwenToolOutput(page, "browser-no-local");

@@ -875,7 +875,8 @@ body:has(.assistant-screen.ant-drawer-open) .companion-voice-prompt {
 .assistant-desktop-item > div {
   margin-top: 8px;
 }
-.assistant-desktop-note {
+.assistant-desktop-note,
+.assistant-execution-hint {
   color: var(--ant-color-text-secondary, #7e879f);
   font-size: 12px;
   line-height: 1.7;

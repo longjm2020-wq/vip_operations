@@ -734,3 +734,7 @@
     transition: none;
   }
 }
+.workspace-voice-slot:has(> .companion-voice-prompt) {
+  width: max-content;
+  max-width: 100%;
+}

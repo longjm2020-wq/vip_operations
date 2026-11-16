@@ -1244,6 +1244,43 @@ export function PersonalAssistantProvider({
       </Button>
     </>
   );
+  const executionLabel = teamMode
+    ? "智能体团队"
+    : browserMode
+      ? "小序独立浏览器"
+      : desktopMode
+        ? `我的电脑 · ${desktopTarget?.name || "尚未选择设备"}`
+        : "网站内";
+  const executionSelector = (
+    <Select
+      size="small"
+      aria-label="执行位置"
+      value={desktopMode ? "computer" : desktopChoice.mode}
+      disabled={busy || voice.listening}
+      loading={desktopConnecting}
+      options={[
+        { value: "site", label: "网站内" },
+        { value: "browser", label: "小序独立浏览器" },
+        { value: "computer", label: "我的电脑" },
+      ]}
+      onChange={(value) => {
+        if (value === "site") {
+          rememberDesktop();
+          setTeamMode(false);
+        } else if (value === "browser") chooseBrowser();
+        else if (value === "computer") {
+          if (nativeDesktop) void setupDesktop();
+          else if (desktopTarget?.online) chooseDesktop(desktopTarget.id);
+          else selectSection("desktop");
+        }
+      }}
+    />
+  );
+  const executionNote = desktopMode
+    ? `仅发送本条指令，请移除附件。${desktopTarget && !desktopTarget.crossWindowAuthorized ? "设备授权尚未开启，任务需在所选电脑允许。" : ""}`
+    : browserMode
+      ? "仅发送本条指令，请移除附件。需要你处理时可查看画面并接管。"
+      : undefined;
   const sender = (inDrawer = false) => (
     <div
       className="assistant-compose"
@@ -1273,51 +1310,32 @@ export function PersonalAssistantProvider({
             inspect={() => inspectBrowser(activeBrowserTask.id)}
           />
         )}
-      <div className="assistant-desktop-entry">
-        <Select
-          size="small"
-          aria-label="执行位置"
-          value={desktopMode ? "computer" : desktopChoice.mode}
-          disabled={busy || voice.listening}
-          options={[
-            { value: "site", label: "网站内" },
-            { value: "browser", label: "小序独立浏览器" },
-            { value: "computer", label: "我的电脑" },
-          ]}
-          onChange={(value) => {
-            if (value === "site") {
-              rememberDesktop();
-              setTeamMode(false);
-            } else if (value === "browser") chooseBrowser();
-            else if (value === "computer") {
+      {!docked && (
+        <div className="assistant-desktop-entry">
+          {executionSelector}
+          <Button
+            size="small"
+            icon={<GlobalOutlined aria-hidden />}
+            disabled={busy || voice.listening}
+            onClick={() => (browserMode ? inspectBrowser() : chooseBrowser())}
+          >
+            独立浏览器
+          </Button>
+          <Button
+            size="small"
+            icon={<DesktopOutlined aria-hidden />}
+            loading={desktopConnecting}
+            disabled={busy || voice.listening}
+            onClick={() => {
               if (nativeDesktop) void setupDesktop();
               else if (desktopTarget?.online) chooseDesktop(desktopTarget.id);
               else selectSection("desktop");
-            }
-          }}
-        />
-        <Button
-          size="small"
-          icon={<GlobalOutlined aria-hidden />}
-          disabled={busy || voice.listening}
-          onClick={() => (browserMode ? inspectBrowser() : chooseBrowser())}
-        >
-          独立浏览器
-        </Button>
-        <Button
-          size="small"
-          icon={<DesktopOutlined aria-hidden />}
-          loading={desktopConnecting}
-          disabled={busy || voice.listening}
-          onClick={() => {
-            if (nativeDesktop) void setupDesktop();
-            else if (desktopTarget?.online) chooseDesktop(desktopTarget.id);
-            else selectSection("desktop");
-          }}
-        >
-          我的电脑
-        </Button>
-      </div>
+            }}
+          >
+            我的电脑
+          </Button>
+        </div>
+      )}
       <Sender
         value={text}
         onChange={(value) => setText(value.slice(0, teamMode ? 8000 : 4000))}
@@ -1501,7 +1519,12 @@ export function PersonalAssistantProvider({
           }
         />
       )}
-      {desktopMode && (
+      {docked && (
+        <div className="assistant-execution-hint" aria-label="当前执行位置">
+          执行位置：{executionLabel}
+        </div>
+      )}
+      {!docked && desktopMode && (
         <div className="assistant-desktop-note">
           <span>
             我的电脑 · {desktopTarget?.name || "尚未选择设备"}
@@ -1521,7 +1544,7 @@ export function PersonalAssistantProvider({
         </div>
       )}
       {desktopProblem && <Alert type="warning" title={desktopProblem} />}
-      {browserMode && (
+      {!docked && browserMode && (
         <div className="assistant-desktop-note">
           <span>
             小序独立浏览器 ·
@@ -2129,9 +2152,18 @@ export function PersonalAssistantProvider({
       {docked &&
         workspaceToolsHost &&
         createPortal(
-          <div className="workspace-tool-panels" data-tool={panelSection}>
-            {panels}
-          </div>,
+          <>
+            <div className="workspace-execution-controls">
+              <div className="workspace-execution-select">
+                <span>执行位置</span>
+                {executionSelector}
+              </div>
+              {executionNote && <p>{executionNote}</p>}
+            </div>
+            <div className="workspace-tool-panels" data-tool={panelSection}>
+              {panels}
+            </div>
+          </>,
           workspaceToolsHost,
         )}
       {docked &&

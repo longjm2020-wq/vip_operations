@@ -1,6 +1,7 @@
 import {
   openPersonalAssistant,
   selectAssistantPanel,
+  selectAssistantExecution,
 } from "./assistant-controls.js";
 import { expect, test, type Page } from "@playwright/test";
 import { defaultTeamSettings } from "../../packages/contracts/src/assistant-team.js";
@@ -588,7 +589,7 @@ test("简洁输入区直接发送附件并下载任务结果，历史回复隐�
   await expect(dialog.locator(".agent-attachments")).toContainText("资料.txt");
   await expect(dialog.locator(".agent-composer-tools button")).toHaveCount(4);
   await expect(dialog.getByRole("combobox", { name: "执行位置" })).toHaveCount(
-    1,
+    0,
   );
   await dialog
     .getByPlaceholder(/告诉我你想完成什么/)
@@ -730,7 +731,7 @@ test("我的电脑无设备只显示连接入口，旧专用偏好不自动选�
   await page.goto("/my-workspace");
   const composer = page.locator(".assistant-compose:visible");
   await expect(composer.getByPlaceholder(/告诉我你想完成什么/)).toBeEnabled();
-  await composer.getByRole("button", { name: "我的电脑", exact: true }).click();
+  await selectAssistantExecution(page, "我的电脑");
   const panel = page.locator(".assistant-desktop-panel");
   await expect(
     panel.getByRole("link", { name: /下载 Windows 桌面端/ }),
@@ -754,14 +755,10 @@ test("我的电脑无设备只显示连接入口，旧专用偏好不自动选�
   await panel
     .getByRole("button", { name: "在这台电脑执行", exact: true })
     .click();
-  await expect(composer.locator(".assistant-desktop-note")).toContainText(
+  await expect(composer.locator(".assistant-execution-hint")).toContainText(
     "我的电脑 · 本机测试电脑",
   );
-  await composer.getByRole("combobox", { name: "执行位置" }).click();
-  await page
-    .locator(".ant-select-dropdown:visible")
-    .getByText("网站内", { exact: true })
-    .click();
+  await selectAssistantExecution(page, "网站内");
   await expect(composer.getByPlaceholder(/告诉我你想完成什么/)).toBeEnabled();
 });
 
@@ -871,8 +868,8 @@ test("桌面端一键操作本机，首次确认后刷新仍记住目标且不�
   );
   await page.goto("/my-workspace");
   const composer = page.locator(".assistant-compose:visible");
-  await composer.getByRole("button", { name: "我的电脑", exact: true }).click();
-  await expect(composer.locator(".assistant-desktop-note")).toContainText(
+  await selectAssistantExecution(page, "我的电脑");
+  await expect(composer.locator(".assistant-execution-hint")).toContainText(
     "我的电脑",
   );
   await expect(composer.getByPlaceholder(/描述电脑任务/)).toBeVisible();
@@ -885,7 +882,8 @@ test("桌面端一键操作本机，首次确认后刷新仍记住目标且不�
   expect(state.actions).not.toContain("show-tasks");
   await page.reload();
   await expect(composer.getByPlaceholder(/描述电脑任务/)).toBeVisible();
-  await composer.getByRole("button", { name: "我的电脑", exact: true }).click();
+  await selectAssistantPanel(page, "我的电脑");
+  await page.getByRole("button", { name: "使用我的电脑", exact: true }).click();
   expect(pairCodes).toBe(1);
   expect(
     (
@@ -979,7 +977,7 @@ test("电脑操作面板选择设备并撤销授权，输入区仅显示当前�
     .click();
   await expect(device).toContainText("逐次允许");
   await device.getByRole("button", { name: "在这台电脑执行" }).click();
-  await expect(composer.locator(".assistant-desktop-note")).toContainText(
+  await expect(composer.locator(".assistant-execution-hint")).toContainText(
     "测试电脑",
   );
   expect(mutations).toHaveLength(1);
@@ -991,7 +989,7 @@ test("电脑操作面板选择设备并撤销授权，输入区仅显示当前�
   expect(requests[0]).not.toHaveProperty("authorizationId");
   expect(requests[0]).not.toHaveProperty("webOpenResult");
   expect(page.context().pages()).toHaveLength(1);
-  await composer.getByRole("button", { name: "返回网站对话" }).click();
+  await selectAssistantExecution(page, "网站内");
   await expect(composer.getByPlaceholder(/告诉我你想完成什么/)).toBeVisible();
 });
 
@@ -1260,7 +1258,7 @@ test("长聊天打开电脑面板从顶部显示连接入口，刷新任务保�
   await expect
     .poll(() => chatBody.evaluate((el) => el.scrollTop))
     .toBeGreaterThan(500);
-  await dialog.getByRole("button", { name: "我的电脑", exact: true }).click();
+  await selectAssistantPanel(page, "我的电脑");
   const panel = page.locator(".workspace-right .assistant-desktop-panel");
   const body = page.locator(".workspace-tool-panels");
   await expect(panel.getByRole("status")).toHaveCount(10);
@@ -1289,10 +1287,7 @@ test("长聊天打开电脑面板从顶部显示连接入口，刷新任务保�
     .getByRole("button", { name: "收起右侧工具栏", exact: true })
     .click();
   await expect(panel).toBeHidden();
-  await page
-    .locator(".assistant-compose:visible")
-    .getByRole("button", { name: "我的电脑", exact: true })
-    .click();
+  await selectAssistantPanel(page, "我的电脑");
   await expect.poll(() => body.evaluate((el) => el.scrollTop)).toBe(0);
   await expect(
     panel.getByRole("link", { name: "下载 Windows 桌面端" }),
@@ -1321,7 +1316,7 @@ test("取消本机授权保留团队模式和原文附件，重试成功才切�
   await expect(composer.locator(".agent-attachments")).toContainText(
     "资料.txt",
   );
-  await composer.getByRole("button", { name: "我的电脑", exact: true }).click();
+  await selectAssistantExecution(page, "我的电脑");
   await expect(
     page.getByText("已取消授权，点击「操作本机」可以重新开始", { exact: true }),
   ).toBeVisible();
@@ -1340,7 +1335,7 @@ test("取消本机授权保留团队模式和原文附件，重试成功才切�
     "资料.txt",
   );
   state.accept = true;
-  await composer.getByRole("button", { name: "我的电脑", exact: true }).click();
+  await selectAssistantExecution(page, "我的电脑");
   await expect(composer.getByPlaceholder(/描述电脑任务/)).toHaveValue(
     "保留这份尚未发送的草稿",
   );
@@ -1391,13 +1386,13 @@ test("记住的电脑离线或归属失效时不改发网站，不同账号不�
   state.userId = "8";
   await page.reload();
   await expect(composer.getByPlaceholder(/告诉我你想完成什么/)).toBeEnabled();
-  await expect(composer.locator(".assistant-desktop-note")).toHaveCount(0);
+  await expect(composer.locator(".assistant-execution-hint")).toContainText(
+    "网站内",
+  );
   state.userId = "7";
   await page.reload();
   await expect(composer.getByPlaceholder(/描述电脑任务/)).toBeDisabled();
-  await composer
-    .getByRole("button", { name: "返回网站对话", exact: true })
-    .click();
+  await selectAssistantExecution(page, "网站内");
   expect(
     await page.evaluate(() => localStorage.getItem("xuti-assistant-desktop:7")),
   ).toBeNull();
@@ -1419,14 +1414,14 @@ test("原生操作本机链接消费一次，重复点击不重复配对或确�
   expect(state.actions.filter((action) => action === "authorize")).toHaveLength(
     1,
   );
-  await composer
-    .getByRole("button", { name: "我的电脑", exact: true })
+  await page
+    .getByRole("button", { name: "使用我的电脑", exact: true })
     .evaluate((element) => {
       (element as HTMLButtonElement).click();
       (element as HTMLButtonElement).click();
     });
   await expect(
-    composer.getByRole("button", { name: "我的电脑", exact: true }),
+    page.getByRole("button", { name: "使用我的电脑", exact: true }),
   ).toBeEnabled();
   expect(state.pairCodes).toBe(1);
   expect(state.actions.filter((action) => action === "authorize")).toHaveLength(
@@ -1458,10 +1453,9 @@ test("已有任务处理中原生事件不会刷新页面或改变目标，完�
     }),
   );
   await page.goto("/my-workspace");
+  await selectAssistantPanel(page, "我的电脑");
   await expect(
-    page
-      .locator(".assistant-compose:visible")
-      .getByRole("button", { name: "我的电脑", exact: true }),
+    page.getByRole("button", { name: "使用我的电脑", exact: true }),
   ).toBeDisabled();
   const locationBefore = page.url();
   const navigationBefore = await page.evaluate(() => performance.timeOrigin);
@@ -1487,9 +1481,11 @@ test("已有任务处理中原生事件不会刷新页面或改变目标，完�
     await page.evaluate(() => localStorage.getItem("xuti-assistant-desktop:7")),
   ).toBeNull();
   pending = false;
-  const button = page
-    .locator(".assistant-compose:visible")
-    .getByRole("button", { name: "我的电脑", exact: true });
+  await selectAssistantPanel(page, "我的电脑");
+  const button = page.getByRole("button", {
+    name: "使用我的电脑",
+    exact: true,
+  });
   await expect(button).toBeEnabled({ timeout: 10000 });
   expect(state.actions).not.toContain("authorize");
   await button.click();
@@ -1508,9 +1504,11 @@ test("本机连接等待期间切换账号会中止旧授权流程，不继续�
     releaseStatus = resolve;
   });
   await page.goto("/my-workspace");
-  const button = page
-    .locator(".assistant-compose:visible")
-    .getByRole("button", { name: "我的电脑", exact: true });
+  await selectAssistantPanel(page, "我的电脑");
+  const button = page.getByRole("button", {
+    name: "使用我的电脑",
+    exact: true,
+  });
   await button.click();
   await expect.poll(() => state.actions.includes("status")).toBe(true);
   const navigationBefore = await page.evaluate(() => performance.timeOrigin);
@@ -1520,7 +1518,7 @@ test("本机连接等待期间切换账号会中止旧授权流程，不继续�
     const { queryClient } = await import(modulePath);
     await queryClient.invalidateQueries({ queryKey: ["me"] });
   });
-  await expect(button).toBeEnabled();
+  await expect(page.getByRole("combobox", { name: "执行位置" })).toBeEnabled();
   expect(await page.evaluate(() => performance.timeOrigin)).toBe(
     navigationBefore,
   );

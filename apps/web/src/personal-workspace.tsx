@@ -73,10 +73,6 @@ import {
   WorkspaceDockCopy,
 } from "./workspace-dock-rendering";
 import "./workspace-world.css";
-import {
-  useWorkspaceRingMotion,
-  WorkspaceRingMotionControl,
-} from "./workspace-ring-motion";
 
 const PersonalWorkspaceContent = lazyPage(() =>
   import("./personal-workspace-content").then((module) => ({
@@ -510,7 +506,6 @@ export function PersonalWorkspacePage() {
     ),
     [title, setTitle] = useState(""),
     [dueDate, setDueDate] = useState("");
-  const ringMotion = useWorkspaceRingMotion(user.id);
   useEffect(() => {
     const resetLayout = () => setBranchLayout(false);
     window.addEventListener("xuti-workspace-layout-reset", resetLayout);
@@ -622,7 +617,7 @@ export function PersonalWorkspacePage() {
         ref={world.surface}
         className="personal-workspace"
         data-workspace-layout={branchLayout ? "branches" : "orbit"}
-        data-workspace-ring-motion={ringMotion.enabled ? "enabled" : "disabled"}
+        data-workspace-ring-motion="enabled"
         data-scene-presence={scenePresence}
         data-hologram-presence={hologramPresence}
         role="region"
@@ -703,7 +698,6 @@ export function PersonalWorkspacePage() {
               <BranchesOutlined />
             </button>
             <WorkspaceHologram onPresenceChange={setHologramPresence} />
-            <WorkspaceRingMotionControl motion={ringMotion} />
           </div>
           <div className="workspace-voice-slot" data-world-ui />
         </header>
