@@ -15,6 +15,7 @@ function fixture() {
     state:vi.fn(async () => ({cookies:[],origins:[]})),
     execute:vi.fn(async (action,current,signal) => { if (!await current()) throw Error('BROWSER_ACTION_STALE'); signal.throwIfAborted(); dispatches.push(action.kind); }),
     manual:vi.fn(async (action,current,signal) => { if (!await current()) throw Error('BROWSER_ACTION_STALE'); signal.throwIfAborted(); dispatches.push('manual:'+action.kind); }),
+    navigate:vi.fn(async (action,current,signal) => { if (!await current()) throw Error('BROWSER_ACTION_STALE'); signal.throwIfAborted(); dispatches.push('navigate:'+action.kind); }),
     close:vi.fn(async () => {}),
   };
   const open=vi.fn(async (_saved:unknown,_signal:AbortSignal) => driver);
@@ -32,6 +33,16 @@ function fixture() {
 const click={kind:'click' as const,ref:'bound-ref',description:'点击目标'};
 
 describe('private browser RPC',() => {
+  it('uses a typed navigation operation with a fresh permission check and never accepts internal URLs',async()=>{
+    const f=fixture();await f.client.initialize(null);
+    const current=vi.fn(async()=>true);
+    await f.client.navigate({kind:'goto',url:'https://example.com/'},current,new AbortController().signal);
+    await f.client.navigate({kind:'resize',viewport:{width:700,height:900}},current,new AbortController().signal);
+    expect(f.dispatches).toEqual(['navigate:goto','navigate:resize']);expect(current).toHaveBeenCalledTimes(2);
+    await expect(f.client.navigate({kind:'reload'},async()=>false,new AbortController().signal)).rejects.toThrow('BROWSER_HANDOFF');
+    expect(browserRpcRequest.safeParse({v:1,id:9,op:'navigate',action:{kind:'goto',url:'file:///secret'}}).success).toBe(false);
+    await f.client.close();
+  });
   it('opens one owned session, returns bounded observations/frames and asks permission at dispatch',async () => {
     const f=fixture(); const state={cookies:[{name:'session',value:'owned-secret'}],origins:[]};
     await f.client.initialize(state);

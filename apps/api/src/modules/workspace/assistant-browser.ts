@@ -3,13 +3,16 @@ import {
   randomBytes,
   createCipheriv,
   createDecipheriv,
+  createHash,
 } from "node:crypto";
 import { z } from "zod";
+import { HttpException } from "@nestjs/common";
 import {
   db,
   one,
   rows,
   type Row,
+  type Tx,
 } from "../../../../../packages/database/src/index.js";
 import {
   browserTaskSchema,
@@ -17,6 +20,14 @@ import {
   browserActionSchema,
   browserStepLabels,
   browserRuntimeNotes,
+  browserBrowseSchema,
+  browserNavigationRequestSchema,
+  browserNavigationActionSchema,
+  type BrowserNavigationAction,
+  type BrowserMode,
+  type BrowserViewport,
+  type BrowserAutomationStatus,
+  type BrowserNavigationState,
   type BrowserAction,
   type BrowserFrame,
   type BrowserManualAction,
@@ -117,11 +128,27 @@ const taskView = (row: Row): BrowserTask => ({
   title: row.page_title,
   createdAt: iso(row.created_at)!,
   updatedAt: iso(row.updated_at)!,
+  mode: row.mode || "AGENT",
+  automationStatus: row.automation_status || "IDLE",
+  automationResult: assistantPublicText(row.automation_result || ""),
+  epoch: row.epoch,
+  lastActivityAt: iso(row.last_activity_at)!,
+  viewport: {
+    width: row.viewport_width || 1080,
+    height: row.viewport_height || 760,
+  },
+  navigationState: row.navigation_state || "STARTING",
 });
 export async function expireBrowserTasks() {
   await db.$executeRawUnsafe(
+    "UPDATE personal_assistant_browser_tasks SET status='DONE',stage='浏览器闲置5分钟，已关闭页面并保存登录状态',lease_id=NULL,epoch=epoch+1,updated_at=now() WHERE mode='BROWSE' AND status IN ('PAUSED','NEEDS_USER') AND greatest(last_activity_at,coalesce(ready_at,created_at))<now()-interval '5 minutes'",
+  );
+  await db.$executeRawUnsafe(
     "UPDATE personal_assistant_browser_tasks SET status='FAILED',stage='独立浏览器已超时或执行中断；未自动重试操作，请核对后重新发起',lease_id=NULL,epoch=epoch+1,frame_encrypted=NULL,frame_id=NULL,updated_at=now() WHERE status=ANY($1::text[]) AND (expires_at<now() OR (lease_id IS NOT NULL AND heartbeat_at<now()-interval '1 minute'))",
     active,
+  );
+  await db.$executeRawUnsafe(
+    "UPDATE personal_assistant_browser_goals g SET status=CASE WHEN t.status='FAILED' THEN 'FAILED' ELSE 'CANCELED' END,result=t.stage,finished_at=now() FROM personal_assistant_browser_tasks t WHERE g.task_id=t.id AND g.user_id=t.user_id AND g.status IN ('RUNNING','PAUSED','NEEDS_USER') AND t.status IN ('DONE','FAILED','CANCELED')",
   );
   await db.$executeRawUnsafe(
     "UPDATE personal_assistant_browser_tasks SET frame_id=NULL,frame_encrypted=NULL WHERE frame_id IS NOT NULL AND (status IN ('FAILED','CANCELED') OR (status='DONE' AND frame_at<now()-interval '24 hours'))",
@@ -145,7 +172,7 @@ export async function browserStatus(c: Context): Promise<BrowserState> {
     ),
     rows(
       db,
-      "SELECT id,instruction,status,stage,step,page_url,page_title,created_at,updated_at FROM personal_assistant_browser_tasks WHERE user_id=$1::bigint ORDER BY created_at DESC LIMIT 30",
+      "SELECT * FROM personal_assistant_browser_tasks WHERE user_id=$1::bigint ORDER BY updated_at DESC LIMIT 30",
       c.actor.id,
     ),
     one(
@@ -166,6 +193,7 @@ export async function browserStatus(c: Context): Promise<BrowserState> {
       : "BROWSER_RUNTIME_UNAVAILABLE";
   return {
     ready: encrypted && worker && ai,
+    canBrowse: encrypted && worker,
     workerOnline: worker,
     encryptionReady: encrypted,
     note: !encrypted
@@ -185,12 +213,176 @@ export async function browserStatus(c: Context): Promise<BrowserState> {
     tasks: tasks.map(taskView),
   };
 }
+function requestHash(input: unknown) {
+  return createHash("sha256").update(JSON.stringify(input)).digest("hex");
+}
+async function priorBrowserRequest(
+  tx: Tx,
+  userId: string,
+  requestId: string,
+  kind: string,
+  input: unknown,
+  taskId?: string,
+) {
+  const prior = await one(
+    tx,
+    "SELECT r.request_hash,r.kind,t.* FROM personal_assistant_browser_requests r JOIN personal_assistant_browser_tasks t ON t.id=r.task_id AND t.user_id=r.user_id WHERE r.user_id=$1::bigint AND r.request_id=$2::uuid",
+    userId,
+    requestId,
+  );
+  if (!prior) return null;
+  if (
+    prior.kind !== kind ||
+    prior.request_hash !== requestHash(input) ||
+    (taskId && prior.id !== taskId)
+  )
+    fail("REQUEST_CONFLICT", "浏览器请求标识已用于其他操作", 409);
+  return prior;
+}
+async function rememberBrowserRequest(
+  tx: Tx,
+  userId: string,
+  requestId: string,
+  taskId: string,
+  kind: string,
+  input: unknown,
+) {
+  await tx.$executeRawUnsafe(
+    "INSERT INTO personal_assistant_browser_requests(user_id,request_id,task_id,kind,request_hash) VALUES($1::bigint,$2::uuid,$3::uuid,$4,$5)",
+    userId,
+    requestId,
+    taskId,
+    kind,
+    requestHash(input),
+  );
+}
+async function cancelBrowserGoal(tx: Tx, row: Row, note: string) {
+  if (!row.active_goal_id) return;
+  await tx.$executeRawUnsafe(
+    "UPDATE personal_assistant_browser_goals SET status='CANCELED',result=$3,finished_at=now() WHERE id=$1::uuid AND user_id=$2::bigint AND status IN ('RUNNING','PAUSED','NEEDS_USER')",
+    row.active_goal_id,
+    row.user_id,
+    note,
+  );
+}
+async function insertBrowserNavigation(
+  tx: Tx,
+  row: Row,
+  requestId: string,
+  action: BrowserNavigationAction,
+) {
+  const id = randomUUID();
+  await tx.$executeRawUnsafe(
+    "INSERT INTO personal_assistant_browser_actions(id,task_id,user_id,request_id,epoch,frame_id,kind,payload_encrypted) VALUES($1::uuid,$2::uuid,$3::bigint,$4::uuid,$5,NULL,'NAVIGATION',$6)",
+    id,
+    row.id,
+    row.user_id,
+    requestId,
+    row.epoch,
+    encryptBrowserData(String(row.user_id), `action:${row.id}:${id}`, action),
+  );
+}
+export async function queueBrowserBrowse(
+  c: Context,
+  input: unknown,
+): Promise<BrowserTask> {
+  requireAssistant(c);
+  const b = parse(browserBrowseSchema, input);
+  const previous = await priorBrowserRequest(
+    db,
+    c.actor.id,
+    b.requestId,
+    "BROWSE",
+    b,
+  );
+  if (previous) return taskView(previous);
+  const state = await browserStatus(c);
+  if (!state.canBrowse) fail("BROWSER_UNAVAILABLE", state.note, 503);
+  return db.$transaction(async (tx) => {
+    await one(
+      tx,
+      "SELECT id FROM users WHERE id=$1::bigint FOR UPDATE",
+      c.actor.id,
+    );
+    const prior = await priorBrowserRequest(
+      tx,
+      c.actor.id,
+      b.requestId,
+      "BROWSE",
+      b,
+    );
+    if (prior) return taskView(prior);
+    let row = await one(
+      tx,
+      "SELECT * FROM personal_assistant_browser_tasks WHERE user_id=$1::bigint AND status=ANY($2::text[]) FOR UPDATE",
+      c.actor.id,
+      active,
+    );
+    if (row) {
+      await cancelBrowserGoal(tx, row, "用户已切换到直接浏览");
+      await tx.$executeRawUnsafe(
+        "DELETE FROM personal_assistant_browser_actions WHERE task_id=$1::uuid AND consumed_at IS NULL",
+        row.id,
+      );
+      row = await one(
+        tx,
+        "UPDATE personal_assistant_browser_tasks SET mode='BROWSE',status=CASE WHEN lease_id IS NULL THEN 'QUEUED' ELSE 'PAUSED' END,automation_status=CASE WHEN active_goal_id IS NULL THEN automation_status ELSE 'CANCELED' END,automation_result=CASE WHEN active_goal_id IS NULL THEN automation_result ELSE '用户已切换到直接浏览' END,active_goal_id=NULL,epoch=epoch+1,last_activity_at=now(),navigation_state=CASE WHEN lease_id IS NULL THEN 'STARTING' ELSE 'LOADING' END,initial_url=CASE WHEN lease_id IS NULL THEN $3 ELSE initial_url END,viewport_width=coalesce($4,viewport_width),viewport_height=coalesce($5,viewport_height),frame_id=NULL,frame_encrypted=NULL,stage='正在打开网页',updated_at=now() WHERE id=$1::uuid AND user_id=$2::bigint RETURNING *",
+        row.id,
+        c.actor.id,
+        b.url,
+        b.viewport?.width ?? null,
+        b.viewport?.height ?? null,
+      );
+    } else {
+      const profile = await one(
+        tx,
+        "INSERT INTO personal_assistant_browser_profiles(id,user_id) VALUES($1::uuid,$2::bigint) ON CONFLICT(user_id) DO UPDATE SET user_id=EXCLUDED.user_id RETURNING id,state_version",
+        randomUUID(),
+        c.actor.id,
+      );
+      row = await one(
+        tx,
+        "INSERT INTO personal_assistant_browser_tasks(id,user_id,profile_id,profile_version,request_id,instruction,initial_url,mode,viewport_width,viewport_height) VALUES($1::uuid,$2::bigint,$3::uuid,$4,$5::uuid,'直接浏览网页',$6,'BROWSE',$7,$8) RETURNING *",
+        randomUUID(),
+        c.actor.id,
+        profile!.id,
+        profile!.state_version,
+        b.requestId,
+        b.url,
+        b.viewport?.width || 1080,
+        b.viewport?.height || 760,
+      );
+    }
+    await insertBrowserNavigation(tx, row!, b.requestId, {
+      kind: "goto",
+      url: b.url,
+    });
+    await rememberBrowserRequest(
+      tx,
+      c.actor.id,
+      b.requestId,
+      row!.id,
+      "BROWSE",
+      b,
+    );
+    return taskView(row!);
+  });
+}
+
 export async function queueBrowserTask(
   c: Context,
   input: unknown,
 ): Promise<BrowserTask> {
   requireAssistant(c);
   const b = parse(browserTaskSchema, input);
+  const previous = await priorBrowserRequest(
+    db,
+    c.actor.id,
+    b.requestId,
+    "AGENT",
+    b,
+  );
+  if (previous) return taskView(previous);
   const status = await browserStatus(c);
   if (!status.ready) fail("BROWSER_UNAVAILABLE", status.note, 503);
   const model = await resolveAgentModel(b.model, "assistant_browser");
@@ -202,6 +394,14 @@ export async function queueBrowserTask(
       "SELECT id FROM users WHERE id=$1::bigint FOR UPDATE",
       c.actor.id,
     );
+    const prior = await priorBrowserRequest(
+      tx,
+      c.actor.id,
+      b.requestId,
+      "AGENT",
+      b,
+    );
+    if (prior) return taskView(prior);
     const existing = await one(
       tx,
       "SELECT * FROM personal_assistant_browser_tasks WHERE user_id=$1::bigint AND request_id=$2::uuid",
@@ -217,19 +417,57 @@ export async function queueBrowserTask(
         fail("REQUEST_CONFLICT", "浏览器任务标识已被另一条指令使用", 409);
       return taskView(existing);
     }
-    if (
-      await one(
-        tx,
-        "SELECT id FROM personal_assistant_browser_tasks WHERE user_id=$1::bigint AND status=ANY($2::text[])",
-        c.actor.id,
-        active,
-      )
-    )
+    const current = await one(
+      tx,
+      "SELECT * FROM personal_assistant_browser_tasks WHERE user_id=$1::bigint AND status=ANY($2::text[]) FOR UPDATE",
+      c.actor.id,
+      active,
+    );
+    if (current && current.mode !== "BROWSE")
       fail(
         "BROWSER_BUSY",
         "独立浏览器已有任务，请查看进度、继续或停止当前任务",
         409,
       );
+    const goalId = randomUUID();
+    if (current) {
+      await tx.$executeRawUnsafe(
+        "DELETE FROM personal_assistant_browser_actions WHERE task_id=$1::uuid AND consumed_at IS NULL",
+        current.id,
+      );
+      const row = await one(
+        tx,
+        "UPDATE personal_assistant_browser_tasks SET mode='AGENT',status=CASE WHEN lease_id IS NULL THEN 'QUEUED' ELSE 'RUNNING' END,instruction=$3,model_ref=$4,automation_status='RUNNING',automation_result='',active_goal_id=$5::uuid,epoch=epoch+1,step=0,last_activity_at=now(),frame_id=NULL,frame_encrypted=NULL,stage='小序开始执行目标',updated_at=now() WHERE id=$1::uuid AND user_id=$2::bigint RETURNING *",
+        current.id,
+        c.actor.id,
+        b.instruction,
+        model.id,
+        goalId,
+      );
+      await tx.$executeRawUnsafe(
+        "INSERT INTO personal_assistant_browser_goals(id,task_id,user_id,request_id,instruction,model_ref,status) VALUES($1::uuid,$2::uuid,$3::bigint,$4::uuid,$5,$6,'RUNNING')",
+        goalId,
+        row!.id,
+        c.actor.id,
+        b.requestId,
+        b.instruction,
+        model.id,
+      );
+      if (b.url)
+        await insertBrowserNavigation(tx, row!, b.requestId, {
+          kind: "goto",
+          url: b.url,
+        });
+      await rememberBrowserRequest(
+        tx,
+        c.actor.id,
+        b.requestId,
+        row!.id,
+        "AGENT",
+        b,
+      );
+      return taskView(row!);
+    }
     const profile = await one(
       tx,
       "INSERT INTO personal_assistant_browser_profiles(id,user_id) VALUES($1::uuid,$2::bigint) ON CONFLICT(user_id) DO UPDATE SET user_id=EXCLUDED.user_id RETURNING id,state_version",
@@ -238,7 +476,7 @@ export async function queueBrowserTask(
     );
     const row = await one(
       tx,
-      "INSERT INTO personal_assistant_browser_tasks(id,user_id,profile_id,profile_version,request_id,instruction,initial_url,model_ref) VALUES($1::uuid,$2::bigint,$3::uuid,$4,$5::uuid,$6,$7,$8) RETURNING *",
+      "INSERT INTO personal_assistant_browser_tasks(id,user_id,profile_id,profile_version,request_id,instruction,initial_url,model_ref,automation_status,active_goal_id) VALUES($1::uuid,$2::bigint,$3::uuid,$4,$5::uuid,$6,$7,$8,'RUNNING',$9::uuid) RETURNING *",
       randomUUID(),
       c.actor.id,
       profile!.id,
@@ -247,8 +485,91 @@ export async function queueBrowserTask(
       b.instruction,
       b.url || "",
       model.id,
+      goalId,
+    );
+    await tx.$executeRawUnsafe(
+      "INSERT INTO personal_assistant_browser_goals(id,task_id,user_id,request_id,instruction,model_ref,status) VALUES($1::uuid,$2::uuid,$3::bigint,$4::uuid,$5,$6,'RUNNING')",
+      goalId,
+      row!.id,
+      c.actor.id,
+      b.requestId,
+      b.instruction,
+      model.id,
+    );
+    await rememberBrowserRequest(
+      tx,
+      c.actor.id,
+      b.requestId,
+      row!.id,
+      "AGENT",
+      b,
     );
     return taskView(row!);
+  });
+}
+export async function queueBrowserNavigation(
+  c: Context,
+  id: string,
+  input: unknown,
+): Promise<BrowserTask> {
+  requireAssistant(c);
+  parse(z.uuid(), id);
+  const b = parse(browserNavigationRequestSchema, input);
+  return db.$transaction(async (tx) => {
+    await one(
+      tx,
+      "SELECT id FROM users WHERE id=$1::bigint FOR UPDATE",
+      c.actor.id,
+    );
+    const prior = await priorBrowserRequest(
+      tx,
+      c.actor.id,
+      b.requestId,
+      "NAVIGATION",
+      b,
+      id,
+    );
+    if (prior) return taskView(prior);
+    const row = await one(
+      tx,
+      "SELECT * FROM personal_assistant_browser_tasks WHERE id=$1::uuid AND user_id=$2::bigint FOR UPDATE",
+      id,
+      c.actor.id,
+    );
+    if (!row) fail("NOT_FOUND", "独立浏览器不存在", 404);
+    if (
+      !active.includes(row.status) ||
+      row.epoch !== b.epoch ||
+      new Date(row.expires_at).getTime() <= Date.now() ||
+      (row.lease_id &&
+        Date.now() - new Date(row.heartbeat_at).getTime() > 60000)
+    )
+      fail("STALE_BROWSER_SESSION", "浏览器状态已变化，请刷新后重新操作", 409);
+    const resize = b.action.kind === "resize";
+    if (!resize) await cancelBrowserGoal(tx, row, "用户已接管浏览器导航");
+    await tx.$executeRawUnsafe(
+      "DELETE FROM personal_assistant_browser_actions WHERE task_id=$1::uuid AND consumed_at IS NULL",
+      id,
+    );
+    const next = await one(
+      tx,
+      "UPDATE personal_assistant_browser_tasks SET mode=CASE WHEN $3 THEN mode ELSE 'BROWSE' END,status=CASE WHEN $3 THEN status WHEN lease_id IS NULL THEN 'QUEUED' ELSE 'PAUSED' END,automation_status=CASE WHEN $3 OR active_goal_id IS NULL THEN automation_status ELSE 'CANCELED' END,automation_result=CASE WHEN $3 OR active_goal_id IS NULL THEN automation_result ELSE '用户已接管浏览器导航' END,active_goal_id=CASE WHEN $3 THEN active_goal_id ELSE NULL END,epoch=epoch+1,last_activity_at=now(),navigation_state='LOADING',viewport_width=coalesce($4,viewport_width),viewport_height=coalesce($5,viewport_height),frame_id=NULL,frame_encrypted=NULL,stage='正在更新网页',updated_at=now() WHERE id=$1::uuid AND user_id=$2::bigint RETURNING *",
+      id,
+      c.actor.id,
+      resize,
+      b.action.kind === "resize" ? b.action.viewport.width : null,
+      b.action.kind === "resize" ? b.action.viewport.height : null,
+    );
+    await insertBrowserNavigation(tx, next!, b.requestId, b.action);
+    await rememberBrowserRequest(
+      tx,
+      c.actor.id,
+      b.requestId,
+      id,
+      "NAVIGATION",
+      b,
+    );
+    return taskView(next!);
   });
 }
 async function ownedTask(c: Context, id: string) {
@@ -272,10 +593,16 @@ export async function controlBrowserTask(
     z.object({ action: z.enum(["pause", "resume", "stop"]) }).strict(),
     input,
   );
-  await ownedTask(c, id);
+  const owned = await ownedTask(c, id);
+  if (b.action === "stop" && owned.mode === "BROWSE") {
+    await closeBrowserSessionForUser(c, id);
+    return taskView(await ownedTask(c, id));
+  }
+  if (owned.mode !== "AGENT")
+    fail("BROWSER_NO_AUTOMATION", "当前没有可暂停或继续的自动操作目标", 409);
   const status =
     b.action === "stop"
-      ? "CANCELED"
+      ? "PAUSED"
       : b.action === "pause"
         ? "PAUSED"
         : "RUNNING";
@@ -287,22 +614,42 @@ export async function controlBrowserTask(
         : active;
   const row = await one(
     db,
-    "UPDATE personal_assistant_browser_tasks SET status=$3,stage=$4,epoch=epoch+1,lease_id=CASE WHEN $3='CANCELED' THEN NULL ELSE lease_id END,frame_id=NULL,frame_encrypted=NULL,updated_at=now() WHERE id=$1::uuid AND user_id=$2::bigint AND status=ANY($5::text[]) AND ($3<>'RUNNING' OR (lease_id IS NOT NULL AND heartbeat_at>now()-interval '1 minute' AND expires_at>now())) RETURNING *",
+    "UPDATE personal_assistant_browser_tasks SET status=CASE WHEN lease_id IS NULL THEN 'QUEUED' ELSE $3 END,stage=$4,mode=CASE WHEN $6 THEN 'BROWSE' ELSE mode END,automation_status=CASE WHEN $6 THEN 'CANCELED' ELSE $3 END,automation_result=CASE WHEN $6 THEN $4 ELSE automation_result END,epoch=epoch+1,last_activity_at=now(),frame_id=NULL,frame_encrypted=NULL,updated_at=now() WHERE id=$1::uuid AND user_id=$2::bigint AND status=ANY($5::text[]) AND active_goal_id IS NOT DISTINCT FROM $7::uuid AND ($3<>'RUNNING' OR (lease_id IS NOT NULL AND heartbeat_at>now()-interval '1 minute' AND expires_at>now())) RETURNING *",
     id,
     c.actor.id,
     status,
     b.action === "stop"
-      ? "你已停止独立浏览器任务"
+      ? "自动操作已停止，可以继续浏览网页"
       : b.action === "pause"
         ? "已暂停自动操作，可以接管当前页面"
         : "已继续当前独立浏览器任务",
     allowed,
+    b.action === "stop",
+    owned.active_goal_id || null,
   );
-  await db.$executeRawUnsafe(
-    "DELETE FROM personal_assistant_browser_actions WHERE task_id=$1::uuid AND user_id=$2::bigint",
-    id,
-    c.actor.id,
-  );
+  if (row && owned.active_goal_id) {
+    await db.$executeRawUnsafe(
+      "UPDATE personal_assistant_browser_goals SET status=$3,result=CASE WHEN $3='CANCELED' THEN $4 ELSE result END,finished_at=CASE WHEN $3='CANCELED' THEN now() ELSE NULL END WHERE id=$1::uuid AND user_id=$2::bigint",
+      owned.active_goal_id,
+      c.actor.id,
+      b.action === "stop" ? "CANCELED" : status,
+      row.stage,
+    );
+    if (b.action === "stop")
+      await db.$executeRawUnsafe(
+        "UPDATE personal_assistant_browser_tasks SET active_goal_id=NULL WHERE id=$1::uuid AND user_id=$2::bigint AND epoch=$3",
+        id,
+        c.actor.id,
+        row.epoch,
+      );
+  }
+  if (row)
+    await db.$executeRawUnsafe(
+      "DELETE FROM personal_assistant_browser_actions WHERE task_id=$1::uuid AND user_id=$2::bigint AND epoch<$3",
+      id,
+      c.actor.id,
+      row.epoch,
+    );
   return taskView(row || (await ownedTask(c, id)));
 }
 export async function browserTaskFrame(
@@ -340,6 +687,11 @@ export async function browserTaskFrame(
     readOnly,
     capturedAt: new Date(row.frame_at).toISOString(),
     expiresAt: new Date(new Date(row.frame_at).getTime() + ttl).toISOString(),
+    canGoBack: !!row.can_go_back,
+    canGoForward: !!row.can_go_forward,
+    ...(row.frame_applied_request_id
+      ? { appliedRequestId: row.frame_applied_request_id }
+      : {}),
   };
 }
 export async function queueBrowserManualAction(
@@ -396,6 +748,11 @@ export async function queueBrowserManualAction(
       b.frameId,
       encryptBrowserData(c.actor.id, `action:${id}:${actionId}`, b.action),
     );
+    await tx.$executeRawUnsafe(
+      "UPDATE personal_assistant_browser_tasks SET last_activity_at=now() WHERE id=$1::uuid AND user_id=$2::bigint",
+      id,
+      c.actor.id,
+    );
     return { queued: true };
   });
 }
@@ -405,6 +762,10 @@ export async function clearBrowserSession(c: Context) {
     await one(
       tx,
       "SELECT id FROM users WHERE id=$1::bigint FOR UPDATE",
+      c.actor.id,
+    );
+    await tx.$executeRawUnsafe(
+      "UPDATE personal_assistant_browser_goals SET status='CANCELED',result='用户已清除浏览器登录状态',finished_at=now() WHERE user_id=$1::bigint AND status IN ('RUNNING','PAUSED','NEEDS_USER')",
       c.actor.id,
     );
     await tx.$executeRawUnsafe(
@@ -442,6 +803,12 @@ export type BrowserRun = {
   status: BrowserTaskStatus;
   step: number;
   expiresAt: string;
+  mode?: BrowserMode;
+  automationStatus?: BrowserAutomationStatus;
+  activeGoalId?: string;
+  lastActivityAt?: string;
+  viewport?: BrowserViewport;
+  navigationState?: BrowserNavigationState;
 };
 const runView = (r: Row): BrowserRun => ({
   id: r.id,
@@ -457,6 +824,15 @@ const runView = (r: Row): BrowserRun => ({
   status: r.status,
   step: r.step,
   expiresAt: iso(r.expires_at)!,
+  mode: r.mode || "AGENT",
+  automationStatus: r.automation_status || "IDLE",
+  activeGoalId: r.active_goal_id || undefined,
+  lastActivityAt: iso(r.last_activity_at) || undefined,
+  viewport: {
+    width: r.viewport_width || 1080,
+    height: r.viewport_height || 760,
+  },
+  navigationState: r.navigation_state || "STARTING",
 });
 export async function heartbeatBrowserWorker(
   ready: boolean,
@@ -476,7 +852,7 @@ export async function claimBrowserTask(): Promise<BrowserRun | null> {
   await expireBrowserTasks();
   const row = await one(
     db,
-    "UPDATE personal_assistant_browser_tasks SET status='RUNNING',stage='正在打开独立浏览器',lease_id=$1::uuid,heartbeat_at=now(),updated_at=now() WHERE id=(SELECT id FROM personal_assistant_browser_tasks WHERE status='QUEUED' AND expires_at>now() ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING *",
+    "UPDATE personal_assistant_browser_tasks SET status=CASE WHEN mode='BROWSE' THEN 'PAUSED' ELSE 'RUNNING' END,stage='正在打开独立浏览器',lease_id=$1::uuid,heartbeat_at=now(),updated_at=now() WHERE id=(SELECT id FROM personal_assistant_browser_tasks WHERE status='QUEUED' AND expires_at>now() ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING *",
     randomUUID(),
   );
   return row ? runView(row) : null;
@@ -484,6 +860,12 @@ export async function claimBrowserTask(): Promise<BrowserRun | null> {
 export async function currentBrowserTask(
   run: BrowserRun,
 ): Promise<BrowserRun | null> {
+  await db.$executeRawUnsafe(
+    "UPDATE personal_assistant_browser_tasks SET status='DONE',stage='浏览器闲置5分钟，已关闭页面并保存登录状态',lease_id=NULL,epoch=epoch+1,updated_at=now() WHERE id=$1::uuid AND user_id=$2::bigint AND lease_id=$3::uuid AND mode='BROWSE' AND status IN ('PAUSED','NEEDS_USER') AND greatest(last_activity_at,coalesce(ready_at,created_at))<now()-interval '5 minutes'",
+    run.id,
+    run.userId,
+    run.leaseId,
+  );
   const row = await one(
     db,
     "UPDATE personal_assistant_browser_tasks SET heartbeat_at=now() WHERE id=$1::uuid AND user_id=$2::bigint AND lease_id=$3::uuid AND status=ANY($4::text[]) AND expires_at>now() AND EXISTS(SELECT 1 FROM personal_assistant_browser_profiles p WHERE p.id=profile_id AND p.user_id=$2::bigint AND p.state_version=profile_version) RETURNING *",
@@ -492,7 +874,24 @@ export async function currentBrowserTask(
     run.leaseId,
     live,
   );
-  return row ? runView(row) : null;
+  if (!row) return null;
+  const current = runView(row);
+  try {
+    await browserActor(run.userId);
+  } catch (error) {
+    if (
+      !(error instanceof HttpException) ||
+      ![401, 403].includes(error.getStatus())
+    )
+      throw error;
+    await finishBrowserTask(
+      current,
+      "FAILED",
+      "账号权限已变化，浏览器操作已停止",
+    );
+    return null;
+  }
+  return current;
 }
 export async function browserActionCurrent(run: BrowserRun, manual = false) {
   const current = await currentBrowserTask(run);
@@ -502,13 +901,7 @@ export async function browserActionCurrent(run: BrowserRun, manual = false) {
     (manual
       ? ["PAUSED", "NEEDS_USER"].includes(current.status)
       : current.status === "RUNNING");
-  if (!matches) return false;
-  try {
-    await browserActor(run.userId);
-    return true;
-  } catch {
-    return false;
-  }
+  return matches;
 }
 export async function loadBrowserSession(
   run: BrowserRun,
@@ -573,6 +966,8 @@ export type BrowserCapturedFrame = {
   height: number;
   url: string;
   title: string;
+  canGoBack?: boolean;
+  canGoForward?: boolean;
 };
 function validBrowserFrame(frame: BrowserCapturedFrame) {
   parse(z.uuid(), frame.frameId);
@@ -593,28 +988,45 @@ export async function publishBrowserFrame(
   frame: BrowserCapturedFrame,
 ): Promise<boolean> {
   if (!validBrowserFrame(frame)) return false;
-  return !!(await db.$executeRawUnsafe(
-    "UPDATE personal_assistant_browser_tasks SET frame_id=$5::uuid,frame_encrypted=$6,frame_width=$7,frame_height=$8,frame_at=now(),page_url=$9,page_title=$10,heartbeat_at=now() WHERE id=$1::uuid AND user_id=$2::bigint AND lease_id=$3::uuid AND epoch=$4 AND status=ANY($11::text[]) AND expires_at>now()",
-    run.id,
-    run.userId,
-    run.leaseId,
-    run.epoch,
-    frame.frameId,
-    encryptBrowserData(
+  return db.$transaction(async (tx) => {
+    // Serialize with queueBrowserManualAction before reading pending actions;
+    // an accepted click must retain the exact frame the user acted on.
+    const locked = await one(
+      tx,
+      "SELECT id FROM personal_assistant_browser_tasks WHERE id=$1::uuid AND user_id=$2::bigint AND lease_id=$3::uuid AND epoch=$4 FOR UPDATE",
+      run.id,
       run.userId,
-      `frame:${run.id}:${frame.frameId}`,
-      frame.jpeg.toString("base64"),
-    ),
-    frame.width,
-    frame.height,
-    publicUrl(frame.url),
-    frame.title.slice(0, 200),
-    live,
-  ));
+      run.leaseId,
+      run.epoch,
+    );
+    if (!locked) return false;
+    return !!(await tx.$executeRawUnsafe(
+      "UPDATE personal_assistant_browser_tasks SET frame_id=$5::uuid,frame_encrypted=$6,frame_width=$7,frame_height=$8,frame_at=now(),page_url=$9,page_title=$10,heartbeat_at=now(),ready_at=coalesce(ready_at,now()),navigation_state=CASE WHEN navigation_state='ERROR' OR EXISTS(SELECT 1 FROM personal_assistant_browser_actions a WHERE a.task_id=personal_assistant_browser_tasks.id AND a.kind='NAVIGATION' AND a.epoch=$4 AND a.consumed_at IS NULL) THEN navigation_state ELSE 'READY' END,can_go_back=$12,can_go_forward=$13,frame_applied_request_id=applied_request_id WHERE id=$1::uuid AND user_id=$2::bigint AND lease_id=$3::uuid AND epoch=$4 AND status=ANY($11::text[]) AND expires_at>now() AND NOT EXISTS(SELECT 1 FROM personal_assistant_browser_actions a WHERE a.task_id=personal_assistant_browser_tasks.id AND a.kind='MANUAL' AND a.epoch=$4 AND a.consumed_at IS NULL)",
+      run.id,
+      run.userId,
+      run.leaseId,
+      run.epoch,
+      frame.frameId,
+      encryptBrowserData(
+        run.userId,
+        `frame:${run.id}:${frame.frameId}`,
+        frame.jpeg.toString("base64"),
+      ),
+      frame.width,
+      frame.height,
+      publicUrl(frame.url),
+      frame.title.slice(0, 200),
+      live,
+      frame.canGoBack === true,
+      frame.canGoForward === true,
+    ));
+  });
 }
-export async function takeBrowserManualAction(
-  run: BrowserRun,
-): Promise<{ id: string; action: BrowserManualAction } | null> {
+export async function takeBrowserManualAction(run: BrowserRun): Promise<{
+  id: string;
+  requestId: string;
+  action: BrowserManualAction;
+} | null> {
   return db.$transaction(async (tx) => {
     const task = await one(
       tx,
@@ -627,7 +1039,7 @@ export async function takeBrowserManualAction(
     if (!task) return null;
     const action = await one(
       tx,
-      "SELECT * FROM personal_assistant_browser_actions WHERE task_id=$1::uuid AND user_id=$2::bigint AND consumed_at IS NULL ORDER BY created_at LIMIT 1 FOR UPDATE",
+      "SELECT * FROM personal_assistant_browser_actions WHERE task_id=$1::uuid AND user_id=$2::bigint AND kind='MANUAL' AND consumed_at IS NULL ORDER BY created_at LIMIT 1 FOR UPDATE",
       run.id,
       run.userId,
     );
@@ -649,6 +1061,7 @@ export async function takeBrowserManualAction(
     );
     return {
       id: action.id,
+      requestId: action.request_id,
       action: parse(
         browserManualRequestSchema.shape.action,
         decryptBrowserData(
@@ -659,6 +1072,66 @@ export async function takeBrowserManualAction(
       ),
     };
   });
+}
+export async function takeBrowserNavigationAction(run: BrowserRun): Promise<{
+  id: string;
+  requestId: string;
+  action: BrowserNavigationAction;
+} | null> {
+  return db.$transaction(async (tx) => {
+    const task = await one(
+      tx,
+      "SELECT id FROM personal_assistant_browser_tasks WHERE id=$1::uuid AND user_id=$2::bigint AND lease_id=$3::uuid AND epoch=$4 AND status=ANY($5::text[]) AND expires_at>now() FOR UPDATE",
+      run.id,
+      run.userId,
+      run.leaseId,
+      run.epoch,
+      live,
+    );
+    if (!task) return null;
+    const action = await one(
+      tx,
+      "SELECT * FROM personal_assistant_browser_actions WHERE task_id=$1::uuid AND user_id=$2::bigint AND kind='NAVIGATION' AND consumed_at IS NULL ORDER BY created_at LIMIT 1 FOR UPDATE",
+      run.id,
+      run.userId,
+    );
+    if (!action) return null;
+    await tx.$executeRawUnsafe(
+      "UPDATE personal_assistant_browser_actions SET consumed_at=now(),payload_encrypted='' WHERE id=$1::uuid",
+      action.id,
+    );
+    if (action.epoch !== run.epoch || action.frame_id) return null;
+    await tx.$executeRawUnsafe(
+      "UPDATE personal_assistant_browser_tasks SET frame_id=NULL,frame_encrypted=NULL WHERE id=$1::uuid",
+      run.id,
+    );
+    return {
+      id: action.id,
+      requestId: action.request_id,
+      action: parse(
+        browserNavigationActionSchema,
+        decryptBrowserData(
+          run.userId,
+          `action:${run.id}:${action.id}`,
+          action.payload_encrypted,
+        ),
+      ),
+    };
+  });
+}
+export async function completeBrowserAction(
+  run: BrowserRun,
+  actionId: string,
+): Promise<boolean> {
+  return !!(await db.$executeRawUnsafe(
+    "UPDATE personal_assistant_browser_tasks t SET applied_request_id=a.request_id,navigation_state=CASE WHEN a.kind='NAVIGATION' THEN 'READY' ELSE t.navigation_state END,stage=CASE WHEN a.kind='NAVIGATION' THEN '网页已打开，可直接浏览' ELSE t.stage END,updated_at=now() FROM personal_assistant_browser_actions a WHERE t.id=$1::uuid AND t.user_id=$2::bigint AND t.lease_id=$3::uuid AND t.epoch=$4 AND t.status=ANY($5::text[]) AND t.expires_at>now() AND a.id=$6::uuid AND a.task_id=t.id AND a.user_id=t.user_id AND a.epoch=t.epoch AND a.consumed_at IS NOT NULL",
+    run.id,
+    run.userId,
+    run.leaseId,
+    run.epoch,
+    live,
+    actionId,
+  ));
 }
 export async function recordBrowserStep(
   run: BrowserRun,
@@ -689,27 +1162,48 @@ export async function finishBrowserTask(
         502,
       );
     await browserActor(run.userId);
-    return !!(await db.$executeRawUnsafe(
-      "UPDATE personal_assistant_browser_tasks SET status='DONE',stage=$5,epoch=epoch+1,lease_id=NULL,frame_id=$6::uuid,frame_encrypted=$7,frame_width=$8,frame_height=$9,frame_at=now(),page_url=$10,page_title=$11,updated_at=now() WHERE id=$1::uuid AND user_id=$2::bigint AND lease_id=$3::uuid AND epoch=$4 AND status='RUNNING' AND expires_at>now() AND EXISTS(SELECT 1 FROM personal_assistant_browser_profiles p WHERE p.id=profile_id AND p.user_id=$2::bigint AND p.state_version=profile_version)",
-      run.id,
-      run.userId,
-      run.leaseId,
-      run.epoch,
-      assistantPublicText(note).slice(0, 300),
-      finalFrame.frameId,
-      encryptBrowserData(
+    return db.$transaction(async (tx) => {
+      const current = await one(
+        tx,
+        "SELECT active_goal_id FROM personal_assistant_browser_tasks WHERE id=$1::uuid AND user_id=$2::bigint AND lease_id=$3::uuid AND epoch=$4 AND mode='AGENT' AND status='RUNNING' AND expires_at>now() FOR UPDATE",
+        run.id,
         run.userId,
-        `frame:${run.id}:${finalFrame.frameId}`,
-        finalFrame.jpeg.toString("base64"),
-      ),
-      finalFrame.width,
-      finalFrame.height,
-      publicUrl(finalFrame.url),
-      finalFrame.title.slice(0, 200),
-    ));
+        run.leaseId,
+        run.epoch,
+      );
+      if (!current) return false;
+      const updated = !!(await tx.$executeRawUnsafe(
+        "UPDATE personal_assistant_browser_tasks SET status='PAUSED',mode='BROWSE',automation_status='DONE',automation_result=$5,active_goal_id=NULL,stage=$5,epoch=epoch+1,frame_id=$6::uuid,frame_encrypted=$7,frame_width=$8,frame_height=$9,frame_at=now(),page_url=$10,page_title=$11,navigation_state='READY',ready_at=now(),can_go_back=$12,can_go_forward=$13,frame_applied_request_id=applied_request_id,updated_at=now() WHERE id=$1::uuid AND user_id=$2::bigint AND lease_id=$3::uuid AND epoch=$4 AND status='RUNNING' AND expires_at>now() AND EXISTS(SELECT 1 FROM personal_assistant_browser_profiles p WHERE p.id=profile_id AND p.user_id=$2::bigint AND p.state_version=profile_version)",
+        run.id,
+        run.userId,
+        run.leaseId,
+        run.epoch,
+        assistantPublicText(note).slice(0, 300),
+        finalFrame.frameId,
+        encryptBrowserData(
+          run.userId,
+          `frame:${run.id}:${finalFrame.frameId}`,
+          finalFrame.jpeg.toString("base64"),
+        ),
+        finalFrame.width,
+        finalFrame.height,
+        publicUrl(finalFrame.url),
+        finalFrame.title.slice(0, 200),
+        finalFrame.canGoBack === true,
+        finalFrame.canGoForward === true,
+      ));
+      if (updated && current.active_goal_id)
+        await tx.$executeRawUnsafe(
+          "UPDATE personal_assistant_browser_goals SET status='DONE',result=$3,finished_at=now() WHERE id=$1::uuid AND user_id=$2::bigint",
+          current.active_goal_id,
+          run.userId,
+          assistantPublicText(note).slice(0, 300),
+        );
+      return updated;
+    });
   }
-  return !!(await db.$executeRawUnsafe(
-    "UPDATE personal_assistant_browser_tasks SET status=$5,stage=$6,epoch=epoch+1,lease_id=CASE WHEN $5='NEEDS_USER' THEN lease_id ELSE NULL END,frame_id=NULL,frame_encrypted=NULL,updated_at=now() WHERE id=$1::uuid AND user_id=$2::bigint AND lease_id=$3::uuid AND epoch=$4 AND status=ANY($7::text[])",
+  const updated = !!(await db.$executeRawUnsafe(
+    "UPDATE personal_assistant_browser_tasks SET status=$5,automation_status=CASE WHEN mode='AGENT' THEN $5 ELSE automation_status END,automation_result=CASE WHEN mode='AGENT' THEN $6 ELSE automation_result END,stage=$6,navigation_state='ERROR',epoch=epoch+1,lease_id=CASE WHEN $5='NEEDS_USER' THEN lease_id ELSE NULL END,frame_id=NULL,frame_encrypted=NULL,updated_at=now() WHERE id=$1::uuid AND user_id=$2::bigint AND lease_id=$3::uuid AND epoch=$4 AND status=ANY($7::text[])",
     run.id,
     run.userId,
     run.leaseId,
@@ -718,6 +1212,91 @@ export async function finishBrowserTask(
     assistantPublicText(note).slice(0, 300),
     live,
   ));
+  if (updated && run.activeGoalId)
+    await db.$executeRawUnsafe(
+      "UPDATE personal_assistant_browser_goals SET status=$3,result=$4,finished_at=CASE WHEN $3='FAILED' THEN now() ELSE NULL END WHERE id=$1::uuid AND user_id=$2::bigint",
+      run.activeGoalId,
+      run.userId,
+      status,
+      assistantPublicText(note).slice(0, 300),
+    );
+  return updated;
+}
+
+/** Ends a live browser, rather than merely completing its current AI goal. */
+export async function closeBrowserSession(
+  run: BrowserRun,
+  note: string,
+  finalFrame?: BrowserCapturedFrame,
+): Promise<boolean> {
+  if (finalFrame && !validBrowserFrame(finalFrame)) return false;
+  return db.$transaction(async (tx) => {
+    const row = await one(
+      tx,
+      "SELECT * FROM personal_assistant_browser_tasks WHERE id=$1::uuid AND user_id=$2::bigint AND lease_id=$3::uuid AND epoch=$4 AND status=ANY($5::text[]) FOR UPDATE",
+      run.id,
+      run.userId,
+      run.leaseId,
+      run.epoch,
+      live,
+    );
+    if (!row) return false;
+    await cancelBrowserGoal(tx, row, "浏览会话已关闭");
+    if (finalFrame)
+      await tx.$executeRawUnsafe(
+        "UPDATE personal_assistant_browser_tasks SET frame_id=$2::uuid,frame_encrypted=$3,frame_width=$4,frame_height=$5,frame_at=now(),page_url=$6,page_title=$7,can_go_back=$8,can_go_forward=$9,frame_applied_request_id=applied_request_id WHERE id=$1::uuid",
+        run.id,
+        finalFrame.frameId,
+        encryptBrowserData(
+          run.userId,
+          `frame:${run.id}:${finalFrame.frameId}`,
+          finalFrame.jpeg.toString("base64"),
+        ),
+        finalFrame.width,
+        finalFrame.height,
+        publicUrl(finalFrame.url),
+        finalFrame.title.slice(0, 200),
+        finalFrame.canGoBack === true,
+        finalFrame.canGoForward === true,
+      );
+    await tx.$executeRawUnsafe(
+      "UPDATE personal_assistant_browser_tasks SET status='DONE',mode='BROWSE',automation_status=CASE WHEN active_goal_id IS NULL THEN automation_status ELSE 'CANCELED' END,active_goal_id=NULL,stage=$2,epoch=epoch+1,lease_id=NULL,updated_at=now() WHERE id=$1::uuid",
+      run.id,
+      assistantPublicText(note).slice(0, 300),
+    );
+    await tx.$executeRawUnsafe(
+      "DELETE FROM personal_assistant_browser_actions WHERE task_id=$1::uuid AND consumed_at IS NULL",
+      run.id,
+    );
+    return true;
+  });
+}
+export async function closeBrowserSessionForUser(
+  c: Context,
+  id: string,
+): Promise<BrowserTask> {
+  await ownedTask(c, id);
+  return db.$transaction(async (tx) => {
+    const row = await one(
+      tx,
+      "SELECT * FROM personal_assistant_browser_tasks WHERE id=$1::uuid AND user_id=$2::bigint FOR UPDATE",
+      id,
+      c.actor.id,
+    );
+    if (!active.includes(row!.status)) return taskView(row!);
+    await cancelBrowserGoal(tx, row!, "用户已关闭浏览会话");
+    const result = await one(
+      tx,
+      "UPDATE personal_assistant_browser_tasks SET status='DONE',mode='BROWSE',automation_status=CASE WHEN active_goal_id IS NULL THEN automation_status ELSE 'CANCELED' END,active_goal_id=NULL,stage='浏览器已关闭，登录状态已保留',epoch=epoch+1,lease_id=NULL,updated_at=now() WHERE id=$1::uuid AND user_id=$2::bigint RETURNING *",
+      id,
+      c.actor.id,
+    );
+    await tx.$executeRawUnsafe(
+      "DELETE FROM personal_assistant_browser_actions WHERE task_id=$1::uuid AND consumed_at IS NULL",
+      id,
+    );
+    return taskView(result!);
+  });
 }
 
 async function browserActor(userId: string): Promise<Context> {

@@ -187,6 +187,7 @@ beforeAll(async () => {
     "088_desktop_authorization.sql",
     "089_realtime_desktop.sql",
     "099_assistant_browser.sql",
+    "103_browser_browsing_sessions.sql",
   ])
     await fixture.database.exec(
       await readFile(`packages/database/migrations/${name}`, "utf8"),
@@ -208,7 +209,7 @@ beforeEach(async () => {
   fixture.encrypted = true;
   calls = [];
   await fixture.database!.exec(
-    "TRUNCATE personal_assistant_browser_actions,personal_assistant_browser_tasks,personal_assistant_browser_profiles; UPDATE personal_assistant_browser_runtime SET ready=false,heartbeat_at=NULL",
+    "TRUNCATE personal_assistant_browser_requests,personal_assistant_browser_goals,personal_assistant_browser_actions,personal_assistant_browser_tasks,personal_assistant_browser_profiles; UPDATE personal_assistant_browser_runtime SET ready=false,heartbeat_at=NULL",
   );
   await fixture.database!.exec(
     "TRUNCATE assistant_realtime_tools,assistant_realtime_sessions,assistant_desktop_tasks,assistant_desktop_devices,personal_assistant_jobs,personal_assistant_files,personal_assistant_conversations,personal_workspaces,idempotency_records,personal_assistant_actions,personal_assistant_memories,projects,project_members,project_library_acl; UPDATE compass_ai_settings SET enabled=true,verified_at=now(); UPDATE users SET status='ACTIVE'",

@@ -49,6 +49,43 @@ export const browserTaskSchema = z
       .optional(),
   })
   .strict();
+export const browserViewportSchema = z
+  .object({
+    width: z.number().int().min(320).max(1600),
+    height: z.number().int().min(240).max(1600),
+  })
+  .strict();
+export type BrowserViewport = z.infer<typeof browserViewportSchema>;
+export const browserBrowseSchema = z
+  .object({
+    requestId: z.uuid(),
+    url: browserUrlSchema,
+    viewport: browserViewportSchema.optional(),
+  })
+  .strict();
+export const browserNavigationActionSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("goto"), url: browserUrlSchema }).strict(),
+  z.object({ kind: z.literal("back") }).strict(),
+  z.object({ kind: z.literal("forward") }).strict(),
+  z.object({ kind: z.literal("reload") }).strict(),
+  z
+    .object({ kind: z.literal("resize"), viewport: browserViewportSchema })
+    .strict(),
+]);
+export type BrowserNavigationAction = z.infer<
+  typeof browserNavigationActionSchema
+>;
+export const browserNavigationRequestSchema = z
+  .object({
+    requestId: z.uuid(),
+    epoch: z.number().int().min(0),
+    action: browserNavigationActionSchema,
+  })
+  .strict();
+export type BrowserMode = "BROWSE" | "AGENT";
+export type BrowserAutomationStatus =
+  "IDLE" | "RUNNING" | "PAUSED" | "NEEDS_USER" | "DONE" | "FAILED" | "CANCELED";
+export type BrowserNavigationState = "STARTING" | "LOADING" | "READY" | "ERROR";
 const description = z.string().trim().min(1).max(300);
 const ref = z.string().regex(/^[A-Za-z0-9_-]{1,128}$/);
 const keys = [
@@ -58,6 +95,15 @@ const keys = [
   "BACKSPACE",
   "ESC",
   "CTRL_A",
+  "ARROW_LEFT",
+  "ARROW_RIGHT",
+  "ARROW_UP",
+  "ARROW_DOWN",
+  "DELETE",
+  "HOME",
+  "END",
+  "PAGE_UP",
+  "PAGE_DOWN",
 ] as const;
 export const browserActionSchema = z.discriminatedUnion("kind", [
   z
@@ -171,9 +217,17 @@ export type BrowserTask = {
   title: string;
   createdAt: string;
   updatedAt: string;
+  mode?: BrowserMode;
+  automationStatus?: BrowserAutomationStatus;
+  automationResult?: string;
+  epoch?: number;
+  lastActivityAt?: string;
+  viewport?: BrowserViewport;
+  navigationState?: BrowserNavigationState;
 };
 export type BrowserState = {
   ready: boolean;
+  canBrowse?: boolean;
   workerOnline: boolean;
   encryptionReady: boolean;
   note: string;
@@ -187,6 +241,8 @@ export type BrowserState = {
 
 /** Only these fixed diagnostics may be persisted or shown for runtime startup. */
 export const browserRuntimeNotes = {
+  BROWSER_TEMPLATE_UNAVAILABLE:
+    "独立浏览器预构建环境尚未就绪，请管理员检查运行模板；不会改用你的电脑执行",
   BROWSER_SANDBOX_UNAVAILABLE:
     "服务器尚未允许浏览器隔离运行，请管理员检查运行环境；不会关闭隔离或改到你的电脑执行",
   BROWSER_EXECUTABLE_MISSING:
@@ -208,4 +264,7 @@ export type BrowserFrame = {
   readOnly?: boolean;
   capturedAt?: string;
   expiresAt?: string;
+  canGoBack?: boolean;
+  canGoForward?: boolean;
+  appliedRequestId?: string;
 };

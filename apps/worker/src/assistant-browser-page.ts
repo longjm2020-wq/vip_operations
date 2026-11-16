@@ -3,7 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { chromium, type BrowserContext, type ElementHandle, type Frame, type LaunchOptions, type Page } from '@playwright/test';
-import type { BrowserAction, BrowserManualAction, BrowserObservation } from '../../../packages/contracts/src/assistant-browser.js';
+import type { BrowserAction, BrowserManualAction, BrowserNavigationAction, BrowserObservation } from '../../../packages/contracts/src/assistant-browser.js';
 import { createPublicBrowserProxy, publicBrowserUrl } from './assistant-browser-proxy.js';
 
 export class BrowserHandoff extends Error {
@@ -12,14 +12,15 @@ export class BrowserHandoff extends Error {
 export class BrowserUnavailable extends Error { constructor() { super('BROWSER_UNAVAILABLE'); } }
 export type BrowserDriver = {
   observe(): Promise<BrowserObservation>;
-  frame(): Promise<{ jpeg: Buffer; width: number; height: number; url: string; title: string }>;
+  frame(): Promise<{ jpeg: Buffer; width: number; height: number; url: string; title: string; canGoBack?: boolean; canGoForward?: boolean }>;
   execute(action: BrowserAction, current: () => Promise<boolean>, signal: AbortSignal): Promise<void>;
   manual(action: BrowserManualAction, current: () => Promise<boolean>, signal: AbortSignal): Promise<void>;
+  navigate(action: BrowserNavigationAction, current: () => Promise<boolean>, signal: AbortSignal): Promise<void>;
   state(): Promise<unknown>;
   close(): Promise<void>;
 };
 const viewport = { width: 1280, height: 800 };
-const keys = { ENTER: 'Enter', TAB: 'Tab', SHIFT_TAB: 'Shift+Tab', BACKSPACE: 'Backspace', ESC: 'Escape', CTRL_A: 'ControlOrMeta+A' } as const;
+const keys = { ENTER: 'Enter', TAB: 'Tab', SHIFT_TAB: 'Shift+Tab', BACKSPACE: 'Backspace', ESC: 'Escape', CTRL_A: 'ControlOrMeta+A', ARROW_LEFT: 'ArrowLeft', ARROW_RIGHT: 'ArrowRight', ARROW_UP: 'ArrowUp', ARROW_DOWN: 'ArrowDown', DELETE: 'Delete', HOME: 'Home', END: 'End', PAGE_UP: 'PageUp', PAGE_DOWN: 'PageDown' } as const;
 const controlSelector = 'a[href],button,input,textarea,select,[role="button"],[role="link"],[role="tab"],[role="option"],[role="checkbox"],[role="combobox"],[contenteditable="true"]';
 const sensitiveSelector = 'input[type="password"],input[autocomplete="one-time-code"],input[autocomplete^="cc-"],input[name*="password" i],input[name*="otp" i],input[name*="token" i],input[name*="secret" i],input[type="file"]';
 
@@ -128,10 +129,12 @@ export class IndependentBrowserPage implements BrowserDriver {
   async frame() {
     const page = this.currentPage();
     const url = page.url();
+    const session = await this.context.newCDPSession(page);
+    const history = await session.send('Page.getNavigationHistory').finally(() => session.detach());
     const jpeg = await page.screenshot({ type: 'jpeg', quality: 65, timeout: 5000, mask: this.masks(false), maskColor: '#333333' });
     if (page !== this.currentPage() || page.url() !== url) throw new BrowserHandoff('页面正在切换，请等待新画面后再操作');
     this.manualView = { page, url, at: Date.now() };
-    return { jpeg, ...viewport, url: page.url(), title: (await page.title()).slice(0, 200) };
+    return { jpeg, ...(page.viewportSize() || viewport), url: page.url(), title: (await page.title()).slice(0, 200), canGoBack: history.currentIndex > 0, canGoForward: history.currentIndex < history.entries.length - 1 };
   }
   async observe(): Promise<BrowserObservation> {
     const page = this.currentPage();
@@ -196,11 +199,26 @@ export class IndependentBrowserPage implements BrowserDriver {
     if (!this.manualView || this.manualView.page !== page || this.manualView.url !== page.url() || Date.now() - this.manualView.at > 15000) throw new BrowserHandoff('接管画面已变化，请等待最新画面再操作');
     signal.throwIfAborted(); if (!await current()) throw Error('BROWSER_ACTION_STALE'); signal.throwIfAborted();
     this.manualView = undefined;
-    if (action.kind === 'click') await page.mouse.click(action.x / 1000 * viewport.width, action.y / 1000 * viewport.height);
+    const size = page.viewportSize() || viewport;
+    if (action.kind === 'click') await page.mouse.click(action.x / 1000 * size.width, action.y / 1000 * size.height);
     else if (action.kind === 'type') await page.keyboard.insertText(action.text);
     else if (action.kind === 'key') await page.keyboard.press(keys[action.key]);
     else await page.mouse.wheel(0, (action.direction === 'down' ? 1 : -1) * action.amount * 400);
     await this.releaseBindings();
+  }
+  async navigate(action: BrowserNavigationAction, current: () => Promise<boolean>, signal: AbortSignal) {
+    const page = this.currentPage();
+    const url = action.kind === 'goto' ? publicBrowserUrl(action.url).href : undefined;
+    signal.throwIfAborted(); if (!await current()) throw Error('BROWSER_ACTION_STALE'); signal.throwIfAborted();
+    this.manualView = undefined;
+    await this.releaseBindings();
+    const options = { waitUntil: 'domcontentloaded' as const, timeout: 20000 };
+    if (action.kind === 'goto') await page.goto(url!, options);
+    else if (action.kind === 'back') await page.goBack(options);
+    else if (action.kind === 'forward') await page.goForward(options);
+    else if (action.kind === 'reload') await page.reload(options);
+    else await page.setViewportSize(action.viewport);
+    signal.throwIfAborted();
   }
   state() { this.currentPage(); return this.context.storageState({ indexedDB: true }); }
   async close() { if (this.closed) return; this.closed = true; await this.releaseBindings(); await this.cleanup(); }

@@ -598,7 +598,9 @@
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .sidebar-assistant *,
+  /* Keep the explicitly enabled facial feedback; the body and other effects
+     still follow the system preference. */
+  .sidebar-assistant *:not(.companion-eye-dot):not(.companion-mouth-open),
   .sidebar-assistant *::before,
   .sidebar-assistant *::after {
     animation: none !important;

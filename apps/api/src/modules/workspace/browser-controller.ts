@@ -8,6 +8,9 @@ import {
   browserTaskFrame,
   queueBrowserManualAction,
   clearBrowserSession,
+  queueBrowserBrowse,
+  queueBrowserNavigation,
+  closeBrowserSessionForUser,
 } from "./assistant-browser.js";
 
 @Controller("api/v1/my-workspace/assistant/browser")
@@ -24,6 +27,25 @@ export class AssistantBrowserController {
     @Body() input: unknown,
   ) {
     return queueBrowserTask(context(request), input);
+  }
+  @Post("browse") async browse(
+    @Req() request: AuthRequest,
+    @Body() input: unknown,
+  ) {
+    return queueBrowserBrowse(context(request), input);
+  }
+  @Post("tasks/:id/navigation") async navigation(
+    @Req() request: AuthRequest,
+    @Param("id") id: string,
+    @Body() input: unknown,
+  ) {
+    return queueBrowserNavigation(context(request), id, input);
+  }
+  @Post("tasks/:id/close") async close(
+    @Req() request: AuthRequest,
+    @Param("id") id: string,
+  ) {
+    return closeBrowserSessionForUser(context(request), id);
   }
   @Post("tasks/:id/control") async control(
     @Req() request: AuthRequest,

@@ -49,6 +49,12 @@ import {
 import {
   browserStatus,
   queueBrowserTask,
+  queueBrowserBrowse,
+  queueBrowserNavigation,
+  takeBrowserNavigationAction,
+  completeBrowserAction,
+  closeBrowserSession,
+  closeBrowserSessionForUser,
   controlBrowserTask,
   clearBrowserSession,
   heartbeatBrowserWorker,
@@ -102,6 +108,18 @@ beforeAll(async () => {
   await f.db.exec(
     await readFile(
       "packages/database/migrations/099_assistant_browser.sql",
+      "utf8",
+    ),
+  );
+  await f.db.exec(
+    await readFile(
+      "packages/database/migrations/103_browser_browsing_sessions.sql",
+      "utf8",
+    ),
+  );
+  await f.db.exec(
+    await readFile(
+      "packages/database/migrations/103_browser_browsing_sessions.sql",
       "utf8",
     ),
   );
@@ -190,13 +208,266 @@ const finalFrame = () => ({
   title: "完成结果",
 });
 describe("independent assistant browser", () => {
+  it("opens and reuses a browsing lease without model readiness, preserving retry identities", async () => {
+    await heartbeatBrowserWorker(true);
+    await f.db!.exec(
+      "UPDATE compass_ai_settings SET enabled=false,verified_at=NULL",
+    );
+    expect(await browserStatus(actor())).toMatchObject({
+      canBrowse: true,
+      ready: false,
+    });
+    const request = {
+      requestId: randomUUID(),
+      url: "https://example.com/",
+      viewport: { width: 900, height: 600 },
+    };
+    const task = await queueBrowserBrowse(actor(), request);
+    expect(task).toMatchObject({
+      mode: "BROWSE",
+      status: "QUEUED",
+      automationStatus: "IDLE",
+      viewport: request.viewport,
+    });
+    const run = (await claimBrowserTask())!;
+    expect(run).toMatchObject({
+      id: task.id,
+      mode: "BROWSE",
+      status: "PAUSED",
+    });
+    const command = (await takeBrowserNavigationAction(run))!;
+    expect(command).toMatchObject({
+      requestId: request.requestId,
+      action: { kind: "goto", url: request.url },
+    });
+    expect(await completeBrowserAction(run, command.id)).toBe(true);
+    await frame(run);
+    expect(await browserTaskFrame(actor(), task.id)).toMatchObject({
+      appliedRequestId: request.requestId,
+      readOnly: false,
+    });
+    const nextRequest = {
+      requestId: randomUUID(),
+      url: "https://example.org/",
+    };
+    const reused = await queueBrowserBrowse(actor(), nextRequest);
+    expect(reused.id).toBe(task.id);
+    expect((await currentBrowserTask(run))!.leaseId).toBe(run.leaseId);
+    const epoch = reused.epoch;
+    expect((await queueBrowserBrowse(actor(), request)).epoch).toBe(epoch);
+    expect((await queueBrowserBrowse(actor(), nextRequest)).epoch).toBe(epoch);
+    await expect(
+      queueBrowserBrowse(actor(), {
+        ...request,
+        url: "https://different.example/",
+      }),
+    ).rejects.toMatchObject({
+      response: { error: { code: "REQUEST_CONFLICT" } },
+    });
+    expect(await claimBrowserTask()).toBeNull();
+    expect(fetch).not.toHaveBeenCalled();
+    expect(
+      (
+        await f.db!.query<Row>(
+          "SELECT request_id FROM personal_assistant_browser_tasks",
+        )
+      ).rows[0].request_id,
+    ).toBe(request.requestId);
+  });
+  it("runs a new AI goal in the same session and returns to manual browsing without losing goal history", async () => {
+    await heartbeatBrowserWorker(true);
+    const browseRequest = {
+      requestId: randomUUID(),
+      url: "https://example.com/",
+    };
+    await queueBrowserBrowse(actor(), browseRequest);
+    const initial = (await claimBrowserTask())!;
+    const goal = input();
+    const active = await queueBrowserTask(actor(), goal);
+    expect(active).toMatchObject({
+      id: initial.id,
+      mode: "AGENT",
+      status: "RUNNING",
+      automationStatus: "RUNNING",
+    });
+    const run = (await currentBrowserTask(initial))!;
+    expect(run.leaseId).toBe(initial.leaseId);
+    expect(await browserActionCurrent(initial, true)).toBe(false);
+    expect(
+      await finishBrowserTask(run, "DONE", "真实目标已完成", finalFrame()),
+    ).toBe(true);
+    const browsing = (await currentBrowserTask(run))!;
+    expect(browsing).toMatchObject({
+      mode: "BROWSE",
+      status: "PAUSED",
+      leaseId: initial.leaseId,
+      automationStatus: "DONE",
+    });
+    expect((await browserTaskFrame(actor(), run.id))!.readOnly).toBe(false);
+    expect((await queueBrowserTask(actor(), goal)).mode).toBe("BROWSE");
+    const secondGoal = { ...input(), instruction: "第二个明确目标" };
+    expect((await queueBrowserTask(actor(), secondGoal)).id).toBe(initial.id);
+    const rows = (
+      await f.db!.query<Row>(
+        "SELECT instruction,status,result FROM personal_assistant_browser_goals ORDER BY created_at",
+      )
+    ).rows;
+    expect(rows).toEqual([
+      {
+        instruction: goal.instruction,
+        status: "DONE",
+        result: "真实目标已完成",
+      },
+      { instruction: secondGoal.instruction, status: "RUNNING", result: "" },
+    ]);
+  });
+  it("serializes navigation by epoch, interrupts automation and never acknowledges a command merely because a screenshot changed", async () => {
+    const initial = await started();
+    const command = {
+      requestId: randomUUID(),
+      epoch: initial.epoch,
+      action: { kind: "goto", url: "https://example.org/" },
+    };
+    await expect(
+      queueBrowserNavigation(actor("8"), initial.id, command),
+    ).rejects.toThrow();
+    const next = await queueBrowserNavigation(actor(), initial.id, command);
+    expect(next).toMatchObject({
+      mode: "BROWSE",
+      status: "PAUSED",
+      epoch: initial.epoch + 1,
+      automationStatus: "CANCELED",
+    });
+    expect(await browserActionCurrent(initial)).toBe(false);
+    expect(
+      await finishBrowserTask(initial, "DONE", "迟到完成", finalFrame()),
+    ).toBe(false);
+    await expect(
+      queueBrowserNavigation(actor(), initial.id, {
+        ...command,
+        requestId: randomUUID(),
+      }),
+    ).rejects.toMatchObject({
+      response: { error: { code: "STALE_BROWSER_SESSION" } },
+    });
+    expect(
+      (await queueBrowserNavigation(actor(), initial.id, command)).epoch,
+    ).toBe(next.epoch);
+    const run = (await currentBrowserTask(initial))!;
+    await frame(run);
+    expect(
+      (await browserTaskFrame(actor(), run.id))!.appliedRequestId,
+    ).toBeUndefined();
+    const action = (await takeBrowserNavigationAction(run))!;
+    expect(await takeBrowserNavigationAction(run)).toBeNull();
+    await frame(run);
+    expect(
+      (await browserTaskFrame(actor(), run.id))!.appliedRequestId,
+    ).toBeUndefined();
+    expect(await completeBrowserAction(run, action.id)).toBe(true);
+    // The currently saved image predates completion and must not acquire its acknowledgement.
+    expect(
+      (await browserTaskFrame(actor(), run.id))!.appliedRequestId,
+    ).toBeUndefined();
+    await publishBrowserFrame(run, {
+      ...finalFrame(),
+      canGoBack: true,
+      canGoForward: false,
+    });
+    expect(await browserTaskFrame(actor(), run.id)).toMatchObject({
+      appliedRequestId: command.requestId,
+      canGoBack: true,
+      canGoForward: false,
+    });
+    const resize = await queueBrowserNavigation(actor(), run.id, {
+      requestId: randomUUID(),
+      epoch: run.epoch,
+      action: { kind: "resize", viewport: { width: 640, height: 480 } },
+    });
+    expect(await completeBrowserAction(run, action.id)).toBe(false);
+    expect(resize.viewport).toEqual({ width: 640, height: 480 });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+  it("resizes an active AI view without canceling the goal and rejects malformed navigation inputs", async () => {
+    const run = await started();
+    const next = await queueBrowserNavigation(actor(), run.id, {
+      requestId: randomUUID(),
+      epoch: run.epoch,
+      action: { kind: "resize", viewport: { width: 640, height: 480 } },
+    });
+    expect(next).toMatchObject({
+      mode: "AGENT",
+      status: "RUNNING",
+      automationStatus: "RUNNING",
+    });
+    const current = (await currentBrowserTask(run))!;
+    expect(current.activeGoalId).toBe(run.activeGoalId);
+    await expect(
+      queueBrowserNavigation(actor(), run.id, {
+        requestId: randomUUID(),
+        epoch: current.epoch,
+        action: { kind: "goto", url: "file:///etc/passwd" },
+      }),
+    ).rejects.toThrow();
+    await expect(
+      queueBrowserBrowse(actor(), {
+        requestId: randomUUID(),
+        url: "https://user:password@example.com/",
+      }),
+    ).rejects.toThrow();
+    await expect(
+      queueBrowserNavigation(actor(), run.id, {
+        requestId: randomUUID(),
+        epoch: current.epoch,
+        action: { kind: "resize", viewport: { width: 50000, height: 1 } },
+      }),
+    ).rejects.toThrow();
+  });
+  it("expires only user-idle browsing, never extends activity from frames or heartbeat, and explicitly closes the lease", async () => {
+    await heartbeatBrowserWorker(true);
+    const task = await queueBrowserBrowse(actor(), {
+      requestId: randomUUID(),
+      url: "https://example.com/",
+    });
+    const run = (await claimBrowserTask())!;
+    await frame(run);
+    const before = (await browserStatus(actor())).tasks[0].lastActivityAt;
+    await currentBrowserTask(run);
+    await frame(run);
+    expect((await browserStatus(actor())).tasks[0].lastActivityAt).toBe(before);
+    await f.db!.query(
+      "UPDATE personal_assistant_browser_tasks SET last_activity_at=now()-interval '6 minutes',ready_at=now()-interval '6 minutes' WHERE id=$1::uuid",
+      [task.id],
+    );
+    expect(await currentBrowserTask(run)).toBeNull();
+    expect((await browserStatus(actor())).tasks[0]).toMatchObject({
+      status: "DONE",
+      mode: "BROWSE",
+    });
+    const reopened = await queueBrowserBrowse(actor(), {
+      requestId: randomUUID(),
+      url: "https://example.org/",
+    });
+    expect(reopened.id).not.toBe(task.id);
+    const fresh = (await claimBrowserTask())!;
+    await frame(fresh);
+    expect((await closeBrowserSessionForUser(actor(), fresh.id)).status).toBe(
+      "DONE",
+    );
+    expect(await currentBrowserTask(fresh)).toBeNull();
+    await expect(
+      queueBrowserNavigation(actor(), fresh.id, {
+        requestId: randomUUID(),
+        epoch: fresh.epoch,
+        action: { kind: "reload" },
+      }),
+    ).rejects.toThrow();
+  });
   it("atomically retains the completed owner's final frame for 24 hours without permitting inputs", async () => {
     const run = await started();
     await frame(run);
     const completed = finalFrame();
-    expect(await finishBrowserTask(run, "DONE", "已核对结果", completed)).toBe(
-      true,
-    );
+    expect(await closeBrowserSession(run, "已核对结果", completed)).toBe(true);
     expect(await currentBrowserTask(run)).toBeNull();
     await f.db!.query(
       "UPDATE personal_assistant_browser_tasks SET frame_at=now()-interval '1 hour' WHERE id=$1::uuid",
@@ -251,9 +522,29 @@ describe("independent assistant browser", () => {
       ).rows[0].frame_encrypted,
     ).toBeNull();
   });
+  it("reclaims idle browsing after an initial navigation error even when no frame was published", async () => {
+    await heartbeatBrowserWorker(true);
+    await queueBrowserBrowse(actor(), {
+      requestId: randomUUID(),
+      url: "https://example.com/",
+    });
+    const run = (await claimBrowserTask())!;
+    await finishBrowserTask(run, "NEEDS_USER", "网页打开失败，请核对地址");
+    const waiting = (await currentBrowserTask(run))!;
+    expect(waiting).toMatchObject({ mode: "BROWSE", status: "NEEDS_USER" });
+    await f.db!.query(
+      "UPDATE personal_assistant_browser_tasks SET last_activity_at=now()-interval '6 minutes',created_at=now()-interval '6 minutes',ready_at=NULL WHERE id=$1::uuid",
+      [run.id],
+    );
+    expect(await currentBrowserTask(waiting)).toBeNull();
+    expect((await browserStatus(actor())).tasks[0]).toMatchObject({
+      status: "DONE",
+      mode: "BROWSE",
+    });
+  });
   it("denies retained frames after permission revocation and clears them with the saved session", async () => {
     const run = await started();
-    await finishBrowserTask(run, "DONE", "已完成", finalFrame());
+    await closeBrowserSession(run, "已完成", finalFrame());
     await f.db!.exec("DELETE FROM role_permissions");
     // Even a stale in-process actor cannot decrypt the saved result.
     await expect(browserTaskFrame(actor(), run.id)).rejects.toThrow();
@@ -430,7 +721,10 @@ describe("independent assistant browser", () => {
     expect(await browserActionCurrent(paused!, true)).toBe(true);
     await controlBrowserTask(actor(), run.id, { action: "stop" });
     expect(await finishBrowserTask(paused!, "DONE", "迟到完成")).toBe(false);
-    expect(await currentBrowserTask(run)).toBeNull();
+    expect(await currentBrowserTask(run)).toMatchObject({
+      mode: "BROWSE",
+      status: "PAUSED",
+    });
   });
   it("encrypts manual inputs, consumes each frame once, and never exposes credentials in task state", async () => {
     const initial = await started();
@@ -473,6 +767,33 @@ describe("independent assistant browser", () => {
     expect(JSON.stringify(await browserStatus(actor()))).not.toMatch(
       /secret-password|private-screen|private-token/,
     );
+  });
+  it("keeps an accepted input's frame until consumption and acknowledges only its post-dispatch capture", async () => {
+    const initial = await started();
+    await controlBrowserTask(actor(), initial.id, { action: "pause" });
+    const run = (await currentBrowserTask(initial))!;
+    const frameId = await frame(run);
+    const request = {
+      requestId: randomUUID(),
+      frameId,
+      epoch: run.epoch,
+      action: { kind: "key", key: "ARROW_DOWN" },
+    };
+    await queueBrowserManualAction(actor(), run.id, request);
+    expect(await publishBrowserFrame(run, finalFrame())).toBe(false);
+    expect((await browserTaskFrame(actor(), run.id))?.frameId).toBe(frameId);
+    const input = (await takeBrowserManualAction(run))!;
+    expect(input).toMatchObject({
+      requestId: request.requestId,
+      action: request.action,
+    });
+    expect(await browserTaskFrame(actor(), run.id)).toBeNull();
+    expect(await completeBrowserAction(run, input.id)).toBe(true);
+    const after = await frame(run);
+    expect(await browserTaskFrame(actor(), run.id)).toMatchObject({
+      frameId: after,
+      appliedRequestId: request.requestId,
+    });
   });
   it("publishes only the authenticated owner's frame and strips tokens from persisted page URLs", async () => {
     const run = await started();
@@ -627,6 +948,21 @@ describe("independent assistant browser", () => {
     expect(await browserActionCurrent(run)).toBe(true);
     await f.db!.exec("UPDATE roles SET code='ADMIN';");
     expect(await browserActionCurrent(run)).toBe(false);
+    expect(await currentBrowserTask(run)).toBeNull();
+    const failed = (
+      await f.db!.query<Row>(
+        "SELECT status,lease_id,stage FROM personal_assistant_browser_tasks WHERE id=$1::uuid",
+        [run.id],
+      )
+    ).rows[0];
+    expect(failed).toEqual({
+      status: "FAILED",
+      lease_id: null,
+      stage: "账号权限已变化，浏览器操作已停止",
+    });
+    await expect(
+      finishBrowserTask(run, "DONE", "迟到完成", finalFrame()),
+    ).rejects.toThrow();
   });
   it("classifies upstream rejection without exposing its body or retrying", async () => {
     const run = await started();

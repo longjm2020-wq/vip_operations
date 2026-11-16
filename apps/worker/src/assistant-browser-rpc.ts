@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { browserActionSchema, browserManualActionSchema } from '../../../packages/contracts/src/assistant-browser.js';
+import { browserActionSchema, browserManualActionSchema, browserNavigationActionSchema } from '../../../packages/contracts/src/assistant-browser.js';
 
 /** VM stdio is a private, finite protocol, never a shell or JavaScript evaluation API. */
 export const browserRpcLimit = 4 * 1024 * 1024;
@@ -18,12 +18,13 @@ export const browserRpcRequest = z.discriminatedUnion('op', [
   z.object({ ...base, op: z.literal('diagnostics') }).strict(),
   z.object({ ...base, op: z.literal('execute'), action: browserActionSchema.refine(action => !['done','handoff'].includes(action.kind)) }).strict(),
   z.object({ ...base, op: z.literal('manual'), action: browserManualActionSchema }).strict(),
+  z.object({ ...base, op: z.literal('navigate'), action: browserNavigationActionSchema }).strict(),
   z.object({ ...base, op: z.literal('close') }).strict(),
   z.object({ ...base, op: z.literal('cancel') }).strict(),
   z.object({ ...base, op: z.literal('grant'), nonce: z.uuid(), allow: z.boolean() }).strict(),
 ]);
 export type BrowserRpcRequest = z.infer<typeof browserRpcRequest>;
-export const browserRpcErrors = ['HANDOFF','UNAVAILABLE','CANCELED','PROTOCOL','BROWSER_SANDBOX_UNAVAILABLE','BROWSER_EXECUTABLE_MISSING','BROWSER_DEPENDENCIES_MISSING','BROWSER_RUNTIME_UNAVAILABLE'] as const;
+export const browserRpcErrors = ['HANDOFF','UNAVAILABLE','CANCELED','PROTOCOL','BROWSER_SANDBOX_UNAVAILABLE','BROWSER_EXECUTABLE_MISSING','BROWSER_DEPENDENCIES_MISSING','BROWSER_RUNTIME_UNAVAILABLE','BROWSER_TEMPLATE_UNAVAILABLE'] as const;
 export type BrowserRpcError = typeof browserRpcErrors[number];
 export const browserRpcReply = z.discriminatedUnion('kind', [
   z.object({ ...base, kind:z.literal('result'), value:z.unknown() }).strict(),
@@ -35,6 +36,7 @@ const base64 = z.string().max(1400000).regex(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-
 export const browserRpcFrame = z.object({
   jpeg:base64, width:z.number().int().min(1).max(4096), height:z.number().int().min(1).max(4096),
   url:z.string().max(8192), title:z.string().max(200),
+  canGoBack:z.boolean().optional(), canGoForward:z.boolean().optional(),
 }).strict();
 export const browserRpcObservation = z.object({
   snapshotId:z.uuid(),url:z.string().max(8192),title:z.string().max(200),text:z.string().max(12000),

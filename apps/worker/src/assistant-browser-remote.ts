@@ -50,8 +50,11 @@ export class RemoteBrowserDriver implements BrowserDriver {
   async manual(action:Parameters<BrowserDriver['manual']>[0],current:()=>Promise<boolean>,signal:AbortSignal) {
     await this.call({op:'manual',action},current,signal);
   }
+  async navigate(action:Parameters<BrowserDriver['navigate']>[0],current:()=>Promise<boolean>,signal:AbortSignal) {
+    await this.call({op:'navigate',action},current,signal);
+  }
 
-  private async call(request:Omit<Extract<BrowserRpcRequest,{op:'open'}>,'v'|'id'> | Omit<Extract<BrowserRpcRequest,{op:'execute'}>,'v'|'id'> | Omit<Extract<BrowserRpcRequest,{op:'manual'}>,'v'|'id'> | {op:'observe'|'frame'|'state'|'diagnostics'},current?:()=>Promise<boolean>,signal?:AbortSignal):Promise<unknown> {
+  private async call(request:Omit<Extract<BrowserRpcRequest,{op:'open'}>,'v'|'id'> | Omit<Extract<BrowserRpcRequest,{op:'execute'}>,'v'|'id'> | Omit<Extract<BrowserRpcRequest,{op:'manual'}>,'v'|'id'> | Omit<Extract<BrowserRpcRequest,{op:'navigate'}>,'v'|'id'> | {op:'observe'|'frame'|'state'|'diagnostics'},current?:()=>Promise<boolean>,signal?:AbortSignal):Promise<unknown> {
     if (this.closed || this.pending || this.nextId >= 2147483646) throw new BrowserUnavailable();
     this.lifetime.throwIfAborted(); signal?.throwIfAborted();
     const id = ++this.nextId;

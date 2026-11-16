@@ -13,6 +13,9 @@ import {
   RailwayBrowserRuntime,
   browserRuntimeCommand,
   browserRuntimeFiles,
+  browserRuntimeVerify,
+  browserTemplatePrefix,
+  railwayBrowserConfig,
 } from "../../apps/worker/src/assistant-browser-railway.js";
 
 function deferred<T>() {
@@ -29,10 +32,14 @@ type ClientOptions = {
   environmentId: string;
   token: string;
 };
-function fixture() {
+function fixture(configuredTemplate?: string) {
   const environmentId = randomUUID(),
     sandboxId = randomUUID(),
     intentId = randomUUID();
+  const template =
+    configuredTemplate ??
+    browserTemplatePrefix({ playwright: "1.63.0", zod: "4.3.6" }) +
+      randomUUID();
   const controller = new AbortController();
   const run: BrowserRun = {
     id: randomUUID(),
@@ -136,7 +143,7 @@ function fixture() {
     execHttp,
     exec,
   };
-  const create = vi.fn(async (options: ClientOptions) => {
+  const create = vi.fn(async (_template: string, options: ClientOptions) => {
     events.push("create");
     started.resolve();
     await options.fetch("https://backboard.railway.com/graphql/v2", {
@@ -164,16 +171,23 @@ function fixture() {
         : "DESTROYING"
       : "RUNNING",
   }));
-  const list = vi.fn(async () => []);
-  const sdk = { create, connect, list } as unknown as Pick<
+  const checkpoints = vi.fn(async () => [
+    {
+      id: randomUUID(),
+      key: template,
+      environmentId,
+      createdAt: new Date().toISOString(),
+    },
+  ]);
+  const sdk = { create, connect, checkpoints } as unknown as Pick<
     typeof Sandbox,
-    "create" | "connect" | "list"
+    "create" | "connect" | "checkpoints"
   >;
   const assets = vi.fn(async () =>
     browserRuntimeFiles.map((path) => ({ path, content: "export {};\n" })),
   );
   const runtime = new RailwayBrowserRuntime(
-    { token: "controller-only-secret", environmentId },
+    { token: "controller-only-secret", environmentId, template },
     {
       sdk,
       store,
@@ -193,6 +207,7 @@ function fixture() {
     receiptRead,
     events,
     environmentId,
+    template,
     sandboxId,
     intentId,
     request,
@@ -202,7 +217,7 @@ function fixture() {
     cleanup,
     create,
     connect,
-    list,
+    checkpoints,
     assets,
     write,
     destroy,
@@ -214,6 +229,7 @@ function fixture() {
 
 beforeEach(() => {
   vi.spyOn(console, "warn").mockImplementation(() => {});
+  vi.spyOn(console, "info").mockImplementation(() => {});
   remote.open
     .mockReset()
     .mockImplementation(async (transport: BrowserRpcTransport) => ({
@@ -229,12 +245,11 @@ describe("Railway independent browser lifecycle (no real resources)", () => {
     const f = fixture();
     await f.runtime.probe(f.controller.signal);
     await f.runtime.probe(f.controller.signal);
-    expect(f.list).toHaveBeenCalledTimes(2);
+    expect(f.checkpoints).toHaveBeenCalledTimes(2);
     expect(f.create).not.toHaveBeenCalled();
     expect(f.reserve).not.toHaveBeenCalled();
-    expect(f.list).toHaveBeenCalledWith(
+    expect(f.checkpoints).toHaveBeenCalledWith(
       expect.objectContaining({
-        first: 1,
         environmentId: f.environmentId,
         authType: "project-token",
       }),
@@ -259,6 +274,7 @@ describe("Railway independent browser lifecycle (no real resources)", () => {
     );
     expect(f.create).toHaveBeenCalledTimes(1);
     expect(f.create).toHaveBeenCalledWith(
+      f.template,
       expect.objectContaining({
         resources: { cpu: 1, memoryGB: 2 },
         networkIsolation: "ISOLATED",
@@ -267,7 +283,15 @@ describe("Railway independent browser lifecycle (no real resources)", () => {
         idleTimeoutMinutes: 1,
       }),
     );
-    expect(f.write).toHaveBeenCalledTimes(browserRuntimeFiles.length + 2);
+    expect(f.write).toHaveBeenCalledTimes(browserRuntimeFiles.length + 1);
+    expect(f.execHttp).toHaveBeenCalledWith(
+      browserRuntimeVerify({ playwright: "1.63.0", zod: "4.3.6" }),
+      { timeoutSec: 15 },
+    );
+    expect(
+      JSON.stringify(f.write.mock.calls) +
+        JSON.stringify(f.execHttp.mock.calls),
+    ).not.toMatch(/npm install|--with-deps|setup\.sh|playwright\/cli/);
     expect(JSON.stringify(f.write.mock.calls)).not.toMatch(
       /controller-only-secret|owned-cookie-secret|DATABASE_URL|COMPASS_MAIL_KEY/,
     );
@@ -295,6 +319,29 @@ describe("Railway independent browser lifecycle (no real resources)", () => {
     expect(f.release).toHaveBeenCalledWith(f.intentId, f.sandboxId);
     expect(f.events.indexOf("release")).toBeGreaterThan(
       f.events.indexOf("destroy"),
+    );
+    const stages = vi
+      .mocked(console.info)
+      .mock.calls.map((call) => JSON.parse(String(call[0])));
+    expect(stages.map((value) => value.stage)).toEqual([
+      "CREATING",
+      "UPLOADING",
+      "VERIFYING",
+      "CONNECTING",
+      "READY",
+      "CLEANUP",
+    ]);
+    expect(
+      stages.every(
+        (value) =>
+          Number.isFinite(value.elapsedMs) &&
+          Number.isFinite(value.sincePreviousMs) &&
+          value.elapsedMs >= 0 &&
+          value.sincePreviousMs >= 0,
+      ),
+    ).toBe(true);
+    expect(JSON.stringify(stages)).not.toMatch(
+      /controller-only-secret|owned-cookie-secret|https?:/,
     );
   });
   it("keeps an already sent create receipt alive after cancellation, records its late ID and destroys it without setup", async () => {
@@ -359,7 +406,7 @@ describe("Railway independent browser lifecycle (no real resources)", () => {
     await f.runtime.cleanup(new AbortController().signal);
     expect(f.release).toHaveBeenCalledWith(f.intentId, f.sandboxId);
   });
-  it("cleans up a created sandbox after installation fails without opening an RPC browser", async () => {
+  it("cleans up an incompatible base without installing or opening an RPC browser", async () => {
     const f = fixture();
     f.execHttp.mockResolvedValue({
       exitCode: 1,
@@ -369,7 +416,7 @@ describe("Railway independent browser lifecycle (no real resources)", () => {
     });
     await expect(
       f.runtime.open(f.run, null, f.controller.signal),
-    ).rejects.toThrow();
+    ).rejects.toThrow("BROWSER_TEMPLATE_UNAVAILABLE");
     expect(f.destroy).toHaveBeenCalledTimes(1);
     expect(f.release).toHaveBeenCalledWith(f.intentId, f.sandboxId);
     expect(f.exec).not.toHaveBeenCalled();
@@ -377,6 +424,49 @@ describe("Railway independent browser lifecycle (no real resources)", () => {
     expect(JSON.stringify(vi.mocked(console.warn).mock.calls)).not.toContain(
       "private setup diagnostic",
     );
+  });
+  it("requires explicit prebuilt configuration and never falls back to an empty VM", async () => {
+    expect(
+      railwayBrowserConfig({
+        ASSISTANT_BROWSER_RAILWAY_TOKEN: "secret",
+        ASSISTANT_BROWSER_RAILWAY_ENVIRONMENT_ID: randomUUID(),
+      }),
+    ).toMatchObject({ template: "" });
+    for (const name of ["", "untrusted-personal-checkpoint"]) {
+      const invalid = fixture(name);
+      await expect(
+        invalid.runtime.probe(invalid.controller.signal),
+      ).rejects.toThrow("BROWSER_TEMPLATE_UNAVAILABLE");
+      expect(invalid.checkpoints).not.toHaveBeenCalled();
+      await invalid.runtime.cleanup(invalid.controller.signal);
+      expect(invalid.cleanup).toHaveBeenCalled();
+    }
+    const f = fixture();
+    f.checkpoints.mockResolvedValue([]);
+    await expect(f.runtime.probe(f.controller.signal)).rejects.toThrow(
+      "BROWSER_TEMPLATE_UNAVAILABLE",
+    );
+    await expect(
+      f.runtime.open(f.run, null, f.controller.signal),
+    ).rejects.toThrow("BROWSER_TEMPLATE_UNAVAILABLE");
+    expect(f.create).not.toHaveBeenCalled();
+    expect(f.reserve).not.toHaveBeenCalled();
+  });
+  it("rejects checkpoint metadata from another environment before allocation", async () => {
+    const f = fixture();
+    f.checkpoints.mockResolvedValue([
+      {
+        id: randomUUID(),
+        key: f.template,
+        environmentId: randomUUID(),
+        createdAt: new Date().toISOString(),
+      },
+    ]);
+    await expect(
+      f.runtime.open(f.run, null, f.controller.signal),
+    ).rejects.toThrow("BROWSER_TEMPLATE_UNAVAILABLE");
+    expect(f.reserve).not.toHaveBeenCalled();
+    expect(remote.open).not.toHaveBeenCalled();
   });
   it("never retries an unknown create outcome or frees its unresolved global slot", async () => {
     const f = fixture();

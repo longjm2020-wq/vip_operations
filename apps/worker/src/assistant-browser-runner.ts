@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { browserStepLabels, type BrowserAction, type BrowserManualAction, type BrowserObservation, type BrowserRecentStep } from '../../../packages/contracts/src/assistant-browser.js';
+import { browserStepLabels, type BrowserAction, type BrowserManualAction, type BrowserNavigationAction, type BrowserObservation, type BrowserRecentStep } from '../../../packages/contracts/src/assistant-browser.js';
 import type { BrowserCapturedFrame, BrowserRun } from '../../api/src/modules/workspace/assistant-browser.js';
 import { BrowserHandoff, BrowserUnavailable, browserObservationUrl, browserPause, openIndependentBrowser, type BrowserDriver } from './assistant-browser-page.js';
 
@@ -8,8 +8,10 @@ export type BrowserStore = {
   browserActionCurrent(run: BrowserRun, manual?: boolean): Promise<boolean>;
   loadBrowserSession(run: BrowserRun): Promise<unknown>;
   saveBrowserSession(run: BrowserRun, state: unknown): Promise<boolean>;
-  publishBrowserFrame(run: BrowserRun, frame: { frameId: string; jpeg: Buffer; width: number; height: number; url: string; title: string }): Promise<boolean>;
-  takeBrowserManualAction(run: BrowserRun): Promise<{ id: string; action: BrowserManualAction } | null>;
+  publishBrowserFrame(run: BrowserRun, frame: BrowserCapturedFrame): Promise<boolean>;
+  takeBrowserManualAction(run: BrowserRun): Promise<{ id: string; requestId?: string; action: BrowserManualAction } | null>;
+  takeBrowserNavigationAction(run: BrowserRun): Promise<{ id: string; requestId?: string; action: BrowserNavigationAction } | null>;
+  completeBrowserAction(run: BrowserRun, actionId: string): Promise<boolean>;
   finishBrowserTask(run: BrowserRun, status: 'DONE' | 'NEEDS_USER' | 'FAILED', note: string, finalFrame?: BrowserCapturedFrame): Promise<boolean>;
   recordBrowserStep(run: BrowserRun, description: string): Promise<boolean>;
   planBrowserStep(run: BrowserRun, observation: BrowserObservation, signal: AbortSignal): Promise<BrowserAction>;
@@ -60,7 +62,8 @@ export async function runIndependentBrowser(
   const combined = AbortSignal.any([signal, lifetime.signal]);
   let run = initial, driver: BrowserDriver | undefined;
   let operation: AbortController | undefined, checking = false, ended = false;
-  let frameAt = 0, sessionAt = 0, navigated = !initial.initialUrl;
+  let frameAt = 0, sessionAt = 0, navigated = !initial.initialUrl, viewportKey = '';
+  let activeGoalId = initial.activeGoalId;
   const recentSteps: BrowserRecentStep[] = [];
   let pendingStep: BrowserRecentStep['kind'] | undefined;
   const refresh = async () => {
@@ -68,6 +71,11 @@ export async function runIndependentBrowser(
     if (!latest) { ended = true; lifetime.abort(); return null; }
     if (latest.epoch < run.epoch) return run;
     if (latest.epoch !== run.epoch || latest.status !== run.status) { operation?.abort(); frameAt = 0; }
+    if (latest.activeGoalId !== activeGoalId) {
+      activeGoalId = latest.activeGoalId;
+      recentSteps.length = 0;
+      pendingStep = undefined;
+    }
     run = latest;
     return latest;
   };
@@ -82,7 +90,7 @@ export async function runIndependentBrowser(
     finally { if (operation === controller) operation = undefined; }
   };
   const capture = async (snapshot: BrowserRun) => {
-    if (!driver || Date.now() - frameAt < 2000) return;
+    if (!driver || Date.now() - frameAt < 750) return;
     const frame = await driver.frame();
     if (combined.aborted) return;
     if (await store.publishBrowserFrame(snapshot, { ...frame, frameId: randomUUID() })) frameAt = Date.now();
@@ -103,35 +111,58 @@ export async function runIndependentBrowser(
       const before = { ...run };
       try {
         await perform(async (snapshot, phase) => {
-          const current = async (manual = false) => {
-            const valid = await store.browserActionCurrent(snapshot, manual);
-            if (!valid) await store.finishBrowserTask(snapshot, 'FAILED', '任务状态或账号权限已变化，浏览器操作已停止');
-            return valid;
-          };
+          const current = (manual = false) => store.browserActionCurrent(snapshot, manual);
+          const navigation = await store.takeBrowserNavigationAction(snapshot);
+          phase.throwIfAborted();
+          const desiredViewport = snapshot.viewport ? `${snapshot.viewport.width}x${snapshot.viewport.height}` : '';
+          if (snapshot.viewport && viewportKey !== desiredViewport && navigation?.action.kind !== 'resize') {
+            await driver!.navigate({kind:'resize',viewport:snapshot.viewport}, () => current(snapshot.status !== 'RUNNING'), phase);
+            viewportKey = desiredViewport;
+            frameAt = 0;
+          }
+          if (navigation) {
+            // Navigation has its own epoch and never requires a screenshot coordinate.
+            // A newly entered address supersedes an unvisited initial address.
+            if (navigation.action.kind === 'goto') navigated = true;
+            await driver!.navigate(navigation.action, () => current(snapshot.status !== 'RUNNING'), phase);
+            phase.throwIfAborted();
+            if (navigation.action.kind === 'resize') viewportKey = `${navigation.action.viewport.width}x${navigation.action.viewport.height}`;
+            await store.completeBrowserAction(snapshot, navigation.id);
+            frameAt = 0;
+            await capture(snapshot);
+            await save(snapshot, true);
+            return;
+          }
+          if (!navigated) {
+            // Consume before dispatch: interruption must never replay a navigation.
+            navigated = true;
+            await driver!.navigate({ kind: 'goto', url: snapshot.initialUrl }, () => current(snapshot.status !== 'RUNNING'), phase);
+            phase.throwIfAborted();
+            if (snapshot.mode !== 'BROWSE') {
+              pendingStep = 'goto';
+              await store.recordBrowserStep(snapshot, '已打开指定网页，正在观察');
+            }
+            frameAt = 0;
+            await capture(snapshot);
+            return;
+          }
           if (snapshot.status === 'PAUSED' || snapshot.status === 'NEEDS_USER') {
             const input = await store.takeBrowserManualAction(snapshot);
             phase.throwIfAborted();
             if (input) {
               // Consumed once by the store before dispatch; never replay after interruption.
               await driver!.manual(input.action, () => current(true), phase);
+              phase.throwIfAborted();
+              await store.completeBrowserAction(snapshot, input.id);
               frameAt = 0;
               await save(snapshot, true);
             }
             await capture(snapshot);
             await save(snapshot);
-            await browserPause(400, phase);
+            await browserPause(150, phase);
             return;
           }
           if (snapshot.status !== 'RUNNING') { ended = true; lifetime.abort(); return; }
-          if (!navigated) {
-            await driver!.execute({ kind: 'goto', url: snapshot.initialUrl, description: '打开指定网页' }, () => current(), phase);
-            navigated = true;
-            pendingStep = 'goto';
-            phase.throwIfAborted();
-            await store.recordBrowserStep(snapshot, '已打开指定网页，正在观察');
-            frameAt = 0;
-            return;
-          }
           await capture(snapshot);
           const observation = await driver!.observe();
           phase.throwIfAborted();
@@ -155,7 +186,9 @@ export async function runIndependentBrowser(
             phase.throwIfAborted();
             const finalFrame = { ...await driver!.frame(), frameId: randomUUID() };
             phase.throwIfAborted();
-            if (await store.finishBrowserTask(snapshot, 'DONE', action.description, finalFrame)) { ended = true; lifetime.abort(); }
+            // Automation is done, but the same browser remains available for browsing.
+            await store.finishBrowserTask(snapshot, 'DONE', action.description, finalFrame);
+            frameAt = 0;
             return;
           }
           await driver!.execute(action, () => current(), phase);

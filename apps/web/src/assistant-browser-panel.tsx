@@ -1,8 +1,8 @@
 import {
   useEffect,
-  useLayoutEffect,
   useRef,
   useState,
+  type KeyboardEvent,
   type MouseEvent,
 } from "react";
 import {
@@ -17,10 +17,13 @@ import {
   Tooltip,
 } from "antd";
 import {
+  ArrowLeftOutlined,
+  ArrowRightOutlined,
   ArrowUpOutlined,
   CloseOutlined,
   ExpandOutlined,
   CompressOutlined,
+  DoubleRightOutlined,
   GlobalOutlined,
   PauseOutlined,
   PlayCircleOutlined,
@@ -34,6 +37,8 @@ import {
   browserUrlSchema,
   type BrowserFrame,
   type BrowserManualAction,
+  type BrowserNavigationAction,
+  type BrowserViewport,
   type BrowserState,
   type BrowserTask,
 } from "../../../packages/contracts/src/assistant-browser";
@@ -56,6 +61,7 @@ export function AssistantBrowserTaskCard({
   compact?: boolean;
   inline?: boolean;
 }) {
+  const { message } = App.useApp();
   const [pending, setPending] = useState("");
   const [error, setError] = useState("");
   const operation = useRef(false);
@@ -72,12 +78,34 @@ export function AssistantBrowserTaskCard({
       );
       await refresh();
     } catch (cause) {
-      setError((cause as Error).message);
+      if (inline) void message.error((cause as Error).message);
+      else setError((cause as Error).message);
     } finally {
       operation.current = false;
       setPending("");
     }
   };
+  if (task.mode === "BROWSE" && isActiveBrowserTask(task))
+    return (
+      <section
+        className="assistant-browser-task assistant-browser-task-compact"
+        data-browser-task-id={task.id}
+      >
+        <strong>{task.title || "浏览网页"}</strong>
+        <p>
+          {task.navigationState === "STARTING"
+            ? "正在打开网页"
+            : task.navigationState === "ERROR"
+              ? task.stage
+              : "可直接浏览或让小序操作"}
+        </p>
+        {inspect && (
+          <Button size="small" onClick={inspect}>
+            查看网页
+          </Button>
+        )}
+      </section>
+    );
   if (inline)
     return (
       <section
@@ -218,153 +246,574 @@ function BrowserTakeover({
   task,
   owner,
   refresh,
+  start,
+  update,
+  canBrowse,
+  disabled,
+  unavailable,
 }: {
-  task: BrowserTask;
+  task?: BrowserTask;
   owner: string;
   refresh: () => Promise<unknown>;
+  start: (url: string, viewport: BrowserViewport) => Promise<void>;
+  update: (task: BrowserTask) => void;
+  canBrowse: boolean;
+  disabled: boolean;
+  unavailable?: string;
 }) {
-  const [text, setText] = useState("");
-  const [error, setError] = useState("");
-  const [note, setNote] = useState("");
+  const { message } = App.useApp();
+  const [address, setAddress] = useState(task?.url || "");
+  const [editingAddress, setEditingAddress] = useState(false);
   const [pending, setPending] = useState(false);
-  const [submittedFrame, setSubmittedFrame] = useState("");
+  const [navigating, setNavigating] = useState(false);
+  const [viewport, setViewport] = useState<BrowserViewport>({
+    width: 960,
+    height: 640,
+  });
+  const page = useRef<HTMLDivElement>(null);
+  const keyboard = useRef<HTMLTextAreaElement>(null);
+  const screen = useRef<HTMLButtonElement>(null);
+  const composing = useRef(false);
   const operation = useRef(false);
-  const lifecycle = useRef({ mounted: true, epoch: 0 });
+  const abort = useRef<AbortController | null>(null);
+  const queue = useRef<{ action: BrowserManualAction; frame?: BrowserFrame }[]>(
+    [],
+  );
+  const exitKeyboard = useRef(false);
+  const consumed = useRef("");
+  const textTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
+    undefined,
+  );
+  const wheelTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
+    undefined,
+  );
+  const wheelDelta = useRef(0);
+  const resizeSent = useRef("");
+  const latest = useRef({ task, viewport });
+  latest.current = { task, viewport };
   useEffect(() => {
-    lifecycle.current.mounted = true;
+    const controller = new AbortController();
+    abort.current = controller;
     return () => {
-      lifecycle.current.mounted = false;
-      lifecycle.current.epoch++;
+      controller.abort();
+      queue.current = [];
+      clearTimeout(textTimer.current);
+      clearTimeout(wheelTimer.current);
     };
   }, []);
   const frame = useQuery({
-    queryKey: ["assistant-browser-frame", owner, task.id, task.status],
+    queryKey: ["assistant-browser-frame", owner, task?.id, task?.status],
+    enabled: !!task,
     queryFn: async ({ signal }) =>
       (
         await api(
-          `/my-workspace/assistant/browser/tasks/${task.id}/frame`,
+          `/my-workspace/assistant/browser/tasks/${task!.id}/frame`,
           "GET",
           undefined,
           undefined,
           { signal },
         )
       ).data as BrowserFrame | null,
-    refetchInterval: isActiveBrowserTask(task) && !pending ? 1500 : false,
+    refetchInterval: task && isActiveBrowserTask(task) ? 900 : false,
     staleTime: 0,
     gcTime: 0,
   });
+  const frameRef = useRef(frame.data);
+  frameRef.current = frame.data;
+  const live = !!task && isActiveBrowserTask(task);
+  const readOnly = task?.status === "DONE" || frame.data?.readOnly === true;
   const manual =
-    ["PAUSED", "NEEDS_USER"].includes(task.status) &&
-    frame.data?.readOnly !== true;
+    live && ["PAUSED", "NEEDS_USER"].includes(task!.status) && !readOnly;
+  const loading =
+    task?.navigationState === "LOADING" ||
+    task?.navigationState === "STARTING" ||
+    task?.status === "QUEUED";
   const usable =
     manual &&
     !!frame.data &&
     !frame.error &&
-    frame.data.frameId !== submittedFrame &&
-    !pending;
-  const readOnlyNote =
-    "任务已结束，执行页面已关闭。最终画面仅供查看" +
-    (frame.data?.expiresAt
-      ? `，保留至 ${new Date(frame.data.expiresAt).toLocaleString("zh-CN")}`
-      : "");
-  const send = async (action: BrowserManualAction) => {
-    const currentFrame = frame.data;
+    !loading &&
+    frame.data.frameId !== consumed.current;
+  const currentUrl = frame.data?.url || task?.url || "";
+  useEffect(() => {
+    if (!editingAddress) setAddress(currentUrl);
+  }, [currentUrl, editingAddress]);
+  useEffect(() => {
+    const element = page.current;
+    if (!element) return;
+    let timer: ReturnType<typeof setTimeout>;
+    const observer = new ResizeObserver(([entry]) => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        const width = Math.max(
+          320,
+          Math.min(1600, Math.round(entry.contentRect.width)),
+        );
+        const height = Math.max(
+          240,
+          Math.min(1600, Math.round(entry.contentRect.height)),
+        );
+        if (entry.contentRect.width < 1 || entry.contentRect.height < 1) return;
+        setViewport((old) =>
+          old.width === width && old.height === height
+            ? old
+            : { width, height },
+        );
+      }, 300);
+    });
+    observer.observe(element);
+    return () => {
+      clearTimeout(timer);
+      observer.disconnect();
+    };
+  }, []);
+  const report = (cause: unknown) => {
+    if (!abort.current?.signal.aborted)
+      void message.error({
+        content: (cause as Error).message || "浏览器暂时无法操作，请稍后重试",
+        key: `browser-${task?.id || "new"}`,
+      });
+  };
+  const waitForFrame = async (
+    previous: BrowserFrame,
+    requestId: string,
+    expectedEpoch = previous.epoch,
+  ) => {
+    const signal = abort.current!.signal;
+    const deadline = Date.now() + 10000;
+    while (!signal.aborted && Date.now() < deadline) {
+      const result = await frame.refetch();
+      if (signal.aborted) throw new Error("操作已取消");
+      const next = result.data;
+      if (next && next.epoch > expectedEpoch)
+        throw new Error("网页已在其他操作中变化，请核对画面后继续");
+      if (
+        next &&
+        !next.readOnly &&
+        next.frameId !== previous.frameId &&
+        next.epoch === expectedEpoch &&
+        next.appliedRequestId === requestId
+      ) {
+        frameRef.current = next;
+        return next;
+      }
+      await new Promise<void>((resolve) => setTimeout(resolve, 180));
+    }
+    throw new Error("网页画面尚未更新，请核对新画面后再操作");
+  };
+  const drain = async () => {
     if (
+      operation.current ||
+      !queue.current.length ||
       !manual ||
-      !currentFrame ||
-      currentFrame.frameId === submittedFrame ||
-      operation.current
+      abort.current?.signal.aborted
     )
       return;
     operation.current = true;
     setPending(true);
-    setError("");
-    setNote("");
-    const epoch = lifecycle.current.epoch;
-    const current = () =>
-      lifecycle.current.mounted && lifecycle.current.epoch === epoch;
     try {
-      await api(
-        `/my-workspace/assistant/browser/tasks/${task.id}/actions`,
-        "POST",
-        {
-          requestId: crypto.randomUUID(),
-          frameId: currentFrame.frameId,
-          epoch: currentFrame.epoch,
-          action,
-        },
-      );
-      if (!current()) return;
-      setSubmittedFrame(currentFrame.frameId);
-      if (action.kind === "type") setText("");
-      setNote("操作已提交，等待更新画面。");
-      await Promise.all([frame.refetch(), refresh()]);
-    } catch (cause) {
-      if (!current()) return;
-      setError((cause as Error).message);
-      // A stale frame is never retried against a different page automatically.
-      await frame.refetch();
-    } finally {
-      if (current()) {
-        operation.current = false;
-        setPending(false);
+      while (queue.current.length && !abort.current?.signal.aborted) {
+        const item = queue.current.shift()!;
+        const action = item.action;
+        const snapshot = item.frame || frameRef.current;
+        const currentTask = latest.current.task;
+        if (
+          !snapshot ||
+          snapshot.readOnly ||
+          !currentTask ||
+          !["PAUSED", "NEEDS_USER"].includes(currentTask.status)
+        )
+          throw new Error("当前页面不能操作，请先接管并核对画面");
+        if (snapshot.frameId === consumed.current)
+          throw new Error("请等待新画面后重新操作");
+        consumed.current = snapshot.frameId;
+        const requestId = crypto.randomUUID();
+        await api(
+          `/my-workspace/assistant/browser/tasks/${currentTask.id}/actions`,
+          "POST",
+          {
+            requestId,
+            frameId: snapshot.frameId,
+            epoch: snapshot.epoch,
+            action,
+          },
+          undefined,
+          { signal: abort.current!.signal },
+        );
+        // Never replay rejected input. A subsequent operation needs a confirmed new frame.
+        const next = await waitForFrame(snapshot, requestId);
+        if (
+          next.url !== snapshot.url &&
+          (queue.current.length || keyboard.current?.value)
+        ) {
+          queue.current = [];
+          clearTimeout(textTimer.current);
+          if (keyboard.current) keyboard.current.value = "";
+          report(new Error("网页已跳转，请核对新页面后继续输入"));
+        }
       }
+      await refresh();
+    } catch (cause) {
+      queue.current = [];
+      clearTimeout(textTimer.current);
+      if (keyboard.current) keyboard.current.value = "";
+      report(cause);
+      if (!abort.current?.signal.aborted) await frame.refetch();
+    } finally {
+      operation.current = false;
+      if (!abort.current?.signal.aborted) setPending(false);
     }
   };
+  const enqueue = (action: BrowserManualAction) => {
+    if (!manual || abort.current?.signal.aborted || loading || navigating)
+      return;
+    if (queue.current.length >= 40) {
+      report(new Error("输入较快，请等待网页更新后继续"));
+      return;
+    }
+    const last = queue.current.at(-1)?.action;
+    if (
+      action.kind === "type" &&
+      last?.kind === "type" &&
+      last.text.length + action.text.length <= 2000
+    )
+      last.text += action.text;
+    else
+      queue.current.push({
+        action,
+        ...(action.kind === "click" && frameRef.current
+          ? { frame: frameRef.current }
+          : {}),
+      });
+    void drain();
+  };
+  const flushText = () => {
+    clearTimeout(textTimer.current);
+    if (composing.current || !keyboard.current?.value) return;
+    const value = keyboard.current.value;
+    keyboard.current.value = "";
+    if (value.length > 2000) {
+      report(new Error("一次最多输入 2000 个字符，请分段粘贴"));
+      return;
+    }
+    enqueue({ kind: "type", text: value });
+  };
+  const keydown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (
+      event.nativeEvent.isComposing ||
+      composing.current ||
+      event.keyCode === 229
+    )
+      return;
+    if (event.key === "Tab" && exitKeyboard.current) {
+      exitKeyboard.current = false;
+      return;
+    }
+    exitKeyboard.current = event.key === "Escape";
+    const keys: Record<
+      string,
+      Extract<BrowserManualAction, { kind: "key" }>["key"]
+    > = {
+      Enter: "ENTER",
+      Tab: event.shiftKey ? "SHIFT_TAB" : "TAB",
+      Backspace: "BACKSPACE",
+      Escape: "ESC",
+      ArrowLeft: "ARROW_LEFT",
+      ArrowRight: "ARROW_RIGHT",
+      ArrowUp: "ARROW_UP",
+      ArrowDown: "ARROW_DOWN",
+      Delete: "DELETE",
+      Home: "HOME",
+      End: "END",
+      PageUp: "PAGE_UP",
+      PageDown: "PAGE_DOWN",
+    };
+    const key =
+      (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "a"
+        ? "CTRL_A"
+        : keys[event.key];
+    if (!key) return;
+    event.preventDefault();
+    event.stopPropagation();
+    flushText();
+    enqueue({ kind: "key", key });
+  };
   const click = (event: MouseEvent<HTMLButtonElement>) => {
-    if (!usable || event.detail === 0) return;
+    if (!usable || pending || event.detail === 0) return;
     const image = event.currentTarget.querySelector("img");
     if (!image) return;
     const rect = image.getBoundingClientRect();
     const x = ((event.clientX - rect.left) / rect.width) * 1000;
     const y = ((event.clientY - rect.top) / rect.height) * 1000;
     if (x < 0 || y < 0 || x > 1000 || y > 1000) return;
-    void send({ kind: "click", x: Math.round(x), y: Math.round(y) });
+    if (keyboard.current?.value) {
+      flushText();
+      report(new Error("请等待文字输入完成，再点击新位置"));
+      return;
+    }
+    enqueue({ kind: "click", x: Math.round(x), y: Math.round(y) });
+    keyboard.current?.focus({ preventScroll: true });
   };
+  const navigation = async (action: BrowserNavigationAction) => {
+    if (operation.current || abort.current?.signal.aborted) return;
+    if (!manual && action.kind !== "goto") return;
+    if (live && !manual) {
+      report(new Error("请先暂停小序操作，再浏览网页"));
+      return;
+    }
+    queue.current = [];
+    if (keyboard.current) keyboard.current.value = "";
+    operation.current = true;
+    setNavigating(true);
+    setPending(true);
+    try {
+      if (!live && action.kind === "goto") {
+        if (disabled || !canBrowse) return;
+        await start(action.url, latest.current.viewport);
+      } else if (task) {
+        const snapshot = frameRef.current;
+        const requestId = crypto.randomUUID();
+        const changed = (
+          await api(
+            `/my-workspace/assistant/browser/tasks/${task.id}/navigation`,
+            "POST",
+            {
+              requestId,
+              epoch: task.epoch ?? snapshot?.epoch ?? 0,
+              action,
+            },
+            undefined,
+            { signal: abort.current!.signal },
+          )
+        ).data as BrowserTask;
+        if (abort.current?.signal.aborted) return;
+        update(changed);
+        if (snapshot) {
+          consumed.current = snapshot.frameId;
+          await waitForFrame(
+            snapshot,
+            requestId,
+            changed.epoch ?? snapshot.epoch,
+          );
+        }
+        await refresh();
+      }
+      if (action.kind === "goto") setEditingAddress(false);
+    } catch (cause) {
+      report(cause);
+    } finally {
+      operation.current = false;
+      if (!abort.current?.signal.aborted) {
+        setPending(false);
+        setNavigating(false);
+      }
+    }
+  };
+  useEffect(() => {
+    if (
+      !manual ||
+      loading ||
+      pending ||
+      !task ||
+      !frame.data ||
+      queue.current.length ||
+      composing.current
+    )
+      return;
+    const desired = `${viewport.width}x${viewport.height}`;
+    if (
+      resizeSent.current === desired ||
+      (task.viewport?.width === viewport.width &&
+        task.viewport?.height === viewport.height)
+    )
+      return;
+    const timer = setTimeout(() => {
+      if (
+        operation.current ||
+        keyboard.current?.value ||
+        composing.current ||
+        queue.current.length
+      )
+        return;
+      resizeSent.current = desired;
+      void navigation({ kind: "resize", viewport });
+    }, 500);
+    return () => clearTimeout(timer);
+    // The dispatch reads the current task and epoch; rerun when the live frame settles.
+  }, [
+    manual,
+    loading,
+    pending,
+    viewport.width,
+    viewport.height,
+    task?.epoch,
+    frame.data?.frameId,
+  ]);
+  useEffect(() => {
+    const element = page.current;
+    if (!element) return;
+    const wheel = (event: WheelEvent) => {
+      if (!manual || loading) return;
+      event.preventDefault();
+      wheelDelta.current += event.deltaY * (event.deltaMode === 1 ? 16 : 1);
+      clearTimeout(wheelTimer.current);
+      wheelTimer.current = setTimeout(() => {
+        const amount = wheelDelta.current;
+        wheelDelta.current = 0;
+        if (Math.abs(amount) < 1) return;
+        flushText();
+        enqueue({
+          kind: "scroll",
+          direction: amount < 0 ? "up" : "down",
+          amount: Math.min(6, Math.max(1, Math.ceil(Math.abs(amount) / 160))),
+        });
+      }, 100);
+    };
+    element.addEventListener("wheel", wheel, { passive: false });
+    return () => element.removeEventListener("wheel", wheel);
+  }, [manual, loading]);
+  const submit = () => {
+    const raw = address.trim();
+    const parsed = browserUrlSchema.safeParse(
+      /^[a-z][a-z\d+.-]*:/i.test(raw) ? raw : `https://${raw}`,
+    );
+    if (!parsed.success) {
+      report(
+        new Error(
+          "请填写不含账号密码的公开 HTTP/HTTPS 网址；自动操作目标请发给小序",
+        ),
+      );
+      return;
+    }
+    void navigation({ kind: "goto", url: parsed.data });
+  };
+  const readOnlyNote =
+    "历史任务已结束，此画面只读" +
+    (frame.data?.expiresAt
+      ? `，保留至 ${new Date(frame.data.expiresAt).toLocaleString("zh-CN")}`
+      : "");
+  const status =
+    unavailable ||
+    frame.error?.message ||
+    (task?.navigationState === "ERROR"
+      ? task.stage
+      : loading
+        ? "正在打开网页"
+        : "");
   return (
     <section
       className="assistant-browser-takeover"
       aria-label="独立浏览器画面与接管"
     >
-      <div
-        className="assistant-browser-address"
-        title={frame.data?.url || task.url}
-        aria-label="当前网页地址"
+      <form
+        className="assistant-browser-navigation"
+        onSubmit={(event) => {
+          event.preventDefault();
+          submit();
+        }}
       >
-        <GlobalOutlined aria-hidden />
-        <span>{frame.data?.url || task.url || "正在打开网页…"}</span>
-        {(task.status === "DONE" || frame.data?.readOnly) && (
-          <Tooltip title={readOnlyNote} trigger={["hover", "focus"]}>
+        <Button
+          type="text"
+          size="small"
+          icon={<ArrowLeftOutlined />}
+          aria-label="后退"
+          disabled={!usable || pending || !frame.data?.canGoBack}
+          onClick={() => void navigation({ kind: "back" })}
+        />
+        <Button
+          type="text"
+          size="small"
+          icon={<ArrowRightOutlined />}
+          aria-label="前进"
+          disabled={!usable || pending || !frame.data?.canGoForward}
+          onClick={() => void navigation({ kind: "forward" })}
+        />
+        <Button
+          type="text"
+          size="small"
+          icon={<ReloadOutlined />}
+          aria-label={readOnly ? "刷新历史画面" : "刷新网页"}
+          loading={pending && live}
+          disabled={pending || (live ? !manual : !readOnly)}
+          onClick={() => {
+            if (readOnly) void frame.refetch();
+            else void navigation({ kind: "reload" });
+          }}
+        />
+        <div className="assistant-browser-address" title={status || currentUrl}>
+          <GlobalOutlined aria-hidden />
+          <Input
+            variant="borderless"
+            aria-label="网页地址"
+            placeholder="输入网址，按回车打开"
+            value={address}
+            maxLength={2048}
+            disabled={pending || disabled || !canBrowse}
+            onFocus={() => setEditingAddress(true)}
+            onBlur={() => {
+              if (address === currentUrl) setEditingAddress(false);
+            }}
+            onChange={(event) => {
+              setEditingAddress(true);
+              setAddress(event.target.value);
+            }}
+          />
+          {readOnly && (
+            <Tooltip title={readOnlyNote} trigger={["hover", "focus"]}>
+              <span
+                className="assistant-browser-readonly"
+                tabIndex={0}
+                aria-label="最终画面只读"
+                aria-description={readOnlyNote}
+                title={readOnlyNote}
+              >
+                只读
+              </span>
+            </Tooltip>
+          )}
+          {status && (
             <span
-              className="assistant-browser-readonly"
-              tabIndex={0}
-              aria-label="最终画面只读"
-              aria-description={readOnlyNote}
-              title={readOnlyNote}
+              className="assistant-browser-address-status"
+              role="status"
+              title={status}
             >
-              只读
+              {status}
             </span>
-          </Tooltip>
+          )}
+          <Button
+            type="text"
+            size="small"
+            htmlType="submit"
+            icon={<ArrowUpOutlined />}
+            aria-label="打开网址"
+            disabled={pending || disabled || !canBrowse || !address.trim()}
+          />
+        </div>
+      </form>
+      {task &&
+        task.mode !== "BROWSE" &&
+        (isActiveBrowserTask(task) || task.status === "FAILED") && (
+          <AssistantBrowserTaskCard task={task} refresh={refresh} inline />
         )}
-      </div>
-      {(isActiveBrowserTask(task) || task.status === "FAILED") && (
-        <AssistantBrowserTaskCard task={task} refresh={refresh} inline />
-      )}
-      <div className="assistant-browser-page">
-        {frame.error && <Alert type="warning" title={frame.error.message} />}
+      <div className="assistant-browser-page" ref={page}>
         {frame.data ? (
           <button
+            ref={screen}
             type="button"
             className="assistant-browser-screen"
             aria-label="点击独立浏览器画面"
-            disabled={!usable}
+            aria-busy={pending || loading}
+            disabled={!usable && !pending}
             onClick={click}
+            onFocus={() => {
+              if (manual) keyboard.current?.focus({ preventScroll: true });
+            }}
             title={
-              manual
-                ? "点击画面中的位置；键盘用户可使用下方 Tab 与 Enter 按键"
-                : task.status === "DONE" || frame.data.readOnly
-                  ? "最终画面仅供查看，不能操作"
-                  : "请先暂停任务再操作"
+              readOnly
+                ? readOnlyNote
+                : manual
+                  ? "直接点击、输入或滚动网页；按 Esc 后 Tab 可离开画面"
+                  : "请先暂停小序操作再接管"
             }
           >
             <img
@@ -379,93 +828,51 @@ function BrowserTakeover({
           <Empty
             image={Empty.PRESENTED_IMAGE_SIMPLE}
             description={
-              frame.isPending
-                ? "正在获取浏览器画面…"
-                : task.status === "DONE"
-                  ? "没有可查看的最终画面，可能已过期或已清除。"
+              task
+                ? readOnly
+                  ? "没有可查看的最终画面，可能已过期或已清除"
                   : isActiveBrowserTask(task)
-                    ? "暂无画面，等待浏览器打开网页后刷新。"
-                    : "任务已结束，没有保留画面。"
+                    ? "正在打开网页…"
+                    : "网页已关闭"
+                : ""
             }
           />
         )}
+        {manual && (
+          <textarea
+            ref={keyboard}
+            className="assistant-browser-keyboard"
+            aria-label="网页键盘输入"
+            disabled={navigating || loading}
+            autoComplete="off"
+            autoCapitalize="off"
+            spellCheck={false}
+            onKeyDown={keydown}
+            onCompositionStart={() => {
+              composing.current = true;
+              clearTimeout(textTimer.current);
+            }}
+            onCompositionEnd={() => {
+              composing.current = false;
+              flushText();
+            }}
+            onInput={() => {
+              if (!composing.current) {
+                clearTimeout(textTimer.current);
+                textTimer.current = setTimeout(flushText, 100);
+              }
+            }}
+            onPaste={(event) => {
+              event.preventDefault();
+              flushText();
+              const text = event.clipboardData.getData("text/plain");
+              if (text.length > 2000)
+                report(new Error("一次最多粘贴 2000 个字符"));
+              else if (text) enqueue({ kind: "type", text });
+            }}
+          />
+        )}
       </div>
-      {manual && (
-        <div className="assistant-browser-manual">
-          <label
-            className="assistant-browser-input-label"
-            htmlFor={`browser-input-${task.id}`}
-          >
-            向当前焦点输入文字
-          </label>
-          <div className="assistant-browser-manual-compose">
-            <Input.Password
-              id={`browser-input-${task.id}`}
-              autoComplete="off"
-              value={text}
-              maxLength={2000}
-              disabled={!usable}
-              onChange={(event) => setText(event.target.value)}
-              placeholder="先点击网页输入框，再填写内容"
-              onPressEnter={() => {
-                if (text) void send({ kind: "type", text });
-              }}
-            />
-            <Button
-              type="primary"
-              size="small"
-              icon={<ArrowUpOutlined />}
-              aria-label="输入到浏览器"
-              disabled={!usable || !text}
-              loading={pending}
-              onClick={() => void send({ kind: "type", text })}
-            >
-              输入
-            </Button>
-          </div>
-          <Space wrap>
-            {(
-              [
-                ["TAB", "Tab 下一个"],
-                ["SHIFT_TAB", "Shift+Tab 上一个"],
-                ["ENTER", "Enter 确认"],
-                ["CTRL_A", "全选"],
-                ["BACKSPACE", "退格"],
-                ["ESC", "Esc 关闭"],
-              ] as const
-            ).map(([key, label]) => (
-              <Button
-                key={key}
-                size="small"
-                disabled={!usable}
-                onClick={() => void send({ kind: "key", key })}
-              >
-                {label}
-              </Button>
-            ))}
-            <Button
-              size="small"
-              disabled={!usable}
-              onClick={() =>
-                void send({ kind: "scroll", direction: "up", amount: 2 })
-              }
-            >
-              向上滚动
-            </Button>
-            <Button
-              size="small"
-              disabled={!usable}
-              onClick={() =>
-                void send({ kind: "scroll", direction: "down", amount: 2 })
-              }
-            >
-              向下滚动
-            </Button>
-          </Space>
-        </div>
-      )}
-      {manual && error && <Alert type="error" showIcon title={error} />}
-      {manual && note && <p role="status">{note}</p>}
     </section>
   );
 }
@@ -503,21 +910,15 @@ export function AssistantBrowserPanel({
   onSubmitting: (value: boolean) => void;
   embedded?: boolean;
 }) {
-  const ref = useRef<HTMLDivElement>(null);
   const { modal, message } = App.useApp();
   const queryClient = useQueryClient();
   const [clearing, setClearing] = useState(false);
+  const [closing, setClosing] = useState(false);
   const [newTab, setNewTab] = useState(false);
-  const [address, setAddress] = useState("");
-  const [starting, setStarting] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
-  const refreshingRef = useRef(false);
-  const [startError, setStartError] = useState("");
-  const startingRef = useRef(false);
   const request = useRef<{ value: string; id: string } | null>(null);
-  useEffect(() => setNewTab(false), [selectedId]);
   const clearDialog = useRef<{ destroy: () => void } | null>(null);
   const mounted = useRef(true);
+  useEffect(() => setNewTab(false), [selectedId]);
   useEffect(() => {
     mounted.current = true;
     return () => {
@@ -526,117 +927,65 @@ export function AssistantBrowserPanel({
       onSubmitting(false);
     };
   }, [onSubmitting]);
-  useLayoutEffect(() => {
-    if (open) {
-      const scroller = ref.current?.querySelector<HTMLElement>(
-        ".assistant-browser-content",
-      );
-      if (scroller) scroller.scrollTop = 0;
-    }
-  }, [open, selectedId, newTab]);
   const tasks = data?.tasks || [];
   const selectedTask =
     tasks.find((entry) => entry.id === selectedId) ||
     tasks.find(isActiveBrowserTask) ||
     tasks[0];
   const task = newTab ? undefined : selectedTask;
-  const activeTask = tasks.find(isActiveBrowserTask);
-  const refreshAll = async () => {
-    if (refreshingRef.current) return;
-    refreshingRef.current = true;
-    setRefreshing(true);
-    try {
-      await Promise.all([
-        refresh(),
-        ...(task
-          ? [
-              queryClient.invalidateQueries({
-                queryKey: ["assistant-browser-frame", owner, task.id],
-              }),
-            ]
-          : []),
-      ]);
-    } catch (cause) {
-      if (mounted.current) message.error((cause as Error).message);
-    } finally {
-      refreshingRef.current = false;
-      if (mounted.current) setRefreshing(false);
-    }
+  const canBrowse = data?.canBrowse ?? data?.ready ?? false;
+  const update = (changed: BrowserTask) => {
+    queryClient.setQueryData<BrowserState>(
+      ["assistant-browser", owner],
+      (previous) =>
+        previous
+          ? {
+              ...previous,
+              tasks: [
+                changed,
+                ...previous.tasks.filter((entry) => entry.id !== changed.id),
+              ],
+            }
+          : previous,
+    );
   };
-  const start = async () => {
-    const value = address.trim();
+  const start = async (url: string, viewport: BrowserViewport) => {
+    const active = tasks.find(isActiveBrowserTask);
     if (
-      value.length < 2 ||
-      disabled ||
-      !data?.ready ||
-      activeTask ||
-      startingRef.current
-    )
-      return;
-    setStartError("");
-    let url: string | undefined;
-    const looksLikeUrl =
-      /^[a-z][a-z\d+.-]*:/i.test(value) ||
-      /^\S+\.[a-z]{2,}(?:[/:?#]|$)/i.test(value);
-    if (looksLikeUrl) {
-      const parsed = browserUrlSchema.safeParse(
-        /^[a-z][a-z\d+.-]*:/i.test(value) ? value : `https://${value}`,
-      );
-      if (!parsed.success) {
-        setStartError(
-          "请填写不含账号密码的公开 HTTP/HTTPS 网址，或描述要完成的网页任务。",
-        );
-        return;
-      }
-      url = parsed.data;
+      active &&
+      active.mode !== "BROWSE" &&
+      !["PAUSED", "NEEDS_USER"].includes(active.status)
+    ) {
+      setNewTab(false);
+      selectTask(active.id);
+      throw new Error("请先暂停小序操作，再打开新网址");
     }
-    if (request.current?.value !== value)
-      request.current = { value, id: crypto.randomUUID() };
-    startingRef.current = true;
-    setStarting(true);
+    if (request.current?.value !== url)
+      request.current = { value: url, id: crypto.randomUUID() };
     onSubmitting(true);
     try {
       const created = (
-        await api("/my-workspace/assistant/browser/tasks", "POST", {
+        await api("/my-workspace/assistant/browser/browse", "POST", {
           requestId: request.current.id,
-          instruction: url ? `打开 ${url}，查看网页标题后完成任务。` : value,
-          ...(url ? { url } : {}),
+          url,
+          viewport,
         })
       ).data as BrowserTask;
       if (!mounted.current) return;
-      queryClient.setQueryData<BrowserState>(
-        ["assistant-browser", owner],
-        (previous) =>
-          previous
-            ? {
-                ...previous,
-                tasks: [
-                  created,
-                  ...previous.tasks.filter((entry) => entry.id !== created.id),
-                ],
-              }
-            : previous,
-      );
-      setAddress("");
+      update(created);
       request.current = null;
       setNewTab(false);
       onStarted(created);
       await refresh();
-    } catch (cause) {
-      if (mounted.current) setStartError((cause as Error).message);
     } finally {
-      startingRef.current = false;
-      if (mounted.current) {
-        setStarting(false);
-        onSubmitting(false);
-      }
+      if (mounted.current) onSubmitting(false);
     }
   };
   const clear = () => {
     clearDialog.current = modal.confirm({
       title: "清除独立浏览器登录状态？",
       content:
-        "将停止当前浏览器任务，并清除已保存的网站登录状态与任务截图。之后需要重新登录这些网站。",
+        "将关闭当前浏览器，并清除已保存的网页登录状态与任务截图。之后需要重新登录这些网站。",
       okText: "清除并停止",
       cancelText: "保留",
       okButtonProps: { danger: true },
@@ -662,12 +1011,33 @@ export function AssistantBrowserPanel({
       },
     });
   };
+  const closePage = async () => {
+    if (closing) return;
+    if (!task || !isActiveBrowserTask(task)) {
+      setNewTab(true);
+      return;
+    }
+    setClosing(true);
+    try {
+      await api(
+        `/my-workspace/assistant/browser/tasks/${task.id}/close`,
+        "POST",
+      );
+      if (!mounted.current) return;
+      await refresh();
+      if (mounted.current) setNewTab(true);
+    } catch (cause) {
+      if (mounted.current) void message.error((cause as Error).message);
+    } finally {
+      if (mounted.current) setClosing(false);
+    }
+  };
   return (
-    <div className="assistant-browser-panel" ref={ref}>
+    <div className="assistant-browser-panel">
       <div className="assistant-browser-tabbar">
         <div
           className="assistant-browser-tab"
-          title={task?.title || task?.instruction || "新任务"}
+          title={task?.title || task?.instruction || "新网页"}
         >
           <Dropdown
             trigger={["click"]}
@@ -678,14 +1048,17 @@ export function AssistantBrowserPanel({
                 {
                   key: "history",
                   type: "group",
-                  label: "最近任务",
+                  label: "最近网页与任务",
                   children: tasks.length
                     ? tasks.map((entry) => ({
                         key: `task:${entry.id}`,
                         label: (
                           <span title={entry.instruction}>
-                            {browserStatusLabels[entry.status]} ·{" "}
-                            {entry.instruction}
+                            {entry.mode === "BROWSE" &&
+                            isActiveBrowserTask(entry)
+                              ? "浏览中"
+                              : browserStatusLabels[entry.status]}{" "}
+                            · {entry.instruction}
                           </span>
                         ),
                       }))
@@ -694,7 +1067,7 @@ export function AssistantBrowserPanel({
                 { type: "divider" },
                 {
                   key: "choose",
-                  label: "在对话中使用浏览器",
+                  label: "让小序操作当前网页",
                   disabled: disabled || !data?.ready,
                 },
                 ...(!embedded
@@ -742,109 +1115,56 @@ export function AssistantBrowserPanel({
               className="assistant-browser-tab-label"
               icon={<GlobalOutlined />}
               aria-label="浏览器标签与会话菜单"
-              title="查看最近任务和浏览器登录状态"
+              title="查看最近网页、任务和登录状态"
             >
-              {task?.title || (task ? "网页任务" : "新任务")}
+              {task?.title || (task ? "网页" : "新网页")}
             </Button>
           </Dropdown>
           <Button
             type="text"
             size="small"
             icon={<CloseOutlined />}
-            aria-label={embedded ? "关闭浏览器面板" : "返回对话"}
-            title="收起浏览器，任务继续保留"
-            onClick={returnToChat}
+            aria-label="关闭当前网页"
+            title="关闭当前网页并停止操作"
+            loading={closing}
+            onClick={() => void closePage()}
           />
         </div>
         <Button
           type="text"
           size="small"
           icon={<PlusOutlined />}
-          aria-label="新建浏览器任务"
-          title="新建任务"
+          aria-label="打开新网址"
+          title="输入新网址，复用当前浏览器"
           onClick={() => setNewTab(true)}
         />
         <div className="assistant-browser-window-actions">
           <Button
             type="text"
             size="small"
-            icon={<ReloadOutlined />}
-            aria-label="刷新浏览器状态"
-            title="刷新网页画面与任务状态"
-            loading={refreshing}
-            onClick={() => void refreshAll()}
+            icon={<DoubleRightOutlined />}
+            aria-label={embedded ? "关闭浏览器面板" : "返回对话"}
+            title="收起面板，保留当前网页"
+            onClick={returnToChat}
           />
         </div>
       </div>
       <div className="assistant-browser-content">
-        {task ? (
-          <>
-            {open && (
-              <BrowserTakeover
-                key={task.id}
-                task={task}
-                owner={owner}
-                refresh={refresh}
-              />
-            )}
-          </>
-        ) : (
-          <div className="assistant-browser-start">
-            <form
-              className="assistant-browser-search"
-              onSubmit={(event) => {
-                event.preventDefault();
-                void start();
-              }}
-            >
-              <GlobalOutlined aria-hidden />
-              <Input
-                variant="borderless"
-                aria-label="网址或网页任务"
-                placeholder="输入网址或描述网页任务"
-                maxLength={4000}
-                value={address}
-                disabled={disabled || starting || !data?.ready || !!activeTask}
-                onChange={(event) => setAddress(event.target.value)}
-              />
-              <Button
-                type="primary"
-                shape="circle"
-                htmlType="submit"
-                icon={<ArrowUpOutlined />}
-                aria-label="开始浏览器任务"
-                loading={starting}
-                disabled={
-                  disabled ||
-                  !data?.ready ||
-                  !!activeTask ||
-                  address.trim().length < 2
-                }
-              />
-            </form>
-            {activeTask && (
-              <p className="assistant-browser-start-note">
-                当前有未结束的任务，请先继续或停止。
-                <Button
-                  type="link"
-                  size="small"
-                  onClick={() => {
-                    setNewTab(false);
-                    selectTask(activeTask.id);
-                  }}
-                >
-                  查看当前任务
-                </Button>
-              </p>
-            )}
-            {startError && <Alert type="error" showIcon title={startError} />}
-          </div>
-        )}
-        {(!data?.ready || error) && (
-          <Alert
-            type="warning"
-            showIcon
-            title={error || data?.note || "正在核对独立浏览器…"}
+        {open && (
+          <BrowserTakeover
+            key={task?.id || "new"}
+            task={task}
+            owner={owner}
+            refresh={refresh}
+            start={start}
+            update={update}
+            canBrowse={canBrowse}
+            disabled={disabled}
+            unavailable={
+              !canBrowse || error
+                ? error || data?.note || "正在连接浏览器"
+                : undefined
+            }
           />
         )}
       </div>

@@ -23,15 +23,21 @@ const makeTask = (): BrowserTask => ({
   title: "示例网站",
   createdAt: new Date().toISOString(),
   updatedAt: new Date().toISOString(),
+  mode: "AGENT",
+  epoch: 3,
+  navigationState: "READY",
 });
 async function fixture(page: Page) {
   const state = {
     user: "7",
     ready: true,
+    canBrowse: undefined as boolean | undefined,
     chatReady: true,
     tasks: [] as BrowserTask[],
     requests: [] as Record<string, unknown>[],
     browserRequests: [] as Record<string, unknown>[],
+    navigations: [] as Record<string, any>[],
+    autoAcknowledge: true,
     createError: "",
     controls: [] as string[],
     actions: [] as Record<string, any>[],
@@ -41,6 +47,7 @@ async function fixture(page: Page) {
     frameRequests: [] as string[],
     saved: true,
     cleared: 0,
+    closed: 0,
   };
   const conversation = {
     ready: true,
@@ -53,15 +60,18 @@ async function fixture(page: Page) {
   const screenshot = Buffer.from(
     '<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="600"><rect width="1000" height="600" fill="#e9eef4"/><text x="80" y="100" font-size="28">Browser test page</text><rect x="200" y="250" width="600" height="70" fill="white" stroke="#333"/></svg>',
   ).toString("base64");
-  const freshFrame = () => {
+  const freshFrame = (appliedRequestId?: string) => {
     state.frame = {
       frameId: crypto.randomUUID(),
-      epoch: 3,
-      width: 1000,
-      height: 600,
-      image: `data:image/svg+xml;base64,${screenshot}`,
-      url: "https://example.com/login",
+      epoch: state.tasks[0]?.epoch ?? 3,
+      width: state.frame?.width || 1000,
+      height: state.frame?.height || 600,
+      image: state.frame?.image || `data:image/svg+xml;base64,${screenshot}`,
+      url: state.frame?.url || "https://example.com/login",
       title: "测试登录页",
+      canGoBack: true,
+      canGoForward: false,
+      appliedRequestId,
     };
   };
   freshFrame();
@@ -124,6 +134,7 @@ async function fixture(page: Page) {
     else if (path === "/my-workspace/assistant/browser")
       data = {
         ready: state.ready,
+        canBrowse: state.canBrowse ?? state.ready,
         workerOnline: state.ready,
         encryptionReady: true,
         note: state.ready ? "独立浏览器已连接" : "独立浏览器执行服务尚未连接",
@@ -134,7 +145,10 @@ async function fixture(page: Page) {
         },
         tasks: state.tasks,
       } satisfies BrowserState;
-    else if (path === "/my-workspace/assistant/browser/tasks") {
+    else if (
+      path === "/my-workspace/assistant/browser/tasks" ||
+      path === "/my-workspace/assistant/browser/browse"
+    ) {
       const body = request.postDataJSON();
       state.browserRequests.push(body);
       if (state.createError) {
@@ -148,12 +162,36 @@ async function fixture(page: Page) {
       }
       data = {
         ...makeTask(),
-        instruction: body.instruction,
+        instruction: body.instruction || `浏览 ${body.url}`,
         url: body.url || "",
-        status: "QUEUED",
-        stage: "等待独立浏览器",
+        status: body.instruction ? "QUEUED" : "PAUSED",
+        mode: body.instruction ? "AGENT" : "BROWSE",
+        viewport: body.viewport,
+        stage: body.instruction ? "等待独立浏览器" : "可直接浏览网页",
       };
       state.tasks = [data as BrowserTask];
+      if (!body.instruction) freshFrame();
+    } else if (
+      path === `/my-workspace/assistant/browser/tasks/${taskId}/navigation`
+    ) {
+      const body = request.postDataJSON();
+      state.navigations.push(body);
+      state.tasks[0].epoch = (state.tasks[0].epoch ?? 3) + 1;
+      if (body.action.kind === "resize")
+        state.tasks[0].viewport = body.action.viewport;
+      if (body.action.kind === "goto") state.tasks[0].url = body.action.url;
+      freshFrame(body.requestId);
+      state.frame!.url = state.tasks[0].url;
+      state.frame!.canGoBack = body.action.kind !== "back";
+      state.frame!.canGoForward = body.action.kind === "back";
+      const viewport = state.tasks[0].viewport;
+      if (viewport) {
+        state.frame!.width = viewport.width;
+        state.frame!.height = viewport.height;
+        const content = `<svg xmlns="http://www.w3.org/2000/svg" width="${viewport.width}" height="${viewport.height}"><rect width="100%" height="100%" fill="#e9eef4"/><text x="30" y="80" font-size="20">Browser viewport ${viewport.width} x ${viewport.height}</text></svg>`;
+        state.frame!.image = `data:image/svg+xml;base64,${Buffer.from(content).toString("base64")}`;
+      }
+      data = state.tasks[0];
     } else if (
       /^\/my-workspace\/assistant\/browser\/tasks\/[^/]+\/frame$/.test(path)
     ) {
@@ -199,6 +237,14 @@ async function fixture(page: Page) {
         return;
       }
       data = { queued: true };
+      if (state.autoAcknowledge) freshFrame(request.postDataJSON().requestId);
+    } else if (
+      path === `/my-workspace/assistant/browser/tasks/${taskId}/close`
+    ) {
+      state.closed++;
+      state.tasks[0].status = "DONE";
+      state.frame = state.frame ? { ...state.frame, readOnly: true } : null;
+      data = state.tasks[0];
     } else if (path === "/my-workspace/assistant/browser/session/clear") {
       state.cleared++;
       state.saved = false;
@@ -303,9 +349,9 @@ for (const viewport of [
     await expect(
       panel.getByRole("button", { name: "浏览器标签与会话菜单", exact: true }),
     ).toContainText("Example Domains");
-    await expect(
-      panel.getByLabel("当前网页地址", { exact: true }),
-    ).toContainText(state.tasks[0].url);
+    await expect(panel.getByLabel("网页地址", { exact: true })).toHaveValue(
+      state.tasks[0].url,
+    );
     await expect(
       panel.getByLabel("最终画面只读", { exact: true }),
     ).toBeVisible();
@@ -320,10 +366,10 @@ for (const viewport of [
     await expect(panel.getByText(instruction, { exact: true })).toHaveCount(0);
     await expect(panel.getByRole("button", { name: /刷新/ })).toHaveCount(1);
     await expect(
-      panel.getByRole("button", { name: "刷新浏览器状态", exact: true }),
+      panel.getByRole("button", { name: "刷新历史画面", exact: true }),
     ).toBeVisible();
     await expect(
-      panel.getByRole("button", { name: "新建浏览器任务", exact: true }),
+      panel.getByRole("button", { name: "打开新网址", exact: true }),
     ).toBeVisible();
     await expect(
       panel.getByRole("button", { name: "关闭浏览器面板", exact: true }),
@@ -413,7 +459,7 @@ for (const viewport of [
       title: "历史帮助页",
     };
     await panel
-      .getByRole("button", { name: "刷新浏览器状态", exact: true })
+      .getByRole("button", { name: "刷新历史画面", exact: true })
       .click();
     await panel
       .getByRole("button", { name: "浏览器标签与会话菜单", exact: true })
@@ -427,9 +473,9 @@ for (const viewport of [
     await expect(
       panel.getByRole("button", { name: "浏览器标签与会话菜单", exact: true }),
     ).toContainText("历史帮助页");
-    await expect(
-      panel.getByLabel("当前网页地址", { exact: true }),
-    ).toContainText("https://example.com/history");
+    await expect(panel.getByLabel("网页地址", { exact: true })).toHaveValue(
+      "https://example.com/history",
+    );
     const reads = state.frameRequests.filter(
       (id) => id === historyTaskId,
     ).length;
@@ -439,16 +485,16 @@ for (const viewport of [
       url: "https://example.com/history-updated",
     };
     await panel
-      .getByRole("button", { name: "刷新浏览器状态", exact: true })
+      .getByRole("button", { name: "刷新历史画面", exact: true })
       .click();
     await expect
       .poll(
         () => state.frameRequests.filter((id) => id === historyTaskId).length,
       )
       .toBeGreaterThan(reads);
-    await expect(
-      panel.getByLabel("当前网页地址", { exact: true }),
-    ).toContainText("https://example.com/history-updated");
+    await expect(panel.getByLabel("网页地址", { exact: true })).toHaveValue(
+      "https://example.com/history-updated",
+    );
     expect(state.actions).toEqual([]);
     expect(state.controls).toEqual([]);
     expect(state.browserRequests).toEqual([]);
@@ -475,7 +521,7 @@ test("独立浏览器未就绪不影响网站对话，显式选择后阻断且�
       .last(),
   ).toBeVisible();
   await expect(
-    page.getByRole("button", { name: "开始浏览器任务", exact: true }),
+    page.getByRole("button", { name: "打开网址", exact: true }),
   ).toBeDisabled();
   await selectAssistantPanel(page, "聊天");
   await expect(composer.locator("textarea")).toHaveValue(
@@ -538,7 +584,7 @@ test("独立浏览器目标发送、后台进度与跨页面恢复保留同一�
   state.tasks[0].status = "NEEDS_USER";
   state.tasks[0].stage = "请接管完成登录";
   await expect(
-    page.locator(".assistant-browser-panel").getByRole("status"),
+    page.locator(".assistant-browser-panel .assistant-browser-status-text"),
   ).toContainText("请接管完成登录", {
     timeout: 8000,
   });
@@ -573,19 +619,23 @@ test("独立浏览器目标发送、后台进度与跨页面恢复保留同一�
   ).toBeNull();
 });
 
-test("浏览器截图接管绑定新画面，旧画面不重放，继续与清除会话使用真实控制接口", async ({
+test("网页内键盘、中文与粘贴串行等待执行回执，旧画面不重放，停止与清除独立生效", async ({
   page,
 }) => {
   const { state, freshFrame } = await fixture(page);
   state.tasks = [makeTask()];
   await page.goto("/my-workspace?assistant=browser");
-  const screen = page.getByRole("button", { name: "点击独立浏览器画面" });
-  await expect(screen).toBeVisible();
+  const panel = page.locator(".assistant-browser-panel");
+  const screen = panel.getByRole("button", { name: "点击独立浏览器画面" });
   await expect(screen).toBeDisabled();
   await page.getByRole("button", { name: "暂停浏览器任务" }).click();
   await expect(screen).toBeEnabled();
+  await expect
+    .poll(() => state.navigations.some((item) => item.action.kind === "resize"))
+    .toBe(true);
+  await expect(screen).toHaveAttribute("aria-busy", "false");
+  state.autoAcknowledge = false;
   const oldFrame = state.frame!.frameId;
-  await screen.scrollIntoViewIfNeeded();
   const bounds = await screen.locator("img").boundingBox();
   if (!bounds) throw Error("No browser screenshot");
   await page.mouse.click(
@@ -595,109 +645,147 @@ test("浏览器截图接管绑定新画面，旧画面不重放，继续与清�
   await expect.poll(() => state.actions.length).toBe(1);
   expect(state.actions[0]).toMatchObject({
     frameId: oldFrame,
-    epoch: 3,
     action: { kind: "click" },
   });
   expect(Math.abs(state.actions[0].action.x - 250)).toBeLessThanOrEqual(2);
   expect(Math.abs(state.actions[0].action.y - 500)).toBeLessThanOrEqual(2);
-  await expect(screen).toBeDisabled();
-  freshFrame();
-  await expect(screen).toBeEnabled({ timeout: 6000 });
-  const input = page.getByLabel("向当前焦点输入文字", { exact: true });
-  await input.fill("test-login-value");
-  await page.getByRole("button", { name: "输入到浏览器", exact: true }).click();
+  const keyboard = panel.getByLabel("网页键盘输入", { exact: true });
+  await expect(keyboard).toBeFocused();
+  await page.keyboard.insertText("queued-text");
+  freshFrame(); // A different screenshot alone does not acknowledge the click.
+  await expect(screen).toHaveAttribute("aria-busy", "true");
+  await page.waitForTimeout(350);
+  expect(state.actions).toHaveLength(1);
+  freshFrame(state.actions[0].requestId);
   await expect.poll(() => state.actions.length).toBe(2);
   expect(state.actions[1].action).toEqual({
     kind: "type",
-    text: "test-login-value",
+    text: "queued-text",
   });
-  await expect(input).toHaveValue("");
-  freshFrame();
-  await expect(screen).toBeEnabled({ timeout: 6000 });
-  state.rejectAction = true;
-  await page.getByRole("button", { name: "Tab 下一个", exact: true }).click();
-  await expect(
-    page.getByRole("alert").filter({ hasText: "浏览器画面已变化" }),
-  ).toBeVisible();
+  expect(state.actions[1].frameId).not.toBe(oldFrame);
+  freshFrame(state.actions[1].requestId);
+  await expect(screen).toHaveAttribute("aria-busy", "false");
+  state.autoAcknowledge = true;
+  await keyboard.evaluate((element) => {
+    const input = element as HTMLTextAreaElement;
+    input.dispatchEvent(
+      new CompositionEvent("compositionstart", { bubbles: true, data: "" }),
+    );
+    input.value = "中文输入";
+    input.dispatchEvent(
+      new InputEvent("input", {
+        bubbles: true,
+        data: "中文输入",
+        isComposing: true,
+      }),
+    );
+  });
+  await page.waitForTimeout(150);
+  expect(state.actions).toHaveLength(2);
+  await keyboard.dispatchEvent("compositionend", { data: "中文输入" });
   await expect.poll(() => state.actions.length).toBe(3);
+  expect(state.actions[2].action).toEqual({ kind: "type", text: "中文输入" });
+  await expect(screen).toHaveAttribute("aria-busy", "false");
+  await keyboard.evaluate((element) => {
+    const clipboardData = new DataTransfer();
+    clipboardData.setData("text/plain", "粘贴内容\n第二行");
+    element.dispatchEvent(
+      new ClipboardEvent("paste", {
+        bubbles: true,
+        cancelable: true,
+        clipboardData,
+      }),
+    );
+  });
+  await expect.poll(() => state.actions.length).toBe(4);
+  expect(state.actions[3].action).toEqual({
+    kind: "type",
+    text: "粘贴内容\n第二行",
+  });
+  await expect(screen).toHaveAttribute("aria-busy", "false");
+  state.rejectAction = true;
+  await keyboard.press("Tab");
+  await expect(
+    page
+      .getByText("浏览器画面已变化，请刷新后重新操作", { exact: true })
+      .first(),
+  ).toBeVisible();
+  await expect.poll(() => state.actions.length).toBe(5);
   state.rejectAction = false;
-  await expect(screen).toBeEnabled();
-  await page.screenshot({
-    path: ".local/browser-takeover.png",
-    fullPage: true,
+  await expect(screen).toHaveAttribute("aria-busy", "false");
+  await page.waitForTimeout(200);
+  expect(state.actions).toHaveLength(5);
+  await screen.hover();
+  await page.mouse.wheel(0, 360);
+  await expect.poll(() => state.actions.length).toBe(6);
+  expect(state.actions[5].action).toEqual({
+    kind: "scroll",
+    direction: "down",
+    amount: 3,
   });
-  await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto("/my-workspace?assistant=browser");
-  await expect(screen).toBeEnabled();
-  await expect
-    .poll(() =>
-      page
-        .locator(".assistant-browser-panel")
-        .evaluate((element) => element.scrollWidth <= element.clientWidth + 1),
-    )
-    .toBe(true);
-  await screen.scrollIntoViewIfNeeded();
-  await page.screenshot({
-    path: ".local/browser-takeover-mobile.png",
-    fullPage: true,
-  });
+  await expect(screen).toHaveAttribute("aria-busy", "false");
+  await expect(panel.locator(".assistant-browser-manual")).toHaveCount(0);
+  state.autoAcknowledge = false;
+  await keyboard.focus();
+  await keyboard.press("ArrowRight");
+  await expect.poll(() => state.actions.length).toBe(7);
+  await page.keyboard.insertText("must-not-replay-after-reload");
+  state.tasks[0].epoch!++;
+  freshFrame(state.actions[6].requestId);
+  await expect(
+    page
+      .getByText("网页已在其他操作中变化，请核对画面后继续", { exact: true })
+      .first(),
+  ).toBeVisible();
+  await expect(screen).toHaveAttribute("aria-busy", "false");
+  expect(state.actions).toHaveLength(7);
+  await expect(panel.getByRole("button", { name: "Tab 下一个" })).toHaveCount(
+    0,
+  );
+  await expect(
+    page
+      .getByText("浏览器画面已变化，请刷新后重新操作", { exact: true })
+      .first(),
+  ).toBeHidden();
+  await expect(
+    page
+      .getByText("网页已在其他操作中变化，请核对画面后继续", { exact: true })
+      .first(),
+  ).toBeHidden();
+  await page.screenshot({ path: ".local/browser-direct-input.png" });
   await page
     .getByRole("button", { name: "继续浏览器任务", exact: true })
     .click();
   await expect(screen).toBeDisabled();
   expect(state.controls).toEqual(["pause", "resume"]);
-  expect(state.actions).toHaveLength(3);
-  state.tasks[0].status = "DONE";
-  state.tasks[0].stage = "已完成页面查看";
-  state.frame = {
-    ...state.frame!,
-    readOnly: true,
-    capturedAt: new Date().toISOString(),
-    expiresAt: new Date(Date.now() + 86400000).toISOString(),
-  };
-  await expect(page.getByLabel("最终画面只读", { exact: true })).toBeVisible({
-    timeout: 8000,
-  });
-  await expect(screen).toBeDisabled();
-  await expect(
-    page.getByRole("img", { name: "小序独立浏览器当前截图" }),
-  ).toBeVisible();
-  await expect(
-    page.getByLabel("最终画面只读", { exact: true }),
-  ).toHaveAttribute("title", /保留至/);
-  await expect(
-    page.getByLabel("向当前焦点输入文字", { exact: true }),
-  ).toHaveCount(0);
-  await page
-    .getByRole("button", { name: "浏览器标签与会话菜单", exact: true })
+  await panel
+    .getByRole("button", { name: "关闭浏览器面板", exact: true })
     .click();
+  expect(state.controls).toEqual(["pause", "resume"]);
+  await page
+    .getByRole("button", { name: "展开独立浏览器", exact: true })
+    .click();
+  await panel
+    .getByRole("button", { name: "关闭当前网页", exact: true })
+    .click();
+  await expect.poll(() => state.closed).toBe(1);
+  expect(state.controls).toEqual(["pause", "resume"]);
+  await expect(panel.getByRole("textbox", { name: "网页地址" })).toHaveValue(
+    "",
+  );
+  await panel.getByRole("button", { name: "浏览器标签与会话菜单" }).click();
   await page
     .getByRole("menuitem", { name: "清除浏览器登录状态", exact: true })
     .click();
   await page.getByRole("button", { name: "保留", exact: true }).click();
   expect(state.cleared).toBe(0);
-  await expect(
-    page.getByRole("img", { name: "小序独立浏览器当前截图", exact: true }),
-  ).toBeVisible();
-  await page
-    .getByRole("button", { name: "浏览器标签与会话菜单", exact: true })
-    .click();
+  await panel.getByRole("button", { name: "浏览器标签与会话菜单" }).click();
   await page
     .getByRole("menuitem", { name: "清除浏览器登录状态", exact: true })
     .click();
   await page.getByRole("button", { name: "清除并停止", exact: true }).click();
   await expect.poll(() => state.cleared).toBe(1);
-  await page
-    .getByRole("button", { name: "浏览器标签与会话菜单", exact: true })
-    .click();
-  await expect(page.getByRole("menu")).toContainText("未保存网页登录状态");
-  await expect(
-    page.getByRole("menuitem", { name: /已停止 · 打开示例网站并查找帮助/ }),
-  ).toBeVisible();
-  await page.keyboard.press("Escape");
-  await expect(
-    page.getByRole("img", { name: "小序独立浏览器当前截图" }),
-  ).toHaveCount(0);
+  expect(state.actions).toHaveLength(7);
 });
 
 test("工作台三栏保留原场景与草稿，左右收起和调宽不提交操作", async ({
@@ -708,9 +796,7 @@ test("工作台三栏保留原场景与草稿，左右收起和调宽不提交�
   const panel = page.locator(".assistant-browser-panel");
   const center = page.getByRole("region", { name: "工作台中栏" });
   const draft = center.locator(".assistant-compose:visible textarea");
-  await expect(
-    panel.getByRole("textbox", { name: "网址或网页任务" }),
-  ).toBeVisible();
+  await expect(panel.getByRole("textbox", { name: "网页地址" })).toBeVisible();
   await expect(center.locator(".personal-workspace")).toBeVisible();
   await expect(center.locator(".workspace-world-controls")).toBeVisible();
   await expect(center.locator(".workspace-date")).toHaveCount(0);
@@ -812,11 +898,12 @@ test("工作台三栏保留原场景与草稿，左右收起和调宽不提交�
   await expect(panel.locator(".assistant-browser-tab")).toContainText(
     "历史网页",
   );
-  await panel.getByRole("button", { name: "新建浏览器任务" }).click();
-  await expect(
-    panel.getByRole("textbox", { name: "网址或网页任务" }),
-  ).toBeDisabled();
-  await panel.getByRole("button", { name: "查看当前任务" }).click();
+  await panel.getByRole("button", { name: "打开新网址" }).click();
+  await expect(panel.getByRole("textbox", { name: "网页地址" })).toBeEnabled();
+  await panel.getByRole("button", { name: "浏览器标签与会话菜单" }).click();
+  await page
+    .getByRole("menuitem", { name: /浏览器操作中 · 打开示例网站/ })
+    .click();
   await expect(panel.locator(".assistant-browser-tab")).toContainText(
     "示例网站",
   );
@@ -832,8 +919,8 @@ for (const width of [1440, 390]) {
     await page.setViewportSize({ width, height: 900 });
     await page.goto("/my-workspace?assistant=browser");
     const panel = page.locator(".assistant-browser-panel");
-    const input = panel.getByRole("textbox", { name: "网址或网页任务" });
-    const submit = panel.getByRole("button", { name: "开始浏览器任务" });
+    const input = panel.getByRole("textbox", { name: "网页地址" });
+    const submit = panel.getByRole("button", { name: "打开网址" });
     await expect(input).toBeVisible();
     await expect(panel.getByRole("heading")).toHaveCount(0);
     await expect(panel.getByRole("combobox")).toHaveCount(0);
@@ -841,12 +928,16 @@ for (const width of [1440, 390]) {
     await page.screenshot({ path: `.local/browser-minimal-new-${width}.png` });
     await input.fill("file:///C:/private");
     await input.press("Enter");
-    await expect(panel.getByRole("alert")).toContainText("HTTP/HTTPS");
+    await expect(
+      page.getByText(/请填写不含账号密码的公开 HTTP\/HTTPS/).first(),
+    ).toBeVisible();
     expect(state.browserRequests).toHaveLength(0);
     await input.fill("example.com");
     state.createError = "服务刚刚离线，请稍后重试";
     await submit.click();
-    await expect(panel.getByRole("alert")).toContainText("服务刚刚离线");
+    await expect(
+      page.getByText("服务刚刚离线，请稍后重试", { exact: true }).first(),
+    ).toBeVisible();
     await expect(input).toHaveValue("example.com");
     state.createError = "";
     await submit.click();
@@ -854,9 +945,8 @@ for (const width of [1440, 390]) {
       panel.getByRole("img", { name: "小序独立浏览器当前截图", exact: true }),
     ).toBeVisible();
     expect(state.browserRequests).toHaveLength(2);
-    expect(state.browserRequests[1]).toEqual({
+    expect(state.browserRequests[1]).toMatchObject({
       requestId: state.browserRequests[0].requestId,
-      instruction: "打开 https://example.com，查看网页标题后完成任务。",
       url: "https://example.com",
     });
     expect(state.requests).toEqual([]);
@@ -878,3 +968,88 @@ for (const width of [1440, 390]) {
     expect(state.controls).toEqual([]);
   });
 }
+
+test("直接浏览不依赖模型，真实导航和视口随面板变化，地址草稿不被轮询覆盖", async ({
+  page,
+}) => {
+  const { state } = await fixture(page);
+  state.ready = false;
+  state.canBrowse = true;
+  state.tasks = [
+    {
+      ...makeTask(),
+      mode: "BROWSE",
+      status: "PAUSED",
+      automationStatus: "IDLE",
+    },
+  ];
+  await page.goto("/my-workspace?assistant=browser");
+  const panel = page.locator(".assistant-browser-panel");
+  const address = panel.getByRole("textbox", { name: "网页地址" });
+  const screen = panel.getByRole("button", { name: "点击独立浏览器画面" });
+  await expect(address).toBeEnabled();
+  await expect(panel.locator(".assistant-browser-status")).toHaveCount(0);
+  await expect
+    .poll(() => state.navigations.some((item) => item.action.kind === "resize"))
+    .toBe(true);
+  await expect(screen).toHaveAttribute("aria-busy", "false");
+  const viewport = state.navigations.at(-1)!.action.viewport;
+  const region = await panel.locator(".assistant-browser-page").boundingBox();
+  expect(viewport.width).toBe(
+    Math.max(320, Math.min(1600, Math.round(region!.width))),
+  );
+  expect(viewport.height).toBe(
+    Math.max(240, Math.min(1600, Math.round(region!.height))),
+  );
+  const panelBounds = await panel.boundingBox();
+  expect(region!.y + region!.height).toBeGreaterThan(
+    panelBounds!.y + panelBounds!.height - 2,
+  );
+  await address.fill("https://example.org/new");
+  state.frame!.url = "https://example.com/background";
+  await page.waitForTimeout(1200);
+  await expect(address).toHaveValue("https://example.org/new");
+  await address.press("Enter");
+  await expect
+    .poll(
+      () =>
+        state.navigations.filter((item) => item.action.kind === "goto").length,
+    )
+    .toBe(1);
+  expect(state.navigations.at(-1)!.action).toEqual({
+    kind: "goto",
+    url: "https://example.org/new",
+  });
+  await expect(screen).toHaveAttribute("aria-busy", "false");
+  await panel.getByRole("button", { name: "后退", exact: true }).click();
+  await expect(screen).toHaveAttribute("aria-busy", "false");
+  await expect(
+    panel.getByRole("button", { name: "后退", exact: true }),
+  ).toBeDisabled();
+  await panel.getByRole("button", { name: "前进", exact: true }).click();
+  await expect(screen).toHaveAttribute("aria-busy", "false");
+  await panel.getByRole("button", { name: "刷新网页", exact: true }).click();
+  await expect(screen).toHaveAttribute("aria-busy", "false");
+  expect(
+    state.navigations
+      .filter((item) => item.action.kind !== "resize")
+      .map((item) => item.action.kind),
+  ).toEqual(["goto", "back", "forward", "reload"]);
+  expect(state.browserRequests).toEqual([]);
+  expect(state.requests).toEqual([]);
+  expect(state.controls).toEqual([]);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect
+    .poll(() => state.navigations.at(-1)!.action.viewport?.width)
+    .toBeLessThan(500);
+  await expect(screen).toHaveAttribute("aria-busy", "false");
+  await expect
+    .poll(() =>
+      panel.evaluate((element) => element.scrollWidth - element.clientWidth),
+    )
+    .toBeLessThanOrEqual(1);
+  await expect(
+    panel.getByRole("button", { name: "后退", exact: true }),
+  ).toBeVisible();
+  await page.screenshot({ path: ".local/browser-direct-mobile.png" });
+});

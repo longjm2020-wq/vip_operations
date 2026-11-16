@@ -5,6 +5,7 @@ export function classifyBrowserStartupFailure(
   error: unknown,
 ): BrowserRuntimeIssue {
   const message = error instanceof Error ? error.message.slice(0, 32768) : "";
+  if (message === 'BROWSER_TEMPLATE_UNAVAILABLE') return 'BROWSER_TEMPLATE_UNAVAILABLE';
   if (
     /No usable sandbox|Running as root without --no-sandbox is not supported|credentials\.cc[^\r\n]{0,300}(?:Permission denied|Operation not permitted|EACCES|EPERM)|Failed to move to new namespace[^\r\n]{0,300}(?:Permission denied|Operation not permitted)|(?:unshare|user namespace)[^\r\n]{0,120}(?:Permission denied|Operation not permitted|EACCES|EPERM)/i.test(
       message,

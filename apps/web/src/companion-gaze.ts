@@ -1,5 +1,12 @@
 const IDLE_MS = 2400;
 const LERP = 0.18;
+const FRAME_MS = 1000 / 60;
+const SETTLED = 0.04;
+
+/** Keep the same gentle response on 60 Hz and high-refresh screens. */
+export function companionGazeFactor(elapsedMs: number) {
+  return 1 - Math.pow(1 - LERP, clamp(elapsedMs, 0, 64) / FRAME_MS);
+}
 
 export type CompanionGazeLimits = {
   range: number;
@@ -58,7 +65,7 @@ const current = new WeakMap<HTMLElement, { x: number; y: number }>();
 const pointer = { x: 0, y: 0, active: false, movedAt: 0 };
 let raf = 0;
 let unbind: (() => void) | null = null;
-let reduced = false;
+let frameAt = 0;
 
 function canTrack(event: PointerEvent) {
   return event.pointerType === "mouse" || event.pointerType === "pen";
@@ -81,27 +88,21 @@ function start() {
   const visibility = () => {
     if (document.hidden) rest();
   };
-  const motion = window.matchMedia("(prefers-reduced-motion: reduce)");
-  const onMotion = () => {
-    reduced = motion.matches;
-    schedule();
-  };
-  onMotion();
   window.addEventListener("pointermove", onMove, { passive: true });
   window.addEventListener("pointerleave", rest);
   document.addEventListener("mouseleave", rest);
   document.addEventListener("visibilitychange", visibility);
   window.addEventListener("blur", rest);
-  motion.addEventListener("change", onMotion);
   unbind = () => {
     window.removeEventListener("pointermove", onMove);
     window.removeEventListener("pointerleave", rest);
     document.removeEventListener("mouseleave", rest);
     document.removeEventListener("visibilitychange", visibility);
     window.removeEventListener("blur", rest);
-    motion.removeEventListener("change", onMotion);
     if (raf) cancelAnimationFrame(raf);
     raf = 0;
+    frameAt = 0;
+    pointer.active = false;
     unbind = null;
   };
   schedule();
@@ -114,6 +115,8 @@ function schedule() {
 function tick() {
   raf = 0;
   const now = performance.now();
+  const elapsed = frameAt ? now - frameAt : FRAME_MS;
+  frameAt = now;
   const idle = !pointer.active || now - pointer.movedAt > IDLE_MS;
   let keepGoing = false;
   for (const el of figures) {
@@ -135,15 +138,15 @@ function tick() {
             },
           );
     const prev = current.get(el) || { x: 0, y: 0 };
-    // Pointer-directed feedback remains available with reduced motion, without
-    // a following animation. Leaving or hiding the page settles immediately.
-    const factor = reduced || !pointer.active || document.hidden ? 1 : LERP;
+    // Five facial features keep their explicit local interaction preference;
+    // leaving the window eases home, while a hidden page does no visible work.
+    const factor = document.hidden ? 1 : companionGazeFactor(elapsed);
     const next = {
       x: lerpGaze(prev.x, target.x, factor),
       y: lerpGaze(prev.y, target.y, factor),
     };
-    if (target.x === 0 && Math.abs(next.x) < 0.02) next.x = 0;
-    if (target.y === 0 && Math.abs(next.y) < 0.02) next.y = 0;
+    if (target.x === 0 && Math.abs(next.x) <= SETTLED) next.x = 0;
+    if (target.y === 0 && Math.abs(next.y) <= SETTLED) next.y = 0;
     current.set(el, next);
     const mouth = companionMouthOffset(next);
     el.style.setProperty("--companion-gaze-x", `${next.x.toFixed(2)}px`);
@@ -151,13 +154,14 @@ function tick() {
     el.style.setProperty("--companion-mouth-x", `${mouth.x.toFixed(2)}px`);
     el.style.setProperty("--companion-mouth-y", `${mouth.y.toFixed(2)}px`);
     if (
-      Math.abs(next.x - target.x) > 0.04 ||
-      Math.abs(next.y - target.y) > 0.04
+      Math.abs(next.x - target.x) > SETTLED ||
+      Math.abs(next.y - target.y) > SETTLED
     ) {
       keepGoing = true;
     }
   }
   if (keepGoing || (!idle && !document.hidden && figures.size)) schedule();
+  else frameAt = 0;
 }
 
 export function subscribeCompanionGaze(el: HTMLElement) {

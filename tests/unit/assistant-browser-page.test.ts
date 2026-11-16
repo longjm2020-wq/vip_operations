@@ -44,6 +44,32 @@ async function fixture(body: string) {
 }
 const signal = () => new AbortController().signal;
 describe('isolated Chromium page execution', () => {
+  it('supports real history, reload, viewport sizing and direct Chinese input in the same context', async () => {
+    const { driver, page, context } = await fixture('<input style="position:absolute;left:300px;top:400px;width:150px;height:40px"><h1>第一页</h1>');
+    await context.addCookies([{name:'session',value:'kept',url:'http://browser-fixture.example/'}]);
+    await driver.navigate({kind:'resize',viewport:{width:700,height:900}},async()=>true,signal());
+    await driver.navigate({kind:'goto',url:'http://browser-fixture.example/second'},async()=>true,signal());
+    expect(await driver.frame()).toMatchObject({width:700,height:900,canGoBack:true,canGoForward:false});
+    await driver.navigate({kind:'back'},async()=>true,signal());
+    expect(page.url()).toBe('http://browser-fixture.example/');
+    expect(await driver.frame()).toMatchObject({canGoForward:true});
+    await driver.navigate({kind:'forward'},async()=>true,signal());
+    expect(page.url()).toBe('http://browser-fixture.example/second');
+    await page.locator('h1').evaluate(el=>{el.textContent='本地改动';});
+    await driver.navigate({kind:'reload'},async()=>true,signal());
+    expect(await page.locator('h1').innerText()).toBe('第一页');
+    expect((await context.cookies()).find(c=>c.name==='session')?.value).toBe('kept');
+    await driver.frame();
+    await driver.manual({kind:'click',x:375/700*1000,y:420/900*1000},async()=>true,signal());
+    await driver.frame();
+    await driver.manual({kind:'type',text:'中文粘贴与输入'},async()=>true,signal());
+    expect(await page.locator('input').inputValue()).toBe('中文粘贴与输入');
+    await driver.frame();
+    await driver.manual({kind:'key',key:'HOME'},async()=>true,signal());
+    await driver.frame();
+    await driver.manual({kind:'key',key:'DELETE'},async()=>true,signal());
+    expect(await page.locator('input').inputValue()).toBe('文粘贴与输入');
+  },30000);
   it('does not inherit application secrets and requires the Chromium sandbox and proxy', () => {
     const env = isolatedBrowserEnvironment('C:/isolated', { PATH: 'safe-path', DATABASE_URL: 'postgres://secret', COMPASS_MAIL_KEY: 'secret', OPENAI_API_KEY: 'secret', HOME: 'real-profile' });
     expect(env).toEqual(expect.objectContaining({ PATH: 'safe-path', HOME: 'C:/isolated', USERPROFILE: 'C:/isolated' }));

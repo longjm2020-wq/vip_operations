@@ -148,6 +148,12 @@ beforeAll(async () => {
       "utf8",
     ),
   );
+  await f.db.exec(
+    await readFile(
+      "packages/database/migrations/103_browser_browsing_sessions.sql",
+      "utf8",
+    ),
+  );
 });
 beforeEach(async () => {
   await f.db!

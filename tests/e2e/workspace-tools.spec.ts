@@ -166,6 +166,33 @@ for (const width of [1440, 390]) {
     if (width === 390) await expect(execution).toBeHidden();
     else await expect(execution).toBeVisible();
 
+    await page
+      .getByRole("button", { name: "关闭浏览器面板", exact: true })
+      .click();
+    await expect(right).toBeHidden();
+    const rail = center.getByRole("navigation", { name: "已收起的右栏工具" });
+    await expect(rail).toBeVisible();
+    const layout = await page
+      .locator(".workspace-columns")
+      .evaluate((element) => {
+        const box = element.getBoundingClientRect();
+        const centerBox = element
+          .querySelector(".workspace-center")!
+          .getBoundingClientRect();
+        const railBox = element
+          .querySelector(".workspace-tools-rail")!
+          .getBoundingClientRect();
+        return {
+          unusedWidth: box.width - centerBox.width,
+          inside:
+            railBox.left >= centerBox.left &&
+            railBox.right <= centerBox.right &&
+            railBox.top >= centerBox.top,
+        };
+      });
+    expect(layout.unusedWidth).toBeLessThan(2);
+    expect(layout.inside).toBe(true);
+
     await selectAssistantExecution(page, "网站内");
     await expect(execution).toBeVisible();
     const draft = center.locator(".assistant-compose:visible textarea");
@@ -200,7 +227,7 @@ for (const width of [1440, 390]) {
   });
 }
 
-test("小序眼睛与嘴巴随鼠标同向移动，减少动态时仍响应且离开窗口回中，不启动任务", async ({
+test("小序眼嘴平滑跟随和回中，眨眼口型不受减少动态限制，不启动任务", async ({
   page,
 }) => {
   const state = await fixture(page);
@@ -233,6 +260,39 @@ test("小序眼睛与嘴巴随鼠标同向移动，减少动态时仍响应且�
     });
   for (const reducedMotion of ["reduce", "no-preference"] as const) {
     await page.emulateMedia({ reducedMotion });
+    let previousBounds: {
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+      } | null = null,
+      stable = 0;
+    await expect
+      .poll(
+        async () => {
+          const next = await figure.boundingBox();
+          const center = await page
+            .getByRole("region", { name: "工作台中栏", exact: true })
+            .boundingBox();
+          if (!next || !center) return false;
+          const inside =
+            next.x >= center.x &&
+            next.x + next.width <= center.x + center.width;
+          stable =
+            inside &&
+            previousBounds &&
+            Math.abs(next.x - previousBounds.x) +
+              Math.abs(next.y - previousBounds.y) +
+              Math.abs(next.width - previousBounds.width) <
+              1
+              ? stable + 1
+              : 0;
+          previousBounds = next;
+          return stable >= 2;
+        },
+        { intervals: [100, 100, 100] },
+      )
+      .toBe(true);
     const bounds = await figure.boundingBox();
     if (!bounds) throw Error("No visible companion figure");
     const originX = bounds.x + bounds.width / 2;
@@ -248,10 +308,43 @@ test("小序眼睛与嘴巴随鼠标同向移动，减少动态时仍响应且�
     expect(left.mouthX).toBeLessThan(0);
     expect(right.eyeTransform - left.eyeTransform).toBeGreaterThan(2);
     expect(right.mouthTransform - left.mouthTransform).toBeGreaterThan(1);
-    await page.evaluate(() => window.dispatchEvent(new Event("blur")));
+    const returnFrame = await figure.evaluate(async (element) => {
+      const x = () =>
+        Number.parseFloat(
+          (element as HTMLElement).style.getPropertyValue("--companion-gaze-x"),
+        );
+      const before = x();
+      window.dispatchEvent(new Event("blur"));
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => resolve()),
+      );
+      return { before, after: x() };
+    });
+    expect(Math.abs(returnFrame.after)).toBeGreaterThan(0);
+    expect(Math.abs(returnFrame.after)).toBeLessThan(
+      Math.abs(returnFrame.before),
+    );
     await expect
       .poll(face)
       .toMatchObject({ x: 0, mouthX: 0, mouthTransform: 0 });
+    const animations = await figure.evaluate((element) => {
+      const host = element.closest<HTMLElement>(".sidebar-assistant")!;
+      const previous = host.dataset.state;
+      host.dataset.state = "speaking";
+      const eyes = getComputedStyle(
+        element.querySelector(".companion-pose-front .companion-eye-dot")!,
+      ).animationName;
+      const mouth = getComputedStyle(
+        element.querySelector(".companion-pose-front .companion-mouth-open")!,
+      ).animationName;
+      if (previous === undefined) delete host.dataset.state;
+      else host.dataset.state = previous;
+      return { eyes, mouth };
+    });
+    expect(animations).toEqual({
+      eyes: "companion-blink",
+      mouth: "companion-talk-lips",
+    });
   }
   expect(state.writes).toEqual([]);
   expect(

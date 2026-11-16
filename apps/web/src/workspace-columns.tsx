@@ -82,6 +82,12 @@ export function WorkspaceColumns({ children }: { children: ReactNode }) {
       <section className="workspace-center" aria-label="工作台中栏">
         {children}
         <div className="workspace-chat-host" ref={dock.registerChat} />
+        <nav className="workspace-tools-rail" aria-label="已收起的右栏工具" hidden={dock.toolsOpen}>
+          <Button type="text" icon={<LeftOutlined />} aria-label="展开右侧工具栏" title="展开右侧工具栏" onClick={() => dock.setToolsOpen(true)} />
+          <Button type="text" icon={<TeamOutlined />} aria-label="展开 AI 员工" title="AI 员工" onClick={() => dock.openEmployee()} />
+          <Button type="text" icon={<GlobalOutlined />} aria-label="展开独立浏览器" title="独立浏览器" onClick={() => dock.selectTool("browser")} />
+          <Button type="text" icon={<DesktopOutlined />} aria-label="展开我的电脑" title="我的电脑" onClick={() => dock.selectTool("desktop")} />
+        </nav>
       </section>
       <div
         className="workspace-column-resizer"
@@ -178,40 +184,6 @@ export function WorkspaceColumns({ children }: { children: ReactNode }) {
             onClick={() => dock.setToolsOpen(false)}
           />
         </header>
-        <nav
-          className="workspace-tools-rail"
-          aria-label="已收起的右栏工具"
-          hidden={dock.toolsOpen}
-        >
-          <Button
-            type="text"
-            icon={<LeftOutlined />}
-            aria-label="展开右侧工具栏"
-            title="展开右侧工具栏"
-            onClick={() => dock.setToolsOpen(true)}
-          />
-          <Button
-            type="text"
-            icon={<TeamOutlined />}
-            aria-label="展开 AI 员工"
-            title="AI 员工"
-            onClick={() => dock.openEmployee()}
-          />
-          <Button
-            type="text"
-            icon={<GlobalOutlined />}
-            aria-label="展开独立浏览器"
-            title="独立浏览器"
-            onClick={() => dock.selectTool("browser")}
-          />
-          <Button
-            type="text"
-            icon={<DesktopOutlined />}
-            aria-label="展开我的电脑"
-            title="我的电脑"
-            onClick={() => dock.selectTool("desktop")}
-          />
-        </nav>
         <div
           ref={dock.registerTools}
           className="workspace-tools-host"

@@ -59,6 +59,7 @@ export class BrowserRpcServer {
         else {
           const current = () => this.permission(request.id,signal);
           if (request.op === 'execute') await this.driver.execute(request.action,current,signal);
+          else if (request.op === 'navigate') await this.driver.navigate(request.action,current,signal);
           else await this.driver.manual(request.action,current,signal);
         }
       }

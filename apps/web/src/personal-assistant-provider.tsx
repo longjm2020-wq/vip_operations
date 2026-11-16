@@ -434,7 +434,7 @@ export function PersonalAssistantProvider({
     setSection("browser");
     setOpen(true);
   }, [browser.data, browserMode]);
-  const activeBrowserTask = browser.data?.tasks.find(isActiveBrowserTask);
+  const activeBrowserTask = browser.data?.tasks.find((task) => isActiveBrowserTask(task) && task.mode !== "BROWSE");
   const browserProblem = !browserMode
     ? ""
     : browser.isPending
@@ -889,7 +889,7 @@ export function PersonalAssistantProvider({
           throw new Error(
             current.data?.note || "独立浏览器暂不可用，未切换到其他执行位置。",
           );
-        if (current.data.tasks.some(isActiveBrowserTask)) {
+        if (current.data.tasks.some((task) => isActiveBrowserTask(task) && task.mode !== "BROWSE")) {
           message.info(
             "已显示当前浏览器任务。指令已保留，请先继续或停止当前任务，无需重复发送。",
           );
@@ -953,6 +953,11 @@ export function PersonalAssistantProvider({
       if (desktopDeviceId) await desktop.refetch();
       if (browserMode) await browser.refetch();
       const latest = (response.data as AssistantConversation).messages?.at(-1);
+      if (browserMode && latest?.browserTaskId) {
+        setSelectedBrowserTaskId(latest.browserTaskId);
+        revealBrowserAfter.current = null;
+        setSection("browser");
+      }
       if (response.data.state === "IDLE" && latest?.role === "assistant") {
         const tool = available.find((entry) => entry.id === latest.navigation);
         if (tool) {
