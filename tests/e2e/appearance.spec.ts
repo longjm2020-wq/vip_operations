@@ -1,12 +1,18 @@
 import { expect, test, type BrowserContext, type Page } from "@playwright/test";
-import { openCompanionMenu, openPersonalAssistant } from "./assistant-controls.js";
+import {
+  openCompanionMenu,
+  openPersonalAssistant,
+} from "./assistant-controls.js";
 import { selectionLayoutSchema } from "../../packages/contracts/src/selection-layout.js";
 
 async function openWorkspacePanel(page: Page, name: string) {
-  // Keyboard focus pauses a moving entry; pointer hover intentionally does not.
-  const entry = page.getByRole("button", { name, exact: true });
-  await entry.focus();
-  await entry.click();
+  const menu = page.getByRole("menu", { name: "工作台工具菜单", exact: true });
+  await page.getByRole("button", { name: "工作台工具", exact: true }).click();
+  await expect(menu).toBeVisible();
+  await menu
+    .getByRole("menuitem", { name: name.replace(/^打开/, ""), exact: true })
+    .click();
+  await expect(menu).toBeHidden();
 }
 
 const store = () => ({

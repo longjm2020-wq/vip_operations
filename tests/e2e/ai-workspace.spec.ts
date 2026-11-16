@@ -9,10 +9,13 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 import type { AssistantActivity } from "../../packages/contracts/src/assistant-activity.js";
 
 async function openWorkspacePanel(page: Page, name: string) {
-  // Keyboard focus pauses a moving entry; pointer hover intentionally does not.
-  const entry = page.getByRole("button", { name, exact: true });
-  await entry.focus();
-  await entry.click();
+  const menu = page.getByRole("menu", { name: "工作台工具菜单", exact: true });
+  await page.getByRole("button", { name: "工作台工具", exact: true }).click();
+  await expect(menu).toBeVisible();
+  await menu
+    .getByRole("menuitem", { name: name.replace(/^打开/, ""), exact: true })
+    .click();
+  await expect(menu).toBeHidden();
 }
 
 async function dragCompanionToPanel(page: Page, panel: Locator) {
@@ -1155,7 +1158,7 @@ test("工作台面板默认收起，切换与重开保留草稿且只在保存�
   const fixture = await workspaceFixture(page);
   await page.goto("/my-workspace");
   await expect(
-    page.getByRole("button", { name: "打开个人待办", exact: true }),
+    page.getByRole("button", { name: "工作台工具", exact: true }),
   ).toBeVisible();
   await expect(page.getByLabel("待办事项", { exact: true })).not.toBeVisible();
   await expect(
@@ -1543,92 +1546,43 @@ test("对话设置收纳隐私选项且默认不发送，手机可选择后发�
   });
 });
 
-test("功能圆环悬停页面仍持续公转，键盘聚焦与打开浮卡暂停以便操作", async ({
+test("顶部工具菜单收纳五个入口，键盘打开后关闭面板返回菜单", async ({
   page,
 }) => {
   const fixture = await workspaceFixture(page, {
     permissions: ["analytics.read", "analytics.manage", "project.read"],
   });
   await page.goto("/my-workspace");
-  const menu = page.getByRole("navigation", { name: "工作台功能面板" });
-  const orbit = menu.locator(".workspace-dock-orbit").first();
-  const entry = menu.getByRole("button", { name: "打开日程", exact: true });
-  await page.mouse.move(5, 5);
-  await expect(orbit).toHaveCSS("animation-play-state", "running");
-  const initial = (await entry.boundingBox())!;
-  await expect
-    .poll(async () => {
-      const moving = (await entry.boundingBox())!;
-      return Math.hypot(moving.x - initial.x, moving.y - initial.y);
-    })
-    .toBeGreaterThan(6);
-  const stage = (await page.locator(".workspace-ai-core-stage").boundingBox())!;
-  await page.mouse.move(stage.x + 10, stage.y + 10);
-  await expect(orbit).toHaveCSS("animation-play-state", "running");
-  const orbitDetails = [menu.locator(".workspace-dock-face").first()];
-  const ringDecorations = [
-    menu.locator(".workspace-dock-halo-sweep").first(),
-    menu.locator(".workspace-dock-halo-counter").first(),
-  ];
-  for (const detail of [...orbitDetails, ...ringDecorations])
-    await expect(detail).toHaveCSS("animation-play-state", "running");
-  expect(
-    await entry.evaluate(
-      (element) => getComputedStyle(element, "::before").animationPlayState,
-    ),
-  ).toBe("running");
-  expect(
-    await entry
-      .locator(".workspace-dock-label")
-      .evaluate(
-        (element) => getComputedStyle(element, "::before").animationPlayState,
-      ),
-  ).toBe("running");
-  const hovered = (await entry.boundingBox())!;
-  await expect
-    .poll(async () => {
-      const moving = (await entry.boundingBox())!;
-      return Math.hypot(moving.x - hovered.x, moving.y - hovered.y);
-    })
-    .toBeGreaterThan(6);
-  await entry.focus();
-  await expect(orbit).toHaveCSS("animation-play-state", "paused");
-  for (const detail of orbitDetails)
-    await expect(detail).toHaveCSS("animation-play-state", "paused");
-  for (const decoration of ringDecorations)
-    await expect(decoration).toHaveCSS("animation-play-state", "running");
-  const focused = (await entry.boundingBox())!;
-  await page.waitForTimeout(350);
-  const stillFocused = (await entry.boundingBox())!;
-  expect(
-    Math.hypot(stillFocused.x - focused.x, stillFocused.y - focused.y),
-  ).toBeLessThan(1);
-  await entry.press("Enter");
+  const trigger = page.getByRole("button", { name: "工作台工具", exact: true });
+  await expect(
+    page.locator(".workspace-dock-item, .workspace-nest-handle"),
+  ).toHaveCount(0);
+  await expect(page.locator(".workspace-ai-core")).toBeVisible();
+  await trigger.focus();
+  await trigger.press("Enter");
+  const menu = page.getByRole("menu", { name: "工作台工具菜单", exact: true });
+  await expect(menu.getByRole("menuitem")).toHaveCount(5);
+  await menu.getByRole("menuitem", { name: "日程", exact: true }).focus();
+  await menu
+    .getByRole("menuitem", { name: "日程", exact: true })
+    .press("Enter");
   await expect(
     page.getByRole("dialog", { name: "日程", exact: true }),
   ).toBeVisible();
-  await page.mouse.move(5, 5);
-  await expect(menu).toHaveAttribute("data-paused", "true");
-  await expect(orbit).toHaveCSS("animation-play-state", "paused");
-  for (const decoration of ringDecorations)
-    await expect(decoration).toHaveCSS("animation-play-state", "running");
-  const opened = (await entry.boundingBox())!;
-  await page.waitForTimeout(350);
-  const stillOpened = (await entry.boundingBox())!;
-  expect(
-    Math.hypot(stillOpened.x - opened.x, stillOpened.y - opened.y),
-  ).toBeLessThan(1);
   await page
     .getByRole("button", { name: "收起工作台面板", exact: true })
     .click();
-  await page.locator(".workspace-title").click();
-  await page.mouse.move(5, 5);
-  await expect(menu).toHaveAttribute("data-paused", "false");
-  await expect(orbit).toHaveCSS("animation-play-state", "running");
+  await expect(trigger).toBeFocused();
+  await expect(
+    page.getByRole("dialog", { name: "日程", exact: true }),
+  ).toBeHidden();
+  await trigger.click();
+  await expect(menu).toBeVisible();
+  await page.screenshot({ path: ".local/workspace-tools-menu.png" });
   expect(fixture.assistantCalls()).toBe(0);
 });
 
-test("圆环入口打开可拖动浮卡，保留屏幕边距与草稿并在卡片内保存", async ({
+test("工具菜单打开可拖动浮卡，保留屏幕边距与草稿并在卡片内保存", async ({
   page,
 }) => {
   const fixture = await workspaceFixture(page, {
@@ -1636,8 +1590,8 @@ test("圆环入口打开可拖动浮卡，保留屏幕边距与草稿并在卡�
   });
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto("/my-workspace");
-  const menu = page.getByRole("navigation", { name: "工作台功能面板" });
-  await expect(menu.getByRole("button")).toHaveCount(5);
+  const menu = page.getByRole("button", { name: "工作台工具", exact: true });
+  await expect(menu).toBeVisible();
   await openWorkspacePanel(page, "打开私有备忘");
   const panel = page.getByRole("dialog", { name: "私有备忘", exact: true });
   await expect(panel).toHaveClass(/personal-workspace-panel/);
@@ -1647,16 +1601,10 @@ test("圆环入口打开可拖动浮卡，保留屏幕边距与草稿并在卡�
   const initial = (await panel.boundingBox())!;
   expect(initial.width).toBeGreaterThanOrEqual(300);
   expect(initial.width).toBeLessThanOrEqual(380);
-  const core = (await page.locator(".workspace-ai-core").boundingBox())!;
-  const entrance = (await menu
-    .getByRole("button", { name: "打开私有备忘", exact: true })
-    .locator(".workspace-dock-label")
+  const toolbar = (await page
+    .locator(".workspace-world-controls")
     .boundingBox())!;
-  const onLeft = entrance.x + entrance.width / 2 < core.x + core.width / 2;
-  if (onLeft && core.x - 24 - initial.width >= 24)
-    expect(initial.x + initial.width).toBeLessThanOrEqual(core.x - 23);
-  else if (!onLeft && core.x + core.width + 24 + initial.width <= 1416)
-    expect(initial.x).toBeGreaterThanOrEqual(core.x + core.width + 23);
+  expect(initial.y).toBeGreaterThanOrEqual(toolbar.y + toolbar.height + 11);
   expect(initial.x).toBeGreaterThanOrEqual(23);
   expect(initial.x + initial.width).toBeLessThanOrEqual(1417);
   const handle = panel.getByRole("button", {
@@ -1694,6 +1642,10 @@ test("圆环入口打开可拖动浮卡，保留屏幕边距与草稿并在卡�
   await expect
     .poll(() => fixture.workspace.note)
     .toBe("移动浮卡后仍保留的备忘");
+  // Narrow screens show one column at a time; keep the center selected.
+  await page
+    .getByRole("button", { name: "收起右侧工具栏", exact: true })
+    .click();
   for (const width of [1280, 1024, 390]) {
     await page.setViewportSize({ width, height: 844 });
     await panel
@@ -1791,7 +1743,7 @@ test("我的内容在首次展开时才读取，关闭后保留分类与显示�
   });
   await page.goto("/my-workspace");
   await expect(
-    page.getByRole("button", { name: "打开我的内容", exact: true }),
+    page.getByRole("button", { name: "工作台工具", exact: true }),
   ).toBeVisible();
   expect(fixture.contentReads()).toBe(0);
   expect(contentModules).toEqual([]);
@@ -2155,9 +2107,14 @@ test("无个人助理权限仍可使用私有记录与已有权限工具", async
   );
   await page.goto("/my-workspace");
   await expect(page.locator(".workspace-ai")).toHaveCount(0);
+  await page.getByRole("button", { name: "工作台工具", exact: true }).click();
   await expect(
-    page.getByRole("button", { name: "打开我的内容", exact: true }),
+    page.getByRole("menuitem", { name: "我的内容", exact: true }),
   ).toHaveCount(0);
+  await page.getByRole("button", { name: "工作台工具", exact: true }).click();
+  await expect(
+    page.getByRole("menu", { name: "工作台工具菜单", exact: true }),
+  ).toBeHidden();
   await openWorkspacePanel(page, "打开私有备忘");
   await expect(
     page.getByRole("textbox", { name: "私有备忘", exact: true }),
@@ -3189,7 +3146,7 @@ test("中心AI核心在桌面与手机完整显示，页面打开不调用模型
   const desktop = (await core.boundingBox())!;
   expect(desktop.x).toBeGreaterThanOrEqual(0);
   expect(desktop.x + desktop.width).toBeLessThanOrEqual(1440);
-  const dock = page.getByRole("navigation", { name: "工作台功能面板" });
+  const dock = page.getByRole("button", { name: "工作台工具", exact: true });
   await expect(dock).toBeInViewport({ ratio: 1 });
   const dockBounds = (await dock.boundingBox())!;
   expect(dockBounds.y + dockBounds.height).toBeLessThanOrEqual(1000);
@@ -3418,6 +3375,9 @@ test("页底新提醒按实际换行高度留在窗口内，拖动后整块形�
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto("/my-workspace");
+  await page
+    .getByRole("button", { name: "收起右侧工具栏", exact: true })
+    .click();
   const companion = page.locator(".workspace-companion");
   const handle = companion.getByRole("button", {
     name: "打开小序文字对话",
@@ -3486,20 +3446,26 @@ test("页底新提醒按实际换行高度留在窗口内，拖动后整块形�
   expect(fixture.assistantCalls()).toBe(0);
 });
 
-test("权限在页内刷新后圆环入口随AI与普通工作区切换，私有备忘草稿保留", async ({
+test("权限在页内刷新后工具菜单随AI与普通工作区切换，私有备忘草稿保留", async ({
   page,
 }) => {
   const permissions = ["analytics.read", "analytics.manage", "project.read"];
   const fixture = await workspaceFixture(page, { permissions });
   await page.goto("/my-workspace");
-  const originalPage = await page
-    .locator(".personal-workspace")
-    .elementHandle();
-  const menu = page.getByRole("navigation", { name: "工作台功能面板" });
+  const menu = page.getByRole("menu", { name: "工作台工具菜单", exact: true });
+  const checkMenu = async (count: number) => {
+    await page.getByRole("button", { name: "工作台工具", exact: true }).click();
+    await expect(menu.getByRole("menuitem")).toHaveCount(count);
+    if (count === 4)
+      await expect(
+        menu.getByRole("menuitem", { name: "我的内容", exact: true }),
+      ).toHaveCount(0);
+    await page.getByRole("button", { name: "工作台工具", exact: true }).click();
+  };
   const note = page.getByRole("textbox", { name: "私有备忘", exact: true });
   const draft = "权限更新期间保留的未保存备忘";
   await expect(page.locator(".workspace-ai-core")).toBeVisible();
-  await expect(menu.getByRole("button")).toHaveCount(5);
+  await checkMenu(5);
   await openWorkspacePanel(page, "打开私有备忘");
   await note.fill(draft);
 
@@ -3523,12 +3489,9 @@ test("权限在页内刷新后圆环入口随AI与普通工作区切换，私有
   await refreshPermissions(["analytics.read", "project.read"]);
   await expect(page.locator(".workspace-ai-core")).toHaveCount(0);
   await expect(page.locator(".workspace-quiet")).toBeVisible();
-  await expect(page.locator(".workspace-quiet .workspace-dock")).toHaveCount(1);
-  await expect(menu.getByRole("button")).toHaveCount(5);
+  await expect(page.locator(".workspace-dock")).toHaveCount(0);
+  await checkMenu(5);
   await expect(note).toHaveValue(draft);
-  expect(await originalPage!.evaluate((element) => element.isConnected)).toBe(
-    true,
-  );
   for (const [entry, title] of [
     ["打开日程", "日程"],
     ["打开个人待办", "个人待办"],
@@ -3536,7 +3499,6 @@ test("权限在页内刷新后圆环入口随AI与普通工作区切换，私有
     ["打开我的内容", "我创建的内容"],
     ["打开私有备忘", "私有备忘"],
   ]) {
-    // Floating cards may cover another orbit entry; close before selecting the next.
     await page
       .getByRole("button", { name: "收起工作台面板", exact: true })
       .click();
@@ -3549,10 +3511,7 @@ test("权限在页内刷新后圆环入口随AI与普通工作区切换，私有
   expect(fixture.workspace.note).toBe("仅自己的备忘，不发送给模型");
 
   await refreshPermissions(["analytics.read"]);
-  await expect(menu.getByRole("button")).toHaveCount(4);
-  await expect(
-    menu.getByRole("button", { name: "打开我的内容", exact: true }),
-  ).toHaveCount(0);
+  await checkMenu(4);
   await page
     .getByRole("button", { name: "收起工作台面板", exact: true })
     .click();
@@ -3566,13 +3525,8 @@ test("权限在页内刷新后圆环入口随AI与普通工作区切换，私有
   ]);
   await expect(page.locator(".workspace-quiet")).toHaveCount(0);
   await expect(page.locator(".workspace-ai-core")).toBeVisible();
-  await expect(
-    page.locator(".workspace-ai-orbit-slot .workspace-dock"),
-  ).toHaveCount(1);
-  await expect(menu.getByRole("button")).toHaveCount(5);
-  expect(await originalPage!.evaluate((element) => element.isConnected)).toBe(
-    true,
-  );
+  await expect(page.locator(".workspace-dock")).toHaveCount(0);
+  await checkMenu(5);
   await expect(note).toHaveValue(draft);
   await page.getByRole("button", { name: "保存更改", exact: true }).click();
   await expect.poll(() => fixture.workspace.note).toBe(draft);

@@ -1223,7 +1223,7 @@ test("星轨展示真实协作、仅在新交付时汇聚、保留配色并可�
   await page.getByRole("button", { name: "返回工作台", exact: true }).click();
   await expect(page.locator(".workspace-team-layer")).toHaveCount(0);
   await expect(
-    page.getByRole("button", { name: "打开日程", exact: true }),
+    page.getByRole("button", { name: "工作台工具", exact: true }),
   ).toBeVisible();
   await openPersonalAssistant(page);
   await page.getByRole("button", { name: "在星轨中查看", exact: true }).click();

@@ -160,6 +160,16 @@ export type EmployeeTask = TeamRun & {
   }[];
 };
 export type EmployeeDirectory = { employees: Employee[]; maxEmployees: number };
+export type EmployeeSkillDocument = {
+  id: string;
+  name: string;
+  content: string;
+};
+export type EmployeeSkillsApplied = {
+  applied: string[];
+  kept: string[];
+  unmatched: string[];
+};
 export type EmployeeCatalog = Pick<
   TeamConfiguration,
   "models" | "imageModels" | "videoModels" | "ready" | "notice"

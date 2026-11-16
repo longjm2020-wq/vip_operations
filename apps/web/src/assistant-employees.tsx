@@ -14,6 +14,7 @@ import {
   Input,
   InputNumber,
   Select,
+  Segmented,
   Spin,
   Switch,
   Tabs,
@@ -43,6 +44,7 @@ import {
   type AgentOptions,
 } from "./assistant-agent-panel";
 import { ArtifactCard, teamActive } from "./assistant-team-panel";
+import { SkillMarkdownView } from "./skill-markdown-view";
 import {
   employeeKindLabels,
   employeeKinds,
@@ -54,6 +56,8 @@ import {
   type EmployeeModelPolicy,
   type EmployeeProfile,
   type EmployeeTask,
+  type EmployeeSkillDocument,
+  type EmployeeSkillsApplied,
 } from "../../../packages/contracts/src/assistant-employees";
 import type { AgentFile } from "../../../packages/contracts/src/assistant-agent";
 import "./assistant-employees.css";
@@ -276,6 +280,27 @@ function EmployeeEditor({
   );
   const [busy, setBusy] = useState(false),
     [error, setError] = useState("");
+  const [skillOpen, setSkillOpen] = useState(false),
+    [skillPreview, setSkillPreview] = useState(false),
+    [skillId, setSkillId] = useState<string>();
+  const skillInput = useRef<HTMLInputElement>(null);
+  const skills = useQuery({
+    queryKey: ["employee-skills", user.id],
+    enabled: skillOpen,
+    queryFn: async () =>
+      (await api(`${root}/skills`)).data as EmployeeSkillDocument[],
+    staleTime: 60000,
+  });
+  const exportSkill = () => {
+    const url = URL.createObjectURL(
+      new Blob([draft.skill], { type: "text/markdown;charset=utf-8" }),
+    );
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${draft.name.replace(/[\\/:*?"<>|]/g, "_") || "employee"}-SKILL.md`;
+    link.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
   const version = useRef(employee?.version || 0),
     id = useRef(employee?.id || crypto.randomUUID());
   const update = <K extends keyof EmployeeProfile>(
@@ -403,6 +428,7 @@ function EmployeeEditor({
       </div>
       <Collapse
         ghost
+        onChange={(keys) => setSkillOpen(keys.includes("knowledge"))}
         items={[
           {
             key: "models",
@@ -442,8 +468,110 @@ function EmployeeEditor({
             label: "技能与知识",
             children: (
               <>
-                <label>
-                  工作方法
+                <div className="employee-skill-controls">
+                  <strong>岗位技能 · SKILL.md</strong>
+                  <Segmented
+                    size="small"
+                    aria-label="员工技能编辑或预览"
+                    value={skillPreview ? "preview" : "edit"}
+                    options={[
+                      { value: "edit", label: "编辑" },
+                      { value: "preview", label: "预览" },
+                    ]}
+                    onChange={(value) => setSkillPreview(value === "preview")}
+                  />
+                </div>
+                <div className="employee-skill-controls">
+                  <Select
+                    aria-label="选择岗位技能模板"
+                    placeholder="选择岗位技能"
+                    value={skillId}
+                    onChange={setSkillId}
+                    loading={skills.isLoading}
+                    options={(skills.data || []).map((s) => ({
+                      value: s.id,
+                      label: s.name,
+                    }))}
+                  />
+                  <Button
+                    size="small"
+                    disabled={busy || !skillId}
+                    onClick={() => {
+                      const skill = skills.data?.find((s) => s.id === skillId);
+                      if (skill) {
+                        update("skill", skill.content);
+                        setSkillPreview(true);
+                      }
+                    }}
+                  >
+                    填入模板
+                  </Button>
+                  <Button
+                    size="small"
+                    disabled={busy}
+                    onClick={() => skillInput.current?.click()}
+                  >
+                    导入 MD
+                  </Button>
+                  <Button
+                    size="small"
+                    disabled={!draft.skill.trim()}
+                    onClick={exportSkill}
+                  >
+                    下载 MD
+                  </Button>
+                  <input
+                    ref={skillInput}
+                    hidden
+                    type="file"
+                    accept=".md,.markdown,text/markdown"
+                    onChange={async (event) => {
+                      const file = event.currentTarget.files?.[0];
+                      event.currentTarget.value = "";
+                      if (!file) return;
+                      if (
+                        !/\.(md|markdown)$/i.test(file.name) ||
+                        file.size > 64000
+                      ) {
+                        setError("请选择不超过 64KB 的 Markdown 文件");
+                        return;
+                      }
+                      try {
+                        const text = (await file.text()).replace(/^\uFEFF/, "");
+                        if (!text.trim() || text.length > 6000) {
+                          setError("技能文档需为 1 至 6000 字符");
+                          return;
+                        }
+                        update("skill", text);
+                        setError("");
+                        setSkillPreview(true);
+                      } catch {
+                        setError(
+                          "无法读取技能文档，请使用 UTF-8 格式的 Markdown 文件",
+                        );
+                      }
+                    }}
+                  />
+                </div>
+                {skills.error && (
+                  <Alert
+                    type="error"
+                    title="岗位技能加载失败"
+                    action={
+                      <Button
+                        size="small"
+                        onClick={() => void skills.refetch()}
+                      >
+                        重试
+                      </Button>
+                    }
+                  />
+                )}
+                {skillPreview ? (
+                  <div className="employee-skill-preview">
+                    <SkillMarkdownView source={draft.skill} />
+                  </div>
+                ) : (
                   <Input.TextArea
                     aria-label="员工技能"
                     maxLength={6000}
@@ -452,7 +580,11 @@ function EmployeeEditor({
                     onChange={(e) => update("skill", e.target.value)}
                     placeholder="工作步骤、交付格式与品牌规范"
                   />
-                </label>
+                )}
+                <p className="employee-note">
+                  填入模板或导入只修改当前草稿，点击“保存员工”后对新任务生效。执行时最多读取前
+                  4000 字符，内置技能均可完整读取。
+                </p>
                 <label>
                   专属知识
                   <Input.TextArea
@@ -739,6 +871,12 @@ export function AssistantEmployeesPanel({
     [sending, setSending] = useState(false),
     [uploading, setUploading] = useState(false),
     [error, setError] = useState("");
+  const [applyingSkills, setApplyingSkills] = useState(false),
+    [skillResult, setSkillResult] = useState<EmployeeSkillsApplied>();
+  useEffect(() => {
+    setTab("chat");
+    setError("");
+  }, [selected]);
   const chatHistory = useRef<HTMLDivElement>(null);
   const scope = user.id + ":" + (selected || "dispatch"),
     draft = drafts[scope] || {
@@ -920,7 +1058,7 @@ export function AssistantEmployeesPanel({
                       key: "settings",
                       label: (
                         <>
-                          <SettingOutlined />
+                          <SettingOutlined aria-hidden />
                           配置
                         </>
                       ),
@@ -938,6 +1076,52 @@ export function AssistantEmployeesPanel({
             />
           ) : tab === "directory" ? (
             <div className="employee-directory">
+              <div>
+                <Button
+                  size="small"
+                  loading={applyingSkills}
+                  disabled={
+                    !employees.some((e) => !e.archived) || directory.isFetching
+                  }
+                  onClick={async () => {
+                    setApplyingSkills(true);
+                    try {
+                      const result = (
+                        await api(`${root}/skills/apply`, "POST", {
+                          employees: employees
+                            .filter((e) => !e.archived)
+                            .map((e) => ({ id: e.id, version: e.version })),
+                        })
+                      ).data as EmployeeSkillsApplied;
+                      setSkillResult(result);
+                      await refresh();
+                      message.success(
+                        `已为 ${result.applied.length} 位员工配齐技能`,
+                      );
+                    } catch (e) {
+                      message.error((e as Error).message);
+                    } finally {
+                      setApplyingSkills(false);
+                    }
+                  }}
+                >
+                  配齐岗位技能
+                </Button>
+                <p className="employee-note">
+                  按称呼或岗位匹配，仅填写空白技能；保留已有内容和模型配置。
+                </p>
+                {skillResult && (
+                  <Alert
+                    type="info"
+                    title={`已配置 ${skillResult.applied.length} 位，保留已有技能 ${skillResult.kept.length} 位`}
+                    description={
+                      skillResult.unmatched.length
+                        ? `未匹配：${skillResult.unmatched.join("、")}，可到配置中选择模板。`
+                        : undefined
+                    }
+                  />
+                )}
+              </div>
               {employees.map((e) => (
                 <button key={e.id} onClick={() => changeEmployee(e.id)}>
                   <EmployeeAvatar employee={e} />

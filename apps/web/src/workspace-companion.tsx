@@ -11,12 +11,10 @@ import {
 } from "./companion-climbing";
 
 type Position = { x: number; y: number };
+const interactiveControls =
+  "button, a, input, textarea, select, [contenteditable=true], [role=button], [role=slider], [role=tab], [role=menuitem], [role=checkbox], [role=radio], [role=switch], [role=combobox]";
 function overlayControlAreas() {
-  return [
-    ...document.querySelectorAll<HTMLElement>(
-      "button, a, input, textarea, select, [contenteditable=true], [role=button], [role=slider]",
-    ),
-  ]
+  return [...document.querySelectorAll<HTMLElement>(interactiveControls)]
     .filter(
       (node) =>
         !node.closest(".workspace-companion-host") &&
@@ -66,7 +64,7 @@ function occupiedAreas() {
             return NodeFilter.FILTER_REJECT;
           if (
             node.matches(
-              "button, a, input, textarea, select, [contenteditable=true], [role=button], table, [role=grid], canvas, .workspace-hologram, .workspace-ai-core, .workspace-dock, .brand",
+              `${interactiveControls}, table, [role=grid], canvas, .workspace-hologram, .workspace-ai-core, .workspace-dock, .brand`,
             )
           ) {
             if (visible(rect)) areas.push(rect);
@@ -89,7 +87,7 @@ function occupiedAreas() {
   // Drawers and dialogs are body portals, outside the business-page subtree.
   // The foreground companion must also leave their controls usable.
   for (const control of document.querySelectorAll<HTMLElement>(
-    "button, a, input, textarea, select, [contenteditable=true], [role=button], [role=slider]",
+    interactiveControls,
   )) {
     if (root.contains(control) || control.closest(".workspace-companion-host"))
       continue;
@@ -115,20 +113,27 @@ function findSpace(
   areas: DOMRect[],
   preferred?: Position,
 ) {
-  const maxX = document.documentElement.clientWidth - width - 8,
-    maxY = innerHeight - height - 8;
+  // Search within the same bounds used to place the companion. Clamping a
+  // viewport-wide candidate into the center column can land it on a control.
+  const center = document
+    .querySelector(".workspace-center")
+    ?.getBoundingClientRect();
+  const minX = (center?.left ?? 0) + 8,
+    minY = (center?.top ?? 0) + 8,
+    maxX = (center?.right ?? document.documentElement.clientWidth) - width - 8,
+    maxY = (center?.bottom ?? innerHeight) - height - 8;
   if (
     preferred &&
-    preferred.x >= 8 &&
+    preferred.x >= minX &&
     preferred.x <= maxX &&
-    preferred.y >= 8 &&
+    preferred.y >= minY &&
     preferred.y <= maxY &&
     isClear(preferred, width, height, areas)
   )
     return preferred;
   const candidates: Position[] = [];
-  for (let y = 8; y <= maxY; y += 36)
-    for (let x = 8; x <= maxX; x += 36)
+  for (let y = minY; y <= maxY; y += 36)
+    for (let x = minX; x <= maxX; x += 36)
       if (isClear({ x, y }, width, height, areas)) candidates.push({ x, y });
   if (preferred)
     candidates.sort(

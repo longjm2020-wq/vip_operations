@@ -12,6 +12,7 @@ import {
   App,
   Button,
   Checkbox,
+  Dropdown,
   Empty,
   Input,
   Modal,
@@ -42,7 +43,6 @@ import {
   RotateRightOutlined,
   AimOutlined,
   MinusOutlined,
-  BranchesOutlined,
 } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
@@ -60,7 +60,6 @@ import { PersonalSchedule } from "./personal-schedule";
 import { useWorkspaceWorld } from "./use-workspace-world";
 import { useWorkspaceHubStage } from "./use-workspace-hub-stage";
 import { WorkspaceWorldBackdrop } from "./workspace-world-backdrop";
-import { WorkspaceDockHalo } from "./workspace-dock-halo";
 import { WorkspaceImageReveal } from "./workspace-image-reveal";
 import { WorkspaceHologram } from "./workspace-hologram";
 import {
@@ -68,11 +67,6 @@ import {
   type WorkspacePresence,
 } from "./workspace-scene-presence";
 import { WorkspacePanelLink } from "./workspace-panel-link";
-import { WorkspaceBranchLines } from "./workspace-flow-line";
-import {
-  WorkspaceDockRendering,
-  WorkspaceDockCopy,
-} from "./workspace-dock-rendering";
 import "./workspace-world.css";
 
 const PersonalWorkspaceContent = lazyPage(() =>
@@ -89,57 +83,6 @@ const panelTitles: Record<WorkspacePanel, string> = {
   note: "私有备忘",
   content: "我创建的内容",
 };
-
-function WorkspaceOrbit({
-  children,
-  paused,
-  assistantEnabled,
-  selected,
-}: {
-  children: ReactNode;
-  paused: boolean;
-  assistantEnabled: boolean;
-  selected: WorkspacePanel | null;
-}) {
-  const [slot, setSlot] = useState<Element | null>(null);
-  useLayoutEffect(() => {
-    setSlot(
-      document.querySelector(
-        ".workspace-ai-orbit-slot, .workspace-quiet-orbit-slot",
-      ),
-    );
-  }, [assistantEnabled]);
-  return slot
-    ? createPortal(
-        <WorkspaceDockRendering
-          stage={slot.closest(".workspace-ai-core-stage, .workspace-quiet")}
-        >
-          <nav
-            className="workspace-dock"
-            aria-label="工作台功能面板"
-            data-paused={paused}
-          >
-            <WorkspaceBranchLines
-              selected={selected}
-              panels={[
-                "schedule",
-                "todos",
-                "tools",
-                "note",
-                ...(Array.isArray(children) && children.length === 5
-                  ? ["content"]
-                  : []),
-              ]}
-            />
-            <div className="workspace-dock-orbit workspace-ring-animation">
-              {children}
-            </div>
-          </nav>
-        </WorkspaceDockRendering>,
-        slot,
-      )
-    : null;
-}
 
 /** Non-modal work cards share the app's frame-coalesced transform dragging approach. */
 function WorkspaceFloatingPanel({
@@ -308,18 +251,17 @@ function WorkspaceFloatingPanel({
       rect = target.getBoundingClientRect();
     const topbar =
       document.querySelector(".topbar")?.getBoundingClientRect().bottom || 68;
+    const toolbarBottom =
+      document
+        .querySelector(".workspace-world-controls")
+        ?.getBoundingClientRect().bottom || topbar;
     place(
       mobile
         ? viewportLeft + (viewportWidth - rect.width) / 2
         : side === "left"
           ? edge - gap - rect.width
           : edge + gap,
-      mobile
-        ? topbar + 16
-        : Math.max(
-            topbar + 24,
-            origin ? origin.top + origin.height / 2 - 40 : topbar + 24,
-          ),
+      Math.max(topbar + (mobile ? 16 : 24), toolbarBottom + 12),
       limits,
     );
   };
@@ -501,22 +443,12 @@ export function PersonalWorkspacePage() {
     [panel, setPanel] = useState<WorkspacePanel>("schedule"),
     [panelAnchor, setPanelAnchor] = useState<HTMLElement | null>(null),
     [panelOpen, setPanelOpen] = useState(false),
-    [branchLayout, setBranchLayout] = useState(false),
     [visitedPanels, setVisitedPanels] = useState<Set<WorkspacePanel>>(
       new Set(),
     ),
     [title, setTitle] = useState(""),
     [dueDate, setDueDate] = useState("");
-  useEffect(() => {
-    const resetLayout = () => setBranchLayout(false);
-    window.addEventListener("xuti-workspace-layout-reset", resetLayout);
-    return () =>
-      window.removeEventListener("xuti-workspace-layout-reset", resetLayout);
-  }, []);
-  const toggleBranches = () => {
-    world.reset();
-    setBranchLayout(!branchLayout);
-  };
+  const toolsMenuAnchor = useRef<HTMLButtonElement>(null);
   const q = useQuery({
     queryKey: ["personal-workspace", user.id],
     queryFn: () => api("/my-workspace"),
@@ -586,12 +518,7 @@ export function PersonalWorkspacePage() {
   };
   const openPanel = (next: WorkspacePanel, anchor?: HTMLElement) => {
     setVisitedPanels((visited) => new Set(visited).add(next));
-    setPanelAnchor(
-      anchor ||
-        document.querySelector<HTMLElement>(
-          `.workspace-dock-item[data-panel="${next}"]`,
-        ),
-    );
+    setPanelAnchor(anchor || toolsMenuAnchor.current);
     setPanel(next);
     setPanelOpen(true);
   };
@@ -617,7 +544,7 @@ export function PersonalWorkspacePage() {
       <div
         ref={world.surface}
         className="personal-workspace"
-        data-workspace-layout={branchLayout ? "branches" : "orbit"}
+        data-workspace-layout="orbit"
         data-workspace-ring-motion="enabled"
         data-scene-presence={scenePresence}
         data-hologram-presence={hologramPresence}
@@ -683,21 +610,55 @@ export function PersonalWorkspacePage() {
               <AimOutlined />
             </button>
             <span className="workspace-world-control-divider" aria-hidden />
-            <button
-              type="button"
-              aria-label={
-                branchLayout ? "收起工作台分支图" : "展开工作台分支图"
-              }
-              aria-pressed={branchLayout}
-              title={
-                branchLayout
-                  ? "回到圆环布局"
-                  : "展开分支图（也可向左拖动巢穴外环）"
-              }
-              onClick={toggleBranches}
+            <Dropdown
+              autoFocus
+              trigger={["click"]}
+              menu={{
+                "aria-label": "工作台工具菜单",
+                items: [
+                  {
+                    key: "tools",
+                    label: "常用工具",
+                    icon: <AppstoreOutlined aria-hidden />,
+                  },
+                  {
+                    key: "note",
+                    label: "私有备忘",
+                    icon: <LockOutlined aria-hidden />,
+                  },
+                  ...(user.permissions.includes("project.read")
+                    ? [
+                        {
+                          key: "content",
+                          label: "我的内容",
+                          icon: <FileTextOutlined aria-hidden />,
+                        },
+                      ]
+                    : []),
+                  {
+                    key: "schedule",
+                    label: "日程",
+                    icon: <CalendarOutlined aria-hidden />,
+                  },
+                  {
+                    key: "todos",
+                    label: "个人待办",
+                    icon: <CheckOutlined aria-hidden />,
+                  },
+                ],
+                onClick: ({ key }) => openPanel(key as WorkspacePanel),
+              }}
             >
-              <BranchesOutlined />
-            </button>
+              <button
+                ref={toolsMenuAnchor}
+                type="button"
+                className="workspace-tools-menu-trigger"
+                aria-label="工作台工具"
+                disabled={!draft || sceneCovered}
+              >
+                <AppstoreOutlined /> <span>工作台工具</span>
+              </button>
+            </Dropdown>
             <WorkspaceHologram onPresenceChange={setHologramPresence} />
           </div>
           <div className="workspace-voice-slot" data-world-ui />
@@ -747,8 +708,6 @@ export function PersonalWorkspacePage() {
                 )}
                 <WorkspaceAI
                   sceneCovered={sceneCovered}
-                  branchLayout={branchLayout}
-                  onToggleBranches={toggleBranches}
                   available={available}
                   schedule={draft.schedule || []}
                   onSchedule={(event) => {
@@ -766,99 +725,11 @@ export function PersonalWorkspacePage() {
                   }}
                 />
               </div>
-              <WorkspaceOrbit
-                paused={panelOpen || sceneCovered}
-                selected={panelOpen ? panel : null}
-                assistantEnabled={canUsePersonalAssistant({
-                  permissions: user.permissions,
-                })}
-              >
-                {(
-                  [
-                    {
-                      key: "schedule",
-                      label: "日程",
-                      aria: "打开日程",
-                      icon: <CalendarOutlined />,
-                      detail: `${(draft.schedule || []).filter((event) => event.date === today).length} 项今日安排`,
-                    },
-                    {
-                      key: "todos",
-                      label: "个人待办",
-                      aria: "打开个人待办",
-                      icon: <CheckOutlined />,
-                      detail: `${incomplete.length} 项待完成${overdue.length ? ` · ${overdue.length} 逾期` : ""}`,
-                    },
-                    {
-                      key: "tools",
-                      label: "常用工具",
-                      aria: "打开常用工具",
-                      icon: <AppstoreOutlined />,
-                      detail: `${draft.shortcuts.length} 个快捷入口`,
-                    },
-                    {
-                      key: "note",
-                      label: "私有备忘",
-                      aria: "打开私有备忘",
-                      icon: <LockOutlined />,
-                      detail: draft.note ? "继续记录" : "记录你的灵感",
-                    },
-                    ...(user.permissions.includes("project.read")
-                      ? [
-                          {
-                            key: "content",
-                            label: "我的内容",
-                            aria: "打开我的内容",
-                            icon: <FileTextOutlined />,
-                            detail: "项目 · 表格 · SOP",
-                          },
-                        ]
-                      : []),
-                  ] as {
-                    key: WorkspacePanel;
-                    label: string;
-                    aria: string;
-                    icon: React.ReactNode;
-                    detail: string;
-                  }[]
-                ).map((item, index, items) => (
-                  <button
-                    key={item.key}
-                    type="button"
-                    className="workspace-dock-item"
-                    data-panel={item.key}
-                    style={
-                      {
-                        "--orbit-angle": `${-90 + (index * 360) / items.length}deg`,
-                        "--orbit-counter-angle": `${90 - (index * 360) / items.length}deg`,
-                        "--branch-y": `${((index + 0.5) / items.length) * 100}%`,
-                      } as CSSProperties
-                    }
-                    aria-label={item.aria}
-                    title={`${item.label} · ${item.detail}`}
-                    aria-expanded={panelOpen && panel === item.key}
-                    onClick={(event) =>
-                      openPanel(item.key, event.currentTarget)
-                    }
-                  >
-                    <span className="workspace-dock-face workspace-ring-animation">
-                      <span className="workspace-dock-label workspace-ring-animation">
-                        <WorkspaceDockHalo />
-                        <WorkspaceDockCopy
-                          panel={item.key}
-                          icon={item.icon}
-                          label={item.label}
-                        />
-                      </span>
-                    </span>
-                  </button>
-                ))}
-              </WorkspaceOrbit>
             </div>
             <WorkspaceFloatingPanel
               title={panelTitles[panel]}
               anchor={panelAnchor}
-              branchLayout={branchLayout}
+              branchLayout={false}
               open={panelOpen && !sceneCovered}
               onClose={() => setPanelOpen(false)}
               footer={

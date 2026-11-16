@@ -18,6 +18,7 @@ import { defaultTeamSettings } from "../../packages/contracts/src/assistant-team
 import {
   employeeTemplate,
   employeeMemberId,
+  type Employee,
 } from "../../packages/contracts/src/assistant-employees.js";
 import {
   saveEmployee,
@@ -32,6 +33,11 @@ import {
   claimAssistantRun,
   reserveEmployeeCall,
 } from "../../apps/api/src/modules/workspace/employee-runtime.js";
+import {
+  applyEmployeeSkillDocuments,
+  readEmployeeSkillDocuments,
+  employeeSkillDocumentId,
+} from "../../apps/api/src/modules/workspace/employee-skills.js";
 import {
   hydrateTeamMessages,
   readConversationReference,
@@ -153,6 +159,142 @@ afterAll(async () => {
 afterEach(() => vi.unstubAllEnvs());
 
 describe("assistant team storage and owner boundaries", () => {
+  it("fills matched empty skills without changing existing instructions or policies, and new tasks snapshot them", async () => {
+    const docs = await readEmployeeSkillDocuments(actor());
+    expect(docs).toHaveLength(10);
+    const staff: Employee[] = [];
+    for (const doc of docs) {
+      const profile = {
+        ...employeeTemplate("custom"),
+        name: doc.name,
+        knowledge: "保留品牌资料",
+        priority: 8,
+      };
+      expect(employeeSkillDocumentId(profile)).toBe(doc.id);
+      staff.push(
+        await saveEmployee(actor(), { id: randomUUID(), version: 0, profile }),
+      );
+    }
+    const existing = await saveEmployee(actor(), {
+      id: randomUUID(),
+      version: 0,
+      profile: { ...employeeTemplate("writing"), skill: "原有的定制工作法" },
+    });
+    const unknown = await saveEmployee(actor(), {
+      id: randomUUID(),
+      version: 0,
+      profile: { ...employeeTemplate("custom"), name: "特殊岗位" },
+    });
+    const oldTask = await createEmployeeTask(actor(), {
+      id: randomUUID(),
+      employeeId: staff[0].id,
+      goal: "原配置下的任务",
+    });
+    const input = {
+      employees: [...staff, existing, unknown].map((e) => ({
+        id: e.id,
+        version: e.version,
+      })),
+    };
+    expect(await applyEmployeeSkillDocuments(actor(), input)).toEqual({
+      applied: expect.arrayContaining(docs.map((d) => d.name)),
+      kept: [existing.name],
+      unmatched: [unknown.name],
+    });
+    const found = (await listEmployees(actor())).employees;
+    for (const before of staff) {
+      const after = found.find((e) => e.id === before.id)!;
+      expect(after).toMatchObject({
+        version: 2,
+        knowledge: before.knowledge,
+        instructions: before.instructions,
+        workModel: before.workModel,
+        priority: 8,
+      });
+      expect(after.skill).toBe(
+        docs.find((d) => d.name === before.name)!.content,
+      );
+    }
+    expect(found.find((e) => e.id === existing.id)).toMatchObject({
+      version: 1,
+      skill: existing.skill,
+    });
+    const newTask = await createEmployeeTask(actor(), {
+      id: randomUUID(),
+      employeeId: staff[0].id,
+      goal: "新技能下的任务",
+    });
+    const raw = (
+      await f.db!.query<{
+        id: string;
+        input: { settings: { members: { id: string; skill: string }[] } };
+      }>(
+        "SELECT id,input FROM personal_assistant_team_runs WHERE id=ANY($1::uuid[])",
+        [[oldTask.id, newTask.id]],
+      )
+    ).rows;
+    expect(
+      raw
+        .find((r) => r.id === oldTask.id)!
+        .input.settings.members.find(
+          (m) => m.id === employeeMemberId(staff[0].id),
+        )!.skill,
+    ).toBe("");
+    expect(
+      raw
+        .find((r) => r.id === newTask.id)!
+        .input.settings.members.find(
+          (m) => m.id === employeeMemberId(staff[0].id),
+        )!.skill,
+    ).toBe(docs[0].content);
+  });
+  it("rejects stale, archived and foreign employee skill writes atomically", async () => {
+    const first = await saveEmployee(actor(), {
+      id: randomUUID(),
+      version: 0,
+      profile: employeeTemplate("image"),
+    });
+    const second = await saveEmployee(actor(), {
+      id: randomUUID(),
+      version: 0,
+      profile: employeeTemplate("video"),
+    });
+    const input = {
+      employees: [first, second].map((e) => ({ id: e.id, version: e.version })),
+    };
+    await saveEmployee(actor(), {
+      id: second.id,
+      version: 1,
+      profile: employeeTemplate("video"),
+    });
+    await expect(
+      applyEmployeeSkillDocuments(actor(), input),
+    ).rejects.toMatchObject(errorCode("VERSION_CONFLICT"));
+    expect(
+      (await listEmployees(actor())).employees.every((e) => !e.skill),
+    ).toBe(true);
+    await expect(
+      applyEmployeeSkillDocuments(actor("8"), input),
+    ).rejects.toMatchObject(errorCode("NOT_FOUND"));
+    await archiveEmployee(actor(), first.id, { version: 1, archived: true });
+    await expect(
+      applyEmployeeSkillDocuments(actor(), {
+        employees: [{ id: first.id, version: 2 }],
+      }),
+    ).rejects.toMatchObject(errorCode("NOT_FOUND"));
+    await expect(
+      readEmployeeSkillDocuments({
+        ...actor(),
+        actor: { ...actor().actor, permissions: ["supply.portal"] },
+      }),
+    ).rejects.toBeDefined();
+    expect(employeeSkillDocumentId({ name: "剪辑师1", kind: "video" })).toBe(
+      "xuti-video-edit",
+    );
+    expect(
+      employeeSkillDocumentId({ name: "未知自定义", kind: "custom" }),
+    ).toBeUndefined();
+  });
   it("isolates employee ownership, snapshots configuration, retries creation idempotently and keeps the main chat untouched", async () => {
     const profile = employeeTemplate("writing"),
       id = randomUUID();

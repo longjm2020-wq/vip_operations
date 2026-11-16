@@ -4,7 +4,6 @@ import { useUser, type Row } from "./shared";
 import { canUsePersonalAssistant } from "../../../packages/contracts/src/personal-assistant";
 import type { WorkspaceSchedule } from "../../../packages/contracts/src/personal-workspace";
 import "./workspace-ai.css";
-import { WorkspaceNestHandle } from "./workspace-nest-handle";
 import { useWorkspaceTeam } from "./use-workspace-team";
 import { WorkspaceTeamOrbit } from "./workspace-team-orbit";
 import { teamIsRunning } from "./workspace-team-state";
@@ -19,13 +18,7 @@ function requestCompanion(command: "home" | "explore") {
   );
 }
 
-function AssistantCore({
-  branchLayout,
-  onToggleBranches,
-}: {
-  branchLayout: boolean;
-  onToggleBranches: () => void;
-}) {
+function AssistantCore() {
   return (
     <div
       className="workspace-ai-core"
@@ -140,10 +133,6 @@ function AssistantCore({
           </g>
         </svg>
       </div>
-      <WorkspaceNestHandle
-        branchLayout={branchLayout}
-        onToggleBranches={onToggleBranches}
-      />
       <div className="workspace-ai-companion-slot" />
       <button
         className="workspace-ai-summon"
@@ -161,15 +150,11 @@ export function WorkspaceAI({
   available,
   schedule,
   onSchedule,
-  branchLayout,
-  onToggleBranches,
 }: {
   sceneCovered?: boolean;
   available: Row[];
   schedule: WorkspaceSchedule[];
   onSchedule: (event: WorkspaceSchedule) => void;
-  branchLayout: boolean;
-  onToggleBranches: () => void;
 }) {
   const user = useUser();
   const hub = useAssistantHub();
@@ -203,10 +188,7 @@ export function WorkspaceAI({
         >
           <div className="workspace-world-camera">
             <div className="workspace-world-plane">
-              <AssistantCore
-                branchLayout={branchLayout}
-                onToggleBranches={onToggleBranches}
-              />
+              <AssistantCore />
               {team.visible && (
                 <WorkspaceTeamOrbit
                   key={team.id}

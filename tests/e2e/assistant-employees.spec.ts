@@ -1,5 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
 import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import {
   employeeTemplate,
   type Employee,
@@ -10,6 +11,26 @@ import { defaultTeamSettings } from "../../packages/contracts/src/assistant-team
 
 const root = "/my-workspace/assistant/employees";
 async function setup(page: Page, count = 0, conflict = false) {
+  const skills = await Promise.all(
+    [
+      ["xuti-product-retouch", "修图师"],
+      ["xuti-product-video", "视频师"],
+      ["xuti-product-copy", "文案师"],
+      ["xuti-research", "研究员"],
+      ["xuti-quality-review", "质检员"],
+      ["xuti-asset-catalog", "资产管理员"],
+      ["xuti-video-edit", "剪辑师"],
+      ["xuti-publication-package", "发布员"],
+      ["xuti-market-intelligence", "情报员"],
+      ["xuti-business-analysis", "数据分析师"],
+    ].map(async ([id, name]) => ({
+      id,
+      name,
+      content: (
+        await readFile(`docs/employee-skills/${id}/SKILL.md`, "utf8")
+      ).trim(),
+    })),
+  );
   const employees: Employee[] = Array.from({ length: count }, (_, i) => ({
     ...employeeTemplate(i === 1 ? "video" : i === 2 ? "review" : "image"),
     id: randomUUID(),
@@ -120,7 +141,23 @@ async function setup(page: Page, count = 0, conflict = false) {
         ],
         videoModels: [],
       };
-    else if (path === root) {
+    else if (path === `${root}/skills`) data = skills;
+    else if (path === `${root}/skills/apply`) {
+      const applied: string[] = [],
+        kept: string[] = [],
+        unmatched: string[] = [];
+      for (const e of employees.filter((e) => !e.archived)) {
+        const skill = skills.find((s) => s.name === e.name);
+        if (e.skill) kept.push(e.name);
+        else if (!skill) unmatched.push(e.name);
+        else {
+          e.skill = skill.content;
+          e.version++;
+          applied.push(e.name);
+        }
+      }
+      data = { applied, kept, unmatched };
+    } else if (path === root) {
       if (req.method() === "POST") {
         if (conflict) {
           await route.fulfill({
@@ -213,7 +250,7 @@ async function setup(page: Page, count = 0, conflict = false) {
     }
     await route.fulfill({ json: { data } });
   });
-  return { employees, tasks, submissions, controls, personal };
+  return { employees, tasks, submissions, controls, personal, skills };
 }
 async function openEmployee(page: Page, name: string) {
   await page
@@ -284,7 +321,9 @@ test("员工草稿相互隔离，切换工具保留草稿，独立交办可暂�
   await expect(
     page.getByRole("button", { name: "暂停任务", exact: true }),
   ).toBeEnabled();
-  await expect(page.locator(".employee-task-actions .anticon-loading")).toHaveCount(0);
+  await expect(
+    page.locator(".employee-task-actions .anticon-loading"),
+  ).toHaveCount(0);
   expect(f.controls).toEqual(["pause", "resume"]);
   await page
     .getByRole("button", { name: "收起右侧工具栏", exact: true })
@@ -310,6 +349,7 @@ test("小序派单独立提交，头像每行最多六个，右栏不展示普�
   expect(new Set(boxes.slice(0, 6).map((b) => Math.round(b.y))).size).toBe(1);
   expect(boxes[6].y).toBeGreaterThan(boxes[0].y);
   await page.screenshot({ path: ".local/employees-home.png" });
+
   await page.getByRole("button", { name: "小序派单", exact: true }).click();
   await expect(page.locator(".workspace-execution-controls")).not.toBeVisible();
   await page
@@ -427,4 +467,68 @@ test("任务详情读取真实产物与生成型号，复用文件需再次明�
   await page.getByRole("button", { name: "发送员工任务", exact: true }).click();
   await expect.poll(() => f.submissions.length).toBe(2);
   expect(f.submissions[1].attachmentIds).toEqual([file.id]);
+});
+
+test("岗位技能批量补空，模板预览和 MD 导入下载不提前保存或发起任务", async ({
+  page,
+}) => {
+  const f = await setup(page, 2);
+  f.employees[1].skill = "保留原有视频规范";
+  await page.goto("/my-workspace?assistant=employees");
+  await page.getByRole("tab", { name: "员工管理", exact: true }).click();
+  await page.getByRole("button", { name: "配齐岗位技能", exact: true }).click();
+  await expect(
+    page.getByText("已配置 1 位，保留已有技能 1 位", { exact: true }),
+  ).toBeVisible();
+  expect(f.employees[0].skill).toBe(f.skills[0].content);
+  expect(f.employees[1].skill).toBe("保留原有视频规范");
+  await openEmployee(page, "修图师");
+  await page.getByRole("tab", { name: "配置", exact: true }).click();
+  await page.getByRole("button", { name: "技能与知识", exact: true }).click();
+  await expect(
+    page.getByRole("textbox", { name: "员工技能", exact: true }),
+  ).toHaveValue(f.skills[0].content);
+  await page.getByRole("combobox", { name: "选择岗位技能模板" }).click();
+  await page.getByText("剪辑师", { exact: true }).click();
+  await page.getByRole("button", { name: "填入模板", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "剪辑师 · 时间线与成片", exact: true }),
+  ).toBeVisible();
+  expect(f.employees[0].skill).toBe(f.skills[0].content);
+  const downloaded = page.waitForEvent("download");
+  await page.getByRole("button", { name: "下载 MD", exact: true }).click();
+  expect(await readFile((await (await downloaded).path())!, "utf8")).toBe(
+    f.skills.find((s) => s.name === "剪辑师")!.content,
+  );
+  const fileInput = page.locator(".employee-skill-controls input[type=file]");
+  await fileInput.setInputFiles({
+    name: "custom.md",
+    mimeType: "text/markdown",
+    buffer: Buffer.from("# 自定义修图规范\n保留面料纹理和所有扣件。"),
+  });
+  await expect(
+    page.getByRole("heading", { name: "自定义修图规范" }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "保存员工", exact: true }).click();
+  await expect
+    .poll(() => f.employees[0].skill)
+    .toBe("# 自定义修图规范\n保留面料纹理和所有扣件。");
+  await page.reload();
+  await openEmployee(page, "修图师");
+  await page.getByRole("tab", { name: "配置", exact: true }).click();
+  await page.getByRole("button", { name: "技能与知识", exact: true }).click();
+  await expect(
+    page.getByRole("textbox", { name: "员工技能", exact: true }),
+  ).toHaveValue(f.employees[0].skill);
+  await fileInput.setInputFiles({
+    name: "large.md",
+    mimeType: "text/markdown",
+    buffer: Buffer.from("x".repeat(6001)),
+  });
+  await expect(
+    page.getByText("技能文档需为 1 至 6000 字符", { exact: true }),
+  ).toBeVisible();
+  expect(f.submissions).toHaveLength(0);
+  expect(f.personal).toHaveLength(0);
+  await page.screenshot({ path: ".local/employee-skill-editor.png" });
 });

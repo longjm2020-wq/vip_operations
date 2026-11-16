@@ -10,6 +10,10 @@ import {
 } from "@nestjs/common";
 import { AuthRequest, context } from "../../http.js";
 import {
+  readEmployeeSkillDocuments,
+  applyEmployeeSkillDocuments,
+} from "./employee-skills.js";
+import {
   listEmployees,
   employeeCatalog,
   saveEmployee,
@@ -31,6 +35,15 @@ export class AssistantEmployeeController {
   @Header("Cache-Control", "private, no-store")
   catalog(@Req() request: AuthRequest) {
     return employeeCatalog(context(request));
+  }
+  @Get("skills")
+  @Header("Cache-Control", "private, no-store")
+  skills(@Req() request: AuthRequest) {
+    return readEmployeeSkillDocuments(context(request));
+  }
+  @Post("skills/apply")
+  applySkills(@Req() request: AuthRequest, @Body() body: unknown) {
+    return applyEmployeeSkillDocuments(context(request), body);
   }
   @Post()
   save(@Req() request: AuthRequest, @Body() body: unknown) {

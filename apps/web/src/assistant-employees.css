@@ -334,6 +334,28 @@
   gap: 8px;
   align-items: center;
 }
+.employee-skill-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.employee-skill-controls > .ant-select {
+  flex: 1;
+  min-width: 130px;
+}
+.employee-skill-controls > strong {
+  flex: 1;
+  font-size: 12px;
+}
+.employee-skill-preview {
+  max-height: 360px;
+  overflow: auto;
+  padding: 12px;
+  border-radius: 8px;
+  background: rgba(128, 138, 169, 0.06);
+}
 .employee-directory {
   display: flex;
   flex-direction: column;

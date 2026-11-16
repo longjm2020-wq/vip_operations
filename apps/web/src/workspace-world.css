@@ -48,7 +48,7 @@
 .personal-workspace[data-world-mode]::after {
   content: "";
   position: absolute;
-  inset: 8px;
+  inset: 0;
   z-index: -1;
   pointer-events: none;
   border: 1px solid color-mix(in srgb, var(--app-accent) 9%, transparent);
@@ -644,6 +644,13 @@
 .workspace-world-controls button:disabled {
   opacity: 0.35;
   cursor: default;
+}
+.workspace-world-controls .workspace-tools-menu-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding-inline: 8px;
+  white-space: nowrap;
 }
 .workspace-world-controls output {
   min-width: 42px;
