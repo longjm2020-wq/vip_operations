@@ -114,6 +114,49 @@ async function fixture(
   return { workspace, writes };
 }
 
+test("品牌标识在减少动态偏好下悬停、收起和跨模块后保持原有渐变动效", async ({
+  page,
+}) => {
+  const state = await fixture(page);
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  const check = async () => {
+    const brand = page.locator(".sidebar .brand-wordmark");
+    await expect(brand).toBeVisible();
+    await brand.hover();
+    const read = () =>
+      brand.evaluate((element) => {
+        const style = getComputedStyle(element, "::after");
+        return {
+          name: style.animationName,
+          play: style.animationPlayState,
+          duration: style.animationDuration,
+          position: style.backgroundPosition,
+        };
+      });
+    const first = await read();
+    expect(first).toMatchObject({
+      name: "brand-gradient-flow",
+      play: "running",
+      duration: "6s",
+    });
+    await expect
+      .poll(async () => (await read()).position)
+      .not.toBe(first.position);
+  };
+  await page.goto("/my-workspace");
+  await check();
+  await page
+    .getByRole("button", { name: "收起工作区导航", exact: true })
+    .click();
+  await expect(page.locator(".sidebar")).toHaveClass(
+    /ant-layout-sider-collapsed/,
+  );
+  await check();
+  await page.goto("/operations");
+  await check();
+  expect(state.writes).toEqual([]);
+});
+
 test("减少动态偏好下数字雨、小序身体和星环在悬停与输入时持续播放", async ({
   page,
 }) => {

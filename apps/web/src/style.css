@@ -915,12 +915,6 @@ pre {
     filter: drop-shadow(0 0 5px var(--app-logo-shadow));
   }
 }
-@media (prefers-reduced-motion: reduce) {
-  .brand-wordmark::after {
-    animation: none;
-    background-position: 50% 50%;
-  }
-}
 
 .login-brand .brand-wordmark {
   width: 280px;

@@ -27,28 +27,32 @@ const makeTask = (): BrowserTask => ({
   epoch: 3,
   navigationState: "READY",
 });
-async function fixture(page: Page) {
-  const state = {
-    user: "7",
-    ready: true,
-    canBrowse: undefined as boolean | undefined,
-    chatReady: true,
-    tasks: [] as BrowserTask[],
-    requests: [] as Record<string, unknown>[],
-    browserRequests: [] as Record<string, unknown>[],
-    navigations: [] as Record<string, any>[],
-    autoAcknowledge: true,
-    createError: "",
-    controls: [] as string[],
-    actions: [] as Record<string, any>[],
-    rejectAction: false,
-    frame: null as BrowserFrame | null,
-    frames: {} as Record<string, BrowserFrame | null>,
-    frameRequests: [] as string[],
-    saved: true,
-    cleared: 0,
-    closed: 0,
-  };
+const makeFixtureState = () => ({
+  user: "7",
+  ready: true,
+  canBrowse: undefined as boolean | undefined,
+  chatReady: true,
+  tasks: [] as BrowserTask[],
+  requests: [] as Record<string, unknown>[],
+  browserRequests: [] as Record<string, unknown>[],
+  navigations: [] as Record<string, any>[],
+  autoAcknowledge: true,
+  createError: "",
+  controls: [] as string[],
+  actions: [] as Record<string, any>[],
+  rejectAction: false,
+  frame: null as BrowserFrame | null,
+  frames: {} as Record<string, BrowserFrame | null>,
+  frameRequests: [] as string[],
+  saved: true,
+  cleared: 0,
+  closed: 0,
+});
+async function fixture(
+  page: Page,
+  sharedState?: ReturnType<typeof makeFixtureState>,
+) {
+  const state = sharedState || makeFixtureState();
   const conversation = {
     ready: true,
     availabilityMessage: "小序已就绪",
@@ -74,8 +78,10 @@ async function fixture(page: Page) {
       appliedRequestId,
     };
   };
-  freshFrame();
-  state.frame!.frameId = frameId;
+  if (!sharedState) {
+    freshFrame();
+    state.frame!.frameId = frameId;
+  }
   await page.route("**/api/v1/**", async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname.replace("/api/v1", "");
@@ -619,6 +625,100 @@ test("独立浏览器目标发送、后台进度与跨页面恢复保留同一�
   ).toBeNull();
 });
 
+test("两个客户端查看同一网页，窄栏轮询不覆盖全屏尺寸，只有本地调整才接管视口", async ({
+  page,
+}) => {
+  const { state } = await fixture(page);
+  state.tasks = [{ ...makeTask(), mode: "BROWSE", status: "PAUSED" }];
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto("/my-workspace?assistant=browser");
+  const narrow = page.locator(".assistant-browser-panel");
+  await expect(narrow.locator(".assistant-browser-screen img")).toBeVisible();
+  await page.waitForTimeout(1100);
+  expect(state.navigations).toEqual([]);
+
+  const otherContext = await page
+    .context()
+    .browser()!
+    .newContext({
+      viewport: { width: 1920, height: 1080 },
+      baseURL: new URL(page.url()).origin,
+    });
+  const other = await otherContext.newPage();
+  await fixture(other, state);
+  const narrowRequests: unknown[] = [];
+  page.on("request", (request) => {
+    if (request.url().endsWith("/navigation"))
+      narrowRequests.push(request.postDataJSON());
+  });
+  try {
+    await other.goto("/my-workspace?assistant=browser");
+    const wide = other.locator(".assistant-browser-panel");
+    await expect(wide.locator(".assistant-browser-screen img")).toBeVisible();
+    await other.waitForTimeout(1100);
+    expect(state.navigations).toEqual([]);
+    await wide.getByRole("button", { name: "全屏查看", exact: true }).click();
+    await expect.poll(() => state.tasks[0].viewport?.width).toBe(1920);
+    await expect(wide.locator(".assistant-browser-screen")).toHaveAttribute(
+      "aria-busy",
+      "false",
+    );
+    await expect
+      .poll(async () => (await wide.locator("img").boundingBox())!.width)
+      .toBeGreaterThan(1919);
+    expect(state.frame!.width).toBe(1920);
+    const fullscreenEpoch = state.tasks[0].epoch;
+    const polled = state.frameRequests.length;
+    await expect
+      .poll(() => state.frameRequests.length)
+      .toBeGreaterThan(polled + 6);
+    expect(state.tasks[0].viewport?.width).toBe(1920);
+    expect(state.tasks[0].epoch).toBe(fullscreenEpoch);
+    expect(narrowRequests).toEqual([]);
+    // Reopening a narrow viewer must not claim an already running full-screen session.
+    await page.reload();
+    await expect(narrow.locator("img")).toHaveAttribute("width", "1920");
+    await page.waitForTimeout(1400);
+    expect(narrowRequests).toEqual([]);
+    expect(state.tasks[0].epoch).toBe(fullscreenEpoch);
+
+    // An actual local window resize is an intentional viewport handoff, once.
+    await page.setViewportSize({ width: 1360, height: 900 });
+    await expect.poll(() => narrowRequests.length).toBe(1);
+    await expect.poll(() => state.frame!.width).toBeLessThan(1000);
+    await expect(narrow.locator(".assistant-browser-screen")).toHaveAttribute(
+      "aria-busy",
+      "false",
+    );
+    const narrowEpoch = state.tasks[0].epoch;
+    await page.waitForTimeout(2200);
+    expect(state.tasks[0].epoch).toBe(narrowEpoch);
+    expect(narrowRequests).toHaveLength(1);
+
+    // Fullscreen may be chosen again even if this viewer previously sent 1920.
+    await wide.getByRole("button", { name: "退出全屏", exact: true }).click();
+    await expect.poll(() => state.tasks[0].viewport?.width).toBeLessThan(1920);
+    await expect(wide.locator(".assistant-browser-screen")).toHaveAttribute(
+      "aria-busy",
+      "false",
+    );
+    await wide.getByRole("button", { name: "全屏查看", exact: true }).click();
+    await expect.poll(() => state.tasks[0].viewport?.width).toBe(1920);
+    await expect
+      .poll(async () => (await wide.locator("img").boundingBox())!.width)
+      .toBeGreaterThan(1919);
+    await other.screenshot({ path: ".local/browser-shared-fullscreen.png" });
+    await page.waitForTimeout(2200);
+    expect(state.tasks[0].viewport?.width).toBe(1920);
+    expect(narrowRequests).toHaveLength(1);
+    expect(state.actions).toEqual([]);
+    expect(state.controls).toEqual([]);
+    expect(state.browserRequests).toEqual([]);
+  } finally {
+    await otherContext.close();
+  }
+});
+
 test("网页内键盘、中文与粘贴串行等待执行回执，旧画面不重放，停止与清除独立生效", async ({
   page,
 }) => {
@@ -630,18 +730,17 @@ test("网页内键盘、中文与粘贴串行等待执行回执，旧画面不�
   await expect(screen).toBeDisabled();
   await page.getByRole("button", { name: "暂停浏览器任务" }).click();
   await expect(screen).toBeEnabled();
-  await expect
-    .poll(() => state.navigations.some((item) => item.action.kind === "resize"))
-    .toBe(true);
+  await screen.click({ trial: true });
   await expect(screen).toHaveAttribute("aria-busy", "false");
   state.autoAcknowledge = false;
   const oldFrame = state.frame!.frameId;
   const bounds = await screen.locator("img").boundingBox();
   if (!bounds) throw Error("No browser screenshot");
-  await page.mouse.click(
-    bounds.x + bounds.width / 4,
-    bounds.y + bounds.height / 2,
-  );
+  const point = {
+    x: Math.round(bounds.x + bounds.width / 4),
+    y: Math.round(bounds.y + bounds.height / 2),
+  };
+  await page.mouse.click(point.x, point.y);
   await expect.poll(() => state.actions.length).toBe(1);
   await expect(screen).toBeDisabled();
   await expect(screen).toHaveCSS("cursor", "progress");
@@ -654,8 +753,12 @@ test("网页内键盘、中文与粘贴串行等待执行回执，旧画面不�
     frameId: oldFrame,
     action: { kind: "click" },
   });
-  expect(Math.abs(state.actions[0].action.x - 250)).toBeLessThanOrEqual(2);
-  expect(Math.abs(state.actions[0].action.y - 500)).toBeLessThanOrEqual(2);
+  expect(state.actions[0].action.x).toBe(
+    Math.round(((point.x - bounds.x) / bounds.width) * 1000),
+  );
+  expect(state.actions[0].action.y).toBe(
+    Math.round(((point.y - bounds.y) / bounds.height) * 1000),
+  );
   const keyboard = panel.getByLabel("网页键盘输入", { exact: true });
   await expect(keyboard).toBeFocused();
   await page.keyboard.insertText("queued-text");
@@ -999,6 +1102,9 @@ test("直接浏览不依赖模型，真实导航和视口随面板变化，地�
   const screen = panel.getByRole("button", { name: "点击独立浏览器画面" });
   await expect(address).toBeEnabled();
   await expect(panel.locator(".assistant-browser-status")).toHaveCount(0);
+  await page.waitForTimeout(1000);
+  expect(state.navigations).toEqual([]);
+  await page.setViewportSize({ width: 1920, height: 1040 });
   await expect
     .poll(() => state.navigations.some((item) => item.action.kind === "resize"))
     .toBe(true);

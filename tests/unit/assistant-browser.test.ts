@@ -208,6 +208,32 @@ const finalFrame = () => ({
   title: "完成结果",
 });
 describe("independent assistant browser", () => {
+  it("retains the original stable-frame expiry and consumes it once before acknowledging a new frame", async () => {
+    const initial=await started();
+    await controlBrowserTask(actor(),initial.id,{action:'pause'});
+    const run=(await currentBrowserTask(initial))!;
+    const stable=finalFrame();
+    await publishBrowserFrame(run,stable);
+    await f.db!.query("UPDATE personal_assistant_browser_tasks SET frame_at=now()-interval '3 seconds' WHERE id=$1::uuid",[run.id]);
+    const before=(await browserTaskFrame(actor(),run.id))!;
+    await publishBrowserFrame(run,stable);
+    expect((await browserTaskFrame(actor(),run.id))!.capturedAt).toBe(before.capturedAt);
+    const requestId=randomUUID();
+    await queueBrowserManualAction(actor(),run.id,{requestId,frameId:stable.frameId,epoch:run.epoch,action:{kind:'click',x:100,y:100}});
+    expect(await publishBrowserFrame(run,{...stable,frameId:randomUUID()})).toBe(false);
+    const taken=(await takeBrowserManualAction(run))!;
+    expect(taken.requestId).toBe(requestId);
+    expect(await takeBrowserManualAction(run)).toBeNull();
+    await completeBrowserAction(run,taken.id);
+    const next={...stable,frameId:randomUUID()};
+    await publishBrowserFrame(run,next);
+    expect(await browserTaskFrame(actor(),run.id)).toMatchObject({frameId:next.frameId,appliedRequestId:requestId});
+    await expect(queueBrowserManualAction(actor(),run.id,{requestId:randomUUID(),frameId:stable.frameId,epoch:run.epoch,action:{kind:'click',x:100,y:100}})).rejects.toMatchObject({response:{error:{code:'STALE_BROWSER_FRAME'}}});
+    await f.db!.query("UPDATE personal_assistant_browser_tasks SET frame_at=now()-interval '16 seconds' WHERE id=$1::uuid",[run.id]);
+    await publishBrowserFrame(run,next);
+    expect(await browserTaskFrame(actor(),run.id)).toBeNull();
+    await expect(queueBrowserManualAction(actor(),run.id,{requestId:randomUUID(),frameId:next.frameId,epoch:run.epoch,action:{kind:'click',x:100,y:100}})).rejects.toMatchObject({response:{error:{code:'STALE_BROWSER_FRAME'}}});
+  });
   it("opens and reuses a browsing lease without model readiness, preserving retry identities", async () => {
     await heartbeatBrowserWorker(true);
     await f.db!.exec(

@@ -130,12 +130,19 @@ export function EmployeeStrip() {
       aria-label="AI 员工列表"
     >
       <div className="employee-strip-heading">
-        <span>AI 员工</span>
-        <button type="button" onClick={() => hub.workbench?.openEmployee()}>
+        <span className="employee-strip-title">
+          AI 员工 <small>{employees.length || ""}</small>
+        </span>
+        <button
+          className="employee-strip-dispatch"
+          type="button"
+          onClick={() => hub.workbench?.openEmployee()}
+        >
           小序派单
         </button>
         <button
           type="button"
+          className="employee-strip-add"
           aria-label="新建 AI 员工"
           title="新建员工"
           onClick={() => hub.workbench?.openEmployee("new")}

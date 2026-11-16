@@ -39,7 +39,7 @@ export class RemoteBrowserDriver implements BrowserDriver {
   async initialize(state:unknown) { await this.call({op:'open',state:state ?? null}); return this; }
   async observe() { return browserRpcResult('observe',await this.call({op:'observe'})) as Awaited<ReturnType<BrowserDriver['observe']>>; }
   async frame() {
-    const value = browserRpcResult('frame',await this.call({op:'frame'})) as {jpeg:string;width:number;height:number;url:string;title:string};
+    const value = browserRpcResult('frame',await this.call({op:'frame'})) as {jpeg:string;width:number;height:number;url:string;title:string;revision?:string};
     return {...value,jpeg:Buffer.from(value.jpeg,'base64')};
   }
   async state() { return this.call({op:'state'}); }
@@ -47,8 +47,8 @@ export class RemoteBrowserDriver implements BrowserDriver {
   async execute(action:Parameters<BrowserDriver['execute']>[0],current:()=>Promise<boolean>,signal:AbortSignal) {
     await this.call({op:'execute',action},current,signal);
   }
-  async manual(action:Parameters<BrowserDriver['manual']>[0],current:()=>Promise<boolean>,signal:AbortSignal) {
-    await this.call({op:'manual',action},current,signal);
+  async manual(action:Parameters<BrowserDriver['manual']>[0],current:()=>Promise<boolean>,signal:AbortSignal,expectedRevision?:string) {
+    await this.call({op:'manual',action,...expectedRevision?{expectedRevision}:{}},current,signal);
   }
   async navigate(action:Parameters<BrowserDriver['navigate']>[0],current:()=>Promise<boolean>,signal:AbortSignal) {
     await this.call({op:'navigate',action},current,signal);

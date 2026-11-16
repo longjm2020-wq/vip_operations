@@ -36,8 +36,18 @@ async function setup(page: Page, count = 0, conflict = false) {
     ...employeeTemplate(i === 1 ? "video" : i === 2 ? "review" : "image"),
     id: randomUUID(),
     name:
-      ["修图师", "视频师", "质检员", "文案师", "研究员", "选品师", "助理"][i] ||
-      `员工${i + 1}`,
+      [
+        "修图师",
+        "视频师",
+        "质检员",
+        "文案师",
+        "研究员",
+        "资产管理员",
+        "剪辑师",
+        "发布员",
+        "情报员",
+        "数据分析师",
+      ][i] || `员工${i + 1}`,
     version: 1,
     archived: false,
     createdAt: new Date().toISOString(),
@@ -448,22 +458,119 @@ test("员工草稿相互隔离，切换工具保留草稿，独立交办可暂�
   ).not.toBeVisible();
   expect(f.controls).toHaveLength(2);
 });
-test("小序派单独立提交，头像每行最多六个，右栏不展示普通执行位置", async ({
+test("小序派单独立提交，员工网格整齐展示，右栏不展示普通执行位置", async ({
   page,
 }) => {
-  const f = await setup(page, 7);
+  const f = await setup(page, 10);
   await page.goto("/my-workspace");
   const entries = page.getByRole("button", { name: /打开员工：/ });
-  await expect(entries).toHaveCount(7);
+  await expect(entries).toHaveCount(10);
   const boxes = await entries.evaluateAll((nodes) =>
     nodes.map((n) => ({
       y: n.getBoundingClientRect().y,
       x: n.getBoundingClientRect().x,
     })),
   );
-  expect(new Set(boxes.slice(0, 6).map((b) => Math.round(b.y))).size).toBe(1);
-  expect(boxes[6].y).toBeGreaterThan(boxes[0].y);
+  expect(new Set(boxes.slice(0, 5).map((b) => Math.round(b.y))).size).toBe(1);
+  expect(boxes[5].y).toBeGreaterThan(boxes[0].y);
+  expect(
+    await page
+      .locator(".employee-entry-name")
+      .evaluateAll((nodes) =>
+        nodes.every((n) => n.scrollWidth <= n.clientWidth),
+      ),
+  ).toBe(true);
   await page.screenshot({ path: ".local/employees-home.png" });
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.locator(".sidebar")).toBeHidden();
+  await expect
+    .poll(() =>
+      page
+        .locator(".sidebar")
+        .evaluate((element) => element.getBoundingClientRect().width),
+    )
+    .toBeLessThanOrEqual(1);
+  await expect(page.locator(".workspace-team-shelf")).toBeVisible();
+  const assertCompactShelf = async () => {
+    const shelf = page.locator(".workspace-team-shelf");
+    const prompt = page.locator(
+      ".workspace-voice-slot .companion-voice-prompt",
+    );
+    await expect(prompt).toBeVisible();
+    await expect(prompt.getByRole("button")).toBeInViewport();
+    await expect
+      .poll(async () => {
+        const card = (await shelf.boundingBox())!;
+        const voice = (await prompt.boundingBox())!;
+        return voice.y - (card.y + card.height);
+      })
+      .toBeGreaterThanOrEqual(0);
+    await expect
+      .poll(() =>
+        shelf.evaluate((element) => {
+          const bounds = element.getBoundingClientRect();
+          const center = element
+            .closest(".workspace-center")!
+            .getBoundingClientRect();
+          return (
+            bounds.left >= center.left &&
+            bounds.right <= center.right &&
+            element.scrollWidth <= element.clientWidth + 1
+          );
+        }),
+      )
+      .toBe(true);
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () => document.documentElement.scrollWidth <= innerWidth + 1,
+        ),
+      )
+      .toBe(true);
+    // Finite sidebar/column transitions must settle before taking a responsive screenshot.
+    await page.evaluate(async () => {
+      const animations = document.getAnimations().filter((animation) => {
+        const target = (animation.effect as KeyframeEffect | null)?.target;
+        return (
+          target instanceof Element &&
+          !!target.closest(".sidebar, .workspace-columns") &&
+          Number.isFinite(
+            Number(animation.effect?.getComputedTiming().iterations),
+          )
+        );
+      });
+      await Promise.allSettled(
+        animations.map((animation) => animation.finished),
+      );
+    });
+  };
+  await assertCompactShelf();
+  await expect
+    .poll(() =>
+      page
+        .locator(".workspace-team-shelf")
+        .evaluate((e) => e.getBoundingClientRect().right <= innerWidth),
+    )
+    .toBe(true);
+  await page.screenshot({ path: ".local/employees-home-mobile.png" });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await selectAssistantPanel(page, "独立浏览器");
+  await expect(page.locator(".workspace-center")).toHaveCSS(
+    "container-name",
+    "workspace-center",
+  );
+  await expect
+    .poll(
+      async () =>
+        (await page.locator(".workspace-center").boundingBox())!.width,
+    )
+    .toBeLessThan(850);
+  await assertCompactShelf();
+  await page.screenshot({ path: ".local/employees-home-narrow-center.png" });
+  await page
+    .getByRole("button", { name: "关闭浏览器面板", exact: true })
+    .click();
 
   await page.getByRole("button", { name: "小序派单", exact: true }).click();
   await expect(page.locator(".workspace-execution-controls")).not.toBeVisible();

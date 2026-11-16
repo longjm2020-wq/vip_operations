@@ -1,22 +1,69 @@
-.workspace-employee-strip {
+.workspace-team-shelf {
   position: absolute;
-  z-index: 5;
-  top: 64px;
-  left: 22px;
-  width: min(342px, calc(100% - 44px));
+  top: 0;
+  left: 0;
+  width: min(344px, calc(100% - 40px));
+  box-sizing: border-box;
+  border: 1px solid rgba(139, 157, 205, 0.18);
+  border-radius: 14px;
+  background: linear-gradient(
+    145deg,
+    rgba(24, 29, 41, 0.88),
+    rgba(15, 19, 28, 0.76)
+  );
+  box-shadow:
+    0 8px 28px rgba(0, 0, 0, 0.12),
+    inset 0 1px rgba(220, 232, 255, 0.025);
+  backdrop-filter: blur(16px);
+  pointer-events: auto;
+}
+.workspace-team-shelf .workspace-world-controls {
+  flex-wrap: nowrap;
+  justify-content: space-between;
+  width: 100%;
+  min-height: 38px;
+  box-sizing: border-box;
+  gap: 2px;
+  padding: 4px 7px;
+  border: 0;
+  border-radius: 14px 14px 0 0;
+  background: transparent;
+}
+.workspace-team-shelf .workspace-world-controls button {
+  min-width: 27px;
+  padding-inline: 5px;
+}
+.workspace-team-shelf .workspace-world-controls output {
+  min-width: 36px;
+}
+.workspace-employee-strip {
+  position: relative;
+  padding: 10px 9px 9px;
+  border-top: 1px solid rgba(139, 157, 205, 0.12);
   color: #bec5d5;
   pointer-events: auto;
 }
 .employee-strip-heading {
   display: flex;
   align-items: center;
-  gap: 14px;
-  margin: 6px 0 12px;
+  gap: 7px;
+  margin: 0 3px 7px;
   font-size: 11px;
   letter-spacing: 0.03em;
 }
-.employee-strip-heading > span {
-  color: #8c96aa;
+.employee-strip-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-right: auto;
+  color: #c9d2e5;
+  font-size: 12px;
+  font-weight: 500;
+}
+.employee-strip-title small {
+  color: #8391aa;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
 }
 .employee-strip-heading > button,
 .employee-load-retry,
@@ -28,16 +75,37 @@
   cursor: pointer;
   font: inherit;
 }
-.employee-strip-heading > button:last-child {
-  margin-left: auto;
+.employee-strip-heading > button {
+  min-height: 26px;
+  border-radius: 7px;
+  transition:
+    background 160ms ease,
+    color 160ms ease;
+}
+.employee-strip-heading > .employee-strip-dispatch {
+  padding: 3px 8px;
+  color: #aebbdb;
+  background: rgba(135, 156, 219, 0.08);
+}
+.employee-strip-heading > .employee-strip-add {
+  width: 26px;
+}
+.employee-strip-heading > button:hover {
+  background: rgba(135, 156, 219, 0.16);
+  color: #e1e8fc;
+}
+.employee-strip-heading > button:focus-visible {
+  outline: 2px solid #8499ed;
+  outline-offset: 2px;
 }
 .employee-avatar-grid {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: 12px 8px;
-  max-height: 222px;
+  grid-template-columns: repeat(auto-fit, minmax(54px, 1fr));
+  gap: 3px;
+  max-height: 232px;
   overflow: auto;
-  padding: 2px;
+  padding: 1px;
+  scrollbar-width: thin;
 }
 .personal-workspace:has(.workspace-team-layer) .workspace-employee-strip {
   display: none;
@@ -47,14 +115,27 @@
   display: flex;
   align-items: center;
   flex-direction: column;
-  gap: 6px;
+  gap: 7px;
   border: 0;
-  padding: 0;
+  border-radius: 10px;
+  padding: 7px 1px 6px;
   color: #c5cbda;
   background: none;
   cursor: pointer;
   min-width: 0;
   font: inherit;
+  transition:
+    background 160ms ease,
+    transform 160ms ease;
+}
+.employee-entry:hover {
+  background: rgba(135, 156, 219, 0.08);
+  transform: translateY(-1px);
+}
+.workspace-employee-strip .employee-avatar {
+  width: 34px;
+  height: 34px;
+  font-size: 16px;
 }
 .employee-avatar {
   display: inline-flex;
@@ -82,15 +163,16 @@
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
-  font-size: 10px;
+  font-size: 11px;
+  line-height: 16px;
   text-align: center;
 }
 .employee-status-dot {
   position: absolute;
-  top: 29px;
-  left: calc(50% + 10px);
-  width: 7px;
-  height: 7px;
+  top: 32px;
+  left: calc(50% + 8px);
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
   background: #80b8a5;
   border: 2px solid #111319;
@@ -115,8 +197,7 @@
 }
 .personal-workspace[data-scene-presence="open"] .workspace-employee-strip,
 .personal-workspace[data-scene-presence="entering"] .workspace-employee-strip {
-  visibility: hidden;
-  pointer-events: none;
+  display: none;
 }
 .employee-panel {
   display: flex;
@@ -395,30 +476,14 @@
   margin-top: 4px;
 }
 @media (max-width: 600px) {
-  .workspace-employee-strip {
-    top: 68px;
-    left: 16px;
-    width: min(320px, calc(100% - 32px));
+  .employee-entry-name {
+    font-size: 10px;
   }
   .employee-panel {
     padding: 12px;
   }
-  .employee-avatar-grid {
-    gap: 10px 5px;
-  }
   .employee-avatar {
     width: 34px;
     height: 34px;
-  }
-  .employee-status-dot {
-    top: 26px;
-  }
-  .employee-entry-name {
-    font-size: 10px;
-  }
-}
-@media (max-width: 350px) {
-  .employee-avatar-grid {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 }

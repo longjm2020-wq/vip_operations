@@ -34,6 +34,29 @@ function setup() {
   return {initial,controller,driver,store,open,getState:()=>state,setState:(value:BrowserRun|null)=>{state=value;},run:()=>runIndependentBrowser(initial,store,controller.signal,open)};
 }
 describe('independent browser lease execution',()=>{
+  it('keeps the same picture ID until an input or task epoch changes, then publishes a fresh receipt',async()=>{
+    const f=setup();f.setState({...f.initial,status:'PAUSED',mode:'BROWSE'});
+    let clock=Date.now(),manual=false;
+    const now=vi.spyOn(Date,'now').mockImplementation(()=>clock);
+    const frames:{frameId:string;epoch:number}[]=[];
+    f.driver.frame=vi.fn(async()=>({jpeg:Buffer.from('same-pixels'),revision:'fixed-view',width:1280,height:800,url:'https://example.com/',title:'静态页面'}));
+    f.store.takeBrowserManualAction=vi.fn(async()=>{clock+=1000;if(!manual)return null;manual=false;return {id:'manual-action',action:{kind:'click' as const,x:100,y:100}};});
+    f.store.publishBrowserFrame=vi.fn(async(run,frame)=>{
+      frames.push({frameId:frame.frameId,epoch:run.epoch});
+      if(frames.length===2)manual=true;
+      if(frames.length===3)f.setState({...f.getState()!,epoch:1});
+      if(frames.length===4)f.setState(null);
+      return true;
+    });
+    try { await f.run(); } finally { now.mockRestore(); }
+    expect(frames).toHaveLength(4);
+    expect(frames[1].frameId).toBe(frames[0].frameId);
+    expect(frames[2].frameId).not.toBe(frames[1].frameId);
+    expect(frames[3].frameId).not.toBe(frames[2].frameId);
+    expect(frames[3].epoch).toBe(1);
+    expect(f.driver.manual).toHaveBeenCalledTimes(1);
+    expect(f.store.completeBrowserAction).toHaveBeenCalledWith(expect.objectContaining({epoch:0}),'manual-action');
+  });
   it('direct browsing navigates and acknowledges input without observing or calling a model',async()=>{
     const f=setup();
     f.initial.initialUrl='https://example.com/';

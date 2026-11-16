@@ -253,6 +253,7 @@ function BrowserTakeover({
   canBrowse,
   disabled,
   unavailable,
+  fullscreen,
 }: {
   task?: BrowserTask;
   owner: string;
@@ -262,6 +263,7 @@ function BrowserTakeover({
   canBrowse: boolean;
   disabled: boolean;
   unavailable?: string;
+  fullscreen: boolean;
 }) {
   const { message } = App.useApp();
   const [address, setAddress] = useState(task?.url || "");
@@ -290,7 +292,10 @@ function BrowserTakeover({
     undefined,
   );
   const wheelDelta = useRef(0);
-  const resizeSent = useRef("");
+  const measuredViewport = useRef<BrowserViewport | null>(null);
+  const [resizeIntent, setResizeIntent] = useState(0);
+  const handledResize = useRef(0);
+  const previousFullscreen = useRef(false);
   const latest = useRef({ task, viewport });
   latest.current = { task, viewport };
   useEffect(() => {
@@ -342,6 +347,11 @@ function BrowserTakeover({
     if (!editingAddress) setAddress(currentUrl);
   }, [currentUrl, editingAddress]);
   useEffect(() => {
+    if (previousFullscreen.current === fullscreen) return;
+    previousFullscreen.current = fullscreen;
+    setResizeIntent((value) => value + 1);
+  }, [fullscreen]);
+  useEffect(() => {
     const element = page.current;
     if (!element) return;
     let timer: ReturnType<typeof setTimeout>;
@@ -357,6 +367,15 @@ function BrowserTakeover({
           Math.min(1600, Math.round(entry.contentRect.height)),
         );
         if (entry.contentRect.width < 1 || entry.contentRect.height < 1) return;
+        const previous = measuredViewport.current;
+        measuredViewport.current = { width, height };
+        // Opening an existing session is observation, not ownership of its viewport.
+        // Only a subsequent local layout change may request another remote size.
+        if (
+          previous &&
+          (previous.width !== width || previous.height !== height)
+        )
+          setResizeIntent((value) => value + 1);
         setViewport((old) =>
           old.width === width && old.height === height
             ? old
@@ -619,17 +638,19 @@ function BrowserTakeover({
       pending ||
       !task ||
       !frame.data ||
+      !measuredViewport.current ||
+      handledResize.current >= resizeIntent ||
       queue.current.length ||
       composing.current
     )
       return;
-    const desired = `${viewport.width}x${viewport.height}`;
     if (
-      resizeSent.current === desired ||
-      (task.viewport?.width === viewport.width &&
-        task.viewport?.height === viewport.height)
-    )
+      task.viewport?.width === viewport.width &&
+      task.viewport?.height === viewport.height
+    ) {
+      handledResize.current = resizeIntent;
       return;
+    }
     const timer = setTimeout(() => {
       if (
         operation.current ||
@@ -638,15 +659,18 @@ function BrowserTakeover({
         queue.current.length
       )
         return;
-      resizeSent.current = desired;
+      // Consume this local intent even if the request is rejected. Remote polling
+      // must never generate a correction loop between two viewers of one session.
+      handledResize.current = resizeIntent;
       void navigation({ kind: "resize", viewport });
     }, 500);
     return () => clearTimeout(timer);
-    // The dispatch reads the current task and epoch; rerun when the live frame settles.
+    // A fresh frame can release a pending local intent, but cannot create one.
   }, [
     canResize,
     loading,
     pending,
+    resizeIntent,
     viewport.width,
     viewport.height,
     task?.epoch,
@@ -1233,6 +1257,7 @@ export function AssistantBrowserPanel({
           <BrowserTakeover
             key={task?.id || "new"}
             task={task}
+            fullscreen={fullscreen || pageFullscreen}
             owner={owner}
             refresh={refresh}
             start={start}

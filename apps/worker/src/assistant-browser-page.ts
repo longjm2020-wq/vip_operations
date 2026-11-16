@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -12,9 +12,9 @@ export class BrowserHandoff extends Error {
 export class BrowserUnavailable extends Error { constructor() { super('BROWSER_UNAVAILABLE'); } }
 export type BrowserDriver = {
   observe(): Promise<BrowserObservation>;
-  frame(): Promise<{ jpeg: Buffer; width: number; height: number; url: string; title: string; canGoBack?: boolean; canGoForward?: boolean }>;
+  frame(): Promise<{ jpeg: Buffer; width: number; height: number; url: string; title: string; canGoBack?: boolean; canGoForward?: boolean; revision?: string }>;
   execute(action: BrowserAction, current: () => Promise<boolean>, signal: AbortSignal): Promise<void>;
-  manual(action: BrowserManualAction, current: () => Promise<boolean>, signal: AbortSignal): Promise<void>;
+  manual(action: BrowserManualAction, current: () => Promise<boolean>, signal: AbortSignal, expectedRevision?: string): Promise<void>;
   navigate(action: BrowserNavigationAction, current: () => Promise<boolean>, signal: AbortSignal): Promise<void>;
   state(): Promise<unknown>;
   close(): Promise<void>;
@@ -94,14 +94,19 @@ export class IndependentBrowserPage implements BrowserDriver {
   private bindings = new Map<string, Binding>();
   private blocked = false;
   private closed = false;
-  private manualView?: { page: Page; url: string; at: number };
+  private manualView?: { page: Page; url: string; at: number; key: string };
+  private pageRevision = randomUUID();
+  private readonly pageIds = new WeakMap<Page, string>();
+  private frameIdentity?: { hash: string; revision: string; at: number };
   constructor(private readonly context: BrowserContext, page: Page, private readonly cleanup: () => Promise<void>) {
     this.page = page;
     const configure = (candidate: Page) => {
+      this.pageIds.set(candidate, randomUUID());
       candidate.on('download', (download) => { this.blocked = true; void download.cancel().catch(() => {}); });
       candidate.on('dialog', (dialog) => { this.blocked = true; void dialog.dismiss().catch(() => {}); });
       candidate.on('filechooser', () => { this.blocked = true; });
       candidate.on('framenavigated', (frame) => {
+        this.invalidateView();
         if (frame !== candidate.mainFrame() || frame.url() === 'about:blank') return;
         try { publicBrowserUrl(frame.url()); } catch { this.blocked = true; void candidate.close().catch(() => {}); }
       });
@@ -111,7 +116,19 @@ export class IndependentBrowserPage implements BrowserDriver {
       configure(candidate);
       if (context.pages().length > 4) { this.blocked = true; void candidate.close().catch(() => {}); return; }
       this.page = candidate;
+      this.invalidateView();
     });
+  }
+  private invalidateView() {
+    this.pageRevision = randomUUID();
+    this.frameIdentity = undefined;
+    this.manualView = undefined;
+  }
+  private async viewKey(page: Page) {
+    const revision = this.pageRevision;
+    const scroll = await page.evaluate(() => [window.scrollX, window.scrollY]);
+    if (revision !== this.pageRevision || page !== this.currentPage()) throw new BrowserHandoff('页面正在切换，请等待新画面后再操作');
+    return JSON.stringify([this.pageIds.get(page), revision, page.url(), page.viewportSize() || viewport, scroll]);
   }
   private currentPage() {
     if (this.closed || !this.context.browser()?.isConnected()) throw new BrowserUnavailable();
@@ -129,12 +146,16 @@ export class IndependentBrowserPage implements BrowserDriver {
   async frame() {
     const page = this.currentPage();
     const url = page.url();
+    const key = await this.viewKey(page);
     const session = await this.context.newCDPSession(page);
     const history = await session.send('Page.getNavigationHistory').finally(() => session.detach());
     const jpeg = await page.screenshot({ type: 'jpeg', quality: 65, timeout: 5000, mask: this.masks(false), maskColor: '#333333' });
-    if (page !== this.currentPage() || page.url() !== url) throw new BrowserHandoff('页面正在切换，请等待新画面后再操作');
-    this.manualView = { page, url, at: Date.now() };
-    return { jpeg, ...(page.viewportSize() || viewport), url: page.url(), title: (await page.title()).slice(0, 200), canGoBack: history.currentIndex > 0, canGoForward: history.currentIndex < history.entries.length - 1 };
+    if (page !== this.currentPage() || page.url() !== url || await this.viewKey(page) !== key) throw new BrowserHandoff('页面正在切换，请等待新画面后再操作');
+    const at = Date.now(), hash = createHash('sha256').update(key).update(jpeg).digest('hex');
+    if (!this.frameIdentity || this.frameIdentity.hash !== hash || at - this.frameIdentity.at >= 15000)
+      this.frameIdentity = { hash, revision: randomUUID(), at };
+    this.manualView = { page, url, at, key };
+    return { jpeg, revision: this.frameIdentity.revision, ...(page.viewportSize() || viewport), url: page.url(), title: (await page.title()).slice(0, 200), canGoBack: history.currentIndex > 0, canGoForward: history.currentIndex < history.entries.length - 1 };
   }
   async observe(): Promise<BrowserObservation> {
     const page = this.currentPage();
@@ -159,7 +180,7 @@ export class IndependentBrowserPage implements BrowserDriver {
     return { snapshotId, url: browserObservationUrl(page.url()), title: (await page.title()).slice(0, 200), text: text.slice(0, 12000), controls, sensitive, image: jpeg?.toString('base64') };
   }
   async execute(action: BrowserAction, current: () => Promise<boolean>, signal: AbortSignal) {
-    const guard = async () => { signal.throwIfAborted(); if (!await current()) throw Error('BROWSER_ACTION_STALE'); signal.throwIfAborted(); };
+    const guard = async () => { signal.throwIfAborted(); if (!await current()) throw Error('BROWSER_ACTION_STALE'); signal.throwIfAborted(); this.invalidateView(); };
     const page = this.currentPage();
     if (action.kind === 'goto') { const url = publicBrowserUrl(action.url); await guard(); await page.goto(url.href, { waitUntil: 'domcontentloaded', timeout: 20000 }); }
     else if ('ref' in action) {
@@ -194,11 +215,13 @@ export class IndependentBrowserPage implements BrowserDriver {
     else if (action.kind === 'wait') { await guard(); await browserPause(action.seconds * 1000, signal); }
     await this.releaseBindings();
   }
-  async manual(action: BrowserManualAction, current: () => Promise<boolean>, signal: AbortSignal) {
+  async manual(action: BrowserManualAction, current: () => Promise<boolean>, signal: AbortSignal, expectedRevision?: string) {
     const page = this.currentPage();
-    if (!this.manualView || this.manualView.page !== page || this.manualView.url !== page.url() || Date.now() - this.manualView.at > 15000) throw new BrowserHandoff('接管画面已变化，请等待最新画面再操作');
+    const view = this.manualView;
+    if (!view || view.page !== page || view.url !== page.url() || Date.now() - view.at > 15000 || (expectedRevision && expectedRevision !== this.frameIdentity?.revision) || await this.viewKey(page) !== view.key) throw new BrowserHandoff('接管画面已变化，请等待最新画面再操作');
     signal.throwIfAborted(); if (!await current()) throw Error('BROWSER_ACTION_STALE'); signal.throwIfAborted();
-    this.manualView = undefined;
+    if (this.manualView !== view || (expectedRevision && expectedRevision !== this.frameIdentity?.revision) || await this.viewKey(page) !== view.key) throw new BrowserHandoff('接管画面已变化，请等待最新画面再操作');
+    this.invalidateView();
     const size = page.viewportSize() || viewport;
     if (action.kind === 'click') await page.mouse.click(action.x / 1000 * size.width, action.y / 1000 * size.height);
     else if (action.kind === 'type') await page.keyboard.insertText(action.text);
@@ -210,7 +233,7 @@ export class IndependentBrowserPage implements BrowserDriver {
     const page = this.currentPage();
     const url = action.kind === 'goto' ? publicBrowserUrl(action.url).href : undefined;
     signal.throwIfAborted(); if (!await current()) throw Error('BROWSER_ACTION_STALE'); signal.throwIfAborted();
-    this.manualView = undefined;
+    this.invalidateView();
     await this.releaseBindings();
     const options = { waitUntil: 'domcontentloaded' as const, timeout: 20000 };
     if (action.kind === 'goto') await page.goto(url!, options);

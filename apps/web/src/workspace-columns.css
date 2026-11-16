@@ -203,6 +203,17 @@ body:has(.workspace-columns[data-chat-open="true"])
   .personal-workspace[data-world-mode] .personal-welcome {
     flex-wrap: wrap;
   }
+  .workspace-center .personal-welcome:has(> .workspace-team-shelf) {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+  .workspace-center .workspace-team-shelf {
+    position: relative;
+  }
+  .workspace-center .workspace-team-shelf .workspace-world-controls {
+    flex-wrap: wrap;
+  }
   .workspace-center .personal-workspace .workspace-voice-slot {
     position: relative;
     width: 100%;
@@ -210,6 +221,13 @@ body:has(.workspace-columns[data-chat-open="true"])
     top: auto;
     transform: none;
     min-height: 24px;
+  }
+  .workspace-center
+    .personal-welcome:has(> .workspace-team-shelf)
+    .workspace-voice-slot {
+    width: min(344px, calc(100% - 40px));
+    min-width: 0;
+    flex: 0 0 auto;
   }
   .workspace-columns
     .workspace-center

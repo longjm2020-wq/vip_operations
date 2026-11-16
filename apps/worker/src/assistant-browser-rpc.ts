@@ -17,7 +17,7 @@ export const browserRpcRequest = z.discriminatedUnion('op', [
   z.object({ ...base, op: z.literal('state') }).strict(),
   z.object({ ...base, op: z.literal('diagnostics') }).strict(),
   z.object({ ...base, op: z.literal('execute'), action: browserActionSchema.refine(action => !['done','handoff'].includes(action.kind)) }).strict(),
-  z.object({ ...base, op: z.literal('manual'), action: browserManualActionSchema }).strict(),
+  z.object({ ...base, op: z.literal('manual'), action: browserManualActionSchema, expectedRevision: z.uuid().optional() }).strict(),
   z.object({ ...base, op: z.literal('navigate'), action: browserNavigationActionSchema }).strict(),
   z.object({ ...base, op: z.literal('close') }).strict(),
   z.object({ ...base, op: z.literal('cancel') }).strict(),
@@ -37,6 +37,7 @@ export const browserRpcFrame = z.object({
   jpeg:base64, width:z.number().int().min(1).max(4096), height:z.number().int().min(1).max(4096),
   url:z.string().max(8192), title:z.string().max(200),
   canGoBack:z.boolean().optional(), canGoForward:z.boolean().optional(),
+  revision:z.uuid().optional(),
 }).strict();
 export const browserRpcObservation = z.object({
   snapshotId:z.uuid(),url:z.string().max(8192),title:z.string().max(200),text:z.string().max(12000),

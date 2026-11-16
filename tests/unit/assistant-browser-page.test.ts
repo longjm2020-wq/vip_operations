@@ -44,6 +44,48 @@ async function fixture(body: string) {
 }
 const signal = () => new AbortController().signal;
 describe('isolated Chromium page execution', () => {
+  it('reuses only an unchanged document picture and expires it after fifteen seconds', async () => {
+    const { driver, page } = await fixture('<body style="margin:0"><h1>静态页面</h1></body>');
+    const first = await driver.frame();
+    expect((await driver.frame()).revision).toBe(first.revision);
+    await page.locator('h1').evaluate(el => { el.textContent = '内容变化'; });
+    const changed = await driver.frame();
+    expect(changed.revision).not.toBe(first.revision);
+    const now = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 15001);
+    try { expect((await driver.frame()).revision).not.toBe(changed.revision); }
+    finally { now.mockRestore(); }
+  },30000);
+  it('invalidates identical pixels after same-URL reload, viewport or scroll changes and every manual input', async () => {
+    const { driver, page } = await fixture('<body style="margin:0;background:white;height:4000px"></body>');
+    const first = await driver.frame();
+    await page.reload({waitUntil:'domcontentloaded'});
+    const reloaded = await driver.frame();
+    expect(reloaded.jpeg.equals(first.jpeg)).toBe(true);
+    expect(reloaded.revision).not.toBe(first.revision);
+    await page.evaluate(() => window.scrollTo(0,100));
+    await expect(driver.manual({kind:'click',x:100,y:100},async()=>true,signal())).rejects.toThrow('BROWSER_HANDOFF');
+    const scrolled = await driver.frame();
+    expect(scrolled.jpeg.equals(reloaded.jpeg)).toBe(true);
+    expect(scrolled.revision).not.toBe(reloaded.revision);
+    await page.setViewportSize({width:700,height:900});
+    await expect(driver.manual({kind:'click',x:100,y:100},async()=>true,signal())).rejects.toThrow('BROWSER_HANDOFF');
+    const resized = await driver.frame();
+    expect(resized.revision).not.toBe(scrolled.revision);
+    await driver.manual({kind:'click',x:100,y:100},async()=>true,signal());
+    await expect(driver.manual({kind:'click',x:100,y:100},async()=>true,signal())).rejects.toThrow('BROWSER_HANDOFF');
+    const clicked = await driver.frame();
+    expect(clicked.jpeg.equals(resized.jpeg)).toBe(true);
+    expect(clicked.revision).not.toBe(resized.revision);
+  },30000);
+  it('does not dispatch an old published picture against a newer unpublished VM screenshot', async () => {
+    const { driver, page } = await fixture('<button onclick="document.body.dataset.clicked=\'yes\'">旧按钮</button>');
+    const published = await driver.frame();
+    await page.locator('button').evaluate(el => { el.textContent='新按钮'; });
+    const unpublished = await driver.frame();
+    expect(unpublished.revision).not.toBe(published.revision);
+    await expect(driver.manual({kind:'click',x:15,y:15},async()=>true,signal(),published.revision)).rejects.toThrow('BROWSER_HANDOFF');
+    expect(await page.locator('body').getAttribute('data-clicked')).toBeNull();
+  });
   it('supports real history, reload, viewport sizing and direct Chinese input in the same context', async () => {
     const { driver, page, context } = await fixture('<input style="position:absolute;left:300px;top:400px;width:150px;height:40px"><h1>第一页</h1>');
     await context.addCookies([{name:'session',value:'kept',url:'http://browser-fixture.example/'}]);

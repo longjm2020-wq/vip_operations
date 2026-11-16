@@ -541,65 +541,67 @@ export function PersonalWorkspacePage() {
         <WorkspaceImageReveal />
         <WorkspaceWorldBackdrop />
         <header className="personal-welcome" data-world-ui>
-          <div
-            className="workspace-world-controls"
-            role="group"
-            aria-label="场景视角"
-          >
-            <button
-              type="button"
-              aria-label="旋转场景"
-              aria-pressed="true"
-              data-world-mode-button="rotate"
-              title="拖动旋转场景"
-              onClick={() => world.mode("rotate")}
+          <div className="workspace-team-shelf">
+            <div
+              className="workspace-world-controls"
+              role="group"
+              aria-label="场景视角"
             >
-              <RotateRightOutlined />
-            </button>
-            <button
-              type="button"
-              aria-label="平移场景"
-              aria-pressed="false"
-              data-world-mode-button="pan"
-              title="拖动平移（或 Shift 加拖动）"
-              onClick={() => world.mode("pan")}
-            >
-              <DragOutlined />
-            </button>
-            <span className="workspace-world-control-divider" aria-hidden />
-            <button
-              type="button"
-              aria-label="缩小场景"
-              title="缩小场景"
-              onClick={() => world.zoom(1 / 1.15)}
-            >
-              <MinusOutlined />
-            </button>
-            <output data-world-scale aria-label="场景缩放">
-              100%
-            </output>
-            <button
-              type="button"
-              aria-label="放大场景"
-              title="放大场景"
-              onClick={() => world.zoom(1.15)}
-            >
-              <PlusOutlined />
-            </button>
-            <button
-              type="button"
-              aria-label="回到中心"
-              title="回到中心（Home 或双击空白处）"
-              onClick={world.reset}
-            >
-              <AimOutlined />
-            </button>
-            <span className="workspace-world-control-divider" aria-hidden />
-            <WorkspaceHologram onPresenceChange={setHologramPresence} />
+              <button
+                type="button"
+                aria-label="旋转场景"
+                aria-pressed="true"
+                data-world-mode-button="rotate"
+                title="拖动旋转场景"
+                onClick={() => world.mode("rotate")}
+              >
+                <RotateRightOutlined />
+              </button>
+              <button
+                type="button"
+                aria-label="平移场景"
+                aria-pressed="false"
+                data-world-mode-button="pan"
+                title="拖动平移（或 Shift 加拖动）"
+                onClick={() => world.mode("pan")}
+              >
+                <DragOutlined />
+              </button>
+              <span className="workspace-world-control-divider" aria-hidden />
+              <button
+                type="button"
+                aria-label="缩小场景"
+                title="缩小场景"
+                onClick={() => world.zoom(1 / 1.15)}
+              >
+                <MinusOutlined />
+              </button>
+              <output data-world-scale aria-label="场景缩放">
+                100%
+              </output>
+              <button
+                type="button"
+                aria-label="放大场景"
+                title="放大场景"
+                onClick={() => world.zoom(1.15)}
+              >
+                <PlusOutlined />
+              </button>
+              <button
+                type="button"
+                aria-label="回到中心"
+                title="回到中心（Home 或双击空白处）"
+                onClick={world.reset}
+              >
+                <AimOutlined />
+              </button>
+              <span className="workspace-world-control-divider" aria-hidden />
+              <WorkspaceHologram onPresenceChange={setHologramPresence} />
+            </div>
+            <EmployeeStrip />
           </div>
           <div className="workspace-voice-slot" data-world-ui />
         </header>
-        <EmployeeStrip />
         <div className="workspace-scene-nebula" aria-hidden="true">
           {Array.from({ length: 28 }, (_, index) => (
             <i
