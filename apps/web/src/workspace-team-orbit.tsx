@@ -160,7 +160,12 @@ export function WorkspaceTeamOrbit({
       const sceneTop = deliveryStacked ? 72 + deliveryRailHeight + 18 : 64;
       const sceneRight = delivered ? deliveryWidth + 42 : 0;
       const deliveryInset = deliveryStacked ? 0 : panel + 42;
-      const bottom = delivered ? 72 : compact ? 272 : 72;
+      // Keep member buttons separate when the middle column stacks the task rail.
+      const compactRailHeight = Math.max(
+        96,
+        Math.min(180, host.clientHeight - 430),
+      );
+      const bottom = delivered ? 72 : compact ? compactRailHeight + 96 : 72;
       const sceneSize = delivered ? 320 : 620;
       const availableWidth = delivered
         ? host.clientWidth - deliveryInset - sceneRight
@@ -203,6 +208,10 @@ export function WorkspaceTeamOrbit({
         host.dataset.teamDeliveryFit = deliveryStacked ? "stacked" : "side";
       else delete host.dataset.teamDeliveryFit;
       host.style.setProperty("--team-panel-width", `${panel}px`);
+      host.style.setProperty(
+        "--team-compact-rail-height",
+        `${compactRailHeight}px`,
+      );
       workspace?.style.setProperty("--team-toolbar-width", `${panel}px`);
       host.style.setProperty("--team-delivery-width", `${deliveryWidth}px`);
       host.style.setProperty(
@@ -239,6 +248,7 @@ export function WorkspaceTeamOrbit({
       workspace?.style.removeProperty("--team-toolbar-width");
       for (const name of [
         "panel-width",
+        "compact-rail-height",
         "delivery-width",
         "delivery-rail-height",
         "scene-scale",
@@ -396,7 +406,10 @@ export function WorkspaceTeamOrbit({
     <>
       <WorkspaceTeamLabels
         host={host}
-        nodes={nodes.map((node) => ({ ...node, active: node.active && !error }))}
+        nodes={nodes.map((node) => ({
+          ...node,
+          active: node.active && !error,
+        }))}
         tone={tone}
         hidden={covered || !visible || delivered}
       />

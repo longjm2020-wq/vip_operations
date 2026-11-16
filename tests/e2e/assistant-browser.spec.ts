@@ -297,7 +297,9 @@ for (const viewport of [
       panel.locator(".assistant-browser-task-heading strong"),
     ).toHaveText(instruction);
     const dimensions = await panel.evaluate((element) => {
-      const drawer = element.closest<HTMLElement>(".ant-drawer-body")!;
+      const drawer = element.closest<HTMLElement>(
+        ".workspace-tools-host, .ant-drawer-body",
+      )!;
       const panelRect = element.getBoundingClientRect();
       const drawerRect = drawer.getBoundingClientRect();
       return {
@@ -339,6 +341,12 @@ for (const viewport of [
     expect(rendered!.width).toBeLessThan(1280);
     expect(rendered!.width / rendered!.height).toBeCloseTo(1280 / 800, 2);
     await image.scrollIntoViewIfNeeded();
+    if (viewport.name === "mobile") {
+      await expect(page.locator(".workspace-dock-copy").first()).toBeHidden();
+      await expect(
+        page.locator(".workspace-companion-host .companion-launch"),
+      ).toBeHidden();
+    }
     await page.screenshot({
       path: `.local/browser-long-task-${viewport.name}.png`,
     });
@@ -360,7 +368,7 @@ test("独立浏览器未就绪不影响网站对话，显式选择后阻断且�
   ).toBeVisible();
   await expect(
     page
-      .getByRole("dialog", { name: "AI 个人助理" })
+      .getByRole("complementary", { name: "右侧工具栏" })
       .getByText("独立浏览器执行服务尚未连接", { exact: true })
       .last(),
   ).toBeVisible();
@@ -432,7 +440,9 @@ test("独立浏览器目标发送、后台进度与跨页面恢复保留同一�
   ).toContainText("请接管完成登录", {
     timeout: 8000,
   });
-  await page.getByRole("button", { name: "返回对话", exact: true }).click();
+  await page
+    .getByRole("button", { name: "关闭浏览器面板", exact: true })
+    .click();
   await composer.locator("textarea").fill("继续查找帮助");
   await composer.getByRole("button", { name: "发送给个人助理" }).click();
   await expect(
@@ -576,34 +586,77 @@ test("浏览器截图接管绑定新画面，旧画面不重放，继续与清�
   ).toHaveCount(0);
 });
 
-test("浏览器分栏与新任务页保留草稿，展开、收起及历史切换不提交操作", async ({
+test("工作台三栏保留原场景与草稿，左右收起和调宽不提交操作", async ({
   page,
 }) => {
   const { state } = await fixture(page);
-  await page.goto("/my-workspace?assistant=browser");
+  await page.goto("/my-workspace");
   const panel = page.locator(".assistant-browser-panel");
-  const chat = page.locator(".assistant-browser-chat");
+  const center = page.getByRole("region", { name: "工作台中栏" });
+  const draft = center.locator(".assistant-compose:visible textarea");
   await expect(
     panel.getByRole("textbox", { name: "网址或网页任务" }),
   ).toBeVisible();
-  const draft = chat.locator("textarea");
-  await draft.fill("保留左侧对话草稿");
-  await expect(
-    page.locator(".assistant-browser-workspace .ant-drawer-content-wrapper"),
-  ).toHaveCSS("filter", "none");
-  const chatBox = await chat.boundingBox();
+  await expect(center.locator(".personal-workspace")).toBeVisible();
+  await expect(center.locator(".workspace-world-controls")).toBeVisible();
+  await expect(center.locator(".workspace-date")).toHaveCount(0);
+  await draft.fill("保留中栏工作台草稿");
+  const centerBox = await center.boundingBox();
   const panelBox = await panel.boundingBox();
-  expect(chatBox!.x + chatBox!.width).toBeLessThanOrEqual(panelBox!.x + 1);
-  await page.screenshot({ path: ".local/browser-split-start.png" });
-  await panel.getByRole("button", { name: "展开浏览器", exact: true }).click();
-  await expect(chat).toBeHidden();
-  expect((await panel.boundingBox())!.width).toBeGreaterThan(panelBox!.width);
-  await panel.getByRole("button", { name: "恢复分栏", exact: true }).click();
-  await expect(draft).toHaveValue("保留左侧对话草稿");
-  await panel.getByRole("button", { name: "返回对话", exact: true }).click();
-  await expect(page.locator(".ant-drawer-footer textarea")).toHaveValue(
-    "保留左侧对话草稿",
+  expect(centerBox!.x + centerBox!.width).toBeLessThanOrEqual(panelBox!.x + 1);
+  const separator = page.getByRole("separator", { name: "调整中栏与右栏宽度" });
+  const handle = await separator.boundingBox();
+  await page.mouse.move(handle!.x + handle!.width / 2, handle!.y + 100);
+  await page.mouse.down();
+  await page.mouse.move(handle!.x - 80, handle!.y + 100);
+  await page.mouse.up();
+  expect((await panel.boundingBox())!.width).toBeGreaterThan(
+    panelBox!.width + 50,
   );
+  await separator.focus();
+  await separator.press("ArrowRight");
+  const savedWidth = await separator.getAttribute("aria-valuenow");
+  await page
+    .getByRole("button", { name: "收起工作区导航", exact: true })
+    .click();
+  await page
+    .getByRole("button", { name: "收起右侧工具栏", exact: true })
+    .click();
+  await expect(panel).toBeHidden();
+  expect((await center.boundingBox())!.width).toBeGreaterThan(centerBox!.width);
+  await expect(draft).toHaveValue("保留中栏工作台草稿");
+  await page.getByRole("button", { name: "展开我的电脑", exact: true }).click();
+  await expect(
+    page.locator(".workspace-right .assistant-desktop-panel"),
+  ).toBeVisible();
+  await expect(draft).toHaveValue("保留中栏工作台草稿");
+  await selectAssistantPanel(page, "独立浏览器");
+  await expect(panel).toBeVisible();
+  await selectAssistantPanel(page, "聊天");
+  await expect(center.locator(".workspace-inline-chat")).toBeVisible();
+  await expect(draft).toHaveValue("保留中栏工作台草稿");
+  await expect(panel).toBeVisible();
+  await page.screenshot({ path: ".local/workspace-columns-chat.png" });
+  await page.getByRole("button", { name: "收起文字对话", exact: true }).click();
+  await expect(draft).toHaveValue("保留中栏工作台草稿");
+  await expect(center.locator(".personal-workspace")).toHaveAttribute(
+    "data-scene-presence",
+    "closed",
+  );
+  await page.screenshot({ path: ".local/workspace-columns-scene.png" });
+  await page
+    .getByRole("button", { name: "收起右侧工具栏", exact: true })
+    .click();
+  await page.reload();
+  await expect(
+    page.getByRole("button", { name: "展开工作区导航", exact: true }),
+  ).toBeVisible();
+  await expect(panel).toBeHidden();
+  await page
+    .getByRole("button", { name: "展开独立浏览器", exact: true })
+    .click();
+  await expect(separator).toHaveAttribute("aria-valuenow", savedWidth!);
+  expect(state.requests).toEqual([]);
   expect(state.browserRequests).toEqual([]);
   expect(state.controls).toEqual([]);
   expect(state.actions).toEqual([]);
@@ -679,9 +732,11 @@ for (const width of [1440, 390]) {
       )
       .toBeLessThanOrEqual(1);
     if (width === 390)
-      await expect(page.locator(".assistant-browser-chat")).toBeHidden();
+      await expect(page.locator(".workspace-center")).toBeHidden();
     await page.screenshot({ path: `.local/browser-created-${width}.png` });
-    await panel.getByRole("button", { name: "返回对话", exact: true }).click();
+    await panel
+      .getByRole("button", { name: "关闭浏览器面板", exact: true })
+      .click();
     await expect(
       page.locator(".assistant-compose:visible .assistant-desktop-note"),
     ).toContainText("小序独立浏览器");

@@ -142,7 +142,7 @@
     bottom: 72px;
     left: 0;
     right: 0;
-    max-height: 180px;
+    max-height: var(--team-compact-rail-height, 180px);
   }
   .workspace-ai-core-stage[data-team-fit][data-team-phase="delivered"]
     .team-execution-rail {

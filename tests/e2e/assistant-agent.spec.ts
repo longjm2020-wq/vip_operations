@@ -606,11 +606,14 @@ test("简洁输入区直接发送附件并下载任务结果，历史回复隐�
     "https://example.com/report",
   );
   await selectAssistantPanel(page, "任务与文件");
-  await expect(dialog.getByRole("heading", { name: "我的文件" })).toBeVisible();
-  await expect(dialog).toContainText("已完成");
+  const filesPanel = page.locator(".workspace-tool-panels");
+  await expect(
+    filesPanel.getByRole("heading", { name: "我的文件" }),
+  ).toBeVisible();
+  await expect(filesPanel).toContainText("已完成");
   await page.screenshot({ path: ".local/assistant-agent-dark.png" });
   const currentUrl = page.url();
-  await dialog
+  await filesPanel
     .locator(".agent-job")
     .getByRole("button", { name: "在全息屏展示" })
     .click();
@@ -642,7 +645,9 @@ test("简洁输入区直接发送附件并下载任务结果，历史回复隐�
   await openFromKeyboard();
   const draft = "跨页全息预览后继续编辑的草稿";
   await dialog.getByPlaceholder(/告诉我你想完成什么/).fill(draft);
-  await dialog.getByRole("button", { name: "关闭", exact: true }).click();
+  await dialog
+    .getByRole("button", { name: "收起文字对话", exact: true })
+    .click();
   await page
     .locator(".sidebar")
     .getByRole("link", { name: "运营中心", exact: true })
@@ -679,7 +684,7 @@ test("窄屏模型听写语音布局不溢出，输入后原位切换发送", as
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/my-workspace?assistant=tasks");
   const dialog = page.getByRole("dialog", { name: /AI 个人助理/ });
-  await expect(dialog).toBeVisible();
+  await expect(page.locator(".workspace-tool-panels")).toBeVisible();
   await selectAssistantPanel(page, "聊天");
   await expect(
     dialog.getByRole("button", { name: "附件", exact: true }),
@@ -1251,12 +1256,13 @@ test("长聊天打开电脑面板从顶部显示连接入口，刷新任务保�
   await page.goto("/my-workspace");
   await openPersonalAssistant(page);
   const dialog = page.getByRole("dialog", { name: /AI 个人助理/ });
-  const body = dialog.locator(".ant-drawer-body");
+  const chatBody = dialog.locator(".ant-drawer-body");
   await expect
-    .poll(() => body.evaluate((el) => el.scrollTop))
+    .poll(() => chatBody.evaluate((el) => el.scrollTop))
     .toBeGreaterThan(500);
   await dialog.getByRole("button", { name: "我的电脑", exact: true }).click();
-  const panel = dialog.locator(".assistant-desktop-panel");
+  const panel = page.locator(".workspace-right .assistant-desktop-panel");
+  const body = page.locator(".workspace-tool-panels");
   await expect(panel.getByRole("status")).toHaveCount(10);
   await expect.poll(() => body.evaluate((el) => el.scrollTop)).toBe(0);
   await expect(panel.getByRole("heading", { name: /我的电脑/ })).toBeInViewport(
@@ -1279,8 +1285,10 @@ test("长聊天打开电脑面板从顶部显示连接入口，刷新任务保�
   await expect(panel.getByRole("status").first()).toHaveText(stage);
   expect(await body.evaluate((el) => el.scrollTop)).toBe(360);
 
-  await dialog.locator(".ant-drawer-close").click();
-  await expect(dialog).toBeHidden();
+  await page
+    .getByRole("button", { name: "收起右侧工具栏", exact: true })
+    .click();
+  await expect(panel).toBeHidden();
   await page
     .locator(".assistant-compose:visible")
     .getByRole("button", { name: "我的电脑", exact: true })
@@ -1480,7 +1488,7 @@ test("已有任务处理中原生事件不会刷新页面或改变目标，完�
   ).toBeNull();
   pending = false;
   const button = page
-    .getByRole("dialog")
+    .locator(".assistant-compose:visible")
     .getByRole("button", { name: "我的电脑", exact: true });
   await expect(button).toBeEnabled({ timeout: 10000 });
   expect(state.actions).not.toContain("authorize");

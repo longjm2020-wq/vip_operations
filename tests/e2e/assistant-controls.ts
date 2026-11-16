@@ -39,8 +39,21 @@ export async function openPersonalAssistant(page: Page) {
     return;
   }
   const mascot = companionLaunch(page);
+  if (new URL(page.url()).pathname === "/my-workspace") {
+    const collapse = page.getByRole("button", {
+      name: "收起右侧工具栏",
+      exact: true,
+    });
+    if (
+      (page.viewportSize()?.width || 1440) <= 1050 &&
+      (await collapse.isVisible())
+    )
+      await collapse.click();
+    await expect(mascot.first()).toBeVisible();
+  }
   if (await mascot.first().isVisible()) {
-    await mascot.first().click();
+    await mascot.first().focus();
+    await mascot.first().press("Enter");
   } else {
     const launcher = page.getByRole("button", {
       name: "文字对话",
@@ -55,6 +68,37 @@ export async function openPersonalAssistant(page: Page) {
 }
 
 export async function selectAssistantPanel(page: Page, name: string) {
+  if (await page.locator(".workspace-columns").isVisible()) {
+    if (name === "聊天") {
+      if ((page.viewportSize()?.width || 1440) <= 1050) {
+        const collapse = page.getByRole("button", {
+          name: "收起右侧工具栏",
+          exact: true,
+        });
+        if (await collapse.isVisible()) await collapse.click();
+      }
+      if (!(await page.locator(".workspace-inline-chat").isVisible()))
+        await companionLaunch(page).first().press("Enter");
+      return;
+    }
+    const expand = page.getByRole("button", {
+      name: "展开右侧工具栏",
+      exact: true,
+    });
+    if (await expand.isVisible()) await expand.click();
+    if (["独立浏览器", "我的电脑"].includes(name)) {
+      await page
+        .getByRole("navigation", { name: "右栏工具" })
+        .getByRole("button", { name, exact: true })
+        .click();
+    } else {
+      await page
+        .getByRole("button", { name: "更多右栏工具", exact: true })
+        .click();
+      await page.getByRole("menuitem", { name, exact: true }).click();
+    }
+    return;
+  }
   await page
     .getByRole("dialog", { name: /AI 个人助理/ })
     .getByRole("button", { name: "更多助理操作", exact: true })

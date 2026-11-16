@@ -529,6 +529,9 @@ test("星轨左侧执行详情跟随真实步骤，完成项可展开且中断�
   await page.setViewportSize({ width: 1600, height: 1000 });
   const fixture = await setup(page);
   await submitInWorkspace(page);
+  await page
+    .getByRole("button", { name: "收起右侧工具栏", exact: true })
+    .click();
   const rail = page.getByRole("complementary", { name: "团队执行详情" });
   const current = rail.locator(".team-execution-current-content");
   const detailScroll = rail.locator(".team-execution-scroll");
@@ -600,9 +603,6 @@ test("星轨左侧执行详情跟随真实步骤，完成项可展开且中断�
               ".team-task-progress",
             )!;
             const progressBounds = progress.getBoundingClientRect();
-            const date = document
-              .querySelector(".workspace-date")!
-              .getBoundingClientRect();
             const clearOf = (rect: DOMRect) =>
               rect.width === 0 ||
               rect.height === 0 ||
@@ -639,8 +639,7 @@ test("星轨左侧执行详情跟随真实步骤，完成项可展开且中断�
                 progressBounds.right <= window.innerWidth &&
                 progressBounds.bottom <= stageBounds.top + 1 &&
                 progress.scrollWidth <= progress.clientWidth + 1 &&
-                clearOf(toolbar) &&
-                clearOf(date),
+                clearOf(toolbar),
               noOuterRailScrollbar:
                 getComputedStyle(panel).overflowY === "hidden",
               insideStageAndViewport:

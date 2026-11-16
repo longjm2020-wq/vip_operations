@@ -37,7 +37,9 @@ export function AssistantDesktopPanel({
   const panelRef = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     if (!open) return;
-    const scroller = panelRef.current?.closest<HTMLElement>(".ant-drawer-body");
+    const scroller = panelRef.current?.closest<HTMLElement>(
+      ".workspace-tool-panels, .ant-drawer-body",
+    );
     if (scroller) scroller.scrollTop = 0;
   }, [open]);
   const [pair, setPair] = useState<{ code: string; expiresAt: string } | null>(

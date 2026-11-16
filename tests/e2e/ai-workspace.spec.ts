@@ -974,6 +974,17 @@ async function workspaceFixture(
         permissions,
         csrfToken: "fixture",
       };
+    if (path === "/my-workspace/assistant/desktop")
+      data = { devices: [], tasks: [] };
+    if (path === "/my-workspace/assistant/browser")
+      data = {
+        ready: false,
+        workerOnline: false,
+        encryptionReady: true,
+        note: "测试服务未连接",
+        tasks: [],
+        profile: null,
+      };
     if (path === "/my-workspace/appearance") {
       if (request.method() === "POST")
         Object.assign(appearance, {
@@ -1293,7 +1304,9 @@ test("工作台与业务页共用透明宽屏对话，单输入和菜单可用�
   const avatar = (await mascot.boundingBox())!;
   expect(avatar.y + avatar.height).toBeLessThanOrEqual(body.y + 1);
   expect(avatar.x).toBeGreaterThanOrEqual(heading.x);
-  await expect(page.locator(".workspace-companion-host .sidebar-assistant")).toBeHidden();
+  await expect(
+    page.locator(".workspace-companion-host .sidebar-assistant"),
+  ).toBeHidden();
   await expect(page.locator(".assistant-screen")).toBeVisible();
   await expect(page.locator(".personal-workspace")).toHaveAttribute(
     "data-scene-presence",
@@ -1360,9 +1373,7 @@ test("工作台与业务页共用透明宽屏对话，单输入和菜单可用�
     ["动态反馈", "刷新助理动态"],
   ] as const) {
     await selectAssistantPanel(page, section);
-    await expect(dialog.locator(".assistant-panel-title")).toHaveText(
-      section,
-    );
+    await expect(dialog.locator(".assistant-panel-title")).toHaveText(section);
     await expect(
       section === "任务与文件"
         ? dialog.getByRole("heading", { name: label, exact: true })
@@ -2375,7 +2386,7 @@ const defaultWorkspaceCamera = {
   mode: "rotate",
 };
 
-test("工作台空白处控制整个三维场景，无界旋转平移、缩放与复位不移动固定输入和日期", async ({
+test("工作台空白处控制整个三维场景，无界旋转平移、缩放与复位不移动固定输入和工具条", async ({
   page,
 }) => {
   const fixture = await workspaceFixture(page);
@@ -2387,14 +2398,13 @@ test("工作台空白处控制整个三维场景，无界旋转平移、缩放�
   const input = page
     .locator(".workspace-ai")
     .getByPlaceholder(/告诉我你想完成什么/);
-  const date = page.locator(".workspace-date");
+  await expect(page.locator(".workspace-date")).toHaveCount(0);
   const controls = page.locator(".workspace-world-controls");
   await expect
     .poll(() => readWorkspaceCamera(page))
     .toEqual(defaultWorkspaceCamera);
   const fixed = {
     input: await input.boundingBox(),
-    date: await date.boundingBox(),
     controls: await controls.boundingBox(),
   };
   await dragWorkspace(page, 900, 600);
@@ -2456,7 +2466,6 @@ test("工作台空白处控制整个三维场景，无界旋转平移、缩放�
     .toBeLessThan(zoomed);
   for (const [element, expected] of [
     [input, fixed.input],
-    [date, fixed.date],
     [controls, fixed.controls],
   ] as const) {
     const actual = (await element.boundingBox())!;
@@ -2620,7 +2629,7 @@ test("手机触摸与减少动态效果仍可操作三维场景，移出中心�
     .toBeGreaterThan(390);
   const reset = page.getByRole("button", { name: "回到中心", exact: true });
   await expect(reset).toBeInViewport({ ratio: 1 });
-  await expect(page.locator(".workspace-date")).toBeInViewport({ ratio: 1 });
+  await expect(page.locator(".workspace-date")).toHaveCount(0);
   expect(
     await page.evaluate(
       () =>
@@ -2860,9 +2869,7 @@ test("工作台圆环是小序巢穴，可离巢移动与召回，文字和动�
     .getByRole("button", { name: "查看助理动态反馈", exact: true })
     .click();
   const dialog = page.getByRole("dialog", { name: /AI 个人助理/ });
-  await expect(dialog.locator(".assistant-panel-title")).toHaveText(
-    "动态反馈",
-  );
+  await expect(dialog.locator(".assistant-panel-title")).toHaveText("动态反馈");
   await expect(
     dialog.getByText("核心入口项目进展", { exact: true }),
   ).toBeVisible();
@@ -3220,6 +3227,9 @@ test("中心AI核心在桌面与手机完整显示，页面打开不调用模型
     .getByRole("button", { name: "收起工作台面板", exact: true })
     .click();
   await page.setViewportSize({ width: 390, height: 844 });
+  await page
+    .getByRole("button", { name: "收起右侧工具栏", exact: true })
+    .click();
   await expect(core).toBeVisible();
   await expect(
     page

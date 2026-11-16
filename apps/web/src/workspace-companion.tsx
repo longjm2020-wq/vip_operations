@@ -275,12 +275,16 @@ export function WorkspaceCompanion() {
     };
     const constrain = (point: Position) => {
       const { width, height } = size();
+      const center = document
+        .querySelector(".workspace-center")
+        ?.getBoundingClientRect();
+      const left = center?.left ?? 0;
+      const top = center?.top ?? 0;
+      const right = center?.right ?? document.documentElement.clientWidth;
+      const bottom = center?.bottom ?? innerHeight;
       return {
-        x: Math.max(
-          8,
-          Math.min(point.x, document.documentElement.clientWidth - width - 8),
-        ),
-        y: Math.max(8, Math.min(point.y, innerHeight - height - 8)),
+        x: Math.max(left + 8, Math.min(point.x, right - width - 8)),
+        y: Math.max(top + 8, Math.min(point.y, bottom - height - 8)),
       };
     };
     const position = (point: Position, commit = true) => {
@@ -430,11 +434,14 @@ export function WorkspaceCompanion() {
         alignNest();
         // Delivery lifts the nest using a short CSS transition. Follow that
         // geometry until it settles, without turning idle anchoring into a loop.
-        if (nest?.closest(".workspace-ai-core")?.getAnimations().some(
-          (animation) => animation.playState === "running",
-        )) anchorFrame = requestAnimationFrame(followAnchor);
-      }
-      else if (perch && !climbFrame && !drag) {
+        if (
+          nest
+            ?.closest(".workspace-ai-core")
+            ?.getAnimations()
+            .some((animation) => animation.playState === "running")
+        )
+          anchorFrame = requestAnimationFrame(followAnchor);
+      } else if (perch && !climbFrame && !drag) {
         const next = climbRestPosition(perch);
         if (next) position(next, false);
         else {

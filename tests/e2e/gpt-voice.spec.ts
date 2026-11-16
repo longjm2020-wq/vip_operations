@@ -861,7 +861,7 @@ test("千问实时语音绑定所选电脑，刷新电脑任务并在同一通�
     .click();
   await page
     .getByRole("dialog", { name: /AI 个人助理/ })
-    .getByRole("button", { name: "关闭", exact: true })
+    .getByRole("button", { name: /^(关闭|收起文字对话)$/ })
     .click();
   await page
     .getByRole("button", { name: "开始与小序语音对话", exact: true })
@@ -1640,6 +1640,19 @@ async function fixture(
         ],
         csrfToken: "fixture",
       };
+    if (path === "/my-workspace/assistant/capabilities")
+      data = {
+        defaultModel: "engine/default",
+        models: [
+          {
+            id: "engine/default",
+            name: "通用助手",
+            displayName: "测试模型",
+            vision: true,
+          },
+        ],
+        imageModels: [],
+      };
     if (path === "/my-workspace/appearance") {
       if (request.method() === "POST")
         Object.assign(appearance, request.postDataJSON(), {
@@ -1874,7 +1887,7 @@ test("文字回复用 GPT 声音朗读和自动回答，不开启麦克风，停
   );
   await dialog.getByRole("button", { name: "小序朗读这条回复" }).last().click();
   await expect.poll(() => speeches.length).toBe(3);
-  await dialog.getByRole("button", { name: "关闭", exact: true }).click();
+  await dialog.getByRole("button", { name: /^(关闭|收起文字对话)$/ }).click();
   await expect(page.locator(".sidebar-assistant")).not.toHaveAttribute(
     "data-state",
     "speaking",
@@ -2043,10 +2056,16 @@ test("文字草稿与语音共用记录，关闭面板保留通话和草稿", as
   await expect(bubble.getByRole("status")).toHaveText("我在听，你说");
   await expectVoiceCaptions(page);
   await expect(dialog).toBeHidden();
+  await page
+    .getByRole("navigation", { name: "右栏工具" })
+    .getByRole("button", { name: "我的电脑", exact: true })
+    .click();
+  expect(await page.evaluate(() => window.gptVoiceTest.stops)).toBe(0);
+  await expect(bubble.getByRole("status")).toHaveText("我在听，你说");
   await openPersonalAssistant(page);
   await expect(dialog.locator("textarea")).toHaveValue("尚未发送的草稿");
   await expectVoiceCaptions(page);
-  await dialog.getByRole("button", { name: "关闭", exact: true }).click();
+  await dialog.getByRole("button", { name: /^(关闭|收起文字对话)$/ }).click();
   expect(await page.evaluate(() => window.gptVoiceTest.stops)).toBe(0);
   await expect(bubble.getByRole("status")).toHaveText("我在听，你说");
   await openPersonalAssistant(page);

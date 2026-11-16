@@ -5,6 +5,18 @@ import type { WorkspaceSchedule } from "../../../packages/contracts/src/personal
 import type { AssistantVoiceStatus } from "../../../packages/contracts/src/assistant-voice";
 import type { useGptVoice, VoiceState } from "./use-gpt-voice";
 
+export type AssistantSection =
+  | "chat"
+  | "activity"
+  | "memory"
+  | "voice"
+  | "tasks"
+  | "desktop"
+  | "browser"
+  | "team"
+  | "settings";
+export type AssistantToolSection = Exclude<AssistantSection, "chat">;
+
 export type AssistantHubState = {
   allowed: boolean;
   conversation?: AssistantConversation;
@@ -32,6 +44,15 @@ export type AssistantHubState = {
   pendingSchedules: WorkspaceSchedule[];
   consumeSchedule: (id: string) => void;
   setDraftSchedule: (value: WorkspaceSchedule[] | null) => void;
+  workbench?: {
+    toolsOpen: boolean;
+    chatOpen: boolean;
+    tool: AssistantToolSection;
+    setToolsOpen: (open: boolean) => void;
+    selectTool: (tool: AssistantToolSection) => void;
+    registerTools: (host: HTMLDivElement | null) => void;
+    registerChat: (host: HTMLDivElement | null) => void;
+  };
 };
 export const AssistantHubContext = createContext<AssistantHubState | null>(
   null,

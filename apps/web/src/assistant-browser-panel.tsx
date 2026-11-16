@@ -416,6 +416,7 @@ export function AssistantBrowserPanel({
   toggleExpanded,
   onStarted,
   onSubmitting,
+  embedded = false,
 }: {
   open: boolean;
   owner: string;
@@ -431,6 +432,7 @@ export function AssistantBrowserPanel({
   toggleExpanded: () => void;
   onStarted: (task: BrowserTask) => void;
   onSubmitting: (value: boolean) => void;
+  embedded?: boolean;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const { modal, message } = App.useApp();
@@ -580,7 +582,7 @@ export function AssistantBrowserPanel({
             type="text"
             size="small"
             icon={<CloseOutlined />}
-            aria-label="返回对话"
+            aria-label={embedded ? "关闭浏览器面板" : "返回对话"}
             title="收起浏览器，任务继续保留"
             onClick={returnToChat}
           />

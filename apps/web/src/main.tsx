@@ -85,7 +85,7 @@ const ProjectDetailPage = lazyPage(() => import("./projects").then(module => ({ 
 import "./style.css";
 import "./workspace-shell.css";
 import { AppearanceProvider, ThemeToggle } from "./appearance";
-const coreFeatureSummary = "小序星轨团队协作与交付 · AI 模型管理与用量 · 实时语音目标执行与演示讲解 · 独立浏览器与电脑操作 · 全息工作台 · 文档、图像与视频创作 · 经营分析 · 唯品会商品资料 · 聚水潭库存同步 · 协作表格 · AIGC";
+const coreFeatureSummary = "小序星轨团队协作与交付 · AI 模型管理与用量 · 实时语音目标执行与演示讲解 · 独立浏览器与电脑操作 · 三栏工作台与全息展示 · 文档、图像与视频创作 · 经营分析 · 唯品会商品资料 · 聚水潭库存同步 · 协作表格 · AIGC";
 const useUi = create<{ collapsed: boolean; toggle: () => void }>((set) => ({
   collapsed: false,
   toggle: () => set((s) => ({ collapsed: !s.collapsed })),
@@ -189,7 +189,20 @@ function Workspace({ user }: { user: Row }) {
   const screens = Grid.useBreakpoint();
   const mobileWorkspace = personalWorkspace && screens.md === false;
   const [workspaceNavOpen, setWorkspaceNavOpen] = useState(false);
-  const navCollapsed = mobileWorkspace ? !workspaceNavOpen : ui.collapsed;
+  const [workspaceNavCollapsed, setWorkspaceNavCollapsed] = useState(() => {
+    try { return localStorage.getItem(`xuti-workspace-nav-collapsed:${user.id}`) === "true"; } catch { return false; }
+  });
+  React.useEffect(() => {
+    try { setWorkspaceNavCollapsed(localStorage.getItem(`xuti-workspace-nav-collapsed:${user.id}`) === "true"); } catch { setWorkspaceNavCollapsed(false); }
+  }, [user.id]);
+  const navCollapsed = mobileWorkspace ? !workspaceNavOpen : personalWorkspace ? workspaceNavCollapsed : ui.collapsed;
+  const toggleNavigation = () => {
+    if (mobileWorkspace) { setWorkspaceNavOpen(!workspaceNavOpen); return; }
+    if (!personalWorkspace) { ui.toggle(); return; }
+    const next = !workspaceNavCollapsed;
+    setWorkspaceNavCollapsed(next);
+    try { localStorage.setItem(`xuti-workspace-nav-collapsed:${user.id}`, String(next)); } catch { /* The layout still changes for this page. */ }
+  };
   React.useEffect(() => setWorkspaceNavOpen(false), [location.pathname]);
   const [searchHost, setSearchHost] = useState<HTMLDivElement | null>(null);
   React.useEffect(() => {
@@ -381,7 +394,7 @@ function Workspace({ user }: { user: Row }) {
               <Button
                 type="text"
                 aria-label={navCollapsed ? "展开工作区导航" : "收起工作区导航"}
-                onClick={() => mobileWorkspace ? setWorkspaceNavOpen(!workspaceNavOpen) : ui.toggle()}
+                onClick={toggleNavigation}
                 icon={
                   navCollapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />
                 }

@@ -51,6 +51,7 @@ import { QueryState, Row, useUser } from "./shared";
 import type { WorkspaceConfig } from "../../../packages/contracts/src/personal-workspace";
 import { canUsePersonalAssistant } from "../../../packages/contracts/src/personal-assistant";
 import "./personal-workspace.css";
+import { WorkspaceColumns } from "./workspace-columns";
 import { lazyPage } from "./page-resource-loader";
 import { PageResourceBoundary } from "./page-resource-boundary";
 import { WorkspaceAI } from "./workspace-ai";
@@ -208,8 +209,20 @@ function WorkspaceFloatingPanel({
     minY: number;
     maxY: number;
   } | null>(null);
+  const viewportBounds = () => {
+    const center = document
+      .querySelector(".workspace-center")
+      ?.getBoundingClientRect();
+    const view = window.visualViewport;
+    return {
+      width: center?.width || view?.width || innerWidth,
+      height: center?.height || view?.height || innerHeight,
+      offsetLeft: center?.left ?? view?.offsetLeft ?? 0,
+      offsetTop: center?.top ?? view?.offsetTop ?? 0,
+    };
+  };
   const bounds = () => {
-    const view = window.visualViewport,
+    const view = viewportBounds(),
       margin = innerWidth < 768 ? 12 : 24;
     const width = view?.width || innerWidth,
       height = view?.height || innerHeight;
@@ -237,7 +250,7 @@ function WorkspaceFloatingPanel({
   const reset = () => {
     const target = box.current;
     if (!target) return;
-    const viewport = window.visualViewport,
+    const viewport = viewportBounds(),
       viewportWidth = viewport?.width || innerWidth,
       viewportLeft = viewport?.offsetLeft || 0,
       mobile = viewportWidth < 768,
@@ -604,530 +617,534 @@ export function PersonalWorkspacePage() {
     tables: <AppstoreOutlined />,
   };
   return (
-    <div
-      ref={world.surface}
-      className="personal-workspace"
-      data-workspace-layout={branchLayout ? "branches" : "orbit"}
-      data-workspace-ring-motion={ringMotion.enabled ? "enabled" : "disabled"}
-      data-scene-presence={scenePresence}
-      data-hologram-presence={hologramPresence}
-      role="region"
-      aria-label="工作台三维场景"
-      aria-description="空白处拖动旋转，Shift 加拖动或中键拖动平移，滚轮缩放；聚焦场景后方向键调整，Home 回到中心。"
-      tabIndex={0}
-    >
-      <WorkspaceImageReveal />
-      <WorkspaceWorldBackdrop />
-      <header className="personal-welcome" data-world-ui>
-        <div
-          className="workspace-world-controls"
-          role="group"
-          aria-label="场景视角"
-        >
-          <button
-            type="button"
-            aria-label="旋转场景"
-            aria-pressed="true"
-            data-world-mode-button="rotate"
-            title="拖动旋转场景"
-            onClick={() => world.mode("rotate")}
-          >
-            <RotateRightOutlined />
-          </button>
-          <button
-            type="button"
-            aria-label="平移场景"
-            aria-pressed="false"
-            data-world-mode-button="pan"
-            title="拖动平移（或 Shift 加拖动）"
-            onClick={() => world.mode("pan")}
-          >
-            <DragOutlined />
-          </button>
-          <span className="workspace-world-control-divider" aria-hidden />
-          <button
-            type="button"
-            aria-label="缩小场景"
-            title="缩小场景"
-            onClick={() => world.zoom(1 / 1.15)}
-          >
-            <MinusOutlined />
-          </button>
-          <output data-world-scale aria-label="场景缩放">
-            100%
-          </output>
-          <button
-            type="button"
-            aria-label="放大场景"
-            title="放大场景"
-            onClick={() => world.zoom(1.15)}
-          >
-            <PlusOutlined />
-          </button>
-          <button
-            type="button"
-            aria-label="回到中心"
-            title="回到中心（Home 或双击空白处）"
-            onClick={world.reset}
-          >
-            <AimOutlined />
-          </button>
-          <span className="workspace-world-control-divider" aria-hidden />
-          <button
-            type="button"
-            aria-label={branchLayout ? "收起工作台分支图" : "展开工作台分支图"}
-            aria-pressed={branchLayout}
-            title={
-              branchLayout
-                ? "回到圆环布局"
-                : "展开分支图（也可向左拖动巢穴外环）"
-            }
-            onClick={toggleBranches}
-          >
-            <BranchesOutlined />
-          </button>
-          <WorkspaceHologram onPresenceChange={setHologramPresence} />
-          <WorkspaceRingMotionControl motion={ringMotion} />
-        </div>
-        <div className="workspace-voice-slot" data-world-ui />
-        <span className="workspace-date">
-          <CalendarOutlined aria-hidden />{" "}
-          {new Intl.DateTimeFormat("zh-CN", {
-            timeZone: "Asia/Shanghai",
-            month: "long",
-            day: "numeric",
-            weekday: "long",
-          }).format(new Date())}
-        </span>
-      </header>
-      <div className="workspace-scene-nebula" aria-hidden="true">
-        {Array.from({ length: 28 }, (_, index) => (
-          <i
-            key={index}
-            style={
-              {
-                "--star-x": `${8 + ((index * 37) % 84)}%`,
-                "--star-y": `${10 + ((index * 23) % 78)}%`,
-                "--star-dx": `${(index % 2 ? 1 : -1) * (12 + (index % 5) * 6)}px`,
-                "--star-dy": `${-12 - (index % 7) * 5}px`,
-                "--star-size": `${index % 3 === 0 ? 3 : 2}px`,
-              } as CSSProperties
-            }
-          />
-        ))}
-      </div>
-      <QueryState error={q.error} reload={() => q.refetch()} />
-      {q.isLoading && <Spin />}
-      {draft && workspace && (
-        <>
-          <div className="personal-workspace-body">
-            <div className="personal-workspace-main">
-              {!canUsePersonalAssistant({ permissions: user.permissions }) && (
-                <div
-                  className="workspace-quiet"
-                  ref={quietStage}
-                  inert={sceneCovered}
-                >
-                  <div className="workspace-world-camera">
-                    <div className="workspace-world-plane">
-                      <div className="workspace-quiet-center">
-                        <AppstoreOutlined aria-hidden />
-                        <h2>你的工作，随时展开</h2>
-                        <p>打开身边的日程、待办与常用工具。</p>
-                      </div>
-                      <div className="workspace-quiet-orbit-slot" />
-                    </div>
-                  </div>
-                </div>
-              )}
-              <WorkspaceAI
-                sceneCovered={sceneCovered}
-                branchLayout={branchLayout}
-                onToggleBranches={toggleBranches}
-                available={available}
-                schedule={draft.schedule || []}
-                onSchedule={(event) => {
-                  if (
-                    (draft.schedule || []).some(
-                      (existing) => existing.id === event.id,
-                    )
-                  )
-                    return;
-                  change({
-                    ...draft,
-                    schedule: [...(draft.schedule || []), event],
-                  });
-                  openPanel("schedule");
-                }}
-              />
-            </div>
-            <WorkspaceOrbit
-              paused={panelOpen || sceneCovered}
-              selected={panelOpen ? panel : null}
-              assistantEnabled={canUsePersonalAssistant({
-                permissions: user.permissions,
-              })}
-            >
-              {(
-                [
-                  {
-                    key: "schedule",
-                    label: "日程",
-                    aria: "打开日程",
-                    icon: <CalendarOutlined />,
-                    detail: `${(draft.schedule || []).filter((event) => event.date === today).length} 项今日安排`,
-                  },
-                  {
-                    key: "todos",
-                    label: "个人待办",
-                    aria: "打开个人待办",
-                    icon: <CheckOutlined />,
-                    detail: `${incomplete.length} 项待完成${overdue.length ? ` · ${overdue.length} 逾期` : ""}`,
-                  },
-                  {
-                    key: "tools",
-                    label: "常用工具",
-                    aria: "打开常用工具",
-                    icon: <AppstoreOutlined />,
-                    detail: `${draft.shortcuts.length} 个快捷入口`,
-                  },
-                  {
-                    key: "note",
-                    label: "私有备忘",
-                    aria: "打开私有备忘",
-                    icon: <LockOutlined />,
-                    detail: draft.note ? "继续记录" : "记录你的灵感",
-                  },
-                  ...(user.permissions.includes("project.read")
-                    ? [
-                        {
-                          key: "content",
-                          label: "我的内容",
-                          aria: "打开我的内容",
-                          icon: <FileTextOutlined />,
-                          detail: "项目 · 表格 · SOP",
-                        },
-                      ]
-                    : []),
-                ] as {
-                  key: WorkspacePanel;
-                  label: string;
-                  aria: string;
-                  icon: React.ReactNode;
-                  detail: string;
-                }[]
-              ).map((item, index, items) => (
-                <button
-                  key={item.key}
-                  type="button"
-                  className="workspace-dock-item"
-                  data-panel={item.key}
-                  style={
-                    {
-                      "--orbit-angle": `${-90 + (index * 360) / items.length}deg`,
-                      "--orbit-counter-angle": `${90 - (index * 360) / items.length}deg`,
-                      "--branch-y": `${((index + 0.5) / items.length) * 100}%`,
-                    } as CSSProperties
-                  }
-                  aria-label={item.aria}
-                  title={`${item.label} · ${item.detail}`}
-                  aria-expanded={panelOpen && panel === item.key}
-                  onClick={(event) => openPanel(item.key, event.currentTarget)}
-                >
-                  <span className="workspace-dock-face workspace-ring-animation">
-                    <span className="workspace-dock-label workspace-ring-animation">
-                      <WorkspaceDockHalo />
-                      <WorkspaceDockCopy
-                        panel={item.key}
-                        icon={item.icon}
-                        label={item.label}
-                      />
-                    </span>
-                  </span>
-                </button>
-              ))}
-            </WorkspaceOrbit>
-          </div>
-          <WorkspaceFloatingPanel
-            title={panelTitles[panel]}
-            anchor={panelAnchor}
-            branchLayout={branchLayout}
-            open={panelOpen && !sceneCovered}
-            onClose={() => setPanelOpen(false)}
-            footer={
-              <>
-                <span role="status">
-                  {dirty
-                    ? "有未保存的更改，收起面板后仍保留"
-                    : panel === "content"
-                      ? "内容沿用已有成员与公开范围"
-                      : "仅自己可见 · 随账号保存"}
-                </span>
-                <Button
-                  type="primary"
-                  aria-label="保存更改"
-                  icon={<SaveOutlined />}
-                  disabled={!dirty}
-                  loading={busy}
-                  onClick={save}
-                >
-                  保存更改
-                </Button>
-              </>
-            }
-          >
-            {visitedPanels.has("tools") && (
-              <section hidden={panel !== "tools"}>
-                <div className="personal-tools-panel">
-                  <div className="workspace-panel-toolbar">
-                    <span className="secondary">
-                      {draft.shortcuts.length} 个常用工具
-                    </span>
-                    <Button
-                      type="text"
-                      size="small"
-                      icon={<SettingOutlined />}
-                      disabled={busy}
-                      onClick={() => {
-                        setTools([...draft.shortcuts]);
-                        setConfigure(true);
-                      }}
-                    >
-                      自定义工具
-                    </Button>
-                  </div>
-                  <div className="personal-tools">
-                    {draft.shortcuts.map((id) => {
-                      const tool = available.find((t) => t.id === id);
-                      return (
-                        tool && (
-                          <Tooltip
-                            key={id}
-                            title={`${tool.title}：${tool.description}`}
-                            trigger={["hover", "focus"]}
-                            mouseEnterDelay={0.4}
-                          >
-                            <Link
-                              to={tool.path}
-                              className="personal-tool"
-                              aria-label={tool.title}
-                              aria-description={tool.description}
-                            >
-                              <span
-                                className="personal-tool-icon"
-                                aria-hidden="true"
-                              >
-                                {toolIcons[id] || <AppstoreOutlined />}
-                              </span>
-                              <strong>{tool.title}</strong>
-                              <ArrowRightOutlined
-                                aria-hidden="true"
-                                className="personal-tool-arrow"
-                              />
-                            </Link>
-                          </Tooltip>
-                        )
-                      );
-                    })}
-                  </div>
-                  {!draft.shortcuts.length && (
-                    <Empty
-                      image={Empty.PRESENTED_IMAGE_SIMPLE}
-                      description="添加常用工具，快速进入已有功能"
-                    />
-                  )}
-                </div>
-              </section>
-            )}
-            {visitedPanels.has("content") &&
-              user.permissions.includes("project.read") && (
-                <section hidden={panel !== "content"}>
-                  <PageResourceBoundary>
-                    <PersonalWorkspaceContent
-                      active={panelOpen && panel === "content"}
-                    />
-                  </PageResourceBoundary>
-                </section>
-              )}
-            {visitedPanels.has("schedule") && (
-              <section hidden={panel !== "schedule"}>
-                <PersonalSchedule
-                  events={draft.schedule || []}
-                  today={today}
-                  busy={busy}
-                  onChange={(schedule) => change({ ...draft, schedule })}
-                />
-              </section>
-            )}
-            {visitedPanels.has("todos") && (
-              <section hidden={panel !== "todos"}>
-                <div className="workspace-panel-toolbar">
-                  <span className="personal-todo-count">
-                    {incomplete.length} 待完成
-                    {overdue.length > 0 && <em> · {overdue.length} 逾期</em>}
-                  </span>
-                </div>
-                <div className="personal-todo-add">
-                  <Input
-                    value={title}
-                    aria-label="待办事项"
-                    placeholder="添加自己的待办事项"
-                    maxLength={160}
-                    disabled={busy || draft.todos.length >= 200}
-                    onChange={(e) => setTitle(e.target.value)}
-                    onPressEnter={addTodo}
-                  />
-                  <Input
-                    type="date"
-                    value={dueDate}
-                    aria-label="待办截止日期"
-                    disabled={busy}
-                    onChange={(e) => setDueDate(e.target.value)}
-                  />
-                  <Button
-                    icon={<PlusOutlined aria-hidden />}
-                    onClick={addTodo}
-                    disabled={
-                      busy || !title.trim() || draft.todos.length >= 200
-                    }
-                  >
-                    添加
-                  </Button>
-                </div>
-                <div className="personal-todos">
-                  {draft.todos.map((todo) => (
-                    <div
-                      className={"personal-todo" + (todo.done ? " done" : "")}
-                      key={todo.id}
-                    >
-                      <Checkbox
-                        checked={todo.done}
-                        disabled={busy}
-                        onChange={(e) =>
-                          change({
-                            ...draft,
-                            todos: draft.todos.map((t) =>
-                              t.id === todo.id
-                                ? { ...t, done: e.target.checked }
-                                : t,
-                            ),
-                          })
-                        }
-                      >
-                        {todo.title}
-                      </Checkbox>
-                      {todo.dueDate && (
-                        <Tag
-                          color={
-                            !todo.done && todo.dueDate < today
-                              ? "volcano"
-                              : undefined
-                          }
-                        >
-                          {todo.dueDate}
-                        </Tag>
-                      )}
-                      <Button
-                        type="text"
-                        icon={<DeleteOutlined />}
-                        aria-label={`删除待办 ${todo.title}`}
-                        disabled={busy}
-                        onClick={() =>
-                          change({
-                            ...draft,
-                            todos: draft.todos.filter((t) => t.id !== todo.id),
-                          })
-                        }
-                      />
-                    </div>
-                  ))}
-                </div>
-                {!draft.todos.length && (
-                  <Empty
-                    image={Empty.PRESENTED_IMAGE_SIMPLE}
-                    description="暂无个人待办"
-                  />
-                )}
-                <small className="secondary">
-                  个人待办仅自己可见。项目任务请在项目协作中查看。
-                </small>
-              </section>
-            )}
-            {visitedPanels.has("note") && (
-              <section hidden={panel !== "note"}>
-                <Input.TextArea
-                  aria-label="私有备忘"
-                  value={draft.note}
-                  onChange={(e) => change({ ...draft, note: e.target.value })}
-                  placeholder="记录工作思路、提醒或备忘…"
-                  maxLength={4000}
-                  showCount
-                  rows={4}
-                  disabled={busy}
-                />
-                <p className="secondary">
-                  保存后随账号同步，其他用户及管理员的工作台不会显示这份内容。
-                </p>
-              </section>
-            )}
-          </WorkspaceFloatingPanel>
-        </>
-      )}
-      <Modal
-        title="自定义常用工具"
-        open={configure}
-        onCancel={() => setConfigure(false)}
-        onOk={() => {
-          if (draft) change({ ...draft, shortcuts: tools });
-          setConfigure(false);
-        }}
-        okText="应用"
-        cancelText="取消"
+    <WorkspaceColumns>
+      <div
+        ref={world.surface}
+        className="personal-workspace"
+        data-workspace-layout={branchLayout ? "branches" : "orbit"}
+        data-workspace-ring-motion={ringMotion.enabled ? "enabled" : "disabled"}
+        data-scene-presence={scenePresence}
+        data-hologram-presence={hologramPresence}
+        role="region"
+        aria-label="工作台三维场景"
+        aria-description="空白处拖动旋转，Shift 加拖动或中键拖动平移，滚轮缩放；聚焦场景后方向键调整，Home 回到中心。"
+        tabIndex={0}
       >
-        <p className="secondary">选择已有权限的工具，并调整显示顺序。</p>
-        <Checkbox.Group
-          value={tools}
-          onChange={(values) =>
-            setTools([
-              ...tools.filter((id) => values.includes(id)),
-              ...values.map(String).filter((id) => !tools.includes(id)),
-            ])
-          }
-          className="personal-tool-options"
-          options={available.map((tool) => ({
-            label: tool.title,
-            value: tool.id,
-          }))}
-        />
-        <div className="personal-tool-order">
-          {tools.map((id, index) => (
-            <div key={id}>
-              <span>
-                {index + 1}. {available.find((tool) => tool.id === id)?.title}
-              </span>
-              <Space>
-                <Button
-                  size="small"
-                  icon={<ArrowUpOutlined />}
-                  aria-label={`上移 ${available.find((t) => t.id === id)?.title}`}
-                  disabled={index === 0}
-                  onClick={() => move(index, -1)}
-                />
-                <Button
-                  size="small"
-                  icon={<ArrowDownOutlined />}
-                  aria-label={`下移 ${available.find((t) => t.id === id)?.title}`}
-                  disabled={index === tools.length - 1}
-                  onClick={() => move(index, 1)}
-                />
-              </Space>
-            </div>
+        <WorkspaceImageReveal />
+        <WorkspaceWorldBackdrop />
+        <header className="personal-welcome" data-world-ui>
+          <div
+            className="workspace-world-controls"
+            role="group"
+            aria-label="场景视角"
+          >
+            <button
+              type="button"
+              aria-label="旋转场景"
+              aria-pressed="true"
+              data-world-mode-button="rotate"
+              title="拖动旋转场景"
+              onClick={() => world.mode("rotate")}
+            >
+              <RotateRightOutlined />
+            </button>
+            <button
+              type="button"
+              aria-label="平移场景"
+              aria-pressed="false"
+              data-world-mode-button="pan"
+              title="拖动平移（或 Shift 加拖动）"
+              onClick={() => world.mode("pan")}
+            >
+              <DragOutlined />
+            </button>
+            <span className="workspace-world-control-divider" aria-hidden />
+            <button
+              type="button"
+              aria-label="缩小场景"
+              title="缩小场景"
+              onClick={() => world.zoom(1 / 1.15)}
+            >
+              <MinusOutlined />
+            </button>
+            <output data-world-scale aria-label="场景缩放">
+              100%
+            </output>
+            <button
+              type="button"
+              aria-label="放大场景"
+              title="放大场景"
+              onClick={() => world.zoom(1.15)}
+            >
+              <PlusOutlined />
+            </button>
+            <button
+              type="button"
+              aria-label="回到中心"
+              title="回到中心（Home 或双击空白处）"
+              onClick={world.reset}
+            >
+              <AimOutlined />
+            </button>
+            <span className="workspace-world-control-divider" aria-hidden />
+            <button
+              type="button"
+              aria-label={
+                branchLayout ? "收起工作台分支图" : "展开工作台分支图"
+              }
+              aria-pressed={branchLayout}
+              title={
+                branchLayout
+                  ? "回到圆环布局"
+                  : "展开分支图（也可向左拖动巢穴外环）"
+              }
+              onClick={toggleBranches}
+            >
+              <BranchesOutlined />
+            </button>
+            <WorkspaceHologram onPresenceChange={setHologramPresence} />
+            <WorkspaceRingMotionControl motion={ringMotion} />
+          </div>
+          <div className="workspace-voice-slot" data-world-ui />
+        </header>
+        <div className="workspace-scene-nebula" aria-hidden="true">
+          {Array.from({ length: 28 }, (_, index) => (
+            <i
+              key={index}
+              style={
+                {
+                  "--star-x": `${8 + ((index * 37) % 84)}%`,
+                  "--star-y": `${10 + ((index * 23) % 78)}%`,
+                  "--star-dx": `${(index % 2 ? 1 : -1) * (12 + (index % 5) * 6)}px`,
+                  "--star-dy": `${-12 - (index % 7) * 5}px`,
+                  "--star-size": `${index % 3 === 0 ? 3 : 2}px`,
+                } as CSSProperties
+              }
+            />
           ))}
         </div>
-        <Button type="link" onClick={() => setTools(workspace.defaults.tools)}>
-          恢复角色默认工具
-        </Button>
-      </Modal>
-    </div>
+        <QueryState error={q.error} reload={() => q.refetch()} />
+        {q.isLoading && <Spin />}
+        {draft && workspace && (
+          <>
+            <div className="personal-workspace-body">
+              <div className="personal-workspace-main">
+                {!canUsePersonalAssistant({
+                  permissions: user.permissions,
+                }) && (
+                  <div
+                    className="workspace-quiet"
+                    ref={quietStage}
+                    inert={sceneCovered}
+                  >
+                    <div className="workspace-world-camera">
+                      <div className="workspace-world-plane">
+                        <div className="workspace-quiet-center">
+                          <AppstoreOutlined aria-hidden />
+                          <h2>你的工作，随时展开</h2>
+                          <p>打开身边的日程、待办与常用工具。</p>
+                        </div>
+                        <div className="workspace-quiet-orbit-slot" />
+                      </div>
+                    </div>
+                  </div>
+                )}
+                <WorkspaceAI
+                  sceneCovered={sceneCovered}
+                  branchLayout={branchLayout}
+                  onToggleBranches={toggleBranches}
+                  available={available}
+                  schedule={draft.schedule || []}
+                  onSchedule={(event) => {
+                    if (
+                      (draft.schedule || []).some(
+                        (existing) => existing.id === event.id,
+                      )
+                    )
+                      return;
+                    change({
+                      ...draft,
+                      schedule: [...(draft.schedule || []), event],
+                    });
+                    openPanel("schedule");
+                  }}
+                />
+              </div>
+              <WorkspaceOrbit
+                paused={panelOpen || sceneCovered}
+                selected={panelOpen ? panel : null}
+                assistantEnabled={canUsePersonalAssistant({
+                  permissions: user.permissions,
+                })}
+              >
+                {(
+                  [
+                    {
+                      key: "schedule",
+                      label: "日程",
+                      aria: "打开日程",
+                      icon: <CalendarOutlined />,
+                      detail: `${(draft.schedule || []).filter((event) => event.date === today).length} 项今日安排`,
+                    },
+                    {
+                      key: "todos",
+                      label: "个人待办",
+                      aria: "打开个人待办",
+                      icon: <CheckOutlined />,
+                      detail: `${incomplete.length} 项待完成${overdue.length ? ` · ${overdue.length} 逾期` : ""}`,
+                    },
+                    {
+                      key: "tools",
+                      label: "常用工具",
+                      aria: "打开常用工具",
+                      icon: <AppstoreOutlined />,
+                      detail: `${draft.shortcuts.length} 个快捷入口`,
+                    },
+                    {
+                      key: "note",
+                      label: "私有备忘",
+                      aria: "打开私有备忘",
+                      icon: <LockOutlined />,
+                      detail: draft.note ? "继续记录" : "记录你的灵感",
+                    },
+                    ...(user.permissions.includes("project.read")
+                      ? [
+                          {
+                            key: "content",
+                            label: "我的内容",
+                            aria: "打开我的内容",
+                            icon: <FileTextOutlined />,
+                            detail: "项目 · 表格 · SOP",
+                          },
+                        ]
+                      : []),
+                  ] as {
+                    key: WorkspacePanel;
+                    label: string;
+                    aria: string;
+                    icon: React.ReactNode;
+                    detail: string;
+                  }[]
+                ).map((item, index, items) => (
+                  <button
+                    key={item.key}
+                    type="button"
+                    className="workspace-dock-item"
+                    data-panel={item.key}
+                    style={
+                      {
+                        "--orbit-angle": `${-90 + (index * 360) / items.length}deg`,
+                        "--orbit-counter-angle": `${90 - (index * 360) / items.length}deg`,
+                        "--branch-y": `${((index + 0.5) / items.length) * 100}%`,
+                      } as CSSProperties
+                    }
+                    aria-label={item.aria}
+                    title={`${item.label} · ${item.detail}`}
+                    aria-expanded={panelOpen && panel === item.key}
+                    onClick={(event) =>
+                      openPanel(item.key, event.currentTarget)
+                    }
+                  >
+                    <span className="workspace-dock-face workspace-ring-animation">
+                      <span className="workspace-dock-label workspace-ring-animation">
+                        <WorkspaceDockHalo />
+                        <WorkspaceDockCopy
+                          panel={item.key}
+                          icon={item.icon}
+                          label={item.label}
+                        />
+                      </span>
+                    </span>
+                  </button>
+                ))}
+              </WorkspaceOrbit>
+            </div>
+            <WorkspaceFloatingPanel
+              title={panelTitles[panel]}
+              anchor={panelAnchor}
+              branchLayout={branchLayout}
+              open={panelOpen && !sceneCovered}
+              onClose={() => setPanelOpen(false)}
+              footer={
+                <>
+                  <span role="status">
+                    {dirty
+                      ? "有未保存的更改，收起面板后仍保留"
+                      : panel === "content"
+                        ? "内容沿用已有成员与公开范围"
+                        : "仅自己可见 · 随账号保存"}
+                  </span>
+                  <Button
+                    type="primary"
+                    aria-label="保存更改"
+                    icon={<SaveOutlined />}
+                    disabled={!dirty}
+                    loading={busy}
+                    onClick={save}
+                  >
+                    保存更改
+                  </Button>
+                </>
+              }
+            >
+              {visitedPanels.has("tools") && (
+                <section hidden={panel !== "tools"}>
+                  <div className="personal-tools-panel">
+                    <div className="workspace-panel-toolbar">
+                      <span className="secondary">
+                        {draft.shortcuts.length} 个常用工具
+                      </span>
+                      <Button
+                        type="text"
+                        size="small"
+                        icon={<SettingOutlined />}
+                        disabled={busy}
+                        onClick={() => {
+                          setTools([...draft.shortcuts]);
+                          setConfigure(true);
+                        }}
+                      >
+                        自定义工具
+                      </Button>
+                    </div>
+                    <div className="personal-tools">
+                      {draft.shortcuts.map((id) => {
+                        const tool = available.find((t) => t.id === id);
+                        return (
+                          tool && (
+                            <Tooltip
+                              key={id}
+                              title={`${tool.title}：${tool.description}`}
+                              trigger={["hover", "focus"]}
+                              mouseEnterDelay={0.4}
+                            >
+                              <Link
+                                to={tool.path}
+                                className="personal-tool"
+                                aria-label={tool.title}
+                                aria-description={tool.description}
+                              >
+                                <span
+                                  className="personal-tool-icon"
+                                  aria-hidden="true"
+                                >
+                                  {toolIcons[id] || <AppstoreOutlined />}
+                                </span>
+                                <strong>{tool.title}</strong>
+                                <ArrowRightOutlined
+                                  aria-hidden="true"
+                                  className="personal-tool-arrow"
+                                />
+                              </Link>
+                            </Tooltip>
+                          )
+                        );
+                      })}
+                    </div>
+                    {!draft.shortcuts.length && (
+                      <Empty
+                        image={Empty.PRESENTED_IMAGE_SIMPLE}
+                        description="添加常用工具，快速进入已有功能"
+                      />
+                    )}
+                  </div>
+                </section>
+              )}
+              {visitedPanels.has("content") &&
+                user.permissions.includes("project.read") && (
+                  <section hidden={panel !== "content"}>
+                    <PageResourceBoundary>
+                      <PersonalWorkspaceContent
+                        active={panelOpen && panel === "content"}
+                      />
+                    </PageResourceBoundary>
+                  </section>
+                )}
+              {visitedPanels.has("schedule") && (
+                <section hidden={panel !== "schedule"}>
+                  <PersonalSchedule
+                    events={draft.schedule || []}
+                    today={today}
+                    busy={busy}
+                    onChange={(schedule) => change({ ...draft, schedule })}
+                  />
+                </section>
+              )}
+              {visitedPanels.has("todos") && (
+                <section hidden={panel !== "todos"}>
+                  <div className="workspace-panel-toolbar">
+                    <span className="personal-todo-count">
+                      {incomplete.length} 待完成
+                      {overdue.length > 0 && <em> · {overdue.length} 逾期</em>}
+                    </span>
+                  </div>
+                  <div className="personal-todo-add">
+                    <Input
+                      value={title}
+                      aria-label="待办事项"
+                      placeholder="添加自己的待办事项"
+                      maxLength={160}
+                      disabled={busy || draft.todos.length >= 200}
+                      onChange={(e) => setTitle(e.target.value)}
+                      onPressEnter={addTodo}
+                    />
+                    <Input
+                      type="date"
+                      value={dueDate}
+                      aria-label="待办截止日期"
+                      disabled={busy}
+                      onChange={(e) => setDueDate(e.target.value)}
+                    />
+                    <Button
+                      icon={<PlusOutlined aria-hidden />}
+                      onClick={addTodo}
+                      disabled={
+                        busy || !title.trim() || draft.todos.length >= 200
+                      }
+                    >
+                      添加
+                    </Button>
+                  </div>
+                  <div className="personal-todos">
+                    {draft.todos.map((todo) => (
+                      <div
+                        className={"personal-todo" + (todo.done ? " done" : "")}
+                        key={todo.id}
+                      >
+                        <Checkbox
+                          checked={todo.done}
+                          disabled={busy}
+                          onChange={(e) =>
+                            change({
+                              ...draft,
+                              todos: draft.todos.map((t) =>
+                                t.id === todo.id
+                                  ? { ...t, done: e.target.checked }
+                                  : t,
+                              ),
+                            })
+                          }
+                        >
+                          {todo.title}
+                        </Checkbox>
+                        {todo.dueDate && (
+                          <Tag
+                            color={
+                              !todo.done && todo.dueDate < today
+                                ? "volcano"
+                                : undefined
+                            }
+                          >
+                            {todo.dueDate}
+                          </Tag>
+                        )}
+                        <Button
+                          type="text"
+                          icon={<DeleteOutlined />}
+                          aria-label={`删除待办 ${todo.title}`}
+                          disabled={busy}
+                          onClick={() =>
+                            change({
+                              ...draft,
+                              todos: draft.todos.filter(
+                                (t) => t.id !== todo.id,
+                              ),
+                            })
+                          }
+                        />
+                      </div>
+                    ))}
+                  </div>
+                  {!draft.todos.length && (
+                    <Empty
+                      image={Empty.PRESENTED_IMAGE_SIMPLE}
+                      description="暂无个人待办"
+                    />
+                  )}
+                  <small className="secondary">
+                    个人待办仅自己可见。项目任务请在项目协作中查看。
+                  </small>
+                </section>
+              )}
+              {visitedPanels.has("note") && (
+                <section hidden={panel !== "note"}>
+                  <Input.TextArea
+                    aria-label="私有备忘"
+                    value={draft.note}
+                    onChange={(e) => change({ ...draft, note: e.target.value })}
+                    placeholder="记录工作思路、提醒或备忘…"
+                    maxLength={4000}
+                    showCount
+                    rows={4}
+                    disabled={busy}
+                  />
+                  <p className="secondary">
+                    保存后随账号同步，其他用户及管理员的工作台不会显示这份内容。
+                  </p>
+                </section>
+              )}
+            </WorkspaceFloatingPanel>
+          </>
+        )}
+        <Modal
+          title="自定义常用工具"
+          open={configure}
+          onCancel={() => setConfigure(false)}
+          onOk={() => {
+            if (draft) change({ ...draft, shortcuts: tools });
+            setConfigure(false);
+          }}
+          okText="应用"
+          cancelText="取消"
+        >
+          <p className="secondary">选择已有权限的工具，并调整显示顺序。</p>
+          <Checkbox.Group
+            value={tools}
+            onChange={(values) =>
+              setTools([
+                ...tools.filter((id) => values.includes(id)),
+                ...values.map(String).filter((id) => !tools.includes(id)),
+              ])
+            }
+            className="personal-tool-options"
+            options={available.map((tool) => ({
+              label: tool.title,
+              value: tool.id,
+            }))}
+          />
+          <div className="personal-tool-order">
+            {tools.map((id, index) => (
+              <div key={id}>
+                <span>
+                  {index + 1}. {available.find((tool) => tool.id === id)?.title}
+                </span>
+                <Space>
+                  <Button
+                    size="small"
+                    icon={<ArrowUpOutlined />}
+                    aria-label={`上移 ${available.find((t) => t.id === id)?.title}`}
+                    disabled={index === 0}
+                    onClick={() => move(index, -1)}
+                  />
+                  <Button
+                    size="small"
+                    icon={<ArrowDownOutlined />}
+                    aria-label={`下移 ${available.find((t) => t.id === id)?.title}`}
+                    disabled={index === tools.length - 1}
+                    onClick={() => move(index, 1)}
+                  />
+                </Space>
+              </div>
+            ))}
+          </div>
+          <Button
+            type="link"
+            onClick={() => setTools(workspace.defaults.tools)}
+          >
+            恢复角色默认工具
+          </Button>
+        </Modal>
+      </div>
+    </WorkspaceColumns>
   );
 }

@@ -5,6 +5,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { createPortal } from "react-dom";
 import { Bubble, Sender } from "@ant-design/x";
 import {
   App,
@@ -27,6 +28,7 @@ import {
   AudioOutlined,
   DesktopOutlined,
   GlobalOutlined,
+  CloseOutlined,
 } from "@ant-design/icons";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useLocation } from "react-router-dom";
@@ -40,7 +42,11 @@ import {
   type AssistantMemoryEntry,
 } from "../../../packages/contracts/src/personal-assistant";
 import { assistantNavigationTools } from "../../../packages/contracts/src/assistant-voice-commands";
-import { AssistantHubContext } from "./assistant-hub-context";
+import {
+  AssistantHubContext,
+  type AssistantSection,
+  type AssistantToolSection,
+} from "./assistant-hub-context";
 import { AssistantActivityPanel } from "./assistant-activity-panel";
 import type { AssistantActivityFeed } from "../../../packages/contracts/src/assistant-activity";
 import type { WorkspaceSchedule } from "../../../packages/contracts/src/personal-workspace";
@@ -109,17 +115,6 @@ import {
 import { useAssistantChatScroll } from "./assistant-chat-scroll";
 import { SidebarAssistant } from "./sidebar-assistant";
 
-type AssistantSection =
-  | "chat"
-  | "activity"
-  | "memory"
-  | "voice"
-  | "tasks"
-  | "desktop"
-  | "browser"
-  | "team"
-  | "settings";
-
 const desktopSelectionKey = (userId: string) =>
   `xuti-assistant-desktop:${userId}`;
 type DesktopChoice =
@@ -155,7 +150,58 @@ export function PersonalAssistantProvider({
     permissions: user.permissions,
     roleCodes: user.roleCodes,
   });
-  const [section, setSection] = useState<AssistantSection>("chat");
+  const allowed = canUsePersonalAssistant({ permissions: user.permissions });
+  const docked = inWorkspace && allowed;
+  const [section, setSectionState] = useState<AssistantSection>("chat");
+  const [workspaceTool, setWorkspaceTool] =
+    useState<AssistantToolSection>("browser");
+  const [workspaceChatOpen, setWorkspaceChatOpen] = useState(false);
+  const [workspaceToolsOpen, setWorkspaceToolsOpen] = useState(() => {
+    try {
+      const saved = localStorage.getItem(
+        `xuti-workspace-tools-open:${user.id}`,
+      );
+      return saved === null
+        ? window.matchMedia("(min-width: 1051px)").matches
+        : saved !== "false";
+    } catch {
+      return window.matchMedia("(min-width: 1051px)").matches;
+    }
+  });
+  const [workspaceToolsHost, setWorkspaceToolsHost] =
+    useState<HTMLDivElement | null>(null);
+  const [workspaceChatHost, setWorkspaceChatHost] =
+    useState<HTMLDivElement | null>(null);
+  const setToolsOpen = useCallback(
+    (value: boolean) => {
+      setWorkspaceToolsOpen(value);
+      try {
+        localStorage.setItem(
+          `xuti-workspace-tools-open:${user.id}`,
+          String(value),
+        );
+      } catch {
+        /* Keep the current layout when storage is unavailable. */
+      }
+    },
+    [user.id],
+  );
+  const setSection = useCallback(
+    (next: AssistantSection) => {
+      setSectionState(next);
+      if (!docked) return;
+      if (next === "chat") {
+        setWorkspaceChatOpen(true);
+        if (window.matchMedia("(max-width: 1050px)").matches)
+          setToolsOpen(false);
+      } else {
+        setWorkspaceTool(next);
+        setToolsOpen(true);
+      }
+    },
+    [docked, setToolsOpen],
+  );
+  const panelSection = docked ? workspaceTool : section;
   const [pendingSchedules, setPendingSchedules] = useState<WorkspaceSchedule[]>(
     [],
   );
@@ -204,14 +250,22 @@ export function PersonalAssistantProvider({
     // Continue in the workspace schedule panel without stacking two drawers.
     playbackAllowed.current = false;
     setOpen(false);
+    setWorkspaceChatOpen(false);
     voice.stop();
     speech.stop();
     navigate("/my-workspace");
   };
-  const allowed = canUsePersonalAssistant({ permissions: user.permissions });
   const [open, setOpen] = useState(false),
     [text, setText] = useState("");
-  useWorkspaceSceneCover(open);
+  const previousWorkspace = useRef(inWorkspace);
+  useEffect(() => {
+    if (previousWorkspace.current && !inWorkspace) setOpen(false);
+    previousWorkspace.current = inWorkspace;
+  }, [inWorkspace]);
+  const chatVisible = docked ? workspaceChatOpen : open && section === "chat";
+  const sceneCovered = docked ? workspaceChatOpen : open;
+  const toolsVisible = docked ? workspaceToolsOpen : open;
+  useWorkspaceSceneCover(sceneCovered);
   const [includeContext, setIncludeContext] = useState(false),
     [sending, setSending] = useState(false);
   const [error, setError] = useState("");
@@ -304,7 +358,7 @@ export function PersonalAssistantProvider({
   const [selectedTeamRunId, setSelectedTeamRunId] = useState<string>();
   const [teamSubmitError, setTeamSubmitError] = useState("");
   const teamConfig = useTeamConfiguration(
-    allowed && (teamMode || section === "team"),
+    allowed && (teamMode || panelSection === "team"),
   );
   const desktop = useQuery({
     queryKey: ["assistant-desktop", user.id],
@@ -312,7 +366,9 @@ export function PersonalAssistantProvider({
     queryFn: async () =>
       (await api("/my-workspace/assistant/desktop")).data as DesktopState,
     refetchInterval: (query) =>
-      open || desktopMode || query.state.data?.tasks.some(isActiveDesktopTask)
+      (toolsVisible && panelSection === "desktop") ||
+      desktopMode ||
+      query.state.data?.tasks.some(isActiveDesktopTask)
         ? 4000
         : false,
     // Native execution moves focus away from this WebView; task progress must continue.
@@ -347,7 +403,7 @@ export function PersonalAssistantProvider({
     },
     refetchInterval: (query) =>
       browserMode ||
-      (open && section === "browser") ||
+      (toolsVisible && panelSection === "browser") ||
       query.state.data?.tasks.some(isActiveBrowserTask)
         ? 3000
         : false,
@@ -424,9 +480,12 @@ export function PersonalAssistantProvider({
   useEffect(() => {
     const showMedia = () => {
       document
-        .querySelectorAll<HTMLVideoElement>(".personal-assistant-drawer video")
+        .querySelectorAll<HTMLVideoElement>(
+          ".personal-assistant-drawer video, .workspace-inline-chat video",
+        )
         .forEach((element) => element.pause());
       setOpen(false);
+      setWorkspaceChatOpen(false);
       voice.stop();
       speech.stop();
     };
@@ -449,10 +508,10 @@ export function PersonalAssistantProvider({
       (await api("/my-workspace/assistant/realtime")).data as RealtimeStatus,
     staleTime: 30000,
   });
-  playbackAllowed.current = open && section === "chat" && voiceReply;
+  playbackAllowed.current = chatVisible && voiceReply;
   const memory = useQuery({
     queryKey: ["assistant-memory", user.id],
-    enabled: allowed && (section === "memory" || includeMemory),
+    enabled: allowed && (panelSection === "memory" || includeMemory),
     queryFn: async () =>
       (await api("/my-workspace/assistant/memory")).data as AssistantMemory,
     staleTime: 15000,
@@ -524,7 +583,13 @@ export function PersonalAssistantProvider({
     },
     realtimeStatus.data?.transport,
     realtimeStatus.data?.provider,
-    { prepare: () => setOpen(false), navigate: (path) => navigate(path) },
+    {
+      prepare: () => {
+        setOpen(false);
+        setWorkspaceChatOpen(false);
+      },
+      navigate: (path) => navigate(path),
+    },
   );
   // A live call owns its transport until it ends, including configuration refetches.
   const useRealtime =
@@ -535,6 +600,7 @@ export function PersonalAssistantProvider({
     const showTeam = () => {
       playbackAllowed.current = false;
       setOpen(false);
+      setWorkspaceChatOpen(false);
       setVoiceVisible(false);
       voice.stopListening();
       speech.stop();
@@ -599,14 +665,14 @@ export function PersonalAssistantProvider({
     if (!device?.online) return;
     rememberDesktopChoice({ mode: "device", deviceId: id });
     setTeamMode(false);
-    setSection("chat");
+    setSection(docked ? "desktop" : "chat");
     setOpen(true);
   };
   const chooseBrowser = () => {
     if (executionBusy.current || desktopSetupRunning.current) return;
     rememberDesktopChoice({ mode: "browser" });
     setTeamMode(false);
-    setSection(browser.data?.ready ? "chat" : "browser");
+    setSection(docked || !browser.data?.ready ? "browser" : "chat");
     setOpen(true);
   };
   const inspectBrowser = (id?: string) => {
@@ -659,7 +725,7 @@ export function PersonalAssistantProvider({
         rememberDesktop(result.deviceId);
         setLocalDesktopId(result.deviceId);
         setTeamMode(false);
-        setSection("chat");
+        setSection(docked ? "desktop" : "chat");
         setOpen(true);
         message.success("已选择本机，可以直接下达电脑操作指令");
       } else {
@@ -725,12 +791,20 @@ export function PersonalAssistantProvider({
       ),
   );
   useEffect(() => {
-    if (!open || section !== "chat") speech.stop();
-  }, [open, section, speech.stop]);
+    if (!chatVisible) speech.stop();
+  }, [chatVisible, speech.stop]);
   const [drawerSettled, setDrawerSettled] = useState(false);
+  const [workspaceChatSettled, setWorkspaceChatSettled] = useState(false);
+  // Pin history after the portal body has mounted and received its column height.
+  useEffect(() => {
+    setWorkspaceChatSettled(false);
+    if (!docked || !workspaceChatOpen || !workspaceChatHost) return;
+    const frame = requestAnimationFrame(() => setWorkspaceChatSettled(true));
+    return () => cancelAnimationFrame(frame);
+  }, [docked, workspaceChatOpen, workspaceChatHost]);
   useAssistantChatScroll(
-    open && (section === "chat" || section === "browser"),
-    drawerSettled,
+    chatVisible || (!docked && open && section === "browser"),
+    docked ? workspaceChatSettled : drawerSettled,
     bottom,
     `${section}:${messages.length}:${Number(busy)}:${liveCaptions.at(-1)?.text || ""}:${Number(voiceVisible)}:${Number(q.isLoading)}`,
   );
@@ -738,7 +812,8 @@ export function PersonalAssistantProvider({
     if (!value.trim() || !composerReady || busy || voice.listening) return;
     const requestId = crypto.randomUUID();
     if (teamMode) {
-      setSection("chat");
+      if (docked && !workspaceChatOpen) setSectionState("chat");
+      else setSection("chat");
       // A task submitted from the workspace composer stays in its live scene.
       setOpen(open || location.pathname !== "/my-workspace");
       setSending(true);
@@ -781,7 +856,7 @@ export function PersonalAssistantProvider({
         ? openAssistantWebsite(websiteRequest.destination.url)
         : prepareAssistantWebsite(requestId)
       : undefined;
-    if (section !== "browser" || !browserMode) setSection("chat");
+    if (docked || section !== "browser" || !browserMode) setSection("chat");
     setOpen(true);
     setSending(true);
     setError("");
@@ -1172,9 +1247,11 @@ export function PersonalAssistantProvider({
   const sender = (inDrawer = false) => (
     <div
       className="assistant-compose"
-      data-suppressed={!inDrawer && inWorkspace && open ? "true" : undefined}
-      inert={!inDrawer && inWorkspace && open}
-      aria-hidden={!inDrawer && inWorkspace && open ? true : undefined}
+      data-suppressed={
+        !inDrawer && inWorkspace && sceneCovered ? "true" : undefined
+      }
+      inert={!inDrawer && inWorkspace && sceneCovered}
+      aria-hidden={!inDrawer && inWorkspace && sceneCovered ? true : undefined}
     >
       {!teamMode && activeDesktopTask && (
         <AssistantDesktopTaskCard
@@ -1188,7 +1265,7 @@ export function PersonalAssistantProvider({
       {!teamMode &&
         browserMode &&
         activeBrowserTask &&
-        !(inDrawer && section === "browser") && (
+        !(toolsVisible && panelSection === "browser") && (
           <AssistantBrowserTaskCard
             task={activeBrowserTask}
             compact
@@ -1463,6 +1540,531 @@ export function PersonalAssistantProvider({
       {browserProblem && <Alert type="warning" title={browserProblem} />}
     </div>
   );
+  const panelMenu = (
+    <Dropdown
+      trigger={["click"]}
+      menu={{
+        items: [
+          ...sectionItems,
+          ...((docked || section === "chat") && allowed
+            ? [
+                { type: "divider" as const },
+                {
+                  key: "clear",
+                  label: "清空对话",
+                  icon: <DeleteOutlined aria-hidden />,
+                  danger: true,
+                  disabled: busy || !messages.length,
+                },
+              ]
+            : []),
+        ],
+        selectedKeys: [section],
+        onClick: ({ key }) => {
+          if (key !== "clear") {
+            selectSection(key as AssistantSection);
+            return;
+          }
+          if (busy || !messages.length || !allowed) return;
+          modal.confirm({
+            title: "清空当前账号的助理对话？",
+            content:
+              "清除聊天中的文字、语音和团队卡片。日程、待办、记忆和团队任务档案保留；运行中的团队任务不会因此停止，未执行的操作卡片将取消。",
+            okText: "清空",
+            cancelText: "取消",
+            okButtonProps: { danger: true },
+            onOk: async () => {
+              closeVoice();
+              speech.stop();
+              try {
+                await api("/my-workspace/assistant/clear", "POST", {
+                  version: data?.version || 0,
+                });
+                setSelectedTeamRunId(undefined);
+                await q.refetch();
+                setError("");
+              } catch (e) {
+                message.error((e as Error).message);
+                throw e;
+              }
+            },
+          });
+        },
+      }}
+    >
+      <Button
+        type="text"
+        className="assistant-panel-more"
+        icon={<EllipsisOutlined />}
+        aria-label="更多助理操作"
+        title="更多"
+      />
+    </Dropdown>
+  );
+  const panels = (
+    <>
+      {allowed && panelSection === "settings" && conversationSettings}
+      {allowed && panelSection === "team" && (
+        <>
+          <AssistantTeamPanel
+            selectedRunId={selectedTeamRunId}
+            selectRun={setSelectedTeamRunId}
+          />
+          <details className="assistant-team-task-settings">
+            <summary>本次任务设置</summary>
+            {teamConfig.data?.engine !== "deerflow" && (
+              <Select
+                size="small"
+                aria-label="团队任务模型"
+                allowClear
+                value={teamModel}
+                disabled={busy}
+                loading={teamConfig.isLoading}
+                popupMatchSelectWidth={false}
+                placeholder="按成员配置"
+                options={teamConfig.data?.models.map((model) => ({
+                  value: model.id,
+                  label: model.name + " · " + model.model,
+                }))}
+                onChange={setTeamModel}
+              />
+            )}
+            <Checkbox
+              checked={useKnowledge}
+              disabled={busy}
+              onChange={(event) => setUseKnowledge(event.target.checked)}
+            >
+              使用知识档案
+            </Checkbox>
+          </details>
+          <Button
+            onClick={() => {
+              setSection("chat");
+              setTeamMode(true);
+            }}
+          >
+            返回聊天并使用团队
+          </Button>
+        </>
+      )}
+      {toolsVisible && panelSection === "voice" && allowed && (
+        <AssistantVoiceSettingsPanel
+          executionLabel={voiceExecutionLabel}
+          realtime={realtimeStatus}
+          status={voiceStatus}
+          context={includeContext}
+          setContext={setIncludeContext}
+          memory={includeMemory}
+          setMemory={setIncludeMemory}
+          startVoice={startVoice}
+        />
+      )}
+      {panelSection === "memory" && allowed && (
+        <AssistantMemoryPanel
+          data={memory.data}
+          loading={memory.isFetching}
+          error={memory.error}
+          save={saveMemory}
+          refresh={() => void memory.refetch()}
+          suggestion={memorySuggestion}
+          clearSuggestion={() => setMemorySuggestion(null)}
+        />
+      )}
+      {panelSection === "tasks" && allowed && (
+        <AgentTasksPanel
+          jobs={jobs.data || []}
+          refresh={() => void jobs.refetch()}
+          onAttach={(file) => {
+            if (agent.attachments.length >= 6) {
+              message.warning("每次最多附加6个文件");
+              return;
+            }
+            setAgent((previous) => ({
+              ...previous,
+              attachments: [
+                ...previous.attachments.filter((f) => f.id !== file.id),
+                file,
+              ],
+            }));
+            setSection("chat");
+          }}
+        />
+      )}
+      {panelSection === "desktop" && allowed && (
+        <AssistantDesktopPanel
+          open={toolsVisible && (docked || drawerSettled)}
+          data={desktop.data}
+          error={desktop.error?.message || ""}
+          refresh={() => desktop.refetch()}
+          choose={chooseDesktop}
+          connectLocal={() => void setupDesktop()}
+          connecting={desktopConnecting}
+          disabled={busy || voice.listening}
+          setupNote={desktopSetupNote}
+          selectedId={desktopTargetId}
+        />
+      )}
+      {panelSection === "browser" && allowed && (
+        <AssistantBrowserPanel
+          key={user.id}
+          open={toolsVisible && (docked || drawerSettled)}
+          owner={user.id}
+          data={browser.data}
+          error={browser.error?.message}
+          refresh={() => browser.refetch()}
+          choose={chooseBrowser}
+          disabled={busy || voice.listening}
+          selectedId={selectedBrowserTaskId}
+          selectTask={setSelectedBrowserTaskId}
+          returnToChat={() =>
+            docked ? setToolsOpen(false) : setSection("chat")
+          }
+          embedded={docked}
+          expanded={browserExpanded}
+          toggleExpanded={() => setBrowserExpanded((value) => !value)}
+          onSubmitting={setBrowserStarting}
+          onStarted={(task) => {
+            rememberDesktopChoice({ mode: "browser" });
+            setTeamMode(false);
+            setSelectedBrowserTaskId(task.id);
+          }}
+        />
+      )}
+      {panelSection === "activity" && (
+        <AssistantActivityPanel
+          feed={activity.data}
+          loading={activity.isFetching}
+          error={activity.error}
+          seen={seen}
+          markSeen={markSeen}
+          refresh={() => void activity.refetch()}
+          onNavigate={() => setOpen(false)}
+        />
+      )}
+    </>
+  );
+  const chatContent = (
+    <>
+      {allowed &&
+        chatVisible &&
+        (speech.active || speech.blocked || speech.error) && (
+          <div className="assistant-speech-status">
+            <span>
+              小序的声音 · AI 生成
+              {voiceStatus.data?.ready
+                ? ` · ${voiceStatus.data.voice}`
+                : " · 尚未就绪"}
+            </span>
+            {!voiceStatus.data?.ready && (
+              <Button size="small" type="link" onClick={openVoiceSettings}>
+                语音设置
+              </Button>
+            )}
+            {speech.active && (
+              <span role="status">
+                {speech.state === "thinking"
+                  ? "小序正在准备声音…"
+                  : "小序正在说话"}
+              </span>
+            )}
+            {speech.blocked && (
+              <Button size="small" onClick={speech.play}>
+                播放小序声音
+              </Button>
+            )}
+            {speech.error && <div role="alert">{speech.error}</div>}
+          </div>
+        )}
+      <div
+        className={
+          !docked && section === "browser"
+            ? "assistant-browser-chat"
+            : undefined
+        }
+        hidden={(!docked && !["chat", "browser"].includes(section)) || !allowed}
+      >
+        <div
+          className={
+            !docked && section === "browser"
+              ? "assistant-browser-chat-scroll assistant-chat-body"
+              : undefined
+          }
+        >
+          <div className="assistant-status">
+            <span>
+              {browserMode
+                ? browser.data?.ready
+                  ? "独立浏览器已就绪"
+                  : "独立浏览器暂未就绪"
+                : data?.ready
+                  ? "小序已就绪"
+                  : "小序暂未就绪"}
+            </span>
+            <Button
+              type="text"
+              size="small"
+              icon={<ReloadOutlined />}
+              aria-label="刷新助理状态"
+              onClick={() => void q.refetch()}
+              loading={q.isFetching}
+            />
+          </div>
+          {q.isLoading && <Spin />}
+          {q.error && <Alert type="error" title={(q.error as Error).message} />}
+          {!browserMode && !q.isLoading && data && !data.ready && (
+            <Alert
+              type="warning"
+              title={
+                data.availabilityMessage || "请管理员启用并验证 AI 模型连接"
+              }
+            />
+          )}
+          {!messages.length && !liveCaptions.length && !voiceVisible && (
+            <div className="assistant-empty">
+              <span className="assistant-spark" aria-hidden>
+                ✦
+              </span>
+              <h3>你的工作，从一句话开始。</h3>
+              <p>说出问题，查库存、跟项目、看任务，也能记住你的工作偏好。</p>
+              {[
+                "帮我安排明天下午3点的选款会",
+                "查看我参与的项目进度",
+                "查看最近的同步任务结果",
+              ].map((prompt) => (
+                <button
+                  type="button"
+                  key={prompt}
+                  onClick={() => setText(prompt)}
+                  disabled={busy}
+                >
+                  {prompt}
+                  <ArrowRightOutlined />
+                </button>
+              ))}
+            </div>
+          )}
+          <div className="assistant-messages" aria-label="助理对话记录">
+            {messages.map((item) =>
+              item.teamRunId ? (
+                <AssistantTeamMessage key={item.id} id={item.teamRunId} />
+              ) : (
+                <div
+                  key={item.id}
+                  className={`assistant-message assistant-message-${item.role}`}
+                >
+                  <Bubble
+                    placement={item.role === "user" ? "end" : "start"}
+                    variant={item.role === "user" ? "filled" : "borderless"}
+                    header={
+                      (item.role === "user" ? "你" : "小序") +
+                      (item.source === "voice"
+                        ? " · 语音"
+                        : item.source === "team"
+                          ? " · 团队任务"
+                          : "")
+                    }
+                    content={
+                      <div className="assistant-message-text">
+                        {item.role === "assistant"
+                          ? assistantPublicText(item.text)
+                          : item.text}
+                        {item.role === "assistant" && item.notice ? (
+                          <div className="assistant-model-hint">
+                            {item.notice}
+                          </div>
+                        ) : null}
+                      </div>
+                    }
+                  />
+                  {item.role === "assistant" && (
+                    <Button
+                      size="small"
+                      type="text"
+                      icon={
+                        speech.messageId === item.id ? (
+                          <StopOutlined />
+                        ) : (
+                          <SoundOutlined />
+                        )
+                      }
+                      aria-label={
+                        speech.messageId === item.id
+                          ? "停止小序朗读"
+                          : "小序朗读这条回复"
+                      }
+                      disabled={
+                        !speech.supported || !voiceStatus.data?.ready || busy
+                      }
+                      onClick={() => {
+                        if (speech.messageId === item.id) speech.stop();
+                        else {
+                          voice.stop();
+                          void speech.read(item.id);
+                        }
+                      }}
+                    >
+                      {speech.messageId === item.id ? "停止朗读" : "小序朗读"}
+                    </Button>
+                  )}
+                  <AssistantBusinessResults
+                    item={item}
+                    feed={activity.data}
+                    executing={executing}
+                    execute={(action) => void execute(action)}
+                    remember={(entry) => {
+                      setMemorySuggestion({
+                        ...entry,
+                        id: crypto.randomUUID(),
+                      });
+                      setSection("memory");
+                    }}
+                  />
+                  {item.role === "assistant" &&
+                    item.webNavigation &&
+                    assistantWebsiteUrl(item.webNavigation.url) && (
+                      <div className="assistant-tool-links">
+                        <a
+                          href={assistantWebsiteUrl(item.webNavigation.url)}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        >
+                          打开{item.webNavigation.title}
+                          <ArrowRightOutlined />
+                        </a>
+                      </div>
+                    )}
+                  {!!item.schedules?.length && (
+                    <>
+                      <AgentMessageResults item={item} jobs={jobs.data || []} />
+                      <div className="assistant-schedule-proposals">
+                        {item.schedules.map((event) => {
+                          const added = [...schedule, ...pendingSchedules].some(
+                            (existing) => existing.id === event.id,
+                          );
+                          return (
+                            <div
+                              key={event.id}
+                              className="assistant-schedule-proposal"
+                            >
+                              <span>
+                                <CalendarOutlined /> 待确认日程
+                              </span>
+                              <strong>{event.title}</strong>
+                              <p>
+                                {event.date} · {event.startTime || "全天"}
+                                {event.endTime ? `–${event.endTime}` : ""}
+                              </p>
+                              {event.note && <p>{event.note}</p>}
+                              <Button
+                                size="small"
+                                disabled={added || schedule.length >= 500}
+                                onClick={() => onSchedule(event)}
+                              >
+                                {added ? "已加入日程草稿" : "加入日程草稿"}
+                              </Button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </>
+                  )}
+                  {!!item.tools?.length && (
+                    <div className="assistant-tool-links">
+                      {item.tools.map((id) => {
+                        const tool = available.find((entry) => entry.id === id);
+                        return tool ? (
+                          <Link key={id} to={tool.path}>
+                            {tool.title}
+                            <ArrowRightOutlined />
+                          </Link>
+                        ) : null;
+                      })}
+                    </div>
+                  )}
+                  {!item.schedules?.length && (
+                    <AgentMessageResults item={item} jobs={jobs.data || []} />
+                  )}
+                  {item.browserTaskId &&
+                    item.browserTaskId !==
+                      (browserMode ? activeBrowserTask?.id : undefined) &&
+                    (() => {
+                      const task = browser.data?.tasks.find(
+                        (entry) => entry.id === item.browserTaskId,
+                      );
+                      return task ? (
+                        <AssistantBrowserTaskCard
+                          task={task}
+                          refresh={() => browser.refetch()}
+                          inspect={() => inspectBrowser(task.id)}
+                        />
+                      ) : (
+                        <Button
+                          size="small"
+                          onClick={() => inspectBrowser(item.browserTaskId)}
+                        >
+                          查看浏览器任务进度
+                        </Button>
+                      );
+                    })()}
+                  {item.desktopTaskId &&
+                    item.desktopTaskId !== activeDesktopTask?.id &&
+                    (() => {
+                      const task = desktop.data?.tasks.find(
+                        (entry) => entry.id === item.desktopTaskId,
+                      );
+                      return task ? (
+                        <AssistantDesktopTaskCard
+                          task={task}
+                          localDeviceId={localDesktopId}
+                          device={desktop.data?.devices.find(
+                            (entry) => entry.id === task.deviceId,
+                          )}
+                          refresh={() => desktop.refetch()}
+                        />
+                      ) : (
+                        <Button
+                          size="small"
+                          onClick={() => setSection("desktop")}
+                        >
+                          查看电脑任务进度
+                        </Button>
+                      );
+                    })()}
+                </div>
+              ),
+            )}
+            {liveCaptions.map((caption) => (
+              <Bubble
+                key={caption.id}
+                placement={caption.role === "user" ? "end" : "start"}
+                variant={caption.role === "user" ? "filled" : "borderless"}
+                header={caption.role === "user" ? "你 · 语音" : "小序 · 语音"}
+                content={
+                  <div className="assistant-message-text">{caption.text}</div>
+                }
+              />
+            ))}
+            {voiceVisible && <div className="assistant-chat-voice-slot" />}
+            {busy && !gptVoice.active && (
+              <Bubble
+                loading
+                content=""
+                header="助理正在回复…"
+                variant="borderless"
+              />
+            )}
+            {(error || data?.error) && (
+              <Alert type="error" title={error || data?.error} showIcon />
+            )}
+            <div ref={bottom} />
+          </div>
+        </div>
+        {!docked && section === "browser" && allowed && (
+          <div className="assistant-browser-chat-compose">{sender(true)}</div>
+        )}
+      </div>
+    </>
+  );
   return (
     <AssistantHubContext.Provider
       value={{
@@ -1503,6 +2105,17 @@ export function PersonalAssistantProvider({
             previous.filter((event) => event.id !== id),
           ),
         setDraftSchedule,
+        workbench: allowed
+          ? {
+              toolsOpen: workspaceToolsOpen,
+              chatOpen: workspaceChatOpen,
+              tool: workspaceTool,
+              setToolsOpen,
+              selectTool: setSection,
+              registerTools: setWorkspaceToolsHost,
+              registerChat: setWorkspaceChatHost,
+            }
+          : undefined,
       }}
     >
       {children}
@@ -1513,561 +2126,95 @@ export function PersonalAssistantProvider({
           .filter((caption) => caption.role === "assistant")
           .at(-1)}
       />
-      <Drawer
-        open={open}
-        aria-label="AI 个人助理"
-        aria-labelledby=""
-        closable={{ placement: "end" }}
-        afterOpenChange={setDrawerSettled}
-        onClose={() => {
-          playbackAllowed.current = false;
-          setOpen(false);
-          voice.stop();
-          speech.stop();
-        }}
-        title={
-          <span className="assistant-panel-heading">
-            {allowed && <SidebarAssistant compact />}
-            <span className="assistant-panel-title">
-              {section === "chat"
-                ? "小序"
-                : sectionItems.find((item) => item.key === section)?.label}
-            </span>
-          </span>
-        }
-        size={1120}
-        rootClassName={`personal-assistant-drawer assistant-screen${section === "team" ? " assistant-team-screen" : ""}${section === "browser" ? ` assistant-browser-workspace${browserExpanded ? " assistant-browser-expanded" : ""}` : ""}`}
-        classNames={{
-          body:
-            section === "browser"
-              ? "assistant-browser-body"
-              : section === "chat"
-                ? "assistant-chat-body"
-                : "assistant-secondary-body",
-        }}
-        extra={
-          <Dropdown
-            trigger={["click"]}
-            menu={{
-              items: [
-                ...sectionItems,
-                ...(section === "chat" && allowed
-                  ? [
-                      { type: "divider" as const },
-                      {
-                        key: "clear",
-                        label: "清空对话",
-                        icon: <DeleteOutlined aria-hidden />,
-                        danger: true,
-                        disabled: busy || !messages.length,
-                      },
-                    ]
-                  : []),
-              ],
-              selectedKeys: [section],
-              onClick: ({ key }) => {
-                if (key !== "clear") {
-                  selectSection(key as AssistantSection);
-                  return;
-                }
-                if (busy || !messages.length || !allowed) return;
-                modal.confirm({
-                  title: "清空当前账号的助理对话？",
-                  content:
-                    "清除聊天中的文字、语音和团队卡片。日程、待办、记忆和团队任务档案保留；运行中的团队任务不会因此停止，未执行的操作卡片将取消。",
-                  okText: "清空",
-                  cancelText: "取消",
-                  okButtonProps: { danger: true },
-                  onOk: async () => {
-                    closeVoice();
+      {docked &&
+        workspaceToolsHost &&
+        createPortal(
+          <div className="workspace-tool-panels" data-tool={panelSection}>
+            {panels}
+          </div>,
+          workspaceToolsHost,
+        )}
+      {docked &&
+        workspaceChatHost &&
+        workspaceChatOpen &&
+        createPortal(
+          <section
+            className="workspace-inline-chat assistant-screen"
+            role="dialog"
+            aria-modal={false}
+            aria-label="AI 个人助理"
+          >
+            <header className="workspace-inline-chat-header">
+              <span className="assistant-panel-heading">
+                <SidebarAssistant compact />
+                <span>小序</span>
+              </span>
+              <div>
+                {panelMenu}
+                <Button
+                  type="text"
+                  className="ant-drawer-close"
+                  aria-label="收起文字对话"
+                  title="返回工作台场景"
+                  icon={<CloseOutlined />}
+                  onClick={() => {
+                    setWorkspaceChatOpen(false);
+                    setOpen(false);
+                    voice.stop();
                     speech.stop();
-                    try {
-                      await api("/my-workspace/assistant/clear", "POST", {
-                        version: data?.version || 0,
-                      });
-                      setSelectedTeamRunId(undefined);
-                      await q.refetch();
-                      setError("");
-                    } catch (e) {
-                      message.error((e as Error).message);
-                      throw e;
-                    }
-                  },
-                });
-              },
-            }}
-          >
-            <Button
-              type="text"
-              className="assistant-panel-more"
-              icon={<EllipsisOutlined />}
-              aria-label="更多助理操作"
-              title="更多"
-            />
-          </Dropdown>
-        }
-        footer={section === "chat" && allowed ? sender(true) : null}
-      >
-        {allowed && section === "settings" && conversationSettings}
-        {allowed && section === "team" && (
-          <>
-            <AssistantTeamPanel
-              selectedRunId={selectedTeamRunId}
-              selectRun={setSelectedTeamRunId}
-            />
-            <details className="assistant-team-task-settings">
-              <summary>本次任务设置</summary>
-              {teamConfig.data?.engine !== "deerflow" && (
-                <Select
-                  size="small"
-                  aria-label="团队任务模型"
-                  allowClear
-                  value={teamModel}
-                  disabled={busy}
-                  loading={teamConfig.isLoading}
-                  popupMatchSelectWidth={false}
-                  placeholder="按成员配置"
-                  options={teamConfig.data?.models.map((model) => ({
-                    value: model.id,
-                    label: model.name + " · " + model.model,
-                  }))}
-                  onChange={setTeamModel}
+                  }}
                 />
-              )}
-              <Checkbox
-                checked={useKnowledge}
-                disabled={busy}
-                onChange={(event) => setUseKnowledge(event.target.checked)}
-              >
-                使用知识档案
-              </Checkbox>
-            </details>
-            <Button
-              onClick={() => {
-                setSection("chat");
-                setTeamMode(true);
-              }}
-            >
-              返回聊天并使用团队
-            </Button>
-          </>
-        )}
-        {allowed &&
-          section === "chat" &&
-          (speech.active || speech.blocked || speech.error) && (
-            <div className="assistant-speech-status">
-              <span>
-                小序的声音 · AI 生成
-                {voiceStatus.data?.ready
-                  ? ` · ${voiceStatus.data.voice}`
-                  : " · 尚未就绪"}
-              </span>
-              {!voiceStatus.data?.ready && (
-                <Button size="small" type="link" onClick={openVoiceSettings}>
-                  语音设置
-                </Button>
-              )}
-              {speech.active && (
-                <span role="status">
-                  {speech.state === "thinking"
-                    ? "小序正在准备声音…"
-                    : "小序正在说话"}
-                </span>
-              )}
-              {speech.blocked && (
-                <Button size="small" onClick={speech.play}>
-                  播放小序声音
-                </Button>
-              )}
-              {speech.error && <div role="alert">{speech.error}</div>}
-            </div>
-          )}
-        {open && section === "voice" && allowed && (
-          <AssistantVoiceSettingsPanel
-            executionLabel={voiceExecutionLabel}
-            realtime={realtimeStatus}
-            status={voiceStatus}
-            context={includeContext}
-            setContext={setIncludeContext}
-            memory={includeMemory}
-            setMemory={setIncludeMemory}
-            startVoice={startVoice}
-          />
-        )}
-        {section === "memory" && allowed && (
-          <AssistantMemoryPanel
-            data={memory.data}
-            loading={memory.isFetching}
-            error={memory.error}
-            save={saveMemory}
-            refresh={() => void memory.refetch()}
-            suggestion={memorySuggestion}
-            clearSuggestion={() => setMemorySuggestion(null)}
-          />
-        )}
-        {section === "tasks" && allowed && (
-          <AgentTasksPanel
-            jobs={jobs.data || []}
-            refresh={() => void jobs.refetch()}
-            onAttach={(file) => {
-              if (agent.attachments.length >= 6) {
-                message.warning("每次最多附加6个文件");
-                return;
-              }
-              setAgent((previous) => ({
-                ...previous,
-                attachments: [
-                  ...previous.attachments.filter((f) => f.id !== file.id),
-                  file,
-                ],
-              }));
-              setSection("chat");
-            }}
-          />
-        )}
-        {section === "desktop" && allowed && (
-          <AssistantDesktopPanel
-            open={open && drawerSettled}
-            data={desktop.data}
-            error={desktop.error?.message || ""}
-            refresh={() => desktop.refetch()}
-            choose={chooseDesktop}
-            connectLocal={() => void setupDesktop()}
-            connecting={desktopConnecting}
-            disabled={busy || voice.listening}
-            setupNote={desktopSetupNote}
-            selectedId={desktopTargetId}
-          />
-        )}
-        {section === "browser" && allowed && (
-          <AssistantBrowserPanel
-            key={user.id}
-            open={open && drawerSettled}
-            owner={user.id}
-            data={browser.data}
-            error={browser.error?.message}
-            refresh={() => browser.refetch()}
-            choose={chooseBrowser}
-            disabled={busy || voice.listening}
-            selectedId={selectedBrowserTaskId}
-            selectTask={setSelectedBrowserTaskId}
-            returnToChat={() => setSection("chat")}
-            expanded={browserExpanded}
-            toggleExpanded={() => setBrowserExpanded((value) => !value)}
-            onSubmitting={setBrowserStarting}
-            onStarted={(task) => {
-              rememberDesktopChoice({ mode: "browser" });
-              setTeamMode(false);
-              setSelectedBrowserTaskId(task.id);
-            }}
-          />
-        )}
-        {section === "activity" && (
-          <AssistantActivityPanel
-            feed={activity.data}
-            loading={activity.isFetching}
-            error={activity.error}
-            seen={seen}
-            markSeen={markSeen}
-            refresh={() => void activity.refetch()}
-            onNavigate={() => setOpen(false)}
-          />
-        )}
-        <div
-          className={
-            section === "browser" ? "assistant-browser-chat" : undefined
-          }
-          hidden={!["chat", "browser"].includes(section) || !allowed}
-        >
-          <div
-            className={
-              section === "browser"
-                ? "assistant-browser-chat-scroll assistant-chat-body"
-                : undefined
-            }
-          >
-            <div className="assistant-status">
-              <span>
-                {browserMode
-                  ? browser.data?.ready
-                    ? "独立浏览器已就绪"
-                    : "独立浏览器暂未就绪"
-                  : data?.ready
-                    ? "小序已就绪"
-                    : "小序暂未就绪"}
-              </span>
-              <Button
-                type="text"
-                size="small"
-                icon={<ReloadOutlined />}
-                aria-label="刷新助理状态"
-                onClick={() => void q.refetch()}
-                loading={q.isFetching}
-              />
-            </div>
-            {q.isLoading && <Spin />}
-            {q.error && (
-              <Alert type="error" title={(q.error as Error).message} />
-            )}
-            {!browserMode && !q.isLoading && data && !data.ready && (
-              <Alert
-                type="warning"
-                title={
-                  data.availabilityMessage || "请管理员启用并验证 AI 模型连接"
-                }
-              />
-            )}
-            {!messages.length && !liveCaptions.length && !voiceVisible && (
-              <div className="assistant-empty">
-                <span className="assistant-spark" aria-hidden>
-                  ✦
-                </span>
-                <h3>你的工作，从一句话开始。</h3>
-                <p>说出问题，查库存、跟项目、看任务，也能记住你的工作偏好。</p>
-                {[
-                  "帮我安排明天下午3点的选款会",
-                  "查看我参与的项目进度",
-                  "查看最近的同步任务结果",
-                ].map((prompt) => (
-                  <button
-                    type="button"
-                    key={prompt}
-                    onClick={() => setText(prompt)}
-                    disabled={busy}
-                  >
-                    {prompt}
-                    <ArrowRightOutlined />
-                  </button>
-                ))}
               </div>
-            )}
-            <div className="assistant-messages" aria-label="助理对话记录">
-              {messages.map((item) =>
-                item.teamRunId ? (
-                  <AssistantTeamMessage key={item.id} id={item.teamRunId} />
-                ) : (
-                  <div
-                    key={item.id}
-                    className={`assistant-message assistant-message-${item.role}`}
-                  >
-                    <Bubble
-                      placement={item.role === "user" ? "end" : "start"}
-                      variant={item.role === "user" ? "filled" : "borderless"}
-                      header={
-                        (item.role === "user" ? "你" : "小序") +
-                        (item.source === "voice"
-                          ? " · 语音"
-                          : item.source === "team"
-                            ? " · 团队任务"
-                            : "")
-                      }
-                      content={
-                        <div className="assistant-message-text">
-                          {item.role === "assistant"
-                            ? assistantPublicText(item.text)
-                            : item.text}
-                          {item.role === "assistant" && item.notice ? (
-                            <div className="assistant-model-hint">
-                              {item.notice}
-                            </div>
-                          ) : null}
-                        </div>
-                      }
-                    />
-                    {item.role === "assistant" && (
-                      <Button
-                        size="small"
-                        type="text"
-                        icon={
-                          speech.messageId === item.id ? (
-                            <StopOutlined />
-                          ) : (
-                            <SoundOutlined />
-                          )
-                        }
-                        aria-label={
-                          speech.messageId === item.id
-                            ? "停止小序朗读"
-                            : "小序朗读这条回复"
-                        }
-                        disabled={
-                          !speech.supported || !voiceStatus.data?.ready || busy
-                        }
-                        onClick={() => {
-                          if (speech.messageId === item.id) speech.stop();
-                          else {
-                            voice.stop();
-                            void speech.read(item.id);
-                          }
-                        }}
-                      >
-                        {speech.messageId === item.id ? "停止朗读" : "小序朗读"}
-                      </Button>
-                    )}
-                    <AssistantBusinessResults
-                      item={item}
-                      feed={activity.data}
-                      executing={executing}
-                      execute={(action) => void execute(action)}
-                      remember={(entry) => {
-                        setMemorySuggestion({
-                          ...entry,
-                          id: crypto.randomUUID(),
-                        });
-                        setSection("memory");
-                      }}
-                    />
-                    {item.role === "assistant" &&
-                      item.webNavigation &&
-                      assistantWebsiteUrl(item.webNavigation.url) && (
-                        <div className="assistant-tool-links">
-                          <a
-                            href={assistantWebsiteUrl(item.webNavigation.url)}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                          >
-                            打开{item.webNavigation.title}
-                            <ArrowRightOutlined />
-                          </a>
-                        </div>
-                      )}
-                    {!!item.schedules?.length && (
-                      <>
-                        <AgentMessageResults
-                          item={item}
-                          jobs={jobs.data || []}
-                        />
-                        <div className="assistant-schedule-proposals">
-                          {item.schedules.map((event) => {
-                            const added = [
-                              ...schedule,
-                              ...pendingSchedules,
-                            ].some((existing) => existing.id === event.id);
-                            return (
-                              <div
-                                key={event.id}
-                                className="assistant-schedule-proposal"
-                              >
-                                <span>
-                                  <CalendarOutlined /> 待确认日程
-                                </span>
-                                <strong>{event.title}</strong>
-                                <p>
-                                  {event.date} · {event.startTime || "全天"}
-                                  {event.endTime ? `–${event.endTime}` : ""}
-                                </p>
-                                {event.note && <p>{event.note}</p>}
-                                <Button
-                                  size="small"
-                                  disabled={added || schedule.length >= 500}
-                                  onClick={() => onSchedule(event)}
-                                >
-                                  {added ? "已加入日程草稿" : "加入日程草稿"}
-                                </Button>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </>
-                    )}
-                    {!!item.tools?.length && (
-                      <div className="assistant-tool-links">
-                        {item.tools.map((id) => {
-                          const tool = available.find(
-                            (entry) => entry.id === id,
-                          );
-                          return tool ? (
-                            <Link key={id} to={tool.path}>
-                              {tool.title}
-                              <ArrowRightOutlined />
-                            </Link>
-                          ) : null;
-                        })}
-                      </div>
-                    )}
-                    {!item.schedules?.length && (
-                      <AgentMessageResults item={item} jobs={jobs.data || []} />
-                    )}
-                    {item.browserTaskId &&
-                      item.browserTaskId !==
-                        (browserMode ? activeBrowserTask?.id : undefined) &&
-                      (() => {
-                        const task = browser.data?.tasks.find(
-                          (entry) => entry.id === item.browserTaskId,
-                        );
-                        return task ? (
-                          <AssistantBrowserTaskCard
-                            task={task}
-                            refresh={() => browser.refetch()}
-                            inspect={() => inspectBrowser(task.id)}
-                          />
-                        ) : (
-                          <Button
-                            size="small"
-                            onClick={() => inspectBrowser(item.browserTaskId)}
-                          >
-                            查看浏览器任务进度
-                          </Button>
-                        );
-                      })()}
-                    {item.desktopTaskId &&
-                      item.desktopTaskId !== activeDesktopTask?.id &&
-                      (() => {
-                        const task = desktop.data?.tasks.find(
-                          (entry) => entry.id === item.desktopTaskId,
-                        );
-                        return task ? (
-                          <AssistantDesktopTaskCard
-                            task={task}
-                            localDeviceId={localDesktopId}
-                            device={desktop.data?.devices.find(
-                              (entry) => entry.id === task.deviceId,
-                            )}
-                            refresh={() => desktop.refetch()}
-                          />
-                        ) : (
-                          <Button
-                            size="small"
-                            onClick={() => setSection("desktop")}
-                          >
-                            查看电脑任务进度
-                          </Button>
-                        );
-                      })()}
-                  </div>
-                ),
-              )}
-              {liveCaptions.map((caption) => (
-                <Bubble
-                  key={caption.id}
-                  placement={caption.role === "user" ? "end" : "start"}
-                  variant={caption.role === "user" ? "filled" : "borderless"}
-                  header={caption.role === "user" ? "你 · 语音" : "小序 · 语音"}
-                  content={
-                    <div className="assistant-message-text">{caption.text}</div>
-                  }
-                />
-              ))}
-              {voiceVisible && <div className="assistant-chat-voice-slot" />}
-              {busy && !gptVoice.active && (
-                <Bubble
-                  loading
-                  content=""
-                  header="助理正在回复…"
-                  variant="borderless"
-                />
-              )}
-              {(error || data?.error) && (
-                <Alert type="error" title={error || data?.error} showIcon />
-              )}
-              <div ref={bottom} />
+            </header>
+            <div className="workspace-inline-chat-scroll assistant-chat-body ant-drawer-body">
+              {chatContent}
             </div>
-          </div>
-          {section === "browser" && allowed && (
-            <div className="assistant-browser-chat-compose">{sender(true)}</div>
-          )}
-        </div>
-      </Drawer>
+            <div className="workspace-inline-chat-footer ant-drawer-footer">
+              {sender(true)}
+            </div>
+          </section>,
+          workspaceChatHost,
+        )}
+      {!docked && (
+        <Drawer
+          open={open}
+          aria-label="AI 个人助理"
+          aria-labelledby=""
+          closable={{ placement: "end" }}
+          afterOpenChange={setDrawerSettled}
+          onClose={() => {
+            playbackAllowed.current = false;
+            setOpen(false);
+            voice.stop();
+            speech.stop();
+          }}
+          title={
+            <span className="assistant-panel-heading">
+              {allowed && <SidebarAssistant compact />}
+              <span className="assistant-panel-title">
+                {section === "chat"
+                  ? "小序"
+                  : sectionItems.find((item) => item.key === section)?.label}
+              </span>
+            </span>
+          }
+          size={1120}
+          rootClassName={`personal-assistant-drawer assistant-screen${section === "team" ? " assistant-team-screen" : ""}${section === "browser" ? ` assistant-browser-workspace${browserExpanded ? " assistant-browser-expanded" : ""}` : ""}`}
+          classNames={{
+            body:
+              section === "browser"
+                ? "assistant-browser-body"
+                : section === "chat"
+                  ? "assistant-chat-body"
+                  : "assistant-secondary-body",
+          }}
+          extra={panelMenu}
+          footer={section === "chat" && allowed ? sender(true) : null}
+        >
+          {panels}
+          {chatContent}
+        </Drawer>
+      )}
     </AssistantHubContext.Provider>
   );
 }

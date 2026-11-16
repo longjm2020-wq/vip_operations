@@ -36,6 +36,7 @@ export function findAssistantChatScroller(
   while (node) {
     if (
       node.classList.contains("assistant-browser-chat-scroll") ||
+      node.classList.contains("workspace-inline-chat-scroll") ||
       node.classList.contains("ant-drawer-body")
     )
       return node;
