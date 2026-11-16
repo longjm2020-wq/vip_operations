@@ -37,7 +37,7 @@ export async function actorForSessionHash(tokenHash: string): Promise<Actor> {
   if (!u) fail("UNAUTHENTICATED", "登录已失效", 401);
   const p = await rows(
     db,
-    "SELECT DISTINCT p.code FROM user_roles ur JOIN role_permissions rp ON rp.role_id=ur.role_id JOIN permissions p ON p.id=rp.permission_id WHERE ur.user_id=$1::bigint",
+    "SELECT DISTINCT p.code FROM user_roles ur JOIN role_permissions rp ON rp.role_id=ur.role_id JOIN permissions p ON p.id=rp.permission_id WHERE ur.user_id=$1::bigint ORDER BY p.code",
     String(u.id),
   );
   const assignedRoles = await rows(
@@ -58,7 +58,9 @@ export async function actorForSessionHash(tokenHash: string): Promise<Actor> {
     username: u.username,
     displayName: u.display_name,
     avatarId: u.avatar_id,
-    permissions: [...permissions],
+    // Sorted so per-actor digests (selection sync tokens/revisions) stay stable across requests;
+    // DISTINCT/heap order from Postgres is not guaranteed and changed tokens force full re-syncs.
+    permissions: [...permissions].sort(),
     roleCodes: assignedRoles.map((r) => r.code),
     roleNames: assignedRoles.map((r) => r.name),
     csrfToken: u.csrf_token,
