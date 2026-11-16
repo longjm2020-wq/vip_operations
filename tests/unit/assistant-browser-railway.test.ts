@@ -133,6 +133,13 @@ function fixture(configuredTemplate?: string) {
   const exec = vi.fn(
     (_command: string, _options: { timeoutSec: number }) => execution,
   );
+  const heartbeat = vi.fn(async () => ({
+    id: sandboxId,
+    environmentId,
+    networkIsolation: "ISOLATED",
+    domains: [],
+    status: "RUNNING",
+  }));
   const vm = {
     id: sandboxId,
     environmentId,
@@ -143,6 +150,7 @@ function fixture(configuredTemplate?: string) {
     destroy,
     execHttp,
     exec,
+    heartbeat,
   };
   const create = vi.fn(async (_template: string, options: ClientOptions) => {
     events.push("create");
@@ -225,6 +233,7 @@ function fixture(configuredTemplate?: string) {
     execHttp,
     exec,
     execution,
+    heartbeat,
   };
 }
 
@@ -238,10 +247,83 @@ beforeEach(() => {
     }));
 });
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
 describe("Railway independent browser lifecycle (no real resources)", () => {
+  it("keeps only the live VM alive past its provider idle timeout and stops at close", async () => {
+    vi.useFakeTimers();
+    const f = fixture();
+    f.run.expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+    const driver = await f.runtime.open(f.run, null, f.controller.signal);
+    expect(f.heartbeat).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(100000);
+    expect(f.heartbeat).toHaveBeenCalledTimes(6);
+    expect(f.create).toHaveBeenCalledTimes(1);
+    expect(f.destroy).not.toHaveBeenCalled();
+    await driver.close();
+    await vi.advanceTimersByTimeAsync(60000);
+    expect(f.heartbeat).toHaveBeenCalledTimes(6);
+    expect(f.destroy).toHaveBeenCalledTimes(1);
+    expect(f.release).toHaveBeenCalledWith(f.intentId, f.sandboxId);
+  });
+  it("does not overlap slow heartbeats or continue them after task cancellation", async () => {
+    vi.useFakeTimers();
+    const f = fixture();
+    const driver = await f.runtime.open(f.run, null, f.controller.signal);
+    const slow = deferred<Awaited<ReturnType<typeof f.heartbeat>>>();
+    f.heartbeat.mockImplementationOnce(() => slow.promise);
+    await vi.advanceTimersByTimeAsync(60000);
+    expect(f.heartbeat).toHaveBeenCalledTimes(2);
+    f.controller.abort();
+    await vi.advanceTimersByTimeAsync(60000);
+    expect(f.heartbeat).toHaveBeenCalledTimes(2);
+    slow.reject(Error("provider-private-detail"));
+    await driver.close();
+    expect(f.destroy).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(vi.mocked(console.warn).mock.calls)).not.toContain(
+      "provider-private-detail",
+    );
+  });
+  it("closes once on a heartbeat failure without reconnecting or logging provider data", async () => {
+    vi.useFakeTimers();
+    const f = fixture();
+    let transport: BrowserRpcTransport;
+    remote.open.mockImplementationOnce(
+      async (
+        value: BrowserRpcTransport,
+        _saved: unknown,
+        signal: AbortSignal,
+      ) => {
+        transport = value;
+        signal.addEventListener(
+          "abort",
+          () => {
+            void value.close();
+          },
+          { once: true },
+        );
+        return { close: () => value.close() };
+      },
+    );
+    const driver = await f.runtime.open(f.run, null, f.controller.signal);
+    f.heartbeat.mockRejectedValueOnce(Error("provider-secret-token"));
+    await vi.advanceTimersByTimeAsync(20000);
+    await transport!.close();
+    await driver.close();
+    await vi.advanceTimersByTimeAsync(60000);
+    expect(f.heartbeat).toHaveBeenCalledTimes(2);
+    expect(f.create).toHaveBeenCalledTimes(1);
+    expect(f.destroy).toHaveBeenCalledTimes(1);
+    expect(f.release).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(vi.mocked(console.warn).mock.calls)).toContain(
+      "BROWSER_VM_HEARTBEAT_FAILED",
+    );
+    expect(JSON.stringify(vi.mocked(console.warn).mock.calls)).not.toContain(
+      "provider-secret-token",
+    );
+  });
   it("accepts real opaque checkpoint IDs while bounding malformed metadata", async () => {
     const f = fixture();
     f.checkpoints.mockResolvedValue([

@@ -336,8 +336,10 @@ export class RailwayBrowserRuntime {
       attempted = false,
       closing: Promise<void> | undefined;
     let execution: ReturnType<Sandbox["exec"]> | undefined;
+    let stopHeartbeat = () => {};
     const close = () =>
-      (closing ??= (async () => {
+      (closing ??= Promise.resolve().then(async () => {
+        stopHeartbeat();
         lifetime.abort();
         await stage("CLEANUP");
         if (execution)
@@ -349,7 +351,7 @@ export class RailwayBrowserRuntime {
         else if (!attempted)
           await this.deps.store.releaseBrowserEnvironment(intentId, null);
         else safeLog("BROWSER_VM_CREATE_OUTCOME_UNKNOWN");
-      })());
+      }));
     const controlFetch: typeof fetch = async (url, init = {}) => {
       if (String(url) !== endpoint) throw Error("BROWSER_CONTROL_ENDPOINT");
       const body = typeof init.body === "string" ? JSON.parse(init.body) : {};
@@ -431,6 +433,46 @@ export class RailwayBrowserRuntime {
       )
         throw Error("BROWSER_VM_SCOPE");
       canceled(signal);
+      // An open ephemeral exec does not reset the provider's VM idle countdown.
+      // Keep only this live lease's VM alive; the runner owns user-idle/total expiry.
+      const heartbeat = async () => {
+        canceled(signal);
+        const current = await bounded(vm.heartbeat(), signal);
+        canceled(signal);
+        if (
+          current.id !== sandboxId ||
+          current.environmentId !== this.config.environmentId ||
+          current.networkIsolation !== "ISOLATED" ||
+          current.domains.length ||
+          current.status !== "RUNNING"
+        )
+          throw Error("BROWSER_VM_SCOPE");
+      };
+      await heartbeat().catch(() => {
+        if (!signal.aborted) safeLog("BROWSER_VM_HEARTBEAT_FAILED");
+        throw new BrowserUnavailable();
+      });
+      let heartbeating = false;
+      const heartbeatTimer = setInterval(() => {
+        if (signal.aborted || heartbeating) return;
+        heartbeating = true;
+        void heartbeat()
+          .catch(async () => {
+            if (signal.aborted) return;
+            safeLog("BROWSER_VM_HEARTBEAT_FAILED");
+            await close().catch(() =>
+              safeLog("BROWSER_VM_CLEANUP_UNCONFIRMED"),
+            );
+          })
+          .finally(() => {
+            heartbeating = false;
+          });
+      }, 20000);
+      stopHeartbeat = () => {
+        clearInterval(heartbeatTimer);
+        signal.removeEventListener("abort", stopHeartbeat);
+      };
+      signal.addEventListener("abort", stopHeartbeat, { once: true });
       await stage("UPLOADING");
       await bounded(
         vm.files.write(
