@@ -645,13 +645,6 @@
   opacity: 0.35;
   cursor: default;
 }
-.workspace-world-controls .workspace-tools-menu-trigger {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding-inline: 8px;
-  white-space: nowrap;
-}
 .workspace-world-controls output {
   min-width: 42px;
   color: var(--app-secondary);

@@ -5,39 +5,8 @@ import {
   selectAssistantPanel,
   setAssistantOption,
 } from "./assistant-controls.js";
-import { expect, test, type Locator, type Page } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import type { AssistantActivity } from "../../packages/contracts/src/assistant-activity.js";
-
-async function openWorkspacePanel(page: Page, name: string) {
-  const menu = page.getByRole("menu", { name: "工作台工具菜单", exact: true });
-  await page.getByRole("button", { name: "工作台工具", exact: true }).click();
-  await expect(menu).toBeVisible();
-  await menu
-    .getByRole("menuitem", { name: name.replace(/^打开/, ""), exact: true })
-    .click();
-  await expect(menu).toBeHidden();
-}
-
-async function dragCompanionToPanel(page: Page, panel: Locator) {
-  const card = (await panel.boundingBox())!;
-  const companion = page.locator(".workspace-companion");
-  const launch = companion.getByRole("button", {
-    name: "打开小序文字对话",
-    exact: true,
-  });
-  const start = (await launch.boundingBox())!;
-  const body = (await companion.boundingBox())!;
-  const left =
-    card.x >= body.width + 16
-      ? card.x - body.width + 8
-      : card.x + card.width - 8;
-  await page.mouse.move(start.x + start.width / 2, start.y + start.height / 2);
-  await page.mouse.down();
-  await page.mouse.move(left + body.width / 2, card.y + 150 + body.height / 2, {
-    steps: 10,
-  });
-  await page.mouse.up();
-}
 
 type VoiceFixture = {
   starts: number;
@@ -609,11 +578,6 @@ for (const reducedMotion of [false, true]) {
       reducedMotion: reducedMotion ? "reduce" : "no-preference",
     });
     await page.goto("/my-workspace");
-    await openWorkspacePanel(page, "打开私有备忘");
-    const panel = page.locator(".personal-workspace-panel");
-    const note = panel.getByRole("textbox", { name: "私有备忘", exact: true });
-    await note.fill("影像关闭后继续编辑的备忘");
-    const retainedNote = await note.elementHandle();
     const composer = page.locator(".workspace-ai .assistant-compose textarea");
     await composer.fill("待发送的工作安排");
     const worldBefore = await readWorkspaceCamera(page);
@@ -639,7 +603,6 @@ for (const reducedMotion of [false, true]) {
     await expect(stage).toHaveAttribute("inert", "");
     await expect(host).toHaveAttribute("data-hologram-presence", "open");
     await expect(stage).toBeHidden();
-    await expect(panel).toBeHidden();
     await expect(composer).toHaveValue("待发送的工作安排");
     await expect(composer).toBeEditable();
     expect(await sceneElement!.evaluate((element) => element.isConnected)).toBe(
@@ -665,14 +628,6 @@ for (const reducedMotion of [false, true]) {
     await expect(host).toHaveAttribute("data-hologram-presence", "closed");
     await expect(stage).not.toHaveAttribute("inert", "");
     await expect(stage).toBeVisible();
-    await expect(note).toBeVisible();
-    await expect(note).toHaveValue("影像关闭后继续编辑的备忘");
-    expect(
-      await retainedNote!.evaluate((element) => ({
-        connected: element.isConnected,
-        value: (element as HTMLTextAreaElement).value,
-      })),
-    ).toEqual({ connected: true, value: "影像关闭后继续编辑的备忘" });
     expect(await readWorkspaceCamera(page)).toEqual(worldBefore);
     const phases = (await transitions.jsonValue()) as string[];
     expect(phases).toContain("open");
@@ -1152,136 +1107,6 @@ test("工作台只保留个人助理，不再读取经营报告或显示专属�
   expect(fixture.settingsReads()).toBe(0);
 });
 
-test("工作台面板默认收起，切换与重开保留草稿且只在保存后同步", async ({
-  page,
-}) => {
-  const fixture = await workspaceFixture(page);
-  await page.goto("/my-workspace");
-  await expect(
-    page.getByRole("button", { name: "工作台工具", exact: true }),
-  ).toBeVisible();
-  await expect(page.getByLabel("待办事项", { exact: true })).not.toBeVisible();
-  await expect(
-    page.getByRole("textbox", { name: "私有备忘", exact: true }),
-  ).not.toBeVisible();
-  await expect(
-    page.getByRole("button", { name: "新增日程", exact: true }),
-  ).not.toBeVisible();
-  await openWorkspacePanel(page, "打开个人待办");
-  await page.getByLabel("待办事项", { exact: true }).fill("整理新品资料");
-  await page.getByLabel("待办截止日期", { exact: true }).fill("2026-10-28");
-  await page
-    .getByRole("button", { name: "收起工作台面板", exact: true })
-    .click();
-  await openWorkspacePanel(page, "打开私有备忘");
-  await page
-    .getByRole("textbox", { name: "私有备忘", exact: true })
-    .fill("保留在草稿中的评审要点");
-  await page
-    .getByRole("button", { name: "收起工作台面板", exact: true })
-    .click();
-  await openWorkspacePanel(page, "打开个人待办");
-  await expect(page.getByLabel("待办事项", { exact: true })).toHaveValue(
-    "整理新品资料",
-  );
-  await expect(page.getByLabel("待办截止日期", { exact: true })).toHaveValue(
-    "2026-10-28",
-  );
-  await page.getByRole("button", { name: "添加", exact: true }).click();
-  await page
-    .getByRole("button", { name: "收起工作台面板", exact: true })
-    .click();
-  expect(fixture.workspace.todos).toEqual([]);
-  expect(fixture.workspace.note).toBe("仅自己的备忘，不发送给模型");
-  await openWorkspacePanel(page, "打开私有备忘");
-  await expect(
-    page.getByRole("textbox", { name: "私有备忘", exact: true }),
-  ).toHaveValue("保留在草稿中的评审要点");
-  await page.getByRole("button", { name: "保存更改", exact: true }).click();
-  await expect.poll(() => fixture.workspace.todos.length).toBe(1);
-  expect(fixture.workspace.note).toBe("保留在草稿中的评审要点");
-  await page.reload();
-  await openWorkspacePanel(page, "打开个人待办");
-  await expect(
-    page.getByRole("checkbox", { name: "整理新品资料", exact: true }),
-  ).toBeVisible();
-  expect(fixture.assistantCalls()).toBe(0);
-});
-
-for (const reducedMotion of [false, true]) {
-  test(`${reducedMotion ? "减少动态效果" : "星云动效"}下浮卡关闭后隐藏，重开和快速重开均保留草稿`, async ({
-    page,
-  }) => {
-    const fixture = await workspaceFixture(page);
-    await page.emulateMedia({
-      reducedMotion: reducedMotion ? "reduce" : "no-preference",
-    });
-    await page.goto("/my-workspace");
-    await openWorkspacePanel(page, "打开私有备忘");
-    const panel = page.locator(".personal-workspace-panel");
-    const note = panel.getByRole("textbox", { name: "私有备忘", exact: true });
-    await expect(panel).toHaveAttribute("data-panel-presence", "open");
-    await note.fill("星云散去后仍保留的草稿");
-    const input = await note.elementHandle();
-    const exit = await panel.evaluateHandle((element) => {
-      const surface = element as HTMLElement;
-      const record = { leaving: false, retained: false, blocked: false };
-      new MutationObserver(() => {
-        if (element.getAttribute("data-panel-presence") !== "leaving") return;
-        record.leaving = true;
-        record.retained = !surface.hidden;
-        record.blocked =
-          surface.inert && element.getAttribute("aria-hidden") === "true";
-      }).observe(element, {
-        attributes: true,
-        attributeFilter: ["data-panel-presence"],
-      });
-      return record;
-    });
-    if (reducedMotion)
-      await expect
-        .poll(() =>
-          panel.evaluate(
-            (element) =>
-              element
-                .getAnimations({ subtree: true })
-                .filter((animation) => animation.playState === "running")
-                .length,
-          ),
-        )
-        .toBe(0);
-    await panel
-      .getByRole("button", { name: "收起工作台面板", exact: true })
-      .click();
-    await expect(panel).toHaveAttribute("data-panel-presence", "hidden");
-    await expect(panel).toBeHidden();
-    expect(
-      await input!.evaluate((element) => ({
-        connected: element.isConnected,
-        value: (element as HTMLTextAreaElement).value,
-      })),
-    ).toEqual({ connected: true, value: "星云散去后仍保留的草稿" });
-    expect(await exit.jsonValue()).toEqual(
-      reducedMotion
-        ? { leaving: false, retained: false, blocked: false }
-        : { leaving: true, retained: true, blocked: true },
-    );
-    await exit.dispose();
-    await openWorkspacePanel(page, "打开私有备忘");
-    await expect(note).toHaveValue("星云散去后仍保留的草稿");
-    await panel
-      .getByRole("button", { name: "收起工作台面板", exact: true })
-      .click();
-    await openWorkspacePanel(page, "打开私有备忘");
-    await expect(panel).toHaveAttribute("data-panel-presence", "open");
-    await page.waitForTimeout(400);
-    await expect(note).toBeVisible();
-    await expect(note).toHaveValue("星云散去后仍保留的草稿");
-    expect(fixture.workspace.note).toBe("仅自己的备忘，不发送给模型");
-    expect(fixture.assistantCalls()).toBe(0);
-  });
-}
-
 test("工作台与业务页共用透明宽屏对话，单输入和菜单可用且跨页保留草稿", async ({
   page,
 }) => {
@@ -1546,261 +1371,6 @@ test("对话设置收纳隐私选项且默认不发送，手机可选择后发�
   });
 });
 
-test("顶部工具菜单收纳五个入口，键盘打开后关闭面板返回菜单", async ({
-  page,
-}) => {
-  const fixture = await workspaceFixture(page, {
-    permissions: ["analytics.read", "analytics.manage", "project.read"],
-  });
-  await page.goto("/my-workspace");
-  const trigger = page.getByRole("button", { name: "工作台工具", exact: true });
-  await expect(
-    page.locator(".workspace-dock-item, .workspace-nest-handle"),
-  ).toHaveCount(0);
-  await expect(page.locator(".workspace-ai-core")).toBeVisible();
-  await trigger.focus();
-  await trigger.press("Enter");
-  const menu = page.getByRole("menu", { name: "工作台工具菜单", exact: true });
-  await expect(menu.getByRole("menuitem")).toHaveCount(5);
-  await menu.getByRole("menuitem", { name: "日程", exact: true }).focus();
-  await menu
-    .getByRole("menuitem", { name: "日程", exact: true })
-    .press("Enter");
-  await expect(
-    page.getByRole("dialog", { name: "日程", exact: true }),
-  ).toBeVisible();
-  await page
-    .getByRole("button", { name: "收起工作台面板", exact: true })
-    .click();
-  await expect(trigger).toBeFocused();
-  await expect(
-    page.getByRole("dialog", { name: "日程", exact: true }),
-  ).toBeHidden();
-  await trigger.click();
-  await expect(menu).toBeVisible();
-  await page.screenshot({ path: ".local/workspace-tools-menu.png" });
-  expect(fixture.assistantCalls()).toBe(0);
-});
-
-test("工具菜单打开可拖动浮卡，保留屏幕边距与草稿并在卡片内保存", async ({
-  page,
-}) => {
-  const fixture = await workspaceFixture(page, {
-    permissions: ["analytics.read", "analytics.manage", "project.read"],
-  });
-  await page.setViewportSize({ width: 1440, height: 1000 });
-  await page.goto("/my-workspace");
-  const menu = page.getByRole("button", { name: "工作台工具", exact: true });
-  await expect(menu).toBeVisible();
-  await openWorkspacePanel(page, "打开私有备忘");
-  const panel = page.getByRole("dialog", { name: "私有备忘", exact: true });
-  await expect(panel).toHaveClass(/personal-workspace-panel/);
-  await expect(panel).not.toHaveAttribute("aria-modal", "true");
-  const note = panel.getByRole("textbox", { name: "私有备忘", exact: true });
-  await note.fill("移动浮卡后仍保留的备忘");
-  const initial = (await panel.boundingBox())!;
-  expect(initial.width).toBeGreaterThanOrEqual(300);
-  expect(initial.width).toBeLessThanOrEqual(380);
-  const toolbar = (await page
-    .locator(".workspace-world-controls")
-    .boundingBox())!;
-  expect(initial.y).toBeGreaterThanOrEqual(toolbar.y + toolbar.height + 11);
-  expect(initial.x).toBeGreaterThanOrEqual(23);
-  expect(initial.x + initial.width).toBeLessThanOrEqual(1417);
-  const handle = panel.getByRole("button", {
-    name: "移动工作台面板",
-    exact: true,
-  });
-  const grip = (await handle.boundingBox())!;
-  await page.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2);
-  await page.mouse.down();
-  await page.mouse.move(1435, 995, { steps: 12 });
-  await page.mouse.up();
-  const dragged = (await panel.boundingBox())!;
-  expect(
-    Math.hypot(dragged.x - initial.x, dragged.y - initial.y),
-  ).toBeGreaterThan(20);
-  expect(dragged.x).toBeGreaterThanOrEqual(23);
-  expect(dragged.y).toBeGreaterThanOrEqual(23);
-  expect(dragged.x + dragged.width).toBeLessThanOrEqual(1417);
-  expect(dragged.y + dragged.height).toBeLessThanOrEqual(977);
-  await expect(note).toHaveValue("移动浮卡后仍保留的备忘");
-  await handle.press("Home");
-  await expect
-    .poll(async () => {
-      const restored = (await panel.boundingBox())!;
-      return Math.hypot(restored.x - initial.x, restored.y - initial.y);
-    })
-    .toBeLessThan(2);
-  await page
-    .getByRole("button", { name: "收起工作台面板", exact: true })
-    .click();
-  await openWorkspacePanel(page, "打开私有备忘");
-  await expect(note).toHaveValue("移动浮卡后仍保留的备忘");
-  expect(fixture.workspace.note).toBe("仅自己的备忘，不发送给模型");
-  await panel.getByRole("button", { name: "保存更改", exact: true }).click();
-  await expect
-    .poll(() => fixture.workspace.note)
-    .toBe("移动浮卡后仍保留的备忘");
-  // Narrow screens show one column at a time; keep the center selected.
-  await page
-    .getByRole("button", { name: "收起右侧工具栏", exact: true })
-    .click();
-  for (const width of [1280, 1024, 390]) {
-    await page.setViewportSize({ width, height: 844 });
-    await panel
-      .getByRole("button", { name: "收起工作台面板", exact: true })
-      .click();
-    await expect(panel).toBeHidden();
-    await openWorkspacePanel(page, "打开私有备忘");
-    await expect(panel).toHaveAttribute("data-panel-presence", "open");
-    const margin = width < 768 ? 12 : 24;
-    const box = (await panel.boundingBox())!;
-    expect(box.x).toBeGreaterThanOrEqual(margin - 1);
-    expect(box.y).toBeGreaterThanOrEqual(margin - 1);
-    expect(box.x + box.width).toBeLessThanOrEqual(width - margin + 1);
-    expect(box.y + box.height).toBeLessThanOrEqual(844 - margin + 1);
-    expect(box.width).toBeLessThanOrEqual(380);
-    await expect(note).toHaveValue("移动浮卡后仍保留的备忘");
-    await expect(
-      panel.getByRole("button", { name: "保存更改", exact: true }),
-    ).toBeInViewport({ ratio: 1 });
-    expect(
-      await panel
-        .locator(".workspace-panel-body")
-        .evaluate((element) => element.scrollWidth - element.clientWidth),
-    ).toBeLessThanOrEqual(1);
-    expect(
-      await page.evaluate(() => document.documentElement.scrollWidth),
-    ).toBeLessThanOrEqual(width + 1);
-    await page.screenshot({ path: `.local/workspace-compact-${width}.png` });
-    if (width === 1024) {
-      await panel
-        .getByRole("button", { name: "收起工作台面板", exact: true })
-        .click();
-      await expect(panel).toBeHidden();
-      await openWorkspacePanel(page, "打开日程");
-      const schedule = page.getByRole("dialog", { name: "日程", exact: true });
-      await expect(schedule).toHaveAttribute("data-panel-presence", "open");
-      const date = schedule.getByRole("button", {
-        name: "2026-10-19",
-        exact: true,
-      });
-      await expect
-        .poll(() =>
-          date.evaluate((element) => {
-            const box = element.getBoundingClientRect();
-            return element.contains(
-              document.elementFromPoint(
-                box.x + box.width / 2,
-                box.y + box.height / 2,
-              ),
-            );
-          }),
-        )
-        .toBe(true);
-      await date.click();
-      await expect(date).toHaveAttribute("aria-pressed", "true");
-      await expect(
-        schedule.getByRole("button", { name: "今天", exact: true }),
-      ).toBeInViewport({ ratio: 1 });
-      await expect(
-        schedule.getByRole("button", { name: "保存更改", exact: true }),
-      ).toBeInViewport({ ratio: 1 });
-      expect(
-        await schedule
-          .locator(".workspace-panel-body")
-          .evaluate((element) => element.scrollWidth - element.clientWidth),
-      ).toBeLessThanOrEqual(1);
-      await page.screenshot({
-        path: ".local/workspace-compact-schedule-1024.png",
-      });
-      await schedule
-        .getByRole("button", { name: "收起工作台面板", exact: true })
-        .click();
-      await expect(schedule).toBeHidden();
-      await openWorkspacePanel(page, "打开私有备忘");
-    }
-  }
-  expect(fixture.assistantCalls()).toBe(0);
-});
-
-test("我的内容在首次展开时才读取，关闭后保留分类与显示样式", async ({
-  page,
-}) => {
-  const contentModules: string[] = [],
-    writes: string[] = [];
-  const deferredContentModule =
-    /\/(?:src\/(?:personal-workspace-content|project-library)\.tsx|assets\/(?:personal-workspace-content|project-library|Table)-[^/?]+\.js)(?:\?.*)?$/;
-  page.on("request", (request) => {
-    if (deferredContentModule.test(request.url()))
-      contentModules.push(request.url());
-    if (request.url().includes("/api/v1/") && request.method() !== "GET")
-      writes.push(`${request.method()} ${new URL(request.url()).pathname}`);
-  });
-  const fixture = await workspaceFixture(page, {
-    permissions: ["project.read", "analytics.read", "analytics.manage"],
-  });
-  await page.goto("/my-workspace");
-  await expect(
-    page.getByRole("button", { name: "工作台工具", exact: true }),
-  ).toBeVisible();
-  expect(fixture.contentReads()).toBe(0);
-  expect(contentModules).toEqual([]);
-  await openWorkspacePanel(page, "打开常用工具");
-  await expect(
-    page.getByRole("dialog", { name: "常用工具", exact: true }),
-  ).toBeVisible();
-  expect(fixture.contentReads()).toBe(0);
-  expect(contentModules).toEqual([]);
-  await page
-    .getByRole("button", { name: "收起工作台面板", exact: true })
-    .click();
-  await openWorkspacePanel(page, "打开我的内容");
-  await expect.poll(() => fixture.contentReads()).toBe(1);
-  expect(
-    contentModules.some((url) => url.includes("personal-workspace-content")),
-  ).toBe(true);
-  const loadedContentModules = [...contentModules];
-  await expect(page.locator(".personal-content")).toContainText("我创建的内容");
-  await page.getByRole("tab", { name: "表格", exact: true }).click();
-  await page
-    .getByRole("radiogroup", { name: "我的内容显示样式" })
-    .getByText("列表", { exact: true })
-    .click();
-  await expect.poll(() => fixture.contentReads()).toBe(2);
-  await page
-    .getByRole("button", { name: "收起工作台面板", exact: true })
-    .click();
-  await openWorkspacePanel(page, "打开日程");
-  await page.getByRole("button", { name: "日程下个月", exact: true }).click();
-  await page
-    .getByRole("button", { name: "收起工作台面板", exact: true })
-    .click();
-  await openWorkspacePanel(page, "打开我的内容");
-  await expect(
-    page.getByRole("tab", { name: "表格", exact: true }),
-  ).toHaveAttribute("aria-selected", "true");
-  await expect(
-    page
-      .getByRole("radiogroup", { name: "我的内容显示样式" })
-      .getByRole("radio", { name: /列表$/ }),
-  ).toBeChecked();
-  expect(contentModules).toEqual(loadedContentModules);
-  await page.screenshot({
-    path: ".local/loading-recovery-20261110/content-reopened.png",
-  });
-  await page
-    .getByRole("button", { name: "收起工作台面板", exact: true })
-    .click();
-  await openWorkspacePanel(page, "打开日程");
-  await expect(page.locator(".schedule-month > strong")).toHaveText(
-    "2026 年 11 月",
-  );
-  expect(fixture.assistantCalls()).toBe(0);
-  expect(writes).toEqual([]);
-});
-
 test("小序在业务页记住浮动位置，返回工作台巢穴保留同一形象，跨页面日程仍需保存", async ({
   page,
 }) => {
@@ -2011,50 +1581,6 @@ test("动态面板显示真实任务进度、筛选和已读，展开入口不�
   });
 });
 
-test("日程可添加编辑删除，保存后跨页面恢复，拒绝无效时间", async ({ page }) => {
-  const fixture = await workspaceFixture(page);
-  await page.goto("/my-workspace");
-  await openWorkspacePanel(page, "打开日程");
-  await page.getByRole("button", { name: "新增日程", exact: true }).click();
-  let dialog = page.getByRole("dialog", { name: "新增日程", exact: true });
-  await dialog.getByLabel("日程名称", { exact: true }).fill("供应商选款会");
-  await dialog.getByLabel("日程日期", { exact: true }).fill("2026-11-02");
-  await dialog.getByRole("switch", { name: "全天安排" }).click();
-  await dialog.getByLabel("日程开始时间").fill("15:00");
-  await dialog.getByLabel("日程结束时间").fill("14:00");
-  await dialog.getByRole("button", { name: "应用日程" }).click();
-  await expect(dialog.getByRole("alert")).toContainText(
-    "结束时间须晚于开始时间",
-  );
-  await dialog.getByLabel("日程结束时间").fill("16:00");
-  await dialog.getByRole("button", { name: "应用日程" }).click();
-  await expect(
-    page.getByRole("button", { name: "编辑日程 供应商选款会" }),
-  ).toBeVisible();
-  await page.getByRole("button", { name: "保存更改", exact: true }).click();
-  await expect(
-    page.getByText("个人工作台已保存", { exact: true }),
-  ).toBeVisible();
-  await page.reload();
-  expect(fixture.workspace.schedule).toHaveLength(1);
-  await openWorkspacePanel(page, "打开日程");
-  await page.getByRole("button", { name: "日程下个月" }).click();
-  await expect(page.locator(".schedule-month > strong")).toHaveText(
-    "2026 年 11 月",
-  );
-  await page
-    .getByRole("button", { name: "2026-11-02，1项日程", exact: true })
-    .click();
-  await page.getByRole("button", { name: "编辑日程 供应商选款会" }).click();
-  dialog = page.getByRole("dialog", { name: "编辑日程", exact: true });
-  await dialog.getByLabel("日程名称", { exact: true }).fill("新品评审会");
-  await dialog.getByRole("button", { name: "应用日程" }).click();
-  await page.getByRole("button", { name: "编辑日程 新品评审会" }).click();
-  await page.getByRole("button", { name: "删除日程", exact: true }).click();
-  await page.getByRole("button", { name: "保存更改", exact: true }).click();
-  await expect.poll(() => fixture.workspace.schedule.length).toBe(0);
-});
-
 test("个人助理仅发送后调用模型，日程须确认且可随账号保存", async ({ page }) => {
   const fixture = await workspaceFixture(page);
   await page.goto("/my-workspace");
@@ -2064,7 +1590,7 @@ test("个人助理仅发送后调用模型，日程须确认且可随账号保�
   await expect(
     page.getByRole("checkbox", { name: "附带已保存日程与待办", exact: true }),
   ).not.toBeChecked();
-  await dialog.getByRole("button", { name: "返回对话", exact: true }).click();
+  await selectAssistantPanel(page, "聊天");
   expect(fixture.assistantCalls()).toBe(0);
   await dialog
     .getByPlaceholder(/告诉我你想完成什么/)
@@ -2097,51 +1623,7 @@ test("个人助理仅发送后调用模型，日程须确认且可随账号保�
   expect(fixture.assistantCalls()).toBe(1);
 });
 
-test("无个人助理权限仍可使用私有记录与已有权限工具", async ({ page }) => {
-  const fixture = await workspaceFixture(page, {
-    permissions: ["inventory.read"],
-  });
-  fixture.workspace.shortcuts = ["inventory"];
-  fixture.workspace.available = fixture.workspace.available.filter(
-    (tool: { id: string }) => tool.id === "inventory",
-  );
-  await page.goto("/my-workspace");
-  await expect(page.locator(".workspace-ai")).toHaveCount(0);
-  await page.getByRole("button", { name: "工作台工具", exact: true }).click();
-  await expect(
-    page.getByRole("menuitem", { name: "我的内容", exact: true }),
-  ).toHaveCount(0);
-  await page.getByRole("button", { name: "工作台工具", exact: true }).click();
-  await expect(
-    page.getByRole("menu", { name: "工作台工具菜单", exact: true }),
-  ).toBeHidden();
-  await openWorkspacePanel(page, "打开私有备忘");
-  await expect(
-    page.getByRole("textbox", { name: "私有备忘", exact: true }),
-  ).toBeVisible();
-  await page
-    .getByRole("button", { name: "收起工作台面板", exact: true })
-    .click();
-  await openWorkspacePanel(page, "打开个人待办");
-  await page.getByLabel("待办事项", { exact: true }).fill("核对库存");
-  await page.getByRole("button", { name: "添加", exact: true }).click();
-  await expect(
-    page.getByRole("checkbox", { name: "核对库存", exact: true }),
-  ).toBeVisible();
-  await page
-    .getByRole("button", { name: "收起工作台面板", exact: true })
-    .click();
-  await openWorkspacePanel(page, "打开常用工具");
-  const tools = page.getByRole("dialog", { name: "常用工具", exact: true });
-  await expect(tools.getByRole("link", { name: /库存明细/ })).toBeVisible();
-  await expect(tools.getByRole("link", { name: /经营分析/ })).toHaveCount(0);
-  expect(fixture.reads()).toBe(0);
-  expect(fixture.settingsReads()).toBe(0);
-  expect(fixture.assistantCalls()).toBe(0);
-  expect(fixture.contentReads()).toBe(0);
-});
-
-test("手机工作台与收起面板不横向溢出，减少动态效果时核心保持静态", async ({
+test("手机工作台与助理面板不横向溢出，减少动态效果时核心保持静态", async ({
   page,
 }) => {
   await workspaceFixture(page, {
@@ -2193,40 +1675,9 @@ test("手机工作台与收起面板不横向溢出，减少动态效果时核�
   ).toBeVisible();
   expect((await dialog.boundingBox())!.width).toBeLessThanOrEqual(390.05);
   await dialog.getByRole("button", { name: "关闭", exact: true }).click();
-  await openWorkspacePanel(page, "打开个人待办");
-  const todo = page.getByRole("dialog", { name: "个人待办", exact: true });
-  await expect(todo.getByLabel("待办事项", { exact: true })).toBeVisible();
-  expect((await todo.boundingBox())!.width).toBeLessThanOrEqual(390.05);
-  expect(
-    await page.evaluate(() => document.documentElement.scrollWidth),
-  ).toBeLessThanOrEqual(391);
-  await todo
-    .getByRole("button", { name: "收起工作台面板", exact: true })
-    .click();
-  for (const [entryName, title] of [
-    ["打开日程", "日程"],
-    ["打开个人待办", "个人待办"],
-    ["打开私有备忘", "私有备忘"],
-    ["打开常用工具", "常用工具"],
-    ["打开我的内容", "我创建的内容"],
-  ]) {
-    const entry = page.getByRole("button", { name: entryName, exact: true });
-    await expect(entry).toBeInViewport({ ratio: 0.99 });
-    // A visually present 3D entry must receive the normal center click,
-    // including the two backmost entries beside the transparent core.
-    await entry.click();
-    const panel = page.getByRole("dialog", { name: title, exact: true });
-    await expect(panel).toBeVisible();
-    await panel
-      .getByRole("button", { name: "收起工作台面板", exact: true })
-      .click();
-    await expect(panel).toBeHidden();
-  }
 });
 
-test("手机导航可开关，助理和日程弹窗完整显示且业务页面沿用全站主题", async ({
-  page,
-}) => {
+test("手机导航可开关，助理完整显示且业务页面沿用全站主题", async ({ page }) => {
   await workspaceFixture(page);
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/my-workspace");
@@ -2246,16 +1697,6 @@ test("手机导航可开关，助理和日程弹窗完整显示且业务页面�
   ).toBeVisible();
   expect((await assistant.boundingBox())!.width).toBeLessThanOrEqual(390.05);
   await assistant.getByRole("button", { name: "关闭", exact: true }).click();
-  await openWorkspacePanel(page, "打开日程");
-  await page.getByRole("button", { name: "新增日程", exact: true }).click();
-  const calendar = page.getByRole("dialog", { name: "新增日程", exact: true });
-  await expect(calendar.getByLabel("日程名称", { exact: true })).toBeVisible();
-  expect((await calendar.boundingBox())!.width).toBeLessThanOrEqual(390.05);
-  await calendar.getByRole("button", { name: "取消", exact: true }).click();
-  await expect(calendar).not.toBeVisible();
-  await page
-    .getByRole("button", { name: "收起工作台面板", exact: true })
-    .click();
   await page.locator(".workspace-ai").scrollIntoViewIfNeeded();
   await page.screenshot({
     path: test.info().outputPath("workspace-future-mobile.png"),
@@ -2452,7 +1893,7 @@ test("工作台空白处控制整个三维场景，无界旋转平移、缩放�
   expect(fixture.assistantCalls()).toBe(0);
 });
 
-test("输入文字、拖动小序和浮卡不会误转三维场景或启动语音", async ({ page }) => {
+test("输入文字和拖动小序不会误转三维场景或启动语音", async ({ page }) => {
   const fixture = await workspaceFixture(page);
   await page.addInitScript(() => {
     Reflect.set(window, "workspaceMicrophoneRequests", 0);
@@ -2493,36 +1934,6 @@ test("输入文字、拖动小序和浮卡不会误转三维场景或启动语�
   await page.mouse.up();
   await expect(companion).toHaveAttribute("data-docked", "false");
   expect(await readWorkspaceCamera(page)).toEqual(camera);
-  await openWorkspacePanel(page, "打开私有备忘");
-  const note = page.getByRole("textbox", { name: "私有备忘", exact: true });
-  await note.fill("浮卡仍可独立输入和滚动\n".repeat(30));
-  const handle = page.getByRole("button", {
-    name: "移动工作台面板",
-    exact: true,
-  });
-  const panel = page.locator(".personal-workspace-panel");
-  const before = (await panel.boundingBox())!;
-  const grip = (await handle.boundingBox())!;
-  await page.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2);
-  await page.mouse.down();
-  await page.mouse.move(
-    grip.x + grip.width / 2 - 180,
-    grip.y + grip.height / 2 + 90,
-    { steps: 8 },
-  );
-  await page.mouse.up();
-  await expect
-    .poll(async () => {
-      const after = (await panel.boundingBox())!;
-      return Math.hypot(after.x - before.x, after.y - before.y);
-    })
-    .toBeGreaterThan(40);
-  await note.hover();
-  await page.mouse.wheel(0, 300);
-  await page.evaluate(
-    () =>
-      new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
-  );
   expect(await readWorkspaceCamera(page)).toEqual(camera);
   await expect(input).toHaveValue("输入草稿，Home仅移动文字光标");
   expect(
@@ -2608,149 +2019,6 @@ test("手机触摸与减少动态效果仍可操作三维场景，移出中心�
   expect(await readWorkspaceCamera(page)).toEqual(defaultWorkspaceCamera);
   expect(fixture.assistantCalls()).toBe(0);
   await client.detach();
-});
-
-test("小序在助理遮罩前仍可操作，攀爬浮卡后保持草稿且目标关闭会回落", async ({
-  page,
-}) => {
-  const fixture = await workspaceFixture(page);
-  await page.addInitScript(() => {
-    Reflect.set(window, "companionMicrophoneRequests", 0);
-    navigator.mediaDevices.getUserMedia = async () => {
-      Reflect.set(
-        window,
-        "companionMicrophoneRequests",
-        Number(Reflect.get(window, "companionMicrophoneRequests")) + 1,
-      );
-      throw new DOMException("本用例不应申请麦克风", "NotAllowedError");
-    };
-  });
-  await page.goto("/my-workspace");
-  const companion = page.locator(".workspace-companion");
-  const voice = companion.getByRole("button", {
-    name: "打开小序文字对话",
-    exact: true,
-  });
-  const instance = await companion
-    .locator(".sidebar-assistant")
-    .elementHandle();
-  await openPersonalAssistant(page);
-  const assistant = page.getByRole("dialog", { name: /AI 个人助理/ });
-  await expect(assistant).toBeVisible();
-  await expect
-    .poll(() =>
-      voice.evaluate((element) => {
-        const rect = element.getBoundingClientRect();
-        return element.contains(
-          document.elementFromPoint(
-            rect.x + rect.width / 2,
-            rect.y + rect.height / 2,
-          ),
-        );
-      }),
-    )
-    .toBe(true);
-  const suggestion = assistant.getByRole("button", {
-    name: /查看我参与的项目进度/,
-  });
-  const suggestionBox = (await suggestion.boundingBox())!;
-  // The right side of this suggestion overlaps the original nest position.
-  // Opening the drawer must leave the whole button usable, not just its text.
-  await suggestion.click({
-    position: { x: suggestionBox.width * 0.7, y: suggestionBox.height / 2 },
-  });
-  await expect(assistant.getByPlaceholder(/告诉我你想完成什么/)).toHaveValue(
-    "查看我参与的项目进度",
-  );
-  await openCompanionMenu(companion);
-  for (const name of ["换个位置", "攀爬组件", "回到巢穴"])
-    await expect(page.getByRole("button", { name, exact: true })).toHaveCount(
-      0,
-    );
-  await expect(
-    page.getByRole("button", { name: "文字对话", exact: true }),
-  ).toBeVisible();
-  await page.screenshot({ path: ".local/companion-over-assistant.png" });
-  await openCompanionMenu(companion);
-  await assistant.getByRole("button", { name: "关闭", exact: true }).click();
-  await expect(
-    page.locator(".personal-assistant-drawer .ant-drawer-content-wrapper"),
-  ).toBeHidden();
-
-  await openWorkspacePanel(page, "打开私有备忘");
-  const panel = page.getByRole("dialog", { name: "私有备忘", exact: true });
-  const note = panel.getByRole("textbox", { name: "私有备忘", exact: true });
-  await note.fill("攀爬前尚未保存的备忘");
-  const camera = await readWorkspaceCamera(page);
-  await dragCompanionToPanel(page, panel);
-  await expect(companion).toHaveAttribute("data-motion", "climbing");
-  await page.waitForTimeout(350);
-  const during = (await companion.boundingBox())!;
-  await expect(companion).toHaveAttribute("data-perched", "true");
-  await expect(companion).toHaveAttribute("data-motion", "idle");
-  const perched = (await companion.boundingBox())!;
-  const card = (await panel.boundingBox())!;
-  expect(perched.y).toBeLessThan(during.y - 20);
-  const side = await companion.getAttribute("data-climb-side");
-  const overlap =
-    side === "left"
-      ? perched.x + perched.width - card.x
-      : card.x + card.width - perched.x;
-  expect(overlap).toBeGreaterThan(0);
-  expect(overlap).toBeLessThanOrEqual(14);
-  expect(perched.y).toBeGreaterThan(card.y);
-  expect(perched.y + perched.height).toBeLessThan(card.y + card.height);
-  await note.fill("停靠时仍能编辑的备忘");
-  await page.screenshot({ path: ".local/companion-perched-note.png" });
-  await panel
-    .getByRole("button", { name: "收起工作台面板", exact: true })
-    .click();
-  await expect(companion).toHaveAttribute("data-perched", "false");
-  await expect(companion).toBeInViewport({ ratio: 1 });
-  await openWorkspacePanel(page, "打开私有备忘");
-  await expect(note).toHaveValue("停靠时仍能编辑的备忘");
-  expect(await readWorkspaceCamera(page)).toEqual(camera);
-  expect(await instance!.evaluate((element) => element.isConnected)).toBe(true);
-  await expect(page.locator(".sidebar-assistant")).toHaveCount(1);
-  expect(
-    await page.evaluate(() =>
-      Reflect.get(window, "companionMicrophoneRequests"),
-    ),
-  ).toBe(0);
-  expect(fixture.assistantCalls()).toBe(0);
-});
-
-test("减少动态效果下拖近卡片立即停靠，移动卡片时跟随且不转动场景", async ({
-  page,
-}) => {
-  const fixture = await workspaceFixture(page);
-  await page.emulateMedia({ reducedMotion: "reduce" });
-  await page.goto("/my-workspace");
-  await openWorkspacePanel(page, "打开私有备忘");
-  const panel = page.getByRole("dialog", { name: "私有备忘", exact: true });
-  const companion = page.locator(".workspace-companion");
-  const camera = await readWorkspaceCamera(page);
-  await dragCompanionToPanel(page, panel);
-  await expect(companion).toHaveAttribute("data-perched", "true");
-  await expect(companion).toHaveAttribute("data-motion", "idle");
-  const resting = (await companion.boundingBox())!;
-  await page.waitForTimeout(150);
-  expect(await companion.boundingBox()).toEqual(resting);
-  const handle = panel.getByRole("button", {
-    name: "移动工作台面板",
-    exact: true,
-  });
-  // The memo orbit sits just above this edge; move into the clear space below.
-  await handle.press("ArrowDown");
-  await expect
-    .poll(async () => (await companion.boundingBox())!.y)
-    .toBeCloseTo(resting.y + 16, 0);
-  await expect(companion).toHaveAttribute("data-perched", "true");
-  expect(await readWorkspaceCamera(page)).toEqual(camera);
-  await expect(
-    page.getByRole("region", { name: "小序语音", exact: true }),
-  ).toHaveCount(0);
-  expect(fixture.assistantCalls()).toBe(0);
 });
 
 test("工作台圆环是小序巢穴，可离巢移动与召回，文字和动态入口仍可用", async ({
@@ -3146,7 +2414,7 @@ test("中心AI核心在桌面与手机完整显示，页面打开不调用模型
   const desktop = (await core.boundingBox())!;
   expect(desktop.x).toBeGreaterThanOrEqual(0);
   expect(desktop.x + desktop.width).toBeLessThanOrEqual(1440);
-  const dock = page.getByRole("button", { name: "工作台工具", exact: true });
+  const dock = page.getByRole("group", { name: "场景视角", exact: true });
   await expect(dock).toBeInViewport({ ratio: 1 });
   const dockBounds = (await dock.boundingBox())!;
   expect(dockBounds.y + dockBounds.height).toBeLessThanOrEqual(1000);
@@ -3173,16 +2441,6 @@ test("中心AI核心在桌面与手机完整显示，页面打开不调用模型
   await expect(
     page.getByRole("button", { name: /切换为[亮暗]色主题/ }),
   ).toHaveCount(0);
-  await openWorkspacePanel(page, "打开日程");
-  await expect(
-    page.getByRole("dialog", { name: "日程", exact: true }),
-  ).toBeVisible();
-  await page.screenshot({
-    path: ".local/world-workspace-schedule.png",
-  });
-  await page
-    .getByRole("button", { name: "收起工作台面板", exact: true })
-    .click();
   await page.setViewportSize({ width: 390, height: 844 });
   await page
     .getByRole("button", { name: "收起右侧工具栏", exact: true })
@@ -3443,93 +2701,6 @@ test("页底新提醒按实际换行高度留在窗口内，拖动后整块形�
   await move(field.x + field.width / 2, field.y - 68);
   await expect(reminder).toBeVisible();
   await expect.poll(safe).toBe(true);
-  expect(fixture.assistantCalls()).toBe(0);
-});
-
-test("权限在页内刷新后工具菜单随AI与普通工作区切换，私有备忘草稿保留", async ({
-  page,
-}) => {
-  const permissions = ["analytics.read", "analytics.manage", "project.read"];
-  const fixture = await workspaceFixture(page, { permissions });
-  await page.goto("/my-workspace");
-  const menu = page.getByRole("menu", { name: "工作台工具菜单", exact: true });
-  const checkMenu = async (count: number) => {
-    await page.getByRole("button", { name: "工作台工具", exact: true }).click();
-    await expect(menu.getByRole("menuitem")).toHaveCount(count);
-    if (count === 4)
-      await expect(
-        menu.getByRole("menuitem", { name: "我的内容", exact: true }),
-      ).toHaveCount(0);
-    await page.getByRole("button", { name: "工作台工具", exact: true }).click();
-  };
-  const note = page.getByRole("textbox", { name: "私有备忘", exact: true });
-  const draft = "权限更新期间保留的未保存备忘";
-  await expect(page.locator(".workspace-ai-core")).toBeVisible();
-  await checkMenu(5);
-  await openWorkspacePanel(page, "打开私有备忘");
-  await note.fill(draft);
-
-  let elapsed = 0;
-  const refreshPermissions = async (next: string[]) => {
-    permissions.splice(0, permissions.length, ...next);
-    // The real auth query becomes stale after 10s and refetches on tab visibility.
-    elapsed += 11000;
-    await page.clock.setFixedTime(
-      new Date(Date.parse("2026-10-26T02:00:00Z") + elapsed),
-    );
-    await Promise.all([
-      page.waitForResponse(
-        (response) =>
-          new URL(response.url()).pathname === "/api/v1/auth/me" &&
-          response.status() === 200,
-      ),
-      page.evaluate(() => window.dispatchEvent(new Event("visibilitychange"))),
-    ]);
-  };
-  await refreshPermissions(["analytics.read", "project.read"]);
-  await expect(page.locator(".workspace-ai-core")).toHaveCount(0);
-  await expect(page.locator(".workspace-quiet")).toBeVisible();
-  await expect(page.locator(".workspace-dock")).toHaveCount(0);
-  await checkMenu(5);
-  await expect(note).toHaveValue(draft);
-  for (const [entry, title] of [
-    ["打开日程", "日程"],
-    ["打开个人待办", "个人待办"],
-    ["打开常用工具", "常用工具"],
-    ["打开我的内容", "我创建的内容"],
-    ["打开私有备忘", "私有备忘"],
-  ]) {
-    await page
-      .getByRole("button", { name: "收起工作台面板", exact: true })
-      .click();
-    await openWorkspacePanel(page, entry);
-    await expect(
-      page.getByRole("dialog", { name: title, exact: true }),
-    ).toBeVisible();
-  }
-  await expect(note).toHaveValue(draft);
-  expect(fixture.workspace.note).toBe("仅自己的备忘，不发送给模型");
-
-  await refreshPermissions(["analytics.read"]);
-  await checkMenu(4);
-  await page
-    .getByRole("button", { name: "收起工作台面板", exact: true })
-    .click();
-  await openWorkspacePanel(page, "打开私有备忘");
-  await expect(note).toHaveValue(draft);
-
-  await refreshPermissions([
-    "analytics.read",
-    "analytics.manage",
-    "project.read",
-  ]);
-  await expect(page.locator(".workspace-quiet")).toHaveCount(0);
-  await expect(page.locator(".workspace-ai-core")).toBeVisible();
-  await expect(page.locator(".workspace-dock")).toHaveCount(0);
-  await checkMenu(5);
-  await expect(note).toHaveValue(draft);
-  await page.getByRole("button", { name: "保存更改", exact: true }).click();
-  await expect.poll(() => fixture.workspace.note).toBe(draft);
   expect(fixture.assistantCalls()).toBe(0);
 });
 

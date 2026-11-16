@@ -134,10 +134,6 @@ test("背景揭示仅显露鼠标附近原图，停止和离开后回到黑底�
   const input = page.locator(".assistant-compose textarea");
   await input.fill("保留在输入框中的草稿");
   await expect(input).toHaveValue("保留在输入框中的草稿");
-  await page.getByRole("button", { name: "工作台工具", exact: true }).click();
-  await page.getByRole("menuitem", { name: "个人待办", exact: true }).click();
-  await expect(page.getByLabel("待办事项", { exact: true })).toBeVisible();
-  await expect.poll(async () => (await revealPixels(page)).coverage).toBe(0);
   expect(writes).toEqual([]);
 });
 

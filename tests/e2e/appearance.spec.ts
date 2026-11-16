@@ -5,16 +5,6 @@ import {
 } from "./assistant-controls.js";
 import { selectionLayoutSchema } from "../../packages/contracts/src/selection-layout.js";
 
-async function openWorkspacePanel(page: Page, name: string) {
-  const menu = page.getByRole("menu", { name: "工作台工具菜单", exact: true });
-  await page.getByRole("button", { name: "工作台工具", exact: true }).click();
-  await expect(menu).toBeVisible();
-  await menu
-    .getByRole("menuitem", { name: name.replace(/^打开/, ""), exact: true })
-    .click();
-  await expect(menu).toBeHidden();
-}
-
 const store = () => ({
   accounts: new Map<string, { mode: string; version: number }>(),
   writes: [] as string[],
@@ -512,7 +502,7 @@ test("跨浏览器读取账号主题，其他账号独立", async ({
   await other.close();
   await separate.close();
 });
-test("运营接入页可切换主题，工作台及日程弹窗固定暗色且不覆盖亮色偏好", async ({
+test("运营接入页可切换主题，工作台固定暗色且不覆盖亮色偏好", async ({
   page,
   context,
 }) => {
@@ -534,17 +524,6 @@ test("运营接入页可切换主题，工作台及日程弹窗固定暗色且�
   await expect(
     page.getByRole("button", { name: /切换为.*色主题/ }),
   ).toHaveCount(0);
-  await openWorkspacePanel(page, "打开日程");
-  await page.getByRole("button", { name: "新增日程", exact: true }).click();
-  const dialog = page.getByRole("dialog", { name: "新增日程", exact: true });
-  await expect(dialog.locator(".ant-modal-container")).toHaveCSS(
-    "background-color",
-    "rgb(41, 44, 53)",
-  );
-  await dialog.getByRole("button", { name: "取消", exact: true }).click();
-  await page
-    .getByRole("button", { name: "收起工作台面板", exact: true })
-    .click();
   await page.goBack();
   await mode(page, "light");
   expect(state.accounts.get("1")?.mode).toBe("light");

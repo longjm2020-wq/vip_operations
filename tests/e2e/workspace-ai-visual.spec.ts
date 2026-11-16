@@ -1,13 +1,4 @@
 import { expect, test, type Page } from "@playwright/test";
-async function openWorkspacePanel(page: Page, name: string) {
-  const menu = page.getByRole("menu", { name: "工作台工具菜单", exact: true });
-  await page.getByRole("button", { name: "工作台工具", exact: true }).click();
-  await expect(menu).toBeVisible();
-  await menu
-    .getByRole("menuitem", { name: name.replace(/^打开/, ""), exact: true })
-    .click();
-  await expect(menu).toBeHidden();
-}
 
 async function fixture(
   page: Page,
@@ -663,59 +654,6 @@ test("超级管理员从系统设置访问模型，侧栏收起图标及悬浮�
     .hover();
   await expect(
     popup.getByRole("link", { name: "新建SOP", exact: true }),
-  ).toBeVisible();
-});
-test("个人工作台保存待办备忘，自己的表格可公开且显示创建者", async ({
-  page,
-}) => {
-  const state = await fixture(page);
-  await page.goto("/my-workspace");
-  await openWorkspacePanel(page, "打开个人待办");
-  await page.getByLabel("待办事项", { exact: true }).fill("核对经营日报");
-  await page.getByRole("button", { name: "添加", exact: true }).click();
-  await page
-    .getByRole("button", { name: "收起工作台面板", exact: true })
-    .click();
-  await openWorkspacePanel(page, "打开私有备忘");
-  await page
-    .getByRole("textbox", { name: "私有备忘", exact: true })
-    .fill("只在自己的工作台中显示");
-  await page.getByRole("button", { name: "保存更改", exact: true }).click();
-  await expect(
-    page.getByText("个人工作台已保存", { exact: true }),
-  ).toBeVisible();
-  await page.reload();
-  await openWorkspacePanel(page, "打开私有备忘");
-  await expect(
-    page.getByRole("textbox", { name: "私有备忘", exact: true }),
-  ).toHaveValue("只在自己的工作台中显示");
-  await page
-    .getByRole("button", { name: "收起工作台面板", exact: true })
-    .click();
-  await openWorkspacePanel(page, "打开个人待办");
-  await expect(
-    page.getByRole("checkbox", { name: "核对经营日报", exact: true }),
-  ).toBeVisible();
-  expect(state.workspace.version).toBe(1);
-  await page
-    .getByRole("button", { name: "收起工作台面板", exact: true })
-    .click();
-  await openWorkspacePanel(page, "打开我的内容");
-  await page.getByRole("tab", { name: "表格", exact: true }).click();
-  await expect(page.locator(".personal-content")).toContainText(
-    "创建者：测试用户",
-  );
-  await page
-    .getByRole("button", { name: "管理表格：我的表格", exact: true })
-    .click();
-  await page.getByRole("menuitem", { name: /设为公开$/ }).click();
-  await page
-    .getByRole("dialog")
-    .locator(".ant-modal-confirm-btns button")
-    .last()
-    .click();
-  await expect(
-    page.locator(".personal-content").getByText("公开", { exact: true }),
   ).toBeVisible();
 });
 test("只读分析账号可打开侧面板，移动屏幕不溢出", async ({ page }) => {

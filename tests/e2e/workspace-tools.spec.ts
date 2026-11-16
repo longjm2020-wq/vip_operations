@@ -96,7 +96,7 @@ async function fixture(
   return { workspace, writes };
 }
 
-test("收纳功能后中央保留小序，旧动效偏好不恢复圆形入口或分支开关", async ({
+test("移除工具菜单后中央保留小序，旧偏好不恢复菜单、圆形入口或分支开关", async ({
   page,
 }) => {
   const state = await fixture(page);
@@ -118,56 +118,9 @@ test("收纳功能后中央保留小序，旧动效偏好不恢复圆形入口�
   );
   await expect(
     page.getByRole("button", { name: "工作台工具", exact: true }),
-  ).toBeEnabled();
-  expect(state.writes).toEqual([]);
-  expect(
-    await page.evaluate(() => window.workspaceToolsMicrophoneRequests),
-  ).toBe(0);
-});
-
-test("手机普通工作台菜单按权限展示四项，备忘草稿切换保留且保存后写入", async ({
-  page,
-}) => {
-  const state = await fixture(page, ["inventory.read"]);
-  await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto("/my-workspace");
-  const trigger = page.getByRole("button", { name: "工作台工具", exact: true });
-  await trigger.click();
-  const menu = page.getByRole("menu", { name: "工作台工具菜单", exact: true });
-  await expect(menu.getByRole("menuitem")).toHaveCount(4);
-  await expect(
-    menu.getByRole("menuitem", { name: "我的内容", exact: true }),
   ).toHaveCount(0);
-  await menu.getByRole("menuitem", { name: "私有备忘", exact: true }).click();
-  const note = page.getByRole("textbox", { name: "私有备忘", exact: true });
-  await note.fill("手机菜单备忘");
-  await page
-    .getByRole("button", { name: "收起工作台面板", exact: true })
-    .click();
-  await trigger.click();
-  await menu.getByRole("menuitem", { name: "日程", exact: true }).click();
-  await expect(
-    page.getByRole("dialog", { name: "日程", exact: true }),
-  ).toBeVisible();
-  await page
-    .getByRole("button", { name: "收起工作台面板", exact: true })
-    .click();
-  await trigger.click();
-  await menu.getByRole("menuitem", { name: "私有备忘", exact: true }).click();
-  await expect(note).toHaveValue("手机菜单备忘");
   expect(state.writes).toEqual([]);
-  await page.getByRole("button", { name: "保存更改", exact: true }).click();
-  await expect.poll(() => state.workspace.note).toBe("手机菜单备忘");
-  const bounds = (await page
-    .getByRole("dialog", { name: "私有备忘", exact: true })
-    .boundingBox())!;
-  expect(bounds.x).toBeGreaterThanOrEqual(11);
-  expect(bounds.x + bounds.width).toBeLessThanOrEqual(379);
-  expect(
-    await page.evaluate(() => document.documentElement.scrollWidth),
-  ).toBeLessThanOrEqual(390);
   expect(
     await page.evaluate(() => window.workspaceToolsMicrophoneRequests),
   ).toBe(0);
-  await page.screenshot({ path: ".local/workspace-tools-mobile.png" });
 });

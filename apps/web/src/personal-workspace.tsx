@@ -12,7 +12,6 @@ import {
   App,
   Button,
   Checkbox,
-  Dropdown,
   Empty,
   Input,
   Modal,
@@ -26,13 +25,10 @@ import {
   ArrowRightOutlined,
   ArrowUpOutlined,
   DeleteOutlined,
-  LockOutlined,
   PlusOutlined,
   SettingOutlined,
   AppstoreOutlined,
   BarChartOutlined,
-  CalendarOutlined,
-  CheckOutlined,
   CloseOutlined,
   FileTextOutlined,
   InboxOutlined,
@@ -448,7 +444,6 @@ export function PersonalWorkspacePage() {
     ),
     [title, setTitle] = useState(""),
     [dueDate, setDueDate] = useState("");
-  const toolsMenuAnchor = useRef<HTMLButtonElement>(null);
   const q = useQuery({
     queryKey: ["personal-workspace", user.id],
     queryFn: () => api("/my-workspace"),
@@ -518,7 +513,12 @@ export function PersonalWorkspacePage() {
   };
   const openPanel = (next: WorkspacePanel, anchor?: HTMLElement) => {
     setVisitedPanels((visited) => new Set(visited).add(next));
-    setPanelAnchor(anchor || toolsMenuAnchor.current);
+    setPanelAnchor(
+      anchor ||
+        (document.activeElement instanceof HTMLElement
+          ? document.activeElement
+          : null),
+    );
     setPanel(next);
     setPanelOpen(true);
   };
@@ -610,55 +610,6 @@ export function PersonalWorkspacePage() {
               <AimOutlined />
             </button>
             <span className="workspace-world-control-divider" aria-hidden />
-            <Dropdown
-              autoFocus
-              trigger={["click"]}
-              menu={{
-                "aria-label": "工作台工具菜单",
-                items: [
-                  {
-                    key: "tools",
-                    label: "常用工具",
-                    icon: <AppstoreOutlined aria-hidden />,
-                  },
-                  {
-                    key: "note",
-                    label: "私有备忘",
-                    icon: <LockOutlined aria-hidden />,
-                  },
-                  ...(user.permissions.includes("project.read")
-                    ? [
-                        {
-                          key: "content",
-                          label: "我的内容",
-                          icon: <FileTextOutlined aria-hidden />,
-                        },
-                      ]
-                    : []),
-                  {
-                    key: "schedule",
-                    label: "日程",
-                    icon: <CalendarOutlined aria-hidden />,
-                  },
-                  {
-                    key: "todos",
-                    label: "个人待办",
-                    icon: <CheckOutlined aria-hidden />,
-                  },
-                ],
-                onClick: ({ key }) => openPanel(key as WorkspacePanel),
-              }}
-            >
-              <button
-                ref={toolsMenuAnchor}
-                type="button"
-                className="workspace-tools-menu-trigger"
-                aria-label="工作台工具"
-                disabled={!draft || sceneCovered}
-              >
-                <AppstoreOutlined /> <span>工作台工具</span>
-              </button>
-            </Dropdown>
             <WorkspaceHologram onPresenceChange={setHologramPresence} />
           </div>
           <div className="workspace-voice-slot" data-world-ui />
@@ -699,7 +650,7 @@ export function PersonalWorkspacePage() {
                         <div className="workspace-quiet-center">
                           <AppstoreOutlined aria-hidden />
                           <h2>你的工作，随时展开</h2>
-                          <p>打开身边的日程、待办与常用工具。</p>
+                          <p>从左侧导航进入已有权限的业务页面。</p>
                         </div>
                         <div className="workspace-quiet-orbit-slot" />
                       </div>
