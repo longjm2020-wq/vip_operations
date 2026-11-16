@@ -19,6 +19,7 @@ import { applyStandards, generateStandards, standardsAIStatus } from "./standard
 import { applyFixedOrder, previewFixedOrder } from "./fixed-order.js";
 import { deleteHistoryRows, restoreHistoryRows } from "./history-rows.js";
 import { createClipboardImages, readClipboardImage } from "./clipboard.js";
+import { queryOperatingDecisions, operatingDecisionDetail, saveOperatingDecision } from "./operating-decisions.js";
 
 const paramId = (value: string) => parse(id, value);
 const transferContext = (request:AuthRequest) => ({...context(request),actor:request.originalActor || request.actor});
@@ -32,6 +33,9 @@ class ProductArchiveTableController {
 @UseInterceptors(SelectionWorkspaceInterceptor)
 class StyleSelectionsController {
   constructor(@Inject(SelectionRealtime) private realtime: SelectionRealtime) {}
+  @Permission("selection.read") @Post("operating-decisions/query") operatingDecisions(@Req() request: AuthRequest, @Body() body: unknown) { return queryOperatingDecisions(context(request), body); }
+  @Permission("selection.read") @Get(":id/operating-decision") operatingDecision(@Req() request: AuthRequest, @Param("id") value: string) { return operatingDecisionDetail(context(request), paramId(value)); }
+  @Permission("selection.manage") @Post(":id/operating-decision") saveOperatingDecision(@Req() request: AuthRequest, @Param("id") value: string, @Body() body: unknown) { return saveOperatingDecision(context(request), paramId(value), body); }
   @Permission("selection.read") @Post("clipboard-images") clipboardImages(@Req() request: AuthRequest, @Body() body: unknown) {
     return createClipboardImages(context(request), request.cookies?.session, body);
   }

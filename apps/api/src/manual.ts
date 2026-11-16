@@ -33,6 +33,7 @@ export const manualPermissions: Record<string, string | null> = {
   "39-assistant-desktop": null,
   "40-assistant-team": null,
   "41-assistant-employees": null,
+  "42-product-operating-decisions": "product.read",
 };
 export function canReadManual(
   actor: Actor,

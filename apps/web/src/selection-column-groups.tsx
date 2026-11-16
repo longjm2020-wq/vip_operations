@@ -344,13 +344,15 @@ export function SelectionColumnGroupTabs({
   visibleKeys,
   activeKey,
   onChange,
+  extraItems = [],
 }: {
   groups: SelectionColumnGroup[];
   visibleKeys: string[];
   activeKey: string;
   onChange: (key: string) => void;
+  extraItems?: { key: string; label: string }[];
 }) {
-  if (!groups.length) return null;
+  if (!groups.length && !extraItems.length) return null;
   return (
     <Tabs
       className="selection-column-group-tabs"
@@ -364,6 +366,7 @@ export function SelectionColumnGroupTabs({
           label: group.name,
           disabled: !group.columnKeys.some((key) => visibleKeys.includes(key)),
         })),
+        ...extraItems,
       ]}
     />
   );

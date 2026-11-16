@@ -1,0 +1,78 @@
+.product-decisions {
+  min-height: 0;
+  overflow: auto;
+  padding: 12px;
+  background: #fff;
+  color: #28334a;
+}
+.product-decisions-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+.product-decisions-toolbar .ant-input-search {
+  width: 230px;
+}
+.product-decisions-toolbar > span {
+  color: #727e94;
+  font-size: 12px;
+  flex: 1;
+}
+.product-decisions .ant-table-thead > tr > th {
+  background: #f2f3f9;
+  color: #52617c;
+}
+.product-decisions .ant-table-cell {
+  border-color: #edeff5 !important;
+}
+.product-decisions .ant-tag {
+  margin-inline-end: 4px;
+  border: 0;
+}
+.product-decision-style.ant-btn {
+  padding: 0;
+  height: auto;
+  white-space: normal;
+  text-align: left;
+}
+.product-decision-reasons {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+.product-decision-muted {
+  display: block;
+  font-size: 12px;
+  color: #7a8495;
+  line-height: 1.7;
+}
+.product-decision-drawer h3 {
+  margin: 24px 0 12px;
+  font-size: 14px;
+}
+.product-decision-drawer .ant-alert {
+  margin: 12px 0;
+}
+.product-decision-drawer .ant-form-item {
+  margin-bottom: 14px;
+}
+.product-decision-history {
+  padding: 12px 0;
+  border-bottom: 1px solid #edeff5;
+  font-size: 12px;
+}
+.product-decision-history p {
+  margin: 6px 0;
+}
+.selection-card.product-decisions-active .selection-toolbar {
+  display: none;
+}
