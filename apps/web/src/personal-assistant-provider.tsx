@@ -322,6 +322,8 @@ export function PersonalAssistantProvider({
   });
   const revealBrowserAfter = useRef<Set<string> | null>(null);
   const [selectedBrowserTaskId, setSelectedBrowserTaskId] = useState<string>();
+  const [browserExpanded, setBrowserExpanded] = useState(false);
+  const [browserStarting, setBrowserStarting] = useState(false);
   const browser = useQuery({
     queryKey: ["assistant-browser", user.id],
     enabled: allowed,
@@ -573,6 +575,7 @@ export function PersonalAssistantProvider({
       }
     : undefined;
   const busy =
+    browserStarting ||
     desktopConnecting ||
     checkingVoiceTarget ||
     sending ||
@@ -582,6 +585,7 @@ export function PersonalAssistantProvider({
     gptVoice.active;
   const executionBusy = useRef(false);
   executionBusy.current =
+    browserStarting ||
     checkingVoiceTarget ||
     sending ||
     uploading ||
@@ -725,10 +729,10 @@ export function PersonalAssistantProvider({
   }, [open, section, speech.stop]);
   const [drawerSettled, setDrawerSettled] = useState(false);
   useAssistantChatScroll(
-    open && section === "chat",
+    open && (section === "chat" || section === "browser"),
     drawerSettled,
     bottom,
-    `${messages.length}:${Number(busy)}:${liveCaptions.at(-1)?.text || ""}:${Number(voiceVisible)}:${Number(q.isLoading)}`,
+    `${section}:${messages.length}:${Number(busy)}:${liveCaptions.at(-1)?.text || ""}:${Number(voiceVisible)}:${Number(q.isLoading)}`,
   );
   const send = async (value: string) => {
     if (!value.trim() || !composerReady || busy || voice.listening) return;
@@ -777,7 +781,7 @@ export function PersonalAssistantProvider({
         ? openAssistantWebsite(websiteRequest.destination.url)
         : prepareAssistantWebsite(requestId)
       : undefined;
-    setSection("chat");
+    if (section !== "browser" || !browserMode) setSection("chat");
     setOpen(true);
     setSending(true);
     setError("");
@@ -1181,14 +1185,17 @@ export function PersonalAssistantProvider({
           refresh={() => desktop.refetch()}
         />
       )}
-      {!teamMode && browserMode && activeBrowserTask && (
-        <AssistantBrowserTaskCard
-          task={activeBrowserTask}
-          compact
-          refresh={() => browser.refetch()}
-          inspect={() => inspectBrowser(activeBrowserTask.id)}
-        />
-      )}
+      {!teamMode &&
+        browserMode &&
+        activeBrowserTask &&
+        !(inDrawer && section === "browser") && (
+          <AssistantBrowserTaskCard
+            task={activeBrowserTask}
+            compact
+            refresh={() => browser.refetch()}
+            inspect={() => inspectBrowser(activeBrowserTask.id)}
+          />
+        )}
       <div className="assistant-desktop-entry">
         <Select
           size="small"
@@ -1529,12 +1536,14 @@ export function PersonalAssistantProvider({
           </span>
         }
         size={1120}
-        rootClassName={`personal-assistant-drawer assistant-screen${section === "team" ? " assistant-team-screen" : ""}`}
+        rootClassName={`personal-assistant-drawer assistant-screen${section === "team" ? " assistant-team-screen" : ""}${section === "browser" ? ` assistant-browser-workspace${browserExpanded ? " assistant-browser-expanded" : ""}` : ""}`}
         classNames={{
           body:
-            section === "chat"
-              ? "assistant-chat-body"
-              : "assistant-secondary-body",
+            section === "browser"
+              ? "assistant-browser-body"
+              : section === "chat"
+                ? "assistant-chat-body"
+                : "assistant-secondary-body",
         }}
         extra={
           <Dropdown
@@ -1732,6 +1741,7 @@ export function PersonalAssistantProvider({
         )}
         {section === "browser" && allowed && (
           <AssistantBrowserPanel
+            key={user.id}
             open={open && drawerSettled}
             owner={user.id}
             data={browser.data}
@@ -1742,6 +1752,14 @@ export function PersonalAssistantProvider({
             selectedId={selectedBrowserTaskId}
             selectTask={setSelectedBrowserTaskId}
             returnToChat={() => setSection("chat")}
+            expanded={browserExpanded}
+            toggleExpanded={() => setBrowserExpanded((value) => !value)}
+            onSubmitting={setBrowserStarting}
+            onStarted={(task) => {
+              rememberDesktopChoice({ mode: "browser" });
+              setTeamMode(false);
+              setSelectedBrowserTaskId(task.id);
+            }}
           />
         )}
         {section === "activity" && (
@@ -1755,275 +1773,299 @@ export function PersonalAssistantProvider({
             onNavigate={() => setOpen(false)}
           />
         )}
-        <div hidden={section !== "chat" || !allowed}>
-          <div className="assistant-status">
-            <span>
-              {browserMode
-                ? browser.data?.ready
-                  ? "独立浏览器已就绪"
-                  : "独立浏览器暂未就绪"
-                : data?.ready
-                  ? "小序已就绪"
-                  : "小序暂未就绪"}
-            </span>
-            <Button
-              type="text"
-              size="small"
-              icon={<ReloadOutlined />}
-              aria-label="刷新助理状态"
-              onClick={() => void q.refetch()}
-              loading={q.isFetching}
-            />
-          </div>
-          {q.isLoading && <Spin />}
-          {q.error && <Alert type="error" title={(q.error as Error).message} />}
-          {!browserMode && !q.isLoading && data && !data.ready && (
-            <Alert
-              type="warning"
-              title={
-                data.availabilityMessage || "请管理员启用并验证 AI 模型连接"
-              }
-            />
-          )}
-          {!messages.length && !liveCaptions.length && !voiceVisible && (
-            <div className="assistant-empty">
-              <span className="assistant-spark" aria-hidden>
-                ✦
+        <div
+          className={
+            section === "browser" ? "assistant-browser-chat" : undefined
+          }
+          hidden={!["chat", "browser"].includes(section) || !allowed}
+        >
+          <div
+            className={
+              section === "browser"
+                ? "assistant-browser-chat-scroll assistant-chat-body"
+                : undefined
+            }
+          >
+            <div className="assistant-status">
+              <span>
+                {browserMode
+                  ? browser.data?.ready
+                    ? "独立浏览器已就绪"
+                    : "独立浏览器暂未就绪"
+                  : data?.ready
+                    ? "小序已就绪"
+                    : "小序暂未就绪"}
               </span>
-              <h3>你的工作，从一句话开始。</h3>
-              <p>说出问题，查库存、跟项目、看任务，也能记住你的工作偏好。</p>
-              {[
-                "帮我安排明天下午3点的选款会",
-                "查看我参与的项目进度",
-                "查看最近的同步任务结果",
-              ].map((prompt) => (
-                <button
-                  type="button"
-                  key={prompt}
-                  onClick={() => setText(prompt)}
-                  disabled={busy}
-                >
-                  {prompt}
-                  <ArrowRightOutlined />
-                </button>
-              ))}
+              <Button
+                type="text"
+                size="small"
+                icon={<ReloadOutlined />}
+                aria-label="刷新助理状态"
+                onClick={() => void q.refetch()}
+                loading={q.isFetching}
+              />
             </div>
-          )}
-          <div className="assistant-messages" aria-label="助理对话记录">
-            {messages.map((item) =>
-              item.teamRunId ? (
-                <AssistantTeamMessage key={item.id} id={item.teamRunId} />
-              ) : (
-                <div
-                  key={item.id}
-                  className={`assistant-message assistant-message-${item.role}`}
-                >
-                  <Bubble
-                    placement={item.role === "user" ? "end" : "start"}
-                    variant={item.role === "user" ? "filled" : "borderless"}
-                    header={
-                      (item.role === "user" ? "你" : "小序") +
-                      (item.source === "voice"
-                        ? " · 语音"
-                        : item.source === "team"
-                          ? " · 团队任务"
-                          : "")
-                    }
-                    content={
-                      <div className="assistant-message-text">
-                        {item.role === "assistant"
-                          ? assistantPublicText(item.text)
-                          : item.text}
-                        {item.role === "assistant" && item.notice ? (
-                          <div className="assistant-model-hint">
-                            {item.notice}
-                          </div>
-                        ) : null}
-                      </div>
-                    }
-                  />
-                  {item.role === "assistant" && (
-                    <Button
-                      size="small"
-                      type="text"
-                      icon={
-                        speech.messageId === item.id ? (
-                          <StopOutlined />
-                        ) : (
-                          <SoundOutlined />
-                        )
-                      }
-                      aria-label={
-                        speech.messageId === item.id
-                          ? "停止小序朗读"
-                          : "小序朗读这条回复"
-                      }
-                      disabled={
-                        !speech.supported || !voiceStatus.data?.ready || busy
-                      }
-                      onClick={() => {
-                        if (speech.messageId === item.id) speech.stop();
-                        else {
-                          voice.stop();
-                          void speech.read(item.id);
-                        }
-                      }}
-                    >
-                      {speech.messageId === item.id ? "停止朗读" : "小序朗读"}
-                    </Button>
-                  )}
-                  <AssistantBusinessResults
-                    item={item}
-                    feed={activity.data}
-                    executing={executing}
-                    execute={(action) => void execute(action)}
-                    remember={(entry) => {
-                      setMemorySuggestion({
-                        ...entry,
-                        id: crypto.randomUUID(),
-                      });
-                      setSection("memory");
-                    }}
-                  />
-                  {item.role === "assistant" &&
-                    item.webNavigation &&
-                    assistantWebsiteUrl(item.webNavigation.url) && (
-                      <div className="assistant-tool-links">
-                        <a
-                          href={assistantWebsiteUrl(item.webNavigation.url)}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                        >
-                          打开{item.webNavigation.title}
-                          <ArrowRightOutlined />
-                        </a>
-                      </div>
-                    )}
-                  {!!item.schedules?.length && (
-                    <>
-                      <AgentMessageResults item={item} jobs={jobs.data || []} />
-                      <div className="assistant-schedule-proposals">
-                        {item.schedules.map((event) => {
-                          const added = [...schedule, ...pendingSchedules].some(
-                            (existing) => existing.id === event.id,
-                          );
-                          return (
-                            <div
-                              key={event.id}
-                              className="assistant-schedule-proposal"
-                            >
-                              <span>
-                                <CalendarOutlined /> 待确认日程
-                              </span>
-                              <strong>{event.title}</strong>
-                              <p>
-                                {event.date} · {event.startTime || "全天"}
-                                {event.endTime ? `–${event.endTime}` : ""}
-                              </p>
-                              {event.note && <p>{event.note}</p>}
-                              <Button
-                                size="small"
-                                disabled={added || schedule.length >= 500}
-                                onClick={() => onSchedule(event)}
-                              >
-                                {added ? "已加入日程草稿" : "加入日程草稿"}
-                              </Button>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </>
-                  )}
-                  {!!item.tools?.length && (
-                    <div className="assistant-tool-links">
-                      {item.tools.map((id) => {
-                        const tool = available.find((entry) => entry.id === id);
-                        return tool ? (
-                          <Link key={id} to={tool.path}>
-                            {tool.title}
-                            <ArrowRightOutlined />
-                          </Link>
-                        ) : null;
-                      })}
-                    </div>
-                  )}
-                  {!item.schedules?.length && (
-                    <AgentMessageResults item={item} jobs={jobs.data || []} />
-                  )}
-                  {item.browserTaskId &&
-                    item.browserTaskId !==
-                      (browserMode ? activeBrowserTask?.id : undefined) &&
-                    (() => {
-                      const task = browser.data?.tasks.find(
-                        (entry) => entry.id === item.browserTaskId,
-                      );
-                      return task ? (
-                        <AssistantBrowserTaskCard
-                          task={task}
-                          refresh={() => browser.refetch()}
-                          inspect={() => inspectBrowser(task.id)}
-                        />
-                      ) : (
-                        <Button
-                          size="small"
-                          onClick={() => inspectBrowser(item.browserTaskId)}
-                        >
-                          查看浏览器任务进度
-                        </Button>
-                      );
-                    })()}
-                  {item.desktopTaskId &&
-                    item.desktopTaskId !== activeDesktopTask?.id &&
-                    (() => {
-                      const task = desktop.data?.tasks.find(
-                        (entry) => entry.id === item.desktopTaskId,
-                      );
-                      return task ? (
-                        <AssistantDesktopTaskCard
-                          task={task}
-                          localDeviceId={localDesktopId}
-                          device={desktop.data?.devices.find(
-                            (entry) => entry.id === task.deviceId,
-                          )}
-                          refresh={() => desktop.refetch()}
-                        />
-                      ) : (
-                        <Button
-                          size="small"
-                          onClick={() => setSection("desktop")}
-                        >
-                          查看电脑任务进度
-                        </Button>
-                      );
-                    })()}
-                </div>
-              ),
+            {q.isLoading && <Spin />}
+            {q.error && (
+              <Alert type="error" title={(q.error as Error).message} />
             )}
-            {liveCaptions.map((caption) => (
-              <Bubble
-                key={caption.id}
-                placement={caption.role === "user" ? "end" : "start"}
-                variant={caption.role === "user" ? "filled" : "borderless"}
-                header={caption.role === "user" ? "你 · 语音" : "小序 · 语音"}
-                content={
-                  <div className="assistant-message-text">{caption.text}</div>
+            {!browserMode && !q.isLoading && data && !data.ready && (
+              <Alert
+                type="warning"
+                title={
+                  data.availabilityMessage || "请管理员启用并验证 AI 模型连接"
                 }
               />
-            ))}
-            {voiceVisible && <div className="assistant-chat-voice-slot" />}
-            {busy && !gptVoice.active && (
-              <Bubble
-                loading
-                content=""
-                header="助理正在回复…"
-                variant="borderless"
-              />
             )}
-            {(error || data?.error) && (
-              <Alert type="error" title={error || data?.error} showIcon />
+            {!messages.length && !liveCaptions.length && !voiceVisible && (
+              <div className="assistant-empty">
+                <span className="assistant-spark" aria-hidden>
+                  ✦
+                </span>
+                <h3>你的工作，从一句话开始。</h3>
+                <p>说出问题，查库存、跟项目、看任务，也能记住你的工作偏好。</p>
+                {[
+                  "帮我安排明天下午3点的选款会",
+                  "查看我参与的项目进度",
+                  "查看最近的同步任务结果",
+                ].map((prompt) => (
+                  <button
+                    type="button"
+                    key={prompt}
+                    onClick={() => setText(prompt)}
+                    disabled={busy}
+                  >
+                    {prompt}
+                    <ArrowRightOutlined />
+                  </button>
+                ))}
+              </div>
             )}
-            <div ref={bottom} />
+            <div className="assistant-messages" aria-label="助理对话记录">
+              {messages.map((item) =>
+                item.teamRunId ? (
+                  <AssistantTeamMessage key={item.id} id={item.teamRunId} />
+                ) : (
+                  <div
+                    key={item.id}
+                    className={`assistant-message assistant-message-${item.role}`}
+                  >
+                    <Bubble
+                      placement={item.role === "user" ? "end" : "start"}
+                      variant={item.role === "user" ? "filled" : "borderless"}
+                      header={
+                        (item.role === "user" ? "你" : "小序") +
+                        (item.source === "voice"
+                          ? " · 语音"
+                          : item.source === "team"
+                            ? " · 团队任务"
+                            : "")
+                      }
+                      content={
+                        <div className="assistant-message-text">
+                          {item.role === "assistant"
+                            ? assistantPublicText(item.text)
+                            : item.text}
+                          {item.role === "assistant" && item.notice ? (
+                            <div className="assistant-model-hint">
+                              {item.notice}
+                            </div>
+                          ) : null}
+                        </div>
+                      }
+                    />
+                    {item.role === "assistant" && (
+                      <Button
+                        size="small"
+                        type="text"
+                        icon={
+                          speech.messageId === item.id ? (
+                            <StopOutlined />
+                          ) : (
+                            <SoundOutlined />
+                          )
+                        }
+                        aria-label={
+                          speech.messageId === item.id
+                            ? "停止小序朗读"
+                            : "小序朗读这条回复"
+                        }
+                        disabled={
+                          !speech.supported || !voiceStatus.data?.ready || busy
+                        }
+                        onClick={() => {
+                          if (speech.messageId === item.id) speech.stop();
+                          else {
+                            voice.stop();
+                            void speech.read(item.id);
+                          }
+                        }}
+                      >
+                        {speech.messageId === item.id ? "停止朗读" : "小序朗读"}
+                      </Button>
+                    )}
+                    <AssistantBusinessResults
+                      item={item}
+                      feed={activity.data}
+                      executing={executing}
+                      execute={(action) => void execute(action)}
+                      remember={(entry) => {
+                        setMemorySuggestion({
+                          ...entry,
+                          id: crypto.randomUUID(),
+                        });
+                        setSection("memory");
+                      }}
+                    />
+                    {item.role === "assistant" &&
+                      item.webNavigation &&
+                      assistantWebsiteUrl(item.webNavigation.url) && (
+                        <div className="assistant-tool-links">
+                          <a
+                            href={assistantWebsiteUrl(item.webNavigation.url)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            打开{item.webNavigation.title}
+                            <ArrowRightOutlined />
+                          </a>
+                        </div>
+                      )}
+                    {!!item.schedules?.length && (
+                      <>
+                        <AgentMessageResults
+                          item={item}
+                          jobs={jobs.data || []}
+                        />
+                        <div className="assistant-schedule-proposals">
+                          {item.schedules.map((event) => {
+                            const added = [
+                              ...schedule,
+                              ...pendingSchedules,
+                            ].some((existing) => existing.id === event.id);
+                            return (
+                              <div
+                                key={event.id}
+                                className="assistant-schedule-proposal"
+                              >
+                                <span>
+                                  <CalendarOutlined /> 待确认日程
+                                </span>
+                                <strong>{event.title}</strong>
+                                <p>
+                                  {event.date} · {event.startTime || "全天"}
+                                  {event.endTime ? `–${event.endTime}` : ""}
+                                </p>
+                                {event.note && <p>{event.note}</p>}
+                                <Button
+                                  size="small"
+                                  disabled={added || schedule.length >= 500}
+                                  onClick={() => onSchedule(event)}
+                                >
+                                  {added ? "已加入日程草稿" : "加入日程草稿"}
+                                </Button>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </>
+                    )}
+                    {!!item.tools?.length && (
+                      <div className="assistant-tool-links">
+                        {item.tools.map((id) => {
+                          const tool = available.find(
+                            (entry) => entry.id === id,
+                          );
+                          return tool ? (
+                            <Link key={id} to={tool.path}>
+                              {tool.title}
+                              <ArrowRightOutlined />
+                            </Link>
+                          ) : null;
+                        })}
+                      </div>
+                    )}
+                    {!item.schedules?.length && (
+                      <AgentMessageResults item={item} jobs={jobs.data || []} />
+                    )}
+                    {item.browserTaskId &&
+                      item.browserTaskId !==
+                        (browserMode ? activeBrowserTask?.id : undefined) &&
+                      (() => {
+                        const task = browser.data?.tasks.find(
+                          (entry) => entry.id === item.browserTaskId,
+                        );
+                        return task ? (
+                          <AssistantBrowserTaskCard
+                            task={task}
+                            refresh={() => browser.refetch()}
+                            inspect={() => inspectBrowser(task.id)}
+                          />
+                        ) : (
+                          <Button
+                            size="small"
+                            onClick={() => inspectBrowser(item.browserTaskId)}
+                          >
+                            查看浏览器任务进度
+                          </Button>
+                        );
+                      })()}
+                    {item.desktopTaskId &&
+                      item.desktopTaskId !== activeDesktopTask?.id &&
+                      (() => {
+                        const task = desktop.data?.tasks.find(
+                          (entry) => entry.id === item.desktopTaskId,
+                        );
+                        return task ? (
+                          <AssistantDesktopTaskCard
+                            task={task}
+                            localDeviceId={localDesktopId}
+                            device={desktop.data?.devices.find(
+                              (entry) => entry.id === task.deviceId,
+                            )}
+                            refresh={() => desktop.refetch()}
+                          />
+                        ) : (
+                          <Button
+                            size="small"
+                            onClick={() => setSection("desktop")}
+                          >
+                            查看电脑任务进度
+                          </Button>
+                        );
+                      })()}
+                  </div>
+                ),
+              )}
+              {liveCaptions.map((caption) => (
+                <Bubble
+                  key={caption.id}
+                  placement={caption.role === "user" ? "end" : "start"}
+                  variant={caption.role === "user" ? "filled" : "borderless"}
+                  header={caption.role === "user" ? "你 · 语音" : "小序 · 语音"}
+                  content={
+                    <div className="assistant-message-text">{caption.text}</div>
+                  }
+                />
+              ))}
+              {voiceVisible && <div className="assistant-chat-voice-slot" />}
+              {busy && !gptVoice.active && (
+                <Bubble
+                  loading
+                  content=""
+                  header="助理正在回复…"
+                  variant="borderless"
+                />
+              )}
+              {(error || data?.error) && (
+                <Alert type="error" title={error || data?.error} showIcon />
+              )}
+              <div ref={bottom} />
+            </div>
           </div>
+          {section === "browser" && allowed && (
+            <div className="assistant-browser-chat-compose">{sender(true)}</div>
+          )}
         </div>
       </Drawer>
     </AssistantHubContext.Provider>

@@ -27,6 +27,8 @@ async function fixture(page: Page) {
     chatReady: true,
     tasks: [] as BrowserTask[],
     requests: [] as Record<string, unknown>[],
+    browserRequests: [] as Record<string, unknown>[],
+    createError: "",
     controls: [] as string[],
     actions: [] as Record<string, any>[],
     rejectAction: false,
@@ -126,7 +128,27 @@ async function fixture(page: Page) {
         },
         tasks: state.tasks,
       } satisfies BrowserState;
-    else if (path === `/my-workspace/assistant/browser/tasks/${taskId}/frame`)
+    else if (path === "/my-workspace/assistant/browser/tasks") {
+      const body = request.postDataJSON();
+      state.browserRequests.push(body);
+      if (state.createError) {
+        await route.fulfill({
+          status: 503,
+          json: {
+            error: { code: "BROWSER_UNAVAILABLE", message: state.createError },
+          },
+        });
+        return;
+      }
+      data = {
+        ...makeTask(),
+        instruction: body.instruction,
+        url: body.url || "",
+        status: "QUEUED",
+        stage: "等待独立浏览器",
+      };
+      state.tasks = [data as BrowserTask];
+    } else if (path === `/my-workspace/assistant/browser/tasks/${taskId}/frame`)
       data = state.frame;
     else if (
       path === `/my-workspace/assistant/browser/tasks/${taskId}/control`
@@ -339,10 +361,11 @@ test("独立浏览器未就绪不影响网站对话，显式选择后阻断且�
   await expect(
     page
       .getByRole("dialog", { name: "AI 个人助理" })
-      .getByText("独立浏览器执行服务尚未连接", { exact: true }),
+      .getByText("独立浏览器执行服务尚未连接", { exact: true })
+      .last(),
   ).toBeVisible();
   await expect(
-    page.getByRole("button", { name: "使用小序独立浏览器", exact: true }),
+    page.getByRole("button", { name: "开始浏览器任务", exact: true }),
   ).toBeDisabled();
   await selectAssistantPanel(page, "聊天");
   await expect(composer.locator("textarea")).toHaveValue(
@@ -552,3 +575,116 @@ test("浏览器截图接管绑定新画面，旧画面不重放，继续与清�
     page.getByRole("img", { name: "小序独立浏览器当前截图" }),
   ).toHaveCount(0);
 });
+
+test("浏览器分栏与新任务页保留草稿，展开、收起及历史切换不提交操作", async ({
+  page,
+}) => {
+  const { state } = await fixture(page);
+  await page.goto("/my-workspace?assistant=browser");
+  const panel = page.locator(".assistant-browser-panel");
+  const chat = page.locator(".assistant-browser-chat");
+  await expect(
+    panel.getByRole("textbox", { name: "网址或网页任务" }),
+  ).toBeVisible();
+  const draft = chat.locator("textarea");
+  await draft.fill("保留左侧对话草稿");
+  await expect(
+    page.locator(".assistant-browser-workspace .ant-drawer-content-wrapper"),
+  ).toHaveCSS("filter", "none");
+  const chatBox = await chat.boundingBox();
+  const panelBox = await panel.boundingBox();
+  expect(chatBox!.x + chatBox!.width).toBeLessThanOrEqual(panelBox!.x + 1);
+  await page.screenshot({ path: ".local/browser-split-start.png" });
+  await panel.getByRole("button", { name: "展开浏览器", exact: true }).click();
+  await expect(chat).toBeHidden();
+  expect((await panel.boundingBox())!.width).toBeGreaterThan(panelBox!.width);
+  await panel.getByRole("button", { name: "恢复分栏", exact: true }).click();
+  await expect(draft).toHaveValue("保留左侧对话草稿");
+  await panel.getByRole("button", { name: "返回对话", exact: true }).click();
+  await expect(page.locator(".ant-drawer-footer textarea")).toHaveValue(
+    "保留左侧对话草稿",
+  );
+  expect(state.browserRequests).toEqual([]);
+  expect(state.controls).toEqual([]);
+  expect(state.actions).toEqual([]);
+  state.tasks = [
+    makeTask(),
+    {
+      ...makeTask(),
+      id: "33333333-3333-4333-8333-333333333333",
+      title: "历史网页",
+      instruction: "查看历史网页",
+      status: "DONE",
+    },
+  ];
+  await page.goto("/my-workspace?assistant=browser");
+  await expect(panel.locator(".assistant-browser-tab")).toContainText(
+    "示例网站",
+  );
+  await panel.getByRole("combobox", { name: "选择浏览器任务" }).click();
+  await page
+    .locator(".ant-select-dropdown:visible")
+    .getByText("已完成 · 查看历史网页", { exact: true })
+    .click();
+  await expect(panel.locator(".assistant-browser-tab")).toContainText(
+    "历史网页",
+  );
+  await panel.getByRole("button", { name: "新建浏览器任务" }).click();
+  await expect(
+    panel.getByRole("textbox", { name: "网址或网页任务" }),
+  ).toBeDisabled();
+  await panel.getByRole("button", { name: "查看当前任务" }).click();
+  await expect(panel.locator(".assistant-browser-tab")).toContainText(
+    "示例网站",
+  );
+  expect(state.browserRequests).toEqual([]);
+  expect(state.controls).toEqual([]);
+});
+
+for (const width of [1440, 390]) {
+  test(`新任务入口在 ${width}px 校验网址、保留失败输入并提交独立浏览器任务`, async ({
+    page,
+  }) => {
+    const { state } = await fixture(page);
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto("/my-workspace?assistant=browser");
+    const panel = page.locator(".assistant-browser-panel");
+    const input = panel.getByRole("textbox", { name: "网址或网页任务" });
+    const submit = panel.getByRole("button", { name: "开始浏览器任务" });
+    await input.fill("file:///C:/private");
+    await input.press("Enter");
+    await expect(panel.getByRole("alert")).toContainText("HTTP/HTTPS");
+    expect(state.browserRequests).toHaveLength(0);
+    await input.fill("example.com");
+    state.createError = "服务刚刚离线，请稍后重试";
+    await submit.click();
+    await expect(panel.getByRole("alert")).toContainText("服务刚刚离线");
+    await expect(input).toHaveValue("example.com");
+    state.createError = "";
+    await submit.click();
+    await expect(
+      panel.getByRole("heading", { name: "浏览器画面", exact: true }),
+    ).toBeVisible();
+    expect(state.browserRequests).toHaveLength(2);
+    expect(state.browserRequests[1]).toEqual({
+      requestId: state.browserRequests[0].requestId,
+      instruction: "打开 https://example.com，查看网页标题后完成任务。",
+      url: "https://example.com",
+    });
+    expect(state.requests).toEqual([]);
+    expect(state.actions).toEqual([]);
+    await expect
+      .poll(() =>
+        panel.evaluate((element) => element.scrollWidth - element.clientWidth),
+      )
+      .toBeLessThanOrEqual(1);
+    if (width === 390)
+      await expect(page.locator(".assistant-browser-chat")).toBeHidden();
+    await page.screenshot({ path: `.local/browser-created-${width}.png` });
+    await panel.getByRole("button", { name: "返回对话", exact: true }).click();
+    await expect(
+      page.locator(".assistant-compose:visible .assistant-desktop-note"),
+    ).toContainText("小序独立浏览器");
+    expect(state.controls).toEqual([]);
+  });
+}

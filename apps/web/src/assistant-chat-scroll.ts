@@ -34,7 +34,11 @@ export function findAssistantChatScroller(
 ): AssistantChatScrollNode | null {
   let node = from;
   while (node) {
-    if (node.classList.contains("ant-drawer-body")) return node;
+    if (
+      node.classList.contains("assistant-browser-chat-scroll") ||
+      node.classList.contains("ant-drawer-body")
+    )
+      return node;
     node = node.parentElement;
   }
   return null;
