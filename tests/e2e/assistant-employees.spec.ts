@@ -8,6 +8,7 @@ import {
   type EmployeeTaskCreate,
 } from "../../packages/contracts/src/assistant-employees.js";
 import { defaultTeamSettings } from "../../packages/contracts/src/assistant-team.js";
+import { selectAssistantPanel } from "./assistant-controls.js";
 
 const root = "/my-workspace/assistant/employees";
 async function setup(page: Page, count = 0, conflict = false) {
@@ -273,6 +274,15 @@ test("紧凑员工栏保留切换、配置返回与新增，长称呼在手机�
   await openEmployee(page, longName);
   const panel = page.getByRole("region", { name: "AI 员工工作台" });
   const heading = panel.locator(".employee-panel-heading");
+  await expect(page.locator(".workspace-tools-header")).toBeHidden();
+  const rail = page.getByRole("navigation", { name: "工作台工具入口" });
+  await expect(rail).toBeVisible();
+  await expect(
+    rail.getByRole("button", { name: "展开右侧工具栏", exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    heading.getByRole("button", { name: "收起右侧工具栏", exact: true }),
+  ).toBeVisible();
   await expect(heading.locator(".employee-avatar")).toHaveCount(1);
   await expect(panel.getByRole("combobox", { name: "选择员工" })).toHaveCount(
     1,
@@ -318,6 +328,7 @@ test("紧凑员工栏保留切换、配置返回与新增，长称呼在手机�
     .click();
   await expect(panel.getByRole("combobox", { name: "协作员工" })).toBeVisible();
   await page.setViewportSize({ width: 390, height: 844 });
+  await expect(rail).toBeHidden();
   await chooseEmployee(longName);
   await expect(
     panel.getByRole("textbox", { name: "交办员工任务" }),
@@ -334,6 +345,24 @@ test("紧凑员工栏保留切换、配置返回与新增，长称呼在手机�
     ),
   ).toBe(true);
   await page.screenshot({ path: ".local/employees-compact-mobile.png" });
+  await heading
+    .getByRole("button", { name: "收起右侧工具栏", exact: true })
+    .click();
+  await expect(panel).toBeHidden();
+  await expect(rail).toBeVisible();
+  await rail
+    .getByRole("button", { name: "更多工作台工具", exact: true })
+    .click();
+  await expect(
+    page.getByRole("menuitem", { name: "语音设置", exact: true }),
+  ).toBeVisible();
+  await page.keyboard.press("Escape");
+  await rail
+    .getByRole("button", { name: "展开右侧工具栏", exact: true })
+    .click();
+  await expect(
+    panel.getByRole("textbox", { name: "交办员工任务" }),
+  ).toHaveValue(draft);
   await heading.getByRole("button", { name: "新建员工", exact: true }).click();
   await expect(panel.getByRole("textbox", { name: "员工称呼" })).toBeVisible();
   await heading
@@ -392,7 +421,7 @@ test("员工草稿相互隔离，切换工具保留草稿，独立交办可暂�
   await expect(page.getByRole("textbox", { name: "交办员工任务" })).toHaveValue(
     "保留衣服版型，只整理图片背景",
   );
-  await page.getByRole("button", { name: "独立浏览器", exact: true }).click();
+  await selectAssistantPanel(page, "独立浏览器");
   await openEmployee(page, "修图师");
   await expect(page.getByRole("textbox", { name: "交办员工任务" })).toHaveValue(
     "保留衣服版型，只整理图片背景",

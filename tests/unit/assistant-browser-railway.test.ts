@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Sandbox } from "railway";
+import type { Sandbox, SandboxCheckpointInfo } from "railway";
 import type { BrowserRun } from "../../apps/api/src/modules/workspace/assistant-browser.js";
 import type * as Environments from "../../apps/worker/src/assistant-browser-environments.js";
 import type { BrowserRpcTransport } from "../../apps/worker/src/assistant-browser-remote.js";
@@ -16,6 +16,7 @@ import {
   browserRuntimeVerify,
   browserTemplatePrefix,
   railwayBrowserConfig,
+  validBrowserCheckpointId,
 } from "../../apps/worker/src/assistant-browser-railway.js";
 
 function deferred<T>() {
@@ -171,7 +172,7 @@ function fixture(configuredTemplate?: string) {
         : "DESTROYING"
       : "RUNNING",
   }));
-  const checkpoints = vi.fn(async () => [
+  const checkpoints = vi.fn(async (): Promise<SandboxCheckpointInfo[]> => [
     {
       id: randomUUID(),
       key: template,
@@ -241,6 +242,32 @@ afterEach(() => {
 });
 
 describe("Railway independent browser lifecycle (no real resources)", () => {
+  it("accepts real opaque checkpoint IDs while bounding malformed metadata", async () => {
+    const f = fixture();
+    f.checkpoints.mockResolvedValue([
+      {
+        id: f.template,
+        key: f.template,
+        environmentId: f.environmentId,
+        createdAt: new Date().toISOString(),
+      },
+    ]);
+    await f.runtime.probe(f.controller.signal);
+    const driver = await f.runtime.open(f.run, null, f.controller.signal);
+    expect(f.create).toHaveBeenCalledWith(f.template, expect.any(Object));
+    await driver.close();
+    expect(validBrowserCheckpointId(f.template)).toBe(true);
+    for (const invalid of [
+      undefined,
+      null,
+      42,
+      "",
+      "bad\nidentifier",
+      "bad identifier",
+      "x".repeat(513),
+    ])
+      expect(validBrowserCheckpointId(invalid)).toBe(false);
+  });
   it("performs only read-only health checks and never reserves or creates a probe VM", async () => {
     const f = fixture();
     await f.runtime.probe(f.controller.signal);

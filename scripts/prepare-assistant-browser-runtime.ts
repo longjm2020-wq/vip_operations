@@ -8,6 +8,7 @@ import {
   browserBaseRoot,
   browserRuntimeSetup,
   browserTemplatePrefix,
+  validBrowserCheckpointId,
   type BrowserRuntimeVersions,
 } from "../apps/worker/src/assistant-browser-railway.js";
 
@@ -56,6 +57,7 @@ export type BrowserPreparationReceipt = {
   environmentId: string;
   template: string;
   stage: Stage;
+  failedStage?: Stage;
   startedAt: string;
   finishedAt?: string;
   sandboxId?: string;
@@ -138,7 +140,7 @@ export async function prepareBrowserRuntime(
   const request =
     (useSignal: AbortSignal, maximum = 15000): typeof fetch =>
     (url, init = {}) => {
-      if (String(url) !== endpoint) throw Error("BROWSER_PREPARE_SCOPE");
+      if (String(url) !== endpoint) throw Error("BROWSER_PREPARE_ENDPOINT");
       return deps.fetch(url, {
         ...init,
         signal: AbortSignal.any([useSignal, AbortSignal.timeout(maximum)]),
@@ -205,7 +207,7 @@ export async function prepareBrowserRuntime(
   };
   let finished = false;
   const controlFetch: typeof fetch = async (url, init = {}) => {
-    if (String(url) !== endpoint) throw Error("BROWSER_PREPARE_SCOPE");
+    if (String(url) !== endpoint) throw Error("BROWSER_PREPARE_ENDPOINT");
     const body = typeof init.body === "string" ? JSON.parse(init.body) : {};
     const creating = /\bsandboxCreate\s*\(/.test(String(body.query || ""));
     if (creating) {
@@ -331,16 +333,17 @@ export async function prepareBrowserRuntime(
     if (
       checkpoint.key !== receipt.template ||
       checkpoint.environmentId !== receipt.environmentId ||
-      !uuid.test(checkpoint.id)
+      !validBrowserCheckpointId(checkpoint.id)
     )
-      throw Error("BROWSER_PREPARE_SCOPE");
+      throw Error("BROWSER_PREPARE_CHECKPOINT_IDENTITY");
     receipt.checkpointId = checkpoint.id;
     receipt.prepared = true;
     await persist();
   } catch (error) {
+    receipt.failedStage = receipt.stage;
     const message = error instanceof Error ? error.message : "";
     receipt.code =
-      /^BROWSER_PREPARE_(?:CONFIGURATION|SCOPE|DEADLINE|NAME_EXISTS|INSTALL_FAILED|VERIFY_FAILED|DUPLICATE_CREATE|RECEIPT_FAILED)$/.test(
+      /^BROWSER_PREPARE_(?:CONFIGURATION|SCOPE|ENDPOINT|CHECKPOINT_IDENTITY|DEADLINE|NAME_EXISTS|INSTALL_FAILED|VERIFY_FAILED|DUPLICATE_CREATE|RECEIPT_FAILED)$/.test(
         message,
       )
         ? message

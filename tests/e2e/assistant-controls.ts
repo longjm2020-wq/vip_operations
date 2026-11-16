@@ -92,11 +92,11 @@ export async function selectAssistantPanel(page: Page, name: string) {
       return;
     }
     const browser = page.locator(".assistant-browser-panel");
-    if (await browser.isVisible()) {
-      if (name === "独立浏览器") return;
+    if (name === "独立浏览器" && (await browser.isVisible())) return;
+    const rail = page.getByRole("navigation", { name: "工作台工具入口" });
+    if (!(await rail.isVisible())) {
       await collapseWorkspaceTools(page);
     }
-    const rail = page.getByRole("navigation", { name: "已收起的右栏工具" });
     if (await rail.isVisible()) {
       const shortcuts: Record<string, string> = {
         独立浏览器: "展开独立浏览器",
@@ -104,13 +104,15 @@ export async function selectAssistantPanel(page: Page, name: string) {
         "AI 员工": "展开 AI 员工",
       };
       const shortcut = shortcuts[name];
-      await rail
-        .getByRole("button", {
-          name: shortcut || "展开我的电脑",
-          exact: true,
-        })
-        .click();
-      if (shortcut) return;
+      if (shortcut) {
+        await rail.getByRole("button", { name: shortcut, exact: true }).click();
+      } else {
+        await rail
+          .getByRole("button", { name: "更多工作台工具", exact: true })
+          .click();
+        await page.getByRole("menuitem", { name, exact: true }).click();
+      }
+      return;
     }
     if (["独立浏览器", "我的电脑"].includes(name)) {
       await page

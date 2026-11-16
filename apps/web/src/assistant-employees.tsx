@@ -24,6 +24,7 @@ import {
   AuditOutlined,
   CameraOutlined,
   EditOutlined,
+  DoubleRightOutlined,
   LoadingOutlined,
   LeftOutlined,
   PlusOutlined,
@@ -855,6 +856,7 @@ export function AssistantEmployeesPanel({
     React.SetStateAction<Record<string, EmployeeDraft>>
   >;
 }) {
+  const hub = useAssistantHub();
   const user = useUser(),
     client = useQueryClient(),
     { message } = App.useApp();
@@ -1054,6 +1056,17 @@ export function AssistantEmployeesPanel({
           onClick={() => changeEmployee("new")}
           disabled={sending}
         />
+        {hub.workbench && (
+          <Button
+            type="text"
+            size="small"
+            className="employee-panel-collapse"
+            icon={<DoubleRightOutlined />}
+            aria-label="收起右侧工具栏"
+            title="收起员工窗口，任务继续保留"
+            onClick={() => hub.workbench?.setToolsOpen(false)}
+          />
+        )}
       </header>
       {(directory.error || catalog.error) && (
         <Alert

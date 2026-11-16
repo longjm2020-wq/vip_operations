@@ -170,7 +170,7 @@ for (const width of [1440, 390]) {
       .getByRole("button", { name: "关闭浏览器面板", exact: true })
       .click();
     await expect(right).toBeHidden();
-    const rail = center.getByRole("navigation", { name: "已收起的右栏工具" });
+    const rail = center.getByRole("navigation", { name: "工作台工具入口" });
     await expect(rail).toBeVisible();
     const layout = await page
       .locator(".workspace-columns")
@@ -199,6 +199,12 @@ for (const width of [1440, 390]) {
     await draft.fill("切换工具后仍保留的草稿");
     await selectAssistantPanel(page, "独立浏览器");
     await expect(browser).toBeVisible();
+    if (width === 1440) {
+      await expect(rail).toBeVisible();
+      await expect(
+        rail.getByRole("button", { name: "展开右侧工具栏", exact: true }),
+      ).toHaveCount(0);
+    } else await expect(rail).toBeHidden();
     // Selecting the already visible browser must not close it or launch a task.
     await selectAssistantPanel(page, "独立浏览器");
     await expect(browser).toBeVisible();

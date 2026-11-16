@@ -100,6 +100,13 @@
   background: color-mix(in srgb, var(--app-bg) 80%, transparent);
   backdrop-filter: blur(8px);
 }
+.workspace-tools-rail .ant-btn {
+  flex-shrink: 0;
+}
+.workspace-tools-rail [aria-pressed="true"] {
+  color: var(--app-accent);
+  background: var(--app-surface);
+}
 .workspace-columns [hidden] {
   display: none !important;
 }

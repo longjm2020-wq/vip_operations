@@ -145,6 +145,9 @@
 .employee-panel-heading > button {
   flex-shrink: 0;
 }
+.employee-panel-collapse {
+  margin-left: 4px;
+}
 .employee-panel-heading > span {
   flex-shrink: 0;
 }

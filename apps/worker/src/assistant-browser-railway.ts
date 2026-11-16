@@ -38,6 +38,15 @@ export type RailwayBrowserConfig = {
   template: string;
 };
 export type BrowserRuntimeVersions = { playwright: string; zod: string };
+/** Railway GraphQL checkpoint IDs are opaque; a named checkpoint can use its name as ID. */
+export function validBrowserCheckpointId(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= 512 &&
+    !/[\u0000-\u0020\u007f]/u.test(value)
+  );
+}
 export function browserTemplatePrefix(versions: BrowserRuntimeVersions) {
   if (!Object.values(versions).every((value) => /^\d+\.\d+\.\d+$/.test(value)))
     throw Error("BROWSER_TEMPLATE_UNAVAILABLE");
@@ -234,7 +243,7 @@ export class RailwayBrowserRuntime {
         (item) =>
           item.key === this.config.template &&
           item.environmentId === this.config.environmentId &&
-          uuid.test(item.id),
+          validBrowserCheckpointId(item.id),
       )
     )
       throw Error("BROWSER_TEMPLATE_UNAVAILABLE");

@@ -82,11 +82,56 @@ export function WorkspaceColumns({ children }: { children: ReactNode }) {
       <section className="workspace-center" aria-label="工作台中栏">
         {children}
         <div className="workspace-chat-host" ref={dock.registerChat} />
-        <nav className="workspace-tools-rail" aria-label="已收起的右栏工具" hidden={dock.toolsOpen}>
-          <Button type="text" icon={<LeftOutlined />} aria-label="展开右侧工具栏" title="展开右侧工具栏" onClick={() => dock.setToolsOpen(true)} />
-          <Button type="text" icon={<TeamOutlined />} aria-label="展开 AI 员工" title="AI 员工" onClick={() => dock.openEmployee()} />
-          <Button type="text" icon={<GlobalOutlined />} aria-label="展开独立浏览器" title="独立浏览器" onClick={() => dock.selectTool("browser")} />
-          <Button type="text" icon={<DesktopOutlined />} aria-label="展开我的电脑" title="我的电脑" onClick={() => dock.selectTool("desktop")} />
+        <nav className="workspace-tools-rail" aria-label="工作台工具入口">
+          {!dock.toolsOpen && (
+            <Button
+              type="text"
+              icon={<LeftOutlined />}
+              aria-label="展开右侧工具栏"
+              title="展开右侧工具栏"
+              onClick={() => dock.setToolsOpen(true)}
+            />
+          )}
+          <Button
+            type="text"
+            icon={<TeamOutlined />}
+            aria-label="展开 AI 员工"
+            title="AI 员工"
+            aria-pressed={dock.toolsOpen && dock.tool === "employees"}
+            onClick={() => dock.openEmployee()}
+          />
+          <Button
+            type="text"
+            icon={<GlobalOutlined />}
+            aria-label="展开独立浏览器"
+            title="独立浏览器"
+            aria-pressed={dock.toolsOpen && dock.tool === "browser"}
+            onClick={() => dock.selectTool("browser")}
+          />
+          <Button
+            type="text"
+            icon={<DesktopOutlined />}
+            aria-label="展开我的电脑"
+            title="我的电脑"
+            aria-pressed={dock.toolsOpen && dock.tool === "desktop"}
+            onClick={() => dock.selectTool("desktop")}
+          />
+          <Dropdown
+            trigger={["click"]}
+            menu={{
+              items: extra,
+              selectedKeys: [dock.tool],
+              onClick: ({ key }) =>
+                dock.selectTool(key as AssistantToolSection),
+            }}
+          >
+            <Button
+              type="text"
+              icon={<EllipsisOutlined />}
+              aria-label="更多工作台工具"
+              title="更多工具"
+            />
+          </Dropdown>
         </nav>
       </section>
       <div
@@ -136,7 +181,11 @@ export function WorkspaceColumns({ children }: { children: ReactNode }) {
       <aside className="workspace-right" aria-label="右侧工具栏">
         <header
           className="workspace-tools-header"
-          hidden={!dock.toolsOpen || dock.tool === "browser"}
+          hidden={
+            !dock.toolsOpen ||
+            dock.tool === "browser" ||
+            dock.tool === "employees"
+          }
         >
           <nav className="workspace-tools-tabs" aria-label="右栏工具">
             <Button

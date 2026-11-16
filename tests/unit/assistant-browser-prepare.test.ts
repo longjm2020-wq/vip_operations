@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
-import type { Sandbox } from "railway";
+import type { Sandbox, SandboxCheckpointInfo } from "railway";
 import {
   browserPreparationPlan,
   prepareBrowserRuntime,
@@ -48,12 +48,14 @@ function fixture() {
       : "XUTI_BROWSER_BASE_VERIFIED",
     stderr: "",
   }));
-  const checkpoint = vi.fn(async (key: string) => ({
-    id: checkpointId,
-    key,
-    environmentId,
-    createdAt: new Date().toISOString(),
-  }));
+  const checkpoint = vi.fn(
+    async (key: string): Promise<SandboxCheckpointInfo> => ({
+      id: checkpointId,
+      key,
+      environmentId,
+      createdAt: new Date().toISOString(),
+    }),
+  );
   const vm = {
     id: sandboxId,
     environmentId,
@@ -78,15 +80,7 @@ function fixture() {
     ...vm,
     status: destroyed ? "DESTROYED" : "RUNNING",
   }));
-  const checkpoints = vi.fn(
-    async () =>
-      [] as {
-        id: string;
-        key: string;
-        environmentId: string;
-        createdAt: string;
-      }[],
-  );
+  const checkpoints = vi.fn(async (): Promise<SandboxCheckpointInfo[]> => []);
   return {
     environmentId,
     sandboxId,
@@ -124,6 +118,38 @@ function fixture() {
 }
 
 describe("clean browser base preparation without real resources", () => {
+  it("accepts the provider's named-checkpoint ID and still requires exact environment and key", async () => {
+    const f = fixture();
+    f.checkpoint.mockImplementation(async (key: string) => ({
+      id: key,
+      key,
+      environmentId: f.environmentId,
+      createdAt: new Date().toISOString(),
+    }));
+    expect(await prepareBrowserRuntime(f.options, f.deps)).toMatchObject({
+      stage: "READY",
+      checkpointId: f.template,
+      prepared: true,
+      destroyConfirmed: true,
+    });
+    for (const mismatch of ["key", "environment"]) {
+      const bad = fixture();
+      bad.checkpoint.mockImplementation(async (key: string) => ({
+        id: key,
+        key: mismatch === "key" ? "another-template" : key,
+        environmentId:
+          mismatch === "environment" ? randomUUID() : bad.environmentId,
+        createdAt: new Date().toISOString(),
+      }));
+      expect(await prepareBrowserRuntime(bad.options, bad.deps)).toMatchObject({
+        stage: "FAILED",
+        failedStage: "CHECKPOINT",
+        code: "BROWSER_PREPARE_CHECKPOINT_IDENTITY",
+        prepared: false,
+        destroyConfirmed: true,
+      });
+    }
+  });
   it("defaults to a pure resource plan without network, receipts or SDK calls", async () => {
     const f = fixture();
     expect(await prepareBrowserRuntime({ receipt: f.persist }, f.deps)).toBe(
