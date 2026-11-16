@@ -10,9 +10,39 @@ import {
   aiModelManagement,
   saveAiFeatureModel,
 } from "./ai-model-management.js";
+import {
+  readAgentAi,
+  saveAgentAi,
+  syncAgentAiModels,
+  testAgentAiModel,
+} from "./modules/workspace/agentai-connection.js";
 
 @Controller("api/v1/ai-model-management")
 export class AiModelManagementController {
+  @Get("agentai") @Permission("analytics.manage") readAgentAi(
+    @Req() req: AuthRequest,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    res.setHeader("Cache-Control", "private, no-store");
+    return readAgentAi(context(req));
+  }
+  @Post("agentai") @Permission("analytics.manage") saveAgentAi(
+    @Req() req: AuthRequest,
+    @Body() body: unknown,
+  ) {
+    return saveAgentAi(context(req), body);
+  }
+  @Post("agentai/sync") @Permission("analytics.manage") syncAgentAi(
+    @Req() req: AuthRequest,
+  ) {
+    return syncAgentAiModels(context(req));
+  }
+  @Post("agentai/test") @Permission("analytics.manage") testAgentAi(
+    @Req() req: AuthRequest,
+    @Body() body: unknown,
+  ) {
+    return testAgentAiModel(context(req), body);
+  }
   @Get("bailian-chat") @Permission("analytics.manage") readBailian(
     @Req() req: AuthRequest,
     @Res({ passthrough: true }) res: Response,

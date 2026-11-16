@@ -32,6 +32,18 @@ import {
 } from "./modules/workspace/agent-models.js";
 import { engineConfig } from "./modules/aigc/config.js";
 import { deerFlowConfigured } from "./modules/workspace/deerflow-client.js";
+import {
+  agentaiReady,
+  readAgentAiConnection,
+} from "./modules/workspace/agentai-connection.js";
+
+const agentaiFeatures = new Set([
+  "assistant_chat",
+  "assistant_team",
+  "assistant_employee",
+  "mastra_team",
+]);
+const agentaiSource = "AgentAI · https://agentai.token6688.com/v1";
 
 const iso = (value: unknown) =>
   value ? new Date(String(value)).toISOString() : null;
@@ -57,6 +69,13 @@ export const emptyAiUsage = (): AiFeatureUsage => ({
 });
 export function supportsFeature(kind: string, model: AgentInternalModel) {
   if (model.provider === "bailian" && kind !== "chat") return false;
+  if (model.provider === "agentai")
+    return (
+      kind === "chat" ||
+      (kind === "team" &&
+        model.structured &&
+        model.parameters.includes("tools"))
+    );
   return (
     (!(
       kind === "chat" ||
@@ -109,6 +128,7 @@ export async function aiModelManagement(
     config,
     state,
     bailian,
+    agentai,
   ] = await Promise.all([
     rows(
       db,
@@ -165,6 +185,7 @@ export async function aiModelManagement(
       db,
       "SELECT enabled,workspace_id,api_key_encrypted IS NOT NULL AS configured,verified_at,updated_at FROM public.bailian_chat_settings WHERE id=1",
     ),
+    readAgentAiConnection(),
   ]);
   const aigc = aigcModelManagement(config, state?.compiler);
   const readyKey = !!(
@@ -316,6 +337,7 @@ export async function aiModelManagement(
             .filter(
               (model) =>
                 model.provider !== "bailian" &&
+                model.provider !== "agentai" &&
                 supportsFeature("aigc_compile", model) &&
                 model.reasoningEffort !== "none",
             )
@@ -367,22 +389,32 @@ export async function aiModelManagement(
         .filter(
           (model) =>
             supportsFeature(feature.kind, model) &&
+            (model.provider !== "agentai" || agentaiFeatures.has(feature.id)) &&
             (model.provider !== "bailian" || feature.id === "assistant_chat"),
         )
         .map((model) => ({
           value: model.id,
           label: model.displayName || model.actual,
           source:
-            model.provider === "bailian" ? "阿里云百炼 · 北京" : row.source,
+            model.provider === "agentai"
+              ? agentaiSource
+              : model.provider === "bailian"
+                ? "阿里云百炼 · 北京"
+                : row.source,
           boundary:
             capability(model) +
+            (model.provider === "agentai"
+              ? " · 仅网站聊天、员工与团队；能力按型号分别验证"
+              : "") +
             (model.provider === "bailian" ? " · 网站内聊天 · JSON Object" : ""),
           available:
-            model.provider === "bailian"
-              ? Boolean(
-                  bailian?.enabled && bailian.configured && encryptionReady(),
-                )
-              : true,
+            model.provider === "agentai"
+              ? agentaiReady(agentai) && Boolean(model.chatVerifiedAt)
+              : model.provider === "bailian"
+                ? Boolean(
+                    bailian?.enabled && bailian.configured && encryptionReady(),
+                  )
+                : true,
         }));
       const automatic = feature.kind === "team";
       const followsChat =
@@ -420,10 +452,32 @@ export async function aiModelManagement(
         row.boundary +=
           " 仅用于网站内聊天；JSON Object 回复由服务器校验，格式错误最多额外调用一次进行修复，不重复执行工具，用量按实际调用记录。搜索与网站识别使用独立的 OpenRouter 搜索服务。";
       }
+      const hasAgentaiChoice = row.choices.some(
+        (choice) => choice.source === agentaiSource && choice.available,
+      );
+      if (
+        (selected?.provider === "agentai" && agentaiFeatures.has(feature.id)) ||
+        (automatic && !row.selection && hasAgentaiChoice && !readyKey)
+      ) {
+        row.source = agentaiSource;
+        row.status = !agentai?.enabled
+          ? "disabled"
+          : !agentai.api_key_encrypted || !encryptionReady()
+            ? "unconfigured"
+            : "configured";
+        row.statusText = agentaiReady(agentai)
+          ? "连接已验证；各型号能力以调用验证为准"
+          : "AgentAI 连接尚未启用或验证";
+      }
+      if (agentaiFeatures.has(feature.id))
+        row.boundary +=
+          " AgentAI 文字连接独立配置：普通聊天可使用已验证文字型号，工具与严格结构化输出分别验证后才开放；员工和团队要求两项均通过。本行只路由文字调用，媒体按对应功能独立配置；浏览器/电脑识屏与 DeerFlow 尚未接入。失败不会暗中改用另一供应商。公开搜索仍使用独立的 OpenRouter 连接。";
+      if (automatic && !row.selection && hasAgentaiChoice && readyKey)
+        row.source = "按任务选择已验证连接（OpenRouter / AgentAI）";
       if (!row.selection && followsChat) {
         row.source = "OpenRouter · https://openrouter.ai/api/v1";
         row.boundary +=
-          " 百炼聊天使用本功能单独选择的 OpenRouter 型号；未设置时使用系统默认搜索型号。";
+          " 百炼与 AgentAI 聊天使用本功能单独选择的 OpenRouter 型号；未设置时使用系统默认搜索型号。";
       }
       if (selected && row.selection)
         row.boundary += ` 当前型号：${capability(selected)}。`;
@@ -442,14 +496,15 @@ export async function aiModelManagement(
         row.selection &&
         (!selected ||
           !supportsFeature(feature.kind, selected) ||
+          (selected.provider === "agentai" &&
+            !agentaiFeatures.has(feature.id)) ||
           (selected.provider === "bailian" && feature.id !== "assistant_chat"))
       ) {
         row.status = "unavailable";
         row.statusText = "型号下架或不满足功能能力，需重新选择";
       }
     }
-    if (feature.id === "mastra_team")
-      row.source = "Mastra → 网站共享连接 → OpenRouter";
+    if (feature.id === "mastra_team") row.source = "Mastra → " + row.source;
     if (feature.id === "deerflow_team") {
       row.source = "DeerFlow 独立服务 → 网站模型网关 → OpenRouter";
       if (
@@ -462,10 +517,29 @@ export async function aiModelManagement(
     }
     const usingBailianChat =
       feature.id === "assistant_chat" && row.model === bailianChatModel;
-    const activeConnection = usingBailianChat ? bailian : shared;
-    const matchingSource =
-      !usingBailianChat ||
-      last?.source === bailian?.workspace_id + ".cn-beijing.maas.aliyuncs.com";
+    const automatic =
+      !row.selection &&
+      (feature.kind === "team" ||
+        feature.id === "assistant_search" ||
+        feature.id === "assistant_website");
+    const selectedModel = catalog.models.find(
+      (model) => model.id === (row.selection || catalog.defaultModel),
+    );
+    const usingAgentai =
+      agentaiFeatures.has(feature.id) &&
+      (selectedModel?.provider === "agentai" ||
+        (automatic && last?.source === "agentai.token6688.com"));
+    const activeConnection = usingAgentai
+      ? agentai
+      : usingBailianChat
+        ? bailian
+        : shared;
+    const matchingSource = usingAgentai
+      ? last?.source === "agentai.token6688.com"
+      : usingBailianChat
+        ? last?.source ===
+          bailian?.workspace_id + ".cn-beijing.maas.aliyuncs.com"
+        : feature.group === "AIGC" || last?.source === "openrouter.ai";
     const after = Math.max(
       new Date(binding?.updated_at || 0).getTime(),
       feature.group === "AIGC"
@@ -475,20 +549,17 @@ export async function aiModelManagement(
         ? new Date(shared?.updated_at || 0).getTime()
         : 0,
     );
-    const automatic =
-      !row.selection &&
-      (feature.kind === "team" ||
-        feature.id === "assistant_search" ||
-        feature.id === "assistant_website");
     if (
       row.status === "configured" &&
       (feature.group === "AIGC" ||
-        (usingBailianChat
-          ? bailian?.verified_at &&
-            bailian.configured &&
-            bailian.enabled &&
-            encryptionReady()
-          : readyKey)) &&
+        (usingAgentai
+          ? agentaiReady(agentai)
+          : usingBailianChat
+            ? bailian?.verified_at &&
+              bailian.configured &&
+              bailian.enabled &&
+              encryptionReady()
+            : readyKey)) &&
       matchingSource &&
       last?.status === "success" &&
       new Date(last.completed_at).getTime() > after &&

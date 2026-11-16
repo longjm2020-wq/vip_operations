@@ -10,6 +10,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { aiFetch, recordAiReceipt } from "../../ai-metering.js";
 import { featureModelRef } from "../../ai-model-routing.js";
+import {
+  readAgentAiConnection,
+  agentaiReady,
+} from "../workspace/agentai-connection.js";
 
 export const secretNames = [
   "BAILIAN_VIDEO_API_KEY",
@@ -169,6 +173,7 @@ export async function engineConfig() {
     featureModelRef("aigc_video"),
   ]);
   const setting = await storedSettings();
+  const agentai = await readAgentAiConnection();
   const secrets =
     setting.secrets_encrypted && encryptionReady()
       ? JSON.parse(decryptSecret(setting.secrets_encrypted))
@@ -184,7 +189,13 @@ export async function engineConfig() {
   return {
     aiFetch,
     recordAiReceipt,
-    aiConfigurationUpdatedAt: setting.updated_at,
+    aiConfigurationUpdatedAt: new Date(
+      Math.max(
+        ...[setting.updated_at, agentai?.updated_at, agentai?.catalog_at]
+          .filter(Boolean)
+          .map((value) => new Date(value).getTime()),
+      ),
+    ),
     useModelManagement: true,
     ...(compiler
       ? {
@@ -196,18 +207,28 @@ export async function engineConfig() {
       : {}),
     ...(image ? { keyframeImageModel: image } : {}),
     defaultVideoSelection: {
-      providerId: "bailian",
-      modelId: video?.startsWith("bailian|")
-        ? video.split("|")[1]
-        : "minimax-h3",
+      providerId: video?.startsWith("agentai|") ? "agentai" : "bailian",
+      modelId:
+        video?.startsWith("bailian|") || video?.startsWith("agentai|")
+          ? video.split("|")[1]
+          : "minimax-h3",
     },
-    enabledVideoProviders: ["bailian"],
+    enabledVideoProviders: ["bailian", "agentai"],
     dataDir: path.join(tmpdir(), `xuti-aigc-${process.pid}`),
     durableStorageConfigured: true,
     sessionSecret: process.env.COMPASS_MAIL_KEY || "",
     publicBaseUrl: process.env.APP_ORIGIN,
     ...setting.config,
-    videoSecrets: secrets,
+    videoSecrets: {
+      ...secrets,
+      AGENTAI_API_KEY: agentaiReady(agentai)
+        ? decryptSecret(agentai!.api_key_encrypted)
+        : "",
+    },
+    agentaiModels:
+      agentai?.catalog_at && Array.isArray(agentai.model_catalog)
+        ? agentai.model_catalog
+        : [],
     opentalkingApiKey: secrets.OPENTALKING_GATEWAY_KEY || "",
     runninghubApiKey: secrets.RUNNINGHUB_API_KEY || "",
     compileProvider: "openrouter",
@@ -222,7 +243,7 @@ export async function engineConfig() {
     xaiApiKey: secrets.XAI_API_KEY || "",
     xaiVideoModel: "grok-imagine-video-1.5",
     videoProviders: [],
-    publicVideoProvider: "bailian",
+    publicVideoProvider: video?.startsWith("agentai|") ? "agentai" : "bailian",
     maxGenerationSegments: 24,
     maxVideoSecondsPerProject: 180,
     maxClipSeconds: 120,

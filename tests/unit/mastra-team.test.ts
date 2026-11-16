@@ -63,6 +63,31 @@ afterEach(() => {
   network.fetch.mockReset();
 });
 describe("real Mastra Agent through the metered website provider", () => {
+  it("uses the selected AgentAI endpoint and its credential without OpenRouter request extensions", async () => {
+    const input = {
+      ...options(),
+      endpoint: "https://agentai.token6688.com/v1/chat/completions",
+      provider: "agentai" as const,
+      apiKey: "agentai-fixture-key",
+    };
+    network.fetch.mockResolvedValue(Response.json(receipt()));
+    const result = await generateMastraTeamResponse(input);
+    expect(result.ok).toBe(true);
+    expect(network.fetch).toHaveBeenCalledTimes(1);
+    const [feature, url, init] = network.fetch.mock.calls[0];
+    expect(feature).toBe("mastra_team");
+    expect(url).toBe(input.endpoint);
+    expect(new Headers(init.headers).get("authorization")).toBe(
+      "Bearer agentai-fixture-key",
+    );
+    expect(JSON.parse(init.body)).toMatchObject({
+      model: input.body.model,
+      stream: false,
+      response_format: { type: "json_schema" },
+    });
+    expect(JSON.parse(init.body)).not.toHaveProperty("provider");
+    expect(JSON.parse(init.body)).not.toHaveProperty("reasoning");
+  });
   it("sends inline images, PDF bytes and tool evidence through the real SDK without external downloads", async () => {
     const input = options();
     input.body.messages = [

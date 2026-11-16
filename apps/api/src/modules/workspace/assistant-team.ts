@@ -28,6 +28,11 @@ import { readTeamModelCatalog, resolveTeamModel } from "./team-models.js";
 import { publicTeamVideoCatalog } from "./team-video.js";
 import { deerFlowConfigured } from "./deerflow-client.js";
 import {
+  agentaiModelCandidates,
+  agentaiReady,
+  readAgentAiConnection,
+} from "./agentai-connection.js";
+import {
   conversationReference,
   hydrateTeamMessages,
 } from "./assistant-shared-context.js";
@@ -51,11 +56,19 @@ export async function teamServiceReady(engine: TeamEngine = "native") {
     db,
     "SELECT enabled,verified_at,(api_key_encrypted IS NOT NULL) AS has_key FROM public.compass_ai_settings WHERE id=1",
   );
-  return !!(
+  const sharedReady = !!(
     encryptionReady() &&
     settings?.enabled &&
     settings.verified_at &&
     settings.has_key
+  );
+  if (sharedReady || engine === "deerflow") return sharedReady;
+  if (!agentaiReady(await readAgentAiConnection())) return false;
+  return (await agentaiModelCandidates()).some(
+    (model) =>
+      model.chatVerifiedAt &&
+      model.structured &&
+      model.parameters.includes("tools"),
   );
 }
 

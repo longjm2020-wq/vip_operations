@@ -2,6 +2,12 @@ import { readFile } from "node:fs/promises";
 import type { PGlite } from "@electric-sql/pglite";
 export async function installAiManagementSchema(database: PGlite) {
   await database.exec(
+    await readFile(
+      "packages/database/migrations/104_agentai_connection.sql",
+      "utf8",
+    ),
+  );
+  await database.exec(
     await readFile("packages/database/migrations/095_bailian_chat.sql", "utf8"),
   );
   await database.exec(

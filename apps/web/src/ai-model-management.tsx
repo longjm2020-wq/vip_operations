@@ -1,4 +1,5 @@
 import { BailianChatSettings } from "./bailian-chat-settings";
+import { AgentAiSettings } from "./agentai-settings";
 import { useState, type ReactNode } from "react";
 import {
   Alert,
@@ -167,6 +168,7 @@ export function AiModelManagementPage({
             <Button onClick={() => setDrawer("bailian-chat")}>
               百炼聊天连接
             </Button>
+            <Button onClick={() => setDrawer("agentai")}>AgentAI 连接</Button>
             <Button
               icon={<ReloadOutlined />}
               aria-label="刷新模型管理"
@@ -452,7 +454,9 @@ export function AiModelManagementPage({
             ? "AIGC 模型与工作流连接"
             : drawer === "bailian-chat"
               ? "百炼聊天连接"
-              : "语音模型配置"
+              : drawer === "agentai"
+                ? "AgentAI 模型连接"
+                : "语音模型配置"
         }
         open={!!drawer}
         width={680}
@@ -462,7 +466,20 @@ export function AiModelManagementPage({
           void refresh();
         }}
       >
-        {drawer === "bailian-chat" ? (
+        {drawer === "agentai" ? (
+          <AgentAiSettings
+            saved={() => {
+              void refresh();
+              void client.invalidateQueries({
+                queryKey: ["assistant-capabilities"],
+              });
+              void client.invalidateQueries({ queryKey: ["assistant-team"] });
+              void client.invalidateQueries({
+                queryKey: ["assistant-employees"],
+              });
+            }}
+          />
+        ) : drawer === "bailian-chat" ? (
           <BailianChatSettings
             saved={() => {
               void refresh();

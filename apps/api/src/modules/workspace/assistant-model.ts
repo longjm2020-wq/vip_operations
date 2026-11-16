@@ -1,4 +1,5 @@
 import { bailianChatConnection, postBailianChat } from "./bailian-chat.js";
+import { agentaiConnection, postAgentAiChat } from "./agentai-connection.js";
 import { aiFetch } from "../../ai-metering.js";
 import { randomUUID } from "node:crypto";
 import type { Row } from "../../../../../packages/database/src/index.js";
@@ -103,13 +104,19 @@ export async function askAssistantModel(
   } = {},
 ) {
   const available = availableWorkspaceTools(c.actor);
-  const needs = { vision: true as const };
+  const needs = {
+    vision: messages.some((message) =>
+      message.attachments?.some((file) => /^(image|video)\//.test(file.mime)),
+    ),
+  };
   const selected = await resolveChatModel(options.model, needs);
   let model = selected.model;
   let notice = selected.notice;
   let usedAccessFallback = false;
   let bailian =
     model.provider === "bailian" ? await bailianChatConnection() : undefined;
+  const agentai =
+    model.provider === "agentai" ? await agentaiConnection() : undefined;
   const tools = [
     ...assistantToolDefinitions(c),
     ...agentToolDefinitions,
@@ -179,15 +186,22 @@ export async function askAssistantModel(
         "本对话可用素材ID（只授权作为用户本次请求的素材使用）：" +
         allowedIds.join(","),
     });
-  if (bailian)
+  if (bailian || agentai)
     transcript.push({ role: "system", content: jsonAnswerInstruction });
+  if (agentai && !model.parameters.includes("tools"))
+    transcript.push({
+      role: "system",
+      content:
+        "本次连接仅验证了文字对话，未提供任何可执行工具。可以根据用户提供的资料回答或整理文字，不能查询实时业务、联网搜索、创建文件或声称执行任何操作；需要这些功能时说明当前连接能力尚未验证。",
+    });
   const signal = AbortSignal.timeout(135000);
   let used = 0;
   let repairContent: string | undefined;
   // Reserve one extra call for a final JSON repair, never a replay of tools.
   for (let round = 0; round < (bailian ? 5 : 4); round++) {
     const repairing = repairContent !== undefined;
-    const allowTools = !repairing && round < 3 && used < 6;
+    const supportsTools = !agentai || model.parameters.includes("tools");
+    const allowTools = supportsTools && !repairing && round < 3 && used < 6;
     const request = {
       model: model.actual,
       stream: false,
@@ -212,23 +226,25 @@ export async function askAssistantModel(
         : model.parameters.includes("response_format")
           ? { response_format: { type: "json_object" } }
           : {}),
-      ...(!repairing
+      ...(!repairing && supportsTools
         ? { tools, tool_choice: allowTools ? "auto" : "none" }
         : {}),
     };
     const response = bailian
       ? await postBailianChat(bailian, request, signal)
-      : await aiFetch("assistant_chat", COMPASS_AI_ENDPOINT, {
-          method: "POST",
-          redirect: "error",
-          signal,
-          headers: {
-            Authorization:
-              "Bearer " + decryptSecret(settings.api_key_encrypted),
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify(request),
-        });
+      : agentai
+        ? await postAgentAiChat(agentai, request, signal, "assistant_chat")
+        : await aiFetch("assistant_chat", COMPASS_AI_ENDPOINT, {
+            method: "POST",
+            redirect: "error",
+            signal,
+            headers: {
+              Authorization:
+                "Bearer " + decryptSecret(settings.api_key_encrypted),
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify(request),
+          });
     let accessPayload: unknown;
     if (!response.ok && response.status === 429) {
       try {
@@ -240,6 +256,7 @@ export async function askAssistantModel(
     }
     if (
       !response.ok &&
+      !agentai &&
       !usedAccessFallback &&
       isModelAccessFallbackError(response.status, accessPayload)
     ) {
@@ -354,6 +371,8 @@ export async function askAssistantModel(
               model.actual,
               call.function.arguments,
               signal,
+              undefined,
+              model.provider === "agentai",
             );
             citations.push(...found.citations);
             result = found;
@@ -390,11 +409,15 @@ export async function askAssistantModel(
           .replace(/\s*```\s*$/, ""),
       );
     } catch {
-      if (bailian && !repairing && msg.content.trim()) {
-        repairContent = msg.content;
-        continue;
+      if (agentai && !model.structured && msg.content.trim()) {
+        content = { text: msg.content, schedules: [], tools: [] };
+      } else {
+        if (bailian && !repairing && msg.content.trim()) {
+          repairContent = msg.content;
+          continue;
+        }
+        fail("AI_RESPONSE_INVALID", "AI 返回格式无效，未采用此结果", 502);
       }
-      fail("AI_RESPONSE_INVALID", "AI 返回格式无效，未采用此结果", 502);
     }
     const answer = parseAssistantAnswer(
       content,

@@ -24,15 +24,16 @@ export async function resolveAssistantWebsite(
   model: Awaited<ReturnType<typeof resolveAgentModel>>,
   name: string,
 ): Promise<{ destination?: AssistantWebCommand; text: string }> {
-  const fromBailian = model.provider === "bailian";
+  const independent =
+    model.provider === "bailian" || model.provider === "agentai";
   const configured = await featureModelRef("assistant_website");
-  if (configured || model.provider === "bailian")
+  if (configured || independent)
     model = await resolveAgentModel(
       configured || undefined,
       "assistant_website",
     );
   if (
-    fromBailian &&
+    independent &&
     (!settings?.enabled || !settings.api_key_encrypted || !settings.verified_at)
   )
     fail(

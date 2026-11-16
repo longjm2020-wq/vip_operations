@@ -81,6 +81,8 @@ import {
 import { searchAgentWeb } from "../../apps/api/src/modules/workspace/agent-search.js";
 import { resolveTeamModel } from "../../apps/api/src/modules/workspace/team-models.js";
 import { engineConfig } from "../../apps/api/src/modules/aigc/config.js";
+import { teamServiceReady } from "../../apps/api/src/modules/workspace/assistant-team.js";
+import { resolveAssistantWebsite } from "../../apps/api/src/modules/workspace/assistant-website.js";
 
 const admin = (): Context => ({
   actor: {
@@ -195,6 +197,9 @@ beforeAll(async () => {
 }, 30000);
 beforeEach(async () => {
   await fixture.db!.exec(
+    "UPDATE agentai_settings SET enabled=false,api_key_encrypted=NULL,verified_at=NULL,model_catalog='[]',catalog_at=NULL,version=0,updated_at=now(); TRUNCATE agentai_model_verifications",
+  );
+  await fixture.db!.exec(
     "UPDATE bailian_chat_settings SET enabled=false,workspace_id='',api_key_encrypted=NULL,verified_at=NULL,last_test_at=NULL,error_note='',version=0,updated_at=now(); UPDATE assistant_realtime_settings SET qwen_api_key_encrypted=NULL,qwen_workspace_id=''",
   );
   await fixture.db!.exec(
@@ -208,6 +213,302 @@ beforeEach(async () => {
 afterEach(() => vi.unstubAllGlobals());
 afterAll(async () => {
   await fixture.db?.close();
+});
+
+async function configureAgentAi(structured = false, tools = false) {
+  const model = {
+    model: "fixture-agentai",
+    name: "Fixture AgentAI",
+    type: "chat",
+    vision: false,
+    available: true,
+  };
+  await fixture.db!.query(
+    "UPDATE agentai_settings SET enabled=true,api_key_encrypted='agentai-key',verified_at=now(),version=1,updated_at=now()-interval '1 hour',catalog_at=now(),model_catalog=$1::jsonb",
+    [JSON.stringify([model])],
+  );
+  await fixture.db!.query(
+    "INSERT INTO agentai_model_verifications(model,settings_version,chat_verified_at,tools_verified_at,structured_verified_at) VALUES($1,1,now(),$2,$3)",
+    [
+      model.model,
+      tools ? new Date().toISOString() : null,
+      structured ? new Date().toISOString() : null,
+    ],
+  );
+  await fixture.db!.query(
+    "INSERT INTO ai_model_usage(id,feature_id,source,model,response_model,status,completed_at) VALUES($1,'assistant_chat','agentai.token6688.com',$2,$2,'success',now())",
+    [randomUUID(), model.model],
+  );
+  return "agentai/" + model.model;
+}
+
+describe("AgentAI actual feature routing", () => {
+  it("runs verified tools on AgentAI and validates the final schema without replaying the tool", async () => {
+    const id = await configureAgentAi(true, true);
+    let calls = 0;
+    vi.stubGlobal("fetch", async (url: string | URL, init?: RequestInit) => {
+      if (!String(url).startsWith("https://agentai.token6688.com/"))
+        return catalogFetch(url, init);
+      const body = JSON.parse(String(init?.body));
+      expect(
+        body.tools.some((tool: any) => tool.function.name === "propose_memory"),
+      ).toBe(true);
+      expect(body.response_format.type).toBe("json_schema");
+      expect(body.provider).toBeUndefined();
+      calls++;
+      const message =
+        calls === 1
+          ? {
+              content: null,
+              tool_calls: [
+                {
+                  id: "agentai-memory",
+                  type: "function",
+                  function: {
+                    name: "propose_memory",
+                    arguments: '{"title":"回复偏好","content":"喜欢简洁回复"}',
+                  },
+                },
+              ],
+            }
+          : {
+              content:
+                '{"text":"已整理为草稿，请确认。","schedules":[],"tools":[]}',
+            };
+      if (calls === 2)
+        expect(body.messages.at(-1).tool_call_id).toBe("agentai-memory");
+      return json({
+        id: randomUUID(),
+        model: body.model,
+        choices: [
+          { finish_reason: calls === 1 ? "tool_calls" : "stop", message },
+        ],
+      });
+    });
+    const answer = await askAssistantModel(
+      admin(),
+      {},
+      [
+        {
+          id: randomUUID(),
+          role: "user",
+          text: "记住我喜欢简洁回复",
+          createdAt: new Date().toISOString(),
+        },
+      ],
+      undefined,
+      "2026-11-16",
+      undefined,
+      false,
+      { model: id },
+    );
+    expect(answer.memorySuggestions).toEqual([
+      { title: "回复偏好", content: "喜欢简洁回复" },
+    ]);
+    expect(calls).toBe(2);
+  });
+  it("stops after a rejected AgentAI call without falling back to OpenRouter", async () => {
+    const id = await configureAgentAi();
+    const network = vi.fn(async (url: string | URL, init?: RequestInit) =>
+      String(url).startsWith("https://agentai.token6688.com/")
+        ? new Response("", { status: 403 })
+        : catalogFetch(url, init),
+    );
+    vi.stubGlobal("fetch", network);
+    await expect(
+      askAssistantModel(
+        admin(),
+        {},
+        [
+          {
+            id: randomUUID(),
+            role: "user",
+            text: "你好",
+            createdAt: new Date().toISOString(),
+          },
+        ],
+        undefined,
+        "2026-11-16",
+        undefined,
+        false,
+        { model: id },
+      ),
+    ).rejects.toMatchObject(errorCode("AI_PROVIDER_ERROR"));
+    expect(
+      network.mock.calls.filter(([url]) =>
+        String(url).endsWith("/chat/completions"),
+      ),
+    ).toHaveLength(1);
+  });
+  it("only offers verified chat and fully verified team capabilities; unsupported features cannot save the new provider", async () => {
+    const id = await configureAgentAi();
+    const view = await aiModelManagement(admin());
+    expect(
+      view.features
+        .find((f) => f.id === "assistant_chat")!
+        .choices.find((c) => c.value === id),
+    ).toMatchObject({
+      available: true,
+      source: expect.stringContaining("AgentAI"),
+    });
+    for (const feature of [
+      "assistant_employee",
+      "assistant_team",
+      "mastra_team",
+      "assistant_browser",
+      "assistant_desktop",
+      "assistant_search",
+      "assistant_website",
+      "deerflow_team",
+      "aigc_compile",
+    ]) {
+      expect(
+        view.features
+          .find((f) => f.id === feature)!
+          .choices.some((c) => c.value === id),
+      ).toBe(false);
+      await expect(
+        saveAiFeatureModel(admin(), { feature, model: id, revision: 0 }),
+      ).rejects.toMatchObject(errorCode("AI_MODEL_UNAVAILABLE"));
+    }
+    await fixture.db!.exec(
+      "UPDATE agentai_model_verifications SET tools_verified_at=now(),structured_verified_at=now()",
+    );
+    const enabled = await aiModelManagement(admin());
+    for (const feature of [
+      "assistant_employee",
+      "assistant_team",
+      "mastra_team",
+    ])
+      expect(
+        enabled.features
+          .find((f) => f.id === feature)!
+          .choices.find((c) => c.value === id)?.available,
+      ).toBe(true);
+  });
+
+  it("runs ordinary text chat with OpenRouter disabled, omits unverified tools/schema, and meters AgentAI", async () => {
+    const id = await configureAgentAi();
+    await fixture.db!.exec("UPDATE compass_ai_settings SET enabled=false");
+    const network = vi.fn(async (url: string | URL, init?: RequestInit) => {
+      if (!String(url).startsWith("https://agentai.token6688.com/"))
+        return catalogFetch(url, init);
+      const body = JSON.parse(String(init?.body));
+      expect(body).toMatchObject({ model: "fixture-agentai", stream: false });
+      expect(body).not.toHaveProperty("tools");
+      expect(body).not.toHaveProperty("response_format");
+      expect(body).not.toHaveProperty("provider");
+      expect(body).not.toHaveProperty("reasoning");
+      return json({
+        id: randomUUID(),
+        model: body.model,
+        choices: [
+          { finish_reason: "stop", message: { content: "你好，已收到。" } },
+        ],
+        usage: { prompt_tokens: 10, completion_tokens: 5 },
+      });
+    });
+    vi.stubGlobal("fetch", network);
+    const answer = await askAssistantModel(
+      admin(),
+      {},
+      [
+        {
+          id: randomUUID(),
+          role: "user",
+          text: "你好",
+          createdAt: new Date().toISOString(),
+        },
+      ],
+      undefined,
+      "2026-11-16",
+      undefined,
+      false,
+      { model: id },
+    );
+    expect(answer).toMatchObject({
+      text: "你好，已收到。",
+      schedules: [],
+      tools: [],
+      jobIds: [],
+    });
+    expect(
+      (
+        await query(
+          "SELECT source,feature_id,input_tokens,output_tokens,amount FROM ai_model_usage WHERE source='agentai.token6688.com' AND input_tokens IS NOT NULL",
+        )
+      )[0],
+    ).toMatchObject({
+      feature_id: "assistant_chat",
+      input_tokens: "10",
+      output_tokens: "5",
+      amount: null,
+    });
+    expect(
+      network.mock.calls.filter(([url]) =>
+        String(url).endsWith("/chat/completions"),
+      ),
+    ).toHaveLength(1);
+    expect(await teamServiceReady()).toBe(false);
+    await fixture.db!.exec(
+      "UPDATE agentai_model_verifications SET tools_verified_at=now(),structured_verified_at=now()",
+    );
+    expect(await teamServiceReady()).toBe(true);
+    expect(await teamServiceReady("deerflow")).toBe(false);
+  });
+
+  it("keeps search and website lookup on OpenRouter instead of sending an AgentAI model ID to that endpoint", async () => {
+    await configureAgentAi(true, true);
+    const network = vi.fn(catalogFetch);
+    vi.stubGlobal("fetch", network);
+    await searchAgentWeb(
+      { enabled: true, verified_at: new Date(), api_key_encrypted: "shared" },
+      "fixture-agentai",
+      '{"query":"公开信息"}',
+      new AbortController().signal,
+      undefined,
+      true,
+    );
+    const sent = network.mock.calls.find(([url]) =>
+      String(url).endsWith("/chat/completions"),
+    )!;
+    expect(String(sent[0])).toBe(
+      "https://openrouter.ai/api/v1/chat/completions",
+    );
+    expect(JSON.parse(String(sent[1]?.body)).model).not.toBe("fixture-agentai");
+    const candidate = (await agentModelCandidates()).models.find(
+      (m) => m.provider === "agentai",
+    )!;
+    await expect(
+      resolveAssistantWebsite({}, candidate, "测试网站"),
+    ).rejects.toMatchObject(errorCode("WEBSITE_LOOKUP_FAILED"));
+  });
+
+  it("does not mark AgentAI selected configuration ready using a previous OpenRouter receipt for the same model", async () => {
+    const id = await configureAgentAi(true, true);
+    await saveAiFeatureModel(admin(), {
+      feature: "assistant_employee",
+      model: id,
+      revision: 0,
+    });
+    await fixture.db!.query(
+      "INSERT INTO ai_model_usage(id,feature_id,source,model,response_model,status,completed_at) VALUES($1,'assistant_employee','openrouter.ai','fixture-agentai','fixture-agentai','success',now()+interval '1 second')",
+      [randomUUID()],
+    );
+    const row = (await aiModelManagement(admin())).features.find(
+      (f) => f.id === "assistant_employee",
+    )!;
+    expect(row.source).toContain("AgentAI");
+    expect(row.status).toBe("configured");
+    await fixture.db!.exec(
+      "UPDATE ai_model_usage SET source='agentai.token6688.com'",
+    );
+    expect(
+      (await aiModelManagement(admin())).features.find(
+        (f) => f.id === "assistant_employee",
+      )!.status,
+    ).toBe("ready");
+  });
 });
 
 it("tracks H3 by task id without inventing tokens or currency and does not double count polling", async () => {
@@ -259,9 +560,14 @@ it("tracks H3 by task id without inventing tokens or currency and does not doubl
   const video = (await aiModelManagement(admin())).features.find(
     (feature) => feature.id === "aigc_video",
   )!;
-  expect(video.choices.map((choice) => choice.value)).toEqual([
-    "bailian|minimax-h3",
-  ]);
+  expect(
+    video.choices.some((choice) => choice.value === "bailian|minimax-h3"),
+  ).toBe(true);
+  expect(
+    video.choices
+      .filter((choice) => choice.value.startsWith("agentai|"))
+      .every((choice) => !choice.available),
+  ).toBe(true);
   expect(video.usage).toMatchObject({
     requests: 1,
     unknown: 0,
@@ -396,11 +702,22 @@ describe("AI model administration and real routing", () => {
   it("registers all actual capabilities, exposes safe API sources and distinguishes unknown from zero", async () => {
     const view = await aiModelManagement(admin());
     expect(view.features).toHaveLength(23);
-    expect(view.features.find(feature => feature.id === "assistant_employee")).toMatchObject({href:"/my-workspace?assistant=employees",name:"工作台 AI 员工"});
-    const browser = view.features.find((feature) => feature.id === "assistant_browser")!;
+    expect(
+      view.features.find((feature) => feature.id === "assistant_employee"),
+    ).toMatchObject({
+      href: "/my-workspace?assistant=employees",
+      name: "工作台 AI 员工",
+    });
+    const browser = view.features.find(
+      (feature) => feature.id === "assistant_browser",
+    )!;
     expect(browser.href).toBe("/my-workspace?assistant=browser");
-    expect(browser.choices.map((choice) => choice.value)).toContain(modelRef(vision));
-    expect(browser.choices.map((choice) => choice.value)).not.toContain(modelRef(plain));
+    expect(browser.choices.map((choice) => choice.value)).toContain(
+      modelRef(vision),
+    );
+    expect(browser.choices.map((choice) => choice.value)).not.toContain(
+      modelRef(plain),
+    );
     expect(browser.boundary).toContain("不占用你的鼠标键盘");
     expect(view.features.filter((row) => row.group === "团队")).toMatchObject([
       { id: "assistant_employee", name: "工作台 AI 员工" },

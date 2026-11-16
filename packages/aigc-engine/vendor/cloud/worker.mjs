@@ -1245,7 +1245,7 @@ export class CloudWorker {
     // later project edits. New jobs retain the complete non-secret route.
     const route = job.payload?.videoRoute || selectVideoRoute({ ...this.config, videoProviders: [], xaiBaseUrl: "https://api.x.ai/v1" });
     const label = route.model.label;
-    if (job.payload?.videoSubmission?.state === "mismatch") throw new AttentionError(`星火 AIGC 任务 ${job.providerRequestId || "未知"} 的提交回执显示参数变化；已保留任务编号，须人工核对，不能自动归档或重复提交。`);
+    if (job.payload?.videoSubmission?.state === "mismatch") throw new AttentionError(`${route.label} 任务 ${job.providerRequestId || "未知"} 的提交回执显示参数变化；已保留任务编号，须人工核对，不能自动归档或重复提交。`);
     if (job.providerRequestId) {
       await this.#updateTask(job.taskId, { stage: "generating", progress: Math.max(45, Math.round((index / units.length) * 88)), currentItem: `${unit.id} 正在由 ${label} 生成` });
       let response;
@@ -1366,6 +1366,10 @@ export class CloudWorker {
     }
     let xhaiReferenceUploads = job.payload?.xhaiReferenceUploads;
     let xhaiPreflight;
+    if (route.protocol === "agentai") {
+      try { xhaiPreflight = await preflightXhaiVideo(this.config, route, input); }
+      catch (error) { throw new AttentionError(`AgentAI 免费估价未能确认本次视频参数，视频未提交：${error.message}`); }
+    }
     if (route.protocol === "xhai") {
       const fingerprint = createHash("sha256").update(references.join("\n")).digest("hex");
       const cached = xhaiReferenceUploads?.[unit.id];
@@ -1395,7 +1399,7 @@ export class CloudWorker {
     let requestId;
     try { requestId = await submitVideo(this.config, route, input, xhaiPreflight); }
     catch (error) {
-      if (error instanceof XhaiVideoAdjustmentError) {
+      if (error instanceof XhaiVideoAdjustmentError || (route.protocol === "agentai" && error.parameterMismatch && error.taskId)) {
         await this.store.mutate(data => {
           const current = data.jobs[job.id];
           if (!current) return;

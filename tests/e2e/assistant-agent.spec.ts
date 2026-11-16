@@ -417,6 +417,73 @@ async function setup(
   });
   return requests;
 }
+test("已验证 AgentAI 纯文字模型可选择并发送，验证失效不改投其他线路", async ({
+  page,
+}) => {
+  const requests = await setup(page);
+  let verified = true;
+  await page.route("**/api/v1/my-workspace/assistant/capabilities", (route) =>
+    route.fulfill({
+      json: {
+        data: {
+          defaultModel: "engine/default",
+          imageModels: [],
+          models: [
+            {
+              id: "engine/default",
+              name: "通用助手",
+              displayName: "GPT-6.1 Sol",
+              vision: true,
+            },
+            {
+              id: "engine/text-only",
+              name: "旧文本",
+              displayName: "Legacy Text",
+              vision: false,
+              chatVerifiedAt: "2026-11-16T12:00:00Z",
+            },
+            {
+              id: "agentai/text-model",
+              name: "AgentAI Text",
+              displayName: "AgentAI Text",
+              vision: false,
+              chatVerifiedAt: verified ? "2026-11-16T12:00:00Z" : null,
+            },
+          ],
+        },
+      },
+    }),
+  );
+  await page.goto("/my-workspace");
+  const composer = page.locator(".assistant-compose:visible");
+  await composer.getByRole("button", { name: "选择对话模型" }).click();
+  await expect(page.getByRole("menuitem", { name: /Legacy Text/ })).toHaveCount(
+    0,
+  );
+  const textModel = page.getByRole("menuitem", { name: /AgentAI Text/ });
+  await expect(textModel).toContainText("仅文字");
+  await textModel.click();
+  await expect(
+    composer.getByRole("button", { name: "选择对话模型" }),
+  ).toContainText("AgentAI Text");
+  await composer.locator("textarea").fill("整理两条建议");
+  await composer.getByRole("button", { name: "发送给个人助理" }).click();
+  await expect.poll(() => requests.length).toBe(1);
+  expect(requests[0].model).toBe("agentai/text-model");
+  await composer.locator("textarea").fill("保留这份草稿");
+  verified = false;
+  await composer.getByRole("button", { name: "选择对话模型" }).click();
+  await page.getByRole("menuitem", { name: "刷新模型列表" }).click();
+  await expect(
+    composer.getByRole("button", { name: "选择对话模型" }),
+  ).toContainText("所选 AgentAI 型号不可用");
+  await expect(
+    composer.getByRole("button", { name: "发送给个人助理" }),
+  ).toBeDisabled();
+  await expect(composer.locator("textarea")).toHaveValue("保留这份草稿");
+  expect(requests).toHaveLength(1);
+});
+
 test("模型菜单只显示多模态型号、发送所选模型并在重开对话后保留", async ({
   page,
 }) => {

@@ -75,6 +75,61 @@ beforeEach(() => {
   });
 });
 describe("team model routing", () => {
+  it("requires independently verified AgentAI tools and structured output, and rejects DeerFlow routing", async () => {
+    const agentai = {
+      ...models[0],
+      id: "agentai/test",
+      actual: "test",
+      provider: "agentai" as const,
+    };
+    f.catalog.mockResolvedValue({
+      models: [agentai, { ...agentai, id: "agentai/plain", structured: false }],
+      imageModels: [],
+      defaultModel: agentai.id,
+    });
+    expect((await readTeamModelCatalog()).models.map((m) => m.id)).toEqual([
+      agentai.id,
+    ]);
+    expect(
+      await resolveTeamModel({ taskModel: agentai.id, structured: true }),
+    ).toMatchObject({ provider: "agentai" });
+    await expect(
+      resolveTeamModel({ taskModel: agentai.id, feature: "deerflow_team" }),
+    ).rejects.toMatchObject({
+      response: { error: { code: "TEAM_MODEL_CAPABILITY" } },
+    });
+    await expect(
+      resolveTeamModel({ taskModel: "agentai/plain" }),
+    ).rejects.toMatchObject({
+      response: { error: { code: "TEAM_MODEL_CAPABILITY" } },
+    });
+  });
+  it("does not silently replace an unverified or failed AgentAI choice with OpenRouter, or cross into AgentAI on an OpenRouter failure", async () => {
+    const agentai = {
+      ...models[0],
+      id: "agentai/test",
+      actual: "test",
+      provider: "agentai" as const,
+    };
+    f.catalog.mockResolvedValue({
+      models: [agentai, ...models],
+      imageModels: [],
+      defaultModel: agentai.id,
+    });
+    f.connected = [models[0].id];
+    await expect(
+      resolveTeamModel({ taskModel: agentai.id }),
+    ).rejects.toMatchObject({
+      response: { error: { code: "TEAM_MODEL_UNAVAILABLE" } },
+    });
+    expect(
+      await fallbackTeamModel(agentai as AgentInternalModel, {}),
+    ).toBeUndefined();
+    f.connected = [agentai.id];
+    expect(
+      await fallbackTeamModel(models[0] as AgentInternalModel, {}),
+    ).toBeUndefined();
+  });
   it("never falls back outside a fixed employee policy even when another model is connected", async () => {
     f.connected = ["engine/strong"];
     const options = {

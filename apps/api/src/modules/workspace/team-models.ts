@@ -19,6 +19,8 @@ export type TeamModelTier = "fast" | "standard" | "strong";
 function supportsSynchronousTeamChat(model: AgentInternalModel): boolean {
   return (
     model.provider !== "bailian" &&
+    (model.provider !== "agentai" ||
+      (model.structured && model.parameters.includes("tools"))) &&
     !/(?:^|:)(?:batch|async|asynchronous)(?=:|$)/i.test(model.actual)
   );
 }
@@ -65,7 +67,7 @@ export async function readTeamModelCatalog() {
     })),
     defaultModel: catalog.defaultModel,
     notice:
-      "自动选型只在当前已接通目录内按任务难度和能力匹配；主智能体默认优先较强能力，不代表全球模型排名。固定或默认型号未接通，或调用返回认证、权限、额度类错误时，会自动改用一个已接通且满足本步骤能力的型号，并在执行详情中说明。百炼聊天型号仅用于网站内对话，不会用于团队。内容类错误不会换型号。",
+      "自动选型只在当前已接通目录内按任务难度和能力匹配；主智能体默认优先较强能力，不代表全球模型排名。AgentAI 仅使用已验证工具与结构化输出的型号，所选连接失败不会暗中切换其他供应商。原共享连接保留已配置的访问错误回退策略并在执行详情说明。百炼聊天型号仅用于网站内对话，不会用于团队。内容类错误不会换型号。",
   };
 }
 
@@ -92,6 +94,7 @@ export async function resolveTeamModel(options: {
     : options.taskModel || options.profileModel || managed;
   const matches = (model: AgentInternalModel) =>
     supportsSynchronousTeamChat(model) &&
+    !(options.feature === "deerflow_team" && model.provider === "agentai") &&
     (!restricted || policy.modelIds.includes(model.id)) &&
     model.parameters.includes("tools") &&
     (!options.vision || model.vision) &&
@@ -99,7 +102,12 @@ export async function resolveTeamModel(options: {
     (!options.structured || model.structured);
   const connected = await connectedTeamModels(catalog.models);
   const connectedMatch = (excluded: string[] = []) =>
-    firstEligibleConnected(catalog.models, connected, matches, excluded);
+    firstEligibleConnected(
+      catalog.models,
+      connected,
+      (model) => matches(model) && model.provider !== "agentai",
+      excluded,
+    );
   if (fixed) {
     const model = catalog.models.find((item) => item.id === fixed);
     if (!model)
@@ -118,6 +126,12 @@ export async function resolveTeamModel(options: {
       fail(
         "TEAM_MODEL_CAPABILITY",
         "指定模型不支持本步骤需要的输入或结构化输出能力；未切换到其他模型",
+        409,
+      );
+    if (model.provider === "agentai" && !connected.has(model.id))
+      fail(
+        "TEAM_MODEL_UNAVAILABLE",
+        "所选 AgentAI 型号尚未通过当前连接的调用验证；未切换其他连接",
         409,
       );
     if (policy?.mode === "fixed" || !connected.size || connected.has(model.id))
@@ -167,7 +181,10 @@ export async function resolveTeamModel(options: {
   // Opaque model IDs are identifiers, never a quality or priority ranking.
   const available = catalog.models
     .filter(
-      (model) => matches(model) && (!connected.size || connected.has(model.id)),
+      (model) =>
+        matches(model) &&
+        (connected.has(model.id) ||
+          (!connected.size && model.provider !== "agentai")),
     )
     .sort(
       (left, right) =>
@@ -189,6 +206,7 @@ export async function resolveTeamModel(options: {
     desired === "fast" && preferred
       ? available.find(
           (candidate) =>
+            candidate.provider === preferred.provider &&
             candidate.actual === preferred.actual &&
             candidate.reasoningEffort === "none",
         ) || preferred
@@ -268,7 +286,8 @@ export async function fallbackTeamModel(
   options: Parameters<typeof resolveTeamModel>[0],
   excluded: string[] = [current.id],
 ) {
-  if (options.policy?.mode === "fixed") return undefined;
+  if (options.policy?.mode === "fixed" || current.provider === "agentai")
+    return undefined;
   const catalog = await agentModelCandidates();
   const connected = await connectedTeamModels(catalog.models);
   const fallback = firstEligibleConnected(
@@ -280,6 +299,7 @@ export async function fallbackTeamModel(
     connected,
     (model) =>
       supportsSynchronousTeamChat(model) &&
+      model.provider === current.provider &&
       model.parameters.includes("tools") &&
       (!options.vision || model.vision) &&
       (!options.pdf || model.pdf) &&

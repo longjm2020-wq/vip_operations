@@ -1,4 +1,9 @@
 import { bailianChatReady, bailianChatConnection } from "./bailian-chat.js";
+import {
+  agentaiConnection,
+  agentaiReady,
+  readAgentAiConnection,
+} from "./agentai-connection.js";
 import { randomUUID } from "node:crypto";
 import { HttpException } from "@nestjs/common";
 import { z } from "zod";
@@ -71,7 +76,7 @@ function publicConversation(
 }
 export async function readAssistant(c: Context) {
   requireAssistant(c);
-  const [row, s, bailian] = await Promise.all([
+  const [row, s, bailian, agentai] = await Promise.all([
     one(
       db,
       "SELECT * FROM public.personal_assistant_conversations WHERE user_id=$1::bigint",
@@ -79,8 +84,13 @@ export async function readAssistant(c: Context) {
     ),
     settings(),
     one(db, "SELECT * FROM public.bailian_chat_settings WHERE id=1"),
+    readAgentAiConnection(),
   ]);
-  const view = publicConversation(row, s, bailianChatReady(bailian));
+  const view = publicConversation(
+    row,
+    s,
+    bailianChatReady(bailian) || agentaiReady(agentai),
+  );
   view.messages = await hydrateTeamMessages(c.actor.id, view.messages);
   const actionIds = view.messages.flatMap(
     (item: AssistantMessage) => item.actions?.map((action) => action.id) || [],
@@ -190,14 +200,17 @@ export async function sendAssistant(
   // Browser execution validates its own registered planner. A disabled chat
   // provider must not prevent an otherwise configured browser task from starting.
   const s = body.browserExecution ? undefined : await settings();
+  const attachments = await ownedAgentFiles(c, body.attachmentIds);
   const chatSelection = body.browserExecution
     ? null
-    : await resolveChatModel(body.model, { vision: true });
+    : await resolveChatModel(body.model, {
+        vision: attachments.some((file) => /^(image|video)\//.test(file.mime)),
+      });
   const selected = chatSelection?.model;
   if (selected?.provider === "bailian") await bailianChatConnection();
+  else if (selected?.provider === "agentai") await agentaiConnection();
   else if (!body.browserExecution && !ready(s))
     fail("AI_NOT_READY", "请管理员先启用并验证 AI 模型连接", 503);
-  const attachments = await ownedAgentFiles(c, body.attachmentIds);
   if (attachments.reduce((sum, f) => sum + f.size, 0) > 80 * 1024 * 1024)
     fail("FILE_LIMIT", "本次附件合计超过80MB，请分次处理", 400);
   if (

@@ -313,8 +313,16 @@ export async function generateTeamVideo(
     try {
       remote = await submitVideo(config, route, payload, preflight);
     } catch (error) {
-      if (!(error instanceof XhaiVideoAdjustmentError)) throw error;
-      remote = error.taskId;
+      const agentaiAdjusted =
+        route.protocol === "agentai" &&
+        error instanceof Error &&
+        "parameterMismatch" in error &&
+        error.parameterMismatch === true &&
+        "taskId" in error &&
+        typeof error.taskId === "string";
+      if (!(error instanceof XhaiVideoAdjustmentError) && !agentaiAdjusted)
+        throw error;
+      remote = (error as Error & { taskId: string }).taskId;
       adjusted = true;
     }
     const saved = await one(

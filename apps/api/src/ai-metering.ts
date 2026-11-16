@@ -49,21 +49,29 @@ export function providerUsage(payload: unknown, source: string): Receipt {
   const input = number(usage.prompt_tokens ?? usage.input_tokens),
     output = number(usage.completion_tokens ?? usage.output_tokens);
   const microUsd = number(response.actual_cost_micro_usd);
+  const agentAiRmb =
+    source === "agentai.token6688.com" && usage.cost_currency === "CNY"
+      ? number(usage.cost_rmb)
+      : null;
   const amount =
-    microUsd !== null
-      ? microUsd / 1_000_000
-      : number(usage.cost ?? usage.total_cost);
+    agentAiRmb !== null
+      ? agentAiRmb
+      : microUsd !== null
+        ? microUsd / 1_000_000
+        : number(usage.cost ?? usage.total_cost);
   const currency = text(usage.currency, 12);
   const unit =
     amount === null
       ? null
-      : microUsd !== null
-        ? "USD"
-        : source === "openrouter.ai"
-          ? "OpenRouter credits"
-          : currency && /^[A-Z]{3}$/.test(currency)
-            ? currency
-            : null;
+      : agentAiRmb !== null
+        ? "CNY"
+        : microUsd !== null
+          ? "USD"
+          : source === "openrouter.ai"
+            ? "OpenRouter credits"
+            : currency && /^[A-Z]{3}$/.test(currency)
+              ? currency
+              : null;
   const credits = number(usage.credits ?? usage.points);
   const bailian = /^ws-[a-z0-9]+\.cn-beijing\.maas\.aliyuncs\.com$/.test(
     source,
@@ -118,10 +126,49 @@ export function providerUsage(payload: unknown, source: string): Receipt {
         "queued",
         "running",
         "processing",
+        "downloading",
         "in_progress",
         "created",
         "submitted",
       ].includes(response.status || response.state),
+  };
+}
+
+/** Only this documented provider uses these billing headers; absent is unknown. */
+export function withProviderBillingHeaders(
+  payload: unknown,
+  source: string,
+  headers: Headers,
+) {
+  if (
+    source !== "agentai.token6688.com" ||
+    !payload ||
+    typeof payload !== "object"
+  )
+    return payload;
+  const value = payload as Record<string, any>;
+  const parsed = (name: string) => {
+    const raw = headers.get(name);
+    return raw !== null && /^\d+(?:\.\d+)?$/.test(raw.trim())
+      ? number(Number(raw))
+      : null;
+  };
+  const rmb = parsed("X-TokenGo-Cost-RMB");
+  const microUsd = parsed("X-TokenGo-Cost-Micro-USD");
+  return {
+    ...value,
+    ...(microUsd !== null && value.actual_cost_micro_usd === undefined
+      ? { actual_cost_micro_usd: microUsd }
+      : {}),
+    ...(rmb !== null
+      ? {
+          usage: {
+            cost_rmb: rmb,
+            cost_currency: "CNY",
+            ...(value.usage || {}),
+          },
+        }
+      : {}),
   };
 }
 
@@ -298,7 +345,14 @@ export async function aiFetch(
           (source.endsWith(".maas.aliyuncs.com") &&
             (value.code || Number(value.status_code || 200) >= 400))
         )
-          receipt = { ...((receipt as object) || {}), ...seen, ...value };
+          receipt = {
+            ...((receipt as object) || {}),
+            ...seen,
+            ...value,
+            ...(value.usage
+              ? { usage: { ...(receipt as any)?.usage, ...value.usage } }
+              : {}),
+          };
       } catch {
         /* Incomplete or non-JSON event; never infer usage. */
       }
@@ -337,7 +391,12 @@ export async function aiFetch(
           }
         }
         // Accounting failure must not discard an already-paid, valid response.
-        await finish(id, source, model, receipt).catch(() => {});
+        await finish(
+          id,
+          source,
+          model,
+          withProviderBillingHeaders(receipt, source, response.headers),
+        ).catch(() => {});
       },
     }),
   );

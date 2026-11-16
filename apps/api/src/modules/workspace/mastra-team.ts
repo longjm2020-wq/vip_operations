@@ -5,6 +5,7 @@ import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { z } from "zod";
 import type { Row } from "../../../../../packages/database/src/index.js";
 import { aiFetch } from "../../ai-metering.js";
+import { agentaiChatBody } from "./agentai-connection.js";
 
 async function readReceipt(
   response: Response,
@@ -111,6 +112,8 @@ export function mastraMessages(messages: Row[]): MessageInput[] {
 
 export async function generateMastraTeamResponse(options: {
   endpoint: string;
+  provider?: "agentai";
+  send?: (body: Row) => Promise<Response>;
   apiKey: string;
   memberId: string;
   memberName: string;
@@ -125,7 +128,7 @@ export async function generateMastraTeamResponse(options: {
   let status = 200;
   let calls = 0;
   const provider = createOpenAICompatible({
-    name: "erp-openrouter",
+    name: options.provider === "agentai" ? "erp-agentai" : "erp-openrouter",
     baseURL: options.endpoint.replace(/\/chat\/completions\/?$/, ""),
     apiKey: options.apiKey,
     supportsStructuredOutputs: true,
@@ -134,26 +137,31 @@ export async function generateMastraTeamResponse(options: {
       "image/*": [/^data:/],
       "application/pdf": [/^data:/],
     }),
-    transformRequestBody: (request) => ({
-      ...request,
-      stream: false,
-      messages: request.messages.map((message: Row) => {
-        const original = body.messages.find(
-          (m: Row) =>
-            m.role === "assistant" &&
-            m.tool_calls?.[0]?.id &&
-            m.tool_calls[0].id === message.tool_calls?.[0]?.id,
-        );
-        return original?.reasoning_details
-          ? { ...message, reasoning_details: original.reasoning_details }
-          : message;
-      }),
-      provider: body.provider,
-      ...(body.reasoning ? { reasoning: body.reasoning } : {}),
-      ...(body.parallel_tool_calls !== undefined
-        ? { parallel_tool_calls: false }
-        : {}),
-    }),
+    transformRequestBody: (request) => {
+      const transformed = {
+        ...request,
+        stream: false,
+        messages: request.messages.map((message: Row) => {
+          const original = body.messages.find(
+            (m: Row) =>
+              m.role === "assistant" &&
+              m.tool_calls?.[0]?.id &&
+              m.tool_calls[0].id === message.tool_calls?.[0]?.id,
+          );
+          return original?.reasoning_details
+            ? { ...message, reasoning_details: original.reasoning_details }
+            : message;
+        }),
+        provider: body.provider,
+        ...(body.reasoning ? { reasoning: body.reasoning } : {}),
+        ...(body.parallel_tool_calls !== undefined
+          ? { parallel_tool_calls: false }
+          : {}),
+      };
+      return options.provider === "agentai"
+        ? agentaiChatBody(transformed)
+        : transformed;
+    },
     fetch: async (url, init) => {
       signal.throwIfAborted();
       if (String(url) !== options.endpoint || ++calls !== 1)
@@ -175,11 +183,13 @@ export async function generateMastraTeamResponse(options: {
         attachmentCount(JSON.parse(String(init?.body)).messages)
       )
         throw new Error("Mastra 未完整传递附件，已在模型调用前停止");
-      const response = await aiFetch("mastra_team", options.endpoint, {
-        ...init,
-        redirect: "error",
-        signal,
-      });
+      const response = options.send
+        ? await options.send(JSON.parse(String(init?.body)))
+        : await aiFetch("mastra_team", options.endpoint, {
+            ...init,
+            redirect: "error",
+            signal,
+          });
       // Preserve the original metered receipt and bounded payload validation in
       // the existing executor. No raw provider errors/credentials reach the UI.
       status = response.status;

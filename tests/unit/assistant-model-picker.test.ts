@@ -20,6 +20,55 @@ const catalog: AgentCatalog = {
 };
 
 describe("assistant model picker fallback", () => {
+  const text = {
+    ...catalog.models[0],
+    id: "agentai/text",
+    name: "AgentAI Text",
+    displayName: "AgentAI Text",
+    vision: false,
+    chatVerifiedAt: "2026-11-16T12:00:00Z",
+  };
+  it("keeps verified AgentAI text models visible without opening legacy text or unverified AgentAI models", () => {
+    const state = resolveAssistantModelPickerState({
+      catalog: {
+        ...catalog,
+        models: [
+          ...catalog.models,
+          text,
+          { ...text, id: "engine/text" },
+          { ...text, id: "agentai/unverified", chatVerifiedAt: null },
+        ],
+      },
+      value: text.id,
+    });
+    expect(state.models.map((m) => m.id)).toEqual([
+      "engine/bailian",
+      "agentai/text",
+    ]);
+    expect(state.selectedId).toBe(text.id);
+    expect(state.autoSwitched).toBe(false);
+    expect(state.title).toBe("AgentAI Text");
+  });
+  it("does not switch an explicitly selected AgentAI model to another provider after verification disappears", () => {
+    const state = resolveAssistantModelPickerState({
+      catalog: {
+        ...catalog,
+        models: [...catalog.models, { ...text, chatVerifiedAt: null }],
+      },
+      value: text.id,
+    });
+    expect(state.selected).toBeUndefined();
+    expect(state.autoSwitched).toBe(false);
+    expect(state.hint).toContain("未自动切换线路");
+    expect(state.title).toBe("所选 AgentAI 型号不可用");
+  });
+  it("preserves the same no-switch boundary for an unavailable AgentAI default", () => {
+    const state = resolveAssistantModelPickerState({
+      catalog: { ...catalog, defaultModel: text.id },
+    });
+    expect(state.selectedId).toBeUndefined();
+    expect(state.autoSwitched).toBe(false);
+  });
   it("auto-selects the first available model instead of showing it as unavailable", () => {
     const state = resolveAssistantModelPickerState({
       catalog,

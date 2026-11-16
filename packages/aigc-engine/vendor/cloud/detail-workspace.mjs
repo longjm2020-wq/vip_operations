@@ -241,7 +241,7 @@ export async function processDetailJobs(store, config) {
       const quote = operationPlan(store.data, job.ownerId, "keyframe", route);
       await store.mutate(data => { reserve(data, { id: job.id, userId: job.ownerId, jobId: job.id, quote, label: `详情页 ${job.unit.id}` }); markSubmitted(data, job.id); data.detailJobs[job.id].status = "inflight"; data.detailJobs[job.id].route = route; data.jobs[job.id].status = "running"; });
       try { const taskId = await submitKeyframe(config, route, body); await store.mutate(data => { data.detailJobs[job.id].taskId = taskId; data.detailJobs[job.id].status = "submitted"; data.jobs[job.id].status = "waiting_provider"; data.jobs[job.id].providerRequestId = taskId; }); }
-      catch (error) { await store.mutate(data => { data.detailJobs[job.id].status = "uncertain"; data.detailJobs[job.id].error = `${error.message}；提交结果不明，请勿重新提交，需核对供应商记录`; data.jobs[job.id].status = "paused"; }); }
+      catch (error) { await store.mutate(data => { data.detailJobs[job.id].status = "uncertain"; data.detailJobs[job.id].error = `${error.message}；提交结果不明，请勿重新提交，需核对供应商记录`; data.jobs[job.id].status = "paused"; if (error.taskId) { data.detailJobs[job.id].taskId = error.taskId; data.jobs[job.id].providerRequestId = error.taskId; } }); }
       return;
       } catch (error) {
         if (store.data.detailJobs[job.id]?.status === "pending") await store.mutate(data => { data.detailJobs[job.id].status = "failed"; data.detailJobs[job.id].error = error.message; data.jobs[job.id].status = "failed"; });

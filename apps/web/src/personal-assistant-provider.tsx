@@ -563,11 +563,10 @@ export function PersonalAssistantProvider({
   });
   const modelHint = !teamMode && !externalMode ? pickerState.hint : "";
   const modelProblem =
-    !teamMode &&
-    !externalMode &&
-    modelCatalog.data &&
-    !pickerState.models.length
-      ? "暂无已接通的多模态模型，请管理员检查连接。"
+    !teamMode && !externalMode && modelCatalog.data && !pickerState.selected
+      ? pickerState.models.length
+        ? "所选模型当前不可用，请重新选择或验证连接。"
+        : "暂无已接通的聊天模型，请管理员检查连接。"
       : "";
   const composerReady = teamMode
     ? teamConfig.data?.ready

@@ -63,10 +63,11 @@ export async function searchAgentWeb(
   args: string,
   signal: AbortSignal,
   matchesModel?: (returnedModel: unknown) => boolean,
+  independentConnection = false,
 ) {
-  const fromBailian = model === bailianChatModel;
+  const independent = model === bailianChatModel || independentConnection;
   const configured = await featureModelRef("assistant_search");
-  if (configured || model === bailianChatModel) {
+  if (configured || independent) {
     const selected = await resolveAgentModel(
       configured || undefined,
       "assistant_search",
@@ -85,7 +86,7 @@ export async function searchAgentWeb(
     raw,
   );
   if (
-    fromBailian &&
+    independent &&
     (!settings?.enabled || !settings.api_key_encrypted || !settings.verified_at)
   )
     fail("SEARCH_FAILED", "公开搜索连接尚未验证，请管理员检查搜索服务", 503);

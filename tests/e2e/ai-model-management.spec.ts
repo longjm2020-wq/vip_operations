@@ -191,6 +191,111 @@ async function fixture(page: Page, superAdmin = true) {
   return { changes, sessions, connectionChanges, verifications };
 }
 
+test("AgentAI separates saving, catalog access and model verification without changing defaults", async ({
+  page,
+}) => {
+  const existing = await fixture(page);
+  const calls: string[] = [];
+  let saved: Record<string, unknown> | undefined;
+  let status: any = {
+    enabled: false,
+    endpoint: "https://agentai.token6688.com/v1",
+    apiKeyConfigured: false,
+    encryptionReady: true,
+    verifiedAt: null,
+    errorNote: "",
+    version: 0,
+    catalogAt: null,
+    models: [
+      {
+        id: "agentai/test-chat",
+        model: "test-chat",
+        name: "Test Chat",
+        type: "chat",
+        available: true,
+        vision: false,
+        parameters: [],
+        chatVerifiedAt: null,
+        toolsVerifiedAt: null,
+        structuredVerifiedAt: null,
+      },
+    ],
+  };
+  await page.route("**/api/v1/ai-model-management/agentai**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (route.request().method() === "POST") {
+      calls.push(path);
+      if (path.endsWith("/sync"))
+        status = {
+          ...status,
+          verifiedAt: new Date().toISOString(),
+          catalogAt: new Date().toISOString(),
+        };
+      else if (path.endsWith("/test")) {
+        expect(route.request().postDataJSON()).toEqual({
+          model: "agentai/test-chat",
+          capability: "chat",
+        });
+        status = {
+          ...status,
+          models: [
+            { ...status.models[0], chatVerifiedAt: new Date().toISOString() },
+          ],
+        };
+      } else {
+        saved = route.request().postDataJSON();
+        status = {
+          ...status,
+          version: 1,
+          enabled: true,
+          apiKeyConfigured: true,
+        };
+      }
+    }
+    await route.fulfill({ json: { data: status } });
+  });
+  await page.goto("/settings/ai");
+  await page.getByRole("button", { name: "AgentAI 连接", exact: true }).click();
+  const drawer = page.getByRole("dialog", {
+    name: "AgentAI 模型连接",
+    exact: true,
+  });
+  await drawer.getByRole("switch", { name: "启用 AgentAI" }).click();
+  await drawer
+    .getByLabel("API Key", { exact: true })
+    .fill("sk-fixture-not-a-secret");
+  await drawer.getByRole("button", { name: "保存连接", exact: true }).click();
+  await expect(
+    drawer.getByRole("button", { name: "同步模型目录", exact: true }),
+  ).toBeEnabled();
+  await expect(drawer.getByLabel("API Key", { exact: true })).toHaveValue("");
+  expect(saved).toMatchObject({
+    apiKey: "sk-fixture-not-a-secret",
+    enabled: true,
+    version: 0,
+  });
+  expect(calls).toHaveLength(1);
+  await expect(
+    drawer.getByRole("button", { name: "验证聊天", exact: true }),
+  ).toBeDisabled();
+  await drawer
+    .getByRole("button", { name: "同步模型目录", exact: true })
+    .click();
+  await expect(
+    drawer.getByText("密钥和模型目录已接通", { exact: true }),
+  ).toBeVisible();
+  await drawer.getByRole("button", { name: "验证聊天", exact: true }).click();
+  await expect(
+    drawer.getByRole("button", { name: "✓ 聊天", exact: true }),
+  ).toBeVisible();
+  await expect(
+    drawer.getByRole("button", { name: "验证工具", exact: true }),
+  ).toBeVisible();
+  expect(calls).toHaveLength(3);
+  expect(existing.changes).toEqual([]);
+  expect(existing.connectionChanges).toEqual([]);
+});
+
 test("Bailian chat copies a saved connection without changing the default and verifies only on request", async ({
   page,
 }) => {
@@ -314,7 +419,7 @@ test("management lists actual sources, persists a per-feature model and filters 
   await expect(
     page.getByRole("heading", { name: "AI 模型管理", exact: true }),
   ).toBeVisible();
-  await expect(page.locator("tr[data-row-key]")).toHaveCount(21);
+  await expect(page.locator("tr[data-row-key]")).toHaveCount(aiFeatures.length);
   await expect(page.getByText("已配置；当前型号待验证").first()).toBeVisible();
   await page.getByRole("combobox", { name: "小序互动对话的默认模型" }).click();
   await page.getByText("视觉模型 B", { exact: true }).click();
@@ -370,7 +475,8 @@ test("voice configuration and direct links do not start a call", async ({
   expect(f.sessions).toEqual([]);
   await page.getByRole("button", { name: "关闭", exact: true }).click();
   await page.getByRole("link", { name: "打开小序实时语音通话" }).click();
-  await expect(page).toHaveURL(/assistant=voice/);
+  // The workspace consumes this one-shot deep link before opening settings.
+  await expect(page).toHaveURL(/\/my-workspace(?:\?|$)/);
   await expect(page.getByText("小序的声音", { exact: false })).toBeVisible();
   expect(f.sessions).toEqual([]);
 });

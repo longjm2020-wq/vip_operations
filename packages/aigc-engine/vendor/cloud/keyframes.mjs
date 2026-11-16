@@ -195,6 +195,7 @@ export class KeyframeService {
       return this.visual.frames(job, refs);
     }
     const imageRoute = gate.imageRoute;
+    if (frame.submission?.state === "mismatch") throw new Error(`图片任务 ${frame.requestId || "未知"} 的生成参数发生变化，须人工核对，不能自动归档或重新提交`);
     if (frame.requestId) {
       let result;
       try { result = await pollKeyframe(this.config, imageRoute, frame.requestId); }
@@ -246,6 +247,7 @@ export class KeyframeService {
     const images = await this.referenceDataUrls(refs, { model: imageModel(imageRoute) });
     const unit = job.payload.artifacts.units.find(u => u.id === frame.unitId);
     const body = keyframeImageBody(imageRoute, { prompt: keyframePrompt(refs, job.payload.artifacts, unit, frame.correction), images, aspectRatio });
+    if (imageRoute.protocol === "agentai-image") await dryRunKeyframe(this.config,imageRoute,body);
     if (imageRoute.protocol === "xhai-image") {
       const fingerprint = createHash("sha256").update(images.join("\n")).digest("hex");
       const cached = gate.xhaiReferenceUploads;
@@ -275,7 +277,13 @@ export class KeyframeService {
     if (!canSubmit) return false;
     let requestId;
     try { requestId = await submitKeyframe(this.config, imageRoute, body); }
-    catch { throw new Error("关键帧提交未能确认；已停止自动重提，请先在原中转站核对请求记录，避免重复扣费"); }
+    catch (error) {
+      if (error.parameterMismatch && error.taskId) await this.store.mutate(data => {
+        const target = state(data,job.id).job.payload.keyframeGate.frames.find(f => f.unitId === frame.unitId);
+        Object.assign(target,{requestId:error.taskId,submission:{...target.submission,state:"mismatch"}});
+      });
+      throw new Error("关键帧提交未能确认或参数发生变化；已停止自动重提，请先在原服务核对请求记录，避免重复扣费");
+    }
     await this.store.mutate(data => {
       const { job: current } = state(data, job.id);
       const target = current.payload.keyframeGate.frames.find(f => f.unitId === frame.unitId);

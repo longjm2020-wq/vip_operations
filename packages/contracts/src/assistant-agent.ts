@@ -25,6 +25,8 @@ export type AgentModel = {
   structured: boolean;
   parameters: string[];
   chatOnly?: boolean;
+  /** Current AgentAI connection has a successful chat capability receipt. */
+  chatVerifiedAt?: string | null;
 };
 export type AgentCatalog = {
   models: AgentModel[];

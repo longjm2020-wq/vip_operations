@@ -25,6 +25,11 @@ import type { AgentFile } from "../../../../../packages/contracts/src/assistant-
 import { assistantPublicText } from "../../../../../packages/contracts/src/ai-presentation.js";
 import type { Context } from "../../core.js";
 import { COMPASS_AI_ENDPOINT } from "../analytics/ai.js";
+import {
+  agentaiConnection,
+  agentaiEndpoint,
+  postAgentAiChat,
+} from "./agentai-connection.js";
 import { decryptSecret, encryptionReady } from "../analytics/secrets.js";
 import { requireAssistant } from "./assistant-memory.js";
 import {
@@ -960,7 +965,7 @@ export async function runTeamExecution(
     );
   };
   const call: TeamExecutionDependencies["call"] = async (request) => {
-    await settings();
+    await check();
     const employee = input.employeeContext?.employees.find(
       (e) => employeeMemberId(e.id) === request.member.id,
     )?.profile;
@@ -1099,7 +1104,9 @@ export async function runTeamExecution(
     let evidenceCorrection = false;
     let forcedTool: string | undefined;
     for (let round = 0; round < 5; round++) {
-      const current = await settings();
+      await check();
+      const agentai = model.provider === "agentai";
+      const current = agentai ? await agentaiConnection() : await settings();
       const requestSignal = AbortSignal.any([
         signal,
         AbortSignal.timeout(150000),
@@ -1147,12 +1154,25 @@ export async function runTeamExecution(
       };
       const apiKey = decryptSecret(current.api_key_encrypted);
       await reserveCall();
+      await check();
       const response =
         engine === "mastra"
           ? await (
               await import("./mastra-team.js")
             ).generateMastraTeamResponse({
-              endpoint: COMPASS_AI_ENDPOINT,
+              endpoint: agentai ? agentaiEndpoint : COMPASS_AI_ENDPOINT,
+              provider: agentai ? "agentai" : undefined,
+              ...(agentai
+                ? {
+                    send: (body: Row) =>
+                      postAgentAiChat(
+                        current,
+                        body,
+                        requestSignal,
+                        "mastra_team",
+                      ),
+                  }
+                : {}),
               apiKey,
               memberId: request.member.id,
               memberName: request.member.name,
@@ -1160,20 +1180,27 @@ export async function runTeamExecution(
               schema: request.schema,
               signal: requestSignal,
             })
-          : await aiFetch(
-              input.employeeContext ? "assistant_employee" : "assistant_team",
-              COMPASS_AI_ENDPOINT,
-              {
-                method: "POST",
-                redirect: "error",
-                signal: requestSignal,
-                headers: {
-                  Authorization: "Bearer " + apiKey,
-                  "Content-Type": "application/json",
+          : agentai
+            ? await postAgentAiChat(
+                current,
+                modelBody,
+                requestSignal,
+                input.employeeContext ? "assistant_employee" : "assistant_team",
+              )
+            : await aiFetch(
+                input.employeeContext ? "assistant_employee" : "assistant_team",
+                COMPASS_AI_ENDPOINT,
+                {
+                  method: "POST",
+                  redirect: "error",
+                  signal: requestSignal,
+                  headers: {
+                    Authorization: "Bearer " + apiKey,
+                    "Content-Type": "application/json",
+                  },
+                  body: JSON.stringify(modelBody),
                 },
-                body: JSON.stringify(modelBody),
-              },
-            );
+              );
       if (!response.ok) {
         let payload: unknown;
         try {
@@ -1287,6 +1314,7 @@ export async function runTeamExecution(
               args,
               AbortSignal.any([signal, AbortSignal.timeout(90000)]),
               (returned) => matchesAgentModel(model, returned),
+              model.provider === "agentai",
             );
             citations.push(...found.citations);
             result = found;

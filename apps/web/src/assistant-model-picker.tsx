@@ -66,7 +66,7 @@ export function AssistantModelPicker({
                 <span>{model.displayName || model.name}</span>
                 <small>
                   {model.name}
-                  {" · 多模态"}
+                  {model.vision ? " · 多模态" : " · 仅文字"}
                 </small>
               </div>
             ),
