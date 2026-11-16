@@ -65,12 +65,19 @@ async function fixture(
     '<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="600"><rect width="1000" height="600" fill="#e9eef4"/><text x="80" y="100" font-size="28">Browser test page</text><rect x="200" y="250" width="600" height="70" fill="white" stroke="#333"/></svg>',
   ).toString("base64");
   const freshFrame = (appliedRequestId?: string) => {
+    const viewport = state.tasks[0]?.viewport;
+    const viewportImage = viewport
+      ? `data:image/svg+xml;base64,${Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${viewport.width}" height="${viewport.height}"><rect width="100%" height="100%" fill="#e9eef4"/><text x="30" y="80" font-size="20">Browser viewport ${viewport.width} x ${viewport.height}</text></svg>`).toString("base64")}`
+      : undefined;
     state.frame = {
       frameId: crypto.randomUUID(),
       epoch: state.tasks[0]?.epoch ?? 3,
-      width: state.frame?.width || 1000,
-      height: state.frame?.height || 600,
-      image: state.frame?.image || `data:image/svg+xml;base64,${screenshot}`,
+      width: viewport?.width || state.frame?.width || 1000,
+      height: viewport?.height || state.frame?.height || 600,
+      image:
+        viewportImage ||
+        state.frame?.image ||
+        `data:image/svg+xml;base64,${screenshot}`,
       url: state.frame?.url || "https://example.com/login",
       title: "测试登录页",
       canGoBack: true,
@@ -190,13 +197,6 @@ async function fixture(
       state.frame!.url = state.tasks[0].url;
       state.frame!.canGoBack = body.action.kind !== "back";
       state.frame!.canGoForward = body.action.kind === "back";
-      const viewport = state.tasks[0].viewport;
-      if (viewport) {
-        state.frame!.width = viewport.width;
-        state.frame!.height = viewport.height;
-        const content = `<svg xmlns="http://www.w3.org/2000/svg" width="${viewport.width}" height="${viewport.height}"><rect width="100%" height="100%" fill="#e9eef4"/><text x="30" y="80" font-size="20">Browser viewport ${viewport.width} x ${viewport.height}</text></svg>`;
-        state.frame!.image = `data:image/svg+xml;base64,${Buffer.from(content).toString("base64")}`;
-      }
       data = state.tasks[0];
     } else if (
       /^\/my-workspace\/assistant\/browser\/tasks\/[^/]+\/frame$/.test(path)
@@ -623,6 +623,109 @@ test("独立浏览器目标发送、后台进度与跨页面恢复保留同一�
   expect(
     await page.evaluate(() => localStorage.getItem("xuti-assistant-desktop:8")),
   ).toBeNull();
+});
+
+test("观察器未回调时历史标签新建与全屏仍同步真实视口，不用旧截图或默认尺寸", async ({
+  page,
+}) => {
+  const { state } = await fixture(page);
+  state.tasks = [{ ...makeTask(), id: historyTaskId, status: "DONE" }];
+  state.frame = { ...state.frame!, width: 1200, height: 800, readOnly: true };
+  // Reproduce Enter arriving before the debounced initial measurement. Other
+  // observers keep running, so the real application layout is unchanged.
+  await page.addInitScript(() => {
+    const NativeObserver = window.ResizeObserver;
+    window.ResizeObserver = class extends NativeObserver {
+      constructor(callback: ResizeObserverCallback) {
+        super((entries, observer) => {
+          const other = entries.filter(
+            (entry) =>
+              !entry.target.classList.contains("assistant-browser-page"),
+          );
+          if (other.length) callback(other, observer);
+        });
+      }
+    };
+  });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto("/my-workspace?assistant=browser");
+  const panel = page.locator(".assistant-browser-panel");
+  await expect(panel.getByLabel("最终画面只读", { exact: true })).toBeVisible();
+  const bounds = (await panel
+    .locator(".assistant-browser-page")
+    .boundingBox())!;
+  const desired = {
+    width: Math.round(bounds.width),
+    height: Math.round(bounds.height),
+  };
+  expect(desired.width).toBeLessThan(960);
+  await panel
+    .getByLabel("网页地址", { exact: true })
+    .fill("https://example.org/new-session");
+  await panel.getByLabel("网页地址", { exact: true }).press("Enter");
+  await expect.poll(() => state.browserRequests.length).toBe(1);
+  expect(state.browserRequests[0]).toMatchObject({
+    url: "https://example.org/new-session",
+    viewport: desired,
+  });
+  await expect(panel.getByLabel("最终画面只读", { exact: true })).toHaveCount(
+    0,
+  );
+  await expect(panel.locator(".assistant-browser-screen img")).toHaveJSProperty(
+    "naturalWidth",
+    desired.width,
+  );
+  await expect(panel.locator(".assistant-browser-screen img")).toHaveJSProperty(
+    "naturalHeight",
+    desired.height,
+  );
+  const displayed = (await panel
+    .locator(".assistant-browser-screen img")
+    .boundingBox())!;
+  expect(Math.abs(displayed.width - bounds.width)).toBeLessThan(1);
+  expect(Math.abs(displayed.height - bounds.height)).toBeLessThan(1);
+  expect(state.navigations).toEqual([]);
+  expect(state.actions).toEqual([]);
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await panel.getByRole("button", { name: "全屏查看", exact: true }).click();
+  await expect.poll(() => state.tasks[0].viewport?.width).toBe(1920);
+  await expect(panel.locator(".assistant-browser-screen")).toHaveAttribute(
+    "aria-busy",
+    "false",
+  );
+  const fullscreenBounds = (await panel
+    .locator(".assistant-browser-page")
+    .boundingBox())!;
+  expect(state.tasks[0].viewport).toEqual({
+    width: 1920,
+    height: Math.round(fullscreenBounds.height),
+  });
+  await expect(panel.locator(".assistant-browser-screen img")).toHaveJSProperty(
+    "naturalWidth",
+    1920,
+  );
+  await expect
+    .poll(
+      async () =>
+        (await panel.locator(".assistant-browser-screen img").boundingBox())!
+          .width,
+    )
+    .toBeGreaterThan(1919);
+  await panel.getByRole("button", { name: "退出全屏", exact: true }).click();
+  await expect.poll(() => state.tasks[0].viewport?.width).toBeLessThan(1000);
+  await expect(panel.locator(".assistant-browser-screen")).toHaveAttribute(
+    "aria-busy",
+    "false",
+  );
+  const restored = (await panel
+    .locator(".assistant-browser-page")
+    .boundingBox())!;
+  expect(state.tasks[0].viewport).toEqual({
+    width: Math.round(restored.width),
+    height: Math.round(restored.height),
+  });
+  expect(state.navigations).toHaveLength(2);
+  expect(state.actions).toEqual([]);
 });
 
 test("两个客户端查看同一网页，窄栏轮询不覆盖全屏尺寸，只有本地调整才接管视口", async ({

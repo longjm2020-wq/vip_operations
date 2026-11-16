@@ -4,6 +4,11 @@
   left: 0;
   width: min(344px, calc(100% - 40px));
   box-sizing: border-box;
+  pointer-events: auto;
+}
+.workspace-team-shelf .workspace-world-controls,
+.workspace-employee-strip {
+  box-sizing: border-box;
   border: 1px solid rgba(139, 157, 205, 0.18);
   border-radius: 14px;
   background: linear-gradient(
@@ -25,9 +30,7 @@
   box-sizing: border-box;
   gap: 2px;
   padding: 4px 7px;
-  border: 0;
-  border-radius: 14px 14px 0 0;
-  background: transparent;
+  border-radius: 12px;
 }
 .workspace-team-shelf .workspace-world-controls button {
   min-width: 27px;
@@ -38,8 +41,8 @@
 }
 .workspace-employee-strip {
   position: relative;
+  margin-top: 10px;
   padding: 10px 9px 9px;
-  border-top: 1px solid rgba(139, 157, 205, 0.12);
   color: #bec5d5;
   pointer-events: auto;
 }

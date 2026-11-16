@@ -348,8 +348,27 @@ function BrowserTakeover({
   }, [currentUrl, editingAddress]);
   useEffect(() => {
     if (previousFullscreen.current === fullscreen) return;
-    previousFullscreen.current = fullscreen;
-    setResizeIntent((value) => value + 1);
+    let measureFrame = 0;
+    // Fullscreen is an explicit local action. Measure the committed layout even
+    // when the embedded browser never delivers its ResizeObserver callback.
+    const layoutFrame = requestAnimationFrame(() => {
+      measureFrame = requestAnimationFrame(() => {
+        const bounds = page.current?.getBoundingClientRect();
+        if (!bounds || bounds.width < 1 || bounds.height < 1) return;
+        const size = {
+          width: Math.max(320, Math.min(2560, Math.round(bounds.width))),
+          height: Math.max(240, Math.min(1600, Math.round(bounds.height))),
+        };
+        previousFullscreen.current = fullscreen;
+        measuredViewport.current = size;
+        setViewport(size);
+        setResizeIntent((value) => value + 1);
+      });
+    });
+    return () => {
+      cancelAnimationFrame(layoutFrame);
+      cancelAnimationFrame(measureFrame);
+    };
   }, [fullscreen]);
   useEffect(() => {
     const element = page.current;
@@ -591,7 +610,20 @@ function BrowserTakeover({
     try {
       if (!live && action.kind === "goto") {
         if (disabled || !canBrowse) return;
-        await start(action.url, latest.current.viewport);
+        // A new session must use the current panel even before the debounced
+        // ResizeObserver has delivered its first (or most recent) measurement.
+        const bounds = page.current?.getBoundingClientRect();
+        const initialViewport =
+          bounds && bounds.width > 0 && bounds.height > 0
+            ? {
+                width: Math.max(320, Math.min(2560, Math.round(bounds.width))),
+                height: Math.max(
+                  240,
+                  Math.min(1600, Math.round(bounds.height)),
+                ),
+              }
+            : measuredViewport.current || latest.current.viewport;
+        await start(action.url, initialViewport);
       } else if (task) {
         const snapshot = frameRef.current;
         const requestId = crypto.randomUUID();
