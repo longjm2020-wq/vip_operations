@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { shiftCompassDate } from "./compass-analytics.js";
 
-export const operatingRuleVersion = "2026-11-16.1";
+export const operatingRuleVersion = "2026-11-17.1";
 export const supplyReasonLabels = {
   stock: "供应商有现货",
   fast: "生产周期不超过20天",
@@ -282,37 +282,40 @@ export function evaluateOperatingDecision(
     result.tags.push("数据待完善");
     result.reasons.push(evidence.issue);
   }
-  if (feedback.backlog) {
-    result.tags.push("压仓库存");
-    result.sales = "继续销售";
-    result.reasons.push("长期积压库存持续上线消化，高退货率不触发停售");
-  }
-  result.reasons.push(
-    ...feedback.supplyReasons.map((r) => supplyReasonLabels[r]),
-  );
-  if (feedback.supply === "deny" || salesPermission === "deny")
-    result.replenishment = "不允许补货";
-  else if (feedback.supply === "allow" && salesPermission === "allow")
-    result.replenishment = "允许补货";
-  else
-    result.reasons.push(
-      feedback.supply === "pending"
-        ? "生产采购端尚未反馈补货条件"
-        : "销售端补货资格待确认",
-    );
-  if (feedback.salesConfirmation === "keep") {
-    result.sales = "继续销售";
-    result.reasons.push("人工确认继续销售：" + feedback.confirmationReason);
-  }
+  if (feedback.backlog) result.tags.push("压仓库存");
   // Explicit quality/clearance feedback remains effective even on backlog stock.
   if (feedback.clearance !== "none" || feedback.salesConfirmation === "stop") {
     result.sales = "已确认停售";
     result.replenishment = "不允许补货";
-    result.reasons.push(
+    result.reasons.unshift(
       feedback.clearance !== "none"
-        ? clearanceReasonLabels[feedback.clearance]
+        ? "退供清仓端确认停售：" + clearanceReasonLabels[feedback.clearance]
         : "人工确认停售：" + feedback.confirmationReason,
     );
+  } else {
+    if (feedback.salesConfirmation === "keep") {
+      result.sales = "继续销售";
+      result.reasons.unshift("人工确认继续销售：" + feedback.confirmationReason);
+    } else if (feedback.backlog) {
+      result.sales = "继续销售";
+      result.reasons.unshift("人工标记压仓库存，继续上线消化");
+    }
+    const permission =
+      feedback.supply === "pending" ? salesPermission : feedback.supply;
+    if (permission === "allow") result.replenishment = "允许补货";
+    if (permission === "deny") result.replenishment = "不允许补货";
+    if (feedback.supply !== "pending") {
+      const reasons = feedback.supplyReasons.map(
+        (reason) => supplyReasonLabels[reason],
+      );
+      result.reasons.unshift(
+        `生产采购端确认${result.replenishment}：${reasons.join("、")}`,
+      );
+    } else if (permission !== "pending") {
+      result.reasons.push(`按销售数据判断${result.replenishment}`);
+    } else if (!evidence.issue) {
+      result.reasons.push("销售数据暂无法判断补货资格");
+    }
   }
   return result;
 }

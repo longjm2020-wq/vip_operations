@@ -729,7 +729,7 @@ function DecisionDrawer({
                           ]}
                         />
                         <p className="product-decision-muted">
-                          按款号完整匹配罗盘款号报表，跨日UV累计未去重；CTR=商详UV/曝光UV，加购率=加购UV/商详UV。期间退货率可能超过100%，不等于同一批订单退货率。更新判断读取最新已导入报表。
+                          人工反馈优先，未给出人工结论的部分采用销售数据判断。按款号完整匹配罗盘款号报表，跨日UV累计未去重。CTR=商详UV/曝光UV，加购率=加购UV/商详UV。期间退货率可能超过100%，不等于同一批订单退货率。
                         </p>
                         <Space>
                           {canAnalytics && (

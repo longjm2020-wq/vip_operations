@@ -157,6 +157,7 @@ describe("product decisions persistence, permissions and source linkage", () => 
       expect(
         result.items.find((item) => item.rowId === "1")?.decision,
       ).toMatchObject({
+        replenishment: "待确认",
         sales: "建议停售",
         evidence: { salesQty: 300, returnRate: 0.9 },
       });
@@ -168,14 +169,45 @@ describe("product decisions persistence, permissions and source linkage", () => 
       expect(saved.item).toMatchObject({
         version: 1,
         decision: {
+          replenishment: "允许补货",
           sales: "继续销售",
+          ruleVersion: "2026-11-17.1",
           tags: expect.arrayContaining(["高退货率", "压仓库存"]),
         },
       });
       const detail = await operatingDecisionDetail(context(), "1");
       expect(detail.history).toHaveLength(1);
       expect(detail.history[0].actorLabel).toBe("测试员工");
+      expect(detail.history[0].decision).toMatchObject({
+        replenishment: "允许补货",
+        sales: "继续销售",
+        ruleVersion: "2026-11-17.1",
+      });
       expect(await q("SELECT * FROM audit_logs")).toHaveLength(1);
+    }));
+  it("uses the current sales report until a structured procurement conclusion is saved", async () =>
+    scope(async () => {
+      await q(
+        "UPDATE compass_records SET payload=jsonb_set(payload, '{metrics,returnsQty}', '0'::jsonb)",
+      );
+      const read = () => queryOperatingDecisions(context(), { rowIds: ["1"] });
+      expect((await read()).items[0]?.decision).toMatchObject({
+        replenishment: "允许补货",
+        sales: "继续销售",
+      });
+      await saveOperatingDecision(context(), "1", {
+        ...saveBody(),
+        feedback: {
+          ...emptyOperatingFeedback(),
+          supply: "deny",
+          supplyReasons: ["moq"],
+        },
+      });
+      expect((await read()).items[0]?.decision).toMatchObject({
+        replenishment: "不允许补货",
+        sales: "继续销售",
+        evidence: { salesQty: 300, returnRate: 0 },
+      });
     }));
   it("rejects lost updates and changed archive identity without appending history", async () =>
     scope(async () => {
@@ -215,9 +247,10 @@ describe("product decisions persistence, permissions and source linkage", () => 
         context(["selection.read"]),
         "1",
       );
-      expect(result.item.decision.evidence).toMatchObject({
-        source: null,
-        salesQty: null,
+      expect(result.item.decision).toMatchObject({
+        replenishment: "允许补货",
+        sales: "继续销售",
+        evidence: { source: null, salesQty: null },
       });
       expect(result.item.canEdit).toBe(false);
       expect(result.history[0].decision).toBeNull();

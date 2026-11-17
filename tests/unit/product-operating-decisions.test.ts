@@ -40,27 +40,49 @@ function days(
     },
   }));
 }
-const decide = (age: number, metrics = {}, feedback = allow) =>
-  evaluateOperatingDecision(feedback, days(age, metrics), source, today);
+const decide = (
+  age: number,
+  metrics = {},
+  feedback = emptyOperatingFeedback(),
+) => evaluateOperatingDecision(feedback, days(age, metrics), source, today);
 
 describe("product decisions: independent replenishment and sales rules", () => {
-  it("requires both procurement eligibility and sales evidence, using the agreed labels", () => {
-    expect(decide(10).replenishment).toBe("允许补货");
-    expect(decide(10, {}, emptyOperatingFeedback()).replenishment).toBe(
-      "待确认",
-    );
-    const result = decide(
-      10,
-      {},
-      { ...allow, supply: "deny", supplyReasons: ["moq"] },
-    );
-    expect(result).toMatchObject({
-      replenishment: "不允许补货",
+  it("uses sales data for decisions with only supplemental notes", () => {
+    const notes = {
+      ...emptyOperatingFeedback(),
+      supplyNote: "等待核对供应商交期",
+      clearanceNote: "仍在核对库存",
+    };
+    expect(decide(10, {}, notes)).toMatchObject({
+      replenishment: "允许补货",
       sales: "继续销售",
     });
+    expect(
+      decide(10, { salesQty: 0, detailViews: 5, cartUsers: 0 }, notes),
+    ).toMatchObject({ replenishment: "不允许补货", sales: "建议停售" });
+    expect(decide(9, { salesQty: 0 }, notes).replenishment).toBe("待确认");
+  });
+  it("uses the procurement conclusion for replenishment despite conflicting automatic results", () => {
+    expect(
+      decide(10, { salesQty: 0, detailViews: 5, cartUsers: 0 }, allow),
+    ).toMatchObject({
+      replenishment: "允许补货",
+      sales: "建议停售",
+      tags: expect.arrayContaining(["首测失败"]),
+    });
+    expect(
+      decide(10, {}, { ...allow, supply: "deny", supplyReasons: ["moq"] }),
+    ).toMatchObject({ replenishment: "不允许补货", sales: "继续销售" });
   });
   it("never stops selling long-held stock solely because of high returns", () => {
-    const result = decide(60, { returnsQty: 1.2 }, { ...allow, backlog: true });
+    const result = decide(
+      60,
+      { returnsQty: 1.2 },
+      {
+        ...emptyOperatingFeedback(),
+        backlog: true,
+      },
+    );
     expect(result.sales).toBe("继续销售");
     expect(result.tags).toEqual(
       expect.arrayContaining(["压仓库存", "高退货率"]),
@@ -84,12 +106,12 @@ describe("product decisions: independent replenishment and sales rules", () => {
         60,
         { returnsQty: 0.81 },
         {
-          ...allow,
+          ...emptyOperatingFeedback(),
           salesConfirmation: "keep",
           confirmationReason: "继续清理现货",
         },
-      ).sales,
-    ).toBe("继续销售");
+      ),
+    ).toMatchObject({ sales: "继续销售", replenishment: "待确认" });
     expect(
       decide(
         60,
@@ -130,7 +152,12 @@ describe("product decisions: independent replenishment and sales rules", () => {
     const records = days(20, { salesQty: 0 });
     records[0].metrics.salesQty = 99;
     expect(
-      evaluateOperatingDecision(allow, records, source, today),
+      evaluateOperatingDecision(
+        emptyOperatingFeedback(),
+        records,
+        source,
+        today,
+      ),
     ).toMatchObject({
       phase: "回测",
       replenishment: "不允许补货",
@@ -156,13 +183,33 @@ describe("product decisions: independent replenishment and sales rules", () => {
     const duplicate = days(20);
     duplicate.push({ ...duplicate[15], entityKey: "OTHER" });
     const variants = [
-      evaluateOperatingDecision(allow, incomplete, source, today),
-      evaluateOperatingDecision(allow, duplicate, source, today),
-      decide(20, { salesQty: null }),
-      evaluateOperatingDecision(allow, days(20), source, "2026-11-19"),
-      evaluateOperatingDecision(allow, days(20).slice(0, -1), source, today),
       evaluateOperatingDecision(
-        allow,
+        emptyOperatingFeedback(),
+        incomplete,
+        source,
+        today,
+      ),
+      evaluateOperatingDecision(
+        emptyOperatingFeedback(),
+        duplicate,
+        source,
+        today,
+      ),
+      decide(20, { salesQty: null }),
+      evaluateOperatingDecision(
+        emptyOperatingFeedback(),
+        days(20),
+        source,
+        "2026-11-19",
+      ),
+      evaluateOperatingDecision(
+        emptyOperatingFeedback(),
+        days(20).slice(0, -1),
+        source,
+        today,
+      ),
+      evaluateOperatingDecision(
+        emptyOperatingFeedback(),
         days(20),
         { ...source, startDate: end },
         today,
@@ -175,18 +222,30 @@ describe("product decisions: independent replenishment and sales rules", () => {
     }
   });
   it("retains valid manual decisions when reports are absent", () => {
+    expect(evaluateOperatingDecision(allow, [], null, today)).toMatchObject({
+      replenishment: "允许补货",
+      sales: "待确认",
+      evidence: { source: null, salesQty: null },
+    });
     expect(
-      evaluateOperatingDecision({ ...allow, backlog: true }, [], null, today)
-        .sales,
-    ).toBe("继续销售");
+      evaluateOperatingDecision(
+        {
+          ...emptyOperatingFeedback(),
+          backlog: true,
+        },
+        [],
+        null,
+        today,
+      ),
+    ).toMatchObject({ replenishment: "待确认", sales: "继续销售" });
     expect(
       evaluateOperatingDecision(
         { ...allow, clearance: "completed" },
         [],
         null,
         today,
-      ).sales,
-    ).toBe("已确认停售");
+      ),
+    ).toMatchObject({ replenishment: "不允许补货", sales: "已确认停售" });
   });
   it("validates incompatible reasons and requires manual confirmation explanations", () => {
     expect(

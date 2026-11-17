@@ -370,6 +370,11 @@ test("经营决策可直接填写三端反馈，保存压仓标记后继续销�
     backlog: true,
     supplyNote: "先销售长期积压库存",
   });
+  await expect(
+    drawer
+      .getByRole("region", { name: "当前判断" })
+      .getByText("允许补货", { exact: true }),
+  ).toBeVisible();
   await expect(drawer.getByText("继续销售", { exact: true })).toBeVisible();
   await expect(drawer.getByText("高退货率", { exact: true })).toBeVisible();
   const evidence = drawer.getByText("统计窗口", { exact: true });
