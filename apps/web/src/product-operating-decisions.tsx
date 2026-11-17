@@ -28,6 +28,7 @@ import {
   type OperatingDecisionItem,
   type OperatingFeedback,
 } from "../../../packages/contracts/src/product-operating-decisions";
+import { invalidSelectionImage } from "./selection-image-links";
 import { useSelectionWorkspace } from "./selection-workspace";
 import { useCan } from "./shared";
 import "./product-operating-decisions.css";
@@ -52,16 +53,19 @@ function Status({ value }: { value: string }) {
   return <Tag color={color}>{value}</Tag>;
 }
 export function ProductOperatingDecisions({
-  rowIds,
+  rows,
   blocked,
 }: {
-  rowIds: string[];
+  rows: { rowId: string; imageUrl?: string }[];
   blocked: boolean;
 }) {
   const { api, tableId } = useSelectionWorkspace();
   const [selected, setSelected] = useState<string | null>(null);
-  const [search, setSearch] = useState("");
-  const ids = useMemo(() => [...new Set(rowIds)].sort(), [rowIds.join(",")]);
+  const imageUrls = useMemo(
+    () => new Map(rows.map(({ rowId, imageUrl }) => [rowId, imageUrl])),
+    [rows],
+  );
+  const ids = useMemo(() => [...imageUrls.keys()].sort(), [imageUrls]);
   const query = useQuery<{ items: OperatingDecisionItem[] }>({
     queryKey: ["product-operating-decisions", tableId, ids],
     enabled: ids.length > 0 && !blocked,
@@ -81,20 +85,9 @@ export function ProductOperatingDecisions({
     },
     refetchInterval: 60000,
   });
-  const items = (query.data?.items || []).filter((item) =>
-    item.styleNo.toLowerCase().includes(search.trim().toLowerCase()),
-  );
   return (
     <section className="product-decisions" aria-label="商品经营决策">
       <div className="product-decisions-toolbar">
-        <Input.Search
-          aria-label="查找经营决策款号"
-          placeholder="查找款号"
-          value={search}
-          onChange={(event) => setSearch(event.target.value)}
-          allowClear
-        />
-        <span>按款判断 · 补货资格与销售状态独立</span>
         <Button
           icon={<ReloadOutlined />}
           loading={query.isFetching}
@@ -123,8 +116,8 @@ export function ProductOperatingDecisions({
         size="small"
         rowKey="rowId"
         loading={query.isLoading && !blocked}
-        dataSource={blocked || query.error ? [] : items}
-        scroll={{ x: 1050 }}
+        dataSource={blocked || query.error ? [] : (query.data?.items ?? [])}
+        scroll={{ x: 1301 }}
         pagination={{
           defaultPageSize: 50,
           showSizeChanger: true,
@@ -156,6 +149,36 @@ export function ProductOperatingDecisions({
                 {v}
               </Button>
             ),
+          },
+          {
+            title: "图片",
+            key: "image",
+            align: "center",
+            width: 76,
+            render: (_, item) => {
+              const imageUrl = imageUrls.get(item.rowId);
+              return imageUrl ? (
+                <img
+                  className="product-decision-image"
+                  src={imageUrl}
+                  alt={`${item.styleNo} 商品图片`}
+                  width={40}
+                  height={48}
+                  loading="lazy"
+                  decoding="async"
+                  referrerPolicy="no-referrer"
+                  onError={({ currentTarget }) => {
+                    if (
+                      currentTarget.getAttribute("src") !==
+                      invalidSelectionImage
+                    )
+                      currentTarget.src = invalidSelectionImage;
+                  }}
+                />
+              ) : (
+                "—"
+              );
+            },
           },
           {
             title: "测试阶段",

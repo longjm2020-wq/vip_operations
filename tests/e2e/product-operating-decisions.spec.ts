@@ -11,13 +11,30 @@ import {
 } from "../../packages/contracts/src/product-operating-decisions.js";
 import { shiftCompassDate } from "../../packages/contracts/src/compass-analytics.js";
 
+const pixel = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jz1sAAAAASUVORK5CYII=",
+  "base64",
+);
+const archiveImage = {
+  id: "photo",
+  url: "/api/v1/style-selections/images/11111111-1111-4111-8111-111111111111?tableId=3",
+  color: "黑色",
+};
+
 async function fixture(
   page: Page,
-  options: { readOnly?: boolean; conflict?: boolean } = {},
+  options: {
+    readOnly?: boolean;
+    conflict?: boolean;
+    testSearch?: boolean;
+  } = {},
 ) {
   let preferences = selectionLayoutSchema.parse({
     columns: [
       { key: "xutiStyleNo", label: "序缇款号", width: 160, type: "text" },
+      ...(options.testSearch
+        ? [{ key: "images", label: "图片", width: 100, type: "image" }]
+        : []),
     ],
     pageSize: 20,
   });
@@ -26,7 +43,7 @@ async function fixture(
       id: "1",
       xutiStyleNo: "XFA32102",
       version: 0,
-      images: [],
+      images: options.testSearch ? [archiveImage] : [],
       labelImages: [],
       extraFields: {},
       defaultCellAccess: "edit",
@@ -37,6 +54,15 @@ async function fixture(
       updatedAt: "2026-09-01T00:00:00Z",
     },
   ];
+  if (options.testSearch)
+    rows.push({
+      ...rows[0],
+      id: "2",
+      xutiStyleNo: "XFW45201",
+      images: [{ ...archiveImage, url: "/protected-photo.png" }],
+      cellAccess: { images: "deny" },
+      sortOrder: 2,
+    });
   const source = {
     id: "1",
     startDate: "2026-10-17",
@@ -78,6 +104,10 @@ async function fixture(
   await page.route("**/api/v1/**", async (route) => {
     const request = route.request(),
       path = new URL(request.url()).pathname;
+    if (path.includes("/style-selections/images/")) {
+      await route.fulfill({ contentType: "image/png", body: pixel });
+      return;
+    }
     let data: unknown = [];
     if (path.endsWith("/assistant/capabilities"))
       data = {
@@ -144,8 +174,26 @@ async function fixture(
     }
     if (path.endsWith("/operating-decisions/query")) {
       expect(new URL(request.url()).searchParams.get("tableId")).toBe("3");
-      data = { items: [item] };
+      const ids: string[] = request.postDataJSON().rowIds;
+      data = {
+        items: rows
+          .filter((row) => ids.includes(row.id))
+          .map((row) =>
+            row.id === item.rowId
+              ? item
+              : { ...item, rowId: row.id, styleNo: row.xutiStyleNo },
+          ),
+      };
     }
+    if (path.endsWith("/style-selections/image-search")) {
+      data = {
+        data: [{ ...rows[0], imageSimilarity: 99, matchedImage: archiveImage }],
+        scannedImages: 1,
+        skippedImages: 0,
+        total: 1,
+      };
+    }
+    if (path.endsWith("/style-selections/1")) data = rows[0];
     if (path.endsWith("/1/operating-decision")) {
       if (request.method() === "POST") {
         writes.push(request.postDataJSON());
@@ -188,8 +236,9 @@ async function fixture(
     await route.fulfill({ json: { data } });
   });
   await page.goto("/products");
-  await expect(page.locator("tr[data-selection-row]")).toHaveCount(1);
+  await expect(page.locator("tr[data-selection-row]")).toHaveCount(rows.length);
   await page.getByRole("tab", { name: "经营决策", exact: true }).click();
+  if (options.testSearch) return { writes, item: () => item };
   await expect(
     page
       .getByRole("region", { name: "商品经营决策" })
@@ -199,6 +248,54 @@ async function fixture(
   await expect(page.getByRole("dialog")).toBeVisible();
   return { writes, item: () => item };
 }
+
+test("经营决策复用顶部文字和图片搜索，并在款号旁显示有权查看的图片", async ({
+  page,
+}) => {
+  await fixture(page, { testSearch: true });
+  const decisions = page.getByRole("region", { name: "商品经营决策" });
+  const pictured = decisions.getByRole("row", { name: /XFA32102/ });
+  const protectedRow = decisions.getByRole("row", { name: /XFW45201/ });
+  const search = page
+    .locator(".page-top-search")
+    .getByRole("textbox", { name: "搜索选款" });
+  await expect(decisions.getByRole("columnheader").nth(1)).toHaveText("图片");
+  await expect(
+    pictured.getByRole("cell").nth(1).getByRole("img"),
+  ).toHaveJSProperty("naturalWidth", 1);
+  await expect(protectedRow.getByRole("cell").nth(1)).toHaveText("—");
+  await expect(decisions.getByRole("textbox")).toHaveCount(0);
+
+  await search.fill("45201");
+  await expect(protectedRow).toBeVisible();
+  await expect(pictured).toHaveCount(0);
+  await search.fill("无匹配款号");
+  await expect(decisions.getByText("暂无可查看的已保存款号")).toBeVisible();
+  await search.fill("45201");
+
+  await page
+    .locator(".page-top-search")
+    .getByRole("button", { name: "拍照或上传图片查找同款" })
+    .click();
+  const imageSearch = page.getByRole("dialog", { name: "图片查找同款" });
+  await expect(
+    imageSearch.getByRole("button", { name: "上传图片查找" }),
+  ).toBeEnabled();
+  await imageSearch
+    .getByLabel("上传查找图片文件")
+    .setInputFiles({ name: "query.png", mimeType: "image/png", buffer: pixel });
+  await imageSearch
+    .getByRole("button", { name: "选择图片候选 XFA32102" })
+    .click();
+  await expect(pictured).toBeVisible();
+  await expect(protectedRow).toHaveCount(0);
+  await page.getByRole("button", { name: "清除图片查找" }).click();
+  await expect(protectedRow).toBeVisible();
+  await expect(pictured).toHaveCount(0);
+  await search.fill("");
+  await expect(pictured).toBeVisible();
+  await expect(protectedRow).toBeVisible();
+});
 
 test("商品档案经营决策保存压仓反馈，高退货率继续销售且可回看记录", async ({
   page,

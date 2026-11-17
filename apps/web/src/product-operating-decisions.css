@@ -7,18 +7,8 @@
 }
 .product-decisions-toolbar {
   display: flex;
-  align-items: center;
-  gap: 12px;
+  justify-content: flex-end;
   margin-bottom: 12px;
-  flex-wrap: wrap;
-}
-.product-decisions-toolbar .ant-input-search {
-  width: 230px;
-}
-.product-decisions-toolbar > span {
-  color: #727e94;
-  font-size: 12px;
-  flex: 1;
 }
 .product-decisions .ant-table-thead > tr > th {
   background: #f2f3f9;
@@ -36,6 +26,12 @@
   height: auto;
   white-space: normal;
   text-align: left;
+}
+.product-decision-image {
+  display: block;
+  margin-inline: auto;
+  object-fit: contain;
+  border-radius: 4px;
 }
 .product-decision-reasons {
   padding: 0;

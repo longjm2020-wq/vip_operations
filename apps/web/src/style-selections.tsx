@@ -734,6 +734,18 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
     retained.splice(Math.min(heldEdit.index,retained.length),0,editingRow);
     return retained;
   }, [rows, matchingRows, retainedResults, heldEdit, editingRow]);
+  const operatingDecisionRows = useMemo(() => {
+    if (!operatingDecisions) return [];
+    const hasImageField = availableColumns.some(column => column.key === "images");
+    return filteredRows
+      .filter(row => row.id && row.xutiStyleNo && readableSelectionCell(row, "xutiStyleNo"))
+      .map(row => ({
+        rowId: String(row.id),
+        imageUrl: hasImageField && readableSelectionCell(row, "images") && !row.hiddenCells?.includes("images")
+          ? rowImages(row)[0]?.url
+          : undefined,
+      }));
+  }, [availableColumns, filteredRows, operatingDecisions]);
   const allGrouped = useMemo(() => {
     const label = (row: Row) => !readableSelectionCell(row, groupKey) ? "受保护内容" : retainedGroupLabels.get(row._key) ?? (heldEdit && heldEdit.rowKey===row._key ? heldEdit.groupLabel : groupLabel(row));
     if (groupBy === "none") return [{ label: "", rows: filteredRows }];
@@ -1642,7 +1654,7 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
         if (key === "system:operating-decisions") { if (dirtyCount || saving || deleting || transferring || releasing) { message.info("请先完成商品档案保存，再查看经营决策"); return; } setOperatingDecisions(true); }
         else { setOperatingDecisions(false); changeColumnGroup(key); }
       }}/>
-      {archive && operatingDecisions ? <ProductOperatingDecisions rowIds={filteredRows.filter(row => row.id && row.xutiStyleNo && readableSelectionCell(row, "xutiStyleNo")).map(row => String(row.id))} blocked={!!dirtyCount || saving || deleting || transferring || !!releasing || data.isLoading || !!data.error} /> : <>
+      {archive && operatingDecisions ? <ProductOperatingDecisions rows={operatingDecisionRows} blocked={!!dirtyCount || saving || deleting || transferring || !!releasing || data.isLoading || !!data.error} /> : <>
     {editor}
       {data.isLoading && <div className="selection-loading-status" role="status"><Spin size="small" /><span>正在加载表格资料…</span></div>}{!data.data && !!data.error && <div className="selection-loading-status" role="status">表格资料加载失败，请点击重试。</div>}<QueryState error={data.error || presence.error || sharedView.error} reload={() => { data.refetch(); presence.refetch(); sharedView.refetch(); }} /><div ref={sheetRef} aria-busy={data.isLoading || undefined} data-realtime-connected={connected ? "true" : "false"} data-windowed={rowWindow.enabled || undefined} className={`selection-sheet row-${rowHeight}${blankLayout?" selection-blank-sheet":""}`}><table aria-rowcount={displayedRows.length + 1} tabIndex={0} onCopy={event => {
         if (!displayedRows.length && selectedColumnKeys.length) {
