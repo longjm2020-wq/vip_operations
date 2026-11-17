@@ -20,6 +20,11 @@ const archiveImage = {
   url: "/api/v1/style-selections/images/11111111-1111-4111-8111-111111111111?tableId=3",
   color: "黑色",
 };
+const secondArchiveImage = {
+  id: "second-photo",
+  url: "/api/v1/style-selections/images/22222222-2222-4222-8222-222222222222?tableId=3",
+  color: "白色",
+};
 
 async function fixture(
   page: Page,
@@ -43,7 +48,7 @@ async function fixture(
       id: "1",
       xutiStyleNo: "XFA32102",
       version: 0,
-      images: options.testSearch ? [archiveImage] : [],
+      images: options.testSearch ? [archiveImage, secondArchiveImage] : [],
       labelImages: [],
       extraFields: {},
       defaultCellAccess: "edit",
@@ -265,6 +270,38 @@ test("经营决策复用顶部文字和图片搜索，并在款号旁显示有�
   ).toHaveJSProperty("naturalWidth", 1);
   await expect(protectedRow.getByRole("cell").nth(1)).toHaveText("—");
   await expect(decisions.getByRole("textbox")).toHaveCount(0);
+  await expect(decisions.locator(".product-decisions-toolbar")).toHaveCount(0);
+  const refresh = decisions
+    .getByRole("columnheader", { name: /数据截止/ })
+    .getByRole("button", { name: "更新判断", exact: true });
+  await expect(refresh).toBeEnabled();
+  const update = page.waitForResponse(
+    (response) =>
+      response.url().includes("/operating-decisions/query") && response.ok(),
+  );
+  await refresh.click();
+  await update;
+
+  await pictured
+    .getByRole("button", { name: "查看 XFA32102 商品图片" })
+    .click();
+  const viewer = page.getByRole("dialog", { name: "XFA32102 商品图片预览" });
+  const fullImage = viewer.getByRole("img", { name: /^XFA32102 商品/ });
+  await expect(fullImage).toHaveAttribute("src", archiveImage.url);
+  await viewer.getByRole("button", { name: "下一张大图" }).click();
+  await expect(fullImage).toHaveAttribute("src", secondArchiveImage.url);
+  await expect(fullImage).toHaveJSProperty("naturalWidth", 1);
+  const originalWidth = await fullImage.evaluate(
+    (image) => image.getBoundingClientRect().width,
+  );
+  await viewer.getByRole("button", { name: "放大图片" }).click();
+  await expect
+    .poll(() =>
+      fullImage.evaluate((image) => image.getBoundingClientRect().width),
+    )
+    .toBeGreaterThan(originalWidth);
+  await page.keyboard.press("Escape");
+  await expect(viewer).toHaveCount(0);
 
   await search.fill("45201");
   await expect(protectedRow).toBeVisible();

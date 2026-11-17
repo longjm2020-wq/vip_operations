@@ -55,17 +55,19 @@ function Status({ value }: { value: string }) {
 export function ProductOperatingDecisions({
   rows,
   blocked,
+  onPreviewImage,
 }: {
-  rows: { rowId: string; imageUrl?: string }[];
+  rows: { rowId: string; rowKey: string; imageUrl?: string }[];
   blocked: boolean;
+  onPreviewImage: (rowKey: string) => void;
 }) {
   const { api, tableId } = useSelectionWorkspace();
   const [selected, setSelected] = useState<string | null>(null);
-  const imageUrls = useMemo(
-    () => new Map(rows.map(({ rowId, imageUrl }) => [rowId, imageUrl])),
+  const archiveRows = useMemo(
+    () => new Map(rows.map((row) => [row.rowId, row])),
     [rows],
   );
-  const ids = useMemo(() => [...imageUrls.keys()].sort(), [imageUrls]);
+  const ids = useMemo(() => [...archiveRows.keys()].sort(), [archiveRows]);
   const query = useQuery<{ items: OperatingDecisionItem[] }>({
     queryKey: ["product-operating-decisions", tableId, ids],
     enabled: ids.length > 0 && !blocked,
@@ -87,16 +89,6 @@ export function ProductOperatingDecisions({
   });
   return (
     <section className="product-decisions" aria-label="商品经营决策">
-      <div className="product-decisions-toolbar">
-        <Button
-          icon={<ReloadOutlined />}
-          loading={query.isFetching}
-          disabled={!ids.length || blocked}
-          onClick={() => void query.refetch()}
-        >
-          更新判断
-        </Button>
-      </div>
       {blocked && (
         <Alert
           type="warning"
@@ -156,25 +148,33 @@ export function ProductOperatingDecisions({
             align: "center",
             width: 76,
             render: (_, item) => {
-              const imageUrl = imageUrls.get(item.rowId);
-              return imageUrl ? (
-                <img
-                  className="product-decision-image"
-                  src={imageUrl}
-                  alt={`${item.styleNo} 商品图片`}
-                  width={40}
-                  height={48}
-                  loading="lazy"
-                  decoding="async"
-                  referrerPolicy="no-referrer"
-                  onError={({ currentTarget }) => {
-                    if (
-                      currentTarget.getAttribute("src") !==
-                      invalidSelectionImage
-                    )
-                      currentTarget.src = invalidSelectionImage;
-                  }}
-                />
+              const row = archiveRows.get(item.rowId);
+              return row?.imageUrl ? (
+                <button
+                  type="button"
+                  className="product-decision-image-preview"
+                  aria-label={`查看 ${item.styleNo} 商品图片`}
+                  title="点击放大"
+                  onClick={() => onPreviewImage(row.rowKey)}
+                >
+                  <img
+                    className="product-decision-image"
+                    src={row.imageUrl}
+                    alt={`${item.styleNo} 商品图片`}
+                    width={40}
+                    height={48}
+                    loading="lazy"
+                    decoding="async"
+                    referrerPolicy="no-referrer"
+                    onError={({ currentTarget }) => {
+                      if (
+                        currentTarget.getAttribute("src") !==
+                        invalidSelectionImage
+                      )
+                        currentTarget.src = invalidSelectionImage;
+                    }}
+                  />
+                </button>
               ) : (
                 "—"
               );
@@ -244,7 +244,22 @@ export function ProductOperatingDecisions({
             ),
           },
           {
-            title: "数据截止",
+            title: (
+              <span className="product-decision-source-header">
+                数据截止
+                <Tooltip title="更新判断">
+                  <Button
+                    aria-label="更新判断"
+                    type="text"
+                    size="small"
+                    icon={<ReloadOutlined />}
+                    loading={query.isFetching}
+                    disabled={!ids.length || blocked}
+                    onClick={() => void query.refetch()}
+                  />
+                </Tooltip>
+              </span>
+            ),
             width: 110,
             render: (_, item) => item.decision.evidence.source?.endDate || "—",
           },

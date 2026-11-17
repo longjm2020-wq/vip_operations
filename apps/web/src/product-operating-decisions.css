@@ -5,10 +5,14 @@
   background: #fff;
   color: #28334a;
 }
-.product-decisions-toolbar {
-  display: flex;
-  justify-content: flex-end;
-  margin-bottom: 12px;
+.product-decision-source-header {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+.product-decision-source-header .ant-btn {
+  color: inherit;
 }
 .product-decisions .ant-table-thead > tr > th {
   background: #f2f3f9;
@@ -27,11 +31,19 @@
   white-space: normal;
   text-align: left;
 }
-.product-decision-image {
+.product-decision-image-preview {
   display: block;
   margin-inline: auto;
-  object-fit: contain;
+  padding: 0;
+  border: 0;
   border-radius: 4px;
+  background: none;
+  cursor: zoom-in;
+}
+.product-decision-image {
+  display: block;
+  object-fit: contain;
+  border-radius: inherit;
 }
 .product-decision-reasons {
   padding: 0;
