@@ -298,6 +298,17 @@ try {
     assert.equal(result.total, 2);
     assert.equal(result.totals.physicalQty, 19);
   });
+  await check("Exact normalized style scope excludes matching article codes and prefixes", async () => {
+    const exact = await summary({ styleNo: " sum-a " });
+    assert.equal(exact.total, 3);
+    assert.equal(exact.totals.physicalQty, 25);
+    assert.ok(exact.data.every((row: { styleNo: string }) => row.styleNo === "SUM-A"));
+    const combined = await summary({ dimension: "article", styleNo: "SUM-A", codes: ["ARTICLE-A-01"] });
+    assert.equal(combined.total, 1);
+    assert.equal(combined.totals.physicalQty, 19);
+    assert.equal((await summary({ styleNo: "ARTICLE-A-01" })).total, 0);
+    assert.equal((await summary({ styleNo: "SUM-" })).total, 0);
+  });
   await check(
     "Article groups merge sizes and whitespace but not different styles",
     async () => {

@@ -24,7 +24,7 @@ import {
   CompassImagePreview,
   type CompassImageTarget,
 } from "./compass-product-image";
-import { useRef, useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import type { TableRef } from "antd/es/table";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -37,6 +37,7 @@ import {
   Select,
   Space,
   Tabs,
+  Tag,
   Table as AntTable,
   Tooltip,
   type TableProps,
@@ -44,7 +45,7 @@ import {
 import {
   ExportOutlined,
 } from "@ant-design/icons";
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams, useSearchParams } from "react-router-dom";
 import { api } from "./api";
 import { MasterPage } from "./master";
 import {
@@ -83,6 +84,8 @@ export function InventoryDetailsPage() {
   );
 }
 function InventoryBalances() {
+  const [params, setParams] = useSearchParams();
+  const styleNo = params.get("styleNo")?.trim() || "";
   const canEditImages = useCan("inventory.adjust");
   const canCreateProducts = useCan("product.create"), canUpdateProducts = useCan("product.update");
   const canImportSku = canCreateProducts || canUpdateProducts;
@@ -113,7 +116,16 @@ function InventoryBalances() {
     ...(skuView ? { reportMatch, ...(referencePeriod ? { referencePeriod } : {}) } : {}),
     ...(search ? { q: search } : {}),
     ...(searchCodes.length ? { codes: searchCodes } : {}),
+    ...(styleNo ? { styleNo } : {}),
   }, pageSize, searchCodes.length ? "POST" : "GET");
+  const { setPage } = q;
+  useEffect(() => { setPage(1); }, [setPage, styleNo]);
+  const clearStyleFilter = () => {
+    const next = new URLSearchParams(params);
+    next.delete("styleNo");
+    setPage(1);
+    setParams(next, { replace: true });
+  };
   const calculationFields: InventoryCalculationField[] = q.data?.calculationFields ?? [];
   const calculationLabel = (field: InventoryCalculationField) => calculationFields.filter(other => other.name === field.name).length > 1
     ? `${field.name}（${field.ownerName} · ${field.id}）` : field.name;
@@ -351,6 +363,11 @@ function InventoryBalances() {
             <InventoryPlatformSync />
             {canEditImages && <InventoryImageImport onDone={() => void q.refetch()} />}
             <InventorySearch codes={searchCodes} onSearch={(value, codes) => { setSearch(value); setSearchCodes(codes); q.setPage(1); }} />
+            {styleNo && (
+              <Tag closable={{ "aria-label": "清除款号筛选" }} onClose={clearStyleFilter}>
+                款号 <CopyableCode value={styleNo} label="款号" />
+              </Tag>
+            )}
             <Select<InventoryDimension>
               aria-label="库存汇总维度"
               style={{ width: 180 }}

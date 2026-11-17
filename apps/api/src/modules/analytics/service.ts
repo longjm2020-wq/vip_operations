@@ -255,7 +255,7 @@ const querySchema = z.object({
   endDate: z.iso.date().optional(),
   startDate: z.iso.date().optional(),
   q: z.string().trim().max(5000).default(""),
-  styleNo: z.string().max(150).default(""),
+  styleNo: z.string().trim().max(150).default(""),
   articleNo: z.string().max(150).default(""),
   page: z.coerce.number().int().min(1).max(10000).default(1),
   pageSize: z.coerce.number().int().min(1).max(1000).default(20),
@@ -314,7 +314,7 @@ export async function dashboard(
   let search: ReturnType<typeof parseCompassSearch>;
   try { search = parseCompassSearch(b.q); } catch (e) { fail("INVALID_SEARCH", (e as Error).message, 400); }
   const params = [source.id, startDate, endDate, search.text, b.styleNo, b.articleNo, search.batch ? search.codes : null];
-  const where = `import_id=$1::bigint AND business_date BETWEEN $2::date AND $3::date AND ($4='' OR ($7::text[] IS NULL AND position(lower($4) in lower(style_no||' '||article_no||' '||barcode||' '||coalesce(payload->>'category','')||' '||coalesce(payload->>'size','')))>0) OR ($7::text[] IS NOT NULL AND (lower(style_no)=ANY($7::text[]) OR lower(article_no)=ANY($7::text[]) OR lower(barcode)=ANY($7::text[])))) AND ($5='' OR style_no=$5) AND ($6='' OR article_no=$6)`;
+  const where = `import_id=$1::bigint AND business_date BETWEEN $2::date AND $3::date AND ($4='' OR ($7::text[] IS NULL AND position(lower($4) in lower(style_no||' '||article_no||' '||barcode||' '||coalesce(payload->>'category','')||' '||coalesce(payload->>'size','')))>0) OR ($7::text[] IS NOT NULL AND (lower(style_no)=ANY($7::text[]) OR lower(article_no)=ANY($7::text[]) OR lower(barcode)=ANY($7::text[])))) AND ($5='' OR lower(trim(style_no))=lower($5)) AND ($6='' OR article_no=$6)`;
   const cte = `WITH filtered AS (SELECT * FROM compass_records WHERE ${where}), grouped AS (SELECT ${column} AS code,
     min(style_no) AS style_no,min(article_no) AS article_no,min(barcode) AS barcode,
     (array_agg(payload->>'image' ORDER BY business_date DESC) FILTER(WHERE payload->>'image'<>''))[1] AS image,
@@ -411,7 +411,7 @@ export async function entityTrend(input: unknown, tx: Tx = db) {
     sum((payload->'metrics'->>'onSaleStock')::numeric) AS "onSaleStock",sum((payload->'metrics'->>'saleableStock')::numeric) AS "saleableStock",
     (array_agg((payload->>'saleAge')::numeric ORDER BY entity_key) FILTER(WHERE payload->>'saleAge' IS NOT NULL))[1] AS "saleAge",
     sum((payload->'metrics'->>'returnsQty')::numeric)+sum((payload->'metrics'->>'rejectedQty')::numeric) AS "rejectedReturnQty"
-    FROM compass_records WHERE import_id=$1::bigint AND business_date BETWEEN $2::date AND $3::date AND ${column}=$4 AND ($5='' OR style_no=$5) AND ($6='' OR article_no=$6)
+    FROM compass_records WHERE import_id=$1::bigint AND business_date BETWEEN $2::date AND $3::date AND ${column}=$4 AND ($5='' OR lower(trim(style_no))=lower($5)) AND ($6='' OR article_no=$6)
     AND ($7='' OR ($8::text[] IS NULL AND position(lower($7) in lower(style_no||' '||article_no||' '||barcode||' '||coalesce(payload->>'category','')||' '||coalesce(payload->>'size','')))>0) OR ($8::text[] IS NOT NULL AND (lower(style_no)=ANY($8::text[]) OR lower(article_no)=ANY($8::text[]) OR lower(barcode)=ANY($8::text[]))))
     GROUP BY business_date ORDER BY business_date`,source.id,startDate,endDate,b.code,b.styleNo,b.articleNo,search.text,search.batch ? search.codes : null);
   return {dimension:b.dimension,code:b.code,startDate,endDate,sourceId:String(source.id),daily:daily.map(row=>({...json(row),...compassRatios(row)}))};

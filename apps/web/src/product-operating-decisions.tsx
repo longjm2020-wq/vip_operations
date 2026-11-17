@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type Key } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   Alert,
@@ -11,14 +11,16 @@ import {
   Empty,
   Form,
   Input,
+  Pagination,
   Radio,
   Space,
   Spin,
   Table,
   Tag,
   Tooltip,
+  type TableRef,
 } from "antd";
-import { ReloadOutlined } from "@ant-design/icons";
+import { InfoCircleOutlined, ReloadOutlined } from "@ant-design/icons";
 import { Link } from "react-router-dom";
 import {
   clearanceReasonLabels,
@@ -29,6 +31,8 @@ import {
   type OperatingFeedback,
 } from "../../../packages/contracts/src/product-operating-decisions";
 import { invalidSelectionImage } from "./selection-image-links";
+import { ProductOperatingFeedbackExchange } from "./product-operating-feedback-exchange";
+import { operatingFeedbackWorkbookLimit } from "./product-operating-feedback-workbook";
 import { useSelectionWorkspace } from "./selection-workspace";
 import { useCan } from "./shared";
 import "./product-operating-decisions.css";
@@ -38,6 +42,22 @@ const formatTime = (value: string | null) =>
 const supplyReasons = Object.keys(
   supplyReasonLabels,
 ) as OperatingFeedback["supplyReasons"];
+const decisionTags = [
+  "待观察",
+  "潜力款",
+  "营销促转化",
+  "待回测",
+  "非潜力款",
+  "首测失败",
+  "回测失败",
+  "压仓库存",
+  "高退货率",
+  "待补退货数据",
+  "数据待完善",
+];
+const decisionStatusKeys = ["phase", "replenishment", "sales"] as const;
+const decisionPageSizes = [20, 50, 100, 200, 500, 1000, 5000];
+const decisionHeaderHeight = 36;
 const metric = (value: number | null, percent = false) =>
   value == null
     ? "—"
@@ -91,11 +111,34 @@ export function ProductOperatingDecisions({
 }) {
   const { api, tableId } = useSelectionWorkspace();
   const [selected, setSelected] = useState<string | null>(null);
+  const [checkedKeys, setCheckedKeys] = useState<Key[]>([]);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(decisionPageSizes[0]);
+  const [viewportHeight, setViewportHeight] = useState(240);
+  const viewport = useRef<HTMLDivElement>(null);
+  const grid = useRef<TableRef>(null);
+  useEffect(() => {
+    const element = viewport.current;
+    if (!element) return;
+    const observer = new ResizeObserver(([entry]) =>
+      setViewportHeight(Math.floor(entry.contentRect.height)),
+    );
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+  const [filters, setFilters] = useState({
+    phase: [] as string[],
+    replenishment: [] as string[],
+    sales: [] as string[],
+    tags: [] as string[],
+  });
   const archiveRows = useMemo(
     () => new Map(rows.map((row) => [row.rowId, row])),
     [rows],
   );
   const ids = useMemo(() => [...archiveRows.keys()].sort(), [archiveRows]);
+  const scope = ids.join(",");
+  useEffect(() => setPage(1), [scope]);
   const query = useQuery<{ items: OperatingDecisionItem[] }>({
     queryKey: ["product-operating-decisions", tableId, ids],
     enabled: ids.length > 0 && !blocked,
@@ -115,6 +158,51 @@ export function ProductOperatingDecisions({
     },
     refetchInterval: 60000,
   });
+  const unavailable = blocked || query.isLoading || !!query.error;
+  const statusMatched = unavailable
+    ? []
+    : (query.data?.items ?? []).filter(({ decision }) =>
+        decisionStatusKeys.every(
+          (key) => !filters[key].length || filters[key].includes(decision[key]),
+        ),
+      );
+  const tagCounts = new Map<string, number>();
+  for (const { decision } of statusMatched) {
+    for (const tag of new Set(decision.tags))
+      tagCounts.set(tag, (tagCounts.get(tag) ?? 0) + 1);
+  }
+  const visibleItems = filters.tags.length
+    ? statusMatched.filter(({ decision }) =>
+        filters.tags.some((tag) => decision.tags.includes(tag)),
+      )
+    : statusMatched;
+  const checked = new Set(checkedKeys);
+  const checkedItems = visibleItems.filter(({ rowId }) => checked.has(rowId));
+  const currentPage = Math.min(
+    page,
+    Math.max(1, Math.ceil(visibleItems.length / pageSize)),
+  );
+  const pageItems = visibleItems.slice(
+    (currentPage - 1) * pageSize,
+    currentPage * pageSize,
+  );
+  useEffect(
+    () => grid.current?.scrollTo({ top: 0 }),
+    [currentPage, pageSize, scope],
+  );
+  const chooseTag = (tag: string | null) => {
+    grid.current?.scrollTo({ top: 0 });
+    setPage(1);
+    setFilters((current) => ({
+      ...current,
+      tags:
+        tag === null
+          ? []
+          : current.tags.includes(tag)
+            ? current.tags.filter((value) => value !== tag)
+            : [...current.tags, tag],
+    }));
+  };
   return (
     <section className="product-decisions" aria-label="商品经营决策">
       {blocked && (
@@ -132,182 +220,272 @@ export function ProductOperatingDecisions({
           action={<Button onClick={() => void query.refetch()}>重试</Button>}
         />
       )}
-      <Table<OperatingDecisionItem>
-        size="small"
-        rowKey="rowId"
-        loading={query.isLoading && !blocked}
-        dataSource={blocked || query.error ? [] : (query.data?.items ?? [])}
-        scroll={{ x: 1301 }}
-        pagination={{
-          defaultPageSize: 50,
-          showSizeChanger: true,
-          pageSizeOptions: [20, 50, 100],
-          showTotal: (n) => `共 ${n} 款`,
-        }}
-        locale={{
-          emptyText: (
-            <Empty
-              image={Empty.PRESENTED_IMAGE_SIMPLE}
-              description={
-                blocked ? "等待商品档案保存" : "暂无可查看的已保存款号"
-              }
-            />
-          ),
-        }}
-        columns={[
-          {
-            title: "款号",
-            dataIndex: "styleNo",
-            fixed: "left",
-            width: 155,
-            render: (v, item) => (
-              <Button
-                type="link"
-                className="product-decision-style"
-                onClick={() => setSelected(item.rowId)}
+      <div className="product-decision-tools">
+        <section
+          className="product-decision-tag-stats"
+          aria-label="经营标签统计"
+        >
+          {[null, ...decisionTags].map((tag) => {
+            const label = tag ?? "全部款";
+            const count =
+              tag === null ? statusMatched.length : (tagCounts.get(tag) ?? 0);
+            return (
+              <button
+                key={label}
+                type="button"
+                className="product-decision-tag-card"
+                disabled={unavailable}
+                aria-label={
+                  unavailable ? `${label} 数量暂不可用` : `${label} ${count} 款`
+                }
+                aria-pressed={
+                  tag === null
+                    ? filters.tags.length === 0
+                    : filters.tags.includes(tag)
+                }
+                onClick={() => chooseTag(tag)}
               >
-                {v}
-              </Button>
+                <span>{label}</span>
+                <span>
+                  <strong>{unavailable ? "—" : count}</strong> 款
+                </span>
+              </button>
+            );
+          })}
+        </section>
+        <div className="product-decision-feedback-actions">
+          {!!checkedItems.length && <span>已选 {checkedItems.length} 款</span>}
+          {checkedItems.length > operatingFeedbackWorkbookLimit && (
+            <span>每批最多 {operatingFeedbackWorkbookLimit} 款</span>
+          )}
+          <ProductOperatingFeedbackExchange
+            items={checkedItems}
+            disabled={unavailable}
+            onSaved={() => void query.refetch()}
+          />
+        </div>
+      </div>
+      <div ref={viewport} className="product-decision-grid">
+        <Table<OperatingDecisionItem>
+          ref={grid}
+          size="small"
+          rowKey="rowId"
+          loading={query.isLoading && !blocked}
+          dataSource={pageItems}
+          virtual={pageSize > 200}
+          scroll={{
+            x: 1339,
+            y: Math.max(0, viewportHeight - decisionHeaderHeight),
+          }}
+          rowSelection={{
+            columnWidth: 38,
+            fixed: true,
+            preserveSelectedRowKeys: true,
+            selectedRowKeys: checkedItems.map(({ rowId }) => rowId),
+            onChange: setCheckedKeys,
+            getCheckboxProps: (item) => ({
+              "aria-label": `选择 ${item.styleNo}`,
+            }),
+          }}
+          pagination={false}
+          onChange={(_, values) => {
+            grid.current?.scrollTo({ top: 0 });
+            setPage(1);
+            setFilters({
+              phase: values.phase?.map(String) ?? [],
+              replenishment: values.replenishment?.map(String) ?? [],
+              sales: values.sales?.map(String) ?? [],
+              tags: values.tags?.map(String) ?? [],
+            });
+          }}
+          locale={{
+            emptyText: (
+              <Empty
+                image={Empty.PRESENTED_IMAGE_SIMPLE}
+                description={
+                  blocked ? "等待商品档案保存" : "暂无可查看的已保存款号"
+                }
+              />
             ),
-          },
-          {
-            title: "图片",
-            key: "image",
-            align: "center",
-            width: 76,
-            render: (_, item) => {
-              const row = archiveRows.get(item.rowId);
-              return row?.imageUrl ? (
-                <button
-                  type="button"
-                  className="product-decision-image-preview"
-                  aria-label={`查看 ${item.styleNo} 商品图片`}
-                  title="点击放大"
-                  onClick={() => onPreviewImage(row.rowKey)}
-                >
-                  <img
-                    className="product-decision-image"
-                    src={row.imageUrl}
-                    alt={`${item.styleNo} 商品图片`}
-                    width={40}
-                    height={48}
-                    loading="lazy"
-                    decoding="async"
-                    referrerPolicy="no-referrer"
-                    onError={({ currentTarget }) => {
-                      if (
-                        currentTarget.getAttribute("src") !==
-                        invalidSelectionImage
-                      )
-                        currentTarget.src = invalidSelectionImage;
-                    }}
-                  />
-                </button>
-              ) : (
-                "—"
-              );
-            },
-          },
-          {
-            title: "测试阶段",
-            width: 95,
-            filters: ["首测", "回测", "观察期", "常测", "待确认"].map(
-              (text) => ({ text, value: text }),
-            ),
-            onFilter: (value, item) => item.decision.phase === value,
-            render: (_, item) => item.decision.phase,
-          },
-          {
-            title: "补货资格",
-            width: 125,
-            filters: ["允许补货", "不允许补货", "待确认"].map((text) => ({
-              text,
-              value: text,
-            })),
-            onFilter: (value, item) => item.decision.replenishment === value,
-            render: (_, item) => <Status value={item.decision.replenishment} />,
-          },
-          {
-            title: "销售状态",
-            width: 125,
-            filters: ["继续销售", "建议停售", "已确认停售", "待确认"].map(
-              (text) => ({ text, value: text }),
-            ),
-            onFilter: (value, item) => item.decision.sales === value,
-            render: (_, item) => <Status value={item.decision.sales} />,
-          },
-          {
-            title: "经营标签",
-            width: 165,
-            filters: [
-              "压仓库存",
-              "高退货率",
-              "潜力款",
-              "首测失败",
-              "回测失败",
-              "数据待完善",
-            ].map((text) => ({ text, value: text })),
-            onFilter: (value, item) =>
-              item.decision.tags.includes(String(value)),
-            render: (_, item) => (
-              <Space size={[0, 4]} wrap>
-                {item.decision.tags.map((tag) => (
-                  <Tag key={tag}>{tag}</Tag>
-                ))}
-              </Space>
-            ),
-          },
-          {
-            title: "判断依据",
-            width: 280,
-            render: (_, item) => (
-              <Tooltip title={item.decision.reasons.join("；")}>
-                <button
-                  className="product-decision-reasons"
+          }}
+          columns={[
+            {
+              title: "款号",
+              dataIndex: "styleNo",
+              fixed: "left",
+              width: 155,
+              render: (v, item) => (
+                <Button
+                  type="link"
+                  className="product-decision-style"
                   onClick={() => setSelected(item.rowId)}
                 >
-                  {item.decision.reasons.join("；") || "查看三端依据"}
-                </button>
-              </Tooltip>
-            ),
-          },
-          {
-            title: (
-              <span className="product-decision-source-header">
-                数据截止
-                <Tooltip title="更新判断">
-                  <Button
-                    aria-label="更新判断"
-                    type="text"
-                    size="small"
-                    icon={<ReloadOutlined />}
-                    loading={query.isFetching}
-                    disabled={!ids.length || blocked}
-                    onClick={() => void query.refetch()}
-                  />
+                  {v}
+                </Button>
+              ),
+            },
+            {
+              title: "图片",
+              key: "image",
+              align: "center",
+              width: 76,
+              render: (_, item) => {
+                const row = archiveRows.get(item.rowId);
+                return row?.imageUrl ? (
+                  <button
+                    type="button"
+                    className="product-decision-image-preview"
+                    aria-label={`查看 ${item.styleNo} 商品图片`}
+                    title="点击放大"
+                    onClick={() => onPreviewImage(row.rowKey)}
+                  >
+                    <img
+                      className="product-decision-image"
+                      src={row.imageUrl}
+                      alt={`${item.styleNo} 商品图片`}
+                      width={40}
+                      height={48}
+                      loading="lazy"
+                      decoding="async"
+                      referrerPolicy="no-referrer"
+                      onError={({ currentTarget }) => {
+                        if (
+                          currentTarget.getAttribute("src") !==
+                          invalidSelectionImage
+                        )
+                          currentTarget.src = invalidSelectionImage;
+                      }}
+                    />
+                  </button>
+                ) : (
+                  "—"
+                );
+              },
+            },
+            {
+              title: "测试阶段",
+              key: "phase",
+              width: 95,
+              filters: ["首测", "回测", "观察期", "常测", "待确认"].map(
+                (text) => ({ text, value: text }),
+              ),
+              filteredValue: filters.phase,
+              render: (_, item) => item.decision.phase,
+            },
+            {
+              title: "补货资格",
+              key: "replenishment",
+              width: 125,
+              filters: ["允许补货", "不允许补货", "待确认"].map((text) => ({
+                text,
+                value: text,
+              })),
+              filteredValue: filters.replenishment,
+              render: (_, item) => (
+                <Status value={item.decision.replenishment} />
+              ),
+            },
+            {
+              title: "销售状态",
+              key: "sales",
+              width: 125,
+              filters: ["继续销售", "建议停售", "已确认停售", "待确认"].map(
+                (text) => ({ text, value: text }),
+              ),
+              filteredValue: filters.sales,
+              render: (_, item) => <Status value={item.decision.sales} />,
+            },
+            {
+              title: "经营标签",
+              key: "tags",
+              width: 165,
+              filters: decisionTags.map((text) => ({ text, value: text })),
+              filteredValue: filters.tags,
+              render: (_, item) => (
+                <Space size={[0, 4]} wrap>
+                  {item.decision.tags.map((tag) => (
+                    <Tag key={tag}>{tag}</Tag>
+                  ))}
+                </Space>
+              ),
+            },
+            {
+              title: "判断依据",
+              width: 280,
+              render: (_, item) => (
+                <Tooltip title={item.decision.reasons.join("；")}>
+                  <button
+                    className="product-decision-reasons"
+                    onClick={() => setSelected(item.rowId)}
+                  >
+                    {item.decision.reasons.join("；") || "查看三端依据"}
+                  </button>
                 </Tooltip>
-              </span>
-            ),
-            width: 110,
-            render: (_, item) => item.decision.evidence.source?.endDate || "—",
-          },
-          {
-            title: "人工反馈",
-            width: 170,
-            render: (_, item) => (
-              <span>
-                {item.updatedBy || "尚未反馈"}
-                <small className="product-decision-muted">
-                  {item.updatedAt ? formatTime(item.updatedAt) : ""}
-                </small>
-              </span>
-            ),
-          },
-        ]}
-      />
-      <p className="product-decision-muted">
-        允许补货表示具备补货条件，实际需求量请结合库存明细。压仓库存保持上线消化，高退货率不自动触发停售。判断不会直接操作唯品会上下架。
-      </p>
+              ),
+            },
+            {
+              title: (
+                <span className="product-decision-source-header">
+                  数据截止
+                  <Tooltip title="更新判断">
+                    <Button
+                      aria-label="更新判断"
+                      type="text"
+                      size="small"
+                      icon={<ReloadOutlined />}
+                      loading={query.isFetching}
+                      disabled={!ids.length || blocked}
+                      onClick={() => void query.refetch()}
+                    />
+                  </Tooltip>
+                </span>
+              ),
+              width: 110,
+              render: (_, item) =>
+                item.decision.evidence.source?.endDate || "—",
+            },
+            {
+              title: "人工反馈",
+              width: 170,
+              render: (_, item) => (
+                <span>
+                  {item.updatedBy || "尚未反馈"}
+                  <small className="product-decision-muted">
+                    {item.updatedAt ? formatTime(item.updatedAt) : ""}
+                  </small>
+                </span>
+              ),
+            },
+          ]}
+        />
+      </div>
+      <div className="product-decision-footer">
+        <Tooltip
+          trigger={["hover", "focus", "click"]}
+          title="允许补货表示具备补货条件，实际需求量请结合库存明细。压仓库存保持上线消化，高退货率不自动触发停售。判断不会直接操作唯品会上下架。"
+        >
+          <Button
+            type="text"
+            size="small"
+            aria-label="经营判断说明"
+            icon={<InfoCircleOutlined />}
+          />
+        </Tooltip>
+        <Pagination
+          aria-label="经营决策分页"
+          responsive
+          current={currentPage}
+          pageSize={pageSize}
+          total={visibleItems.length}
+          showTotal={(count) => `共 ${count} 款`}
+          pageSizeOptions={decisionPageSizes}
+          showSizeChanger={{ "aria-label": "每页条数", placement: "topRight" }}
+          onChange={(nextPage, nextPageSize) => {
+            setPage(nextPageSize === pageSize ? nextPage : 1);
+            setPageSize(nextPageSize);
+          }}
+        />
+      </div>
       {selected && (
         <DecisionDrawer
           key={selected}
@@ -354,6 +532,9 @@ function DecisionDrawer({
   }, [query.data]);
   const item = query.data?.item,
     evidence = item?.decision.evidence;
+  const styleSearch = item
+    ? new URLSearchParams({ styleNo: item.styleNo.trim() }).toString()
+    : "";
   const writable = !!item?.canEdit && !blocked && !saving && !query.error;
   const change = (patch: Partial<OperatingFeedback>) =>
     setDraft((current) => (current ? { ...current, ...patch } : current));
@@ -733,10 +914,22 @@ function DecisionDrawer({
                         </p>
                         <Space>
                           {canAnalytics && (
-                            <Link to="/analytics/compass">查看经营分析</Link>
+                            <Link
+                              to={{
+                                pathname: "/analytics/compass",
+                                search: styleSearch,
+                              }}
+                            >
+                              查看经营分析
+                            </Link>
                           )}
                           {canInventory && (
-                            <Link to="/operations/vip/inventory">
+                            <Link
+                              to={{
+                                pathname: "/operations/vip/inventory",
+                                search: styleSearch,
+                              }}
+                            >
                               查看库存与补货数量
                             </Link>
                           )}

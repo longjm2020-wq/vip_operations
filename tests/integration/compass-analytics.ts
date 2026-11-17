@@ -208,9 +208,9 @@ export async function testCompassAnalytics(h: Record<string, any>) {
     await ok(`${endpoint}/imports/${job.id}/finish`, "POST", {});
   }
   const sku = await ok(
-    endpoint + "?dimension=barcode&days=7&styleNo=CMP-ST-1&articleNo=CMP-AR-1",
+    endpoint + "?dimension=barcode&days=7&styleNo=%20cmp-st-1%20&articleNo=CMP-AR-1",
   );
-  const exactTrend = await ok(`${endpoint}/entity-trend?dimension=barcode&code=000012345&startDate=${shiftCompassDate(end,-2)}&endDate=${end}&styleNo=CMP-ST-1&articleNo=CMP-AR-1`);
+  const exactTrend = await ok(`${endpoint}/entity-trend?dimension=barcode&code=000012345&startDate=${shiftCompassDate(end,-2)}&endDate=${end}&styleNo=cmp-st-1&articleNo=CMP-AR-1`);
   assert.equal(exactTrend.daily.length,3);
   assert.equal(Number(exactTrend.daily[0].salesAmount),10,"entity trend uses daily values, not the period sum");
   assert.equal(Number(exactTrend.daily[0].saleableStock),8,"stock is each day's snapshot");

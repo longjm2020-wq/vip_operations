@@ -1,9 +1,100 @@
 .product-decisions {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
   min-height: 0;
-  overflow: auto;
-  padding: 12px;
+  overflow: hidden;
+  padding: 12px 12px 0;
   background: #fff;
   color: #28334a;
+}
+.product-decision-tools {
+  display: flex;
+  flex: none;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.product-decision-tag-stats {
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+  padding: 2px;
+  overflow-x: auto;
+}
+.product-decision-tag-card {
+  display: grid;
+  flex: none;
+  gap: 2px;
+  min-width: 74px;
+  padding: 5px 9px;
+  border: 1px solid var(--app-border);
+  border-radius: 6px;
+  background: var(--app-muted);
+  color: var(--app-secondary);
+  font-size: 12px;
+  line-height: 1.35;
+  text-align: left;
+  cursor: pointer;
+}
+.product-decision-tag-card strong {
+  color: var(--app-text);
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+}
+.product-decision-tag-card[aria-pressed="true"] {
+  border-color: var(--app-accent-border);
+  background: var(--app-accent-soft);
+  color: var(--app-accent);
+}
+.product-decision-tag-card[aria-pressed="true"] strong {
+  color: inherit;
+}
+.product-decision-tag-card:hover:not(:disabled) {
+  border-color: var(--app-accent);
+}
+.product-decision-tag-card:disabled {
+  opacity: 0.65;
+  cursor: default;
+}
+.product-decision-feedback-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  color: var(--app-secondary);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.product-decision-grid {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+.product-decision-footer {
+  display: flex;
+  flex: none;
+  justify-content: space-between;
+  align-items: center;
+  gap: 6px;
+  margin-inline: -12px;
+  padding: 6px 12px;
+  border-top: 1px solid var(--app-border);
+  background: var(--app-muted);
+}
+.product-decision-footer .ant-pagination {
+  justify-content: flex-end;
+}
+@media (max-width: 780px) {
+  .product-decision-tools {
+    display: block;
+  }
+  .product-decision-feedback-actions {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    margin-top: 6px;
+  }
 }
 .product-decision-source-header {
   display: inline-flex;
@@ -15,6 +106,7 @@
   color: inherit;
 }
 .product-decisions .ant-table-thead > tr > th {
+  height: 36px;
   background: #f2f3f9;
   color: #52617c;
 }

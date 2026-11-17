@@ -85,6 +85,22 @@ test("batch paste preserves identifiers and filters, deduplicates and clears wit
   expect(f.summaries.at(-1)?.codes).toBeUndefined();
 });
 
+test("深链接按完整款号筛选库存，清除款号后保留其他搜索", async ({ page }) => {
+  const f = await fixture(page);
+  await page.goto("/operations/vip/inventory?styleNo=XFA16X31196L");
+  const clear = page.getByLabel("清除款号筛选", { exact: true });
+  await expect(clear).toBeVisible();
+  expect(f.summaries[0]).toMatchObject({ styleNo: "XFA16X31196L", dimension: "sku", page: "1" });
+  const search = page.getByRole("textbox", { name: "商品编码 / 货号 / 款号 / 条码" });
+  await search.fill("000123");
+  await expect.poll(() => f.summaries.at(-1)).toMatchObject({ styleNo: "XFA16X31196L", q: "000123" });
+  await clear.click();
+  await expect(clear).toBeHidden();
+  await expect.poll(() => f.summaries.at(-1)?.styleNo).toBeUndefined();
+  expect(f.summaries.at(-1)?.q).toBe("000123");
+  expect(new URL(page.url()).searchParams.has("styleNo")).toBe(false);
+});
+
 test("batch query accepts 1000 complete long codes and rejects overflow", async ({ page }) => {
   const f = await fixture(page);
   await page.goto("/operations/vip/inventory");

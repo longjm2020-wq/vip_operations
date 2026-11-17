@@ -25,6 +25,7 @@ import {
   RobotOutlined,
 } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
+import { useSearchParams } from "react-router-dom";
 import { api, queryClient } from "./api";
 import { CompassAIReport } from "./compass-ai";
 import { CompassTrend } from "./compass-charts";
@@ -267,6 +268,8 @@ function MailSettings({
   );
 }
 export function CompassAnalyticsPage() {
+  const [params, setParams] = useSearchParams();
+  const linkedStyleNo = params.get("styleNo")?.trim() || "";
   const manage = useCan("analytics.manage"),
     [dimension, setDimension] = useState<CompassDimension>("style"),
     [period, setPeriod] = useState<CompassPeriod>("recent:7"),
@@ -274,7 +277,7 @@ export function CompassAnalyticsPage() {
     [search, setSearch] = useState(""),
     [qText, setQText] = useState(""),
     [searchError, setSearchError] = useState(""),
-    [styleNo, setStyleNo] = useState(""),
+    [drilledStyleNo, setDrilledStyleNo] = useState(""),
     [articleNo, setArticleNo] = useState(""),
     [page, setPage] = useState(1),
     [pageSize, setPageSize] = useState(20),
@@ -282,8 +285,24 @@ export function CompassAnalyticsPage() {
     [miniMetric,setMiniMetric] = useState("salesAmount"),
     [mailOpen, setMailOpen] = useState(false),
     [aiOpen, setAIOpen] = useState(false);
+  const styleNo = linkedStyleNo || drilledStyleNo;
   const [productPreview, setProductPreview] =
     useState<CompassImageTarget | null>(null);
+  useEffect(() => {
+    if (!linkedStyleNo) return;
+    setDrilledStyleNo("");
+    setArticleNo("");
+    setPage(1);
+  }, [linkedStyleNo]);
+  const clearStyleFilter = () => {
+    setDrilledStyleNo("");
+    setPage(1);
+    if (params.has("styleNo")) {
+      const next = new URLSearchParams(params);
+      next.delete("styleNo");
+      setParams(next, { replace: true });
+    }
+  };
   useEffect(() => {
     const timer = setTimeout(() => {
       try {
@@ -349,7 +368,7 @@ export function CompassAnalyticsPage() {
   };
   const drill = (row: Row) => {
     if (dimension === "style") {
-      setStyleNo(row.code);
+      setDrilledStyleNo(row.code);
       setArticleNo("");
       changeDimension("article");
     } else if (dimension === "article") {
@@ -434,11 +453,8 @@ export function CompassAnalyticsPage() {
           <span>分析范围</span>
           {styleNo && (
             <Tag
-              closable
-              onClose={() => {
-                setStyleNo("");
-                setPage(1);
-              }}
+              closable={{ "aria-label": "清除款号筛选" }}
+              onClose={clearStyleFilter}
             >
               款号 <CopyableCode value={styleNo} label="款号" />
             </Tag>
@@ -457,7 +473,7 @@ export function CompassAnalyticsPage() {
           <Button
             type="link"
             onClick={() => {
-              setStyleNo("");
+              clearStyleFilter();
               setArticleNo("");
               setSearch("");
               setPage(1);
