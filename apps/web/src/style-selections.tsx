@@ -1254,7 +1254,7 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
     }
     // Never leave URL-only text available while pictures are still loading.
     event.clipboardData.setData("text/plain", ""); copiedSingleValue.current = null; setCopiedCells(new Set());
-    setOfficeCopyRequest({ cells, text, selected: new Set(selected) });
+    setOfficeCopyRequest({ cells, headers: colIndexes.map(index => activeColumns[index].label), text, selected: new Set(selected) });
   };
   const pasteCells = (event: ClipboardEvent<HTMLTableCellElement>, rowKey: string, columnKey: string) => {
     if (!canEdit || event.defaultPrevented) return;

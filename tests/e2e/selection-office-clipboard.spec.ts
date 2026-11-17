@@ -94,9 +94,11 @@ test("62 rows and 124 pictures retain all seven columns in the clipboard and emb
   await page.getByRole("button", { name: "下载带图表格" }).click();
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.readFile((await (await downloaded).path())!);
-  expect(workbook.worksheets[0].rowCount).toBe(62);
+  expect(workbook.worksheets[0].rowCount).toBe(63);
+  expect(workbook.worksheets[0].getRow(1).values).toEqual([undefined, "图片", "序缇款号", "细节图片", "成分", "supplierStyleNo", "supplierCode", "color"]);
   expect(workbook.worksheets[0].getImages()).toHaveLength(124);
-  expect(workbook.worksheets[0].getCell(23, 2).value).toBe("00023");
+  expect(workbook.worksheets[0].getCell(24, 2).value).toBe("00023");
+  expect(workbook.worksheets[0].getCell(63, 2).value).toBe("00062");
 });
 
 test("the 45th failing picture identifies its style and field and a fresh preparation can succeed", async ({ page }) => {
@@ -259,14 +261,15 @@ test("download embeds the first picture in each row with editable aligned style 
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.readFile((await download.path())!);
   const sheet = workbook.worksheets[0];
-  expect(sheet.rowCount).toBe(3);
+  expect(sheet.rowCount).toBe(4);
+  expect(sheet.getRow(1).values).toEqual([undefined, "图片", "序缇款号", "成分"]);
   expect(sheet.getImages()).toHaveLength(3);
   for (let index = 0; index < 3; index++) {
-    expect(sheet.getCell(index + 1, 1).value).toBe("");
-    expect(sheet.getCell(index + 1, 2).value).toBe(`000${index + 1}`);
-    expect(sheet.getCell(index + 1, 3).value).toBe("第一行\n第二行");
+    expect(sheet.getCell(index + 2, 1).value).toBe("");
+    expect(sheet.getCell(index + 2, 2).value).toBe(`000${index + 1}`);
+    expect(sheet.getCell(index + 2, 3).value).toBe("第一行\n第二行");
     const image = sheet.getImages()[index];
-    expect(image.range.tl.nativeRow).toBe(index);
+    expect(image.range.tl.nativeRow).toBe(index + 1);
     expect(image.range.tl.nativeCol).toBe(0);
     const media = workbook.getImage(Number(image.imageId));
     expect(media.extension).toBe("jpeg");

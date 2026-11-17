@@ -1,11 +1,20 @@
 import type { OfficeClipboardPayload } from "./selection-office-clipboard.js";
 import { loadExcelJS } from "./exceljs-loader.js";
 
-export async function officeClipboardWorkbook(payload: OfficeClipboardPayload) {
+export async function officeClipboardWorkbook(payload: OfficeClipboardPayload, headers: readonly string[]) {
+  if (headers.length !== (payload.cells[0]?.length || 0)) throw Error("表头与选区列数不一致，请重新选择后下载");
   const ExcelJS = await loadExcelJS();
   const workbook = new ExcelJS.Workbook();
   const sheet = workbook.addWorksheet("表格选区");
   sheet.columns = Array.from({ length: payload.cells[0]?.length || 0 }, () => ({ width: 22 }));
+  const header = sheet.addRow([...headers]);
+  header.height = Math.max(24, ...headers.map(label => Math.min(10, label.split(/\r\n?|\n/).length) * 15));
+  header.eachCell({ includeEmpty: true }, cell => {
+    cell.numFmt = "@";
+    cell.font = { bold: true };
+    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF3F4F6" } };
+    cell.alignment = { vertical: "middle", wrapText: true };
+  });
   for (let rowIndex = 0; rowIndex < payload.cells.length; rowIndex++) {
     const cells = payload.cells[rowIndex];
     const row = sheet.addRow(cells.map(cell => cell.image ? "" : cell.text));
@@ -25,7 +34,7 @@ export async function officeClipboardWorkbook(payload: OfficeClipboardPayload) {
       for (let offset = 0; offset < bytes.length; offset += 8192)
         binary += String.fromCharCode(...bytes.subarray(offset, offset + 8192));
       const imageId = workbook.addImage({ base64: btoa(binary), extension: "jpeg" });
-      sheet.addImage(imageId, { tl: { col: columnIndex + .04, row: rowIndex + .04 },
+      sheet.addImage(imageId, { tl: { col: columnIndex + .04, row: row.number - 1 + .04 },
         ext: { width: picture.width, height: picture.height }, editAs: "oneCell" });
     }
   }

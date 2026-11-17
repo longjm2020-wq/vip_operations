@@ -3,7 +3,7 @@ import { Alert, Button, Modal, Progress, Space } from "antd";
 import { DownloadOutlined, CopyOutlined } from "@ant-design/icons";
 import { prepareOfficeClipboard, writeOfficeClipboard, type OfficeClipboardCell, type OfficeClipboardImage, type OfficeClipboardPayload } from "./selection-office-clipboard";
 
-export type OfficeCopyRequest = { cells: OfficeClipboardCell[][]; text: string; selected: Set<string> };
+export type OfficeCopyRequest = { cells: OfficeClipboardCell[][]; headers: string[]; text: string; selected: Set<string> };
 type Props = { request: OfficeCopyRequest | null; onClose: () => void; onCopied: (request: OfficeCopyRequest) => void;
   prepare: (images: OfficeClipboardImage[], signal: AbortSignal) => Promise<{ rowId: string; columnKey: string; url: string }[]> };
 
@@ -73,11 +73,11 @@ export function SelectionOfficeCopy({ request, onClose, onCopied, prepare }: Pro
     return () => document.removeEventListener("copy", copyEvent, true);
   }, [request, copyEvent]);
   const download = async () => {
-    if (!payload || !active.current) return;
+    if (!payload || !request || !active.current) return;
     const controller = active.current; setDownloading(true); setError("");
     try {
       const { officeClipboardWorkbook } = await import("./selection-office-workbook");
-      const blob = await officeClipboardWorkbook(payload);
+      const blob = await officeClipboardWorkbook(payload, request.headers);
       if (controller.signal.aborted) return;
       const url = URL.createObjectURL(blob), link = document.createElement("a");
       link.href = url; link.download = "表格选区_带图.xlsx"; link.click();
@@ -98,6 +98,6 @@ export function SelectionOfficeCopy({ request, onClose, onCopied, prepare }: Pro
       : phase === "copied" ? <Alert type="success" showIcon title="图文已复制，可切换到 Excel / WPS 粘贴" description="请使用普通粘贴或保留源格式。若目标表格仍只显示地址，请下载带图表格，图片已嵌入文件。" />
       : phase !== "error" && <Alert type="info" showIcon title={phase === "copying" ? "正在写入剪贴板…" : "图片已准备，请点击「复制图文」"} description="也可在此窗口按 Ctrl+C；看到复制完成后，再切换到 Excel / WPS 粘贴。" />}
     {!!error && <Alert style={{ marginTop: 12 }} type={phase === "error" ? "error" : "warning"} showIcon title={phase === "error" ? "本次图文未复制" : "复制提示"} description={error} />}
-    <p style={{ marginBottom: 0, marginTop: 12 }}>「下载带图表格」保留可编辑文字及对应图片，打开文件后无需联网加载图片。关闭窗口不修改原表资料。</p>
+    <p style={{ marginBottom: 0, marginTop: 12 }}>「下载带图表格」首行包含所选列的字段名，下方保留可编辑文字及对应图片，打开文件后无需联网加载图片。关闭窗口不修改原表资料。</p>
   </Modal>;
 }
