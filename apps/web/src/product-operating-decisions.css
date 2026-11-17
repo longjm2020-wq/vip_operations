@@ -63,15 +63,87 @@
   color: #7a8495;
   line-height: 1.7;
 }
-.product-decision-drawer h3 {
-  margin: 24px 0 12px;
+body:has(.product-decision-drawer) .workspace-companion-host {
+  z-index: 999;
+}
+.product-decision-overview,
+.product-decision-card {
+  padding: 12px;
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+}
+.product-decision-overview {
+  background: var(--app-muted);
+  margin-bottom: 10px;
+}
+.product-decision-status-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0 0 8px;
+}
+.product-decision-status-grid dt {
+  margin-bottom: 3px;
+  color: var(--app-secondary);
+  font-size: 12px;
+}
+.product-decision-status-grid dd {
+  margin: 0;
+}
+.product-decision-overview .product-decision-muted {
+  margin: 6px 0 0;
+  overflow-wrap: anywhere;
+}
+.product-decision-feedback {
+  display: grid;
+  gap: 10px;
+}
+.product-decision-card {
+  min-width: 0;
+}
+.product-decision-card h3 {
+  margin: 0 0 8px;
   font-size: 14px;
 }
 .product-decision-drawer .ant-alert {
-  margin: 12px 0;
+  margin: 8px 0;
 }
-.product-decision-drawer .ant-form-item {
-  margin-bottom: 14px;
+.product-decision-card .ant-form-item {
+  margin-bottom: 8px;
+}
+.product-decision-card .ant-form-item-label {
+  padding-bottom: 4px !important;
+}
+.product-decision-card .ant-form-item-control-input {
+  min-height: 24px;
+}
+.product-decision-card .ant-checkbox-group,
+.product-decision-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px 6px;
+}
+.product-decision-card .product-decision-options .ant-radio-button-wrapper {
+  border-inline-start-width: 1px;
+  border-radius: 6px;
+  padding-inline: 10px;
+}
+.product-decision-options .ant-radio-button-wrapper::before {
+  display: none;
+}
+.product-decision-card .product-decision-muted {
+  margin: 4px 0 0;
+}
+.product-decision-note > summary {
+  color: var(--app-secondary);
+  font-size: 12px;
+  cursor: pointer;
+}
+.product-decision-note[open] > summary {
+  margin-bottom: 6px;
+}
+.product-decision-records {
+  margin-top: 10px;
 }
 .product-decision-history {
   padding: 12px 0;

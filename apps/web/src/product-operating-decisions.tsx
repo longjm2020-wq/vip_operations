@@ -11,7 +11,7 @@ import {
   Empty,
   Form,
   Input,
-  Select,
+  Radio,
   Space,
   Spin,
   Table,
@@ -35,6 +35,9 @@ import "./product-operating-decisions.css";
 
 const formatTime = (value: string | null) =>
   value ? new Date(value).toLocaleString("zh-CN", { hour12: false }) : "—";
+const supplyReasons = Object.keys(
+  supplyReasonLabels,
+) as OperatingFeedback["supplyReasons"];
 const metric = (value: number | null, percent = false) =>
   value == null
     ? "—"
@@ -52,6 +55,31 @@ function Status({ value }: { value: string }) {
           : "default";
   return <Tag color={color}>{value}</Tag>;
 }
+function FeedbackNote({
+  label,
+  value,
+  hasSavedNote,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  hasSavedNote: boolean;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <details className="product-decision-note" open={hasSavedNote}>
+      <summary>{label}（选填）</summary>
+      <Input.TextArea
+        aria-label={label}
+        autoSize={{ minRows: 2, maxRows: 5 }}
+        maxLength={1000}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+      />
+    </details>
+  );
+}
+
 export function ProductOperatingDecisions({
   rows,
   blocked,
@@ -442,24 +470,45 @@ function DecisionDrawer({
       )}
       {item && draft && evidence && (
         <>
-          <Space wrap>
-            <Tag>{item.decision.phase}</Tag>
-            <Status value={item.decision.replenishment} />
-            <Status value={item.decision.sales} />
-            {item.decision.tags.map((tag) => (
-              <Tag key={tag}>{tag}</Tag>
-            ))}
-          </Space>
-          <p className="product-decision-muted">
-            {item.decision.reasons.join("；")}
-          </p>
+          <section className="product-decision-overview" aria-label="当前判断">
+            <dl className="product-decision-status-grid">
+              <div>
+                <dt>测试阶段</dt>
+                <dd>
+                  <Tag>{item.decision.phase}</Tag>
+                </dd>
+              </div>
+              <div>
+                <dt>补货资格</dt>
+                <dd>
+                  <Status value={item.decision.replenishment} />
+                </dd>
+              </div>
+              <div>
+                <dt>销售状态</dt>
+                <dd>
+                  <Status value={item.decision.sales} />
+                </dd>
+              </div>
+            </dl>
+            {!!item.decision.tags.length && (
+              <Space size={[4, 4]} wrap>
+                {item.decision.tags.map((tag) => (
+                  <Tag key={tag}>{tag}</Tag>
+                ))}
+              </Space>
+            )}
+            <p className="product-decision-muted">
+              {item.decision.reasons.join("；")}
+            </p>
+          </section>
           {item.needsReconfirmation && (
             <Alert
               type="warning"
               title="款号已变更，原款反馈未套用，请重新确认后保存。"
             />
           )}
-          {!writable && (
+          {(blocked || !item.canEdit) && (
             <Alert
               type="info"
               title={
@@ -469,198 +518,240 @@ function DecisionDrawer({
               }
             />
           )}
-          <Form layout="vertical" disabled={!writable}>
-            <h3>生产采购端</h3>
-            <Form.Item label="补货条件">
-              <Select
-                aria-label="生产采购补货条件"
-                value={draft.supply}
-                options={[
-                  { value: "pending", label: "待确认" },
-                  { value: "allow", label: "允许补货" },
-                  { value: "deny", label: "不允许补货" },
-                ]}
-                onChange={(supply) => change({ supply, supplyReasons: [] })}
-              />
-            </Form.Item>
-            {draft.supply !== "pending" && (
-              <Form.Item label="判断原因" required>
-                <Select
-                  mode="multiple"
-                  aria-label="生产采购判断原因"
-                  value={draft.supplyReasons}
-                  options={Object.entries(supplyReasonLabels)
-                    .filter(
-                      ([key]) =>
-                        (draft.supply === "allow") ===
-                        ["stock", "fast"].includes(key),
-                    )
-                    .map(([value, label]) => ({ value, label }))}
-                  onChange={(supplyReasons) => change({ supplyReasons })}
-                />
-              </Form.Item>
-            )}
-            <Form.Item label="采购反馈补充">
-              <Input.TextArea
-                aria-label="采购反馈补充"
-                rows={2}
-                maxLength={1000}
-                value={draft.supplyNote}
-                onChange={(event) => change({ supplyNote: event.target.value })}
-              />
-            </Form.Item>
-            <h3>退供清仓端</h3>
-            <Form.Item>
-              <Checkbox
-                checked={draft.backlog}
-                onChange={(event) => change({ backlog: event.target.checked })}
-              >
-                压仓库存：长期积压，持续上线销售消化
-              </Checkbox>
-              <p className="product-decision-muted">
-                即使高退货率仍继续销售；人工明确的品质退供、大货退供、清仓完结或停售决定仍优先。
-              </p>
-            </Form.Item>
-            <Form.Item label="停售反馈">
-              <Select
-                aria-label="退供清仓停售反馈"
-                value={draft.clearance}
-                options={Object.entries(clearanceReasonLabels).map(
-                  ([value, label]) => ({ value, label }),
-                )}
-                onChange={(clearance) => change({ clearance })}
-              />
-            </Form.Item>
-            <Form.Item label="退供清仓补充">
-              <Input.TextArea
-                aria-label="退供清仓补充"
-                rows={2}
-                maxLength={1000}
-                value={draft.clearanceNote}
-                onChange={(event) =>
-                  change({ clearanceNote: event.target.value })
-                }
-              />
-            </Form.Item>
-            <h3>销售状态确认</h3>
-            <Form.Item label="人工确认">
-              <Select
-                aria-label="人工确认销售状态"
-                value={draft.salesConfirmation}
-                options={[
-                  { value: "auto", label: "采用规则建议" },
-                  { value: "keep", label: "确认继续销售" },
-                  { value: "stop", label: "确认停售" },
-                ]}
-                onChange={(salesConfirmation) => change({ salesConfirmation })}
-              />
-            </Form.Item>
-            {draft.salesConfirmation !== "auto" && (
-              <Form.Item label="确认原因" required>
-                <Input.TextArea
-                  aria-label="销售状态确认原因"
-                  rows={2}
-                  maxLength={1000}
-                  value={draft.confirmationReason}
+          <Form
+            className="product-decision-feedback"
+            layout="vertical"
+            disabled={!writable}
+          >
+            <section
+              className="product-decision-card"
+              aria-labelledby="product-decision-supply"
+            >
+              <h3 id="product-decision-supply">生产采购端</h3>
+              <Form.Item label="补货条件">
+                <Radio.Group
+                  role="radiogroup"
+                  aria-label="生产采购补货条件"
+                  className="product-decision-options"
+                  optionType="button"
+                  size="small"
+                  value={draft.supply}
+                  options={[
+                    { value: "pending", label: "待确认" },
+                    { value: "allow", label: "允许补货" },
+                    { value: "deny", label: "不允许补货" },
+                  ]}
                   onChange={(event) =>
-                    change({ confirmationReason: event.target.value })
+                    change({ supply: event.target.value, supplyReasons: [] })
                   }
                 />
               </Form.Item>
-            )}
+              {draft.supply !== "pending" && (
+                <Form.Item label="判断原因" required>
+                  <Checkbox.Group<OperatingFeedback["supplyReasons"][number]>
+                    role="group"
+                    aria-label="生产采购判断原因"
+                    value={draft.supplyReasons}
+                    options={supplyReasons
+                      .filter(
+                        (key) =>
+                          (draft.supply === "allow") ===
+                          ["stock", "fast"].includes(key),
+                      )
+                      .map((value) => ({
+                        value,
+                        label: supplyReasonLabels[value],
+                      }))}
+                    onChange={(supplyReasons) => change({ supplyReasons })}
+                  />
+                </Form.Item>
+              )}
+              <FeedbackNote
+                label="采购反馈补充"
+                hasSavedNote={!!item.feedback.supplyNote}
+                value={draft.supplyNote}
+                onChange={(supplyNote) => change({ supplyNote })}
+              />
+            </section>
+            <section
+              className="product-decision-card"
+              aria-labelledby="product-decision-clearance"
+            >
+              <h3 id="product-decision-clearance">退供清仓端</h3>
+              <Form.Item>
+                <Checkbox
+                  checked={draft.backlog}
+                  onChange={(event) =>
+                    change({ backlog: event.target.checked })
+                  }
+                >
+                  标记压仓库存
+                </Checkbox>
+                <p className="product-decision-muted">
+                  长期积压库存继续上线消化，高退货率也继续销售。明确的退供、清仓完结或人工停售优先。
+                </p>
+              </Form.Item>
+              <Form.Item label="停售反馈">
+                <Radio.Group
+                  role="radiogroup"
+                  aria-label="退供清仓停售反馈"
+                  className="product-decision-options"
+                  optionType="button"
+                  size="small"
+                  value={draft.clearance}
+                  options={Object.entries(clearanceReasonLabels).map(
+                    ([value, label]) => ({ value, label }),
+                  )}
+                  onChange={(event) =>
+                    change({ clearance: event.target.value })
+                  }
+                />
+              </Form.Item>
+              <FeedbackNote
+                label="退供清仓补充"
+                hasSavedNote={!!item.feedback.clearanceNote}
+                value={draft.clearanceNote}
+                onChange={(clearanceNote) => change({ clearanceNote })}
+              />
+            </section>
+            <section
+              className="product-decision-card"
+              aria-labelledby="product-decision-sales"
+            >
+              <h3 id="product-decision-sales">销售数据与确认</h3>
+              <Form.Item label="人工确认销售状态">
+                <Radio.Group
+                  role="radiogroup"
+                  aria-label="人工确认销售状态"
+                  className="product-decision-options"
+                  optionType="button"
+                  size="small"
+                  value={draft.salesConfirmation}
+                  options={[
+                    { value: "auto", label: "采用规则建议" },
+                    { value: "keep", label: "确认继续销售" },
+                    { value: "stop", label: "确认停售" },
+                  ]}
+                  onChange={(event) =>
+                    change({ salesConfirmation: event.target.value })
+                  }
+                />
+              </Form.Item>
+              {draft.salesConfirmation !== "auto" && (
+                <Form.Item label="确认原因" required>
+                  <Input.TextArea
+                    aria-label="销售状态确认原因"
+                    rows={2}
+                    maxLength={1000}
+                    value={draft.confirmationReason}
+                    onChange={(event) =>
+                      change({ confirmationReason: event.target.value })
+                    }
+                  />
+                </Form.Item>
+              )}
+              <Collapse
+                size="small"
+                items={[
+                  {
+                    key: "evidence",
+                    label: "销售数据端 · 自动判断依据",
+                    children: (
+                      <>
+                        {evidence.issue && (
+                          <Alert type="warning" title={evidence.issue} />
+                        )}
+                        <Descriptions
+                          size="small"
+                          column={2}
+                          items={[
+                            {
+                              key: "age",
+                              label: "售龄",
+                              children:
+                                evidence.age == null
+                                  ? "—"
+                                  : `${evidence.age}天`,
+                            },
+                            {
+                              key: "date",
+                              label: "数据截止",
+                              children: evidence.source?.endDate || "—",
+                            },
+                            {
+                              key: "window",
+                              label: "统计窗口",
+                              span: 2,
+                              children: evidence.startDate
+                                ? `${evidence.startDate} 至 ${evidence.endDate}`
+                                : "—",
+                            },
+                            {
+                              key: "coverage",
+                              label: "记录覆盖",
+                              children: `${evidence.coveredDays}/${evidence.expectedDays}天`,
+                            },
+                            {
+                              key: "sales",
+                              label: "销售量",
+                              children: metric(evidence.salesQty),
+                            },
+                            {
+                              key: "exposure",
+                              label: "曝光UV",
+                              children: metric(evidence.exposure),
+                            },
+                            {
+                              key: "detail",
+                              label: "商详UV",
+                              children: metric(evidence.detailViews),
+                            },
+                            {
+                              key: "ctr",
+                              label: "CTR",
+                              children: metric(evidence.clickRate, true),
+                            },
+                            {
+                              key: "cart",
+                              label: "加购率",
+                              children: metric(evidence.cartRate, true),
+                            },
+                            {
+                              key: "returns",
+                              label: "退货件数",
+                              children: metric(evidence.returnsQty),
+                            },
+                            {
+                              key: "rate",
+                              label: "期间退货率",
+                              children: metric(evidence.returnRate, true),
+                            },
+                          ]}
+                        />
+                        <p className="product-decision-muted">
+                          按款号完整匹配罗盘款号报表，跨日UV累计未去重；CTR=商详UV/曝光UV，加购率=加购UV/商详UV。期间退货率可能超过100%，不等于同一批订单退货率。更新判断读取最新已导入报表。
+                        </p>
+                        <Space>
+                          {canAnalytics && (
+                            <Link to="/analytics/compass">查看经营分析</Link>
+                          )}
+                          {canInventory && (
+                            <Link to="/operations/vip/inventory">
+                              查看库存与补货数量
+                            </Link>
+                          )}
+                        </Space>
+                      </>
+                    ),
+                  },
+                ]}
+              />
+            </section>
           </Form>
           <Collapse
-            defaultActiveKey={["evidence"]}
+            size="small"
+            className="product-decision-records"
             items={[
-              {
-                key: "evidence",
-                label: "销售数据端 · 自动判断依据",
-                children: (
-                  <>
-                    {evidence.issue && (
-                      <Alert type="warning" title={evidence.issue} />
-                    )}
-                    <Descriptions
-                      size="small"
-                      column={2}
-                      items={[
-                        {
-                          key: "age",
-                          label: "售龄",
-                          children:
-                            evidence.age == null ? "—" : `${evidence.age}天`,
-                        },
-                        {
-                          key: "date",
-                          label: "数据截止",
-                          children: evidence.source?.endDate || "—",
-                        },
-                        {
-                          key: "window",
-                          label: "统计窗口",
-                          span: 2,
-                          children: evidence.startDate
-                            ? `${evidence.startDate} 至 ${evidence.endDate}`
-                            : "—",
-                        },
-                        {
-                          key: "coverage",
-                          label: "记录覆盖",
-                          children: `${evidence.coveredDays}/${evidence.expectedDays}天`,
-                        },
-                        {
-                          key: "sales",
-                          label: "销售量",
-                          children: metric(evidence.salesQty),
-                        },
-                        {
-                          key: "exposure",
-                          label: "曝光UV",
-                          children: metric(evidence.exposure),
-                        },
-                        {
-                          key: "detail",
-                          label: "商详UV",
-                          children: metric(evidence.detailViews),
-                        },
-                        {
-                          key: "ctr",
-                          label: "CTR",
-                          children: metric(evidence.clickRate, true),
-                        },
-                        {
-                          key: "cart",
-                          label: "加购率",
-                          children: metric(evidence.cartRate, true),
-                        },
-                        {
-                          key: "returns",
-                          label: "退货件数",
-                          children: metric(evidence.returnsQty),
-                        },
-                        {
-                          key: "rate",
-                          label: "期间退货率",
-                          children: metric(evidence.returnRate, true),
-                        },
-                      ]}
-                    />
-                    <p className="product-decision-muted">
-                      按款号完整匹配罗盘款号报表，跨日UV累计未去重；CTR=商详UV/曝光UV，加购率=加购UV/商详UV。期间退货率可能超过100%，不等于同一批订单退货率。更新判断读取最新已导入报表。
-                    </p>
-                    <Space>
-                      {canAnalytics && (
-                        <Link to="/analytics/compass">查看经营分析</Link>
-                      )}
-                      {canInventory && (
-                        <Link to="/operations/vip/inventory">
-                          查看库存与补货数量
-                        </Link>
-                      )}
-                    </Space>
-                  </>
-                ),
-              },
               {
                 key: "history",
                 label: "反馈记录 · 最近20次",

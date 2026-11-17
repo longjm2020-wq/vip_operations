@@ -334,21 +334,48 @@ test("经营决策复用顶部文字和图片搜索，并在款号旁显示有�
   await expect(protectedRow).toBeVisible();
 });
 
-test("商品档案经营决策保存压仓反馈，高退货率继续销售且可回看记录", async ({
+test("经营决策可直接填写三端反馈，保存压仓标记后继续销售并保留记录", async ({
   page,
 }) => {
   const f = await fixture(page);
   const drawer = page.getByRole("dialog");
+  await expect(drawer.getByText("测试阶段", { exact: true })).toBeVisible();
+  await expect(drawer.getByText("补货资格", { exact: true })).toBeVisible();
+  await expect(drawer.getByText("销售状态", { exact: true })).toBeVisible();
+  await expect(
+    drawer.getByRole("radio", { name: "无停售反馈", exact: true }),
+  ).toBeChecked();
+  await drawer.getByText("允许补货", { exact: true }).click();
+  await expect(
+    drawer.getByRole("radio", { name: "允许补货", exact: true }),
+  ).toBeChecked();
+  await drawer.getByRole("checkbox", { name: "供应商有现货" }).check();
   await drawer.getByRole("checkbox", { name: /压仓库存/ }).check();
-  await drawer
-    .getByLabel("采购反馈补充", { exact: true })
-    .fill("先销售长期积压库存");
+  const noteToggle = drawer.getByText("采购反馈补充（选填）", { exact: true });
+  const note = drawer.getByLabel("采购反馈补充", { exact: true });
+  await expect(note).toBeHidden();
+  await noteToggle.click();
+  await note.fill("先销售长期积压库存");
+  await noteToggle.click();
+  await expect(note).toBeHidden();
+  await noteToggle.click();
+  await expect(note).toHaveValue("先销售长期积压库存");
   await drawer
     .getByRole("button", { name: "保存三端反馈", exact: true })
     .click();
   await expect.poll(() => f.writes.length).toBe(1);
+  expect(f.writes[0].feedback).toMatchObject({
+    supply: "allow",
+    supplyReasons: ["stock"],
+    backlog: true,
+    supplyNote: "先销售长期积压库存",
+  });
   await expect(drawer.getByText("继续销售", { exact: true })).toBeVisible();
   await expect(drawer.getByText("高退货率", { exact: true })).toBeVisible();
+  const evidence = drawer.getByText("统计窗口", { exact: true });
+  await expect(evidence).toBeHidden();
+  await drawer.getByText("销售数据端 · 自动判断依据", { exact: true }).click();
+  await expect(evidence).toBeVisible();
   await drawer.getByText("反馈记录 · 最近20次", { exact: true }).click();
   await expect(
     drawer
@@ -375,8 +402,10 @@ test("商品档案经营决策保存压仓反馈，高退货率继续销售且�
 test("人工停售需要原因和确认，冲突保留草稿", async ({ page }) => {
   const f = await fixture(page, { conflict: true });
   const drawer = page.getByRole("dialog").first();
-  await drawer.getByLabel("人工确认销售状态", { exact: true }).click();
-  await page.getByTitle("确认停售", { exact: true }).click();
+  await drawer.getByText("确认停售", { exact: true }).click();
+  await expect(
+    drawer.getByRole("radio", { name: "确认停售", exact: true }),
+  ).toBeChecked();
   await drawer
     .getByRole("button", { name: "保存三端反馈", exact: true })
     .click();
@@ -409,6 +438,9 @@ test("只读账号不能保存经营反馈，窄屏侧栏可查看", async ({ pa
     page.getByRole("button", { name: "保存三端反馈", exact: true }),
   ).toBeDisabled();
   await expect(page.getByRole("checkbox", { name: /压仓库存/ })).toBeDisabled();
+  await expect(
+    page.getByRole("radio", { name: "允许补货", exact: true }),
+  ).toBeDisabled();
   await page.screenshot({
     animations: "disabled",
     path: ".local/product-decisions-mobile.png",
