@@ -47,6 +47,7 @@ async function fixture(
     conflict?: boolean;
     testSearch?: boolean;
     testTagStats?: boolean;
+    zeroSales?: "available" | "interrupted";
   } = {},
 ) {
   let preferences = selectionLayoutSchema.parse({
@@ -108,8 +109,10 @@ async function fixture(
     saleAge: 60,
     firstListedAt: null,
     metrics: {
-      salesQty: 10,
-      returnsQty: 9,
+      salesQty: options.zeroSales ? 0 : 10,
+      returnsQty: options.zeroSales ? 0 : 9,
+      onSaleStock: options.zeroSales === "interrupted" && i === 0 ? 0 : 5,
+      saleableStock: options.zeroSales === "interrupted" && i === 0 ? 0 : 5,
       exposure: 200,
       detailViews: 20,
       cartUsers: 2,
@@ -289,7 +292,11 @@ async function fixture(
   await expect(
     page
       .getByRole("region", { name: "商品经营决策" })
-      .getByText("建议停售", { exact: true }),
+      .getByRole("row", { name: /XFA32102/ })
+      .getByText(
+        options.zeroSales === "interrupted" ? "零销量待核实" : "建议停售",
+        { exact: true },
+      ),
   ).toBeVisible();
   await page.getByRole("button", { name: "XFA32102", exact: true }).click();
   await expect(page.getByRole("dialog")).toBeVisible();
@@ -402,12 +409,14 @@ test("经营标签统计覆盖全部页，点击筛选并与表头联动", async
   const importFeedback = decisions.getByRole("button", {
     name: /导入反馈$/,
   });
-  const openFilter = (column: string) =>
-    decisions
+  const filter = page.locator(".ant-table-filter-dropdown:visible");
+  const openFilter = async (column: string) => {
+    await expect(filter).toHaveCount(0);
+    await decisions
       .getByRole("columnheader", { name: new RegExp(column) })
       .getByRole("button")
       .click();
-  const filter = page.locator(".ant-table-filter-dropdown:visible");
+  };
   const filterOption = (label: string) =>
     filter.getByRole("menuitem", { name: label, exact: true });
 
@@ -499,6 +508,23 @@ test("经营标签统计覆盖全部页，点击筛选并与表头联动", async
   await expect(decisions.getByText("已选 1 款", { exact: true })).toBeVisible();
   await expect(style(1)).toBeVisible();
   await expect(style(3)).toHaveCount(0);
+  await openFilter("测试阶段");
+  await filter.getByRole("button", { name: "重置", exact: true }).click();
+  await expect(filter).toBeHidden();
+  await expect(button("压仓库存", 2)).toHaveAttribute("aria-pressed", "true");
+  await expect(style(3)).toBeVisible();
+  await expect(style(4)).toHaveCount(0);
+
+  await openFilter("测试阶段");
+  await filterOption("常测").click();
+  await filter.getByRole("button", { name: "确定", exact: true }).click();
+  await openFilter("经营标签");
+  await filter.getByRole("button", { name: "重置", exact: true }).click();
+  await expect(button("全部款", 4)).toHaveAttribute("aria-pressed", "true");
+  await expect(style(4)).toBeVisible();
+  await expect(style(3)).toHaveCount(0);
+
+  await button("压仓库存", 1).click();
   await button("全部款", 4).click();
   await expect(button("压仓库存", 1)).toHaveAttribute("aria-pressed", "false");
   await expect(style(4)).toBeVisible();
@@ -506,6 +532,17 @@ test("经营标签统计覆盖全部页，点击筛选并与表头联动", async
   await selectStyle(1).uncheck();
   await expect(exportFeedback).toBeEnabled();
   await expect(importFeedback).toBeEnabled();
+
+  await openFilter("测试阶段");
+  await filterOption("常测").click();
+  await filterOption("回测").click();
+  await filter.getByRole("button", { name: "确定", exact: true }).click();
+  await footer.getByTitle("下一页", { exact: true }).click();
+  await expect(style(1)).toHaveCount(0);
+  await openFilter("测试阶段");
+  await filter.getByRole("button", { name: "重置", exact: true }).click();
+  await expect(button("全部款", 51)).toHaveAttribute("aria-pressed", "true");
+  await expect(style(1)).toBeVisible();
 });
 
 test("未勾选款号时可导出筛选结果、下载空白模板并按款号导入", async ({
@@ -793,6 +830,31 @@ test("人工停售需要原因和确认，冲突保留草稿", async ({ page }) 
   ).toHaveValue("已核验清仓完结");
   expect(f.writes).toHaveLength(1);
 });
+
+for (const stock of ["available", "interrupted"] as const) {
+  test(`常测零销量显示每日库存核实结果（${stock}）`, async ({ page }) => {
+    await fixture(page, { zeroSales: stock });
+    const drawer = page.getByRole("dialog");
+    const verified = stock === "available";
+    const judgment = drawer.getByRole("region", { name: "当前判断" });
+    await expect(
+      judgment.getByText(verified ? "建议停售" : "零销量待核实", {
+        exact: true,
+      }),
+    ).toBeVisible();
+    await expect(
+      judgment.getByText("待补退货数据", { exact: true }),
+    ).toHaveCount(0);
+    await drawer
+      .getByText("销售数据端 · 自动判断依据", { exact: true })
+      .click();
+    const details = drawer
+      .getByRole("alert")
+      .filter({ hasText: "零销量 · 在售与库存核实" });
+    await expect(details).toContainText(verified ? "30/30天" : "29/30天");
+    await expect(details).toContainText(`可售库存为 0：${verified ? 0 : 1}天`);
+  });
+}
 
 test("只读账号不能保存经营反馈，窄屏侧栏可查看", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });

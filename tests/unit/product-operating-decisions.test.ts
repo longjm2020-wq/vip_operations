@@ -36,6 +36,8 @@ function days(
       exposure: 250,
       detailViews: 12,
       cartUsers: 1,
+      onSaleStock: 20,
+      saleableStock: 10,
       ...metrics,
     },
   }));
@@ -148,6 +150,26 @@ describe("product decisions: independent replenishment and sales rules", () => {
       decide(10, { salesQty: 1, detailViews: 5, cartUsers: 0 }),
     ).toMatchObject({ sales: "继续销售", replenishment: "允许补货" });
   });
+  it("calls for availability checks before failing a mature first test or retest", () => {
+    const firstTest = decide(10, {
+      salesQty: 0,
+      detailViews: 5,
+      cartUsers: 0,
+      onSaleStock: null,
+    });
+    const retest = decide(20, { salesQty: 0, saleableStock: 0 });
+    for (const [result, expectedFailure] of [
+      [firstTest, "首测失败"],
+      [retest, "回测失败"],
+    ] as const) {
+      expect(result).toMatchObject({
+        sales: "待确认",
+        replenishment: "待确认",
+        tags: expect.arrayContaining(["零销量待核实"]),
+      });
+      expect(result.tags).not.toContain(expectedFailure);
+    }
+  });
   it("retest excludes first-test sales and waits for the tenth retest day", () => {
     const records = days(20, { salesQty: 0 });
     records[0].metrics.salesQty = 99;
@@ -173,10 +195,90 @@ describe("product decisions: independent replenishment and sales rules", () => {
       expect(decide(age, { salesQty: 0 })).toMatchObject({
         phase: "观察期",
         sales: "继续销售",
-        evidence: { issue: null, expectedDays: age - 20 },
+        evidence: {
+          issue: null,
+          expectedDays: age - 20,
+          zeroSalesAvailability: { availableDays: age - 20 },
+        },
       });
     },
   );
+  it("recommends stopping mature zero-sale styles only with positive stock snapshots for all 30 days", () => {
+    const result = decide(63, { salesQty: 0 });
+    expect(result).toMatchObject({
+      phase: "常测",
+      sales: "建议停售",
+      replenishment: "不允许补货",
+      tags: ["在售无销量"],
+      evidence: {
+        salesQty: 0,
+        returnRate: null,
+        zeroSalesAvailability: {
+          availableDays: 30,
+          zeroSaleableDays: 0,
+          zeroOnSaleDays: 0,
+          unknownDays: 0,
+        },
+      },
+    });
+    expect(result.reasons[0]).toContain("罗盘每日快照");
+  });
+  it("distinguishes interrupted availability and incomplete stock evidence from a zero-sale result with stock", () => {
+    const records = days(63, { salesQty: 0 });
+    records[0].metrics.saleableStock = 0;
+    records[1].metrics.onSaleStock = 0;
+    records[2].metrics.onSaleStock = 0;
+    records[2].metrics.saleableStock = NaN;
+    records[3].metrics.saleableStock = -1;
+    records[4].metrics.onSaleStock = undefined;
+    expect(
+      evaluateOperatingDecision(
+        emptyOperatingFeedback(),
+        records,
+        source,
+        today,
+      ),
+    ).toMatchObject({
+      sales: "待确认",
+      replenishment: "待确认",
+      tags: ["零销量待核实"],
+      evidence: {
+        salesQty: 0,
+        zeroSalesAvailability: {
+          availableDays: 25,
+          zeroSaleableDays: 1,
+          zeroOnSaleDays: 2,
+          unknownDays: 3,
+        },
+      },
+    });
+    expect(
+      decide(63, { salesQty: 0, saleableStock: null, onSaleStock: undefined }),
+    ).toMatchObject({
+      sales: "待确认",
+      tags: ["零销量待核实"],
+      evidence: {
+        zeroSalesAvailability: { availableDays: 0, unknownDays: 30 },
+      },
+    });
+  });
+  it("preserves human decisions and the positive-sales return data check", () => {
+    expect(
+      decide(63, { salesQty: 0 }, { ...allow, backlog: true }),
+    ).toMatchObject({ sales: "继续销售", replenishment: "允许补货" });
+    expect(
+      decide(
+        63,
+        { salesQty: 0, onSaleStock: null },
+        { ...allow, clearance: "quality" },
+      ),
+    ).toMatchObject({ sales: "已确认停售", replenishment: "不允许补货" });
+    expect(decide(63, { returnsQty: null, onSaleStock: null })).toMatchObject({
+      sales: "继续销售",
+      tags: ["待补退货数据"],
+      evidence: { zeroSalesAvailability: null },
+    });
+  });
   it("does not turn missing sales, missing dates, ambiguity or stale reports into zero", () => {
     const incomplete = days(20, { salesQty: 0 });
     incomplete.splice(15, 1);
@@ -219,6 +321,7 @@ describe("product decisions: independent replenishment and sales rules", () => {
       expect(result.replenishment).toBe("待确认");
       expect(result.sales).toBe("待确认");
       expect(result.evidence.issue).toBeTruthy();
+      expect(result.evidence.zeroSalesAvailability).toBeNull();
     }
   });
   it("retains valid manual decisions when reports are absent", () => {

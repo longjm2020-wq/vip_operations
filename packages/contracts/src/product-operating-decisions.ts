@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { shiftCompassDate } from "./compass-analytics.js";
 
-export const operatingRuleVersion = "2026-11-17.1";
+export const operatingRuleVersion = "2026-11-17.2";
 export const supplyReasonLabels = {
   stock: "供应商有现货",
   fast: "生产周期不超过20天",
@@ -69,18 +69,26 @@ export const emptyOperatingFeedback = (): OperatingFeedback =>
   operatingFeedbackSchema.parse({});
 export type OperatingMetric =
   "salesQty" | "returnsQty" | "exposure" | "detailViews" | "cartUsers";
+type OperatingStockMetric = "onSaleStock" | "saleableStock";
 export type OperatingDay = {
   date: string;
   entityKey: string;
   saleAge: number | null;
   firstListedAt: string | null;
-  metrics: Record<OperatingMetric, number | null>;
+  metrics: Record<OperatingMetric, number | null> &
+    Partial<Record<OperatingStockMetric, number | null>>;
 };
 export type OperatingSource = {
   id: string;
   startDate: string;
   endDate: string;
   importedAt: string | null;
+};
+type ZeroSalesAvailability = {
+  availableDays: number;
+  zeroSaleableDays: number;
+  zeroOnSaleDays: number;
+  unknownDays: number;
 };
 export type OperatingEvidence = {
   source: OperatingSource | null;
@@ -98,6 +106,7 @@ export type OperatingEvidence = {
   clickRate: number | null;
   cartRate: number | null;
   returnRate: number | null;
+  zeroSalesAvailability?: ZeroSalesAvailability | null;
 };
 export type OperatingDecision = {
   phase: "待确认" | "首测" | "回测" | "观察期" | "常测";
@@ -112,6 +121,28 @@ const difference = (a: string, b: string) =>
   Math.round((Date.parse(a) - Date.parse(b)) / 86400000);
 const ratio = (a: number | null, b: number | null) =>
   a == null || b == null || b <= 0 ? null : Number((a / b).toPrecision(14));
+
+function summarizeZeroSalesAvailability(
+  days: OperatingDay[],
+): ZeroSalesAvailability {
+  const counts = {
+    availableDays: 0,
+    zeroSaleableDays: 0,
+    zeroOnSaleDays: 0,
+    unknownDays: 0,
+  };
+  const known = (value: number | null | undefined): value is number =>
+    value != null && Number.isFinite(value) && value >= 0;
+  for (const {
+    metrics: { onSaleStock, saleableStock },
+  } of days) {
+    if (onSaleStock === 0) counts.zeroOnSaleDays++;
+    if (saleableStock === 0) counts.zeroSaleableDays++;
+    if (!known(onSaleStock) || !known(saleableStock)) counts.unknownDays++;
+    else if (onSaleStock > 0 && saleableStock > 0) counts.availableDays++;
+  }
+  return counts;
+}
 
 /** Deterministic, auditable rules. Missing observations never become zero sales. */
 export function evaluateOperatingDecision(
@@ -137,6 +168,7 @@ export function evaluateOperatingDecision(
     clickRate: null,
     cartRate: null,
     returnRate: null,
+    zeroSalesAvailability: null,
   };
   const result: OperatingDecision = {
     phase: "待确认",
@@ -218,6 +250,26 @@ export function evaluateOperatingDecision(
       if (!evidence.issue) {
         result.sales = "继续销售";
         const sold = evidence.salesQty! > 0;
+        const zeroSales = sold ? null : summarizeZeroSalesAvailability(window);
+        evidence.zeroSalesAvailability = zeroSales;
+        const judgeZeroSales = (
+          availability: ZeroSalesAvailability,
+          reason: string,
+          qualifyingTags: string[],
+        ) => {
+          if (availability.availableDays === evidence.expectedDays) {
+            result.tags.push(...qualifyingTags);
+            result.reasons.push(
+              `${reason}，罗盘每日快照均显示在售库存和可售库存大于零`,
+            );
+            salesPermission = "deny";
+            result.sales = "建议停售";
+          } else {
+            result.tags.push("零销量待核实");
+            result.reasons.push(`${reason}，请核实观察期是否缺货或未上线`);
+            result.sales = "待确认";
+          }
+        };
         if (sold) {
           salesPermission = "allow";
           result.reasons.push("观察窗口已有销售");
@@ -235,27 +287,26 @@ export function evaluateOperatingDecision(
             evidence.detailViews < 100 &&
             evidence.cartRate < 0.08
           ) {
-            result.tags.push("非潜力款");
-            if (!sold) {
-              salesPermission = "deny";
-              result.sales = "建议停售";
-              result.tags.push("首测失败");
-              result.reasons.push(
+            if (zeroSales) {
+              judgeZeroSales(
+                zeroSales,
                 "首测满10天且曝光达标，商详和加购均未达标、无销量",
+                ["非潜力款", "首测失败"],
               );
-            } else
+            } else {
+              result.tags.push("非潜力款");
               result.reasons.push("商详和加购未达标，但已有销量，继续观察");
+            }
           } else {
             result.tags.push("待观察");
             result.reasons.push("观察期未满、流量不足或指标仅部分达标");
           }
         } else if (age <= 20) {
-          if (!sold && age === 20) {
-            salesPermission = "deny";
-            result.sales = "建议停售";
-            result.tags.push("回测失败");
-            result.reasons.push("第11—20天数据完整且无销量");
-          } else if (!sold) {
+          if (zeroSales && age === 20) {
+            judgeZeroSales(zeroSales, "第11—20天数据完整且无销量", [
+              "回测失败",
+            ]);
+          } else if (zeroSales) {
             result.tags.push("待观察");
             result.reasons.push("回测尚未满10天");
           }
@@ -263,7 +314,9 @@ export function evaluateOperatingDecision(
           result.tags.push("待观察");
           result.reasons.push("第21—30天为观察期，不自动判停售");
         } else if (age > 30) {
-          if (evidence.returnRate == null) {
+          if (zeroSales) {
+            judgeZeroSales(zeroSales, "近30天销量为零", ["在售无销量"]);
+          } else if (evidence.returnRate == null) {
             salesPermission = "pending";
             result.tags.push("待补退货数据");
           } else if (evidence.returnRate > 0.8) {
@@ -295,7 +348,9 @@ export function evaluateOperatingDecision(
   } else {
     if (feedback.salesConfirmation === "keep") {
       result.sales = "继续销售";
-      result.reasons.unshift("人工确认继续销售：" + feedback.confirmationReason);
+      result.reasons.unshift(
+        "人工确认继续销售：" + feedback.confirmationReason,
+      );
     } else if (feedback.backlog) {
       result.sales = "继续销售";
       result.reasons.unshift("人工标记压仓库存，继续上线消化");

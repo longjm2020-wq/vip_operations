@@ -76,7 +76,8 @@ async function sourceDays(tx: Tx, c: Context, styles: string[]) {
     `SELECT upper(btrim(style_no)) AS style_key, business_date::text AS date, entity_key,
     payload->'saleAge' AS sale_age, payload->>'firstListedAt' AS first_listed_at,
     jsonb_build_object('salesQty',payload->'metrics'->'salesQty','returnsQty',payload->'metrics'->'returnsQty',
-      'exposure',payload->'metrics'->'exposure','detailViews',payload->'metrics'->'detailViews','cartUsers',payload->'metrics'->'cartUsers') AS metrics
+      'exposure',payload->'metrics'->'exposure','detailViews',payload->'metrics'->'detailViews','cartUsers',payload->'metrics'->'cartUsers',
+      'onSaleStock',payload->'metrics'->'onSaleStock','saleableStock',payload->'metrics'->'saleableStock') AS metrics
     FROM public.compass_records WHERE import_id=$1::bigint AND upper(btrim(style_no))=ANY($2::text[])
     AND business_date BETWEEN $3::date AND $4::date ORDER BY style_no,business_date,entity_key`,
     source.id,
@@ -119,10 +120,16 @@ async function readItems(
   const byStyle = new Map<string, OperatingDay[]>();
   for (const row of records) {
     const metrics = Object.fromEntries(
-      Object.entries(row.metrics).map(([k, value]) => [
-        k,
-        value == null ? null : Number(value),
-      ]),
+      Object.entries(row.metrics).map(([key, value]) => {
+        // Invalid stock inputs must not be coerced into evidence of a zero-stock day.
+        const stock = key === "onSaleStock" || key === "saleableStock";
+        return [
+          key,
+          value == null || (stock && typeof value !== "number")
+            ? null
+            : Number(value),
+        ];
+      }),
     ) as OperatingDay["metrics"];
     const day: OperatingDay = {
       date: row.date,

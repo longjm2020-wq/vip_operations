@@ -141,6 +141,8 @@ beforeEach(async () => {
             exposure: 200,
             detailViews: 20,
             cartUsers: 2,
+            onSaleStock: 12,
+            saleableStock: 10,
           },
         }),
       ],
@@ -171,7 +173,7 @@ describe("product decisions persistence, permissions and source linkage", () => 
         decision: {
           replenishment: "允许补货",
           sales: "继续销售",
-          ruleVersion: "2026-11-17.1",
+          ruleVersion: "2026-11-17.2",
           tags: expect.arrayContaining(["高退货率", "压仓库存"]),
         },
       });
@@ -181,9 +183,44 @@ describe("product decisions persistence, permissions and source linkage", () => 
       expect(detail.history[0].decision).toMatchObject({
         replenishment: "允许补货",
         sales: "继续销售",
-        ruleVersion: "2026-11-17.1",
+        ruleVersion: "2026-11-17.2",
       });
       expect(await q("SELECT * FROM audit_logs")).toHaveLength(1);
+    }));
+  it("uses on-sale and sellable stock from the complete style report for zero-sales evidence", async () =>
+    scope(async () => {
+      await q(
+        "UPDATE compass_records SET payload=jsonb_set(payload, '{metrics,salesQty}', '0'::jsonb)",
+      );
+      const read = () => operatingDecisionDetail(context(), "1");
+      expect((await read()).item.decision).toMatchObject({
+        sales: "建议停售",
+        tags: ["在售无销量"],
+        evidence: {
+          zeroSalesAvailability: {
+            availableDays: 30,
+            zeroSaleableDays: 0,
+            zeroOnSaleDays: 0,
+            unknownDays: 0,
+          },
+        },
+      });
+      await q(`UPDATE compass_records SET payload=jsonb_set(payload, '{metrics,saleableStock}', '0'::jsonb)
+        WHERE business_date=(SELECT min(business_date) FROM compass_records)`);
+      await q(`UPDATE compass_records SET payload=jsonb_set(payload, '{metrics,onSaleStock}', '"10"'::jsonb)
+        WHERE business_date=(SELECT max(business_date) FROM compass_records)`);
+      expect((await read()).item.decision).toMatchObject({
+        sales: "待确认",
+        tags: ["零销量待核实"],
+        evidence: {
+          zeroSalesAvailability: {
+            availableDays: 28,
+            zeroSaleableDays: 1,
+            zeroOnSaleDays: 0,
+            unknownDays: 1,
+          },
+        },
+      });
     }));
   it("uses the current sales report until a structured procurement conclusion is saved", async () =>
     scope(async () => {

@@ -11,6 +11,7 @@ import {
   Empty,
   Form,
   Input,
+  Menu,
   Pagination,
   Radio,
   Space,
@@ -20,6 +21,7 @@ import {
   Tooltip,
   type TableRef,
 } from "antd";
+import type { FilterDropdownProps } from "antd/es/table/interface";
 import { InfoCircleOutlined, ReloadOutlined } from "@ant-design/icons";
 import { Link } from "react-router-dom";
 import {
@@ -49,6 +51,8 @@ const decisionTags = [
   "非潜力款",
   "首测失败",
   "回测失败",
+  "在售无销量",
+  "零销量待核实",
   "压仓库存",
   "高退货率",
   "待补退货数据",
@@ -74,6 +78,73 @@ function Status({ value }: { value: string }) {
           : "default";
   return <Tag color={color}>{value}</Tag>;
 }
+
+function DecisionFilterDropdown({
+  prefixCls,
+  appliedKeys,
+  filters,
+  selectedKeys,
+  setSelectedKeys,
+  clearFilters,
+  confirm,
+  visible,
+}: FilterDropdownProps & { appliedKeys: string[] }) {
+  const wasVisible = useRef(visible);
+  const changed =
+    selectedKeys.length !== appliedKeys.length ||
+    selectedKeys.some((key) => !appliedKeys.includes(String(key)));
+  useEffect(() => {
+    // Keep Ant Design's apply-on-close behavior for the custom dropdown.
+    if (wasVisible.current && !visible && changed)
+      confirm({ closeDropdown: false });
+    wasVisible.current = visible;
+  }, [changed, confirm, visible]);
+
+  const menuPrefix = prefixCls.replace(/-custom$/, "-menu");
+  return (
+    <>
+      <Menu
+        prefixCls={menuPrefix}
+        className={`${menuPrefix}-without-submenu`}
+        multiple
+        selectedKeys={selectedKeys.map(String)}
+        onSelect={({ selectedKeys: keys }) => setSelectedKeys(keys)}
+        onDeselect={({ selectedKeys: keys }) => setSelectedKeys(keys)}
+        items={filters?.map(({ text, value }) => ({
+          key: String(value),
+          label: (
+            <>
+              <Checkbox
+                checked={selectedKeys.includes(String(value))}
+                tabIndex={-1}
+              />
+              <span>{text}</span>
+            </>
+          ),
+        }))}
+      />
+      <div className="ant-table-filter-dropdown-btns">
+        <Button
+          type="link"
+          size="small"
+          disabled={!selectedKeys.length && !appliedKeys.length}
+          onClick={() => clearFilters?.({ confirm: true, closeDropdown: true })}
+        >
+          重置
+        </Button>
+        <Button type="primary" size="small" onClick={() => confirm()}>
+          确定
+        </Button>
+      </div>
+    </>
+  );
+}
+
+const decisionFilterDropdown =
+  (appliedKeys: string[]) => (props: FilterDropdownProps) => (
+    <DecisionFilterDropdown {...props} appliedKeys={appliedKeys} />
+  );
+
 function FeedbackNote({
   label,
   value,
@@ -367,6 +438,7 @@ export function ProductOperatingDecisions({
                 (text) => ({ text, value: text }),
               ),
               filteredValue: filters.phase,
+              filterDropdown: decisionFilterDropdown(filters.phase),
               render: (_, item) => item.decision.phase,
             },
             {
@@ -378,6 +450,7 @@ export function ProductOperatingDecisions({
                 value: text,
               })),
               filteredValue: filters.replenishment,
+              filterDropdown: decisionFilterDropdown(filters.replenishment),
               render: (_, item) => (
                 <Status value={item.decision.replenishment} />
               ),
@@ -390,6 +463,7 @@ export function ProductOperatingDecisions({
                 (text) => ({ text, value: text }),
               ),
               filteredValue: filters.sales,
+              filterDropdown: decisionFilterDropdown(filters.sales),
               render: (_, item) => <Status value={item.decision.sales} />,
             },
             {
@@ -398,6 +472,7 @@ export function ProductOperatingDecisions({
               width: 165,
               filters: decisionTags.map((text) => ({ text, value: text })),
               filteredValue: filters.tags,
+              filterDropdown: decisionFilterDropdown(filters.tags),
               render: (_, item) => (
                 <Space size={[0, 4]} wrap>
                   {item.decision.tags.map((tag) => (
@@ -529,6 +604,7 @@ function DecisionDrawer({
   }, [query.data]);
   const item = query.data?.item,
     evidence = item?.decision.evidence;
+  const availability = evidence?.zeroSalesAvailability;
   const styleSearch = item
     ? new URLSearchParams({ styleNo: item.styleNo.trim() }).toString()
     : "";
@@ -906,6 +982,34 @@ function DecisionDrawer({
                             },
                           ]}
                         />
+                        {availability && (
+                          <Alert
+                            type={
+                              availability.availableDays ===
+                              evidence.expectedDays
+                                ? "info"
+                                : "warning"
+                            }
+                            title="零销量 · 在售与库存核实"
+                            description={
+                              <>
+                                <p className="product-decision-muted">
+                                  每日在售库存和可售库存均大于 0：
+                                  {availability.availableDays}/
+                                  {evidence.expectedDays}天
+                                  <br />
+                                  可售库存为 0：{availability.zeroSaleableDays}
+                                  天 · 在售库存为 0：
+                                  {availability.zeroOnSaleDays}天 ·
+                                  库存记录缺失：{availability.unknownDays}天
+                                </p>
+                                <p className="product-decision-muted">
+                                  以上是罗盘每日库存快照。若有零值或缺失，请核对该款观察期内的库存变动和上下架记录。
+                                </p>
+                              </>
+                            }
+                          />
+                        )}
                         <p className="product-decision-muted">
                           人工反馈优先，未给出人工结论的部分采用销售数据判断。按款号完整匹配罗盘款号报表，跨日UV累计未去重。CTR=商详UV/曝光UV，加购率=加购UV/商详UV。期间退货率可能超过100%，不等于同一批订单退货率。
                         </p>
