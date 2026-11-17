@@ -55,7 +55,11 @@ services:
     depends_on:
       redis: {condition: service_healthy}
   web:
-    build: {context: ., dockerfile: Dockerfile.web}
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+      args:
+        PREVIOUS_WEB_ASSET_ORIGIN: "${PREVIOUS_WEB_ASSET_ORIGIN:-}"
     ports: ["127.0.0.1:8080:80"]
     depends_on: [api]
 volumes:

@@ -8,6 +8,8 @@ RUN npm install -g pnpm@10.32.1
 COPY . .
 RUN pnpm install --frozen-lockfile
 RUN pnpm db:generate && pnpm build
+ARG PREVIOUS_WEB_ASSET_ORIGIN=https://vip-web-production.up.railway.app
+RUN node scripts/retain-web-assets.mjs /app/dist/web "$PREVIOUS_WEB_ASSET_ORIGIN"
 FROM nginx:1.28-alpine
 ENV API_UPSTREAM=api:3100
 ENV NGINX_ENTRYPOINT_LOCAL_RESOLVERS=1
