@@ -39,7 +39,7 @@ describe("经营决策反馈工作簿", () => {
     } satisfies OperatingDecisionItem["feedback"];
     const blob = await writeOperatingFeedbackWorkbook([
       {
-        rowId: "1",
+        rowId: "9223372036854775807",
         rowVersion: 7,
         styleNo: "0000123",
         version: 0,
@@ -55,6 +55,7 @@ describe("经营决策反馈工作簿", () => {
     expect(await readOperatingFeedbackWorkbook(file)).toEqual([
       {
         styleNo: "0000123",
+        rowId: "9223372036854775807",
         feedback,
         version: 0,
         rowVersion: 7,
@@ -64,6 +65,39 @@ describe("经营决策反馈工作簿", () => {
     const book = new ExcelJS.Workbook();
     await book.xlsx.load(await file.arrayBuffer());
     expect(book.worksheets[0].getCell("D2").value).toBe("=1+2");
+    expect(book.worksheets[0].getCell("L2").value).toBe("9223372036854775807");
+  });
+
+  it("空白反馈模板包含表头与说明，填写时空白备注默认不改动", async () => {
+    const template = await writeOperatingFeedbackWorkbook([]);
+    const book = new ExcelJS.Workbook();
+    await book.xlsx.load(await template.arrayBuffer());
+    const sheet = book.getWorksheet("经营反馈")!;
+    expect(sheet.actualRowCount).toBe(1);
+    expect((sheet.getRow(1).values as string[]).slice(1)).toEqual([
+      "款号",
+      "补货条件",
+      "补货判断原因",
+      "采购反馈补充",
+      "压仓库存",
+      "停售反馈",
+      "退供清仓补充",
+      "人工确认销售状态",
+      "销售状态确认原因",
+      "反馈版本",
+      "档案版本",
+      "档案行ID",
+    ]);
+    expect(sheet.getCell("C1").note).toBeTruthy();
+    expect(sheet.getCell("I1").note).toBeTruthy();
+    sheet.addRow(["0000123", "", "", "", "是"]);
+    const file = new File(
+      [new Uint8Array(await book.xlsx.writeBuffer())],
+      "反馈模板.xlsx",
+    );
+    expect(await readOperatingFeedbackWorkbook(file)).toEqual([
+      { styleNo: "0000123", feedback: { backlog: true }, line: 2 },
+    ]);
   });
 
   it("支持部分列、稀疏行、零填充数值款号和多种原因分隔符", async () => {
@@ -96,9 +130,38 @@ describe("经营决策反馈工作簿", () => {
         styleNo: "00012",
         feedback: {
           supplyReasons: ["stock", "fast"],
-          supplyNote: "",
           backlog: false,
         },
+        line: 3,
+      },
+    ]);
+  });
+
+  it("导出的版本允许清空备注，档案行ID单独使用时仍保留空白备注", async () => {
+    const file = await workbookFile([
+      [
+        "款号",
+        "采购反馈补充",
+        "退供清仓补充",
+        "销售状态确认原因",
+        "档案行ID",
+        "反馈版本",
+      ],
+      ["S-1", "", "", "", 21, 0],
+      ["S-2", "", "退供原因", "", "22"],
+    ]);
+    expect(await readOperatingFeedbackWorkbook(file)).toEqual([
+      {
+        styleNo: "S-1",
+        rowId: "21",
+        version: 0,
+        feedback: { supplyNote: "", clearanceNote: "" },
+        line: 2,
+      },
+      {
+        styleNo: "S-2",
+        rowId: "22",
+        feedback: { clearanceNote: "退供原因" },
         line: 3,
       },
     ]);
@@ -138,6 +201,90 @@ describe("经营决策反馈工作簿", () => {
     await expect(readOperatingFeedbackWorkbook(malformedId)).rejects.toThrow(
       "数字款号可能失真",
     );
+  });
+
+  it("允许使用各自档案行ID区分同款号，拒绝重复ID和无ID的同款混合导入", async () => {
+    const file = await workbookFile([
+      ["款号", "档案行ID"],
+      [" S-1 ", "12"],
+      ["s-1", "13"],
+    ]);
+    expect(await readOperatingFeedbackWorkbook(file)).toEqual([
+      { styleNo: "S-1", rowId: "12", feedback: {}, line: 2 },
+      { styleNo: "s-1", rowId: "13", feedback: {}, line: 3 },
+    ]);
+    await expect(
+      readOperatingFeedbackWorkbook(
+        await workbookFile([
+          ["款号", "档案行ID"],
+          ["S-1", "12"],
+          ["S-2", "12"],
+        ]),
+      ),
+    ).rejects.toThrow("与第 2 行档案行ID重复");
+    await expect(
+      readOperatingFeedbackWorkbook(
+        await workbookFile([
+          ["款号", "档案行ID"],
+          ["S-1", "12"],
+          ["s-1", ""],
+        ]),
+      ),
+    ).rejects.toThrow("使用导出的档案行ID区分");
+    await expect(
+      readOperatingFeedbackWorkbook(
+        await workbookFile([
+          ["款号", "档案行ID"],
+          ["S-1", "9223372036854775808"],
+        ]),
+      ),
+    ).rejects.toThrow("请填写导出文件中的有效档案行ID");
+    await expect(
+      readOperatingFeedbackWorkbook(
+        await workbookFile([
+          ["款号", "档案行ID"],
+          ["S-1", 1234567890123456],
+        ]),
+      ),
+    ).rejects.toThrow("数字档案行ID可能失真");
+  });
+
+  it("导出可以超过导入上限，并保留同款号的多条档案行", async () => {
+    const feedback = emptyOperatingFeedback();
+    const decision = evaluateOperatingDecision(
+      feedback,
+      [],
+      null,
+      "2026-11-17",
+    );
+    const items: OperatingDecisionItem[] = Array.from(
+      { length: operatingFeedbackWorkbookLimit + 1 },
+      (_, i) => ({
+        rowId: String(i + 1),
+        rowVersion: 0,
+        styleNo: "S-1",
+        version: 0,
+        canEdit: true,
+        feedback,
+        decision,
+        updatedAt: null,
+        updatedBy: null,
+        needsReconfirmation: false,
+      }),
+    );
+    const exported = await writeOperatingFeedbackWorkbook(items);
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(await exported.arrayBuffer());
+    const sheet = workbook.getWorksheet("经营反馈")!;
+    expect(sheet.actualRowCount).toBe(operatingFeedbackWorkbookLimit + 2);
+    expect([sheet.getCell("A2").value, sheet.getCell("L2").value]).toEqual([
+      "S-1",
+      "1",
+    ]);
+    expect([sheet.getCell("A3").value, sheet.getCell("L3").value]).toEqual([
+      "S-1",
+      "2",
+    ]);
   });
 
   it("限制单批记录数并拒绝重名的输入列", async () => {

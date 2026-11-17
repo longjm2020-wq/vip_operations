@@ -412,8 +412,8 @@ test("经营标签统计覆盖全部页，点击筛选并与表头联动", async
     filter.getByRole("menuitem", { name: label, exact: true });
 
   await expect(button("全部款", 51)).toHaveAttribute("aria-pressed", "true");
-  await expect(exportFeedback).toBeDisabled();
-  await expect(importFeedback).toBeDisabled();
+  await expect(exportFeedback).toBeEnabled();
+  await expect(importFeedback).toBeEnabled();
   const footer = decisions.locator(".product-decision-footer");
   const pageSize = footer.getByRole("combobox", { name: "每页条数" });
   const selectedSize = footer.locator(".ant-select-content-has-value");
@@ -461,12 +461,23 @@ test("经营标签统计覆盖全部页，点击筛选并与表头联动", async
   await selectStyle(3).check();
   await expect(decisions.getByText("已选 1 款", { exact: true })).toBeVisible();
   await expect(exportFeedback).toBeEnabled();
-  await expect(importFeedback).toBeDisabled();
+  await importFeedback.click();
+  const readOnlyImport = page.getByRole("dialog", { name: "导入三端反馈" });
+  await expect(
+    readOnlyImport.getByRole("button", { name: "选择 Excel 文件" }),
+  ).toBeDisabled();
+  await expect(
+    readOnlyImport.getByRole("button", { name: /下载反馈模板$/ }),
+  ).toBeEnabled();
+  await readOnlyImport
+    .getByRole("button", { name: "关闭", exact: true })
+    .last()
+    .click();
   await button("压仓库存", 2).click();
   await expect(button("压仓库存", 2)).toHaveAttribute("aria-pressed", "false");
   await expect(style(3)).toHaveCount(0);
-  await expect(exportFeedback).toBeDisabled();
-  await expect(importFeedback).toBeDisabled();
+  await expect(exportFeedback).toBeEnabled();
+  await expect(importFeedback).toBeEnabled();
   await button("压仓库存", 2).click();
   await selectStyle(1).check();
   await expect(importFeedback).toBeEnabled();
@@ -493,8 +504,101 @@ test("经营标签统计覆盖全部页，点击筛选并与表头联动", async
   await expect(style(4)).toBeVisible();
   await expect(style(3)).toHaveCount(0);
   await selectStyle(1).uncheck();
-  await expect(exportFeedback).toBeDisabled();
-  await expect(importFeedback).toBeDisabled();
+  await expect(exportFeedback).toBeEnabled();
+  await expect(importFeedback).toBeEnabled();
+});
+
+test("未勾选款号时可导出筛选结果、下载空白模板并按款号导入", async ({
+  page,
+}) => {
+  const fixtureState = await fixture(page, { testTagStats: true });
+  const decisions = page.getByRole("region", { name: "商品经营决策" });
+  const stats = decisions.getByRole("region", { name: "经营标签统计" });
+  const downloadWorkbook = async (
+    button: ReturnType<Page["getByRole"]>,
+    filename: string,
+  ) => {
+    const event = page.waitForEvent("download");
+    await button.click();
+    const download = await event;
+    expect(download.suggestedFilename()).toBe(filename);
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.readFile((await download.path())!);
+    return workbook;
+  };
+  const exportFeedback = decisions.getByRole("button", { name: /导出反馈$/ });
+  await expect(
+    decisions.getByRole("button", { name: tagStatsStyleNo(51), exact: true }),
+  ).toHaveCount(0);
+  const fullExport = await downloadWorkbook(
+    exportFeedback,
+    "商品经营反馈.xlsx",
+  );
+  const fullSheet = fullExport.getWorksheet("经营反馈")!;
+  expect(fullSheet.rowCount).toBe(52);
+  expect(fullSheet.getCell("A52").text).toBe(tagStatsStyleNo(51));
+
+  await stats
+    .getByRole("button", { name: "高退货率 3 款", exact: true })
+    .click();
+  const filteredExport = await downloadWorkbook(
+    exportFeedback,
+    "商品经营反馈.xlsx",
+  );
+  const filteredSheet = filteredExport.getWorksheet("经营反馈")!;
+  expect(filteredSheet.rowCount).toBe(4);
+  expect(
+    [2, 3, 4].map((row) => [
+      filteredSheet.getCell(`A${row}`).text,
+      filteredSheet.getCell(`L${row}`).text,
+    ]),
+  ).toEqual([1, 2, 51].map((id) => [tagStatsStyleNo(id), String(id)]));
+
+  await decisions.getByRole("button", { name: /导入反馈$/ }).click();
+  const modal = page.getByRole("dialog", { name: "导入三端反馈" });
+  const template = await downloadWorkbook(
+    modal.getByRole("button", { name: /下载反馈模板$/ }),
+    "商品经营反馈模板.xlsx",
+  );
+  const templateSheet = template.getWorksheet("经营反馈")!;
+  expect(templateSheet.rowCount).toBe(1);
+  expect(templateSheet.getRow(1).values).toEqual([
+    undefined,
+    "款号",
+    "补货条件",
+    "补货判断原因",
+    "采购反馈补充",
+    "压仓库存",
+    "停售反馈",
+    "退供清仓补充",
+    "人工确认销售状态",
+    "销售状态确认原因",
+    "反馈版本",
+    "档案版本",
+    "档案行ID",
+  ]);
+  templateSheet.getCell("A2").value = tagStatsStyleNo(1).toLowerCase();
+  templateSheet.getCell("E2").value = "是";
+  await modal.getByLabel("反馈 Excel 文件").setInputFiles({
+    name: "商品经营反馈模板.xlsx",
+    mimeType:
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    buffer: Buffer.from(await template.xlsx.writeBuffer()),
+  });
+  await expect(
+    modal.getByText(tagStatsStyleNo(1), { exact: true }),
+  ).toBeVisible();
+  await expect(modal.getByText(/压仓库存.*否.*是/)).toBeVisible();
+  expect(fixtureState.writes).toHaveLength(0);
+  await modal.getByRole("button", { name: "确认导入" }).click();
+  await expect(modal.getByText("已保存", { exact: true })).toBeVisible();
+  expect(fixtureState.writes).toHaveLength(1);
+  expect(fixtureState.writes[0]).toMatchObject({
+    styleNo: tagStatsStyleNo(1),
+    version: 0,
+    rowVersion: 0,
+    feedback: { backlog: true },
+  });
 });
 
 test("按勾选款号导出反馈原因，并预览后导入", async ({ page }) => {

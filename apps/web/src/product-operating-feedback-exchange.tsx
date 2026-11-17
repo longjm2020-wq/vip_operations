@@ -76,20 +76,37 @@ function describeChanges(
 function prepareImport(
   rows: OperatingFeedbackWorkbookRow[],
   items: OperatingDecisionItem[],
+  selectionScoped: boolean,
 ) {
-  const selected = new Map<string, OperatingDecisionItem[]>();
+  const byStyle = new Map<string, OperatingDecisionItem[]>();
+  const byId = new Map<string, OperatingDecisionItem>();
+  const targetIds = new Set<string>();
   for (const item of items) {
     const key = styleKey(item.styleNo);
-    const group = selected.get(key) ?? [];
-    selected.set(key, [...group, item]);
+    const group = byStyle.get(key);
+    if (group) group.push(item);
+    else byStyle.set(key, [item]);
+    byId.set(item.rowId, item);
   }
   return rows.map((row): FeedbackLine => {
     const prefix = `第 ${row.line} 行（${row.styleNo}）`;
-    const candidates = selected.get(styleKey(row.styleNo));
-    if (!candidates?.length) throw Error(`${prefix}：该款号未勾选或不可查看`);
-    if (candidates.length > 1)
-      throw Error(`${prefix}：勾选范围内款号重复，请只勾选目标记录`);
-    const item = candidates[0];
+    const key = styleKey(row.styleNo);
+    const candidates = byStyle.get(key) ?? [];
+    const item = row.rowId ? byId.get(row.rowId) : candidates[0];
+    const scope = selectionScoped ? "所勾选款号" : "当前筛选结果";
+    if (!item)
+      throw Error(
+        `${prefix}：该${row.rowId ? "档案行" : "款号"}不在${scope}中或不可查看`,
+      );
+    if (row.rowId && styleKey(item.styleNo) !== key)
+      throw Error(`${prefix}：款号与档案行ID不匹配，请重新导出后再填写`);
+    if (!row.rowId && candidates.length > 1)
+      throw Error(
+        `${prefix}：${scope}中有重复款号，请从导出的文件保留档案行ID`,
+      );
+    if (targetIds.has(item.rowId))
+      throw Error(`${prefix}：同一档案行在文件中重复出现`);
+    targetIds.add(item.rowId);
     if (!item.canEdit) throw Error(`${prefix}：当前无权编辑该款反馈`);
     if (
       (row.version !== undefined && row.version !== item.version) ||
@@ -132,10 +149,12 @@ function prepareImport(
 
 export function ProductOperatingFeedbackExchange({
   items,
+  selectionScoped = false,
   disabled,
   onSaved,
 }: {
   items: OperatingDecisionItem[];
+  selectionScoped?: boolean;
   disabled: boolean;
   onSaved: () => void;
 }) {
@@ -149,9 +168,10 @@ export function ProductOperatingFeedbackExchange({
   const [error, setError] = useState("");
   const [lines, setLines] = useState<FeedbackLine[]>([]);
   const [confirmedStop, setConfirmedStop] = useState(false);
-  const [busy, setBusy] = useState<"read" | "write" | "export" | null>(null);
-  const unavailable =
-    disabled || !items.length || items.length > operatingFeedbackWorkbookLimit;
+  const [busy, setBusy] = useState<
+    "read" | "write" | "export" | "template" | null
+  >(null);
+  const importUnavailable = disabled || !items.some((item) => item.canEdit);
   const pending = lines.filter(isWritable);
   const retrying = pending.some((line) => line.state === "retry");
   const stopCount = pending.filter((line) => line.confirmsStop).length;
@@ -172,14 +192,14 @@ export function ProductOperatingFeedbackExchange({
     setConfirmedStop(false);
   };
   const read = async (file: File) => {
-    if (unavailable || lock.current) return;
+    if (importUnavailable || lock.current) return;
     lock.current = true;
     reset();
     setFileName(file.name);
     setBusy("read");
     try {
       const rows = await readOperatingFeedbackWorkbook(file);
-      setLines(prepareImport(rows, items));
+      setLines(prepareImport(rows, items, selectionScoped));
     } catch (failure) {
       setError((failure as Error).message);
     } finally {
@@ -187,23 +207,24 @@ export function ProductOperatingFeedbackExchange({
       setBusy(null);
     }
   };
-  const exportFeedback = async () => {
-    if (unavailable || lock.current) return;
-    if (
-      new Set(items.map((item) => styleKey(item.styleNo))).size < items.length
-    ) {
-      message.error("勾选范围内有重复款号，请只勾选每款的一条记录后导出");
+  const downloadWorkbook = async (kind: "export" | "template") => {
+    if (lock.current || (kind === "export" && disabled)) return;
+    if (kind === "export" && !items.length) {
+      message.info("当前筛选结果没有可导出的反馈");
       return;
     }
     lock.current = true;
-    setBusy("export");
+    setBusy(kind);
     try {
-      const blob = await writeOperatingFeedbackWorkbook(items);
+      const blob = await writeOperatingFeedbackWorkbook(
+        kind === "template" ? [] : items,
+      );
       const url = URL.createObjectURL(blob);
       try {
         const link = document.createElement("a");
         link.href = url;
-        link.download = "商品经营反馈.xlsx";
+        link.download =
+          kind === "template" ? "商品经营反馈模板.xlsx" : "商品经营反馈.xlsx";
         document.body.appendChild(link);
         link.click();
         link.remove();
@@ -219,7 +240,7 @@ export function ProductOperatingFeedbackExchange({
   };
   const save = async () => {
     if (
-      unavailable ||
+      importUnavailable ||
       lock.current ||
       !pending.length ||
       (stopCount && !confirmedStop)
@@ -305,9 +326,7 @@ export function ProductOperatingFeedbackExchange({
         <Button
           size="small"
           icon={<UploadOutlined />}
-          disabled={
-            unavailable || !!busy || !items.some((item) => item.canEdit)
-          }
+          disabled={!!busy}
           onClick={() => {
             reset();
             setOpen(true);
@@ -319,8 +338,9 @@ export function ProductOperatingFeedbackExchange({
           size="small"
           icon={<DownloadOutlined />}
           loading={busy === "export"}
-          disabled={unavailable || !!busy}
-          onClick={() => void exportFeedback()}
+          disabled={disabled || !!busy}
+          title={selectionScoped ? "导出所勾选的款号" : "导出当前筛选结果"}
+          onClick={() => void downloadWorkbook("export")}
         >
           导出反馈
         </Button>
@@ -345,7 +365,7 @@ export function ProductOperatingFeedbackExchange({
               type="primary"
               loading={busy === "write"}
               disabled={
-                unavailable ||
+                importUnavailable ||
                 !!busy ||
                 !!error ||
                 !pending.length ||
@@ -360,10 +380,24 @@ export function ProductOperatingFeedbackExchange({
       >
         <Space orientation="vertical" size={12} style={{ width: "100%" }}>
           <span>
-            先导出所选款号的反馈，填写后选择 Excel 文件预览。每次最多{" "}
-            {operatingFeedbackWorkbookLimit} 款。
+            下载反馈模板并填写款号与反馈，再选择 Excel 文件预览。每次最多导入{" "}
+            {operatingFeedbackWorkbookLimit} 条记录。
+            {selectionScoped
+              ? "本次只匹配已勾选的款号。"
+              : "未勾选时，按文件里的款号匹配当前筛选结果。"}
+          </span>
+          <span>
+            同款号有多条记录时，可只勾选目标记录，或保留导出文件里的「档案行ID」。
           </span>
           <Space wrap>
+            <Button
+              icon={<DownloadOutlined />}
+              loading={busy === "template"}
+              disabled={!!busy}
+              onClick={() => void downloadWorkbook("template")}
+            >
+              下载反馈模板
+            </Button>
             <input
               ref={fileInput}
               type="file"
@@ -377,7 +411,7 @@ export function ProductOperatingFeedbackExchange({
               }}
             />
             <Button
-              disabled={unavailable || !!busy}
+              disabled={importUnavailable || !!busy}
               onClick={() => fileInput.current?.click()}
             >
               选择 Excel 文件
@@ -386,13 +420,18 @@ export function ProductOperatingFeedbackExchange({
               <span style={{ overflowWrap: "anywhere" }}>{fileName}</span>
             )}
           </Space>
+          {!disabled && importUnavailable && (
+            <span>
+              当前范围没有可编辑的反馈记录。可下载模板，或调整筛选范围。
+            </span>
+          )}
           {busy === "read" && <span role="status">正在读取反馈文件…</span>}
           {error && <Alert type="error" showIcon title={error} />}
           {!!lines.length && (
             <>
               <span role="status">
-                {lines.length} 款，{pending.length} 款待提交，{savedCount}{" "}
-                款已保存，{failedCount} 款失败
+                {lines.length} 条记录，{pending.length} 条待提交，
+                {savedCount} 条已保存，{failedCount} 条失败
               </span>
               {stopCount > 0 && (
                 <Checkbox
@@ -400,8 +439,8 @@ export function ProductOperatingFeedbackExchange({
                   checked={confirmedStop}
                   onChange={(event) => setConfirmedStop(event.target.checked)}
                 >
-                  确认记录 {stopCount}{" "}
-                  款停售决定。保存后显示「已确认停售」和「不允许补货」。
+                  确认提交 {stopCount}{" "}
+                  条停售决定。保存后显示「已确认停售」和「不允许补货」。
                 </Checkbox>
               )}
               <Table<FeedbackLine>

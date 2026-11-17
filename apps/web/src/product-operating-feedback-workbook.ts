@@ -12,6 +12,7 @@ export const operatingFeedbackWorkbookMaxBytes = 5 * 1024 * 1024;
 
 export type OperatingFeedbackWorkbookRow = {
   styleNo: string;
+  rowId?: string;
   feedback: Partial<OperatingFeedback>;
   version?: number;
   rowVersion?: number;
@@ -31,6 +32,7 @@ const columns = [
   { key: "confirmationReason", header: "销售状态确认原因", width: 36 },
   { key: "version", header: "反馈版本", width: 14 },
   { key: "rowVersion", header: "档案版本", width: 14 },
+  { key: "rowId", header: "档案行ID", width: 22 },
 ] as const;
 type Header = (typeof columns)[number];
 type Field = Header["key"];
@@ -51,9 +53,6 @@ const salesLabels: Record<OperatingFeedback["salesConfirmation"], string> = {
 export async function writeOperatingFeedbackWorkbook(
   items: OperatingDecisionItem[],
 ): Promise<Blob> {
-  if (items.length > operatingFeedbackWorkbookLimit)
-    throw Error(`每次最多导出 ${operatingFeedbackWorkbookLimit} 款`);
-
   const { Workbook } = await loadExcelJS();
   const workbook = new Workbook();
   const sheet = workbook.addWorksheet(sheetName, {
@@ -71,14 +70,22 @@ export async function writeOperatingFeedbackWorkbook(
     fgColor: { argb: "FF344D72" },
   };
   header.height = 25;
-  sheet.getCell("A1").note = "每行一款。请保留款号的文本格式及前导零。";
+  sheet.getCell("A1").note = "填写商品档案中的完整款号，保留文本格式和前导零。";
   sheet.getCell("B1").note = Object.values(supplyLabels).join("、");
   sheet.getCell("C1").note =
-    "多个原因用顿号分隔。选择允许或不允许补货时，原因须与补货条件一致。";
+    `可填${Object.values(supplyReasonLabels).join("、")}。多个原因用顿号分隔，原因须与补货条件一致。`;
+  const notesHint =
+    "填入要更新的说明。不带版本的行留空时保留原说明，带版本的导出行留空时清空原说明。";
+  sheet.getCell("D1").note = notesHint;
   sheet.getCell("E1").note = "填「是」或「否」。留空保留现有标记。";
   sheet.getCell("F1").note = Object.values(clearanceReasonLabels).join("、");
+  sheet.getCell("G1").note = notesHint;
   sheet.getCell("H1").note = Object.values(salesLabels).join("、");
+  sheet.getCell("I1").note = "人工确认继续销售或停售时须填写原因。";
+  sheet.getCell("J1").note = "请保留导出时的版本号，以检查反馈是否已发生修改。";
   sheet.getCell("K1").note = "请保留导出时的版本号，以检查档案是否已发生修改。";
+  sheet.getCell("L1").note =
+    "使用空白模板时可留空。同款号有多条档案时，请导出并保留目标档案行ID。";
   for (const item of items) {
     const feedback = item.feedback;
     // Keep codes and notes as literal strings, including leading zeros and "=".
@@ -96,6 +103,7 @@ export async function writeOperatingFeedbackWorkbook(
       confirmationReason: feedback.confirmationReason,
       version: String(item.version),
       rowVersion: String(item.rowVersion),
+      rowId: item.rowId,
     });
   }
   const bytes = await workbook.xlsx.writeBuffer();
@@ -124,6 +132,8 @@ function cellValue(cell: ExcelJS.Cell, header?: Header): string {
   }
   if (header?.key === "styleNo" && typeof raw === "boolean")
     throw Error(`${position}请填写有效款号`);
+  if (header?.key === "rowId" && typeof raw === "number" && raw >= 1e15)
+    throw Error(`${position}的数字档案行ID可能失真，请保留导出的文本格式`);
   return String(raw).trim();
 }
 
@@ -166,7 +176,8 @@ export async function readOperatingFeedbackWorkbook(
   if (!indexes.has("styleNo")) throw Error("第 1 行缺少「款号」表头");
 
   const entries: OperatingFeedbackWorkbookRow[] = [];
-  const seenStyles = new Map<string, number>();
+  const seenStyles = new Map<string, { line: number; rowId?: string }>();
+  const seenIds = new Map<string, number>();
   sheet.eachRow((row, line) => {
     if (line === 1) return;
     const values = new Map<Field, string>(
@@ -190,11 +201,26 @@ export async function readOperatingFeedbackWorkbook(
     const styleNo = values.get("styleNo") ?? "";
     if (!styleNo || styleNo.length > 150)
       invalid("styleNo", "须填写 1–150 个字符");
+    const rowId = values.get("rowId") || undefined;
+    if (rowId) {
+      if (
+        !/^[1-9]\d{0,18}$/.test(rowId) ||
+        BigInt(rowId) > 9223372036854775807n
+      )
+        invalid("rowId", "请填写导出文件中的有效档案行ID");
+      const priorId = seenIds.get(rowId);
+      if (priorId !== undefined)
+        invalid("rowId", `与第 ${priorId} 行档案行ID重复`);
+      seenIds.set(rowId, line);
+    }
     const styleKey = styleNo.toUpperCase();
-    const priorLine = seenStyles.get(styleKey);
-    if (priorLine !== undefined)
-      invalid("styleNo", `与第 ${priorLine} 行款号重复`);
-    seenStyles.set(styleKey, line);
+    const priorStyle = seenStyles.get(styleKey);
+    if (priorStyle && (!priorStyle.rowId || !rowId))
+      invalid(
+        "styleNo",
+        `与第 ${priorStyle.line} 行款号重复，请使用导出的档案行ID区分`,
+      );
+    seenStyles.set(styleKey, { line, rowId });
 
     const feedback: Partial<OperatingFeedback> = {};
     const supply = values.get("supply");
@@ -243,18 +269,12 @@ export async function readOperatingFeedbackWorkbook(
         ),
       );
 
-    for (const key of [
-      "supplyNote",
-      "clearanceNote",
-      "confirmationReason",
-    ] as const) {
-      const value = values.get(key);
-      if (value === undefined || (key === "confirmationReason" && !value))
-        continue;
-      if (value.length > 1000) invalid(key, "不能超过 1000 个字符");
-      feedback[key] = value;
-    }
-    const entry: OperatingFeedbackWorkbookRow = { styleNo, feedback, line };
+    const entry: OperatingFeedbackWorkbookRow = {
+      styleNo,
+      ...(rowId ? { rowId } : {}),
+      feedback,
+      line,
+    };
     for (const key of ["version", "rowVersion"] as const) {
       const value = values.get(key);
       if (!value) continue;
@@ -262,6 +282,22 @@ export async function readOperatingFeedbackWorkbook(
       if (!/^\d+$/.test(value) || !Number.isSafeInteger(version))
         invalid(key, "请填写有效的非负整数版本号");
       entry[key] = version;
+    }
+    const hasVersion =
+      entry.version !== undefined || entry.rowVersion !== undefined;
+    for (const key of [
+      "supplyNote",
+      "clearanceNote",
+      "confirmationReason",
+    ] as const) {
+      const value = values.get(key);
+      if (
+        value === undefined ||
+        (!value && (key === "confirmationReason" || !hasVersion))
+      )
+        continue;
+      if (value.length > 1000) invalid(key, "不能超过 1000 个字符");
+      feedback[key] = value;
     }
     entries.push(entry);
   });

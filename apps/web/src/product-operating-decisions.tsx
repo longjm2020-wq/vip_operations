@@ -32,7 +32,6 @@ import {
 } from "../../../packages/contracts/src/product-operating-decisions";
 import { invalidSelectionImage } from "./selection-image-links";
 import { ProductOperatingFeedbackExchange } from "./product-operating-feedback-exchange";
-import { operatingFeedbackWorkbookLimit } from "./product-operating-feedback-workbook";
 import { useSelectionWorkspace } from "./selection-workspace";
 import { useCan } from "./shared";
 import "./product-operating-decisions.css";
@@ -255,11 +254,9 @@ export function ProductOperatingDecisions({
         </section>
         <div className="product-decision-feedback-actions">
           {!!checkedItems.length && <span>已选 {checkedItems.length} 款</span>}
-          {checkedItems.length > operatingFeedbackWorkbookLimit && (
-            <span>每批最多 {operatingFeedbackWorkbookLimit} 款</span>
-          )}
           <ProductOperatingFeedbackExchange
-            items={checkedItems}
+            items={checkedItems.length ? checkedItems : visibleItems}
+            selectionScoped={checkedItems.length > 0}
             disabled={unavailable}
             onSaved={() => void query.refetch()}
           />
