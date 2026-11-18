@@ -19,6 +19,7 @@ export async function api(
     keepalive?: boolean;
     signal?: AbortSignal;
     readTimeoutMs?: number;
+    cache?: RequestCache;
   },
 ) {
   try {
@@ -29,6 +30,7 @@ export async function api(
         credentials: "include",
         ...(options?.signal ? { signal: options.signal } : {}),
         ...(options?.keepalive ? { keepalive: true } : {}),
+        ...(options?.cache ? { cache: options.cache } : {}),
         headers: {
           ...(body ? { "Content-Type": "application/json" } : {}),
           ...(method === "GET"

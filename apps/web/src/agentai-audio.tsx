@@ -43,7 +43,9 @@ export function AgentAiAudio({
   const { message } = App.useApp();
   const state = useQuery({
     queryKey: ["agentai-audio"],
-    queryFn: async () => (await api(base)).data as AgentAiAudioState,
+    queryFn: async () =>
+      (await api(base, "GET", undefined, undefined, { cache: "no-store" }))
+        .data as AgentAiAudioState,
   });
   const [model, setModel] = useState(initialModel),
     [input, setInput] = useState("");
@@ -179,7 +181,7 @@ export function AgentAiAudio({
   return (
     <Space direction="vertical" size="middle" style={{ width: "100%" }}>
       <QueryState error={state.error} reload={() => state.refetch()} />
-      {!ready && (
+      {state.data && !ready && (
         <Alert type="info" showIcon message="先启用 AgentAI 并同步模型目录" />
       )}
       <Tabs
