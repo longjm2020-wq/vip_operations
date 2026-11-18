@@ -140,9 +140,17 @@ async function network(url: string | URL, init: RequestInit = {}) {
 }
 beforeAll(async () => {
   fixture.db = new PGlite();
-  await fixture.db
-    .exec(`CREATE TABLE users(id bigint PRIMARY KEY); INSERT INTO users VALUES(7),(8);
-    CREATE TABLE audit_logs(id bigserial,actor_id bigint,actor_label text,action text,entity_type text,entity_id text,request_id text,before_data jsonb,after_data jsonb,reason text);`);
+  await fixture.db.exec(
+    "CREATE TABLE users(id bigint PRIMARY KEY); INSERT INTO users VALUES(7),(8)",
+  );
+  // Load the production DDL: a text-only entity_id fixture masked UUID writes.
+  const initial = await readFile(
+    "packages/database/migrations/001_initial.sql",
+    "utf8",
+  );
+  const auditDdl = initial.match(/CREATE TABLE audit_logs \([\s\S]*?\);/)?.[0];
+  if (!auditDdl) throw Error("Production audit schema missing");
+  await fixture.db.exec(auditDdl);
   await installAiManagementSchema(fixture.db);
   const migration = await readFile(
     "packages/database/migrations/107_agentai_audio.sql",
@@ -254,6 +262,13 @@ it("quotes real parameters privately, submits once without pinning and replays t
   expect(
     (await query("SELECT count(*)::int AS count FROM ai_model_usage"))[0].count,
   ).toBe(1);
+  const audit = (await query("SELECT entity_id,after_data FROM audit_logs"))[0];
+  expect(audit.entity_id).toBeNull();
+  expect(audit.after_data).toMatchObject({
+    taskId: first.id,
+    model: "doubao-tts-2.0",
+    characters: 6,
+  });
 });
 
 it("uses true terminal receipts for completion, keeps pending tasks pending and meters the final cost once", async () => {

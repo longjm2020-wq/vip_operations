@@ -470,7 +470,7 @@ export function AiModelManagementPage({
                 : "语音模型配置"
         }
         open={!!drawer}
-        width={680}
+        width={drawer === "agentai" ? 960 : 680}
         destroyOnHidden
         onClose={() => {
           setDrawer(undefined);

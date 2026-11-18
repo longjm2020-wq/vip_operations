@@ -375,9 +375,11 @@ async function reserveTask(
       c,
       options.kind === "clone" ? "agentai.audio.clone" : "agentai.audio.speech",
       "agentai_audio_task",
-      task!.id,
+      // The shared audit entity_id is BIGINT; UUID tasks belong in JSON data.
+      null,
       null,
       {
+        taskId: task!.id,
         model: options.model,
         characters: options.characters || 0,
         consentStatementVersion:
