@@ -526,6 +526,7 @@ export function agentaiChatBody(body: Row) {
     "response_format",
     "parallel_tool_calls",
     "reasoning_effort",
+    "thinking_budget",
     "enable_thinking",
   ];
   return {
@@ -642,12 +643,14 @@ export async function testAgentAiModel(c: Context, input: unknown) {
       },
     ],
   };
-  const reasoning = catalog(s).find((m) => m.model === model)?.paramSchema
-    ?.reasoning_effort as { enum?: unknown[] } | undefined;
-  const effort = ["none", "minimal", "low"].find((item) =>
-    reasoning?.enum?.includes(item),
-  );
-  if (effort) probe.reasoning_effort = effort;
+  const parameters = catalog(s).find((m) => m.model === model)?.paramSchema;
+  for (const field of ["reasoning_effort", "thinking_budget"] as const) {
+    const declared = parameters?.[field] as { enum?: unknown[] } | undefined;
+    const effort = ["none", "minimal", "low"].find((item) =>
+      declared?.enum?.includes(item),
+    );
+    if (effort) probe[field] = effort;
+  }
   if (b.capability === "tools")
     Object.assign(probe, {
       tools: [
@@ -672,8 +675,8 @@ export async function testAgentAiModel(c: Context, input: unknown) {
     tools: "tools_verified_at",
     structured: "structured_verified_at",
   }[b.capability];
+  const signal = AbortSignal.timeout(90000);
   try {
-    const signal = AbortSignal.timeout(60000);
     const response = await sendAgentAiChat(s, probe, signal);
     if (!response.ok) httpFailure(response);
     const result = await readJson(response, signal, 300 * 1024);
@@ -732,12 +735,20 @@ export async function testAgentAiModel(c: Context, input: unknown) {
     });
     return view((await readAgentAiConnection())!);
   } catch (error) {
+    const interrupted =
+      signal.aborted ||
+      ["TimeoutError", "AbortError"].includes(
+        String((error as { name?: unknown })?.name),
+      );
+    const interruptionNote =
+      "AgentAI 验证超时或请求中断，未自动重试；请核对供应商调用日志";
     await db.$executeRawUnsafe(
       `UPDATE public.agentai_model_verifications SET ${column}=NULL,error_note=$3 WHERE model=$1 AND settings_version=$2`,
       model,
       s.version,
-      safeNote(error),
+      interrupted ? interruptionNote : safeNote(error),
     );
+    if (interrupted) fail("AGENTAI_TEST_TIMEOUT", interruptionNote, 502);
     throw error;
   }
 }

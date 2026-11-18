@@ -111,10 +111,16 @@ function Connection({
     run(
       model.id + capability,
       () =>
-        api("/ai-model-management/agentai/test", "POST", {
-          model: model.id,
-          capability,
-        }),
+        api(
+          "/ai-model-management/agentai/test",
+          "POST",
+          {
+            model: model.id,
+            capability,
+          },
+          undefined,
+          { readTimeoutMs: 110000 },
+        ),
       "模型能力验证通过",
     );
   const ready =

@@ -723,3 +723,92 @@ it("a failed price refresh preserves verified capabilities, and a late response 
   expect(replaced.models.every((m) => !m.pricing)).toBe(true);
   expect(replaced.verifiedAt).toBeNull();
 });
+
+it("uses only a model-declared low thinking_budget for the Argon probe and preserves ordinary user effort", async () => {
+  await ready();
+  await fixture.db!.query(
+    "UPDATE agentai_settings SET model_catalog=model_catalog || $1::jsonb",
+    [
+      JSON.stringify([
+        {
+          model: "gemini-4-argon",
+          name: "GM-4 Argon",
+          type: "chat",
+          available: true,
+          vision: true,
+          paramSchema: {
+            thinking_budget: {
+              type: "enum",
+              enum: ["low", "medium", "high"],
+              default: "high",
+            },
+          },
+        },
+      ]),
+    ],
+  );
+  const state = await probe("chat", "agentai/gm-4-argon");
+  expect(
+    state.models.find((m) => m.model === "gemini-4-argon")?.chatVerifiedAt,
+  ).toBeTruthy();
+  expect(posted).toHaveLength(1);
+  expect(posted[0]).toMatchObject({
+    model: "gemini-4-argon",
+    thinking_budget: "low",
+    max_tokens: 256,
+    strategy: "balanced",
+  });
+  expect(posted[0]).not.toHaveProperty("reasoning_effort");
+  expect(
+    agentaiChatBody({
+      model: "gemini-4-argon",
+      messages: [],
+      thinking_budget: "high",
+    }),
+  ).toMatchObject({ thinking_budget: "high" });
+  await probe("chat", "gpt-6.1-sol");
+  expect(posted[1]).toMatchObject({ reasoning_effort: "low" });
+  expect(posted[1]).not.toHaveProperty("thinking_budget");
+});
+
+it.each(["TimeoutError", "AbortError"])(
+  "returns a safe 502 for %s without retrying or certifying a failed probe",
+  async (name) => {
+    await ready();
+    completion = async () => {
+      throw new DOMException("private-provider-timeout " + key, name);
+    };
+    let caught: unknown;
+    try {
+      await probe("chat");
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toMatchObject({
+      status: 502,
+      ...error("AGENTAI_TEST_TIMEOUT"),
+    });
+    expect(JSON.stringify(caught)).not.toContain(key);
+    expect(JSON.stringify(caught)).not.toContain("private-provider-timeout");
+    expect(posted).toHaveLength(1);
+    expect(
+      (await readAgentAi(admin())).models.every((m) => !m.chatVerifiedAt),
+    ).toBe(true);
+    expect(await query("SELECT * FROM agentai_model_verifications")).toEqual(
+      [],
+    );
+  },
+);
+
+it("allows ninety seconds for one capability probe without changing its output budget or retrying", async () => {
+  await ready();
+  const timeout = vi.spyOn(AbortSignal, "timeout");
+  try {
+    await probe("chat");
+    expect(timeout.mock.calls).toEqual([[90000]]);
+    expect(posted).toHaveLength(1);
+    expect(posted[0].max_tokens).toBe(256);
+  } finally {
+    timeout.mockRestore();
+  }
+});

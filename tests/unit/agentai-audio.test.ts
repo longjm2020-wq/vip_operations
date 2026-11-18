@@ -19,9 +19,20 @@ const fixture = vi.hoisted(() => ({
   downloads: 0,
   pinned: "",
   redirect: "",
+  addresses: null as { address: string; family: number }[] | null,
+  attempted: [] as string[],
+  failures: [] as string[],
+  hang: false,
+  dnsHang: false,
+  bodyHang: false,
+  redirects: [] as string[],
+  responseDelays: [] as number[],
 }));
 vi.mock("node:dns/promises", () => ({
-  lookup: async () => [{ address: fixture.address, family: 4 }],
+  lookup: async () =>
+    fixture.dnsHang
+      ? new Promise<never>(() => {})
+      : fixture.addresses || [{ address: fixture.address, family: 4 }],
 }));
 vi.mock("node:https", async () => {
   const { EventEmitter } = await import("node:events");
@@ -38,6 +49,7 @@ vi.mock("node:https", async () => {
         { all: true },
         (_error: unknown, result: { address: string }[]) => {
           fixture.pinned = result[0].address;
+          fixture.attempted.push(result[0].address);
         },
       );
       expect(options.agent).toBe(false);
@@ -47,14 +59,33 @@ vi.mock("node:https", async () => {
         req.emit("error", error);
       };
       req.end = () => {
-        const response = Readable.from([
-          Buffer.from("ID3returned audio"),
-        ]) as any;
-        response.statusCode = fixture.redirect ? 302 : 200;
-        response.headers = fixture.redirect
-          ? { location: fixture.redirect }
-          : { "content-type": "audio/mpeg" };
-        receive(response);
+        if (fixture.hang) return;
+        if (fixture.failures.includes(fixture.pinned)) {
+          req.emit(
+            "error",
+            Object.assign(Error("fixture transport failure"), {
+              code: "ECONNREFUSED",
+            }),
+          );
+          return;
+        }
+        const socket = new EventEmitter();
+        req.emit("socket", socket);
+        socket.emit("secureConnect");
+        const nextRedirect = fixture.redirects.shift() || fixture.redirect;
+        const receiveResponse = () => {
+          const response = fixture.bodyHang
+            ? (new Readable({ read() {} }) as any)
+            : (Readable.from([Buffer.from("ID3returned audio")]) as any);
+          response.statusCode = nextRedirect ? 302 : 200;
+          response.headers = nextRedirect
+            ? { location: nextRedirect }
+            : { "content-type": "audio/mpeg" };
+          receive(response);
+        };
+        const delay = fixture.responseDelays.shift() || 0;
+        if (delay) setTimeout(receiveResponse, delay);
+        else receiveResponse();
       };
       return req;
     },
@@ -89,6 +120,7 @@ import {
   audioParams,
   createAgentAiSpeech,
   createAgentAiVoice,
+  downloadAgentAiAudio,
   estimateAgentAiAudio,
   inspectVoiceSample,
   readAgentAiAudio,
@@ -182,6 +214,14 @@ beforeEach(async () => {
   fixture.downloads = 0;
   fixture.pinned = "";
   fixture.redirect = "";
+  fixture.addresses = null;
+  fixture.attempted = [];
+  fixture.failures = [];
+  fixture.hang = false;
+  fixture.dnsHang = false;
+  fixture.bodyHang = false;
+  fixture.redirects = [];
+  fixture.responseDelays = [];
   quoteResponse = {
     effective_total_rmb: 0.1,
     max_effective_total_rmb: 0.15,
@@ -201,6 +241,8 @@ beforeEach(async () => {
   vi.stubGlobal("fetch", vi.fn(network));
 });
 afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
 });
@@ -628,4 +670,114 @@ it("pins public DNS addresses when proxying audio and rejects private DNS and re
     error("AGENTAI_AUDIO_DOWNLOAD_FAILED"),
   );
   expect(fixture.downloads).toBe(2);
+});
+
+it("prefers validated public IPv4 over an earlier IPv6 answer and retries only safe GET candidates", async () => {
+  fixture.addresses = [
+    { address: "2606:4700:4700::1111", family: 6 },
+    { address: "1.1.1.1", family: 4 },
+    { address: "8.8.8.8", family: 4 },
+  ];
+  fixture.failures = ["1.1.1.1"];
+  expect(
+    (
+      await downloadAgentAiAudio("https://audio.real-cdn.net/output.mp3")
+    ).toString(),
+  ).toBe("ID3returned audio");
+  expect(fixture.attempted).toEqual(["1.1.1.1", "8.8.8.8"]);
+  expect(calls).toHaveLength(0);
+});
+
+it("rejects the whole DNS answer when any candidate is private before attempting a public fallback", async () => {
+  fixture.addresses = [
+    { address: "1.1.1.1", family: 4 },
+    { address: "127.0.0.1", family: 4 },
+  ];
+  await expect(
+    downloadAgentAiAudio("https://audio.real-cdn.net/output.mp3"),
+  ).rejects.toMatchObject({ code: "AUDIO_DNS_PRIVATE", phase: "DNS" });
+  expect(fixture.downloads).toBe(0);
+});
+
+it("bounds DNS and all connection candidates within one total deadline", async () => {
+  vi.useFakeTimers();
+  fixture.addresses = Array.from({ length: 8 }, (_, i) => ({
+    address: `8.8.8.${i + 1}`,
+    family: 4,
+  }));
+  fixture.hang = true;
+  const result = downloadAgentAiAudio(
+    "https://audio.real-cdn.net/output.mp3",
+  ).catch((error) => error);
+  await vi.advanceTimersByTimeAsync(25001);
+  expect(await result).toMatchObject({ code: "AUDIO_DEADLINE" });
+  expect(fixture.downloads).toBeLessThanOrEqual(5);
+  expect(vi.getTimerCount()).toBe(0);
+  fixture.hang = false;
+  fixture.dnsHang = true;
+  const dns = downloadAgentAiAudio(
+    "https://audio.real-cdn.net/output.mp3",
+  ).catch((error) => error);
+  await vi.advanceTimersByTimeAsync(8001);
+  expect(await dns).toMatchObject({ code: "AUDIO_DNS_TIMEOUT", phase: "DNS" });
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+it("keeps the total deadline while a connected response never finishes", async () => {
+  vi.useFakeTimers();
+  fixture.bodyHang = true;
+  const result = downloadAgentAiAudio(
+    "https://audio.real-cdn.net/output.mp3",
+  ).catch((error) => error);
+  await vi.advanceTimersByTimeAsync(25001);
+  expect(await result).toMatchObject({
+    code: "AUDIO_DEADLINE",
+    phase: "DOWNLOAD",
+  });
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+it("shares one total deadline across a delayed redirect and a hanging final response", async () => {
+  vi.useFakeTimers();
+  fixture.bodyHang = true;
+  fixture.redirects = ["https://second.real-cdn.net/final.mp3"];
+  fixture.responseDelays = [9000, 0];
+  const result = downloadAgentAiAudio(
+    "https://audio.real-cdn.net/output.mp3",
+  ).catch((error) => error);
+  await vi.advanceTimersByTimeAsync(25001);
+  expect(await result).toMatchObject({
+    code: "AUDIO_DEADLINE",
+    phase: "DOWNLOAD",
+  });
+  expect(fixture.downloads).toBe(2);
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+it("logs only task identifier and safe error code/phase when an authorized result cannot be downloaded", async () => {
+  const c = admin(),
+    quote = await estimateAgentAiAudio(c, input());
+  const task = await createAgentAiSpeech(c, {
+    quoteId: quote.quoteId,
+    requestId: randomUUID(),
+  });
+  await fixture.db!.query(
+    "UPDATE agentai_audio_tasks SET status='completed',output_url='https://audio.real-cdn.net/result.mp3?token=private-fixture-token' WHERE id=$1",
+    [task.id],
+  );
+  const log = vi.spyOn(console, "warn").mockImplementation(() => {});
+  fixture.address = "127.0.0.1";
+  await expect(agentAiAudioResult(c, task.id)).rejects.toMatchObject(
+    error("AGENTAI_AUDIO_DOWNLOAD_FAILED"),
+  );
+  expect(log).toHaveBeenCalledTimes(1);
+  expect(JSON.parse(log.mock.calls[0][0])).toEqual({
+    event: "agentai_audio_download_failed",
+    taskId: task.id,
+    code: "AUDIO_DNS_PRIVATE",
+    phase: "DNS",
+  });
+  expect(JSON.stringify(log.mock.calls)).not.toMatch(
+    /real-cdn|private-fixture-token|fixture-audio-key/,
+  );
 });

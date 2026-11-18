@@ -844,28 +844,99 @@ for (const [address, prefix] of [
   ["ff00::", 8],
 ] as const)
   blockedV6.addSubnet(address, prefix, "ipv6");
-async function downloadAudio(value: string, redirects = 0): Promise<Buffer> {
-  const url = safeAudioUrl(value);
-  if (!url) fail("AGENTAI_AUDIO_RESULT_INVALID", "语音结果地址无效", 502);
-  const addresses = await lookup(url.hostname, { all: true });
-  if (
-    !addresses.length ||
-    addresses.some((a) =>
-      a.family === 4
-        ? blockedV4.check(a.address, "ipv4")
-        : blockedV6.check(a.address, "ipv6"),
-    )
-  )
-    fail("AGENTAI_AUDIO_RESULT_INVALID", "语音结果地址不可访问", 502);
-  // Pin the validated public address into the TLS request, preventing a second
-  // DNS lookup from rebinding the result request to an internal address.
-  const address = addresses[0];
-  return new Promise<Buffer>((resolve, reject) => {
+type DownloadPhase =
+  "URL" | "DNS" | "CONNECT" | "RESPONSE" | "DOWNLOAD" | "REDIRECT";
+class AudioDownloadError extends Error {
+  constructor(
+    readonly code: string,
+    readonly phase: DownloadPhase,
+    readonly retryable = false,
+  ) {
+    super(code);
+  }
+}
+const totalDownloadMs = 25000;
+const transportCodes = new Set([
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "EAI_FAIL",
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "ENETUNREACH",
+  "EHOSTUNREACH",
+  "EADDRNOTAVAIL",
+  "ETIMEDOUT",
+  "EPIPE",
+  "ERR_STREAM_PREMATURE_CLOSE",
+  "CERT_HAS_EXPIRED",
+  "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+  "SELF_SIGNED_CERT_IN_CHAIN",
+  "DEPTH_ZERO_SELF_SIGNED_CERT",
+  "ERR_TLS_CERT_ALTNAME_INVALID",
+]);
+function transportError(error: unknown, phase: DownloadPhase) {
+  if (error instanceof AudioDownloadError) return error;
+  const code =
+    typeof error === "object" && error !== null && "code" in error
+      ? String(error.code)
+      : "";
+  return new AudioDownloadError(
+    transportCodes.has(code) ? code : "AUDIO_TRANSPORT",
+    phase,
+    true,
+  );
+}
+async function resolveAudioHost(host: string, deadline: number) {
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) throw new AudioDownloadError("AUDIO_DEADLINE", "DNS");
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      lookup(host, { all: true }),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+          () =>
+            reject(
+              new AudioDownloadError(
+                remaining <= 8000 ? "AUDIO_DEADLINE" : "AUDIO_DNS_TIMEOUT",
+                "DNS",
+              ),
+            ),
+          Math.min(8000, remaining),
+        );
+      }),
+    ]);
+  } catch (error) {
+    throw transportError(error, "DNS");
+  } finally {
+    clearTimeout(timer);
+  }
+}
+async function fetchAudioAddress(
+  url: URL,
+  address: { address: string; family: number },
+  deadline: number,
+): Promise<Buffer | URL> {
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) throw new AudioDownloadError("AUDIO_DEADLINE", "CONNECT");
+  return new Promise<Buffer | URL>((resolve, reject) => {
+    let phase: DownloadPhase = "CONNECT",
+      settled = false;
+    const finish = (error?: AudioDownloadError, value?: Buffer | URL) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(totalTimer);
+      clearTimeout(connectTimer);
+      if (error) reject(error);
+      else resolve(value!);
+    };
     const req = httpsRequest(
       url,
       {
         method: "GET",
         agent: false,
+        family: address.family,
+        // Every attempt connects only to an address checked before this request.
         lookup: (_host, options, done) => {
           if (typeof options === "object" && "all" in options && options.all) {
             (
@@ -876,54 +947,166 @@ async function downloadAudio(value: string, redirects = 0): Promise<Buffer> {
             )(null, [address]);
           } else done(null, address.address, address.family);
         },
-        timeout: 30000,
+        timeout: Math.min(10000, remaining),
         headers: { accept: "audio/*,application/octet-stream" },
       },
       (response) => {
+        clearTimeout(connectTimer);
+        phase = "RESPONSE";
         if ([301, 302, 303, 307, 308].includes(response.statusCode || 0)) {
-          response.resume();
-          if (redirects >= 3 || !response.headers.location)
-            return reject(Error("AUDIO_REDIRECT"));
-          void downloadAudio(
-            new URL(response.headers.location, url).href,
-            redirects + 1,
-          ).then(resolve, reject);
+          try {
+            if (!response.headers.location)
+              throw new AudioDownloadError("AUDIO_REDIRECT", "REDIRECT");
+            finish(undefined, new URL(response.headers.location, url));
+          } catch {
+            finish(new AudioDownloadError("AUDIO_REDIRECT", "REDIRECT"));
+          }
+          response.destroy();
+          req.destroy();
           return;
         }
-        if (
-          response.statusCode !== 200 ||
-          Number(response.headers["content-length"] || 0) > 64 * MiB
-        ) {
-          response.resume();
-          reject(Error("AUDIO_DOWNLOAD"));
+        if (response.statusCode !== 200) {
+          const status = response.statusCode || 0;
+          finish(
+            new AudioDownloadError(
+              `AUDIO_HTTP_${status}`,
+              "RESPONSE",
+              status >= 500 && status <= 599,
+            ),
+          );
+          response.destroy();
+          req.destroy();
           return;
         }
+        if (Number(response.headers["content-length"] || 0) > 64 * MiB) {
+          finish(new AudioDownloadError("AUDIO_LIMIT", "DOWNLOAD"));
+          response.destroy();
+          req.destroy();
+          return;
+        }
+        phase = "DOWNLOAD";
         const chunks: Buffer[] = [];
         let size = 0;
         response.on("data", (chunk) => {
           size += chunk.length;
-          if (size > 64 * MiB) req.destroy(Error("AUDIO_LIMIT"));
-          else chunks.push(chunk);
+          if (size > 64 * MiB) {
+            const error = new AudioDownloadError("AUDIO_LIMIT", "DOWNLOAD");
+            finish(error);
+            req.destroy(error);
+          } else chunks.push(chunk);
         });
-        response.on("end", () => {
-          if (!size) reject(Error("AUDIO_EMPTY"));
-          else resolve(Buffer.concat(chunks));
-        });
-        response.on("error", reject);
+        response.on("end", () =>
+          finish(
+            size
+              ? undefined
+              : new AudioDownloadError("AUDIO_EMPTY", "DOWNLOAD", true),
+            size ? Buffer.concat(chunks) : undefined,
+          ),
+        );
+        response.on("aborted", () =>
+          finish(new AudioDownloadError("AUDIO_TRUNCATED", "DOWNLOAD", true)),
+        );
+        response.on("error", (error) =>
+          finish(transportError(error, "DOWNLOAD")),
+        );
       },
     );
-    req.on("timeout", () => req.destroy(Error("AUDIO_TIMEOUT")));
-    req.on("error", reject);
+    req.on("socket", (socket) => {
+      socket.once("secureConnect", () => {
+        clearTimeout(connectTimer);
+        phase = "RESPONSE";
+      });
+    });
+    req.on("error", (error) => finish(transportError(error, phase)));
+    req.on("timeout", () => {
+      const error = new AudioDownloadError("AUDIO_IDLE_TIMEOUT", phase, true);
+      finish(error);
+      req.destroy(error);
+    });
+    const totalTimer = setTimeout(() => {
+      const error = new AudioDownloadError("AUDIO_DEADLINE", phase);
+      finish(error);
+      req.destroy(error);
+    }, remaining);
+    const connectTimer = setTimeout(
+      () => {
+        const error = new AudioDownloadError(
+          "AUDIO_CONNECT_TIMEOUT",
+          "CONNECT",
+          true,
+        );
+        finish(error);
+        req.destroy(error);
+      },
+      Math.min(5000, remaining),
+    );
     req.end();
   });
 }
+async function downloadAudio(
+  value: string,
+  deadline: number,
+  redirects = 0,
+): Promise<Buffer> {
+  const url = safeAudioUrl(value);
+  if (!url) throw new AudioDownloadError("AUDIO_URL_INVALID", "URL");
+  if (Date.now() >= deadline)
+    throw new AudioDownloadError("AUDIO_DEADLINE", "URL");
+  const addresses = await resolveAudioHost(url.hostname, deadline);
+  if (
+    !addresses.length ||
+    addresses.length > 32 ||
+    addresses.some(
+      (a) =>
+        ![4, 6].includes(a.family) ||
+        isIP(a.address) !== a.family ||
+        (a.family === 4
+          ? blockedV4.check(a.address, "ipv4")
+          : blockedV6.check(a.address, "ipv6")),
+    )
+  )
+    throw new AudioDownloadError("AUDIO_DNS_PRIVATE", "DNS");
+  const candidates = [...addresses]
+    .sort((a, b) => a.family - b.family)
+    .slice(0, 8);
+  let last: AudioDownloadError | undefined;
+  for (const address of candidates) {
+    let result: Buffer | URL;
+    try {
+      result = await fetchAudioAddress(url, address, deadline);
+    } catch (error) {
+      last = transportError(error, "CONNECT");
+      if (!last.retryable || Date.now() >= deadline) throw last;
+      continue;
+    }
+    if (result instanceof URL) {
+      if (redirects >= 3)
+        throw new AudioDownloadError("AUDIO_REDIRECT_LIMIT", "REDIRECT");
+      return downloadAudio(result.href, deadline, redirects + 1);
+    }
+    return result;
+  }
+  throw last || new AudioDownloadError("AUDIO_CONNECT_FAILED", "CONNECT");
+}
+/** Read-only download; retries never enter any model-generation endpoint. */
+export const downloadAgentAiAudio = (value: string) =>
+  downloadAudio(value, Date.now() + totalDownloadMs);
 export async function agentAiAudioResult(c: Context, id: unknown) {
   const task = await ownedTask(c, id);
   if (task.kind !== "speech" || task.status !== "completed" || !task.output_url)
     fail("AGENTAI_AUDIO_NOT_READY", "音频尚未完成", 409);
-  const bytes = await downloadAudio(task.output_url).catch(() =>
-    fail("AGENTAI_AUDIO_DOWNLOAD_FAILED", "音频下载暂未完成，请稍后再试", 502),
-  );
+  const bytes = await downloadAgentAiAudio(task.output_url).catch((error) => {
+    const safe = transportError(error, "DOWNLOAD");
+    console.warn(
+      JSON.stringify({
+        event: "agentai_audio_download_failed",
+        taskId: task.id,
+        code: safe.code,
+        phase: safe.phase,
+      }),
+    );
+    fail("AGENTAI_AUDIO_DOWNLOAD_FAILED", "音频下载暂未完成，请稍后再试", 502);
+  });
   return {
     bytes,
     mime: task.response_format === "wav" ? "audio/wav" : "audio/mpeg",
