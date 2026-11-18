@@ -110,9 +110,11 @@ const safeNote = (error: unknown) => {
     ? "配置已变更，本次结果未用于新连接"
     : code === "AGENTAI_MODEL_MISMATCH"
       ? "返回型号与请求不一致，未验证通过"
-      : code === "AGENTAI_CAPABILITY_UNVERIFIED"
-        ? "未返回所要求的能力验证结果"
-        : "AgentAI 验证未完成，请核对连接、权限与额度；未自动重试";
+      : code === "AGENTAI_RESPONSE_INCOMPLETE"
+        ? "响应缺少可核对的请求标识，未验证通过"
+        : code === "AGENTAI_CAPABILITY_UNVERIFIED"
+          ? "未返回所要求的能力验证结果"
+          : "AgentAI 验证未完成，请核对连接、权限与额度；未自动重试";
 };
 function catalog(s?: Row): AgentAiCatalogModel[] {
   const models: AgentAiCatalogModel[] =
@@ -680,8 +682,24 @@ export async function testAgentAiModel(c: Context, input: unknown) {
     const response = await sendAgentAiChat(s, probe, signal);
     if (!response.ok) httpFailure(response);
     const result = await readJson(response, signal, 300 * 1024);
-    if (result.model !== model || !result.id)
+    if (result.model !== model)
       fail("AGENTAI_MODEL_MISMATCH", "返回型号与请求不一致，未验证通过", 502);
+    const boundedReceipt = (value: unknown) =>
+      typeof value === "string" &&
+      value.trim().length > 0 &&
+      value.length <= 200 &&
+      !/[\u0000-\u001f\u007f]/.test(value);
+    // AgentAI documents X-Request-Id for every response. Some native model
+    // adapters omit Chat Completions' body id while retaining this receipt.
+    if (
+      !boundedReceipt(result.id) &&
+      !boundedReceipt(response.headers.get("X-Request-Id"))
+    )
+      fail(
+        "AGENTAI_RESPONSE_INCOMPLETE",
+        "响应缺少可核对的请求标识，未验证通过",
+        502,
+      );
     const choice = result.choices?.[0],
       message = choice?.message;
     if (!message || message.refusal || choice.finish_reason === "length")

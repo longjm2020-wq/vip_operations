@@ -812,3 +812,79 @@ it("allows ninety seconds for one capability probe without changing its output b
     timeout.mockRestore();
   }
 });
+
+it.each(["chat", "tools", "structured"] as const)(
+  "accepts the documented header receipt for %s only with the exact model and full nonce result",
+  async (capability) => {
+    await ready();
+    completion = async (body) => {
+      const value = await (await validResponse(body)).json();
+      delete value.id;
+      return new Response(JSON.stringify(value), {
+        headers: {
+          "content-type": "application/json",
+          "X-Request-Id": "provider-request-" + randomUUID(),
+        },
+      });
+    };
+    const state = await probe(capability);
+    const verified = state.models.find((m) => m.model === "gpt-6.1-sol")!;
+    expect(verified.chatVerifiedAt).toBeTruthy();
+    if (capability === "tools") expect(verified.toolsVerifiedAt).toBeTruthy();
+    if (capability === "structured")
+      expect(verified.structuredVerifiedAt).toBeTruthy();
+    expect(posted).toHaveLength(1);
+  },
+);
+
+it.each([
+  { id: undefined, header: undefined },
+  { id: 7, header: "" },
+  { id: "   ", header: "x".repeat(201) },
+])(
+  "rejects an incomplete response without a valid body or header receipt: %j",
+  async ({ id, header }) => {
+    await ready();
+    completion = async (body) => {
+      const value = await (await validResponse(body)).json();
+      delete value.id;
+      if (id !== undefined) value.id = id;
+      return new Response(JSON.stringify(value), {
+        headers: {
+          "content-type": "application/json",
+          ...(header !== undefined ? { "X-Request-Id": header } : {}),
+        },
+      });
+    };
+    await expect(probe("chat")).rejects.toMatchObject({
+      status: 502,
+      ...error("AGENTAI_RESPONSE_INCOMPLETE"),
+    });
+    expect(
+      (await readAgentAi(admin())).models.every((m) => !m.chatVerifiedAt),
+    ).toBe(true);
+    expect(posted).toHaveLength(1);
+  },
+);
+
+it("rejects a wrong model even with a valid header receipt", async () => {
+  await ready();
+  completion = async (body) => {
+    const value = await (await validResponse(body)).json();
+    delete value.id;
+    value.model = "gemini-4-argon";
+    return new Response(JSON.stringify(value), {
+      headers: {
+        "content-type": "application/json",
+        "X-Request-Id": randomUUID(),
+      },
+    });
+  };
+  await expect(probe("chat")).rejects.toMatchObject(
+    error("AGENTAI_MODEL_MISMATCH"),
+  );
+  expect(
+    (await readAgentAi(admin())).models.every((m) => !m.chatVerifiedAt),
+  ).toBe(true);
+  expect(posted).toHaveLength(1);
+});
