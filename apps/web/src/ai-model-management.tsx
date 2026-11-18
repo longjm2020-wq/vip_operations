@@ -1,6 +1,6 @@
 import { BailianChatSettings } from "./bailian-chat-settings";
 import { AgentAiSettings } from "./agentai-settings";
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import {
   Alert,
   App,
@@ -22,7 +22,7 @@ import {
   SettingOutlined,
 } from "@ant-design/icons";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import type {
   AiManagement,
   AiManagementRow,
@@ -99,6 +99,8 @@ export function AiModelManagementPage({
   const user = useUser();
   const client = useQueryClient();
   const { message } = App.useApp();
+  const [params] = useSearchParams();
+  const audioEntry = params.get("agentai") === "audio";
   const [days, setDays] = useState(30),
     [search, setSearch] = useState(""),
     [group, setGroup] = useState("全部功能");
@@ -106,6 +108,9 @@ export function AiModelManagementPage({
     [connectionsOpen, setConnectionsOpen] = useState(false),
     [drawer, setDrawer] = useState<string>(),
     [detail, setDetail] = useState<AiManagementRow>();
+  useEffect(() => {
+    if (audioEntry) setDrawer("agentai");
+  }, [audioEntry]);
   const q = useQuery({
     queryKey: ["ai-model-management", days],
     queryFn: async () =>
@@ -147,7 +152,13 @@ export function AiModelManagementPage({
     }
   };
   const configure = (row: AiManagementRow) =>
-    setDrawer(row.mode === "voice" ? row.id : "aigc");
+    setDrawer(
+      row.mode === "voice"
+        ? row.id
+        : row.mode === "agentai"
+          ? "agentai"
+          : "aigc",
+    );
   const canAigc =
     user.permissions.includes("aigc.manage") &&
     user.permissions.includes("aigc.use");
@@ -468,6 +479,7 @@ export function AiModelManagementPage({
       >
         {drawer === "agentai" ? (
           <AgentAiSettings
+            initialAudio={audioEntry}
             saved={() => {
               void refresh();
               void client.invalidateQueries({

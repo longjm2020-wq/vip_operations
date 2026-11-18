@@ -15,6 +15,7 @@ import {
   saveAgentAi,
   syncAgentAiModels,
   testAgentAiModel,
+  refreshAgentAiPrices,
 } from "./modules/workspace/agentai-connection.js";
 
 @Controller("api/v1/ai-model-management")
@@ -42,6 +43,11 @@ export class AiModelManagementController {
     @Body() body: unknown,
   ) {
     return testAgentAiModel(context(req), body);
+  }
+  @Post("agentai/prices") @Permission("analytics.manage") pricesAgentAi(
+    @Req() req: AuthRequest,
+  ) {
+    return refreshAgentAiPrices(context(req));
   }
   @Get("bailian-chat") @Permission("analytics.manage") readBailian(
     @Req() req: AuthRequest,

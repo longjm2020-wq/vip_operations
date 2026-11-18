@@ -21,6 +21,8 @@ import { inventoryCalculationWriteSchema, inventoryCalculationFieldWriteSchema, 
 import { assistantSendSchema, assistantMemorySaveSchema } from "../../../packages/contracts/src/personal-assistant.js";
 import { workspaceSaveSchema } from "../../../packages/contracts/src/personal-workspace.js";
 import { appearanceSchema } from "../../../packages/contracts/src/appearance.js";
+import { agentaiSaveSchema, agentaiTestSchema } from "../../../packages/contracts/src/agentai.js";
+import { agentAiAudioInputSchema, agentAiSpeechSchema } from "../../../packages/contracts/src/agentai-audio.js";
 import {
   listingRequestSchema,
   listingStates,
@@ -313,6 +315,41 @@ export function enrichOpenApi(doc: OpenAPIObject) {
   set("/api/v1/my-workspace/assistant/memory", "post", assistantMemorySaveSchema, "保存本人个人记忆，检查版本并发冲突");
   set("/api/v1/my-workspace/assistant/actions", "post", z.object({ id: z.string().uuid() }).strict(), "执行本人待确认同步卡片，复核当前权限并防止重复提交");
   set("/api/v1/my-workspace/assistant/clear", "post", z.object({ version: z.number().int().min(0) }).strict(), "清空本人助理对话，不修改工作台记录");
+  const agentai = "/api/v1/ai-model-management/agentai";
+  set(agentai, "get", undefined, "读取指定20型号、能力验证和账号私有价格，不调用模型");
+  set(agentai, "post", agentaiSaveSchema, "加密保存AgentAI连接，更换连接使旧价格与验证失效");
+  set(agentai + "/sync", "post", z.object({}).strict(), "认证同步指定模型和账号实际价格，不生成内容");
+  set(agentai + "/prices", "post", z.object({}).strict(), "读取账号实付价，使用五分钟缓存与ETag，不撤销模型验证");
+  set(agentai + "/test", "post", agentaiTestSchema, "单次验证指定聊天模型能力，产生实际API用量");
+  const audio = agentai + "/audio";
+  set(audio, "get", undefined, "读取本人语音制作任务和可用音色");
+  set(audio + "/estimate", "post", agentAiAudioInputSchema, "按实际语音参数获取报价及备用渠道上界");
+  set(audio + "/speech", "post", agentAiSpeechSchema, "确认报价后幂等创建语音任务，未知提交不重发");
+  set(audio + "/voices/sync", "post", z.object({}).strict(), "核对本人在本站创建的克隆音色");
+  set(audio + "/voices", "post", undefined, "上传本人已获授权的录音并创建海螺克隆音色");
+  doc.paths[audio + "/voices"]!.post!.requestBody = {
+    required: true,
+    content: { "multipart/form-data": { schema: { type: "object", required: ["file", "name", "requestId", "consentAgreed", "consentStatementVersion"], properties: {
+      file: { type: "string", format: "binary", description: "10至300秒MP3/M4A/WAV，最多20MiB" },
+      name: { type: "string", minLength: 1, maxLength: 50 },
+      requestId: { type: "string", format: "uuid" },
+      previewText: { type: "string", maxLength: 300 },
+      consentAgreed: { type: "string", enum: ["true"] },
+      consentStatementVersion: { type: "string", enum: ["voice-v1"] },
+    } } } },
+  };
+  set(audio + "/tasks/{id}/refresh", "post", z.object({}).strict(), "查询本人同一供应商任务，不重复生成");
+  set(audio + "/tasks/{id}/result", "get", undefined, "按本人任务归属安全代理已完成音频");
+  for (const methods of Object.entries(doc.paths).filter(([path]) => path.startsWith(agentai)).map(([, methods]) => methods)) {
+    for (const operation of Object.values(methods!)) {
+      if (!operation || typeof operation !== "object" || !("parameters" in operation)) continue;
+      const op = operation as any;
+      op.parameters = op.parameters.filter((p: any) => !["page", "pageSize"].includes(p.name));
+      const idParameter = op.parameters.find((p: any) => p.in === "path" && p.name === "id");
+      if (idParameter) idParameter.schema = { type: "string", format: "uuid" };
+    }
+  }
+  doc.paths[audio + "/tasks/{id}/result"]!.get!.responses = { 200: { description: "音频文件，仅本人可读", content: { "audio/mpeg": { schema: { type: "string", format: "binary" } }, "audio/wav": { schema: { type: "string", format: "binary" } } } } };
   void money;
   set(
     compass + "/ai-settings",

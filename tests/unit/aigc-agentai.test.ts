@@ -49,7 +49,7 @@ const config = () => ({
   agentaiModels: structuredClone(snapshot.models),
   enabledVideoProviders: ["agentai"],
   defaultVideoSelection: { providerId: "agentai", modelId: "minimax-h3" },
-  keyframeImageModel: "agentai-gm-3-pro-image",
+  keyframeImageModel: "agentai-gm-nb-2.1-image",
 });
 const images = [
   "https://assets.test/person.png",
@@ -61,7 +61,7 @@ const input = (duration = 4) => ({
   aspectRatio: "16:9",
   referenceImages: [...images],
 });
-const imageBody = (cfg = config(), id = "agentai-gm-3-pro-image") =>
+const imageBody = (cfg = config(), id = "agentai-gm-nb-2.1-image") =>
   keyframeImageBody(keyframeImageRoute(cfg, { modelId: id }), {
     prompt: input().prompt,
     images,
@@ -75,7 +75,7 @@ const json = (body: unknown, status = 200) =>
 const estimate = (pinned = false, duration?: number) => ({
   effective_total_rmb: 2.5,
   max_effective_total_rmb: pinned ? 2.5 : 5,
-  required_freeze_rmb: 2.5,
+  required_freeze_rmb: pinned ? 2.5 : 5,
   channels: [{ lane: "documented-lane", is_delivery_head: true }],
   ...(duration ? { price_basis: { output_duration_sec: duration } } : {}),
 });
@@ -98,16 +98,16 @@ const stubProtocol = (invoke: unknown = { task_id: "paid-task-1" }) => {
 };
 afterEach(() => vi.unstubAllGlobals());
 
-it("offers exactly four reviewed image and three video adapters with independent authenticated availability", () => {
+it("offers exactly the three approved images and nine approved videos with independent authenticated availability", () => {
   const cfg = config();
-  expect(snapshot.models).toHaveLength(7);
+  expect(snapshot.models).toHaveLength(12);
   expect(
     imageCatalog(cfg, "operator").models.filter((m: any) =>
       m.id.startsWith("agentai-"),
     ),
-  ).toHaveLength(4);
+  ).toHaveLength(3);
   expect(videoCatalog(cfg).map((p: any) => p.id)).toEqual(["agentai"]);
-  expect(videoCatalog(cfg)[0].models).toHaveLength(3);
+  expect(videoCatalog(cfg)[0].models).toHaveLength(9);
   expect(videoCatalog(cfg)[0].models.every((m: any) => m.configured)).toBe(
     true,
   );
@@ -129,7 +129,10 @@ it("offers exactly four reviewed image and three video adapters with independent
   const managed = aigcModelManagement(config(), undefined);
   const image = managed.find((row) => row.id === "aigc_image")!;
   const video = managed.find((row) => row.id === "aigc_video")!;
-  expect(image).toMatchObject({ model: "gm-3-pro-image", configured: true });
+  expect(image).toMatchObject({
+    model: "gemini-nano-banana-2.1-image",
+    configured: true,
+  });
   expect(image.source).toContain("https://agentai.token6688.com");
   expect(
     video.choices.every((choice) =>
@@ -204,7 +207,6 @@ it.each(videoCases)(
             mode: "reference",
             count: 1,
           });
-          if (id === "vo-3.1") expect(body.params.quality).toBe("快速");
         }
     const route = selectVideoRoute(cfg, { providerId: "agentai", modelId: id });
     expect(() =>
@@ -228,12 +230,12 @@ it("rejects incompatible synchronized schema, required new parameters, or too ma
   const spy = vi.fn();
   vi.stubGlobal("fetch", spy);
   cfg.agentaiModels.find(
-    (m: any) => m.publicId === body.model_id,
+    (m: any) => m.model === body.model_id,
   ).paramSchema.size.enum = ["1K"];
   await expect(prepareAgentAi(cfg, body)).rejects.toThrow(/不支持所选/);
   const next = config();
   next.agentaiModels.find(
-    (m: any) => m.publicId === body.model_id,
+    (m: any) => m.model === body.model_id,
   ).paramSchema.new_required = { required: true, type: "string" };
   await expect(prepareAgentAi(next, body)).rejects.toThrow(/新增必填参数/);
   await expect(
@@ -283,7 +285,7 @@ it("uploads validated image bytes once, using only the independent AgentAI key a
   expect(spy).toHaveBeenCalledTimes(1);
 });
 
-it("performs two free pinned estimates then exactly one image invoke through shared metering", async () => {
+it("estimates the full balanced fallback bound then invokes once without pinning a lane", async () => {
   const cfg = config(),
     route = keyframeImageRoute(cfg),
     body = imageBody(cfg);
@@ -294,26 +296,39 @@ it("performs two free pinned estimates then exactly one image invoke through sha
   });
   const runtime = { ...cfg, aiFetch };
   await dryRunKeyframe(runtime, route, body);
-  expect(spy).toHaveBeenCalledTimes(2);
+  expect(spy).toHaveBeenCalledTimes(1);
   expect(aiFetch).not.toHaveBeenCalled();
   expect(await submitKeyframe(runtime, route, body)).toBe("paid-task-1");
   expect(aiFetch).toHaveBeenCalledTimes(1);
-  expect(spy).toHaveBeenCalledTimes(3);
+  expect(spy).toHaveBeenCalledTimes(2);
   const requests = spy.mock.calls.map(([url, init]) => ({
     url: new URL(url).pathname,
     body: JSON.parse(String(init?.body)),
   }));
   expect(requests[0].url).toBe("/v1/pricing-estimate");
-  expect(requests[1].body.pinned_lane_id).toBe("documented-lane");
-  expect(requests[2]).toMatchObject({
+  expect(requests[0].body.strategy).toBe("balanced");
+  expect(requests[1]).toMatchObject({
     url: "/api/v1/model-runtime/invoke",
     body: {
-      model_id: "gm-3-pro-image",
-      lane_id: "documented-lane",
+      model_id: "gemini-nano-banana-2.1-image",
       modality: "image",
     },
   });
-  expect(requests[2].body.client_request_id).toMatch(/^[\da-f-]{36}$/);
+  expect(requests[1].body.client_request_id).toMatch(/^[\da-f-]{36}$/);
+  expect(
+    requests.every(
+      (request) =>
+        request.body.lane_id === undefined &&
+        request.body.pinned_lane_id === undefined,
+    ),
+  ).toBe(true);
+  expect(
+    spy.mock.calls.every(
+      ([, init]) =>
+        (init?.headers as Record<string, string>)["X-Schedule-Strategy"] ===
+        "balanced",
+    ),
+  ).toBe(true);
   expect(
     spy.mock.calls.every(([, init]) =>
       JSON.stringify(init?.headers).includes("agentai-fixture-key"),
@@ -341,14 +356,14 @@ it("requires a video estimate for the exact submitted input and preserves provid
   await expect(submitVideo(cfg, route, input(5), preflight)).rejects.toThrow(
     /缺少/,
   );
-  expect(spy).toHaveBeenCalledTimes(2);
+  expect(spy).toHaveBeenCalledTimes(1);
   await expect(
     submitVideo(cfg, route, input(), preflight),
   ).rejects.toMatchObject({ taskId: "adjusted-task", parameterMismatch: true });
-  expect(spy).toHaveBeenCalledTimes(3);
+  expect(spy).toHaveBeenCalledTimes(2);
 });
 
-it.each(["adjustment", "changed-price", "bad-duration", "ambiguous-lane"])(
+it.each(["adjustment", "bad-upper-bound", "bad-duration", "ambiguous-lane"])(
   "does not invoke when the free estimate reports %s",
   async (mode) => {
     const cfg = config(),
@@ -365,10 +380,10 @@ it.each(["adjustment", "changed-price", "bad-duration", "ambiguous-lane"])(
             reason: "nearest_supported",
           },
         ];
-      if (mode === "changed-price" && body.pinned_lane_id)
+      if (mode === "bad-upper-bound")
         Object.assign(value, {
           effective_total_rmb: 4,
-          max_effective_total_rmb: 4,
+          max_effective_total_rmb: 8,
           required_freeze_rmb: 4,
         });
       if (mode === "bad-duration") value.price_basis.output_duration_sec = 5;
@@ -395,7 +410,10 @@ it("never retries an uncertain paid invoke or submits after job cancellation", a
   });
   vi.stubGlobal("fetch", spy);
   await expect(submitAgentAi(cfg, prepared)).rejects.toThrow(/socket closed/);
+  await expect(submitAgentAi(cfg, prepared)).rejects.toThrow(/已提交/);
   expect(spy).toHaveBeenCalledTimes(1);
+  stubProtocol();
+  const unsubmitted = await prepareAgentAi(cfg, imageBody(cfg));
   const abort = new AbortController();
   abort.abort();
   vi.stubGlobal(
@@ -406,8 +424,47 @@ it("never retries an uncertain paid invoke or submits after job cancellation", a
     }),
   );
   await expect(
-    withJobSignal(abort.signal, () => submitAgentAi(cfg, prepared)),
+    withJobSignal(abort.signal, () => submitAgentAi(cfg, unsubmitted)),
   ).rejects.toThrow();
+});
+
+it("enforces current option availability, quality combinations and retired-model boundaries before upload or invoke", async () => {
+  const cfg = config();
+  const body = imageBody(cfg);
+  const spy = vi.fn();
+  vi.stubGlobal("fetch", spy);
+  const image = cfg.agentaiModels.find((m: any) => m.model === body.model_id);
+  image.paramSchema.aspect_ratio.options.find(
+    (o: any) => o.value === "16:9",
+  ).available_when = { size: ["1K"] };
+  await expect(prepareAgentAi(cfg, body)).rejects.toThrow(/参数组合/);
+  expect(agentaiConfigured(cfg, "gm-3-pro-image")).toBe(false);
+  expect(agentaiConfigured(cfg, undefined)).toBe(false);
+  await expect(
+    prepareAgentAi(cfg, { ...body, model_id: "gm-3-pro-image" }),
+  ).rejects.toThrow(/尚未就绪/);
+  const other = config();
+  const route = selectVideoRoute(other, {
+    providerId: "agentai",
+    modelId: "seedance-2-5-promo",
+    resolution: "1080p",
+  });
+  const video = videoRequestBody(route, input());
+  video.params.quality = "flash";
+  await expect(prepareAgentAi(other, video)).rejects.toThrow(/质量档位/);
+  await expect(
+    prepareAgentAi(other, { ...imageBody(other), lane_id: "fixed-lane" }),
+  ).rejects.toThrow(/不能锁定/);
+  expect(spy).not.toHaveBeenCalled();
+});
+
+it("does not reuse a free quote after its checked generation parameters were modified", async () => {
+  const cfg = config();
+  const spy = stubProtocol();
+  const prepared = await prepareAgentAi(cfg, imageBody(cfg));
+  prepared.params.aspect_ratio = "1:1";
+  await expect(submitAgentAi(cfg, prepared)).rejects.toThrow(/参数已变更/);
+  expect(spy).toHaveBeenCalledTimes(1);
 });
 
 it("treats is_final as authoritative and records only the terminal receipt, never estimated price as actual cost", async () => {
@@ -451,7 +508,7 @@ it("treats is_final as authoritative and records only the terminal receipt, neve
   expect(recordAiReceipt).toHaveBeenCalledWith(
     "aigc_image",
     "agentai.token6688.com",
-    "gm-3-pro-image",
+    "gemini-nano-banana-2.1-image",
     expect.objectContaining({
       task_id: "task-1",
       actual_cost_micro_usd: 12500,
@@ -505,7 +562,7 @@ it("handles failed/expired/malformed task states without generation retry or inv
     state: "failed",
   });
   await expect(
-    pollAgentAi(cfg, "gm-3-pro-image", "image", "task"),
+    pollAgentAi(cfg, "gemini-nano-banana-2.1-image", "image", "task"),
   ).rejects.toMatchObject({ terminal: true });
   expect(await pollVideo(cfg, route, "task")).toMatchObject({
     pending: false,

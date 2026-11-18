@@ -1,0 +1,7 @@
+ALTER TABLE public.agentai_settings
+  ADD COLUMN IF NOT EXISTS model_prices JSONB NOT NULL DEFAULT '[]'::jsonb,
+  ADD COLUMN IF NOT EXISTS prices_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS prices_generated_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS prices_etag TEXT,
+  ADD COLUMN IF NOT EXISTS prices_error_note TEXT NOT NULL DEFAULT '',
+  ADD COLUMN IF NOT EXISTS prices_refresh_started_at TIMESTAMPTZ;

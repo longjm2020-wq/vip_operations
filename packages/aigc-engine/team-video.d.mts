@@ -54,7 +54,9 @@ export class XhaiVideoAdjustmentError extends Error {
 }
 export function pollVideo(
   config: unknown,
-  route: VideoRoute,
+  route: { protocol: string; model: Pick<VideoModel, "model"> } & Partial<
+    Omit<VideoRoute, "model">
+  >,
   id: string,
 ): Promise<{ pending: boolean; url?: string; state: string }>;
 export function uploadXhaiImages(

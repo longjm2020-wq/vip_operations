@@ -105,6 +105,9 @@ export function providerUsage(payload: unknown, source: string): Receipt {
     model: text(response.model),
     requestId: text(
       taskId ??
+        // AgentAI clone responses use id for the new voice and task_id for
+        // the billed asynchronous task; later receipts must join that task.
+        (source === "agentai.token6688.com" ? response.task_id : null) ??
         response.id ??
         response.request_id ??
         response.task_id ??

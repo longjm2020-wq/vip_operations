@@ -15,7 +15,14 @@ import {
   type AgentAiCatalogModel,
   type AgentAiModel,
   type AgentAiStatus,
+  type AgentAiModelPricing,
+  type AgentAiPriceChannel,
 } from "../../../../../packages/contracts/src/agentai.js";
+import {
+  agentaiAllowedModels,
+  canonicalAgentAiModel,
+  isAllowedAgentAiModel,
+} from "../../../../../packages/contracts/src/agentai-policy.js";
 import type { AiFeatureId } from "../../../../../packages/contracts/src/ai-management.js";
 import { audit, command, fail, parse, type Context } from "../../core.js";
 import { aiFetch } from "../../ai-metering.js";
@@ -32,7 +39,7 @@ export const agentaiEndpoint = agentaiBaseUrl + "/chat/completions";
 export const agentaiSource = "agentai.token6688.com";
 const iso = (value: unknown) =>
   value ? new Date(String(value)).toISOString() : null;
-const canonicalModel = (value: string) => value.replace(/^agentai\//, "");
+const canonicalModel = (value: string) => canonicalAgentAiModel(value);
 export const agentaiReady = (s?: Row) =>
   Boolean(
     encryptionReady() && s?.enabled && s.api_key_encrypted && s.verified_at,
@@ -108,9 +115,26 @@ const safeNote = (error: unknown) => {
         : "AgentAI 验证未完成，请核对连接、权限与额度；未自动重试";
 };
 function catalog(s?: Row): AgentAiCatalogModel[] {
-  return s?.catalog_at && Array.isArray(s.model_catalog)
-    ? s.model_catalog
-    : agentaiCatalogSnapshot;
+  const models: AgentAiCatalogModel[] =
+    s?.catalog_at && Array.isArray(s.model_catalog)
+      ? s.model_catalog
+      : agentaiCatalogSnapshot;
+  const seen = new Set<string>();
+  return models.flatMap((m) => {
+    if (!m || typeof m !== "object") return [];
+    const model = canonicalAgentAiModel(m.model);
+    const policy = agentaiAllowedModels.find((item) => item.model === model);
+    if (!policy || policy.type !== m.type || seen.has(policy.model)) return [];
+    seen.add(policy.model);
+    return [
+      {
+        ...m,
+        model: policy.model,
+        publicId: policy.publicId,
+        name: policy.name,
+      },
+    ];
+  });
 }
 async function modelsView(
   s: Row,
@@ -128,6 +152,9 @@ async function modelsView(
     const structured = enabled && !!check?.structured_verified_at;
     return {
       ...m,
+      pricing: Array.isArray(s.model_prices)
+        ? s.model_prices.find((p: Row) => p.model === m.model)?.pricing || null
+        : null,
       id: "agentai/" + m.model,
       pdf: false,
       parameters: [
@@ -153,6 +180,10 @@ async function view(s: Row, connection: Tx = db): Promise<AgentAiStatus> {
     version: s.version,
     catalogAt: iso(s.catalog_at),
     models: await modelsView(s, connection),
+    pricesAt: iso(s.prices_at),
+    pricesGeneratedAt: iso(s.prices_generated_at),
+    pricesErrorNote: s.prices_error_note || "",
+    strategy: "balanced",
   };
 }
 export async function readAgentAi(c: Context) {
@@ -184,7 +215,7 @@ export async function saveAgentAi(
     const saved = (await one(
       tx,
       `UPDATE public.agentai_settings SET enabled=$1,api_key_encrypted=$2,
-      verified_at=NULL,last_test_at=NULL,error_note='',version=version+1,updated_by=$3::bigint,updated_at=now()
+      verified_at=NULL,last_test_at=NULL,error_note='',model_prices='[]'::jsonb,prices_at=NULL,prices_generated_at=NULL,prices_etag=NULL,prices_error_note='',prices_refresh_started_at=NULL,version=version+1,updated_by=$3::bigint,updated_at=now()
       WHERE id=1 RETURNING *`,
       b.enabled && !b.clearKey,
       key,
@@ -221,67 +252,199 @@ export function normalizeAgentAiCatalog(
       seen.has(parsed.data)
     )
       return [];
-    const publicId = agentaiModelName.safeParse(m.public_id);
-    if (
-      allowed &&
-      !allowed.has(parsed.data) &&
-      !(publicId.success && allowed.has(publicId.data))
-    )
+    const model = canonicalAgentAiModel(parsed.data);
+    const policy = agentaiAllowedModels.find((item) => item.model === model);
+    if (!policy || policy.type !== m.category || seen.has(policy.model))
+      return [];
+    if (allowed && !allowed.has(policy.model) && !allowed.has(policy.publicId))
       return [];
     if (typeof m.category !== "string" || !/^[a-z_-]{1,30}$/.test(m.category))
       return [];
-    seen.add(parsed.data);
+    seen.add(policy.model);
     return [
       {
-        model: parsed.data,
-        ...(publicId.success ? { publicId: publicId.data } : {}),
-        name:
-          typeof m.display_name === "string"
-            ? m.display_name.replace(/[\u0000-\u001f<>]/g, "").slice(0, 100)
-            : parsed.data,
+        model: policy.model,
+        publicId: policy.publicId,
+        name: policy.name,
         type: m.category,
         vision:
           Array.isArray(m.capabilities) && m.capabilities.includes("vision"),
         available: true,
-        paramSchema: Object.fromEntries(
-          Object.entries(m.param_schema || {})
-            .slice(0, 60)
-            .flatMap(([k, v]) =>
-              /^[a-zA-Z0-9_]{1,80}$/.test(k) &&
-              v &&
-              typeof v === "object" &&
-              !Array.isArray(v)
-                ? [
-                    [
-                      k,
-                      Object.fromEntries(
-                        Object.entries(v).filter(([p]) =>
-                          [
-                            "type",
-                            "enum",
-                            "min",
-                            "max",
-                            "required",
-                            "default",
-                            "max_items",
-                            "max_bytes",
-                            "available_when",
-                            "max_items_by_mode",
-                            "min_edge_px",
-                            "max_edge_px",
-                            "aspect_min",
-                            "aspect_max",
-                          ].includes(p),
-                        ),
-                      ),
-                    ],
-                  ]
-                : [],
-            ),
-        ),
+        billingMode: safeText(m.billing_mode, 40),
+        billingUnit: safeText(m.billing_unit, 40),
+        paramSchema: sanitizeAgentAiParamSchema(m.param_schema),
       },
     ];
   });
+}
+function safeText(value: unknown, max = 100) {
+  return typeof value === "string"
+    ? value.replace(/[\u0000-\u001f<>]/g, "").slice(0, max)
+    : "";
+}
+/** Keep conditional provider schemas intact while bounding untrusted JSON. */
+export function sanitizeAgentAiParamSchema(
+  value: unknown,
+): Record<string, unknown> {
+  let budget = 12000;
+  const clean = (v: unknown, depth: number): unknown => {
+    if (--budget < 0 || depth > 10) return undefined;
+    if (v === null || typeof v === "boolean") return v;
+    if (typeof v === "number") return Number.isFinite(v) ? v : undefined;
+    if (typeof v === "string") return safeText(v, 4000);
+    if (Array.isArray(v))
+      return v.slice(0, 150).map((item) => clean(item, depth + 1));
+    if (v && typeof v === "object")
+      return Object.fromEntries(
+        Object.entries(v)
+          .slice(0, 150)
+          .flatMap(([key, item]) =>
+            !["__proto__", "constructor", "prototype"].includes(key) &&
+            key.length <= 100
+              ? [[key, clean(item, depth + 1)]]
+              : [],
+          ),
+      );
+    return undefined;
+  };
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return clean(value, 0) as Record<string, unknown>;
+}
+
+type StoredPrice = { model: string; pricing: AgentAiModelPricing };
+const nonnegative = (v: unknown) =>
+  typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : null;
+const safeDate = (v: unknown) =>
+  typeof v === "string" && Number.isFinite(Date.parse(v))
+    ? new Date(v).toISOString()
+    : null;
+export function normalizeAgentAiPrices(payload: unknown): StoredPrice[] {
+  const p = payload as Row;
+  if (!Array.isArray(p?.models) || p.models.length > 1000)
+    fail("AGENTAI_PRICES_INVALID", "AgentAI 价格目录格式无效", 502);
+  const seen = new Set<string>();
+  return p.models.flatMap((m: Row) => {
+    const model = canonicalAgentAiModel(m.name);
+    if (!model || seen.has(model) || !Array.isArray(m.channel_groups))
+      return [];
+    seen.add(model);
+    const channels: AgentAiPriceChannel[] = m.channel_groups
+      .slice(0, 150)
+      .flatMap((g: Row) => {
+        if (!g || g.is_active !== true) return [];
+        const rate = nonnegative(g.success_rate_24h);
+        const source =
+          g.stats_source === "live" || g.stats_source === "estimate"
+            ? g.stats_source
+            : "unknown";
+        return [
+          {
+            vendor: safeText(g.vendor, 60),
+            laneNo:
+              typeof g.lane_no === "number" &&
+              Number.isSafeInteger(g.lane_no) &&
+              g.lane_no >= 0
+                ? g.lane_no
+                : null,
+            billingUnit: safeText(g.billing_unit, 40),
+            billingMethod: safeText(g.billing_method, 40),
+            defaultTotalRmb: nonnegative(g.user_price_rmb),
+            billedSeconds: nonnegative(g.billed_seconds),
+            inputPerMillionRmb: nonnegative(g.user_price_per_million_input_rmb),
+            outputPerMillionRmb: nonnegative(
+              g.user_price_per_million_output_rmb,
+            ),
+            // Default provider statistics must never appear as measured performance.
+            successRate24h:
+              source === "live" && rate !== null && rate <= 100 ? rate : null,
+            avgResponseSeconds:
+              source === "live" ? nonnegative(g.avg_response_seconds) : null,
+            statsSource: source,
+          },
+        ];
+      });
+    return [
+      {
+        model,
+        pricing: {
+          currency: "CNY",
+          generatedAt: safeDate(p.generated_at),
+          channels,
+        },
+      },
+    ];
+  });
+}
+
+/** Account-private, version-bound bulk price cache; no price request generates content. */
+export async function refreshAgentAiPrices(c: Context): Promise<AgentAiStatus> {
+  requireAIConfiguration(c);
+  const s = await agentaiConnection();
+  if (s.prices_at && Date.now() - new Date(s.prices_at).getTime() < 300000)
+    return view(s);
+  const claim = await one(
+    db,
+    `UPDATE public.agentai_settings SET prices_refresh_started_at=now()
+    WHERE id=1 AND enabled AND version=$1 AND
+    (prices_refresh_started_at IS NULL OR prices_refresh_started_at<now()-interval '5 minutes') RETURNING id`,
+    s.version,
+  );
+  if (!claim) return view((await readAgentAiConnection())!);
+  try {
+    const signal = AbortSignal.timeout(20000);
+    const headers: Record<string, string> = {
+      Authorization: "Bearer " + decryptSecret(s.api_key_encrypted),
+    };
+    if (
+      typeof s.prices_etag === "string" &&
+      s.prices_etag.length < 200 &&
+      !/[\r\n]/.test(s.prices_etag)
+    )
+      headers["If-None-Match"] = s.prices_etag;
+    const response = await fetch(
+      agentaiBaseUrl + "/skills/pricing?status=active",
+      { redirect: "error", signal, headers },
+    );
+    let saved: Row | undefined;
+    if (
+      response.status === 304 &&
+      s.prices_at &&
+      Array.isArray(s.model_prices)
+    ) {
+      saved = await one(
+        db,
+        "UPDATE public.agentai_settings SET prices_at=now(),prices_error_note='' WHERE id=1 AND enabled AND version=$1 RETURNING *",
+        s.version,
+      );
+    } else {
+      if (!response.ok) httpFailure(response);
+      const payload = await readJson(response, signal, 3 * 1024 * 1024);
+      const prices = normalizeAgentAiPrices(payload);
+      if (!prices.length)
+        fail("AGENTAI_PRICES_INVALID", "AgentAI 未返回指定型号的账号价格", 502);
+      const etag = response.headers.get("etag");
+      saved = await one(
+        db,
+        `UPDATE public.agentai_settings SET model_prices=$2::jsonb,prices_at=now(),prices_generated_at=$3::timestamptz,prices_etag=$4,prices_error_note=''
+        WHERE id=1 AND enabled AND version=$1 RETURNING *`,
+        s.version,
+        JSON.stringify(prices),
+        safeDate(payload.generated_at),
+        etag && etag.length < 200 && !/[\r\n]/.test(etag) ? etag : null,
+      );
+    }
+    if (!saved)
+      fail("VERSION_CONFLICT", "配置已变更，本次价格未用于新连接", 409);
+    return view(saved);
+  } catch (error) {
+    await one(
+      db,
+      "UPDATE public.agentai_settings SET prices_error_note=$2 WHERE id=1 AND version=$1 RETURNING id",
+      s.version,
+      "账号价格同步未完成，请稍后重试；现有模型连接和能力验证不受影响",
+    );
+    throw error;
+  }
 }
 export async function syncAgentAiModels(c: Context) {
   requireAIConfiguration(c);
@@ -331,7 +494,12 @@ export async function syncAgentAiModels(c: Context) {
       JSON.stringify(models),
     );
     if (!saved) fail("VERSION_CONFLICT", "配置已变更，请重新验证当前连接", 409);
-    return view(saved);
+    try {
+      return await refreshAgentAiPrices(c);
+    } catch {
+      // Price availability is independent of directory or model capability verification.
+      return view((await readAgentAiConnection())!);
+    }
   } catch (error) {
     await one(
       db,
@@ -357,12 +525,15 @@ export function agentaiChatBody(body: Row) {
     "tool_choice",
     "response_format",
     "parallel_tool_calls",
+    "reasoning_effort",
+    "enable_thinking",
   ];
   return {
     ...Object.fromEntries(
       fields.filter((k) => body[k] !== undefined).map((k) => [k, body[k]]),
     ),
     stream: false,
+    strategy: "balanced",
   };
 }
 const allowedFeatures: AiFeatureId[] = [
@@ -380,6 +551,8 @@ async function sendAgentAiChat(
   if (!allowedFeatures.includes(feature))
     fail("AI_MODEL_CAPABILITY", "此功能尚未接入 AgentAI 聊天线路", 409);
   if (!agentaiReady(s)) fail("AGENTAI_NOT_READY", "AgentAI 连接尚未验证", 503);
+  if (!isAllowedAgentAiModel(body.model, "chat"))
+    fail("AGENTAI_MODEL_UNAVAILABLE", "该 AgentAI 型号已停用，请重新选择", 409);
   return aiFetch(feature, agentaiEndpoint, {
     method: "POST",
     redirect: "error",
@@ -404,8 +577,11 @@ export async function postAgentAiChat(
       "AgentAI 连接已变更或尚未验证，未提交旧连接请求",
       409,
     );
+  const requested = canonicalAgentAiModel(body.model);
+  if (!isAllowedAgentAiModel(requested, "chat"))
+    fail("AGENTAI_MODEL_UNAVAILABLE", "该 AgentAI 型号已停用，请重新选择", 409);
   const model = (await modelsView(current)).find(
-    (m) => m.type === "chat" && m.model === body.model && m.available,
+    (m) => m.type === "chat" && m.model === requested && m.available,
   );
   if (!model?.chatVerifiedAt)
     fail("AGENTAI_MODEL_UNVERIFIED", "此 AgentAI 型号尚未完成模型验证", 409);
@@ -418,7 +594,12 @@ export async function postAgentAiChat(
       "此型号尚未验证本次所需的工具或结构化输出能力",
       409,
     );
-  return sendAgentAiChat(current, body, signal, feature);
+  return sendAgentAiChat(
+    current,
+    { ...body, model: requested },
+    signal,
+    feature,
+  );
 }
 
 export async function testAgentAiModel(c: Context, input: unknown) {
@@ -461,6 +642,12 @@ export async function testAgentAiModel(c: Context, input: unknown) {
       },
     ],
   };
+  const reasoning = catalog(s).find((m) => m.model === model)?.paramSchema
+    ?.reasoning_effort as { enum?: unknown[] } | undefined;
+  const effort = ["none", "minimal", "low"].find((item) =>
+    reasoning?.enum?.includes(item),
+  );
+  if (effort) probe.reasoning_effort = effort;
   if (b.capability === "tools")
     Object.assign(probe, {
       tools: [

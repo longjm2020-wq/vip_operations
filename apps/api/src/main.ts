@@ -34,8 +34,9 @@ import { selectionImportBodyParser } from "./selection-import-body.js";
 import { createAigcService } from "./modules/aigc/service.js";
 import { attachRealtimeRelay } from "./modules/workspace/realtime-relay.js";
 import { AiModelManagementController } from "./ai-model-management-controller.js";
+import { AgentAiAudioController } from "./modules/workspace/agentai-audio-controller.js";
 @Module({
-  controllers: [ManualController, DeerFlowModelGatewayController, AiModelManagementController],
+  controllers: [ManualController, DeerFlowModelGatewayController, AiModelManagementController, AgentAiAudioController],
   imports: [
     CompassSharesModule,
     CompetitorAnalysisModule,

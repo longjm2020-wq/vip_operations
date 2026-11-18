@@ -40,6 +40,27 @@ export type AgentAiCatalogModel = {
   vision: boolean;
   available: boolean;
   paramSchema?: Record<string, unknown>;
+  billingMode?: string;
+  billingUnit?: string;
+};
+export type AgentAiPriceChannel = {
+  vendor: string;
+  laneNo: number | null;
+  billingUnit: string;
+  billingMethod: string;
+  /** Default-parameter whole-job reference price, never a per-second/character rate. */
+  defaultTotalRmb: number | null;
+  billedSeconds: number | null;
+  inputPerMillionRmb: number | null;
+  outputPerMillionRmb: number | null;
+  successRate24h: number | null;
+  avgResponseSeconds: number | null;
+  statsSource: "live" | "estimate" | "unknown";
+};
+export type AgentAiModelPricing = {
+  currency: "CNY";
+  generatedAt: string | null;
+  channels: AgentAiPriceChannel[];
 };
 export type AgentAiModel = AgentAiCatalogModel & {
   id: string;
@@ -48,6 +69,7 @@ export type AgentAiModel = AgentAiCatalogModel & {
   chatVerifiedAt: string | null;
   toolsVerifiedAt: string | null;
   structuredVerifiedAt: string | null;
+  pricing?: AgentAiModelPricing | null;
 };
 export type AgentAiStatus = {
   enabled: boolean;
@@ -59,4 +81,8 @@ export type AgentAiStatus = {
   version: number;
   catalogAt: string | null;
   models: AgentAiModel[];
+  pricesAt?: string | null;
+  pricesGeneratedAt?: string | null;
+  pricesErrorNote?: string;
+  strategy?: "balanced";
 };

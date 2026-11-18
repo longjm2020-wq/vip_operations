@@ -45,7 +45,7 @@ async function catalog(c: Context) {
         id: modelRef(`video/${provider.id}/${model.id}`),
         name: `${provider.label} · ${model.label}`,
         model: model.model,
-        durations: route.model.durations.filter((n) => n <= 15),
+        durations: route.model.durations.filter((n) => n <= 30),
         aspects: model.aspects,
         minImages: model.inputMode === "first-frame" ? 1 : 2,
         maxImages: Math.min(4, model.maxImages),
@@ -110,7 +110,7 @@ export const videoGenerationTool = {
   function: {
     name: "generate_video",
     description:
-      "使用已配置的 AIGC 视频模型生成真实短片，最长15秒。需要本任务授权的1至4张参考图（具体数量/时长/画幅见视频目录）。返回后台任务ID，必须等待真实文件完成才能交付；不改变用户指定模型、时长或画幅。没有参考图时可先由图像成员生成。",
+      "使用已配置的 AIGC 视频模型生成真实短片，最长30秒。需要本任务授权的1至4张参考图（具体数量/时长/画幅见视频目录；Seedance 2.5 特价按次固定30秒）。返回后台任务ID，必须等待真实文件完成才能交付；不改变用户指定模型、时长或画幅。没有参考图时可先由图像成员生成。",
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -119,7 +119,7 @@ export const videoGenerationTool = {
         title: { type: "string" },
         prompt: { type: "string" },
         referenceIds: { type: "array", items: { type: "string" } },
-        duration: { type: "integer", minimum: 1, maximum: 15 },
+        duration: { type: "integer", minimum: 1, maximum: 30 },
         aspectRatio: {
           type: "string",
           enum: ["16:9", "9:16", "1:1", "4:3", "3:4"],
@@ -245,6 +245,45 @@ export async function downloadTeamVideo(
   return Buffer.concat(chunks);
 }
 
+async function waitForTeamVideo(
+  config: Awaited<ReturnType<typeof engineConfig>>,
+  route: Parameters<typeof pollVideo>[1],
+  remote: string,
+  progress: (n: number, stage: string) => Promise<void>,
+  deadline: AbortSignal,
+  minutes: number,
+) {
+  for (let poll = 0; poll < minutes * 12; poll++) {
+    deadline.throwIfAborted();
+    await progress(Math.min(85, 20 + poll), "视频模型生成中");
+    let result;
+    try {
+      result = await pollVideo(config, route, remote);
+    } catch (error) {
+      const status = (error as { statusCode?: number }).statusCode;
+      if (
+        route.protocol !== "agentai" ||
+        ![429, 500, 502, 503, 504].includes(status || 0)
+      )
+        throw error;
+      await progress(
+        Math.min(85, 20 + poll),
+        "视频状态查询暂不可用，保留原任务编号继续查询",
+      );
+      await delay(5000, undefined, { signal: deadline });
+      continue;
+    }
+    if (!result.pending) {
+      if (!result.url)
+        throw Error("视频服务未生成可下载成片，已停止；未自动重试");
+      await progress(90, "下载视频成片");
+      return downloadTeamVideo(result.url, deadline);
+    }
+    await delay(5000, undefined, { signal: deadline });
+  }
+  throw Error("视频生成等待超时，远端任务可能仍在处理；请核对后再决定重试");
+}
+
 export async function generateTeamVideo(
   c: Context,
   job: Row,
@@ -257,10 +296,34 @@ export async function generateTeamVideo(
     videoSelection,
     model: _model,
     providerRequestId: _remote,
+    providerParameterMismatch: _mismatch,
     ...raw
   } = job.input;
   const input = parse(videoGenerationSchema, raw);
   const config = await engineConfig();
+  if (_mismatch)
+    throw Error("远端任务曾调整请求参数，请人工核对原任务，未自动重试或归档");
+  const resumingAgentAi =
+    videoSelection?.providerId === "agentai" &&
+    typeof _remote === "string" &&
+    _remote.length > 0;
+  // A paid AgentAI task is queried by its saved receipt, even after a model is
+  // removed from the new-task menu. Resume never uploads or submits again.
+  if (resumingAgentAi) {
+    if (!config.videoSecrets?.AGENTAI_API_KEY)
+      throw Error("AgentAI 连接不可用，请恢复连接后查询原视频任务");
+    const deadline = AbortSignal.any([signal, AbortSignal.timeout(65 * 60000)]);
+    return withJobSignal(deadline, () =>
+      waitForTeamVideo(
+        config,
+        { protocol: "agentai", model: { model: _model } },
+        _remote,
+        progress,
+        deadline,
+        65,
+      ),
+    );
+  }
   const route = selectVideoRoute(config, videoSelection);
   if (signature(route) !== videoSelection.signature || !videoKey(config, route))
     throw Error("视频服务配置已变化，未自动换模型或重新提交");
@@ -291,7 +354,11 @@ export async function generateTeamVideo(
     if (buffer.length > 5 * 1024 * 1024) throw Error("视频参考图压缩后超过5MB");
     references.push("data:image/jpeg;base64," + buffer.toString("base64"));
   }
-  const deadline = AbortSignal.any([signal, AbortSignal.timeout(20 * 60000)]);
+  const pollMinutes = route.protocol === "agentai" ? 65 : 20;
+  const deadline = AbortSignal.any([
+    signal,
+    AbortSignal.timeout(pollMinutes * 60000),
+  ]);
   return withJobSignal(deadline, async () => {
     const payload = {
       prompt: input.prompt,
@@ -330,7 +397,10 @@ export async function generateTeamVideo(
       "UPDATE public.personal_assistant_jobs SET input=input || $3::jsonb,updated_at=now() WHERE id=$1::uuid AND lease_id=$2::uuid AND user_id=$4::bigint AND status IN ('RUNNING','CANCELED','FAILED') RETURNING id,status",
       job.id,
       job.lease_id,
-      JSON.stringify({ providerRequestId: remote }),
+      JSON.stringify({
+        providerRequestId: remote,
+        ...(adjusted ? { providerParameterMismatch: true } : {}),
+      }),
       c.actor.id,
     );
     if (!saved || saved.status !== "RUNNING")
@@ -339,18 +409,13 @@ export async function generateTeamVideo(
       throw Error(
         "视频服务已创建任务但调整了请求参数；已保存远端任务编号，请人工核对，未自动重试或归档",
       );
-    for (let poll = 0; poll < 240; poll++) {
-      deadline.throwIfAborted();
-      await progress(Math.min(85, 20 + poll), "视频模型生成中");
-      const result = await pollVideo(config, route, remote);
-      if (!result.pending) {
-        if (!result.url)
-          throw Error("视频服务未生成可下载成片，已停止；未自动重试");
-        await progress(90, "下载视频成片");
-        return downloadTeamVideo(result.url, deadline);
-      }
-      await delay(5000, undefined, { signal: deadline });
-    }
-    throw Error("视频生成等待超时，远端任务可能仍在处理；请核对后再决定重试");
+    return waitForTeamVideo(
+      config,
+      route,
+      remote,
+      progress,
+      deadline,
+      pollMinutes,
+    );
   });
 }

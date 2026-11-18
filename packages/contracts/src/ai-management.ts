@@ -135,7 +135,7 @@ export const aiFeatures = [
     group: "AIGC",
     href: "/aigc",
     boundary:
-      "通过百炼 MiniMax H3 或已适配的 AgentAI 图片参考视频型号生成视频；新任务采用所选线路，已提交任务保留原路由。AgentAI 按实际模型参数校验、估价并锁定渠道后提交，不自动重发收费任务。",
+      "通过百炼 MiniMax H3 或指定的 AgentAI 图片参考视频型号生成视频；新任务采用所选线路，已提交任务保留原路由。AgentAI 按实际模型参数估价，以智能调度综合成功率、耗时和价格选择可用渠道并容灾；不自动重复提交收费任务。",
     kind: "aigc_video",
   },
   {
@@ -188,6 +188,24 @@ export const aiFeatures = [
     boundary:
       "录制最多25秒音频，通过已配置的音频模型转成可编辑草稿；不自动发送或执行指令，不保存原始录音。与分段语音共用模型和密钥，用量独立记录。",
     kind: "audio",
+  },
+  {
+    id: "agentai_speech",
+    name: "AgentAI 语音制作",
+    group: "语音制作",
+    href: "/settings/ai?agentai=audio",
+    boundary:
+      "使用指定的海螺 2.8 或豆包 2.0 音色合成语音，每次最多5000字符。先获取账号实际参数报价，确认后提交同一持久任务；支持本人任务播放与下载，按供应商实际回执计量。独立于实时通话、听写与朗读设置。",
+    kind: "external",
+  },
+  {
+    id: "agentai_voice_clone",
+    name: "AgentAI 音色克隆",
+    group: "语音制作",
+    href: "/settings/ai?agentai=audio",
+    boundary:
+      "通过海螺 2.8 创建本人有权使用的音色；需上传合规录音并主动确认音色授权声明。音色及任务按账号隔离，保存配置不自动克隆，费用以供应商回执为准。",
+    kind: "external",
   },
   {
     id: "product_ocr",
@@ -245,7 +263,7 @@ export type AiManagementRow = {
     | "local";
   statusText: string;
   choices: AiModelChoice[];
-  mode: "select" | "voice" | "aigc" | "fixed";
+  mode: "select" | "voice" | "aigc" | "fixed" | "agentai";
   usage: AiFeatureUsage;
   usageNote: string;
 };

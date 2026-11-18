@@ -2,8 +2,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import sharp from "sharp";
 import type { Context } from "../../apps/api/src/core.js";
 import { XhaiVideoAdjustmentError } from "../../packages/aigc-engine/team-video.mjs";
+import { videoGenerationSchema } from "../../packages/contracts/src/assistant-agent.js";
 const fixture = vi.hoisted(() => ({
-  config: { videoSecrets: { TEST_KEY: "fixture-only" } },
+  config: { videoSecrets: { TEST_KEY: "fixture-only", AGENTAI_API_KEY: "" } },
   submit: vi.fn(),
   poll: vi.fn(),
   save: vi.fn(),
@@ -87,7 +88,7 @@ vi.mock("../../packages/aigc-engine/team-video.mjs", () => ({
           label: "首帧",
           inputMode: "first-frame",
           maxImages: 1,
-          durations: [5, 10, 20],
+          durations: [5, 10, 30, 60],
           aspects: ["16:9"],
           resolutions: ["720p"],
         },
@@ -108,7 +109,7 @@ vi.mock("../../packages/aigc-engine/team-video.mjs", () => ({
       label: "首帧",
       inputMode: "first-frame",
       maxImages: 1,
-      durations: [5, 10, 20],
+      durations: [5, 10, 30, 60],
       aspects: ["16:9"],
       resolutions: ["720p"],
     },
@@ -143,6 +144,7 @@ beforeEach(() => {
   fixture.downloads = [];
   fixture.requested = [];
   fixture.config.videoSecrets.TEST_KEY = "fixture-only";
+  fixture.config.videoSecrets.AGENTAI_API_KEY = "";
   fixture.submit.mockResolvedValue("remote-1");
   fixture.save.mockResolvedValue({ id: "job", status: "RUNNING" });
   fixture.poll.mockResolvedValue({ pending: false, state: "failed" });
@@ -154,7 +156,7 @@ describe("team video model adapter", () => {
       model: "fixture-first",
       minImages: 1,
       maxImages: 1,
-      durations: [5, 10],
+      durations: [5, 10, 30],
     });
     expect(JSON.stringify(result)).not.toContain("fixture-only");
     expect(
@@ -185,6 +187,83 @@ describe("team video model adapter", () => {
         aspectRatio: "16:9",
       }),
     ).resolves.toHaveProperty("info.id", model.id);
+    await expect(
+      resolveTeamVideoModel(context, model.id, {
+        referenceIds: ["ref"],
+        duration: 30,
+        aspectRatio: "16:9",
+      }),
+    ).resolves.toHaveProperty("info.id", model.id);
+    expect(
+      videoGenerationSchema.safeParse({
+        title: "视频",
+        prompt: "商品展示",
+        referenceIds: ["126c22ac-edac-4a99-8770-a4974fbe00f7"],
+        duration: 30,
+        aspectRatio: "16:9",
+      }).success,
+    ).toBe(true);
+    expect(
+      videoGenerationSchema.safeParse({
+        title: "视频",
+        prompt: "商品展示",
+        referenceIds: ["126c22ac-edac-4a99-8770-a4974fbe00f7"],
+        duration: 31,
+        aspectRatio: "16:9",
+      }).success,
+    ).toBe(false);
+  });
+  it("resumes a saved AgentAI receipt after model retirement without uploading or generating again", async () => {
+    fixture.config.videoSecrets.AGENTAI_API_KEY = "fixture-agentai-key";
+    fixture.poll.mockResolvedValue({
+      pending: false,
+      state: "success",
+      url: "https://example.com/paid.mp4",
+    });
+    const job = {
+      id: "job",
+      lease_id: "lease",
+      input: {
+        generation: true,
+        model: "vo-3.1",
+        providerRequestId: "already-paid-task",
+        videoSelection: {
+          providerId: "agentai",
+          modelId: "vo-3.1",
+          signature: "old-settings",
+        },
+        title: "旧任务",
+        prompt: "商品展示",
+        referenceIds: ["126c22ac-edac-4a99-8770-a4974fbe00f7"],
+        duration: 8,
+        aspectRatio: "16:9",
+      },
+    };
+    const bytes = await generateTeamVideo(
+      context,
+      job,
+      async () => {},
+      new AbortController().signal,
+    );
+    expect(bytes.toString()).toBe("video-bytes");
+    expect(fixture.poll).toHaveBeenCalledWith(
+      fixture.config,
+      { protocol: "agentai", model: { model: "vo-3.1" } },
+      "already-paid-task",
+    );
+    expect(fixture.submit).not.toHaveBeenCalled();
+    expect(fixture.files).not.toHaveBeenCalled();
+    fixture.poll.mockClear();
+    await expect(
+      generateTeamVideo(
+        context,
+        { ...job, input: { ...job.input, providerParameterMismatch: true } },
+        async () => {},
+        new AbortController().signal,
+      ),
+    ).rejects.toThrow(/调整请求参数/);
+    expect(fixture.poll).not.toHaveBeenCalled();
+    expect(fixture.submit).not.toHaveBeenCalled();
   });
   it("blocks private, loopback and credential-bearing video result URLs", async () => {
     for (const address of [

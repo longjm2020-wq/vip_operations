@@ -937,7 +937,7 @@ export async function runTeamExecution(
     });
   };
   const waitJob = async (id: string) => {
-    const deadline = Date.now() + 20 * 60 * 1000;
+    const deadline = Date.now() + 65 * 60 * 1000;
     while (Date.now() < deadline) {
       await check();
       const job = await one(
@@ -961,7 +961,7 @@ export async function runTeamExecution(
       await teamDelay(1200, signal);
     }
     throw new TeamNeedsUser(
-      "等待文件超过20分钟，未自动重跑；请在任务与文件中检查最终结果",
+      "等待文件超过65分钟，未自动重跑；请在任务与文件中检查最终结果",
     );
   };
   const call: TeamExecutionDependencies["call"] = async (request) => {

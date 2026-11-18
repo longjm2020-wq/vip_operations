@@ -253,6 +253,40 @@ export async function aiModelManagement(
     if (feature.kind === "team")
       row.usageNote +=
         " 各团队引擎的文字调用分别统计；搜索、图片、视频等子调用在对应功能单独统计。";
+    if (
+      feature.id === "agentai_speech" ||
+      feature.id === "agentai_voice_clone"
+    ) {
+      row.mode = "agentai";
+      row.source = agentaiSource;
+      row.model =
+        feature.id === "agentai_speech"
+          ? "海螺语音 2.8 / 豆包语音合成 2.0（按制作任务选择）"
+          : "海螺语音克隆 2.8";
+      row.status = !agentai?.enabled
+        ? "disabled"
+        : !agentai.api_key_encrypted || !encryptionReady()
+          ? "unconfigured"
+          : "configured";
+      row.statusText = agentaiReady(agentai)
+        ? "目录已连接；等待实际制作验证"
+        : "AgentAI 连接尚未启用或验证";
+      if (
+        agentaiReady(agentai) &&
+        last?.source === "agentai.token6688.com" &&
+        new Date(last.completed_at).getTime() >
+          new Date(agentai?.updated_at || 0).getTime()
+      ) {
+        if (last.status === "success") {
+          row.status = "ready";
+          row.statusText = "最近任务成功";
+        } else if (last.status === "failed")
+          row.statusText = "最近任务失败；请核对任务详情";
+      }
+      row.usageNote +=
+        " 合成输入字符单独记录；账号报价、备用渠道上界和冻结金额均不是实际费用。";
+      return row;
+    }
     if (feature.kind === "fixed") {
       row.mode = "fixed";
       row.status = "local";
@@ -352,7 +386,7 @@ export async function aiModelManagement(
         ];
       row.usageNote +=
         feature.id === "aigc_video"
-          ? " H3 记录供应商返回的输入/输出视频秒数与计费图片数；未返回金额保持未知。新生成仅提供百炼 H3，已提交任务保留原路由。"
+          ? " 记录供应商返回的输入/输出视频秒数与计费图片数；未返回金额保持未知。新任务支持百炼 H3 或指定 AgentAI 视频型号，已提交任务保留原路由。"
           : " 新默认值在服务刷新后生效（约 10 秒）；项目明确选择和已提交任务保留原型号。";
       const selectedBoundary = row.choices.find(
         (choice) => choice.value === row.selection,

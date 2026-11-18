@@ -279,7 +279,6 @@ export function keyframeImageBody(route, { prompt, images, aspectRatio }) {
         ...(model.quality
           ? {
               quality: model.quality,
-              background: "opaque",
               output_format: "png",
               moderation: "auto",
             }

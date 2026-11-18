@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { aiFetch, recordAiReceipt } from "../../ai-metering.js";
 import { featureModelRef } from "../../ai-model-routing.js";
+import { isAllowedAgentAiModel } from "../../../../../packages/contracts/src/agentai-policy.js";
 import {
   readAgentAiConnection,
   agentaiReady,
@@ -227,7 +228,12 @@ export async function engineConfig() {
     },
     agentaiModels:
       agentai?.catalog_at && Array.isArray(agentai.model_catalog)
-        ? agentai.model_catalog
+        ? agentai.model_catalog.filter(
+            (model: { model?: unknown; type?: unknown }) =>
+              typeof model.model === "string" &&
+              typeof model.type === "string" &&
+              isAllowedAgentAiModel(model.model, model.type),
+          )
         : [],
     opentalkingApiKey: secrets.OPENTALKING_GATEWAY_KEY || "",
     runninghubApiKey: secrets.RUNNINGHUB_API_KEY || "",

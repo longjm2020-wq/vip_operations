@@ -8,6 +8,12 @@ export async function installAiManagementSchema(database: PGlite) {
     ),
   );
   await database.exec(
+    await readFile(
+      "packages/database/migrations/106_agentai_prices.sql",
+      "utf8",
+    ),
+  );
+  await database.exec(
     await readFile("packages/database/migrations/095_bailian_chat.sql", "utf8"),
   );
   await database.exec(

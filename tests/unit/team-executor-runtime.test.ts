@@ -87,7 +87,7 @@ const c: Context = {
 const model = {
   id: "engine/fixed",
   name: "Test",
-  actual: "test/model",
+  actual: "gpt-6.1-sol",
   vision: true,
   pdf: true,
   structured: true,
@@ -141,7 +141,7 @@ const response = (data: unknown) =>
   Response.json({
     id: "fixture-response",
     created: 1,
-    model: "test/model",
+    model: "gpt-6.1-sol",
     choices: [
       {
         index: 0,
@@ -194,7 +194,7 @@ function toolResponse(name = "create_document") {
   return Response.json({
     id: "fixture-tool",
     created: 1,
-    model: "test/model",
+    model: "gpt-6.1-sol",
     choices: [
       {
         index: 0,
@@ -250,9 +250,9 @@ function successfulFileJob(runId: string) {
 async function configureAgentAiRuntime() {
   await f.db!.exec(`UPDATE compass_ai_settings SET enabled=false;
     UPDATE agentai_settings SET enabled=true,api_key_encrypted='agentai-test',verified_at=now(),version=1,catalog_at=now(),
-      model_catalog='[{"model":"test/model","name":"Test","type":"chat","vision":true,"available":true}]';
+      model_catalog='[{"model":"gpt-6.1-sol","name":"Test","type":"chat","vision":true,"available":true}]';
     INSERT INTO agentai_model_verifications(model,settings_version,chat_verified_at,tools_verified_at,structured_verified_at)
-      VALUES('test/model',1,now(),now(),now())`);
+      VALUES('gpt-6.1-sol',1,now(),now(),now())`);
   f.route.mockResolvedValue({ ...model, provider: "agentai" });
 }
 describe("production team adapter", () => {
@@ -590,7 +590,7 @@ describe("production team adapter", () => {
           review: "原始文件与内容已逐项核验通过",
         });
         return Response.json({
-          model: "test/model",
+          model: "gpt-6.1-sol",
           choices: [{ finish_reason: "length", message: { content: null } }],
           usage: {
             completion_tokens: 2500,
@@ -659,7 +659,7 @@ describe("production team adapter", () => {
     const empty = await runRow();
     f.fetch.mockResolvedValueOnce(
       Response.json({
-        model: "test/model",
+        model: "gpt-6.1-sol",
         choices: [{ finish_reason: "stop", message: { content: null } }],
       }),
     );
@@ -674,7 +674,7 @@ describe("production team adapter", () => {
     });
     f.fetch.mockResolvedValueOnce(
       Response.json({
-        model: "test/model",
+        model: "gpt-6.1-sol",
         choices: [
           {
             message: {
@@ -740,7 +740,7 @@ describe("production team adapter", () => {
     f.fetch
       .mockResolvedValueOnce(
         Response.json({
-          model: "test/model",
+          model: "gpt-6.1-sol",
           choices: [{ message: { content: "这是已经写好的说明正文。" } }],
         }),
       )
@@ -900,7 +900,7 @@ describe("production team adapter", () => {
       )
       .mockResolvedValueOnce(
         Response.json({
-          model: "test/model",
+          model: "gpt-6.1-sol",
           choices: [
             {
               message: {
@@ -971,7 +971,7 @@ describe("production team adapter", () => {
     expect(
       bodies.every(
         (body) =>
-          body.model === "test/model" && body.parallel_tool_calls === undefined,
+          body.model === "gpt-6.1-sol" && body.parallel_tool_calls === undefined,
       ),
     ).toBe(true);
     expect(
@@ -1048,7 +1048,7 @@ describe("production team adapter", () => {
             ])
           ).rows[0];
           expect(stored.state.steps[0]).toMatchObject({
-            model: "test/model",
+            model: "gpt-6.1-sol",
             status: "RUNNING",
           });
           return Response.json(
@@ -1076,7 +1076,7 @@ describe("production team adapter", () => {
     );
     expect(result.state.steps[0]).toMatchObject({
       status: "NEEDS_USER",
-      model: "test/model",
+      model: "gpt-6.1-sol",
       modelId: "engine/fixed",
       routeReason: "固定测试模型",
     });

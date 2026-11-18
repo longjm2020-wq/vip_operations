@@ -48,8 +48,14 @@ import {
   postAgentAiChat,
   agentaiChatBody,
   normalizeAgentAiCatalog,
+  normalizeAgentAiPrices,
+  refreshAgentAiPrices,
 } from "../../apps/api/src/modules/workspace/agentai-connection.js";
 import { connectedModelRefs } from "../../apps/api/src/ai-model-connections.js";
+import {
+  agentaiAllowedModels,
+  canonicalAgentAiModel,
+} from "../../packages/contracts/src/agentai-policy.js";
 import {
   publicAgentCatalog,
   resolveAgentModel,
@@ -78,8 +84,8 @@ const json = (body: unknown, status = 200) =>
 const logical = {
   models: [
     {
-      id: "text-model",
-      public_id: "public-text",
+      id: "gpt-6.1-sol",
+      public_id: "gt-6.1-sol",
       display_name: "Text Model",
       category: "chat",
       available: true,
@@ -89,7 +95,7 @@ const logical = {
       },
     },
     {
-      id: "vision-model",
+      id: "gpt-6-astra",
       display_name: "Vision Model",
       category: "chat",
       available: true,
@@ -97,7 +103,7 @@ const logical = {
       supported_parameters: ["tools", "structured_outputs"],
     },
     {
-      id: "media-model",
+      id: "gpt-image-2.6-flare",
       category: "image",
       available: true,
       capabilities: ["image"],
@@ -138,6 +144,27 @@ async function network(url: string | URL, init?: RequestInit) {
     expect(new Headers(init?.headers).has("authorization")).toBe(false);
     return json(logical);
   }
+  if (target === agentaiBaseUrl + "/skills/pricing?status=active")
+    return json({
+      generated_at: "2026-11-18T12:00:00Z",
+      models: [
+        {
+          name: "gt-6.1-sol",
+          channel_groups: [
+            {
+              is_active: true,
+              billing_unit: "token",
+              user_price_rmb: 0.02,
+              user_price_per_million_input_rmb: 1.5,
+              user_price_per_million_output_rmb: 4,
+              stats_source: "estimate",
+              success_rate_24h: 95,
+              avg_response_seconds: 0,
+            },
+          ],
+        },
+      ],
+    });
   expect(target).toBe(agentaiEndpoint);
   expect(new Headers(init?.headers).get("authorization")).toBe("Bearer " + key);
   const body = JSON.parse(String(init?.body));
@@ -179,7 +206,7 @@ async function ready() {
 }
 async function probe(
   capability: "chat" | "tools" | "structured",
-  model = "text-model",
+  model = "gpt-6.1-sol",
 ) {
   await fixture.db!.exec("UPDATE agentai_settings SET last_test_at=NULL");
   return testAgentAiModel(admin(), { model, capability });
@@ -200,7 +227,7 @@ beforeEach(async () => {
   completion = validResponse;
   vi.stubGlobal("fetch", vi.fn(network));
   await fixture.db!.exec(
-    "TRUNCATE agentai_model_verifications,ai_model_usage,idempotency_records,audit_logs; UPDATE agentai_settings SET enabled=false,api_key_encrypted=NULL,verified_at=NULL,version=0,error_note='',catalog_at=NULL,model_catalog='[]',last_test_at=NULL,updated_at=now()",
+    "TRUNCATE agentai_model_verifications,ai_model_usage,idempotency_records,audit_logs; UPDATE agentai_settings SET enabled=false,api_key_encrypted=NULL,verified_at=NULL,version=0,error_note='',catalog_at=NULL,model_catalog='[]',last_test_at=NULL,model_prices='[]',prices_at=NULL,prices_etag=NULL,prices_generated_at=NULL,prices_error_note='',prices_refresh_started_at=NULL,updated_at=now()",
   );
 });
 afterEach(() => {
@@ -252,27 +279,27 @@ it("authenticated catalog sync is not a model capability probe and preserves exa
   const saved = await ready();
   expect(saved.verifiedAt).toBeTruthy();
   expect(saved.models.map((m) => m.model)).toEqual([
-    "text-model",
-    "vision-model",
-    "media-model",
+    "gpt-6.1-sol",
+    "gpt-6-astra",
+    "gpt-image-2.6-flare",
   ]);
   expect(
     saved.models.every(
       (m) => !m.chatVerifiedAt && !m.toolsVerifiedAt && !m.structuredVerifiedAt,
     ),
   ).toBe(true);
-  expect(saved.models.find((m) => m.model === "vision-model")).toMatchObject({
+  expect(saved.models.find((m) => m.model === "gpt-6-astra")).toMatchObject({
     vision: true,
     parameters: [],
   });
   expect(
-    saved.models.find((m) => m.model === "media-model")?.paramSchema,
+    saved.models.find((m) => m.model === "gpt-image-2.6-flare")?.paramSchema,
   ).toMatchObject({
     images: { min_edge_px: 256, available_when: { mode: ["reference"] } },
   });
   expect(await query("SELECT * FROM ai_model_usage")).toEqual([]);
   expect(agentaiReady(await agentaiConnection())).toBe(true);
-  await expect(resolveChatModel("agentai/text-model")).rejects.toMatchObject(
+  await expect(resolveChatModel("agentai/gpt-6.1-sol")).rejects.toMatchObject(
     error("AGENTAI_MODEL_UNVERIFIED"),
   );
   await expect(resolveChatModel("agentai/missing-model")).rejects.toMatchObject(
@@ -301,16 +328,16 @@ it("validates chat, tools and strict JSON independently with one real request ea
   ).toBe(true);
   const catalog = await publicAgentCatalog();
   expect(
-    catalog.models.find((m) => m.id === "agentai/text-model"),
+    catalog.models.find((m) => m.id === "agentai/gpt-6.1-sol"),
   ).toMatchObject({ vision: false, structured: true });
-  expect(await resolveChatModel("agentai/text-model")).toMatchObject({
-    model: { provider: "agentai", actual: "text-model" },
+  expect(await resolveChatModel("agentai/gpt-6.1-sol")).toMatchObject({
+    model: { provider: "agentai", actual: "gpt-6.1-sol" },
   });
   await expect(
-    resolveChatModel("agentai/text-model", { vision: true }),
+    resolveChatModel("agentai/gpt-6.1-sol", { vision: true }),
   ).rejects.toMatchObject(error("AI_MODEL_CAPABILITY"));
   await expect(
-    resolveAgentModel("agentai/text-model", "compass_analysis"),
+    resolveAgentModel("agentai/gpt-6.1-sol", "compass_analysis"),
   ).rejects.toMatchObject(error("AI_MODEL_CAPABILITY"));
   const usage = await query(
     "SELECT source,model,status,total_tokens FROM ai_model_usage",
@@ -320,7 +347,7 @@ it("validates chat, tools and strict JSON independently with one real request ea
     usage.every(
       (u) =>
         u.source === "agentai.token6688.com" &&
-        u.model === "text-model" &&
+        u.model === "gpt-6.1-sol" &&
         u.status === "success",
     ),
   ).toBe(true);
@@ -354,14 +381,14 @@ it("isolates identical names by provider receipts and invalidates capabilities w
   await probe("tools");
   const variants = [
     {
-      id: "agentai/text-model",
-      actual: "text-model",
+      id: "agentai/gpt-6.1-sol",
+      actual: "gpt-6.1-sol",
       provider: "agentai" as const,
     },
-    { id: "engine/or-text", actual: "text-model" },
+    { id: "engine/or-text", actual: "gpt-6.1-sol" },
   ];
   expect([...(await connectedModelRefs(variants))]).toEqual([
-    "agentai/text-model",
+    "agentai/gpt-6.1-sol",
   ]);
   await saveAgentAi(admin(), {
     version: 1,
@@ -397,7 +424,7 @@ it("rejects unverified capabilities and unsupported feature routes before submis
   const s = await agentaiConnection(),
     signal = new AbortController().signal;
   const body = {
-    model: "text-model",
+    model: "gpt-6.1-sol",
     messages: [{ role: "user", content: "hello" }],
     provider: { secret: "never" },
     plugins: ["web"],
@@ -406,9 +433,10 @@ it("rejects unverified capabilities and unsupported feature routes before submis
     stream: true,
   };
   expect(agentaiChatBody(body)).toEqual({
-    model: "text-model",
+    model: "gpt-6.1-sol",
     messages: body.messages,
     stream: false,
+    strategy: "balanced",
   });
   await expect(
     postAgentAiChat(s, { ...body, tools: [{}] }, signal),
@@ -421,9 +449,10 @@ it("rejects unverified capabilities and unsupported feature routes before submis
   await response.json();
   expect(posted).toHaveLength(2);
   expect(posted[1]).toEqual({
-    model: "text-model",
+    model: "gpt-6.1-sol",
     messages: body.messages,
     stream: false,
+    strategy: "balanced",
   });
 });
 it("returns safe errors without provider body or secret and does not retry paid probes", async () => {
@@ -449,5 +478,248 @@ it("imports catalog names without guessing capabilities or accepting URL-like id
         { id: "https://evil.test", category: "chat", available: true },
       ],
     }).map((m) => m.model),
-  ).toEqual(["text-model", "vision-model", "media-model"]);
+  ).toEqual(["gpt-6.1-sol", "gpt-6-astra", "gpt-image-2.6-flare"]);
+});
+
+it("enforces the exact twenty-model policy for cached catalogs and direct paid/test submissions", async () => {
+  expect(agentaiAllowedModels).toHaveLength(20);
+  expect(new Set(agentaiAllowedModels.map((m) => m.model)).size).toBe(20);
+  expect(canonicalAgentAiModel("agentai/mu-video")).toBe("muse-video");
+  expect(canonicalAgentAiModel("agentai/gm-nb-2.1-image")).toBe(
+    "gemini-nano-banana-2.1-image",
+  );
+  const initial = await readAgentAi(admin());
+  expect(initial.models).toHaveLength(20);
+  await ready();
+  await fixture.db!.query(
+    "UPDATE agentai_settings SET model_catalog=model_catalog || $1::jsonb",
+    [
+      JSON.stringify([
+        {
+          model: "retired-extra",
+          name: "Old cached entry",
+          type: "chat",
+          available: true,
+          vision: true,
+        },
+        {
+          model: "gpt-6-astra",
+          name: "Wrong modality",
+          type: "audio",
+          available: true,
+        },
+      ]),
+    ],
+  );
+  expect((await readAgentAi(admin())).models.map((m) => m.model)).toEqual([
+    "gpt-6.1-sol",
+    "gpt-6-astra",
+    "gpt-image-2.6-flare",
+  ]);
+  await expect(
+    testAgentAiModel(admin(), { model: "retired-extra" }),
+  ).rejects.toMatchObject(error("AGENTAI_MODEL_UNAVAILABLE"));
+  await expect(
+    postAgentAiChat(
+      await agentaiConnection(),
+      { model: "retired-extra", messages: [] },
+      AbortSignal.timeout(1000),
+    ),
+  ).rejects.toMatchObject(error("AGENTAI_MODEL_UNAVAILABLE"));
+  expect(posted).toHaveLength(0);
+});
+
+it("keeps conditional schema choices and mode/quality limits intact", () => {
+  const schema = {
+    size: {
+      type: "enum",
+      enum: ["1K", "2K"],
+      options: [{ value: "2K", available_when: { aspect_ratio: ["1:1"] } }],
+    },
+    quality: {
+      type: "multi_enum",
+      enum_values_by_quality: { flash: ["720p"] },
+      exclusive_options: ["fast", "full"],
+    },
+  };
+  const normalized = normalizeAgentAiCatalog({
+    models: [
+      {
+        id: "gt-image-2.6-sunburst",
+        category: "image",
+        available: true,
+        param_schema: schema,
+        capabilities: [],
+      },
+    ],
+  });
+  expect(normalized[0]).toMatchObject({
+    model: "gpt-image-2.6-sunburst",
+    paramSchema: schema,
+  });
+});
+
+it("parses account prices by channel billing instead of modality and labels unmeasured statistics honestly", () => {
+  const models = normalizeAgentAiPrices({
+    generated_at: "2026-11-18T12:00:00Z",
+    models: [
+      {
+        name: "gt-image-2.6-sunburst",
+        channel_groups: [
+          {
+            is_active: true,
+            billing_unit: "token",
+            billing_method: "按token",
+            user_price_rmb: 0.02,
+            user_price_per_million_input_rmb: 2,
+            user_price_per_million_output_rmb: 10,
+            stats_source: "estimate",
+            success_rate_24h: 95,
+            avg_response_seconds: 0,
+          },
+          {
+            is_active: true,
+            billing_unit: "per_call",
+            user_price_rmb: 0,
+            stats_source: "live",
+            success_rate_24h: 97,
+            avg_response_seconds: 12,
+          },
+          { is_active: false, billing_unit: "per_call", user_price_rmb: 0.001 },
+        ],
+      },
+      {
+        name: "speech-2.8",
+        channel_groups: [
+          {
+            is_active: true,
+            billing_unit: "token",
+            user_price_per_million_output_rmb: 500,
+            stats_source: "live",
+            success_rate_24h: 200,
+            avg_response_seconds: -1,
+          },
+        ],
+      },
+      {
+        name: "seedance-2-5-promo",
+        channel_groups: [
+          {
+            is_active: true,
+            billing_unit: "per_second",
+            user_price_rmb: 10,
+            billed_seconds: 20,
+          },
+        ],
+      },
+      { name: "not-selected", channel_groups: [] },
+    ],
+  });
+  expect(models).toHaveLength(3);
+  expect(models[0].pricing.channels).toHaveLength(2);
+  expect(models[0].pricing.channels[0]).toMatchObject({
+    billingUnit: "token",
+    inputPerMillionRmb: 2,
+    outputPerMillionRmb: 10,
+    defaultTotalRmb: 0.02,
+    statsSource: "estimate",
+    successRate24h: null,
+    avgResponseSeconds: null,
+  });
+  expect(models[0].pricing.channels[1]).toMatchObject({
+    defaultTotalRmb: 0,
+    statsSource: "live",
+    successRate24h: 97,
+    avgResponseSeconds: 12,
+  });
+  expect(models[1].pricing.channels[0]).toMatchObject({
+    billingUnit: "token",
+    inputPerMillionRmb: null,
+    successRate24h: null,
+    avgResponseSeconds: null,
+  });
+  expect(models[2].pricing.channels[0]).toMatchObject({
+    defaultTotalRmb: 10,
+    billedSeconds: 20,
+  });
+});
+
+it("uses the private five-minute price cache and ETag without generating content", async () => {
+  const saved = await ready();
+  expect(saved.models[0].pricing?.channels[0]).toMatchObject({
+    inputPerMillionRmb: 1.5,
+    statsSource: "estimate",
+    successRate24h: null,
+  });
+  const fetcher = vi.mocked(fetch);
+  const calls = fetcher.mock.calls.length;
+  await refreshAgentAiPrices(admin());
+  expect(fetcher.mock.calls).toHaveLength(calls);
+  await fixture.db!.exec(
+    `UPDATE agentai_settings SET prices_at=now()-interval '6 minutes',prices_refresh_started_at=now()-interval '6 minutes',prices_etag='"private-version"'`,
+  );
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (_url, init) => {
+      expect(new Headers(init?.headers).get("if-none-match")).toBe(
+        '"private-version"',
+      );
+      expect(new Headers(init?.headers).get("authorization")).toBe(
+        "Bearer " + key,
+      );
+      return new Response(null, { status: 304 });
+    }),
+  );
+  const refreshed = await refreshAgentAiPrices(admin());
+  expect(refreshed.models[0].pricing).toEqual(saved.models[0].pricing);
+  expect(refreshed.pricesErrorNote).toBe("");
+  expect(posted).toHaveLength(0);
+});
+
+it("a failed price refresh preserves verified capabilities, and a late response cannot attach prices to a new key", async () => {
+  await ready();
+  await probe("chat");
+  const stale = async () =>
+    fixture.db!.exec(
+      "UPDATE agentai_settings SET prices_at=now()-interval '6 minutes',prices_refresh_started_at=now()-interval '6 minutes'",
+    );
+  await stale();
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => json({ error: { message: key } }, 503)),
+  );
+  await expect(refreshAgentAiPrices(admin())).rejects.toMatchObject(
+    error("AGENTAI_REQUEST_FAILED"),
+  );
+  const state = await readAgentAi(admin());
+  expect(state.verifiedAt).toBeTruthy();
+  expect(state.models[0].chatVerifiedAt).toBeTruthy();
+  expect(state.pricesErrorNote).toBeTruthy();
+  expect(JSON.stringify(state)).not.toContain(key);
+  await stale();
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => {
+      await saveAgentAi(admin(), {
+        version: 1,
+        enabled: true,
+        apiKey: "fixture-replacement-key-no-real-secret",
+      });
+      return json({
+        models: [
+          {
+            name: "gt-6.1-sol",
+            channel_groups: [{ is_active: true, user_price_rmb: 1 }],
+          },
+        ],
+      });
+    }),
+  );
+  await expect(refreshAgentAiPrices(admin())).rejects.toMatchObject(
+    error("VERSION_CONFLICT"),
+  );
+  const replaced = await readAgentAi(admin());
+  expect(replaced.pricesAt).toBeNull();
+  expect(replaced.models.every((m) => !m.pricing)).toBe(true);
+  expect(replaced.verifiedAt).toBeNull();
 });

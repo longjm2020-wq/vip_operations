@@ -3,6 +3,7 @@ import {
   Alert,
   App,
   Button,
+  Drawer,
   Input,
   Select,
   Space,
@@ -18,8 +19,16 @@ import type {
 } from "../../../packages/contracts/src/agentai";
 import { api } from "./api";
 import { QueryState } from "./shared";
+import { AgentAiPrice, AgentAiPriceChannels } from "./agentai-pricing";
+import { AgentAiAudio } from "./agentai-audio";
 
-export function AgentAiSettings({ saved }: { saved: () => void }) {
+export function AgentAiSettings({
+  saved,
+  initialAudio = false,
+}: {
+  saved: () => void;
+  initialAudio?: boolean;
+}) {
   const q = useQuery({
     queryKey: ["agentai-settings"],
     queryFn: async () =>
@@ -32,6 +41,7 @@ export function AgentAiSettings({ saved }: { saved: () => void }) {
         <Connection
           key={q.data.version}
           value={q.data}
+          initialAudio={initialAudio}
           saved={async () => {
             await q.refetch();
             saved();
@@ -45,9 +55,11 @@ export function AgentAiSettings({ saved }: { saved: () => void }) {
 function Connection({
   value,
   saved,
+  initialAudio,
 }: {
   value: AgentAiStatus;
   saved: () => Promise<void>;
+  initialAudio: boolean;
 }) {
   const { message, modal } = App.useApp();
   const [key, setKey] = useState("");
@@ -56,6 +68,10 @@ function Connection({
   const [busy, setBusy] = useState("");
   const [search, setSearch] = useState("");
   const [type, setType] = useState("all");
+  const [audioOpen, setAudioOpen] = useState(initialAudio);
+  const [audioModel, setAudioModel] = useState<"speech-2.8" | "doubao-tts-2.0">(
+    "speech-2.8",
+  );
   const run = async (
     name: string,
     operation: () => Promise<unknown>,
@@ -120,8 +136,8 @@ function Connection({
     <Space direction="vertical" size="middle" style={{ width: "100%" }}>
       <Typography.Text strong>AgentAI 模型连接</Typography.Text>
       <Typography.Text type="secondary">
-        接入小序对话、AI 员工及支持的 AIGC
-        图片和视频模型。各功能仍按实际能力筛选型号。
+        仅接入指定的 20 个型号：6 个聊天、3 个图片、9 个视频和 2 个音频。
+        各功能仍按实际能力及密钥权限筛选。
       </Typography.Text>
       <Typography.Link
         href="https://agentai.token6688.com/zh-CN/console/keys"
@@ -131,6 +147,12 @@ function Connection({
         前往 AgentAI 管理 API 密钥
       </Typography.Link>
       <Typography.Text code>{value.endpoint}</Typography.Text>
+      <Alert
+        type="info"
+        showIcon
+        message="智能调度 · 自动避开故障渠道"
+        description="综合成功率、耗时与价格选择可用渠道，故障时由平台自动切换。每个型号按账号实付价展示；实际结算以本次参数与供应商回执为准。"
+      />
       <Alert
         showIcon
         type={value.verifiedAt && !dirty ? "success" : "info"}
@@ -185,12 +207,45 @@ function Connection({
           保存连接
         </Button>
         <Button
+          loading={busy === "prices"}
+          disabled={!!busy || !ready || !value.verifiedAt}
+          onClick={() =>
+            run(
+              "prices",
+              () =>
+                api(
+                  "/ai-model-management/agentai/prices",
+                  "POST",
+                  {},
+                  undefined,
+                  { readTimeoutMs: 40000 },
+                ),
+              "账号价格已读取，有效期内使用缓存",
+            )
+          }
+        >
+          同步价格
+        </Button>
+        <Button
+          disabled={!ready || !value.verifiedAt || !!busy}
+          onClick={() => setAudioOpen(true)}
+        >
+          语音制作
+        </Button>
+        <Button
           loading={busy === "sync"}
           disabled={!!busy || !ready}
           onClick={() =>
             run(
               "sync",
-              () => api("/ai-model-management/agentai/sync", "POST", {}),
+              () =>
+                api(
+                  "/ai-model-management/agentai/sync",
+                  "POST",
+                  {},
+                  undefined,
+                  { readTimeoutMs: 90000 },
+                ),
               "模型目录已同步",
             )
           }
@@ -214,7 +269,18 @@ function Connection({
         )}
       </Space>
       <Typography.Text type="secondary">
-        密钥仅在服务器加密保存，不回显。目录列出不代表模型已验证；音频目录目前供查看，不替代实时语音连接。
+        密钥仅在服务器加密保存，不回显。目录列出不代表模型已验证。
+        音频制作独立提供，不替代实时通话设置。
+      </Typography.Text>
+      {value.pricesErrorNote && (
+        <Alert type="warning" showIcon message={value.pricesErrorNote} />
+      )}
+      <Typography.Text type="secondary">
+        价格同步：
+        {value.pricesAt
+          ? new Date(value.pricesAt).toLocaleString("zh-CN")
+          : "尚未同步"}{" "}
+        · 价格至少缓存 5 分钟，报价与实际消耗分别记录。
       </Typography.Text>
       <Space wrap>
         <Input
@@ -243,11 +309,15 @@ function Connection({
         rowKey="id"
         dataSource={rows}
         pagination={{
-          pageSize: 8,
+          pageSize: 10,
           showSizeChanger: false,
           showTotal: (n) => `${n} 个模型`,
         }}
-        scroll={{ x: 520 }}
+        scroll={{ x: 720 }}
+        expandable={{
+          rowExpandable: (m) => !!m.pricing?.channels.length,
+          expandedRowRender: (m) => <AgentAiPriceChannels model={m} />,
+        }}
         columns={[
           {
             title: "模型",
@@ -268,6 +338,11 @@ function Connection({
                 </div>
               </>
             ),
+          },
+          {
+            title: "账号价格",
+            width: 225,
+            render: (_, m) => <AgentAiPrice model={m} />,
           },
           {
             title: "能力验证",
@@ -297,14 +372,38 @@ function Connection({
                 </Space>
               ) : (
                 <Typography.Text type="secondary">
-                  {m.type === "audio"
-                    ? "音频工作流尚未接入"
-                    : "在 AIGC 中按兼容能力选择；以实际任务结果为准"}
+                  {m.type === "audio" ? (
+                    <Button
+                      size="small"
+                      disabled={!ready || !value.verifiedAt || !m.available}
+                      onClick={() => {
+                        setAudioModel(
+                          m.model === "doubao-tts-2.0"
+                            ? "doubao-tts-2.0"
+                            : "speech-2.8",
+                        );
+                        setAudioOpen(true);
+                      }}
+                    >
+                      语音制作
+                    </Button>
+                  ) : (
+                    "在 AIGC 中按兼容能力选择；以实际任务结果为准"
+                  )}
                 </Typography.Text>
               ),
           },
         ]}
       />
+      <Drawer
+        title="语音制作"
+        open={audioOpen}
+        onClose={() => setAudioOpen(false)}
+        size={760}
+        destroyOnHidden
+      >
+        {audioOpen && <AgentAiAudio initialModel={audioModel} />}
+      </Drawer>
     </Space>
   );
 }

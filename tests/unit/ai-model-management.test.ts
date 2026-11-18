@@ -1,4 +1,5 @@
 import { bailianChatModel } from "../../packages/contracts/src/bailian-chat.js";
+import { aiFeatures } from "../../packages/contracts/src/ai-management.js";
 import {
   readBailianChat,
   saveBailianChat,
@@ -217,7 +218,7 @@ afterAll(async () => {
 
 async function configureAgentAi(structured = false, tools = false) {
   const model = {
-    model: "fixture-agentai",
+    model: "gpt-6.1-sol",
     name: "Fixture AgentAI",
     type: "chat",
     vision: false,
@@ -394,7 +395,7 @@ describe("AgentAI actual feature routing", () => {
       if (!String(url).startsWith("https://agentai.token6688.com/"))
         return catalogFetch(url, init);
       const body = JSON.parse(String(init?.body));
-      expect(body).toMatchObject({ model: "fixture-agentai", stream: false });
+      expect(body).toMatchObject({ model: "gpt-6.1-sol", stream: false });
       expect(body).not.toHaveProperty("tools");
       expect(body).not.toHaveProperty("response_format");
       expect(body).not.toHaveProperty("provider");
@@ -463,7 +464,7 @@ describe("AgentAI actual feature routing", () => {
     vi.stubGlobal("fetch", network);
     await searchAgentWeb(
       { enabled: true, verified_at: new Date(), api_key_encrypted: "shared" },
-      "fixture-agentai",
+      "gpt-6.1-sol",
       '{"query":"公开信息"}',
       new AbortController().signal,
       undefined,
@@ -475,7 +476,7 @@ describe("AgentAI actual feature routing", () => {
     expect(String(sent[0])).toBe(
       "https://openrouter.ai/api/v1/chat/completions",
     );
-    expect(JSON.parse(String(sent[1]?.body)).model).not.toBe("fixture-agentai");
+    expect(JSON.parse(String(sent[1]?.body)).model).not.toBe("gpt-6.1-sol");
     const candidate = (await agentModelCandidates()).models.find(
       (m) => m.provider === "agentai",
     )!;
@@ -492,7 +493,7 @@ describe("AgentAI actual feature routing", () => {
       revision: 0,
     });
     await fixture.db!.query(
-      "INSERT INTO ai_model_usage(id,feature_id,source,model,response_model,status,completed_at) VALUES($1,'assistant_employee','openrouter.ai','fixture-agentai','fixture-agentai','success',now()+interval '1 second')",
+      "INSERT INTO ai_model_usage(id,feature_id,source,model,response_model,status,completed_at) VALUES($1,'assistant_employee','openrouter.ai','gpt-6.1-sol','gpt-6.1-sol','success',now()+interval '1 second')",
       [randomUUID()],
     );
     const row = (await aiModelManagement(admin())).features.find(
@@ -701,7 +702,7 @@ describe("AI model administration and real routing", () => {
   });
   it("registers all actual capabilities, exposes safe API sources and distinguishes unknown from zero", async () => {
     const view = await aiModelManagement(admin());
-    expect(view.features).toHaveLength(23);
+    expect(view.features).toHaveLength(aiFeatures.length);
     expect(
       view.features.find((feature) => feature.id === "assistant_employee"),
     ).toMatchObject({
