@@ -299,7 +299,10 @@ describe("clean browser base preparation without real resources", () => {
     expect(f.create).toHaveBeenCalledOnce();
   });
   it("keeps version checking and user startup completely free of install commands", () => {
-    const check = browserRuntimeVerify({ playwright: "1.63.0", zod: "4.3.6" });
+    const check = browserRuntimeVerify(
+      { playwright: "1.63.0", zod: "4.3.6" },
+      "a".repeat(64),
+    );
     expect(check).toContain("manifest.json");
     expect(check).toContain("chromium_headless_shell");
     expect(check).toContain("chmod -R a+rX /tmp/xuti-browser-runtime");

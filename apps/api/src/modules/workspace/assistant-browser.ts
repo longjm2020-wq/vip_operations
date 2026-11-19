@@ -172,7 +172,10 @@ export async function browserStatus(c: Context): Promise<BrowserState> {
     ),
     rows(
       db,
-      "SELECT * FROM personal_assistant_browser_tasks WHERE user_id=$1::bigint ORDER BY updated_at DESC LIMIT 30",
+      `SELECT id,instruction,status,stage,step,page_url,page_title,created_at,updated_at,
+        mode,automation_status,automation_result,epoch,last_activity_at,
+        viewport_width,viewport_height,navigation_state
+      FROM personal_assistant_browser_tasks WHERE user_id=$1::bigint ORDER BY updated_at DESC LIMIT 30`,
       c.actor.id,
     ),
     one(

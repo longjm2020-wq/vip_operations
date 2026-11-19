@@ -1,4 +1,8 @@
-import { randomUUID } from "node:crypto";
+import { spawnSync } from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Sandbox, SandboxCheckpointInfo } from "railway";
 import type { BrowserRun } from "../../apps/api/src/modules/workspace/assistant-browser.js";
@@ -13,6 +17,7 @@ import {
   RailwayBrowserRuntime,
   browserRuntimeCommand,
   browserRuntimeFiles,
+  browserRuntimeUnpackScript,
   browserRuntimeVerify,
   browserTemplatePrefix,
   railwayBrowserConfig,
@@ -252,80 +257,102 @@ afterEach(() => {
 });
 
 describe("Railway independent browser lifecycle (no real resources)", () => {
-  it("uploads at most three fixed files together and verifies only after all finish", async () => {
+  it("uploads one fixed bundle and verifies it only after the upload finishes", async () => {
     const f = fixture();
-    const uploads: ReturnType<typeof deferred<void>>[] = [];
-    let active = 0,
-      peak = 0;
-    f.write.mockImplementation(async () => {
-      const pending = deferred<void>();
-      uploads.push(pending);
-      peak = Math.max(peak, ++active);
-      await pending.promise;
-      active--;
-    });
+    const upload = deferred<void>();
+    f.write.mockReturnValue(upload.promise);
     const opening = f.runtime.open(f.run, null, f.controller.signal);
-    await vi.waitFor(() => expect(uploads).toHaveLength(3));
+    await vi.waitFor(() => expect(f.write).toHaveBeenCalledTimes(1));
     expect(f.execHttp).not.toHaveBeenCalled();
-    for (let batch = 0; batch < 3; batch++) {
-      for (const upload of uploads.slice(batch * 3, batch * 3 + 3))
-        upload.resolve();
-      if (batch < 2)
-        await vi.waitFor(() => expect(uploads).toHaveLength((batch + 2) * 3));
-    }
+    expect(f.exec).not.toHaveBeenCalled();
+    const [path, content] = f.write.mock.calls[0];
+    expect(path).toBe("/tmp/xuti-browser-runtime/runtime-bundle.json");
+    expect(JSON.parse(content)).toEqual(
+      Object.fromEntries(
+        browserRuntimeFiles.map((name) => [name, "export {};\n"]),
+      ),
+    );
+    upload.resolve();
     const driver = await opening;
-    expect(peak).toBe(3);
-    expect(f.write).toHaveBeenCalledTimes(9);
-    expect(f.write.mock.calls.every((call) => call.length === 2)).toBe(true);
-    expect(new Set(f.write.mock.calls.map(([path]) => path)).size).toBe(9);
+    expect(f.write).toHaveBeenCalledTimes(1);
     expect(f.execHttp).toHaveBeenCalledTimes(1);
     await driver.close();
   });
-  it("stops the remaining upload queue and never executes partial runtime files after failure", async () => {
+  it("never verifies or executes a partial bundle after upload failure", async () => {
     const f = fixture();
-    const uploads: ReturnType<typeof deferred<void>>[] = [];
-    f.write.mockImplementation(() => {
-      const pending = deferred<void>();
-      uploads.push(pending);
-      return pending.promise;
-    });
-    const opening = f.runtime.open(f.run, null, f.controller.signal);
-    const failed = expect(opening).rejects.toThrow();
-    await vi.waitFor(() => expect(uploads).toHaveLength(3));
-    uploads[0].reject(Error("upload failed"));
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(f.destroy).not.toHaveBeenCalled();
-    uploads[1].resolve();
-    uploads[2].resolve();
-    await failed;
-    expect(f.write).toHaveBeenCalledTimes(3);
+    f.write.mockRejectedValue(Error("upload failed"));
+    await expect(
+      f.runtime.open(f.run, null, f.controller.signal),
+    ).rejects.toThrow();
+    expect(f.write).toHaveBeenCalledTimes(1);
     expect(f.execHttp).not.toHaveBeenCalled();
     expect(f.exec).not.toHaveBeenCalled();
     expect(f.create).toHaveBeenCalledTimes(1);
     expect(f.destroy).toHaveBeenCalledTimes(1);
     expect(f.release).toHaveBeenCalledWith(f.intentId, f.sandboxId);
   });
-  it("drains submitted uploads on cancellation without starting queued files or browser code", async () => {
+  it("drains a submitted bundle on cancellation before destruction", async () => {
     const f = fixture();
-    const uploads: ReturnType<typeof deferred<void>>[] = [];
-    f.write.mockImplementation(() => {
-      const pending = deferred<void>();
-      uploads.push(pending);
-      return pending.promise;
-    });
+    const upload = deferred<void>();
+    f.write.mockReturnValue(upload.promise);
     const opening = f.runtime.open(f.run, null, f.controller.signal);
     const failed = expect(opening).rejects.toThrow();
-    await vi.waitFor(() => expect(uploads).toHaveLength(3));
+    await vi.waitFor(() => expect(f.write).toHaveBeenCalledTimes(1));
     f.controller.abort();
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(f.destroy).not.toHaveBeenCalled();
-    for (const upload of uploads) upload.resolve();
+    upload.resolve();
     await failed;
-    expect(f.write).toHaveBeenCalledTimes(3);
+    expect(f.write).toHaveBeenCalledTimes(1);
     expect(f.execHttp).not.toHaveBeenCalled();
     expect(f.exec).not.toHaveBeenCalled();
     expect(f.destroy).toHaveBeenCalledTimes(1);
     expect(f.release).toHaveBeenCalledWith(f.intentId, f.sandboxId);
+  });
+  it("checks the digest and exact fixed paths before unpacking any runtime code", async () => {
+    const directory = await mkdtemp(
+      join(tmpdir(), "xuti-runtime-bundle-test-"),
+    );
+    const bundleFile = join(directory, "runtime-bundle.json");
+    const files = Object.fromEntries(
+      browserRuntimeFiles.map((path) => [path, "export {};\n"]),
+    );
+    const digest = (content: string) =>
+      createHash("sha256").update(content).digest("hex");
+    const unpack = (hash: string) =>
+      spawnSync(
+        process.execPath,
+        ["-e", browserRuntimeUnpackScript, directory, hash],
+        { timeout: 5000 },
+      );
+    try {
+      const untrusted: Record<string, string> = {
+        ...files,
+        "../outside.js": "unexpected",
+      };
+      delete untrusted[browserRuntimeFiles[0]];
+      const invalid = JSON.stringify(untrusted);
+      await writeFile(bundleFile, invalid);
+      expect(unpack(digest(invalid)).status).toBe(2);
+      expect(await readdir(directory)).toEqual(["runtime-bundle.json"]);
+      const valid = JSON.stringify(files);
+      await writeFile(bundleFile, valid);
+      expect(unpack(digest(invalid)).status).toBe(2);
+      expect(await readdir(directory)).toEqual(["runtime-bundle.json"]);
+      expect(unpack(digest(valid)).status).toBe(0);
+      expect((await readdir(directory)).sort()).toEqual([
+        "apps",
+        "package.json",
+        "packages",
+      ]);
+      expect(await readFile(join(directory, "package.json"), "utf8")).toBe(
+        '{"type":"module","private":true}',
+      );
+      for (const path of browserRuntimeFiles)
+        expect(await readFile(join(directory, path), "utf8")).toBe(files[path]);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
   it("keeps only the live VM alive past its provider idle timeout and stops at close", async () => {
     vi.useFakeTimers();
@@ -467,9 +494,12 @@ describe("Railway independent browser lifecycle (no real resources)", () => {
         idleTimeoutMinutes: 1,
       }),
     );
-    expect(f.write).toHaveBeenCalledTimes(browserRuntimeFiles.length + 1);
+    expect(f.write).toHaveBeenCalledTimes(1);
+    const digest = createHash("sha256")
+      .update(f.write.mock.calls[0][1])
+      .digest("hex");
     expect(f.execHttp).toHaveBeenCalledWith(
-      browserRuntimeVerify({ playwright: "1.63.0", zod: "4.3.6" }),
+      browserRuntimeVerify({ playwright: "1.63.0", zod: "4.3.6" }, digest),
       { timeoutSec: 15 },
     );
     expect(

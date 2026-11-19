@@ -529,9 +529,10 @@ test("星轨左侧执行详情跟随真实步骤，完成项可展开且中断�
   await page.setViewportSize({ width: 1600, height: 1000 });
   const fixture = await setup(page);
   await submitInWorkspace(page);
-  await page
-    .getByRole("button", { name: "收起右侧工具栏", exact: true })
-    .click();
+  await expect(page.locator(".workspace-columns")).toHaveAttribute(
+    "data-tools-open",
+    "false",
+  );
   const rail = page.getByRole("complementary", { name: "团队执行详情" });
   const current = rail.locator(".team-execution-current-content");
   const detailScroll = rail.locator(".team-execution-scroll");

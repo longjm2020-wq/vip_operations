@@ -345,10 +345,10 @@ for (const width of [1440, 390]) {
     await expect(page.locator(".assistant-compose-menu:visible")).toContainText(
       "执行位置 · 当前：小序独立浏览器",
     );
-    await page.screenshot({ path: `.local/assistant-input-menu-${width}.png` });
     await expect(
       page.getByRole("menuitem", { name: "小序独立浏览器", exact: true }),
-    ).toHaveClass(/ant-dropdown-menu-item-selected/);
+    ).toHaveCount(0);
+    await page.screenshot({ path: `.local/assistant-input-menu-${width}.png` });
     await page.getByRole("menuitem", { name: "网站内", exact: true }).click();
     await expect(draft).toHaveValue("切换工具后仍保留的草稿");
     await selectAssistantPanel(page, "独立浏览器");

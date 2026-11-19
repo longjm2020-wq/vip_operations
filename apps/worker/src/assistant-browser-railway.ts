@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { Sandbox } from "railway";
@@ -75,17 +76,77 @@ export const browserRuntimeFiles = [
   "apps/worker/src/assistant-browser-isolation.js",
   "packages/contracts/src/assistant-browser.js",
 ] as const;
+const runtimeBundleFile = "runtime-bundle.json";
+const runtimePackage = '{"type":"module","private":true}';
+const maxRuntimeFileBytes = 1024 * 1024;
+const maxRuntimeBundleBytes = 2 * maxRuntimeFileBytes;
 export async function browserRuntimeAssets() {
   const base = new URL("../../../", import.meta.url);
   return Promise.all(
     browserRuntimeFiles.map(async (path) => {
       const content = await readFile(new URL(path, base), "utf8");
-      if (Buffer.byteLength(content) > 1024 * 1024)
+      if (Buffer.byteLength(content) > maxRuntimeFileBytes)
         throw Error("BROWSER_RUNTIME_UNAVAILABLE");
       return { path, content };
     }),
   );
 }
+
+function packBrowserRuntime(
+  assets: Awaited<ReturnType<typeof browserRuntimeAssets>>,
+) {
+  const files = Object.fromEntries(
+    assets.map(({ path, content }) => [path, content]),
+  );
+  if (
+    assets.length !== browserRuntimeFiles.length ||
+    !browserRuntimeFiles.every(
+      (path) =>
+        Object.hasOwn(files, path) &&
+        typeof files[path] === "string" &&
+        Buffer.byteLength(files[path]) <= maxRuntimeFileBytes,
+    )
+  )
+    throw Error("BROWSER_RUNTIME_UNAVAILABLE");
+  const bundle = JSON.stringify(files);
+  if (Buffer.byteLength(bundle) > maxRuntimeBundleBytes)
+    throw Error("BROWSER_RUNTIME_UNAVAILABLE");
+  return { bundle, digest: createHash("sha256").update(bundle).digest("hex") };
+}
+
+// The fixed script runs with the prebuilt Node binary. It never evaluates an
+// uploaded file, and writes only the allowlisted paths into a fresh directory.
+export const browserRuntimeUnpackScript = `
+const fs = require("node:fs");
+const path = require("node:path");
+const { createHash } = require("node:crypto");
+const root = process.argv[1];
+const digest = process.argv[2];
+const bundleFile = ${JSON.stringify(runtimeBundleFile)};
+const allowed = ${JSON.stringify(browserRuntimeFiles)};
+try {
+  if (!fs.lstatSync(root).isDirectory()) process.exit(2);
+  const entries = fs.readdirSync(root);
+  if (entries.length !== 1 || entries[0] !== bundleFile) process.exit(2);
+  const bundle = path.join(root, bundleFile);
+  const stat = fs.lstatSync(bundle);
+  if (!stat.isFile() || stat.size > ${maxRuntimeBundleBytes}) process.exit(2);
+  const bytes = fs.readFileSync(bundle);
+  if (createHash("sha256").update(bytes).digest("hex") !== digest) process.exit(2);
+  const files = JSON.parse(bytes.toString("utf8"));
+  if (!files || typeof files !== "object" || Array.isArray(files) || Object.keys(files).length !== allowed.length ||
+      !allowed.every((name) => Object.hasOwn(files, name) && typeof files[name] === "string" &&
+        Buffer.byteLength(files[name]) <= ${maxRuntimeFileBytes})) process.exit(2);
+  for (const name of allowed) {
+    const file = path.join(root, name);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, files[name], { flag: "wx", mode: 0o644 });
+  }
+  fs.writeFileSync(path.join(root, "package.json"), ${JSON.stringify(runtimePackage)}, { flag: "wx", mode: 0o644 });
+  fs.unlinkSync(bundle);
+} catch { process.exit(2); }
+`;
+
 export function browserRuntimeSetup(playwright: string, zod: string) {
   if (![playwright, zod].every((value) => /^\d+\.\d+\.\d+$/.test(value)))
     throw Error("BROWSER_RUNTIME_UNAVAILABLE");
@@ -109,14 +170,19 @@ runuser -u xutibrowser -- /usr/bin/env -i PATH=/usr/local/bin:/usr/bin:/bin HOME
 echo XUTI_BROWSER_BASE_READY
 `;
 }
-/** Fixed code permissions, dependency checks and one symlink; never installs on a user request. */
-export function browserRuntimeVerify(versions: BrowserRuntimeVersions) {
+/** Unpack fixed files, set permissions and verify installed dependencies before opening the browser. */
+export function browserRuntimeVerify(
+  versions: BrowserRuntimeVersions,
+  digest: string,
+) {
   browserTemplatePrefix(versions);
+  if (!/^[a-f0-9]{64}$/.test(digest))
+    throw Error("BROWSER_RUNTIME_UNAVAILABLE");
   const expected = JSON.stringify({ schema: 1, ...versions });
   return `set -eu
 test -x ${browserBaseRoot}/runtime/node
 test -r ${browserBaseRoot}/manifest.json
-test ! -e ${vmRoot}/node_modules
+${browserBaseRoot}/runtime/node -e '${browserRuntimeUnpackScript}' ${vmRoot} ${digest}
 chmod -R a+rX ${vmRoot}
 ln -s ${browserBaseRoot}/node_modules ${vmRoot}/node_modules
 runuser -u xutibrowser -- /usr/bin/env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/home/xutibrowser LANG=C.UTF-8 PLAYWRIGHT_BROWSERS_PATH=${browserBaseRoot}/browsers ${browserBaseRoot}/runtime/node -e 'const fs=require("node:fs");const expected=${expected};const actual=JSON.parse(fs.readFileSync("${browserBaseRoot}/manifest.json","utf8"));if(process.getuid()===0||Number(process.versions.node.split(".")[0])<22||Object.keys(expected).some(k=>actual[k]!==expected[k]))process.exit(2);fs.accessSync("${vmRoot}/apps/worker/src/assistant-browser-vm-main.js",fs.constants.R_OK);for(const name of ["@playwright/test","zod"]){require.resolve(name,{paths:["${vmRoot}"]});const p=require("${browserBaseRoot}/node_modules/"+name+"/package.json");if(p.version!==expected[name==="zod"?"zod":"playwright"])process.exit(2)}const root="${browserBaseRoot}/browsers";const found=fs.readdirSync(root).filter(n=>/^chromium_headless_shell-[0-9]+$/.test(n)).some(n=>["chrome-headless-shell-linux64/chrome-headless-shell","chrome-linux/headless_shell"].some(p=>{try{fs.accessSync(root+"/"+n+"/"+p,fs.constants.X_OK);return true}catch{return false}}));if(!found)process.exit(2);'
@@ -221,7 +287,7 @@ export class RailwayBrowserRuntime {
     };
   }
   async probe(signal: AbortSignal) {
-    await this.deps.assets();
+    packBrowserRuntime(await this.deps.assets());
     canceled(signal);
     await this.checkTemplate(signal);
   }
@@ -323,7 +389,7 @@ export class RailwayBrowserRuntime {
         lifetime.signal,
         AbortSignal.timeout(deadline - Date.now()),
       ]);
-    const assets = await this.deps.assets();
+    const { bundle, digest } = packBrowserRuntime(await this.deps.assets());
     canceled(signal);
     await this.checkTemplate(signal);
     canceled(signal);
@@ -474,40 +540,13 @@ export class RailwayBrowserRuntime {
       };
       signal.addEventListener("abort", stopHeartbeat, { once: true });
       await stage("UPLOADING");
-      for (const asset of assets) {
-        if (!(browserRuntimeFiles as readonly string[]).includes(asset.path))
-          throw Error("BROWSER_RUNTIME_UNAVAILABLE");
-      }
-      const files = [
-        { path: "package.json", content: '{"type":"module","private":true}' },
-        ...assets,
-      ];
-      const uploads = new AbortController();
-      const uploadSignal = AbortSignal.any([signal, uploads.signal]);
-      const dispatchedWrites: Promise<void>[] = [];
-      let nextFile = 0;
-      // SDK writes use independent connections and create missing parents.
-      // Its default 0644 avoids a redundant remote chmod exec for each file;
-      // VERIFYING still applies the required permissions before any code runs.
-      await Promise.all(
-        Array.from({ length: Math.min(3, files.length) }, async () => {
-          while (nextFile < files.length) {
-            canceled(uploadSignal);
-            const file = files[nextFile++];
-            const writing = vm.files.write(
-              vmRoot + "/" + file.path,
-              file.content,
-            );
-            dispatchedWrites.push(writing);
-            await bounded(writing, uploadSignal);
-          }
-        }),
-      ).catch(async (error) => {
-        uploads.abort();
-        // SDK file writes cannot be aborted. Drain already dispatched writes
-        // before destroying their VM, with a bound for a stalled connection.
+      canceled(signal);
+      const writing = vm.files.write(`${vmRoot}/${runtimeBundleFile}`, bundle);
+      await bounded(writing, signal).catch(async (error) => {
+        // The SDK write cannot be aborted. Drain it before destroying the VM,
+        // with a bound for a stalled connection.
         await bounded(
-          Promise.allSettled(dispatchedWrites),
+          Promise.allSettled([writing]),
           AbortSignal.timeout(10000),
         ).catch(() => safeLog("BROWSER_VM_UPLOAD_DRAIN_TIMEOUT"));
         throw error;
@@ -516,7 +555,7 @@ export class RailwayBrowserRuntime {
         Math.max(1, Math.floor((deadline - Date.now()) / 1000));
       await stage("VERIFYING");
       const setup = await bounded(
-        vm.execHttp(browserRuntimeVerify(this.deps.versions), {
+        vm.execHttp(browserRuntimeVerify(this.deps.versions, digest), {
           timeoutSec: Math.min(15, remaining()),
         }),
         signal,

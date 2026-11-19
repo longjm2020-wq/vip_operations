@@ -170,14 +170,12 @@ export function PersonalAssistantProvider({
   }, [user.id]);
   const [workspaceToolsOpen, setWorkspaceToolsOpen] = useState(() => {
     try {
-      const saved = localStorage.getItem(
-        `xuti-workspace-tools-open:${user.id}`,
+      return (
+        localStorage.getItem(`xuti-workspace-tools-open:${user.id}`) ===
+        "true"
       );
-      return saved === null
-        ? window.matchMedia("(min-width: 1051px)").matches
-        : saved !== "false";
     } catch {
-      return window.matchMedia("(min-width: 1051px)").matches;
+      return false;
     }
   });
   const [workspaceToolsHost, setWorkspaceToolsHost] =
@@ -1397,10 +1395,12 @@ export function PersonalAssistantProvider({
                         key: "execution",
                         type: "group",
                         label: `执行位置 · 当前：${executionLabel}`,
-                        children: executionOptions.map((option) => ({
-                          key: option.value,
-                          label: option.label,
-                        })),
+                        children: executionOptions
+                          .filter((option) => option.value !== "browser")
+                          .map((option) => ({
+                            key: option.value,
+                            label: option.label,
+                          })),
                       },
                     ],
                     onClick: ({ key }) => changeExecution(key),

@@ -2475,9 +2475,10 @@ test("中心AI核心在桌面与手机完整显示，页面打开不调用模型
     page.getByRole("button", { name: /切换为[亮暗]色主题/ }),
   ).toHaveCount(0);
   await page.setViewportSize({ width: 390, height: 844 });
-  await page
-    .getByRole("button", { name: "收起右侧工具栏", exact: true })
-    .click();
+  await expect(page.locator(".workspace-columns")).toHaveAttribute(
+    "data-tools-open",
+    "false",
+  );
   await expect(core).toBeVisible();
   await expect(
     page
@@ -2660,9 +2661,10 @@ test("页底新提醒按实际换行高度留在窗口内，拖动后整块形�
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto("/my-workspace");
-  await page
-    .getByRole("button", { name: "收起右侧工具栏", exact: true })
-    .click();
+  await expect(page.locator(".workspace-columns")).toHaveAttribute(
+    "data-tools-open",
+    "false",
+  );
   const companion = page.locator(".workspace-companion");
   const handle = companion.getByRole("button", {
     name: "打开小序文字对话",

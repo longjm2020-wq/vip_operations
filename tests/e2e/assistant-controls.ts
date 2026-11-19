@@ -151,6 +151,16 @@ export async function selectAssistantExecution(page: Page, name: string) {
   const workspace = page.locator(".workspace-columns");
   if (new URL(page.url()).pathname === "/my-workspace") {
     await expect(workspace).toBeVisible();
+    if (name === "小序独立浏览器") {
+      await selectAssistantPanel(page, "独立浏览器");
+      await page
+        .getByRole("button", { name: "浏览器标签与会话菜单", exact: true })
+        .click();
+      await page
+        .getByRole("menuitem", { name: "让小序操作当前网页", exact: true })
+        .click();
+      return;
+    }
     if ((page.viewportSize()?.width || 1440) <= 1050)
       await collapseWorkspaceTools(page);
     await page

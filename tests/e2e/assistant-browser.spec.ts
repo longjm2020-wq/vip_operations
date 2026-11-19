@@ -1009,6 +1009,20 @@ test("工作台三栏保留原场景与草稿，左右收起和调宽不提交�
   const panel = page.locator(".assistant-browser-panel");
   const center = page.getByRole("region", { name: "工作台中栏" });
   const draft = center.locator(".assistant-compose:visible textarea");
+  const browserEntry = center.getByRole("button", {
+    name: "展开独立浏览器",
+    exact: true,
+  });
+  const closeBrowser = panel.getByRole("button", {
+    name: "关闭浏览器面板",
+    exact: true,
+  });
+  await expect(page.locator(".workspace-columns")).toHaveAttribute(
+    "data-tools-open",
+    "false",
+  );
+  await expect(panel).toBeHidden();
+  await browserEntry.click();
   await expect(panel.getByRole("textbox", { name: "网页地址" })).toBeVisible();
   await expect(center.locator(".personal-workspace")).toBeVisible();
   await expect(center.locator(".workspace-world-controls")).toBeVisible();
@@ -1045,9 +1059,7 @@ test("工作台三栏保留原场景与草稿，左右收起和调宽不提交�
   await page
     .getByRole("button", { name: "收起工作区导航", exact: true })
     .click();
-  await page
-    .getByRole("button", { name: "关闭浏览器面板", exact: true })
-    .click();
+  await closeBrowser.click();
   await expect(panel).toBeHidden();
   expect((await center.boundingBox())!.width).toBeGreaterThan(centerBox!.width);
   await expect(draft).toHaveValue("保留中栏工作台草稿");
@@ -1074,22 +1086,22 @@ test("工作台三栏保留原场景与草稿，左右收起和调宽不提交�
     "closed",
   );
   await page.screenshot({ path: ".local/workspace-columns-scene.png" });
-  await page
-    .getByRole("button", { name: "关闭浏览器面板", exact: true })
-    .click();
+  await closeBrowser.click();
   await page.reload();
   await expect(
     page.getByRole("button", { name: "展开工作区导航", exact: true }),
   ).toBeVisible();
   await expect(panel).toBeHidden();
-  await page
-    .getByRole("button", { name: "展开独立浏览器", exact: true })
-    .click();
+  await browserEntry.click();
+  await expect(panel).toBeVisible();
+  await page.reload();
+  await expect(panel).toBeVisible();
   await expect(separator).toHaveAttribute("aria-valuenow", savedWidth!);
   expect(state.requests).toEqual([]);
   expect(state.browserRequests).toEqual([]);
   expect(state.controls).toEqual([]);
   expect(state.actions).toEqual([]);
+  await closeBrowser.click();
   state.tasks = [
     makeTask(),
     {
@@ -1183,6 +1195,70 @@ for (const width of [1440, 390]) {
     expect(state.controls).toEqual([]);
   });
 }
+
+test("直接浏览首帧到达后立即核对状态，切出排队时保留画面", async ({
+  page,
+}) => {
+  const { state } = await fixture(page);
+  await page.addInitScript(() => {
+    const browserWindow: Window = window;
+    const setIntervalNormally = browserWindow.setInterval.bind(browserWindow);
+    browserWindow.setInterval = (callback, delay, ...args) =>
+      setIntervalNormally(callback, delay === 3000 ? 30000 : delay, ...args);
+  });
+  state.tasks = [
+    {
+      ...makeTask(),
+      mode: "BROWSE",
+      status: "QUEUED",
+      navigationState: "STARTING",
+    },
+  ];
+  const readyFrame = { ...state.frame!, epoch: state.tasks[0].epoch! };
+  state.frame = { ...readyFrame, epoch: readyFrame.epoch - 2 };
+  const statusPath = "/api/v1/my-workspace/assistant/browser";
+  let statusReads = 0;
+  page.on("request", (request) => {
+    if (
+      request.method() === "GET" &&
+      new URL(request.url()).pathname === statusPath
+    )
+      statusReads++;
+  });
+  await page.goto("/my-workspace?assistant=browser");
+  const screen = page.getByRole("button", {
+    name: "点击独立浏览器画面",
+    exact: true,
+  });
+  await expect(screen).toBeVisible();
+  await expect(screen).toBeDisabled();
+  const initialStatusReads = statusReads;
+
+  state.frame = {
+    ...state.frame,
+    frameId: crypto.randomUUID(),
+    epoch: readyFrame.epoch - 1,
+    url: "https://example.com/stale",
+  };
+  await expect(page.getByRole("textbox", { name: "网页地址" })).toHaveValue(
+    state.frame.url,
+  );
+  await expect(screen).toBeDisabled();
+  expect(statusReads).toBe(initialStatusReads);
+  const initialFrameReads = state.frameRequests.length;
+
+  state.frame = readyFrame;
+  state.tasks[0] = {
+    ...state.tasks[0],
+    status: "PAUSED",
+    navigationState: "READY",
+  };
+  // The next ordinary status poll is held back, but the frame poll runs normally.
+  await expect(screen).toBeEnabled();
+  expect(statusReads).toBe(initialStatusReads + 1);
+  expect(state.frameRequests).toHaveLength(initialFrameReads + 1);
+  expect(state.actions).toEqual([]);
+});
 
 test("直接浏览不依赖模型，真实导航和视口随面板变化，地址草稿不被轮询覆盖", async ({
   page,

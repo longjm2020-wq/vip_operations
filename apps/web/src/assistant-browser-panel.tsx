@@ -292,6 +292,7 @@ function BrowserTakeover({
     undefined,
   );
   const wheelDelta = useRef(0);
+  const checkedFrameEpoch = useRef<number | undefined>(undefined);
   const measuredViewport = useRef<BrowserViewport | null>(null);
   const [resizeIntent, setResizeIntent] = useState(0);
   const handledResize = useRef(0);
@@ -308,8 +309,17 @@ function BrowserTakeover({
       clearTimeout(wheelTimer.current);
     };
   }, []);
+  const live = !!task && isActiveBrowserTask(task);
+  const liveBrowsing = live && task.mode === "BROWSE";
   const frame = useQuery({
-    queryKey: ["assistant-browser-frame", owner, task?.id, task?.status],
+    // Keep the first frame when a direct browsing session leaves the queue.
+    // Terminal states still fetch their own retained frame or empty result.
+    queryKey: [
+      "assistant-browser-frame",
+      owner,
+      task?.id,
+      liveBrowsing ? "BROWSE" : task?.status,
+    ],
     enabled: !!task,
     queryFn: async ({ signal }) =>
       (
@@ -321,13 +331,12 @@ function BrowserTakeover({
           { signal },
         )
       ).data as BrowserFrame | null,
-    refetchInterval: task && isActiveBrowserTask(task) ? 900 : false,
+    refetchInterval: live ? 900 : false,
     staleTime: 0,
     gcTime: 0,
   });
   const frameRef = useRef(frame.data);
   frameRef.current = frame.data;
-  const live = !!task && isActiveBrowserTask(task);
   const readOnly = task?.status === "DONE" || frame.data?.readOnly === true;
   const manual =
     live && ["PAUSED", "NEEDS_USER"].includes(task!.status) && !readOnly;
@@ -336,11 +345,27 @@ function BrowserTakeover({
     task?.navigationState === "LOADING" ||
     task?.navigationState === "STARTING" ||
     task?.status === "QUEUED";
+  const frameEpoch = frame.data?.epoch;
+  const writableFrame = !!frame.data && !frame.data.readOnly;
+  useEffect(() => {
+    if (
+      !liveBrowsing ||
+      !loading ||
+      !writableFrame ||
+      frameEpoch === undefined ||
+      frameEpoch !== task?.epoch ||
+      frameEpoch === checkedFrameEpoch.current
+    )
+      return;
+    checkedFrameEpoch.current = frameEpoch;
+    void refresh();
+  }, [frameEpoch, liveBrowsing, loading, refresh, task?.epoch, writableFrame]);
   const usable =
     manual &&
     !!frame.data &&
     !frame.error &&
     !loading &&
+    (task?.epoch === undefined || frame.data.epoch === task.epoch) &&
     frame.data.frameId !== consumed.current;
   const currentUrl = frame.data?.url || task?.url || "";
   useEffect(() => {
@@ -462,6 +487,8 @@ function BrowserTakeover({
           !snapshot ||
           snapshot.readOnly ||
           !currentTask ||
+          (currentTask.epoch !== undefined &&
+            snapshot.epoch !== currentTask.epoch) ||
           !["PAUSED", "NEEDS_USER"].includes(currentTask.status)
         )
           throw new Error("当前页面不能操作，请先接管并核对画面");
@@ -1183,7 +1210,7 @@ export function AssistantBrowserPanel({
                 {
                   key: "choose",
                   label: "让小序操作当前网页",
-                  disabled: disabled || !data?.ready,
+                  disabled: disabled || (!embedded && !data?.ready),
                 },
                 ...(!embedded
                   ? [
