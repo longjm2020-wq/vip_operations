@@ -2087,6 +2087,53 @@ test("工作台圆环是小序巢穴，可离巢移动与召回，文字和动�
   expect(fixture.assistantCalls()).toBe(0);
 });
 
+test("工作台小序可停在左侧导航，收起和刷新后仍能移动", async ({ page }) => {
+  const fixture = await workspaceFixture(page);
+  await page.goto("/my-workspace");
+  const companion = page.locator(".workspace-companion");
+  const sidebar = page.locator(".workspace-future > .sidebar");
+  const handle = companion.getByRole("button", {
+    name: "打开小序文字对话",
+    exact: true,
+  });
+  await expect(companion).toHaveAttribute("data-docked", "true");
+  const from = (await handle.boundingBox())!;
+  const navigation = (await sidebar.boundingBox())!;
+  await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(navigation.x + navigation.width / 2, 650, {
+    steps: 14,
+  });
+  await page.mouse.up();
+  const insideSidebar = async () => {
+    const box = await companion.boundingBox();
+    const nav = await sidebar.boundingBox();
+    return (
+      !!box &&
+      !!nav &&
+      box.x >= nav.x + 7 &&
+      box.x + box.width <= nav.x + nav.width - 7 &&
+      box.y > 400 &&
+      box.y + box.height < nav.y + nav.height
+    );
+  };
+  await expect.poll(insideSidebar).toBe(true);
+  await expect(companion).toHaveAttribute("data-docked", "false");
+  await page
+    .getByRole("button", { name: "收起工作区导航", exact: true })
+    .click();
+  await expect.poll(insideSidebar).toBe(true);
+  await expect(companion).toHaveClass(/is-compact/);
+  await page.reload();
+  await expect.poll(insideSidebar).toBe(true);
+  await expect(companion).toHaveAttribute("data-docked", "false");
+  await handle.press("ArrowRight");
+  await expect.poll(insideSidebar).toBe(false);
+  await page.getByRole("button", { name: "召唤小序", exact: true }).click();
+  await expect(companion).toHaveAttribute("data-docked", "true");
+  expect(fixture.assistantCalls()).toBe(0);
+});
+
 test("小序可从巢穴拖出或用方向键离巢，Home归巢且移动不误触语音", async ({
   page,
 }) => {

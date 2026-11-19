@@ -11,6 +11,44 @@ import {
 } from "./companion-climbing";
 
 type Position = { x: number; y: number };
+type PlacementBounds = Pick<DOMRect, "left" | "top" | "right" | "bottom">;
+type CompanionSize = { width: number; height: number };
+
+function roamingBounds(): PlacementBounds {
+  return (
+    document.querySelector(".workspace-center")?.getBoundingClientRect() ?? {
+      left: 0,
+      top: 0,
+      right: document.documentElement.clientWidth,
+      bottom: innerHeight,
+    }
+  );
+}
+
+function sidebarBounds() {
+  if (innerWidth < 768) return;
+  return document
+    .querySelector(".workspace-future > .sidebar")
+    ?.getBoundingClientRect();
+}
+
+function clampPosition(
+  point: Position,
+  size: CompanionSize,
+  bounds: PlacementBounds,
+) {
+  return {
+    x: Math.max(
+      bounds.left + 8,
+      Math.min(point.x, bounds.right - size.width - 8),
+    ),
+    y: Math.max(
+      bounds.top + 8,
+      Math.min(point.y, bounds.bottom - size.height - 8),
+    ),
+  };
+}
+
 const interactiveControls =
   "button, a, input, textarea, select, [contenteditable=true], [role=button], [role=slider], [role=tab], [role=menuitem], [role=checkbox], [role=radio], [role=switch], [role=combobox]";
 function overlayControlAreas() {
@@ -112,16 +150,12 @@ function findSpace(
   height: number,
   areas: DOMRect[],
   preferred?: Position,
+  bounds = roamingBounds(),
 ) {
-  // Search within the same bounds used to place the companion. Clamping a
-  // viewport-wide candidate into the center column can land it on a control.
-  const center = document
-    .querySelector(".workspace-center")
-    ?.getBoundingClientRect();
-  const minX = (center?.left ?? 0) + 8,
-    minY = (center?.top ?? 0) + 8,
-    maxX = (center?.right ?? document.documentElement.clientWidth) - width - 8,
-    maxY = (center?.bottom ?? innerHeight) - height - 8;
+  const minX = bounds.left + 8,
+    minY = bounds.top + 8,
+    maxX = bounds.right - width - 8,
+    maxY = bounds.bottom - height - 8;
   if (
     preferred &&
     preferred.x >= minX &&
@@ -222,11 +256,17 @@ export function WorkspaceCompanion() {
     let anchorFrame = 0;
     let climbFrame = 0;
     let perch: ClimbTarget | null = null;
-    let parked: Position | undefined;
+    let parked: (Position & { sidebar: boolean }) | undefined;
+    let restingInSidebar = false;
     try {
       const saved = JSON.parse(localStorage.getItem(storageKey) || "null");
-      if (saved && Number.isFinite(saved.x) && Number.isFinite(saved.y))
-        parked = { x: saved.x * innerWidth, y: saved.y * innerHeight };
+      if (saved && Number.isFinite(saved.x) && Number.isFinite(saved.y)) {
+        parked = {
+          x: saved.x * innerWidth,
+          y: saved.y * innerHeight,
+          sidebar: saved.sidebar === true,
+        };
+      }
     } catch {
       /* Ignore an invalid local position. */
     }
@@ -263,35 +303,28 @@ export function WorkspaceCompanion() {
         : 0;
       return { width, height: (compact ? 58 : 118) + reminderHeight };
     };
-    const constrain = (point: Position) => {
-      const { width, height } = size();
-      const center = document
-        .querySelector(".workspace-center")
-        ?.getBoundingClientRect();
-      const left = center?.left ?? 0;
-      const top = center?.top ?? 0;
-      const right = center?.right ?? document.documentElement.clientWidth;
-      const bottom = center?.bottom ?? innerHeight;
-      return {
-        x: Math.max(left + 8, Math.min(point.x, right - width - 8)),
-        y: Math.max(top + 8, Math.min(point.y, bottom - height - 8)),
-      };
-    };
-    const position = (point: Position, commit = true) => {
-      state.position = constrain(point);
+    const constrain = (point: Position, bounds = roamingBounds()) =>
+      clampPosition(point, size(), bounds);
+    const position = (
+      point: Position,
+      commit = true,
+      bounds = roamingBounds(),
+    ) => {
+      state.position = constrain(point, bounds);
       if (panel.current)
         panel.current.style.transform = `translate3d(${state.position.x}px, ${state.position.y}px, 0)`;
       if (commit) publish();
     };
     const persist = () => {
       if (!state.position) return;
-      parked = { ...state.position };
+      parked = { ...state.position, sidebar: restingInSidebar };
       try {
         localStorage.setItem(
           storageKey,
           JSON.stringify({
             x: parked.x / innerWidth,
             y: parked.y / innerHeight,
+            ...(parked.sidebar ? { sidebar: true } : {}),
           }),
         );
       } catch {
@@ -327,7 +360,10 @@ export function WorkspaceCompanion() {
     const attach = (home: boolean) => {
       state.docked = !!(home && nest);
       if (host.parentElement !== document.body) document.body.appendChild(host);
-      if (state.docked) state.compact = false;
+      if (state.docked) {
+        restingInSidebar = false;
+        state.compact = false;
+      }
       if (panel.current) {
         panel.current.dataset.docked = String(state.docked);
         panel.current.style.transform = `translate3d(${state.position?.x || 0}px, ${state.position?.y || 0}px, 0)`;
@@ -403,7 +439,30 @@ export function WorkspaceCompanion() {
       state.compact = !regular;
       return small;
     };
+    const placeInSidebar = (preferred: Position, bounds: PlacementBounds) => {
+      const areas = occupiedAreas();
+      for (const compact of [false, true]) {
+        const dimensions = size(compact);
+        const point = clampPosition(preferred, dimensions, bounds);
+        const next = findSpace(
+          dimensions.width,
+          dimensions.height,
+          areas,
+          point,
+          bounds,
+        );
+        if (!next) continue;
+        state.compact = compact;
+        restingInSidebar = true;
+        position(next, true, bounds);
+        return true;
+      }
+      return false;
+    };
     const clearRest = (preferred?: Position) => {
+      const sidebar = restingInSidebar && sidebarBounds();
+      if (sidebar && preferred && placeInSidebar(preferred, sidebar)) return;
+      restingInSidebar = false;
       const next = destination(preferred);
       position(
         next ||
@@ -457,6 +516,7 @@ export function WorkspaceCompanion() {
       }
       cancelTransition();
       leavePerch();
+      restingInSidebar = false;
       state.compact = target.compact;
       attach(false);
       perch = target;
@@ -581,6 +641,7 @@ export function WorkspaceCompanion() {
             finish();
             return;
           }
+          restingInSidebar = false;
           attach(false);
           position(target, false);
         }
@@ -658,6 +719,12 @@ export function WorkspaceCompanion() {
       drag = null;
       active();
       lastTravel = Date.now() - 4000;
+      const sidebar = parked?.sidebar && sidebarBounds();
+      restingInSidebar = false;
+      if (sidebar && parked && nest) {
+        attach(false);
+        if (placeInSidebar(parked, sidebar)) return;
+      }
       if (nestAvailable()) {
         attach(true);
         publish();
@@ -692,11 +759,14 @@ export function WorkspaceCompanion() {
           }
           return;
         }
+        const sidebar = restingInSidebar && sidebarBounds();
         const { width, height } = size();
         if (
           !state.position ||
           state.position.y + height > innerHeight - 8 ||
           state.position.x + width > document.documentElement.clientWidth - 8 ||
+          (restingInSidebar &&
+            (!sidebar || state.position.x + width > sidebar.right - 8)) ||
           !isClear(state.position, width, height, occupiedAreas())
         )
           clearRest(state.position || undefined);
@@ -705,7 +775,19 @@ export function WorkspaceCompanion() {
     const release = (event?: globalThis.PointerEvent) => {
       if (!drag || (event && event.pointerId !== drag.id)) return;
       if (drag.moved) {
-        if (!climb(true)) {
+        const sidebar = sidebarBounds();
+        const drop = event ? { x: event.clientX, y: event.clientY } : pointer;
+        const placed =
+          sidebar &&
+          drop &&
+          state.position &&
+          drop.x >= sidebar.left &&
+          drop.x < sidebar.right &&
+          drop.y >= sidebar.top &&
+          drop.y < sidebar.bottom &&
+          placeInSidebar(state.position, sidebar);
+        if (placed) persist();
+        else if (!climb(true)) {
           clearRest(state.position || undefined);
           persist();
         }
@@ -730,11 +812,25 @@ export function WorkspaceCompanion() {
         suppressClick.current = true;
         cancelTransition();
         leavePerch();
+        restingInSidebar = false;
         state.dragging = true;
         attach(false);
         publish();
       }
-      position({ x: drag.origin.x + dx, y: drag.origin.y + dy }, false);
+      const bounds = roamingBounds();
+      const sidebar = sidebarBounds();
+      position(
+        { x: drag.origin.x + dx, y: drag.origin.y + dy },
+        false,
+        sidebar
+          ? {
+              left: sidebar.left,
+              top: sidebar.top,
+              right: bounds.right,
+              bottom: bounds.bottom,
+            }
+          : bounds,
+      );
       if (!dragFrame)
         dragFrame = requestAnimationFrame(() => {
           dragFrame = 0;
@@ -815,7 +911,17 @@ export function WorkspaceCompanion() {
           }
         : state.position!;
       attach(false);
-      position({ x: origin.x + direction[0], y: origin.y + direction[1] });
+      const point = { x: origin.x + direction[0], y: origin.y + direction[1] };
+      const sidebar = sidebarBounds();
+      const enterSidebar =
+        sidebar &&
+        (restingInSidebar
+          ? point.x <= sidebar.right - size().width - 8
+          : event.key === "ArrowLeft" && point.x < roamingBounds().left + 8);
+      if (!enterSidebar || !placeInSidebar(point, sidebar)) {
+        restingInSidebar = false;
+        position(point);
+      }
       persist();
     };
     controls.current = {
@@ -885,6 +991,8 @@ export function WorkspaceCompanion() {
     observer.observe(document.body, { childList: true, subtree: true });
     const resizeObserver = new ResizeObserver(reflow);
     if (panel.current) resizeObserver.observe(panel.current);
+    const sidebar = document.querySelector(".workspace > .sidebar");
+    if (sidebar) resizeObserver.observe(sidebar);
     const events = ["pointerdown", "keydown", "input", "focusin", "wheel"];
     for (const event of events)
       window.addEventListener(event, active, { capture: true, passive: true });
@@ -901,6 +1009,7 @@ export function WorkspaceCompanion() {
     const timer = setInterval(() => {
       const blocked =
         perch ||
+        restingInSidebar ||
         drag ||
         document.hidden ||
         innerWidth < 768 ||
