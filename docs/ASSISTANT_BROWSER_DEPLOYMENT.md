@@ -43,7 +43,7 @@
 
 准备产生一次计算、下载及保留 checkpoint 的存储用量；超时只是程序执行限制，不是平台费用上限。保留上一个仍在使用的版本供回滚；新版本验证且所有服务不再引用旧名称后，由管理员按同一环境下确切 checkpoint ID 删除旧版本。脚本不会删除其他 checkpoint，不创建常驻预热 VM、不购买新服务。SDK 的 `create(template)` 会隐式等待模板构建，生产打开路径因此使用已存在的 `create(checkpointName)`。
 
-运行日志仅记录固定阶段 `CREATING / UPLOADING / VERIFYING / CONNECTING / READY / CLEANUP` 及有限数值 `elapsedMs`、`sincePreviousMs`，用于比较优化后的真实启动时间；不记录页面、输入、Cookie、token、安装输出或 SDK 原始错误。准备回执也只包含资源 ID、版本名称、固定阶段和固定错误码。
+运行日志记录固定阶段 `CREATING / UPLOADING / VERIFYING / CONNECTING / OPEN_DISPATCHED / READY / CLEANUP` 及有限数值 `elapsedMs`、`sincePreviousMs`。`CONNECTING` 到 `OPEN_DISPATCHED` 计安全通道建立和启动请求发出，之后到 `READY` 计浏览器初始化及回执。启动按已校验的视口创建会话，视口在启动期间发生变化时仍由正常流程调整。直接浏览的首帧日志另记录运行环境、导航、截图与写入的耗时，以便定位首屏等待。日志不记录网页地址、输入、Cookie、token、安装输出或 SDK 原始错误。准备回执只包含资源 ID、版本名称、固定阶段和固定错误码。
 
 创建前先记录意图并全局限制最多 2 个未确认销毁的环境。创建响应返回 VM ID 后立即持久记录，即使用户已停止任务也保留清理目标；不等待 SDK 的启动就绪阶段。确认销毁或确认资源不存在后才释放记录；清理失败保留记录并由后续 Worker 调度继续处理。无法确定创建结果时不重复创建、不把记录当作成功销毁，也不猜测或删除其他 VM。任务结束、租约失效、心跳中断或过期的已知环境会进入清理。
 

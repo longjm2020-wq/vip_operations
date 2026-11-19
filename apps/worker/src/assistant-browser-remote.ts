@@ -1,3 +1,4 @@
+import type { BrowserViewport } from '../../../packages/contracts/src/assistant-browser.js';
 import { BrowserHandoff, BrowserUnavailable, type BrowserDriver } from './assistant-browser-page.js';
 import { BrowserRpcLines, browserRpcReply, browserRpcRequest, browserRpcResult, encodeBrowserRpc, type BrowserRpcRequest, type BrowserRpcError } from './assistant-browser-rpc.js';
 
@@ -36,7 +37,7 @@ export class RemoteBrowserDriver implements BrowserDriver {
     lifetime.addEventListener('abort',this.abort,{once:true});
     if (lifetime.aborted) this.abort();
   }
-  async initialize(state:unknown) { await this.call({op:'open',state:state ?? null}); return this; }
+  async initialize(state:unknown, viewport?:BrowserViewport) { await this.call({op:'open',state:state ?? null,viewport}); return this; }
   async observe() { return browserRpcResult('observe',await this.call({op:'observe'})) as Awaited<ReturnType<BrowserDriver['observe']>>; }
   async frame() {
     const value = browserRpcResult('frame',await this.call({op:'frame'})) as {jpeg:string;width:number;height:number;url:string;title:string;revision?:string};
@@ -114,8 +115,8 @@ export class RemoteBrowserDriver implements BrowserDriver {
   }
 }
 
-export async function openRemoteBrowser(transport:BrowserRpcTransport,saved:unknown,signal:AbortSignal) {
+export async function openRemoteBrowser(transport:BrowserRpcTransport,saved:unknown,signal:AbortSignal,initialViewport?:BrowserViewport) {
   const driver = new RemoteBrowserDriver(transport,signal);
-  try { return await driver.initialize(saved); }
+  try { return await driver.initialize(saved, initialViewport); }
   catch (error) { await driver.close().catch(() => {}); throw error; }
 }

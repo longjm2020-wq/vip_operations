@@ -46,7 +46,7 @@ export class BrowserRpcServer {
       if (request.op === 'open') {
         if (this.initialized) throw new BrowserUnavailable();
         this.initialized = true;
-        this.opening = this.open(request.state ?? undefined,this.lifetime.signal);
+        this.opening = this.open(request.state ?? undefined,this.lifetime.signal,request.viewport);
         const driver = await this.opening;
         this.driver = driver;
         if (this.closed) { await driver.close(); return; }

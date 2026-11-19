@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { Sandbox } from "railway";
+import type { BrowserViewport } from "../../../packages/contracts/src/assistant-browser.js";
 import type { BrowserRun } from "../../api/src/modules/workspace/assistant-browser.js";
 import type * as environments from "./assistant-browser-environments.js";
 import {
@@ -203,7 +204,13 @@ type Dependencies = {
   ) => void | Promise<void>;
 };
 export type BrowserRuntimeStage =
-  "CREATING" | "UPLOADING" | "VERIFYING" | "CONNECTING" | "READY" | "CLEANUP";
+  | "CREATING"
+  | "UPLOADING"
+  | "VERIFYING"
+  | "CONNECTING"
+  | "OPEN_DISPATCHED"
+  | "READY"
+  | "CLEANUP";
 function safeLog(code: string) {
   console.warn(JSON.stringify({ event: "assistant_browser_runtime", code }));
 }
@@ -366,16 +373,22 @@ export class RailwayBrowserRuntime {
       throw Error("BROWSER_VM_CLEANUP_UNCONFIRMED");
     }
   }
-  async open(run: BrowserRun, saved: unknown, parent: AbortSignal) {
+  async open(
+    run: BrowserRun,
+    saved: unknown,
+    parent: AbortSignal,
+    initialViewport?: BrowserViewport,
+  ) {
     const started = performance.now();
     let previous = started;
     const stage = async (value: BrowserRuntimeStage) => {
       const now = performance.now();
-      await this.stage(value, {
+      const timing = {
         elapsedMs: Math.round(now - started),
         sincePreviousMs: Math.round(now - previous),
-      });
+      };
       previous = now;
+      await this.stage(value, timing);
     };
     const deadline = Math.min(
       Date.parse(run.expiresAt),
@@ -389,9 +402,11 @@ export class RailwayBrowserRuntime {
         lifetime.signal,
         AbortSignal.timeout(deadline - Date.now()),
       ]);
-    const { bundle, digest } = packBrowserRuntime(await this.deps.assets());
     canceled(signal);
-    await this.checkTemplate(signal);
+    const [{ bundle, digest }] = await Promise.all([
+      this.deps.assets().then(packBrowserRuntime),
+      this.checkTemplate(signal),
+    ]);
     canceled(signal);
     const intentId = await this.deps.store.reserveBrowserEnvironment(
       run,
@@ -590,8 +605,16 @@ export class RailwayBrowserRuntime {
           onClose();
         },
       );
+      let openingWrite: Promise<void> | undefined;
       const transport: BrowserRpcTransport = {
-        write: (line) => execution!.stdin.write(line),
+        write: (line) => {
+          const write = execution!.stdin.write(line);
+          if (openingWrite) return write;
+          openingWrite = write.then(() => {
+            if (!signal.aborted) void stage("OPEN_DISPATCHED");
+          });
+          return openingWrite;
+        },
         subscribe: (chunk, closed) => {
           onChunk = chunk;
           onClose = closed;
@@ -603,7 +626,13 @@ export class RailwayBrowserRuntime {
         },
         close,
       };
-      const driver = await openRemoteBrowser(transport, saved, signal);
+      const driver = await openRemoteBrowser(
+        transport,
+        saved,
+        signal,
+        initialViewport,
+      );
+      await openingWrite;
       await stage("READY");
       return driver;
     } catch (error) {

@@ -474,7 +474,17 @@ describe("Railway independent browser lifecycle (no real resources)", () => {
       cookies: [{ name: "session", value: "owned-cookie-secret" }],
       origins: [],
     };
-    const opening = f.runtime.open(f.run, saved, f.controller.signal);
+    const initialViewport = { width: 940, height: 616 };
+    remote.open.mockImplementationOnce(async (transport: BrowserRpcTransport) => {
+      await transport.write("initial open request");
+      return { close: () => transport.close() };
+    });
+    const opening = f.runtime.open(
+      f.run,
+      saved,
+      f.controller.signal,
+      initialViewport,
+    );
     await f.receiptRead.promise;
     expect(f.record).toHaveBeenCalledWith(f.intentId, f.sandboxId);
     expect(f.write).not.toHaveBeenCalled();
@@ -513,6 +523,7 @@ describe("Railway independent browser lifecycle (no real resources)", () => {
       expect.any(Object),
       saved,
       expect.any(AbortSignal),
+      initialViewport,
     );
     expect(f.exec).toHaveBeenCalledWith(
       browserRuntimeCommand,
@@ -542,6 +553,7 @@ describe("Railway independent browser lifecycle (no real resources)", () => {
       "UPLOADING",
       "VERIFYING",
       "CONNECTING",
+      "OPEN_DISPATCHED",
       "READY",
       "CLEANUP",
     ]);

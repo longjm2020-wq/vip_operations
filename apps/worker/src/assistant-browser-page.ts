@@ -3,7 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { chromium, type BrowserContext, type ElementHandle, type Frame, type LaunchOptions, type Page } from '@playwright/test';
-import type { BrowserAction, BrowserManualAction, BrowserNavigationAction, BrowserObservation } from '../../../packages/contracts/src/assistant-browser.js';
+import type { BrowserAction, BrowserManualAction, BrowserNavigationAction, BrowserObservation, BrowserViewport } from '../../../packages/contracts/src/assistant-browser.js';
 import { createPublicBrowserProxy, publicBrowserUrl } from './assistant-browser-proxy.js';
 
 export class BrowserHandoff extends Error {
@@ -256,7 +256,7 @@ export async function browserPause(ms: number, signal: AbortSignal) {
   });
 }
 
-export async function openIndependentBrowser(saved: unknown, signal: AbortSignal): Promise<BrowserDriver> {
+export async function openIndependentBrowser(saved: unknown, signal: AbortSignal, initialViewport?: BrowserViewport): Promise<BrowserDriver> {
   const directory = await mkdtemp(join(tmpdir(), 'xuti-browser-'));
   const proxy = await createPublicBrowserProxy({ signal }).catch(async (error) => { await rm(directory, { recursive: true, force: true }); throw error; });
   let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
@@ -265,7 +265,7 @@ export async function openIndependentBrowser(saved: unknown, signal: AbortSignal
     signal.throwIfAborted();
     // Only server-created, owner-bound encrypted storage is restored; no file paths are accepted.
     const storageState = saved && typeof saved === 'object' && !Array.isArray(saved) ? saved as Exclude<Parameters<typeof browser.newContext>[0], undefined>['storageState'] : undefined;
-    const context = await browser.newContext({ viewport, locale: 'zh-CN', acceptDownloads: false, serviceWorkers: 'block', permissions: [], storageState });
+    const context = await browser.newContext({ viewport: initialViewport ?? viewport, locale: 'zh-CN', acceptDownloads: false, serviceWorkers: 'block', permissions: [], storageState });
     context.setDefaultTimeout(3000);
     await context.route('**/*', async (route) => {
       try { publicBrowserUrl(route.request().url()); await route.continue(); }

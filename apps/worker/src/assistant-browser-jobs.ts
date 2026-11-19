@@ -48,7 +48,7 @@ export function startAssistantBrowserJobs() {
       const run = await store.claimBrowserTask();
       if (!run) return;
       const running = runIndependentBrowser(run, store, controller.signal,
-        remote ? (saved, signal) => remote!.open(run, saved, signal) : openIndependentBrowser)
+        remote ? (saved, signal, viewport) => remote!.open(run, saved, signal, viewport) : openIndependentBrowser)
         .catch(() => {})
         .finally(() => active.delete(running));
       active.add(running);

@@ -34,8 +34,8 @@ vi.mock("../../apps/worker/src/assistant-browser-railway.js", () => ({
     cleanup(signal: AbortSignal) {
       return fixture.cleanup(signal);
     }
-    open(run: BrowserRun, saved: unknown, signal: AbortSignal) {
-      return fixture.remoteOpen(run, saved, signal);
+    open(run: BrowserRun, saved: unknown, signal: AbortSignal, viewport?: BrowserRun["viewport"]) {
+      return fixture.remoteOpen(run, saved, signal, viewport);
     }
   },
 }));
@@ -203,6 +203,7 @@ describe("Railway browser job scheduling", () => {
   it("binds only claimed tasks to remote drivers, limits concurrency and waits for driver cleanup when stopping", async () => {
     const tasks = [run("a"), run("b"), run("c")];
     const saved = { cookies: [], origins: [] };
+    const viewport = { width: 720, height: 960 };
     const finished = new Map<string, () => void>();
     const closed: string[] = [];
     fixture.claim
@@ -216,7 +217,7 @@ describe("Railway browser job scheduling", () => {
     }));
     fixture.runner.mockImplementation(async (task, _store, signal, open) => {
       if (!open) throw Error("Remote opener was not supplied");
-      const driver = await open(saved, signal);
+      const driver = await open(saved, signal, viewport);
       await new Promise<void>((resolve) => {
         finished.set(task.id, resolve);
         signal.addEventListener("abort", () => resolve(), { once: true });
@@ -233,12 +234,14 @@ describe("Railway browser job scheduling", () => {
       tasks[0],
       saved,
       signal,
+      viewport,
     );
     expect(fixture.remoteOpen).toHaveBeenNthCalledWith(
       2,
       tasks[1],
       saved,
       signal,
+      viewport,
     );
     expect(signal.aborted).toBe(false);
     finished.get("a")!();
@@ -248,6 +251,7 @@ describe("Railway browser job scheduling", () => {
       tasks[2],
       saved,
       signal,
+      viewport,
     );
     expect(closed).toEqual(["a"]);
     await stop();

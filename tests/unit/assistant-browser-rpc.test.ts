@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { BrowserRpcServer } from '../../apps/worker/src/assistant-browser-bridge.js';
 import { RemoteBrowserDriver, type BrowserRpcTransport } from '../../apps/worker/src/assistant-browser-remote.js';
 import { BrowserRpcLines, browserRpcRequest, browserRpcLimit, encodeBrowserRpc, type BrowserRpcReply } from '../../apps/worker/src/assistant-browser-rpc.js';
-import type { BrowserDriver } from '../../apps/worker/src/assistant-browser-page.js';
+import type { BrowserDriver, openIndependentBrowser } from '../../apps/worker/src/assistant-browser-page.js';
 
 function fixture() {
   const lifetime = new AbortController();
@@ -18,7 +18,7 @@ function fixture() {
     navigate:vi.fn(async (action,current,signal) => { if (!await current()) throw Error('BROWSER_ACTION_STALE'); signal.throwIfAborted(); dispatches.push('navigate:'+action.kind); }),
     close:vi.fn(async () => {}),
   };
-  const open=vi.fn(async (_saved:unknown,_signal:AbortSignal) => driver);
+  const open=vi.fn<typeof openIndependentBrowser>(async () => driver);
   const server = new BrowserRpcServer(async reply => {
     replies.push(reply); receive(encodeBrowserRpc(reply));
   },open,100);
@@ -53,8 +53,9 @@ describe('private browser RPC',() => {
   });
   it('opens one owned session, returns bounded observations/frames and asks permission at dispatch',async () => {
     const f=fixture(); const state={cookies:[{name:'session',value:'owned-secret'}],origins:[]};
-    await f.client.initialize(state);
-    expect(f.open).toHaveBeenCalledWith(state,expect.any(AbortSignal));
+    const viewport={width:720,height:960};
+    await f.client.initialize(state,viewport);
+    expect(f.open).toHaveBeenCalledWith(state,expect.any(AbortSignal),viewport);
     await expect(f.client.observe()).resolves.toMatchObject({title:'Example'});
     await expect(f.client.frame()).resolves.toMatchObject({jpeg:Buffer.from([255,216,255,217])});
     const current=vi.fn(async () => true);
@@ -90,6 +91,8 @@ describe('private browser RPC',() => {
     for(const input of [
       {v:1,id:1,op:'eval',code:'process.env'},
       {v:1,id:1,op:'open',state:'/etc/passwd'},
+      {v:1,id:1,op:'open',state:null,viewport:{width:2561,height:900}},
+      {v:1,id:1,op:'open',state:null,viewport:{width:800,height:900,url:'https://example.com/'}},
       {v:1,id:1,op:'execute',action:{...click,script:'unsafe'}},
       {v:1,id:1,op:'manual',action:{kind:'type',text:'secret'},userId:'someone'},
     ]) expect(browserRpcRequest.safeParse(input).success).toBe(false);

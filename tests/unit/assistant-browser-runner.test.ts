@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { BrowserRun } from '../../apps/api/src/modules/workspace/assistant-browser.js';
 import type { BrowserAction } from '../../packages/contracts/src/assistant-browser.js';
-import type { BrowserDriver } from '../../apps/worker/src/assistant-browser-page.js';
+import type { BrowserDriver, openIndependentBrowser } from '../../apps/worker/src/assistant-browser-page.js';
 import { runIndependentBrowser, safeBrowserFailure, type BrowserStore } from '../../apps/worker/src/assistant-browser-runner.js';
 
 function setup() {
@@ -30,7 +30,7 @@ function setup() {
     recordBrowserStep:vi.fn(async(run)=>{if(!current(run))return false;state!.step++;return true;}),
     planBrowserStep:vi.fn<BrowserStore['planBrowserStep']>(async()=>({kind:'done',description:'已核验目标页面'})),
   };
-  const open=vi.fn(async()=>driver);
+  const open=vi.fn<typeof openIndependentBrowser>(async()=>driver);
   return {initial,controller,driver,store,open,getState:()=>state,setState:(value:BrowserRun|null)=>{state=value;},run:()=>runIndependentBrowser(initial,store,controller.signal,open)};
 }
 describe('independent browser lease execution',()=>{
@@ -60,18 +60,49 @@ describe('independent browser lease execution',()=>{
   it('direct browsing navigates and acknowledges input without observing or calling a model',async()=>{
     const f=setup();
     f.initial.initialUrl='https://example.com/';
-    f.setState({...f.initial,mode:'BROWSE',status:'PAUSED',viewport:{width:700,height:900}});
+    f.initial.mode='BROWSE';
+    const viewport = {width:700,height:900};
+    f.setState({...f.initial,status:'PAUSED',viewport});
     let inputs=0;
     f.store.takeBrowserManualAction=vi.fn(async()=>{
       if(inputs++===0)return {id:'typing',requestId:'request',action:{kind:'type' as const,text:'中文搜索'}};
       f.setState(null);return null;
     });
-    await f.run();
-    expect(f.driver.navigate).toHaveBeenNthCalledWith(1,{kind:'resize',viewport:{width:700,height:900}},expect.any(Function),expect.any(AbortSignal));
-    expect(f.driver.navigate).toHaveBeenNthCalledWith(2,{kind:'goto',url:'https://example.com/'},expect.any(Function),expect.any(AbortSignal));
+    const info = vi.spyOn(console,'info').mockImplementation(() => {});
+    try {
+      await f.run();
+      expect(info).toHaveBeenCalledOnce();
+      expect(JSON.parse(String(info.mock.calls[0][0]))).toEqual({
+        event:'assistant_browser_first_frame',
+        runtimeMs:expect.any(Number),
+        navigationMs:expect.any(Number),
+        frameMs:expect.any(Number),
+        elapsedMs:expect.any(Number),
+      });
+    } finally { info.mockRestore(); }
+    expect(f.open).toHaveBeenCalledWith(expect.any(Object),expect.any(AbortSignal),viewport);
+    expect(f.driver.navigate).toHaveBeenCalledOnce();
+    expect(f.driver.navigate).toHaveBeenCalledWith({kind:'goto',url:'https://example.com/'},expect.any(Function),expect.any(AbortSignal));
     expect(f.store.completeBrowserAction).toHaveBeenCalledWith(expect.any(Object),'typing');
     expect(f.driver.observe).not.toHaveBeenCalled();expect(f.store.planBrowserStep).not.toHaveBeenCalled();
     expect(f.open).toHaveBeenCalledTimes(1);expect(f.driver.close).toHaveBeenCalledTimes(1);
+  });
+  it('applies a viewport change accepted while the context is opening before the next navigation',async()=>{
+    const f=setup();
+    f.initial.initialUrl='https://example.com/';
+    const openingViewport={width:700,height:900};
+    const latestViewport={width:1000,height:600};
+    f.setState({...f.initial,mode:'BROWSE',status:'PAUSED',viewport:openingViewport});
+    f.open.mockImplementationOnce(async()=>{
+      f.setState({...f.getState()!,epoch:1,viewport:latestViewport});
+      return f.driver;
+    });
+    f.store.takeBrowserManualAction=vi.fn(async()=>{f.setState(null);return null;});
+    await f.run();
+    expect(f.open).toHaveBeenCalledWith(expect.any(Object),expect.any(AbortSignal),openingViewport);
+    expect(f.driver.navigate).toHaveBeenCalledTimes(2);
+    expect(f.driver.navigate).toHaveBeenNthCalledWith(1,{kind:'resize',viewport:latestViewport},expect.any(Function),expect.any(AbortSignal));
+    expect(f.driver.navigate).toHaveBeenNthCalledWith(2,{kind:'goto',url:'https://example.com/'},expect.any(Function),expect.any(AbortSignal));
   });
   it('a queued navigation supersedes the unvisited original URL and is consumed only once',async()=>{
     const f=setup();f.initial.initialUrl='https://example.com/old';
@@ -104,7 +135,7 @@ describe('independent browser lease execution',()=>{
     const f=setup();let screenshots=0;
     f.driver.frame=vi.fn(async()=>({jpeg:Buffer.from('jpeg'),width:1280,height:800,url:'https://example.com/',title:++screenshots===1?'执行前':'最终结果'}));
     await f.run();
-    expect(f.open).toHaveBeenCalledWith({cookies:[{name:'isolated-cookie'}],origins:[]},expect.any(AbortSignal));
+    expect(f.open).toHaveBeenCalledWith({cookies:[{name:'isolated-cookie'}],origins:[]},expect.any(AbortSignal),undefined);
     expect(f.store.saveBrowserSession).toHaveBeenCalled();
     expect(f.store.finishBrowserTask).toHaveBeenCalledWith(expect.objectContaining({epoch:0}),'DONE','已核验目标页面',expect.objectContaining({frameId:expect.any(String),jpeg:Buffer.from('jpeg'),title:'最终结果'}));
     expect(f.driver.frame).toHaveBeenCalledTimes(2);

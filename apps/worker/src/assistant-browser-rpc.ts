@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { browserActionSchema, browserManualActionSchema, browserNavigationActionSchema } from '../../../packages/contracts/src/assistant-browser.js';
+import { browserActionSchema, browserManualActionSchema, browserNavigationActionSchema, browserViewportSchema } from '../../../packages/contracts/src/assistant-browser.js';
 
 /** VM stdio is a private, finite protocol, never a shell or JavaScript evaluation API. */
 export const browserRpcLimit = 4 * 1024 * 1024;
@@ -11,7 +11,7 @@ const state = z.unknown().refine(value => {
   try { return Buffer.byteLength(JSON.stringify(value)) <= browserSessionLimit; } catch { return false; }
 });
 export const browserRpcRequest = z.discriminatedUnion('op', [
-  z.object({ ...base, op: z.literal('open'), state: state.nullable() }).strict(),
+  z.object({ ...base, op: z.literal('open'), state: state.nullable(), viewport: browserViewportSchema.optional() }).strict(),
   z.object({ ...base, op: z.literal('observe') }).strict(),
   z.object({ ...base, op: z.literal('frame') }).strict(),
   z.object({ ...base, op: z.literal('state') }).strict(),
