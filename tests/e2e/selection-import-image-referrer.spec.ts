@@ -47,7 +47,7 @@ test("imported supplier pictures render, preload and download without a blocked 
   await expect.poll(() => loaded('td[data-selection-column="images"] .selection-image-slide img')).toBe(true);
   await expect.poll(() => loaded('td[data-selection-column="labelImages"] .selection-image-slide img')).toBe(true);
   expect(internalCookies.some(cookie => cookie.includes("image-fixture-session=authenticated"))).toBe(true);
-  await imageCell.locator(".selection-image-slide img").click();
+  await imageCell.locator(".selection-image-slide img").dblclick();
   await expect.poll(() => loaded(".selection-preview-image")).toBe(true);
   await expect.poll(() => requests.some(request => request.url === urls[1])).toBe(true);
   await page.getByRole("button", { name: "下一张大图", exact: true }).click();

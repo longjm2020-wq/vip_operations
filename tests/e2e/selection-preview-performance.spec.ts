@@ -37,8 +37,22 @@ async function fixture(page: Page, saveData = false) {
 test("大图仅提前准备本格相邻图片，切图可用且关闭后停止请求", async ({ page }) => {
   const { requested, cell } = await fixture(page);
   expect([...new Set(requested)]).toEqual([pictureUrl(0)]);
-  await cell.locator("img").click();
+  const thumbnail = cell.locator(".selection-image-slide img");
   const preview = page.getByRole("dialog", { name: "图片图片预览", exact: true });
+  await thumbnail.click();
+  await expect(cell).toHaveClass(/selection-cell-active/);
+  await expect(preview).toHaveCount(0);
+
+  const thumbnailBounds = (await thumbnail.boundingBox())!;
+  const center = { x: thumbnailBounds.x + thumbnailBounds.width / 2, y: thumbnailBounds.y + thumbnailBounds.height / 2 };
+  await page.mouse.move(center.x, center.y);
+  await page.mouse.down();
+  await page.mouse.move(center.x + 12, center.y, { steps: 4 });
+  await page.mouse.move(center.x, center.y, { steps: 4 });
+  await page.mouse.up();
+  await expect(preview).toHaveCount(0);
+
+  await thumbnail.click();
   const image = preview.locator(".selection-preview-image");
   await expect(image).toHaveAttribute("decoding", "async");
   await expect(image).toHaveAttribute("fetchpriority", "high");
@@ -61,7 +75,7 @@ test("大图仅提前准备本格相邻图片，切图可用且关闭后停止�
 
 test("大图连续指针移动每帧只提交一次，最终位置和框选保持准确", async ({ page }) => {
   const { cell, requested } = await fixture(page, true);
-  await cell.locator("img").click();
+  await cell.locator(".selection-image-slide img").dblclick();
   const preview = page.getByRole("dialog", { name: "图片图片预览", exact: true });
   const image = preview.locator(".selection-preview-image");
   await expect.poll(() => image.evaluate(element => (element as HTMLImageElement).naturalWidth)).toBe(600);

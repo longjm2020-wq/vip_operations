@@ -71,6 +71,10 @@ async function fixture(page: Page, readonly = false, choiceFields = false, rowCo
       id: userId, displayName: "交互测试", roleCodes: [], csrfToken: "fixture",
       permissions: readonly ? ["selection.read"] : ["selection.read", "selection.manage"],
     };
+    if (path === "/api/v1/my-workspace/assistant/desktop") data = { devices: [], tasks: [] };
+    if (path === "/api/v1/my-workspace/assistant/browser") data = {
+      ready: false, canBrowse: false, workerOnline: false, encryptionReady: false, note: "", profile: null, tasks: [],
+    };
     if (path.endsWith("/revision")) data = { revision: `interactions-${revision}` };
     if (path.endsWith("/sync")) data = {
       revision: `interactions-${revision}`, index: rows.map(row => ({ id: row.id, token: row.updatedAt })), data: rows,
@@ -342,8 +346,12 @@ test("row shortcuts use visible fields, empty axes retain selection and text edi
 test("floating preview permits saving and scrolling the table, retains drag position and supports zoom and right-click actions", async ({ page, context }) => {
   await context.grantPermissions(["clipboard-read", "clipboard-write"]);
   await fixture(page);
-  await cell(page, 0, "labelImages").locator("img").click();
+  const thumbnail = cell(page, 0, "labelImages").locator(".selection-image-slide img");
   const preview = page.locator(".selection-image-preview-layer"), image = preview.locator(".selection-preview-image");
+  await thumbnail.click();
+  await expect(cell(page, 0, "labelImages")).toHaveClass(/selection-cell-active/);
+  await expect(preview).toHaveCount(0);
+  await thumbnail.click();
   await expect(preview).toBeVisible();
   await expect(preview).toHaveAttribute("aria-modal", "false");
   const saved = page.waitForResponse(response => response.url().endsWith("/style-selections/shortcut-0") && response.request().method() === "PATCH");
@@ -604,7 +612,7 @@ test("gallery enlargement becomes modeless for readonly users and switching anot
   await expect(preview.locator("img")).toHaveAttribute("src", imageUrls[1]);
   await expect(cell(page, 0, "registrationBatch").locator("input")).toHaveAttribute("readonly", "");
   await page.getByRole("button", { name: "关闭图片预览", exact: true }).click();
-  await cell(page, 0, "labelImages").locator("img").click();
+  await cell(page, 0, "labelImages").locator(".selection-image-slide img").dblclick();
   await expect(preview).toHaveCount(1);
   await expect(preview).toHaveAttribute("aria-label", "洗唛/吊牌图图片预览");
   await page.getByRole("button", { name: "关闭图片预览", exact: true }).click();
@@ -862,7 +870,7 @@ test("image text OCR starts on demand, copies from the right-click menu and pres
   let ocrRequests = 0;
   page.on("request", request => { if (new URL(request.url()).pathname.startsWith("/ocr/")) ocrRequests++; });
   await photoFixture(page);
-  await cell(page, 0, "labelImages").locator("img").click();
+  await cell(page, 0, "labelImages").locator(".selection-image-slide img").dblclick();
   expect(ocrRequests).toBe(0);
   const image = page.locator(".selection-preview-image"), text = page.getByRole("textbox", { name: "图片识别文字", exact: true });
   await image.click({ button: "right" });
@@ -891,7 +899,7 @@ test("original full-photo care label OCR recognizes Chinese material and percent
   const label = await readFile("tests/fixtures/selection-care-label-original.webp");
   await page.route("**/api/v1/style-selections/images/preview-*", route => route.fulfill({ contentType: "image/webp", body: label }));
   await page.reload();
-  await cell(page, 0, "labelImages").locator("img").click();
+  await cell(page, 0, "labelImages").locator(".selection-image-slide img").dblclick();
   await page.getByRole("button", { name: "识别图片文字", exact: true }).click();
   const text = page.getByRole("textbox", { name: "图片识别文字", exact: true });
   await expect(text).toHaveValue(/100%\s*山羊绒/, { timeout: 90000 });
@@ -903,7 +911,7 @@ test("readonly users can crop OCR, select and copy text without changing picture
   test.setTimeout(120000);
   await context.grantPermissions(["clipboard-read", "clipboard-write"]);
   const body = await photoFixture(page, true);
-  await cell(page, 0, "labelImages").locator("img").click();
+  await cell(page, 0, "labelImages").locator(".selection-image-slide img").dblclick();
   const image = page.locator(".selection-preview-image"), text = page.getByRole("textbox", { name: "图片识别文字", exact: true });
   await page.getByRole("button", { name: "框选识别文字", exact: true }).click();
   const bounds = (await image.boundingBox())!;
@@ -938,7 +946,7 @@ test("switching a picture cancels pending text recognition without putting the p
     if (route.request().resourceType() === "fetch") { fetched(); await finish; }
     await route.fulfill({ contentType: "image/png", body }).catch(() => {});
   });
-  await cell(page, 0, "labelImages").locator("img").click();
+  await cell(page, 0, "labelImages").locator(".selection-image-slide img").dblclick();
   await page.getByRole("button", { name: "识别图片文字", exact: true }).click();
   await started;
   await expect(page.locator(".selection-preview-text-panel")).toContainText("正在读取图片");
@@ -1212,7 +1220,7 @@ test("picture enlargement keeps draggable text details editable for their origin
   await page.getByRole("button",{name:"展开单元格详情",exact:true}).click();
   const detail = page.getByRole("dialog",{name:"单元格详情",exact:true});
   const content = detail.getByLabel("单元格详情内容",{exact:true});
-  await cell(page,0,"images").locator(".selection-image-slide img").click();
+  await cell(page,0,"images").locator(".selection-image-slide img").dblclick();
   const preview = page.locator(".selection-image-preview-layer");
   await expect(preview).toBeVisible();
   await expect(detail).toBeVisible();
@@ -1234,7 +1242,7 @@ test("picture enlargement keeps draggable text details editable for their origin
   await expect(page.getByRole("group",{name:"单元格编辑栏",exact:true}).getByLabel("编辑当前单元格",{exact:true})).toHaveValue("对照图片核对材质");
   await detail.getByRole("button",{name:"收起单元格详情",exact:true}).click();
   // The reverse order must also reposition the image controls correctly.
-  await cell(page,0,"images").locator(".selection-image-slide img").click();
+  await cell(page,0,"images").locator(".selection-image-slide img").dblclick();
   await cell(page,3,"material").click();
   await page.getByRole("button",{name:"展开单元格详情",exact:true}).click();
   await expect(content).toHaveValue("对照图片核对材质");

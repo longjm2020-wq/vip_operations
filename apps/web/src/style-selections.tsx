@@ -183,7 +183,7 @@ function SizeEditor({ value, disabled, onChange }: { value: string; disabled: bo
   }} />{customOpen && <Space.Compact><Input autoFocus aria-label="补充尺码" value={customValue} disabled={disabled} placeholder="输入尺码，按回车添加" onChange={event => setCustomValue(event.target.value)} onPressEnter={addCustom} /><Button disabled={disabled || !customValue.trim()} onClick={addCustom}>添加</Button><Button onClick={() => { setCustomOpen(false); setCustomValue(""); }}>取消</Button></Space.Compact>}</div>;
 }
 
-function ImageCell({ images, colors, linkedColors, standardColors, disabled, onChange, mobileId, labelImages = false,field, previewing, onPreview, pasteKey, pasteHandlers }: {field?:Column; mobileId?: string; images: SelectionImage[]; colors: string[]; linkedColors?: Record<string, string[]>; standardColors?: StandardImageColors; disabled: boolean; onChange: (images: SelectionImage[]) => void; labelImages?: boolean; previewing: boolean; onPreview: (index: number) => void; pasteKey: string; pasteHandlers: ImagePasteHandlers }) {
+function ImageCell({ images, colors, linkedColors, standardColors, disabled, onChange, mobileId, labelImages = false,field, selected, previewing, onPreview, pasteKey, pasteHandlers }: {field?:Column; mobileId?: string; images: SelectionImage[]; colors: string[]; linkedColors?: Record<string, string[]>; standardColors?: StandardImageColors; disabled: boolean; onChange: (images: SelectionImage[]) => void; labelImages?: boolean; selected: boolean; previewing: boolean; onPreview: (index: number) => void; pasteKey: string; pasteHandlers: ImagePasteHandlers }) {
   const { api } = useSelectionWorkspace();
 
   const { message } = App.useApp();
@@ -200,6 +200,7 @@ function ImageCell({ images, colors, linkedColors, standardColors, disabled, onC
   const [onScreen, setOnScreen] = useState(false);
   const [hasBeenVisible, setHasBeenVisible] = useState(false);
   const summaryRef = useRef<HTMLDivElement>(null);
+  const thumbnailPress = useRef<{ id: string; x: number; y: number } | null>(null);
   const currentImageIndex = Math.min(imageIndex, Math.max(0, images.length - 1));
   useEffect(() => summaryRef.current ? observeImageVisibility(summaryRef.current, visible => { setOnScreen(visible); if (visible) setHasBeenVisible(true); }) : undefined, [images.length > 0]);
   useEffect(() => {
@@ -278,8 +279,29 @@ function ImageCell({ images, colors, linkedColors, standardColors, disabled, onC
     <div className="selection-image-gallery">{editor}{!images.length && <Empty description="暂无图片，可添加链接、上传或粘贴图片" />}</div></Modal>;
   const all = <><Button className="selection-mini-tag" size="small" onClick={() => setAllOpen(true)}>全部</Button>{gallery}</>;
   if (!images.length) return <div className="selection-image-empty" tabIndex={0} aria-label={`${labelImages ? "洗唛/吊牌图" : "图片"}，支持粘贴链接或图片`} onPaste={paste}><button className="selection-image-placeholder" type="button" disabled={disabled} onClick={() => setAllOpen(true)}>+ 图片</button>{gallery}</div>;
-  return <div ref={summaryRef} className="selection-image-summary" data-selection-image-url={images[currentImageIndex].url} data-selection-image-index={currentImageIndex + 1} tabIndex={0} aria-label="图片轮播，点击图片放大" onMouseEnter={() => setCarouselPaused(true)} onMouseLeave={() => setCarouselPaused(false)} onFocus={() => setCarouselPaused(true)} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) setCarouselPaused(false); }} onPaste={paste} onKeyDown={event => { if (event.target === event.currentTarget && ["Enter", " "].includes(event.key) && !failedImages.has(images[currentImageIndex].url)) { event.preventDefault(); event.stopPropagation(); onPreview(currentImageIndex); } }}>
-    <div className="selection-image-slide">{hasBeenVisible && <Image loading="lazy" referrerPolicy="no-referrer" src={images[currentImageIndex].url} fallback={invalidSelectionImage} onError={() => imageError(images[currentImageIndex].url)} alt={failedImages.has(images[currentImageIndex].url) ? "无效图片，链接无法加载" : labelImages ? "洗唛/吊牌图" : images[currentImageIndex].color || "款式图片"} width="100%" height="100%" preview={false} onClick={event => { event.stopPropagation(); if (!failedImages.has(images[currentImageIndex].url)) onPreview(currentImageIndex); }} />}
+  const thumbnail = images[currentImageIndex];
+  const thumbnailFailed = failedImages.has(thumbnail.url);
+  return <div ref={summaryRef} className="selection-image-summary" data-selection-image-url={thumbnail.url} data-selection-image-index={currentImageIndex + 1} tabIndex={0} aria-label="图片轮播，选中单元格后点击图片放大，或按回车键" onMouseEnter={() => setCarouselPaused(true)} onMouseLeave={() => setCarouselPaused(false)} onFocus={() => setCarouselPaused(true)} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) setCarouselPaused(false); }} onPaste={paste} onKeyDown={event => { if (event.target === event.currentTarget && ["Enter", " "].includes(event.key) && !thumbnailFailed) { event.preventDefault(); event.stopPropagation(); onPreview(currentImageIndex); } }}>
+    <div className="selection-image-slide">{hasBeenVisible && <Image loading="lazy" referrerPolicy="no-referrer" src={thumbnail.url} fallback={invalidSelectionImage} onError={() => imageError(thumbnail.url)} alt={thumbnailFailed ? "无效图片，链接无法加载" : labelImages ? "洗唛/吊牌图" : thumbnail.color || "款式图片"} width="100%" height="100%" preview={false} draggable={false}
+      onMouseDown={event => {
+        // The enclosing cell updates the selection on this same mousedown.
+        const canPreview = selected && event.button === 0 && !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey;
+        thumbnailPress.current = canPreview ? { id: thumbnail.id, x: event.clientX, y: event.clientY } : null;
+      }}
+      onMouseMove={event => {
+        const press = thumbnailPress.current;
+        if (press && Math.hypot(event.clientX - press.x, event.clientY - press.y) >= 4) thumbnailPress.current = null;
+      }}
+      onMouseLeave={() => { thumbnailPress.current = null; }}
+      onClick={event => {
+        event.stopPropagation();
+        const press = thumbnailPress.current;
+        thumbnailPress.current = null;
+        const touch = "pointerType" in event.nativeEvent && event.nativeEvent.pointerType === "touch";
+        if (!thumbnailFailed && (touch || event.detail === 0 || press?.id === thumbnail.id)) onPreview(currentImageIndex);
+      }}
+      onDoubleClick={event => event.stopPropagation()}
+    />}
       <i className="selection-image-badge">{currentImageIndex + 1}/{images.length}</i>
       {images[currentImageIndex].color && <span className="selection-slide-color">{images[currentImageIndex].color}</span>}
       {images.length > 1 && <div className="selection-carousel-controls"><button type="button" aria-label="上一张图片" onClick={() => setImageIndex((currentImageIndex + images.length - 1) % images.length)}>‹</button><button type="button" aria-label="下一张图片" onClick={() => setImageIndex((currentImageIndex + 1) % images.length)}>›</button></div>}
@@ -290,7 +312,7 @@ function ImageCell({ images, colors, linkedColors, standardColors, disabled, onC
 
 // These callbacks bind a row/field identity and use state updaters. Selection changes
 // do not change their behavior or require rebuilding image controls in every cell.
-const MemoImageCell = memo(ImageCell, (before, after) => before.field === after.field && before.mobileId === after.mobileId && before.disabled === after.disabled && before.labelImages === after.labelImages && before.previewing === after.previewing && before.pasteKey === after.pasteKey && before.pasteHandlers === after.pasteHandlers && comparable(before.images) === comparable(after.images) && comparable(before.colors) === comparable(after.colors) && comparable(before.linkedColors) === comparable(after.linkedColors) && comparable(before.standardColors) === comparable(after.standardColors));
+const MemoImageCell = memo(ImageCell, (before, after) => before.field === after.field && before.mobileId === after.mobileId && before.disabled === after.disabled && before.labelImages === after.labelImages && before.selected === after.selected && before.previewing === after.previewing && before.pasteKey === after.pasteKey && before.pasteHandlers === after.pasteHandlers && comparable(before.images) === comparable(after.images) && comparable(before.colors) === comparable(after.colors) && comparable(before.linkedColors) === comparable(after.linkedColors) && comparable(before.standardColors) === comparable(after.standardColors));
 const ReadOnlyStockCell = memo(({ inventory }: { inventory: CollectionStock[] }) => <CollectionStockEditor readOnly inventory={inventory} onChange={()=>{}}/>, (before, after) => comparable(before.inventory) === comparable(after.inventory));
 // Cache row output by its data and local visual state. Event handlers read the
 // live interaction ref below so skipped rows still act on the current selection.
@@ -1461,7 +1483,7 @@ function StyleSelectionsTable({ layout }: { layout: SelectionLayoutController })
     const textColor = row.cellTextColors?.[column.key];
     const textRgb = /^#[0-9a-f]{6}$/i.test(textColor || "") ? [1,3,5].map(index => parseInt(textColor.slice(index,index+2),16)) : null;
     const textCanvas = textRgb ? (textRgb[0]*.299 + textRgb[1]*.587 + textRgb[2]*.114 > 160 ? "#24262d" : "#ffffff") : undefined;
-    const imagePreviewProps = { previewing: imagePreview?.rowKey === row._key && imagePreview?.columnKey === column.key, onPreview: (index: number) => setImagePreview({ rowKey: row._key, columnKey: column.key, index }), pasteKey: cellId(row._key, column.key), pasteHandlers: imagePasteHandlers };
+    const imagePreviewProps = { selected: selected && selectedCells.size === 1, previewing: imagePreview?.rowKey === row._key && imagePreview?.columnKey === column.key, onPreview: (index: number) => setImagePreview({ rowKey: row._key, columnKey: column.key, index }), pasteKey: cellId(row._key, column.key), pasteHandlers: imagePasteHandlers };
     const cell = (content: React.ReactNode) => <td key={column.key} {...common} onContextMenu={event => {
       event.preventDefault();
       const summary = event.currentTarget.querySelector<HTMLElement>("[data-selection-image-url]");
