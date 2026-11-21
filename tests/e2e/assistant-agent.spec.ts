@@ -1871,22 +1871,25 @@ test("名称有歧义时等待页说明原因，不跳转到猜测的网址", as
 test("历史 HTML 源码 TXT 可在右栏运行隔离的骑行动画和控件", async ({
   page,
 }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
   await setup(page);
   const path = "**/api/v1/my-workspace/assistant";
   const title = "pelican-bike.html 源码";
   const script = `<script>
     const wheel = document.getElementById("wheel");
+    const [leg, foot] = document.getElementById("leg-group").children;
     const toggle = document.getElementById("toggle");
     const speedControl = document.getElementById("speed");
     const speedDisplay = document.querySelector("#speed-display");
     document.getElementById("isolation").textContent = typeof fetch + "/" + typeof parent;
     try {
       document.getElementById("network-probe").setAttribute("href", "https://artifact-preview.invalid/program.png");
+      foot.setAttribute("href", "https://artifact-preview.invalid/anonymous.svg");
     } catch {}
 
     let distance = 0;
     let speed = 1;
-    let riding = true;
+    let riding = !matchMedia("(prefers-reduced-motion: reduce)").matches;
     let queued = false;
 
     function scheduleRide() {
@@ -1900,26 +1903,28 @@ test("历史 HTML 源码 TXT 可在右栏运行隔离的骑行动画和控件", 
       if (!riding) return;
       distance = (distance + speed) % 60;
       wheel.setAttribute("cx", String(20 + distance));
+      leg.setAttribute("d", "M0 30L" + (20 + distance) + " 5");
+      foot.setAttribute("transform", "translate(" + (20 + distance) + " 5)");
       scheduleRide();
     }
 
     toggle.addEventListener("click", () => {
       riding = !riding;
-      toggle.textContent = riding ? "暂停动画" : "继续动画";
+      toggle.textContent = riding ? "暂停动画" : "播放";
       if (riding) scheduleRide();
     });
     speedControl.addEventListener("input", () => {
       speed = Number(speedControl.value);
       speedDisplay.textContent = speed + " 倍速";
     });
-    scheduleRide();
+    if (riding) scheduleRide();
   </script>`;
   const source = [
     "骑行示例",
     "```html",
     "<!doctype html><html><body><h1>骑行预览</h1>",
-    '<svg viewBox="0 0 100 40"><circle id="wheel" cx="20" cy="20" r="10" /><image id="network-probe" width="1" height="1" /></svg>',
-    "<button id=\"toggle\" onclick=\"document.getElementById('isolation').textContent = 'unsafe'\">暂停动画</button>",
+    '<svg viewBox="0 0 100 40"><circle id="wheel" cx="20" cy="20" r="10" /><g id="leg-group"><path d="M0 30L20 5" /><path d="M0 0L5 0" transform="translate(20 5)" /></g><image id="network-probe" width="1" height="1" /></svg>',
+    "<button id=\"toggle\" onclick=\"document.getElementById('isolation').textContent = 'unsafe'\">播放</button>",
     '<label for="speed">骑行速度</label><input id="speed" type="range" min="1" max="3" step="1" value="1">',
     '<output id="speed-display">1 倍速</output><p id="isolation"></p>',
     '<img src="https://artifact-preview.invalid/image.png" alt="测试资源">',
@@ -2003,23 +2008,36 @@ test("历史 HTML 源码 TXT 可在右栏运行隔离的骑行动画和控件", 
   await expect(networkProbe).not.toHaveAttribute("href");
 
   const wheel = preview.locator("#wheel");
+  const leg = preview.locator("#leg-group > path").nth(0);
+  const foot = preview.locator("#leg-group > path").nth(1);
   await expect(wheel).toBeVisible();
+  await expect(wheel).toHaveAttribute("cx", "20");
+  await expect(foot).not.toHaveAttribute("href");
+  await preview.getByRole("button", { name: "播放" }).click();
   await expect(wheel).toHaveAttribute("cx", /^(2[1-9]|[3-7][0-9])$/);
+  await expect(leg).not.toHaveAttribute("d", "M0 30L20 5");
+  await expect(foot).not.toHaveAttribute("transform", "translate(20 5)");
   await preview.getByRole("button", { name: "暂停动画" }).click();
-  await expect(preview.getByRole("button", { name: "继续动画" })).toBeVisible();
+  await expect(preview.getByRole("button", { name: "播放" })).toBeVisible();
   const stoppedAt = (await wheel.getAttribute("cx")) ?? "";
+  const stoppedLeg = (await leg.getAttribute("d")) ?? "";
+  const stoppedFoot = (await foot.getAttribute("transform")) ?? "";
   await page.evaluate(async () => {
     for (let frame = 0; frame < 5; frame++) {
       await new Promise<number>((resolve) => requestAnimationFrame(resolve));
     }
   });
   expect(await wheel.getAttribute("cx")).toBe(stoppedAt);
+  expect(await leg.getAttribute("d")).toBe(stoppedLeg);
+  expect(await foot.getAttribute("transform")).toBe(stoppedFoot);
 
   await preview.getByRole("slider", { name: "骑行速度" }).press("End");
   await expect(preview.locator("#speed-display")).toHaveText("3 倍速");
-  await preview.getByRole("button", { name: "继续动画" }).click();
+  await preview.getByRole("button", { name: "播放" }).click();
   await expect(preview.getByRole("button", { name: "暂停动画" })).toBeVisible();
   await expect(wheel).not.toHaveAttribute("cx", stoppedAt);
+  await expect(leg).not.toHaveAttribute("d", stoppedLeg);
+  await expect(foot).not.toHaveAttribute("transform", stoppedFoot);
   await expect(preview.locator("#isolation")).toHaveText("undefined/undefined");
 
   await panel.getByRole("button", { name: "源码", exact: true }).click();

@@ -1,5 +1,6 @@
 export type ArtifactScriptSnapshot = {
   attributes: Record<string, string>;
+  children: string[];
   text: string;
   value?: string;
 };

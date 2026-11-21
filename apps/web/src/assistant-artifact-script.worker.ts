@@ -20,6 +20,7 @@ const bootstrap = String.raw`
 (() => {
   const allowedAttributes = new Set(${JSON.stringify(artifactScriptAttributes)});
   const elements = new Map();
+  const elementsById = new Map();
   const changes = new Map();
   let updateLength = 0;
   let hidden = false;
@@ -74,18 +75,23 @@ const bootstrap = String.raw`
     return result;
   }
 
-  function element(id, initial) {
+  function element(handle, initial) {
     const attributes = new Map(Object.entries(initial.attributes));
+    let children = initial.children;
     let text = initial.text;
     let value = initial.value ?? "";
     const target = {
-      id,
+      get id() { return attributes.get("id") ?? ""; },
+      get children() {
+        return children.map((child) => elements.get(child)?.target).filter(Boolean);
+      },
       get textContent() { return text; },
       set textContent(next) {
         next = limitedString(next ?? "");
-        if (next === text) return;
+        if (next === text && !children.length) return;
+        children = [];
         text = next;
-        enqueue(id, null, next);
+        enqueue(handle, null, next);
       },
       get value() { return value; },
       set value(next) { value = limitedString(next); },
@@ -96,7 +102,7 @@ const bootstrap = String.raw`
         next = limitedString(next);
         if (attributes.get(name) === next) return;
         attributes.set(name, next);
-        enqueue(id, name, next);
+        enqueue(handle, name, next);
       },
     };
     const fire = eventTarget(target, ["click", "input", "change"]);
@@ -104,7 +110,7 @@ const bootstrap = String.raw`
   }
 
   function getElementById(id) {
-    return elements.get(String(id))?.target ?? null;
+    return elementsById.get(String(id)) ?? null;
   }
   const document = {
     getElementById,
@@ -141,8 +147,12 @@ const bootstrap = String.raw`
       const snapshot = parse(json);
       hidden = snapshot.hidden;
       reducedMotion = snapshot.reducedMotion;
-      for (const [id, initial] of Object.entries(snapshot.elements)) {
-        elements.set(id, element(id, initial));
+      for (const [handle, initial] of Object.entries(snapshot.elements)) {
+        const item = element(handle, initial);
+        elements.set(handle, item);
+        const id = item.target.id;
+        if (id && id.length <= ${limits.maxIdLength} && !elementsById.has(id))
+          elementsById.set(id, item.target);
       }
     },
     load() {

@@ -25,24 +25,37 @@ function controlValue(element: Element): string | undefined {
 
 function bridgeElements(document: Document) {
   const elements = new Map<string, Element>();
-  for (const element of Document.prototype.querySelectorAll.call(
-    document,
-    "[id]",
-  )) {
-    if (
-      element.id &&
-      element.id.length <= artifactScriptLimits.maxIdLength &&
-      !["style", "template"].includes(element.localName) &&
-      !elements.has(element.id)
-    ) {
-      elements.set(element.id, element);
-      if (elements.size > artifactScriptLimits.elementCount) return;
-    }
+  const handles = new WeakMap<Element, string>();
+  const namedIds = new Set<string>();
+  const candidates = Array.from<Element>(
+    Document.prototype.querySelectorAll.call(document, "[id], [id] *"),
+  ).filter((element) => !["style", "template"].includes(element.localName));
+  const add = (element: Element) => {
+    const handle = String(elements.size);
+    elements.set(handle, element);
+    handles.set(element, handle);
+  };
+
+  // Reserve the budget for named elements before adding their anonymous descendants.
+  for (const element of candidates) {
+    const { id } = element;
+    if (!id || id.length > artifactScriptLimits.maxIdLength || namedIds.has(id))
+      continue;
+    if (elements.size >= artifactScriptLimits.elementCount) return;
+    namedIds.add(id);
+    add(element);
   }
-  return elements;
+  for (const element of candidates) {
+    if (elements.size >= artifactScriptLimits.elementCount) break;
+    if (!handles.has(element)) add(element);
+  }
+  return { elements, handles };
 }
 
-function elementSnapshots(elements: Map<string, Element>) {
+function elementSnapshots(
+  elements: Map<string, Element>,
+  handles: WeakMap<Element, string>,
+) {
   const snapshots: Record<string, ArtifactScriptSnapshot> = Object.create(null);
   let length = 0;
   for (const [id, element] of elements) {
@@ -56,6 +69,10 @@ function elementSnapshots(elements: Map<string, Element>) {
       text:
         element.textContent?.slice(0, artifactScriptLimits.valueLength) ?? "",
       value: controlValue(element),
+      children: Array.from(element.children).flatMap((child) => {
+        const handle = handles.get(child);
+        return handle === undefined ? [] : [handle];
+      }),
     };
     length += JSON.stringify([id, snapshot]).length;
     if (length > artifactScriptLimits.snapshotLength) return;
@@ -69,12 +86,13 @@ export function startArtifactScript(
   scripts: string[],
   setState: (state: "ready" | "error") => void,
 ) {
-  const elements = bridgeElements(document);
-  const snapshots = elements && elementSnapshots(elements);
-  if (!elements || !snapshots) {
+  const bridge = bridgeElements(document);
+  const snapshots = bridge && elementSnapshots(bridge.elements, bridge.handles);
+  if (!bridge || !snapshots) {
     setState("error");
     return;
   }
+  const { elements, handles } = bridge;
 
   let worker: Worker;
   try {
@@ -92,10 +110,12 @@ export function startArtifactScript(
     const target = event.target as Node | null;
     if (target?.nodeType !== Node.ELEMENT_NODE) return;
     const element = (target as Element).closest("[id]");
-    if (!element || elements.get(element.id) !== element) return;
+    if (!element) return;
+    const handle = handles.get(element);
+    if (handle === undefined) return;
     post({
       type: "event",
-      id: element.id,
+      id: handle,
       name: event.type as (typeof controlEvents)[number],
       value: controlValue(element),
     });
