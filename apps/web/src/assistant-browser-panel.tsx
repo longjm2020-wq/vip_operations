@@ -250,6 +250,93 @@ export function AssistantBrowserTaskCard({
   );
 }
 
+function LocalBrowserAddress({
+  choose,
+  disabled,
+}: {
+  choose?: () => void;
+  disabled: boolean;
+}) {
+  const [address, setAddress] = useState("");
+  const [opening, setOpening] = useState(false);
+  const [opened, setOpened] = useState(false);
+  const [error, setError] = useState("");
+  const launchInProgress = useRef(false);
+  const launch = async (url?: string) => {
+    if (launchInProgress.current) return;
+    launchInProgress.current = true;
+    setOpening(true);
+    setOpened(false);
+    setError("");
+    try {
+      await openLocalBrowser(url);
+      setOpened(true);
+    } catch (cause) {
+      setError((cause as Error).message);
+    } finally {
+      launchInProgress.current = false;
+      setOpening(false);
+    }
+  };
+  return (
+    <section className="assistant-browser-takeover" aria-label="本地浏览器地址">
+      <form
+        className="assistant-browser-navigation"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (address.trim()) void launch(address);
+        }}
+      >
+        <div className="assistant-browser-address">
+          <DesktopOutlined aria-hidden />
+          <Input
+            variant="borderless"
+            aria-label="网页地址"
+            placeholder="输入 HTTPS 网址，按回车在本机打开"
+            value={address}
+            maxLength={2048}
+            disabled={opening}
+            onChange={(event) => {
+              setAddress(event.target.value);
+              setError("");
+              setOpened(false);
+            }}
+          />
+          <Button
+            type="text"
+            size="small"
+            htmlType="submit"
+            icon={<ArrowUpOutlined />}
+            aria-label="打开网址"
+            disabled={opening || !address.trim()}
+          />
+        </div>
+      </form>
+      <div className="assistant-browser-local">
+        <Button size="small" loading={opening} onClick={() => void launch()}>
+          打开本地窗口
+        </Button>
+        {choose && (
+          <Button size="small" disabled={disabled || opening} onClick={choose}>
+            让小序操作本地网页
+          </Button>
+        )}
+        {error ? (
+          <span role="alert">{error}</span>
+        ) : (
+          <span role="status">
+            {opening
+              ? "正在打开本地窗口"
+              : opened
+                ? "已打开本地浏览器窗口"
+                : "网页在单独的桌面窗口显示"}
+          </span>
+        )}
+      </div>
+    </section>
+  );
+}
+
 function BrowserTakeover({
   task,
   owner,
@@ -260,8 +347,6 @@ function BrowserTakeover({
   disabled,
   unavailable,
   fullscreen,
-  showLocalBrowser,
-  chooseLocal,
 }: {
   task?: BrowserTask;
   owner: string;
@@ -272,14 +357,11 @@ function BrowserTakeover({
   disabled: boolean;
   unavailable?: string;
   fullscreen: boolean;
-  showLocalBrowser: boolean;
-  chooseLocal?: () => void;
 }) {
-  const { message, modal } = App.useApp();
+  const { message } = App.useApp();
   const [address, setAddress] = useState(task?.url || "");
   const [editingAddress, setEditingAddress] = useState(false);
   const [pending, setPending] = useState(false);
-  const [launchingLocal, setLaunchingLocal] = useState(false);
   const [navigating, setNavigating] = useState(false);
   const [viewport, setViewport] = useState<BrowserViewport>({
     width: 960,
@@ -785,37 +867,6 @@ function BrowserTakeover({
     }
     void navigation({ kind: "goto", url: parsed.data });
   };
-  const localBrowserReady = showLocalBrowser && canOpenLocalBrowser();
-  const launchLocal = async () => {
-    if (!localBrowserReady) {
-      modal.info({
-        title: "在桌面端打开本地浏览器",
-        okText: "关闭提示",
-        content: (
-          <>
-            <p>
-              {isDesktopClient()
-                ? "请更新小序桌面端。"
-                : "请安装并登录小序 Windows 桌面端。"}
-            </p>
-            <Button href="/downloads/xuti-desktop.zip" download>
-              下载 Windows 桌面端
-            </Button>
-          </>
-        ),
-      });
-      return;
-    }
-    setLaunchingLocal(true);
-    try {
-      await openLocalBrowser(editingAddress ? address : undefined);
-      setEditingAddress(false);
-    } catch (error) {
-      message.error((error as Error).message);
-    } finally {
-      setLaunchingLocal(false);
-    }
-  };
   const readOnlyNote =
     "历史任务已结束，此画面只读" +
     (frame.data?.expiresAt
@@ -827,37 +878,13 @@ function BrowserTakeover({
     (task?.navigationState === "ERROR"
       ? task.stage
       : loading
-        ? "正在打开网页"
+        ? "云端浏览器正在打开网页"
         : "");
   return (
     <section
       className="assistant-browser-takeover"
       aria-label="独立浏览器画面与接管"
     >
-      {showLocalBrowser && !fullscreen && (
-        <div className="assistant-browser-local">
-          <Button
-            size="small"
-            type={localBrowserReady ? "primary" : "default"}
-            icon={<DesktopOutlined aria-hidden />}
-            aria-label="本地浏览器"
-            loading={launchingLocal}
-            onClick={() => void launchLocal()}
-          >
-            本地浏览器
-          </Button>
-          {localBrowserReady && (
-            <Button
-              size="small"
-              disabled={disabled || launchingLocal}
-              onClick={chooseLocal}
-            >
-              让小序操作本地网页
-            </Button>
-          )}
-          <span>在单独的桌面窗口打开</span>
-        </div>
-      )}
       <form
         className="assistant-browser-navigation"
         onSubmit={(event) => {
@@ -898,14 +925,10 @@ function BrowserTakeover({
           <Input
             variant="borderless"
             aria-label="网页地址"
-            placeholder={
-              localBrowserReady && !canBrowse
-                ? "输入网址后点击本地浏览器"
-                : "输入网址，按回车打开"
-            }
+            placeholder="输入网址，按回车打开"
             value={address}
             maxLength={2048}
-            disabled={pending || disabled || (!canBrowse && !localBrowserReady)}
+            disabled={pending || disabled || !canBrowse}
             onFocus={() => setEditingAddress(true)}
             onBlur={() => {
               if (address === currentUrl) setEditingAddress(false);
@@ -998,7 +1021,7 @@ function BrowserTakeover({
                 ? readOnly
                   ? "没有可查看的最终画面，可能已过期或已清除"
                   : isActiveBrowserTask(task)
-                    ? "正在打开网页…"
+                    ? "云端浏览器正在打开网页…"
                     : "网页已关闭"
                 : ""
             }
@@ -1052,7 +1075,7 @@ export function AssistantBrowserPanel({
   choose,
   chooseLocal,
   disabled,
-  selectedId,
+  selection,
   selectTask,
   returnToChat,
   expanded,
@@ -1069,8 +1092,8 @@ export function AssistantBrowserPanel({
   choose: () => void;
   chooseLocal?: () => void;
   disabled: boolean;
-  selectedId?: string;
-  selectTask: (id: string) => void;
+  selection: { id?: string };
+  selectTask: (id?: string) => void;
   returnToChat: () => void;
   expanded: boolean;
   toggleExpanded: () => void;
@@ -1086,10 +1109,16 @@ export function AssistantBrowserPanel({
   const panelRef = useRef<HTMLDivElement>(null);
   const [fullscreen, setFullscreen] = useState(false);
   const [pageFullscreen, setPageFullscreen] = useState(false);
+  const [showCloud, setShowCloud] = useState(!!selection.id);
+  const localAvailable = embedded && canOpenLocalBrowser();
+  const localView = localAvailable && !showCloud;
   const request = useRef<{ value: string; id: string } | null>(null);
   const clearDialog = useRef<{ destroy: () => void } | null>(null);
   const mounted = useRef(true);
-  useEffect(() => setNewTab(false), [selectedId]);
+  useEffect(() => {
+    setNewTab(false);
+    if (selection.id) setShowCloud(true);
+  }, [selection]);
   useEffect(() => {
     const changed = () =>
       setFullscreen(document.fullscreenElement === panelRef.current);
@@ -1137,7 +1166,7 @@ export function AssistantBrowserPanel({
   }, [onSubmitting]);
   const tasks = data?.tasks || [];
   const selectedTask =
-    tasks.find((entry) => entry.id === selectedId) ||
+    tasks.find((entry) => entry.id === selection.id) ||
     tasks.find(isActiveBrowserTask) ||
     tasks[0];
   const task = newTab ? undefined : selectedTask;
@@ -1242,13 +1271,79 @@ export function AssistantBrowserPanel({
       if (mounted.current) setClosing(false);
     }
   };
+  const closePanel = (
+    <Button
+      type="text"
+      size="small"
+      icon={<DoubleRightOutlined />}
+      aria-label={embedded ? "关闭浏览器面板" : "返回对话"}
+      title="收起浏览器面板"
+      onClick={() => {
+        void leaveFullscreen().finally(returnToChat);
+      }}
+    />
+  );
+  const showInstall = () => {
+    modal.info({
+      title: "在桌面端打开本地浏览器",
+      okText: "关闭提示",
+      content: (
+        <>
+          <p>
+            {isDesktopClient()
+              ? "请更新小序桌面端。"
+              : "请安装并登录小序 Windows 桌面端。"}
+          </p>
+          <Button href="/downloads/xuti-desktop.zip" download>
+            下载 Windows 桌面端
+          </Button>
+        </>
+      ),
+    });
+  };
   return (
     <div
       ref={panelRef}
       className={`assistant-browser-panel${pageFullscreen ? " assistant-browser-page-fullscreen" : ""}`}
       data-browser-fullscreen={fullscreen || pageFullscreen}
     >
-      <div className="assistant-browser-tabbar">
+      {embedded && !fullscreen && !pageFullscreen && (
+        <div className="assistant-browser-local assistant-browser-mode">
+          <Button
+            size="small"
+            type={localView ? "primary" : "default"}
+            aria-pressed={localAvailable ? localView : undefined}
+            icon={<DesktopOutlined aria-hidden />}
+            onClick={() => {
+              if (!localAvailable) {
+                showInstall();
+                return;
+              }
+              selectTask(undefined);
+              setShowCloud(false);
+            }}
+          >
+            本地浏览器
+          </Button>
+          {localAvailable ? (
+            <Button
+              size="small"
+              type={showCloud ? "primary" : "default"}
+              aria-pressed={showCloud}
+              icon={<GlobalOutlined aria-hidden />}
+              onClick={() => setShowCloud(true)}
+            >
+              云端独立浏览器
+            </Button>
+          ) : (
+            <span>云端独立浏览器</span>
+          )}
+          {localView && (
+            <div className="assistant-browser-window-actions">{closePanel}</div>
+          )}
+        </div>
+      )}
+      <div className="assistant-browser-tabbar" hidden={localView}>
         <div
           className="assistant-browser-tab"
           title={task?.title || task?.instruction || "新网页"}
@@ -1277,7 +1372,13 @@ export function AssistantBrowserPanel({
                           </span>
                         ),
                       }))
-                    : [{ key: "empty", label: "暂无历史任务", disabled: true }],
+                    : [
+                        {
+                          key: "empty",
+                          label: "暂无历史任务",
+                          disabled: true,
+                        },
+                      ],
                 },
                 { type: "divider" },
                 {
@@ -1372,39 +1473,31 @@ export function AssistantBrowserPanel({
             }
             onClick={() => void toggleFullscreen()}
           />
-          <Button
-            type="text"
-            size="small"
-            icon={<DoubleRightOutlined />}
-            aria-label={embedded ? "关闭浏览器面板" : "返回对话"}
-            title="收起面板，保留当前网页"
-            onClick={() => {
-              void leaveFullscreen().finally(returnToChat);
-            }}
-          />
+          {closePanel}
         </div>
       </div>
       <div className="assistant-browser-content">
-        {open && (
-          <BrowserTakeover
-            key={task?.id || "new"}
-            task={task}
-            fullscreen={fullscreen || pageFullscreen}
-            showLocalBrowser={embedded}
-            chooseLocal={chooseLocal}
-            owner={owner}
-            refresh={refresh}
-            start={start}
-            update={update}
-            canBrowse={canBrowse}
-            disabled={disabled}
-            unavailable={
-              !canBrowse || error
-                ? error || data?.note || "正在连接浏览器"
-                : undefined
-            }
-          />
-        )}
+        {open &&
+          (localView ? (
+            <LocalBrowserAddress choose={chooseLocal} disabled={disabled} />
+          ) : (
+            <BrowserTakeover
+              key={task?.id || "new"}
+              task={task}
+              fullscreen={fullscreen || pageFullscreen}
+              owner={owner}
+              refresh={refresh}
+              start={start}
+              update={update}
+              canBrowse={canBrowse}
+              disabled={disabled}
+              unavailable={
+                !canBrowse || error
+                  ? error || data?.note || "正在连接云端浏览器"
+                  : undefined
+              }
+            />
+          ))}
       </div>
     </div>
   );

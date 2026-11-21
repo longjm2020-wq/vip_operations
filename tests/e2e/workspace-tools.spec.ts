@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import type { BrowserTask } from "../../packages/contracts/src/assistant-browser.js";
 import {
   openPersonalAssistant,
   selectAssistantPanel,
@@ -389,10 +390,58 @@ for (const width of [1440, 390]) {
   });
 }
 
-test("桌面端本地浏览器通过本机打开并准备网页指令", async ({ page }) => {
+test("桌面端地址栏默认在本机打开，也可明确选择云端浏览器", async ({ page }) => {
   const state = await fixture(page);
   const deviceId = "47d7cb0b-8975-4a1c-9f9b-b21942ec4ae2";
   const localRequests: Array<{ action: string; url?: string }> = [];
+  const cloudRequests: string[] = [];
+  const now = new Date().toISOString();
+  let cloudTask: BrowserTask = {
+    id: "1d06d29e-70ff-4fe6-a284-85748915919e",
+    instruction: "浏览旧云端页面",
+    status: "QUEUED",
+    stage: "正在打开网页",
+    step: 0,
+    url: "https://example.net/previous",
+    title: "",
+    createdAt: now,
+    updatedAt: now,
+    mode: "BROWSE",
+    navigationState: "STARTING",
+  };
+  await page.route("**/api/v1/my-workspace/assistant/browser", (route) =>
+    route.fulfill({
+      json: {
+        data: {
+          ready: true,
+          canBrowse: true,
+          workerOnline: true,
+          encryptionReady: true,
+          note: "",
+          profile: null,
+          tasks: [cloudTask],
+        },
+      },
+    }),
+  );
+  await page.route(
+    "**/api/v1/my-workspace/assistant/browser/browse",
+    (route) => {
+      const { url, viewport } = route.request().postDataJSON();
+      cloudRequests.push(url);
+      cloudTask = {
+        ...cloudTask,
+        instruction: `浏览 ${url}`,
+        url,
+        viewport,
+      };
+      return route.fulfill({ json: { data: cloudTask } });
+    },
+  );
+  await page.route(
+    "**/api/v1/my-workspace/assistant/browser/tasks/*/frame",
+    (route) => route.fulfill({ json: { data: null } }),
+  );
   await page.route("**/api/v1/my-workspace/assistant/desktop", (route) =>
     route.fulfill({
       json: {
@@ -451,20 +500,46 @@ test("桌面端本地浏览器通过本机打开并准备网页指令", async ({
     name: "本地浏览器",
     exact: true,
   });
+  const cloud = browser.getByRole("button", {
+    name: "云端独立浏览器",
+    exact: true,
+  });
+  const submit = browser.getByRole("button", {
+    name: "打开网址",
+    exact: true,
+  });
   const address = browser.getByRole("textbox", {
     name: "网页地址",
     exact: true,
   });
+  await expect(local).toHaveAttribute("aria-pressed", "true");
+  await expect(cloud).toHaveAttribute("aria-pressed", "false");
+  const cloudLoading = browser
+    .getByRole("status")
+    .filter({ hasText: "云端浏览器正在打开网页" })
+    .first();
+  await expect(cloudLoading).toHaveCount(0);
+  await address.fill("https://example.com/help");
+  await address.press("Enter");
+  await expect
+    .poll(() => localRequests.map(({ url }) => url))
+    .toEqual(["https://example.com/help"]);
+  await expect(
+    browser.getByText("已打开本地浏览器窗口", { exact: true }),
+  ).toBeVisible();
+  await expect(address).toHaveValue("https://example.com/help");
   await address.fill("example.com");
-  await local.click();
+  await submit.click();
   await expect
     .poll(() => localRequests.map(({ url }) => url))
-    .toEqual(["https://example.com/"]);
-  await expect(address).toHaveValue("");
-  await local.click();
+    .toEqual(["https://example.com/help", "https://example.com/"]);
+  await browser
+    .getByRole("button", { name: /打开本地窗口/ })
+    .click();
   await expect
     .poll(() => localRequests.map(({ url }) => url))
-    .toEqual(["https://example.com/", undefined]);
+    .toEqual(["https://example.com/help", "https://example.com/", undefined]);
+  expect(cloudRequests).toEqual([]);
   const startTask = browser.getByRole("button", {
     name: "让小序操作本地网页",
     exact: true,
@@ -484,8 +559,20 @@ test("桌面端本地浏览器通过本机打开并准备网页指令", async ({
   await expect(page.locator(".assistant-compose:visible textarea")).toHaveValue(
     "在小序本地浏览器中操作当前网页：",
   );
-  expect(localRequests).toHaveLength(2);
   expect(state.writes).toEqual([]);
+  await cloud.click();
+  await expect(cloud).toHaveAttribute("aria-pressed", "true");
+  await expect(local).toHaveAttribute("aria-pressed", "false");
+  await expect(startTask).toBeHidden();
+  await expect(cloudLoading).toBeVisible();
+  await browser
+    .getByRole("button", { name: "打开新网址", exact: true })
+    .click();
+  await address.fill("https://example.org/cloud");
+  await submit.click();
+  await expect.poll(() => cloudRequests).toEqual(["https://example.org/cloud"]);
+  await expect(cloudLoading).toBeVisible();
+  expect(localRequests).toHaveLength(3);
 });
 
 test("工作台忽略旧的浏览器模式，常用电脑仅随自动分流请求传递", async ({

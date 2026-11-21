@@ -92,6 +92,11 @@
   color: var(--app-secondary);
   font-size: 12px;
 }
+.assistant-browser-mode {
+  flex-shrink: 0;
+  border-bottom: 1px solid
+    color-mix(in srgb, var(--app-secondary) 12%, transparent);
+}
 .assistant-browser-screen {
   display: flex;
   align-items: center;
@@ -175,6 +180,9 @@
   padding: 8px 10px;
   border-bottom: 1px solid
     color-mix(in srgb, var(--app-secondary) 12%, transparent);
+}
+.assistant-browser-tabbar[hidden] {
+  display: none;
 }
 .assistant-browser-tab {
   display: flex;

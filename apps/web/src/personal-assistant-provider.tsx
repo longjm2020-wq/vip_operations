@@ -415,7 +415,11 @@ export function PersonalAssistantProvider({
     refetchOnReconnect: "always",
   });
   const revealBrowserAfter = useRef<Set<string> | null>(null);
-  const [selectedBrowserTaskId, setSelectedBrowserTaskId] = useState<string>();
+  const [browserSelection, setBrowserSelection] = useState<{ id?: string }>({});
+  const setSelectedBrowserTaskId = useCallback(
+    (id?: string) => setBrowserSelection({ id }),
+    [],
+  );
   const [browserExpanded, setBrowserExpanded] = useState(false);
   const [browserStarting, setBrowserStarting] = useState(false);
   const browser = useQuery({
@@ -1870,7 +1874,7 @@ export function PersonalAssistantProvider({
           choose={chooseBrowser}
           chooseLocal={docked ? chooseLocalBrowser : undefined}
           disabled={busy || voice.listening}
-          selectedId={selectedBrowserTaskId}
+          selection={browserSelection}
           selectTask={setSelectedBrowserTaskId}
           returnToChat={() =>
             docked ? setToolsOpen(false) : setSection("chat")
