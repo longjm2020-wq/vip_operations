@@ -1443,6 +1443,222 @@ describe("assistant business tools and private memory", () => {
 afterEach(() => vi.unstubAllGlobals());
 afterAll(async () => fixture.database?.close());
 
+describe("AgentAI personal assistant receipts", () => {
+  const model = "claude-opus-5-5";
+  const modelRef = "agentai/" + model;
+  const endpoint = "https://agentai.token6688.com/v1/chat/completions";
+
+  beforeEach(async () => {
+    await fixture.database!.query(
+      `UPDATE agentai_settings SET enabled=true,api_key_encrypted='test-only',
+      verified_at=now(),version=1,catalog_at=now(),model_catalog=$1::jsonb,
+      updated_at=now()-interval '1 second'`,
+      [
+        JSON.stringify([
+          { model, type: "chat", name: "CL Opus 5.5", available: true },
+        ]),
+      ],
+    );
+    await fixture.database!.query(
+      `INSERT INTO agentai_model_verifications
+      (model,settings_version,chat_verified_at,tools_verified_at,structured_verified_at)
+      VALUES($1,1,now(),now(),now())`,
+      [model],
+    );
+    await fixture.database!.query(
+      `INSERT INTO ai_model_usage
+      (id,feature_id,source,model,response_model,status,completed_at)
+      VALUES($1::uuid,'assistant_chat','agentai.token6688.com',$2,$2,'success',now())`,
+      [randomUUID(), model],
+    );
+  });
+
+  afterEach(async () => {
+    await fixture.database!.exec(
+      `UPDATE agentai_settings SET enabled=false,api_key_encrypted=NULL,
+      verified_at=NULL,model_catalog='[]'; TRUNCATE agentai_model_verifications`,
+    );
+  });
+
+  it("accepts header-only AgentAI tool and final receipts and queues a real HTML source file once", async () => {
+    const html = '<!doctype html><svg viewBox="0 0 20 20"></svg>';
+    const args = {
+      title: "骑行动画.html 源码",
+      format: "txt",
+      sections: [{ heading: "", text: html, rows: [] }],
+    };
+    const fetcher = vi
+      .fn()
+      .mockResolvedValueOnce(
+        Response.json(
+          {
+            model,
+            choices: [
+              {
+                finish_reason: "tool_calls",
+                message: {
+                  content: null,
+                  tool_calls: [
+                    {
+                      type: "function",
+                      id: randomUUID(),
+                      function: {
+                        name: "create_document",
+                        arguments: JSON.stringify(args),
+                      },
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+          { headers: { "X-Request-Id": randomUUID() } },
+        ),
+      )
+      .mockResolvedValueOnce(
+        Response.json(
+          {
+            model,
+            choices: [
+              {
+                finish_reason: "stop",
+                message: {
+                  content: JSON.stringify({
+                    text: "已提交文件生成任务。",
+                    schedules: [],
+                    tools: [],
+                  }),
+                },
+              },
+            ],
+          },
+          { headers: { "X-Request-Id": randomUUID() } },
+        ),
+      );
+    vi.stubGlobal("fetch", fetcher);
+
+    const request = {
+      ...input(),
+      model: modelRef,
+      message: "生成一份含 SVG 的骑行动画 HTML 源码文件",
+    };
+    const result = await sendAssistant(actor(), request);
+    expect(result.state).toBe("IDLE");
+    expect(result.messages.at(-1)?.text).toBe("已提交文件生成任务。");
+    const jobs = await listAgentJobs(actor());
+    expect(jobs).toHaveLength(1);
+    expect(result.messages.at(-1)?.jobIds).toEqual([jobs[0].id]);
+    expect(await sendAssistant(actor(), request)).toMatchObject({
+      messages: result.messages,
+    });
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(fetcher.mock.calls.map(([url]) => url)).toEqual([
+      endpoint,
+      endpoint,
+    ]);
+    expect(
+      fetcher.mock.calls.map(
+        ([, init]) => JSON.parse(String(init?.body)).model,
+      ),
+    ).toEqual([model, model]);
+
+    await pollAssistantJobs(AbortSignal.timeout(10000));
+    const [completed] = await listAgentJobs(actor());
+    expect(completed.status).toBe("DONE");
+    expect(completed.files[0].name).toBe("骑行动画.html 源码.txt");
+    const [file] = await ownedAgentFiles(
+      actor(),
+      [completed.files[0].id],
+      true,
+    );
+    expect(Buffer.from(file.content).toString("utf8")).toContain(html);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    {
+      case: "missing receipt",
+      header: undefined,
+      responseModel: model,
+      finish: "stop",
+      content: "有效正文",
+      expected: "响应缺少可核对的请求标识",
+    },
+    {
+      case: "oversized receipt",
+      header: "x".repeat(201),
+      responseModel: model,
+      finish: "stop",
+      content: "有效正文",
+      expected: "响应缺少可核对的请求标识",
+    },
+    {
+      case: "different model",
+      header: "receipt",
+      responseModel: "claude-fable-5-2",
+      finish: "stop",
+      content: "有效正文",
+      expected: "模型标识不符",
+    },
+    {
+      case: "truncated reply",
+      header: "receipt",
+      responseModel: model,
+      finish: "length",
+      content: "不完整正文",
+      expected: "达到输出上限",
+    },
+    {
+      case: "malformed reply",
+      header: "receipt",
+      responseModel: model,
+      finish: "stop",
+      content: { invalid: true },
+      expected: "未返回完整回复",
+    },
+    {
+      case: "provider refusal",
+      header: "receipt",
+      responseModel: model,
+      finish: "stop",
+      content: null,
+      refusal: "internal provider reason",
+      expected: "拒绝了本次请求",
+    },
+  ])(
+    "rejects $case without a replacement call or a job",
+    async ({ header, responseModel, finish, content, refusal, expected }) => {
+      const fetcher = vi.fn(async () =>
+        Response.json(
+          {
+            model: responseModel,
+            choices: [
+              {
+                finish_reason: finish,
+                message: { content, refusal },
+              },
+            ],
+          },
+          { headers: header ? { "X-Request-Id": header } : {} },
+        ),
+      );
+      vi.stubGlobal("fetch", fetcher);
+      const result = await sendAssistant(actor(), {
+        ...input(),
+        model: modelRef,
+      });
+      expect(result.state).toBe("FAILED");
+      expect(result.error).toContain(expected);
+      expect(result.error).not.toContain("internal provider reason");
+      expect(
+        result.messages.map((message: AssistantMessage) => message.role),
+      ).toEqual(["user"]);
+      expect(await listAgentJobs(actor())).toEqual([]);
+      expect(fetcher).toHaveBeenCalledTimes(1);
+    },
+  );
+});
+
 describe("private personal assistant", () => {
   it("routes the quick-answer selection to the exact Flash snapshot and rejects a different version", async () => {
     const flashId = "deepseek/deepseek-v4.1-flash-1017";

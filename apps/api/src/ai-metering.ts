@@ -4,6 +4,7 @@ import {
   aiFeatures,
   type AiFeatureId,
 } from "../../../packages/contracts/src/ai-management.js";
+import { agentAiChatReceiptId } from "./agentai-receipt.js";
 
 const validFeatures = new Set<string>(aiFeatures.map((feature) => feature.id));
 const number = (value: unknown): number | null =>
@@ -180,20 +181,28 @@ async function finish(
   source: string,
   requestedModel: string,
   payload?: unknown,
+  chatReceiptId?: string,
 ) {
   const value = providerUsage(payload, source);
-  const previous = value.requestId
+  const requestId = chatReceiptId ?? value.requestId;
+  const previous = requestId
     ? await one(
         db,
         "SELECT id,model FROM public.ai_model_usage WHERE source=$1 AND provider_request_id=$2 AND id<>$3::uuid",
         source,
-        value.requestId,
+        requestId,
         id,
       )
     : undefined;
   if (previous) {
     // One provider receipt is billed once, including later asynchronous results.
-    await finish(String(previous.id), source, previous.model, payload);
+    await finish(
+      String(previous.id),
+      source,
+      previous.model,
+      payload,
+      chatReceiptId,
+    );
     await db.$queryRawUnsafe(
       "UPDATE public.ai_model_usage SET completed_at=now() WHERE id=$1::uuid",
       id,
@@ -229,7 +238,7 @@ async function finish(
     value.unit,
     value.credits,
     value.creditUnit,
-    value.requestId,
+    requestId,
     value.characters,
     value.inputVideoSeconds,
     value.outputVideoSeconds,
@@ -266,7 +275,7 @@ export async function recordAiReceipt(
   await finish(String(row.id), source, model, payload);
 }
 
-/** No prompts, media, headers, credentials or raw provider errors are stored. */
+/** Stores normalized receipts, without prompts, media, credentials or raw response data. */
 export async function aiFetch(
   feature: AiFeatureId,
   url: string | URL,
@@ -274,7 +283,11 @@ export async function aiFetch(
 ): Promise<Response> {
   if (!validFeatures.has(feature))
     throw Error("AI feature must be registered before calling a model");
-  const source = new URL(url).hostname;
+  const endpoint = new URL(url);
+  const source = endpoint.hostname;
+  const agentAiChat =
+    source === "agentai.token6688.com" &&
+    endpoint.pathname === "/v1/chat/completions";
   let model = "";
   if (typeof init.body === "string") {
     try {
@@ -393,12 +406,20 @@ export async function aiFetch(
             }
           }
         }
+        const chatReceiptId =
+          agentAiChat && !streaming && receipt && typeof receipt === "object"
+            ? agentAiChatReceiptId(
+                (receipt as { id?: unknown }).id,
+                response.headers,
+              )
+            : undefined;
         // Accounting failure must not discard an already-paid, valid response.
         await finish(
           id,
           source,
           model,
           withProviderBillingHeaders(receipt, source, response.headers),
+          chatReceiptId,
         ).catch(() => {});
       },
     }),

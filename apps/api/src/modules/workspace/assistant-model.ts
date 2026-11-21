@@ -1,5 +1,6 @@
 import { bailianChatConnection, postBailianChat } from "./bailian-chat.js";
 import { agentaiConnection, postAgentAiChat } from "./agentai-connection.js";
+import { agentAiChatReceiptId } from "../../agentai-receipt.js";
 import { aiFetch } from "../../ai-metering.js";
 import { randomUUID } from "node:crypto";
 import type { Row } from "../../../../../packages/database/src/index.js";
@@ -307,9 +308,36 @@ export async function askAssistantModel(
     } catch {
       fail("AI_RESPONSE_INVALID", "AI 返回格式无效，未采用此结果", 502);
     }
+    if (!payload || typeof payload !== "object" || Array.isArray(payload))
+      fail("AI_RESPONSE_INVALID", "AI 返回格式无效，未采用此结果", 502);
     const choice = payload.choices?.[0],
       msg = choice?.message;
-    if (!matchesAgentModel(model, payload.model) || !payload.id || msg?.refusal)
+    if (agentai) {
+      if (!matchesAgentModel(model, payload.model))
+        fail(
+          "AI_RESPONSE_INVALID",
+          "AI 返回的模型标识不符，请联系管理员核对当前型号",
+          502,
+        );
+      if (!agentAiChatReceiptId(payload.id, response.headers))
+        fail(
+          "AI_RESPONSE_INVALID",
+          "AI 响应缺少可核对的请求标识，请稍后重试",
+          502,
+        );
+      if (msg?.refusal)
+        fail("AI_RESPONSE_INVALID", "AI 拒绝了本次请求，请调整要求后重试", 502);
+      if (choice?.finish_reason === "length")
+        fail(
+          "AI_RESPONSE_INVALID",
+          "AI 回复达到输出上限，请缩短要求后重试",
+          502,
+        );
+    } else if (
+      !matchesAgentModel(model, payload.model) ||
+      !payload.id ||
+      msg?.refusal
+    )
       fail(
         "AI_RESPONSE_INVALID",
         "AI 模型标识不符或结果不完整，未采用此结果",
@@ -317,7 +345,7 @@ export async function askAssistantModel(
       );
     if (choice?.finish_reason === "tool_calls" && allowTools) {
       if (
-        !Array.isArray(msg.tool_calls) ||
+        !Array.isArray(msg?.tool_calls) ||
         !msg.tool_calls.length ||
         msg.tool_calls.length > 6 - used ||
         msg.tool_calls.some(
@@ -398,7 +426,9 @@ export async function askAssistantModel(
     if (choice?.finish_reason !== "stop" || typeof msg?.content !== "string")
       fail(
         "AI_RESPONSE_INVALID",
-        "AI 模型标识不符或结果不完整，未采用此结果",
+        agentai
+          ? "AI 未返回完整回复，请稍后重试"
+          : "AI 模型标识不符或结果不完整，未采用此结果",
         502,
       );
     let content: unknown;

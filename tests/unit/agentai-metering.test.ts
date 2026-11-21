@@ -94,6 +94,93 @@ describe("AgentAI actual usage", () => {
       ),
     ).toEqual({});
   });
+  it.each([
+    {
+      label: "uses the AgentAI chat response header when the body has no ID",
+      host: source,
+      path: "/v1/chat/completions",
+      feature: "assistant_chat",
+      bodyId: undefined,
+      taskId: undefined,
+      headerId: "provider-request-1",
+      requestId: "provider-request-1",
+    },
+    {
+      label: "keeps the AgentAI chat body ID when the header is also present",
+      host: source,
+      path: "/v1/chat/completions",
+      feature: "assistant_chat",
+      bodyId: "completion-1",
+      taskId: undefined,
+      headerId: "provider-request-1",
+      requestId: "completion-1",
+    },
+    {
+      label: "ignores an oversized AgentAI chat header receipt",
+      host: source,
+      path: "/v1/chat/completions",
+      feature: "assistant_chat",
+      bodyId: undefined,
+      taskId: undefined,
+      headerId: "x".repeat(201),
+      requestId: null,
+    },
+    {
+      label: "keeps the canonical AgentAI media task ID",
+      host: source,
+      path: "/v1/audio/voices",
+      feature: "agentai_voice_clone",
+      bodyId: "voice-1",
+      taskId: "audio-task-1",
+      headerId: "provider-request-1",
+      requestId: "audio-task-1",
+    },
+    {
+      label: "ignores the AgentAI header on other providers",
+      host: "another.example",
+      path: "/v1/chat/completions",
+      feature: "assistant_chat",
+      bodyId: undefined,
+      taskId: undefined,
+      headerId: "provider-request-1",
+      requestId: null,
+    },
+  ] as const)(
+    "$label",
+    async ({ host, path, feature, bodyId, taskId, headerId, requestId }) => {
+      const model = "claude-opus-5-5";
+      const data = {
+        ...(bodyId !== undefined ? { id: bodyId } : {}),
+        ...(taskId !== undefined ? { task_id: taskId } : {}),
+        model,
+        usage: { prompt_tokens: 8, completion_tokens: 3 },
+      };
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () =>
+          Response.json(data, {
+            headers: {
+              "X-Request-Id": headerId,
+              "X-TokenGo-Cost-RMB": "0.0123",
+            },
+          }),
+        ),
+      );
+      const response = await aiFetch(feature, `https://${host}${path}`, {
+        method: "POST",
+        body: JSON.stringify({ model }),
+      });
+      expect(await response.json()).toEqual(data);
+      const bill = writes.find((row) =>
+        String(row[0]).includes("input_tokens=COALESCE"),
+      );
+      expect(bill?.slice(2, 7)).toEqual(["success", model, 8, 3, 11]);
+      expect(bill?.slice(7, 9)).toEqual(
+        host === source ? [0.0123, "CNY"] : [null, null],
+      );
+      expect(bill?.[11]).toBe(requestId);
+    },
+  );
   it("merges the final SSE cost chunk without losing earlier token usage", async () => {
     vi.stubGlobal(
       "fetch",

@@ -25,6 +25,7 @@ import {
 } from "../../../../../packages/contracts/src/agentai-policy.js";
 import type { AiFeatureId } from "../../../../../packages/contracts/src/ai-management.js";
 import { audit, command, fail, parse, type Context } from "../../core.js";
+import { agentAiChatReceiptId } from "../../agentai-receipt.js";
 import { aiFetch } from "../../ai-metering.js";
 import { requireAIConfiguration } from "../analytics/ai.js";
 import {
@@ -684,17 +685,7 @@ export async function testAgentAiModel(c: Context, input: unknown) {
     const result = await readJson(response, signal, 300 * 1024);
     if (result.model !== model)
       fail("AGENTAI_MODEL_MISMATCH", "返回型号与请求不一致，未验证通过", 502);
-    const boundedReceipt = (value: unknown) =>
-      typeof value === "string" &&
-      value.trim().length > 0 &&
-      value.length <= 200 &&
-      !/[\u0000-\u001f\u007f]/.test(value);
-    // AgentAI documents X-Request-Id for every response. Some native model
-    // adapters omit Chat Completions' body id while retaining this receipt.
-    if (
-      !boundedReceipt(result.id) &&
-      !boundedReceipt(response.headers.get("X-Request-Id"))
-    )
+    if (!agentAiChatReceiptId(result.id, response.headers))
       fail(
         "AGENTAI_RESPONSE_INCOMPLETE",
         "响应缺少可核对的请求标识，未验证通过",
