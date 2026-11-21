@@ -26,6 +26,7 @@
 | [UI_SPEC.md](UI_SPEC.md) | 中文后台路由、表格字段、交互、异常状态 |
 | [VOP_INTEGRATION.md](VOP_INTEGRATION.md) | 独立Adapter、禁用模式、真实接入证据门槛 |
 | [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) | 启动指令、里程碑、检查命令、测试及报告格式 |
+| [小序作品交付与官网质量对标规划](AI_DELIVERY_QUALITY_PLAN.md) | 图片、视频、HTML、办公文档和软件的目标交付、验收标准与发布顺序 |
 
 ## 必须注意的范围说明
 
