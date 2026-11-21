@@ -21,6 +21,7 @@ export function AssistantDesktopPanel({
   disabled = false,
   setupNote = "",
   selectedId,
+  automatic = false,
 }: {
   open: boolean;
   data?: DesktopState;
@@ -32,6 +33,7 @@ export function AssistantDesktopPanel({
   disabled?: boolean;
   setupNote?: string;
   selectedId?: string;
+  automatic?: boolean;
 }) {
   const { message } = App.useApp();
   const panelRef = useRef<HTMLDivElement>(null);
@@ -84,8 +86,9 @@ export function AssistantDesktopPanel({
         </Button>
       </div>
       <p>
-        使用你自己的 Windows
-        电脑操作网页和应用。首次连接确认一次，之后可直接下达指令。
+        {automatic
+          ? "连接 Windows 电脑后，可以说「在我的电脑上打开记事本」。有多台电脑时，可以指定设备名称或设置常用电脑。"
+          : "使用你自己的 Windows 电脑操作网页和应用。首次连接确认一次，之后可直接下达指令。"}
       </p>
       {(native || !data?.devices.length) && (
         <Alert
@@ -194,14 +197,16 @@ export function AssistantDesktopPanel({
           <Tag color={d.crossWindowAuthorized ? "blue" : undefined}>
             {d.crossWindowAuthorized ? "已记住跨窗口授权" : "逐次允许"}
           </Tag>
-          {selectedId === d.id && <Tag color="blue">当前执行电脑</Tag>}
+          {selectedId === d.id && (
+            <Tag color="blue">{automatic ? "常用电脑" : "当前执行电脑"}</Tag>
+          )}
           <Space>
             <Button
               size="small"
               disabled={!d.online || !!busy || disabled}
               onClick={() => choose(d.id)}
             >
-              在这台电脑执行
+              {automatic ? "设为常用电脑" : "在这台电脑执行"}
             </Button>
           </Space>
           <details className="assistant-desktop-management">
@@ -245,7 +250,9 @@ export function AssistantDesktopPanel({
       {!!data?.devices.length && <h4>操作任务</h4>}
       {!!data?.devices.length && !data?.tasks.length && (
         <p>
-          选择电脑后，在对话框描述任务，例如“将记事本中的文字整理成分点列表”。
+          {automatic
+            ? "请在指令中说明要在哪台电脑执行。"
+            : "选择电脑后，在对话框描述任务，例如“将记事本中的文字整理成分点列表”。"}
         </p>
       )}
       {data?.tasks.map((t) => (

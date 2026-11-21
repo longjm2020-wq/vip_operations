@@ -26,6 +26,7 @@ export const assistantSendSchema = z
     imageModel: agentModelId.optional(),
     attachmentIds: z.array(z.string().uuid()).max(6).default([]),
     webSearch: z.boolean().default(false),
+    autoExecution: z.literal(true).optional(),
     desktopDeviceId: z.string().uuid().optional(),
     browserExecution: z.literal(true).optional(),
     webOpenResult: z
@@ -34,7 +35,7 @@ export const assistantSendSchema = z
   })
   .strict()
   .refine(
-    (v) => !(v.browserExecution && v.desktopDeviceId),
+    (v) => !(v.browserExecution && (v.desktopDeviceId || v.autoExecution)),
     "独立浏览器与电脑操作只能选择一处执行",
   );
 const scheduleDraft = z

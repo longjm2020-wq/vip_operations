@@ -85,6 +85,7 @@ export const realtimeStartSchema = z
       .optional(),
     includePersonalContext: z.boolean().default(false),
     includeMemory: z.boolean().default(false),
+    autoExecution: z.literal(true).optional(),
     desktopDeviceId: z.string().uuid().optional(),
     browserExecution: z.literal(true).optional(),
     model: z
@@ -94,11 +95,13 @@ export const realtimeStartSchema = z
   })
   .strict()
   .refine(
-    (v) => !(v.browserExecution && v.desktopDeviceId),
+    (v) => !(v.browserExecution && (v.desktopDeviceId || v.autoExecution)),
     "独立浏览器与电脑操作只能选择一处执行",
   )
   .refine(
-    (v) => !v.model || !!v.desktopDeviceId || !!v.browserExecution,
+    (v) =>
+      !v.model ||
+      (!v.autoExecution && (!!v.desktopDeviceId || !!v.browserExecution)),
     "操作能力需选择执行环境",
   );
 export const realtimeToolNames = [
@@ -119,6 +122,17 @@ export const realtimeToolSchema = z
       .max(128)
       .regex(/^[\w-]+$/),
     request: z.string().trim().min(1).max(4000),
+    spokenTurn: z
+      .object({
+        id: z
+          .string()
+          .min(1)
+          .max(128)
+          .regex(/^[\w-]+$/),
+        text: z.string().trim().min(1).max(4000),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 export const realtimeCaptionsSchema = z

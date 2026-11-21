@@ -8,6 +8,7 @@ import { actorForSessionHash } from "../auth/service.js";
 import type { Context } from "../../core.js";
 import { requireAssistant } from "./assistant-memory.js";
 import { isRealtimeToolName } from "../../../../../packages/contracts/src/assistant-realtime.js";
+import { RealtimeSpokenTurns } from "../../../../../packages/contracts/src/realtime-spoken-turn.js";
 import {
   isPresentationToolName,
   parsePresentationCall,
@@ -322,6 +323,7 @@ function runRelay(
   let upstreamDrain: ReturnType<typeof setInterval> | undefined;
   let lifetime: ReturnType<typeof setTimeout> | undefined;
   let toolQueue = Promise.resolve();
+  let spokenCancel = new AbortController();
   const frameBudget = new RealtimeFrameBudget();
   let writeAttempts = 0,
     writeCompletions = 0,
@@ -394,6 +396,7 @@ function runRelay(
     if (closed) return;
     if (message) send({ type: "xuti.error", message });
     closed = true;
+    spokenCancel.abort();
     clearTimeout(connectTimer);
     clearTimeout(lifetime);
     clearInterval(health);
@@ -442,6 +445,9 @@ function runRelay(
           return stop("语音连接凭证无效，请重新开始");
         const config = await claimRealtimeSocket(c, id, event.ticket);
         if (closed) return;
+        const spokenTurns = new RealtimeSpokenTurns();
+        let spokenItem: unknown;
+        let spokenQuestion: unknown;
         unregister = registerRealtimeRelay(id, () => stop());
         if (config.provider === "qwen")
           qwen = new QwenRealtimeProtocol((e, valid) =>
@@ -464,6 +470,7 @@ function runRelay(
                   config.history,
                   false,
                   config.browserEnabled,
+                  config.autoExecution,
                 ),
               ),
             ),
@@ -509,6 +516,7 @@ function runRelay(
                         config.history,
                         true,
                         config.browserEnabled,
+                        config.autoExecution,
                       ),
                     ),
                   ),
@@ -563,6 +571,36 @@ function runRelay(
             }
             if (!ready) return;
             for (const e of qwen ? qwen.events(rawEvent) : [rawEvent]) {
+              if (config.autoExecution) {
+                if (
+                  e.type ===
+                  "conversation.item.input_audio_transcription.started"
+                ) {
+                  spokenCancel.abort();
+                  spokenCancel = new AbortController();
+                  spokenItem = e.item_id ?? e.question_id;
+                  spokenQuestion = e.question_id;
+                } else if (
+                  e.type ===
+                    "conversation.item.input_audio_transcription.completed" ||
+                  e.type ===
+                    "conversation.item.input_audio_transcription.failed"
+                ) {
+                  const item = e.item_id ?? e.question_id;
+                  const interim =
+                    e.asr_info &&
+                    (e.asr_info as Record<string, unknown>).is_interim === true;
+                  if (!interim && item && item === spokenItem) {
+                    spokenQuestion = e.question_id ?? spokenQuestion;
+                    spokenTurns.finish(
+                      item,
+                      e.type.endsWith(".completed")
+                        ? (e.transcript ?? e.text ?? e.delta)
+                        : undefined,
+                    );
+                  }
+                }
+              }
               if (e.type === "response.function_call_arguments.done") {
                 if (!Array.isArray(e.items) || e.items.length > 8)
                   return stop("语音指令格式无效");
@@ -571,6 +609,13 @@ function runRelay(
                   question_id: e.question_id,
                   response_id: e.response_id,
                 };
+                const speechSignal = spokenCancel.signal;
+                const sourceItem =
+                  typeof e.question_id === "string" &&
+                  (e.question_id === spokenItem ||
+                    e.question_id === spokenQuestion)
+                    ? spokenItem
+                    : undefined;
                 // Presentation calls only drive the browser panel; they are not business work.
                 if (
                   items.some(
@@ -581,7 +626,11 @@ function runRelay(
                   send({ type: "xuti.tool_started", ...turn });
                 toolQueue = toolQueue
                   .then(async () => {
-                    if (closed || (qwen && !qwen.current(e.response_id)))
+                    if (
+                      closed ||
+                      (qwen && !qwen.current(e.response_id)) ||
+                      (config.autoExecution && speechSignal.aborted)
+                    )
                       return;
                     const results = [];
                     const qwenResults: { call_id: string; output: string }[] =
@@ -623,7 +672,10 @@ function runRelay(
                           call_id: item.call_id,
                           role: "tool",
                           content: [
-                            { type: "input_text", text: JSON.stringify(output) },
+                            {
+                              type: "input_text",
+                              text: JSON.stringify(output),
+                            },
                           ],
                         });
                         continue;
@@ -637,10 +689,21 @@ function runRelay(
                       )
                         throw Error("invalid tool");
                       const args = JSON.parse(item.arguments);
+                      const spokenTurn = await spokenTurns.read(
+                        sourceItem,
+                        speechSignal,
+                      );
+                      if (
+                        closed ||
+                        (qwen && !qwen.current(e.response_id)) ||
+                        (config.autoExecution && speechSignal.aborted)
+                      )
+                        return;
                       const result = await runRealtimeTool(c, id, {
                         tool: item.name,
                         callId: item.call_id,
                         request: args.request,
+                        ...(spokenTurn ? { spokenTurn } : {}),
                       });
                       if (closed) return;
                       qwenResults.push({
@@ -690,6 +753,7 @@ function runRelay(
       if (!ready || upstream?.readyState !== WebSocket.OPEN)
         return stop("实时语音尚未连接，请重新开始");
       if (!frameBudget.take()) return stop("音频持续发送过快，请重新开始");
+      if (allowed.type === "response.cancel") spokenCancel.abort();
       if (qwen) qwen.command(allowed);
       else upstreamBuffer.send(allowed);
     })().catch((error) => stop(relayFailure(error)));

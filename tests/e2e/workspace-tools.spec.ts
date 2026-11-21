@@ -1,7 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import {
   openPersonalAssistant,
-  selectAssistantExecution,
   selectAssistantPanel,
 } from "./assistant-controls.js";
 
@@ -268,7 +267,7 @@ test("移除工具菜单后中央保留小序，旧偏好不恢复菜单、圆�
 });
 
 for (const width of [1440, 390]) {
-  test(`浏览器简洁右栏在 ${width}px 可返回中栏选择执行位置并访问其他工具，不提交任务`, async ({
+  test(`浏览器右栏在 ${width}px 可准备网页指令，中栏直接添加附件，不提交任务`, async ({
     page,
   }) => {
     const state = await fixture(page);
@@ -278,8 +277,8 @@ for (const width of [1440, 390]) {
     const browser = page.locator(".assistant-browser-panel");
     const right = page.getByRole("complementary", { name: "右侧工具栏" });
     const center = page.getByRole("region", { name: "工作台中栏" });
-    const execution = center.getByRole("button", {
-      name: "输入框菜单",
+    const attachment = center.getByRole("button", {
+      name: "附件",
       exact: true,
     });
     await expect(browser).toBeVisible();
@@ -288,8 +287,20 @@ for (const width of [1440, 390]) {
     await expect(
       right.getByRole("combobox", { name: "执行位置", exact: true }),
     ).toHaveCount(0);
-    if (width === 390) await expect(execution).toBeHidden();
-    else await expect(execution).toBeVisible();
+    if (width === 390) await expect(attachment).toBeHidden();
+    else await expect(attachment).toBeVisible();
+    await browser
+      .getByRole("button", { name: "本地浏览器", exact: true })
+      .click();
+    const localHelp = page.getByRole("dialog", {
+      name: "在桌面端打开本地浏览器",
+    });
+    await expect(
+      localHelp.getByRole("link", { name: "下载 Windows 桌面端" }),
+    ).toHaveAttribute("href", "/downloads/xuti-desktop.zip");
+    await localHelp
+      .getByRole("button", { name: "关闭提示", exact: true })
+      .click();
 
     await page
       .getByRole("button", { name: "关闭浏览器面板", exact: true })
@@ -318,39 +329,30 @@ for (const width of [1440, 390]) {
     expect(layout.unusedWidth).toBeLessThan(2);
     expect(layout.inside).toBe(true);
 
-    await selectAssistantExecution(page, "网站内");
-    await expect(execution).toBeVisible();
+    await expect(attachment).toBeVisible();
     const draft = center.locator(".assistant-compose:visible textarea");
     await draft.fill("切换工具后仍保留的草稿");
     await expect(center.locator(".assistant-execution-hint")).toHaveCount(0);
     await expect(
       center.getByRole("combobox", { name: "执行位置", exact: true }),
     ).toHaveCount(0);
-    await execution.click();
-    await expect(page.locator(".assistant-compose-menu:visible")).toContainText(
-      "执行位置 · 当前：网站内",
-    );
+    const chooserPromise = page.waitForEvent("filechooser");
+    await attachment.click();
+    await (await chooserPromise).setFiles([]);
     await expect(
       page.getByRole("menuitem", { name: "网站内", exact: true }),
-    ).toHaveClass(/ant-dropdown-menu-item-selected/);
-    const chooserPromise = page.waitForEvent("filechooser");
-    await page.getByRole("menuitem", { name: "添加附件", exact: true }).click();
-    await (await chooserPromise).setFiles([]);
-    await selectAssistantExecution(page, "小序独立浏览器");
-    if (width === 390)
-      await page
-        .getByRole("button", { name: "关闭浏览器面板", exact: true })
-        .click();
-    await execution.click();
-    await expect(page.locator(".assistant-compose-menu:visible")).toContainText(
-      "执行位置 · 当前：小序独立浏览器",
-    );
-    await expect(
-      page.getByRole("menuitem", { name: "小序独立浏览器", exact: true }),
     ).toHaveCount(0);
-    await page.screenshot({ path: `.local/assistant-input-menu-${width}.png` });
-    await page.getByRole("menuitem", { name: "网站内", exact: true }).click();
-    await expect(draft).toHaveValue("切换工具后仍保留的草稿");
+    await selectAssistantPanel(page, "独立浏览器");
+    await browser
+      .getByRole("button", { name: "浏览器标签与会话菜单", exact: true })
+      .click();
+    await page
+      .getByRole("menuitem", { name: "让小序操作当前网页", exact: true })
+      .click();
+    await expect(draft).toHaveValue(
+      "在小序独立浏览器中操作当前网页：切换工具后仍保留的草稿",
+    );
+    await draft.fill("切换工具后仍保留的草稿");
     await selectAssistantPanel(page, "独立浏览器");
     await expect(browser).toBeVisible();
     if (width === 1440) {
@@ -379,13 +381,139 @@ for (const width of [1440, 390]) {
     await selectAssistantPanel(page, "独立浏览器");
     await openPersonalAssistant(page);
     await expect(draft).toHaveValue("切换工具后仍保留的草稿");
-    await expect(execution).toBeVisible();
+    await expect(attachment).toBeVisible();
     expect(state.writes).toEqual([]);
     expect(
       await page.evaluate(() => window.workspaceToolsMicrophoneRequests),
     ).toBe(0);
   });
 }
+
+test("桌面端本地浏览器通过本机打开并准备网页指令", async ({ page }) => {
+  const state = await fixture(page);
+  const deviceId = "47d7cb0b-8975-4a1c-9f9b-b21942ec4ae2";
+  const localRequests: Array<{ action: string; url?: string }> = [];
+  await page.route("**/api/v1/my-workspace/assistant/desktop", (route) =>
+    route.fulfill({
+      json: {
+        data: {
+          devices: [
+            {
+              id: deviceId,
+              name: "本机测试电脑",
+              online: true,
+              crossWindowAuthorized: true,
+            },
+          ],
+          tasks: [],
+        },
+      },
+    }),
+  );
+  await page.exposeFunction(
+    "workspaceLocalBrowserRequest",
+    (request: { action: string; url?: string }) => {
+      if (request.action === "open-local-browser") localRequests.push(request);
+      return { version: "1.2.5", connected: true, deviceId };
+    },
+  );
+  await page.addInitScript(() => {
+    const events = new EventTarget();
+    Object.defineProperty(window, "xutiDesktop", {
+      value: { version: "1.2.5", localBrowser: true },
+    });
+    Object.assign(window.chrome || (window.chrome = {}), {
+      webview: {
+        addEventListener: events.addEventListener.bind(events),
+        removeEventListener: events.removeEventListener.bind(events),
+        postMessage(request: { id: string; action: string; url?: string }) {
+          void (window as any)
+            .workspaceLocalBrowserRequest(request)
+            .then((data: unknown) =>
+              events.dispatchEvent(
+                new MessageEvent("message", {
+                  data: {
+                    channel: "xuti-desktop",
+                    id: request.id,
+                    ok: true,
+                    data,
+                  },
+                }),
+              ),
+            );
+        },
+      },
+    });
+  });
+  await page.goto("/my-workspace?assistant=browser");
+  const browser = page.locator(".assistant-browser-panel");
+  const local = browser.getByRole("button", {
+    name: "本地浏览器",
+    exact: true,
+  });
+  const address = browser.getByRole("textbox", {
+    name: "网页地址",
+    exact: true,
+  });
+  await address.fill("example.com");
+  await local.click();
+  await expect
+    .poll(() => localRequests.map(({ url }) => url))
+    .toEqual(["https://example.com/"]);
+  await expect(address).toHaveValue("");
+  await local.click();
+  await expect
+    .poll(() => localRequests.map(({ url }) => url))
+    .toEqual(["https://example.com/", undefined]);
+  const startTask = browser.getByRole("button", {
+    name: "让小序操作本地网页",
+    exact: true,
+  });
+  await startTask.click();
+  await expect(
+    page.getByText(
+      "请在「我的电脑」连接这台电脑并设为常用电脑，再操作本地网页",
+    ),
+  ).toBeVisible();
+  await expect(page.locator(".assistant-compose:visible textarea")).toHaveValue(
+    "",
+  );
+  await page.getByRole("button", { name: "设为常用电脑", exact: true }).click();
+  await selectAssistantPanel(page, "独立浏览器");
+  await startTask.click();
+  await expect(page.locator(".assistant-compose:visible textarea")).toHaveValue(
+    "在小序本地浏览器中操作当前网页：",
+  );
+  expect(localRequests).toHaveLength(2);
+  expect(state.writes).toEqual([]);
+});
+
+test("工作台忽略旧的浏览器模式，常用电脑仅随自动分流请求传递", async ({
+  page,
+}) => {
+  await fixture(page);
+  const desktopDeviceId = "76896aaf-69d9-441d-b8c2-447c6b8cd1ce";
+  await page.addInitScript((deviceId) => {
+    localStorage.setItem("xuti-assistant-desktop:105", '{"mode":"browser"}');
+    localStorage.setItem("xuti-assistant-preferred-desktop:105", deviceId);
+  }, desktopDeviceId);
+  await page.goto("/my-workspace");
+  const draft = page.locator(".assistant-compose:visible textarea");
+  await draft.fill("帮我整理一下今天的工作重点");
+  const submitted = page.waitForRequest(
+    (request) =>
+      request.method() === "POST" &&
+      new URL(request.url()).pathname === "/api/v1/my-workspace/assistant",
+  );
+  await draft.press("Enter");
+  const payload = (await submitted).postDataJSON();
+  expect(payload).toMatchObject({
+    autoExecution: true,
+    desktopDeviceId,
+    message: "帮我整理一下今天的工作重点",
+  });
+  expect(payload).not.toHaveProperty("browserExecution");
+});
 
 test("小序眼嘴平滑跟随和回中，眨眼口型不受减少动态限制，不启动任务", async ({
   page,

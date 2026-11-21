@@ -21,6 +21,7 @@ import {
   ArrowRightOutlined,
   ArrowUpOutlined,
   CloseOutlined,
+  DesktopOutlined,
   ExpandOutlined,
   CompressOutlined,
   DoubleRightOutlined,
@@ -45,6 +46,11 @@ import {
   type BrowserTask,
 } from "../../../packages/contracts/src/assistant-browser";
 import { api } from "./api";
+import {
+  canOpenLocalBrowser,
+  isDesktopClient,
+  openLocalBrowser,
+} from "./desktop-client";
 import "./assistant-browser.css";
 
 export const isActiveBrowserTask = (task: BrowserTask) =>
@@ -254,6 +260,8 @@ function BrowserTakeover({
   disabled,
   unavailable,
   fullscreen,
+  showLocalBrowser,
+  chooseLocal,
 }: {
   task?: BrowserTask;
   owner: string;
@@ -264,11 +272,14 @@ function BrowserTakeover({
   disabled: boolean;
   unavailable?: string;
   fullscreen: boolean;
+  showLocalBrowser: boolean;
+  chooseLocal?: () => void;
 }) {
-  const { message } = App.useApp();
+  const { message, modal } = App.useApp();
   const [address, setAddress] = useState(task?.url || "");
   const [editingAddress, setEditingAddress] = useState(false);
   const [pending, setPending] = useState(false);
+  const [launchingLocal, setLaunchingLocal] = useState(false);
   const [navigating, setNavigating] = useState(false);
   const [viewport, setViewport] = useState<BrowserViewport>({
     width: 960,
@@ -759,6 +770,7 @@ function BrowserTakeover({
     return () => element.removeEventListener("wheel", wheel);
   }, [manual, loading]);
   const submit = () => {
+    if (!canBrowse || disabled || pending) return;
     const raw = address.trim();
     const parsed = browserUrlSchema.safeParse(
       /^[a-z][a-z\d+.-]*:/i.test(raw) ? raw : `https://${raw}`,
@@ -772,6 +784,37 @@ function BrowserTakeover({
       return;
     }
     void navigation({ kind: "goto", url: parsed.data });
+  };
+  const localBrowserReady = showLocalBrowser && canOpenLocalBrowser();
+  const launchLocal = async () => {
+    if (!localBrowserReady) {
+      modal.info({
+        title: "在桌面端打开本地浏览器",
+        okText: "关闭提示",
+        content: (
+          <>
+            <p>
+              {isDesktopClient()
+                ? "请更新小序桌面端。"
+                : "请安装并登录小序 Windows 桌面端。"}
+            </p>
+            <Button href="/downloads/xuti-desktop.zip" download>
+              下载 Windows 桌面端
+            </Button>
+          </>
+        ),
+      });
+      return;
+    }
+    setLaunchingLocal(true);
+    try {
+      await openLocalBrowser(editingAddress ? address : undefined);
+      setEditingAddress(false);
+    } catch (error) {
+      message.error((error as Error).message);
+    } finally {
+      setLaunchingLocal(false);
+    }
   };
   const readOnlyNote =
     "历史任务已结束，此画面只读" +
@@ -791,6 +834,30 @@ function BrowserTakeover({
       className="assistant-browser-takeover"
       aria-label="独立浏览器画面与接管"
     >
+      {showLocalBrowser && !fullscreen && (
+        <div className="assistant-browser-local">
+          <Button
+            size="small"
+            type={localBrowserReady ? "primary" : "default"}
+            icon={<DesktopOutlined aria-hidden />}
+            aria-label="本地浏览器"
+            loading={launchingLocal}
+            onClick={() => void launchLocal()}
+          >
+            本地浏览器
+          </Button>
+          {localBrowserReady && (
+            <Button
+              size="small"
+              disabled={disabled || launchingLocal}
+              onClick={chooseLocal}
+            >
+              让小序操作本地网页
+            </Button>
+          )}
+          <span>在单独的桌面窗口打开</span>
+        </div>
+      )}
       <form
         className="assistant-browser-navigation"
         onSubmit={(event) => {
@@ -831,10 +898,14 @@ function BrowserTakeover({
           <Input
             variant="borderless"
             aria-label="网页地址"
-            placeholder="输入网址，按回车打开"
+            placeholder={
+              localBrowserReady && !canBrowse
+                ? "输入网址后点击本地浏览器"
+                : "输入网址，按回车打开"
+            }
             value={address}
             maxLength={2048}
-            disabled={pending || disabled || !canBrowse}
+            disabled={pending || disabled || (!canBrowse && !localBrowserReady)}
             onFocus={() => setEditingAddress(true)}
             onBlur={() => {
               if (address === currentUrl) setEditingAddress(false);
@@ -979,6 +1050,7 @@ export function AssistantBrowserPanel({
   error,
   refresh,
   choose,
+  chooseLocal,
   disabled,
   selectedId,
   selectTask,
@@ -995,6 +1067,7 @@ export function AssistantBrowserPanel({
   error?: string;
   refresh: () => Promise<unknown>;
   choose: () => void;
+  chooseLocal?: () => void;
   disabled: boolean;
   selectedId?: string;
   selectTask: (id: string) => void;
@@ -1317,6 +1390,8 @@ export function AssistantBrowserPanel({
             key={task?.id || "new"}
             task={task}
             fullscreen={fullscreen || pageFullscreen}
+            showLocalBrowser={embedded}
+            chooseLocal={chooseLocal}
             owner={owner}
             refresh={refresh}
             start={start}

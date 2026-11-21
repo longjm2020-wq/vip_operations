@@ -180,7 +180,7 @@ async function qwenRtcFixture(
         data = {
           provider: "qwen",
           transport: "webrtc",
-          pageControl: !body.desktopDeviceId,
+          pageControl: !!body.autoExecution || !body.desktopDeviceId,
           ...(options.pageTaskControl ? { pageTaskControl: true } : {}),
           sdp: await page.evaluate(
             (sdp) => window.qwenRTCTest.answer(sdp),
@@ -227,9 +227,10 @@ async function sendQwenTool(
   args: Record<string, unknown> = { request: callId },
   newTurn = true,
   interrupt = false,
+  utterance?: string,
 ) {
   await page.evaluate(
-    ({ callId, tool, args, newTurn, interrupt }) => {
+    ({ callId, tool, args, newTurn, interrupt, utterance }) => {
       const send = window.qwenRTCTest.send;
       const id = `response-${callId}`;
       if (newTurn) {
@@ -240,6 +241,11 @@ async function sendQwenTool(
         send({
           type: "input_audio_buffer.speech_stopped",
           item_id: `user-${callId}`,
+        });
+        send({
+          type: "conversation.item.input_audio_transcription.completed",
+          item_id: `user-${callId}`,
+          transcript: utterance ?? args.request ?? args.goal ?? "操作当前业务页面",
         });
       }
       send({ type: "response.created", response: { id } });
@@ -262,7 +268,7 @@ async function sendQwenTool(
         });
       }
     },
-    { callId, tool, args, newTurn, interrupt },
+    { callId, tool, args, newTurn, interrupt, utterance },
   );
 }
 
@@ -821,7 +827,7 @@ test("千问实时语音观察并点击任意新控件，跨业务页继续且�
   await bubble.getByRole("button", { name: "结束语音", exact: true }).click();
 });
 
-test("千问实时语音绑定所选电脑，刷新电脑任务并在同一通话返回工作台", async ({
+test("千问实时语音按原话分流本机任务和站内导航", async ({
   page,
 }) => {
   const { bubble } = await fixture(page, { configured: false });
@@ -857,7 +863,7 @@ test("千问实时语音绑定所选电脑，刷新电脑任务并在同一通�
   await page
     .locator(".assistant-desktop-item")
     .filter({ hasText: "测试电脑" })
-    .getByRole("button", { name: "在这台电脑执行" })
+    .getByRole("button", { name: "设为常用电脑" })
     .click();
   await page
     .getByRole("dialog", { name: /AI 个人助理/ })
@@ -868,20 +874,25 @@ test("千问实时语音绑定所选电脑，刷新电脑任务并在同一通�
     .click();
   await expect(bubble.getByRole("status")).toHaveText("实时聆听中，你说");
   await expect(bubble.locator(".companion-voice-target")).toHaveText(
-    "我的电脑 · 测试电脑",
+    "自动选择",
   );
   expect(starts).toHaveLength(1);
-  expect(starts[0]).toMatchObject({ desktopDeviceId: deviceId });
+  expect(starts[0]).toMatchObject({ autoExecution: true, desktopDeviceId: deviceId });
   expect(starts[0]).not.toHaveProperty("authorizationId");
   await page.screenshot({ path: ".local/realtime-desktop-voice.png" });
   const before = desktopReads;
-  await sendQwenTool(page, "computer", "desktop_request");
+  await sendQwenTool(page, "computer", "workspace_request", {
+    request: "在我的电脑上打开 Excel",
+  });
   await expect.poll(() => desktopReads).toBeGreaterThan(before);
-  await sendQwenTool(page, "analytics", "workspace_request");
+  await sendQwenTool(page, "analytics", "workspace_request", { request: "打开经营分析" });
   await expect(page).toHaveURL(/\/analytics\/compass$/);
-  await sendQwenTool(page, "home", "workspace_request");
+  await sendQwenTool(page, "home", "workspace_request", { request: "返回我的工作台" });
   await expect(page).toHaveURL(/\/my-workspace$/);
   expect(tools).toHaveLength(3);
+  expect(tools[0]).toMatchObject({
+    spokenTurn: { id: "user-computer", text: "在我的电脑上打开 Excel" },
+  });
   expect(starts).toHaveLength(1);
   expect(await page.evaluate(() => window.gptVoiceTest.starts)).toBe(1);
   await page.setViewportSize({ width: 390, height: 844 });
@@ -896,9 +907,9 @@ test("千问实时语音绑定所选电脑，刷新电脑任务并在同一通�
     .toBe(1);
 });
 
-test("我的电脑语音启动前核对最新连接，通话中仍固定原设备", async ({ page }) => {
+test("常用电脑离线时仍可开始语音并使用站内操作", async ({ page }) => {
   const { bubble } = await fixture(page, { configured: false });
-  const { starts } = await qwenRtcFixture(page);
+  const { starts, tools } = await qwenRtcFixture(page);
   const deviceId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
   const otherId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
   let online = true,
@@ -943,31 +954,22 @@ test("我的电脑语音启动前核对最新连接，通话中仍固定原设�
     exact: true,
   });
   await expect(begin).toHaveAttribute("title", "实时语音对话");
-  await expect(composer.locator("[aria-label='输入框菜单']")).toHaveAttribute(
-    "title",
-    /专用电脑 A/,
-  );
+  await expect(composer.getByRole("button", { name: "附件", exact: true }))
+    .toBeVisible();
   online = false;
-  await begin.click();
-  await expect(
-    page.getByText(
-      "所选电脑的连接已变化，请重新选择后开始语音；未切换到其他电脑。",
-      { exact: true },
-    ),
-  ).toBeVisible();
-  expect(starts).toHaveLength(0);
-  expect(await page.evaluate(() => window.gptVoiceTest.starts)).toBe(0);
-  online = true;
-  await expect(begin).toBeEnabled({ timeout: 10000 });
   await begin.click();
   await expect(bubble.getByRole("status")).toHaveText("实时聆听中，你说");
   expect(starts).toHaveLength(1);
-  expect(starts[0]).toMatchObject({ desktopDeviceId: deviceId });
+  expect(starts[0]).toMatchObject({ autoExecution: true, desktopDeviceId: deviceId });
   preferred = otherId;
   await expect(bubble.locator(".companion-voice-target")).toHaveText(
-    "我的电脑 · 专用电脑 A",
+    "自动选择",
   );
-  await expect(page.getByRole("button", { name: "输入框菜单" })).toBeDisabled();
+  await sendQwenTool(page, "analytics", "workspace_request", { request: "打开经营分析" });
+  await expect(page).toHaveURL(/\/analytics\/compass$/);
+  expect(tools[0]).toMatchObject({
+    spokenTurn: { text: "打开经营分析" },
+  });
   expect(starts).toHaveLength(1);
   await bubble.getByRole("button", { name: "结束语音", exact: true }).click();
   await expect
@@ -975,7 +977,7 @@ test("我的电脑语音启动前核对最新连接，通话中仍固定原设�
     .toBe(1);
 });
 
-test("独立浏览器语音核对服务并固定执行环境，不使用本机或站内点击", async ({
+test("实时语音只把明确的外网操作发往独立浏览器", async ({
   page,
 }) => {
   const { bubble } = await fixture(page, { configured: false });
@@ -1009,39 +1011,32 @@ test("独立浏览器语音核对服务并固定执行环境，不使用本机�
     exact: true,
   });
   await expect(begin).toHaveAttribute("title", "实时语音对话");
-  await expect(composer.locator("[aria-label='输入框菜单']")).toHaveAttribute(
-    "title",
-    /小序独立浏览器/,
-  );
   ready = false;
-  await begin.click();
-  await expect(
-    page.locator(".ant-message").getByText("独立浏览器执行服务尚未连接"),
-  ).toBeVisible();
-  expect(starts).toHaveLength(0);
-  expect(await page.evaluate(() => window.gptVoiceTest.starts)).toBe(0);
-  ready = true;
-  await expect(begin).toBeEnabled({ timeout: 8000 });
   await begin.click();
   await expect(bubble.getByRole("status")).toHaveText("实时聆听中，你说");
   expect(starts).toHaveLength(1);
   expect(starts[0]).toMatchObject({
-    browserExecution: true,
+    autoExecution: true,
     includePersonalContext: false,
     includeMemory: false,
   });
   expect(starts[0].desktopDeviceId).toBeUndefined();
+  expect(starts[0].browserExecution).toBeUndefined();
   await expect(bubble.locator(".companion-voice-target")).toHaveText(
-    "小序独立浏览器",
+    "自动选择",
   );
-  await expect(page.getByRole("button", { name: "输入框菜单" })).toBeDisabled();
-  // Even a malformed server response offering pageControl cannot enable local DOM tools.
-  await sendQwenTool(page, "browser-no-local", "page_observe", {});
+  const instruction = "在 https://example.com 上查找帮助入口";
+  await sendQwenTool(page, "browser-no-local", "page_observe", {}, true, false, instruction);
   const output = await qwenToolOutput(page, "browser-no-local");
-  expect(output).not.toHaveProperty("snapshotId");
+  expect(output).toMatchObject({ dispatched: false });
+  ready = true;
   await page.route(
     "**/api/v1/my-workspace/assistant/realtime/sessions/*/tool",
     async (route) => {
+      expect(route.request().postDataJSON()).toMatchObject({
+        tool: "workspace_request",
+        spokenTurn: { text: instruction },
+      });
       browserTasks.push({
         id: "33333333-3333-4333-8333-333333333333",
         instruction: "查看示例网页",
@@ -1064,8 +1059,8 @@ test("独立浏览器语音核对服务并固定执行环境，不使用本机�
     "**/api/v1/my-workspace/assistant/browser/tasks/*/frame",
     (route) => route.fulfill({ json: { data: null } }),
   );
-  await sendQwenTool(page, "browser-created", "browser_request", {
-    request: "查看示例网页",
+  await sendQwenTool(page, "browser-created", "workspace_request", {
+    request: instruction,
   });
   await qwenToolOutput(page, "browser-created");
   await expect(

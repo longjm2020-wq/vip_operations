@@ -42,6 +42,7 @@ import {
   type AssistantMemoryEntry,
 } from "../../../packages/contracts/src/personal-assistant";
 import { assistantNavigationTools } from "../../../packages/contracts/src/assistant-voice-commands";
+import { classifyAssistantExecution } from "../../../packages/contracts/src/assistant-execution";
 import {
   AssistantHubContext,
   type AssistantSection,
@@ -121,6 +122,11 @@ import { SidebarAssistant } from "./sidebar-assistant";
 
 const desktopSelectionKey = (userId: string) =>
   `xuti-assistant-desktop:${userId}`;
+const preferredDesktopKey = (userId: string) =>
+  `xuti-assistant-preferred-desktop:${userId}`;
+const currentBrowserPagePrefix = "在小序独立浏览器中操作当前网页：";
+const currentLocalPagePrefix = "在小序本地浏览器中操作当前网页：";
+const browserPagePrefixes = [currentBrowserPagePrefix, currentLocalPagePrefix];
 type DesktopChoice =
   { mode: "site" } | { mode: "browser" } | { mode: "device"; deviceId: string };
 const desktopIdPattern = /^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/i;
@@ -137,6 +143,18 @@ function readDesktopSelection(userId: string): DesktopChoice {
     /* A missing or invalid stored choice starts in the website. */
   }
   return { mode: "site" };
+}
+function readAssistantDesktopChoices(userId: string) {
+  const choice = readDesktopSelection(userId);
+  let preferredDeviceId =
+    choice.mode === "device" ? choice.deviceId : undefined;
+  try {
+    const stored = localStorage.getItem(preferredDesktopKey(userId));
+    if (stored && desktopIdPattern.test(stored)) preferredDeviceId = stored;
+  } catch {
+    /* Keep the existing device choice when storage is unavailable. */
+  }
+  return { owner: userId, choice, preferredDeviceId };
 }
 
 export function PersonalAssistantProvider({
@@ -171,8 +189,7 @@ export function PersonalAssistantProvider({
   const [workspaceToolsOpen, setWorkspaceToolsOpen] = useState(() => {
     try {
       return (
-        localStorage.getItem(`xuti-workspace-tools-open:${user.id}`) ===
-        "true"
+        localStorage.getItem(`xuti-workspace-tools-open:${user.id}`) === "true"
       );
     } catch {
       return false;
@@ -291,19 +308,21 @@ export function PersonalAssistantProvider({
       (await api("/my-workspace/assistant/capabilities")).data as AgentCatalog,
     staleTime: 30000,
   });
-  const [desktopSelection, setDesktopSelection] = useState(() => ({
-    owner: user.id,
-    choice: readDesktopSelection(user.id),
-  }));
-  const desktopChoice =
+  const [desktopSelection, setDesktopSelection] = useState(() =>
+    readAssistantDesktopChoices(user.id),
+  );
+  const { choice: desktopChoice, preferredDeviceId } =
     desktopSelection.owner === user.id
-      ? desktopSelection.choice
-      : readDesktopSelection(user.id);
-  const browserMode = desktopChoice.mode === "browser";
-  const desktopMode = desktopChoice.mode === "device";
+      ? desktopSelection
+      : readAssistantDesktopChoices(user.id);
+  const browserMode = !docked && desktopChoice.mode === "browser";
+  const desktopMode = !docked && desktopChoice.mode === "device";
   const externalMode = desktopMode || browserMode;
-  const desktopTargetId =
-    desktopChoice.mode === "device" ? desktopChoice.deviceId : undefined;
+  const desktopTargetId = docked
+    ? preferredDeviceId
+    : desktopChoice.mode === "device"
+      ? desktopChoice.deviceId
+      : undefined;
   const nativeDesktop = isDesktopClient();
   const [localDesktopId, setLocalDesktopId] = useState<string>();
   useEffect(() => {
@@ -336,8 +355,17 @@ export function PersonalAssistantProvider({
     };
   }, []);
   const rememberDesktopChoice = (choice: DesktopChoice) => {
-    setDesktopSelection({ owner: user.id, choice });
+    if (docked && choice.mode !== "device") return;
+    setDesktopSelection({
+      owner: user.id,
+      choice: docked ? desktopChoice : choice,
+      preferredDeviceId:
+        choice.mode === "device" ? choice.deviceId : preferredDeviceId,
+    });
     try {
+      if (choice.mode === "device")
+        localStorage.setItem(preferredDesktopKey(user.id), choice.deviceId);
+      if (docked) return;
       if (choice.mode === "site")
         localStorage.removeItem(desktopSelectionKey(user.id));
       else
@@ -451,7 +479,9 @@ export function PersonalAssistantProvider({
     (device) => device.id === desktopTargetId,
   );
   const activeDesktopTask = desktop.data?.tasks.find(
-    (task) => task.deviceId === desktopTargetId && isActiveDesktopTask(task),
+    (task) =>
+      (docked || task.deviceId === desktopTargetId) &&
+      isActiveDesktopTask(task),
   );
   // A remembered ID is only routed after the current account's server list confirms ownership.
   const desktopDeviceId = desktopTarget?.id;
@@ -566,15 +596,39 @@ export function PersonalAssistantProvider({
         ? "所选模型当前不可用，请重新选择或验证连接。"
         : "暂无已接通的聊天模型，请管理员检查连接。"
       : "";
+  const draftIsSite =
+    !docked || classifyAssistantExecution(text).kind === "site";
   const composerReady = teamMode
     ? teamConfig.data?.ready
-    : browserMode
-      ? !!data && browser.data?.ready && !browserProblem
-      : data?.ready && !modelProblem && !desktopProblem;
+    : docked
+      ? !!data &&
+        !browserPagePrefixes.includes(text.trim()) &&
+        (!draftIsSite || (data.ready && !modelProblem))
+      : browserMode
+        ? !!data && browser.data?.ready && !browserProblem
+        : data?.ready && !modelProblem && !desktopProblem;
+  const canEditComposer = docked && !teamMode ? !!data : composerReady;
+  const showVoiceTask = (result?: {
+    browserTaskId?: string;
+    desktopTaskId?: string;
+  }) => {
+    if (!docked) return;
+    if (result?.browserTaskId) {
+      setSelectedBrowserTaskId(result.browserTaskId);
+      setSection("browser");
+      setOpen(true);
+    } else if (result?.desktopTaskId) {
+      setSection("desktop");
+      setOpen(true);
+    }
+  };
   const legacyVoice = useGptVoice(
-    () => {
+    (result) => {
       void q.refetch();
       void activity.refetch();
+      if (result?.browserTaskId) void browser.refetch();
+      if (result?.desktopTaskId) void desktop.refetch();
+      showVoiceTask(result);
     },
     (toolId) => {
       const tool = available.find((item) => item.id === toolId);
@@ -582,11 +636,12 @@ export function PersonalAssistantProvider({
     },
   );
   const realtimeVoice = useRealtimeVoice(
-    () => {
+    (result) => {
       void q.refetch();
       void activity.refetch();
       void desktop.refetch();
       void browser.refetch();
+      showVoiceTask(result);
     },
     (toolId) => {
       const tool = available.find((item) => item.id === toolId);
@@ -621,8 +676,9 @@ export function PersonalAssistantProvider({
     return () => window.removeEventListener(workspaceTeamEvent, showTeam);
   }, [voice.stopListening, speech.stop, gptVoice.stop]);
   const activeVoiceDesktopLabel = useRef<string | undefined>(undefined);
-  const selectedVoiceExecutionLabel =
-    useRealtime && browserMode
+  const selectedVoiceExecutionLabel = docked
+    ? "自动选择"
+    : useRealtime && browserMode
       ? "小序独立浏览器"
       : useRealtime && desktopMode
         ? `我的电脑 · ${desktopTarget?.name || "尚未选择设备"}`
@@ -674,17 +730,48 @@ export function PersonalAssistantProvider({
     if (executionBusy.current || desktopSetupRunning.current) return;
     const device = desktop.data?.devices.find((entry) => entry.id === id);
     if (!device?.online) return;
-    rememberDesktopChoice({ mode: "device", deviceId: id });
-    setTeamMode(false);
+    rememberDesktop(id);
+    if (!docked) setTeamMode(false);
     setSection(docked ? "desktop" : "chat");
     setOpen(true);
   };
-  const chooseBrowser = () => {
+  const stageBrowserDraft = (prefix: string) => {
     if (executionBusy.current || desktopSetupRunning.current) return;
-    rememberDesktopChoice({ mode: "browser" });
+    const existingPrefix = browserPagePrefixes.find((entry) =>
+      text.startsWith(entry),
+    );
+    const draft = existingPrefix ? text.slice(existingPrefix.length) : text;
+    if (draft.length + prefix.length > 4000) {
+      message.info("请缩短草稿后再添加当前网页的操作目标");
+      return;
+    }
     setTeamMode(false);
-    setSection(docked || !browser.data?.ready ? "browser" : "chat");
+    setText(`${prefix}${draft}`);
+    setSection("chat");
     setOpen(true);
+  };
+  const chooseBrowser = () => {
+    if (docked) {
+      stageBrowserDraft(currentBrowserPagePrefix);
+      return;
+    }
+    if (executionBusy.current || desktopSetupRunning.current) return;
+    setTeamMode(false);
+    rememberDesktopChoice({ mode: "browser" });
+    setSection(browser.data?.ready ? "chat" : "browser");
+    setOpen(true);
+  };
+  const chooseLocalBrowser = () => {
+    if (executionBusy.current || desktopSetupRunning.current) return;
+    if (!localDesktopId || localDesktopId !== preferredDeviceId) {
+      message.info(
+        "请在「我的电脑」连接这台电脑并设为常用电脑，再操作本地网页",
+      );
+      setSection("desktop");
+      setOpen(true);
+      return;
+    }
+    stageBrowserDraft(currentLocalPagePrefix);
   };
   const inspectBrowser = (id?: string) => {
     setSelectedBrowserTaskId(id);
@@ -735,10 +822,14 @@ export function PersonalAssistantProvider({
           throw new Error("本机连接尚未同步，请稍后重试。");
         rememberDesktop(result.deviceId);
         setLocalDesktopId(result.deviceId);
-        setTeamMode(false);
+        if (!docked) setTeamMode(false);
         setSection(docked ? "desktop" : "chat");
         setOpen(true);
-        message.success("已选择本机，可以直接下达电脑操作指令");
+        message.success(
+          docked
+            ? "已设为常用电脑，请在指令中说明要操作本机"
+            : "已选择本机，可以直接下达电脑操作指令",
+        );
       } else {
         setDesktopSetupNote(desktopSetupMessage(result.authorized));
         setSection("desktop");
@@ -858,8 +949,12 @@ export function PersonalAssistantProvider({
       return;
     }
     if (!data) return;
+    const target = docked ? classifyAssistantExecution(value).kind : undefined;
+    const siteRequest = !externalMode && (!target || target === "site");
+    const externalRequest =
+      externalMode || target === "browser" || target === "desktop";
     const websiteRequest =
-      !externalMode && !agent.attachments.length
+      siteRequest && !agent.attachments.length
         ? parseAssistantWebsiteRequest(value)
         : undefined;
     const webOpenResult = websiteRequest
@@ -875,7 +970,7 @@ export function PersonalAssistantProvider({
     speech.stop();
     if (voiceReply && voiceStatus.data?.ready) speech.prepare();
     try {
-      if (externalMode && agent.attachments.length)
+      if (externalRequest && agent.attachments.length)
         throw new Error("外部操作仅接收本条指令，请先移除附件后发送。");
       if (browserMode) {
         const epoch = desktopSetupLifecycle.current.epoch;
@@ -901,7 +996,7 @@ export function PersonalAssistantProvider({
           return;
         }
       }
-      if (desktopDeviceId) {
+      if (desktopMode && desktopDeviceId) {
         const current = await desktop.refetch();
         if (
           !desktopSetupLifecycle.current.mounted ||
@@ -942,26 +1037,37 @@ export function PersonalAssistantProvider({
         message: value.trim(),
         version: data.version,
         requestId,
-        includePersonalContext: externalMode ? false : includeContext,
-        includeMemory: externalMode ? false : includeMemory,
+        includePersonalContext: siteRequest && includeContext,
+        includeMemory: siteRequest && includeMemory,
         attachmentIds: agent.attachments.map((f) => f.id),
-        ...(!externalMode && chatModel ? { model: chatModel } : {}),
-        desktopDeviceId,
+        ...(siteRequest && chatModel ? { model: chatModel } : {}),
+        desktopDeviceId: docked ? desktopTargetId : desktopDeviceId,
+        ...(docked ? { autoExecution: true } : {}),
         ...(browserMode ? { browserExecution: true } : {}),
         webOpenResult,
       });
-      if (!externalMode || response.data.state !== "FAILED") {
+      const latest = (response.data as AssistantConversation).messages?.at(-1);
+      const createdTask = latest?.browserTaskId || latest?.desktopTaskId;
+      if (
+        siteRequest ||
+        (response.data.state !== "FAILED" && (!docked || createdTask))
+      ) {
         setText("");
         setAgent((previous) => ({ ...previous, attachments: [] }));
       }
       void jobs.refetch();
-      if (desktopDeviceId) await desktop.refetch();
-      if (browserMode) await browser.refetch();
-      const latest = (response.data as AssistantConversation).messages?.at(-1);
-      if (browserMode && latest?.browserTaskId) {
+      if (desktopMode || latest?.desktopTaskId) await desktop.refetch();
+      if (browserMode || latest?.browserTaskId) await browser.refetch();
+      if (response.data.state === "IDLE" && latest?.browserTaskId) {
         setSelectedBrowserTaskId(latest.browserTaskId);
         revealBrowserAfter.current = null;
         setSection("browser");
+      } else if (
+        docked &&
+        response.data.state === "IDLE" &&
+        latest?.desktopTaskId
+      ) {
+        setSection("desktop");
       }
       if (response.data.state === "IDLE" && latest?.role === "assistant") {
         const tool = available.find((entry) => entry.id === latest.navigation);
@@ -1048,8 +1154,7 @@ export function PersonalAssistantProvider({
     const attempt = ++voiceStartAttempt.current;
     const owner = user.id;
     const epoch = desktopSetupLifecycle.current.epoch;
-    const capturedDeviceId = desktopDeviceId;
-    const capturedMode = desktopChoice.mode;
+    const capturedDeviceId = docked ? desktopTargetId : desktopDeviceId;
     const isCurrent = () =>
       desktopSetupLifecycle.current.mounted &&
       desktopSetupLifecycle.current.epoch === epoch &&
@@ -1096,12 +1201,9 @@ export function PersonalAssistantProvider({
       await gptVoice.start({
         includePersonalContext: externalMode ? false : includeContext,
         includeMemory: externalMode ? false : includeMemory,
-        ...(useRealtime && capturedMode === "browser"
-          ? {
-              browserExecution: true,
-            }
-          : {}),
-        ...(useRealtime && capturedDeviceId
+        ...(docked ? { autoExecution: true as const } : {}),
+        ...(useRealtime && browserMode ? { browserExecution: true } : {}),
+        ...((docked || useRealtime) && capturedDeviceId
           ? { desktopDeviceId: capturedDeviceId }
           : {}),
       });
@@ -1272,13 +1374,6 @@ export function PersonalAssistantProvider({
       </Button>
     </>
   );
-  const executionLabel = teamMode
-    ? "智能体团队"
-    : browserMode
-      ? "小序独立浏览器"
-      : desktopMode
-        ? `我的电脑 · ${desktopTarget?.name || "尚未选择设备"}`
-        : "网站内";
   const changeExecution = (value: string) => {
     if (busy || voice.listening) return;
     if (value === "site") {
@@ -1323,14 +1418,16 @@ export function PersonalAssistantProvider({
       {!teamMode && activeDesktopTask && (
         <AssistantDesktopTaskCard
           task={activeDesktopTask}
-          device={desktopTarget}
+          device={desktop.data?.devices.find(
+            (device) => device.id === activeDesktopTask.deviceId,
+          )}
           localDeviceId={localDesktopId}
           compact
           refresh={() => desktop.refetch()}
         />
       )}
       {!teamMode &&
-        browserMode &&
+        (docked || browserMode) &&
         activeBrowserTask &&
         !(toolsVisible && panelSection === "browser") && (
           <AssistantBrowserTaskCard
@@ -1372,7 +1469,7 @@ export function PersonalAssistantProvider({
         onSubmit={(value) => void send(value)}
         loading={busy}
         readOnly={busy || voice.listening}
-        disabled={!composerReady || busy}
+        disabled={!canEditComposer || busy}
         submitType="enter"
         suffix={false}
         footer={(_, { components }) => (
@@ -1381,32 +1478,6 @@ export function PersonalAssistantProvider({
             change={setAgent}
             disabled={busy || voice.listening}
             onUploading={setUploading}
-            menuCurrent={docked ? executionLabel : undefined}
-            menu={
-              docked
-                ? {
-                    className: "assistant-compose-menu",
-                    selectable: true,
-                    selectedKeys: teamMode
-                      ? []
-                      : [desktopMode ? "computer" : desktopChoice.mode],
-                    items: [
-                      {
-                        key: "execution",
-                        type: "group",
-                        label: `执行位置 · 当前：${executionLabel}`,
-                        children: executionOptions
-                          .filter((option) => option.value !== "browser")
-                          .map((option) => ({
-                            key: option.value,
-                            label: option.label,
-                          })),
-                      },
-                    ],
-                    onClick: ({ key }) => changeExecution(key),
-                  }
-                : undefined
-            }
             actions={
               <div className="assistant-send-actions">
                 {!externalMode && (
@@ -1524,7 +1595,7 @@ export function PersonalAssistantProvider({
               : teamConfig.isLoading
                 ? "正在连接智能体团队…"
                 : "团队智能服务尚未就绪，请查看面板提示"
-            : data?.ready || (browserMode && browser.data?.ready)
+            : data?.ready || ((docked || browserMode) && browser.data?.ready)
               ? browserMode
                 ? "描述网页目标，小序将在独立浏览器中连续操作…"
                 : desktopMode
@@ -1552,12 +1623,12 @@ export function PersonalAssistantProvider({
           {voice.error}
         </div>
       )}
-      {modelProblem && (
+      {draftIsSite && modelProblem && (
         <div className="assistant-voice-error" role="alert">
           {modelProblem}
         </div>
       )}
-      {!modelProblem && modelHint && (
+      {draftIsSite && !modelProblem && modelHint && (
         <div className="assistant-model-hint" role="status">
           {modelHint}
         </div>
@@ -1785,6 +1856,7 @@ export function PersonalAssistantProvider({
           disabled={busy || voice.listening}
           setupNote={desktopSetupNote}
           selectedId={desktopTargetId}
+          automatic={docked}
         />
       )}
       {panelSection === "browser" && allowed && (
@@ -1796,6 +1868,7 @@ export function PersonalAssistantProvider({
           error={browser.error?.message}
           refresh={() => browser.refetch()}
           choose={chooseBrowser}
+          chooseLocal={docked ? chooseLocalBrowser : undefined}
           disabled={busy || voice.listening}
           selectedId={selectedBrowserTaskId}
           selectTask={setSelectedBrowserTaskId}
@@ -1807,8 +1880,10 @@ export function PersonalAssistantProvider({
           toggleExpanded={() => setBrowserExpanded((value) => !value)}
           onSubmitting={setBrowserStarting}
           onStarted={(task) => {
-            rememberDesktopChoice({ mode: "browser" });
-            setTeamMode(false);
+            if (!docked) {
+              rememberDesktopChoice({ mode: "browser" });
+              setTeamMode(false);
+            }
             setSelectedBrowserTaskId(task.id);
           }}
         />
@@ -2069,7 +2144,9 @@ export function PersonalAssistantProvider({
                   )}
                   {item.browserTaskId &&
                     item.browserTaskId !==
-                      (browserMode ? activeBrowserTask?.id : undefined) &&
+                      (docked || browserMode
+                        ? activeBrowserTask?.id
+                        : undefined) &&
                     (() => {
                       const task = browser.data?.tasks.find(
                         (entry) => entry.id === item.browserTaskId,

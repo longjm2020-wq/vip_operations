@@ -32,6 +32,7 @@ export const desktopTaskSchema = z
     deviceId: z.string().uuid(),
     requestId: z.string().uuid(),
     instruction: z.string().trim().min(2).max(4000),
+    localBrowser: z.literal(true).optional(),
     model: z
       .string()
       .regex(/^engine\/[a-f0-9]{24}$/)
@@ -123,6 +124,7 @@ export const desktopObservationSchema = z
     window: z.string().max(200),
     application: z.string().max(80),
     controls: z.string().max(12000),
+    localBrowser: z.literal(true).optional(),
     windowId: z.string().uuid().optional(),
     windows: z
       .array(desktopWindowSchema)
@@ -152,6 +154,7 @@ export type DesktopTask = {
   step: number;
   window: string;
   scope: "window" | "device";
+  localBrowser?: boolean;
   createdAt: string;
   updatedAt: string;
 };

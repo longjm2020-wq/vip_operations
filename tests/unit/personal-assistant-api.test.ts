@@ -186,8 +186,11 @@ beforeAll(async () => {
     "087_qwen_realtime.sql",
     "088_desktop_authorization.sql",
     "089_realtime_desktop.sql",
+    "098_desktop_device_purpose.sql",
     "099_assistant_browser.sql",
     "103_browser_browsing_sessions.sql",
+    "108_realtime_automatic_execution.sql",
+    "109_assistant_local_browser.sql",
   ])
     await fixture.database.exec(
       await readFile(`packages/database/migrations/${name}`, "utf8"),
@@ -286,6 +289,32 @@ describe("multimodal agent ownership and jobs", () => {
       (await fixture.database!.query("SELECT * FROM assistant_desktop_tasks"))
         .rows,
     ).toEqual([]);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+  it("dispatches an automatic external web task to the browser's own model and replays the same request", async () => {
+    await fixture.database!.exec(
+      "UPDATE personal_assistant_browser_runtime SET ready=true,heartbeat_at=now()",
+    );
+    const request = {
+      ...input(),
+      message: "在小序独立浏览器中操作当前网页：搜索服装趋势",
+      autoExecution: true,
+      desktopDeviceId: randomUUID(),
+      model: "chat-only/unavailable",
+    };
+    const result = await sendAssistant(actor(), request);
+    expect(result.state).toBe("IDLE");
+    expect(result.messages.at(-1)).toMatchObject({
+      browserTaskId: expect.any(String),
+    });
+    expect(result.messages.at(-1)?.desktopTaskId).toBeUndefined();
+    expect(result.messages.at(-1)?.webNavigation).toBeUndefined();
+    await fixture.database!.exec(
+      "UPDATE personal_assistant_browser_runtime SET ready=false",
+    );
+    expect((await sendAssistant(actor(), request)).messages).toEqual(
+      result.messages,
+    );
     expect(fetch).not.toHaveBeenCalled();
   });
   it("keeps browser failures visible and never falls back to site or desktop execution", async () => {
@@ -778,6 +807,79 @@ describe("assistant business tools and private memory", () => {
         webSearch: true,
       }),
     ).rejects.toThrow();
+  });
+  it("treats the computer preference as a hint for clear desktop requests only", async () => {
+    const deviceId = randomUUID();
+    await fixture.database!.query(
+      "INSERT INTO assistant_desktop_devices(id,user_id,name,session_hash,token_hash,last_seen_at) VALUES($1,7,'测试电脑','session','token',now())",
+      [deviceId],
+    );
+    const routing = { autoExecution: true, desktopDeviceId: deviceId };
+    const website = await sendAssistant(actor(), {
+      ...input(),
+      ...routing,
+      message: "打开百度",
+      webOpenResult: "opened",
+    });
+    expect(website.messages.at(-1)?.webNavigation).toEqual({
+      title: "百度",
+      url: "https://www.baidu.com/",
+    });
+    const task = await sendAssistant(actor(), {
+      ...input(website.version),
+      ...routing,
+      message: "在我的电脑上打开 Excel",
+      includePersonalContext: true,
+      includeMemory: true,
+    });
+    expect(task.messages.at(-1)?.desktopTaskId).toEqual(expect.any(String));
+    expect(
+      (
+        await fixture.database!.query(
+          "SELECT device_id, status FROM assistant_desktop_tasks",
+        )
+      ).rows,
+    ).toEqual([{ device_id: deviceId, status: "WAITING" }]);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("asks to connect a computer and never sends an explicit desktop task to the chat model", async () => {
+    const result = await sendAssistant(actor(), {
+      ...input(),
+      message: "在我的电脑上打开 Excel",
+      autoExecution: true,
+    });
+    expect(result.state).toBe("IDLE");
+    expect(result.messages.at(-1)?.text).toMatch(/连接.*电脑|连接.*小序/);
+    expect(result.messages.at(-1)?.desktopTaskId).toBeUndefined();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+  it("keeps automatic local browser work within a browser-only desktop task", async () => {
+    const deviceId = randomUUID();
+    await fixture.database!.query(
+      "INSERT INTO assistant_desktop_devices(id,user_id,name,session_hash,token_hash,last_seen_at,local_browser_seen_at) VALUES($1,7,'测试电脑','session','token',now(),now())",
+      [deviceId],
+    );
+    const result = await sendAssistant(actor(), {
+      ...input(),
+      message: "在本地浏览器中点击详情",
+      autoExecution: true,
+      desktopDeviceId: deviceId,
+    });
+    expect(result.state).toBe("IDLE");
+    expect(result.messages.at(-1)).toMatchObject({
+      desktopTaskId: expect.any(String),
+      text: expect.stringContaining("本机浏览器任务已提交"),
+    });
+    expect(result.messages.at(-1)?.browserTaskId).toBeUndefined();
+    expect(
+      (
+        await fixture.database!.query(
+          "SELECT browser_only FROM assistant_desktop_tasks",
+        )
+      ).rows,
+    ).toEqual([{ browser_only: true }]);
+    expect(fetch).not.toHaveBeenCalled();
   });
   it("runs explicit voice and text navigation without a model call; questions and negations do not execute", async () => {
     const result = await sendAssistant(

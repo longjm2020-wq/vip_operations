@@ -3,9 +3,15 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { csrf, queryClient } from "./api";
 import { pcmBuffer, pcmBytes, wavFromFrames } from "./voice-pcm";
 import type { VoiceEvent } from "../../../packages/contracts/src/assistant-voice";
+import type { RealtimeToolResult } from "../../../packages/contracts/src/assistant-realtime";
 export type VoiceState =
   "idle" | "connecting" | "listening" | "thinking" | "speaking";
-type Options = { includePersonalContext: boolean; includeMemory: boolean };
+type Options = {
+  includePersonalContext: boolean;
+  includeMemory: boolean;
+  autoExecution?: true;
+  desktopDeviceId?: string;
+};
 type Connection = {
   context: AudioContext;
   stream: MediaStream;
@@ -28,7 +34,7 @@ type Connection = {
   options: Options;
 };
 export function useGptVoice(
-  onResult: () => void,
+  onResult: (result?: RealtimeToolResult) => void,
   onNavigate: (toolId: string) => void,
 ) {
   const [state, setState] = useState<VoiceState>("idle"),
@@ -173,7 +179,7 @@ export function useGptVoice(
             if (event.type === "reply") {
               addCaption("assistant", event.text);
               setHasBusiness(true);
-              callback.current();
+              callback.current(event);
             }
             if (event.type === "model") setModel(event.model);
             if (event.type === "navigate") navigate.current(event.toolId);

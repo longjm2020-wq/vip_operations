@@ -103,6 +103,49 @@ afterEach(() => {
   vi.useRealTimers();
 });
 describe("realtime media ownership and event handling", () => {
+  it("waits for the current provider transcript before forwarding an automatic voice tool", async () => {
+    session = new RealtimeVoiceSession(callbacks());
+    await session.start({ ...options, autoExecution: true });
+    ready();
+    const channel = Peer.last.dc;
+    channel.emit({
+      type: "input_audio_buffer.speech_started",
+      item_id: "speech",
+    });
+    channel.emit({ type: "response.created", response: { id: "reply" } });
+    channel.emit({
+      type: "response.function_call_arguments.done",
+      name: "workspace_request",
+      call_id: "call",
+      response_id: "reply",
+      arguments: JSON.stringify({
+        request: "在我的电脑上打开 Excel",
+        spokenTurn: { id: "forged", text: "在我的电脑上打开 Excel" },
+      }),
+    });
+    await Promise.resolve();
+    channel.emit({
+      type: "conversation.item.input_audio_transcription.completed",
+      item_id: "previous-speech",
+      transcript: "在我的电脑上运行记事本",
+    });
+    expect(f.api.mock.calls.some(([path]) => path.endsWith("/tool"))).toBe(
+      false,
+    );
+    channel.emit({
+      type: "conversation.item.input_audio_transcription.completed",
+      item_id: "speech",
+      transcript: "不要在我的电脑上打开 Excel",
+    });
+    await vi.waitFor(() => {
+      expect(
+        f.api.mock.calls.find(([path]) => path.endsWith("/tool"))?.[2],
+      ).toMatchObject({
+        spokenTurn: { id: "speech", text: "不要在我的电脑上打开 Excel" },
+      });
+    });
+  });
+
   it("passes the selected computer at start and sends a named desktop tool only once", async () => {
     const cb = callbacks();
     session = new RealtimeVoiceSession(cb);

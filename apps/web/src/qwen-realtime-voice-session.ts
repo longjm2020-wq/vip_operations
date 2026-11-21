@@ -11,6 +11,8 @@ import {
 } from "../../../packages/contracts/src/assistant-presentation.js";
 import { runPresentationTool } from "./voice-presentation-store.js";
 import { assistantPublicText } from "../../../packages/contracts/src/ai-presentation.js";
+import { classifyAssistantExecution } from "../../../packages/contracts/src/assistant-execution.js";
+import { RealtimeSpokenTurns } from "../../../packages/contracts/src/realtime-spoken-turn.js";
 import {
   isPageToolName,
   isPageTaskToolName,
@@ -126,6 +128,8 @@ export class QwenRealtimeVoiceSession {
   private toolIds = new Set<string>();
   private eventIds = new Set<string>();
   private businessUsers = new Set<string>();
+  private autoExecution = false;
+  private spokenTurns = new RealtimeSpokenTurns();
   private captions: Caption[] = [];
   private pendingTools = 0;
   private pageArgumentFailures = 0;
@@ -457,12 +461,22 @@ export class QwenRealtimeVoiceSession {
   }
   private async executeTools(id: string, response: Response) {
     const outputs: { callId: string; result: unknown }[] = [];
-    const pageBatch =
-      !!this.activePageTask() ||
-      response.tools.some((tool) => isLocalPageTool(tool.name));
     let resume = true;
     let businessMarked = false;
     try {
+      const spokenTurn =
+        this.autoExecution &&
+        response.tools.some((tool) => !isPresentationToolName(tool.name))
+          ? await this.spokenTurns.read(response.user, response.cancel.signal)
+          : undefined;
+      if (!this.current(id)) return;
+      const externalTurn =
+        !!spokenTurn &&
+        classifyAssistantExecution(spokenTurn.text).kind !== "site";
+      const pageBatch =
+        !externalTurn &&
+        (!!this.activePageTask() ||
+          response.tools.some((tool) => isLocalPageTool(tool.name)));
       let stepIndex = 0;
       for (const tool of response.tools) {
         if (!this.current(id)) return;
@@ -477,6 +491,16 @@ export class QwenRealtimeVoiceSession {
               this.id,
               () => this.cb.result(),
             ),
+          });
+          continue;
+        }
+        if (externalTurn && isLocalPageTool(tool.name)) {
+          outputs.push({
+            callId: tool.callId,
+            result: {
+              dispatched: false,
+              text: "这条指令由工作台自动分流，请调用 workspace_request 处理。",
+            },
           });
           continue;
         }
@@ -797,6 +821,7 @@ export class QwenRealtimeVoiceSession {
                   callId: tool.callId,
                   request,
                   tool: tool.name,
+                  ...(spokenTurn ? { spokenTurn } : {}),
                 },
                 undefined,
                 { signal: AbortSignal.timeout(180000) },
@@ -804,7 +829,7 @@ export class QwenRealtimeVoiceSession {
             ).data as RealtimeToolResult;
             result = business;
             navigation = business.navigation;
-            this.cb.result();
+            this.cb.result(business);
           }
         } catch (error) {
           if (pageArgumentsInvalid)
@@ -958,6 +983,7 @@ export class QwenRealtimeVoiceSession {
     if (
       event.type === "conversation.item.input_audio_transcription.completed"
     ) {
+      this.spokenTurns.finish(event.item_id, event.transcript);
       if (typeof event.transcript === "string") {
         const user = String(event.item_id || this.user);
         this.caption(
@@ -969,6 +995,10 @@ export class QwenRealtimeVoiceSession {
         );
         void this.flush();
       }
+      return;
+    }
+    if (event.type === "conversation.item.input_audio_transcription.failed") {
+      this.spokenTurns.finish(event.item_id);
       return;
     }
     if (event.type === "response.created") {
@@ -1090,6 +1120,7 @@ export class QwenRealtimeVoiceSession {
     }
   }
   async start(options: RealtimeOptions) {
+    this.autoExecution = options.autoExecution === true;
     this.cb.state("connecting");
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -1178,7 +1209,7 @@ export class QwenRealtimeVoiceSession {
       this.configuration = result.configuration;
       if (
         result.pageControl === true &&
-        !options.desktopDeviceId &&
+        (this.autoExecution || !options.desktopDeviceId) &&
         !options.browserExecution
       ) {
         this.page = new RealtimePageController({

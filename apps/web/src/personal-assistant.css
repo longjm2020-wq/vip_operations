@@ -862,13 +862,6 @@ body:has(.assistant-screen.ant-drawer-open) .companion-voice-prompt {
   line-height: 1.7;
   margin-top: 8px;
 }
-.assistant-compose-menu {
-  max-width: min(340px, calc(100vw - 24px));
-}
-.assistant-compose-menu .ant-dropdown-menu-item-group-title {
-  white-space: normal;
-  overflow-wrap: anywhere;
-}
 .assistant-desktop-task-heading {
   display: flex;
   align-items: baseline;

@@ -10,8 +10,6 @@ import {
   Tag,
   Tooltip,
   Alert,
-  Dropdown,
-  type MenuProps,
 } from "antd";
 import {
   PlusOutlined,
@@ -47,16 +45,12 @@ export function AgentComposer({
   disabled,
   onUploading,
   actions,
-  menu,
-  menuCurrent,
 }: {
   value: AgentOptions;
   change: (v: AgentOptions) => void;
   disabled: boolean;
   onUploading: (v: boolean) => void;
   actions?: ReactNode;
-  menu?: MenuProps;
-  menuCurrent?: string;
 }) {
   const input = useRef<HTMLInputElement>(null),
     { message } = App.useApp();
@@ -102,19 +96,6 @@ export function AgentComposer({
       if (input.current) input.current.value = "";
     }
   };
-  const attachmentButton = (
-    <Button
-      size="small"
-      type="text"
-      shape="circle"
-      icon={<PlusOutlined />}
-      title={menu ? `附件与执行位置 · 当前：${menuCurrent}` : "添加附件"}
-      aria-label={menu ? "输入框菜单" : "附件"}
-      loading={uploading}
-      disabled={disabled || uploading}
-      onClick={menu ? undefined : () => input.current?.click()}
-    />
-  );
   return (
     <div className="agent-composer">
       <div className="agent-composer-tools">
@@ -128,32 +109,17 @@ export function AgentComposer({
             onChange={(e) => void upload(e.target.files)}
             aria-label="上传助理附件"
           />
-          {menu ? (
-            <Dropdown
-              trigger={["click"]}
-              disabled={disabled || uploading}
-              menu={{
-                ...menu,
-                items: [
-                  {
-                    key: "attachment",
-                    label: "添加附件",
-                    icon: <FileOutlined aria-hidden />,
-                  },
-                  { type: "divider" },
-                  ...(menu.items || []),
-                ],
-                onClick: (info) => {
-                  if (info.key === "attachment") input.current?.click();
-                  else menu.onClick?.(info);
-                },
-              }}
-            >
-              {attachmentButton}
-            </Dropdown>
-          ) : (
-            attachmentButton
-          )}
+          <Button
+            size="small"
+            type="text"
+            shape="circle"
+            icon={<PlusOutlined />}
+            title="添加附件"
+            aria-label="附件"
+            loading={uploading}
+            disabled={disabled || uploading}
+            onClick={() => input.current?.click()}
+          />
         </div>
         <div className="agent-composer-trailing">{actions}</div>
       </div>

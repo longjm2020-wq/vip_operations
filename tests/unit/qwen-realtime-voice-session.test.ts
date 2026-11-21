@@ -1757,6 +1757,58 @@ describe("Qwen WebRTC initialization and media ownership", () => {
 });
 
 describe("Qwen WebRTC tools and interruption", () => {
+  it("keeps site controls with a preferred device and dispatches external speech through the workbench", async () => {
+    allowPage();
+    session = new QwenRealtimeVoiceSession(callbacks());
+    await session.start({
+      ...options,
+      autoExecution: true,
+      desktopDeviceId: "preferred-device",
+    });
+    await ready();
+    expect(f.pageCreated).toHaveBeenCalledOnce();
+
+    const channel = Peer.last.dc;
+    channel.emit({
+      type: "input_audio_buffer.speech_started",
+      item_id: "speech",
+    });
+    channel.emit({
+      type: "input_audio_buffer.speech_stopped",
+      item_id: "speech",
+    });
+    channel.emit({
+      type: "conversation.item.input_audio_transcription.completed",
+      item_id: "speech",
+      transcript: "在我的电脑上打开 Excel",
+    });
+    channel.emit({ type: "response.created", response: { id: "reply" } });
+    channel.emit({
+      type: "response.function_call_arguments.done",
+      response_id: "reply",
+      name: "page_observe",
+      call_id: "wrong-tool",
+      arguments: "{}",
+    });
+    channel.emit({
+      type: "response.function_call_arguments.done",
+      response_id: "reply",
+      name: "workspace_request",
+      call_id: "workbench",
+      arguments: '{"request":"打开经营分析"}',
+    });
+    done("reply");
+    await vi.waitFor(() => {
+      expect(
+        f.api.mock.calls.find(([path]) => path.endsWith("/tool"))?.[2],
+      ).toMatchObject({
+        callId: "workbench",
+        spokenTurn: { id: "speech", text: "在我的电脑上打开 Excel" },
+      });
+    });
+    expect(f.observe).not.toHaveBeenCalled();
+  });
+
   it("waits for response.done, executes a desktop tool once, and returns a Qwen-compatible continuation", async () => {
     const cb = callbacks();
     session = new QwenRealtimeVoiceSession(cb);

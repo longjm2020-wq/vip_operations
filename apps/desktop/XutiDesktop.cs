@@ -105,6 +105,7 @@ sealed class Shot {
     public string Image, Controls;
     public int Width, Height;
     public Native.RECT Rect;
+    public Rectangle InputBounds;
 }
 sealed class AssistantForm : Form {
     const string Origin = "https://vip-web-production.up.railway.app";
@@ -150,6 +151,7 @@ sealed class AssistantForm : Form {
     Func<WindowChoice> startWindowOverride;
     long epoch;
     Dictionary<string, object> task;
+    bool BrowserOnly { get { return task!=null&&task.ContainsKey("localBrowser")&&Object.Equals(task["localBrowser"],true); } }
     readonly Dictionary<string, string> journal = new Dictionary<string, string>();
     Native.Hook inputHook;
 
@@ -483,7 +485,9 @@ sealed class AssistantForm : Form {
     async Task StopTask() { LocalPause(); await Safe(async () => { await Control("stop", "你已停止操作"); status.Text = "已停止"; }); }
     void RefreshWindows() {
         windows.Items.Clear();
-        foreach(var item in Native.Windows(Handle)) windows.Items.Add(item);
+        foreach(var item in Native.Windows(Handle)) {
+            if(!BrowserOnly||Native.LocalBrowserWindows.ContainsKey(item.Handle))windows.Items.Add(item);
+        }
         if (windows.Items.Count>0) windows.SelectedIndex = 0;
     }
     async Task AllowTask() { await StartTask(false); }
@@ -503,7 +507,13 @@ sealed class AssistantForm : Form {
         failureTaskId="";failureDiagnostic="";
         Exception failure=null;
         try {
-        selected = startWindowOverride!=null ? startWindowOverride() : automatic ? Native.InitialWindow(Native.Windows(Handle)) : windows.SelectedItem as WindowChoice;
+        bool browserOnly=BrowserOnly;
+        if(browserOnly) {
+            selected=automatic?Native.Windows(Handle).FirstOrDefault(w=>Native.LocalBrowserWindows.ContainsKey(w.Handle)):windows.SelectedItem as WindowChoice;
+            Native.LocalBrowser(selected).ValidateLocalPage();
+        } else {
+            selected=startWindowOverride!=null?startWindowOverride():automatic?Native.InitialWindow(Native.Windows(Handle)):windows.SelectedItem as WindowChoice;
+        }
         if (selected == null) throw new Exception("请先打开要操作的应用，再刷新并选择窗口。");
         Native.ValidateWindow(selected, false);
         Native.RefreshTitle(selected);
@@ -511,6 +521,7 @@ sealed class AssistantForm : Form {
         CheckStart(id,connectionToken,version,grant);
         var payload=new Dictionary<string,object>{{"action","allow"},{"window",selected.Title},{"application",selected.App},{"windowId",selected.Id}};
         if(grant.Length>0) payload["authorizationId"]=grant;
+        if(browserOnly)payload["localBrowser"]=true;
         var result=await Request("tasks/" + id + "/control",payload);
         CheckStart(id,connectionToken,version,grant);
         if(S(result,"status")!="RUNNING") throw new Exception("任务已暂停或停止，请刷新后核对。");
@@ -536,13 +547,13 @@ sealed class AssistantForm : Form {
         polling = true;
         string connectionToken=token; long permissionVersion=permissionEpoch, pollVersion=epoch;
         try {
-            var result = await Request("poll", new {});
+            var result = await Request("poll", new { localBrowser=true });
             if(token!=connectionToken || permissionVersion!=permissionEpoch || pollVersion!=epoch || closing) return;
             if(!await ReconcileAuthorization(result)) return;
             task = D(result.ContainsKey("task") ? result["task"] : null);
             if (task.Count == 0) { taskId = ""; state = ""; allow.Enabled = false; LocalPause(); if (!working) status.Text = "暂无进行中的电脑任务；结果可在网站查看。"; return; }
             string id = S(task,"id"); state = S(task,"status");
-            if (taskId != id) { LocalPause(); approvedId = ""; autoAttemptedId="";startFailureNote="";manualPauseSent=false;manualPausePending=false; }
+            if (taskId != id) { LocalPause(); approvedId = ""; autoAttemptedId="";startFailureNote="";manualPauseSent=false;manualPausePending=false; if(BrowserOnly)RefreshWindows(); }
             taskId = id; instruction.Text = S(task,"instruction"); if(!manualPausePending || !new[]{"WAITING","RUNNING"}.Contains(state))status.Text = TaskStage(task);
             allow.Enabled = !captureBlocked && !working && new[]{"WAITING","PAUSED","NEEDS_USER"}.Contains(state);
             if (state != "RUNNING" && armed) LocalPause();
@@ -575,6 +586,7 @@ sealed class AssistantForm : Form {
         if (!armed || id != approvedId || id != taskId || version != epoch || closing) throw new Exception("操作已暂停");
         if(activeAuthorizationId.Length>0 && activeAuthorizationId!=authorizationId) throw new Exception("跨窗口授权已撤销");
         Native.ValidateWindow(selected, true);
+        if(BrowserOnly)Native.LocalBrowser(selected).ValidateLocalPage();
     }
     async void RunStep(string id, long version) {
         string commandId = "",connectionToken=token;
@@ -583,17 +595,27 @@ sealed class AssistantForm : Form {
         try {
             Check(id, version);
             Native.RefreshTitle(selected);
-            var available = activeAuthorizationId.Length>0 ? Native.ObservationWindows(Handle,selected) : new List<WindowChoice>();
+            bool browserOnly=BrowserOnly;
+            BrowserWindow localBrowser=browserOnly?Native.LocalBrowser(selected):null;
+            long browserRevision=localBrowser==null?0:localBrowser.PageRevision;
+            Rectangle? contentBounds=localBrowser==null?(Rectangle?)null:localBrowser.ContentBounds();
+            Action checkInput=()=>{
+                Check(id,version);
+                if(localBrowser!=null&&browserRevision!=localBrowser.PageRevision)
+                    throw new Exception("本地网页已切换，请核对当前页面再继续。");
+            };
+            var available = !browserOnly&&activeAuthorizationId.Length>0 ? Native.ObservationWindows(Handle,selected) : new List<WindowChoice>();
             // UI Automation and PrintWindow may wait on a hung application. Never capture another window as fallback.
-            var capture = Task.Run(() => Native.Capture(selected));
+            var capture = Task.Run(() => Native.Capture(selected, contentBounds));
             if (await Task.WhenAny(capture,Task.Delay(4000)) != capture) { captureBlocked=true; throw new Exception("应用窗口没有响应，请关闭本机助手后重试"); }
             Shot shot = await capture;
-            Check(id, version);
+            checkInput();
             string requestId=Guid.NewGuid().ToString();
             var observation=new Dictionary<string,object>{{"requestId",requestId},{"image",shot.Image},{"width",shot.Width},{"height",shot.Height},{"window",selected.Title},{"application",selected.App},{"controls",shot.Controls},{"windowId",selected.Id}};
-            if(activeAuthorizationId.Length>0) observation["windows"]=available.Select(w=>new {id=w.Id,title=w.Title,application=w.App}).ToArray();
+            if(browserOnly)observation["localBrowser"]=true;
+            else if(activeAuthorizationId.Length>0) observation["windows"]=available.Select(w=>new {id=w.Id,title=w.Title,application=w.App}).ToArray();
             var plan = await Request("tasks/" + id + "/plan", observation);
-            Check(id, version);
+            checkInput();
             var command = D(plan.ContainsKey("command") ? plan["command"] : null);
             if (command.Count == 0) { LocalPause(); return; }
             commandId = S(command,"id"); Guid parsed;
@@ -610,6 +632,7 @@ sealed class AssistantForm : Form {
             Native.ValidateAction(action);
             WindowChoice target=null;
             if(S(action,"kind")=="switch_window") {
+                if(browserOnly)throw new Exception("本地浏览器任务不能切换窗口。");
                 if(activeAuthorizationId.Length==0) throw new Exception("尚未授权跨窗口操作");
                 target=Native.ResolveTarget(available,S(action,"windowId"),selected);
                 Native.ValidateWindow(target,false);
@@ -625,7 +648,7 @@ sealed class AssistantForm : Form {
                 selected=target;
                 await Task.Delay(500);
                 Check(id,version);
-            } else { executingKind=S(action,"kind");await Native.Execute(selected,shot,action,()=>Check(id,version)); }
+            } else { executingKind=S(action,"kind");await Native.Execute(selected,shot,action,checkInput,localBrowser); }
             Record(commandId,"ok");
             await Ack(id,commandId,"ok",S(action,"description"));
             await Task.Delay(600);
@@ -783,6 +806,13 @@ sealed class AssistantForm : Form {
 static class Native {
     // Only dedicated, unprivileged browser windows can be selected from this process.
     public static readonly System.Collections.Concurrent.ConcurrentDictionary<IntPtr,byte> BrowserWindows = new System.Collections.Concurrent.ConcurrentDictionary<IntPtr,byte>();
+    public static readonly System.Collections.Concurrent.ConcurrentDictionary<IntPtr,BrowserWindow> LocalBrowserWindows = new System.Collections.Concurrent.ConcurrentDictionary<IntPtr,BrowserWindow>();
+    public static BrowserWindow LocalBrowser(WindowChoice window) {
+        BrowserWindow browser;
+        if(window==null||!LocalBrowserWindows.TryGetValue(window.Handle,out browser))
+            throw new Exception("请先从工作台右侧打开小序本地浏览器，再继续此任务。");
+        return browser;
+    }
     [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left,Top,Right,Bottom; }
     [StructLayout(LayoutKind.Sequential)] struct POINT { public int X,Y; public POINT(int x,int y){X=x;Y=y;} }
     [StructLayout(LayoutKind.Sequential)] struct INPUT { public uint type; public UNION data; }
@@ -853,33 +883,41 @@ static class Native {
         if(foreground&&GetForegroundWindow()!=w.Handle)throw new Exception("当前窗口已切换，请核对后继续");
         if(Regex.IsMatch(Title(w.Handle),"Windows PowerShell|命令提示符|终端|管理员:|API.?Keys|密码管理",RegexOptions.IgnoreCase))throw new Exception("此窗口需要你亲自操作");
     }
-    static string Controls(WindowChoice w) {
+    static string Controls(WindowChoice w,Rectangle? contentBounds) {
         var root=AutomationElement.FromHandle(w.Handle); var walker=TreeWalker.ControlViewWalker;
         var queue=new Queue<AutomationElement>(); queue.Enqueue(root); var text=new StringBuilder(); int count=0;
         while(queue.Count>0&&count++<120) {
             var element=queue.Dequeue();
             if(element.Current.IsPassword)throw new Exception("窗口包含密码输入，请自行处理后再继续");
             string name=element.Current.Name;
-            if(!element.Current.IsOffscreen) text.AppendLine(Cut(element.Current.ControlType.ProgrammaticName+": "+name,180));
+            var bounds=element.Current.BoundingRectangle;
+            bool inContent=!contentBounds.HasValue||(!bounds.IsEmpty&&
+                bounds.Left>=contentBounds.Value.Left&&bounds.Top>=contentBounds.Value.Top&&
+                bounds.Right<=contentBounds.Value.Right&&bounds.Bottom<=contentBounds.Value.Bottom);
+            if(inContent&&!element.Current.IsOffscreen)text.AppendLine(Cut(element.Current.ControlType.ProgrammaticName+": "+name,180));
             var child=walker.GetFirstChild(element); int sibling=0;
             while(child!=null&&sibling++<30&&queue.Count<140){queue.Enqueue(child);child=walker.GetNextSibling(child);}
         }
         return Cut(text.ToString(),12000);
     }
-    public static Shot Capture(WindowChoice w) {
-        ValidateWindow(w,true); string controls=Controls(w); RECT r;
+    public static Shot Capture(WindowChoice w, Rectangle? contentBounds=null) {
+        ValidateWindow(w,true); string controls=Controls(w,contentBounds); RECT r;
         if(!GetWindowRect(w.Handle,out r)||r.Right-r.Left<100||r.Bottom-r.Top<100)throw new Exception("窗口太小，请调整后继续");
         if((long)(r.Right-r.Left)*(r.Bottom-r.Top)>24000000)throw new Exception("窗口尺寸过大，请缩小后继续");
+        var windowBounds=Rectangle.FromLTRB(r.Left,r.Top,r.Right,r.Bottom);
+        var inputBounds=contentBounds??windowBounds;
+        if(!windowBounds.Contains(inputBounds))throw new Exception("网页区域已变化，请核对后继续。");
         using(var original=new Bitmap(r.Right-r.Left,r.Bottom-r.Top)) {
             using(var g=Graphics.FromImage(original)){IntPtr dc=g.GetHdc();try{if(!PrintWindow(w.Handle,dc,2))throw new Exception("此应用不支持窗口截取，请使用其他窗口");}finally{g.ReleaseHdc(dc);}}
-            double scale=Math.Min(1,1400.0/Math.Max(original.Width,original.Height));
-            int width=(int)(original.Width*scale),height=(int)(original.Height*scale);
+            double scale=Math.Min(1,1400.0/Math.Max(inputBounds.Width,inputBounds.Height));
+            int width=(int)(inputBounds.Width*scale),height=(int)(inputBounds.Height*scale);
             if(width<100||height<100)throw new Exception("窗口比例过窄，请调整后继续");
-            using(var resized=new Bitmap(original,new Size(width,height))) using(var stream=new MemoryStream()) {
+            using(var resized=new Bitmap(width,height)) using(var stream=new MemoryStream()) {
+                using(var g=Graphics.FromImage(resized))g.DrawImage(original,new Rectangle(0,0,width,height),new Rectangle(inputBounds.Left-r.Left,inputBounds.Top-r.Top,inputBounds.Width,inputBounds.Height),GraphicsUnit.Pixel);
                 var codec=ImageCodecInfo.GetImageEncoders().First(i=>i.MimeType=="image/jpeg");
                 using(var quality=new EncoderParameters(1)){quality.Param[0]=new EncoderParameter(System.Drawing.Imaging.Encoder.Quality,78L);resized.Save(stream,codec,quality);}
                 if(stream.Length>2000000)throw new Exception("窗口画面过大，请缩小窗口后继续");
-                return new Shot{Image=Convert.ToBase64String(stream.ToArray()),Width=width,Height=height,Controls=controls,Rect=r};
+                return new Shot{Image=Convert.ToBase64String(stream.ToArray()),Width=width,Height=height,Controls=controls,Rect=r,InputBounds=inputBounds};
             }
         }
     }
@@ -913,15 +951,17 @@ static class Native {
     static void Send(params INPUT[] input) { if(SendInput((uint)input.Length,input,Marshal.SizeOf(typeof(INPUT)))!=input.Length)throw new Exception("应用拒绝输入，请检查窗口权限并自行操作；不要提升助手权限"); }
     static INPUT K(ushort key,uint flags) { return new INPUT{type=1,data=new UNION{key=new KEY{vk=key,flags=flags}}}; }
     static INPUT Mouse(uint flags,uint data=0) { return new INPUT{type=0,data=new UNION{mouse=new MOUSE{flags=flags,mouseData=data}}}; }
-    public static async Task Execute(WindowChoice w,Shot shot,Dictionary<string,object> a,Action check) {
+    public static async Task Execute(WindowChoice w,Shot shot,Dictionary<string,object> a,Action check,BrowserWindow localBrowser=null) {
         ValidateAction(a); check(); RECT r;GetWindowRect(w.Handle,out r);
         if(r.Left!=shot.Rect.Left||r.Top!=shot.Rect.Top||r.Right!=shot.Rect.Right||r.Bottom!=shot.Rect.Bottom)throw new Exception("窗口位置或大小已变化，请核对后继续");
+        if(localBrowser!=null&&localBrowser.ContentBounds()!=shot.InputBounds)throw new Exception("网页区域已变化，请核对后继续。");
         string kind=S(a,"kind");
         if(kind=="switch_window") throw new Exception("切换窗口必须经过本机设备授权和目标校验");
         if(kind=="wait"){await Task.Delay(800);return;}
         if(kind=="click"||kind=="scroll") {
-            int x=r.Left+(int)Math.Round(Number(a,"x",0,1000)*(r.Right-r.Left-1)/1000.0);
-            int y=r.Top+(int)Math.Round(Number(a,"y",0,1000)*(r.Bottom-r.Top-1)/1000.0);
+            int x=shot.InputBounds.Left+(int)Math.Round(Number(a,"x",0,1000)*(shot.InputBounds.Width-1)/1000.0);
+            int y=shot.InputBounds.Top+(int)Math.Round(Number(a,"y",0,1000)*(shot.InputBounds.Height-1)/1000.0);
+            if(localBrowser!=null)localBrowser.ValidateLocalAction(kind,S(a,"button"),x,y);
             if(GetAncestor(WindowFromPoint(new POINT(x,y)),2)!=w.Handle)throw new Exception("目标位置被其他窗口遮挡，请核对后继续");
             GuardElement(AutomationElement.FromPoint(new System.Windows.Point(x,y))); check();
             // Move and act in one injected batch. A harmless physical move between
@@ -933,12 +973,14 @@ static class Native {
             else { bool right=S(a,"button")=="right";Send(move,Mouse(right?0x0008u:0x0002u),Mouse(right?0x0010u:0x0004u));if(S(a,"button")=="double"){await Task.Delay(80);check();Send(move,Mouse(2),Mouse(4));} }
             return;
         }
+        if(localBrowser!=null)localBrowser.ValidateLocalAction(kind,S(a,"key"),0,0);
         GuardElement(AutomationElement.FocusedElement); check();
         if(kind=="key") {
             ushort[] keys=Keys[S(a,"key")];var inputs=new List<INPUT>();foreach(var key in keys)inputs.Add(K(key,0));foreach(var key in keys.Reverse())inputs.Add(K(key,2));Send(inputs.ToArray());
         } else {
             // Unicode SendInput doesn't interpret text as key shortcuts or executable code.
             foreach(char ch in S(a,"text")) {
+                if(localBrowser!=null)localBrowser.ValidateLocalAction(kind,"",0,0);
                 check();GuardElement(AutomationElement.FocusedElement);
                 Send(new INPUT{type=1,data=new UNION{key=new KEY{scan=ch,flags=4}}},new INPUT{type=1,data=new UNION{key=new KEY{scan=ch,flags=6}}});
                 await Task.Delay(2);

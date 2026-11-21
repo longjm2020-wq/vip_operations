@@ -7,9 +7,10 @@ import {
 import { DoubaoVoiceSession } from "./doubao-voice-session";
 import { QwenRealtimeVoiceSession } from "./qwen-realtime-voice-session";
 import type { VoiceState } from "./use-gpt-voice";
+import type { RealtimeToolResult } from "../../../packages/contracts/src/assistant-realtime.js";
 
 export function useRealtimeVoice(
-  onResult: () => void,
+  onResult: (result?: RealtimeToolResult) => void,
   onNavigate: (id: string) => void,
   transport: "webrtc" | "websocket" = "webrtc",
   provider: "openai" | "doubao" | "qwen" = "openai",
@@ -79,7 +80,9 @@ export function useRealtimeVoice(
       blocked: (value) => {
         if (turn === generation.current) setPlaybackBlocked(value);
       },
-      result: () => callbacks.current.onResult(),
+      result: (result) => {
+        if (turn === generation.current) callbacks.current.onResult(result);
+      },
       navigate: (id) => callbacks.current.onNavigate(id),
       business: () => setHasBusiness(true),
       preparePage: () => callbacks.current.page?.prepare(),

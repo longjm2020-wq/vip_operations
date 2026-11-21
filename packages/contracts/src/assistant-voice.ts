@@ -71,7 +71,7 @@ export const voiceSettingsSchema = z
     "复用连接时不能同时填写或清除密钥",
   )
   .refine((v) => !(v.apiKey && v.clearKey), "不能同时清空和填写密钥");
-export const voiceTurnSchema = z
+export const voiceDictationSchema = z
   .object({
     id: z.string().uuid(),
     audio: z
@@ -79,17 +79,19 @@ export const voiceTurnSchema = z
       .min(100)
       .max(1600100)
       .regex(/^[A-Za-z0-9+/]+={0,2}$/),
-    includePersonalContext: z.boolean().default(false),
-    includeMemory: z.boolean().default(false),
   })
   .strict();
+export const voiceTurnSchema = voiceDictationSchema
+  .extend({
+    includePersonalContext: z.boolean().default(false),
+    includeMemory: z.boolean().default(false),
+    autoExecution: z.literal(true).optional(),
+    desktopDeviceId: z.string().uuid().optional(),
+  })
+  .refine((v) => !v.desktopDeviceId || !!v.autoExecution, "常用电脑仅用于自动分流");
 export const voiceSpeechSchema = z
   .object({ id: z.string().uuid(), messageId: z.string().uuid() })
   .strict();
-export const voiceDictationSchema = voiceTurnSchema.pick({
-  id: true,
-  audio: true,
-});
 export type AssistantDictationStatus = {
   ready: boolean;
   message: string;
@@ -125,7 +127,13 @@ export type AssistantVoiceStatus = {
 export type VoiceEvent =
   | { type: "stage"; stage: "transcribing" | "thinking" | "speaking" }
   | { type: "transcript"; text: string }
-  | { type: "reply"; text: string; messageId: string }
+  | {
+      type: "reply";
+      text: string;
+      messageId: string;
+      browserTaskId?: string;
+      desktopTaskId?: string;
+    }
   | { type: "audio"; data: string }
   | { type: "model"; model: string }
   | { type: "spoken"; text: string }

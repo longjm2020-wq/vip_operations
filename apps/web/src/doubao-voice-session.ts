@@ -385,7 +385,7 @@ export class DoubaoVoiceSession {
         }
         this.businessTurns.add(eventTurn);
         this.cb.business();
-        this.cb.result();
+        this.cb.result(event.result);
         if (event.result?.navigation) this.cb.navigate(event.result.navigation);
         break;
       case "xuti.presentation":

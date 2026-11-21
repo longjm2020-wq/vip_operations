@@ -4,10 +4,8 @@ import type {
   BrowserState,
   BrowserTask,
 } from "../../packages/contracts/src/assistant-browser.js";
-import {
-  selectAssistantPanel,
-  selectAssistantExecution,
-} from "./assistant-controls.js";
+import { classifyAssistantExecution } from "../../packages/contracts/src/assistant-execution.js";
+import { selectAssistantPanel } from "./assistant-controls.js";
 
 const taskId = "11111111-1111-4111-8111-111111111111";
 const frameId = "22222222-2222-4222-8222-222222222222";
@@ -266,7 +264,28 @@ async function fixture(
         const body = request.postDataJSON();
         state.requests.push(body);
         conversation.version++;
-        if (body.browserExecution) {
+        conversation.state = "IDLE";
+        conversation.error = "";
+        const browserExecution =
+          body.browserExecution === true ||
+          (body.autoExecution === true &&
+            classifyAssistantExecution(body.message).kind === "browser");
+        if (
+          browserExecution &&
+          (!state.ready ||
+            state.tasks.some(
+              (task) =>
+                task.mode !== "BROWSE" &&
+                ["QUEUED", "RUNNING", "NEEDS_USER", "PAUSED"].includes(
+                  task.status,
+                ),
+            ))
+        ) {
+          conversation.state = "FAILED";
+          conversation.error = state.ready
+            ? "独立浏览器已有任务，请查看进度、继续或停止当前任务"
+            : "独立浏览器执行服务尚未连接";
+        } else if (browserExecution) {
           state.tasks = [
             {
               ...makeTask(),
@@ -301,7 +320,13 @@ async function fixture(
   return { state, freshFrame };
 }
 async function chooseBrowser(page: Page) {
-  await selectAssistantExecution(page, "小序独立浏览器");
+  await selectAssistantPanel(page, "独立浏览器");
+  await page
+    .getByRole("button", { name: "浏览器标签与会话菜单", exact: true })
+    .click();
+  await page
+    .getByRole("menuitem", { name: "让小序操作当前网页", exact: true })
+    .click();
 }
 
 for (const viewport of [
@@ -507,7 +532,7 @@ for (const viewport of [
   });
 }
 
-test("独立浏览器未就绪不影响网站对话，显式选择后阻断且不回退主机", async ({
+test("独立浏览器未就绪保留网页指令，后续普通消息仍用网站对话", async ({
   page,
 }) => {
   const { state } = await fixture(page);
@@ -515,7 +540,7 @@ test("独立浏览器未就绪不影响网站对话，显式选择后阻断且�
   await page.goto("/my-workspace");
   const composer = page.locator(".assistant-compose:visible");
   await expect(composer.locator("textarea")).toBeEnabled();
-  await composer.locator("textarea").fill("保留这个网页任务草稿");
+  await composer.locator("textarea").fill("点击第一个帮助链接");
   await chooseBrowser(page);
   await expect(
     page.getByRole("button", { name: "浏览器标签与会话菜单", exact: true }),
@@ -530,17 +555,32 @@ test("独立浏览器未就绪不影响网站对话，显式选择后阻断且�
     page.getByRole("button", { name: "打开网址", exact: true }),
   ).toBeDisabled();
   await selectAssistantPanel(page, "聊天");
-  await expect(composer.locator("textarea")).toHaveValue(
-    "保留这个网页任务草稿",
-  );
-  await expect(composer.locator("textarea")).toBeDisabled();
+  const draft = "在小序独立浏览器中操作当前网页：点击第一个帮助链接";
+  await expect(composer.locator("textarea")).toHaveValue(draft);
   expect(state.requests).toEqual([]);
-  await selectAssistantExecution(page, "网站内");
-  await expect(composer.locator("textarea")).toBeEnabled();
   await composer.getByRole("button", { name: "发送给个人助理" }).click();
   await expect.poll(() => state.requests.length).toBe(1);
-  expect(state.requests[0].browserExecution).toBeUndefined();
+  await expect(composer.locator("textarea")).toHaveValue(draft);
+  await expect(
+    page
+      .getByRole("alert")
+      .filter({ hasText: "独立浏览器执行服务尚未连接" })
+      .first(),
+  ).toBeVisible();
+  expect(state.requests[0]).toMatchObject({
+    autoExecution: true,
+    message: draft,
+  });
   expect(state.requests[0].desktopDeviceId).toBeUndefined();
+  expect(state.tasks).toEqual([]);
+  await composer.locator("textarea").fill("请帮我整理工作重点");
+  await composer.getByRole("button", { name: "发送给个人助理" }).click();
+  await expect(page.getByText("网站对话回复", { exact: true })).toBeVisible();
+  expect(state.requests[1]).toMatchObject({
+    autoExecution: true,
+    message: "请帮我整理工作重点",
+  });
+  expect(state.requests[1].browserExecution).toBeUndefined();
 });
 
 test("独立浏览器目标发送、后台进度与跨页面恢复保留同一任务，服务变更不误发", async ({
@@ -551,10 +591,8 @@ test("独立浏览器目标发送、后台进度与跨页面恢复保留同一�
   await page.goto("/my-workspace");
   await chooseBrowser(page);
   const composer = page.locator(".assistant-compose:visible");
-  await expect(
-    composer.getByRole("button", { name: "选择对话模型" }),
-  ).toHaveCount(0);
-  await composer.locator("textarea").fill("打开百度");
+  const message = "在小序独立浏览器中操作当前网页：打开百度";
+  await composer.locator("textarea").fill(message);
   state.ready = false;
   await composer.getByRole("button", { name: "发送给个人助理" }).click();
   await expect(
@@ -563,29 +601,29 @@ test("独立浏览器目标发送、后台进度与跨页面恢复保留同一�
       .filter({ hasText: "独立浏览器执行服务尚未连接" })
       .first(),
   ).toBeVisible();
-  expect(state.requests).toEqual([]);
-  await expect(composer.locator("textarea")).toHaveValue("打开百度");
+  expect(state.requests).toHaveLength(1);
+  await expect(composer.locator("textarea")).toHaveValue(message);
   state.ready = true;
   await expect(
     composer.getByRole("button", { name: "发送给个人助理" }),
   ).toBeEnabled({ timeout: 8000 });
   await composer.getByRole("button", { name: "发送给个人助理" }).click();
-  await expect.poll(() => state.requests.length).toBe(1);
-  expect(state.requests[0]).toMatchObject({
-    browserExecution: true,
-    message: "打开百度",
+  await expect.poll(() => state.requests.length).toBe(2);
+  expect(state.requests[1]).toMatchObject({
+    autoExecution: true,
+    message,
     includePersonalContext: false,
     includeMemory: false,
   });
-  expect(state.requests[0].desktopDeviceId).toBeUndefined();
-  expect(state.requests[0].model).toBeUndefined();
-  expect(state.requests[0].webOpenResult).toBeUndefined();
+  expect(state.requests[1].desktopDeviceId).toBeUndefined();
+  expect(state.requests[1].model).toBeUndefined();
+  expect(state.requests[1].webOpenResult).toBeUndefined();
   expect(page.context().pages()).toHaveLength(1);
   await expect(
     page.getByRole("img", { name: "小序独立浏览器当前截图", exact: true }),
   ).toBeVisible();
   await expect(
-    page.getByRole("region", { name: "浏览器任务：打开百度" }),
+    page.getByRole("region", { name: `浏览器任务：${message}` }),
   ).toContainText("等待独立浏览器");
   state.tasks[0].status = "NEEDS_USER";
   state.tasks[0].stage = "请接管完成登录";
@@ -597,20 +635,22 @@ test("独立浏览器目标发送、后台进度与跨页面恢复保留同一�
   await page
     .getByRole("button", { name: "关闭浏览器面板", exact: true })
     .click();
-  await composer.locator("textarea").fill("继续查找帮助");
+  const next = "在小序独立浏览器中操作当前网页：点击帮助链接";
+  await composer.locator("textarea").fill(next);
   await composer.getByRole("button", { name: "发送给个人助理" }).click();
   await expect(
-    page.getByText(
-      "已显示当前浏览器任务。指令已保留，请先继续或停止当前任务，无需重复发送。",
-      { exact: true },
-    ),
+    page
+      .getByRole("alert")
+      .filter({ hasText: "独立浏览器已有任务，请查看进度、继续或停止当前任务" })
+      .first(),
   ).toBeVisible();
-  expect(state.requests).toHaveLength(1);
-  await expect(composer.locator("textarea")).toHaveValue("继续查找帮助");
+  expect(state.requests).toHaveLength(3);
+  expect(state.tasks.map((task) => task.instruction)).toEqual([message]);
+  await expect(composer.locator("textarea")).toHaveValue(next);
   await page.reload();
   await expect(
-    page.locator(".assistant-compose:visible [aria-label='输入框菜单']"),
-  ).toHaveAttribute("title", /小序独立浏览器/);
+    composer.getByRole("button", { name: "附件", exact: true }),
+  ).toBeVisible();
   await expect(
     page.locator(".assistant-compose:visible [data-browser-task-id]"),
   ).toContainText("请接管完成登录");
@@ -618,8 +658,8 @@ test("独立浏览器目标发送、后台进度与跨页面恢复保留同一�
   state.tasks = [];
   await page.reload();
   await expect(
-    page.locator(".assistant-compose:visible [aria-label='输入框菜单']"),
-  ).toHaveAttribute("title", /网站内/);
+    page.locator(".assistant-compose:visible [data-browser-task-id]"),
+  ).toHaveCount(0);
   expect(
     await page.evaluate(() => localStorage.getItem("xuti-assistant-desktop:8")),
   ).toBeNull();
@@ -1028,7 +1068,7 @@ test("工作台三栏保留原场景与草稿，左右收起和调宽不提交�
   await expect(center.locator(".workspace-world-controls")).toBeVisible();
   await expect(center.locator(".workspace-date")).toHaveCount(0);
   await expect(
-    center.getByRole("button", { name: "输入框菜单", exact: true }),
+    center.getByRole("button", { name: "附件", exact: true }),
   ).toBeVisible();
   await expect(center.locator(".assistant-desktop-entry")).toHaveCount(0);
   await expect(
@@ -1036,10 +1076,6 @@ test("工作台三栏保留原场景与草稿，左右收起和调宽不提交�
       .locator(".workspace-right")
       .getByRole("combobox", { name: "执行位置" }),
   ).toHaveCount(0);
-  await expect(center.locator("[aria-label='输入框菜单']")).toHaveAttribute(
-    "title",
-    /网站内/,
-  );
   await draft.fill("保留中栏工作台草稿");
   const centerBox = await center.boundingBox();
   const panelBox = await panel.boundingBox();
@@ -1067,10 +1103,9 @@ test("工作台三栏保留原场景与草稿，左右收起和调宽不提交�
   await expect(
     page.locator(".workspace-right .assistant-desktop-panel"),
   ).toBeVisible();
-  await expect(center.locator("[aria-label='输入框菜单']")).toHaveAttribute(
-    "title",
-    /网站内/,
-  );
+  await expect(
+    center.getByRole("button", { name: "附件", exact: true }),
+  ).toBeVisible();
   await expect(draft).toHaveValue("保留中栏工作台草稿");
   await selectAssistantPanel(page, "独立浏览器");
   await expect(panel).toBeVisible();
@@ -1190,15 +1225,20 @@ for (const width of [1440, 390]) {
       .getByRole("button", { name: "关闭浏览器面板", exact: true })
       .click();
     await expect(
-      page.locator(".assistant-compose:visible [aria-label='输入框菜单']"),
-    ).toHaveAttribute("title", /小序独立浏览器/);
+      page
+        .locator(".assistant-compose:visible")
+        .getByRole("button", { name: "附件", exact: true }),
+    ).toBeVisible();
+    expect(
+      await page.evaluate(() =>
+        localStorage.getItem("xuti-assistant-desktop:7"),
+      ),
+    ).toBeNull();
     expect(state.controls).toEqual([]);
   });
 }
 
-test("直接浏览首帧到达后立即核对状态，切出排队时保留画面", async ({
-  page,
-}) => {
+test("直接浏览首帧到达后立即核对状态，切出排队时保留画面", async ({ page }) => {
   const { state } = await fixture(page);
   await page.addInitScript(() => {
     const browserWindow: Window = window;

@@ -35,6 +35,7 @@ import {
 import { runAssistantVoiceCommand } from "./assistant-voice-commands.js";
 import { queueDesktopTask } from "./desktop.js";
 import { queueBrowserTask } from "./assistant-browser.js";
+import { resolveAutomaticAssistantExecution } from "./assistant-execution.js";
 import { resolveAssistantWebsite } from "./assistant-website.js";
 import { hydrateTeamMessages } from "./assistant-shared-context.js";
 export { parseAssistantAnswer } from "./assistant-model.js";
@@ -156,24 +157,7 @@ export async function sendAssistant(
 ) {
   requireAssistant(c);
   const body = parse(assistantSendSchema, input);
-  const websiteRequest =
-    !voice &&
-    !body.desktopDeviceId &&
-    !body.browserExecution &&
-    !body.attachmentIds.length
-      ? parseAssistantWebsiteRequest(body.message)
-      : undefined;
-  if (
-    body.webOpenResult &&
-    (!websiteRequest ||
-      (!websiteRequest.destination &&
-        ["opened", "requested"].includes(body.webOpenResult)))
-  )
-    fail(
-      "WEB_COMMAND_INVALID",
-      "打开网页的结果与当前指令不符，请重新发送",
-      400,
-    );
+  const autoExecution = body.autoExecution === true;
   if (
     body.browserExecution &&
     (body.attachmentIds.length ||
@@ -186,6 +170,7 @@ export async function sendAssistant(
       400,
     );
   if (
+    !autoExecution &&
     body.desktopDeviceId &&
     (body.attachmentIds.length ||
       body.webSearch ||
@@ -197,28 +182,6 @@ export async function sendAssistant(
       400,
     );
   const fingerprint = hash(JSON.stringify(body));
-  // Browser execution validates its own registered planner. A disabled chat
-  // provider must not prevent an otherwise configured browser task from starting.
-  const s = body.browserExecution ? undefined : await settings();
-  const attachments = await ownedAgentFiles(c, body.attachmentIds);
-  const chatSelection = body.browserExecution
-    ? null
-    : await resolveChatModel(body.model, {
-        vision: attachments.some((file) => /^(image|video)\//.test(file.mime)),
-      });
-  const selected = chatSelection?.model;
-  if (selected?.provider === "bailian") await bailianChatConnection();
-  else if (selected?.provider === "agentai") await agentaiConnection();
-  else if (!body.browserExecution && !ready(s))
-    fail("AI_NOT_READY", "请管理员先启用并验证 AI 模型连接", 503);
-  if (attachments.reduce((sum, f) => sum + f.size, 0) > 80 * 1024 * 1024)
-    fail("FILE_LIMIT", "本次附件合计超过80MB，请分次处理", 400);
-  if (
-    selected &&
-    !selected.vision &&
-    attachments.some((f) => f.mime.startsWith("image/"))
-  )
-    fail("VISION_REQUIRED", "所选能力不支持看图，请选择标有“识图”的能力", 400);
   await db.$executeRawUnsafe(
     "INSERT INTO public.personal_assistant_conversations(user_id) VALUES($1::bigint) ON CONFLICT DO NOTHING",
     c.actor.id,
@@ -243,6 +206,64 @@ export async function sendAssistant(
     existing.request_count >= 20
   )
     fail("AI_RATE_LIMIT", "每小时最多发送20条消息，请稍后再试", 429);
+  const hasAttachments = body.attachmentIds.length > 0;
+  const execution =
+    autoExecution && !hasAttachments && !body.webSearch
+      ? await resolveAutomaticAssistantExecution(
+          c,
+          body.message,
+          body.desktopDeviceId,
+        )
+      : undefined;
+  const browserExecution = autoExecution
+    ? execution?.kind === "browser"
+    : !!body.browserExecution;
+  const desktopExecution =
+    execution?.kind === "desktop" ? execution : undefined;
+  const desktopDeviceId = autoExecution
+    ? desktopExecution?.deviceId
+    : body.desktopDeviceId;
+  const clarification =
+    execution?.kind === "clarify" ? execution.message : undefined;
+  const siteExecution =
+    !browserExecution && !desktopDeviceId && clarification === undefined;
+  const websiteRequest =
+    !voice && siteExecution && !hasAttachments
+      ? parseAssistantWebsiteRequest(body.message)
+      : undefined;
+  if (
+    body.webOpenResult &&
+    (!websiteRequest ||
+      (!websiteRequest.destination &&
+        ["opened", "requested"].includes(body.webOpenResult)))
+  )
+    fail(
+      "WEB_COMMAND_INVALID",
+      "打开网页的结果与当前指令不符，请重新发送",
+      400,
+    );
+  // Automatic desktop and browser requests use their own registered planners.
+  const usesChat = autoExecution ? siteExecution : !browserExecution;
+  const s = usesChat ? await settings() : undefined;
+  const attachments = await ownedAgentFiles(c, body.attachmentIds);
+  const chatSelection = usesChat
+    ? await resolveChatModel(body.model, {
+        vision: attachments.some((file) => /^(image|video)\//.test(file.mime)),
+      })
+    : null;
+  const selected = chatSelection?.model;
+  if (selected?.provider === "bailian") await bailianChatConnection();
+  else if (selected?.provider === "agentai") await agentaiConnection();
+  else if (usesChat && !ready(s))
+    fail("AI_NOT_READY", "请管理员先启用并验证 AI 模型连接", 503);
+  if (attachments.reduce((sum, f) => sum + f.size, 0) > 80 * 1024 * 1024)
+    fail("FILE_LIMIT", "本次附件合计超过80MB，请分次处理", 400);
+  if (
+    selected &&
+    !selected.vision &&
+    attachments.some((f) => f.mime.startsWith("image/"))
+  )
+    fail("VISION_REQUIRED", "所选能力不支持看图，请选择标有“识图”的能力", 400);
   const messages: AssistantMessage[] = [
     ...(await hydrateTeamMessages(c.actor.id, existing.messages.slice(-38))),
     {
@@ -282,9 +303,7 @@ export async function sendAssistant(
       day: "2-digit",
     }).format(new Date());
     const stored =
-      body.includePersonalContext &&
-      !body.desktopDeviceId &&
-      !body.browserExecution
+      body.includePersonalContext && siteExecution
         ? await one(
             db,
             "SELECT config FROM public.personal_workspaces WHERE user_id=$1::bigint",
@@ -292,50 +311,44 @@ export async function sendAssistant(
           )
         : undefined;
     const memory =
-      body.includeMemory && !body.desktopDeviceId && !body.browserExecution
-        ? await readAssistantMemory(c)
-        : null;
+      body.includeMemory && siteExecution ? await readAssistantMemory(c) : null;
     const command =
-      !body.desktopDeviceId &&
-      !body.browserExecution &&
-      !body.attachmentIds.length &&
-      !body.webSearch
+      siteExecution && !hasAttachments && !body.webSearch
         ? parseVoiceCommand(body.message)
         : undefined;
-    const desktopTask = body.desktopDeviceId
+    const executionModel = autoExecution ? undefined : body.model;
+    const desktopTask = desktopDeviceId
       ? await queueDesktopTask(c, {
-          deviceId: body.desktopDeviceId,
+          deviceId: desktopDeviceId,
           requestId: body.requestId,
           instruction: body.message,
-          model: body.model,
+          model: executionModel,
+          localBrowser: desktopExecution?.localBrowser,
         })
       : null;
-    const browserTask = body.browserExecution
+    const browserTask = browserExecution
       ? await queueBrowserTask(c, {
           requestId: body.requestId,
           instruction: body.message,
-          model: body.model,
+          model: executionModel,
         })
       : null;
-    const answer = website
-      ? {
-          text: webCommand
-            ? assistantWebOpenText(webCommand, body.webOpenResult)
-            : website.text,
-          schedules: [],
-          tools: [],
-          evidence: [],
-          actions: [],
-          memorySuggestions: [],
-          responseModel: undefined,
-          jobIds: [],
-          citations: [],
-        }
-      : desktopTask || browserTask
+    let directReply = clarification;
+    if (website)
+      directReply = webCommand
+        ? assistantWebOpenText(webCommand, body.webOpenResult)
+        : website.text;
+    else if (browserTask)
+      directReply =
+        "浏览器任务已提交，小序会在服务端独立浏览器中执行。下方任务卡显示实际进度，需要登录或确认时会停下来提醒你。";
+    else if (desktopTask)
+      directReply = desktopTask.localBrowser
+        ? "本机浏览器任务已提交。请在所选电脑的小序桌面端打开目标网页。下方任务卡会显示实际进度和接手提示。"
+        : "电脑任务已提交，等待所选电脑执行。实际进度、暂停原因及继续操作会显示在下方任务卡中。";
+    const answer =
+      directReply !== undefined
         ? {
-            text: browserTask
-              ? "浏览器任务已提交，小序会在服务端独立浏览器中执行。下方任务卡显示实际进度，需要登录或确认时会停下来提醒你。"
-              : "电脑任务已提交，等待所选电脑执行。实际进度、暂停原因及继续操作会显示在下方任务卡中。",
+            text: directReply,
             schedules: [],
             tools: [],
             evidence: [],
@@ -368,6 +381,7 @@ export async function sendAssistant(
                 attachmentIds: body.attachmentIds,
                 webSearch: body.webSearch,
                 requestId: body.requestId,
+                autoExecution,
               },
             );
     const reply: AssistantMessage = {
@@ -383,11 +397,11 @@ export async function sendAssistant(
       responseModel:
         typeof answer.responseModel === "string"
           ? answer.responseModel
-          : command || desktopTask || browserTask || websiteRequest
+          : command || directReply !== undefined
             ? undefined
             : COMPASS_AI_MODEL,
       notice:
-        command || desktopTask || browserTask || websiteRequest
+        command || directReply !== undefined
           ? undefined
           : ("notice" in answer && typeof answer.notice === "string"
               ? answer.notice

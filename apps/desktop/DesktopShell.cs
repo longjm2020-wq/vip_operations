@@ -14,7 +14,7 @@ using Microsoft.Web.WebView2.WinForms;
 namespace XutiDesktop {
 static class ShellPolicy {
     public const string Origin = "https://vip-web-production.up.railway.app";
-    public const string Version = "1.2.4";
+    public const string Version = "1.2.5";
     public const string SetupPath = "/my-workspace?assistant=desktop&connect=1";
     public static bool Trusted(string value) {
         Uri uri;
@@ -31,16 +31,17 @@ static class ShellPolicy {
         if(!Trusted(source)||!Trusted(current)||raw==null||raw.Length>4096) throw new Exception("不支持的客户端请求");
         var d=AssistantForm.D(new JavaScriptSerializer().DeserializeObject(raw));
         string channel=AssistantForm.S(d,"channel"), action=AssistantForm.S(d,"action");
-        if(channel!="xuti-desktop"||!new[]{"status","pair","authorize","show-tasks","theme"}.Contains(action)) throw new Exception("不支持的客户端请求");
+        if(channel!="xuti-desktop"||!new[]{"status","pair","authorize","show-tasks","open-local-browser","theme"}.Contains(action)) throw new Exception("不支持的客户端请求");
         if(action=="theme") {
             if(d.Keys.Any(k=>!new[]{"channel","action","value"}.Contains(k))||!new[]{"light","dark"}.Contains(AssistantForm.S(d,"value"))) throw new Exception("主题无效");
         } else {
             Guid id;
-            if(!Guid.TryParse(AssistantForm.S(d,"id"),out id)||d.Keys.Any(k=>!new[]{"channel","action","id","code","deviceId"}.Contains(k))) throw new Exception("请求无效");
+            if(!Guid.TryParse(AssistantForm.S(d,"id"),out id)||d.Keys.Any(k=>!new[]{"channel","action","id","code","deviceId","url"}.Contains(k))) throw new Exception("请求无效");
             if(action=="pair"&&!Regex.IsMatch(AssistantForm.S(d,"code"),"^[a-f0-9]{32}$")) throw new Exception("配对码无效");
             if(action!="pair"&&d.ContainsKey("code")) throw new Exception("请求无效");
             if(action=="authorize"&&!Guid.TryParse(AssistantForm.S(d,"deviceId"),out id)) throw new Exception("设备无效");
             if(action!="authorize"&&d.ContainsKey("deviceId")) throw new Exception("请求无效");
+            if(d.ContainsKey("url")&&(action!="open-local-browser"||!(d["url"] is string)||!WebAddress((string)d["url"]))) throw new Exception("仅支持 HTTPS 网页地址。");
         }
         return d;
     }
@@ -53,6 +54,11 @@ static class ShellPolicy {
             string valid=j.Serialize(new{channel="xuti-desktop",action="status",id=Guid.NewGuid().ToString()});
             Message(Origin,Origin,valid);
             Message(Origin,Origin,j.Serialize(new{channel="xuti-desktop",action="authorize",id=Guid.NewGuid().ToString(),deviceId=Guid.NewGuid().ToString()}));
+            Message(Origin,Origin,j.Serialize(new{channel="xuti-desktop",action="open-local-browser",id=Guid.NewGuid().ToString()}));
+            Message(Origin,Origin,j.Serialize(new{channel="xuti-desktop",action="open-local-browser",id=Guid.NewGuid().ToString(),url="https://example.com/"}));
+            foreach(string bad in new[]{j.Serialize(new{channel="xuti-desktop",action="open-local-browser",id=Guid.NewGuid().ToString(),url="file:///C:/private"}),j.Serialize(new{channel="xuti-desktop",action="status",id=Guid.NewGuid().ToString(),url="https://example.com/"})}) {
+                bool rejected=false;try{Message(Origin,Origin,bad);}catch{rejected=true;}if(!rejected)throw new Exception("Invalid local browser request accepted");
+            }
             foreach(string bad in new[]{j.Serialize(new{channel="xuti-desktop",action="authorize",id=Guid.NewGuid().ToString()}),j.Serialize(new{channel="xuti-desktop",action="authorize",id=Guid.NewGuid().ToString(),deviceId="wrong"}),j.Serialize(new{channel="xuti-desktop",action="status",id=Guid.NewGuid().ToString(),deviceId=Guid.NewGuid().ToString()})}) {
                 bool rejected=false;try{Message(Origin,Origin,bad);}catch{rejected=true;}if(!rejected)throw new Exception("Invalid authorization request accepted");
             }
@@ -92,6 +98,8 @@ sealed class DesktopShell : Form {
     readonly JavaScriptSerializer json=new JavaScriptSerializer();
     readonly List<BrowserWindow> browsers=new List<BrowserWindow>();
     CoreWebView2Environment environment;
+    Task<CoreWebView2Environment> localBrowserEnvironment;
+    BrowserWindow localBrowser;
     bool ready,initializing,exiting,closePending,dark;
     long navigation;
     string pendingUrl=ShellPolicy.Origin+"/my-workspace";
@@ -111,7 +119,7 @@ sealed class DesktopShell : Form {
         workButton=ShellStyle.Button("工作台",()=>ShowWorkspace(null));
         taskButton=ShellStyle.Button("电脑任务",ShowTasks);
         header.Controls.Add(workButton);
-        header.Controls.Add(ShellStyle.Button("打开网页",()=>OpenBrowser(null)));
+        header.Controls.Add(ShellStyle.Button("本地浏览器",ShowLocalBrowser));
         header.Controls.Add(taskButton);
         header.Controls.Add(ShellStyle.Button("操作本机",()=>{var ignored=RequestSetup();}));
         header.Controls.Add(ShellStyle.Button("刷新",()=>{if(ready){ShowWorkspace(null);workspace.Reload();}else{var ignored=Initialize();}}));
@@ -154,7 +162,7 @@ sealed class DesktopShell : Form {
     void ShowTasks(){taskPanel.Visible=true;workPanel.Visible=false;taskPanel.BringToFront();}
     Action Shortcut(Keys keyData) {
         if(keyData==(Keys.Control|Keys.D1))return ()=>ShowWorkspace(null);
-        if(keyData==(Keys.Control|Keys.D2))return ()=>OpenBrowser(null);
+        if(keyData==(Keys.Control|Keys.D2))return ShowLocalBrowser;
         if(keyData==(Keys.Control|Keys.D3))return ShowTasks;
         if(keyData==(Keys.Control|Keys.Shift|Keys.L))return ()=>{var ignored=RequestSetup();};
         return null;
@@ -193,6 +201,32 @@ sealed class DesktopShell : Form {
         var window=new BrowserWindow(environment,url,dark);
         browsers.Add(window);window.FormClosed+=(s,e)=>browsers.Remove(window);window.Show();
     }
+    async void ShowLocalBrowser() {
+        try { await OpenLocalBrowser(null, navigation); }
+        catch { footer.Text="本地浏览器未能启动。请检查 WebView2 Runtime 后重试。"; }
+    }
+    async Task OpenLocalBrowser(string url,long version) {
+        if(localBrowserEnvironment==null) {
+            string profile=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"XutiDesktopAssistant","LocalBrowserProfile");
+            localBrowserEnvironment=CoreWebView2Environment.CreateAsync(null,profile);
+        }
+        CoreWebView2Environment localEnvironment;
+        try { localEnvironment=await localBrowserEnvironment; }
+        catch { localBrowserEnvironment=null;throw; }
+        if(exiting||version!=navigation)return;
+        if(localBrowser==null||localBrowser.IsDisposed) {
+            if(BrowserWindow.WindowCount>=8)throw new InvalidOperationException("请先关闭一个网页窗口。");
+            var window=new BrowserWindow(localEnvironment,url,dark,true);
+            localBrowser=window;browsers.Add(window);
+            window.FormClosed+=(s,e)=>{browsers.Remove(window);if(localBrowser==window)localBrowser=null;};
+            window.Show(this);
+        } else {
+            if(localBrowser.WindowState==FormWindowState.Minimized)localBrowser.WindowState=FormWindowState.Normal;
+            if(url!=null)localBrowser.OpenAddress(url);
+            localBrowser.Activate();
+        }
+        await localBrowser.EnsureReady();
+    }
     async Task Initialize() {
         if(initializing||ready)return;initializing=true;ShowNotice("正在连接你的工作台…");
         try {
@@ -224,7 +258,7 @@ sealed class DesktopShell : Form {
             // No native object, token, filesystem or execution API is injected into any page.
             await core.AddScriptToExecuteOnDocumentCreatedAsync(@"(() => {
                 if (window !== window.top || location.origin !== 'https://vip-web-production.up.railway.app') return;
-                Object.defineProperty(window, 'xutiDesktop', {value: Object.freeze({version:'1.2.4'}), writable:false});
+                Object.defineProperty(window, 'xutiDesktop', {value: Object.freeze({version:'" + ShellPolicy.Version + @"',localBrowser:true}), writable:false});
                 const theme = () => window.chrome.webview.postMessage({channel:'xuti-desktop',action:'theme',value:document.documentElement.dataset.theme === 'dark'?'dark':'light'});
                 addEventListener('DOMContentLoaded', () => {theme();new MutationObserver(theme).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});});
             })();");
@@ -248,9 +282,10 @@ sealed class DesktopShell : Form {
                 if(version!=navigation){await assistant.Disconnect();return;}
             }
             if(action=="show-tasks")ShowTasks();
+            if(action=="open-local-browser")await OpenLocalBrowser(data.ContainsKey("url")?(string)data["url"]:null,version);
             Reply(version,new{channel="xuti-desktop",id,ok=true,data=new{version=ShellPolicy.Version,connected=assistant.Connected,deviceId=assistant.DeviceId,authorized=assistant.Authorized}});
         } catch(Exception ex) {
-            if(id.Length>0)Reply(version,new{channel="xuti-desktop",id,ok=false,error=ex is ApiFailure?ex.Message:"未能连接本机，请在电脑任务中检查连接，或重新生成配对码。"});
+            if(id.Length>0)Reply(version,new{channel="xuti-desktop",id,ok=false,error=ex is ApiFailure||ex is InvalidOperationException?ex.Message:"客户端未能完成请求，请检查本机状态后重试。"});
         }
     }
     void Reply(long version,object value) {
@@ -265,10 +300,14 @@ sealed class BrowserWindow : Form {
     readonly TextBox address=new TextBox{Width=660,Font=new Font("Microsoft YaHei UI",11),Margin=new Padding(6,8,6,0)};
     readonly Label progress=new Label{Dock=DockStyle.Bottom,Height=28,Padding=new Padding(12,5,0,0),Text="此网页窗口可在「电脑任务」中选择。"};
     readonly Label welcome=new Label{Dock=DockStyle.Fill,Padding=new Padding(60,90,40,0),Font=new Font("Microsoft YaHei UI",16),Text="在网页与工作之间，自由切换。\n\n在上方输入网址，打开聚水潭、罗盘或其他工作页面。\n\n登录由你完成；网页会话仅保存在这台电脑。"};
+    readonly bool dedicatedLocal;
+    public long PageRevision { get; private set; }
+    bool pageReady;
     string initial;
-    public BrowserWindow(CoreWebView2Environment env,string url,bool dark) {
+    public BrowserWindow(CoreWebView2Environment env,string url,bool dark,bool dedicatedLocal=false) {
         WindowCount++;
-        environment=env;initial=url;Text="小序网页";Width=1180;Height=810;MinimumSize=new Size(900,600);StartPosition=FormStartPosition.CenterScreen;
+        this.dedicatedLocal=dedicatedLocal;
+        environment=env;initial=url;Text=dedicatedLocal?"小序本地浏览器":"小序网页";Width=1180;Height=810;MinimumSize=new Size(900,600);StartPosition=FormStartPosition.CenterScreen;
         Font=new Font("Microsoft YaHei UI",10);
         web.KeyDown+=(s,e)=>{
             if(e.KeyData!=(Keys.Control|Keys.L))return;
@@ -287,10 +326,10 @@ sealed class BrowserWindow : Form {
                 await web.EnsureCoreWebView2Async(environment);var core=web.CoreWebView2;
                 core.Settings.AreHostObjectsAllowed=false;core.Settings.IsWebMessageEnabled=false;core.Settings.AreDevToolsEnabled=false;
                 core.Settings.IsPasswordAutosaveEnabled=false;core.Settings.IsGeneralAutofillEnabled=false;
-                core.NavigationStarting+=(o,a)=>{if(!ShellPolicy.WebAddress(a.Uri)&&a.Uri!="about:blank"){a.Cancel=true;progress.Text="仅支持 HTTPS 网页地址。";}else welcome.Visible=false;};
-                core.SourceChanged+=(o,a)=>{if(ShellPolicy.WebAddress(core.Source))address.Text=core.Source;};
-                core.DocumentTitleChanged+=(o,a)=>{Text="小序网页 · "+core.DocumentTitle;};
-                core.NavigationCompleted+=(o,a)=>{progress.Text=a.IsSuccess?"在「电脑任务」允许此窗口，或记住跨窗口授权后，小序可以按任务操作网页。":"网页加载失败，请检查地址或网络后重试。";};
+                core.NavigationStarting+=(o,a)=>{PageRevision++;if(!ShellPolicy.WebAddress(a.Uri)&&a.Uri!="about:blank"){a.Cancel=true;progress.Text="仅支持 HTTPS 网页地址。";}else {pageReady=false;welcome.Visible=false;}};
+                core.SourceChanged+=(o,a)=>{PageRevision++;if(ShellPolicy.WebAddress(core.Source))address.Text=core.Source;};
+                core.DocumentTitleChanged+=(o,a)=>{Text=(dedicatedLocal?"小序本地浏览器 · ":"小序网页 · ")+core.DocumentTitle;};
+                core.NavigationCompleted+=(o,a)=>{pageReady=a.IsSuccess;progress.Text=a.IsSuccess?(dedicatedLocal?"可对小序说「在本地浏览器中…」；登录和敏感操作请亲自处理。":"在「电脑任务」允许此窗口，或记住跨窗口授权后，小序可以按任务操作网页。"):"网页加载失败，请检查地址或网络后重试。";};
                 core.NewWindowRequested+=async(o,a)=>{
                     if(!a.IsUserInitiated||!ShellPolicy.WebAddress(a.Uri)||WindowCount>=8){a.Handled=true;return;}
                     using(var deferred=a.GetDeferral()) {
@@ -303,13 +342,36 @@ sealed class BrowserWindow : Form {
                 core.DownloadStarting+=(o,a)=>Download(this,a);
                 core.WindowCloseRequested+=(o,a)=>Close();
                 Native.BrowserWindows.TryAdd(Handle,0);
+                if(dedicatedLocal)Native.LocalBrowserWindows.TryAdd(Handle,this);
                 if(initial!=null){address.Text=initial;Navigate();}
                 else {welcome.Visible=true;welcome.BringToFront();address.Focus();}
             }catch{progress.Text="网页环境未能启动，请重启小序后再试。";}
         };
-        FormClosed+=(s,e)=>{WindowCount--;byte ignored;Native.BrowserWindows.TryRemove(Handle,out ignored);web.Dispose();};
+        FormClosed+=(s,e)=>{WindowCount--;byte ignored;BrowserWindow local;Native.LocalBrowserWindows.TryRemove(Handle,out local);Native.BrowserWindows.TryRemove(Handle,out ignored);web.Dispose();};
     }
-    async Task EnsureReady(){for(int i=0;i<100;i++){if(web.CoreWebView2!=null)return;await Task.Delay(100);}throw new Exception("网页启动超时");}
+    public async Task EnsureReady(){for(int i=0;i<100&&!IsDisposed;i++){if(web.CoreWebView2!=null)return;await Task.Delay(100);}throw new InvalidOperationException("本地网页启动超时，请重试。");}
+    public void OpenAddress(string url) {
+        if(!ShellPolicy.WebAddress(url))throw new InvalidOperationException("仅支持 HTTPS 网页地址。");
+        if(web.CoreWebView2==null)initial=url;
+        else {address.Text=url;Navigate();}
+    }
+    public void ValidateLocalPage() {
+        if(!dedicatedLocal||IsDisposed||web.CoreWebView2==null||!pageReady||!ShellPolicy.WebAddress(web.CoreWebView2.Source)||welcome.Visible)
+            throw new Exception("请在小序本地浏览器打开要操作的 HTTPS 网页，再继续。");
+    }
+    public Rectangle ContentBounds() {
+        ValidateLocalPage();
+        return web.RectangleToScreen(web.ClientRectangle);
+    }
+    public void ValidateLocalAction(string kind,string detail,int x,int y) {
+        ValidateLocalPage();
+        if(kind=="click"||kind=="scroll") {
+            if(!ContentBounds().Contains(x,y)||(kind=="click"&&detail!="left"))
+                throw new Exception("本地浏览器任务只能在网页内容区点击或滚动。");
+        } else if(kind!="wait"&&(!web.ContainsFocus||detail.StartsWith("CTRL_"))) {
+            throw new Exception("请先在网页内容区定位输入框；浏览器工具栏和快捷键由你操作。");
+        }
+    }
     public void Theme(bool dark){ShellStyle.Apply(this,dark);web.DefaultBackgroundColor=dark?Color.FromArgb(17,18,23):Color.White;}
     protected override bool ProcessCmdKey(ref Message msg,Keys keyData) {
         if(keyData==(Keys.Control|Keys.L)){address.Focus();address.SelectAll();return true;}

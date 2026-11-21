@@ -74,9 +74,16 @@ export class AssistantDesktopController {
     if (r.get("Origin")) fail("FORBIDDEN", "请在本机助手配对", 403);
     return pairDesktop(input);
   }
-  @Public() @Post("client/poll") async poll(@Req() r: AuthRequest) {
+  @Public() @Post("client/poll") async poll(
+    @Req() r: AuthRequest,
+    @Body() input: unknown,
+  ) {
     const d = await desktopIdentity(r.get("Authorization"), r.get("Origin"));
-    return pollDesktop(d.c, d.deviceId);
+    const b = parse(
+      z.object({ localBrowser: z.literal(true).optional() }).strict(),
+      input ?? {},
+    );
+    return pollDesktop(d.c, d.deviceId, b.localBrowser);
   }
   @Public() @Post("client/authorization") async authorization(
     @Req() r: AuthRequest,

@@ -432,6 +432,45 @@ describe("OpenRouter GPT voice", () => {
     ).rejects.toBeDefined();
     expect(fixture.send).toHaveBeenCalledTimes(1);
   });
+  it("routes segmented workbench voice from its server transcript and returns its task ID", async () => {
+    const transcript = "在我的电脑上打开 Excel";
+    const desktopDeviceId = randomUUID();
+    const desktopTaskId = randomUUID();
+    vi.mocked(fetch).mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          model: config.model,
+          choices: [{ message: { content: transcript } }],
+        }),
+      ),
+    );
+    fixture.send.mockResolvedValueOnce({
+      state: "IDLE",
+      messages: [
+        {
+          id: randomUUID(),
+          text: "电脑任务已提交",
+          role: "assistant",
+          desktopTaskId,
+        },
+      ],
+    });
+    const events: VoiceEvent[] = [];
+    await runVoiceTurn(
+      actor(),
+      { ...input(), autoExecution: true, desktopDeviceId },
+      new AbortController().signal,
+      (event) => events.push(event),
+    );
+    expect(fixture.send.mock.calls[0][1]).toMatchObject({
+      autoExecution: true,
+      desktopDeviceId,
+      message: transcript,
+    });
+    expect(events.find((event) => event.type === "reply")).toMatchObject({
+      desktopTaskId,
+    });
+  });
   it("stops after canceled recognition and never executes business work", async () => {
     const controller = new AbortController();
     vi.mocked(fetch).mockImplementationOnce(async () => {

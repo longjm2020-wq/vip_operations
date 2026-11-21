@@ -29,6 +29,7 @@ export function AssistantDesktopTaskCard({
   const [error, setError] = useState("");
   const pending = useRef(false);
   const active = isActiveDesktopTask(task);
+  const taskLabel = task.localBrowser ? "本地浏览器任务" : "电脑任务";
   const control = async (action: "pause" | "resume" | "stop") => {
     if (pending.current) return;
     pending.current = true;
@@ -51,7 +52,7 @@ export function AssistantDesktopTaskCard({
   return (
     <section
       className={`assistant-desktop-item assistant-desktop-task${compact ? " assistant-desktop-task-compact" : ""}`}
-      aria-label={`电脑任务：${task.instruction}`}
+      aria-label={`${taskLabel}：${task.instruction}`}
       data-desktop-task-id={task.id}
     >
       <div className="assistant-desktop-task-heading">
@@ -72,6 +73,7 @@ export function AssistantDesktopTaskCard({
       </div>
       <p role="status">{task.stage}</p>
       <div className="assistant-desktop-task-meta">
+        {task.localBrowser && "本地浏览器 · "}
         {task.deviceName || device?.name || "所选电脑"} · 已执行 {task.step} 步
         {task.window ? ` · ${task.window}` : " · 尚未开始操作窗口"}
         <time dateTime={task.updatedAt}>

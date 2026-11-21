@@ -609,6 +609,9 @@ export async function runVoiceTurn(
         version: conversation.version,
         includePersonalContext: b.includePersonalContext,
         includeMemory: b.includeMemory,
+        ...(b.autoExecution
+          ? { autoExecution: true, desktopDeviceId: b.desktopDeviceId }
+          : {}),
       },
       { signal },
     );
@@ -620,7 +623,13 @@ export async function runVoiceTurn(
         result.error || "助理未完成回复，请在互动对话查看",
         409,
       );
-    emit({ type: "reply", text: latest.text, messageId: latest.id });
+    emit({
+      type: "reply",
+      text: latest.text,
+      messageId: latest.id,
+      ...(latest.browserTaskId ? { browserTaskId: latest.browserTaskId } : {}),
+      ...(latest.desktopTaskId ? { desktopTaskId: latest.desktopTaskId } : {}),
+    });
     if (latest.navigation)
       emit({ type: "navigate", toolId: latest.navigation });
     emit({ type: "stage", stage: "speaking" });

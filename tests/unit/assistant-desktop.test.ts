@@ -118,6 +118,12 @@ beforeAll(async () => {
       "utf8",
     ),
   );
+  await fixture.db.exec(
+    await readFile(
+      "packages/database/migrations/109_assistant_local_browser.sql",
+      "utf8",
+    ),
+  );
 });
 beforeEach(async () => {
   fixture.session = true;
@@ -596,6 +602,96 @@ describe("paired desktop task execution", () => {
     await expect(
       desktopControl(actor(), t.id, input, d.deviceId),
     ).rejects.toThrow();
+  });
+  it("delivers local browser tasks only to clients that advertise support and bind the browser window", async () => {
+    const d = await paired();
+    const request = {
+      deviceId: d.deviceId,
+      requestId: randomUUID(),
+      instruction: "在本地浏览器中点击详情",
+      localBrowser: true,
+    };
+    await expect(queueDesktopTask(actor(), request)).rejects.toMatchObject({
+      response: { error: { code: "LOCAL_BROWSER_UNAVAILABLE" } },
+    });
+    await pollDesktop(actor(), d.deviceId, true);
+    const task = await queueDesktopTask(actor(), request);
+    expect(task).toMatchObject({
+      status: "WAITING",
+      localBrowser: true,
+      scope: "window",
+    });
+    expect((await pollDesktop(actor(), d.deviceId)).task).toBeNull();
+    expect((await pollDesktop(actor(), d.deviceId, true)).task?.id).toBe(
+      task.id,
+    );
+    const windowId = randomUUID();
+    const approval = {
+      action: "allow",
+      window: "小序本机浏览器",
+      application: "XutiDesktop",
+      windowId,
+    };
+    await expect(
+      desktopControl(actor(), task.id, approval, d.deviceId),
+    ).rejects.toMatchObject({
+      response: { error: { code: "LOCAL_BROWSER_SCOPE" } },
+    });
+    const grant = await setDesktopAuthorization(actor(), d.deviceId, true);
+    const started = await desktopControl(
+      actor(),
+      task.id,
+      { ...approval, ...grant, localBrowser: true },
+      d.deviceId,
+    );
+    expect(started).toMatchObject({
+      status: "RUNNING",
+      localBrowser: true,
+      scope: "window",
+    });
+    const observation = {
+      ...(await shot()),
+      window: approval.window,
+      application: approval.application,
+      windowId,
+      localBrowser: true,
+    };
+    const { command } = await planDesktop(
+      actor(),
+      d.deviceId,
+      task.id,
+      observation,
+    );
+    expect(command?.action.kind).toBe("click");
+    expect(
+      await permitDesktop(actor(), d.deviceId, task.id, {
+        commandId: command!.id,
+      }),
+    ).toEqual({ allowed: true });
+    await acknowledgeDesktop(actor(), d.deviceId, task.id, {
+      commandId: command!.id,
+      outcome: "ok",
+      note: "已点击",
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        model({
+          kind: "switch_window",
+          windowId: randomUUID(),
+          description: "切换到其他窗口",
+        }),
+      ),
+    );
+    await expect(
+      planDesktop(actor(), d.deviceId, task.id, {
+        ...observation,
+        requestId: randomUUID(),
+      }),
+    ).rejects.toMatchObject({ response: { error: { code: "FORBIDDEN" } } });
+    expect((await pollDesktop(actor(), d.deviceId, true)).task?.status).toBe(
+      "PAUSED",
+    );
   });
   it("switches only to an observed window and binds the next screenshot after an acknowledged switch", async () => {
     const { d, t } = await queued();

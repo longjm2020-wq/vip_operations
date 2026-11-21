@@ -349,6 +349,52 @@ async function ready(provider = "doubao") {
 }
 
 describe("full-duplex relay", () => {
+  it("uses only the final matching Doubao transcript for automatic execution", async () => {
+    f.claim.mockResolvedValue({
+      provider: "doubao",
+      key: "encrypted-server-only",
+      voice: "zh_female_vv_uranus_bigtts",
+      autoExecution: true,
+    });
+    const { upstream } = await ready();
+    const emit = (event: unknown) =>
+      upstream.emit("message", Buffer.from(JSON.stringify(event)), false);
+    emit({
+      type: "conversation.item.input_audio_transcription.started",
+      item_id: "speech",
+      question_id: "question",
+    });
+    emit({
+      type: "response.function_call_arguments.done",
+      question_id: "question",
+      response_id: "reply",
+      items: [
+        {
+          name: "workspace_request",
+          call_id: "call",
+          arguments: JSON.stringify({ request: "在我的电脑上打开 Excel" }),
+        },
+      ],
+    });
+    emit({
+      type: "conversation.item.input_audio_transcription.completed",
+      item_id: "speech",
+      transcript: "在我的电脑上打开 Excel",
+      asr_info: { is_interim: true },
+    });
+    expect(f.tool).not.toHaveBeenCalled();
+    emit({
+      type: "conversation.item.input_audio_transcription.completed",
+      item_id: "speech",
+      transcript: "不要在我的电脑上打开 Excel",
+    });
+    await vi.waitFor(() => {
+      expect(f.tool.mock.calls[0]?.[2]).toMatchObject({
+        spokenTurn: { id: "speech", text: "不要在我的电脑上打开 Excel" },
+      });
+    });
+  });
+
   it("does not execute an interrupted Qwen tool while its permission refresh is pending", async () => {
     const { upstream } = await ready("qwen");
     const emit = (event: unknown) =>

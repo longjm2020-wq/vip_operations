@@ -7,6 +7,7 @@ import {
 } from "../../../packages/contracts/src/assistant-realtime.js";
 import { assistantPublicText } from "../../../packages/contracts/src/ai-presentation.js";
 import { isPresentationToolName } from "../../../packages/contracts/src/assistant-presentation.js";
+import { RealtimeSpokenTurns } from "../../../packages/contracts/src/realtime-spoken-turn.js";
 import { runPresentationTool } from "./voice-presentation-store.js";
 
 type VoiceState = "idle" | "connecting" | "listening" | "thinking" | "speaking";
@@ -19,6 +20,7 @@ export type RealtimeCaption = {
 export type RealtimeOptions = {
   includePersonalContext: boolean;
   includeMemory: boolean;
+  autoExecution?: true;
   desktopDeviceId?: string;
   browserExecution?: true;
   model?: string;
@@ -29,7 +31,7 @@ export type RealtimeCallbacks = {
   note: (text: string) => void;
   error: (text: string) => void;
   blocked: (blocked: boolean) => void;
-  result: () => void;
+  result: (result?: RealtimeToolResult) => void;
   navigate: (id: string) => void;
   business: () => void;
   preparePage?: () => void;
@@ -75,6 +77,8 @@ export class RealtimeVoiceSession {
   private lastUser = "";
   private items: CaptionItem[] = [];
   private handledUsers = new Set<string>();
+  private autoExecution = false;
+  private spokenTurns = new RealtimeSpokenTurns();
   private responseUsers = new Map<string, string>();
   private interruptedResponses = new Set<string>();
   private currentResponse = "";
@@ -216,7 +220,14 @@ export class RealtimeVoiceSession {
     response?: string,
   ) {
     if (this.closed) return;
-    if (response && this.interruptedResponses.has(response)) {
+    const spokenTurn = this.autoExecution
+      ? await this.spokenTurns.read(user)
+      : undefined;
+    if (
+      this.closed ||
+      (response && this.interruptedResponses.has(response)) ||
+      (this.autoExecution && !!user && user !== this.lastUser)
+    ) {
       this.pendingTools--;
       this.phase();
       this.resumeToolResponse();
@@ -231,12 +242,17 @@ export class RealtimeVoiceSession {
         await api(
           this.path("/tool"),
           "POST",
-          { callId, request: value.request, tool },
+          {
+            callId,
+            request: value.request,
+            tool,
+            ...(spokenTurn ? { spokenTurn } : {}),
+          },
           undefined,
           { signal: AbortSignal.timeout(180000) },
         )
       ).data as RealtimeToolResult;
-      this.cb.result();
+      this.cb.result(result);
       if (result.navigation && !this.closed)
         this.cb.navigate(result.navigation);
     } catch (e) {
@@ -322,11 +338,13 @@ export class RealtimeVoiceSession {
         this.phase();
         break;
       case "conversation.item.input_audio_transcription.completed":
+        this.spokenTurns.finish(e.item_id, e.transcript);
         if (typeof e.transcript === "string" && e.transcript.trim())
           this.addCaption(String(e.item_id), "user", e.transcript.trim(), true);
         void this.flush();
         break;
       case "conversation.item.input_audio_transcription.failed":
+        this.spokenTurns.finish(e.item_id);
         // Audio is still heard natively. Missing captions must not end a call.
         break;
       case "response.created":
@@ -405,7 +423,8 @@ export class RealtimeVoiceSession {
           return;
         this.toolIds.add(e.call_id);
         const user =
-          this.responseUsers.get(String(e.response_id)) || this.lastUser;
+          this.responseUsers.get(String(e.response_id)) ||
+          (this.autoExecution ? "" : this.lastUser);
         this.handledUsers.add(user);
         this.pendingTools++;
         this.cb.business();
@@ -458,6 +477,7 @@ export class RealtimeVoiceSession {
     }
   }
   async start(options: RealtimeOptions) {
+    this.autoExecution = options.autoExecution === true;
     this.cb.state("connecting");
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -622,7 +642,8 @@ export class RealtimeVoiceSession {
   }
   interrupt() {
     if (this.playing) this.discardUnheard(this.playingResponse);
-    if (this.responding) this.discardUnheard(this.currentResponse);
+    if (this.responding || (this.autoExecution && this.pendingTools))
+      this.discardUnheard(this.currentResponse);
     if (this.responding) this.sendEvent({ type: "response.cancel" });
     if (this.playing) this.sendEvent({ type: "output_audio_buffer.clear" });
     this.playing = false;
