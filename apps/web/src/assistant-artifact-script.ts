@@ -7,6 +7,8 @@ import {
 } from "./assistant-artifact-script-protocol";
 
 const controlEvents = ["click", "input", "change"] as const;
+// First use also has to download and initialize the runtime.
+const startupTimeoutMs = 25_000;
 
 function controlValue(element: Element): string | undefined {
   if (
@@ -112,7 +114,7 @@ export function startArtifactScript(
     stop();
     setState("error");
   };
-  const startupTimeout = window.setTimeout(fail, 8_000);
+  const startupTimeout = window.setTimeout(fail, startupTimeoutMs);
   worker.onerror = (event) => {
     event.preventDefault();
     fail();
