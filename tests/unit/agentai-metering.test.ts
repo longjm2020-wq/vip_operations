@@ -14,6 +14,7 @@ import {
   providerUsage,
   withProviderBillingHeaders,
 } from "../../apps/api/src/ai-metering.js";
+import { agentAiChatError } from "../../apps/api/src/agentai-chat-error.js";
 const source = "agentai.token6688.com";
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -218,6 +219,114 @@ describe("AgentAI actual usage", () => {
       0.0012,
       "CNY",
     ]);
+  });
+  it.each([
+    {
+      label: "classifies a model-less HTTP 200 provider failure",
+      path: "/v1/chat/completions",
+      feature: "assistant_chat",
+      body: {
+        error: { code: "all_vendors_failed", message: "private vendor detail" },
+      },
+      model: null,
+      receiptId: "req_failed",
+      code: "AGENTAI_ALL_VENDORS_FAILED",
+    },
+    {
+      label:
+        "keeps a top-level AgentAI error authoritative over nested metadata",
+      path: "/v1/chat/completions",
+      feature: "assistant_chat",
+      body: {
+        error: { type: "insufficient_funds", message: "private vendor detail" },
+        response: { model: "claude-opus-5-5" },
+      },
+      model: "claude-opus-5-5",
+      receiptId: "req_failed",
+      code: "AGENTAI_INSUFFICIENT_FUNDS",
+    },
+    {
+      label:
+        "records a generic code without passing through unknown provider data",
+      path: "/v1/chat/completions",
+      feature: "assistant_chat",
+      body: {
+        data: {
+          error: {
+            code: "private vendor code",
+            message: "private vendor detail",
+          },
+        },
+      },
+      model: null,
+      receiptId: "req_failed",
+      code: "AGENTAI_PROVIDER_ERROR",
+    },
+    {
+      label: "keeps ordinary media failure metering and its task ID",
+      path: "/v1/audio/voices",
+      feature: "agentai_voice_clone",
+      body: {
+        id: "voice-1",
+        task_id: "audio-task-1",
+        error: { code: "all_vendors_failed", message: "private vendor detail" },
+      },
+      model: null,
+      receiptId: "audio-task-1",
+      code: null,
+    },
+  ] as const)(
+    "$label",
+    async ({ path, feature, body, model, receiptId, code }) => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () =>
+          Response.json(body, {
+            status: 200,
+            headers: { "X-Request-Id": "req_failed" },
+          }),
+        ),
+      );
+      const response = await aiFetch(feature, `https://${source}${path}`, {
+        method: "POST",
+        body: JSON.stringify({ model: "claude-opus-5-5" }),
+      });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual(body);
+      const bill = writes.find((row) =>
+        String(row[0]).includes("input_tokens=COALESCE"),
+      );
+      expect(bill?.slice(2, 9)).toEqual([
+        "failed",
+        model,
+        null,
+        null,
+        null,
+        null,
+        null,
+      ]);
+      expect(bill?.[11]).toBe(receiptId);
+      expect(bill?.[16]).toBe(code);
+      expect(JSON.stringify(writes)).not.toContain("private vendor");
+    },
+  );
+  it("distinguishes an inner numeric failure status from a successful envelope", () => {
+    expect(
+      agentAiChatError({ response: { state: "failed", code: 429 } }),
+    ).toMatchObject({
+      code: "AGENTAI_STATUS_429",
+    });
+    expect(
+      agentAiChatError({
+        code: 0,
+        status: 200,
+        response: {
+          model: "claude-opus-5-5",
+          status: "completed",
+          error: null,
+        },
+      }),
+    ).toBeUndefined();
   });
   it("does not mark downloading as a completed model call", () => {
     expect(

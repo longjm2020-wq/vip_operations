@@ -4,6 +4,7 @@ import {
   aiFeatures,
   type AiFeatureId,
 } from "../../../packages/contracts/src/ai-management.js";
+import { agentAiChatError } from "./agentai-chat-error.js";
 import { agentAiChatReceiptId } from "./agentai-receipt.js";
 
 const validFeatures = new Set<string>(aiFeatures.map((feature) => feature.id));
@@ -182,6 +183,7 @@ async function finish(
   requestedModel: string,
   payload?: unknown,
   chatReceiptId?: string,
+  chatErrorCode?: string,
 ) {
   const value = providerUsage(payload, source);
   const requestId = chatReceiptId ?? value.requestId;
@@ -202,6 +204,7 @@ async function finish(
       previous.model,
       payload,
       chatReceiptId,
+      chatErrorCode,
     );
     await db.$queryRawUnsafe(
       "UPDATE public.ai_model_usage SET completed_at=now() WHERE id=$1::uuid",
@@ -226,10 +229,14 @@ async function finish(
     input_tokens=COALESCE($4,input_tokens),output_tokens=COALESCE($5,output_tokens),total_tokens=COALESCE($6,total_tokens),amount=COALESCE($7,amount),amount_unit=COALESCE($8,amount_unit),credits=COALESCE($9,credits),credit_unit=COALESCE($10,credit_unit),
     provider_request_id=COALESCE($11,provider_request_id),input_characters=COALESCE($12,input_characters),
     input_video_seconds=COALESCE($13,input_video_seconds),output_video_seconds=COALESCE($14,output_video_seconds),billable_images=COALESCE($15,billable_images),
-    error_code=CASE WHEN $2='failed' THEN COALESCE(error_code,'PROVIDER_ERROR') ELSE NULL END,
+    error_code=CASE WHEN $2='failed' THEN COALESCE($16,error_code,'PROVIDER_ERROR') ELSE NULL END,
     completed_at=now() WHERE id=$1::uuid`,
     id,
-    value.failed ? "failed" : confirmed ? "success" : "responded",
+    value.failed || chatErrorCode
+      ? "failed"
+      : confirmed
+        ? "success"
+        : "responded",
     value.model,
     value.input,
     value.output,
@@ -243,6 +250,7 @@ async function finish(
     value.inputVideoSeconds,
     value.outputVideoSeconds,
     value.billableImages,
+    chatErrorCode ?? null,
   );
 }
 
@@ -420,6 +428,7 @@ export async function aiFetch(
           model,
           withProviderBillingHeaders(receipt, source, response.headers),
           chatReceiptId,
+          agentAiChat ? agentAiChatError(receipt)?.code : undefined,
         ).catch(() => {});
       },
     }),

@@ -1577,6 +1577,27 @@ describe("AgentAI personal assistant receipts", () => {
 
   it.each([
     {
+      case: "HTTP 200 with a model-less provider error",
+      header: "receipt",
+      responseModel: undefined,
+      finish: "tool_calls",
+      content: "不应采用的正文",
+      providerError: {
+        code: "over_capacity",
+        message: "internal provider reason",
+      },
+      expected: "请求频率或容量受限",
+    },
+    {
+      case: "an unclassified provider failure without a model",
+      header: "receipt",
+      responseModel: undefined,
+      finish: "tool_calls",
+      content: "不应采用的正文",
+      providerError: { message: "internal provider reason" },
+      expected: "本次请求失败",
+    },
+    {
       case: "missing receipt",
       header: undefined,
       responseModel: model,
@@ -1627,11 +1648,20 @@ describe("AgentAI personal assistant receipts", () => {
     },
   ])(
     "rejects $case without a replacement call or a job",
-    async ({ header, responseModel, finish, content, refusal, expected }) => {
+    async ({
+      header,
+      responseModel,
+      finish,
+      content,
+      refusal,
+      providerError,
+      expected,
+    }) => {
       const fetcher = vi.fn(async () =>
         Response.json(
           {
             model: responseModel,
+            error: providerError,
             choices: [
               {
                 finish_reason: finish,
@@ -1650,6 +1680,7 @@ describe("AgentAI personal assistant receipts", () => {
       expect(result.state).toBe("FAILED");
       expect(result.error).toContain(expected);
       expect(result.error).not.toContain("internal provider reason");
+      if (providerError) expect(result.error).not.toContain("模型标识不符");
       expect(
         result.messages.map((message: AssistantMessage) => message.role),
       ).toEqual(["user"]);

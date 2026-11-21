@@ -1149,6 +1149,13 @@ export function PersonalAssistantProvider({
       const createdTask = latest?.browserTaskId || latest?.desktopTaskId;
       const latestIsCurrent = conversation.messages.at(-1)?.id === latest?.id;
       if (
+        siteRequest &&
+        conversation.state === "FAILED" &&
+        latest?.role !== "assistant" &&
+        (input.model ?? modelCatalog.data?.defaultModel)?.startsWith("agentai/")
+      )
+        void modelCatalog.refetch();
+      if (
         (conversation.state !== "FAILED" ||
           (!latestIsCurrent && latest?.role === "assistant")) &&
         (siteRequest || !docked || createdTask)

@@ -25,6 +25,7 @@ import {
 } from "../../../../../packages/contracts/src/agentai-policy.js";
 import type { AiFeatureId } from "../../../../../packages/contracts/src/ai-management.js";
 import { audit, command, fail, parse, type Context } from "../../core.js";
+import { agentAiChatError } from "../../agentai-chat-error.js";
 import { agentAiChatReceiptId } from "../../agentai-receipt.js";
 import { aiFetch } from "../../ai-metering.js";
 import { requireAIConfiguration } from "../analytics/ai.js";
@@ -683,6 +684,8 @@ export async function testAgentAiModel(c: Context, input: unknown) {
     const response = await sendAgentAiChat(s, probe, signal);
     if (!response.ok) httpFailure(response);
     const result = await readJson(response, signal, 300 * 1024);
+    const providerError = agentAiChatError(result);
+    if (providerError) fail(providerError.code, providerError.message, 502);
     if (result.model !== model)
       fail("AGENTAI_MODEL_MISMATCH", "返回型号与请求不一致，未验证通过", 502);
     if (!agentAiChatReceiptId(result.id, response.headers))

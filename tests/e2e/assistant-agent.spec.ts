@@ -484,6 +484,107 @@ test("已验证 AgentAI 纯文字模型可选择并发送，验证失效不改�
   expect(requests).toHaveLength(1);
 });
 
+test("AgentAI 发送失败后刷新可用型号，保留草稿直到用户另选型号", async ({
+  page,
+}) => {
+  await setup(page);
+  const opus = "agentai/claude-opus-5-5";
+  const fallback = "engine/default";
+  const prompt = "生成一份 SVG 骑行动画 HTML 源码文件";
+  const failure =
+    "当前型号暂时无法完成本次生成，请选择另一个已验证模型后重新发送。";
+  const requests: { model: string; message: string; requestId: string }[] = [];
+  const messages: { id: string; role: string; text: string }[] = [];
+  let failed = false;
+  await page.route("**/api/v1/my-workspace/assistant/capabilities", (route) =>
+    route.fulfill({
+      json: {
+        data: {
+          defaultModel: fallback,
+          imageModels: [],
+          models: [
+            {
+              id: fallback,
+              name: "通用助手",
+              displayName: "GPT-6.1 Sol",
+              vision: true,
+            },
+            ...(!failed
+              ? [
+                  {
+                    id: opus,
+                    name: "CL Opus 5.5 · AgentAI",
+                    vision: true,
+                    chatVerifiedAt: "2026-11-21T12:00:00Z",
+                  },
+                ]
+              : []),
+          ],
+        },
+      },
+    }),
+  );
+  await page.route("**/api/v1/my-workspace/assistant", (route) => {
+    if (route.request().method() === "POST") {
+      const request = route.request().postDataJSON();
+      requests.push(request);
+      messages.push({
+        id: request.requestId,
+        role: "user",
+        text: request.message,
+      });
+      failed = request.model === opus;
+      if (!failed)
+        messages.push({
+          id: "alternate-model-reply",
+          role: "assistant",
+          text: "收到文件生成要求。",
+        });
+    }
+    return route.fulfill({
+      json: {
+        data: {
+          ready: true,
+          version: requests.length,
+          state: failed ? "FAILED" : "IDLE",
+          error: failed ? failure : "",
+          messages,
+        },
+      },
+    });
+  });
+
+  await page.goto("/my-workspace");
+  const composer = page.locator(".assistant-compose:visible");
+  const picker = composer.getByRole("button", { name: "选择对话模型" });
+  const send = composer.getByRole("button", { name: "发送给个人助理" });
+  await picker.click();
+  await page.getByRole("menuitem", { name: /CL Opus 5.5/ }).click();
+  await composer.locator("textarea").fill(prompt);
+  await send.click();
+
+  await expect(page.getByText(failure, { exact: true })).toBeVisible();
+  await expect(picker).toContainText("所选 AgentAI 型号不可用");
+  await expect(composer.locator("textarea")).toHaveValue(prompt);
+  await expect(send).toBeDisabled();
+  expect(requests.map(({ model, message }) => ({ model, message }))).toEqual([
+    { model: opus, message: prompt },
+  ]);
+
+  await picker.click();
+  await expect(page.getByRole("menuitem", { name: /CL Opus 5.5/ })).toHaveCount(
+    0,
+  );
+  await page.getByRole("menuitem", { name: /GPT-6.1 Sol/ }).click();
+  await expect(send).toBeEnabled();
+  expect(requests).toHaveLength(1);
+  await send.click();
+  await expect(
+    page.getByText("收到文件生成要求。", { exact: true }),
+  ).toBeVisible();
+  expect(requests.map(({ model }) => model)).toEqual([opus, fallback]);
+});
+
 test("模型菜单只显示多模态型号、发送所选模型并在重开对话后保留", async ({
   page,
 }) => {

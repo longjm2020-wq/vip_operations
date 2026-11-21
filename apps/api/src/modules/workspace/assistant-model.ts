@@ -1,5 +1,6 @@
 import { bailianChatConnection, postBailianChat } from "./bailian-chat.js";
 import { agentaiConnection, postAgentAiChat } from "./agentai-connection.js";
+import { agentAiChatError } from "../../agentai-chat-error.js";
 import { agentAiChatReceiptId } from "../../agentai-receipt.js";
 import { aiFetch } from "../../ai-metering.js";
 import { randomUUID } from "node:crypto";
@@ -313,6 +314,9 @@ export async function askAssistantModel(
     const choice = payload.choices?.[0],
       msg = choice?.message;
     if (agentai) {
+      // A provider error can arrive with HTTP 200 and no returned model.
+      const providerError = agentAiChatError(payload);
+      if (providerError) fail(providerError.code, providerError.message, 502);
       if (!matchesAgentModel(model, payload.model))
         fail(
           "AI_RESPONSE_INVALID",
