@@ -1767,18 +1767,60 @@ test("名称有歧义时等待页说明原因，不跳转到猜测的网址", as
   expect(context.pages()).toHaveLength(2);
 });
 
-test("历史生成的 HTML 源码 TXT 可在右栏预览且不运行文件脚本", async ({
+test("历史 HTML 源码 TXT 可在右栏运行隔离的骑行动画和控件", async ({
   page,
 }) => {
   await setup(page);
   const path = "**/api/v1/my-workspace/assistant";
-  const title = "骑行动画.html 源码";
-  const script = '<script>document.body.dataset.executed = "yes"</script>';
+  const title = "pelican-bike.html 源码";
+  const script = `<script>
+    const wheel = document.getElementById("wheel");
+    const toggle = document.getElementById("toggle");
+    const speedControl = document.getElementById("speed");
+    const speedDisplay = document.querySelector("#speed-display");
+    document.getElementById("isolation").textContent = typeof fetch + "/" + typeof parent;
+    try {
+      document.getElementById("network-probe").setAttribute("href", "https://artifact-preview.invalid/program.png");
+    } catch {}
+
+    let distance = 0;
+    let speed = 1;
+    let riding = true;
+    let queued = false;
+
+    function scheduleRide() {
+      if (queued) return;
+      queued = true;
+      requestAnimationFrame(advanceRide);
+    }
+
+    function advanceRide() {
+      queued = false;
+      if (!riding) return;
+      distance = (distance + speed) % 60;
+      wheel.setAttribute("cx", String(20 + distance));
+      scheduleRide();
+    }
+
+    toggle.addEventListener("click", () => {
+      riding = !riding;
+      toggle.textContent = riding ? "暂停动画" : "继续动画";
+      if (riding) scheduleRide();
+    });
+    speedControl.addEventListener("input", () => {
+      speed = Number(speedControl.value);
+      speedDisplay.textContent = speed + " 倍速";
+    });
+    scheduleRide();
+  </script>`;
   const source = [
     "骑行示例",
     "```html",
     "<!doctype html><html><body><h1>骑行预览</h1>",
-    '<svg viewBox="0 0 40 40"><circle cx="20" cy="20" r="10" /></svg>',
+    '<svg viewBox="0 0 100 40"><circle id="wheel" cx="20" cy="20" r="10" /><image id="network-probe" width="1" height="1" /></svg>',
+    "<button id=\"toggle\" onclick=\"document.getElementById('isolation').textContent = 'unsafe'\">暂停动画</button>",
+    '<label for="speed">骑行速度</label><input id="speed" type="range" min="1" max="3" step="1" value="1">',
+    '<output id="speed-display">1 倍速</output><p id="isolation"></p>',
     '<img src="https://artifact-preview.invalid/image.png" alt="测试资源">',
     script,
     "</body></html>",
@@ -1849,16 +1891,171 @@ test("历史生成的 HTML 源码 TXT 可在右栏预览且不运行文件脚本
   await expect(
     preview.getByRole("heading", { name: "骑行预览" }),
   ).toBeVisible();
-  await expect(preview.locator("svg circle")).toBeVisible();
-  await expect(preview.locator("body")).not.toHaveAttribute("data-executed");
-  expect(await iframe.getAttribute("sandbox")).not.toContain("allow-scripts");
+  await expect(iframe).toHaveAttribute("sandbox", "allow-same-origin");
+  await expect(panel.getByRole("status")).toHaveText(
+    "交互在当前浏览器中隔离运行。",
+    { timeout: 12_000 },
+  );
+  await expect(preview.locator("#isolation")).toHaveText("undefined/undefined");
+  const networkProbe = preview.locator("#network-probe");
+  await expect(networkProbe).toHaveCount(1);
+  await expect(networkProbe).not.toHaveAttribute("href");
+
+  const wheel = preview.locator("#wheel");
+  await expect(wheel).toBeVisible();
+  await expect(wheel).toHaveAttribute("cx", /^(2[1-9]|[3-7][0-9])$/);
+  await preview.getByRole("button", { name: "暂停动画" }).click();
+  await expect(preview.getByRole("button", { name: "继续动画" })).toBeVisible();
+  const stoppedAt = (await wheel.getAttribute("cx")) ?? "";
+  await page.evaluate(async () => {
+    for (let frame = 0; frame < 5; frame++) {
+      await new Promise<number>((resolve) => requestAnimationFrame(resolve));
+    }
+  });
+  expect(await wheel.getAttribute("cx")).toBe(stoppedAt);
+
+  await preview.getByRole("slider", { name: "骑行速度" }).press("End");
+  await expect(preview.locator("#speed-display")).toHaveText("3 倍速");
+  await preview.getByRole("button", { name: "继续动画" }).click();
+  await expect(preview.getByRole("button", { name: "暂停动画" })).toBeVisible();
+  await expect(wheel).not.toHaveAttribute("cx", stoppedAt);
+  await expect(preview.locator("#isolation")).toHaveText("undefined/undefined");
 
   await panel.getByRole("button", { name: "源码", exact: true }).click();
-  await expect(panel.locator("pre")).toContainText(script);
+  await expect(panel.locator("pre")).toContainText("requestAnimationFrame");
   await expect(iframe).toHaveCount(0);
   await expect(task.getByRole("link", { name: file.name })).toHaveAttribute(
     "download",
     file.name,
   );
   expect(outgoing).toEqual([]);
+});
+
+test("网关超时后核对已收取的小序消息并恢复成果，不重复发送", async ({
+  page,
+}) => {
+  await setup(page);
+  const prompt = "请生成带 SVG 动画的 HTML 文件。";
+  const reply = "已完成 SVG 动画文件。";
+  const requests: string[] = [];
+  let finished = false;
+  await page.route("**/api/v1/my-workspace/assistant", (route) => {
+    if (route.request().method() === "POST") {
+      const { requestId } = route.request().postDataJSON();
+      requests.push(requestId);
+      return route.fulfill({
+        status: 504,
+        contentType: "text/html",
+        body: "<h1>Gateway Timeout</h1>",
+      });
+    }
+    return route.fulfill({
+      json: {
+        data: {
+          ready: true,
+          version: finished ? 2 : requests.length,
+          state: finished || !requests.length ? "IDLE" : "PENDING",
+          messages: requests
+            .map((id) => ({ id, role: "user", text: prompt }))
+            .concat(
+              finished ? [{ id: "reply", role: "assistant", text: reply }] : [],
+            ),
+        },
+      },
+    });
+  });
+  await page.goto("/my-workspace");
+  const composer = page.locator(".assistant-compose:visible");
+  const textbox = composer.getByPlaceholder(/告诉我你想完成什么/);
+  await textbox.fill(prompt);
+  await composer.getByRole("button", { name: "发送给个人助理" }).click();
+  const chat = page.getByRole("dialog", { name: "AI 个人助理" });
+  const error = chat.getByText("服务暂时不可用，请重试。", { exact: true });
+  await expect(chat.getByText("正在核对发送结果…")).toBeVisible();
+  await expect(error).toHaveCount(0);
+  finished = true;
+  await expect(chat.getByText(reply, { exact: true })).toBeVisible();
+  await expect(textbox).toHaveValue("");
+  await expect(error).toHaveCount(0);
+  expect(requests).toHaveLength(1);
+});
+
+test("服务未收取消息时保留错误及草稿，同文旧回复不能当作成功", async ({
+  page,
+}) => {
+  await setup(page);
+  const prompt = "请生成带 SVG 动画的 HTML 文件。";
+  let posts = 0;
+  await page.route("**/api/v1/my-workspace/assistant", (route) => {
+    if (route.request().method() === "POST") {
+      posts++;
+      return route.fulfill({
+        status: 503,
+        contentType: "text/html",
+        body: "<h1>Service Unavailable</h1>",
+      });
+    }
+    return route.fulfill({
+      json: {
+        data: {
+          ready: true,
+          version: 2,
+          state: "IDLE",
+          messages: [
+            { id: "old-request", role: "user", text: prompt },
+            { id: "old-reply", role: "assistant", text: "上一次已完成。" },
+          ],
+        },
+      },
+    });
+  });
+  await page.goto("/my-workspace");
+  const composer = page.locator(".assistant-compose:visible");
+  const textbox = composer.getByPlaceholder(/告诉我你想完成什么/);
+  await textbox.fill(prompt);
+  await composer.getByRole("button", { name: "发送给个人助理" }).click();
+  const chat = page.getByRole("dialog", { name: "AI 个人助理" });
+  await expect(chat.getByText("服务暂时不可用，请重试。")).toBeVisible();
+  await expect(textbox).toHaveValue(prompt);
+  expect(posts).toBe(1);
+});
+
+test("核对发现已接收消息但模型失败时，保留服务器原因和原稿", async ({
+  page,
+}) => {
+  await setup(page);
+  const prompt = "请生成带 SVG 动画的 HTML 文件。";
+  const reason = "模型请求失败，请稍后再试。";
+  const requests: string[] = [];
+  await page.route("**/api/v1/my-workspace/assistant", (route) => {
+    if (route.request().method() === "POST") {
+      const { requestId } = route.request().postDataJSON();
+      requests.push(requestId);
+      return route.fulfill({
+        status: 504,
+        contentType: "text/html",
+        body: "<h1>Gateway Timeout</h1>",
+      });
+    }
+    return route.fulfill({
+      json: {
+        data: {
+          ready: true,
+          version: requests.length ? 2 : 0,
+          state: requests.length ? "FAILED" : "IDLE",
+          error: requests.length ? reason : "",
+          messages: requests.map((id) => ({ id, role: "user", text: prompt })),
+        },
+      },
+    });
+  });
+  await page.goto("/my-workspace");
+  const composer = page.locator(".assistant-compose:visible");
+  const textbox = composer.getByPlaceholder(/告诉我你想完成什么/);
+  await textbox.fill(prompt);
+  await composer.getByRole("button", { name: "发送给个人助理" }).click();
+  const chat = page.getByRole("dialog", { name: "AI 个人助理" });
+  await expect(chat.getByText(reason)).toBeVisible();
+  await expect(textbox).toHaveValue(prompt);
+  expect(requests).toHaveLength(1);
 });

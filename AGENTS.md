@@ -1,5 +1,10 @@
 # Repository working agreement
 
+## Production releases
+
+- When a requested production change is complete and its relevant checks pass, publish it without waiting for a separate release request unless the user asks to hold it. Include only completed work in the release.
+- Publish through the existing GitHub `main` → Railway deployment. Wait for the affected services to finish deploying and verify the change in production before reporting it as live.
+
 ## User manual maintenance
 
 - Every user-facing feature, workflow, label, validation, permission, or integration-scope change must update the relevant `docs/manual/*.md` chapter in the same change. Read existing chapters before editing behavior.

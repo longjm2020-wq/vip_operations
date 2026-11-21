@@ -6,6 +6,12 @@ export default defineConfig({
   root: fileURLToPath(new URL(".", import.meta.url)),
   plugins: [react(), excelJsVendorPlugin()],
   worker: { format: "es" },
+  optimizeDeps: {
+    include: [
+      "@jitl/quickjs-singlefile-browser-release-sync",
+      "quickjs-emscripten-core",
+    ],
+  },
   server: {
     host: "127.0.0.1",
     port: 5173,

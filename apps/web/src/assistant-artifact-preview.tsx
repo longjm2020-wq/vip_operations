@@ -10,10 +10,11 @@ import {
 import type { AgentFile } from "../../../packages/contracts/src/assistant-agent";
 import { agentContentUrl } from "./assistant-agent-panel";
 import {
-  agentArtifactFrameHtml,
   analyzeAgentArtifact,
+  buildAgentArtifactFrame,
   maxAgentArtifactPreviewBytes,
 } from "./assistant-artifact-document";
+import { startArtifactScript } from "./assistant-artifact-script";
 import "./assistant-artifact-preview.css";
 
 const sizeError = "文件超过在线预览大小限制，可下载原文件。";
@@ -65,7 +66,15 @@ function animatedSvgRoots(document: Document) {
   );
 }
 
-function ArtifactFrame({ name, source }: { name: string; source: string }) {
+function ArtifactFrame({
+  name,
+  html,
+  scripts,
+}: {
+  name: string;
+  html: string;
+  scripts: string[];
+}) {
   const frame = useRef<HTMLIFrameElement>(null);
   const suspended = useRef<{
     css: Animation[];
@@ -73,6 +82,12 @@ function ArtifactFrame({ name, source }: { name: string; source: string }) {
   } | null>(null);
   const [hasAnimation, setHasAnimation] = useState(false);
   const [paused, setPaused] = useState(false);
+  const [previewDocument, setPreviewDocument] = useState<Document>();
+  const [scriptState, setScriptState] = useState<"ready" | "error">();
+  useEffect(() => {
+    if (previewDocument && scripts.length)
+      return startArtifactScript(previewDocument, scripts, setScriptState);
+  }, [previewDocument, scripts]);
 
   function toggleMotion() {
     if (suspended.current) {
@@ -105,9 +120,10 @@ function ArtifactFrame({ name, source }: { name: string; source: string }) {
         sandbox="allow-same-origin"
         referrerPolicy="no-referrer"
         title={`${name} 的预览`}
-        srcDoc={source}
+        srcDoc={html}
         onLoad={() => {
           const document = frame.current?.contentDocument;
+          if (document?.URL === "about:srcdoc") setPreviewDocument(document);
           setHasAnimation(
             Boolean(
               document &&
@@ -118,7 +134,15 @@ function ArtifactFrame({ name, source }: { name: string; source: string }) {
         }}
       />
       <div className="assistant-artifact-footer">
-        <small>预览已停用页面脚本和外部资源。</small>
+        <small role={scripts.length ? "status" : undefined}>
+          {!scripts.length
+            ? "预览仅使用文件内资源。"
+            : scriptState === "ready"
+              ? "交互在当前浏览器中隔离运行。"
+              : scriptState === "error"
+                ? "部分交互未能运行，仍可查看画面和源码。"
+                : "正在启动交互预览…"}
+        </small>
         {hasAnimation && (
           <Button
             size="small"
@@ -176,9 +200,8 @@ export function AssistantArtifactPreview({ file, onClose }: PreviewProps) {
   }, [url, mime, attempt]);
 
   const artifact = result?.status === "ready" ? result.artifact : undefined;
-  const hasInlinePreview = artifact && artifact.kind !== "text";
-  const frameSource = useMemo(
-    () => (artifact ? agentArtifactFrameHtml(artifact) : ""),
+  const preview = useMemo(
+    () => (artifact ? buildAgentArtifactFrame(artifact) : undefined),
     [artifact],
   );
   return (
@@ -209,7 +232,7 @@ export function AssistantArtifactPreview({ file, onClose }: PreviewProps) {
         </div>
       </header>
 
-      {hasInlinePreview && (
+      {preview && (
         <div
           className="assistant-artifact-modes"
           role="group"
@@ -256,8 +279,12 @@ export function AssistantArtifactPreview({ file, onClose }: PreviewProps) {
         </div>
       )}
       {artifact &&
-        (hasInlinePreview && mode === "preview" ? (
-          <ArtifactFrame name={file.name} source={frameSource} />
+        (preview && mode === "preview" ? (
+          <ArtifactFrame
+            name={file.name}
+            html={preview.html}
+            scripts={preview.scripts}
+          />
         ) : (
           <pre
             className="assistant-artifact-code"

@@ -61,6 +61,10 @@ import {
   type AgentOptions,
 } from "./assistant-agent-panel";
 import { AssistantArtifactPreview } from "./assistant-artifact-preview";
+import {
+  canRecoverAssistantSend,
+  recoverAssistantSend,
+} from "./assistant-send-recovery";
 import type {
   AgentCatalog,
   AgentFile,
@@ -354,6 +358,7 @@ export function PersonalAssistantProvider({
   useWorkspaceSceneCover(sceneCovered);
   const [includeContext, setIncludeContext] = useState(false),
     [sending, setSending] = useState(false);
+  const [checkingSend, setCheckingSend] = useState(false);
   const [error, setError] = useState("");
   const [agent, setAgent] = useState<AgentOptions>({
     attachments: [],
@@ -1032,6 +1037,11 @@ export function PersonalAssistantProvider({
     voice.stop();
     speech.stop();
     if (voiceReply && voiceStatus.data?.ready) speech.prepare();
+    const epoch = desktopSetupLifecycle.current.epoch;
+    const isCurrent = () =>
+      desktopSetupLifecycle.current.mounted &&
+      desktopSetupLifecycle.current.epoch === epoch &&
+      currentOwner.current === user.id;
     try {
       if (externalRequest && agent.attachments.length)
         throw new Error("外部操作仅接收本条指令，请先移除附件后发送。");
@@ -1096,7 +1106,7 @@ export function PersonalAssistantProvider({
             ])?.tasks || []
           ).map((task) => task.id),
         );
-      const response = await api("/my-workspace/assistant", "POST", {
+      const input = {
         message: value.trim(),
         version: data.version,
         requestId,
@@ -1108,31 +1118,62 @@ export function PersonalAssistantProvider({
         ...(docked ? { autoExecution: true } : {}),
         ...(browserMode ? { browserExecution: true } : {}),
         webOpenResult,
-      });
-      const latest = (response.data as AssistantConversation).messages?.at(-1);
+      };
+      const submittedAt = Date.now();
+      const { conversation, reply } = await api(
+        "/my-workspace/assistant",
+        "POST",
+        input,
+      )
+        .then(({ data }: { data: AssistantConversation }) => ({
+          conversation: data,
+          reply: data.messages.at(-1),
+        }))
+        .catch(async (cause) => {
+          if (!isCurrent() || !canRecoverAssistantSend(cause)) throw cause;
+          setCheckingSend(true);
+          const recovered = await recoverAssistantSend({
+            requestId,
+            submittedAt,
+            isCurrent,
+            read: async () => {
+              const result = await q.refetch();
+              return result.isSuccess ? result.data.data : undefined;
+            },
+          });
+          if (!recovered) throw cause;
+          return recovered;
+        });
+      if (!isCurrent()) return;
+      const latest = reply;
       const createdTask = latest?.browserTaskId || latest?.desktopTaskId;
+      const latestIsCurrent = conversation.messages.at(-1)?.id === latest?.id;
       if (
-        siteRequest ||
-        (response.data.state !== "FAILED" && (!docked || createdTask))
+        (conversation.state !== "FAILED" ||
+          (!latestIsCurrent && latest?.role === "assistant")) &&
+        (siteRequest || !docked || createdTask)
       ) {
-        setText("");
-        setAgent((previous) => ({ ...previous, attachments: [] }));
+        setText((current) => (current.trim() === input.message ? "" : current));
+        setAgent((previous) => ({
+          ...previous,
+          attachments: previous.attachments.filter(
+            (file) => !input.attachmentIds.includes(file.id),
+          ),
+        }));
       }
       void jobs.refetch();
+      const conversationIdle = conversation.state === "IDLE" && latestIsCurrent;
       if (desktopMode || latest?.desktopTaskId) await desktop.refetch();
       if (browserMode || latest?.browserTaskId) await browser.refetch();
-      if (response.data.state === "IDLE" && latest?.browserTaskId) {
+      if (!isCurrent()) return;
+      if (conversationIdle && latest?.browserTaskId) {
         setSelectedBrowserTaskId(latest.browserTaskId);
         revealBrowserAfter.current = null;
         setSection("browser");
-      } else if (
-        docked &&
-        response.data.state === "IDLE" &&
-        latest?.desktopTaskId
-      ) {
+      } else if (docked && conversationIdle && latest?.desktopTaskId) {
         setSection("desktop");
       }
-      if (response.data.state === "IDLE" && latest?.role === "assistant") {
+      if (conversationIdle && latest?.role === "assistant") {
         const tool = available.find((entry) => entry.id === latest.navigation);
         if (tool) {
           navigate(tool.path);
@@ -1144,11 +1185,12 @@ export function PersonalAssistantProvider({
         !document.hidden &&
         voiceStatus.data?.ready &&
         latest?.role === "assistant" &&
-        response.data.state === "IDLE"
+        conversationIdle
       )
         void speech.read(latest.id);
       else speech.stop();
     } catch (e) {
+      if (!isCurrent()) return;
       speech.stop();
       setError(
         (webOpenResult === "opened"
@@ -1160,9 +1202,12 @@ export function PersonalAssistantProvider({
               : "") + (e as Error).message,
       );
     } finally {
-      if (!playbackAllowed.current) speech.stop();
-      setSending(false);
-      await q.refetch();
+      if (isCurrent()) {
+        if (!playbackAllowed.current) speech.stop();
+        setCheckingSend(false);
+        setSending(false);
+        await q.refetch();
+      }
     }
   };
   const execute = async (action: AssistantAction) => {
@@ -2279,15 +2324,20 @@ export function PersonalAssistantProvider({
               />
             ))}
             {voiceVisible && <div className="assistant-chat-voice-slot" />}
-            {busy && !gptVoice.active && (
+            {checkingSend ? (
+              <div className="assistant-status" role="status">
+                <Spin size="small" />
+                <span>正在核对发送结果…</span>
+              </div>
+            ) : busy && !gptVoice.active ? (
               <Bubble
                 loading
                 content=""
                 header="助理正在回复…"
                 variant="borderless"
               />
-            )}
-            {(error || data?.error) && (
+            ) : null}
+            {!checkingSend && (error || data?.error) && (
               <Alert type="error" title={error || data?.error} showIcon />
             )}
             <div ref={bottom} />

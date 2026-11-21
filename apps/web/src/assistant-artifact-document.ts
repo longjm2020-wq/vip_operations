@@ -96,7 +96,7 @@ const htmlTags = new Set(
   (
     "a abbr address article aside b bdi bdo blockquote br button caption cite code col colgroup " +
     "dd del details dfn dialog div dl dt em fieldset figcaption figure footer h1 h2 h3 h4 h5 h6 " +
-    "header hgroup hr i img input ins kbd label legend li main mark meter nav ol optgroup option " +
+    "header hgroup hr i img input ins kbd label legend li main mark meter nav ol optgroup option output " +
     "p picture pre progress q rp rt ruby s samp section select small span strong style sub summary sup " +
     "table tbody td textarea tfoot th thead time tr u ul var wbr"
   ).split(" "),
@@ -228,14 +228,26 @@ function retainWrapperAttributes(
   }
 }
 
-// The caller loads this document in an iframe sandbox without allow-scripts.
-export function agentArtifactFrameHtml(
-  analysis: AgentArtifactAnalysis,
-): string {
-  if (analysis.kind === "text") return "";
+export function buildAgentArtifactFrame(analysis: AgentArtifactAnalysis) {
+  if (analysis.kind === "text") return undefined;
 
   const template = document.createElement("template");
   template.innerHTML = analysis.code;
+  const scripts = Array.from(template.content.querySelectorAll("script"))
+    .filter((script) => {
+      const type = script.getAttribute("type")?.trim().toLowerCase();
+      return (
+        !(
+          script.hasAttribute("src") ||
+          script.hasAttribute("href") ||
+          script.hasAttribute("xlink:href")
+        ) &&
+        (!type ||
+          /^(?:text|application)\/(?:javascript|ecmascript)$/.test(type))
+      );
+    })
+    .map((script) => script.textContent ?? "")
+    .filter((source) => source.trim());
   sanitizeMarkup(template);
 
   // Assemble the output in the template's inert document as well.
@@ -257,5 +269,6 @@ export function agentArtifactFrameHtml(
     retainWrapperAttributes(template, analysis.code, body);
   }
   html.append(head, body);
-  return `<!doctype html>${html.outerHTML}`;
+  // Scripts stay separate from the iframe and run through the worker.
+  return { html: `<!doctype html>${html.outerHTML}`, scripts };
 }
