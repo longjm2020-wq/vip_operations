@@ -1766,3 +1766,99 @@ test("名称有歧义时等待页说明原因，不跳转到猜测的网址", as
   await expect(page.getByRole("link", { name: "打开示例文库" })).toHaveCount(0);
   expect(context.pages()).toHaveLength(2);
 });
+
+test("历史生成的 HTML 源码 TXT 可在右栏预览且不运行文件脚本", async ({
+  page,
+}) => {
+  await setup(page);
+  const path = "**/api/v1/my-workspace/assistant";
+  const title = "骑行动画.html 源码";
+  const script = '<script>document.body.dataset.executed = "yes"</script>';
+  const source = [
+    "骑行示例",
+    "```html",
+    "<!doctype html><html><body><h1>骑行预览</h1>",
+    '<svg viewBox="0 0 40 40"><circle cx="20" cy="20" r="10" /></svg>',
+    '<img src="https://artifact-preview.invalid/image.png" alt="测试资源">',
+    script,
+    "</body></html>",
+    "```",
+  ].join("\n");
+  const file = {
+    id: resultId,
+    name: `${title}.txt`,
+    mime: "text/plain",
+    size: Buffer.byteLength(source),
+    source: "generated",
+    createdAt: "2026-11-21T00:00:00Z",
+  };
+  await page.route(path, (route) =>
+    route.fulfill({
+      json: {
+        data: {
+          ready: true,
+          version: 1,
+          state: "IDLE",
+          messages: [
+            {
+              id: "artifact-history",
+              role: "assistant",
+              text: "文件已生成。",
+              jobIds: [jobId],
+            },
+          ],
+        },
+      },
+    }),
+  );
+  await page.route(`${path}/jobs`, (route) =>
+    route.fulfill({
+      json: {
+        data: [
+          {
+            id: jobId,
+            kind: "document",
+            title,
+            status: "DONE",
+            stage: "已完成",
+            progress: 100,
+            files: [file],
+          },
+        ],
+      },
+    }),
+  );
+  await page.route(`${path}/files/${resultId}/content`, (route) =>
+    route.fulfill({ body: source, contentType: "text/plain; charset=utf-8" }),
+  );
+  const outgoing: string[] = [];
+  await page.route("https://artifact-preview.invalid/**", (route) => {
+    outgoing.push(route.request().url());
+    return route.abort();
+  });
+
+  await page.goto("/my-workspace");
+  await selectAssistantPanel(page, "聊天");
+  const task = page.getByRole("region", { name: `任务：${title}` });
+  await task.getByRole("button", { name: `预览 ${file.name}` }).click();
+  const panel = page
+    .getByRole("complementary", { name: "右侧工具栏" })
+    .getByRole("region", { name: "文件预览" });
+  const iframe = panel.getByTitle(`${file.name} 的预览`);
+  const preview = iframe.contentFrame();
+  await expect(
+    preview.getByRole("heading", { name: "骑行预览" }),
+  ).toBeVisible();
+  await expect(preview.locator("svg circle")).toBeVisible();
+  await expect(preview.locator("body")).not.toHaveAttribute("data-executed");
+  expect(await iframe.getAttribute("sandbox")).not.toContain("allow-scripts");
+
+  await panel.getByRole("button", { name: "源码", exact: true }).click();
+  await expect(panel.locator("pre")).toContainText(script);
+  await expect(iframe).toHaveCount(0);
+  await expect(task.getByRole("link", { name: file.name })).toHaveAttribute(
+    "download",
+    file.name,
+  );
+  expect(outgoing).toEqual([]);
+});

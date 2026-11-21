@@ -1,6 +1,7 @@
 import { createContext, useContext, type ReactNode } from "react";
 import type { AssistantConversation } from "../../../packages/contracts/src/personal-assistant";
 import type { AssistantActivityFeed } from "../../../packages/contracts/src/assistant-activity";
+import type { AgentFile } from "../../../packages/contracts/src/assistant-agent";
 import type { WorkspaceSchedule } from "../../../packages/contracts/src/personal-workspace";
 import type { AssistantVoiceStatus } from "../../../packages/contracts/src/assistant-voice";
 import type { useGptVoice, VoiceState } from "./use-gpt-voice";
@@ -11,6 +12,7 @@ export type AssistantSection =
   | "memory"
   | "voice"
   | "tasks"
+  | "artifact"
   | "desktop"
   | "browser"
   | "team"
@@ -38,6 +40,7 @@ export type AssistantHubState = {
   announce?: (text: string) => void;
   compose: () => ReactNode;
   openPanel: (tab?: "chat" | "activity" | "voice" | "team") => void;
+  previewArtifact?: (file: AgentFile) => void;
   feed?: AssistantActivityFeed;
   feedLoading: boolean;
   feedError: Error | null;

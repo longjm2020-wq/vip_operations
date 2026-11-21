@@ -60,8 +60,10 @@ import {
   AgentTasksPanel,
   type AgentOptions,
 } from "./assistant-agent-panel";
+import { AssistantArtifactPreview } from "./assistant-artifact-preview";
 import type {
   AgentCatalog,
+  AgentFile,
   AgentJob,
 } from "../../../packages/contracts/src/assistant-agent";
 import { AssistantModelPicker } from "./assistant-model-picker";
@@ -284,6 +286,63 @@ export function PersonalAssistantProvider({
   };
   const [open, setOpen] = useState(false),
     [text, setText] = useState("");
+  const [artifactPreview, setArtifactPreview] = useState<{
+    owner: string;
+    file: AgentFile;
+    returnTo:
+      | { tool: Exclude<AssistantToolSection, "artifact">; open: boolean }
+      | { section: Exclude<AssistantSection, "artifact"> };
+  }>();
+  const openArtifactPreview = useCallback(
+    (file: AgentFile) => {
+      setArtifactPreview((previous) => {
+        if (
+          panelSection === "artifact" &&
+          previous &&
+          previous.owner === user.id
+        )
+          return { ...previous, file };
+        return {
+          owner: user.id,
+          file,
+          returnTo: docked
+            ? {
+                tool: workspaceTool === "artifact" ? "tasks" : workspaceTool,
+                open: workspaceToolsOpen,
+              }
+            : { section: section === "artifact" ? "chat" : section },
+        };
+      });
+      if (docked) {
+        setWorkspaceTool("artifact");
+        setToolsOpen(true);
+      } else {
+        setSectionState("artifact");
+        setOpen(true);
+      }
+    },
+    [
+      docked,
+      panelSection,
+      section,
+      setToolsOpen,
+      user.id,
+      workspaceTool,
+      workspaceToolsOpen,
+    ],
+  );
+  const closeArtifactPreview = () => {
+    const returnTo = artifactPreview?.returnTo;
+    setArtifactPreview(undefined);
+    if (docked && returnTo && "tool" in returnTo) {
+      setWorkspaceTool(returnTo.tool);
+      setToolsOpen(returnTo.open);
+    } else if (!docked) {
+      setSectionState(
+        returnTo && "section" in returnTo ? returnTo.section : "chat",
+      );
+    }
+  };
   const previousWorkspace = useRef(inWorkspace);
   useEffect(() => {
     if (previousWorkspace.current && !inWorkspace) setOpen(false);
@@ -1752,6 +1811,17 @@ export function PersonalAssistantProvider({
   );
   const panels = (
     <>
+      {allowed &&
+        toolsVisible &&
+        panelSection === "artifact" &&
+        artifactPreview &&
+        artifactPreview.owner === user.id && (
+          <AssistantArtifactPreview
+            key={artifactPreview.file.id}
+            file={artifactPreview.file}
+            onClose={closeArtifactPreview}
+          />
+        )}
       {allowed && panelSection === "employees" && (
         <AssistantEmployeesPanel
           key={user.id}
@@ -2259,6 +2329,7 @@ export function PersonalAssistantProvider({
         announce,
         compose: () => sender(),
         openPanel,
+        previewArtifact: allowed ? openArtifactPreview : undefined,
         feed: activity.data,
         feedLoading: activity.isLoading,
         feedError: activity.error,
@@ -2362,7 +2433,9 @@ export function PersonalAssistantProvider({
               <span className="assistant-panel-title">
                 {section === "chat"
                   ? "小序"
-                  : sectionItems.find((item) => item.key === section)?.label}
+                  : section === "artifact"
+                    ? "文件预览"
+                    : sectionItems.find((item) => item.key === section)?.label}
               </span>
             </span>
           }

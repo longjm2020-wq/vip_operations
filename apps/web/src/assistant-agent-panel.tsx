@@ -1,4 +1,10 @@
-import { useCallback, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useContext,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   App,
   Button,
@@ -14,6 +20,7 @@ import {
 import {
   PlusOutlined,
   DownloadOutlined,
+  EyeOutlined,
   FileOutlined,
   DeleteOutlined,
 } from "@ant-design/icons";
@@ -27,6 +34,8 @@ import type {
 } from "../../../packages/contracts/src/assistant-agent";
 import type { AssistantMessage } from "../../../packages/contracts/src/personal-assistant";
 import { assistantPublicText } from "../../../packages/contracts/src/ai-presentation";
+import { AssistantHubContext } from "./assistant-hub-context";
+import { canPreviewAgentArtifact } from "./assistant-artifact-document";
 import { showWorkspaceHologram } from "./workspace-hologram";
 import "./assistant-agent.css";
 
@@ -159,6 +168,7 @@ export function AgentFileLink({
 }) {
   const navigate = useNavigate(),
     location = useLocation();
+  const openPreview = useContext(AssistantHubContext)?.previewArtifact;
   const previewVideo = useRef<HTMLVideoElement | null>(null);
   const attachPreview = useCallback((element: HTMLVideoElement | null) => {
     if (previewVideo.current && previewVideo.current !== element)
@@ -184,6 +194,17 @@ export function AgentFileLink({
       <a href={url} download={file.name}>
         <DownloadOutlined /> {file.name} <small>{sizeLabel(file.size)}</small>
       </a>
+      {openPreview && canPreviewAgentArtifact(file) && (
+        <Button
+          size="small"
+          type="text"
+          icon={<EyeOutlined />}
+          aria-label={"预览 " + file.name}
+          onClick={() => openPreview(file)}
+        >
+          预览
+        </Button>
+      )}
       {(file.mime.startsWith("image/") || file.mime.startsWith("video/")) && (
         <Button
           size="small"

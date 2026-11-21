@@ -1,0 +1,111 @@
+.workspace-tool-panels[data-tool="artifact"] {
+  padding: 8px;
+}
+
+.assistant-artifact-preview {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-width: 0;
+  min-height: 260px;
+  overflow: hidden;
+  border: 1px solid var(--app-shell-border);
+  border-radius: 10px;
+  background: var(--app-surface);
+  color: var(--app-text);
+}
+
+.assistant-artifact-toolbar,
+.assistant-artifact-file-title,
+.assistant-artifact-actions,
+.assistant-artifact-modes,
+.assistant-artifact-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.assistant-artifact-toolbar,
+.assistant-artifact-modes,
+.assistant-artifact-footer {
+  flex-shrink: 0;
+  padding: 8px 12px;
+}
+
+.assistant-artifact-toolbar,
+.assistant-artifact-footer {
+  justify-content: space-between;
+}
+
+.assistant-artifact-file-title {
+  min-width: 0;
+}
+
+.assistant-artifact-file-title > .anticon,
+.assistant-artifact-actions,
+.assistant-artifact-footer .ant-btn {
+  flex-shrink: 0;
+}
+
+.assistant-artifact-file-title h3 {
+  margin: 0;
+  overflow: hidden;
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.assistant-artifact-modes {
+  border-top: 1px solid var(--app-shell-border);
+}
+
+.assistant-artifact-frame,
+.assistant-artifact-code {
+  flex: 1;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  border: 0;
+  border-top: 1px solid var(--app-shell-border);
+}
+
+.assistant-artifact-frame {
+  background: #fff;
+}
+
+.assistant-artifact-code {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 14px;
+  overflow: auto;
+  background: var(--app-bg);
+  font:
+    12px/1.65 ui-monospace,
+    Consolas,
+    monospace;
+  overflow-wrap: normal;
+  scrollbar-width: thin;
+}
+
+.assistant-artifact-code:focus-visible {
+  outline: 1px solid var(--app-accent);
+  outline-offset: -2px;
+}
+
+.assistant-artifact-footer {
+  min-height: 24px;
+  border-top: 1px solid var(--app-shell-border);
+  color: var(--app-secondary);
+}
+
+.assistant-artifact-status {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 16px;
+  border-top: 1px solid var(--app-shell-border);
+  color: var(--app-secondary);
+}
