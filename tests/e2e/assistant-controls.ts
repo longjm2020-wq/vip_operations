@@ -81,6 +81,21 @@ export async function openPersonalAssistant(page: Page) {
   ).toBeInViewport({ ratio: 0.99 });
 }
 
+async function selectPanelMenuItem(page: Page, name: string) {
+  const parents: Record<string, string> = {
+    动态反馈: "任务与文件",
+    对话设置: "助理设置",
+    语音设置: "助理设置",
+    个人记忆: "助理设置",
+  };
+  const group = parents[name] ?? name;
+  const item = page.getByRole("menuitem", { name: group, exact: true });
+  await item.click();
+  await expect(item).toBeHidden();
+  if (group !== name)
+    await page.getByRole("tab", { name, exact: true }).click();
+}
+
 export async function selectAssistantPanel(page: Page, name: string) {
   if (new URL(page.url()).pathname === "/my-workspace") {
     await expect(page.locator(".workspace-columns")).toBeVisible();
@@ -110,7 +125,7 @@ export async function selectAssistantPanel(page: Page, name: string) {
         await rail
           .getByRole("button", { name: "更多工作台工具", exact: true })
           .click();
-        await page.getByRole("menuitem", { name, exact: true }).click();
+        await selectPanelMenuItem(page, name);
       }
       return;
     }
@@ -123,7 +138,7 @@ export async function selectAssistantPanel(page: Page, name: string) {
       await page
         .getByRole("button", { name: "更多右栏工具", exact: true })
         .click();
-      await page.getByRole("menuitem", { name, exact: true }).click();
+      await selectPanelMenuItem(page, name);
     }
     return;
   }
@@ -131,8 +146,7 @@ export async function selectAssistantPanel(page: Page, name: string) {
     .getByRole("dialog", { name: /AI 个人助理/ })
     .getByRole("button", { name: "更多助理操作", exact: true })
     .click();
-  await page.getByRole("menuitem", { name, exact: true }).click();
-  await expect(page.getByRole("menuitem", { name, exact: true })).toBeHidden();
+  await selectPanelMenuItem(page, name);
 }
 
 export async function setAssistantOption(

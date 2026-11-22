@@ -14,7 +14,7 @@ using Microsoft.Web.WebView2.WinForms;
 namespace XutiDesktop {
 static class ShellPolicy {
     public const string Origin = "https://vip-web-production.up.railway.app";
-    public const string Version = "1.2.5";
+    public const string Version = "1.2.6";
     public const string SetupPath = "/my-workspace?assistant=desktop&connect=1";
     public static bool Trusted(string value) {
         Uri uri;
@@ -72,7 +72,6 @@ static class ShellPolicy {
 }
 
 static class ShellStyle {
-    public static readonly Color Blue=Color.FromArgb(70,88,239);
     public static Button Button(string text,Action click) {
         var b=new Button{Text=text,AutoSize=true,AutoSizeMode=AutoSizeMode.GrowAndShrink,FlatStyle=FlatStyle.Flat,Padding=new Padding(12,7,12,7),Margin=new Padding(3,0,3,0),Cursor=Cursors.Hand};
         b.FlatAppearance.BorderSize=0;b.Click+=(s,e)=>click();return b;
@@ -91,7 +90,6 @@ sealed class DesktopShell : Form {
     readonly AssistantForm assistant=new AssistantForm{TopLevel=false,FormBorderStyle=FormBorderStyle.None,Dock=DockStyle.Fill};
     readonly Panel workPanel=new Panel{Dock=DockStyle.Fill};
     readonly Panel taskPanel=new Panel{Dock=DockStyle.Fill,Visible=false,Padding=new Padding(30,12,30,12)};
-    readonly FlowLayoutPanel header=new FlowLayoutPanel{Dock=DockStyle.Top,Height=62,Padding=new Padding(14,10,12,8),WrapContents=false};
     readonly Label footer=new Label{Dock=DockStyle.Bottom,Height=30,Padding=new Padding(18,6,0,0),AutoEllipsis=true};
     readonly Panel notice=new Panel{Dock=DockStyle.Fill,Visible=false,Padding=new Padding(36)};
     readonly Label noticeText=new Label{Dock=DockStyle.Top,Height=100,Font=new Font("Microsoft YaHei UI",12)};
@@ -103,7 +101,6 @@ sealed class DesktopShell : Form {
     bool ready,initializing,exiting,closePending,dark;
     long navigation;
     string pendingUrl=ShellPolicy.Origin+"/my-workspace";
-    Button workButton,taskButton;
 
     public DesktopShell() {
         Text="小序 · 桌面工作台";Width=1340;Height=900;MinimumSize=new Size(980,650);
@@ -114,27 +111,19 @@ sealed class DesktopShell : Form {
             e.Handled=true;e.SuppressKeyPress=true;BeginInvoke(action);
         };
         try{Icon=Icon.ExtractAssociatedIcon(Application.ExecutablePath);}catch{}
-        var brand=new Label{Text="XUTI  /  小序",AutoSize=false,Width=165,Height=40,TextAlign=ContentAlignment.MiddleLeft,Font=new Font("Microsoft YaHei UI",15,FontStyle.Bold)};
-        header.Controls.Add(brand);
-        workButton=ShellStyle.Button("工作台",()=>ShowWorkspace(null));
-        taskButton=ShellStyle.Button("电脑任务",ShowTasks);
-        header.Controls.Add(workButton);
-        header.Controls.Add(ShellStyle.Button("本地浏览器",ShowLocalBrowser));
-        header.Controls.Add(taskButton);
-        header.Controls.Add(ShellStyle.Button("操作本机",()=>{var ignored=RequestSetup();}));
-        header.Controls.Add(ShellStyle.Button("刷新",()=>{if(ready){ShowWorkspace(null);workspace.Reload();}else{var ignored=Initialize();}}));
-        header.Controls.Add(ShellStyle.Button("使用帮助",()=>ShowWorkspace("/help?chapter=39-assistant-desktop.md")));
         workPanel.Controls.Add(workspace);workPanel.Controls.Add(notice);
         notice.Controls.Add(noticeText);
         var actions=new FlowLayoutPanel{Dock=DockStyle.Top,Height=52};
         actions.Controls.Add(ShellStyle.Button("重新连接",()=>{if(ready)workspace.CoreWebView2.Navigate(pendingUrl);else{var ignored=Initialize();}}));
+        actions.Controls.Add(ShellStyle.Button("打开电脑任务",ShowTasks));
         actions.Controls.Add(ShellStyle.Button("在浏览器中打开",()=>OpenSystem(ShellPolicy.Origin+"/my-workspace")));
         actions.Controls.Add(ShellStyle.Button("安装网页运行环境",()=>OpenSystem("https://developer.microsoft.com/microsoft-edge/webview2/")));
         notice.Controls.Add(actions);actions.BringToFront();
         taskPanel.Controls.Add(assistant);
-        Controls.Add(workPanel);Controls.Add(taskPanel);Controls.Add(footer);Controls.Add(header);
+        Controls.Add(workPanel);Controls.Add(taskPanel);Controls.Add(footer);
         assistant.Changed+=()=>UpdateFooter();
         assistant.SetupRequested+=()=>{var ignored=RequestSetup();};
+        assistant.WorkspaceRequested+=()=>ShowWorkspace(null);
         Shown+=async(s,e)=>{assistant.Show();assistant.StartEngine();await Initialize();};
         FormClosing+=async(s,e)=>{
             if(exiting)return;
@@ -143,7 +132,7 @@ sealed class DesktopShell : Form {
             assistant.Shutdown();exiting=true;BeginInvoke(new Action(Close));
         };
         FormClosed+=(s,e)=>{foreach(var b in browsers.ToArray())b.Close();assistant.Dispose();workspace.Dispose();};
-        ApplyTheme(false);brand.ForeColor=ShellStyle.Blue;UpdateFooter();
+        ApplyTheme(false);UpdateFooter();
     }
     public static int CheckRuntime() {
         try{Console.WriteLine("WebView2 runtime: "+CoreWebView2Environment.GetAvailableBrowserVersionString());return 0;}
@@ -157,14 +146,17 @@ sealed class DesktopShell : Form {
         dark=value;ShellStyle.Apply(this,dark);
         workspace.DefaultBackgroundColor=dark?Color.FromArgb(17,18,23):Color.FromArgb(247,248,253);
         foreach(var b in browsers)b.Theme(dark);
-        workButton.ForeColor=ShellStyle.Blue;taskButton.ForeColor=ShellStyle.Blue;
     }
-    void ShowTasks(){taskPanel.Visible=true;workPanel.Visible=false;taskPanel.BringToFront();}
+    void ShowTasks(){taskPanel.Visible=true;workPanel.Visible=false;}
     Action Shortcut(Keys keyData) {
         if(keyData==(Keys.Control|Keys.D1))return ()=>ShowWorkspace(null);
         if(keyData==(Keys.Control|Keys.D2))return ShowLocalBrowser;
         if(keyData==(Keys.Control|Keys.D3))return ShowTasks;
         if(keyData==(Keys.Control|Keys.Shift|Keys.L))return ()=>{var ignored=RequestSetup();};
+        if(keyData==Keys.F1)return ()=>ShowWorkspace("/help?chapter=39-assistant-desktop.md");
+        if(keyData==Keys.F5||keyData==(Keys.Control|Keys.R))return ()=>{
+            ShowWorkspace(null);if(ready)workspace.Reload();else{var ignored=Initialize();}
+        };
         return null;
     }
     protected override bool ProcessCmdKey(ref Message msg,Keys keyData) {
@@ -172,7 +164,7 @@ sealed class DesktopShell : Form {
         return base.ProcessCmdKey(ref msg,keyData);
     }
     void ShowWorkspace(string path) {
-        workPanel.Visible=true;taskPanel.Visible=false;workPanel.BringToFront();
+        workPanel.Visible=true;taskPanel.Visible=false;
         if(path!=null){pendingUrl=ShellPolicy.Origin+path;if(ready)workspace.CoreWebView2.Navigate(pendingUrl);}
     }
     async Task RequestSetup() {
@@ -184,7 +176,7 @@ sealed class DesktopShell : Form {
                 if(version!=navigation || exiting) return;
                 if(handled=="true") return;
             } catch {
-                if(!exiting) footer.Text="页面暂时无法响应，请稍后再点「操作本机」。当前通话和任务保持不变。";
+                if(!exiting) footer.Text="页面暂时无法响应，请稍后从「我的电脑」重试。当前通话和任务保持不变。";
                 return;
             }
         }
@@ -243,11 +235,11 @@ sealed class DesktopShell : Form {
                 if(!ShellPolicy.Trusted(e.Uri)){e.Cancel=true;if(e.IsUserInitiated&&ShellPolicy.WebAddress(e.Uri))OpenBrowser(e.Uri);return;}
                 pendingUrl=e.Uri;
             };
-            core.NavigationCompleted+=(s,e)=>{if(e.IsSuccess)notice.Visible=false;else ShowNotice("暂时无法连接工作台。请检查网络，再点击「重新连接」。电脑任务可从顶部入口查看。");};
+            core.NavigationCompleted+=(s,e)=>{if(e.IsSuccess)notice.Visible=false;else ShowNotice("暂时无法连接工作台。请检查网络，再点击「重新连接」。");};
             core.NewWindowRequested+=(s,e)=>{e.Handled=true;if(e.IsUserInitiated&&ShellPolicy.WebAddress(e.Uri))OpenBrowser(e.Uri);};
             core.PermissionRequested+=(s,e)=>BrowserWindow.Permission(this,e,true);
             core.DownloadStarting+=(s,e)=>BrowserWindow.Download(this,e);
-            core.ProcessFailed+=(s,e)=>ShowNotice("网页进程已停止，请关闭并重新打开小序。电脑任务可在顶部暂停或停止。");
+            core.ProcessFailed+=(s,e)=>ShowNotice("网页进程已停止，请关闭并重新打开小序。需要暂停或停止电脑任务时，点击「打开电脑任务」。");
             core.WebMessageReceived+=OnMessage;
             core.WebResourceResponseReceived+=async(s,e)=>{
                 Uri u;if(!Uri.TryCreate(e.Request.Uri,UriKind.Absolute,out u)||!ShellPolicy.Trusted(e.Request.Uri))return;

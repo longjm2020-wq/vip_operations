@@ -132,6 +132,7 @@ sealed class AssistantForm : Form {
     long permissionEpoch;
     public event Action Changed;
     public event Action SetupRequested;
+    public event Action WorkspaceRequested;
     public bool Connected { get { return token.Length > 0; } }
     public bool Authorized { get { return Connected && authorizationId.Length > 0; } }
     public string DeviceId { get { return deviceId; } }
@@ -161,7 +162,12 @@ sealed class AssistantForm : Form {
         BackColor = Color.FromArgb(246, 247, 252);
         var layout = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoScroll = true, Padding = new Padding(20) };
         Controls.Add(layout);
-        layout.Controls.Add(new Label { Text = "本机操作", AutoSize = true, Font = new Font(Font.FontFamily, 17, FontStyle.Bold), Margin = new Padding(0, 0, 0, 12) });
+        var title = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = new Padding(0, 0, 0, 12) };
+        title.Controls.Add(new Label { Text = "本机操作", AutoSize = true, Font = new Font(Font.FontFamily, 17, FontStyle.Bold), Margin = new Padding(0, 0, 12, 0) });
+        var back = new Button { Text = "返回工作台", AutoSize = true };
+        back.Click += (s,e) => { if(WorkspaceRequested!=null) WorkspaceRequested(); };
+        title.Controls.Add(back);
+        layout.Controls.Add(title);
         layout.Controls.Add(new Label { Text = "点击「操作本机」，首次允许并记住后，就可以在工作台直接说或输入任务。", AutoSize = true, MaximumSize = new Size(570, 0) });
         layout.Controls.Add(connection);
         layout.Controls.Add(permission);

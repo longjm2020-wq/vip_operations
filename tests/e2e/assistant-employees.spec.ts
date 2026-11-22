@@ -462,9 +462,9 @@ test("紧凑员工栏保留切换、配置返回与新增，长称呼在手机�
   await rail
     .getByRole("button", { name: "更多工作台工具", exact: true })
     .click();
-  await expect(
-    page.getByRole("menuitem", { name: "语音设置", exact: true }),
-  ).toBeVisible();
+  await expect(page.locator(".ant-dropdown:visible").getByRole("menuitem")).toHaveText([
+    "公司知识库", "任务与文件", "助理设置",
+  ]);
   await page.keyboard.press("Escape");
   await rail
     .getByRole("button", { name: "展开右侧工具栏", exact: true })

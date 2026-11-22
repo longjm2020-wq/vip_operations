@@ -108,7 +108,7 @@ export function AssistantDesktopPanel({
               ? local?.crossWindowAuthorized
                 ? "已记住本机授权，点击「使用我的电脑」即可下达指令。"
                 : "点击下方按钮，在本机弹窗确认后即可使用。授权会记住，可随时撤销。"
-              : "下载并解压桌面端，打开 XutiDesktop.exe，登录后点击「操作本机」。只需首次确认，之后可从网页或桌面端下达指令。"
+              : "下载并解压桌面端，打开 XutiDesktop.exe，登录后在「我的电脑」中点击「使用我的电脑」。只需首次确认，之后可从网页或桌面端下达指令。"
           }
         />
       )}

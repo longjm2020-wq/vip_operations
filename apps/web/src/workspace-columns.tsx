@@ -15,7 +15,9 @@ import {
   TeamOutlined,
 } from "@ant-design/icons";
 import {
+  assistantToolGroup,
   useAssistantHub,
+  workspaceMoreTools,
   type AssistantToolSection,
 } from "./assistant-hub-context";
 import { useUser } from "./shared";
@@ -62,15 +64,12 @@ export function WorkspaceColumns({ children }: { children: ReactNode }) {
     }
   };
   if (!dock) return children;
-  const extra: { key: AssistantToolSection; label: string }[] = [
-    { key: "employees", label: "AI 员工" },
-    { key: "knowledge", label: "公司知识库" },
-    { key: "tasks", label: "任务与文件" },
-    { key: "activity", label: "动态反馈" },
-    { key: "memory", label: "个人记忆" },
-    { key: "voice", label: "语音设置" },
-    { key: "settings", label: "对话设置" },
-  ];
+  const moreMenu = {
+    items: workspaceMoreTools,
+    selectedKeys: [assistantToolGroup(dock.tool)],
+    onClick: ({ key }: { key: string }) =>
+      dock.selectTool(key as AssistantToolSection),
+  };
   return (
     <div
       ref={container}
@@ -116,15 +115,7 @@ export function WorkspaceColumns({ children }: { children: ReactNode }) {
             aria-pressed={dock.toolsOpen && dock.tool === "desktop"}
             onClick={() => dock.selectTool("desktop")}
           />
-          <Dropdown
-            trigger={["click"]}
-            menu={{
-              items: extra,
-              selectedKeys: [dock.tool],
-              onClick: ({ key }) =>
-                dock.selectTool(key as AssistantToolSection),
-            }}
-          >
+          <Dropdown trigger={["click"]} menu={moreMenu}>
             <Button
               type="text"
               icon={<EllipsisOutlined />}
@@ -206,22 +197,15 @@ export function WorkspaceColumns({ children }: { children: ReactNode }) {
             >
               我的电脑
             </Button>
-            <Dropdown
-              trigger={["click"]}
-              menu={{
-                items: extra,
-                selectedKeys: [dock.tool],
-                onClick: ({ key }) =>
-                  dock.selectTool(key as AssistantToolSection),
-              }}
-            >
+            <Dropdown trigger={["click"]} menu={moreMenu}>
               <Button
                 type="text"
                 icon={<EllipsisOutlined />}
                 aria-label="更多右栏工具"
                 title={
-                  extra.find((item) => item.key === dock.tool)?.label ||
-                  "更多工具"
+                  workspaceMoreTools.find(
+                    (item) => item.key === assistantToolGroup(dock.tool),
+                  )?.label || "更多工具"
                 }
               />
             </Dropdown>

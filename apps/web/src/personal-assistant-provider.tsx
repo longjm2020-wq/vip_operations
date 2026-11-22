@@ -16,6 +16,7 @@ import {
   Dropdown,
   Select,
   Spin,
+  Tabs,
 } from "antd";
 import {
   ArrowRightOutlined,
@@ -45,6 +46,8 @@ import { assistantNavigationTools } from "../../../packages/contracts/src/assist
 import { classifyAssistantExecution } from "../../../packages/contracts/src/assistant-execution";
 import {
   AssistantHubContext,
+  assistantToolGroup,
+  workspaceMoreTools,
   type AssistantSection,
   type AssistantToolSection,
 } from "./assistant-hub-context";
@@ -1364,20 +1367,24 @@ export function PersonalAssistantProvider({
     else openPanel("chat");
     // React to navigation, not to changing voice/session state.
   }, [location.key, location.pathname, location.search, allowed]);
-  const sectionItems = [
-    ...(allowed ? [{ key: "chat", label: "聊天" }] : []),
-    ...(allowed ? [{ key: "employees", label: "AI 员工" }] : []),
-    ...(allowed ? [{ key: "knowledge", label: "公司知识库" }] : []),
-    ...(allowed ? [{ key: "tasks", label: "任务与文件" }] : []),
-    ...(allowed ? [{ key: "desktop", label: "我的电脑" }] : []),
-    ...(allowed ? [{ key: "browser", label: "独立浏览器" }] : []),
-    ...(allowed
-      ? [{ key: "voice", label: "语音设置", disabled: sending || !!executing }]
-      : []),
-    { key: "activity", label: "动态反馈" },
-    ...(allowed ? [{ key: "memory", label: "个人记忆" }] : []),
-    ...(allowed ? [{ key: "settings", label: "对话设置" }] : []),
-  ];
+  const sectionItems = !allowed
+    ? [{ key: "activity", label: "动态反馈" }]
+    : [
+        ...(!docked
+          ? [
+              { key: "chat", label: "聊天" },
+              { key: "employees", label: "AI 员工" },
+              { key: "desktop", label: "我的电脑" },
+              { key: "browser", label: "独立浏览器" },
+            ]
+          : []),
+        ...workspaceMoreTools,
+      ];
+  const panelGroup = allowed ? assistantToolGroup(panelSection) : panelSection;
+  const switchGroupTab = (key: string) => {
+    if (docked) setSection(key as AssistantSection);
+    else selectSection(key as AssistantSection);
+  };
   const conversationSettings = (
     <>
       <div className="assistant-settings-preferences">
@@ -1732,7 +1739,7 @@ export function PersonalAssistantProvider({
               ]
             : []),
         ],
-        selectedKeys: [section],
+        selectedKeys: [panelGroup],
         onClick: ({ key }) => {
           if (key !== "clear") {
             selectSection(key as AssistantSection);
@@ -1773,6 +1780,17 @@ export function PersonalAssistantProvider({
       />
     </Dropdown>
   );
+  const activityPanel = (
+    <AssistantActivityPanel
+      feed={activity.data}
+      loading={activity.isFetching}
+      error={activity.error}
+      seen={seen}
+      markSeen={markSeen}
+      refresh={() => void activity.refetch()}
+      onNavigate={() => setOpen(false)}
+    />
+  );
   const panels = (
     <>
       {allowed &&
@@ -1795,58 +1813,96 @@ export function PersonalAssistantProvider({
           setDrafts={setEmployeeDrafts}
         />
       )}
-      {allowed && panelSection === "settings" && conversationSettings}
       {allowed && panelSection === "knowledge" && (
         <AssistantKnowledgePanel
           key={`${user.id}:${knowledgeTarget?.key || ""}`}
           target={knowledgeTarget}
         />
       )}
-      {toolsVisible && panelSection === "voice" && allowed && (
-        <AssistantVoiceSettingsPanel
-          executionLabel={voiceExecutionLabel}
-          realtime={realtimeStatus}
-          status={voiceStatus}
-          context={includeContext}
-          setContext={setIncludeContext}
-          memory={includeMemory}
-          setMemory={setIncludeMemory}
-          startVoice={startVoice}
+      {allowed && panelGroup === "settings" && (
+        <Tabs
+          size="small"
+          activeKey={panelSection}
+          onChange={switchGroupTab}
+          items={[
+            {
+              key: "settings",
+              label: "对话设置",
+              children: conversationSettings,
+            },
+            {
+              key: "voice",
+              label: "语音设置",
+              disabled: !docked && (sending || !!executing),
+              children: toolsVisible && (
+                <AssistantVoiceSettingsPanel
+                  executionLabel={voiceExecutionLabel}
+                  realtime={realtimeStatus}
+                  status={voiceStatus}
+                  context={includeContext}
+                  setContext={setIncludeContext}
+                  memory={includeMemory}
+                  setMemory={setIncludeMemory}
+                  startVoice={startVoice}
+                />
+              ),
+            },
+            {
+              key: "memory",
+              label: "个人记忆",
+              children: (
+                <AssistantMemoryPanel
+                  data={memory.data}
+                  loading={memory.isFetching}
+                  error={memory.error}
+                  save={saveMemory}
+                  refresh={() => void memory.refetch()}
+                  suggestion={memorySuggestion}
+                  clearSuggestion={() => setMemorySuggestion(null)}
+                />
+              ),
+            },
+          ]}
         />
       )}
-      {panelSection === "memory" && allowed && (
-        <AssistantMemoryPanel
-          data={memory.data}
-          loading={memory.isFetching}
-          error={memory.error}
-          save={saveMemory}
-          refresh={() => void memory.refetch()}
-          suggestion={memorySuggestion}
-          clearSuggestion={() => setMemorySuggestion(null)}
+      {allowed && panelGroup === "tasks" && (
+        <Tabs
+          size="small"
+          activeKey={panelSection}
+          onChange={switchGroupTab}
+          items={[
+            {
+              key: "tasks",
+              label: "任务与文件",
+              children: (
+                <>
+                  <AssistantCollaborationHistory key={user.id} />
+                  <AgentTasksPanel
+                    jobs={jobs.data || []}
+                    refresh={() => void jobs.refetch()}
+                    onAttach={(file) => {
+                      if (agent.attachments.length >= 6) {
+                        message.warning("每次最多附加6个文件");
+                        return;
+                      }
+                      setAgent((previous) => ({
+                        ...previous,
+                        attachments: [
+                          ...previous.attachments.filter(
+                            (f) => f.id !== file.id,
+                          ),
+                          file,
+                        ],
+                      }));
+                      setSection("chat");
+                    }}
+                  />
+                </>
+              ),
+            },
+            { key: "activity", label: "动态反馈", children: activityPanel },
+          ]}
         />
-      )}
-      {panelSection === "tasks" && allowed && (
-        <>
-          <AssistantCollaborationHistory key={user.id} />
-          <AgentTasksPanel
-            jobs={jobs.data || []}
-            refresh={() => void jobs.refetch()}
-            onAttach={(file) => {
-              if (agent.attachments.length >= 6) {
-                message.warning("每次最多附加6个文件");
-                return;
-              }
-              setAgent((previous) => ({
-                ...previous,
-                attachments: [
-                  ...previous.attachments.filter((f) => f.id !== file.id),
-                  file,
-                ],
-              }));
-              setSection("chat");
-            }}
-          />
-        </>
       )}
       {panelSection === "desktop" && allowed && (
         <AssistantDesktopPanel
@@ -1891,17 +1947,7 @@ export function PersonalAssistantProvider({
           }}
         />
       )}
-      {panelSection === "activity" && (
-        <AssistantActivityPanel
-          feed={activity.data}
-          loading={activity.isFetching}
-          error={activity.error}
-          seen={seen}
-          markSeen={markSeen}
-          refresh={() => void activity.refetch()}
-          onNavigate={() => setOpen(false)}
-        />
-      )}
+      {!allowed && panelSection === "activity" && activityPanel}
     </>
   );
   const chatContent = (
@@ -2368,7 +2414,8 @@ export function PersonalAssistantProvider({
                   ? "小序"
                   : section === "artifact"
                     ? "文件预览"
-                    : sectionItems.find((item) => item.key === section)?.label}
+                    : sectionItems.find((item) => item.key === panelGroup)
+                        ?.label}
               </span>
             </span>
           }

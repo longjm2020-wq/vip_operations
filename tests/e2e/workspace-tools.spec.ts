@@ -114,6 +114,119 @@ async function fixture(
   return { workspace, writes };
 }
 
+test("更多工具精简为三个入口，切换设置保留记忆草稿，手机旧链接可直达语音页", async ({
+  page,
+}) => {
+  const state = await fixture(page);
+  await page.goto("/my-workspace?assistant=tasks");
+  const right = page.getByRole("complementary", { name: "右侧工具栏" });
+  const tab = (name: string) => right.getByRole("tab", { name, exact: true });
+  await expect(tab("任务与文件")).toHaveAttribute("aria-selected", "true");
+  await tab("动态反馈").click();
+  await expect(right.getByRole("region", { name: "助理动态" })).toBeVisible();
+  const rail = page.getByRole("navigation", { name: "工作台工具入口" });
+  await expect(
+    rail.getByRole("button", { name: "展开 AI 员工" }),
+  ).toBeVisible();
+  await rail.getByRole("button", { name: "更多工作台工具" }).click();
+  const popup = page.locator(".ant-dropdown:visible");
+  await expect(popup.getByRole("menuitem")).toHaveText([
+    "公司知识库",
+    "任务与文件",
+    "助理设置",
+  ]);
+  await expect(page.getByRole("menuitem", { name: "任务与文件" })).toHaveClass(
+    /ant-dropdown-menu-item-selected/,
+  );
+  await page.getByRole("menuitem", { name: "助理设置" }).click();
+  await expect(right.getByRole("tab")).toHaveText([
+    "对话设置",
+    "语音设置",
+    "个人记忆",
+  ]);
+  await tab("个人记忆").click();
+  await right.getByRole("button", { name: "新增记忆" }).click();
+  const content = right.getByRole("textbox", { name: "记忆内容" });
+  await content.fill("换标签后仍可继续编辑");
+  await tab("对话设置").click();
+  await expect(content).toBeHidden();
+  await expect(
+    right.getByRole("checkbox", { name: "使用个人记忆" }),
+  ).not.toBeChecked();
+  await tab("个人记忆").click();
+  await expect(content).toHaveValue("换标签后仍可继续编辑");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/my-workspace?assistant=voice");
+  await expect(tab("语音设置")).toHaveAttribute("aria-selected", "true");
+  await right.getByRole("button", { name: "更多右栏工具" }).click();
+  await expect(page.getByRole("menuitem", { name: "助理设置" })).toHaveClass(
+    /ant-dropdown-menu-item-selected/,
+  );
+  await page.getByRole("menuitem", { name: "任务与文件" }).click();
+  await expect(tab("任务与文件")).toHaveAttribute("aria-selected", "true");
+  await tab("动态反馈").click();
+  await expect(
+    right.getByRole("button", { name: "刷新助理动态" }),
+  ).toBeInViewport();
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth + 1,
+    ),
+  ).toBe(true);
+  expect(
+    await page.evaluate(() => window.workspaceToolsMicrophoneRequests),
+  ).toBe(0);
+  expect(state.writes).toEqual([]);
+});
+
+test("仅有反馈权限的账号通过原入口查看动态，分组不会开放助理工具", async ({
+  page,
+}) => {
+  const state = await fixture(page, ["supply.portal"]);
+  await page.goto("/my-workspace?assistant=knowledge");
+  await expect(
+    page.getByRole("navigation", { name: "工作台工具入口" }),
+  ).toHaveCount(0);
+  await page
+    .getByRole("button", { name: "打开 AI 个人助理", exact: true })
+    .press("Enter");
+  const dialog = page.getByRole("dialog", { name: "AI 个人助理" });
+  await expect(dialog.getByRole("region", { name: "助理动态" })).toBeVisible();
+  await dialog.getByRole("button", { name: "更多助理操作" }).click();
+  await expect(
+    page.locator(".ant-dropdown:visible").getByRole("menuitem"),
+  ).toHaveText(["动态反馈"]);
+  await expect(dialog.getByRole("tab", { name: "任务与文件" })).toHaveCount(0);
+  expect(state.writes).toEqual([]);
+});
+
+test("业务页独立助理保留员工和浏览器入口，助理设置可打开个人记忆", async ({
+  page,
+}) => {
+  const state = await fixture(page);
+  await page.goto("/operations");
+  await openPersonalAssistant(page);
+  const dialog = page.getByRole("dialog", { name: "AI 个人助理" });
+  await dialog.getByRole("button", { name: "更多助理操作" }).click();
+  const entries = page.locator(".ant-dropdown:visible").getByRole("menuitem");
+  await expect(entries).toHaveText([
+    "聊天",
+    "AI 员工",
+    "我的电脑",
+    "独立浏览器",
+    "公司知识库",
+    "任务与文件",
+    "助理设置",
+    "清空对话",
+  ]);
+  await entries.filter({ hasText: "助理设置" }).click();
+  await dialog.getByRole("tab", { name: "个人记忆", exact: true }).click();
+  await expect(
+    dialog.getByRole("region", { name: "个人记忆管理" }),
+  ).toBeVisible();
+  expect(state.writes).toEqual([]);
+});
+
 test("品牌标识在减少动态偏好下悬停、收起和跨模块后保持原有渐变动效", async ({
   page,
 }) => {

@@ -20,6 +20,18 @@ export type AssistantSection =
   | "settings";
 export type AssistantToolSection = Exclude<AssistantSection, "chat">;
 
+export const workspaceMoreTools = [
+  { key: "knowledge", label: "公司知识库" },
+  { key: "tasks", label: "任务与文件" },
+  { key: "settings", label: "助理设置" },
+] satisfies { key: AssistantToolSection; label: string }[];
+
+export function assistantToolGroup(section: AssistantSection) {
+  if (section === "voice" || section === "memory") return "settings";
+  if (section === "activity") return "tasks";
+  return section;
+}
+
 export type AssistantHubState = {
   allowed: boolean;
   conversation?: AssistantConversation;

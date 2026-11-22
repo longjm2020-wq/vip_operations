@@ -1187,11 +1187,12 @@ test("工作台与业务页共用透明宽屏对话，单输入和菜单可用�
     ["动态反馈", "刷新助理动态"],
   ] as const) {
     await selectAssistantPanel(page, section);
-    await expect(dialog.locator(".assistant-panel-title")).toHaveText(section);
+    const tools = page.getByRole("complementary", { name: "右侧工具栏" });
+    await expect(tools.getByRole("tab", { name: section, exact: true })).toHaveAttribute("aria-selected", "true");
     await expect(
       section === "任务与文件"
-        ? dialog.getByRole("heading", { name: label, exact: true })
-        : dialog.getByRole("button", { name: label }),
+        ? tools.getByRole("heading", { name: label, exact: true })
+        : tools.getByRole("button", { name: label }),
     ).toBeVisible();
   }
   await selectAssistantPanel(page, "聊天");
@@ -2079,10 +2080,10 @@ test("工作台圆环是小序巢穴，可离巢移动与召回，文字和动�
   await page
     .getByRole("button", { name: "查看助理动态反馈", exact: true })
     .click();
-  const dialog = page.getByRole("dialog", { name: /AI 个人助理/ });
-  await expect(dialog.locator(".assistant-panel-title")).toHaveText("动态反馈");
+  const tools = page.getByRole("complementary", { name: "右侧工具栏" });
+  await expect(tools.getByRole("tab", { name: "动态反馈" })).toHaveAttribute("aria-selected", "true");
   await expect(
-    dialog.getByText("核心入口项目进展", { exact: true }),
+    tools.getByText("核心入口项目进展", { exact: true }),
   ).toBeVisible();
   expect(fixture.assistantCalls()).toBe(0);
 });
