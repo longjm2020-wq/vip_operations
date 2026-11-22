@@ -5,6 +5,7 @@ on:
       [
         "apps/desktop/**",
         "scripts/*desktop*.mjs",
+        "scripts/test-desktop-caption.ps1",
         ".github/workflows/desktop.yml",
       ]
   pull_request:
@@ -12,6 +13,7 @@ on:
       [
         "apps/desktop/**",
         "scripts/*desktop*.mjs",
+        "scripts/test-desktop-caption.ps1",
         ".github/workflows/desktop.yml",
       ]
 jobs:
@@ -26,6 +28,11 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: node scripts/prepare-desktop.mjs
       - run: pnpm build:desktop
+      - name: Verify native title bar theme changes
+        shell: powershell
+        run: |
+          $desktop = Get-Content -Raw .local/desktop-client-build/latest.json | ConvertFrom-Json
+          ./scripts/test-desktop-caption.ps1 -Executable $desktop.executable
       - uses: actions/upload-artifact@v4
         with:
           name: xuti-desktop-win-x64

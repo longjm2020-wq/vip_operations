@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
@@ -128,6 +129,48 @@ static class ShellStyle {
     }
 }
 
+static class WindowCaption {
+    const int ImmersiveDarkMode=20, LegacyImmersiveDarkMode=19, CaptionColor=35, TextColor=36;
+    const int InvalidArgument=unchecked((int)0x80070057), DefaultColor=-1;
+    [DllImport("dwmapi.dll",ExactSpelling=true)]
+    static extern int DwmSetWindowAttribute(IntPtr hwnd,int attribute,ref int value,int size);
+    [DllImport("user32.dll",ExactSpelling=true)] static extern bool IsWindowVisible(IntPtr hwnd);
+    [DllImport("user32.dll",ExactSpelling=true)] static extern IntPtr GetActiveWindow();
+    [DllImport("user32.dll",ExactSpelling=true)] static extern IntPtr DefWindowProcW(IntPtr hwnd,int message,IntPtr wParam,IntPtr lParam);
+
+    // Query Windows directly: the .NET Framework HighContrast property caches its last result.
+    [StructLayout(LayoutKind.Sequential)]
+    struct HighContrastSettings { public int Size,Flags; public IntPtr DefaultScheme; }
+    [DllImport("user32.dll",CharSet=CharSet.Unicode)]
+    static extern bool SystemParametersInfo(uint action,uint size,ref HighContrastSettings settings,uint flags);
+    public static bool HighContrast() {
+        var settings=new HighContrastSettings { Size=Marshal.SizeOf(typeof(HighContrastSettings)) };
+        const uint GetHighContrast=0x0042;
+        return !SystemParametersInfo(GetHighContrast,(uint)settings.Size,ref settings,0) || (settings.Flags&1)!=0;
+    }
+    public static void Apply(IntPtr hwnd,bool? dark) {
+        int immersive=dark==true?1:0;
+        // Match the website header and text. A null theme restores the user's system palette.
+        int background=dark.HasValue?ColorTranslator.ToWin32(dark.Value?Color.FromArgb(18,19,23):Color.White):DefaultColor;
+        int foreground=dark.HasValue?ColorTranslator.ToWin32(dark.Value?Color.FromArgb(244,247,255):Color.FromArgb(39,44,61)):DefaultColor;
+        try {
+            int applied=DwmSetWindowAttribute(hwnd,ImmersiveDarkMode,ref immersive,sizeof(int));
+            if(applied==InvalidArgument)applied=DwmSetWindowAttribute(hwnd,LegacyImmersiveDarkMode,ref immersive,sizeof(int));
+            // Windows 11 supports explicit caption colors even when the OS theme differs.
+            int captionResult=DwmSetWindowAttribute(hwnd,CaptionColor,ref background,sizeof(int));
+            DwmSetWindowAttribute(hwnd,TextColor,ref foreground,sizeof(int));
+            if(applied>=0 && captionResult==InvalidArgument && IsWindowVisible(hwnd)) {
+                // Windows 10 can keep drawing the previous caption until its active appearance changes.
+                // Repaint the non-client frame and restore its appearance without changing focus.
+                const int NonClientActivate=0x0086;
+                bool active=GetActiveWindow()==hwnd;
+                DefWindowProcW(hwnd,NonClientActivate,new IntPtr(active?0:1),IntPtr.Zero);
+                DefWindowProcW(hwnd,NonClientActivate,new IntPtr(active?1:0),IntPtr.Zero);
+            }
+        } catch(DllNotFoundException) {} catch(EntryPointNotFoundException) {}
+    }
+}
+
 sealed class DesktopShell : Form {
     readonly WebView2 workspace=new WebView2{Dock=DockStyle.Fill,DefaultBackgroundColor=Color.FromArgb(247,248,253)};
     readonly AssistantForm assistant=new AssistantForm{TopLevel=false,FormBorderStyle=FormBorderStyle.None,Dock=DockStyle.Fill};
@@ -151,6 +194,8 @@ sealed class DesktopShell : Form {
     Task<CoreWebView2Environment> localBrowserEnvironment;
     BrowserWindow localBrowser;
     bool ready,initializing,exiting,closePending,dark;
+    bool websiteThemeKnown;
+    bool? appliedCaptionTheme;
     long navigation;
     string pendingUrl=ShellPolicy.Origin+"/my-workspace";
 
@@ -193,7 +238,7 @@ sealed class DesktopShell : Form {
             assistant.Shutdown();exiting=true;BeginInvoke(new Action(Close));
         };
         FormClosed+=(s,e)=>{foreach(var b in browsers.ToArray())b.Close();assistant.Dispose();workspace.Dispose();};
-        ApplyTheme(false);
+        ShellStyle.Apply(this,false);
     }
     public static int CheckRuntime() {
         try{Console.WriteLine("WebView2 runtime: "+CoreWebView2Environment.GetAvailableBrowserVersionString());return 0;}
@@ -256,8 +301,28 @@ sealed class DesktopShell : Form {
     void ShowActionError(string text) {
         if(!exiting&&!IsDisposed&&Visible)actionError.Show(text,this,18,18,8000);
     }
+    protected override void OnHandleCreated(EventArgs e) {
+        base.OnHandleCreated(e);
+        appliedCaptionTheme=null;
+        UpdateCaptionTheme();
+    }
+    protected override void WndProc(ref Message message) {
+        base.WndProc(ref message);
+        const int SettingChange=0x001a, SystemColorChange=0x0015, ThemeChanged=0x031a;
+        if(message.Msg==SettingChange || message.Msg==SystemColorChange || message.Msg==ThemeChanged)UpdateCaptionTheme();
+    }
+    void UpdateCaptionTheme() {
+        if(!websiteThemeKnown || !IsHandleCreated || Disposing || IsDisposed)return;
+        bool? requested=WindowCaption.HighContrast()? (bool?)null : dark;
+        if(requested==appliedCaptionTheme)return;
+        appliedCaptionTheme=requested;
+        WindowCaption.Apply(Handle,requested);
+    }
     void ApplyTheme(bool value) {
-        dark=value;ShellStyle.Apply(this,dark);
+        if(websiteThemeKnown && dark==value)return;
+        websiteThemeKnown=true;dark=value;
+        UpdateCaptionTheme();
+        ShellStyle.Apply(this,dark);
         workspace.DefaultBackgroundColor=dark?Color.FromArgb(17,18,23):Color.FromArgb(247,248,253);
         foreach(var b in browsers)b.Theme(dark);
     }
@@ -365,8 +430,15 @@ sealed class DesktopShell : Form {
             await core.AddScriptToExecuteOnDocumentCreatedAsync(@"(() => {
                 if (window !== window.top || location.origin !== 'https://vip-web-production.up.railway.app') return;
                 Object.defineProperty(window, 'xutiDesktop', {value: Object.freeze({version:'" + ShellPolicy.Version + @"',localBrowser:true,nativeUpdates:true}), writable:false});
-                const theme = () => window.chrome.webview.postMessage({channel:'xuti-desktop',action:'theme',value:document.documentElement.dataset.theme === 'dark'?'dark':'light'});
-                addEventListener('DOMContentLoaded', () => {theme();new MutationObserver(theme).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});});
+                let lastTheme;
+                const theme = () => {
+                    const value=document.documentElement.dataset.theme;
+                    if ((value==='light' || value==='dark') && value!==lastTheme) {
+                        lastTheme=value;
+                        window.chrome.webview.postMessage({channel:'xuti-desktop',action:'theme',value});
+                    }
+                };
+                addEventListener('DOMContentLoaded', () => {new MutationObserver(theme).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});theme();});
             })();");
             ready=true;core.Navigate(pendingUrl);
         } catch {ShowNotice("网页环境未能启动。请确认电脑已安装 Microsoft Edge WebView2 Runtime，然后重新打开小序。可点击下方按钮前往微软官网。");}
