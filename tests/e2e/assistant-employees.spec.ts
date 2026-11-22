@@ -275,8 +275,14 @@ async function openEmployee(page: Page, name: string) {
   ).toBeVisible();
 }
 
-async function overviewFixture(page: Page, titles: string[]) {
-  await setup(page, 10);
+async function overviewFixture(
+  page: Page,
+  titles: string[],
+  archivedEmployee?: number,
+) {
+  const { employees } = await setup(page, 10);
+  if (archivedEmployee !== undefined)
+    employees[archivedEmployee].archived = true;
   const notes: KnowledgeNote[] = titles.map((title) => ({
     id: randomUUID(),
     title,
@@ -286,6 +292,7 @@ async function overviewFixture(page: Page, titles: string[]) {
     updatedAt: new Date().toISOString(),
   }));
   const path = "/api/v1/my-workspace/assistant/knowledge";
+  const links: { sourceId: string; targetId: string }[] = [];
   const requests: string[] = [];
   await page.route("**" + path + "**", async (route) => {
     const request = route.request();
@@ -302,7 +309,22 @@ async function overviewFixture(page: Page, titles: string[]) {
       });
     }
     if (request.method() === "GET" && !suffix) {
-      return route.fulfill({ json: { data: { notes, links: [] } } });
+      return route.fulfill({
+        json: {
+          data: {
+            notes: notes.map(
+              ({ id, title, version, updatedAt, employeeIds }) => ({
+                id,
+                title,
+                version,
+                updatedAt,
+                employeeIds,
+              }),
+            ),
+            links,
+          },
+        },
+      });
     }
     if (request.method() === "POST" && !suffix) {
       const body = request.postDataJSON();
@@ -326,8 +348,115 @@ async function overviewFixture(page: Page, titles: string[]) {
     return route.fulfill({ json: { data: notes[index] } });
   });
   await page.goto("/my-workspace");
-  return { notes, requests };
+  return { notes, requests, links, employees };
 }
+
+test("公司知识库卡片原位切换图谱和最近三篇，图谱按实际引用方向和员工授权打开对应笔记", async ({
+  page,
+}) => {
+  await page.clock.setFixedTime(new Date("2026-11-22T09:00:00Z"));
+  const titles = [
+    "商品上新规范",
+    "主图验收标准",
+    "仓库交接",
+    "拍摄清单",
+    "尺码标准",
+    "退货须知",
+  ];
+  const { notes, requests, links, employees } = await overviewFixture(
+    page,
+    titles,
+    1,
+  );
+  links.push({ sourceId: notes[0].id, targetId: notes[1].id });
+  notes[1].employeeIds = employees.slice(0, 4).map((employee) => employee.id);
+  const card = page.getByRole("region", { name: "公司知识库速览" });
+  const panel = page.getByRole("region", { name: "公司知识库", exact: true });
+  const graph = card.getByRole("region", { name: "知识图谱速览" });
+  const listView = card.getByRole("radio", { name: "笔记列表" });
+  const graphView = card.getByRole("radio", { name: "知识图谱" });
+  const columns = page.locator(".workspace-columns");
+  const fullDirectoryGets = () =>
+    requests.filter((value) => value === "GET ").length;
+  await expect(listView).toBeChecked();
+  await expect(
+    card.getByRole("button", { name: titles[0], exact: true }),
+  ).toBeVisible();
+  expect(fullDirectoryGets()).toBe(0);
+  await card.getByText("知识图谱", { exact: true }).click();
+  await expect(graphView).toBeChecked();
+  await expect(columns).toHaveAttribute("data-tools-open", "false");
+  await expect(graph.locator(".kgraph-edge.grant")).toHaveCount(2);
+  await expect(graph.getByRole("button", { name: /^打开笔记 / })).toHaveCount(
+    4,
+  );
+  await expect(
+    graph.getByRole("button", { name: /^查看授权员工 / }),
+  ).toHaveCount(2);
+  await expect(graph.getByText("已显示 4 / 共 6 篇")).toBeVisible();
+  await expect(graph.getByText("员工 2 / 3 位")).toBeVisible();
+  await expect(
+    graph.getByRole("button", { name: "打开笔记 " + titles[5] }),
+  ).toHaveCount(0);
+  const edge = graph.locator(".kgraph-edge:not(.grant)");
+  await expect(edge).toHaveCount(1);
+  await expect(edge).toHaveAttribute("marker-end", /^url\(#/);
+  const startNearNode = await edge.evaluate(
+    (el, ids) => {
+      const line = el as SVGLineElement;
+      return ids.map((id) => {
+        const node = line.ownerSVGElement!.querySelector<SVGGElement>(
+          `[data-vertex="${id}"]`,
+        )!;
+        const { e: x, f: y } = node.transform.baseVal.consolidate()!.matrix;
+        return (
+          Math.hypot(x - line.x1.baseVal.value, y - line.y1.baseVal.value) <
+          Math.hypot(x - line.x2.baseVal.value, y - line.y2.baseVal.value)
+        );
+      });
+    },
+    [notes[0].id, notes[1].id],
+  );
+  expect(startNearNode).toEqual([true, false]);
+  await expect(
+    graph.getByRole("button", { name: "查看授权员工 " + employees[1].name }),
+  ).toHaveCount(0);
+  await graph
+    .getByRole("button", { name: "查看授权员工 " + employees[0].name })
+    .press("Enter");
+  await expect(graph.getByText(employees[0].name + "可查阅")).toBeVisible();
+  await expect(
+    graph.getByRole("button", { name: titles[1], exact: true }),
+  ).toBeVisible();
+  await expect(columns).toHaveAttribute("data-tools-open", "false");
+  await card.getByText("笔记列表", { exact: true }).click();
+  const list = card.getByRole("list", { name: "最近更新的笔记" });
+  await expect(list.getByRole("button")).toHaveText(titles.slice(0, 3));
+  await expect(graph).toHaveCount(0);
+  await expect(columns).toHaveAttribute("data-tools-open", "false");
+  await card.getByText("知识图谱", { exact: true }).click();
+  await graph
+    .getByRole("button", { name: "打开笔记 " + titles[3] })
+    .press("Enter");
+  await expect(panel.getByRole("heading", { name: titles[3] })).toBeVisible();
+  await expect(
+    panel.getByText(notes[3].content, { exact: true }),
+  ).toBeVisible();
+  await panel.getByRole("button", { name: "返回知识库" }).click();
+  await expect(
+    panel.getByRole("region", { name: "知识图谱", exact: true }),
+  ).toBeVisible();
+  await expect(
+    panel.getByRole("button", { name: "打开笔记 " + titles[5] }),
+  ).toBeVisible();
+  await expect(
+    panel.getByRole("button", { name: "查看授权员工 " + employees[3].name }),
+  ).toBeVisible();
+  await expect(
+    panel.getByRole("button", { name: "查看授权员工 " + employees[1].name }),
+  ).toHaveCount(0);
+  expect(fullDirectoryGets()).toBe(1);
+});
 
 test("工作台知识库速览只取最近三篇，直接打开所选笔记并同步改名、删除", async ({
   page,
@@ -376,6 +505,12 @@ test("工作台知识库速览可从空库直接建笔记、随后打开知识�
   const { notes } = await overviewFixture(page, []);
   const card = page.getByRole("region", { name: "公司知识库速览" });
   await expect(card.getByText("暂无笔记", { exact: true })).toBeVisible();
+  await card.getByText("知识图谱", { exact: true }).click();
+  await expect(card.getByText("暂无笔记", { exact: true })).toBeVisible();
+  await expect(
+    page.getByRole("region", { name: "公司知识库", exact: true }),
+  ).toBeHidden();
+  await card.getByText("笔记列表", { exact: true }).click();
   await card.getByRole("button", { name: "新建笔记" }).click();
   const editor = page.getByRole("dialog");
   await expect(editor.getByLabel("笔记标题")).toHaveValue("");
@@ -395,9 +530,6 @@ test("工作台知识库速览在大屏、矮屏和手机均位于员工下方�
   const titles = ["主图规范", "客服回复范例", "供应商入驻资料"];
   await overviewFixture(page, titles);
   const card = page.getByRole("region", { name: "公司知识库速览" });
-  const employees = page.getByRole("region", { name: "AI 员工列表" });
-  const composer = page.locator(".assistant-compose:visible");
-  const input = composer.locator("textarea");
   for (const size of [
     { width: 1440, height: 900 },
     { width: 1024, height: 640 },
@@ -408,29 +540,77 @@ test("工作台知识库速览在大屏、矮屏和手机均位于员工下方�
     await last.scrollIntoViewIfNeeded();
     await expect(last).toBeInViewport();
     await last.click({ trial: true });
-    const cardBox = (await card.boundingBox())!;
-    const employeeBox = (await employees.boundingBox())!;
-    expect(cardBox.y).toBeGreaterThanOrEqual(
-      employeeBox.y + employeeBox.height - 1,
-    );
-    const shelf = (await page.locator(".workspace-shelf-cards").boundingBox())!;
-    const composeBox = (await composer.boundingBox())!;
-    const visibleCardBottom = Math.min(
-      cardBox.y + cardBox.height,
-      shelf.y + shelf.height,
-    );
-    if (
-      cardBox.x < composeBox.x + composeBox.width &&
-      cardBox.x + cardBox.width > composeBox.x
-    )
-      expect(visibleCardBottom).toBeLessThanOrEqual(composeBox.y + 1);
-    await expect(input).toBeInViewport();
-    await input.click({ trial: true });
-    expect(
-      await page.evaluate(
-        () => document.documentElement.scrollWidth <= innerWidth + 1,
-      ),
-    ).toBe(true);
+    await assertKnowledgeCardLayout(page);
+  }
+});
+
+async function assertKnowledgeCardLayout(page: Page) {
+  const card = page.getByRole("region", { name: "公司知识库速览" });
+  const employee = page.getByRole("region", { name: "AI 员工列表" });
+  const composer = page.locator(".assistant-compose:visible");
+  const cardBox = (await card.boundingBox())!;
+  const employeeBox = (await employee.boundingBox())!;
+  expect(cardBox.y).toBeGreaterThanOrEqual(
+    employeeBox.y + employeeBox.height - 1,
+  );
+  const shelf = (await page.locator(".workspace-shelf-cards").boundingBox())!;
+  const composeBox = (await composer.boundingBox())!;
+  const visibleBottom = Math.min(
+    cardBox.y + cardBox.height,
+    shelf.y + shelf.height,
+  );
+  if (
+    cardBox.x < composeBox.x + composeBox.width &&
+    cardBox.x + cardBox.width > composeBox.x
+  )
+    expect(visibleBottom).toBeLessThanOrEqual(composeBox.y + 1);
+  const input = composer.locator("textarea");
+  await expect(input).toBeInViewport();
+  await input.click({ trial: true });
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth + 1,
+    ),
+  ).toBe(true);
+}
+
+test("公司知识库卡片的图谱在桌面和手机能原位查看，场景输入仍可操作", async ({
+  page,
+}, testInfo) => {
+  const titles = ["主图规范", "商品上新", "素材清单", "尺码表"];
+  const { notes, links, employees } = await overviewFixture(page, titles);
+  links.push(
+    { sourceId: notes[1].id, targetId: notes[0].id },
+    { sourceId: notes[1].id, targetId: notes[3].id },
+    { sourceId: notes[0].id, targetId: notes[2].id },
+  );
+  notes[0].employeeIds.push(employees[0].id);
+  notes[3].employeeIds.push(employees[2].id);
+  const card = page.getByRole("region", { name: "公司知识库速览" });
+  await card.getByText("知识图谱", { exact: true }).click();
+  const graph = card.getByRole("region", { name: "知识图谱速览" });
+  await expect(graph.locator(".kgraph-edge")).toHaveCount(5);
+  for (const size of [
+    { width: 1440, height: 900 },
+    { width: 390, height: 740 },
+  ]) {
+    await page.setViewportSize(size);
+    const node = graph.getByRole("button", { name: "打开笔记 主图规范" });
+    await node.scrollIntoViewIfNeeded();
+    await node.click({ trial: true });
+    await assertKnowledgeCardLayout(page);
+    if (size.width === 1440) {
+      await page.mouse.move(10, 10);
+      await card.screenshot({
+        path: testInfo.outputPath("knowledge-card-graph-example.png"),
+      });
+    } else {
+      const input = page.locator(".assistant-compose:visible textarea");
+      await input.click();
+      await expect(input).toBeFocused();
+      await page.keyboard.insertText("请核对主图规范");
+      await expect(input).toHaveValue("请核对主图规范");
+    }
   }
 });
 

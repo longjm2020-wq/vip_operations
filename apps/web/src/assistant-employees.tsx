@@ -95,14 +95,17 @@ const statusLabels: Record<string, string> = {
   PENDING: "待执行",
   REWORK: "返工中",
 };
-export function useEmployeeDirectory(enabled = true) {
+export function useEmployeeDirectory(
+  enabled = true,
+  refetchInterval: number | false = 15000,
+) {
   const user = useUser();
   return useQuery({
     queryKey: directoryKey(user.id),
     enabled,
     queryFn: async () => (await api(root)).data as EmployeeDirectory,
     staleTime: 10000,
-    refetchInterval: enabled ? 15000 : false,
+    refetchInterval: enabled ? refetchInterval : false,
   });
 }
 function EmployeeAvatar({

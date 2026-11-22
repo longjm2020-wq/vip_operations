@@ -51,6 +51,12 @@
     scrollbar-width: thin;
   }
 }
+.workspace-shelf-cards:has(.workspace-kgraph--compact) {
+  max-height: max(68px, calc(100dvh - var(--workspace-topbar-height, 48px) - 246px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
 .workspace-employee-strip,
 .workspace-knowledge-card {
   position: relative;

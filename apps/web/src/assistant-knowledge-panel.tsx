@@ -66,12 +66,57 @@ const blankDraft = (): Draft => ({
   employeeIds: [],
 });
 
+const knowledgeViews = [
+  { value: "graph", label: "知识图谱", icon: <ApartmentOutlined /> },
+  { value: "list", label: "笔记列表", icon: <UnorderedListOutlined /> },
+] as const;
+
+function useKnowledgeDirectory(
+  userId: string,
+  query: string,
+  enabled: boolean,
+) {
+  return useQuery({
+    queryKey: ["assistant-knowledge", userId, "directory", query],
+    enabled,
+    queryFn: async ({ signal }) => {
+      const { data } = await api(
+        query ? `${root}?q=${encodeURIComponent(query)}` : root,
+        "GET",
+        undefined,
+        undefined,
+        { signal },
+      );
+      const result = data as KnowledgeDirectory | null;
+      if (
+        !Array.isArray(result?.notes) ||
+        !Array.isArray(result.links) ||
+        !result.notes.every(
+          (note) =>
+            typeof note?.id === "string" &&
+            typeof note.title === "string" &&
+            Array.isArray(note.employeeIds),
+        ) ||
+        !result.links.every(
+          (link) =>
+            typeof link?.sourceId === "string" &&
+            typeof link.targetId === "string",
+        )
+      )
+        throw new Error("无法读取知识库目录");
+      return result;
+    },
+  });
+}
+
 export function WorkspaceKnowledgeCard() {
   const { allowed, workbench } = useAssistantHub();
   const user = useUser();
+  const [view, setView] = useState<"graph" | "list">("list");
+  const enabled = allowed && !!workbench;
   const overview = useQuery({
     queryKey: ["assistant-knowledge", user.id, "directory", { overview: true }],
-    enabled: allowed && !!workbench,
+    enabled: enabled && view === "list",
     staleTime: 30000,
     queryFn: async ({ signal }) => {
       const { data } = await api(
@@ -84,8 +129,29 @@ export function WorkspaceKnowledgeCard() {
       return knowledgeOverviewSchema.parse(data);
     },
   });
+  const directory = useKnowledgeDirectory(
+    user.id,
+    "",
+    enabled && view === "graph",
+  );
+  const employees = useEmployeeDirectory(
+    enabled && view === "graph" && !!directory.data?.notes.length,
+    // The employee card above already refreshes their shared directory.
+    false,
+  );
+  const activeStaff = useMemo(
+    () =>
+      employees.data?.employees?.filter((employee) => !employee.archived) || [],
+    [employees.data],
+  );
   if (!allowed || !workbench) return null;
   const { data, isError } = overview;
+  const count =
+    view === "graph"
+      ? directory.data?.notes.length
+      : isError
+        ? undefined
+        : data?.total;
   return (
     <section
       className="workspace-knowledge-card"
@@ -94,7 +160,7 @@ export function WorkspaceKnowledgeCard() {
     >
       <div className="employee-strip-heading">
         <span className="employee-strip-title">
-          公司知识库 {data && !isError && <small>{data.total} 篇</small>}
+          公司知识库 {count !== undefined && <small>{count} 篇</small>}
         </span>
         <button
           className="employee-strip-dispatch"
@@ -114,7 +180,44 @@ export function WorkspaceKnowledgeCard() {
           <PlusOutlined aria-hidden />
         </button>
       </div>
-      {isError ? (
+      <Segmented
+        className="knowledge-card-switch"
+        size="small"
+        block
+        aria-label="知识库速览视图"
+        value={view}
+        options={[...knowledgeViews]}
+        onChange={setView}
+      />
+      {view === "graph" ? (
+        directory.isError ||
+        (!!directory.data?.notes.length && employees.isError) ? (
+          <p className="knowledge-card-status">
+            图谱加载失败{" "}
+            <button
+              type="button"
+              onClick={() => {
+                if (directory.isError) void directory.refetch();
+                if (employees.isError) void employees.refetch();
+              }}
+            >
+              重试
+            </button>
+          </p>
+        ) : directory.data?.notes.length === 0 ? (
+          <p className="knowledge-card-status">暂无笔记</p>
+        ) : !directory.data || !employees.data ? (
+          <p className="knowledge-card-status">正在加载图谱…</p>
+        ) : (
+          <WorkspaceKnowledgeGraph
+            compact
+            notes={directory.data.notes}
+            links={directory.data.links}
+            employees={activeStaff}
+            onSelectNote={(id) => workbench.openKnowledge({ id })}
+          />
+        )
+      ) : isError ? (
         <p className="knowledge-card-status">
           笔记加载失败{" "}
           <button type="button" onClick={() => void overview.refetch()}>
@@ -386,20 +489,7 @@ export function AssistantKnowledgePanel({
   );
   const scope = ["assistant-knowledge", user.id];
   const query = view === "list" && !selection ? term : "";
-  const directory = useQuery({
-    queryKey: [...scope, "directory", query],
-    enabled: !selection,
-    queryFn: async ({ signal }) =>
-      (
-        await api(
-          query ? `${root}?q=${encodeURIComponent(query)}` : root,
-          "GET",
-          undefined,
-          undefined,
-          { signal },
-        )
-      ).data as KnowledgeDirectory,
-  });
+  const directory = useKnowledgeDirectory(user.id, query, !selection);
   const note = useQuery({
     queryKey: [...scope, "note", selection?.id],
     enabled: !!selection,
@@ -694,18 +784,7 @@ export function AssistantKnowledgePanel({
           <Segmented
             value={view}
             aria-label="知识库视图"
-            options={[
-              {
-                value: "graph",
-                label: "知识图谱",
-                icon: <ApartmentOutlined />,
-              },
-              {
-                value: "list",
-                label: "笔记列表",
-                icon: <UnorderedListOutlined />,
-              },
-            ]}
+            options={[...knowledgeViews]}
             onChange={setView}
           />
           {view === "list" && (

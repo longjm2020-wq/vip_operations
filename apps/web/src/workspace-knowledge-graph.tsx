@@ -17,6 +17,7 @@ interface Link {
   targetId: string;
 }
 interface Props {
+  compact?: boolean;
   notes: GraphNote[];
   links: Link[];
   employees: Employee[];
@@ -32,9 +33,74 @@ type Vertex = Point & {
 };
 type Edge = { from: Vertex; to: Vertex; grant: boolean };
 
+function previewData(notes: GraphNote[], links: Link[], employees: Employee[]) {
+  const noteIds = new Set(notes.map((note) => note.id));
+  const staffIds = new Set(employees.map((employee) => employee.id));
+  const grantedNotes = new Set<string>();
+  const grantedStaff = new Set<string>();
+  for (const note of notes) {
+    for (const id of note.employeeIds) {
+      if (!staffIds.has(id)) continue;
+      grantedNotes.add(note.id);
+      grantedStaff.add(id);
+    }
+  }
+  const references = links.filter(
+    ({ sourceId, targetId }) =>
+      sourceId !== targetId && noteIds.has(sourceId) && noteIds.has(targetId),
+  );
+  const chosen = new Set<string>();
+  const add = (id: string) => {
+    if (chosen.size < 4) chosen.add(id);
+  };
+  // Keep both relationship types when present, even if recent notes are unrelated.
+  const first =
+    references.find(
+      (link) =>
+        grantedNotes.has(link.sourceId) || grantedNotes.has(link.targetId),
+    ) ?? references[0];
+  if (first) {
+    add(first.sourceId);
+    add(first.targetId);
+  }
+  if (![...chosen].some((id) => grantedNotes.has(id))) {
+    const granted = notes.find((note) => grantedNotes.has(note.id));
+    if (granted) add(granted.id);
+  }
+  for (const { sourceId, targetId } of references) {
+    if (chosen.size === 4) break;
+    if (chosen.has(sourceId) || chosen.has(targetId)) {
+      add(sourceId);
+      add(targetId);
+    }
+  }
+  // The directory is already sorted by most recently updated.
+  for (const note of notes) {
+    if (chosen.size === 4) break;
+    add(note.id);
+  }
+  const shown = notes.filter((note) => chosen.has(note.id));
+  const readers = new Set(shown.flatMap((note) => note.employeeIds));
+  return {
+    notes: shown,
+    links: references.filter(
+      (link) => chosen.has(link.sourceId) && chosen.has(link.targetId),
+    ),
+    employees: employees
+      .filter((employee) => readers.has(employee.id))
+      .slice(0, 2),
+    totalEmployees: grantedStaff.size,
+  };
+}
+
 // Place each connected component around its most connected node. Breadth-first
 // rings put directly related notes close together without an ongoing simulation.
-function layoutGraph(notes: GraphNote[], links: Link[], employees: Employee[]) {
+function layoutGraph(
+  notes: GraphNote[],
+  links: Link[],
+  employees: Employee[],
+  compact = false,
+) {
   const vertices = new Map<string, Vertex>();
   const edges: Edge[] = [];
   const employeeNames = new Map(employees.map((item) => [item.id, item.name]));
@@ -68,6 +134,22 @@ function layoutGraph(notes: GraphNote[], links: Link[], employees: Employee[]) {
       a.label.localeCompare(b.label, "zh-CN") ||
       a.id.localeCompare(b.id),
   );
+  if (compact) {
+    const center = sorted.find((vertex) => vertex.kind === "note");
+    if (center) {
+      const others = sorted.filter((vertex) => vertex !== center);
+      center.x = others.length === 1 ? 97 : 150;
+      center.y = 63;
+      others.forEach((vertex, index) => {
+        const angle =
+          (2 * Math.PI * index) / others.length -
+          (others.length > 2 ? Math.PI / 2 : 0);
+        vertex.x = center.x + 106 * Math.cos(angle);
+        vertex.y = center.y + 48 * Math.sin(angle);
+      });
+    }
+    return { vertices, edges, width: 300, height: 145 };
+  }
   const seen = new Set<string>();
   const groups: { nodes: Vertex[]; width: number; height: number }[] = [];
   for (const root of sorted) {
@@ -145,15 +227,23 @@ function layoutGraph(notes: GraphNote[], links: Link[], employees: Employee[]) {
 }
 
 export function WorkspaceKnowledgeGraph({
+  compact = false,
   notes,
   links,
   employees,
   selectedNoteId,
   onSelectNote,
 }: Props) {
+  const preview = useMemo(
+    () => (compact ? previewData(notes, links, employees) : undefined),
+    [compact, notes, links, employees],
+  );
   const graph = useMemo(
-    () => layoutGraph(notes, links, employees),
-    [notes, links, employees],
+    () =>
+      preview
+        ? layoutGraph(preview.notes, preview.links, preview.employees, true)
+        : layoutGraph(notes, links, employees),
+    [preview, notes, links, employees],
   );
   const clipId = useId().replace(/:/g, "");
   const viewport = useRef<HTMLDivElement>(null);
@@ -173,8 +263,8 @@ export function WorkspaceKnowledgeGraph({
   const focus = graph.vertices.get(hover ?? "") ?? selected;
   const fit = Math.min(
     1.35,
-    (size.width - 20) / graph.width,
-    (size.height - 24) / graph.height,
+    (size.width - (compact ? 0 : 20)) / graph.width,
+    (size.height - (compact ? 0 : 24)) / graph.height,
   );
   const scale = Math.max(0.001, fit) * view.zoom;
   const options = useMemo(
@@ -239,26 +329,36 @@ export function WorkspaceKnowledgeGraph({
       />
     );
   return (
-    <section className="workspace-kgraph" aria-label="知识图谱">
-      <Select
-        className="workspace-kgraph__locator"
-        variant="borderless"
-        aria-label="定位图谱节点"
-        placeholder="定位笔记或员工"
-        allowClear
-        showSearch={{ optionFilterProp: "label" }}
-        value={pinned}
-        options={options}
-        onChange={locate}
-      />
+    <section
+      className={`workspace-kgraph${compact ? " workspace-kgraph--compact" : ""}`}
+      aria-label={compact ? "知识图谱速览" : "知识图谱"}
+    >
+      {!compact && (
+        <Select
+          className="workspace-kgraph__locator"
+          variant="borderless"
+          aria-label="定位图谱节点"
+          placeholder="定位笔记或员工"
+          allowClear
+          showSearch={{ optionFilterProp: "label" }}
+          value={pinned}
+          options={options}
+          onChange={locate}
+        />
+      )}
       <div className="workspace-kgraph__stage" ref={viewport}>
         <svg
           width="100%"
           height="100%"
           role="group"
-          aria-label="笔记引用和员工授权关系，可拖动画布"
+          aria-label={
+            compact
+              ? "笔记引用和员工授权关系"
+              : "笔记引用和员工授权关系，可拖动画布"
+          }
           onPointerDown={(e) => {
             if (
+              compact ||
               e.button !== 0 ||
               (e.target as Element).closest("[data-vertex]")
             )
@@ -313,10 +413,10 @@ export function WorkspaceKnowledgeGraph({
                     (grant ? " grant" : "") +
                     (active ? " active" : "")
                   }
-                  x1={from.x + (dx * 14) / dist}
-                  y1={from.y + (dy * 14) / dist}
-                  x2={to.x - (dx * 17) / dist}
-                  y2={to.y - (dy * 17) / dist}
+                  x1={from.x + (dx * (compact ? 9 : 14)) / dist}
+                  y1={from.y + (dy * (compact ? 9 : 14)) / dist}
+                  x2={to.x - (dx * (compact ? 10 : 17)) / dist}
+                  y2={to.y - (dy * (compact ? 10 : 17)) / dist}
                   markerEnd={grant ? undefined : `url(#${clipId}-arrow)`}
                   opacity={focus && !active ? 0.28 : 1}
                 />
@@ -326,6 +426,7 @@ export function WorkspaceKnowledgeGraph({
               const related =
                 !focus || focus.id === v.id || focus.neighbors.has(v.id);
               const short = Array.from(v.label);
+              const labelLimit = compact ? 6 : 10;
               return (
                 <g
                   key={v.id}
@@ -339,6 +440,9 @@ export function WorkspaceKnowledgeGraph({
                   }
                   role="button"
                   tabIndex={0}
+                  aria-pressed={
+                    v.kind === "employee" ? selected?.id === v.id : undefined
+                  }
                   aria-label={
                     (v.kind === "note" ? "打开笔记 " : "查看授权员工 ") +
                     v.label
@@ -356,19 +460,23 @@ export function WorkspaceKnowledgeGraph({
                   onClick={() => choose(v)}
                 >
                   <title>{v.label}</title>
-                  <circle className="kgraph-hit" r="23" />
+                  <circle className="kgraph-hit" r={compact ? 18 : 23} />
                   <circle
                     className="kgraph-halo"
-                    r={v.kind === "note" ? 16 : 18}
+                    r={compact ? 9 : v.kind === "note" ? 16 : 18}
                   />
                   {v.kind === "note" ? (
-                    <circle className="kgraph-core" r="7" />
+                    <circle className="kgraph-core" r={compact ? 4 : 7} />
                   ) : (
-                    <path className="kgraph-core" d="M0 -9 9 0 0 9 -9 0Z" />
+                    <path
+                      className="kgraph-core"
+                      transform={compact ? "scale(.65)" : undefined}
+                      d="M0 -9 9 0 0 9 -9 0Z"
+                    />
                   )}
-                  <text y="33" textAnchor="middle">
-                    {short.length > 10
-                      ? short.slice(0, 9).join("") + "…"
+                  <text y={compact ? 23 : 33} textAnchor="middle">
+                    {short.length > labelLimit
+                      ? short.slice(0, labelLimit - 1).join("") + "…"
                       : v.label}
                   </text>
                 </g>
@@ -376,32 +484,50 @@ export function WorkspaceKnowledgeGraph({
             })}
           </g>
         </svg>
-        <div className="workspace-kgraph__tools">
-          <Button
-            aria-label="缩小图谱"
-            title="缩小"
-            size="small"
-            icon={<MinusOutlined />}
-            onClick={() => zoom(1 / 1.4)}
-          />
-          <Button
-            aria-label="放大图谱"
-            title="放大"
-            size="small"
-            icon={<PlusOutlined />}
-            onClick={() => zoom(1.4)}
-          />
-          <Button
-            aria-label="图谱全览"
-            title="图谱全览"
-            size="small"
-            icon={<AimOutlined />}
-            onClick={() => {
-              locate();
-            }}
-          />
-        </div>
+        {!compact && (
+          <div className="workspace-kgraph__tools">
+            <Button
+              aria-label="缩小图谱"
+              title="缩小"
+              size="small"
+              icon={<MinusOutlined />}
+              onClick={() => zoom(1 / 1.4)}
+            />
+            <Button
+              aria-label="放大图谱"
+              title="放大"
+              size="small"
+              icon={<PlusOutlined />}
+              onClick={() => zoom(1.4)}
+            />
+            <Button
+              aria-label="图谱全览"
+              title="图谱全览"
+              size="small"
+              icon={<AimOutlined />}
+              onClick={() => {
+                locate();
+              }}
+            />
+          </div>
+        )}
       </div>
+      {preview &&
+        (preview.notes.length < notes.length ||
+          preview.employees.length < preview.totalEmployees) && (
+          <div className="workspace-kgraph__counts">
+            {preview.notes.length < notes.length && (
+              <span>
+                已显示 {preview.notes.length} / 共 {notes.length} 篇
+              </span>
+            )}
+            {preview.employees.length < preview.totalEmployees && (
+              <span>
+                员工 {preview.employees.length} / {preview.totalEmployees} 位
+              </span>
+            )}
+          </div>
+        )}
       <div className="workspace-kgraph__legend">
         <span>
           <i aria-hidden="true" />

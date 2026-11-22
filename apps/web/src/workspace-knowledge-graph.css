@@ -135,3 +135,40 @@
 .workspace-kgraph__grants button:hover {
   text-decoration: underline;
 }
+.workspace-knowledge-card .knowledge-card-switch {
+  margin-bottom: 8px;
+  font-size: 11px;
+}
+.workspace-kgraph--compact {
+  border-radius: 8px;
+}
+.workspace-kgraph--compact .workspace-kgraph__stage {
+  height: auto;
+  aspect-ratio: 300 / 145;
+  min-height: 122px;
+  max-height: 160px;
+}
+.workspace-kgraph--compact .workspace-kgraph__stage svg,
+.workspace-kgraph--compact .workspace-kgraph__stage svg:active {
+  cursor: default;
+  touch-action: pan-y;
+}
+.workspace-kgraph--compact .workspace-kgraph__legend,
+.workspace-kgraph--compact .workspace-kgraph__grants,
+.workspace-kgraph__counts {
+  padding: 5px 8px;
+  gap: 4px 10px;
+  font-size: 11px;
+}
+.workspace-kgraph__counts {
+  display: flex;
+  flex-wrap: wrap;
+  color: var(--app-secondary);
+  border-top: 1px solid var(--app-border);
+}
+.workspace-kgraph--compact .workspace-kgraph__grants button {
+  max-width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}

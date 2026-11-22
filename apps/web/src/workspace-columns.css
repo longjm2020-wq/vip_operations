@@ -211,6 +211,23 @@ body:has(.workspace-columns[data-chat-open="true"])
   .workspace-center .workspace-team-shelf {
     position: relative;
   }
+  /* In stacked layouts, keep room for the docked robot above the composer.
+     The cards scroll together while the view controls and voice prompt stay in place. */
+  .workspace-center .personal-welcome:has(.workspace-kgraph--compact) {
+    max-height: 50%;
+    flex-wrap: nowrap;
+  }
+  .workspace-center .workspace-team-shelf:has(.workspace-kgraph--compact) {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+  .workspace-center .workspace-team-shelf:has(.workspace-kgraph--compact) .workspace-world-controls {
+    flex: none;
+  }
+  .workspace-center .workspace-shelf-cards:has(.workspace-kgraph--compact) {
+    min-height: 0;
+  }
   .workspace-center .workspace-team-shelf .workspace-world-controls {
     flex-wrap: wrap;
   }
