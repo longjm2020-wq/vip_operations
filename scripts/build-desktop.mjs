@@ -20,6 +20,20 @@ const config = JSON.parse(
 const buildRoot = path.join(root, ".local/desktop-client-build");
 const build = path.join(buildRoot, `run-${Date.now()}`);
 await fs.mkdir(build, { recursive: true });
+if (
+  !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(config.version) ||
+  config.version.split(".").some((n) => Number(n) > 65534)
+)
+  throw new Error("Expected a three-part Windows desktop release version");
+const versionSource = path.join(build, "ReleaseVersion.cs");
+await fs.writeFile(
+  versionSource,
+  [
+    `[assembly: System.Reflection.AssemblyFileVersion("${config.version}.0")]`,
+    `[assembly: System.Reflection.AssemblyInformationalVersion("${config.version}")]`,
+    `namespace XutiDesktop { static partial class ShellPolicy { public const string Version = "${config.version}"; } }`,
+  ].join("\n") + "\n",
+);
 const sdkFile = path.join(buildRoot, "webview2.nupkg");
 let sdk;
 try {
@@ -99,6 +113,7 @@ const args = [
   ].map((n) => `/reference:${n}`),
   path.join(root, "apps/desktop/XutiDesktop.cs"),
   path.join(root, "apps/desktop/DesktopShell.cs"),
+  versionSource,
 ];
 const result = spawnSync(path.join(framework, "csc.exe"), args, {
   stdio: "inherit",
@@ -135,6 +150,7 @@ add(
   "使用说明.txt",
   await fs.readFile(path.join(root, "apps/desktop/README.txt")),
 );
+add("source/ReleaseVersion.cs", await fs.readFile(versionSource));
 for (const file of sourceFiles.filter(
   (n) => n.startsWith("apps/desktop/") && !n.endsWith(".cmd"),
 ))

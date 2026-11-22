@@ -135,12 +135,13 @@ sealed class AssistantForm : Form {
     public event Action WorkspaceRequested;
     public bool Connected { get { return token.Length > 0; } }
     public bool Authorized { get { return Connected && authorizationId.Length > 0; } }
-    public string DeviceId { get { return deviceId; } }
-    public string ConnectionText { get { return connection.Text; } }
-    public string TaskText { get {
-        if(task!=null && taskId.Length>0 && new[]{"PAUSED","NEEDS_USER"}.Contains(state))return (state=="PAUSED"?"任务已暂停：":"需要你接手：")+TaskStage(task);
-        return status.Text;
+    public bool CanShowReleaseNotice { get {
+        if(working || allowing || pairing || changingAuthorization)return false;
+        if(!Connected)return true;
+        // A restored connection learns whether work is waiting from its first poll.
+        return task!=null && (taskId.Length==0 || state=="DONE" || state=="FAILED" || state=="CANCELED");
     } }
+    public string DeviceId { get { return deviceId; } }
     bool started, pairing, isolatedPreview;
     WindowChoice selected;
     bool polling, working, armed, closing, captureBlocked, allowing;
@@ -429,8 +430,10 @@ sealed class AssistantForm : Form {
     }
     string TaskStage(Dictionary<string,object> value) {
         string text=S(value,"stage");
-        if(taskId==failureTaskId && new[]{"PAUSED","NEEDS_USER"}.Contains(S(value,"status")) && failureDiagnostic.Length>0 && !text.Contains(failureDiagnostic))text+=failureDiagnostic;
-        return text;
+        string state=S(value,"status");
+        string prefix=state=="PAUSED"?"任务已暂停：":state=="NEEDS_USER"?"需要你接手：":"";
+        if(prefix.Length>0 && taskId==failureTaskId && failureDiagnostic.Length>0 && !text.Contains(failureDiagnostic))text+=failureDiagnostic;
+        return text.StartsWith(prefix,StringComparison.Ordinal)?text:prefix+text;
     }
     static string FailureText(Exception error) {
         if(error is HttpRequestException)return "网络连接中断，已停止本机输入；恢复后请核对任务并继续。";
@@ -475,7 +478,7 @@ sealed class AssistantForm : Form {
             if(!CurrentOperation(id,connectionToken,version)) return;
             var result=await Request("tasks/"+id+"/control",new {action="pause",note});
             if(!CurrentOperation(id,connectionToken,version)) return;
-            state=S(result,"status");task=result;status.Text=S(result,"stage");ShowTaskControls();
+            state=S(result,"status");task=result;status.Text=TaskStage(result);ShowTaskControls();
             if(Changed!=null)Changed();
         } finally {
             if(manualPauseVersion==version)manualPausePending=false;
@@ -485,7 +488,7 @@ sealed class AssistantForm : Form {
         if(!CurrentOperation(id,connectionToken,version))return;
         var result=await Request("tasks/"+id+"/control",new {action="handoff",startupFailure=true,note=note.Substring(0,Math.Min(300,note.Length))});
         if(!CurrentOperation(id,connectionToken,version))return;
-        state=S(result,"status");task=result;status.Text=S(result,"stage");startFailureNote="";ShowTaskControls();
+        state=S(result,"status");task=result;status.Text=TaskStage(result);startFailureNote="";ShowTaskControls();
         if(Changed!=null)Changed();
     }
     async Task StopTask() { LocalPause(); await Safe(async () => { await Control("stop", "你已停止操作"); status.Text = "已停止"; }); }
@@ -761,10 +764,10 @@ sealed class AssistantForm : Form {
                 newTask();firstTask=form.taskId;firstToken=form.token;long failureVersion=form.epoch;calls=0;
                 fake.Reply=req=>{calls++;var body=D(form.json.DeserializeObject(req.Content.ReadAsStringAsync().GetAwaiter().GetResult()));if(S(body,"action")!="handoff"||!body.ContainsKey("startupFailure")||!Convert.ToBoolean(body["startupFailure"])||!S(body,"note").Contains(diagnosticId))throw new Exception("Failure handoff lacked guarded diagnosis");return TestResponse(200,form.json.Serialize(new{data=new{id=firstTask,status="PAUSED",stage="智能服务暂不可用（HTTP 403），任务已暂停"}}));};
                 form.ReportStepFailure(firstTask,firstToken,failureVersion,"",providerError).GetAwaiter().GetResult();
-                if(calls!=1||form.state!="PAUSED"||!form.TaskText.Contains("HTTP 403")||!form.TaskText.Contains(diagnosticId)||!form.TaskText.StartsWith("任务已暂停："))throw new Exception("Server pause or footer diagnosis was overwritten");
+                if(calls!=1||form.state!="PAUSED"||!form.status.Text.Contains("HTTP 403")||!form.status.Text.Contains(diagnosticId)||!form.status.Text.StartsWith("任务已暂停："))throw new Exception("Server pause or task diagnosis was overwritten");
                 fake.Reply=req=>TestResponse(200,form.json.Serialize(new{data=new{authorizationId=form.authorizationId,task=new{id=firstTask,status="PAUSED",stage="智能服务暂不可用（HTTP 403），任务已暂停"}}}));
                 form.Poll().GetAwaiter().GetResult();
-                if(!form.TaskText.Contains(diagnosticId)||form.status.Text.Contains("连接或智能服务异常"))throw new Exception("Polling erased the same-task diagnosis");
+                if(!form.status.Text.Contains(diagnosticId)||form.status.Text.Contains("连接或智能服务异常"))throw new Exception("Polling erased the same-task diagnosis");
                 form.taskId=Guid.NewGuid().ToString();
                 form.ReportStepFailure(firstTask,firstToken,failureVersion,"",providerError).GetAwaiter().GetResult();
                 if(calls!=1)throw new Exception("Old failure reached a newer task");
@@ -775,7 +778,7 @@ sealed class AssistantForm : Form {
                 newTask();firstTask=form.taskId;firstToken=form.token;failureVersion=form.epoch;
                 fake.Reply=req=>TestResponse(200,"{\"data\":{\"status\":\"CANCELED\",\"stage\":\"你已停止操作\"}}");
                 form.ReportStepFailure(firstTask,firstToken,failureVersion,"",providerError).GetAwaiter().GetResult();
-                if(form.state!="CANCELED"||form.TaskText!="你已停止操作")throw new Exception("Failure revived a stopped task");
+                if(form.state!="CANCELED"||form.status.Text!="你已停止操作")throw new Exception("Failure revived a stopped task");
             }
             Console.WriteLine("Desktop connection, startup and safe diagnosis validation: passed (fake HTTP, isolated credentials, no desktop input)");return 0;
         } catch(Exception ex){Console.WriteLine(ex.Message);return 1;}

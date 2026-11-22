@@ -4,6 +4,9 @@ using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Linq;
+using System.Net;
+using System.Net.Http;
+using System.Threading;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Web.Script.Serialization;
@@ -12,9 +15,8 @@ using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 
 namespace XutiDesktop {
-static class ShellPolicy {
+static partial class ShellPolicy {
     public const string Origin = "https://vip-web-production.up.railway.app";
-    public const string Version = "1.2.6";
     public const string SetupPath = "/my-workspace?assistant=desktop&connect=1";
     public static bool Trusted(string value) {
         Uri uri;
@@ -66,8 +68,49 @@ static class ShellPolicy {
                 bool rejected=false;try{Message(Origin,Origin,bad);}catch{rejected=true;}if(!rejected)throw new Exception("Invalid bridge message accepted");
             }
             bool denied=false;try{Message("https://example.com",Origin,valid);}catch{denied=true;}if(!denied)throw new Exception("External page bridge accepted");
-            Console.WriteLine("Desktop origin, navigation and bridge validation: passed");return 0;
+            DesktopRelease.SelfTest();
+            Console.WriteLine("Desktop origin, navigation, bridge and release validation: passed");return 0;
         } catch(Exception e){Console.WriteLine(e.Message);return 1;}
+    }
+}
+
+static class DesktopRelease {
+    public const string FeedUrl = ShellPolicy.Origin + "/downloads/xuti-desktop-release.json";
+    public const string DownloadUrl = ShellPolicy.Origin + "/downloads/xuti-desktop.zip";
+    const int MaxFeedBytes = 4096;
+
+    public static HttpClient CreateClient() {
+        return new HttpClient(new HttpClientHandler { AllowAutoRedirect=false, UseCookies=false }) {
+            Timeout=TimeSpan.FromSeconds(10), MaxResponseContentBufferSize=MaxFeedBytes
+        };
+    }
+    public static async Task<Version> ReadLatestAsync(HttpClient client,CancellationToken cancellation) {
+        using(var request=new HttpRequestMessage(HttpMethod.Get,FeedUrl)) {
+            request.Headers.CacheControl=new System.Net.Http.Headers.CacheControlHeaderValue { NoCache=true };
+            using(var response=await client.SendAsync(request,HttpCompletionOption.ResponseContentRead,cancellation).ConfigureAwait(false)) {
+                if(response.StatusCode!=HttpStatusCode.OK || response.Content==null)return null;
+                var bytes=await response.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
+                if(bytes.Length>MaxFeedBytes)return null;
+                return ParseFeed(System.Text.Encoding.UTF8.GetString(bytes));
+            }
+        }
+    }
+    static Version ParseFeed(string body) {
+        try {
+            var data=new JavaScriptSerializer { MaxJsonLength=MaxFeedBytes, RecursionLimit=8 }.DeserializeObject(body) as Dictionary<string,object>;
+            object field;
+            if(data==null || !data.TryGetValue("version",out field))return null;
+            string text=field as string;
+            Version version;
+            if(text==null || !Regex.IsMatch(text,@"\A(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\z") || !Version.TryParse(text,out version))return null;
+            return version;
+        } catch(ArgumentException) { return null; } catch(InvalidOperationException) { return null; }
+    }
+    public static void SelfTest() {
+        var actual=ParseFeed("{\"version\":\"1.10.0\",\"url\":\"https://example.com/ignored\"}");
+        if(actual==null || actual.CompareTo(new Version(1,9,99))<=0)throw new Exception("Invalid desktop release ordering");
+        foreach(string invalid in new[]{"{}","[]","<html>","{\"version\":1}","{\"version\":\"1.2\"}","{\"version\":\"01.2.3\"}","{\"version\":\"1.2.3-beta\"}","{\"version\":\"1.2.3.4\"}"})
+            if(ParseFeed(invalid)!=null)throw new Exception("Malformed desktop release accepted");
     }
 }
 
@@ -90,7 +133,16 @@ sealed class DesktopShell : Form {
     readonly AssistantForm assistant=new AssistantForm{TopLevel=false,FormBorderStyle=FormBorderStyle.None,Dock=DockStyle.Fill};
     readonly Panel workPanel=new Panel{Dock=DockStyle.Fill};
     readonly Panel taskPanel=new Panel{Dock=DockStyle.Fill,Visible=false,Padding=new Padding(30,12,30,12)};
-    readonly Label footer=new Label{Dock=DockStyle.Bottom,Height=30,Padding=new Padding(18,6,0,0),AutoEllipsis=true};
+    readonly FlowLayoutPanel updateNotice=new FlowLayoutPanel { AutoSize=true,AutoSizeMode=AutoSizeMode.GrowAndShrink,WrapContents=false,Padding=new Padding(8),BorderStyle=BorderStyle.FixedSingle,Visible=false,AccessibleName="桌面端更新" };
+    readonly Label releaseLabel=new Label { AutoSize=true,Anchor=AnchorStyles.Left,Margin=new Padding(5,0,8,0) };
+    readonly System.Windows.Forms.Timer updateTimer=new System.Windows.Forms.Timer { Interval=30*60*1000 };
+    readonly CancellationTokenSource releaseLifetime=new CancellationTokenSource();
+    readonly HttpClient releaseClient=DesktopRelease.CreateClient();
+    readonly string reminderPath=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"XutiDesktopAssistant","release-reminder.txt");
+    Version availableRelease,deferredRelease;
+    long deferredUntil;
+    bool reminderLoaded,checkingRelease,releaseDisposed;
+    readonly ToolTip actionError=new ToolTip();
     readonly Panel notice=new Panel{Dock=DockStyle.Fill,Visible=false,Padding=new Padding(36)};
     readonly Label noticeText=new Label{Dock=DockStyle.Top,Height=100,Font=new Font("Microsoft YaHei UI",12)};
     readonly JavaScriptSerializer json=new JavaScriptSerializer();
@@ -103,7 +155,7 @@ sealed class DesktopShell : Form {
     string pendingUrl=ShellPolicy.Origin+"/my-workspace";
 
     public DesktopShell() {
-        Text="小序 · 桌面工作台";Width=1340;Height=900;MinimumSize=new Size(980,650);
+        Text="XUTI DESKTOP";Width=1340;Height=900;MinimumSize=new Size(980,650);
         StartPosition=FormStartPosition.CenterScreen;Font=new Font("Microsoft YaHei UI",10);
         AutoScaleMode=AutoScaleMode.Dpi;
         workspace.KeyDown+=(s,e)=>{
@@ -120,27 +172,89 @@ sealed class DesktopShell : Form {
         actions.Controls.Add(ShellStyle.Button("安装网页运行环境",()=>OpenSystem("https://developer.microsoft.com/microsoft-edge/webview2/")));
         notice.Controls.Add(actions);actions.BringToFront();
         taskPanel.Controls.Add(assistant);
-        Controls.Add(workPanel);Controls.Add(taskPanel);Controls.Add(footer);
-        assistant.Changed+=()=>UpdateFooter();
+        Controls.Add(workPanel);Controls.Add(taskPanel);
+        updateNotice.Controls.Add(releaseLabel);
+        updateNotice.Controls.Add(ShellStyle.Button("下载新版",()=>{if(availableRelease!=null && assistant.CanShowReleaseNotice && OpenSystem(DesktopRelease.DownloadUrl))DeferRelease();}));
+        updateNotice.Controls.Add(ShellStyle.Button("稍后",DeferRelease));
+        Controls.Add(updateNotice);
+        ClientSizeChanged+=(s,e)=>PositionUpdateNotice();
+        updateNotice.SizeChanged+=(s,e)=>PositionUpdateNotice();
+        assistant.Changed+=RefreshUpdateNotice;
+        updateTimer.Tick+=async(s,e)=>await CheckForReleaseAsync();
         assistant.SetupRequested+=()=>{var ignored=RequestSetup();};
         assistant.WorkspaceRequested+=()=>ShowWorkspace(null);
         Shown+=async(s,e)=>{assistant.Show();assistant.StartEngine();await Initialize();};
+        Shown+=async(s,e)=>{updateTimer.Start();await CheckForReleaseAsync();};
         FormClosing+=async(s,e)=>{
             if(exiting)return;
             e.Cancel=true;if(closePending)return;closePending=true;
+            updateTimer.Stop();releaseLifetime.Cancel();
             await Task.WhenAny(assistant.EndSession(),Task.Delay(3000));
             assistant.Shutdown();exiting=true;BeginInvoke(new Action(Close));
         };
         FormClosed+=(s,e)=>{foreach(var b in browsers.ToArray())b.Close();assistant.Dispose();workspace.Dispose();};
-        ApplyTheme(false);UpdateFooter();
+        ApplyTheme(false);
     }
     public static int CheckRuntime() {
         try{Console.WriteLine("WebView2 runtime: "+CoreWebView2Environment.GetAvailableBrowserVersionString());return 0;}
         catch{Console.WriteLine("WebView2 runtime missing");return 1;}
     }
-    void UpdateFooter() {
-        if(IsDisposed)return;
-        footer.Text="小序 "+ShellPolicy.Version+"   ·   "+assistant.ConnectionText+"   ·   "+assistant.TaskText;
+    protected override void Dispose(bool disposing) {
+        if(disposing && !releaseDisposed) {
+            releaseDisposed=true;
+            updateTimer.Dispose();releaseLifetime.Cancel();releaseClient.Dispose();releaseLifetime.Dispose();
+            actionError.Dispose();
+        }
+        base.Dispose(disposing);
+    }
+    async Task CheckForReleaseAsync() {
+        if(checkingRelease || closePending || releaseDisposed)return;
+        checkingRelease=true;
+        try {
+            var cancellation=releaseLifetime.Token;
+            var version=await Task.Run(()=>DesktopRelease.ReadLatestAsync(releaseClient,cancellation));
+            if(!closePending && !releaseDisposed)ApplyReleaseVersion(version);
+        } catch(HttpRequestException) { /* Offline clients retry on the next tick. */ }
+          catch(OperationCanceledException) { /* Timeout or shutdown. */ }
+          catch(ObjectDisposedException) { /* The window closed during the request. */ }
+        finally { checkingRelease=false; }
+    }
+    void ApplyReleaseVersion(Version version) {
+        availableRelease=version!=null && version.CompareTo(new Version(ShellPolicy.Version))>0 ? version : null;
+        if(availableRelease!=null && !reminderLoaded) {
+            reminderLoaded=true;
+            try {
+                var file=new FileInfo(reminderPath);
+                if(file.Exists && file.Length<=128) {
+                    var parts=File.ReadAllText(reminderPath).Split(' ');
+                    if(parts.Length==2 && Version.TryParse(parts[0],out deferredRelease))Int64.TryParse(parts[1],System.Globalization.NumberStyles.None,System.Globalization.CultureInfo.InvariantCulture,out deferredUntil);
+                }
+            } catch(IOException) {} catch(UnauthorizedAccessException) {} catch(System.Security.SecurityException) {}
+        }
+        if(availableRelease!=null)releaseLabel.Text="桌面端 "+availableRelease+" 已发布";
+        RefreshUpdateNotice();
+    }
+    void RefreshUpdateNotice() {
+        if(closePending || releaseDisposed)return;
+        bool show=availableRelease!=null && assistant.CanShowReleaseNotice && !(availableRelease.Equals(deferredRelease) && DateTime.UtcNow.Ticks<deferredUntil);
+        if(updateNotice.Visible==show)return;
+        updateNotice.Visible=show;
+        if(show){updateNotice.BringToFront();PositionUpdateNotice();}
+    }
+    void PositionUpdateNotice() {
+        updateNotice.Location=new Point(Math.Max(0,ClientSize.Width-updateNotice.Width-16),Math.Max(0,ClientSize.Height-updateNotice.Height-16));
+    }
+    void DeferRelease() {
+        if(availableRelease==null)return;
+        deferredRelease=availableRelease;deferredUntil=DateTime.UtcNow.AddDays(1).Ticks;
+        RefreshUpdateNotice();
+        try {
+            Directory.CreateDirectory(Path.GetDirectoryName(reminderPath));
+            File.WriteAllText(reminderPath,deferredRelease+" "+deferredUntil.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        } catch(IOException) {} catch(UnauthorizedAccessException) {} catch(System.Security.SecurityException) {}
+    }
+    void ShowActionError(string text) {
+        if(!exiting&&!IsDisposed&&Visible)actionError.Show(text,this,18,18,8000);
     }
     void ApplyTheme(bool value) {
         dark=value;ShellStyle.Apply(this,dark);
@@ -176,16 +290,16 @@ sealed class DesktopShell : Form {
                 if(version!=navigation || exiting) return;
                 if(handled=="true") return;
             } catch {
-                if(!exiting) footer.Text="页面暂时无法响应，请稍后从「我的电脑」重试。当前通话和任务保持不变。";
+                ShowActionError("页面暂时无法响应，请稍后从「我的电脑」重试。");
                 return;
             }
         }
         ShowWorkspace(ShellPolicy.SetupPath);
     }
     void ShowNotice(string text){noticeText.Text=text;notice.Visible=true;notice.BringToFront();}
-    void OpenSystem(string url) {
-        if(!ShellPolicy.WebAddress(url))return;
-        try{Process.Start(new ProcessStartInfo(url){UseShellExecute=true});}catch{ShowNotice("无法打开系统浏览器，请检查默认浏览器设置。");}
+    bool OpenSystem(string url) {
+        if(!ShellPolicy.WebAddress(url))return false;
+        try{Process.Start(new ProcessStartInfo(url){UseShellExecute=true});return true;}catch{ShowActionError("无法打开系统浏览器，请检查默认浏览器设置。");return false;}
     }
     void OpenBrowser(string url) {
         if(environment==null){ShowNotice("网页环境尚未准备好，请稍后重试。");return;}
@@ -195,7 +309,7 @@ sealed class DesktopShell : Form {
     }
     async void ShowLocalBrowser() {
         try { await OpenLocalBrowser(null, navigation); }
-        catch { footer.Text="本地浏览器未能启动。请检查 WebView2 Runtime 后重试。"; }
+        catch { ShowActionError("本地浏览器未能启动。请检查 WebView2 Runtime 后重试。"); }
     }
     async Task OpenLocalBrowser(string url,long version) {
         if(localBrowserEnvironment==null) {
@@ -250,7 +364,7 @@ sealed class DesktopShell : Form {
             // No native object, token, filesystem or execution API is injected into any page.
             await core.AddScriptToExecuteOnDocumentCreatedAsync(@"(() => {
                 if (window !== window.top || location.origin !== 'https://vip-web-production.up.railway.app') return;
-                Object.defineProperty(window, 'xutiDesktop', {value: Object.freeze({version:'" + ShellPolicy.Version + @"',localBrowser:true}), writable:false});
+                Object.defineProperty(window, 'xutiDesktop', {value: Object.freeze({version:'" + ShellPolicy.Version + @"',localBrowser:true,nativeUpdates:true}), writable:false});
                 const theme = () => window.chrome.webview.postMessage({channel:'xuti-desktop',action:'theme',value:document.documentElement.dataset.theme === 'dark'?'dark':'light'});
                 addEventListener('DOMContentLoaded', () => {theme();new MutationObserver(theme).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});});
             })();");

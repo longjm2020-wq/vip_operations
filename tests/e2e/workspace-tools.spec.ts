@@ -505,6 +505,9 @@ for (const width of [1440, 390]) {
 
 test("桌面端地址栏默认在本机打开，也可明确选择云端浏览器", async ({ page }) => {
   const state = await fixture(page);
+  await page.route("**/downloads/xuti-desktop-release.json", (route) =>
+    route.fulfill({ json: { version: "1.2.7" } }),
+  );
   const deviceId = "47d7cb0b-8975-4a1c-9f9b-b21942ec4ae2";
   const localRequests: Array<{ action: string; url?: string }> = [];
   const cloudRequests: string[] = [];
@@ -609,6 +612,7 @@ test("桌面端地址栏默认在本机打开，也可明确选择云端浏览�
   });
   await page.goto("/my-workspace?assistant=browser");
   const browser = page.locator(".assistant-browser-panel");
+  await expect(page.locator(".topbar").getByRole("link", { name: "下载新版 1.2.7" })).toBeVisible();
   const local = browser.getByRole("button", {
     name: "本地浏览器",
     exact: true,

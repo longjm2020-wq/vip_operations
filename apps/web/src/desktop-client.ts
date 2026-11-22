@@ -19,7 +19,11 @@ type WebViewBridge = {
 };
 declare global {
   interface Window {
-    xutiDesktop?: Readonly<{ version: string; localBrowser?: true }>;
+    xutiDesktop?: Readonly<{
+      version: string;
+      localBrowser?: true;
+      nativeUpdates?: true;
+    }>;
     chrome?: { webview?: WebViewBridge };
   }
 }
@@ -111,7 +115,7 @@ export function desktopClientRequest(
           new Error(
             openingBrowser
               ? "打开本地浏览器超时，请重试"
-              : "本机连接超时，请在顶部电脑任务中检查状态",
+              : "本机连接超时，请在「我的电脑」中检查状态",
           ),
         );
       },

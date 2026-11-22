@@ -1,6 +1,7 @@
 import {SelectionWorkspace} from "./selection-workspace";
 import { BrandVideo } from "./brand-video";
 import { FloatingPanels } from "./floating-panels";
+import { DesktopUpdateNotice } from "./desktop-update-notice";
 import {
   resolveVipWorkspaceRoute,
   useVipWorkspaceTabs,
@@ -421,6 +422,7 @@ function Workspace({ user }: { user: Row }) {
               ) : null}
             </nav>
             <div ref={setSearchHost} className="topbar-search-host" role="search" aria-label="当前页面搜索"/>
+            <DesktopUpdateNotice inHeader />
             <Space className="topbar-actions" size={10}>
               <ThemeToggle />
               <ProjectNotifications />
@@ -580,7 +582,7 @@ function Root() {
       (root) => themePath === root || themePath.startsWith(`${root}/`),
     )
   );
-  return <AppearanceProvider key={accountId || "guest"} accountId={accountId} forcedMode={fixedLightPage ? "light" : fixedDarkPage ? "dark" : undefined}><App><FloatingPanels />{(publicPage || (!me.isLoading && !me.data) || location.pathname === "/mobile/style-photos") && <ThemeToggle standalone />}{renderContent()}</App></AppearanceProvider>;
+  return <AppearanceProvider key={accountId || "guest"} accountId={accountId} forcedMode={fixedLightPage ? "light" : fixedDarkPage ? "dark" : undefined}><App><FloatingPanels />{!publicPage && !me.isLoading && !me.data && <DesktopUpdateNotice />}{(publicPage || (!me.isLoading && !me.data) || location.pathname === "/mobile/style-photos") && <ThemeToggle standalone />}{renderContent()}</App></AppearanceProvider>;
 }
 createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

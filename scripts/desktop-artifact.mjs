@@ -33,6 +33,13 @@ export async function verifyDesktopArtifact() {
   const manifest = JSON.parse(
     await fs.readFile(path.join(release, "manifest.json"), "utf8"),
   );
+  const config = JSON.parse(
+    await fs.readFile(path.join(root, "apps/desktop/version.json"), "utf8"),
+  );
+  if (manifest.version !== config.version || manifest.platform !== "win-x64")
+    throw new Error(
+      "Desktop release metadata does not match the Windows client",
+    );
   const actual = await desktopSourceHashes();
   for (const file of sourceFiles)
     if (manifest.sources[file] !== actual[file])
